@@ -28,6 +28,38 @@ export function useExtApprovals(): Approval[] {
   return usePendingApprovals();
 }
 
+/**
+ * What tells apart approvals that read the same (the same step asked again, by the same asker:
+ * four "Place order" clicks on one page read word for word alike, review round 4, #7): their place
+ * among them, oldest first, and the second each was asked at. One line by id, only for those with
+ * a twin; the others say nothing more. Pure.
+ */
+export function alikeLines(list: readonly Approval[], timeOf: (iso: string) => string = askedTime): Map<string, string> {
+  const groups = new Map<string, Approval[]>();
+  for (const a of list) {
+    const r = a.requester;
+    const k = JSON.stringify([a.what, a.detail ?? '', r.host, r.taskId ?? '', r.sessionId ?? '', r.command ?? ''])
+    groups.set(k, [...(groups.get(k) ?? []), a]);
+  }
+  const out = new Map<string, string>();
+  for (const g of groups.values()) {
+    if (g.length < 2) continue;
+    const sorted = [...g].sort((x, y) => x.createdAt.localeCompare(y.createdAt) || x.id.localeCompare(y.id));
+    sorted.forEach((a, i) => out.set(a.id, `${i + 1} of ${sorted.length} alike · asked ${timeOf(a.createdAt)}`));
+  }
+  return out;
+}
+
+function askedTime(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+}
+
+/** The alike line under an approval's asker, when it has a twin among those waiting. */
+export function AlikeLine({ line }: { line?: string }) {
+  return line ? <span className="ext-approval-alike" data-testid="ext-approval-alike">{line}</span> : null;
+}
+
 /** How many the Ask view shows itself; the rest wait in the Tasks view. */
 export const ASK_APPROVALS_SHOWN = 2;
 
@@ -44,9 +76,10 @@ export function ExtAskApprovals({ list, taskId, onMore }: { list: readonly Appro
   if (ordered.length === 0) return null;
   const shown = ordered.slice(0, ASK_APPROVALS_SHOWN);
   const more = ordered.length - shown.length;
+  const alike = alikeLines(list);
   return (
     <section className="ext-ask-approvals" data-testid="ext-ask-approvals" aria-label="Approvals waiting for you">
-      {shown.map((a) => <AskApproval key={a.id} a={a} mine={!!taskId && a.requester.taskId === taskId} />)}
+      {shown.map((a) => <AskApproval key={a.id} a={a} mine={!!taskId && a.requester.taskId === taskId} alike={alike.get(a.id)} />)}
       {more > 0 && (
         <button type="button" className="ext-ask-approvals-more" data-testid="ext-ask-approvals-more" onClick={onMore}>
           {more === 1 ? '1 more approval waiting' : `${more} more approvals waiting`}
@@ -56,7 +89,7 @@ export function ExtAskApprovals({ list, taskId, onMore }: { list: readonly Appro
   );
 }
 
-function AskApproval({ a, mine }: { a: Approval; mine: boolean }) {
+function AskApproval({ a, mine, alike }: { a: Approval; mine: boolean; alike?: string }) {
   const s = useApprovals();
   const host = useHostDisplayLabel(a.requester.host);
   return (
@@ -64,7 +97,7 @@ function AskApproval({ a, mine }: { a: Approval; mine: boolean }) {
       {/* Whole, on the card's full width: what, on which site, and why it waits (review round 3:
           cut after two lines beside the buttons, it hid the site and the reason). */}
       <span className="ext-ask-approval-what">{a.what}</span>
-      <span className="ext-ask-approval-who">{requesterText(a, host)}</span>
+      <span className="ext-ask-approval-who">{requesterText(a, host)}<AlikeLine line={alike} /></span>
       <ApprovalButtons a={a} s={s} />
       {/* The whole request, as Home's card has it: the title cuts a message after about 80
           characters, and what it sends and where is read here before Approve (round 3 code

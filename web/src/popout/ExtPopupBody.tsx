@@ -4,14 +4,14 @@
  * here: a question, or a picked ask, goes to the side panel (the extension page opens it and hands
  * the question over, sidepanel.ts), where the conversation runs.
  */
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { DraftSessionPanel } from '@/components/sessions/DraftSessionPanel';
 import { useAskObjectDraft } from '@/components/chat/useAskObjectDraft';
 import type { DrawerRow } from '@/components/chat/AskWalnutDrawer';
 import { ContinueRow, ExtComposerChips } from './ExtAskChrome';
 import { toParent } from './ext-frame';
 import { log } from '@/utils/log';
-import type { PanelPage } from './ext-panel-model';
+import { composerPlaceholderOf, selectionLeftOutOnSwitch, type PanelPage } from './ext-panel-model';
 import { sessionOfTask } from './useExtAsks';
 import type { KeptAsk } from './ext-continue-kept';
 
@@ -41,7 +41,7 @@ export function ContinueList({ rows, kept, max, loading, onPick, className = '' 
   );
 }
 
-export function ExtPopupBody({ rows, kept, page, canAct, loading }: { rows: DrawerRow[]; kept: readonly KeptAsk[]; page: PanelPage | null; canAct: boolean; loading: boolean }) {
+export function ExtPopupBody({ rows, kept, page, canAct, loading, agentId, agentName }: { rows: DrawerRow[]; kept: readonly KeptAsk[]; page: PanelPage | null; canAct: boolean; loading: boolean; agentId: string; agentName: string }) {
   const draft = useAskObjectDraft('ext-popup');
   const [pageOn, setPageOn] = useState(true);
   const [actOn, setActOn] = useState(false);
@@ -50,6 +50,16 @@ export function ExtPopupBody({ rows, kept, page, canAct, loading }: { rows: Draw
   const selection = page?.selection?.trim() ?? '';
   const [leftOut, setLeftOut] = useState('');
   const quote = selection && selection !== leftOut ? selection : '';
+  // It follows the page's live selection: cleared there, gone here (the next one shows, the same
+  // words too); another agent picked is never offered the selection shown before (ext-panel-model).
+  useEffect(() => { if (!selection) setLeftOut(''); }, [selection]);
+  const pickedAgent = useRef(agentId);
+  const selectionRef = useRef(selection);
+  selectionRef.current = selection;
+  useEffect(() => {
+    if (pickedAgent.current !== agentId) setLeftOut(selectionLeftOutOnSwitch(pickedAgent.current, agentId, selectionRef.current));
+    pickedAgent.current = agentId;
+  }, [agentId]);
 
   const onStart = useCallback(async (_id: string, text: string): Promise<boolean> => {
     const question = text.trim();
@@ -83,7 +93,7 @@ export function ExtPopupBody({ rows, kept, page, canAct, loading }: { rows: Draw
           onMetaChange={draft.onMetaChange}
           isKnownProject={known}
           plainChat
-          placeholder="Ask Walnut, or ask it to do something here…"
+          placeholder={composerPlaceholderOf(agentName, true)}
           composerPill={quotePill}
           composerBar={<ExtComposerChips page={page} pageOn={pageOn} onPage={setPageOn} {...(canAct ? { act: { on: actOn, onToggle: setActOn } } : {})} />}
         />

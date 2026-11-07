@@ -485,14 +485,22 @@ function start(): void {
     if (document.activeElement instanceof HTMLInputElement) void onFocus({ target: document.activeElement })
   })
 }
-// A selection the person makes on the page: an open side panel shows it at once (top frame only;
-// what was selected is read by the panel when it asks, never sent here).
+// A selection the person makes on the page, and its end: an open side panel follows it at once
+// (top frame only; what was selected is read by the panel when it asks, never sent here). A
+// selection cleared on the page is told too, so its quote leaves the panel's composer and never
+// rides into a later message (review 2026-11-06 round 4, #4); a click on nothing, with no selection
+// before it, tells nothing.
 if (SELF === 'top') {
   let selTimer = 0
+  // A selection already on the page when this script came in counts: its clearing is told too (L3).
+  let hadSelection = (getSelection()?.toString() ?? '').trim() !== ''
   document.addEventListener('selectionchange', () => {
     clearTimeout(selTimer)
     selTimer = window.setTimeout(() => {
-      if (isWalnutApp() || !(getSelection()?.toString() ?? '').trim()) return
+      if (isWalnutApp()) return
+      const has = (getSelection()?.toString() ?? '').trim() !== ''
+      if (!has && !hadSelection) return
+      hadSelection = has
       void ask({ type: 'page-selection' })
     }, 400)
   })

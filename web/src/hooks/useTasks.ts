@@ -463,6 +463,14 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   // Server events newer than an in-flight snapshot must survive its eventual merge.
   const retainedAtGen = useRef(new Map<string, number>());
   const retainServerTask = (id: string) => { retainedAtGen.current.set(id, fetchGeneration.current); };
+  // The row object a retained task's latest server event left in the store: on an
+  // equal updated_at it outranks the snapshot (mergeFetchedTasks), unless an
+  // optimistic write replaced it since.
+  const eventRowOf = useRef(new Map<string, Task>());
+  const noteEventRow = (rows: Task[], row: Task): Task[] => {
+    eventRowOf.current.set(row.id, row);
+    return rows;
+  };
   // Optimistic fields written after the current list request left (performance.now
   // clock): its answer was read before them, so the merge lays them back over it. A
   // refetch that left just before a second drag drop used to land after it and draw
@@ -640,7 +648,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
         // flips ride the same transition so there is no "loaded but empty"
         // flash between the states.
         for (const [id, gen] of retainedAtGen.current) {
-          if (gen < generation) retainedAtGen.current.delete(id);
+          if (gen < generation) { retainedAtGen.current.delete(id); eventRowOf.current.delete(id); }
         }
         const sentAt = listDispatch.current?.generation === generation ? (listDispatch.current.at ?? t0) : t0;
         const answer = overlayLaterEdits(tasks.filter((t) => !isPluginOnlyTask(t)), localEdits.current, sentAt);
@@ -648,10 +656,14 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
           // Events may arrive after this transition is queued but before React applies it.
           setTasks((prev) => {
             const retain = new Set<string>();
+            const eventRows = new Map<string, Task>();
             for (const [id, gen] of retainedAtGen.current) {
-              if (gen >= generation) retain.add(id);
+              if (gen < generation) continue;
+              retain.add(id);
+              const row = eventRowOf.current.get(id);
+              if (row) eventRows.set(id, row);
             }
-            return mergeFetchedTasks(prev, answer, retain);
+            return mergeFetchedTasks(prev, answer, retain, eventRows);
           });
           setLoading(false);
           setRefreshing(false);
@@ -779,18 +791,19 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     setTasks((prev) => {
       const withoutTmp = prev.filter((t) => t.id !== tmpId);
       const idx = withoutTmp.findIndex((t) => t.id === task.id);
-      if (idx === -1) return [task, ...withoutTmp];
+      if (idx === -1) return noteEventRow([task, ...withoutTmp], task);
       // Already present (a task:updated upsert can precede the create payload):
       // the created payload is the authoritative final state, merge it in like
       // the task:created fallthrough below does.
       withoutTmp[idx] = mergeTask(withoutTmp[idx], task);
-      return withoutTmp;
+      return noteEventRow(withoutTmp, withoutTmp[idx]);
     });
     hooks?.onReconcile?.(tmpId, task.id);
   }, [guardEcho]);
 
   const dropPluginOnly = useCallback((id: string) => {
     retainedAtGen.current.delete(id);
+    eventRowOf.current.delete(id);
     setTasks((prev) => (prev.some((t) => t.id === id) ? prev.filter((t) => t.id !== id) : prev));
   }, []);
 
@@ -860,12 +873,12 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     retainServerTask(task.id);
     setTasks((prev) => {
       const idx = prev.findIndex((t) => t.id === task.id);
-      if (idx === -1) return [task, ...prev];
+      if (idx === -1) return noteEventRow([task, ...prev], task);
       const merged = mergeTask(prev[idx], task);
-      if (tasksShallowEqual(prev[idx], merged)) return prev;
+      if (tasksShallowEqual(prev[idx], merged)) return noteEventRow(prev, prev[idx]);
       const next = prev.slice();
       next[idx] = merged;
-      return next;
+      return noteEventRow(next, merged);
     });
   });
 
@@ -893,17 +906,17 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
         // Same guard as task:created: skip empty-title metadata/sync artifacts.
         if (!task.title || task.title.trim() === '') return prev;
         scrollLog('drag-trace-ws-updated-UPSERT', { id: task.id.slice(0,12) });
-        return [incoming, ...prev];
+        return noteEventRow([incoming, ...prev], incoming);
       }
       const merged = mergeTask(prev[idx], incoming);
       if (tasksShallowEqual(prev[idx], merged)) {
         scrollLog('drag-trace-ws-updated-bail-shallowEqual', { id: task.id.slice(0,12) });
-        return prev;
+        return noteEventRow(prev, prev[idx]);
       }
       scrollLog('drag-trace-ws-updated-APPLY', { id: task.id.slice(0,12), parent: task.parent_task_id });
       const next = prev.slice();
       next[idx] = merged;
-      return next;
+      return noteEventRow(next, merged);
     });
   });
 
@@ -929,6 +942,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     const id = deletedTaskId(data);
     if (!id) return;
     retainedAtGen.current.delete(id);
+    eventRowOf.current.delete(id);
     setTasks((prev) => prev.filter((t) => t.id !== id));
   });
 

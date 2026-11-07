@@ -161,16 +161,27 @@ export function listRowEqual(a: Task, b: Task): boolean {
  * events inserted it. When the snapshot DOES carry it, the snapshot may still
  * predate the events that followed the insert (the session link lands a beat
  * after the create), so the row with the later server `updated_at` wins; both
- * stamps come from the server, so they compare.
+ * stamps come from the server, so they compare. `eventRows` holds the row each
+ * retained task's latest server event left in the store; it decides an equal stamp
+ * (retainedRowWins).
  */
-export function mergeFetchedTasks(prev: Task[], fetched: Task[], retain?: ReadonlySet<string>): Task[] {
+export function mergeFetchedTasks(
+  prev: Task[],
+  fetched: Task[],
+  retain?: ReadonlySet<string>,
+  eventRows?: ReadonlyMap<string, Task>,
+): Task[] {
   if (prev.length === 0) return fetched;
   const prevById = new Map(prev.map((t) => [t.id, t]));
   let reused = 0;
   const next = fetched.map((t) => {
     const old = prevById.get(t.id);
     if (old && listRowEqual(old, t)) { reused++; return old; }
-    if (old && retain?.has(t.id) && Date.parse(old.updated_at ?? '') > Date.parse(t.updated_at ?? '')) return old;
+    if (old && retain?.has(t.id)) {
+      const wins = retainedRowWins(old, t, eventRows?.get(t.id));
+      if (wins === 'row') return old;
+      if (wins === 'fields') return withEventFields(t, old);
+    }
     return t;
   });
   if (retain?.size) {
@@ -186,6 +197,34 @@ export function mergeFetchedTasks(prev: Task[], fetched: Task[], retain?: Readon
     if (sameOrder) return prev;
   }
   return next;
+}
+
+/**
+ * Whether a retained row outranks the snapshot's copy of it. A later server stamp
+ * wins (`row`). On an EQUAL stamp the row's own fields still win (`fields`) when it is
+ * exactly what a server event left in the store (`eventRow`, the same object): many
+ * writes leave `updated_at` alone (a read marker, user_status, result_report, a team
+ * stop), so an event and a snapshot read before it carry one stamp, and the snapshot
+ * (older) used to win (2026-11-07: a read ask came back as unread in a list that never
+ * refetched). A row an optimistic write touched since the event is no longer that
+ * object, and the snapshot's copy, the server's answer, wins the tie as before.
+ */
+function retainedRowWins(old: Task, fetched: Task, eventRow: Task | undefined): 'row' | 'fields' | false {
+  const a = Date.parse(old.updated_at ?? '');
+  const b = Date.parse(fetched.updated_at ?? '');
+  if (a > b) return 'row';
+  return a === b && eventRow === old ? 'fields' : false;
+}
+
+/**
+ * The snapshot's row with what the event row says laid over it. An event carries the
+ * raw task, which lacks what the list answer adds (a read marker set before, the
+ * session it backfills): a key the event row leaves out keeps the snapshot's value.
+ */
+function withEventFields(fetched: Task, eventRow: Task): Task {
+  const out = { ...fetched } as Record<string, unknown>;
+  for (const [k, v] of Object.entries(eventRow)) if (v !== undefined) out[k] = v;
+  return out as unknown as Task;
 }
 
 /** An optimistic write's fields and when it was made (performance.now clock).

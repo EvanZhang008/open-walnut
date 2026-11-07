@@ -93,7 +93,10 @@ export async function handleMenu(msg: { type: string; [k: string]: unknown }, se
       // The person pressed an arrow key in the field: only the frame that opened the menu moves into it.
       const owner = tabId !== undefined ? await stores.menus.get(tabId) : undefined
       if (!owner || owner.frameId !== sender.frameId) return { ok: false }
-      void ext.runtime.sendMessage({ type: 'menu-focus', nonce: owner.nonce, where: msg.where === 'last' ? 'last' : 'first', pick: msg.pick === true }).catch(() => undefined)
+      // `step`: rows typed past the first (or last); `more`: a key typed in the field just after the
+      // hand-over, applied where the menu's keys stand (content-ui.ts keysOnTheWay).
+      const step = typeof msg.step === 'number' && Number.isInteger(msg.step) ? Math.max(-50, Math.min(50, msg.step)) : 0
+      void ext.runtime.sendMessage({ type: 'menu-focus', nonce: owner.nonce, where: msg.where === 'last' ? 'last' : 'first', pick: msg.pick === true, ...(step ? { step } : {}), ...(msg.more === true ? { more: true } : {}) }).catch(() => undefined)
       return { ok: true }
     }
   }

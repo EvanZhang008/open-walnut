@@ -13,7 +13,6 @@ import type { Task } from '@open-walnut/core';
 import type { Approval } from '@/api/approvals';
 import { apiPatch } from '@/api/client';
 import { buildImageRefsPayload } from '@/api/image-upload';
-import { fetchSessionHistory } from '@/api/sessions';
 import { createTask } from '@/api/tasks';
 import { wsClient } from '@/api/ws';
 import { ApprovalButtons, requesterText } from '@/components/approvals/ApprovalPrompts';
@@ -29,12 +28,14 @@ import { log } from '@/utils/log';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { taskPath } from '@/utils/task-path';
 import { fromParent, toParent } from './ext-frame';
-import { ApprovalLines, useExtApprovals } from './ExtApprovals';
+import { AlikeLine, ApprovalLines, alikeLines, useExtApprovals } from './ExtApprovals';
 import { useVaultChangedRelay } from './vault-changed-relay';
 import { useFrameTheme } from './ext-theme';
 import { hostOf, panelAskTitle, type PanelPage } from './ext-panel-model';
-import { askedOf, extTaskLists, inFocus, keepTaskLists, keptTaskLists, pageTaskInput, rowLine, type ExtTaskRow } from './ext-tasks-model';
+import { EXT_TASKS_MAX, askedOf, extTaskLists, lastWordsKnown, inFocus, keepTaskLists, keptTaskLists, pageTaskInput, rowLine, type ExtTaskRow } from './ext-tasks-model';
 import { SHOWN_AFTER_PAINT_MAX_MS, SNAP_ROWS, type TasksSnap } from './ext-snapshot';
+import { latestReplies } from './ask-words-read';
+import { useAskWords } from './useExtAsks';
 import './ext-panel.css';
 
 export function PopoutExtTasks() {
@@ -56,10 +57,18 @@ function ExtTasks() {
   /** Each reply's send, by task: a row moving between sections keeps it (the words are a draft). */
   const [replies, setReplies] = useState<Record<string, ReplyState>>({});
   const approvals = useExtApprovals();
+  const alike = useMemo(() => alikeLines(approvals), [approvals]);
   useVaultChangedRelay();
   /** Tasks answered from this panel: their rows stay put, with their new state (ext-tasks-model.ts). */
   const answered = useMemo(() => new Set(Object.entries(replies).filter(([, r]) => r.state === 'sent').map(([id]) => id)), [replies]);
-  const fresh = useMemo(() => (loading ? null : extTaskLists(tasks, answered)), [tasks, loading, answered]);
+  /** Moves when a row's latest words were read (useAskWords), so its line says them. */
+  const [wordsRev, setWordsRev] = useState(0);
+  const fresh = useMemo(() => (loading ? null : extTaskLists(tasks, answered)), [tasks, loading, answered, wordsRev]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Each row says what its task last said, read as the drawer reads its asks' (review round 4, #2).
+  // In the order the view draws them (Focus on top), every row of both lists: a full Needs you list
+  // left Focus's rows unread (review round 4, L1).
+  const wordRows = useMemo(() => (fresh ? [...fresh.focus, ...fresh.needs].map((r) => ({ id: r.task.id, task: r.task })) : []), [fresh]);
+  useAskWords(wordRows, !!fresh, () => setWordsRev((n) => n + 1), 2 * EXT_TASKS_MAX);
   // The lists of the last open, read once: shown only until the real ones land.
   const [kept] = useState(() => keptTaskLists());
   useEffect(() => { if (fresh) keepTaskLists(fresh); }, [fresh]);
@@ -134,7 +143,7 @@ function ExtTasks() {
         <Section section="focus" title="Focus" testid="ext-tasks-focus" rows={lists.focus} empty={fresh ? 'No Focus tasks. Open a task below and add it to Focus.' : ''} open={open} onOpen={setOpen} replies={replies} setReplies={setReplies} />
         {/* Approvals first: a script or an agent's step in this browser is blocked on each. */}
         <Section section="needs" title="Needs you" testid="ext-tasks-needs" rows={lists.needs} extra={approvals.length} empty={fresh && approvals.length === 0 ? 'Nothing needs you.' : ''} open={open} onOpen={setOpen} replies={replies} setReplies={setReplies}>
-          {approvals.map((a) => <PanelApproval key={a.id} a={a} />)}
+          {approvals.map((a) => <PanelApproval key={a.id} a={a} alike={alike.get(a.id)} />)}
         </Section>
       </div>
     )}
@@ -156,12 +165,12 @@ type Replies = { replies: Record<string, ReplyState>; setReplies: Dispatch<SetSt
  * One approval, answered here. Home lists approvals as one line and answers them on its corner
  * card; the panel has no corner, so each request shows what it is, who asks, and its buttons.
  */
-function PanelApproval({ a }: { a: Approval }) {
+function PanelApproval({ a, alike }: { a: Approval; alike?: string }) {
   const s = useApprovals();
   const host = useHostDisplayLabel(a.requester.host);
   return <div className="ext-approval" data-testid="approval-row" data-approval-id={a.id}>
     <span className="ext-approval-what">{a.what}</span>
-    <span className="ext-approval-who">{requesterText(a, host)}</span>
+    <span className="ext-approval-who">{requesterText(a, host)}<AlikeLine line={alike} /></span>
     <ApprovalButtons a={a} s={s} />
     <ApprovalLines a={a} s={s} />
   </div>;
@@ -223,9 +232,9 @@ function useLastMessage(sessionId: string | null, known: boolean): string {
   useEffect(() => {
     if (!sessionId || known) return;
     const controller = new AbortController();
-    fetchSessionHistory(sessionId, { tail: 8, signal: controller.signal })
+    latestReplies(sessionId, { tail: 8, signal: controller.signal })
       .then((r) => {
-        const last = [...r.messages].reverse().find((m) => m.role === 'assistant' && (m.text ?? '').trim());
+        const last = [...(r ?? [])].reverse().find((m) => m.role === 'assistant' && (m.text ?? '').trim());
         const words = (last?.text ?? '').replace(/\s+/g, ' ').trim();
         setText(words.length > LAST_MESSAGE_MAX ? `…${words.slice(-LAST_MESSAGE_MAX)}` : words);
       })
@@ -240,7 +249,7 @@ function TaskReply({ task, line, reply, onChange }: { task: Task; line: string; 
   const { state } = reply;
   const asked = askedOf(task, line);
   // Its last words are known already when the status line or the list carries them.
-  const lastMessage = useLastMessage(sessionId, asked.length > 1 || !!task.last_words?.text?.trim());
+  const lastMessage = useLastMessage(sessionId, asked.length > 1 || lastWordsKnown(task));
   const said = lastMessage && !asked.some((a) => a.includes(lastMessage.slice(0, 60))) ? [...asked, lastMessage] : asked;
   // The words wait in the draft store and pictures go with them, as in the chat.
   const draft = useDraft(sessionId ? draftKey('ext-task-reply', task.id) : null);

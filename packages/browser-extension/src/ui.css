@@ -311,6 +311,10 @@ body.bar > #root { background: var(--bg); border: 1px solid var(--line); border-
 .panel-snap-tasks h3 { margin: 6px 12px 4px; font-size: 12px; color: var(--muted); }
 .panel-snap-empty { margin: 2px 12px 6px; font-size: 12px; color: var(--muted); }
 .panel-snap-tasks .panel-snap-task { margin: 0 6px; }
+/* The view's own loading line (web/src/popout/ext-panel.css .ext-tasks-loading), drawn before the view is up. */
+.panel-snap-loading { display: flex; align-items: center; gap: 8px; margin: 18px 12px; font-size: 13px; color: var(--muted); }
+.panel-snap-spinner { width: 12px; height: 12px; border: 2px solid var(--line); border-top-color: var(--muted); border-radius: 50%; animation: panel-snap-spin .8s linear infinite; }
+@keyframes panel-snap-spin { to { transform: rotate(360deg); } }
 .panel-snap-count { font-weight: 400; }
 .panel-snap-task { display: flex; gap: 8px; padding: 7px 8px; }
 .panel-snap-dot { flex: 0 0 8px; height: 8px; margin-top: 5px; border-radius: 50%; background: var(--muted); }

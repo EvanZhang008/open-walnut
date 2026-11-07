@@ -12,11 +12,19 @@ import type { Task } from '@open-walnut/core';
 
 /** How much of the words a row keeps: its single line cuts what it cannot show. */
 export const ASK_WORDS_MAX = 160;
-const KEY = 'walnut.ext-panel.ask-words';
+/**
+ * v2: the words read before an ask's chat history was read too (ask-words-read.ts) said nothing for
+ * a chat whose whole history is there, and were kept at the ask's stamp: never read again.
+ */
+const KEY = 'walnut.ext-panel.ask-words.v2';
+/** The key v1 kept its words under: removed at the first write (review round 4, L2). */
+const OLD_KEY = 'walnut.ext-panel.ask-words';
+/** At most this many asks' words, none older than KEEP_DAYS: a row not shown for a month reads again. */
 const KEEP = 80;
+const KEEP_DAYS = 30;
 
 export interface KeptWords { text: string; stamp: string; at: number }
-type Store = Pick<Storage, 'getItem' | 'setItem'>;
+type Store = Pick<Storage, 'getItem' | 'setItem'> & Partial<Pick<Storage, 'removeItem'>>;
 const browserStore = (): Store | null => { try { return window.localStorage; } catch { return null; } };
 
 /** When the ask last moved: words read at an older stamp may be of an earlier turn. */
@@ -65,8 +73,14 @@ export function keptWords(taskId: string, s: Store | null = browserStore()): Kep
 
 export function keepWords(taskId: string, text: string, stamp: string, s: Store | null = browserStore(), now = Date.now()): void {
   const all = { ...readAll(s), [taskId]: { text: text.slice(0, ASK_WORDS_MAX + 1), stamp, at: now } };
-  const kept = Object.entries(all).filter(([, v]) => v && typeof v.at === 'number').sort((a, b) => b[1].at - a[1].at).slice(0, KEEP);
+  const since = now - KEEP_DAYS * 86_400_000;
+  const kept = Object.entries(all)
+    .filter(([, v]) => v && typeof v.at === 'number' && typeof v.text === 'string' && v.at >= since)
+    .sort((a, b) => b[1].at - a[1].at)
+    .slice(0, KEEP)
+    .map(([id, v]) => [id, { text: v.text.slice(0, ASK_WORDS_MAX + 1), stamp: String(v.stamp ?? '').slice(0, 64), at: v.at }] as const);
   try { s?.setItem(KEY, JSON.stringify(Object.fromEntries(kept))); } catch { /* full or blocked: read again next open */ }
+  try { s?.removeItem?.(OLD_KEY); } catch { /* blocked: nothing to do */ }
 }
 
 /**

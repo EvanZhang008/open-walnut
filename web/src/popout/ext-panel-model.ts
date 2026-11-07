@@ -406,9 +406,48 @@ export function rememberSent(key: string, selection: string, s: HandedStore | nu
   try { s?.setItem(SENT_KEY, JSON.stringify(Object.fromEntries(kept))); } catch { /* full or blocked: offered again, no harm */ }
 }
 
+/** The page's selection is gone: what was sent of it no longer keeps the same words out. */
+export function forgetSent(key: string, s: HandedStore | null = store()): void {
+  if (!key) return;
+  try {
+    const all = JSON.parse(s?.getItem(SENT_KEY) ?? '{}') as Record<string, unknown>;
+    if (!all || typeof all !== 'object' || !(key in all)) return;
+    delete all[key];
+    s?.setItem(SENT_KEY, JSON.stringify(all));
+  } catch { /* unreadable or blocked: offered again once it is, no harm */ }
+}
+
 export function sentOf(key: string, s: HandedStore | null = store()): string {
   try {
     const v = (JSON.parse(s?.getItem(SENT_KEY) ?? '{}') as Record<string, { sel?: unknown }>)[key];
     return typeof v?.sel === 'string' ? v.sel : '';
   } catch { return ''; }
+}
+
+/**
+ * The composer's placeholder, naming the agent the person picked (review round 4, #5: it said
+ * "Ask Walnut" with Mentor picked). `onPage`: a web page is open beside it.
+ */
+export function composerPlaceholderOf(agentName: string, onPage: boolean): string {
+  const name = agentName.trim() || 'Walnut';
+  return onPage ? `Ask ${name}, or ask it to do something here…` : `Ask ${name} anything…`;
+}
+
+/**
+ * What the selection offered as a quote is, once the person switches to another agent: the page's
+ * selection as it is at the switch is left out of the new agent's conversation (it was offered to
+ * the other one), so only a selection made after the switch shows there; the same agent's new
+ * conversation leaves nothing out. Review round 4, #4: a quote rode into Mentor's next message.
+ */
+/**
+ * The agent a page selection is offered to: the one picked when it was made (`owner`), else the one
+ * picked last. Back on that agent after a look at another, the selection shows again (round 4
+ * code review, L5: Walnut, Mentor, then Walnut again left it out of Walnut's own conversation).
+ */
+export function selectionOfferedTo(owner: { sel: string; agent: string }, selection: string, picked: string): string {
+  return selection && owner.sel === selection ? owner.agent : picked;
+}
+
+export function selectionLeftOutOnSwitch(before: string, after: string, selection: string | undefined): string {
+  return before !== after ? (selection?.trim() ?? '') : '';
 }

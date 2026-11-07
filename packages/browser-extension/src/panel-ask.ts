@@ -18,7 +18,7 @@
 import { ask, ext } from './ext'
 import { h } from './dom'
 import { popupIcon } from './popup-ui'
-import { agentNameOf, agentOf, drawSnap, keepAgent, keepSnap, shellOf, snapKeyOf, snapOf, type AskSnap, type SnapView } from './panel-snap'
+import { agentNameOf, agentOf, drawSnap, drawTasksLoading, keepAgent, keepSnap, shellOf, snapKeyOf, snapOf, type AskSnap, type SnapView } from './panel-snap'
 import { drawAskLook, type AskLook } from './panel-look'
 import { startPagePlumbing } from './panel-page'
 import { keyPopover } from './key-pop'
@@ -148,8 +148,9 @@ export async function startAsk(root: HTMLElement, server: string, win: { id?: nu
     // Ask is drawn by the look above; only Tasks has a drawing of last time here.
     if (view === 'ask' || surface === 'popup' || upViews.has(view) || covers.has(view)) return
     const snap = await snapOf(view, url)
-    if (!snap || upViews.has(view) || covers.has(view)) return
-    const el = drawSnap(view, snap)
+    if (upViews.has(view) || covers.has(view)) return
+    // Never shown here before: its loading line in its places, not the frame's blank page.
+    const el = snap ? drawSnap(view, snap) : drawTasksLoading()
     covers.set(view, el)
     if (view === 'tasks') views.get('tasks')?.el.append(el)
     else { el.hidden = current !== null; body.append(el) }

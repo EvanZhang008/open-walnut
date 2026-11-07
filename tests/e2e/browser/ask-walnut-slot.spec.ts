@@ -197,6 +197,33 @@ async function hideForeignWalnutTasks(page: Page): Promise<void> {
   })
 }
 
+/**
+ * The socket half of hideForeignWalnutTasks, for a test that counts drawer rows and launches no
+ * ask of its own: `task:created` / `task:updated` are global broadcasts, so another file's ask
+ * made meanwhile (draft-bound-ask-walnut-and-task-menu.spec.ts, the extension's specs) grew a row
+ * the HTTP filter never saw (2026-11-07: 3 rows, expected 2, with two workers). Frames about any
+ * other task pass. A test that launches from the slot passes `keep`: its own ask's create event
+ * comes before the launch answer names it, so it keeps the frames its launch may send while that
+ * launch is on its way (tests/e2e/browser/ask-drawer-order.spec.ts does the same).
+ */
+type AskFrameTask = { id?: string; walnut_agent?: boolean; project?: string; agent_id?: string }
+async function dropForeignAskEvents(page: Page, keep: (task: AskFrameTask) => boolean = () => false): Promise<void> {
+  const isAsk = (task: AskFrameTask) =>
+    task.walnut_agent === true || (task.project ?? '').trim().toLowerCase().startsWith('ask ')
+  await page.routeWebSocket(/\/ws(\?|$)/, (ws) => {
+    const server = ws.connectToServer()
+    ws.onMessage((message) => server.send(message))
+    server.onMessage((message) => {
+      const text = typeof message === 'string' ? message : message.toString('utf8')
+      let frame: { type?: string; data?: { task?: AskFrameTask } } | null = null
+      try { frame = JSON.parse(text) } catch { /* not JSON: pass it on */ }
+      const task = frame?.type === 'event' ? frame.data?.task : undefined
+      if (task && typeof task === 'object' && isAsk(task) && !(task.id && ourWalnutTaskIds.has(task.id)) && !keep(task)) return
+      ws.send(message)
+    })
+  })
+}
+
 // ── Actions ──────────────────────────────────────────────────────────────────
 
 /** Let the drawer's 160ms slide/fade (or the panel's fullscreen enter) finish
@@ -723,6 +750,7 @@ test('expand-to-fullscreen takes the whole page, not the slot', async ({ page })
 
 test('the drawer\'s search filters the asks by title', async ({ page }) => {
   await hideForeignWalnutTasks(page)
+  await dropForeignAskEvents(page)
   await loadHome(page)
   await expect(slot(page)).toBeVisible({ timeout: 30_000 })
 
@@ -734,6 +762,16 @@ test('the drawer\'s search filters the asks by title', async ({ page }) => {
   await openAskWalnutDrawer(page)
   await expect(drawerRow(page, firstTaskId)).toContainText(needle, { timeout: 20_000 })
   await expect(drawerRows(page)).toHaveCount(2)
+  // Another file's ask made meanwhile never becomes a row here (its events are dropped above).
+  const foreign = await page.request.post('/api/v1/tasks', { data: { title: `foreign ask ${STAMP}`, project: 'Ask Walnut' } })
+  expect(foreign.ok(), await foreign.text()).toBe(true)
+  const foreignId = String(((await foreign.json()) as { task?: { id?: string } }).task?.id ?? '')
+  try {
+    await page.waitForTimeout(1_500)
+    await expect(drawerRows(page)).toHaveCount(2)
+  } finally {
+    await page.request.delete(`/api/v1/tasks/${foreignId}`).catch(() => undefined)
+  }
 
   // Typing filters: word order and case do not matter.
   await drawerSearch(page).fill(`ASK ${STAMP}`)
@@ -768,6 +806,11 @@ const agentItem = (page: Page, id: string): Locator =>
 
 test('the drawer\'s title switches agents: Mentor has its own list, its own composer, and its launch is stamped', async ({ page }) => {
   await hideForeignWalnutTasks(page)
+  // Another file's ask made meanwhile never becomes a row in the lists counted here (2026-11-07:
+  // Walnut's list read 3 rows for 2 in a combined run); only this test's own launch, on its way,
+  // may bring a Mentor ask the file does not know yet.
+  let launching = false
+  await dropForeignAskEvents(page, (task) => launching && task.agent_id === 'mentor')
   await loadHome(page)
   await expect(slot(page)).toBeVisible({ timeout: 30_000 })
 
@@ -812,12 +855,15 @@ test('the drawer\'s title switches agents: Mentor has its own list, its own comp
       && new URL(response.url()).pathname === '/api/sessions/quick-start',
   )
   await composer.fill(MENTOR_PROMPT)
+  launching = true
   await composer.press('Enter')
   const response = await quickStart
   expect(response.status(), await response.text()).toBe(200)
   const payload = (await response.json()) as {
     taskId?: string; sessionId?: string; task?: { project?: string; agent_id?: string; walnut_agent?: boolean }
   }
+  if (payload.taskId) ourWalnutTaskIds.add(payload.taskId)
+  launching = false
   expect(payload.task?.project).toBe('Ask Mentor')
   expect(payload.task?.agent_id).toBe('mentor')
   expect(payload.task?.walnut_agent).toBe(true)
@@ -837,6 +883,16 @@ test('the drawer\'s title switches agents: Mentor has its own list, its own comp
   await expect(agentSwitch(page)).toHaveText(/Ask Walnut/)
   await expect(drawerRow(page, mentorTaskId)).toHaveCount(0)
   await expect(drawerRows(page)).toHaveCount(2)
+  // Another file's ask made now stays out of the list (its events are dropped above).
+  const foreign = await page.request.post('/api/v1/tasks', { data: { title: `foreign ask ${STAMP}`, project: 'Ask Walnut' } })
+  expect(foreign.ok(), await foreign.text()).toBe(true)
+  const foreignId = String(((await foreign.json()) as { task?: { id?: string } }).task?.id ?? '')
+  try {
+    await page.waitForTimeout(1_500)
+    await expect(drawerRows(page)).toHaveCount(2)
+  } finally {
+    await page.request.delete(`/api/v1/tasks/${foreignId}`).catch(() => undefined)
+  }
   await expect(drawerMain(page)).toHaveAttribute('aria-current', 'true')
   await page.keyboard.press('Escape')
   await expect(page.locator(`[data-testid="ask-walnut-session"][data-session-id="${payload.sessionId}"]`)).toHaveCount(0)

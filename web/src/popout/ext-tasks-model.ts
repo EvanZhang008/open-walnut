@@ -17,35 +17,67 @@ export interface ExtTaskRow { task: Task; state: ReturnType<typeof shownState>; 
 const oneLine = (t: string | null | undefined) => (t ?? '').replace(/\s+/g, ' ').trim();
 
 /**
- * A Needs you row's line: its category, then what tells it apart from the rows around it. That is
- * the task's own ask; else the words its last turn ended with (task.last_words); else the category
- * alone. Walnut's stock sentences ("Its turn ended without asking you anything", "It was set to
- * need you by hand") say the same on every row, so they are never the words here.
+ * A Needs you row's line: its category, then what tells it apart from the rows around it
+ * (taskWords: its own ask, else what it last said). Walnut's stock sentences ("Its turn ended
+ * without asking you anything", "It was set to need you by hand") say the same on every row, so
+ * they are never the words here; with nothing it said known, the category alone.
  */
-export function needsRowLine(task: Task): string {
+export function needsRowLine(task: Task, words: string = keptWords(task.id)?.text ?? ''): string {
   const s = task.user_status;
   if (!s) return '';
   const line = needsLineOf(s);
   if (!line) return '';
-  return [NEEDS_CATEGORY_LABELS[line.category], ownWords(task)].filter(Boolean).join(': ');
+  return [NEEDS_CATEGORY_LABELS[line.category], taskWords(task, words)].filter(Boolean).join(': ');
 }
 
 /**
- * What the task itself said, to tell its row apart: its own ask of the person; else the words its
- * last turn ended with, which a hand-back's status carries (lastWordsOfStatus; a list's task has no
- * `last_words`, a full task does); else ''.
+ * THE words of a task's row on every extension surface (the drawer, Continue, the Tasks view, the
+ * kept rows and the drawings of them; tests/web/ext-ask-words-surfaces.test.ts): what the task
+ * itself said, to tell its row apart. Its own ask of the person; else the words its last turn ended
+ * with as Walnut read them (lastWordsOfStatus; a list's task has no `last_words`, a full task
+ * does); else the latest words of its conversation as this browser read them (`words`:
+ * ext-ask-words.ts via ask-words-read.ts, for the tasks Walnut has read nothing of, most asks);
+ * else ''. Review 2026-11-06 round 4: the Tasks view read "Take a look" on 29 of 30 rows.
  */
-function ownWords(task: Task): string {
-  const s = task.user_status;
-  const own = s && storedUserState(s) === 'needs' && s.ask !== MARKED_ASK ? oneLine(s.ask) : '';
-  return own || oneLine(lastWordsOfStatus(s)) || oneLine(task.last_words?.text);
+export function taskWords(task: Task, words: string = keptWords(task.id)?.text ?? ''): string {
+  return askingWords(task) || oneLine(lastWordsOfStatus(task.user_status)) || oneLine(task.last_words?.text) || oneLine(words);
 }
 
-function rowOf(task: Task): ExtTaskRow {
+/** What the task asks the person itself (its stored Needs you ask), or ''. */
+function askingWords(task: Task): string {
+  const s = task.user_status;
+  return s && storedUserState(s) === 'needs' && s.ask !== MARKED_ASK ? oneLine(s.ask) : '';
+}
+
+/** A conversation with an agent: born one, or filed under an agent's "Ask ..." project (caller-placement isAskTask). */
+export function isAskTask(task: Pick<Task, 'walnut_agent' | 'project'>): boolean {
+  return task.walnut_agent === true || /^ask /i.test((task.project ?? '').trim());
+}
+
+/**
+ * An ask whose latest answer the person has read: its answer is only there to read (Walnut's To
+ * read, nothing asked of them) and Walnut's read marker says they opened it since that answer
+ * (`task.unread === false`; the phase machine sets it again with the next answer, phase.ts
+ * readMarkerForPhase). Walnut's own lists keep it on their Needs you list (an answer to read stays
+ * there until he acts); the extension's own surfaces (the drawer's and Continue's red dot, the
+ * Tasks view's Needs you and its badge) leave it out, so a quick question about a page is not work
+ * that needs him once he has read its answer in the panel (review 2026-11-06 round 4, #3).
+ * A real ask of the person (Decide, a prompt, a letter) is never read away.
+ */
+export function readHere(task: Task): boolean {
+  const s = task.user_status;
+  return isAskTask(task) && !!s && storedUserState(s) === 'read' && task.unread === false;
+}
+
+/** The words this browser read of a task's conversation (ext-ask-words.ts), by task. */
+export type WordsOf = (taskId: string) => string;
+const keptWordsOf: WordsOf = (id) => keptWords(id)?.text ?? '';
+
+function rowOf(task: Task, wordsOf: WordsOf = keptWordsOf): ExtTaskRow {
   const state = shownState(taskUserState(task));
   const s = task.user_status;
   // A passing wait (its report on the turn that just ended, due in seconds) says nothing about the task.
-  const line = s ? (state === 'needs' ? needsRowLine(task) : s.transient ? '' : (s.waitingOn ?? s.ask ?? '')) : '';
+  const line = s ? (state === 'needs' ? needsRowLine(task, wordsOf(task.id)) : s.transient ? '' : (s.waitingOn ?? s.ask ?? '')) : '';
   return { task, state, label: stateWord(state, !!s?.snoozed), line: oneLine(line) };
 }
 
@@ -56,7 +88,7 @@ const newest = (a: Task, b: Task) => String(b.updated_at ?? '').localeCompare(St
  * more, yet the row stays where they left it (with its new state) until the panel closes, so the
  * answer does not make it vanish from under them.
  */
-export function extTaskLists(tasks: readonly Task[], kept: ReadonlySet<string> = new Set()): { needs: ExtTaskRow[]; focus: ExtTaskRow[] } {
+export function extTaskLists(tasks: readonly Task[], kept: ReadonlySet<string> = new Set(), wordsOf: WordsOf = keptWordsOf): { needs: ExtTaskRow[]; focus: ExtTaskRow[] } {
   // Open, and not parked out of sight: Home folds a parked task away unless its own work goes on or
   // it has something to read (status-sections' stateSectionNoNeeds), so the panel does too.
   const open = tasks.filter((t) => {
@@ -67,8 +99,9 @@ export function extTaskLists(tasks: readonly Task[], kept: ReadonlySet<string> =
   // Focus is the board's Focus tier, as Home counts it: every open task in it, whatever it needs
   // (its row says so). Needs you is the rest that needs the person, so each task shows once.
   const focus = open.filter(inFocus).sort(newest);
-  const needs = open.filter((t) => !inFocus(t) && (shownState(taskUserState(t)) === 'needs' || kept.has(t.id))).sort(newest);
-  return { needs: needs.slice(0, EXT_TASKS_MAX).map(rowOf), focus: focus.slice(0, EXT_TASKS_MAX).map(rowOf) };
+  const needs = open.filter((t) => !inFocus(t) && ((shownState(taskUserState(t)) === 'needs' && !readHere(t)) || kept.has(t.id))).sort(newest);
+  const row = (t: Task) => rowOf(t, wordsOf);
+  return { needs: needs.slice(0, EXT_TASKS_MAX).map(row), focus: focus.slice(0, EXT_TASKS_MAX).map(row) };
 }
 
 /**
@@ -125,6 +158,11 @@ export function keptTaskLists(s: KeptStore | null = keptStore(), now = Date.now(
   } catch { return null; }
 }
 
+/** Walnut has read the words the task's last turn ended with (a full task's `last_words`). */
+export function lastWordsKnown(task: Task): boolean {
+  return !!task.last_words?.text?.trim();
+}
+
 /** What the open row says the task asked: its status line in full, then its last words when they add to it. */
 export function askedOf(task: Task, line: string): string[] {
   const out: string[] = [];
@@ -138,29 +176,23 @@ export function askedOf(task: Task, line: string): string[] {
 /**
  * An ask's row in the side panel's drawer and the popup's Continue list: its one-line status and
  * whether it needs the person (the red dot). The line says where the ask stopped, so the rows tell
- * apart: what it asks the person when it really needs them (its own question); else the words its
- * last turn ended with as Walnut read them (its status, task.last_words); else the latest words of
- * its conversation as this browser read them (`words`: ext-ask-words.ts, for the asks Walnut has
- * read nothing of, most of them); else its status line (the category alone for
- * one that needs the person, "Take a look", only when nothing it said is known). A passing wait
- * (its report due in seconds) gives no line. Review 2026-11-06 round 3: every finished ask read
- * "Take a look".
+ * apart: its words (taskWords), else its status line (the category alone for one that needs the
+ * person, "Take a look", only when nothing it said is known). A passing wait (its report due in
+ * seconds) gives no line. An ask whose answer the person read (readHere) wears no dot. Review
+ * 2026-11-06 round 3: every finished ask read "Take a look".
  */
 export function askRowDetail(task: Task, words: string = keptWords(task.id)?.text ?? ''): { line: string; needs: boolean } {
-  const row = rowOf(task);
-  const needs = row.state === 'needs';
-  const s = task.user_status;
-  const asking = s && storedUserState(s) === 'needs' && s.ask !== MARKED_ASK ? oneLine(s.ask) : '';
-  if (asking) return { line: asking, needs };
-  const said = oneLine(lastWordsOfStatus(s)) || oneLine(task.last_words?.text) || oneLine(words);
+  const row = rowOf(task, () => words);
+  const needs = row.state === 'needs' && !readHere(task);
+  const said = taskWords(task, words);
   if (said) return { line: said, needs };
   // With nothing it said known, a Needs you row's line is its category alone (needsRowLine).
-  if (needs) return { line: row.line, needs };
+  if (row.state === 'needs') return { line: row.line, needs };
   return { line: row.line || (row.state === 'working' ? row.label : ''), needs };
 }
 
 /** What needs the person, as the Tasks view counts it (Focus rows that need them, and Needs you). */
 export function needsCount(tasks: readonly Task[]): number {
   const { needs, focus } = extTaskLists(tasks);
-  return needs.length + focus.filter((r) => r.state === 'needs').length;
+  return needs.length + focus.filter((r) => r.state === 'needs' && !readHere(r.task)).length;
 }

@@ -3385,7 +3385,10 @@ an id outside `[A-Za-z0-9_-]`.
   the session begins, so a session panel can show an old chat whose transcript
   lives elsewhere. Not a chat lane session, or a replica → `200 { "messages":
   [] }`. The read past its 5 s budget, or failing → `200 { "messages": [],
-  "degraded": true }`: ask again later.
+  "degraded": true }`: ask again later. `?tail=N` (additive, 2026-11; 1 to
+  200): only the last N text rows (tool, thinking and notice rows left out),
+  with `"more": true` when older ones were left out; without it the answer is
+  the whole part, as before.
 
 ### Message hints (additive, 2026-10): `/api/v1/hints`
 

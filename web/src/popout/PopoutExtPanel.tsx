@@ -33,8 +33,8 @@ import { usePageView } from '@/utils/view-memory';
 import { taskPath } from '@/utils/task-path';
 import { log } from '@/utils/log';
 import {
-  ACT_CONTEXT_NAME, CONTEXT_NAME, actLine, currentConversation, handedOf, hostOf, otherOwnerOf, pageChipOn, pageContextBlock, panelOptions,
-  firstQuestionOf, pageKey as pageKeyOf, panelAskTitle, rememberFirstQuestion, rememberHanded, rememberSent, rememberSentPage, sentOf, sentPageOf, selectionQuote,
+  ACT_CONTEXT_NAME, CONTEXT_NAME, actLine, composerPlaceholderOf, currentConversation, handedOf, hostOf, otherOwnerOf, pageChipOn, pageContextBlock, panelOptions,
+  firstQuestionOf, selectionLeftOutOnSwitch, selectionOfferedTo, pageKey as pageKeyOf, panelAskTitle, rememberFirstQuestion, rememberHanded, rememberSent, forgetSent, rememberSentPage, sentOf, sentPageOf, selectionQuote,
   MAIN_OPEN, startConversation, type HandedAsk, type PanelContext, type VaultState,
 } from './ext-panel-model';
 import { fromParent, toParent } from './ext-frame';
@@ -185,12 +185,24 @@ function ExtPanel() {
   const scope = useMemo(() => ({ agentId: agent.id, key }), [agent.id, key]);
   const mine = record ? `task:${record.taskId}` : '';
 
-  // Another conversation: nothing is asked for it yet, and acting is as New chat left it.
+  /** The agent the person picked last (agentId moves only on a pick; `agent` also while the list loads). */
+  const pickedAgent = useRef(agentId);
+  /** The page's selection and the agent picked when it was made: the one it is offered to. */
+  const selectionOwner = useRef({ sel: '', agent: agentId });
+  const liveSelection = ctx?.page?.selection?.trim() ?? '';
+  if (liveSelection && selectionOwner.current.sel !== liveSelection) selectionOwner.current = { sel: liveSelection, agent: agentId };
+  // Another conversation: nothing is asked for it yet, and acting is as New chat left it. Another
+  // agent's conversation never takes the selection another agent was offered (review round 4, #4):
+  // only a selection made after the switch shows there; back on the agent it was made for, it
+  // shows again (round 4 code review, L5).
   useEffect(() => {
     setActChoice(carryAct.current ? true : null); setActError(''); adoptedFor.current = ''; heldSelection.current = '';
-    carryAct.current = false; actNote.current = undefined; attachedByWords.current.clear(); setLeftOut('');
+    carryAct.current = false; actNote.current = undefined; attachedByWords.current.clear();
+    const sel = ctxRef.current?.page?.selection?.trim() ?? '';
+    setLeftOut(selectionLeftOutOnSwitch(selectionOfferedTo(selectionOwner.current, sel, pickedAgent.current), agentId, sel));
+    pickedAgent.current = agentId;
     setPageAdded(''); setPageLeftOut('');
-  }, [key, chat, agent.id]);
+  }, [key, chat, agent.id, agentId]);
   // Another page: the conversation stays; the page chip and the selection are the new page's.
   useEffect(() => {
     setSentSelection(sentOf(pageKey)); setLeftOut(''); setPageAdded(''); setPageLeftOut('');
@@ -395,6 +407,17 @@ function ExtPanel() {
   // The selection on the page goes with the person's next message in a conversation already
   // going, shown in its composer until it is sent or left out.
   const selection = page?.selection?.trim() ?? '';
+  // Cleared on the page: the quote goes (it follows the page's live selection), and what was left
+  // out with ×, on a switch, or sent was that selection's; the next one, the same words too, shows
+  // (review round 4, L6: a sent selection kept the same words selected again out).
+  const lastSelection = useRef('');
+  useEffect(() => {
+    const was = lastSelection.current;
+    lastSelection.current = selection;
+    if (selection) return;
+    setLeftOut('');
+    if (was) { setSentSelection(''); forgetSent(pageKeyRef.current); }
+  }, [selection]);
   const attach = !!record?.sessionId && !!selection && selection !== leftOut && selection !== sentSelection ? selection : '';
   const attachRef = useRef(attach);
   attachRef.current = attach;
@@ -575,6 +598,9 @@ function ExtPanel() {
     />
   );
   const shownTask = shownTaskId ? asks.tasks.find((t) => t.id === shownTaskId) : undefined;
+  // An answer is read the way Home reads it: the person's first click or keystroke in the
+  // conversation (SessionPanel markRead), never its being on screen. The drawer, Continue and the
+  // Tasks badge then leave the ask out of what needs them (ext-tasks-model.ts readHere).
   // An ask with no title of its own yet shows the agent's name once (its switch), never twice.
   const named = shownTask ? panelAskTitle(shownTask, agent) : null;
   const headTitle = named
@@ -614,7 +640,7 @@ function ExtPanel() {
     return <div ref={rootRef} className="ext-panel ext-ask is-popup" data-testid="ext-panel" data-surface="popup" data-asks={asks.rowsReady || keptRows.length > 0 ? 'ready' : 'loading'}>
       {header}
       {approvalsStrip}
-      <ExtPopupBody rows={asks.rows} kept={keptRows} page={page} canAct={canAct && !owner} loading={!asks.rowsReady} />
+      <ExtPopupBody rows={asks.rows} kept={keptRows} page={page} canAct={canAct && !owner} loading={!asks.rowsReady} agentId={agentId} agentName={agent.name} />
       {drawer}
     </div>;
   }
@@ -649,7 +675,7 @@ function ExtPanel() {
       <AskObjectDrawer
         key={conv}
         objectKey={key}
-        title={page ? `Ask Walnut about ${page.title ?? hostOf(page.url)}` : 'Ask Walnut'}
+        title={page ? `Ask ${agent.name} about ${page.title ?? hostOf(page.url)}` : `Ask ${agent.name}`}
         quote={quote}
         agentId={agent.id}
         contextBlock=""
@@ -664,7 +690,7 @@ function ExtPanel() {
         noQuote={!draftQuote}
         onDropQuote={dropQuote}
         {...(askPreset ? { preset: askPreset, autoSend: true } : {})}
-        composerPlaceholder={forMain ? 'Ask the CEO, or hand it something to do…' : page ? 'Ask Walnut, or ask it to do something here…' : 'Ask Walnut anything…'}
+        composerPlaceholder={forMain ? 'Ask the CEO, or hand it something to do…' : composerPlaceholderOf(agent.name, !!page)}
         composerPill={selectionPill}
         composerBar={chips}
       />

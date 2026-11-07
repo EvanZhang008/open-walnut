@@ -70,6 +70,10 @@ function lookMsg(m: AskSnap['messages'][number]): HTMLElement {
 const ico = (k: keyof typeof LOOK_ICONS, cls = '') => h('span', { class: `look-ico ${cls}`.trim(), 'aria-hidden': 'true' }, svg(LOOK_ICONS[k]))
 
 export const NEW_CHAT_PLACEHOLDER = 'Ask Walnut, or ask it to do something here…'
+/** A new chat's placeholder naming its agent ("Ask Mentor"), as the view words it (web/src/popout/ext-panel-model.ts composerPlaceholderOf). */
+export function newChatPlaceholder(agent: string): string {
+  return /^Ask \S/.test(agent) && agent !== 'Ask Walnut' ? `${agent}, or ask it to do something here…` : NEW_CHAT_PLACEHOLDER
+}
 export const FOLLOW_UP_PLACEHOLDER = 'Ask a follow-up…'
 
 function contList(rows: ContRow[], surface: 'panel' | 'popup'): HTMLElement {
@@ -116,7 +120,7 @@ export function drawAskLook(o: AskLook, el?: HTMLElement): HTMLElement {
       pageOn ? h('span', { class: 'look-chip-x' }, '×') : null) : null,
     o.page ? h('span', { class: 'look-chip look-chip-act' }, ico('pointer'), h('span', {}, 'Act in tab')) : null)
   const composer = h('div', { class: 'look-composer' },
-    h('div', { class: 'look-placeholder', 'data-testid': 'panel-snap-placeholder' }, s?.placeholder || (talking ? FOLLOW_UP_PLACEHOLDER : NEW_CHAT_PLACEHOLDER)),
+    h('div', { class: 'look-placeholder', 'data-testid': 'panel-snap-placeholder' }, s?.placeholder || (talking ? FOLLOW_UP_PLACEHOLDER : newChatPlaceholder(agent))),
     h('div', { class: 'look-bar' }, ico('plus', 'look-plus'), chips, h('span', { class: 'look-end' }, ico('mic', 'look-mic'), h('span', { class: 'look-send' }, ico('send')))))
   box.replaceChildren(head, body,
     ...(sugg.length ? [h('div', { class: 'look-sugg' }, ...sugg.map((t, i) => suggChip(t, suggIcons[i] ?? '')))] : []),

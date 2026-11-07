@@ -14,7 +14,9 @@
  * ArrowDown (through the background: menu-focus); ArrowUp / ArrowDown / Home / End pick a row,
  * Enter fills it, Escape and Tab close the menu and give the field its focus back. An Enter that
  * comes before the keys were handed over (typed fast after the ArrowDown) waits a moment for
- * them, and then fills the first login of this site, never one of another part of it.
+ * them, and then fills the row the arrows typed reached (the first login of this site after one),
+ * never one of another part of it. Arrows typed in the field before or just after the hand-over
+ * count as rows too (menu-focus `step`, `more`).
  */
 import { ask as askBackground, ext } from './ext'
 import { avatar, h, icon, totpView } from './dom'
@@ -46,8 +48,18 @@ let wantFocus: 'first' | 'last' | null = null
 let codeTimer = 0
 /** An Enter that came before the keys were handed over: when, so it still counts a moment later. */
 let pendingPick = 0
+/** That Enter was typed on the rows the person saw (the keys were here already): any row it is on fills. */
+let pendingChosen = false
 /** Arrow keys pressed in the menu before the keys were handed over (menu-focus): the rows to move once they are. */
 let early = 0
+/** When the keys were handed over (menu-focus): keys the field got just before still come after it. */
+let armedAt = 0
+/**
+ * How long an Enter waits after the hand-over before it fills: a second arrow key typed at once may
+ * have reached the field (or the page) instead of this frame and come the long way, through the
+ * background, a moment after the Enter (content-ui.ts keysOnTheWay).
+ */
+const SETTLE_MS = 250
 /** What the person typed in the field (content-ui.ts): only the rows that fit it show. */
 let filterText = ''
 
@@ -132,7 +144,7 @@ async function render(): Promise<void> {
     scheduleCodes(d, items)
     if (filterText) applyFilter(filterText, false)
   }
-  requestAnimationFrame(() => { size(); if (wantFocus) focusList(wantFocus); tryPendingPick() })
+  requestAnimationFrame(() => { size(); if (wantFocus) focusList(wantFocus); pickSoon() })
 }
 
 /** A heading in the list, and its rows under it (the heading is no row: the keys skip it). */
@@ -239,17 +251,34 @@ function focusList(where: 'first' | 'last'): void {
   early = 0
 }
 
+/** Rows typed past the hand-over's row in the field, before or after it (content-ui.ts). */
+function moveBy(step: number): void {
+  if (!step) return
+  if (armed && list && rows.length && current >= 0 && wantFocus === null) setCurrent(current + step)
+  else early += step
+}
+
+/** Fill the pending Enter's row once the keys typed with it are all here. */
+function pickSoon(): void {
+  if (!pendingPick) return
+  const wait = armedAt + SETTLE_MS - Date.now()
+  if (wait > 0) setTimeout(tryPendingPick, wait)
+  else tryPendingPick()
+}
+
 /**
  * An Enter that came before the keys were handed over (or one the page script held for us, `pick`):
- * once they are, and the rows are drawn, it fills the first login of this site. A login saved for
- * another part of the site is filled only when the person picks it themself.
+ * once they are, and the rows are drawn, it fills the row the arrow keys typed before it reached
+ * (the first login of this site after one ArrowDown). A login saved for another part of the site
+ * is filled only when the person picks it themself (`pendingChosen`: an Enter on the rows they saw).
  */
 function tryPendingPick(): void {
   if (!pendingPick) return
   if (Date.now() - pendingPick > 2500) { pendingPick = 0; return }
   if (!armed || !rows.length || current < 0) return
   pendingPick = 0
-  if (rows[current]?.dataset.tier !== '2') pickCurrent()
+  if (pendingChosen || rows[current]?.dataset.tier !== '2') pickCurrent()
+  pendingChosen = false
 }
 
 /** Enter on the picked row: only once the frame may act (frame-guard.ts), waiting the moment out. */
@@ -278,8 +307,8 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === 'End') { e.preventDefault(); setCurrent(rows.length - 1) }
   else if (e.key === 'Enter' || e.key === ' ') {
     e.preventDefault()
-    if (armed && current >= 0) pickCurrent()
-    else if (e.key === 'Enter') { pendingPick = Date.now(); tryPendingPick() }
+    if (armed && current >= 0 && Date.now() - armedAt >= SETTLE_MS) pickCurrent()
+    else if (e.key === 'Enter' || armed) { pendingPick = Date.now(); pendingChosen = armed && current >= 0; pickSoon() }
   }
 })
 let closing = ''
@@ -293,17 +322,27 @@ document.addEventListener('pointerdown', (e) => { if (e.isTrusted) { armed = tru
 addEventListener('blur', () => { armed = false })
 
 // The page script moved the person's keys here (through the background, so a page cannot).
-const pendingFocus: Array<{ nonce: string; where: 'first' | 'last'; pick: boolean }> = []
-function applyFocus(m: { nonce: string; where: 'first' | 'last'; pick: boolean }): void {
+type FocusReq = { nonce: string; where: 'first' | 'last'; pick: boolean; step: number; more: boolean }
+const pendingFocus: FocusReq[] = []
+function applyFocus(m: FocusReq): void {
   if (m.nonce !== currentNonce()) return
+  // A key typed in the field just after the hand-over: where the keys stand now, not a new hand-over.
+  if (m.more) {
+    moveBy(m.step)
+    if (m.pick) { pendingPick = Date.now(); pickSoon() }
+    return
+  }
   armed = true
+  armedAt = Date.now()
+  early += m.step
   if (m.pick) pendingPick = Date.now()
-  if (rows.length || list) { focusList(m.where); tryPendingPick() }
+  if (rows.length || list) { focusList(m.where); pickSoon() }
   else wantFocus = m.where
 }
-ext.runtime.onMessage.addListener((m: { type?: string; nonce?: string; where?: string; pick?: boolean }) => {
+ext.runtime.onMessage.addListener((m: { type?: string; nonce?: string; where?: string; pick?: boolean; step?: unknown; more?: boolean }) => {
   if (m?.type !== 'menu-focus' || typeof m.nonce !== 'string') return
-  const req = { nonce: m.nonce, where: m.where === 'last' ? 'last' as const : 'first' as const, pick: m.pick === true }
+  const step = typeof m.step === 'number' && Number.isInteger(m.step) ? m.step : 0
+  const req: FocusReq = { nonce: m.nonce, where: m.where === 'last' ? 'last' as const : 'first' as const, pick: m.pick === true, step, more: m.more === true }
   if (!currentNonce()) pendingFocus.push(req)
   else applyFocus(req)
 })

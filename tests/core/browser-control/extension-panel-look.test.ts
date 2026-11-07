@@ -21,7 +21,8 @@ const local: Record<string, unknown> = {}
 const { agentAskKey, keepSnap, shellOf, snapOf } = await import('../../../packages/browser-extension/src/panel-snap')
 // The Ask view on Walnut's own agent said so (its `agent` word): its conversation is the one drawn.
 const CURRENT_ASK_KEY = agentAskKey('walnut')
-const { drawAskLook, NEW_CHAT_PLACEHOLDER, FOLLOW_UP_PLACEHOLDER } = await import('../../../packages/browser-extension/src/panel-look')
+const { drawAskLook, newChatPlaceholder, NEW_CHAT_PLACEHOLDER, FOLLOW_UP_PLACEHOLDER } = await import('../../../packages/browser-extension/src/panel-look')
+const { composerPlaceholderOf } = await import('../../../web/src/popout/ext-panel-model')
 
 beforeEach(() => { for (const k of Object.keys(local)) delete local[k]; local.panelServer = 'http://walnut.example.test'; local.panelSnaps = { agent: { id: 'walnut', at: 0 } } })
 
@@ -209,5 +210,14 @@ describe('every icon the extension draws parses', () => {
       for (const m of src.matchAll(/<svg \$\{[^}]+\}([^>]*)>/g)) if (/\b(width|height|stroke-width|viewBox|fill|stroke)=/.test(m[1])) bad.push(`${f}: ${m[0].slice(0, 80)}`)
     }
     expect(bad).toEqual([])
+  })
+})
+
+describe('a new chat of another agent (review round 4, #5)', () => {
+  it('the drawing names the agent in its placeholder, as the view does', () => {
+    expect(newChatPlaceholder('Ask Mentor')).toBe(composerPlaceholderOf('Mentor', true))
+    expect(newChatPlaceholder('Ask Walnut')).toBe(composerPlaceholderOf('Walnut', true))
+    const el = drawAskLook({ surface: 'panel', snap: null, shell: { at: 0, agent: 'Ask Mentor' }, page: null, locked: false } as never)
+    expect(el.querySelector('[data-testid="panel-snap-placeholder"]')?.textContent).toBe('Ask Mentor, or ask it to do something here…')
   })
 })

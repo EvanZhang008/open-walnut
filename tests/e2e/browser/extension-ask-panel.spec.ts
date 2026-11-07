@@ -176,10 +176,10 @@ test('the panel opens on Ask, with no tab strip; the key wears its padlock', asy
   }
   // A row that needs the person wears the red dot.
   await expect(cont.locator(`[data-testid="ext-continue-row"][data-task-id="${seeded[2]}"]`)).toHaveAttribute('data-needs', 'true')
-  // The suggestion chips read whole at 400 px: the stem has a blank to fill, never an ellipsis.
+  // The suggestion chips read whole at 400 px: whole words, no ellipsis and no drawn blank (round 4, #7).
   const chips = v.locator('.draft-walnut-suggests .session-action-chip')
-  await expect(chips).toHaveText(['Which task is', 'Schedule my day', 'What ran today'])
-  await expect(chips.first().locator('.session-action-chip-blank')).toHaveCount(1)
+  await expect(chips).toHaveText(['Find a task', 'Schedule my day', 'What ran today'])
+  await expect(v.locator('.draft-walnut-suggests .session-action-chip-blank')).toHaveCount(0)
   for (const c of await chips.all()) expect(await c.evaluate((e) => e.scrollWidth <= e.clientWidth + 1)).toBe(true)
   // What the extension keeps to draw while the frame loads next time: this view itself.
   await expect.poll(async () => {
@@ -979,6 +979,223 @@ test('the header\'s key and New chat are in the first frame, the placeholder\'s 
     expect(b.x + b.width, `${id} inside the view`).toBeLessThanOrEqual(vw + 0.5)
   }
   await p.close()
+})
+
+test('an old phone chat reads its last answer; the Tasks view says the same; a click or keystroke in it reads its answer, which leaves the count until the next (review round 4, #1 #2 #3)', async () => {
+  test.setTimeout(240_000)
+  // An ask on a phone chat opened again: its lane session never ran a turn (no transcript), its
+  // whole chat is in chat history (tests/e2e/browser/chat-earlier-fixture.ts).
+  const made = await lab.doc.request.post(`${lab.base}/api/v1/tasks`, { data: { title: 'An old phone chat', project: 'Ask Walnut' } })
+  expect(made.ok(), await made.text()).toBe(true)
+  const oldTask = String(((await made.json()) as Record<string, any>).task?.id)
+  seeded.push(oldTask)
+  const handBack = async () => {
+    expect((await lab.doc.request.post(`${lab.base}/api/test/task-fixture/hand-back`, { data: { taskId: oldTask, sessionId: 'pw-chat-earlier-ext' } })).ok()).toBe(true)
+    // A real hand-back's read marker (phase.ts readMarkerForPhase); the fixture route writes the phase raw.
+    expect((await lab.doc.request.patch(`${lab.base}/api/tasks/${oldTask}`, { data: { unread: true } })).ok()).toBe(true)
+  }
+  await handBack()
+  const stateOf = async () => ((await (await lab.doc.request.get(`${lab.base}/api/v1/tasks/${oldTask}`)).json()) as Record<string, any>).task as { unread?: boolean; user_status?: { state?: string } }
+  await expect.poll(async () => (await stateOf()).user_status?.state, { timeout: 60_000 }).toBe('read')
+  const ANSWER = 'Old phone answer 30, with bold text'
+
+  const p = await openAskPanel()
+  const v = askView(p)
+  const diag: string[] = []
+  p.on('console', (m) => { const t = m.text(); if (/tasks|ws /.test(t)) diag.push(`${Date.now()} ${m.location().url.includes('ext-tasks') ? 'T' : 'A'} ${t.slice(0, 240)}`) })
+  try {
+    await v.getByTestId('ext-panel-new').click()
+    const contRow = v.locator(`[data-testid="ext-continue-row"][data-task-id="${oldTask}"]`)
+    await expect(contRow.locator('.ask-walnut-drawer-item-line')).toHaveText(ANSWER, { timeout: 30_000 })
+    await expect(contRow).toHaveAttribute('data-needs', 'true')
+    await v.getByTestId('ask-walnut-menu').click()
+    const drawerRow = v.locator(`[data-testid="ask-walnut-drawer-item"][data-task-id="${oldTask}"]`)
+    await expect(drawerRow.locator('.ask-walnut-drawer-item-line')).toHaveText(ANSWER)
+    await p.keyboard.press('Escape')
+    // The Tasks view: its row says the same words after what to do.
+    await openView(p, 'tasks')
+    const taskRow = tasksView(p).locator(`[data-testid="ext-task"][data-task-id="${oldTask}"]`)
+    await expect(taskRow.locator('.ext-task-line')).toHaveText(`Take a look: ${ANSWER}`, { timeout: 30_000 })
+    await p.setViewportSize({ width: 400, height: 760 })
+    await shots(p, 'r4-tasks-lines')
+    await backToAsk(p)
+
+    // Opened in the panel with its answer on screen, it is not read yet: Home's rule, a click or a
+    // keystroke in the conversation reads it, its being on screen does not (round 4 code review).
+    const answerShown = v.getByText(ANSWER.replace(', with bold text', '')).first()
+    const openOld = async () => {
+      await v.getByTestId('ask-walnut-menu').click()
+      await drawerRow.click()
+      await expect(v.getByTestId('ask-object-session')).toHaveAttribute('data-session-id', 'pw-chat-earlier-ext', { timeout: 30_000 })
+      await expect(answerShown).toBeVisible({ timeout: 30_000 })
+    }
+    await openOld()
+    await p.waitForTimeout(2_500)
+    expect((await stateOf()).unread, 'shown, not touched: still unread').toBe(true)
+    await v.getByTestId('ask-walnut-menu').click()
+    await expect(drawerRow.locator('.ask-walnut-drawer-needs')).toHaveClass(/is-on/)
+    await p.keyboard.press('Escape')
+
+    // A click in the conversation reads it.
+    await answerShown.click()
+    await expect.poll(async () => (await stateOf()).unread, { timeout: 15_000 }).toBe(false)
+    const markAt = Date.now()
+    // Walnut's own status is as it was (an answer to read stays on Home's list).
+    expect((await stateOf()).user_status?.state).toBe('read')
+    const leavesEverywhere = async () => {
+      await v.getByTestId('ext-panel-new').click()
+      await expect(contRow).toHaveAttribute('data-needs', 'false', { timeout: 15_000 })
+      await v.getByTestId('ask-walnut-menu').click()
+      await expect(drawerRow.locator('.ask-walnut-drawer-needs')).not.toHaveClass(/is-on/)
+      await p.keyboard.press('Escape')
+      await openView(p, 'tasks')
+      try {
+        await expect(tasksView(p).getByTestId('ext-tasks-needs').locator(`[data-task-id="${oldTask}"]`)).toHaveCount(0, { timeout: 15_000 })
+      } catch (err) {
+        const st = await stateOf()
+        console.log(`[r4-3] server: unread=${st.unread} status=${JSON.stringify(st.user_status)}; read at ${markAt}; frames:\n${diag.join('\n')}`)
+        throw err
+      }
+      await backToAsk(p)
+    }
+    await leavesEverywhere()
+    await shots(p, 'r4-drawer-read')
+
+    // Its next answer brings the dot back; a keystroke in the conversation reads it again.
+    await handBack()
+    await expect(contRow).toHaveAttribute('data-needs', 'true', { timeout: 30_000 })
+    await openOld()
+    expect((await stateOf()).unread).toBe(true)
+    // Focus without a pointer, then a key that types nothing.
+    const box = v.locator('[data-testid="ask-object-session"] textarea').first()
+    await box.focus()
+    await p.waitForTimeout(1_000)
+    expect((await stateOf()).unread, 'focus alone is no read').toBe(true)
+    await p.keyboard.press('ArrowRight')
+    await expect.poll(async () => (await stateOf()).unread, { timeout: 15_000 }).toBe(false)
+    await leavesEverywhere()
+
+    // A real ask of the person keeps its dot though it was read (Decide is not read away).
+    const asked = await lab.doc.request.post(`${lab.base}/api/v1/tasks`, { data: { title: 'Which slot for the call', project: 'Ask Walnut' } })
+    expect(asked.ok(), await asked.text()).toBe(true)
+    const realAsk = String(((await asked.json()) as Record<string, any>).task?.id)
+    seeded.push(realAsk)
+    const rep = await lab.doc.request.put(`${lab.base}/api/v1/tasks/${realAsk}/report`, { data: { state: 'needs', ask: 'Pick the 3 pm or the 4 pm slot for the call?' } })
+    expect(rep.ok(), await rep.text()).toBe(true)
+    expect((await lab.doc.request.patch(`${lab.base}/api/tasks/${realAsk}`, { data: { unread: false } })).ok()).toBe(true)
+    await v.getByTestId('ext-panel-new').click()
+    await expect(v.getByTestId('ext-continue').locator(`[data-testid="ext-continue-row"][data-task-id="${realAsk}"]`)).toHaveAttribute('data-needs', 'true', { timeout: 30_000 })
+    await v.getByTestId('ask-walnut-menu').click()
+    await expect(v.locator(`[data-testid="ask-walnut-drawer-item"][data-task-id="${realAsk}"] .ask-walnut-drawer-needs`)).toHaveClass(/is-on/)
+    await p.keyboard.press('Escape')
+  } finally {
+    await p.close()
+  }
+})
+
+test('the selection quote follows the page and stays with its agent; the composer names the agent (review round 4, #4 #5)', async () => {
+  test.setTimeout(180_000)
+  // The agent pick is mirrored to the fixture's ui-prefs: kept in this browser, never handed to another spec.
+  await lab.ctx.route('**/api/ui-prefs', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: route.request().method() === 'GET' ? '{"prefs":{}}' : '{"ok":true}' }))
+  await lab.doc.goto(lab.site('docs.example.test', '/notes'))
+  const p = await openAskPanel()
+  const v = askView(p)
+  const quote = v.getByTestId('ask-object-quote')
+  const box = v.locator('[data-testid="ask-object-compose"] textarea')
+  try {
+    await v.getByTestId('ext-panel-new').click()
+    await selectText(lab.doc, 'p1')
+    await expect(quote).toContainText('retries a failed upload three times', { timeout: 15_000 })
+    // Cleared on the page: gone here.
+    await lab.doc.evaluate(() => getSelection()?.removeAllRanges())
+    await expect(quote).toHaveCount(0, { timeout: 10_000 })
+    // Selected again (the same words): shown again.
+    await selectText(lab.doc, 'p1')
+    await expect(quote).toContainText('retries a failed upload three times', { timeout: 15_000 })
+    // Another agent: its conversation is not offered the selection shown to Walnut's.
+    await v.getByTestId('ext-ask-agent').click()
+    await v.locator('[data-testid="ask-walnut-agent-item"][data-agent-id="mentor"]').click()
+    await expect(v.locator('.ext-ask-agent')).toContainText('Mentor', { timeout: 15_000 })
+    // Its list, still open, says when it has no asks, its words where the drawer's title starts (round 4, #7).
+    const drawer = v.getByTestId('ask-walnut-drawer')
+    if (await drawer.isVisible()) {
+      const empty = drawer.locator('.ask-walnut-drawer-empty').first()
+      if (await empty.isVisible()) {
+        // Where each one's words start (a button's box starts at its padding, not its text).
+        const textX = (l: typeof empty) => l.evaluate((e) => { const r = document.createRange(); r.selectNodeContents(e); return r.getClientRects()[0]?.left ?? -1 })
+        const ex = await textX(empty)
+        const tx = await textX(v.locator('.ask-walnut-drawer-title').first())
+        expect(Math.abs(ex - tx), `the empty line starts where the title does (${ex} vs ${tx})`).toBeLessThanOrEqual(2)
+      }
+      await p.setViewportSize({ width: 400, height: 760 })
+      await shots(p, 'r4-mentor-drawer')
+      await p.keyboard.press('Escape')
+    }
+    if (await v.getByTestId('ask-object-session').isVisible()) await v.getByTestId('ext-panel-new').click()
+    await expect(box).toHaveAttribute('placeholder', 'Ask Mentor, or ask it to do something here…', { timeout: 15_000 })
+    await expect(quote).toHaveCount(0)
+    await p.setViewportSize({ width: 400, height: 760 })
+    await shots(p, 'r4-mentor-no-quote')
+    // A selection made after the switch is its own.
+    await selectText(lab.doc, 'p2')
+    await expect(quote).toContainText('Dark mode follows', { timeout: 15_000 })
+  } finally {
+    await lab.doc.evaluate(() => getSelection()?.removeAllRanges())
+    // Back on Walnut's agent for the files after this one.
+    if (await v.getByTestId('ask-walnut-drawer').isVisible().catch(() => false)) await p.keyboard.press('Escape').catch(() => undefined)
+    await v.getByTestId('ext-ask-agent').click({ timeout: 10_000 }).catch(() => undefined)
+    await v.locator(`[data-testid="ask-walnut-agent-item"][data-agent-id="general"]`).click({ timeout: 10_000 }).catch(() => undefined)
+    await p.close()
+    await lab.ctx.unroute('**/api/ui-prefs')
+  }
+})
+
+test('Tasks opened before it was ever shown: its loading line at once, never a blank body (review round 4, R4-8)', async () => {
+  test.setTimeout(120_000)
+  // No lists of last time: the extension's kept drawing of Tasks is gone. The shared panel goes
+  // first (its Tasks view, opened by an earlier test, keeps the drawing current as tasks change on
+  // the shared server); the last test closes it anyway.
+  await panel.close().catch(() => undefined)
+  await sw(lab).evaluate(async () => {
+    const all = ((await chrome.storage.local.get('panelSnaps')).panelSnaps ?? {}) as Record<string, unknown>
+    delete all.tasks
+    await chrome.storage.local.set({ panelSnaps: all })
+  })
+  const p = await openAskPanel()
+  try {
+    const v = askView(p)
+    await v.getByTestId('ask-walnut-menu').click()
+    // Every frame from the click on: the Tasks view shows the drawing or its own content.
+    await p.evaluate(() => {
+      const w = window as unknown as { __tasks: Array<{ at: number; snap: string | null }>; __t0: number }
+      w.__tasks = []
+      w.__t0 = performance.now()
+      const tick = () => {
+        const view = document.querySelector('[data-testid="panel-view-tasks"]')
+        if (view && !(view as HTMLElement).hidden) w.__tasks.push({ at: performance.now() - w.__t0, snap: view.querySelector('[data-testid="panel-snap"]')?.getAttribute('data-snap') ?? (view.querySelector('[data-testid="panel-snap"]') ? 'lists' : null) })
+        if (w.__tasks.length < 400) requestAnimationFrame(tick)
+      }
+      tick()
+    })
+    const clicked = Date.now()
+    await v.getByTestId('ext-drawer-tasks').click()
+    await expect(p.getByTestId('panel-view-tasks')).toBeVisible({ timeout: 15_000 })
+    // What the body showed before this drawing: Walnut's own page in the frame, once it is up.
+    await expect(tasksView(p).getByTestId('ext-tasks')).toBeVisible({ timeout: 30_000 })
+    const ownAt = Date.now() - clicked
+    await expect(p.getByTestId('panel-view-tasks').getByTestId('panel-snap')).toHaveCount(0, { timeout: 20_000 })
+    const frames = await p.evaluate(() => (window as unknown as { __tasks: Array<{ at: number; snap: string | null }> }).__tasks)
+    expect(frames.length).toBeGreaterThan(0)
+    // Its loading line is drawn within a frame or two of the view showing (one storage read), long
+    // before Walnut's page in the frame can draw; it goes once the view says its lists are up.
+    const first = frames[0].at
+    const drawn = frames.find((f) => f.snap === 'loading')
+    expect(drawn, JSON.stringify(frames.slice(0, 8))).toBeTruthy()
+    expect(drawn!.at - first).toBeLessThan(200)
+    console.log(`[r4-8] Tasks view on screen at ${Math.round(first)} ms after the drawer opened, its loading line at ${Math.round(drawn!.at)} ms; the frame's own content about ${ownAt} ms after the click (the body was blank until then before this drawing); the drawing gone at ${Math.round(frames.find((f) => f.at > drawn!.at && !f.snap)?.at ?? -1)} ms`)
+  } finally {
+    await p.close()
+  }
 })
 
 /** The background's answer from Walnut's panel route, as an older Walnut gives it (no `askPanel`). */

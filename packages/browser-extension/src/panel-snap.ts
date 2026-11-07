@@ -250,3 +250,15 @@ export function drawSnap(view: SnapView, snap: AskSnap | TasksSnap): HTMLElement
           h('span', { class: 'panel-snap-task-title' }, r.title),
           h('span', { class: 'panel-snap-task-line' }, r.line)))))))
 }
+
+/**
+ * The Tasks view before it has ever shown here (no lists of last time): its save row and the line
+ * it says while its tasks load, in the view's places, never a blank body while Walnut's page starts
+ * in its frame (about a second, longer on a busy machine; review 2026-11-06 round 4, R4-8: 2.5 s of
+ * the bar alone).
+ */
+export function drawTasksLoading(): HTMLElement {
+  return h('div', { class: 'panel-snap panel-snap-tasks', 'data-testid': 'panel-snap', 'data-snap': 'loading', 'aria-hidden': 'true' },
+    h('div', { class: 'panel-snap-save' }, h('span', { class: 'panel-snap-btn' }, 'Save this page as a task')),
+    h('p', { class: 'panel-snap-loading' }, h('span', { class: 'panel-snap-spinner' }), 'Loading your tasks…'))
+}

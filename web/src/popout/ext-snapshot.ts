@@ -86,7 +86,7 @@ export function askViewSnapOf(root: ParentNode): Omit<AskSnap, 'title' | 'host' 
     time: cut(textOf(row.querySelector('.ask-walnut-drawer-item-time')), 30),
     needs: row.getAttribute('data-needs') === 'true',
   })).filter((r) => r.title);
-  // A stem chip names its blank in its label ("Which task is …"): the words the person reads.
+  // A chip's label as the person reads it (an older chip named a stem's blank in its aria-label).
   const chips = Array.from(root.querySelectorAll('.draft-walnut-suggests .session-action-chip')).slice(0, SNAP_SUGGESTIONS)
     .map((c) => ({ label: cut(c.getAttribute('aria-label') ?? textOf(c), 60), icon: c.getAttribute('data-icon') ?? '' })).filter((c) => c.label);
   const suggestions = chips.map((c) => c.label);

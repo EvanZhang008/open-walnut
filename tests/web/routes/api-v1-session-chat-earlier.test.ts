@@ -143,6 +143,18 @@ describe('GET /api/v1/sessions/:id/chat-earlier', () => {
       'assistant:text:About eight minutes in all.',
     ])
     expect(earlier.messages.every((m) => m.createdAt.length > 0)).toBe(true)
+
+    // `?tail=N`: the last N text rows only, saying older ones were left out; no tail, the whole part.
+    const res = await fetch(apiUrl('/api/v1/sessions/earlier-warm-1/chat-earlier?tail=2'))
+    const tail = await res.json() as Earlier & { more?: boolean }
+    expect(texts(tail)).toEqual(['user:text:And for how long?', 'assistant:text:About eight minutes in all.'])
+    expect(tail.more).toBe(true)
+    const all = await (await fetch(apiUrl('/api/v1/sessions/earlier-warm-1/chat-earlier?tail=50'))).json() as Earlier & { more?: boolean }
+    expect(all.messages).toHaveLength(4)
+    expect(all.more).toBe(false)
+    const bad = await (await fetch(apiUrl('/api/v1/sessions/earlier-warm-1/chat-earlier?tail=x'))).json() as Earlier & { more?: boolean }
+    expect(bad.messages).toHaveLength(4)
+    expect(bad.more).toBeUndefined()
   })
 
   it("serves the older lane segments and their prefix, never the session's own turns or later ones", async () => {

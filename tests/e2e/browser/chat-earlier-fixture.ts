@@ -19,6 +19,12 @@ import path from 'node:path'
 export const EARLIER_OLD_SESSION = 'pw-chat-earlier-old'
 export const EARLIER_OLD_CONV = 'conv-pw-chat-earlier-old'
 export const EARLIER_CONT_SESSION = 'pw-chat-earlier-cont'
+/**
+ * The old chat again, for the extension's ask spec alone: that spec links it to an ask task of its
+ * own (POST /api/test/task-fixture/hand-back), which the shared old chat above must never be.
+ */
+export const EARLIER_EXT_SESSION = 'pw-chat-earlier-ext'
+export const EARLIER_EXT_CONV = 'conv-pw-chat-earlier-ext'
 export const EARLIER_CONT_CONV = 'conv-pw-chat-earlier-cont'
 /** Long enough that the block pages ("Show N earlier messages"). */
 export const EARLIER_OLD_TURNS = 30
@@ -35,6 +41,11 @@ export function chatEarlierSessionRecords(now: number, cwd: string): Array<Recor
     {
       ...base, claudeSessionId: EARLIER_OLD_SESSION, lane: `chat:general:${EARLIER_OLD_CONV}`,
       title: 'Chat earlier: old chat', startedAt: new Date(now - DAY).toISOString(),
+      lastActiveAt: new Date(now - DAY).toISOString(), last_status_change: new Date(now - DAY).toISOString(),
+    },
+    {
+      ...base, claudeSessionId: EARLIER_EXT_SESSION, lane: `chat:general:${EARLIER_EXT_CONV}`,
+      title: 'Chat earlier: old chat (extension)', startedAt: new Date(now - DAY).toISOString(),
       lastActiveAt: new Date(now - DAY).toISOString(), last_status_change: new Date(now - DAY).toISOString(),
     },
     {
@@ -62,6 +73,7 @@ export async function writeChatEarlierFiles(home: string, now: number, cwd: stri
     old.push(asst(earlierOldAnswer(i), oldStart + i * 60_000 + 20_000))
   }
   await fs.writeFile(path.join(dir, `${EARLIER_OLD_CONV}.json`), store(old))
+  await fs.writeFile(path.join(dir, `${EARLIER_EXT_CONV}.json`), store(old))
 
   const contStart = now - 10 * DAY
   await fs.writeFile(path.join(dir, `${EARLIER_CONT_CONV}.json`), store([

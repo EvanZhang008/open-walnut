@@ -3,8 +3,9 @@
  * one form, a sign-in inside a same-site frame, a two-step sign-in, a one-time-code page):
  * a card or an identity fills every field it has a value for and says what it lacked; a framed
  * login fills and its menu is never cut by the frame; the keyboard picks and fills, even typed
- * fast; the menu never covers the form's own button, opens on the code page only when the person
- * is in the field, closes on an outside click, a submit and Escape, and filters as the person
+ * fast; the menu opens under the field whenever it fits there (the form's button under it or
+ * not), above it only when it does not, opens on the code page only when the person is in the
+ * field, closes on an outside click, a submit and Escape, and filters as the person
  * types; logins saved for another part of the site are listed under their own heading.
  *
  * Sites are *.a2lab.test (mapped to this machine), so nothing the other specs save matches them.
@@ -61,9 +62,13 @@ const SITES: Record<string, Record<string, string>> = {
       <label>Current password <input name="current" type="password" autocomplete="current-password"></label>
       <label>New password <input name="new1" type="password" autocomplete="new-password"></label>
       <label>Confirm new password <input name="new2" type="password" autocomplete="new-password"></label><button>Change password</button></form>`),
-    // A sign-up whose button sits right under the new password (review R3-11).
+    // A sign-up whose button sits right under the new password (reviews R3-11, R4-6).
     '/signup': page('Create your Lab Shop account', `<form onsubmit="return false"><label>Name <input name="name" autocomplete="name"></label>
       <label>Email <input name="email" type="email" autocomplete="username"></label>
+      <label>Password <input name="password" type="password" autocomplete="new-password"></label><button>Create account</button></form>`),
+    // The same sign-up low on a long page, its password field near the window's bottom edge.
+    '/signup-low': page('Create your Lab Shop account', `<p>Read the terms before you sign up.</p><div style="height:calc(100vh - 400px)"></div>
+      <form onsubmit="return false"><label>Email <input name="email" type="email" autocomplete="username"></label>
       <label>Password <input name="password" type="password" autocomplete="new-password"></label><button>Create account</button></form>`),
     '/frame': page('Sign in (framed)', `<p>The sign-in form below is inside a frame from the same site.</p><iframe id="fr" src="/signin" style="width:100%;height:340px;border:1px solid #ccc"></iframe>`),
   },
@@ -128,39 +133,19 @@ async function expectUnder(p: Page, field: import('@playwright/test').Locator): 
 }
 
 /**
- * The form's send button sits right under the field: the menu goes right over the field instead,
- * on its left edge, clear of the button, when the room above holds it; else under the field, as
- * always (never beside it). R3-11.
+ * The menu is drawn right over the field, on its left edge, inside the window: only when the room
+ * under the field cannot hold it (R4-6).
  */
-async function expectClearWhenRoom(p: Page, field: import('@playwright/test').Locator, button: import('@playwright/test').Locator): Promise<'over' | 'under'> {
+async function expectAbove(p: Page, field: import('@playwright/test').Locator): Promise<void> {
   const f = (await field.boundingBox())!
-  let where: 'over' | 'under' = 'under'
-  await expect.poll(async () => {
-    const m = await menuBox(p)
-    if (!m) return 'no menu'
-    if (Math.abs(m.x - f.x) > 2) return `not on the field's edge: ${JSON.stringify(m)}`
-    if (Math.abs(m.y - (f.y + f.height + 4)) <= 2) {
-      where = 'under'
-      // Under it only when the room over the field cannot hold the menu.
-      return m.height > f.y - 8 ? 'ok' : `under, with room over it: ${JSON.stringify(m)} field ${JSON.stringify(f)}`
-    }
-    where = 'over'
-    return 'ok'
-  }).toBe('ok')
-  if (where === 'over') await expectAboveClear(p, field, button)
-  return where
-}
-
-/** Right over the field, on its left edge, clear of the button. */
-async function expectAboveClear(p: Page, field: import('@playwright/test').Locator, button: import('@playwright/test').Locator): Promise<void> {
-  const f = (await field.boundingBox())!
-  const b = (await button.boundingBox())!
+  const view = p.viewportSize()!
   await expect.poll(async () => {
     const m = await menuBox(p)
     if (!m) return 'no menu'
     if (Math.abs(m.y + m.height - (f.y - 4)) > 2 || Math.abs(m.x - f.x) > 2) return `not over the field: ${JSON.stringify(m)} field ${JSON.stringify(f)}`
-    const covers = m.x < b.x + b.width && m.x + m.width > b.x && m.y < b.y + b.height && m.y + m.height > b.y
-    return covers ? 'covers the button' : m.y >= 0 ? 'ok' : 'past the top'
+    if (m.y < 0) return 'past the top'
+    // It went above because it does not fit under the field.
+    return m.height > view.height - (f.y + f.height) - 8 ? 'ok' : `above, with room under it: ${JSON.stringify(m)} field ${JSON.stringify(f)}`
   }).toBe('ok')
 }
 
@@ -313,15 +298,15 @@ test('a login inside a same-site frame: the menu fits inside the frame, and a pi
   await p.close()
 })
 
-test('two-step sign in: the menu sits on the field\'s edge (over it when there is room, clear of Next), ArrowDown and Enter fill the email and close it, and the password step offers its login', async () => {
+test('two-step sign in: the menu opens under the email field, Next under it or not, ArrowDown and Enter fill the email and close it, and the password step offers its login', async () => {
   const p = await ctx.newPage()
   await p.goto(site('accounts.a2lab.test', '/email'))
   const email = p.getByLabel('Email')
   await email.click()
   await menuOf(p, false)
   await p.waitForTimeout(500)
-  // Next is right under the field: the menu goes over the field when the room there holds it, else under it (R3-11).
-  await expectClearWhenRoom(p, email, p.getByRole('button', { name: 'Next' }))
+  // Next is right under the field: the menu still opens under it, where it fits (R4-6).
+  await expectUnder(p, email)
   await shot(p, 'two-step-email-menu')
   await p.keyboard.press('ArrowDown')
   await p.keyboard.press('Enter')
@@ -353,6 +338,27 @@ test('the menu open, ArrowDown twice and Enter at normal speed: the second login
   await p.close()
 })
 
+test('ArrowDown twice typed at once, before the menu is up: the second row is picked, and Enter fills it', async () => {
+  const p = await ctx.newPage()
+  await p.goto(site('shop.a2lab.test', '/signin'))
+  await p.waitForTimeout(600)
+  const email = p.getByLabel('Email')
+  // The focus put there by the page (the menu does not open by itself then), then the keys at once:
+  // they come while the menu is on its way, and each arrow is a row (2026-11-07: an arrow typed
+  // before the keys were handed to the menu was lost, and the first login filled).
+  await email.evaluate((el: HTMLInputElement) => el.focus())
+  await p.waitForTimeout(800)
+  expect(menuCount(p)).toBe(0)
+  await p.keyboard.press('ArrowDown')
+  await p.keyboard.press('ArrowDown')
+  const items = (await menuOf(p, false)).locator('[data-testid=menu-item]:not([data-tier="2"])')
+  await expect(items.nth(1)).toHaveAttribute('aria-selected', 'true', { timeout: 5000 })
+  const want = (await items.nth(1).textContent()) ?? ''
+  await p.keyboard.press('Enter')
+  await expect(email).toHaveValue(want.includes('work') ? 'alex.work@a2lab.test' : 'alex@a2lab.test', { timeout: 5000 })
+  await p.close()
+})
+
 test('a change-password page lists the account it names first, before the login used last (R2-12)', async () => {
   const p = await ctx.newPage()
   // The work login filled on this tab moments ago: the most recently used, and step one's hint.
@@ -375,22 +381,32 @@ test('a change-password page lists the account it names first, before the login 
   await p.close()
 })
 
-test('a sign-up: the menu on the last field, the new password, never covers Create account; the email\'s stays under it (R3-11)', async () => {
+test('a sign-up: the menu opens under the new password where it fits, Create account under it or not, and above it only when it does not fit (R4-6)', async () => {
   const p = await ctx.newPage()
   await p.goto(site('shop.a2lab.test', '/signup'))
   const pw = p.getByLabel('Password')
   await pw.click()
   await menuOf(p)
-  const create = p.getByRole('button', { name: 'Create account' })
-  await expectAboveClear(p, pw, create)
-  await shot(p, 'signup-menu-clear')
-  // The button stays clickable with the menu open.
-  await create.click({ trial: true, timeout: 3000 })
-  // The email field is not the last: its menu is under it, as always (what it covers is the form it fills).
+  // Room under the field (Create account included): the menu opens there, its top under the field.
+  await expectUnder(p, pw)
+  const f = (await pw.boundingBox())!
+  expect((await menuBox(p))!.y).toBeGreaterThan(f.y + f.height)
+  await shot(p, 'signup-menu-below')
   await p.keyboard.press('Escape')
   await p.getByLabel('Email').click()
   await menuOf(p)
   await expectUnder(p, p.getByLabel('Email'))
+  // Low on the page, no room under the password field: the menu opens above it.
+  await p.goto(site('shop.a2lab.test', '/signup-low'))
+  const low = p.getByLabel('Password')
+  await low.click()
+  await menuOf(p)
+  const lf = (await low.boundingBox())!
+  expect(p.viewportSize()!.height - (lf.y + lf.height)).toBeLessThan(160)
+  await expectAbove(p, low)
+  const lm = (await menuBox(p))!
+  expect(lm.y + lm.height).toBeLessThan(lf.y)
+  await shot(p, 'signup-menu-above')
   await p.close()
 })
 
@@ -415,7 +431,7 @@ test('ArrowDown and Enter typed at once, before the menu has loaded: the form is
   await p.close()
 })
 
-test('the code page: the menu waits for the person to be in the field, then sits on its edge, clear of Verify when there is room', async () => {
+test('the code page: the menu waits for the person to be in the field, then opens under it, Verify and all (R4-6)', async () => {
   const p = await ctx.newPage()
   // A sign in Walnut knows, so the code page that follows has the code to offer.
   await p.goto(site('accounts.a2lab.test', '/password'))
@@ -428,8 +444,14 @@ test('the code page: the menu waits for the person to be in the field, then sits
   await p.getByLabel('Code').click()
   const menu = await menuOf(p)
   await expect(menu.getByTestId('menu-item').filter({ hasText: `Accounts ${stamp}` })).toBeVisible()
-  await expectClearWhenRoom(p, p.getByLabel('Code'), p.getByRole('button', { name: 'Verify' }))
-  await shot(p, 'code-menu')
+  const code = p.getByLabel('Code')
+  await expectUnder(p, code)
+  const cf = (await code.boundingBox())!
+  expect((await menuBox(p))!.y).toBeGreaterThan(cf.y + cf.height)
+  // Nothing of the page above the field is covered: its instruction stays clear of the menu.
+  const note = (await p.getByText('Enter the 6-digit code from your authenticator app.').boundingBox())!
+  expect(note.y + note.height).toBeLessThanOrEqual((await menuBox(p))!.y)
+  await shot(p, 'code-menu-below')
   await menu.getByTestId('menu-item').filter({ hasText: `Accounts ${stamp}` }).click()
   await expect(p.getByLabel('Code')).toHaveValue(/^\d{6}$/)
   await p.close()

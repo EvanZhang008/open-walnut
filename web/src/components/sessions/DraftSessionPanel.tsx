@@ -107,15 +107,16 @@ const REPAIR_PLACEHOLDER =
 /** The Ask Walnut tab's quick actions: Walnut's one-tap composer seeds.
  *  Prefill only, never auto-send: the user finishes the sentence (or edits it)
  *  and presses Ask themselves. The inserted text must MATCH the label: a chip
- *  that inserts less than it promises reads as a bug. The first is a deliberate
- *  stem (trailing space), drawn with a blank to fill in after its words, never an
- *  ellipsis, which read as a label cut off (review 2026-11-06, a 400 px side
- *  panel); the other two are complete asks. Line icons, not emoji, like every
- *  other control. */
+ *  that inserts less than it promises reads as a bug. Every label is whole words:
+ *  the first starts a sentence for the user to finish (its text ends in a space),
+ *  and its label says what it is for rather than showing the unfinished sentence,
+ *  which read as cut off with an ellipsis and as a form with a drawn blank
+ *  (reviews 2026-11-06, a 400 px side panel); the other two are complete asks.
+ *  Line icons, not emoji, like every other control. */
 /** `iconName` names the icon in words, for a drawing of this composer elsewhere (the browser
  *  extension's placeholder, web/src/popout/ext-snapshot.ts), which carries text only. */
-const WALNUT_SUGGESTS: readonly { label: string; icon: ReactNode; iconName: string; text: string; stem?: true }[] = [
-  { label: 'Which task is', icon: ICONS.ICON_SEARCH, iconName: 'search', text: 'Which task is ', stem: true },
+const WALNUT_SUGGESTS: readonly { label: string; icon: ReactNode; iconName: string; text: string }[] = [
+  { label: 'Find a task', icon: ICONS.ICON_SEARCH, iconName: 'search', text: 'Find a task about ' },
   { label: 'Schedule my day', icon: ICONS.ICON_CALENDAR, iconName: 'calendar', text: 'Schedule my day' },
   { label: 'What ran today', icon: ICONS.ICON_SECTION_RECENT, iconName: 'clock', text: 'What ran today?' },
 ];
@@ -807,11 +808,9 @@ export function DraftSessionPanel({
                     className="session-action-chip"
                     data-icon={s.iconName}
                     onClick={() => setPrefill((p) => ({ text: s.text, nonce: p.nonce + 1 }))}
-                    {...(s.stem ? { 'aria-label': `${s.label} …` } : {})}
                   >
                     <span className="session-action-chip-ic" aria-hidden="true">{s.icon}</span>
                     {s.label}
-                    {s.stem && <span className="session-action-chip-blank" aria-hidden="true" />}
                   </button>
                 ))}
               </div>

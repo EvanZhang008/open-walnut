@@ -142,6 +142,14 @@ test('a selection made in an open conversation goes with the next message, as a 
   // conversation's saved row shows the quote from its hint (tests/web/ext-panel-attached-hint.test.ts;
   // the fixture's mock CLI keeps no transcript to reload it from).
   await expect(v.getByTestId('ext-panel-selection')).toHaveCount(0)
+  // Cleared on the page and the same words selected again: a new selection, offered again (review round 4, L6).
+  await lab.doc.evaluate(() => getSelection()?.removeAllRanges())
+  await panel.waitForTimeout(800)
+  await selectText(lab.doc, 'p2')
+  await expect(chip).toContainText('Dark mode follows the system setting', { timeout: 15_000 })
+  await v.getByTestId('ext-panel-selection-drop').click()
+  await expect(chip).toHaveCount(0)
+  await lab.doc.evaluate(() => getSelection()?.removeAllRanges())
 })
 
 test('× leaves a selection out of the next message', async () => {

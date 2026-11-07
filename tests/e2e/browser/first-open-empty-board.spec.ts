@@ -386,7 +386,7 @@ test('each tab has its own quick actions: Ask Walnut the seeds, Start Task Custo
   // Ask Walnut: the seeds, no Customize chip.
   await drafts(page).locator('.draft-intent-card-walnut').click()
   await expect(drafts(page)).toHaveClass(/draft-session-panel-walnut/)
-  await expect(quickActions(page).locator('.session-action-chip')).toHaveText(['Which task is', 'Schedule my day', 'What ran today'])
+  await expect(quickActions(page).locator('.session-action-chip')).toHaveText(['Find a task', 'Schedule my day', 'What ran today'])
   await expect(quickActions(page).locator('.session-action-chip .session-action-chip-ic svg')).toHaveCount(3)
   expect(await quickActions(page).innerText()).not.toMatch(/\p{Extended_Pictographic}/u)
   await expect(customizeChip(page)).toHaveCount(0)

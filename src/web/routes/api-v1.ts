@@ -1584,18 +1584,37 @@ apiV1Router.get('/conversations/:id/messages', async (req: Request, res: Respons
   }
 })
 
-// GET /api/v1/sessions/:id/chat-earlier
+// GET /api/v1/sessions/:id/chat-earlier[?tail=N]
 // What the chat this lane session belongs to said before the session started, in
 // the phone's message shape. A degraded answer is an empty list marked
 // `degraded`, never an error: the panel shows the session alone and asks again.
+// `tail` (1..200): only the last N text rows (tool, thinking and notice rows left
+// out), with `more: true` when older rows were left out; a reader of the latest
+// words (the browser extension's ask rows) takes 4 rows of a chat that may hold
+// hundreds. Without it the answer is the whole part, as before.
 apiV1Router.get('/sessions/:id/chat-earlier', async (req: Request, res: Response, next: NextFunction) => {
   try {
+    const tail = chatEarlierTail(req.query.tail)
     const earlier = await chatEarlierThanSession(paramStr(req.params.id))
-    res.json(earlier === 'degraded' ? { messages: [], degraded: true } : earlier ?? { messages: [] })
+    if (earlier === 'degraded') { res.json({ messages: [], degraded: true }); return }
+    if (!earlier || tail === null) { res.json(earlier ?? { messages: [] }); return }
+    res.json({ ...earlier, ...tailTextRows(earlier.messages, tail) })
   } catch (err) {
     next(err)
   }
 })
+
+/** `?tail=` as a row count (1..200), or null when absent or not a number. */
+export function chatEarlierTail(raw: unknown): number | null {
+  const n = typeof raw === 'string' && /^\d+$/.test(raw) ? Number(raw) : NaN
+  return Number.isFinite(n) && n >= 1 ? Math.min(n, 200) : null
+}
+
+/** The last `n` text rows (no `kind`) of `rows`, and whether older rows were left out. Pure. */
+export function tailTextRows<T extends { kind?: string }>(rows: readonly T[], n: number): { messages: T[]; more: boolean } {
+  const text = rows.filter((m) => !m.kind)
+  return { messages: text.slice(-n), more: text.length > n }
+}
 
 // ─── SSE stream: per-conversation ring buffer + replay ────────────────────
 // Machinery lives in ../sse-channels.ts (shared with session streams). The

@@ -73,4 +73,18 @@ describe('the words read from a conversation', () => {
     const moved = { ...t, last_session_update: '2026-11-06T02:00:00Z' }
     expect(wordsToRead([{ id: 't1', task: moved as never }], sessionOf as never, (id) => keptWords(id, s))).toHaveLength(1)
   })
+
+  it('keeps at most 80 asks of the last 30 days, and removes the old key (review round 4, L2)', () => {
+    const m = new Map<string, string>([['walnut.ext-panel.ask-words', '{"x":{"text":"old","stamp":"s","at":1}}']])
+    const s = { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => { m.set(k, v) }, removeItem: (k: string) => { m.delete(k) } }
+    const now = Date.parse('2026-11-07T00:00:00Z')
+    keepWords('stale', 'A month and a day ago.', 's', s, now - 31 * 86_400_000)
+    for (let i = 0; i < 90; i++) keepWords(`t${i}`, `Answer ${i}`, 's', s, now + i)
+    expect(m.has('walnut.ext-panel.ask-words')).toBe(false)
+    const kept = JSON.parse(m.get('walnut.ext-panel.ask-words.v2') ?? '{}') as Record<string, unknown>
+    expect(Object.keys(kept)).toHaveLength(80)
+    expect(kept.stale).toBeUndefined()
+    expect(kept.t89).toBeDefined()
+    expect(kept.t0).toBeUndefined()
+  })
 })

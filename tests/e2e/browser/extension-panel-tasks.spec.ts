@@ -101,6 +101,47 @@ test('Ask: an approval waiting shows over the conversation with its buttons, and
   expect(back.approval.status).toBe('approved')
 })
 
+test('Ask and Tasks: approvals that read the same say which of them each is and when it was asked (review round 4, #7)', async () => {
+  test.setTimeout(120_000)
+  await panel.setViewportSize({ width: 400, height: 760 })
+  const v = askView(panel)
+  await expect(v.getByTestId('ask-object-session')).toBeVisible({ timeout: 30_000 })
+  const what = `Click "Place order ${Date.now().toString(36)}" on shop.example.test`
+  const ids: string[] = []
+  for (let i = 0; i < 2; i++) {
+    const made = await lab.doc.request.post(`${lab.base}/api/v1/approvals`, { data: { what, timeout_ms: 300_000 } })
+    expect(made.ok(), await made.text()).toBe(true)
+    ids.push(String(((await made.json()) as { approval: { id: string } }).approval.id))
+    // A second apart, so their times differ as a person's asks would.
+    await panel.waitForTimeout(1100)
+  }
+  try {
+    const card = (id: string) => v.locator(`[data-testid="ext-ask-approval"][data-approval-id="${id}"]`)
+    await expect(card(ids[0]).getByTestId('ext-approval-alike')).toContainText('1 of 2 alike · asked', { timeout: 20_000 })
+    await expect(card(ids[1]).getByTestId('ext-approval-alike')).toContainText('2 of 2 alike · asked')
+    expect(await card(ids[0]).getByTestId('ext-approval-alike').textContent()).not.toBe(await card(ids[1]).getByTestId('ext-approval-alike').textContent())
+    // Whole on the card, never cut.
+    for (const id of ids) expect(await card(id).getByTestId('ext-approval-alike').evaluate((e) => e.scrollWidth <= e.clientWidth + 1)).toBe(true)
+    await panel.screenshot({ path: path.join(process.env.R4_SHOTS ?? 'test-results/extension-panel-tasks', 'r4-approvals-alike.png') })
+    await panel.emulateMedia({ colorScheme: 'dark' })
+    await panel.waitForTimeout(250)
+    await panel.screenshot({ path: path.join(process.env.R4_SHOTS ?? 'test-results/extension-panel-tasks', 'r4-approvals-alike-dark.png') })
+    await panel.emulateMedia({ colorScheme: 'light' })
+    // The Tasks view's list tells them apart the same way.
+    await openView(panel, 'tasks')
+    const row = (id: string) => tasksView(panel).locator(`[data-testid="approval-row"][data-approval-id="${id}"]`)
+    await expect(row(ids[0]).getByTestId('ext-approval-alike')).toContainText('1 of 2 alike', { timeout: 20_000 })
+    await expect(row(ids[1]).getByTestId('ext-approval-alike')).toContainText('2 of 2 alike')
+    await backToAsk(panel)
+    // One answered: the other is one of a kind again.
+    await card(ids[0]).getByRole('button', { name: 'Deny' }).click()
+    await expect(card(ids[0])).toHaveCount(0, { timeout: 15_000 })
+    await expect(card(ids[1]).getByTestId('ext-approval-alike')).toHaveCount(0)
+  } finally {
+    for (const id of ids) await lab.doc.request.post(`${lab.base}/api/v1/approvals/${id}/answer`, { data: { decision: 'deny' } }).catch(() => undefined)
+  }
+})
+
 test('Ask: an answer that fails says why in the strip, and the card\'s notes show as on Home (review round 2, finding 3)', async () => {
   test.setTimeout(120_000)
   const v = askView(panel)

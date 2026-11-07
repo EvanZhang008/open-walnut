@@ -9,9 +9,9 @@
  * Enter typed right after that ArrowDown, before the menu loaded, is the menu's (`pick`), never
  * the page form's.
  *
- * Where it is drawn: under the field, above it only when there is no room under it or when, on the
- * form's last field, it would cover the send button and the room above holds it; always inside this
- * frame's own viewport, so a frame never cuts it (content-place.ts).
+ * Where it is drawn: under the field whenever it fits there (over the form's send button too, until
+ * the person picks), above it only when it does not; always inside this frame's own viewport, so a
+ * frame never cuts it (content-place.ts).
  */
 import { ask } from './ext'
 import { groupOfField } from './form-detect'
@@ -19,7 +19,7 @@ import { readRules } from './field-rules'
 import { walletGroupOf } from './wallet-detect'
 import { cs } from './content-state'
 import { dropHost, extFrame, hostStyle, makeHost, type Host } from './content-host'
-import { menuSpot, type Rect } from './content-place'
+import { menuSpot } from './content-place'
 
 const ICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#8a5a2b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M10.85 12.15 19 4"/><path d="m18 5 2 2"/><path d="m15 8 2 2"/></svg>'
 const MENU_WIDTH = 320
@@ -29,6 +29,12 @@ export let menu: {
   host: Host; frame: HTMLIFrameElement; height: number; loaded: boolean; focus?: 'first' | 'last'
   /** Enter came with the arrow key, before the menu loaded: it picks the first row once there. */
   pick?: boolean
+  /** Arrow keys typed in the field after the one that asked for the menu, before the keys were handed to it. */
+  steps?: number
+  /** When the keys were handed to the menu: keys typed in the field just after are still the menu's. */
+  handedAt?: number
+  /** The hand-over and the keys after it go to the menu one after another, in the order typed. */
+  chain?: Promise<unknown>
   /** Nothing in it fits what the person typed: drawn nowhere until something does. */
   hidden?: boolean
   /** What the person typed in the field: the menu shows only the logins that fit it. */
@@ -37,37 +43,8 @@ export let menu: {
 
 const px = (n: number) => `${Math.round(n)}px`
 
-/** The menu's width: its usual 320 px, or this frame's width when that is narrower. */
-const menuWidth = () => Math.max(200, Math.min(MENU_WIDTH, innerWidth - 8))
-
-/** The words of a button that sends its form (content.ts SEND_WORDS). */
-const SEND_WORDS = /log.?in|sign.?in|sign.?up|log on|continue|next|submit|create|register|join|save|change|update|verify/i
-
-/** A field the person types in (not a box, a button or a hidden value). */
-const TYPED = 'input:not([type=hidden]):not([type=checkbox]):not([type=radio]):not([type=submit]):not([type=button]):not([type=image]):not([type=file]):not([type=reset]), textarea, select'
-
-/**
- * The send buttons on screen the menu must not cover (content-place.ts): only for the form's last
- * field, whose next step is the send (a sign-up's password, a step's email or code). On an earlier
- * field the menu stays under it, as always: what it covers there is the rest of the form it fills.
- */
-function sendButtons(field: HTMLInputElement): Rect[] {
-  const scope = field.form ?? cs.active?.group?.root ?? null
-  if (!scope) return []
-  const typed = Array.from(scope.querySelectorAll<HTMLElement>(TYPED)).filter((el) => el.getClientRects().length > 0)
-  if (typed[typed.length - 1] !== field) return []
-  const out: Rect[] = []
-  for (const b of Array.from(scope.querySelectorAll('button, input[type=submit], input[type=button], [role=button]')).slice(0, 40)) {
-    const sends = b instanceof HTMLInputElement
-      ? b.type === 'submit' || SEND_WORDS.test(b.value)
-      : (b instanceof HTMLButtonElement && !!b.form && b.type === 'submit') || SEND_WORDS.test((b.textContent ?? '').slice(0, 80))
-    if (!sends) continue
-    const r = b.getBoundingClientRect()
-    if (r.width > 0 && r.height > 0) out.push({ top: r.top, bottom: r.bottom, left: r.left, right: r.right })
-    if (out.length >= 4) break
-  }
-  return out
-}
+/** The menu's width: its usual 320 px, or this frame's width when that is narrower (L7: even under 208 px). */
+const menuWidth = () => Math.min(MENU_WIDTH, Math.max(100, innerWidth - 8))
 
 function place(h: Host, field: HTMLInputElement, where: 'icon' | 'menu', height = 0): void {
   const r = field.getBoundingClientRect()
@@ -82,7 +59,7 @@ function place(h: Host, field: HTMLInputElement, where: 'icon' | 'menu', height 
     return
   }
   const width = menuWidth()
-  const spot = menuSpot(r, height, width, { w: innerWidth, h: innerHeight }, sendButtons(field))
+  const spot = menuSpot(r, height, width, { w: innerWidth, h: innerHeight })
   hostStyle(h, `z-index: 2147483647 !important; top: ${px(spot.top)} !important; left: ${px(spot.left)} !important;${menu?.hidden ? ' display: none !important;' : ''}`)
   if (menu && menu.host === h) {
     menu.frame.style.width = `${width}px`
@@ -134,7 +111,7 @@ export function roleOf(field: HTMLInputElement): { role: string; kind: string } 
  * two answers raced and the later menu, drawn without the keyboard, replaced the one with it)
  * joins it, and an arrow key's wish to move into the menu rides along.
  */
-let opening: { field: HTMLInputElement; focus?: 'first' | 'last'; pick?: boolean } | null = null
+let opening: { field: HTMLInputElement; focus?: 'first' | 'last'; pick?: boolean; steps?: number } | null = null
 
 /** An open of this field is on its way (the focus handler leaves the menu to it). */
 export const openingFor = (field: HTMLInputElement) => opening?.field === field
@@ -142,8 +119,13 @@ export const openingFor = (field: HTMLInputElement) => opening?.field === field
 export async function openMenu(field: HTMLInputElement, focus?: 'first' | 'last', all = false): Promise<void> {
   const what = roleOf(field)
   if (!what || cs.off) return
-  if (opening?.field === field) { if (focus) opening.focus = focus; return }
-  const mine: { field: HTMLInputElement; focus?: 'first' | 'last'; pick?: boolean } = { field, ...(focus ? { focus } : {}) }
+  if (opening?.field === field) {
+    // A second ArrowDown while the menu is on its way is one row further, never lost (round 4).
+    if (focus && opening.focus) opening.steps = (opening.steps ?? 0) + 1
+    else if (focus) opening.focus = focus
+    return
+  }
+  const mine: { field: HTMLInputElement; focus?: 'first' | 'last'; pick?: boolean; steps?: number } = { field, ...(focus ? { focus } : {}) }
   opening = mine
   const hit = groupOfField(cs.groups, field)
   cs.active = { ...(hit ? { group: hit.group } : { wallet: walletGroupOf(cs.wallets, field) ?? undefined }), role: what.role, field }
@@ -180,20 +162,46 @@ export async function openMenu(field: HTMLInputElement, focus?: 'first' | 'last'
   root.appendChild(frame)
   // Typed before the menu came (it reopened as the person typed): it shows what fits.
   const typed = !all && what.role === 'username' && field.value && cs.typed.has(field) ? field.value : undefined
-  menu = { host, frame, height: 120, loaded: false, ...(keys ? { focus: keys } : {}), ...(mine.pick ? { pick: true } : {}), ...(typed !== undefined ? { filter: typed } : {}) }
+  menu = { host, frame, height: 120, loaded: false, ...(keys ? { focus: keys } : {}), ...(mine.pick ? { pick: true } : {}), ...(mine.steps ? { steps: mine.steps } : {}), ...(typed !== undefined ? { filter: typed } : {}) }
   place(host, field, 'menu', menu.height)
 }
 
-/** Move the keyboard into the open menu, on its first or last row. */
+/**
+ * How long after the keys were handed to the menu a key typed in the field is still the menu's: the
+ * browser moves the keyboard into the menu's frame a moment after it is focused, and a second
+ * ArrowDown (or the Enter) typed at once still lands in the field (round 4: under load, "ArrowDown
+ * twice and Enter" filled the first login, the second arrow having handed the keys over again).
+ */
+const KEYS_ON_THE_WAY_MS = 1000
+
+/** To the menu, after what was sent to it before (through the background, so a page cannot). */
+function toMenu(m: { type: string; [k: string]: unknown }): void {
+  if (!menu) return
+  menu.chain = (menu.chain ?? Promise.resolve()).then(() => ask(m)).catch(() => undefined)
+}
+
+/** Move the keyboard into the open menu, on its first or last row (and the rows typed past it). */
 function focusMenu(where: 'first' | 'last'): void {
   if (!menu || menu.hidden) return
   if (!menu.loaded) { menu.focus = where; return }
   const pick = menu.pick === true
+  const steps = menu.steps ?? 0
   menu.focus = undefined
   menu.pick = undefined
+  menu.steps = undefined
   menu.frame.focus()
-  void ask({ type: 'menu-focus', where, ...(pick ? { pick: true } : {}) })
+  menu.handedAt = performance.now()
+  toMenu({ type: 'menu-focus', where, ...(pick ? { pick: true } : {}), ...(steps ? { step: steps } : {}) })
 }
+
+/**
+ * The keys were handed to the menu a moment ago: a key typed now in the field, or one the page got
+ * for the menu's frame before the browser moved the keyboard into it (its target is the menu's
+ * host), is still the menu's.
+ */
+const keysOnTheWay = (t: EventTarget | null) => !!menu && !menu.hidden && menu.loaded && !!cs.active
+  && (t === cs.active.field || t === menu.host.el)
+  && menu.handedAt !== undefined && performance.now() - menu.handedAt < KEYS_ON_THE_WAY_MS
 
 export function closeMenu(refocus = false): void {
   if (!menu) return
@@ -251,20 +259,32 @@ export function reposition(): void {
 export function onFieldKey(e: KeyboardEvent): boolean {
   if (!e.isTrusted || cs.off || e.altKey || e.ctrlKey || e.metaKey) return false
   const t = e.target
-  if (!(t instanceof HTMLInputElement)) return false
+  if (!(t instanceof HTMLInputElement)) {
+    // A key for the menu's frame that reached the page while the keyboard was on its way there.
+    if (!keysOnTheWay(t) || !['ArrowDown', 'ArrowUp', 'Enter'].includes(e.key) || e.shiftKey) return false
+    toMenu(e.key === 'Enter' ? { type: 'menu-focus', more: true, pick: true } : { type: 'menu-focus', more: true, step: e.key === 'ArrowUp' ? -1 : 1 })
+    e.preventDefault()
+    e.stopPropagation()
+    return true
+  }
   if (e.key === 'Tab' || e.key === 'Escape') { if (menu) closeMenu(); return false }
   if (e.key === 'Enter' && !e.shiftKey) {
     // ArrowDown, then Enter before the menu could take the keys: the Enter is for the menu (it
     // picks the first login once it is there), not for the page's form, which would go out empty.
     if (opening?.field === t && opening.focus) opening.pick = true
     else if (menu && !menu.loaded && menu.focus && cs.active?.field === t) menu.pick = true
+    else if (keysOnTheWay(t)) toMenu({ type: 'menu-focus', more: true, pick: true })
     else return false
     e.preventDefault()
     e.stopPropagation()
     return true
   }
   if ((e.key !== 'ArrowDown' && e.key !== 'ArrowUp') || e.shiftKey || !roleOf(t)) return false
-  if (menu && !menu.hidden && cs.active?.field === t) focusMenu(e.key === 'ArrowUp' ? 'last' : 'first')
+  const step = e.key === 'ArrowUp' ? -1 : 1
+  // Typed after the arrow that asked for the menu, before its keys were handed over: a row further.
+  if (menu && !menu.hidden && !menu.loaded && menu.focus && cs.active?.field === t) menu.steps = (menu.steps ?? 0) + step
+  else if (keysOnTheWay(t)) toMenu({ type: 'menu-focus', more: true, step })
+  else if (menu && !menu.hidden && cs.active?.field === t) focusMenu(step < 0 ? 'last' : 'first')
   else if (e.key === 'ArrowDown' && !menu?.hidden && cs.pageFill) void openMenu(t, 'first')
   else return false
   e.preventDefault()

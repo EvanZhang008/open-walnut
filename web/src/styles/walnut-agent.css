@@ -151,8 +151,6 @@
   font-size: 11px;
   color: var(--fg);
 }
-/* A stem's blank, where the person's words go ("Which task is ___"). */
-.draft-walnut-suggests .session-action-chip-blank { display: inline-block; width: 1.6em; height: 0.85em; margin-left: 1px; border-bottom: 1px solid currentColor; opacity: 0.55; }
 /* The chip's line icon: muted until hover, when it takes the chip's accent. */
 .draft-walnut-suggests .session-action-chip-ic { display: inline-flex; color: var(--fg-muted); }
 .draft-walnut-suggests .session-action-chip-ic svg { width: 12px; height: 12px; }
@@ -601,6 +599,8 @@
 .ask-walnut-drawer-new.is-head { width: auto; padding: 5px 12px; border-radius: 8px; font-size: 12.5px; flex: none; }
 .ask-walnut-drawer.is-panel .ask-walnut-drawer-search { height: 34px; margin: 0 10px 10px; }
 .ask-walnut-drawer.is-panel .ask-walnut-drawer-list { padding: 0; }
+/* The list's words start where its head and labels do (review round 4, #7: 8 px, left of them). */
+.ask-walnut-drawer.is-panel .ask-walnut-drawer-empty { margin: 8px 12px; }
 .ask-walnut-drawer.is-panel .ask-walnut-drawer-item { align-items: flex-start; gap: 8px; padding: 8px 12px 8px 10px; border-radius: 0; }
 .ask-walnut-drawer.is-panel .ask-walnut-drawer-item.is-selected { color: var(--fg); font-weight: 400; }
 .ask-walnut-drawer.is-panel .ask-walnut-drawer-item-time { margin-top: 2px; }
