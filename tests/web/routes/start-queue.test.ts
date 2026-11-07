@@ -341,6 +341,13 @@ describe('a task asked to start or sent work that shows nothing for 10 minutes t
     const busySid = `33333333-4444-5555-6666-${String(seq).padStart(12, '0')}`
     await createSessionRecord(busySid, busy, 'queue', '/repo/queue', { title: 'Busy child', initialProcessStatus: 'running' })
     await createSessionRequest({ fromSessionId: sid, fromTaskId: parent.id, toTaskId: busy, toSessionId: busySid, text: 'Do the busy part.' })
+    // 2026-11-07: idle between turns, but it messaged its lead after the ask: at work, never told silent.
+    const [talked] = await children(parent.id, ['TODO'])
+    seq += 1
+    const talkedSid = `33333333-4444-5555-6666-${String(seq).padStart(12, '0')}`
+    await createSessionRecord(talkedSid, talked, 'queue', '/repo/queue', { title: 'Child that wrote back', initialProcessStatus: 'idle' })
+    await createSessionRequest({ fromSessionId: sid, fromTaskId: parent.id, toTaskId: talked, toSessionId: talkedSid, text: 'Do the third part.' })
+    await createSessionRequest({ fromSessionId: talkedSid, fromTaskId: talked, toSessionId: sid, text: 'Which file holds it?' })
 
     // Not yet ten minutes: nothing.
     expect(await remindSilent(Date.now() + SILENT_AFTER_MS - 60_000)).toBe(0)
@@ -349,6 +356,7 @@ describe('a task asked to start or sent work that shows nothing for 10 minutes t
     const told = toldTo(sid)
     expect(told).toContain(`(${silent}) has shown nothing for 11 minutes since you asked (${ask.id}): no session of it ever started.`)
     expect(told).not.toContain(busy)
+    expect(told).not.toContain(talked)
     // Only once.
     expect(await remindSilent(later + 60_000)).toBe(0)
   })

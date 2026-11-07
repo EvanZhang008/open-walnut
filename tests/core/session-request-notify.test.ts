@@ -1580,7 +1580,8 @@ describe('time Walnut was away never counts against a deadline (2026-11-06)', ()
   it('a deadline that ran out while Walnut was away is not overdue on the first sweep back, and keeps its own wait', async () => {
     const now = Date.now();
     const rq = await arm({ text: 'asked before the Mac slept' });
-    setRow(rq.id, { createdAt: new Date(now - 4.5 * HOUR).toISOString(), deadlineAt: now - 3 * HOUR });
+    // Asked 5 minutes before the stop: neither overdue nor silent (SILENT_AFTER_MS counts live time only).
+    setRow(rq.id, { createdAt: new Date(now - 4 * HOUR - 5 * 60_000).toISOString(), deadlineAt: now - 3 * HOUR });
     const wait = requestWaitMs((await getSessionRequest(rq.id))!);
     lastAlive(now - 4 * HOUR);
     expect(await sweepSessionRequests()).toBe(0);

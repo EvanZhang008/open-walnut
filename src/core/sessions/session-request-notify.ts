@@ -601,6 +601,64 @@ export function sweepSessionRequests(): Promise<number> {
 export const SILENT_AFTER_MS = 10 * 60_000;
 
 /**
+ * Every sign that a target took up the work since it was asked; the silent-target notice
+ * (remindSilent) goes only when none shows. 2026-11-07: a task whose turn began before the ask,
+ * read it mid-turn and ended 45 minutes later with a status report naming the ask was read as
+ * "has not taken up the work", and so was one that had messaged its asker an hour before: only a
+ * turn running now or one begun since the ask counted.
+ */
+export const TARGET_SIGNS = [
+  'a turn running now',
+  'a turn begun since the ask',
+  'a turn ended since the ask',
+  'its status report since the ask',
+  'an answer it sent since the ask',
+  'a message it sent since the ask',
+] as const;
+export type TargetSign = typeof TARGET_SIGNS[number];
+
+/** What the request watch knows of a target, for targetSignSince. */
+export interface TargetFacts {
+  /** The ask's time (epoch ms). */
+  since: number;
+  /** Its runner says a turn runs (true) or not (false); null when this server holds no runner for it. */
+  inTurn: boolean | null;
+  /** Its session's process status (running, idle, stopped, error), when it has one. */
+  processStatus?: string;
+  /** When its last turn began (epoch ms; lastTurnSpeed.startedAt), absent when unseen. */
+  turnStartedAt?: number;
+  /**
+   * Its report of its last turn (task.status_report). Only its own counts: a line a person or
+   * another task set (`by` other than self) is dated when they set it, and a report with no `by`
+   * may be Walnut's own status ask of an idle session (`at` only, never `turn_ended_at`).
+   */
+  report?: { at?: string; turn_ended_at?: string; by?: string };
+  /** Its task id and session ids: rows it answered or sent are matched on them. */
+  taskId?: string;
+  sessionIds: readonly string[];
+  /** The request ledger. */
+  rows: readonly SessionRequest[];
+  /** This request (never its own sign). */
+  requestId: string;
+}
+
+/** The first sign that the target took up the work since the ask (TARGET_SIGNS), or null. */
+export function targetSignSince(f: TargetFacts): TargetSign | null {
+  const after = (iso: string | undefined): boolean => { const t = Date.parse(iso ?? ''); return Number.isFinite(t) && t >= f.since; };
+  if (f.processStatus === 'running' && f.inTurn !== false) return 'a turn running now';
+  if ((f.turnStartedAt ?? 0) > f.since) return 'a turn begun since the ask';
+  const ownReport = !f.report?.by || f.report.by === 'self';
+  if (ownReport && after(f.report?.turn_ended_at)) return 'a turn ended since the ask';
+  if (f.report?.by === 'self' && after(f.report.at)) return 'its status report since the ask';
+  const own = new Set(f.sessionIds.filter(Boolean));
+  const others = f.rows.filter((x) => x.id !== f.requestId);
+  if (others.some((x) => x.status === 'replied' && after(x.settledAt)
+    && ((!!f.taskId && x.toTaskId === f.taskId) || (!!x.toSessionId && own.has(x.toSessionId))))) return 'an answer it sent since the ask';
+  if (others.some((x) => own.has(x.fromSessionId) && after(x.createdAt))) return 'a message it sent since the ask';
+  return null;
+}
+
+/**
  * The safety net under a start or a send (2026-11-06, the user: "if a task has not updated for a
  * while, the VP gets a notification and checks it; best is that it never happens"): a pending
  * request whose target task shows nothing for SILENT_AFTER_MS since the ask (no session of it,
@@ -609,15 +667,17 @@ export const SILENT_AFTER_MS = 10 * 60_000;
  */
 export async function remindSilent(now = Date.now()): Promise<number> {
   const { IS_EPHEMERAL } = await import('../../constants.js');
-  const { listPendingRequests, claimSilentNotice, releaseSilentNotice } = await import('../session-requests.js');
+  const { listPendingRequests, listAllSessionRequests, claimSilentNotice, releaseSilentNotice } = await import('../session-requests.js');
   const runner = await import('../../providers/claude-code-session.js').then((m) => m.sessionRunner).catch(() => null);
-  const due = (await listPendingRequests()).filter((r) => !r.silentToldAt && r.toTaskId && now - Date.parse(r.createdAt) >= SILENT_AFTER_MS
+  // Time Walnut was not running (pausedMs, creditDowntime) is no silence: the target could not work either.
+  const due = (await listPendingRequests()).filter((r) => !r.silentToldAt && r.toTaskId && now - Date.parse(r.createdAt) - (r.pausedMs ?? 0) >= SILENT_AFTER_MS
     && (!IS_EPHEMERAL || Date.parse(r.createdAt) >= PROCESS_STARTED_AT));
   if (!due.length) return 0;
   const { listTasksByIds } = await import('../task-manager.js');
   const { getSessionByClaudeId } = await import('../session-tracker.js');
   const tasks = new Map((await listTasksByIds([...new Set(due.map((r) => r.toTaskId!))]).catch(() => [])).map((t) => [t.id, t] as const));
   let told = 0;
+  let ledger: SessionRequest[] | null | undefined;
   for (const r of due) {
     const task = tasks.get(r.toTaskId!);
     if (!task || task.phase === 'COMPLETE') continue;
@@ -625,12 +685,22 @@ export async function remindSilent(now = Date.now()): Promise<number> {
     const sid = r.toSessionId ?? task.session_id ?? task.exec_session_id ?? undefined;
     const session = sid ? await getSessionByClaudeId(sid).catch(() => null) : null;
     const asked = Date.parse(r.createdAt);
-    // Working: a turn runs now (or may: this server holds no runner for it), or one began since
-    // the ask. Not lastActiveAt: a status write moves it (review round 6, Sol: a spawn timeout's
-    // error write read as work).
-    const turnNow = session?.process_status === 'running' ? runner?.isInTurn(session.claudeSessionId) ?? null : false;
-    if (turnNow !== false) continue;
-    if ((session?.lastTurnSpeed?.startedAt ?? 0) > asked) continue;
+    // Working: any sign since the ask (TARGET_SIGNS). Not lastActiveAt: a status write moves it
+    // (review round 6, Sol: a spawn timeout's error write read as work).
+    const sign = targetSignSince({
+      since: asked,
+      inTurn: session?.process_status === 'running' ? runner?.isInTurn(session.claudeSessionId) ?? null : false,
+      ...(session?.process_status ? { processStatus: session.process_status } : {}),
+      ...(session?.lastTurnSpeed?.startedAt ? { turnStartedAt: session.lastTurnSpeed.startedAt } : {}),
+      ...(task.status_report ? { report: task.status_report } : {}),
+      taskId: task.id,
+      sessionIds: [sid, task.session_id, task.exec_session_id, ...(task.session_ids ?? [])].filter((x): x is string => !!x),
+      rows: (ledger ??= await listAllSessionRequests().catch(() => null)) ?? [],
+      requestId: r.id,
+    });
+    if (sign) continue;
+    // The ledger could not be read: an answer or a message of it is unknown, so not told this pass.
+    if (!ledger) { ledger = undefined; continue; }
     const why = !session ? 'no session of it ever started'
       : session.process_status === 'error' ? `its session stopped with an error${session.errorMessage ? `: ${session.errorMessage.length > 200 ? `${session.errorMessage.slice(0, cutEnd(session.errorMessage, 199))}…` : session.errorMessage}` : ''}`
       : `its session has not taken up the work (${session.process_status === 'running' ? 'it waits after its last turn' : `it is ${session.process_status || 'not running'}`})`;
@@ -639,7 +709,7 @@ export async function remindSilent(now = Date.now()): Promise<number> {
     if (!destination || !isLive(destination.session)) continue;
     const claimed = await claimSilentNotice(r.id, now);
     if (!claimed) continue;
-    const minutes = Math.round((now - asked) / 60_000);
+    const minutes = Math.round((now - asked - (r.pausedMs ?? 0)) / 60_000);
     const text = buildWalnutMessage({
       kind: 'notification',
       attrs: { from: 'Walnut', about: task.title, 'about-task': task.id, request: r.id, asked: r.preview, outcome: 'error', note: 'automated Walnut status notice' },
