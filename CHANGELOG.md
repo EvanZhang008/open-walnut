@@ -6,6 +6,111 @@ breaking changes).
 
 ## [Unreleased]
 
+## [0.6.28] - 2026-11-07
+
+### Added
+
+- A task tap opens its conversation, and Org nodes get Threads, Tasks and Brief pages
+- By project folds completed tasks once, at the bottom
+- Count Claude Code sessions no Walnut session started, and leave out what a cloud bill already covers
+- Session.tag_requests also tags Walnut's one-shot calls, its server-side model calls and every ACP engine
+- Session.tag_requests tags every model request of a Walnut session with its task id
+- Codex sessions use the configured provider and model on every host, and ACP sessions take the task's permission posture
+- Count Codex runs no Walnut session started, with their account and a Started by filter
+- One decision shows once across a team, and an ask answered above leaves Needs you
+- Import from Claude Code points Pi at Claude Code's gateway
+- Refuse a Codex model run with no provider override after the subcommand
+- A phone browser's sign-in renews itself, with a refresh token only the renewal sees
+- Org side bar puts Threads first and opens a node on it
+- WALNUT_EPHEMERAL_IDLE_MINUTES sets how long an idle ephemeral server lives
+- No cold-cache line: once the cache expired, compacting is the user's call
+- A message lined up for after the running turn is held in the queue until the turn ends; iOS fixes from the last review round
+- The task panel keeps the tab the user is on
+- Glanceable git state on task and session rows, live Changed tab
+- Idle compaction at 85% of the session's auto-compaction limit, editable on its row
+- Status groups fold by one rule: folded by default, folded again 15 minutes after opening
+- Every notice shows in one bottom-left corner; an approval is one card with its buttons
+- A phone Follow up names its thread on POST /api/v1/sessions/:id/messages
+- Autofill on par with the big password managers, one extension for agents, and agent access the person sets
+
+### Fixed
+
+- Walnut's recovery compaction names itself on its row, and a cached history picks up the new notice
+- Say that All also counts an imported usage bill, and that Started by covers Claude Code sessions too
+- A reloaded panel never draws Walnut's queued /compact, and the recovery says which compaction runs
+- A full outside read that fails between pages falls back too; name more Claude entrypoints; say what Billed directly is
+- Walnut's own /compact reads as its notice, never the user's message
+- A word that starts with digits is an opaque id, never read for a term in its parts
+- An Org thread's Follow up takes pictures, and the inbox guards read the one task opener
+- An outside Codex pass stops when its time budget is used up, also when a page took no time
+- New ids work on a plain-http address, where crypto.randomUUID does not exist
+- The selection bar hangs off the whole passage, and one guard checks the menu in every view
+- A full read of a host's outside sessions that a lost link cut off falls back to the normal collection
+- A session never stays stuck on "Prompt is too long"
+- A usage scan a lost link cut off goes on, and the same request asked again takes it up
+- Claude-outside-core is in both daemon hash lists
+- The notice corner keeps inside a narrow left column too
+- Selection pill boxes open in room the text makes, never over words
+- Session panels stay readable in a narrow column
+- Session menu Columns row shows numbers, not bars to count
+- An isolated server starts, adopts and records no voice process unless WALNUT_STT_AUTO_SETUP=1
+- The transcript head cache entry may be absent before it is read
+- The notice corner sits next to the sidebar, over the page's left column
+- Outside GETs try again past a 5xx for minutes, and a failure with no walnut of its own prints one scenario's logs
+- A death this computer's shutdown causes is held as a restart loss, never handed back
+- Every corner notice shows its whole message, with its command copyable
+- Copy session.tag_requests to replicas
+- Read Codex runs by engine capability and each machine once
+- A person's picks run one at a time and the newest wins; picking the current engine again withdraws an unanswered pick
+- A page with no token asks the renewal path only when its refresh cookie's mark is there
+- A newer pick ends an older pick's retries, and a resume keeps the context it never read
+- A rule with only a subject pattern reads "Subject matches ..."
+- Run subject patterns in a linear-time matcher instead of guessing their cost
+- A cut status question never answers the user's next message, and a switch never runs over a turn it could not stop
+- Carried context is never lost between switches, and a stuck turn is stopped before the read
+- An opaque id is matched whole, never by its letter and digit parts
+- A switch with nothing to say runs no turn, survives a restart, and never resumes a broken session
+- Fold checkpoints move to format 6 for the local-command echo rule
+- A stop finds the recorded CLI gone when its pid now runs another program
+- A test server ends with the process it works for, and its snapshot is copy-on-write
+- Every mic in a phone task detail is a 44 px box
+- An engine switch runs when the picker closes, and every panel follows the task's session
+- The running-subtask cap counts on the started task's lead, whoever starts it
+- The off-view note's Show runs the locate again on the tab it opens
+- The notice corner sits at the bottom on a phone and keeps clear of the page's work
+- A remote host's reboot resumes its sessions instead of handing them back first
+- The empty filter row a removed chip leaves goes once the user moves on
+- Mail and task detail on a phone keep 44 px targets
+- A later check of the same conflict keeps Save's warning
+- A start the user asked for is not held back by older plain starts the lower cap refuses
+- A status fold waits only for a reader of the panel; the panel keeps a tab picked in a project jump
+- The host's letter check takes same_ask_reason, as human_inbox_send does
+- A message lined up for after the turn is also held during a turn only the session record knows
+- The off-view note keeps its sentence whole and dismisses with the shared close icon
+- One decision shows once when a task and its subtask ask the same
+- A hook turned back on is in the list PATCH /api/hooks answers before it
+- A right-click menu and its picker stay open when a live update above the row scrolls its list without moving it
+- A status fold judges "on screen" by the panel's list area, and an on-screen heading keeps its place
+- A revoke or the hard stop while a call waits starts nothing, and a call can run under one named grant
+- An install past a tarball npm does not serve yet runs again, and a failure prints its own logs
+- A Stop stays visible in the transcript, several withdrawals undo together, and a held-back queue can be sent in one tap
+- New task draws its whole draft in the first frame
+- Idle compaction threshold stays 45K under the limit; inline save reads fresh config
+- The queue tray keeps the model name readable, shrinks with the keyboard at large text, and its times tick
+- Idle compaction off by default (measured cost), stopped compaction hands back
+- A Mac on a call is busy, and an owner's queue can lend a lane
+- The first review round's findings, from login matching to agents that ask before they buy
+- Undo restores a withdrawn message in its place, and the queue tray reads clearly
+- A failed keychain probe also pauses secret reads, and the pause ends after six hours
+- One gated reader for the keychain items the password manager reads back, registered in the keychain guard
+- An Undo tap cannot become a second tap on the row that moves under it; the queue seat shows a tray
+- Idle compaction says what it does, and runs before an idle reap
+- A right-click menu stays open through a scroll that left its row in place; C50 judges the drag without other workers' frames
+- Stop stays within reach while a draft is typed and asks before it sets waiting messages aside
+- A message a Stop set aside can be corrected; the queue tray gets edit hints, an undo that says where it returns, and guards against double taps
+- A run that waits its turn cleans up after itself and survives a dropped fleet read
+- A fleet iOS run waits its turn when every Mac is busy, instead of failing
+
 ## [0.6.27] - 2026-11-06
 
 ### Added
