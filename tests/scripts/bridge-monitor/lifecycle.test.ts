@@ -218,7 +218,8 @@ describe('orphan sweep: signal only what the collector provably spawned', () => 
     expect(planSweep([entry({ pid: 6900, pgid: 6900 })], own, { nowMs: NOW, selfPid: SELF })[0]).toMatchObject({ action: 'drop', reason: 'never signal init or the collector itself' })
   })
 
-  it("this Mac's real ps output, every group leader's pid 'reused' with its exact start time, kills nothing", () => {
+  // macOS only: a Linux container has a handful of process groups, not a Mac's hundreds (2026-11-07).
+  it.skipIf(process.platform !== 'darwin')("this Mac's real ps output, every group leader's pid 'reused' with its exact start time, kills nothing", () => {
     const rows = parsePsRows(execFileSync('/bin/ps', ['-A', '-o', 'pid=', '-o', 'pgid=', '-o', 'lstart=', '-o', 'command='], { encoding: 'utf-8', maxBuffer: 64 << 20, env: { ...process.env, LC_ALL: 'C' } }))
     const leaders = [...rows.values()].filter((p) => p.pid === p.pgid && p.pid > 1)
     expect(leaders.length).toBeGreaterThan(10)

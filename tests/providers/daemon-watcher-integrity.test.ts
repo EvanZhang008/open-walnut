@@ -31,7 +31,9 @@ const PORT_FILE = path.join(DAEMON_DIR, 'daemon.port')
 const PID_FILE = path.join(DAEMON_DIR, 'daemon.pid')
 const STREAMS_DIR = `${DAEMON_DIR}-streams`
 
-const hasBinary = fs.existsSync(BINARY)
+// The darwin-arm64 build runs only on an Apple-silicon Mac: a Linux checkout that cross-built it
+// gets ENOEXEC (2026-11-07).
+const hasBinary = fs.existsSync(BINARY) && process.platform === 'darwin' && process.arch === 'arm64'
 const d = hasBinary ? describe : describe.skip
 
 let daemonPid: number | null = null

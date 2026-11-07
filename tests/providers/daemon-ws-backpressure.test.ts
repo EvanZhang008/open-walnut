@@ -40,7 +40,9 @@ const BIG_A = path.join(DATA_DIR, 'big-a.jsonl')
 const BIG_B = path.join(DATA_DIR, 'big-b.jsonl')
 const SMALL = path.join(DATA_DIR, 'small.jsonl')
 
-const hasBinary = fs.existsSync(BINARY)
+// The darwin-arm64 build runs only on an Apple-silicon Mac: a Linux checkout that cross-built it
+// gets ENOEXEC (2026-11-07).
+const hasBinary = fs.existsSync(BINARY) && process.platform === 'darwin' && process.arch === 'arm64'
 const d = hasBinary ? describe : describe.skip
 
 let daemonPid: number | null = null
