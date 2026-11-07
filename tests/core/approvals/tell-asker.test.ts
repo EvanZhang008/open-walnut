@@ -65,7 +65,8 @@ describe('the asking session hears the decision', () => {
     await answerApproval(approval.id, { decision: 'approve', device: { name: 'MacBook', kind: 'mac-app' } }, lookup)
     const text = await toldOnce('sess-asker', 'approved')
     expect(text).toContain(approval.id)
-    expect(text).toContain('APPROVED')
+    // The result and what was asked lead the note, so its folded preview reads as the answer.
+    expect(text).toMatch(/\n?Approved: "Push the release"/)
     expect(text).toContain('git push origin main')
   })
 

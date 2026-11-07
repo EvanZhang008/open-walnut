@@ -241,9 +241,11 @@
 .corner-stack .kanban-toast-main .notice-details-toggle { margin: 0 auto 0 0; }
 
 /* A row scrolled into view stops above the stack, not behind it (TodoPanel revealBelowHeadings). */
-[data-corner-room] { scroll-padding-bottom: var(--corner-room, 0px); }
+[data-corner-room]:not([data-corner-room-shrink]) { scroll-padding-bottom: var(--corner-room, 0px); }
+/* A scroller that fills its column ends above the stack: no row sits under it (syncRoom). */
+[data-corner-room][data-corner-room-shrink] { margin-bottom: var(--corner-room, 0px); }
 /* The room the stack takes at the end of the scroller under it (corner-stack.tsx syncRoom). */
-[data-corner-room]::after {
+[data-corner-room]:not([data-corner-room-shrink])::after {
   content: '';
   display: block;
   flex: none;

@@ -38,12 +38,12 @@ export function askerNoticeFor(rec: NoticeInput): { outcome: 'approved' | 'denie
     const where = rec.answer?.device.name ? ` on ${rec.answer.device.name}` : ''
     const at = rec.answer?.at ? ` at ${rec.answer.at}` : ''
     if (rec.status === 'approved') {
-      return { outcome: 'approved', body: `Your approval request ${rec.id} was APPROVED by the person, with ${by}${where}${at}: "${what}". Go ahead with that step now${step}, then report the result where you planned to.${once}` }
+      return { outcome: 'approved', body: `Approved: "${what}". Your approval request ${rec.id} was approved by the person, with ${by}${where}${at}. Go ahead with that step now${step}, then report the result where you planned to.${once}` }
     }
-    return { outcome: 'denied', body: `Your approval request ${rec.id} was DENIED by the person, with ${by}${where}${at}: "${what}". Do not take that step${step}; carry on without it, or ask again only if something changed.` }
+    return { outcome: 'denied', body: `Denied: "${what}". Your approval request ${rec.id} was denied by the person, with ${by}${where}${at}. Do not take that step${step}; carry on without it, or ask again only if something changed.` }
   }
   if (rec.status === 'expired') {
-    return { outcome: 'expired', body: `Your approval request ${rec.id} got no answer before it expired: "${what}". It is not approved: do not take that step${step}. Ask again (approval_request) if it is still needed.` }
+    return { outcome: 'expired', body: `Expired, not approved: "${what}". Your approval request ${rec.id} got no answer in time. It is not approved: do not take that step${step}. Ask again (approval_request) if it is still needed.` }
   }
   return null
 }

@@ -232,6 +232,20 @@ test('the corner sits next to the sidebar, over the page left column, never out 
       const stack = document.querySelector('.corner-stack')!.getBoundingClientRect()
       return !foot || stack.right <= foot.left || stack.bottom <= foot.top + 1 ? 'clear' : `stack bottom ${Math.round(stack.bottom)} over the foot row at ${Math.round(foot.top)}`
     })).toBe('clear')
+    // No row of the column is under the corner, also before the list is scrolled (2026-11-06
+    // review: Home's bottom Focus rows sat under the card): the list ends above it.
+    await expect.poll(() => page.evaluate(() => {
+      const stack = document.querySelector('.corner-stack')!
+      const r = stack.getBoundingClientRect()
+      for (let x = r.left + 4; x < r.right; x += 24) {
+        for (let y = r.top + 2; y < r.bottom; y += 12) {
+          const hit = document.elementsFromPoint(x, y).find((el) => !stack.contains(el))
+          const row = hit?.closest('[data-task-id], .org-channel, .todo-panel-item')
+          if (row) return `a row is under the corner at ${Math.round(x)},${Math.round(y)}: ${row.className}`
+        }
+      }
+      return 'clear'
+    })).toBe('clear')
     await expectInside(toast)
     await page.screenshot({ path: `${SHOTS}/${info.project.name}-left-${shot}.png` })
     await toast.locator('.notification-toast-close').click()

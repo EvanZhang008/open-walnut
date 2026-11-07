@@ -272,21 +272,38 @@ function takesSpacer(el: HTMLElement): boolean {
   return column && (el === reserved || getComputedStyle(el, '::after').content === 'none');
 }
 
+/** A scroller that grows to fill its flex column, so a bottom margin shortens it rather than the page. */
+function fillsColumn(el: HTMLElement): boolean {
+  const parent = el.parentElement;
+  if (!parent) return false;
+  const pcs = getComputedStyle(parent);
+  return pcs.display.endsWith('flex') && pcs.flexDirection === 'column' && parseFloat(getComputedStyle(el).flexGrow) > 0;
+}
+
 function scrollerUnder(x: number, y: number): HTMLElement | null {
   for (const hit of document.elementsFromPoint(x, y)) {
     if (stack?.contains(hit) || !hit.closest(PAGE_AREA)) continue;
     for (let el: HTMLElement | null = hit as HTMLElement; el && el !== document.body; el = el.parentElement) {
       const oy = getComputedStyle(el).overflowY;
-      if ((oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight + 1) return takesSpacer(el) ? el : null;
+      if ((oy === 'auto' || oy === 'scroll') && (el.scrollHeight > el.clientHeight + 1 || fillsColumn(el))) return takesSpacer(el) ? el : null;
     }
     return null;
   }
   return null;
 }
 
+/** The shortened scroller still counts as under the stack where its end was before. */
+function shrunkUnder(x: number, y: number): HTMLElement | null {
+  if (!reserved?.isConnected || reserved.dataset.cornerRoomShrink === undefined) return null;
+  const b = reserved.getBoundingClientRect();
+  const held = parseFloat(reserved.style.getPropertyValue('--corner-room')) || 0;
+  return x >= b.left && x <= b.right && y >= b.top && y <= b.bottom + held ? reserved : null;
+}
+
 function release(): void {
   if (!reserved) return;
   delete reserved.dataset.cornerRoom;
+  delete reserved.dataset.cornerRoomShrink;
   reserved.style.removeProperty('--corner-room');
   reserved = null;
 }
@@ -295,16 +312,23 @@ function syncRoom(): void {
   if (!stack) return;
   const r = stack.getBoundingClientRect();
   const visible = stack.childElementCount > 0 && !stack.classList.contains('is-tucked') && !stack.classList.contains('under-drawer') && r.height > 0;
-  const scroller = visible ? scrollerUnder(r.left + 24, r.top + 4) : null;
+  const scroller = visible ? (shrunkUnder(r.left + 24, r.top + 4) ?? scrollerUnder(r.left + 24, r.top + 4)) : null;
   if (!scroller) { release(); return; }
   if (reserved !== scroller) release();
   // While the stack holds something the room only grows: a notice leaving (a toast's own time
   // running out) never moves the chat back down under the reader. It goes when the stack is empty.
   const held = reserved === scroller ? parseFloat(scroller.style.getPropertyValue('--corner-room')) || 0 : 0;
-  const room = Math.max(held, Math.round(scroller.getBoundingClientRect().bottom - r.top + 8));
+  // A scroller that fills a column (the Home task list) ends above the stack instead: its rows are
+  // never under the card, also before the reader scrolls (2026-11-06 review: the bottom Focus rows
+  // sat under an approval at the top of the list). Its bottom is measured as it is without that.
+  const shrink = fillsColumn(scroller);
+  const bottom = scroller.getBoundingClientRect().bottom + (shrink && scroller.dataset.cornerRoomShrink !== undefined ? held : 0);
+  const room = Math.max(held, Math.round(bottom - r.top + 8));
   if (room <= 0) { release(); return; }
   reserved = scroller;
   scroller.dataset.cornerRoom = '';
+  if (shrink) scroller.dataset.cornerRoomShrink = '';
+  else delete scroller.dataset.cornerRoomShrink;
   if (scroller.style.getPropertyValue('--corner-room') !== `${room}px`) {
     // A chat read at its end stays at its end: the newest line moves up clear of the stack.
     const atEnd = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 8;

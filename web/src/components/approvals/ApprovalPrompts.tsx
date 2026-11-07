@@ -156,7 +156,7 @@ function ApprovalBody({ a, s, now, detailOpen = false, onOpen, onMinimize, total
         : <div className="approval-what">{a.what}</div>}
       <div className="approval-who">
         <span className="approval-who-text">{asker
-          ? <><AskerLink a={a} label={a.requester.taskTitle || 'Its task'} /><span className="approval-who-host">on {hostName}</span></>
+          ? <><AskerLink a={a} label={a.requester.taskTitle || 'Its task'} />{' '}<span className="approval-who-host">on {hostName}</span></>
           : <span className="approval-who-host">{requesterText(a, hostName)}</span>}</span>
         {a.requester.cwd ? <span className="approval-cwd">{a.requester.cwd}</span> : null}
       </div>
