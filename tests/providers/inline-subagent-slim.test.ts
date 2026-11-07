@@ -10,6 +10,7 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { tmpdir } from 'node:os';
 import { createMockConstants } from '../helpers/mock-constants.js';
+import { endWhenHeard } from '../helpers/fake-child.js';
 
 const { spawnMock, settingsJsonRef } = vi.hoisted(() => ({
   spawnMock: vi.fn(),
@@ -54,9 +55,8 @@ async function run(opts: Partial<Parameters<typeof runInlineSubagent>[0]>): Prom
   const proc = fakeProc();
   spawnMock.mockReturnValueOnce(proc);
   const done = runInlineSubagent({ prompt: 'p', toolUseId: 'tu-slim', systemPrompt: 'tiny', ...opts });
-  await vi.waitFor(() => expect(proc.listenerCount('close')).toBeGreaterThan(0));
-  proc.emit('exit', 0);
-  proc.emit('close', 0);
+  // Finish the child cleanly once the runner listens for its end.
+  await endWhenHeard(proc, 0);
   await done;
   const [, args, spawnOpts] = spawnMock.mock.calls.at(-1)!;
   return { args, spawnOpts };

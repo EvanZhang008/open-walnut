@@ -11,6 +11,7 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { tmpdir } from 'node:os';
 import { createMockConstants } from '../helpers/mock-constants.js';
+import { endWhenHeard, until } from '../helpers/fake-child.js';
 
 const { spawnMock, settingsArgRef } = vi.hoisted(() => ({
   spawnMock: vi.fn(),
@@ -183,10 +184,9 @@ describe('warm micro-claude pool', () => {
     const procs: FakeProc[] = [];
     spawnMock.mockImplementation(() => { const p = fakeProc(); procs.push(p); return p; });
     const done = runWarmMicroClaude({ ...SPEC, prompt: 'q', timeoutMs: 5_000, toolUseId: 'tu-w5' });
-    await new Promise((r) => setTimeout(r, 10));
+    await until(() => procs.length > 0);
     procs[0].exitCode = 1;
-    procs[0].emit('exit', 1);
-    procs[0].emit('close', 1);
+    await endWhenHeard(procs[0], 1);
     await expect(done).rejects.toThrow(/exited before answering/);
   });
 
