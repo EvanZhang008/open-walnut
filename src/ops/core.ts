@@ -306,8 +306,25 @@ defineOp({
       .describe('Exact-string edits on the stored document, applied in order'),
     expectedHash: z.string().optional().describe('memory.contentHash from memory_read: the save is refused if the file changed'),
   },
-  bind: { method: 'PUT', path: '/memory/:doc', body: ['content', 'edits', 'expectedHash'] },
-  mapResult: ({ body, args }) => memoryWriteResult(body, args),
+  handler: async (args, call) => {
+    const doc = args.doc === 'global' ? 'global' : 'user'
+    const expectedHash = typeof args.expectedHash === 'string' && args.expectedHash ? args.expectedHash : undefined
+    // Checked here too: an older server or companion drops expectedHash and would overwrite.
+    if (expectedHash) {
+      const current = (await call('GET', `/memory/${doc}`)) as { memory?: { contentHash?: unknown } } | undefined
+      const hash = current?.memory?.contentHash
+      if (hash !== expectedHash) {
+        throw new Error(`conflict: ${memoryFileName(args)} changed since you read it (expectedHash ${expectedHash}, `
+          + `current ${String(hash)}), so nothing was written: memory_read it again and redo the change`)
+      }
+    }
+    const body = await call('PUT', `/memory/${doc}`, {
+      ...(args.content !== undefined ? { content: args.content } : {}),
+      ...(args.edits !== undefined ? { edits: args.edits } : {}),
+      ...(expectedHash ? { expectedHash } : {}),
+    })
+    return memoryWriteResult(body, args)
+  },
   tags: { readonly: false, remote: 'allow' },
 })
 

@@ -12,8 +12,8 @@
  *     nothing says so in its outcome;
  *   - memory_read's outcome names where the text is (memory.content);
  *   - expectedHash refuses a save on a file that moved on, and two concurrent edits both land.
- * And the class: every op that replaces a whole stored document has a way to change part of it,
- * so no agent needs a read-modify-write script to change one line.
+ * And the class: every write op that takes text is classified, and a new op that replaces a whole
+ * stored document needs a line edit (`edits`), so no agent needs a read-modify-write script.
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -29,44 +29,67 @@ import { executeOp, listOps, getOp } from '../../src/ops/index.js'
 
 const USER = '---\nname: User Profile\n---\n\n## Rules\n- One.\n- Two.\n'
 
-/**
- * Whole-document write ops and the op that changes part of the same document. An op listed
- * here takes the whole text; the named sibling takes a part. A new op that replaces a stored
- * document needs `edits` (or `mode`) of its own, or a sibling named here.
- */
+/** Input keys that carry text a write op stores or sends. Every write op with one is classified below. */
+const TEXT_KEYS = ['content', 'html', 'markdown', 'instructions', 'body', 'text', 'description', 'note', 'summary', 'prompt', 'reply']
+/** Input keys through which an op changes part of a stored document by exact text. */
+const PARTIAL_KEYS = ['edits', 'old_str']
+/** A whole-document write whose part-edit is another op. */
 const PARTIAL_SIBLING: Record<string, string> = {
   note_write: 'note_edit',
   board_set: 'board_edit',
 }
-
-/** Input keys that carry a whole stored document. */
-const WHOLE_DOC_KEYS = ['content', 'html', 'markdown']
-/** Input keys through which the same op changes part of it. */
-const PARTIAL_KEYS = ['edits', 'mode', 'old_str']
-/** Write ops whose `content`/`html`/`markdown` is a message or a request body, not a stored document. */
-const NOT_A_DOCUMENT = new Set(['api', 'host_http', 'human_inbox_send', 'human_inbox_reply'])
+/**
+ * Whole-document writes with no exact-text edit yet (`mode: append` adds, it does not change a
+ * line). The ratchet: this list may only shrink; a new op that replaces a stored document needs
+ * `edits` or a sibling instead.
+ */
+const WHOLE_REPLACE_KNOWN: Record<string, string> = {
+  task_update: 'description is a task field, usually set whole',
+  task_note_write: 'replace or append; no line edit yet',
+  agent_memory_write: 'replace or append; no line edit yet',
+  org_node_edit: 'instructions replace whole, at most 4000 characters',
+}
+/** Creates, or short fields set whole: nothing a script would edit one line of. */
+const CREATE_OR_SHORT = new Set([
+  'task_create', 'org_node_create', 'trigger_create', 'task_not_done_settle', 'board_project_set',
+  'board_card_set', 'board_remind', 'thread_update', 'hint_set',
+])
+/** Messages and request bodies: sent, not stored as a document. */
+const MESSAGE = new Set([
+  'api', 'host_http', 'browser', 'task_send', 'board_post', 'org_send', 'thread_create', 'thread_file',
+  'human_inbox_send', 'human_inbox_reply', 'human_inbox_answer', 'task_switch_engine', 'task_move',
+])
 
 describe('every whole-document write op has a partial path', () => {
-  it('no op makes an agent rewrite a whole document to change one line', () => {
-    const missing: string[] = []
+  it('every write op that takes text is classified, and only the known ones lack a line edit', () => {
+    const unclassified: string[] = []
     for (const op of listOps()) {
-      if (op.tags.readonly || NOT_A_DOCUMENT.has(op.name)) continue
+      if (op.tags.readonly) continue
       const keys = Object.keys(op.input ?? {})
-      if (!keys.some((k) => WHOLE_DOC_KEYS.includes(k))) continue
-      if (keys.some((k) => PARTIAL_KEYS.includes(k))) continue
-      const sibling = PARTIAL_SIBLING[op.name]
-      if (sibling && getOp(sibling)) continue
-      missing.push(op.name)
+      if (!keys.some((k) => TEXT_KEYS.includes(k))) continue
+      if (keys.some((k) => PARTIAL_KEYS.includes(k))) {
+        expect(WHOLE_REPLACE_KNOWN[op.name], `${op.name} has a line edit now: drop it from WHOLE_REPLACE_KNOWN`).toBeUndefined()
+        continue
+      }
+      if (PARTIAL_SIBLING[op.name] && getOp(PARTIAL_SIBLING[op.name])) continue
+      if (WHOLE_REPLACE_KNOWN[op.name] || CREATE_OR_SHORT.has(op.name) || MESSAGE.has(op.name)) continue
+      unclassified.push(`${op.name} (${keys.filter((k) => TEXT_KEYS.includes(k)).join(', ')})`)
     }
-    expect(missing, `whole-document write ops with no partial edit: ${missing.join(', ')}`).toEqual([])
+    expect(unclassified, `write ops that take text with no line edit and no class: ${unclassified.join('; ')}. `
+      + 'Give a stored document `edits`, or classify the op here').toEqual([])
   })
 
-  it('the exemptions still name real ops', () => {
-    for (const [op, sibling] of Object.entries(PARTIAL_SIBLING)) {
-      expect(getOp(op), op).toBeDefined()
-      expect(getOp(sibling), sibling).toBeDefined()
+  it('memory_write is no longer among the whole-replace writes', () => {
+    expect(Object.keys(getOp('memory_write')?.input ?? {})).toContain('edits')
+    expect(WHOLE_REPLACE_KNOWN.memory_write).toBeUndefined()
+  })
+
+  it('every name in the tables is a real write op that takes text', () => {
+    const names = [...Object.keys(PARTIAL_SIBLING), ...Object.values(PARTIAL_SIBLING), ...Object.keys(WHOLE_REPLACE_KNOWN), ...CREATE_OR_SHORT, ...MESSAGE]
+    for (const name of names) expect(getOp(name), name).toBeDefined()
+    for (const name of [...Object.keys(WHOLE_REPLACE_KNOWN), ...CREATE_OR_SHORT, ...MESSAGE]) {
+      expect(Object.keys(getOp(name)?.input ?? {}).some((k) => TEXT_KEYS.includes(k)), `${name} takes no text any more`).toBe(true)
     }
-    for (const name of NOT_A_DOCUMENT) expect(getOp(name), name).toBeDefined()
   })
 })
 
@@ -170,6 +193,21 @@ describe('memory_write against the live server', () => {
     expect(res.next).toContain('"edits"')
   })
 
+  it('a save waits for the file lock every memory writer takes, and edits the text it finds then', async () => {
+    const { withFileLock } = await import('../../src/utils/file-lock.js')
+    let pending: Promise<unknown> | undefined
+    await withFileLock(USER_FILE, async () => {
+      // Another writer (memory_manage's bounded store) holds the lock: the save may not read yet.
+      pending = call('memory_write', { doc: 'user', edits: [{ old: '- One.', new: '- 1.' }] })
+      await new Promise((r) => setTimeout(r, 400))
+      expect(await disk()).toBe(USER)
+      await fs.writeFile(USER_FILE, `${USER}- Three, by the other writer.\n`, 'utf-8')
+    })
+    const r = (await pending) as { ok: boolean }
+    expect(r.ok).toBe(true)
+    expect(await disk()).toBe(USER.replace('- One.', '- 1.') + '- Three, by the other writer.\n')
+  })
+
   it('concurrent edits of different lines both land', async () => {
     const lines = Array.from({ length: 12 }, (_, i) => `- line ${i}.`)
     await fs.writeFile(USER_FILE, `## Rules\n${lines.join('\n')}\n`, 'utf-8')
@@ -178,5 +216,32 @@ describe('memory_write against the live server', () => {
     expect(results.every((r) => r.ok)).toBe(true)
     const after = await disk()
     for (let i = 0; i < lines.length; i++) expect(after).toContain(`- LINE ${i}.`)
+  })
+})
+
+describe('memory_write against a server that ignores expectedHash', () => {
+  it('a stale expectedHash is refused before any PUT, so an older server cannot overwrite', async () => {
+    const http = await import('node:http')
+    const puts: string[] = []
+    const stub = http.createServer((req, res) => {
+      if (req.method === 'PUT') puts.push(req.url ?? '')
+      res.setHeader('content-type', 'application/json')
+      res.end(JSON.stringify(req.method === 'GET'
+        ? { memory: { path: 'USER.md', content: 'now', contentHash: 'current-hash' } }
+        : { ok: true, updatedAt: new Date().toISOString() }))
+    })
+    await new Promise<void>((r) => stub.listen(0, '127.0.0.1', () => r()))
+    try {
+      const apiBase = `http://127.0.0.1:${(stub.address() as AddressInfo).port}`
+      const stale = await executeOp('memory_write', { doc: 'user', content: 'mine', expectedHash: 'old-hash' }, { apiBase })
+      expect(stale.ok).toBe(false)
+      expect(JSON.stringify(stale)).toMatch(/changed since you read it .*nothing was written/)
+      expect(puts).toEqual([])
+      const fresh = await executeOp('memory_write', { doc: 'user', content: 'mine', expectedHash: 'current-hash' }, { apiBase })
+      expect(fresh.ok).toBe(true)
+      expect(puts).toHaveLength(1)
+    } finally {
+      await new Promise<void>((r) => stub.close(() => r()))
+    }
   })
 })

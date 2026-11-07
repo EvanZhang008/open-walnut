@@ -27,6 +27,7 @@ import { log } from '../../logging/index.js'
 import { companionMemoryRoutes } from '../../replica/companion-copy-routes.js'
 import { applyMemoryEdits, memoryChangeOf, MemoryEditError, type MemoryEdit } from '../../core/memory-edits.js'
 import { sortedByName } from '../../lib/dir-order.js'
+import { withFileLock } from '../../utils/file-lock.js'
 
 export const memoryRouter = Router()
 // The companion's memory reads and saves take the Mac's copy and its journal (stage 4d); a pass-through elsewhere.
@@ -286,17 +287,6 @@ export async function readUserMemoryDoc(): Promise<MemoryDoc | null> {
   }
 }
 
-/** One write at a time per file, so two edits never read the same text and lose one. */
-const writeChains = new Map<string, Promise<unknown>>()
-function oneAtATime<T>(file: string, run: () => Promise<T>): Promise<T> {
-  const prior = writeChains.get(file) ?? Promise.resolve()
-  const mine = prior.catch(() => {}).then(run)
-  const settled = mine.catch(() => {})
-  writeChains.set(file, settled)
-  void settled.then(() => { if (writeChains.get(file) === settled) writeChains.delete(file) })
-  return mine
-}
-
 export interface MemoryWriteResult {
   ok: true
   updatedAt: string
@@ -312,7 +302,7 @@ export interface MemoryWriteResult {
  * Write MEMORY.md or USER.md with human-edit telemetry + prompt-snapshot thaw
  * (see recordBoundedStoreEdit). Shared by the web PUT routes and /api/v1.
  * `change` is the whole new text, or exact-string edits applied to the stored text under the
- * same per-file turn as the write (2026-11-06: an agent's read-modify-write script misread the
+ * same file lock as the write (2026-11-06: an agent's read-modify-write script misread the
  * read and never wrote, then took the read's output for the save).
  */
 export async function writeMemoryDoc(
@@ -322,24 +312,27 @@ export async function writeMemoryDoc(
 ): Promise<MemoryWriteResult> {
   const file = target === 'memory' ? MEMORY_FILE : USER_FILE
   const relPath = target === 'memory' ? 'MEMORY.md' : 'USER.md'
-  return oneAtATime(file, async () => {
-    await fsp.mkdir(path.dirname(file), { recursive: true })
-    const previous = await fsp.readFile(file, 'utf-8').catch(() => '')
-    assertMemoryHash(previous, expectedHash)
-    const content = typeof change === 'string' ? change : applyMemoryEdits(previous, change.edits, relPath)
-    await fsp.writeFile(file, content, 'utf-8')
-    await recordBoundedStoreEdit(target, previous, content)
-    const stat = await fsp.stat(file)
-    const changed = content !== previous
-    log.memory.info(`${target === 'memory' ? 'Global MEMORY.md' : 'USER.md'} updated via editor`, {
-      size: content.length, previousSize: previous.length, changed, ...(typeof change === 'string' ? {} : { edits: change.edits.length }),
-    })
-    emitMemoryUpdated(relPath, content)
-    return {
-      ok: true as const, updatedAt: stat.mtime.toISOString(), contentHash: computeContentHash(content),
-      changed, size: content.length, previousSize: previous.length, ...(await overBudget(target, content)),
-    }
+  await fsp.mkdir(path.dirname(file), { recursive: true })
+  // The read, the lock check, the edits and the write share the file lock every writer of these
+  // files takes (bounded-memory.ts mutate, the Files panel's save), so no concurrent change is lost.
+  const { previous, content } = await withFileLock(file, async () => {
+    const before = await fsp.readFile(file, 'utf-8').catch(() => '')
+    assertMemoryHash(before, expectedHash)
+    const after = typeof change === 'string' ? change : applyMemoryEdits(before, change.edits, relPath)
+    await fsp.writeFile(file, after, 'utf-8')
+    return { previous: before, content: after }
   })
+  await recordBoundedStoreEdit(target, previous, content)
+  const stat = await fsp.stat(file)
+  const changed = content !== previous
+  log.memory.info(`${target === 'memory' ? 'Global MEMORY.md' : 'USER.md'} updated via editor`, {
+    size: content.length, previousSize: previous.length, changed, ...(typeof change === 'string' ? {} : { edits: change.edits.length }),
+  })
+  emitMemoryUpdated(relPath, content)
+  return {
+    ok: true as const, updatedAt: stat.mtime.toISOString(), contentHash: computeContentHash(content),
+    changed, size: content.length, previousSize: previous.length, ...(await overBudget(target, content)),
+  }
 }
 
 /**
