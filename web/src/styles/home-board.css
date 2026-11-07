@@ -41,7 +41,7 @@
 .home-board-card.home-board-child { margin: 0 0 3px; padding: 7px 0 7px 9px; border: 0; border-left: 2px solid var(--border); border-radius: 0; box-shadow: none; }
 .home-board-child .home-board-title { font-size: 12px; font-weight: 400; }
 .home-board-child .home-board-meta { margin-top: 4px; }
-.home-board-drag-preview { width: 230px; box-shadow: 0 8px 24px #0003; }
+.home-board-drag-preview { box-sizing: border-box; width: 100%; margin: 0; box-shadow: 0 8px 24px #0003; }
 .home-board-empty { padding: 20px 8px; color: var(--fg-muted); font-size: 12px; text-align: center; }
 .home-board-more { width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg-muted); font: inherit; font-size: 12px; }
 .home-board-sheet button:disabled { opacity: .45; cursor: wait; }
