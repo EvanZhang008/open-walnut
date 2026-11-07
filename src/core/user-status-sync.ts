@@ -88,6 +88,8 @@ export interface StatusFacts {
   sessionsOf: Map<string, string[]>;
   /** Task id -> how many of its direct subtasks are open (filled by syncUserStatuses). */
   openWorkers?: Map<string, number>;
+  /** Task id -> the titles of its direct subtasks at work (in progress or parked on a wait of their own). */
+  workersAtWork?: Map<string, string[]>;
   /** Task id -> when the team stop that holds it was made (Task.team_stop members, filled by syncUserStatuses). */
   teamStopped?: Map<string, string>;
   /** Project keys (trimmed, lower case) that have an open lead (filled by syncUserStatuses). */
@@ -472,6 +474,7 @@ export function statusInputOf(task: Task, facts: StatusFacts, nowMs = Date.now()
     waitUntil: task.wait_until ?? null,
     hasLeader: !!task.parent_task_id,
     openWorkers: facts.openWorkers?.get(task.id) ?? 0,
+    workersAtWork: facts.workersAtWork?.get(task.id) ?? [],
     isMain: task.org_role === 'main',
     phaseChangedAt: task.phase_changed_at ?? null,
     owedHold: openOwedHold(task),
@@ -536,9 +539,15 @@ export function completeStatusFacts(facts: StatusFacts, everything: readonly Tas
   facts.tasksById = new Map(everything.map((t) => [t.id, t] as const));
   facts.relativeAsks = relativeAsksIndex(everything);
   facts.openWorkers = new Map();
+  facts.workersAtWork = new Map();
   for (const t of everything) {
     if (!t.parent_task_id || t.phase === 'COMPLETE' || t.status === 'done') continue;
     facts.openWorkers.set(t.parent_task_id, (facts.openWorkers.get(t.parent_task_id) ?? 0) + 1);
+    // At work: running its own turn or parked on a wait of its own. One handed back (NEED_ACTION)
+    // or not started (TODO) is its parent's to look at, never a wait of the parent's.
+    if (t.phase === 'IN_PROGRESS' || t.phase === 'WAITING') {
+      facts.workersAtWork.set(t.parent_task_id, [...(facts.workersAtWork.get(t.parent_task_id) ?? []), t.title]);
+    }
   }
   facts.teamStopped = new Map();
   // A pause of the wake sources only (sessions:"keep") leaves the sessions running: not a stop to show.

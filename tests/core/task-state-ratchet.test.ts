@@ -131,6 +131,8 @@ const PHASE_READERS: Record<string, number> = {
   'src/core/task-wait-until.ts': 4,
   // + two: a parked task's own work reads Working while its wait clock brings it back (ownWork).
   'src/core/user-status.ts': 6,
+  // the deriver's own fact: a subtask in progress or parked on its own wait is one its parent waits on (workersAtWork)
+  'src/core/user-status-sync.ts': 1,
   'src/ops/tasks.ts': 2,
   'src/providers/daemon-source.ts': 1,
   // + one: a person's NEED_ACTION write is marked as their ask (core/sessions/person-needs.ts)

@@ -279,6 +279,8 @@ export interface UserStatusInput {
   hasLeader?: boolean;
   /** Its open subtasks: their news (a completion, an error) wakes it. */
   openWorkers?: number;
+  /** Titles of its subtasks at work now (in progress or parked on their own wait): their news wakes it. */
+  workersAtWork?: readonly string[];
   /** Main (org_role 'main'): the user's next message or a team's news wakes it, never a timer. */
   isMain?: boolean;
   /** Its last message since its latest hand-back (sessions/last-words.ts), for a turn that left no report. */
@@ -1043,6 +1045,11 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
     // turn running (a NEED_ACTION set inside a turn waits for that turn's report), it waits on the watch.
     // Not Main or a lead: they are never closed, and their NEED_ACTION is the user's turn to talk.
     const watch = running || input.isMain || input.isLead ? null : wakeSource(input, w, nowMs, false);
+    // It waits on another task of its own: a reply it asked for, or its own subtask at work (its
+    // reviewer). That task's answer or news wakes it, so it is no one's to look at now (2026-11-07:
+    // workers whose review subtask ran read "Waiting on its lead" and filled their lead's list).
+    const awaited = !running && !input.reportPending ? awaitedTask(input, w) : null;
+    if (awaited) return awaited;
     // A worker whose session stopped (Walnut's idle reap, a stop) with no report of its own saying it
     // needs the user: its lead is the one to look (2026-10-27: a worker reaped while its tests ran read
     // Needs you everywhere). The reap still hands it back, so a reply its lead waits for is settled.
@@ -1114,6 +1121,24 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
   if (until) return strip({ state: 'waiting', kind: 'time', waitingOn: 'Its next check', until, ...w });
   if (input.phase === 'WAITING') return strip({ state: 'waiting', kind: 'other', waitingOn: 'A message (parked with no clock or watch)', ...w });
   return strip({ state: fallbackUserState(input.phase), ...w });
+}
+
+/**
+ * The other task a task waits on by the facts, or null: a reply it asked for (waitingOnTasks), then
+ * its own subtasks at work (workersAtWork). Every wait source a hand-back must name before it
+ * reads as its lead's (tests/core/user-status-own-waits.test.ts lists them).
+ */
+export const OWN_TASK_WAIT_SOURCES = ['waitingOnTasks', 'workersAtWork'] as const satisfies readonly (keyof UserStatusInput)[];
+
+function awaitedTask(input: UserStatusInput, w: ReturnType<typeof words>): UserStatus | null {
+  const replies = (input.waitingOnTasks ?? []).map(clean).filter(Boolean);
+  if (replies.length) return strip<UserStatus>({ state: 'waiting', kind: 'task', waitingOn: `A reply from ${replies.slice(0, 3).join(', ')}`, ...w });
+  const workers = (input.workersAtWork ?? []).map(clean).filter(Boolean);
+  if (workers.length) {
+    const named = workers.slice(0, 3).join(', ') + (workers.length > 3 ? ` and ${workers.length - 3} more` : '');
+    return strip<UserStatus>({ state: 'waiting', kind: 'task', waitingOn: `Its ${workers.length === 1 ? 'subtask' : 'subtasks'} at work: ${named}`, ...w });
+  }
+  return null;
 }
 
 /** The state of a task the server has not derived yet (an older server, a row before the
