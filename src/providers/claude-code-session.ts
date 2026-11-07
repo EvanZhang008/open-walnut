@@ -754,6 +754,15 @@ function takeEffortHeldForSpawn(sessionId: string): import('../core/types.js').S
 // (= leaked instance pointing at the same sid).
 let __ccsIdCounter = 0
 
+/** The send that opened the current turn, while it waits for its answer (holdDeathForWrite). */
+type OpeningWrite = {
+  transport: SessionManager
+  /** The turn generation the send opened. */
+  gen: number
+  /** The first death reported meanwhile, judged once the send has its answer. */
+  held?: () => void
+}
+
 export class ClaudeCodeSession {
   private readonly _ccsId: number = ++__ccsIdCounter
   /** DUP-DEBUG: count of jsonl lines this instance has ingested. */
@@ -2894,6 +2903,8 @@ export class ClaudeCodeSession {
 
     this._active = true
     this._processEnded = false
+    // A death held for a send to the process this spawn replaces is not this one's.
+    this._openingWrite = null
     // Init-only spawn (pre-assigned id): NO first turn — the CLI inits then
     // idles on its FIFO. Claiming 'running' here made the pre-spawn status
     // emit (below) mark the stream buffer streaming; the corrective 'idle'
@@ -3104,50 +3115,54 @@ export class ClaudeCodeSession {
       mode: this._mode,
       onOutput: (event) => this.handleStreamLine(event.line, event.v),
       onExit: (code, stderr) => {
-        this._exitCode = code
-        this._exitStderr = stderr
-        if (code !== 0) {
-          log.session.warn('session process exited with non-zero code', {
-            taskId: this.taskId, exitCode: code, host, isRemote: !!sshTarget,
-            stderr: stderr?.slice(0, 200),
-          })
+        // A death reported while the send that opened this turn waits for its answer is judged after it.
+        const judge = () => {
+          this._exitCode = code
+          this._exitStderr = stderr
+          if (code !== 0) {
+            log.session.warn('session process exited with non-zero code', {
+              taskId: this.taskId, exitCode: code, host, isRemote: !!sshTarget,
+              stderr: stderr?.slice(0, 200),
+            })
+          }
+          // Process died before init (no claudeSessionId) — emit error so callers
+          // waiting for this session (e.g. plan execute endpoint) can detect the failure.
+          if (!this.claudeSessionId && !this.resultEmitted) {
+            this.resultEmitted = true
+            this._active = false
+            this._processStatus = 'error'
+            this._activity = undefined
+            this.clearStallDiagTimer()
+            // Startup advisories are not the cause of death — strip before quoting.
+            const initStderr = stderr ? stripCliStartupNoise(stderr) : ''
+            const parts = [`Process exited with code ${code} before initialization`]
+            if (host) parts.push(`[${host}]`)
+            if (initStderr) parts.push(initStderr.slice(0, 500))
+            const errMsg = parts.join(' — ')
+            log.session.error('session process died before init', {
+              taskId: this.taskId, exitCode: code, host, fromPlanSessionId: this.fromPlanSessionId,
+              stderr: initStderr.slice(0, 500) || undefined,
+            })
+            this.emitStatusChanged('NEED_ACTION', errMsg)
+            bus.emit(EventNames.SESSION_ERROR, {
+              sessionId: this.claudeSessionId ?? undefined,
+              taskId: this.taskId,
+              error: errMsg,
+              fromPlanSessionId: this.fromPlanSessionId,
+            }, ['main-ai', 'session-runner'], { source: 'session-runner' })
+          }
+          // Post-init death: claudeSessionId IS set, so the block above is skipped.
+          // Without this, the error is silently swallowed and the session drifts to 'idle'.
+          // Applies to all daemon-backed sessions (both remote and local via __local__ daemon).
+          else if (code !== 0 && !this.resultEmitted) {
+            this.handleRemoteProcessExit(code, stderr)
+          }
+          // A quiet exit reports nothing, so the lines it never took are handed back
+          // here; only while this process is still the session's (a replaced one's
+          // late exit must not take its successor's lines).
+          else if (this._transport === transport) this.handleQuietProcessExit()
         }
-        // Process died before init (no claudeSessionId) — emit error so callers
-        // waiting for this session (e.g. plan execute endpoint) can detect the failure.
-        if (!this.claudeSessionId && !this.resultEmitted) {
-          this.resultEmitted = true
-          this._active = false
-          this._processStatus = 'error'
-          this._activity = undefined
-          this.clearStallDiagTimer()
-          // Startup advisories are not the cause of death — strip before quoting.
-          const initStderr = stderr ? stripCliStartupNoise(stderr) : ''
-          const parts = [`Process exited with code ${code} before initialization`]
-          if (host) parts.push(`[${host}]`)
-          if (initStderr) parts.push(initStderr.slice(0, 500))
-          const errMsg = parts.join(' — ')
-          log.session.error('session process died before init', {
-            taskId: this.taskId, exitCode: code, host, fromPlanSessionId: this.fromPlanSessionId,
-            stderr: initStderr.slice(0, 500) || undefined,
-          })
-          this.emitStatusChanged('NEED_ACTION', errMsg)
-          bus.emit(EventNames.SESSION_ERROR, {
-            sessionId: this.claudeSessionId ?? undefined,
-            taskId: this.taskId,
-            error: errMsg,
-            fromPlanSessionId: this.fromPlanSessionId,
-          }, ['main-ai', 'session-runner'], { source: 'session-runner' })
-        }
-        // Post-init death: claudeSessionId IS set, so the block above is skipped.
-        // Without this, the error is silently swallowed and the session drifts to 'idle'.
-        // Applies to all daemon-backed sessions (both remote and local via __local__ daemon).
-        else if (code !== 0 && !this.resultEmitted) {
-          this.handleRemoteProcessExit(code, stderr)
-        }
-        // A quiet exit reports nothing, so the lines it never took are handed back
-        // here; only while this process is still the session's (a replaced one's
-        // late exit must not take its successor's lines).
-        else if (this._transport === transport) this.handleQuietProcessExit()
+        if (!this.holdDeathForWrite(transport, judge)) judge()
       },
       })
     }
@@ -3881,15 +3896,19 @@ export class ClaudeCodeSession {
           mode: session._mode,
           onOutput: (event) => session.handleStreamLine(event.line, event.v),
           onExit: (code, stderr) => {
-            session._exitCode = code
-            session._exitStderr = stderr
-            // Post-init death — surface error instead of silent swallow.
-            // Applies to all daemon-backed sessions (both remote and local via __local__ daemon).
-            if (code !== 0 && !session.resultEmitted) {
-              session.handleRemoteProcessExit(code, stderr)
-            } else if (session._transport === attachedTransport) {
-              session.handleQuietProcessExit()
+            const judge = () => {
+              session._exitCode = code
+              session._exitStderr = stderr
+              // Post-init death — surface error instead of silent swallow.
+              // Applies to all daemon-backed sessions (both remote and local via __local__ daemon).
+              if (code !== 0 && !session.resultEmitted) {
+                session.handleRemoteProcessExit(code, stderr)
+              } else if (session._transport === attachedTransport) {
+                session.handleQuietProcessExit()
+              }
             }
+            // A death reported while the send that opened this turn waits for its answer is judged after it.
+            if (!session.holdDeathForWrite(attachedTransport, judge)) judge()
           },
         })
         // Recover pending permission from daemon attach response.
@@ -4115,6 +4134,8 @@ export class ClaudeCodeSession {
     // keeping them until the next idle→running reset is harmless.
     const transport = this._transport
     let undoDispatch: (() => void) | undefined
+    // Assigned by onDispatch (a callback): typed this way so the checks below are not narrowed to null.
+    let opening = null as OpeningWrite | null
     const onDispatch = () => {
       const isMidTurnInjection = this._processStatus === 'running'
         && (!this._turnResultEmitted || this._teamActive)
@@ -4165,9 +4186,14 @@ export class ClaudeCodeSession {
         // dispatch opened and emitted that turn's result under this generation.
         // Rolling the generation back would let the next turn reuse it, and a lane
         // would then read the stale result as the next turn's answer.
+        // Nor while a death is held for this write (holdDeathForWrite): the process
+        // ended meanwhile, and settleOpeningWrite closes the turn. Restoring the whole
+        // pre-dispatch state would also undo what a Stop or a teardown set during the
+        // write (a stopped session read idle again, a teardown's lines delivered again).
+        const deathHeld = !!opening?.held && this._openingWrite === opening
         if (this._transport === transport && this._turnGen === before._turnGen + 1
           && this._lastJsonlEventTs === eventAt && transport.fileSize === offset
-          && this._processEnds === endsAt) {
+          && this._processEnds === endsAt && !deathHeld) {
           Object.assign(this, before)
           if (this.claudeSessionId) this._emitBackgroundTasksUpdate(this.claudeSessionId)
           // The readout flipped to live at the anchor below; put the previous
@@ -4207,6 +4233,15 @@ export class ClaudeCodeSession {
       // they join the SAME turn and must not bump.
       this._turnGen++
       this._turnEdgeAt = Date.now()
+      // A turn opened after a settled one: a death reported before this write's
+      // answer waits for that answer (holdDeathForWrite).
+      if (before.resultEmitted || before._turnResultEmitted) {
+        // A death still held for an earlier send of this process carries over: that
+        // send's own settle no longer finds itself here and would drop it.
+        const prev = this._openingWrite
+        const carried = prev && prev.transport === transport ? prev.held : undefined
+        opening = this._openingWrite = { transport, gen: this._turnGen, ...(carried ? { held: carried } : {}) }
+      }
       // Walnut's own send opens this turn: the server's send source judges it, not a line.
       this._pendingOpenLine = this._turnOpenLine = undefined
       this._turnSeq++
@@ -4311,21 +4346,27 @@ export class ClaudeCodeSession {
         onHeld: () => { waited = true; opts?.onHeld?.() },
       })
     }
-    catch (error) { forget(error instanceof SendOutcomeUnknownError); throw error }
-    if (!ok) { forget(); return false }
+    catch (error) { forget(error instanceof SendOutcomeUnknownError); this.settleOpeningWrite(opening, false); throw error }
+    if (!ok) { forget(); this.settleOpeningWrite(opening, false); return false }
     // "Waiting" means the line sits in a live process's pipe. This session saw its
     // process end and has started none since, and the transport has no pipe: nothing
     // will read the line. Not delivered, as a dead process's refusal is, so the caller
     // takes it to the next process; a line handed back by that end must never stay
     // parked on the process that died (2026-10-25: the test daemon answered "waiting"
     // for one, the real daemon reaps first). A pipe found alive again keeps the answer.
-    if (known?.fate === 'waiting' && this._processEnded && !transport.hasPipe) {
+    // A death held for this write is that end too (holdDeathForWrite).
+    const endedMeanwhile = !!opening && this._openingWrite === opening && !!opening.held
+    if (known?.fate === 'waiting' && (this._processEnded || endedMeanwhile) && !transport.hasPipe) {
       log.session.warn('the daemon says the line waits in a process that ended: it goes to the next process', {
         sessionId: this.claudeSessionId, uuid, ...known, messageIds: rows.map((r) => r.id),
       })
       forget()
+      this.settleOpeningWrite(opening, false)
       return false
     }
+    // Written: a death reported meanwhile is judged now, as it was before the hold,
+    // ahead of everything below that reads it (_processEnded).
+    this.settleOpeningWrite(opening, true)
     // This process already took a line behind a cut copy: it exits on that copy and
     // never reads what is written after it, so this line is held the same way. Asked
     // only now that the write has its answer, and so after every line queued before
@@ -5234,6 +5275,74 @@ export class ClaudeCodeSession {
   private _processEnds = 0
   /** The process this object last started or attached has ended (spawn clears it). */
   private _processEnded = false
+  /** The send that opened the current turn, until it has its answer (writeMessage). */
+  private _openingWrite: OpeningWrite | null = null
+
+  /**
+   * A death reported while the send that opened this turn still waits for its
+   * answer is judged once that answer is in (settleOpeningWrite). The daemon
+   * reaps a CLI it finds dead when that send reaches it, and its exit report
+   * travels ahead of the refusal; the transport's own refusal reports the death
+   * first too (RemoteSessionManager onExit, then false). Judged at once, the death
+   * found the turn the send had just opened and ended it with a stand-in: a result
+   * made of the previous turn's text or of nothing, or a session error, although
+   * the line never reached that process and the resume the caller starts next
+   * answers it. Only for a turn opened after a settled one: a death before the
+   * first answer is start recovery's (offerUnreadFirstLine). Returns true when the
+   * death is held.
+   */
+  private holdDeathForWrite(transport: SessionManager | null, judge: () => void): boolean {
+    const w = this._openingWrite
+    if (!w || !transport || w.transport !== transport || this._turnGen !== w.gen) return false
+    // One death per process: another report of it while held adds nothing.
+    if (!w.held) w.held = judge
+    return true
+  }
+
+  /** The opening send has its answer: judge a death held for it (holdDeathForWrite).
+   *  Not delivered: the line never reached the process that died, so the turn opened
+   *  for it ends here with no result of its own and the death is one between turns. */
+  private settleOpeningWrite(opening: OpeningWrite | null, delivered: boolean): void {
+    if (!opening || this._openingWrite !== opening) return
+    this._openingWrite = null
+    const judge = opening.held
+    if (!judge) return
+    // The session moved to another process while the write waited (a spawn, an
+    // attach): the death was that old process's, and judging it now would end the
+    // new one's turn or reclaim its lines.
+    if (this._transport !== opening.transport) {
+      log.session.info('a death held for a send belongs to a process the session left: not judged', {
+        sessionId: this.claudeSessionId, taskId: this.taskId, turnGen: opening.gen,
+      })
+      return
+    }
+    if (!delivered) {
+      // The turn the dispatch opened ends here, with no result (undoDispatch leaves it
+      // to this: a rollback would also undo what a Stop or a teardown set meanwhile).
+      if (this._turnGen === opening.gen && !this._turnResultEmitted) {
+        this._turnResultEmitted = true
+        this.setForegroundActive(false)
+        this.finalizeTurnSpeed({ interrupted: true })
+      }
+      // Nor a session error: a failure code ends no turn either. Between turns a live
+      // CLI's crash is reported as one (resultEmitted is cleared after each result),
+      // but this one is the resume's to recover, and a session:error here reads as the
+      // new turn's end to everyone waiting on it. A resume that fails reports its own.
+      this.resultEmitted = true
+    }
+    log.session.info(delivered
+      ? 'a death reported while a send was on its way: the line was written, judged now'
+      : 'a death reported while a send was on its way: the line never reached that process, so it ends no turn', {
+      sessionId: this.claudeSessionId, taskId: this.taskId, turnGen: opening.gen,
+    })
+    // Never into the write's own outcome: a throw here would replace the send's
+    // answer (false, or its error) with this one.
+    try { judge() } catch (err) {
+      log.session.warn('judging a death held for a send failed', {
+        sessionId: this.claudeSessionId, taskId: this.taskId, error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
 
   private handBackLines(sid: string, lines: UntakenLine[], why: 'exit' | 'death' | 'crash' | 'teardown', announce: boolean): void {
     if (lines.length === 0) return
@@ -5662,7 +5771,8 @@ export class ClaudeCodeSession {
             pid: this.pid,
             isRemote: this._transport.isRemote,
           })
-          this.handleProcessDeath()
+          // Judged after the answer of a send that opened this turn, as a reported exit is.
+          if (!this.holdDeathForWrite(this._transport, () => this.handleProcessDeath())) this.handleProcessDeath()
         }
       } catch (err) {
         log.session.warn('liveness monitor tick failed', {
