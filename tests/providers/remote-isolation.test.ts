@@ -25,6 +25,9 @@ import { buildDaemonDirProbeScript, chooseDaemonDir, parseDaemonDirProbe } from 
 import { isProdDaemonDir } from '../../src/providers/ephemeral-replica-host.js'
 import { classifyHostConnectError } from '../../src/core/sessions/host-connect-hint.js'
 import { guardedPath } from '../setup/exec-guard.js'
+import { testBun } from '../helpers/bun-runtime.js'
+
+const BUN: string | undefined = testBun()
 
 const ON = { WALNUT_EPHEMERAL_REMOTE_HOSTS: '1' }
 const cleanup: string[] = []
@@ -105,7 +108,7 @@ describe('the layout and the start env: every dir under the root', () => {
       expect(v.startsWith(root + '/'), k).toBe(true)
     }
     expect(Object.keys(env).sort()).toEqual([
-      'WALNUT_DAEMON_DIR', 'WALNUT_DAEMON_ISOLATED_FOR', 'WALNUT_DAEMON_ORPHAN_EXIT_MS', 'WALNUT_INSTALL_HOME',
+      'BUN_RUNTIME_TRANSPILER_CACHE_PATH', 'WALNUT_DAEMON_DIR', 'WALNUT_DAEMON_ISOLATED_FOR', 'WALNUT_DAEMON_ORPHAN_EXIT_MS', 'WALNUT_INSTALL_HOME',
       'WALNUT_RUNTIME_DIR', 'WALNUT_SECRETS_DIR_ROOT', 'WALNUT_STREAMS_DIR', 'WALNUT_TASK_DIR_ROOT', 'WALNUT_WORKTREES_ROOT',
     ])
   })
@@ -119,6 +122,26 @@ describe('the layout and the start env: every dir under the root', () => {
     const home = freshHome()
     expect(testServerRemoteTermRoot(false, home)).toBeNull()
     expect(testServerRemoteTermRoot(true, home)!.termDir).toBe(`${ISOLATED_TMP_PREFIX}${isolationKey(home)}/term`)
+  })
+})
+
+describe('bun running the isolated daemon, for real', () => {
+  it.skipIf(!BUN)('keeps its transpiler cache under the root\'s home, never in HOME', () => {
+    const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-iso-bun-home-')))
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-iso-bun-root-')))
+    try {
+      // Bun caches a transpiled file over 50 KB, as it does daemon.cjs.
+      const script = path.join(root, 'daemon.cjs')
+      fs.writeFileSync(script, Array.from({ length: 6000 }, (_, i) => `exports.f${i} = function () { return ${i} }`).join('\n') + '\nconsole.log("ran")\n')
+      const env = isolatedDaemonEnv(root, '0123456789abcdef')
+      const out = execFileSync(BUN!, [script], { encoding: 'utf-8', env: { PATH: guardedPath([], '/usr/bin:/bin'), HOME: home, BUN_RUNTIME_TRANSPILER_CACHE_PATH: env.BUN_RUNTIME_TRANSPILER_CACHE_PATH } })
+      expect(out.trim()).toBe('ran')
+      expect(fs.readdirSync(env.BUN_RUNTIME_TRANSPILER_CACHE_PATH).some((f) => f.endsWith('.pile'))).toBe(true)
+      expect(fs.readdirSync(home)).toEqual([])
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true })
+      fs.rmSync(root, { recursive: true, force: true })
+    }
   })
 })
 

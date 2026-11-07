@@ -173,6 +173,9 @@ export function isolatedDaemonEnv(root: string, key: string): Record<string, str
     WALNUT_RUNTIME_DIR: l.runtimeDir,
     WALNUT_DAEMON_ISOLATED_FOR: key,
     WALNUT_DAEMON_ORPHAN_EXIT_MS: String(ISOLATED_ORPHAN_EXIT_MS),
+    // Bun keeps the transpiled daemon.cjs in ~/.bun/install/cache/@t@ of the real HOME
+    // otherwise (2026-11-07 live check: a 2 MB file there per test server).
+    BUN_RUNTIME_TRANSPILER_CACHE_PATH: path.posix.join(l.installHome, '.bun', 'install', 'cache', '@t@'),
   }
 }
 

@@ -190,7 +190,7 @@ server is isolated by construction, so nothing it does reaches the real Walnut:
   daemon (which hands relayed work to whichever server it sees first)
   (`src/providers/remote-isolation.ts`): everything it writes there is under
   `/tmp/open-walnut-test-<key>` (else `~/.cache/open-walnut-test/<key>`): its daemon dir,
-  streams, task dirs, installs (bun, host fixes, dtach run with HOME in its `home/`) and terminal
+  streams, task dirs, installs (bun, host fixes, dtach run with HOME in its `home/`, bun's transpiler cache too) and terminal
   sockets. Both daemon twins say their dir and the test server's key in their hello; a test
   server refuses any other daemon, a real server refuses a test server's, and the daemon refuses
   to start in a production dir. The test server stops it and removes the root when it exits, and
