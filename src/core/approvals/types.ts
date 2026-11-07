@@ -11,6 +11,7 @@
  * Only a person answers: a session caller is refused on the answer route (see
  * tests/core/agent-parity-ratchet.test.ts, which lists that refusal with its reason).
  */
+import type { AskerContext } from './asker-context.js'
 
 export type ApprovalMode = 'tap' | 'biometric'
 export type ApprovalDecision = 'approve' | 'deny'
@@ -27,6 +28,22 @@ export interface ApprovalRequester {
   /** The asking process's working directory and command line, when given. */
   cwd?: string
   command?: string
+  /**
+   * Whether Walnut saw the asking process inside the session it named (caller-proof.ts):
+   * verified, unverified (another process named it, or Walnut could not look), none (no session).
+   */
+  identity?: 'verified' | 'unverified' | 'none'
+  /** Why unverified: Walnut looked and the asking process is outside that session, or it could not look. */
+  check?: 'outside' | 'unchecked'
+  /** It came from a terminal Walnut opened for the task, not from the task's agent. */
+  via?: 'terminal'
+  /** A process on this machine sent it claiming to be a host's relay; it is read as its own. */
+  relayClaimed?: true
+  /** For a request from no session: the process that ran `walnut approve`, and the account. */
+  process?: string
+  /** The command line that ran `walnut approve`, read from the process table (the person reads what really runs). */
+  ranBy?: string
+  user?: string
 }
 
 export interface ApprovalAnswer {
@@ -66,6 +83,10 @@ export interface ApprovalRecord {
   answer?: ApprovalAnswer
   /** When the asker read the decision; an approval is used once. */
   consumedAt?: string
+  /** Why it asks, the task's goal and its last steps, read when it asked (asker-context.ts). */
+  context?: AskerContext
+  /** Asked with `walnut approve --request-only`: the session reruns with --approval <id>. */
+  requestOnly?: boolean
   /** Wait reads the signed decision; consume spends it once, with no retry grace. */
   singleUse?: boolean
   signingKeyId?: string

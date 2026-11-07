@@ -1,9 +1,12 @@
 /**
- * walnut approve "<what>" [--biometric] [--timeout 10m] [--detail <file>|-] [--json]
- * — block until a person approves (exit 0), denies (1), or nobody answers in time (2).
- * The loop is core/approvals/cli-core.ts, shared with the remote hosts' CLI (wn-cli.ts).
+ * walnut approve "<what>" [--biometric] [--timeout 10m] [--detail <file>|-] [--why "<line>"] [--json]
+ *   [--single-use --signing-key <file>] [--request-only | --approval <id>]
+ * — block until a person approves (exit 0), denies (1), or nobody answers in time (2); with
+ * --request-only, ask and exit 4 for a later --approval run. The loop is
+ * core/approvals/cli-core.ts, shared with the remote hosts' CLI (wn-cli.ts).
  */
 import fs from 'node:fs'
+import path from 'node:path'
 import { executeOp } from '../ops/index.js'
 import { LOCAL_ORIGIN } from '../lib/caller-origin.js'
 import { APPROVE_EXIT, APPROVE_USAGE, parseApproveArgv, runApprove, type OpCallResult } from '../core/approvals/cli-core.js'
@@ -43,11 +46,26 @@ export async function runApproveCommand(argv: string[]): Promise<void> {
     process.exitCode = APPROVE_EXIT.error
     return
   }
+  let signingKey: string | undefined
+  if (parsed.signingKeyFrom) {
+    try {
+      signingKey = fs.readFileSync(parsed.signingKeyFrom, 'utf8')
+    } catch (err) {
+      console.error(`walnut approve: cannot read --signing-key ${parsed.signingKeyFrom}: ${err instanceof Error ? err.message : String(err)}`)
+      process.exitCode = APPROVE_EXIT.error
+      return
+    }
+  }
   const { cliAutomationSender } = await import('../lib/cli-sender.js')
   const sender = cliAutomationSender()
   const code = await runApprove({
     what: parsed.what, detail, biometric: parsed.biometric, timeoutMs: parsed.timeoutMs, json: parsed.json,
     cwd: process.cwd(), ...(parsed.command ? { command: parsed.command } : {}),
+    ...(parsed.why ? { why: parsed.why } : {}),
+    ...(parsed.singleUse ? { singleUse: true, signingKey, signingKeyPath: path.resolve(parsed.signingKeyFrom!) } : {}),
+    ...(parsed.requestOnly ? { requestOnly: true } : {}),
+    ...terminalSessionArg(process.env),
+    ...(parsed.approvalId ? { approvalId: parsed.approvalId } : {}),
   }, {
     call: async (name, args) => {
       const r = await executeOp(name, args, { origin: LOCAL_ORIGIN, ...(sender ? { sender } : {}) })
@@ -80,4 +98,11 @@ export async function runApprovalsList(all: boolean, globals: { json?: boolean }
   }
   console.log(body.keys.length ? '\nDevices that sign approvals:' : '\nNo device signs approvals yet (the Walnut iPhone app or the Mac app sets one up).')
   for (const k of body.keys) console.log(`  ${k.id}  ${k.status.padEnd(7)} ${k.kind.padEnd(8)} ${k.name}`)
+}
+
+/** A command typed in a task terminal Walnut opened names that terminal, never a session. */
+function terminalSessionArg(env: NodeJS.ProcessEnv): { terminalSession?: string } {
+  if ((env.WALNUT_SESSION_ID ?? '').trim()) return {}
+  const t = (env.WALNUT_TERMINAL_SESSION_ID ?? '').trim()
+  return t ? { terminalSession: t } : {}
 }

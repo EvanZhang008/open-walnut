@@ -242,7 +242,9 @@ USAGE
   walnut mcp list | <server> tools ...      MCP servers Walnut runs (see \`walnut mcp --help\`)
   walnut mcp-server                         serve these same operations as an MCP stdio server
   walnut wait <id> [<id>...] [--any] [--timeout secs] [--json]   block until tasks settle or reply requests resolve
-  walnut approve "<what>" [--biometric] [--timeout 10m] [--detail file|-]   wait for a person's yes: exit 0 approve, 1 deny, 2 no answer
+  walnut approve "<what>" [--biometric] [--timeout 10m] [--detail file|-] [--why "<line>"]   wait for a person's yes: exit 0 approve, 1 deny, 2 no answer, 3 error
+    [--single-use --signing-key <pubkey file>]   strict: signed by that device's Face ID / Touch ID, checked here, used once (5m at most)
+    [--request-only | --approval <id>]   ask, print the id and exit 4; later rerun the same command with --approval <id> to wait and go on
   walnut pass list | get <item> --purpose "<why>" | run --purpose "<why>" --env NAME=<item> -- <cmd> | sync-bitwarden (Walnut runs bw)   passwords from the vault (run masks them in output)
   walnut browser open <url> | snapshot | click <ref> | type [<ref>] <text> | screenshot [<file>] | ...   the user's own browser (walnut browser for all actions)
   walnut --help | walnut tools --help
@@ -1242,9 +1244,23 @@ async function runApproveViaGateway(socketPath: string, sid: string, argv: strin
       return APPROVE_EXIT.error
     }
   }
+  let signingKey: string | undefined
+  if (parsed.signingKeyFrom) {
+    try {
+      signingKey = fs.readFileSync(parsed.signingKeyFrom, 'utf-8')
+    } catch (err) {
+      process.stderr.write(`walnut approve: cannot read --signing-key ${parsed.signingKeyFrom}: ${err instanceof Error ? err.message : String(err)}\n`)
+      return APPROVE_EXIT.error
+    }
+  }
   return runApprove({
     what: parsed.what, detail, biometric: parsed.biometric, timeoutMs: parsed.timeoutMs, json: parsed.json,
     cwd: process.cwd(), ...(parsed.command ? { command: parsed.command } : {}),
+    ...(parsed.why ? { why: parsed.why } : {}),
+    ...(parsed.singleUse ? { singleUse: true, signingKey, signingKeyPath: path.resolve(parsed.signingKeyFrom!) } : {}),
+    ...(parsed.requestOnly ? { requestOnly: true } : {}),
+    ...terminalSessionArg(process.env),
+    ...(parsed.approvalId ? { approvalId: parsed.approvalId } : {}),
   }, {
     call: gatewayOpCall(socketPath, sid),
     say: (line) => { process.stderr.write(line + '\n') },
@@ -1357,4 +1373,11 @@ async function runWaitMany(
     }
     await sleep(WAIT_POLL_INTERVAL_MS)
   }
+}
+
+/** A command typed in a task terminal Walnut opened names that terminal, never a session. */
+function terminalSessionArg(env: NodeJS.ProcessEnv): { terminalSession?: string } {
+  if ((env.WALNUT_SESSION_ID ?? '').trim()) return {}
+  const t = (env.WALNUT_TERMINAL_SESSION_ID ?? '').trim()
+  return t ? { terminalSession: t } : {}
 }

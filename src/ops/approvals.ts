@@ -29,7 +29,9 @@ defineOp({
     + 'so no agent and no click-through can say yes (with no such device yet it asks for a tap and says why in `downgraded`). '
     + 'Returns the approval and a `waitToken`; then call approval_wait with both until it is decided, or end your turn: once it is '
     + 'approved, denied or expired, Walnut tells your session (a Walnut note that wakes it), so no trigger is needed to watch it. In a shell script use '
-    + '`walnut approve "<what>" [--biometric] [--timeout 10m] [--detail <file>]` instead: it waits and exits 0 only on Approve. '
+    + '`walnut approve "<what>" [--why <sentence>] [--biometric] [--timeout 10m] [--detail <file>]` instead: it waits and exits 0 only on Approve '
+    + '(`--request-only` asks and exits 4, then `walnut approve --approval <id>` runs it once approved). The person sees why, the task, its last steps '
+    + 'and whether Walnut saw the asking process inside this session. '
     + 'No op answers one and the answer route refuses every session: a person answers on their device, and an agent never tries. Use it for a step the user must allow '
     + '(the charter\'s own kinds: an outward send, spending, credentials, deleting data), not for questions you can decide.',
   input: {
@@ -41,6 +43,9 @@ defineOp({
     timeout_ms: z.number().int().min(10_000).max(86_400_000).optional().describe('Unanswered after this long = expired (default 10 minutes, or 5 minutes for single_use)'),
     cwd: z.string().optional().describe('The asking process\'s working directory, shown to the person'),
     command: z.string().optional().describe('A short name for the asking script or command, shown to the person'),
+    why: z.string().max(400).optional().describe('Why this step, in a sentence the person reads first (else Walnut uses your last words before asking)'),
+    request_only: z.boolean().optional().describe('Ask and end: Walnut tells this session the answer, and the step runs again with `walnut approve --approval <id>`'),
+    terminal_session: z.string().max(120).optional().describe('Set by the walnut CLI in a task terminal Walnut opened; checked against the terminal\'s own process'),
   },
   bind: { method: 'POST', path: '/approvals' },
   mapResult: ({ body }) => withOutcome(body as Record<string, unknown>, stateLine(body), 'approval_wait with id and token (waitToken) until status is approved, denied, expired or canceled, or end your turn: Walnut tells this session the answer.'),

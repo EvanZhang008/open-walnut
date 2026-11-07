@@ -14,13 +14,76 @@ walnut approve "Publish v2.3.0 to npm" --biometric --timeout 30m || exit 1
 | 1 | denied, or its answer was already used |
 | 2 | nobody answered before `--timeout` (default 10 minutes), or it was withdrawn |
 | 3 | it could not ask (bad usage, Walnut not reachable) |
+| 4 | `--request-only`: asked, not answered yet (below) |
 | 130 | the script was stopped (Ctrl-C); the request is withdrawn on every device |
 
 Options: `--biometric` (Approve needs Face ID or Touch ID, below), `--timeout 90s|10m|2h`
 (10 seconds to 24 hours), `--detail <file>` (`-` reads stdin; up to 32,000 characters),
 `--from <label>` (a short name for the asking script), `--json` (prints the decided record on
 stdout). It works on every machine with the `walnut` CLI: on a remote host the call goes through
-that host's daemon to your Mac, so the request shows which host asked.
+that host's daemon to your Mac, so the request shows which host asked. `--why "<one line>"` is the
+sentence the person reads first (without it, the asking session's last words before it asked).
+
+### Two ways to wait
+
+| Mode | How | Exit codes |
+|---|---|---|
+| Wait in place (the default, and the better one) | `walnut approve "<what>" && ./step.sh`: the script pauses until a person answers | as above |
+| Ask and end | `walnut approve "<what>" --request-only` asks, prints the approval id and exits **4**; the session ends its turn; once it is answered, Walnut tells the session to run the same command again with `--approval <id>` added, which waits for (or reads) that answer and goes on only on Approve | 4 = asked, not answered yet; then as above |
+
+`--request-only` saves what it asked (the wait token, the detail, for a single-use one the signed
+envelope) in `${XDG_STATE_HOME:-~/.local/state}/open-walnut/approvals/<id>.json` (mode 0600).
+The rerun refuses when `what`, the detail or the mode changed since: ask again.
+
+From Python, one line in each mode:
+
+```python
+import subprocess
+# Wait in place: blocks until a person answers; True only on Approve.
+ok = subprocess.run(["walnut", "approve", "Publish 1.2 to the store", "--why", "Tests pass on main"]).returncode == 0
+# Ask and end: 4 means asked; the session reruns this script, which passes --approval <id> through.
+code = subprocess.run(["walnut", "approve", "Publish 1.2 to the store", "--request-only"]).returncode
+```
+
+### What the person sees, and who asked
+
+The card and its dialog read the request in plain words: **Why** (the `--why` line, else the
+session's last words before it asked), **Task** (a link that opens the task and its chat),
+**Goal** (the task description's first sentence), **Just before** (the session's last three
+steps: commands run, files edited, words said, the approval call itself left out), **Runs** (the
+command and its folder) and **Session**. A part Walnut does not know says so (`Session: unknown`,
+`Task: unknown`, `Why: not given`); it is never left blank and never guessed
+(`src/core/approvals/asker-context.ts`, `web/src/components/approvals/approval-context.tsx`).
+
+A session id is a name: any process of the account could put one in `WALNUT_SESSION_ID`. So
+Walnut checks the process on the other end of the request itself
+(`src/core/approvals/caller-proof.ts`): `lsof` (macOS) or `ss` (Linux) names the process holding
+the connection, and one `ps` walks its parents to the session's own process, whatever engine runs
+it: the Claude Code CLI (the session record's pid), an ACP worker (Codex and every other ACP
+engine, from this machine's daemon's worker list), or the shell of a task terminal Walnut opened
+(`WALNUT_TERMINAL_SESSION_ID`, checked against the terminal's dtach process; a person's own
+commands there never count as a session's). The result is the requester's `identity`:
+
+| identity | When | The screen says |
+|---|---|---|
+| `verified` | the asking process descends from that session's process | "seen inside this task's session" |
+| `unverified`, `check: outside` | Walnut looked, and the asking process is not inside that session (another session's id, a forged one) | "unverified: the asking process is not inside this session" |
+| `unverified`, `check: unchecked` | Walnut could not look: the call came through a host's daemon (a remote host, or a session's Walnut tools on this Mac, which reach Walnut through the daemon's socket), no `lsof`/`ss`, a timeout, or the session has no live process | "not checked: Walnut could not look at the asking process" |
+| `none` | no session named: a cron job, a hand-started script | "Session: unknown", with the host, folder, command, the process that started it and the user |
+
+The match is on the whole connection (both addresses, both ports), so a process that binds the
+same port number on another loopback address is not taken for the caller; a stopped session's
+recorded pid, this server and the processes above it, and the local daemon never count as a
+session's process. A request that claims a host's relay (`x-walnut-origin: host:<name>`) and is not
+the server's own self-call is read as the sending process's own ask on this machine, with no
+session.
+
+A plain approval asks in every case, the screen saying which. A single-use approval (below) fails
+closed: creating it and spending it (`approval_consume`) each need the asking process seen inside
+its session, checked again on each call, else `403 unverified_session`. That covers a check
+Walnut could not make, so a single-use ask through a daemon's socket (a remote host, or the gateway
+`walnut` on a session's PATH) is refused until the daemon names the process on its end; run it from
+the session's shell with the `walnut` CLI reaching Walnut over HTTP.
 
 ## Where the ask shows up
 

@@ -15,7 +15,21 @@ export interface Approval {
   digest: string;
   mode: ApprovalMode;
   downgraded?: string;
-  requester: { host: string; taskId?: string; taskTitle?: string; sessionId?: string; cwd?: string; command?: string };
+  requester: {
+    host: string; taskId?: string; taskTitle?: string; sessionId?: string; cwd?: string; command?: string;
+    /** Whether Walnut saw the asking process inside that session: absent from an older server. */
+    identity?: 'verified' | 'unverified' | 'none';
+    /** Why unverified: looked and found it outside the session, or could not look. */
+    check?: 'outside' | 'unchecked';
+    /** For a request from no session: the process that ran it and the account it ran as. */
+    process?: string; user?: string;
+    /** The command line that ran it, read by Walnut from the process table. */
+    ranBy?: string;
+  };
+  /** Why it asks, the task's goal and its last steps, read when it asked (src/core/approvals/asker-context.ts). */
+  context?: ApprovalContext;
+  /** A signed approval that is used once (its detail is the signed envelope). */
+  singleUse?: boolean;
   createdAt: string;
   expiresAt: string;
   status: ApprovalStatus;
@@ -28,6 +42,14 @@ export interface Approval {
   guard?: 'vault' | 'vault-sensitive' | 'person';
   canceledReason?: string;
   testRun?: string;
+}
+
+export interface ApprovalContext {
+  why?: string;
+  whyFrom?: 'asker' | 'session';
+  goal?: string;
+  project?: string;
+  steps?: { kind: 'ran' | 'edited' | 'said' | 'tool'; text: string }[];
 }
 
 export interface ApprovalKey {

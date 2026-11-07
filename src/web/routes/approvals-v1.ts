@@ -28,7 +28,7 @@ import { isFollower } from '../../core/server-role.js'
 import { requestOrigin } from '../middleware/request-origin.js'
 import { LOCAL_ORIGIN, REMOTE_HTTP_ORIGIN, hostOrigin } from '../../lib/caller-origin.js'
 import { CALLER_KIND_HEADER } from '../../lib/cli-sender.js'
-import { APPROVAL_WAIT_MAX_MS, type ApprovalDeviceKind, type ApprovalMode } from '../../core/approvals/types.js'
+import { APPROVAL_WAIT_MAX_MS, type ApprovalDeviceKind, type ApprovalMode, type ApprovalRequester } from '../../core/approvals/types.js'
 import { ambientTestRun } from '../../core/test-run.js'
 
 export const approvalsV1Router = Router()
@@ -90,11 +90,12 @@ export async function requesterOf(req: Request, body: Record<string, unknown>) {
   const sid = header(req, 'x-walnut-caller-sid')
   const hostHeader = header(req, 'x-walnut-caller-host')
   const origin = requestOrigin(req)
-  const out: { host: string; taskId?: string; taskTitle?: string; sessionId?: string; cwd?: string; command?: string } = {
+  const out: ApprovalRequester = {
     // The host is named only for a call that came through a host's gateway: a local caller
     // could put any name in the header and pass its ask off as another machine's.
     host: origin.startsWith('host:') ? (hostHeader && hostHeader !== LOCAL_ORIGIN ? hostHeader : origin.slice(5)) : os.hostname() || 'this computer',
   }
+  let sessionPids: number[] = []
   if (sid && sid !== 'external') {
     const { resolveCaller } = await import('../../core/sessions/session-send-core.js')
     const caller = await resolveCaller(sid)
@@ -103,6 +104,9 @@ export async function requesterOf(req: Request, body: Record<string, unknown>) {
     if (caller.kind === 'session' && hostOrigin(caller.record.host || LOCAL_ORIGIN) === origin) {
       out.sessionId = sid
       out.taskId = caller.record.taskId
+      // A stopped session's pid may belong to anything by now.
+      const live = caller.record.process_status === 'running' || caller.record.process_status === 'idle'
+      sessionPids = await sessionProcessPids([caller.record.acpRuntimeId, sid], live ? caller.record.pid : undefined)
       try {
         const { getTask } = await import('../../core/task-manager.js')
         out.taskTitle = (await getTask(caller.record.taskId)).title
@@ -113,7 +117,130 @@ export async function requesterOf(req: Request, body: Record<string, unknown>) {
   const command = str(body.command, 200)
   if (cwd) out.cwd = cwd
   if (command) out.command = command
+  await proveIdentity(req, body, out, origin, sessionPids)
   return out
+}
+
+/**
+ * Whether the asking process is inside the session it names (caller-proof.ts). A local request
+ * is checked by the process holding the connection; a request a host's daemon relays cannot be
+ * checked here yet, so it reads unverified. A local task terminal's request (its shell has
+ * WALNUT_TERMINAL_SESSION_ID) names the task once its process descends from that terminal.
+ */
+async function proveIdentity(req: Request, body: Record<string, unknown>, out: ApprovalRequester, origin: string, sessionPids: number[]): Promise<void> {
+  const { isSelfCall, localCallerIdentity } = await import('../../core/approvals/caller-proof.js')
+  // A host origin is the server's own relay of a host daemon's call. From any other process of
+  // this machine the header is only a claim: the ask is that process's own, made on this machine
+  // and named for no session.
+  const conn = connOf(req)
+  const claimed = origin.startsWith('host:') && !(conn && await isSelfCall(conn))
+  if (claimed) {
+    delete out.sessionId; delete out.taskId; delete out.taskTitle
+    out.host = os.hostname() || 'this computer'
+    out.relayClaimed = true
+  }
+  const local = claimed || (origin === LOCAL_ORIGIN && !header(req, 'x-walnut-caller-host'))
+  const notSession = await localDaemonPids()
+  if (out.sessionId) {
+    // A host's relay (the remote daemons, and this Mac's own for a session's Walnut tools) is not
+    // checked here yet: the daemon would have to name the process on its socket.
+    if (!local || !conn) { out.identity = 'unverified'; out.check = 'unchecked'; return }
+    const seen = await localCallerIdentity({ conn, sessionId: out.sessionId, sessionPids, notSession })
+    out.identity = seen.identity
+    if (seen.check) out.check = seen.check
+    if (seen.process) out.process = seen.process
+    if (seen.ranBy) out.ranBy = seen.ranBy
+    return
+  }
+  const terminal = str(body.terminal_session, 120)
+  if (local && conn && terminal && /^[A-Za-z0-9_-]+$/.test(terminal)) {
+    const pid = await terminalShellPid(terminal)
+    const seen = await localCallerIdentity({ conn, sessionId: terminal, sessionPids: pid ? [pid] : [], notSession })
+    if (seen.identity === 'verified') {
+      const { getSessionByClaudeId } = await import('../../core/session-tracker.js')
+      const rec = await getSessionByClaudeId(terminal).catch(() => null)
+      if (rec?.taskId) {
+        out.taskId = rec.taskId
+        out.via = 'terminal'
+        out.identity = 'verified'
+        if (seen.ranBy) out.ranBy = seen.ranBy
+        try {
+          const { getTask } = await import('../../core/task-manager.js')
+          out.taskTitle = (await getTask(rec.taskId)).title
+        } catch { /* the id is enough */ }
+        return
+      }
+    }
+  }
+  const seen = local && conn ? await localCallerIdentity({ conn, sessionPids: [] }) : { identity: 'none' as const }
+  out.identity = 'none'
+  if ('process' in seen && seen.process) out.process = seen.process
+  if ('ranBy' in seen && seen.ranBy) out.ranBy = seen.ranBy
+  if ('user' in seen && seen.user) out.user = seen.user
+}
+
+/** A single-use step needs its asking process seen inside the session it names (403 otherwise). */
+function assertSeenInside(requester: ApprovalRequester, E: new (status: number, code: string, message: string) => Error): void {
+  if (requester.identity === 'verified' && requester.sessionId) return
+  const why = !requester.sessionId
+    ? 'the request names no session Walnut can check'
+    : requester.check === 'outside'
+      ? 'the asking process is not inside the session it names'
+      : 'Walnut could not check that the asking process is inside the session it names (a call through a host daemon\'s socket, a remote host, or a check that timed out)'
+  throw new E(403, 'unverified_session', `A single-use approval needs the asking process seen inside its session, and ${why}. Run walnut approve from that session's own shell on this machine, with the walnut CLI reaching Walnut over HTTP.`)
+}
+
+/** The connection this request came on, as the server sees both ends. */
+function connOf(req: Request): import('../../core/approvals/caller-proof.js').Conn | undefined {
+  const s = req.socket
+  if (!s?.remoteAddress || !s.remotePort || !s.localAddress || !s.localPort) return undefined
+  return { remoteAddress: s.remoteAddress, remotePort: s.remotePort, localAddress: s.localAddress, localPort: s.localPort }
+}
+
+/** This machine's daemon: it starts every session, so it is never one. */
+async function localDaemonPids(): Promise<number[]> {
+  try {
+    const { localDaemonDirChoice } = await import('../../lib/daemon-dir.js')
+    const fs = await import('node:fs/promises')
+    const path = await import('node:path')
+    const pid = Number((await fs.readFile(path.join(localDaemonDirChoice().dir, 'daemon.pid'), 'utf8')).trim())
+    return Number.isInteger(pid) && pid > 1 ? [pid] : []
+  } catch {
+    return []
+  }
+}
+
+/**
+ * The processes a local session runs as: its Claude Code CLI (the record's pid), or the ACP
+ * worker this machine's daemon runs for it (Codex and every other ACP engine), from the daemon's
+ * own worker list, keyed by the record's runtime id.
+ */
+async function sessionProcessPids(keys: Array<string | undefined>, recordPid: unknown): Promise<number[]> {
+  const pids = typeof recordPid === 'number' && recordPid > 1 ? [recordPid] : []
+  try {
+    const { localDaemonDirChoice } = await import('../../lib/daemon-dir.js')
+    const fs = await import('node:fs/promises')
+    const path = await import('node:path')
+    const rows = JSON.parse(await fs.readFile(path.join(localDaemonDirChoice().dir, 'acp-workers.json'), 'utf8')) as Record<string, unknown>
+    // The daemon keys a worker by the session's ACP runtime id.
+    const key = keys.find((k): k is string => !!k && k in rows)
+    const row = key ? rows[key] : undefined
+    const pid = typeof row === 'number' ? row : (row as { pid?: unknown } | undefined)?.pid
+    if (typeof pid === 'number' && pid > 1) pids.push(pid)
+  } catch { /* no ACP worker here */ }
+  return pids
+}
+
+/** The pid of a local task terminal's dtach master, from its pid record. */
+async function terminalShellPid(sessionId: string): Promise<number | undefined> {
+  try {
+    const { dtachPidPath } = await import('../terminal/spawn.js')
+    const fs = await import('node:fs/promises')
+    const pid = Number((await fs.readFile(dtachPidPath(sessionId), 'utf8')).split('\n')[0])
+    return Number.isInteger(pid) && pid > 1 ? pid : undefined
+  } catch {
+    return undefined
+  }
 }
 
 approvalsV1Router.post('/approvals', (req: Request, res: Response, next: NextFunction) => {
@@ -122,6 +249,7 @@ approvalsV1Router.post('/approvals', (req: Request, res: Response, next: NextFun
     const body = (req.body ?? {}) as Record<string, unknown>
     const { createApproval, ApprovalError } = await import('../../core/approvals/store.js')
     const singleUse = body.single_use === true
+    const origin = requestOrigin(req)
     const requester = await requesterOf(req, body)
     const { activeKeys } = await import('../../core/approvals/keys.js')
     const wanted: ApprovalMode = body.mode === 'biometric' ? 'biometric' : 'tap'
@@ -136,13 +264,24 @@ approvalsV1Router.post('/approvals', (req: Request, res: Response, next: NextFun
       mode = 'tap'
       downgraded = 'No device signs approvals yet (the Walnut iPhone app, or the Mac app on a Mac with Touch ID, sets one up), so this asks for a tap.'
     }
+    // A single-use approval is the session's own step: Walnut must have seen the asking process
+    // inside it, never only its name, and a check it could not make refuses too (fail closed).
+    if (singleUse) assertSeenInside(requester, ApprovalError)
     const timeoutMs = typeof body.timeout_ms === 'number' ? body.timeout_ms : undefined
+    const { readAskerContext } = await import('../../core/approvals/asker-context.js')
+    const context = await readAskerContext({
+      ...(requester.sessionId ? { sessionId: requester.sessionId } : {}),
+      ...(requester.taskId ? { taskId: requester.taskId } : {}),
+      ...(str(body.why, 400) ? { why: str(body.why, 400) } : {}),
+    })
     const { approval, waitToken } = await createApproval({
       what: String(body.what ?? ''),
       detail: typeof body.detail === 'string' ? body.detail : undefined,
       mode, timeoutMs, downgraded,
       requester,
       ...(singleUse ? { singleUse: true, signingKeyId: String(body.signing_key_id) } : {}),
+      context,
+      ...(body.request_only === true ? { requestOnly: true } : {}),
       testRun: ambientTestRun(),
     })
     return { approval, waitToken, ...(downgraded ? { downgraded } : {}) }
@@ -221,11 +360,16 @@ approvalsV1Router.post('/approvals/:id/consume', (req: Request, res: Response, n
     const body = (req.body ?? {}) as Record<string, unknown>
     const { consumeApproval } = await import('../../core/approvals/store.js')
     const { activeKey } = await import('../../core/approvals/keys.js')
+    // The step is spent by the same session's own process, checked again here: a token another
+    // process of this machine took cannot be spent by naming the asking session.
+    const requester = await requesterOf(req, body)
+    const { ApprovalError } = await import('../../core/approvals/store.js')
+    assertSeenInside(requester, ApprovalError)
     return consumeApproval(param(req.params.id), {
       token: typeof body.token === 'string' ? body.token : '',
       digest: typeof body.digest === 'string' ? body.digest : '',
       detail: typeof body.detail === 'string' ? body.detail : '',
-      requester: await requesterOf(req, body),
+      requester,
     }, activeKey)
   })
 })

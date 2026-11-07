@@ -334,6 +334,22 @@ for (const size of [{ width: 1512, height: 900 }, { width: 2200, height: 1100 }]
 // to that task". The asking task's name, a link on the card and in its dialog, opens that task on
 // Home, its row in sight and its session column on top, from a full-screen sheet and from another
 // page. The title still opens the whole request, so it is read before it is approved.
+/** The task status dot keeps its size where the link is a flex row (2026-11-07 review: a sliver),
+ *  the ↗ stays on the line of the name's last word, and nothing reaches past the box. */
+async function expectAskerLinkReads(link: Locator, box: Locator) {
+  const boxHandle = await box.elementHandle()
+  await expect.poll(() => link.evaluate((el, boxEl) => {
+    const dot = getComputedStyle(el, '::before')
+    const dotOk = dot.content === 'none' || dot.content === 'normal' || parseFloat(dot.width) >= 6
+    const rects = el.querySelector('.approval-task-link-label')!.getClientRects()
+    const lastLine = rects[rects.length - 1]!
+    const go = el.querySelector('.approval-task-link-go')!.getBoundingClientRect()
+    const b = (boxEl as Element).getBoundingClientRect()
+    const inside = el.getBoundingClientRect().right <= b.right + 0.5
+    return dotOk && inside && Math.abs(go.top - lastLine.top) <= 4 ? 'ok' : `dot ${dot.width}, go top ${go.top} vs last line ${lastLine.top}, inside ${inside}`
+  }, boxHandle)).toBe('ok')
+}
+
 test('the approval card opens the task that asked, from a full-screen sheet and from another page', async ({ page, request }, info) => {
   await page.setViewportSize({ width: 1600, height: 900 })
   const sock = await routeSocket(page)
@@ -358,6 +374,7 @@ test('the approval card opens the task that asked, from a full-screen sheet and 
     const card = el.closest('[data-testid="approval-card"]')!.getBoundingClientRect()
     return go.width > 0 && go.right <= card.right - 8
   })).toBe(true)
+  await expectAskerLinkReads(link, card)
   await page.waitForTimeout(1_000) // its buttons take a click 700ms after it shows
   await page.screenshot({ path: `${SHOTS}/${info.project.name}-jump-before.png` })
   const asker = page.locator('.main-page-session-column .session-panel[data-session-id="pw-provenance-session"]')
@@ -387,6 +404,9 @@ test('the approval card opens the task that asked, from a full-screen sheet and 
   await card.getByTestId('approval-what').click()
   const dialog = page.getByTestId('approval-dialog')
   await expect(dialog).toBeVisible()
+  // The whole request: the command it runs too (2026-11-07 review: only the folder showed).
+  await expect(dialog.getByTestId('approval-command')).toHaveText('release.sh')
+  await expectAskerLinkReads(dialog.getByTestId('approval-task-link'), dialog.locator('.approval-dialog'))
   await dialog.locator('.approval-dialog-close').click()
   // The task name on the card, over the full-screen sheet: the asking task's column opens on top.
   await link.click()

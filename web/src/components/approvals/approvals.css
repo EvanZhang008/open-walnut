@@ -237,6 +237,9 @@
 }
 /* The folder is in the dialog: cut to an ellipsis here it would say nothing. */
 .corner-stack .approval-who .approval-cwd { display: none; }
+/* The command it runs: in the dialog, where the whole request reads (ApprovalBody). */
+.approval-command { display: block; margin-top: 2px; font-family: var(--font-mono); font-size: 12px; color: var(--fg-muted); overflow-wrap: anywhere; }
+.corner-stack .approval-command { display: none; }
 .corner-stack .approval-card .approval-actions { flex: none; margin-top: 0; gap: 6px; }
 .corner-stack .approval-card .approval-actions .approval-btn { padding: 4px 12px; font-size: 12px; }
 .corner-stack .approval-card .approval-detail { display: none; }
@@ -488,12 +491,16 @@ button.approval-row { width: 100%; font: inherit; font-size: 13px; text-align: l
 .approval-task-link { color: var(--accent-text, var(--accent)); font-weight: 500; text-decoration: none; }
 .approval-task-link:hover { text-decoration: underline; text-underline-offset: 2px; }
 .approval-task-link-go { flex: none; font-size: 0.9em; }
-/* A long name is cut inside the link, so its ↗ always shows; the host after it gives way first. */
-.approval-task-link-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* In the dialog the whole name reads, wrapping like text, its ↗ held to the last word (&nbsp;). */
+.approval-task-link-label { min-width: 0; }
+/* In the corner a long name is cut inside the link, so its ↗ always shows; the host after it gives way first. */
+.corner-stack .approval-task-link-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The task's status dot (globals.css a.task-link::before) keeps its size in a flex link. */
+.corner-stack .approval-task-link::before { flex: none; align-self: center; }
 /* Who asks reads on a row of its own above the buttons, so the task's name is never squeezed away. */
 .corner-stack .approval-card:not(.approval-card-line) .approval-who { display: flex; align-items: baseline; flex: 1 0 100%; }
 .corner-stack .approval-card .approval-who-text { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 0.3em; min-width: 0; overflow: hidden; }
-.corner-stack .approval-who-text .approval-task-link { display: inline-flex; min-width: 0; white-space: nowrap; }
+.corner-stack .approval-who-text .approval-task-link { display: inline-flex; align-items: baseline; min-width: 0; white-space: nowrap; }
 .approval-who-host { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 button.approval-line-more { border: 0; cursor: pointer; font: inherit; font-size: 11px; font-weight: 600; }
 /* "10:01 left" never splits over two lines in a narrow corner. */
@@ -502,4 +509,21 @@ button.approval-line-more { border: 0; cursor: pointer; font: inherit; font-size
 /* The short line's task name is cut to an ellipsis: the link fills its place, so a click on the cut end opens it too. */
 /* With a link the row cuts the name inside it (its ↗ stays), never an ellipsis of its own after the ↗. */
 .approval-line-who-link { display: flex; align-items: center; text-overflow: clip; }
-.approval-line-who .approval-task-link { display: flex; min-width: 0; white-space: nowrap; }
+.approval-line-who .approval-task-link { display: flex; align-items: baseline; min-width: 0; white-space: nowrap; }
+
+/* Why it asks, on the card: two lines at most (approval-context.tsx has the whole request). */
+.approval-why { margin-top: 3px; color: var(--fg-secondary); font-size: 12px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+/* The dialog's rows: a label column and the words, every part named, an unknown one in grey. */
+.approval-context { margin-top: 8px; }
+.approval-context-rows { display: grid; grid-template-columns: max-content minmax(0, 1fr); column-gap: 12px; row-gap: 6px; margin: 0; font-size: 13px; }
+.approval-context-rows dt { color: var(--fg-muted); font-weight: 500; }
+.approval-context-rows dd { margin: 0; min-width: 0; overflow-wrap: anywhere; color: var(--fg); }
+.approval-context-rows dd .approval-cwd { display: block; white-space: normal; overflow-wrap: anywhere; }
+.approval-context-rows .approval-command { margin-top: 0; }
+.approval-unknown, .approval-context-rows dd.approval-unknown { color: var(--fg-muted); font-style: italic; }
+.approval-context-from { color: var(--fg-muted); font-size: 12px; font-style: normal; }
+.approval-steps { margin: 0; padding-left: 18px; }
+.approval-steps li { margin: 1px 0; }
+.approval-step-kind { color: var(--fg-muted); font-weight: 500; }
+.approval-step-text { font-family: var(--font-mono); font-size: 12px; overflow-wrap: anywhere; }
+.approval-open-chat { margin-top: 8px; }

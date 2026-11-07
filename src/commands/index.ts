@@ -69,13 +69,18 @@ export function registerCommands(program: Command): void {
 
   program
     .command('approve [what...]')
-    .description('Ask a person to approve before going on: exit 0 on Approve, 1 on Deny, 2 when nobody answers in time')
+    .description('Ask a person to approve before going on: exit 0 on Approve, 1 on Deny, 2 when nobody answers in time, 4 when asked with --request-only')
     .option('--biometric', 'Approve needs Face ID or Touch ID on a device that signs approvals')
     .option('--face-id', 'The same as --biometric')
     .option('--touch-id', 'The same as --biometric')
     .option('--timeout <duration>', 'Give up after this long (10s to 24h, like 90s, 10m, 2h; default 10m)')
     .option('--detail <file>', 'A file with the detail to show (- reads stdin)')
     .option('--from <label>', 'A short name for the asking script, shown to the person')
+    .option('--why <reason>', 'Why it asks, in a line, shown to the person (default: the session\'s last words)')
+    .option('--single-use', 'A signed approval used once: needs --signing-key and --detail, at most 5 minutes')
+    .option('--signing-key <path>', 'The pinned public key (PEM, P-256) that must sign a --single-use approval')
+    .option('--request-only', 'Ask and exit at once with 4 (pending), printing the id; rerun with --approval <id>')
+    .option('--approval <id>', 'Rerun after an approval asked with --request-only: waits for it, then uses it')
     .allowUnknownOption(false)
     .action(async () => {
       const { runApproveCommand } = await import('./approve.js');

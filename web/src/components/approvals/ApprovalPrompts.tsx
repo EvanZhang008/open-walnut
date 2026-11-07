@@ -22,19 +22,17 @@
  */
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { useNavigate } from 'react-router-dom';
 import { CORNER_ORDER, CornerSlot, useCornerState } from '@/components/common/corner-stack';
 import { useEvent } from '@/hooks/useWebSocket';
 import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
-import { openTaskOnHome } from '@/utils/open-session';
-import { taskPath } from '@/utils/task-path';
 import type { Approval } from '@/api/approvals';
 import {
   applyApprovalEvent, approveKind, closeApproval, decideApproval, noApproveReason, noticePending, openApproval, pendingAt, refreshApprovals,
   startTouchId, useApprovals, type ApprovalsState,
 } from './approvals-store';
 import { askNoticePermission, nativeNoticeStatus, noticeAccess, openNoticeSettings, OPEN_APPROVAL_EVENT, takeClickedApproval, type NoticeAccess } from './approval-notify';
+import { ApprovalContextRows, AskerLink, detailText } from './approval-context';
 import './approvals.css';
 
 export function useNow(ms: number): number {
@@ -77,33 +75,6 @@ function shortRequester(a: Approval): string {
   return cmd ? cmd.split('/').pop()! : 'A script';
 }
 
-/**
- * The task that asked, opened the way a task link opens it: on Home, selected, its session column
- * open, from any page or a full-screen sheet (2026-11-06, the user: "It doesn't make me able to
- * click and jump to that task"). An open dialog closes first.
- */
-function useOpenAsker(): (a: Approval) => void {
-  const navigate = useNavigate();
-  return (a: Approval) => {
-    if (!a.requester.taskId) { openApproval(a.id); return; }
-    closeApproval();
-    openTaskOnHome(a.requester.taskId, navigate);
-  };
-}
-
-/** The asking task's name as a task link (a modifier click opens it in a new tab). */
-function AskerLink({ a, label }: { a: Approval; label: string }) {
-  const openAsker = useOpenAsker();
-  const id = a.requester.taskId!;
-  return (
-    <a className="task-link approval-task-link" data-task-id={id} data-testid="approval-task-link" href={taskPath(id)} title="Open the task that asked"
-      onClick={(e) => {
-        if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-        e.preventDefault(); e.stopPropagation(); openAsker(a);
-      }}><span className="approval-task-link-label">{label}</span><span className="approval-task-link-go" aria-hidden="true">&nbsp;↗</span></a>
-  );
-}
-
 export function settledWord(a: Approval): string {
   return a.status === 'approved' ? 'Approved' : a.status === 'denied' ? 'Denied' : a.status === 'expired' ? 'Expired' : 'Withdrawn';
 }
@@ -133,6 +104,7 @@ function ApprovalBody({ a, s, now, detailOpen = false, onOpen, onMinimize, total
   const biometric = a.mode === 'biometric';
   const hostName = useHostDisplayLabel(a.requester.host);
   const asker = a.requester.taskId;
+  const detail = detailText(a);
   return (
     <>
       <div className="approval-head">
@@ -154,16 +126,20 @@ function ApprovalBody({ a, s, now, detailOpen = false, onOpen, onMinimize, total
       {onOpen
         ? <button type="button" className="approval-what approval-what-open" title="Open the request" data-testid="approval-what" onClick={onOpen}><span className="approval-what-text">{a.what}</span></button>
         : <div className="approval-what">{a.what}</div>}
-      <div className="approval-who">
-        <span className="approval-who-text">{asker
-          ? <><AskerLink a={a} label={a.requester.taskTitle || 'Its task'} />{' '}<span className="approval-who-host">on {hostName}</span></>
-          : <span className="approval-who-host">{requesterText(a, hostName)}</span>}</span>
-        {a.requester.cwd ? <span className="approval-cwd">{a.requester.cwd}</span> : null}
-      </div>
-      {a.detail ? (
+      {onOpen ? (<>
+        {/* Why it asks, on the card too: two lines at most (the dialog has the whole of it). */}
+        {a.context?.why ? <div className="approval-why" data-testid="approval-card-why">Why: {a.context.why}</div> : null}
+        <div className="approval-who">
+          <span className="approval-who-text">{asker
+            ? <><AskerLink a={a} label={a.requester.taskTitle || 'Its task'} />{' '}<span className="approval-who-host">{[a.context?.project, `on ${hostName}`].filter(Boolean).join(' · ')}</span></>
+            : <span className="approval-who-host">{requesterText(a, hostName)}</span>}</span>
+          {a.requester.cwd ? <span className="approval-cwd">{a.requester.cwd}</span> : null}
+        </div>
+      </>) : <ApprovalContextRows a={a} hostName={hostName} />}
+      {detail.text ? (
         <details className="approval-detail" open={detailOpen}>
-          <summary>Detail</summary>
-          <pre>{a.detail}</pre>
+          <summary>{detail.signed ? 'Detail (signed)' : 'Detail'}</summary>
+          <pre>{detail.text}</pre>
         </details>
       ) : null}
       {a.downgraded ? <div className="approval-note">{a.downgraded}</div> : null}

@@ -10,6 +10,7 @@
  * own change signal or its deadline, whichever is first, then re-reads the file.
  */
 
+import { contextSummary, type AskerContext } from './asker-context.js'
 import crypto from 'node:crypto'
 import path from 'node:path'
 import { EventEmitter } from 'node:events'
@@ -144,6 +145,9 @@ export interface CreateInput {
   guard?: ApprovalGuard
   singleUse?: boolean
   signingKeyId?: string
+  /** Why it asks and where the task stands (asker-context.ts); signed in a single-use envelope. */
+  context?: AskerContext
+  requestOnly?: boolean
 }
 
 /** Whether a viewer (its test-run label, or none for the person) sees this approval. */
@@ -190,7 +194,10 @@ export async function createApproval(input: CreateInput): Promise<{ approval: Ap
   if (input.singleUse && detail) {
     detail = JSON.stringify({ version: 'walnut-single-use-v1', sessionId: input.requester.sessionId,
       taskId: input.requester.taskId, host: input.requester.host, signingKeyId: input.signingKeyId,
-      nonce: crypto.randomBytes(32).toString('hex'), context: detail })
+      nonce: crypto.randomBytes(32).toString('hex'), context: detail,
+      // What the person read to decide is signed with it, never only an unsigned requester.
+      ...(input.context?.why ? { why: input.context.why } : {}),
+      ...(input.context && contextSummary(input.context) ? { context_summary: contextSummary(input.context) } : {}) })
   }
   if (detail && detail.length > APPROVAL_DETAIL_MAX) {
     throw new ApprovalError(400, 'bad_request', input.singleUse ? `The signed context envelope exceeds ${APPROVAL_DETAIL_MAX} characters; shorten the operation context.` : `detail is at most ${APPROVAL_DETAIL_MAX} characters.`)
@@ -218,6 +225,8 @@ export async function createApproval(input: CreateInput): Promise<{ approval: Ap
     ...(input.testRun ? { testRun: input.testRun } : {}),
     ...(input.guard ? { guard: input.guard } : {}),
     ...(input.singleUse ? { singleUse: true, signingKeyId: input.signingKeyId } : {}),
+    ...(input.context && Object.keys(input.context).length ? { context: input.context } : {}),
+    ...(input.requestOnly ? { requestOnly: true } : {}),
   }
   let settled: ApprovalRecord[] = []
   await serial(() => updateJsonFile<ApprovalsFile>(approvalsFile(), EMPTY, (file) => {

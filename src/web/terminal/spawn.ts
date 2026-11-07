@@ -378,11 +378,17 @@ export async function prewarmRemoteHost(host: string | undefined): Promise<void>
  * deploy deletes; a `walnut` run in the terminal would unpack into that stage, or
  * mkdir it back inside a dead one. Without it a compiled walnut uses its own tree.
  */
-export function terminalEnv(base: NodeJS.ProcessEnv = process.env): Record<string, string> {
+export function terminalEnv(base: NodeJS.ProcessEnv = process.env, sessionId?: string): Record<string, string> {
   const env = { ...base, TERM: 'xterm-256color' } as Record<string, string>
   delete env.WALNUT_RUNTIME_DIR
+  // Which task's terminal this is, for `walnut approve` alone (its card names the task; the
+  // server checks the asking process descends from this terminal's shell). Never
+  // WALNUT_SESSION_ID: what a person types here is theirs, not the session's agent.
+  if (sessionId) env[TERMINAL_SESSION_ENV] = sessionId
   return env
 }
+
+export const TERMINAL_SESSION_ENV = 'WALNUT_TERMINAL_SESSION_ID'
 
 /**
  * Spawn a terminal pty for a session record. Local → dtach; remote → ssh→dtach.
@@ -400,7 +406,7 @@ export async function resolveSpawnForSession(
   opts: { persistent?: boolean } = {},
 ): Promise<SpawnResult> {
   const pty = await loadPty()
-  const env = terminalEnv()
+  const env = terminalEnv(process.env, record.host ? undefined : record.claudeSessionId)
   const persistent = opts.persistent !== false
 
   if (!persistent) {

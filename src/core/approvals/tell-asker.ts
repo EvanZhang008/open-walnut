@@ -22,7 +22,7 @@ const REARM_WITHIN_MS = 30 * 60_000
 const pending = new Set<string>()
 let graceMs = ASKER_GRACE_MS
 
-type NoticeInput = Pick<ApprovalRecord, 'id' | 'what' | 'status' | 'answer' | 'requester' | 'consumedAt' | 'readAt' | 'askerToldAt' | 'singleUse'>
+type NoticeInput = Pick<ApprovalRecord, 'id' | 'what' | 'status' | 'answer' | 'requester' | 'consumedAt' | 'readAt' | 'askerToldAt' | 'singleUse' | 'requestOnly'>
 
 /** Whether this decision is one the asking session must hear about, and in which words. */
 export function askerNoticeFor(rec: NoticeInput): { outcome: 'approved' | 'denied' | 'expired'; body: string } | null {
@@ -38,6 +38,11 @@ export function askerNoticeFor(rec: NoticeInput): { outcome: 'approved' | 'denie
     const where = rec.answer?.device.name ? ` on ${rec.answer.device.name}` : ''
     const at = rec.answer?.at ? ` at ${rec.answer.at}` : ''
     if (rec.status === 'approved') {
+      // Asked with --request-only: the command ended, so the session runs it again to go on.
+      const rerun = rec.requestOnly
+        ? `Run the same command again with \`--approval ${rec.id}\` added${step}: it re-reads what it is about to do and goes on only if nothing changed${rec.singleUse ? ' and its signed approval is consumed once' : ''}. Never take the step any other way; a changed or expired operation needs a new approval.`
+        : undefined
+      if (rerun) return { outcome: 'approved', body: `Approved: "${what}". Your approval request ${rec.id} was approved by the person, with ${by}${where}${at}. The command that asked has ended, so the step has not run.${rec.singleUse ? " Do not run yet by hand." : ""} ${rerun}` }
       if (rec.singleUse) return { outcome: 'approved', body: `Approved: "${what}". Request ${rec.id} was signed with ${by}${where}${at}. Do not run yet: verify the signed record, rebuild the current operation context and call approval_consume. Run only after used:true; a changed or expired operation needs a new approval.${once}` }
       return { outcome: 'approved', body: `Approved: "${what}". Your approval request ${rec.id} was approved by the person, with ${by}${where}${at}. Go ahead with that step now${step}, then report the result where you planned to.${once}` }
     }

@@ -78,6 +78,18 @@ describe('the asking session hears the decision', () => {
     expect(notice?.body).not.toContain('Go ahead')
   })
 
+  it('a request-only ask (its command ended) is told to rerun with --approval, strict or not', () => {
+    const answer = { decision: 'approve' as const, at: new Date().toISOString(), mode: 'biometric' as const, device: { name: 'Mac', kind: 'mac-app' as const } }
+    const plain = askerNoticeFor({ id: 'apr-later', what: 'Publish', status: 'approved', requester, requestOnly: true, answer })
+    expect(plain?.body).toContain('--approval apr-later')
+    expect(plain?.body).toContain('has not run')
+    expect(plain?.body).not.toContain('Go ahead')
+    const strict = askerNoticeFor({ id: 'apr-later2', what: 'Push', status: 'approved', requester, requestOnly: true, singleUse: true, answer })
+    expect(strict?.body).toContain('--approval apr-later2')
+    expect(strict?.body).toContain('Do not run yet')
+    expect(strict?.body).toContain('consumed once')
+  })
+
   it('a Deny', async () => {
     const { approval } = await createApproval({ what: 'Push the release', mode: 'tap', requester })
     await answerApproval(approval.id, { decision: 'deny', device: { name: 'iPhone', kind: 'iphone' } }, lookup)
