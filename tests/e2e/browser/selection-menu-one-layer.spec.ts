@@ -371,7 +371,8 @@ test.describe('Selection menu: a bar and normal menus over the conversation, in 
     await mapRow(panel, MAP_TITLES.Q1).click()
     await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '1', { timeout: 15_000 })
     await page.getByRole('button', { name: 'Split', exact: true }).click()
-    const left = panel.locator('.tree-split-left')
+    // The left half (the right page's sibling question is a .tree-split-left too).
+    const left = panel.locator('.tree-split-left[data-tree-half="L"]')
     await expect(left).toBeVisible({ timeout: 15_000 })
     await expect(left.locator('.session-history')).toContainText(MAP_READY, { timeout: 15_000 })
     await checkAllStates(page, left, await underTable(left), 'split-left-under-table')
