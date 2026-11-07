@@ -8,7 +8,7 @@
  *   GET  /memory/browse               → { tree }                 (A: git-synced files)
  *   GET  /memory?category=            → { memories }
  *   GET  /memory/global | /memory/user       → { memory } | 404
- *   PUT  /memory/global | /memory/user { content } → { ok, updatedAt }
+ *   PUT  /memory/global | /memory/user { content | edits, expectedHash? } → { ok, updatedAt, changed, size }
  *   GET  /memory/telemetry            → { stores, note }          (Wave 3, A)
  *   POST /memory/daily-log/compact    → compaction result         (Wave 3, A)
  *   GET  /notifications               → { feed, unreadCount }    (B: relay on replica)
@@ -225,6 +225,30 @@ searchMemoryV1Router.get('/memory', async (req: Request, res: Response, next: Ne
   }
 })
 
+/**
+ * PUT /api/v1/memory/{global,user}: `content` (the whole doc) or `edits` ([{ old, new }], each
+ * old once, all or none), and an optional `expectedHash` (409 conflict when the file moved on).
+ * A body without either, or an edit whose old text is not there, is refused and writes nothing.
+ */
+async function putMemoryDoc(doc: 'memory' | 'user', req: Request, res: Response): Promise<void> {
+  const { writeMemoryDoc, MemoryConflictError } = await import('./memory.js')
+  const { memoryChangeOf, MemoryEditError } = await import('../../core/memory-edits.js')
+  const body = (req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {}) as Record<string, unknown>
+  try {
+    res.json(await writeMemoryDoc(doc, memoryChangeOf(body), body.expectedHash))
+  } catch (err) {
+    if (err instanceof MemoryEditError) {
+      sendError(res, err.status, err.code, err.message, err.index !== undefined ? { index: err.index } : undefined)
+      return
+    }
+    if (err instanceof MemoryConflictError) {
+      sendError(res, 409, 'conflict', `${doc === 'memory' ? 'MEMORY.md' : 'USER.md'} changed since that expectedHash; nothing was written: read it again`, { currentHash: err.currentHash })
+      return
+    }
+    throw err
+  }
+}
+
 // GET /api/v1/memory/global — read MEMORY.md.
 searchMemoryV1Router.get('/memory/global', async (_req: Request, res: Response, next: NextFunction) => {
   try {
@@ -243,13 +267,7 @@ searchMemoryV1Router.get('/memory/global', async (_req: Request, res: Response, 
 // PUT /api/v1/memory/global { content } — write MEMORY.md (human-edit provenance).
 searchMemoryV1Router.put('/memory/global', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const content = (req.body ?? {}).content
-    if (typeof content !== 'string') {
-      sendError(res, 400, 'bad_request', 'content (string) is required')
-      return
-    }
-    const { writeMemoryDoc } = await import('./memory.js')
-    res.json(await writeMemoryDoc('memory', content))
+    await putMemoryDoc('memory', req, res)
   } catch (err) {
     next(err)
   }
@@ -273,13 +291,7 @@ searchMemoryV1Router.get('/memory/user', async (_req: Request, res: Response, ne
 // PUT /api/v1/memory/user { content } — write USER.md.
 searchMemoryV1Router.put('/memory/user', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const content = (req.body ?? {}).content
-    if (typeof content !== 'string') {
-      sendError(res, 400, 'bad_request', 'content (string) is required')
-      return
-    }
-    const { writeMemoryDoc } = await import('./memory.js')
-    res.json(await writeMemoryDoc('user', content))
+    await putMemoryDoc('user', req, res)
   } catch (err) {
     next(err)
   }

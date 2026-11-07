@@ -589,7 +589,7 @@ export function createHostReplica(deps: HostReplicaDeps) {
     if (doc !== 'global' && doc !== 'user') return fail('bad_request', 'doc must be "global" or "user"')
     const memory = jsonEntry(home, 'memory', doc)
     if (memory === undefined) return fail('not_found', `${doc === 'global' ? 'MEMORY.md' : 'USER.md'} is not in this host's copy`)
-    return ok({ memory, offline: true, as_of: ageOf(home, 'memory'), outcome: `Read from this host's copy of the memory (as of ${ageOf(home, 'memory')}). ${why}` })
+    return ok({ memory, offline: true, as_of: ageOf(home, 'memory'), outcome: `Read from this host's copy of the memory (as of ${ageOf(home, 'memory')}); its text is memory.content, and memory_write edits change a few lines. ${why}` })
   }
 
   /** MEMORY.md and USER.md of this host's copy, for the offline `search` (offline-search-core.ts). */

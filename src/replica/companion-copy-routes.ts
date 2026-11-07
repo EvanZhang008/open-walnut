@@ -32,6 +32,7 @@ import { companionMemoryAsOf, companionMemoryDoc, companionMemorySave, isMemoryD
 import { companionMemoryFiles, copyListMemories, copyMemoryBrowseTree, copyMemoryEntry } from '../core/companion-memory-files.js'
 import { isCompanion } from '../core/server-role.js'
 import { computeContentHash } from '../utils/file-ops.js'
+import { applyMemoryEdits, memoryChangeOf, MemoryEditError, type MemoryEdit } from '../core/memory-edits.js'
 import { COMPANION_REPLICA_HOME, companionCopyHolds, companionCopyOff, companionCopySkills, companionHostReplica, parseCopySkill, type CopySkill } from '../core/companion-host-replica.js'
 import { forwardUnkept } from '../core/companion-forward.js'
 import { hostCopyReads } from './host-copy-reads.js'
@@ -133,12 +134,26 @@ function memoryDoc(flavor: Flavor, doc: MemoryDocName, read: boolean, req: Reque
     return
   }
   const b = (req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {}) as Record<string, unknown>
-  if (typeof b.content !== 'string') { badRequest(res, flavor, 'content (string) is required'); return }
-  // The v1 PUT takes no lock (search-memory-v1.ts); the web PUT's expectedHash is the editor's.
-  const r = companionMemorySave({ doc, content: b.content, ...(flavor === 'web' ? { expectedHash: b.expectedHash } : {}) })
+  // The whole text, or edits applied to this copy's text (locked to it, so a copy that moved on refuses).
+  let change: string | { edits: MemoryEdit[] }
+  try { change = memoryChangeOf(b) } catch (err) {
+    if (!(err instanceof MemoryEditError)) throw err
+    memoryEditRefused(res, flavor, err)
+    return
+  }
+  const previous = companionMemoryDoc(doc)?.content ?? ''
+  let content: string
+  try { content = typeof change === 'string' ? change : applyMemoryEdits(previous, change.edits, file) } catch (err) {
+    if (!(err instanceof MemoryEditError)) throw err
+    memoryEditRefused(res, flavor, err)
+    return
+  }
+  // An expectedHash is optional on both PUTs (none: last write wins, as before).
+  const expectedHash = b.expectedHash ?? (typeof change === 'string' ? undefined : computeContentHash(previous))
+  const r = companionMemorySave({ doc, content, ...(expectedHash !== undefined ? { expectedHash } : {}) })
   if (r.ok) {
     log.web.info('companion: memory change kept for the Mac', { doc: file, seq: r.seq })
-    res.json({ ok: true, updatedAt: r.updatedAt, contentHash: r.contentHash })
+    res.json({ ok: true, updatedAt: r.updatedAt, contentHash: r.contentHash, changed: content !== previous, size: content.length, previousSize: previous.length })
     return
   }
   log.web.info('companion: memory change refused', { doc: file, code: r.code })
@@ -151,6 +166,12 @@ function memoryDoc(flavor: Flavor, doc: MemoryDocName, read: boolean, req: Reque
   if (r.code === 'bad_request') { badRequest(res, flavor, r.message); return }
   const why = typeof r.detail?.why === 'string' ? r.detail.why : undefined
   send(res, r.code === 'needs_leader' ? needsLeaderAnswer(why ?? 'needs_mac', r.message) : refusalAnswer(r.code, r.message, r.detail, typeof r.detail?.retryAfterMs === 'number' ? r.detail.retryAfterMs : undefined))
+}
+
+function memoryEditRefused(res: Response, flavor: Flavor, err: MemoryEditError): void {
+  const extra = err.index !== undefined ? { index: err.index } : {}
+  if (flavor === 'web') res.status(err.status).json({ error: err.message, code: err.code, ...extra })
+  else res.status(err.status).json({ error: { code: err.code, message: err.message }, ...extra })
 }
 
 // ── skills ──

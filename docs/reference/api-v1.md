@@ -3487,9 +3487,16 @@ like the other conversation endpoints (absent → `general`).
   - `GET /api/v1/memory/global` | `/memory/user` → `200 { "memory": { path,
     title, category, content, createdAt, updatedAt } }`; `404 not_found` when
     the file doesn't exist yet.
-  - `PUT /api/v1/memory/global` | `/memory/user` body `{ "content" }` →
-    `200 { "ok": true, "updatedAt" }` — human-edit provenance (telemetry +
-    immediate prompt-snapshot refresh, same as the web editor).
+  - `PUT /api/v1/memory/global` | `/memory/user` body `{ "content" }` (the whole
+    file) or `{ "edits": [{ old, new }] }` (exact strings on the stored file, each
+    old once, all or none), plus an optional `expectedHash` →
+    `200 { "ok": true, "updatedAt", "contentHash", "changed", "size", "previousSize" }`
+    (`changed: false`: the file already held that text) — human-edit provenance
+    (telemetry + immediate prompt-snapshot refresh, same as the web editor).
+    `400 bad_request` for neither or both of content and edits;
+    `409 memory_edit_not_found` / `memory_edit_not_unique` (with `index`) for an
+    edit that does not match exactly once; `409 conflict` (with `currentHash`)
+    when `expectedHash` no longer describes the file. A refused save writes nothing.
 - Notifications (Class B — the durable store lives on the primary; a REPLICA
   relays via the `session.control` command's `server.*` actions, same failure
   ladder as session lifecycle):

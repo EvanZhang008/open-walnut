@@ -25,6 +25,7 @@ import { computeContentHash } from '../../utils/file-ops.js'
 import { bus } from '../../core/event-bus.js'
 import { log } from '../../logging/index.js'
 import { companionMemoryRoutes } from '../../replica/companion-copy-routes.js'
+import { applyMemoryEdits, memoryChangeOf, MemoryEditError, type MemoryEdit } from '../../core/memory-edits.js'
 import { sortedByName } from '../../lib/dir-order.js'
 
 export const memoryRouter = Router()
@@ -75,6 +76,10 @@ function assertMemoryHash(current: string, expectedHash: unknown): void {
 function sendMemoryWriteError(res: Response, err: unknown, next: NextFunction): void {
   if (err instanceof MemoryConflictError) {
     res.status(409).json({ error: err.message, code: 'conflict', currentHash: err.currentHash })
+    return
+  }
+  if (err instanceof MemoryEditError) {
+    res.status(err.status).json({ error: err.message, code: err.code, ...(err.index !== undefined ? { index: err.index } : {}) })
     return
   }
   next(err)
@@ -281,26 +286,60 @@ export async function readUserMemoryDoc(): Promise<MemoryDoc | null> {
   }
 }
 
+/** One write at a time per file, so two edits never read the same text and lose one. */
+const writeChains = new Map<string, Promise<unknown>>()
+function oneAtATime<T>(file: string, run: () => Promise<T>): Promise<T> {
+  const prior = writeChains.get(file) ?? Promise.resolve()
+  const mine = prior.catch(() => {}).then(run)
+  const settled = mine.catch(() => {})
+  writeChains.set(file, settled)
+  void settled.then(() => { if (writeChains.get(file) === settled) writeChains.delete(file) })
+  return mine
+}
+
+export interface MemoryWriteResult {
+  ok: true
+  updatedAt: string
+  contentHash: string
+  /** False when the text written is the text the file already held: the save changed nothing. */
+  changed: boolean
+  size: number
+  previousSize: number
+  warning?: string
+}
+
 /**
  * Write MEMORY.md or USER.md with human-edit telemetry + prompt-snapshot thaw
  * (see recordBoundedStoreEdit). Shared by the web PUT routes and /api/v1.
+ * `change` is the whole new text, or exact-string edits applied to the stored text under the
+ * same per-file turn as the write (2026-11-06: an agent's read-modify-write script misread the
+ * read and never wrote, then took the read's output for the save).
  */
 export async function writeMemoryDoc(
   target: 'memory' | 'user',
-  content: string,
+  change: string | { edits: readonly MemoryEdit[] },
   expectedHash?: unknown,
-): Promise<{ ok: true; updatedAt: string; contentHash: string; warning?: string }> {
+): Promise<MemoryWriteResult> {
   const file = target === 'memory' ? MEMORY_FILE : USER_FILE
-  await fsp.mkdir(path.dirname(file), { recursive: true })
-  const previous = await fsp.readFile(file, 'utf-8').catch(() => '')
-  assertMemoryHash(previous, expectedHash)
-  await fsp.writeFile(file, content, 'utf-8')
-  await recordBoundedStoreEdit(target, previous, content)
-  const stat = await fsp.stat(file)
-  log.memory.info(`${target === 'memory' ? 'Global MEMORY.md' : 'USER.md'} updated via editor`, { size: content.length })
   const relPath = target === 'memory' ? 'MEMORY.md' : 'USER.md'
-  emitMemoryUpdated(relPath, content)
-  return { ok: true, updatedAt: stat.mtime.toISOString(), contentHash: computeContentHash(content), ...(await overBudget(target, content)) }
+  return oneAtATime(file, async () => {
+    await fsp.mkdir(path.dirname(file), { recursive: true })
+    const previous = await fsp.readFile(file, 'utf-8').catch(() => '')
+    assertMemoryHash(previous, expectedHash)
+    const content = typeof change === 'string' ? change : applyMemoryEdits(previous, change.edits, relPath)
+    await fsp.writeFile(file, content, 'utf-8')
+    await recordBoundedStoreEdit(target, previous, content)
+    const stat = await fsp.stat(file)
+    const changed = content !== previous
+    log.memory.info(`${target === 'memory' ? 'Global MEMORY.md' : 'USER.md'} updated via editor`, {
+      size: content.length, previousSize: previous.length, changed, ...(typeof change === 'string' ? {} : { edits: change.edits.length }),
+    })
+    emitMemoryUpdated(relPath, content)
+    return {
+      ok: true as const, updatedAt: stat.mtime.toISOString(), contentHash: computeContentHash(content),
+      changed, size: content.length, previousSize: previous.length, ...(await overBudget(target, content)),
+    }
+  })
 }
 
 /**
@@ -337,12 +376,8 @@ memoryRouter.get('/global', async (_req: Request, res: Response, next: NextFunct
 
 memoryRouter.put('/global', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { content, expectedHash } = req.body
-    if (typeof content !== 'string') {
-      res.status(400).json({ error: 'content (string) is required' })
-      return
-    }
-    res.json(await writeMemoryDoc('memory', content, expectedHash))
+    const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>
+    res.json(await writeMemoryDoc('memory', memoryChangeOf(body), body.expectedHash))
   } catch (err) {
     sendMemoryWriteError(res, err, next)
   }
@@ -366,12 +401,8 @@ memoryRouter.get('/user', async (_req: Request, res: Response, next: NextFunctio
 
 memoryRouter.put('/user', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { content, expectedHash } = req.body
-    if (typeof content !== 'string') {
-      res.status(400).json({ error: 'content (string) is required' })
-      return
-    }
-    res.json(await writeMemoryDoc('user', content, expectedHash))
+    const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>
+    res.json(await writeMemoryDoc('user', memoryChangeOf(body), body.expectedHash))
   } catch (err) {
     sendMemoryWriteError(res, err, next)
   }

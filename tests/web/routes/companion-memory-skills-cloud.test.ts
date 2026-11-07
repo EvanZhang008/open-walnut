@@ -205,6 +205,19 @@ describe('memory on the box', () => {
     await syncCompanionHostReplica()
     expect((await api('/api/memory/global')).body.memory.content).toBe(merged)
   })
+
+  it('edits apply to the text this box shows, as a record; one that does not match writes nothing', async () => {
+    const before = memoryRecords().length
+    const edited = await put('/api/v1/memory/global', { edits: [{ old: '- Added on the Mac\n', new: '- Added on the Mac\n- Send invites\n' }] })
+    expect(edited).toMatchObject({ status: 200, body: { ok: true, changed: true } })
+    expect(memoryRecords()).toHaveLength(before + 1)
+    expect((await api('/api/memory/global')).body.memory.content).toContain('- Send invites\n')
+    const missed = await put('/api/v1/memory/global', { edits: [{ old: '- Not on the list\n', new: 'x' }] })
+    expect(missed).toMatchObject({ status: 409, body: { error: { code: 'memory_edit_not_found' }, index: 0 } })
+    const web = await put('/api/memory/global', { edits: [{ old: '- Not on the list\n', new: 'x' }] })
+    expect(web).toMatchObject({ status: 409, body: { code: 'memory_edit_not_found' } })
+    expect(memoryRecords()).toHaveLength(before + 1)
+  })
 })
 
 describe('the rest of the memory dir on the box', () => {

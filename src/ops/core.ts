@@ -276,11 +276,14 @@ defineOp({
   title: 'Read Walnut memory (MEMORY.md / USER.md)',
   description:
     'Read one of the user\'s standing memory documents: "global" = MEMORY.md (project/world ' +
-    'knowledge index), "user" = USER.md (who the user is). Returns { memory: { content, ... } }.',
+    'knowledge index), "user" = USER.md (who the user is). Returns { memory: { content, contentHash, ' +
+    'updatedAt, ... } }: the text is memory.content, not a top-level field. To change a few lines, ' +
+    'pass memory_write edits instead of rewriting the file from a script.',
   input: {
     doc: z.enum(['global', 'user']).describe('Which memory document'),
   },
   bind: { method: 'GET', path: '/memory/:doc' },
+  mapResult: ({ body, args }) => memoryReadResult(body, args),
   tags: { readonly: true, remote: 'allow' },
 })
 
@@ -288,17 +291,64 @@ defineOp({
   name: 'memory_write',
   title: 'Write Walnut memory (MEMORY.md / USER.md)',
   description:
-    'Replace the FULL content of a memory document ("global" = MEMORY.md, "user" = USER.md). ' +
-    'Read it first (memory_read) and write back the complete revised text — this is a whole-file ' +
-    'replace, not an append. Every session reads only the first 4000 characters of USER.md: a save ' +
-    'past that is kept, and answers with a `warning` naming what is left out; trim it then.',
+    'Change a memory document ("global" = MEMORY.md, "user" = USER.md). To change a few lines, pass ' +
+    '`edits` (exact-string [{old,new}], each old once, all or none; an old that is not there refuses ' +
+    'the whole save and writes nothing): no read and no script needed. `content` instead replaces the ' +
+    'WHOLE file (memory_read it first, its text is memory.content). Pass `expectedHash` (memory.contentHash ' +
+    'from memory_read) to refuse the save when the file changed since. The answer says whether the file ' +
+    'changed (`changed`, `size`): a save is done only when that answer says so. Every session reads only ' +
+    'the first 4000 characters of USER.md: a save past that is kept, and answers with a `warning` naming ' +
+    'what is left out; trim it then.',
   input: {
     doc: z.enum(['global', 'user']).describe('Which memory document'),
-    content: z.string().describe('Complete new document content'),
+    content: z.string().optional().describe('The complete new document (whole-file replace); or pass edits'),
+    edits: z.array(z.object({ old: z.string().min(1), new: z.string() })).min(1).max(40).optional()
+      .describe('Exact-string edits on the stored document, applied in order'),
+    expectedHash: z.string().optional().describe('memory.contentHash from memory_read: the save is refused if the file changed'),
   },
-  bind: { method: 'PUT', path: '/memory/:doc', body: ['content'] },
+  bind: { method: 'PUT', path: '/memory/:doc', body: ['content', 'edits', 'expectedHash'] },
+  mapResult: ({ body, args }) => memoryWriteResult(body, args),
   tags: { readonly: false, remote: 'allow' },
 })
+
+function memoryFileName(args: Record<string, unknown>): string {
+  return args.doc === 'global' ? 'MEMORY.md' : 'USER.md'
+}
+
+/** memory_read's answer, saying where the text is (2026-11-06: a script read a top-level `content`, found none, and never wrote). */
+function memoryReadResult(body: unknown, args: Record<string, unknown>): unknown {
+  if (!body || typeof body !== 'object') return body
+  const b = body as Record<string, unknown>
+  const memory = b.memory as { content?: unknown; contentHash?: unknown; updatedAt?: unknown } | undefined
+  if (!memory || typeof memory.content !== 'string' || typeof b.outcome === 'string') return body
+  const file = memoryFileName(args)
+  return withOutcome(
+    b,
+    `${file}: ${memory.content.length} characters, saved ${String(memory.updatedAt ?? 'at an unknown time')}. Its text is memory.content.`,
+    `To change a few lines: memory_write {"doc":"${String(args.doc)}","edits":[{"old":"<exact text>","new":"<new text>"}]}.`,
+  )
+}
+
+/** memory_write's answer: what the file holds now, and plainly when the save changed nothing. */
+function memoryWriteResult(body: unknown, args: Record<string, unknown>): unknown {
+  if (!body || typeof body !== 'object') return body
+  const b = body as Record<string, unknown>
+  const file = memoryFileName(args)
+  if (b.changed === false) {
+    return withOutcome(
+      b,
+      `Nothing changed: ${file} already held exactly this text.`,
+      'If you meant to change it, memory_read it and pass edits whose old text is in it.',
+    )
+  }
+  const size = typeof b.size === 'number'
+    ? `: ${b.size} characters${typeof b.previousSize === 'number' ? ` (was ${b.previousSize})` : ''}` : ''
+  return withOutcome(
+    b,
+    `${file} saved${size}, contentHash ${String(b.contentHash ?? '')}.${typeof b.warning === 'string' ? ` ${b.warning}` : ''}`,
+    typeof b.warning === 'string' ? `Trim ${file} with memory_write edits.` : 'No further action is required.',
+  )
+}
 
 // ── Curated additions: notes ─────────────────────────────────────────────────
 
