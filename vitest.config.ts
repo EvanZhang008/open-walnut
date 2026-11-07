@@ -74,13 +74,13 @@ export default defineConfig({
       'tests/setup/exec-guard.ts',
       // bun only (vi.mock paths, os.homedir): see the file.
       'tests/setup/bun-compat.ts',
-      // toEqual on bytes compares bytes: see the file.
-      'tests/setup/byte-equality.ts',
       'tests/setup/runtime-dir-isolation.ts',
       'tests/setup/git-env-isolation.ts',
       'tests/setup/tmp-reaper.ts',
       'tests/setup/temp-tree-rm.ts',
       'tests/setup/worker-watchdog.ts',
+      // toEqual on bytes compares bytes: see the file.
+      'tests/setup/byte-equality.ts',
     ],
     include: ['tests/**/*.test.ts'],
     // notes-roundtrip runs under its own DOM-shimmed config (its deps live in
