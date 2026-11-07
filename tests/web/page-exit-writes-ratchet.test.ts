@@ -28,6 +28,7 @@ const KNOWN: Record<string, 'client' | 'raw' | 'local'> = {
   'components/chat/island-runtime.ts': 'local',
   'hooks/usePhoneRestore.ts': 'local',
   'popout/useAskSnapshots.ts': 'local', // the side panel Ask's snapshot goes to the parent frame, its history to IndexedDB
+  'popout/useHomeSnapshots.ts': 'local', // the first page's snapshot goes to the parent frame by postMessage
   'components/common/FileContentView.tsx': 'local', // the unsaved text goes to localStorage and the IndexedDB draft store
 }
 
