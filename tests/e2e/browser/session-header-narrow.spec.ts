@@ -24,6 +24,10 @@ import { clampColumn } from './composer-controls-overflow-helpers'
 import { expectHeaderLabel, headerLabelsButton } from './session-header-labels-helpers'
 import { iconInkOffsets, ICON_CENTER_TOLERANCE_PX } from './icon-ink'
 
+// WebKit reports this when a resize observer's callback changes layout within one frame (the
+// column is resized here on purpose); it is a notice, not a page fault.
+const BENIGN_PAGE_ERROR = /^ResizeObserver loop completed with undelivered notifications\.$/
+
 const SHOT_DIR = process.env.PW_SCREENSHOT_DIR ?? '/tmp/session-header-narrow'
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const API = `http://localhost:${TEST_PORT}`
@@ -256,7 +260,7 @@ function expectMonotonic(wider: HeaderState, narrower: HeaderState, label: strin
 test('a narrow column keeps the tool row on one line and the labels whole under the title, from 400px down to 180px', async ({ page }) => {
   test.setTimeout(240_000)
   const errors: string[] = []
-  page.on('pageerror', (e) => errors.push(e.message))
+  page.on('pageerror', (e) => { if (!BENIGN_PAGE_ERROR.test(e.message)) errors.push(e.message) })
   await openHome(page)
   await openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`)
   const { taskId, sessionId } = await quickStart(page, draftComposer(page), 'snapshot-clean-turn:Narrow header turn finished')
@@ -385,7 +389,7 @@ test('a narrow column keeps the tool row on one line and the labels whole under 
 test('a second trigger while narrow stays one Trigger label that names both watches', async ({ page }) => {
   test.setTimeout(180_000)
   const errors: string[] = []
-  page.on('pageerror', (e) => errors.push(e.message))
+  page.on('pageerror', (e) => { if (!BENIGN_PAGE_ERROR.test(e.message)) errors.push(e.message) })
   await openHome(page)
   await openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`)
   const { taskId, sessionId } = await quickStart(page, draftComposer(page), 'snapshot-clean-turn:Narrow header second turn finished')
