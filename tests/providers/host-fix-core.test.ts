@@ -1640,7 +1640,7 @@ describe('host fixes of a test server\'s isolated daemon install under its own H
       expect(inst.env.HOME).toBe(OWN)
       expect(inst.cwd).toBe(OWN)
       for (const k of ['CLAUDE_CONFIG_DIR', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'BUN_INSTALL']) expect(inst.env[k], k).toBeUndefined()
-      expect(String(inst.env.PATH ?? '')).not.toContain(`${HOME}/.local/bin`)
+      // PATH still finds the host's tools (a read); every write goes under the isolated HOME.
       for (const c of nonProbe(h.calls)) {
         for (const a of [c.file, ...c.args, String(c.cwd ?? '')]) expect(a.startsWith(`${HOME}/`), a).toBe(false)
       }

@@ -24,6 +24,7 @@
  * and told a user with a broken ssh key to install gcc.
  */
 
+import { ownRootGuardSh } from '../../providers/remote-isolation.js'
 import { shellQuote } from '../../providers/session-io.js'
 
 export const BEGIN_MARKER = 'WALNUT_DTACH_BEGIN'
@@ -112,10 +113,12 @@ const SH_HELPERS = [
  * non-interactive `ssh host sh -s` often lacks the login PATH (brew's prefix
  * is the usual miss). (3) a C compiler to build with, else (4) NO_COMPILER.
  */
-export function buildProbeScript(opts: { ownBin?: string } = {}): string {
+export function buildProbeScript(opts: { ownBin?: string; ownRoot?: string } = {}): string {
   return [
     ...PREAMBLE,
     ...SH_HELPERS,
+    // Never run a dtach from a root someone else planted in the test server's place.
+    ...(opts.ownRoot ? [ownRootGuardSh(opts.ownRoot)] : []),
     binLine(opts.ownBin),
     'if is_dtach "$B"; then echo "DTACH_OK:walnut:$B"; exit 0; fi',
     // A test server builds into a dir of its own, and may still run the build already in ~/.local/bin.
@@ -182,11 +185,12 @@ function prebuiltLines(prebuilt: Buffer): string[] {
  * but no compiler, a prebuilt that fails ends in NO_COMPILER: installing one is
  * the fix left.
  */
-export function buildInstallScript(opts: { prebuilt?: Buffer; cc?: string; sources: Record<string, string>; ownBin?: string }): string {
+export function buildInstallScript(opts: { prebuilt?: Buffer; cc?: string; sources: Record<string, string>; ownBin?: string; ownRoot?: string }): string {
   const { prebuilt, cc, sources } = opts
   const lines = [
     ...PREAMBLE,
     ...SH_HELPERS,
+    ...(opts.ownRoot ? [ownRootGuardSh(opts.ownRoot, { create: true })] : []),
     binLine(opts.ownBin),
     'mkdir -p "$(dirname "$B")" || { echo BUILD_FAILED; exit 0; }',
   ]

@@ -21,7 +21,8 @@
 
 import { execFile } from 'node:child_process'
 import type { SessionRecord } from '../../core/types.js'
-import { resolveSshTarget, dtachSocketPath, dtachPidPath, dtachOwnerMarkerPath, DTACH_SOCKET_DIR, REMOTE_DTACH_SOCKET_DIR, sshControlMasterArgs } from './spawn.js'
+import { resolveSshTarget, dtachSocketPath, dtachPidPath, dtachOwnerMarkerPath, DTACH_SOCKET_DIR, REMOTE_DTACH_SOCKET_DIR, REMOTE_TEST_ROOT, sshControlMasterArgs } from './spawn.js'
+import { buildIsolatedRetireScript } from '../../providers/remote-isolation.js'
 import { chooseDtachMaster, dtachProbeScript, parseDtachProbe, stopDtachMaster, type StopOutcome } from './dtach-master.js'
 import { WALNUT_HOME } from '../../constants.js'
 import { listSessions } from '../../core/session-tracker.js'
@@ -168,6 +169,19 @@ export async function endTestServerRemoteTerminals(hosts: string[]): Promise<voi
       if (owner !== WALNUT_HOME) return
       for (const id of ids) await stopDtachSession({ claudeSessionId: id, host }).catch(() => {})
     } catch { /* the host is gone: nothing of ours can be ended there now */ }
+  }))
+}
+
+/**
+ * After the daemons retired: the test server's /tmp root on each host its terminal
+ * reached, removed the way a daemon's is (buildIsolatedRetireScript: never a symlink
+ * or another user's dir, and only once any daemon of that dir is proven stopped).
+ */
+export async function retireTestServerTerminalRoots(hosts: string[]): Promise<void> {
+  if (!REMOTE_TEST_ROOT) return
+  const root = REMOTE_TEST_ROOT
+  await Promise.all(hosts.map(async (host) => {
+    try { await runShell(host, buildIsolatedRetireScript(root)) } catch { /* the host is gone: its daemon-less root is swept by the next test server there */ }
   }))
 }
 

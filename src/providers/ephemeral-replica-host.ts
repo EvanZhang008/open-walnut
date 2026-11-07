@@ -30,7 +30,7 @@ const CLOUD_BOX_ALIAS = '__cloudbox__'
 /** The production replica's root segment (core/host-server/install.ts HOST_ROOT). */
 const PROD_HOST_ROOT_SEGMENT = '.open-walnut-host'
 
-export type EphemeralReplicaRefusal = 'remote-hosts-off' | 'not-ssh' | 'no-dir' | 'dir-not-absolute' | 'prod-dir'
+export type EphemeralReplicaRefusal = 'remote-hosts-off' | 'not-ssh' | 'no-dir' | 'dir-not-absolute' | 'dir-shallow' | 'prod-dir'
   | 'no-host-root' | 'prod-host-root'
 
 export type EphemeralReplicaDecision =
@@ -69,17 +69,14 @@ export function ephemeralReplicaHost(hostKey: string, env: NodeJS.ProcessEnv, ep
   const raw = (env.WALNUT_EPHEMERAL_REPLICA_DIR ?? '').trim()
   if (!raw) return { lifted: false, asked: true, reason: 'no-dir' }
   if (!raw.startsWith('/') || raw.split('/').includes('..')) return { lifted: false, asked: true, reason: 'dir-not-absolute', dir: raw }
+  // A root of its own, never a shared dir such as /tmp or a home (the probe makes it 0700).
+  if (raw.split('/').filter(Boolean).length < 2) return { lifted: false, asked: true, reason: 'dir-shallow', dir: raw }
   const dir = path.posix.normalize(raw).replace(/\/+$/, '')
   if (isProdDaemonDir(dir)) return { lifted: false, asked: true, reason: 'prod-dir', dir }
   const root = (env.WALNUT_HOST_SERVER_ROOT ?? '').trim()
   if (!root) return { lifted: false, asked: true, reason: 'no-host-root', dir }
   if (isProdHostRoot(root)) return { lifted: false, asked: true, reason: 'prod-host-root', dir }
   return { lifted: true, asked: true, dir }
-}
-
-/** The env a lifted host's daemon starts with: its own dir and its own streams dir. */
-export function ephemeralReplicaDirEnv(dir: string): Record<string, string> {
-  return { WALNUT_DAEMON_DIR: dir, WALNUT_STREAMS_DIR: path.posix.join(dir, 'streams') }
 }
 
 /**

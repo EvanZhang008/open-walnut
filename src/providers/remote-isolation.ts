@@ -46,7 +46,7 @@
 import path from 'node:path'
 import { shq } from './remote-sh.js'
 import { walnutKeyOf } from './daemon-shared.js'
-import { buildDaemonStopCmd } from './daemon-start-cmd.js'
+import { DAEMON_PID_SH, buildDaemonStopCmd } from './daemon-start-cmd.js'
 import type { DirProbeScriptOpts } from './remote-daemon-dir.js'
 import { ephemeralReplicaHost, isProdDaemonDir, type EphemeralReplicaRefusal } from './ephemeral-replica-host.js'
 
@@ -120,6 +120,8 @@ export interface IsolatedLayout {
   daemonDir: string
   streamsDir: string
   installHome: string
+  /** WALNUT_RUNTIME_DIR: where a walnut file run as the daemon unpacks its runtime tree (else ~/.open-walnut/local/runtime, pruned). */
+  runtimeDir: string
   taskDirRoot: string
   secretsRoot: string
   worktreesRoot: string
@@ -133,6 +135,7 @@ export function isolatedLayout(root: string): IsolatedLayout {
     daemonDir: j('daemon'),
     streamsDir: j('streams'),
     installHome: j('home'),
+    runtimeDir: j('runtime'),
     taskDirRoot: j('tasks'),
     secretsRoot: j('secrets'),
     worktreesRoot: j('worktrees'),
@@ -167,6 +170,7 @@ export function isolatedDaemonEnv(root: string, key: string): Record<string, str
     WALNUT_SECRETS_DIR_ROOT: l.secretsRoot,
     WALNUT_WORKTREES_ROOT: l.worktreesRoot,
     WALNUT_INSTALL_HOME: l.installHome,
+    WALNUT_RUNTIME_DIR: l.runtimeDir,
     WALNUT_DAEMON_ISOLATED_FOR: key,
     WALNUT_DAEMON_ORPHAN_EXIT_MS: String(ISOLATED_ORPHAN_EXIT_MS),
   }
@@ -246,6 +250,50 @@ export function buildIsolatedRetireScript(root: string, opts: { remove?: boolean
     ] : []),
     'echo walnut-isolated-retired',
   ].join('\n')
+}
+
+/** A root left by a test server that is gone is swept once nothing touched it this long. */
+export const STALE_ROOT_MINUTES = 120
+
+/**
+ * Removes the test roots this user left on the host (another test server's, gone:
+ * killed with -9, a crashed daemon, a probe whose daemon never started): a real dir
+ * this user owns, named by a 16-hex key that is not `ownKey`, with no live daemon of
+ * that dir and no live terminal, untouched for `minutes`. A root in ~/.cache stays
+ * across a reboot, and each holds its own bun and Claude Code.
+ */
+export function buildStaleIsolatedRootSweepScript(ownKey: string, minutes = STALE_ROOT_MINUTES): string {
+  return [
+    ...DAEMON_PID_SH,
+    `OWN=${shq(ownKey)}`,
+    'w_sweep() {',
+    '  R=$1; k=$2',
+    '  [ "${#k}" -eq 16 ] || return 0',
+    '  case "$k" in *[!0-9a-f]*) return 0;; esac',
+    '  [ "$k" = "$OWN" ] && return 0',
+    '  [ -d "$R" ] && [ ! -L "$R" ] && [ -O "$R" ] || return 0',
+    `  [ -n "$(find "$R" -maxdepth 0 -mmin +${Math.max(1, Math.floor(minutes))} 2>/dev/null)" ] || return 0`,
+    '  P=$(cat "$R/daemon/daemon.pid" 2>/dev/null)',
+    '  if [ -n "$P" ] && kill -0 "$P" 2>/dev/null && w_daemon "$P" "$R/daemon"; then return 0; fi',
+    '  for f in "$R"/term/*.pid; do [ -f "$f" ] || continue; q=$(cat "$f" 2>/dev/null); [ -n "$q" ] && kill -0 "$q" 2>/dev/null && return 0; done',
+    '  rm -rf "$R" "$R/daemon-images" 2>/dev/null && echo "walnut-swept $R"',
+    '}',
+    `for R in ${ISOLATED_TMP_PREFIX}*; do w_sweep "$R" "\${R#${ISOLATED_TMP_PREFIX}}"; done`,
+    `for R in "$HOME/${ISOLATED_CACHE_SUBDIR}"/*; do w_sweep "$R" "\${R##*/}"; done`,
+    'echo walnut-sweep-done',
+  ].join('\n')
+}
+
+/**
+ * One shell line for a script that writes under a test server's root without the
+ * daemon (the terminal's own ssh: dtach build, sockets): the root must be a real
+ * dir this user owns, never a symlink planted in its place. `create` makes it (0700);
+ * without it a missing root is fine and nothing is made. Ends the script with 97 otherwise.
+ */
+export function ownRootGuardSh(root: string, opts: { create?: boolean } = {}): string {
+  const bad = 'if [ -L "$R" ] || { [ -e "$R" ] && { [ ! -d "$R" ] || [ ! -O "$R" ]; }; }; then exit 1; fi'
+  const make = opts.create ? '; mkdir -p "$R" && [ ! -L "$R" ] && [ -O "$R" ] && chmod 700 "$R"' : ''
+  return `(umask 077; R=${shq(root)}; ${bad}${make}) || { echo "walnut: the test server root on this host is not its own: ${root.replace(/[^A-Za-z0-9/._-]/g, '')}" >&2; exit 97; }`
 }
 
 /** A short sentence for the connect error of a refused host. */

@@ -43,6 +43,7 @@ const CONNECTION: Record<string, Entry> = {
   pipeSingleStream: { count: 1, kind: 'transport', why: 'writes the path its caller names (deployBinary: the daemon dir)' },
   pipeChunk: { count: 2, kind: 'transport', why: 'writes the chunk dir its caller names (under the daemon dir)' },
   sshExec: { count: 2, kind: 'transport', why: 'the primitive: runs the script its caller builds' },
+  sweepStaleIsolatedRoots: { count: 1, kind: 'own-root', why: 'buildStaleIsolatedRootSweepScript: only 16-hex test roots this user owns, no live daemon or terminal, untouched for 2 hours' },
   resolveRemoteDir: { count: 1, kind: 'own-dir', why: 'an isolated connection probes only isolatedProbeOpts (tests/providers/remote-isolation.test.ts runs it)' },
   detectServiceTakeover: { count: 1, kind: 'not-for-test-server', why: 'returns unmanaged for an isolated connection before probing the host\'s service files' },
   checkDaemonRunning: { count: 2, kind: 'own-dir', why: 'candidateDaemonDirs: only the isolated dirs; --status with dirEnv' },
@@ -64,7 +65,7 @@ const CONNECTION: Record<string, Entry> = {
 
 /** Every other file in src/ with a site, with how many. */
 const FILES: Record<string, Entry> = {
-  'src/providers/remote-sh.ts': { count: 2, kind: 'transport', why: 'runRemoteSh itself: `sh -s` with the caller\'s script' },
+  'src/providers/remote-sh.ts': { count: 4, kind: 'transport', why: 'runSshBounded and runRemoteSh themselves: ssh with the caller\'s args, `sh -s` with the caller\'s script' },
   'src/core/host-server/manager.ts': { count: 13, kind: 'not-for-test-server', why: 'acts only on a host handle hostServerConnected gave it (shared host or the replica check\'s own root)' },
   'src/core/plugin-jobs/manager.ts': { count: 2, kind: 'not-for-test-server', why: 'plugin jobs do not run on a test server (pluginJobsOffReason); bundles go to the daemon\'s own dir' },
   'src/core/plugins/plugin-hosts.ts': { count: 1, kind: 'gated', why: 'runOnPluginHost refuses a host whose isolation is off' },
@@ -129,5 +130,12 @@ describe('remote write paths ratchet', () => {
     expect(fs.readFileSync(path.join(ROOT, 'src/core/plugin-jobs/index.ts'), 'utf-8')).toMatch(/plugin jobs do not run on a test server/)
     expect(fs.readFileSync(path.join(ROOT, 'src/core/plugins/plugin-hosts.ts'), 'utf-8')).toMatch(/remoteIsolationFor\(/)
     expect(fs.readFileSync(path.join(ROOT, 'src/web/terminal/spawn.ts'), 'utf-8')).toMatch(/remoteIsolationFor\(/)
+    // A test daemon's identity never reaches its sessions (a nested test server's daemon would claim it).
+    for (const twin of ['src/providers/daemon-standalone.ts', 'src/providers/daemon-source.ts']) {
+      const src = fs.readFileSync(path.join(ROOT, twin), 'utf-8')
+      for (const k of ['WALNUT_DAEMON_ISOLATED_FOR', 'WALNUT_DAEMON_ORPHAN_EXIT_MS', 'WALNUT_INSTALL_HOME', 'WALNUT_RUNTIME_DIR']) expect(src, `${twin} ${k}`).toContain(`${k}: undefined,`)
+    }
+    const local = fs.readFileSync(path.join(ROOT, 'src/providers/local-daemon.ts'), 'utf-8')
+    for (const k of ['WALNUT_DAEMON_ISOLATED_FOR', 'WALNUT_DAEMON_ORPHAN_EXIT_MS', 'WALNUT_INSTALL_HOME']) expect(local).toContain(`delete env.${k}`)
   })
 })

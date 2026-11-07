@@ -49,6 +49,12 @@ describe('the decision', () => {
     expect(ephemeralReplicaHost('devbox', env({}), false)).toEqual({ lifted: false, asked: false })
   })
 
+  it('refuses a dir too shallow to be a root of its own (the probe makes it 0700)', () => {
+    for (const dir of ['/', '/tmp', '/home', '/tmp/']) {
+      expect(ephemeralReplicaHost('devbox', env({ WALNUT_EPHEMERAL_REPLICA_DIR: dir }), true), dir).toMatchObject({ lifted: false, reason: 'dir-shallow' })
+    }
+  })
+
   it('never lifts another host, nor the local daemon', () => {
     expect(ephemeralReplicaHost('buildbox', env({}), true)).toEqual({ lifted: false, asked: false })
     expect(ephemeralReplicaHost('__local__', env({ WALNUT_EPHEMERAL_REPLICA_HOST: '__local__' }), true).lifted).toBe(false)

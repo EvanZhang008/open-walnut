@@ -92,7 +92,8 @@ export function parseBunProbe(output: string): BunProbe {
 export function buildBunInstallScript(logPath: string, url: string = BUN_INSTALL_URL, opts: BunScriptOpts = {}): string {
   // bun's installer writes $BUN_INSTALL (default ~/.bun) and adds a PATH line to the shell's rc file in $HOME.
   const runner = opts.installHome
-    ? `mkdir -p ${shq(opts.installHome)} && env HOME=${shq(opts.installHome)} BUN_INSTALL=${shq(`${opts.installHome}/.bun`)} bash`
+    // Grouped, so the pipe feeds bash (mkdir reads no stdin): `x | mkdir ... && bash` piped into mkdir.
+    ? `{ mkdir -p ${shq(opts.installHome)} && env HOME=${shq(opts.installHome)} BUN_INSTALL=${shq(`${opts.installHome}/.bun`)} bash; }`
     : 'bash'
   return [
     `L=${shq(logPath)}`,

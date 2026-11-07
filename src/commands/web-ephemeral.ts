@@ -353,10 +353,14 @@ export async function runEphemeralChild(): Promise<void> {
     // stopped and removed while their ssh masters are still up. Bounded; a daemon left
     // behind ends itself once no server has come for a while.
     try {
-      const [{ retireIsolatedRemoteDaemons, isolatedRemoteHosts }, { endTestServerRemoteTerminals }] = await Promise.all([
-        import('../providers/daemon-connection.js'), import('../web/terminal/dtach-lifecycle.js'),
+      const [{ retireIsolatedRemoteDaemons, isolatedRemoteHosts }, { endTestServerRemoteTerminals, retireTestServerTerminalRoots }, { testServerTerminalHosts }] = await Promise.all([
+        import('../providers/daemon-connection.js'), import('../web/terminal/dtach-lifecycle.js'), import('../web/terminal/spawn.js'),
       ])
-      const retire = endTestServerRemoteTerminals(isolatedRemoteHosts()).catch(() => {}).then(() => retireIsolatedRemoteDaemons(4_000))
+      // Hosts reached through a daemon and hosts reached only by a terminal (its own ssh, no daemon).
+      const hosts = [...new Set([...isolatedRemoteHosts(), ...testServerTerminalHosts()])]
+      const retire = endTestServerRemoteTerminals(hosts).catch(() => {})
+        .then(() => retireIsolatedRemoteDaemons(4_000))
+        .then(() => retireTestServerTerminalRoots(testServerTerminalHosts()).catch(() => {}))
       await Promise.race([retire, new Promise((r) => setTimeout(r, 6_000))])
     } catch { /* best-effort */ }
     try { await stopServer() } catch { /* best-effort */ }

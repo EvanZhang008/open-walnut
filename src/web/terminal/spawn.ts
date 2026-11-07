@@ -47,7 +47,7 @@ import { shellQuote } from '../../providers/session-io.js'
 import { getConfig } from '../../core/config-manager.js'
 import { hostOffersTerminal } from '../../core/hosts/host-status.js'
 import { DTACH_SOCKET_DIR, IS_EPHEMERAL, WALNUT_HOME } from '../../constants.js'
-import { describeIsolationRefusal, isolationKey, remoteIsolationFor, testServerRemoteTermRoot } from '../../providers/remote-isolation.js'
+import { describeIsolationRefusal, isolationKey, remoteIsolationFor, testServerRemoteTermRoot, ownRootGuardSh } from '../../providers/remote-isolation.js'
 import { SHARED_DAEMON_DIR, localDaemonDirChoice } from '../../lib/daemon-dir.js'
 import { log } from '../../logging/index.js'
 import { remoteDtachPath, localDtachPath } from './dtach-provision.js'
@@ -123,6 +123,11 @@ export const REMOTE_DTACH_SOCKET_DIR = TEST_SERVER_TERM ? TEST_SERVER_TERM.termD
 
 /** Where a test server keeps its own dtach build on a remote host (undefined: the usual ~/.local/bin). */
 export const REMOTE_DTACH_OWN_BIN: string | undefined = TEST_SERVER_TERM ? `${TEST_SERVER_TERM.installHome}/.local/bin/walnut-dtach` : undefined
+/** The remote hosts this test server's terminal path reached (its exit ends them and removes its root there). */
+const TEST_SERVER_TERMINAL_HOSTS = new Set<string>()
+export function testServerTerminalHosts(): string[] { return [...TEST_SERVER_TERMINAL_HOSTS] }
+/** That test server's root on every remote host (undefined for a real server): checked before the terminal writes under it. */
+export const REMOTE_TEST_ROOT: string | undefined = TEST_SERVER_TERM?.root
 
 function socketDir(remote: boolean): string {
   return remote ? REMOTE_DTACH_SOCKET_DIR : DTACH_SOCKET_DIR
@@ -185,7 +190,8 @@ export function dtachOwnerMarkerPath(remote = false): string {
  */
 export function dtachOwnerClaimScript(remote = false): string {
   const marker = dtachOwnerMarkerPath(remote)
-  return `mkdir -p ${shellQuote(socketDir(remote))}; [ -e ${shellQuote(marker)} ] || printf '%s\\n' ${shellQuote(WALNUT_HOME)} > ${shellQuote(marker)}`
+  const guard = remote && REMOTE_TEST_ROOT ? `${ownRootGuardSh(REMOTE_TEST_ROOT, { create: true })}; ` : ''
+  return `${guard}mkdir -p ${shellQuote(socketDir(remote))}; [ -e ${shellQuote(marker)} ] || printf '%s\\n' ${shellQuote(WALNUT_HOME)} > ${shellQuote(marker)}`
 }
 
 /**
@@ -204,6 +210,7 @@ export async function resolveSshTarget(host: string): Promise<SshTarget> {
   // A test server reaches a remote host only with remote hosts on, and then only its own dirs there.
   const iso = remoteIsolationFor({ hostKey: host, env: process.env, ephemeral: IS_EPHEMERAL, link: 'ssh', home: WALNUT_HOME })
   if (iso.mode === 'off') throw new Error(describeIsolationRefusal(host, iso.reason, iso.dir))
+  if (iso.mode === 'isolated') TEST_SERVER_TERMINAL_HOSTS.add(host)
   return linkTarget(host, config)
 }
 

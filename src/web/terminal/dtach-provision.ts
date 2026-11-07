@@ -38,7 +38,7 @@ import fs from 'node:fs/promises'
 import { constants as fsConstants } from 'node:fs'
 import { execFile } from 'node:child_process'
 import { TMP_DIR } from '../../constants.js'
-import { REMOTE_DTACH_OWN_BIN, resolveSshTarget, sshControlMasterArgs } from './spawn.js'
+import { REMOTE_DTACH_OWN_BIN, REMOTE_TEST_ROOT, resolveSshTarget, sshControlMasterArgs } from './spawn.js'
 import { DTACH_SOURCES, DTACH_VERSION } from './dtach-sources.js'
 import {
   ALL_FILES,
@@ -304,7 +304,7 @@ async function sshArgsFor(host: string): Promise<string[]> {
 async function provisionRemote(host: string): Promise<DtachResolution> {
   const args = await sshArgsFor(host)
   // Round trip 1 (also warms the ControlMaster the spawn reuses).
-  const probeRun = await run('ssh', args, { input: buildProbeScript({ ownBin: REMOTE_DTACH_OWN_BIN }) })
+  const probeRun = await run('ssh', args, { input: buildProbeScript({ ownBin: REMOTE_DTACH_OWN_BIN, ownRoot: REMOTE_TEST_ROOT }) })
   const probe = classifyScriptRun(probeRun)
   if (probe.kind !== 'need_build' && probe.kind !== 'no_compiler') {
     logRemote(host, probe)
@@ -320,7 +320,7 @@ async function provisionRemote(host: string): Promise<DtachResolution> {
   }
   const cc = probe.kind === 'need_build' ? probe.cc : undefined
   // Round trip 2, once per host: ship the prebuilt and/or the source.
-  const script = buildInstallScript({ prebuilt: prebuilt?.bytes, cc, sources: DTACH_SOURCES, ownBin: REMOTE_DTACH_OWN_BIN })
+  const script = buildInstallScript({ prebuilt: prebuilt?.bytes, cc, sources: DTACH_SOURCES, ownBin: REMOTE_DTACH_OWN_BIN, ownRoot: REMOTE_TEST_ROOT })
   const installRun = await run('ssh', args, { input: script })
   const installed = classifyScriptRun(installRun)
   const result: DtachResolution = installed.kind === 'need_build'

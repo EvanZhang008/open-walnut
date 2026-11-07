@@ -33,6 +33,8 @@ export function slotNeedKb(bytes: number): number {
 export interface SlotFit {
   /** The daemon version the file must print (`<file> __daemon --version`); unset skips the run. */
   version?: string | null
+  /** Env the file runs with (a test server's isolated daemon: its runtime dir, remote-isolation.ts). */
+  env?: Record<string, string>
 }
 
 /**
@@ -43,8 +45,10 @@ export interface SlotFit {
  */
 function fitsSh(fit: SlotFit): string {
   if (!fit.version) return 'w_fits() { W_SAID=; return 0; }'
-  return 'w_fits() { if command -v timeout >/dev/null 2>&1; then W_SAID=$(timeout 60 "$1" __daemon --version 2>&1 | head -n 1); '
-    + 'else W_SAID=$("$1" __daemon --version 2>&1 | head -n 1); fi; '
+  const env = Object.entries(fit.env ?? {}).filter(([k]) => /^[A-Z_][A-Z0-9_]*$/.test(k)).map(([k, v]) => `${k}=${shq(v)}`).join(' ')
+  const run = env ? `env ${env} "$1"` : '"$1"'
+  return `w_fits() { if command -v timeout >/dev/null 2>&1; then W_SAID=$(timeout 60 ${env ? `env ${env} ` : ''}"$1" __daemon --version 2>&1 | head -n 1); `
+    + `else W_SAID=$(${run} __daemon --version 2>&1 | head -n 1); fi; `
     + `[ "$W_SAID" = ${shq(fit.version)} ]; }`
 }
 

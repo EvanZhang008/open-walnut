@@ -1090,6 +1090,11 @@ export class LocalDaemon {
     // read-at-boot contract. Scrub any INHERITED values first: this env is built
     // from ...process.env, so a var left over from whatever spawned us must not
     // silently enable retries the user's config has turned off.
+    // A remote test daemon's own identity (remote-isolation.ts), inherited when this server runs
+    // inside one of its sessions: this machine's daemon is not that one.
+    delete env.WALNUT_DAEMON_ISOLATED_FOR
+    delete env.WALNUT_DAEMON_ORPHAN_EXIT_MS
+    delete env.WALNUT_INSTALL_HOME
     delete env.WALNUT_TURN_RETRY
     delete env.WALNUT_TURN_RETRY_BUDGET_MS
     delete env.WALNUT_TURN_RETRY_MAX_ATTEMPTS

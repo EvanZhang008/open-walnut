@@ -90,6 +90,20 @@ function homeDir(): string {
   return process.env.WALNUT_INSTALL_HOME || process.env.WALNUT_HOME_OVERRIDE || process.env.HOME || os.homedir()
 }
 
+/**
+ * The env code-server runs with. For a test server's isolated daemon: HOME is its
+ * install home and no XDG dir points into the real one, so code-server's own config
+ * (~/.config/code-server/config.yaml, written when missing) and caches stay there too.
+ */
+function codeServerEnv(): NodeJS.ProcessEnv {
+  const own = process.env.WALNUT_INSTALL_HOME
+  if (!own) return { ...process.env }
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: own }
+  for (const k of ['XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_STATE_HOME', 'CODE_SERVER_CONFIG']) delete env[k]
+  env.CODE_SERVER_CONFIG = path.join(own, '.config', 'code-server', 'config.yaml')
+  return env
+}
+
 function libDir(): string {
   return path.join(homeDir(), '.local', 'lib')
 }
@@ -387,7 +401,7 @@ async function startCodeServer(entry: string, version: string): Promise<VscodeEn
   ], {
     detached: true,
     stdio: ['ignore', logFd, logFd],
-    env: { ...process.env },
+    env: codeServerEnv(),
   })
   child.unref()
   fs.closeSync(logFd)

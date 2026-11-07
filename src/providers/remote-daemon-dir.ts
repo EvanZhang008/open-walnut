@@ -111,7 +111,8 @@ export function buildDaemonDirProbeScript(opts: DirProbeScriptOpts = {}): string
     // An isolated root someone else made (or a symlink planted in its place) is never ours to fill.
     ...(opts.guardParent ? ['  p=$(dirname "$d"); if [ -L "$p" ] || { [ -e "$p" ] && [ ! -O "$p" ]; }; then echo not-owned; return; fi'] : []),
     '  e=$(mkdir -p "$d" 2>&1) || { w_reason "$e"; return; }',
-    ...(opts.guardParent ? ['  chmod 700 "$p" 2>/dev/null'] : []),
+    // Checked again after the mkdir: one planted between the check and the mkdir is caught here.
+    ...(opts.guardParent ? ['  if [ -L "$p" ] || [ ! -O "$p" ]; then echo not-owned; return; fi', '  chmod 700 "$p" 2>/dev/null'] : []),
     // A dir another user owns (or a symlink someone planted) is theirs to swap
     // the daemon in: never use it, even when it happens to be writable.
     '  if [ -L "$d" ] || [ ! -O "$d" ]; then echo not-owned; return; fi',

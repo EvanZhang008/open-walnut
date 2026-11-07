@@ -18,8 +18,9 @@ import path from 'node:path'
 import {
   ISOLATED_TMP_PREFIX, buildIsolatedRetireScript, daemonIdentityVerdict, describeIsolationRefusal, isOwnIsolatedRoot,
   isolatedDaemonEnv, isolatedLayout, isolatedProbeOpts, isolationKey, remoteIsolationFor, resolveIsolatedRoot,
-  testServerRemoteTermRoot, type RemoteIsolation,
+  testServerRemoteTermRoot, ownRootGuardSh, buildStaleIsolatedRootSweepScript, type RemoteIsolation,
 } from '../../src/providers/remote-isolation.js'
+import { buildBunInstallScript } from '../../src/providers/remote-runtime.js'
 import { buildDaemonDirProbeScript, chooseDaemonDir, parseDaemonDirProbe } from '../../src/providers/remote-daemon-dir.js'
 import { isProdDaemonDir } from '../../src/providers/ephemeral-replica-host.js'
 import { classifyHostConnectError } from '../../src/core/sessions/host-connect-hint.js'
@@ -104,7 +105,7 @@ describe('the layout and the start env: every dir under the root', () => {
     }
     expect(Object.keys(env).sort()).toEqual([
       'WALNUT_DAEMON_DIR', 'WALNUT_DAEMON_ISOLATED_FOR', 'WALNUT_DAEMON_ORPHAN_EXIT_MS', 'WALNUT_INSTALL_HOME',
-      'WALNUT_SECRETS_DIR_ROOT', 'WALNUT_STREAMS_DIR', 'WALNUT_TASK_DIR_ROOT', 'WALNUT_WORKTREES_ROOT',
+      'WALNUT_RUNTIME_DIR', 'WALNUT_SECRETS_DIR_ROOT', 'WALNUT_STREAMS_DIR', 'WALNUT_TASK_DIR_ROOT', 'WALNUT_WORKTREES_ROOT',
     ])
   })
   it('the $HOME root resolves only once the host\'s home is known', () => {
@@ -292,5 +293,84 @@ describe('the retire script, run for real', () => {
     fs.symlinkSync(target, link)
     expect(await retire(link)).toMatchObject({ code: 1, out: expect.stringContaining('walnut-isolated-not-owned') })
     expect(fs.readFileSync(path.join(target, 'keep'), 'utf8')).toBe('x')
+  })
+})
+
+describe('the bun install of an isolated daemon, run for real', () => {
+  it('pipes the installer into bash under the isolated HOME (never into mkdir), and reports its status', () => {
+    const scratch = tempDir('walnut-iso-bun-')
+    const bin = path.join(scratch, 'bin')
+    fs.mkdirSync(bin)
+    const installer = 'echo "installer ran HOME=$HOME BUN_INSTALL=$BUN_INSTALL" > "$HOME/ran"; exit 0'
+    fs.writeFileSync(path.join(bin, 'curl'), `#!/bin/sh\nprintf '%s\\n' '${installer}'\n`, { mode: 0o755 })
+    const own = path.join(scratch, 'root', 'home')
+    const realHome = path.join(scratch, 'real-home')
+    fs.mkdirSync(realHome)
+    const out = execFileSync('/bin/sh', ['-s'], {
+      input: buildBunInstallScript(path.join(scratch, 'install.log'), 'https://bun.example/install', { installHome: own }),
+      encoding: 'utf-8', env: { PATH: `${bin}:/usr/bin:/bin`, HOME: realHome },
+    })
+    expect(out).toMatch(/^install_rc=0$/m)
+    expect(fs.readFileSync(path.join(own, 'ran'), 'utf8').trim()).toBe(`installer ran HOME=${own} BUN_INSTALL=${own}/.bun`)
+    expect(fs.readdirSync(realHome)).toEqual([])
+  })
+})
+
+describe('ownRootGuardSh', () => {
+  const run = (script: string) => { try { execFileSync('/bin/sh', ['-c', script], { encoding: 'utf-8' }); return 0 } catch (e) { return (e as { status: number }).status } }
+  it('makes a missing root 0700 with create, and passes an own root', () => {
+    const r = path.join(tempDir('walnut-iso-guard-'), 'root')
+    expect(run(`${ownRootGuardSh(r)}; echo ok`)).toBe(0)
+    expect(fs.existsSync(r)).toBe(false)
+    expect(run(`${ownRootGuardSh(r, { create: true })}; echo ok`)).toBe(0)
+    expect(fs.statSync(r).mode & 0o777).toBe(0o700)
+  })
+  it('stops the script on a symlink or a file in its place', () => {
+    const d = tempDir('walnut-iso-guard-')
+    fs.symlinkSync(d, path.join(d, 'link'))
+    fs.writeFileSync(path.join(d, 'file'), 'x')
+    for (const r of [path.join(d, 'link'), path.join(d, 'file')]) {
+      expect(run(`${ownRootGuardSh(r, { create: true })}; touch ${d}/after`)).toBe(97)
+    }
+    expect(fs.existsSync(path.join(d, 'after'))).toBe(false)
+  })
+})
+
+describe('the stale test root sweep, run for real', () => {
+  it('removes only gone test servers\' roots this user owns, untouched for long enough', async () => {
+    const home = tempDir('walnut-iso-sweep-home-')
+    const cache = path.join(home, '.cache', 'open-walnut-test')
+    const mk = (name: string, ageMin: number) => {
+      const r = path.join(cache, name)
+      fs.mkdirSync(path.join(r, 'daemon'), { recursive: true })
+      const t = new Date(Date.now() - ageMin * 60_000)
+      fs.utimesSync(r, t, t)
+      return r
+    }
+    const own = 'a'.repeat(16)
+    const stale = mk('b'.repeat(16), 200)
+    const fresh = mk('c'.repeat(16), 10)
+    const mine = mk(own, 200)
+    const notKey = mk('claude', 200)
+    const liveDaemon = mk('d'.repeat(16), 200)
+    const liveTerm = mk('e'.repeat(16), 200)
+    const elsewhere = tempDir('walnut-iso-sweep-target-')
+    fs.symlinkSync(elsewhere, path.join(cache, 'f'.repeat(16)))
+    fs.utimesSync(liveDaemon, new Date(Date.now() - 200 * 60_000), new Date(Date.now() - 200 * 60_000))
+    const daemon = spawn('/bin/sh', ['-c', 'sleep 600; true', `${liveDaemon}/daemon/daemon.cjs`, '--start'], { stdio: 'ignore' })
+    const term = spawn('/bin/sh', ['-c', 'sleep 600; true'], { stdio: 'ignore' })
+    children.push(daemon, term)
+    fs.writeFileSync(`${liveDaemon}/daemon/daemon.pid`, String(daemon.pid))
+    fs.mkdirSync(`${liveTerm}/term`)
+    fs.writeFileSync(`${liveTerm}/term/s1.pid`, String(term.pid))
+    for (const r of [liveDaemon, liveTerm]) { const t = new Date(Date.now() - 200 * 60_000); fs.utimesSync(r, t, t) }
+    const out = await new Promise<string>((resolve, reject) => {
+      const c = execFile('/bin/sh', ['-s'], { encoding: 'utf-8', env: { PATH: '/usr/bin:/bin', HOME: home } }, (err, stdout) => err ? reject(err) : resolve(stdout))
+      c.stdin!.end(buildStaleIsolatedRootSweepScript(own))
+    })
+    expect(out).toMatch(/walnut-sweep-done/)
+    expect(fs.existsSync(stale)).toBe(false)
+    for (const kept of [fresh, mine, notKey, liveDaemon, liveTerm, elsewhere]) expect(fs.existsSync(kept), kept).toBe(true)
+    expect(fs.lstatSync(path.join(cache, 'f'.repeat(16))).isSymbolicLink()).toBe(true)
   })
 })

@@ -712,6 +712,10 @@ const hostRuntime = createHostRuntime({
 })
 const bootPath = hostRuntime.computeDaemonPath()
 process.env.PATH = bootPath.path
+// A test server's isolated daemon installs Claude Code and dtach under its own HOME
+// (host-fix-core.ts): its sessions find them there. Keep in sync with daemon-source.ts.
+const INSTALL_HOME_BIN = process.env.WALNUT_INSTALL_HOME ? path.join(process.env.WALNUT_INSTALL_HOME, '.local', 'bin') : ''
+if (INSTALL_HOME_BIN) process.env.PATH = process.env.PATH + path.delimiter + INSTALL_HOME_BIN
 // 'hostfix-v1': the named, idempotent fixes host.fix runs (host-fix-core.ts).
 // Keep in sync with daemon-source.ts.
 const hostFix = createHostFix({
@@ -1330,7 +1334,7 @@ function buildSpawnPreamble(nodeDir?: string, gatewayFirst = false): string {
     // template) so `walnut` — the peer-session CLI shim — is on every session's
     // PATH. Keep in sync with daemon-source.ts.
     'export PATH="$PATH:$HOME/.toolbox/bin:$HOME/.local/bin:$HOME/.npm-global/bin:'
-      + GATEWAY_SHIM_DIR + '"',
+      + (INSTALL_HOME_BIN ? INSTALL_HOME_BIN + ':' : '') + GATEWAY_SHIM_DIR + '"',
     // A node hostRuntime.ensureClaude() found outside PATH (e.g. an older nvm
     // version on a host whose newest node needs a newer glibc) is only used when
     // the rc PATH gives no working node.
@@ -6587,6 +6591,12 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
       // daemon's own exit policy, and a CLI that starts a daemon of its own must
       // not hand it on. Keep in sync with daemon-source.ts.
       WALNUT_DAEMON_KEEP_SESSIONS: undefined,
+      // A test server's isolated daemon (remote-isolation.ts) is this daemon's own identity: a
+      // daemon a CLI starts (a nested test server's) must not claim it. Keep in sync with the twin.
+      WALNUT_DAEMON_ISOLATED_FOR: undefined,
+      WALNUT_DAEMON_ORPHAN_EXIT_MS: undefined,
+      WALNUT_INSTALL_HOME: undefined,
+      WALNUT_RUNTIME_DIR: undefined,
       // And the service state dir: a daemon a CLI starts (a test, a sandbox) is isolated,
       // and with this var it could reach the service daemon's journals and state.
       // Keep in sync with daemon-source.ts.
@@ -11704,12 +11714,23 @@ const hostExec = createHostExec({
 })
 // A task on another host calling this host's MCP servers ('host-mcp-v1', host-mcp-core.ts)
 // and its web services ('host-http-v1', host-http-core.ts). PARITY: keep in sync with daemon-source.ts.
+/**
+ * The MCP servers of a test server's isolated daemon (WALNUT_INSTALL_HOME) keep the real
+ * HOME (their own config and sign-ins live there) but put what `npx -y` / `uvx` fetch
+ * under the isolated install home. PARITY: daemon-source.ts reachEnv.
+ */
+function hostMcpEnv(): Record<string, string> {
+  const env = hostExecEnv()
+  const own = process.env.WALNUT_INSTALL_HOME
+  if (own) Object.assign(env, { npm_config_cache: path.join(own, '.npm'), XDG_CACHE_HOME: path.join(own, '.cache'), UV_CACHE_DIR: path.join(own, '.cache', 'uv'), PIP_CACHE_DIR: path.join(own, '.cache', 'pip') })
+  return env
+}
 const hostMcp = createHostMcp({
   spawn: (command, args, opts) => spawn(command, args, opts),
   killGroup: (pid, signal) => { if (pid > 1) process.kill(-pid, signal) },
   shell: sessionShell(),
   home: HOME_DIR,
-  env: hostExecEnv(),
+  env: hostMcpEnv(),
 })
 const hostHttp = createHostHttp()
 

@@ -1550,6 +1550,9 @@ const hostRuntime = (__CREATE_HOST_RUNTIME__)({
 });
 const bootPath = hostRuntime.computeDaemonPath();
 process.env.PATH = bootPath.path;
+// A test server's isolated daemon installs Claude Code and dtach under its own HOME
+// (host-fix-core.ts): its sessions find them there. Keep in sync with daemon-standalone.ts.
+if (process.env.WALNUT_INSTALL_HOME) process.env.PATH = process.env.PATH + path.delimiter + path.join(process.env.WALNUT_INSTALL_HOME, '.local', 'bin');
 // 'hostfix-v1': the named, idempotent fixes host.fix runs (host-fix-core.ts,
 // injected as text). Keep in sync with daemon-standalone.ts.
 const hostFix = (__CREATE_HOST_FIX__)({
@@ -7456,6 +7459,12 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
       // Same for the keep-sessions switch (this daemon's own exit policy): a CLI
       // that starts a daemon of its own must not hand it on.
       WALNUT_DAEMON_KEEP_SESSIONS: undefined,
+      // A test server's isolated daemon (remote-isolation.ts) is this daemon's own identity: a
+      // daemon a CLI starts (a nested test server's) must not claim it. Keep in sync with the twin.
+      WALNUT_DAEMON_ISOLATED_FOR: undefined,
+      WALNUT_DAEMON_ORPHAN_EXIT_MS: undefined,
+      WALNUT_INSTALL_HOME: undefined,
+      WALNUT_RUNTIME_DIR: undefined,
       // And the service state dir: a daemon a CLI starts is isolated, and with this var
       // it could reach the service daemon's journals. Keep in sync with daemon-standalone.ts.
       WALNUT_DAEMON_STATE_DIR: undefined,
@@ -13276,6 +13285,14 @@ try {
     reachEnv[k] = v;
   }
   reachEnv.HOME = process.env.HOME || HOME_DIR;
+  // A test server's isolated daemon: what npx -y / uvx fetch goes under its install home (the real HOME keeps the servers' config). PARITY: daemon-standalone.ts hostMcpEnv.
+  if (process.env.WALNUT_INSTALL_HOME) {
+    const own = process.env.WALNUT_INSTALL_HOME;
+    reachEnv.npm_config_cache = path.join(own, '.npm');
+    reachEnv.XDG_CACHE_HOME = path.join(own, '.cache');
+    reachEnv.UV_CACHE_DIR = path.join(own, '.cache', 'uv');
+    reachEnv.PIP_CACHE_DIR = path.join(own, '.cache', 'pip');
+  }
   hostMcp = hostReachCore.createHostMcp({
     spawn: function (command, args, opts) { return spawn(command, args, opts); },
     killGroup: function (pid, signal) { if (pid > 1) process.kill(-pid, signal); },

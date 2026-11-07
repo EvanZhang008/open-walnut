@@ -77,7 +77,7 @@ import {
 } from './remote-daemon-dir.js'
 import {
   buildIsolatedRetireScript, daemonIdentityVerdict, describeIsolationRefusal, isOwnIsolatedRoot, isolatedDaemonEnv, isolatedLayout,
-  isolatedProbeOpts, isolatedRootOfDaemonDir, remoteIsolationFor, resolveIsolatedRoot, type RemoteIsolation,
+  isolatedProbeOpts, isolatedRootOfDaemonDir, remoteIsolationFor, resolveIsolatedRoot, type RemoteIsolation, buildStaleIsolatedRootSweepScript,
 } from './remote-isolation.js'
 import {
   buildBunInstallScript, buildBunProbeScript, installTailForError, isRuntimeStartFailure, nextRuntimeAfterStartFailure,
@@ -3363,6 +3363,24 @@ export class DaemonConnection {
     }
     this._remoteDir = choice.path
     this._dirChoice = choice
+    const iso = this.isolation
+    if (iso.mode === 'isolated' && !iso.replica && !this._staleRootsSwept) {
+      this._staleRootsSwept = true
+      void this.sweepStaleIsolatedRoots(iso.key)
+    }
+  }
+
+  private _staleRootsSwept = false
+
+  /** Once per connection: remove the roots gone test servers left on this host (remote-isolation.ts). Never fails the connect. */
+  private async sweepStaleIsolatedRoots(ownKey: string): Promise<void> {
+    try {
+      const out = await this.sshExec(buildStaleIsolatedRootSweepScript(ownKey), 20_000)
+      const swept = out.split('\n').filter((l) => l.startsWith('walnut-swept ')).map((l) => l.slice('walnut-swept '.length))
+      if (swept.length) log.session.info('DaemonConnection: removed test roots gone test servers left', { host: this.hostKey, swept })
+    } catch (err) {
+      log.session.warn('DaemonConnection: stale test root sweep failed', { host: this.hostKey, error: err instanceof Error ? err.message : String(err) })
+    }
   }
 
   /** Env the daemon needs for the chosen dir (empty on /tmp; a test server's whole isolated layout). */
@@ -4857,7 +4875,7 @@ export class DaemonConnection {
     const home = lookThere && rootSpec.startsWith('$HOME') ? (await this.sshExec('printf %s "$HOME"', 10_000)).trim() : ''
     const alsoAt = !lookThere ? [] : !rootSpec.startsWith('$HOME') ? [`${rootSpec}/app/${file.id}/walnut`] : home.startsWith('/') ? [`${rootSpec.replace('$HOME', home)}/app/${file.id}/walnut`] : []
     // Run once before it goes in (its daemon version, which also proves it runs here), and only with room for it.
-    const fit = { version: this.getExpectedDaemonVersion() }
+    const fit: SlotFit = { version: this.getExpectedDaemonVersion(), ...(iso.mode === 'isolated' ? { env: this.dirEnv } : {}) }
     const rawBytes = file.gz.length >= 18 ? file.gz.readUInt32LE(file.gz.length - 4) : 0
     const checked = await this.sshExec(slotCheckScript(slot, file.sha256, alsoAt, { ...fit, needKb: slotNeedKb(Math.max(rawBytes, file.gz.length)) }), 120_000)
     const found = parseSlotAnswer(checked)
@@ -4973,7 +4991,7 @@ export class DaemonConnection {
         const versionFile = localBinaryPath + '.version'
         const localVersion = fs.readFileSync(versionFile, 'utf-8').trim()
         const remoteDaemonPath = await this.getRemoteDaemonPath()
-        const remoteVersion = await this.sshExec(`${shq(remoteDaemonPath)} --version 2>/dev/null`, 5_000)
+        const remoteVersion = await this.sshExec(`${this.dirEnvPrefix}${shq(remoteDaemonPath)} --version 2>/dev/null`, 5_000)
         if (localVersion && remoteVersion && localVersion === remoteVersion) {
           needsDeploy = false
           log.session.info('DaemonConnection: binary already up to date', {
