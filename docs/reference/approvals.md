@@ -122,7 +122,32 @@ What each strength guards:
 | `POST /api/v1/approvals/keys` | a person | `{ publicKey, name, kind }` (base64 DER P-256 SPKI) |
 | `DELETE /api/v1/approvals/keys/:id` | a person | removes one (never the last) |
 
-Ops for agents: `approval_request`, `approval_wait`, `approval_cancel`, `approval_list`.
+Ops for agents: `approval_request`, `approval_wait`, `approval_consume`, `approval_cancel`, `approval_list`.
+
+### Strict single-use steps
+
+`approval_request` also accepts `single_use: true` and `signing_key_id`, with biometric mode,
+operation context in `detail`, and a timeout of at most five minutes. It requires a task session
+and an active signing device. No device means refusal, never a tap fallback. The server wraps the
+context in a signed JSON detail: `{version:"walnut-single-use-v1", sessionId, taskId, host,
+signingKeyId, nonce, context}`. Identity comes from the caller, nonce is 32 random bytes, and the
+existing approval digest signs the entire envelope and its expiry. Existing clients can still
+show and sign the detail without a new digest format.
+
+For these requests, `approval_wait` reads the answer without spending it (`used: false`). The
+asker rebuilds the original operation context from the current state and verifies the record's
+digest and signature against its pinned public key. Then `approval_consume` calls
+`POST /api/v1/approvals/:id/consume` with `{token, digest, detail}`, where `detail` is that rebuilt
+context, not the envelope. The store checks the same task session and host, context, signature,
+required signing device and expiry under its file lock. Success returns `{approval, used:true}`
+and durably spends the nonce. Every later consume is `409 approval_used`, including a retry
+within a second. A lost response is not permission to run: ask again. Deny, timeout, unsigned or
+forged answers, removed signing devices and mismatches never grant a use.
+
+This step guards scripts that call it. It does not prevent a process from deleting the call,
+rewriting user-owned code or using credentials it already holds. Strong enforcement of a Git
+push additionally needs credentials isolated from the agent and an executor that verifies and
+pushes only the approved SHA to the approved remote and ref.
 
 The asking session hears the answer (`src/core/approvals/tell-asker.ts`). A `walnut approve` still waiting reads the decision itself; when nothing of the asker read it within 15 seconds of an Approve, a Deny or the deadline (a session that asked with `approval_request` and ended its turn, a command stopped meanwhile), Walnut sends that session one Walnut note with the decision, which wakes it when idle. Every way of answering ends in the store's `announce()`, so the web notice, the phone, Touch ID, Face ID and expiry all tell it; a withdrawal tells no one. `tests/core/approvals/tell-asker.test.ts` fails on a store path that ends an approval without announcing it.
 

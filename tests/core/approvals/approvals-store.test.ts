@@ -13,7 +13,7 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-approvals
 
 import { WALNUT_HOME } from '../../../src/constants.js'
 import {
-  answerApproval, cancelApproval, createApproval, getApproval, listApprovals, sweepExpired, waitApproval, ApprovalError,
+  answerApproval, cancelApproval, consumeApproval, createApproval, getApproval, listApprovals, sweepExpired, waitApproval, ApprovalError,
   _resetApprovalTimersForTesting, APPROVAL_PENDING_MAX,
 } from '../../../src/core/approvals/store.js'
 import { answerMessage, approvalDigest, canonicalText, keyIdOf, verifySignature } from '../../../src/core/approvals/digest.js'
@@ -219,6 +219,101 @@ describe('biometric approvals and device keys', () => {
     expect(b.enrollment?.id).toBe(a.enrollment?.id)
     const open = (await listApprovals({ status: 'pending' })).filter((x) => x.enrollsKey === mac.id)
     expect(open).toHaveLength(1)
+  })
+})
+
+describe('strict single-use approvals', () => {
+  const owner = { host: 'build-box', taskId: 'task-1', sessionId: 'session-1' }
+  const fields = {
+    repo: '/work/repo', remote: 'ssh://example.com/private/repo', localRef: 'refs/heads/scratch',
+    sha: 'ab'.repeat(20), remoteRef: 'refs/heads/scratch', argv: ['git', 'push', 'origin', 'scratch'],
+    session: owner.sessionId, task: owner.taskId, nonce: '0123456789abcdef'.repeat(4),
+  }
+  const detail = JSON.stringify(fields)
+  async function signed() {
+    const key = softKey()
+    await enrollKey({ publicKey: key.spki, name: 'Test phone', kind: 'iphone', firstAllowed: true })
+    const made = await createApproval({ what: 'Allow one Git push?', mode: 'biometric', requester: owner,
+      detail, singleUse: true, signingKeyId: key.id, timeoutMs: 300_000 })
+    await answerApproval(made.approval.id, { decision: 'approve', device: { name: 'Test phone', kind: 'iphone' },
+      keyId: key.id, signature: key.sign(answerMessage(made.approval.digest, 'approve')) }, lookup)
+    return { ...made, key, input: { token: made.waitToken, digest: made.approval.digest, detail, requester: owner } }
+  }
+
+  it('wait reads without spending, then concurrent consumers get exactly one use with no grace', async () => {
+    const a = await signed()
+    for (let i = 0; i < 2; i++) expect(await waitApproval(a.approval.id, a.waitToken, 0)).toMatchObject({ used: false, approval: { status: 'approved' } })
+    expect((await getApproval(a.approval.id))?.consumedAt).toBeUndefined()
+    const results = await Promise.allSettled(Array.from({ length: 5 }, () => consumeApproval(a.approval.id, a.input, lookup)))
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1)
+    for (const r of results) if (r.status === 'rejected') expect(r.reason.code).toBe('approval_used')
+    expect((await getApproval(a.approval.id))?.consumedAt).toBeTruthy()
+    await rejects(consumeApproval(a.approval.id, a.input, lookup), 'approval_used')
+  })
+
+  it.each(Object.keys(fields))('rejects a changed %s before consuming', async (field) => {
+    const a = await signed()
+    const changed = JSON.stringify({ ...fields, [field]: 'different' })
+    await rejects(consumeApproval(a.approval.id, { ...a.input, detail: changed }, lookup), 'changed')
+    expect((await getApproval(a.approval.id))?.consumedAt).toBeUndefined()
+    expect((await consumeApproval(a.approval.id, a.input, lookup)).used).toBe(true)
+  })
+
+  it.each(['sessionId', 'taskId', 'host'])('rejects another %s even with the wait token', async (field) => {
+    const a = await signed()
+    await rejects(consumeApproval(a.approval.id, { ...a.input, requester: { ...owner, [field]: 'other' } }, lookup), 'wrong_asker')
+    await rejects(consumeApproval(a.approval.id, { ...a.input, token: 'wrong' }, lookup), 'bad_token')
+    await rejects(consumeApproval(a.approval.id, { ...a.input, digest: '00'.repeat(32) }, lookup), 'changed')
+  })
+
+  it('refuses an approved record after expiry, not just an unanswered one', async () => {
+    const a = await signed()
+    vi.useFakeTimers({ now: Date.now() + 300_001, toFake: ['Date'] })
+    try { await rejects(consumeApproval(a.approval.id, a.input, lookup), 'approval_expired') }
+    finally { vi.useRealTimers() }
+    expect((await getApproval(a.approval.id))?.consumedAt).toBeUndefined()
+  })
+
+  it('defaults to five minutes and signs the caller, fresh nonce and exact Unicode context', async () => {
+    const key = softKey()
+    const base = { what: 'One step', mode: 'biometric' as const, singleUse: true, signingKeyId: key.id, requester: owner }
+    const context = 'Line one\n"quoted" \\ path ' + String.fromCodePoint(0x4e2d, 0x6587)
+    const a = await createApproval({ ...base, detail: context })
+    const b = await createApproval({ ...base, detail: context })
+    expect(Date.parse(a.approval.expiresAt) - Date.parse(a.approval.createdAt)).toBe(300_000)
+    const envelope = JSON.parse(a.approval.detail!)
+    expect(envelope).toMatchObject({ version: 'walnut-single-use-v1', ...owner, signingKeyId: key.id, context })
+    expect(envelope.nonce).toMatch(/^[0-9a-f]{64}$/)
+    expect(JSON.parse(b.approval.detail!).nonce).not.toBe(envelope.nonce)
+    await rejects(createApproval({ ...base, detail: '\ud800' }), 'bad_request')
+    await rejects(createApproval({ ...base, detail: '\n'.repeat(20_000) + 'x' }), 'bad_request')
+  })
+
+  it('rechecks signatures and the device, refusing a forged record or a revoked device', async () => {
+    const a = await signed()
+    await rejects(consumeApproval(a.approval.id, a.input, async () => undefined), 'bad_signature')
+    await rejects(consumeApproval(a.approval.id, a.input, async (id) => ({ id, publicKey: softKey().spki, name: 'Wrong', kind: 'mac-app' })), 'bad_signature')
+    const file = `${WALNUT_HOME}/approvals/approvals.json`
+    const data = JSON.parse(await fs.readFile(file, 'utf8'))
+    data.approvals[0].answer.signature = 'AAAA'
+    await fs.writeFile(file, JSON.stringify(data))
+    await rejects(consumeApproval(a.approval.id, a.input, lookup), 'bad_signature')
+  })
+
+  it('never accepts tap, a proven unsigned answer, a different device, or a long lifetime', async () => {
+    const key = softKey(), other = softKey()
+    const getKey = async (id: string) => ({ id, name: 'Test', kind: 'mac-app' as const, publicKey: id === key.id ? key.spki : other.spki })
+    const base = { what: 'Git restore', requester: owner, detail, singleUse: true, signingKeyId: key.id, timeoutMs: 300_000 }
+    await rejects(createApproval({ ...base, mode: 'tap' }), 'strict_approval_required')
+    await rejects(createApproval({ ...base, mode: 'biometric', downgraded: 'No device' }), 'strict_approval_required')
+    await rejects(createApproval({ ...base, mode: 'biometric', timeoutMs: 300_001 }), 'strict_approval_required')
+    const a = await createApproval({ ...base, mode: 'biometric' })
+    await rejects(answerApproval(a.approval.id, { decision: 'approve', proven: true, device: { name: 'Web', kind: 'web' } }, getKey), 'biometric_required')
+    await rejects(answerApproval(a.approval.id, { decision: 'approve', keyId: other.id,
+      signature: other.sign(answerMessage(a.approval.digest, 'approve')), device: { name: 'Other', kind: 'mac-app' } }, getKey), 'biometric_required')
+    const denied = await answerApproval(a.approval.id, { decision: 'deny', device: { name: 'Web', kind: 'web' } }, getKey)
+    expect(denied.status).toBe('denied')
+    await rejects(consumeApproval(a.approval.id, { token: a.waitToken, digest: a.approval.digest, detail, requester: owner }, getKey), 'not_approved')
   })
 })
 

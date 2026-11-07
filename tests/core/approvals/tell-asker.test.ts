@@ -70,6 +70,14 @@ describe('the asking session hears the decision', () => {
     expect(text).toContain('git push origin main')
   })
 
+  it('a strict signed decision tells the session to consume before running', () => {
+    const notice = askerNoticeFor({ id: 'apr-strict', what: 'One push', status: 'approved', requester,
+      singleUse: true, answer: { decision: 'approve', at: new Date().toISOString(), mode: 'biometric', device: { name: 'Mac', kind: 'mac-app' } } })
+    expect(notice?.body).toContain('Do not run yet')
+    expect(notice?.body).toContain('approval_consume')
+    expect(notice?.body).not.toContain('Go ahead')
+  })
+
   it('a Deny', async () => {
     const { approval } = await createApproval({ what: 'Push the release', mode: 'tap', requester })
     await answerApproval(approval.id, { decision: 'deny', device: { name: 'iPhone', kind: 'iphone' } }, lookup)

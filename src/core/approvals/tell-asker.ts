@@ -22,7 +22,7 @@ const REARM_WITHIN_MS = 30 * 60_000
 const pending = new Set<string>()
 let graceMs = ASKER_GRACE_MS
 
-type NoticeInput = Pick<ApprovalRecord, 'id' | 'what' | 'status' | 'answer' | 'requester' | 'consumedAt' | 'readAt' | 'askerToldAt'>
+type NoticeInput = Pick<ApprovalRecord, 'id' | 'what' | 'status' | 'answer' | 'requester' | 'consumedAt' | 'readAt' | 'askerToldAt' | 'singleUse'>
 
 /** Whether this decision is one the asking session must hear about, and in which words. */
 export function askerNoticeFor(rec: NoticeInput): { outcome: 'approved' | 'denied' | 'expired'; body: string } | null {
@@ -38,6 +38,7 @@ export function askerNoticeFor(rec: NoticeInput): { outcome: 'approved' | 'denie
     const where = rec.answer?.device.name ? ` on ${rec.answer.device.name}` : ''
     const at = rec.answer?.at ? ` at ${rec.answer.at}` : ''
     if (rec.status === 'approved') {
+      if (rec.singleUse) return { outcome: 'approved', body: `Approved: "${what}". Request ${rec.id} was signed with ${by}${where}${at}. Do not run yet: verify the signed record, rebuild the current operation context and call approval_consume. Run only after used:true; a changed or expired operation needs a new approval.${once}` }
       return { outcome: 'approved', body: `Approved: "${what}". Your approval request ${rec.id} was approved by the person, with ${by}${where}${at}. Go ahead with that step now${step}, then report the result where you planned to.${once}` }
     }
     return { outcome: 'denied', body: `Denied: "${what}". Your approval request ${rec.id} was denied by the person, with ${by}${where}${at}. Do not take that step${step}; carry on without it, or ask again only if something changed.` }

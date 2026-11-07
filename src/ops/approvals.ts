@@ -36,7 +36,9 @@ defineOp({
     what: z.string().min(1).max(300).describe('What is to be approved, one line (shown as the title)'),
     detail: z.string().max(32_000).optional().describe('The detail the person reads before answering (a diff summary, the command, the target)'),
     mode: z.enum(['tap', 'biometric']).optional().describe('tap (default): a plain Approve; biometric: Face ID / Touch ID on a device that signs'),
-    timeout_ms: z.number().int().min(10_000).max(86_400_000).optional().describe('Unanswered after this long = expired (default 10 minutes)'),
+    single_use: z.boolean().optional().describe('Strict signed approval: no tap fallback; wait only reads, approval_consume spends it once before expiry (at most 5 minutes). Requires a task session.'),
+    signing_key_id: z.string().min(1).max(80).optional().describe('The enrolled signing device required for a single-use approval'),
+    timeout_ms: z.number().int().min(10_000).max(86_400_000).optional().describe('Unanswered after this long = expired (default 10 minutes, or 5 minutes for single_use)'),
     cwd: z.string().optional().describe('The asking process\'s working directory, shown to the person'),
     command: z.string().optional().describe('A short name for the asking script or command, shown to the person'),
   },
@@ -59,7 +61,24 @@ defineOp({
   },
   bind: { method: 'POST', path: '/approvals/:id/wait' },
   timeoutMs: 20_000,
-  mapResult: ({ body }) => withOutcome(body as Record<string, unknown>, stateLine(body), 'Go on only when status is approved.'),
+  mapResult: ({ body }) => withOutcome(body as Record<string, unknown>, stateLine(body), (body as { approval?: { singleUse?: boolean } }).approval?.singleUse
+    ? 'Do not run yet. Verify the signed record, rebuild the current operation context, then approval_consume; run only after used:true.'
+    : 'Go on only when status is approved.'),
+  tags: { readonly: false, remote: 'allow', primaryOnly: true },
+});
+
+defineOp({
+  name: 'approval_consume',
+  title: 'Use one signed approval',
+  description: 'Use a single_use approval exactly once, after checking its signature and rebuilding detail from the operation about to run. Requires the same task session and host, an unexpired signature and matching digest and detail. No retry grace: a lost response means ask again, never run.',
+  input: {
+    id: z.string().min(1).describe('The approval id'),
+    token: z.string().min(1).describe('The waitToken returned to the asker'),
+    digest: z.string().regex(/^[0-9a-f]{64}$/).describe('The verified approval digest'),
+    detail: z.string().min(1).max(32_000).describe('The original operation context rebuilt from its current state, without the server-generated signed envelope'),
+  },
+  bind: { method: 'POST', path: '/approvals/:id/consume' },
+  mapResult: ({ body }) => withOutcome(body as Record<string, unknown>, 'The signed approval was used once.', 'Run only this approved operation; a retry needs a new approval.'),
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
 

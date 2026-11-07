@@ -120,12 +120,19 @@ approvalsV1Router.post('/approvals', (req: Request, res: Response, next: NextFun
   if (leaderOnly(res)) return
   void answer(res, next, async () => {
     const body = (req.body ?? {}) as Record<string, unknown>
-    const { createApproval } = await import('../../core/approvals/store.js')
+    const { createApproval, ApprovalError } = await import('../../core/approvals/store.js')
+    const singleUse = body.single_use === true
+    const requester = await requesterOf(req, body)
     const { activeKeys } = await import('../../core/approvals/keys.js')
     const wanted: ApprovalMode = body.mode === 'biometric' ? 'biometric' : 'tap'
     let mode = wanted
     let downgraded: string | undefined
-    if (wanted === 'biometric' && (await activeKeys()).length === 0) {
+    const keys = await activeKeys()
+    if (singleUse && (wanted !== 'biometric' || !requester.sessionId || !requester.taskId
+      || !keys.some((key) => key.id === body.signing_key_id))) {
+      throw new ApprovalError(403, 'strict_approval_required', 'A single-use approval needs a task session and its enrolled signing device; it never falls back to a tap.')
+    }
+    if (wanted === 'biometric' && keys.length === 0) {
       mode = 'tap'
       downgraded = 'No device signs approvals yet (the Walnut iPhone app, or the Mac app on a Mac with Touch ID, sets one up), so this asks for a tap.'
     }
@@ -134,7 +141,8 @@ approvalsV1Router.post('/approvals', (req: Request, res: Response, next: NextFun
       what: String(body.what ?? ''),
       detail: typeof body.detail === 'string' ? body.detail : undefined,
       mode, timeoutMs, downgraded,
-      requester: await requesterOf(req, body),
+      requester,
+      ...(singleUse ? { singleUse: true, signingKeyId: String(body.signing_key_id) } : {}),
       testRun: ambientTestRun(),
     })
     return { approval, waitToken, ...(downgraded ? { downgraded } : {}) }
@@ -204,6 +212,21 @@ approvalsV1Router.post('/approvals/:id/wait', (req: Request, res: Response, next
     const { waitApproval } = await import('../../core/approvals/store.js')
     const waitMs = typeof body.wait_ms === 'number' && body.wait_ms >= 0 ? Math.min(APPROVAL_WAIT_MAX_MS, body.wait_ms) : APPROVAL_WAIT_MAX_MS
     return waitApproval(param(req.params.id), typeof body.token === 'string' ? body.token : undefined, waitMs)
+  })
+})
+
+approvalsV1Router.post('/approvals/:id/consume', (req: Request, res: Response, next: NextFunction) => {
+  if (leaderOnly(res)) return
+  void answer(res, next, async () => {
+    const body = (req.body ?? {}) as Record<string, unknown>
+    const { consumeApproval } = await import('../../core/approvals/store.js')
+    const { activeKey } = await import('../../core/approvals/keys.js')
+    return consumeApproval(param(req.params.id), {
+      token: typeof body.token === 'string' ? body.token : '',
+      digest: typeof body.digest === 'string' ? body.digest : '',
+      detail: typeof body.detail === 'string' ? body.detail : '',
+      requester: await requesterOf(req, body),
+    }, activeKey)
   })
 })
 

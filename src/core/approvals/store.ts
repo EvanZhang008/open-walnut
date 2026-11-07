@@ -142,6 +142,8 @@ export interface CreateInput {
   removesKey?: string
   testRun?: string
   guard?: ApprovalGuard
+  singleUse?: boolean
+  signingKeyId?: string
 }
 
 /** Whether a viewer (its test-run label, or none for the person) sees this approval. */
@@ -168,13 +170,36 @@ export function cleanWhat(raw: unknown): string {
   return what
 }
 
+function singleUseDetailMatches(detail: string | undefined, requester: ApprovalRequester, signingKeyId: string | undefined): boolean {
+  if (!detail || !signingKeyId || !requester.sessionId || !requester.taskId) return false
+  try {
+    const value = JSON.parse(detail)
+    return value?.version === 'walnut-single-use-v1' && value.sessionId === requester.sessionId
+      && value.taskId === requester.taskId && value.host === requester.host && value.signingKeyId === signingKeyId
+      && typeof value.nonce === 'string' && /^[0-9a-f]{64}$/.test(value.nonce)
+      && typeof value.context === 'string' && value.context.length > 0
+  } catch { return false }
+}
+
 export async function createApproval(input: CreateInput): Promise<{ approval: ApprovalView; waitToken: string }> {
   const what = cleanWhat(input.what)
-  const detail = typeof input.detail === 'string' && input.detail.trim() ? wellFormed(input.detail) : undefined
-  if (detail && detail.length > APPROVAL_DETAIL_MAX) {
-    throw new ApprovalError(400, 'bad_request', `detail is at most ${APPROVAL_DETAIL_MAX} characters.`)
+  if (input.singleUse && typeof input.detail === 'string' && wellFormed(input.detail) !== input.detail) {
+    throw new ApprovalError(400, 'bad_request', 'Single-use operation context must be well-formed Unicode; it is never normalized.')
   }
-  const timeout = Math.min(APPROVAL_MAX_TIMEOUT_MS, Math.max(APPROVAL_MIN_TIMEOUT_MS, input.timeoutMs ?? APPROVAL_DEFAULT_TIMEOUT_MS))
+  let detail = typeof input.detail === 'string' && input.detail.trim() ? wellFormed(input.detail) : undefined
+  if (input.singleUse && detail) {
+    detail = JSON.stringify({ version: 'walnut-single-use-v1', sessionId: input.requester.sessionId,
+      taskId: input.requester.taskId, host: input.requester.host, signingKeyId: input.signingKeyId,
+      nonce: crypto.randomBytes(32).toString('hex'), context: detail })
+  }
+  if (detail && detail.length > APPROVAL_DETAIL_MAX) {
+    throw new ApprovalError(400, 'bad_request', input.singleUse ? `The signed context envelope exceeds ${APPROVAL_DETAIL_MAX} characters; shorten the operation context.` : `detail is at most ${APPROVAL_DETAIL_MAX} characters.`)
+  }
+  const timeout = Math.min(APPROVAL_MAX_TIMEOUT_MS, Math.max(APPROVAL_MIN_TIMEOUT_MS, input.timeoutMs ?? (input.singleUse ? 300_000 : APPROVAL_DEFAULT_TIMEOUT_MS)))
+  if (input.singleUse && (input.mode !== 'biometric' || input.downgraded || !input.requester.sessionId
+    || !singleUseDetailMatches(detail, input.requester, input.signingKeyId) || !Number.isFinite(timeout) || timeout > 300_000)) {
+    throw new ApprovalError(400, 'strict_approval_required', 'Single-use approvals need a task session, a signing key, detail and biometric mode, with at most five minutes to use them.')
+  }
   const now = Date.now()
   const id = 'apr-' + crypto.randomBytes(9).toString('base64url')
   const createdAt = new Date(now).toISOString()
@@ -192,6 +217,7 @@ export async function createApproval(input: CreateInput): Promise<{ approval: Ap
     ...(input.removesKey ? { removesKey: input.removesKey } : {}),
     ...(input.testRun ? { testRun: input.testRun } : {}),
     ...(input.guard ? { guard: input.guard } : {}),
+    ...(input.singleUse ? { singleUse: true, signingKeyId: input.signingKeyId } : {}),
   }
   let settled: ApprovalRecord[] = []
   await serial(() => updateJsonFile<ApprovalsFile>(approvalsFile(), EMPTY, (file) => {
@@ -262,6 +288,9 @@ export async function answerApproval(id: string, input: AnswerInput, lookupKey: 
     }
     signed = { id: key.id, name: key.name, kind: key.kind }
   }
+  if (current.singleUse && input.decision === 'approve' && (!signed || signed.id !== current.signingKeyId)) {
+    throw new ApprovalError(403, 'biometric_required', 'This approval needs a signature from its required signing device; an unsigned answer or another device cannot approve it.')
+  }
   if (current.mode === 'biometric' && input.decision === 'approve' && !signed && !input.proven) {
     throw new ApprovalError(403, 'biometric_required', 'This approval needs Face ID or Touch ID on a device that signs approvals.')
   }
@@ -327,6 +356,10 @@ export async function waitApproval(id: string, token: string | undefined, waitMs
     if (isTerminal(rec.status)) await noteAskerRead(id)
     return { approval: viewOf(rec), used: false }
   }
+  if (rec.singleUse) {
+    await noteAskerRead(id)
+    return { approval: viewOf(rec), used: false }
+  }
   let used = false
   let refused = false
   let consumedAt = rec.consumedAt
@@ -347,6 +380,54 @@ export async function waitApproval(id: string, token: string | undefined, waitMs
   }))
   if (refused) throw new ApprovalError(409, 'approval_used', 'This approval\'s answer was already used; ask again.')
   return { approval: viewOf({ ...rec, consumedAt }), used }
+}
+
+export interface ConsumeInput {
+  token: string
+  digest: string
+  detail: string
+  requester: ApprovalRequester
+}
+
+export async function consumeApproval(id: string, input: ConsumeInput, lookupKey: KeyLookup): Promise<WaitResult> {
+  let out: ApprovalRecord | undefined
+  await serial(() => updateJsonFile<ApprovalsFile>(approvalsFile(), EMPTY, async (file) => {
+    const rec = file.approvals.find((a) => a.id === id)
+    if (!rec) throw new ApprovalError(404, 'not_found', 'No such approval.')
+    if (!tokenMatches(rec, input.token)) throw new ApprovalError(403, 'bad_token', 'Only the asker can consume this approval.')
+    const owner = rec.requester
+    if (!owner.sessionId || !owner.taskId || owner.sessionId !== input.requester.sessionId
+      || owner.taskId !== input.requester.taskId || owner.host !== input.requester.host) {
+      throw new ApprovalError(403, 'wrong_asker', 'This approval belongs to another task session or host.')
+    }
+    const digest = approvalDigest({ ...rec, host: owner.host, taskId: owner.taskId })
+    if (!rec.singleUse || rec.mode !== 'biometric' || rec.downgraded || rec.digest !== digest
+      || input.digest !== digest || !singleUseDetailMatches(rec.detail, owner, rec.signingKeyId)
+      || JSON.parse(rec.detail!).context !== input.detail) {
+      throw new ApprovalError(409, 'changed', 'The signed approval does not match this operation.')
+    }
+    const created = Date.parse(rec.createdAt), expires = Date.parse(rec.expiresAt), now = Date.now()
+    if (!Number.isFinite(created) || !Number.isFinite(expires) || created > now || expires <= now
+      || expires <= created || expires - created > 300_000) {
+      throw new ApprovalError(409, 'approval_expired', 'The approval expired; ask again.')
+    }
+    if (rec.consumedAt) throw new ApprovalError(409, 'approval_used', 'This approval was already used; ask again.')
+    if (rec.status !== 'approved' || rec.answer?.decision !== 'approve' || rec.answer.mode !== 'biometric'
+      || !rec.answer.keyId || !rec.answer.signature || rec.answer.keyId !== rec.signingKeyId) {
+      throw new ApprovalError(403, 'not_approved', 'There is no signed approval for this operation.')
+    }
+    const key = await lookupKey(rec.answer.keyId)
+    if (!key || !verifySignature(key.publicKey, answerMessage(digest, 'approve'), rec.answer.signature)) {
+      throw new ApprovalError(403, 'bad_signature', 'The approval signature is invalid or its signing device was removed.')
+    }
+    const spentAt = Date.now()
+    if (expires <= spentAt) throw new ApprovalError(409, 'approval_expired', 'The approval expired; ask again.')
+    rec.consumedAt = new Date(spentAt).toISOString()
+    rec.readAt ??= rec.consumedAt
+    out = rec
+    return file
+  }, { durable: true }))
+  return { approval: viewOf(out!), used: true }
 }
 
 /**

@@ -170,6 +170,51 @@ describe('walnut approve against a real server', () => {
     expect(keys.body.keys[0].lastUsedAt).toBeTruthy()
   }, 60_000)
 
+  it('strict approvals require a session and a device, refuse self-approval, and consume once over HTTP', async () => {
+    const { createSessionRecord } = await import('../../src/core/session-tracker.js')
+    const { addTask } = await import('../../src/core/task-manager.js')
+    const { privateKey, publicKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
+    const spki = publicKey.export({ format: 'der', type: 'spki' }).toString('base64')
+    const keyId = keyIdOf(spki)
+    const { task } = await addTask({ title: 'Strict approval test', project: 'Approval tests' })
+    const sid = crypto.randomUUID()
+    await createSessionRecord(sid, task.id, task.project, WALNUT_HOME, { host: '__local__', initialProcessStatus: 'stopped' })
+    const H = { 'x-walnut-caller-sid': sid, 'x-walnut-origin': LOCAL_ORIGIN }
+    const spec = { what: 'Allow one Git push?', detail: JSON.stringify({ session: sid, task: task.id,
+      repo: '/work/repo', remote: 'ssh://example.com/private/repo', sha: 'ab'.repeat(20), nonce: crypto.randomBytes(32).toString('hex') }),
+      mode: 'biometric', single_use: true, signing_key_id: keyId, timeout_ms: 300_000 }
+    expect((await http('POST', '/api/v1/approvals', spec, H)).body.code).toBe('strict_approval_required')
+    const keyFile = `${WALNUT_HOME}/approvals/keys.json`
+    await fs.mkdir(`${WALNUT_HOME}/approvals`, { recursive: true })
+    await fs.writeFile(keyFile, JSON.stringify({ version: 1, keys: [{ id: keyId, publicKey: spki,
+      name: 'Strict test Mac', kind: 'mac-app', status: 'active', createdAt: new Date().toISOString() }] }))
+    expect((await http('POST', '/api/v1/approvals', spec)).body.code).toBe('strict_approval_required')
+    const identity = await http('POST', '/api/v1/approvals', { what: 'Check asker identity' }, H)
+    expect(identity.body.approval.requester).toMatchObject({ sessionId: sid, taskId: task.id })
+    expect((await http('GET', '/api/v1/approvals/keys')).body.keys).toContainEqual(expect.objectContaining({ id: keyId, status: 'active' }))
+    const made = await http('POST', '/api/v1/approvals', spec, H)
+    expect(made.status, JSON.stringify(made.body)).toBe(200)
+    const a = made.body.approval
+    expect(a.requester).toMatchObject({ taskId: task.id, sessionId: sid })
+    expect(a).toMatchObject({ mode: 'biometric', singleUse: true, signingKeyId: keyId })
+    const signature = crypto.sign('sha256', Buffer.from(answerMessage(a.digest, 'approve')), { key: privateKey, dsaEncoding: 'der' }).toString('base64')
+    expect((await http('POST', `/api/v1/approvals/${a.id}/answer`, { decision: 'approve', keyId, signature }, H)).body.code).toBe('human_only')
+    expect((await http('POST', `/api/v1/approvals/${a.id}/answer`, { decision: 'approve' })).body.code).toBe('biometric_required')
+    expect((await http('POST', `/api/v1/approvals/${a.id}/answer`, { decision: 'approve', keyId, signature })).status).toBe(200)
+    const token = made.body.waitToken
+    const read = await http('POST', `/api/v1/approvals/${a.id}/wait`, { token, wait_ms: 0 }, H)
+    expect(read.body).toMatchObject({ used: false, approval: { status: 'approved' } })
+    const envelope = JSON.parse(a.detail)
+    expect(envelope).toMatchObject({ version: 'walnut-single-use-v1', sessionId: sid, taskId: task.id, signingKeyId: keyId, context: spec.detail })
+    expect(envelope.nonce).toMatch(/^[0-9a-f]{64}$/)
+    const consume = { token, digest: a.digest, detail: spec.detail }
+    expect((await http('POST', `/api/v1/approvals/${a.id}/consume`, consume)).body.code).toBe('wrong_asker')
+    expect((await http('POST', `/api/v1/approvals/${a.id}/consume`, { ...consume, detail: spec.detail + 'changed' }, H)).body.code).toBe('changed')
+    const results = await Promise.all([1, 2, 3].map(() => http('POST', `/api/v1/approvals/${a.id}/consume`, consume, H)))
+    expect(results.filter((r) => r.status === 200)).toHaveLength(1)
+    expect(results.filter((r) => r.body.code === 'approval_used')).toHaveLength(2)
+  })
+
   it('a test run\'s approval shows only to that test run, which cannot change the signing devices', async () => {
     const T = { 'x-walnut-test-run': 'apr-e2e' }
     const made = await http('POST', '/api/v1/approvals', { what: 'Test-run deploy' }, T)
