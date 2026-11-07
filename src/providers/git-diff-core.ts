@@ -185,16 +185,26 @@ export function createGitDiffCore(exec: ExecFn, readText: ReadTextFn) {
     return r.code === 0 ? r.stdout.trim() : '';
   }
 
-  /** The default branch: origin/HEAD, else the usual names, remote first. */
+  /** An origin that is a path on this machine (a clone of another checkout): its HEAD is
+   *  whatever branch that checkout had out, not a default anyone chose. */
+  function isLocalRemote(url: string): boolean {
+    return url.charAt(0) === '/' || url.charAt(0) === '.' || url.charAt(0) === '~' || url.indexOf('file:') === 0 || /^[A-Za-z]:[\\/]/.test(url);
+  }
+
+  /** The default branch: origin/HEAD, else the usual names, remote first. A local origin's
+   *  HEAD comes after the usual names (it named a task's work branch as the default). */
   async function defaultBranch(root: string): Promise<string> {
     const sym = await exec(['git', 'symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'], root);
-    if (sym.code === 0 && sym.stdout.trim()) return sym.stdout.trim();
+    const originHead = sym.code === 0 ? sym.stdout.trim() : '';
+    const url = await exec(['git', 'config', '--get', 'remote.origin.url'], root);
+    const local = url.code === 0 && isLocalRemote(url.stdout.trim());
+    if (originHead && !local) return originHead;
     const names = ['origin/main', 'origin/master', 'main', 'master'];
     for (const name of names) {
       const full = (name.indexOf('/') >= 0 ? 'refs/remotes/' : 'refs/heads/') + name;
       if (await verifyCommit(full, root)) return name;
     }
-    return '';
+    return originHead;
   }
 
   function parseCommitLine(line: string): GitCommitSummary | null {

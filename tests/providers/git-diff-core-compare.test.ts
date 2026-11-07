@@ -119,6 +119,18 @@ describe('git-diff core: branch base', () => {
     expect((await computeGitDiff('branch', repo, exec, readText))!.compare!.ref).toBe('main')
   })
 
+  // A clone of another checkout on this machine: its origin/HEAD is whatever branch that
+  // checkout had out (a task's work branch), and "Branch vs" it listed every file of the repo.
+  it('an origin on this machine: its HEAD on a work branch never becomes the default; a network origin\'s HEAD does', async () => {
+    const { repo } = makeRepo()
+    git(repo, ['push', '-q', 'origin', 'feature'])
+    git(repo, ['remote', 'set-head', 'origin', 'feature'])
+    expect((await computeGitDiff('branch', repo, exec, readText))!.compare!.ref).toBe('origin/main')
+    expect((await listGitRefs(repo, exec))!.defaultRef).toBe('origin/main')
+    git(repo, ['remote', 'set-url', 'origin', 'https://example.invalid/app.git'])
+    expect((await computeGitDiff('branch', repo, exec, readText))!.compare!.ref).toBe('origin/feature')
+  })
+
   it('an explicit ref compares against its merge-base; a ref this repo lacks answers missing, never an error', async () => {
     const { repo, f1 } = makeRepo()
     git(repo, ['branch', 'checkpoint', f1])
