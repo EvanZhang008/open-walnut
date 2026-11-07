@@ -12,7 +12,7 @@
  * All data is owned by the test (a per-run project).
  */
 import { test, expect, type Page } from '@playwright/test'
-import { isolateUiPrefs, sectionTab } from './todo-panel-helpers'
+import { isolateUiPrefs } from './todo-panel-helpers'
 import { chooseViewOption, openHome } from './home-navigation-helpers'
 import { closeDisplayMenu, displayMenu, openDisplayMenu } from './filter-bar-helpers'
 
@@ -75,9 +75,8 @@ test('Recent lists what was opened, newest first, flat, and greys what is open n
   const d = await createTask(`Recent opened last delta ${STAMP}`)
   const mine = [a, b, c, d]
   await openHome(page, baseURL!, 90_000)
-  // Nothing opened yet in this browser: the tab stays on the bar ("Hide empty tabs" leaves it,
-  // a first launch has nothing opened), and the list says what it is for.
-  await expect(sectionTab(page, 'Recent')).toBeVisible()
+  // Nothing opened yet in this browser: the list says what it is for. (An empty Recent stays on
+  // the tab bar under "Hide empty tabs": tests/web/tab-bar-model.test.ts; this fixture shows no bar.)
   await chooseViewOption(page, 'recent')
   await expect(page.getByTestId('todo-recent-empty')).toHaveText('Tasks you open show up here, newest first.')
   await chooseViewOption(page, 'all')
