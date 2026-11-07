@@ -11,7 +11,7 @@ export const BROWSER_USAGE = [
   'usage: walnut browser status',
   '       walnut browser tabs [--all]                    (--all: every tab of the browser, title and address)',
   '       walnut browser take <tab>                      (act in one of the person\'s tabs; close gives it back)',
-  '       walnut browser open <url>',
+  '       walnut browser open <url> [--record]       (--record: its requests and console from before the page loads)',
   '       walnut browser navigate <url> [--tab N]      (also: go)',
   '       walnut browser back | close [--tab N]',
   '       walnut browser snapshot | text | form-values [--tab N]',
@@ -26,10 +26,15 @@ export const BROWSER_USAGE = [
   '       walnut browser wait <text> | --gone <text> | --url <part or /regex/> | --ms N [--tab N]',
   '       walnut browser screenshot [<file>] [--full] [--tab N]   (default: a .jpg in $WALNUT_TASK_DIR/shots; a .png name saves a PNG)',
   '       walnut browser upload <ref> <file>... [--tab N]          (10 MB in all; --trusted --path P: a file on the browser\'s machine)',
+  '       walnut browser upload --selector <css> <file>... [--tab N] (a file field the page hides)',
   '       walnut browser downloads [--wait] [--ms N]',
   '       walnut browser fill-login [--item <id|name>] [--fresh-sign-in] [--tab N]   (signs in with the saved login; you never see the password)',
   '       walnut browser dialog accept|dismiss [--text T] [--tab N]   (real input)',
   '       walnut browser evaluate <expression> [--tab N]             (real input; a tab you opened)',
+  '       walnut browser network [--url part] [--method M] [--status 404|4xx] [--type XHR] [--limit N] [--include-static] [--stop] [--tab N]',
+  '       walnut browser network-body <request id> [--max-chars N] | network-request-body <request id> [--tab N]',
+  '       walnut browser console [--level error|warn|info|log|debug] [--limit N] [--tab N]   (recording: real input; a tab you opened)',
+  '       walnut browser resize <width> <height> [--viewport] [--tab N]   (Walnut\'s agent window; --viewport: the page\'s size)',
   '  Refs: e12 in the page, f3:e12 inside a frame. --json prints the whole result. A site agents have not used yet waits for the',
   '  person only when they chose "Ask me first" in Settings. Real input (--trusted, dialog, evaluate) needs the person to turn it on in the extension.',
   'Exit: 0 done; 1 refused or a choice to make (the person said no, not your tab, which tab or login: the message lists them); 2 no answer in time; 3 an error.',
@@ -90,6 +95,16 @@ export function parseBrowserArgv(argv: string[]): ParsedBrowser {
       else if (w === '--item') args.item = val()
       else if (w === '--fresh-sign-in') args.fresh_sign_in = true
       else if (w === '--ref') args.ref = val()
+      else if (w === '--selector') args.selector = val()
+      else if (w === '--record') args.record = true
+      else if (w === '--stop') args.stop = true
+      else if (w === '--method') args.method = val()
+      else if (w === '--status') { const v = val(); args.status = /^\d+$/.test(v) ? Number(v) : v }
+      else if (w === '--type') args.type = val()
+      else if (w === '--include-static') args.include_static = true
+      else if (w === '--level') args.level = val()
+      else if (w === '--max-chars') args.max_chars = Number(val())
+      else if (w === '--viewport') args.viewport = true
       else if (w === '--file' || w === '--path') {
         const key = w === '--file' ? 'files' : 'paths'
         args[key] = [...((args[key] as string[] | undefined) ?? []), val()]
@@ -135,12 +150,24 @@ export function parseBrowserArgv(argv: string[]): ParsedBrowser {
         return { ok: true, op: 'browser', args: { action: 'fill_form', fields, ...args }, json }
       }
       case 'upload': {
-        const ref = typeof args.ref === 'string' ? args.ref : rest[0]
-        const files = [...(typeof args.ref === 'string' ? rest : rest.slice(1)), ...((args.files as string[] | undefined) ?? [])]
+        // A file field the page hides is named by a CSS selector instead of a ref.
+        const bySel = typeof args.selector === 'string' && typeof args.ref !== 'string'
+        const ref = bySel ? undefined : typeof args.ref === 'string' ? args.ref : rest[0]
+        const files = [...(bySel || typeof args.ref === 'string' ? rest : rest.slice(1)), ...((args.files as string[] | undefined) ?? [])]
         const { files: _f, ...a } = args
-        if (!ref || !REFS.test(ref)) return { ok: false, error: 'upload needs the ref of the file field (e5)' }
+        if (!bySel && (!ref || !REFS.test(ref))) return { ok: false, error: 'upload needs the ref of the file field (e5), or --selector <css> for one the page hides' }
         if (!files.length && !a.paths) return { ok: false, error: 'upload needs a file' }
-        return { ok: true, op: 'browser', args: { action: 'upload', ...a, ref }, json, ...(files.length ? { upload: files } : {}) }
+        return { ok: true, op: 'browser', args: { action: 'upload', ...a, ...(ref ? { ref } : {}) }, json, ...(files.length ? { upload: files } : {}) }
+      }
+      case 'network': return { ok: true, op: 'browser', args: { action: 'network', ...args }, json }
+      case 'console': return { ok: true, op: 'browser', args: { action: 'console', ...args }, json }
+      case 'network-body': case 'network_body': case 'network-request-body': case 'network_request_body':
+        return { ok: true, op: 'browser', args: { action: verb.includes('request') ? 'network_request_body' : 'network_body', request_id: one('a request id (network lists them)'), ...args }, json }
+      case 'resize': {
+        const m = rest.length === 1 ? /^(\d+)x(\d+)$/i.exec(rest[0]) : null
+        const [w, h] = m ? [m[1], m[2]] : rest
+        if (!/^\d+$/.test(w ?? '') || !/^\d+$/.test(h ?? '')) return { ok: false, error: 'resize takes a width and a height (resize 1280 900)' }
+        return { ok: true, op: 'browser', args: { action: 'resize', width: Number(w), height: Number(h), ...args }, json }
       }
       case 'dialog': {
         if (rest[0] !== 'accept' && rest[0] !== 'dismiss') return { ok: false, error: 'dialog takes accept or dismiss' }
@@ -185,7 +212,7 @@ export function parseBrowserArgv(argv: string[]): ParsedBrowser {
   return { ok: false, error: `unknown action ${verb}` }
 }
 
-const REFUSED = new Set(['site_denied', 'not_your_tab', 'test_run', 'which_tab', 'person_is_here', 'trusted_off', 'denied', 'agents_off', 'agent_never', 'which_login', 'other_site', 'agents_tab_only', 'site_open_in_person_tab'])
+const REFUSED = new Set(['site_denied', 'not_your_tab', 'test_run', 'which_tab', 'person_is_here', 'trusted_off', 'denied', 'agents_off', 'agent_never', 'which_login', 'other_site', 'agents_tab_only', 'site_open_in_person_tab', 'not_agent_opened', 'filled_here', 'recording_cancelled', 'person_window'])
 
 const MIME: Record<string, string> = {
   '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp',
@@ -299,13 +326,33 @@ function render(action: string | undefined, b: Record<string, unknown>): string 
     return `${f ? `Finished: ${f.filename}\n` : ''}${d.map((x) => `${x.state}  ${x.bytes} bytes  ${x.filename || x.url}`).join('\n') || 'No downloads of this task.'}`
   }
   if (action === 'evaluate') return b.json !== undefined ? String(b.json) : JSON.stringify(b.value)
+  if (action === 'network') {
+    if (b.stopped !== undefined) return b.stopped ? 'Stopped recording.' : 'This tab was not recording.'
+    const reqs = (b.requests as Array<{ id: string; status?: number; method: string; type?: string; ms?: number; url: string; failed?: string }> | undefined) ?? []
+    const head = `${reqs.length} of ${String(b.matched ?? reqs.length)} matching, ${String(b.total ?? reqs.length)} recorded since ${String(b.since ?? '?')}${typeof b.note === 'string' ? `\n${b.note}` : ''}`
+    return [head, ...reqs.map((r) => `${r.id}  ${r.failed ? `failed (${r.failed})` : r.status ?? '...'}  ${r.method}  ${r.type ?? ''}  ${r.ms !== undefined ? `${r.ms} ms` : ''}  ${r.url}`)].join('\n')
+  }
+  if (action === 'console') {
+    const m = (b.messages as Array<{ level: string; text: string; where?: string }> | undefined) ?? []
+    const head = `${m.length} of ${String(b.total ?? m.length)} since ${String(b.since ?? '?')}${typeof b.note === 'string' ? `\n${b.note}` : ''}`
+    return [head, ...m.map((x) => `[${x.level}] ${x.text}${x.where ? `  (${x.where})` : ''}`)].join('\n')
+  }
+  // A body as it came (base64 for bytes, said once on stderr would be lost: a note line ends it).
+  if (action === 'network_body' || action === 'network_request_body') {
+    return `${String(b.body ?? '')}${b.cut ? `\n[cut at ${String((b.body as string | undefined)?.length ?? 0)} of ${String(b.length)} characters: --max-chars reads more]` : ''}${b.base64 ? '\n[the body is base64]' : ''}`
+  }
+  if (action === 'resize') {
+    const v = (b.viewport ?? {}) as { width?: number; height?: number }
+    return `ok  window ${String(b.width ?? '?')}x${String(b.height ?? '?')}, page ${String(v.width ?? '?')}x${String(v.height ?? '?')}`
+  }
   if (action === 'snapshot') return typeof b.snapshot === 'string' ? b.snapshot : JSON.stringify(b)
   if (action === 'text') return typeof b.text === 'string' ? b.text : ''
   const where = [typeof b.tab === 'number' ? `tab ${b.tab}` : '', typeof b.url === 'string' ? b.url : '', typeof b.title === 'string' ? `"${b.title}"` : ''].filter(Boolean).join('  ')
   // Which window and tab, and the person's own tabs on the site (where-words.ts), each on a line of its own.
   if (typeof b.where === 'string') {
     const theirs = typeof b.person_tabs_note === 'string' ? `\n${b.person_tabs_note}` : ''
-    return `ok  ${b.where}${theirs}${typeof b.note === 'string' ? `\n${b.note}` : ''}`
+    const rec = b.recording === true ? '\nRecording its requests and console (network, console).' : b.record_refused ? `\nNot recording: ${(b.record_refused as { message?: string }).message ?? ''}` : ''
+    return `ok  ${b.where}${theirs}${rec}${typeof b.note === 'string' ? `\n${b.note}` : ''}`
   }
   const opened = b.opened as { tab?: number; url?: string } | undefined
   const also = opened && typeof opened.tab === 'number' ? `\nOpened a new tab: ${opened.tab}  ${opened.url ?? ''} (this task's too: --tab ${opened.tab})` : ''

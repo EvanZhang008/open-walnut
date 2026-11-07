@@ -12,8 +12,20 @@ export class CdpError extends Error {
   constructor(message: string, readonly code: string) { super(message) }
 }
 
-/** Attach to the tab, do the work, always detach. */
+/**
+ * Tabs whose debugger stays attached while an agent records there (agent-net.ts): an action that
+ * needs the debugger uses that session instead of a second attach (which the browser refuses),
+ * and leaves it attached.
+ */
+const held = new Map<number, Send>()
+export function holdDebugger(tabId: number, send: Send): void { held.set(tabId, send) }
+export function dropDebugger(tabId: number): void { held.delete(tabId) }
+export const debuggerHeld = (tabId: number): boolean => held.has(tabId)
+
+/** Attach to the tab, do the work, always detach (or the recording's session, left attached). */
 export async function withDebugger<T>(dbg: DebuggerApi, tabId: number, work: (send: Send) => Promise<T>): Promise<T> {
+  const kept = held.get(tabId)
+  if (kept) return work(kept)
   const target = { tabId }
   try {
     await dbg.attach(target, '1.3')

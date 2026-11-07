@@ -19,6 +19,10 @@ export interface DebuggerApi {
   attach(target: Debuggee, version: string): Promise<void>
   detach(target: Debuggee): Promise<void>
   sendCommand(target: Debuggee, method: string, params?: Record<string, unknown>): Promise<unknown>
+  /** What the page does while the debugger is attached (agent-net.ts records an agent tab's requests and console). */
+  onEvent?: Ev<(source: Debuggee, method: string, params?: Record<string, unknown>) => void>
+  /** The debugger let go: the tab closed, or the person cancelled Chrome's "started debugging" bar (`canceled_by_user`). */
+  onDetach?: Ev<(source: Debuggee, reason: string) => void>
 }
 
 interface MoreApi {
@@ -30,7 +34,7 @@ interface MoreApi {
   }
   windows: { get(id: number): Promise<{ id?: number; type?: string; incognito?: boolean }> }
   scripting?: {
-    executeScript(o: { target: { tabId: number; allFrames?: boolean }; func: () => unknown }): Promise<Array<{ frameId: number; result?: unknown }>>
+    executeScript(o: { target: { tabId: number; allFrames?: boolean }; func: () => unknown; injectImmediately?: boolean }): Promise<Array<{ frameId: number; result?: unknown }>>
   }
   downloads?: {
     onCreated: Ev<(item: DownloadItem) => void>

@@ -560,11 +560,14 @@ test('real input is off until the person turns it on: trusted, dialog and evalua
     { action: 'type', ref: refOf(s, /textbox "Your name"/), text: 'x', trusted: true },
     { action: 'evaluate', expression: 'document.title' },
     { action: 'dialog', accept: true },
+    { action: 'network' },
+    { action: 'console' },
   ]) {
     const r = await act(page, body)
     expect(r.status, JSON.stringify(r.body)).toBe(409)
     expect(r.body.code).toBe('trusted_off')
-    expect(r.body.error).toContain('Settings')
+    // Exactly which switch the person turns on, and where.
+    expect(r.body.error).toContain('click the gear (Settings) at the top of the popup, and turn on "Let agents use real mouse and keys"')
   }
   await expect(agentPage()!.locator('#who')).toHaveValue('')
 })

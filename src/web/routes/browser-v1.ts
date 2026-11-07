@@ -289,18 +289,19 @@ browserV1Router.post('/browser/adopt', (req, res, next) => {
 const ACTIONS = [
   'tabs', 'open', 'navigate', 'back', 'close', 'snapshot', 'text', 'find', 'form_values', 'click', 'hover', 'type', 'fill_form', 'select', 'press',
   'scroll', 'wait', 'screenshot', 'upload', 'downloads', 'take', 'fill_login', 'dialog', 'evaluate',
+  'network', 'network_body', 'network_request_body', 'console', 'resize',
 ] as const
 type Action = typeof ACTIONS[number]
 /** Actions that go to a page, so the page's site must be allowed. */
 const ON_TAB = new Set<Action>([
   'navigate', 'back', 'close', 'snapshot', 'text', 'find', 'form_values', 'click', 'hover', 'type', 'fill_form', 'select', 'press', 'scroll', 'wait',
-  'screenshot', 'upload', 'fill_login', 'dialog', 'evaluate',
+  'screenshot', 'upload', 'fill_login', 'dialog', 'evaluate', 'network', 'network_body', 'network_request_body', 'console', 'resize',
 ])
 /** Actions whose step may buy, send or delete (the page judges; outward-asks.ts asks the person). */
 const OUTWARD_ACTS = new Set<Action>(['click', 'press', 'type'])
 /** Actions the extension answers for the owner as a whole (its tabs, its downloads, a tab to take). */
 const FOR_OWNER = new Set<Action>(['tabs', 'downloads', 'take'])
-const TIMEOUT: Partial<Record<Action, number>> = { open: 45_000, navigate: 45_000, back: 30_000, wait: 40_000, screenshot: 30_000, downloads: 40_000, take: 30_000 }
+const TIMEOUT: Partial<Record<Action, number>> = { open: 45_000, navigate: 45_000, back: 30_000, wait: 40_000, screenshot: 30_000, downloads: 40_000, take: 30_000, network_body: 30_000, network_request_body: 30_000 }
 /** A full-page screenshot scrolls through the page, two captures a second. */
 const FULL_SCREENSHOT_MS = 50_000
 /** The tab each owner used last, so `tab` may be left out. */

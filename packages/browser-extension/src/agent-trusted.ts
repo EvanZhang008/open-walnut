@@ -19,8 +19,14 @@ export const TRUSTED_OPS = new Set(['click', 'type', 'press', 'hover', 'upload']
 /** These use the debugger whatever the command says. */
 export const DEBUGGER_OPS = new Set(['dialog', 'evaluate'])
 
-const OFF = 'Real input is off in this browser. The person turns it on in the Walnut extension popup, Settings, "Let agents use real mouse and keys" '
-  + '(Chrome then shows its "started debugging" bar while an agent acts). Without it, use the action without trusted.'
+/**
+ * Where the person turns real input on, step by step (an agent passes it on as it is). Real input,
+ * evaluate, dialog and recording a tab (agent-net.ts) all wait for this one switch.
+ */
+export const REAL_INPUT_SWITCH = 'Only the person can turn it on: in Chrome, click the Walnut extension\'s icon in the toolbar (in the puzzle-piece Extensions menu when it is not pinned), '
+  + 'click the gear (Settings) at the top of the popup, and turn on "Let agents use real mouse and keys"; Chrome then asks to allow the debugger: Allow. '
+  + 'While an agent uses it, Chrome shows its "started debugging" bar on that tab.'
+const OFF = `Real input is off in this browser. ${REAL_INPUT_SWITCH} Without it, use the action without trusted.`
 
 export async function trustedReady(): Promise<boolean> {
   return !isFirefox && !!more.debugger && await more.permissions.contains({ permissions: ['debugger'] }).catch(() => false)
@@ -64,8 +70,8 @@ export async function trustedAct(c: WireCommand, tabId: number, tab: Tab, rec: A
   let out: Record<string, unknown>
   switch (c.action) {
     case 'evaluate': {
-      if (nearPerson(rec)) throw new AgentError('evaluate runs only in a tab an agent opened, never in the person\'s own tab or one it opened.', 'not_agent_opened')
-      if (await filledHere(rec.owner, page.href)) throw new AgentError('evaluate does not run on a site where Walnut filled a login for you: it could read the password.', 'filled_here')
+      if (nearPerson(rec)) throw new AgentError('evaluate runs only in a tab an agent opened, never in the person\'s own tab or one it opened: open the page in a tab of your own (open {url}), which has their sign-ins too.', 'not_agent_opened')
+      if (await filledHere(rec.owner, page.href)) throw new AgentError('evaluate does not run on a site where Walnut filled a login for you: it could read the password. Read the page with snapshot, text or find, or record its requests (network).', 'filled_here')
       const expression = typeof a.expression === 'string' ? a.expression : ''
       if (!expression) throw new AgentError('Give the expression to run.', 'bad_request')
       out = { ...(await run(tabId, rec.owner, (send) => cdpEvaluate(send, expression))) }
@@ -98,7 +104,7 @@ export async function trustedAct(c: WireCommand, tabId: number, tab: Tab, rec: A
       const other = paths.filter((p) => !mine.includes(p))
       if (other.length) throw new AgentError(`A trusted upload sends only files this task downloaded (downloads lists them); not ${other.slice(0, 3).join(', ')}. Send other files as bytes, without trusted.`, 'path_not_allowed')
       const markId = crypto.randomUUID().replace(/-/g, '')
-      const l = await locate({ mark: markId })
+      const l = await locate({ mark: markId, ...(typeof a.selector === 'string' && a.ref === undefined ? { selector: a.selector } : {}) })
       await run(tabId, rec.owner, (send) => cdpUpload(send, markId, paths))
       out = { uploaded: paths, into: l.what, trusted: true }
       break

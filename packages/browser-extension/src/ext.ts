@@ -5,8 +5,8 @@
  */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-export interface Tab { id?: number; url?: string; title?: string; windowId?: number; active?: boolean; status?: string; discarded?: boolean }
-export interface Win { id?: number; tabs?: Tab[]; state?: string; focused?: boolean }
+export interface Tab { id?: number; url?: string; title?: string; windowId?: number; active?: boolean; status?: string; discarded?: boolean; width?: number; height?: number; mutedInfo?: { muted?: boolean } }
+export interface Win { id?: number; tabs?: Tab[]; state?: string; focused?: boolean; width?: number; height?: number }
 export interface Sender { tab?: Tab; frameId?: number; url?: string; origin?: string; id?: string }
 
 interface Event<F> { addListener(f: F): void; removeListener(f: F): void }
@@ -34,7 +34,7 @@ export interface ExtApi {
     get(tabId: number): Promise<Tab>
     sendMessage(tabId: number, msg: unknown, opts?: { frameId?: number }): Promise<any>
     create(o: { url: string; active?: boolean; windowId?: number }): Promise<Tab>
-    update(tabId: number, o: { active?: boolean; url?: string }): Promise<Tab>
+    update(tabId: number, o: { active?: boolean; url?: string; muted?: boolean }): Promise<Tab>
     remove(tabId: number): Promise<void>
     goBack(tabId: number): Promise<void>
     reload(tabId: number): Promise<void>
@@ -47,7 +47,8 @@ export interface ExtApi {
     create(o: { url: string; type?: string; width?: number; height?: number; focused?: boolean }): Promise<Win>
     get(id: number, o?: { populate?: boolean }): Promise<Win>
     getCurrent(): Promise<Win>
-    update?(windowId: number, o: { focused?: boolean }): Promise<Win>
+    /** focused only for the person's own click (background.ts openWalnutTab); agent code sets a size alone (agent-window.ts resizeAgentWindow). */
+    update?(windowId: number, o: { focused?: boolean; width?: number; height?: number; state?: 'normal' }): Promise<Win>
     onRemoved: Event<(windowId: number) => void>
   }
   permissions: {

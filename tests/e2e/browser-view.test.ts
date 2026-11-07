@@ -79,6 +79,10 @@ function fakeExtension(token: string) {
         return { ok: true, result: { tab: c.args.tab, stopped: had } }
       }
       case 'close': tabs.delete(c.args.tab); return { ok: true, result: { tab: c.args.tab, closed: true } }
+      case 'network': return { ok: true, result: { tab: c.args.tab, recording: true, since: '2026-11-07T08:00:00.000Z', total: 1, matched: 1, requests: [{ id: '31.2', url: 'https://login.bank.example.test/api/accounts', method: 'GET', type: 'Fetch', status: 200 }] } }
+      case 'network_body': return { ok: true, result: { tab: c.args.tab, request_id: c.args.request_id, body: '{"accounts":2}', length: 14 } }
+      case 'resize': return { ok: true, result: { tab: c.args.tab, width: c.args.width, height: c.args.height, viewport: { width: c.args.width - 16, height: c.args.height - 120 } } }
+      case 'upload': return { ok: true, result: { tab: c.args.tab, uploaded: ['a.txt (1 bytes)'], into: `the file field ${c.args.selector}` } }
       default: return { ok: true, result: { tab: c.args.tab, snapshot: '[e1] button "Sign in"' } }
     }
   }
@@ -191,6 +195,23 @@ describe('a session in the person\'s browser', () => {
     // The view follows the tab's new address.
     expect((await http('GET', `/browser/view?task=${taskId}`)).body.tabs[0].url).toBe('https://shop.elsewhere.test/')
     await http('POST', '/browser/act', { action: 'navigate', tab: agentTab, url: 'https://login.bank.example.test/' }, SESSION())
+  })
+
+  it('the relay\'s last actions go to the browser with their own arguments: network, a body, resize, upload by selector', async () => {
+    const net = await http('POST', '/browser/act', { action: 'network', tab: agentTab, url: '/api/', method: 'GET', status: '2xx', type: 'Fetch', include_static: false }, SESSION())
+    expect(net.status, JSON.stringify(net.body)).toBe(200)
+    expect(ext.seen.at(-1)).toMatchObject({ action: 'network', args: { tab: agentTab, url: '/api/', method: 'GET', status: '2xx', type: 'Fetch', include_static: false } })
+    expect(net.body.requests).toEqual([expect.objectContaining({ id: '31.2', status: 200 })])
+    const body = await http('POST', '/browser/act', { action: 'network_body', tab: agentTab, request_id: '31.2', max_chars: 5000 }, SESSION())
+    expect(body.body).toMatchObject({ request_id: '31.2', body: '{"accounts":2}' })
+    expect(ext.seen.at(-1)!.args).toMatchObject({ request_id: '31.2', max_chars: 5000 })
+    const size = await http('POST', '/browser/act', { action: 'resize', tab: agentTab, width: 1000, height: 700, viewport: true }, SESSION())
+    expect(size.body).toMatchObject({ width: 1000, height: 700, viewport: { width: 984 } })
+    expect(ext.seen.at(-1)!.args).toMatchObject({ width: 1000, height: 700, viewport: true })
+    const up = await http('POST', '/browser/act', { action: 'upload', tab: agentTab, selector: '#image-upload-field', files: [{ name: 'a.txt', base64: 'YQ==' }] }, SESSION())
+    expect(up.body).toMatchObject({ uploaded: ['a.txt (1 bytes)'] })
+    expect(ext.seen.at(-1)!.args).toMatchObject({ selector: '#image-upload-field', files: [{ name: 'a.txt', base64: 'YQ==' }] })
+    expect((await http('POST', '/browser/act', { action: 'nope', tab: agentTab }, SESSION())).body.code).toBe('bad_action')
   })
 
   it('fill_login on a site the person has open in their own tab is refused with the step; a fresh sign-in they asked for goes on to the vault', async () => {

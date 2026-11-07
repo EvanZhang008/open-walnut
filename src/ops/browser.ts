@@ -12,6 +12,7 @@ import { noBrowserLine, type GoneBrowser } from '../core/browser-control/gone-wo
 const ACTIONS = [
   'tabs', 'open', 'navigate', 'back', 'close', 'snapshot', 'text', 'find', 'form_values', 'click', 'hover', 'type', 'fill_form', 'select', 'press',
   'scroll', 'wait', 'screenshot', 'upload', 'downloads', 'take', 'fill_login', 'dialog', 'evaluate',
+  'network', 'network_body', 'network_request_body', 'console', 'resize',
 ] as const
 
 function outcomeOf(args: Record<string, unknown>, body: Record<string, unknown>): { outcome: string; next: string } {
@@ -43,8 +44,10 @@ function outcomeOf(args: Record<string, unknown>, body: Record<string, unknown>)
     case 'open': case 'navigate': case 'back': {
       const where = typeof body.where === 'string' ? body.where : `At ${body.url ?? '?'}${tab}: ${body.title ?? ''}`
       const theirs = typeof body.person_tabs_note === 'string' ? ` ${body.person_tabs_note}` : ''
+      const refused = body.record_refused as { message?: string } | undefined
+      const rec = body.recording === true ? ' It records its requests and console from the start (network, console).' : refused ? ` Not recording: ${refused.message ?? 'refused'}` : ''
       return {
-        outcome: `${where}${theirs}`,
+        outcome: `${where}${theirs}${rec}`,
         next: theirs ? 'Ask the person for their tab (or take it) before you sign in anywhere; else snapshot to see the page.'
           : args.action === 'open' ? 'Tell the person in your first line which window and tab you are working in; then snapshot to see the page and its element refs.'
             : 'snapshot to see what is on the page and its element refs.',
@@ -65,7 +68,31 @@ function outcomeOf(args: Record<string, unknown>, body: Record<string, unknown>)
       : { outcome: `${(body.downloads as unknown[] | undefined)?.length ?? 0} download(s) of this task.`, next: 'downloads with wait to wait for the next one to finish.' }
     case 'fill_login': return { outcome: `Filled ${((body.fields as string[] | undefined) ?? []).join(' and ') || 'the login'} of "${(body.item as { title?: string } | undefined)?.title ?? ''}"${tab}; you never see the password.`, next: 'click the sign-in button (snapshot for its ref).' }
     case 'evaluate': return { outcome: `The script ran${tab}${body.cut ? '; its result was cut at 50 KB' : ''}.`, next: 'No further action is required.' }
-    case 'close': return { outcome: body.released ? `Gave tab ${args.tab ?? ''} back to the person (it stays open).` : `Closed tab ${args.tab ?? ''}.`, next: 'No further action is required.' }
+    case 'close': {
+      const which = body.tab ?? args.tab
+      const n = which !== undefined ? ` ${which}` : ''
+      return { outcome: body.released ? `Gave tab${n} back to the person (it stays open).` : `Closed tab${n}.`, next: 'No further action is required.' }
+    }
+    case 'network': {
+      if (body.stopped !== undefined) return { outcome: body.stopped ? `Stopped recording${tab}.` : `Tab${tab} was not recording.`, next: 'No further action is required.' }
+      const shown = (body.requests as unknown[] | undefined)?.length ?? 0
+      return {
+        outcome: `${shown} of ${body.matched ?? shown} matching request(s)${tab}, of ${body.total ?? shown} recorded since ${String(body.since ?? '?')}.${body.started_now ? ` ${String(body.note ?? '')}` : ''}`,
+        next: 'network_body {request_id} reads a response; network_request_body {request_id} what a request sent. Filter with url, method, status (404 or 4xx), type (XHR, Fetch, Document).',
+      }
+    }
+    case 'network_body': case 'network_request_body': return {
+      outcome: `${args.action === 'network_body' ? 'Response' : 'Request'} body of ${String(body.request_id ?? '')} (${String(body.length ?? 0)} characters${body.base64 ? ', base64' : ''}${body.cut ? ', cut: max_chars reads more, up to 1,000,000' : ''}).`,
+      next: 'No further action is required.',
+    }
+    case 'console': return {
+      outcome: `${(body.messages as unknown[] | undefined)?.length ?? 0} console message(s)${tab}, of ${body.total ?? 0} since ${String(body.since ?? '?')}.${body.started_now ? ` ${String(body.note ?? '')}` : ''}`,
+      next: 'level: error (or warn, info) for the important ones only.',
+    }
+    case 'resize': {
+      const v = (body.viewport ?? {}) as { width?: number; height?: number }
+      return { outcome: `The agent window is ${String(body.width ?? '?')}x${String(body.height ?? '?')}; the page sees ${String(v.width ?? '?')}x${String(v.height ?? '?')}${tab}.`, next: 'screenshot to see the page at that size.' }
+    }
     default: return { outcome: `Done${tab}${body.url ? ` at ${body.url}` : ''}.${also}`, next: 'snapshot again to see the result.' }
   }
 }
@@ -84,11 +111,16 @@ defineOp({
     + 'downloads {wait?, ms?}; fill_login {item?} (signs in with the user\'s saved login for the page: you never see the password; needs_ok waits for their approval: call again with request). '
     + 'Real input (off unless the user turned it on in the extension: trusted_off): trusted: true on click, hover, type, press, upload {paths on the browser\'s machine}; '
     + 'dialog {accept, text?} answers an alert, confirm or prompt; evaluate {expression} runs page JavaScript in a tab you opened (result JSON, 50 KB). '
+    + 'Recording, in a tab you opened, also with that switch (Chrome shows its debugging bar there): network {url?, method?, status?: 404 or "4xx", type?, limit?, include_static?, stop?} lists the requests the page made '
+    + '(id, url, method, status, type, ms, size) since recording began (open {url, record: true} records from before the page loads; the first network or console starts it otherwise); '
+    + 'network_body {request_id, max_chars?} a response body (200,000 characters, base64 for bytes); network_request_body {request_id} what the request sent; console {level?, limit?}. '
+    + 'upload {selector, files} also reaches a file field a page hides (a CSS selector). resize {width, height, viewport?} sizes Walnut\'s agent window (viewport: the page gets that size); never the person\'s window. '
+    + 'Tabs you open are muted and their media does not play by itself. '
     + '`tab` may be left out after you used one. A site agents have not used yet may ask the user first (needs_ok): call the same action again (wait_ms up to 25000 holds for the answer). '
     + 'Every open, take, navigate and back names the window (Walnut\'s agent window, behind theirs, not minimized; or the person\'s own) and the tab (id, title, address): '
     + 'say which in your first line to the user when you start using the browser. An open or navigate to a site the person already has open in a tab of their own lists those tabs (person_tabs): '
     + 'ask them to hand that tab over, or take it, instead of signing in again; fill_login there answers site_open_in_person_tab unless they asked for a fresh sign-in (fresh_sign_in: true). '
-    + 'Refusals: browser_not_connected (the user turns agents on in the extension popup), browser_disconnected (the user disconnected the extension: ask them to connect it), site_denied, not_your_tab, person_is_here, trusted_off, test_run. '
+    + 'Refusals: browser_not_connected (the user turns agents on in the extension popup), browser_disconnected (the user disconnected the extension: ask them to connect it), site_denied, not_your_tab, person_is_here, trusted_off (its message says which switch the user turns on, and where: pass it on as it is), not_agent_opened (open the page in a tab of your own), filled_here, test_run. '
     + 'Passwords: sign in with fill_login; never type one you read from elsewhere. A click, Enter or other key that buys or pays, sends or posts, or deletes '
     + '(Place order, Pay, Send, Post, Publish, Delete, a form with card details or a message) waits for the user\'s approval: needs_ok with request, call the same action again with it; '
     + 'only the user can approve it. Add to cart, search, sign in, Next, filters and opening pages never ask. The ask does not judge evaluate, the page\'s own scripts '
@@ -96,14 +128,14 @@ defineOp({
   input: {
     action: z.enum(ACTIONS).describe('What to do'),
     tab: z.number().int().optional().describe('The tab id (from open or tabs); default the tab you used last'),
-    url: z.string().max(4000).optional().describe('open / navigate: the page; wait: a substring of the address or /regex/'),
+    url: z.string().max(4000).optional().describe('open / navigate: the page; wait: a substring of the address or /regex/; network: a part of the request\'s address'),
     ref: z.string().max(40).optional().describe('click / hover / type / select / scroll / upload: an element ref from snapshot or find (e12, f3:e12)'),
     x: z.number().optional().describe('click / hover: a point in the page (CSS pixels of the viewport), instead of ref'),
     y: z.number().optional(),
     text: z.string().max(20_000).optional().describe('type: the text; find: the words to find; wait: text to wait for'),
     exact: z.boolean().optional().describe('find: the whole text must match'),
     role: z.string().max(40).optional().describe('find: only elements of this role (button, link, textbox, ...)'),
-    limit: z.number().int().min(1).max(100).optional().describe('find: at most this many (default 20)'),
+    limit: z.number().int().min(1).max(500).optional().describe('find: at most this many (default 20, at most 100); network: requests (default 50, at most 500); console: messages (default 100)'),
     textGone: z.string().max(2000).optional().describe('wait: until this text is gone from the page'),
     fields: z.array(z.object({ ref: z.string().max(40).optional(), label: z.string().max(200).optional(), value: z.union([z.string().max(20_000), z.boolean()]) })).max(100).optional()
       .describe('fill_form: each field by ref or label, and its value (true/false for a checkbox)'),
@@ -133,6 +165,19 @@ defineOp({
     inline: z.boolean().optional().describe('screenshot: put the image (a data URL) in the result; the shell command uses this'),
     wait_ms: z.number().int().min(0).max(25_000).optional().describe('needs_ok: hold this long for the person\'s answer'),
     device: z.string().max(80).optional().describe('Which browser, when more than one is connected (browser_status names them)'),
+    selector: z.string().max(500).optional().describe('upload: a CSS selector of the file field, for one a page hides (snapshot does not list it)'),
+    record: z.boolean().optional().describe('open: record the tab\'s requests and console from before the page loads (real input switch)'),
+    stop: z.boolean().optional().describe('network: stop recording this tab'),
+    method: z.string().max(40).optional().describe('network: only requests of this method (GET, POST...)'),
+    status: z.union([z.number().int(), z.string().max(10)]).optional().describe('network: only this status (404) or class ("4xx")'),
+    type: z.string().max(40).optional().describe('network: only this type (XHR, Fetch, Document, Script...)'),
+    include_static: z.boolean().optional().describe('network: also images, fonts, media and stylesheets'),
+    request_id: z.string().max(100).optional().describe('network_body / network_request_body: the request\'s id from network'),
+    max_chars: z.number().int().min(1000).max(1_000_000).optional().describe('network_body / network_request_body: read up to this many characters (default 200,000)'),
+    level: z.enum(['debug', 'log', 'info', 'warn', 'error']).optional().describe('console: this level and above'),
+    width: z.number().int().min(100).max(4000).optional().describe('resize: width in pixels'),
+    height: z.number().int().min(100).max(4000).optional().describe('resize: height in pixels'),
+    viewport: z.boolean().optional().describe('resize: the size is the page\'s, not the window\'s'),
   },
   bind: { method: 'POST', path: '/browser/act' },
   timeoutMs: 75_000,

@@ -112,6 +112,20 @@ extension's Settings, reached from the key's popover in the side panel or the to
   or take it when you are not on it, and not to sign in again. `fill_login` there is refused
   (`site_open_in_person_tab`) unless the agent says you asked for a fresh sign-in
   (`fresh_sign_in: true`).
+- **An agent tab is quiet.** Each tab an agent opens is muted before its page loads, and media in
+  it that starts by itself is paused (a play right after the agent's own click or key still
+  plays). Your own tabs, handed over or taken, keep their sound.
+- **Recording a tab's requests and console** (`network`, `network_body`, `network_request_body`,
+  `console`; `src/core/browser-control/` and the extension's `agent-net.ts`). An agent can read
+  the requests a page makes and their bodies, for scripts that read a site's own data the way
+  the page does. It uses the browser's debugger, so it waits for the same "Let agents use real
+  mouse and keys" switch as `evaluate`, works only in a tab an agent opened (never yours), and
+  Chrome shows its debugging bar on that tab while it records; its Cancel ends the recording
+  there. The listing keeps the latest 500 requests and 300 console messages; bodies stay in the
+  browser until asked for, 200,000 characters each by default. On a site where Walnut signed the
+  agent in, request bodies and the console are not given and addresses lose their query.
+- **`upload {selector}`** reaches a file field a page hides behind a button of its own;
+  **`resize`** sizes Walnut's agent window (or its page, `viewport`), never yours.
 
 Turning the switch off in the popup ends it at once: Walnut hears that the browser stopped,
 every command waiting on it fails, and every agent tab is yours again.

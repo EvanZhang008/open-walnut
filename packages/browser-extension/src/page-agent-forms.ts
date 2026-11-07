@@ -157,10 +157,28 @@ function bytes(b64: string): Uint8Array {
 }
 
 /** Files into a file input, as a person's pick would put them: the input's files, then input and change. */
-export function upload(args: { ref?: unknown; files?: unknown }): { uploaded: string[]; into: string } {
-  const el = byRef(args.ref)
-  const input = el instanceof HTMLInputElement && el.type === 'file' ? el : (el.querySelector?.('input[type=file]') as HTMLInputElement | null) ?? (el instanceof HTMLLabelElement && el.control instanceof HTMLInputElement && el.control.type === 'file' ? el.control : null)
-  if (!input) throw new PageError(`${String(args.ref)} is not a file field (input type=file).`, 'not_a_file_field')
+/**
+ * The element a CSS selector names in this frame: for a file field a page hides (styled with a
+ * button of its own), which snapshot and find do not list.
+ */
+export function bySelector(selector: unknown): Element {
+  if (typeof selector !== 'string' || !selector.trim()) throw new PageError('Give a CSS selector.', 'bad_request')
+  let el: Element | null
+  try { el = document.querySelector(selector) } catch { throw new PageError(`Not a CSS selector: ${clip(selector, 120)}.`, 'bad_selector') }
+  if (!el) throw new PageError(`Nothing on the page matches ${clip(selector, 120)}.`, 'no_match')
+  return el
+}
+
+/** The file input an element is, holds, or labels. */
+export function fileInputOf(el: Element): HTMLInputElement | null {
+  return el instanceof HTMLInputElement && el.type === 'file' ? el : (el.querySelector?.('input[type=file]') as HTMLInputElement | null) ?? (el instanceof HTMLLabelElement && el.control instanceof HTMLInputElement && el.control.type === 'file' ? el.control : null)
+}
+
+export function upload(args: { ref?: unknown; selector?: unknown; files?: unknown }): { uploaded: string[]; into: string } {
+  const bySel = typeof args.selector === 'string' && args.ref === undefined
+  const el = bySel ? bySelector(args.selector) : byRef(args.ref)
+  const input = fileInputOf(el)
+  if (!input) throw new PageError(`${bySel ? clip(String(args.selector), 120) : String(args.ref)} is not a file field (input type=file).`, 'not_a_file_field')
   if (input.disabled) throw new PageError('That file field is disabled.', 'read_only')
   const files = Array.isArray(args.files) ? args.files as Array<{ name?: unknown; type?: unknown; base64?: unknown }> : []
   if (!files.length) throw new PageError('No files to put in.', 'no_files')
@@ -173,5 +191,5 @@ export function upload(args: { ref?: unknown; files?: unknown }): { uploaded: st
   input.files = dt.files
   input.dispatchEvent(new Event('input', { bubbles: true, composed: true }))
   input.dispatchEvent(new Event('change', { bubbles: true }))
-  return { uploaded: [...input.files].map((f) => `${f.name} (${f.size} bytes)`), into: `${roleOf(input)} "${clip(nameOf(input), 60)}"` }
+  return { uploaded: [...input.files].map((f) => `${f.name} (${f.size} bytes)`), into: bySel && !nameOf(input) ? `the file field ${clip(String(args.selector), 80)}` : `${roleOf(input)} "${clip(nameOf(input), 60)}"` }
 }

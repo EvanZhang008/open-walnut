@@ -62,6 +62,13 @@ function locate(args: Record<string, unknown>): Record<string, unknown> {
     const h = how ? held(args, how, document.activeElement) : null
     return h ?? {}
   }
+  // A file field a page hides (upload {selector}): the debugger needs only its mark, no point.
+  if (typeof args.selector === 'string' && args.ref === undefined && typeof args.mark === 'string' && /^[a-z0-9]{6,40}$/.test(args.mark)) {
+    const input = forms.fileInputOf(forms.bySelector(args.selector))
+    if (!input) throw new pa.PageError(`${pa.clip(args.selector, 120)} is not a file field (input type=file).`, 'not_a_file_field')
+    input.setAttribute('data-walnut-upload', args.mark)
+    return { x: 0, y: 0, what: `the file field ${pa.clip(args.selector, 80)}` }
+  }
   const { el, x, y } = pa.target(args)
   // Checked before the focus moves: a held step leaves the page as it was.
   const how = trustedHow(args)

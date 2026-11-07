@@ -27,8 +27,10 @@ import { downloadsAction, watchDownloads } from './agent-downloads'
 import { DEBUGGER_OPS, TRUSTED_OPS, trustedAct, trustedReady } from './agent-trusted'
 import { fillFrames } from './bg-fill'
 import { inHandedReach } from './agent-tab-kind'
-import { openInAgentWindow, windowOf } from './agent-window'
+import { openInAgentWindow, resizeAgentWindow, windowOf } from './agent-window'
 import { viewFrame } from './agent-view'
+import { NET_OPS, netAct, startRecording, stopRecording } from './agent-net'
+import { watchMedia } from './agent-media'
 
 export { setTrustedInput, trustedInputState } from './trusted-switch'
 
@@ -148,10 +150,18 @@ async function act(cmd: WireCommand): Promise<unknown> {
       const url = String(a.url ?? '')
       await checkPage(c.allow, url)
       const owner = ownerArg(a)
-      const t = await openInAgentWindow(ext, url)
-      if (t.id === undefined) throw new AgentError('The browser did not open the tab.', 'open_failed')
       const who = typeof a.who === 'string' ? a.who : undefined
+      // record: the tab records its requests and console from before its page loads (agent-net.ts).
+      let recordOut: Record<string, unknown> = {}
+      const t = await openInAgentWindow(ext, url, a.record === true ? async (id) => {
+        const rec = { owner, ...(who ? { who } : {}), history: [url] }
+        await agentTabs.set(id, rec)
+        recordOut = await startRecording(id, rec).then(() => ({ recording: true }),
+          (err: unknown) => ({ recording: false, record_refused: { code: err instanceof AgentError ? err.code : 'browser_error', message: err instanceof Error ? err.message : String(err) } }))
+      } : undefined)
+      if (t.id === undefined) throw new AgentError('The browser did not open the tab.', 'open_failed')
       await agentTabs.set(t.id, { owner, ...(who ? { who } : {}), history: [url] })
+      await sleep(100)
       await loaded(t.id)
       // What loaded may be Walnut itself under another address (its tunnel, a host's own server).
       if ((await pageCheck(t.id))?.walnut) {
@@ -160,7 +170,17 @@ async function act(cmd: WireCommand): Promise<unknown> {
         throw new AgentError(WALNUT_PAGE, 'walnut_page')
       }
       await mark(t.id, true, who)
-      return where(t.id)
+      return { ...(await where(t.id)), ...recordOut }
+    }
+    case 'resize': {
+      const { tabId } = await ownTab(a)
+      const width = Number(a.width), height = Number(a.height)
+      if (!Number.isFinite(width) || !Number.isFinite(height)) throw new AgentError('resize takes a width and a height in pixels.', 'bad_request')
+      try {
+        return { ...(await resizeAgentWindow(ext, tabId, { width, height, viewport: a.viewport === true })), ...(await where(tabId)) }
+      } catch (err) {
+        throw new AgentError(err instanceof Error ? err.message : String(err), (err as { code?: string }).code ?? 'resize_failed')
+      }
     }
     case 'navigate': {
       const { tabId, tab } = await ownTab(a)
@@ -194,6 +214,7 @@ async function act(cmd: WireCommand): Promise<unknown> {
     case 'close': {
       const { tabId, rec } = await ownTab(a)
       await agentTabs.delete(tabId)
+      await stopRecording(tabId)
       // The person's own tab is given back, never closed.
       if (personsTab(rec)) { await mark(tabId, false); return { tab: tabId, closed: false, released: true } }
       await ext.tabs.remove(tabId).catch(() => undefined)
@@ -223,6 +244,11 @@ async function act(cmd: WireCommand): Promise<unknown> {
       const filled = await fillFrames(tabId, undefined, creds, 'login', String(a.url ?? ''))
       return { filled, ...(await where(tabId)) }
     }
+  }
+  if (NET_OPS.has(c.action)) {
+    const { tabId, tab, rec } = await ownTab(a)
+    await checkPage(c.allow, tab.url ?? '')
+    return netAct(c, tabId, rec)
   }
   if (DEBUGGER_OPS.has(c.action) || (a.trusted === true && TRUSTED_OPS.has(c.action))) {
     const { tabId, tab, rec } = await ownTab(a)
@@ -262,6 +288,7 @@ async function viewAct(c: WireCommand): Promise<unknown> {
   const rec = await agentTabs.get(tabId)
   if (!rec) return { tab: tabId, stopped: false }
   await agentTabs.delete(tabId)
+  await stopRecording(tabId)
   await mark(tabId, false)
   await stopIfNoReach()
   return { tab: tabId, stopped: true, ...(personsTab(rec) ? { givenBack: true } : {}) }
@@ -335,7 +362,7 @@ export async function agentLoop(): Promise<void> {
 /** The person turned agents off: Walnut hears it, and every agent tab is theirs again. */
 export async function agentOff(): Promise<void> {
   await call('POST', '/browser/off', {}, { noSession: true, timeoutMs: 8000 }).catch(() => undefined)
-  for (const id of await agentTabs.keys()) { await mark(id, false); await agentTabs.delete(id) }
+  for (const id of await agentTabs.keys()) { await mark(id, false); await agentTabs.delete(id); await stopRecording(id) }
 }
 
 /** Hand-overs still waiting on Walnut; a take-back meanwhile cancels one. */
@@ -382,6 +409,7 @@ export async function releaseTab(tabId: number): Promise<void> {
   if (flight) flight.cancelled = true
   if (!(await agentTabs.get(tabId))) return
   await agentTabs.delete(tabId)
+  await stopRecording(tabId)
   await mark(tabId, false)
   await stopIfNoReach()
 }
@@ -416,7 +444,7 @@ export async function agentMessage(type: string, sender: Sender): Promise<Record
     }
     case 'agent-stop': {
       const id = sender.tab?.id
-      if (id !== undefined) { await agentTabs.delete(id); await stopIfNoReach() }
+      if (id !== undefined) { await agentTabs.delete(id); await stopRecording(id); await stopIfNoReach() }
       return { ok: true }
     }
   }
@@ -427,6 +455,7 @@ export function initAgent(deps: { isWalnutPage: (url: string) => Promise<boolean
   walnutCheck.isWalnutPage = deps.isWalnutPage
   watchOpened()
   watchDownloads()
+  watchMedia()
   ext.tabs.onRemoved.addListener((tabId) => { void agentTabs.delete(tabId); void forgetTampered(tabId) })
   ext.tabs.onUpdated.addListener((tabId, change: { status?: string }) => { if (change.status === 'loading') void tabLoading(tabId) })
   // Each agent tab's own list of addresses, for Back when the browser skips one.

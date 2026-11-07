@@ -10,6 +10,7 @@ import { siteKey } from '../../../src/core/vault/url-match'
 import { walnutAddress } from './walnut-address'
 import { pageCheck } from './page-reach'
 import { popupRecord } from './agent-tab-kind'
+import { muteAgentTab } from './agent-media'
 import {
   ACTING_MS, AgentError, WALNUT_PAGE, acting, agentTabs, allowed, checkPage, frameOp, loaded, mark, originOf, personsTab, settled, sleep, where,
   walnutCheck, type AgentTab, type WireCommand,
@@ -199,6 +200,7 @@ const linking = new Map<number, string>()
 
 async function adoptOpened(tabId: number, rec: AgentTab, url?: string): Promise<void> {
   await agentTabs.set(tabId, popupRecord(rec, url))
+  await muteAgentTab(tabId)
   await loaded(tabId)
   // What loaded may be Walnut itself: never an agent's.
   if ((await pageCheck(tabId))?.walnut) { await agentTabs.delete(tabId); await ext.tabs.remove(tabId).catch(() => undefined); return }

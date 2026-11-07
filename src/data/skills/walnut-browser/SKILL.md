@@ -56,7 +56,11 @@ More actions, when the loop above is not enough:
   cannot find fills nothing).
 - `hover e3` for menus that open on hover; `scroll bottom`, `scroll right --by 400`.
 - `screenshot --full` for the whole page in one image (cut at 12000 px, says so).
-- `upload e5 ./invoice.pdf` puts a file from your machine into a file field (10 MB in all).
+- `upload e5 ./invoice.pdf` puts a file from your machine into a file field (10 MB in all);
+  `upload --selector '#image-upload' ./a.png` reaches a file field the page hides behind a
+  button of its own (snapshot does not list it).
+- `resize 1280 900` sizes Walnut's agent window (`--viewport`: the page itself gets that size),
+  never the user's own window.
 - `downloads --wait` waits for the download your click started and gives its file path.
 - Frames: a snapshot shows elements inside frames with refs like `f3:e2`; use them as any ref.
 - A link that opens a new tab, or a page's popup window, gives you that tab too (`opened: {tab, url}`
@@ -78,7 +82,22 @@ More actions, when the loop above is not enough:
   `evaluate <js>` in a tab you opened) work only after the user turns on "Let agents use real
   mouse and keys" in the extension's Settings; otherwise `trusted_off`. Use them only when page
   events did not work (a keystroke-checking bank form, an alert blocking the page), and tell the
-  user in one line how to turn it on if you need it.
+  user in one line how to turn it on if you need it: the `trusted_off` message says exactly
+  where (the extension's icon, the gear, the switch, Allow); pass it on as it is.
+- **Recording a tab** (with the same switch, in a tab you opened): `open <url> --record` records
+  the tab's requests and console from before the page loads; otherwise the first `network` or
+  `console` starts recording (what came before is not in it: navigate again). `network` lists
+  the requests (id, status, method, type, ms, address; `--url part`, `--method POST`,
+  `--status 4xx`, `--type XHR`; images, fonts, media and stylesheets only with
+  `--include-static`); `network-body <id>` reads a response (200,000 characters, `--max-chars`
+  up to 1,000,000; base64 for bytes); `network-request-body <id>` what a request sent; `console
+  --level error` the page's errors. Chrome shows its debugging bar on that tab while it records;
+  `network --stop` or giving the tab back ends it. To read a site's own data (an API the page
+  calls), this is the way: open the page in a tab of your own (it has the user's sign-ins), never
+  record theirs. After `fill-login` on a site, its request bodies and console are not read (the
+  sign-in sent the password).
+- Tabs you open are muted, and their media does not play by itself (your own click on Play
+  still plays it).
 
 - **Snapshot again after anything changes the page.** Refs (`e12`) hold while the element is on
   the page; a stale one answers `stale_ref`.
@@ -128,6 +147,8 @@ loaded, `fill-login` answers `page_tampered`: navigate to the page again (a relo
 - Close the tabs you opened when the work is done (never one the user handed you).
 - A page that needs trusted input (some games, some anti-bot checks) will not respond to agent
   input: try `--trusted` once if real input is on, else say so instead of retrying.
+- Record (`network`, `console`) only for the work you were asked to do, and stop when you have
+  what you need: response bodies hold the user's own data.
 - `evaluate` reads anything on the page: use it only for what the other actions cannot read,
   never to get at a password field.
 
