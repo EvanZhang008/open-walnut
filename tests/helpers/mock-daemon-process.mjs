@@ -23,6 +23,8 @@ import os from 'node:os'
 import { createServer } from 'node:net'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
+// How late a CLI's own exit is reported (100 ms, so its last lines are on disk).
+const EXIT_REPORT_DELAY_MS = Number(process.env.MOCK_DAEMON_EXIT_DELAY_MS ?? 100)
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mock-daemon-proc-'))
 fs.mkdirSync(path.join(tmpDir, 'streams'), { recursive: true })
 
@@ -140,7 +142,10 @@ function cmdStart(ws, id, cmd) {
     session.exitCode = 1
     if (session.pollTimer) clearInterval(session.pollTimer)
     session.pollTimer = null
-    sendEvent(ws, 'exit', { sid, code: 1, error: err.message })
+    if (!session.reaped) {
+      session.reaped = true
+      sendEvent(ws, 'exit', { sid, code: 1, error: err.message })
+    }
     markExited()
   })
 
@@ -164,12 +169,19 @@ function cmdStart(ws, id, cmd) {
       session.pollTimer = null
       // The real daemon's generation guard: a process a newer start replaced
       // (a cold --resume) must not report its exit as the new process's
-      if (sessions.get(sid) === session) {
-        pollJsonl(ws, sid, session)
+      if (sessions.get(sid) === session) pollJsonl(ws, sid, session)
+      // Once per process, as daemon-core's reapSession: a death a refused write
+      // already reported (writeFifo) is not reported again, 100 ms later, into a
+      // turn the server has opened since (tests/helpers/mock-daemon.ts reap).
+      const report = sessions.get(sid) === session && !session.reaped
+      if (report) {
+        session.reaped = true
         sendEvent(ws, 'exit', { sid, code: session.exitCode })
       }
+      // For a test that checks nothing more was reported (mock-daemon-death-order.test.ts).
+      process.stderr.write(`[MockDaemon] exit of sid=${sid}: ${report ? 'reported' : 'not reported again'}\n`)
       markExited()
-    }, 100)
+    }, EXIT_REPORT_DELAY_MS)
   })
 
   sessions.set(sid, session)
@@ -237,6 +249,7 @@ function writeFifo(ws, id, sid, line, what) {
   if (!session) return sendOk(ws, id, { ok: false, reason: 'not_found' })
   if (session.exitCode !== null) {
     drainBeforeDeath(sid, session)
+    reapOnce(sid, session)
     return sendOk(ws, id, { ok: false, reason: 'session_dead', exitCode: reapExitCode(session) })
   }
   try {
@@ -248,6 +261,7 @@ function writeFifo(ws, id, sid, line, what) {
     // answers with reapSession's normalized exit code.
     if (err.code === 'ENXIO') {
       drainBeforeDeath(sid, session)
+      reapOnce(sid, session)
       return sendOk(ws, id, { ok: false, reason: 'ENXIO', exitCode: reapExitCode(session) })
     }
     if (err.code === 'EAGAIN') return sendOk(ws, id, { ok: false, reason: 'EAGAIN', retriable: true })
@@ -360,4 +374,18 @@ function pollJsonl(ws, sid, session) {
 
 function sendOk(ws, id, data) { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ id, ok: true, ...data })) }
 function sendError(ws, id, error) { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ id, ok: false, error })) }
+/**
+ * daemon-core's reapSession, once per process: the death to every client
+ * (session_state dead), before the refusal that found it. The process's own exit,
+ * reported late by cmdStart, then reports nothing more.
+ */
+function reapOnce(sid, session) {
+  if (session.reaped) return
+  session.reaped = true
+  const payload = JSON.stringify({ ev: 'session_state', sid, state: 'dead', exitCode: reapExitCode(session), reason: 'send-enxio' })
+  for (const client of wss.clients) {
+    if (client.readyState === WebSocket.OPEN) { try { client.send(payload) } catch {} }
+  }
+}
+
 function sendEvent(ws, ev, data) { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ ev, ...data })) }

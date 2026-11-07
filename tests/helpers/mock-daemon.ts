@@ -43,6 +43,17 @@ interface DaemonSession {
   exitCode: number | null
   /** Resolves once the CLI has exited and its `exit` event went out. */
   exited?: Promise<void>
+  /**
+   * This process's death was already reported (a refused write reaped it, or
+   * simulateDeath). daemon-core's reapSession runs once per process (`state ===
+   * 'dead'` returns), so the process's own exit, which this mock reports 100 ms
+   * late, reports nothing more.
+   */
+  reaped?: boolean
+  /** Where this process's stderr begins in the `.err` file (a resume appends to it). */
+  stderrStart?: number
+  /** The process itself has exited (its `exit` event fired). */
+  procExited?: boolean
 }
 
 /** A non-blocking FIFO write takes at most the pipe's free space (8192 bytes on macOS), so a
@@ -80,6 +91,8 @@ export interface MockDaemonOptions {
   /** `usage.sessionCost` reads transcripts here (the real session-cost-core). Unset: the command answers "unknown". */
   claudeProjectsDir?: string
   codexHome?: string
+  /** How late a CLI's own exit is reported (default 100 ms, so its last lines are on disk). */
+  exitReportDelayMs?: number
 }
 
 /**
@@ -92,6 +105,7 @@ export class MockDaemon {
   private _port = 0
   private _fault: string | null = null
   private _cliCommand = MOCK_CLI
+  private readonly exitReportDelayMs: number
   private _attachHistory: Array<{ sid: string; fromOffset: number }> = []
   /** Roles clients announced with client.role ('client-role-v1'). */
   readonly clientRoles: string[] = []
@@ -99,6 +113,10 @@ export class MockDaemon {
   private _wsClients = new Set<WebSocket>()
   /** Per-session injected faults for cmdSend (strict-ack envelope). */
   private _sendFaults = new Map<string, SendFault>()
+  /** The exit code an injected ENXIO reaps with (injectSendFault opts.exitCode). */
+  private _sendFaultExitCodes = new Map<string, number>()
+  /** Faults only the next user line takes, never a control write (injectSendFault opts.sendOnly). */
+  private _sendOnlyFaults = new Set<string>()
   /** Spawn fault returned by every cmdStart until cleared (see injectStartFault). */
   private _startFault: string | null = null
   private _startFaultData: Record<string, unknown> | undefined
@@ -136,6 +154,7 @@ export class MockDaemon {
   private usageDirs: { projects?: string; codex?: string }
 
   constructor(options: MockDaemonOptions = {}) {
+    this.exitReportDelayMs = options.exitReportDelayMs ?? 100
     this.tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mock-daemon-'))
     this.streamsDir = options.streamsDir ?? path.join(this.tmpDir, 'streams')
     this.turnSnapshotRoot = options.turnSnapshotRoot ?? null
@@ -489,7 +508,10 @@ export class MockDaemon {
       session.exitCode = 1
       if (session.pollTimer) clearInterval(session.pollTimer)
       session.pollTimer = null
-      if (ownsSid()) this.sendEvent(ws, 'exit', { sid: session.sid, code: 1, error: err.message })
+      if (ownsSid() && !session.reaped) {
+        session.reaped = true
+        this.sendEvent(ws, 'exit', { sid: session.sid, code: 1, error: err.message })
+      }
       markExited()
     })
 
@@ -509,10 +531,12 @@ export class MockDaemon {
       offset: startOffset,
       exitCode: null,
       exited,
+      stderrStart,
     }
 
     proc.on('exit', (code) => {
       session.exitCode = code ?? 1
+      session.procExited = true
       // Final flush of JSONL before sending exit event.
       // Without this, the poll timer (50ms) may not have caught the last lines
       // written by mock-claude before it exited, causing a race where the test
@@ -520,8 +544,15 @@ export class MockDaemon {
       setTimeout(() => {
         if (session.pollTimer) clearInterval(session.pollTimer)
         session.pollTimer = null
-        if (ownsSid()) {
-          this.pollJsonl(ws, session.sid, session)
+        // Once per process, as daemon-core's reapSession: a death a refused write
+        // already reported is not reported again. Reported late, it reached the
+        // server mid-send, where it ended the turn that send had just opened with
+        // the previous turn's text, or reached the process a resume had started
+        // under the same sid and ended that one's turn empty (2026-11-07,
+        // session-lifecycle e2e on a Linux dev host and in CI).
+        if (ownsSid()) this.pollJsonl(ws, session.sid, session)
+        if (ownsSid() && !session.reaped) {
+          session.reaped = true
           // A failed CLI's stderr rides its exit, as the real daemon replays its `.err`.
           let stderr: string | undefined
           if (session.exitCode !== 0) {
@@ -530,7 +561,7 @@ export class MockDaemon {
           this.sendEvent(ws, 'exit', { sid: session.sid, code: session.exitCode!, ...(stderr ? { stderr } : {}) })
         }
         markExited()
-      }, 100) // 100ms delay ensures JSONL file is fully flushed to disk
+      }, this.exitReportDelayMs) // 100ms by default: the JSONL file is fully flushed to disk
     })
 
     this.sessions.set(sid, session)
@@ -594,6 +625,7 @@ export class MockDaemon {
     if (fault) {
       // One-shot by default — clear after delivering
       this._sendFaults.delete(sid)
+      this._sendOnlyFaults.delete(sid)
       switch (fault) {
         case 'not_found':
           return this.sendOk(ws, id, { ok: false, reason: 'not_found' })
@@ -602,10 +634,9 @@ export class MockDaemon {
         case 'ENXIO':
           // Daemon-level semantics: ENXIO reaps the session. Mirror that so
           // follow-up sends hit session_dead.
-          this.drainBeforeDeath(sid)
-          this._deadSessions.set(sid, -1)
-          this.broadcastSessionState(sid, 'dead', { exitCode: -1, reason: 'send-enxio' })
-          return this.sendOk(ws, id, { ok: false, reason: 'ENXIO', exitCode: -1 })
+          this.reap(sid, this._sendFaultExitCodes.get(sid) ?? -1, 'send-enxio')
+          this._sendFaultExitCodes.delete(sid)
+          return this.sendOk(ws, id, { ok: false, reason: 'ENXIO', exitCode: this._deadSessions.get(sid)! })
         case 'EAGAIN':
           return this.sendOk(ws, id, { ok: false, reason: 'EAGAIN', retriable: true })
       }
@@ -654,11 +685,9 @@ export class MockDaemon {
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code
       if (code === 'ENXIO') {
-        this.drainBeforeDeath(sid)
         const exitCode = reapExitCode(session)
+        this.reap(sid, exitCode, 'send-enxio')
         session.exitCode = exitCode
-        this._deadSessions.set(sid, exitCode)
-        this.broadcastSessionState(sid, 'dead', { exitCode, reason: 'send-enxio' })
         return this.sendOk(ws, id, { ok: false, reason: 'ENXIO', exitCode })
       }
       if (code === 'EAGAIN') return this.sendOk(ws, id, { ok: false, reason: 'EAGAIN', retriable: true })
@@ -681,7 +710,8 @@ export class MockDaemon {
     // The real daemon's send and sendRaw share one FIFO writer, so an injected
     // pipe fault must hit a control envelope exactly like a user message. Same
     // one-shot semantics as cmdSend; ENXIO reaps the session there too.
-    const fault = this._sendFaults.get(sid)
+    // A fault injected for the next user line only (sendOnly) waits for cmdSend.
+    const fault = this._sendOnlyFaults.has(sid) ? undefined : this._sendFaults.get(sid)
     if (fault) {
       this._sendFaults.delete(sid)
       switch (fault) {
@@ -690,10 +720,9 @@ export class MockDaemon {
         case 'session_dead':
           return this.sendOk(ws, id, { ok: false, reason: 'session_dead', exitCode: -1 })
         case 'ENXIO':
-          this.drainBeforeDeath(sid)
-          this._deadSessions.set(sid, -1)
-          this.broadcastSessionState(sid, 'dead', { exitCode: -1, reason: 'sendraw-enxio' })
-          return this.sendOk(ws, id, { ok: false, reason: 'ENXIO', exitCode: -1 })
+          this.reap(sid, this._sendFaultExitCodes.get(sid) ?? -1, 'sendraw-enxio')
+          this._sendFaultExitCodes.delete(sid)
+          return this.sendOk(ws, id, { ok: false, reason: 'ENXIO', exitCode: this._deadSessions.get(sid)! })
         case 'EAGAIN':
           return this.sendOk(ws, id, { ok: false, reason: 'EAGAIN', retriable: true })
       }
@@ -716,8 +745,13 @@ export class MockDaemon {
       // completed turn (the mock CLI exits right after its result, so a control
       // request sent at turn end races that exit), never a blanket -1.
       if (code === 'ENXIO') {
-        this.drainBeforeDeath(sid)
-        return this.sendOk(ws, id, { ok: false, reason: 'ENXIO', exitCode: reapExitCode(session) })
+        // The real daemon reaps here too (handleSendRawCommand → reapSession), so
+        // the process's own exit reports nothing more and the next send is refused
+        // as session_dead.
+        const exitCode = reapExitCode(session)
+        this.reap(sid, exitCode, 'sendraw-enxio')
+        session.exitCode = exitCode
+        return this.sendOk(ws, id, { ok: false, reason: 'ENXIO', exitCode })
       }
       if (code === 'EAGAIN') return this.sendOk(ws, id, { ok: false, reason: 'EAGAIN', retriable: true })
       this.sendError(ws, id, `sendRaw write failed: ${(err as Error).message}`)
@@ -1048,6 +1082,27 @@ export class MockDaemon {
    * (2026-11-04, CI run 41870554237: one peer message ran three turns, and the
    * extra turns ran into the next tests of task-wait-resume.test.ts).
    */
+  /**
+   * daemon-core's reapSession, once per process: the CLI's last lines first
+   * (drainBeforeDeath), then the death to every client (session_state dead, with
+   * the stderr tail of a process that exited with a failure code), and the next
+   * send is refused as session_dead. The process's own exit, reported 100 ms late
+   * by cmdStart, then reports nothing (`reaped`).
+   */
+  private reap(sid: string, exitCode: number, reason: string): void {
+    this.drainBeforeDeath(sid)
+    this._deadSessions.set(sid, exitCode)
+    const session = this.sessions.get(sid)
+    let stderr: string | undefined
+    if (session) {
+      session.reaped = true
+      if (session.procExited && exitCode !== 0) {
+        try { stderr = fs.readFileSync(session.jsonlPath + '.err').subarray(session.stderrStart ?? 0).toString('utf8').slice(-2000) || undefined } catch { /* none */ }
+      }
+    }
+    this.broadcastSessionState(sid, 'dead', { exitCode, reason, ...(stderr ? { stderr } : {}) })
+  }
+
   private drainBeforeDeath(sid: string): void {
     const session = this.sessions.get(sid)
     if (session?.subscriber) this.pollJsonl(session.subscriber, sid, session)
@@ -1081,9 +1136,17 @@ export class MockDaemon {
   // ── Test Injection API ──
 
   /** Inject a one-shot fault that the next `cmdSend` for `sid` will return. */
-  injectSendFault(sid: string, reason: SendFault): void {
+  injectSendFault(sid: string, reason: SendFault, opts: { exitCode?: number; sendOnly?: boolean } = {}): void {
+    this._sendFaultExitCodes.delete(sid)
+    this._sendOnlyFaults.delete(sid)
     if (reason === null) this._sendFaults.delete(sid)
     else this._sendFaults.set(sid, reason)
+    // A test that needs the user line itself to meet the fault: a control write
+    // (a settings read-back, a status question) in between does not take it.
+    if (reason !== null && opts.sendOnly) this._sendOnlyFaults.add(sid)
+    // The code the reap reports for an injected ENXIO: -1 by default; 0 is what the
+    // real daemon reports for a CLI whose stream ends in a completed turn.
+    if (reason === 'ENXIO' && opts.exitCode !== undefined) this._sendFaultExitCodes.set(sid, opts.exitCode)
   }
 
   /**
@@ -1144,6 +1207,7 @@ export class MockDaemon {
     this._deadSessions.set(sid, exitCode)
     const session = this.sessions.get(sid)
     if (session) {
+      session.reaped = true
       session.exitCode = exitCode
       if (session.pollTimer) {
         clearInterval(session.pollTimer)
