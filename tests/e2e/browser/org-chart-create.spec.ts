@@ -92,6 +92,9 @@ test('+ New VP makes a VP with no project, named and instructed as typed', async
 
   const card = vp(page, VP)
   await expect(card).toContainText(VP)
+  // Closed, the card is its name alone; opened, it says it has no projects yet.
+  await expect(card.getByTestId('org-chart-vp-empty')).toHaveCount(0)
+  await card.getByTestId('org-chart-vp-toggle').click()
   await expect(card.getByTestId('org-chart-vp-empty')).toHaveText('No projects yet: drag one here')
   await expect(card.getByTestId('org-chart-project')).toHaveCount(0)
   const lead = await leadOf(request, VP)

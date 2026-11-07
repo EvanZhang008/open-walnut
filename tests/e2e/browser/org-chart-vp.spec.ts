@@ -222,8 +222,7 @@ test('a drag onto another VP says what it does, asks first, and puts the project
 
 test('a drag onto the drop zone creates a dedicated VP again; the menu asks the same without a drag', async ({ page, request }) => {
   await openChart(page)
-  const row = vp(page, A).locator(`[data-testid="org-chart-project"][data-project="${B}"]`)
-  await dragOver(page, row, page.getByTestId('org-chart-own'))
+  await dragOver(page, row(page, A, B), page.getByTestId('org-chart-own'))
   await expect(page.getByTestId('org-chart-own')).toHaveText(`Drop: ${B} gets a dedicated VP`)
   await page.mouse.up()
   await expect(page.getByTestId('org-chart-confirm')).toContainText(`Create a dedicated VP for ${B}?`)

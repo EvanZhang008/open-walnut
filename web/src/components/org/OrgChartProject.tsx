@@ -11,7 +11,7 @@ import type { Task } from '@open-walnut/core';
 import { teamNews, type OrgTaskNode, type TeamNewsItem, type TeamNewsTask } from '@open-walnut/org-tree';
 import { USER_STATE_LABELS, shownState, stateCountLabel } from '@open-walnut/user-status';
 import type { VpProject } from './org-chart-model';
-import { useChartOpen } from './OrgChartVp';
+import { domId, useChartOpen } from './OrgChartVp';
 
 /** Tasks shown before "Show all". */
 export const PROJECT_TASKS_SHOWN = 10;
@@ -61,7 +61,7 @@ export function OrgChartProject({ project: p, tasks, dragging, onDragStart, onDr
   const [all, setAll] = useState(false);
   const lines = open ? projectTasks(p, tasks) : [];
   const shown = all ? lines : lines.slice(0, PROJECT_TASKS_SHOWN);
-  const detailId = `oc-tasks-${p.key}`;
+  const detailId = domId('oc-tasks', p.key);
   const counts = [p.line, p.needsYou > 0 ? needsTitle(p.needsYou) : ''].filter(Boolean).join(' · ');
   return (
     <li
@@ -73,7 +73,11 @@ export function OrgChartProject({ project: p, tasks, dragging, onDragStart, onDr
       onDragStart={(e) => onDragStart(e, p)}
       onDragEnd={onDragEnd}
       // The move menu is a right-click away too, with no control drawn for it.
-      onContextMenu={onMove ? (e) => { e.preventDefault(); e.stopPropagation(); onMove(e.currentTarget, { x: e.clientX, y: e.clientY }); } : undefined}
+      onContextMenu={onMove ? (e) => {
+        // On one of its tasks, the right-click is the task's (the browser's own menu), not the move.
+        if ((e.target as Element).closest('.oc-tasks')) return;
+        e.preventDefault(); e.stopPropagation(); onMove(e.currentTarget, { x: e.clientX, y: e.clientY });
+      } : undefined}
     >
       {/* A div, not a button: WebKit and Firefox start no drag from inside a button. */}
       <div
@@ -95,8 +99,9 @@ export function OrgChartProject({ project: p, tasks, dragging, onDragStart, onDr
       {open && (
         <div className="oc-project-detail" id={detailId}>
           <p className={`oc-detail-line${p.needsYou > 0 ? ' is-alert' : ' is-muted'}`} data-testid="org-chart-project-line">{counts}</p>
-          {p.news && <p className="oc-detail-news" data-testid="org-chart-project-news">{p.news}</p>}
-          <ul className="oc-tasks" data-testid="org-chart-tasks">
+          {/* "Nothing open" is said once, by the counts. */}
+          {p.news && p.news !== p.line && <p className="oc-detail-news" data-testid="org-chart-project-news">{p.news}</p>}
+          <ul className="oc-tasks" data-testid="org-chart-tasks" hidden={lines.length === 0 && p.line === 'Nothing open'}>
             {shown.length === 0 && <li className="oc-task-empty">Nothing open</li>}
             {shown.map((t) => (
               <li key={t.id}>

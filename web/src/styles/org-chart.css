@@ -121,6 +121,9 @@
 /* An opened card or project: what is in it now. */
 .oc-detail, .oc-project-detail { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 0 4px 2px 20px; }
 .oc-project-detail { padding: 0 4px 4px 18px; }
+/* A flex column sizes a child to its content's widest line: an opened project's one-line task
+ * states would widen the card past its column (and the sheet at 720px). */
+.oc-detail > *, .oc-project-detail > * { min-width: 0; max-width: 100%; }
 .oc-detail-line { margin: 0; font-size: 12px; line-height: 1.35; color: var(--fg); overflow-wrap: anywhere; }
 .oc-detail-line.is-muted { color: var(--fg-muted); }
 .oc-detail-line.is-alert { color: var(--error, #d70015); }
@@ -194,6 +197,7 @@
 }
 .oc-vp {
   position: relative;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -344,7 +348,7 @@
 
 @media (max-width: 720px) {
   .org-sheet { margin: 0; border-radius: 0; padding: 12px; }
-  .oc-vps { grid-template-columns: 1fr; }
+  .oc-vps { grid-template-columns: minmax(0, 1fr); }
 }
 .oc-card-btn:focus-visible, .oc-project-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 6px; }
 

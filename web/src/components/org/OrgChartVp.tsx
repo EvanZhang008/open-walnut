@@ -29,6 +29,9 @@ export function pressable(onPress: () => void) {
   };
 }
 
+/** An element id from a row key ("project:event service" has a space, which breaks aria-controls). */
+export const domId = (prefix: string, key: string): string => `${prefix}-${key.replace(/[^A-Za-z0-9_-]/g, (ch) => `_${ch.charCodeAt(0).toString(16)}`)}`;
+
 /** Whether a card or row is open, kept per key on the Org page's view. */
 export function useChartOpen(key: string): [boolean, () => void] {
   const [open, setOpen] = usePageViewOf('org', 'chart.open', key, false, isBoolean);
@@ -59,6 +62,13 @@ function newsIsThreads(news: string, row: ChannelRow): boolean {
   if (!row.threads?.shown) return false;
   const line = threadLine(row.threads);
   return news === line || news.endsWith(` · ${line}`);
+}
+
+/** "Tasks that need you: Garden 3 · Seeds 1": what its tasks ask, by project. The node's own
+ *  threads are their own line, so a VP with threads never hides its tasks' asks. */
+function taskAsks(c: VpCard): string | null {
+  const parts = c.projects.filter((p) => p.row.alerts.length > 0).map((p) => `${p.name} ${p.row.alerts.length}`);
+  return parts.length ? `Tasks that need you: ${parts.join(' · ')}` : null;
 }
 
 interface CeoProps {
@@ -119,9 +129,12 @@ export function OrgChartVp({ card: c, now, className, zone, draggable, onDragSta
   // Its own key is its home project's row key too: the card and that row open apart.
   const [open, toggle] = useChartOpen(`vp:${c.key}`);
   const sign = cardSign(c.row, c.needsYou);
-  const detailId = `oc-detail-${c.key}`;
+  const detailId = domId('oc-detail', c.key);
   const threads = threadsText(c.row);
   const meta = metaLine(c.newsAt, c.newsTask, now);
+  // The news, unless it only repeats the threads or the counts (then its time goes with it).
+  const news = !!c.news && c.news !== c.line && !newsIsThreads(c.news, c.row);
+  const asks = taskAsks(c);
   return (
     <li
       className={`${className}${open ? ' is-open' : ''}`}
@@ -155,10 +168,12 @@ export function OrgChartVp({ card: c, now, className, zone, draggable, onDragSta
       {open && (
         <div className="oc-detail" id={detailId} data-testid="org-chart-vp-detail">
           {threads && <p className={`oc-detail-line is-clamped${c.row.threads?.needs ? ' is-alert' : ''}`} data-testid="org-chart-vp-threads" title={threads}>{threads}</p>}
-          {!threads && c.needsYou > 0 && <p className="oc-detail-line is-alert" data-testid="org-chart-vp-needs">{stateCountLabel('needs', c.needsYou)}</p>}
-          {c.news && !newsIsThreads(c.news, c.row) && <p className={`oc-card-news${c.row.state === 'alert' ? ' is-alert' : ''}`} data-testid="org-chart-vp-news" title={c.newsTask ? `${c.newsTask}: ${c.news}` : c.news}>{c.news}</p>}
-          {meta && <p className="oc-detail-line is-muted" data-testid="org-chart-vp-meta">{meta}</p>}
-          {c.projects.length > 0 && <p className="oc-detail-line is-muted" data-testid="org-chart-vp-line">{c.line}</p>}
+          {asks && <p className="oc-detail-line is-alert" data-testid="org-chart-vp-needs">{asks}</p>}
+          {news && <p className={`oc-card-news${c.row.state === 'alert' ? ' is-alert' : ''}`} data-testid="org-chart-vp-news" title={c.newsTask ? `${c.newsTask}: ${c.news}` : c.news}>{c.news}</p>}
+          {news && meta && <p className="oc-detail-line is-muted" data-testid="org-chart-vp-meta">{meta}</p>}
+          {c.projects.length > 0
+            ? <p className="oc-detail-line is-muted" data-testid="org-chart-vp-line">{c.line}</p>
+            : <p className="oc-detail-line is-muted" data-testid="org-chart-vp-empty">{c.line}</p>}
           <div className="oc-detail-actions">
             <button type="button" className="oc-detail-btn" data-testid="org-chart-vp-open" onClick={onOpenChat}>Open chat</button>
             {more}

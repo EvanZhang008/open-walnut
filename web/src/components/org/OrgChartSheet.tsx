@@ -215,8 +215,10 @@ export function OrgChartSheet({ main, rows, tasks, onClose, onPick, onOpenTask, 
     const r = from.getBoundingClientRect();
     // A right-click lands on the card head: focus comes back to its ⋯, a control that takes it.
     // (Its ⋯ shows only on an open card; else its name, the card's toggle.)
+    const node = from.closest('[data-testid="org-chart-vp"], .oc-ceo-wrap');
     const more = from.matches('button') ? from
-      : from.closest('[data-testid="org-chart-vp"], .oc-ceo-wrap')?.querySelector<HTMLElement>('[data-testid="org-chart-vp-menu"], [data-testid="org-chart-ceo-menu"], [data-testid="org-chart-vp-toggle"], [data-testid="org-chart-ceo"]');
+      : node?.querySelector<HTMLElement>('[data-testid="org-chart-vp-menu"], [data-testid="org-chart-ceo-menu"]')
+        ?? node?.querySelector<HTMLElement>('[data-testid="org-chart-vp-toggle"], [data-testid="org-chart-ceo"]');
     setNodeMenu({ card, x: point?.x ?? r.left, y: point?.y ?? r.bottom + 4, from: more ?? from });
   };
   const nodeMenuItems = (card: VpCard | null, from: HTMLElement): ContextMenuItem[] => {
@@ -336,7 +338,6 @@ export function OrgChartSheet({ main, rows, tasks, onClose, onPick, onOpenTask, 
                   onOpenChat={() => pick(c.key)}
                   more={c.role === 'VP' ? nodeMore(c, `More for ${theVp(c.name)}`) : null}
                 >
-                  {c.projects.length === 0 && <p className="oc-vp-empty" data-testid="org-chart-vp-empty">{c.line}</p>}
                   <ul className="oc-projects" data-testid="org-chart-projects" aria-label={`Projects ${theVp(c.name)} leads`} hidden={c.projects.length === 0}>
                     {c.projects.map((p) => (
                       <OrgChartProject
