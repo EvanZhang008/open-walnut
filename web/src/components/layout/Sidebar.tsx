@@ -25,7 +25,7 @@ import { setUpdateNoticeDock } from '@/components/common/update-notice-dock';
 import { useLendAppUpdateToasts } from './useAppUpdateActions';
 import { useRailPeek } from './useRailPeek';
 import { RailItemPill } from './RailItemPill';
-import { sideBarPageOf, usePageSideBar } from './page-side-bar';
+import { sideBarPageOf, toggleSideBarPane, usePageSideBar } from './page-side-bar';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import { bellPresentation } from '@/utils/host-banner-placement';
 import { useAttentionDots } from '@/hooks/useAttentionDots';
@@ -193,9 +193,12 @@ export function Sidebar({
   const sideBar = usePageSideBar(sideBarPage);
   const agendaOpen = sideBarPage === null ? calendarPanelVisible : sideBar.view.agenda;
   const scratchpadOpen = sideBarPage === null ? scratchpadVisible : sideBar.view.scratchpad;
+  // Where the tap happens is the URL, as for the Home toggles below: right after a rail link
+  // to a slow page the drawn route can still be the old one.
   const sideBarToggle = (event: string, pane: 'agenda' | 'scratchpad') => () => {
-    if (sideBarPage === null) window.dispatchEvent(new CustomEvent(event));
-    else sideBar.setPane(pane, (open) => !open);
+    const here = sideBarPageOf(window.location.pathname);
+    if (here === null) window.dispatchEvent(new CustomEvent(event));
+    else toggleSideBarPane(here, pane);
   };
   const handleToggleCalendarPanel = sideBarToggle('sidebar:toggle-calendar', 'agenda');
   const handleToggleScratchpad = sideBarToggle('sidebar:toggle-scratchpad', 'scratchpad');

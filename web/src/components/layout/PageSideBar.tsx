@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { useDragGesture } from '@/hooks/useDragGesture';
 import { openTaskOnHome } from '@/utils/open-session';
 import { CompanionColumn } from './HomeCompanionPanel';
-import { sideBarPageOf, sideBarWidth, usePageSideBar } from './page-side-bar';
+import { SIDE_BAR_LAYOUT_EVENT, SIDE_BAR_WIDTH_MIN, sideBarPageOf, sideBarWidth, usePageSideBar } from './page-side-bar';
 
 /** Hands focus back to the rail toggle that opens a pane (as Home's column does). */
 function focusOpener(testId: string) {
@@ -60,10 +60,14 @@ export function PageSideBar() {
   const onTaskClick = useCallback((taskId: string) => openTaskOnHome(taskId, navigate), [navigate]);
 
   const width = dragWidth ?? shown;
+  const agendaOpen = page !== null && view.agenda;
+  const scratchpadOpen = page !== null && view.scratchpad;
+  // The full screen area starts beside the side bar (AppShell): tell it when the bar moved.
+  useLayoutEffect(() => { window.dispatchEvent(new Event(SIDE_BAR_LAYOUT_EVENT)); }, [agendaOpen, scratchpadOpen, width]);
   return (
     <CompanionColumn
-      calendarOpen={page !== null && view.agenda}
-      scratchpadOpen={page !== null && view.scratchpad}
+      calendarOpen={agendaOpen}
+      scratchpadOpen={scratchpadOpen}
       onCloseCalendar={closeAgenda}
       onCloseScratchpad={closeScratchpad}
       tasks={tasks}
@@ -78,8 +82,19 @@ export function PageSideBar() {
         role="separator"
         aria-orientation="vertical"
         aria-label="Resize side bar"
+        aria-valuenow={width}
+        aria-valuemin={SIDE_BAR_WIDTH_MIN}
+        aria-valuemax={sideBarWidth(Number.MAX_SAFE_INTEGER, windowWidth)}
+        tabIndex={0}
         data-testid="page-side-bar-resize"
         onPointerDown={onPointerDown}
+        onKeyDown={(event) => {
+          // The arrows widen and narrow it from the keyboard, 16px a press.
+          const step = event.key === 'ArrowRight' ? 16 : event.key === 'ArrowLeft' ? -16 : 0;
+          if (!step) return;
+          event.preventDefault();
+          setWidth(sideBarWidth(shown + step, window.innerWidth));
+        }}
       />
     </CompanionColumn>
   );

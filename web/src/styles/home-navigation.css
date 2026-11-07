@@ -304,7 +304,8 @@
 .page-side-bar-resize { position: absolute; top: 0; bottom: 0; right: 0; width: 0; z-index: 5; cursor: col-resize; touch-action: none; }
 .page-side-bar-resize::before { content: ''; position: absolute; top: 0; bottom: 0; left: -3px; right: -3px; cursor: col-resize; }
 .page-side-bar-resize::after { content: ''; position: absolute; top: 0; bottom: 0; left: -2px; width: 3px; background: var(--accent); opacity: 0; transition: opacity .15s; pointer-events: none; }
-.page-side-bar-resize:hover::after, .page-side-bar-resize.resizing::after { opacity: .5; }
+.page-side-bar-resize:hover::after, .page-side-bar-resize.resizing::after, .page-side-bar-resize:focus-visible::after { opacity: .5; }
+.page-side-bar-resize:focus-visible { outline: none; }
 /* A narrow window lays the side bar over the page from its left edge, as Home does its column. */
 @media (max-width: 1100px) {
   .page-side-bar { position: absolute; top: 0; left: 0; bottom: 0; z-index: 45; box-shadow: 10px 0 36px rgb(0 0 0 / 10%); }

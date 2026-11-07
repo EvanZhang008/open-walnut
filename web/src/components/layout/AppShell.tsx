@@ -27,6 +27,8 @@ import { installStandaloneLinks } from '@/utils/standalone-links';
 import { PhoneTopBar } from './PhoneTopBar';
 import { AwayLine } from './AwayLine';
 import { PageSideBar } from './PageSideBar';
+import { SIDE_BAR_LAYOUT_EVENT, pageAreaLeft } from './page-side-bar';
+import { ScratchpadHost } from './ScratchpadHost';
 import '@/styles/phone-layout.css';
 import '@/styles/phone-fixes.css';
 import '@/styles/phone-fixes-r2.css';
@@ -90,20 +92,23 @@ function AppShellInner({ children }: AppShellProps) {
   const contentRef = useRef<HTMLDivElement>(null);
   // Where the page area starts: a full screen panel fills the tab beside the
   // sidebar, and beside the page's Agenda and Scratchpad side bar when it is open,
-  // which stay usable like the rail (fullscreen-tab.css reads --fullscreen-left;
-  // 0 on a phone). The area's left edge only moves with its width, so watching its
-  // size is enough.
+  // which stays usable like the rail (fullscreen-tab.css reads --fullscreen-left;
+  // 0 on a phone). It is the side bar's right edge while it shows, beside the page
+  // (a wide window) or over it (a narrow one).
   const mainRef = useRef<HTMLElement>(null);
   useEffect(() => {
+    const main = mainRef.current;
     const area = contentRef.current;
-    if (!area) return;
+    if (!main || !area) return;
     const root = document.documentElement;
-    const publish = () => root.style.setProperty('--fullscreen-left', `${Math.max(0, Math.round(area.getBoundingClientRect().left))}px`);
+    const publish = () => root.style.setProperty('--fullscreen-left', `${pageAreaLeft(main)}px`);
     publish();
     const ro = new ResizeObserver(publish);
+    ro.observe(main);
     ro.observe(area);
     window.addEventListener('resize', publish);
-    return () => { ro.disconnect(); window.removeEventListener('resize', publish); };
+    window.addEventListener(SIDE_BAR_LAYOUT_EVENT, publish);
+    return () => { ro.disconnect(); window.removeEventListener('resize', publish); window.removeEventListener(SIDE_BAR_LAYOUT_EVENT, publish); };
   }, []);
   const sidebarRef = useRef<HTMLElement>(null);
   const sidebarToggleRef = useRef<HTMLButtonElement>(null);
@@ -316,6 +321,7 @@ function AppShellInner({ children }: AppShellProps) {
             mounts (the rail has no toggle for them there). */}
         <div className="main-content-row">
           {!isMobileSidebar && <PageSideBar />}
+          {!isMobileSidebar && <ScratchpadHost />}
           <div
             ref={contentRef}
             className="app-content-area"

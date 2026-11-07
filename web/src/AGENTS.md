@@ -323,8 +323,11 @@ show inline after the open ones, other completed hits that show the query fold i
   `open-walnut-home-*-visible` flags); every other page gets `PageSideBar` on its left edge inside
   `.main-content-row` (AppShell), the same `CompanionColumn`. What is open and the width are kept per
   page in view memory (`page-side-bar.ts`, `side-bar.view` per `sideBarPageOf`), a narrow window
-  (<=1100px) lays it over the page, and `--fullscreen-left` is the page area's left edge, so a full
-  screen sheet lies beside it and it stays usable like the rail. No phone: neither pane mounts there.
+  (<=1100px) lays it over the page, and `--fullscreen-left` is the side bar's right edge while it
+  shows (`pageAreaLeft`), so a full screen sheet lies beside it and it stays usable like the rail. The
+  window has ONE scratchpad editor (`ScratchpadHost`, one `useGlobalNotes`), moved as a DOM box into the
+  slot of the column that shows it: two editors meant two savers, and a line typed on Home whose save
+  was in flight was lost to the other's 409 reload. No phone: neither pane mounts there.
   Spec: `tests/e2e/browser/page-side-bar.spec.ts`.
 - Use the structured logger `import { log } from '@/utils/log'` — never raw `console.log`;
   never `console.debug` (invisible to the disk forwarder). IDs full, never truncated.

@@ -1,8 +1,7 @@
 import { useEffect, useRef, type CSSProperties, type ReactNode } from 'react';
 import { useLocation } from 'react-router-dom';
 import { CalendarSidePanel } from '@/components/calendar/CalendarSidePanel';
-import { GlobalNotesSection } from '@/components/notes/GlobalNotesSection';
-import { useGlobalNotes, type UseGlobalNotesReturn } from '@/hooks/useGlobalNotes';
+import { useScratchpadSlot } from './ScratchpadHost';
 import type { Task } from '@open-walnut/core';
 
 interface Props {
@@ -55,14 +54,13 @@ interface ColumnProps extends Omit<Props, 'overlayLeft'> {
 export function CompanionColumn({ calendarOpen, scratchpadOpen, onCloseCalendar, onCloseScratchpad, tasks, focusedTaskId, onTaskClick, className, testId, style, children, place }: ColumnProps) {
   const open = calendarOpen || scratchpadOpen;
   const shellRef = useRef<HTMLElement | null>(null);
-  // Loaded with the page, not when the pane first opens: opening it puts the caret in the editor,
-  // and typing that began before a late load landed raced the load and lost the text.
-  const notes = useGlobalNotes();
   // Opening a pane takes the focus there: the agenda's close button, the scratchpad's editor
   // (opening it is a request to write in it; a reload that restores it open is not). A pane that
   // shows because the side bar moved to another page that keeps it open is no open: that page's
   // own focus stays.
-  const was = useRef({ calendarOpen: false, scratchpadOpen, place });
+  // Home's column (no place) keeps its old rule of focusing an agenda a reload restores open;
+  // beside another page a restored pane leaves that page's own first focus alone.
+  const was = useRef({ calendarOpen: place === undefined ? false : calendarOpen, scratchpadOpen, place });
   useEffect(() => {
     const before = was.current;
     was.current = { calendarOpen, scratchpadOpen, place };
@@ -108,17 +106,16 @@ export function CompanionColumn({ calendarOpen, scratchpadOpen, onCloseCalendar,
         </div>
       )}
       {visitedScratchpad.current && (
-        <ScratchpadPane notes={notes} open={scratchpadOpen} onClose={onCloseScratchpad} tasks={tasks} focusedTaskId={focusedTaskId} onTaskClick={onTaskClick} testId={`${testId}-scratchpad`} />
+        <ScratchpadPane open={scratchpadOpen} onClose={onCloseScratchpad} tasks={tasks} focusedTaskId={focusedTaskId} onTaskClick={onTaskClick} testId={`${testId}-scratchpad`} />
       )}
       {children}
     </aside>
   );
 }
 
-function ScratchpadPane({ notes, open, onClose, tasks, focusedTaskId, onTaskClick, testId }: { notes: UseGlobalNotesReturn; open: boolean; onClose: () => void; tasks: Task[]; focusedTaskId?: string; onTaskClick: (taskId: string) => void; testId: string }) {
-  return (
-    <div className="home-companion-body home-companion-scratchpad" data-testid={testId} style={open ? undefined : { display: 'none' }}>
-      <GlobalNotesSection {...notes} fill title="Scratchpad" onClose={onClose} tasks={tasks} focusedTaskId={focusedTaskId} onTaskClick={onTaskClick} />
-    </div>
-  );
+/** The column's place for the window's one scratchpad editor (ScratchpadHost moves it here). */
+function ScratchpadPane({ open, onClose, tasks, focusedTaskId, onTaskClick, testId }: { open: boolean; onClose: () => void; tasks: Task[]; focusedTaskId?: string; onTaskClick: (taskId: string) => void; testId: string }) {
+  const slot = useRef<HTMLDivElement | null>(null);
+  useScratchpadSlot(slot, open, { onClose, tasks, focusedTaskId, onTaskClick });
+  return <div ref={slot} className="home-companion-body home-companion-scratchpad" data-testid={testId} style={open ? undefined : { display: 'none' }} />;
 }

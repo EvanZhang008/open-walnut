@@ -10,7 +10,7 @@
  * Notes, and both come back as left after another page, a reload or a restart.
  */
 import { useCallback } from 'react';
-import { usePageViewOf } from '@/utils/view-memory';
+import { shownText, storedView, usePageViewOf, viewKey, writeView } from '@/utils/view-memory';
 
 export interface PageSideBarView {
   agenda: boolean;
@@ -25,6 +25,21 @@ export const SIDE_BAR_WIDTH_MIN = 280;
 export const SIDE_BAR_WIDTH_MAX = 720;
 /** A column never takes more than this share of the window, so the page keeps room. */
 export const SIDE_BAR_WINDOW_SHARE = 0.5;
+
+/** Sent after the side bar opens, closes or changes width, so the full screen area follows it. */
+export const SIDE_BAR_LAYOUT_EVENT = 'page-side-bar:layout';
+
+/**
+ * Where a full screen sheet's area starts (--fullscreen-left): the shell's page column (`main`,
+ * 0 on a phone, whatever its safe-area padding), or the side bar's right edge while it shows, beside
+ * the page or over it (a narrow window).
+ */
+export function pageAreaLeft(main: Element): number {
+  let left = main.getBoundingClientRect().left;
+  const bar = document.querySelector('[data-testid="page-side-bar"]');
+  if (bar && bar.getClientRects().length > 0) left = Math.max(left, bar.getBoundingClientRect().right);
+  return Math.max(0, Math.round(left));
+}
 
 /**
  * The page a side bar view belongs to, or null on Home (which has its own column). One page per
@@ -53,6 +68,17 @@ export function isPageSideBarView(v: unknown): v is PageSideBarView {
 export function sideBarWidth(stored: number | undefined, windowWidth: number): number {
   const max = Math.max(SIDE_BAR_WIDTH_MIN, Math.min(SIDE_BAR_WIDTH_MAX, Math.floor(windowWidth * SIDE_BAR_WINDOW_SHARE)));
   return Math.round(Math.min(max, Math.max(SIDE_BAR_WIDTH_MIN, stored ?? SIDE_BAR_WIDTH_DEFAULT)));
+}
+
+const VIEW_KEY = viewKey('side-bar', 'view');
+
+/**
+ * Open or shut one pane of `page`'s side bar, read and written by page id (the rail passes the page
+ * the window's URL names, which can run ahead of the route React has drawn).
+ */
+export function toggleSideBarPane(page: string, pane: 'agenda' | 'scratchpad'): void {
+  const prev = storedView(shownText(VIEW_KEY), page, isPageSideBarView) ?? SIDE_BAR_CLOSED;
+  writeView(VIEW_KEY, page, { ...prev, [pane]: !prev[pane] });
 }
 
 /** The side bar of `page` (Home's id is never written), with a setter per pane and the width. */
