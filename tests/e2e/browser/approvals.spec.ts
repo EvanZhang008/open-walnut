@@ -131,6 +131,8 @@ test('biometric: a tap with a reason when no device signs, then Face ID only onc
 })
 
 test('Needs you: approvals are one line on Home, a click opens the request, and Main on the Org page lists them', async ({ page, request }) => {
+  // Home, a batch and the Org page in one walk: over a minute on a loaded runner.
+  test.setTimeout(180_000)
   await page.goto('/')
   await expect(page.locator('.app-layout, #root').first()).toBeVisible()
   const summary = page.locator('.status-section-block-needs [data-testid="approval-summary"]')
@@ -221,7 +223,9 @@ test('Needs you: approvals are one line on Home, a click opens the request, and 
   await expect(page.locator('[data-testid="org-task-tab"][data-tab="needs"] .org-task-tab-count')).not.toHaveText('0')
   await orgLine.click()
   await expect(dialog.locator('.approval-what')).toContainText('Rotate keys')
-  await dialog.getByRole('button', { name: 'Approve', exact: true }).click()
+  const approve = dialog.getByRole('button', { name: 'Approve', exact: true })
+  await expect(approve, 'the dialog stays open over the Org page').toBeVisible({ timeout: 10_000 })
+  await approve.click({ timeout: 20_000 })
   expect((await waitFor(request, third.approval.id, third.waitToken)).approval.status).toBe('approved')
   await expect(orgLine).toHaveCount(0)
 })
