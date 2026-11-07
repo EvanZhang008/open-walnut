@@ -133,7 +133,7 @@ describe('remote write paths ratchet', () => {
     // A test daemon's identity never reaches its sessions (a nested test server's daemon would claim it).
     for (const twin of ['src/providers/daemon-standalone.ts', 'src/providers/daemon-source.ts']) {
       const src = fs.readFileSync(path.join(ROOT, twin), 'utf-8')
-      for (const k of ['WALNUT_DAEMON_ISOLATED_FOR', 'WALNUT_DAEMON_ORPHAN_EXIT_MS', 'WALNUT_INSTALL_HOME', 'WALNUT_RUNTIME_DIR']) expect(src, `${twin} ${k}`).toContain(`${k}: undefined,`)
+      for (const k of ['WALNUT_DAEMON_ISOLATED_FOR', 'WALNUT_DAEMON_ORPHAN_EXIT_MS', 'WALNUT_INSTALL_HOME', 'WALNUT_RUNTIME_DIR', 'WALNUT_DAEMON_STATE_DIR']) expect(src, `${twin} ${k}`).toContain(`${k}: undefined,`)
     }
     const local = fs.readFileSync(path.join(ROOT, 'src/providers/local-daemon.ts'), 'utf-8')
     for (const k of ['WALNUT_DAEMON_ISOLATED_FOR', 'WALNUT_DAEMON_ORPHAN_EXIT_MS', 'WALNUT_INSTALL_HOME']) expect(local).toContain(`delete env.${k}`)

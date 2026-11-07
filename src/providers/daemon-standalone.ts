@@ -693,7 +693,7 @@ const LOG_FILE = path.join(DAEMON_DIR, `daemon-${DAEMON_INSTANCE_ID}.log`)
 // Claude CLI (#!/usr/bin/env node) needs BOTH claude AND node in PATH.
 // Order (host-runtime-core.ts buildDaemonPath): the user's login-shell PATH,
 // captured from a CLEAN env so our inherited PATH cannot leak into it, then the
-// fallback tool dirs (~/.toolbox/bin first among them), then the inherited PATH.
+// fallback tool dirs (the user's own tool dirs first), then the inherited PATH.
 // The old order was fallbacks -> rc PATH -> inherited: the fallback dirs
 // (/usr/local/bin, /usr/bin, ...) came BEFORE the user's rc PATH, and that rc
 // PATH was captured in the inherited env, so a node in a system dir or in the
@@ -6596,7 +6596,7 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
       WALNUT_DAEMON_ISOLATED_FOR: undefined,
       WALNUT_DAEMON_ORPHAN_EXIT_MS: undefined,
       WALNUT_INSTALL_HOME: undefined,
-      WALNUT_RUNTIME_DIR: undefined,
+      // WALNUT_RUNTIME_DIR is unset below.
       // And the service state dir: a daemon a CLI starts (a test, a sandbox) is isolated,
       // and with this var it could reach the service daemon's journals and state.
       // Keep in sync with daemon-source.ts.

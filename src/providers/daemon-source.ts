@@ -1535,7 +1535,7 @@ function runWnMinimal(argv, stdinText) {
 // claude/node/etc; cmdStart spawns claude directly, so this PATH decides what
 // runs. Order: the user's login-shell PATH (captured from a CLEAN env, so the
 // PATH we inherited cannot leak into it), then the fallback tool dirs
-// (~/.toolbox/bin first among them), then the inherited PATH. The old order was
+// (the user's own tool dirs first among them), then the inherited PATH. The old order was
 // fallbacks -> rc PATH -> inherited: the fallback dirs (/usr/local/bin,
 // /usr/bin, ...) came BEFORE the user's rc PATH, and that rc PATH was captured
 // in the inherited env, so a node in a system dir or in the server's own shell
@@ -7464,7 +7464,6 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
       WALNUT_DAEMON_ISOLATED_FOR: undefined,
       WALNUT_DAEMON_ORPHAN_EXIT_MS: undefined,
       WALNUT_INSTALL_HOME: undefined,
-      WALNUT_RUNTIME_DIR: undefined,
       // And the service state dir: a daemon a CLI starts is isolated, and with this var
       // it could reach the service daemon's journals. Keep in sync with daemon-standalone.ts.
       WALNUT_DAEMON_STATE_DIR: undefined,
