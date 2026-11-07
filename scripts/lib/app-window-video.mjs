@@ -36,7 +36,7 @@ for w in list {
 /** The pids whose executable is exactly `exe`. */
 function pidsOf(exe) {
   try {
-    return execFileSync('/bin/ps', ['-axww', '-o', 'pid=,comm='], { encoding: 'utf8' }).split('\n')
+    return execFileSync('/bin/ps', ['-axww', '-o', 'pid=', '-o', 'comm='], { encoding: 'utf8' }).split('\n')
       .map((row) => row.match(/^\s*(\d+)\s+(.*\S)\s*$/))
       .filter((m) => m && m[2] === exe)
       .map((m) => m[1])

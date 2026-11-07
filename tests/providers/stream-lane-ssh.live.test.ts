@@ -117,7 +117,7 @@ describe.skipIf(!enabled)('the stream lane\'s own SSH forward, on real OpenSSH',
     let why = ''
     cut.onExit((w) => { why = w })
     // Every process under this test's sshd (a session is a monitor and its child; both hold the socket).
-    const table = spawnSync('ps', ['-axo', 'pid=,ppid=']).stdout.toString().trim().split('\n').map((l) => l.trim().split(/\s+/).map(Number))
+    const table = spawnSync('ps', ['-axo', 'pid=', '-o', 'ppid=']).stdout.toString().trim().split('\n').map((l) => l.trim().split(/\s+/).map(Number))
     const sessions: number[] = []
     for (let grew = true; grew;) {
       grew = false

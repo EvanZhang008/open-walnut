@@ -93,11 +93,13 @@ function runPosix(host: string | undefined, script: string): Promise<{ code: num
  * socket's owner, each proved by start time and argv), never a command-line
  * match, which also picked up any process that only named the socket. The
  * probe carries the WHOLE process table in the same round trip, and the tree is
- * walked in JS. WHY `ps -ax -o pid=,ppid=,comm=` (and NOT `ps --ppid`):
+ * walked in JS. WHY `ps -ax -o pid= -o ppid= -o comm=` (and NOT `ps --ppid`):
  * `--ppid` is GNU-only and errors with "ps: illegal option" on macOS BSD ps;
- * the BSD `-g` fallback means process-GROUP-id (not pid). `ps -ax -o
- * pid=,ppid=,comm=` is portable across macOS BSD ps and Linux GNU ps, so we
- * get the same table on both and resolve the leaf ourselves.
+ * the BSD `-g` fallback means process-GROUP-id (not pid). `ps -ax -o pid= -o
+ * ppid= -o comm=` is portable across macOS BSD ps and Linux GNU ps (one -o per
+ * column: procps 3.3.10 takes everything after a column's `=` as its header,
+ * commas included), so we get the same table on both and resolve the leaf
+ * ourselves.
  */
 export async function hasForegroundProcess(record: Pick<SessionRecord, 'claudeSessionId' | 'host'>): Promise<boolean> {
   const sock = dtachSocketPath(record.claudeSessionId, !!record.host)

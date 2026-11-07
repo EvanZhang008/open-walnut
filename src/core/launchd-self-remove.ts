@@ -51,11 +51,11 @@ export function claimedLaunchdLabel(
   return label
 }
 
-/** One process's parent and command line, or null when it is gone (`ps -o ppid=,command=`). */
+/** One process's parent and command line, or null when it is gone (`ps -o ppid= -o command=`). */
 export type ProcessParentLookup = (pid: number) => Promise<{ ppid: number; command: string } | null>
 
 const defaultParentOf: ProcessParentLookup = (pid) => new Promise((resolve) => {
-  execFile('ps', ['-o', 'ppid=,command=', '-p', String(pid)], { timeout: 5_000 }, (err, stdout) => {
+  execFile('ps', ['-o', 'ppid=', '-o', 'command=', '-p', String(pid)], { timeout: 5_000 }, (err, stdout) => {
     const m = err ? null : /^\s*(\d+)\s+(.*)$/.exec(String(stdout).split('\n')[0] ?? '')
     resolve(m ? { ppid: Number(m[1]), command: m[2]! } : null)
   })

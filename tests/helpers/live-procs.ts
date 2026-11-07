@@ -244,7 +244,7 @@ export class LiveProcs {
   }
 }
 
-/** Parses `ps -o pid=,ppid=,pgid=,stat=,lstart=,command=` under LC_ALL=C (lstart is five words). */
+/** Parses `ps -o pid= -o ppid= -o pgid= -o stat= -o lstart= -o command=` under LC_ALL=C (lstart is five words). */
 export function parsePs(out: string): Map<number, ProcRow> {
   const rows = new Map<number, ProcRow>()
   for (const line of out.split('\n')) {
@@ -257,7 +257,7 @@ export function parsePs(out: string): Map<number, ProcRow> {
   return rows
 }
 
-const PS_COLUMNS = 'pid=,ppid=,pgid=,stat=,lstart=,command='
+const PS_COLUMNS = ['pid=', 'ppid=', 'pgid=', 'stat=', 'lstart=', 'command='].flatMap((c) => ['-o', c])
 // The start time's words follow the locale; parsePs reads the C one. Both tools run by full path.
 const PS_ENV = { LC_ALL: 'C' }
 
@@ -265,7 +265,7 @@ const PS_ENV = { LC_ALL: 'C' }
 export function realProcTable(): ProcTable {
   return {
     async read() {
-      const { stdout } = await run('/bin/ps', ['-A', '-ww', '-o', PS_COLUMNS], { maxBuffer: 32 << 20, timeout: 15_000, env: PS_ENV })
+      const { stdout } = await run('/bin/ps', ['-A', '-ww', ...PS_COLUMNS], { maxBuffer: 32 << 20, timeout: 15_000, env: PS_ENV })
       const rows = parsePs(stdout)
       if (rows.size === 0) throw new Error('ps returned no rows')
       return rows
@@ -273,7 +273,7 @@ export function realProcTable(): ProcTable {
     rowSync(pid) {
       if (!(pid > 1)) throw new Error(`no row for pid ${pid}`)
       try {
-        const out = execFileSync('/bin/ps', ['-ww', '-o', PS_COLUMNS, '-p', String(pid)], { timeout: 5_000, env: PS_ENV, stdio: ['ignore', 'pipe', 'ignore'] }).toString()
+        const out = execFileSync('/bin/ps', ['-ww', ...PS_COLUMNS, '-p', String(pid)], { timeout: 5_000, env: PS_ENV, stdio: ['ignore', 'pipe', 'ignore'] }).toString()
         return parsePs(out).get(pid) ?? null
       } catch (err) {
         // ps -p exits 1 with no rows for a pid that is gone; anything else is a failed read.

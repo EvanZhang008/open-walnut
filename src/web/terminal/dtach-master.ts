@@ -151,7 +151,7 @@ export function dtachProbeScript(socketPath: string, withTable = false): string 
     'for c in $rp $owners; do case "$c" in ""|*[!0-9]*) continue ;; esac; [ "$c" -gt 1 ] && walnut_proc "$c"; done',
     `if [ -S ${sock} ]; then echo "SOCKET:yes"; else echo "SOCKET:no"; fi`,
     'echo "PROBE:END"',
-    ...(withTable ? ['echo "TABLE:"', 'ps -ax -o pid=,ppid=,comm='] : []),
+    ...(withTable ? ['echo "TABLE:"', 'ps -ax -o pid= -o ppid= -o comm='] : []),
   ].join('\n')
 }
 

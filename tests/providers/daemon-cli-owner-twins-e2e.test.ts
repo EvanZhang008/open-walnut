@@ -157,7 +157,7 @@ async function waitFor(check: () => boolean, ms = 15_000): Promise<boolean> {
 
 /** Every live stand-in CLI that runs `sid`, from the real process table. */
 function liveClis(sid: string): number[] {
-  const out = spawnSync('ps', ['-A', '-ww', '-o', 'pid=,args='], { encoding: 'utf8', maxBuffer: 64 << 20 }).stdout
+  const out = spawnSync('ps', ['-A', '-ww', '-o', 'pid=', '-o', 'args='], { encoding: 'utf8', maxBuffer: 64 << 20 }).stdout
   return out.split('\n').map((l) => /^\s*(\d+)\s+(.*)$/.exec(l)).filter((m): m is RegExpExecArray => !!m)
     .filter((m) => m[2].includes(cliPath) && (m[2].includes(`--resume ${sid}`) || m[2].includes(`--session-id ${sid}`))).map((m) => Number(m[1]))
 }
@@ -353,7 +353,7 @@ describe.each(PAIRS)('cli-owner-v1: $name', ({ a: twinA, b: twinB }) => {
  * answer once the scan's own deadline (8 s) has passed, skipping the scan.
  */
 const HUNG_PS = `#!/bin/sh
-if [ "$1" = "-A" ] && [ "$2" = "-ww" ] && [ "$4" = "pid=,pgid=,args=" ]; then
+if [ "$1" = "-A" ] && [ "$2" = "-ww" ] && [ "$4" = "pid=" ] && [ "$6" = "pgid=" ] && [ "$8" = "args=" ]; then
   echo "$$" >> "$WALNUT_TEST_HUNG_PS_LOG"
   trap '' TERM
   exec /bin/sleep 90

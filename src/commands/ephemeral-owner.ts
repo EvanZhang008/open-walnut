@@ -85,7 +85,7 @@ export function pickOwner(rows: readonly ProcessRow[], fromPid: number): Ephemer
   return owner ? { ...owner, above: above.slice(0, 8) } : null
 }
 
-/** `ps -o pid=,ppid=,lstart=,args=` lines: lstart is five words ("Wed Nov  4 20:57:01 2026"). */
+/** `ps -o pid= -o ppid= -o lstart= -o args=` lines: lstart is five words ("Wed Nov  4 20:57:01 2026"). */
 export function parsePsRows(out: string): ProcessRow[] {
   const rows: ProcessRow[] = []
   for (const line of out.split('\n')) {
@@ -106,7 +106,7 @@ function ps(args: string[]): Promise<string | null> {
 export async function resolveEphemeralOwner(env: NodeJS.ProcessEnv = process.env, fromPid: number = process.ppid): Promise<EphemeralOwner | null> {
   const named = env.WALNUT_EPHEMERAL_OWNER_PID?.trim()
   if (named === '0') return null
-  const out = await ps(['-A', '-o', 'pid=,ppid=,lstart=,args='])
+  const out = await ps(['-A', '-o', 'pid=', '-o', 'ppid=', '-o', 'lstart=', '-o', 'args='])
   if (out == null) return null
   const rows = parsePsRows(out)
   if (named && /^\d+$/.test(named)) {

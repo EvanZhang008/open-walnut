@@ -71,7 +71,7 @@ const ALLOWLIST: Array<{ file: string; rule: KillRule; text: string; reason: str
     file: 'scripts/desktop-update-e2e.mjs',
     rule: 'search-kill',
     reason: 'the relaunched app is picked by exact equality of its executable path (comm) with this run\'s own copy of the app in its private temp dir, never a substring of a command line, and never this process',
-    text: "const rows = execFileSync('/bin/ps', ['-axww', '-o', 'pid=,comm='], { encoding: 'utf8' }).split('\\n')",
+    text: "const rows = execFileSync('/bin/ps', ['-axww', '-o', 'pid=', '-o', 'comm='], { encoding: 'utf8' }).split('\\n')",
   },
   {
     file: 'scripts/desktop-smoke.mjs',
@@ -158,7 +158,7 @@ describe('findKillViolations', () => {
     ['pidof into kill', 'kill $(pidof bun)', 'search-kill'],
     ['lsof -t on a port into xargs kill', 'lsof -ti:${PORT} -sTCP:LISTEN 2>/dev/null | xargs kill -9 2>/dev/null || true', 'search-kill'],
     ['a while-read loop fed by process substitution', 'while read -r pid _; do\n  kill -9 "$pid"\ndone < <(pgrep -fl chromium)', 'search-kill'],
-    ['a search function whose output is killed', 'browsers() {\n  ps -eo pid=,command= | grep chromium\n}\nfor pid in $(browsers); do kill -9 "$pid"; done', 'search-kill'],
+    ['a search function whose output is killed', 'browsers() {\n  ps -eo pid= -o command= | grep chromium\n}\nfor pid in $(browsers); do kill -9 "$pid"; done', 'search-kill'],
     ['a pid copied from the captured list, then killed', 'pids="$(pgrep -f x)"\nfor p in $pids; do\n  target="$p"\n  kill "$target"\ndone', 'search-kill'],
     ['wrapped: bash -c with pkill', "bash -c \"pkill -f vite\"", 'pkill'],
     ['wrapped: sh -c with pkill', "sh -c 'pkill -f vite'", 'pkill'],

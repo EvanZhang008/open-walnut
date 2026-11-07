@@ -277,7 +277,7 @@ export function createCliOwner(deps: CliOwnerDeps): CliOwner {
    */
   async function scan(sid: string, except: Set<number>): Promise<number[] | null> {
     if (deps.platform === 'win32') return null
-    const out = await deps.exec('ps', ['-A', '-ww', '-o', 'pid=,pgid=,args='], PS_TIMEOUT_MS)
+    const out = await deps.exec('ps', ['-A', '-ww', '-o', 'pid=', '-o', 'pgid=', '-o', 'args='], PS_TIMEOUT_MS)
     if (out === null) return null
     const mine = real(deps.configDir)
     const found: number[] = []

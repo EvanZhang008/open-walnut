@@ -2158,7 +2158,7 @@ function parsePsStartTimes(stdout) {
   }
   return out;
 }
-function psStartTimeArgs(pids) { return ['-o', 'pid=,lstart=', '-p', pids.join(',')]; }
+function psStartTimeArgs(pids) { return ['-o', 'pid=', '-o', 'lstart=', '-p', pids.join(',')]; }
 function uniquePids(pids) {
   return Array.from(new Set(pids.filter(function (p) { return Number.isSafeInteger(p) && p > 1; })));
 }
@@ -3322,7 +3322,7 @@ function runningGroupIdsSync() {
   }
   let out;
   try {
-    out = execFileSync('ps', ['-A', '-o', 'pgid=,stat='], { encoding: 'utf-8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] });
+    out = execFileSync('ps', ['-A', '-o', 'pgid=', '-o', 'stat='], { encoding: 'utf-8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] });
   } catch {
     return null;
   }
@@ -12976,7 +12976,7 @@ function persistBudgetStops() {
 }
 async function budgetGroupMembers(pgid) {
   const text = await new Promise(function (resolve, reject) {
-    execFile('/bin/ps', ['-axo', 'pid=,pgid=,lstart='], { timeout: 5000, maxBuffer: 8 * 1024 * 1024, env: { ...process.env, LANG: 'C', LC_ALL: 'C' } }, function (error, stdout) { if (error) reject(error); else resolve(String(stdout)); });
+    execFile('/bin/ps', ['-axo', 'pid=', '-o', 'pgid=', '-o', 'lstart='], { timeout: 5000, maxBuffer: 8 * 1024 * 1024, env: { ...process.env, LANG: 'C', LC_ALL: 'C' } }, function (error, stdout) { if (error) reject(error); else resolve(String(stdout)); });
   });
   const members = [];
   for (const line of text.split('\\n')) {

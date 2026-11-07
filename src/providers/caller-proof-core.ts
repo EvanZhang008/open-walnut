@@ -6,7 +6,7 @@
 
 export const MAX_DEPTH = 40
 
-/** `ps -Ao pid=,ppid=,comm=` as pid -> {ppid, comm}. Pure. */
+/** `ps -Ao pid= -o ppid= -o comm=` as pid -> {ppid, comm}. Pure. */
 export function parseProcessTable(out: string): Map<number, { ppid: number; comm: string }> {
   const table = new Map<number, { ppid: number; comm: string }>()
   for (const line of out.split('\n')) {
@@ -52,9 +52,9 @@ export interface ProcRow { ppid: number; comm: string; start: string }
 const LSTART_ROW = /^\s*(\d+)\s+(\d+)\s+([A-Z][a-z]{2}\s+[A-Z][a-z]{2}\s+\d{1,2}\s+\d{1,2}:\d{2}:\d{2}\s+\d{4})\s*(.*)$/
 
 /** Arguments for one `ps` snapshot of every process with its parent, start time and name (run with LC_ALL=C). */
-export const PS_TREE_ARGS = ['-Ao', 'pid=,ppid=,lstart=,comm=']
+export const PS_TREE_ARGS = ['-Ao', 'pid=', '-o', 'ppid=', '-o', 'lstart=', '-o', 'comm=']
 
-/** `ps -Ao pid=,ppid=,lstart=,comm=` (LC_ALL=C) as pid -> {ppid, comm, start}. Pure. */
+/** `ps -Ao pid= -o ppid= -o lstart= -o comm=` (LC_ALL=C) as pid -> {ppid, comm, start}. Pure. */
 export function parseProcessTree(out: string): Map<number, ProcRow> {
   const table = new Map<number, ProcRow>()
   for (const line of out.split('\n')) {

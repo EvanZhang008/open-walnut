@@ -60,7 +60,7 @@ export function leaderCommandLines(argv) {
   return lines
 }
 
-/** `ps -o pid=,pgid=,lstart=,command=` -> Map pid -> {pid, pgid, lstart, command} */
+/** `ps -o pid= -o pgid= -o lstart= -o command=` -> Map pid -> {pid, pgid, lstart, command} */
 export function parsePsRows(out) {
   const rows = new Map()
   for (const line of String(out ?? '').split('\n')) {
@@ -73,7 +73,7 @@ export function parsePsRows(out) {
 /** ps rows for `pids` plus this process; null when ps cannot be read (error, timeout, no own row). */
 export async function readProcesses(pids, { runImpl = run, selfPid = process.pid } = {}) {
   const list = [...new Set([...pids, selfPid])].filter((p) => Number.isInteger(p) && p > 0)
-  const res = await runImpl(PS, ['-o', 'pid=,pgid=,lstart=,command=', '-p', list.join(',')], { timeoutMs: 5000, env: C_LOCALE })
+  const res = await runImpl(PS, ['-o', 'pid=', '-o', 'pgid=', '-o', 'lstart=', '-o', 'command=', '-p', list.join(',')], { timeoutMs: 5000, env: C_LOCALE })
   if (res.timedOut || res.error) return null
   const rows = parsePsRows(res.stdout)
   return rows.has(selfPid) ? rows : null
@@ -136,7 +136,7 @@ export async function sweepRegistry(file, { runImpl = run, kill = killGroupNow, 
 
 /** The pgid and start time of a pid, right after spawn; null when ps cannot say. */
 export async function processIdentity(pid, { runImpl = run } = {}) {
-  const res = await runImpl(PS, ['-o', 'pgid=,lstart=', '-p', String(pid)], { timeoutMs: 5000, env: C_LOCALE })
+  const res = await runImpl(PS, ['-o', 'pgid=', '-o', 'lstart=', '-p', String(pid)], { timeoutMs: 5000, env: C_LOCALE })
   const m = res.code === 0 ? /^\s*(\d+)\s+(\S.*\S)\s*$/.exec(res.stdout) : null
   return m ? { pgid: Number(m[1]), lstart: oneSpace(m[2]) } : null
 }

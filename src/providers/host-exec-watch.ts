@@ -172,7 +172,7 @@ export function psDurationMs(text: string): number | null {
   return Math.round((((Number(d ?? 0) * 24 + Number(h ?? 0)) * 60 + Number(min)) * 60 + Number(sec)) * 1000)
 }
 
-/** One `ps -A -o pid=,pgid=,etime=,time=,comm=` table, for the groups in `pgids`. */
+/** One `ps -A -o pid= -o pgid= -o etime= -o time= -o comm=` table, for the groups in `pgids`. */
 export function readSnapshot(psOut: string, pgids: number[], nowMs: number): ProcessTable {
   const wanted = new Set(pgids)
   const processes: ProcessRow[] = []
@@ -211,7 +211,7 @@ function run(file: string, args: string[]): Promise<string | null> {
 export function macPromptProbe(now: () => number = Date.now): PromptProbe {
   return {
     snapshot: async (pgids) => {
-      const out = await run('/bin/ps', ['-A', '-o', 'pid=,pgid=,etime=,time=,comm='])
+      const out = await run('/bin/ps', ['-A', '-o', 'pid=', '-o', 'pgid=', '-o', 'etime=', '-o', 'time=', '-o', 'comm='])
       return out === null ? { processes: null, securityAgentStartedAt: null } : readSnapshot(out, pgids, now())
     },
     tccPrompts: async (sinceMs) => {

@@ -1198,7 +1198,7 @@ function runningGroupIdsSync(): Set<number> | null {
   }
   let out: string
   try {
-    out = execFileSync('ps', ['-A', '-o', 'pgid=,stat='], { encoding: 'utf-8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] })
+    out = execFileSync('ps', ['-A', '-o', 'pgid=', '-o', 'stat='], { encoding: 'utf-8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] })
   } catch {
     return null
   }
@@ -3113,7 +3113,7 @@ function persistBudgetStops(): Promise<void> {
 }
 async function budgetGroupMembers(pgid: number): Promise<Array<{ pid: number; startTime: string }>> {
   const text = await new Promise<string>((resolve, reject) => {
-    execFile('/bin/ps', ['-axo', 'pid=,pgid=,lstart='], { timeout: 5000, maxBuffer: 8 * 1024 * 1024, env: { ...process.env, LANG: 'C', LC_ALL: 'C' } }, (error, stdout) => error ? reject(error) : resolve(String(stdout)))
+    execFile('/bin/ps', ['-axo', 'pid=', '-o', 'pgid=', '-o', 'lstart='], { timeout: 5000, maxBuffer: 8 * 1024 * 1024, env: { ...process.env, LANG: 'C', LC_ALL: 'C' } }, (error, stdout) => error ? reject(error) : resolve(String(stdout)))
   })
   const members: Array<{ pid: number; startTime: string }> = []
   for (const line of text.split('\n')) {

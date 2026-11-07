@@ -15,10 +15,10 @@ fi
 timestamp="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 battery="$(pmset -g batt | tail -1 | tr -s ' ' | sed 's/^[[:space:]]*//')"
 load="$(sysctl -n vm.loadavg | tr -d '{}')"
-listener="$(ps -axo pid=,command= | awk '/dist\/cli.js web --port 3456/ && !/awk/ && first == "" { first=$1 } END { print first }')"
-walnut="$(ps -axo pid=,ppid=,%cpu=,%mem=,rss=,comm= | awk '$6 == "/Applications/Walnut.app/Contents/MacOS/Walnut" { print }' | xargs || true)"
-contacts="$(ps -axo pid=,%cpu=,%mem=,comm= | awk '/AddressBookManager|AddressBookSourceSync|Contacts.framework\/Support\/contactsd$/ { printf "%s%s", sep, $0; sep=" | " }' || true)"
-top_cpu="$(ps -axo pid=,%cpu=,%mem=,comm= | sort -k2 -nr | sed -n '1,8p' | tr '\n' '|' | sed 's/|$//')"
+listener="$(ps -axo pid= -o command= | awk '/dist\/cli.js web --port 3456/ && !/awk/ && first == "" { first=$1 } END { print first }')"
+walnut="$(ps -axo pid= -o ppid= -o %cpu= -o %mem= -o rss= -o comm= | awk '$6 == "/Applications/Walnut.app/Contents/MacOS/Walnut" { print }' | xargs || true)"
+contacts="$(ps -axo pid= -o %cpu= -o %mem= -o comm= | awk '/AddressBookManager|AddressBookSourceSync|Contacts.framework\/Support\/contactsd$/ { printf "%s%s", sep, $0; sep=" | " }' || true)"
+top_cpu="$(ps -axo pid= -o %cpu= -o %mem= -o comm= | sort -k2 -nr | sed -n '1,8p' | tr '\n' '|' | sed 's/|$//')"
 
 {
     printf 'timestamp=%s load="%s" port3456_pid="%s"\n' "$timestamp" "$load" "$listener"

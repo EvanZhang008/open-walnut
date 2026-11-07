@@ -146,7 +146,7 @@ describe.skipIf(!ON)('a companion box from before the compiled file moves to it 
     return must(['exec', name, '/bin/sh', '-c', script])
   }
   async function procs(): Promise<Proc[]> {
-    const out = await sh('ps -eo pid=,ppid=,user=,args=')
+    const out = await sh('ps -eo pid= -o ppid= -o user= -o args=')
     return out.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => {
       const m = /^(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/.exec(l)!
       return { pid: Number(m[1]), ppid: Number(m[2]), user: m[3], args: m[4] }

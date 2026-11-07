@@ -60,7 +60,7 @@ describe('createAsyncStartTimeReader', () => {
     const answers = await Promise.all([read(4001), read(4002), read(4003), read(4001)])
 
     expect(calls).toHaveLength(1)
-    expect(calls[0]).toEqual(['-o', 'pid=,lstart=', '-p', '4001,4002,4003'])
+    expect(calls[0]).toEqual(['-o', 'pid=', '-o', 'lstart=', '-p', '4001,4002,4003'])
     expect(answers).toEqual([
       'Mon Sep 28 10:00:00 2026', 'Mon Sep 28 10:00:01 2026', null, 'Mon Sep 28 10:00:00 2026',
     ])

@@ -63,7 +63,7 @@ orphan_browsers() {
   #      ($TMPDIR/puppeteer_dev_chrome_profile-* / playwright_chromiumdev_profile-*).
   #      2026-07-31: 12 such trees (75 procs, ~5 GB) leaked by killed MCP
   #      web-search servers pushed load to 120 — invisible to the old matcher.
-  ps -eo pid=,ppid=,rss=,etime=,command= \
+  ps -eo pid= -o ppid= -o rss= -o etime= -o command= \
     | grep -E 'ms-playwright/(chromium|chrome-headless-shell)|user-data-dir=[^ ]*(puppeteer_dev_chrome_profile|playwright_chromiumdev_profile)' \
     | grep -v grep
 }

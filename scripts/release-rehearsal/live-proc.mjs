@@ -46,7 +46,7 @@ export function childrenOf(pid) {
     return out
   }
   try {
-    return execFileSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8' }).split('\n')
+    return execFileSync('ps', ['-A', '-o', 'pid=', '-o', 'ppid='], { encoding: 'utf8' }).split('\n')
       .map((l) => l.trim().split(/\s+/).map(Number)).filter(([, pp]) => pp === pid).map(([p]) => p)
   } catch { return [] }
 }

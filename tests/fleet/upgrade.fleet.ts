@@ -58,7 +58,7 @@ interface Proc { pid: number; started: string; args: string }
 
 /** `ps` rows on a host whose command line passes `keep` (pid, start time, command line). */
 async function procs(f: Fleet, host: string, keep: (args: string) => boolean): Promise<Proc[]> {
-  const out = await f.hostExec(host, 'ps -eo pid=,lstart=,args=')
+  const out = await f.hostExec(host, 'ps -eo pid= -o lstart= -o args=')
   return out.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => {
     const m = /^(\d+)\s+(\S+\s+\S+\s+\S+\s+\S+\s+\S+)\s+(.*)$/.exec(l)
     return m ? { pid: Number(m[1]), started: m[2]!, args: m[3]! } : null

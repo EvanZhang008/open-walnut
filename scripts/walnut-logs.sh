@@ -736,7 +736,7 @@ PY
     echo "── live process ──"
     pid=$(lsof -nP -iTCP:3456 -sTCP:LISTEN -t 2>/dev/null | head -1)
     if [[ -n "$pid" ]]; then
-      ps -o pid=,rss=,pcpu=,etime=,nice= -p "$pid" | awk '{ printf "pid=%s rss=%.1fGB cpu=%s%% up=%s nice=%s\n", $1, $2/1048576, $3, $4, $5 }'
+      ps -o pid= -o rss= -o pcpu= -o etime= -o nice= -p "$pid" | awk '{ printf "pid=%s rss=%.1fGB cpu=%s%% up=%s nice=%s\n", $1, $2/1048576, $3, $4, $5 }'
     else
       echo "no listener on :3456"
     fi

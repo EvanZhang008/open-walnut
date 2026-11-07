@@ -74,7 +74,7 @@ function fixture(): Fixture {
 interface Run { code: number | null; stdout: string; stderr: string }
 /** Every process below `root` (its tree by parent pid, as Claude Code's tool timeout finds it). */
 function treeOf(root: number): number[] {
-  const rows = execFileSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8' }).trim().split('\n')
+  const rows = execFileSync('ps', ['-A', '-o', 'pid=', '-o', 'ppid='], { encoding: 'utf8' }).trim().split('\n')
     .map((l) => l.trim().split(/\s+/).map(Number))
   const out: number[] = []
   const walk = (p: number) => { for (const [pid, ppid] of rows) if (ppid === p && !out.includes(pid)) { out.push(pid); walk(pid) } }

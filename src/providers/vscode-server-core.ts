@@ -250,7 +250,7 @@ export function parseProcIdentity(out: string): { startTime: string; command: st
   return m ? { startTime: m[1], command: m[2] } : null
 }
 
-const psArgs = (pid: number) => ['-ww', '-o', 'lstart=,command=', '-p', String(pid)]
+const psArgs = (pid: number) => ['-ww', '-o', 'lstart=', '-o', 'command=', '-p', String(pid)]
 
 /** Daemon-side reapers only (idle scan, isolated-dir exit): never on the web server's loop. */
 function procIdentitySync(pid: number): { startTime: string; command: string } | null {

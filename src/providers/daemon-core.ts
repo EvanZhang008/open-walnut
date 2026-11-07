@@ -2688,10 +2688,10 @@ function readProcStartTime(fs: typeof import('node:fs'), pid: number): string | 
   }
 }
 
-const PS_START_TIME_ARGS = (pids: number[]): string[] => ['-o', 'pid=,lstart=', '-p', pids.join(',')]
+const PS_START_TIME_ARGS = (pids: number[]): string[] => ['-o', 'pid=', '-o', 'lstart=', '-p', pids.join(',')]
 
 /**
- * Parse `ps -o pid=,lstart=` output into pid → lstart. Each value is byte-equal
+ * Parse `ps -o pid= -o lstart=` output into pid → lstart. Each value is byte-equal
  * to what `ps -p <pid> -o lstart=` prints (trimmed), so start times recorded by
  * defaultReadStartTime still compare equal.
  */

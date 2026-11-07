@@ -313,7 +313,7 @@ export async function runUpdateE2E({ old, next, source, work: made, keep = false
       // any shell or agent whose command merely mentions the path.
       const exe = path.join(target, 'Contents', 'MacOS', 'Walnut')
       try {
-        const rows = execFileSync('/bin/ps', ['-axww', '-o', 'pid=,comm='], { encoding: 'utf8' }).split('\n')
+        const rows = execFileSync('/bin/ps', ['-axww', '-o', 'pid=', '-o', 'comm='], { encoding: 'utf8' }).split('\n')
         for (const row of rows) {
           const m = row.match(/^\s*(\d+)\s+(.*\S)\s*$/)
           if (m && m[2] === exe && Number(m[1]) !== process.pid) return Number(m[1])

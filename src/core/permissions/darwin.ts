@@ -70,7 +70,7 @@ export async function detectLauncher(): Promise<LauncherInfo> {
     const chain: string[] = [];
     let pid = process.ppid;
     for (let hop = 0; hop < 10 && pid > 1; hop++) {
-      const { stdout } = await execFileAsync('ps', ['-o', 'ppid=,comm=', '-p', String(pid)], {
+      const { stdout } = await execFileAsync('ps', ['-o', 'ppid=', '-o', 'comm=', '-p', String(pid)], {
         timeout: PROBE_TIMEOUT_MS,
       });
       const m = stdout.trim().match(/^(\d+)\s+(.*)$/);
