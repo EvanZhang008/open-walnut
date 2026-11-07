@@ -378,22 +378,13 @@ test('a long thread\'s card is its summary and the answer he has not seen; the c
   await expect(answer.locator('strong')).toHaveText('Where the small model runs')
   await expect(answer.getByTestId('msg-about').locator(`a[data-task-id="${work}"]`)).toContainText(`Small model task ${STAMP}`)
   await expect(c).not.toContainText('<walnut-')
-  // Its detail folded to a few lines; Expand sits on the answer itself, and a click on the text opens it too.
   const body = answer.getByTestId('org-thread-answer-body')
-  const folded = await body.evaluate((el) => el.clientHeight)
-  expect(folded).toBeLessThanOrEqual(96)
-  await shot(page, 'conversation')
-  const toggle = answer.getByTestId('org-thread-answer-body-more')
-  await expect(toggle).toContainText('Expand')
-  const near = await toggle.evaluate((el) => el.getBoundingClientRect().left - (el.closest('.org-thread-answer')!.getBoundingClientRect().left))
-  expect(near).toBeLessThanOrEqual(24)
-  await body.click()
-  await expect(toggle).toContainText('Collapse')
-  await expect(toggle).toHaveAttribute('aria-expanded', 'true')
-  expect(await body.evaluate((el) => el.clientHeight)).toBeGreaterThan(folded)
+  await expect(body).toHaveCSS('max-height', '240px')
+  await expect(body).toHaveCSS('overflow-y', 'auto')
+  await answer.getByTestId('org-thread-answer-body-more').click()
+  await expect(body).toHaveCSS('max-height', 'none')
   await expect(body).toContainText('Background job 10')
-  await toggle.click()
-  await expect(toggle).toContainText('Expand')
+  await shot(page, 'conversation')
   // The whole conversation, from the toggle in the card body: five messages, three answers, the first two known.
   await expect(c.getByTestId('org-thread-count')).toHaveText('5 messages')
   await c.getByTestId('org-thread-history').click()
@@ -678,6 +669,85 @@ test('Snooze puts a thread aside in its Snoozed section until its time; it comes
   await expect(c2).toBeVisible()
   await expect(c2.getByTestId('org-thread-state')).toHaveText('Needs you')
   expect((await stored('th-00000000c002'))?.snoozed).toBeUndefined()
+})
+
+test('asks and structured bodies stay whole; plain long answers still expand without fading', async ({ page, request }) => {
+  const project = `Threads readable ${STAMP} ${test.info().project.name}`
+  await createTask(request, `Readable work ${STAMP}`, project)
+  await createTask(request, `Readable review ${STAMP}`, project)
+  const node = (await post<{ task: { id: string } }>(request, '/api/v1/org/contact', { to: project })).task.id
+  made.push(node)
+  const { walnutHome } = await discoverBrowserFixture(TEST_PORT)
+  const at = new Date(Date.now() - 60_000).toISOString()
+  const long = Array.from({ length: 10 }, (_, i) => `Paragraph ${i + 1}: ${'readable detail '.repeat(12)}`).join('\n\n')
+  const bodies = [
+    ['plain', long],
+    ['plain-code', `${long}\n\nUse \`config\` to pick the default.`],
+    ['short', 'Pick A or B.'],
+    ['path', `${long}\n\n\`/workspace/designs/choose-a-readable-design.html\``],
+    ['link', `${long}\n\n/workspace/designs/choose-a-readable-design.html`],
+    ['code', `${long}\n\n\`\`\`text\n/workspace/designs/choose-a-readable-design.html\n\`\`\``],
+    ['list', `${long}\n\n1. Choose A.\n2. Choose B.\n3. Reply with your choice.`],
+    ['table', `${long}\n\n| Option | Choice |\n| --- | --- |\n| A | Recommended |\n| B | Alternative |`],
+    ['quote', `${long}\n\n> Reply with your choice.`],
+  ]
+  const seeded = ['needs', 'answered', 'new', 'working', 'pending'].flatMap((state, s) => bodies.flatMap(([kind, text], k) => ['opener', 'answer'].map((via, v) => ({
+    id: `th-${(s * 100 + k * 2 + v + 1000).toString(16).padStart(12, '0')}`,
+    title: `${state} ${kind} ${via}`, titled: true, state, createdAt: at, updatedAt: at,
+    messages: via === 'opener' ? [] : [{ id: `tm-${s}-${k}`, at, text: 'Which option?', via: 'chat', answer: { at: new Date(Date.parse(at) + s * 100 + k + 1).toISOString(), text } }],
+    ...(via === 'opener' ? { opener: { at, text, from: 'node', by: 'task:agent' } } : {}),
+  }))))
+  fs.mkdirSync(`${walnutHome}/org/threads`, { recursive: true })
+  fs.writeFileSync(`${walnutHome}/org/threads/${node}.json`, JSON.stringify({ version: 1, taskId: node, threads: seeded }))
+  await isolateUiPrefs(page)
+  await showInProgress(page)
+  await loadHome(page)
+  await page.getByTestId('sidebar-org').click()
+  await page.locator(`[data-testid="org-channel"][data-key="${rowKey(project)}"]`).click()
+  await expect(page.getByTestId('org-detail')).toHaveAttribute('data-key', rowKey(project))
+  await page.getByTestId('org-top-threads').click()
+  if (await page.getByTestId('org-threads-hidden').getAttribute('aria-expanded') === 'false') await page.getByTestId('org-threads-hidden').click()
+  for (const t of seeded) {
+    const c = card(page, t.id)
+    const body = c.getByTestId('org-thread-answer-body')
+    const plainFold = t.state !== 'needs' && / plain(?:-code)? /.test(t.title)
+    await expect(body).toHaveCount(1)
+    await expect(body).toHaveCSS('mask-image', 'none')
+    const toggle = c.getByTestId('org-thread-answer-body-more')
+    if (t.state !== 'needs' && !t.title.includes(' short ')) {
+      await expect(toggle).toContainText('Expand')
+      if (!plainFold) {
+        await expect(body).toHaveCSS('overflow-y', 'auto')
+        await expect(body).toHaveCSS('max-height', '240px')
+      }
+      const foldedHeight = await body.evaluate((e) => e.clientHeight)
+      await toggle.click()
+      await expect(body).toHaveCSS('display', 'block')
+      expect(await body.evaluate((e) => e.clientHeight)).toBeGreaterThan(foldedHeight)
+      expect(await body.evaluate((e) => e.scrollHeight - e.clientHeight)).toBeLessThanOrEqual(1)
+      await toggle.click()
+      await expect(toggle).toContainText('Expand')
+    } else {
+      await expect(toggle).toHaveCount(0)
+      if (!t.title.includes(' short ')) {
+        await expect(body).toHaveCSS('max-height', 'none')
+        expect(await body.evaluate((e) => e.scrollHeight - e.clientHeight)).toBeLessThanOrEqual(1)
+      }
+    }
+  }
+  await page.setViewportSize({ width: 1000, height: 900 })
+  const needs = seeded.find((t) => t.title === 'needs code opener')!
+  const c = card(page, needs.id)
+  await expect(c.locator('pre')).toContainText('/workspace/designs/choose-a-readable-design.html')
+  await c.getByTestId('org-thread-history').click()
+  await expect(c.getByTestId('org-thread-answer-body')).toHaveCSS('max-height', 'none')
+  await c.getByTestId('org-thread-history').click()
+  await c.getByTestId('org-thread-follow-open').click()
+  await c.getByTestId('org-thread-follow-input').fill('My choice is A')
+  await expect(c.locator('pre')).toContainText('choose-a-readable-design.html')
+  await c.getByRole('button', { name: 'Cancel', exact: true }).click()
+  expect(await page.getByTestId('org-threads').evaluate((e) => e.scrollWidth - e.clientWidth)).toBeLessThanOrEqual(1)
+  await shot(page, 'readable')
 })
 
 test('Pin keeps a thread at the top whatever its state; the node cannot take his pin off; unpinned it goes back to its place', async ({ page, request }) => {

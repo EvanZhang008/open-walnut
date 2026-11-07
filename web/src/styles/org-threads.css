@@ -42,7 +42,7 @@
 /* The answers he has not seen, under the summary: what each answers in one line, the answer folded. */
 .org-thread-unread { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
 .org-thread-unread .org-thread-answer { margin-left: 0; }
-.org-thread-unread .org-thread-answer-body { max-height: 88px; }
+.org-thread-unread .org-thread-answer-body { -webkit-line-clamp: 4; }
 .org-thread-re { font-size: 12px; color: var(--fg-muted, #86868b); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Expand / Collapse, on the text it opens (left, under it), and the card's Conversation toggle. */
@@ -79,11 +79,13 @@
 .org-thread-answer.is-news { border-left-color: var(--accent, #0a84ff); }
 .org-thread-answer.is-waiting { font-size: 12px; color: var(--fg-muted, #86868b); }
 .org-thread-answer-by { font-size: 11px; color: var(--fg-muted, #86868b); font-variant-numeric: tabular-nums; }
-.org-thread-fold { overflow: hidden; }
-.org-thread-fold.is-folded { -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 32px), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 32px), transparent); }
-.org-thread-fold.is-whole { max-height: none; }
-.org-thread-words-fold { max-height: 120px; }
-.org-thread-answer-body { font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; max-height: 160px; }
+.org-thread-fold { display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
+/* Structured replies scroll instead of cutting a block or fading its words. */
+.org-thread .org-thread-fold:has(:where(.markdown-body > :not(p, h1, h2, h3, h4, h5, h6), img, a[data-file-path], .rich-blocks)) { display: block; -webkit-line-clamp: unset; max-height: 240px; overflow: auto; }
+.org-thread .org-thread-fold.is-whole,
+.org-thread[data-state="needs"] .org-thread-fold { display: block; -webkit-line-clamp: unset; max-height: none; overflow: visible; }
+.org-thread-words-fold { -webkit-line-clamp: 6; }
+.org-thread-answer-body { font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; -webkit-line-clamp: 8; }
 .org-thread-answer-body .markdown-body > :first-child { margin-top: 0; }
 /* A heading in a reply reads as a bold line here, not a page title. */
 .org-thread-answer-body .markdown-body :is(h1, h2, h3, h4, h5, h6) { font-size: 13px; line-height: 1.5; font-weight: 600; margin: 4px 0; }

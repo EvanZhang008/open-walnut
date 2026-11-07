@@ -105,6 +105,20 @@ describe('threads come first', () => {
     expect(counting.filter((f) => !f.endsWith('OrgThreads.tsx'))).toEqual([])
   })
 
+  it('every ask and non-prose Markdown block stays whole, including newly supported block kinds', () => {
+    const css = fs.readFileSync(path.join(__dirname, '../../web/src/styles/org-threads.css'), 'utf8')
+    expect(css).not.toMatch(/(?:-webkit-)?mask-image\s*:/)
+    expect(css).toMatch(/-webkit-line-clamp: 4/)
+    expect(css).toMatch(/\.org-thread \.org-thread-fold\.is-whole,/)
+    expect(css).toMatch(/\.org-thread\[data-state="needs"\] \.org-thread-fold \{ display: block; -webkit-line-clamp: unset; max-height: none; overflow: visible; \}/)
+    expect(css).toMatch(/:has\(:where\(\.markdown-body > :not\(p, h1, h2, h3, h4, h5, h6\), img, a\[data-file-path\], \.rich-blocks\)\) \{ display: block; -webkit-line-clamp: unset; max-height: 240px; overflow: auto; \}/)
+    const source = fs.readFileSync(path.join(__dirname, '../../web/src/components/org/OrgThreads.tsx'), 'utf8')
+    const folds = [...source.matchAll(/<Fold\s+className="([^"]+)"/g)].map((m) => m[1])
+    expect(folds.length).toBeGreaterThan(0)
+    for (const name of folds) expect(name).toMatch(/^org-thread-/)
+    expect(source).toMatch(/className=\{`org-thread-fold /)
+  })
+
   it('the VP itself is no Needs you, and a thread coming or going is no status move above', () => {
     const vp = tasks.find((x) => x.id === 'vp')!
     expect(vp.user_status?.state).not.toBe('needs')
