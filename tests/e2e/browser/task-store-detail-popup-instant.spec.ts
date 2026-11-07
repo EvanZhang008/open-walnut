@@ -15,8 +15,11 @@
 import { expect, test } from './shortcut-test-fixture'
 import { type Locator, type Page } from '@playwright/test'
 
-const TASK_ID = 'pw-task-store-sync'
-const TITLE = 'Store sync fixture task'
+/** The spec's own task, made for the run. The fixture's store-sync task belongs to
+ *  task-store-same-browser-instant, which renames and completes it mid-run (CI 2026-11-07:
+ *  this popup opened on "Renamed from the session header" and its row read Done). */
+let TASK_ID = ''
+const TITLE = `Detail popup task ${Date.now().toString(36)}`
 /** Each write is held this long. Deliberately under the API client's own 15s
  *  request timeout: past that the client aborts and retries, and the retry — not
  *  the hold — would be what the assertions saw. */
@@ -35,12 +38,18 @@ async function openDetails(page: Page, row: Locator): Promise<Locator> {
   return modal
 }
 
+test.afterEach(async ({ request }) => {
+  if (TASK_ID) await request.delete(`/api/tasks/${TASK_ID}?force=true`).catch(() => undefined)
+  TASK_ID = ''
+})
+
 test('an edit in the task details popup reaches the board row before the server answers', async ({ page, request }) => {
   // Three writes are each held for HOLD_MS and the run has to outlive all of them.
   test.setTimeout(120_000)
-  const reset = await request.patch(`/api/tasks/${TASK_ID}`, {
-    data: { title: TITLE, phase: 'IN_PROGRESS', due_date: '' },
-  })
+  const created = await request.post('/api/tasks', { data: { title: TITLE, project: 'Walnut', source: 'local', pinned: false } })
+  expect(created.ok()).toBe(true)
+  TASK_ID = ((await created.json()) as { task: { id: string } }).task.id
+  const reset = await request.patch(`/api/tasks/${TASK_ID}`, { data: { phase: 'IN_PROGRESS' } })
   expect(reset.ok()).toBe(true)
 
   await page.goto('/')
