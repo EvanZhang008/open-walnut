@@ -29,13 +29,14 @@
 import { gzipSync } from 'node:zlib'
 import { JSON_AWK } from './tmp-path-awk.js'
 import {
-  ALWAYS_PLAYS, AUDIO_FILE_RE, CODE_AUDIO_API_RE, CODE_OSASCRIPT_RE, CODE_PLAYER_RE, CODE_SAY_FILE_RE, CODE_SPAWN_RE,
+  ALWAYS_PLAYS, AUDIO_FILE_RE, CODE_AUDIO_API_RE, CODE_CALL_RE, CODE_OSASCRIPT_RE, CODE_SAY_FILE_RE, CODE_STRING_RE,
   FFMPEG_AUDIO_OUT_RE, MEDIA_APPS_RE, OSA_AFPLAY_RE, OSA_BEEP_RE, OSA_JXA_VOLUME_RE, OSA_MEDIA_TELL_RE, OSA_PLAY_RE,
   OSA_SAVING_RE, OSA_SAY_RE, OSA_SET_VOLUME_RE, VOL_MUTED_RE, VOL_UNMUTE_RE, soundAdvice,
 } from './sound-rules.js'
 
 /** A string as an awk string literal (a regex of sound-rules.ts is used as a dynamic regex) ("..."), its backslashes doubled. */
-const s = (re: string) => '"' + re.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"'
+// A \t or \n becomes the character itself first: busybox awk reads "\\t" inside a bracket as a t.
+const s = (re: string) => '"' + re.replace(/\\t/g, '\t').replace(/\\n/g, '\n').replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\t/g, '\\t') + '"'
 /** The refusal around what was found, which awk puts between. */
 const [ADVICE_PRE, ADVICE_POST] = soundAdvice('\u0000').split('\u0000')
 
@@ -118,41 +119,57 @@ function stdintext(d, ci,   t, p, k) {
 }
 function has(A, n, f,   k) { for (k = 1; k <= n; k++) if (A[k] == f) return k; return 0 }
 function after(A, n, f,   k) { k = has(A, n, f); return k && k < n ? A[k + 1] : "\001" }
-function zero(v) { return v ~ /^0+(\.0+)?%?$/ }
-function audible(stmt) {
-  if (stmt ~ ${s(VOL_UNMUTE_RE)}) return 1
-  if (stmt ~ ${s(VOL_MUTED_RE)}) return 0
-  return stmt ~ /[1-9]/
-}
+# Any number in a set volume statement sets a level (0 too): only a mute alone passes.
+function changes(stmt) { return stmt ~ ${s(VOL_UNMUTE_RE)} || stmt ~ /[0-9]/ || stmt !~ ${s(VOL_MUTED_RE)} }
 function stmtof(t, at,   r) { r = substr(t, at); if (match(r, /[\n;'"]/)) r = substr(r, 1, RSTART - 1); return r }
+# An AppleScript say that speaks: no "saving to" after its own text.
+function speaks(t,   r, rest) {
+  r = t
+  while (match(r, ${s(OSA_SAY_RE)})) {
+    rest = substr(r, RSTART + RLENGTH - (substr(r, RSTART + RLENGTH - 1, 1) == "y" ? 0 : 1))
+    if (match(rest, /\n/)) rest = substr(rest, 1, RSTART - 1)
+    sub(/^[ \t]*"[^"]*"/, "", rest)
+    if (rest !~ ${s(OSA_SAVING_RE)}) return 1
+    match(r, ${s(OSA_SAY_RE)}); r = substr(r, RSTART + RLENGTH)
+  }
+  return 0
+}
 function osahit(t,   r, at, j) {
-  if (t ~ ${s(OSA_SAY_RE)} && t !~ ${s(OSA_SAVING_RE)}) return "AppleScript say"
+  if (speaks(t)) return "AppleScript say"
   if (t ~ ${s(OSA_BEEP_RE)}) return "AppleScript beep"
   if (t ~ ${s(OSA_AFPLAY_RE)}) return "afplay"
   if (t ~ ${s(OSA_MEDIA_TELL_RE)} && t ~ ${s(OSA_PLAY_RE)}) return "a media app told to play"
   r = t; at = 0
   while ((j = index(r, ${s(OSA_SET_VOLUME_RE)})) > 0) {
     at += j
-    if (audible(stmtof(t, at))) return "set volume"
+    if (changes(stmtof(t, at))) return "set volume"
     r = substr(t, at + 1)
   }
-  if (match(t, ${s(OSA_JXA_VOLUME_RE)})) { r = substr(t, RSTART); if (match(r, /[\n;)]/)) r = substr(r, 1, RSTART - 1); if (audible(r)) return "setVolume" }
+  if (match(t, ${s(OSA_JXA_VOLUME_RE)})) { r = substr(t, RSTART); if (match(r, /[\n;)]/)) r = substr(r, 1, RSTART - 1); if (changes(r)) return "setVolume" }
   return ""
 }
-function codehit(t,   p) {
-  if (t ~ ${s(CODE_AUDIO_API_RE)}) return "an audio or speech API"
-  if (match(t, ${s(CODE_PLAYER_RE)})) {
-    p = substr(t, RSTART + 1, RLENGTH - 1); sub(/[ "'\140,]$/, "", p)
-    if (t ~ ${s(CODE_SPAWN_RE)} && !(p == "say" && t ~ ${s(CODE_SAY_FILE_RE)})) return p " started from code"
+# Code: an audio API outside string literals, or a call that starts a player (each call judged alone).
+function codehit(t,   t2, r, m, p, call, k) {
+  t2 = t; gsub(${s(CODE_STRING_RE)}, "\"\"", t2)
+  if (t2 ~ ${s(CODE_AUDIO_API_RE)}) return "an audio or speech API"
+  r = t
+  while (match(r, ${s(CODE_CALL_RE)})) {
+    m = substr(r, RSTART, RLENGTH); p = m; sub(/[ "'\140,]$/, "", p); sub(/^.*["'\140]/, "", p)
+    call = substr(r, RSTART); k = index(call, ")"); if (k) call = substr(call, 1, k - 1)
+    if (!(p == "say" && call ~ ${s(CODE_SAY_FILE_RE)})) return p " started from code"
+    r = substr(r, RSTART + RLENGTH)
   }
   if (t ~ ${s(CODE_OSASCRIPT_RE)}) return osahit(t)
   return ""
 }
-# Inline code from flags F (" -c -e "): sets CODE and returns 1, 2 for stdin, 0 for a file.
-function inline(A, n, F, deno,   k) {
+# Inline code from flags F (" -c -e "), also attached (-c'code', --eval=code): sets CODE and returns 1, 2 for stdin, 0 for a file.
+function inline(A, n, F, deno,   k, e) {
   CODE = ""
   for (k = 1; k <= n; k++) {
     if (index(F, " " A[k] " ")) { if (k < n) CODE = CODE A[++k] "\n"; continue }
+    e = index(A[k], "=")
+    if (A[k] ~ /^--/ && e > 1 && index(F, " " substr(A[k], 1, e - 1) " ")) { CODE = CODE substr(A[k], e + 1) "\n"; continue }
+    if (length(A[k]) > 2 && substr(A[k], 1, 2) ~ /^-[A-Za-z]$/ && index(F, " " substr(A[k], 1, 2) " ")) { CODE = CODE substr(A[k], 3) "\n"; continue }
     if (CODE != "") return 1
     if (deno && A[k] == "eval") { if (k < n) { CODE = A[k + 1]; return 1 } return 0 }
     if (A[k] == "-") return 2
@@ -163,18 +180,22 @@ function inline(A, n, F, deno,   k) {
 }
 function anyre(A, n, re,   k) { for (k = 1; k <= n; k++) if (A[k] ~ re) return 1; return 0 }
 # Programs that play unless an argument makes them silent (OK), or only with one (ON).
-function prog(name, A, n,   k, v, first, dev, li, sub1) {
+function prog(name, A, n,   k, v, first, dev, j, sub1) {
   if (index(" ${ALWAYS_PLAYS.join(' ')} ", " " name " ")) return name
   if (name in OK) return anyre(A, n, OK[name]) || (name == "say" && after(A, n, "-v") == "?") || (name ~ /^m/ && after(A, n, name == "mpv" ? "--ao" : "-ao") == "null") ? "" : name
   if (name in ON) return anyre(A, n, ON[name]) ? name : ""
   if (name == "sox") {
     first = 0; dev = 0
-    for (k = 1; k <= n; k++) { if (!first && A[k] !~ /^-/) first = k; if (!dev && (A[k] == "-d" || A[k] == "--default-device")) dev = k }
+    for (k = 1; k <= n; k++) { if (!first && (A[k] !~ /^-/ || A[k] == "-n" || A[k] == "--null")) first = k; if (!dev && (A[k] == "-d" || A[k] == "--default-device")) dev = k }
     return first && dev > first ? "sox to the default device" : ""
   }
+  # ffmpeg: -f <device> is the next file's format, an output unless -i comes first.
   if (name == "ffmpeg") {
-    li = 0; for (k = 1; k <= n; k++) if (A[k] == "-i") li = k
-    if (li) for (k = li; k < n; k++) if (A[k] == "-f" && tolower(A[k + 1]) ~ ${s(FFMPEG_AUDIO_OUT_RE)}) return "ffmpeg to " A[k + 1]
+    for (k = 1; k < n; k++) {
+      if (A[k] != "-f" || tolower(A[k + 1]) !~ ${s(FFMPEG_AUDIO_OUT_RE)}) continue
+      for (j = k + 2; j <= n && A[j] ~ /^-./ && A[j] != "-i"; ) j += A[j] ~ /^-(y|n|an|vn|sn|dn|nostdin|re|hide_banner|stats|nostats)$/ ? 1 : 2
+      if (A[j] != "-i") return "ffmpeg to " A[k + 1]
+    }
     return ""
   }
   if (name == "open" || name == "xdg-open") {
@@ -183,21 +204,20 @@ function prog(name, A, n,   k, v, first, dev, li, sub1) {
     for (k = 1; k <= n; k++) if (A[k] !~ /^-/ && A[k] != v && tolower(A[k]) ~ ${s(AUDIO_FILE_RE)}) return name " " A[k]
     return ""
   }
+  # Mixers: a mute alone passes; any level (0 too), an unmute or a toggle does not.
   if (name == "amixer") {
     for (k = 1; k <= n; k++) if (A[k] ~ /^c?s?set$/) break
-    for (k += 2; k <= n; k++) if (A[k] ~ /^(unmute|on|toggle)$/ || (A[k] ~ /[0-9]/ && !zero(A[k]))) return "amixer set"
+    for (k += 2; k <= n; k++) if (A[k] ~ /^(unmute|on|toggle)$/ || A[k] ~ /[0-9]/) return "amixer set"
     return ""
   }
   if (name == "pactl" || name == "wpctl") {
-    sub1 = ""; for (k = 1; k <= n; k++) if (A[k] !~ /^-/) { sub1 = A[k]; break }
-    if (sub1 ~ /^set-(sink|sink-input)-volume$|^set-volume$/) return zero(A[n]) ? "" : name " " sub1
-    if (sub1 ~ /^set-(sink|sink-input)-mute$|^set-mute$/) return A[n] ~ (name == "wpctl" ? "^1$" : "^(1|true|yes|on)$") ? "" : name " " sub1
+    for (k = 1; k <= n && A[k] ~ /^-/; k++) if (A[k] ~ /^(-s|--server|-n|--client-name)$/) k++
+    sub1 = k <= n ? A[k] : ""
+    if (sub1 ~ /^set-(sink|sink-input)-volume$|^set-volume$|^play-sample$/) return name " " sub1
+    if (sub1 ~ /^set-(sink|sink-input)-mute$|^set-mute$/) return A[n] ~ /^(1|true|yes|on)$/ ? "" : name " " sub1
     return ""
   }
-  if (name == "pamixer") {
-    v = after(A, n, "--set-volume")
-    return anyre(A, n, "^(-u|--unmute|-t|--toggle-mute|-i|--increase|--allow-boost)$") || (v != "\001" && !zero(v)) ? "pamixer" : ""
-  }
+  if (name == "pamixer") return anyre(A, n, "^(-u|--unmute|-t|--toggle-mute|-i|--increase|-d|--decrease|-v|--set-volume|--allow-boost)$") ? "pamixer" : ""
   return ""
 }
 # Options of a wrapper that take a value.
@@ -231,6 +251,12 @@ function judge(d, ci, j, exec,   n, w, b, A, na, k, r, F) {
     for (j++; j <= n; j++) {
       w = CW[d, ci, j]
       if (b == "command" && w ~ /^-[vV]$/) return
+      # env -S 'cmd args': the string is the command line.
+      if (b == "env" && w ~ /^(-S|--split-string)/) {
+        r = w; sub(/^(-S|--split-string=?)/, "", r)
+        for (k = j + 1; k <= n; k++) r = r " " CW[d, ci, k]
+        scan(r, d + 1); return
+      }
       if (w == "--") { j++; break }
       if (w ~ /^-./) { if (wrapopt(b, w)) j++; continue }
       if ((b == "env" || b == "sudo") && w ~ /^[A-Za-z_][A-Za-z0-9_]*=/) continue
@@ -241,6 +267,7 @@ function judge(d, ci, j, exec,   n, w, b, A, na, k, r, F) {
   }
   if (j > n) return
   b = base(CW[d, ci, j])
+  if (b ~ /^python[23]?(\.[0-9]+)+$/) sub(/(\.[0-9]+)+$/, "", b)
   na = args(d, ci, j + 1, A)
   if (isshell(b)) {
     for (k = 1; k <= na; k++) {
@@ -312,9 +339,17 @@ function scan(s, d,   n, i, c, q, w, qb, j, nh, HD, HT, HQ, HO, h, rest, m, L, k
     if (c == "'" || c == "\"") { q = c; qb = ""; continue }
     if (c == "#") { if (w == "") { while (i < n && substr(s, i + 1, 1) != "\n") i++ } else w = w c; continue }
     if (c == "\140") { j = tick(s, i); scan(substr(s, i + 1, j - i - 1), d + 1); i = j; w = w "x"; continue }
+    if (c == "$" && substr(s, i + 1, 1) == "'") {
+      for (i += 2; i <= n && substr(s, i, 1) != "'"; i++) {
+        c = substr(s, i, 1)
+        if (c == "\\" && i < n) { c = substr(s, ++i, 1); if (c == "n") c = "\n"; else if (c == "t") c = "\t" }
+        w = w c
+      }
+      continue
+    }
     if (c == "$" && substr(s, i + 1, 1) == "{") { j = index(substr(s, i), "}"); if (!j) j = n - i + 1; subs(substr(s, i, j), d + 1); w = w substr(s, i, j); i += j - 1; continue }
     if (c == "$" && substr(s, i + 1, 1) == "(") {
-      if (substr(s, i + 2, 1) == "(") { j = closer(s, i + 3); i = j + 1; w = w "0"; continue }
+      if (substr(s, i + 2, 1) == "(") { j = closer(s, i + 3); subs(substr(s, i + 3, j - i - 3), d + 1); i = j + 1; w = w "0"; continue }
       j = closer(s, i + 2); scan(substr(s, i + 2, j - i - 2), d + 1); i = j; w = w "x"; continue
     }
     if (c == "<" && substr(s, i, 3) == "<<<") { word(d, w); w = ""; HS[d] = 1; i += 2; continue }
@@ -346,6 +381,8 @@ function scan(s, d,   n, i, c, q, w, qb, j, nh, HD, HT, HQ, HO, h, rest, m, L, k
         }
         nh = 0
       }
+      # A pipe still waiting for its command (a | then a newline) carries on.
+      if (c == "\n" && CN[d, NC[d]] == 0 && CI[d, NC[d]] == "" && CP[d, NC[d]]) continue
       if (c == "\n") flush(d)
       else if (CN[d, NC[d]] > 0 || CI[d, NC[d]] != "") newcmd(d, piped)
       else CP[d, NC[d]] = piped
@@ -387,14 +424,18 @@ export const SOUND_AWK_PROGRAM = SOUND_AWK.replace(/^[ \t]*#.*\n/gm, '').replace
  */
 const PACKED = gzipSync(Buffer.from(SOUND_AWK_PROGRAM), { level: 9 }).toString('base64')
 
+/** Too long to parse: refused when any of these names appears as a word at all. */
+const LONG_NAMES = [...ALWAYS_PLAYS, 'say', 'espeak', 'espeak-ng', 'aplay', 'pacat', 'pw-cat', 'mpv', 'mplayer', 'ffplay', 'ffmpeg', 'sox', 'festival',
+  'osascript', 'amixer', 'pactl', 'pamixer', 'wpctl', 'open', 'xdg-open']
+
 /** The hook command: a fast `case` bail-out, then the awk check. */
 export const SOUND_GUARD_COMMAND = [
   '# Walnut sound guard: src/providers/sound-guard-hook.ts (the awk program below is gzip + base64)',
   'in=$(cat 2>/dev/null)',
   `case $in in ${TRIGGERS.map((t) => `*${t}*`).join('|')}) ;; *) exit 0 ;; esac`,
   'if [ ${#in} -gt 100000 ]; then',
-  "  printf '%s' \"$in\" | grep -Eiq '(^|[^A-Za-z0-9_-]|\\\\[nt])afplay([^A-Za-z0-9_-]|$)|set volume' || exit 0",
-  "  msg='Walnut refused this command: it is too long to check and names afplay or set volume. Make no sound on this machine; write long text with the Write tool.'",
+  `  printf '%s' "$in" | grep -Eiq '(^|[^A-Za-z0-9_-]|\\\\[nt])(${LONG_NAMES.join('|')})([^A-Za-z0-9_-]|$)|set volume' || exit 0`,
+  "  msg='Walnut refused this command: it is too long to check and names a program that can make sound. Make no sound on this machine; write long text with the Write tool.'",
   'else',
   `  b='${PACKED}'`,
   `  p=$( (printf '%s' "$b" | base64 -d 2>/dev/null || printf '%s' "$b" | base64 -D 2>/dev/null) | gzip -dc 2>/dev/null)`,

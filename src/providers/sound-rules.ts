@@ -40,22 +40,23 @@ export const OSA_SAY_RE = word('say')
 export const OSA_SAVING_RE = 'saving to'
 export const OSA_BEEP_RE = word('beep')
 export const OSA_AFPLAY_RE = word('afplay')
-export const OSA_MEDIA_TELL_RE = 'application (id )?"(music|itunes|spotify|quicktime player|vlc|tv)"'
+/** A media app named by its name or bundle id, in AppleScript (`application id "..."`) or JXA (`Application("...")`). */
+export const OSA_MEDIA_TELL_RE = 'application[ \t(]+(id[ \t]+)?"(com\\.apple\\.(music|itunes|tv|quicktimeplayerx)|com\\.spotify\\.client|org\\.videolan\\.vlc|music|itunes|spotify|quicktime player|vlc|tv)"'
 export const OSA_PLAY_RE = word('play|playpause|resume')
 export const OSA_SET_VOLUME_RE = 'set volume'
 export const OSA_JXA_VOLUME_RE = 'setvolume[ \t]*\\('
-/** A `set volume` statement that unmutes. */
+/** A `set volume` statement that unmutes. Any number in one sets a level: refused too, 0 and muted included. */
 export const VOL_UNMUTE_RE = 'without output muted|output muted (false|no)|outputmuted:[ \t]*false'
 /** One that leaves the output muted. */
 export const VOL_MUTED_RE = 'with output muted|output muted (true|yes)|outputmuted:[ \t]*true'
 
-/** In a script's code (python -c, node -e, a heredoc to them): an audio or speech API. */
+/** In a script's code (python -c, node -e, a heredoc to them), outside its string literals: an audio or speech API. */
 export const CODE_AUDIO_API_RE = 'nssound|nsspeechsynthesizer|avspeechsynthesizer|avaudioplayer|pyttsx3|playsound|simpleaudio|winsound|pygame\\.mixer|system\\.speech|speechsynthesizer|soundplayer|\\[console\\]::beep'
-/** A player named as a program the code starts (`["say", "hi"]`, `os.system("afplay x")`). */
-export const CODE_PLAYER_RE = '["\'`](say|afplay|aplay|paplay|espeak|espeak-ng|spd-say|mpg123|ffplay|mpv)([ "\'`,]|$)'
-/** ...together with a call that starts a process. */
-export const CODE_SPAWN_RE = 'system|popen|subprocess|spawn|exec|check_output|check_call|run\\(|call\\(|command\\(|\\$`'
-/** `say -o file` inside code: renders to a file, silent. */
+/** A string literal in code, left out before CODE_AUDIO_API_RE is matched (`print("playsound")` names it, runs nothing). */
+export const CODE_STRING_RE = '"[^"]*"|\'[^\']*\''
+/** A call that starts a player as its program: `os.system("say hi")`, `subprocess.run(["afplay", ...])`, Bun's $`say hi`. */
+export const CODE_CALL_RE = '((system|popen|run|call|check_output|check_call|exec|execsync|execfile|execfilesync|spawn|spawnsync|command)[ \t]*\\([ \t]*\\[?[ \t]*["\'`]|\\$`)(say|afplay|aplay|paplay|espeak|espeak-ng|spd-say|mpg123|ffplay|mpv)([ "\'`,]|$)'
+/** `say -o file` among that call's own arguments (up to its first `)`): renders to a file, silent. */
 export const CODE_SAY_FILE_RE = '["\' ](-o|--output-file)([ "\'=]|$)'
 /** Code that runs osascript is judged by the AppleScript rules too. */
 export const CODE_OSASCRIPT_RE = word('osascript')
@@ -64,6 +65,6 @@ export const CODE_OSASCRIPT_RE = word('osascript')
 export function soundAdvice(what: string): string {
   return `it would make sound on the machine it runs on (${what}). The person there wants no sound from an agent, never a volume change or an unmute. `
     + 'Work silently: speech to a file (say -o out.aiff, espeak -w out.wav) fed to the app or simulator, audio through a virtual audio device '
-    + '(BlackHole, a null sink), a player with a null output (mpv --ao=null). Muting and reading the volume are fine. '
+    + '(BlackHole, a null sink), a player with a null output (mpv --ao=null). Muting alone and reading the volume are fine; setting any level is not. '
     + 'Text that only names these: write it with the Write tool.'
 }

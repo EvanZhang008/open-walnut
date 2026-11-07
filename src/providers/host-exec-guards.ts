@@ -122,7 +122,8 @@ export function tokenize(src: string): Tokens {
     const had = cur.length > 0
     if (had) { done.text = src.slice(cmdStart, at); commands.push(cur); inputs.push(done) }
     cur = []
-    input = { text: '', heredocs: [], pipedFrom: pipe ? (had ? [...done.pipedFrom, done] : done.pipedFrom) : [] }
+    // A pipe still waiting for its command (`a |` then a newline) keeps what it carries.
+    input = { text: '', heredocs: [], pipedFrom: pipe ? (had ? [...done.pipedFrom, done] : done.pipedFrom) : had ? [] : done.pipedFrom }
   }
   /** A `$(`/`<(`/`>(` body from `i`: kept for its own scan, and the word gets its text. */
   const substitution = (i: number, open: string): number => {

@@ -56,10 +56,12 @@ describe.each(SHELLS)('sound guard hook under %s', (shell) => {
     expect(r.stdout).toBe(SOUND_AWK_PROGRAM.replace(/\n+$/, ''))
   })
 
-  it('refuses a command too long to parse only when it names afplay or set volume', () => {
-    const big = 'cat > n.md <<EOF\n' + 'x say '.repeat(20_000) + '\nEOF\n'
+  it('refuses a command too long to parse when it names any program that can make sound', () => {
+    const big = "cat > data.txt <<'EOF'\n" + 'x '.repeat(60_000) + '\nEOF\n'
     expect(run(shell, big).stdout).toBe('')
-    expect(run(shell, big + 'afplay x.wav').reason).toMatch(/too long to check/)
+    for (const tail of ['say done', 'afplay x.wav', 'mpv a.mp3', 'pactl set-sink-volume @DEFAULT_SINK@ 50%']) {
+      expect(run(shell, big + tail).reason).toMatch(/too long to check/)
+    }
   })
 
   it('answers a long command quickly', () => {
