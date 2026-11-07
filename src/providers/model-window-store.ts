@@ -81,7 +81,10 @@ async function seedFromSessionRecords(): Promise<number> {
     for (const r of await listSessions()) {
       if (!r.modelMaxWindow || !r.modelMaxWindowModel || !isExactWindowSource(r.modelMaxWindowSource)) continue
       if (r.modelMaxWindowSource !== 'cli-model-usage') continue
-      const key = `${r.host || '__local__'}::${shortModelId(r.modelMaxWindowModel).toLowerCase()}`
+      // The init line drops a requested `[1m]`; put it back so a plain and a 1M variant stay apart
+      // (ClaudeCodeSession.windowCacheModel).
+      const marked = /\[1m\]$/i.test(r.cliModel ?? '') && !/\[1m\]$/i.test(r.modelMaxWindowModel) ? `${r.modelMaxWindowModel}[1m]` : r.modelMaxWindowModel
+      const key = `${r.host || '__local__'}::${shortModelId(marked).toLowerCase()}`
       const at = Date.parse(r.lastActiveAt ?? '') || 0
       if (!entries[key] || entries[key].at < at) entries[key] = { window: r.modelMaxWindow, source: 'cli-model-usage', at }
     }

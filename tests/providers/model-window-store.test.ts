@@ -51,6 +51,15 @@ describe('model window store', () => {
     expect(recallModelWindow(null, 'claude-haiku-4-5')).toBeUndefined();
   });
 
+  it('a 1M request and the plain model stay apart, though the init line drops the marker', async () => {
+    records.push(
+      { host: 'mac', cliModel: 'claude-opus-4-8[1m]', modelMaxWindow: 1_000_000, modelMaxWindowSource: 'cli-model-usage', modelMaxWindowModel: 'claude-opus-4-8' },
+    );
+    await startModelWindowStore();
+    expect(recallModelWindow('mac', 'claude-opus-4-8[1m]')).toBe(1_000_000);
+    expect(recallModelWindow('mac', 'claude-opus-4-8')).toBeUndefined();
+  });
+
   it('a broken file starts empty instead of failing the boot', async () => {
     await fs.mkdir(path.dirname(file), { recursive: true });
     await fs.writeFile(file, '{not json');

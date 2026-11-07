@@ -2843,6 +2843,19 @@ describe('ClaudeCodeSession payload reads (context usage / usage / version)', ()
     expect(s.contextReadout(10_000).contextWindowEstimate).toBeUndefined();
   });
 
+  it('a [1m] request caches its window apart from the plain model', () => {
+    resetContextWindowCaches();
+    const { session } = makeSessionWithStubTransport();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const s = session as any;
+    s._cliModel = 'claude-opus-4-8[1m]';
+    s._initModel = 'claude-opus-4-8'; // the init line drops the marker
+    s.harvestRawContextWindow({ 'claude-opus-4-8': { contextWindow: 1_000_000 } });
+    expect(recallModelWindow(null, 'claude-opus-4-8[1m]')).toBe(1_000_000);
+    expect(recallModelWindow(null, 'claude-opus-4-8')).toBeUndefined();
+    resetContextWindowCaches();
+  });
+
   // The seed read is the ONLY thing that can put a percentage on the badge of a
   // session that has produced no assistant message since this server started —
   // and for a custom proxy model there is no model-string fallback at all, so

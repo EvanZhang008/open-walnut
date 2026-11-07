@@ -9641,7 +9641,7 @@ export class ClaudeCodeSession {
       // What any earlier session on this host+model already learned. The exact
       // window only arrives at a turn END, so without this every session would
       // spend its first turn on a guess and then jump.
-      hostModelWindow: recallModelWindow(this._host, this._initModel ?? this._model),
+      hostModelWindow: recallModelWindow(this._host, this.windowCacheModel()),
       envMaxContextTokens: this._envMaxContextTokens ?? recallEnvMaxContextTokens(this._host),
       model: this._initModel ?? this._model,
       observedTokens: this._maxContextTokensSeen || undefined,
@@ -9743,9 +9743,24 @@ export class ClaudeCodeSession {
       // Teach every future session on this host+model: this exact value only
       // arrives at a turn END, so the cache is what stops the next session from
       // spending its first turn on a guess (or, for a proxy model, on nothing).
-      rememberModelWindow(this._host, this._initModel ?? this._model, win)
-      rememberModelWindow(this._host, key, win)
+      const cacheModel = this.windowCacheModel()
+      rememberModelWindow(this._host, cacheModel, win)
+      // The modelUsage key names the same model undecorated; never for a `[1m]` request, whose
+      // plain id is another model's window (Opus 4.8 is 200K, Opus 4.8 [1m] 1M).
+      if (!cacheModel?.endsWith('[1m]')) rememberModelWindow(this._host, key, win)
     }
+  }
+
+  /**
+   * The model id this session's window is cached under. The init line drops the `[1m]` a request
+   * carried (CLI 2.1.312: `--model global.anthropic.claude-opus-5-5[1m]` reports
+   * `global.anthropic.claude-opus-5-5`), so the marker of the `--model` asked for is put back: a
+   * plain and a 1M variant of one model never share a cached window.
+   */
+  private windowCacheModel(): string | undefined {
+    const model = this._initModel ?? this._model
+    if (!model) return undefined
+    return /\[1m\]$/i.test(this._cliModel ?? '') && !/\[1m\]$/i.test(model) ? `${model}[1m]` : model
   }
 
   /** Read get_context_usage at session-start / after a model change (NOT per
@@ -9785,7 +9800,7 @@ export class ClaudeCodeSession {
           })
         }
         this._cliUnclampedWindow = cu.maxTokens
-        rememberModelWindow(this._host, this._initModel ?? this._model, cu.maxTokens, 'cli-context-usage')
+        rememberModelWindow(this._host, this.windowCacheModel(), cu.maxTokens, 'cli-context-usage')
       }
       if (cu?.maxTokens && cu.maxTokens > 0 && cu.maxTokens !== this._cliContextWindow) {
         log.session.info('cli effective (auto-compact) window seeded', {
