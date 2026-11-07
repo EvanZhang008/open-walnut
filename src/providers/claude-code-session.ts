@@ -2929,8 +2929,15 @@ export class ClaudeCodeSession {
     // TTFT anchor for the spawn path (init-only spawns get re-anchored by the
     // first real writeMessage; a stale anchor is overwritten there).
     this._turnStartTs = initOnly ? undefined : Date.now()
-    // A spawn that carries a message starts a turn (see turnStartedAt).
-    if (!initOnly) this._turnEdgeAt = this._turnStartTs
+    // A spawn that carries a message starts a turn (see turnStartedAt), and a turn
+    // has a generation of its own: the resumed turn must never share one with a
+    // result the previous process emitted (its exit can complete the turn a failed
+    // write had opened). A lane holding that result would take it as this turn's
+    // answer when this delivery reports its generation (lane-turn.ts isOurs).
+    if (!initOnly) {
+      this._turnEdgeAt = this._turnStartTs
+      this._turnGen++
+    }
     this._pendingOpenLine = this._turnOpenLine = undefined
     this._turnSeq++
     this._firstThinkingTs = undefined
@@ -4151,10 +4158,16 @@ export class ClaudeCodeSession {
       }
       const eventAt = this._lastJsonlEventTs
       const offset = transport.fileSize
+      const endsAt = this._processEnds
       const speedBefore = this._speed.snapshot(Date.now())
       undoDispatch = () => {
+        // Not once the process ended meanwhile: its exit settled the turn this
+        // dispatch opened and emitted that turn's result under this generation.
+        // Rolling the generation back would let the next turn reuse it, and a lane
+        // would then read the stale result as the next turn's answer.
         if (this._transport === transport && this._turnGen === before._turnGen + 1
-          && this._lastJsonlEventTs === eventAt && transport.fileSize === offset) {
+          && this._lastJsonlEventTs === eventAt && transport.fileSize === offset
+          && this._processEnds === endsAt) {
           Object.assign(this, before)
           if (this.claudeSessionId) this._emitBackgroundTasksUpdate(this.claudeSessionId)
           // The readout flipped to live at the anchor below; put the previous
@@ -4165,6 +4178,9 @@ export class ClaudeCodeSession {
           } else {
             this.finalizeTurnSpeed({ interrupted: true })
           }
+        } else if (this._transport === transport && this._processEnds !== endsAt) {
+          // The exit settled the turn, but a teardown exit closes no meter of its own.
+          this.finalizeTurnSpeed({ interrupted: true })
         }
       }
       this._processStatus = 'running'  // Back to running from idle
