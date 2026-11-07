@@ -84,45 +84,69 @@ const ADDED_ASK_CHARS = 200;
 /** Walnut's line for the asks past ADDED_ASKS_MAX: no task of its own, never a rule issue. */
 export const ADDED_MORE_RE = /^- And \d+ more asks? the user: the Task view lists (?:it|them)\.$/;
 
-/** The word an added ask line leads with when its status has no category. */
-const ADDED_NO_CATEGORY = 'Needs you';
-
-/** Walnut's line for a task that asks the user and that the letter does not name: its own ask.
- *  It always leads with a label (a category, else ADDED_NO_CATEGORY), so isWalnutBriefLine knows
- *  it for Walnut's in every letter it was ever stored in. */
+/** Walnut's line for a task that asks the user and that the letter does not name: its own ask. */
 export function addedAskLine(task: BriefSectionTask, main: boolean, tasks: readonly BriefSectionTask[]): string {
-  const vp = main ? briefVpOf(task, tasks) : undefined;
   // What to do with it, then its ask or what there is to read (needsLineOf, 2026-11-03).
   const line = task.user_status ? needsLineOf(task.user_status) : null;
-  const ask = [line ? NEEDS_CATEGORY_LABELS[line.category] : ADDED_NO_CATEGORY, words(line ? line.text : task.user_status?.ask ?? '')].filter(Boolean).join(': ').slice(0, ADDED_ASK_CHARS);
+  const ask = (line ? [NEEDS_CATEGORY_LABELS[line.category], words(line.text)].filter(Boolean).join(': ') : words(task.user_status?.ask ?? '')).slice(0, ADDED_ASK_CHARS) || 'Needs you';
+  return askLineOf(task, main, tasks, ask);
+}
+
+function askLineOf(task: BriefSectionTask, main: boolean, tasks: readonly BriefSectionTask[], ask: string): string {
+  const vp = main ? briefVpOf(task, tasks) : undefined;
   return `- <task-ref id="${task.id}" label="${attr(task.title)}"/>${vp ? ` (VP <task-ref id="${vp.id}" label="${attr(vp.title)}"/>)` : ''}: ${ask}`;
 }
 
 const reEscape = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-const ADDED_ASK_RE = new RegExp(
+/** addedAskLine's shape with a category, its ask clipped as Walnut clips it. */
+const LABELED_ASK_RE = new RegExp(
   `^- <task-ref id="[^"]+" label="[^"]*"/>(?: \\(VP <task-ref id="[^"]+" label="[^"]*"/>\\))?: `
-  + `(?:${[...Object.values(NEEDS_CATEGORY_LABELS), ADDED_NO_CATEGORY].map(reEscape).join('|')})(?:: .*)?$`,
+  + `((?:${Object.values(NEEDS_CATEGORY_LABELS).map(reEscape).join('|')})(?:: .*)?)$`,
 );
 
-/** A line Walnut wrote into a letter (an ask the letter did not name, the count past the cap), not
- *  its writer's: told by its fixed shape, so a letter stored before this was known reads the same
- *  (2026-11-06, Main: such lines kept a stored letter over BRIEF_MAX_CHARS and every edit failed). */
-export function isWalnutBriefLine(line: string): boolean {
-  const t = line.trim();
-  return ADDED_MORE_RE.test(t) || ADDED_ASK_RE.test(t);
+/**
+ * The lines Walnut wrote into a stored letter, not its writer's (2026-11-06, Main: the asks
+ * Walnut adds kept a stored letter over BRIEF_MAX_CHARS, and every edit after it failed). A letter
+ * stored since this was known says so itself (TaskBrief.added, exactly the lines). One stored
+ * before has no record, so its lines are told by their shape: addedAskLine's with a category (the
+ * ask at most as long as Walnut clips it), the count past the cap, or a line equal to what Walnut
+ * writes for that task now, in today's form or the one before 2026-11-03 (no category).
+ */
+export function briefWalnutLines(
+  brief: { text: string; added?: readonly string[] } | undefined, owner: BriefSectionTask, tasks: readonly BriefSectionTask[],
+): string[] {
+  if (!brief) return [];
+  if (brief.added) return [...brief.added];
+  const main = owner.org_role === 'main';
+  const known = new Set<string>();
+  for (const t of briefAskScope(owner, tasks)) {
+    known.add(addedAskLine(t, main, tasks));
+    known.add(askLineOf(t, main, tasks, words(t.user_status?.ask ?? '').slice(0, ADDED_ASK_CHARS) || 'Needs you'));
+  }
+  return brief.text.split('\n').map((l) => l.trim()).filter((l) => {
+    const labeled = l.match(LABELED_ASK_RE);
+    return ADDED_MORE_RE.test(l) || known.has(l) || (!!labeled && labeled[1]!.length <= ADDED_ASK_CHARS);
+  });
 }
 
 /**
  * The writer's own share of a letter, the part BRIEF_MAX_CHARS holds (brief-write.ts): every line
- * but Walnut's (isWalnutBriefLine), the section headings and a section's "nothing" line, each
- * counted without its list marker or indent, which Walnut may add when it shapes the letter. So
- * shaping a letter never makes its writer's share larger (tests/core/sessions/brief-own-chars.test.ts).
+ * but Walnut's (`walnut`, from briefWalnutLines or a write's record, each excused once and only
+ * word for word: a Walnut line its writer edited is the writer's), the count past the cap, the
+ * section headings and a section's "nothing" line, each counted without its list marker or
+ * indent, which Walnut may add when it shapes the letter. So shaping a letter never makes its
+ * writer's share larger (tests/core/sessions/brief-own-chars.test.ts).
  */
-export function briefOwnChars(text: string): number {
+export function briefOwnChars(text: string, walnut: readonly string[] = []): number {
+  const left = new Map<string, number>();
+  for (const l of walnut) left.set(l.trim(), (left.get(l.trim()) ?? 0) + 1);
   let n = 0;
   for (const raw of text.split('\n')) {
     const t = raw.trim();
-    if (!t || isWalnutBriefLine(t) || headingSection(t) || saysNothing(t)) continue;
+    if (!t) continue;
+    const k = left.get(t);
+    if (k) { left.set(t, k - 1); continue; }
+    if (ADDED_MORE_RE.test(t) || headingSection(t) || saysNothing(t)) continue;
     n += t.replace(/^(?:[-*+]|\d+[.)])\s+/, '').length + 1;
   }
   return n;
@@ -157,6 +181,8 @@ export interface StructuredBrief {
    *  finished tasks left. */
   asksAdded?: string[];
   dropped?: number;
+  /** With `live`: the lines Walnut wrote into the letter (its asks, the count past the cap). */
+  walnutLines?: string[];
 }
 
 /**
@@ -228,17 +254,21 @@ export function structureBrief(
   }
   // Every task that asks the user now is in Needs you, in its own words when the letter has none.
   const added: string[] = [];
+  // Every line Walnut writes into the letter goes through here, so the write records it as
+  // Walnut's (TaskBrief.added) and the length limit leaves it out (briefOwnChars).
+  const walnutLines: string[] = [];
+  const walnut = (line: string) => { body.needs.push(line); walnutLines.push(line); };
   if (opts.live) {
     const main = opts.live.org_role === 'main';
     const missing = briefAskScope(opts.live, tasks)
       .filter((t) => !named.has(t.id) && briefSectionOf(t) === 'needs' && !t.user_status?.transient)
       .sort((a, b) => askedAt(b) - askedAt(a));
     for (const t of missing.slice(0, ADDED_ASKS_MAX)) {
-      body.needs.push(addedAskLine(t, main, tasks));
+      walnut(addedAskLine(t, main, tasks));
       added.push(t.id);
     }
     const more = missing.length - ADDED_ASKS_MAX;
-    if (more > 0) body.needs.push(`- And ${more} more ${more === 1 ? 'ask' : 'asks'} the user: the Task view lists ${more === 1 ? 'it' : 'them'}.`);
+    if (more > 0) walnut(`- And ${more} more ${more === 1 ? 'ask' : 'asks'} the user: the Task view lists ${more === 1 ? 'it' : 'them'}.`);
   }
   const trim = (ls: string[]) => {
     let a = 0; let b = ls.length;
@@ -262,7 +292,7 @@ export function structureBrief(
     text: out.join('\n').trim(),
     moved,
     added: BRIEF_SECTIONS.filter((s) => !s.optional).map((s) => s.state).filter((k) => !seen.has(k)),
-    ...(opts.live ? { asksAdded: added, dropped } : {}),
+    ...(opts.live ? { asksAdded: added, dropped, walnutLines } : {}),
   };
 }
 

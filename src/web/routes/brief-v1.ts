@@ -17,7 +17,7 @@ import { role } from '../../core/server-role.js'
 import { BRIEF_MAX_CHARS } from '../../core/user-status.js'
 import { briefFreshness, freshnessWords, liveWords } from '../../core/sessions/brief-fresh.js'
 import { briefRules, briefSectionLines } from '../../core/sessions/brief.js'
-import { briefOwnChars } from '../../core/sessions/brief-structure.js'
+import { briefOwnChars, briefWalnutLines } from '../../core/sessions/brief-structure.js'
 import { briefVpLines, formatBriefIssues } from '../../core/sessions/brief-rules.js'
 import { BriefWriteError, writeNodeBrief, type BriefEdit } from '../../core/sessions/brief-write.js'
 import { compactBrief, noteRulesGiven, rulesDue } from '../../core/sessions/brief-compact.js'
@@ -89,7 +89,7 @@ briefV1Router.get('/tasks/:id/brief', route(async (req, res) => {
   if (sections) noteRulesGiven(sid, task.id, wording)
   res.json({
     task_id: task.id, title: task.title, brief: task.brief ? { text: task.brief.text, at: task.brief.at } : null,
-    chars: task.brief?.text.length ?? 0, own_chars: briefOwnChars(task.brief?.text ?? ''), limit: BRIEF_MAX_CHARS,
+    chars: task.brief?.text.length ?? 0, own_chars: briefOwnChars(task.brief?.text ?? '', briefWalnutLines(task.brief, task, tasks)), limit: BRIEF_MAX_CHARS,
     fresh,
     sections,
     rules: sections ? briefRules({ ...ruleOpts, sections }) : null,
@@ -116,5 +116,5 @@ briefV1Router.put('/tasks/:id/brief', route(async (req, res) => {
     ? `${callerSid}#${(await getSessionByClaudeId(callerSid).catch(() => null))?.lastCompactUuid ?? ''}`
     : undefined
   log.task.info('brief written', { taskId: task.id, by: sid ? 'session' : 'human', chars: out.brief.text.length, issues: out.issues.length })
-  res.json({ task_id: task.id, title: task.title, brief: { text: out.brief.text, at: out.brief.at }, issues: formatBriefIssues(out.issues), chars: out.brief.text.length, own_chars: briefOwnChars(out.brief.text), limit: BRIEF_MAX_CHARS })
+  res.json({ task_id: task.id, title: task.title, brief: { text: out.brief.text, at: out.brief.at }, issues: formatBriefIssues(out.issues), chars: out.brief.text.length, own_chars: briefOwnChars(out.brief.text, out.brief.added), limit: BRIEF_MAX_CHARS })
 }))

@@ -13,7 +13,7 @@
 import type { Task } from '../types.js';
 import { BRIEF_MAX_CHARS, type TaskBrief } from '../user-status.js';
 import { briefSnapshot } from './brief-fresh.js';
-import { briefOwnChars, structureBrief } from './brief-structure.js';
+import { briefOwnChars, briefWalnutLines, structureBrief } from './brief-structure.js';
 import { briefIssues, completeBriefRefs, type BriefIssue } from './brief-rules.js';
 
 export class BriefWriteError extends Error {
@@ -40,18 +40,35 @@ export function applyBriefEdits(text: string, edits: readonly BriefEdit[]): stri
   return out;
 }
 
-/** A letter in its stored shape, against the live tasks. Pure. */
+/** A letter in its stored shape, against the live tasks. Pure. `prior`: the lines Walnut wrote into
+ *  the letter it replaces (briefWalnutLines); those still in it word for word stay Walnut's. */
 export function shapeBriefText(
-  text: string, owner: Task, tasks: readonly Task[], opts: { language?: string; nowIso?: string } = {},
+  text: string, owner: Task, tasks: readonly Task[], opts: { language?: string; nowIso?: string; prior?: readonly string[] } = {},
 ): { brief: TaskBrief; issues: BriefIssue[] } {
   const full = completeBriefRefs({ text }, tasks).text;
   const shaped = structureBrief(full, owner.id, tasks, { ...(opts.language ? { language: opts.language } : {}), live: owner });
   const issues = briefIssues(shaped.text, owner, tasks);
   const at = opts.nowIso ?? new Date().toISOString();
+  const added = walnutLinesKept(shaped.text, shaped.walnutLines ?? [], opts.prior ?? []);
   return {
-    brief: { text: shaped.text, at, ...briefSnapshot(shaped.text, owner, tasks), ...(issues.length ? { issues } : {}) },
+    brief: { text: shaped.text, at, ...briefSnapshot(shaped.text, owner, tasks), ...(issues.length ? { issues } : {}), added },
     issues,
   };
+}
+
+/** The lines of a stored letter that are Walnut's: the ones it just wrote, and the ones it wrote
+ *  before that are still there word for word, each as often as the letter holds it. */
+function walnutLinesKept(text: string, written: readonly string[], prior: readonly string[]): string[] {
+  const left = new Map<string, number>();
+  for (const l of text.split('\n')) left.set(l.trim(), (left.get(l.trim()) ?? 0) + 1);
+  const out: string[] = [];
+  for (const l of [...written, ...prior]) {
+    const k = left.get(l.trim());
+    if (!k) continue;
+    left.set(l.trim(), k - 1);
+    out.push(l.trim());
+  }
+  return out;
 }
 
 /** Write a node's Brief (whole `content`, or `edits` on the stored one). Main or a lead only. */
@@ -75,10 +92,10 @@ export async function writeNodeBrief(taskId: string, input: { content?: string; 
   // count past the cap, headings, "None") may take it past BRIEF_MAX_CHARS, and an edit that does
   // not grow the writer's share still goes through (2026-11-06, Main: a stored letter over the
   // limit refused every later edit, and it rewrote the whole letter four times in a day).
-  const checkOwn = (shaped: string, base: string): void => {
-    const own = briefOwnChars(shaped);
-    if (own > BRIEF_MAX_CHARS && (input.content !== undefined || own > briefOwnChars(base))) {
-      throw new BriefWriteError(413, 'brief_too_long', `Your own lines in the Brief come to ${own} characters, over ${BRIEF_MAX_CHARS} (the lines Walnut adds, the headings and "None" lines are not counted): keep it to what matters now (at most 15 lines of work).`, { chars: shaped.length, own_chars: own, limit: BRIEF_MAX_CHARS });
+  const checkOwn = (shaped: TaskBrief, base: string, prior: readonly string[]): void => {
+    const own = briefOwnChars(shaped.text, shaped.added);
+    if (own > BRIEF_MAX_CHARS && (input.content !== undefined || own > briefOwnChars(base, prior))) {
+      throw new BriefWriteError(413, 'brief_too_long', `Your own lines in the Brief come to ${own} characters, over ${BRIEF_MAX_CHARS} (the lines Walnut adds, the headings and "None" lines are not counted): keep it to what matters now (at most 15 lines of work).`, { chars: shaped.text.length, own_chars: own, limit: BRIEF_MAX_CHARS });
     }
   };
   const first = textOf(task.brief?.text ?? '');
@@ -95,8 +112,9 @@ export async function writeNodeBrief(taskId: string, input: { content?: string; 
   await updateTaskRaw(task.id, (current) => {
     try {
       const base = current.brief?.text ?? '';
-      out = shapeBriefText(textOf(base), current, tasks, input.language ? { language: input.language } : {});
-      checkOwn(out.brief.text, base);
+      const prior = briefWalnutLines(current.brief, current, tasks);
+      out = shapeBriefText(textOf(base), current, tasks, { ...(input.language ? { language: input.language } : {}), prior });
+      checkOwn(out.brief, base, prior);
       return { brief: out.brief };
     } catch (err) {
       failure = err;

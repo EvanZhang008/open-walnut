@@ -1216,6 +1216,9 @@ export interface TaskBrief {
   marks?: Record<string, string>;
   /** The tasks that asked the user when it was written (a lead's team, Main's org). */
   asks?: string[];
+  /** The lines of `text` Walnut wrote (sessions/brief-structure.ts briefWalnutLines), word for
+   *  word: not its writer's, so BRIEF_MAX_CHARS leaves them out. Absent on a letter stored before. */
+  added?: string[];
 }
 
 /** The longest Brief kept: a dozen lines, not a document (Main's lines carry two task refs). */

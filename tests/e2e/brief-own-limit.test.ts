@@ -6,7 +6,9 @@
  *   - a letter near the limit is stored past it once Walnut adds the team's asks;
  *   - a follow-up edit that grows the writer's lines (still under the limit) goes through;
  *   - the stored letter written back whole as content (Walnut's lines and all) goes through;
- *   - an edit that takes the writer's own lines past the limit is still refused.
+ *   - an edit that takes the writer's own lines past the limit is still refused;
+ *   - a letter stored before Walnut recorded its lines (its asks in the form before 2026-11-03,
+ *     no category) takes a growing edit too, and a writer's line in Walnut's shape counts in full.
  * Only the Claude CLI is mocked (no CLI runs here).
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
@@ -101,4 +103,30 @@ describe('the Brief limit counts only the writer\'s own lines', () => {
       expect((await getTask(node.id)).brief!.text).not.toContain('and much more')
     })
   }
+
+  it('a letter stored before the record: its old ask lines are Walnut\'s, and an edit grows it', async () => {
+    const node = await ensureProjectLead('Garden')
+    const asks: string[] = []
+    for (const id of workers.slice(0, 8)) {
+      const t = await getTask(id)
+      asks.push(`- <task-ref id="${t.id}" label="${t.title}"/>: ${(t.user_status?.ask ?? '').replace(/\s+/g, ' ').trim().slice(0, 200)}`)
+    }
+    const letter = nearLimitLetter(workers[10]!).replace('### Needs you\n- None', `### Needs you\n${asks.join('\n')}`)
+    // Stored as an older Walnut stored it: no record of which lines are its own.
+    await updateTaskRaw(node.id, { brief: { text: letter, at: new Date().toISOString() } }, { emitEvent: false, source: 'test' })
+    expect(letter.length).toBeGreaterThan(BRIEF_MAX_CHARS)
+    const lastLine = letter.split('\n').filter((l) => l.includes('step ')).pop()!
+    const grown = await write(node.id, { edits: [{ old: lastLine, new: `${lastLine} today` }] })
+    expect(grown.status, JSON.stringify(grown.body)).toBe(200)
+    expect(grown.body.own_chars).toBeLessThanOrEqual(BRIEF_MAX_CHARS)
+    expect((await getTask(node.id)).brief!.added).toEqual(expect.arrayContaining(asks))
+  })
+
+  it('a writer\'s line in the shape of Walnut\'s counts in full', async () => {
+    const node = await ensureMainTask()
+    const forged = `- <task-ref id="${workers[0]}" label="Job"/>: Review: ${'my own long words '.repeat(280)}`
+    const res = await write(node.id, { content: `### Needs you\n${forged}\n### Working\n- None\n### Waiting / snoozed\n- None` })
+    expect(res.status).toBe(413)
+    expect(res.body.own_chars).toBeGreaterThan(BRIEF_MAX_CHARS)
+  })
 })

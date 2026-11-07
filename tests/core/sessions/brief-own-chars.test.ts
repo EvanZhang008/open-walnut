@@ -13,7 +13,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { Task } from '../../../src/core/types.js'
 import { BRIEF_MAX_CHARS, BRIEF_SECTIONS, NEEDS_CATEGORY_LABELS, type NeedsCategory, type UserStatus } from '../../../src/core/user-status.js'
-import { ADDED_ASKS_MAX, addedAskLine, briefOwnChars, emptySectionLine, isWalnutBriefLine, structureBrief } from '../../../src/core/sessions/brief-structure.js'
+import { ADDED_ASKS_MAX, addedAskLine, briefOwnChars, briefWalnutLines, emptySectionLine, structureBrief } from '../../../src/core/sessions/brief-structure.js'
 import { shapeBriefText } from '../../../src/core/sessions/brief-write.js'
 import { completeBriefRefs } from '../../../src/core/sessions/brief-rules.js'
 
@@ -71,32 +71,55 @@ function letters(tasks: Task[]): string[] {
   ]
 }
 
-describe('isWalnutBriefLine', () => {
-  it('knows every line Walnut adds, for Main (with the VP) and a lead, every category and none', () => {
-    const tasks = team()
-    const vp = { id: 'vp-00001', title: 'Garden "VP"', phase: 'IN_PROGRESS', status: 'in_progress', org_role: 'lead', project: 'Garden' } as Task
-    for (const t of tasks.filter((x) => x.user_status?.state === 'needs' || x.user_status?.state === 'read')) {
-      for (const owner of [lead, main]) {
-        const line = addedAskLine(t, owner === main, [...tasks, vp])
-        expect(isWalnutBriefLine(line), line).toBe(true)
-        expect(briefOwnChars(line)).toBe(0)
-      }
-    }
-    expect(isWalnutBriefLine('- And 1 more ask the user: the Task view lists it.')).toBe(true)
-    expect(isWalnutBriefLine('- And 12 more asks the user: the Task view lists them.')).toBe(true)
-  })
-  it('never takes a writer\'s line for Walnut\'s', () => {
-    for (const line of [
-      '- <task-ref id="a" label="A"/>：Can close 了',
-      '- <task-ref id="a" label="A"/>: approve the fence plan',
-      '- <task-ref id="a" label="A"/>: Can closely watch it',
-      '- Can close: the result is ready',
-    ]) expect(isWalnutBriefLine(line), line).toBe(false)
-  })
+const shape = (letter: string, owner: Task, tasks: Task[], prior: string[] = []) =>
+  shapeBriefText(letter, owner, tasks, { nowIso: NOW, prior }).brief
+
+describe('the lines Walnut writes are recorded and left out', () => {
+  for (const owner of [lead, main]) {
+    it(`${owner.org_role}: every ask it adds and the count past the cap, for every category and none`, () => {
+      const tasks = [owner, ...team()]
+      const b = shape('### Needs you\n- None', owner, tasks)
+      const lines = b.text.split('\n').filter((l) => l.startsWith('- ') && l !== '- None')
+      expect(lines.length).toBe(ADDED_ASKS_MAX + 1)
+      expect([...b.added!].sort()).toEqual([...lines].sort())
+      expect(briefOwnChars(b.text, b.added)).toBe(0)
+      // A letter stored before the record existed: the same lines, told by their shape.
+      expect(briefWalnutLines({ text: b.text }, owner, tasks).sort()).toEqual([...lines].sort())
+    })
+  }
   it('headings and a section\'s "nothing" line are not the writer\'s share either', () => {
     for (const s of BRIEF_SECTIONS) expect(briefOwnChars(`### ${s.heading}`)).toBe(0)
     expect(briefOwnChars(emptySectionLine('English'))).toBe(0)
     expect(briefOwnChars(emptySectionLine('Chinese'))).toBe(0)
+  })
+})
+
+describe('only Walnut\'s own lines are excused (review 2026-11-07)', () => {
+  const tasks = [lead, ...team()]
+  const asker = tasks.find((t) => t.user_status?.state === 'needs')!
+  it('a writer\'s line in Walnut\'s shape counts in full', () => {
+    const forged = `- <task-ref id="${asker.id}" label="Job"/>: Review: ${'my own long words '.repeat(280)}`
+    const b = shape(`### Needs you\n${forged}`, lead, tasks)
+    expect(b.added).not.toContain(forged)
+    expect(briefOwnChars(b.text, b.added)).toBeGreaterThan(BRIEF_MAX_CHARS)
+  })
+  it('a line Walnut wrote and its writer then grew is the writer\'s', () => {
+    const first = shape('### Needs you\n- None', lead, tasks)
+    const walnutLine = first.added![0]!
+    const grown = first.text.replace(walnutLine, `${walnutLine} ${'and more of mine '.repeat(20)}`)
+    const b = shape(grown, lead, tasks, first.added)
+    expect(b.added).not.toContain(walnutLine)
+    expect(briefOwnChars(b.text, b.added)).toBeGreaterThan(300)
+  })
+  it('a letter with no record: a labeled line longer than Walnut ever writes is the writer\'s', () => {
+    const long = `- <task-ref id="${asker.id}" label="Job"/>: Decide: ${'x'.repeat(300)}`
+    expect(briefWalnutLines({ text: long }, lead, tasks)).toEqual([])
+  })
+  it('a letter with no record: the ask line Walnut wrote before 2026-11-03 (no category) is Walnut\'s', () => {
+    const t = tasks.find((x) => x.user_status?.ask === 'Approve the fence plan')!
+    const old = `- <task-ref id="${t.id}" label="${t.title.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')}"/>: Approve the fence plan`
+    const writer = `- <task-ref id="${t.id}" label="Job"/>: approve the fence plan today`
+    expect(briefWalnutLines({ text: `### Needs you\n${old}\n${writer}` }, lead, tasks)).toEqual([old])
   })
 })
 
@@ -105,12 +128,12 @@ describe('shaping never grows the writer\'s share', () => {
     it(`${owner.org_role}: every letter shape, against every status`, () => {
       const tasks = [owner, ...team()]
       for (const letter of letters(tasks)) {
-        const shaped = shapeBriefText(letter, owner, tasks, { nowIso: NOW }).brief.text
+        const b = shape(letter, owner, tasks)
         const before = briefOwnChars(completeBriefRefs({ text: letter }, tasks).text)
-        expect(briefOwnChars(shaped), `${letter}\n=>\n${shaped}`).toBeLessThanOrEqual(before)
-        // Shaped again (a later write of the stored letter as it is): the same share.
-        const again = shapeBriefText(shaped, owner, tasks, { nowIso: NOW }).brief.text
-        expect(briefOwnChars(again)).toBe(briefOwnChars(shaped))
+        expect(briefOwnChars(b.text, b.added), `${letter}\n=>\n${b.text}`).toBeLessThanOrEqual(before)
+        // Written again as it is stored (an edit that changes nothing, or the whole letter back).
+        const again = shape(b.text, owner, tasks, briefWalnutLines(b, owner, tasks))
+        expect(briefOwnChars(again.text, again.added)).toBe(briefOwnChars(b.text, b.added))
       }
     })
   }
@@ -126,43 +149,44 @@ describe('shaping never grows the writer\'s share', () => {
       if (briefOwnChars(next) > BRIEF_MAX_CHARS - 100) break
       letter = next
     }
-    const stored = shapeBriefText(letter, main, tasks, { nowIso: NOW }).brief.text
-    expect(stored.length).toBeGreaterThan(BRIEF_MAX_CHARS)
-    expect(briefOwnChars(stored)).toBeLessThanOrEqual(BRIEF_MAX_CHARS)
-    expect(briefOwnChars(stored)).toBe(briefOwnChars(letter))
+    const stored = shape(letter, main, tasks)
+    expect(stored.text.length).toBeGreaterThan(BRIEF_MAX_CHARS)
+    expect(briefOwnChars(stored.text, stored.added)).toBe(briefOwnChars(letter))
   })
 })
 
-/** Every place structureBrief puts a line into the letter. A new one is a new kind of line Walnut
- *  may write: make briefOwnChars leave it out (isWalnutBriefLine, headingSection or saysNothing),
- *  cover it in team() / letters() above, then list it here. */
-const KNOWN_LINE_SOURCES: Record<string, string> = {
-  'last.push(line)': 'the writer\'s own line, moved to its section',
-  'body.needs.push(addedAskLine(t, main, tasks))': 'an ask the letter did not name: isWalnutBriefLine',
-  'body.needs.push(`- And ${more} more': 'the count past the cap: ADDED_MORE_RE',
-  'added.push(t.id)': 'ids, not lines',
-  "out.push(...head, '')": 'the writer\'s lines before the first heading',
-  'out.push(`### ${s.heading}`, ...lines': 'a canonical heading: headingSection',
-  'lines = [emptySectionLine(': 'a section\'s "nothing" line: saysNothing',
-}
+/** Every place structureBrief puts a line into the letter, word for word. A new one is a new kind
+ *  of line: a writer's line goes in as `line`; one Walnut writes goes through `walnut(...)`, which
+ *  records it (TaskBrief.added) so the limit leaves it out. Cover it in team() / letters() above,
+ *  then list it here. */
+const KNOWN_LINE_SOURCES = [
+  'last.push(line)', // the writer's line under the item before it
+  'last.push(line)', // the writer's line, moved to its section
+  'body.needs.push(line)', // inside walnut(): recorded as Walnut's
+  'walnutLines.push(line)', // the record itself
+  'added.push(t.id)', // ids, not lines
+  "out.push(...head, '')", // the writer's lines before the first heading
+  'out.push(`### ${s.heading}`, ...lines, \'\')', // a canonical heading: headingSection
+  'lines = [emptySectionLine(opts.language, text)]', // a section's "nothing" line: saysNothing
+  'walnut(addedAskLine(t, main, tasks))', // an ask the letter did not name
+  'walnut(`- And ${more} more ${more === 1 ? \'ask\' : \'asks\'} the user: the Task view lists ${more === 1 ? \'it\' : \'them\'}.`)', // the count past the cap: ADDED_MORE_RE
+]
 
 describe('source ratchet: every line structureBrief writes is accounted for', () => {
-  it('lists every push and every assigned line', () => {
+  it('lists every push, every assigned line and every walnut() call', () => {
     const src = fs.readFileSync(path.join(process.cwd(), 'src/core/sessions/brief-structure.ts'), 'utf8')
     const body = src.slice(src.indexOf('export function structureBrief('), src.indexOf('export function briefSectionsBlock('))
-    const found = [...body.matchAll(/[\w.]+\.(?:push|unshift|splice)\([^\n;]*|lines = \[[^\n;]*/g)].map((m) => m[0])
-    const unknown = found.filter((f) => !Object.keys(KNOWN_LINE_SOURCES).some((k) => f.startsWith(k)))
-    expect(unknown, 'a new line source in structureBrief: see KNOWN_LINE_SOURCES').toEqual([])
-    for (const k of Object.keys(KNOWN_LINE_SOURCES)) expect(found.some((f) => f.startsWith(k)), `stale entry: ${k}`).toBe(true)
+    const found = [...body.matchAll(/[\w.]+\.(?:push|unshift|splice)\([^\n;]*?\)(?=[;\s]|$)|lines = \[[^\n;]*\]|\bwalnut\((?!line: string)[^\n;]*\)(?=;)/g)].map((m) => m[0])
+    expect(found.sort(), 'a new line source in structureBrief: see KNOWN_LINE_SOURCES').toEqual([...KNOWN_LINE_SOURCES].sort())
   })
 })
 
-describe('structureBrief live keeps Walnut\'s asks recognizable', () => {
-  it('every line it adds is Walnut\'s', () => {
+describe('structureBrief live records Walnut\'s asks', () => {
+  it('every line it adds is in walnutLines', () => {
     const tasks = [lead, ...team()]
     const out = structureBrief('### Needs you\n- None', lead.id, tasks, { live: lead })
-    const asks = out.text.split('\n').filter((l) => l.includes('<task-ref'))
-    expect(asks.length).toBe(ADDED_ASKS_MAX)
-    for (const l of asks) expect(isWalnutBriefLine(l), l).toBe(true)
+    const asks = out.text.split('\n').filter((l) => l.startsWith('- ') && l !== '- None')
+    expect(asks.length).toBe(ADDED_ASKS_MAX + 1)
+    expect([...out.walnutLines!].sort()).toEqual([...asks].sort())
   })
 })
