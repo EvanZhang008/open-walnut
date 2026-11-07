@@ -75,7 +75,7 @@ describe.skipIf(!BUN)('a --service daemon behind a stand-in', () => {
 
     // The stand-in serves the dir.
     const standIn = start()
-    expect(await until(() => pidFile() === standIn.pid && fs.existsSync(path.join(dir('d'), 'daemon.port')), 30_000)).toBe(true)
+    expect(await until(() => pidFile() === standIn.pid && fs.existsSync(path.join(dir('d'), 'daemon.port')), 60_000)).toBe(true)
     fs.writeFileSync(path.join(dir('d'), 'daemon.standin'), `${standIn.pid}\n`)
 
     // launchd's job starts: it waits, it neither exits nor takes the dir.
@@ -86,24 +86,24 @@ describe.skipIf(!BUN)('a --service daemon behind a stand-in', () => {
 
     // The stand-in goes (its handback): the job's daemon takes the dir and serves.
     process.kill(-standIn.pid!, 'SIGTERM')
-    expect(await until(() => pidFile() === job.pid && fs.existsSync(path.join(dir('d'), 'daemon.port')), 30_000)).toBe(true)
+    expect(await until(() => pidFile() === job.pid && fs.existsSync(path.join(dir('d'), 'daemon.port')), 60_000)).toBe(true)
     expect(exited(job)).toBe(false)
 
     // Behind a daemon that is no stand-in, a --service daemon still exits as before.
     fs.rmSync(path.join(dir('d'), 'daemon.standin'), { force: true })
     const other = start()
-    expect(await until(() => exited(other), 20_000)).toBe(true)
+    expect(await until(() => exited(other), 60_000)).toBe(true)
     expect(pidFile()).toBe(job.pid)
 
     // A daemon.standin a killed stand-in left, naming a pid a daemon that is no stand-in has now
     // (here an on-demand `--start` one): that is not a stand-in to wait for (2026-11-04 review).
     process.kill(-job.pid!, 'SIGTERM')
-    expect(await until(() => exited(job), 20_000)).toBe(true)
+    expect(await until(() => exited(job), 60_000)).toBe(true)
     const onDemand = start('--start')
-    expect(await until(() => pidFile() === onDemand.pid && fs.existsSync(path.join(dir('d'), 'daemon.port')), 30_000)).toBe(true)
+    expect(await until(() => pidFile() === onDemand.pid && fs.existsSync(path.join(dir('d'), 'daemon.port')), 60_000)).toBe(true)
     fs.writeFileSync(path.join(dir('d'), 'daemon.standin'), `${onDemand.pid}\n`)
     const late = start()
-    expect(await until(() => exited(late), 20_000)).toBe(true)
+    expect(await until(() => exited(late), 60_000)).toBe(true)
     expect(pidFile()).toBe(onDemand.pid)
-  }, 120_000)
+  }, 300_000)
 })

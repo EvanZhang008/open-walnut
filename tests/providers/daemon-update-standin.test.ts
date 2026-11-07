@@ -23,6 +23,10 @@ import { createServiceStubs, type ServiceStubs } from '../helpers/service-stubs.
 import { fakeUpdateRunner } from '../helpers/fake-update-runner.js'
 import { standInStartLines } from '../../src/providers/daemon-update-standin.js'
 
+// Each wait is for a process to start, stop or be started again, which a full test run on a
+// host at load 100 and more stretched past 10 s (2026-11-07); a wait ends as soon as it holds.
+const UP_MS = 40_000
+
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-update-standin-')))
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }))
 
@@ -127,7 +131,7 @@ describe('a LaunchAgent update in a dark wake (launchd loads jobs and starts non
     expect(tail).toEqual({ outcome: 'standin', words: "launchd starts no jobs in this login session now (a dark wake, or a login not finished), so the service's daemon runs outside launchd until it does, and launchd's job takes over then" })
     // No put-back: launchd starting nothing says nothing about the build.
     expect(fs.readFileSync(config, 'utf8')).toContain('good-new')
-    await vi.waitFor(() => expect(stubs!.daemonUp()).toBe(true), { timeout: 10_000 })
+    await vi.waitFor(() => expect(stubs!.daemonUp()).toBe(true), { timeout: UP_MS })
     const standIn = pidOf()
     expect(fs.readFileSync(standInFile(), 'utf8').trim()).toBe(String(standIn))
     // As launchd starts it: the plist's own env, nothing of the tail's.
@@ -150,13 +154,13 @@ describe('a LaunchAgent update in a dark wake (launchd loads jobs and starts non
     }, { timeout: 30_000, interval: 200 })
     expect(handbacks()).toEqual(['walnut daemon handback --yes --scope user'])
     expect(stubs!.calls()).toContain(`launchctl kickstart gui/${process.getuid!()}/dev.openwalnut.session-daemon`)
-    await vi.waitFor(() => expect(fs.existsSync(standInFile())).toBe(false), { timeout: 5_000 })
-    await vi.waitFor(() => expect(fs.existsSync(path.join(stubs!.runtime, '.standin-loop'))).toBe(false), { timeout: 5_000 })
+    await vi.waitFor(() => expect(fs.existsSync(standInFile())).toBe(false), { timeout: UP_MS })
+    await vi.waitFor(() => expect(fs.existsSync(path.join(stubs!.runtime, '.standin-loop'))).toBe(false), { timeout: UP_MS })
     // launchd started its pending job when it resumed; that daemon waited behind the stand-in, and nobody was refused the dir.
     expect(pidOf()).toBe(Number(fs.readFileSync(path.join(stubs!.state, 'jobpid'), 'utf8').trim()))
     expect(stubs!.lockRefusals()).toEqual([])
     expect(lines('standin-refusals')).toEqual([])
-  }, 60_000)
+  }, 150_000)
 
   // 2026-11-04 review: the stand-in starts after the rollback put the previous plist back, so both
   // CLIs it asked were the previous build; one without `handback` answered nothing, and the
@@ -195,7 +199,7 @@ describe('a LaunchAgent update in a dark wake (launchd loads jobs and starts non
     stubs!.setLoaded(true, config, true)
     const tail = parseUpdateTail(sh(withMarker(updateTailScript(record, { scope: 'user', ...FAST, standInCheckSeconds: 1 }))))
     expect(tail?.outcome).toBe('standin')
-    await vi.waitFor(() => expect(stubs!.daemonUp()).toBe(true), { timeout: 10_000 })
+    await vi.waitFor(() => expect(stubs!.daemonUp()).toBe(true), { timeout: UP_MS })
     const standIn = pidOf()
     expect(fs.readFileSync(standInFile(), 'utf8').trim()).toBe(String(standIn))
     // launchd starts jobs again, and starts the pending job: its daemon waits behind the stand-in.
@@ -209,46 +213,46 @@ describe('a LaunchAgent update in a dark wake (launchd loads jobs and starts non
     expect(lines('previous-walnut-calls').length).toBeGreaterThanOrEqual(1)
     expect(handbacks()).toEqual(['walnut daemon handback --yes --scope user'])
     expect(pidOf()).toBe(Number(fs.readFileSync(path.join(stubs!.state, 'jobpid'), 'utf8').trim()))
-    await vi.waitFor(() => expect(fs.existsSync(path.join(rt, '.standin-loop'))).toBe(false), { timeout: 5_000 })
+    await vi.waitFor(() => expect(fs.existsSync(path.join(rt, '.standin-loop'))).toBe(false), { timeout: UP_MS })
     // Never two at once: no start found another daemon serving the dir.
     expect(stubs!.lockRefusals()).toEqual([])
     expect(lines('standin-refusals')).toEqual([])
-  }, 60_000)
+  }, 150_000)
 
   it('a stand-in with work open refuses the handback and keeps serving; it is asked again later', async () => {
     fs.writeFileSync(path.join(work, 'handback-busy'), '')
     const { tail } = darkWakeUpdate()
     expect(tail?.outcome).toBe('standin')
-    await vi.waitFor(() => expect(stubs!.daemonUp()).toBe(true), { timeout: 10_000 })
+    await vi.waitFor(() => expect(stubs!.daemonUp()).toBe(true), { timeout: UP_MS })
     const standIn = pidOf()
     stubs!.setSpawning(true)
-    await vi.waitFor(() => expect(handbacks().length).toBeGreaterThanOrEqual(2), { timeout: 20_000, interval: 200 })
+    await vi.waitFor(() => expect(handbacks().length).toBeGreaterThanOrEqual(2), { timeout: UP_MS, interval: 200 })
     expect(alive(standIn)).toBe(true)
     expect(pidOf()).toBe(standIn)
     fs.rmSync(path.join(work, 'handback-busy'))
     await vi.waitFor(() => {
       expect(alive(standIn)).toBe(false)
       expect(stubs!.daemonUp()).toBe(true)
-    }, { timeout: 20_000, interval: 200 })
-  }, 60_000)
+    }, { timeout: UP_MS, interval: 200 })
+  }, 150_000)
 
   it('a stand-in that exits on its own is started again while launchd starts nothing, and there is one loop per runtime dir', async () => {
     const { tail } = darkWakeUpdate()
     expect(tail?.outcome).toBe('standin')
-    await vi.waitFor(() => expect(stubs!.daemonUp()).toBe(true), { timeout: 10_000 })
+    await vi.waitFor(() => expect(stubs!.daemonUp()).toBe(true), { timeout: UP_MS })
     const first = pidOf()
     // A second start of the loop (another tail, a revive) finds the first one at work and leaves.
     const script = path.join(daemonInstallRoot('darwin', home), 'daemon-standin.sh')
-    const again = spawnSync('/bin/sh', [script, stubs!.runtime], { env: { HOME: home, ...stubs!.env }, encoding: 'utf8', timeout: 10_000 })
+    const again = spawnSync('/bin/sh', [script, stubs!.runtime], { env: { HOME: home, ...stubs!.env }, encoding: 'utf8', timeout: UP_MS })
     expect(again.status).toBe(0)
     expect(pidOf()).toBe(first)
     process.kill(first, 'SIGTERM')
     await vi.waitFor(() => {
       expect(stubs!.daemonUp()).toBe(true)
       expect(pidOf()).not.toBe(first)
-    }, { timeout: 10_000, interval: 200 })
+    }, { timeout: UP_MS, interval: 200 })
     expect(fs.readFileSync(standInFile(), 'utf8').trim()).toBe(String(pidOf()))
-  }, 60_000)
+  }, 150_000)
 
   // 2026-11-04 review: a loop killed with the Mac (a power loss, a SIGKILL) left its pid in
   // .standin-loop/pid, and while any process had that pid every later stand-in exited at once.
@@ -259,15 +263,15 @@ describe('a LaunchAgent update in a dark wake (launchd loads jobs and starts non
       fs.writeFileSync(path.join(stubs!.runtime, '.standin-loop', 'pid'), `${other.pid}\n`)
       const { tail } = darkWakeUpdate()
       expect(tail?.outcome).toBe('standin')
-      await vi.waitFor(() => expect(stubs!.daemonUp()).toBe(true), { timeout: 10_000 })
+      await vi.waitFor(() => expect(stubs!.daemonUp()).toBe(true), { timeout: UP_MS })
       expect(fs.readFileSync(path.join(stubs!.runtime, '.standin-loop', 'pid'), 'utf8').trim()).not.toBe(String(other.pid))
     } finally { other.kill() }
-  }, 60_000)
+  }, 150_000)
 
   it('a stand-in an update stopped is not started again while that update\'s runner is at work; its tail decides', async () => {
     const { tail } = darkWakeUpdate()
     expect(tail?.outcome).toBe('standin')
-    await vi.waitFor(() => expect(stubs!.daemonUp()).toBe(true), { timeout: 10_000 })
+    await vi.waitFor(() => expect(stubs!.daemonUp()).toBe(true), { timeout: UP_MS })
     const first = pidOf()
     // A later update's runner is at work and stops the stand-in.
     const runner = fakeUpdateRunner('alive', marker())
@@ -280,9 +284,9 @@ describe('a LaunchAgent update in a dark wake (launchd loads jobs and starts non
       await vi.waitFor(() => {
         expect(stubs!.daemonUp()).toBe(true)
         expect(pidOf()).not.toBe(first)
-      }, { timeout: 10_000, interval: 200 })
+      }, { timeout: UP_MS, interval: 200 })
     } finally { runner.stop() }
-  }, 60_000)
+  }, 150_000)
 
   // 2026-11-04 review: the tail of that runner then asks for a stand-in, and the loop already at
   // work (its stand-in stopped) both kept the new one from starting and skipped it while that
@@ -290,7 +294,7 @@ describe('a LaunchAgent update in a dark wake (launchd loads jobs and starts non
   it('a tail that wants a stand-in while its own runner is still at work gets one from the loop already at work', async () => {
     const { tail } = darkWakeUpdate()
     expect(tail?.outcome).toBe('standin')
-    await vi.waitFor(() => expect(stubs!.daemonUp()).toBe(true), { timeout: 10_000 })
+    await vi.waitFor(() => expect(stubs!.daemonUp()).toBe(true), { timeout: UP_MS })
     const first = pidOf()
     const runner = fakeUpdateRunner('alive', marker())
     try {
@@ -303,15 +307,15 @@ describe('a LaunchAgent update in a dark wake (launchd loads jobs and starts non
       await vi.waitFor(() => {
         expect(stubs!.daemonUp()).toBe(true)
         expect(pidOf()).not.toBe(first)
-      }, { timeout: 10_000, interval: 200 })
+      }, { timeout: UP_MS, interval: 200 })
     } finally { runner.stop() }
-  }, 60_000)
+  }, 150_000)
 
   // 2026-11-04 review: the loop restarted its stand-in in the middle of a `walnut daemon` transaction (an uninstall, an update from a terminal).
   it('a stand-in that exits is not started again while a `walnut daemon` transaction holds the install lock', async () => {
     const { tail } = darkWakeUpdate()
     expect(tail?.outcome).toBe('standin')
-    await vi.waitFor(() => expect(stubs!.daemonUp()).toBe(true), { timeout: 10_000 })
+    await vi.waitFor(() => expect(stubs!.daemonUp()).toBe(true), { timeout: UP_MS })
     const first = pidOf()
     const lock = path.join(daemonInstallRoot('darwin', home), 'service-configs.json.lock')
     fs.mkdirSync(lock)
@@ -324,8 +328,8 @@ describe('a LaunchAgent update in a dark wake (launchd loads jobs and starts non
     await vi.waitFor(() => {
       expect(stubs!.daemonUp()).toBe(true)
       expect(pidOf()).not.toBe(first)
-    }, { timeout: 10_000, interval: 200 })
-  }, 60_000)
+    }, { timeout: UP_MS, interval: 200 })
+  }, 150_000)
 
   // 2026-11-04 review: a stand-in that dies at once was started again every tick, for good.
   it('a stand-in that exits at once is started again less and less often', async () => {
@@ -344,7 +348,7 @@ describe('a LaunchAgent update in a dark wake (launchd loads jobs and starts non
     // Ticks of 1 s: started at 0, 2 and 7 s (1, 3, 7 ... ticks between); every tick would be 9 or 10.
     expect(starts).toBeGreaterThanOrEqual(2)
     expect(starts).toBeLessThanOrEqual(4)
-  }, 60_000)
+  }, 150_000)
 
   // 2026-11-04 review: a job launchd would not load at all never set tn, so the tail ended down with no daemon.
   it('a job launchd will not load at all, with nothing to put back, still leaves a daemon serving outside launchd', async () => {
@@ -355,13 +359,13 @@ describe('a LaunchAgent update in a dark wake (launchd loads jobs and starts non
     expect(tail?.outcome).toBe('standin')
     expect(tail?.words).toBe("no daemon answered within 2 s, and there was no earlier service config to go back to, so the service's daemon runs outside launchd until launchd's job can start, and that job takes over then")
     expect(stubs!.calls().filter((c) => c.startsWith(`launchctl bootstrap gui/${process.getuid!()} ${config}`)).length).toBeGreaterThan(0)
-    await vi.waitFor(() => expect(stubs!.daemonUp()).toBe(true), { timeout: 10_000 })
+    await vi.waitFor(() => expect(stubs!.daemonUp()).toBe(true), { timeout: UP_MS })
     const standIn = pidOf()
     expect(fs.readFileSync(standInFile(), 'utf8').trim()).toBe(String(standIn))
     // launchd starts jobs, and has none of the service loaded: the stand-in is not handed back into nothing.
-    await vi.waitFor(() => expect(handbacks().length).toBeGreaterThanOrEqual(1), { timeout: 10_000, interval: 200 })
+    await vi.waitFor(() => expect(handbacks().length).toBeGreaterThanOrEqual(1), { timeout: UP_MS, interval: 200 })
     expect(alive(standIn)).toBe(true)
-  }, 60_000)
+  }, 150_000)
 
   // 2026-11-04 review: the stand-in ran the daemon outside launchd past the user's `launchctl disable`.
   it('a job the user turned off is never stood in for, and the record says why', async () => {
@@ -376,24 +380,24 @@ describe('a LaunchAgent update in a dark wake (launchd loads jobs and starts non
     expect(fs.existsSync(standInFile())).toBe(false)
     expect(stubs!.daemonUp()).toBe(false)
     expect(fs.readFileSync(config, 'utf8')).toContain('good-new')
-  }, 60_000)
+  }, 150_000)
 
   it('a stand-in loop at work stops standing in once the user turns the job off', async () => {
     darkWakeUpdate()
-    await vi.waitFor(() => expect(stubs!.daemonUp()).toBe(true), { timeout: 10_000 })
+    await vi.waitFor(() => expect(stubs!.daemonUp()).toBe(true), { timeout: UP_MS })
     stubs!.setDisabled(true)
     // The stand-in exits on its own; the loop does not start it again, and ends.
     process.kill(pidOf(), 'SIGTERM')
-    await vi.waitFor(() => expect(fs.existsSync(path.join(stubs!.runtime, '.standin-loop'))).toBe(false), { timeout: 10_000 })
+    await vi.waitFor(() => expect(fs.existsSync(path.join(stubs!.runtime, '.standin-loop'))).toBe(false), { timeout: UP_MS })
     expect(stubs!.daemonUp()).toBe(false)
-  }, 60_000)
+  }, 150_000)
 
   it('the service uninstalled meanwhile ends the stand-in loop', async () => {
     const { config } = darkWakeUpdate()
-    await vi.waitFor(() => expect(stubs!.daemonUp()).toBe(true), { timeout: 10_000 })
+    await vi.waitFor(() => expect(stubs!.daemonUp()).toBe(true), { timeout: UP_MS })
     fs.rmSync(config)
-    await vi.waitFor(() => expect(fs.existsSync(path.join(stubs!.runtime, '.standin-loop'))).toBe(false), { timeout: 10_000 })
-  }, 60_000)
+    await vi.waitFor(() => expect(fs.existsSync(path.join(stubs!.runtime, '.standin-loop'))).toBe(false), { timeout: UP_MS })
+  }, 150_000)
 })
 
 describe('the spawn probe (whether launchd starts jobs now)', () => {
