@@ -42,6 +42,8 @@ export interface SpawnTemplateInputs {
   env?: NodeJS.ProcessEnv
   /** Each agent's tool lists from its lane profile (hostAgentTools); absent: none. */
   agents?: Record<string, AgentTools>
+  /** The model a start that names none runs, when the host CLI's own default is not Claude (unnamed-model-guard.ts). */
+  autoModel?: string
   now?: number
 }
 
@@ -102,6 +104,17 @@ export function hostAskModes(bypassAllowed: boolean): { modes: Record<string, st
   return { modes, defaultMode }
 }
 
+/**
+ * The model a host start that names none runs (`SpawnTemplate.autoModel`): set only when that
+ * host's CLI default is not a Claude model, as a session this Mac starts there gets it
+ * (unnamed-model-guard.ts). A routine run names its own folder, so its template reads the
+ * user's settings alone.
+ */
+export async function hostAutoModel(hostKey: string, cwd: string | undefined): Promise<string | undefined> {
+  const { guardUnnamedModel } = await import('../core/sessions/unnamed-model-guard.js')
+  return (await guardUnnamedModel(hostKey, cwd || undefined)).use
+}
+
 export function buildHostSpawnTemplate(i: SpawnTemplateInputs): SpawnTemplate {
   const env = i.env ?? process.env
   // The same order as send(): output flags, --debug, the bypass capability, then the slots.
@@ -124,6 +137,7 @@ export function buildHostSpawnTemplate(i: SpawnTemplateInputs): SpawnTemplate {
     v: 1, home: i.home, argv, ...hostAskModes(i.bypassAllowed === true), models,
     autoEffort: modelSupportsEffort(undefined), effortRules: hostEffortRules(), efforts: [...SESSION_EFFORT_IDS],
     agents: i.agents ?? {},
+    ...(i.autoModel ? { autoModel: i.autoModel } : {}),
     // As send() passes it: the string flag (the daemon caps it at 120 KB).
     persona: 'arg', cwd: i.cwd, builtAt: i.now ?? Date.now(),
   }
@@ -169,6 +183,7 @@ export async function pushRoutineSpawnTemplate(
   const template = buildRoutineSpawnTemplate({
     home: o.home, hostKey: o.hostKey,
     streamPartialMessages: config.session?.stream_partial_messages, permissionPrompt: config.session?.permission_prompt,
+    autoModel: await hostAutoModel(o.hostKey, undefined),
   })
   const { builtAt: _at, ...content } = template
   const hash = createHash('sha256').update(JSON.stringify(content)).digest('hex').slice(0, 16)
@@ -197,6 +212,7 @@ export async function pushHostSpawnTemplate(
     home: o.home, hostKey: o.hostKey, cwd: o.cwd, bypassAllowed: o.bypassAllowed,
     streamPartialMessages: config.session?.stream_partial_messages, permissionPrompt: config.session?.permission_prompt,
     agents: await hostAgentTools(),
+    autoModel: await hostAutoModel(o.hostKey, o.cwd),
   })
   const { builtAt: _at, ...content } = template
   const hash = createHash('sha256').update(JSON.stringify(content)).digest('hex').slice(0, 16)

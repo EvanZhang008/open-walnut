@@ -3060,6 +3060,20 @@ export class ClaudeCodeSession {
           log.session.warn('restored cost state unavailable', { sessionId: resumeSessionId, error: String(error) })
         }
       }
+      // No model named: the CLI would take its own settings default, which may be a
+      // model outside Claude (unnamed-model-guard.ts). Start such a session on Claude.
+      if (!args.includes('--model')) {
+        const { guardUnnamedModel, insertModelArg } = await import('../core/sessions/unnamed-model-guard.js')
+        const decision = await guardUnnamedModel(host, resolvedCwd)
+        if (decision.use) {
+          insertModelArg(args, decision.use)
+          this._cliModel = decision.use
+          log.session.warn('unnamed model guard: the CLI default is not a Claude model; starting on Claude', {
+            taskId: this.taskId, sessionId: resumeSessionId ?? opts?.preassignedSessionId, host: host ?? '__local__',
+            cliDefault: decision.cliDefault, from: decision.from, model: decision.use,
+          })
+        }
+      }
       return transport.start({
       args,
       stopFence,

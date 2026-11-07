@@ -128,7 +128,7 @@ beforeAll(async () => {
     path.join(tasksDir, 'tasks.json'),
     JSON.stringify({
       version: 1,
-      tasks: ['001', '002', '003', '004', '005', '006', '007', '008', '009', '010', '011'].map(n => ({
+      tasks: ['001', '002', '003', '004', '005', '006', '007', '008', '009', '010', '011', '012', '013'].map(n => ({
         id: `cli-map-task-${n}`,
         title: `CLI map test task ${n}`,
         status: 'todo',
@@ -219,6 +219,51 @@ describe('MODEL_CLI_MAP alias resolution: E2E', () => {
     const text = (result.data as { result?: string }).result ?? ''
 
     expect(text).not.toContain('[model:')
+
+    ws.close()
+    await delay(50)
+  })
+
+  // Test 2b: "Auto" while the CLI's own default is NOT a Claude model (2026-11-07: the
+  // Mac's settings said gpt-6.1-sol and task sessions nobody pointed at Sol ran on it).
+  // The project's .claude/settings.local.json names the non-Claude default here, read
+  // through the daemon as on a real host; the session starts on Claude instead.
+  it('"Auto" with a non-Claude CLI default → --model opus (unnamed-model-guard)', async () => {
+    const { _resetUnnamedModelGuardCache } = await import('../../src/core/sessions/unnamed-model-guard.js')
+    _resetUnnamedModelGuardCache()
+    const cwd = await fs.mkdtemp(path.join(WALNUT_HOME, 'proxy-default-'))
+    await fs.mkdir(path.join(cwd, '.claude'), { recursive: true })
+    await fs.writeFile(path.join(cwd, '.claude', 'settings.local.json'), JSON.stringify({ model: 'gpt-6.1-sol' }))
+    const ws = await connectWs()
+
+    const resultPromise = waitForWsEvent(ws, 'session:result')
+    const rpcRes = await sendWsRpc(ws, 'session:start', {
+      taskId: 'cli-map-task-012', message: 'auto with a proxy default', project: 'Walnut', mode: 'bypass', cwd,
+    })
+    expect((rpcRes as Record<string, unknown>).ok).toBe(true)
+    const result = await resultPromise
+    expect((result.data as { result?: string }).result ?? '').toContain('[model:opus]')
+
+    ws.close()
+    await delay(50)
+  })
+
+  // Test 2c: a model the starter named is never replaced, whatever the CLI default says.
+  it('a named model with a non-Claude CLI default → that model', async () => {
+    const { _resetUnnamedModelGuardCache } = await import('../../src/core/sessions/unnamed-model-guard.js')
+    _resetUnnamedModelGuardCache()
+    const cwd = await fs.mkdtemp(path.join(WALNUT_HOME, 'proxy-default-named-'))
+    await fs.mkdir(path.join(cwd, '.claude'), { recursive: true })
+    await fs.writeFile(path.join(cwd, '.claude', 'settings.local.json'), JSON.stringify({ model: 'gpt-6.1-sol' }))
+    const ws = await connectWs()
+
+    const resultPromise = waitForWsEvent(ws, 'session:result')
+    const rpcRes = await sendWsRpc(ws, 'session:start', {
+      taskId: 'cli-map-task-013', message: 'named with a proxy default', project: 'Walnut', mode: 'bypass', cwd, model: 'gpt-6-astra',
+    })
+    expect((rpcRes as Record<string, unknown>).ok).toBe(true)
+    const result = await resultPromise
+    expect((result.data as { result?: string }).result ?? '').toContain('[model:gpt-6-astra]')
 
     ws.close()
     await delay(50)
