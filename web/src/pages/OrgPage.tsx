@@ -48,7 +48,7 @@ import {
   orgStripToggleLock, orgStripView, type SameSession,
 } from '@/components/org/org-side-columns';
 import {
-  MAIN_KEY, buildChannels, filterChannels, flattenNodes, movedProjects, pickChannel, projectRowKey, rowOf, type AlertProbe, type ChannelRow,
+  MAIN_KEY, buildChannels, filterChannels, flattenNodes, movedProjects, pickChannel, projectRowKey, rowOf, settleDefaultNode, type AlertProbe, type ChannelRow,
 } from '@/components/org/org-channels-model';
 import {
   ANSWERED_HOLD_MS, phaseMark, promptAnswered, promptKey, settleHolds, withAnswered, without, type AnsweredHolds,
@@ -207,10 +207,16 @@ export function OrgPage() {
   const nodeParam = params.get('node') ?? pendingPlace?.node ?? null;
   const tabParam = params.get('tab') ?? pendingPlace?.tab ?? null;
   const urlTab = TABS.includes(tabParam as OrgTab) ? (tabParam as OrgTab) : null;
-  const selected = pickChannel(channels, nodeParam);
+  // With no node named (or one whose row is gone), the default is picked once the tasks are in and
+  // then stays (settleDefaultNode).
+  const namedRow = !!nodeParam && !!rowOf(channels, nodeParam);
+  const [defaultNode, setDefaultNode] = useState<string | null>(null);
+  const settledDefault = namedRow ? defaultNode : settleDefaultNode(defaultNode, channels, tasksLoading);
+  if (settledDefault !== defaultNode) setDefaultNode(settledDefault);
+  const selected = pickChannel(channels, namedRow ? nodeParam : settledDefault);
   // The node it names has no row until the tasks arrive: show none rather than Main for a moment
-  // (a reload drew Main's Task view, then the lead's Threads).
-  const nodeArriving = tasksLoading && !!nodeParam && !rowOf(channels, nodeParam);
+  // (a reload drew Main's Task view, then the lead's Threads). The same with no node named.
+  const nodeArriving = tasksLoading && (nodeParam ? !rowOf(channels, nodeParam) : !settledDefault);
   // On a phone the list shows until a row is picked (and again when the picked one is gone).
   const picked = !!rowOf(channels, nodeParam);
   const showDetail = !phone || picked;

@@ -403,6 +403,19 @@ export function pickChannel(channels: OrgChannels, key: string | null): ChannelR
   return rowOf(channels, key) || channels.rows[0] || channels.main;
 }
 
+/**
+ * The node a page with no node named shows, decided ONCE the tasks are in and then kept while
+ * its row lives. pickChannel's default is the most urgent lead, so read on every render it moved
+ * under the user: Main while the tasks loaded, then the first VP a moment later, then another
+ * whenever the order changed (2026-11-07, seen with a full screen sheet open on Main). Null
+ * while the tasks load: the page shows no node rather than one it is about to leave.
+ */
+export function settleDefaultNode(prev: string | null, channels: OrgChannels, loading: boolean): string | null {
+  if (prev && rowOf(channels, prev)) return prev;
+  if (loading) return null;
+  return pickChannel(channels, null).key;
+}
+
 /** A project another VP took over: listed under "Archived", with where it went. */
 export interface MovedRow {
   key: string;

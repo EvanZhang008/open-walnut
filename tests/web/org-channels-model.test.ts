@@ -4,7 +4,7 @@ import type { Task } from '../../src/core/types.js'
 import { buildOrgTree } from '../../src/core/org/org-tree.js'
 import {
   MAIN_KEY, alertText, buildChannels, cardChecked, channelState, filterChannels, initials, mainTeamColumns, movedProjects, pickChannel,
-  projectRowKey, rowOf, teamColumns, type AlertProbe,
+  projectRowKey, rowOf, settleDefaultNode, teamColumns, type AlertProbe,
 } from '../../web/src/components/org/org-channels-model.js'
 
 const at = (min: number) => new Date(Date.UTC(2026, 9, 25, 12, min)).toISOString()
@@ -232,6 +232,24 @@ describe('org channels', () => {
     const empty = buildChannels(buildOrgTree([]), [], noAlerts)
     expect(empty.rows).toEqual([])
     expect(pickChannel(empty, null).kind).toBe('main')
+  })
+
+  it('with no node named, settles the default once the tasks are in and keeps it as the order moves', () => {
+    const empty = buildChannels(buildOrgTree([]), [], noAlerts)
+    // Still loading: no node, never Main for a moment.
+    expect(settleDefaultNode(null, empty, true)).toBeNull()
+    const channels = buildChannels(buildOrgTree(tasks), tasks, noAlerts)
+    const first = settleDefaultNode(null, channels, false)
+    expect(first).toBe(channels.rows[0]!.key)
+    expect(pickChannel(channels, first).name).toBe('Walnut')
+    // The rows re-sort (another project turns urgent): the page stays on the node it showed.
+    const reordered = { ...channels, rows: [...channels.rows].reverse() }
+    expect(reordered.rows[0]!.name).not.toBe('Walnut')
+    expect(settleDefaultNode(first, reordered, false)).toBe(first)
+    // Main, once settled, stays Main when VPs come later.
+    expect(settleDefaultNode(MAIN_KEY, channels, false)).toBe(MAIN_KEY)
+    // Its row gone: the default is picked again.
+    expect(settleDefaultNode('project:gone', channels, false)).toBe(channels.rows[0]!.key)
   })
 
   it('lays a project\'s teams out by state, a team holding a prompt under Needs you', () => {

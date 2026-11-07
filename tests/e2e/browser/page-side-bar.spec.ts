@@ -376,11 +376,9 @@ test('a full screen sheet lies beside the side bar, and a narrow window overlays
 
   // A real full screen sheet (the Org node's side bar) leaves the side bar usable.
   const full = page.getByTestId('org-rail-fullscreen')
-  // The Org page restores the node it last showed a moment after it loads (org-place.ts), and a
-  // node change moves the full screen sheet to another place: wait until the node stays put.
-  const nodeShown = () => page.evaluate(() => document.querySelector('.org-page h2')?.textContent ?? '')
-  let lastNode = ''
-  await expect.poll(async () => { const now = await nodeShown(); const same = now !== '' && now === lastNode; lastNode = now; return same }, { intervals: [1500] }).toBe(true)
+  // No wait for the node to settle: the page picks its default node once the tasks are in and
+  // keeps it (settleDefaultNode), so the sheet opened here stays open (it once jumped from Main to
+  // the first VP a moment after load and the sheet went with it).
   // The node on screen may have no side bar of its own: pick one that has.
   const channels = page.getByTestId('org-channel')
   for (let i = 0; i < await channels.count() && !(await full.isVisible()); i++) {
@@ -403,6 +401,32 @@ test('a full screen sheet lies beside the side bar, and a narrow window overlays
   await expect(page.locator('.open-walnut-fullscreen')).toBeVisible()
   await page.keyboard.press('Escape')
   await page.setViewportSize({ width: 1440, height: 900 })
+})
+
+test('the Org page with no node named shows none while the tasks load, then one that stays', async ({ page }) => {
+  // Nothing saved for the page: it opens on its default node.
+  await page.addInitScript(() => localStorage.removeItem('walnut.org.place'))
+  let release!: () => void
+  const held = new Promise<void>((r) => { release = r })
+  let holding = true
+  await page.route(/\/api\/tasks(\?|$)/, async (route) => {
+    if (holding && route.request().method() === 'GET') await held
+    await route.continue()
+  })
+  await openOrg(page)
+  // While the tasks load no node is drawn, never Main for a moment before the first VP.
+  await expect(page.locator('.org-detail-pane')).toHaveAttribute('aria-busy', 'true')
+  await expect(page.getByTestId('org-detail-title')).toHaveCount(0)
+  holding = false
+  release()
+  const name = page.getByTestId('org-detail-title').first()
+  await expect(name).toBeVisible({ timeout: 30_000 })
+  const first = await name.textContent()
+  // It stays on that node as the list settles (statuses arrive, rows re-sort).
+  for (let i = 0; i < 6; i++) {
+    await page.waitForTimeout(500)
+    expect(await name.textContent()).toBe(first)
+  }
 })
 
 test('Home keeps its own column and flags', async ({ page }) => {
