@@ -18,7 +18,7 @@
 import { test, expect } from './shortcut-test-fixture'
 import type { Locator, Page } from '@playwright/test'
 import { isolateUiPrefs, selectSection } from './todo-panel-helpers'
-import { pausePageClock } from './page-clock'
+import { pausePageClock, wheelSeenByPage } from './page-clock'
 import { LS_STATUS_SECTIONS_KEY, endRunningTurn, presetPanelDesign, setStatusSectionOpen, showSectionCard, startRunningTurn, statusSection, statusSectionCard, statusSectionRows, statusSectionToggle } from './status-section-helpers'
 
 const MIN = 60_000
@@ -125,7 +125,7 @@ test.describe('status folds: one rule', () => {
       await setStatusSectionOpen(panel, 'done', true)
       await page.clock.fastForward(40_000)
       await statusSection(panel, 'done').hover()
-      if (act === 'wheel') await page.mouse.wheel(0, 40)
+      if (act === 'wheel') await wheelSeenByPage(page, 0, 40)
       else await panel.locator('.todo-panel-toolbar').first().click({ position: { x: 4, y: 4 } })
       await page.clock.fastForward(40_000)
       await expect(statusSectionToggle(panel, 'done'), `${act} 40 s ago`).toHaveAttribute('aria-expanded', 'true')
