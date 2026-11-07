@@ -30,7 +30,8 @@ export function pressable(onPress: () => void) {
 }
 
 /** An element id from a row key ("project:event service" has a space, which breaks aria-controls). */
-export const domId = (prefix: string, key: string): string => `${prefix}-${key.replace(/[^A-Za-z0-9_-]/g, (ch) => `_${ch.charCodeAt(0).toString(16)}`)}`;
+// One to one: every other UTF-16 unit, "_" included, becomes "_" and four hex digits.
+export const domId = (prefix: string, key: string): string => `${prefix}-${key.replace(/[^A-Za-z0-9-]/g, (ch) => `_${ch.charCodeAt(0).toString(16).padStart(4, '0')}`)}`;
 
 /** Whether a card or row is open, kept per key on the Org page's view. */
 export function useChartOpen(key: string): [boolean, () => void] {
