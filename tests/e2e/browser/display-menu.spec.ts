@@ -246,9 +246,11 @@ test('page one keeps its height and every row in place in every view; the View p
   await page.setViewportSize({ width: 1280, height: 720 })
   await boot(page, baseURL!)
   await openDisplayMenu(page)
-  const height = async () => (await box(displayMenu(page))).height
+  const note = async () => { const n = displayMenu(page).locator('[data-view-option="experimental-note"]'); return (await n.count()) ? (await box(n)).height : 0 }
+  const height = async () => (await box(displayMenu(page))).height - await note()
   // Rows every view has (Sort, Group, View, Session columns: C29b) sit at the same place in
-  // every view; only the last row, Collapse all, comes and goes (views with project groups).
+  // every view; only the rows under them come and go: the note that Flat and In one list are
+  // experimental (views with the layout Group row) and Collapse all (views with project groups).
   const ys = async () => { const top = (await box(displayMenu(page))).y; return Promise.all([option(page, 'sort'), option(page, 'group'), option(page, 'view'), option(page, 'session-panels')]
     .map(async (l) => Math.round((await box(l)).y - top))) }
   await expect(option(page, 'sort')).toBeVisible()
@@ -540,16 +542,16 @@ test('keyboard reaches every Display control, with a visible ring and readable c
   expect(await status.evaluate((el) => getComputedStyle(el).outlineStyle)).toBe('solid')
   await page.keyboard.press('ArrowUp')
   await expect(filterSearch(page)).toBeFocused()
-  // Segments (All has Group: Flat, By project, In one list): Left/Right move AND pick
+  // Segments (All has Group: By project, Flat, In one list): Left/Right move AND pick
   // (roving tabindex), the ring follows.
   const group = option(page, 'group')
   await group.locator('[data-choice="project"]').focus()
   await page.keyboard.press('ArrowRight')
-  await expect(group.locator('[data-choice="none"]')).toBeFocused()
-  await expect(group.locator('[data-choice="none"]')).toHaveAttribute('aria-pressed', 'true')
+  await expect(group.locator('[data-choice="status"]')).toBeFocused()
+  await expect(group.locator('[data-choice="status"]')).toHaveAttribute('aria-pressed', 'true')
   await page.keyboard.press('ArrowLeft')
   await expect(group.locator('[data-choice="project"]')).toHaveAttribute('aria-pressed', 'true')
-  expect(await group.locator('[data-choice]').evaluateAll((els) => els.map((el) => (el as HTMLElement).tabIndex))).toEqual([-1, 0, -1])
+  expect(await group.locator('[data-choice]').evaluateAll((els) => els.map((el) => (el as HTMLElement).tabIndex))).toEqual([0, -1, -1])
   expect(await group.locator('[data-choice="project"]').evaluate((el) => getComputedStyle(el).outlineStyle)).toBe('solid')
   // Down from Group (its active segment) is the View row; Right opens the View page on the current view.
   await page.keyboard.press('ArrowDown')

@@ -192,15 +192,18 @@ describe('buildStatusSections', () => {
 });
 
 describe('panel layout (panel-design.ts)', () => {
-  it('two layouts, Flat first and the default', () => {
-    expect(PANEL_DESIGNS.map((d) => [d.id, d.label])).toEqual([['status', 'Flat'], ['project', 'By project']]);
-    expect(readPanelDesign(null)).toBe('status');
+  it('two layouts, By project first and the default, Flat experimental', () => {
+    // 2026-11-06, the user: "when people first use this please only default to the
+    // project, the flat (show experimental, not default)".
+    expect(PANEL_DESIGNS.map((d) => [d.id, d.label, !!d.experimental])).toEqual([['project', 'By project', false], ['status', 'Flat', true]]);
+    expect(readPanelDesign(null)).toBe('project');
     expect(readPanelDesign('project')).toBe('project');
+    // The user's own pick of Flat is kept.
+    expect(readPanelDesign('status')).toBe('status');
   });
 
-  it('a stored layout no longer offered reads as Flat', () => {
+  it('nothing stored, or a stored layout no longer offered, never reads as Flat', () => {
     // 'shelf' was the third layout on trial (2026-10-29).
-    expect(readPanelDesign('shelf')).toBe('status');
-    expect(readPanelDesign('garbage')).toBe('status');
+    for (const raw of [null, '', 'shelf', 'garbage', 'Status', '"status"']) expect(readPanelDesign(raw)).toBe('project');
   });
 });

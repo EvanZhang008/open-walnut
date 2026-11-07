@@ -1,17 +1,18 @@
 /**
- * The home task panel's two layouts, picked as the Display menu's Group row
- * (2026-10-30, the user: "default can be flat ... you can also in display by project,
- * by project is our normal way"):
+ * The home task panel's two layouts, picked as the Display menu's Group row. By project
+ * is the default and Flat is experimental (2026-11-06, the user: "when people first use
+ * this please only default to the project, the flat (show experimental, not default)"):
  *
- *   status   Flat (the default): the panel is its status sections, each a flat list
+ *   project  By project (the default): projects at the top level; each project ends
+ *            with its own folded Waiting / snoozed row, and the view's completed tasks
+ *            fold once, in one Completed row at its bottom (never per project).
+ *   status   Flat (experimental): the panel is its status sections, each a flat list
  *            of two-line rows (project and tags on a small line, then the title):
  *            Watching and Needs you on top, then Working, Waiting / snoozed and
  *            Completed as folded divider rows.
- *   project  By project: the list as it was, projects at the top level; each project
- *            ends with its own folded Waiting / snoozed row, and the view's completed
- *            tasks fold once, in one Completed row at its bottom (never per project).
  *
- * A stored 'shelf' (a third layout once on trial) reads as Flat.
+ * Only a stored 'status' (the user's own pick of Flat) reads as Flat: nothing stored, a
+ * stored 'shelf' (a third layout once on trial) or anything else reads as By project.
  */
 import { useCallback, useEffect, useState } from 'react';
 import type { Task } from '@open-walnut/core';
@@ -19,21 +20,23 @@ import { isWatched, projectRuns, sortSectionTasks, stateSectionNoNeeds, type Sta
 
 export type PanelDesign = 'status' | 'project';
 
-export const PANEL_DESIGNS: readonly { id: PanelDesign; label: string; title: string }[] = [
-  { id: 'status', label: 'Flat', title: 'One list per status (Needs you, Working, Waiting, Completed), each task with its project above the title' },
+export const PANEL_DESIGNS: readonly { id: PanelDesign; label: string; title: string; experimental?: true }[] = [
   { id: 'project', label: 'By project', title: 'Grouped by project; each project folds its own waiting tasks, and completed tasks fold in one row at the bottom' },
+  { id: 'status', label: 'Flat', title: 'Experimental: one list per status (Needs you, Working, Waiting, Completed), each task with its project above the title', experimental: true },
 ];
+
+export const DEFAULT_PANEL_DESIGN: PanelDesign = 'project';
 
 /** walnut-todo-* keys sync across devices (ui-prefs-sync.ts). */
 export const LS_PANEL_DESIGN_KEY = 'walnut-todo-panel-design';
 
 export function readPanelDesign(raw: string | null): PanelDesign {
-  return raw === 'project' ? 'project' : 'status';
+  return raw === 'status' ? 'status' : DEFAULT_PANEL_DESIGN;
 }
 
 export function usePanelDesign(): [PanelDesign, (next: PanelDesign) => void] {
   const [design, setDesign] = useState<PanelDesign>(() => {
-    try { return readPanelDesign(localStorage.getItem(LS_PANEL_DESIGN_KEY)); } catch { return 'status'; }
+    try { return readPanelDesign(localStorage.getItem(LS_PANEL_DESIGN_KEY)); } catch { return DEFAULT_PANEL_DESIGN; }
   });
   useEffect(() => {
     const changed = (e: StorageEvent) => {

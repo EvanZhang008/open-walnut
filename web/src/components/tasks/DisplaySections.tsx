@@ -24,17 +24,20 @@ const GROUP_CHOICES: readonly SegChoice<GroupBy>[] = [
   { key: 'project', label: 'By project', title: 'Group the list by project' },
   { key: 'none', label: 'In one list', title: 'One list, in pin order' },
 ];
+/** Below page one's rows wherever the layout Group row shows: By project is the default, the other two are experimental. */
+export const EXPERIMENTAL_LAYOUTS_NOTE = 'Group: Flat and In one list are experimental';
 export const MIXED_ORDER_NOTE = 'Lists in this view differ';
 
 /**
- * The panel's layout as the Group row (panel-design.ts): Flat is the status sections,
- * By project the list as it was, and In one list that list without project runs (pin
- * order, separators), which a single tier view reaches only here.
+ * The panel's layout as the Group row (panel-design.ts): By project (the default) first,
+ * then Flat, the status sections, and In one list, the list without project runs (pin
+ * order, separators), which a single tier view reaches only here. Flat and In one list are
+ * experimental, and the row says so.
  */
 type LayoutChoice = PanelDesign | 'none';
 const LAYOUT_CHOICES: readonly SegChoice<LayoutChoice>[] = [
   ...PANEL_DESIGNS.map((d) => ({ key: d.id, label: d.label, title: d.title })),
-  GROUP_CHOICES[1],
+  { ...GROUP_CHOICES[1], title: `Experimental: ${GROUP_CHOICES[1].title?.toLowerCase()}` },
 ];
 
 /** Every view in menu order: the tabs kept on the bar first, then the rest, Projects last. */
@@ -123,6 +126,10 @@ export function DisplaySections({ display: p, flashOption, viewLabel, onOpenView
             onPick={(k) => sessionRow.choices.find((c) => c.key === k)?.onSelect()} />
         </DisplayRow>
       </div>
+
+      {/* Under every row, so Sort, Group, View and Session columns keep their place in every
+          view: the views with the layout Group row say which of its picks are experimental. */}
+      {layout && <div className="dm-note dm-experimental-note" data-view-option="experimental-note">{EXPERIMENTAL_LAYOUTS_NOTE}</div>}
 
       {/* Collapse all, only in the views that draw project groups, always LAST. */}
       {p.showCollapse && (

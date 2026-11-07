@@ -39,6 +39,36 @@ async function seed(page: Page, project: string, title: string, patch: Record<st
 test.describe('Flat layout', () => {
   test.describe.configure({ timeout: 120_000 })
 
+  // 2026-11-06, the user: "when people first use this please only default to the project,
+  // the flat (show experimental, not default)". A fresh profile (nothing stored, no synced
+  // prefs) opens By project; a Flat the user picked stays Flat across a reload.
+  test('a first visit opens By project, Flat is marked experimental, and a picked Flat is kept', async ({ page, baseURL }) => {
+    await isolateUiPrefs(page, { newInstall: true })
+    await openHome(page, baseURL!)
+    await seed(page, `First visit ${Date.now()}`, 'Wait for the first visit approval', { phase: 'WAITING' })
+    await page.reload()
+    await selectSection(page, 'All')
+    const panel = page.locator('.todo-panel').first()
+    await expect(panel.locator('[data-task-id]').first()).toBeAttached({ timeout: 30_000 })
+    // By project draws no Waiting / snoozed section of its own (each project folds its own).
+    await expect(panel.getByTestId('status-section-waiting')).toHaveCount(0)
+    expect(await page.evaluate(() => localStorage.getItem('walnut-todo-panel-design'))).toBeNull()
+    await openDisplayMenu(page)
+    const group = displayMenu(page).locator('[data-view-option="group"]')
+    await expect(group.locator('[data-choice]')).toHaveText(['By project', 'Flat', 'In one list'])
+    await expect(group.locator('[data-choice="project"]')).toHaveAttribute('aria-pressed', 'true')
+    await expect(displayMenu(page).locator('[data-view-option="experimental-note"]')).toHaveText('Group: Flat and In one list are experimental')
+    await group.locator('[data-choice="status"]').click()
+    await closeDisplayMenu(page)
+    await expect(panel.getByTestId('status-section-waiting').first()).toBeAttached()
+    await page.reload()
+    await selectSection(page, 'All')
+    await expect(panel.getByTestId('status-section-waiting').first()).toBeAttached({ timeout: 30_000 })
+    await openDisplayMenu(page)
+    await expect(displayMenu(page).locator('[data-view-option="group"] [data-choice="status"]')).toHaveAttribute('aria-pressed', 'true')
+    await closeDisplayMenu(page)
+  })
+
   test('status sentences are hidden by default; Display toggles every row and keeps the choice after reload', async ({ page, baseURL }) => {
     await isolateUiPrefs(page)
     await presetPanelDesign(page, 'status')
@@ -154,8 +184,9 @@ test.describe('Flat layout', () => {
     await openDisplayMenu(page)
     const menu = displayMenu(page)
     const group = menu.locator('[data-view-option="group"]')
-    await expect(group.locator('[data-choice]')).toHaveText(['Flat', 'By project', 'In one list'])
+    await expect(group.locator('[data-choice]')).toHaveText(['By project', 'Flat', 'In one list'])
     await expect(group.locator('[data-choice="status"]')).toHaveAttribute('aria-pressed', 'true')
+    await expect(menu.locator('[data-view-option="experimental-note"]')).toHaveText('Group: Flat and In one list are experimental')
     await expect(menu.locator('[data-view-option="sort"]')).toHaveCount(0)
     await group.locator('[data-choice="project"]').click()
     await expect(menu.locator('[data-view-option="sort"]')).toBeVisible()
