@@ -46,7 +46,8 @@ import type { SshTarget } from '../../providers/session-io.js'
 import { shellQuote } from '../../providers/session-io.js'
 import { getConfig } from '../../core/config-manager.js'
 import { hostOffersTerminal } from '../../core/hosts/host-status.js'
-import { DTACH_SOCKET_DIR, WALNUT_HOME } from '../../constants.js'
+import { DTACH_SOCKET_DIR, IS_EPHEMERAL, WALNUT_HOME } from '../../constants.js'
+import { describeIsolationRefusal, isolationKey, remoteIsolationFor, testServerRemoteTermRoot } from '../../providers/remote-isolation.js'
 import { SHARED_DAEMON_DIR, localDaemonDirChoice } from '../../lib/daemon-dir.js'
 import { log } from '../../logging/index.js'
 import { remoteDtachPath, localDtachPath } from './dtach-provision.js'
@@ -64,7 +65,8 @@ import { dtachPidFileFor, dtachRecordScript } from './dtach-master.js'
  * `host` is the alias — one socket per alias, stable across probe+spawn+reaper.
  */
 export function sshControlMasterArgs(host: string): string[] {
-  const socket = path.join(os.tmpdir(), `walnut-term-ssh-${host}`)
+  // A test server keeps its own master: never one the real Walnut's terminals ride.
+  const socket = path.join(os.tmpdir(), IS_EPHEMERAL ? `walnut-term-ssh-${host}-${isolationKey(WALNUT_HOME).slice(0, 8)}` : `walnut-term-ssh-${host}`)
   return [
     '-o', 'ControlMaster=auto',
     '-o', `ControlPath=${socket}`,
@@ -108,10 +110,19 @@ export interface SpawnResult {
  */
 export { DTACH_SOCKET_DIR }
 
-/** The socket dir on a remote host: the local one, except for a home-dir fallback. */
-export const REMOTE_DTACH_SOCKET_DIR = localDaemonDirChoice().fallback
-  ? `${SHARED_DAEMON_DIR}/term-${typeof process.getuid === 'function' ? process.getuid() : 'user'}`
-  : DTACH_SOCKET_DIR
+/**
+ * The socket dir on a remote host: the local one, except for a home-dir fallback,
+ * and a test server's own root there (remote-isolation.ts), never a path of this
+ * machine nor one beside the real Walnut's.
+ */
+const TEST_SERVER_TERM = testServerRemoteTermRoot(IS_EPHEMERAL, WALNUT_HOME)
+export const REMOTE_DTACH_SOCKET_DIR = TEST_SERVER_TERM ? TEST_SERVER_TERM.termDir
+  : localDaemonDirChoice().fallback
+    ? `${SHARED_DAEMON_DIR}/term-${typeof process.getuid === 'function' ? process.getuid() : 'user'}`
+    : DTACH_SOCKET_DIR
+
+/** Where a test server keeps its own dtach build on a remote host (undefined: the usual ~/.local/bin). */
+export const REMOTE_DTACH_OWN_BIN: string | undefined = TEST_SERVER_TERM ? `${TEST_SERVER_TERM.installHome}/.local/bin/walnut-dtach` : undefined
 
 function socketDir(remote: boolean): string {
   return remote ? REMOTE_DTACH_SOCKET_DIR : DTACH_SOCKET_DIR
@@ -190,6 +201,9 @@ export async function resolveSshTarget(host: string): Promise<SshTarget> {
   // hang. The session panel hides the tab from the same capability; this is the
   // server's own guard.
   if (!hostOffersTerminal(def)) throw new Error(`A terminal is not available on ${def.label ?? host}: this Mac reaches it through ${def.transport === 'net' ? 'the host network' : 'the cloud companion'}, not SSH`)
+  // A test server reaches a remote host only with remote hosts on, and then only its own dirs there.
+  const iso = remoteIsolationFor({ hostKey: host, env: process.env, ephemeral: IS_EPHEMERAL, link: 'ssh', home: WALNUT_HOME })
+  if (iso.mode === 'off') throw new Error(describeIsolationRefusal(host, iso.reason, iso.dir))
   return linkTarget(host, config)
 }
 

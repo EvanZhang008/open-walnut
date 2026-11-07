@@ -25,11 +25,21 @@ export type RemoteRuntime = 'bun' | 'binary' | 'node'
 export const BUN_VERIFY_TIMEOUT_S = 10
 export const BUN_INSTALL_URL = 'https://bun.sh/install'
 
-/** Locate bun (PATH, then the installer's default) and run it once. One `sh -s` round trip. */
-export function buildBunProbeScript(): string {
+export interface BunScriptOpts {
+  /**
+   * The HOME a test server's installs go to (remote-isolation.ts): its bun is looked
+   * for there first and installed only there, never into the user's ~/.bun.
+   */
+  installHome?: string
+}
+
+/** Locate bun (a test server's own, PATH, then the installer's default) and run it once. One `sh -s` round trip. */
+export function buildBunProbeScript(opts: BunScriptOpts = {}): string {
+  const own = opts.installHome ? `${shq(`${opts.installHome}/.bun/bin/bun`)}` : null
   return [
     'B=',
-    'if command -v bun >/dev/null 2>&1; then B=$(command -v bun); elif [ -x "$HOME/.bun/bin/bun" ]; then B="$HOME/.bun/bin/bun"; fi',
+    ...(own ? [`if [ -x ${own} ]; then B=${own}; fi`] : []),
+    'if [ -n "$B" ]; then :; elif command -v bun >/dev/null 2>&1; then B=$(command -v bun); elif [ -x "$HOME/.bun/bin/bun" ]; then B="$HOME/.bun/bin/bun"; fi',
     'if [ -z "$B" ]; then echo "bun_path=MISSING"; exit 0; fi',
     'echo "bun_path=$B"',
     `if command -v timeout >/dev/null 2>&1; then O=$(timeout ${BUN_VERIFY_TIMEOUT_S} "$B" --version 2>&1); R=$?; else O=$("$B" --version 2>&1); R=$?; fi`,
@@ -79,7 +89,11 @@ export function parseBunProbe(output: string): BunProbe {
  * read as success. Always exits 0 and REPORTS the status, so the log tail
  * survives the trip back (a non-zero exit would lose stdout).
  */
-export function buildBunInstallScript(logPath: string, url: string = BUN_INSTALL_URL): string {
+export function buildBunInstallScript(logPath: string, url: string = BUN_INSTALL_URL, opts: BunScriptOpts = {}): string {
+  // bun's installer writes $BUN_INSTALL (default ~/.bun) and adds a PATH line to the shell's rc file in $HOME.
+  const runner = opts.installHome
+    ? `mkdir -p ${shq(opts.installHome)} && env HOME=${shq(opts.installHome)} BUN_INSTALL=${shq(`${opts.installHome}/.bun`)} bash`
+    : 'bash'
   return [
     `L=${shq(logPath)}`,
     'mkdir -p "$(dirname "$L")" 2>/dev/null',
@@ -90,7 +104,7 @@ export function buildBunInstallScript(logPath: string, url: string = BUN_INSTALL
     'else',
     `  S=$(curl -fsSL ${shq(url)} 2>>"$L"); R=$?`,
     '  if [ "$R" -eq 0 ] && [ -z "$S" ]; then echo "the installer download was empty" >> "$L"; R=1; fi',
-    '  if [ "$R" -eq 0 ]; then printf \'%s\\n\' "$S" | bash >> "$L" 2>&1; R=$?; fi',
+    `  if [ "$R" -eq 0 ]; then printf '%s\\n' "$S" | ${runner} >> "$L" 2>&1; R=$?; fi`,
     'fi',
     'echo "install_rc=$R"',
     'echo "install_log=$L"',

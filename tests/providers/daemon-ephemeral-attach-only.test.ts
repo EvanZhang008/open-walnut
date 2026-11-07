@@ -1,10 +1,11 @@
 /**
- * Unit tests for ephemeral attach-only isolation (DaemonConnection).
+ * Unit tests for ephemeral remote isolation (DaemonConnection).
  *
  * An ephemeral server (argv --_ephemeral-child) runs over a snapshot of production
- * data. It MAY attach to an already-running remote daemon to debug live sessions,
- * but must NEVER deploy/start/stop/redeploy it — two servers owning the singleton
- * remote daemon caused a redeploy/restart crash loop.
+ * data. It never deploys/starts/stops/redeploys a host's own daemon: two servers
+ * owning the singleton remote daemon caused a redeploy/restart crash loop. Since
+ * src/providers/remote-isolation.ts it does not attach to one either: a host is off,
+ * or (WALNUT_EPHEMERAL_REMOTE_HOSTS=1) gets an isolated daemon of the test server's own.
  *
  * The single discriminator gating all destructive paths is the private getter
  * `isReadOnlyRemote` (IS_EPHEMERAL && hostKey !== '__local__'). These tests pin its
@@ -56,8 +57,14 @@ describe('ephemeral attach-only: isReadOnlyRemote discriminator', () => {
 describe('ephemeral attach-only: prevents destructive daemon ops', () => {
   // Cast helper: reach private methods/getters for spying + invocation.
   const priv = (conn: DaemonConnection) => conn as unknown as Record<string, (...args: unknown[]) => unknown>
-  // Attaching to a remote host at all is opt-in for ephemeral servers now (see
-  // 'ephemeral remote hosts' below); these tests pin what an OPTED-IN one may do.
+  // Since remote isolation (src/providers/remote-isolation.ts) a test server never
+  // attaches to a host's own daemon over ssh: it is refused, or it gets an isolated
+  // daemon of its own. These pin the backstop: were a connection ever a read-only
+  // view (the cloud box's mode, forced here on an ssh host), no destructive path runs.
+  const readOnlyView = (conn: DaemonConnection) => {
+    Object.defineProperty(conn, 'isolation', { get: () => ({ mode: 'attach' }) })
+    return conn
+  }
   const savedOptIn = process.env.WALNUT_EPHEMERAL_REMOTE_HOSTS
   beforeEach(() => { process.env.WALNUT_EPHEMERAL_REMOTE_HOSTS = '1' })
   afterEach(() => {
@@ -66,7 +73,7 @@ describe('ephemeral attach-only: prevents destructive daemon ops', () => {
   })
 
   it('Test 1 — connect(), no daemon running → throws attach-only, never deploys/starts', async () => {
-    const conn = new DaemonConnection('clouddev', testSshTarget)
+    const conn = readOnlyView(new DaemonConnection('clouddev', testSshTarget))
     vi.spyOn(priv(conn), 'ensureControlMaster').mockResolvedValue(undefined)
     // The daemon dir probe is the connect's first ssh call; no host is dialled here.
     vi.spyOn(priv(conn), 'resolveRemoteDir').mockResolvedValue(undefined)
@@ -80,7 +87,7 @@ describe('ephemeral attach-only: prevents destructive daemon ops', () => {
   })
 
   it('Test 2 — connect() handshake fail → throws attach-only, never forceRedeploy', async () => {
-    const conn = new DaemonConnection('clouddev', testSshTarget)
+    const conn = readOnlyView(new DaemonConnection('clouddev', testSshTarget))
     vi.spyOn(priv(conn), 'ensureControlMaster').mockResolvedValue(undefined)
     // The daemon dir probe is the connect's first ssh call; no host is dialled here.
     vi.spyOn(priv(conn), 'resolveRemoteDir').mockResolvedValue(undefined)
@@ -98,7 +105,7 @@ describe('ephemeral attach-only: prevents destructive daemon ops', () => {
   })
 
   it('Test 3 — shouldUpgradeDaemon → false, never sshExec', async () => {
-    const conn = new DaemonConnection('clouddev', testSshTarget)
+    const conn = readOnlyView(new DaemonConnection('clouddev', testSshTarget))
     const ssh = vi.spyOn(priv(conn), 'sshExec').mockResolvedValue('')
 
     await expect(priv(conn).shouldUpgradeDaemon('/tmp/open-walnut/daemon-linux-x64')).resolves.toBe(false)
@@ -106,7 +113,7 @@ describe('ephemeral attach-only: prevents destructive daemon ops', () => {
   })
 
   it('Test 4 — forceRedeployAndReconnect backstop throws directly, never deploy/start', async () => {
-    const conn = new DaemonConnection('clouddev', testSshTarget)
+    const conn = readOnlyView(new DaemonConnection('clouddev', testSshTarget))
     const deploy = vi.spyOn(priv(conn), 'deployDaemon').mockImplementation(vi.fn())
     const start = vi.spyOn(priv(conn), 'startDaemon').mockImplementation(vi.fn())
 
@@ -116,7 +123,7 @@ describe('ephemeral attach-only: prevents destructive daemon ops', () => {
   })
 
   it('Test 5a — reconnect() with daemon absent → throws, never deploys/starts', async () => {
-    const conn = new DaemonConnection('clouddev', testSshTarget)
+    const conn = readOnlyView(new DaemonConnection('clouddev', testSshTarget))
     // Drive past reconnect()'s early returns: not destroyed (fresh instance),
     // host !== '__local__' with sshTarget → takes the SSH branch.
     vi.spyOn(priv(conn), 'stopControlMaster').mockResolvedValue(undefined)
@@ -133,7 +140,7 @@ describe('ephemeral attach-only: prevents destructive daemon ops', () => {
   })
 
   it('Test 5b — reconnect() handshake fail → throws, never forceRedeploy', async () => {
-    const conn = new DaemonConnection('clouddev', testSshTarget)
+    const conn = readOnlyView(new DaemonConnection('clouddev', testSshTarget))
     vi.spyOn(priv(conn), 'stopControlMaster').mockResolvedValue(undefined)
     vi.spyOn(priv(conn), 'ensureControlMaster').mockResolvedValue(undefined)
     // The daemon dir probe is the connect's first ssh call; no host is dialled here.
@@ -182,16 +189,13 @@ describe('ephemeral remote hosts: off unless WALNUT_EPHEMERAL_REMOTE_HOSTS=1', (
     expect(classifyHostConnectError(`ephemeral server: remote host 'clouddev' is off for test servers`, 'clouddev').kind).toBe('ephemeral')
   })
 
-  it('the opt-in reaches the attach path (contrast: the gate is what stopped it)', async () => {
+  it('the opt-in gives the host an isolated daemon of its own, never the read-only view of the host\'s daemon', async () => {
     process.env.WALNUT_EPHEMERAL_REMOTE_HOSTS = '1'
     const conn = new DaemonConnection('clouddev', testSshTarget)
-    const ssh = vi.spyOn(priv(conn), 'ensureControlMaster').mockResolvedValue(undefined)
-    // The daemon dir probe is the connect's first ssh call; no host is dialled here.
-    vi.spyOn(priv(conn), 'resolveRemoteDir').mockResolvedValue(undefined)
-    vi.spyOn(priv(conn), 'checkDaemonRunning').mockResolvedValue(null)
-
-    await expect(conn.connect()).rejects.toThrow(/attach-only/)
-    expect(ssh).toHaveBeenCalledTimes(1)
+    expect(conn.isolation.mode).toBe('isolated')
+    expect(conn.readOnlyRemote).toBe(false)
+    // Before any probe, every path already names the test server's own dir.
+    expect(conn.remoteDaemonDir).toMatch(/^\/tmp\/open-walnut-test-[0-9a-f]{16}\/daemon$/)
   })
 
   it('never pushes the cloud bridge config, not even to its own local daemon', async () => {

@@ -1409,7 +1409,10 @@ Safe check on the real dev box (never the user's prod data, never port 3456, nev
    with a test). A host entry names no daemon dir (the connection probes for one), so the isolated
    dir is given beside the alias: `WALNUT_EPHEMERAL_REPLICA_DIR=<abs dir>`, refused when it is
    `/tmp/open-walnut`, `~/.cache/open-walnut`, `~/.open-walnut` or inside one; the lifted host
-   uses that dir and its own streams dir (`src/providers/ephemeral-replica-host.ts`). The lift is also
+   uses that dir as its isolated root, the daemon in `<dir>/daemon` and its streams, installs and terminals
+   beside it (`src/providers/ephemeral-replica-host.ts`; since `src/providers/remote-isolation.ts`, 2026-11-07,
+   every other ssh host of a test server gets the same isolation under `/tmp/open-walnut-test-<key>`, only
+   without the host server). The lift is also
    refused for the companion's box (it comes through its tunnel, not ssh) and unless step 3's
    `WALNUT_HOST_SERVER_ROOT` is set to a root other than `~/.open-walnut-host`; a lifted host never
    probes or updates the box's service daemon.

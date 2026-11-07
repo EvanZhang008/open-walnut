@@ -126,6 +126,14 @@ export async function runOnPluginHost(
   }
   const host = await getPluginHost(alias)
   if (!host) throw new Error(`Walnut has no host named "${alias}" (Settings, Hosts).`)
+  // A test server reaches a remote host only with remote hosts on (providers/remote-isolation.ts).
+  if (!host.local) {
+    const [{ IS_EPHEMERAL, WALNUT_HOME }, { remoteIsolationFor, describeIsolationRefusal }] = await Promise.all([
+      import('../../constants.js'), import('../../providers/remote-isolation.js'),
+    ])
+    const iso = remoteIsolationFor({ hostKey: alias, env: process.env, ephemeral: IS_EPHEMERAL, link: 'ssh', home: WALNUT_HOME })
+    if (iso.mode === 'off') throw new Error(describeIsolationRefusal(alias, iso.reason, iso.dir))
+  }
   const { command, argv } = hostRunCommand(host, args)
   const timeoutMs = clampInt(input.timeoutMs, 1_000, MAX_TIMEOUT_MS, DEFAULT_TIMEOUT_MS)
   const maxOutput = clampInt(input.maxOutputBytes, 1, MAX_OUTPUT, DEFAULT_MAX_OUTPUT)

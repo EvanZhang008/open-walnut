@@ -217,7 +217,7 @@ export function hintForKind(kind: HostConnectErrorKind, sshTarget: string, targe
   const who = hintSubject(sshTarget, target)
   const hostname = target.hostname?.trim() || bareHostOf(sshTarget) || sshTarget
   switch (kind) {
-    case 'ephemeral': return 'This is a throwaway test server: it stays off shared remote hosts and never installs a daemon there. Use the main Walnut server for remote hosts, or start the test server with WALNUT_EPHEMERAL_REMOTE_HOSTS=1 to attach.'
+    case 'ephemeral': return 'This is a throwaway test server: it stays off remote hosts and never touches their own daemon. Use the main Walnut server for remote hosts, or start the test server with WALNUT_EPHEMERAL_REMOTE_HOSTS=1 to give it an isolated daemon of its own on each host it reaches over SSH.'
     case 'shell_noise': return `SSH works, but the login shell on ${who} did not run Walnut's command as written (a ForceCommand, or a login shell that is not a shell). Check that \`ssh ${sshTarget} sh -c 'echo ok'\` prints just ok, then Retry.`
     case 'host_key': return `The host key of ${who} changed since this machine last saw it. If the host was rebuilt, run \`ssh-keygen -R ${knownHostsName(sshTarget, target)}\` and then \`ssh ${sshTarget}\` once to accept the new key; if nothing changed on the host, stop: a changed key can also mean someone is intercepting the connection.`
     case 'cert_expired': return 'Your SSH certificate expired; run your organization\'s login command, then Retry.'

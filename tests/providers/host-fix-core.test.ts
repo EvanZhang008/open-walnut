@@ -1607,3 +1607,53 @@ describe('injection into the source daemon twin', () => {
     expect(() => validateFoldInjection(fold.concat(broken))).toThrow(/wrong apk argv/)
   })
 })
+
+// ── A test server's isolated daemon (WALNUT_INSTALL_HOME, src/providers/remote-isolation.ts) ──
+
+describe('host fixes of a test server\'s isolated daemon install under its own HOME', () => {
+  const OWN = '/tmp/open-walnut-test-0123456789abcdef/home'
+  const OWN_BIN = `${OWN}/.local/bin/claude`
+  // eslint-disable-next-line @typescript-eslint/no-implied-eval
+  const rebuilt = <T,>(f: T): T => new Function('"use strict"; return ' + String(f))() as T
+
+  function isolatedHost() {
+    const h = fakeHost({
+      bins: { curl: '/usr/bin/curl', bash: '/bin/bash', sudo: '/usr/bin/sudo', 'apt-get': '/usr/bin/apt-get' },
+      script: (file) => {
+        if (file === '/bin/bash') h.claude[OWN_BIN] = { ...NATIVE, path: OWN_BIN }
+        if (file === OWN_BIN) return { code: 0, stdout: '2.1.280 (Claude Code)\n' }
+        return { code: 0 }
+      },
+    })
+    Object.assign(h.deps.env, {
+      WALNUT_INSTALL_HOME: OWN,
+      CLAUDE_CONFIG_DIR: `${HOME}/.claude`, XDG_DATA_HOME: `${HOME}/.local/share`, XDG_CONFIG_HOME: `${HOME}/.config`, BUN_INSTALL: `${HOME}/.bun`,
+    })
+    return h
+  }
+
+  for (const [label, factory] of [['module', createHostFix], ['re-materialized (the source twin)', rebuilt(createHostFix)]] as const) {
+    it(`${label}: the installer runs with HOME = the isolated home and none of the real home's install dirs`, async () => {
+      const h = isolatedHost()
+      const r = await factory(h.deps).run('install-claude-native')
+      const inst = nonProbe(h.calls).find((c) => c.file === '/bin/bash')!
+      expect(inst.env.HOME).toBe(OWN)
+      expect(inst.cwd).toBe(OWN)
+      for (const k of ['CLAUDE_CONFIG_DIR', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'BUN_INSTALL']) expect(inst.env[k], k).toBeUndefined()
+      expect(String(inst.env.PATH ?? '')).not.toContain(`${HOME}/.local/bin`)
+      for (const c of nonProbe(h.calls)) {
+        for (const a of [c.file, ...c.args, String(c.cwd ?? '')]) expect(a.startsWith(`${HOME}/`), a).toBe(false)
+      }
+      expect(r).toMatchObject({ ok: true, claude: { path: OWN_BIN } })
+      // The real home's env object is untouched.
+      expect(h.deps.env.HOME).toBe(HOME)
+    })
+
+    it(`${label}: never installs a compiler system-wide`, async () => {
+      const h = isolatedHost()
+      const r = await factory(h.deps).run('install-compiler')
+      expect(r).toMatchObject({ ok: false, error: 'isolated' })
+      expect(nonProbe(h.calls)).toEqual([])
+    })
+  }
+})

@@ -156,6 +156,21 @@ export async function stopDtachSession(record: Pick<SessionRecord, 'claudeSessio
   return res
 }
 
+/**
+ * A test server shutting down ends the terminals it opened on remote hosts (their
+ * sockets live in its own root there, remote-isolation.ts, which goes next), each
+ * master proved before it is signalled. Bounded per host by the caller.
+ */
+export async function endTestServerRemoteTerminals(hosts: string[]): Promise<void> {
+  await Promise.all(hosts.map(async (host) => {
+    try {
+      const { owner, ids } = await listWalnutDtach(host)
+      if (owner !== WALNUT_HOME) return
+      for (const id of ids) await stopDtachSession({ claudeSessionId: id, host }).catch(() => {})
+    } catch { /* the host is gone: nothing of ours can be ended there now */ }
+  }))
+}
+
 /** stopDtachSession, outcome only. */
 export async function killDtachSession(record: Pick<SessionRecord, 'claudeSessionId' | 'host'>): Promise<StopOutcome['outcome']> {
   return (await stopDtachSession(record)).outcome

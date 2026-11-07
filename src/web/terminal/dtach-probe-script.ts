@@ -112,12 +112,14 @@ const SH_HELPERS = [
  * non-interactive `ssh host sh -s` often lacks the login PATH (brew's prefix
  * is the usual miss). (3) a C compiler to build with, else (4) NO_COMPILER.
  */
-export function buildProbeScript(): string {
+export function buildProbeScript(opts: { ownBin?: string } = {}): string {
   return [
     ...PREAMBLE,
     ...SH_HELPERS,
-    `B="$HOME/${REMOTE_BIN}"`,
+    binLine(opts.ownBin),
     'if is_dtach "$B"; then echo "DTACH_OK:walnut:$B"; exit 0; fi',
+    // A test server builds into a dir of its own, and may still run the build already in ~/.local/bin.
+    ...(opts.ownBin ? [`U="$HOME/${REMOTE_BIN}"`, 'if is_modern_dtach "$U"; then echo "DTACH_OK:walnut:$U"; exit 0; fi'] : []),
     'for S in "$(command -v dtach 2>/dev/null)" /usr/bin/dtach /usr/local/bin/dtach /opt/homebrew/bin/dtach; do',
     '  if [ -n "$S" ] && is_modern_dtach "$S"; then echo "DTACH_OK:system:$S"; exit 0; fi',
     'done',
@@ -127,6 +129,14 @@ export function buildProbeScript(): string {
     'echo NO_COMPILER',
     'exit 0',
   ].join('\n')
+}
+
+/**
+ * `B=` names Walnut's own copy: ~/.local/bin/walnut-dtach, or a test server's own
+ * path on the host (remote-isolation.ts), so it never installs into the user's home.
+ */
+function binLine(ownBin?: string): string {
+  return ownBin ? `B=${shellQuote(ownBin)}` : `B="$HOME/${REMOTE_BIN}"`
 }
 
 /** Heredoc terminator for the prebuilt's base64; the base64 alphabet can't contain it. */
@@ -172,12 +182,12 @@ function prebuiltLines(prebuilt: Buffer): string[] {
  * but no compiler, a prebuilt that fails ends in NO_COMPILER: installing one is
  * the fix left.
  */
-export function buildInstallScript(opts: { prebuilt?: Buffer; cc?: string; sources: Record<string, string> }): string {
+export function buildInstallScript(opts: { prebuilt?: Buffer; cc?: string; sources: Record<string, string>; ownBin?: string }): string {
   const { prebuilt, cc, sources } = opts
   const lines = [
     ...PREAMBLE,
     ...SH_HELPERS,
-    `B="$HOME/${REMOTE_BIN}"`,
+    binLine(opts.ownBin),
     'mkdir -p "$(dirname "$B")" || { echo BUILD_FAILED; exit 0; }',
   ]
   if (prebuilt) lines.push(...prebuiltLines(prebuilt))

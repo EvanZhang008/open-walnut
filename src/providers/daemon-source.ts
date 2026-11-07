@@ -1727,7 +1727,8 @@ function namedSessionId(args) {
 // daemon under the real HOME) must never swallow and delete the real markers.
 function backfillSpawnJournal() {
   const list = (dir) => { try { return fs.readdirSync(dir); } catch { return []; } };
-  const legacy = process.env.WALNUT_SPAWN_JOURNAL ? [] : list(LEGACY_SPAWN_LEDGER_DIR);
+  // A test server's isolated daemon leaves the markers to the host's own daemon: it never deletes them.
+  const legacy = process.env.WALNUT_SPAWN_JOURNAL || ISOLATED_FOR ? [] : list(LEGACY_SPAWN_LEDGER_DIR);
   for (const name of legacy) appendSpawnJournal(name, { kind: 'backfill', from: 'ledger' });
   for (const name of list(STREAMS_DIR)) {
     if (name.endsWith('.jsonl')) appendSpawnJournal(name.slice(0, -6), { kind: 'backfill', from: 'streams' });
@@ -1781,6 +1782,23 @@ const WATCHDOG_PARENT_PID = (function() {
   const pid = parseInt(process.env.WALNUT_DAEMON_PARENT_PID || '', 10);
   return Number.isFinite(pid) && pid > 0 ? pid : 0;
 })();
+// A test server's own daemon on a remote host (the server's remote-isolation.ts): the
+// key of the test server it serves, said in its hello with its dir. It ends itself
+// once no server has been connected for the lease, and takes its root with it.
+// Never on a production dir. Mirror daemon-standalone.ts.
+const ISOLATED_FOR = (process.env.WALNUT_DAEMON_ISOLATED_FOR || '').trim();
+const ISOLATED_ORPHAN_EXIT_MS = (function() {
+  const ms = parseInt(process.env.WALNUT_DAEMON_ORPHAN_EXIT_MS || '', 10);
+  return ISOLATED_FOR && Number.isFinite(ms) && ms > 0 ? ms : 0;
+})();
+// The last time a server socket was connected (the lease's clock; boot counts as one).
+let isolatedServerSeenAt = Date.now();
+// The root a test server made for this daemon, when the dir is one.
+function isolatedOwnRoot() {
+  if (!ISOLATED_FOR || !/^[A-Za-z0-9_-]+$/.test(ISOLATED_FOR)) return null;
+  const root = path.dirname(path.resolve(DAEMON_DIR));
+  return root === '/tmp/open-walnut-test-' + ISOLATED_FOR || root.endsWith('/.cache/open-walnut-test/' + ISOLATED_FOR) ? root : null;
+}
 
 function ensureOwnerOnlyStorage() {
   function repair(entryPath) {
@@ -4392,6 +4410,10 @@ function dispatchCommand(ws, id, cmd) {
       uptimeSec: Math.floor((Date.now() - DAEMON_START_TS) / 1000),
       runtime: DAEMON_RUNTIME,
       ...(TASK_DIR_ROOT ? { taskDirRoot: TASK_DIR_ROOT } : {}),
+      // Which Walnut this daemon is: its dir, and a test server's key when it is that
+      // server's isolated daemon (the server's remote-isolation.ts checks both).
+      dir: DAEMON_DIR,
+      ...(ISOLATED_FOR ? { isolatedFor: ISOLATED_FOR } : {}),
       // host_exec runs a stop would end: every update path waits for them (exec-runs-hold.ts).
       ...(hostExec ? { execRunning: hostExec.running() } : {}),
       });
@@ -15536,6 +15558,10 @@ async function startDaemon() {
   if (SERVICE_MODE && (!DAEMON_STATE_DIR || !path.isAbsolute(DAEMON_STATE_DIR))) {
     throw new Error('--service requires an absolute WALNUT_DAEMON_STATE_DIR');
   }
+  // A test server's daemon never runs as, or in the place of, the production one.
+  if (ISOLATED_FOR && (IS_PROD_DAEMON_DIR || SERVICE_MODE)) {
+    throw new Error('isolated daemon: refusing to start it in the production daemon dir or as a service (WALNUT_DAEMON_ISOLATED_FOR names a test server)');
+  }
   // --service promises a kernel-locked singleton and cron supervision; without
   // both sidecars it cannot keep either promise, so it refuses to run at all.
   if (SERVICE_MODE && (!cronRuntimeCore || !daemonLockCore)) {
@@ -15892,6 +15918,22 @@ async function startDaemon() {
             parentPid: WATCHDOG_PARENT_PID,
           });
           cleanup();
+          process.exit(0);
+        }
+      }
+      // A test server's isolated daemon on a remote host: no server socket for the
+      // lease's length ends it, root and all. Keep in sync with daemon-standalone.ts.
+      if (ISOLATED_ORPHAN_EXIT_MS && !SERVICE_MODE) {
+        const now = Date.now();
+        for (const client of wsClients) if (client.readyState === 1 && isServerClient(client)) isolatedServerSeenAt = now;
+        if (now - isolatedServerSeenAt > ISOLATED_ORPHAN_EXIT_MS) {
+          const root = isolatedOwnRoot();
+          logMsg('warn', 'isolated daemon: no test server for the lease, exiting', { isolatedFor: ISOLATED_FOR, leaseMs: ISOLATED_ORPHAN_EXIT_MS, root: root });
+          cleanup();
+          if (root) {
+            try { fs.rmSync(root, { recursive: true, force: true }); } catch { /* /tmp is swept anyway */ }
+            try { fs.rmSync(DAEMON_DIR + '-images', { recursive: true, force: true }); } catch { /* same */ }
+          }
           process.exit(0);
         }
       }

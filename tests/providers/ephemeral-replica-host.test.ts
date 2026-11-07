@@ -9,9 +9,10 @@
  *     (/tmp/open-walnut, ~/.cache/open-walnut, ~/.open-walnut, or inside one);
  *   - only for a host reached over ssh (never the companion's box), and only with an
  *     isolated host server root (never the production replica's ~/.open-walnut-host);
- *   - a refusal says why in the log, and the host stays read only;
- *   - a lifted host uses its isolated dir and that dir's own streams dir,
- *     never the dir its probe would choose.
+ *   - a refusal says why in the log, and the host stays off (a test server never
+ *     attaches to a host's own daemon: src/providers/remote-isolation.ts);
+ *   - a lifted host's dir is its isolated root: the daemon runs in <dir>/daemon,
+ *     its streams, installs and task dirs beside it, never the dir its probe would choose.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createMockConstants } from '../helpers/mock-constants.js'
@@ -59,7 +60,7 @@ describe('the decision', () => {
       const d = ephemeralReplicaHost('devbox', env({ WALNUT_EPHEMERAL_REPLICA_DIR: dir }), true)
       expect(d, dir).toMatchObject({ lifted: false, asked: true, reason: 'prod-dir' })
     }
-    for (const dir of ['/tmp/open-walnut-check', '/tmp/walnut-replica-check/run', '/home/marina/.cache/open-walnut-eph']) expect(isProdDaemonDir(dir), dir).toBe(false)
+    for (const dir of ['/tmp/open-walnut-check', '/tmp/walnut-replica-check/run', '/home/marina/.cache/open-walnut-eph', '/tmp/open-walnut-test-0123456789abcdef', '/home/marina/.cache/open-walnut-test/0123456789abcdef']) expect(isProdDaemonDir(dir), dir).toBe(false)
   })
 
   it('never lifts the companion\'s box: it comes through its tunnel, where no isolated dir applies', () => {
@@ -84,31 +85,36 @@ describe('the decision', () => {
 })
 
 describe('DaemonConnection on an ephemeral server', () => {
-  it('the one allowed case: the alias with an isolated dir is not read only, and starts in that dir', () => {
+  it('the replica host: its dir is the isolated root, the daemon runs in it, and only it may run a host server', () => {
     Object.assign(process.env, { WALNUT_EPHEMERAL_REMOTE_HOSTS: '1', WALNUT_EPHEMERAL_REPLICA_HOST: 'devbox', WALNUT_EPHEMERAL_REPLICA_DIR: ISOLATED, WALNUT_HOST_SERVER_ROOT: EPH_ROOT })
     const warn = vi.spyOn(log.session, 'warn')
     const conn = new DaemonConnection('devbox', TARGET)
     expect(readOnly(conn)).toBe(false)
-    expect(dirEnv(conn)).toEqual({ WALNUT_DAEMON_DIR: ISOLATED, WALNUT_STREAMS_DIR: ISOLATED + '/streams' })
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('read only lifted'), expect.objectContaining({ host: 'devbox', dir: ISOLATED }))
-    // Every other host stays read only.
-    expect(readOnly(new DaemonConnection('buildbox', TARGET))).toBe(true)
+    expect(conn.isolation).toMatchObject({ mode: 'isolated', roots: [ISOLATED], replica: true })
+    expect(conn.remoteDaemonDir).toBe(ISOLATED + '/daemon')
+    expect(dirEnv(conn)).toMatchObject({ WALNUT_DAEMON_DIR: ISOLATED + '/daemon', WALNUT_STREAMS_DIR: ISOLATED + '/streams', WALNUT_INSTALL_HOME: ISOLATED + '/home' })
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('isolated daemon of its own'), expect.objectContaining({ host: 'devbox', roots: [ISOLATED], replica: true }))
+    // Every other ssh host gets an isolated daemon too, never a host server.
+    const other = new DaemonConnection('buildbox', TARGET)
+    expect(readOnly(other)).toBe(false)
+    expect(other.isolation).toMatchObject({ mode: 'isolated', replica: false })
   })
 
-  it('refusal one: the prod dir keeps the host read only, with the reason logged', () => {
+  it('refusal one: the prod dir keeps the host off, with the reason logged', () => {
     Object.assign(process.env, { WALNUT_EPHEMERAL_REMOTE_HOSTS: '1', WALNUT_EPHEMERAL_REPLICA_HOST: 'devbox', WALNUT_EPHEMERAL_REPLICA_DIR: '/tmp/open-walnut', WALNUT_HOST_SERVER_ROOT: EPH_ROOT })
     const warn = vi.spyOn(log.session, 'warn')
     const conn = new DaemonConnection('devbox', TARGET)
     expect(readOnly(conn)).toBe(true)
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('refused'), expect.objectContaining({ host: 'devbox', reason: 'prod-dir', dir: '/tmp/open-walnut' }))
+    expect(conn.isolation).toMatchObject({ mode: 'off', reason: 'prod-dir' })
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('stays off'), expect.objectContaining({ host: 'devbox', reason: 'prod-dir', dir: '/tmp/open-walnut' }))
     expect(dirEnv(conn)).toEqual({})
   })
 
-  it('refusal two: no dir named keeps the host read only, with the reason logged', () => {
+  it('refusal two: no dir named keeps the host off, with the reason logged', () => {
     Object.assign(process.env, { WALNUT_EPHEMERAL_REMOTE_HOSTS: '1', WALNUT_EPHEMERAL_REPLICA_HOST: 'devbox' })
     const warn = vi.spyOn(log.session, 'warn')
     expect(readOnly(new DaemonConnection('devbox', TARGET))).toBe(true)
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('refused'), expect.objectContaining({ host: 'devbox', reason: 'no-dir' }))
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('stays off'), expect.objectContaining({ host: 'devbox', reason: 'no-dir' }))
   })
 })
 

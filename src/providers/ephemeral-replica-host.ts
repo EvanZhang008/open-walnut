@@ -2,16 +2,16 @@
  * The narrow opt-in of the replica check on a real dev box
  * (docs/plan/walnut-replica-servers-impl.md section 13 step 2, WP14).
  *
- * An ephemeral server is read only against every remote host (C10,
- * daemon-connection.ts isReadOnlyRemote): no slice, no leader.configure, no
- * host server, no drain. That is right for every host but one: the check runs
- * an ISOLATED daemon on the box, in its own dir, and needs the ephemeral server
- * to lead it. So:
+ * Since remote-isolation.ts every ssh host of an ephemeral server (with
+ * WALNUT_EPHEMERAL_REMOTE_HOSTS=1) gets an isolated daemon of its own. The
+ * replica check is that same isolation with two differences: its root is the
+ * dir named here, and only on this host does the test server also lead the
+ * host's replica server (slice, leader.configure, host server, drain):
  *
- *   WALNUT_EPHEMERAL_REPLICA_HOST=<alias>   the one host whose read only is lifted
- *   WALNUT_EPHEMERAL_REPLICA_DIR=<abs dir>  that host's isolated daemon dir
+ *   WALNUT_EPHEMERAL_REPLICA_HOST=<alias>   the one host the test server leads
+ *   WALNUT_EPHEMERAL_REPLICA_DIR=<abs dir>  that host's isolated root (daemon in <dir>/daemon)
  *
- * lift it for that alias only, only on an ephemeral server that may reach
+ * granted for that alias only, only on an ephemeral server that may reach
  * remote hosts at all (WALNUT_EPHEMERAL_REMOTE_HOSTS=1), only for a host reached
  * over ssh (the companion's box comes through its tunnel, where no isolated dir
  * applies), only when the dir is not a production daemon dir
@@ -20,8 +20,7 @@
  * not the production replica's `~/.open-walnut-host` or inside it: else this
  * server would install into, and run a replica over, the production replica's
  * data, run and log dirs). Anything else is refused with a logged reason, and
- * the host stays read only. The connection then uses that dir for the host
- * instead of the one its probe would choose, with the dir's own streams dir.
+ * the host stays off.
  */
 import path from 'node:path'
 import { FALLBACK_DAEMON_SUBDIR, PROD_REMOTE_DAEMON_DIR } from './remote-daemon-dir.js'

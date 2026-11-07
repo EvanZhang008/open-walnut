@@ -107,13 +107,29 @@ export function createHostFix(deps: HostFixDeps) {
   var cancelled = false
   var active: Array<() => void> = []
   var wakers: Array<() => void> = []
+  // A test server's isolated daemon on a remote host (WALNUT_INSTALL_HOME, the server's
+  // remote-isolation.ts): every install lands in that HOME, never the user's own, and
+  // nothing is installed system-wide. A live view of deps.env with HOME swapped and the
+  // dirs that would point elsewhere hidden.
+  var INSTALL_HOME = deps.env.WALNUT_INSTALL_HOME || ''
+  var HIDDEN = ['XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_STATE_HOME', 'CLAUDE_CONFIG_DIR', 'BUN_INSTALL']
+  var hidden = function (k: string | symbol) { return typeof k === 'string' && HIDDEN.indexOf(k) >= 0 }
+  var env: Record<string, string | undefined> = !INSTALL_HOME ? deps.env : new Proxy(deps.env, {
+    get: function (t, k) { return k === 'HOME' ? INSTALL_HOME : hidden(k) ? undefined : t[k as string] },
+    has: function (t, k) { return k === 'HOME' || (!hidden(k) && k in t) },
+    ownKeys: function (t) { return Reflect.ownKeys(t).filter(function (k) { return !hidden(k) && k !== 'HOME' }).concat(['HOME']) },
+    getOwnPropertyDescriptor: function (t, k) {
+      if (k === 'HOME') return { value: INSTALL_HOME, enumerable: true, configurable: true, writable: true }
+      return hidden(k) ? undefined : Reflect.getOwnPropertyDescriptor(t, k)
+    },
+  })
 
   type Run = { code: number; stdout: string; stderr: string; timedOut: boolean }
   type Result = Omit<HostFixResult, 'action' | 'durationMs' | 'log'> & { log?: string }
 
   function now(): number { return deps.now ? deps.now() : Date.now() }
-  function home(): string { return deps.env.HOME || '/root' }
-  function pathStr(): string { return deps.env.PATH || '' }
+  function home(): string { return env.HOME || '/root' }
+  function pathStr(): string { return env.PATH || '' }
   function tail(s: string): string { return s.length > LOG_TAIL ? s.slice(s.length - LOG_TAIL) : s }
 
   /**
@@ -157,10 +173,10 @@ export function createHostFix(deps: HostFixDeps) {
       active.push(stop)
       timers.push(setTimeout(stop, Math.max(1, opts.timeoutMs)))
       if (!deps.execFile) return finish({ code: -1, stdout: '', stderr: 'exec unavailable', timedOut: false })
-      var env: Record<string, string | undefined> = Object.assign({}, deps.env, opts.env || {})
+      var childEnv: Record<string, string | undefined> = Object.assign({}, env, opts.env || {})
       try {
         child = deps.execFile(file, args, {
-          env: env, cwd: opts.cwd, encoding: 'utf-8', maxBuffer: 16 * 1024 * 1024, detached: true,
+          env: childEnv, cwd: opts.cwd, encoding: 'utf-8', maxBuffer: 16 * 1024 * 1024, detached: true,
         }, function (err, stdout, stderr) {
           var code = err ? (typeof err.code === 'number' ? err.code : -1) : 0
           var errText = err && typeof err.code !== 'number' ? String(err.message || err) : ''
@@ -319,7 +335,7 @@ export function createHostFix(deps: HostFixDeps) {
 
   // install() answers null when Claude Code got installed, else why not. Every process
   // it starts goes through run(), so cancel() and the deadline reach it.
-  var installer = deps.claudeInstall({ fs: deps.fs, env: deps.env, os: deps.os, runtime: deps.runtime, log: deps.log,
+  var installer = deps.claudeInstall({ fs: deps.fs, env: env, os: deps.os, runtime: deps.runtime, log: deps.log,
     run: run, transcript: transcript, now: now, sleep: sleep, atLeast: atLeast, installUrl: INSTALL_URL, installLine: INSTALL_LINE, download: deps.claudeDownload })
 
   async function claudeVersion(bin: string, nodeDir: string | undefined, deadline: number, logs: string[]): Promise<string | null> {
@@ -432,7 +448,7 @@ export function createHostFix(deps: HostFixDeps) {
     var real = p
     try { if (deps.fs) real = deps.fs.realpathSync(p) } catch { return false }
     var roots = [home() + '/.local/share/claude/versions/']
-    if (deps.env.XDG_DATA_HOME) roots.push(deps.env.XDG_DATA_HOME.replace(/\/$/, '') + '/claude/versions/')
+    if (env.XDG_DATA_HOME) roots.push(env.XDG_DATA_HOME.replace(/\/$/, '') + '/claude/versions/')
     for (var i = 0; i < roots.length; i++) if (real.indexOf(roots[i]) === 0) return true
     return false
   }
@@ -454,7 +470,7 @@ export function createHostFix(deps: HostFixDeps) {
     if (current.kind !== 'native' || !isNativeInstall(bin)) return { ok: false, error: 'unmanaged-install', log: 'not a native-installer claude: ' + bin }
     var before = await claudeVersion(bin, undefined, deadline, logs)
     if (before && need && atLeast(before, need)) return { ok: true, skipped: true, claude: { path: bin, kind: 'native', version: before } }
-    if (truthy(deps.env.DISABLE_UPDATES)) return { ok: false, error: 'updates-disabled', manualCommand: 'claude update' }
+    if (truthy(env.DISABLE_UPDATES)) return { ok: false, error: 'updates-disabled', manualCommand: 'claude update' }
     if (await keychainLocked(deadline) === true) return { ok: false, error: 'keychain-locked', manualCommand: 'claude update' }
     var up = await run(bin, ['update'], { timeoutMs: Math.max(1, Math.min(180000, deadline - now())) })
     transcript(logs, [bin, 'update'], up)
@@ -476,7 +492,7 @@ export function createHostFix(deps: HostFixDeps) {
 
   // ── build-dtach (dtach-build-core.ts, on run() like every step) ──
 
-  var dtach = deps.dtachBuild({ fs: deps.fs, env: deps.env, os: deps.os, run: run, transcript: transcript, now: now, findCompiler: findCompiler })
+  var dtach = deps.dtachBuild({ fs: deps.fs, env: env, os: deps.os, run: run, transcript: transcript, now: now, findCompiler: findCompiler })
 
   /** host.fix: run ONE named action. Never throws; a refusal is a result. */
   async function fix(action: unknown, params?: Record<string, unknown>): Promise<HostFixResult> {
@@ -484,6 +500,9 @@ export function createHostFix(deps: HostFixDeps) {
     var name = typeof action === 'string' ? action : String(action)
     if (ACTIONS.indexOf(name) < 0) return { action: name, ok: false, error: 'unknown-action', log: '', durationMs: 0 }
     if (running) return { action: name, ok: false, error: 'busy', log: 'another fix is running: ' + running, durationMs: 0 }
+    if (INSTALL_HOME && name === 'install-compiler') {
+      return { action: name, ok: false, error: 'isolated', log: 'a test server\'s isolated daemon installs nothing system-wide', durationMs: 0 }
+    }
     running = name
     cancelled = false
     wakers.length = 0

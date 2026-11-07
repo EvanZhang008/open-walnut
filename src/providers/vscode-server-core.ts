@@ -86,7 +86,8 @@ let starting: Promise<VscodeEnsureResult> | null = null
 let lastStartAttempt = 0
 
 function homeDir(): string {
-  return process.env.WALNUT_HOME_OVERRIDE || process.env.HOME || os.homedir()
+  // A test server's isolated daemon installs and keeps code-server in its own HOME (remote-isolation.ts).
+  return process.env.WALNUT_INSTALL_HOME || process.env.WALNUT_HOME_OVERRIDE || process.env.HOME || os.homedir()
 }
 
 function libDir(): string {

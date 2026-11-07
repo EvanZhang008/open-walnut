@@ -75,7 +75,10 @@ import {
   PROD_REMOTE_DAEMON_DIR, buildDaemonDirProbeScript, chooseDaemonDir, daemonDirEnv, parseDaemonDirProbe,
   buildLiveDaemonScanScript, liveDaemonScanFoundNone, parseLiveDaemonScan, productionDaemonDirs, type DaemonDirChoice,
 } from './remote-daemon-dir.js'
-import { ephemeralReplicaDirEnv, ephemeralReplicaHost, type EphemeralReplicaDecision } from './ephemeral-replica-host.js'
+import {
+  buildIsolatedRetireScript, daemonIdentityVerdict, describeIsolationRefusal, isOwnIsolatedRoot, isolatedDaemonEnv, isolatedLayout,
+  isolatedProbeOpts, isolatedRootOfDaemonDir, remoteIsolationFor, resolveIsolatedRoot, type RemoteIsolation,
+} from './remote-isolation.js'
 import {
   buildBunInstallScript, buildBunProbeScript, installTailForError, isRuntimeStartFailure, nextRuntimeAfterStartFailure,
   parseBunInstall, parseBunProbe, type RemoteRuntime,
@@ -296,6 +299,22 @@ export class DaemonServiceProbeError extends Error {
     super(`could not check whether '${hostKey}' runs its session daemon as an OS service (${reason}); ${what}. Walnut checks again on its own.`)
     this.name = 'DaemonServiceProbeError'
     this.hostKey = hostKey
+  }
+}
+
+/**
+ * The daemon that answered is not one this server may use (remote-isolation.ts):
+ * a test server reached a daemon that is not its own, or a real server reached a
+ * test server's. The connect fails and nothing there is stopped or redeployed.
+ */
+export class DaemonIdentityError extends Error {
+  readonly hostKey: string
+  readonly reason: string
+  constructor(hostKey: string, reason: string) {
+    super(`refusing the daemon on '${hostKey}': ${reason}`)
+    this.name = 'DaemonIdentityError'
+    this.hostKey = hostKey
+    this.reason = reason
   }
 }
 
@@ -855,50 +874,54 @@ export class DaemonConnection {
   }
 
   /**
-   * True when this connection must run read-only against a SHARED remote daemon:
-   * an ephemeral server connecting to a real (non-__local__) host. Ephemeral servers
-   * run over a snapshot of production data and may ATTACH to an already-running remote
-   * daemon to debug live sessions — but they must NEVER deploy, start, stop, or redeploy
-   * it. The remote daemon is a singleton (fixed /tmp/open-walnut/daemon.*); two servers
-   * deploying/restarting it is what caused the crash loop. Local daemons are exempt:
-   * same machine + same binary version means ensureRunning() reuses rather than fights.
+   * True when this connection is a test server's view of a host whose daemon it
+   * does not own. Since remote isolation (remote-isolation.ts) a test server never
+   * attaches to a host's production daemon: such a host is refused at connect
+   * (ephemeralRemoteRefused), and every destructive path below still checks this
+   * as the backstop. Its own isolated daemon is not read only; its cloud box (a
+   * test companion on this machine) is attached read only as before.
    */
-  /** A test server's view of a host whose daemon the real Walnut shares (never true outside a test server). */
   get readOnlyRemote(): boolean { return this.isReadOnlyRemote }
 
   private get isReadOnlyRemote(): boolean {
-    return IS_EPHEMERAL && this.hostKey !== '__local__' && !this.ephemeralReplica.lifted
+    return IS_EPHEMERAL && this.hostKey !== '__local__' && this.isolation.mode !== 'isolated'
   }
 
-  private _ephemeralReplica: EphemeralReplicaDecision | null = null
+  private _isolation: { link: string; iso: RemoteIsolation } | null = null
   /**
-   * The replica check's one lifted host (ephemeral-replica-host.ts, WP14):
-   * WALNUT_EPHEMERAL_REPLICA_HOST names it and WALNUT_EPHEMERAL_REPLICA_DIR its
-   * isolated daemon dir, never a production one. Decided once, logged once.
+   * Where a test server stands on this host (remote-isolation.ts): 'shared' for a
+   * real server, 'isolated' (a daemon of its own in a root of its own) or 'off'.
+   * Decided per link kind, logged once.
    */
-  private get ephemeralReplica(): EphemeralReplicaDecision {
-    if (this._ephemeralReplica) return this._ephemeralReplica
-    const d = ephemeralReplicaHost(this.hostKey, process.env, IS_EPHEMERAL)
-    this._ephemeralReplica = d
-    if (d.lifted) {
-      log.session.warn('DaemonConnection: ephemeral replica host, read only lifted for its isolated daemon dir', { host: this.hostKey, dir: d.dir })
-    } else if (d.asked) {
-      log.session.warn('DaemonConnection: ephemeral replica host refused, the host stays read only', { host: this.hostKey, reason: d.reason, ...(d.dir ? { dir: d.dir } : {}) })
+  get isolation(): RemoteIsolation {
+    const link = this.linkKind
+    if (this._isolation?.link === link) return this._isolation.iso
+    const iso = remoteIsolationFor({ hostKey: this.hostKey, env: process.env, ephemeral: IS_EPHEMERAL, link, home: WALNUT_HOME })
+    this._isolation = { link, iso }
+    if (iso.mode === 'isolated') {
+      // Until the probe chose, every path names the test server's own dir, never /tmp/open-walnut.
+      if (!this._dirChoice && iso.roots[0]?.startsWith('/')) this._remoteDir = isolatedLayout(iso.roots[0]).daemonDir
+      log.session.warn('DaemonConnection: test server, this host gets an isolated daemon of its own', { host: this.hostKey, key: iso.key, roots: iso.roots, replica: iso.replica })
+    } else if (iso.mode === 'off') {
+      log.session.warn('DaemonConnection: test server, this host stays off', { host: this.hostKey, reason: iso.reason, ...(iso.dir ? { dir: iso.dir } : {}) })
     }
-    return d
+    return iso
+  }
+
+  /** This test server's isolated root on the host, once the dir probe chose it (null otherwise). */
+  get isolatedRoot(): string | null {
+    return this.isolation.mode === 'isolated' && this._dirChoice ? isolatedRootOfDaemonDir(this._remoteDir) : null
   }
 
   /**
-   * An ephemeral server stays off shared remote hosts unless started with
-   * WALNUT_EPHEMERAL_REMOTE_HOSTS=1. A remote daemon is one per host and hands
-   * relayed work (phone requests, the `walnut` calls of its sessions) to
-   * whichever server it sees first: attached there, a test server could answer
-   * the real Walnut's traffic, and its own test sessions' calls could land on
-   * the real Walnut. Read only when IS_EPHEMERAL, so the flag leaking down a
-   * process tree changes nothing for any other server.
+   * A test server never talks to a host's production daemon: a remote daemon is
+   * one per host and hands relayed work (phone requests, the `walnut` calls of
+   * its sessions) to whichever server it sees first, and everything a test server
+   * did there landed in the production dirs. Read only when IS_EPHEMERAL, so the
+   * flag leaking down a process tree changes nothing for any other server.
    */
   private get ephemeralRemoteRefused(): boolean {
-    return this.isReadOnlyRemote && process.env.WALNUT_EPHEMERAL_REMOTE_HOSTS !== '1'
+    return IS_EPHEMERAL && this.hostKey !== '__local__' && this.isolation.mode === 'off'
   }
 
   /**
@@ -1026,6 +1049,8 @@ export class DaemonConnection {
       connected: () => this._connected && !this._destroyed,
       off: async () => {
         if (bootStartOff()) return 'automatic boot start setup is turned off (WALNUT_DAEMON_BOOT_START)'
+        // A test server's isolated daemon ends with the test server: nothing on the host starts it again.
+        if (this.isolation.mode === 'isolated') return 'it is a test server\'s isolated daemon'
         const { autofixDisabledReason } = await import('../core/hosts/host-autofix.js')
         const { getConfig } = await import('../core/config-manager.js')
         const off = autofixDisabledReason(process.env, (await getConfig().catch(() => null))?.hosts?.[this.hostKey])
@@ -1666,7 +1691,9 @@ export class DaemonConnection {
             if (this.hostKey !== '__local__' && this.hasCapability('clock-host-start-v1')) this.pushTriggers()
             // The daemon now knows which Walnut speaks: the server this Mac keeps
             // on the host may be set up (core/host-server/; off unless enabled).
-            void import('../core/host-server/index.js').then((m) => m.hostServerConnected(this.hostServerHandle())).catch((err) => {
+            // A test server runs one only for the replica check's host, in its own root.
+            const iso = this.isolation
+            if (iso.mode === 'shared' || (iso.mode === 'isolated' && iso.replica)) void import('../core/host-server/index.js').then((m) => m.hostServerConnected(this.hostServerHandle())).catch((err) => {
               log.session.warn('DaemonConnection: host server setup failed to start', { host: this.hostKey, error: err instanceof Error ? err.message : String(err) })
             })
             // And which plugin jobs run on this machine (core/plugin-jobs/; nothing is sent to an older daemon).
@@ -1856,10 +1883,8 @@ export class DaemonConnection {
       }
 
       if (this.ephemeralRemoteRefused) {
-        throw new Error(
-          `ephemeral server: remote host '${this.hostKey}' is off for test servers ` +
-          `(set WALNUT_EPHEMERAL_REMOTE_HOSTS=1 to attach anyway)`,
-        )
+        const iso = this.isolation
+        throw new Error(iso.mode === 'off' ? describeIsolationRefusal(this.hostKey, iso.reason, iso.dir) : `ephemeral server: remote host '${this.hostKey}' is off for test servers`)
       }
 
       // The cloud box: no SSH, no deploy. The companion's own build ships the
@@ -2972,6 +2997,42 @@ export class DaemonConnection {
     }
   }
 
+  /**
+   * A test server's goodbye to this host (remote-isolation.ts): the connection
+   * closes for good, then its isolated daemon is stopped (the stop proves the pid
+   * is that dir's daemon) and its root removed, over the master this connection
+   * still holds. The replica check's root is the operator's own dir: only its
+   * daemon is stopped. 'skipped' for every other connection. Never throws.
+   */
+  async retireIsolatedDaemon(timeoutMs = 15_000): Promise<'retired' | 'stopped' | 'skipped' | 'failed'> {
+    const iso = this.isolation
+    if (iso.mode !== 'isolated' || !this._dirChoice || !this.sshTarget || this.noSsh) return 'skipped'
+    const root = isolatedRootOfDaemonDir(this._remoteDir)
+    if (!isOwnIsolatedRoot(root, iso)) {
+      log.session.warn('DaemonConnection: not retiring a root this test server did not make', { host: this.hostKey, root })
+      return 'skipped'
+    }
+    const controlPath = this._controlPath
+    const args = [...this.baseSshArgs, this.sshHostString]
+    const masterArgs = this.buildSshArgs({ useControlMaster: false })
+    // First the link, so no reconnect redeploys into the root being removed.
+    this.disconnect({ keepSshMaster: true })
+    try {
+      const others = iso.roots.map((r) => resolveIsolatedRoot(r, this._remoteHome)).filter((r): r is string => !!r && r !== root && isOwnIsolatedRoot(r, iso))
+      const out = await runRemoteSh(args, buildIsolatedRetireScript(root, { remove: !iso.replica, alsoRemove: others }), timeoutMs)
+      const outcome = /walnut-isolated-retired/.test(out) ? (iso.replica ? 'stopped' : 'retired') : 'failed'
+      log.session.info('DaemonConnection: test server retired its isolated daemon', { host: this.hostKey, root, outcome })
+      return outcome
+    } catch (err) {
+      log.session.warn('DaemonConnection: retiring the isolated daemon failed (it ends itself once no server is left)', {
+        host: this.hostKey, root, error: err instanceof Error ? err.message : String(err),
+      })
+      return 'failed'
+    } finally {
+      if (controlPath) await exitControlMaster(controlPath, masterArgs, this.sshHostString).catch(() => {})
+    }
+  }
+
   disconnect(opts: { keepSshMaster?: boolean } = {}): void {
     this._destroyed = true
     this._bootStartKeeper?.stop()
@@ -3278,7 +3339,9 @@ export class DaemonConnection {
     // times out or answers garbage fails this connect (retryable), always.
     let output: string
     try {
-      output = await this.sshExec(buildDaemonDirProbeScript({ writeTest: !this.isReadOnlyRemote }), 15_000)
+      const iso = this.isolation
+      // A test server probes only its own dirs: the production ones are never written, nor read.
+      output = await this.sshExec(buildDaemonDirProbeScript(iso.mode === 'isolated' ? isolatedProbeOpts(iso) : { writeTest: !this.isReadOnlyRemote }), 15_000)
     } catch (err) {
       if (isSshTransportFailure(err)) throw err
       const detail = (err instanceof Error ? err.message : String(err)).split('\n').filter(Boolean).pop() ?? 'no answer'
@@ -3290,11 +3353,7 @@ export class DaemonConnection {
     }
     if (probe.arch) this._remoteArch = probe.arch.trim() === 'aarch64' ? 'arm64' : 'x64'
     if (probe.home) this._remoteHome = probe.home
-    // The replica check's lifted host: its isolated dir, never the probe's (a production one).
-    const lifted = this.ephemeralReplica
-    const choice: DaemonDirChoice = lifted.lifted
-      ? { path: lifted.dir, fallback: true, reason: 'the replica check runs an isolated daemon there (WALNUT_EPHEMERAL_REPLICA_DIR)' }
-      : chooseDaemonDir(probe)
+    const choice: DaemonDirChoice = chooseDaemonDir(probe)
     if (choice.path !== this._remoteDir || choice.fallback !== this._dirChoice?.fallback) {
       const logFn = choice.fallback || choice.unusable ? log.session.warn : log.session.info
       logFn.call(log.session, 'DaemonConnection: daemon dir chosen', {
@@ -3306,11 +3365,19 @@ export class DaemonConnection {
     this._dirChoice = choice
   }
 
-  /** Env the daemon needs for the chosen dir (empty on /tmp). */
+  /** Env the daemon needs for the chosen dir (empty on /tmp; a test server's whole isolated layout). */
   private get dirEnv(): Record<string, string> {
-    const lifted = this.ephemeralReplica
-    if (lifted.lifted) return ephemeralReplicaDirEnv(lifted.dir)
+    const iso = this.isolation
+    if (iso.mode === 'isolated') return isolatedDaemonEnv(isolatedRootOfDaemonDir(this._remoteDir), iso.key)
     return daemonDirEnv(this._dirChoice, this._remoteHome ?? undefined)
+  }
+
+  /** The daemon dirs a live daemon of this connection may be running from, the chosen one first. */
+  private get candidateDaemonDirs(): string[] {
+    const iso = this.isolation
+    if (iso.mode !== 'isolated') return productionDaemonDirs(this._remoteDir, this._remoteHome)
+    const dirs = iso.roots.map((r) => resolveIsolatedRoot(r, this._remoteHome)).filter((r): r is string => !!r).map((r) => isolatedLayout(r).daemonDir)
+    return [this._remoteDir, ...dirs.filter((d) => d !== this._remoteDir)]
   }
 
   /** A daemon already answers from the other production dir: that dir is this host's now. */
@@ -3346,6 +3413,9 @@ export class DaemonConnection {
    */
   private async detectServiceTakeover(): Promise<RemoteServiceTakeover> {
     const dir = this._remoteDir
+    // A test server's isolated daemon is never an OS service's: the host's service (its
+    // fixed $HOME unit paths) is the production daemon, which this server never touches.
+    if (this.isolation.mode === 'isolated') return { managed: false, present: [], unknown: [], dir }
     const paths = remoteServiceProbePaths(dir)
     let reason = 'no answer'
     for (let attempt = 0; attempt < SERVICE_PROBE_TIMEOUTS_MS.length; attempt++) {
@@ -3418,7 +3488,7 @@ export class DaemonConnection {
       // the other one is adopted, never duplicated (a second daemon on the same
       // streams dir takes over every CLI of the first). The runtime token comes
       // from the live process's command line (status / diagnostics).
-      const dirs = productionDaemonDirs(this._remoteDir, this._remoteHome)
+      const dirs = this.candidateDaemonDirs
       const output = await this.sshExec(buildLiveDaemonScanScript(dirs), 5_000)
       const status = parseLiveDaemonScan(output, dirs)
       scanSettled = status !== null || liveDaemonScanFoundNone(output)
@@ -3785,7 +3855,7 @@ export class DaemonConnection {
       bunPath: async () => {
         if (this._failedRuntimes.has('bun')) return null
         try {
-          const probe = parseBunProbe(await this.sshExec(buildBunProbeScript(), 20_000))
+          const probe = parseBunProbe(await this.sshExec(buildBunProbeScript(this.bunScriptOpts), 20_000))
           return probe.path && probe.ok ? probe.path : null
         } catch { return null }
       },
@@ -4269,6 +4339,12 @@ export class DaemonConnection {
    * 'unknown command') — the send() timeout is what catches that case, so
    * timeout == drift.
    */
+  /** What the daemon's hello must say: a test server's key and dir; null = it must not be a test server's. */
+  private get identityExpectation(): { key: string; daemonDir: string } | null {
+    const iso = this.isolation
+    return iso.mode === 'isolated' ? { key: iso.key, daemonDir: this._remoteDir } : null
+  }
+
   private async verifyCapabilities(): Promise<boolean> {
     try {
       const helloAt = Date.now()
@@ -4280,6 +4356,11 @@ export class DaemonConnection {
         })
         return false
       }
+      // Which Walnut the daemon serves, as its hello says (remote-isolation.ts): a test
+      // server talks only to its own isolated daemon, a real server never to a test one.
+      // Refused, never redeployed: the daemon there may be the production one.
+      const identity = daemonIdentityVerdict(res, this.identityExpectation)
+      if (!identity.ok) throw new DaemonIdentityError(this.hostKey, identity.reason)
       const caps = Array.isArray(res.capabilities) ? res.capabilities as string[] : []
       this._capabilities = caps
       if (this.ws) this.announceProbeRole(this.ws)
@@ -4335,6 +4416,12 @@ export class DaemonConnection {
       })
       return true
     } catch (err) {
+      if (err instanceof DaemonIdentityError) {
+        log.session.error('DaemonConnection: the daemon there is not the one this server may use, refusing it', { host: this.hostKey, reason: err.reason })
+        // No socket stays open to it, whichever path asked.
+        this.closeTransport()
+        throw err
+      }
       // Timeout or WS closed mid-hello — treat as drift, force redeploy
       log.session.warn('DaemonConnection: hello failed', {
         host: this.hostKey, error: err instanceof Error ? err.message : String(err),
@@ -4654,8 +4741,13 @@ export class DaemonConnection {
    * over), and a failed install keeps its log on the host (bun-install.log in
    * the daemon dir) with the tail in this connect's error.
    */
+  /** A test server's bun lives in its isolated install HOME (remote-isolation.ts). */
+  private get bunScriptOpts(): { installHome?: string } {
+    return this.isolation.mode === 'isolated' ? { installHome: isolatedLayout(isolatedRootOfDaemonDir(this._remoteDir)).installHome } : {}
+  }
+
   private async probeOrInstallBun(): Promise<string | null> {
-    const probeScript = buildBunProbeScript()
+    const probeScript = buildBunProbeScript(this.bunScriptOpts)
     let probe
     try {
       probe = parseBunProbe(await this.sshExec(probeScript, 20_000))
@@ -4684,7 +4776,7 @@ export class DaemonConnection {
     log.session.info('DaemonConnection: bun absent, attempting one-shot install', { host: this.hostKey, logPath })
     let install
     try {
-      install = parseBunInstall(await this.sshExec(buildBunInstallScript(logPath), 90_000))
+      install = parseBunInstall(await this.sshExec(buildBunInstallScript(logPath, undefined, this.bunScriptOpts), 90_000))
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       this._bunInstallNote = `the installer did not finish (${message.split('\n').pop()}); log: ${logPath}`
@@ -4758,9 +4850,12 @@ export class DaemonConnection {
     }).catch((err: unknown) => { throw new WalnutFileUnavailableError(err instanceof Error ? err.message : String(err)) })
     const slot = await this.getRemoteDaemonPath()
     // A host server install of this very build holds the same file.
+    // (Not for a test server's isolated daemon outside the replica check: that install is the host's own.)
+    const iso = this.isolation
     const rootSpec = checkHostRoot(hostServerRootSpec() ?? HOST_ROOT)
-    const home = rootSpec.startsWith('$HOME') ? (await this.sshExec('printf %s "$HOME"', 10_000)).trim() : ''
-    const alsoAt = !rootSpec.startsWith('$HOME') ? [`${rootSpec}/app/${file.id}/walnut`] : home.startsWith('/') ? [`${rootSpec.replace('$HOME', home)}/app/${file.id}/walnut`] : []
+    const lookThere = iso.mode !== 'isolated' || iso.replica
+    const home = lookThere && rootSpec.startsWith('$HOME') ? (await this.sshExec('printf %s "$HOME"', 10_000)).trim() : ''
+    const alsoAt = !lookThere ? [] : !rootSpec.startsWith('$HOME') ? [`${rootSpec}/app/${file.id}/walnut`] : home.startsWith('/') ? [`${rootSpec.replace('$HOME', home)}/app/${file.id}/walnut`] : []
     // Run once before it goes in (its daemon version, which also proves it runs here), and only with room for it.
     const fit = { version: this.getExpectedDaemonVersion() }
     const rawBytes = file.gz.length >= 18 ? file.gz.readUInt32LE(file.gz.length - 4) : 0
@@ -5190,7 +5285,9 @@ export class DaemonConnection {
       // saves 5-30s and avoids EBADPLATFORM on hosts without npm.
       if (!this._bunPath) {
         try {
-          await exec(`${userShellPathScript(preamble)}\ncd ${shq(dir)} && node -e "require('ws')" 2>/dev/null || (rm -f package.json && npm install --prefix ${shq(dir)} ws 2>/dev/null)`, 30_000)
+          // npm keeps its cache under HOME: a test server's goes to its own install HOME.
+          const npmEnv = this.bunScriptOpts.installHome ? `env HOME=${shq(this.bunScriptOpts.installHome)} npm_config_cache=${shq(`${this.bunScriptOpts.installHome}/.npm`)} ` : ''
+          await exec(`${userShellPathScript(preamble)}\ncd ${shq(dir)} && node -e "require('ws')" 2>/dev/null || (rm -f package.json && ${npmEnv}npm install --prefix ${shq(dir)} ws 2>/dev/null)`, 30_000)
         } catch {
           log.session.debug('DaemonConnection: ws install skipped', { host: this.hostKey })
         }
@@ -7373,6 +7470,23 @@ export function summarizeConnectFailure(raw: string, maxLen = 160): string {
  * a hook edit takes effect without a daemon restart. Fire-and-forget per
  * host; each push is hash-skipped daemon-side when nothing changed.
  */
+/**
+ * A test server shutting down retires every isolated daemon it started on a
+ * remote host (remote-isolation.ts), all hosts at once, each bounded. Nothing
+ * for a real server.
+ */
+/** The remote hosts this test server runs an isolated daemon on (remote-isolation.ts). */
+export function isolatedRemoteHosts(): string[] {
+  if (!IS_EPHEMERAL) return []
+  return [...new Set([...connectionPool.values()].filter((c) => c.host !== '__local__' && c.isolation.mode === 'isolated').map((c) => c.host))]
+}
+
+export async function retireIsolatedRemoteDaemons(timeoutMs = 15_000): Promise<Array<{ host: string; outcome: string }>> {
+  if (!IS_EPHEMERAL) return []
+  const conns = [...new Set(connectionPool.values())].filter((c) => c.host !== '__local__' && c.isolation.mode === 'isolated')
+  return Promise.all(conns.map(async (c) => ({ host: c.host, outcome: await c.retireIsolatedDaemon(timeoutMs) })))
+}
+
 export function pushDaemonHooksToAllHosts(): void {
   for (const conn of connectionPool.values()) {
     if (conn.connected) conn.pushDaemonHooks()

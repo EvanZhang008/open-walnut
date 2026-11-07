@@ -349,6 +349,16 @@ export async function runEphemeralChild(): Promise<void> {
     }, 10_000)
     forceExit.unref()
 
+    // The daemons it ran on remote hosts, each in its own root there (remote-isolation.ts):
+    // stopped and removed while their ssh masters are still up. Bounded; a daemon left
+    // behind ends itself once no server has come for a while.
+    try {
+      const [{ retireIsolatedRemoteDaemons, isolatedRemoteHosts }, { endTestServerRemoteTerminals }] = await Promise.all([
+        import('../providers/daemon-connection.js'), import('../web/terminal/dtach-lifecycle.js'),
+      ])
+      const retire = endTestServerRemoteTerminals(isolatedRemoteHosts()).catch(() => {}).then(() => retireIsolatedRemoteDaemons(4_000))
+      await Promise.race([retire, new Promise((r) => setTimeout(r, 6_000))])
+    } catch { /* best-effort */ }
     try { await stopServer() } catch { /* best-effort */ }
     // Stop our own daemon before deleting its dir, or it keeps writing there.
     // Bounded: stopIfIsolated polls the pid; the parent-pid watchdog covers the rest.

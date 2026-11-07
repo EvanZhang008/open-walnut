@@ -185,8 +185,19 @@ server is isolated by construction, so nothing it does reaches the real Walnut:
   never fire (ones set there do), the copied phone push tokens
   are removed, no plugin syncs tasks (installed ones included), and there is no cloud bridge
   push and no heartbeat;
-- shared remote hosts stay off unless it is started with `WALNUT_EPHEMERAL_REMOTE_HOSTS=1`,
-  because a remote daemon hands relayed work to whichever server it sees first;
+- remote hosts stay off unless it is started with `WALNUT_EPHEMERAL_REMOTE_HOSTS=1`, and then
+  each ssh host gets an isolated daemon of the test server's own, never the host's production
+  daemon (which hands relayed work to whichever server it sees first)
+  (`src/providers/remote-isolation.ts`): everything it writes there is under
+  `/tmp/open-walnut-test-<key>` (else `~/.cache/open-walnut-test/<key>`): its daemon dir,
+  streams, task dirs, installs (bun, host fixes, dtach run with HOME in its `home/`) and terminal
+  sockets. Both daemon twins say their dir and the test server's key in their hello; a test
+  server refuses any other daemon, a real server refuses a test server's, and the daemon refuses
+  to start in a production dir. The test server stops it and removes the root when it exits, and
+  a daemon left with no server for 30 minutes ends itself the same way. Exceptions that stay in
+  the real home on purpose: what a session's CLI writes (`~/.claude`) and the shared spawn
+  journal and CLI owner records. Ratchet: `tests/providers/remote-write-paths-ratchet.test.ts`
+  lists every remote-exec site in `src/` and why it stays in the root;
 - search is keyword only and voice is not set up: no isolated server (an ephemeral child, the
   test runner, a data home in a temp dir or a task dir, a HOME that is not the account's own)
   loads the embedding model, about 2.2 GB per worker lane plus a full re-embed of the copied

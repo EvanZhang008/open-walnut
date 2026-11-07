@@ -70,16 +70,28 @@ const PROBE_DONE = 'walnut-dir-probe-done'
 export interface DirProbeScriptOpts {
   /** Create/write/exec test. False = only look for a live daemon and free space. */
   writeTest?: boolean
-  /** Test seams: absolute dirs instead of the real ones. */
+  /** Absolute dirs instead of the production ones: test seams, and a test server's isolated dirs (remote-isolation.ts). */
   tmpDir?: string
   cacheDir?: string
+  /** The fallback dir relative to the host's $HOME (a test server's `.cache/open-walnut-test/<key>/daemon`). */
+  cacheSubdir?: string
+  /** No fallback dir at all (the replica check's one named dir). */
+  noCache?: boolean
+  /**
+   * The dir's parent must be ours too, never a symlink (an isolated dir nests in a root
+   * of its own: /tmp/open-walnut-test-<key>/daemon). Never set for production, whose
+   * parent is /tmp.
+   */
+  guardParent?: boolean
   minFreeMb?: number
 }
 
 /** One POSIX sh script (run through `sh -s`) printing `key=value` lines between a header and a done line. */
 export function buildDaemonDirProbeScript(opts: DirProbeScriptOpts = {}): string {
   const tmp = shq(opts.tmpDir ?? PROD_REMOTE_DAEMON_DIR)
-  const cache = opts.cacheDir ? shq(opts.cacheDir) : `"\${HOME:+$HOME/${FALLBACK_DAEMON_SUBDIR}}"`
+  const cache = opts.noCache ? "''"
+    : opts.cacheDir ? shq(opts.cacheDir)
+    : `"\${HOME:+$HOME/${(opts.cacheSubdir ?? FALLBACK_DAEMON_SUBDIR).replace(/[^A-Za-z0-9._/-]/g, '')}}"`
   const min = opts.minFreeMb ?? MIN_DAEMON_FREE_MB
   const check = opts.writeTest === false ? 'echo unchecked' : 'w_check "$1"'
   return [
@@ -96,7 +108,10 @@ export function buildDaemonDirProbeScript(opts: DirProbeScriptOpts = {}): string
     '  d=$1',
     '  [ -n "$d" ] || { echo no-home; return; }',
     '  if [ -e "$d" ] && [ ! -d "$d" ]; then echo not-a-directory; return; fi',
+    // An isolated root someone else made (or a symlink planted in its place) is never ours to fill.
+    ...(opts.guardParent ? ['  p=$(dirname "$d"); if [ -L "$p" ] || { [ -e "$p" ] && [ ! -O "$p" ]; }; then echo not-owned; return; fi'] : []),
     '  e=$(mkdir -p "$d" 2>&1) || { w_reason "$e"; return; }',
+    ...(opts.guardParent ? ['  chmod 700 "$p" 2>/dev/null'] : []),
     // A dir another user owns (or a symlink someone planted) is theirs to swap
     // the daemon in: never use it, even when it happens to be writable.
     '  if [ -L "$d" ] || [ ! -O "$d" ]; then echo not-owned; return; fi',
@@ -108,8 +123,8 @@ export function buildDaemonDirProbeScript(opts: DirProbeScriptOpts = {}): string
     '  rm -f "$f" 2>/dev/null',
     '  echo "$r"',
     '}',
-    // Free space of the dir, or of its parent when it does not exist yet.
-    'w_free() { t=$1; [ -d "$t" ] || t=$(dirname "$t"); df -Pk "$t" 2>/dev/null | awk \'NR==2 { print int($4 / 1024) }\'; }',
+    // Free space of the dir, or of its nearest existing parent while it does not exist yet.
+    'w_free() { t=$1; while [ -n "$t" ] && [ "$t" != / ] && [ ! -d "$t" ]; do t=$(dirname "$t"); done; df -Pk "$t" 2>/dev/null | awk \'NR==2 { print int($4 / 1024) }\'; }',
     // Only a dir we own can hold OUR live daemon (a planted pid file must not steer the connect),
     // and only a pid that is a daemon (a stale pid file's pid may name another process now).
     ...DAEMON_PID_SH,
