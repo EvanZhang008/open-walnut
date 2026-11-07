@@ -458,12 +458,12 @@ describe('who asks: Walnut checks the asking process, never only the session id 
     const { handleGatewayCapability } = await import('../../src/core/peers/capability-router.js')
     const viaDaemon = (args: Record<string, unknown>, callerProof?: Record<string, unknown>) =>
       handleGatewayCapability('tools.call', sid, { name: 'approval_request', args, ...(callerProof ? { callerProof } : {}) }, 'devbox')
-    const seen = await viaDaemon({ what: 'Identity: relayed, seen' }, { v: 1, verified: true, pid: 4242, process: 'python3', ranBy: 'python3 release.py --token sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789' })
+    const seen = await viaDaemon({ what: 'Identity: relayed, seen' }, { v: 1, verified: true, pid: 4242, process: 'python3', ranBy: 'python3 release.py --token=FAKE-TOKEN-NOT-REAL-zq7w4k9x2m' })
     expect(seen.ok, JSON.stringify(seen)).toBe(true)
     const seenReq = (seen.ok ? seen.result : {}) as Record<string, any>
     expect(seenReq.approval.requester).toMatchObject({ sessionId: sid, identity: 'verified', process: 'python3' })
     expect(seenReq.approval.requester.ranBy).toMatch(/^python3 release\.py/)
-    expect(seenReq.approval.requester.ranBy).not.toContain('abcdefghijklmnop')
+    expect(seenReq.approval.requester.ranBy).not.toContain('FAKE-TOKEN-NOT-REAL')
     const outsideRelay = await viaDaemon({ what: 'Identity: relayed, outside' }, { v: 1, verified: false, pid: 4243 })
     expect(((outsideRelay.ok ? outsideRelay.result : {}) as Record<string, any>).approval.requester).toMatchObject({ identity: 'unverified', check: 'outside' })
     const strictSeen = await viaDaemon({ what: 'Identity: relayed strict, seen', detail: 'ctx', mode: 'biometric', single_use: true, signing_key_id: active.id, timeout_ms: 60_000 }, { v: 1, verified: true, pid: 4242 })
