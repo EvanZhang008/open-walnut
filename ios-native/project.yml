@@ -177,7 +177,7 @@ targets:
         # iOS and App Store Connect want an extension's versions to match its app's: the
         # script phase below copies the app's version and build number at build time, so the
         # app's line stays the one build-number line the TestFlight bump rewrites.
-        CFBundleShortVersionString: "1.0.1"
+        CFBundleShortVersionString: "1.0.2"
         NSFaceIDUsageDescription: Walnut uses Face ID to unlock your passwords before it fills one in.
         NSExtension:
           NSExtensionPointIdentifier: com.apple.authentication-services-credential-provider-ui
