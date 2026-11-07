@@ -1,6 +1,6 @@
 {
   "suite": "playwright: chromium, chromium-host-fixture",
-  "count": 230,
+  "count": 229,
   "failures": [
     "action-cards-and-time.spec.ts :: suggest action cards › card renders, its button runs the real op, and the receipt survives a reload",
     "action-cards-and-time.spec.ts :: time tracking › real interaction earns human time banked against the right task and kind",
@@ -124,7 +124,6 @@
     "pdf-preview.spec.ts :: PDF links remain clickable and unsafe URLs are excluded",
     "pdf-preview.spec.ts :: trackpad pinch zooms only the PDF and normal scrolling still works",
     "perm-store-same-browser-instant.spec.ts :: a permission answered on one surface settles the others before the server answers",
-    "phone-home.spec.ts :: C68: a collapsed leader says 1 need you, and the tap shows the worker",
     "phone-session.spec.ts :: a long last turn opens at its start; 20 calls are one row; the jump pill counts what arrives (C69, C35)",
     "pinned-folder-drag.spec.ts :: a loose card dragged down over a folder's cards: its gap only moves with the pointer, and the folder row lights while the gap is inside",
     "pinned-group-drag.spec.ts :: dragging a whole group opens a slot — siblings displace",
@@ -356,7 +355,6 @@
     "pdf-preview.spec.ts :: PDF links remain clickable and unsafe URLs are excluded": "Error: expect(locator).toHaveText(expected) failed",
     "pdf-preview.spec.ts :: trackpad pinch zooms only the PDF and normal scrolling still works": "Error: Timeout 5000ms exceeded while waiting on the predicate",
     "perm-store-same-browser-instant.spec.ts :: a permission answered on one surface settles the others before the server answers": "Error: expect(locator).toBeAttached() failed",
-    "phone-home.spec.ts :: C68: a collapsed leader says 1 need you, and the tap shows the worker": "[fails on a clean main too (A/B 2026-10-31)] Error: expect(locator).toHaveText(expected) failed",
     "phone-session.spec.ts :: a long last turn opens at its start; 20 calls are one row; the jump pill counts what arrives (C69, C35)": "Error: expect(locator).toHaveText(expected) failed",
     "pinned-folder-drag.spec.ts :: a loose card dragged down over a folder's cards: its gap only moves with the pointer, and the folder row lights while the gap is inside": "Error: the gap never moves back while the pointer moves down",
     "pinned-group-drag.spec.ts :: dragging a whole group opens a slot — siblings displace": "Error: the dragged group never moved above Group A — no slot opened",

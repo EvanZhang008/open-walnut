@@ -133,14 +133,16 @@
     min-height: 52px;
   }
 
-  /* The search row: field, New task and Display at 44 px. */
+  /* The search row: field, New task, Display and Board at 44 px. */
   .app-shell-navigation .todo-panel .todo-search-input,
   .app-shell-navigation .todo-panel .new-launcher-btn,
-  .app-shell-navigation .todo-panel .tp-btn {
+  .app-shell-navigation .todo-panel .tp-btn,
+  .app-shell-navigation .todo-panel .todo-panel-board {
     min-height: 44px;
   }
 
-  .app-shell-navigation .todo-panel .tp-btn {
+  .app-shell-navigation .todo-panel .tp-btn,
+  .app-shell-navigation .todo-panel .todo-panel-board {
     min-width: 44px;
   }
 

@@ -310,7 +310,7 @@ test('C66, C67: a row says Needs you in words, a prompt names its tool, attentio
   expect(errors).toEqual([])
 })
 
-test('C68: a collapsed leader says 1 need you, and the tap shows the worker', async ({ page }) => {
+test('C68: a collapsed leader says 1 Needs you, and the tap shows the worker', async ({ page }) => {
   const errors = await bootHome(page)
   await expandProject(page, 'Walnut')
   await revealRow(page, SESSION_TASK_TITLE)
@@ -331,7 +331,7 @@ test('C68: a collapsed leader says 1 need you, and the tap shows the worker', as
   if (await chevron.evaluate((el) => el.classList.contains('expanded'))) await chevron.tap()
   await expect(page.locator(`.todo-panel .todo-panel-item[data-task-id="${worker}"]`)).toHaveCount(0)
   const pill = parent.locator('.phone-row-need-you-parent')
-  await expect(pill).toHaveText('1 need you')
+  await expect(pill).toHaveText('1 Needs you')
   const box = (await pill.boundingBox())!
   expect(box.x + box.width).toBeLessThanOrEqual(390)
   await pill.tap()
