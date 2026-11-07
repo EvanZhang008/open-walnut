@@ -238,6 +238,11 @@ interface TodoPanelProps {
   customTierIds?: Record<string, Set<string>>;
   /** When true, suppress opening the detail panel for the focused task (e.g. chat task-ref clicks). */
   suppressDetail?: boolean;
+  /**
+   * The tab bar is always on (the browser extension's first page, where the panel is the only list
+   * and has no sidebar): the person's "Show tab bar" choice is Home's, not this panel's.
+   */
+  tabBarAlways?: boolean;
   /** Set of session IDs currently displayed in session columns. */
   openSessionIds?: Set<string>;
   /** Set of task IDs whose session is open on the home page — highlights their cards. */
@@ -2225,7 +2230,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
 
 // ── TodoPanel ──
 
-export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onDelete, onBatchSetPhase, onBatchDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, focusScope, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onStartSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier: onSetTierProp, onSetDate, onSetStartDate, pinnedTaskIds, focusTaskIds, waitTaskIds, customTiers: customTiersLive, customTiersLoaded, customTierIds, suppressDetail, openSessionIds, openSessionTaskIds, onOperationError, externalProject, onProjectChange, onOpenLauncher, onOpenLauncherForProject, onOpenLauncherForTier, onOpenSearchSession, taskGroups, hiddenGroups, onGroupTasks, onAddToGroup, onUngroupTask, onUngroupTasks, onRenameGroup, onSetGroupHidden, folderMeta, onCreateFolder, onDeleteFolder, onMoveFolderToProject, onSetFolderParent, banner }: TodoPanelProps) {
+export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onDelete, onBatchSetPhase, onBatchDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, focusScope, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onStartSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier: onSetTierProp, onSetDate, onSetStartDate, pinnedTaskIds, focusTaskIds, waitTaskIds, customTiers: customTiersLive, customTiersLoaded, customTierIds, suppressDetail, tabBarAlways = false, openSessionIds, openSessionTaskIds, onOperationError, externalProject, onProjectChange, onOpenLauncher, onOpenLauncherForProject, onOpenLauncherForTier, onOpenSearchSession, taskGroups, hiddenGroups, onGroupTasks, onAddToGroup, onUngroupTask, onUngroupTasks, onRenameGroup, onSetGroupHidden, folderMeta, onCreateFolder, onDeleteFolder, onMoveFolderToProject, onSetFolderParent, banner }: TodoPanelProps) {
   // TEMP drag-flash trace — remove after diagnosis
   const __renderCountRef = useRef(0);
   __renderCountRef.current += 1;
@@ -2454,7 +2459,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // independent — in single-section mode the region renders regardless of its
   // collapse flag (a tab you just picked must never show up already folded).
   const [activeSection, setActiveSection] = useState<TodoSection>(readSection);
-  const [quickViews, setQuickViews] = useNavigationPreference(TASK_SHORTCUTS_KEY);
+  const [storedQuickViews, setQuickViews] = useNavigationPreference(TASK_SHORTCUTS_KEY);
+  const quickViews = tabBarAlways || storedQuickViews;
   const [tabBarHidden] = useNavigationList(TAB_BAR_HIDDEN_TABS_KEY, DEFAULT_HIDDEN_TABS);
   // Read by the locate effect, whose deps deliberately leave out view state.
   const tabBarRef = useRef({ shown: quickViews, hidden: tabBarHidden });
@@ -7879,6 +7885,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         heldCounts={sectionHeldCounts}
         countsReady={!loading}
         customTiers={customTiers}
+        fixed={tabBarAlways}
       />}
 
       {/* The filter row sits right above the list it narrows, below the tier heading

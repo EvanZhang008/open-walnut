@@ -52,9 +52,11 @@ interface TodoSectionTabsProps {
   countsReady?: boolean;
   /** User-defined tiers: each gets its own tab between Parked and Recent. */
   customTiers?: CustomTierDef[];
+  /** The bar is always on where it is (the browser extension's first page): no "Show tab bar" switch. */
+  fixed?: boolean;
 }
 
-export const TodoSectionTabs = memo(function TodoSectionTabs({ active, onChange, counts, heldCounts, countsReady = true, customTiers }: TodoSectionTabsProps) {
+export const TodoSectionTabs = memo(function TodoSectionTabs({ active, onChange, counts, heldCounts, countsReady = true, customTiers, fixed = false }: TodoSectionTabsProps) {
   const { notify } = useNotifications();
   const [hidden, setHidden] = useNavigationList(TAB_BAR_HIDDEN_TABS_KEY, DEFAULT_HIDDEN_TABS);
   const [hideEmpty, setHideEmpty] = useNavigationPreference(TAB_BAR_HIDE_EMPTY_KEY, true);
@@ -110,8 +112,10 @@ export const TodoSectionTabs = memo(function TodoSectionTabs({ active, onChange,
     ...groups.tiers.map(tabItem),
     { divider: true },
     { key: 'hide-empty', label: 'Hide empty tabs', toggle: true, keepOpen: true, checked: hideEmpty, title: 'A view with no tasks leaves the bar (parked tasks count as tasks); the lists you made always stay', onSelect: () => setHideEmpty(!hideEmpty) },
-    { divider: true },
-    { key: 'tab-bar', label: 'Show tab bar', toggle: true, checked: true, onSelect: hideBar },
+    ...(fixed ? [] : [
+      { divider: true },
+      { key: 'tab-bar', label: 'Show tab bar', toggle: true, checked: true, onSelect: hideBar },
+    ] satisfies ContextMenuItem[]),
   ];
 
   return (

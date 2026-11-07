@@ -35,8 +35,9 @@ export interface AskObjectDraft {
   isKnownProject: (name: string) => boolean;
 }
 
-export function useAskObjectDraft(draftId: string): AskObjectDraft {
-  const [draft, setDraft] = useState<DraftColumn>(() => initialAskDraft(draftId));
+/** `task`: the row opens as a new task (Start Task) rather than Ask Walnut (the browser extension's New task). */
+export function useAskObjectDraft(draftId: string, opts: { task?: boolean } = {}): AskObjectDraft {
+  const [draft, setDraft] = useState<DraftColumn>(() => (opts.task ? leaveWalnutDraft(initialAskDraft(draftId)) : initialAskDraft(draftId)));
   const draftRef = useRef(draft);
   draftRef.current = draft;
 

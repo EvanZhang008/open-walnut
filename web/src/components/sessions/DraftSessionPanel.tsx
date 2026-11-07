@@ -381,13 +381,18 @@ interface Props {
   composerBar?: ReactNode;
   /** In plain chat: a pill at the top of the composer (SessionPanel `composerPill`). */
   composerPill?: ReactNode;
+  /**
+   * The host starts a task that names no folder in the task's own directory (the browser
+   * extension's New task): no folder bar, no picker, no "pick a folder" notice, and no hint line.
+   */
+  ownFolder?: boolean;
 }
 
 export function DraftSessionPanel({
   draft, autoFocus, onStart, onSaveAsTask, onClose, headerLeading,
   onPathChange, onProjectChange, onMetaChange, onModeChange, isKnownProject, onAiParse, onWalnutToggle,
   onTaskFieldChange, onReturnFieldToWalnut, hostNotice, intro, gateError, onGateErrorClear, restoreImages,
-  onCustomizeWalnut, repairTarget, phoneLayer, walnutLabel, plainChat, placeholder, composerBar, composerPill,
+  onCustomizeWalnut, repairTarget, phoneLayer, walnutLabel, plainChat, placeholder, composerBar, composerPill, ownFolder,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const phoneDraft = usePhoneLayerWithBar({
@@ -653,8 +658,9 @@ export function DraftSessionPanel({
   // no-cwd case (open the picker, keep the text) can never degrade into the
   // sync-false branch of dispatchSend that wipes the draft. See Props.onStart.
   const startWith = useCallback(async (body: string, images?: ImageAttachment[]): Promise<boolean> => {
-    // Ask Walnut needs no folder — the server owns the cwd (WALNUT_HOME).
-    if (!draft.cwd && !draft.walnut) {
+    // Ask Walnut needs no folder — the server owns the cwd (WALNUT_HOME); nor does a host that
+    // starts such a task in its own directory.
+    if (!draft.cwd && !draft.walnut && !ownFolder) {
       // The picker is the RECOVERY, not the explanation (alone it read as a dead
       // Start button), so say why next to the pill. Cleared once a folder lands.
       setNeedsFolder(true);
@@ -664,7 +670,7 @@ export function DraftSessionPanel({
     const override = overrideNextRef.current;
     overrideNextRef.current = false;
     return onStart(draft.id, body, images, override ? { overrideReadiness: true } : undefined);
-  }, [draft.cwd, draft.walnut, draft.id, onStart]);
+  }, [draft.cwd, draft.walnut, draft.id, onStart, ownFolder]);
 
   // "Start anyway" (the host gate's override) is a send by another name: click
   // ChatInput's own send button (in THIS column) so pasted IMAGES ride along and
@@ -740,7 +746,7 @@ export function DraftSessionPanel({
           pre-selected so the common case costs zero clicks; Ask Walnut opts
           into the Personal-AI session. Bound/fork drafts are already committed
           to a shape and keep the one-line hint instead. */}
-      <div className="draft-session-body">
+      {!ownFolder && <div className="draft-session-body">
         {showTabs || isWalnut ? (
           <div className="draft-intent-stack">
             {/* The fork itself only renders where there is a choice to make. A
@@ -837,7 +843,7 @@ export function DraftSessionPanel({
                 : isBound ? BOUND_HINT : HINT}
           </div>
         )}
-      </div>
+      </div>}
 
       <div className="session-panel-input">
         {/* Why the last Start didn't start. Above the launch bar so it sits
@@ -857,7 +863,7 @@ export function DraftSessionPanel({
             Pick a folder first — the session runs in it.
           </div>
         )}
-        <DraftLaunchBar
+        {!ownFolder && <DraftLaunchBar
           draft={draft}
           pickerOpen={pickerOpen}
           onOpenPicker={() => setPickerOpen(true)}
@@ -880,7 +886,7 @@ export function DraftSessionPanel({
           composerText={text}
           getComposer={getComposer}
           openMenuNonce={openMenuNonce}
-        />
+        />}
         <ChatInput
           onSend={(body, images) => startWith(body, images)}
           onValueChange={setText}

@@ -18,7 +18,17 @@ function subscribe(onChange: () => void): () => void {
   return () => media.removeEventListener('change', onChange);
 }
 
+/**
+ * A narrow page that is no phone: the browser extension's side panel and popup frame Walnut at
+ * about 400 px beside a desktop browser's page (web/src/popout/PopoutExtPanel.tsx). Its task panel
+ * searches in place and opens rows in the frame, as a desktop's does, never a phone's full-screen
+ * layers. Set once, for the whole document, before anything renders.
+ */
+let notPhone = false;
+export function markNotAPhone(): void { notPhone = true; }
+
 export function isPhoneLayout(): boolean {
+  if (notPhone) return false;
   if (typeof window === 'undefined' || !window.matchMedia) return false;
   return window.matchMedia(PHONE_LAYOUT_QUERY).matches;
 }
