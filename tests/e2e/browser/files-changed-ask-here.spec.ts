@@ -110,6 +110,42 @@ async function textRects(root: Locator, phrase: string, nth = 0, scroll = true):
   return rects!
 }
 
+/** Hovers each block of `root` on screen (on its first word, as a reader
+ *  reaches for it) and checks the inline Ask lands off that block's words.
+ *  Returns how many
+ *  blocks were looked at, and how many of them wrap (a full first line, where
+ *  the chip covered its last word: 2026-11-07). */
+async function chipOffWords(page: Page, view: Locator, root: Locator): Promise<{ seen: number; wrapped: number }> {
+  const chip = view.locator('.fv-ask-block')
+  const vh = page.viewportSize()!.height
+  const blocks = root.locator('p, h1, h2, h3, td')
+  const n = Math.min(await blocks.count(), 16)
+  let seen = 0
+  let wrapped = 0
+  for (let i = 0; i < n; i++) {
+    const words = (await blocks.nth(i).evaluate((el) => {
+      const r = el.ownerDocument.createRange()
+      r.selectNodeContents(el)
+      return Array.from(r.getClientRects()).filter((q) => q.width > 0 && q.height > 0)
+        .map((q) => ({ left: q.left, right: q.right, top: q.top, bottom: q.bottom }))
+    }))
+    if (!words.length || words[0].top < 80 || words[words.length - 1].bottom > vh - 40) continue
+    const first = words[0]
+    await page.mouse.move(first.left + 3, (first.top + first.bottom) / 2, { steps: 2 })
+    await expect(chip).toBeVisible({ timeout: 3_000 })
+    // The chip follows the pointer a frame later.
+    await page.waitForTimeout(150)
+    const c = (await chip.boundingBox())!
+    for (const w of words) {
+      const hit = c.x < w.right - 0.5 && c.x + c.width > w.left + 0.5 && c.y < w.bottom - 0.5 && c.y + c.height > w.top + 0.5
+      expect(hit, `the inline Ask on block ${i} covers its words (chip ${JSON.stringify(c)}, words ${JSON.stringify(w)})`).toBe(false)
+    }
+    seen++
+    if (new Set(words.map((w) => Math.round(w.top))).size > 1) wrapped++
+  }
+  return { seen, wrapped }
+}
+
 /** The same inside the HTML preview's frame, in top-document coordinates. */
 async function frameTextRects(view: Locator, phrase: string): Promise<Rect[]> {
   const rects = await view.frameLocator('.fv-html-preview').locator('body').evaluate((el, needle) => {
@@ -417,6 +453,47 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
       await page.waitForTimeout(300)
       await expect(chip, 'no inline Ask over the passage while its card is open').toHaveCount(0)
     })
+  })
+
+  test('Files: the hovered block\'s inline Ask never covers its words, and a drag from a line\'s end selects', async ({ page }) => {
+    const panel = await openSession(page)
+    // Narrow enough that paragraphs wrap and their first line runs to the edge.
+    await page.setViewportSize({ width: 1100, height: 820 })
+    let view = await openFile(panel, MD_FILE)
+    const editor = view.locator('.fv-wysiwyg-editor .ProseMirror')
+    await expect(editor).toContainText(MD_PASSAGE)
+    const md = await chipOffWords(page, view, editor)
+    expect(md.seen, 'markdown blocks looked at').toBeGreaterThan(2)
+    expect(md.wrapped, 'a wrapped markdown block was among them').toBeGreaterThan(0)
+    // A drag that starts at the right end of a wrapped block's first line (where
+    // the chip sat) selects words.
+    const wrappedEnd = await editor.locator('p').evaluateAll((els) => {
+      for (const el of els) {
+        const r = el.ownerDocument.createRange()
+        r.selectNodeContents(el)
+        const rects = Array.from(r.getClientRects()).filter((q) => q.width > 0)
+        if (new Set(rects.map((q) => Math.round(q.top))).size < 2) continue
+        const top = Math.min(...rects.map((q) => q.top))
+        const line = rects.filter((q) => Math.round(q.top) === Math.round(top))
+        const right = Math.max(...line.map((q) => q.right))
+        if (top < 80 || top > window.innerHeight - 60) continue
+        return { x: right - 4, y: top + line[0].height / 2 }
+      }
+      return null
+    })
+    expect(wrappedEnd, 'a wrapped paragraph on screen').not.toBeNull()
+    await page.mouse.move(wrappedEnd!.x - 40, wrappedEnd!.y, { steps: 2 })
+    await page.mouse.move(wrappedEnd!.x, wrappedEnd!.y, { steps: 2 })
+    await page.mouse.down()
+    await page.mouse.move(wrappedEnd!.x - 120, wrappedEnd!.y, { steps: 6 })
+    await page.mouse.up()
+    expect((await page.evaluate(() => window.getSelection()?.toString() ?? '')).trim().length, 'the drag from the line end selected words').toBeGreaterThan(3)
+    await page.keyboard.press('Escape')
+
+    view = await openFile(panel, MDX_FILE)
+    const preview = view.locator('.fv-md-preview')
+    await expect(preview).toContainText(MDX_LINE, { timeout: 10_000 })
+    expect((await chipOffWords(page, view, preview)).seen, 'read-only render blocks looked at').toBeGreaterThan(0)
   })
 
   test('Files: the markdown Source tab (pill)', async ({ page }) => {

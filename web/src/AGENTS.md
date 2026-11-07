@@ -710,7 +710,9 @@ show inline after the open ones, other completed hits that show the query fold i
   whenever the panel can ask): the selection pill's second action (`SelectionAskPill` with
   `onAskHere`: `Ask here` / `Quote in chat`; the WYSIWYG bubble menu has the same pair), and an
   inline `Ask` on the block under the pointer (`askableBlockOf`, `blockQuoteOf`: the whole
-  paragraph, item, heading, cell or code block). The card is STILL the timeline's: the layer lends
+  paragraph, item, heading, cell or code block), placed off the block's words by `placeAskChip`
+  (after its last line, else beside it, else under it; a full first line once hid its last word
+  and swallowed a drag; not over the HTML preview, whose page is out of reach). The card is STILL the timeline's: the layer lends
   a host (`FileCardHost {path, el, place}` through `threadsApi.setFileCardHost`), asks with
   `threadsApi.requestCard(key | null, via)`, and `SessionChatHistory` portals its one
   `ThreadCommentCard` into that host when the open question is about the file on show, or calls

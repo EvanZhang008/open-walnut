@@ -132,6 +132,66 @@ export function blockQuoteOf(index: QuoteTextIndex, block: Element): TextQuote |
   return quoteFromRange(index, range);
 }
 
+/** The hovered block's inline Ask: its box (file-thread.css `.fv-ask-block`). */
+export const ASK_CHIP_WIDTH = 44;
+export const ASK_CHIP_HEIGHT = 20;
+const ASK_CHIP_GAP = 6;
+
+/**
+ * Where the hovered block's inline Ask goes, never over the block's words when
+ * the view shows a place for it:
+ *  - after the end of its last line, when that line is on screen and leaves room
+ *    for it in the block;
+ *  - else right of the block, when the block is not a table cell (a cell's right
+ *    is the next cell's text) and the view has room there;
+ *  - else under the block's right end (the gap before the next block), else over
+ *    its first line's right end, whichever is on screen;
+ *  - else (a block taller than the view) on its top-right corner, kept on screen.
+ * `lastLine`: the box of the block's last line of text, null when not known.
+ * 2026-11-07: it always sat on the block's top-right corner, over the last word
+ * of a full first line ("27" of "2026-10-27"), and a drag that started there
+ * selected nothing.
+ */
+export function placeAskChip(
+  block: HostRect, lastLine: HostRect | null, host: { width: number; height: number }, cell = false,
+): { top: number; left: number } {
+  const H = ASK_CHIP_HEIGHT;
+  const onScreen = (top: number) => top >= 0 && top + H <= host.height;
+  const clampTop = (top: number) => Math.max(0, Math.min(top, host.height - H));
+  const clampLeft = (left: number) => Math.max(0, Math.min(left, host.width - ASK_CHIP_WIDTH - 4));
+  const at = (top: number, left: number) => ({ top: Math.round(top), left: Math.round(left) });
+  const centred = (line: HostRect) => line.top + (line.bottom - line.top - H) / 2;
+  if (lastLine && onScreen(centred(lastLine)) && lastLine.right + ASK_CHIP_GAP + ASK_CHIP_WIDTH <= block.right) {
+    return at(centred(lastLine), clampLeft(lastLine.right + ASK_CHIP_GAP));
+  }
+  if (!cell && block.right + ASK_CHIP_GAP + ASK_CHIP_WIDTH + 4 <= host.width) {
+    const first = { ...block, bottom: Math.min(block.bottom, block.top + H) };
+    const line = lastLine && onScreen(centred(lastLine)) ? lastLine : first;
+    return at(clampTop(centred(line)), block.right + ASK_CHIP_GAP);
+  }
+  const right = clampLeft(block.right - ASK_CHIP_WIDTH);
+  if (onScreen(block.bottom + 2)) return at(block.bottom + 2, right);
+  if (onScreen(block.top - H - 2)) return at(block.top - H - 2, right);
+  return at(clampTop(block.top), right);
+}
+
+/** The block's last line of text, in the coordinates of its own document: the
+ *  lowest line's box, from the left of its first piece to the right of its last. */
+export function lastLineRect(block: Element): DOMRect | null {
+  const range = block.ownerDocument.createRange();
+  range.selectNodeContents(block);
+  const rects = Array.from(range.getClientRects()).filter((r) => r.width > 0 && r.height > 0);
+  if (!rects.length) return null;
+  const bottom = Math.max(...rects.map((r) => r.bottom));
+  // The lowest line's pieces: their middles lie within its height of its foot.
+  const lineHeight = Math.min(...rects.filter((r) => r.bottom === bottom).map((r) => r.height));
+  const lowest = rects.filter((r) => r.top + r.height / 2 > bottom - lineHeight);
+  const left = Math.min(...lowest.map((r) => r.left));
+  const right = Math.max(...lowest.map((r) => r.right));
+  const top = Math.min(...lowest.map((r) => r.top));
+  return new DOMRect(left, top, right - left, bottom - top);
+}
+
 /** A box in the file view's coordinates (the host's top-left is 0,0). */
 export interface HostRect {
   top: number;

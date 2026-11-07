@@ -5,7 +5,7 @@ import { describe, it, expect } from 'vitest';
 import { buildThreadTree, threadKeyOf, type ThreadTreeMessage } from '@/utils/thread-tree';
 import type { SessionThreadAnchor } from '@/types/session';
 import { CARD_GAP, CARD_GROWN_WIDTH, CARD_WIDTH } from '@/utils/thread-card';
-import { FILE_CARD_MIN_HEIGHT, fileQuestionMarks, fileQuestionRows, placeFileCard, rectInHost, toHostRect } from '@/utils/file-thread';
+import { ASK_CHIP_HEIGHT, ASK_CHIP_WIDTH, FILE_CARD_MIN_HEIGHT, fileQuestionMarks, placeAskChip, fileQuestionRows, placeFileCard, rectInHost, toHostRect } from '@/utils/file-thread';
 
 const user = (msgId: string, text = `q ${msgId}`): ThreadTreeMessage => ({ role: 'user', msgId, text });
 const reply = (msgId: string, text = `a ${msgId}`): ThreadTreeMessage => ({ role: 'assistant', msgId, text });
@@ -211,5 +211,67 @@ describe('fileQuestionRows (the rail)', () => {
   });
   it('is empty for a file nobody asked about', () => {
     expect(fileQuestionRows(tree, new Set(), new Map(), '/d/none.md', null, null, new Set())).toEqual([]);
+  });
+});
+
+describe('placeAskChip', () => {
+  const box = (left: number, top: number, right: number, bottom: number) => ({ left, top, right, bottom });
+  const HOST = { width: 760, height: 600 };
+  const overlaps = (a: { left: number; top: number; right: number; bottom: number }, spot: { top: number; left: number }) =>
+    spot.left < a.right && spot.left + ASK_CHIP_WIDTH > a.left && spot.top < a.bottom && spot.top + ASK_CHIP_HEIGHT > a.top;
+
+  it('goes after the end of a short last line, inside the block', () => {
+    const block = box(20, 100, 700, 160);
+    const last = box(20, 140, 300, 160);
+    const spot = placeAskChip(block, last, HOST);
+    expect(spot.left).toBeGreaterThanOrEqual(300);
+    expect(spot.left + ASK_CHIP_WIDTH).toBeLessThanOrEqual(700);
+    expect(overlaps(last, spot)).toBe(false);
+  });
+
+  it('a full last line: right of the block when the view has room there', () => {
+    const block = box(20, 100, 600, 120);
+    const spot = placeAskChip(block, box(20, 100, 598, 120), HOST);
+    expect(spot.left).toBeGreaterThanOrEqual(600);
+    expect(overlaps(block, spot)).toBe(false);
+  });
+
+  it('a full last line in a full-width block: under its right end, off its words', () => {
+    const block = box(20, 100, 740, 160);
+    const spot = placeAskChip(block, box(20, 140, 739, 160), HOST);
+    expect(spot.top).toBeGreaterThanOrEqual(160);
+    expect(spot.left + ASK_CHIP_WIDTH).toBeLessThanOrEqual(756);
+  });
+
+  it('a table cell never puts it right of the cell (the next cell\'s words are there)', () => {
+    const cell = box(20, 100, 200, 120);
+    const spot = placeAskChip(cell, box(20, 100, 199, 120), HOST, true);
+    expect(spot.left + ASK_CHIP_WIDTH).toBeLessThanOrEqual(200);
+    expect(spot.top).toBeGreaterThanOrEqual(120);
+  });
+
+  it('no known last line: still never over the block when there is room beside it', () => {
+    const block = box(20, 100, 600, 180);
+    expect(overlaps(block, placeAskChip(block, null, HOST))).toBe(false);
+  });
+
+  it('a last line below the view: not after it (unseen), beside or around the block instead', () => {
+    const block = box(20, 100, 740, 900);
+    const spot = placeAskChip(block, box(20, 880, 300, 900), HOST);
+    expect(spot.top).toBeGreaterThanOrEqual(0);
+    expect(spot.top + ASK_CHIP_HEIGHT).toBeLessThanOrEqual(HOST.height);
+    expect(spot.top + ASK_CHIP_HEIGHT).toBeLessThanOrEqual(100);
+  });
+
+  it('a block taller than the view on both ends: its corner, on screen', () => {
+    const spot = placeAskChip(box(20, -50, 740, 900), null, HOST);
+    expect(spot.top).toBeGreaterThanOrEqual(0);
+    expect(spot.left + ASK_CHIP_WIDTH).toBeLessThanOrEqual(HOST.width);
+  });
+
+  it('stays inside a narrow view', () => {
+    const spot = placeAskChip(box(0, 0, 120, 20), box(0, 0, 119, 20), { width: 120, height: 400 });
+    expect(spot.left).toBeGreaterThanOrEqual(0);
+    expect(spot.left + ASK_CHIP_WIDTH).toBeLessThanOrEqual(120);
   });
 });

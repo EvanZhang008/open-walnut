@@ -39,7 +39,8 @@ import type { SessionPinnedQuote } from '@/types/session';
 import { buildTextIndex, locateQuote, quoteFromRange, quoteFromText, rangeForQuote, rangePieces, type QuoteLines, type QuoteSkip } from '@/utils/text-quote-anchor';
 import { DIFF_FILE_TEXT_SKIP } from '@/utils/diff-passage';
 import {
-  askableBlockOf, blockQuoteOf, cardNaturalHeight, fileQuestionMarks, fileQuestionRows, placeFileCard, rectInHost, toHostRect, type HostRect,
+  ASK_CHIP_HEIGHT, ASK_CHIP_WIDTH, askableBlockOf, blockQuoteOf, cardNaturalHeight, fileQuestionMarks, fileQuestionRows, lastLineRect, placeAskChip, placeFileCard,
+  rectInHost, toHostRect, type HostRect,
 } from '@/utils/file-thread';
 import { FileQuestionRail } from '@/components/common/FileQuestionRail';
 import { rafThrottle } from '@/utils/thread-mark-hit';
@@ -560,7 +561,7 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
   }), [askQuote, readQuote, clearSelection, sessionId, filePath]);
 
   // ── The inline Ask on the block under the pointer ──
-  const [hover, setHover] = useState<{ el: Element; rect: HostRect } | null>(null);
+  const [hover, setHover] = useState<{ el: Element; rect: HostRect; spot: { top: number; left: number } } | null>(null);
   const hoverRef = useRef(hover);
   hoverRef.current = hover;
   useEffect(() => {
@@ -573,17 +574,26 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
       if (!b) { if (hoverRef.current) setHover(null); return; }
       const target = document.elementFromPoint(x, y);
       const block = askableBlockOf(target, b);
+      const hostBox = root.getBoundingClientRect();
       if (!block) {
-        // Leaving the block for its own Ask button keeps the button.
-        if (hoverRef.current && target?.closest?.('.fv-ask-block')) return;
-        if (hoverRef.current) setHover(null);
+        const h = hoverRef.current;
+        if (!h) return;
+        // Leaving the block for its own Ask button keeps the button, across the
+        // gap between them too (the button sits off the block's words).
+        if (target?.closest?.('.fv-ask-block')) return;
+        const px = x - hostBox.left;
+        const py = y - hostBox.top;
+        const inBridge = px >= Math.min(h.rect.left, h.spot.left) && px <= Math.max(h.rect.right, h.spot.left + ASK_CHIP_WIDTH)
+          && py >= Math.min(h.rect.top, h.spot.top) && py <= Math.max(h.rect.bottom, h.spot.top + ASK_CHIP_HEIGHT);
+        if (!inBridge) setHover(null);
         return;
       }
-      const hostBox = root.getBoundingClientRect();
       const rect = toHostRect(block.getBoundingClientRect(), hostBox, null);
       const prev = hoverRef.current;
       if (prev && prev.el === block && Math.abs(prev.rect.top - rect.top) < 1 && Math.abs(prev.rect.right - rect.right) < 1) return;
-      setHover({ el: block, rect });
+      const line = lastLineRect(block);
+      const spot = placeAskChip(rect, line ? toHostRect(line, hostBox, null) : null, { width: root.clientWidth, height: hostBox.height }, block.matches('td, th'));
+      setHover({ el: block, rect, spot });
     });
     const onMove = (e: PointerEvent) => pick.call({ x: e.clientX, y: e.clientY });
     const onLeave = (e: PointerEvent) => {
@@ -640,12 +650,13 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
         />
       )}
       {/* Hidden while this file's card is open: it sat over a word of the
-          passage the card is about (2026-11-06). */}
+          passage the card is about (2026-11-06). Placed off the block's words
+          (placeAskChip). */}
       {hover && !mine && (
         <button
           type="button"
           className="fv-ask-block"
-          style={{ top: Math.max(0, Math.round(hover.rect.top)), left: Math.max(0, Math.min(Math.round(hover.rect.right) - 44, hostW - 48)) }}
+          style={{ top: hover.spot.top, left: hover.spot.left }}
           title="Ask about this passage"
           onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
           onClick={askBlock}
