@@ -5,11 +5,13 @@
  * folds (localStorage per owner, narrow only; a filter unfolds the sections
  * with matches and folds the rest without storing it); the wide done rails
  * that were opened and the done lanes showing all their cards (sessionStorage
- * per owner, this visit only).
+ * per owner, this visit only). A full-screen sheet's room for the notice corner never picks the
+ * mode (modeBesideCorner): a move's own toast does not fold the board under the user.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { BoardLaneKind } from '../../../../../src/core/boards/board-lanes';
 import { KANBAN_NARROW_BELOW, KANBAN_WIDE_FROM, type KanbanMode } from './kanban-contract';
+import { modeBesideCorner } from '../../common/corner-sheet-inset';
 
 export const FOLDS_PREFIX = 'walnut:board-lanes-folded.v1:';
 export const RAILS_PREFIX = 'walnut:board-done-rail.v1:';
@@ -71,7 +73,7 @@ export function useKanbanLayout(ownerId: string, opts: KanbanLayoutOpts): Kanban
     observer.current = null;
     if (!el) return;
     const measure = (w: number) => {
-      const next = modeFor(w, modeRef.current);
+      const next = modeBesideCorner(el, w, modeRef.current, modeFor);
       modeRef.current = next;
       setWidth(Math.round(w));
       setMode(next);

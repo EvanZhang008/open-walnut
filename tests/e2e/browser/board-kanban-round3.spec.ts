@@ -336,14 +336,22 @@ for (const theme of ['light', 'dark'] as const) {
     const lane = pane.locator('[data-testid="kanban-lane"][data-lane-id="mitigating"]')
     const laneRest = await bg(lane)
     await a.scrollIntoViewIfNeeded()
+    // Drag to a lane the user can see: in the 1280px full-screen sheet beside its chat the lanes row
+    // shows about two lanes and a half, so at rest Mitigating's middle sits past the row's end, over
+    // the rail (2026-11-01 to 11-07 this aimed at the rail and the lane never lit). Bring it in, as
+    // a user scrolls the row before a drag; Investigating, where the card is, stays in sight.
+    await lane.evaluate((el) => el.scrollIntoView({ block: 'nearest', inline: 'nearest' }))
     const lb = (await lane.boundingBox())!
+    const row = (await pane.getByTestId('kanban-lanes').boundingBox())!
+    expect(lb.x + lb.width / 2, 'the target lane\'s middle is inside the lanes row').toBeLessThan(row.x + row.width)
     const ab = (await a.getByTestId('kanban-card-title').boundingBox())!
     await page.mouse.move(ab.x + 30, ab.y + ab.height / 2)
     await page.mouse.down()
     await page.mouse.move(ab.x + 45, ab.y + ab.height / 2 + 10, { steps: 4 })
     await page.mouse.move(lb.x + lb.width / 2, lb.y + 200, { steps: 15 })
     await expect(lane).toHaveClass(/is-over/)
-    expect(channelGap(await bg(lane), laneRest)).toBeGreaterThanOrEqual(10)
+    // The tint fades in (`transition: background 0.12s`): read it once it settles, not as the class lands.
+    await expect.poll(async () => channelGap(await bg(lane), laneRest), { timeout: 3_000 }).toBeGreaterThanOrEqual(10)
     await page.screenshot({ path: `${SHOTS}/${engine}-${theme}-drag-over.png` })
     await page.keyboard.press('Escape')
     await page.mouse.up()

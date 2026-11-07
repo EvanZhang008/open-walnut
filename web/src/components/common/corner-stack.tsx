@@ -16,6 +16,7 @@ import { useContext, useLayoutEffect, useSyncExternalStore, type ReactNode } fro
 import { createPortal } from 'react-dom';
 import { PHONE_LAYOUT_QUERY } from '@/hooks/usePhoneLayout';
 import { RouteShownContext } from '@/contexts/RouteShownContext';
+import { CORNER_SHEET_INSET_VAR, cornerSheetInsetOf } from './corner-sheet-inset';
 import '@/styles/corner-stack.css';
 
 /** Where each kind sits in the stack: higher is nearer the corner. */
@@ -448,11 +449,10 @@ function syncRoom(): void {
 let insetSheet: HTMLElement | null = null;
 /** The sheet's left edge as it would be with no inset. */
 function sheetBaseLeft(sheet: Element): number {
-  const held = parseFloat((sheet as HTMLElement).style.getPropertyValue('--corner-sheet-inset')) || 0;
-  return sheet.getBoundingClientRect().left - held;
+  return sheet.getBoundingClientRect().left - cornerSheetInsetOf(sheet);
 }
 function releaseInset(): void {
-  insetSheet?.style.removeProperty('--corner-sheet-inset');
+  insetSheet?.style.removeProperty(CORNER_SHEET_INSET_VAR);
   insetSheet = null;
 }
 function syncSheetInset(): void {
@@ -461,13 +461,13 @@ function syncSheetInset(): void {
   const parts = [...stack.querySelectorAll('.corner-slot > *')].map((el) => el.getBoundingClientRect()).filter((r) => r.height > 0);
   if (!sheet || parts.length === 0 || stack.classList.contains('is-tucked')) { releaseInset(); return; }
   if (insetSheet !== sheet) releaseInset();
-  const held = parseFloat(sheet.style.getPropertyValue('--corner-sheet-inset')) || 0;
+  const held = cornerSheetInsetOf(sheet);
   // Measured from where the sheet starts without the inset, so moving it never undoes itself.
   const reach = Math.ceil(Math.max(...parts.map((p) => p.right)) + 12 - sheetBaseLeft(sheet));
   const inset = Math.max(held, reach);
   if (inset <= 0) { releaseInset(); return; }
   insetSheet = sheet;
-  if (held !== inset) sheet.style.setProperty('--corner-sheet-inset', `${inset}px`);
+  if (held !== inset) sheet.style.setProperty(CORNER_SHEET_INSET_VAR, `${inset}px`);
 }
 
 function syncLeft(): void {

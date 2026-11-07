@@ -1,0 +1,32 @@
+/**
+ * The room a full-screen sheet gives the notice corner (corner-stack.tsx syncSheetInset): while
+ * the corner holds a notice that reaches past the strip left of the sheet, the sheet's left edge
+ * moves past it by `--corner-sheet-inset` (fullscreen-tab.css), and goes back when the corner is
+ * empty. Its own module (no React, no CSS) so a layout hook can read it without the corner.
+ */
+export const CORNER_SHEET_INSET_VAR = '--corner-sheet-inset';
+
+/** The inset the full-screen sheet holding `el` has for the corner now, in px (0: none, or no sheet). */
+export function cornerSheetInsetOf(el: Element | null | undefined): number {
+  const sheet = el?.closest<HTMLElement>('.open-walnut-fullscreen');
+  return sheet ? parseFloat(sheet.style.getPropertyValue(CORNER_SHEET_INSET_VAR)) || 0 : 0;
+}
+
+/**
+ * A layout mode picked by a pane's width, the corner's inset left out: a notice showing for a few
+ * seconds (a kanban move's own toast) never switches the layout under the user (2026-11-07: a card
+ * dropped on the wide board's Resolved rail toasted, the toast moved the sheet 126px, and the board
+ * fell to its narrow sections, rail gone). While an inset is held the mode stays what it was; with
+ * no mode yet it is picked for the width the pane has without the inset. The inset's release
+ * resizes the pane again, which picks the mode afresh.
+ */
+export function modeBesideCorner<M>(
+  el: Element | null | undefined,
+  width: number,
+  prev: M | null,
+  pick: (width: number, prev: M | null) => M,
+): M {
+  const inset = cornerSheetInsetOf(el);
+  if (inset <= 0) return pick(width, prev);
+  return prev ?? pick(width + inset, prev);
+}

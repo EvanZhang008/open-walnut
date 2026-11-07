@@ -1,0 +1,83 @@
+/**
+ * A full-screen sheet moves its left edge past the notice corner while the corner holds a notice
+ * (`--corner-sheet-inset`, web/src/components/common/corner-stack.tsx). A layout MODE picked from a
+ * pane's width must not follow that inset: 2026-11-07, main CI (board-kanban-round3 N1), a card
+ * dropped on the wide board's Resolved rail showed its own "The task is still open" toast, the toast
+ * moved the 1280px sheet 126px, the board pane fell under 600px and the kanban switched to its
+ * narrow sections, so the rail the user had just dropped on was gone.
+ *
+ * The rule (modeBesideCorner): while an inset is held the mode stays as it was; with none yet it is
+ * picked for the width without the inset. The guard reads web/src and fails on a new file that picks
+ * a wide/narrow layout from a ResizeObserver without going through it.
+ */
+import { describe, expect, it } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import { CORNER_SHEET_INSET_VAR, cornerSheetInsetOf, modeBesideCorner } from '../../web/src/components/common/corner-sheet-inset';
+import { modeFor } from '../../web/src/components/board/kanban/useKanbanLayout';
+
+/** An element inside a sheet whose inline style holds `inset` (or no sheet at all). */
+function inSheet(inset: number | null): Element {
+  const sheet = inset === null ? null : {
+    style: { getPropertyValue: (name: string) => (name === CORNER_SHEET_INSET_VAR && inset ? `${inset}px` : '') },
+  };
+  return { closest: (sel: string) => (sel === '.open-walnut-fullscreen' ? sheet : null) } as unknown as Element;
+}
+
+describe('modeBesideCorner', () => {
+  it('reads the inset of the sheet holding the element, 0 outside a sheet or with none', () => {
+    expect(cornerSheetInsetOf(inSheet(126))).toBe(126);
+    expect(cornerSheetInsetOf(inSheet(0))).toBe(0);
+    expect(cornerSheetInsetOf(inSheet(null))).toBe(0);
+    expect(cornerSheetInsetOf(null)).toBe(0);
+  });
+
+  it('the N1 case: a wide board narrowed to 573px by a toast stays wide', () => {
+    expect(modeFor(573, 'wide')).toBe('narrow');
+    expect(modeBesideCorner(inSheet(126), 573, 'wide', modeFor)).toBe('wide');
+  });
+
+  it('a narrow board stays narrow while a notice shows, however the width moves', () => {
+    expect(modeBesideCorner(inSheet(126), 700, 'narrow', modeFor)).toBe('narrow');
+  });
+
+  it('with no inset the width alone decides, the hysteresis included', () => {
+    expect(modeBesideCorner(inSheet(0), 573, 'wide', modeFor)).toBe('narrow');
+    expect(modeBesideCorner(inSheet(null), 610, 'narrow', modeFor)).toBe('narrow');
+    expect(modeBesideCorner(inSheet(null), 624, 'narrow', modeFor)).toBe('wide');
+  });
+
+  it('a first measure under an inset is made for the width without it', () => {
+    expect(modeBesideCorner(inSheet(126), 573, null, modeFor)).toBe('wide');
+    expect(modeBesideCorner(inSheet(126), 400, null, modeFor)).toBe('narrow');
+  });
+});
+
+const ROOT = path.resolve(__dirname, '../../web/src');
+function walk(dir: string): string[] {
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((d) => {
+    const p = path.join(dir, d.name);
+    if (d.isDirectory()) return walk(p);
+    return /\.(ts|tsx)$/.test(d.name) ? [p] : [];
+  });
+}
+const files = walk(ROOT).map((p) => ({ rel: path.relative(ROOT, p), code: fs.readFileSync(p, 'utf8') }));
+
+describe('every width-picked layout mode leaves the corner inset out', () => {
+  // A file that watches a size and switches between named wide/narrow layouts.
+  const pickers = files.filter((f) => /new ResizeObserver\b/.test(f.code) && /['"](wide|narrow)['"]/.test(f.code));
+
+  it('finds the one it knows of (the matcher still matches)', () => {
+    expect(pickers.map((f) => f.rel)).toContain('components/board/kanban/useKanbanLayout.ts');
+  });
+
+  it('each one picks through modeBesideCorner', () => {
+    const missing = pickers.filter((f) => !/\bmodeBesideCorner\(/.test(f.code)).map((f) => f.rel);
+    expect(missing, 'pick the mode with modeBesideCorner(el, width, prev, pick) from components/common/corner-sheet-inset').toEqual([]);
+  });
+
+  it('the inset is named in one place', () => {
+    const literal = files.filter((f) => f.rel !== 'components/common/corner-sheet-inset.ts' && /['"]--corner-sheet-inset['"]/.test(f.code)).map((f) => f.rel);
+    expect(literal, 'use CORNER_SHEET_INSET_VAR').toEqual([]);
+  });
+});
