@@ -494,12 +494,15 @@ test('a hit for several words chooses the copy next to the other words, and the 
 test('a word selected in the note fills the bar', async ({ page }) => {
   await openNotes(page)
   await openNote(page, mainNote(), 'Lantern ledger')
-  // Double-click the word itself (the paragraph's box runs the whole line).
-  const at = await page.locator(NOTE).evaluate((root) => {
+  // Double-click the word itself (the paragraph's box runs the whole line). The
+  // note may open scrolled (its kept scroll place) or still settling, so bring
+  // the word into view first and try again until the double-click selects it.
+  const wordAt = () => page.locator(NOTE).evaluate((root) => {
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
     for (let n = walker.nextNode(); n; n = walker.nextNode()) {
       const i = (n as Text).data.indexOf('Upper')
       if (i < 0) continue
+      n.parentElement?.scrollIntoView({ block: 'center' })
       const r = document.createRange()
       r.setStart(n, i)
       r.setEnd(n, i + 5)
@@ -508,9 +511,16 @@ test('a word selected in the note fills the bar', async ({ page }) => {
     }
     throw new Error('no word')
   })
-  await page.mouse.dblclick(at.x, at.y)
-  const picked = (await page.evaluate(() => getSelection()?.toString() ?? '')).trim()
-  expect(picked).toBe('Upper')
+  let picked = ''
+  await expect(async () => {
+    const first = await wordAt()
+    await page.waitForTimeout(150)
+    const at = await wordAt()
+    expect(Math.abs(at.y - first.y)).toBeLessThan(2)
+    await page.mouse.dblclick(at.x, at.y)
+    picked = (await page.evaluate(() => getSelection()?.toString() ?? '')).trim()
+    expect(picked).toBe('Upper')
+  }).toPass({ timeout: 20_000 })
   await chord(page)
   await expect(findInput(page)).toHaveValue(picked)
   await expect(label(page)).toHaveText(/^\?\/\d+$/)
