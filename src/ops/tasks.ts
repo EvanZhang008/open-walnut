@@ -1055,7 +1055,7 @@ defineOp({
     + 'in issues as "holds several things"; write each thing as its own line with its own task instead of joining them. '
     + 'task defaults to your own task.',
   input: {
-    content: z.string().max(8000).optional().describe('The whole letter (Markdown, the three sections)'),
+    content: z.string().max(16000).optional().describe('The whole letter (Markdown, the three sections). Only your own lines are held to the length limit (`limit` in the reply); the lines Walnut adds, the headings and "None" lines are not counted'),
     edits: z.array(z.object({ old: z.string().min(1), new: z.string() })).max(40).optional().describe('Exact-string edits on the stored letter'),
     task: z.string().min(1).optional().describe('Task id or unique prefix of Main or a lead; default: your own task'),
   },
@@ -1068,11 +1068,11 @@ defineOp({
     if (typeof args.content !== 'string' && !edits.length) throw new Error('Pass content (the whole letter) or edits.')
     const body = await call('PUT', `/tasks/${encodeURIComponent(id)}/brief`, {
       ...(typeof args.content === 'string' ? { content: args.content } : {}), ...(edits.length ? { edits } : {}),
-    }) as { title?: string; chars?: number; issues?: Array<{ kind: string; line: string }> }
+    }) as { title?: string; chars?: number; own_chars?: number; limit?: number; issues?: Array<{ kind: string; line: string }> }
     const issues = body.issues ?? []
     return withOutcome(
       body,
-      `Brief of "${body.title}" written: ${body.chars} characters.`,
+      `Brief of "${body.title}" written: ${body.chars} characters${typeof body.own_chars === 'number' ? `, ${body.own_chars} of them your own lines (limit ${body.limit})` : ''}.`,
       issues.length ? `${issues.length} line(s) break its rules (${issues.map((i) => i.kind).join(', ')}): fix them with another brief_write.` : 'No further action is required.',
     )
   },

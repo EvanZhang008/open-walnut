@@ -13,7 +13,7 @@
 import type { Task } from '../types.js';
 import { BRIEF_MAX_CHARS, type TaskBrief } from '../user-status.js';
 import { briefSnapshot } from './brief-fresh.js';
-import { structureBrief } from './brief-structure.js';
+import { briefOwnChars, structureBrief } from './brief-structure.js';
 import { briefIssues, completeBriefRefs, type BriefIssue } from './brief-rules.js';
 
 export class BriefWriteError extends Error {
@@ -68,12 +68,18 @@ export async function writeNodeBrief(taskId: string, input: { content?: string; 
   const textOf = (base: string): string => {
     const text = input.content !== undefined ? input.content : applyBriefEdits(base, input.edits!);
     if (!text.trim()) throw new BriefWriteError(400, 'bad_request', 'The Brief cannot be empty: write its three sections');
-    // The writer's own words are held to the limit; the asks Walnut added (ADDED_ASKS_MAX lines at
-    // most) may take a stored letter past it, and an edit that does not grow it still goes through.
-    if (text.length > BRIEF_MAX_CHARS && (input.content !== undefined || text.length > base.length)) {
-      throw new BriefWriteError(413, 'brief_too_long', `The Brief is ${text.length} characters, over ${BRIEF_MAX_CHARS}: keep it to what matters now (at most 15 lines of work).`, { chars: text.length, limit: BRIEF_MAX_CHARS });
-    }
     return text;
+  };
+  // Only the writer's own lines are held to the limit, measured on the letter as it is stored
+  // (briefOwnChars): the lines Walnut adds (asks the letter did not name, can-close lines, the
+  // count past the cap, headings, "None") may take it past BRIEF_MAX_CHARS, and an edit that does
+  // not grow the writer's share still goes through (2026-11-06, Main: a stored letter over the
+  // limit refused every later edit, and it rewrote the whole letter four times in a day).
+  const checkOwn = (shaped: string, base: string): void => {
+    const own = briefOwnChars(shaped);
+    if (own > BRIEF_MAX_CHARS && (input.content !== undefined || own > briefOwnChars(base))) {
+      throw new BriefWriteError(413, 'brief_too_long', `Your own lines in the Brief come to ${own} characters, over ${BRIEF_MAX_CHARS} (the lines Walnut adds, the headings and "None" lines are not counted): keep it to what matters now (at most 15 lines of work).`, { chars: shaped.length, own_chars: own, limit: BRIEF_MAX_CHARS });
+    }
   };
   const first = textOf(task.brief?.text ?? '');
   // Every status it names is derived now (user-status-sync.ts debounces 1.5 s): a phase set right
@@ -88,7 +94,9 @@ export async function writeNodeBrief(taskId: string, input: { content?: string; 
   let out: { brief: TaskBrief; issues: BriefIssue[] } | null = null;
   await updateTaskRaw(task.id, (current) => {
     try {
-      out = shapeBriefText(textOf(current.brief?.text ?? ''), current, tasks, input.language ? { language: input.language } : {});
+      const base = current.brief?.text ?? '';
+      out = shapeBriefText(textOf(base), current, tasks, input.language ? { language: input.language } : {});
+      checkOwn(out.brief.text, base);
       return { brief: out.brief };
     } catch (err) {
       failure = err;

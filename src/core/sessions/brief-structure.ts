@@ -84,13 +84,48 @@ const ADDED_ASK_CHARS = 200;
 /** Walnut's line for the asks past ADDED_ASKS_MAX: no task of its own, never a rule issue. */
 export const ADDED_MORE_RE = /^- And \d+ more asks? the user: the Task view lists (?:it|them)\.$/;
 
-/** Walnut's line for a task that asks the user and that the letter does not name: its own ask. */
+/** The word an added ask line leads with when its status has no category. */
+const ADDED_NO_CATEGORY = 'Needs you';
+
+/** Walnut's line for a task that asks the user and that the letter does not name: its own ask.
+ *  It always leads with a label (a category, else ADDED_NO_CATEGORY), so isWalnutBriefLine knows
+ *  it for Walnut's in every letter it was ever stored in. */
 export function addedAskLine(task: BriefSectionTask, main: boolean, tasks: readonly BriefSectionTask[]): string {
   const vp = main ? briefVpOf(task, tasks) : undefined;
   // What to do with it, then its ask or what there is to read (needsLineOf, 2026-11-03).
   const line = task.user_status ? needsLineOf(task.user_status) : null;
-  const ask = (line ? [NEEDS_CATEGORY_LABELS[line.category], words(line.text)].filter(Boolean).join(': ') : words(task.user_status?.ask ?? '')).slice(0, ADDED_ASK_CHARS) || 'Needs you';
+  const ask = [line ? NEEDS_CATEGORY_LABELS[line.category] : ADDED_NO_CATEGORY, words(line ? line.text : task.user_status?.ask ?? '')].filter(Boolean).join(': ').slice(0, ADDED_ASK_CHARS);
   return `- <task-ref id="${task.id}" label="${attr(task.title)}"/>${vp ? ` (VP <task-ref id="${vp.id}" label="${attr(vp.title)}"/>)` : ''}: ${ask}`;
+}
+
+const reEscape = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const ADDED_ASK_RE = new RegExp(
+  `^- <task-ref id="[^"]+" label="[^"]*"/>(?: \\(VP <task-ref id="[^"]+" label="[^"]*"/>\\))?: `
+  + `(?:${[...Object.values(NEEDS_CATEGORY_LABELS), ADDED_NO_CATEGORY].map(reEscape).join('|')})(?:: .*)?$`,
+);
+
+/** A line Walnut wrote into a letter (an ask the letter did not name, the count past the cap), not
+ *  its writer's: told by its fixed shape, so a letter stored before this was known reads the same
+ *  (2026-11-06, Main: such lines kept a stored letter over BRIEF_MAX_CHARS and every edit failed). */
+export function isWalnutBriefLine(line: string): boolean {
+  const t = line.trim();
+  return ADDED_MORE_RE.test(t) || ADDED_ASK_RE.test(t);
+}
+
+/**
+ * The writer's own share of a letter, the part BRIEF_MAX_CHARS holds (brief-write.ts): every line
+ * but Walnut's (isWalnutBriefLine), the section headings and a section's "nothing" line, each
+ * counted without its list marker or indent, which Walnut may add when it shapes the letter. So
+ * shaping a letter never makes its writer's share larger (tests/core/sessions/brief-own-chars.test.ts).
+ */
+export function briefOwnChars(text: string): number {
+  let n = 0;
+  for (const raw of text.split('\n')) {
+    const t = raw.trim();
+    if (!t || isWalnutBriefLine(t) || headingSection(t) || saysNothing(t)) continue;
+    n += t.replace(/^(?:[-*+]|\d+[.)])\s+/, '').length + 1;
+  }
+  return n;
 }
 
 /** "- Nothing", "- None", "- 无", "- 暂无": a whole line that only says the section is empty.
