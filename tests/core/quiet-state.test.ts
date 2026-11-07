@@ -151,8 +151,9 @@ describe('persistence', () => {
       holds: [{ source: 'user', since: Date.now() - 120_000, until: Date.now() - 1_000, allowPermissions: true }],
     }));
     expect((await getQuiet()).active).toBe(false);
-    await new Promise(r => setTimeout(r, 30));
-    expect(JSON.parse(fs.readFileSync(FILE, 'utf-8')).holds).toEqual([]);
+    // The prune is written after the read answers: wait for it rather than for a fixed 30 ms,
+    // which a loaded runner overshoots.
+    await vi.waitFor(() => expect(JSON.parse(fs.readFileSync(FILE, 'utf-8')).holds).toEqual([]), { timeout: 3_000, interval: 20 });
   });
 
   it('an unreadable file starts loud instead of throwing', async () => {
