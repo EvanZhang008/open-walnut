@@ -18,7 +18,10 @@ const rail = (page: Page, id: string) => page.getByTestId(`sidebar-core-app-${id
 
 async function gotoHome(page: Page): Promise<void> {
   await rail(page, 'home').click()
-  await expect(page).toHaveURL(/\/$/)
+  // Home's address carries Home's own state: a task opened there writes `?task=<id>`
+  // 300 ms after its focus lands (useUrlSync), which on a slow runner is after this
+  // click (CI, 2026-11-07). Only the path says the click reached Home.
+  await expect.poll(() => new URL(page.url()).pathname).toBe('/')
   await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 30_000 })
 }
 
