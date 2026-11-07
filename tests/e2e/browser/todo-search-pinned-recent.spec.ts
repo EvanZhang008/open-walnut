@@ -120,14 +120,21 @@ test('search filters the Pinned tiers and the Recent list like the Tasks list', 
 
   // A search typed while on Recent narrows Recent itself (2026-11-07 verifier: it jumped to the
   // all-task results), a completed task it lists included: Recent keeps every state.
+  // A row sharing the query's words but not the query itself is only loosely Related: the
+  // all-task results fold it, Recent leaves it out (2026-11-07 verifier: rows 15 and 17 stayed).
   expect((await request.post(`/api/tasks/${recentMatch}/complete`)).ok()).toBe(true);
+  const recentNear = await createTask(request, `Recent ${token}-other match`);
+  await page.evaluate((taskId) => window.dispatchEvent(new CustomEvent('main:locate-task', { detail: { taskId } })), recentNear);
+  await expect(recentCard(recentNear)).toBeVisible({ timeout: 10_000 });
   await page.locator('#home-task-navigation .todo-search-input').click();
-  await page.keyboard.type(token);
+  await page.keyboard.type(`${token} match`);
   await expect(recentCard(recentMiss)).toHaveCount(0, { timeout: 5_000 });
+  await expect(recentCard(recentNear)).toHaveCount(0);
   await expect(recentCard(recentMatch)).toBeVisible();
   await expect(page.locator('.todo-search-results')).toHaveCount(0);
   await expect(page.locator('.fb-row-lead')).toHaveText('Searching Recent');
   await page.locator('.todo-search-clear').click();
   await expect(recentCard(recentMiss)).toBeVisible({ timeout: 5_000 });
   await expect(recentCard(recentMatch)).toBeVisible();
+  await expect(recentCard(recentNear)).toBeVisible();
 });

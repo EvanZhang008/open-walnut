@@ -4995,11 +4995,16 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const [showRelatedResults, setShowRelatedResults] = useState(false);
   const [showCompletedResults, setShowCompletedResults] = useState(false);
   useEffect(() => { setShowRelatedResults(false); setShowCompletedResults(false); }, [deferredSearchQuery]);
+  // The server hits that show the query in their own text (the rest fold under Related).
+  const searchEvidenced = useMemo(
+    () => new Set(searchResults?.filter((result) => result.showsQuery).map((result) => result.taskId)),
+    [searchResults],
+  );
   const searchSplit = useMemo(() => {
     if (!isSearchMode) return { primary: searchOpenMatches, completed: [] as Task[], related: [] as Task[], looseDone: 0 };
     const lowerQuery = deferredSearchQuery.trim().toLowerCase();
     const openIds = new Set(searchOpenMatches.map((task) => task.id));
-    const evidenced = new Set(searchResults?.filter((result) => result.showsQuery).map((result) => result.taskId));
+    const evidenced = searchEvidenced;
     const isLiteral = (task: Task) => taskMatchesLiterally(task, lowerQuery) || taskMatchesDateTag(task, lowerQuery);
     return arrangeSearchResults(searchMatches, {
       isOpen: (task) => openIds.has(task.id),
@@ -5012,7 +5017,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       },
       completedAt: (task) => task.completed_at,
     }, showDoneResults || !statusIsDefault);
-  }, [searchOpenMatches, searchMatches, showDoneResults, statusIsDefault, isSearchMode, searchResults, deferredSearchQuery]);
+  }, [searchOpenMatches, searchMatches, showDoneResults, statusIsDefault, isSearchMode, searchResults, searchEvidenced, deferredSearchQuery]);
   // Include Complete (C56) counts every completed hit of the search, inline,
   // folded or loose: it is the one switch that brings them all in rank order.
   const searchDoneCount = isSearchMode ? searchMatches.length - searchOpenMatches.length : 0;
@@ -5125,14 +5130,15 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     return list.filter(task => keep.has(task.id));
   }, [filterResult.list, dedupePinned, displayedPinIds]);
   // The filter chips leave Recent alone (it lists what was opened, whatever its state); a
-  // search narrows it to the matches, as it does every list. A row the search's own set leaves
-  // out (read in by id outside the board list, or a completed one the search hides) matches on
-  // its title and fields: Recent keeps every state.
+  // search narrows it to the hits that show the query (its title or fields, or a server hit
+  // quoting it), never the loosely Related ones: Recent is for finding the one task. Any state
+  // counts, and a row read in by id outside the board list matches on its own text.
   const visibleRecentTasks = useMemo(() => {
     if (!isSearchMode) return recentTasks;
     const lowerQuery = deferredSearchQuery.trim().toLowerCase();
-    return recentTasks.filter((task) => visibleTaskIds.has(task.id) || taskMatchesLiterally(task, lowerQuery));
-  }, [recentTasks, visibleTaskIds, isSearchMode, deferredSearchQuery]);
+    return recentTasks.filter((task) => taskMatchesLiterally(task, lowerQuery)
+      || taskMatchesDateTag(task, lowerQuery) || (searchEvidenced.has(task.id) && visibleTaskIds.has(task.id)));
+  }, [recentTasks, visibleTaskIds, isSearchMode, deferredSearchQuery, searchEvidenced]);
   const visibleRecentIds = useMemo(
     () => visibleRecentTasks.map(recentStaticId),
     [recentStaticId, visibleRecentTasks],
