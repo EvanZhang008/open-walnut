@@ -196,6 +196,19 @@ for (const twin of TWINS) {
         expect(inside.callerProof).toBeUndefined()
         expect(outside.callerProof).toBeUndefined()
       }
+      // caller.check: the server asks the same of a process it found on its own HTTP connection.
+      if (twin.reads) {
+        const asker = inside.callerProof.pid as number
+        const check = (pid: number, at: number, asSid = sid) => rpc(d, { cmd: 'caller.check', sid: asSid, pid, at })
+        expect((await check(asker, Date.now())).proof).toMatchObject({ v: 1, verified: true, pid: asker })
+        expect((await check(process.pid, Date.now())).proof).toMatchObject({ verified: false, pid: process.pid })
+        expect((await check(process.pid, Date.now())).proof.unchecked).toBeUndefined()
+        // A process that started after the moment asked about is not the one seen then (its pid was given out again).
+        expect((await check(asker, Date.now() - 3_600_000)).proof).toMatchObject({ verified: false, unchecked: true })
+        // A session this daemon does not run has no process to be inside.
+        expect((await check(asker, Date.now(), crypto.randomUUID())).proof).toMatchObject({ verified: false, unchecked: true })
+        expect((await rpc(d, { cmd: 'caller.check', sid, pid: 1, at: Date.now() })).ok).toBe(false)
+      }
       // Not an approval: no proof at all, whatever the caller wrote.
       callFromOutside(d, sid, 'task_list', { callerProof: { v: 1, verified: true } })
       expect(await waitFor(() => d.requests.length >= 3)).toBe(true)

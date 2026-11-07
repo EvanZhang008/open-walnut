@@ -78,7 +78,7 @@ import {
   type BudgetGate,
 } from './daemon-core.js'
 import { ADVERTISED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
-import { descendsFrom, parentName, parseProcessTable, shortProgram } from './caller-proof-core.js'
+import { PS_TREE_ARGS, parentName, parseProcessTree, proofFor, shortProgram } from './caller-proof-core.js'
 import { socketPeerPid, socketPeerPidReady } from './socket-peer-pid.js'
 import { findDeliveryMarkers, validMarkerIds } from './marker-find-core.js'
 import { createHostRuntime, NODE_DISCOVERY_SHELL } from './host-runtime-core.js'
@@ -2550,6 +2550,8 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'stop': return daemonCommands.run(() => cmdStop(ws, id as number, cmd))
     case 'setMode': return cmdSetMode(ws, id as number, cmd)
     case 'status': return cmdStatus(ws, id as number, cmd)
+    // caller-proof-v1: is a process of this host inside a session this daemon runs (approvals-v1.ts).
+    case 'caller.check': return void cmdCallerCheck(ws, id as number, cmd as Record<string, unknown>)
     case 'cancelPendingStart': return cmdCancelPendingStart(ws, id as number, cmd)
     case 'getState': return cmdGetState(ws, id as number, cmd)
     case 'cron.metadata': {
@@ -5512,11 +5514,13 @@ function sendPluginJobGatewayRequest(home: string, capability: string, payload: 
 }
 
 /** One parsed NDJSON line from the agent socket → local reject or hub relay. */
-function handleGatewayLine(line: string, respond: (resp: GatewayResponse) => void, fd?: number) {
+function handleGatewayLine(line: string, respond: (resp: GatewayResponse) => void, fd?: number, openedAt = Date.now()) {
   if (daemonCommands.closed) return respond(gatewayError('hub_unreachable', 'daemon is shutting down; retry after reconnecting', { stopping: true }))
   const parsed = parseGatewayLine(line)
   if (!parsed.ok) return respond({ ok: false, error: parsed.error })
   const req = parsed.request
+  // caller-proof-v1: only this daemon writes callerProof, on any path the line takes.
+  req.args = withoutCallerProof(req.args)
   if (pluginJobs.isRunSid(req.sid)) {
     const home = pluginJobs.homeOfRun(req.sid)
     if (!home) return respond(gatewayError('unknown_caller', 'no plugin job of this daemon runs under this id'))
@@ -5543,14 +5547,23 @@ function handleGatewayLine(line: string, respond: (resp: GatewayResponse) => voi
   // caller-proof-v1: only this daemon writes callerProof. For an approval it reads the process on
   // the socket now, while the caller still holds it, and tells the server whether it runs inside
   // the session it names (keep in sync with daemon-source.ts, which sends none).
-  const args = withoutCallerProof(req.args)
+  const args = req.args
   if (!isExternalCallerSid(callerSid) && wantsCallerProof(req.op, args)) {
     const peer = socketPeerPid(fd)
-    void gatewayCallerProof(peer, callerSid).then((callerProof) =>
+    void gatewayCallerProof(peer, callerSid, openedAt).then((callerProof) =>
       sendGatewayRequest(req.op, callerSid, { ...args, callerProof }, respond, plan))
     return
   }
   sendGatewayRequest(req.op, callerSid, args, respond, plan)
+}
+
+// At most a few process lookups at once: a burst of approval calls queues here.
+let proofsRunning = 0
+const proofsWaiting: Array<() => void> = []
+async function proofSlot<T>(fn: () => Promise<T>): Promise<T> {
+  if (proofsRunning >= 3) await new Promise<void>((resolve) => proofsWaiting.push(resolve))
+  proofsRunning++
+  try { return await fn() } finally { proofsRunning--; proofsWaiting.shift()?.() }
 }
 
 /**
@@ -5558,25 +5571,76 @@ function handleGatewayLine(line: string, respond: (resp: GatewayResponse) => voi
  * the process this daemon runs for that session, its Claude Code CLI or its ACP worker. Never
  * throws; a peer it could not read, or a session with no live process here, is not verified.
  */
-async function gatewayCallerProof(peer: number | undefined, sid: string): Promise<CallerProof> {
-  if (!peer) return { v: 1, verified: false }
-  const own = [sessions.get(sid)?.pid, acp.workers.get(sid)?.proc?.pid]
-    .filter((p): p is number => typeof p === 'number' && p > 1 && p !== process.pid)
-  const ps = await new Promise<string | null>((resolve) => {
-    execFile('ps', ['-axo', 'pid=,ppid=,comm='], { timeout: 2_000, maxBuffer: 8 * 1024 * 1024, env: { ...process.env, LC_ALL: 'C' } },
+async function gatewayCallerProof(peer: number | undefined, sid: string, openedAt: number): Promise<CallerProof> {
+  if (!peer) return { v: 1, verified: false, unchecked: true }
+  // One snapshot names every process with its parent and its start time, so each pid below is
+  // checked as the process it was then, never only as a number.
+  const ps = await proofSlot(() => new Promise<string | null>((resolve) => {
+    execFile('ps', PS_TREE_ARGS, { timeout: 2_000, maxBuffer: 8 * 1024 * 1024, env: { ...process.env, LC_ALL: 'C', LANG: 'C' } },
       (err, stdout) => resolve(err && !stdout ? null : String(stdout ?? '')))
-  })
-  if (!ps) return { v: 1, verified: false, pid: peer }
-  const table = parseProcessTable(ps)
+  }))
+  const table = ps ? parseProcessTree(ps) : null
+  if (!table?.size) return { v: 1, verified: false, pid: peer, unchecked: true }
+  // Only a process this daemon holds alive for the session, and still the one it started: its CLI
+  // with the start time recorded at spawn (and this boot's, for a system service), or its ACP
+  // worker, a child of this daemon not reaped yet, with the start time read after spawn. The
+  // asker must have started by `openedAt`: a process given its pid after it exited started later.
+  const native = sessions.get(sid)
+  const worker = acp.hasWorker(sid) ? acp.workers.get(sid) : undefined
+  const procs: Array<{ pid: number; start?: string | null }> = []
+  if (native?.state === 'running' && native.pid && native.pid !== process.pid && (!SERVICE_MODE || (!!daemonBootId && native.bootId === daemonBootId))) {
+    procs.push({ pid: native.pid, start: native.startTime })
+  }
+  const wpid = worker?.proc?.pid
+  if (wpid && wpid !== process.pid && worker.proc.exitCode === null && worker.proc.signalCode === null && worker.start) {
+    procs.push({ pid: wpid, start: worker.start })
+  }
+  // Each start time read again by the reader that recorded it (the CLI's by the daemon's own, an
+  // ACP worker's by `ps` as acp-daemon.ts reads it), so a locale never makes it differ.
+  const now = new Map<number, string | null>()
+  for (const p of procs) now.set(p.pid, p.pid === wpid ? await psLstart(p.pid) : await proofStartTime(p.pid))
+  const verdict = proofFor(table, peer, openedAt, procs, (pid) => now.get(pid))
   const parent = table.get(peer)?.ppid
   const args = parent && parent > 1 ? await new Promise<string | null>((resolve) => {
     execFile('ps', ['-o', 'args=', '-p', String(parent)], { timeout: 2_000 }, (err, stdout) => resolve(err ? null : String(stdout ?? '').trim()))
   }) : null
   const proc = parentName(table, peer)
   return {
-    v: 1, verified: own.length > 0 && descendsFrom(table, peer, own), pid: peer,
+    v: 1, verified: verdict.verified, pid: peer,
+    ...(verdict.unchecked ? { unchecked: true } : {}),
     ...(proc ? { process: proc } : {}),
     ...(args ? { ranBy: shortProgram(args.split('\n')[0]!).slice(0, 300) } : {}),
+  }
+}
+
+const proofStartTime = createAsyncStartTimeReader({
+  fs,
+  execFileFn: (file, args, options, callback) => execFile(file, args, options, (error, stdout) => callback(error, String(stdout ?? ''))),
+})
+
+/** A process's lstart read as acp-daemon.ts reads its workers' (psField), or null. */
+function psLstart(pid: number): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile('ps', ['-ww', '-o', 'lstart=', '-p', String(pid)], { timeout: 2_000 }, (err, stdout) => resolve(err ? null : String(stdout ?? '').trim() || null))
+  })
+}
+
+/**
+ * caller-proof-v1 `caller.check {sid, pid, at}`: the same word for a process the server found on
+ * its own HTTP connection (lsof/ss), from what this daemon holds in memory for the session, never
+ * from a file another process could write. Read-only; not reachable through a bridge.
+ */
+async function cmdCallerCheck(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>): Promise<void> {
+  const pid = Number(cmd.pid)
+  const at = Number(cmd.at)
+  const sid = typeof cmd.sid === 'string' ? cmd.sid : ''
+  if (!Number.isSafeInteger(pid) || pid <= 1 || !Number.isFinite(at) || !sid) return sendError(ws, id, 'caller.check: needs sid, pid and at')
+  const callerSid = resolveGatewayCallerSid(sid, sessions, gatewaySidAliases) ?? (acp.hasWorker(sid) ? sid : null)
+  if (!callerSid || isExternalCallerSid(callerSid)) return sendOk(ws, id, { proof: { v: 1, verified: false, pid, unchecked: true } })
+  try {
+    sendOk(ws, id, { proof: await gatewayCallerProof(pid, callerSid, at) })
+  } catch (err) {
+    sendError(ws, id, `caller.check: ${String(err)}`)
   }
 }
 
@@ -5593,7 +5657,7 @@ function startGatewayListener() {
     // characters (corrupt JSON), and re-measuring/re-scanning the accumulated
     // string per chunk is O(line²) — ~1.6GB of rescanning for 10MB in 64KB
     // chunks.
-    type GwSockData = { chunks: Uint8Array[]; bytes: number; done: boolean; out?: Buffer; sent?: number }
+    type GwSockData = { chunks: Uint8Array[]; bytes: number; done: boolean; out?: Buffer; sent?: number; openedAt?: number }
     type GwSocket = { data: GwSockData; write(s: string | Buffer): number; end(): void }
     // Bun.listen raw sockets do PARTIAL writes: write() returns the bytes the
     // kernel buffer took (~8KB) and end() closes immediately, silently
@@ -5621,7 +5685,7 @@ function startGatewayListener() {
     Bun.listen<GwSockData>({
       unix: GATEWAY_SOCK_PATH,
       socket: {
-        open(socket) { socket.data = { chunks: [], bytes: 0, done: false } },
+        open(socket) { socket.data = { chunks: [], bytes: 0, done: false, openedAt: Date.now() } },
         data(socket, chunk) {
           const d = socket.data
           if (d.done) return
@@ -5640,7 +5704,7 @@ function startGatewayListener() {
           d.done = true
           const line = Buffer.concat(d.chunks).toString('utf-8')
           d.chunks = []
-          handleGatewayLine(line, (resp) => reply(socket, resp), socket.fd)
+          handleGatewayLine(line, (resp) => reply(socket, resp), socket.fd, d.openedAt)
         },
         drain(socket) { pump(socket) },
         error() { /* client went away — pending timer self-cleans */ },

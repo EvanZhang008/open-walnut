@@ -57,24 +57,41 @@ command and its folder) and **Session**. A part Walnut does not know says so (`S
 
 A session id is a name: any process of the account could put one in `WALNUT_SESSION_ID`. So
 Walnut checks the process on the other end of the request itself
-(`src/core/approvals/caller-proof.ts`): `lsof` (macOS) or `ss` (Linux) names the process holding
-the connection, and one `ps` walks its parents to the session's own process, whatever engine runs
-it: the Claude Code CLI (the session record's pid), an ACP worker (Codex and every other ACP
-engine, from this machine's daemon's worker list), or the shell of a task terminal Walnut opened
-(`WALNUT_TERMINAL_SESSION_ID`, checked against the terminal's dtach process; a person's own
-commands there never count as a session's). The result is the requester's `identity`:
+(`src/core/approvals/caller-proof.ts`): `lsof` (macOS) or `ss`, else `lsof` (Linux) names the process holding
+the connection. Whether that process runs inside the session is the word of the daemon that runs
+the session, which holds its processes in memory: the Claude Code CLI, an ACP worker (Codex and
+every other ACP engine), each with the start time it read when it started it (`caller.check`,
+caller-proof-v1). Walnut never takes them from a file, since any process of the account can write
+one. A local task terminal's shell is the one exception (`WALNUT_TERMINAL_SESSION_ID`): its dtach
+master records its pid and start time in a pid file, which only ever names a task for a plain ask,
+never a session, so it cannot get a single-use approval. A person's own commands there never count
+as a session's. The result is the requester's `identity`:
 
 | identity | When | The screen says |
 |---|---|---|
 | `verified` | the asking process descends from that session's process | "seen inside this task's session" |
 | `unverified`, `check: outside` | Walnut looked, and the asking process is not inside that session (another session's id, a forged one) | "unverified: the asking process is not inside this session" |
-| `unverified`, `check: unchecked` | Walnut could not look: no `lsof`/`ss`, a timeout, the session has no live process, or the call came through a host daemon too old to say (below) | "not checked: Walnut could not look at the asking process" |
+| `unverified`, `check: unchecked` | Walnut could not look: no `lsof`/`ss`, a timeout, the session has no live process the daemon recorded, a daemon too old to say (below) | "not checked: Walnut could not look at the asking process" |
 | `none` | no session named: a cron job, a hand-started script | "Session: unknown", with the host, folder, command, the process that started it and the user |
 
 The match is on the whole connection (both addresses, both ports), so a process that binds the
 same port number on another loopback address is not taken for the caller; a stopped session's
 recorded pid, this server and the processes above it, and the local daemon never count as a
-session's process. A request that claims a host's relay (`x-walnut-origin: host:<name>`) and is not
+session's process.
+
+A pid is checked as the process it was, never only as a number, since the kernel gives a pid out
+again once its process ends (`src/providers/caller-proof-core.ts`). One `ps` snapshot names each
+process's parent and start time. A session's process counts only while it is the one recorded: the
+CLI under the start time the daemon read at spawn (and this boot's, for a host's system service),
+the ACP worker under the start time read after starting it (a worker with none read yet does not
+count), each read again by the reader that recorded it, so a locale never makes them differ; the
+terminal's dtach master under the start time it recorded. The asking process must have started
+before Walnut looked (the HTTP check) or before the daemon's socket connection opened (the gateway
+check): a process given the asker's pid after it exited started later. `ps` gives start times in
+whole seconds and Linux's may drift by one with the clock, so only a pid given out again within
+about two seconds would pass, and both systems hand pids out in turn.
+
+A request that claims a host's relay (`x-walnut-origin: host:<name>`) and is not
 the server's own self-call is read as the sending process's own ask on this machine, with no
 session.
 
@@ -82,7 +99,7 @@ A call through a host daemon's gateway socket (a remote host, the gateway `walnu
 PATH, a session's Walnut tools) is checked by that daemon (`caller-proof-v1`,
 `src/providers/socket-peer-pid.ts`): it reads the process on the other end of its socket from the
 kernel (`LOCAL_PEERPID` on macOS, `SO_PEERCRED` on Linux), walks its parents to the CLI or ACP
-worker it runs for that session, and puts its answer on the relayed call as `callerProof`. Only the
+worker it runs for that session (each checked by its start time, above), and puts its answer on the relayed call as `callerProof`. Only the
 daemon writes it: both daemon builds drop one the caller sent, the server reads it only from a daemon
 that advertises the capability, and the approvals route reads it only by a token the relay made in
 the server's own memory (`src/core/approvals/relay-proof.ts`), never from a header another process

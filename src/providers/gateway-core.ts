@@ -75,6 +75,9 @@ export interface CallerProof {
   /** The asking process descends from the session's own process (its CLI or ACP worker). */
   verified: boolean
   pid?: number
+  /** Not verified because the daemon could not tell (no live process recorded for the session, a
+   *  peer it could not read), as against one it saw outside the session. */
+  unchecked?: boolean
   /** The name of the process that started the asker, and its command line. */
   process?: string
   ranBy?: string

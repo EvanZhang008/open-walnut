@@ -440,3 +440,11 @@ export async function relayFile(fromHost: string, fromPath: string, toHost: stri
     }
   }
 }
+
+/** caller-proof-v1: whether process `pid` of `host` runs inside session `sid` there, by that host's daemon (approvals). */
+export async function callerCheck(host: string, opts: { sid: string; pid: number; at: number }): Promise<import('../../providers/gateway-core.js').CallerProof> {
+  const { CALLER_PROOF_CAPABILITY } = await import('../../providers/gateway-core.js')
+  const reply = await call<{ proof?: import('../../providers/gateway-core.js').CallerProof }>(host, CALLER_PROOF_CAPABILITY, 'caller.check', { ...opts }, 4_000)
+  if (!reply.proof || typeof reply.proof.verified !== 'boolean') throw new Error('caller.check: no proof in the answer')
+  return reply.proof
+}

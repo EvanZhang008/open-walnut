@@ -35,8 +35,10 @@ function load(): PeerPid | null {
     try {
       const { symbols } = ffi.dlopen(lib, {
         getsockopt: { args: [ffi.FFIType.i32, ffi.FFIType.i32, ffi.FFIType.i32, ffi.FFIType.ptr, ffi.FFIType.ptr], returns: ffi.FFIType.i32 },
+        socketpair: { args: [ffi.FFIType.i32, ffi.FFIType.i32, ffi.FFIType.i32, ffi.FFIType.ptr], returns: ffi.FFIType.i32 },
+        close: { args: [ffi.FFIType.i32], returns: ffi.FFIType.i32 },
       })
-      return (fd: number) => {
+      const read = (fd: number) => {
         if (!Number.isInteger(fd) || fd < 0) return undefined
         // macOS: an int pid. Linux: struct ucred { pid, uid, gid }, three ints.
         const out = new Int32Array(mac ? 1 : 3)
@@ -45,6 +47,14 @@ function load(): PeerPid | null {
         const pid = out[0]!
         return rc === 0 && pid > 1 ? pid : undefined
       }
+      // It counts only once it reads this process back through a socket pair of its own
+      // (AF_UNIX = 1, SOCK_STREAM = 1 on both systems), so a capability it advertises works.
+      const pair = new Int32Array(2)
+      if (symbols.socketpair!(1, 1, 0, ffi.ptr(pair)) !== 0) continue
+      const self = read(pair[0]!)
+      symbols.close!(pair[0]!); symbols.close!(pair[1]!)
+      if (self !== process.pid) continue
+      return read
     } catch { /* the next name */ }
   }
   return null

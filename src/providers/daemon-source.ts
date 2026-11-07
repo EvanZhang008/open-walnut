@@ -6595,6 +6595,12 @@ function handleGatewayLine(line, respond) {
   var parsed = parseGatewayLine(line);
   if (parsed.ok !== true) return respond(parsed);
   var req = parsed.request;
+  // caller-proof-v1 (gateway-core.ts): only a daemon writes callerProof, and this twin cannot read
+  // its socket's peer, so it sends none and drops any the caller put there, on every path.
+  if (req.args && typeof req.args === 'object' && 'callerProof' in req.args) {
+    req.args = Object.assign({}, req.args);
+    delete req.args.callerProof;
+  }
   if (pluginJobs.isRunSid(req.sid)) {
     var jobHome = pluginJobs.homeOfRun(req.sid);
     if (!jobHome) return respond(gatewayError('unknown_caller', 'no plugin job of this daemon runs under this id'));
@@ -6611,14 +6617,7 @@ function handleGatewayLine(line, respond) {
   if (callerSid === EXTERNAL_CALLER_SID) {
     logMsg('info', 'gateway: external caller (no session env)', { op: req.op });
   }
-  // caller-proof-v1 (gateway-core.ts): only a daemon writes callerProof, and this twin cannot read
-  // its socket's peer, so it sends none and drops any the caller put there.
-  var relayArgs = req.args;
-  if (relayArgs && typeof relayArgs === 'object' && 'callerProof' in relayArgs) {
-    relayArgs = Object.assign({}, relayArgs);
-    delete relayArgs.callerProof;
-  }
-  sendGatewayRequest(req.op, callerSid, relayArgs, respond, gatewayCallPlan(req.waitMs, GATEWAY_HUB_TIMEOUT_MS, Date.now()));
+  sendGatewayRequest(req.op, callerSid, req.args, respond, gatewayCallPlan(req.waitMs, GATEWAY_HUB_TIMEOUT_MS, Date.now()));
 }
 
 // Second listener: owner-only unix socket, raw NDJSON, one request per conn.

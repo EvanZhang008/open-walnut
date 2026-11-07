@@ -16,9 +16,10 @@
  * process whose socket is exactly this connection's client end (both addresses and both ports).
  */
 import { execFile } from 'node:child_process'
-import { MAX_DEPTH, descendsFrom, parentName, parseProcessTable, shortProgram } from '../../providers/caller-proof-core.js'
+import { readFileSync } from 'node:fs'
+import { MAX_DEPTH, PS_TREE_ARGS, descendsFrom, parentName, parseProcessTree, shortProgram, startedBy, stillTheirs, type ProcRow } from '../../providers/caller-proof-core.js'
 
-export { descendsFrom, parentName, parseProcessTable, shortProgram }
+export { descendsFrom, parentName, parseProcessTable, parseProcessTree, shortProgram, startedBy, stillTheirs } from '../../providers/caller-proof-core.js'
 
 export type CallerIdentity = 'verified' | 'unverified' | 'none'
 
@@ -98,12 +99,14 @@ async function limited<T>(fn: () => Promise<T>): Promise<T> {
 export async function clientPidsOf(c: Conn): Promise<number[] | null> {
   if (!Number.isInteger(c.remotePort) || c.remotePort <= 0) return null
   return limited(async () => {
-    if (process.platform === 'darwin') {
+    const viaLsof = async () => {
       const out = await run('lsof', ['-nP', '-b', '-w', `-iTCP:${c.remotePort}`, '-sTCP:ESTABLISHED', '-Fpn'])
       return out === null ? null : clientPidsFromLsof(out, c)
     }
+    if (process.platform === 'darwin') return viaLsof()
+    // Linux: ss, else lsof (a slim image may carry one and not the other).
     const out = await run('ss', ['-Htnp', 'state', 'established', `( sport = :${c.remotePort} and dport = :${c.localPort} )`])
-    return out === null ? null : clientPidsFromSs(out, c)
+    return out === null ? viaLsof() : clientPidsFromSs(out, c)
   })
 }
 
@@ -117,11 +120,45 @@ export async function isSelfCall(c: Conn): Promise<boolean> {
   return !!pids && pids.length === 1 && pids[0] === process.pid
 }
 
-export async function processTable(): Promise<Map<number, { ppid: number; comm: string }> | null> {
+export async function processTable(): Promise<Map<number, ProcRow> | null> {
   return limited(async () => {
-    const out = await run('ps', ['-axo', 'pid=,ppid=,comm='])
-    return out ? parseProcessTable(out) : null
+    const out = await run('ps', PS_TREE_ARGS)
+    const table = out ? parseProcessTree(out) : null
+    return table && table.size ? table : null
   })
+}
+
+/** A Linux process's start in /proc ticks, the form a Linux daemon records. */
+function procTicks(pid: number): string | null {
+  try {
+    const raw = readFileSync(`/proc/${pid}/stat`, 'utf8')
+    return raw.slice(raw.lastIndexOf(')') + 2).split(' ')[19] ?? null
+  } catch { return null }
+}
+
+/** A process of the session, as recorded: its pid with its start time, or a time it had started by. */
+export interface SessionProc { pid: number; start?: string | null; startUtc?: string; before?: number }
+
+/** The local daemon's word on whether `pid` runs inside session `sid` (undefined: no word). */
+export type InSession = (sid: string, pid: number, at: number) => Promise<{ verified: boolean; unchecked?: boolean } | undefined>
+
+let inSessionImpl: InSession | null = null
+
+/** Tests stand in for the daemon (its real command is driven in daemon-caller-proof-twins-e2e). */
+export function _setInSessionForTesting(fn: InSession | null): void { inSessionImpl = fn }
+
+/**
+ * Ask this machine's daemon, which holds the session's processes in memory (its CLI with the start
+ * time read at spawn, its ACP worker): never a file, since any process of the account can write one.
+ */
+export const inSessionByDaemon: InSession = async (sid, pid, at) => {
+  if (inSessionImpl) return inSessionImpl(sid, pid, at)
+  try {
+    const { callerCheck } = await import('../transfer/daemon-transfer-client.js')
+    return await callerCheck('__local__', { sid, pid, at })
+  } catch {
+    return undefined
+  }
 }
 
 /** This server and every process above it: never a session's own process. Pure. */
@@ -146,8 +183,8 @@ async function parentCommand(table: Map<number, { ppid: number }>, pid: number):
 }
 
 /**
- * The identity of a local caller. `sessionPids` are the named session's own live processes (its
- * CLI, its ACP worker, its terminal's dtach process); `notSession` are processes that never count
+ * The identity of a local caller. `sessionProcs` are the named session's own processes (its
+ * CLI, its ACP worker, its terminal's dtach process) with the start time recorded for each; `notSession` are processes that never count
  * as one (the local daemon). Never throws.
  *
  * - verified: exactly one process holds the connection and it descends from one of them;
@@ -155,9 +192,10 @@ async function parentCommand(table: Map<number, { ppid: number }>, pid: number):
  *   is refused);
  * - unchecked: Walnut could not look (no lsof or ss, a timeout, no live process recorded).
  */
-export async function localCallerIdentity(input: { conn?: Conn; sessionId?: string; sessionPids: readonly number[]; notSession?: readonly number[] }):
+export async function localCallerIdentity(input: { conn?: Conn; sessionId?: string; sessionProcs?: readonly SessionProc[]; inSession?: InSession; notSession?: readonly number[] }):
 Promise<{ identity: CallerIdentity; check?: 'outside' | 'unchecked'; process?: string; ranBy?: string; user?: string }> {
   try {
+    const askedAt = Date.now()
     const pids = input.conn ? await clientPidsOf(input.conn) : null
     const pid = pids && pids.length === 1 && pids[0] !== process.pid ? pids[0] : undefined
     const table = pid ? await processTable() : null
@@ -169,8 +207,18 @@ Promise<{ identity: CallerIdentity; check?: 'outside' | 'unchecked'; process?: s
     if (!input.sessionId) return { identity: 'none', ...seen, ...(user ? { user } : {}) }
     if (pids && pids.length > 1) return { identity: 'unverified', check: 'outside' }
     if (!pid || !table) return { identity: 'unverified', check: 'unchecked' }
+    // The process holding the connection started before Walnut looked; one that got its pid after
+    // it exited started later, and the snapshot cannot speak for the asker.
+    if (!startedBy(table.get(pid)?.start, askedAt)) return { identity: 'unverified', check: 'unchecked' }
+    if (input.inSession) {
+      // A session's own processes are known to the daemon that runs them, which says.
+      const word = await input.inSession(input.sessionId, pid, askedAt)
+      if (!word || word.unchecked) return { identity: 'unverified', check: 'unchecked', ...seen }
+      return word.verified ? { identity: 'verified', ...seen } : { identity: 'unverified', check: 'outside', ...seen }
+    }
     const never = new Set([...selfAndAbove(table, process.pid), ...(input.notSession ?? [])])
-    const own = input.sessionPids.filter((p) => !never.has(p) && table.has(p))
+    // Only the session's processes still the ones recorded: a pid given out again counts for nothing.
+    const own = stillTheirs(table, input.sessionProcs ?? [], procTicks).filter((p) => !never.has(p))
     if (!own.length) return { identity: 'unverified', check: 'unchecked', ...seen }
     return descendsFrom(table, pid, own)
       ? { identity: 'verified', ...seen }

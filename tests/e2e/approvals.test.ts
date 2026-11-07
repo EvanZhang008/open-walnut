@@ -48,6 +48,58 @@ async function curl(urlPath: string, body: unknown, headers: Record<string, stri
   return parseCurl(stdout)
 }
 
+/** Withdraw an ask a check made, so the file stays under the cap on open approvals. */
+async function withdraw(r: { body: any }): Promise<void> {
+  if (r.body?.approval?.id) await http('POST', `/api/v1/approvals/${r.body.approval.id}/cancel`, { token: r.body.waitToken })
+}
+
+/** The start line a dtach master records for itself (dtach-master.ts START_FN). */
+async function masterStart(pid: number): Promise<string> {
+  const { START_FN } = await import('../../src/web/terminal/dtach-master.js')
+  const { stdout } = await execFileP('/bin/sh', ['-c', `${START_FN}; walnut_st "\${1}"`, 'sh', String(pid)])
+  return stdout.trim()
+}
+
+/** When `pid` started, as the daemon records it on a Mac (`ps -o lstart=`; tests compare the same form on Linux). */
+async function startOf(pid: number): Promise<string> {
+  const { stdout } = await execFileP('ps', ['-o', 'lstart=', '-p', String(pid)], { env: { ...process.env, LC_ALL: 'C', LANG: 'C' } })
+  return stdout.trim()
+}
+
+/**
+ * This machine's daemon, as the approvals route asks it (`caller.check`, caller-proof-v1): the
+ * sessions it runs, each with the start time it read at spawn, judged with the daemon's own verdict
+ * (`proofFor`) on a real `ps` snapshot. The daemon's command itself is driven in
+ * tests/providers/daemon-caller-proof-twins-e2e.test.ts.
+ */
+const daemonSessions = new Map<string, { pid: number; start?: string | null }>()
+const daemonAsked: string[] = []
+beforeAll(async () => {
+  const { _setInSessionForTesting } = await import('../../src/core/approvals/caller-proof.js')
+  const { PS_TREE_ARGS, parseProcessTree, proofFor } = await import('../../src/providers/caller-proof-core.js')
+  _setInSessionForTesting(async (sid, pid, at) => {
+    daemonAsked.push(sid)
+    const { stdout } = await execFileP('ps', PS_TREE_ARGS, { env: { ...process.env, LC_ALL: 'C', LANG: 'C' }, maxBuffer: 8 * 1024 * 1024 })
+    const own = daemonSessions.get(sid)
+    return proofFor(parseProcessTree(stdout), pid, at, own ? [own] : [], () => null)
+  })
+})
+afterAll(async () => {
+  const { _setInSessionForTesting } = await import('../../src/core/approvals/caller-proof.js')
+  _setInSessionForTesting(null)
+})
+
+/**
+ * Record `pid` as session `sid`'s live CLI, the way this machine's daemon does: the session record
+ * names the pid, and the daemon holds it with the start time it read at spawn (`start` overrides
+ * that, for a pid given out again; `key` is the daemon's name for it, an ACP runtime id).
+ */
+async function asDaemonSession(sid: string, pid: number, start?: string | null, key = sid): Promise<void> {
+  const { updateSessionRecord } = await import('../../src/core/session-tracker.js')
+  daemonSessions.set(key, { pid, start: start === undefined ? await startOf(pid) : start })
+  await updateSessionRecord(sid, { pid, process_status: 'idle' })
+}
+
 /**
  * A request from inside a session: a shell stands for the session's own process (its CLI), and
  * runs curl as its child once `register` has recorded the shell's pid as the session's, the way a
@@ -231,7 +283,7 @@ describe('walnut approve against a real server', () => {
     const sid = crypto.randomUUID()
     await createSessionRecord(sid, task.id, task.project, WALNUT_HOME, { host: '__local__', initialProcessStatus: 'stopped' })
     const { updateSessionRecord } = await import('../../src/core/session-tracker.js')
-    const asSession = (pid: number) => updateSessionRecord(sid, { pid, process_status: 'idle' }).then(() => undefined)
+    const asSession = (pid: number) => asDaemonSession(sid, pid)
     const H = { 'x-walnut-caller-sid': sid, 'x-walnut-origin': LOCAL_ORIGIN }
     const spec = { what: 'Allow one Git push?', detail: JSON.stringify({ session: sid, task: task.id,
       repo: '/work/repo', remote: 'ssh://example.com/private/repo', sha: 'ab'.repeat(20), nonce: crypto.randomBytes(32).toString('hex') }),
@@ -311,7 +363,8 @@ describe('who asks: Walnut checks the asking process, never only the session id 
     const theirs = crypto.randomUUID()
     await createSessionRecord(mine, task.id, task.project, WALNUT_HOME, { host: '__local__', initialProcessStatus: 'stopped' })
     await createSessionRecord(theirs, otherTask.id, otherTask.project, WALNUT_HOME, { host: '__local__', initialProcessStatus: 'idle', pid: other.pid! })
-    const asMine = (pid: number) => updateSessionRecord(mine, { pid, process_status: 'idle' }).then(() => undefined)
+    await asDaemonSession(theirs, other.pid!)
+    const asMine = (pid: number) => asDaemonSession(mine, pid)
     return { task, mine, theirs, asMine }
   }
 
@@ -334,6 +387,18 @@ describe('who asks: Walnut checks the asking process, never only the session id 
     const reused = await curlInSession((pid) => updateSessionRecord(stale, { pid, process_status: 'stopped' }).then(() => undefined),
       '/api/v1/approvals', { what: 'Identity: stale pid' }, { 'x-walnut-caller-sid': stale })
     expect(reused.body.approval.requester).toMatchObject({ sessionId: stale, identity: 'unverified', check: 'unchecked' })
+    // A live session whose recorded pid was given out again: the daemon recorded another start time
+    // for it, so the process now under that pid is not the session's, whatever it runs.
+    const recycled = await curlInSession((pid) => asDaemonSession(stale, pid, 'Mon Jan  1 00:00:00 2001'),
+      '/api/v1/approvals', { what: 'Identity: recycled pid' }, { 'x-walnut-caller-sid': stale })
+    expect(recycled.body.approval.requester).toMatchObject({ sessionId: stale, identity: 'unverified', check: 'unchecked' })
+    await withdraw(recycled)
+    // A pid the session record names that the daemon's registry does not (it names the earlier one)
+    // has no recorded start time, and proves nothing either.
+    const unrecorded = await curlInSession((pid) => updateSessionRecord(stale, { pid, process_status: 'idle' }).then(() => undefined),
+      '/api/v1/approvals', { what: 'Identity: no recorded start' }, { 'x-walnut-caller-sid': stale })
+    expect(unrecorded.body.approval.requester).toMatchObject({ identity: 'unverified', check: 'unchecked' })
+    await withdraw(unrecorded)
 
     const forged = await curl('/api/v1/approvals', { what: 'Identity: forged' }, { 'x-walnut-caller-sid': theirs })
     expect(forged.status).toBe(200)
@@ -375,7 +440,7 @@ describe('who asks: Walnut checks the asking process, never only the session id 
     const { hostOrigin } = await import('../../src/lib/caller-origin.js')
     const { task } = await addTask({ title: 'Identity remote task', project: 'Approval tests' })
     const sid = crypto.randomUUID()
-    await createSessionRecord(sid, task.id, task.project, WALNUT_HOME, { host: 'devbox', initialProcessStatus: 'stopped' })
+    await createSessionRecord(sid, task.id, task.project, WALNUT_HOME, { host: 'devbox', initialProcessStatus: 'idle' })
     // The real relay: the server runs the host's op itself (capability-router.ts), in this process.
     const relayed = await executeOp('approval_request', { what: 'Identity: relayed' }, { origin: hostOrigin('devbox'), callerSid: sid, callerHost: 'devbox', apiBase: base })
     expect(relayed.ok).toBe(true)
@@ -403,6 +468,12 @@ describe('who asks: Walnut checks the asking process, never only the session id 
     expect(((outsideRelay.ok ? outsideRelay.result : {}) as Record<string, any>).approval.requester).toMatchObject({ identity: 'unverified', check: 'outside' })
     const strictSeen = await viaDaemon({ what: 'Identity: relayed strict, seen', detail: 'ctx', mode: 'biometric', single_use: true, signing_key_id: active.id, timeout_ms: 60_000 }, { v: 1, verified: true, pid: 4242 })
     expect(strictSeen.ok, JSON.stringify(strictSeen)).toBe(true)
+    // A stopped session's proof counts for nothing: its process may be gone and its pid anyone's.
+    const { updateSessionRecord } = await import('../../src/core/session-tracker.js')
+    await updateSessionRecord(sid, { process_status: 'stopped' })
+    const stale = await viaDaemon({ what: 'Identity: relayed, stopped session' }, { v: 1, verified: true, pid: 4242 })
+    expect(((stale.ok ? stale.result : {}) as Record<string, any>).approval.requester).toMatchObject({ identity: 'unverified', check: 'unchecked' })
+    await updateSessionRecord(sid, { process_status: 'idle' })
     // A proof token is this process's own: one named in a header by another process means nothing.
     const fakeToken = await curl('/api/v1/approvals', { what: 'Identity: fake proof token' },
       { 'x-walnut-caller-sid': sid, 'x-walnut-origin': hostOrigin('devbox'), 'x-walnut-caller-proof': 'f'.repeat(48) })
@@ -419,30 +490,41 @@ describe('who asks: Walnut checks the asking process, never only the session id 
   }, 30_000)
 
   it("an ACP engine's session (Codex and the rest) is seen through its worker's process", async () => {
-    const { createSessionRecord } = await import('../../src/core/session-tracker.js')
+    const { createSessionRecord, updateSessionRecord } = await import('../../src/core/session-tracker.js')
     const { addTask } = await import('../../src/core/task-manager.js')
-    const { localDaemonDirChoice, isProductionDaemonDir } = await import('../../src/lib/daemon-dir.js')
-    const dir = localDaemonDirChoice().dir
-    expect(isProductionDaemonDir(dir)).toBe(false)
     const { task } = await addTask({ title: 'Identity ACP task', project: 'Approval tests' })
     const sid = crypto.randomUUID()
     const runtimeId = `acp-${crypto.randomUUID()}`
     await createSessionRecord(sid, task.id, task.project, WALNUT_HOME, { host: '__local__', initialProcessStatus: 'idle' })
-    const { updateSessionRecord } = await import('../../src/core/session-tracker.js')
     await updateSessionRecord(sid, { acpRuntimeId: runtimeId })
-    const file = path.join(dir, 'acp-workers.json')
-    const before = await fs.readFile(file, 'utf8').catch(() => null)
+    // The daemon knows the worker by the session's ACP runtime id (acp-daemon.ts), and is asked by it.
+    const r = await curlInSession((pid) => asDaemonSession(sid, pid, undefined, runtimeId),
+      '/api/v1/approvals', { what: 'Identity: acp' }, { 'x-walnut-caller-sid': sid })
+    expect(r.body.approval.requester).toMatchObject({ sessionId: sid, identity: 'verified' })
+    expect(daemonAsked.at(-1)).toBe(runtimeId)
+    // A worker with no start time read yet does not name the process under its pid.
+    const unread = await curlInSession((pid) => asDaemonSession(sid, pid, null, runtimeId),
+      '/api/v1/approvals', { what: 'Identity: acp, no start' }, { 'x-walnut-caller-sid': sid })
+    expect(unread.body.approval.requester).toMatchObject({ sessionId: sid, identity: 'unverified', check: 'unchecked' })
+    await withdraw(unread)
+    // Nothing a process writes on disk names a session's worker: the daemon's word alone counts.
+    const { localDaemonDirChoice, isProductionDaemonDir } = await import('../../src/lib/daemon-dir.js')
+    const dir = localDaemonDirChoice().dir
+    expect(isProductionDaemonDir(dir)).toBe(false)
     await fs.mkdir(dir, { recursive: true })
+    const file = path.join(dir, 'acp-workers.json')
+    daemonSessions.delete(runtimeId)
     try {
-      // The daemon's worker list names the shell as this session's worker.
-      const r = await curlInSession(async (pid) => {
-        // The daemon keys its workers by the session's ACP runtime id (acp-daemon.ts).
-        await fs.writeFile(file, JSON.stringify({ ...(before ? JSON.parse(before) : {}), [runtimeId]: { pid, cmd: 'acp-worker.js' } }))
-      }, '/api/v1/approvals', { what: 'Identity: acp' }, { 'x-walnut-caller-sid': sid })
-      expect(r.body.approval.requester).toMatchObject({ sessionId: sid, identity: 'verified' })
+      const forged = await curlInSession(async (pid) => {
+        await fs.writeFile(file, JSON.stringify({ [runtimeId]: { pid, cmd: 'acp-worker.js', start: await startOf(pid) }, [sid]: { pid, start: await startOf(pid) } }))
+        await fs.writeFile(path.join(dir, 'sessions.json'), JSON.stringify({ version: 1, sessions: { [sid]: { pid, startTime: await startOf(pid) } } }))
+        await updateSessionRecord(sid, { pid, process_status: 'idle' })
+      }, '/api/v1/approvals', { what: 'Identity: acp, forged files' }, { 'x-walnut-caller-sid': sid })
+      expect(forged.body.approval.requester).toMatchObject({ sessionId: sid, identity: 'unverified', check: 'unchecked' })
+      await withdraw(forged)
     } finally {
-      if (before === null) await fs.rm(file, { force: true })
-      else await fs.writeFile(file, before)
+      await fs.rm(file, { force: true })
+      await fs.rm(path.join(dir, 'sessions.json'), { force: true })
     }
   }, 30_000)
 
@@ -456,12 +538,21 @@ describe('who asks: Walnut checks the asking process, never only the session id 
     const pidFile = dtachPidPath(sid)
     await fs.mkdir(path.dirname(pidFile), { recursive: true })
     try {
-      const inside = await curlInSession((pid) => fs.writeFile(pidFile, `${pid}\n`), '/api/v1/approvals', { what: 'Identity: terminal', terminal_session: sid })
+      const inside = await curlInSession(async (pid) => fs.writeFile(pidFile, `${pid}\n${await masterStart(pid)}\n`), '/api/v1/approvals', { what: 'Identity: terminal', terminal_session: sid })
       expect(inside.body.approval.requester).toMatchObject({ taskId: task.id, via: 'terminal', identity: 'verified' })
       expect(inside.body.approval.requester.sessionId).toBeUndefined()
+      // A pid record naming another start time is a dead terminal's: the process under its pid got
+      // the pid later and is not that terminal's shell. A record with no start time proves nothing.
+      for (const second of ['ps:Mon Jan 1 00:00:00 2001', 'proc:12', '']) {
+        const late = await curlInSession((pid) => fs.writeFile(pidFile, `${pid}\n${second}\n`),
+          '/api/v1/approvals', { what: 'Identity: terminal pid reused', terminal_session: sid })
+        expect(late.body.approval.requester.taskId).toBeUndefined()
+        expect(late.body.approval.requester.identity).toBe('none')
+        await withdraw(late)
+      }
       // Another shell naming that terminal is not in it.
       other ??= spawn('sleep', ['60'], { stdio: 'ignore' })
-      await fs.writeFile(pidFile, `${other.pid}\n`)
+      await fs.writeFile(pidFile, `${other.pid}\n${await masterStart(other.pid!)}\n`)
       const outside = await curl('/api/v1/approvals', { what: 'Identity: not terminal', terminal_session: sid })
       expect(outside.body.approval.requester.taskId).toBeUndefined()
       expect(outside.body.approval.requester.identity).toBe('none')

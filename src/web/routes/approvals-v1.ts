@@ -30,6 +30,7 @@ import { LOCAL_ORIGIN, REMOTE_HTTP_ORIGIN, hostOrigin } from '../../lib/caller-o
 import { CALLER_KIND_HEADER } from '../../lib/cli-sender.js'
 import { APPROVAL_WAIT_MAX_MS, type ApprovalDeviceKind, type ApprovalMode, type ApprovalRequester } from '../../core/approvals/types.js'
 import { ambientTestRun } from '../../core/test-run.js'
+import type { SessionProc } from '../../core/approvals/caller-proof.js'
 
 export const approvalsV1Router = Router()
 
@@ -95,7 +96,8 @@ export async function requesterOf(req: Request, body: Record<string, unknown>) {
     // could put any name in the header and pass its ask off as another machine's.
     host: origin.startsWith('host:') ? (hostHeader && hostHeader !== LOCAL_ORIGIN ? hostHeader : origin.slice(5)) : os.hostname() || 'this computer',
   }
-  let sessionPids: number[] = []
+  let sessionLive = false
+  let daemonSid: string | undefined
   if (sid && sid !== 'external') {
     const { resolveCaller } = await import('../../core/sessions/session-send-core.js')
     const caller = await resolveCaller(sid)
@@ -106,7 +108,9 @@ export async function requesterOf(req: Request, body: Record<string, unknown>) {
       out.taskId = caller.record.taskId
       // A stopped session's pid may belong to anything by now.
       const live = caller.record.process_status === 'running' || caller.record.process_status === 'idle'
-      sessionPids = await sessionProcessPids([caller.record.acpRuntimeId, sid], live ? caller.record.pid : undefined)
+      sessionLive = live
+      // The daemon knows an ACP session's worker by its runtime id.
+      daemonSid = caller.record.acpRuntimeId || sid
       try {
         const { getTask } = await import('../../core/task-manager.js')
         out.taskTitle = (await getTask(caller.record.taskId)).title
@@ -117,7 +121,7 @@ export async function requesterOf(req: Request, body: Record<string, unknown>) {
   const command = str(body.command, 200)
   if (cwd) out.cwd = cwd
   if (command) out.command = command
-  await proveIdentity(req, body, out, origin, sessionPids)
+  await proveIdentity(req, body, out, origin, sessionLive, daemonSid)
   return out
 }
 
@@ -127,8 +131,8 @@ export async function requesterOf(req: Request, body: Record<string, unknown>) {
  * checked here yet, so it reads unverified. A local task terminal's request (its shell has
  * WALNUT_TERMINAL_SESSION_ID) names the task once its process descends from that terminal.
  */
-async function proveIdentity(req: Request, body: Record<string, unknown>, out: ApprovalRequester, origin: string, sessionPids: number[]): Promise<void> {
-  const { isSelfCall, localCallerIdentity } = await import('../../core/approvals/caller-proof.js')
+async function proveIdentity(req: Request, body: Record<string, unknown>, out: ApprovalRequester, origin: string, sessionLive = false, daemonSid?: string): Promise<void> {
+  const { inSessionByDaemon, isSelfCall, localCallerIdentity } = await import('../../core/approvals/caller-proof.js')
   // A host origin is the server's own relay of a host daemon's call. From any other process of
   // this machine the header is only a claim: the ask is that process's own, made on this machine
   // and named for no session.
@@ -148,9 +152,9 @@ async function proveIdentity(req: Request, body: Record<string, unknown>, out: A
     if (!local) {
       const { relayProofOf } = await import('../../core/approvals/relay-proof.js')
       const held = relayProofOf(header(req, 'x-walnut-caller-proof'))
-      if (held && held.sid === out.sessionId) {
+      if (held && held.sid === out.sessionId && origin === hostOrigin(held.host) && sessionLive) {
         out.identity = held.proof.verified ? 'verified' : 'unverified'
-        if (!held.proof.verified) out.check = held.proof.pid ? 'outside' : 'unchecked'
+        if (!held.proof.verified) out.check = held.proof.pid && !held.proof.unchecked ? 'outside' : 'unchecked'
         if (held.proof.process) out.process = held.proof.process
         if (held.proof.ranBy) {
           const { redactSensitiveText } = await import('../../logging/redact.js')
@@ -160,8 +164,8 @@ async function proveIdentity(req: Request, body: Record<string, unknown>, out: A
       }
       out.identity = 'unverified'; out.check = 'unchecked'; return
     }
-    if (!conn) { out.identity = 'unverified'; out.check = 'unchecked'; return }
-    const seen = await localCallerIdentity({ conn, sessionId: out.sessionId, sessionPids, notSession })
+    if (!conn || !sessionLive) { out.identity = 'unverified'; out.check = 'unchecked'; return }
+    const seen = await localCallerIdentity({ conn, sessionId: daemonSid ?? out.sessionId, inSession: inSessionByDaemon, notSession })
     out.identity = seen.identity
     if (seen.check) out.check = seen.check
     if (seen.process) out.process = seen.process
@@ -170,8 +174,8 @@ async function proveIdentity(req: Request, body: Record<string, unknown>, out: A
   }
   const terminal = str(body.terminal_session, 120)
   if (local && conn && terminal && /^[A-Za-z0-9_-]+$/.test(terminal)) {
-    const pid = await terminalShellPid(terminal)
-    const seen = await localCallerIdentity({ conn, sessionId: terminal, sessionPids: pid ? [pid] : [], notSession })
+    const shell = await terminalShell(terminal)
+    const seen = await localCallerIdentity({ conn, sessionId: terminal, sessionProcs: shell ? [shell] : [], notSession })
     if (seen.identity === 'verified') {
       const { getSessionByClaudeId } = await import('../../core/session-tracker.js')
       const rec = await getSessionByClaudeId(terminal).catch(() => null)
@@ -188,7 +192,7 @@ async function proveIdentity(req: Request, body: Record<string, unknown>, out: A
       }
     }
   }
-  const seen = local && conn ? await localCallerIdentity({ conn, sessionPids: [] }) : { identity: 'none' as const }
+  const seen = local && conn ? await localCallerIdentity({ conn, sessionProcs: [] }) : { identity: 'none' as const }
   out.identity = 'none'
   if ('process' in seen && seen.process) out.process = seen.process
   if ('ranBy' in seen && seen.ranBy) out.ranBy = seen.ranBy
@@ -227,33 +231,20 @@ async function localDaemonPids(): Promise<number[]> {
 }
 
 /**
- * The processes a local session runs as: its Claude Code CLI (the record's pid), or the ACP
- * worker this machine's daemon runs for it (Codex and every other ACP engine), from the daemon's
- * own worker list, keyed by the record's runtime id.
+ * A local task terminal's dtach master, from its pid record: the pid and, on its second line, the
+ * start time the master recorded for itself (`proc:<ticks>` on Linux, `ps:<lstart in UTC>`
+ * elsewhere, dtach-master.ts). The process under that pid counts only while it is that one.
  */
-async function sessionProcessPids(keys: Array<string | undefined>, recordPid: unknown): Promise<number[]> {
-  const pids = typeof recordPid === 'number' && recordPid > 1 ? [recordPid] : []
-  try {
-    const { localDaemonDirChoice } = await import('../../lib/daemon-dir.js')
-    const fs = await import('node:fs/promises')
-    const path = await import('node:path')
-    const rows = JSON.parse(await fs.readFile(path.join(localDaemonDirChoice().dir, 'acp-workers.json'), 'utf8')) as Record<string, unknown>
-    // The daemon keys a worker by the session's ACP runtime id.
-    const key = keys.find((k): k is string => !!k && k in rows)
-    const row = key ? rows[key] : undefined
-    const pid = typeof row === 'number' ? row : (row as { pid?: unknown } | undefined)?.pid
-    if (typeof pid === 'number' && pid > 1) pids.push(pid)
-  } catch { /* no ACP worker here */ }
-  return pids
-}
-
-/** The pid of a local task terminal's dtach master, from its pid record. */
-async function terminalShellPid(sessionId: string): Promise<number | undefined> {
+async function terminalShell(sessionId: string): Promise<SessionProc | undefined> {
   try {
     const { dtachPidPath } = await import('../terminal/spawn.js')
     const fs = await import('node:fs/promises')
-    const pid = Number((await fs.readFile(dtachPidPath(sessionId), 'utf8')).split('\n')[0])
-    return Number.isInteger(pid) && pid > 1 ? pid : undefined
+    const [first, second] = (await fs.readFile(dtachPidPath(sessionId), 'utf8')).split('\n')
+    const pid = Number(first)
+    if (!Number.isInteger(pid) || pid <= 1) return undefined
+    const m = /^(proc|ps):(.+)$/.exec((second ?? '').trim())
+    if (!m) return undefined
+    return m[1] === 'proc' ? { pid, start: m[2]!.trim() } : { pid, startUtc: m[2]! }
   } catch {
     return undefined
   }
