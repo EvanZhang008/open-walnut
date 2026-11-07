@@ -62,6 +62,8 @@ import {
 } from '../../src/core/sessions/session-send-core.js';
 import { PEER_PENDING_CAP } from '../../src/core/peers/peer-throttle.js';
 import { parseWalnutMessage } from '../../src/core/peers/walnut-message-tag.js';
+import { notePluginName } from '../../src/core/plugins/plugin-caller.js';
+import { parseSessionEnvelopes } from '../../src/lib/history-session-envelope.js';
 import { REQUESTS_FILE, getSessionRequest, settleNotified } from '../../src/core/session-requests.js';
 import type { SessionRecord } from '../../src/core/types.js';
 
@@ -399,6 +401,22 @@ describe('performSessionSend — who is speaking decides the envelope', () => {
       to: 'sess-target-1', text: 'from another script', callerSid: 'external',
     });
     expect(parseWalnutMessage(deliveredText(1))!.attrs.host).toBe('unknown');
+  });
+
+  it('an installed App\'s own call is named as that App, never as an unidentified process', async () => {
+    sessions = [rec('sess-target-1', { title: 'Target' })];
+    notePluginName('quiz-coach', 'Quiz Coach');
+    await performSessionSend({ to: 'sess-target-1', text: 'you are the interviewer now', title: 'Now the interviewer', callerSid: 'plugin:quiz-coach' });
+    const sent = parseWalnutMessage(deliveredText(0))!;
+    expect(sent.attrs).toMatchObject({ from: 'Quiz Coach (App)', app: 'true', title: 'Now the interviewer' });
+    expect(sent.attrs.anonymous).toBeUndefined();
+    expect(sent.attrs.note).toContain('an App your user installed in Walnut');
+    expect(sent.body).toBe('you are the interviewer now');
+    // Every view reads it as the App's card, with no session id to resolve.
+    expect(parseSessionEnvelopes(deliveredText(0))![0]).toMatchObject({ kind: 'envelope', envelope: { kind: 'peer-note', peer: { title: 'Quiz Coach (App)' } } });
+    // A plugin id with no name yet still names the plugin.
+    await performSessionSend({ to: 'sess-target-1', text: 'hello', callerSid: 'plugin:unnamed-app' });
+    expect(parseWalnutMessage(deliveredText(1))!.attrs.from).toBe('unnamed-app (App)');
   });
 
   it('refuses a send that resolves to the calling session itself', async () => {

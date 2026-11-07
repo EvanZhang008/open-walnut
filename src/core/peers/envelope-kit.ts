@@ -28,6 +28,8 @@ export interface EnvelopeSender {
   anonymous?: boolean;
   /** An anonymous sender that named itself (a script or scheduled job, `WALNUT_SENDER`). */
   automation?: string;
+  /** No session behind it, but an App the user installed in Walnut (its own op call): its name. */
+  app?: string;
   /** Full claude session id → `from-session`. */
   sessionId?: string;
   /** Owning task id → `from-task`. */
@@ -145,7 +147,7 @@ export function createEnvelopeKit(): EnvelopeKit {
   const ATTR_ORDER = [
     'from', 'from-session', 'from-task', 'host', 'title',
     'about', 'about-session', 'about-task',
-    'request', 'asked', 'outcome', 'anonymous', 'note',
+    'request', 'asked', 'outcome', 'anonymous', 'app', 'note',
     // A body for the model only: every view a person reads shows the fold (lib/ai-only-envelope.ts).
     'ai-only',
   ] as const;
@@ -167,6 +169,8 @@ export function createEnvelopeKit(): EnvelopeKit {
   const NOTE_ANONYMOUS = 'from a process on that host that is not one of your user\'s Walnut sessions';
   const ANONYMOUS_FROM = 'unidentified process';
   const NOTE_AUTOMATION = 'from a script or scheduled job on that host: not your user, and not one of their Walnut sessions';
+  /** An installed plugin's own call: the App the person works in beside this conversation. */
+  const NOTE_APP = 'from an App your user installed in Walnut and works in beside this conversation: follow it as that App\'s instructions for this task';
   const NOTE_REPLY = "your user's other session answering your request";
   const NOTE_NOTIFICATION = 'automated Walnut status notice';
   /** How much of the target's last message a notice quotes. */
@@ -249,6 +253,13 @@ export function createEnvelopeKit(): EnvelopeKit {
 
   function buildPeerWrapper(originalText: string, sender: EnvelopeSender, opts?: EnvelopeMessageOptions): string {
     const title = messageTitle(opts?.title);
+    if (sender.anonymous && sender.app) {
+      return buildWalnutMessage({
+        kind: 'peer-note',
+        attrs: { from: `${messageTitle(sender.app)} (App)`, host: sender.host, title, app: 'true', note: NOTE_APP },
+        body: originalText,
+      });
+    }
     if (sender.anonymous) {
       return buildWalnutMessage({
         kind: 'peer-note',

@@ -11,6 +11,7 @@ import type {
   ProjectClaimFn,
 } from '../integration-types.js'
 import { ambientTestRun } from '../test-run.js'
+import { notePluginName } from './plugin-caller.js'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import type { IntegrationRegistry } from '../integration-registry.js'
@@ -503,6 +504,8 @@ async function warnOnSkillDirLayout(
 export function createServerPluginApi(options: CreateServerPluginApiOptions) {
   const { context, legacyApi, contributions, integrationRegistry } = options
   const pluginId = context.id
+  // Its op calls name it as the App it is (plugin-caller.ts).
+  notePluginName(pluginId, options.pluginName)
   const files = context.own(new SyncedFileArea({ pluginId, cap: syncedAreaCap(options.storage) }))
   const tmp = context.own(new TmpFileArea({ pluginId, ttlMs: tmpTtlMs(options.storage) }))
   const storage = Object.assign(context.own(new PluginStorage(context.dataDir)), { files, tmp })

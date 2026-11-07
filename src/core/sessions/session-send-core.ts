@@ -22,6 +22,7 @@
 import { log } from '../../logging/index.js';
 import type { SessionRecord } from '../types.js';
 import { buildPeerWrapper } from '../peers/peer-wrapper.js';
+import { pluginCallerName } from '../plugins/plugin-caller.js';
 import { senderTitleOf } from '../peers/sender-name.js';
 import { createEnvelopeKit } from '../peers/envelope-kit.js';
 import { sessionHandle } from '../peers/walnut-message-tag.js';
@@ -329,13 +330,16 @@ async function resolveSendTargetAddress(to: string): Promise<ResolvedTarget> {
 /** Caller classes the envelope decision keys on. */
 export type CallerIdentity =
   | { kind: 'session'; record: SessionRecord }
-  | { kind: 'external' }            // gateway 'external' or an unknown sid
+  | { kind: 'external'; app?: string } // gateway 'external' or an unknown sid; `app`: an installed plugin's own call
   | { kind: 'human' };              // no caller sid at all: the user's own CLI
 
 export async function resolveCaller(callerSid: string | undefined): Promise<CallerIdentity> {
   const sid = (callerSid ?? '').trim();
   if (!sid) return { kind: 'human' };
   if (sid === 'external') return { kind: 'external' };
+  // An installed App's own op call: no session, but not an unknown program either (plugin-caller.ts).
+  const app = pluginCallerName(sid);
+  if (app) return { kind: 'external', app };
   try {
     const { getSessionByClaudeId } = await import('../session-tracker.js');
     const record = await getSessionByClaudeId(sid);
@@ -740,7 +744,8 @@ async function performPlainSend(input: SessionSendInput): Promise<SessionSendRes
           ? displayHost(input.callerHost.trim().slice(0, 64))
           : walnutSends ? 'local' : 'unknown',
         anonymous: true,
-        ...(input.callerLabel ? { automation: input.callerLabel } : walnutSends ? { automation: `Walnut (${input.source})` } : {}),
+        ...(caller.kind === 'external' && caller.app ? { app: caller.app }
+          : input.callerLabel ? { automation: input.callerLabel } : walnutSends ? { automation: `Walnut (${input.source})` } : {}),
       }, { title: input.title });
   }
   // One `\n`, one line, and only when a request exists to answer.
