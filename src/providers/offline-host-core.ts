@@ -1385,6 +1385,9 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       evidence.length ? `Evidence:\n${evidence.map((e) => `- ${e}`).join('\n')}` : '',
       notDone.length ? `Not done (partial reply):\n${notDone.map((e) => `- ${e}`).join('\n')}` : ''].filter(Boolean).join('\n\n')
     if (!text) return fail('bad_request', 'text must be a non-empty string')
+    // An answer for the user is recorded on the asking task by the server, which also keeps it from
+    // waking a task that is not running (ask-answer.ts answerReach): never delivered here as a plain message.
+    if (args.answers_ask === true) return needsServer('Answering a task\'s ask of the user in their place (answers_ask)')
     if (args.in_reply_to !== undefined) {
       if (typeof args.in_reply_to !== 'string' || !/^rq-[a-f0-9]{6,}$/.test(args.in_reply_to)) return fail('bad_request', 'in_reply_to must be an rq-… id')
       return opReply(home, callerSid, args, text)
@@ -1658,6 +1661,9 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     if (!text) return null
     // A hand-off links requests in the server's ledger: the server delivers it.
     if (args.hands_on !== undefined) return null
+    // An answer for the user (answers_ask) is recorded on the asking task, and delivered only to one
+    // that runs (session-send-core.ts, ask-answer.ts answerReach): the server's alone to decide.
+    if (args.answers_ask !== undefined) return null
     // So does a structured reply (result / evidence / not_done): the server keeps its fields
     // on the request and the replier's task, where the Board reads Partial.
     if (args.result !== undefined || args.evidence !== undefined || args.not_done !== undefined) return null

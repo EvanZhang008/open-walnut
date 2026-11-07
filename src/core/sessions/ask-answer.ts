@@ -9,9 +9,16 @@
  * it is told). After the send: the answer is recorded on the asker (Task.ask_answered), so the shown
  * status (same-ask.ts answeredAbove) is no longer Needs you while it asks the same, whatever its
  * next report repeats.
+ *
+ * An answer never starts work the task is not doing (2026-11-06, the org reflection: a VP answered
+ * the ask of a task whose session had stopped, and within 90 s it woke, pushed two commits and armed
+ * a second trigger the VP then had to clean up). Only an open task whose session's CLI is alive takes
+ * the answer as a message (`answerReach`); a COMPLETE task, or one with no session running, has it
+ * recorded and taken off the user's Needs you, and nothing more: work there needs a task_start.
  */
 import { log } from '../../logging/index.js';
-import type { Task } from '../types.js';
+import type { SessionRecord, Task } from '../types.js';
+import { isLiveSessionStatus } from '../routines/session-target.js';
 import { briefTeam } from '../user-status.js';
 import { APPROVAL_KINDS, ASKS_ANSWERED_MAX, askAnswerLine, askKey, type AskAnswer, type SameAskFold } from '../same-ask.js';
 
@@ -37,6 +44,16 @@ export function openAskOf(t: Pick<Task, 'user_status' | 'status_report'>): { ask
   return { none: 'it asks the user nothing now' };
 }
 
+/**
+ * A COMPLETE task reads Done, so its ask is the one its last report still asked, if any: answered,
+ * it is recorded (a reopened task asking it again stays off Needs you), and never delivered.
+ */
+function finishedAskOf(t: Pick<Task, 'status_report'>): { ask: string } | { none: string } {
+  const r = t.status_report;
+  if (r?.state === 'needs' && r.ask) return { ask: r.ask };
+  return { none: 'it is complete and asks the user nothing (a message would reopen it; task_start it only if it must work again)' };
+}
+
 /** Whether `caller` stands above `target`: a task it is under, Main, or a lead or VP whose team holds it. Pure. */
 export function standsAbove(caller: Task, target: Task, everything: readonly Task[]): boolean {
   if (caller.id === target.id) return false;
@@ -50,9 +67,30 @@ export function standsAbove(caller: Task, target: Task, everything: readonly Tas
   return caller.org_role === 'lead' && briefTeam(caller, everything).some((t) => t.id === target.id);
 }
 
+/** Whether an answer for the user may be delivered as a message, or why it is only recorded. */
+export type AnswerReach = { wakes: true } | { wakes: false; why: 'complete' | 'stopped' };
+
+/**
+ * Whether an answer for the user reaches the asking task as a message: only an open task with a
+ * session whose CLI is alive (running or idle), so no answer ever resumes a stopped session or
+ * reopens a finished task. The explicit ways to have it act on the answer: task_start, or `force`
+ * with a reason (which leads the message, and reopens a COMPLETE task). Pure.
+ */
+export function answerReach(
+  task: Pick<Task, 'phase'>,
+  sessions: ReadonlyArray<Pick<SessionRecord, 'process_status' | 'archived'>>,
+  opts: { force?: boolean } = {},
+): AnswerReach {
+  if (opts.force === true) return { wakes: true };
+  if (task.phase === 'COMPLETE') return { wakes: false, why: 'complete' };
+  return sessions.some((s) => !s.archived && isLiveSessionStatus(s.process_status)) ? { wakes: true } : { wakes: false, why: 'stopped' };
+}
+
 export interface PreparedAnswer {
   /** Walnut's line that leads the answer: the one time the asker is told. */
   line: string;
+  /** The asking task, as the answer found it. */
+  target: Pick<Task, 'id' | 'title' | 'phase'>;
   /** Record it on the asker once the message is queued. */
   commit: () => Promise<void>;
 }
@@ -75,7 +113,7 @@ export async function prepareAskAnswer(
       `Not sent: answers_ask answers a task's question to the user in the user's place, which only a task it is under, its lead or VP, or Main does; "${target.title}" (${target.id}) is not below you. `
       + 'Send it without answers_ask, or tell the task that leads it.');
   }
-  const open = openAskOf(target);
+  const open = target.phase === 'COMPLETE' ? finishedAskOf(target) : openAskOf(target);
   if ('none' in open) {
     throw new AskAnswerError('no_open_ask', `Not sent: "${target.title}" (${target.id}) has no ask to answer here: ${open.none}. Or send it without answers_ask.`);
   }
@@ -97,6 +135,7 @@ export async function prepareAskAnswer(
   };
   return {
     line: askAnswerLine(ask, byTitle),
+    target: { id: target.id, title: target.title, phase: target.phase },
     commit: async () => {
       // Kept beside the ones before it, read under the row's lock: one answer never takes another's
       // place, even one recorded while this message was on its way.
@@ -117,11 +156,17 @@ export async function prepareAskAnswer(
  */
 export async function tellFoldAnswered(task: Pick<Task, 'id' | 'title'>, fold: SameAskFold): Promise<void> {
   const { listTasks } = await import('../task-manager.js');
-  const holder = (await listTasks()).find((t) => t.id === fold.id);
+  const all = await listTasks();
+  const holder = all.find((t) => t.id === fold.id);
   const answer = holder?.ask_answered?.key && holder.ask_answered.key === askKey(fold.ask) ? holder.ask_answered : null;
   const { getSessionsForTask } = await import('../session-tracker.js');
   const { pickDeliverySession } = await import('../routines/session-target.js');
-  const target = pickDeliverySession(await getSessionsForTask(task.id).catch(() => []));
+  // Told only while it runs: a stopped session is never resumed for it (answerReach), it reads the
+  // fold in its status when it is next started.
+  const sessions = (await getSessionsForTask(task.id).catch(() => [])).filter((s) => !s.archived && isLiveSessionStatus(s.process_status));
+  const self = all.find((t) => t.id === task.id);
+  if (!self || !answerReach(self, sessions).wakes) return;
+  const target = pickDeliverySession(sessions);
   if (!target) return;
   const { buildWalnutMessage } = await import('../peers/walnut-message-tag.js');
   const { sendMessageToSession } = await import('../session-message-queue.js');

@@ -51,6 +51,7 @@ defineOp({
     'so list there anything left over instead of burying it in the text. ' +
     'Give every message a `title`: the one-line TL;DR the reader sees first. ' +
     'When you decide in the user\'s place a question a task below you is asking the user, pass answers_ask=true: the user sees that ask no more, and the task is told once. ' +
+    'Such an answer never resumes a stopped session or reopens a finished task: to a COMPLETE task, or one whose session is not running, it is only recorded (no turn starts); task_start it when it must act on the answer. ' +
     'Address the task id. A task not started yet returns 409: use task_start. ' +
     'A COMPLETE task returns 409 target_complete: its work is done and a message would reopen it. ' +
     'Send to it only when it must act again, with force=true and a reason saying why; the reason leads the message. ' +
@@ -68,7 +69,8 @@ defineOp({
     hands_on: z.string().regex(/^rq-[a-f0-9]{6,}$/).optional().describe('A request you owe (rq-…) that you hand to this task instead of answering it now: its asker waits for this task\'s answer, is told where the work went, and gets that answer straight from it'),
     answers_ask: z.boolean().optional().describe(
       'This message decides the question the target task is asking the user, in the user\'s place (you are a task it is under, its lead or VP, or Main). '
-      + 'Walnut takes that ask off the user\'s Needs you and leads your message with one line telling the task so. 409 not_above when the task is not below you, '
+      + 'Walnut takes that ask off the user\'s Needs you and leads your message with one line telling the task so. A COMPLETE task, or one whose session is not running, '
+      + 'is not woken: the answer is recorded and nothing is delivered (delivery "recorded"); task_start it, or force with a reason, when it must act. 409 not_above when the task is not below you, '
       + '409 no_open_ask when it has no ask of its own to answer (none, a Board choice, or one shown on another task, named), 409 user_words for an ask only the user approves'),
     user_words: z.string().min(10).max(2000).optional().describe(
       'With answers_ask on an ask of a kind only the user approves (an outward send, spending, credentials, permissions, a cloud delete, an irreversible step): the user\'s own words you act on, quoted exactly'),
@@ -90,6 +92,14 @@ defineOp({
       : String(args.to ?? args.in_reply_to ?? 'the session');
     // The target's host did not take its last message in time: this one waits behind it.
     const waiting = sendBehindSlowHostLine(b.waiting, b.requestId, b.messageId);
+    if (delivery === 'recorded') {
+      const who = b.targetTaskId || target;
+      return withOutcome(
+        { ...b },
+        `Answer recorded on ${who}: Walnut took its ask off the user's Needs you. Not delivered: the task is ${b.notWoken === 'complete' ? 'COMPLETE' : 'not running'}, so no turn was started and it does not know yet.`,
+        `Nothing to wait for. If it must act on this answer, task_start ${who} with the answer in the message${b.notWoken === 'complete' ? ' (it reopens)' : ''}. Do NOT resend.`,
+      );
+    }
     return withOutcome(
       { ...b },
       delivery === 'deferred'

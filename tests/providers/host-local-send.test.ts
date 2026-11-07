@@ -296,6 +296,31 @@ describe('what the host leaves to the server (null: relay, nothing delivered)', 
   })
 })
 
+describe('an answer for the user (answers_ask) is never this host\'s to deliver (2026-11-06)', () => {
+  // The server records it on the asking task and delivers it only to a task that runs
+  // (ask-answer.ts answerReach); a plain delivery here would skip both.
+  it('while the server answers: left to the server, even to a running same-host target', async () => {
+    const h = harness()
+    expect(await send(h, A, { to: TASK_B, text: 'Decided: ship it.', answers_ask: true, expect_reply: false }).result).toBeNull()
+    expect(h.delivered).toEqual([])
+    expect(h.host.hasRecords(HOME)).toBe(false)
+  })
+
+  it('while the server is away: refused as needing the server, nothing delivered or queued', async () => {
+    const h = harness()
+    h.serverUp.v = false
+    const r = await h.host.handle(HOME, A, 'tools.call', { name: 'task_send', args: { to: TASK_B, text: 'Decided: ship it.', answers_ask: true } })
+    expect(r.ok).toBe(false)
+    expect(JSON.stringify(r)).toContain('hub_unreachable')
+    expect(JSON.stringify(r)).toContain('answers_ask')
+    expect(h.delivered).toEqual([])
+    // A plain message the same way still goes in: only the answer is held back.
+    const plain = await h.host.handle(HOME, A, 'tools.call', { name: 'task_send', args: { to: TASK_B, text: 'Ping.' } })
+    expect(plain.ok).toBe(true)
+    expect(h.delivered.map((d) => d.sid)).toEqual([B])
+  })
+})
+
 describe('the server\'s throttle, applied by the host', () => {
   it('10 messages a minute per sender, then throttled with a retry time; the window frees them', async () => {
     const h = harness()

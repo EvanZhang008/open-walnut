@@ -124,8 +124,11 @@ export interface SessionSendInput {
 }
 
 export interface SessionSendResult {
-  /** queued = dispatched; deferred = enqueued but target awaits a permission prompt. */
-  delivery: 'queued' | 'deferred';
+  /** queued = dispatched; deferred = enqueued but target awaits a permission prompt;
+   *  recorded = an answer for the user kept on a task it was not delivered to (`notWoken`). */
+  delivery: 'queued' | 'deferred' | 'recorded';
+  /** An answers_ask send to a COMPLETE task or one with no session running: recorded, no turn started. */
+  notWoken?: 'complete' | 'stopped';
   targetSessionId: string;
   targetTitle: string | null;
   targetTaskId?: string;
@@ -575,7 +578,12 @@ async function holdAnswer(key: string): Promise<() => void> {
   return () => { answering.delete(key); release(); };
 }
 
+/** A send that went out as a message (every send but an answer for the user that was only recorded). */
+export type DeliveredSendResult = SessionSendResult & { delivery: 'queued' | 'deferred' };
+
 /** The one send entry point (route + gateway both land here). */
+export async function performSessionSend(input: SessionSendInput & { answersAsk?: false }): Promise<DeliveredSendResult>;
+export async function performSessionSend(input: SessionSendInput): Promise<SessionSendResult>;
 export async function performSessionSend(input: SessionSendInput): Promise<SessionSendResult> {
   if (!input.answersAsk) {
     const result = await performPlainSend(input);
@@ -588,19 +596,31 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
     throw new SendError('bad_request', 'answers_ask needs a task\'s session or the person as the sender');
   }
   let targetTaskId: string | undefined;
+  // The sessions an answer would reach: a send's target session, or every session of the asker.
+  let reachable: SessionRecord[] = [];
+  let resolved: ResolvedTarget | undefined;
+  let asked: SessionRequest | undefined;
   if (input.inReplyTo) {
-    const { getSessionRequest } = await import('../session-requests.js');
-    const asked = await getSessionRequest(input.inReplyTo);
+    asked = await getSessionRequest(input.inReplyTo);
     if (asked) {
-      const { getSessionByClaudeId } = await import('../session-tracker.js');
-      targetTaskId = (await getSessionByClaudeId(asked.fromSessionId).catch(() => undefined))?.taskId;
+      const { getSessionByClaudeId, getSessionsForTask } = await import('../session-tracker.js');
+      const askerRecord = await getSessionByClaudeId(asked.fromSessionId).catch(() => undefined);
+      targetTaskId = askerRecord?.taskId;
+      reachable = [...(askerRecord ? [askerRecord] : []), ...(targetTaskId ? await getSessionsForTask(targetTaskId).catch(() => []) : [])];
     }
   } else if (input.to) {
-    // A target that cannot be reached fails here as the send would, never as a plain send.
-    const t = await resolveSendTarget(input.to);
-    targetTaskId = t.taskId ?? t.session.taskId;
+    // A target that cannot be reached fails here as the send would, never as a plain send; a task
+    // with no session at all is still answered (recorded), never started.
+    try {
+      resolved = await resolveSendTarget(input.to);
+      targetTaskId = resolved.taskId ?? resolved.session.taskId;
+      reachable = [resolved.session];
+    } catch (err) {
+      if (!(err instanceof SendError && err.code === 'task_has_no_session' && typeof err.detail?.taskId === 'string')) throw err;
+      targetTaskId = err.detail.taskId;
+    }
   }
-  const { prepareAskAnswer, AskAnswerError } = await import('./ask-answer.js');
+  const { prepareAskAnswer, AskAnswerError, answerReach } = await import('./ask-answer.js');
   const words = input.text?.trim() || (typeof input.reply?.result === 'string' ? input.reply.result : '');
   let prepared: Awaited<ReturnType<typeof prepareAskAnswer>>;
   try {
@@ -609,12 +629,56 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
     if (err instanceof AskAnswerError) throw new SendError(err.code, err.message, err.status, targetTaskId ? { taskId: targetTaskId } : undefined);
     throw err;
   }
+  // A COMPLETE task, or one whose session is not running, is never woken by an answer: it is
+  // recorded and taken off the user's Needs you (2026-11-06: an answer resumed a stopped session).
+  // A request that carries another one is answered past this asker, for that one's (performReply).
+  const reach = asked?.carries?.length ? { wakes: true as const }
+    : answerReach(prepared.target, reachable, { force: input.force === true && !!input.reason?.trim() });
+  if (!reach.wakes) {
+    if (input.handsOn) {
+      throw new SendError('bad_request', `hands_on needs "${prepared.target.title}" (${prepared.target.id}) to work on the request, and it is ${reach.why === 'complete' ? 'complete' : 'not running'}: answer without hands_on, then task_start it with the request.`, 409, { taskId: prepared.target.id });
+    }
+    if (asked) await settleAnswerNotDelivered(asked, caller, input);
+    await prepared.commit();
+    log.session.info('answers_ask: recorded, not delivered (the task is not running)', { taskId: prepared.target.id, why: reach.why, requestId: asked?.id });
+    const sid = resolved?.session.claudeSessionId ?? asked?.fromSessionId ?? '';
+    return {
+      delivery: 'recorded', notWoken: reach.why, targetSessionId: sid, targetTitle: prepared.target.title, targetTaskId: prepared.target.id,
+      target: { handle: sessionHandle(prepared.target.title, sid), sessionId: sid, taskId: prepared.target.id },
+      ...(asked ? { repliedTo: asked.id } : {}),
+    };
+  }
   const result = await performPlainSend({ ...input, answersAsk: false, text: input.text?.trim() ? `${prepared.line}\n\n${input.text}` : prepared.line });
   await prepared.commit();
   return result;
 }
 
-async function performPlainSend(input: SessionSendInput): Promise<SessionSendResult> {
+/** Whether the caller answers this request: its target, or the task it was handed on to (request-handoff.ts). */
+function answersRequest(caller: CallerIdentity, request: Pick<SessionRequest, 'toSessionId' | 'toTaskId' | 'carriedBy'>): boolean {
+  if (caller.kind !== 'session') return false;
+  return caller.record.claudeSessionId === request.toSessionId
+    || (!!request.toTaskId && caller.record.taskId === request.toTaskId)
+    || (!!caller.record.taskId && (request.carriedBy ?? []).some((c) => c.taskId === caller.record.taskId));
+}
+
+/**
+ * An answer for the user to a request whose asker is not running (or is complete): the request is
+ * settled by it, as a reply would settle it, and nothing is delivered, so no overdue notice wakes
+ * the asker later either. The answer itself is kept on the asker (Task.ask_answered).
+ */
+async function settleAnswerNotDelivered(
+  request: SessionRequest, caller: CallerIdentity, input: SessionSendInput,
+): Promise<void> {
+  if (!answersRequest(caller, request)) {
+    throw new SendError('not_request_target', `request ${request.id} was not addressed to this session`, 403);
+  }
+  const { readStructuredReply } = await import('../peers/structured-reply.js');
+  const fields = input.reply ? readStructuredReply(input.reply) : null;
+  if (request.status === 'pending') await settleReplied(request.id, fields).catch(() => null);
+  else if (request.status === 'expired') await settleLateReply(request.id, fields).catch(() => null);
+}
+
+async function performPlainSend(input: SessionSendInput): Promise<DeliveredSendResult> {
   const { readStructuredReply, composeReplyText } = await import('../peers/structured-reply.js');
   const fields = input.reply ? readStructuredReply(input.reply) : null;
   if (fields && !input.inReplyTo) {
@@ -811,7 +875,7 @@ async function performReply(
   caller: CallerIdentity,
   text: string,
   fields: import('../peers/structured-reply.js').StructuredReply | null = null,
-): Promise<SessionSendResult> {
+): Promise<DeliveredSendResult> {
   const id = String(input.inReplyTo);
   const request = await getSessionRequest(id);
   if (!request) throw new SendError('unknown_request', `no such request: ${id}`, 404);
@@ -820,10 +884,7 @@ async function performReply(
     throw new SendError('not_request_target', 'replies must come from the session the request was sent to', 403);
   }
   // The task it was handed on to (request-handoff.ts) answers it as well as its target.
-  const isTarget = caller.record.claudeSessionId === request.toSessionId
-    || (!!request.toTaskId && caller.record.taskId === request.toTaskId)
-    || (!!caller.record.taskId && (request.carriedBy ?? []).some((c) => c.taskId === caller.record.taskId));
-  if (!isTarget) {
+  if (!answersRequest(caller, request)) {
     throw new SendError('not_request_target',
       `request ${id} was not addressed to this session`, 403);
   }
