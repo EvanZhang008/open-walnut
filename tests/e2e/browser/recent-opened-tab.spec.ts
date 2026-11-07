@@ -126,7 +126,12 @@ test('Recent lists what was opened, newest first, flat, and greys what is open n
   await expect(recentCard(page, a)).not.toHaveClass(/todo-recent-card-open/)
 
   // A click on a Recent row is an open too; the list takes the new order on its next visit.
+  // c has no session (and is completed by now): the click opens its details, never only a highlight.
   await recentCard(page, c).click()
+  await expect(page.locator('.task-detail-modal-overlay')).toBeVisible()
+  await expect(recentCard(page, c)).toHaveClass(/todo-recent-card-open/)
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.task-detail-modal-overlay')).toHaveCount(0)
   await expect.poll(() => recentRows(page, mine)).toEqual([b, c, a])
   // A session started from a row (its ▶) opens a column for the task: the row greys while
   // the column is open (a new-session draft bound to the task, as here, or the session itself).

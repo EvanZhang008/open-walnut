@@ -5124,11 +5124,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     return list.filter(task => keep.has(task.id));
   }, [filterResult.list, dedupePinned, displayedPinIds]);
   // The filter chips leave Recent alone (it lists what was opened, whatever its state); a
-  // search narrows it to the matches, as it does every list.
-  const visibleRecentTasks = useMemo(
-    () => (isSearchMode ? recentTasks.filter((task) => visibleTaskIds.has(task.id)) : recentTasks),
-    [recentTasks, visibleTaskIds, isSearchMode],
-  );
+  // search narrows it to the matches, as it does every list. A row read in by id (outside the
+  // board list, so outside the search's own task set) matches on its title and fields.
+  const visibleRecentTasks = useMemo(() => {
+    if (!isSearchMode) return recentTasks;
+    const lowerQuery = deferredSearchQuery.trim().toLowerCase();
+    return recentTasks.filter((task) => visibleTaskIds.has(task.id)
+      || (recentOpened.outside.has(task.id) && taskMatchesLiterally(task, lowerQuery)));
+  }, [recentTasks, visibleTaskIds, isSearchMode, deferredSearchQuery, recentOpened.outside]);
   const visibleRecentIds = useMemo(
     () => visibleRecentTasks.map(recentStaticId),
     [recentStaticId, visibleRecentTasks],
@@ -6706,10 +6709,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, [onFocusTask, navigate]);
   // A row opened from Recent keeps its place while the list is on screen (useRecentOpenedTasks).
   const { hold: holdRecentRow, outside: recentOutside } = recentOpened;
-  const handleRecentRowClick = useCallback((task: Task) => {
+  // Recent is for opening what you looked at: a row with no session to open (a finished task,
+  // one never started) opens its details instead of only being selected.
+  const handleRecentRowClick = useCallback((task: Task, e?: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean }) => {
     holdRecentRow(task.id);
-    (recentOutside.has(task.id) ? openUnlistedTask : handlePinnedCardClick)(task);
-  }, [holdRecentRow, recentOutside, openUnlistedTask, handlePinnedCardClick]);
+    if (recentOutside.has(task.id)) { openUnlistedTask(task); return; }
+    if (!resolveTaskSessionId(task) && !(e && (e.metaKey || e.ctrlKey || e.shiftKey))) { handleExpandDetail(task); return; }
+    handlePinnedCardClick(task, e);
+  }, [holdRecentRow, recentOutside, openUnlistedTask, handlePinnedCardClick, handleExpandDetail]);
   const handleRecentExpandDetail = useCallback((task: Task) => {
     holdRecentRow(task.id);
     (recentOutside.has(task.id) ? openUnlistedTask : handleExpandDetail)(task);
