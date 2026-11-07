@@ -3406,7 +3406,7 @@ export interface SessionRecord {
   /** Where modelMaxWindow came from (`ContextWindowSource` in src/providers/context-window.ts).
    *  Only the CLI's own reading is restored as exact on attach; anything else, or none (written by
    *  an older Walnut, its 200K guess included), is a hint the floor can lift. */
-  modelMaxWindowSource?: 'cli-model-usage' | 'host-model-cache' | 'env-max-tokens' | 'model-string' | 'record' | 'floor';
+  modelMaxWindowSource?: 'cli-model-usage' | 'host-model-cache' | 'cli-context-usage' | 'engine' | 'env-max-tokens' | 'model-string' | 'record' | 'floor';
   /** The model modelMaxWindow is the window of (the session may have switched since it was stored):
    *  a window stored for another model is never restored. */
   modelMaxWindowModel?: string;

@@ -108,7 +108,7 @@ extension DemoServer {
             }
             return .encoded(ChatStats(
                 apiMessageCount: count, estimatedTotalTokens: 18_400 + count * 350,
-                contextWindow: 1_000_000, compacted: false
+                contextWindow: 1_000_000, contextWindowEstimate: nil, compacted: false
             ))
         }
         if match2(r, "GET", s, "chat", "engine") || match2(r, "POST", s, "chat", "engine", "session") {

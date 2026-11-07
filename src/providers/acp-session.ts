@@ -1053,7 +1053,7 @@ export class AcpSession {
         if (sid) {
           void updateSessionRecord(sid, {
             lastTurnSpeed: speed,
-            ...(context ? { contextTokens: context.used, ...(context.size > 0 ? { modelMaxWindow: context.size } : {}) } : {}),
+            ...(context ? { contextTokens: context.used, ...(context.size > 0 ? { modelMaxWindow: context.size, modelMaxWindowSource: 'engine' as const } : {}) } : {}),
           }).catch(() => {})
         }
       }

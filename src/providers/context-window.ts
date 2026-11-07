@@ -41,7 +41,15 @@
  *      1M window for a 200K model.
  *   4. The model string: `[1m]` → 1M, a recognized Anthropic family → 200K.
  *
- * `get_context_usage.maxTokens` is deliberately NOT in that list. In 2.1.240 the
+ * 2026-11-07 (the user: "find the actual model context window for the current model ... not by
+ * string matching which is flaky"): every answer now says whether it is the CLI's own number or an
+ * estimate (`estimate`), the host+model cache is kept on disk (src/providers/model-window-store.ts),
+ * so a restart no longer sends every session back to the name rule until its first turn ends, and
+ * `get_context_usage.maxTokens` counts as exact when the CLI says nothing clamped it
+ * (`autocompactSource` "auto" or "unknown-model", read from CLI 2.1.312's resolver). The name rule
+ * is the last resort, and every surface shows a window from it as an estimate.
+ *
+ * `get_context_usage.maxTokens` is NOT in that list while a setting clamps it. In 2.1.240 the
  * payload is built as `{maxTokens: g, rawMaxTokens: g, autocompactSource: y}` —
  * the same variable twice, already clamped — so it reveals the effective window
  * and nothing about the model's real one.
@@ -62,7 +70,9 @@ export const EXTENDED_WINDOW = 1_000_000
  *  and logged, so a wrong percentage is diagnosable without a repro. */
 export type ContextWindowSource =
   | 'cli-model-usage' // result.modelUsage[model].contextWindow — exact
-  | 'host-model-cache' // the same value, learned from an earlier session
+  | 'host-model-cache' // an exact value learned from an earlier session (kept on disk)
+  | 'cli-context-usage' // get_context_usage.maxTokens with nothing clamping it — exact
+  | 'engine' // an ACP engine's own context size — exact
   | 'env-max-tokens' // CLAUDE_CODE_MAX_CONTEXT_TOKENS (unrecognized models only)
   | 'model-string' // `[1m]` marker / known Anthropic family
   | 'record' // the window an earlier run of this session wrote, not known to be the CLI's own
@@ -78,6 +88,9 @@ export interface ContextWindowInputs {
    *  was the CLI's own (an older Walnut wrote its 200K guess there too, 2026-11-06). A hint
    *  only: it ranks after the host cache and is lifted by the floor like every other one. */
   recordWindow?: number | undefined
+  /** get_context_usage.maxTokens when its `autocompactSource` says no setting clamped it ("auto",
+   *  "unknown-model"): then it IS the model's window, before any turn has ended. */
+  cliUnclampedWindow?: number | undefined
   /** get_context_usage.maxTokens: the CLI's EFFECTIVE window, min(model window, auto-compact
    *  clamp). Never the denominator, but a floor under it: the model's window cannot be smaller. */
   effectiveWindow?: number | undefined
@@ -94,7 +107,21 @@ export interface ContextWindowInputs {
 export interface ResolvedContextWindow {
   window: number
   source: ContextWindowSource
+  /** Not a number the CLI or the engine gave: a name rule, a stored hint or a floor. Every surface
+   *  shows such a window as an estimate. */
+  estimate: boolean
 }
+
+/** The sources that are a number the CLI or the engine reported for this model. */
+const EXACT_SOURCES: ReadonlySet<ContextWindowSource> = new Set(['cli-model-usage', 'host-model-cache', 'cli-context-usage', 'engine'])
+
+/** A window from this source is the CLI's (or the engine's) own number, not an estimate. */
+export function isExactWindowSource(source: ContextWindowSource | string | undefined): boolean {
+  return !!source && EXACT_SOURCES.has(source as ContextWindowSource)
+}
+
+const resolved = (window: number, source: ContextWindowSource): ResolvedContextWindow =>
+  ({ window, source, estimate: !EXACT_SOURCES.has(source) })
 
 const positive = (n: number | undefined): number | undefined =>
   typeof n === 'number' && Number.isFinite(n) && n > 0 ? n : undefined
@@ -134,12 +161,12 @@ export function hasNativeExtendedWindow(model: string): boolean {
 }
 
 /**
- * The window a Claude model id names before any session reported one: `[1m]` or a model with 1M
- * built in reads 1M, any other Claude id 200K, anything else nothing. For a place that has no
- * session to read (an engine handoff's budget, a gateway's model list); a session's own readout
- * goes through resolveContextWindow.
+ * The window a model's NAME suggests: `[1m]` or a model with 1M built in reads 1M, any other Claude
+ * id 200K, anything else nothing. An estimate, never the model's own number: the last resort of
+ * resolveContextWindow and knownModelWindow, and of the web's twin for a page with no reading. Any
+ * other caller is refused by tests/core/context-window-name-rule-guard.test.ts.
  */
-export function modelStringWindow(model: string | undefined): number | undefined {
+export function modelNameWindowEstimate(model: string | undefined): number | undefined {
   return windowFromModelString(model)
 }
 
@@ -158,37 +185,35 @@ export function modelStringWindow(model: string | undefined): number | undefined
  */
 export function resolveContextWindow(inputs: ContextWindowInputs): ResolvedContextWindow | null {
   const own = positive(inputs.cliModelWindow)
-  if (own !== undefined) return { window: own, source: 'cli-model-usage' }
+  if (own !== undefined) return resolved(own, 'cli-model-usage')
 
   const floor = Math.max(positive(inputs.observedTokens) ?? 0, positive(inputs.effectiveWindow) ?? 0)
   const lifted = (r: ResolvedContextWindow): ResolvedContextWindow => {
     if (r.window >= floor) return r
     const anthropic = isRecognizedClaudeModel(inputs.model) || /\[1m\]/i.test(inputs.model ?? '')
-    return { window: anthropic ? Math.max(EXTENDED_WINDOW, floor) : floor, source: 'floor' }
+    return resolved(anthropic ? Math.max(EXTENDED_WINDOW, floor) : floor, 'floor')
   }
 
+  const unclamped = positive(inputs.cliUnclampedWindow)
+  if (unclamped !== undefined) return lifted(resolved(unclamped, 'cli-context-usage'))
+
   const cached = positive(inputs.hostModelWindow)
-  if (cached !== undefined) return lifted({ window: cached, source: 'host-model-cache' })
+  if (cached !== undefined) return lifted(resolved(cached, 'host-model-cache'))
 
   const recorded = positive(inputs.recordWindow)
-  if (recorded !== undefined) return lifted({ window: recorded, source: 'record' })
+  if (recorded !== undefined) return lifted(resolved(recorded, 'record'))
 
   // The CLI applies this variable to models it does not recognize, and ignores
   // it for its own — mirror that exactly rather than trusting it everywhere.
   const envMax = positive(inputs.envMaxContextTokens)
   if (envMax !== undefined && !isRecognizedClaudeModel(inputs.model)) {
-    return lifted({ window: envMax, source: 'env-max-tokens' })
+    return lifted(resolved(envMax, 'env-max-tokens'))
   }
 
   const guess = windowFromModelString(inputs.model)
-  if (guess !== undefined) return lifted({ window: guess, source: 'model-string' })
+  if (guess !== undefined) return lifted(resolved(guess, 'model-string'))
 
   return null
-}
-
-/** The sources a session record may restore as the CLI's own reading (`cliModelWindow`). */
-export function isExactWindowSource(source: ContextWindowSource | undefined): boolean {
-  return source === 'cli-model-usage' || source === 'host-model-cache'
 }
 
 const hostKey = (host: string | null | undefined): string => host ?? '__local__'
@@ -241,30 +266,102 @@ export function recallEnvMaxContextTokens(host: string | null | undefined): numb
 }
 
 /**
- * Absolute max window per host+model, learned from `result.modelUsage`.
+ * Absolute max window per host+model, learned from `result.modelUsage` (or an unclamped
+ * `get_context_usage`): only exact numbers are kept here.
  *
  * This is what removes the remaining ladder. The exact window only arrives at a
  * turn END, so without a cache every session would spend its first turn on a
  * string guess (or, for a proxy model, on no percentage at all) and then jump.
  * Keyed by host too: the same alias can resolve differently on a remote daemon.
- * A session's OWN reading always wins over the cache.
+ * A session's OWN reading always wins over the cache. The server keeps the cache on disk
+ * (src/providers/model-window-store.ts, through onModelWindowLearned / seedModelWindows), so a
+ * restart does not empty it.
  */
-const modelWindowByHostModel = new Map<string, number>()
+export interface LearnedModelWindow {
+  window: number
+  /** The CLI reading it came from. */
+  source: 'cli-model-usage' | 'cli-context-usage'
+  /** When it was learned (ms). */
+  at: number
+}
+const modelWindowByHostModel = new Map<string, LearnedModelWindow>()
+let learnedListener: ((key: string, entry: LearnedModelWindow) => void) | undefined
 /** Normalized so one model can't occupy two slots. The writer sees the key
  *  `result.modelUsage` used and the reader sees the init/applied string, and the
  *  two differ by decoration: `openai.gpt-5.6-sol` vs `gpt-5.6-sol` missed the
  *  cache on every model switch until both sides ran through shortModelId. */
 const modelKey = (host: string | null | undefined, model: string): string =>
   `${hostKey(host)}::${shortModelId(model).toLowerCase()}`
+const modelOfKey = (key: string): string => key.slice(key.indexOf('::') + 2)
 
-export function rememberModelWindow(host: string | null | undefined, model: string | undefined, window: number): void {
+export function rememberModelWindow(
+  host: string | null | undefined, model: string | undefined, window: number,
+  source: LearnedModelWindow['source'] = 'cli-model-usage',
+): void {
   if (!model) return
-  if (Number.isFinite(window) && window > 0) modelWindowByHostModel.set(modelKey(host, model), window)
+  if (!(Number.isFinite(window) && window > 0)) return
+  const key = modelKey(host, model)
+  const prev = modelWindowByHostModel.get(key)
+  // A turn-end reading is never replaced by a usage read (the next turn end settles it), and the
+  // same reading again is no news.
+  if (prev?.source === 'cli-model-usage' && source !== 'cli-model-usage') return
+  if (prev && prev.window === window && prev.source === source) return
+  const entry = { window, source, at: Date.now() }
+  modelWindowByHostModel.set(key, entry)
+  learnedListener?.(key, entry)
 }
 
 export function recallModelWindow(host: string | null | undefined, model: string | undefined): number | undefined {
   if (!model) return undefined
-  return modelWindowByHostModel.get(modelKey(host, model))
+  return modelWindowByHostModel.get(modelKey(host, model))?.window
+}
+
+/** The same model learned on any host, the newest first. A window is a property of the model; the
+ *  host only matters for an alias, so a place with no host of its own may read another's. */
+export function recallModelWindowAnyHost(model: string | undefined): number | undefined {
+  if (!model) return undefined
+  const want = shortModelId(model).toLowerCase()
+  let best: LearnedModelWindow | undefined
+  for (const [key, entry] of modelWindowByHostModel) {
+    if (modelOfKey(key) === want && (!best || entry.at > best.at)) best = entry
+  }
+  return best?.window
+}
+
+/**
+ * The window of a model for a place with no session of its own to read (an engine handoff's
+ * budget, a gateway's model list, the chat stats before the lane reported): a window the CLI
+ * reported for it on this host, else on any host, else the name rule as an estimate, else null.
+ */
+export function knownModelWindow(host: string | null | undefined, model: string | undefined): ResolvedContextWindow | null {
+  const exact = recallModelWindow(host, model) ?? recallModelWindowAnyHost(model)
+  if (exact !== undefined) return resolved(exact, 'host-model-cache')
+  const guess = windowFromModelString(model)
+  return guess !== undefined ? resolved(guess, 'model-string') : null
+}
+
+/** The store's hook: told every exact window learned, to keep it on disk. */
+export function onModelWindowLearned(listener: ((key: string, entry: LearnedModelWindow) => void) | undefined): void {
+  learnedListener = listener
+}
+
+/** The store's boot load: windows learned before the restart. A reading this process already
+ *  made wins over the file. */
+export function seedModelWindows(entries: Record<string, LearnedModelWindow>): number {
+  let n = 0
+  for (const [key, e] of Object.entries(entries)) {
+    if (!key.includes('::') || !(Number.isFinite(e?.window) && e.window > 0)) continue
+    if (e.source !== 'cli-model-usage' && e.source !== 'cli-context-usage') continue
+    if (modelWindowByHostModel.has(key)) continue
+    modelWindowByHostModel.set(key, { window: e.window, source: e.source, at: Number.isFinite(e.at) ? e.at : 0 })
+    n++
+  }
+  return n
+}
+
+/** Every exact window known now, for the store to write. */
+export function learnedModelWindows(): Record<string, LearnedModelWindow> {
+  return Object.fromEntries(modelWindowByHostModel)
 }
 
 /** Test seam only. */

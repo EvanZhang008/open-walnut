@@ -200,12 +200,12 @@ export function ComposerModelPill({
   const liveBeforeCompaction = contextPercent == null || liveSeen.current.at < compactedAt;
   if (liveBeforeCompaction && Number.isFinite(compactedAt) && !(replyAt > compactedAt) && session?.promptCache) {
     const totalInput = session.promptCache.tokens;
-    const ctxSize = sessionContextWindow(session.modelMaxWindow, rawModel, totalInput, session.autoCompactAt);
-    if (totalInput > 0 && ctxSize != null) {
+    const ctx = sessionContextWindow(session.modelMaxWindow, rawModel, totalInput, session.autoCompactAt, session.modelMaxWindowSource);
+    if (totalInput > 0 && ctx != null) {
       // Auto-compact off: 100% is where the session stops (the server's stopsAt, kept on the record).
-      contextPercent = Math.round(totalInput / (session.contextStopsAt ?? ctxSize) * 100);
+      contextPercent = Math.round(totalInput / (session.contextStopsAt ?? ctx.window) * 100);
       badgeUsage = {
-        ...liveUsage, inputTokens: totalInput, contextWindow: ctxSize,
+        ...liveUsage, inputTokens: totalInput, contextWindow: ctx.window, contextWindowEstimate: ctx.estimate,
         autoCompactAt: liveUsage.autoCompactAt ?? session.autoCompactAt,
         stopsAt: liveUsage.stopsAt ?? session.contextStopsAt,
       };
@@ -214,11 +214,11 @@ export function ComposerModelPill({
   if (contextPercent == null && fallbackAssistant?.usage) {
     const u = fallbackAssistant.usage as Record<string, number>;
     const totalInput = (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
-    const ctxSize = sessionContextWindow(session?.modelMaxWindow, rawModel, totalInput, session?.autoCompactAt);
-    if (totalInput > 0 && ctxSize != null) {
-      contextPercent = Math.round(totalInput / (session?.contextStopsAt ?? ctxSize) * 100);
+    const ctx = sessionContextWindow(session?.modelMaxWindow, rawModel, totalInput, session?.autoCompactAt, session?.modelMaxWindowSource);
+    if (totalInput > 0 && ctx != null) {
+      contextPercent = Math.round(totalInput / (session?.contextStopsAt ?? ctx.window) * 100);
       badgeUsage = {
-        ...liveUsage, inputTokens: totalInput, contextWindow: ctxSize,
+        ...liveUsage, inputTokens: totalInput, contextWindow: ctx.window, contextWindowEstimate: ctx.estimate,
         autoCompactAt: liveUsage.autoCompactAt ?? session?.autoCompactAt,
         stopsAt: liveUsage.stopsAt ?? session?.contextStopsAt,
       };
@@ -420,7 +420,7 @@ export function ComposerModelPill({
             }}
             title={contextBadgeTitle(badgeUsage, contextPercent)}
           >
-            {' '}{contextPercent}%
+            {' '}{badgeUsage.contextWindowEstimate && badgeUsage.stopsAt == null ? '~' : ''}{contextPercent}%
           </span>
         ),
       )}

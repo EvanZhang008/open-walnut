@@ -16,7 +16,7 @@ import { validateAgentId, validateConversationId } from '../../constants.js'
 import * as chatHistory from '../../core/chat-history.js'
 import { estimateMessagesTokens } from '../../core/daily-log.js'
 import { getContextWindowSize } from '../../model/model.js'
-import { getLastTurnTokens } from '../agent-turn-queue.js'
+import { getLastTurnTokens, getLaneWindow } from '../agent-turn-queue.js'
 import { log } from '../../logging/index.js'
 import { isCompactionInProgress, triggerBackgroundCompaction } from '../background-compaction.js'
 import { isCompanion } from '../../core/server-role.js'
@@ -57,6 +57,9 @@ export interface ChatStatsPayload {
   estimatedTotalTokens: number
   compacted: boolean
   contextWindow: number
+  /** `contextWindow` is an estimate (the configured model's catalog entry or name), not the window
+   *  the lane's CLI reported. Older clients ignore it. */
+  contextWindowEstimate?: boolean
 }
 const cachedStatsMap = new Map<string, ChatStatsPayload>()
 const cachedMtimeMap = new Map<string, string>()
@@ -75,7 +78,8 @@ export async function computeChatStats(
   const lastUpdated = await chatHistory.getLastUpdated(agentId, conversationId)
   const cachedStats = cachedStatsMap.get(cacheKey)
   const cachedMtime = cachedMtimeMap.get(cacheKey)
-  if (cachedStats && cachedMtime === lastUpdated) {
+  const laneNow = getLaneWindow(conversationId)
+  if (cachedStats && cachedMtime === lastUpdated && (!laneNow || laneNow.window === cachedStats.contextWindow)) {
     return cachedStats
   }
 
@@ -92,14 +96,22 @@ export async function computeChatStats(
   // the best available answer.
   const laneTokens = getLastTurnTokens(conversationId) ?? 0
 
-  // Read model from config for context window detection
+  // The window the lane's CLI reported (its own reading, the same as the session's badge); before
+  // the lane's first reply, the configured model's catalog window, flagged as an estimate.
+  const lane = laneNow
   let contextWindow: number
-  try {
-    const { getConfig } = await import('../../core/config-manager.js')
-    const config = await getConfig()
-    contextWindow = getContextWindowSize(config.agent?.main_model)
-  } catch {
-    contextWindow = getContextWindowSize(undefined)
+  let contextWindowEstimate = true
+  if (lane) {
+    contextWindow = lane.window
+    contextWindowEstimate = lane.estimate
+  } else {
+    try {
+      const { getConfig } = await import('../../core/config-manager.js')
+      const config = await getConfig()
+      contextWindow = getContextWindowSize(config.agent?.main_model)
+    } catch {
+      contextWindow = getContextWindowSize(undefined)
+    }
   }
 
   const result: ChatStatsPayload = {
@@ -108,6 +120,7 @@ export async function computeChatStats(
     estimatedTotalTokens: laneTokens > 0 ? laneTokens : messageTokens,
     compacted: !!summary,
     contextWindow,
+    ...(contextWindowEstimate ? { contextWindowEstimate: true } : {}),
   }
 
   // Cache for subsequent calls

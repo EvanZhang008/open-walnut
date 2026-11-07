@@ -16,7 +16,7 @@ import { CHAT_HISTORY_FILE, chatHistoryFile, conversationFile } from '../constan
 import { readJsonFile, writeJsonFile } from '../utils/fs.js';
 import { estimateMessagesTokens, estimateTokens, compactDailyLog, formatDateKey } from './daily-log.js';
 import { getWorkingMemory, isWorkingMemoryEmpty, truncateWorkingMemoryForCompact, snapshotWorkingMemory } from './working-memory.js';
-import { effectiveTotalTokens, getLastTurnTokens, clearLastTurnTokens } from './token-truth.js';
+import { effectiveTotalTokens, getLastTurnTokens, clearLastTurnTokens, getLaneWindow } from './token-truth.js';
 import { log } from '../logging/index.js';
 import fsp from 'node:fs/promises';
 import { compressForApi, MAX_BASE64_BYTES } from '../utils/image-compress.js';
@@ -2027,9 +2027,12 @@ export async function clear(agentId?: string, conversationId?: string): Promise<
 export async function needsCompaction(agentId?: string, conversationId?: string): Promise<boolean> {
   const modelMsgs = await getModelContext(agentId, conversationId);
 
-  // Read model from config to compute context-aware threshold
+  // The window the lane's CLI reported, when it has (the same number its session badge shows);
+  // else the configured model's catalog window.
+  const lane = conversationId ? getLaneWindow(conversationId) : undefined;
   let threshold: number;
-  try {
+  if (lane && !lane.estimate) threshold = Math.round(lane.window * COMPACTION_PERCENT);
+  else try {
     const { getConfig } = await import('./config-manager.js');
     const config = await getConfig();
     const model = config.agent?.main_model;

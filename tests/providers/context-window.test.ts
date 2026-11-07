@@ -4,7 +4,8 @@ import {
   rememberAutoCompactWindow, recallAutoCompactWindow,
   rememberEnvMaxContextTokens, recallEnvMaxContextTokens,
   rememberModelWindow, recallModelWindow, resetContextWindowCaches,
-  ANTHROPIC_DEFAULT_WINDOW, EXTENDED_WINDOW, hasNativeExtendedWindow, modelStringWindow, isExactWindowSource,
+  knownModelWindow, recallModelWindowAnyHost, onModelWindowLearned, learnedModelWindows, seedModelWindows,
+  ANTHROPIC_DEFAULT_WINDOW, EXTENDED_WINDOW, hasNativeExtendedWindow, modelNameWindowEstimate, isExactWindowSource,
 } from '../../src/providers/context-window.js';
 import { MODEL_CATALOG } from '../../src/model/providers/model-catalog.js';
 
@@ -26,7 +27,7 @@ describe('resolveContextWindow', () => {
       envMaxContextTokens: 272_000,
       model: 'gpt-5.6-sol',
       observedTokens: 99_366,
-    })).toEqual({ window: 1_000_000, source: 'cli-model-usage' });
+    })).toEqual({ window: 1_000_000, source: 'cli-model-usage', estimate: false });
   });
 
   it('an auto-compact clamp does NOT shrink the denominator', () => {
@@ -38,22 +39,22 @@ describe('resolveContextWindow', () => {
 
   it('falls back to what an earlier session on this host+model learned', () => {
     expect(resolveContextWindow({ hostModelWindow: 1_000_000, model: 'gpt-5.6-sol' }))
-      .toEqual({ window: 1_000_000, source: 'host-model-cache' });
+      .toEqual({ window: 1_000_000, source: 'host-model-cache', estimate: false });
   });
 
   it('uses CLAUDE_CODE_MAX_CONTEXT_TOKENS for a model the CLI does not recognize', () => {
     // The CLI's own words for an unrecognized model: "set
     // CLAUDE_CODE_MAX_CONTEXT_TOKENS to its real window".
     expect(resolveContextWindow({ envMaxContextTokens: 1_000_000, model: 'gpt-5.6-sol' }))
-      .toEqual({ window: 1_000_000, source: 'env-max-tokens' });
+      .toEqual({ window: 1_000_000, source: 'env-max-tokens', estimate: true });
   });
 
   it('IGNORES that env var for a recognized Claude model — the CLI does too', () => {
     // Trusting it here would invent a 1M window for a 200K model.
     expect(resolveContextWindow({ envMaxContextTokens: 1_000_000, model: 'claude-sonnet-4-6' }))
-      .toEqual({ window: ANTHROPIC_DEFAULT_WINDOW, source: 'model-string' });
+      .toEqual({ window: ANTHROPIC_DEFAULT_WINDOW, source: 'model-string', estimate: true });
     expect(resolveContextWindow({ envMaxContextTokens: 1_000_000, model: 'global.anthropic.claude-fable-5[1m]' }))
-      .toEqual({ window: EXTENDED_WINDOW, source: 'model-string' });
+      .toEqual({ window: EXTENDED_WINDOW, source: 'model-string', estimate: true });
   });
 
   it('returns NOTHING for a custom model with no CLI-sourced window', () => {
@@ -66,12 +67,12 @@ describe('resolveContextWindow', () => {
 
   it('reads the [1m] marker, and the 200K default for plain Anthropic ids', () => {
     expect(resolveContextWindow({ model: 'claude-sonnet-4-6[1m]' }))
-      .toEqual({ window: EXTENDED_WINDOW, source: 'model-string' });
+      .toEqual({ window: EXTENDED_WINDOW, source: 'model-string', estimate: true });
     expect(resolveContextWindow({ model: 'claude-sonnet-4-6' }))
-      .toEqual({ window: ANTHROPIC_DEFAULT_WINDOW, source: 'model-string' });
+      .toEqual({ window: ANTHROPIC_DEFAULT_WINDOW, source: 'model-string', estimate: true });
     // Family name without the "claude-" prefix still reads as Anthropic.
     expect(resolveContextWindow({ model: 'opus[1m]' }))
-      .toEqual({ window: EXTENDED_WINDOW, source: 'model-string' });
+      .toEqual({ window: EXTENDED_WINDOW, source: 'model-string', estimate: true });
   });
 
   it('trusts observed tokens over a lost [1m] suffix', () => {
@@ -85,7 +86,7 @@ describe('resolveContextWindow', () => {
   // its record held a 200K guess an earlier attach wrote.
   it('reads the 1M window of a model with 1M built in, with no [1m] in its id', () => {
     for (const model of ['claude-opus-5-5', 'global.anthropic.claude-opus-5-5', 'claude-opus-5', 'global.anthropic.claude-haiku-5-5']) {
-      expect(resolveContextWindow({ model })).toEqual({ window: EXTENDED_WINDOW, source: 'model-string' });
+      expect(resolveContextWindow({ model })).toEqual({ window: EXTENDED_WINDOW, source: 'model-string', estimate: true });
     }
     expect(resolveContextWindow({ model: 'claude-opus-4-8' })?.window).toBe(ANTHROPIC_DEFAULT_WINDOW);
   });
@@ -95,21 +96,21 @@ describe('resolveContextWindow', () => {
     const model = 'claude-opus-9'; // a Claude id no catalog row names yet
     expect(resolveContextWindow({ model })?.window).toBe(ANTHROPIC_DEFAULT_WINDOW);
     expect(resolveContextWindow({ model, effectiveWindow: 500_000 }))
-      .toEqual({ window: EXTENDED_WINDOW, source: 'floor' });
+      .toEqual({ window: EXTENDED_WINDOW, source: 'floor', estimate: true });
     expect(resolveContextWindow({ model, recordWindow: 200_000, effectiveWindow: 500_000, observedTokens: 324_400 }))
-      .toEqual({ window: EXTENDED_WINDOW, source: 'floor' });
+      .toEqual({ window: EXTENDED_WINDOW, source: 'floor', estimate: true });
     expect(resolveContextWindow({ model, hostModelWindow: 200_000, observedTokens: 324_400 })?.window).toBe(EXTENDED_WINDOW);
     // A record or cache at or above the floor stands.
     expect(resolveContextWindow({ model, recordWindow: 1_000_000, observedTokens: 324_400 }))
-      .toEqual({ window: 1_000_000, source: 'record' });
+      .toEqual({ window: 1_000_000, source: 'record', estimate: true });
     // An effective window at or below 200K proves nothing more.
     expect(resolveContextWindow({ model, effectiveWindow: 180_000 })?.window).toBe(ANTHROPIC_DEFAULT_WINDOW);
     // A model that is not Anthropic's is lifted to the floor itself, never to a made-up 1M.
     expect(resolveContextWindow({ model: 'my-proxy', envMaxContextTokens: 128_000, observedTokens: 300_000 }))
-      .toEqual({ window: 300_000, source: 'floor' });
+      .toEqual({ window: 300_000, source: 'floor', estimate: true });
     // The session's own reading is never second-guessed.
     expect(resolveContextWindow({ model, cliModelWindow: 1_000_000, effectiveWindow: 500_000 }))
-      .toEqual({ window: 1_000_000, source: 'cli-model-usage' });
+      .toEqual({ window: 1_000_000, source: 'cli-model-usage', estimate: false });
   });
 
   it('only the CLI\'s own readings are restored as exact', () => {
@@ -127,12 +128,12 @@ describe('resolveContextWindow', () => {
       const short = shortModelId(m.id);
       for (const id of [m.id, short, `global.anthropic.${short}`, `${short}[1m]`]) {
         expect(hasNativeExtendedWindow(id) || id.endsWith('[1m]'), id).toBe(true);
-        expect(modelStringWindow(id), id).toBe(EXTENDED_WINDOW);
+        expect(modelNameWindowEstimate(id), id).toBe(EXTENDED_WINDOW);
       }
     }
     for (const m of [...MODEL_CATALOG.bedrock ?? [], ...MODEL_CATALOG.anthropic ?? []]) {
       if (m.compat?.native_1m || (m.context_window ?? 0) >= 1_000_000) continue;
-      expect(modelStringWindow(m.id), m.id).toBe(ANTHROPIC_DEFAULT_WINDOW);
+      expect(modelNameWindowEstimate(m.id), m.id).toBe(ANTHROPIC_DEFAULT_WINDOW);
     }
   });
 
@@ -233,5 +234,64 @@ describe('shortModelId', () => {
     expect(shortModelId('claude-haiku-4-5')).toBe('claude-haiku-4-5');
     expect(shortModelId('my-lab.custom-model-2.1')).toBe('my-lab.custom-model-2.1');
     expect(shortModelId('default')).toBe('default');
+  });
+});
+
+// 2026-11-07, the user: "find the actual model context window for the current model ... not by
+// string matching which is flaky". The CLI's own numbers come first and are kept; a name rule is
+// the last resort and says it is an estimate.
+describe('the window from the real source', () => {
+  it('an unclamped get_context_usage reading is exact, before any turn ends', () => {
+    // CLI 2.1.312, Opus 5.5 with no auto-compact setting: maxTokens 1000000, autocompactSource "auto".
+    expect(resolveContextWindow({ cliUnclampedWindow: 1_000_000, effectiveWindow: 1_000_000, model: 'global.anthropic.claude-opus-5-5' }))
+      .toEqual({ window: 1_000_000, source: 'cli-context-usage', estimate: false });
+    // The turn-end reading still outranks it.
+    expect(resolveContextWindow({ cliModelWindow: 400_000, cliUnclampedWindow: 1_000_000 }).source).toBe('cli-model-usage');
+  });
+
+  it('a usage read never replaces a turn-end reading in the cache', () => {
+    resetContextWindowCaches();
+    rememberModelWindow('clouddev', 'claude-opus-5-5', 1_000_000);
+    rememberModelWindow('clouddev', 'claude-opus-5-5', 500_000, 'cli-context-usage');
+    expect(recallModelWindow('clouddev', 'claude-opus-5-5')).toBe(1_000_000);
+    // A turn end replaces anything.
+    rememberModelWindow('clouddev', 'claude-opus-5-5', 900_000);
+    expect(recallModelWindow('clouddev', 'claude-opus-5-5')).toBe(900_000);
+  });
+
+  it('a place with no session reads the CLI\'s number from any host, else the name as an estimate', () => {
+    resetContextWindowCaches();
+    // A proxy model the name rule cannot name at all.
+    expect(knownModelWindow('__local__', 'gpt-6.1-sol')).toBeNull();
+    rememberModelWindow('clouddev', 'openai.gpt-6.1-sol', 400_000);
+    expect(knownModelWindow('__local__', 'gpt-6.1-sol')).toEqual({ window: 400_000, source: 'host-model-cache', estimate: false });
+    expect(recallModelWindowAnyHost('gpt-6.1-sol')).toBe(400_000);
+    expect(knownModelWindow(null, 'claude-opus-5-5')).toEqual({ window: EXTENDED_WINDOW, source: 'model-string', estimate: true });
+  });
+
+  it('the cache round-trips through the store and keeps only exact readings', () => {
+    resetContextWindowCaches();
+    const told: string[] = [];
+    onModelWindowLearned((key) => told.push(key));
+    rememberModelWindow('mac', 'global.anthropic.claude-opus-5-5', 1_000_000);
+    rememberModelWindow('mac', 'global.anthropic.claude-opus-5-5', 1_000_000); // same again: no news
+    onModelWindowLearned(undefined);
+    expect(told).toEqual(['mac::claude-opus-5-5']);
+    const saved = learnedModelWindows();
+    resetContextWindowCaches();
+    const n = seedModelWindows({
+      ...saved,
+      'mac::bogus': { window: 200_000, source: 'model-string' as never, at: 1 },
+      'nohost': { window: 1, source: 'cli-model-usage', at: 1 },
+    });
+    expect(n).toBe(1);
+    expect(recallModelWindow('mac', 'claude-opus-5-5')).toBe(1_000_000);
+    expect(recallModelWindow('mac', 'bogus')).toBeUndefined();
+  });
+
+  it('every exact source says so, every other one is an estimate', () => {
+    for (const s of ['cli-model-usage', 'host-model-cache', 'cli-context-usage', 'engine']) expect(isExactWindowSource(s), s).toBe(true);
+    expect(resolveContextWindow({ model: 'claude-opus-4-8' })?.estimate).toBe(true);
+    expect(resolveContextWindow({ model: 'claude-opus-4-8', observedTokens: 300_000 })).toEqual({ window: EXTENDED_WINDOW, source: 'floor', estimate: true });
   });
 });

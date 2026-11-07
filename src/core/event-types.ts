@@ -790,6 +790,11 @@ export interface SessionUsageUpdateEvent {
    *  Carried so the UI can show "99K / 1M" instead of a bare percentage whose
    *  basis is invisible. */
   contextWindow?: number;
+  /** Where `contextWindow` came from (`ContextWindowSource` in src/providers/context-window.ts). */
+  contextWindowSource?: string;
+  /** `contextWindow` is an estimate (the model's name, a stored hint, a floor), not a number the CLI
+   *  or the engine reported: the UI shows it as one. */
+  contextWindowEstimate?: boolean;
   /** Where this session will auto-compact, when that is BELOW `contextWindow`
    *  (a session-level or env-level CLAUDE_CODE_AUTO_COMPACT_WINDOW). Reported
    *  alongside the percentage, never folded into it: the badge measures the

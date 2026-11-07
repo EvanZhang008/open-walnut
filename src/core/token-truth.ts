@@ -38,6 +38,19 @@ export function getLastTurnTokens(conversationId: string): number | undefined {
   return lastTurnExactTokens.get(conversationId);
 }
 
+/** The context window a conversation's lane session reported (its CLI's own reading, or the
+ *  session's estimate, flagged). The chat stats divide by it. */
+export interface LaneWindow { window: number; source?: string; estimate: boolean }
+const laneWindows = new Map<string, LaneWindow>();
+
+export function recordLaneWindow(conversationId: string, w: LaneWindow): void {
+  if (w.window > 0) laneWindows.set(conversationId, w);
+}
+
+export function getLaneWindow(conversationId: string): LaneWindow | undefined {
+  return laneWindows.get(conversationId);
+}
+
 /** Forget the cached exact count — call after a compaction prunes the conversation so
  *  the next gate check doesn't re-fire on the now-stale (pre-prune) large count. */
 export function clearLastTurnTokens(conversationId: string): void {

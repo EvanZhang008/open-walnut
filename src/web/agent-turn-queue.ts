@@ -194,7 +194,7 @@ export function enqueueMainAgentTurn<T>(
 // and BOTH the triage bail AND background-compaction's needsCompaction gate read it.
 // Two separate maps would silently drop the ground-truth signal (the original bug
 // where neither gate ever fired on a 1M-token conversation). See token-truth.ts.
-export { recordLastTurnTokens, getLastTurnTokens } from '../core/token-truth.js';
+export { recordLastTurnTokens, getLastTurnTokens, recordLaneWindow, getLaneWindow } from '../core/token-truth.js';
 
 /**
  * Get the current queue status for a specific agent (or all agents).

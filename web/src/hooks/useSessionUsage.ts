@@ -12,6 +12,9 @@ export interface SessionUsage {
   /** Denominator behind contextPercent — the MODEL'S ABSOLUTE max window, for
    *  the "99K / 1M" tooltip. */
   contextWindow?: number;
+  /** `contextWindow` is an estimate (the model's name, a stored hint, a floor), not the number
+   *  Claude Code or the engine reported: shown as "~1M (estimate)". */
+  contextWindowEstimate?: boolean;
   /** Where this session auto-compacts, when below contextWindow. Shown as a
    *  separate line: it explains why a session compacts "early" without
    *  redefining what the percentage measures. */
@@ -35,7 +38,7 @@ export function useSessionUsage(sessionId: string | null): SessionUsage {
   const handler = useCallback((data: unknown) => {
     const d = data as {
       sessionId?: string; model?: string; contextPercent?: number;
-      inputTokens?: number; contextWindow?: number; autoCompactAt?: number; stopsAt?: number;
+      inputTokens?: number; contextWindow?: number; contextWindowEstimate?: boolean; autoCompactAt?: number; stopsAt?: number;
     };
     if (!sessionId || d.sessionId !== sessionId) return;
     setUsage({
@@ -43,6 +46,7 @@ export function useSessionUsage(sessionId: string | null): SessionUsage {
       contextPercent: d.contextPercent,
       inputTokens: d.inputTokens,
       contextWindow: d.contextWindow,
+      ...(d.contextWindowEstimate ? { contextWindowEstimate: true } : {}),
       autoCompactAt: d.autoCompactAt,
       stopsAt: d.stopsAt,
     });
@@ -56,43 +60,33 @@ export function useSessionUsage(sessionId: string | null): SessionUsage {
 // formatModelName moved to '@/utils/model-name' (pure module, unit-testable
 // without this hook's react/websocket import chain); re-exported for importers.
 export { formatModelName } from '@/utils/model-name';
-import { modelStringWindow } from '../../../src/providers/context-window';
+import { isExactWindowSource, modelNameWindowEstimate } from '../../../src/providers/context-window';
 
-/**
- * Client-side fallback window, used ONLY when the server sent no
- * `contextWindow` (history-derived usage on a session with no live events).
- * Returns null for any model whose window the string can't reveal — a custom
- * proxy model (GPT-5.6 Sol via the local Bedrock proxy) carries no `[1m]`
- * marker, and guessing 200K for it put a 5x-wrong percentage on the badge
- * (2026-08-23). The server's authoritative value replaces this on the first
- * live turn; until then, showing nothing beats showing a wrong number.
- */
-export function getContextWindowSize(model: string | undefined, totalInput?: number): number | null {
-  return liftedWindow(stringWindow(model), model, totalInput ?? 0);
-}
+/** A window a page shows, and whether it is only an estimate. */
+export interface PageContextWindow { window: number; estimate: boolean }
 
 /**
  * The window a page shows for a session with no live reading: the server's stored one, else the
- * string guess, lifted to what the session already holds (its tokens, its auto-compact point). A
+ * name rule, lifted to what the session already holds (its tokens, its auto-compact point). A
  * window is never below either, and an Anthropic model's window is 200K or 1M, so a stored or
  * guessed 200K under a session holding 324K reads 1M (2026-11-06: Opus 5.5 has 1M built in with
  * no `[1m]` in its id, and the badge read 162%). Mirrors resolveContextWindow's floor on the server.
+ * Only a stored window the CLI or the engine reported (`storedSource`) and not lifted counts as
+ * exact; every other answer is an estimate the badge marks as one (2026-11-07).
  */
 export function sessionContextWindow(
   stored: number | null | undefined, model: string | undefined, totalInput: number, autoCompactAt?: number | null,
-): number | null {
-  const base = stored && stored > 0 ? stored : stringWindow(model);
-  return liftedWindow(base, model, Math.max(totalInput, autoCompactAt ?? 0));
+  storedSource?: string,
+): PageContextWindow | null {
+  const hasStored = !!stored && stored > 0;
+  const base = hasStored ? stored! : (modelNameWindowEstimate(model) ?? null);
+  const window = liftedWindow(base, model, Math.max(totalInput, autoCompactAt ?? 0));
+  if (window == null) return null;
+  return { window, estimate: !(hasStored && window === stored && isExactWindowSource(storedSource)) };
 }
 
 const isAnthropicModel = (lower: string): boolean =>
   lower.includes('[1m]') || /claude/.test(lower) || /\b(opus|sonnet|haiku|fable)\b/.test(lower);
-
-/** The server's own rule (src/providers/context-window.ts): `[1m]` or a model with 1M built in
- *  (Opus 5.5 as `claude-opus-5-5`) reads 1M, any other Claude id 200K, anything else nothing. */
-function stringWindow(model: string | undefined): number | null {
-  return modelStringWindow(model) ?? null;
-}
 
 function liftedWindow(window: number | null, model: string | undefined, floor: number): number | null {
   if (window == null || window >= floor) return window;
@@ -121,7 +115,9 @@ export function contextBadgeTitle(usage: SessionUsage, percent: number): string 
     return parts.join(' — ');
   }
   if (usage.inputTokens != null && usage.contextWindow != null) {
-    parts.push(`${fmtTokens(usage.inputTokens)} / ${fmtTokens(usage.contextWindow)} (model max)`);
+    parts.push(usage.contextWindowEstimate
+      ? `${fmtTokens(usage.inputTokens)} / ~${fmtTokens(usage.contextWindow)} (estimate: Claude Code has not reported this model's window yet)`
+      : `${fmtTokens(usage.inputTokens)} / ${fmtTokens(usage.contextWindow)} (model max)`);
   } else if (usage.inputTokens != null) {
     parts.push(`${fmtTokens(usage.inputTokens)} in context`);
   }

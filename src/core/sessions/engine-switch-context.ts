@@ -324,11 +324,11 @@ export async function targetWindowTokens(
   if (same?.modelMaxWindow) return Math.min(same.modelMaxWindow, same.autoCompactAt ?? Infinity);
   let named: number | undefined;
   try {
-    const { recallModelWindow, modelStringWindow } = await import('../../providers/context-window.js');
-    const known = model ? recallModelWindow(host, model) : undefined;
-    if (known) return known;
-    // `[1m]`, or a model with 1M built in (Opus 5.5 as `claude-opus-5-5`).
-    named = modelStringWindow(model);
+    // A window the CLI reported for this model (on this host, else any), else its name's estimate.
+    const { knownModelWindow } = await import('../../providers/context-window.js');
+    const known = model ? knownModelWindow(host, model) : null;
+    if (known && !known.estimate) return known.window;
+    named = known?.window;
   } catch { /* defaults below */ }
   if (!isAcpEngine(target)) return named ?? CLAUDE_DEFAULT_WINDOW;
   return DEFAULT_WINDOWS[target] ?? OTHER_DEFAULT_WINDOW;

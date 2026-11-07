@@ -193,7 +193,7 @@ import { registerAuthRpc } from './routes/auth-rpc.js'
 import { initPushNotifications } from '../core/push-notification.js'
 import { initLetterPush } from '../core/push/letter-push.js'
 import { takeQosClampRequest } from '../lib/background-qos.js'
-import { enqueueMainAgentTurn, getQueueStatus, recordLastTurnTokens } from './agent-turn-queue.js'
+import { enqueueMainAgentTurn, getQueueStatus, recordLastTurnTokens, recordLaneWindow } from './agent-turn-queue.js'
 import { activeRelayedTurnCount } from './routes/chat-turn-relay.js'
 import { setPrivacyModelReady } from '../core/private-tasks/privacy-judge.js'
 
@@ -2032,6 +2032,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     void import('../core/hosts/exec-grants.js').then((m) => m.startExecGrantAnswers())
       .catch((err) => log.web.warn('host exec grants: answers not wired', { error: String(err) }))
   }
+
+  // ── The model windows Claude Code reported, kept across restarts (src/providers/model-window-store.ts).
+  void import('../providers/model-window-store.js').then((m) => m.startModelWindowStore()).catch(() => {})
 
   // ── The one status the user sees per task (src/core/user-status-sync.ts).
   if (bootPolicy('user-status')) {
@@ -4996,7 +4999,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         sendStreamEvent(sessionId, event.name, event.data)
       }
     } else if (event.name === 'session:usage-update') {
-      const { sessionId, inputTokens, liveReply } = eventData<'session:usage-update'>(event)
+      const { sessionId, inputTokens, liveReply, contextWindow, contextWindowEstimate, contextWindowSource } = eventData<'session:usage-update'>(event)
       if (sessionId) {
         sendStreamEvent(sessionId, event.name, event.data)
         // A real model reply after an error card is the session working again: its cards retire
@@ -5023,7 +5026,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
               const rec = await getSessionByClaudeId(sessionId)
               const { parseLaneKey } = await import('../core/sessions/personal-ai-lane.js')
               const laneIds = parseLaneKey(rec?.lane)
-              if (laneIds) recordLastTurnTokens(laneIds.conversationId, inputTokens)
+              if (laneIds) {
+                recordLastTurnTokens(laneIds.conversationId, inputTokens)
+                // The lane's own window, so the chat stats divide by what its CLI said, not by a
+                // catalog lookup of the configured model.
+                if (contextWindow) recordLaneWindow(laneIds.conversationId, { window: contextWindow, source: contextWindowSource, estimate: !!contextWindowEstimate })
+              }
             } catch { /* token truth is an optimization; a miss falls back to the estimate */ }
           })()
         }

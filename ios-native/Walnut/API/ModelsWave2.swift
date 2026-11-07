@@ -337,6 +337,9 @@ struct ChatStats: Codable {
     let apiMessageCount: Int?
     let estimatedTotalTokens: Int?
     let contextWindow: Int?
+    /// The window is an estimate (the configured model's catalog entry), not the one the
+    /// conversation's Claude Code session reported. Absent from an older server.
+    let contextWindowEstimate: Bool?
     let compacted: Bool?
 
     /// "34% of context" when both sides are known.

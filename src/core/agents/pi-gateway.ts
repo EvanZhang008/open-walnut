@@ -24,7 +24,7 @@
  */
 
 import { parseJsonObject, serializeJsonObject, type JsonObject } from './config-file-edit.js'
-import { modelStringWindow } from '../../providers/context-window.js'
+import { knownModelWindow } from '../../providers/context-window.js'
 
 /**
  * The one provider entry in pi's models.json that Walnut owns. An import replaces this entry
@@ -42,7 +42,7 @@ export type PiGatewayApi = 'bedrock-converse-stream' | 'anthropic-messages'
 export interface PiGatewayModel {
   id: string
   name?: string
-  /** 1M when Claude Code asks for the model's `[1m]` variant, else 200K. */
+  /** The window Claude Code reported for the model, else its name's estimate, else 200K. */
   contextWindow: number
 }
 
@@ -116,8 +116,9 @@ export function piGatewayFromClaudeCode(env: EnvLookup, bedrock: boolean, chosen
   const add = (rawId: string | undefined, name?: string): void => {
     if (!rawId?.trim()) return
     const id = plainId(rawId)
-    // `[1m]`, or a model with 1M built in (Opus 5.5 as `claude-opus-5-5`, 2026-11-06).
-    const contextWindow = ONE_M.test(rawId.trim()) ? 1_000_000 : (modelStringWindow(rawId.trim()) ?? 200_000)
+    // A window Claude Code reported for the model (any host), else its name's estimate (`[1m]`, a
+    // model with 1M built in), else 200K: pi's models.json needs a number.
+    const contextWindow = knownModelWindow(null, rawId.trim())?.window ?? 200_000
     const known = byId.get(id)
     if (known) {
       known.contextWindow = Math.max(known.contextWindow, contextWindow)

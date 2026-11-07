@@ -442,7 +442,7 @@ struct SettingsView: View {
     private func chatStatsLine(_ stats: ChatStats, count: Int) -> String {
         var line = "\(count) messages"
         if let percent = stats.contextPercent {
-            line += " · \(percent)% of context"
+            line += stats.contextWindowEstimate == true ? " · ~\(percent)% of context" : " · \(percent)% of context"
         }
         return line
     }

@@ -860,7 +860,7 @@ export interface SessionLiveSettings {
     /** The windows Walnut resolved: `modelMax` is the context% denominator (the
      *  model's absolute max), `autoCompactAt` is where this session compacts
      *  when a setting puts that below the model's limit. */
-    windows?: { modelMax: number | null; autoCompactAt: number | null } | null;
+    windows?: { modelMax: number | null; autoCompactAt: number | null; estimate?: boolean; source?: string } | null;
   };
 }
 

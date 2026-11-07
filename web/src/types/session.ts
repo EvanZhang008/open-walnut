@@ -191,6 +191,9 @@ export interface SessionRecord {
    *  freshly-loaded page compute the context badge from history tokens without
    *  guessing from the model string. */
   modelMaxWindow?: number;
+  /** Where modelMaxWindow came from (`ContextWindowSource` in src/providers/context-window.ts):
+   *  only the CLI's or the engine's own reading is exact, anything else an estimate. */
+  modelMaxWindowSource?: string;
   /** Where this session auto-compacts, when below modelMaxWindow. */
   autoCompactAt?: number;
   /** Where this session stops when Claude Code's auto-compact is off for it (the CLI refuses

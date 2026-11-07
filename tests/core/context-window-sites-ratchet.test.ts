@@ -4,7 +4,7 @@
  * 2026-11-06, the user's Mac app: an Opus 5.5 session read "Context 324.4K / 200K (162%)". Opus 5.5
  * runs a 1M window as `claude-opus-5-5`, with no `[1m]`, and three places each kept their own
  * "no [1m] means 200K" rule: the session readout, an engine handoff's budget and the pi gateway's
- * model list. They now read one rule (`modelStringWindow` / `resolveContextWindow` in
+ * model list. They now read one rule (`knownModelWindow` / `resolveContextWindow` in
  * src/providers/context-window.ts, its web twin `sessionContextWindow` in useSessionUsage.ts),
  * which knows the models with 1M built in from the model catalog and lifts any guess to what a
  * session shows it holds.
@@ -27,8 +27,8 @@ const ALLOWED: Record<string, string> = {
   'src/model/providers/model-catalog.ts': 'the catalog the rule reads its native-1M models from',
   'src/model/providers/defaults.ts': 'the Personal AI model layer constants, read with the catalog',
   'src/model/model.ts': 'the 1M beta header decision, from the catalog',
-  'src/core/sessions/engine-switch-context.ts': 'engine defaults for engines that are not Claude; Claude goes through modelStringWindow',
-  'src/core/agents/pi-gateway.ts': 'the 200K fallback of modelStringWindow for an id it cannot name',
+  'src/core/sessions/engine-switch-context.ts': 'engine defaults for engines that are not Claude; Claude goes through knownModelWindow',
+  'src/core/agents/pi-gateway.ts': 'the 200K fallback of knownModelWindow for an id it cannot name',
   'web/src/api/paste-spill.ts': 'a paste size threshold, not a model window',
   'web/src/components/sessions/compact-offer.ts': 'formats a token count as "1.2M", not a model window',
   'src/core/event-loop-monitor.ts': 'nanoseconds to milliseconds, not a model window',
@@ -59,7 +59,7 @@ describe('context window numbers live in one rule', () => {
       if (lines.some((line, i) => WINDOW_NUMBER.test(line) && WINDOW_WORD.test(lines.slice(Math.max(0, i - 3), i + 2).join('\n')))) found.add(rel);
     }
     const unlisted = [...found].filter((f) => !(f in ALLOWED));
-    expect(unlisted, 'name the window through modelStringWindow / resolveContextWindow (server) or sessionContextWindow (web)').toEqual([]);
+    expect(unlisted, 'name the window through resolveContextWindow / knownModelWindow (server) or sessionContextWindow (web)').toEqual([]);
     // A listed file that no longer names one comes off the list.
     expect(Object.keys(ALLOWED).filter((f) => !found.has(f))).toEqual([]);
   });

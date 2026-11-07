@@ -2801,6 +2801,48 @@ describe('ClaudeCodeSession payload reads (context usage / usage / version)', ()
     expect((session as any)._cliContextWindow).toBe(400000);
   });
 
+  // 2026-11-07 (the user: the real window, not the name's guess). With nothing clamping it the CLI's
+  // get_context_usage maxTokens IS the model's window (CLI 2.1.312: autocompactSource "auto"), so a
+  // proxy model the name rule cannot name reads exact before its first turn ends; a clamp ("env")
+  // stays only the effective window, and the name rule's answer is flagged as an estimate.
+  it('an unclamped get_context_usage is the model window, exact; a clamped one is not', async () => {
+    resetContextWindowCaches();
+    for (const [src, want] of [['auto', { window: 400_000, estimate: false }], ['env', null]] as const) {
+      const { session, writes } = makeSessionWithStubTransport();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const s = session as any;
+      s._initModel = 'gpt-6.1-sol';
+      s.seedCliContextWindow('test');
+      await new Promise((r) => setTimeout(r, 5));
+      const env = JSON.parse(writes[0]!);
+      feed(session, { type: 'control_response', response: { subtype: 'success', request_id: env.request_id,
+        response: { categories: [], totalTokens: 50_000, maxTokens: 400_000, rawMaxTokens: 400_000, autocompactSource: src, percentage: 12 } } });
+      await new Promise((r) => setTimeout(r, 5));
+      const r = s.contextReadout(50_000);
+      if (want) {
+        expect(r).toMatchObject({ contextWindow: want.window, contextWindowSource: 'cli-context-usage' });
+        expect(r.contextWindowEstimate).toBeUndefined();
+        expect(recallModelWindow(null, 'gpt-6.1-sol')).toBe(400_000);
+      } else {
+        // The clamp is never the model's own number: a proxy model the name cannot name gets no
+        // window (tokens only) rather than the auto-compact point passed off as its window.
+        expect(r.contextWindow).toBeUndefined();
+        expect(r.autoCompactAt).toBe(400_000);
+      }
+      resetContextWindowCaches();
+    }
+    // The name rule alone: an estimate, and said so.
+    const { session } = makeSessionWithStubTransport();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const s = session as any;
+    s._initModel = 'global.anthropic.claude-opus-5-5';
+    expect(s.contextReadout(10_000)).toMatchObject({ contextWindow: 1_000_000, contextWindowSource: 'model-string', contextWindowEstimate: true });
+    expect(s.contextWindowsForUi()).toMatchObject({ modelMax: 1_000_000, estimate: true });
+    // Once the CLI reports it at a turn end, it is exact.
+    s._cliRawContextWindow = 1_000_000;
+    expect(s.contextReadout(10_000).contextWindowEstimate).toBeUndefined();
+  });
+
   // The seed read is the ONLY thing that can put a percentage on the badge of a
   // session that has produced no assistant message since this server started —
   // and for a custom proxy model there is no model-string fallback at all, so
@@ -2998,7 +3040,7 @@ describe('ClaudeCodeSession payload reads (context usage / usage / version)', ()
       s._recordWindowHint = 200_000;
       expect(s.contextWindowsForUi().modelMax).toBe(200_000);
       s._cliContextWindow = 500_000; // get_context_usage.maxTokens at session start
-      expect(s.contextWindowsForUi()).toEqual({ modelMax: 1_000_000, autoCompactAt: 500_000 });
+      expect(s.contextWindowsForUi()).toMatchObject({ modelMax: 1_000_000, autoCompactAt: 500_000 });
       s._cliContextWindow = undefined;
       s.contextReadout(324_400); // a usage push
       expect(s.contextWindowsForUi().modelMax).toBe(1_000_000);

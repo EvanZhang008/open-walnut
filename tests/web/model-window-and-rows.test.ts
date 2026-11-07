@@ -6,7 +6,7 @@
  * The catalog below is the one the session's CLI answered that day (GET /api/sessions/:id/models).
  */
 import { describe, it, expect } from 'vitest';
-import { sessionContextWindow, getContextWindowSize } from '../../web/src/hooks/useSessionUsage';
+import { sessionContextWindow } from '../../web/src/hooks/useSessionUsage';
 import { oneRowPerModel, rowNamedLike, modelIdentity } from '../../web/src/components/sessions/model-row-dedupe';
 import { catalogRowLabel } from '../../web/src/components/sessions/ModelPicker';
 import { matchSessionModelCatalogEntry, sessionModelsAsCatalog, type SessionModelCatalogEntry } from '../../src/core/types';
@@ -84,18 +84,30 @@ describe('one row per model', () => {
 
 describe('the window a page shows with no live reading', () => {
   it('a stored 200K under a session holding more reads 1M', () => {
-    expect(sessionContextWindow(200_000, 'claude-opus-5-5', 324_400)).toBe(1_000_000);
+    const w = (...a: Parameters<typeof sessionContextWindow>) => sessionContextWindow(...a)?.window ?? null;
+    expect(w(200_000, 'claude-opus-5-5', 324_400)).toBe(1_000_000);
     // ... and under a session whose auto-compact point is past 200K.
-    expect(sessionContextWindow(200_000, 'claude-opus-5-5', 50_000, 500_000)).toBe(1_000_000);
-    expect(sessionContextWindow(1_000_000, 'claude-opus-5-5', 324_400)).toBe(1_000_000);
-    expect(sessionContextWindow(200_000, 'claude-opus-4-8', 120_000)).toBe(200_000);
+    expect(w(200_000, 'claude-opus-5-5', 50_000, 500_000)).toBe(1_000_000);
+    expect(w(1_000_000, 'claude-opus-5-5', 324_400)).toBe(1_000_000);
+    expect(w(200_000, 'claude-opus-4-8', 120_000)).toBe(200_000);
     // A proxy model is lifted to what it holds, never to a made-up 1M.
-    expect(sessionContextWindow(128_000, 'gpt-6.1-sol', 300_000)).toBe(300_000);
-    expect(sessionContextWindow(undefined, 'gpt-6.1-sol', 300_000)).toBeNull();
-    expect(getContextWindowSize('claude-sonnet-4-6', 250_000)).toBe(1_000_000);
+    expect(w(128_000, 'gpt-6.1-sol', 300_000)).toBe(300_000);
+    expect(w(undefined, 'gpt-6.1-sol', 300_000)).toBeNull();
+    expect(w(undefined, 'claude-sonnet-4-6', 250_000)).toBe(1_000_000);
     // The server's rule: a model with 1M built in reads 1M with nothing stored and few tokens.
-    expect(sessionContextWindow(undefined, 'claude-opus-5-5', 100_000)).toBe(1_000_000);
-    expect(getContextWindowSize('global.anthropic.claude-haiku-5-5')).toBe(1_000_000);
-    expect(getContextWindowSize('claude-sonnet-4-6[1m]')).toBe(1_000_000);
+    expect(w(undefined, 'claude-opus-5-5', 100_000)).toBe(1_000_000);
+    expect(w(undefined, 'global.anthropic.claude-haiku-5-5', 0)).toBe(1_000_000);
+    expect(w(undefined, 'claude-sonnet-4-6[1m]', 0)).toBe(1_000_000);
+  });
+
+  it('only a stored window the CLI reported, and not lifted, is exact', () => {
+    expect(sessionContextWindow(1_000_000, 'claude-opus-5-5', 324_400, null, 'cli-model-usage')).toEqual({ window: 1_000_000, estimate: false });
+    expect(sessionContextWindow(400_000, 'gpt-6.1-sol', 1_000, null, 'engine')).toEqual({ window: 400_000, estimate: false });
+    // No source (an older Walnut), a name guess, a floor: estimates.
+    expect(sessionContextWindow(1_000_000, 'claude-opus-5-5', 1_000)?.estimate).toBe(true);
+    expect(sessionContextWindow(200_000, 'claude-opus-5-5', 1_000, null, 'model-string')?.estimate).toBe(true);
+    expect(sessionContextWindow(undefined, 'claude-opus-5-5', 1_000)?.estimate).toBe(true);
+    // An exact 200K that the session outgrew is lifted, and so no longer exact.
+    expect(sessionContextWindow(200_000, 'claude-opus-4-8', 300_000, null, 'cli-model-usage')).toEqual({ window: 1_000_000, estimate: true });
   });
 });

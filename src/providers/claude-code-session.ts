@@ -1401,6 +1401,10 @@ export class ClaudeCodeSession {
    *  was the CLI's own (an older Walnut stored its model-string guess there). A hint, lifted by
    *  the floor like any guess, never THE denominator. Cleared on model change. */
   private _recordWindowHint: number | undefined
+  /** get_context_usage.maxTokens when the CLI said no setting clamped it (`autocompactSource`
+   *  "auto" or "unknown-model"): then it is the model's own window, known before any turn ends.
+   *  Cleared on model change. */
+  private _cliUnclampedWindow: number | undefined
   /** The most tokens this session has been seen holding on its current model: a window can never
    *  be smaller, so it is a floor under every guess. Cleared on model change. */
   private _maxContextTokensSeen = 0
@@ -3418,7 +3422,9 @@ export class ClaudeCodeSession {
       const forModel = record.modelMaxWindowModel
       const sameModel = !forModel || !session._initModel
         || shortModelId(forModel).toLowerCase() === shortModelId(session._initModel).toLowerCase()
-      if (sameModel && forModel && isExactWindowSource(record.modelMaxWindowSource)) {
+      if (sameModel && forModel && record.modelMaxWindowSource === 'cli-context-usage') {
+        session._cliUnclampedWindow = record.modelMaxWindow
+      } else if (sameModel && forModel && isExactWindowSource(record.modelMaxWindowSource)) {
         session._cliRawContextWindow = record.modelMaxWindow
       } else if (sameModel) {
         session._recordWindowHint = record.modelMaxWindow
@@ -6443,6 +6449,7 @@ export class ClaudeCodeSession {
               this._cliRawContextWindow = undefined
               this._cliContextWindow = undefined
               this._recordWindowHint = undefined
+              this._cliUnclampedWindow = undefined
               this._maxContextTokensSeen = 0
             }
             this._initModel = rawModel
@@ -9627,6 +9634,7 @@ export class ClaudeCodeSession {
     if (totalInput != null && totalInput > this._maxContextTokensSeen) this._maxContextTokensSeen = totalInput
     return resolveContextWindow({
       cliModelWindow: this._cliRawContextWindow,
+      cliUnclampedWindow: this._cliUnclampedWindow,
       recordWindow: this._recordWindowHint,
       // min(model window, auto-compact clamp): the model's window is at least this.
       effectiveWindow: this._cliContextWindow,
@@ -9642,9 +9650,10 @@ export class ClaudeCodeSession {
 
   /** Same two windows, for the picker's live-details panel — so the panel and
    *  the badge divide by the SAME number instead of contradicting each other. */
-  contextWindowsForUi(): { modelMax: number | null; autoCompactAt: number | null } {
+  contextWindowsForUi(): { modelMax: number | null; autoCompactAt: number | null; estimate?: boolean; source?: string } {
     const { window, autoCompactAt } = this.contextLimits()
-    return { modelMax: window, autoCompactAt }
+    const r = this.resolvedContextWindow()
+    return { modelMax: window, autoCompactAt, ...(r ? { source: r.source, ...(r.estimate ? { estimate: true } : {}) } : {}) }
   }
 
   /**
@@ -9653,11 +9662,17 @@ export class ClaudeCodeSession {
    * window), so 100% is that stop, never a point the session cannot reach (2026-11-05: a session read
    * 89% while every message already got "Prompt is too long").
    */
-  private contextReadout(tokens: number): { contextPercent?: number; contextWindow?: number; autoCompactAt?: number; stopsAt?: number } {
+  private contextReadout(tokens: number): {
+    contextPercent?: number; contextWindow?: number; contextWindowSource?: string; contextWindowEstimate?: boolean; autoCompactAt?: number; stopsAt?: number
+  } {
     const { window, autoCompactAt, stopsAt } = this.contextLimits(tokens)
     const basis = stopsAt ?? window
+    const r = window != null ? this.resolvedContextWindow(tokens) : null
     return {
       ...(window != null ? { contextWindow: window } : {}),
+      // Where the window came from, and whether it is only an estimate (a name rule, a floor): the
+      // UI marks such a window as one instead of passing a guess off as the model's own number.
+      ...(r ? { contextWindowSource: r.source, ...(r.estimate ? { contextWindowEstimate: true } : {}) } : {}),
       ...(basis ? { contextPercent: Math.round(tokens / basis * 100) } : {}),
       ...(autoCompactAt != null ? { autoCompactAt } : {}),
       ...(stopsAt != null ? { stopsAt } : {}),
@@ -9759,6 +9774,18 @@ export class ClaudeCodeSession {
         }
         this._autoCompactOff = off
         rememberAutoCompactOff(this._host, off)
+      }
+      // Nothing clamped the window (no CLAUDE_CODE_AUTO_COMPACT_WINDOW, no setting, no experiment): the
+      // CLI's resolver then hands back the model's own window (CLI 2.1.312 resolveAutoCompactWindow:
+      // "auto" and "unknown-model" return the window unchanged). Exact, before any turn has ended.
+      if (cu?.maxTokens && cu.maxTokens > 0 && (cu.autocompactSource === 'auto' || cu.autocompactSource === 'unknown-model')) {
+        if (cu.maxTokens !== this._cliUnclampedWindow) {
+          log.session.info('model context window read from get_context_usage (unclamped)', {
+            sessionId: this.claudeSessionId, taskId: this.taskId, reason, contextWindow: cu.maxTokens, source: cu.autocompactSource,
+          })
+        }
+        this._cliUnclampedWindow = cu.maxTokens
+        rememberModelWindow(this._host, this._initModel ?? this._model, cu.maxTokens, 'cli-context-usage')
       }
       if (cu?.maxTokens && cu.maxTokens > 0 && cu.maxTokens !== this._cliContextWindow) {
         log.session.info('cli effective (auto-compact) window seeded', {
@@ -9962,6 +9989,7 @@ export class ClaudeCodeSession {
         this._cliRawContextWindow = undefined
         this._cliContextWindow = undefined
         this._recordWindowHint = undefined
+        this._cliUnclampedWindow = undefined
         this._maxContextTokensSeen = 0
         this.seedCliContextWindow('model-change')
         // Read-back truth outside the cached catalog ⇒ the allowlist/overrides

@@ -1111,8 +1111,9 @@ export function ModelPicker({
                 return (
                 <div className="model-picker-details-block">
                   <div className="model-picker-details-title">
-                    Context — {fmtTokens(cu.totalTokens)} / {fmtTokens(modelMax)}
+                    Context — {fmtTokens(cu.totalTokens)} / {details.windows?.estimate ? '~' : ''}{fmtTokens(modelMax)}
                     {pct != null ? ` (${pct}%)` : ''}
+                    {details.windows?.estimate ? ' · estimate' : ''}
                   </div>
                   {compactAt != null && (
                     <div className="model-picker-details-row model-picker-details-note">
