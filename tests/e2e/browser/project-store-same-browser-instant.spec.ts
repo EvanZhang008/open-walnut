@@ -333,11 +333,22 @@ test('the /tasks table reads the project registry once for the whole table, not 
 
   // Count the LIST endpoint only ('/api/projects' exactly, never a per-project
   // sub-path): that is the one a per-consumer hook multiplied by the row count.
-  let listGets = 0
+  const listGetsAt: number[] = []
   await page.route('**/api/projects', async (route) => {
-    if (route.request().method() === 'GET') listGets++
+    if (route.request().method() === 'GET') listGetsAt.push(Date.now())
     await route.continue()
   })
+  // Every spec shares one fixture server, and the ones running beside this one create,
+  // rename and delete projects. Each such event tells the store to read the list again
+  // (one debounced GET, useProjectRegistry), which is right and is not this test's
+  // concern: on CI it added 1 or 2 reads to the window (2026-11-07). A read that follows
+  // a project event within 3 s is that refresh, not a row's own fetch.
+  const projectEvents: number[] = []
+  page.on('websocket', (socket) => socket.on('framereceived', ({ payload }) => {
+    if (/"name":"project:(created|renamed|deleted|updated)"/.test(String(payload))) projectEvents.push(Date.now())
+  }))
+  const ownReads = (since: number) => listGetsAt.filter((at) => at >= since
+    && !projectEvents.some((ev) => ev <= at && at - ev <= 3_000)).length
 
   await presetPanelView(page, { section: 'all', project: '' })
   // The Project column is off by default (tasks-table-columns.ts): choose it.
@@ -348,7 +359,7 @@ test('the /tasks table reads the project registry once for the whole table, not 
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(String(e).slice(0, 300)))
 
-  const afterHome = listGets
+  const afterHome = Date.now()
   await navigateToTasksPage(page)
   const rows = page.locator('.tp-row[data-task-id]')
   // The premise: MANY rows are on screen, each of which used to fetch for itself.
@@ -357,7 +368,7 @@ test('the /tasks table reads the project registry once for the whole table, not 
 
   // At most one: the store shares one in-flight request and a fresh-enough list is
   // reused outright, so the usual number here is ZERO.
-  const onTasksPage = listGets - afterHome
+  const onTasksPage = ownReads(afterHome)
   expect(onTasksPage,
     `the /tasks table fetched the registry ${onTasksPage}x for ${rowCount} rows`).toBeLessThanOrEqual(1)
 
