@@ -40,19 +40,20 @@ describe('visibleTabBarTabs', () => {
     expect(ids(visibleTabBarTabs(tabs, { active: 'all', counts: full, hidden: ['backlog'], hideEmpty: false }))).toEqual(ids(tabs))
   })
 
-  it('hides an empty built-in tier and Recent, never All, Pinned or a custom tier', () => {
+  it('hides an empty built-in tier, never All, Pinned, Recent or a custom tier', () => {
     const counts = { pinned: 2, focus: 0, satellite: 2, wait: 0, recent: 0, ct_a: 0 }
+    // Recent stays while empty: nothing opened yet (a first launch) must not take the tab away.
     expect(ids(visibleTabBarTabs(tabs, { active: 'satellite', counts, hidden: [], hideEmpty: true })))
-      .toEqual(['all', 'pinned', 'satellite', 'ct_a', 'ct_b'])
+      .toEqual(ids(tabs).filter((id) => id !== 'focus' && id !== 'wait'))
     expect(ids(visibleTabBarTabs(tabs, { active: 'satellite', counts, hidden: [], hideEmpty: false }))).toEqual(ids(tabs))
   })
 
   it('a tier whose only tasks are parked (held, hidden by default) is not empty', () => {
     const counts = { pinned: 2, focus: 0, satellite: 2, wait: 0, recent: 0, ct_a: 0 }
-    expect(ids(visibleTabBarTabs(tabs, { active: 'all', counts, held: { focus: 1 }, hidden: [], hideEmpty: true })))
+    expect(ids(visibleTabBarTabs(tabs, { active: 'all', counts, held: { focus: 1 }, hidden: ['recent'], hideEmpty: true })))
       .toEqual(['all', 'pinned', 'focus', 'satellite', 'ct_a', 'ct_b'])
     // A held count never brings back a tab the user took off the bar.
-    expect(ids(visibleTabBarTabs(tabs, { active: 'all', counts, held: { focus: 1 }, hidden: ['focus'], hideEmpty: true })))
+    expect(ids(visibleTabBarTabs(tabs, { active: 'all', counts, held: { focus: 1 }, hidden: ['focus', 'recent'], hideEmpty: true })))
       .toEqual(['all', 'pinned', 'satellite', 'ct_a', 'ct_b'])
   })
 

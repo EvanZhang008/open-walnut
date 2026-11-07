@@ -92,8 +92,9 @@ export function visibleTabBarTabs(tabs: readonly TabBarTab[], { active, counts, 
     if (tab.id === active) return true;
     if (hidden.includes(tab.id)) return false;
     // All has no count of its own; Pinned is the bar's one fixed stop; a custom tier
-    // stays findable while empty.
-    if (!hideEmpty || tab.id === 'all' || tab.id === 'pinned' || tab.custom) return true;
+    // stays findable while empty; Recent fills itself as tasks are opened, so it stays
+    // (empty, it says how: a first launch after it shipped has nothing opened yet).
+    if (!hideEmpty || tab.id === 'all' || tab.id === 'pinned' || tab.id === 'recent' || tab.custom) return true;
     // A tier whose tasks are all parked still has work in it: the tab stays, so the
     // footer's "N waiting hidden" under it can be reached (2026-10-01).
     return (counts[tab.id] ?? 0) > 0 || (held?.[tab.id] ?? 0) > 0;

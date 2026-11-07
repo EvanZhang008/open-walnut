@@ -133,6 +133,7 @@ test('search filters the Pinned tiers and the Recent list like the Tasks list', 
   await expect(recentCard(recentMatch)).toBeVisible();
   await expect(page.locator('.todo-search-results')).toHaveCount(0);
   await expect(page.locator('.fb-row-lead')).toHaveText('Searching Recent');
+  await expect(page.locator('.fb-row .fb-toggle')).toHaveCount(0);
   await page.locator('.todo-search-clear').click();
   await expect(recentCard(recentMiss)).toBeVisible({ timeout: 5_000 });
   await expect(recentCard(recentMatch)).toBeVisible();

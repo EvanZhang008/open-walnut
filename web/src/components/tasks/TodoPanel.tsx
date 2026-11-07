@@ -7540,7 +7540,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     search: {
       active: isSearchMode,
       lead: effectiveSection === 'recent' ? 'Searching Recent' : null,
-      includeComplete: isSearchMode && statusIsDefault && searchDoneCount > 0
+      // Recent lists every state already: the chip would switch nothing there.
+      includeComplete: isSearchMode && statusIsDefault && searchDoneCount > 0 && effectiveSection !== 'recent'
         ? { count: searchDoneCount, on: showDoneResults, toggle: toggleIncludeComplete }
         : null,
     },
