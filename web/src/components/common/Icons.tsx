@@ -61,8 +61,9 @@ export const ICON_EXPAND = <svg width="14" height="14" viewBox="0 0 16 16" fill=
 // Minimize / "collapse back": two arrows pointing INWARD toward the centre
 // (lucide minimize-2). The old version put the brackets at odd offsets and
 // rendered as a lightning-zigzag; this is the standard exit-fullscreen glyph.
-/** A bar along the bottom: minimize to the taskbar. */
-export const ICON_MINIMIZE = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><line x1="3.5" y1="12" x2="12.5" y2="12"/></svg>;
+/** A dash: minimize to the taskbar. Drawn on the box's middle line (y 8), so its ink sits
+ *  on the header row's center like its neighbours (2026-11-06: at y 12 it sat low). */
+export const ICON_MINIMIZE = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><line x1="3.5" y1="8" x2="12.5" y2="8"/></svg>;
 export const ICON_COLLAPSE = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><polyline points="13 7 9 7 9 3"/><polyline points="3 9 7 9 7 13"/><line x1="9" y1="7" x2="14" y2="2"/><line x1="2" y1="14" x2="7" y2="9"/></svg>;
 export const ICON_REFRESH = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><path d="M1.5 8a6.5 6.5 0 0111.3-4.4"/><polyline points="13 1 13 4.5 9.5 4.5"/><path d="M14.5 8a6.5 6.5 0 01-11.3 4.4"/><polyline points="3 15 3 11.5 6.5 11.5"/></svg>;
 // Thin chevrons for the pane collapse rails (SVG, not a text glyph: ⟨ read as

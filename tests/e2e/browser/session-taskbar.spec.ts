@@ -6,6 +6,7 @@
  * session's last reply and a composer.
  */
 import { test, expect, type Page } from '@playwright/test'
+import { iconInkOffsets, ICON_CENTER_TOLERANCE_PX } from './icon-ink'
 
 const SESSION_ID = 'pw-vscode-session'
 const TASK_ID = 'pw-task-vscode'
@@ -23,6 +24,17 @@ async function openSessionPanel(page: Page) {
 }
 
 const chip = (page: Page) => page.locator(`.session-taskbar-chip[data-session-id="${SESSION_ID}"]`)
+
+test('every icon of the header\'s window buttons draws on the row\'s middle, Minimize included', async ({ page }) => {
+  const panel = await openSessionPanel(page)
+  const controls = panel.locator('.session-panel-window-controls')
+  await expect(controls.locator('[data-header-id="minimize"]')).toBeVisible()
+  const inks = await iconInkOffsets(controls.locator('button'))
+  expect(inks.map((i) => i.id)).toContain('minimize')
+  for (const ink of inks) {
+    expect(Math.abs(ink.dy), `${ink.id} icon is ${ink.dy.toFixed(2)}px off its button's middle`).toBeLessThan(ICON_CENTER_TOLERANCE_PX)
+  }
+})
 
 test('Minimize puts the column on the taskbar; its chip brings it back', async ({ page }) => {
   const panel = await openSessionPanel(page)

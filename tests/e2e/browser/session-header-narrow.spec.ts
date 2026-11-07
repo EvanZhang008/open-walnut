@@ -22,6 +22,7 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL, draftComposer, openDraftOnCwd } from './draft-helpers'
 import { clampColumn } from './composer-controls-overflow-helpers'
 import { expectHeaderLabel, headerLabelsButton } from './session-header-labels-helpers'
+import { iconInkOffsets, ICON_CENTER_TOLERANCE_PX } from './icon-ink'
 
 const SHOT_DIR = process.env.PW_SCREENSHOT_DIR ?? '/tmp/session-header-narrow'
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -317,6 +318,10 @@ test('a narrow column keeps the tool row on one line and the labels whole under 
   await expect(more.getByTestId('session-header-more-item-expand')).toHaveCount(0)
   const moreRows = await more.locator('[role="menuitem"]').evaluateAll((els) => els.map((el) => el.getAttribute('data-testid')!.replace('session-header-more-item-', '')))
   expect(moreRows.slice(-3), 'window buttons come after the views').toEqual(['locate', 'popout', 'minimize'])
+  // Each window button's icon draws on its menu row's middle, as on the header row.
+  for (const ink of await iconInkOffsets(more.locator('[role="menuitem"]'))) {
+    expect(Math.abs(ink.dy), `${ink.id} icon is ${ink.dy.toFixed(2)}px off its row's middle`).toBeLessThan(ICON_CENTER_TOLERANCE_PX)
+  }
   await shootHeader(panel, '180-more', 220)
   await more.getByTestId('session-header-more-item-files').click()
   await expect(more).toHaveCount(0)
