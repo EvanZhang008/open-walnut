@@ -238,10 +238,15 @@ export function pruneRiding(now = Date.now()): void {
   }
 }
 
-/** Shutdown: a save still waiting is written first (save reads the items before its first await). */
-export function stopRiding(): void {
-  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; void save(); }
+/**
+ * Shutdown: a save still waiting is written first (save reads the items before its
+ * first await). Resolves once that write is done, for a caller that can wait for it.
+ */
+export function stopRiding(): Promise<void> {
+  let written = Promise.resolve();
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; written = save(); }
   clearRiding();
+  return written;
 }
 
 /** Test seams. */
@@ -251,6 +256,11 @@ export function clearRiding(): void {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = null;
   filePath = null;
+}
+
+/** Test seam: forget what an earlier test saved, so the next start loads none of it. */
+export async function dropRidingStoreForTest(): Promise<void> {
+  await fs.rm(await storePath(), { force: true });
 }
 
 export async function flushRidingForTest(): Promise<void> {

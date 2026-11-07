@@ -19,7 +19,7 @@ import { _rideForTest, pendingStatusNote, stopStatusPush } from '../../src/core/
 const SID = 'aaaaaaaa-1111-4222-8333-444444444444'
 
 beforeEach(async () => {
-  stopStatusPush()
+  await stopStatusPush()
   resetCache()
   _resetSessionTrackerForTesting()
   await createSessionRecord(SID, 't-asker', 'Acme', '/tmp')

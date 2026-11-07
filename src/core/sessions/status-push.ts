@@ -331,14 +331,15 @@ export async function startStatusPush(opts: { quietMs?: number } = {}): Promise<
   });
 }
 
-export function stopStatusPush(): void {
+/** Stop; resolves once the ride-along items still waiting to be saved are on disk. */
+export function stopStatusPush(): Promise<void> {
   live = false;
   bus.unsubscribe(SUBSCRIBER);
   if (timer) clearTimeout(timer);
   timer = null;
   baseline.clear();
   pending.clear();
-  stopRiding();
+  return stopRiding();
 }
 
 /** Test seam: a line waiting for a session's next message. */

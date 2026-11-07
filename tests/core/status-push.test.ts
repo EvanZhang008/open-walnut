@@ -39,6 +39,7 @@ vi.mock('../../src/core/session-message-queue.js', () => ({
   enqueueMessage: async (sid: string, text: string) => { queued.push({ sid, text }); return { id: 'qm-x' }; },
 }));
 
+import { dropRidingStoreForTest } from '../../src/core/sessions/status-riding.js';
 import { SETTLE_MS, changeLine, flushStatusPush, pendingStatusNote, seenOf, startStatusPush, stopStatusPush, _pendingStatusPush } from '../../src/core/sessions/status-push.js';
 import { bus, EventNames } from '../../src/core/event-bus.js';
 
@@ -51,7 +52,9 @@ const needs = (ask: string) => ({ state: 'needs' as const, source: 'session' as 
 const T0 = Date.parse('2026-10-28T17:00:00Z');
 
 beforeEach(async () => {
-  stopStatusPush();
+  // The stop saves what still rides; drop it, or this test's start loads the last test's items.
+  await stopStatusPush();
+  await dropRidingStoreForTest();
   tasks.clear();
   delivered.length = 0;
   queued.length = 0;
@@ -194,7 +197,7 @@ describe('who hears it', () => {
   });
 
   it('right after a start the baseline follows silently (a restart catching up)', async () => {
-    stopStatusPush();
+    await stopStatusPush();
     await startStatusPush({ quietMs: 60_000 });
     emit(task('w', { parent_task_id: 'lead', phase: 'IN_PROGRESS', user_status: { state: 'working' } }));
     expect(_pendingStatusPush()).toHaveLength(0);
