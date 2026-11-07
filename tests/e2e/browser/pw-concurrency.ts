@@ -178,13 +178,15 @@ function loadPerCore(): number {
  * every spec failed on `page.waitForLoadState` timeouts and the run's own browsers
  * made it worse. Queuing is strictly better than adding fuel and failing anyway.
  *
- * Advisory: gives up after timeoutMs and lets the run proceed, because a
- * permanently busy machine must not mean tests can never run.
+ * Still overloaded after timeoutMs, it throws and the run does not start: it used
+ * to run anyway, and WebKit started at load 295 (2026-11-07), where every spec
+ * fails on timeouts that are not product bugs. Run it again once the machine is
+ * calmer; PW_IGNORE_LOAD=1 skips the wait (CI and clouddev's containers set it).
  */
-export function waitForCapacitySync(timeoutMs = 10 * 60_000): void {
+export function waitForCapacitySync(timeoutMs = 10 * 60_000, perCore: () => number = loadPerCore): void {
   if (process.env.PW_IGNORE_LOAD === '1' || process.env.CI) return
   const cores = Math.max(1, os.cpus().length)
-  if (loadPerCore() <= LOAD_PER_CORE_CEILING) return
+  if (perCore() <= LOAD_PER_CORE_CEILING) return
 
   const deadline = Date.now() + timeoutMs
   console.log(
@@ -192,16 +194,16 @@ export function waitForCapacitySync(timeoutMs = 10 * 60_000): void {
       `waiting for it to settle before starting browsers. Check with: scripts/pw-cleanup.sh status`,
   )
   while (Date.now() < deadline) {
-    sleepSync(5_000)
-    if (loadPerCore() <= LOAD_PER_CORE_CEILING) {
+    sleepSync(Math.min(5_000, Math.max(100, deadline - Date.now())))
+    if (perCore() <= LOAD_PER_CORE_CEILING) {
       console.log(`[pw-concurrency] load settled to ${os.loadavg()[0].toFixed(0)} — starting`)
       return
     }
   }
-  console.warn(
-    `[pw-concurrency] still overloaded (load ${os.loadavg()[0].toFixed(0)}) after ` +
-      `${Math.round(timeoutMs / 60_000)}m; running anyway — expect timeout-shaped failures that are ` +
-      `NOT product bugs. Set PW_IGNORE_LOAD=1 to skip this wait.`,
+  throw new Error(
+    `[pw-concurrency] still overloaded (load ${os.loadavg()[0].toFixed(0)} on ${cores} cores) after ` +
+      `${Math.round(timeoutMs / 60_000)}m: this run did not start (its browsers would fail on timeouts ` +
+      `that are not product bugs). Run it again once the machine is calmer (scripts/pw-cleanup.sh status).`,
   )
 }
 

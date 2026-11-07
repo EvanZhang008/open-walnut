@@ -229,19 +229,20 @@ describe('playwright admission gate', () => {
     }
   })
 
-  it('the overload wait gives up rather than blocking forever', () => {
-    // Fail-open contract: on a permanently busy machine the gate must still let
-    // the run start. With a tiny budget this returns quickly either way — the
-    // point is that it RETURNS (an early version could sit in Atomics.wait past
-    // its deadline).
+  it('the overload wait ends in an error, never a run on an overloaded machine', () => {
+    // 2026-11-07: after its 10 minutes the wait ran WebKit anyway at load 295.
     const prev = process.env.PW_IGNORE_LOAD
+    const prevCi = process.env.CI
     delete process.env.PW_IGNORE_LOAD
+    delete process.env.CI
     try {
       const started = Date.now()
-      waitForCapacitySync(1_000)
+      expect(() => waitForCapacitySync(1_000, () => 999)).toThrow(/still overloaded .*: this run did not start/)
       expect(Date.now() - started).toBeLessThan(20_000)
+      expect(() => waitForCapacitySync(1_000, () => 0)).not.toThrow()
     } finally {
       if (prev !== undefined) process.env.PW_IGNORE_LOAD = prev
+      if (prevCi !== undefined) process.env.CI = prevCi
     }
   })
 })

@@ -745,7 +745,8 @@ starts it; CI installs Node for it). The fixture servers it tests run on bun lik
 - **Orphan sweep** — reaps a fixture server left by a SIGKILLed run before
   `reuseExistingServer` can silently attach to it.
 - **Overload wait** — if something else already saturates the box (concurrent vitest,
-  Xcode, simulators), it waits rather than piling on. `PW_IGNORE_LOAD=1` skips it.
+  Xcode, simulators), it waits rather than piling on, up to 10 minutes, then stops with an
+  error and nothing runs. `PW_IGNORE_LOAD=1` skips it.
 
 ```bash
 scripts/pw-cleanup.sh status   # browsers / fixture server / isolated daemons / leases
