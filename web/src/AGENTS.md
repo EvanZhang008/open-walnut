@@ -317,6 +317,15 @@ show inline after the open ones, other completed hits that show the query fold i
   `needs_leader` why has words in `NEEDS_LEADER_REASONS` (ratchet:
   `tests/replica/needs-leader-reasons-ratchet.test.ts`). Tests: `tests/web/leader-presence*.test.ts`,
   `tests/web/chat-input-away-draft.test.ts`.
+- **The rail's Agenda and Scratchpad open beside the page on screen, never a trip home**
+  (2026-11-06, the user: "any page can show this side bar, I find I sometimes need it for the org
+  page"). Home keeps its own column (`HomeCompanionPanel`, right of the task panel, its own
+  `open-walnut-home-*-visible` flags); every other page gets `PageSideBar` on its left edge inside
+  `.main-content-row` (AppShell), the same `CompanionColumn`. What is open and the width are kept per
+  page in view memory (`page-side-bar.ts`, `side-bar.view` per `sideBarPageOf`), a narrow window
+  (<=1100px) lays it over the page, and `--fullscreen-left` is the page area's left edge, so a full
+  screen sheet lies beside it and it stays usable like the rail. No phone: neither pane mounts there.
+  Spec: `tests/e2e/browser/page-side-bar.spec.ts`.
 - Use the structured logger `import { log } from '@/utils/log'` — never raw `console.log`;
   never `console.debug` (invisible to the disk forwarder). IDs full, never truncated.
 - **`<suggest>` action cards render in BOTH lanes through one module**

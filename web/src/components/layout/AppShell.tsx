@@ -26,6 +26,7 @@ import { usePhoneResync } from '@/hooks/usePhoneResync';
 import { installStandaloneLinks } from '@/utils/standalone-links';
 import { PhoneTopBar } from './PhoneTopBar';
 import { AwayLine } from './AwayLine';
+import { PageSideBar } from './PageSideBar';
 import '@/styles/phone-layout.css';
 import '@/styles/phone-fixes.css';
 import '@/styles/phone-fixes-r2.css';
@@ -88,16 +89,19 @@ function AppShellInner({ children }: AppShellProps) {
   const focusBar = useFocusBarContext();
   const contentRef = useRef<HTMLDivElement>(null);
   // Where the page area starts: a full screen panel fills the tab beside the
-  // sidebar (fullscreen-tab.css reads --fullscreen-left; 0 on a phone).
+  // sidebar, and beside the page's Agenda and Scratchpad side bar when it is open,
+  // which stay usable like the rail (fullscreen-tab.css reads --fullscreen-left;
+  // 0 on a phone). The area's left edge only moves with its width, so watching its
+  // size is enough.
   const mainRef = useRef<HTMLElement>(null);
   useEffect(() => {
-    const main = mainRef.current;
-    if (!main) return;
+    const area = contentRef.current;
+    if (!area) return;
     const root = document.documentElement;
-    const publish = () => root.style.setProperty('--fullscreen-left', `${Math.max(0, Math.round(main.getBoundingClientRect().left))}px`);
+    const publish = () => root.style.setProperty('--fullscreen-left', `${Math.max(0, Math.round(area.getBoundingClientRect().left))}px`);
     publish();
     const ro = new ResizeObserver(publish);
-    ro.observe(main);
+    ro.observe(area);
     window.addEventListener('resize', publish);
     return () => { ro.disconnect(); window.removeEventListener('resize', publish); };
   }, []);
@@ -307,12 +311,18 @@ function AppShellInner({ children }: AppShellProps) {
       <main ref={mainRef} className="main-content" inert={sidebarOpen && isMobileSidebar}>
         {/* A host replica's console while the Mac is away (nothing otherwise). */}
         <AwayLine />
-        <div
-          ref={contentRef}
-          className="app-content-area"
-          style={isFullBleed ? { padding: 0, overflow: 'hidden' } : undefined}
-        >
-          {children}
+        {/* The page and, on its left edge, the Agenda and Scratchpad side bar (PageSideBar):
+            any page but Home, which keeps its own column. Not on a phone, where neither pane
+            mounts (the rail has no toggle for them there). */}
+        <div className="main-content-row">
+          {!isMobileSidebar && <PageSideBar />}
+          <div
+            ref={contentRef}
+            className="app-content-area"
+            style={isFullBleed ? { padding: 0, overflow: 'hidden' } : undefined}
+          >
+            {children}
+          </div>
         </div>
         {!isMainPage && focusBar.visible && <FocusDock focusBar={focusBar} />}
       </main>

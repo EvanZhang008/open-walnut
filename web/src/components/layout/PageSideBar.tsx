@@ -1,0 +1,86 @@
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { useTasksContextSafe } from '@/contexts/TasksContext';
+import { useDragGesture } from '@/hooks/useDragGesture';
+import { openTaskOnHome } from '@/utils/open-session';
+import { CompanionColumn } from './HomeCompanionPanel';
+import { sideBarPageOf, sideBarWidth, usePageSideBar } from './page-side-bar';
+
+/** Hands focus back to the rail toggle that opens a pane (as Home's column does). */
+function focusOpener(testId: string) {
+  requestAnimationFrame(() => {
+    const opener = document.querySelector<HTMLButtonElement>(`[data-testid="${testId}"]`);
+    if (opener?.getClientRects().length) opener.focus();
+  });
+}
+
+function useWindowWidth(): number {
+  const [width, setWidth] = useState(() => window.innerWidth);
+  useEffect(() => {
+    const onResize = () => setWidth(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  return width;
+}
+
+/**
+ * The Agenda and the Scratchpad beside any page but Home (page-side-bar.ts): one column on the
+ * page's left edge, opened from the rail's Agenda and Scratchpad, kept open or shut and as wide
+ * as it was per page. On Home it draws nothing (Home's own column is HomeCompanionPanel).
+ */
+export function PageSideBar() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const page = sideBarPageOf(location.pathname);
+  const { view, setPane, setWidth } = usePageSideBar(page);
+  const tasks = useTasksContextSafe()?.tasks ?? [];
+  const windowWidth = useWindowWidth();
+  const shown = sideBarWidth(view.width, windowWidth);
+  // The width while a drag runs; written to the page's view once, when it ends.
+  const [dragWidth, setDragWidth] = useState<number | null>(null);
+  const startRef = useRef(shown);
+  const latestRef = useRef<number | null>(null);
+  const { onPointerDown } = useDragGesture({
+    cursor: 'col-resize',
+    onStart: () => { startRef.current = shown; latestRef.current = null; },
+    onMove: ({ dx }) => {
+      const next = sideBarWidth(startRef.current + dx, window.innerWidth);
+      latestRef.current = next;
+      setDragWidth(next);
+    },
+    onEnd: ({ canceled }) => {
+      const final = latestRef.current;
+      setDragWidth(null);
+      if (!canceled && final !== null) setWidth(final);
+    },
+  });
+  const closeAgenda = useCallback(() => { setPane('agenda', false); focusOpener('sidebar-toggle-calendar'); }, [setPane]);
+  const closeScratchpad = useCallback(() => { setPane('scratchpad', false); focusOpener('sidebar-toggle-scratchpad'); }, [setPane]);
+  const onTaskClick = useCallback((taskId: string) => openTaskOnHome(taskId, navigate), [navigate]);
+
+  const width = dragWidth ?? shown;
+  return (
+    <CompanionColumn
+      calendarOpen={page !== null && view.agenda}
+      scratchpadOpen={page !== null && view.scratchpad}
+      onCloseCalendar={closeAgenda}
+      onCloseScratchpad={closeScratchpad}
+      tasks={tasks}
+      onTaskClick={onTaskClick}
+      className="page-side-bar"
+      testId="page-side-bar"
+      place={page}
+      style={{ '--page-side-bar-width': `${width}px` } as CSSProperties}
+    >
+      <div
+        className={`page-side-bar-resize${dragWidth !== null ? ' resizing' : ''}`}
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize side bar"
+        data-testid="page-side-bar-resize"
+        onPointerDown={onPointerDown}
+      />
+    </CompanionColumn>
+  );
+}

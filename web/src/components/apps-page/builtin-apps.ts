@@ -53,8 +53,8 @@ const RAIL_COPY: Readonly<Record<RailItemId, Copy & { title: string }>> = {
   'home-todo': { title: 'Task panel', line: 'The task list on Home', tint: '#0A84FF' },
   'home-chat': { title: 'Ask Walnut', line: 'Chat with your Personal AI', tint: '#5E5CE6' },
   org: { title: 'Org', line: 'The CEO and the VPs', tint: '#30B0C7' },
-  'home-agenda': { title: 'Agenda', line: "Today's calendar beside your tasks", tint: '#FF6B5E' },
-  'home-scratchpad': { title: 'Scratchpad', line: 'A quick note pad on Home', tint: '#FF9F0A' },
+  'home-agenda': { title: 'Agenda', line: "Today's calendar beside any page", tint: '#FF6B5E' },
+  'home-scratchpad': { title: 'Scratchpad', line: 'A quick note pad beside any page', tint: '#FF9F0A' },
 }
 
 /** Rail order: Home, its panel toggles, Org, then the registry apps as the rail draws them. */

@@ -446,13 +446,13 @@ test('the corner: a toast and an approval card share the bottom left, right of t
   }).toBe(true)
   // A toast on the phone is one row above it for its few seconds (a tap opens the center), and the
   // page under the bar does not move.
-  const areaTop = (await page.locator('.main-content > .app-content-area').boundingBox())!.y
+  const areaTop = (await page.locator('.main-content-row > .app-content-area').boundingBox())!.y
   sock()!.send(agentErrorEvent('agent-phone', '401 unauthorized (phone notice)'))
   const phoneToast = stack.locator('.notification-toast').first()
   await expect(phoneToast).toBeVisible()
   await expect.poll(async () => Math.round((await phoneToast.boundingBox())!.height)).toBeLessThanOrEqual(48)
   expect((await phoneToast.boundingBox())!.y).toBeGreaterThan(844 / 2)
-  expect((await page.locator('.main-content > .app-content-area').boundingBox())!.y).toBe(areaTop)
+  expect((await page.locator('.main-content-row > .app-content-area').boundingBox())!.y).toBe(areaTop)
   await card3.locator('.approval-line-open').click()
   await dialog.getByRole('button', { name: 'Deny' }).click()
   expect((await waitFor(request, third.id, thirdToken)).approval.status).toBe('denied')

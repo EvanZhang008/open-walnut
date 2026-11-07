@@ -1,4 +1,4 @@
-import { useEffect, useRef, type CSSProperties } from 'react';
+import { useEffect, useRef, type CSSProperties, type ReactNode } from 'react';
 import { useLocation } from 'react-router-dom';
 import { CalendarSidePanel } from '@/components/calendar/CalendarSidePanel';
 import { GlobalNotesSection } from '@/components/notes/GlobalNotesSection';
@@ -22,26 +22,56 @@ interface Props {
  * The column right of the task panel: the day agenda and the scratchpad, each toggled
  * from the rail's Home group. With both on they share the column, agenda on top.
  */
-export function HomeCompanionPanel({ calendarOpen: calendarRequested, scratchpadOpen: scratchpadRequested, onCloseCalendar, onCloseScratchpad, tasks, focusedTaskId, onTaskClick, overlayLeft }: Props) {
+export function HomeCompanionPanel({ calendarOpen, scratchpadOpen, overlayLeft, ...rest }: Props) {
   const home = useLocation().pathname === '/';
-  const calendarOpen = home && calendarRequested;
-  const scratchpadOpen = home && scratchpadRequested;
+  return (
+    <CompanionColumn
+      {...rest}
+      calendarOpen={home && calendarOpen}
+      scratchpadOpen={home && scratchpadOpen}
+      className="home-companion"
+      testId="home-companion"
+      style={overlayLeft ? { '--home-companion-left': overlayLeft } as CSSProperties : undefined}
+    />
+  );
+}
+
+interface ColumnProps extends Omit<Props, 'overlayLeft'> {
+  /** The column's own class (`home-companion` on Home, `page-side-bar` beside another page). */
+  className: string;
+  /** Prefix of the column's and its panes' test ids. */
+  testId: string;
+  style?: CSSProperties;
+  /** Drawn after the panes (the side bar's resize handle). */
+  children?: ReactNode;
+  /** The page the column serves now (the side bar's), so moving to another page focuses nothing. */
+  place?: string | null;
+}
+
+/**
+ * The agenda and the scratchpad in one column, agenda on top, each shown while it is open.
+ * Home's column and every other page's side bar (PageSideBar) are this one component.
+ */
+export function CompanionColumn({ calendarOpen, scratchpadOpen, onCloseCalendar, onCloseScratchpad, tasks, focusedTaskId, onTaskClick, className, testId, style, children, place }: ColumnProps) {
   const open = calendarOpen || scratchpadOpen;
   const shellRef = useRef<HTMLElement | null>(null);
   // Loaded with the page, not when the pane first opens: opening it puts the caret in the editor,
   // and typing that began before a late load landed raced the load and lost the text.
   const notes = useGlobalNotes();
+  // Opening a pane takes the focus there: the agenda's close button, the scratchpad's editor
+  // (opening it is a request to write in it; a reload that restores it open is not). A pane that
+  // shows because the side bar moved to another page that keeps it open is no open: that page's
+  // own focus stays.
+  const was = useRef({ calendarOpen: false, scratchpadOpen, place });
   useEffect(() => {
-    if (calendarOpen) shellRef.current?.querySelector<HTMLButtonElement>('.cal-side-header [title="Close calendar panel"]')?.focus({ preventScroll: true });
-  }, [calendarOpen]);
-  // Opening the scratchpad is a request to write in it; a reload that restores it open is not.
-  const scratchpadWasOpen = useRef(scratchpadOpen);
-  useEffect(() => {
-    if (scratchpadOpen && !scratchpadWasOpen.current) {
+    const before = was.current;
+    was.current = { calendarOpen, scratchpadOpen, place };
+    if (before.place !== place) return;
+    if (calendarOpen && !before.calendarOpen) shellRef.current?.querySelector<HTMLButtonElement>('.cal-side-header [title="Close calendar panel"]')?.focus({ preventScroll: true });
+    if (scratchpadOpen && !before.scratchpadOpen) {
       requestAnimationFrame(() => shellRef.current?.querySelector<HTMLElement>('.home-companion-scratchpad .tiptap')?.focus({ preventScroll: true }));
     }
-    scratchpadWasOpen.current = scratchpadOpen;
-  }, [scratchpadOpen]);
+  }, [calendarOpen, scratchpadOpen, place]);
   // Each pane stays mounted once shown, so the chosen day, an open create form and the
   // editor's undo history survive closing it.
   const visitedCalendar = useRef(false);
@@ -55,19 +85,16 @@ export function HomeCompanionPanel({ calendarOpen: calendarRequested, scratchpad
     <aside
       ref={shellRef}
       aria-label={calendarOpen && !scratchpadOpen ? 'Calendar side panel' : scratchpadOpen && !calendarOpen ? 'Scratchpad' : 'Home side panel'}
-      className={`home-companion${calendarOpen ? ' home-companion-calendar' : ''}${scratchpadOpen ? ' home-companion-has-scratchpad' : ''}`}
-      data-testid="home-companion"
+      className={`${className}${calendarOpen ? ` ${className}-calendar` : ''}${scratchpadOpen ? ` ${className}-has-scratchpad` : ''}`}
+      data-testid={testId}
       data-active={active}
-      style={{
-        ...(open ? {} : { display: 'none' }),
-        ...(overlayLeft ? { '--home-companion-left': overlayLeft } : {}),
-      } as CSSProperties}
+      style={{ ...(open ? {} : { display: 'none' }), ...style }}
       inert={!open}
     >
       {visitedCalendar.current && (
         <div
           className="home-companion-body home-companion-body-calendar"
-          data-testid="home-companion-calendar"
+          data-testid={`${testId}-calendar`}
           style={calendarOpen ? undefined : { display: 'none' }}
           onKeyDown={event => {
             // Escape closes the agenda; the scratchpad is a typing surface and keeps its Escape.
@@ -81,15 +108,16 @@ export function HomeCompanionPanel({ calendarOpen: calendarRequested, scratchpad
         </div>
       )}
       {visitedScratchpad.current && (
-        <ScratchpadPane notes={notes} open={scratchpadOpen} onClose={onCloseScratchpad} tasks={tasks} focusedTaskId={focusedTaskId} onTaskClick={onTaskClick} />
+        <ScratchpadPane notes={notes} open={scratchpadOpen} onClose={onCloseScratchpad} tasks={tasks} focusedTaskId={focusedTaskId} onTaskClick={onTaskClick} testId={`${testId}-scratchpad`} />
       )}
+      {children}
     </aside>
   );
 }
 
-function ScratchpadPane({ notes, open, onClose, tasks, focusedTaskId, onTaskClick }: { notes: UseGlobalNotesReturn; open: boolean; onClose: () => void; tasks: Task[]; focusedTaskId?: string; onTaskClick: (taskId: string) => void }) {
+function ScratchpadPane({ notes, open, onClose, tasks, focusedTaskId, onTaskClick, testId }: { notes: UseGlobalNotesReturn; open: boolean; onClose: () => void; tasks: Task[]; focusedTaskId?: string; onTaskClick: (taskId: string) => void; testId: string }) {
   return (
-    <div className="home-companion-body home-companion-scratchpad" data-testid="home-companion-scratchpad" style={open ? undefined : { display: 'none' }}>
+    <div className="home-companion-body home-companion-scratchpad" data-testid={testId} style={open ? undefined : { display: 'none' }}>
       <GlobalNotesSection {...notes} fill title="Scratchpad" onClose={onClose} tasks={tasks} focusedTaskId={focusedTaskId} onTaskClick={onTaskClick} />
     </div>
   );

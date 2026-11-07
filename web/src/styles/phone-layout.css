@@ -254,7 +254,7 @@
      on iOS, so the old height ran under the toolbar), the toolbar wraps onto
      two lines instead of drawing its buttons over each other, and the task
      list opens over the grid (CalendarPage keeps it closed by default here). */
-  .app-shell-navigation .main-content > .app-content-area:has(> .cal-page) {
+  .app-shell-navigation .main-content-row > .app-content-area:has(> .cal-page) {
     padding: 0;
   }
 

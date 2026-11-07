@@ -17465,7 +17465,7 @@ a.task-kebab-info:hover {
   }
 
   /* Settings runs edge to edge. */
-  .main-content > .app-content-area:has(.settings-container) {
+  .main-content-row > .app-content-area:has(.settings-container) {
     padding: 0;
   }
 

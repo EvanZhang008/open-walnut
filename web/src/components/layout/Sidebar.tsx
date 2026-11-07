@@ -25,6 +25,7 @@ import { setUpdateNoticeDock } from '@/components/common/update-notice-dock';
 import { useLendAppUpdateToasts } from './useAppUpdateActions';
 import { useRailPeek } from './useRailPeek';
 import { RailItemPill } from './RailItemPill';
+import { sideBarPageOf, usePageSideBar } from './page-side-bar';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import { bellPresentation } from '@/utils/host-banner-placement';
 import { useAttentionDots } from '@/hooks/useAttentionDots';
@@ -171,8 +172,8 @@ export function Sidebar({
     };
   }, []);
 
-  // These four control panels OF the home page: from another route they bring
-  // the user home first, and only ever open a panel there, never hide it.
+  // The task panel and Ask Walnut control panels OF the home page: from another route
+  // they bring the user home first, and only ever open a panel there, never hide it.
   // Where the tap happens is the URL now, not the route last drawn: the router commits a
   // location in a transition, so right after a drawer link to a slow page (Settings on a
   // phone) it still reads the old one. Read as home, the tap opened the chat over Settings
@@ -186,8 +187,18 @@ export function Sidebar({
   };
   const handleToggleChat = homeToggle('dock:activate-chat', chatVisible);
   const handleToggleTodo = homeToggle('sidebar:toggle-todo', todoVisible);
-  const handleToggleCalendarPanel = homeToggle('sidebar:toggle-calendar', calendarPanelVisible);
-  const handleToggleScratchpad = homeToggle('sidebar:toggle-scratchpad', scratchpadVisible);
+  // The Agenda and the Scratchpad open beside the page on screen (PageSideBar), Home's own
+  // column on Home: never a trip home. Each page keeps what it has open (page-side-bar.ts).
+  const sideBarPage = sideBarPageOf(location.pathname);
+  const sideBar = usePageSideBar(sideBarPage);
+  const agendaOpen = sideBarPage === null ? calendarPanelVisible : sideBar.view.agenda;
+  const scratchpadOpen = sideBarPage === null ? scratchpadVisible : sideBar.view.scratchpad;
+  const sideBarToggle = (event: string, pane: 'agenda' | 'scratchpad') => () => {
+    if (sideBarPage === null) window.dispatchEvent(new CustomEvent(event));
+    else sideBar.setPane(pane, (open) => !open);
+  };
+  const handleToggleCalendarPanel = sideBarToggle('sidebar:toggle-calendar', 'agenda');
+  const handleToggleScratchpad = sideBarToggle('sidebar:toggle-scratchpad', 'scratchpad');
   // The org is a page of its own (pages/OrgPage.tsx): Main and the project leads.
   const orgActive = location.pathname === '/org';
   const handleOpenOrg = () => {
@@ -222,8 +233,9 @@ export function Sidebar({
       {!phone && (<>
       {railShown['home-agenda'] && (
       <button
-        className={`sidebar-link sidebar-panel-toggle${calendarPanelVisible ? ' active' : ''}`}
+        className={`sidebar-link sidebar-panel-toggle${agendaOpen ? ' active' : ''}`}
         onClick={handleToggleCalendarPanel}
+        aria-pressed={agendaOpen}
         data-testid="sidebar-toggle-calendar"
       >
         <CalendarIcon />
@@ -232,8 +244,9 @@ export function Sidebar({
       )}
       {railShown['home-scratchpad'] && (
       <button
-        className={`sidebar-link sidebar-panel-toggle${scratchpadVisible ? ' active' : ''}`}
+        className={`sidebar-link sidebar-panel-toggle${scratchpadOpen ? ' active' : ''}`}
         onClick={handleToggleScratchpad}
+        aria-pressed={scratchpadOpen}
         data-testid="sidebar-toggle-scratchpad"
       >
         <ScratchpadIcon />
