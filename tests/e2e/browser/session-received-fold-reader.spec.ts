@@ -18,7 +18,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { createEnvelopeKit, type EnvelopeKind } from '../../../src/core/peers/envelope-kit';
-import { MOCK_SESSION_ID as SID, injectEvent, waitForWs } from './mock-session-harness';
+import { MOCK_SESSION_ID as SID, injectEvent, takeLine, waitForWs } from './mock-session-harness';
 
 const SHOTS = process.env.RECEIVED_FOLD_SHOTS ?? '/tmp/received-fold-reader';
 test.describe.configure({ timeout: 120_000 });
@@ -116,6 +116,8 @@ async function receiveRounds(page: Page, kind: EnvelopeKind, rounds: number, pau
       sessionId: SID, messageId: qm, message: envelope, source: 'peer', sentBy: 'agent', queuedText: envelope, enqueuedAt: new Date().toISOString(),
     });
     await injectEvent(page, 'session:messages-delivered', { sessionId: SID, count: 1, messageIds: [qm], turnGen: r });
+    // Claude Code takes the line as its turn starts.
+    await takeLine(page, qm);
     await page.waitForTimeout(pauseMs);
     if (withCall) {
       await injectEvent(page, 'session:text-delta', { sessionId: SID, delta: narration, msgId: `rf-step-${n}` });
@@ -129,7 +131,11 @@ async function receiveRounds(page: Page, kind: EnvelopeKind, rounds: number, pau
     // view, under the row they read.
     const box = (await hist.boundingBox())!;
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    const gapBefore = await hist.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
     await page.mouse.wheel(0, -120);
+    // WebKit applies a queued wheel step late: wait until the reader really moved.
+    await expect.poll(() => hist.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight), { timeout: 10_000 })
+      .toBeGreaterThan(gapBefore + 60);
     await page.waitForTimeout(600 + pauseMs);
 
     rows = [
