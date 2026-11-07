@@ -202,8 +202,12 @@ test('a tall picture fills the width on a click in its zoom, and scrolls', async
   await big.click()
   await expect(big).toHaveClass(/lightbox-image--filled/)
   await expect.poll(() => big.evaluate((i) => i.getBoundingClientRect().width)).toBeGreaterThan(inline)
-  await page.mouse.wheel(0, 600)
-  await expect.poll(() => page.locator('.lightbox-scroll').evaluate((o) => o.scrollTop)).toBeGreaterThan(0)
+  // WebKit takes a frame to route the wheel to a scroller that just appeared,
+  // so the wheel turns until the zoom moves (a person scrolls later than that).
+  await expect.poll(async () => {
+    await page.mouse.wheel(0, 300)
+    return page.locator('.lightbox-scroll').evaluate((o) => o.scrollTop)
+  }).toBeGreaterThan(0)
   // Still the zoom: the close button stays on screen while it scrolls.
   await expect(page.locator('.lightbox-close')).toBeInViewport()
 
