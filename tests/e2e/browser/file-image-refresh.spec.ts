@@ -164,13 +164,13 @@ async function openDocWithPicture(page: Page): Promise<Fixture> {
 }
 
 test('a regenerated picture updates by itself, without touching the editor', async ({ page }) => {
-  const { dir, img } = await openDocWithPicture(page)
+  const { dir, docName, img } = await openDocWithPicture(page)
   try {
-    // The user is mid-edit: unsaved text, caret in the document.
+    // The user is mid-edit: caret in the document, the words saving as they type.
     await page.locator('.fv-wysiwyg-editor .ProseMirror p').first().click()
     await page.keyboard.press('End')
     await page.keyboard.type(' (still typing)')
-    await expect(page.locator('.fv-dirty-dot')).toBeVisible()
+    await expect.poll(() => fs.readFile(path.join(dir, docName), 'utf8'), { timeout: 10_000 }).toContain('(still typing)')
     await stampEditor(page)
     await page.screenshot({ path: `${SCREENSHOT_DIR}/3-typing-before.png` })
 
@@ -182,11 +182,12 @@ test('a regenerated picture updates by itself, without touching the editor', asy
     await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')))
     await expect.poll(() => embeddedWidth(img), { timeout: 15_000 }).toBe(2)
 
-    // The editor was NOT disturbed: same DOM node, the typing is still there,
-    // the buffer is still dirty. A remount would have failed every one of these.
+    // The editor was NOT disturbed: same DOM node, the typing is still there, and
+    // typing goes on saving. A remount would have failed every one of these.
     expect(await editorStamp(page)).toBe('same-editor')
     await expect(page.locator('.fv-wysiwyg-editor')).toContainText('(still typing)')
-    await expect(page.locator('.fv-dirty-dot')).toBeVisible()
+    await page.keyboard.type(' and more')
+    await expect.poll(() => fs.readFile(path.join(dir, docName), 'utf8'), { timeout: 10_000 }).toContain('(still typing) and more')
     await page.screenshot({ path: `${SCREENSHOT_DIR}/4-updated-in-place.png` })
   } finally {
     await fs.rm(dir, { recursive: true, force: true })
