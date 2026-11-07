@@ -7,6 +7,10 @@ settings:
   base:
     SWIFT_VERSION: "5.0"
     IPHONEOS_DEPLOYMENT_TARGET: "18.0"
+    # An expression the compiler needs half a second for is flagged in every build: CI's
+    # slower compiler gave up on such expressions ("unable to type-check this expression in
+    # reasonable time") at random places (2026-11-07). Split them, typed in steps.
+    OTHER_SWIFT_FLAGS: $(inherited) -Xfrontend -warn-long-expression-type-checking=500
     # Automatic signing so device archives / TestFlight uploads resolve a real
     # cert + provisioning profile. Simulator builds don't sign and ignore these.
     # DEVELOPMENT_TEAM is left blank here (public repo) — the build/upload script

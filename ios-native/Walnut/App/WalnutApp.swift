@@ -452,13 +452,15 @@ struct MainTabView: View {
                 // Closes the launch timeline on the tape: process start →
                 // first frame (LaunchTrace) → stores ready. A field report of
                 // "the app was stuck on open" is answerable from these three.
-                AppLog.info("launch", "store hydration done", [
-                    "elapsedMs": String(Int(Date().timeIntervalSince(started) * 1000)),
-                    "sinceProcessStartMs": String(
-                        Int(Date().timeIntervalSince(LaunchTrace.processStart) * 1000)
-                    ),
+                // Typed in steps: as one literal it ran past CI's type-check limit.
+                let elapsedMs: Int = Int(Date().timeIntervalSince(started) * 1000)
+                let sinceStartMs: Int = Int(Date().timeIntervalSince(LaunchTrace.processStart) * 1000)
+                let fields: [String: String] = [
+                    "elapsedMs": String(elapsedMs),
+                    "sinceProcessStartMs": String(sinceStartMs),
                     "memoryMB": String(FreezeContext.residentMemoryMB()),
-                ])
+                ]
+                AppLog.info("launch", "store hydration done", fields)
             }
         }
     }

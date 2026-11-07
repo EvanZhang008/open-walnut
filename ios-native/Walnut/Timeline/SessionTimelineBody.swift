@@ -57,7 +57,7 @@ struct SessionTimelineBody: View {
     private var visibleMessages: [ChatMessage] {
         let rows = queueRowsByMessage
         guard !rows.isEmpty else { return store.messages }
-        return store.messages.filter { message in
+        return store.messages.filter { (message: ChatMessage) -> Bool in
             guard let id = message.clientMessageId else { return true }
             return !Self.queueHolds(rows[id])
         }

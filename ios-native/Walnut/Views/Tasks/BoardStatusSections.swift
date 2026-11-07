@@ -196,17 +196,25 @@ enum BoardStatusSectionModel {
                 }
                 .map(\.0)
         case .done:
-            return rows.map { row -> (BoardRow, Date) in
+            let dated: [(BoardRow, Date)] = rows.map { (row: BoardRow) -> (BoardRow, Date) in
                 let at = WalnutTask.parseISO(row.task?.completedAt ?? row.task?.updatedAt) ?? .distantPast
                 return (row, at)
             }
-            .sorted { $0.1 != $1.1 ? $0.1 > $1.1 : $0.0.id < $1.0.id }
-            .map(\.0)
+            return latestFirst(dated)
         case .needs, .working:
-            return rows.map { ($0, activity($0)) }
-                .sorted { $0.1 != $1.1 ? $0.1 > $1.1 : $0.0.id < $1.0.id }
-                .map(\.0)
+            let dated: [(BoardRow, Date)] = rows.map { (row: BoardRow) -> (BoardRow, Date) in (row, activity(row)) }
+            return latestFirst(dated)
         }
+    }
+
+    /// Latest date first, ties by id. Typed in full: as an inferred tuple closure it took the
+    /// compiler over a second to type-check, and CI's compiler gave up on such expressions.
+    private static func latestFirst(_ dated: [(BoardRow, Date)]) -> [BoardRow] {
+        dated.sorted { (a: (BoardRow, Date), b: (BoardRow, Date)) -> Bool in
+            if a.1 != b.1 { return a.1 > b.1 }
+            return a.0.id < b.0.id
+        }
+        .map { (pair: (BoardRow, Date)) -> BoardRow in pair.0 }
     }
 
     /// A section's rows gathered by project, projects in the order their first row appears,
