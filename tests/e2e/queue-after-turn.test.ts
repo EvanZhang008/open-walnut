@@ -21,6 +21,7 @@ import { WALNUT_HOME } from '../../src/constants.js'
 import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
+import { waitForWsEvent } from '../helpers/ws-event-wait.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 
@@ -35,21 +36,6 @@ function connectWs(): Promise<WebSocket> {
     const ws = new WebSocket(`ws://localhost:${port}/ws`)
     ws.on('open', () => resolve(ws))
     ws.on('error', reject)
-  })
-}
-
-function waitForWsEvent(ws: WebSocket, eventName: string, match: (data: Record<string, unknown>) => boolean = () => true, timeoutMs = 20000): Promise<WsFrame> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`Timed out waiting for ${eventName}`)), timeoutMs)
-    const handler = (raw: WebSocket.RawData) => {
-      const frame = JSON.parse(raw.toString()) as WsFrame
-      if (frame.type === 'event' && frame.name === eventName && match(frame.data ?? {})) {
-        clearTimeout(timer)
-        ws.off('message', handler)
-        resolve(frame)
-      }
-    }
-    ws.on('message', handler)
   })
 }
 
@@ -114,7 +100,7 @@ afterAll(async () => {
 }, 15000)
 
 async function startSession(ws: WebSocket): Promise<string> {
-  const first = waitForWsEvent(ws, 'session:result', () => true, 30000)
+  const first = waitForWsEvent(ws, 'session:result', { taskId: 'aft-local-001' }, 30000)
   await sendWsRpc(ws, 'session:start', { taskId: 'aft-local-001', message: 'turn 1: establish' })
   return (await first).data!.sessionId as string
 }
@@ -157,7 +143,7 @@ describe('afterTurn on the phone send route', () => {
   it('also holds it during the first turn of a session (the one its launch message started)', async () => {
     const ws = await connectWs()
     try {
-      const firstResult = waitForWsEvent(ws, 'session:result', () => true, 60000)
+      const firstResult = waitForWsEvent(ws, 'session:result', { taskId: 'aft-local-001' }, 60000)
       const runningSeen = waitForWsEvent(ws, 'session:status-changed', (d) => d.taskId === 'aft-local-001' && d.process_status === 'running', 30000)
       const started = await sendWsRpc(ws, 'session:start', { taskId: 'aft-local-001', message: 'slow:6000 the first turn' })
       expect(started.ok).toBe(true)

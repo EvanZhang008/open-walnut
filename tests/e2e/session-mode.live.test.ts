@@ -31,6 +31,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-mode-live'))
 
 import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
+import { waitForWsEvent } from '../helpers/ws-event-wait.js'
 
 const LIVE = process.env.WALNUT_LIVE_MODE_TEST === '1'
 const describeIf = LIVE ? describe : describe.skip
@@ -59,28 +60,6 @@ function connectWs(): Promise<WebSocket> {
     const ws = new WebSocket(`ws://localhost:${port}/ws`)
     ws.on('open', () => resolve(ws))
     ws.on('error', reject)
-  })
-}
-
-function waitForWsEvent(
-  ws: WebSocket,
-  eventName: string,
-  timeoutMs = 120_000,
-  filter?: (msg: WsEvent) => boolean,
-): Promise<WsEvent> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`Timeout waiting for ${eventName}`)), timeoutMs)
-    const handler = (data: WebSocket.Data) => {
-      try {
-        const msg = JSON.parse(data.toString()) as WsEvent
-        if (msg.type === 'event' && msg.name === eventName && (!filter || filter(msg))) {
-          clearTimeout(timer)
-          ws.removeListener('message', handler)
-          resolve(msg)
-        }
-      } catch { /* skip non-JSON */ }
-    }
-    ws.on('message', handler)
   })
 }
 
@@ -371,8 +350,7 @@ describeIf('Live mode tests (real Claude CLI + Haiku)', () => {
   }): Promise<{ sessionId: string; resultText: string }> {
     const ws = await connectWs()
     try {
-      const resultPromise = waitForWsEvent(ws, 'session:result', 120_000,
-        (msg) => !!(msg.data?.sessionId))
+      const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: opts.taskId }, 120_000)
 
       const rpcRes = await sendWsRpc(ws, 'session:start', {
         taskId: opts.taskId,
@@ -402,8 +380,7 @@ describeIf('Live mode tests (real Claude CLI + Haiku)', () => {
   }): Promise<{ resultText: string }> {
     const ws = await connectWs()
     try {
-      const resultPromise = waitForWsEvent(ws, 'session:result', 120_000,
-        (msg) => (msg.data?.sessionId as string) === opts.sessionId)
+      const resultPromise = waitForWsEvent(ws, 'session:result', { sessionId: opts.sessionId }, 120_000)
 
       const rpcRes = await sendWsRpc(ws, 'session:send', {
         sessionId: opts.sessionId,
@@ -638,8 +615,7 @@ describeIf('Live mode tests (real Claude CLI + Haiku)', () => {
       // Start remote session in bypass
       const ws = await connectWs()
       try {
-        const resultPromise = waitForWsEvent(ws, 'session:result', 180_000,
-          (msg) => !!(msg.data?.sessionId))
+        const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'mode-live-task-009' }, 180_000)
 
         await sendWsRpc(ws, 'session:start', {
           taskId: 'mode-live-task-009',
@@ -667,8 +643,7 @@ describeIf('Live mode tests (real Claude CLI + Haiku)', () => {
         // PATCH to plan + send follow-up
         await patchMode(sessionId, 'plan')
 
-        const followUpPromise = waitForWsEvent(ws, 'session:result', 180_000,
-          (msg) => (msg.data?.sessionId as string) === sessionId)
+        const followUpPromise = waitForWsEvent(ws, 'session:result', { sessionId }, 180_000)
         await sendWsRpc(ws, 'session:send', { sessionId, message: SIMPLE_PROMPT })
         await followUpPromise
         console.log(`T9: follow-up completed after plan switch`)

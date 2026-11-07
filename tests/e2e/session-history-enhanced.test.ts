@@ -32,6 +32,7 @@ import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { encodeProjectPath } from '../../src/core/session-history.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
+import { waitForWsEvent } from '../helpers/ws-event-wait.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 const CWD = '/Users/test/project'
@@ -56,21 +57,6 @@ function connectWs(): Promise<WebSocket> {
     const ws = new WebSocket(wsUrl())
     ws.on('open', () => resolve(ws))
     ws.on('error', reject)
-  })
-}
-
-function waitForWsEvent(ws: WebSocket, eventName: string, timeoutMs = 15000): Promise<Record<string, unknown>> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`Timed out waiting for ${eventName}`)), timeoutMs)
-    const handler = (raw: WebSocket.RawData) => {
-      const frame = JSON.parse(raw.toString()) as Record<string, unknown>
-      if (frame.type === 'event' && frame.name === eventName) {
-        clearTimeout(timer)
-        ws.off('message', handler)
-        resolve(frame)
-      }
-    }
-    ws.on('message', handler)
   })
 }
 
@@ -304,7 +290,7 @@ describe('live session via mock CLI — default history works', () => {
   it('starts a session and reads history via default mode', async () => {
     const ws = await connectWs()
     try {
-      const resultPromise = waitForWsEvent(ws, 'session:result')
+      const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'hist-task-002' })
 
       const rpcRes = await sendWsRpc(ws, 'session:start', {
         taskId: 'hist-task-002',

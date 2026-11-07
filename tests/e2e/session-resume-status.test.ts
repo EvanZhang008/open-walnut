@@ -23,6 +23,7 @@ import { WALNUT_HOME } from '../../src/constants.js'
 import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
+import { waitForWsEvent } from '../helpers/ws-event-wait.js'
 
 // ── Helpers ──
 
@@ -51,21 +52,6 @@ interface WsEvent {
   name?: string
   data?: Record<string, unknown>
   [key: string]: unknown
-}
-
-function waitForWsEvent(ws: WebSocket, eventName: string, timeoutMs = 15000): Promise<WsEvent> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`Timed out waiting for ${eventName}`)), timeoutMs)
-    const handler = (raw: WebSocket.RawData) => {
-      const frame = JSON.parse(raw.toString()) as WsEvent
-      if (frame.type === 'event' && frame.name === eventName) {
-        clearTimeout(timer)
-        ws.off('message', handler)
-        resolve(frame)
-      }
-    }
-    ws.on('message', handler)
-  })
 }
 
 function collectWsEvents(ws: WebSocket, eventNames: string[]): WsEvent[] {
@@ -170,7 +156,7 @@ describe('Session resume status changes', () => {
     const statusEvents = collectWsEvents(ws, ['session:status-changed'])
 
     // 1. Start a session — it completes quickly via mock CLI
-    const resultPromise = waitForWsEvent(ws, 'session:result')
+    const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'resume-task-001' })
     const rpcRes = await sendWsRpc(ws, 'session:start', {
       taskId: 'resume-task-001',
       message: 'initial session message',
@@ -204,7 +190,7 @@ describe('Session resume status changes', () => {
 
     // 3. Resume the session by sending a new message
     const statusCountBefore = statusEvents.length
-    const resumeResultPromise = waitForWsEvent(ws, 'session:result')
+    const resumeResultPromise = waitForWsEvent(ws, 'session:result', { sessionId, resultIncludes: 'follow-up after resume' })
 
     const sendRes = await sendWsRpc(ws, 'session:send', {
       sessionId,
@@ -242,7 +228,7 @@ describe('Session resume status changes', () => {
     const ws = await connectWs()
 
     // Start a session
-    const firstResultPromise = waitForWsEvent(ws, 'session:result')
+    const firstResultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'resume-task-001' })
     await sendWsRpc(ws, 'session:start', {
       taskId: 'resume-task-001',
       message: 'slow:300 db status check',
@@ -270,7 +256,7 @@ describe('Session resume status changes', () => {
 
     // Resume with a slow message to have time to check mid-flight
     let resumed = false
-    const resumeResultPromise = waitForWsEvent(ws, 'session:result').then((r) => { resumed = true; return r })
+    const resumeResultPromise = waitForWsEvent(ws, 'session:result', { sessionId }).then((r) => { resumed = true; return r })
 
     // slow:500 holds the resumed turn open for 500ms after its init line
     await sendWsRpc(ws, 'session:send', {
@@ -295,7 +281,7 @@ describe('Session resume status changes', () => {
     const ws = await connectWs()
     const statusEvents = collectWsEvents(ws, ['session:status-changed'])
 
-    const resultPromise = waitForWsEvent(ws, 'session:result')
+    const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'resume-task-001' })
     await sendWsRpc(ws, 'session:start', {
       taskId: 'resume-task-001',
       message: 'verify event fields',

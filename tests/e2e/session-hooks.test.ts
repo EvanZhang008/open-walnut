@@ -28,6 +28,7 @@ import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { bus, EventNames } from '../../src/core/event-bus.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
+import { waitForWsEvent } from '../helpers/ws-event-wait.js'
 
 // Use mock CLI directly
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
@@ -55,21 +56,6 @@ interface WsEvent {
   name?: string
   data?: Record<string, unknown>
   [key: string]: unknown
-}
-
-function waitForWsEvent(ws: WebSocket, eventName: string, timeoutMs = 15000): Promise<WsEvent> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`Timed out waiting for ${eventName}`)), timeoutMs)
-    const handler = (raw: WebSocket.RawData) => {
-      const frame = JSON.parse(raw.toString()) as WsEvent
-      if (frame.type === 'event' && frame.name === eventName) {
-        clearTimeout(timer)
-        ws.off('message', handler)
-        resolve(frame)
-      }
-    }
-    ws.on('message', handler)
-  })
 }
 
 function sendWsRpc(ws: WebSocket, method: string, payload: unknown): Promise<WsEvent> {
@@ -251,7 +237,7 @@ describe('Turn completion dispatches no summarizer subagent', () => {
 
     // Wait for the session result (so we know the session completed), then give
     // the debounce-0 fire path time to run.
-    await waitForWsEvent(ws, 'session:result')
+    await waitForWsEvent(ws, 'session:result', { taskId: 'hook-task-001' })
     await delay(1500)
 
     // The mock CLI can't answer side_question, so the summary work skips gracefully
@@ -277,7 +263,7 @@ describe('Turn completion dispatches no summarizer subagent', () => {
     expect((rpcRes as Record<string, unknown>).ok).toBe(true)
 
     // Wait for session to complete
-    await waitForWsEvent(ws, 'session:result')
+    await waitForWsEvent(ws, 'session:result', { taskId: '' })
 
     // Give hooks time to fire
     await delay(1000)
@@ -305,7 +291,7 @@ describe('Error hook fires on session error', () => {
     // runs on the same bus events.
 
     // Start a session with "error" message — mock CLI exits with code 1
-    const errorPromise = waitForWsEvent(ws, 'session:error')
+    const errorPromise = waitForWsEvent(ws, 'session:error', { taskId: 'hook-task-002' })
 
     await sendWsRpc(ws, 'session:start', {
       taskId: 'hook-task-002',
@@ -344,7 +330,7 @@ describe('Error hook fires on session error', () => {
     })
 
     // Wait for the error event
-    await waitForWsEvent(ws, 'session:error')
+    await waitForWsEvent(ws, 'session:error', { taskId: 'hook-task-002' })
 
     // Give hooks time to settle
     await delay(1000)
@@ -397,7 +383,7 @@ describe('Hooks can be disabled via config', () => {
       message: 'custom hook test',
       project: 'Walnut',
     })
-    await waitForWsEvent(ws, 'session:result')
+    await waitForWsEvent(ws, 'session:result', { taskId: 'hook-task-001' })
 
     // Give hooks time to process
     await delay(1000)
@@ -414,7 +400,7 @@ describe('Hooks can be disabled via config', () => {
       message: 'after removal test',
       project: 'Walnut',
     })
-    await waitForWsEvent(ws, 'session:result')
+    await waitForWsEvent(ws, 'session:result', { taskId: 'hook-task-001' })
 
     await delay(1000)
 
@@ -451,7 +437,7 @@ describe('Hooks can be disabled via config', () => {
       message: 'disabled hook test',
       project: 'Walnut',
     })
-    await waitForWsEvent(ws, 'session:result')
+    await waitForWsEvent(ws, 'session:result', { taskId: 'hook-task-001' })
 
     await delay(1000)
 
@@ -495,7 +481,7 @@ describe('Hook payload context', () => {
       message: 'payload inspection test',
       project: 'Walnut',
     })
-    await waitForWsEvent(ws, 'session:result')
+    await waitForWsEvent(ws, 'session:result', { taskId: 'hook-task-001' })
 
     await delay(1500)
 
@@ -624,7 +610,7 @@ describe('Full-path: message send through hooks to mock CLI', () => {
     const ws = await connectWs()
 
     // Step 1: Start a session to get a sessionId
-    const firstResult = waitForWsEvent(ws, 'session:result')
+    const firstResult = waitForWsEvent(ws, 'session:result', { taskId: 'hook-task-001' })
     const rpcRes = await sendWsRpc(ws, 'session:start', {
       taskId: 'hook-task-001',
       message: 'initial prompt for send test',
@@ -657,7 +643,7 @@ describe('Full-path: message send through hooks to mock CLI', () => {
     // message rather than the follow-up over that path (same relaxation as
     // session-manager-e2e.test.ts). This test's real subject is the hook chain
     // asserted in Steps 4–6, not the CLI's echoed text.
-    const secondResultEvent = await waitForWsEvent(ws, 'session:result', 20000)
+    const secondResultEvent = await waitForWsEvent(ws, 'session:result', { sessionId }, 20000)
     const rd = secondResultEvent.data as { result: string; taskId: string; sessionId: string }
     expect(typeof rd.result).toBe('string')
     expect(rd.result).toBeTruthy()

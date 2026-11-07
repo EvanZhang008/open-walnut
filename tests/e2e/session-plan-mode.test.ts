@@ -29,6 +29,7 @@ import { WALNUT_HOME, CLAUDE_HOME } from '../../src/constants.js'
 import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
+import { waitForWsEvent } from '../helpers/ws-event-wait.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 
@@ -59,21 +60,6 @@ interface WsEvent {
   name?: string
   data?: Record<string, unknown>
   [key: string]: unknown
-}
-
-function waitForWsEvent(ws: WebSocket, eventName: string, timeoutMs = 15000): Promise<WsEvent> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`Timed out waiting for ${eventName}`)), timeoutMs)
-    const handler = (raw: WebSocket.RawData) => {
-      const frame = JSON.parse(raw.toString()) as WsEvent
-      if (frame.type === 'event' && frame.name === eventName) {
-        clearTimeout(timer)
-        ws.off('message', handler)
-        resolve(frame)
-      }
-    }
-    ws.on('message', handler)
-  })
 }
 
 function sendWsRpc(ws: WebSocket, method: string, payload: unknown): Promise<WsEvent> {
@@ -187,7 +173,7 @@ describe('Plan mode session lifecycle', () => {
     const planFilePath = path.join(planDir, 'mock-plan-test.md')
     await fs.writeFile(planFilePath, '# Plan\n\nStep 1: Do the thing\nStep 2: Verify the thing\n')
 
-    const resultPromise = waitForWsEvent(ws, 'session:result')
+    const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'plan-task-001' })
 
     // Start plan session — mock CLI will emit ExitPlanMode + Write events
     const rpcRes = await sendWsRpc(ws, 'session:start', {
@@ -292,7 +278,7 @@ describe('Plan mode session lifecycle', () => {
     expect(execBody.taskId).not.toBe('plan-task-001')
 
     // Wait for the execution session's result
-    const resultEvent = await waitForWsEvent(ws, 'session:result')
+    const resultEvent = await waitForWsEvent(ws, 'session:result', { taskId: execBody.taskId })
     const rd = resultEvent.data as {
       result: string
       taskId: string
@@ -331,7 +317,7 @@ describe('Plan mode edge cases', () => {
     const ws = await connectWs()
 
     // Start a normal (non-plan) session
-    const resultPromise = waitForWsEvent(ws, 'session:result')
+    const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'plan-task-002' })
     await sendWsRpc(ws, 'session:start', {
       taskId: 'plan-task-002',
       message: 'normal session for rejection test',

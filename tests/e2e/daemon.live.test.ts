@@ -29,11 +29,14 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-live-test'))
 import { WALNUT_HOME } from '../../src/constants.js'
 import { copyConfigSections } from '../helpers/temp-home.js'
 import { startServer, stopServer } from '../../src/web/server.js'
+import { newSessionMatcher, waitForWsEvent } from '../helpers/ws-event-wait.js'
 
 const LIVE_HOST = process.env.WALNUT_LIVE_HOST
 
 // Skip all tests if no live host configured
 const describeIf = LIVE_HOST ? describe : describe.skip
+// Sessions here start with no task: a start waits only for a session it has not seen.
+const newSession = newSessionMatcher()
 
 // ── Shared state across tests ──
 
@@ -59,28 +62,6 @@ function connectWs(): Promise<WebSocket> {
     const ws = new WebSocket(`ws://localhost:${port}/ws`)
     ws.on('open', () => resolve(ws))
     ws.on('error', reject)
-  })
-}
-
-function waitForWsEvent(
-  ws: WebSocket,
-  eventName: string,
-  timeoutMs = 120_000,
-  filter?: (msg: WsEvent) => boolean,
-): Promise<WsEvent> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`Timeout waiting for ${eventName}`)), timeoutMs)
-    const handler = (data: WebSocket.Data) => {
-      try {
-        const msg = JSON.parse(data.toString()) as WsEvent
-        if (msg.type === 'event' && msg.name === eventName && (!filter || filter(msg))) {
-          clearTimeout(timer)
-          ws.removeListener('message', handler)
-          resolve(msg)
-        }
-      } catch { /* skip non-JSON */ }
-    }
-    ws.on('message', handler)
   })
 }
 
@@ -161,7 +142,7 @@ describeIf(`Live daemon tests (host: ${LIVE_HOST})`, () => {
       const ws = await connectWs()
       try {
         // First session includes binary deploy (SCP transfer) — needs longer timeout
-        const resultPromise = waitForWsEvent(ws, 'session:result', 170_000)
+        const resultPromise = waitForWsEvent(ws, 'session:result', newSession({ taskId: '' }), 170_000)
 
         await sendWsRpc(ws, 'session:start', {
           taskId: '',
@@ -186,7 +167,7 @@ describeIf(`Live daemon tests (host: ${LIVE_HOST})`, () => {
       const ws = await connectWs()
       try {
         const t0 = Date.now()
-        const resultPromise = waitForWsEvent(ws, 'session:result', 120_000)
+        const resultPromise = waitForWsEvent(ws, 'session:result', newSession({ taskId: '' }), 120_000)
 
         await sendWsRpc(ws, 'session:start', {
           taskId: '',
@@ -234,7 +215,7 @@ describeIf(`Live daemon tests (host: ${LIVE_HOST})`, () => {
     it('L4: start session and get real Claude response', async () => {
       const ws = await connectWs()
       try {
-        const resultPromise = waitForWsEvent(ws, 'session:result', 120_000)
+        const resultPromise = waitForWsEvent(ws, 'session:result', newSession({ taskId: '' }), 120_000)
 
         await sendWsRpc(ws, 'session:start', {
           taskId: '',
@@ -266,7 +247,7 @@ describeIf(`Live daemon tests (host: ${LIVE_HOST})`, () => {
 
       const ws = await connectWs()
       try {
-        const resultPromise = waitForWsEvent(ws, 'session:result', 120_000)
+        const resultPromise = waitForWsEvent(ws, 'session:result', (d) => d.sessionId === sessionIdForFollowUp, 120_000)
 
         await sendWsRpc(ws, 'session:send', {
           sessionId: sessionIdForFollowUp,
@@ -286,7 +267,7 @@ describeIf(`Live daemon tests (host: ${LIVE_HOST})`, () => {
     it('L6: session with tool use — list files in /tmp', async () => {
       const ws = await connectWs()
       try {
-        const resultPromise = waitForWsEvent(ws, 'session:result', 120_000)
+        const resultPromise = waitForWsEvent(ws, 'session:result', newSession({ taskId: '' }), 120_000)
 
         await sendWsRpc(ws, 'session:start', {
           taskId: '',

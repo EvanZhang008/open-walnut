@@ -29,6 +29,7 @@ import { WALNUT_HOME } from '../../src/constants.js'
 import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
+import { waitForWsEvent } from '../helpers/ws-event-wait.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 
@@ -57,26 +58,6 @@ interface WsFrame {
   ok?: boolean
   payload?: unknown
   error?: unknown
-}
-
-function waitForWsEvent(
-  ws: WebSocket,
-  eventName: string,
-  match: (data: Record<string, unknown>) => boolean = () => true,
-  timeoutMs = 20000,
-): Promise<WsFrame> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`Timed out waiting for ${eventName}`)), timeoutMs)
-    const handler = (raw: WebSocket.RawData) => {
-      const frame = JSON.parse(raw.toString()) as WsFrame
-      if (frame.type === 'event' && frame.name === eventName && match(frame.data ?? {})) {
-        clearTimeout(timer)
-        ws.off('message', handler)
-        resolve(frame)
-      }
-    }
-    ws.on('message', handler)
-  })
 }
 
 function sendWsRpc(ws: WebSocket, method: string, payload: unknown): Promise<WsFrame> {
@@ -164,7 +145,7 @@ describe('session:interrupt RPC', () => {
     const ws = await connectWs()
     try {
       // Turn 1: establish the session.
-      const result1 = waitForWsEvent(ws, 'session:result', () => true, 30000)
+      const result1 = waitForWsEvent(ws, 'session:result', { taskId: 'int-local-001' }, 30000)
       await sendWsRpc(ws, 'session:start', {
         taskId: 'int-local-001',
         message: 'turn 1: establish',

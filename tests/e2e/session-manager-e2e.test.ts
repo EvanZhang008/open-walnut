@@ -37,6 +37,7 @@ import { WALNUT_HOME, CLAUDE_HOME } from '../../src/constants.js'
 import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { startDaemonTwin, type DaemonTwin } from '../helpers/daemon-twin.js'
+import { waitForWsEvent } from '../helpers/ws-event-wait.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 
@@ -66,43 +67,6 @@ interface WsEvent {
   result?: unknown
   error?: unknown
   [key: string]: unknown
-}
-
-function waitForWsEvent(ws: WebSocket, eventName: string, timeoutMs = 20000): Promise<WsEvent> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`Timed out waiting for ${eventName}`)), timeoutMs)
-    const handler = (raw: WebSocket.RawData) => {
-      const frame = JSON.parse(raw.toString()) as WsEvent
-      if (frame.type === 'event' && frame.name === eventName) {
-        clearTimeout(timer)
-        ws.off('message', handler)
-        resolve(frame)
-      }
-    }
-    ws.on('message', handler)
-  })
-}
-
-/** Wait for N events of a given name, collecting them all. */
-function waitForWsEvents(ws: WebSocket, eventName: string, count: number, timeoutMs = 30000): Promise<WsEvent[]> {
-  return new Promise((resolve, reject) => {
-    const events: WsEvent[] = []
-    const timer = setTimeout(() => reject(new Error(
-      `Timed out waiting for ${count}x ${eventName} (got ${events.length})`,
-    )), timeoutMs)
-    const handler = (raw: WebSocket.RawData) => {
-      const frame = JSON.parse(raw.toString()) as WsEvent
-      if (frame.type === 'event' && frame.name === eventName) {
-        events.push(frame)
-        if (events.length >= count) {
-          clearTimeout(timer)
-          ws.off('message', handler)
-          resolve(events)
-        }
-      }
-    }
-    ws.on('message', handler)
-  })
 }
 
 function collectWsEvents(ws: WebSocket, eventNames: string[]): WsEvent[] {
@@ -260,7 +224,7 @@ describe('Local multi-turn conversation', () => {
     const ws = await connectWs()
     try {
       // Turn 1: start
-      const result1Promise = waitForWsEvent(ws, 'session:result', 30000)
+      const result1Promise = waitForWsEvent(ws, 'session:result', { taskId: 'mgr-local-001' }, 30000)
       await sendWsRpc(ws, 'session:start', {
         taskId: 'mgr-local-001',
         message: 'turn 1: hello',
@@ -277,7 +241,7 @@ describe('Local multi-turn conversation', () => {
       expect(session1.process_status).toBe('stopped')
 
       // Turn 2: follow-up
-      const result2Promise = waitForWsEvent(ws, 'session:result', 30000)
+      const result2Promise = waitForWsEvent(ws, 'session:result', { sessionId }, 30000)
       await sendWsRpc(ws, 'session:send', {
         sessionId,
         message: 'turn 2: follow up',
@@ -289,7 +253,7 @@ describe('Local multi-turn conversation', () => {
       expect(result2.data!.sessionId).toBe(sessionId)
 
       // Turn 3: another follow-up
-      const result3Promise = waitForWsEvent(ws, 'session:result', 30000)
+      const result3Promise = waitForWsEvent(ws, 'session:result', { sessionId }, 30000)
       await sendWsRpc(ws, 'session:send', {
         sessionId,
         message: 'turn 3: final message',
@@ -324,7 +288,7 @@ describe('Remote multi-turn conversation', () => {
     const ws = await connectWs()
     try {
       // Turn 1
-      const result1Promise = waitForWsEvent(ws, 'session:result', 30000)
+      const result1Promise = waitForWsEvent(ws, 'session:result', { taskId: 'mgr-remote-001' }, 30000)
       await sendWsRpc(ws, 'session:start', {
         taskId: 'mgr-remote-001',
         message: 'remote turn 1',
@@ -342,7 +306,7 @@ describe('Remote multi-turn conversation', () => {
       expect(session1.process_status).toBe('stopped')
 
       // Turn 2: follow-up
-      const result2Promise = waitForWsEvent(ws, 'session:result', 30000)
+      const result2Promise = waitForWsEvent(ws, 'session:result', { sessionId }, 30000)
       await sendWsRpc(ws, 'session:send', {
         sessionId,
         message: 'remote turn 2',
@@ -385,7 +349,7 @@ describe('SessionManager registry', () => {
     try {
       // Start a slow session so we can check registry mid-flight
       const statusEvents = collectWsEvents(ws, ['session:status-changed'])
-      const resultPromise = waitForWsEvent(ws, 'session:result', 30000)
+      const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'mgr-local-007' }, 30000)
       await sendWsRpc(ws, 'session:start', {
         taskId: 'mgr-local-007',
         message: 'slow:500 registry test',
@@ -429,7 +393,7 @@ describe('SessionManager registry', () => {
     const ws = await connectWs()
     try {
       // Turn 1
-      const result1Promise = waitForWsEvent(ws, 'session:result', 30000)
+      const result1Promise = waitForWsEvent(ws, 'session:result', { taskId: 'mgr-local-002' }, 30000)
       await sendWsRpc(ws, 'session:start', {
         taskId: 'mgr-local-002',
         message: 'registry turn 1',
@@ -441,7 +405,7 @@ describe('SessionManager registry', () => {
       const mgr1 = getRegisteredSessionManager(sessionId)
 
       // Turn 2: follow-up
-      const result2Promise = waitForWsEvent(ws, 'session:result', 30000)
+      const result2Promise = waitForWsEvent(ws, 'session:result', { sessionId }, 30000)
       await sendWsRpc(ws, 'session:send', {
         sessionId,
         message: 'registry turn 2',
@@ -475,7 +439,7 @@ describe('isSessionProcessAlive', () => {
 
     const ws = await connectWs()
     try {
-      const resultPromise = waitForWsEvent(ws, 'session:result', 30000)
+      const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'mgr-local-006' }, 30000)
       await sendWsRpc(ws, 'session:start', {
         taskId: 'mgr-local-006',
         message: 'slow:1000 liveness check',
@@ -525,7 +489,7 @@ describe('lastEventAt tracking', () => {
 
     const ws = await connectWs()
     try {
-      const resultPromise = waitForWsEvent(ws, 'session:result', 30000)
+      const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'mgr-local-005' }, 30000)
       await sendWsRpc(ws, 'session:start', {
         taskId: 'mgr-local-005',
         message: 'lastEventAt local test',
@@ -553,7 +517,7 @@ describe('lastEventAt tracking', () => {
 
     const ws = await connectWs()
     try {
-      const resultPromise = waitForWsEvent(ws, 'session:result', 30000)
+      const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'mgr-remote-003' }, 30000)
       await sendWsRpc(ws, 'session:start', {
         taskId: 'mgr-remote-003',
         message: 'lastEventAt remote test',
@@ -589,7 +553,7 @@ describe('Session deduplication', () => {
     const ws = await connectWs()
     try {
       // Turn 1
-      const result1Promise = waitForWsEvent(ws, 'session:result', 30000)
+      const result1Promise = waitForWsEvent(ws, 'session:result', { taskId: 'mgr-local-003' }, 30000)
       await sendWsRpc(ws, 'session:start', {
         taskId: 'mgr-local-003',
         message: 'dedup turn 1',
@@ -600,7 +564,7 @@ describe('Session deduplication', () => {
 
       // Turn 2: collect ALL result events
       const allResults = collectWsEvents(ws, ['session:result'])
-      const result2Promise = waitForWsEvent(ws, 'session:result', 30000)
+      const result2Promise = waitForWsEvent(ws, 'session:result', { sessionId }, 30000)
       await sendWsRpc(ws, 'session:send', {
         sessionId,
         message: 'dedup turn 2',
@@ -629,7 +593,10 @@ describe('Concurrent sessions', () => {
     const ws = await connectWs()
     try {
       // Start both simultaneously
-      const results = waitForWsEvents(ws, 'session:result', 2, 30000)
+      const results = Promise.all([
+        waitForWsEvent(ws, 'session:result', { taskId: 'mgr-local-003' }, 30000),
+        waitForWsEvent(ws, 'session:result', { taskId: 'mgr-local-004' }, 30000),
+      ])
 
       await Promise.all([
         sendWsRpc(ws, 'session:start', { taskId: 'mgr-local-003', message: 'concurrent A' }),
@@ -660,7 +627,10 @@ describe('Concurrent sessions', () => {
   it('local + remote sessions in parallel → both complete, correct host fields', async () => {
     const ws = await connectWs()
     try {
-      const results = waitForWsEvents(ws, 'session:result', 2, 30000)
+      const results = Promise.all([
+        waitForWsEvent(ws, 'session:result', { taskId: 'mgr-remote-004' }, 30000),
+        waitForWsEvent(ws, 'session:result', { taskId: 'mgr-remote-005' }, 30000),
+      ])
 
       await Promise.all([
         sendWsRpc(ws, 'session:start', { taskId: 'mgr-remote-004', message: 'mixed local', }),
@@ -701,7 +671,7 @@ describe('Error recovery', () => {
     const ws = await connectWs()
     try {
       // Start a normal session first
-      const result1Promise = waitForWsEvent(ws, 'session:result', 30000)
+      const result1Promise = waitForWsEvent(ws, 'session:result', { taskId: 'mgr-local-005' }, 30000)
       await sendWsRpc(ws, 'session:start', {
         taskId: 'mgr-local-005',
         message: 'recovery base',
@@ -716,7 +686,7 @@ describe('Error recovery', () => {
       expect(doneSession.process_status).toBe('stopped')
 
       // Follow-up to a completed session → should resume and produce a new result
-      const result2Promise = waitForWsEvent(ws, 'session:result', 30000)
+      const result2Promise = waitForWsEvent(ws, 'session:result', { sessionId }, 30000)
       await sendWsRpc(ws, 'session:send', {
         sessionId,
         message: 'recovery follow-up',
@@ -747,7 +717,7 @@ describe('Status transitions', () => {
       const statusEvents = collectWsEvents(ws, ['session:status-changed'])
 
       // Turn 1
-      const result1Promise = waitForWsEvent(ws, 'session:result', 30000)
+      const result1Promise = waitForWsEvent(ws, 'session:result', { taskId: 'mgr-local-004' }, 30000)
       await sendWsRpc(ws, 'session:start', {
         taskId: 'mgr-local-004',
         message: 'slow:300 status transitions',
@@ -757,7 +727,7 @@ describe('Status transitions', () => {
       await delay(500)
 
       // Turn 2
-      const result2Promise = waitForWsEvent(ws, 'session:result', 30000)
+      const result2Promise = waitForWsEvent(ws, 'session:result', { sessionId }, 30000)
       await sendWsRpc(ws, 'session:send', {
         sessionId,
         message: 'slow:300 status turn 2',
@@ -794,7 +764,7 @@ describe('Remote session liveness', () => {
 
     const ws = await connectWs()
     try {
-      const resultPromise = waitForWsEvent(ws, 'session:result', 30000)
+      const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'mgr-remote-002' }, 30000)
       await sendWsRpc(ws, 'session:start', {
         taskId: 'mgr-remote-002',
         message: 'slow:800 remote liveness',
@@ -883,7 +853,7 @@ describe('Tool events through SessionManager', () => {
     try {
       const allEvents = collectWsEvents(ws, ['session:tool-use', 'session:tool-result', 'session:result'])
 
-      const resultPromise = waitForWsEvent(ws, 'session:result', 30000)
+      const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'mgr-local-006' }, 30000)
       await sendWsRpc(ws, 'session:start', {
         taskId: 'mgr-local-006',
         message: 'tool-test',
@@ -914,7 +884,7 @@ describe('Session history', () => {
     try {
       // snapshot-clean-turn makes the mock CLI write the canonical transcript
       // (~/.claude/projects/<cwd>/<sid>.jsonl) that the history reader serves.
-      const resultPromise = waitForWsEvent(ws, 'session:result', 30000)
+      const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'mgr-local-007' }, 30000)
       await sendWsRpc(ws, 'session:start', {
         taskId: 'mgr-local-007',
         message: 'snapshot-clean-turn:history test message',
@@ -946,7 +916,7 @@ describe('Rapid sequential follow-ups', () => {
     const ws = await connectWs()
     try {
       // Start initial session
-      const result0Promise = waitForWsEvent(ws, 'session:result', 30000)
+      const result0Promise = waitForWsEvent(ws, 'session:result', { taskId: 'mgr-local-002' }, 30000)
       await sendWsRpc(ws, 'session:start', {
         taskId: 'mgr-local-002',
         message: 'rapid base',
@@ -957,7 +927,7 @@ describe('Rapid sequential follow-ups', () => {
 
       // Send 3 follow-ups sequentially (waiting for each to complete before next)
       for (let i = 1; i <= 3; i++) {
-        const resultPromise = waitForWsEvent(ws, 'session:result', 30000)
+        const resultPromise = waitForWsEvent(ws, 'session:result', { sessionId }, 30000)
         await sendWsRpc(ws, 'session:send', {
           sessionId,
           message: `rapid follow-up ${i}`,
@@ -991,7 +961,7 @@ describe('Remote rapid follow-ups', () => {
     const ws = await connectWs()
     try {
       // Start
-      const result0Promise = waitForWsEvent(ws, 'session:result', 30000)
+      const result0Promise = waitForWsEvent(ws, 'session:result', { taskId: 'mgr-remote-002' }, 30000)
       await sendWsRpc(ws, 'session:start', {
         taskId: 'mgr-remote-002',
         message: 'remote rapid base',
@@ -1004,7 +974,7 @@ describe('Remote rapid follow-ups', () => {
 
       // 2 follow-ups
       for (let i = 1; i <= 2; i++) {
-        const resultPromise = waitForWsEvent(ws, 'session:result', 30000)
+        const resultPromise = waitForWsEvent(ws, 'session:result', { sessionId }, 30000)
         await sendWsRpc(ws, 'session:send', {
           sessionId,
           message: `remote rapid ${i}`,

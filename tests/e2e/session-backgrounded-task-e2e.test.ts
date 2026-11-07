@@ -33,6 +33,7 @@ import { WALNUT_HOME } from '../../src/constants.js'
 import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
+import { waitForWsEvent } from '../helpers/ws-event-wait.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 
@@ -77,33 +78,19 @@ function sendWsRpc(ws: WebSocket, method: string, payload: unknown): Promise<WsE
   })
 }
 
-/** Collect every WS `event`-frame with the given name, with their arrival order. */
-function collectWsEvents(ws: WebSocket, eventName: string): {
+/** Collect the task's WS `event`-frames with the given name, with their arrival order.
+ *  Frames of other tasks are skipped: the server broadcasts them for every session. */
+function collectWsEvents(ws: WebSocket, eventName: string, taskId: string): {
   events: WsEvent[]
   cleanup: () => void
 } {
   const events: WsEvent[] = []
   const handler = (raw: WebSocket.RawData) => {
     const frame = JSON.parse(raw.toString()) as WsEvent
-    if (frame.type === 'event' && frame.name === eventName) events.push(frame)
+    if (frame.type === 'event' && frame.name === eventName && frame.data?.taskId === taskId) events.push(frame)
   }
   ws.on('message', handler)
   return { events, cleanup: () => ws.off('message', handler) }
-}
-
-function waitForWsEvent(ws: WebSocket, eventName: string, timeoutMs = 15000): Promise<WsEvent> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`Timed out waiting for ${eventName}`)), timeoutMs)
-    const handler = (raw: WebSocket.RawData) => {
-      const frame = JSON.parse(raw.toString()) as WsEvent
-      if (frame.type === 'event' && frame.name === eventName) {
-        clearTimeout(timer)
-        ws.off('message', handler)
-        resolve(frame)
-      }
-    }
-    ws.on('message', handler)
-  })
 }
 
 function delay(ms: number): Promise<void> {
@@ -152,8 +139,8 @@ describe('Backgrounded task E2E: turn completes despite non-terminal is_backgrou
     const ws = await connectWs()
 
     // Start collecting BEFORE the send so we catch every frame in order.
-    const bgCollector = collectWsEvents(ws, 'session:background-tasks')
-    const resultCollector = collectWsEvents(ws, 'session:result')
+    const bgCollector = collectWsEvents(ws, 'session:background-tasks', 'bg-task-001')
+    const resultCollector = collectWsEvents(ws, 'session:result', 'bg-task-001')
 
     // Kick off the turn that backgrounds a bash task and never drains it.
     const rpc = await sendWsRpc(ws, 'session:start', {
@@ -167,7 +154,7 @@ describe('Backgrounded task E2E: turn completes despite non-terminal is_backgrou
     // never got a terminal event. Pre-fix this timed out — the backgrounded task
     // held hasActiveBackgroundWork() true and both the result and the idle were
     // withheld forever.
-    const resultEvent = await waitForWsEvent(ws, 'session:result', 15000)
+    const resultEvent = await waitForWsEvent(ws, 'session:result', { taskId: 'bg-task-001' }, 15000)
     const rd = resultEvent.data as { sessionId: string; taskId: string; isError?: boolean }
     expect(rd.taskId).toBe('bg-task-001')
     expect(rd.isError).toBeFalsy()

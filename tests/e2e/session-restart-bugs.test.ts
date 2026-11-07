@@ -27,6 +27,7 @@ import { WALNUT_HOME, TASKS_FILE } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
+import { newSessionMatcher, waitForWsEvent } from '../helpers/ws-event-wait.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 
@@ -64,24 +65,13 @@ function rpc(ws: WebSocket, method: string, payload: unknown): Promise<WsMsg> {
   })
 }
 
-/** Wait for a named event (e.g. 'session:result'). */
-function waitEvent(ws: WebSocket, name: string, timeoutMs = 30000): Promise<WsMsg> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`Timeout waiting for ${name}`)), timeoutMs)
-    const handler = (raw: WebSocket.Data) => {
-      try {
-        const msg = JSON.parse(raw.toString()) as WsMsg
-        if (msg.type === 'event' && msg.name === name) { clearTimeout(timer); ws.removeListener('message', handler); resolve(msg) }
-      } catch { /* skip */ }
-    }
-    ws.on('message', handler)
-  })
-}
+// Every session here is started with no task: a start waits only for a session it has not seen.
+const newSession = newSessionMatcher()
 
 /** Start a remote session and wait for the first response. Returns { ws, sessionId }. */
 async function startSessionAndGetResponse(message: string): Promise<{ ws: WebSocket; sessionId: string }> {
   const ws = await connect()
-  const resultP = waitEvent(ws, 'session:result')
+  const resultP = waitForWsEvent(ws, 'session:result', newSession({ taskId: '' }), 30000)
   await rpc(ws, 'session:start', { taskId: '', message, host: 'mock-remote', cwd: '/tmp' })
   const result = await resultP
   const sessionId = result.data?.sessionId as string
@@ -92,7 +82,7 @@ async function startSessionAndGetResponse(message: string): Promise<{ ws: WebSoc
 
 /** Send a follow-up message to an existing session and wait for response. */
 async function sendAndExpectResponse(ws: WebSocket, sessionId: string, message: string): Promise<void> {
-  const resultP = waitEvent(ws, 'session:result')
+  const resultP = waitForWsEvent(ws, 'session:result', { sessionId }, 30000)
   await rpc(ws, 'session:send', { sessionId, message })
   const result = await resultP
   expect(result.data?.sessionId).toBe(sessionId)

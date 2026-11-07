@@ -26,11 +26,14 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-live-registr
 import { WALNUT_HOME } from '../../src/constants.js'
 import { copyConfigSections } from '../helpers/temp-home.js'
 import { startServer, stopServer } from '../../src/web/server.js'
+import { newSessionMatcher, waitForWsEvent } from '../helpers/ws-event-wait.js'
 
 const execFileAsync = promisify(execFile)
 const LIVE_HOST = process.env.WALNUT_LIVE_HOST
 const LIVE_SSH_HOST = process.env.WALNUT_LIVE_SSH_HOST ?? LIVE_HOST
 const describeIf = LIVE_HOST ? describe : describe.skip
+// Sessions here start with no task: a start waits only for a session it has not seen.
+const newSession = newSessionMatcher()
 
 interface WsEvent {
   type: string
@@ -48,28 +51,6 @@ function connectWs(): Promise<WebSocket> {
     const ws = new WebSocket(`ws://localhost:${port}/ws`)
     ws.on('open', () => resolve(ws))
     ws.on('error', reject)
-  })
-}
-
-function waitForWsEvent(
-  ws: WebSocket,
-  name: string,
-  timeoutMs = 120_000,
-  filter?: (m: WsEvent) => boolean,
-): Promise<WsEvent> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`timeout: ${name}`)), timeoutMs)
-    const handler = (data: WebSocket.Data) => {
-      try {
-        const m = JSON.parse(data.toString()) as WsEvent
-        if (m.type === 'event' && m.name === name && (!filter || filter(m))) {
-          clearTimeout(timer)
-          ws.removeListener('message', handler)
-          resolve(m)
-        }
-      } catch { /* skip */ }
-    }
-    ws.on('message', handler)
   })
 }
 
@@ -121,7 +102,7 @@ describeIf(`Live daemon: registry integrity (${LIVE_HOST})`, () => {
     let sid: string | null = null
     let claudePid: number | null = null
     try {
-      const resultPromise = waitForWsEvent(ws, 'session:result', 170_000, (m) => !!m.data?.sessionId)
+      const resultPromise = waitForWsEvent(ws, 'session:result', newSession({ taskId: '' }), 170_000)
       await sendRpc(ws, 'session:start', {
         taskId: '',
         message: 'Reply exactly: REGISTRY_TEST_OK',

@@ -33,6 +33,7 @@ import { WALNUT_HOME } from '../../src/constants.js'
 import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
+import { waitForWsEvent } from '../helpers/ws-event-wait.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 
@@ -59,31 +60,6 @@ interface WsEvent {
   name?: string
   data?: Record<string, unknown>
   [key: string]: unknown
-}
-
-function waitForWsEvent(
-  ws: WebSocket,
-  eventName: string,
-  predicate?: (evt: WsEvent) => boolean,
-  timeoutMs = 15000,
-): Promise<WsEvent> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error(`Timed out waiting for ${eventName}`)),
-      timeoutMs,
-    )
-    const handler = (raw: WebSocket.RawData) => {
-      const frame = JSON.parse(raw.toString()) as WsEvent
-      if (frame.type === 'event' && frame.name === eventName) {
-        if (!predicate || predicate(frame)) {
-          clearTimeout(timer)
-          ws.off('message', handler)
-          resolve(frame)
-        }
-      }
-    }
-    ws.on('message', handler)
-  })
 }
 
 function sendWsRpc(ws: WebSocket, method: string, payload: unknown): Promise<WsEvent> {
@@ -177,9 +153,10 @@ describe('MODEL_CLI_MAP alias resolution: E2E', () => {
     it(`picker model "${pickerId}" → --model ${expectedCliArg}`, async () => {
       const ws = await connectWs()
 
-      const resultPromise = waitForWsEvent(ws, 'session:result')
+      const taskId = `cli-map-task-${String(idx + 1).padStart(3, '0')}`
+      const resultPromise = waitForWsEvent(ws, 'session:result', { taskId })
       const rpcRes = await sendWsRpc(ws, 'session:start', {
-        taskId: `cli-map-task-${String(idx + 1).padStart(3, '0')}`,
+        taskId,
         message: `test ${pickerId} model mapping`,
         project: 'Walnut',
         mode: 'bypass',
@@ -205,7 +182,7 @@ describe('MODEL_CLI_MAP alias resolution: E2E', () => {
   it('"Auto" (no model specified) → no --model flag', async () => {
     const ws = await connectWs()
 
-    const resultPromise = waitForWsEvent(ws, 'session:result')
+    const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'cli-map-task-008' })
     const rpcRes = await sendWsRpc(ws, 'session:start', {
       taskId: 'cli-map-task-008',
       message: 'test auto model mapping',
@@ -274,7 +251,7 @@ describe('MODEL_CLI_MAP alias resolution: E2E', () => {
     const ws = await connectWs()
 
     // Start session with default model
-    const firstResultPromise = waitForWsEvent(ws, 'session:result')
+    const firstResultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'cli-map-task-009' })
     const rpcRes = await sendWsRpc(ws, 'session:start', {
       taskId: 'cli-map-task-009',
       message: 'initial turn before opus-1m switch',
@@ -299,8 +276,8 @@ describe('MODEL_CLI_MAP alias resolution: E2E', () => {
     const secondResultPromise = waitForWsEvent(
       ws,
       'session:result',
-      (evt) => (evt.data as { sessionId?: string })?.sessionId === sessionId
-        && ((evt.data as { result?: string })?.result ?? '').includes('follow-up with opus-1m model'),
+      (data) => (data as { sessionId?: string })?.sessionId === sessionId
+        && ((data as { result?: string })?.result ?? '').includes('follow-up with opus-1m model'),
     )
     await sendWsRpc(ws, 'session:send', {
       sessionId,
@@ -324,7 +301,7 @@ describe('MODEL_CLI_MAP alias resolution: E2E', () => {
     const ws = await connectWs()
 
     // Start session with default model
-    const firstResultPromise = waitForWsEvent(ws, 'session:result')
+    const firstResultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'cli-map-task-010' })
     const rpcRes = await sendWsRpc(ws, 'session:start', {
       taskId: 'cli-map-task-010',
       message: 'initial turn before sonnet-1m switch',
@@ -346,8 +323,8 @@ describe('MODEL_CLI_MAP alias resolution: E2E', () => {
     const secondResultPromise = waitForWsEvent(
       ws,
       'session:result',
-      (evt) => (evt.data as { sessionId?: string })?.sessionId === sessionId
-        && ((evt.data as { result?: string })?.result ?? '').includes('follow-up with sonnet-1m model'),
+      (data) => (data as { sessionId?: string })?.sessionId === sessionId
+        && ((data as { result?: string })?.result ?? '').includes('follow-up with sonnet-1m model'),
     )
     await sendWsRpc(ws, 'session:send', {
       sessionId,
@@ -372,7 +349,7 @@ describe('MODEL_CLI_MAP alias resolution: E2E', () => {
     const ws = await connectWs()
 
     // Start session with default model
-    const firstResultPromise = waitForWsEvent(ws, 'session:result')
+    const firstResultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'cli-map-task-011' })
     const rpcRes = await sendWsRpc(ws, 'session:start', {
       taskId: 'cli-map-task-011',
       message: 'initial turn before fable-1m switch',
@@ -394,8 +371,8 @@ describe('MODEL_CLI_MAP alias resolution: E2E', () => {
     const secondResultPromise = waitForWsEvent(
       ws,
       'session:result',
-      (evt) => (evt.data as { sessionId?: string })?.sessionId === sessionId
-        && ((evt.data as { result?: string })?.result ?? '').includes('follow-up with fable-1m model'),
+      (data) => (data as { sessionId?: string })?.sessionId === sessionId
+        && ((data as { result?: string })?.result ?? '').includes('follow-up with fable-1m model'),
     )
     await sendWsRpc(ws, 'session:send', {
       sessionId,

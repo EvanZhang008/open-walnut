@@ -28,6 +28,7 @@ import { WALNUT_HOME } from '../../src/constants.js'
 import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
+import { waitForWsEvent } from '../helpers/ws-event-wait.js'
 
 // Mock CLI (mock-claude.mjs) is spawned by the MockDaemon, not directly by the
 // session runner: in the unified-daemon architecture all local sessions go
@@ -75,20 +76,6 @@ function collectWsEvents(ws: WebSocket, eventNames: string[]): WsEvent[] {
   return events
 }
 
-function waitForWsEvent(ws: WebSocket, eventName: string, timeoutMs = 15000): Promise<WsEvent> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`Timed out waiting for ${eventName}`)), timeoutMs)
-    const handler = (raw: WebSocket.RawData) => {
-      const frame = JSON.parse(raw.toString()) as WsEvent
-      if (frame.type === 'event' && frame.name === eventName) {
-        clearTimeout(timer)
-        ws.off('message', handler)
-        resolve(frame)
-      }
-    }
-    ws.on('message', handler)
-  })
-}
 
 function sendWsRpc(ws: WebSocket, method: string, payload: unknown): Promise<WsEvent> {
   return new Promise((resolve, reject) => {
@@ -224,7 +211,7 @@ describe('Session start via WS RPC', () => {
     expect((rpcRes as Record<string, unknown>).ok).toBe(true)
 
     // Wait for session:result
-    const resultEvent = await waitForWsEvent(ws, 'session:result')
+    const resultEvent = await waitForWsEvent(ws, 'session:result', { taskId: 'sess-task-001', resultIncludes: 'hello from e2e' })
 
     // Verify session:result has correct structure
     const rd = resultEvent.data as {
@@ -292,7 +279,7 @@ describe('Session record created at init (before result)', () => {
 
     // Use "slow:2000" prefix — mock CLI emits init immediately, then waits 2s before result.
     // This gives us a window to check the REST API mid-session.
-    const resultPromise = waitForWsEvent(ws, 'session:result', 20000)
+    const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'sess-task-002' }, 20000)
 
     const rpcRes = await sendWsRpc(ws, 'session:start', {
       taskId: 'sess-task-002',
@@ -344,7 +331,7 @@ describe('Session record created at init (before result)', () => {
 describe('Session error handling', () => {
   it('session:start with error message emits session:error', async () => {
     const ws = await connectWs()
-    const errorPromise = waitForWsEvent(ws, 'session:error')
+    const errorPromise = waitForWsEvent(ws, 'session:error', { taskId: 'sess-task-002' })
 
     await sendWsRpc(ws, 'session:start', {
       taskId: 'sess-task-002',
@@ -395,7 +382,7 @@ describe('Session error handling', () => {
 describe('Session result carries response text', () => {
   it('session:result event contains the full result text', async () => {
     const ws = await connectWs()
-    const resultPromise = waitForWsEvent(ws, 'session:result')
+    const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'sess-task-001', resultIncludes: 'verify result payload' })
 
     await sendWsRpc(ws, 'session:start', {
       taskId: 'sess-task-001',
@@ -433,7 +420,7 @@ describe('Session send (resume existing session)', () => {
     const ws = await connectWs()
 
     // First, start a session to get a sessionId
-    const firstResult = waitForWsEvent(ws, 'session:result')
+    const firstResult = waitForWsEvent(ws, 'session:result', { taskId: 'sess-task-resume' })
     await sendWsRpc(ws, 'session:start', {
       taskId: 'sess-task-resume',
       message: 'start session for resume',
@@ -451,7 +438,7 @@ describe('Session send (resume existing session)', () => {
     expect((rpcRes as Record<string, unknown>).ok).toBe(true)
 
     // Wait for the result from the resumed session
-    const secondResultEvent = await waitForWsEvent(ws, 'session:result')
+    const secondResultEvent = await waitForWsEvent(ws, 'session:result', { sessionId })
     const rd = secondResultEvent.data as { result: string; taskId: string }
 
     // The resumed session should produce a valid response
@@ -469,16 +456,19 @@ describe('Session send (resume existing session)', () => {
 describe('Context usage from final stream counters', () => {
   it('publishes each request\'s real input across cache switches, a failed turn and recovery', async () => {
     const ws = await connectWs()
-    const usage = collectWsEvents(ws, ['session:usage-update'])
-    const inputs = () => usage.map((e) => (e.data as { inputTokens: number }).inputTokens)
+    const usageFrames = collectWsEvents(ws, ['session:usage-update'])
+    // Usage frames of this test's session only: the server broadcasts every session's.
+    let sessionId = ''
+    const usage = () => usageFrames.filter((e) => (e.data as { sessionId?: string }).sessionId === sessionId)
+    const inputs = () => usage().map((e) => (e.data as { inputTokens: number }).inputTokens)
 
-    const firstResult = waitForWsEvent(ws, 'session:result')
+    const firstResult = waitForWsEvent(ws, 'session:result', { taskId: 'sess-task-usage' })
     await sendWsRpc(ws, 'session:start', {
       taskId: 'sess-task-usage',
       message: 'final-usage-turn:436,488,265328',
       project: 'Walnut',
     })
-    const sessionId = ((await firstResult).data as { sessionId: string }).sessionId
+    sessionId = ((await firstResult).data as { sessionId: string }).sessionId
     await pollUntil(async () => inputs().includes(266252))
 
     // [input, cacheWrite, cacheRead] per turn, then the context that turn must show.
@@ -488,7 +478,7 @@ describe('Context usage from final stream counters', () => {
       ['2,0,90560', 90562],       // after compaction: a read of the smaller context
     ]
     for (const [spec, expected] of turns) {
-      const done = Promise.race([waitForWsEvent(ws, 'session:result'), waitForWsEvent(ws, 'session:error')])
+      const done = Promise.race([waitForWsEvent(ws, 'session:result', { sessionId }), waitForWsEvent(ws, 'session:error', { sessionId })])
       const res = await sendWsRpc(ws, 'session:send', { sessionId, message: `final-usage-turn:${spec}` })
       expect((res as Record<string, unknown>).ok).toBe(true)
       await done
@@ -496,10 +486,8 @@ describe('Context usage from final stream counters', () => {
     }
 
     expect(inputs()).toEqual([266252, 266698, 90562])
-    for (const e of usage) {
-      const d = e.data as { sessionId: string; inputTokens: number }
-      expect(d.sessionId).toBe(sessionId)
-      expect(d.inputTokens).toBeGreaterThan(0)
+    for (const e of usage()) {
+      expect((e.data as { inputTokens: number }).inputTokens).toBeGreaterThan(0)
     }
     ws.close()
     await delay(50)
@@ -513,8 +501,9 @@ describe('Multi-client session events', () => {
     const ws1 = await connectWs()
     const ws2 = await connectWs()
 
-    const result1 = waitForWsEvent(ws1, 'session:result')
-    const result2 = waitForWsEvent(ws2, 'session:result')
+    const multi = { taskId: 'sess-task-001' }
+    const result1 = waitForWsEvent(ws1, 'session:result', multi)
+    const result2 = waitForWsEvent(ws2, 'session:result', multi)
 
     await sendWsRpc(ws1, 'session:start', {
       taskId: 'sess-task-001',
@@ -536,8 +525,9 @@ describe('Multi-client session events', () => {
     const ws1 = await connectWs()
     const ws2 = await connectWs()
 
-    const result1 = waitForWsEvent(ws1, 'session:result')
-    const result2 = waitForWsEvent(ws2, 'session:result')
+    const broadcast = { taskId: 'sess-task-001', resultIncludes: 'broadcast result text' }
+    const result1 = waitForWsEvent(ws1, 'session:result', broadcast)
+    const result2 = waitForWsEvent(ws2, 'session:result', broadcast)
 
     await sendWsRpc(ws1, 'session:start', {
       taskId: 'sess-task-001',
@@ -565,7 +555,7 @@ describe('Multi-client session events', () => {
 describe('Session permission mode', () => {
   it('session with mode "plan" spawns CLI with --permission-mode plan', async () => {
     const ws = await connectWs()
-    const resultPromise = waitForWsEvent(ws, 'session:result')
+    const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'sess-task-mode-plan' })
 
     await sendWsRpc(ws, 'session:start', {
       taskId: 'sess-task-mode-plan',
@@ -590,7 +580,7 @@ describe('Session permission mode', () => {
 
   it('session with mode "bypass" spawns CLI with --permission-mode bypassPermissions', async () => {
     const ws = await connectWs()
-    const resultPromise = waitForWsEvent(ws, 'session:result')
+    const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'sess-task-mode-bypass' })
 
     await sendWsRpc(ws, 'session:start', {
       taskId: 'sess-task-mode-bypass',
@@ -611,7 +601,7 @@ describe('Session permission mode', () => {
 
   it('session without mode defaults to bypassPermissions', async () => {
     const ws = await connectWs()
-    const resultPromise = waitForWsEvent(ws, 'session:result')
+    const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'sess-task-mode-nomode' })
 
     await sendWsRpc(ws, 'session:start', {
       taskId: 'sess-task-mode-nomode',
@@ -631,7 +621,7 @@ describe('Session permission mode', () => {
 
   it('session with explicit "default" mode spawns CLI with --permission-mode default', async () => {
     const ws = await connectWs()
-    const resultPromise = waitForWsEvent(ws, 'session:result')
+    const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'sess-task-mode-default' })
 
     await sendWsRpc(ws, 'session:start', {
       taskId: 'sess-task-mode-default',
@@ -656,7 +646,7 @@ describe('Session permission mode', () => {
 describe('Event payload structure — frontend contract', () => {
   it('session:result has all fields the frontend needs', async () => {
     const ws = await connectWs()
-    const resultPromise = waitForWsEvent(ws, 'session:result')
+    const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'sess-task-001' })
 
     await sendWsRpc(ws, 'session:start', {
       taskId: 'sess-task-001',
@@ -691,7 +681,7 @@ describe('Event payload structure — frontend contract', () => {
 describe('Taskless sessions', () => {
   it('session:start without taskId succeeds and produces result', async () => {
     const ws = await connectWs()
-    const resultPromise = waitForWsEvent(ws, 'session:result')
+    const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: '', resultIncludes: 'taskless e2e test' })
 
     // Start a session with only message — no taskId
     const rpcRes = await sendWsRpc(ws, 'session:start', {
@@ -720,7 +710,7 @@ describe('Taskless sessions', () => {
   it('taskless session persists to sessions store with empty taskId', async () => {
     // Start our own taskless session (self-contained — no dependency on prior tests)
     const ws = await connectWs()
-    const resultPromise = waitForWsEvent(ws, 'session:result')
+    const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: '' })
 
     await sendWsRpc(ws, 'session:start', { message: 'taskless persist test' })
     await resultPromise

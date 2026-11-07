@@ -26,6 +26,7 @@ vi.mock('../../src/constants.js', () => createMockConstants())
 import { WALNUT_HOME } from '../../src/constants.js'
 import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { startServer, stopServer } from '../../src/web/server.js'
+import { waitForWsEvent } from '../helpers/ws-event-wait.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 
@@ -52,31 +53,6 @@ interface WsEvent {
   name?: string
   data?: Record<string, unknown>
   [key: string]: unknown
-}
-
-function waitForWsEvent(
-  ws: WebSocket,
-  eventName: string,
-  predicate?: (evt: WsEvent) => boolean,
-  timeoutMs = 15000,
-): Promise<WsEvent> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error(`Timed out waiting for ${eventName}`)),
-      timeoutMs,
-    )
-    const handler = (raw: WebSocket.RawData) => {
-      const frame = JSON.parse(raw.toString()) as WsEvent
-      if (frame.type === 'event' && frame.name === eventName) {
-        if (!predicate || predicate(frame)) {
-          clearTimeout(timer)
-          ws.off('message', handler)
-          resolve(frame)
-        }
-      }
-    }
-    ws.on('message', handler)
-  })
 }
 
 function collectWsEvents(ws: WebSocket, eventNames: string[]): WsEvent[] {
@@ -171,7 +147,7 @@ describe('Session mode change: real-time updates', () => {
 
     // Start session in bypass mode with a message that triggers a mode change to plan.
     // The mock CLI emits: init(permissionMode=bypassPermissions) → system(permissionMode=plan) → result
-    const resultPromise = waitForWsEvent(ws, 'session:result')
+    const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'mode-change-task-001' })
     const rpcRes = await sendWsRpc(ws, 'session:start', {
       taskId: 'mode-change-task-001',
       message: 'mode-change:bypass-to-plan simulate EnterPlanMode',
@@ -237,7 +213,7 @@ describe('Session mode change: real-time updates', () => {
     const ws = await connectWs()
     const statusEvents = collectWsEvents(ws, ['session:status-changed'])
 
-    const resultPromise = waitForWsEvent(ws, 'session:result')
+    const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'mode-change-task-002' })
     await sendWsRpc(ws, 'session:start', {
       taskId: 'mode-change-task-002',
       message: 'mode-change:bypass-to-plan always has mode',
@@ -269,7 +245,7 @@ describe('Session mode change: real-time updates', () => {
     const statusEvents = collectWsEvents(ws, ['session:status-changed'])
 
     // Start a normal bypass session (no mode-change message)
-    const resultPromise = waitForWsEvent(ws, 'session:result')
+    const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'mode-change-task-003' })
     const rpcRes = await sendWsRpc(ws, 'session:start', {
       taskId: 'mode-change-task-003',
       message: 'normal bypass session, no mode change',
@@ -303,10 +279,10 @@ describe('Session mode change: real-time updates', () => {
     const modeChangePromise = waitForWsEvent(
       ws,
       'session:status-changed',
-      (evt) => (evt.data as { mode?: string })?.mode === 'plan',
+      (d) => d.taskId === 'mode-change-task-001' && d.mode === 'plan',
     )
 
-    const resultPromise = waitForWsEvent(ws, 'session:result')
+    const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'mode-change-task-001' })
     await sendWsRpc(ws, 'session:start', {
       taskId: 'mode-change-task-001',
       message: 'mode-change:bypass-to-plan verify REST enrichment',

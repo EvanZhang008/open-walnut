@@ -32,6 +32,7 @@ import { WALNUT_HOME } from '../../src/constants.js'
 import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
+import { waitForWsEvent } from '../helpers/ws-event-wait.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 
@@ -58,31 +59,6 @@ interface WsEvent {
   name?: string
   data?: Record<string, unknown>
   [key: string]: unknown
-}
-
-function waitForWsEvent(
-  ws: WebSocket,
-  eventName: string,
-  predicate?: (evt: WsEvent) => boolean,
-  timeoutMs = 15000,
-): Promise<WsEvent> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error(`Timed out waiting for ${eventName}`)),
-      timeoutMs,
-    )
-    const handler = (raw: WebSocket.RawData) => {
-      const frame = JSON.parse(raw.toString()) as WsEvent
-      if (frame.type === 'event' && frame.name === eventName) {
-        if (!predicate || predicate(frame)) {
-          clearTimeout(timer)
-          ws.off('message', handler)
-          resolve(frame)
-        }
-      }
-    }
-    ws.on('message', handler)
-  })
 }
 
 function collectWsEvents(ws: WebSocket, eventNames: string[]): WsEvent[] {
@@ -174,7 +150,7 @@ describe('Session model switch: E2E', () => {
     const ws = await connectWs()
 
     // Start session (default model = opus)
-    const firstResultPromise = waitForWsEvent(ws, 'session:result')
+    const firstResultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'model-switch-task-001' })
     const rpcRes = await sendWsRpc(ws, 'session:start', {
       taskId: 'model-switch-task-001',
       message: 'initial turn, no model switch',
@@ -199,8 +175,8 @@ describe('Session model switch: E2E', () => {
     const secondResultPromise = waitForWsEvent(
       ws,
       'session:result',
-      (evt) => (evt.data as { sessionId?: string })?.sessionId === sessionId
-        && ((evt.data as { result?: string })?.result ?? '').includes('follow-up after model switch'),
+      (data) => (data as { sessionId?: string })?.sessionId === sessionId
+        && ((data as { result?: string })?.result ?? '').includes('follow-up after model switch'),
     )
     await sendWsRpc(ws, 'session:send', {
       sessionId,
@@ -230,8 +206,8 @@ describe('Session model switch: E2E', () => {
     const statusPromise = waitForWsEvent(
       ws,
       'session:status-changed',
-      (evt) => {
-        const d = evt.data as { taskId?: string; sessionId?: string }
+      (data) => {
+        const d = data as { taskId?: string; sessionId?: string }
         return d.taskId === 'model-switch-task-002' && !!d.sessionId
       },
     )
@@ -255,8 +231,8 @@ describe('Session model switch: E2E', () => {
     const resultPromise = waitForWsEvent(
       ws,
       'session:result',
-      (evt) => {
-        const d = evt.data as { sessionId?: string; result?: string }
+      (data) => {
+        const d = data as { sessionId?: string; result?: string }
         return d.sessionId === sessionId && (d.result?.includes('[model:haiku]') ?? false)
       },
     )
@@ -282,7 +258,7 @@ describe('Session model switch: E2E', () => {
     const ws = await connectWs()
 
     // Start session
-    const firstResultPromise = waitForWsEvent(ws, 'session:result')
+    const firstResultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'model-switch-task-003' })
     await sendWsRpc(ws, 'session:start', {
       taskId: 'model-switch-task-003',
       message: 'initial turn',
@@ -297,7 +273,7 @@ describe('Session model switch: E2E', () => {
     const secondResultPromise = waitForWsEvent(
       ws,
       'session:result',
-      (evt) => (evt.data as { sessionId?: string })?.sessionId === sessionId,
+      (data) => (data as { sessionId?: string })?.sessionId === sessionId,
     )
     await sendWsRpc(ws, 'session:send', {
       sessionId,
@@ -330,7 +306,7 @@ describe('Session model switch: E2E', () => {
     const ws = await connectWs()
 
     // Turn 1: start session (default model = opus)
-    const firstResultPromise = waitForWsEvent(ws, 'session:result')
+    const firstResultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'model-switch-task-004' })
     await sendWsRpc(ws, 'session:start', {
       taskId: 'model-switch-task-004',
       message: 'initial turn',
@@ -348,8 +324,8 @@ describe('Session model switch: E2E', () => {
     const secondResultPromise = waitForWsEvent(
       ws,
       'session:result',
-      (evt) => (evt.data as { sessionId?: string })?.sessionId === sessionId
-        && ((evt.data as { result?: string })?.result ?? '').includes('switch to sonnet'),
+      (data) => (data as { sessionId?: string })?.sessionId === sessionId
+        && ((data as { result?: string })?.result ?? '').includes('switch to sonnet'),
     )
     await sendWsRpc(ws, 'session:send', {
       sessionId,
@@ -370,8 +346,8 @@ describe('Session model switch: E2E', () => {
     const thirdResultPromise = waitForWsEvent(
       ws,
       'session:result',
-      (evt) => {
-        const d = evt.data as { sessionId?: string; result?: string }
+      (data) => {
+        const d = data as { sessionId?: string; result?: string }
         return d.sessionId === sessionId && (d.result?.includes('no model override this time') ?? false)
       },
     )
@@ -394,7 +370,7 @@ describe('Session model switch: E2E', () => {
     const ws = await connectWs()
 
     // Start session
-    const firstResultPromise = waitForWsEvent(ws, 'session:result')
+    const firstResultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'model-switch-task-005' })
     await sendWsRpc(ws, 'session:start', {
       taskId: 'model-switch-task-005',
       message: 'initial turn before empty model switch',
@@ -425,8 +401,8 @@ describe('Session model switch: E2E', () => {
     const secondResultPromise = waitForWsEvent(
       ws,
       'session:result',
-      (evt) => (evt.data as { sessionId?: string })?.sessionId === sessionId
-        && ((evt.data as { result?: string })?.result ?? '').includes('real turn after pure switch'),
+      (data) => (data as { sessionId?: string })?.sessionId === sessionId
+        && ((data as { result?: string })?.result ?? '').includes('real turn after pure switch'),
     )
     await sendWsRpc(ws, 'session:send', { sessionId, message: 'real turn after pure switch' })
     const secondText = ((await secondResultPromise).data as { result?: string }).result ?? ''
@@ -449,7 +425,7 @@ describe('POST /api/sessions/:id/model — live switch route', () => {
   it('persists cliModel and a later resume uses it', async () => {
     const ws = await connectWs()
 
-    const firstResultPromise = waitForWsEvent(ws, 'session:result')
+    const firstResultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'model-switch-task-006' })
     await sendWsRpc(ws, 'session:start', {
       taskId: 'model-switch-task-006',
       message: 'initial turn before REST model switch',
@@ -482,8 +458,8 @@ describe('POST /api/sessions/:id/model — live switch route', () => {
     const secondResultPromise = waitForWsEvent(
       ws,
       'session:result',
-      (evt) => (evt.data as { sessionId?: string })?.sessionId === sessionId
-        && ((evt.data as { result?: string })?.result ?? '').includes('turn after REST switch'),
+      (data) => (data as { sessionId?: string })?.sessionId === sessionId
+        && ((data as { result?: string })?.result ?? '').includes('turn after REST switch'),
     )
     await sendWsRpc(ws, 'session:send', { sessionId, message: 'turn after REST switch' })
     const secondResult = await secondResultPromise
@@ -496,7 +472,7 @@ describe('POST /api/sessions/:id/model — live switch route', () => {
 
   it('rejects garbage model strings (400), accepts catalog values, 404s a missing session', async () => {
     const ws = await connectWs()
-    const resultPromise = waitForWsEvent(ws, 'session:result')
+    const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'model-switch-task-007' })
     await sendWsRpc(ws, 'session:start', {
       taskId: 'model-switch-task-007',
       message: 'validation test session',
@@ -549,7 +525,7 @@ describe('POST /api/sessions/:id/model — live switch route', () => {
 describe('GET /api/sessions/:id/models — catalog route degraded modes', () => {
   it('falls back to the static registry when the CLI cannot answer the catalog reads', async () => {
     const ws = await connectWs()
-    const resultPromise = waitForWsEvent(ws, 'session:result')
+    const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'model-catalog-task-001' })
     await sendWsRpc(ws, 'session:start', {
       taskId: 'model-catalog-task-001',
       message: 'catalog fallback test session',
@@ -593,7 +569,7 @@ describe('PATCH /api/sessions/:id mode — live switch (set_permission_mode, no 
   it('persists record.mode without setting pendingMode; cold resume carries the new mode', async () => {
     const ws = await connectWs()
 
-    const firstResultPromise = waitForWsEvent(ws, 'session:result')
+    const firstResultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'model-switch-task-008' })
     await sendWsRpc(ws, 'session:start', {
       taskId: 'model-switch-task-008',
       message: 'initial turn before mode PATCH',
@@ -623,8 +599,8 @@ describe('PATCH /api/sessions/:id mode — live switch (set_permission_mode, no 
     const secondResultPromise = waitForWsEvent(
       ws,
       'session:result',
-      (evt) => (evt.data as { sessionId?: string })?.sessionId === sessionId
-        && ((evt.data as { result?: string })?.result ?? '').includes('turn after mode patch'),
+      (data) => (data as { sessionId?: string })?.sessionId === sessionId
+        && ((data as { result?: string })?.result ?? '').includes('turn after mode patch'),
     )
     await sendWsRpc(ws, 'session:send', { sessionId, message: 'turn after mode patch' })
     const secondText = ((await secondResultPromise).data as { result?: string }).result ?? ''

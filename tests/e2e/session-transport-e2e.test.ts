@@ -43,6 +43,7 @@ import { WALNUT_HOME, CLAUDE_HOME } from '../../src/constants.js'
 import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
+import { waitForWsEvent } from '../helpers/ws-event-wait.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 const MOCK_SSH_SCRIPT = path.resolve(import.meta.dirname, '../providers/mock-ssh.mjs')
@@ -78,21 +79,6 @@ interface WsEvent {
   name?: string
   data?: Record<string, unknown>
   [key: string]: unknown
-}
-
-function waitForWsEvent(ws: WebSocket, eventName: string, timeoutMs = 15000): Promise<WsEvent> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`Timed out waiting for ${eventName}`)), timeoutMs)
-    const handler = (raw: WebSocket.RawData) => {
-      const frame = JSON.parse(raw.toString()) as WsEvent
-      if (frame.type === 'event' && frame.name === eventName) {
-        clearTimeout(timer)
-        ws.off('message', handler)
-        resolve(frame)
-      }
-    }
-    ws.on('message', handler)
-  })
 }
 
 function collectWsEvents(ws: WebSocket, eventNames: string[]): WsEvent[] {
@@ -398,7 +384,7 @@ afterAll(async () => {
 describe('Local session via SessionIO', () => {
   it('full lifecycle: start → stream → result → persistence', async () => {
     const ws = await connectWs()
-    const resultPromise = waitForWsEvent(ws, 'session:result', 20000)
+    const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'transport-local-001' }, 20000)
 
     const rpcRes = await sendWsRpc(ws, 'session:start', {
       taskId: 'transport-local-001',
@@ -472,7 +458,7 @@ describe('Local session via SessionIO', () => {
 describe('SSH session via SessionIO', () => {
   it('full lifecycle: start with host → mock SSH → result → persistence with host', async () => {
     const ws = await connectWs()
-    const resultPromise = waitForWsEvent(ws, 'session:result', 20000)
+    const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'transport-ssh-001' }, 20000)
 
     const rpcRes = await sendWsRpc(ws, 'session:start', {
       taskId: 'transport-ssh-001',
@@ -550,7 +536,7 @@ describe('SSH session via SessionIO', () => {
 describe('Streaming events via SessionIO', () => {
   it('tool-test session produces correct JSONL output through the full pipeline', async () => {
     const ws = await connectWs()
-    const resultPromise = waitForWsEvent(ws, 'session:result', 20000)
+    const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'transport-stream-001' }, 20000)
 
     // 'tool-test' makes mock CLI emit: init → tool_use → tool_result → assistant text → result
     await sendWsRpc(ws, 'session:start', {
@@ -644,7 +630,7 @@ describe('Streaming events via SessionIO', () => {
 describe('Output file rename lifecycle', () => {
   it('output file is named after the session ID from the start', async () => {
     const ws = await connectWs()
-    const resultPromise = waitForWsEvent(ws, 'session:result', 20000)
+    const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'transport-rename-001' }, 20000)
 
     await sendWsRpc(ws, 'session:start', {
       taskId: 'transport-rename-001',
@@ -720,7 +706,7 @@ describe('Follow-up message delivery', () => {
 
   it('start initial session and capture session ID', async () => {
     const ws = await connectWs()
-    const resultPromise = waitForWsEvent(ws, 'session:result', 20000)
+    const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'transport-followup-001' }, 20000)
 
     await sendWsRpc(ws, 'session:start', {
       taskId: 'transport-followup-001',
@@ -761,7 +747,7 @@ describe('Follow-up message delivery', () => {
     expect(sendData?.messageId).toBeTruthy()
 
     // Wait for the resumed session to produce a result
-    const resultEvent = await waitForWsEvent(ws, 'session:result', 20000)
+    const resultEvent = await waitForWsEvent(ws, 'session:result', { sessionId: firstSessionId }, 20000)
     const rd = resultEvent.data as {
       sessionId: string
       result: string
@@ -920,7 +906,7 @@ describe('Session streaming events via WebSocket', () => {
       'session:started',
     ])
 
-    const resultPromise = waitForWsEvent(ws, 'session:result', 20000)
+    const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'transport-streaming-001' }, 20000)
 
     // 'tool-test' makes mock CLI emit: init → tool_use → tool_result → text → result
     await sendWsRpc(ws, 'session:start', {
@@ -963,7 +949,7 @@ describe('Session error handling', () => {
   it('session with error message produces a session error and server stays healthy', async () => {
     const ws = await connectWs()
 
-    const errorPromise = waitForWsEvent(ws, 'session:error', 20000)
+    const errorPromise = waitForWsEvent(ws, 'session:error', { taskId: 'transport-error-001' }, 20000)
 
     // Send 'error' message — mock CLI exits with code 1
     await sendWsRpc(ws, 'session:start', {

@@ -37,6 +37,7 @@ import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 import { modelSupportsEffort } from '../../src/core/types.js'
+import { waitForWsEvent } from '../helpers/ws-event-wait.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 /** A model with no effort at all (the static override table): Haiku 4.5. */
@@ -63,31 +64,6 @@ interface WsEvent {
   name?: string
   data?: Record<string, unknown>
   [key: string]: unknown
-}
-
-function waitForWsEvent(
-  ws: WebSocket,
-  eventName: string,
-  predicate?: (evt: WsEvent) => boolean,
-  timeoutMs = 15000,
-): Promise<WsEvent> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error(`Timed out waiting for ${eventName}`)),
-      timeoutMs,
-    )
-    const handler = (raw: WebSocket.RawData) => {
-      const frame = JSON.parse(raw.toString()) as WsEvent
-      if (frame.type === 'event' && frame.name === eventName) {
-        if (!predicate || predicate(frame)) {
-          clearTimeout(timer)
-          ws.off('message', handler)
-          resolve(frame)
-        }
-      }
-    }
-    ws.on('message', handler)
-  })
 }
 
 function sendWsRpc(ws: WebSocket, method: string, payload: unknown): Promise<WsEvent> {
@@ -160,7 +136,7 @@ describe('session --effort plumbing: E2E', () => {
   it('session:start with effort=high → --effort high', async () => {
     const ws = await connectWs()
 
-    const resultPromise = waitForWsEvent(ws, 'session:result')
+    const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'effort-task-001' })
     const rpcRes = await sendWsRpc(ws, 'session:start', {
       taskId: 'effort-task-001',
       message: 'test effort on start',
@@ -183,7 +159,7 @@ describe('session --effort plumbing: E2E', () => {
   it('session:start without effort → no [effort:] marker', async () => {
     const ws = await connectWs()
 
-    const resultPromise = waitForWsEvent(ws, 'session:result')
+    const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'effort-task-002' })
     const rpcRes = await sendWsRpc(ws, 'session:start', {
       taskId: 'effort-task-002',
       message: 'test no effort on start',
@@ -208,7 +184,7 @@ describe('session --effort plumbing: E2E', () => {
     expect(modelSupportsEffort(HAIKU_4_5)).toBe(false)
     const ws = await connectWs()
 
-    const resultPromise = waitForWsEvent(ws, 'session:result')
+    const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'effort-task-003' })
     const rpcRes = await sendWsRpc(ws, 'session:start', {
       taskId: 'effort-task-003',
       message: 'test effort suppressed on haiku',
@@ -234,7 +210,7 @@ describe('session --effort plumbing: E2E', () => {
   it('POST /effort persists the level and reports appliedLive on a running session', async () => {
     const ws = await connectWs()
 
-    const firstResultPromise = waitForWsEvent(ws, 'session:result')
+    const firstResultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'effort-task-004' })
     const rpcRes = await sendWsRpc(ws, 'session:start', {
       taskId: 'effort-task-004',
       message: 'initial turn before effort switch',
@@ -274,7 +250,7 @@ describe('session --effort plumbing: E2E', () => {
   // supports no effort at all, so any level is a clean 409 case.
   it('POST /effort rejects invalid level (400) and unsupported level (409)', async () => {
     const ws = await connectWs()
-    const resultPromise = waitForWsEvent(ws, 'session:result')
+    const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'effort-task-006' })
     await sendWsRpc(ws, 'session:start', {
       taskId: 'effort-task-006',
       message: 'gating test session',
@@ -309,7 +285,7 @@ describe('session --effort plumbing: E2E', () => {
   // session-effort.test.ts via modelSupportsXhighEffort — no live CLI needed.)
   it('POST /effort accepts xhigh on an Opus session (200 + persisted)', async () => {
     const ws = await connectWs()
-    const resultPromise = waitForWsEvent(ws, 'session:result')
+    const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'effort-task-008' })
     await sendWsRpc(ws, 'session:start', {
       taskId: 'effort-task-008',
       message: 'opus xhigh gating test',
@@ -341,7 +317,7 @@ describe('session --effort plumbing: E2E', () => {
   // opus→max back to a 409.
   it('POST /effort accepts max on an Opus session (200 + persisted)', async () => {
     const ws = await connectWs()
-    const resultPromise = waitForWsEvent(ws, 'session:result')
+    const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'effort-task-007' })
     await sendWsRpc(ws, 'session:start', {
       taskId: 'effort-task-007',
       message: 'opus max gating test',
@@ -375,7 +351,7 @@ describe('session --effort plumbing: E2E', () => {
   // proven against the real binary + on live prod sessions.)
   it('GET /settings returns requested values and live:false when CLI not reachable', async () => {
     const ws = await connectWs()
-    const resultPromise = waitForWsEvent(ws, 'session:result')
+    const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'effort-task-009' })
     await sendWsRpc(ws, 'session:start', {
       taskId: 'effort-task-009',
       message: 'settings pull test',
@@ -410,7 +386,7 @@ describe('session --effort plumbing: E2E', () => {
 
   it('uses the live catalog as effort authority and exposes the configured default', async () => {
     const ws = await connectWs()
-    const resultPromise = waitForWsEvent(ws, 'session:result')
+    const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'effort-task-010' })
     await sendWsRpc(ws, 'session:start', {
       taskId: 'effort-task-010',
       message: 'live catalog authority test',
@@ -497,7 +473,7 @@ describe('session --effort plumbing: E2E', () => {
   it('effort persists across turns without re-specifying it', async () => {
     const ws = await connectWs()
 
-    const firstResultPromise = waitForWsEvent(ws, 'session:result')
+    const firstResultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'effort-task-005' })
     const rpcRes = await sendWsRpc(ws, 'session:start', {
       taskId: 'effort-task-005',
       message: 'initial turn with medium effort',
@@ -519,8 +495,8 @@ describe('session --effort plumbing: E2E', () => {
     const secondResultPromise = waitForWsEvent(
       ws,
       'session:result',
-      (evt) => (evt.data as { sessionId?: string })?.sessionId === sessionId
-        && ((evt.data as { result?: string })?.result ?? '').includes('second turn no effort field'),
+      (data) => (data as { sessionId?: string })?.sessionId === sessionId
+        && ((data as { result?: string })?.result ?? '').includes('second turn no effort field'),
     )
     await sendWsRpc(ws, 'session:send', {
       sessionId,

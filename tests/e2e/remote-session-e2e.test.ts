@@ -25,8 +25,11 @@ import { WALNUT_HOME, TASKS_FILE, CLAUDE_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { startDaemonTwin, type DaemonTwin } from '../helpers/daemon-twin.js'
+import { newSessionMatcher, waitForWsEvent, waitForWsEvents } from '../helpers/ws-event-wait.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
+// Every test here starts a session with no task: a wait takes only a session it has not seen.
+const newSession = newSessionMatcher()
 
 let server: HttpServer
 let port: number
@@ -49,23 +52,6 @@ function connectWs(): Promise<WebSocket> {
     const ws = new WebSocket(`ws://localhost:${port}/ws`)
     ws.on('open', () => resolve(ws))
     ws.on('error', reject)
-  })
-}
-
-function waitForWsEvent(ws: WebSocket, eventName: string, timeoutMs = 20000): Promise<WsEvent> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`Timeout waiting for ${eventName}`)), timeoutMs)
-    const handler = (data: WebSocket.Data) => {
-      try {
-        const msg = JSON.parse(data.toString()) as WsEvent
-        if (msg.type === 'event' && msg.name === eventName) {
-          clearTimeout(timer)
-          ws.removeListener('message', handler)
-          resolve(msg)
-        }
-      } catch { /* not JSON — skip */ }
-    }
-    ws.on('message', handler)
   })
 }
 
@@ -163,7 +149,7 @@ describe('Remote session Quick Start via RPC', () => {
   it('session:start with host → session:result with correct data', async () => {
     const ws = await connectWs()
     try {
-      const resultPromise = waitForWsEvent(ws, 'session:result', 30000)
+      const resultPromise = waitForWsEvent(ws, 'session:result', newSession({ taskId: '' }), 30000)
 
       await sendWsRpc(ws, 'session:start', {
         taskId: '',
@@ -210,7 +196,7 @@ describe('Remote session follow-up', () => {
     const ws = await connectWs()
     try {
       // Start a session first — wait for the result (which gives us the sessionId)
-      const resultPromise = waitForWsEvent(ws, 'session:result', 30000)
+      const resultPromise = waitForWsEvent(ws, 'session:result', newSession({ taskId: '' }), 30000)
 
       await sendWsRpc(ws, 'session:start', {
         taskId: '',
@@ -223,7 +209,7 @@ describe('Remote session follow-up', () => {
       expect(sessionId).toBeTruthy()
 
       // Now send a follow-up
-      const followUpResult = waitForWsEvent(ws, 'session:result', 30000)
+      const followUpResult = waitForWsEvent(ws, 'session:result', { sessionId }, 30000)
 
       await sendWsRpc(ws, 'session:send', {
         sessionId,
@@ -248,7 +234,7 @@ describe('Health API for remote sessions', () => {
     // First, create a remote session to trigger daemon connection
     const ws = await connectWs()
     try {
-      const resultPromise = waitForWsEvent(ws, 'session:result', 30000)
+      const resultPromise = waitForWsEvent(ws, 'session:result', newSession({ taskId: '' }), 30000)
       await sendWsRpc(ws, 'session:start', {
         taskId: '',
         message: 'health check trigger',
@@ -279,21 +265,15 @@ describe('Remote session streaming', () => {
     try {
       // Collect all events
       const allEvents: WsEvent[] = []
-      const resultPromise = new Promise<WsEvent>((resolve) => {
-        const handler = (data: WebSocket.Data) => {
-          try {
-            const msg = JSON.parse(data.toString()) as WsEvent
-            if (msg.type === 'event') {
-              allEvents.push(msg)
-            }
-            if (msg.type === 'event' && msg.name === 'session:result') {
-              ws.removeListener('message', handler)
-              resolve(msg)
-            }
-          } catch { /* skip */ }
-        }
-        ws.on('message', handler)
-      })
+      const collect = (data: WebSocket.Data) => {
+        try {
+          const msg = JSON.parse(data.toString()) as WsEvent
+          if (msg.type === 'event') allEvents.push(msg)
+        } catch { /* skip */ }
+      }
+      ws.on('message', collect)
+      const resultPromise = waitForWsEvent(ws, 'session:result', newSession({ taskId: '' }), 30000)
+        .finally(() => ws.removeListener('message', collect))
 
       await sendWsRpc(ws, 'session:start', {
         taskId: '',
@@ -320,7 +300,7 @@ describe('Model override', () => {
   it('session:start with model → session record stores cliModel', async () => {
     const ws = await connectWs()
     try {
-      const resultPromise = waitForWsEvent(ws, 'session:result', 30000)
+      const resultPromise = waitForWsEvent(ws, 'session:result', newSession({ taskId: '' }), 30000)
 
       await sendWsRpc(ws, 'session:start', {
         taskId: '',
@@ -362,7 +342,7 @@ describe('Permission mode', () => {
   it('session:start with mode=plan → session record stores mode', async () => {
     const ws = await connectWs()
     try {
-      const resultPromise = waitForWsEvent(ws, 'session:result', 30000)
+      const resultPromise = waitForWsEvent(ws, 'session:result', newSession({ taskId: '' }), 30000)
 
       await sendWsRpc(ws, 'session:start', {
         taskId: '',
@@ -404,30 +384,9 @@ describe('Concurrent starts', () => {
     const ws = await connectWs()
 
     try {
-      // Collect COUNT distinct session:result events on a single connection
-      const collected: WsEvent[] = []
-      const allDone = new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error(`Only got ${collected.length}/${COUNT} concurrent results`)), 60000)
-        const seenIds = new Set<string>()
-        const handler = (data: WebSocket.Data) => {
-          try {
-            const msg = JSON.parse(data.toString()) as WsEvent
-            if (msg.type === 'event' && msg.name === 'session:result') {
-              const sid = msg.data?.sessionId as string
-              if (sid && !seenIds.has(sid)) {
-                seenIds.add(sid)
-                collected.push(msg)
-                if (collected.length === COUNT) {
-                  clearTimeout(timer)
-                  ws.removeListener('message', handler)
-                  resolve()
-                }
-              }
-            }
-          } catch { /* skip */ }
-        }
-        ws.on('message', handler)
-      })
+      // Collect COUNT distinct session:result events on a single connection,
+      // each from a session no earlier test of this file started
+      const allDone = waitForWsEvents(ws, 'session:result', newSession({ taskId: '' }), COUNT, 60000)
 
       // Fire all 5 session:start RPCs concurrently
       for (let i = 0; i < COUNT; i++) {
@@ -438,7 +397,7 @@ describe('Concurrent starts', () => {
         })
       }
 
-      await allDone
+      const collected = await allDone
 
       // All 5 should succeed
       for (let i = 0; i < COUNT; i++) {
@@ -464,7 +423,7 @@ describe('Sequential follow-up messages', () => {
     const ws = await connectWs()
     try {
       // Start session
-      const firstResult = waitForWsEvent(ws, 'session:result', 30000)
+      const firstResult = waitForWsEvent(ws, 'session:result', newSession({ taskId: '' }), 30000)
       await sendWsRpc(ws, 'session:start', {
         taskId: '',
         message: 'sequential base',
@@ -488,7 +447,7 @@ describe('Sequential follow-up messages', () => {
           await new Promise(r => setTimeout(r, 300))
         }
 
-        const resultPromise = waitForWsEvent(ws, 'session:result', 30000)
+        const resultPromise = waitForWsEvent(ws, 'session:result', { sessionId }, 30000)
         await sendWsRpc(ws, 'session:send', {
           sessionId,
           message: `sequential follow-up ${i}`,
@@ -512,7 +471,7 @@ describe('Error recovery', () => {
     const ws = await connectWs()
     try {
       // Start a session and wait for completion
-      const startResult = waitForWsEvent(ws, 'session:result', 30000)
+      const startResult = waitForWsEvent(ws, 'session:result', newSession({ taskId: '' }), 30000)
       await sendWsRpc(ws, 'session:start', {
         taskId: '',
         message: 'error recovery base',
@@ -536,7 +495,7 @@ describe('Error recovery', () => {
       expect(session.process_status).toBe('stopped')
 
       // Send a follow-up message — session should resume and produce a new result
-      const recoveryResult = waitForWsEvent(ws, 'session:result', 30000)
+      const recoveryResult = waitForWsEvent(ws, 'session:result', { sessionId }, 30000)
       await sendWsRpc(ws, 'session:send', { sessionId, message: 'recovery after completion' })
       const result2 = await recoveryResult
       expect(result2.data?.sessionId).toBe(sessionId)
@@ -555,7 +514,7 @@ describe('Session record fields', () => {
   it('session record has host, cwd, and outputFile set', async () => {
     const ws = await connectWs()
     try {
-      const resultPromise = waitForWsEvent(ws, 'session:result', 30000)
+      const resultPromise = waitForWsEvent(ws, 'session:result', newSession({ taskId: '' }), 30000)
       await sendWsRpc(ws, 'session:start', {
         taskId: '',
         message: 'record fields test',
@@ -604,7 +563,7 @@ describe('Health monitor detects process exit', () => {
     const ws = await connectWs()
     try {
       // Start a slow session (2s delay before output — fast enough but still exercises the delay path)
-      const resultPromise = waitForWsEvent(ws, 'session:result', 30000)
+      const resultPromise = waitForWsEvent(ws, 'session:result', newSession({ taskId: '' }), 30000)
       await sendWsRpc(ws, 'session:start', {
         taskId: '',
         message: 'slow:2000 health monitor test',
@@ -642,7 +601,7 @@ describe('No duplicate session:result on follow-up', () => {
     const ws = await connectWs()
     try {
       // Start a session and wait for the first result
-      const startResult = waitForWsEvent(ws, 'session:result', 30000)
+      const startResult = waitForWsEvent(ws, 'session:result', newSession({ taskId: '' }), 30000)
       await sendWsRpc(ws, 'session:start', {
         taskId: '',
         message: 'duplicate check base',
@@ -709,7 +668,7 @@ describe('Session status during follow-up execution', () => {
       // Start a session. snapshot-clean-turn keeps the mock CLI alive after its
       // result, like the real stream-json CLI: a one-shot mock exits at its result,
       // and the daemon then (correctly) reports the dead CLI as 'stopped', not idle.
-      const startResult = waitForWsEvent(ws, 'session:result', 30000)
+      const startResult = waitForWsEvent(ws, 'session:result', newSession({ taskId: '' }), 30000)
       await sendWsRpc(ws, 'session:start', {
         taskId: '',
         message: 'slow:2000 snapshot-clean-turn:status lifecycle test',
@@ -744,7 +703,7 @@ describe('Session status during follow-up execution', () => {
       }
       ws.on('message', statusHandler)
 
-      const followUpResult = waitForWsEvent(ws, 'session:result', 30000)
+      const followUpResult = waitForWsEvent(ws, 'session:result', { sessionId }, 30000)
       await sendWsRpc(ws, 'session:send', { sessionId, message: 'snapshot-clean-turn:status follow-up' })
       await followUpResult
 
@@ -778,7 +737,7 @@ describe('Session history API', () => {
       // A LOCAL session (no host). History is read from the CLI's canonical
       // transcript (~/.claude/projects), which the mock CLI writes only in its
       // snapshot-clean-turn mode (the real long-running FIFO CLI's turn shape).
-      const resultPromise = waitForWsEvent(ws, 'session:result', 30000)
+      const resultPromise = waitForWsEvent(ws, 'session:result', newSession({ taskId: '' }), 30000)
       await sendWsRpc(ws, 'session:start', {
         taskId: '',
         message: 'snapshot-clean-turn:history api test',

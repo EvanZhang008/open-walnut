@@ -23,6 +23,7 @@ import type { Server as HttpServer } from 'node:http'
 import { WebSocket } from 'ws'
 import yaml from 'js-yaml'
 import { isLiveTest } from '../helpers/live.js'
+import { waitForWsEvent } from '../helpers/ws-event-wait.js'
 
 // ── Helpers ──
 
@@ -51,33 +52,6 @@ interface WsEvent {
   name?: string
   data?: Record<string, unknown>
   [key: string]: unknown
-}
-
-function waitForWsEvent(
-  ws: WebSocket,
-  eventName: string,
-  timeoutMs = 120_000,
-  filter?: (frame: WsEvent) => boolean,
-): Promise<WsEvent> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error(`Timed out waiting for ${eventName} after ${timeoutMs}ms`)),
-      timeoutMs,
-    )
-    const handler = (raw: WebSocket.RawData) => {
-      const frame = JSON.parse(raw.toString()) as WsEvent
-      if (frame.type === 'event' && frame.name === eventName) {
-        const taskId = (frame.data as Record<string, unknown>)?.taskId
-        console.log(`[WS] received ${eventName}: taskId=${taskId}, match=${!filter || filter(frame)}`)
-        if (!filter || filter(frame)) {
-          clearTimeout(timer)
-          ws.off('message', handler)
-          resolve(frame)
-        }
-      }
-    }
-    ws.on('message', handler)
-  })
 }
 
 function sendWsRpc(ws: WebSocket, method: string, payload: unknown): Promise<WsEvent> {
@@ -267,12 +241,7 @@ describe.skipIf(!isLiveTest())('Session transport live (real SSH + real Claude)'
     const ws = await connectWs()
     // Filter to only our test task's result — other sessions may complete concurrently
     // Use 3-minute wait — real Claude CLI startup over SSH can take time
-    const resultPromise = waitForWsEvent(
-      ws,
-      'session:result',
-      180_000,
-      (frame) => (frame.data as Record<string, unknown>)?.taskId === testTaskId,
-    )
+    const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: testTaskId }, 180_000)
 
     // Start a remote session on devbox with a minimal prompt
     console.log(`Starting remote session for task ${testTaskId}...`)
