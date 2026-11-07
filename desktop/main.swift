@@ -2249,6 +2249,25 @@ extension AppDelegate: WKUIDelegate {
                  decisionHandler: @escaping (WKPermissionDecision) -> Void) {
         decisionHandler(linkPolicy.isLoopback(origin.host) && origin.port == (serverPort ?? 3456) && type == .microphone ? .grant : .deny)
     }
+
+    // A page's <input type="file"> (attach files or images to a message): on macOS
+    // WKWebView shows no picker unless the app opens one, and answers "cancelled".
+    func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters,
+                 initiatedByFrame frame: WKFrameInfo,
+                 completionHandler: @escaping ([URL]?) -> Void) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = parameters.allowsDirectories
+        panel.allowsMultipleSelection = parameters.allowsMultipleSelection
+        panel.resolvesAliases = true
+        guard let window = webView.window else {
+            completionHandler(panel.runModal() == .OK ? panel.urls : nil)
+            return
+        }
+        panel.beginSheetModal(for: window) { response in
+            completionHandler(response == .OK ? panel.urls : nil)
+        }
+    }
 }
 
 // MARK: - WKNavigationDelegate
