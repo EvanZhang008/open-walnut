@@ -33,8 +33,6 @@ const NOT_A_ROW_LINK: Record<string, string> = {
     'The open task\'s own detail header, not a row in a list.',
   'components/tasks/PhoneNeedsYouStrip.tsx: t.project':
     'A phone chip that is one tap target; a 15 px name inside it is no target (phone-fixes-r4.css R3-04).',
-  'components/tasks/TodoPanel.tsx: task.project || \'Inbox\'':
-    'Recent\'s "group by project" heading over a run of rows (its first row\'s project), not a row.',
   'components/org/OrgChannelList.tsx: m.project':
     'A project that moved to another VP on the Org page: a project row, not a task row.',
 };
