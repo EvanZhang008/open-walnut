@@ -495,10 +495,14 @@ test('a narrow corner (a page\'s left column): the card reads the whole action a
   }
   if (process.env.APR_SHOTS) await card.screenshot({ path: `${process.env.APR_SHOTS}/approval-narrow-card.png` })
 
-  // Made smaller by the person, it stays its two short lines, buttons kept.
+  // Made smaller by the person, it stays short: its two lines, and in a corner this narrow the
+  // buttons on a row of their own under them (approvals.css .approval-line-meta: the time is never
+  // cut to "9:56 le" to make room), buttons kept.
   await card.getByTestId('approval-minimize').click()
   await expect(card).toHaveClass(/approval-card-line/)
-  await expect.poll(async () => Math.round((await card.boundingBox())!.height)).toBeLessThanOrEqual(64)
+  await expect.poll(async () => Math.round((await card.boundingBox())!.height)).toBeLessThanOrEqual(92)
+  const clock = card.locator('.approval-clock').first()
+  expect(await clock.evaluate((e) => e.scrollWidth <= e.clientWidth + 1)).toBe(true)
   await expect(card.getByRole('button', { name: 'Deny', exact: true })).toBeVisible()
   const res = await request.post(`/api/v1/approvals/${made.approval.id}/answer`, { data: { decision: 'deny' } })
   expect(res.ok()).toBe(true)
