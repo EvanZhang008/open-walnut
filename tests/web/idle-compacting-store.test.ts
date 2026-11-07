@@ -55,6 +55,18 @@ describe("a task's circle while Walnut's idle compaction runs", () => {
     expect(taskCircleClass(task, running)).toBe('task-circle-running')
   })
 
+  it("says which of Walnut's compactions runs: the context-full recovery is quiet too", () => {
+    ws.emit(IDLE_COMPACTION_EVENT, { sessionId: SID, active: true, reason: 'context' })
+    expect(idleCompactingStore.kind(SID, true)).toBe('context')
+    expect(taskCircleClass(task, running)).toBe('task-circle-session')
+    ws.emit(IDLE_COMPACTION_EVENT, { sessionId: SID, active: true })
+    expect(idleCompactingStore.kind(SID, true)).toBe('idle')
+    ws.emit(IDLE_COMPACTION_EVENT, { sessionId: SID, active: false, reason: 'context' })
+    expect(idleCompactingStore.kind(SID, true)).toBeNull()
+    vi.advanceTimersByTime(IDLE_COMPACTING_END_GRACE_MS)
+    expect(idleCompactingStore.kind(SID)).toBeNull()
+  })
+
   it('a reconnect forgets what it may have missed the end of', () => {
     const seen: number[] = []
     const off = idleCompactingStore.subscribe(() => seen.push(1))

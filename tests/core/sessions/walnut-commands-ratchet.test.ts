@@ -16,7 +16,7 @@ import path from 'node:path';
 import { frameForSource } from '../../../src/core/sessions/send-frame.js';
 import { isPersonSource } from '../../../src/core/sessions/send-sent-by.js';
 import {
-  LEGACY_CONTEXT_COMPACT_HISTORY_TEXTS, WALNUT_COMMANDS, WALNUT_COMMAND_HISTORY_TEXT, WALNUT_COMMAND_MARK, isWalnutCommandNotice,
+  LEGACY_CONTEXT_COMPACT_HISTORY_TEXTS, LEGACY_IDLE_COMPACT_HISTORY_TEXTS, WALNUT_COMMANDS, WALNUT_COMMAND_HISTORY_TEXT, WALNUT_COMMAND_MARK, isWalnutCommandNotice,
   walnutCommandNotice, walnutNoticeKind,
 } from '../../../src/core/sessions/walnut-commands.js';
 import { HISTORY_CACHE_SCHEMA } from '../../../src/core/history-disk-cache.js';
@@ -181,11 +181,12 @@ describe('every listed command reads as Walnut\'s notice', () => {
     // A cached parse holds the notice text it was made with until the schema moves (2026-11-05: the
     // shorter recovery notice was not served for sessions parsed under the first one). Changing a
     // text here: bump HISTORY_CACHE_SCHEMA (history-disk-cache.ts), move the old text to
-    // LEGACY_CONTEXT_COMPACT_HISTORY_TEXTS, then update this pin.
+    // LEGACY_CONTEXT_COMPACT_HISTORY_TEXTS (LEGACY_IDLE_COMPACT_HISTORY_TEXTS for the idle one), then
+    // update this pin.
     expect({ schema: HISTORY_CACHE_SCHEMA, notices: [...WALNUT_COMMANDS.map((c) => c.notice), WALNUT_COMMAND_HISTORY_TEXT] }).toEqual({
-      schema: 11,
+      schema: 12,
       notices: [
-        'Walnut sent /compact while the session was idle, before its prompt cache expired, so the next message reads a summary instead of the whole conversation.',
+        'Walnut sent /compact while the session was idle, before its prompt cache would expire, so the next message reads a summary instead of the whole conversation.',
         'Claude Code answered "Prompt is too long", so Walnut asked it to compact this conversation.',
         'Walnut sent /compact to compact this session.',
       ],
@@ -193,6 +194,10 @@ describe('every listed command reads as Walnut\'s notice', () => {
     for (const old of LEGACY_CONTEXT_COMPACT_HISTORY_TEXTS) {
       expect(isWalnutCommandNotice(old), old).toBe(true);
       expect(walnutNoticeKind(old), old).toBe('context');
+    }
+    for (const old of LEGACY_IDLE_COMPACT_HISTORY_TEXTS) {
+      expect(isWalnutCommandNotice(old), old).toBe(true);
+      expect(walnutNoticeKind(old), old).toBe('idle');
     }
     expect(WALNUT_COMMANDS.map((c) => walnutNoticeKind(c.notice))).toEqual(['idle', 'context']);
   });

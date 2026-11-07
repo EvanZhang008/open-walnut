@@ -44,6 +44,11 @@ export const LEGACY_CONTEXT_COMPACT_HISTORY_TEXTS: readonly string[] = [
   'Walnut asked to compact this conversation because it no longer fit the model\'s context window ("Prompt is too long").',
 ];
 
+/** The same for the idle compaction's notice (HISTORY_CACHE_SCHEMA 12: "would expire", as it runs before). */
+export const LEGACY_IDLE_COMPACT_HISTORY_TEXTS: readonly string[] = [
+  'Walnut sent /compact while the session was idle, before its prompt cache expired, so the next message reads a summary instead of the whole conversation.',
+];
+
 export interface WalnutCommand {
   /** The send source that carries it (send-sent-by: an agent's). */
   source: string;
@@ -98,7 +103,7 @@ export function isWalnutCommandNotice(text: string | undefined): boolean {
  */
 export function walnutNoticeKind(text: string | undefined): 'idle' | 'context' | 'other' | undefined {
   if (!text) return undefined;
-  if (text === IDLE_COMPACT_HISTORY_TEXT) return 'idle';
+  if (text === IDLE_COMPACT_HISTORY_TEXT || LEGACY_IDLE_COMPACT_HISTORY_TEXTS.includes(text)) return 'idle';
   if (text === CONTEXT_COMPACT_HISTORY_TEXT || LEGACY_CONTEXT_COMPACT_HISTORY_TEXTS.includes(text)) return 'context';
   return text === WALNUT_COMMAND_HISTORY_TEXT ? 'other' : undefined;
 }

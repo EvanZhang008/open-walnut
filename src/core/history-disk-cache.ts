@@ -63,8 +63,11 @@ import type { SessionHistoryMessage } from './session-history.js';
  *
  * 11 (2026-11-06): an App's AI-only brief (sessions/app-brief.ts) is stored as its fold, never its
  * body, in `text` and `rawText` (lib/ai-only-envelope.ts).
+ *
+ * 12 (2026-11-07): the idle compaction's notice says "before its prompt cache would expire" (it
+ * runs before the expiry, never after).
  */
-export const HISTORY_CACHE_SCHEMA = 11;
+export const HISTORY_CACHE_SCHEMA = 12;
 
 /**
  * The incremental read state of the parse, kept beside it (`inc` in the file), so a
