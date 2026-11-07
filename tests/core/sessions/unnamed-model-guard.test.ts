@@ -5,13 +5,13 @@
  */
 import { describe, it, expect, beforeEach } from 'vitest'
 import {
-  isClaudeModelId, claudeFallbackAlias, decideUnnamedModel, guardUnnamedModel,
-  insertModelArg, modelOfSettingsText, _resetUnnamedModelGuardCache, type UnnamedModelDeps,
+  isClaudeModelId, claudeFallback, decideUnnamedModel, guardUnnamedModel, resolvedModel, cliDefaultOf,
+  insertModelArg, modelOfSettingsText, modelPartOfSettingsText, _resetUnnamedModelGuardCache, type UnnamedModelDeps,
 } from '../../../src/core/sessions/unnamed-model-guard.js'
 
-function deps(value: string | null, mainModel?: string, from?: string): UnnamedModelDeps {
+function deps(value: string | null, mainModel?: string, from?: string, pins?: Record<string, string>): UnnamedModelDeps {
   return {
-    async readDefault() { return { value, ...(from ? { from } : {}) } },
+    async readDefault() { return { value, ...(from ? { from } : {}), ...(pins ? { pins } : {}) } },
     async mainModel() { return mainModel },
   }
 }
@@ -35,26 +35,65 @@ describe('isClaudeModelId', () => {
   })
 })
 
-describe('claudeFallbackAlias', () => {
+describe('claudeFallback', () => {
   it('takes the family of Walnut\'s main model, else opus', () => {
-    expect(claudeFallbackAlias('global.anthropic.claude-opus-5-5')).toBe('opus')
-    expect(claudeFallbackAlias('global.anthropic.claude-sonnet-5-5[1m]')).toBe('sonnet')
-    expect(claudeFallbackAlias('claude-haiku-5-5')).toBe('haiku')
-    expect(claudeFallbackAlias('global.anthropic.claude-fable-5-1')).toBe('fable')
-    expect(claudeFallbackAlias(undefined)).toBe('opus')
-    expect(claudeFallbackAlias('')).toBe('opus')
+    expect(claudeFallback('global.anthropic.claude-opus-5-5')).toBe('opus')
+    expect(claudeFallback('global.anthropic.claude-sonnet-5-5[1m]')).toBe('sonnet')
+    expect(claudeFallback('claude-haiku-5-5')).toBe('haiku')
+    expect(claudeFallback('global.anthropic.claude-fable-5-1')).toBe('fable')
+    expect(claudeFallback(undefined)).toBe('opus')
+    expect(claudeFallback('')).toBe('opus')
     // A main model outside Claude never becomes the fallback.
-    expect(claudeFallbackAlias('gpt-6.1-sol')).toBe('opus')
+    expect(claudeFallback('gpt-6.1-sol')).toBe('opus')
+  })
+
+  it('skips a family whose pin sends its alias outside Claude, and ends on a full Claude id', () => {
+    expect(claudeFallback('global.anthropic.claude-opus-5-5', { opus: 'gpt-6.1-sol' })).toBe('sonnet')
+    expect(claudeFallback('global.anthropic.claude-opus-5-5', { opus: 'global.anthropic.claude-opus-5-5[1m]' })).toBe('opus')
+    const allAway = { opus: 'gpt-6.1-sol', sonnet: 'gpt-6-astra', haiku: 'gpt-6-luna', fable: 'gpt-6-luna' }
+    expect(claudeFallback('global.anthropic.claude-opus-5-5', allAway)).toBe('global.anthropic.claude-opus-5-5')
+    expect(claudeFallback(undefined, allAway)).toMatch(/claude/)
+  })
+})
+
+describe('resolvedModel', () => {
+  it('sends an alias (and the built-in default) through its family pin, a model id as itself', () => {
+    expect(resolvedModel('opus', { opus: 'gpt-6.1-sol' })).toBe('gpt-6.1-sol')
+    expect(resolvedModel('opus[1m]', { opus: 'gpt-6.1-sol' })).toBe('gpt-6.1-sol')
+    expect(resolvedModel(null, { opus: 'gpt-6.1-sol' })).toBe('gpt-6.1-sol')
+    expect(resolvedModel('sonnet', { opus: 'gpt-6.1-sol' })).toBe('sonnet')
+    expect(resolvedModel('global.anthropic.claude-opus-5-5', { opus: 'gpt-6.1-sol' })).toBe('global.anthropic.claude-opus-5-5')
+    expect(resolvedModel(null, undefined)).toBe('')
+  })
+})
+
+describe('cliDefaultOf', () => {
+  const part = (t: object) => modelPartOfSettingsText(JSON.stringify(t))
+  const paths = ['/p/.claude/settings.local.json', '/p/.claude/settings.json', '~/.claude/settings.json']
+  it('ANTHROPIC_MODEL in a settings file env outranks every model key (the CLI lays env over process.env)', () => {
+    const r = cliDefaultOf({}, [part({}), part({}), part({ model: 'opus', env: { ANTHROPIC_MODEL: 'gpt-6.1-sol' } })], paths)
+    expect(r).toMatchObject({ value: 'gpt-6.1-sol', from: 'ANTHROPIC_MODEL' })
+    expect(decideUnnamedModel(r, 'global.anthropic.claude-opus-5-5')).toBe('opus')
+  })
+  it('a settings env wins over the process env, a higher file over a lower one', () => {
+    expect(cliDefaultOf({ ANTHROPIC_MODEL: 'opus' }, [part({}), part({}), part({ env: { ANTHROPIC_MODEL: 'gpt-6.1-sol' } })], paths).value).toBe('gpt-6.1-sol')
+    expect(cliDefaultOf({}, [part({ model: 'sonnet' }), part({}), part({ model: 'gpt-6.1-sol' })], paths)).toMatchObject({ value: 'sonnet', from: paths[0] })
+    expect(cliDefaultOf({}, [part({}), part({}), part({})], paths).value).toBeNull()
+  })
+  it('collects the alias pins, so a pinned opus is judged by where it lands', () => {
+    const r = cliDefaultOf({}, [part({}), part({}), part({ model: 'opus', env: { ANTHROPIC_DEFAULT_OPUS_MODEL: 'gpt-6.1-sol' } })], paths)
+    expect(r.pins).toEqual({ opus: 'gpt-6.1-sol' })
+    expect(decideUnnamedModel(r, 'global.anthropic.claude-opus-5-5')).toBe('sonnet')
   })
 })
 
 describe('decideUnnamedModel', () => {
   it('keeps a Claude default and an unset one, replaces any other', () => {
-    expect(decideUnnamedModel(null, 'x')).toBeUndefined()
-    expect(decideUnnamedModel('global.anthropic.claude-opus-5-5[1m]', undefined)).toBeUndefined()
-    expect(decideUnnamedModel('sonnet', undefined)).toBeUndefined()
-    expect(decideUnnamedModel('gpt-6.1-sol', 'global.anthropic.claude-opus-5-5')).toBe('opus')
-    expect(decideUnnamedModel('gpt-6.1-sol', 'global.anthropic.claude-sonnet-5-5')).toBe('sonnet')
+    expect(decideUnnamedModel({ value: null }, 'x')).toBeUndefined()
+    expect(decideUnnamedModel({ value: 'global.anthropic.claude-opus-5-5[1m]' }, undefined)).toBeUndefined()
+    expect(decideUnnamedModel({ value: 'sonnet' }, undefined)).toBeUndefined()
+    expect(decideUnnamedModel({ value: 'gpt-6.1-sol' }, 'global.anthropic.claude-opus-5-5')).toBe('opus')
+    expect(decideUnnamedModel({ value: 'gpt-6.1-sol' }, 'global.anthropic.claude-sonnet-5-5')).toBe('sonnet')
   })
 })
 
@@ -73,6 +112,11 @@ describe('guardUnnamedModel', () => {
   it('adds the fallback for a non-Claude default and says where it came from', async () => {
     const d = deps('gpt-6.1-sol', 'global.anthropic.claude-opus-5-5', '~/.claude/settings.json')
     expect(await guardUnnamedModel('__local__', '/w', d)).toEqual({ cliDefault: 'gpt-6.1-sol', from: '~/.claude/settings.json', use: 'opus' })
+  })
+
+  it('replaces a Claude-looking alias whose pin lands outside Claude', async () => {
+    const out = await guardUnnamedModel('__local__', '/w', deps('opus', 'global.anthropic.claude-opus-5-5', undefined, { opus: 'gpt-6.1-sol' }))
+    expect(out).toMatchObject({ cliDefault: 'opus', resolved: 'gpt-6.1-sol', use: 'sonnet' })
   })
 
   it('leaves a Claude default alone', async () => {

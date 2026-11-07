@@ -3070,7 +3070,7 @@ export class ClaudeCodeSession {
           this._cliModel = decision.use
           log.session.warn('unnamed model guard: the CLI default is not a Claude model; starting on Claude', {
             taskId: this.taskId, sessionId: resumeSessionId ?? opts?.preassignedSessionId, host: host ?? '__local__',
-            cliDefault: decision.cliDefault, from: decision.from, model: decision.use,
+            cliDefault: decision.cliDefault, resolved: decision.resolved, from: decision.from, model: decision.use,
           })
         }
       }
