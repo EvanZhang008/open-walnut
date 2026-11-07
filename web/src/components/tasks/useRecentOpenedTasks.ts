@@ -8,6 +8,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Task } from '@open-walnut/core';
 import { fetchTasksByIds } from '@/api/tasks';
+import { useEvent } from '@/hooks/useWebSocket';
+import { deletedTaskId } from '../../../../src/core/task-deleted-id';
 import { recentRowOrder, useRecentOpened, type HeldRow, type RecentOpen } from '@/utils/recent-opened';
 
 export interface RecentOpenedRows {
@@ -56,6 +58,13 @@ export function useRecentOpenedTasks(listed: readonly Task[], listLoading: boole
     });
     return () => { cancelled = true; clearTimeout(timer); };
   }, [missingKey, retry]);
+
+  // A deleted task leaves the list: the board list drops it, and its read copy is forgotten so
+  // the row never falls back to it.
+  useEvent('task:deleted', (data) => {
+    const id = deletedTaskId(data);
+    if (id) setRead((prev) => (prev.get(id) === null ? prev : new Map(prev).set(id, null)));
+  });
 
   // Rows opened from the list this visit (recentRowOrder lets one go when it is opened elsewhere).
   const heldRef = useRef(new Map<string, HeldRow>());

@@ -160,6 +160,10 @@ test('Recent lists what was opened, newest first, flat, and greys what is open n
   await expect.poll(() => recentRows(page, mine), { timeout: 20_000 }).toEqual([a, d, b, c])
   const stored = await page.evaluate((k) => JSON.parse(localStorage.getItem(k) ?? '[]') as Array<{ id: string }>, KEY)
   expect(stored.map((e) => e.id).filter((id) => mine.includes(id))).toEqual([a, d, b, c])
+
+  // A task deleted elsewhere leaves the list while it is on screen (its copy is never shown again).
+  expect((await fetch(`${API}/api/tasks/${c}`, { method: 'DELETE' })).ok).toBe(true)
+  await expect.poll(() => recentRows(page, mine), { timeout: 15_000 }).toEqual([a, d, b])
 })
 
 test('an open made on another device joins the list when this window comes back', async ({ page, baseURL }) => {

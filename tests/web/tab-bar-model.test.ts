@@ -58,8 +58,9 @@ describe('visibleTabBarTabs', () => {
   })
 
   it('always draws the tab the panel is on, hidden or empty', () => {
+    // (Recent and the custom tiers stay while empty.)
     expect(ids(visibleTabBarTabs(tabs, { active: 'wait', counts: { wait: 0 }, hidden: ['wait', 'all', 'pinned'], hideEmpty: true })))
-      .toEqual(['wait', 'ct_a', 'ct_b'])
+      .toEqual(['wait', 'ct_a', 'ct_b', 'recent'])
   })
 
   it('highlights nothing on the Projects view, which is not a tab', () => {
