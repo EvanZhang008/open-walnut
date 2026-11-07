@@ -45,7 +45,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          sparse-checkout: scripts/leak-scan
+          sparse-checkout: |
+            scripts/leak-scan
+            scripts/lib/gh-retry.sh
+          sparse-checkout-cone-mode: false
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
@@ -56,7 +59,8 @@ jobs:
           set -euo pipefail
           d="$RUNNER_TEMP/run"; mkdir -p "$d/artifacts"
           curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 -H "Authorization: Bearer $GH_TOKEN" -o "$d/logs.zip" "https://api.github.com/repos/$REPO/actions/runs/$RUN_ID/logs"
-          gh api --paginate "repos/$REPO/actions/runs/$RUN_ID/artifacts?per_page=100" \
+          . scripts/lib/gh-retry.sh
+          gh_retry gh api --paginate "repos/$REPO/actions/runs/$RUN_ID/artifacts?per_page=100" \
             --jq '.artifacts[] | select(.expired | not) | select(.size_in_bytes < 1073741824) | "\(.id) \(.name)"' |
           while read -r id name; do
             curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 -H "Authorization: Bearer $GH_TOKEN" -o "$d/artifacts/$id.zip" "https://api.github.com/repos/$REPO/actions/artifacts/$id/zip"
@@ -80,7 +84,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          sparse-checkout: scripts/leak-scan
+          sparse-checkout: |
+            scripts/leak-scan
+            scripts/lib/gh-retry.sh
+          sparse-checkout-cone-mode: false
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
@@ -89,7 +96,8 @@ jobs:
           set -euo pipefail
           d="$RUNNER_TEMP/release"; mkdir -p "$d"
           since=$(date -u -v-26H +%Y-%m-%dT%H:%M:%SZ)
-          gh api "repos/$REPO/releases?per_page=40" > "$RUNNER_TEMP/releases.json"
+          . scripts/lib/gh-retry.sh
+          gh_retry sh -c 'gh api "repos/$REPO/releases?per_page=40" > "$RUNNER_TEMP/releases.json"'
           jq -r --arg since "$since" '.[] | select(.draft | not)
             | select(.published_at >= $since or ([.assets[].updated_at] | any(. >= $since))) | .tag_name' "$RUNNER_TEMP/releases.json" > "$RUNNER_TEMP/tags.txt"
           echo "releases changed since $since:"; cat "$RUNNER_TEMP/tags.txt"
@@ -97,7 +105,7 @@ jobs:
             mkdir -p "$d/$tag"
             jq --arg t "$tag" '.[] | select(.tag_name == $t) | {name, body}' "$RUNNER_TEMP/releases.json" > "$d/$tag/release-text.json"
             if [ "$(jq --arg t "$tag" '[.[] | select(.tag_name == $t) | .assets[]] | length' "$RUNNER_TEMP/releases.json")" -gt 0 ]; then
-              gh release download "$tag" -R "$REPO" -D "$d/$tag"
+              gh_retry gh release download "$tag" -R "$REPO" -D "$d/$tag" --clobber
             fi
           done < "$RUNNER_TEMP/tags.txt"
           du -sh "$d"
@@ -165,9 +173,10 @@ jobs:
           set -euo pipefail
           d="$RUNNER_TEMP/talk"; mkdir -p "$d"
           since=$(date -u -d '3 days ago' +%Y-%m-%dT%H:%M:%SZ)
-          gh api --paginate "repos/$REPO/issues?state=all&since=$since&per_page=100" > "$d/issues.json"
-          gh api --paginate "repos/$REPO/issues/comments?since=$since&per_page=100" > "$d/issue-comments.json"
-          gh api --paginate "repos/$REPO/pulls/comments?since=$since&per_page=100" > "$d/review-comments.json"
+          . scripts/lib/gh-retry.sh
+          gh_retry sh -c 'gh api --paginate "repos/$REPO/issues?state=all&since=$1&per_page=100" > "$2/issues.json"' _ "$since" "$d"
+          gh_retry sh -c 'gh api --paginate "repos/$REPO/issues/comments?since=$1&per_page=100" > "$2/issue-comments.json"' _ "$since" "$d"
+          gh_retry sh -c 'gh api --paginate "repos/$REPO/pulls/comments?since=$1&per_page=100" > "$2/review-comments.json"' _ "$since" "$d"
       - name: Scan the issue and pull request text (a count only)
         if: ${{ !cancelled() }}
         env:
