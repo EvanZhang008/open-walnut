@@ -98,6 +98,24 @@ describe('trigger_list on the host', () => {
     expect(r.outcome).toContain('2 trigger(s)')
   })
 
+  it('honors the server op\'s name, state, task and limit filters instead of listing everything', async () => {
+    const { call } = setup()
+    const one = result(await call('trigger_list', { name: 'JOB-CI' }))
+    expect(one.triggers.map((t: { id: string }) => t.id)).toEqual(['job-ci'])
+    expect(one).toMatchObject({ count: 1 })
+    expect(one.outcome).toContain('1 trigger(s) matching')
+    const none = result(await call('trigger_list', { name: 'does-not-match', state: 'paused', limit: 1 }))
+    expect(none).toMatchObject({ count: 0, triggers: [] })
+    expect(none.next).toContain('None of this host')
+    expect(result(await call('trigger_list', { state: 'paused' })).count).toBe(0)
+    expect(result(await call('trigger_list', { state: 'armed' })).count).toBe(2)
+    expect(result(await call('trigger_list', { task: TASK.slice(0, 8) })).count).toBe(2)
+    expect(result(await call('trigger_list', { task: 'someone-else' })).count).toBe(0)
+    const page = result(await call('trigger_list', { limit: 1 }))
+    expect(page).toMatchObject({ count: 2, shown: 1, more: 1 })
+    expect(page.triggers.map((t: { id: string }) => t.id)).toEqual(['job-pr'])
+  })
+
   it('says what it cannot see, and needs the server where the daemon has no trigger table', async () => {
     const { call } = setup()
     expect(result(await call('trigger_list')).outcome).toContain('other hosts')

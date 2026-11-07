@@ -2058,7 +2058,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     return undefined
   }
 
-  function opTriggerList(home: string): GatewayResult {
+  function opTriggerList(home: string, args: Record<string, unknown> = {}): GatewayResult {
     const table = deps.triggers!
     const host = slices.get(home)?.host ?? ''
     const holds = holdsOf(home)
@@ -2081,10 +2081,23 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       if (hold.home !== home || hold.on || hold.deleted || !hold.def || triggers.some((t) => t.id === id)) continue
       triggers.push(row(hold.def, 'paused'))
     }
+    // The server's filters (src/ops/triggers.ts), honored here rather than ignored: a caller that
+    // asked for one trigger must not read every one as its answer. This host's rows stay whole.
+    const needle = typeof args.name === 'string' ? args.name.trim().toLowerCase() : ''
+    const wanted = typeof args.state === 'string' ? args.state : ''
+    const forTask = typeof args.task === 'string' ? args.task.trim() : ''
+    const matched = triggers.filter((t) => (!wanted || t.state === wanted)
+      && (!forTask || (typeof t.task === 'string' && t.task.startsWith(forTask)))
+      && (!needle || [t.id, t.name].some((v) => typeof v === 'string' && v.toLowerCase().includes(needle))))
+    const limit = typeof args.limit === 'number' && args.limit >= 1 ? Math.min(Math.floor(args.limit), 500) : 25
+    const shown = matched.slice(0, limit)
     return ok({
-      count: triggers.length, triggers, offline: true, as_of: asOf(home),
-      outcome: `${triggers.length} trigger(s) this host checks for this Walnut, as this host runs them now. Triggers on other hosts, and ones paused or stopped before the server went away, are listed by the Walnut server.`,
-      next: triggers.length === 0
+      count: matched.length, ...(shown.length < matched.length ? { shown: shown.length, more: matched.length - shown.length } : {}),
+      triggers: shown, offline: true, as_of: asOf(home),
+      outcome: `${matched.length} trigger(s)${needle || wanted || forTask ? ' matching' : ''} this host checks for this Walnut, as this host runs them now. Triggers on other hosts, and ones paused or stopped before the server went away, are listed by the Walnut server.`,
+      next: triggers.length > 0 && matched.length === 0
+        ? 'None of this host\'s triggers matches; trigger_list with no name, state or task lists them all.'
+        : triggers.length === 0
         ? (createsTriggers(home) ? 'No trigger runs here. trigger_create arms one here now.' : 'No trigger runs here. trigger_create needs the Walnut server.')
         : 'trigger_test runs a check once here; trigger_pause / trigger_delete stop one here at once.',
     })
@@ -2344,7 +2357,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
         case 'open_items': if (deps.openItems) return opOpenItems(home, callerSid, args); return needsServer('"open_items"', home)
         case 'search': if (deps.search) return opSearch(home, args); return needsServer('"search"', home)
         case 'walnut_status': return opWalnutStatus(home)
-        case 'trigger_list': if (deps.triggers) return opTriggerList(home); return needsServer('"trigger_list"', home)
+        case 'trigger_list': if (deps.triggers) return opTriggerList(home, args); return needsServer('"trigger_list"', home)
         case 'trigger_test': if (deps.triggers) return await opTriggerTest(home, callerSid, args); return needsServer('"trigger_test"', home)
         case 'trigger_pause': case 'trigger_resume': case 'trigger_delete':
           if (deps.triggers) return opTriggerWrite(home, callerSid, name, args)

@@ -170,6 +170,157 @@ describe('trigger_list state', () => {
   })
 })
 
+describe('trigger_list filters, limit and compact rows', () => {
+  type Out = {
+    count: number; shown?: number; more?: number; hint?: string
+    triggers: Array<Record<string, unknown>>; clocks?: unknown[]
+  }
+  const op = () => getOp('trigger_list')!
+  const T0 = Date.parse('2026-11-06T08:00:00Z')
+  const job = (id: string, name: string, extra: Record<string, unknown> = {}, state: Record<string, unknown> = {}) => ({
+    id, name, enabled: true, schedule: { kind: 'every', everyMs: 300_000 },
+    check: { run: `bash ~/.open-walnut/triggers/${id}/check.sh ${'x'.repeat(2000)}`, host: '__local__' },
+    executor: { type: 'session', config: { target: `task-${id}` } },
+    state, ...extra,
+  })
+  const checkLog = (n: number, atMs: number) => Array.from({ length: n }, (_, i) => ({
+    atMs: atMs - i * 300_000, outcome: 'quiet', reason: 'all-seen', injected: { chars: 4000, preview: 'p'.repeat(4000) },
+  }))
+  // A registry the size of the 2026-11-06 one: about a hundred triggers, each with a long script and history.
+  const many = Array.from({ length: 120 }, (_, i) => job(`t${i}`, i === 77 ? 'VP Ops daily reflection' : `Watch ${i}`,
+    { description: `Watches thing ${i}. ${'d'.repeat(600)}`, enabled: i % 4 !== 0 },
+    { lastCheck: { atMs: T0 + i * 1000, outcome: 'quiet', reason: 'all-seen' }, checkLog: checkLog(6, T0 + i * 1000),
+      fireLog: [{ atMs: T0 - 3_600_000, outcome: 'fired', items: 2, delivery: { status: 'ok' } }], fireCount: 3,
+      ...(i % 4 === 0 ? { pausedAtMs: T0 } : {}) }))
+  const list = async (args: Record<string, unknown>, jobs: unknown[] = many) =>
+    await op().handler!(args, async () => ({ jobs })) as Out
+
+  it('answers short by default: 25 compact rows, newest activity first, with how many were left out', async () => {
+    const out = await list({})
+    expect(out.count).toBe(120)
+    expect(out.triggers).toHaveLength(25)
+    expect(out).toMatchObject({ shown: 25, more: 95 })
+    expect(out.hint).toMatch(/95 more not shown: narrow with name, task or state/)
+    expect(out.triggers[0].id).toBe('t119')
+    expect(JSON.stringify(out).length).toBeLessThan(15_000)
+    const row = out.triggers[0]
+    expect(row).toMatchObject({
+      id: 't119', state: 'armed', enabled: true, every: '5m', host: '__local__', task: 'task-t119', fires: 3,
+      last: `quiet (all-seen) at ${new Date(T0 + 119_000).toISOString()}`,
+      lastFire: `${new Date(T0 - 3_600_000).toISOString()}, 2 items, delivery ok`,
+    })
+    for (const gone of ['run', 'lastCheck', 'recentChecks']) expect(gone in row).toBe(false)
+    expect(String(row.description).length).toBeLessThanOrEqual(160)
+  })
+
+  it('name finds one trigger by a piece of its name, id or description, in any case', async () => {
+    const out = await list({ name: 'REFLECTION' })
+    expect(out.triggers.map((t) => t.id)).toEqual(['t77'])
+    expect(out).toMatchObject({ count: 1 })
+    expect('more' in out).toBe(false)
+    expect((await list({ name: 't77' })).triggers.map((t) => t.id)).toEqual(['t77'])
+    expect((await list({ name: 'thing 42.' })).triggers.map((t) => t.id)).toEqual(['t42'])
+    const none = await list({ name: 'no such watch' })
+    expect(none).toMatchObject({ count: 0, triggers: [] })
+    expect(none.hint).toBe('No trigger matches name "no such watch".')
+  })
+
+  it('state keeps only armed (or paused, or stopped) triggers', async () => {
+    const armed = await list({ state: 'armed', limit: 500 })
+    expect(armed.count).toBe(90)
+    expect(armed.triggers.every((t) => t.state === 'armed')).toBe(true)
+    const paused = await list({ state: 'paused', limit: 500 })
+    expect(paused.count).toBe(30)
+    expect(paused.triggers.every((t) => t.state === 'paused' && typeof t.pausedAt === 'string')).toBe(true)
+    expect((await list({ state: 'stopped' })).count).toBe(0)
+    expect(z.object(op().input).strict().safeParse({ state: 'on' }).success).toBe(false)
+  })
+
+  it('limit sets the page size and is capped; full brings back the whole row with a shorter page', async () => {
+    expect((await list({ limit: 3 })).triggers.map((t) => t.id)).toEqual(['t119', 't118', 't117'])
+    expect((await list({ limit: 10_000 })).triggers).toHaveLength(120)
+    expect(z.object(op().input).strict().safeParse({ limit: 0 }).success).toBe(false)
+    const full = await list({ full: true })
+    expect(full.triggers).toHaveLength(5)
+    const row = full.triggers[0]
+    expect(String(row.run)).toContain('check.sh')
+    expect(row.lastCheck).toMatchObject({ outcome: 'quiet' })
+    expect((row.recentChecks as unknown[]).length).toBe(6)
+    expect(JSON.stringify(row.recentChecks)).not.toContain('preview')
+    const one = await list({ name: 'reflection', full: true })
+    expect(one.triggers.map((t) => t.id)).toEqual(['t77'])
+  })
+
+  it('combines with task: only what wakes the task, filtered and limited the same way', async () => {
+    const calls: string[] = []
+    const out = await op().handler!({ task: 'lead', state: 'armed', limit: 1 }, async (_m: string, path: string) => {
+      calls.push(path)
+      if (path.startsWith('/tasks/')) {
+        return { root: { id: 'lead', title: 'Lead' }, routines: [
+          { id: 't1', target: 'lead', kind: 'trigger' }, { id: 't2', target: 'lead', kind: 'trigger' },
+          { id: 't4', target: 'lead', kind: 'trigger' },
+        ], clocks: [] }
+      }
+      return { jobs: many }
+    }) as Out
+    expect(calls[0]).toBe('/tasks/lead/wake-sources?team=0')
+    expect(out).toMatchObject({ count: 2, shown: 1, more: 1 })
+    expect(out.triggers[0]).toMatchObject({ id: 't2', kind: 'trigger', target: 'lead' })
+    expect('task' in out.triggers[0]).toBe(false)
+    expect(out.hint).toMatch(/1 more not shown/)
+    expect(out.hint).toMatch(/team_stop/)
+  })
+
+  it('writes the last check as one line for a fire, a quiet check and an error', async () => {
+    const at = Date.parse('2026-11-07T01:02:03Z')
+    const jobs = [
+      job('f', 'F', {}, { lastCheck: { atMs: at, outcome: 'fired', items: 1, retryPending: true } }),
+      job('e', 'E', {}, { lastCheck: { atMs: at - 1, outcome: 'error', error: `jq: command not found\n${'y'.repeat(400)}` } }),
+      job('n', 'N'),
+    ]
+    const rows = (await list({}, jobs)).triggers
+    expect(rows[0].last).toBe('fired 1 item at 2026-11-07T01:02:03.000Z, delivery retrying')
+    expect(String(rows[1].last)).toMatch(/^error at 2026-11-07T01:02:02\.999Z: jq: command not found y+…$/)
+    expect(String(rows[1].last).length).toBeLessThan(220)
+    expect('last' in rows[2]).toBe(false)
+    expect('lastFire' in rows[2]).toBe(false)
+  })
+
+  it('lastFire is the newest fire by its time, not the head of the log a late fire was put at', async () => {
+    const t1 = Date.parse('2026-11-07T01:00:00Z'), t0 = Date.parse('2026-11-07T00:00:00Z')
+    // A backlog fire from 00:00 arrived after the 01:00 one, so it heads the log (mergeFireAttempt).
+    const late = job('late', 'Late', {}, {
+      lastCheck: { atMs: t1, outcome: 'fired', items: 1 },
+      fireLog: [{ atMs: t0, outcome: 'fired', items: 4, delivery: { status: 'ok' } }, { atMs: t1, outcome: 'fired', items: 1, delivery: { status: 'ok' } }],
+      checkLog: [{ atMs: t0, outcome: 'fired', items: 4 }, { atMs: t1, outcome: 'fired', items: 1 }],
+    })
+    const row = (await list({}, [late])).triggers[0]
+    expect(row.lastFire).toBe('2026-11-07T01:00:00.000Z, 1 item, delivery ok')
+  })
+
+  it('a task view puts a plain timed routine by its last run among the triggers, and keeps it inside the limit', async () => {
+    const t0 = Date.parse('2026-11-07T00:00:00Z')
+    const jobs = [
+      job('old', 'Old trigger', {}, { lastCheck: { atMs: t0, outcome: 'quiet', reason: 'fire-false' } }),
+      { id: 'cron', name: 'Morning digest', enabled: true, schedule: { kind: 'every', everyMs: 3_600_000 },
+        executor: { type: 'session', config: { target: 'lead' } }, state: { lastRunAtMs: t0 + 3_600_000 } },
+    ]
+    const out = await op().handler!({ task: 'lead', limit: 1 }, async (_m: string, path: string) => path.startsWith('/tasks/')
+      ? { root: { id: 'lead', title: 'Lead' }, routines: [{ id: 'old', target: 'lead', kind: 'trigger' }, { id: 'cron', target: 'lead', kind: 'routine' }], clocks: [] }
+      : { jobs }) as Out
+    expect(out).toMatchObject({ count: 2, more: 1 })
+    expect(out.triggers[0]).toMatchObject({ id: 'cron', kind: 'routine', lastRunAt: '2026-11-07T01:00:00.000Z' })
+  })
+
+  it('tells the model how to find one trigger', () => {
+    const d = op().description
+    expect(d).toContain('To find one trigger, narrow it')
+    expect(d).toContain('state:"armed"')
+    expect(d).toContain('full:true')
+    expect(Object.keys(op().input).sort()).toEqual(['full', 'limit', 'name', 'state', 'task', 'team'])
+  })
+})
+
 describe('trigger_pause / trigger_resume', () => {
   type Call = { method: string; path: string; body?: unknown }
   function server(job: Record<string, unknown> | null) {

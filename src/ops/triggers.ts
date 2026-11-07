@@ -12,15 +12,10 @@ import { z } from 'zod'
 import { defineOp, type HttpBinding } from './registry.js'
 import { withOutcome } from './outcome.js'
 import { triggerRunState } from '../core/cron/trigger-run-state.js'
-
-/** Human interval out of a stored `every` schedule. */
-function everyLabel(everyMs: unknown): string {
-  const ms = typeof everyMs === 'number' && Number.isFinite(everyMs) ? everyMs : 0
-  if (ms <= 0) return 'unknown'
-  if (ms % 3_600_000 === 0) return `${ms / 3_600_000}h`
-  if (ms % 60_000 === 0) return `${ms / 60_000}m`
-  return `${Math.round(ms / 1000)}s`
-}
+import {
+  byActivity, compactRow, everyLabel, filterWords, fullRow, matchesFilter, pageLimit, MAX_LIMIT,
+  type ListedJob, type ListFilter,
+} from './trigger-list-rows.js'
 
 const CHECK_CONTRACT =
   'The check reads ONE JSON object on stdin ({state, lastFireAt, now}) and must print ONE JSON object as '
@@ -250,17 +245,26 @@ defineOp({
   name: 'trigger_list',
   title: 'List Walnut triggers',
   description:
-    'Every trigger, polling or not: id, name, description, interval, host, its state ("armed" = polling, '
-    + '"paused" = switched off by someone, with pausedAt; "stopped" = switched off by Walnut after its check '
-    + 'failed 5 times in a row), how many times it has fired, the last check the daemon reported (fired with '
-    + 'an item count / quiet with a reason / the error text) and the recent check history. Use it to answer '
-    + '"what are you watching?" and to check whether a trigger you created is healthy; one that has never '
-    + 'fired may be a script that never says fire. With task: only what would wake that task (and with team:true every '
-    + 'open task under it): its triggers, its plain timed routines (cron, kind "routine"), and its wake clocks; '
-    + 'team_stop with sessions:"keep" pauses all of them at once.',
+    'The triggers, newest activity first, one short row each: id, name, description, interval, host, the task '
+    + 'it wakes, its state ("armed" = polling, "paused" = switched off by someone, with pausedAt; "stopped" = '
+    + 'switched off by Walnut after its check failed 5 times in a row), how many times it has fired, `last` (the '
+    + 'last check in one line: fired with an item count / quiet with a reason / the error text), `lastFire` and '
+    + 'the next check. To find one trigger, narrow it: `name` (a piece of its name, id or description, any case), '
+    + '`task` (what would wake that task), `state:"armed"`; e.g. {"name":"reflection","task":"<the VP\'s task id>"}. '
+    + `At most \`limit\` rows (default 25, up to ${MAX_LIMIT}); \`count\` is how many matched and \`more\` how many `
+    + 'were left out. `full:true` adds the script, the last check object and the recent check history (default '
+    + 'limit 5 then): read it for one trigger you are debugging. Use it to answer "what are you watching?" and to '
+    + 'check whether a trigger you created is healthy; one that has never fired may be a script that never says '
+    + 'fire. With task: only what would wake that task (and with team:true every open task under it): its '
+    + 'triggers, its plain timed routines (cron, kind "routine"), and its wake clocks; team_stop with '
+    + 'sessions:"keep" pauses all of them at once.',
   input: {
     task: z.string().optional().describe('Task id or unique prefix: list only the triggers, routines and clocks that would wake it'),
     team: z.boolean().optional().describe('With task: every open task under it too (default false)'),
+    name: z.string().optional().describe('Only triggers whose name, id or description contains this text (any case)'),
+    state: z.enum(['armed', 'paused', 'stopped']).optional().describe('Only triggers in this state; "armed" = polling now'),
+    limit: z.number().int().positive().optional().describe(`At most this many rows, most recent activity first (default 25, or 5 with full; up to ${MAX_LIMIT})`),
+    full: z.boolean().optional().describe('Whole rows: the script, the last check object and the recent check history (default false)'),
   },
   bind: TRIGGER_LIST_BINDING,
   handler: async (args, call) => {
@@ -272,70 +276,54 @@ defineOp({
       } | undefined
       : undefined
     const aimed = wake ? new Map((wake.routines ?? []).map((r) => [r.id, r] as const)) : undefined
+    const full = args.full === true
+    const filter: ListFilter = {
+      ...(typeof args.name === 'string' && args.name.trim() ? { name: args.name } : {}),
+      ...(args.state === 'armed' || args.state === 'paused' || args.state === 'stopped' ? { state: args.state } : {}),
+    }
+    const limit = pageLimit(args.limit, full)
     // includeDisabled is pinned rather than exposed: a trigger that was
     // auto-disabled for check errors is exactly what a caller needs to see.
     const body = await call('GET', '/routines?includeDisabled=true') as { jobs?: unknown[] } | undefined
-    const jobs = Array.isArray(body?.jobs) ? body.jobs : []
-    const triggers = jobs
-      .map((raw) => raw as {
-        id?: string; name?: string; description?: string; enabled?: boolean
-        schedule?: { everyMs?: number }
-        check?: { run?: string; host?: string; cwd?: string }
-        state?: {
-          lastCheck?: unknown; nextRunAtMs?: number; fireCount?: number; pausedAtMs?: number
-          consecutiveErrors?: number; checkLog?: Array<Record<string, unknown>>
-        }
-      })
+    const jobs = (Array.isArray(body?.jobs) ? body.jobs : []) as ListedJob[]
+    const matched = byActivity(jobs
       // A task's view lists its plain routines too: they wake it just the same.
       .filter((job) => aimed ? aimed.has(String(job.id)) : !!job.check && typeof job.check.run === 'string')
-      .map((job) => ({
-        id: job.id,
-        name: job.name,
-        ...(aimed ? { kind: aimed.get(String(job.id))?.kind, target: aimed.get(String(job.id))?.target } : {}),
-        ...(job.description ? { description: job.description } : {}),
-        every: everyLabel(job.schedule?.everyMs),
-        host: job.check?.host ?? '__local__',
-        enabled: job.enabled === true,
-        state: triggerRunState(job),
-        ...(!job.enabled && typeof job.state?.pausedAtMs === 'number'
-          ? { pausedAt: new Date(job.state.pausedAtMs).toISOString() } : {}),
-        run: job.check?.run,
-        ...(job.check?.cwd ? { cwd: job.check.cwd } : {}),
-        fires: job.state?.fireCount ?? 0,
-        ...(job.state?.lastCheck ? { lastCheck: job.state.lastCheck } : {}),
-        ...(typeof job.state?.nextRunAtMs === 'number'
-          ? { nextCheckAt: new Date(job.state.nextRunAtMs).toISOString() } : {}),
-        // The audit trail, trimmed for a tool answer: the verdicts and where each
-        // fire went, without the injected-text previews (those are for the UI —
-        // a caller that wants the message reads the session).
-        ...(Array.isArray(job.state?.checkLog) && job.state.checkLog.length > 0
-          ? {
-            recentChecks: job.state.checkLog.slice(0, 6).map((entry) => {
-              const { injected: _injected, epoch: _epoch, ...rest } = entry as Record<string, unknown>
-              const atMs = typeof rest.atMs === 'number' ? rest.atMs : undefined
-              return { ...rest, ...(atMs ? { at: new Date(atMs).toISOString() } : {}), atMs: undefined }
-            }),
-          }
-          : {}),
-      }))
+      .filter((job) => matchesFilter(job, filter)))
+    const triggers = matched.slice(0, limit).map((job) => {
+      const extra = aimed ? { kind: aimed.get(String(job.id))?.kind, target: aimed.get(String(job.id))?.target } : {}
+      return full ? fullRow(job, extra) : compactRow(job, extra)
+    })
+    const more = matched.length - triggers.length
+    const filtered = filterWords(filter)
+    const page = {
+      count: matched.length,
+      ...(more > 0 ? { shown: triggers.length, more } : {}),
+      triggers,
+    }
+    const moreHint = more > 0
+      ? `${more} more not shown: narrow with name, task or state, or raise limit (up to ${MAX_LIMIT}).`
+      : undefined
     if (wake) {
       return {
         task: wake.root,
         ...(args.team === true ? { members: wake.members ?? [] } : {}),
-        count: triggers.length,
-        triggers,
+        ...page,
         clocks: wake.clocks ?? [],
         ...(wake.stopped ? { teamStop: wake.stopped } : {}),
-        hint: triggers.length || (wake.clocks ?? []).length
-          ? `team_stop '{"id":"${wake.root?.id ?? taskRef}","sessions":"keep"}' pauses all of these (team_resume turns them back on).`
-          : 'Nothing would wake it by itself.',
+        hint: [
+          moreHint,
+          triggers.length || (wake.clocks ?? []).length
+            ? `team_stop '{"id":"${wake.root?.id ?? taskRef}","sessions":"keep"}' pauses all of these (team_resume turns them back on).`
+            : filtered ? `Nothing aimed at it matches ${filtered}.` : 'Nothing would wake it by itself.',
+        ].filter(Boolean).join(' '),
       }
     }
-    return {
-      count: triggers.length,
-      triggers,
-      ...(triggers.length === 0 ? { hint: 'No triggers armed. trigger_create arms one.' } : {}),
-    }
+    const emptyHint = matched.length === 0
+      ? (filtered ? `No trigger matches ${filtered}.` : 'No triggers armed. trigger_create arms one.')
+      : undefined
+    const hint = moreHint ?? emptyHint
+    return { ...page, ...(hint ? { hint } : {}) }
   },
   tags: { readonly: true, remote: 'allow' },
 })

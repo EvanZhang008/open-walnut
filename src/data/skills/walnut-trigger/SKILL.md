@@ -195,7 +195,7 @@ let stdin = ''; process.stdin.on('data', (c) => stdin += c).on('end', () => {
 
 Keep tokens out of `run`. The command line is stored with the routine (it syncs
 with the rest of Walnut's data), shows on the Routines card and in
-`trigger_list`, and a failing `curl -v` echoes headers into the error text.
+`trigger_list` (with `full:true`), and a failing `curl -v` echoes headers into the error text.
 Read a token inside the script file instead (from the environment, a keychain,
 or a file only that host has), and never paste one inline as `curl -H
 'Authorization: Bearer ...'` in `run`.
@@ -344,7 +344,8 @@ Re-check carefully before anything else:
 1. Look at the thing itself (the PR, the build, the page, the inbox): has it
    happened?
 2. If it has and no fire came, the trigger is wrong. Find out why (run the check
-   with `trigger_test`, read its recent checks in `trigger_list`), replace it
+   with `trigger_test`, read its recent checks with
+   `trigger_list '{"name":"<its id>","full":true}'`), replace it
    with a check that would have caught it (`trigger_delete`, then
    `trigger_create`), and act on what happened.
 3. If it has not, is the trigger still sound: armed (not paused or stopped),
@@ -387,9 +388,14 @@ task with them.
 
 ## Managing them
 
-- `trigger_list`: every trigger with its description, interval, host, state
-  (`armed`, `paused` with `pausedAt`, `stopped` after 5 failed checks in a row),
-  and last check (fired with an item count / quiet with a reason / the error).
+- `trigger_list`: one short row per trigger, newest activity first: its
+  description, interval, host, the task it wakes, state (`armed`, `paused` with
+  `pausedAt`, `stopped` after 5 failed checks in a row), the last check in one
+  line (fired with an item count / quiet with a reason / the error) and the last
+  fire. At most 25 rows unless you pass `limit`; to find one, narrow it with
+  `name` (a piece of its name, id or description), `task` and `state:"armed"`,
+  e.g. `trigger_list '{"name":"reflection","state":"armed"}'`. `full:true` adds
+  the script and the recent check history, for the one you are debugging.
 - `trigger_pause '{"id":"..."}'`: stop checking for now. The trigger stays on
   its task marked Paused, with a Resume button. Use it for "pause that", "stop
   for a while"; delete only when the user wants it gone.

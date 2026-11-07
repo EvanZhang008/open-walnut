@@ -81,7 +81,7 @@ export function buildWaitWakeBody(opts: { until: string; nowMs: number; triggers
       'Check now, carefully:',
       '1. Look at the thing itself (the PR, the build, the page, the reply): has it happened, or changed in a way that matters?',
       '2. If it happened and no fire came, the trigger is wrong. Find out why (run its check with trigger_test, read its '
-        + 'recent checks in trigger_list), replace it with a check that would have caught it (trigger_delete, then '
+        + 'recent checks with trigger_list {"name":"<its id>","full":true}), replace it with a check that would have caught it (trigger_delete, then '
         + 'trigger_create), and act on what happened.',
       '3. If it has not happened, is the trigger still sound: armed, checking without errors, and watching everything '
         + 'that would count (another place the answer could land, a state the check does not know)? Fix what is not.',
