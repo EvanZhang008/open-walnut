@@ -40,10 +40,6 @@ function serializeUntouched(ed: Editor, body: string): string {
   return ed.storage.markdown.serializer.serialize(createDocument(html, ed.schema, ed.options.parseOptions)) as string;
 }
 
-/** What `markdown` renders to, for telling two spellings of one document apart. */
-function renderedHtml(ed: Editor, markdown: string): string {
-  return ed.storage.markdown.parser.parse(normalizeForEditor(entityRefsToMarkdownLinks(markdown))) as string;
-}
 
 interface FileMarkdownEditorProps {
   /** Full file bytes (frontmatter included). Only read on mount — see contract. */
@@ -135,8 +131,12 @@ export const FileMarkdownEditor = forwardRef<FileSourceEditorHandle, FileMarkdow
     onSaveRef.current = onSave;
 
     /** `body` with every line the user did not edit put back to the seed's own
-     *  bytes. Used only when the result renders to the same document as `body`;
-     *  anything else writes `body` as it is (the editor's own spelling). */
+     *  bytes. Used only when the editor reads the result as the same document as
+     *  `body` (loading it would serialize to `body` again); anything else writes
+     *  `body` as it is, the editor's own spelling. Not "renders to the same HTML":
+     *  the serializer is lossy (inline code ending in a space loses the space after
+     *  it), so the file's own bytes can render better than the editor's spelling,
+     *  and that check threw the whole merge away (2026-11-07, a 153-line note). */
     const keepSource = (ed: Editor, body: string): string => {
       const seed = seedRef.current.body;
       if (keptRef.current?.body === body && keptRef.current.seed === seed) return keptRef.current.text;
@@ -145,7 +145,7 @@ export const FileMarkdownEditor = forwardRef<FileSourceEditorHandle, FileMarkdow
         const untouched = untouchedOf(ed, seed);
         if (untouched != null) {
           const kept = keepUntouchedSource(seed, untouched, body);
-          if (kept === body || renderedHtml(ed, kept) === renderedHtml(ed, body)) text = kept;
+          if (kept === body || serializeUntouched(ed, kept) === body) text = kept;
         }
       } catch { /* the editor's spelling is always a correct save */ }
       keptRef.current = { seed, body, text };

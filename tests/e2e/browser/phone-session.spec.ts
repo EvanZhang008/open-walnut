@@ -787,7 +787,12 @@ test('Files is the tree or one file (back returns to the tree); Changed is one c
   await file.click()
   await expect(body).toHaveClass(/is-phone-file/)
   await expect(tree).toBeHidden()
-  await expect(topbar(page).locator('.phone-topbar-title-text')).toHaveText(name)
+  // The file's name is on the document bar; the top bar names its folder, so the
+  // name is not shown twice (2026-11-06 file page redesign).
+  await expect(overlay(page).locator('.fv-doc-bar')).toContainText(name)
+  const title = (await topbar(page).locator('.phone-topbar-title-text').textContent())?.trim() ?? ''
+  expect(title).not.toBe('')
+  expect(title).not.toBe(name)
   expect((await historyInfo(page)).marker?.id).toMatch(/^file:/)
   await expectNoHorizontalOverflow(page)
   await page.screenshot({ path: `${SHOTS}/c78-file-${test.info().project.name}.png` })

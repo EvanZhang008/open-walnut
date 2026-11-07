@@ -651,6 +651,11 @@
     justify-content: center;
   }
 
+  /* The tree head's folder name is a button too (tap it to type a path). */
+  .app-shell-navigation .session-panel .sfe-tree-head-name {
+    min-height: 44px;
+  }
+
   .app-shell-navigation .session-panel .sfe-btn-label {
     display: none;
   }

@@ -1184,6 +1184,10 @@ const RICH_NOTE = [
   '## Open', '', '',
   '- first item', '- second item', '',
   'Path ~/notes, 5 * 3 and snake_case_name.', '',
+  // Inline code that ends in a space: the serializer writes `x = `matched (the
+  // space after it lost), so the editor's own spelling is not the same text.
+  'The sed was greedy (`.*sec = ` matched `usec = `), so the time was wrong.', '',
+  '| when | what |', '|---|---|', '| 11-03 | `a = ` then b |', '',
 ].join('\n')
 
 test('typing one sentence into a rich note writes that sentence and nothing else', async ({ page }) => {
