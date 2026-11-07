@@ -100,8 +100,8 @@ describe('trigger_list on the host', () => {
 
   it('honors the server op\'s name, state, task and limit filters instead of listing everything', async () => {
     const { call } = setup()
-    const one = result(await call('trigger_list', { name: 'JOB-CI' }))
-    expect(one.triggers.map((t: { id: string }) => t.id)).toEqual(['job-ci'])
+    const one = result(await call('trigger_list', { name: 'B-PR' }))
+    expect(one.triggers.map((t: { id: string }) => t.id)).toEqual(['job-pr'])
     expect(one).toMatchObject({ count: 1 })
     expect(one.outcome).toContain('1 trigger(s) matching')
     const none = result(await call('trigger_list', { name: 'does-not-match', state: 'paused', limit: 1 }))
