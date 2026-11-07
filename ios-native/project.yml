@@ -47,8 +47,8 @@ targets:
       path: Walnut/Support/Info.plist
       properties:
         CFBundleDisplayName: Walnut
-        CFBundleShortVersionString: "1.0.1"
-        CFBundleVersion: "158"
+        CFBundleShortVersionString: "1.0.2"
+        CFBundleVersion: "160"
         UILaunchScreen: {}
         # The lock-screen work card (WorkCardController): one Live Activity with how many
         # tasks work, need you and were completed, kept current by silent server pushes.
@@ -170,7 +170,7 @@ targets:
       path: WalnutWidgets/Info.plist
       properties:
         CFBundleDisplayName: Walnut
-        CFBundleShortVersionString: "1.0.0"
+        CFBundleShortVersionString: "1.0.2"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     # The build number and the version are the app's: App Store Connect warns on an
