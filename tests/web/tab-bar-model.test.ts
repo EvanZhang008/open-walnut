@@ -10,7 +10,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_HIDDEN_TABS, DISPLAY_FIRST_LAYER_LIMIT, ROOMY_TAB_LIMIT, allViews, displayViewLayers, tabBarTabs,
-  tabMenuGroups, viewLabel, viewTitle, visibleTabBarTabs,
+  tabMenuGroups, viewLabel, viewTitle, visibleTabBarTabs, WIDE_HIDDEN_TABS, wideHidden,
 } from '@/components/tasks/tab-bar-model'
 
 const customs = [{ id: 'ct_a', label: 'Reading' }, { id: 'ct_b', label: 'Errands' }]
@@ -158,5 +158,16 @@ describe('tabMenuGroups (the bar chevron menu)', () => {
     expect(ids(tiers)).toEqual(['focus', 'satellite', 'wait', 'ct_a', 'ct_b'])
     expect(top.map((t) => `${t.label} ${t.title}`).join(' ')).not.toMatch(TIER_WORDS)
     for (const tier of tiers) expect(tier.title).not.toBe('')
+  })
+})
+
+describe('wideHidden: the extension\'s first page (review round 5, Opus #2)', () => {
+  it('opens on All, Pinned and the tiers, and never on All and Pinned alone', () => {
+    expect(WIDE_HIDDEN_TABS).toEqual(['recent'])
+    expect(wideHidden(WIDE_HIDDEN_TABS)).toEqual(['recent'])
+    // Home's default (All and Pinned only) gets the tiers back on the wide bar.
+    expect(wideHidden(DEFAULT_HIDDEN_TABS)).toEqual(DEFAULT_HIDDEN_TABS.filter((id) => !['focus', 'satellite', 'wait'].includes(id)))
+    // A choice that keeps three or more built-in tabs is the person's, as it stands.
+    expect(wideHidden(['satellite', 'recent'])).toEqual(['satellite', 'recent'])
   })
 })

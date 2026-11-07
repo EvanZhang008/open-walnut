@@ -1,11 +1,18 @@
 /**
- * The extension's first page (design option A, 2026-11-07; web/src/popout/ExtHome.tsx,
- * ExtHomeTasks.tsx, ExtRelay.tsx; packages/browser-extension/src/panel-ask.ts, panel-look-home.ts),
- * through the real extension in Chromium, with real mouse and keyboard input:
+ * The extension's first page (design C with a side bar, 2026-11-07; web/src/popout/ExtHome.tsx,
+ * ExtHomeTasks.tsx, ExtRelay.tsx, ExtControl.tsx; packages/browser-extension/src/panel-ask.ts,
+ * panel-rail.ts, panel-look-home.ts), through the real extension in Chromium, with real mouse and
+ * keyboard input:
  *
- * - the side panel and the popup open on New task: ≡, Walnut, the relay pill, the key, settings;
- *   the composer with the page as a chip and Act in this tab; Home's task panel under it (tabs,
- *   search, Needs you, the rows), drawn by the extension the moment it opens;
+ * - the side panel and the popup open on Chat: the side bar (Chat, Passwords, Browser control,
+ *   Settings), the header (≡, Walnut, the relay pill, the key), Home's task panel filling the page
+ *   (tabs, search, Needs you with each row's status line, the rows), and New task docked at the
+ *   bottom on one line ("This page" and send), which grows into the whole composer (the page chip
+ *   with ×, Act in this tab, Save as todo) when clicked; all drawn by the extension the moment it opens;
+ * - each side bar entry: Passwords (locked, its one unlock row), Browser control (the status, an
+ *   agent's tab shown everywhere at once with no reload, Stop; "Shared earlier" only for tabs he
+ *   handed over; its settings), Settings; the panel opens on the entry it was left on;
+ * - a new task's row is titled with his words at once, and search finds it;
  * - typing and Send make a task and a session that knows the page, shown in the panel with Back;
  *   Back returns to the list where it was; × leaves the page out; Act in this tab hands the tab over
  *   and the strip shows while the agent holds it, with Stop;
@@ -28,11 +35,23 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { askView, openPanel, selectText, startPanelLab, sw, type PanelLab } from './extension-panel-harness'
 import { holdVaultLock } from './vault-lock'
+import { ensureVaultSetUp } from './vault-session-helper'
 
 test.describe.configure({ mode: 'serial' })
 // The key reads the fixture's vault; nothing here locks it or ends an unlock.
 holdVaultLock('shared', 'file')
 
+// The grown composer's row: how far the send arrow reaches past the box (negative: inside), and how
+// much of "Act in this tab" is cut.
+const sendOverhang = async (v: ReturnType<typeof askView>): Promise<number> => {
+  const send = (await v.locator('[data-testid="ext-home-composer"] .chat-send-group').boundingBox())!
+  const bar = (await v.locator('[data-testid="ext-home-composer"] .chat-input-box').boundingBox())!
+  return Math.round(send.x + send.width - (bar.x + bar.width))
+}
+const actWordsCut = (v: ReturnType<typeof askView>): Promise<number> =>
+  v.locator('[data-testid="ext-home-composer"] .ext-home-act > span:last-child').evaluate((e) => e.scrollWidth - e.clientWidth)
+// The first needs card by its own name: a task made later may quote its title in its words.
+const needsCard = (v: ReturnType<typeof askView>) => v.locator(`.todo-pinned-card[aria-label="${NEEDS[0].title}"]`)
 const SHOTS = process.env.EXT_FIRST_SHOTS ?? 'test-results/extension-first-page'
 let lab: PanelLab
 let panel: Page
@@ -70,6 +89,8 @@ async function openFirstPage(): Promise<Page> {
 test.beforeAll(async ({}, info) => {
   test.setTimeout(400_000)
   lab = await startPanelLab(String(info.project.use.baseURL ?? 'http://localhost:3457'), 'first-page')
+  // A person who has Passwords: the key and the Passwords entry read a locked vault, never "set it up".
+  await ensureVaultSetUp(lab.doc, lab.base)
   const post = async (data: Record<string, unknown>): Promise<string> => {
     const r = await lab.doc.request.post(`${lab.base}/api/v1/tasks`, { data })
     expect(r.ok(), await r.text()).toBe(true)
@@ -138,25 +159,66 @@ async function taskOfSession(sid: string): Promise<string> {
 }
 const agentOwners = () => sw(lab).evaluate(async () => Object.values(((await chrome.storage.session.get('agentTabs')).agentTabs ?? {}) as Record<string, { owner: string }>).map((r) => r.owner))
 
-test('the side panel opens on New task over Home\'s task panel, and keeps its drawing', async () => {
+test('the side panel opens on Chat: the side bar, the list filling the page, New task docked at the bottom; it keeps its drawing', async () => {
   test.setTimeout(200_000)
   panel = await openFirstPage()
   const v = askView(panel)
+  // The side bar: four entries, Chat marked.
+  const rail = panel.getByTestId('panel-rail')
+  await expect(rail).toBeVisible()
+  for (const e of ['chat', 'passwords', 'control', 'settings']) await expect(rail.getByTestId(`panel-rail-${e}`)).toBeVisible()
+  await expect(rail.getByTestId('panel-rail-chat')).toHaveAttribute('aria-current', 'page')
+  expect((await rail.boundingBox())!.width).toBeLessThanOrEqual(48)
   await expect(v.getByTestId('ext-home-head')).toBeVisible()
   await expect(v.getByTestId('ext-relay-pill')).toHaveText('Relay off')
   await expect(v.getByTestId('ext-ask-key')).toBeVisible()
   await expect(v.getByTestId('ext-key-locked')).toBeVisible({ timeout: 15_000 })
-  await expect(v.getByTestId('ext-home-settings')).toBeVisible()
-  const box = v.locator('[data-testid="ext-home-composer"] textarea')
+  // Settings is the side bar's: no gear in the header.
+  await expect(v.getByTestId('ext-home-settings')).toHaveCount(0)
+  // New task, docked on one line at the bottom: the words, "This page", send.
+  const composer = v.getByTestId('ext-home-composer')
+  const box = composer.locator('textarea')
   await expect(box).toHaveAttribute('placeholder', 'New task: what should Walnut do?')
+  await expect(composer).toHaveAttribute('data-docked', 'true')
+  await expect(v.getByTestId('ext-home-dock-chip')).toHaveText(/This page/, { timeout: 30_000 })
+  await expect(v.getByTestId('ext-home-dock-chip')).toHaveAttribute('title', /Release notes 4\.2/)
+  await expect(v.getByTestId('ext-home-act')).toHaveCount(0)
+  const dock = (await composer.boundingBox())!
+  // One line: the box no taller than a line, the dock with its padding under 100 px.
+  expect((await box.boundingBox())!.height).toBeLessThan(44)
+  expect(dock.height).toBeLessThan(100)
+  expect(dock.y + dock.height).toBeGreaterThan(760 - 20)
+  // Home's task panel: its tabs (over the search box) and its Needs you rows with their status line.
+  await expect(v.locator('.todo-section-tab').filter({ hasText: 'All' })).toHaveClass(/is-active/, { timeout: 60_000 })
+  // Never All and Pinned alone (review round 5, Opus #2): the tiers are there too.
+  await expect(v.locator('.todo-section-tab').filter({ hasText: 'Pinned' })).toBeVisible()
+  // (an empty tier hides, as on Home: this board's pinned tasks are in Satellite)
+  await expect(v.locator('.todo-section-tab').filter({ hasText: /Focus|Satellite|Parked/ }).first()).toBeVisible()
+  await expect(v.locator('.todo-section-tabs-menu')).toContainText('More')
+  const tabsY = (await v.locator('.ext-home-tasks .todo-section-tabs').boundingBox())!.y
+  const searchY = (await v.locator('.ext-home-tasks .todo-search-input').boundingBox())!.y
+  expect(tabsY).toBeLessThan(searchY)
+  for (const n of NEEDS) {
+    const card = v.locator('.todo-pinned-card.todo-pinned-card-needs-action').filter({ hasText: n.title })
+    await expect(card).toBeVisible({ timeout: 30_000 })
+    // Its status line, as Home draws it (review round 5, Sol #3): the ask, in words.
+    await expect(card).toContainText(n.ask, { timeout: 30_000 })
+  }
+  // A click grows it into the whole composer: the page chip with ×, Act in this tab, Save as todo.
+  await box.click()
+  await expect(composer).toHaveAttribute('data-docked', 'false')
   await expect(v.getByTestId('ext-panel-include')).toContainText('Release notes 4.2', { timeout: 30_000 })
   await expect(v.getByTestId('ext-panel-include')).toBeChecked()
   await expect(v.getByTestId('ext-home-act')).not.toBeChecked()
-  // Home's task panel: its tabs and its Needs you rows.
-  await expect(v.locator('.todo-section-tab').filter({ hasText: 'All' })).toHaveClass(/is-active/, { timeout: 60_000 })
-  // Home's default bar: All and Pinned (the person's own choice of tabs in this browser, else these).
-  await expect(v.locator('.todo-section-tab').filter({ hasText: 'Pinned' })).toBeVisible()
-  for (const n of NEEDS) await expect(v.locator('.todo-pinned-card.todo-pinned-card-needs-action').filter({ hasText: n.title })).toBeVisible({ timeout: 30_000 })
+  await expect(composer.locator('.draft-later-btn')).toBeVisible()
+  // Beside the side bar every control keeps its words and room: Act in this tab whole, send inside.
+  await expect.poll(() => actWordsCut(v)).toBe(0)
+  await expect.poll(() => sendOverhang(v)).toBeLessThanOrEqual(-2)
+  await shots(panel, 'panel-composer-grown')
+  // Left empty, it docks again (a press on the header's empty middle).
+  const head = (await v.getByTestId('ext-home-head').boundingBox())!
+  await panel.mouse.click(head.x + head.width * 0.7, head.y + head.height / 2)
+  await expect(composer).toHaveAttribute('data-docked', 'true')
   // Home's own "hide the task panel" control is not here.
   await expect(v.locator('.todo-panel-hide')).toBeHidden()
   // The drawing of the next open: the first page, its tabs and rows.
@@ -178,7 +240,10 @@ test('the panel opens on the drawing of the first page while Walnut loads', asyn
   await expect(look).toHaveAttribute('data-look', 'home', { timeout: 10_000 })
   await expect(look.getByTestId('panel-snap-placeholder')).toHaveText('New task: what should Walnut do?')
   await expect(look.getByTestId('panel-snap-relay')).toHaveText('Relay off')
-  await expect(look.getByTestId('panel-snap-page')).toContainText('Release notes 4.2')
+  await expect(look.getByTestId('panel-snap-page')).toContainText('This page')
+  await expect(look.getByTestId('panel-snap-page')).toHaveAttribute('title', /Release notes 4\.2/)
+  // The side bar is the extension's own: there at once, beside the drawing.
+  await expect(p.getByTestId('panel-rail-chat')).toHaveAttribute('aria-current', 'page')
   await expect(look.getByTestId('panel-snap-tabs')).toContainText('All')
   await expect(look.getByTestId('panel-snap-rows')).toContainText(NEEDS[0].title)
   await shots(p, 'panel-look')
@@ -193,7 +258,7 @@ test('the tabs and a list of more than 100 tasks are Home\'s own', async () => {
   await pinnedTab.click()
   await expect(pinnedTab).toHaveClass(/is-active/)
   // Pinned holds the tasks pinned to a tier, never an ask that is in no tier.
-  await expect(v.locator('.todo-pinned-card').filter({ hasText: NEEDS[0].title })).toBeVisible({ timeout: 20_000 })
+  await expect(needsCard(v)).toBeVisible({ timeout: 20_000 })
   await expect(v.getByTestId('status-section-waiting')).toBeVisible()
   await expect(v.locator('.ext-home-tasks').getByText('Which plants like shade?')).toHaveCount(0)
   await shots(panel, 'panel-tab-pinned')
@@ -281,6 +346,16 @@ test('typing and Send start a task that knows the page; it opens here, and Back 
   expect(await listTop(panel)).toBe(before)
   await expect(box).toHaveValue('')
   await expect.poll(async () => (await kept())?.mode?.mode, { timeout: 15_000 }).toBe('home')
+  // Its row is titled with his words at once, never "Session: <id>" (review round 5, Sol #1),
+  // and search finds it by them.
+  expect(String((await getTask(taskId)).title)).toContain('Find the receipt for order 40917')
+  const search = v.locator('.ext-home-tasks .todo-search-input')
+  await search.click()
+  await panel.keyboard.type('receipt for order 40917')
+  await expect(v.locator('.ext-home-tasks').getByText(/Find the receipt for order 40917/).first()).toBeVisible({ timeout: 30_000 })
+  await expect(v.locator('.ext-home-tasks').getByText(/^Session: /)).toHaveCount(0)
+  await panel.keyboard.press('Escape')
+  await expect(search).toHaveValue('')
 })
 
 test('× leaves the page out; Save as todo files the words and starts nothing', async () => {
@@ -295,7 +370,10 @@ test('× leaves the page out; Save as todo files the words and starts nothing', 
   const saved = v.getByTestId('ext-home-saved')
   await expect(saved).toContainText('Renew the library card before Friday', { timeout: 30_000 })
   await expect(box).toHaveValue('')
-  // The next one starts as a new task does: with the page.
+  // Docked again; the next one starts as a new task does: with the page.
+  await expect(v.getByTestId('ext-home-composer')).toHaveAttribute('data-docked', 'true')
+  await expect(v.getByTestId('ext-home-dock-chip')).toBeVisible()
+  await box.click()
   await expect(v.getByTestId('ext-panel-include')).toBeChecked()
   let todo: Record<string, any> | undefined
   await expect.poll(async () => {
@@ -359,7 +437,7 @@ test('Save as todo saves once: a double click makes one todo, and Send waits whi
 test('a task with no conversation opens its detail in the panel', async () => {
   test.setTimeout(120_000)
   const v = askView(panel)
-  const row = v.locator('.todo-pinned-card').filter({ hasText: NEEDS[0].title })
+  const row = needsCard(v)
   const pages = lab.ctx.pages().length
   await row.locator('.todo-pinned-title').click()
   await expect(v.getByTestId('ext-task-detail')).toBeVisible({ timeout: 30_000 })
@@ -404,6 +482,7 @@ test('a task\'s detail opens its subtask and its parent in the panel too, never 
 test('Act in this tab hands the tab over: the strip and the relay show it, Stop takes it back', async () => {
   test.setTimeout(200_000)
   const v = askView(panel)
+  await v.locator('[data-testid="ext-home-composer"] textarea').click()
   await v.getByTestId('ext-home-act').click()
   await expect(v.getByTestId('ext-home-act')).toBeChecked()
   await v.locator('[data-testid="ext-home-composer"] textarea').click()
@@ -452,6 +531,7 @@ test('Act in this tab hands over only the tab Send was pressed in: moved to anot
   const other = await sw(lab).evaluate(async (o: { w: number; url: string }) => (await chrome.tabs.create({ windowId: o.w, url: o.url, active: false })).id ?? 0, { w: lab.docWindow, url: lab.site('docs.example.test', '/other') })
   const start = await holdPosts('**/api/sessions/quick-start')
   try {
+    await v.locator('[data-testid="ext-home-composer"] textarea').click()
     await v.getByTestId('ext-home-act').click()
     await expect(v.getByTestId('ext-home-act')).toBeChecked()
     await v.locator('[data-testid="ext-home-composer"] textarea').click()
@@ -518,6 +598,155 @@ test('the relay panel turns agents on and off, and Stop all ends every agent tab
   await other.close()
 })
 
+/** This window's tab with the docs page, and what the extension tells its pages about agents' tabs. */
+const docTabId = () => sw(lab).evaluate(async () => (await chrome.tabs.query({ active: true, url: 'http://docs.example.test/notes*' }))[0]?.id ?? 0)
+const setAgentTabs = (rec: Record<string, unknown>) => sw(lab).evaluate((r: Record<string, unknown>) => chrome.storage.session.set({ agentTabs: r }), rec)
+
+test('Browser control: the status big; an agent taking this tab while it is open shows there, on the pill and the strip, with no reload; Stop', async () => {
+  test.setTimeout(200_000)
+  const v = askView(panel)
+  await panel.getByTestId('panel-rail-control').click({ timeout: 20_000 })
+  await expect(panel.getByTestId('panel-rail-control')).toHaveAttribute('aria-current', 'page')
+  const control = v.getByTestId('ext-control')
+  await expect(control).toBeVisible({ timeout: 20_000 })
+  await expect(v.getByTestId('ext-home')).toBeHidden()
+  const status = v.getByTestId('ext-control-status')
+  await expect(status).toHaveAttribute('data-kind', 'off', { timeout: 20_000 })
+  await expect(status).toContainText('Agents are off')
+  await expect(v.getByTestId('ext-control-none')).toBeVisible()
+  await expect(v.getByTestId('ext-control-agents')).not.toBeChecked()
+  await expect(v.getByTestId('ext-control-stop-all')).toBeDisabled()
+  await shots(panel, 'panel-control')
+  // An agent takes the tab he is on from the command line (a session's owner key), the panel open.
+  const doc = await docTabId()
+  expect(doc).toBeGreaterThan(0)
+  const frameUrl = frame(panel).url()
+  await setAgentTabs({ [String(doc)]: { owner: 'session:s-cli-take-1', history: ['http://docs.example.test/notes', 'http://docs.example.test/notes#retries'], taken: true } })
+  await expect(status).toHaveAttribute('data-kind', 'tab', { timeout: 20_000 })
+  await expect(status).toContainText('An agent is using this tab')
+  const row = control.getByTestId('ext-relay-row').filter({ hasText: 'this tab' })
+  await expect(row).toContainText('Release notes 4.2 · this tab')
+  await expect(row).toContainText('A Walnut session')
+  await expect(control.getByTestId('ext-control-recent')).toContainText('docs.example.test/notes')
+  await expect(v.getByTestId('ext-control-stop-all')).toBeEnabled()
+  await shots(panel, 'panel-control-tab')
+  // Chat says the same, at once: the pill and the strip.
+  await panel.getByTestId('panel-rail-chat').click({ timeout: 20_000 })
+  await expect(v.getByTestId('ext-home')).toBeVisible()
+  await expect(v.getByTestId('ext-relay-pill')).toHaveText('Agent in tab', { timeout: 20_000 })
+  await expect(v.getByTestId('ext-relay-strip')).toContainText('using this tab', { timeout: 20_000 })
+  // And the pill's own panel.
+  await v.getByTestId('ext-relay-pill').click({ timeout: 20_000 })
+  await expect(v.getByTestId('ext-relay-panel').getByTestId('ext-relay-row').first()).toContainText('this tab', { timeout: 20_000 })
+  await panel.keyboard.press('Escape')
+  // Nothing reloaded the view for it.
+  expect(frame(panel).url()).toBe(frameUrl)
+  // Stop, from Browser control.
+  await panel.getByTestId('panel-rail-control').click({ timeout: 20_000 })
+  await row.getByTestId('ext-relay-stop').click({ timeout: 20_000 })
+  await expect(status).toHaveAttribute('data-kind', 'off', { timeout: 20_000 })
+  await expect.poll(async () => (await agentOwners()).length, { timeout: 20_000 }).toBe(0)
+})
+
+test('Browser control: "Shared earlier" lists only tabs he handed over, never a tab an agent opened; its settings', async () => {
+  test.setTimeout(200_000)
+  const v = askView(panel)
+  await expect(v.getByTestId('ext-control')).toBeVisible()
+  // Its settings first (agents off ends the agents' own tabs): the switch is the extension's.
+  await v.getByTestId('ext-control-agents').click({ timeout: 20_000 })
+  await expect.poll(() => sw(lab).evaluate(async () => (await chrome.storage.local.get('agentControl')).agentControl), { timeout: 20_000 }).toBe(true)
+  await expect(v.getByTestId('ext-control-agents')).toBeChecked()
+  await v.getByTestId('ext-control-agents').click({ timeout: 20_000 })
+  await expect.poll(() => sw(lab).evaluate(async () => (await chrome.storage.local.get('agentControl')).agentControl), { timeout: 20_000 }).toBe(false)
+  // Ask before a new site: Walnut's own site setting.
+  const sites = v.getByTestId('ext-control-ask-sites')
+  await expect(sites).toBeVisible({ timeout: 20_000 })
+  const was = await sites.isChecked()
+  await sites.click({ timeout: 20_000 })
+  await expect.poll(async () => ((await (await lab.doc.request.get(`${lab.base}/api/v1/browser/status`)).json()) as { mode?: string }).mode, { timeout: 20_000 }).toBe(was ? 'any' : 'ask')
+  await sites.click({ timeout: 20_000 })
+  await expect.poll(async () => ((await (await lab.doc.request.get(`${lab.base}/api/v1/browser/status`)).json()) as { mode?: string }).mode, { timeout: 20_000 }).toBe(was ? 'ask' : 'any')
+  const handedPage = await lab.ctx.newPage()
+  await handedPage.goto(lab.site('docs.example.test', '/other'), { timeout: 30_000 })
+  const agentPage = await lab.ctx.newPage()
+  await agentPage.goto(lab.site('docs.example.test', '/login'), { timeout: 30_000 })
+  await lab.doc.bringToFront()
+  try {
+    const ids = await sw(lab).evaluate(async () => {
+      const [a] = await chrome.tabs.query({ url: 'http://docs.example.test/other*' })
+      const [b] = await chrome.tabs.query({ url: 'http://docs.example.test/login*' })
+      return { handed: a?.id ?? 0, opened: b?.id ?? 0 }
+    })
+    expect(ids.handed).toBeGreaterThan(0)
+    expect(ids.opened).toBeGreaterThan(0)
+    // A task he handed a tab to (done with it), and a tab an agent opened from it (a popup).
+    await setAgentTabs({
+      [String(ids.handed)]: { owner: 'task:demo-done', who: 'Walnut task', handed: true, history: ['http://docs.example.test/other'] },
+      [String(ids.opened)]: { owner: 'task:demo-done', who: 'Walnut task', viaHanded: true, history: ['http://docs.example.test/login'] },
+    })
+    const control = v.getByTestId('ext-control')
+    await expect(control.getByTestId('ext-relay-unshare')).toHaveCount(1, { timeout: 20_000 })
+    await expect(control.locator('[data-testid="ext-relay-row"]:has([data-testid="ext-relay-unshare"])')).toHaveAttribute('data-tab', String(ids.handed))
+    await expect(control.locator(`[data-testid="ext-relay-row"][data-tab="${ids.opened}"]`).getByTestId('ext-relay-stop')).toBeVisible()
+    await shots(panel, 'panel-control-shared')
+    // Stop all ends both.
+    await v.getByTestId('ext-control-stop-all').click({ timeout: 20_000 })
+    await expect(v.getByTestId('ext-control-none')).toBeVisible({ timeout: 20_000 })
+    await expect.poll(async () => (await agentOwners()).length, { timeout: 20_000 }).toBe(0)
+  } finally {
+    await setAgentTabs({})
+    await handedPage.close()
+    await agentPage.close()
+  }
+})
+
+test('the panel opens again on the side bar entry it was left on', async () => {
+  test.setTimeout(150_000)
+  await expect(askView(panel).getByTestId('ext-control')).toBeVisible()
+  const { panel: again } = await openPanel(lab, 'home', { keepRail: true })
+  await again.setViewportSize({ width: 400, height: 760 })
+  await expect(again.getByTestId('panel-rail-control')).toHaveAttribute('aria-current', 'page', { timeout: 20_000 })
+  await expect(askView(again).getByTestId('ext-control')).toBeVisible({ timeout: 60_000 })
+  await again.getByTestId('panel-rail-chat').click({ timeout: 20_000 })
+  await expect(askView(again).getByTestId('ext-home')).toBeVisible()
+  await again.close()
+  await panel.getByTestId('panel-rail-chat').click({ timeout: 20_000 })
+  await expect(askView(panel).getByTestId('ext-home')).toBeVisible()
+})
+
+test('Passwords on the side bar: the full view; locked, its one unlock row', async () => {
+  test.setTimeout(150_000)
+  await panel.getByTestId('panel-rail-passwords').click({ timeout: 20_000 })
+  await expect(panel.getByTestId('panel-view-passwords')).toBeVisible({ timeout: 20_000 })
+  await expect(panel.getByTestId('panel-rail-passwords')).toHaveAttribute('aria-current', 'page')
+  const pw = panel.frameLocator('iframe.panel-frame-passwords')
+  await expect(pw.getByLabel('Master password')).toBeVisible({ timeout: 30_000 })
+  await expect(pw.getByTestId('popup-unlock')).toBeVisible()
+  await expect(pw.locator('.view-bar h1')).toHaveText('Passwords')
+  // The side bar is the way back: the view's own Back is not drawn beside it.
+  await expect(pw.getByTestId('panel-view-back')).toBeHidden()
+  await shots(panel, 'panel-passwords')
+  await panel.getByTestId('panel-rail-chat').click({ timeout: 20_000 })
+  await expect(panel.locator('.panel-view:not([hidden])')).toHaveCount(0)
+  await expect(askView(panel).getByTestId('ext-home')).toBeVisible()
+})
+
+test('Settings on the side bar: the extension\'s settings view', async () => {
+  test.setTimeout(150_000)
+  await panel.getByTestId('panel-rail-settings').click({ timeout: 20_000 })
+  await expect(panel.getByTestId('panel-view-settings')).toBeVisible({ timeout: 20_000 })
+  await expect(panel.getByTestId('panel-rail-settings')).toHaveAttribute('aria-current', 'page')
+  const st = panel.frameLocator('iframe.panel-frame-settings')
+  await expect(st.getByText('Let Walnut agents use this browser')).toBeVisible({ timeout: 30_000 })
+  await expect(st.locator('.view-bar h1')).toHaveText('Settings')
+  await shots(panel, 'panel-settings')
+  // Escape goes back to Chat, and the next open opens there.
+  await st.locator('body').press('Escape', { timeout: 20_000 })
+  await expect(panel.locator('.panel-view:not([hidden])')).toHaveCount(0, { timeout: 10_000 })
+  await expect(panel.getByTestId('panel-rail-chat')).toHaveAttribute('aria-current', 'page')
+  await expect.poll(() => sw(lab).evaluate(async () => ((await chrome.storage.local.get('panelRail')).panelRail as Record<string, string> | undefined)?.panel), { timeout: 10_000 }).toBe('chat')
+})
+
 test('the asks stay one ≡ away, and Tasks there comes back to the first page', async () => {
   test.setTimeout(150_000)
   const v = askView(panel)
@@ -563,7 +792,10 @@ test('the popup opens on New task; a question there goes on in the side panel', 
   const v = askView(pop)
   await expect(v.getByTestId('ext-home')).toBeVisible({ timeout: 60_000 })
   await expect(v.getByTestId('ext-ask-side-panel')).toBeVisible()
-  await expect(v.locator('.todo-pinned-card').filter({ hasText: NEEDS[0].title })).toBeVisible({ timeout: 30_000 })
+  // The popup has the side bar too (it fits at 400 px): Chat marked.
+  await expect(pop.getByTestId('panel-rail-chat')).toHaveAttribute('aria-current', 'page', { timeout: 20_000 })
+  await expect(needsCard(v)).toBeVisible({ timeout: 30_000 })
+  await expect(v.getByTestId('ext-home-composer')).toHaveAttribute('data-docked', 'true')
   await shots(pop, 'popup-first')
   await v.getByTestId('ext-relay-pill').click()
   await expect(v.getByTestId('ext-relay-panel')).toBeVisible()
@@ -575,9 +807,25 @@ test('the popup opens on New task; a question there goes on in the side panel', 
   await shots(pop, 'popup-key')
   await v.getByTestId('ext-ask-key').click()
   await expect(pop.getByTestId('key-pop')).toBeHidden()
+  // Each side bar entry in the popup too, in place (never a page of its own).
+  await pop.getByTestId('panel-rail-control').click()
+  await expect(v.getByTestId('ext-control-status')).toBeVisible({ timeout: 20_000 })
+  await shots(pop, 'popup-control')
+  await pop.getByTestId('panel-rail-passwords').click()
+  await expect(pop.frameLocator('iframe.panel-frame-passwords').locator('.view-bar h1')).toHaveText('Passwords', { timeout: 30_000 })
+  expect(pop.url()).toContain('popup-ask.html')
+  await shots(pop, 'popup-passwords')
+  await pop.getByTestId('panel-rail-settings').click()
+  await expect(pop.frameLocator('iframe.panel-frame-settings').getByText('Let Walnut agents use this browser')).toBeVisible({ timeout: 30_000 })
+  await shots(pop, 'popup-settings')
+  await pop.getByTestId('panel-rail-chat').click()
+  await expect(v.getByTestId('ext-home')).toBeVisible()
   // A question typed in the popup is started by the side panel, which shows the task.
   await v.locator('[data-testid="ext-home-composer"] textarea').click()
   await pop.keyboard.type('Compare the two hotel rooms')
+  // Grown in the popup, the send button keeps its room (review round 5, Sol #4).
+  expect(await sendOverhang(v)).toBeLessThanOrEqual(-2)
+  expect(await actWordsCut(v)).toBe(0)
   await shots(pop, 'popup-typing')
   const side = lab.ctx.waitForEvent('page')
   await pop.keyboard.press('Enter')
@@ -612,9 +860,9 @@ test('a question the popup handed over that Walnut could not start comes back in
     await pop.setViewportSize({ width: 400, height: 600 })
     const pv = askView(pop)
     await expect(pv.getByTestId('ext-home')).toBeVisible({ timeout: 60_000 })
-    await expect(pv.getByTestId('ext-panel-include')).toContainText('Release notes 4.2', { timeout: 30_000 })
     const words = 'Compare the two standing desks for the lab'
     await pv.locator('[data-testid="ext-home-composer"] textarea').click()
+    await expect(pv.getByTestId('ext-panel-include')).toContainText('Release notes 4.2', { timeout: 30_000 })
     await pop.keyboard.type(words)
     const side = lab.ctx.waitForEvent('page')
     await pop.keyboard.press('Enter')

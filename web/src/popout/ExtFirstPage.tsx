@@ -11,7 +11,7 @@ import { ExtHomeHeader, ExtTaskHeader } from './ExtAskChrome';
 import { ExtHome, type HomeLaunched, type HomePreset } from './ExtHome';
 import type { OpenTask } from './ExtHomeTasks';
 import { RelayPanel, RelayPill, RelayStrip } from './ExtRelay';
-import { relayPillOf, taskOfOwner, type RelayState } from './ext-relay-model';
+import { ownerHere, ownerWord, relayPillOf, taskOfOwner, type RelayState } from './ext-relay-model';
 import { taskPageTitle } from './ext-home-model';
 import { firstQuestionOf, type PanelPage, type VaultState } from './ext-panel-model';
 import { taskHead } from './ext-tasks-model';
@@ -59,6 +59,8 @@ interface FirstPageProps {
   vault: VaultState | null;
   keyPressed: boolean;
   settings: boolean;
+  /** The extension draws the side bar (Settings is there). */
+  rail: boolean;
   approvals: ReactNode;
   pageText: (p: { url: string; title?: string }, remote: boolean) => Promise<{ file?: string; inline?: string }>;
   onLaunched: (r: HomeLaunched) => void;
@@ -73,16 +75,18 @@ interface FirstPageProps {
 export function ExtFirstPage(p: FirstPageProps) {
   const [relayOpen, setRelayOpen] = useState(false);
   const relayRef = useRef<HTMLButtonElement>(null);
-  const pill = relayPillOf(p.relay, { agents: p.agents, ...(p.owner ? { owner: p.owner } : {}) });
-  const ownerTask = p.owner ? p.tasks.find((t) => t.id === taskOfOwner(p.owner!)) : undefined;
-  const ownerWho = p.relay?.tabs.find((t) => t.tab === p.tab)?.who;
+  // One reading of who acts here, for the pill, the strip and the panel (ext-relay-model.ts ownerHere).
+  const owner = ownerHere(p.relay, p.tab, p.owner);
+  const pill = relayPillOf(p.relay, { agents: p.agents, ...(owner ? { owner } : {}) });
+  const ownerTask = owner ? p.tasks.find((t) => t.id === taskOfOwner(owner)) : undefined;
+  const ownerWho = p.relay?.tabs.find((t) => t.tab === p.tab)?.who ?? (owner ? ownerWord(owner) : undefined);
   return <>
     <ExtHome
       surface={p.surface}
       hidden={p.hidden}
       page={p.page}
       {...(p.tab !== undefined ? { tab: p.tab } : {})}
-      canAct={!!p.page && p.tab !== undefined && !p.owner}
+      canAct={!!p.page && p.tab !== undefined && !owner}
       header={
         <ExtHomeHeader
           surface={p.surface}
@@ -94,10 +98,11 @@ export function ExtFirstPage(p: FirstPageProps) {
           vault={p.vault}
           keyPressed={p.keyPressed}
           settings={p.settings}
+          rail={p.rail}
         />
       }
       approvals={p.approvals}
-      strip={p.owner ? <RelayStrip {...(ownerTask ? { task: ownerTask } : {})} {...(ownerWho ? { who: ownerWho } : {})} onStop={p.onStop} /> : null}
+      strip={owner ? <RelayStrip {...(ownerTask ? { task: ownerTask } : {})} {...(ownerWho ? { who: ownerWho } : {})} onStop={p.onStop} /> : null}
       pageText={p.pageText}
       onLaunched={p.onLaunched}
       onOpenTask={p.onOpenTask}

@@ -437,12 +437,14 @@ async function stopIfNoReach(): Promise<void> {
 
 /** At most this many tabs in the side panel's relay list (the panel's own cap: ext-relay-model.ts). */
 const RELAY_TABS_MAX = 40
+/** The pages each relay row lists (Browser control's recent activity). */
+const RELAY_RECENT_MAX = 4
 
 /**
  * The browser relay as the side panel's first page shows it (ExtRelay.tsx): the agents switch, and
  * every tab an agent holds now with its page's title and address, newest first.
  */
-export async function relayState(): Promise<{ on: boolean; tabs: Array<{ tab: number; owner: string; who?: string; title?: string; url?: string; handed?: boolean }> }> {
+export async function relayState(): Promise<{ on: boolean; tabs: Array<{ tab: number; owner: string; who?: string; title?: string; url?: string; handed?: boolean; recent?: string[] }> }> {
   const on = await agentOn()
   const ids = (await agentTabs.keys()).reverse().slice(0, RELAY_TABS_MAX)
   const tabs = []
@@ -452,7 +454,11 @@ export async function relayState(): Promise<{ on: boolean; tabs: Array<{ tab: nu
     const tab = await ext.tabs.get(id).catch(() => null)
     if (!tab) continue
     const url = tab.url && /^https?:/.test(tab.url) ? tab.url : undefined
-    tabs.push({ tab: id, owner: rec.owner, ...(rec.who ? { who: rec.who } : {}), ...(tab.title ? { title: tab.title } : {}), ...(url ? { url } : {}), ...(inHandedReach(rec) ? { handed: true } : {}) })
+    // The pages it went to there, newest first (its history, the one record of what an agent did in a tab).
+    const recent = (rec.history ?? []).filter((u) => /^https?:/.test(u)).slice(-RELAY_RECENT_MAX).reverse()
+    // `handed`: a tab the person handed over himself, never one an agent opened from it (`viaHanded`):
+    // the panel lists only his under "Shared earlier" (review round 5, Opus #3).
+    tabs.push({ tab: id, owner: rec.owner, ...(rec.who ? { who: rec.who } : {}), ...(tab.title ? { title: tab.title } : {}), ...(url ? { url } : {}), ...(rec.handed ? { handed: true } : {}), ...(recent.length ? { recent } : {}) })
   }
   return { on, tabs }
 }

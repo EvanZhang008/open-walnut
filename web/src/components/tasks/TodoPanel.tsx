@@ -7886,6 +7886,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         countsReady={!loading}
         customTiers={customTiers}
         fixed={tabBarAlways}
+        wide={tabBarAlways}
       />}
 
       {/* The filter row sits right above the list it narrows, below the tier heading

@@ -10,7 +10,7 @@ import {
   useNavigationList, useNavigationPreference,
 } from '@/hooks/useNavigationPreference';
 import { useNotifications } from '@/contexts/notifications/NotificationProvider';
-import { DEFAULT_HIDDEN_TABS, ROOMY_TAB_LIMIT, tabBarTabs, tabMenuGroups, visibleTabBarTabs, type TabBarTab } from './tab-bar-model';
+import { DEFAULT_HIDDEN_TABS, ROOMY_TAB_LIMIT, WIDE_HIDDEN_TABS, tabBarTabs, tabMenuGroups, visibleTabBarTabs, wideHidden, type TabBarTab } from './tab-bar-model';
 
 /**
  * The todo panel's tab bar: one tab per view, the picked view owns the panel below.
@@ -54,11 +54,18 @@ interface TodoSectionTabsProps {
   customTiers?: CustomTierDef[];
   /** The bar is always on where it is (the browser extension's first page): no "Show tab bar" switch. */
   fixed?: boolean;
+  /**
+   * The bar is the page's only way into the tiers (the browser extension's first page, design C):
+   * All, Pinned and the tiers by default, never two tabs alone, and its menu reads "More"
+   * (tab-bar-model.ts wideHidden).
+   */
+  wide?: boolean;
 }
 
-export const TodoSectionTabs = memo(function TodoSectionTabs({ active, onChange, counts, heldCounts, countsReady = true, customTiers, fixed = false }: TodoSectionTabsProps) {
+export const TodoSectionTabs = memo(function TodoSectionTabs({ active, onChange, counts, heldCounts, countsReady = true, customTiers, fixed = false, wide = false }: TodoSectionTabsProps) {
   const { notify } = useNotifications();
-  const [hidden, setHidden] = useNavigationList(TAB_BAR_HIDDEN_TABS_KEY, DEFAULT_HIDDEN_TABS);
+  const [storedHidden, setHidden] = useNavigationList(TAB_BAR_HIDDEN_TABS_KEY, wide ? WIDE_HIDDEN_TABS : DEFAULT_HIDDEN_TABS);
+  const hidden = wide ? wideHidden(storedHidden) : storedHidden;
   const [hideEmpty, setHideEmpty] = useNavigationPreference(TAB_BAR_HIDE_EMPTY_KEY, true);
   const [, setBarShown] = useNavigationPreference(TASK_SHORTCUTS_KEY);
   const [menu, setMenu] = useState<{ x: number; y: number; origin: HTMLElement } | null>(null);
@@ -156,6 +163,7 @@ export const TodoSectionTabs = memo(function TodoSectionTabs({ active, onChange,
         onClick={(event) => openMenu(event)}
         onPointerDown={(event) => event.stopPropagation()}
       >
+        {wide && <span className="todo-section-tabs-menu-label">More</span>}
         <span className="todo-section-tabs-menu-icon" aria-hidden="true">{ICONS.ICON_CHEVRON_DOWN}</span>
       </button>
       {menu && <ContextMenu point={menu} items={items} onClose={() => setMenu(null)} returnFocus={menu.origin} ariaLabel="Tab bar options" className="todo-section-tabs-ctx" />}

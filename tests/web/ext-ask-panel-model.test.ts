@@ -16,11 +16,13 @@ const msg = (type: string, extra: Record<string, unknown> = {}) => ({ walnut: 'e
 
 describe('panelOptions', () => {
   it('the key and the drawer rows only for an extension that draws the popover (ext=2)', () => {
-    expect(panelOptions('?view=ext-panel')).toEqual({ keyed: false, surface: 'panel', settings: false })
-    expect(panelOptions('?view=ext-panel&ext=2')).toEqual({ keyed: true, surface: 'panel', settings: false })
-    expect(panelOptions('?view=ext-panel&ext=3&surface=popup')).toEqual({ keyed: true, surface: 'popup', settings: true })
+    expect(panelOptions('?view=ext-panel')).toEqual({ keyed: false, surface: 'panel', settings: false, rail: false })
+    expect(panelOptions('?view=ext-panel&ext=2')).toEqual({ keyed: true, surface: 'panel', settings: false, rail: false })
+    expect(panelOptions('?view=ext-panel&ext=3&surface=popup')).toEqual({ keyed: true, surface: 'popup', settings: true, rail: false })
     // An old extension cannot have the popup shape: it never framed one.
-    expect(panelOptions('?view=ext-panel&surface=popup')).toEqual({ keyed: false, surface: 'panel', settings: false })
+    expect(panelOptions('?view=ext-panel&surface=popup')).toEqual({ keyed: false, surface: 'panel', settings: false, rail: false })
+    // ext=4 draws the side bar (panel-rail.ts): the frame leaves its Settings gear to it.
+    expect(panelOptions('?view=ext-panel&ext=4&surface=popup')).toEqual({ keyed: true, surface: 'popup', settings: true, rail: true })
   })
 })
 

@@ -31,7 +31,7 @@ import { clearBadges, initBadge, setBadge } from './bg-badge'
 import { walletValues } from './bg-wallet'
 import { itemDetail, secretField } from './popup-item-data'
 import { getSettings, pageFillOn } from './settings'
-import { BROWSER_KEY_MESSAGE, handBrowserKey, initHandBrowserKey } from './hand-browser-key'
+import { BROWSER_KEY_MESSAGE, handBrowserKey, handPanelBrowserKey, initHandBrowserKey } from './hand-browser-key'
 
 const { pendingSave, pendingPrev, seenUsername, connecting, menus, frames, generated, lastLogin } = stores
 
@@ -130,6 +130,8 @@ const ALLOWED: Record<string, SenderKind | SenderKind[]> = {
   'page-selection': 'content',
   'panel-state': 'sidepanel', 'panel-page': 'sidepanel', 'panel-adopt': 'sidepanel', 'panel-release': 'sidepanel', 'panel-pending': 'sidepanel', 'panel-hand': 'sidepanel',
   [BROWSER_KEY_MESSAGE]: 'content',
+  // The panel's own Walnut frame shares the extension's unlock (hand-browser-key.ts handPanelBrowserKey).
+  'panel-browser-key': 'sidepanel',
 }
 
 /**
@@ -162,6 +164,7 @@ async function handle(msg: { type: string; [k: string]: unknown }, sender: Sende
   await lockIfIdle(lockNow).catch(() => false)
   if (USE.has(msg.type)) void touch()
   if (msg.type === BROWSER_KEY_MESSAGE) return handBrowserKey(msg, sender)
+  if (msg.type === 'panel-browser-key') return handPanelBrowserKey(msg)
   if (kind === 'menu' || msg.type === 'open-menu' || msg.type === 'menu-focus') return handleMenu(msg, sender)
   if (kind === 'savebar' || msg.type === 'seen-login' || msg.type === 'seen-username') return handleSave(msg, sender)
   const tabId = sender.tab?.id

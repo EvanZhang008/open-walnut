@@ -2,8 +2,9 @@
  * The side panel, and the toolbar popup, as Walnut's own Ask (a Walnut whose panel answer says
  * `askPanel`): one frame, `/popout?view=ext-panel&ext=2` (`&surface=popup` in the popup), whose
  * header has the ≡ drawer of asks and a key button. This page draws what Walnut's page must not:
- * the key popover over the frame (key-pop.ts), and the full Tasks and Passwords views with a Back
- * control, which the drawer's foot opens.
+ * the side bar on the left (panel-rail.ts: Chat and Browser control are the frame, Passwords and
+ * Settings the extension's own views, embedded), the key popover over the frame (key-pop.ts), and
+ * the Tasks view with its Back, which the approvals' "more" opens.
  *
  * It tells the frame how the vault stands (`vault-state`: locked, this site's count) whenever that
  * changes, following it as the popup does (an unlock in a Walnut window, a Lock all elsewhere).
@@ -18,13 +19,18 @@
 import { ask, ext } from './ext'
 import { h } from './dom'
 import { popupIcon } from './popup-ui'
-import { agentNameOf, agentOf, drawSnap, drawTasksLoading, homeOf, keepAgent, keepHomeSnap, keepMode, keepSnap, shellOf, snapKeyOf, snapOf, type AskSnap, type PanelMode, type SnapView } from './panel-snap'
+import { agentNameOf, agentOf, drawSnap, drawTasksLoading, homeOf, keepAgent, keepHomeSnap, keepMode, keepSnap, shellOf, snapKeyOf, snapOf, type AskSnap, type PanelMode } from './panel-snap'
 import { drawAskLook, type AskLook } from './panel-look'
-import { drawHomeLook, drawTaskLook, type HomeLook, type RelayLook } from './panel-look-home'
+import { drawControlLook, drawHomeLook, drawTaskLook, type HomeLook, type RelayLook } from './panel-look-home'
+import { drawRail, keepRail, railOf, type RailEntry } from './panel-rail'
 import { startPagePlumbing } from './panel-page'
 import { keyPopover } from './key-pop'
 import { keepTheme } from './panel-theme'
 
+/**
+ * The views over the frame: the side bar's Passwords and Settings, and Tasks, the whole list of
+ * approvals and asks that the approvals' "more" opens (Chat's first page holds the rest of it).
+ */
 type FullView = 'tasks' | 'passwords' | 'settings'
 /** The vault state this page last told its frame (storage.session: gone with the browser), for the next open's first word. */
 const KEPT_VAULT = 'panelVault'
@@ -32,8 +38,11 @@ const KEPT_VAULT = 'panelVault'
 export const VAULT_LOOK_MS = 1000
 /** How long the look takes to fade into the view (ui.css `.panel-snap.is-look.is-going`). */
 const LOOK_FADE_MS = 120
-/** What the frame's URL says this page draws: `3` adds the Settings view (`open-view` `settings`). */
-const EXT_LEVEL = 3
+/**
+ * What the frame's URL says this page draws: `3` adds the Settings view (`open-view` `settings`),
+ * `4` the side bar (panel-rail.ts: Chat, Passwords, Browser control, Settings).
+ */
+const EXT_LEVEL = 4
 
 export async function startAsk(root: HTMLElement, server: string, win: { id?: number }, surface: 'panel' | 'popup', inTab: boolean, gone: () => boolean): Promise<void> {
   const frame = h('iframe', {
@@ -43,20 +52,28 @@ export async function startAsk(root: HTMLElement, server: string, win: { id?: nu
     allow: 'clipboard-write; microphone',
   }) as HTMLIFrameElement
   const body = h('div', { class: 'panel-body' }, frame)
-  root.replaceChildren(h('div', { class: `panel-shell is-ask is-${surface}` }, body))
+  // ── the side bar: drawn here at once, on the entry the person left it on ──
+  /** The frame's own entry on show (Chat or Browser control), under a Passwords or Settings view too. */
+  let frameEntry: 'chat' | 'control' = 'chat'
+  const rail = drawRail(surface, (entry) => pick(entry))
+  rail.select('chat')
+  /** The entry it was left on: the drawing below is of it, and it opens once this page is set up (the end). */
+  const railKept = railOf(surface)
+  root.replaceChildren(h('div', { class: `panel-shell is-ask is-${surface} has-rail` }, rail.el, body))
 
   // ── the view as it will look, drawn here at once, until it says its own is up ──
   // The page it opens on: the popup always the first page (New task), the side panel the page it
   // was left on (the first page, an ask, or a task opened there), as the view said (`mode`).
   let lookShown = true
   const look: AskLook = { surface, snap: null, shell: null, page: null, locked: true }
-  const homeLook: HomeLook = { surface, home: null, page: null, locked: true, relay: 'off', settings: EXT_LEVEL >= 3 }
+  const homeLook: HomeLook = { surface, home: null, page: null, locked: true, relay: 'off', settings: false }
   let lookMode: PanelMode = 'home'
   let lookTask = ''
   const lookEl = h('div', { class: `panel-snap panel-snap-ask is-look is-${surface}`, 'data-testid': 'panel-snap', 'aria-hidden': 'true' })
   const drawLook = () => {
     if (!lookShown) return
-    if (lookMode === 'ask') drawAskLook(look, lookEl)
+    if (frameEntry === 'control') drawControlLook({ relay: homeLook.relay, locked: look.locked }, lookEl)
+    else if (lookMode === 'ask') drawAskLook(look, lookEl)
     else if (lookMode === 'task') drawTaskLook({ title: lookTask, locked: look.locked }, lookEl)
     else drawHomeLook({ ...homeLook, locked: look.locked }, lookEl)
   }
@@ -121,6 +138,7 @@ export async function startAsk(root: HTMLElement, server: string, win: { id?: nu
     drawLook()
   }
   void Promise.all([
+    railKept.then((e) => { if (e === 'control') { frameEntry = 'control'; rail.select('control') } }),
     homeOf().then(({ home, mode }) => {
       homeLook.home = home
       if (surface === 'panel' && mode) { lookMode = mode.mode; lookTask = mode.title ?? '' }
@@ -131,34 +149,44 @@ export async function startAsk(root: HTMLElement, server: string, win: { id?: nu
     lookAtPage(),
   ]).then(drawLook)
 
-  // ── the full views the drawer's foot opens, over the Ask frame, each kept once made ──
+  // ── the views over the frame (the side bar's Passwords and Settings, and Tasks), each kept once made ──
   const views = new Map<FullView, { el: HTMLElement; frame: HTMLIFrameElement }>()
   let current: FullView | null = null
+  /** Show a view (null: the frame, on its entry). Tasks is part of Chat: the side bar marks Chat under it. */
   const showView = (v: FullView | null) => {
     current = v
+    rail.select(v === 'passwords' || v === 'settings' ? v : v === 'tasks' ? 'chat' : frameEntry)
     if (v && !views.has(v)) {
       const f = v === 'tasks'
         ? h('iframe', { class: 'panel-frame-tasks', src: `${server}/popout?view=ext-tasks`, title: 'Walnut tasks' }) as HTMLIFrameElement
         : h('iframe', {
           class: `panel-frame-${v}`,
-          src: ext.runtime.getURL(`popup.html?embed=panel&view=1&window=${win.id ?? ''}${v === 'settings' ? '&open=settings' : ''}`),
+          src: ext.runtime.getURL(`popup.html?embed=panel&view=1&rail=1&window=${win.id ?? ''}${v === 'settings' ? '&open=settings' : ''}`),
           title: v === 'settings' ? 'Walnut settings' : 'Walnut passwords',
           allow: 'clipboard-write',
         }) as HTMLIFrameElement
-      // Passwords and Settings draw their own bar (Back, the title and its tools in one row: popup.ts `inView`).
+      // Passwords and Settings draw their own bar (the title and its tools in one row: popup.ts `inView`).
       const el = h('div', { class: 'panel-view', 'data-testid': `panel-view-${v}` },
         v === 'tasks' ? h('div', { class: 'panel-view-bar' },
-          h('button', { class: 'back-btn', type: 'button', 'data-testid': 'panel-view-back', onclick: () => showView(null) }, popupIcon('back'), h('span', {}, 'Ask')),
+          h('button', { class: 'back-btn', type: 'button', 'data-testid': 'panel-view-back', onclick: () => showView(null) }, popupIcon('back'), h('span', {}, 'Chat')),
           h('span', { class: 'panel-view-title' }, 'Tasks')) : null,
         f)
       views.set(v, { el, frame: f })
       body.append(el)
-      if (v === 'tasks') void cover('tasks')
+      if (v === 'tasks') void coverTasks()
     }
     for (const [k, x] of views) x.el.hidden = k !== v
-    for (const [k, c] of covers) c.hidden = k === 'tasks' ? v !== 'tasks' : v !== null
     key.close()
     if (!v) frame.focus()
+  }
+
+  /**
+   * Back to the frame from the view on show: from Passwords or Settings that is a side bar pick of
+   * the frame's entry, so the next open opens there too, not on the view just left.
+   */
+  const back = () => {
+    if (current === 'passwords' || current === 'settings') pick(frameEntry)
+    else showView(null)
   }
 
   // The Passwords and Settings views' own Back (popup.ts viewBack), from those frames on this extension's origin.
@@ -167,25 +195,22 @@ export async function startAsk(root: HTMLElement, server: string, win: { id?: nu
     if (e.origin !== location.origin || d?.walnut !== 'panel-view' || d.type !== 'back') return
     // Only the view on screen goes back: a Back from a hidden one (late, or sent twice) leaves the shown view be.
     const shown = current === 'passwords' || current === 'settings' ? views.get(current) : undefined
-    if (e.source && shown && e.source === shown.frame.contentWindow) showView(null)
+    if (e.source && shown && e.source === shown.frame.contentWindow) back()
   })
 
-  // ── what Ask and Tasks showed last time, until each view says its own is up (panel-snap.ts) ──
-  const covers = new Map<SnapView, HTMLElement>()
-  const upViews = new Set<SnapView>()
-  const uncover = (view: SnapView) => { upViews.add(view); covers.get(view)?.remove(); covers.delete(view) }
-  const cover = async (view: SnapView, url?: string) => {
-    // Ask is drawn by the look above; only Tasks has a drawing of last time here.
-    if (view === 'ask' || surface === 'popup' || upViews.has(view) || covers.has(view)) return
-    const snap = await snapOf(view, url)
-    if (upViews.has(view) || covers.has(view)) return
+  // ── what the Tasks view showed last time, until it says its own is up (panel-snap.ts) ──
+  let tasksCover: HTMLElement | null = null
+  let tasksUp = false
+  const uncoverTasks = () => { tasksUp = true; tasksCover?.remove(); tasksCover = null }
+  const coverTasks = async () => {
+    if (surface === 'popup' || tasksUp || tasksCover) return
+    const snap = await snapOf('tasks')
+    if (tasksUp || tasksCover) return
     // Never shown here before: its loading line in its places, not the frame's blank page.
-    const el = snap ? drawSnap(view, snap) : drawTasksLoading()
-    covers.set(view, el)
-    if (view === 'tasks') views.get('tasks')?.el.append(el)
-    else { el.hidden = current !== null; body.append(el) }
+    tasksCover = snap ? drawSnap('tasks', snap) : drawTasksLoading()
+    views.get('tasks')?.el.append(tasksCover)
     // A view that never says so still gets its frame back.
-    setTimeout(() => uncover(view), 15_000)
+    setTimeout(uncoverTasks, 15_000)
   }
 
   // ── the key popover and the vault it shows ──
@@ -255,13 +280,30 @@ export async function startAsk(root: HTMLElement, server: string, win: { id?: nu
     windowId: win.id,
     surface,
     inTab,
-    onSearchAll: () => { if (surface === 'panel') showView('passwords'); else location.href = 'popup.html?from=ask' },
-    onSettings: () => { if (surface === 'panel') showView('settings'); else location.href = 'popup.html?from=ask&open=settings' },
+    onSearchAll: () => pick('passwords'),
+    onSettings: () => pick('settings'),
     onOpenVault: () => { void ask({ type: 'open-walnut' }).then(() => { if (surface === 'popup' && !inTab) window.close() }) },
     onChange: (open) => page.postAsk({ type: 'key-state', open }),
     onVault: () => void tellVault(),
     onEscape: () => frame.focus(),
   })
+
+  /**
+   * The frame's entry: Chat (`home`: on its first page, the task list) or Browser control. Told to
+   * the frame at once, or when it says it is ready (onReady below).
+   */
+  const toFrameEntry = (entry: 'chat' | 'control', home = false) => {
+    frameEntry = entry
+    page.postAsk({ type: 'rail', entry, ...(home ? { home: true } : {}) })
+  }
+  /** The person picked a side bar entry (or something opened one): show it, and keep it for the next open. */
+  function pick(entry: RailEntry): void {
+    void keepRail(surface, entry)
+    if (entry === 'passwords' || entry === 'settings') { showView(entry); return }
+    toFrameEntry(entry)
+    showView(null)
+    if (lookShown) drawLook()
+  }
 
   /**
    * The popup's question for this window's panel: a new ask, or an ask to show. The background
@@ -272,8 +314,9 @@ export async function startAsk(root: HTMLElement, server: string, win: { id?: nu
     const r = await ask<{ hand?: { ask?: unknown; open?: unknown; view?: unknown } }>({ type: 'panel-hand', windowId: win.id })
     const hand = r.ok ? r.hand : undefined
     if (!hand) return
-    if (hand.view === 'tasks') { showView('tasks'); return }
-    showView(null)
+    if (hand.view === 'tasks') { pick('chat'); showView('tasks'); return }
+    // What the popup handed over shows in Chat.
+    pick('chat')
     page.postAsk({ type: 'hand', ...(hand.ask ? { ask: hand.ask } : {}), ...(hand.open ? { open: hand.open } : {}) })
   }
 
@@ -296,7 +339,7 @@ export async function startAsk(root: HTMLElement, server: string, win: { id?: nu
     server, win, askFrame: frame, gone,
     frames: () => [frame, views.get('tasks')?.frame],
     onWebPage: () => { if (lookShown) void lookAtPage() },
-    onAskSelection: () => showView(null),
+    onAskSelection: () => back(),
     // Escape in the composer never closes the side panel (R1-3); the toolbar popup closes.
     onClose: () => { if (surface === 'popup') window.close() },
     onReady: (w) => {
@@ -305,6 +348,7 @@ export async function startAsk(root: HTMLElement, server: string, win: { id?: nu
       // build) gets its own view back soon after, not at the 15 s backstop.
       setTimeout(unLook, 2500)
       told = ''
+      page.postAsk({ type: 'rail', entry: frameEntry })
       void tellKnown()
       void tellVault()
       void takeHand()
@@ -323,11 +367,16 @@ export async function startAsk(root: HTMLElement, server: string, win: { id?: nu
         return
       }
       if (d.type === 'shown' || d.type === 'snapshot') {
-        const view: SnapView = from === frame.contentWindow ? 'ask' : 'tasks'
-        if (d.type === 'shown') { if (view === 'ask') unLook(); else uncover(view) }
-        // The first page's task panel, from the Ask frame (its first page).
-        else if (d.view === 'home' && view === 'ask') void keepHomeSnap(d.snap)
-        else if (d.view === view) void keepSnap(view, d.snap, { key: d.key, agentId: d.agentId, counts: d.counts })
+        if (from === views.get('tasks')?.frame.contentWindow) {
+          if (d.type === 'shown') uncoverTasks()
+          else if (d.view === 'tasks') void keepSnap('tasks', d.snap, { key: d.key, agentId: d.agentId, counts: d.counts })
+          return
+        }
+        if (from !== frame.contentWindow) return
+        if (d.type === 'shown') unLook()
+        // The first page's task panel (Chat's first page), and the Ask page's words.
+        else if (d.view === 'home') void keepHomeSnap(d.snap)
+        else if (d.view === 'ask') void keepSnap('ask', d.snap, { key: d.key, agentId: d.agentId, counts: d.counts })
         return
       }
       switch (d.type) {
@@ -348,9 +397,10 @@ export async function startAsk(root: HTMLElement, server: string, win: { id?: nu
           if (surface === 'panel') void keepMode(d.mode, d.title)
           return
         case 'open-view':
-          if (d.view === 'passwords' && surface === 'popup') { location.href = 'popup.html?from=ask'; return }
-          if (d.view === 'settings' && surface === 'popup') { location.href = 'popup.html?from=ask&open=settings'; return }
-          if (d.view === 'tasks' || d.view === 'passwords' || d.view === 'settings') showView(d.view)
+          // The side bar's entries, in the popup too (design C): never a page of its own.
+          if (d.view === 'passwords' || d.view === 'settings') pick(d.view)
+          // The approvals' "more": the whole list, over Chat.
+          else if (d.view === 'tasks') { pick('chat'); showView('tasks') }
           return
         case 'open-walnut':
           void ask({ type: 'open-walnut', ...(typeof d.path === 'string' ? { path: d.path } : {}) }).then(() => { if (surface === 'popup' && !inTab) window.close() })
@@ -371,13 +421,17 @@ export async function startAsk(root: HTMLElement, server: string, win: { id?: nu
   window.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape' || !current || key.isOpen() || e.defaultPrevented) return
     e.preventDefault()
-    showView(null)
+    back()
   }, true)
+
+  // The side bar's entry of last time (Chat needs nothing: the frame opens on it).
+  void railKept.then((e) => { if (e !== 'chat' && !gone()) pick(e) })
 
   // The vault as Walnut sees it now (popup.ts followVault): a Lock all elsewhere locks the key here
   // within about a second, an unlock in a Walnut window unlocks it. The frame's `vault-changed` is
   // the quick way; this look is for a Walnut whose frame does not say it (review R3-6: 1.5 to 2.5 s
   // at a look every 3 s).
+
   setInterval(() => { if (document.visibilityState === 'visible') void tellVault() }, VAULT_LOOK_MS)
   document.addEventListener('visibilitychange', () => void tellVault())
   let soon: ReturnType<typeof setTimeout> | undefined

@@ -458,6 +458,9 @@ test('the popup sends what it shows: its quote goes with the page left out, and 
     await pop.setViewportSize({ width: 380, height: 560 })
     const v = askView(pop)
     await expect(v.getByTestId('ext-panel')).toHaveAttribute('data-surface', 'popup', { timeout: 60_000 })
+    // New task is docked on one line until the person clicks into it (design C): then the chips.
+    const composer = v.locator('.draft-session-panel textarea')
+    await composer.click({ timeout: 60_000 })
     await expect(pageChip(pop)).toContainText('Release notes 4.2', { timeout: 30_000 })
     // The selection shows as its own quote over the composer, with its own ×.
     const strip = v.getByTestId('ext-panel-selection')
@@ -466,7 +469,6 @@ test('the popup sends what it shows: its quote goes with the page left out, and 
     if (drop.quote) { await strip.getByTestId('ext-panel-selection-drop').click(); await expect(strip).toHaveCount(0) }
     await shot(pop, `popup-quote-${drop.page ? 'nopage' : 'page'}-${drop.quote ? 'noquote' : 'quote'}`)
     const next = lab.ctx.waitForEvent('page')
-    const composer = v.locator('.draft-session-panel textarea')
     await composer.fill(words)
     await composer.press('Enter')
     const handed = await next
@@ -644,20 +646,18 @@ test('Tasks and Passwords open as full views with Back to Ask', async () => {
   const pw = passwordsView(panel)
   const item = pw.getByTestId('popup-item').filter({ hasText: loginTitle })
   await expect(item).toBeVisible({ timeout: 30_000 })
-  // One bar: Back, the title and the tools in a single row (no row of icons alone), Back drawn as
-  // the Tasks view's; the box says it searches logins; the username whole, as in the popover.
+  // One bar: the title and the tools in a single row (no row of icons alone); its Back is the side
+  // bar's Chat (design C), marked Passwords; the box says it searches logins; the username whole.
   const bar = pw.locator('.top-sub.view-bar')
-  await expect(bar.getByTestId('panel-view-back')).toBeVisible()
+  await expect(bar.getByTestId('panel-view-back')).toBeHidden()
+  await expect(panel.getByTestId('panel-rail-passwords')).toHaveAttribute('aria-current', 'page')
   await expect(bar.locator('h1')).toHaveText('Passwords')
   await expect(bar.getByTestId('popup-lock')).toBeVisible()
   await expect(pw.locator('.top:not(.top-sub)')).toHaveCount(0)
   await expect(panel.getByTestId('panel-view-passwords').locator('.panel-view-bar')).toHaveCount(0)
   await expect(pw.getByLabel('Search logins')).toHaveAttribute('placeholder', 'Search logins')
   await expect(item.locator('.row-sub')).toHaveText('reader@example.test')
-  const backLook = (l: ReturnType<typeof bar.getByTestId>) => l.evaluate((e) => { const c = getComputedStyle(e); return [c.backgroundColor, c.color, c.fontSize, c.height, c.paddingLeft].join(' ') })
-  // Measured unhovered: Tasks' Back sat under the pointer that clicked it.
-  await panel.mouse.move(399, 400)
-  expect(await backLook(bar.getByTestId('panel-view-back'))).toBe(tasksBack)
+  expect(tasksBack).not.toBe('')
   await shot(panel, 'panel-view-passwords')
   await backToAsk(panel)
   // The key's "Search all logins" opens the same view.
@@ -681,11 +681,11 @@ test('the popup opens on the first page: New task over the tasks, the key, the s
   await expect(v.getByTestId('ext-panel')).toHaveAttribute('data-surface', 'popup', { timeout: 60_000 })
   await expect(v.getByTestId('ext-ask-side-panel')).toBeVisible()
   await expect(v.getByTestId('ext-ask-key')).toBeVisible()
-  // New task on top, Home's task list under it, the ask among its rows.
+  // Home's task list, the ask among its rows, New task docked under it with this page (design C).
   await expect(v.locator('[data-testid="ext-home-composer"] textarea')).toBeVisible({ timeout: 30_000 })
   await expect(v.locator(`.ext-home [data-task-id="${askTask}"]`).first()).toContainText('Uploads in release 4.2', { timeout: 30_000 })
   await expect(v.getByTestId('ext-key-locked')).toBeVisible({ timeout: 15_000 })
-  await expect(v.getByTestId('ext-panel-include')).toContainText('Sign in')
+  await expect(v.getByTestId('ext-home-dock-chip')).toHaveAttribute('title', /Sign in/)
   await shot(pop, 'popup-ask-dark')
   // The key popover, unlocked from its row, as in the panel.
   await v.getByTestId('ext-ask-key').click()
@@ -742,11 +742,11 @@ test('the popup opens on the first page: New task over the tasks, the key, the s
 test('locked: the Passwords view has Back, Escape goes back; Escape never closes the side panel; Settings from the key', async () => {
   test.setTimeout(150_000)
   await lockExtension()
-  // The full Passwords view, locked: Back to Ask is there all the same (R1-2), and Escape is Back.
+  // The full Passwords view, locked: the side bar's Chat is there all the same (R1-2), and Escape goes back.
   await openView(panel, 'passwords')
   const pw = passwordsView(panel)
   await expect(pw.getByLabel('Master password')).toBeVisible({ timeout: 30_000 })
-  await expect(pw.getByTestId('panel-view-back')).toBeVisible()
+  await expect(panel.getByTestId('panel-rail-chat')).toBeVisible()
   await expect(pw.locator('.view-bar h1')).toHaveText('Passwords')
   await shot(panel, 'panel-view-passwords-locked')
   await pw.getByLabel('Master password').press('Escape')
@@ -765,12 +765,12 @@ test('locked: the Passwords view has Back, Escape goes back; Escape never closes
   await expect(panel.getByTestId('panel-view-settings')).toBeVisible()
   const st = panel.frameLocator('iframe.panel-frame-settings')
   await expect(st.getByText('Let Walnut agents use this browser')).toBeVisible({ timeout: 30_000 })
-  await expect(st.getByTestId('panel-view-back')).toHaveText('Ask')
+  await expect(panel.getByTestId('panel-rail-settings')).toHaveAttribute('aria-current', 'page')
   await shot(panel, 'panel-view-settings')
-  await st.getByTestId('panel-view-back').click()
+  await panel.getByTestId('panel-rail-chat').click()
   await expect(panel.locator('.panel-view:not([hidden])')).toHaveCount(0)
-  // The frame may open it too (its drawer row, ext=3).
-  expect(await panel.locator('iframe.panel-frame').getAttribute('src')).toContain('ext=3')
+  // The frame may open it too (its drawer row, ext=3 and up; ext=4 adds the side bar).
+  expect(await panel.locator('iframe.panel-frame').getAttribute('src')).toContain('ext=4')
 })
 
 test('the popup\'s hand-over is taken by one panel only', async () => {
@@ -833,19 +833,22 @@ test('opened, it looks like the view at once: the same header and composer in th
   await expect(look).toHaveCount(0, { timeout: 20_000 })
   const ta = v.locator('[data-testid="ask-object-compose"] textarea, .session-panel.is-plain-chat textarea').first()
   await expect(ta).toBeVisible({ timeout: 30_000 })
+  // The view's boxes are in the frame's own coordinates; the frame sits right of the side bar.
+  const at = await rect(p.locator('iframe.panel-frame'))
+  const inPage = (r: { x: number; y: number; w: number; h: number }) => ({ ...r, x: r.x + at.x, y: r.y + at.y })
   const real = {
-    menu: await rect(v.getByTestId('ask-walnut-menu')),
-    key: await rect(v.getByTestId('ext-ask-key')),
+    menu: inPage(await rect(v.getByTestId('ask-walnut-menu'))),
+    key: inPage(await rect(v.getByTestId('ext-ask-key'))),
     title: await v.getByTestId('ext-ask-title').textContent(),
     placeholder: await ta.getAttribute('placeholder'),
     // The composer's box: the textarea's nearest ancestor with a border.
-    composer: await ta.evaluate((e) => {
+    composer: inPage(await ta.evaluate((e) => {
       let n: HTMLElement | null = e as HTMLElement
       while (n && getComputedStyle(n).borderTopWidth === '0px') n = n.parentElement
       const r = (n ?? e).getBoundingClientRect()
       return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }
-    }),
-    head: await rect(v.getByTestId('ext-ask-head')),
+    })),
+    head: inPage(await rect(v.getByTestId('ext-ask-head'))),
   }
   await shot(p, 'panel-look-real')
   console.log('[look]', JSON.stringify({ drawn, real }))
@@ -977,11 +980,11 @@ test('the header\'s key and New chat are in the first frame, the placeholder\'s 
     expect(x.compose, 'New chat with the menu').not.toBeNull()
     expect(x.compose![1], 'New chat inside the panel').toBeLessThanOrEqual(x.vw + 0.5)
   }
-  // The view's own: on screen, inside the panel.
-  const vw = await frame.evaluate(() => innerWidth)
+  // The view's own: on screen, inside the panel (boxes in the page's coordinates, the frame right of the side bar).
+  const fr = (await p.locator('iframe.panel-frame').boundingBox())!
   for (const id of ['ext-ask-key', 'ext-panel-new']) {
     const b = (await v.getByTestId(id).boundingBox())!
-    expect(b.x + b.width, `${id} inside the view`).toBeLessThanOrEqual(vw + 0.5)
+    expect(b.x + b.width, `${id} inside the view`).toBeLessThanOrEqual(fr.x + fr.width + 0.5)
   }
   await p.close()
 })

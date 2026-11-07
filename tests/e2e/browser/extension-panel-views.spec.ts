@@ -157,7 +157,7 @@ test('unlocked, the key never wears its padlock, even while Walnut is slow to an
   await panel.close()
 })
 
-test('the key\'s Settings is Settings every time; another tab and the vault watch leave it; Back goes to Ask (R2-10, R2-14)', async () => {
+test('the key\'s Settings is Settings every time; another tab and the vault watch leave it; the side bar\'s Chat goes back to Ask (R2-10, R2-14)', async () => {
   test.setTimeout(150_000)
   const panel = await panelPage()
   const v = askView(panel)
@@ -174,8 +174,9 @@ test('the key\'s Settings is Settings every time; another tab and the vault watc
     await expect(st.locator('.view-bar h1')).toHaveText('Settings')
     await expect(st.getByTestId('popup-item')).toHaveCount(0)
     if (round === 0) await shot(panel, 'r2-10-settings-after-tab-switch')
-    await expect(st.getByTestId('panel-view-back')).toHaveText('Ask')
-    await st.getByTestId('panel-view-back').click()
+    // Its Back is the side bar's Chat (design C): Settings is marked there while it shows.
+    await expect(panel.getByTestId('panel-rail-settings')).toHaveAttribute('aria-current', 'page')
+    await panel.getByTestId('panel-rail-chat').click()
     await expect(panel.locator('.panel-view:not([hidden])')).toHaveCount(0)
     await expect(v.getByTestId('ext-ask-head')).toBeVisible()
   }
@@ -225,7 +226,8 @@ test('a row\'s buttons leave its name and account whole, in the side panel and t
   await expect(row).toBeVisible({ timeout: 30_000 })
   // The side panel at the widths Chrome gives it (it can be dragged down to 320 px): hovered, every
   // button it shows, Fill and the one-time code included, and still the name and account whole.
-  for (const width of [400, 360, 320]) {
+  // The view sits right of the side bar (48 px), so a 440 px panel gives it what 400 px gave before.
+  for (const width of [440, 400, 360, 320]) {
     await panel.setViewportSize({ width, height: 760 })
     await panel.mouse.move(5, 700)
     await row.hover()
@@ -233,7 +235,7 @@ test('a row\'s buttons leave its name and account whole, in the side panel and t
     await expect(row.getByTestId('copy-totp')).toBeVisible()
     await expect(row.getByTestId('copy-password')).toBeVisible()
     // Wide enough, the row shows a password in place too; narrower, that waits in the item's view.
-    if (width === 400) await expect(row.getByTestId('reveal-password')).toBeVisible()
+    if (width === 440) await expect(row.getByTestId('reveal-password')).toBeVisible()
     expect(await cut(row), `${width} px`).toEqual([0, 0])
     await shot(panel, `r2-15-row-hover-panel-${width}`, true)
   }
@@ -300,7 +302,7 @@ test('an open Settings shows the sites "Never for this site" adds and removes at
       await expect(list).not.toContainText(host, { timeout: 2000 })
       await expect(list).toContainText('No sites yet')
     }
-    await st.getByTestId('panel-view-back').click()
+    await panel.getByTestId('panel-rail-chat').click()
     await expect(v.getByTestId('ext-ask-head')).toBeVisible()
   }
   await panel.close()

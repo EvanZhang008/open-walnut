@@ -1,7 +1,9 @@
 /**
- * The extension's first page (design option A, 2026-11-07): Home's New task composer with the page
- * the person is on as a chip and Act in this tab, the relay strip while an agent acts in this tab,
- * then Home's own task panel (tabs, search, Needs you, the rows), loaded after the composer paints.
+ * The extension's first page, Chat on its side bar (design C, 2026-11-07): Home's own task panel
+ * fills the page (tabs, search, Needs you, the rows), with the relay strip over it while an agent
+ * acts in this tab, and New task is docked at the bottom like a chat composer: one line (the words,
+ * the page as "This page", send) that grows into the full composer on focus (the page chip with its
+ * ×, Act in this tab, Save as todo, the mic) and goes back to one line when left empty.
  *
  * Send makes a task and its session, as Home's New task draft does, with the page and the tab as
  * Walnut hints beside the words (never in them): the panel then shows its conversation
@@ -9,7 +11,7 @@
  * extension never opens a folder picker. In the toolbar popup, which closes as soon as focus
  * leaves it, the text goes to the side panel instead, which sends it (`preset`).
  */
-import { Suspense, lazy, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useRef, useState, type FocusEvent, type ReactNode } from 'react';
 import type { Task } from '@open-walnut/core';
 import type { ImageAttachment } from '@/api/chat';
 import { apiPost } from '@/api/client';
@@ -87,6 +89,25 @@ export function ExtHome(p: Props) {
   const [saving, setSaving] = useState(false);
   /** Moves after a save as todo, so the composer starts empty again. */
   const [composerNo, setComposerNo] = useState(0);
+  /** The composer grown (focus inside it, or words in it): else docked on one line (design C). */
+  const [grown, setGrown] = useState(false);
+  const composerRef = useRef<HTMLDivElement>(null);
+  const dockLater = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(dockLater.current), []);
+  const onComposerFocus = useCallback(() => { clearTimeout(dockLater.current); setGrown(true); }, []);
+  const onComposerBlur = useCallback((e: FocusEvent<HTMLDivElement>) => {
+    const to = e.relatedTarget instanceof Node ? e.relatedTarget : null;
+    if (to && composerRef.current?.contains(to)) return;
+    // Docked a moment later, never inside the press that moved focus: the list and the line over
+    // the composer move when it docks, and the click must land where the pointer went down.
+    clearTimeout(dockLater.current);
+    dockLater.current = setTimeout(() => {
+      if (composerRef.current?.contains(document.activeElement)) return;
+      // Left with words in it, it stays grown: what is typed shows whole.
+      const words = composerRef.current?.querySelector('textarea')?.value.trim() ?? '';
+      if (!words) setGrown(false);
+    }, 250);
+  }, []);
   /** One write at a time from this composer: a launch or a save as todo (review round 5, #4). */
   const flight = useRef(false);
 
@@ -123,8 +144,8 @@ export function ExtHome(p: Props) {
       setStarting('');
       p.onLaunched({ taskId: r.taskId, ...(r.sessionId ? { sessionId: r.sessionId } : {}), act: acting, ...(acting ? { actTab } : {}), question, attached, pageUrl: withPage ? pg!.url : '' });
       if (sel) setLeftOut(sel);
-      // The next task starts as a new one does: with this page, not acting.
-      setPageOn(true); setActOn(false);
+      // The next task starts as a new one does: with this page, not acting, docked.
+      setPageOn(true); setActOn(false); setGrown(false);
       return true;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -160,6 +181,8 @@ export function ExtHome(p: Props) {
     writeDraft(key, there && there !== text.trim() ? `${there}\n\n${text}` : text);
     setComposerNo((n) => n + 1);
     setPageOn(withPage);
+    // Grown, so the words and the page as they chose it show whole.
+    setGrown(true);
   }, []);
 
   // The popup's question, sent once, with the popup's choices; not started, its words come back.
@@ -187,7 +210,7 @@ export function ExtHome(p: Props) {
       log.info('ext-home', 'todo saved from the panel', { taskId: task.id });
       discardDraft(draftComposerKey(HOME_DRAFT_ID));
       setComposerNo((n) => n + 1);
-      setPageOn(true); setActOn(false);
+      setPageOn(true); setActOn(false); setGrown(false);
       setSaved(task);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -217,6 +240,13 @@ export function ExtHome(p: Props) {
       <ExtComposerChips page={page} pageOn={pageOn} onPage={setPageOn} />
     </div>
   ) : undefined;
+  // Docked, the bar holds only the page, as one chip ("This page"): a click on it grows the box.
+  const dockChip = page && pageOn ? (
+    <span className="ext-home-dock-chip" data-testid="ext-home-dock-chip" title={page.title ?? hostOf(page.url)}>
+      <span className="ext-chip-fav" aria-hidden="true">{(hostOf(page.url).replace(/^www\./, '').match(/[a-z0-9]/i)?.[0] ?? '?').toUpperCase()}</span>
+      {quote ? 'This page + selection' : 'This page'}
+    </span>
+  ) : null;
   const actSwitch = p.canAct ? (
     <label className="ext-home-act" title="Let the task act in this tab: it opens pages, clicks and types here, framed, with Stop">
       <ToggleSwitch checked={actOn} onChange={setActOn} data-testid="ext-home-act" aria-label="Act in this tab" />
@@ -224,18 +254,13 @@ export function ExtHome(p: Props) {
     </label>
   ) : undefined;
 
-  return (
-    <div ref={rootRef} className="ext-home" data-testid="ext-home" hidden={p.hidden}>
-      {/* Under another page only the task list stays (it keeps its place); the composer's words
-          are kept by its draft, so the hidden page holds no second header, key or page chip. */}
-      {!p.hidden && <>
-      {p.header}
-      {p.approvals}
-      <div className="ext-home-composer" data-testid="ext-home-composer" aria-busy={!!starting || saving}>
+  const docked = !grown && !starting;
+  const composer = (
+    <div ref={composerRef} className={`ext-home-composer${docked ? ' is-docked' : ' is-grown'}`} data-testid="ext-home-composer" data-docked={docked ? 'true' : 'false'}
+      aria-busy={!!starting || saving} onFocus={onComposerFocus} onBlur={onComposerBlur}>
         <DraftSessionPanel
           key={composerNo}
           draft={draft.draft}
-          autoFocus={!p.hidden}
           onStart={onStart}
           onSaveAsTask={saveTodo}
           onClose={noop}
@@ -247,11 +272,28 @@ export function ExtHome(p: Props) {
           ownFolder
           saveBusy={saving || !!starting}
           placeholder={HOME_PLACEHOLDER}
-          composerPill={pills}
-          composerBar={actSwitch}
+          composerPill={docked ? undefined : pills}
+          composerBar={docked ? dockChip : actSwitch}
         />
+    </div>
+  );
+
+  return (
+    <div ref={rootRef} className="ext-home is-c" data-testid="ext-home" hidden={p.hidden}>
+      {/* Under another page only the task list stays (it keeps its place); the composer's words
+          are kept by its draft, so the hidden page holds no second header, key or page chip. */}
+      {!p.hidden && <>
+      {p.header}
+      {p.approvals}
+      {p.strip}
+      </>}
+      <div className="ext-home-tasks" data-testid="ext-home-tasks">
+        <Suspense fallback={<p className="ext-home-loading muted" role="status"><span className="spinner" /> Loading your tasks…</p>}>
+          <ExtHomeTasks onOpen={p.onOpenTask} />
+        </Suspense>
       </div>
-      {/* In the page's own column under the composer box (inside it they overflowed onto the search box). */}
+      {!p.hidden && <>
+      {/* Over the docked composer, in the page's own column. */}
       <div className="ext-home-notes">
         {saving && <p className="ext-home-note" role="status" data-testid="ext-home-saving"><span className="spinner" /> Saving as a todo…</p>}
         {starting && <p className="ext-home-note" role="status" data-testid="ext-home-starting"><span className="spinner" /> Starting the task…</p>}
@@ -263,13 +305,8 @@ export function ExtHome(p: Props) {
           </p>
         )}
       </div>
-      {p.strip}
+      {composer}
       </>}
-      <div className="ext-home-tasks" data-testid="ext-home-tasks">
-        <Suspense fallback={<p className="ext-home-loading muted" role="status"><span className="spinner" /> Loading your tasks…</p>}>
-          <ExtHomeTasks onOpen={p.onOpenTask} />
-        </Suspense>
-      </div>
     </div>
   );
 }

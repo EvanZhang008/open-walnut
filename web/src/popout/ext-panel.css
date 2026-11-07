@@ -362,8 +362,72 @@
 .ext-home-pills .ext-chips { overflow: visible; }
 .ext-home-pills .ext-chip-page { max-width: 100%; }
 .ext-home-act { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--fg-secondary, var(--fg)); cursor: pointer; white-space: nowrap; }
-/* The whole words fit beside the switch at 400 px. */
-.ext-home-composer .draft-later-words { display: inline; }
-.ext-home-composer .draft-later-short { display: none; }
+/* "Save as todo" or "Todo" as Home picks them (the controls row's container query): beside the
+   side bar a 400 px panel gives the row about 330 px, where "Todo" leaves the send arrow its room. */
 /* Home's phone label on a row is drawn by Home's phone shell; here the row's red dot says it. */
 .ext-home .phone-row-needs-you { display: none; }
+
+/* ── design C (2026-11-07): the list fills the page, New task docked at the bottom like a chat ── */
+/* Under Browser control the conversation stays mounted, out of sight (PopoutExtPanel). */
+.ext-panel.is-control > :not(.ext-control) { display: none !important; }
+.ext-home.is-c > .ext-home-tasks { flex: 1; min-height: 0; }
+/* As C draws it: the tab bar over the search box. */
+.ext-home.is-c .todo-panel > .todo-section-tabs { order: -1; }
+.ext-home.is-c .todo-section-tabs-menu-label { margin-right: 2px; font-size: 12px; font-weight: 600; }
+.ext-home.is-c > .ext-relay-strip { margin: 6px 8px 2px; }
+.ext-home.is-c > .ext-home-notes { padding: 2px 8px 0; }
+.ext-home.is-c > .ext-home-composer { padding: 6px 8px 10px; border-top: 1px solid var(--border); background: var(--bg); }
+/* Docked: one line, "+", the words, "This page", send. */
+.ext-home-composer.is-docked .chat-input-box { flex-direction: row; align-items: center; flex-wrap: nowrap; gap: 6px; min-height: 0; padding: 4px 4px 4px 6px; border-radius: 22px; }
+.ext-home-composer.is-docked .chat-input-controls { display: contents; }
+.ext-home-composer.is-docked .chat-input-box > .chat-input-textarea { order: 1; flex: 1; min-width: 0; min-height: 0; height: 30px !important; max-height: 30px; padding: 5px 2px; overflow: hidden; white-space: nowrap; resize: none; }
+.ext-home-composer.is-docked .chat-input-textarea::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ext-home-composer.is-docked .chat-plus-group { order: 0; }
+.ext-home-composer.is-docked .ext-home-dock-chip { order: 2; }
+.ext-home-composer.is-docked .chat-send-group { order: 3; }
+.ext-home-composer.is-docked .chat-input-controls > :not(.chat-plus-group):not(.chat-send-group):not(.ext-home-dock-chip) { display: none; }
+.ext-home-dock-chip { flex: none; display: inline-flex; align-items: center; gap: 5px; max-width: 132px; height: 26px; padding: 0 9px 0 5px; border: 1px solid var(--border); border-radius: 8px; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--fg); }
+.ext-home-dock-chip .ext-chip-fav { width: 16px; height: 16px; font-size: 9.5px; border-radius: 4px; }
+/* Grown: the full composer; its controls get room in a 400 px popup (review round 5, Sol #4). */
+.ext-home-composer.is-grown .chat-input-controls { gap: 4px; padding-right: 2px; }
+/* Beside the side bar (the row about 330 px) "Save as todo" is its glyph alone, a round button like
+   the mic's, its words in the tooltip: Act in this tab keeps its words and the send arrow its room. */
+@container (max-width: 345px) {
+  .ext-home-composer .draft-later-words, .ext-home-composer .draft-later-short { display: none; }
+  .ext-home-composer .draft-later-glyph { margin-right: 0; }
+  .ext-home-composer .draft-later-btn { width: 32px; padding: 0; border-radius: 50%; font-size: 14px; }
+}
+.ext-home-composer.is-grown .chat-send-group { margin-left: 2px; }
+/* Narrower still, the switch's words give way (cut with an ellipsis), never the send arrow. */
+.ext-home-composer.is-grown .chat-input-controls :has(> .ext-home-act) { min-width: 0; flex-shrink: 1; overflow: hidden; }
+.ext-home-composer.is-grown .ext-home-act { min-width: 0; flex-shrink: 1; overflow: hidden; }
+.ext-home-composer.is-grown .ext-home-act > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+/* ── Browser control (ExtControl.tsx), the side bar's third entry ── */
+.ext-control { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.ext-control-head { gap: 6px; }
+.ext-control-title { flex: 1; min-width: 0; font-weight: 700; font-size: 15px; padding-left: 6px; }
+.ext-control-body { flex: 1; min-height: 0; overflow: auto; padding: 4px 10px 16px; display: flex; flex-direction: column; gap: 10px; }
+.ext-control-status { display: flex; align-items: center; gap: 12px; margin-top: 6px; padding: 14px 14px; border: 1px solid var(--border); border-radius: 14px; color: var(--fg-muted); }
+.ext-control-status.is-on { background: rgba(34, 160, 80, .08); border-color: rgba(34, 160, 80, .35); color: #1f8a46; }
+.ext-control-status.is-tab { background: rgba(37, 99, 235, .08); border-color: rgba(37, 99, 235, .35); color: #2457c5; }
+.ext-control-status-dot { flex: none; width: 14px; height: 14px; border-radius: 50%; background: currentColor; }
+.ext-control-status.is-off .ext-control-status-dot { background: none; border: 2px solid currentColor; box-sizing: border-box; }
+.ext-control-status-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ext-control-status-title { font-size: 16px; font-weight: 700; color: var(--fg); }
+.ext-control-status-line { font-size: 12.5px; line-height: 1.4; color: var(--fg-muted); }
+.ext-control-group { display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; }
+.ext-control-tab { display: flex; flex-direction: column; }
+.ext-control-recent { margin: 0 6px 4px 32px; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 1px; font-size: 11.5px; color: var(--fg-muted); }
+.ext-control-recent li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ext-control-recent li::before { content: '↳ '; opacity: .7; }
+.ext-control-setting { display: flex; align-items: center; gap: 10px; padding: 8px 6px; border-radius: 8px; cursor: pointer; }
+.ext-control-setting:hover { background: var(--hover-bg); }
+.ext-control-setting-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.ext-control-setting-name { font-weight: 600; color: var(--fg); }
+.ext-control-setting-line { font-size: 11.5px; color: var(--fg-muted); }
+.ext-control-more { align-self: flex-start; margin: 4px 6px 0; font-size: 12.5px; }
+@media (prefers-color-scheme: dark) {
+  .ext-control-status.is-on { color: #4cc27a; }
+  .ext-control-status.is-tab { color: #7aa7ff; }
+}

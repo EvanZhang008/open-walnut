@@ -18,6 +18,7 @@ import { engineCaps, isAcpEngine, normalizeEngine } from '../agents/engine-regis
 import { resolveDefaultEngine } from '../agents/default-engine.js';
 import { buildAskProfilePrefix } from './ask-profile-prefix.js';
 import { isPersonSource } from './send-sent-by.js';
+import { heuristicShortTitle } from './task-title-brake.js';
 import { ASK_WALNUT_PROJECT, GENERAL_AGENT_ID, askProjectFor, resolveAskAgent, stampedAgentId, type AskAgentRef } from './ask-agent.js';
 
 export interface QuickStartTaskMeta {
@@ -206,6 +207,15 @@ export function matchPlaceholderTitle(
   return cwds.filter((c): c is string => !!c)
     .map(defaultSessionTaskTitle)
     .find((ph) => title === ph);
+}
+
+/**
+ * A new task's title from the words that start it: their first line, cut to a row's length as the
+ * title brake cuts (SESSION_TITLE_MAX). '' for no words.
+ */
+export function titleFromWords(message: string): string {
+  const line = message.split(/\r?\n/).map((l) => l.trim()).find(Boolean) ?? '';
+  return line ? heuristicShortTitle(line) : '';
 }
 
 /**
@@ -437,7 +447,11 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     // generic one is "Session: <basename(cwd)>", which for WALNUT_HOME reads
     // "Session: .open-walnut" (the data dir's name means nothing to the user).
     const placeholderTitle = askAgent ? askProjectFor(askAgent) : defaultSessionTaskTitle(cwd);
-    const title = params.taskTitle?.trim() || placeholderTitle;
+    // A task in its own directory has no folder to name it: the person's own words do, at once,
+    // cut as the title brake cuts (the board, search and approvals read it; review round 5: every
+    // such task read "Session: <its id>" until a model titled it, and never when none did).
+    const wordsTitle = inOwnTaskDir && !params.taskTitle?.trim() ? titleFromWords(message) : '';
+    const title = params.taskTitle?.trim() || wordsTitle || placeholderTitle;
     // A folder-derived project is decided HERE, not trusted from the draft:
     // the folder's own project, else a new one named after the folder, made
     // unique against the registry and created with the folder stamped on it
@@ -546,7 +560,13 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
       const made = await ensureTaskDirOnHost(task.id, '__local__');
       if ('error' in made) throw new QuickStartError(`The new task's own directory could not be made: ${made.error}`, made.status);
       cwd = made.path;
-      ({ task } = await updateTask(task.id, { cwd, ...(params.taskTitle?.trim() ? {} : { title: defaultSessionTaskTitle(cwd) }) }, { source }));
+      ({ task } = await updateTask(task.id, { cwd, ...(params.taskTitle?.trim() || wordsTitle ? {} : { title: defaultSessionTaskTitle(cwd) }) }, { source }));
+      // A cut of longer words: Walnut's fast model may name it better, in the background, only
+      // while the task still wears the cut.
+      if (wordsTitle && wordsTitle !== message.trim()) {
+        const id = task.id;
+        void import('./task-title-brake.js').then(({ refineShortTitle }) => refineShortTitle(id, wordsTitle, message));
+      }
     }
     // One rare follow-up write left: `unread` doesn't ride AddTaskInput. The
     // tier no longer needs one — it rode the create above.

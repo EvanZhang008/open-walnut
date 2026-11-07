@@ -169,6 +169,15 @@ export function startPagePlumbing(o: {
       case 'relay-stop-all':
         void ask({ type: 'relay-stop-all' }).then(() => { void tellRelay(); void push() })
         return
+      case 'browser-key-ask': {
+        // The frame shares the extension's unlock: the key it should keep, from the background
+        // (hand-browser-key.ts handPanelBrowserKey), told to this frame only, at Walnut's origin.
+        const had = typeof d.key === 'string' && /^[A-Za-z0-9_-]{43}$/.test(d.key) ? d.key : undefined
+        void ask<{ key?: string; known?: boolean }>({ type: 'panel-browser-key', ...(had ? { key: had } : {}) }).then((r) => {
+          postAsk({ type: 'browser-key', ...(r.ok && typeof r.key === 'string' ? { key: r.key } : {}), ok: r.ok })
+        })
+        return
+      }
       case 'page-text': {
         // A question goes out with the page: its text, read now, from the tab the panel named.
         if (typeof d.id !== 'string') return

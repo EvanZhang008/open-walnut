@@ -141,11 +141,15 @@ test('connect the extension, then open the panel beside a page with a selection'
   await sw().evaluate((w: number) => chrome.windows.create({ url: chrome.runtime.getURL(`sidepanel.html?window=${w}`), type: 'popup', width: 420, height: 760 }), ids.window)
   panel = await panelOpened
   await expect(view().getByTestId('ext-panel')).toBeVisible({ timeout: 60_000 })
+  // It opens on the first page (the task list, New task docked under it, design C): "This page +
+  // selection" there; the box grown, the page chip and the selection as its quote. The asks are one
+  // ≡ away: New chat there is Walnut's own Ask, no tab strip, the key in the header.
+  await expect(view().getByTestId('ext-home')).toBeVisible({ timeout: 30_000 })
+  await expect(view().getByTestId('ext-home-dock-chip')).toHaveText(/This page \+ selection/, { timeout: 30_000 })
+  await expect(view().getByTestId('ext-home-dock-chip')).toHaveAttribute('title', 'Release notes 4.2')
+  await view().locator('[data-testid="ext-home-composer"] textarea').click()
   await expect(view().getByTestId('ext-panel-include')).toContainText('Release notes 4.2', { timeout: 30_000 })
   await expect(view().getByTestId('ext-panel-include')).toContainText(`docs.example.test:${port}`)
-  // It opens on the first page (a new task over the task list), the selection as its quote; the
-  // asks are one ≡ away: New chat there is Walnut's own Ask, no tab strip, the key in the header.
-  await expect(view().getByTestId('ext-home')).toBeVisible({ timeout: 30_000 })
   await expect(view().getByTestId('ext-panel-selection')).toContainText('retries a failed upload three times', { timeout: 15_000 })
   await view().getByTestId('ask-walnut-menu').click()
   await view().getByTestId('ask-walnut-new').click()
@@ -536,8 +540,8 @@ test('Passwords view: unlock in place, the page\'s logins, show a password, fill
   await expect.poll(() => doc.locator('#pass').inputValue(), { timeout: 15_000 }).toBe(`Panel-Fill-${stamp}`)
   expect(await doc.locator('#user').inputValue()).toBe('reader@example.test')
 
-  // Back to Ask; opened again, the panel opens on Ask.
-  await pwView().getByTestId('panel-view-back').click()
+  // Back to Ask (the side bar's Chat, design C); opened again, the panel opens on Ask.
+  await panel.getByTestId('panel-rail-chat').click()
   await expect(panel.getByTestId('panel-view-passwords')).toBeHidden()
   await panel.reload()
   await expect(view().getByTestId('ext-ask-head')).toBeVisible({ timeout: 60_000 })

@@ -71,7 +71,16 @@ export type PanelInbound =
   | ({ type: 'vault-state' } & VaultState)
   | { type: 'key-state'; open: boolean }
   | { type: 'hand'; ask?: HandedAsk; open?: HandedOpen }
-  | ({ type: 'relay' } & RelayState);
+  | ({ type: 'relay' } & RelayState)
+  /** The key this frame keeps to share the extension's unlock (absent: none new; ext-browser-key.ts). */
+  | { type: 'browser-key'; key?: string }
+  /** The side bar's entry on show (the extension draws the bar): Chat, or Browser control. */
+  | { type: 'rail'; entry: RailEntry; home?: boolean };
+
+/** The extension's side bar: Chat (the first page and its tasks), Passwords, Browser control, Settings. */
+export const RAIL_ENTRIES = ['chat', 'passwords', 'control', 'settings'] as const;
+export type RailEntry = typeof RAIL_ENTRIES[number];
+export const isRailEntry = (v: unknown): v is RailEntry => typeof v === 'string' && (RAIL_ENTRIES as readonly string[]).includes(v);
 
 const EXTENSION_ORIGIN = /^(chrome|moz|safari-web)-extension:\/\/[a-z0-9-]+$/i;
 
@@ -115,6 +124,10 @@ export function readInbound(data: unknown, origin: string, fromParent: boolean):
     const relay = readRelay(d);
     return relay ? { type: 'relay', ...relay } : null;
   }
+  if (d.type === 'browser-key') {
+    return { type: 'browser-key', ...(typeof d.key === 'string' && /^[A-Za-z0-9_-]{43}$/.test(d.key) ? { key: d.key } : {}) };
+  }
+  if (d.type === 'rail' && isRailEntry(d.entry)) return { type: 'rail', entry: d.entry, ...(d.home === true ? { home: true } : {}) };
   return null;
 }
 
@@ -129,13 +142,18 @@ export interface PanelOptions {
   surface: 'panel' | 'popup';
   /** It opens its own Settings as a full view (`ext=3`): the drawer's Settings row shows. */
   settings: boolean;
+  /**
+   * It draws the side bar (`ext=4`, design C): Chat, Passwords, Browser control, Settings. The
+   * header then leaves Settings to the bar.
+   */
+  rail: boolean;
 }
 
 export function panelOptions(search: string): PanelOptions {
   const q = new URLSearchParams(search);
   const ext = Number(q.get('ext'));
   const keyed = ext >= 2;
-  return { keyed, surface: keyed && q.get('surface') === 'popup' ? 'popup' : 'panel', settings: ext >= 3 };
+  return { keyed, surface: keyed && q.get('surface') === 'popup' ? 'popup' : 'panel', settings: ext >= 3, rail: ext >= 4 };
 }
 
 /**

@@ -9,7 +9,7 @@ import { useEffect, useRef, useState, type RefObject } from 'react';
 import type { Task } from '@open-walnut/core';
 import { ToggleSwitch } from '@/components/settings/inputs/ToggleSwitch';
 import { useMenuPlacement } from '@/hooks/useMenuPlacement';
-import { relayGroups, relayTabName, taskOfOwner, type RelayPillKind, type RelayState, type RelayTab } from './ext-relay-model';
+import { ownerWord, relayGroups, relayTabName, taskOfOwner, type RelayPillKind, type RelayState, type RelayTab } from './ext-relay-model';
 import { taskHead } from './ext-tasks-model';
 import { taskPageTitle } from './ext-home-model';
 import { firstQuestionOf } from './ext-panel-model';
@@ -28,15 +28,15 @@ export function RelayPill({ kind, label, open, onToggle, pillRef }: { kind: Rela
  * Who acts and what it does: the task's name (its first question while it wears Walnut's
  * placeholder title, as on its page) and its state line; else the extension's word for who.
  */
-function whatOf(task: Task | undefined, who: string | undefined): string {
+export function whatOf(task: Task | undefined, who: string | undefined): string {
   const head = task ? taskHead(task) : null;
   const name = task ? taskPageTitle(task.title, firstQuestionOf(task.id)) : who ?? '';
   return [name, head?.line ?? ''].filter(Boolean).join(' · ');
 }
 
 /** A task's name and line for a relay row, its Stop or Unshare after it. */
-function RelayRow({ t, here, task, action, onAction }: { t: RelayTab; here: number | undefined; task?: Task; action: 'Stop' | 'Unshare'; onAction: () => void }) {
-  const what = whatOf(task, t.who);
+export function RelayRow({ t, here, task, action, onAction }: { t: RelayTab; here: number | undefined; task?: Task; action: 'Stop' | 'Unshare'; onAction: () => void }) {
+  const what = whatOf(task, t.who ?? ownerWord(t.owner));
   const site = (t.url ? (() => { try { return new URL(t.url).host; } catch { return ''; } })() : '') || 'tab';
   const letter = (site.replace(/^www\./, '').match(/[a-z0-9]/i)?.[0] ?? '?').toUpperCase();
   return (

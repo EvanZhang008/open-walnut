@@ -79,7 +79,8 @@ export async function startPanelLab(base: string, label: string): Promise<PanelL
   const opened = ctx.waitForEvent('page')
   await p.getByTestId('popup-connect').click()
   const connect = await opened
-  await expect(connect.getByRole('heading', { name: 'Connect this browser to Walnut?' })).toBeVisible({ timeout: 60_000 })
+  // Walnut's whole app loads first (Vite compiles it on the first visit): minutes on a busy host.
+  await expect(connect.getByRole('heading', { name: 'Connect this browser to Walnut?' })).toBeVisible({ timeout: 150_000 })
   // Agents in this browser stay off here, as the person may choose on this page (on by default):
   // a browser of this spec must not join the fixture Walnut's agents beside the agent specs' own.
   // (A build from before that choice, PW_EXTENSION_DIR's, has no such box.)
@@ -116,10 +117,14 @@ export const sw = (lab: PanelLab) => lab.ctx.serviceWorkers()[0]
  * to an ask. `view` 'ask' (and the full views) then goes to Ask the way a person does, from the ≡
  * drawer's New chat, when the panel opened on the first page; 'home' leaves it there. `view` then
  * opens the Tasks or Passwords full view, with its Back control (panel-ask.ts). A Walnut too old for
- * that shape shows the three tabs, where `view` picks the tab it keeps.
+ * that shape shows the three tabs, where `view` picks the tab it keeps. `keepRail` opens on the side
+ * bar entry it was left on, as a person's next open does.
  */
-export async function openPanel(lab: PanelLab, view?: 'ask' | 'home' | 'tasks' | 'passwords'): Promise<{ panel: Page; t0: number }> {
+export async function openPanel(lab: PanelLab, view?: 'ask' | 'home' | 'tasks' | 'passwords', opts: { keepRail?: boolean } = {}): Promise<{ panel: Page; t0: number }> {
   if (view && view !== 'home') await sw(lab).evaluate((t: string) => chrome.storage.local.set({ panelTab: t }), view)
+  // The side bar's entry of last time (panel-rail.ts) is the person's: a caller names the view it
+  // wants, so the panel opens on Chat here unless it asks to keep that entry.
+  if (!opts.keepRail) await sw(lab).evaluate(() => chrome.storage.local.remove('panelRail'))
   // The page the view said it was left on (panel-snap.ts `mode`): already Ask, the panel opens
   // there and nothing waits on it here (a drawing of last time stays a drawing for the caller).
   const left = await sw(lab).evaluate(async () => ((await chrome.storage.local.get('panelSnaps')).panelSnaps as { mode?: { mode?: string } } | undefined)?.mode?.mode ?? '')
@@ -166,9 +171,8 @@ export async function toAsk(panel: Page): Promise<void> {
 }
 
 /**
- * A full view over the panel, with Back: Passwords from the ≡ drawer's row; Tasks (an older
- * extension's Tasks tab, and the approvals' "more" link: the drawer's Tasks row is the first page
- * now) asked for the way the frame asks for it.
+ * A full view over the panel: Passwords from the side bar (panel-rail.ts), the way a person picks
+ * it; Tasks (the approvals' "more" link, with its Back to Chat) asked for the way the frame asks.
  */
 export async function openView(panel: Page, view: 'tasks' | 'passwords'): Promise<void> {
   const v = askView(panel)
@@ -179,23 +183,20 @@ export async function openView(panel: Page, view: 'tasks' | 'passwords'): Promis
     const f = panel.frames().find((x) => x.url().includes('view=ext-panel'))!
     await f.evaluate(() => window.parent.postMessage({ walnut: 'ext-panel', type: 'open-view', view: 'tasks' }, '*'))
   } else {
-    // A task's page has Back where the others have ≡: the first page's ≡ then.
-    if (await v.getByTestId('ext-task-head').isVisible()) await v.getByTestId('ext-task-back').click()
-    await v.getByTestId('ask-walnut-menu').click()
-    await v.getByTestId(`ext-drawer-${view}`).click()
+    await panel.getByTestId(`panel-rail-${view}`).click()
   }
   await expect(panel.getByTestId(`panel-view-${view}`)).toBeVisible({ timeout: 15_000 })
 }
 
 /**
- * The Back of the full view on show: Tasks has it in the panel's bar, Passwords in its own bar
- * inside its frame (popup.ts `inView`).
+ * The way back from the full view on show: Tasks has its Back in the panel's bar; Passwords and
+ * Settings are side bar entries, left by its Chat (their own Back is hidden beside the side bar).
  */
 export async function viewBack(panel: Page): Promise<Locator> {
   const shown = panel.locator('.panel-view:not([hidden])')
-  const inFrame = (await shown.getAttribute('data-testid')) === 'panel-view-passwords'
-  return inFrame
-    ? shown.frameLocator('iframe.panel-frame-passwords').getByTestId('panel-view-back')
+  const id = await shown.getAttribute('data-testid')
+  return id === 'panel-view-passwords' || id === 'panel-view-settings'
+    ? panel.getByTestId('panel-rail-chat')
     : shown.locator('> .panel-view-bar').getByTestId('panel-view-back')
 }
 

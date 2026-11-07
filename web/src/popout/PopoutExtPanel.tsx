@@ -56,11 +56,16 @@ import { ExtAskApprovals, useExtApprovals } from './ExtApprovals';
 import { keepAsks, keptAsks } from './ext-continue-kept';
 import { useVaultChangedRelay } from './vault-changed-relay';
 import { markNotAPhone } from '@/hooks/usePhoneLayout';
+import { markStatusLinesOn } from '@/components/tasks/useTaskStatusLines';
+import { takeBrowserKey, useExtBrowserKey } from './ext-browser-key';
+import { ExtControl } from './ExtControl';
 import './ext-panel.css';
 import '@/styles/walnut-agent.css';
 
-// The panel is a desktop browser's, however narrow: Home's task panel acts as on a desktop here.
+// The panel is a desktop browser's, however narrow: Home's task panel acts as on a desktop here,
+// and every row says what it needs (design C).
 markNotAPhone();
+markStatusLinesOn();
 
 export function PopoutExtPanel() {
   return <TasksProvider><NotificationProvider><FocusBarProvider>
@@ -126,6 +131,12 @@ function ExtPanel() {
   useEffect(() => { if (asks.rowsReady) keepAsks(agentId, asks.rows); }, [asks.rowsReady, asks.rows, agentId]);
   const agent = asks.agent;
   const [vault, setVault] = useState<VaultState | null>(null);
+  // The frame shares the extension's unlock (its approval cards read the same as the key: ext-browser-key.ts).
+  const browserKey = useExtBrowserKey(!!vault && !vault.locked);
+  const browserKeyRef = useRef(browserKey);
+  browserKeyRef.current = browserKey;
+  /** The side bar's entry on show, as the extension says (it draws the bar and keeps the choice). */
+  const [railEntry, setRailEntry] = useState<'chat' | 'control'>('chat');
   const [keyPressed, setKeyPressed] = useState(false);
   /** The ≡ drawer, opened on its asks or with its agent list unfolded. A gesture, never kept. */
   const [asksDrawer, setAsksDrawer] = useState<false | 'asks' | 'agents'>(false);
@@ -338,6 +349,8 @@ function ExtPanel() {
     setDetailId('');
     setKeptMode('home');
   }, [setDetailId, setKeptMode]);
+  const goHomeRef = useRef(goHome);
+  goHomeRef.current = goHome;
 
   const applyHand = useCallback((h: { ask?: HandedAsk; open?: HandedOpen }) => {
     if (h.open?.task) {
@@ -388,6 +401,12 @@ function ExtPanel() {
         setVault({ locked: m.locked, siteCount: m.siteCount, host: m.host });
       } else if (m.type === 'key-state') {
         setKeyPressed(m.open);
+      } else if (m.type === 'browser-key') {
+        takeBrowserKey(m.key, browserKeyRef.current.askedWith());
+      } else if (m.type === 'rail') {
+        // Passwords and Settings are the extension's own views over this frame; Chat and Browser control are here.
+        if (m.entry === 'chat' || m.entry === 'control') setRailEntry(m.entry);
+        if (m.entry === 'chat' && m.home) goHomeRef.current();
       } else if (m.type === 'hand') {
         const h = { ...(m.ask ? { ask: m.ask } : {}), ...(m.open ? { open: m.open } : {}) };
         if (keyRef.current) applyHandRef.current(h);
@@ -758,11 +777,13 @@ function ExtPanel() {
     else if (how === 'detail') openDetail(task.id);
     else openTask(task.id, how.sessionId);
   };
+  // Browser control, the side bar's third entry: what agents do in this browser, its few settings.
+  const onControl = railEntry === 'control';
   // The first page: under its header the relay pill and its panel, the strip while an agent acts in this tab.
   const home = (
     <ExtFirstPage
       surface={opts.surface}
-      hidden={mode !== 'home'}
+      hidden={mode !== 'home' || onControl}
       page={page}
       {...(tab !== undefined ? { tab } : {})}
       {...(owner ? { owner } : {})}
@@ -776,7 +797,8 @@ function ExtPanel() {
       vault={vault}
       keyPressed={keyPressed}
       settings={opts.settings}
-      approvals={mode === 'home' ? approvalsStrip : null}
+      rail={opts.rail}
+      approvals={mode === 'home' && !onControl ? approvalsStrip : null}
       pageText={pageText}
       onLaunched={(r) => openTask(r.taskId, r.sessionId, r)}
       onOpenTask={onOpenTask}
@@ -805,10 +827,16 @@ function ExtPanel() {
 
   // A new chat: the Continue list over the composer (ext-panel.css `.is-fresh`).
   const fresh = onAsk && !shownTaskId && !forMain;
-  return <div ref={rootRef} className={`ext-panel ext-ask is-${mode}${isPopup ? ' is-popup' : ''}${fresh ? ' is-fresh' : ''}`} data-testid="ext-panel"
-    {...(isPopup ? { 'data-surface': 'popup' } : {})} data-mode={mode} data-page-key={pageKey} data-conversation={mode === 'home' ? '' : key}
+  return <div ref={rootRef} className={`ext-panel ext-ask is-${onControl ? 'control' : mode}${isPopup ? ' is-popup' : ''}${fresh && !onControl ? ' is-fresh' : ''}`} data-testid="ext-panel"
+    {...(isPopup ? { 'data-surface': 'popup' } : {})} data-mode={onControl ? 'control' : mode} data-page-key={pageKey} data-conversation={mode === 'home' ? '' : key}
     data-asks={asks.rowsReady || keptRows.length > 0 ? 'ready' : 'loading'}>
     {home}
+    {onControl && (
+      <ExtControl relay={relay} here={tab} tasks={allTasks} {...(owner ? { owner } : {})} agents={ctx.agents}
+        keyed={opts.keyed} vault={vault} keyPressed={keyPressed} settings={opts.settings} />
+    )}
+    {/* Under Browser control the conversation stays mounted (its stream and draft), out of sight
+        (ext-panel.css `.ext-panel.is-control`): never in a wrapper, the panel's rules are on its children. */}
     {mode !== 'home' && (mode === 'task' ? taskHeader : header)}
     {mode !== 'home' && approvalsStrip}
     {mode !== 'home' && otherOwner && (

@@ -21,7 +21,7 @@ const local: Record<string, unknown> = {}
 }
 
 const { cleanHome, cleanMode, homeOf, keepHomeSnap, keepMode } = await import('../../../packages/browser-extension/src/panel-snap')
-const { drawHomeLook, drawTaskLook, HOME_PLACEHOLDER } = await import('../../../packages/browser-extension/src/panel-look-home')
+const { drawControlLook, drawHomeLook, drawTaskLook, HOME_PLACEHOLDER } = await import('../../../packages/browser-extension/src/panel-look-home')
 const { HOME_PLACEHOLDER: VIEW_PLACEHOLDER } = await import('../../../web/src/popout/ext-home-model')
 
 beforeEach(() => { for (const k of Object.keys(local)) delete local[k]; local.panelServer = 'http://walnut.example.test' })
@@ -82,14 +82,21 @@ describe('the first page\'s words, kept', () => {
 describe('the drawing of the first page', () => {
   const box = () => document.createElement('div')
 
-  it('has the view\'s places: the header with the relay and the key, the composer, the tabs, the rows', () => {
-    const el = drawHomeLook({ surface: 'panel', home: { at: 1, ...HOME }, page: { title: 'Lab Accounts', host: 'accounts.example.test' }, locked: true, relay: 'tab', settings: true }, box())
+  it('has the view\'s places (design C): the header with the relay and the key, the tabs, the rows, New task docked last', () => {
+    const el = drawHomeLook({ surface: 'panel', home: { at: 1, ...HOME }, page: { title: 'Lab Accounts', host: 'accounts.example.test' }, locked: true, relay: 'tab', settings: false }, box())
     expect(el.dataset.look).toBe('home')
     expect(el.querySelector('[data-testid="panel-snap-relay"]')?.textContent).toBe('Agent in tab')
     expect(el.querySelector('[data-testid="panel-snap-locked"]')).not.toBeNull()
     expect(el.querySelector('[data-testid="panel-snap-placeholder"]')?.textContent).toBe(HOME_PLACEHOLDER)
-    expect(el.querySelector('[data-testid="panel-snap-page"]')?.textContent).toContain('Lab Accounts · accounts.example.test')
-    expect(el.querySelector('.look-home-act')?.textContent).toBe('Act in this tab')
+    // Docked on one line: "This page" (its title on hover) and send; Act in this tab only once it grows.
+    const chip = el.querySelector('[data-testid="panel-snap-page"]')!
+    expect(chip.textContent).toContain('This page')
+    expect(chip.getAttribute('title')).toBe('Lab Accounts · accounts.example.test')
+    expect(el.querySelector('.look-home-act')).toBeNull()
+    expect(el.querySelector('.look-home-composer.is-docked .look-send')).not.toBeNull()
+    const order = [...el.children].map((c) => c.className.split(' ')[0])
+    expect(order.indexOf('look-home-tabs')).toBeLessThan(order.indexOf('look-home-dock'))
+    expect(order[order.length - 1]).toBe('look-home-dock')
     expect(el.querySelector('[data-testid="panel-snap-tabs"]')?.textContent).toContain('All128')
     const rows = el.querySelectorAll('.look-home-row')
     expect(rows).toHaveLength(2)
@@ -125,5 +132,13 @@ describe('the drawing of the first page', () => {
     expect(el.querySelector('.look-home-back')?.textContent).toBe('Back')
     expect(el.querySelector('[data-testid="panel-snap-title"]')?.textContent).toBe('Rotate the expired API key')
     expect(el.querySelector('[data-testid="panel-snap-placeholder"]')?.textContent).toBe('Ask a follow-up…')
+  })
+
+  it('Browser control, as the side bar left it, draws its title and its status', () => {
+    const el = drawControlLook({ relay: 'tab', locked: false }, box())
+    expect(el.dataset.look).toBe('control')
+    expect(el.querySelector('[data-testid="panel-snap-title"]')?.textContent).toBe('Browser control')
+    expect(el.querySelector('[data-testid="panel-snap-control"]')?.textContent).toBe('An agent is using this tab')
+    expect(drawControlLook({ relay: 'off', locked: true }, box()).querySelector('[data-testid="panel-snap-locked"]')).not.toBeNull()
   })
 })

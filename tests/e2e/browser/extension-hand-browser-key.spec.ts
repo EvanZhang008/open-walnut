@@ -8,8 +8,8 @@
  * Shares the fixture's vault (the same master password as the other specs). Fake data only.
  */
 import { expect, test, type Page } from '@playwright/test'
-import { startPanelLab, sw, type PanelLab } from './extension-panel-harness'
-import { ensureVaultSetUp, VAULT_MASTER } from './vault-session-helper'
+import { askView, openPanel, startPanelLab, sw, type PanelLab } from './extension-panel-harness'
+import { ensureVaultSetUp, VAULT_MASTER, vaultSession } from './vault-session-helper'
 import { holdVaultLock } from './vault-lock'
 
 test.describe.configure({ mode: 'serial' })
@@ -147,4 +147,50 @@ test('a Walnut tab open and locked while the extension unlocks gets its key at o
   await expect(unlockOf(p)).toBeVisible({ timeout: 10_000 })
   await web.close()
   await p.close()
+})
+
+test('unlocked once in the extension, an agent\'s password ask in the side panel offers Approve, never an unlock row (review round 5, Opus #1)', async () => {
+  test.setTimeout(240_000)
+  const base = lab.base
+  const session = await vaultSession(lab.doc, base)
+  const person = { 'x-walnut-vault-session': session }
+  const item = await lab.doc.request.post(`${base}/api/v1/vault/items`, { headers: person, data: { item: { type: 'login', title: `Lab shop ${Date.now().toString(36)}`, username: 'buyer@example.test', password: 'shop-fake-Pass-1', urls: ['shop.example.test'] } } })
+  expect(item.ok(), await item.text()).toBe(true)
+  const itemId = String(((await item.json()) as { item: { id: string } }).item.id)
+  const policy = await lab.doc.request.get(`${base}/api/v1/vault/agent/policy`, { headers: person })
+  const before = (await policy.json()) as { agents?: string; grantMs?: number }
+  expect((await lab.doc.request.put(`${base}/api/v1/vault/agent/policy`, { headers: person, data: { agents: 'ask', grantMs: 0 } })).ok()).toBe(true)
+  let panel: Page | undefined
+  try {
+    // The person unlocks once, in the extension.
+    const p = await popup()
+    await unlockInPopup(p)
+    await p.close()
+    ;({ panel } = await openPanel(lab, 'home'))
+    await panel.setViewportSize({ width: 400, height: 760 })
+    const v = askView(panel)
+    await expect(v.getByTestId('ext-home')).toBeVisible({ timeout: 60_000 })
+    await expect(v.getByTestId('ext-key-locked')).toHaveCount(0, { timeout: 20_000 })
+    // An agent asks for the login.
+    const use = await lab.doc.request.post(`${base}/api/v1/vault/agent/use`, { headers: { 'x-walnut-caller-kind': 'automation' }, data: { item: itemId, purpose: 'place the lab order' } })
+    const asked = (await use.json()) as { status?: string; requestId?: string; waitToken?: string }
+    expect(asked.status, JSON.stringify(asked)).toBe('pending')
+    const row = v.locator(`[data-testid="ext-ask-approval"][data-approval-id="${asked.requestId}"]`)
+    await expect(row).toBeVisible({ timeout: 30_000 })
+    // The panel holds this browser's unlock (handed by the extension): Approve, and nothing asks for the master password.
+    await expect(row.getByRole('button', { name: 'Approve' })).toBeVisible({ timeout: 20_000 })
+    await expect(row.getByTestId('approval-unlock')).toHaveCount(0)
+    await expect(row.getByTestId('ext-approval-reason')).toHaveCount(0)
+    await expect(row.getByRole('button', { name: /unlock/i })).toHaveCount(0)
+    await panel.screenshot({ path: `${SHOTS}/panel-approval-unlocked.png` })
+    await row.getByRole('button', { name: 'Approve' }).click()
+    await expect(row).toHaveCount(0, { timeout: 20_000 })
+    const w = await lab.doc.request.post(`${base}/api/v1/vault/agent/use/${asked.requestId}/wait`, { headers: { 'x-walnut-caller-kind': 'automation' }, data: { token: asked.waitToken, wait_ms: 0 } })
+    expect(((await w.json()) as { status?: string }).status).toBe('released')
+  } finally {
+    await panel?.close()
+    await lab.doc.request.put(`${base}/api/v1/vault/agent/policy`, { headers: person, data: { agents: before.agents ?? 'ask', ...(typeof before.grantMs === 'number' ? { grantMs: before.grantMs } : {}) } }).catch(() => undefined)
+    await lab.doc.request.delete(`${base}/api/v1/vault/items/${itemId}`, { headers: person }).catch(() => undefined)
+    await lab.doc.request.post(`${base}/api/v1/vault/lock`, { data: { everywhere: true } }).catch(() => undefined)
+  }
 })

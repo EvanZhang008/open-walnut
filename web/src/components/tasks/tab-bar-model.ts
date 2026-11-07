@@ -23,6 +23,24 @@ export interface TabBarTab {
 /** The tabs a bar nobody has customised leaves off: the tiers and Recent. */
 export const DEFAULT_HIDDEN_TABS: readonly string[] = ['focus', 'satellite', 'wait', 'recent'];
 
+/**
+ * Where the bar is the page's only way into the tiers (the browser extension's first page, design
+ * C; the user: "show task like in the all, focus etc"): the tiers stay on it until the person takes
+ * them off; only Recent waits under More.
+ */
+export const WIDE_HIDDEN_TABS: readonly string[] = ['recent'];
+/** The tiers the wide bar brings back when the person's own choice left only All and Pinned. */
+const WIDE_FLOOR: readonly string[] = ['focus', 'satellite', 'wait'];
+
+/**
+ * The tabs a wide bar hides: the person's own choice (Home's, the same key), except that it never
+ * leaves only All and Pinned (review round 5, Opus #6: the first page showed those two alone).
+ */
+export function wideHidden(hidden: readonly string[]): readonly string[] {
+  const kept = BUILT_IN.filter((t) => !hidden.includes(t.id)).length;
+  return kept > 2 ? hidden : hidden.filter((id) => !WIDE_FLOOR.includes(id));
+}
+
 /** Up to this many tabs, every tab spells out its name; past it, only the active one does. */
 export const ROOMY_TAB_LIMIT = 3;
 

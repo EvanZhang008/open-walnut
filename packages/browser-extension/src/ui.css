@@ -141,6 +141,8 @@ body.popup .item [data-tip]::after { top: auto; bottom: calc(100% + 4px); }
 .item { container-type: inline-size; }
 @container (max-width: 330px) { .item:not(:has(.revealed)) .act-reveal { display: none; } }
 @container (max-width: 300px) { .item .act-user { display: none; } }
+/* Narrower still (a 320 px side panel less the side bar): the site's letter goes, the words stay whole. */
+@container (max-width: 280px) { .item > .avatar { display: none; } }
 /* Hovered or picked with the keys, a row trades its code chip for its buttons. */
 .item:hover .totp-chip, .item:focus-within .totp-chip { display: none; }
 .totp-chip { white-space: nowrap; flex: none; }
@@ -464,3 +466,30 @@ html.askpop.wide, html.askpop.wide body.sidepanel, html.askpop.wide body.sidepan
 }
 :root.theme-dark .look-relay.is-on { color: #5fd38a; background: rgba(95, 211, 138, .14); }
 :root.theme-dark .look-relay.is-tab { color: #8fb4ff; background: rgba(143, 180, 255, .14); }
+
+/* ── the side bar (panel-rail.ts, design C): Chat, Passwords, Browser control, Settings ── */
+.panel-shell.has-rail { flex-direction: row; }
+.panel-shell.has-rail > .panel-body { flex: 1; min-width: 0; height: 100%; }
+.panel-rail { flex: none; width: 48px; display: flex; flex-direction: column; align-items: stretch; gap: 2px; padding: 8px 3px; border-right: 1px solid var(--line); background: var(--bg2); }
+.panel-rail-btn { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 0 5px; border: 0; border-radius: 9px; background: none; color: var(--muted); font: inherit; cursor: pointer; }
+.panel-rail-btn:hover { color: var(--fg); background: var(--bg); }
+.panel-rail-btn.is-on { color: var(--accent); background: var(--accent-soft); }
+.panel-rail-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.panel-rail-icon { display: inline-grid; }
+.panel-rail-name { font-size: 9.5px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.1; white-space: nowrap; }
+/* The views under the bar: the bar goes between them, so their own Back is not drawn. */
+html.in-rail .view-bar > .back-btn[data-testid="panel-view-back"] { visibility: hidden; }
+/* Browser control as the panel opens on it (panel-look-home.ts drawControlLook). */
+.look-control-status { margin: 14px 12px 6px; display: flex; align-items: center; gap: 10px; padding: 14px 12px; border: 1px solid var(--line); border-radius: 12px; }
+.look-control-status .look-relay-dot { width: 12px; height: 12px; }
+.look-control-title { font-weight: 700; font-size: 15px; }
+/* Design C: New task docked at the bottom on one line (web/src/popout/ext-panel.css .is-docked). */
+.look-home-dock { flex: none; margin-top: auto; padding: 6px 8px 10px; border-top: 1px solid var(--line); }
+.look-home-composer.is-docked { min-height: 0; display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 10px; border-radius: 22px; }
+.look-home-composer.is-docked .look-placeholder { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.look-home-dock-chip { flex: none; }
+.look-control-status { color: var(--muted); }
+.look-control-status.is-on { color: #1f8a46; }
+.look-control-status.is-tab { color: #2457c5; }
+.look-control-status.is-off .look-relay-dot { background: none; border: 1.5px solid currentColor; box-sizing: border-box; }
+.look-control-status .look-control-title { color: var(--fg); }

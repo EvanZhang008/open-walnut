@@ -1,8 +1,8 @@
 /**
  * POST /api/sessions/quick-start with `ownTaskDir` (the browser extension's New task, which has no
  * folder picker): a new task on this machine with no folder starts in its own task directory,
- * made right after the task is filed and recorded as its folder, with the placeholder title the
- * launch auto-title replaces. Every other launch without a cwd is still refused, as for an older
+ * made right after the task is filed and recorded as its folder, and titled from the person's own
+ * words at once (never "Session: <its id>", which named the task by its folder). Every other launch without a cwd is still refused, as for an older
  * client, and the flag never moves a launch that names a folder, a host or an existing task.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -75,6 +75,7 @@ import request from 'supertest';
 import { sessionsRouter } from '../../../src/web/routes/sessions.js';
 import { errorHandler } from '../../../src/web/middleware/error-handler.js';
 import { _resetForTesting as resetTaskManager, getTask } from '../../../src/core/task-manager.js';
+import { titleFromWords } from '../../../src/core/sessions/quick-start.js';
 import { WALNUT_HOME } from '../../../src/constants.js';
 
 function createApp() {
@@ -113,9 +114,21 @@ describe('POST /api/sessions/quick-start: ownTaskDir', () => {
     expect((await fs.stat(dir)).isDirectory()).toBe(true);
     const task = await getTask(taskId);
     expect(task.cwd).toBe(dir);
-    // The placeholder the launch auto-title looks for: the folder's name.
-    expect(task.title).toBe(`Session: ${taskId}`);
+    // Named by the person's words, not by its folder (review round 5).
+    expect(task.title).toBe('Find the receipt for order 40917');
     expect(res.body.sessionId).toBeTruthy();
+  });
+
+  it('long words are cut to a row\'s length, from their first line', async () => {
+    const long = 'Compare the three internet plans for the new office and pick the cheapest one that has a static address\nthen book the install';
+    const a = await request(createApp()).post('/api/sessions/quick-start').send({ cwd: '', message: long, ownTaskDir: true });
+    expect(a.status, JSON.stringify(a.body)).toBe(200);
+    const t = await getTask(String(a.body.taskId));
+    expect(t.title.length).toBeLessThanOrEqual(60);
+    expect(long.startsWith(t.title)).toBe(true);
+    expect(t.title).not.toContain('Session:');
+    expect(titleFromWords('\n\n  Book the room  \nmore')).toBe('Book the room');
+    expect(titleFromWords('   ')).toBe('');
   });
 
   it('the flag takes nothing from a launch that names its folder', async () => {

@@ -43,6 +43,24 @@ async function pairedTop(sender: Sender): Promise<string | null> {
 export async function handBrowserKey(msg: { [k: string]: unknown }, sender: Sender): Promise<Reply> {
   const origin = await pairedTop(sender)
   if (!origin) return { ok: false, silent: true }
+  return keyFor(msg, origin)
+}
+
+/**
+ * The side panel's and the popup's own Walnut frame (`panel-browser-key`, from those extension
+ * pages only, background.ts ALLOWED): it is no tab, so no page script runs in it, and its approval
+ * cards read Passwords as locked while the key over them, the extension's, read it unlocked (review
+ * round 5, Opus #3: an agent's purchase asked for the master password in an unlocked window). The
+ * page asks for its frame (panel-page.ts), with the key the frame keeps, and posts the answer only
+ * to the paired Walnut's origin.
+ */
+export async function handPanelBrowserKey(msg: { [k: string]: unknown }): Promise<Reply> {
+  const origin = (await connection())?.serverUrl
+  if (!origin) return { ok: false, silent: true }
+  return keyFor(msg, origin)
+}
+
+async function keyFor(msg: { [k: string]: unknown }, origin: string): Promise<Reply> {
   const token = await vaultSession()
   if (!token) return { ok: false, code: 'locked' }
   const presented = keyShape(msg.key) ? msg.key : undefined

@@ -139,7 +139,7 @@ describe('Home sections equal the user status', () => {
     expect(stateSectionOf(task({ phase: 'NEED_ACTION', user_status: { state: 'waiting', toRead: 'result', snoozed: { until: '2099-01-01' } } as Task['user_status'] }))).toBe('waiting')
   })
 
-  it('every shared task status sentence uses the default-off Display preference', () => {
+  it('every shared task status sentence uses the Display preference, off by default on Home', () => {
     const dir = path.join(ROOT, 'web/src/components/tasks')
     const renderers = fs.readdirSync(dir).filter((name) => /\.tsx$/.test(name))
       .filter((name) => /className=\{?`?"?status-card-reason/.test(fs.readFileSync(path.join(dir, name), 'utf8')))
@@ -148,6 +148,8 @@ describe('Home sections equal the user status', () => {
     expect(card).toContain('const [showStatusLines] = useTaskStatusLines()')
     expect(card).toContain("const reason = !showStatusLines && reasonText !== 'Snoozed' ? null")
     expect(fs.readFileSync(path.join(dir, 'useTaskStatusLines.ts'), 'utf8')).toContain("usePageView('tasks', 'statusLines', false, isBoolean)")
+    // The browser extension's first page keeps its own choice, on by default (design C).
+    expect(fs.readFileSync(path.join(dir, 'useTaskStatusLines.ts'), 'utf8')).toContain("usePageView('ext-panel', 'statusLines', true, isBoolean)")
     expect(fs.readFileSync(path.join(dir, 'DisplaySections.tsx'), 'utf8')).toContain('checked={showStatusLines} onChange={setShowStatusLines}')
   })
 

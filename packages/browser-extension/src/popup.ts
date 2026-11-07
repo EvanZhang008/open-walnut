@@ -44,6 +44,8 @@ if (!params.has('clipboard')) followTheme()
  */
 const inView = embedded && params.get('view') === '1'
 if (inView) document.documentElement.classList.add('in-view')
+// Under the side bar (panel-rail.ts): the bar goes between the views, so the view's own Back has nothing to do.
+if (inView && params.get('rail') === '1') document.documentElement.classList.add('in-rail')
 const viewBack = (): HTMLElement => h('button', {
   class: 'back-btn', type: 'button', 'data-testid': 'panel-view-back',
   onclick: () => window.parent.postMessage({ walnut: 'panel-view', type: 'back' }, location.origin),

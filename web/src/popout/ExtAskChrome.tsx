@@ -82,7 +82,7 @@ export function ExtAskHeader(p: HeaderProps) {
 }
 
 /** The key button: the extension draws its Passwords popover over the frame, under this button. */
-function KeyButton({ vault, pressed }: { vault: VaultState | null; pressed: boolean }) {
+export function KeyButton({ vault, pressed }: { vault: VaultState | null; pressed: boolean }) {
   const locked = vault?.locked !== false;
   const keyLabel = locked ? 'Passwords, locked' : 'Passwords';
   return (
@@ -116,6 +116,8 @@ interface HomeHeaderProps {
   keyPressed: boolean;
   /** The extension opens its Settings as a view (`ext=3`). */
   settings: boolean;
+  /** The extension's side bar has Settings (`ext=4`): the header leaves it out. */
+  rail?: boolean;
 }
 
 /** The first page's header: ≡, Walnut, the relay pill, the key, (the side panel,) Settings. */
@@ -132,7 +134,7 @@ export function ExtHomeHeader(p: HomeHeaderProps) {
       {p.surface === 'popup' && (
         <button type="button" className="ext-ask-icon" data-testid="ext-ask-side-panel" aria-label="Open in the side panel" title="Open in the side panel" onClick={() => toParent({ type: 'open-side-panel' })}>{ICON_SIDE}</button>
       )}
-      {p.keyed && p.settings && (
+      {p.keyed && p.settings && !p.rail && (
         <button type="button" className="ext-ask-icon" data-testid="ext-home-settings" aria-label="Settings" title="Settings" onClick={() => toParent({ type: 'open-view', view: 'settings' })}>{ICON_GEAR}</button>
       )}
     </header>

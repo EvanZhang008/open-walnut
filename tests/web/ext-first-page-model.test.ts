@@ -16,7 +16,7 @@ vi.mock('../../web/src/utils/log', () => ({
 }));
 
 import { ACT_TAB_MOVED, HOME_PLACEHOLDER, actCarriesTo, HOME_SNAP_ROWS, HOME_SNAP_TABS, homeLaunchBody, homeSnapOf, homeTodoInput, isPanelMode, taskPageTitle } from '../../web/src/popout/ext-home-model';
-import { readRelay, relayGroups, relayPillOf, relayTabName, taskOfOwner, type RelayState } from '../../web/src/popout/ext-relay-model';
+import { controlStatus, ownerHere, ownerWord, readRelay, relayGroups, relayPillOf, relayTabName, taskOfOwner, type RelayState } from '../../web/src/popout/ext-relay-model';
 import { readInbound } from '../../web/src/popout/ext-panel-model';
 import { initialAskDraft } from '../../web/src/components/chat/ask-object-draft';
 import { applyDraftPathPick, leaveWalnutDraft, makeTierKnown } from '../../web/src/components/sessions/draft-ownership';
@@ -166,9 +166,54 @@ describe('the browser relay word', () => {
   it('the panel lists the tab here and working tasks first, then the rest', () => {
     const r: RelayState = readRelay(word)!;
     const g = relayGroups(r, 9, (id) => id === 't-refund');
-    expect(g.now.map((t) => t.tab)).toEqual([9, 4]);
-    expect(g.earlier.map((t) => t.tab)).toEqual([12]);
+    expect(g.now.map((t) => t.tab)).toEqual([9, 4, 12]);
+    expect(g.earlier).toEqual([]);
     expect(relayGroups(null, 9, () => true)).toEqual({ now: [], earlier: [] });
+  });
+
+  it('"Shared earlier" holds only tabs the person handed over, never a tab an agent opened (review round 5, Opus #3)', () => {
+    const r = readRelay({ on: true, tabs: [
+      { tab: 4, owner: 'task:t-done', handed: true },
+      { tab: 5, owner: 'task:t-own' },
+      { tab: 6, owner: 'agent' },
+    ] })!;
+    const g = relayGroups(r, 9, () => false);
+    expect(g.earlier.map((t) => t.tab)).toEqual([4]);
+    expect(g.now.map((t) => t.tab)).toEqual([5, 6]);
+    // The tab he is on is never "earlier", handed or not.
+    expect(relayGroups(r, 4, () => false).now[0].tab).toBe(4);
+  });
+
+  it('every owner the relay gives is read, so the pill, the strip and the panel agree (review round 5, Sol #2)', () => {
+    const r = readRelay({ on: false, tabs: [
+      { tab: 1, owner: 'session:s-cli.1' },
+      { tab: 2, owner: 'person' },
+      { tab: 3, owner: 'agent' },
+      { tab: 4, owner: 'task:t-1' },
+      { tab: 5, owner: 'root' },
+    ] })!;
+    expect(r.tabs.map((t) => t.owner)).toEqual(['session:s-cli.1', 'person', 'agent', 'task:t-1']);
+    // One reading of "who holds this tab": the relay's word when the extension gives one.
+    expect(ownerHere(r, 1, undefined)).toBe('session:s-cli.1');
+    expect(ownerHere(r, 9, 'task:t-1')).toBeUndefined();
+    expect(ownerHere(r, undefined, 'task:t-1')).toBeUndefined();
+    // An older extension with no relay word: the page's own owner.
+    expect(ownerHere(null, 1, 'task:t-1')).toBe('task:t-1');
+    expect(ownerWord('person')).toMatch(/command line/);
+    expect(ownerWord('session:s-cli.1')).toMatch(/session/);
+    expect(ownerWord('agent')).toMatch(/agent/);
+    expect(ownerWord('task:t-1')).toBe('');
+    // The pill reads the same owner: a CLI take shows as an agent in this tab.
+    expect(relayPillOf(r, { agents: false, owner: ownerHere(r, 1, undefined) }).kind).toBe('tab');
+    expect(controlStatus(r, 1, undefined, false).kind).toBe('tab');
+    expect(controlStatus(r, 9, undefined, false).kind).toBe('on');
+    expect(controlStatus({ on: false, tabs: [] }, 9, undefined, false).kind).toBe('off');
+    expect(controlStatus({ on: true, tabs: [] }, 9, undefined, false).kind).toBe('on');
+  });
+
+  it('recent pages: http only, newest first, at most four', () => {
+    const r = readRelay({ on: true, tabs: [{ tab: 1, owner: 'agent', recent: ['https://a.example.test/1', 'javascript:x', 'https://a.example.test/2', 'https://a.example.test/3', 'https://a.example.test/4', 'https://a.example.test/5'] }] })!;
+    expect(r.tabs[0].recent).toEqual(['https://a.example.test/1', 'https://a.example.test/2', 'https://a.example.test/3', 'https://a.example.test/4']);
   });
 
   it('a row names its page and site, or this tab', () => {
