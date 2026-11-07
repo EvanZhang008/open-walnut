@@ -35,31 +35,36 @@ const NW = '[^a-z0-9_]'
 /** A word in text: not part of a longer name. */
 const word = (w: string) => `(^|${NW})(${w})(${NW}|$)`
 
-/** In AppleScript / JXA text: speech, a beep, a shell player, a media app told to play. */
+/** A string literal in AppleScript or code: left out before a word is looked for (`return "afplay"`, `print("playsound")` run nothing). */
+export const STRING_RE = '"[^"]*"|\'[^\']*\''
+
+/**
+ * AppleScript / JXA, matched on its text with string literals emptied: speech (a `say` with no `saving to`
+ * after its own text), a beep, a media app told to play. A shell line it runs (`do shell script "..."`,
+ * JXA `doShellScript("...")`) is judged as a command line.
+ */
 export const OSA_SAY_RE = word('say')
 export const OSA_SAVING_RE = 'saving to'
 export const OSA_BEEP_RE = word('beep')
-export const OSA_AFPLAY_RE = word('afplay')
-/** A media app named by its name or bundle id, in AppleScript (`application id "..."`) or JXA (`Application("...")`). */
-export const OSA_MEDIA_TELL_RE = 'application[ \t(]+(id[ \t]+)?"(com\\.apple\\.(music|itunes|tv|quicktimeplayerx)|com\\.spotify\\.client|org\\.videolan\\.vlc|music|itunes|spotify|quicktime player|vlc|tv)"'
+/** A media app by name or bundle id: `application id "..."`, `app "..."`, JXA `Application('...')`. Matched on the text as written. */
+export const OSA_MEDIA_TELL_RE = '(application|app)[ \t(]+(id[ \t]+)?["\'](com\\.apple\\.(music|itunes|tv|quicktimeplayerx)|com\\.spotify\\.client|org\\.videolan\\.vlc|music|itunes|spotify|quicktime player|vlc|tv)["\']'
 export const OSA_PLAY_RE = word('play|playpause|resume')
+export const OSA_SHELL_RE = '(do shell script|doshellscript[ \t]*\\()[ \t]*'
+/** Every `set volume` statement (to the end of its line) and JXA setVolume call must be one of these: a mute alone. */
 export const OSA_SET_VOLUME_RE = 'set volume'
+export const OSA_MUTE_ONLY_RE = '^set volume[ \t]+(with output muted|output muted (true|yes))[ \t]*$'
 export const OSA_JXA_VOLUME_RE = 'setvolume[ \t]*\\('
-/** A `set volume` statement that unmutes. Any number in one sets a level: refused too, 0 and muted included. */
-export const VOL_UNMUTE_RE = 'without output muted|output muted (false|no)|outputmuted:[ \t]*false'
-/** One that leaves the output muted. */
-export const VOL_MUTED_RE = 'with output muted|output muted (true|yes)|outputmuted:[ \t]*true'
+export const JXA_MUTE_ONLY_RE = '^setvolume[ \t]*\\([ \t]*null[ \t]*,[ \t]*\\{[ \t]*outputmuted[ \t]*:[ \t]*true[ \t]*\\}[ \t]*\\)'
 
 /** In a script's code (python -c, node -e, a heredoc to them), outside its string literals: an audio or speech API. */
 export const CODE_AUDIO_API_RE = 'nssound|nsspeechsynthesizer|avspeechsynthesizer|avaudioplayer|pyttsx3|playsound|simpleaudio|winsound|pygame\\.mixer|system\\.speech|speechsynthesizer|soundplayer|\\[console\\]::beep'
-/** A string literal in code, left out before CODE_AUDIO_API_RE is matched (`print("playsound")` names it, runs nothing). */
-export const CODE_STRING_RE = '"[^"]*"|\'[^\']*\''
-/** A call that starts a player as its program: `os.system("say hi")`, `subprocess.run(["afplay", ...])`, Bun's $`say hi`. */
-export const CODE_CALL_RE = '((system|popen|run|call|check_output|check_call|exec|execsync|execfile|execfilesync|spawn|spawnsync|command)[ \t]*\\([ \t]*\\[?[ \t]*["\'`]|\\$`)(say|afplay|aplay|paplay|espeak|espeak-ng|spd-say|mpg123|ffplay|mpv)([ "\'`,]|$)'
-/** `say -o file` among that call's own arguments (up to its first `)`): renders to a file, silent. */
-export const CODE_SAY_FILE_RE = '["\' ](-o|--output-file)([ "\'=]|$)'
-/** Code that runs osascript is judged by the AppleScript rules too. */
-export const CODE_OSASCRIPT_RE = word('osascript')
+/**
+ * A call in code that starts a process, up to its first argument: what it starts is judged as a command line,
+ * by the same rules as the shell: a string (`os.system("say hi")`, `execSync(...)`), an argv list
+ * (`subprocess.run(["afplay", "x"])`), or a program string then its list (`spawn("say", ["hi"])`).
+ * Bun's $`...` is one too.
+ */
+export const CODE_SPAWN_RE = '(system|popen|getoutput|getstatusoutput|run|call|check_output|check_call|exec|execsync|execfile|execfilesync|spawn|spawnsync|command)[ \t]*\\([ \t]*|\\$`'
 
 /** The refusal both guards give, after "Walnut refused this command: ". */
 export function soundAdvice(what: string): string {

@@ -29,9 +29,9 @@
 import { gzipSync } from 'node:zlib'
 import { JSON_AWK } from './tmp-path-awk.js'
 import {
-  ALWAYS_PLAYS, AUDIO_FILE_RE, CODE_AUDIO_API_RE, CODE_CALL_RE, CODE_OSASCRIPT_RE, CODE_SAY_FILE_RE, CODE_STRING_RE,
-  FFMPEG_AUDIO_OUT_RE, MEDIA_APPS_RE, OSA_AFPLAY_RE, OSA_BEEP_RE, OSA_JXA_VOLUME_RE, OSA_MEDIA_TELL_RE, OSA_PLAY_RE,
-  OSA_SAVING_RE, OSA_SAY_RE, OSA_SET_VOLUME_RE, VOL_MUTED_RE, VOL_UNMUTE_RE, soundAdvice,
+  ALWAYS_PLAYS, AUDIO_FILE_RE, CODE_AUDIO_API_RE, CODE_SPAWN_RE, FFMPEG_AUDIO_OUT_RE, JXA_MUTE_ONLY_RE, MEDIA_APPS_RE,
+  OSA_BEEP_RE, OSA_JXA_VOLUME_RE, OSA_MEDIA_TELL_RE, OSA_MUTE_ONLY_RE, OSA_PLAY_RE, OSA_SAVING_RE, OSA_SAY_RE,
+  OSA_SET_VOLUME_RE, OSA_SHELL_RE, STRING_RE, soundAdvice,
 } from './sound-rules.js'
 
 /** A string as an awk string literal (a regex of sound-rules.ts is used as a dynamic regex) ("..."), its backslashes doubled. */
@@ -119,47 +119,84 @@ function stdintext(d, ci,   t, p, k) {
 }
 function has(A, n, f,   k) { for (k = 1; k <= n; k++) if (A[k] == f) return k; return 0 }
 function after(A, n, f,   k) { k = has(A, n, f); return k && k < n ? A[k + 1] : "\001" }
-# Any number in a set volume statement sets a level (0 too): only a mute alone passes.
-function changes(stmt) { return stmt ~ ${s(VOL_UNMUTE_RE)} || stmt ~ /[0-9]/ || stmt !~ ${s(VOL_MUTED_RE)} }
-function stmtof(t, at,   r) { r = substr(t, at); if (match(r, /[\n;'"]/)) r = substr(r, 1, RSTART - 1); return r }
-# An AppleScript say that speaks: no "saving to" after its own text.
-function speaks(t,   r, rest) {
-  r = t
+# The string literal opening at s[i]: LIT its text (escapes read), LITEND the index after it.
+function lit(s, i,   q, k, c, n) {
+  q = substr(s, i, 1); if (q != "\"" && q != "'" && q != "\140") return 0
+  LIT = ""; n = length(s)
+  for (k = i + 1; k <= n; k++) {
+    c = substr(s, k, 1)
+    if (c == "\\" && k < n) { LIT = LIT substr(s, ++k, 1); continue }
+    if (c == q) { LITEND = k + 1; return 1 }
+    LIT = LIT c
+  }
+  return 0
+}
+function skipsp(s, i) { while (substr(s, i, 1) ~ /[ \t\n]/) i++; return i }
+# The string items of the list opening at s[i] ("["), as a shell line of double-quoted words.
+function items(s, i,   out) {
+  out = ""
+  for (i++; ; ) {
+    i = skipsp(s, i)
+    if (substr(s, i, 1) == ",") { i++; continue }
+    if (!lit(s, i)) return out
+    out = out (out == "" ? "" : " ") "\"" LIT "\""; i = LITEND
+  }
+}
+# The command lines a script's code starts (each process call's first argument and its argv list), judged as shell lines.
+function spawned(raw, d,   t, off, i, j, m, line) {
+  t = tolower(raw); off = 0
+  while (found == "" && match(substr(t, off + 1), ${s(CODE_SPAWN_RE)})) {
+    m = substr(t, off + RSTART, RLENGTH); i = off + RSTART + RLENGTH; off += RSTART
+    if (m == "$\140") { if (lit(raw, i - 1)) scan(LIT, d + 1); continue }
+    if (substr(raw, i, 1) == "[") { scan(items(raw, i), d + 1); continue }
+    if (!lit(raw, i)) continue
+    line = LIT; j = skipsp(raw, LITEND)
+    if (substr(raw, j, 1) == ",") j = skipsp(raw, j + 1)
+    if (substr(raw, j, 1) == "[") line = "\"" line "\" " items(raw, j)
+    scan(line, d + 1)
+  }
+}
+# An AppleScript say (strings emptied) with no "saving to" after it on its line: it speaks.
+function speaks(t0,   r, rest) {
+  r = t0
   while (match(r, ${s(OSA_SAY_RE)})) {
     rest = substr(r, RSTART + RLENGTH - (substr(r, RSTART + RLENGTH - 1, 1) == "y" ? 0 : 1))
     if (match(rest, /\n/)) rest = substr(rest, 1, RSTART - 1)
-    sub(/^[ \t]*"[^"]*"/, "", rest)
     if (rest !~ ${s(OSA_SAVING_RE)}) return 1
     match(r, ${s(OSA_SAY_RE)}); r = substr(r, RSTART + RLENGTH)
   }
   return 0
 }
-function osahit(t,   r, at, j) {
-  if (speaks(t)) return "AppleScript say"
-  if (t ~ ${s(OSA_BEEP_RE)}) return "AppleScript beep"
-  if (t ~ ${s(OSA_AFPLAY_RE)}) return "afplay"
-  if (t ~ ${s(OSA_MEDIA_TELL_RE)} && t ~ ${s(OSA_PLAY_RE)}) return "a media app told to play"
-  r = t; at = 0
+function osahit(raw, d,   t, t0, off, r, at, j) {
+  t = tolower(raw); off = 0
+  while (found == "" && match(substr(t, off + 1), ${s(OSA_SHELL_RE)})) {
+    j = off + RSTART + RLENGTH; off += RSTART
+    if (lit(raw, j)) scan(LIT, d + 1)
+  }
+  if (found != "") return ""
+  t0 = t; gsub(${s(STRING_RE)}, "\"\"", t0)
+  if (speaks(t0)) return "AppleScript say"
+  if (t0 ~ ${s(OSA_BEEP_RE)}) return "AppleScript beep"
+  if (t ~ ${s(OSA_MEDIA_TELL_RE)} && t0 ~ ${s(OSA_PLAY_RE)}) return "a media app told to play"
+  r = t0; at = 0
   while ((j = index(r, ${s(OSA_SET_VOLUME_RE)})) > 0) {
     at += j
-    if (changes(stmtof(t, at))) return "set volume"
-    r = substr(t, at + 1)
+    r = substr(t0, at); if (match(r, /[\n;]/)) r = substr(r, 1, RSTART - 1)
+    if (r !~ ${s(OSA_MUTE_ONLY_RE)}) return "set volume"
+    r = substr(t0, at + 1)
   }
-  if (match(t, ${s(OSA_JXA_VOLUME_RE)})) { r = substr(t, RSTART); if (match(r, /[\n;)]/)) r = substr(r, 1, RSTART - 1); if (changes(r)) return "setVolume" }
+  off = 0
+  while (match(substr(t0, off + 1), ${s(OSA_JXA_VOLUME_RE)})) {
+    off += RSTART
+    if (substr(t0, off) !~ ${s(JXA_MUTE_ONLY_RE)}) return "setVolume"
+  }
   return ""
 }
-# Code: an audio API outside string literals, or a call that starts a player (each call judged alone).
-function codehit(t,   t2, r, m, p, call, k) {
-  t2 = t; gsub(${s(CODE_STRING_RE)}, "\"\"", t2)
+# Code: an audio API outside its strings, or a process it starts that would make sound.
+function codehit(raw, d,   t2) {
+  t2 = tolower(raw); gsub(${s(STRING_RE)}, "\"\"", t2)
   if (t2 ~ ${s(CODE_AUDIO_API_RE)}) return "an audio or speech API"
-  r = t
-  while (match(r, ${s(CODE_CALL_RE)})) {
-    m = substr(r, RSTART, RLENGTH); p = m; sub(/[ "'\140,]$/, "", p); sub(/^.*["'\140]/, "", p)
-    call = substr(r, RSTART); k = index(call, ")"); if (k) call = substr(call, 1, k - 1)
-    if (!(p == "say" && call ~ ${s(CODE_SAY_FILE_RE)})) return p " started from code"
-    r = substr(r, RSTART + RLENGTH)
-  }
-  if (t ~ ${s(CODE_OSASCRIPT_RE)}) return osahit(t)
+  spawned(raw, d)
   return ""
 }
 # Inline code from flags F (" -c -e "), also attached (-c'code', --eval=code): sets CODE and returns 1, 2 for stdin, 0 for a file.
@@ -180,9 +217,25 @@ function inline(A, n, F, deno,   k, e) {
 }
 function anyre(A, n, re,   k) { for (k = 1; k <= n; k++) if (A[k] ~ re) return 1; return 0 }
 # Programs that play unless an argument makes them silent (OK), or only with one (ON).
+# mpv / mplayer: whether the last option that picks audio output turns it off.
+function lastsilent(name, A, n,   k, v, silent) {
+  silent = 0
+  for (k = 1; k <= n; k++) {
+    v = "\001"
+    if (A[k] == (name == "mpv" ? "--ao" : "-ao")) v = k < n ? A[++k] : ""
+    else if (A[k] ~ /^--?ao=/) { v = A[k]; sub(/^[^=]*=/, "", v) }
+    if (v != "\001") silent = v == "null"
+    else if (A[k] ~ /^(--no-audio|--audio=no|--aid=no|-nosound)$/) silent = 1
+    else if (A[k] ~ /^--(audio|aid)=/) silent = 0
+  }
+  return silent
+}
 function prog(name, A, n,   k, v, first, dev, j, sub1) {
   if (index(" ${ALWAYS_PLAYS.join(' ')} ", " " name " ")) return name
-  if (name in OK) return anyre(A, n, OK[name]) || (name == "say" && after(A, n, "-v") == "?") || (name ~ /^m/ && after(A, n, name == "mpv" ? "--ao" : "-ao") == "null") ? "" : name
+  # Options end at --: what follows is text.
+  k = has(A, n, "--"); if (k) n = k - 1
+  if (name == "mpv" || name == "mplayer") return lastsilent(name, A, n) ? "" : name
+  if (name in OK) return anyre(A, n, OK[name]) || (name == "say" && after(A, n, "-v") == "?") ? "" : name
   if (name in ON) return anyre(A, n, ON[name]) ? name : ""
   if (name == "sox") {
     first = 0; dev = 0
@@ -217,7 +270,7 @@ function prog(name, A, n,   k, v, first, dev, j, sub1) {
     if (sub1 ~ /^set-(sink|sink-input)-mute$|^set-mute$/) return A[n] ~ /^(1|true|yes|on)$/ ? "" : name " " sub1
     return ""
   }
-  if (name == "pamixer") return anyre(A, n, "^(-u|--unmute|-t|--toggle-mute|-i|--increase|-d|--decrease|-v|--set-volume|--allow-boost)$") ? "pamixer" : ""
+  if (name == "pamixer") return anyre(A, n, "^(-u|--unmute|-t|--toggle-mute|-i|--increase|-d|--decrease|--set-volume|--allow-boost)(=.*)?$") ? "pamixer" : ""
   return ""
 }
 # Options of a wrapper that take a value.
@@ -293,8 +346,8 @@ function judge(d, ci, j, exec,   n, w, b, A, na, k, r, F) {
     r = 0; F = 0
     for (k = 1; k <= na; k++) { if (A[k] == "-l" || A[k] == "-s") { k++; continue } F++; A2[F] = A[k] }
     r = inline(A2, F, " -e ", 0)
-    if (r == 1) hit(osahit(tolower(CODE)))
-    else if (r == 2) hit(osahit(tolower(stdintext(d, ci))))
+    if (r == 1) hit(osahit(CODE, d))
+    else if (r == 2) hit(osahit(stdintext(d, ci), d))
     return
   }
   F = ""
@@ -307,8 +360,8 @@ function judge(d, ci, j, exec,   n, w, b, A, na, k, r, F) {
   else if (b == "deno" || b == "swift") F = " "
   if (F != "") {
     r = inline(A, na, F, b == "deno")
-    if (r == 1) hit(codehit(tolower(CODE)))
-    else if (r == 2) hit(codehit(tolower(stdintext(d, ci))))
+    if (r == 1) hit(codehit(CODE, d))
+    else if (r == 2) hit(codehit(stdintext(d, ci), d))
     return
   }
   hit(prog(b, A, na))
@@ -400,7 +453,7 @@ BEGIN {
   RS = "\001"
   OK["say"] = "^(-o.*|--output-file.*|--voice=[?])$"; OK["espeak"] = OK["espeak-ng"] = "^(--stdout|-q|-w.*)$"
   OK["aplay"] = "^(-l|-L|--list-devices|--list-pcms)$"; OK["pacat"] = "^(-r|--record)$"
-  OK["mpv"] = "^--(ao=null|no-audio|audio=no|aid=no)$"; OK["mplayer"] = "^(-nosound|-ao=null)$"; OK["ffplay"] = "^-an$"
+  OK["ffplay"] = "^-an$"
   ON["pw-cat"] = "^(-p|--playback)$"; ON["festival"] = "^--tts$"
 }
 {

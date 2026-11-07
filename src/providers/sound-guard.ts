@@ -16,19 +16,19 @@
 import path from 'node:path'
 import { ASSIGN, BEFORE_COMMAND, EXEC_FLAGS, WRAPPERS, ANY_SHELL, shellInput, simpleCommands, tokenize, type CommandInput } from './host-exec-guards.js'
 import {
-  ALWAYS_PLAYS, AUDIO_FILE_RE, CODE_AUDIO_API_RE, CODE_CALL_RE, CODE_OSASCRIPT_RE, CODE_SAY_FILE_RE, CODE_STRING_RE,
-  FFMPEG_AUDIO_OUT_RE, MEDIA_APPS_RE, OSA_AFPLAY_RE, OSA_BEEP_RE, OSA_JXA_VOLUME_RE, OSA_MEDIA_TELL_RE, OSA_PLAY_RE,
-  OSA_SAVING_RE, OSA_SAY_RE, OSA_SET_VOLUME_RE, VOL_MUTED_RE, VOL_UNMUTE_RE,
+  ALWAYS_PLAYS, AUDIO_FILE_RE, CODE_AUDIO_API_RE, CODE_SPAWN_RE, FFMPEG_AUDIO_OUT_RE, JXA_MUTE_ONLY_RE, MEDIA_APPS_RE,
+  OSA_BEEP_RE, OSA_JXA_VOLUME_RE, OSA_MEDIA_TELL_RE, OSA_MUTE_ONLY_RE, OSA_PLAY_RE, OSA_SAVING_RE, OSA_SAY_RE,
+  OSA_SET_VOLUME_RE, OSA_SHELL_RE, STRING_RE,
 } from './sound-rules.js'
 
 const re = (s: string) => new RegExp(s)
+const all = (s: string) => new RegExp(s, 'g')
 const R = {
   audioFile: re(AUDIO_FILE_RE), mediaApp: re(MEDIA_APPS_RE), ffmpegOut: re(FFMPEG_AUDIO_OUT_RE),
-  osaSay: re(OSA_SAY_RE), osaSaving: re(OSA_SAVING_RE), osaBeep: re(OSA_BEEP_RE), osaAfplay: re(OSA_AFPLAY_RE),
-  osaTell: re(OSA_MEDIA_TELL_RE), osaPlay: re(OSA_PLAY_RE), osaJxaVol: re(OSA_JXA_VOLUME_RE),
-  volUnmute: re(VOL_UNMUTE_RE), volMuted: re(VOL_MUTED_RE),
-  codeApi: re(CODE_AUDIO_API_RE), codeCall: new RegExp(CODE_CALL_RE, 'g'), codeString: new RegExp(CODE_STRING_RE, 'g'),
-  codeSayFile: re(CODE_SAY_FILE_RE), codeOsa: re(CODE_OSASCRIPT_RE), osaSayAll: new RegExp(OSA_SAY_RE, 'g'),
+  osaSay: all(OSA_SAY_RE), osaSaving: re(OSA_SAVING_RE), osaBeep: re(OSA_BEEP_RE),
+  osaTell: re(OSA_MEDIA_TELL_RE), osaPlay: re(OSA_PLAY_RE), osaShell: all(OSA_SHELL_RE),
+  muteOnly: re(OSA_MUTE_ONLY_RE), jxaVol: all(OSA_JXA_VOLUME_RE), jxaMuteOnly: re(JXA_MUTE_ONLY_RE),
+  codeApi: re(CODE_AUDIO_API_RE), spawn: all(CODE_SPAWN_RE), string: all(STRING_RE),
 }
 const PLAYS = new Set<string>(ALWAYS_PLAYS)
 const MAX_DEPTH = 8
@@ -43,45 +43,82 @@ const CODE_FLAGS: Record<string, string[]> = {
   pwsh: ['-c', '-Command', '-command'], powershell: ['-c', '-Command', '-command'],
 }
 
-/** A `set volume` statement (lower case, to the end of its line) that does more than mute: an unmute or any level, 0 too. */
-function volumeChanges(stmt: string): boolean {
-  return R.volUnmute.test(stmt) || /[0-9]/.test(stmt) || !R.volMuted.test(stmt)
+/** The string literal opening at t[i] ("...", '...' or `...`), backslash escapes read: its text and the index after it. */
+function literal(t: string, i: number): { text: string; end: number } | null {
+  const q = t[i]
+  if (q !== '"' && q !== "'" && q !== '`') return null
+  let out = ''
+  for (let k = i + 1; k < t.length; k++) {
+    if (t[k] === '\\' && k + 1 < t.length) { out += t[++k]; continue }
+    if (t[k] === q) return { text: out, end: k + 1 }
+    out += t[k]
+  }
+  return null
+}
+const skipSpace = (t: string, i: number) => { while (t[i] === ' ' || t[i] === '\t' || t[i] === '\n') i++; return i }
+/** The string items of the list opening at t[i] (`[`). */
+function listItems(t: string, i: number): string[] {
+  const out: string[] = []
+  for (i++; ;) {
+    i = skipSpace(t, i)
+    if (t[i] === ',') { i++; continue }
+    const lit = literal(t, i)
+    if (!lit) return out
+    out.push(lit.text)
+    i = lit.end
+  }
+}
+const asLine = (words: string[]) => words.map((w) => `"${w}"`).join(' ')
+
+/** The command lines a script's code starts: what each process call's first argument (and its argv list) names. */
+function spawnedLines(raw: string): string[] {
+  const t = raw.toLowerCase()
+  const out: string[] = []
+  for (const m of t.matchAll(R.spawn)) {
+    const i = m.index! + m[0].length
+    if (m[0] === '$`') { const lit = literal(raw, i - 1); if (lit) out.push(lit.text); continue }
+    if (raw[i] === '[') { out.push(asLine(listItems(raw, i))); continue }
+    const lit = literal(raw, i)
+    if (!lit) continue
+    let j = skipSpace(raw, lit.end)
+    if (raw[j] === ',') j = skipSpace(raw, j + 1)
+    out.push(raw[j] === '[' ? asLine([lit.text, ...listItems(raw, j)]) : lit.text)
+  }
+  return out
 }
 
-/** An AppleScript `say` that speaks: one with no `saving to` after its own text (`say "x" saving to f` writes a file). */
-function speaks(t: string): boolean {
-  for (const m of t.matchAll(R.osaSayAll)) {
-    const rest = t.slice(m.index! + m[0].length - (m[3] ? m[3].length : 0)).split('\n')[0]
-    if (!R.osaSaving.test(rest.replace(/^[ \t]*"[^"]*"/, ''))) return true
+/** An AppleScript `say` (in text whose strings are emptied) with no `saving to` after it on its line: it speaks. */
+function speaks(t0: string): boolean {
+  for (const m of t0.matchAll(R.osaSay)) {
+    const rest = t0.slice(m.index! + m[0].length - (m[3] ? m[3].length : 0)).split('\n')[0]
+    if (!R.osaSaving.test(rest)) return true
   }
   return false
 }
 
-/** What AppleScript / JXA text (lower case) does that makes sound, or null. */
-export function osaHit(t: string): string | null {
-  if (speaks(t)) return 'AppleScript say'
-  if (R.osaBeep.test(t)) return 'AppleScript beep'
-  if (R.osaAfplay.test(t)) return 'afplay'
-  if (R.osaTell.test(t) && R.osaPlay.test(t)) return 'a media app told to play'
-  for (let at = t.indexOf(OSA_SET_VOLUME_RE); at >= 0; at = t.indexOf(OSA_SET_VOLUME_RE, at + 1)) {
-    const stmt = t.slice(at).split(/[\n;'"]/)[0]
-    if (volumeChanges(stmt)) return 'set volume'
+/** What AppleScript / JXA text does that makes sound, or null. */
+export function osaHit(raw: string, depth = 0): string | null {
+  const t = raw.toLowerCase()
+  for (const m of t.matchAll(R.osaShell)) {
+    const lit = literal(raw, m.index! + m[0].length)
+    const h = lit ? lineHit(lit.text, depth + 1) : null
+    if (h) return h
   }
-  const jxa = t.search(R.osaJxaVol)
-  if (jxa >= 0 && volumeChanges(t.slice(jxa).split(/[\n;)]/)[0])) return 'setVolume'
+  const t0 = t.replace(R.string, '""')
+  if (speaks(t0)) return 'AppleScript say'
+  if (R.osaBeep.test(t0)) return 'AppleScript beep'
+  if (R.osaTell.test(t) && R.osaPlay.test(t0)) return 'a media app told to play'
+  for (let at = t0.indexOf(OSA_SET_VOLUME_RE); at >= 0; at = t0.indexOf(OSA_SET_VOLUME_RE, at + 1)) {
+    if (!R.muteOnly.test(t0.slice(at).split(/[\n;]/)[0])) return 'set volume'
+  }
+  for (const m of t0.matchAll(R.jxaVol)) if (!R.jxaMuteOnly.test(t0.slice(m.index!))) return 'setVolume'
   return null
 }
 
-/** What a script's code (lower case) does that makes sound, or null. */
-export function codeHit(t: string): string | null {
-  if (R.codeApi.test(t.replace(R.codeString, '""'))) return 'an audio or speech API'
-  // Each call on its own: a `say -o` in one never lets another speak.
-  for (const m of t.matchAll(R.codeCall)) {
-    const player = m[3]
-    const call = t.slice(m.index!).split(')')[0]
-    if (!(player === 'say' && R.codeSayFile.test(call))) return `${player} started from code`
-  }
-  if (R.codeOsa.test(t)) return osaHit(t)
+/** What a script's code does that makes sound: an audio API outside its strings, or a process it starts that would. */
+export function codeHit(raw: string, depth = 0): string | null {
+  if (R.codeApi.test(raw.toLowerCase().replace(R.string, '""'))) return 'an audio or speech API'
+  for (const line of spawnedLines(raw)) { const h = lineHit(line, depth + 1); if (h) return h }
   return null
 }
 
@@ -91,9 +128,25 @@ const last = (args: string[]) => args[args.length - 1] ?? ''
 /** ffmpeg options that take no value. */
 const FFMPEG_FLAGS = new Set(['-y', '-n', '-an', '-vn', '-sn', '-dn', '-nostdin', '-re', '-hide_banner', '-stats', '-nostats'])
 
+/** mpv / mplayer: whether the last option that picks audio output turns it off. */
+function lastAudioSilent(name: string, args: string[]): boolean {
+  let silent = false
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k]
+    const v = a === (name === 'mpv' ? '--ao' : '-ao') ? args[++k] ?? '' : /^--?ao=/.test(a) ? a.slice(a.indexOf('=') + 1) : null
+    if (v !== null) silent = v === 'null'
+    else if (/^(--no-audio|--audio=no|--aid=no|-nosound)$/.test(a)) silent = true
+    else if (/^--(audio|aid)=/.test(a)) silent = false
+  }
+  return silent
+}
+
 /** A player or mixer program's own verdict on its arguments, or null. */
-function programHit(name: string, args: string[]): string | null {
+function programHit(name: string, all: string[]): string | null {
   if (PLAYS.has(name)) return name
+  // Options end at `--`: what follows is text (`espeak -- hello -q` speaks "-q").
+  const end = all.indexOf('--')
+  const args = end >= 0 ? all.slice(0, end) : all
   switch (name) {
     case 'say':
       if (args.some((a) => a === '-o' || a === '--output-file' || a.startsWith('--output-file=') || /^-o./.test(a))) return null
@@ -107,10 +160,9 @@ function programHit(name: string, args: string[]): string | null {
       return has(args, '-r', '--record') ? null : 'pacat'
     case 'pw-cat':
       return has(args, '-p', '--playback') ? 'pw-cat' : null
-    case 'mpv':
-      return args.some((a) => /^--(ao=null|no-audio|audio=no|aid=no)$/.test(a)) || valueAfter(args, '--ao') === 'null' ? null : 'mpv'
-    case 'mplayer':
-      return has(args, '-nosound', '-ao=null') || valueAfter(args, '-ao') === 'null' ? null : 'mplayer'
+    // The last audio option wins (`mpv --ao=null --ao=pulse` plays).
+    case 'mpv': case 'mplayer':
+      return lastAudioSilent(name, args) ? null : name
     case 'ffplay':
       return has(args, '-an') ? null : 'ffplay'
     case 'festival':
@@ -152,7 +204,7 @@ function programHit(name: string, args: string[]): string | null {
       return null
     }
     case 'pamixer':
-      return args.some((a) => /^(-u|--unmute|-t|--toggle-mute|-i|--increase|-d|--decrease|-v|--set-volume|--allow-boost)$/.test(a)) ? 'pamixer' : null
+      return args.some((a) => /^(-u|--unmute|-t|--toggle-mute|-i|--increase|-d|--decrease|--set-volume|--allow-boost)(=.*)?$/.test(a)) ? 'pamixer' : null
   }
   return null
 }
@@ -193,8 +245,9 @@ function envSplit(args: string[]): string | null {
 /** ssh's options that take a value. */
 const SSH_ARG = /^-[pioFlJLRDWbcEemOQSwB]$/
 
+/** What a program reads on stdin, as data: its heredocs, then the words (quotes read) and heredocs of what is piped in. */
 function stdinOf(input: CommandInput): string[] {
-  return [...input.heredocs, ...input.pipedFrom.flatMap((f) => [f.text, ...f.heredocs])]
+  return [...input.heredocs, ...input.pipedFrom.flatMap((f) => [...tokenize(f.text).commands.map((w) => w.join(' ')), ...f.heredocs])]
 }
 
 /** Text a shell reads on stdin, as commands: its heredocs, and every word and heredoc of what is piped in. */
@@ -222,6 +275,7 @@ function commandHit(words: string[], start: number, input: CommandInput, depth: 
     if (at === null) return null
     i = i + 1 + at
     if (words[i] === '--') i++
+    else if (name === 'unbuffer') while (i < words.length && words[i].startsWith('-')) i++
   }
   if (i >= words.length) return null
   // python3.11 is python3.
@@ -243,13 +297,13 @@ function commandHit(words: string[], start: number, input: CommandInput, depth: 
   if (name === 'osascript') {
     const script = inlineCode(['-e'], name, args.filter((a, k) => !(a === '-l' || a === '-s' || args[k - 1] === '-l' || args[k - 1] === '-s')))
     if (script === null) return null
-    return osaHit((script === 'stdin' ? stdinOf(input) : script).join('\n').toLowerCase())
+    return osaHit((script === 'stdin' ? stdinOf(input) : script).join('\n'), depth)
   }
   const flags = Object.hasOwn(CODE_FLAGS, name) ? CODE_FLAGS[name] : undefined
   if (flags) {
     const code = inlineCode(flags, name, args)
     if (code === null) return null
-    return codeHit((code === 'stdin' ? stdinOf(input) : code).join('\n').toLowerCase())
+    return codeHit((code === 'stdin' ? stdinOf(input) : code).join('\n'), depth)
   }
   const own = programHit(name, args)
   if (own) return own
@@ -279,6 +333,23 @@ function substitutions(text: string): string[] {
   return out
 }
 
+/** The bodies of `$(( ))` in a shell line, outside single quotes (the tokenizer keeps them as text). */
+function arithmetic(line: string): string[] {
+  const out: string[] = []
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i]
+    if (c === '\\') { i++; continue }
+    if (c === "'") { const e = line.indexOf("'", i + 1); if (e < 0) break; i = e; continue }
+    if (c !== '$' || line[i + 1] !== '(' || line[i + 2] !== '(') continue
+    let depth = 2
+    let j = i + 3
+    for (; j < line.length && depth > 0; j++) { if (line[j] === '(') depth++; else if (line[j] === ')') depth-- }
+    out.push(line.slice(i + 3, j))
+    i = j - 1
+  }
+  return out
+}
+
 /** The bodies of a command's heredocs whose delimiter is unquoted (`<<EOF`, not `<<'EOF'`): the shell expands those. */
 function expandedHeredocs(input: CommandInput): string[] {
   const marks = [...input.text.matchAll(/<<(?!<)-?[ \t]*([^ \t\n;&|<>()]+)/g)]
@@ -290,8 +361,7 @@ function lineHit(line: string, depth: number): string | null {
   const { commands, inputs, subs } = tokenize(line)
   for (let k = 0; k < commands.length; k++) { const h = commandHit(commands[k], 0, inputs[k], depth); if (h) return h }
   // An unquoted heredoc's $(...), and one inside $(( )), which the tokenizer keeps as arithmetic text.
-  const expanded = [...inputs.flatMap((input) => expandedHeredocs(input).flatMap(substitutions)),
-    ...commands.flat().filter((w) => w.includes('$((')).flatMap(substitutions)]
+  const expanded = [...inputs.flatMap((input) => expandedHeredocs(input).flatMap(substitutions)), ...arithmetic(line).flatMap(substitutions)]
   for (const body of [...subs, ...expanded]) { const h = lineHit(body, depth + 1); if (h) return h }
   return null
 }
