@@ -45,7 +45,20 @@ export const SUGGESTION_ICONS = ['search', 'calendar', 'clock'] as const
  * `agent`: the agent the Ask view said it is on last (its `agent` word), `shells` each agent's
  * shell. An older store's one `shell` (any agent's) is never drawn.
  */
-interface Snaps { ask?: Record<string, AskSnap>; tasks?: TasksSnap; agent?: { id: string; name?: string; at: number }; shells?: Record<string, AskShell> }
+/** The first page's task panel as it showed it (web/src/popout/ext-home-model.ts HomeSnap). */
+export interface HomeSnap {
+  at: number
+  tabs: Array<{ label: string; count?: string; on?: boolean }>
+  heading?: string
+  rows: Array<{ title: string; meta: string; line: string; time: string; needs: boolean }>
+}
+/** The page the side panel's view shows: the first page, an ask, or a task opened there (with its title). */
+export type PanelMode = 'home' | 'ask' | 'task'
+export interface ModeKept { mode: PanelMode; title?: string; at: number }
+interface Snaps {
+  ask?: Record<string, AskSnap>; tasks?: TasksSnap; agent?: { id: string; name?: string; at: number }; shells?: Record<string, AskShell>
+  home?: HomeSnap; mode?: ModeKept
+}
 
 const STORE = PANEL_SNAPS_KEY
 const ASK_KEEP = 30
@@ -123,6 +136,64 @@ function cleanTasks(raw: unknown, counts: unknown, now: number): TasksSnap | nul
       return { title: str(o?.title, 40), count: typeof n[i] === 'number' ? n[i] as number : rows.length, rows }
     }),
   }
+}
+
+/** What the first page said it shows, cut to what a drawing holds; null for anything else. */
+export function cleanHome(raw: unknown, now: number): HomeSnap | null {
+  if (!raw || typeof raw !== 'object') return null
+  const r = raw as Record<string, unknown>
+  const tabs = (Array.isArray(r.tabs) ? r.tabs : []).slice(0, 6).flatMap((x) => {
+    const o = x as Record<string, unknown> | null
+    const label = str(o?.label, 30)
+    const count = str(o?.count, 8)
+    return label ? [{ label, ...(count ? { count } : {}), ...(o?.on === true ? { on: true } : {}) }] : []
+  })
+  const rows = (Array.isArray(r.rows) ? r.rows : []).slice(0, 10).flatMap((x) => {
+    const o = x as Record<string, unknown> | null
+    const title = str(o?.title, 160)
+    return title ? [{ title, meta: str(o?.meta, 60), line: str(o?.line, 160), time: str(o?.time, 20), needs: o?.needs === true }] : []
+  })
+  if (!tabs.length && !rows.length) return null
+  const heading = str(r.heading, 40)
+  return { at: now, tabs, ...(heading ? { heading } : {}), rows }
+}
+
+const MODES: readonly PanelMode[] = ['home', 'ask', 'task']
+/** The view's page word, or null for anything else. */
+export function cleanMode(mode: unknown, title: unknown, now: number): ModeKept | null {
+  if (!MODES.includes(mode as PanelMode)) return null
+  const t = mode === 'task' ? str(title, 200) : ''
+  return { mode: mode as PanelMode, ...(t ? { title: t } : {}), at: now }
+}
+
+/** Keep the first page's words, or the page the view shows (a view of the connected Walnut, checked by the caller). */
+export function keepHomeSnap(snap: unknown, now = Date.now()): Promise<void> {
+  return keepOwn((all) => { const c = cleanHome(snap, now); if (!c) return false; all.home = c; return true })
+}
+export function keepMode(mode: unknown, title: unknown, now = Date.now()): Promise<void> {
+  return keepOwn((all) => {
+    const c = cleanMode(mode, title, now)
+    if (!c || (all.mode?.mode === c.mode && (all.mode.title ?? '') === (c.title ?? ''))) return false
+    all.mode = c
+    return true
+  })
+}
+function keepOwn(change: (all: Snaps) => boolean): Promise<void> {
+  writing = writing.then(async () => {
+    const server = (await ext.storage.local.get(PANEL_SERVER_KEY))[PANEL_SERVER_KEY]
+    if (typeof server !== 'string' || !server) return
+    const all = await readAll()
+    if (change(all)) await ext.storage.local.set({ [STORE]: all })
+  }).catch(() => undefined)
+  return writing
+}
+
+/** The first page's words of last time, and the page the side panel's view was on (none: the first page). */
+export async function homeOf(now = Date.now()): Promise<{ home: HomeSnap | null; mode: ModeKept | null }> {
+  const all = await readAll()
+  const home = all.home && now - all.home.at < MAX_AGE_MS ? all.home : null
+  const mode = all.mode && MODES.includes(all.mode.mode) ? all.mode : null
+  return { home, mode }
 }
 
 async function readAll(): Promise<Snaps> {

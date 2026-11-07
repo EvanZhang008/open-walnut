@@ -1607,7 +1607,7 @@ describe('the sidebar on the shared fixture', () => {
     'engine-settings-popover-r2.spec.ts', 'engine-settings-popover-r2.webkit.spec.ts',
     'engine-settings-popover-r3-rows.spec.ts', 'engine-settings-popover-scope.spec.ts',
     'engine-settings-popover.webkit.spec.ts', 'engine-settings-project-scope.spec.ts',
-    'extension-hand-browser-key.spec.ts', 'extension-one-unlock.spec.ts', 'keep-awake-settings.spec.ts',
+    'keep-awake-settings.spec.ts',
     'mail-app-design.spec.ts', 'mail-app-filter.spec.ts', 'mail-app-folder-fetch.spec.ts', 'mail-app-gate.spec.ts',
     'mail-app-read.spec.ts', 'mail-app-sidebar.spec.ts', 'mail-app-sidebar.webkit.spec.ts',
     'mail-app-unified.spec.ts', 'mail-app-unified.webkit.spec.ts', 'mail-app-write.spec.ts',

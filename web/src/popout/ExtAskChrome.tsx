@@ -27,6 +27,7 @@ const ICON_CARET = <svg {...S} width={11} height={11}><path d="m6 9 6 6 6-6" /><
 const ICON_POINTER = <svg {...S} width={13} height={13}><path d="m4 4 7 17 2.5-7.5L21 11z" /></svg>;
 const ICON_TASKS = <svg {...S}><rect x="4" y="4" width="16" height="16" rx="3" /><path d="m8.5 12 2.5 2.5 4.5-5" /></svg>;
 const ICON_GEAR = <svg {...S}><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" /></svg>;
+const ICON_BACK = <svg {...S} width={15} height={15}><path d="m15 18-6-6 6-6" /></svg>;
 const ICON_OUT = <svg {...S}><path d="M14 4h6v6" /><path d="M20 4 10 14" /><path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5" /></svg>;
 
 /** The key with its padlock badge while Passwords is locked. */
@@ -61,8 +62,6 @@ export function ExtAskHeader(p: HeaderProps) {
       {p.agent.project}<span aria-hidden="true">{ICON_CARET}</span>
     </button>
   ) : <span className="ext-ask-agent is-plain">{p.agent.project}</span>;
-  const locked = p.vault?.locked !== false;
-  const keyLabel = locked ? 'Passwords, locked' : 'Passwords';
   return (
     <header className={`ext-ask-head is-${p.surface}`} data-testid="ext-ask-head">
       <AskWalnutMenuButton ref={p.menuRef} open={p.menuOn} onToggle={p.onMenu} label={p.agent.project} />
@@ -72,28 +71,93 @@ export function ExtAskHeader(p: HeaderProps) {
           {agentSwitch}
         </div>
       ) : <div className="ext-ask-titles is-popup">{agentSwitch}</div>}
-      {p.keyed && (
-        <button
-          type="button"
-          className={`ext-ask-icon ext-ask-key${p.keyPressed ? ' is-pressed' : ''}`}
-          data-testid="ext-ask-key"
-          aria-label={keyLabel}
-          aria-haspopup="dialog"
-          aria-expanded={p.keyPressed}
-          title={keyLabel}
-          onClick={(e) => {
-            const r = e.currentTarget.getBoundingClientRect();
-            toParent({ type: 'key-toggle', rect: { top: r.top, right: r.right, bottom: r.bottom, left: r.left } });
-          }}
-        >
-          <KeyGlyph locked={locked} />
-        </button>
-      )}
+      {p.keyed && <KeyButton vault={p.vault} pressed={p.keyPressed} />}
       {p.surface === 'panel' ? (
         <button type="button" className="ext-ask-icon" data-testid="ext-panel-new" aria-label="New chat" title="New chat about this page" onClick={p.onNew}>{ICON_COMPOSE}</button>
       ) : (
         <button type="button" className="ext-ask-icon" data-testid="ext-ask-side-panel" aria-label="Open in the side panel" title="Open in the side panel" onClick={() => toParent({ type: 'open-side-panel' })}>{ICON_SIDE}</button>
       )}
+    </header>
+  );
+}
+
+/** The key button: the extension draws its Passwords popover over the frame, under this button. */
+function KeyButton({ vault, pressed }: { vault: VaultState | null; pressed: boolean }) {
+  const locked = vault?.locked !== false;
+  const keyLabel = locked ? 'Passwords, locked' : 'Passwords';
+  return (
+    <button
+      type="button"
+      className={`ext-ask-icon ext-ask-key${pressed ? ' is-pressed' : ''}`}
+      data-testid="ext-ask-key"
+      aria-label={keyLabel}
+      aria-haspopup="dialog"
+      aria-expanded={pressed}
+      title={keyLabel}
+      onClick={(e) => {
+        const r = e.currentTarget.getBoundingClientRect();
+        toParent({ type: 'key-toggle', rect: { top: r.top, right: r.right, bottom: r.bottom, left: r.left } });
+      }}
+    >
+      <KeyGlyph locked={locked} />
+    </button>
+  );
+}
+
+interface HomeHeaderProps {
+  surface: 'panel' | 'popup';
+  menuRef: RefObject<HTMLButtonElement | null>;
+  menuOn: boolean;
+  onMenu: () => void;
+  /** The relay pill (ExtRelay.tsx), drawn by the panel, which holds the relay state. */
+  relay: ReactNode;
+  keyed: boolean;
+  vault: VaultState | null;
+  keyPressed: boolean;
+  /** The extension opens its Settings as a view (`ext=3`). */
+  settings: boolean;
+}
+
+/** The first page's header: ≡, Walnut, the relay pill, the key, (the side panel,) Settings. */
+export function ExtHomeHeader(p: HomeHeaderProps) {
+  return (
+    <header className={`ext-ask-head ext-home-head is-${p.surface}`} data-testid="ext-home-head">
+      <AskWalnutMenuButton ref={p.menuRef} open={p.menuOn} onToggle={p.onMenu} label="Walnut" />
+      <div className="ext-home-brand">
+        <img src="/walnut-icon.png" alt="" className="ext-home-mark" aria-hidden="true" />
+        <span className="ext-home-name">Walnut</span>
+        {p.relay}
+      </div>
+      {p.keyed && <KeyButton vault={p.vault} pressed={p.keyPressed} />}
+      {p.surface === 'popup' && (
+        <button type="button" className="ext-ask-icon" data-testid="ext-ask-side-panel" aria-label="Open in the side panel" title="Open in the side panel" onClick={() => toParent({ type: 'open-side-panel' })}>{ICON_SIDE}</button>
+      )}
+      {p.keyed && p.settings && (
+        <button type="button" className="ext-ask-icon" data-testid="ext-home-settings" aria-label="Settings" title="Settings" onClick={() => toParent({ type: 'open-view', view: 'settings' })}>{ICON_GEAR}</button>
+      )}
+    </header>
+  );
+}
+
+/** A task opened from the first page: Back (to the list, where it was), its title, its state and project. */
+export function ExtTaskHeader({ title, state, label, meta, onBack, keyed, vault, keyPressed }: {
+  title: string; state: string; label: string; meta: string; onBack: () => void; keyed: boolean; vault: VaultState | null; keyPressed: boolean;
+}) {
+  return (
+    <header className="ext-ask-head ext-taskpage-head" data-testid="ext-task-head">
+      <button type="button" className="ext-taskpage-back" data-testid="ext-task-back" onClick={onBack} aria-label="Back to the tasks" title="Back to the tasks">
+        <span aria-hidden="true">{ICON_BACK}</span>Back
+      </button>
+      <div className="ext-ask-titles">
+        <span className="ext-ask-title" data-testid="ext-task-title" title={title}>{title}</span>
+        {(label || meta) && (
+          <span className="ext-taskpage-line" data-testid="ext-task-headline">
+            {label && <span className={`ext-taskpage-state state-${state}`}>{label}</span>}
+            {label && meta ? ' · ' : ''}{meta}
+          </span>
+        )}
+      </div>
+      {keyed && <KeyButton vault={vault} pressed={keyPressed} />}
     </header>
   );
 }

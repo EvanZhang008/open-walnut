@@ -62,15 +62,12 @@ test('a follow-up reaches the kept words while the panel stays open; the popup k
   await panel.close()
   const before = await pageWords()
   expect((await kept()).agent?.id).toBe(GENERAL)
-  const shellAt = (await kept()).shells?.[GENERAL]?.at ?? 0
 
-  // The toolbar popup on that page: its composer and Continue rows, held open past its send.
+  // The toolbar popup on that page opens on the first page (a new task over the task list)...
   const opened = lab.ctx.waitForEvent('page')
   await sw(lab).evaluate((w: number) => chrome.windows.create({ url: chrome.runtime.getURL(`popup-ask.html?window=${w}`), type: 'popup', width: 380, height: 560 }), lab.docWindow)
   const pop: Page = await opened
-  await expect(pop.frameLocator('iframe.panel-frame').locator('.ext-popup-composer textarea')).toBeVisible({ timeout: 60_000 })
-  // Its words are kept (the shell, for every placeholder)...
-  await expect.poll(async () => (await kept()).shells?.[GENERAL]?.at ?? 0, { timeout: 15_000 }).toBeGreaterThan(shellAt)
+  await expect(pop.frameLocator('iframe.panel-frame').locator('[data-testid="ext-home-composer"] textarea')).toBeVisible({ timeout: 60_000 })
   await pop.waitForTimeout(800)
   await pop.close()
   // ...and the panel's open conversation is as the panel left it.
@@ -93,21 +90,20 @@ test('a follow-up reaches the kept words while the panel stays open; the popup k
 
 test('the popup switches to another agent: the next side panel draws that agent\'s, never the first agent\'s question', async () => {
   test.setTimeout(240_000)
-  // The pick is mirrored to the fixture's ui-prefs: kept in this browser, never handed to another spec.
-  await lab.ctx.route('**/api/ui-prefs', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: route.request().method() === 'GET' ? '{"prefs":{}}' : '{"ok":true}' }))
   expect(await pageWords()).toContain(SECOND)
   const openPopup = async (): Promise<Page> => {
     const opened = lab.ctx.waitForEvent('page')
     await sw(lab).evaluate((w: number) => chrome.windows.create({ url: chrome.runtime.getURL(`popup-ask.html?window=${w}`), type: 'popup', width: 380, height: 560 }), lab.docWindow)
     return opened
   }
-  /** In the popup's drawer, the agent list: pick `id`. */
+  /** In the popup's ≡ drawer, the agent list (its title unfolds it): pick `id`. */
   const pickAgent = async (pop: Page, id: string) => {
     const v = pop.frameLocator('iframe.panel-frame')
-    await expect(v.locator('.ext-popup-composer textarea')).toBeVisible({ timeout: 60_000 })
-    await v.getByTestId('ext-ask-agent').click()
-    await v.locator(`[data-testid="ask-walnut-agent-item"][data-agent-id="${id}"]`).click()
-    await expect(v.locator('.ext-ask-agent')).not.toContainText('Ask Walnut', { timeout: 15_000 })
+    await expect(v.locator('[data-testid="ext-home-composer"] textarea')).toBeVisible({ timeout: 60_000 })
+    await v.getByTestId('ask-walnut-menu').click()
+    const item = v.locator(`[data-testid="ask-walnut-agent-item"][data-agent-id="${id}"]`)
+    if (!(await item.isVisible())) await v.getByTestId('ask-walnut-agent-switch').click()
+    await item.click()
   }
   const pop = await openPopup()
   try {
@@ -156,7 +152,6 @@ test('the popup switches to another agent: the next side panel draws that agent\
     await v.locator(`[data-testid="ask-walnut-agent-item"][data-agent-id="${GENERAL}"]`).click().catch(() => undefined)
     await expect.poll(async () => (await kept()).agent?.id, { timeout: 15_000 }).toBe(GENERAL).catch(() => undefined)
     await panel.close()
-    await lab.ctx.unroute('**/api/ui-prefs')
   }
   // Walnut's own conversation was kept apart all along: the next open draws it again.
   expect(await pageWords()).toContain(SECOND)

@@ -18,8 +18,9 @@
 import { ask, ext } from './ext'
 import { h } from './dom'
 import { popupIcon } from './popup-ui'
-import { agentNameOf, agentOf, drawSnap, drawTasksLoading, keepAgent, keepSnap, shellOf, snapKeyOf, snapOf, type AskSnap, type SnapView } from './panel-snap'
+import { agentNameOf, agentOf, drawSnap, drawTasksLoading, homeOf, keepAgent, keepHomeSnap, keepMode, keepSnap, shellOf, snapKeyOf, snapOf, type AskSnap, type PanelMode, type SnapView } from './panel-snap'
 import { drawAskLook, type AskLook } from './panel-look'
+import { drawHomeLook, drawTaskLook, type HomeLook, type RelayLook } from './panel-look-home'
 import { startPagePlumbing } from './panel-page'
 import { keyPopover } from './key-pop'
 import { keepTheme } from './panel-theme'
@@ -44,12 +45,23 @@ export async function startAsk(root: HTMLElement, server: string, win: { id?: nu
   const body = h('div', { class: 'panel-body' }, frame)
   root.replaceChildren(h('div', { class: `panel-shell is-ask is-${surface}` }, body))
 
-  // ── Ask as it will look, drawn here at once, until the view says its own is up ──
+  // ── the view as it will look, drawn here at once, until it says its own is up ──
+  // The page it opens on: the popup always the first page (New task), the side panel the page it
+  // was left on (the first page, an ask, or a task opened there), as the view said (`mode`).
   let lookShown = true
   const look: AskLook = { surface, snap: null, shell: null, page: null, locked: true }
-  const lookEl = drawAskLook(look)
+  const homeLook: HomeLook = { surface, home: null, page: null, locked: true, relay: 'off', settings: EXT_LEVEL >= 3 }
+  let lookMode: PanelMode = 'home'
+  let lookTask = ''
+  const lookEl = h('div', { class: `panel-snap panel-snap-ask is-look is-${surface}`, 'data-testid': 'panel-snap', 'aria-hidden': 'true' })
+  const drawLook = () => {
+    if (!lookShown) return
+    if (lookMode === 'ask') drawAskLook(look, lookEl)
+    else if (lookMode === 'task') drawTaskLook({ title: lookTask, locked: look.locked }, lookEl)
+    else drawHomeLook({ ...homeLook, locked: look.locked }, lookEl)
+  }
+  drawLook()
   body.append(lookEl)
-  const drawLook = () => { if (lookShown) drawAskLook(look, lookEl) }
   /**
    * The view said its own is up: the look goes once the frame has painted it, fading out. Gone at
    * once, the frame's last painted picture (Walnut's launch splash) showed for a frame or two
@@ -74,6 +86,19 @@ export async function startAsk(root: HTMLElement, server: string, win: { id?: nu
     let host = ''
     try { host = url ? new URL(url).host : '' } catch { /* no page */ }
     look.page = url ? { title: tab?.title ?? '', host, key: snapKeyOf(url) } : null
+    homeLook.page = url ? { title: tab?.title ?? '', host } : null
+    drawLook()
+  }
+  /** The relay pill of the drawing: an agent in this tab, the agents switch, or tabs handed over. */
+  const lookAtRelay = async () => {
+    const [local, session, [tab]] = await Promise.all([
+      ext.storage.local.get('agentControl').catch(() => ({} as Record<string, unknown>)),
+      ext.storage.session.get('agentTabs').catch(() => ({} as Record<string, unknown>)),
+      ext.tabs.query({ active: true, windowId: win.id }).catch(() => [] as Array<{ id?: number }>),
+    ])
+    const tabs = (session.agentTabs ?? {}) as Record<string, unknown>
+    const relay: RelayLook = tab?.id !== undefined && tabs[String(tab.id)] ? 'tab' : local.agentControl === true || Object.keys(tabs).length > 0 ? 'on' : 'off'
+    homeLook.relay = relay
     drawLook()
   }
   /**
@@ -96,6 +121,11 @@ export async function startAsk(root: HTMLElement, server: string, win: { id?: nu
     drawLook()
   }
   void Promise.all([
+    homeOf().then(({ home, mode }) => {
+      homeLook.home = home
+      if (surface === 'panel' && mode) { lookMode = mode.mode; lookTask = mode.title ?? '' }
+    }),
+    lookAtRelay(),
     agentOf().then((a) => (lookAgent === null ? lookAtAgent(a) : undefined)),
     ext.storage.session.get('vaultSession').then((v) => { look.locked = !v.vaultSession }).catch(() => undefined),
     lookAtPage(),
@@ -295,6 +325,8 @@ export async function startAsk(root: HTMLElement, server: string, win: { id?: nu
       if (d.type === 'shown' || d.type === 'snapshot') {
         const view: SnapView = from === frame.contentWindow ? 'ask' : 'tasks'
         if (d.type === 'shown') { if (view === 'ask') unLook(); else uncover(view) }
+        // The first page's task panel, from the Ask frame (its first page).
+        else if (d.view === 'home' && view === 'ask') void keepHomeSnap(d.snap)
         else if (d.view === view) void keepSnap(view, d.snap, { key: d.key, agentId: d.agentId, counts: d.counts })
         return
       }
@@ -311,6 +343,10 @@ export async function startAsk(root: HTMLElement, server: string, win: { id?: nu
           return
         }
         case 'key-close': case 'frame-pointer': key.close(); return
+        // The page the side panel's view shows now: the next open draws that one.
+        case 'mode':
+          if (surface === 'panel') void keepMode(d.mode, d.title)
+          return
         case 'open-view':
           if (d.view === 'passwords' && surface === 'popup') { location.href = 'popup.html?from=ask'; return }
           if (d.view === 'settings' && surface === 'popup') { location.href = 'popup.html?from=ask&open=settings'; return }

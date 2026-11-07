@@ -47,10 +47,8 @@ export function useAskSnapshots(rootRef: RefObject<HTMLDivElement | null>, page:
       requestAnimationFrame(() => requestAnimationFrame(send));
       setTimeout(send, SHOWN_AFTER_PAINT_MAX_MS);
     };
-    // The popup's body is its composer (the conversation goes on in the side panel).
-    const viewOf = () => (surface === 'popup'
-      ? (el.querySelector('.ext-popup-body textarea') ? 'compose' : undefined)
-      : el.querySelector('[data-testid="ask-object-drawer"]')?.getAttribute('data-view'));
+    // The popup shows the first page (useHomeSnapshots): only the side panel's Ask page comes here.
+    const viewOf = () => el.querySelector('[data-testid="ask-object-drawer"]')?.getAttribute('data-view');
     // A new chat is up once its Continue list is what it will stay: the asks have loaded (the root's
     // `data-asks`). Before that the view would replace the drawing's rows with "Loading your
     // asks…" and then put them back (review R2-6), so the drawing stays until the rows are real.

@@ -21,7 +21,7 @@
 import { expect, test, type FrameLocator, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs'
 import path from 'node:path'
-import { askView, backToAsk, openView, passwordsView, startPanelLab, sw, type PanelLab } from './extension-panel-harness'
+import { askView, backToAsk, openView, pageShown, passwordsView, startPanelLab, sw, toAsk, type PanelLab } from './extension-panel-harness'
 import { ensureVaultSetUp, vaultSession, VAULT_MASTER } from './vault-session-helper'
 import { holdVaultLock, vaultExclusively } from './vault-lock'
 
@@ -81,7 +81,7 @@ async function panelPage(query = ''): Promise<Page> {
   await sw(lab).evaluate(([w, q]: [number, string]) => chrome.windows.create({ url: chrome.runtime.getURL(`sidepanel.html?window=${w}${q}`), type: 'popup', width: 420, height: 760 }), [lab.docWindow, query] as [number, string])
   const panel = await opened
   await panel.setViewportSize({ width: 400, height: 760 })
-  await expect(askView(panel).getByTestId('ext-ask-head')).toBeVisible({ timeout: 60_000 })
+  await toAsk(panel)
   return panel
 }
 
@@ -315,7 +315,8 @@ test('Fill in the key popover fills the page and closes the popover, in the side
     await sw(lab).evaluate(([w, u]: [number, string]) => chrome.windows.create({ url: chrome.runtime.getURL(`${u}?window=${w}`), type: 'popup', width: 420, height: 760 }), [lab.docWindow, page] as [number, string])
     const panel = await opened
     const v = askView(panel)
-    await expect(v.getByTestId('ext-ask-head')).toBeVisible({ timeout: 60_000 })
+    // The side panel opens on the page it was left on, the popup on the first page: both have the key.
+    await expect(pageShown(panel)).toBeVisible({ timeout: 60_000 })
     await v.getByTestId('ext-ask-key').click()
     const row = panel.getByTestId('key-pop').getByTestId('key-pop-row').filter({ hasText: WORK_TITLE })
     await expect(row).toBeVisible({ timeout: 15_000 })

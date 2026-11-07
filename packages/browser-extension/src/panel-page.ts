@@ -92,6 +92,24 @@ export function startPagePlumbing(o: {
   let timer: ReturnType<typeof setTimeout> | undefined
   const soon = () => { clearTimeout(timer); timer = setTimeout(() => void push(), 250) }
 
+  /**
+   * The browser relay for the Ask view's first page (its pill and panel, ExtRelay.tsx): the agents
+   * switch and the tabs agents hold, told when the view is ready and whenever either changes.
+   */
+  let relayTold = ''
+  const tellRelay = async () => {
+    if (o.gone() || !frame.contentWindow || !ready.has(frame.contentWindow)) return
+    const r = await ask<{ on: boolean; tabs: unknown[] }>({ type: 'relay-state' })
+    if (!r.ok) return
+    const m = { type: 'relay', on: r.on === true, tabs: Array.isArray(r.tabs) ? r.tabs : [] }
+    const words = JSON.stringify(m)
+    if (words === relayTold) return
+    relayTold = words
+    postAsk(m)
+  }
+  let relayTimer: ReturnType<typeof setTimeout> | undefined
+  const relaySoon = () => { clearTimeout(relayTimer); relayTimer = setTimeout(() => void tellRelay(), 150) }
+
   /** A selection the context menu asked about while the Ask view was not up yet: it goes once that view is. */
   let heldSelection = ''
   const pending = async () => {
@@ -114,6 +132,7 @@ export function startPagePlumbing(o: {
       // The page first (it picks the conversation), then a selection held for the Ask view.
       void push(() => {
         if (from === frame.contentWindow && heldSelection) { postAsk({ type: 'ask-selection', text: heldSelection }); heldSelection = '' }
+        if (from === frame.contentWindow) { relayTold = ''; void tellRelay() }
         o.onReady?.(from)
       }).then(pending)
       return
@@ -138,6 +157,18 @@ export function startPagePlumbing(o: {
         if (typeof d.tab !== 'number' || d.tab !== tabId) return
         void ask({ type: 'panel-release', tabId: d.tab }).then(() => void push())
         return
+      // The relay panel: the agents switch, a tab's Stop or Unshare (any agent tab), Stop all.
+      case 'relay-set':
+        if (typeof d.on !== 'boolean') return
+        void ask({ type: d.on ? 'agent-on' : 'agent-off' }).then(() => { void tellRelay(); void push() })
+        return
+      case 'relay-release':
+        if (typeof d.tab !== 'number') return
+        void ask({ type: 'panel-release', tabId: d.tab }).then(() => { void tellRelay(); void push() })
+        return
+      case 'relay-stop-all':
+        void ask({ type: 'relay-stop-all' }).then(() => { void tellRelay(); void push() })
+        return
       case 'page-text': {
         // A question goes out with the page: its text, read now, from the tab the panel named.
         if (typeof d.id !== 'string') return
@@ -154,12 +185,16 @@ export function startPagePlumbing(o: {
   ext.tabs.onActivated.addListener((info) => { if (info.windowId === win.id) soon() })
   ext.tabs.onUpdated.addListener((id, change) => {
     if (id === tabId && (change.status === 'complete' || change.url || change.title)) soon()
+    // An agent tab's page moved on: its row in the relay panel names the new page.
+    if (change.url || change.title) relaySoon()
   })
+  ext.tabs.onRemoved.addListener(() => relaySoon())
   ext.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && 'agentControl' in changes) relaySoon()
     if (area !== 'session') return
     if ('panelAsk' in changes && changes.panelAsk.newValue) void pending()
     // Stop on the page, or another task's tab: the panel's switch follows.
-    if ('agentTabs' in changes) soon()
+    if ('agentTabs' in changes) { soon(); relaySoon() }
   })
   // A selection made on the page this panel follows.
   ext.runtime.onMessage.addListener((m: { type?: string; tabId?: number }) => {

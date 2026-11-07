@@ -78,6 +78,8 @@ const CONSOLE_ONLY: Array<[string, string]> = [
   ['components/board/TaskBoardPane.tsx', 'the Board'],
   ['components/sessions/SessionChangedTab.tsx', 'the diff view'],
   ['components/tasks/TaskDetailPane.tsx', 'the task detail'],
+  // The extension's first page (ExtHome.tsx) draws its composer first; Home's task panel comes after it.
+  ['components/tasks/TodoPanel.tsx', "Home's task panel"],
 ]
 
 describe('a pop-out loads only its own view', () => {
@@ -107,6 +109,14 @@ describe('a pop-out loads only its own view', () => {
   it("the browser side panel's view (ext-panel) reaches none of the console", () => {
     const hits = CONSOLE_ONLY.map(([f, what]) => [path.join(WEB, f), what] as const).filter(([f]) => extPanel.has(f))
     expect(hits.map(([f, what]) => `${what}: ${chain(extPanel, f)}`)).toEqual([])
+  })
+
+  it("the extension's first page draws its composer at once, and Home's task panel and a task's detail after it", () => {
+    expect(extPanel.has(path.join(WEB, 'popout/ExtHome.tsx'))).toBe(true)
+    expect(extPanel.has(path.join(WEB, 'popout/ExtRelay.tsx'))).toBe(true)
+    for (const later of ['popout/ExtHomeTasks.tsx', 'popout/ExtTaskDetail.tsx']) expect(extPanel.has(path.join(WEB, later)), later).toBe(false)
+    expect(fs.readFileSync(path.join(WEB, 'popout/ExtHome.tsx'), 'utf8')).toMatch(/lazy\(\(\) => import\('\.\/ExtHomeTasks'\)\)/)
+    expect(fs.readFileSync(path.join(WEB, 'popout/ExtFirstPage.tsx'), 'utf8')).toMatch(/lazy\(\(\) => import\('\.\/ExtTaskDetail'\)\)/)
   })
 
   it('PopoutRoot loads its views through popout-views.ts, never by a static import', () => {

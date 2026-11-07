@@ -196,3 +196,12 @@ export function needsCount(tasks: readonly Task[]): number {
   const { needs, focus } = extTaskLists(tasks);
   return needs.length + focus.filter((r) => r.state === 'needs' && !readHere(r.task)).length;
 }
+
+/**
+ * A task as the frame's heads name it (its open conversation's header, the relay's strip and its
+ * panel): the state word, and the line that tells it apart, the same words as its row.
+ */
+export function taskHead(task: Task, words: string = keptWords(task.id)?.text ?? ''): { state: ExtTaskRow['state']; label: string; line: string } {
+  const row = rowOf(task, () => words);
+  return { state: row.state, label: row.label, line: row.line || taskWords(task, words) };
+}

@@ -28,6 +28,7 @@
  * person only looks at stay in the browser. The view answers only the first extension page that
  * spoke to it, at its origin.
  */
+import { readRelay, type RelayState } from './ext-relay-model';
 
 export const EXT_PANEL = 'ext-panel';
 
@@ -57,7 +58,10 @@ export interface VaultState { locked: boolean; siteCount: number | null; host: s
  * may act in the tab; `sel`: the page's selection its quote showed, absent when none showed or the
  * person left it out). What the popup showed is what goes: never a selection it did not show.
  */
-export interface HandedAsk { text: string; page: boolean; act: boolean; sel?: string }
+export interface HandedAsk { text: string; page: boolean; act: boolean; sel?: string; task?: boolean }
+
+/** An ask or task the popup handed to the panel to show (`task`: a task picked from the first page's list). */
+export interface HandedOpen { taskId: string; sessionId?: string; task?: boolean }
 
 export type PanelInbound =
   | ({ type: 'context' } & PanelContext)
@@ -66,7 +70,8 @@ export type PanelInbound =
   | { type: 'page-text'; id: string; url: string; text: string }
   | ({ type: 'vault-state' } & VaultState)
   | { type: 'key-state'; open: boolean }
-  | { type: 'hand'; ask?: HandedAsk; open?: { taskId: string; sessionId?: string } };
+  | { type: 'hand'; ask?: HandedAsk; open?: HandedOpen }
+  | ({ type: 'relay' } & RelayState);
 
 const EXTENSION_ORIGIN = /^(chrome|moz|safari-web)-extension:\/\/[a-z0-9-]+$/i;
 
@@ -99,12 +104,16 @@ export function readInbound(data: unknown, origin: string, fromParent: boolean):
     const a = d.ask as Record<string, unknown> | undefined;
     const o = d.open as Record<string, unknown> | undefined;
     const sel = a && typeof a.sel === 'string' && a.sel.trim() ? a.sel.trim().slice(0, MAX_SELECTION) : '';
-    const ask = a && typeof a.text === 'string' && a.text.trim() ? { text: a.text.slice(0, MAX_TEXT_ASK), page: a.page !== false, act: a.act === true, ...(sel ? { sel } : {}) } : undefined;
+    const ask = a && typeof a.text === 'string' && a.text.trim() ? { text: a.text.slice(0, MAX_TEXT_ASK), page: a.page !== false, act: a.act === true, ...(sel ? { sel } : {}), ...(a.task === true ? { task: true } : {}) } : undefined;
     const open = o && typeof o.taskId === 'string' && ID.test(o.taskId)
-      ? { taskId: o.taskId, ...(typeof o.sessionId === 'string' && ID.test(o.sessionId) ? { sessionId: o.sessionId } : {}) }
+      ? { taskId: o.taskId, ...(typeof o.sessionId === 'string' && ID.test(o.sessionId) ? { sessionId: o.sessionId } : {}), ...(o.task === true ? { task: true } : {}) }
       : undefined;
     if (!ask && !open) return null;
     return { type: 'hand', ...(ask ? { ask } : {}), ...(open ? { open } : {}) };
+  }
+  if (d.type === 'relay') {
+    const relay = readRelay(d);
+    return relay ? { type: 'relay', ...relay } : null;
   }
   return null;
 }

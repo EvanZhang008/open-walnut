@@ -45,8 +45,8 @@ test('Disconnect closes the open panel\'s frames and removes what it kept; a reo
   expect(after.panelServer).toBeUndefined()
   await panel.close()
 
-  // Opened afterwards: nothing of that Walnut is drawn or framed.
-  ;({ panel } = await openPanel(lab, 'ask'))
+  // Opened afterwards: nothing of that Walnut is drawn or framed (so no page of it to go to).
+  ;({ panel } = await openPanel(lab, 'home'))
   await expect(panel.getByRole('heading', { name: 'Connect to Walnut' })).toBeVisible({ timeout: 15_000 })
   await expect(panel.locator('iframe')).toHaveCount(0)
   await expect(panel.getByTestId('panel-snap')).toHaveCount(0)

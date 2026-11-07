@@ -17,7 +17,7 @@ import { ext, type Sender } from './ext'
 import { ApiError, DEFAULT_SERVER, api, call, cleanServerUrl, connection, disconnect, pair, vaultSession } from './walnut-api'
 import { displayHost, matchItem } from '../../../src/core/vault/url-match'
 import { generate, DEFAULT_PASSWORD, type GeneratorOptions } from '../../../src/core/vault/generator'
-import { adoptTab, agentMessage, agentOn, initAgent, isAgentTab, releaseTab, tabOwnerOf } from './agent'
+import { adoptTab, agentMessage, agentOn, initAgent, isAgentTab, releaseAllTabs, releaseTab, relayState, tabOwnerOf } from './agent'
 import { initSelfUpdate } from './self-update'
 import { injectOpenTabs, reachPage, toPage } from './page-reach'
 import { CODE_PAGE_MS, PENDING_MS, activeTab, fail, forget, insecureFor, isWalnutPage, liveState, matchesFor, originOf, pendingAlive, siteOf, state, stores, summaries, tiersOf, view, walletItems, type Reply } from './bg-vault'
@@ -124,7 +124,9 @@ const ALLOWED: Record<string, SenderKind | SenderKind[]> = {
   'menu-data': 'menu', 'menu-codes': 'menu', 'menu-fill': 'menu', 'menu-generate': 'menu', 'menu-regenerate': 'menu', 'menu-copied': 'menu',
   'menu-unlock': 'menu', 'menu-connect': 'menu', 'menu-close': 'menu', 'menu-size': 'menu',
   'savebar-data': 'savebar', 'savebar-action': 'savebar', 'savebar-size': 'savebar',
-  'agent-get': 'popup', 'agent-on': 'popup', 'agent-off': 'popup', 'agent-stop': 'content',
+  // The side panel's first page has the relay switch too (ExtRelay.tsx).
+  'agent-get': ['popup', 'sidepanel'], 'agent-on': ['popup', 'sidepanel'], 'agent-off': ['popup', 'sidepanel'], 'agent-stop': 'content',
+  'relay-state': 'sidepanel', 'relay-stop-all': 'sidepanel',
   'page-selection': 'content',
   'panel-state': 'sidepanel', 'panel-page': 'sidepanel', 'panel-adopt': 'sidepanel', 'panel-release': 'sidepanel', 'panel-pending': 'sidepanel', 'panel-hand': 'sidepanel',
   [BROWSER_KEY_MESSAGE]: 'content',
@@ -224,6 +226,11 @@ async function handle(msg: { type: string; [k: string]: unknown }, sender: Sende
     }
     case 'panel-release': {
       if (typeof msg.tabId === 'number') await releaseTab(msg.tabId)
+      return { ok: true }
+    }
+    case 'relay-state': return { ok: true, ...(await relayState()) }
+    case 'relay-stop-all': {
+      await releaseAllTabs()
       return { ok: true }
     }
     case 'panel-pending': {

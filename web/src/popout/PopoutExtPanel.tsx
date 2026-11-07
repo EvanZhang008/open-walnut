@@ -1,6 +1,11 @@
 /**
- * Walnut in the browser's side panel, and in the toolbar popup: Walnut's own Ask. The Walnut
- * extension's panel page frames this view and tells it about the page the person is on
+ * Walnut in the browser's side panel, and in the toolbar popup. The first page (design option A,
+ * 2026-11-07, ExtHome.tsx) is a new task composer over Home's task panel, with the browser relay
+ * in the header; a task opened there shows its conversation here, with Back to the list
+ * (`mode: 'task'`), and the Ask conversations are a page of their own, from ≡ (`mode: 'ask'`).
+ * The popup always opens on the first page and hands what it starts to the side panel.
+ *
+ * The Ask page: Walnut's own Ask. The Walnut extension's panel page frames this view and tells it about the page the person is on
  * (ext-panel-model.ts). The header is the Ask slot's (≡ for the drawer of asks, the ask's title over
  * "Ask Walnut ⌄", New chat), with the key button the extension draws its vault popover for; the
  * conversation is an ordinary Ask session (AskObjectDrawer). As on Home, the open conversation stays
@@ -9,11 +14,10 @@
  *
  * The composer's page chip says the page goes with the next message (its text as a file the ask
  * names); × leaves it out. "Act in tab" is the person's click: the extension makes the tab this
- * ask's agent tab, framed and with Stop, like the tabs agents open themselves. In the popup
- * (`surface=popup`) the body is the asks to continue and a composer whose question goes to the side
- * panel (ExtPopupBody.tsx).
+ * ask's agent tab, framed and with Stop, like the tabs agents open themselves.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { Task } from '@open-walnut/core';
 import { apiPost } from '@/api/client';
 import { AskObjectDrawer, escapeBelongsToAnOverlay, type AskObjectQuote } from '@/components/chat/AskObjectDrawer';
 import type { AskSessionLaunch } from '@/components/chat/ask-object-session';
@@ -26,7 +30,7 @@ import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from '@/utils/compos
 import { NotificationToaster } from '@/components/common/NotificationToaster';
 import { OperationErrorBridge } from '@/components/common/OperationErrorBridge';
 import { TransferDialogHost } from '@/components/transfer/TransferDialogHost';
-import { TasksProvider } from '@/contexts/TasksContext';
+import { TasksProvider, useTasksContext } from '@/contexts/TasksContext';
 import { NotificationProvider } from '@/contexts/notifications';
 import { FocusBarProvider } from '@/contexts/FocusBarContext';
 import { usePageView } from '@/utils/view-memory';
@@ -35,20 +39,28 @@ import { log } from '@/utils/log';
 import {
   ACT_CONTEXT_NAME, CONTEXT_NAME, actLine, composerPlaceholderOf, currentConversation, handedOf, hostOf, otherOwnerOf, pageChipOn, pageContextBlock, panelOptions,
   firstQuestionOf, selectionLeftOutOnSwitch, selectionOfferedTo, pageKey as pageKeyOf, panelAskTitle, rememberFirstQuestion, rememberHanded, rememberSent, forgetSent, rememberSentPage, sentOf, sentPageOf, selectionQuote,
-  MAIN_OPEN, startConversation, type HandedAsk, type PanelContext, type VaultState,
+  MAIN_OPEN, startConversation, type HandedAsk, type HandedOpen, type PanelContext, type VaultState,
 } from './ext-panel-model';
-import { fromParent, toParent } from './ext-frame';
+import { fromParent, onParentKnown, toParent } from './ext-frame';
 import { useFrameTheme } from './ext-theme';
 import { useAskSnapshots } from './useAskSnapshots';
 import { attachedView, type Attached } from './ext-attached';
 import { ExtAskHeader, ExtAsksDrawer, ExtComposerChips } from './ExtAskChrome';
-import { ContinueList, ExtPopupBody } from './ExtPopupBody';
+import { ContinueList } from './ExtContinueList';
+import type { HomeLaunched, HomePreset } from './ExtHome';
+import type { OpenTask } from './ExtHomeTasks';
+import { ExtFirstPage, ExtTaskPageDetail, ExtTaskPageHead, taskNameOf, useRelayWord } from './ExtFirstPage';
+import { isPanelMode, type PanelMode } from './ext-home-model';
 import { sessionOfTask, useExtAsks } from './useExtAsks';
 import { ExtAskApprovals, useExtApprovals } from './ExtApprovals';
 import { keepAsks, keptAsks } from './ext-continue-kept';
 import { useVaultChangedRelay } from './vault-changed-relay';
+import { markNotAPhone } from '@/hooks/usePhoneLayout';
 import './ext-panel.css';
 import '@/styles/walnut-agent.css';
+
+// The panel is a desktop browser's, however narrow: Home's task panel acts as on a desktop here.
+markNotAPhone();
 
 export function PopoutExtPanel() {
   return <TasksProvider><NotificationProvider><FocusBarProvider>
@@ -66,6 +78,13 @@ const TEXT_MS = 10_000;
 const NO_PAGE_KEY = 'web:none';
 
 const isAgentId = (v: unknown): v is string => typeof v === 'string' && /^[\w.-]{1,80}$/.test(v);
+const isDetailId = (v: unknown): v is string => typeof v === 'string' && /^[\w.:-]{0,120}$/.test(v);
+/**
+ * The pointer to the conversation of a task opened from the first page, kept apart from every
+ * agent's own (currentConversation): opening a task never replaces the ask the person left open.
+ * Its records are the general agent's, under keys of their own.
+ */
+const TASK_POINTER = 'ext-first-page-task';
 
 function insertInto(sessionId: string, text: string): void {
   const detail: ComposerInsertDetail = { sessionId, text, mode: 'lead', handled: false };
@@ -80,6 +99,20 @@ function blurComposer(): void {
 function ExtPanel() {
   const opts = useMemo(() => panelOptions(window.location.search), []);
   useFrameTheme();
+  const isPopup = opts.surface === 'popup';
+  /**
+   * The page on show, kept across opens like any view choice: the first page, an ask, or a task
+   * opened from the list (`detailId`: one with no conversation, shown as its detail). The popup is
+   * always the first page, and never writes it.
+   */
+  const [keptMode, setKeptMode] = usePageView('ext-panel', 'mode', 'home', isPanelMode);
+  const [detailId, setDetailId] = usePageView('ext-panel', 'detail', '', isDetailId);
+  const { tasks: allTasks } = useTasksContext();
+  const relay = useRelayWord();
+  /** A first message the popup handed over to the first page, sent once there. */
+  const [homePreset, setHomePreset] = useState<HomePreset | null>(null);
+  /** What a task started on the first page took from the page, for its first bubble. */
+  const launchAttach = useRef<{ words: string; att: Attached } | null>(null);
   const [ctx, setCtx] = useState<PanelContext | null>(null);
   const [orphan, setOrphan] = useState(false);
   const [agentId, setAgentId] = usePageView('ext-panel', 'agent', GENERAL_AGENT_ID, isAgentId);
@@ -123,7 +156,7 @@ function ExtPanel() {
   /** A selection the context menu asked about before the conversation's session was known. */
   const heldSelection = useRef('');
   /** What the popup handed over before this view knew the page. */
-  const heldHand = useRef<{ ask?: HandedAsk; open?: { taskId: string; sessionId?: string } } | null>(null);
+  const heldHand = useRef<{ ask?: HandedAsk; open?: HandedOpen } | null>(null);
   const textWaits = useRef(new Map<string, (r: { url: string; text: string }) => void>());
   /** The page's selection the person left out of their next message (×), and the one already sent. */
   const [leftOut, setLeftOut] = useState('');
@@ -161,13 +194,17 @@ function ExtPanel() {
   pageKeyRef.current = pageKey;
   /** Moves when another conversation starts, so the pointer is read again. */
   const [convRev, setConvRev] = useState(0);
+  // A task opened from the first page has its own pointer (TASK_POINTER), its records the general agent's.
+  const inTaskPage = !isPopup && keptMode === 'task';
+  const pointer = inTaskPage ? TASK_POINTER : agent.id;
+  const convAgentId = inTaskPage ? GENERAL_AGENT_ID : agent.id;
   // The open conversation, whatever page or tab (currentConversation); none before the page is known.
-  const convKey = useMemo(() => currentConversation(agent.id), [agent.id, convRev]); // eslint-disable-line react-hooks/exhaustive-deps
+  const convKey = useMemo(() => currentConversation(pointer), [pointer, convRev]); // eslint-disable-line react-hooks/exhaustive-deps
   const key = ctx ? convKey : '';
   const keyRef = useRef(key);
   keyRef.current = key;
   /** Which conversation, and which drawer of it: a record reported for another one is not this one's. */
-  const conv = `${agent.id}:${key}:${chat}`;
+  const conv = `${pointer}:${key}:${chat}`;
   const convRef = useRef(conv);
   convRef.current = conv;
   const record = reported && reported.conv === conv ? reported : null;
@@ -182,7 +219,7 @@ function ExtPanel() {
   }, []);
   /** New chat while this conversation acts in the tab: the new one gets the tab once it has a task. */
   const carryAct = useRef(false);
-  const scope = useMemo(() => ({ agentId: agent.id, key }), [agent.id, key]);
+  const scope = useMemo(() => ({ agentId: convAgentId, key }), [convAgentId, key]);
   const mine = record ? `task:${record.taskId}` : '';
 
   /** The agent the person picked last (agentId moves only on a pick; `agent` also while the list loads). */
@@ -198,6 +235,8 @@ function ExtPanel() {
   useEffect(() => {
     setActChoice(carryAct.current ? true : null); setActError(''); adoptedFor.current = ''; heldSelection.current = '';
     carryAct.current = false; actNote.current = undefined; attachedByWords.current.clear();
+    // A task the first page started: its first bubble shows what it took from the page.
+    if (launchAttach.current) { attachedByWords.current.set(launchAttach.current.words, launchAttach.current.att); launchAttach.current = null; }
     const sel = ctxRef.current?.page?.selection?.trim() ?? '';
     setLeftOut(selectionLeftOutOnSwitch(selectionOfferedTo(selectionOwner.current, sel, pickedAgent.current), agentId, sel));
     pickedAgent.current = agentId;
@@ -240,8 +279,9 @@ function ExtPanel() {
     if (agent.id !== GENERAL_AGENT_ID) setAgentId(GENERAL_AGENT_ID);
     const next = chatNo.current + 1;
     setMainChat(next);
+    setKeptMode('ask');
     setChat(next);
-  }, [agent.id, setAgentId, nextConversation]);
+  }, [agent.id, setAgentId, nextConversation, setKeptMode]);
 
   /** Show an ask (picked in the drawer or Continue, or handed over by the popup) as the open conversation. */
   const pickAsk = useCallback((taskId: string, sessionId: string | undefined, forAgent?: string) => {
@@ -256,12 +296,58 @@ function ExtPanel() {
     carryAct.current = false;
     handChoice.current = null;
     if (to !== agent.id) setAgentId(to);
+    setKeptMode('ask');
     setChat((n) => n + 1);
-  }, [agent.id, setAgentId, startMain, nextConversation]);
+  }, [agent.id, setAgentId, startMain, nextConversation, setKeptMode]);
 
-  const applyHand = useCallback((h: { ask?: HandedAsk; open?: { taskId: string; sessionId?: string } }) => {
+  /**
+   * A task from the first page in this frame: its conversation (one just started there, or a row's),
+   * under the first page's own pointer, with Back to the list. `started` is what a launch on the
+   * first page took along: acting in the tab, the first question, what it took from the page.
+   */
+  const openTask = useCallback((taskId: string, sessionId: string | undefined, started?: HomeLaunched) => {
+    if (!keyRef.current) return;
+    const k = nextConversation(TASK_POINTER);
+    writeAskSession({ agentId: GENERAL_AGENT_ID, key: k }, { taskId, ...(sessionId ? { sessionId } : {}), asked: [], at: Date.now() });
+    carryAct.current = !!started?.act;
+    handChoice.current = null;
+    if (started) {
+      if (started.question && (started.attached.page || started.attached.sel)) launchAttach.current = { words: started.question, att: started.attached };
+      if (started.pageUrl) rememberSentPage(taskId, started.pageUrl);
+      if (started.question) { rememberFirstQuestion(taskId, started.question); setQuestionsRev((n) => n + 1); }
+    }
+    setMainChat(null);
+    setDetailId('');
+    setKeptMode('task');
+    setChat((n) => n + 1);
+  }, [nextConversation, setKeptMode, setDetailId]);
+  /** A task with no conversation yet: its detail in this frame, never a Walnut tab. */
+  const openDetail = useCallback((taskId: string) => {
+    setDetailId(taskId);
+    setKeptMode('task');
+  }, [setDetailId, setKeptMode]);
+  /** Back to the first page, where the list kept its place (it stays mounted under the other pages). */
+  const goHome = useCallback(() => {
+    setDetailId('');
+    setKeptMode('home');
+  }, [setDetailId, setKeptMode]);
+
+  const applyHand = useCallback((h: { ask?: HandedAsk; open?: HandedOpen }) => {
+    if (h.open?.task) {
+      if (h.open.sessionId) openTask(h.open.taskId, h.open.sessionId);
+      else openDetail(h.open.taskId);
+      return;
+    }
     if (h.open) { pickAsk(h.open.taskId, h.open.sessionId); return; }
+    if (h.ask?.task) {
+      // The first page's question from the popup: the first page here sends it, with the popup's choices.
+      const a = h.ask;
+      setHomePreset({ id: Math.random().toString(36).slice(2), text: a.text, page: a.page, act: a.act, sel: a.sel ?? '' });
+      goHome();
+      return;
+    }
     if (!h.ask || !keyRef.current) return;
+    setKeptMode('ask');
     const k = nextConversation(agent.id);
     const next = chatNo.current + 1;
     handChoice.current = { chat: next, key: k, page: h.ask.page, act: h.ask.act, sel: h.ask.sel ?? '' };
@@ -269,7 +355,7 @@ function ExtPanel() {
     carryAct.current = h.ask.act;
     setPreset({ chat: next, key: k, text: h.ask.text });
     setChat(next);
-  }, [agent.id, pickAsk, nextConversation]);
+  }, [agent.id, pickAsk, nextConversation, openTask, openDetail, goHome, setKeptMode]);
   const applyHandRef = useRef(applyHand);
   applyHandRef.current = applyHand;
 
@@ -376,8 +462,8 @@ function ExtPanel() {
     if (adoptedFor.current === once) return;
     adoptedFor.current = once;
     rememberHanded(tab, key, record.taskId);
-    toParent({ type: 'adopt', tab, task: record.taskId, who: 'Ask Walnut' });
-  }, [actWanted, tab, record?.taskId, key]);
+    toParent({ type: 'adopt', tab, task: record.taskId, who: inTaskPage ? 'Walnut task' : 'Ask Walnut' });
+  }, [actWanted, tab, record?.taskId, key, inTaskPage]);
 
   const toggleAct = useCallback((on: boolean) => {
     setActError('');
@@ -506,7 +592,26 @@ function ExtPanel() {
   // The agent on show once it is the one picked, or the agent list says the pick is gone: before
   // that, the general agent stands in for a pick still loading (useExtAsks).
   const shownAgent = agent.id === agentId || asks.rowsReady ? agent.id : '';
-  useAskSnapshots(rootRef, page, key ? conv : '', opts.surface, shownAgent, agent.project);
+  // A task page open with nothing to show (its conversation forgotten, no detail): the first page.
+  const taskShownHere = !!detailId || !!shownTaskId;
+  const mode: PanelMode = isPopup ? 'home' : keptMode === 'task' && !taskShownHere ? 'home' : keptMode;
+  // The Ask page's own words and drawing; the first page sends its own (useHomeSnapshots). The
+  // agent picked is told on every page (a pick in the popup's drawer names the panel's next Ask).
+  useAskSnapshots(rootRef, page, key && mode === 'ask' ? conv : '', opts.surface, shownAgent, agent.project);
+
+  // Which page the view shows (a task's, with its title), for the extension's drawing of the next
+  // open (panel-look-home.ts): the drawing is the page the view opens on.
+  const modeTaskId = mode === 'task' ? (detailId || shownTaskId) : '';
+  const modeTitle = useMemo(() => {
+    if (!modeTaskId) return '';
+    return taskNameOf(allTasks.find((x) => x.id === modeTaskId), modeTaskId);
+  }, [modeTaskId, allTasks, questionsRev]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (isPopup) return;
+    const tell = () => toParent({ type: 'mode', mode, ...(modeTitle ? { title: modeTitle.slice(0, 200) } : {}) });
+    tell();
+    return onParentKnown(tell);
+  }, [mode, modeTitle, isPopup]);
 
   const prepareContext = useCallback(async (draft: { walnut?: boolean; host?: string | null }, question: string): Promise<string> => {
     const now = ctxRef.current;
@@ -547,8 +652,10 @@ function ExtPanel() {
     nextConversation(agent.id);
     carryAct.current = ownTab;
     handChoice.current = null;
+    setMainChat(null);
+    setKeptMode('ask');
     setChat((n) => n + 1);
-  }, [key, agent.id, ownTab, nextConversation]);
+  }, [key, agent.id, ownTab, nextConversation, setKeptMode]);
 
   /**
    * A question asked here is a conversation, not work for the board: its task is not pinned (as
@@ -566,6 +673,7 @@ function ExtPanel() {
   const pickAgent = useCallback((id: string) => { setMainChat(null); setAgentId(id); }, [setAgentId]);
   const closeDrawer = useCallback(() => setAsksDrawer(false), []);
   const mainSession = sessionOfTask(asks.mainTask);
+  const onAsk = mode === 'ask';
   const drawer = (
     <ExtAsksDrawer
       open={!!asksDrawer}
@@ -574,27 +682,28 @@ function ExtPanel() {
       asks={asks}
       agentsFirst={asksDrawer === 'agents'}
       onPickAgent={pickAgent}
-      selectedTaskId={shownTaskId && shownTaskId !== asks.mainTask?.id ? shownTaskId : null}
-      mainSelected={shownTaskId ? shownTaskId === asks.mainTask?.id : forMain}
+      selectedTaskId={onAsk && shownTaskId && shownTaskId !== asks.mainTask?.id ? shownTaskId : null}
+      mainSelected={onAsk && (shownTaskId ? shownTaskId === asks.mainTask?.id : forMain)}
       onPick={(id) => {
         const t = asks.rows.find((r) => r.id === id)?.task;
         const sid = sessionOfTask(t) ?? undefined;
-        if (opts.surface === 'popup') toParent({ type: 'open-side-panel', open: { taskId: id, ...(sid ? { sessionId: sid } : {}) } });
+        if (isPopup) toParent({ type: 'open-side-panel', open: { taskId: id, ...(sid ? { sessionId: sid } : {}) } });
         else pickAsk(id, sid);
       }}
       onPickMain={() => {
         const main = asks.mainTask;
         // Main's conversation, in the panel like any ask; before its first message, its composer.
-        if (opts.surface === 'popup') toParent({ type: 'open-side-panel', open: main && mainSession ? { taskId: main.id, sessionId: mainSession } : { taskId: MAIN_OPEN } });
+        if (isPopup) toParent({ type: 'open-side-panel', open: main && mainSession ? { taskId: main.id, sessionId: mainSession } : { taskId: MAIN_OPEN } });
         else if (main && mainSession) pickAsk(main.id, mainSession, GENERAL_AGENT_ID);
         else startMain();
       }}
-      onNew={() => { if (opts.surface === 'panel') newChat(); }}
+      onNew={() => { if (!isPopup) newChat(); }}
       keyed={opts.keyed}
       settings={opts.settings}
       vault={vault}
       approvals={approvals.length}
-      onView={(view) => (opts.surface === 'popup' && view === 'tasks' ? toParent({ type: 'open-side-panel', view }) : toParent({ type: 'open-view', view }))}
+      // Tasks is the first page (the popup is on it already); the others are the extension's own views.
+      onView={(view) => { if (view === 'tasks') { if (!isPopup) goHome(); } else toParent({ type: 'open-view', view }); }}
     />
   );
   const shownTask = shownTaskId ? asks.tasks.find((t) => t.id === shownTaskId) : undefined;
@@ -633,17 +742,42 @@ function ExtPanel() {
 
   const canAct = !!page && tab !== undefined && !otherOwner;
   const approvalsStrip = (
-    <ExtAskApprovals list={approvals} taskId={shownTaskId}
-      onMore={() => (opts.surface === 'popup' ? toParent({ type: 'open-side-panel', view: 'tasks' }) : toParent({ type: 'open-view', view: 'tasks' }))} />
+    <ExtAskApprovals list={approvals} taskId={onAsk ? shownTaskId : ''}
+      onMore={() => (isPopup ? toParent({ type: 'open-side-panel', view: 'tasks' }) : toParent({ type: 'open-view', view: 'tasks' }))} />
   );
-  if (opts.surface === 'popup') {
-    return <div ref={rootRef} className="ext-panel ext-ask is-popup" data-testid="ext-panel" data-surface="popup" data-asks={asks.rowsReady || keptRows.length > 0 ? 'ready' : 'loading'}>
-      {header}
-      {approvalsStrip}
-      <ExtPopupBody rows={asks.rows} kept={keptRows} page={page} canAct={canAct && !owner} loading={!asks.rowsReady} agentId={agentId} agentName={agent.name} />
-      {drawer}
-    </div>;
-  }
+
+  const onOpenTask: OpenTask = (task: Task, how) => {
+    if (isPopup) toParent({ type: 'open-side-panel', open: { taskId: task.id, ...(how !== 'detail' ? { sessionId: how.sessionId } : {}), task: true } });
+    else if (how === 'detail') openDetail(task.id);
+    else openTask(task.id, how.sessionId);
+  };
+  // The first page: under its header the relay pill and its panel, the strip while an agent acts in this tab.
+  const home = (
+    <ExtFirstPage
+      surface={opts.surface}
+      hidden={mode !== 'home'}
+      page={page}
+      {...(tab !== undefined ? { tab } : {})}
+      {...(owner ? { owner } : {})}
+      agents={ctx.agents}
+      relay={relay}
+      tasks={allTasks}
+      menuRef={menuRef}
+      menuOn={!!asksDrawer && mode === 'home'}
+      onMenu={() => setAsksDrawer((v) => (v ? false : 'asks'))}
+      keyed={opts.keyed}
+      vault={vault}
+      keyPressed={keyPressed}
+      settings={opts.settings}
+      approvals={mode === 'home' ? approvalsStrip : null}
+      pageText={pageText}
+      onLaunched={(r) => openTask(r.taskId, r.sessionId, r)}
+      onOpenTask={onOpenTask}
+      preset={homePreset}
+      onPresetTaken={(id) => setHomePreset((h) => (h?.id === id ? null : h))}
+      onStop={takeBack}
+    />
+  );
 
   const chips = (
     <ExtComposerChips page={page} pageOn={pageOn} onPage={setPageChip} {...(canAct ? { act: { on: actOn, onToggle: toggleAct } } : {})} />
@@ -656,46 +790,58 @@ function ExtPanel() {
   };
   const askPreset = preset && preset.chat === chat && preset.key === key ? preset.text : '';
 
+  // A task opened from the first page: Back, its name and its state line; its detail when it has no conversation.
+  const pageTaskId = mode === 'task' ? (detailId || shownTaskId) : '';
+  const taskHeader = (
+    <ExtTaskPageHead taskId={pageTaskId} tasks={allTasks} onBack={goHome} keyed={opts.keyed} vault={vault} keyPressed={keyPressed} />
+  );
+
   // A new chat: the Continue list over the composer (ext-panel.css `.is-fresh`).
-  const fresh = !shownTaskId && !forMain;
-  return <div ref={rootRef} className={`ext-panel ext-ask${fresh ? ' is-fresh' : ''}`} data-testid="ext-panel" data-page-key={pageKey} data-conversation={key} data-asks={asks.rowsReady || keptRows.length > 0 ? 'ready' : 'loading'}>
-    {header}
-    {approvalsStrip}
-    {otherOwner && (
+  const fresh = onAsk && !shownTaskId && !forMain;
+  return <div ref={rootRef} className={`ext-panel ext-ask is-${mode}${isPopup ? ' is-popup' : ''}${fresh ? ' is-fresh' : ''}`} data-testid="ext-panel"
+    {...(isPopup ? { 'data-surface': 'popup' } : {})} data-mode={mode} data-page-key={pageKey} data-conversation={mode === 'home' ? '' : key}
+    data-asks={asks.rowsReady || keptRows.length > 0 ? 'ready' : 'loading'}>
+    {home}
+    {mode !== 'home' && (mode === 'task' ? taskHeader : header)}
+    {mode !== 'home' && approvalsStrip}
+    {mode !== 'home' && otherOwner && (
       <p className="ext-panel-note" data-testid="ext-panel-other-owner">
         Another Walnut conversation or task is acting in this tab.{' '}
         <button type="button" className="ext-panel-link" data-testid="ext-panel-take-back" onClick={takeBack}>Take it back</button>
       </p>
     )}
-    {actError && <p className="ext-panel-note ext-panel-error" role="alert">{actError}</p>}
-    {/* A new chat opens as the popup does: the asks to continue over the composer. */}
+    {mode !== 'home' && actError && <p className="ext-panel-note ext-panel-error" role="alert">{actError}</p>}
+    {/* A new chat opens as the popup did: the asks to continue over the composer. */}
     {fresh && <ContinueList className="is-panel" rows={asks.rows} kept={keptRows} max={4} loading={!asks.rowsReady} onPick={(id, sid) => pickAsk(id, sid)} />}
-    <div className="ext-panel-chat">
-      <UserRowAttachmentsContext.Provider value={attachmentsOf}>
-      <AskObjectDrawer
-        key={conv}
-        objectKey={key}
-        title={page ? `Ask ${agent.name} about ${page.title ?? hostOf(page.url)}` : `Ask ${agent.name}`}
-        quote={quote}
-        agentId={agent.id}
-        contextBlock=""
-        contextName={CONTEXT_NAME}
-        prepareContext={prepareContext}
-        onRecord={onRecord}
-        // Escape here never closes the side panel (it holds the conversation and the draft): it
-        // only leaves the composer. The toolbar popup closes on Escape (above).
-        onClose={blurComposer}
-        adjustLaunch={adjustLaunch}
-        plainChat
-        noQuote={!draftQuote}
-        onDropQuote={dropQuote}
-        {...(askPreset ? { preset: askPreset, autoSend: true } : {})}
-        composerPlaceholder={forMain ? 'Ask the CEO, or hand it something to do…' : composerPlaceholderOf(agent.name, !!page)}
-        composerPill={selectionPill}
-        composerBar={chips}
-      />
-      </UserRowAttachmentsContext.Provider>
-    </div>
+    {mode === 'task' && detailId && <ExtTaskPageDetail taskId={detailId} tasks={allTasks} onOpenSession={openTask} onClose={goHome} />}
+    {mode !== 'home' && !(mode === 'task' && detailId) && (
+      <div className="ext-panel-chat">
+        <UserRowAttachmentsContext.Provider value={attachmentsOf}>
+        <AskObjectDrawer
+          key={conv}
+          objectKey={key}
+          title={mode === 'task' ? modeTitle : page ? `Ask ${agent.name} about ${page.title ?? hostOf(page.url)}` : `Ask ${agent.name}`}
+          quote={quote}
+          agentId={convAgentId}
+          contextBlock=""
+          contextName={CONTEXT_NAME}
+          prepareContext={prepareContext}
+          onRecord={onRecord}
+          // Escape here never closes the side panel (it holds the conversation and the draft): it
+          // only leaves the composer. The toolbar popup closes on Escape (above).
+          onClose={blurComposer}
+          adjustLaunch={adjustLaunch}
+          plainChat
+          noQuote={!draftQuote}
+          onDropQuote={dropQuote}
+          {...(askPreset ? { preset: askPreset, autoSend: true } : {})}
+          composerPlaceholder={mode === 'task' ? 'Ask a follow-up…' : forMain ? 'Ask the CEO, or hand it something to do…' : composerPlaceholderOf(agent.name, !!page)}
+          composerPill={selectionPill}
+          composerBar={chips}
+        />
+        </UserRowAttachmentsContext.Provider>
+      </div>
+    )}
     {drawer}
   </div>;
 }

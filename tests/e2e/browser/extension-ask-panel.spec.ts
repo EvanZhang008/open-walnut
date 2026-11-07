@@ -22,7 +22,7 @@
 import { expect, test, type Page } from '@playwright/test'
 import fs from 'node:fs'
 import path from 'node:path'
-import { askView, backToAsk, openPanel, openView, pageChip, passwordsView, selectText, startPanelLab, sw, tasksView, type PanelLab } from './extension-panel-harness'
+import { askView, backToAsk, openPanel, openView, pageChip, passwordsView, selectText, startPanelLab, sw, tasksView, toAsk, pageShown, leaveOnAsk, type PanelLab } from './extension-panel-harness'
 import { ensureVaultSetUp, vaultSession, VAULT_MASTER } from './vault-session-helper'
 import { holdVaultLock, vaultExclusively } from './vault-lock'
 
@@ -513,6 +513,8 @@ test('the popup sends what it shows: its quote goes with the page left out, and 
   // (a conversation's title is renamed after the panel moved on, which its look cannot know).
   await lab.doc.goto(lab.site('docs.example.test', '/notes'))
   await expect(pageChip(panel)).toContainText('Release notes 4.2', { timeout: 30_000 })
+  // A question from the popup is a task now: the panel that took it shows that task. Back to Ask.
+  await toAsk(panel)
   await askView(panel).getByTestId('ext-panel-new').click()
   await expect(askView(panel).getByTestId('ask-object-compose')).toBeVisible({ timeout: 15_000 })
   await panel.waitForTimeout(1000)
@@ -665,7 +667,7 @@ test('Tasks and Passwords open as full views with Back to Ask', async () => {
   await backToAsk(panel)
 })
 
-test('the popup opens on Ask: Continue, the key, the side panel button; a question goes on in the side panel', async () => {
+test('the popup opens on the first page: New task over the tasks, the key, the side panel button; a question goes on in the side panel', async () => {
   test.setTimeout(180_000)
   await lockExtension()
   // The popup page in a window of its own for the person's window (Playwright cannot open the
@@ -679,10 +681,9 @@ test('the popup opens on Ask: Continue, the key, the side panel button; a questi
   await expect(v.getByTestId('ext-panel')).toHaveAttribute('data-surface', 'popup', { timeout: 60_000 })
   await expect(v.getByTestId('ext-ask-side-panel')).toBeVisible()
   await expect(v.getByTestId('ext-ask-key')).toBeVisible()
-  await expect(v.getByTestId('ext-continue')).toBeVisible({ timeout: 30_000 })
-  const askRow = v.locator(`[data-testid="ext-continue-row"][data-task-id="${askTask}"]`)
-  await expect(askRow).toContainText('Uploads in release 4.2', { timeout: 30_000 })
-  await expect(askRow.locator('.ask-walnut-drawer-item-line')).toHaveText('Uploads now retry three times before giving up.')
+  // New task on top, Home's task list under it, the ask among its rows.
+  await expect(v.locator('[data-testid="ext-home-composer"] textarea')).toBeVisible({ timeout: 30_000 })
+  await expect(v.locator(`.ext-home [data-task-id="${askTask}"]`).first()).toContainText('Uploads in release 4.2', { timeout: 30_000 })
   await expect(v.getByTestId('ext-key-locked')).toBeVisible({ timeout: 15_000 })
   await expect(v.getByTestId('ext-panel-include')).toContainText('Sign in')
   await shot(pop, 'popup-ask-dark')
@@ -705,10 +706,11 @@ test('the popup opens on Ask: Continue, the key, the side panel button; a questi
   await v.getByTestId('ext-ask-side-panel').click()
   const side = await opened
   expect(side.url()).toContain(`sidepanel.html?window=${lab.docWindow}`)
-  await expect(askView(side).getByTestId('ext-ask-head')).toBeVisible({ timeout: 60_000 })
+  // It opens on the page it was left on (Ask, here).
+  await expect(pageShown(side)).toBeVisible({ timeout: 60_000 })
   await side.close()
 
-  // A question asked in the popup starts in the side panel, which sends it.
+  // A question asked in the popup starts a task in the side panel, which sends it and shows it.
   const words = `Popup question ${Date.now().toString(36)}`
   const next = lab.ctx.waitForEvent('page')
   const composer = v.locator('.draft-session-panel textarea')
@@ -716,6 +718,7 @@ test('the popup opens on Ask: Continue, the key, the side panel button; a questi
   await composer.press('Enter')
   const handed = await next
   const hv = askView(handed)
+  await expect(hv.getByTestId('ext-task-head')).toBeVisible({ timeout: 90_000 })
   const session = hv.getByTestId('ask-object-session')
   await expect(session).toBeVisible({ timeout: 90_000 })
   const sid = (await session.getAttribute('data-session-id')) ?? ''
@@ -724,7 +727,7 @@ test('the popup opens on Ask: Continue, the key, the side panel button; a questi
   // Its task is removed with the others after the run.
   const handedRec = await lab.doc.request.get(`${lab.base}/api/v1/sessions/${sid}`).then((r) => r.json()).catch(() => ({})) as Record<string, any>
   const handedTask = String(handedRec.session?.taskId ?? handedRec.taskId ?? '')
-  if (handedTask) { seeded.push(handedTask); await expectUnpinned(handedTask) }
+  if (handedTask) seeded.push(handedTask)
   // The question reached the session (the mock CLI answers with it; it keeps no transcript to
   // draw the person's own row from, as the other panel specs note).
   await expect(hv.getByText(`Hello! I processed your message: ${words}`, { exact: false }).first()).toBeVisible({ timeout: 30_000 })
@@ -805,6 +808,8 @@ test('Walnut\'s theme reaches the key popover and the Passwords view (R1-19)', a
 test('opened, it looks like the view at once: the same header and composer in the same places (R1-4)', async () => {
   test.setTimeout(150_000)
   await lab.doc.goto(lab.site('docs.example.test', '/notes'))
+  // Left on Ask (a task the popup handed over showed last): the next open draws Ask's look.
+  await leaveOnAsk(lab)
   const { panel: p } = await openPanel(lab)
   await p.setViewportSize({ width: 400, height: 760 })
   const look = p.getByTestId('panel-snap')
@@ -1095,8 +1100,6 @@ test('an old phone chat reads its last answer; the Tasks view says the same; a c
 
 test('the selection quote follows the page and stays with its agent; the composer names the agent (review round 4, #4 #5)', async () => {
   test.setTimeout(180_000)
-  // The agent pick is mirrored to the fixture's ui-prefs: kept in this browser, never handed to another spec.
-  await lab.ctx.route('**/api/ui-prefs', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: route.request().method() === 'GET' ? '{"prefs":{}}' : '{"ok":true}' }))
   await lab.doc.goto(lab.site('docs.example.test', '/notes'))
   const p = await openAskPanel()
   const v = askView(p)
@@ -1146,7 +1149,6 @@ test('the selection quote follows the page and stays with its agent; the compose
     await v.getByTestId('ext-ask-agent').click({ timeout: 10_000 }).catch(() => undefined)
     await v.locator(`[data-testid="ask-walnut-agent-item"][data-agent-id="general"]`).click({ timeout: 10_000 }).catch(() => undefined)
     await p.close()
-    await lab.ctx.unroute('**/api/ui-prefs')
   }
 })
 
@@ -1163,9 +1165,7 @@ test('Tasks opened before it was ever shown: its loading line at once, never a b
   })
   const p = await openAskPanel()
   try {
-    const v = askView(p)
-    await v.getByTestId('ask-walnut-menu').click()
-    // Every frame from the click on: the Tasks view shows the drawing or its own content.
+    // Every frame from the ask on: the Tasks view shows the drawing or its own content.
     await p.evaluate(() => {
       const w = window as unknown as { __tasks: Array<{ at: number; snap: string | null }>; __t0: number }
       w.__tasks = []
@@ -1177,8 +1177,11 @@ test('Tasks opened before it was ever shown: its loading line at once, never a b
       }
       tick()
     })
+    // The full Tasks view is what the approvals' "more" asks for (the drawer's Tasks row is the
+    // first page now): asked the way the frame asks.
     const clicked = Date.now()
-    await v.getByTestId('ext-drawer-tasks').click()
+    const f = p.frames().find((x) => x.url().includes('view=ext-panel'))!
+    await f.evaluate(() => window.parent.postMessage({ walnut: 'ext-panel', type: 'open-view', view: 'tasks' }, '*'))
     await expect(p.getByTestId('panel-view-tasks')).toBeVisible({ timeout: 15_000 })
     // What the body showed before this drawing: Walnut's own page in the frame, once it is up.
     await expect(tasksView(p).getByTestId('ext-tasks')).toBeVisible({ timeout: 30_000 })
@@ -1192,7 +1195,7 @@ test('Tasks opened before it was ever shown: its loading line at once, never a b
     const drawn = frames.find((f) => f.snap === 'loading')
     expect(drawn, JSON.stringify(frames.slice(0, 8))).toBeTruthy()
     expect(drawn!.at - first).toBeLessThan(200)
-    console.log(`[r4-8] Tasks view on screen at ${Math.round(first)} ms after the drawer opened, its loading line at ${Math.round(drawn!.at)} ms; the frame's own content about ${ownAt} ms after the click (the body was blank until then before this drawing); the drawing gone at ${Math.round(frames.find((f) => f.at > drawn!.at && !f.snap)?.at ?? -1)} ms`)
+    console.log(`[r4-8] Tasks view on screen at ${Math.round(first)} ms after it was asked for, its loading line at ${Math.round(drawn!.at)} ms; the frame's own content about ${ownAt} ms after the click (the body was blank until then before this drawing); the drawing gone at ${Math.round(frames.find((f) => f.at > drawn!.at && !f.snap)?.at ?? -1)} ms`)
   } finally {
     await p.close()
   }

@@ -6,7 +6,7 @@
  * numbers go to PANEL_SPEED_OUT (JSON) when it is set.
  *
  * What it holds the panel to: opened again, Ask shows the page and its conversation (the person's
- * last question on screen), and Tasks, opened from the drawer, shows its list, each within a second.
+ * last question on screen), and the first page shows its task list, each within a second.
  */
 import { expect, test, type Frame, type Page } from '@playwright/test'
 import fs from 'node:fs'
@@ -99,34 +99,42 @@ test('Ask, opened again: the page, then the conversation with the person\'s ques
   expect.soft(median(results['ask-again:shown'])).toBeLessThan(1000)
 })
 
-/** The panel on Ask, then the drawer's Tasks row, timed from that press (Tasks is a view the drawer opens). */
-async function openTasks(): Promise<{ panel: Page; t0: number }> {
-  const { panel } = await openPanel(lab, 'ask')
+/**
+ * The first page (a new task over the task list), the page the panel opens on until the person
+ * goes to an ask: from Ask, the ≡ drawer's Tasks row goes back to it, and the panel is closed there.
+ */
+async function leaveOnFirstPage(): Promise<void> {
+  const { panel } = await openPanel(lab, 'home')
   const v = askView(panel)
-  await expect(v.getByTestId('ext-ask-head')).toBeVisible({ timeout: 60_000 })
-  await v.getByTestId('ask-walnut-menu').click()
-  const row = v.getByTestId('ext-drawer-tasks')
-  await expect(row).toBeVisible()
-  const t0 = Date.now()
-  await row.click()
-  return { panel, t0 }
+  const home = v.getByTestId('ext-home')
+  await expect(v.getByTestId('ext-ask-head').or(home).filter({ visible: true }).first()).toBeVisible({ timeout: 60_000 })
+  if (!(await home.isVisible())) {
+    await v.getByTestId('ask-walnut-menu').click()
+    await v.getByTestId('ext-drawer-tasks').click()
+    await expect(home).toBeVisible()
+  }
+  await expect(v.locator(HOME_ROW).first()).toBeVisible({ timeout: 60_000 })
+  await panel.waitForTimeout(1500)
+  await panel.close()
 }
+const HOME_ROW = '.ext-home:not([hidden]) :is(.todo-pinned-card, .todo-panel-item)'
 
-test('Tasks, opened again: the list', async () => {
+test('the first page, opened again: the task list', async () => {
   test.setTimeout(180_000)
-  // The first open of Tasks loads its frame; the person's usual case is the ones after.
-  const first = await openTasks()
-  record('tasks-first:list', await until(first.panel, 'ext-tasks', '[data-testid="ext-task"]', first.t0))
-  await first.panel.waitForTimeout(1500)
-  await first.panel.close()
+  // The first open there loads the list and keeps its drawing; the person's usual case is the ones after.
+  await leaveOnFirstPage()
   for (let i = 0; i < 5; i++) {
-    const { panel, t0 } = await openTasks()
-    record('tasks-again:shown', await firstShown(panel, 'ext-tasks', '[data-testid="ext-task"]', '[data-testid="panel-snap"] .panel-snap-task', t0))
-    record('tasks-again:list', await until(panel, 'ext-tasks', '[data-testid="ext-task"]', t0))
+    const { panel, t0 } = await openPanel(lab, 'home')
+    record('tasks-again:shown', await firstShown(panel, 'ext-panel', HOME_ROW, '[data-testid="panel-snap"] .look-home-row', t0))
+    record('tasks-again:list', await until(panel, 'ext-panel', HOME_ROW, t0))
     await panel.waitForTimeout(1200)
     await panel.close()
   }
   expect.soft(median(results['tasks-again:shown'])).toBeLessThan(1000)
+  // Back on Ask, as the next tests open it.
+  const { panel } = await openPanel(lab, 'ask')
+  await panel.waitForTimeout(800)
+  await panel.close()
 })
 
 /**
@@ -137,9 +145,11 @@ test('Tasks, opened again: the list', async () => {
  */
 const LOOK_PANEL = '[data-testid="panel-snap"] [data-testid="panel-snap-menu"]'
 const REAL_HEAD = '[data-testid="ext-ask-head"]'
+/** The popup opens on the first page: its header and its composer. */
+const REAL_POPUP_HEAD = '[data-testid="ext-home-head"]'
 /** Either composer: a new chat's, or the conversation's when the page has one (its follow-up). */
 const REAL_COMPOSER = '[data-testid="ask-object-compose"] textarea, .session-panel.is-plain-chat textarea'
-const REAL_POPUP_COMPOSER = '.ext-popup-composer textarea'
+const REAL_POPUP_COMPOSER = '[data-testid="ext-home-composer"] textarea'
 
 async function openPopupAsk(): Promise<{ pop: Page; t0: number }> {
   const opened = lab.ctx.waitForEvent('page')
@@ -161,12 +171,14 @@ async function settleWatch(p: Page, view: string, t0: number): Promise<{ settled
     const lookUp = await p.locator('[data-testid="panel-snap"]').isVisible().catch(() => false)
     const state = f ? await f.evaluate(() => {
       const root = document.querySelector('[data-testid="ext-panel"]')
-      const spin = document.querySelector('.ext-continue-empty')
-      const spinner = !!spin && (spin as HTMLElement).offsetParent !== null
+      const shown = (sel: string) => Array.from(document.querySelectorAll(sel)).some((e) => (e as HTMLElement).offsetParent !== null)
+      const spinner = shown('.ext-continue-empty') || shown('.ext-home-loading')
       // A conversation's messages are on screen; or a new chat's Continue rows, with nothing
-      // loading. A build before `data-asks` (an A/B baseline) is judged by what shows alone.
+      // loading; or the first page's task rows. A build before `data-asks` (an A/B baseline) is
+      // judged by what shows alone.
       const ready = !!document.querySelector('.session-msg')
         || (root?.getAttribute('data-asks') !== 'loading' && !spinner && !!document.querySelector('[data-testid="ext-continue-row"]'))
+        || (!spinner && shown('.ext-home :is(.todo-pinned-card, .todo-panel-item)'))
       return { ready, spinner }
     }).catch(() => null) : null
     if (state?.spinner && !lookUp) uncovered++
@@ -176,9 +188,9 @@ async function settleWatch(p: Page, view: string, t0: number): Promise<{ settled
   }
 }
 
-async function lookAndReal(p: Page, view: string, t0: number, name: string, realSel: string): Promise<void> {
-  const look = firstShown(p, view, REAL_HEAD, LOOK_PANEL, t0)
-  const real = (async () => { await until(p, view, REAL_HEAD, t0); return until(p, view, realSel, t0) })()
+async function lookAndReal(p: Page, view: string, t0: number, name: string, realSel: string, head = REAL_HEAD): Promise<void> {
+  const look = firstShown(p, view, head, LOOK_PANEL, t0)
+  const real = (async () => { await until(p, view, head, t0); return until(p, view, realSel, t0) })()
   const settle = settleWatch(p, view, t0)
   record(`${name}:look`, await look)
   record(`${name}:real`, await real)
@@ -198,7 +210,7 @@ test('open time, as seen: the side panel and the popup, cold and warm', async ()
   }
   for (let i = 0; i < 4; i++) {
     const { pop, t0 } = await openPopupAsk()
-    await lookAndReal(pop, 'ext-panel', t0, i === 0 ? 'popup-open-1st' : 'popup-open-again', REAL_POPUP_COMPOSER)
+    await lookAndReal(pop, 'ext-panel', t0, i === 0 ? 'popup-open-1st' : 'popup-open-again', REAL_POPUP_COMPOSER, REAL_POPUP_HEAD)
     await pop.waitForTimeout(1200)
     await pop.close()
   }

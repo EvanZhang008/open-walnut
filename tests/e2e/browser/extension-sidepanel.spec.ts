@@ -91,6 +91,9 @@ test.beforeAll(async ({}, info) => {
       '--host-resolver-rules=MAP *.example.test 127.0.0.1',
     ],
   })
+  // The panel's view choices are mirrored to ui-prefs, and the fixture serves every spec: this
+  // browser keeps them to itself.
+  await ctx.route('**/api/ui-prefs', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: route.request().method() === 'GET' ? '{"prefs":{}}' : '{"ok":true}' }))
   let worker = ctx.serviceWorkers()[0]
   if (!worker) worker = await ctx.waitForEvent('serviceworker')
   worker.on('console', (m) => { if (m.type() === 'error') console.log(`[background error] ${m.text()}`) })
@@ -140,7 +143,13 @@ test('connect the extension, then open the panel beside a page with a selection'
   await expect(view().getByTestId('ext-panel')).toBeVisible({ timeout: 60_000 })
   await expect(view().getByTestId('ext-panel-include')).toContainText('Release notes 4.2', { timeout: 30_000 })
   await expect(view().getByTestId('ext-panel-include')).toContainText(`docs.example.test:${port}`)
-  // Walnut's own Ask: no tab strip, the key in the header.
+  // It opens on the first page (a new task over the task list), the selection as its quote; the
+  // asks are one ≡ away: New chat there is Walnut's own Ask, no tab strip, the key in the header.
+  await expect(view().getByTestId('ext-home')).toBeVisible({ timeout: 30_000 })
+  await expect(view().getByTestId('ext-panel-selection')).toContainText('retries a failed upload three times', { timeout: 15_000 })
+  await view().getByTestId('ask-walnut-menu').click()
+  await view().getByTestId('ask-walnut-new').click()
+  await expect(view().getByTestId('ext-ask-head')).toBeVisible({ timeout: 30_000 })
   await expect(panel.getByTestId('panel-tab-ask')).toHaveCount(0)
   await expect(view().getByTestId('ext-ask-key')).toBeVisible()
   await expect(view().getByTestId('ask-object-quote')).toContainText('retries a failed upload three times')
@@ -402,11 +411,11 @@ test('the page script put in again (page-reach.ts, after an update) runs once an
   expect(await doc.evaluate(() => typeof (globalThis as { __walnutContentLive?: unknown }).__walnutContentLive)).toBe('undefined')
 })
 
-// ── the full views the drawer's foot opens: Tasks · Passwords ──
+// ── the drawer's foot: Tasks (the first page) · Passwords (a full view) ──
 
-/** The ≡ drawer's row for that view, over Ask, with Back (panel-ask.ts). */
-async function openView(v: 'tasks' | 'passwords'): Promise<void> {
-  // Another full view on show: Back to Ask first (Tasks has it in the panel's bar).
+/** The ≡ drawer's Passwords row: that full view over Ask, with Back (panel-ask.ts). */
+async function openView(v: 'passwords'): Promise<void> {
+  // Another full view on show: Back to Ask first.
   const shown = panel.locator('.panel-view:not([hidden])')
   if (await shown.count()) await shown.locator('> .panel-view-bar').getByTestId('panel-view-back').click()
   await view().getByTestId('ask-walnut-menu').click()
@@ -414,15 +423,14 @@ async function openView(v: 'tasks' | 'passwords'): Promise<void> {
   await expect(panel.getByTestId(`panel-view-${v}`)).toBeVisible({ timeout: 15_000 })
 }
 
-const tasksView = (): FrameLocator => panel.frameLocator('iframe.panel-frame-tasks')
 const pwView = (): FrameLocator => panel.frameLocator('iframe.panel-frame-passwords')
 
 async function vaultSession(): Promise<string> {
   return openVaultSession(doc, base, { password: MASTER })
 }
 
-test('Tasks view: what needs the person with its status, a reply into its session, the page saved as a task', async () => {
-  test.setTimeout(120_000)
+test('the first page: what needs the person, a reply into its session, the words saved as a todo with the page', async () => {
+  test.setTimeout(150_000)
   // The ask's own task, handed back to the person: it needs them, and it has a conversation.
   const rec = await (await doc.request.get(`${base}/api/v1/sessions/${askSession}`)).json() as Record<string, any>
   const taskId = String(rec.taskId ?? rec.session?.taskId ?? '')
@@ -430,34 +438,53 @@ test('Tasks view: what needs the person with its status, a reply into its sessio
   const patched = await doc.request.patch(`${base}/api/v1/tasks/${taskId}`, { data: { phase: 'NEED_ACTION' } })
   expect(patched.ok(), await patched.text()).toBe(true)
 
-  await openView('tasks')
-  const row = tasksView().locator(`[data-testid="ext-task"][data-task-id="${taskId}"]`)
+  // The drawer's Tasks row is the first page: a new task over Home's task panel.
+  const shown = panel.locator('.panel-view:not([hidden])')
+  if (await shown.count()) await shown.locator('> .panel-view-bar').getByTestId('panel-view-back').click()
+  await view().getByTestId('ask-walnut-menu').click()
+  await view().getByTestId('ext-drawer-tasks').click()
+  await expect(view().getByTestId('ext-home')).toBeVisible({ timeout: 15_000 })
+  const row = view().locator(`[data-testid="status-section-needs-rows"] [data-task-id="${taskId}"]`)
   await expect(row).toBeVisible({ timeout: 30_000 })
-  // A panel ask is never pinned to Focus (review 2026-11-06): Needs you lists it (once), with what
-  // it needs on its row, and Focus does not.
-  await expect(tasksView().getByTestId('ext-tasks-needs').locator(`[data-task-id="${taskId}"]`)).toHaveCount(1)
-  await expect(tasksView().getByTestId('ext-tasks-focus').locator(`[data-task-id="${taskId}"]`)).toHaveCount(0)
-  await expect(row).toHaveAttribute('data-state', /needs|read/)
-  // The row leads with what to do (Take a look, Decide...), never a bare "Needs you" again.
-  await expect(row.locator('.ext-task-line')).not.toContainText(/^Needs you/)
+  // Listed once, under Needs you.
+  await expect(view().locator(`.ext-home [data-task-id="${taskId}"]`)).toHaveCount(1)
 
-  await row.locator('.ext-task-head').click()
-  await row.getByTestId('ext-task-input').fill('Thanks, that answers it')
-  await row.getByTestId('ext-task-send').click()
-  await expect(row.getByTestId('ext-task-sent')).toBeVisible({ timeout: 30_000 })
+  // Its row opens its conversation here; a reply goes into its session.
+  await row.locator('.todo-pinned-title').click()
+  await expect(view().getByTestId('ext-task-head')).toBeVisible({ timeout: 30_000 })
+  await expect(view().getByTestId('ask-object-session')).toHaveAttribute('data-session-id', askSession, { timeout: 30_000 })
+  const reply = view().locator('.session-panel.is-plain-chat textarea').first()
+  await reply.click()
+  await panel.keyboard.type('Thanks, that answers it')
+  await panel.keyboard.press('Enter')
   await expect.poll(async () => {
     const h = await (await doc.request.get(`${base}/api/v1/sessions/${askSession}/history?tail=50`)).text()
     return h.includes('Thanks, that answers it')
   }, { timeout: 30_000 }).toBe(true)
 
-  // The page the person is on, saved for later: a task named after it, with its address.
-  await tasksView().getByTestId('ext-tasks-save-page').click()
-  await expect(tasksView().getByTestId('ext-tasks-saved')).toContainText('Release notes 4.2', { timeout: 30_000 })
-  const savedId = await tasksView().getByTestId('ext-tasks-saved').getAttribute('data-task-id')
-  const got = await (await doc.request.get(`${base}/api/v1/tasks/${savedId}`)).json() as Record<string, any>
-  const saved = (got.task ?? got) as { title?: string; description?: string }
-  expect(saved.title).toBe('Release notes 4.2')
-  expect(saved.description).toContain(site('docs.example.test', '/notes'))
+  // Back on the list, words saved for later as a todo: the page they were typed on goes in its description.
+  await view().getByTestId('ext-task-back').click()
+  await expect(view().getByTestId('ext-home')).toBeVisible()
+  const box = view().locator('[data-testid="ext-home-composer"] textarea')
+  await box.click()
+  await panel.keyboard.type('Read the release notes later')
+  await view().locator('[data-testid="ext-home-composer"] .draft-later-btn').click()
+  await expect(view().getByTestId('ext-home-saved')).toContainText('Read the release notes later', { timeout: 30_000 })
+  let saved: { id?: string; title?: string; description?: string } | undefined
+  await expect.poll(async () => {
+    const r = await (await doc.request.get(`${base}/api/v1/tasks`)).json() as Record<string, any>
+    const list = (Array.isArray(r) ? r : r.tasks ?? r.items ?? []) as Array<{ id?: string; title?: string; description?: string }>
+    saved = list.find((t) => t.title === 'Read the release notes later')
+    return !!saved
+  }, { timeout: 20_000 }).toBe(true)
+  // The list leaves descriptions out: the task itself has it.
+  const got = await (await doc.request.get(`${base}/api/v1/tasks/${saved!.id}`)).json() as Record<string, any>
+  expect(String((got.task ?? got).description ?? '')).toContain(site('docs.example.test', '/notes'))
+  await doc.request.delete(`${base}/api/v1/tasks/${saved!.id}`).catch(() => undefined)
+  // Back on Ask, as the next tests use the panel.
+  await view().getByTestId('ask-walnut-menu').click()
+  await view().getByTestId('ask-walnut-new').click()
+  await expect(view().getByTestId('ext-ask-head')).toBeVisible({ timeout: 30_000 })
 })
 
 test('Passwords view: unlock in place, the page\'s logins, show a password, fill the page; Back to Ask', async () => {

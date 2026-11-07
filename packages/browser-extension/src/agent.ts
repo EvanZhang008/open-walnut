@@ -435,6 +435,33 @@ async function stopIfNoReach(): Promise<void> {
   if (!(await agentReach())) await call('POST', '/browser/off', {}, { noSession: true, timeoutMs: 8000 }).catch(() => undefined)
 }
 
+/** At most this many tabs in the side panel's relay list (the panel's own cap: ext-relay-model.ts). */
+const RELAY_TABS_MAX = 40
+
+/**
+ * The browser relay as the side panel's first page shows it (ExtRelay.tsx): the agents switch, and
+ * every tab an agent holds now with its page's title and address, newest first.
+ */
+export async function relayState(): Promise<{ on: boolean; tabs: Array<{ tab: number; owner: string; who?: string; title?: string; url?: string; handed?: boolean }> }> {
+  const on = await agentOn()
+  const ids = (await agentTabs.keys()).reverse().slice(0, RELAY_TABS_MAX)
+  const tabs = []
+  for (const id of ids) {
+    const rec = await agentTabs.get(id)
+    if (!rec?.owner) continue
+    const tab = await ext.tabs.get(id).catch(() => null)
+    if (!tab) continue
+    const url = tab.url && /^https?:/.test(tab.url) ? tab.url : undefined
+    tabs.push({ tab: id, owner: rec.owner, ...(rec.who ? { who: rec.who } : {}), ...(tab.title ? { title: tab.title } : {}), ...(url ? { url } : {}), ...(inHandedReach(rec) ? { handed: true } : {}) })
+  }
+  return { on, tabs }
+}
+
+/** Stop all from the side panel: every tab an agent holds goes back (the agents switch stays as it is). */
+export async function releaseAllTabs(): Promise<void> {
+  for (const id of await agentTabs.keys()) await releaseTab(id)
+}
+
 /** Who acts in a tab now (its owner key), for the side panel. */
 export async function tabOwnerOf(tabId: number | undefined): Promise<string | undefined> {
   return tabId === undefined ? undefined : (await agentTabs.get(tabId))?.owner

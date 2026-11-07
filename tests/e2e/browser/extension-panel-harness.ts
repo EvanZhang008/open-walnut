@@ -65,6 +65,9 @@ export async function startPanelLab(base: string, label: string): Promise<PanelL
       '--host-resolver-rules=MAP *.example.test 127.0.0.1',
     ],
   })
+  // The panel's view choices (the page it was left on, the agent, Home's tab) are mirrored to
+  // ui-prefs, and the fixture serves every spec: this browser keeps them to itself.
+  await ctx.route('**/api/ui-prefs', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: route.request().method() === 'GET' ? '{"prefs":{}}' : '{"ok":true}' }))
   let worker = ctx.serviceWorkers()[0]
   if (!worker) worker = await ctx.waitForEvent('serviceworker')
   worker.on('console', (m) => { if (m.type() === 'error') console.log(`[background error] ${m.text()}`) })
@@ -108,29 +111,79 @@ export async function startPanelLab(base: string, label: string): Promise<PanelL
 export const sw = (lab: PanelLab) => lab.ctx.serviceWorkers()[0]
 
 /**
- * Open the panel window for the person's window, timed from the click. The panel opens on Ask
- * (Walnut's own Ask, with the key in its header); `view` then opens the drawer's Tasks or Passwords
- * row, the full view with its Back control (panel-ask.ts). A Walnut too old for that shape shows
- * the three tabs, where `view` picks the tab it keeps.
+ * Open the panel window for the person's window, timed from the click. The panel opens on the page
+ * it was left on: the first page (New task over the task list, ExtHome.tsx) until the person went
+ * to an ask. `view` 'ask' (and the full views) then goes to Ask the way a person does, from the ≡
+ * drawer's New chat, when the panel opened on the first page; 'home' leaves it there. `view` then
+ * opens the Tasks or Passwords full view, with its Back control (panel-ask.ts). A Walnut too old for
+ * that shape shows the three tabs, where `view` picks the tab it keeps.
  */
-export async function openPanel(lab: PanelLab, view?: 'ask' | 'tasks' | 'passwords'): Promise<{ panel: Page; t0: number }> {
-  if (view) await sw(lab).evaluate((t: string) => chrome.storage.local.set({ panelTab: t }), view)
+export async function openPanel(lab: PanelLab, view?: 'ask' | 'home' | 'tasks' | 'passwords'): Promise<{ panel: Page; t0: number }> {
+  if (view && view !== 'home') await sw(lab).evaluate((t: string) => chrome.storage.local.set({ panelTab: t }), view)
+  // The page the view said it was left on (panel-snap.ts `mode`): already Ask, the panel opens
+  // there and nothing waits on it here (a drawing of last time stays a drawing for the caller).
+  const left = await sw(lab).evaluate(async () => ((await chrome.storage.local.get('panelSnaps')).panelSnaps as { mode?: { mode?: string } } | undefined)?.mode?.mode ?? '')
   const opened = lab.ctx.waitForEvent('page')
   const t0 = Date.now()
   await sw(lab).evaluate((w: number) => chrome.windows.create({ url: chrome.runtime.getURL(`sidepanel.html?window=${w}`), type: 'popup', width: 420, height: 760 }), lab.docWindow)
   const panel = await opened
+  if (view !== 'home' && left !== 'ask') await toAsk(panel)
   if (view === 'tasks' || view === 'passwords') await openView(panel, view)
   return { panel, t0 }
 }
 
-/** The ≡ drawer's Tasks or Passwords row: that full view over Ask, with Back. */
+/**
+ * Leave the panel on Ask (walked there when it was on another page), and closed: its next open
+ * opens on Ask and draws Ask's look first, as for a person who left it there.
+ */
+export async function leaveOnAsk(lab: PanelLab): Promise<void> {
+  const { panel } = await openPanel(lab, 'ask')
+  await expect(askView(panel).getByTestId('ext-ask-head')).toBeVisible({ timeout: 60_000 })
+  await expect.poll(() => sw(lab).evaluate(async () => ((await chrome.storage.local.get('panelSnaps')).panelSnaps as { mode?: { mode?: string } } | undefined)?.mode?.mode ?? ''), { timeout: 15_000 }).toBe('ask')
+  await panel.close()
+}
+
+/** The page the view shows: Ask's header, the first page, or a task's header (the first page stays mounted, hidden, under the others). */
+export const pageShown = (panel: Page): Locator => {
+  const v = askView(panel)
+  return v.getByTestId('ext-ask-head').or(v.getByTestId('ext-home')).or(v.getByTestId('ext-task-head')).filter({ visible: true }).first()
+}
+
+/**
+ * The Ask page: from the first page, the ≡ drawer's New chat; already on Ask (or a task opened
+ * there), nothing. Walnut keeps the page the panel was left on, so the next open is Ask again.
+ */
+export async function toAsk(panel: Page): Promise<void> {
+  const v = askView(panel)
+  const head = v.getByTestId('ext-ask-head')
+  const home = v.getByTestId('ext-home')
+  await expect(pageShown(panel)).toBeVisible({ timeout: 60_000 })
+  if (await head.isVisible()) return
+  if (await v.getByTestId('ext-task-head').isVisible()) { await v.getByTestId('ext-task-back').click(); await expect(home).toBeVisible() }
+  await v.getByTestId('ask-walnut-menu').click()
+  await v.getByTestId('ask-walnut-new').click()
+  await expect(head).toBeVisible({ timeout: 30_000 })
+}
+
+/**
+ * A full view over the panel, with Back: Passwords from the ≡ drawer's row; Tasks (an older
+ * extension's Tasks tab, and the approvals' "more" link: the drawer's Tasks row is the first page
+ * now) asked for the way the frame asks for it.
+ */
 export async function openView(panel: Page, view: 'tasks' | 'passwords'): Promise<void> {
   const v = askView(panel)
-  await expect(v.getByTestId('ext-ask-head')).toBeVisible({ timeout: 60_000 })
+  await expect(pageShown(panel)).toBeVisible({ timeout: 60_000 })
   // Another full view on show: Back to Ask first.
   if (await panel.locator('.panel-view:not([hidden])').count()) await backToAsk(panel)
-  await v.getByTestId('ask-walnut-menu').click()
-  await v.getByTestId(`ext-drawer-${view}`).click()
+  if (view === 'tasks') {
+    const f = panel.frames().find((x) => x.url().includes('view=ext-panel'))!
+    await f.evaluate(() => window.parent.postMessage({ walnut: 'ext-panel', type: 'open-view', view: 'tasks' }, '*'))
+  } else {
+    // A task's page has Back where the others have ≡: the first page's ≡ then.
+    if (await v.getByTestId('ext-task-head').isVisible()) await v.getByTestId('ext-task-back').click()
+    await v.getByTestId('ask-walnut-menu').click()
+    await v.getByTestId(`ext-drawer-${view}`).click()
+  }
   await expect(panel.getByTestId(`panel-view-${view}`)).toBeVisible({ timeout: 15_000 })
 }
 

@@ -99,6 +99,7 @@ const PASSING: Record<string, string> = {
   'components/calendar/CalendarsPopover.tsx#hiddenOpen': 'the hidden calendars list inside a popover',
   'components/chat/AskWalnutDrawer.tsx#agentsOpen': 'the agent list inside the drawer, a popover',
   'components/chat/AskWalnutSlot.tsx#drawerOpen': 'the asks drawer, an overlay',
+  'popout/ExtFirstPage.tsx#relayOpen': 'the browser relay panel under its pill, a popover',
   'components/chat/ChatMessage.tsx#manualOpen': 'one message folded or unfolded by hand',
   'components/commands/CommandCard.tsx#expanded': 'one card expanded for one look',
   'components/common/DocCommentsLayer.tsx#listOpen': 'the comments list, a popover',
