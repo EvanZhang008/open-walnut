@@ -26,9 +26,10 @@ const SAVED = JSON.stringify({ v: 1, value: [{ id: 's1', locked: true }] })
 let local: MapStorage
 const origNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator')
 
-async function boot(webdriver: boolean, optIn = false): Promise<void> {
+async function boot(webdriver: boolean, optIn = false, seed: Record<string, string> = {}): Promise<void> {
   local = new MapStorage()
   if (optIn) local.m.set('walnut-e2e-layout-record', '1')
+  for (const [k, v] of Object.entries(seed)) local.m.set(k, v)
   Object.assign(globalThis, { Storage: MapStorage, localStorage: local, sessionStorage: new MapStorage(), window: { addEventListener: () => {} } })
   Object.defineProperty(globalThis, 'navigator', { value: { webdriver }, configurable: true })
   vi.resetModules()
@@ -82,5 +83,21 @@ describe('boot merge of the layout record', () => {
   it('an automated browser that opted in adopts them', async () => {
     await boot(true, true)
     expect(local.getItem(COLUMNS)).toBe(SAVED)
+  })
+})
+
+describe('boot merge of the tasks opened lately (utils/recent-opened.ts)', () => {
+  const KEY = 'walnut-todo-recent-opened'
+  it("keeps this browser's opens and the server's newer ones, and sends the union back", async () => {
+    const mine = JSON.stringify([{ id: 'offline-open', at: '2026-11-06T19:40:00.000Z' }])
+    const theirs = JSON.stringify([{ id: 'phone-open', at: '2026-11-06T19:45:00.000Z' }])
+    serverPrefs.value = { [KEY]: { v: theirs, ts: 99 } }
+    puts.length = 0
+    // This browser's write is older (ts 1) than the server's: last-writer-wins would drop it.
+    await boot(false, false, { [KEY]: mine, 'open-walnut-ui-prefs-sync-meta': JSON.stringify({ [KEY]: 1 }) })
+    const merged = JSON.parse(local.getItem(KEY)!) as Array<{ id: string }>
+    expect(merged.map((e) => e.id)).toEqual(['phone-open', 'offline-open'])
+    const sent = puts.find((b) => KEY in b.prefs)?.prefs[KEY] as { v: string } | undefined
+    expect(JSON.parse(sent!.v).map((e: { id: string }) => e.id)).toEqual(['phone-open', 'offline-open'])
   })
 })

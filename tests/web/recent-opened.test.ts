@@ -15,7 +15,7 @@ vi.mock('@/api/client', () => ({
 
 import {
   RECENT_OPENED_KEY, RECENT_OPENED_MAX, mergeRecentOpened, parseRecentOpened, pullRecentOpened,
-  readRecentOpened, recordTaskOpened, settledOrder, withOpened,
+  mergeRecentOpenedRaw, readRecentOpened, recentRowOrder, recordTaskOpened, withOpened, type HeldRow,
 } from '../../web/src/utils/recent-opened'
 
 class MapStorage {
@@ -98,12 +98,34 @@ describe('two windows or devices', () => {
   })
 })
 
-describe('settledOrder: a Recent tab on screen keeps its rows in place', () => {
-  it('a tab just opened draws newest first', () => {
-    expect(settledOrder(null, ['c', 'b', 'a'])).toEqual(['c', 'b', 'a'])
+describe('recentRowOrder: a row opened from the list keeps its place', () => {
+  const opens = (pairs: Array<[string, number]>) => pairs.map(([id, min]) => ({ id, at: at(min) }))
+  it('no held rows: newest open first', () => {
+    expect(recentRowOrder(opens([['c', 3], ['b', 2], ['a', 1]]), new Map())).toEqual(['c', 'b', 'a'])
   })
-  it('re-opening a shown row does not move it; a new open comes in on top; a dropped one leaves', () => {
-    // a was opened again (it is first in the stored order now) and d is new; b fell off the cap.
-    expect(settledOrder(['c', 'b', 'a'], ['d', 'a', 'c'])).toEqual(['d', 'c', 'a'])
+  it("the click's own opens (within 2 s) leave the row where it was; an open elsewhere later lets it go", () => {
+    const click = Date.parse(at(10))
+    const held = new Map<string, HeldRow>([['a', { before: at(1), clickedAt: click }]])
+    // a was clicked in the list at minute 10 (recorded twice, a second apart): it stays third.
+    const afterClick = [{ id: 'a', at: new Date(click + 1000).toISOString() }, ...opens([['c', 3], ['b', 2]])]
+    expect(recentRowOrder(afterClick, held)).toEqual(['c', 'b', 'a'])
+    expect(held.has('a')).toBe(true)
+    // A new open of another task comes in on top; a stays.
+    expect(recentRowOrder([...opens([['d', 11]]), ...afterClick], held)).toEqual(['d', 'c', 'b', 'a'])
+    // a opened again from a chat link a minute later: it goes to the top and is no longer held.
+    expect(recentRowOrder([...opens([['a', 12], ['d', 11], ['c', 3], ['b', 2]])], held)).toEqual(['a', 'd', 'c', 'b'])
+    expect(held.has('a')).toBe(false)
+  })
+})
+
+describe('the boot merge and optimistic ids', () => {
+  it("the raw merge keeps both sides' opens", () => {
+    const local = JSON.stringify([{ id: 'offline', at: at(9) }, { id: 'b', at: at(2) }])
+    const server = JSON.stringify([{ id: 'phone', at: at(7) }, { id: 'b', at: at(5) }])
+    expect(JSON.parse(mergeRecentOpenedRaw(local, server))).toEqual([{ id: 'offline', at: at(9) }, { id: 'phone', at: at(7) }, { id: 'b', at: at(5) }])
+  })
+  it("an optimistic create's tmp- id is never recorded", () => {
+    recordTaskOpened('tmp-abc123')
+    expect(local.getItem(RECENT_OPENED_KEY)).toBeNull()
   })
 })

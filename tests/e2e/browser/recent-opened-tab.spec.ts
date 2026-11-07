@@ -139,17 +139,21 @@ test('Recent lists what was opened, newest first, flat, and greys what is open n
   // An open made elsewhere while the list is on screen comes in on top.
   await page.evaluate((id) => window.dispatchEvent(new CustomEvent('main:locate-task', { detail: { taskId: id } })), d)
   await expect.poll(() => recentRows(page, mine)).toEqual([d, b, c, a])
+  // A row opened from the list earlier, opened again from elsewhere (a chat link), goes to the top.
+  await page.waitForTimeout(2_500)
+  await page.evaluate((id) => window.dispatchEvent(new CustomEvent('main:locate-task', { detail: { taskId: id } })), a)
+  await expect.poll(() => recentRows(page, mine)).toEqual([a, d, b, c])
   await chooseViewOption(page, 'all')
   await chooseViewOption(page, 'recent')
-  await expect.poll(() => recentRows(page, mine)).toEqual([d, b, c, a])
+  await expect.poll(() => recentRows(page, mine)).toEqual([a, d, b, c])
   await page.locator('.todo-panel').screenshot({ path: `${SHOTS}/recent-flat.png` })
 
   // A reload brings the list back as it was, and restoring the focused task is not an open.
   await page.reload()
   await expect(page.locator('.todo-pinned-list-recent')).toBeVisible({ timeout: 30_000 })
-  await expect.poll(() => recentRows(page, mine), { timeout: 20_000 }).toEqual([d, b, c, a])
+  await expect.poll(() => recentRows(page, mine), { timeout: 20_000 }).toEqual([a, d, b, c])
   const stored = await page.evaluate((k) => JSON.parse(localStorage.getItem(k) ?? '[]') as Array<{ id: string }>, KEY)
-  expect(stored.map((e) => e.id).filter((id) => mine.includes(id))).toEqual([d, b, c, a])
+  expect(stored.map((e) => e.id).filter((id) => mine.includes(id))).toEqual([a, d, b, c])
 })
 
 test('an open made on another device joins the list when this window comes back', async ({ page, baseURL }) => {

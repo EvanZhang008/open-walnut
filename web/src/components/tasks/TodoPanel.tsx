@@ -6704,6 +6704,20 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     setDetailTarget(null);
     onFocusTask ? onFocusTask(task) : openTaskOnHome(task.id, navigate);
   }, [onFocusTask, navigate]);
+  // A row opened from Recent keeps its place while the list is on screen (useRecentOpenedTasks).
+  const { hold: holdRecentRow, outside: recentOutside } = recentOpened;
+  const handleRecentRowClick = useCallback((task: Task) => {
+    holdRecentRow(task.id);
+    (recentOutside.has(task.id) ? openUnlistedTask : handlePinnedCardClick)(task);
+  }, [holdRecentRow, recentOutside, openUnlistedTask, handlePinnedCardClick]);
+  const handleRecentExpandDetail = useCallback((task: Task) => {
+    holdRecentRow(task.id);
+    (recentOutside.has(task.id) ? openUnlistedTask : handleExpandDetail)(task);
+  }, [holdRecentRow, recentOutside, openUnlistedTask, handleExpandDetail]);
+  const handleRecentStartSession = useCallback((task: Task) => {
+    holdRecentRow(task.id);
+    onStartSession?.(task);
+  }, [holdRecentRow, onStartSession]);
 
   const showProjectDetail = useCallback((project: string) => {
     // Inbox has no registry row, so there is nothing to show for it.
@@ -8094,7 +8108,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                         isSessionOpen={openSessionTaskIds?.has(task.id) ?? false}
                         isOpenInWindow={openInWindowTaskIds?.has(task.id) ?? false}
                         isDetailOpen={focusedTaskId === task.id && !suppressDetail}
-                        onClick={recentOpened.outside.has(task.id) ? openUnlistedTask : handlePinnedCardClick}
+                        onClick={handleRecentRowClick}
                         onPinTask={onPinTask}
                         onUnpinTask={onUnpinTask}
                         isPinned={pinnedTaskIds?.has(task.id)}
@@ -8104,10 +8118,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                         onSetDate={onSetDate}
                         onSetStartDate={onSetStartDate}
                                     onSetTier={onSetTier}
-                        onExpandDetail={handleExpandDetail}
+                        onExpandDetail={handleRecentExpandDetail}
                         onClearFocus={onClearFocus}
-                        onOpenSession={onOpenSession}
-                        onStartSession={onStartSession}
+                        onOpenSession={onOpenSession ? (sid) => { holdRecentRow(task.id); onOpenSession(sid); } : undefined}
+                        onStartSession={onStartSession ? handleRecentStartSession : undefined}
                         onSetPhase={setPhaseOrComplete}
                         onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
                         onMoveToProject={onMoveTask ? handleMoveToProject : undefined}

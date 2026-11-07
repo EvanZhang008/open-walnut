@@ -27,6 +27,7 @@ import { apiGet, apiPut } from '@/api/client';
 import { getDeviceToken } from '@/api/device-token';
 import { SKIP_PREFS_MERGE_FLAG } from './crash-recovery';
 import { LAYOUT_PREFIX, adoptsServerLayout } from './layout-record';
+import { RECENT_OPENED_KEY, mergeRecentOpenedRaw } from './recent-opened';
 
 const INCLUDE_PREFIXES = ['open-walnut-', 'walnut-todo-'];
 /**
@@ -45,6 +46,10 @@ const INCLUDE_PREFIXES = ['open-walnut-', 'walnut-todo-'];
  *    The server's twin is MACHINE_LOCAL_PREFIXES in src/core/ui-prefs-keys.ts.
  */
 const EXCLUDE_PREFIXES = ['open-walnut-diff-review:', 'open-walnut-file-explorer-selected:', 'open-walnut-view:panel.', 'open-walnut-view:tab.', 'open-walnut-diff-state:'];
+/** Keys the boot merge combines instead of taking the newer side (each side's raw value in, the stored value out). */
+const MERGED_KEYS: Record<string, (local: string, server: string) => string> = {
+  [RECENT_OPENED_KEY]: mergeRecentOpenedRaw,
+};
 /** Local write timestamps per key — lets boot-merge decide who's newer. */
 const META_KEY = 'open-walnut-ui-prefs-sync-meta';
 
@@ -214,6 +219,16 @@ export async function initUiPrefsSync(): Promise<void> {
       if (!adoptLayout && key.startsWith(LAYOUT_PREFIX)) continue;
       const localVal = rawGet.call(localStorage, key);
       const localTs = meta[key];
+      // A list both sides add to (the tasks opened lately): one list from the two, never the
+      // newer side replacing the other, so an open whose write never reached the server stays.
+      const merge = MERGED_KEYS[key];
+      if (merge && localVal !== null && typeof entry.v === 'string') {
+        const merged = merge(localVal, entry.v);
+        try { if (merged !== localVal) rawSet.call(localStorage, key, merged); } catch { /* quota */ }
+        meta[key] = Math.max(localTs ?? 0, entry.ts);
+        if (merged !== entry.v) localOnly[key] = { v: merged, ts: Math.max(Date.now(), entry.ts + 1) };
+        continue;
+      }
       // Server wins ONLY when this browser has nothing for the key, or when
       // the server entry is STRICTLY newer than a tracked local write. A local
       // value with no timestamp (written by an older bundle / another code

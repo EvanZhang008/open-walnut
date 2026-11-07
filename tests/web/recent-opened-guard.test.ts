@@ -91,8 +91,8 @@ describe('Org (pages/OrgPage.tsx)', () => {
   const src = read('web/src/pages/OrgPage.tsx')
   const ls = lines(src)
 
-  it('a node picked is an open (Main left out)', () => {
-    expect(src).toContain('if (key !== MAIN_KEY) recordTaskOpened(rowOf(channels, key)?.contactId);')
+  it('a node picked is an open, a led project as itself (Main left out)', () => {
+    expect(src).toMatch(/if \(key !== MAIN_KEY\) \{\s*\n\s*const row = rowOf\(channelsRef\.current, key\);\s*\n\s*recordTaskOpened\(\(row\?\.key === key \? row : row\?\.led\?\.find\(\(l\) => l\.key === key\)\)\?\.contactId\);/)
   })
 
   it('every panel opened beside the page records its task', () => {

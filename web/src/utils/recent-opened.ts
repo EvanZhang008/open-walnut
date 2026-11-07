@@ -59,23 +59,49 @@ export function mergeRecentOpened(a: readonly RecentOpen[], b: readonly RecentOp
   return normalize([...a, ...b]);
 }
 
+/**
+ * The boot merge's rule for this key (ui-prefs-sync): this browser's stored value and the
+ * server's, as one list, instead of the newer one replacing the other. An open whose write never
+ * reached the server (offline, a quit within the mirror's debounce) survives another device's
+ * later write.
+ */
+export function mergeRecentOpenedRaw(local: string | null, server: string | null): string {
+  return JSON.stringify(mergeRecentOpened(parseRecentOpened(local), parseRecentOpened(server)));
+}
+
 /** The list with `id` opened at `at` (moved to the top when already there). */
 export function withOpened(list: readonly RecentOpen[], id: string, at: string): RecentOpen[] {
   return normalize([{ id, at }, ...list.filter((e) => e.id !== id)]);
 }
 
+/** A Recent row opened from the list itself: its open time before that click, and when the click was. */
+export interface HeldRow {
+  before: string;
+  /** The click (ms since epoch): the opens it records land within SAME_CLICK_MS after it. */
+  clickedAt: number;
+}
+
+/** Opens within this long of the click are that click's own (a row with a session records twice). */
+const SAME_CLICK_MS = 2000;
+
 /**
- * The order a Recent tab on screen draws: rows it already shows keep their places, and a task
- * new to the list comes in on top. Opening a row from the list must not move it under the
- * pointer or the thumb (a phone's Back lands where the thumb left, N2-01); the list takes the
- * newest-first order again the next time it is opened. `shown` null: the tab just opened.
+ * The order the Recent tab draws: newest open first, except that a row opened FROM the list
+ * keeps the place it had while the tab stays on screen. Clicking a row must not move it under the
+ * pointer or the thumb (a phone's Back lands where the thumb left, N2-01). An open from anywhere
+ * else still goes to the top: a later open of a held row lets it go (`held` is updated in place,
+ * so the hook's map follows), and a held row takes its new place the next time the tab opens.
  */
-export function settledOrder(shown: readonly string[] | null, fresh: readonly string[]): string[] {
-  if (!shown) return [...fresh];
-  const now = new Set(fresh);
-  const kept = shown.filter((id) => now.has(id));
-  const had = new Set(kept);
-  return [...fresh.filter((id) => !had.has(id)), ...kept];
+export function recentRowOrder(opens: readonly RecentOpen[], held: Map<string, HeldRow>): string[] {
+  const key = (e: RecentOpen): number => {
+    const h = held.get(e.id)
+    const at = Date.parse(e.at)
+    if (!h) return at
+    if (at - h.clickedAt > SAME_CLICK_MS) { held.delete(e.id); return at }
+    return Math.min(at, Date.parse(h.before))
+  }
+  return opens.map((e, i) => ({ id: e.id, t: key(e), i }))
+    .sort((a, b) => b.t - a.t || a.i - b.i)
+    .map((x) => x.id)
 }
 
 function storage(): Storage | null {
@@ -108,7 +134,8 @@ function writeRecentOpened(list: readonly RecentOpen[]): void {
 
 /** The person opened this task. Never throws. */
 export function recordTaskOpened(taskId: string | null | undefined, now: Date = new Date()): void {
-  if (!taskId) return;
+  // `tmp-` is an optimistic create's id until the server's arrives (useTasks): never a real task.
+  if (!taskId || taskId.startsWith('tmp-')) return;
   writeRecentOpened(withOpened(readRecentOpened(), taskId, now.toISOString()));
 }
 

@@ -176,6 +176,8 @@ export function OrgPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- alertSig stands for the status store
     [tree, shownTasks, alertSig],
   );
+  // For callbacks that must stay stable across org updates (select: the row menu memo holds it).
+  const channelsRef = useCommittedRef(channels);
 
   // The status store only knows sessions someone asked about: ask for the org's.
   const orgSessionKey = useMemo(
@@ -287,7 +289,11 @@ export function OrgPage() {
   // closes the side panel: what it showed belonged to the node the user left.
   const select = useCallback((key: string, tab?: OrgTab) => {
     // An open for Home's Recent tab (utils/recent-opened.ts); Main is left out, it is always at hand.
-    if (key !== MAIN_KEY) recordTaskOpened(rowOf(channels, key)?.contactId);
+    // rowOf answers a led project's VP row, so the project's own row is looked up in it.
+    if (key !== MAIN_KEY) {
+      const row = rowOf(channelsRef.current, key);
+      recordTaskOpened((row?.key === key ? row : row?.led?.find((l) => l.key === key))?.contactId);
+    }
     setParams(() => {
       const next = liveParams();
       next.set('node', key);
@@ -295,7 +301,7 @@ export function OrgPage() {
       next.delete('open');
       return next;
     }, phone ? { state: { orgPick: true } } : { replace: true });
-  }, [setParams, phone, channels]);
+  }, [setParams, phone, channelsRef]);
   const back = useCallback(() => {
     if ((window.history.state as { usr?: { orgPick?: boolean } } | null)?.usr?.orgPick) { navigate(-1); return; }
     // Opened straight on a node (a link, a reload): the list is this page's own way back.
