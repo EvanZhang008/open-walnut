@@ -25,8 +25,9 @@ async function openExplorer(page: Page): Promise<Locator> {
 
 async function openReportFile(page: Page, explorer: Locator, name: string): Promise<void> {
   const folderRow = explorer.locator('.session-file-explorer-node', { has: page.locator('.sfe-name', { hasText: /^report$/ }) })
-  await expect(folderRow.locator('.sfe-arrow')).toHaveText(/[▶▼]/, { timeout: 10_000 })
-  if (/^\u25B6\uFE0E?$/.test((await folderRow.locator('.sfe-arrow').textContent())?.trim() ?? '')) await folderRow.click()
+  // Decide from the chevron's state (a folder still expanding would collapse on a click).
+  await expect(folderRow.locator('.sfe-arrow')).toHaveAttribute('data-state', /^(open|closed)$/, { timeout: 10_000 })
+  if ((await folderRow.locator('.sfe-arrow').getAttribute('data-state')) === 'closed') await folderRow.click()
   const row = explorer.locator('.sfe-name', { hasText: name })
   await expect(row).toBeVisible({ timeout: 10_000 })
   await row.click()
