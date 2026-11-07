@@ -17,8 +17,9 @@ import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { spawnSync } from 'node:child_process'
 import {
-  DARWIN_IDENTITY, readMachoUuid, stampDarwinIdentity, uuidOffset, writeMachoUuid,
+  DARWIN_IDENTITY, NoDarwinSignerError, readMachoUuid, stampDarwinIdentity, uuidOffset, writeMachoUuid,
 } from '../../scripts/lib/macho-identity.mjs'
 
 const REPO = path.join(import.meta.dirname, '..', '..')
@@ -107,10 +108,18 @@ describe('darwin identity: the Mach-O edit', () => {
     const file = path.join(dir, 'daemon-darwin-arm64')
     fs.writeFileSync(file, fakeMacho(Buffer.alloc(16)))
     const failed = new Error('signature failed')
+    const before = fs.readFileSync(file)
     try {
-      expect(() => stampDarwinIdentity(file, 'daemon-darwin-arm64', { platform: 'linux', run: (_cmd: string, args: string[]) => {
-        if (args[0] === 'sign') throw failed
-      } })).toThrow(failed)
+      let thrown: unknown
+      try {
+        stampDarwinIdentity(file, 'daemon-darwin-arm64', { platform: 'linux', run: (_cmd: string, args: string[]) => {
+          if (args[0] === 'sign') throw failed
+        } })
+      } catch (err) { thrown = err }
+      // The signer's own error is named, never read as an unavailable signer, and the file is as it was.
+      expect(String(thrown)).toMatch(/signature failed/)
+      expect((thrown as { code?: string }).code).not.toBe('signer_unavailable')
+      expect(fs.readFileSync(file)).toEqual(before)
     } finally { fs.rmSync(dir, { recursive: true, force: true }) }
   })
 
@@ -125,14 +134,98 @@ describe('darwin identity: the Mach-O edit', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'macho-id-'))
     const file = path.join(dir, 'f')
     fs.writeFileSync(file, fakeMacho(Buffer.alloc(16)))
+    const work = `${file}.stamp-${process.pid}`
     const calls: string[][] = []
     stampDarwinIdentity(file, 'walnut-darwin-arm64', { platform: 'darwin', run: (cmd: string, args: string[]) => { calls.push([cmd, ...args]) } })
-    expect(calls[0]).toEqual(['codesign', '--force', '--sign', '-', '--identifier', 'dev.openwalnut.walnut', '--preserve-metadata=entitlements,flags', file])
+    // The signature is made on a copy, which replaces the file only once it verifies.
+    expect(calls[0]).toEqual(['codesign', '--force', '--sign', '-', '--identifier', 'dev.openwalnut.walnut', '--preserve-metadata=entitlements,flags', work])
+    expect(calls[1]).toEqual(['codesign', '--verify', work])
     expect(readMachoUuid(file)).toBe(DARWIN_IDENTITY['walnut-darwin-arm64'].uuid)
+    expect(fs.existsSync(work)).toBe(false)
     const linux: string[][] = []
-    stampDarwinIdentity(file, 'walnut-darwin-x64', { platform: 'linux', rcodesign: 'rc', run: (cmd: string, args: string[]) => { linux.push([cmd, ...args]) } })
-    expect(linux.at(-1)).toEqual(['rc', 'sign', '--binary-identifier', 'dev.openwalnut.walnut', file])
+    stampDarwinIdentity(file, 'walnut-darwin-x64', {
+      platform: 'linux', rcodesign: 'rc', run: (cmd: string, args: string[]) => { linux.push([cmd, ...args]) },
+      capture: (cmd: string, args: string[]) => { linux.push([cmd, ...args]); return { stdout: '', stderr: 'CMS error: missing further values' } },
+    })
+    expect(linux).toEqual([['rc', '--version'], ['rc', 'sign', '--binary-identifier', 'dev.openwalnut.walnut', work], ['rc', 'verify', work]])
     expect(() => stampDarwinIdentity(file, 'walnut-darwin-new', { platform: 'darwin', run: () => {} })).toThrow(/no fixed darwin identity/)
     fs.rmSync(dir, { recursive: true, force: true })
+  })
+})
+
+/**
+ * A stamp that fails leaves the file exactly as bun wrote it (2026-11-07: a daemon built on Linux
+ * had its UUID stamped before the build found it could not re-sign, so it shipped with bun's
+ * signature broken and macOS refused to start it). Every darwin output of build-binary and
+ * build-daemon goes through stampDarwinIdentity (the class test above), so this covers them all.
+ */
+describe('darwin identity: a stamp that cannot finish changes nothing', () => {
+  const STAMPED = DARWIN_IDENTITY['daemon-darwin-arm64'].uuid
+  const setup = () => {
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'macho-id-')))
+    const file = path.join(dir, 'daemon-darwin-arm64')
+    const bytes = fakeMacho(Buffer.from('4c4c44565555314' + '4a175b24f7cbbd850', 'hex'))
+    fs.writeFileSync(file, bytes, { mode: 0o755 })
+    return { dir, file, bytes }
+  }
+  const untouched = (dir: string, file: string, bytes: Buffer) => {
+    expect(fs.readFileSync(file).equals(bytes)).toBe(true)
+    expect(fs.readdirSync(dir)).toEqual([path.basename(file)])
+  }
+
+  it.each([
+    ['no signer on this host', { run: (cmd: string, args: string[]) => { if (args[0] === '--version') throw new Error('ENOENT') } }, NoDarwinSignerError],
+    ['the signer fails', { run: (cmd: string, args: string[]) => { if (args[0] === 'sign') throw new Error('sign failed') } }, Error],
+    ['the signature does not verify', { run: () => {}, capture: () => ({ stdout: '', stderr: 'code digest mismatch for entry 0' }) }, Error],
+  ])('%s: it throws and the file keeps its bytes', (_label, over, kind) => {
+    const { dir, file, bytes } = setup()
+    expect(() => stampDarwinIdentity(file, 'daemon-darwin-arm64', { platform: 'linux', rcodesign: 'rc', ...over })).toThrow(kind)
+    untouched(dir, file, bytes)
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('macOS: a codesign that fails leaves the file as it was too', () => {
+    const { dir, file, bytes } = setup()
+    expect(() => stampDarwinIdentity(file, 'daemon-darwin-arm64', { platform: 'darwin', run: (_c: string, args: string[]) => { if (args[0] === '--verify') throw new Error('invalid') } })).toThrow(/left as it was/)
+    untouched(dir, file, bytes)
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  // The command line the shell builds run: --where-signable skips only when there is no signer at
+  // all, never when one fails, and WALNUT_REQUIRE_DARWIN_SIGN=1 turns that skip into a failure.
+  it.skipIf(process.platform === 'darwin')('the CLI: skips only a missing signer, fails a failing one, and fails a missing one when signing is required', () => {
+    const { dir, file, bytes } = setup()
+    const failing = path.join(os.tmpdir(), `rc-fail-${process.pid}`)
+    fs.writeFileSync(failing, '#!/bin/sh\n[ "$1" = --version ] && exit 0\nexit 3\n', { mode: 0o755 })
+    const cli = (env: Record<string, string>) => spawnSync(process.execPath, [path.join(REPO, 'scripts/lib/macho-identity.mjs'), 'stamp', file, 'daemon-darwin-arm64', '--where-signable'],
+      { encoding: 'utf8', env: { ...process.env, ...env } })
+    try {
+      const missing = cli({ WALNUT_RCODESIGN: path.join(dir, 'no-such-rcodesign') })
+      expect(missing.status, missing.stderr).toBe(0)
+      expect(missing.stderr).toMatch(/keeps bun's own identity and signature, untouched/)
+      untouched(dir, file, bytes)
+      const required = cli({ WALNUT_RCODESIGN: path.join(dir, 'no-such-rcodesign'), WALNUT_REQUIRE_DARWIN_SIGN: '1' })
+      expect(required.status).toBe(1)
+      untouched(dir, file, bytes)
+      const fails = cli({ WALNUT_RCODESIGN: failing })
+      expect(fails.status).toBe(1)
+      expect(fails.stderr).toMatch(/left as it was/)
+      untouched(dir, file, bytes)
+      expect(readMachoUuid(file)).not.toBe(STAMPED)
+    } finally {
+      fs.rmSync(failing, { force: true })
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('nothing but the stamp edits a darwin UUID, and no build swallows a failed stamp', () => {
+    const scripts = fs.readdirSync(path.join(REPO, 'scripts')).filter((f) => /\.(sh|mjs|ts)$/.test(f)).map((f) => `scripts/${f}`)
+    for (const rel of scripts) {
+      const text = read(rel)
+      expect(text, `${rel} edits a Mach-O UUID itself: go through stampDarwinIdentity`).not.toMatch(/writeMachoUuid\(/)
+      for (const line of text.split('\n').filter((l) => /macho-identity\.mjs stamp /.test(l))) {
+        expect(line, `${rel}: a failed stamp must fail the build`).not.toMatch(/\|\||; *true|2>\/dev\/null/)
+      }
+    }
   })
 })

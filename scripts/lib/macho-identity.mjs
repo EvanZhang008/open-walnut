@@ -92,30 +92,68 @@ export function readSigningIdentifier(file) {
   return m ? m[1] : null
 }
 
+/** No way to sign on this host: nothing was changed (see `--where-signable`). */
+export class NoDarwinSignerError extends Error {
+  code = 'signer_unavailable'
+}
+
+/**
+ * The tool that signs a darwin file here, found BEFORE the file is touched: a
+ * stamped UUID breaks the signature bun gave the file, so a stamp that cannot
+ * re-sign must never begin (2026-11-07: a daemon built on Linux shipped with its
+ * UUID stamped and bun's signature broken, and macOS refused to start it).
+ */
+function darwinSigner(name, opts, run) {
+  if ((opts.platform ?? process.platform) === 'darwin') return { kind: 'codesign' }
+  const rcodesign = opts.rcodesign ?? process.env.WALNUT_RCODESIGN ?? 'rcodesign'
+  try {
+    run(rcodesign, ['--version'])
+  } catch {
+    throw new NoDarwinSignerError(`${name} needs an ad-hoc signature after its identity is stamped: build it on macOS, or put rcodesign on PATH (sh scripts/install-rcodesign.sh <dir>)`)
+  }
+  return { kind: 'rcodesign', cmd: rcodesign }
+}
+
+/**
+ * rcodesign's verify says an ad-hoc signature has no CMS part (it has none by design), so only
+ * a code hash that does not match, or no signature at all, counts as broken.
+ */
+function rcodesignVerifies(cmd, file, opts) {
+  const r = (opts.capture ?? ((c, a) => spawnSync(c, a, { encoding: 'utf8' })))(cmd, ['verify', file])
+  const out = `${r.stdout ?? ''}${r.stderr ?? ''}`
+  if (r.error) throw new Error(`${cmd} verify did not run: ${r.error.message}`)
+  if (/digest mismatch|no code signature|not signed/i.test(out)) throw new Error(`the signature does not match the file: ${out.trim().split('\n').slice(-3).join(' ')}`)
+}
+
 /**
  * Give `file` its fixed identity: the UUID, then an ad-hoc signature with the
  * identifier, keeping the flags and entitlements bun signed it with (its JIT
- * needs allow-jit). `name` is a key of DARWIN_IDENTITY.
+ * needs allow-jit). `name` is a key of DARWIN_IDENTITY. The work is done on a
+ * copy that replaces `file` only once it is signed and the signature checks, so
+ * on any failure `file` is left exactly as bun wrote it.
  */
 export function stampDarwinIdentity(file, name, opts = {}) {
   const id = DARWIN_IDENTITY[name]
   if (!id) throw new Error(`no fixed darwin identity for ${name}; add one to scripts/lib/macho-identity.mjs`)
   const run = opts.run ?? ((cmd, args) => execFileSync(cmd, args, { stdio: 'ignore' }))
-  if ((opts.platform ?? process.platform) === 'darwin') {
-    writeMachoUuid(file, id.uuid)
-    run('codesign', ['--force', '--sign', '-', '--identifier', id.identifier, '--preserve-metadata=entitlements,flags', file])
-    run('codesign', ['--verify', file])
-    return id
-  }
-  const rcodesign = opts.rcodesign ?? process.env.WALNUT_RCODESIGN ?? 'rcodesign'
+  const signer = darwinSigner(name, opts, run)
+  const work = `${file}.stamp-${process.pid}`
+  fs.copyFileSync(file, work)
+  fs.chmodSync(work, fs.statSync(file).mode & 0o7777)
   try {
-    run(rcodesign, ['--version'])
-  } catch {
-    throw Object.assign(new Error(`${name} needs an ad-hoc signature after its identity is stamped: build it on macOS, or put rcodesign on PATH (sh scripts/install-rcodesign.sh <dir>)`), { code: 'signer_unavailable' })
+    writeMachoUuid(work, id.uuid)
+    if (signer.kind === 'codesign') {
+      run('codesign', ['--force', '--sign', '-', '--identifier', id.identifier, '--preserve-metadata=entitlements,flags', work])
+      run('codesign', ['--verify', work])
+    } else {
+      run(signer.cmd, ['sign', '--binary-identifier', id.identifier, work])
+      rcodesignVerifies(signer.cmd, work, opts)
+    }
+    fs.renameSync(work, file)
+  } catch (err) {
+    fs.rmSync(work, { force: true })
+    throw new Error(`${name}: stamping its identity failed, ${file} is left as it was: ${err instanceof Error ? err.message : err}`)
   }
-  // Editing the first page invalidates bun's signature, so prove the signer exists before touching it.
-  writeMachoUuid(file, id.uuid)
-  run(rcodesign, ['sign', '--binary-identifier', id.identifier, file])
   return id
 }
 
@@ -141,8 +179,11 @@ export function checkDarwinIdentity(file, name, opts = {}) {
  * `bun scripts/lib/macho-identity.mjs stamp|check <file> <name>` for the shell builds
  * (scripts/build-daemon.sh) and the deploy's check (scripts/dev-prod.sh). `stamp
  * --where-signable` skips with a note on a host with no way to sign (Linux without
- * rcodesign): such a daemon binary is only for that host's own tests, and a deploy
- * builds and checks its own on the Mac.
+ * rcodesign), and only then: the file keeps bun's own identity and signature,
+ * untouched. Such a daemon binary is for that host's own tests; a deploy builds and
+ * checks its own on the Mac. A build whose darwin file must carry Walnut's identity
+ * sets WALNUT_REQUIRE_DARWIN_SIGN=1, and then a missing signer fails it too. A
+ * signer that is there and fails always fails the build.
  */
 if (import.meta.main) {
   const [verb, file, name, flag] = process.argv.slice(2)
@@ -154,8 +195,12 @@ if (import.meta.main) {
     try {
       stampDarwinIdentity(file, name)
     } catch (err) {
-      if (flag !== '--where-signable' || process.platform === 'darwin' || err.code !== 'signer_unavailable') throw err
-      console.error(`macho-identity: ${name} keeps bun's identity on this host (${err.message})`)
+      const mayKeep = flag === '--where-signable' && err instanceof NoDarwinSignerError && process.env.WALNUT_REQUIRE_DARWIN_SIGN !== '1'
+      if (!mayKeep) {
+        console.error(`macho-identity: ${err instanceof Error ? err.message : err}`)
+        process.exit(1)
+      }
+      console.error(`macho-identity: ${name} keeps bun's own identity and signature, untouched, on this host (${err.message})`)
       process.exit(0)
     }
   }
