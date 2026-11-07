@@ -235,6 +235,8 @@ describe('Org Threads', () => {
     expect(((await refused.json()) as { error?: { code?: string } }).error?.code ?? '').toBe('not_reacted')
     expect((await patch(t.id, { known: 'all' }, LEAD_SID)).status).toBe(409)
     expect((await threads()).find((x) => x.id === t.id)?.closed).toBeUndefined()
+    // His words asking to close it ride the route: a quote he never wrote is refused.
+    expect((await patch(t.id, { close: 'acked', user_words: 'please close this thread' }, LEAD_SID)).status).toBe(409)
     // He reacts in the thread: now the lead may close it.
     await typeIntoChat(LEAD_SID, 'ok, thanks', t.id)
     const closed = await patch(t.id, { close: 'acked' }, LEAD_SID)

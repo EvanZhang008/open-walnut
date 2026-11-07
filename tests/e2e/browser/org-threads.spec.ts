@@ -874,3 +874,34 @@ test('Pin keeps a thread at the top whatever its state; the node cannot take his
   await expect.poll(async () => { const t = await stored('th-00000000d003'); return !!t?.closed && !t.pinned }, { timeout: 15_000 }).toBe(true)
   await expect.poll(ids3).toEqual(['th-00000000d001', 'th-00000000d002'])
 })
+
+// 2026-11-07, the user, on a thread the VP opened asking whether to use a yearly budget: "... close
+// this thread" (a 72-character message, not a short ok), and both of the VP's closes were refused.
+test('he asks the lead in its chat to close a thread it opened: the lead closes it quoting him, and the card goes', async ({ page, request }) => {
+  const res = await request.post(`/api/v1/tasks/${ids.lead}/threads/open`, {
+    data: { title: `Yearly learning budget ${STAMP}`, text: 'Decide: the yearly learning budget lapses on Dec 31. My pick: let it lapse unless there is a course you want.', from: 'node', user_kind: 'user_own', user_kind_why: 'His own benefit and his own call' },
+    headers: { 'x-walnut-caller-sid': ids.leadSid },
+  })
+  expect(res.status(), await res.text()).toBe(201)
+  const opened = ((await res.json()) as { thread: Thread }).thread
+  await openThreads(page)
+  const c = card(page, opened.id)
+  await expect(c).toBeVisible()
+  // His words, typed into the lead's chat (a real send): filed as a thread of their own.
+  const ask = `don't want to use it, can we not ask me every day, close this thread ${STAMP}`
+  await sendToLead(page, ask)
+  await expect.poll(async () => (await threads(request)).some((t) => t.messages.some((m) => m.text === ask)), { timeout: 30_000 }).toBe(true)
+  const filed = (await threads(request)).find((t) => t.messages.some((m) => m.text === ask))!
+  if (filed.id !== opened.id) await leadUpdates(request, filed.id, { merge_into: opened.id })
+  await shot(page, 'close-asked')
+  // A close that does not quote him is still refused: his message is not a short ok.
+  const refused = await request.patch(`/api/v1/tasks/${ids.lead}/threads/${opened.id}`, { data: { close: 'dropped' }, headers: { 'x-walnut-caller-sid': ids.leadSid } })
+  expect(refused.status()).toBe(409)
+  expect(await refused.text()).toContain('user_words')
+  await expect(c).toBeVisible()
+  // Quoting his words, the lead's close goes through and the card leaves his view.
+  await leadUpdates(request, opened.id, { close: 'dropped', user_words: 'close this thread' })
+  await expect(c).toHaveCount(0, { timeout: 15_000 })
+  expect((await threads(request)).find((t) => t.id === opened.id)?.closed).toMatchObject({ how: 'dropped' })
+  await shot(page, 'close-done')
+})

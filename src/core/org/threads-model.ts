@@ -442,6 +442,8 @@ export interface ThreadPatch {
   user_kind_why?: string;
   /** With state needs from an agent: why it asks what a task in the node's team already asks (same-ask.ts). Never stored. */
   same_ask_reason?: string;
+  /** With close from a node: his own words asking for it (closeAskOf). Never stored. */
+  user_words?: string;
 }
 
 /**
@@ -525,22 +527,55 @@ export function isAcknowledgement(text: string): boolean {
  * answer is not known, however clear it was (2026-11-01, the user: "I had not replied ... clearly
  * I had not acknowledged it ... you cannot remove it"). His last message may be that reaction
  * ("ok, thanks", the node replying to it is fine); a question of his the node is still answering,
- * or answered and he has not reacted to, is not. His own Acknowledge needs no check.
+ * or answered and he has not reacted to, is not, unless the node quotes his own words asking for
+ * the close (`user_words`, closeAskOf). His own Acknowledge needs no check.
  */
-function checkClose(file: ThreadsFile, t: OrgThread, by: ThreadWriter): void {
+function checkClose(file: ThreadsFile, t: OrgThread, by: ThreadWriter, words?: string): void {
   if (by === 'human') return;
+  if (closeAskOf(t, words)) return;
   const lastIdx = t.messages.length - 1;
   const last = t.messages[lastIdx];
   if (!last) {
     // Only the node's own post: closed once he wrote to it after it (anywhere, the node's judgment).
     if (t.opener && reactedSince(file, t.opener.at)) return;
-    throw notReacted('closed', t.opener?.at ?? '');
+    throw notReacted('closed', t.opener?.at ?? '', words);
   }
   if (last.answer && reactedSince(file, last.answer.at)) return;
   // His last message is a plain reaction to what the node said before it.
   const before = nodeWordAt(t, lastIdx - 1);
   if (before && last.at > before && isAcknowledgement(last.text)) return;
-  throw notReacted('closed', last.answer?.at ?? nodeWordAt(t, lastIdx));
+  throw notReacted('closed', last.answer?.at ?? nodeWordAt(t, lastIdx), words);
+}
+
+/** Words compared as he wrote them, case and spacing aside. */
+const wordsKey = (s: string): string => s.normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase();
+/** The shortest quote that names a message of his, unless it is the whole message: a word or two is no quote. */
+const USER_WORDS_MIN = 6;
+const quotes = (text: string, quote: string): boolean => {
+  const said = wordsKey(text);
+  return said.includes(quote) && (quote.length >= USER_WORDS_MIN || quote === said);
+};
+
+/**
+ * He asked the node in his own words to close the thread, or said it is done or no longer wanted
+ * (2026-11-07: a VP was refused closing a thread on the user's 72-character "... close this
+ * thread", which the 40-character acknowledgement test did not read as one). The node quotes them
+ * (`user_words`); they count when they are in a message of his in this thread (one filed elsewhere
+ * is merged in first, so his words about one subject never close another) written after every
+ * word the node said in it, except its own reply to that message, and after his every other
+ * message in it. Silence still is not knowing: an answer the node gave after those words (to an
+ * earlier question of his) keeps the thread open, and no known mark rides on them.
+ */
+export function closeAskOf(t: OrgThread, words: string | undefined): ThreadMessage | null {
+  const quote = wordsKey(words ?? '');
+  if (!quote) return null;
+  return t.messages.find((m) => quotes(m.text, quote) && afterAllSaid(t, m)) ?? null;
+}
+
+/** `m` came after everything said in `t` but the node's own reply to it. */
+function afterAllSaid(t: OrgThread, m: ThreadMessage): boolean {
+  if (t.opener && t.opener.at >= m.at) return false;
+  return t.messages.every((x) => x.id === m.id || (x.at <= m.at && !(x.answer && x.answer.at > m.at)));
 }
 
 /**
@@ -557,11 +592,14 @@ function knownThrough(file: ThreadsFile, t: OrgThread, upTo: number, by: ThreadW
   throw notReacted('marked known', nodeWordAt(t, upTo));
 }
 
-function notReacted(what: string, at: string): ThreadError {
+function notReacted(what: string, at: string, words?: string): ThreadError {
   return new ThreadError('not_reacted', 409,
     `Not ${what}: ${at ? `the user has not written to you since your last word in it (${at})` : 'there is no answer of yours in it he could have reacted to yet'}. `
     + 'An answer he has not reacted to is not known: the thread stays open (answered, your answer in full) until he replies, says ok or '
-    + 'thanks, follows up, or acknowledges it.');
+    + 'thanks, follows up, or acknowledges it. '
+    + (words?.trim()
+      ? 'The user_words you quoted are not in a message of his in this thread written after everything said in it: quote his words exactly, from his latest message (merge it into this thread first when it was filed elsewhere).'
+      : 'If he asked you in his own words to close it, or said it is done or no longer wanted, close it with user_words quoting them.'));
 }
 
 /** He pinned it: a node's write may not take it out of his sight. */
@@ -627,7 +665,7 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
   if (patch.close && !(cur.closed && cur.closed.how === patch.close)) {
     // A thread the node opened that he never answered may be dropped by it: he was never asked yet.
     const ownUnseen = patch.close === 'dropped' && !!cur.opener && !cur.messages.length && by === cur.opener.by;
-    if (!ownUnseen) checkClose(file, cur, by);
+    if (!ownUnseen) checkClose(file, cur, by, patch.user_words);
     next.closed = { how: patch.close, at, by };
     delete next.snoozed;
     delete next.pinned;

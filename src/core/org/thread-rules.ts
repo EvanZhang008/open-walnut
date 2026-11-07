@@ -20,7 +20,8 @@ export const THREADS_KNOWN_RULE =
   + 'answer: the thread stays open in answered with your answer on its card (an answer that only says who took it is no news: '
   + 'that thread is pending, below), and you never mark it known or close it then (Walnut '
   + 'refuses). Once he reacted, mark what he reacted to known (thread_update known: the last message of his you answered and he '
-  + 'reacted to, or "all"), and close a thread he reacted to as finished (close: acked).';
+  + 'reacted to, or "all"), and close a thread he reacted to as finished (close: acked). When he asks you to close it or says it is '
+  + 'done or no longer wanted, in the thread or your chat, close it then, with user_words quoting him.';
 
 /** A node may open a thread itself (2026-11-01, the user: "not only limited to threads I started"), never as a feed. */
 export const THREADS_OPEN_RULE =

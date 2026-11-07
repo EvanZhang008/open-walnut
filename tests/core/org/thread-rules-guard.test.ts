@@ -17,7 +17,8 @@ import { describe, it, expect } from 'vitest'
 import { THREADS_KNOWN_RULE, THREADS_OPEN_RULE, THREADS_PENDING_RULE, THREADS_SUMMARY_RULE } from '../../../src/core/org/thread-rules.js'
 import { THREADS_LINE } from '../../../src/core/sessions/session-context.js'
 import { threadHintText, threadsTidyOf, threadsTidyText, type ThreadHintState } from '../../../src/core/org/thread-capture.js'
-import { emptyThreads, fileMessage, openThread, setAnswers, ThreadError, updateThread } from '../../../src/core/org/threads-model.js'
+import { promises as fs } from 'node:fs'
+import { emptyThreads, fileMessage, mergeThreads, openThread, setAnswers, ThreadError, updateThread } from '../../../src/core/org/threads-model.js'
 import { findHint } from '../../../src/core/hints/hint-registry.js'
 import { getOp } from '../../../src/ops/index.js'
 
@@ -163,6 +164,69 @@ describe('Walnut enforces it', () => {
     expect(() => updateThread(f, t.id, { close: 'acked' }, 'task:lead-1', at(4))).toThrow(/has not written to you since/)
     // Folding: the first answer, which his question reacted to, may fold; the second may not.
     expect(updateThread(f, t.id, { known: 'all' }, 'task:lead-1', at(4)).thread.known?.through).toBe(t.messages[0].id)
+  })
+
+  // 2026-11-07: a VP opened a thread asking him to decide, he wrote back "... close this thread" (72
+  // characters, so not a short acknowledgement), and both of the VP's closes were refused.
+  const CLOSE_ASK = "don't want to use it, can we not ask me every day, close this thread"
+  const opened = () => openThread(emptyThreads('lead-1'), { title: 'Career budget', text: 'Use the yearly budget or let it lapse?', from: 'node', user_kind: 'user_own', user_kind_why: 'His own benefit and his own call' }, 'task:lead-1', at(0))
+
+  it('he asks in the chat to close it: the node closes it quoting him, before and after its reply is read', () => {
+    const o = opened()
+    const f = fileMessage(o.file, { text: CLOSE_ASK, via: 'chat', threadId: o.thread.id, at: at(10) }).file
+    expect(() => updateThread(f, o.thread.id, { close: 'dropped' }, 'task:lead-1', at(11))).toThrow(/close it with user_words quoting them/)
+    expect(updateThread(f, o.thread.id, { close: 'dropped', user_words: 'close this thread' }, 'task:lead-1', at(11)).thread.closed)
+      .toMatchObject({ how: 'dropped', by: 'task:lead-1' })
+    // The node's reply to it ("ok, closing it") was read before the close: still his ask, still closes.
+    const msg = f.threads[0].messages[0]
+    const replied = setAnswers(f, new Map([[msg.id, { text: 'Ok, I will not ask again.', at: at(12) }]])).file
+    expect(() => updateThread(replied, o.thread.id, { close: 'acked' }, 'task:lead-1', at(13))).toThrow(ThreadError)
+    expect(updateThread(replied, o.thread.id, { close: 'acked', user_words: 'Close  This Thread' }, 'task:lead-1', at(13)).thread.closed?.how).toBe('acked')
+    // His words close it; they never mark the node's reply to them known.
+    expect(() => updateThread(replied, o.thread.id, { known: 'all', user_words: 'close this thread' }, 'task:lead-1', at(13))).toThrow(ThreadError)
+  })
+
+  it('his close filed in another thread counts once merged in; words he never wrote, a word or two, or an answer after them do not', () => {
+    // His question waits on its answer; then he writes about it in a message filed as a thread of its own.
+    let q = fileMessage(emptyThreads('lead-1'), { text: 'which courses does the career budget pay for?', via: 'chat', at: at(0) }).file
+    const asked = q.threads[0]
+    q = fileMessage(q, { text: 'stop asking me about the career budget, drop it', via: 'chat', at: at(10) }).file
+    const words = 'stop asking me about the career budget'
+    // His words about one subject never close another thread...
+    expect(() => updateThread(q, asked.id, { close: 'dropped', user_words: words }, 'task:lead-1', at(11))).toThrow(/merge it into this thread first/)
+    // ...until the node puts them under the thread they are about.
+    const other = q.threads.find((x) => x.id !== asked.id)!
+    const merged = mergeThreads(q, other.id, asked.id, 'task:lead-1', at(11)).file
+    expect(updateThread(merged, asked.id, { close: 'dropped', user_words: words }, 'task:lead-1', at(12)).thread.closed?.how).toBe('dropped')
+    expect(() => updateThread(merged, asked.id, { close: 'dropped', user_words: 'please close it' }, 'task:lead-1', at(12))).toThrow(/not in a message of his/)
+    expect(() => updateThread(merged, asked.id, { close: 'dropped', user_words: 'drop' }, 'task:lead-1', at(12))).toThrow(ThreadError)
+    // Words from before the node's post are no answer to it.
+    const early = fileMessage(emptyThreads('lead-1'), { text: 'stop asking me about the career budget', via: 'chat', at: at(0) }).file
+    const late = openThread(early, { title: 'Career budget', text: 'Use it?', from: 'node', user_kind: 'user_own', user_kind_why: 'His own benefit and his own call' }, 'task:lead-1', at(5))
+    const lateMerged = mergeThreads(late.file, early.threads[0].id, late.thread.id, 'task:lead-1', at(6)).file
+    expect(() => updateThread(lateMerged, late.thread.id, { close: 'acked', user_words: 'stop asking me about the career budget' }, 'task:lead-1', at(6))).toThrow(ThreadError)
+    // He asked a question, then said "close this thread", then the node answered the question: that answer is unseen.
+    let f = fileMessage(emptyThreads('lead-1'), { text: 'what does the budget cover?', via: 'chat', at: at(0) }).file
+    const t = f.threads[0]
+    f = fileMessage(f, { text: CLOSE_ASK, via: 'follow-up', threadId: t.id, at: at(2) }).file
+    f = setAnswers(f, new Map([[t.messages[0].id, { text: 'Undergraduate courses only.', at: at(3) }]])).file
+    expect(() => updateThread(f, t.id, { close: 'acked', user_words: 'close this thread' }, 'task:lead-1', at(4))).toThrow(/not in a message of his/)
+    // A whole short message is a quote: "close it" as he wrote it.
+    const short = fileMessage(opened().file, { text: 'close it', via: 'chat', threadId: opened().thread.id, at: at(10) }).file
+    expect(updateThread(short, short.threads[0].id, { close: 'acked', user_words: 'close it' }, 'task:lead-1', at(11)).thread.closed?.how).toBe('acked')
+  })
+
+  it('every refusal of a close weighs the words the node quoted', async () => {
+    // The class: each not_reacted refusal of a close in the model. A new one that drops the node's quote fails here.
+    const src = await fs.readFile(new URL('../../../src/core/org/threads-model.ts', import.meta.url), 'utf8')
+    const calls = [...src.matchAll(/throw notReacted\(([^;]*)\);/g)].map((m) => m[1])
+    const closes = calls.filter((c) => c.startsWith("'closed'"))
+    expect(closes.length).toBeGreaterThanOrEqual(2)
+    for (const c of closes) expect(c, c).toMatch(/,\s*words\)?$/)
+    expect(src).toMatch(/function checkClose\([^)]*words[^)]*\)[^{]*\{\s*if \(by === 'human'\) return;\s*if \(closeAskOf\(t, words\)\) return;/)
+    expect(src.match(/new ThreadError\('not_reacted'/g)).toHaveLength(1)
+    expect(THREADS_KNOWN_RULE).toContain('with user_words quoting him')
+    expect(Object.keys(getOp('thread_update')!.input)).toContain('user_words')
   })
 
   it('a thread the node opened files his reply under it', () => {

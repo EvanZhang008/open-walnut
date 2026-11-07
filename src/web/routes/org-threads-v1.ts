@@ -10,7 +10,7 @@
  *                                                          `shown` is his view's rule over all of them; 503 primary_only on the companion)
  *   GET   /api/v1/tasks/:id/threads/:thread                { task_id, thread }  (one thread whole, its `shown` as above)
  *   POST  /api/v1/tasks/:id/threads                        { text, images?, thread? } -> file one of his messages
- *   PATCH /api/v1/tasks/:id/threads/:thread                { title?, ask?, state?, user_kind?, user_kind_why?, same_ask_reason?, reply?, tasks?, add_tasks?, known?, close?, reopen?, snooze?, pin?, merge_into? }
+ *   PATCH /api/v1/tasks/:id/threads/:thread                { title?, ask?, state?, user_kind?, user_kind_why?, same_ask_reason?, reply?, tasks?, add_tasks?, known?, close?, user_words?, reopen?, snooze?, pin?, merge_into? }
  *   POST  /api/v1/tasks/:id/threads/open                   { title, text, from, ref?, state?, user_kind?, user_kind_why?, same_ask_reason?, tasks? } -> the node opens one itself
  *   POST  /api/v1/tasks/:id/threads/:thread/split          { message } -> that message becomes its own thread
  *
@@ -201,7 +201,7 @@ orgThreadsV1Router.patch('/tasks/:id/threads/:thread', route(async (req, res) =>
   const by = await writerOf(req)
   const mergeInto = str(b, 'merge_into')
   const patch: ThreadPatch = {}
-  for (const k of ['title', 'ask', 'reply', 'state', 'close', 'known', 'snooze', 'user_kind', 'user_kind_why', 'same_ask_reason'] as const) {
+  for (const k of ['title', 'ask', 'reply', 'state', 'close', 'known', 'snooze', 'user_kind', 'user_kind_why', 'same_ask_reason', 'user_words'] as const) {
     const v = str(b, k)
     if (v !== undefined) (patch as Record<string, unknown>)[k] = v
   }
