@@ -24,6 +24,7 @@ import { saveConfig, getConfig } from '../../src/core/config-manager.js';
 import { describe as describeAction, run } from '../../src/actions/inbox-triage-batch.js';
 import { TRIAGE_ACTION_ID } from '../../src/core/triage/types.js';
 import { TRIAGE_STATE_NOTE } from '../../src/core/triage/batch.js';
+import { routingRulesPath } from '../../src/core/triage/routing-rules.js';
 import {
   ackTriageClaim,
   loadTriageState,
@@ -119,6 +120,23 @@ describe('the action itself', () => {
     expect(result.invoke).toBe(true);
     expect(result.content).toContain('nothing new was reported');
     expect(result.content).not.toContain('completed with no output');
+  });
+
+  it('a routing rules file it cannot read holds the batch: nothing is claimed, the next run gets the items', async () => {
+    const file = routingRulesPath(WALNUT_HOME);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, JSON.stringify({ version: 1, rules: 'not a list' }), 'utf-8');
+    try {
+      await recordTriageArrivals({ slack: slackRows(3) });
+      const held = await run(ctx);
+      expect(held.invoke).toBe(false);
+      expect(held.status).toBe('skipped');
+      expect(held.content).toMatch(/routing rules could not be read/);
+    } finally {
+      await fs.rm(file, { force: true });
+    }
+    const next = await run(ctx);
+    expect((next.content ?? '').split('\n')[0]).toBe('WALNUT_TRIAGE_COUNT: 3');
   });
 
   it('a missing State.md is a sentence, not a failure', async () => {

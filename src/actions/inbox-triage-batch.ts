@@ -82,13 +82,25 @@ export async function run(ctx: ActionContext): Promise<ActionResult> {
     };
   }
 
+  // The standing routing rules ride every batch (routing-rules.ts), read before anything is
+  // claimed: a rules file that cannot be read is not "no rules" (every item a rule covers would
+  // go to triage as unrouted mail), so the run waits and the items stay for the next one.
+  let allRules: TriageRoutingRule[];
+  try {
+    allRules = await readRoutingRules(home);
+  } catch (err) {
+    return {
+      invoke: false,
+      status: 'skipped',
+      content: `The routing rules could not be read (${err instanceof Error ? err.message : String(err)}) — no batch this run; the items wait for the next one.`,
+    };
+  }
   const nowMs = Date.now();
   const claimed = await claimTriageBatch(nowMs, home);
   const stateDoc = await readStateNote(home);
-  // The standing routing rules ride every batch (routing-rules.ts); a bad file costs only them.
   // A rule whose task is complete or gone sits out: it must not win the first match and keep a
   // later rule (to open work) from routing the item.
-  const rules = await liveRules(await readRoutingRules(home).catch(() => []));
+  const rules = await liveRules(allRules);
 
   const batch = buildTriageBatch({
     mail: claimed.mail,

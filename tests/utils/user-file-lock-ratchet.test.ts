@@ -52,6 +52,7 @@ const STORE_LOCKS = new Set<string>([
   'src/core/suggest-accuracy.ts: file',                         // suggestion accuracy stats
   'src/core/task-manager.ts: TASKS_FILE',                       // the task store
   'src/core/triage/runs.ts: file',                              // triage run log
+  'src/core/triage/routing-rules.ts: file',                     // WALNUT_HOME/triage/routing-rules.json
   'src/core/triage/state.ts: file',                             // triage state
   'src/providers/daemon-service-files.ts: ownershipPath',       // daemon dir ownership record
   'src/providers/session-host.ts: manifest',                    // ~/Library/Application Support/Open Walnut/session-host-launch.json: Walnut's own, read by Walnut.app; the deploy and the server approve under one lock whatever their data homes

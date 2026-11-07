@@ -14,12 +14,14 @@
  * name and address, a Slack message's author and conversation), `subject` against a mail's subject
  * or a Slack message's text; a rule with both needs both.
  *
- * File: `<WALNUT_HOME>/triage/routing-rules.json`, one writer at a time (updateJsonFile's lock).
+ * File: `<WALNUT_HOME>/triage/routing-rules.json`, one writer at a time (withFileLock). Only a missing file reads as no rules; anything else that is not a valid table throws (readRulesFile).
  * Paths come from the caller, because the batch action is its own bundle (actions/inbox-triage-batch.ts).
  */
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { readJsonFile, updateJsonFile } from '../../utils/fs.js';
+import fs from 'node:fs/promises';
+import { writeJsonFile } from '../../utils/fs.js';
+import { withFileLock } from '../../utils/file-lock.js';
 
 export const ROUTING_RULES_FILE = path.join('triage', 'routing-rules.json');
 export const MAX_ROUTING_RULES = 200;
@@ -123,25 +125,54 @@ function normalizeRule(raw: unknown): TriageRoutingRule | null {
   };
 }
 
-function normalizeFile(raw: unknown): RoutingRulesFile {
-  const rules = Array.isArray((raw as { rules?: unknown } | null)?.rules)
-    ? ((raw as { rules: unknown[] }).rules.map(normalizeRule).filter(Boolean) as TriageRoutingRule[])
-    : [];
+/** The rules file is there but is not a rules table Walnut can read: never taken for no rules. */
+function unreadable(file: string, why: string): RoutingRuleError {
+  return new RoutingRuleError(`The routing rules at ${file} cannot be read: ${why}. Nothing was changed; fix or remove the file.`, 'rules_unreadable', 503);
+}
+
+function parseRulesFile(file: string, content: string): RoutingRulesFile {
+  if (!content.trim()) throw unreadable(file, 'the file is empty');
+  let raw: unknown;
+  try { raw = JSON.parse(content); } catch (err) { throw unreadable(file, `it is not JSON (${err instanceof Error ? err.message : String(err)})`); }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw unreadable(file, 'it is not an object');
+  const doc = raw as { version?: unknown; rules?: unknown };
+  if (doc.version !== 1) throw unreadable(file, `its version is ${JSON.stringify(doc.version ?? null)}, not 1`);
+  if (!Array.isArray(doc.rules)) throw unreadable(file, '`rules` is not a list');
+  const rules = doc.rules.map((r, i) => {
+    const rule = normalizeRule(r);
+    if (!rule) throw unreadable(file, `rule ${i + 1} has no valid id, task or match`);
+    return rule;
+  });
   return { version: 1, rules };
 }
 
+// Only a missing file is no rules. A read that failed (EACCES, EMFILE, an I/O error), an empty
+// file, a wrong version, `rules` not a list or a rule Walnut cannot read throws: read as "no
+// rules" it would hand every item a rule covers to triage as unrouted mail, and a write that
+// started from it would replace the whole table with an empty one.
+async function readRulesFile(file: string): Promise<RoutingRulesFile> {
+  let content: string;
+  try {
+    content = await fs.readFile(file, 'utf-8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return { version: 1, rules: [] };
+    throw unreadable(file, err instanceof Error ? err.message : String(err));
+  }
+  return parseRulesFile(file, content);
+}
+
 export async function readRoutingRules(home: string): Promise<TriageRoutingRule[]> {
-  return normalizeFile(await readJsonFile<unknown>(routingRulesPath(home), null)).rules;
+  return (await readRulesFile(routingRulesPath(home))).rules;
 }
 
 async function mutate<R>(home: string, fn: (file: RoutingRulesFile) => R): Promise<R> {
-  let out!: R;
-  await updateJsonFile<unknown>(routingRulesPath(home), null, (raw) => {
-    const file = normalizeFile(raw);
-    out = fn(file);
-    return file;
+  const file = routingRulesPath(home);
+  return withFileLock(file, async () => {
+    const current = await readRulesFile(file);
+    const out = fn(current);
+    await writeJsonFile(file, current);
+    return out;
   });
-  return out;
 }
 
 export interface RoutingRuleInput {

@@ -45,7 +45,7 @@ import { addTask, updateTaskRaw } from '../../src/core/task-manager.js';
 import { createSessionRecord } from '../../src/core/session-tracker.js';
 import { executeOp } from '../../src/ops/index.js';
 import { buildTriageBatch } from '../../src/core/triage/batch.js';
-import { readRoutingRules } from '../../src/core/triage/routing-rules.js';
+import { readRoutingRules, routingRulesPath } from '../../src/core/triage/routing-rules.js';
 
 let server: Server;
 let root: string;
@@ -243,5 +243,24 @@ describe('every batch reads the rules, and an item goes to its task named by its
     // A string `enabled` is refused, not ignored; an unknown rule is 404 before any task check.
     expect((await http('POST', '/triage/routing-rules', { from: 'x.example', task_id: ownerId, enabled: 'false' })).status).toBe(400);
     expect((await http('PATCH', '/triage/routing-rules/rr-none', { task_id: doneId })).status).toBe(404);
+  });
+});
+
+describe('a rules file that cannot be read', () => {
+  it('the routes and ops answer 503 rules_unreadable, never an empty list, and a write changes nothing', async () => {
+    const file = routingRulesPath(WALNUT_HOME);
+    const before = await fs.readFile(file, 'utf-8');
+    await fs.writeFile(file, JSON.stringify({ version: 1, rules: 'not a list' }), 'utf-8');
+    try {
+      const list = await http('GET', '/triage/routing-rules');
+      expect(list.status).toBe(503);
+      expect(JSON.stringify(await list.json())).toContain('rules_unreadable');
+      expect((await http('POST', '/triage/routing-rules', { from: 'more.example', task_id: ownerId })).status).toBe(503);
+      expect((await op('triage_rule_list', {})).ok).toBe(false);
+      expect(await fs.readFile(file, 'utf-8')).toBe(JSON.stringify({ version: 1, rules: 'not a list' }));
+    } finally {
+      await fs.writeFile(file, before, 'utf-8');
+    }
+    expect((await http('GET', '/triage/routing-rules')).status).toBe(200);
   });
 });

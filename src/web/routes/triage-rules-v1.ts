@@ -125,7 +125,7 @@ triageRulesV1Router.get(BASE, async (_req: Request, res: Response, next: NextFun
   try {
     const rules = await readRoutingRules(WALNUT_HOME)
     res.json({ rules: await Promise.all(rules.map(view)) })
-  } catch (err) { next(err) }
+  } catch (err) { if (!routingError(res, err)) next(err) }
 })
 
 async function write(req: Request, res: Response, id: string | undefined): Promise<void> {
@@ -180,11 +180,11 @@ async function write(req: Request, res: Response, id: string | undefined): Promi
 }
 
 triageRulesV1Router.post(BASE, async (req: Request, res: Response, next: NextFunction) => {
-  try { await write(req, res, undefined) } catch (err) { next(err) }
+  try { await write(req, res, undefined) } catch (err) { if (!routingError(res, err)) next(err) }
 })
 
 triageRulesV1Router.patch(`${BASE}/:id`, async (req: Request, res: Response, next: NextFunction) => {
-  try { await write(req, res, String(req.params.id ?? '')) } catch (err) { next(err) }
+  try { await write(req, res, String(req.params.id ?? '')) } catch (err) { if (!routingError(res, err)) next(err) }
 })
 
 triageRulesV1Router.delete(`${BASE}/:id`, async (req: Request, res: Response, next: NextFunction) => {
@@ -199,7 +199,7 @@ triageRulesV1Router.delete(`${BASE}/:id`, async (req: Request, res: Response, ne
     }
     log.web.info('triage routing rule deleted', { ruleId: id, by: author.by, byTask: author.taskId })
     res.json({ deleted: true })
-  } catch (err) { next(err) }
+  } catch (err) { if (!routingError(res, err)) next(err) }
 })
 
 /** The words the routed task reads first: which rule sent the item, and how to change it. */
@@ -284,7 +284,7 @@ triageRulesV1Router.post(`${BASE}/:id/route`, async (req: Request, res: Response
       }
       throw err
     }
-  } catch (err) { next(err) }
+  } catch (err) { if (!routingError(res, err)) next(err) }
 })
 
 async function startWithItem(
