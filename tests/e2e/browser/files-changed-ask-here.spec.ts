@@ -574,6 +574,9 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
 
     test('Changed: a split diff: the new side and the left copy of an unchanged line are asked about; a removed line only quoted', async ({ page, request }) => {
       const panel = await openSession(page)
+      // Split needs a code pane of AUTO_SPLIT_MIN_W (720px) beside the file tree and the
+      // chat (SessionDiffView): narrower, it shows unified ("unified: too narrow to split").
+      await page.setViewportSize({ width: 1760, height: 900 })
       const diff = await openChanged(panel, GO_FILE)
       // Split needs a diff pane two code columns wide (856fd6db5): beside the
       // chat at 1400px the pane is about 580px, so Split reads unified and says
