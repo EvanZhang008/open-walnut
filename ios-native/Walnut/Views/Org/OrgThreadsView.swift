@@ -104,11 +104,11 @@ struct OrgThreadsView: View {
                 // and nothing ends under the floating tab bar.
                 .padding(.bottom, 240)
             }
-            // Pinned under the page's switch while there are cards, so a jump is one tap from
+            // Pinned under the page's switch while it lists threads, so a jump is one tap from
             // anywhere in the list (r10 review: it scrolled away with the cards), and the page keeps
             // one header as a snooze or an acknowledge takes a card away (r8 review).
             .safeAreaInset(edge: .top, spacing: 0) {
-                if store.threads != nil, !sections.open.isEmpty {
+                if showsJumps(sections) {
                     jumps(sections, proxy: proxy)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 4)
@@ -172,6 +172,12 @@ struct OrgThreadsView: View {
 
     /// The count of cards for him, and one tap to each fold below them (2026-11-04 review: a
     /// dozen screens of cards before them).
+    private func showsJumps(_ s: OrgThreadModel.Sections) -> Bool {
+        guard store.threads != nil else { return false }
+        let unreadable = OrgThreadModel.unreadCount(serverCount: store.shownCount, nodeCount: nodeShown, read: s.open.count) != nil
+        return s.showsJumps(unreadable: unreadable)
+    }
+
     private func jumps(_ s: OrgThreadModel.Sections, proxy: ScrollViewProxy) -> some View {
         let items: [(id: String, label: String, count: Int, open: Binding<Bool>)] = [
             ("snoozed", "Snoozed", s.snoozed.count, foldBinding("snoozed")),

@@ -29,6 +29,14 @@ enum OrgThreadModel {
         var inProgress: [OrgThread] = []
         /// Closed this week.
         var closed: [OrgThread] = []
+
+        /// The jump bar stays while the page lists any thread, the last card for him gone included
+        /// (r11 review: acknowledging the last one took the bar away with 159 closed below); not on
+        /// a read that could not bring the threads its counts name (`unreadable`).
+        func showsJumps(unreadable: Bool) -> Bool {
+            if open.isEmpty && unreadable { return false }
+            return !open.isEmpty || !snoozed.isEmpty || !inProgress.isEmpty || !closed.isEmpty
+        }
     }
 
     // MARK: - Exchanges

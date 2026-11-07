@@ -265,4 +265,17 @@ final class OrgThreadModelTests: XCTestCase {
         XCTAssertFalse(OrgThreadModel.inView(still, shared: [], now: Self.now))
         XCTAssertEqual(OrgThreadModel.sections([still], now: Self.now).snoozed.map(\.id), ["th-000014"])
     }
+    func testTheJumpBarStaysWhenTheLastCardForHimIsGone() throws {
+        let closed = try t("th-000021", extra: #","closed":{"how":"acked","at":"2026-11-04T10:00:00Z","by":"human"}"#)
+        let working = try t("th-000022", state: "working")
+        // Acknowledging his last card leaves in-progress and closed threads: the bar stays.
+        let s = OrgThreadModel.sections([closed, working], now: Self.now)
+        XCTAssertTrue(s.open.isEmpty)
+        XCTAssertTrue(s.showsJumps(unreadable: false))
+        // A read that brought none of the counted threads says so instead.
+        XCTAssertFalse(s.showsJumps(unreadable: true))
+        XCTAssertFalse(OrgThreadModel.Sections().showsJumps(unreadable: false))
+        let open = OrgThreadModel.sections([try t("th-000023", state: "needs")], now: Self.now)
+        XCTAssertTrue(open.showsJumps(unreadable: true))
+    }
 }
