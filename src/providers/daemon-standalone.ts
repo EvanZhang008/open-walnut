@@ -2534,7 +2534,7 @@ function handleCommand(ws: ServerWebSocket<WsData>, msg: string) {
 
 /** What this daemon's hello advertises: also what its serves file records. */
 function helloCapabilities(): string[] {
-  return [...ADVERTISED_DAEMON_CAPABILITIES, 'service-handover-v1', ...(socketPeerPidReady() ? [CALLER_PROOF_CAPABILITY] : []), ...(cronRuntime ? ['cron-supervision-v1', 'service-update-v1'] : []), ...(acp.hostEngines ? ['acp-host-v1'] : [])]
+  return [...ADVERTISED_DAEMON_CAPABILITIES, 'service-handover-v1', ...(cronRuntime ? ['cron-supervision-v1', 'service-update-v1'] : []), ...(acp.hostEngines ? ['acp-host-v1'] : []), ...(socketPeerPidReady() ? [CALLER_PROOF_CAPABILITY] : [])]
 }
 
 /** This Walnut's per-Walnut pushes: an older server sends them naming no home. */

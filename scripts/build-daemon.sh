@@ -183,6 +183,8 @@ SOURCES=(
   src/core/sessions/open-items-text.ts
   src/core/human-inbox/letter-check.ts
   src/providers/git-diff-core.ts
+  src/providers/caller-proof-core.ts
+  src/providers/socket-peer-pid.ts
   src/providers/bridge-uplink-core.ts
   src/providers/workspace-core.ts
   src/providers/line-fate-core.ts

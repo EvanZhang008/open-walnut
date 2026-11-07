@@ -266,6 +266,8 @@ const DAEMON_SOURCE_FILES = [
   'src/core/human-inbox/letter-check.ts',
   // git.diff, run host-side: imported by the standalone twin.
   'src/providers/git-diff-core.ts',
+  'src/providers/caller-proof-core.ts',
+  'src/providers/socket-peer-pid.ts',
   // The paced bridge uplink and loop-drift probe: same import-or-inline rule.
   'src/providers/bridge-uplink-core.ts',
   // Task workspaces (workspace.create / status / remove): same import-or-inline rule.

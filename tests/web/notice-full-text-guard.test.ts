@@ -99,7 +99,9 @@ const KINDS: Record<string, { file: string; how: string; check: (src: string, cs
     check: (src) => {
       // The title opens the whole request; the asking task's name is the way to the task (2026-11-06).
       expect(src).toMatch(/approval-what-open" title="Open the request" data-testid="approval-what" onClick=\{onOpen\}/);
-      expect(src).toMatch(/data-testid="approval-task-link"/);
+      // The task link is AskerLink, shared by the card and the dialog (approval-context.tsx).
+      expect(src).toMatch(/<AskerLink a=\{card\}/);
+      expect(read('web/src/components/approvals/approval-context.tsx')).toMatch(/data-testid="approval-task-link"/);
       expect(src).toContain('data-testid="approval-dialog"');
     },
   },
