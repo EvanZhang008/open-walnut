@@ -706,7 +706,9 @@ bun install                   # Dependencies; git and bun 1.4.4+ are all a check
 bun run build                 # Build server → dist/
 cd web && bun x vite build    # Build React SPA
 cd web && bun x vite          # Frontend hot reload (:5173, proxies to :3456)
-bun run test:quick            # ⭐ DEFAULT: 306 pure-logic files, ~51s
+bun run test:local            # ⭐ DEFAULT: the tests of your change, about a minute
+bun run test:land             # what the land check runs: a few minutes
+bun run test:quick            # the whole quick tier, ~3,200 files
 bun run test                  # Everything CI runs: quick, slow, e2e, frontend, one after another
 ```
 
@@ -716,7 +718,9 @@ Full details: [Testing pipeline](./docs/reference/testing-pipeline.md).
 
 | Layer | Command | Time | When |
 |---|---|---|---|
-| L1 quick | `bun run test:quick` | ~51s | every code change |
+| L0 local | `bun run test:local` | about 1 min | every code change: the change's own tests, fast importers, scan tests |
+| Land | `bun run test:land` | a few min | before a land (the land check runs it) |
+| L1 quick | `bun run test:quick` | ~10 min at 8 workers | a change that reaches far; the push gate runs it |
 | L2 focus | `bun run test:focus <path>` | 0.3 to 30s | one module |
 | L3 pre-commit | `bun run test:pre-commit` | 1 to 6 min | before a larger commit: maps your diff → affected tiers |
 | L4 CI | GitHub Actions, automatic | free | every push/PR |

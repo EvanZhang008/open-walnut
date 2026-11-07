@@ -101,6 +101,8 @@
     "search:robustness": "bun scripts/search-robustness-eval.mjs",
     "test:slow": "bun --bun vitest run --config vitest.slow.config.ts",
     "test:focus": "bun --bun vitest run --config vitest.focus.config.ts",
+    "test:local": "bun scripts/test-layers.mjs run local",
+    "test:land": "bun scripts/test-layers.mjs run land",
     "test:frontend:ci": "bun scripts/test-frontend.mjs",
     "test:changed": "bun scripts/test-changed.mjs",
     "test:baseline": "bun scripts/test-baseline.mjs check",

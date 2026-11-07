@@ -2,6 +2,7 @@ import { defineConfig, mergeConfig } from 'vitest/config';
 import path from 'path';
 import baseConfig from './vitest.config.js';
 import { SLOW_TEST_FILES, SLOW_TEST_DIRS } from './tests/setup/slow-tests.js';
+import { QUARANTINED_TEST_FILES } from './tests/setup/quarantine.js';
 
 /**
  * L1 — the FAST feedback tier (`npm run test:quick`). Target: under 60 seconds.
@@ -72,6 +73,8 @@ config.test!.include = ['tests/**/*.test.ts'];
 config.test!.exclude = [
   ...SLOW_TEST_DIRS,
   ...SLOW_TEST_FILES,
+  // Files that fail at random run in the slow tier (CI, with retries) until fixed: tests/setup/quarantine.ts.
+  ...QUARANTINED_TEST_FILES,
   '**/*.live.test.ts',
   // Frontend-rooted suites — their deps live in web/node_modules and they need a
   // DOM shim, so they run ONLY under their own configs (`npm run test:frontend:ci`).

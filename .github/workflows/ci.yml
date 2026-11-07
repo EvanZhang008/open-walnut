@@ -174,7 +174,7 @@ jobs:
     name: Test (slow)
     runs-on: ubuntu-24.04
     needs: build
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2

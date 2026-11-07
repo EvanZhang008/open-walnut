@@ -1,10 +1,12 @@
 # Testing pipeline
 
-Five layers, chosen so the one you run most often is the one that costs least. Run `bun run test:quick` on every change, `bun run test:pre-commit` before a bigger commit, and let GitHub Actions run everything on push: Actions is free for this repo (public repos get unlimited minutes on GitHub-hosted runners). Cross-machine features additionally need the L5 live journey before they count as done.
+Layers chosen so the one you run most often is the one that costs least. Run `bun run test:local` on every change, `bun run test:land` before you land (the land runs it too), `bun run test:pre-commit` before a bigger commit, and let GitHub Actions run everything on push: Actions is free for this repo (public repos get unlimited minutes on GitHub-hosted runners). Cross-machine features additionally need the L5 live journey before they count as done.
 
 | Layer | Command | Scope | Time | When |
 |---|---|---|---|---|
-| **L1 quick** | `bun run test:quick` | ~2,250 fast test files | ~3 min (1 worker, machine-wide default) | every code change |
+| **L0 local** | `bun run test:local` | the tests of your change: its own tests, the fast direct importers, the fast scan tests | about a minute | every code change |
+| **Land** | `bun run test:land` | the same with the importers up to 30 s each (at most 200) and the scan tests up to 6 s | a few minutes | before a land; the land check runs it |
+| **L1 quick** | `bun run test:quick` | the whole quick tier, ~3,200 files | ~10 min at 8 workers, much longer at 1 | when a change reaches far; the push gate runs it on GitHub |
 | **L2 focus** | `bun run test:focus <path>` | whatever you name | 0.3 to 30 s | while working on one module |
 | **L3 pre-commit** | `bun run test:pre-commit` | the tiers your diff can break | 1 to 6 min | before a larger commit |
 | **Push gate** | `.husky/pre-push` (opt in: `git config walnut.pushGate true`) | CI's quick and frontend tiers, plus the browser specs the push touches, on GitHub's runners | ~25 min | every push to main |
@@ -40,6 +42,21 @@ When to run it: a change to how the Mac deploys to or reaches a host (`daemon-co
 Cost: the first run pulls `node:22-bookworm-slim` and builds the host image (a minute or two); both are cached after that, until `bash scripts/run-fleet-tests.sh clean`. Each container is capped at 1 GB, 1.5 CPUs and 512 processes, and binds on 127.0.0.1 only. It holds a Walnut server, its daemons and one container per host, so run one fleet at a time, on a machine that is not already busy.
 
 What it caught that the cluster could not (2026-10-23): the ControlMaster socket path limit was 100, but `ssh -M` binds `<ControlPath>.<16 random chars>` before renaming it into place, so on macOS (104 bytes) any path of 87 to 100 characters failed with `too long for Unix domain socket`, and that host ran without a master. The cluster has no SSH, so it could never see it.
+
+## L0 and the land layer: the tests of one change
+
+`scripts/test-layers.mjs` picks the tests a change can break, from the quick tier only (never the slow, quarantined, e2e or live files), and runs them (`run local|land`; `plan` lists them with the reason for each, `--base <ref>` is the diff base, `--changed-from <file>` reads the changed paths from a file, `--json <file>` writes the verdict). It reads the per-file times of `tests/setup/test-durations.json` (`bun scripts/test-layers.mjs measure <vitest json report>` rewrites it from a full quick run). A layer is the union of:
+
+- the changed test files;
+- the tests importing a changed file directly, and the tests naming a changed path (`scripts/test-changed-refs.mjs`), within the layer's cost per file (1.5 s local, 30 s land) and count (60 local, 200 land), cheapest first; the rest are left to the push gate, which runs the whole tier;
+- the scan tests: a test named `*ratchet*` or `*guard*`, or one that reads the source tree and starts no server, up to 3 s each local and 6 s for a land. They are rule checks over the whole tree, so any change can break one, and in the land history of 2026-11-01..07 they caught most of the real problems;
+- for a change to the test setup (a vitest config, `tests/setup/`, `package.json`, `bun.lock`), the setup's own tests.
+
+A file that fails is run once more, alone: failing again fails the run, passing alone is reported as flaky and does not; a file that never reports counts as failed. Replayed on the refused lands of 2026-11-05..07, the land layer still selects a real failing test for 24 of 25 real refusals (the files of 4 more were deleted since).
+
+## Quarantine
+
+`tests/setup/quarantine.ts` lists test files that fail at random: on a clean main, or in the land checks of four or more unrelated tasks, and never for a real problem. A listed file leaves the quick tier (so local runs, land checks and the push gate) and runs in the slow tier, which CI runs on every push with retries, so it still runs while it is being fixed. Every entry names its date, reason and evidence; `bun scripts/test-layers.mjs report` names entries older than 21 days. Scan tests are never quarantined: a rule check that times out is made faster. `tests/setup/quick-tier.test.ts` keeps the partition whole.
 
 ## L1 — the fast tier
 

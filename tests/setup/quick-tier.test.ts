@@ -18,6 +18,7 @@ import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import { SLOW_TEST_FILES, SLOW_TEST_DIRS } from './slow-tests.js'
+import { QUARANTINE, QUARANTINED_TEST_FILES } from './quarantine.js'
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../..')
 
@@ -37,6 +38,16 @@ describe('slow-test list hygiene', () => {
   it('lists repo-root-relative paths (so vitest include/exclude match)', () => {
     const bad = [...SLOW_TEST_FILES, ...SLOW_TEST_DIRS].filter((f) => f.startsWith('/') || f.startsWith('./') || !f.startsWith('tests/'))
     expect(bad).toEqual([])
+  })
+})
+
+describe('quarantine list hygiene (tests/setup/quarantine.ts)', () => {
+  it('every entry is a quick-tier file on disk, listed once, with its date, reason and evidence', () => {
+    const bad = QUARANTINE.filter((q) => !fs.existsSync(path.join(REPO_ROOT, q.file)) || !/^\d{4}-\d{2}-\d{2}$/.test(q.since) || q.reason.length < 10 || q.evidence.length < 5)
+    expect(bad.map((q) => q.file)).toEqual([])
+    expect(QUARANTINED_TEST_FILES.filter((f, i) => QUARANTINED_TEST_FILES.indexOf(f) !== i)).toEqual([])
+    // A slow file is already out of the quick tier: listing it here too says nothing.
+    expect(QUARANTINED_TEST_FILES.filter((f) => (SLOW_TEST_FILES as readonly string[]).includes(f))).toEqual([])
   })
 })
 
@@ -117,7 +128,13 @@ describe('quick + slow partition the whole runnable suite', () => {
   it('the slow config includes exactly the slow list and the heavy directories but tests/e2e', async () => {
     const slowConfig: any = (await import('../../vitest.slow.config.js')).default
     const dirs = SLOW_TEST_DIRS.filter((d) => d !== 'tests/e2e/**').map((d) => `${d}/*.test.ts`)
-    expect([...slowConfig.test.include].sort()).toEqual([...SLOW_TEST_FILES, ...dirs].sort())
+    expect([...slowConfig.test.include].sort()).toEqual([...SLOW_TEST_FILES, ...QUARANTINED_TEST_FILES, ...dirs].sort())
+  })
+
+  it('a quarantined file leaves the quick tier and runs in the slow one', async () => {
+    const quickConfig: any = (await import('../../vitest.quick.config.js')).default
+    const exclude: string[] = quickConfig.test.exclude
+    expect(QUARANTINED_TEST_FILES.filter((f) => !exclude.includes(f))).toEqual([])
   })
 
   it('the fast tier holds the bulk of the suite', () => {
