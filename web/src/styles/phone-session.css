@@ -658,6 +658,12 @@
     min-height: 44px;
   }
 
+  /* Changed's comparison button and Hide whitespace sit on rows of their own
+     there: a full 44 px tall box each. */
+  .app-shell-navigation .session-panel :is(.session-diff-compare-trigger, .session-diff-ws-toggle) {
+    min-height: 44px;
+  }
+
   .app-shell-navigation .session-panel .sfe-btn-label {
     display: none;
   }
@@ -669,7 +675,7 @@
 
   .app-shell-navigation :is(.session-panel, .main-page-chat, .draft-session-panel) :is(
     .msg-copy-label, .msg-time, .mode-toggle-pill-label, .session-detail-model-pill, .composer-model-pill-short,
-    .sfe-arrow, .session-diff-base-help, .session-diff-ai-toggle, .session-diff-commit-btn,
+    .sfe-arrow, .session-diff-base-help, .session-diff-ai-toggle, .session-diff-commit-btn, .session-diff-ws-toggle,
     .chat-earlier-label, .chat-earlier-divider span
   ),
   html body .task-kebab-menu :is(.task-kebab-date-caret, .task-kebab-project-caret, .task-kebab-status-caret) {
