@@ -117,4 +117,17 @@ test('search filters the Pinned tiers and the Recent list like the Tasks list', 
   await expect(focusCard(pinnedMatch)).toBeVisible();
   await selectSection(page, 'Recent');
   await expect(recentCard(recentMiss)).toBeVisible();
+
+  // A search typed while on Recent narrows Recent itself (2026-11-07 verifier: it jumped to the
+  // all-task results), a completed task it lists included: Recent keeps every state.
+  expect((await request.post(`/api/tasks/${recentMatch}/complete`)).ok()).toBe(true);
+  await page.locator('#home-task-navigation .todo-search-input').click();
+  await page.keyboard.type(token);
+  await expect(recentCard(recentMiss)).toHaveCount(0, { timeout: 5_000 });
+  await expect(recentCard(recentMatch)).toBeVisible();
+  await expect(page.locator('.todo-search-results')).toHaveCount(0);
+  await expect(page.locator('.fb-row-lead')).toHaveText('Searching Recent');
+  await page.locator('.todo-search-clear').click();
+  await expect(recentCard(recentMiss)).toBeVisible({ timeout: 5_000 });
+  await expect(recentCard(recentMatch)).toBeVisible();
 });

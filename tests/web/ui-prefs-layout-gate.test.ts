@@ -100,4 +100,24 @@ describe('boot merge of the tasks opened lately (utils/recent-opened.ts)', () =>
     const sent = puts.find((b) => KEY in b.prefs)?.prefs[KEY] as { v: string } | undefined
     expect(JSON.parse(sent!.v).map((e: { id: string }) => e.id)).toEqual(['phone-open', 'offline-open'])
   })
+
+  it("a write sent after another device's keeps both: the PUT carries the union, stamped newer", async () => {
+    serverPrefs.value = {}
+    await boot(false)
+    const events: string[] = []
+    Object.assign(globalThis.window, { dispatchEvent: (e: { key?: string }) => { events.push(e.key ?? ''); return true } })
+    Object.assign(globalThis, { StorageEvent: class { type: string; key: string; constructor(type: string, init: { key: string }) { this.type = type; this.key = init.key } } })
+    // Another device opened B after this window last read the server (inside the pull's 15 s gap).
+    serverPrefs.value = { [KEY]: { v: JSON.stringify([{ id: 'B', at: '2026-11-07T09:00:05.000Z' }]), ts: 10 ** 13 } }
+    puts.length = 0
+    vi.useFakeTimers()
+    localStorage.setItem(KEY, JSON.stringify([{ id: 'A', at: '2026-11-07T09:00:00.000Z' }]))
+    await vi.advanceTimersByTimeAsync(1_000)
+    vi.useRealTimers()
+    const sent = puts.find((b) => KEY in b.prefs)?.prefs[KEY] as { v: string; ts: number } | undefined
+    expect(JSON.parse(sent!.v).map((e: { id: string }) => e.id)).toEqual(['B', 'A'])
+    expect(sent!.ts).toBeGreaterThan(10 ** 13)
+    expect(JSON.parse(local.getItem(KEY)!).map((e: { id: string }) => e.id)).toEqual(['B', 'A'])
+    expect(events).toContain(KEY)
+  })
 })

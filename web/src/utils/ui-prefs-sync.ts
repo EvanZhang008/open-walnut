@@ -138,9 +138,38 @@ function takePending(): Record<string, PrefEntry> | null {
   return prefs;
 }
 
+/**
+ * A list both sides add to (MERGED_KEYS): read the server's copy just before the PUT and send
+ * the union, stamped newer than it, so an open another device saved since this window last
+ * looked is kept rather than replaced. This window takes the union too, unless the key
+ * changed again meanwhile (that write queues its own merge).
+ */
+async function mergeWithServer(prefs: Record<string, PrefEntry>): Promise<void> {
+  for (const [key, entry] of Object.entries(prefs)) {
+    const merge = MERGED_KEYS[key];
+    if (!merge || typeof entry.v !== 'string') continue;
+    try {
+      const res = await apiGet<{ prefs?: Record<string, PrefEntry> }>(
+        '/api/ui-prefs', { key }, { timeoutMs: 2500, priority: 'low' },
+      );
+      const theirs = res?.prefs?.[key];
+      if (!theirs || typeof theirs.v !== 'string') continue;
+      const mine = entry.v;
+      const merged = merge(mine, theirs.v);
+      entry.ts = Math.max(entry.ts, theirs.ts + 1);
+      if (merged === mine) continue;
+      entry.v = merged;
+      if (rawGet.call(localStorage, key) !== mine) continue;
+      rawSet.call(localStorage, key, merged);
+      window.dispatchEvent(new StorageEvent('storage', { key, newValue: merged }));
+    } catch { /* offline: PUT this window's copy; the next boot merge unions them */ }
+  }
+}
+
 async function flush() {
   const prefs = takePending();
   if (!prefs) return;
+  await mergeWithServer(prefs);
   try {
     await apiPut('/api/ui-prefs', { prefs });
   } catch {

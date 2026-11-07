@@ -2651,9 +2651,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // so the best hit is first no matter where it lives. Tabs stay usable during a
   // search via the ephemeral
   // `searchSection` override; the persisted tab is untouched, so clearing the query
-  // restores the pre-search view.
+  // restores the pre-search view. Recent is the exception: a search typed there narrows the
+  // Recent list itself (finding what was opened is what the tab is for).
   isSearchModeRef.current = isSearchMode;
-  const rawSection: TodoSection = isSearchMode ? (searchSection ?? 'all') : jumpLive ? projectJumpSection(projectJump, activeSection) : activeSection;
+  const rawSection: TodoSection = isSearchMode ? (searchSection ?? (activeSection === 'recent' ? 'recent' : 'all')) : jumpLive ? projectJumpSection(projectJump, activeSection) : activeSection;
   // The home Filter has no Pinned dimension (spec 3.2), so the view is the section.
   const effectiveSection: TodoSection = rawSection;
 
@@ -5124,14 +5125,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     return list.filter(task => keep.has(task.id));
   }, [filterResult.list, dedupePinned, displayedPinIds]);
   // The filter chips leave Recent alone (it lists what was opened, whatever its state); a
-  // search narrows it to the matches, as it does every list. A row read in by id (outside the
-  // board list, so outside the search's own task set) matches on its title and fields.
+  // search narrows it to the matches, as it does every list. A row the search's own set leaves
+  // out (read in by id outside the board list, or a completed one the search hides) matches on
+  // its title and fields: Recent keeps every state.
   const visibleRecentTasks = useMemo(() => {
     if (!isSearchMode) return recentTasks;
     const lowerQuery = deferredSearchQuery.trim().toLowerCase();
-    return recentTasks.filter((task) => visibleTaskIds.has(task.id)
-      || (recentOpened.outside.has(task.id) && taskMatchesLiterally(task, lowerQuery)));
-  }, [recentTasks, visibleTaskIds, isSearchMode, deferredSearchQuery, recentOpened.outside]);
+    return recentTasks.filter((task) => visibleTaskIds.has(task.id) || taskMatchesLiterally(task, lowerQuery));
+  }, [recentTasks, visibleTaskIds, isSearchMode, deferredSearchQuery]);
   const visibleRecentIds = useMemo(
     () => visibleRecentTasks.map(recentStaticId),
     [recentStaticId, visibleRecentTasks],
@@ -7532,13 +7533,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     archiveLoading,
     search: {
       active: isSearchMode,
+      lead: effectiveSection === 'recent' ? 'Searching Recent' : null,
       includeComplete: isSearchMode && statusIsDefault && searchDoneCount > 0
         ? { count: searchDoneCount, on: showDoneResults, toggle: toggleIncludeComplete }
         : null,
     },
     viewItem: viewItemLabel ? { label: viewItemLabel } : null,
     openDisplay: () => homeFilters.setMenuOpen(true),
-  }), [homeFilters, filterCount, archiveLoading, isSearchMode, statusIsDefault, searchDoneCount, showDoneResults, toggleIncludeComplete, viewItemLabel]);
+  }), [homeFilters, filterCount, archiveLoading, isSearchMode, effectiveSection, statusIsDefault, searchDoneCount, showDoneResults, toggleIncludeComplete, viewItemLabel]);
   const footerTasks = useMemo(() => footerScope(tasks, effectiveSection, {
     pinned: pinnedTaskIds, focus: focusTaskIds, wait: waitTaskIds, custom: customTierIds,
   }), [tasks, effectiveSection, pinnedTaskIds, focusTaskIds, waitTaskIds, customTierIds]);

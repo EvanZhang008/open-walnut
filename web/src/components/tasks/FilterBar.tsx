@@ -260,7 +260,7 @@ export function FilterBar({ controller: c }: FilterBarProps) {
     >
       <div ref={chipsRef} className="fb-row-chips">
         {c.search.active && (
-          <span className="fb-row-lead">{chips.length > 0 ? 'Search uses these filters' : 'Searching all tasks'}</span>
+          <span className="fb-row-lead">{chips.length > 0 ? 'Search uses these filters' : (c.search.lead ?? 'Searching all tasks')}</span>
         )}
         {inc && (
           <button type="button" className="fb-toggle" tabIndex={0} aria-pressed={inc.on} onClick={inc.toggle}>

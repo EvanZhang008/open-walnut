@@ -152,6 +152,8 @@ export interface FilterBarController {
   archiveLoading: boolean;
   search: {
     active: boolean;
+    /** The row's lead when no chip narrows the search (null = "Searching all tasks"). */
+    lead?: string | null;
     includeComplete: { count: number; on: boolean; toggle(): void } | null;
   };
   viewItem: { label: string } | null;
