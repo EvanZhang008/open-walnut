@@ -39,6 +39,7 @@ import {
   type SecretHoldNotice,
 } from '../../src/integrations/git-sync-secrets.js';
 import { WALNUT_HOME } from '../../src/constants.js';
+import { measureLoopHold } from '../helpers/loop-hold.js';
 
 // ── Fake credentials, built at runtime ─────────────────────────────────────
 
@@ -372,17 +373,12 @@ describe('auto-commit with the secret guard', () => {
   it('scans a big first commit without stalling: 6 MB of transcripts', async () => {
     const line = JSON.stringify({ role: 'assistant', text: 'ran npm test, 42 passed, accessToken() returns the cached value' });
     for (let i = 0; i < 6; i++) await writeFile(`sessions/transcripts/t${i}.json`, Array.from({ length: 9000 }, () => line).join('\n'));
-    let longestGap = 0;
-    let last = Date.now();
-    const timer = setInterval(() => { const now = Date.now(); longestGap = Math.max(longestGap, now - last); last = now; }, 5);
     const started = Date.now();
-    try {
-      expect(await commitIfDirty()).toBe(true);
-    } finally {
-      clearInterval(timer);
-    }
+    // Judged on the loop thread's CPU, so a loaded runner's scheduling delay is no stall.
+    const { value: committed, gapMs, holdMs } = await measureLoopHold(() => commitIfDirty(), 5);
+    expect(committed).toBe(true);
     expect(Date.now() - started).toBeLessThan(10_000);
-    expect(longestGap).toBeLessThan(500);
+    expect(holdMs, `loop held ${Math.round(holdMs)} ms of CPU (longest wall gap ${Math.round(gapMs)} ms)`).toBeLessThan(500);
     expect(notices).toEqual([]);
   }, 30_000);
 });

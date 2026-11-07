@@ -85,6 +85,7 @@ import { recordRemap } from '../../../src/core/offline-merge/ledger.js'
 import { buildTaskProjection } from '../../../src/core/task-projection.js'
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { heuristicShortTitle } from '../../../src/core/sessions/task-title-brake.js'
+import { measureLoopHold } from '../../helpers/loop-hold.js'
 
 let seqN = 900
 let opN = 0
@@ -404,15 +405,11 @@ describe('a long text both sides rewrote is merged off the event loop', () => {
     expect((await getTask(id)).description).toBe(lines('mac'))
     // Warm the drain's own imports first, so the probe measures the merge.
     await drain([fieldsRec(id, { priority: { base: 'none', value: 'backlog' } }, { actor: NOT_SESSION })])
-    let last = Date.now()
-    let gap = 0
-    const probe = setInterval(() => { const now = Date.now(); gap = Math.max(gap, now - last); last = now }, 10)
-    try {
-      await drain([fieldsRec(id, { description: { base, value: lines('away') } }, { actor: NOT_SESSION, at: Date.now() + 1000 })])
-    } finally {
-      clearInterval(probe)
-    }
-    expect(gap).toBeLessThan(100)
+    // Judged on the loop thread's CPU, so a loaded runner's scheduling delay is no hold
+    // (2026-11-07: a 149 ms wall gap on a GitHub runner where the drain itself held ~40 ms).
+    const { gapMs, holdMs } = await measureLoopHold(() =>
+      drain([fieldsRec(id, { description: { base, value: lines('away') } }, { actor: NOT_SESSION, at: Date.now() + 1000 })]))
+    expect(holdMs, `loop held ${Math.round(holdMs)} ms of CPU (longest wall gap ${Math.round(gapMs)} ms)`).toBeLessThan(100)
     // Over budget is one conflict over the whole text, the newer side kept (section 6): the
     // away write is newer here, so it wins and the Mac's text is in the conflict log.
     expect((await getTask(id)).description).toBe(lines('away'))

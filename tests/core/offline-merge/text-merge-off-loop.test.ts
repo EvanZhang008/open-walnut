@@ -7,24 +7,11 @@
  * A worker merge answers exactly what the inline merge answers.
  */
 import { describe, it, expect } from 'vitest'
-import { performance } from 'node:perf_hooks'
+import { measureLoopHold } from '../../helpers/loop-hold.js'
 import { mergeText, mergeTextOffLoop, TEXT_MERGE_DEADLINE_MS, TEXT_MERGE_INLINE_MAX } from '../../../src/core/offline-merge/text-merge.js'
 import { resolveTaskFields, premergeTexts } from '../../../src/core/offline-merge/task-fields.js'
 
 const lines = (n: number, tag: string): string => Array.from({ length: n }, (_, i) => `${tag} line ${i} ${'x'.repeat(8)}\n`).join('')
-
-/** The longest gap between two 10 ms timer ticks while `run` is pending. */
-async function maxLoopGap<T>(run: () => Promise<T>): Promise<{ value: T; gapMs: number }> {
-  let last = performance.now()
-  let gap = 0
-  const probe = setInterval(() => { const now = performance.now(); gap = Math.max(gap, now - last); last = now }, 10)
-  try {
-    const value = await run()
-    return { value, gapMs: Math.max(gap, performance.now() - last) }
-  } finally {
-    clearInterval(probe)
-  }
-}
 
 describe('text merge off the event loop', () => {
   it('a 12,000-line both-sides rewrite never holds the loop over 100 ms; after the deadline the newer side is kept', async () => {
@@ -32,9 +19,10 @@ describe('text merge off the event loop', () => {
     const mac = lines(12_000, 'mac')
     const away = lines(12_000, 'away')
     const started = Date.now()
-    const { value, gapMs } = await maxLoopGap(() => mergeTextOffLoop(base, mac, away))
+    const { value, gapMs, holdMs } = await measureLoopHold(() => mergeTextOffLoop(base, mac, away))
     expect(value).toEqual({ clean: false, conflicts: 1, overBudget: true, timedOut: true })
-    expect(gapMs).toBeLessThan(100)
+    // Judged on the loop thread's CPU, so a loaded runner's scheduling delay is no hold.
+    expect(holdMs, `loop held ${Math.round(holdMs)} ms of CPU (longest wall gap ${Math.round(gapMs)} ms)`).toBeLessThan(100)
     expect(Date.now() - started).toBeLessThan(TEXT_MERGE_DEADLINE_MS + 2_000)
     // The resolver turns that answer into the over-budget row (section 6): one conflict over
     // the whole text, the newer side kept, by the times alone (never the machine's speed).
