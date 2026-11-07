@@ -41,7 +41,8 @@ final class TalkSession {
         case notPaired
         case micDenied
         case micNotAsked
-        case liveActivitiesOff
+        /// Walnut was not on screen: iOS lets no app start recording from the background.
+        case notInFront
         case busy
         case couldNotStart(String)
 
@@ -53,8 +54,8 @@ final class TalkSession {
                 return "Walnut can't use the microphone. Turn it on in the iPhone Settings app, Walnut, Microphone."
             case .micNotAsked:
                 return "Open Walnut once and allow the microphone (Walnut's Settings tab, Action Button), then try again."
-            case .liveActivitiesOff:
-                return "Turn on Live Activities for Walnut in the iPhone Settings app (Walnut, Live Activities), then try again. iOS records in the background only while one shows."
+            case .notInFront:
+                return "Walnut didn't come to the front, so iOS wouldn't let it listen. Open Walnut, then press again."
             case .busy:
                 return "Walnut is still sending what you said. Try again in a moment."
             case .couldNotStart(let reason):
@@ -162,28 +163,42 @@ final class TalkSession {
         case .undetermined where !foreground: throw StartError.micNotAsked
         default: break
         }
+        // Build 160 opened the microphone from the background: every press on a phone was
+        // refused ('!int', "Audio is in use by another app"), and only a phone refuses it.
+        guard foreground else { throw StartError.notInFront }
         phase = .starting
         startedAt = Date()
+        // A field report then says whether Walnut was in front when it asked iOS for the
+        // microphone (build 160 asked from the background and was refused, '!int').
+        AppLog.info("talk", "opening microphone", ["source": source, "inFront": foreground ? "true" : "false"])
         if let failure = await recorder.begin() {
             phase = .idle
             startedAt = nil
             AppLog.warn("talk", "start failed", ["source": source, "reason": failure])
             throw StartError.couldNotStart(failure)
         }
-        // iOS keeps a background recording only while its Live Activity shows; in
-        // the app (Try It) the screen itself shows the take.
-        if !activity.start(state(.listening)), !foreground {
-            recorder.discard()
-            phase = .idle
-            startedAt = nil
-            AppLog.warn("talk", "no live activity, take dropped", ["source": source])
-            throw StartError.liveActivitiesOff
-        }
+        // No Live Activity: the take shows on Walnut's own Talk screen (the user, 2026-11-07:
+        // "walnut don't need live, just make the action button thing").
         phase = .listening
         cue(.started)
         AppLog.info("talk", "listening", ["source": source])
         detector = detectorTemplate
         startMonitor()
+    }
+
+    /// Wait (a few seconds at most) until Walnut is the app on screen: the
+    /// shortcut opens it, and iOS starts the recording only once it is in front.
+    @discardableResult
+    func waitUntilInFront(timeout: TimeInterval = 10) async -> Bool {
+        // A press on a locked phone that starts Walnut cold goes through Face ID, the
+        // launch and the scene before Walnut is active: seconds on an older phone.
+        let deadline = Date().addingTimeInterval(timeout)
+        while !isForeground(), Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        if isForeground() { return true }
+        AppLog.warn("talk", "not in front after wait", ["seconds": String(timeout)])
+        return false
     }
 
     /// End the take and send it in the background, returning at once (the Live

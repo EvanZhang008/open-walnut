@@ -7,7 +7,8 @@ import XCTest
 ///  - a tap on the island opens the list it shows; the expanded island opens each count's own;
 ///  - a tap on a count on the lock screen opens that list, and the chips switch between the three;
 ///  - a row opens its task;
-///  - Settings, Lock Screen, Work card off ends the card.
+///  - the card is off until Settings, Lock Screen, Work card turns it on (the user,
+///    2026-11-07: the Action Button press showed it), and off there ends it again.
 ///
 /// The app is pinned at the demo server with the demo's token as launch arguments, so it
 /// saves no pairing and erases nothing on this simulator.
@@ -43,11 +44,45 @@ final class WorkCardUITests: XCTestCase {
         add(a)
     }
 
+    /// Settings' Work card switch, scrolled into view.
+    private func workCardSwitch(_ app: XCUIApplication) -> XCUIElement {
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10), "Walnut did not come back")
+        let tab = app.tabBars.buttons["Settings"]
+        XCTAssertTrue(tab.waitForExistence(timeout: 10), "no Settings tab")
+        // A tap right after the app comes forward can be lost: tap until Settings shows.
+        for _ in 0..<3 where !tab.isSelected {
+            tab.tap()
+            _ = app.navigationBars["Settings"].waitForExistence(timeout: 3)
+        }
+        let toggle = app.switches["settings.workCard"]
+        for _ in 0..<12 where !toggle.isHittable { app.swipeUp(velocity: .slow) }
+        XCTAssertTrue(toggle.isHittable, "no Work card switch in Settings")
+        return toggle
+    }
+
+    private func flip(_ toggle: XCUIElement) {
+        toggle.switches.firstMatch.exists ? toggle.switches.firstMatch.tap() : toggle.tap()
+    }
+
     @MainActor
     func testTheCardShowsOnTheLockScreenAndItsCountsOpenTheirLists() throws {
         let app = UITestLaunch.launch(Self.demoArguments)
         XCTAssertTrue(app.tabBars.firstMatch.waitForExistence(timeout: 60), "the demo never opened")
-        // The controller reads the numbers when the app comes forward and starts the card.
+        // Off until the user turns it on: nothing in the Dynamic Island yet.
+        sleep(3)
+        XCUIDevice.shared.press(.home)
+        sleep(2)
+        shot("0-off-by-default")
+        XCTAssertFalse(count(springboard, "Needs you").exists, "the work card started before the user turned it on")
+        app.activate()
+        let on = workCardSwitch(app)
+        XCTAssertEqual(on.value as? String, "0", "the work card is off by default")
+        flip(on)
+        XCTAssertEqual(on.value as? String, "1")
+        // Back on Chat, where the rest of the walk starts (a task opened from the card pushes
+        // onto the Tasks tab and hides the tab bar there).
+        app.tabBars.buttons["Chat"].tap()
+        // The controller reads the numbers and starts the card.
         sleep(4)
         shot("1-app-open")
 
@@ -169,13 +204,10 @@ final class WorkCardUITests: XCTestCase {
         let done = element(app, "workcard.sheet.done")
         if done.exists { done.tap() }
         XCTAssertTrue(sheet.waitForNonExistence(timeout: 10), "the list did not close")
-        app.tabBars.buttons["Settings"].tap()
-        let toggle = app.switches["settings.workCard"]
-        for _ in 0..<12 where !toggle.isHittable { app.swipeUp(velocity: .slow) }
-        XCTAssertTrue(toggle.isHittable, "no Work card switch in Settings")
-        XCTAssertEqual(toggle.value as? String, "1", "the work card is on by default")
+        let toggle = workCardSwitch(app)
+        XCTAssertEqual(toggle.value as? String, "1", "the work card's switch did not stay on")
         shot("8-settings")
-        toggle.switches.firstMatch.exists ? toggle.switches.firstMatch.tap() : toggle.tap()
+        flip(toggle)
         XCTAssertEqual(toggle.value as? String, "0")
         sleep(2)
         XCUIDevice.shared.press(.home)
@@ -191,11 +223,6 @@ final class WorkCardUITests: XCTestCase {
         XCTAssertFalse(count(springboard, "Completed").exists, "the card is still on the lock screen after turning it off")
         XCUIDevice.shared.press(.home)
         sleep(1)
-
-        // Back on for whoever uses this simulator next.
-        app.activate()
-        let again = app.switches["settings.workCard"]
-        XCTAssertTrue(again.waitForExistence(timeout: 10))
-        again.switches.firstMatch.exists ? again.switches.firstMatch.tap() : again.tap()
+        // Left off, the default, for whoever uses this simulator next.
     }
 }

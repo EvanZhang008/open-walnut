@@ -1,11 +1,12 @@
 import XCTest
 
 /// Talk to Walnut when the words cannot go out, end to end through real taps:
-///  - the Shortcuts app lists "Talk to Walnut" with no setup, and a tap starts a take without
-///    opening Walnut (a recorded file stands in for the microphone);
-///  - the server is unreachable, so the take is kept and waits to send;
-///  - opening Walnut does not interrupt for it: Settings, Action Button shows it first,
-///    then the setup; its list has the reason, its length, playback, Send Now and Delete.
+///  - the Shortcuts app lists "Talk to Walnut" with no setup, and a tap with Walnut in the
+///    background brings Walnut forward already listening (iOS starts no recording in the
+///    background; a recorded file stands in for the microphone, through the real audio session);
+///  - the server is unreachable, so the take is kept and the panel says so;
+///  - Settings, Action Button shows it first, then the setup; its list has the reason, its
+///    length, playback, Send Now and Delete.
 ///
 /// The app is pinned at a closed local port, so nothing is sent anywhere.
 final class TalkToWalnutUITests: XCTestCase {
@@ -46,18 +47,28 @@ final class TalkToWalnutUITests: XCTestCase {
         XCTAssertTrue(tile.waitForExistence(timeout: 30), "Talk to Walnut is not in the Shortcuts app")
         shot("1-shortcuts-lists-it")
         XCTAssertNotEqual(app.state, .notRunning, "Walnut stopped: the tap would start an unpinned one")
+        XCTAssertNotEqual(app.state, .runningForeground, "Walnut is in front before the press: the test would not show it coming forward")
         tile.tap()
 
-        // Listening, then the pause ends it; the server is unreachable, so it is not sent.
-        for second in 1...14 {
-            sleep(1)
-            if second % 2 == 0 { shot("2-take-\(second)s") }
-        }
+        // The press brings Walnut forward, already listening, on its own screen.
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10), "the shortcut did not bring Walnut forward")
+        let panel = element(app, "talk.panel")
+        XCTAssertTrue(panel.waitForExistence(timeout: 10), "Walnut came forward without the Talk screen")
+        let title = element(app, "talk.panel.title")
+        let listening = expectation(for: NSPredicate(format: "label == 'Listening'"), evaluatedWith: title)
+        XCTAssertEqual(XCTWaiter().wait(for: [listening], timeout: 10), .completed, "the Talk screen never listened: \(title.label)")
+        XCTAssertFalse(labelled(app, "Couldn't start listening").exists, "the microphone was refused")
+        XCTAssertTrue(element(app, "talk.panel.send").exists, "listening without a Send button")
+        XCTAssertTrue(element(app, "talk.panel.cancel").exists, "listening without a Cancel button")
+        shot("2-listening")
 
-        // Back in Walnut: a take Walnut sends by itself does not interrupt.
-        app.activate()
-        XCTAssertFalse(labelled(app, "Waiting to Send").waitForExistence(timeout: 4), "a take that sends by itself popped a sheet")
-        shot("3-no-interruption")
+        // The pause ends it; the server is unreachable, so it waits to send and the panel says so.
+        let waiting = expectation(for: NSPredicate(format: "label == 'Waiting to send'"), evaluatedWith: title)
+        XCTAssertEqual(XCTWaiter().wait(for: [waiting], timeout: 40), .completed, "the take did not end as waiting to send: \(title.label)")
+        XCTAssertTrue(labelled(app, "by itself the next time").exists, "the panel does not say the take goes out later")
+        shot("3-not-sent")
+        element(app, "talk.panel.close").tap()
+        XCTAssertTrue(panel.waitForNonExistence(timeout: 5), "Close left the Talk screen")
 
         // Settings, Action Button: the waiting take comes first, then what it
         // does, the steps, and the other ways.

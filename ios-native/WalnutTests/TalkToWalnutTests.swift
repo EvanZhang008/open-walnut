@@ -139,7 +139,8 @@ final class TalkSessionTests: XCTestCase {
     private var activity: FakeTalkActivity!
     private var outbox: TalkOutbox!
     private var mic: TalkSession.MicAccess = .granted
-    private var foreground = false
+    /// A take starts in front: the Action Button opens Walnut first.
+    private var foreground = true
     private var paired = true
     private var cues: [TalkCue] = []
     private let key = "talk-outbox-test-\(UUID().uuidString)"
@@ -150,7 +151,7 @@ final class TalkSessionTests: XCTestCase {
         activity = FakeTalkActivity()
         outbox = TalkOutbox(key: key)
         mic = .granted
-        foreground = false
+        foreground = true
         paired = true
     }
 
@@ -168,6 +169,21 @@ final class TalkSessionTests: XCTestCase {
         session.tick = .milliseconds(5)
         session.cue = { [unowned self] in self.cues.append($0) }
         return session
+    }
+
+    /// The Action Button opens Walnut before the take: the intent waits until it is in front,
+    /// and says so when it never comes (iOS would refuse the microphone).
+    func testThePressWaitsForWalnutInFrontAndSaysWhenItNeverCame() async {
+        let session = session()
+        foreground = false
+        let never = await session.waitUntilInFront(timeout: 0.2)
+        XCTAssertFalse(never, "a Walnut that never came forward reads as in front")
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(100))
+            self.foreground = true
+        }
+        let came = await session.waitUntilInFront(timeout: 5)
+        XCTAssertTrue(came, "Walnut came forward, but the wait did not see it")
     }
 
     /// Press, press: the words reach the CEO chat once.
@@ -273,7 +289,7 @@ final class TalkSessionTests: XCTestCase {
         let first = try await talk.toggle(source: "test")
         XCTAssertEqual(first, .listening)
         XCTAssertEqual(talk.phase, .listening)
-        XCTAssertEqual(activity.started.map(\.phase), [.listening])
+        XCTAssertTrue(activity.started.isEmpty, "a take shows on Walnut's Talk screen, never as a Live Activity")
 
         let second = try await talk.toggle(source: "test")
         XCTAssertEqual(second, .finishing, "the second press returns before the send")
@@ -439,14 +455,20 @@ final class TalkSessionTests: XCTestCase {
         XCTAssertEqual(talk.phase, .listening, "in the app the system asks for the microphone itself")
     }
 
-    func testWithLiveActivitiesOffABackgroundTakeIsRefusedNotLeftToDieSilently() async throws {
+    /// Build 160 opened the microphone from the background and a phone refused every press.
+    func testATakeNeverOpensTheMicrophoneFromTheBackground() async throws {
+        foreground = false
+        await assertThrows(session(), .notInFront)
+        XCTAssertEqual(recorder.began, 0, "the microphone was asked for from the background")
+        XCTAssertTrue(activity.started.isEmpty)
+    }
+
+    func testLiveActivitiesOffChangeNothing() async throws {
         activity.allow = false
-        await assertThrows(session(), .liveActivitiesOff)
-        XCTAssertEqual(recorder.discarded, 1)
-        foreground = true
         let talk = session()
         try await pressTwice(talk)
-        XCTAssertEqual(talk.phase, .sent("hello"), "in the app the screen shows the take instead")
+        XCTAssertEqual(talk.phase, .sent("hello"))
+        XCTAssertTrue(activity.started.isEmpty)
     }
 
     func testAMicrophoneThatWillNotStartIsReportedAndNothingIsLeftListening() async throws {
@@ -791,11 +813,13 @@ final class TalkBundleTests: XCTestCase {
         XCTAssertEqual(info["CFBundleIdentifier"] as? String, "\(Bundle.main.bundleIdentifier ?? "").widgets")
     }
 
-    func testTheIntentMayStartItsLiveActivityFromTheBackground() {
-        // iOS grants a background Live Activity start only to a LiveActivityIntent;
-        // an AudioRecordingIntent alone is refused, and so is the recording.
-        XCTAssertTrue((TalkToWalnutIntent() as Any) is any LiveActivityIntent)
-        XCTAssertTrue((TalkToWalnutIntent() as Any) is any AudioRecordingIntent)
+    func testTheIntentOpensWalnutAndStartsNoLiveActivity() {
+        // iOS records only for an app in front, so the press opens Walnut; it is no
+        // AudioRecordingIntent (made to record from the background) and no
+        // LiveActivityIntent (the press shows no Live Activity).
+        XCTAssertTrue(TalkToWalnutIntent.openAppWhenRun)
+        XCTAssertFalse((TalkToWalnutIntent() as Any) is any LiveActivityIntent)
+        XCTAssertFalse((TalkToWalnutIntent() as Any) is any AudioRecordingIntent)
     }
 
     func testTheShortcutIsInTheAppsIntentMetadata() throws {

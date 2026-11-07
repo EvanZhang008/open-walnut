@@ -41,6 +41,7 @@ final class TalkLiveActivity: TalkActivityPresenting {
                 content: ActivityContent(state: state, staleDate: nil),
                 pushType: nil
             )
+            AppLog.info("talk", "live activity started", [:])
             return true
         } catch {
             AppLog.error("talk", "live activity refused", ["error": String(describing: error)])

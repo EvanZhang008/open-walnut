@@ -149,10 +149,11 @@ final class UITestLaunchRatchetTests: XCTestCase {
     /// still running right before the tap, so iOS never starts an unpinned Walnut
     /// for it. Anywhere else, or without both, it is an ordinary attach.
     static let shortcutsID = "com.apple.shortcuts"
-    static let shortcutsRunFile = "TalkToWalnutUITests.swift"
+    /// The recorded-file run and the run against a real paired server (TalkRealServerUITests).
+    static let shortcutsRunFiles: Set<String> = ["TalkToWalnutUITests.swift", "TalkRealServerUITests.swift"]
 
     private static func isPinnedShortcutsRun(_ use: AttachSite, file: String) -> Bool {
-        use.bundleID == shortcutsID && file == shortcutsRunFile && use.enclosing.hasPrefix("test")
+        use.bundleID == shortcutsID && shortcutsRunFiles.contains(file) && use.enclosing.hasPrefix("test")
             && shortcutsRunProblems(in: use.body).isEmpty
     }
 

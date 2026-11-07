@@ -68,7 +68,11 @@ final class VoiceTalkRecorder: TalkRecording {
         var started: Bool
         #if DEBUG
         if let path = TalkDebug.replayFile {
+            // The file stands in for the microphone's sound only: the session is
+            // switched on as a real take does it (build 160 shipped a session that
+            // a test's own session hid).
             AppLog.info("talk", "replaying a file as the microphone", ["file": (path as NSString).lastPathComponent])
+            if let refused = await recorder.activateForReplay() { return refused }
             started = recorder._beginReplayTake(source: URL(fileURLWithPath: path))
             if !started { return recorder.errorMessage ?? "Could not replay the test recording." }
             takeID = recorder.liveTakeID
@@ -185,10 +189,11 @@ final class TalkReplayCapture: AudioCapture, AudioLevelSource {
     private let rate: Double
     private let began = Date()
     private var stoppedAt: TimeInterval?
-    /// Silent playback that holds the background audio session, as a real
-    /// recording does: without it iOS freezes a Walnut the intent left in the
-    /// background, and the pause is never heard.
-    private let keepAlive: AVAudioPlayer?
+    /// A real recording of the microphone, thrown away, that holds the session
+    /// the take switched on (`VoiceRecorder.activateForReplay`) as a real take
+    /// does: without one iOS suspends a Walnut the person left mid-take.
+    private let keepAlive: AVAudioRecorder?
+    private let keepAliveURL: URL
 
     init?(url: URL) {
         guard let file = try? AVAudioFile(forReading: url, commonFormat: .pcmFormatInt16, interleaved: true),
@@ -196,12 +201,16 @@ final class TalkReplayCapture: AudioCapture, AudioLevelSource {
               (try? file.read(into: buffer)) != nil, let data = buffer.int16ChannelData else { return nil }
         samples = Array(UnsafeBufferPointer(start: data[0], count: Int(buffer.frameLength)))
         rate = file.processingFormat.sampleRate
-        try? AVAudioSession.sharedInstance().setCategory(.playback, options: [.mixWithOthers])
-        try? AVAudioSession.sharedInstance().setActive(true)
-        keepAlive = try? AVAudioPlayer(contentsOf: url)
-        keepAlive?.volume = 0
-        keepAlive?.numberOfLoops = -1
-        keepAlive?.play()
+        keepAliveURL = FileManager.default.temporaryDirectory.appendingPathComponent("talk-replay-hold-\(UUID().uuidString).caf")
+        keepAlive = try? AVAudioRecorder(url: keepAliveURL, settings: [
+            AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 16_000, AVNumberOfChannelsKey: 1,
+        ])
+        keepAlive?.record()
+    }
+
+    deinit {
+        keepAlive?.stop()
+        try? FileManager.default.removeItem(at: keepAliveURL)
     }
 
     var currentTime: TimeInterval { stoppedAt ?? Date().timeIntervalSince(began) }
@@ -209,6 +218,7 @@ final class TalkReplayCapture: AudioCapture, AudioLevelSource {
     func stop() {
         if stoppedAt == nil { stoppedAt = Date().timeIntervalSince(began) }
         keepAlive?.stop()
+        try? FileManager.default.removeItem(at: keepAliveURL)
     }
 
     /// RMS of the 50 ms before now; silence past the end of the file.

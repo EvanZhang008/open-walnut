@@ -49,7 +49,7 @@ struct TalkSetupView: View {
             }
 
             Section {
-                Text("Press and hold the Action Button, then say anything. Walnut sends it to your CEO chat as your message when you pause, press the Action Button again, or tap Send.")
+                Text("Press and hold the Action Button: Walnut opens, already listening. Say anything; it goes to your CEO chat as your message when you pause, press the Action Button again, or tap Send.")
                     .accessibilityIdentifier("talk.intro")
                 TalkTryRow(talk: talk, error: $tryError)
                 if mic != .granted { micRow }

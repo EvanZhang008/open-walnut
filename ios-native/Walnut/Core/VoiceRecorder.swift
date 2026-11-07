@@ -345,6 +345,10 @@ final class VoiceRecorder: NSObject {
                         }
                     }
                 }
+                // A field report then says which category the phone switched on.
+                AppLog.info("voice", "session active", [
+                    "category": session.category.rawValue, "attempts": String(attempt + 1),
+                ])
                 if attempt > 0 {
                     // Prove the retry earned its keep — otherwise a recovered
                     // activation is indistinguishable from a clean one.
@@ -1102,6 +1106,22 @@ final class VoiceRecorder: NSObject {
     /// 16-bit PCM CAF) played back in real time, so a simulator run of Talk to
     /// Walnut sends real words through the real upload and transcription. The
     /// file is copied into the store like a recorded take.
+    /// Test hook for Talk to Walnut's replayed takes: switch the audio session on
+    /// exactly as `start()` does, so a run on a simulator goes through the same
+    /// session steps as the phone, not a session of the test's own.
+    func activateForReplay() async -> String? {
+        do {
+            try await activateSession()
+            return nil
+        } catch let failure as VoiceSessionActivationFailure {
+            errorMessage = failure.diagnosis.message
+            return failure.diagnosis.message
+        } catch {
+            errorMessage = Self.diagnosticMessage(prefix: "Recording failed", error)
+            return errorMessage
+        }
+    }
+
     func _beginReplayTake(source: URL) -> Bool {
         guard state == .idle, let capture = TalkReplayCapture(url: source) else { return false }
         let id = UUID().uuidString

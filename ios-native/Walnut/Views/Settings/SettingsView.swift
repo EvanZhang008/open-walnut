@@ -26,7 +26,7 @@ struct SettingsView: View {
     @AppStorage(VoiceRecorder.micRouteKey, store: AppPrefs.defaults) private var micRoute = VoiceRecorder.MicRoute.automatic.rawValue
     /// Default is `always` — "send them all", the behavior the user asked for.
     @AppStorage(PushRegistration.modeKey, store: AppPrefs.defaults) private var notificationMode = PushRegistration.Mode.always.rawValue
-    @AppStorage(WorkCardController.enabledKey, store: AppPrefs.defaults) private var workCardEnabled = true
+    @AppStorage(WorkCardController.enabledKey, store: AppPrefs.defaults) private var workCardEnabled = WorkCardController.enabledByDefault
     @State private var push = PushRegistration.shared
     @State private var talkOutbox = TalkOutbox.shared
 

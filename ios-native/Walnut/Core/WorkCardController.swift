@@ -1,6 +1,7 @@
 import ActivityKit
 import Foundation
 import Observation
+import UIKit
 
 /// What the app does with the lock-screen work card on each read of the server's numbers.
 /// Pure: unit-pinned in `WorkCardPlanTests`.
@@ -188,9 +189,13 @@ final class WorkCardController {
     private var again = false
     private var defaults: UserDefaults { AppPrefs.defaults }
 
-    /// The user's switch (Settings, Lock Screen). On by default.
+    /// Off until the user turns it on (the user, 2026-11-07: the Action Button must do one
+    /// thing; build 160 showed this card on a press). Settings reads the same default.
+    nonisolated static let enabledByDefault = false
+
+    /// The user's switch (Settings, Lock Screen). Off by default.
     var enabled: Bool {
-        get { defaults.object(forKey: Self.enabledKey) as? Bool ?? true }
+        get { defaults.object(forKey: Self.enabledKey) as? Bool ?? Self.enabledByDefault }
         set {
             defaults.set(newValue, forKey: Self.enabledKey)
             Task { newValue ? await refresh() : await endNow() }
@@ -340,6 +345,13 @@ final class WorkCardController {
     }
 
     private func start(_ view: WalnutAPI.WorkCardView) {
+        // Only an app in front starts a card. A run that did not open Walnut (the Action Button's
+        // Talk to Walnut) may start Live Activities of its own, and the card must not ride on it:
+        // a press that shows the work card instead of the take reads as the press doing nothing.
+        guard Self.isInFront() else {
+            AppLog.info("workcard", "card start skipped", ["reason": "not-in-front"])
+            return
+        }
         // A card the server ended a moment ago lingers with its last numbers: the new one replaces it.
         for old in Activity<WorkCardAttributes>.activities where old.activityState == .ended {
             Task { await old.end(nil, dismissalPolicy: .immediate) }
@@ -361,6 +373,9 @@ final class WorkCardController {
             AppLog.warn("workcard", "card could not start", ["error": error.localizedDescription])
         }
     }
+
+    /// Whether Walnut is the app on screen. Replaced in tests.
+    static var isInFront: @MainActor () -> Bool = { UIApplication.shared.applicationState == .active }
 
     /// Nothing works any more: the card stays a while with its last numbers. `now`: the user
     /// asked for it to go (the switch off, a disconnect), so it leaves at once.
