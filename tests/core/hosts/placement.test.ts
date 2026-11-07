@@ -534,8 +534,7 @@ describe('each host\'s slots', () => {
     // A hold that ran out gives the slot back.
     const b = await admitHostStart('h-b', 'spare', { automatic: true });
     b(1);
-    await new Promise((r) => setTimeout(r, 5));
-    expect(slotHoldersOn('spare')).toEqual(['h-a']);
+    await vi.waitFor(() => expect(slotHoldersOn('spare')).toEqual(['h-a']));
   });
 
   it('a start admitted before its task existed hands its slot on to the task it made (a routine\'s new run; review round 5, Sol)', async () => {
