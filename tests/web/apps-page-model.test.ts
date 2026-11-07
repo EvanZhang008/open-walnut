@@ -49,7 +49,7 @@ describe('Apps page: built-in entries', () => {
 
   it('matches the search on the name and the line', () => {
     const entries = builtinEntries(coreApps(), createAppPreferences())
-    expect(entries.filter((entry) => builtinMatches(entry, 'TASK')).map((entry) => entry.id)).toEqual(['home', 'home-todo', 'home-agenda', 'tasks'])
+    expect(entries.filter((entry) => builtinMatches(entry, 'TASK')).map((entry) => entry.id)).toEqual(['home', 'home-todo', 'tasks'])
     expect(entries.filter((entry) => builtinMatches(entry, '  ')).length).toBe(entries.length)
   })
 })
