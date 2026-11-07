@@ -23,6 +23,7 @@ import {
   resolveWaitFile, waitBefore, waitUntil, type LineSplitter, type ScanEdge, type WaitFor,
 } from '../../src/providers/host-exec-wait.js'
 import { createMatcher, type Matcher, type MatchResult } from '../../src/providers/host-exec-matcher.js'
+import { measureLoopHold } from '../helpers/loop-hold.js'
 import { testMatcherStart } from '../helpers/wait-matcher.js'
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-host-exec-wait-')))
@@ -545,15 +546,13 @@ describe('the wait on a log', () => {
   it('a pattern that runs away on a line ends the wait as too slow, without holding the loop', async () => {
     const logFile = path.join(root, 'slow.log')
     fs.writeFileSync(logFile, `first\n${'a'.repeat(20_000)}\nlast\n`)
-    let last = performance.now()
-    let gap = 0
-    const tick = setInterval(() => { const t = performance.now(); gap = Math.max(gap, t - last); last = t }, 10)
-    const w = await waitUntil(checkOn(logFile, { output: 'a.*a.*a.*b' }), running, 10_000).finally(() => clearInterval(tick))
+    // Judged on the loop thread's own CPU: a loaded machine stretches a wall-clock gap by itself.
+    const { value: w, holdMs } = await measureLoopHold(() => waitUntil(checkOn(logFile, { output: 'a.*a.*a.*b' }), running, 10_000))
     expect(w).toMatchObject({ matched: null, tooSlow: true })
     // The tested offset stays before the line that ran away (its batch is not counted).
     expect(w.scanned).toBeLessThanOrEqual('first\n'.length)
     expect(w.ms).toBeLessThan(5_000)
-    expect(gap).toBeLessThan(200)
+    expect(holdMs).toBeLessThan(200)
   }, 20_000)
 
   it('waits take turns in the matcher: a wait whose match is at the start answers while another tests a long log', async () => {

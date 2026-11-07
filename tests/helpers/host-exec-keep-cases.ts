@@ -25,6 +25,7 @@ import path from 'node:path'
 import { KEEP_POINTER, daemonCwd, keepMarkWhy, pointerOf, savedBy, shapedLine, trapFirstLine, withKeepMarkSaid } from '../../src/core/hosts/host-exec-keep.js'
 import { sealFor } from '../../src/core/hosts/host-exec-strict.js'
 import { resolveCwd } from '../../src/providers/host-exec-line.js'
+import { guardedPath } from '../setup/exec-guard.js'
 
 export type KeepMode = 'server' | 'shell'
 
@@ -115,7 +116,7 @@ export const KEEP_CASES: KeepCase[] = [
     { command: 'echo "${NEWV-unset}|${KEEPTEST_BASE-unset}|${KEEPTEST_GONE-unset}"', expect: { out: 'unset|changed|back\n' } },
   ] },
   { name: 'a venv-like activate carries PATH and VIRTUAL_ENV, not its deactivate function', steps: [
-    { command: 'mkdir -p venv/bin && printf \'%s\\n\' \'export VIRTUAL_ENV="$PWD/venv"\' \'export PATH="$VIRTUAL_ENV/bin:$PATH"\' \'deactivate() { :; }\' > venv/bin/activate'
+    { command: 'mkdir -p venv/bin && printf \'%s\\n\' \'export VIRTUAL_ENV="$PWD/venv"\' \'export "PATH=$VIRTUAL_ENV/bin:$PATH"\' \'deactivate() { :; }\' > venv/bin/activate'
       + ' && printf \'#!/bin/sh\\necho venv-tool\\n\' > venv/bin/vtool && chmod +x venv/bin/vtool && . venv/bin/activate && vtool', expect: { rc: 0, out: 'venv-tool\n' } },
     { command: 'echo "$VIRTUAL_ENV"; vtool; type deactivate >/dev/null 2>&1 && echo has-deactivate || echo no-deactivate', expect: { rc: 0, out: '{home}/venv\nvenv-tool\nno-deactivate\n' } },
   ] },
@@ -411,7 +412,7 @@ export function runLine(shell: string, line: string, b: Sandbox, o: { cwd?: stri
   const jobId = o.jobId ?? `hx-keep-${process.pid}-${seq += 1}`
   const log = path.join(b.root, `${jobId}.log`)
   const fd = fs.openSync(log, 'w')
-  const env = { PATH: '/usr/bin:/bin:/usr/sbin:/sbin', HOME: b.home, KEEPTEST_BASE: 'base', KEEPTEST_GONE: 'here', WALNUT_TASK_DIR: b.task, WALNUT_HOST_EXEC_JOB: jobId }
+  const env = { PATH: guardedPath([], '/usr/bin:/bin:/usr/sbin:/sbin'), HOME: b.home, KEEPTEST_BASE: 'base', KEEPTEST_GONE: 'here', WALNUT_TASK_DIR: b.task, WALNUT_HOST_EXEC_JOB: jobId }
   return new Promise((resolve, reject) => {
     const child = spawn(shell, ['-c', line], { cwd: o.cwd ?? b.home, env, detached: true, stdio: ['ignore', fd, fd] })
     fs.closeSync(fd)

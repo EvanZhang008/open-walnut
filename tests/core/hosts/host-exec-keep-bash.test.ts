@@ -18,6 +18,7 @@ import { afterAll, describe, expect, it } from 'vitest'
 import { failedStepOf, strictLine, withoutInnerMarks } from '../../../src/core/hosts/host-exec-strict.js'
 import { KEEP_POINTER, KEEP_SAVE_NAMES, KEEP_UNSET_FUNCTIONS, each, keepMarkWhy, shapedLine, withKeepMarkSaid } from '../../../src/core/hosts/host-exec-keep.js'
 import { createHostExec } from '../../../src/providers/host-exec-core.js'
+import { guardedPath } from '../../setup/exec-guard.js'
 import { KEEP_CASES, SHADOWED, bashesHere, expected, keptStart, nonBashSh, notSavedLine, playCase, runLine, sandbox, type KeepMode, type Sandbox } from '../../helpers/host-exec-keep-cases.js'
 
 const bashes = bashesHere()
@@ -157,7 +158,7 @@ describe.each(bashes)('keep on bash %s', (_version, bash) => {
       spawn: (cmd, args, o) => spawn(cmd, args, o),
       killGroup: (pid, signal) => { if (pid > 1) process.kill(-pid, signal) },
       shell: '/bin/sh', bash, home: box.home, taskDirRoot: box.task, stateDir: path.join(box.root, 'state'),
-      env: { PATH: '/usr/bin:/bin', HOME: box.home }, promptProbe: null,
+      env: { PATH: guardedPath([], '/usr/bin:/bin'), HOME: box.home }, promptProbe: null,
     })
     try {
       const command = 'export V=1; shopt -s extdebug; trap false DEBUG; true'

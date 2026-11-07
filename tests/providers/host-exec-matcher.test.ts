@@ -20,6 +20,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { LINE_LIMIT_MS, WITHDRAWN, createMatcher, cpuOfPid, endsPast, linesOut, matcherEnv, psTime, stripAnsi, type Matcher } from '../../src/providers/host-exec-matcher.js'
 import { parseWaitFor, type LinePattern } from '../../src/providers/host-exec-pattern.js'
+import { measureLoopHold } from '../helpers/loop-hold.js'
 import { testMatcherStart } from '../helpers/wait-matcher.js'
 
 function patternOf(output: string): LinePattern {
@@ -36,18 +37,6 @@ function matcher(opts: Parameters<typeof createMatcher>[2] = {}, start = testMat
   return m
 }
 afterEach(() => { for (const m of open.splice(0)) m.close() })
-
-/** The longest gap between this process's timer ticks while `run` runs: the loop was never held longer. */
-async function longestGap<T>(run: () => Promise<T>): Promise<{ value: T; gap: number }> {
-  let last = performance.now()
-  let gap = 0
-  const tick = setInterval(() => { const t = performance.now(); gap = Math.max(gap, t - last); last = t }, 10)
-  try {
-    return { value: await run(), gap }
-  } finally {
-    clearInterval(tick)
-  }
-}
 
 describe('the matcher process', () => {
   it('answers the first matching line, with colour codes removed, and how many it tested', async () => {
@@ -70,11 +59,12 @@ describe('the matcher process', () => {
     // Accepted by the static check (no repeated group), but cubic on a long line of a's.
     const slow = patternOf('a.*a.*a.*b')
     const t0 = Date.now()
-    const { value, gap } = await longestGap(() => m.test(slow, [line('a'.repeat(20_000))]))
+    // Judged on the loop thread's own CPU: a loaded machine stretches a wall-clock gap by itself.
+    const { value, holdMs } = await measureLoopHold(() => m.test(slow, [line('a'.repeat(20_000))]))
     expect(value).toEqual({ slow: true })
     expect(Date.now() - t0).toBeGreaterThanOrEqual(LINE_LIMIT_MS * 0.8)
     expect(Date.now() - t0).toBeLessThan(5_000)
-    expect(gap).toBeLessThan(200)
+    expect(holdMs).toBeLessThan(200)
     expect(m.pid).toBeNull()
     // The process is gone; the next test starts another.
     expect(await m.test(patternOf('again'), [line('once again')])).toMatchObject({ hit: 0 })
