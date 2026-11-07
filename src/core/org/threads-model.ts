@@ -18,12 +18,15 @@
  * reacted after it (2026-11-01, the user: "I had not replied ... so clearly I had not acknowledged
  * it"): a node may mark exchanges known (`known`) or close a thread only then (`reactedSince`).
  *
- * His view shows a thread only when it has something for him (thread-view.ts shownToHim): needs,
- * answered, or a node answer he has not reacted to. His message in a thread makes it working, so it
- * leaves his view at once (2026-11-01, the user: "if i reply to a thread, it shoud go out of the
- * thread immediately instead of just show working"); `pending` stays hidden even with an answer on
- * it (a handoff the node judged no news: "if it is just assigned no need to tell me ... thread
- * pending, which is auto hide like closed"). A new summary written without a state is news: answered.
+ * His view shows a thread only when it has something for him (thread-view.ts shownToHim): needs or
+ * answered. His message in a thread makes it working, so it leaves his view at once (2026-11-01, the
+ * user: "if i reply to a thread, it shoud go out of the thread immediately instead of just show
+ * working"), and it stays out with the node's chat answer on it until the node gives it a state
+ * (2026-11-07); `pending` stays hidden (a handoff the node judged no news: "if it is just assigned no
+ * need to tell me ... thread pending, which is auto hide like closed"). A new summary written without
+ * a state is news: answered. A summary replaces the node's earlier answers on the card (`replyAt`,
+ * thread-view.ts supersededBySummary). A thread left new or working, or in needs with nothing new,
+ * too long wakes the node once (`recheck`, thread-recheck.ts), then shows to him saying so.
  *
  * A node may also open a thread itself for something that reached it the user must act on or asked
  * to follow (2026-11-01, the user: "you can also create a new thread even if it is not from me ...
@@ -52,7 +55,7 @@ import crypto from 'node:crypto';
 
 export const THREAD_STATES = ['new', 'working', 'needs', 'answered', 'pending'] as const;
 export type ThreadState = typeof THREAD_STATES[number];
-/** The states his view keeps out of sight unless an answer he has not reacted to is on it (pending: even then). */
+/** The states his view keeps out of sight (unless pinned, or overdue with something for him: thread-view.ts shownToHim). */
 export const HIDDEN_STATES: ReadonlySet<ThreadState> = new Set(['new', 'working', 'pending']);
 export const THREAD_CLOSE_HOWS = ['acked', 'dropped'] as const;
 export type ThreadCloseHow = typeof THREAD_CLOSE_HOWS[number];
@@ -170,6 +173,8 @@ export interface OrgThread {
   state: ThreadState;
   /** The node's latest answer or result, Markdown, one or two lines. */
   reply?: string;
+  /** When the node last wrote `reply` (thread-view.ts supersededBySummary: an older answer leaves the card). */
+  replyAt?: string;
   /** Tasks the thread went to: shown with their live status. */
   tasks?: string[];
   messages: ThreadMessage[];
@@ -190,6 +195,16 @@ export interface OrgThread {
   pinned?: ThreadPinned;
   /** When its last move into needs buzzed his phone (push/thread-push.ts): one buzz per absence. */
   needsBuzzedAt?: string;
+  /** Walnut woke the node about the overdue stretch that began at `since` (thread-recheck.ts): once per stretch. */
+  recheck?: ThreadRecheck;
+}
+
+export interface ThreadRecheck {
+  since: string;
+  at: string;
+  why: 'reply' | 'needs';
+  /** Recorded before the send and not confirmed after it: not delivered (yet). */
+  pending?: boolean;
 }
 
 export interface ThreadsFile {
@@ -259,6 +274,8 @@ function normalizeThread(t: unknown): OrgThread | null {
   }
   if (opener) next.opener = opener; else delete next.opener;
   if (next.snoozed && !(typeof next.snoozed === 'object' && isStr(next.snoozed.until) && isStr(next.snoozed.at) && Number.isFinite(Date.parse(next.snoozed.until)))) delete next.snoozed;
+  if (next.replyAt !== undefined && !(isStr(next.replyAt) && next.reply)) delete next.replyAt;
+  if (next.recheck && !(typeof next.recheck === 'object' && isStr(next.recheck.since) && isStr(next.recheck.at))) delete next.recheck;
   if (next.pinned && !(typeof next.pinned === 'object' && isStr(next.pinned.at))) delete next.pinned;
   else if (next.pinned && !isStr(next.pinned.by)) next.pinned = { ...next.pinned, by: 'human' };
   // A closed thread holds no pin (a hand edit, or a file from a build that kept one).
@@ -555,7 +572,9 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
   const next: OrgThread = { ...cur, updatedAt: at, by };
   if (patch.title !== undefined) { next.title = clip(patch.title, THREAD_TITLE_MAX); next.titled = true; }
   if (patch.ask !== undefined) { if (patch.ask.trim()) next.ask = clip(patch.ask, THREAD_ASK_MAX); else delete next.ask; }
-  if (patch.reply !== undefined) { if (patch.reply.trim()) next.reply = clip(patch.reply, THREAD_REPLY_MAX); else delete next.reply; }
+  if (patch.reply !== undefined) {
+    if (patch.reply.trim()) { next.reply = clip(patch.reply, THREAD_REPLY_MAX); next.replyAt = at; } else { delete next.reply; delete next.replyAt; }
+  }
   if (patch.state !== undefined) next.state = patch.state;
   // A new summary on a thread out of his sight is news: it shows (answered), unless the same write names a state.
   else if (HIDDEN_STATES.has(cur.state) && next.reply !== undefined && next.reply !== cur.reply) next.state = 'answered';
@@ -719,6 +738,12 @@ export function setAnswers(file: ThreadsFile, answers: ReadonlyMap<string, Threa
     return { ...t, messages };
   });
   return changed.length ? { file: { ...file, threads }, changed } : { file, changed };
+}
+
+/** Walnut woke the node about these threads' overdue stretches (thread-recheck.ts). Moves no clock. */
+export function markRechecked(file: ThreadsFile, marks: ReadonlyMap<string, ThreadRecheck>): ThreadsFile {
+  if (!marks.size) return file;
+  return { ...file, threads: file.threads.map((t) => { const r = marks.get(t.id); return r ? { ...t, recheck: r } : t; }) };
 }
 
 /** The node was told these closes (the threads hint). */

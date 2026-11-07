@@ -8,7 +8,8 @@
  * A card is kept short (2026-11-01, the user: "the purpose is to keep the thread extremely
  * concise ... I replied from the first one to the ninth, so why still show the first to the
  * eighth?"): its title, the node's summary (latest first, a sentence or two of background), and
- * only the node's answers he has not reacted to, each folded to a few lines with an Expand /
+ * only the node's answers he has not reacted to that the summary did not supersede (2026-11-07: a
+ * card showed the new summary and the older answer under it), each folded to a few lines with an Expand /
  * Collapse toggle on the answer itself ("I have to click the corner text ... outrageous"). What he
  * already knew (src/core/org/thread-view.ts) is gone from the card; the whole conversation opens
  * from a toggle in the card body, numbered, with Split out on each message.
@@ -16,8 +17,11 @@
  * A thread with nothing for him is out of sight (2026-11-01, the user: "if it is just assigned no
  * need to tell me, or doing, unless there are some update ... thread pending, which is auto hide
  * like closed"; then "if i reply to a thread, it shoud go out of the thread immediately instead of
- * just show working"): only needs, answered, or an answer he has not reacted to shows
- * (src/core/org/thread-view.ts shownToHim); his reply makes a thread working, so it leaves at once. A summary already naming a task keeps no
+ * just show working"): only needs and answered show (src/core/org/thread-view.ts shownToHim); his
+ * reply makes a thread working, so it leaves at once, and a working thread stays out even with the
+ * node's chat answer on it (2026-11-07, the user: the real reply comes about 20 s later, "before it
+ * replies, what is the use?"). One the node let sit too long comes back with a line saying so
+ * (thread-view.ts threadOverdue; Walnut wakes the node first, thread-recheck.ts). A summary already naming a task keeps no
  * second chip for it, and one reply that covered several threads stays off every card.
  *
  *   a card     state, title, time; the summary; its tasks the summary does not name; the answers
@@ -40,7 +44,7 @@ import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Task } from '@open-walnut/core';
 import { userStateOf } from '@open-walnut/org-tree';
 import { USER_STATE_LABELS, shownState } from '@open-walnut/user-status';
-import { cardView, exchangesOf, pinnedFirst, pinnedNow, sharedAnswers, shownToHim, snoozedNow, type ThreadExchange } from '@open-walnut/thread-view';
+import { cardView, exchangesOf, overdueLine, pinnedFirst, pinnedNow, sharedAnswers, shownToHim, snoozedNow, type ThreadExchange } from '@open-walnut/thread-view';
 import { ThreadPinIcon } from '@/components/sessions/ThreadIcons';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
@@ -309,6 +313,8 @@ function ThreadCard({ t, all, shared, tasks, onOpenTask, state, onFollowUp, name
   const closed = !!t.closed;
   const pinned = pinnedNow(t);
   const card = useMemo(() => cardView(t, shared), [t, shared]);
+  // It sat too long with nothing from the node: the card says so (core/org/thread-view.ts threadOverdue).
+  const overdue = closed || snoozed ? null : overdueLine(t, name, now, (iso) => timeAgo(iso, { now }));
   // The tasks the summary already shows as pills get no second chip (the renderer resolves them
   // from the task labels, so it is read again when one arrives, with the summary itself).
   const labels = useEntityLabelsVersion();
@@ -344,6 +350,7 @@ function ThreadCard({ t, all, shared, tasks, onOpenTask, state, onFollowUp, name
       </button>
       {snoozed && t.snoozed && <p className="org-thread-snoozed" data-testid="org-thread-snoozed-until">Snoozed until {backAt(t.snoozed.until, now)}</p>}
       {follows && <p className="org-thread-follows">Asks again about “{follows.title}”</p>}
+      {overdue && <p className="org-thread-overdue" data-testid="org-thread-overdue">{overdue}</p>}
       {t.reply && <Markdown text={t.reply} className="org-thread-summary" testId="org-thread-reply" />}
       {chips.length > 0 && <TaskChips ids={chips} tasks={tasks} onOpenTask={onOpenTask} />}
       {!open && card.unread.length > 0 && (

@@ -21,6 +21,8 @@ export interface OrgThread {
   ask?: string;
   state: OrgThreadState;
   reply?: string;
+  /** When the node last wrote the summary (an older answer leaves the card: core/org/thread-view.ts supersededBySummary). */
+  replyAt?: string;
   tasks?: string[];
   messages: OrgThreadMessage[];
   follows?: string;
@@ -36,6 +38,8 @@ export interface OrgThread {
   snoozed?: { until: string; at: string; by: string };
   /** Pinned to the top of his view, whatever its state (core/org/thread-view.ts pinnedNow). */
   pinned?: { at: string; by: string };
+  /** Walnut woke the node about this thread's overdue stretch (core/org/thread-recheck.ts). */
+  recheck?: { since: string; at: string; why?: string; pending?: boolean };
 }
 
 const base = (taskId: string) => `/api/v1/tasks/${encodeURIComponent(taskId)}/threads`;

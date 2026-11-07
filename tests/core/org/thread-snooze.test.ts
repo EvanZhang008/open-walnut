@@ -111,7 +111,9 @@ describe('a snoozed thread', () => {
     const { f, id, msg } = answered()
     const asked = fileMessage(f, { text: 'and the cost?', via: 'follow-up', threadId: id, at: at(3) })
     const s = snooze(asked.file, id, at(600))
-    const early = setAnswers(s, new Map([[asked.message.id, { text: 'About the same.', at: at(9) }]])).file
+    // The node answers and gives the thread its state (a chat answer alone leaves it working, out of sight).
+    const answeredEarly = setAnswers(s, new Map([[asked.message.id, { text: 'About the same.', at: at(9) }]])).file
+    const early = updateThread(answeredEarly, id, { state: 'answered' }, 'task:lead-1', at(9)).file
     expect(newsAt(early.threads, undefined, ms(10))).toBe(at(9))
     expect(newsAt(early.threads, undefined, ms(601))).toBe(at(9))
     expect(msg).toMatch(/^tm-/)

@@ -519,7 +519,7 @@ export async function prepareStartHints<T extends StartHintData>(data: T, opts: 
 export const QUEUE_HINT_SOURCES: ReadonlySet<string> = new Set([
   'routine-trigger', 'routine-watcher', 'wait-until', 'peer', 'walnut-notify',
   'human-inbox', 'auto-continue', 'auto-recover', 'app-state', 'cli', 'brief-refresh', 'choice-recheck',
-  'context-recovery',
+  'context-recovery', 'thread-recheck',
 ]);
 
 /**

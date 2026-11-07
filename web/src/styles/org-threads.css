@@ -23,11 +23,12 @@
 .org-thread-state i, .org-thread-task i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex: none; }
 .org-thread-title { grid-column: 1 / -1; grid-row: 2; min-width: 0; font-weight: 600; font-size: 13px; line-height: 1.4; overflow-wrap: break-word; }
 .org-thread-meta {
-  grid-column: 2; grid-row: 1; justify-self: end; min-width: 0; font-size: 11px; color: var(--fg-muted, #86868b);
+  grid-column: 2; grid-row: 1; justify-self: end; min-width: 0; max-width: 100%; font-size: 11px; color: var(--fg-muted, #86868b);
   font-variant-numeric: tabular-nums; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .org-thread-head:focus-visible { outline: 2px solid var(--accent, #0a84ff); outline-offset: 2px; border-radius: 4px; }
 .org-thread-follows { margin: 0; font-size: 12px; color: var(--fg-muted, #86868b); }
+.org-thread-overdue { margin: 0; font-size: 12px; color: color-mix(in srgb, var(--warning, #ff9f0a) 75%, var(--fg, #1d1d1f)); }
 /* The node's summary: what the card is about now, latest first. */
 .org-thread-summary { font-size: 13px; line-height: 1.5; color: var(--fg); overflow-wrap: anywhere; }
 .org-thread-summary > :first-child { margin-top: 0; }

@@ -84,6 +84,7 @@ const INTERRUPTING_SEND_SOURCES: ReadonlySet<string> = new Set([
   'auto-recover',  // sessions/auto-recover-env.ts AUTO_RECOVER_SOURCE
   'brief-refresh', // sessions/brief-refresh.ts: the user opened a node whose Brief is stale
   'choice-recheck', // sessions/needs-recheck.ts: a Board owner asked to confirm a choice
+  'thread-recheck', // org/thread-recheck.ts: a node asked about a thread that sat with no reply
   'idle-compact',  // sessions/idle-compaction.ts: a quiet turn, which moves no phase anyway
   'context-compact', // sessions/context-full-recovery.ts: the same quiet /compact, for a full context
 ]);
@@ -91,7 +92,7 @@ const INTERRUPTING_SEND_SOURCES: ReadonlySet<string> = new Set([
 /** Sends Walnut makes only to ask for words (a Brief, a check of a Board choice): the wait they
  *  interrupt comes back at the turn end whatever held it, its clock included, because nothing the
  *  task waited for came (2026-10-31: a look at a parked lead lost the clock it had set). */
-const WORDS_ONLY_SOURCES: ReadonlySet<string> = new Set(['brief-refresh', 'choice-recheck', 'idle-compact', 'context-compact']);
+const WORDS_ONLY_SOURCES: ReadonlySet<string> = new Set(['brief-refresh', 'choice-recheck', 'thread-recheck', 'idle-compact', 'context-compact']);
 
 /**
  * The cause a WAITING → IN_PROGRESS edge records, or null when its turn ends the wait for good.

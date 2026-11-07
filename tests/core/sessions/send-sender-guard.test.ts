@@ -99,6 +99,7 @@ const CALL_SITES: Record<string, number> = {
   'src/core/org/lead-waits.ts': 1,
   'src/core/org/org-autostart.ts': 2,
   'src/core/org/org-store.ts': 2,
+  'src/core/org/thread-recheck.ts': 1,
   'src/core/routines/executors/session.ts': 2,
   'src/core/routines/executors/watcher.ts': 3,
   'src/core/routines/run-start-deps.ts': 1,

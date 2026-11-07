@@ -428,10 +428,17 @@ test('his view shows only threads with something for him; his reply sends one ou
         [{ id: 'tm-0000000000a3', at: at(10), text: 'who pushed this to the tracker?', via: 'chat', answer: one }]),
       thread('th-0000000000a4', 'A source button in the new task form', 'answered', { reply: 'The button is in' },
         [{ id: 'tm-0000000000a4', at: at(11), text: 'also in the new task form, a button to pick the source', via: 'chat', answer: one }]),
-      thread('th-0000000000a5', 'Answered, he has not read it', 'working', { reply: 'Looking at the phone next' },
-        [{ id: 'tm-0000000000a5', at: at(13), text: 'does the phone get it too?', via: 'chat', answer: { at: at(14), text: 'Yes, the phone reads the same file.' } }]),
+      // 2026-11-07: the node's chat answer on a working thread (only who took it) is no reply yet.
+      thread('th-0000000000a5', 'Answered in chat, still working', 'working', { reply: 'Looking at the phone next' },
+        [{ id: 'tm-0000000000a5', at: at(13), text: 'does the phone get it too?', via: 'chat', answer: { at: at(14), text: 'Handed to the phone team.' } }]),
       thread('th-0000000000a6', 'Just asked', 'working', { reply: 'On it' },
         [{ id: 'tm-0000000000a6', at: at(15), text: 'and the mail page?', via: 'chat' }]),
+      // His message an hour and a half ago, nothing from the node since: overdue, so it shows saying so.
+      thread('th-0000000000a7', 'Asked long ago', 'working', { createdAt: at(-60), updatedAt: at(-60), by: 'human' },
+        [{ id: 'tm-0000000000a7', at: at(-60), text: 'why is it still queued?', via: 'chat' }]),
+      // A summary written after the answer replaces it on the card (2026-11-07, the user's third card).
+      thread('th-0000000000a8', 'Summary after the answer', 'answered', { reply: 'iOS allows it; the next build ships both.', replyAt: at(14), by: 'task:node' },
+        [{ id: 'tm-0000000000a8', at: at(12), text: 'can it skip opening the app?', via: 'chat', answer: { at: at(13), text: 'Both went to the action button team.' } }]),
     ],
   }
   const dir = `${walnutHome}/org/threads`
@@ -449,10 +456,19 @@ test('his view shows only threads with something for him; his reply sends one ou
   const open = page.getByTestId('org-thread-list')
   const shown = async () => open.getByTestId('org-thread').evaluateAll((els) => els.map((e) => e.getAttribute('data-thread-id')).sort())
 
-  // Shown: needs, answered, and a working one with an answer he has not read. Out of sight: the
-  // pending one and the working one he just wrote in; one quiet line says they are there.
-  await expect.poll(shown).toEqual(['th-0000000000a2', 'th-0000000000a3', 'th-0000000000a4', 'th-0000000000a5'])
-  await expect(page.getByTestId('org-threads-hidden')).toHaveText(/^2 in progress, nothing for you/)
+  // Shown: needs, answered, and the one left with no reply too long. Out of sight: the pending one,
+  // the working one with only the node's chat answer, and the one he just wrote in.
+  await expect.poll(shown).toEqual(['th-0000000000a2', 'th-0000000000a3', 'th-0000000000a4', 'th-0000000000a7', 'th-0000000000a8'])
+  await expect(page.getByTestId('org-threads-hidden')).toHaveText(/^3 in progress, nothing for you/)
+  await expect(card(page, 'th-0000000000a7').getByTestId('org-thread-overdue')).toHaveText(/^No reply from .+ · last activity .+ ago$/)
+  await expect(card(page, 'th-0000000000a2').getByTestId('org-thread-overdue')).toHaveCount(0)
+  // The newer summary alone: the older answer is only in the conversation.
+  const superseded = card(page, 'th-0000000000a8')
+  await expect(superseded.getByTestId('org-thread-reply')).toContainText('the next build ships both')
+  await expect(superseded.getByTestId('org-thread-unread')).toHaveCount(0)
+  await superseded.getByTestId('org-thread-history').click()
+  await expect(superseded.getByTestId('org-thread-answer')).toContainText('Both went to the action button team')
+  await superseded.getByTestId('org-thread-history').click()
   await expect(page.getByTestId('org-threads-hidden')).toHaveAttribute('aria-expanded', 'false')
 
   // A summary that already shows its task as a pill keeps no second chip for it.
@@ -477,15 +493,15 @@ test('his view shows only threads with something for him; his reply sends one ou
   // The line opens the ones in progress, as the closed ones open.
   await page.getByTestId('org-threads-hidden').click()
   const quiet = page.getByTestId('org-thread-list-hidden')
-  await expect(quiet.getByTestId('org-thread')).toHaveCount(2)
+  await expect(quiet.getByTestId('org-thread')).toHaveCount(3)
   await expect(card(page, 'th-0000000000a1').getByTestId('org-thread-state')).toHaveText('Pending')
   await page.getByTestId('org-threads-hidden').click()
   await expect(quiet).toHaveCount(0)
 
-  // He replies under the answer he had not read: the next move is the node's, so it leaves at once.
-  await post(request, `/api/v1/tasks/${node}/threads`, { text: `and the tablet ${STAMP}`, thread: 'th-0000000000a5' })
-  await expect(open.locator('[data-thread-id="th-0000000000a5"]')).toHaveCount(0)
-  await expect(page.getByTestId('org-threads-hidden')).toHaveText(/^3 in progress/)
+  // He writes in the overdue one: the next move is the node's again, so it leaves at once.
+  await post(request, `/api/v1/tasks/${node}/threads`, { text: `still waiting ${STAMP}`, thread: 'th-0000000000a7' })
+  await expect(open.locator('[data-thread-id="th-0000000000a7"]')).toHaveCount(0)
+  await expect(page.getByTestId('org-threads-hidden')).toHaveText(/^4 in progress/)
   // An answered one he writes in leaves too.
   await post(request, `/api/v1/tasks/${node}/threads`, { text: `thanks, one more ${STAMP}`, thread: 'th-0000000000a3' })
   await expect(open.locator('[data-thread-id="th-0000000000a3"]')).toHaveCount(0)
@@ -506,8 +522,8 @@ test('his view shows only threads with something for him; his reply sends one ou
   // A reload reads the same: the state is the file's.
   await page.reload()
   await expect(detail.getByTestId('org-top')).toHaveAttribute('data-view', 'threads')
-  await expect.poll(shown).toEqual(['th-0000000000a1', 'th-0000000000a2', 'th-0000000000a4', 'th-0000000000a6'])
-  await expect(page.getByTestId('org-threads-hidden')).toHaveText(/^2 in progress/)
+  await expect.poll(shown).toEqual(['th-0000000000a1', 'th-0000000000a2', 'th-0000000000a4', 'th-0000000000a6', 'th-0000000000a8'])
+  await expect(page.getByTestId('org-threads-hidden')).toHaveText(/^3 in progress/)
 })
 
 test('the panel closes and comes back, per node; the Threads tab shows a dot for news he has not looked at', async ({ page, request }) => {
@@ -522,7 +538,7 @@ test('the panel closes and comes back, per node; the Threads tab shows a dot for
   const t0 = Date.now() - 20 * 60_000
   const at = (min: number) => new Date(t0 + min * 60_000).toISOString()
   const file = { version: 1, taskId: node, threads: [
-    { id: 'th-00000000b001', title: 'Phone view', titled: true, state: 'working', reply: 'Checking the phone', createdAt: at(0), updatedAt: at(2),
+    { id: 'th-00000000b001', title: 'Phone view', titled: true, state: 'answered', reply: 'Checking the phone', createdAt: at(0), updatedAt: at(2),
       messages: [{ id: 'tm-00000000b001', at: at(1), text: 'does the phone get it?', via: 'chat', answer: { at: at(3), text: 'Yes, the same file.' } }] },
   ] }
   fs.mkdirSync(`${walnutHome}/org/threads`, { recursive: true })

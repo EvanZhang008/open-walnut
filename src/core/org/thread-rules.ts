@@ -48,12 +48,16 @@ export const THREAD_ONE_PLACE_RULE =
  * His Threads view shows only what has something for him (2026-11-01, the user: "if a task is just
  * hand over, let's not show it in the thread, unless there are some update"; "there can be thread
  * pending, which is auto hide like closed"; then "if i reply to a thread, it shoud go out of the
- * thread immediately instead of just show working"). thread-view.ts shownToHim holds it.
+ * thread immediately instead of just show working"; 2026-11-07: a working thread with only the
+ * node's handoff answer on it showed too, "before it replies, what is the use?"). thread-view.ts
+ * shownToHim holds it, and threadOverdue / thread-recheck.ts the reminder.
  */
 export const THREADS_PENDING_RULE =
-  'His Threads view shows a thread only when it has something for him: needs (he must decide), answered (the result he asked '
-  + 'for is in), or an answer of yours he has not reacted to. A new thread, one he just wrote in (his message makes it working), '
-  + 'and one in working or pending are out of his sight until then. A new summary written without a state is news and shows it '
+  'His Threads view shows a thread only when it has something for him: needs (he must decide) or answered (the result he asked '
+  + 'for is in). A new thread, one he just wrote in (his message makes it working), and one in working or pending are out of his '
+  + 'sight, your chat answer on it included: give every thread you answer its state in that same turn. One left new or working '
+  + 'for 30 minutes, or in needs 4 hours with nothing new, is overdue: Walnut reminds you, then shows it to him as having no '
+  + 'reply. A new summary written without a state is news and shows it '
   + '(Walnut sets answered); to update it quietly, name working or pending in the same write. Never write a summary that only '
   + 'says who took it or that it is being done (its task chip says that). When your answer to him only says that, set pending '
   + 'in the same turn: pending stays hidden even with that answer on it. Setting needs (he must decide) names user_kind and '
@@ -65,7 +69,8 @@ export const THREADS_PENDING_RULE =
  * notification about a thread I have not read reaches you, update that thread's summary").
  */
 export const THREADS_SUMMARY_RULE =
-  'A card shows only its title, your summary (reply) and your answers he has not reacted to; nothing he already knew. Write the '
+  'A card shows only its title, your summary (reply) and your answers he has not reacted to that came after it (a summary you '
+  + 'write replaces your earlier answers on the card); nothing he already knew. Write the '
   + 'summary latest first: the newest question or what he must decide and where it stands, then at most one or two sentences of '
   + 'background; never a log of the thread, never one bare line. Keep the title following the subject as it moves. When news '
   + 'about a thread reaches you (a team\'s notice, a mail, a trigger), update that thread\'s summary and title (thread_update); '

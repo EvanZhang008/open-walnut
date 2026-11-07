@@ -15,8 +15,8 @@ import type { OrgThreadsChangedEvent } from '../event-types.js';
 import { isCompanion } from '../server-role.js';
 import { walnutLetterLanguage as letterLang } from '../human-inbox/walnut-letters/languages.js';
 import {
-  emptyThreads, enteredNeeds, fileMessage, markClosesTold, mergeThreads, normalizeThreads, openThread, patchHandsToUser, setAnswers, splitThreadMessage, sweepClosed, ThreadError, updateThread,
-  type FileMessageInput, type FileMessageResult, type OpenThreadInput, type OrgThread, type ThreadAnswer, type ThreadPatch, type ThreadsFile, type ThreadWriter,
+  emptyThreads, enteredNeeds, fileMessage, markClosesTold, markRechecked, mergeThreads, normalizeThreads, openThread, patchHandsToUser, setAnswers, splitThreadMessage, sweepClosed, ThreadError, updateThread,
+  type FileMessageInput, type FileMessageResult, type OpenThreadInput, type OrgThread, type ThreadAnswer, type ThreadPatch, type ThreadRecheck, type ThreadsFile, type ThreadWriter,
 } from './threads-model.js';
 
 const TASK_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -149,6 +149,13 @@ export async function splitThread(taskId: string, threadId: string, messageId: s
 export async function noteClosesTold(taskId: string, ids: readonly string[]): Promise<void> {
   if (!ids.length || isCompanion()) return;
   await mutateThreads(taskId, (cur) => ({ file: markClosesTold(cur, ids), out: undefined }));
+}
+
+/** Walnut woke the node about these threads (thread-recheck.ts): the card's line names when. */
+export async function noteThreadsRechecked(taskId: string, marks: ReadonlyMap<string, ThreadRecheck>): Promise<void> {
+  if (!marks.size || isCompanion()) return;
+  await mutateThreads(taskId, (cur) => ({ file: markRechecked(cur, marks), out: undefined }));
+  emit({ taskId, kind: 'updated', ...(marks.size === 1 ? { threadId: [...marks.keys()][0] } : {}) });
 }
 
 /** Answers Walnut read from the node's chat (thread-answers.ts), each onto its message. Returns how many landed. */

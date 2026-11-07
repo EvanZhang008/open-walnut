@@ -50,8 +50,9 @@ function thread(id: string, state: OrgThread['state'], over: Partial<OrgThread> 
   } as OrgThread
 }
 
-/** Every kind his view judges: shown (needs, answered, an unread answer, pinned), hidden (pending,
- *  snoozed, working with nothing new), closed; one answer shared with a closed thread. */
+/** Every kind his view judges: shown (needs, answered, pinned), hidden (pending, snoozed, working
+ *  with nothing new, working with only the node's chat answer), closed; one answer shared with a
+ *  closed thread. */
 function fixture(): OrgThread[] {
   const answered = (id: string, text: string, at = iso(2 * HOUR)) => ({
     messages: [{ id: `tm-${id.slice(3)}01`, at: iso(5 * HOUR), text: `ask ${id}`, via: 'chat', answer: { text, at } }],
@@ -61,11 +62,14 @@ function fixture(): OrgThread[] {
     // He reacted to this answer already (known): a cut read may cut it.
     thread('th-a00002', 'answered', { ...answered('th-a00002', LONG), known: { through: 'tm-a0000201' } } as Partial<OrgThread>),
     // Not reacted to yet: the card shows it, so it stays whole however long.
-    thread('th-a00003', 'working', answered('th-a00003', LONG_UNSEEN)),
+    thread('th-a00003', 'answered', answered('th-a00003', LONG_UNSEEN)),
     thread('th-a00004', 'working', { pinned: { at: iso(HOUR), by: 'human' } } as Partial<OrgThread>),
     thread('th-a00005', 'pending', answered('th-a00005', 'handed on')),
     thread('th-a00006', 'answered', { snoozed: { until: new Date(T0 + 5 * HOUR).toISOString(), at: iso(HOUR / 2) } } as Partial<OrgThread>),
-    thread('th-a00007', 'working'),
+    // His message a few minutes ago, nothing yet: the node's move, not overdue.
+    thread('th-a00007', 'working', { messages: [{ id: 'tm-a0000701', at: iso(5 * 60_000), text: 'ask th-a00007', via: 'chat' }], updatedAt: iso(5 * 60_000) } as Partial<OrgThread>),
+    // The node's chat answer on a working thread (only who took it): out of his view (2026-11-07).
+    thread('th-a00009', 'working', { messages: [{ id: 'tm-a0000901', at: iso(2 * 60_000), text: 'ask th-a00009', via: 'chat', answer: { text: 'Handed to the phone team.', at: iso(60_000) } }], updatedAt: iso(90_000), by: 'task:lead' } as Partial<OrgThread>),
     // Its answer is the same reply as the closed th-c00002's: a shared answer, judged over both.
     thread('th-a00008', 'working', answered('th-a00008', 'one reply for two threads', iso(3 * HOUR))),
   ]
@@ -97,7 +101,7 @@ describe('reading Threads as the phone does', () => {
   it('says per thread whether his view shows it, by the count the node status uses', async () => {
     const all = (await (await read()).json()) as Reply
     const expected = threadCounts(fixture()).shown
-    // needs, answered, an unread answer, pinned; not pending, snoozed, nothing new, or the shared answer.
+    // needs, two answered, pinned; not pending, snoozed, working (with or without a chat answer), or the shared answer.
     expect(expected).toBe(4)
     expect(all.shown_count).toBe(expected)
     expect(all.threads.filter((t) => t.shown).length).toBe(expected)
@@ -108,6 +112,7 @@ describe('reading Threads as the phone does', () => {
     expect(open.shown_count).toBe(expected)
     expect(open.threads.find((t) => t.id === 'th-a00005')?.shown).toBe(false)
     expect(open.threads.find((t) => t.id === 'th-a00006')?.shown).toBe(false)
+    expect(open.threads.find((t) => t.id === 'th-a00009')?.shown).toBe(false)
   })
 
   it('splits open and closed, keeps the newest closed, and cuts long answers', async () => {

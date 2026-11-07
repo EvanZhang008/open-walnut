@@ -3,8 +3,8 @@
  * user's messages with the node's answer under it, numbered (2026-11-01, the user: "do it like
  * slack thread ... 1. what is small mode, then your explanation, 2. why, who asked you to do it").
  *
- * The card shows only what he has not seen: the node's answers he has not reacted to, under the
- * node's summary; what he already knew is gone from it (2026-11-01, the user: "I replied from the
+ * The card shows only what he has not seen: the node's answers he has not reacted to that its
+ * summary did not supersede, under that summary; what he already knew is gone from it (2026-11-01, the user: "I replied from the
  * first one to the ninth, so why still show the first to the eighth?"). The whole conversation
  * stays one click away. He knows an answer once he reacted after it: wrote again in
  * the thread, the node marked it known after he reacted elsewhere (`known`, checked by the
@@ -38,6 +38,14 @@ export interface ViewThread<M extends ViewMessage = ViewMessage> {
   snoozed?: { until: string; at: string };
   /** He (or the node) pinned it to the top of his view (threads-model.ts ThreadPinned). */
   pinned?: { at: string; by?: string };
+  /** The node's summary, when it was last rewritten (`replyAt`; absent on threads written before 2026-11-07). */
+  reply?: string;
+  replyAt?: string;
+  /** The last change and who made it (his writes are `human`). */
+  updatedAt?: string;
+  by?: string;
+  /** Walnut woke the node about this thread's overdue stretch that began at `since` (thread-recheck.ts). */
+  recheck?: { since: string; at: string; pending?: boolean };
 }
 
 /** One exchange: his message (or a few in a row the node answered at once) and the answer. */
@@ -110,12 +118,55 @@ export function cardView<M extends ViewMessage>(t: ViewThread<M>, shared: Readon
   let lastSaid = -1;
   exchanges.forEach((x, i) => { if (x.answer || x.opener) lastSaid = i; });
   return {
-    unread: exchanges.filter((x) => (x.answer || x.opener) && !x.known && !x.messages.some((m) => shared.has(m.id))),
+    unread: exchanges.filter((x) => (x.answer || x.opener) && !x.known && !x.messages.some((m) => shared.has(m.id)) && !supersededBySummary(t, x)),
     waiting: exchanges.slice(lastSaid + 1).filter((x) => !x.answer && !x.opener),
   };
 }
 
 const NONE: ReadonlySet<string> = new Set();
+
+/**
+ * An answer written in the same turn as a summary, or one the summary was rewritten after, is that
+ * summary's background: within this of the summary it was covered by it.
+ */
+export const SUMMARY_COVERS_MS = 10 * 60_000;
+
+/** From this time on, every summary write stamps `replyAt` (a little after the build that added it shipped). */
+export const REPLY_AT_SINCE = '2026-11-08T06:00:00.000Z';
+
+/**
+ * When the node last rewrote the thread's summary. A thread written before `replyAt` existed reads
+ * its last change when the node made it, which may be later than the summary itself (a state-only
+ * write), so supersededBySummary trusts it only against the thread's first post.
+ */
+export function summaryAt(t: Pick<ViewThread, 'reply' | 'replyAt' | 'updatedAt' | 'by'>): string | undefined {
+  if (!t.reply?.trim()) return undefined;
+  if (t.replyAt) return t.replyAt;
+  return t.by && t.by !== 'human' ? t.updatedAt : undefined;
+}
+
+/**
+ * The card shows the newest of the node's words, never an older answer under a newer summary
+ * (2026-11-07, the user, on a card that showed the new summary and the superseded answer under it).
+ * A summary written after his message covers the answer to it when the answer came before the
+ * summary or in the same turn (within SUMMARY_COVERS_MS); a thread the node opened, once it wrote a
+ * summary after its first post. The answer still reads in the conversation.
+ */
+export function supersededBySummary(t: ViewThread, x: Pick<ThreadExchange, 'messages' | 'answer' | 'opener'>): boolean {
+  const s = summaryAt(t);
+  if (!s) return false;
+  // Every summary was written after the thread's first post.
+  if (x.opener) return s >= x.opener.at;
+  if (!x.answer) return false;
+  // A thread whose summary predates replyAt: the node's last change stands in, newer than the answer,
+  // and only for answers from before replyAt existed. A later answer on such a thread stays, since a
+  // state or title write after it proves nothing about the summary (review 2026-11-07); every
+  // summary written since stamps replyAt. Checked on the user's real threads: each answer this hides
+  // there is one the newer summary covers (his third card).
+  if (!t.replyAt) return x.answer.at < REPLY_AT_SINCE && s > x.answer.at;
+  const asked = x.messages[x.messages.length - 1]?.at ?? '';
+  return s > asked && Date.parse(x.answer.at) - Date.parse(s) <= SUMMARY_COVERS_MS;
+}
 
 /** The messages whose answer is one reply that also sits under a message of another thread. */
 export function sharedAnswers(threads: ReadonlyArray<{ id: string; messages: readonly ViewMessage[] }>): Set<string> {
@@ -168,10 +219,11 @@ function newsSince(t: ViewThread, at: string): boolean {
 
 /**
  * Does his Threads view show this thread? Only when it has something for him: he must decide
- * (needs), the result is in (answered), or an answer of the node's he has not reacted to is on it.
- * A new thread, one he just wrote in (working) and one in progress are the node's move, out of his
- * sight (2026-11-01, the user: "if i reply to a thread, it shoud go out of the thread immediately
- * instead of just show working"); pending stays out even with an answer (the node judged it no news).
+ * (needs) or the result is in (answered). A new thread, one he just wrote in (working) and one in
+ * progress are the node's move, out of his sight with the node's chat answer on it too (2026-11-01,
+ * the user: "if i reply to a thread, it shoud go out of the thread immediately instead of just show
+ * working"; 2026-11-07, of a working card showing only who took it: "before it replies, what is the
+ * use?"), until it is overdue with something for him; pending stays out (the node judged it no news).
  */
 export function shownToHim<M extends ViewMessage>(t: ViewThread<M> & { state: string }, shared: ReadonlySet<string> = NONE, now: number = Date.now()): boolean {
   if (t.closed) return false;
@@ -179,7 +231,77 @@ export function shownToHim<M extends ViewMessage>(t: ViewThread<M> & { state: st
   if (pinnedNow(t)) return true;
   if (t.state === 'pending' || snoozedNow(t, now)) return false;
   if (t.state === 'needs' || t.state === 'answered') return true;
-  return cardView(t, shared).unread.length > 0;
+  // New or working: the node's move, out of sight even with its chat answer on it (2026-11-07, the
+  // user: about 20 s later the real reply comes, "before it replies, what is the use?"), until the
+  // node has let it sit past the reminder and there is something for him on it.
+  return overdueShown(t, shared, now);
+}
+
+/** A thread in the node's hands (new, working) with nothing new this long is overdue: Walnut wakes the node. */
+export const REPLY_DUE_MS = 30 * 60_000;
+/** A thread waiting on him (needs) with nothing new this long: the node checks it still stands. */
+export const NEEDS_QUIET_MS = 4 * 3600_000;
+/** After the wake, this long more with nothing new and his view says so plainly. */
+export const OVERDUE_SHOW_MS = 30 * 60_000;
+
+export interface ThreadOverdue {
+  /** `reply`: in the node's hands with no reply on the thread; `needs`: waiting on him with nothing new. */
+  why: 'reply' | 'needs';
+  /** The last thing that happened on it (his message, the node's write or answer, its first post). */
+  since: string;
+  /** When Walnut wakes the node; `showAt`: when his view says so. */
+  dueAt: string;
+  showAt: string;
+  /** He wrote and no answer of the node's came after it. */
+  unanswered: boolean;
+}
+
+/**
+ * Has this thread waited too long for the node? (2026-11-07, the user: "one that has had no reply
+ * for this long, something must be wrong: the AI should go and answer it, and if not, our system
+ * reminds.") In the node's hands (new, working) REPLY_DUE_MS after the last thing on it, or waiting on
+ * him (needs) NEEDS_QUIET_MS with nothing new: Walnut wakes the node once per stretch
+ * (thread-recheck.ts), and OVERDUE_SHOW_MS later his view says so. Answered waits on his reaction,
+ * pending is the node's call and a snoozed thread is put aside: none is ever overdue. Null when not due yet.
+ */
+export function threadOverdue(t: ViewThread & { state: string }, now: number = Date.now()): ThreadOverdue | null {
+  if (t.closed || snoozedNow(t, now)) return null;
+  const why = t.state === 'new' || t.state === 'working' ? 'reply' : t.state === 'needs' ? 'needs' : null;
+  if (!why) return null;
+  let lastHis = '';
+  let last = t.opener?.at ?? '';
+  for (const m of t.messages) {
+    if (m.at > lastHis) lastHis = m.at;
+    if (m.at > last) last = m.at;
+    if (m.answer && m.answer.at > last) last = m.answer.at;
+  }
+  if (t.by && t.by !== 'human' && t.updatedAt && t.updatedAt > last) last = t.updatedAt;
+  if (!last) return null;
+  const at = Date.parse(last);
+  const due = at + (why === 'reply' ? REPLY_DUE_MS : NEEDS_QUIET_MS);
+  if (!Number.isFinite(at) || now < due) return null;
+  const unanswered = !!lastHis && !t.messages.some((m) => !!m.answer && m.answer.at > lastHis);
+  return { why, since: last, dueAt: new Date(due).toISOString(), showAt: new Date(due + OVERDUE_SHOW_MS).toISOString(), unanswered };
+}
+
+/**
+ * A new or working thread the node let sit past the reminder shows when there is something for him
+ * on it: his message with no reply (the card says so), or an answer he has not seen. One whose
+ * answers he already knew stays the node's to tidy.
+ */
+function overdueShown<M extends ViewMessage>(t: ViewThread<M> & { state: string }, shared: ReadonlySet<string>, now: number): boolean {
+  const o = threadOverdue(t, now);
+  if (!o || o.why !== 'reply' || now < Date.parse(o.showAt)) return false;
+  return o.unanswered || cardView(t, shared).unread.length > 0;
+}
+
+/** The plain line his card carries for an overdue thread once it is his to see; null otherwise. */
+export function overdueLine(t: ViewThread & { state: string }, name: string, now: number = Date.now(), fmt: (iso: string) => string = (iso) => iso): string | null {
+  const o = threadOverdue(t, now);
+  if (!o || now < Date.parse(o.showAt)) return null;
+  const woke = t.recheck && t.recheck.since === o.since && !t.recheck.pending ? ` \u00b7 Walnut reminded ${name} ${fmt(t.recheck.at)}` : '';
+  const head = o.why === 'needs' ? `Nothing new from ${name} on this` : `${o.unanswered ? 'No reply' : 'Nothing new'} from ${name}`;
+  return `${head} \u00b7 last activity ${fmt(o.since)}${woke}`;
 }
 
 /**

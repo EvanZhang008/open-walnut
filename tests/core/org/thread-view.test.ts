@@ -152,24 +152,27 @@ describe('what his view shows', () => {
   it('needs and answered show; new, working and pending with nothing for him do not', () => {
     expect(shownToHim(th('needs', [msg('tm-1', 10, 'x')]))).toBe(true)
     expect(shownToHim(th('answered', [asked, msg('tm-2', 12, 'ok')]))).toBe(true)
-    expect(shownToHim(th('new', [msg('tm-1', 10, 'build it')]))).toBe(false)
-    expect(shownToHim(th('working', [asked, msg('tm-2', 12, 'and the phone?')]))).toBe(false)
+    expect(shownToHim(th('new', [msg('tm-1', 10, 'build it')]), new Set(), Date.parse(at(13)))).toBe(false)
+    expect(shownToHim(th('working', [asked, msg('tm-2', 12, 'and the phone?')]), new Set(), Date.parse(at(13)))).toBe(false)
     expect(shownToHim(th('pending', [msg('tm-1', 10, 'x')]))).toBe(false)
   })
 
-  it('an answer he has not reacted to shows a working thread, never a pending one; a closed one never shows', () => {
-    expect(shownToHim(th('working', [asked]))).toBe(true)
-    expect(shownToHim(th('pending', [asked]))).toBe(false)
-    expect(shownToHim(th('answered', [asked], { closed: { by: 'human' } }))).toBe(false)
+  it('an answer he has not reacted to does not show a working or pending thread (2026-11-07: the real reply follows); a closed one never shows', () => {
+    const soon = Date.parse(at(12))
+    expect(shownToHim(th('working', [asked]), new Set(), soon)).toBe(false)
+    expect(shownToHim(th('pending', [asked]), new Set(), soon)).toBe(false)
+    expect(shownToHim(th('answered', [asked], { closed: { by: 'human' } }), new Set(), soon)).toBe(false)
+    // Left working past the reminder, the answer shows after all (thread-overdue.test.ts).
+    expect(shownToHim(th('working', [asked]), new Set(), Date.parse(at(11)) + 60 * 60_000)).toBe(true)
   })
 
   it('he replies under the answer: the thread is working and leaves his view at once', () => {
-    expect(shownToHim(th('working', [asked, msg('tm-2', 12, 'also the phone')]))).toBe(false)
+    expect(shownToHim(th('working', [asked, msg('tm-2', 12, 'also the phone')]), new Set(), Date.parse(at(13)))).toBe(false)
   })
 
-  it('a reply shared with another thread does not show it', () => {
+  it('a reply shared with another thread does not show it, even overdue', () => {
     const t = th('working', [asked])
-    expect(shownToHim(t, new Set(['tm-1']))).toBe(false)
+    expect(shownToHim(t, new Set(['tm-1']), Date.parse(at(11)) + 60 * 60_000)).toBe(false)
   })
 })
 
@@ -177,18 +180,20 @@ describe('when the threads he sees last had news (the Threads tab dot)', () => {
   const t = (id: string, state: string, updatedAt: number, messages: ViewMessage[]) => ({ id, state, updatedAt: at(updatedAt), messages })
 
   it('is the newest change or answer among the threads his view shows; hidden ones never count', () => {
-    const shown = t('th-1', 'working', 10, [msg('tm-1', 9, 'a', { min: 15, text: 'A' })])
+    const shown = t('th-1', 'answered', 10, [msg('tm-1', 9, 'a', { min: 15, text: 'A' })])
     const needs = t('th-2', 'needs', 12, [msg('tm-2', 11, 'b')])
     const quiet = t('th-3', 'working', 40, [msg('tm-3', 39, 'c')])
     const pending = t('th-4', 'pending', 50, [msg('tm-4', 49, 'd', { min: 51, text: 'D' })])
-    expect(newsAt([shown, needs, quiet, pending])).toBe(at(15))
-    expect(newsAt([quiet, pending])).toBeNull()
+    const answeredInChat = t('th-5', 'working', 52, [msg('tm-5', 52, 'e', { min: 53, text: 'E' })])
+    const soon = Date.parse(at(55))
+    expect(newsAt([shown, needs, quiet, pending, answeredInChat], new Set(), soon)).toBe(at(15))
+    expect(newsAt([quiet, pending, answeredInChat], new Set(), soon)).toBeNull()
   })
 
   it('a new summary on a shown thread moves it; he writes in it and it leaves (no news of his own)', () => {
     const answered = t('th-1', 'answered', 20, [msg('tm-1', 9, 'a', { min: 15, text: 'A' })])
     expect(newsAt([answered])).toBe(at(20))
     const replied = t('th-1', 'working', 25, [...answered.messages, msg('tm-2', 25, 'thanks')])
-    expect(newsAt([replied])).toBeNull()
+    expect(newsAt([replied], new Set(), Date.parse(at(26)))).toBeNull()
   })
 })

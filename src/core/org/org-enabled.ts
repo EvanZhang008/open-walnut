@@ -124,7 +124,7 @@ export const ORG_OFF_MESSAGE = 'The org is off (Settings → Org): Main and the 
 export const ORG_OFF_BLOCKED_SOURCES: ReadonlySet<string> = new Set([
   'wait-until', 'trigger-check-failed', 'routine', 'routine-trigger', 'routine-watcher',
   'needs-recheck', 'brief-refresh', 'status-report', 'task-watch', ORG_START_SOURCE_NAME,
-  'idle-compact',
+  'idle-compact', 'thread-recheck',
 ]);
 
 /** An org node: Main or a VP (a project's lead). */

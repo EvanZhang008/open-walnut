@@ -90,7 +90,12 @@ describe('every place a node reads it carries it', () => {
 
 describe('his view shows only what has something for him', () => {
   it('says what shows, what hides, and what brings a thread back', () => {
-    expect(THREADS_PENDING_RULE).toMatch(/shows a thread only when it has something for him: needs .*answered .*an answer of yours he has not reacted to/)
+    expect(THREADS_PENDING_RULE).toMatch(/shows a thread only when it has something for him: needs .*answered/)
+    // 2026-11-07, the user: a working thread with only a handoff answer on it is no reply yet.
+    expect(THREADS_PENDING_RULE).not.toMatch(/or an answer of yours he has not reacted to/)
+    expect(THREADS_PENDING_RULE).toContain('your chat answer on it included: give every thread you answer its state in that same turn')
+    expect(THREADS_PENDING_RULE).toMatch(/is overdue: Walnut reminds you, then shows it to him as having no reply/)
+    expect(THREADS_SUMMARY_RULE).toContain('a summary you write replaces your earlier answers on the card')
     expect(THREADS_PENDING_RULE).toMatch(/one he just wrote in \(his message makes it working\)/)
     expect(THREADS_PENDING_RULE).toContain('A new summary written without a state is news and shows it')
     expect(THREADS_PENDING_RULE).toContain('Never write a summary that only says who took it')

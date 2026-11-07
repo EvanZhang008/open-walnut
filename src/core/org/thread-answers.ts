@@ -331,7 +331,7 @@ async function answersIn(sid: string, messages: readonly ThreadMessage[], endedA
 /** How long after a turn's result its transcript is read. */
 const RESULT_SETTLE_MS = 1500;
 
-/** The primary keeps answers current: a node's turn ending reads them, and closed threads expire. */
+/** The primary keeps answers current: a node's turn ending reads them, closed threads expire, and overdue ones wake the node. */
 export function startThreadAnswers(): { stop: () => void } {
   let stopped = false;
   void (async () => {
@@ -352,9 +352,13 @@ export function startThreadAnswers(): { stop: () => void } {
   sweep.unref?.();
   const first = setTimeout(() => { void sweepAll(); }, 60_000);
   first.unref?.();
+  // A thread that sat too long with nothing from the node wakes it (thread-recheck.ts).
+  let recheck: { stop: () => void } | null = null;
+  void import('./thread-recheck.js').then((m) => { if (!stopped) recheck = m.startThreadRecheck(); });
   return {
     stop: () => {
       stopped = true;
+      recheck?.stop();
       clearInterval(sweep);
       clearTimeout(first);
       void import('../event-bus.js').then(({ bus }) => bus.unsubscribe('org-thread-answers'));
