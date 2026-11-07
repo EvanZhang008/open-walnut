@@ -346,7 +346,7 @@ describe('pw-cleanup.sh reaps only what this repo recorded', () => {
     // Each stub must have exec'd its browser script before its owner is read.
     await vi.waitFor(() => {
       for (const p of [owned, live, unrecorded, unmarked]) {
-        const ps = spawnSync('ps', ['-ww', '-o', 'command=', '-p', String(p)], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin' } })
+        const ps = spawnSync('ps', ['-ww', '-o', 'command=', '-p', String(p)], { encoding: 'utf8', env: { PATH: guardedPath([], '/usr/bin:/bin') } })
         expect(ps.stdout).toContain('fake-browser.js')
       }
     }, { timeout: 10_000, interval: 20 })

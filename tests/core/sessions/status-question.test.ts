@@ -48,7 +48,9 @@ afterAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
 })
 
-beforeEach(() => { __resetStatusQuestion(); __resetTriageRateLimiter() })
+// A test that returns once its question was asked leaves that question's tail running (its answer
+// stored, its in-flight mark cleared). Wait for it to end first, or it clears the next test's mark.
+beforeEach(async () => { await settleStatusQuestion(SID, 10_000); __resetStatusQuestion(); __resetTriageRateLimiter() })
 
 describe('the status question', () => {
   it('asks only the status lines, telling the session not to work', () => {
