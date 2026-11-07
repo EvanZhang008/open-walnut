@@ -3,18 +3,12 @@
    draws into it (thread-card.css) and the inline Ask are its only children that
    take the pointer. Same containing-block trick as the history flyout: the view
    is a plain block until something positioned needs it. */
-.file-content-view:has(> .fv-thread-layer),
-.file-content-view:has(> .fv-ask-notice) {
+.file-content-view:has(> .fv-thread-layer) {
   position: relative;
 }
-/* Why an Ask here opened no card (FILE_ASK_FAILURE_TEXT): a press never does nothing. */
+/* Why an Ask here opened no card (FILE_ASK_FAILURE_TEXT): a press never does nothing.
+   Shown in the notice corner (<CornerSlot>), like every notice Walnut raises itself. */
 .fv-ask-notice {
-  position: absolute;
-  top: 52px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 9;
-  max-width: min(420px, calc(100% - 24px));
   padding: 6px 12px;
   border: 1px solid var(--border-strong);
   border-radius: 8px;

@@ -704,7 +704,7 @@ show inline after the open ones, other completed hits that show the query fold i
   growing answer scrolls inside the card instead of moving it to the other side. The pill's
   `Ask here` asks with the quote taken at mouseup (`FileThreadLayerHandle.quoteOf`: a quote is text,
   found again in whatever DOM shows the file by the click), and an Ask that opens no card says why
-  (`FileAskResult`, logged, and shown in the view as `.fv-ask-notice`), never nothing. A file
+  (`FileAskResult`, logged, and shown in the notice corner by `FileAskNotice`), never nothing. A file
   question is located with whitespace ignored (`locateQuote`'s `ignoreWhitespace`), and the views
   that draw a file line by line (the read-only code view, the source editor, a table diff) index
   it with its line breaks (`QuoteSkip.lines`), so a passage over several lines is quoted as the file

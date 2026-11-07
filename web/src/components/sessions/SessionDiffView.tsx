@@ -1,5 +1,6 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback, type ReactNode, type ReactElement, type MouseEvent as ReactMouseEvent } from 'react';
 import { useSelectionMatches } from '@/hooks/useSelectionMatches';
+import { FileAskNotice } from '@/components/common/FileAskNotice';
 import { isBoolean, usePageView } from '@/utils/view-memory';
 import { stableHtml } from '@/hooks/useStableHtml';
 import { useDraft } from '@/hooks/useDraft';
@@ -3261,7 +3262,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
               surfaceNonce={`${selectedChange.filePath}:${phoneDiff ? 'unified' : viewType}:${rendered}:${selectedChange.after.length}`}
             />
           )}
-          {askNotice && <div className="fv-ask-notice" role="status" data-testid="file-ask-notice">{askNotice.text}</div>}
+          {askNotice && <FileAskNotice text={askNotice.text} />}
           </div>
           {refState && (
             <ReferencePanel

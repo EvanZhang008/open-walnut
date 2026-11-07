@@ -25,6 +25,7 @@ import { expect, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import { centreInHistory, openThreadsSession, passageRects, resetThreadsFixture, selectPassage, test } from './threads-helpers'
 import { MAP_SESSION, MAP_TITLES, seededThreadState } from './threads-fixture'
+import { cssColorToRgba } from './css-color'
 
 const MAP_TASK = 'pw-task-threads-map'
 const MAP_READY = 'Summarize the open risks.'
@@ -87,12 +88,8 @@ type Geometry = {
   alpha: number; border: number; shadow: string
 }
 
-const SOLID_BG = (bg: string) => {
-  // "rgb(r, g, b)" is opaque; "rgba(r, g, b, a)" and "color(srgb r g b / a)" carry an alpha.
-  const m = /\/\s*([\d.]+)\)$|rgba\([^)]*,\s*([\d.]+)\)$/.exec(bg)
-  if (bg === 'transparent') return 0
-  return m ? Number(m[1] ?? m[2]) : 1
-}
+/** The background's alpha, 0..1 (every colour form: css-color.ts). */
+const SOLID_BG = (bg: string) => cssColorToRgba(bg)[3]
 
 /** One element's geometry and paint, read in one pass once it stops moving. */
 async function geometry(page: Page, selector: string): Promise<Geometry> {

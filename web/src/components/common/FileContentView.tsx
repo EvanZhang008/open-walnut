@@ -23,6 +23,7 @@
  */
 import { useState, useEffect, useRef, useMemo, useCallback, type ReactNode, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
+import { FileAskNotice } from '@/components/common/FileAskNotice';
 import { useSelectionMatches } from '@/hooks/useSelectionMatches';
 import { stableHtml } from '@/hooks/useStableHtml';
 import { useNavigate } from 'react-router-dom';
@@ -2997,7 +2998,7 @@ export function FileContentView({
           getDocText={docTextNow}
         />
       )}
-      {askNotice && <div className="fv-ask-notice" role="status" data-testid="file-ask-notice">{askNotice.text}</div>}
+      {askNotice && <FileAskNotice text={askNotice.text} />}
       {selection && (
         <SelectionAskPill
           anchor={selection}

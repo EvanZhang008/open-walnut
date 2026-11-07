@@ -22,6 +22,8 @@ import '@/styles/corner-stack.css';
 export const CORNER_ORDER = {
   /** NotificationToaster: Walnut's and plugins' toasts, permission prompts, reminders. */
   toasts: 10,
+  /** Why an Ask here in Files or Changed opened no card (FileAskNotice). */
+  fileAsk: 15,
   /** A board's move toasts (KanbanToasts), with their Undo and Complete buttons. */
   board: 20,
   /** A one-off line from a pop-out window (openPopout.ts). */

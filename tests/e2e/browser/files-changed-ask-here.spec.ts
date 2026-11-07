@@ -480,7 +480,7 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
     })
     expect(pressed, 'the render was replaced under the pill, and Ask here pressed').toEqual({ replaced: true, pressed: true })
     await expectCardLanded(page, view, 'files-md-readonly-rerendered', () => textRects(preview, MDX_LINE, 0, false))
-    await expect(view.locator('[data-testid="file-ask-notice"]')).toHaveCount(0)
+    await expect(page.locator('[data-testid="file-ask-notice"]')).toHaveCount(0)
   })
 
   test('Files: the read-only code view (a truncated read, pill)', async ({ page }) => {

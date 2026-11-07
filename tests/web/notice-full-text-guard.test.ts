@@ -80,6 +80,19 @@ const KINDS: Record<string, { file: string; how: string; check: (src: string, cs
       expect(src).not.toMatch(/popout-flash-notice[\s\S]{0,400}nowrap/);
     },
   },
+  fileAsk: {
+    file: 'web/src/components/common/FileAskNotice.tsx',
+    how: 'fixed short sentences of Walnut\'s own (FILE_ASK_FAILURE_TEXT), which wrap: nothing to cut',
+    check: (src) => {
+      expect(src).toContain('>{text}</div>');
+      const texts = read('web/src/components/common/FileThreadLayer.tsx');
+      const table = texts.slice(texts.indexOf('export const FILE_ASK_FAILURE_TEXT'), texts.indexOf('};', texts.indexOf('export const FILE_ASK_FAILURE_TEXT')));
+      const lines = [...table.matchAll(/^\s+'[\w-]+':\s*'((?:[^'\\]|\\.)*)',$/gm)].map((m) => m[1]);
+      expect(lines.length).toBeGreaterThanOrEqual(5);
+      for (const line of lines) expect(line.length).toBeLessThanOrEqual(80);
+      expect(read('web/src/styles/file-thread.css')).not.toMatch(/\.fv-ask-notice\s*\{[^}]*(nowrap|text-overflow)/);
+    },
+  },
   approvals: {
     file: 'web/src/components/approvals/ApprovalPrompts.tsx',
     how: 'the card is a summary; a click opens the request\'s dialog with its whole words',

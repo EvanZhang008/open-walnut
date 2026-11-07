@@ -148,6 +148,8 @@ describe('one corner for every notice', () => {
       'web/src/components/common/NotificationToaster.tsx',
       'web/src/components/approvals/ApprovalPrompts.tsx',
       'web/src/components/board/kanban/KanbanToasts.tsx',
+      // Why an Ask here opened no card, in Files and in Changed.
+      'web/src/components/common/FileAskNotice.tsx',
     ]) expect(read(f), f).toMatch(/<CornerSlot order=\{CORNER_ORDER\.\w+\}[ >]/);
     expect(read('web/src/popout/openPopout.ts')).toMatch(/appendToCornerStack\(el, CORNER_ORDER\.flash\)/);
   });
