@@ -264,6 +264,7 @@ const DAEMON_SOURCE_FILES = [
   'src/core/sessions/open-items-text.ts',
   // A letter from a session, checked on the host while the Mac is away: same rule.
   'src/core/human-inbox/letter-check.ts',
+  'src/core/routines/trigger-label.ts',
   // git.diff, run host-side: imported by the standalone twin.
   'src/providers/git-diff-core.ts',
   'src/providers/caller-proof-core.ts',

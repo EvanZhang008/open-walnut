@@ -409,17 +409,3 @@ describe('parseEveryMs', () => {
     expect(parseEveryMs('1s')).toBeLessThan(MIN_EVERY_MS);
   });
 });
-
-describe('defaultTriggerName', () => {
-  it('keeps a short prompt whole, cuts a long one at a word boundary, and never adds a prefix', async () => {
-    const { defaultTriggerName } = await import('../../../src/core/routines/trigger-api.js');
-    expect(defaultTriggerName('Read each new comment.')).toBe('Read each new comment.');
-    const long = 'done.txt has appeared in the watched demo folder, read it and report its first line to the user';
-    const name = defaultTriggerName(long);
-    expect(name.length).toBeLessThanOrEqual(64);
-    expect(name.endsWith('...')).toBe(true);
-    expect(name.startsWith('done.txt has appeared in the watched demo folder')).toBe(true);
-    expect(name).not.toMatch(/^Trigger:/);
-    expect(defaultTriggerName('  spaced\n\nout  ')).toBe('spaced out');
-  });
-});

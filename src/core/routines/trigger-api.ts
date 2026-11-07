@@ -21,6 +21,7 @@ import { requireTriggerDaemon, triggerHost } from './trigger-daemon.js';
 import { createRoutine } from './routines-core.js';
 import type { CronJob } from '../cron/types.js';
 import { HOST_TRIGGER_ID_RE } from './host-trigger-id.js';
+import { createTriggerLabel } from './trigger-label.js';
 import { assertCheckHostAllowed, checkCallerOrigin } from './check-host-policy.js';
 import {
   TriggerTemplateError, exemptTemplateRun, parseTemplateRun, templateOriginRefusal, prepareTemplate, requireTriggerTemplate, templateRun,
@@ -254,19 +255,8 @@ async function parkForTrigger(taskId: string, opts: {
   }
 }
 
-/**
- * A name for a trigger the agent did not name: the prompt's opening, cut at a
- * word boundary. No "Trigger:" prefix: the Routines card carries a Trigger badge
- * and the session card says "Trigger fired", so the prefix only repeated itself
- * ("Trigger: Trigger: ...") once the name was printed inside those.
- */
-export function defaultTriggerName(prompt: string, max = 60): string {
-  const flat = prompt.replace(/\s+/g, ' ').trim();
-  if (flat.length <= max) return flat;
-  const cut = flat.slice(0, max);
-  const atWord = cut.lastIndexOf(' ');
-  return `${atWord > max / 2 ? cut.slice(0, atWord) : cut}...`;
-}
+/** Every trigger's name is a short label, never the prompt's opening (trigger-label.ts). */
+export const triggerLabels = createTriggerLabel();
 
 /**
  * The longest `description` trigger_create accepts. It is shown in full on the
@@ -378,7 +368,11 @@ export async function createTriggerRoutine(body: unknown, callerSid?: string, or
   // A template's command runs with no directory (exemptTemplateRun), so it never
   // takes the caller's; one given explicitly still counts against it.
   const cwd = fromTemplate ? '' : str(b.cwd) || (parseTemplateRun(run) ? '' : resolved.cwd) || '';
-  const name = str(b.name) || fromTemplate?.label || defaultTriggerName(prompt);
+  // A name an old host cut from the prompt (its replay) is relabelled too.
+  // A template's label is its own, never a cut of the prompt.
+  const name = !str(b.name) && fromTemplate?.label
+    ? triggerLabels.label({ name: fromTemplate.label, description, run })
+    : triggerLabels.label({ name: str(b.name), description, prompt, run });
   const maxFiresPerDay = b.maxFiresPerDay ?? fromTemplate?.maxFiresPerDay;
 
   if (hostId) {

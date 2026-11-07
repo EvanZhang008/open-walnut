@@ -113,7 +113,10 @@ defineOp({
         + 'does then (e.g. "Checks PR 123 for new review comments every 5 minutes; when one arrives, the session '
         + 'addresses it and replies on the PR."). Shown on the task\'s trigger card, so name the real source. '
         + 'Required unless `template` is given'),
-    name: z.string().optional().describe('Routine name shown on the Routines page (defaults to the prompt\'s opening words)'),
+    name: z.string().optional().describe('A short label, a few plain words naming what it watches (e.g. "PR 123 review comments", '
+      + '"Session cookie watch"). It is what Walnut calls the trigger everywhere: the task\'s waiting line, its trigger card, '
+      + 'trigger_list, Routines, notices. Never the prompt\'s opening: those words are an instruction and read as news. '
+      + 'When left out, Walnut makes one from the description'),
     session: z.string().optional().describe('"this" (default) = the calling session\'s task; or an explicit task id'),
     cwd: z.string().optional().describe('Working directory for the check (defaults to the calling session\'s cwd)'),
     host: z.string().optional().describe('Host whose daemon runs the check (defaults to the calling session\'s host). '

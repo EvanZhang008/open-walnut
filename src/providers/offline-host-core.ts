@@ -38,6 +38,7 @@ import type { HostReplica } from './host-replica-core.js'
 import type { OfflineSearch } from './offline-search-core.js'
 import type { OpenAsk, OpenItemsInput, OpenItemsText, OpenWait } from '../core/sessions/open-items-text.js'
 import type { LetterCheck } from '../core/human-inbox/letter-check.js'
+import { createTriggerLabel, type TriggerLabels } from '../core/routines/trigger-label.js'
 
 /**
  * `aside`: an environment or lane session, which the server never picks as a message's address by name.
@@ -349,6 +350,8 @@ export interface OfflineHostDeps {
   triggers?: OfflineTriggerTable
   /** The letter store's rules (letter-check.ts); absent: a letter to the user needs the server. */
   letters?: LetterCheck
+  /** A trigger's short label (trigger-label.ts); absent: a trigger created here is named by its description's start. */
+  labels?: TriggerLabels
   /**
    * The journal store (offline-journal-core.ts, journal v2). The twins build it (it also
    * migrates v1 journals and answers offline.blob); createOfflineHost builds one in `dir`
@@ -2275,17 +2278,10 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     if (target.phase === 'COMPLETE') return fail('bad_request', `task ${target.id} is complete, so a fire could not land there; point the trigger at an open task`)
     const own = caller?.taskId === target.id
     const cwd = text(args.cwd) || table.cwdOf?.(callerSid) || ''
-    // defaultTriggerName (trigger-api.ts): the prompt's opening, cut at a word boundary.
-    let name = text(args.name)
-    if (!name) {
-      const flat = prompt.replace(/\s+/g, ' ').trim()
-      if (flat.length <= 60) name = flat
-      else {
-        const cut = flat.slice(0, 60)
-        const atWord = cut.lastIndexOf(' ')
-        name = `${atWord > 30 ? cut.slice(0, atWord) : cut}...`
-      }
-    }
+    // The server's label (trigger-label.ts): the author's name, else one from the description, never the prompt.
+    const name = deps.labels
+      ? deps.labels.label({ name: args.name, description, prompt, run })
+      : text(args.name) || description.slice(0, 48)
     // The server's routine id shape (cron/jobs.ts generateId) with a longer random part, so
     // an id this host gives can never be one the server gave (trigger-api.ts HOST_TRIGGER_ID_RE).
     const id = `${deps.now().toString(36)}-${deps.randomHex(4)}`
@@ -2971,6 +2967,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
 export function createOfflineHost(deps: OfflineHostDeps) {
   return createOfflineHostCore({
     ...deps,
+    labels: deps.labels ?? createTriggerLabel(),
     journal: deps.journal ?? createOfflineJournal({
       fs: deps.fs, path: deps.path, dir: deps.dir, now: deps.now, randomHex: deps.randomHex, keyOf: deps.keyOf, log: deps.log,
       sha256: (body) => createHash('sha256').update(body).digest('hex'),

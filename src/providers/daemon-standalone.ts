@@ -112,6 +112,7 @@ import { createClockHostStart } from './clock-host-start-core.js'
 import { createReplicaLogs } from './replica-logs-core.js'
 import { createOpenItemsText } from '../core/sessions/open-items-text.js'
 import { createLetterCheck } from '../core/human-inbox/letter-check.js'
+import { createTriggerLabel } from '../core/routines/trigger-label.js'
 import { createEnvelopeKit } from '../core/peers/envelope-kit.js'
 import {
   foldLine,
@@ -3988,6 +3989,8 @@ const offlineHost = createOfflineHostCore({
   search: createOfflineSearch(),
   // A session's letter to the user is saved here while its Walnut is away (a Mac that drains `letter`).
   letters: createLetterCheck(),
+  // A trigger created here gets the label the server would give it.
+  labels: createTriggerLabel(),
   // The checks run here: their ops answer here while the Walnut is away (walnut-trigger).
   triggers: {
     // Clock routines are not triggers a session lists, pauses or tests here.

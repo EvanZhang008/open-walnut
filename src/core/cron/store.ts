@@ -15,13 +15,15 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { CronStoreFile, CronStateFile, CronJobState, CronServiceState } from './types.js';
+import type { CronJob, CronStoreFile, CronStateFile, CronJobState, CronServiceState } from './types.js';
 import { readJsonFile, writeJsonFile } from '../../utils/fs.js';
 import { noteStoreWrite } from '../replication/store-writes.js';
 import { isHostReplicaProgram } from '../server-role.js';
 import { NeedsLeaderError } from '../replication/needs-leader.js';
 import { recomputeNextRuns } from './jobs.js';
 import { syncExecutorFields } from './executor-compat.js';
+import { createTriggerLabel } from '../routines/trigger-label.js';
+import { promptOf } from '../routines/trigger-push.js';
 
 function emptyStore(): CronStoreFile {
   return { version: 2, jobs: [] };
@@ -130,6 +132,11 @@ export async function ensureLoaded(
     if (syncExecutorFields(job)) {
       dirty = true;
     }
+    // A trigger named with its prompt's opening before labels gets its label (trigger-label.ts).
+    // A host replica keeps the Mac's rows: the copy round brings the Mac's relabel.
+    if (!isHostReplicaProgram() && relabelTrigger(job)) {
+      dirty = true;
+    }
   }
   if (loaded.version !== 2) dirty = true;
   state.store = { version: 2, jobs: loaded.jobs ?? [] };
@@ -140,6 +147,24 @@ export async function ensureLoaded(
   if (!opts?.skipRecompute) {
     recomputeNextRuns(state);
   }
+}
+
+const triggerLabels = createTriggerLabel();
+
+/**
+ * Give a trigger whose name is its prompt's opening a short label instead
+ * (2026-11-06: "The session-cookie-watch check fired. Never print cookie..."
+ * read as news on a task's waiting line). True when it changed the job.
+ * Idempotent: a label is never the prompt's opening, so a second load keeps it.
+ */
+export function relabelTrigger(job: CronJob): boolean {
+  if (!job.check || typeof job.name !== 'string') return false;
+  const prompt = promptOf(job);
+  if (!triggerLabels.isFromPrompt(job.name, prompt)) return false;
+  const label = triggerLabels.label({ name: job.name, description: job.description, prompt, run: job.check.run });
+  if (label === job.name) return false;
+  job.name = label;
+  return true;
 }
 
 /**
@@ -179,6 +204,8 @@ export async function persist(state: CronServiceState): Promise<void> {
     }
   }
 
+  // The one write point, so no path (a create, an edit, a replay, one added later) stores a prompt's opening as a name.
+  for (const job of state.store.jobs) relabelTrigger(job);
   const states: Record<string, CronJobState> = {};
   const jobsWithoutState = state.store.jobs.map((job) => {
     states[job.id] = job.state ?? {};

@@ -105,7 +105,7 @@ describe('trigger_create on a host while its Walnut is away', () => {
       kind: 'op', op: 'trigger_create', callerSid: SID,
       // Decided here, all of it: the server stores what this host runs.
       args: {
-        id: r.id, run: BASE.run, prompt: BASE.prompt, description: BASE.description, name: BASE.prompt,
+        id: r.id, run: BASE.run, prompt: BASE.prompt, description: BASE.description, name: 'Checks the clock',
         every: 300_000, session: TASK, host: 'devbox', cwd: '/work/session-cwd', timeoutSeconds: 300, maxFiresPerDay: 0,
       },
       trigger: {

@@ -8,6 +8,9 @@
  */
 
 import { clampTimeoutSeconds } from '../../providers/trigger-check-core.js';
+import { createTriggerLabel } from '../routines/trigger-label.js';
+
+const triggerLabels = createTriggerLabel();
 import type { CronJobCreate, CronJobPatch } from './types.js';
 
 type UnknownRecord = Record<string, unknown>;
@@ -532,7 +535,10 @@ function normalizeCronJobInput(
       : isRecord(next.executor) && isRecord((next.executor as UnknownRecord).config)
         ? { kind: (next.executor as UnknownRecord).type, message: ((next.executor as UnknownRecord).config as UnknownRecord).instructions }
         : null;
-    if (
+    if ((typeof next.name !== 'string' || !next.name.trim()) && isRecord(next.check)) {
+      // A trigger is named by a short label from its description, never its prompt (trigger-label.ts).
+      next.name = triggerLabels.label({ description: next.description, run: (next.check as UnknownRecord).run });
+    } else if (
       (typeof next.name !== 'string' || !next.name.trim()) &&
       isRecord(next.schedule) &&
       nameSource

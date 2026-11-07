@@ -196,8 +196,8 @@ describe('POST /api/v1/routines/trigger', () => {
     })
     expect(job.schedule).toMatchObject({ kind: 'every', everyMs: 300_000 })
     expect(job.description).toBe('Checks the PR for new review comments every 5 minutes; the session addresses each one.')
-    // The name is the prompt itself when none was given (short enough to keep whole).
-    expect(job.name).toBe('Read each new comment and change the code where it asks.')
+    // With no name given, a short label from the description, never the prompt (trigger-label.ts).
+    expect(job.name).toBe('Checks the PR for new review comments')
     // The server never invents a next check time for a check job.
     expect(job.state.nextRunAtMs).toBeUndefined()
   })

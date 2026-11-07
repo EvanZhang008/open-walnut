@@ -77,6 +77,7 @@ import { createClockSchedule } from './clock-schedule-core.js'
 import { createReplicaLogs } from './replica-logs-core.js'
 import { createOpenItemsText } from '../core/sessions/open-items-text.js'
 import { createLetterCheck } from '../core/human-inbox/letter-check.js'
+import { createTriggerLabel } from '../core/routines/trigger-label.js'
 import { createHostRuntime } from './host-runtime-core.js'
 import { createHostFix } from './host-fix-core.js'
 import { createClaudeInstall } from './claude-install-core.js'
@@ -295,6 +296,7 @@ export function getDaemonSource(): string {
     ['__CREATE_CLOCK_SCHEDULE__', createClockSchedule.toString()],
     ['__CREATE_OPEN_ITEMS_TEXT__', createOpenItemsText.toString()],
     ['__CREATE_LETTER_CHECK__', createLetterCheck.toString()],
+    ['__CREATE_TRIGGER_LABEL__', createTriggerLabel.toString()],
     ['__INITIAL_FOLD_STATE__', initialFoldState.toString()],
     ['__ASSEMBLE_SNAPSHOT__', assembleSnapshot.toString()],
     ['__SNAPSHOT_DIFFERS__', snapshotDiffers.toString()],
@@ -501,6 +503,15 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
       if (!letters.shape({ subject: 's', type: 'info', markdown: 'm' }).ok || letters.shape({ subject: 's', type: 'action_required', markdown: 'm' }).ok
         || letters.opArgs({ subject: 's', type: 'info', markdown: 'm' }) !== null) {
         throw new Error('letter check did not build')
+      }
+    }
+    // Trigger label smoke: a reconstructed labeller must name a trigger from its
+    // description, never from its prompt's opening.
+    const createLabels = reconstructed['__CREATE_TRIGGER_LABEL__'] as typeof createTriggerLabel | undefined
+    if (createLabels) {
+      const labels = createLabels()
+      if (labels.label({ name: 'The check fired. Do...', prompt: 'The check fired. Do the thing.', description: 'Checks PR 123 for new comments.' }) !== 'Checks PR 123 for new comments') {
+        throw new Error('trigger label did not build')
       }
     }
     // Host server smoke: a reconstructed supervisor must refuse a spec with a
@@ -5160,6 +5171,8 @@ var offlineHost = (__CREATE_OFFLINE_HOST__)({
   search: (__CREATE_OFFLINE_SEARCH__)(),
   // A session's letter to the user is saved here while its Walnut is away (a Mac that drains letters).
   letters: (__CREATE_LETTER_CHECK__)(),
+  // A trigger created here gets the label the server would give it. Twin of daemon-standalone.ts.
+  labels: (__CREATE_TRIGGER_LABEL__)(),
   // The checks run here: their ops answer here while the Walnut is away (walnut-trigger).
   triggers: {
     armed: function () {

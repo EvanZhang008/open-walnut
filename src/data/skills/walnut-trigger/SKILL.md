@@ -207,8 +207,8 @@ or a file only that host has), and never paste one inline as `curl -H
    Keep going until `parsed` is non-null. `wouldFire: false` with `parsed` set is a
    working check with nothing to report: that is a pass, not a failure.
 3. **Tell the user in ONE line** what will be watched and how often, before arming it.
-4. **Arm it**: `walnut tools call trigger_create '{"run":"bash ~/.open-walnut/triggers/<slug>/check.sh","every":"5m","prompt":"...","description":"...","wait_until":"4h"}'`.
-   `description` is required (see below). `wait_until` is when you expect the
+4. **Arm it**: `walnut tools call trigger_create '{"run":"bash ~/.open-walnut/triggers/<slug>/check.sh","every":"5m","name":"...","prompt":"...","description":"...","wait_until":"4h"}'`.
+   `description` is required and `name` is expected (see below). `wait_until` is when you expect the
    event, kept short (see below); left out it is 4 hours.
    `session` defaults to `"this"`, so the fire lands in this conversation (resumed
    if it has gone quiet by then). `cwd` and `host` default to this session's.
@@ -235,6 +235,15 @@ carries the items as JSON, so do not ask the model to go re-fetch them.
 When the user asked to be told ("tell me when X", "let me know if"), say so in
 the prompt: "send the user a letter (human_inbox_send) saying X happened". That
 letter is one they asked for. Without that ask, a fire sends no letter.
+
+## Name writing
+
+The name is a short label, a few plain words for what is watched: "PR 123 review
+comments", "Session cookie watch", "#eng-oncall new messages". Walnut calls the
+trigger by it everywhere: the task's waiting line, its trigger card,
+`trigger_list`, Routines, notices. Never the prompt's opening: "The check fired.
+Never print cookie..." was read as "the cookie was deleted again" (2026-11-06).
+Left out, Walnut makes one from the description's first clause.
 
 ## Description writing
 
