@@ -95,7 +95,8 @@ export function ExtControl({ relay, here, tasks, owner, agents, keyed, vault, ke
           <label className="ext-control-setting">
             <span className="ext-control-setting-text">
               <span className="ext-control-setting-name">Let Walnut agents use this browser</span>
-              <span className="ext-control-setting-line">Off: they act only in a tab you share.</span>
+              {/* The line says what the switch does in the state it is in now. */}
+              <span className="ext-control-setting-line" data-testid="ext-control-agents-line">{on ? 'On: they also open tabs of their own, in a window of their own.' : 'Off: they act only in a tab you share.'}</span>
             </span>
             <ToggleSwitch checked={on} onChange={flip} data-testid="ext-control-agents" aria-label="Let Walnut agents use this browser" />
           </label>

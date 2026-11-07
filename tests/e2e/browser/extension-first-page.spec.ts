@@ -656,8 +656,11 @@ test('Browser control: "Shared earlier" lists only tabs he handed over, never a 
   await v.getByTestId('ext-control-agents').click({ timeout: 20_000 })
   await expect.poll(() => sw(lab).evaluate(async () => (await chrome.storage.local.get('agentControl')).agentControl), { timeout: 20_000 }).toBe(true)
   await expect(v.getByTestId('ext-control-agents')).toBeChecked()
+  // The line under the switch says what it does in the state it is in now.
+  await expect(v.getByTestId('ext-control-agents-line')).toHaveText(/^On: /)
   await v.getByTestId('ext-control-agents').click({ timeout: 20_000 })
   await expect.poll(() => sw(lab).evaluate(async () => (await chrome.storage.local.get('agentControl')).agentControl), { timeout: 20_000 }).toBe(false)
+  await expect(v.getByTestId('ext-control-agents-line')).toHaveText(/^Off: /)
   // Ask before a new site: Walnut's own site setting.
   const sites = v.getByTestId('ext-control-ask-sites')
   await expect(sites).toBeVisible({ timeout: 20_000 })
