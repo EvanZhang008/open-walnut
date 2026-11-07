@@ -91,10 +91,13 @@ const sameList = (a: string[], b: string[]) => a.length === b.length && a.every(
 export function useToolRowFit(rowRef: RefObject<HTMLElement | null>): ToolRowState {
   const widths = useRef(new Map<string, number>());
   const [state, setState] = useState<ToolRowState>(NO_TOOL_FIT);
+  const current = useRef(state);
+  current.current = state;
 
-  const measure = useCallback(() => {
+  /** The fit the row's room asks for now, or null when that is what it shows. */
+  const measure = useCallback((): ToolRowState | null => {
     const row = rowRef.current;
-    if (!row) return;
+    if (!row) return null;
     const items: ToolRowItem[] = [];
     for (const el of row.querySelectorAll<HTMLElement>('[data-header-id]')) {
       const id = el.dataset.headerId!;
@@ -113,19 +116,22 @@ export function useToolRowFit(rowRef: RefObject<HTMLElement | null>): ToolRowSta
     const rowWidth = row.getBoundingClientRect().width;
     // A row with no width is not laid out (a hidden column, a collapsed panel):
     // keep the last decision rather than reset to "show everything".
-    if (rowWidth <= 0) return;
+    if (rowWidth <= 0) return null;
     const fit = fitToolRow(items, rowWidth - FIT_SLACK, {
       chipGap: CHIP_GAP, windowGap: WINDOW_GAP, groupGap: GROUP_GAP, moreWidth,
     });
     const hidden = [...fit.inMore, ...fit.dropped];
-    setState((prev) => {
-      const prevHidden = [...prev.hidden];
-      if (sameList(prevHidden, hidden) && sameList(prev.inMore, fit.inMore)) return prev;
-      return { hidden: new Set(hidden), inMore: fit.inMore };
-    });
+    const prev = current.current;
+    if (sameList([...prev.hidden], hidden) && sameList(prev.inMore, fit.inMore)) return null;
+    return { hidden: new Set(hidden), inMore: fit.inMore };
   }, [rowRef]);
 
-  useObserved(rowRef, measure, '[data-header-id]');
+  const apply = useCallback((next: ToolRowState) => {
+    current.current = next;
+    setState(next);
+  }, []);
+
+  useObserved(rowRef, measure, apply, '[data-header-id]');
   return state;
 }
 
@@ -133,24 +139,33 @@ export function useToolRowFit(rowRef: RefObject<HTMLElement | null>): ToolRowSta
  * Re-measures when the container, the elements `alsoWatch` names, or any item
  * changes size, and when the DOM under the outermost watched element changes
  * (a Trigger pill appearing, a chip the host stops offering, a title renamed).
- * The measurement's state update renders before the frame paints (flushSync), and
- * that render is measured again by the observers, so the decision converges at once.
+ * A changed decision renders before the frame paints (flushSync), and that render
+ * is measured again by the observers, so the decision converges at once. An
+ * unchanged one renders nothing: flushSync would also commit every other update
+ * waiting then (the title row's, a neighbour's), and a box above the row changing
+ * inside the observer's callback is WebKit's 'ResizeObserver loop' error.
  */
-function useObserved(
+function useObserved<T>(
   ref: RefObject<HTMLElement | null>,
-  measure: () => void,
+  measure: () => T | null,
+  apply: (next: T) => void,
   itemSelector: string,
   alsoWatch?: (el: HTMLElement) => HTMLElement[],
 ) {
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    measure();
+    // In a layout effect the update renders before paint by itself.
+    const first = measure();
+    if (first !== null) apply(first);
     if (typeof ResizeObserver === 'undefined') return;
     // The observers run after layout and before paint; flushSync renders the new fit in that same
     // frame, so a column that narrows or widens (a draft opening or closing beside it) never paints
     // one frame with the old fit (2026-11-04: a neighbour's tools showed compact, then expanded).
-    const fit = () => flushSync(measure);
+    const fit = () => {
+      const next = measure();
+      if (next !== null) flushSync(() => apply(next));
+    };
     const ro = new ResizeObserver(fit);
     const watched = alsoWatch?.(el) ?? [];
     const observeItems = () => {
@@ -165,5 +180,5 @@ function useObserved(
     const mo = typeof MutationObserver === 'undefined' ? null : new MutationObserver(() => { observeItems(); fit(); });
     mo?.observe(root, { childList: true, subtree: true, characterData: true });
     return () => { ro.disconnect(); mo?.disconnect(); };
-  }, [ref, measure, itemSelector, alsoWatch]);
+  }, [ref, measure, apply, itemSelector, alsoWatch]);
 }

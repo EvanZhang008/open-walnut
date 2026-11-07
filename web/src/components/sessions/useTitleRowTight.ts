@@ -16,7 +16,7 @@ export const TITLE_ROW_TIGHT_PX = 440;
 export function useTitleRowTight(): [(el: HTMLElement | null) => void, boolean] {
   const [el, setEl] = useState<HTMLElement | null>(null);
   const [tight, setTight] = useState(false);
-  // Before paint, so a narrow column never shows the words for one frame.
+  // Before paint at mount, so a narrow column never shows the words for one frame.
   useLayoutEffect(() => {
     if (!el) return;
     const read = () => {
@@ -25,9 +25,17 @@ export function useTitleRowTight(): [(el: HTMLElement | null) => void, boolean] 
     };
     read();
     if (typeof ResizeObserver === 'undefined') return;
-    const ro = new ResizeObserver(read);
+    // A resize is read on the next frame, never inside the observer's callback: the labels
+    // moving to their own line changes the header's height, and a box above the row changing
+    // inside the callback (or inside the tool row's flushSync in the same pass) is what WebKit
+    // reports as 'ResizeObserver loop completed with undelivered notifications' (2026-11-07).
+    let raf = 0;
+    const ro = new ResizeObserver(() => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => { raf = 0; read(); });
+    });
     ro.observe(el);
-    return () => ro.disconnect();
+    return () => { ro.disconnect(); if (raf) cancelAnimationFrame(raf); };
   }, [el]);
   return [setEl, tight];
 }
