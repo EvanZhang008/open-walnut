@@ -615,7 +615,8 @@ test('the key: locked, one row to unlock; unlocked, this site\'s logins; Fill fi
   await expect(pop).toHaveCount(0)
   // The drawer says how many logins this site has.
   await v.getByTestId('ask-walnut-menu').click()
-  await expect(v.getByTestId('ext-drawer-passwords-meta')).toHaveText('1 login here', { timeout: 15_000 })
+  // (A count, not a fixed one: another spec on the shared fixture may save a login for this site too.)
+  await expect(v.getByTestId('ext-drawer-passwords-meta')).toHaveText(/^[1-9]\d* logins? here$/, { timeout: 15_000 })
   await panel.keyboard.press('Escape')
   // On a page with no site (Walnut's own) the row still has a state (R1-13b).
   await lab.doc.goto(`${lab.base}/`)
