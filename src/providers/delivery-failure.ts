@@ -109,6 +109,17 @@ export function isSlowHostFailure(err: unknown): boolean {
   return err instanceof Error && HOST_SLOW.test(err.message);
 }
 
+/**
+ * Nothing reached the host: its link is down (a send held for the connection, a
+ * daemon connection that is not up, a connect that failed a moment ago). The
+ * message was never written, so it waits and goes out when the link is back
+ * (the reconnect redelivers it), never a "Send failed".
+ */
+const HOST_LINK_DOWN = /waiting for the connection to the session host|no companion connection is available|^DaemonConnection not connected to\b|connection to .+ failed \d+s ago|connection to .+ was closed/i;
+export function isHostLinkFailure(err: unknown): boolean {
+  return err instanceof Error && !(err instanceof SendOutcomeUnknownError) && HOST_LINK_DOWN.test(err.message);
+}
+
 export function isDaemonCommandOutcomeUnknown(err: unknown): boolean {
   if (err instanceof SendOutcomeUnknownError) return true;
   if (!(err instanceof Error)) return false;

@@ -62,6 +62,8 @@ export interface StatusFacts {
     errorKind?: string; restartLoss?: { state: string; cause?: string };
     endpointWait?: UserStatusInput['endpointWait'];
     usageLimit?: UserStatusInput['usageLimit'];
+    /** Its process runs (or ran) on this host, and nothing reaches the host now. */
+    hostDown?: string;
     pendingTool?: string; taskId?: string; archived?: boolean; startedAt?: string;
     /** Its own work that runs on after its turn (sessions/outliving-work.ts), from the live runner. */
     outliving?: OutlivingSource[];
@@ -335,13 +337,24 @@ export async function readStatusFacts(tasks: readonly Task[], allIds: readonly s
     const runner = await import('../providers/claude-code-session.js').then((m) => m.sessionRunner).catch(() => null);
     const endpoint = await import('./sessions/endpoint-wait.js').catch(() => null);
     const limits = await import('./sessions/usage-limit-wait.js').catch(() => null);
+    const links = await import('../providers/daemon-connection.js').catch(() => null);
+    // A link state that cannot be read is not "down".
+    const linkDown = (host: string): boolean => { try { return links?.hostLinkDown(host) === true } catch { return false } };
+    // A host's name in a sentence (its label), read once per pass.
+    const names = new Map<string, Promise<string>>();
+    const downHostName = (host: string): Promise<string> => {
+      if (!names.has(host)) names.set(host, import('./hosts/host-display-name.js').then((m) => m.hostDisplayNameFor(host)).catch(() => host));
+      return names.get(host)!;
+    };
     for (const rec of await listSessionsForTasks(taskIds, sessionIds)) {
       if (rec.provider === 'embedded') continue;
       // Only a live process carries work on: a stopped one's runner state is its last word.
       const live = rec.process_status === 'running' || rec.process_status === 'idle';
       const outliving = live && runner ? runner.outlivingWorkOf(rec.claudeSessionId) : [];
+      const hostDown = rec.host && !rec.archived && linkDown(rec.host) ? await downHostName(rec.host) : undefined;
       sessions.set(rec.claudeSessionId, {
         ...(outliving.length ? { outliving } : {}),
+        ...(hostDown ? { hostDown } : {}),
         // A quiet turn (Walnut's idle compaction, sessions/quiet-turn.ts) is no running work.
         processStatus: rec.process_status === 'running' && isQuietTurn(rec.claudeSessionId) ? 'idle' : rec.process_status,
         errorMessage: rec.errorMessage,
@@ -464,6 +477,7 @@ export function statusInputOf(task: Task, facts: StatusFacts, nowMs = Date.now()
     restartLoss: main?.restartLoss ?? null,
     endpointWait: main?.endpointWait ?? null,
     usageLimit: main?.usageLimit ?? null,
+    hostDown: main?.hostDown ?? null,
     projectLead: !!facts.projectLeads?.has((task.project ?? '').trim().toLowerCase()) && task.org_role !== 'lead',
     undeliveredMessage: undelivered?.reason ?? null,
     statusSince: main?.statusSince ?? null,
@@ -827,6 +841,9 @@ function markSession(sessionId: unknown): void {
     .catch(() => markAll());
 }
 
+/** Each host's link as the last host:status frame said it (up or not), so only a change re-derives. */
+const hostUp = new Map<string, boolean>();
+
 function markAll(): void {
   all = true;
   schedule();
@@ -845,6 +862,15 @@ function onEvent(event: { name: string; data: unknown; source?: string }): void 
       // names only the new parent, so a former one drops it at the minute sweep.
       mark(d.task?.parent_task_id);
       return;
+    case EventNames.HOST_STATUS: {
+      // A host's link went down or came back: its tasks read Waiting on it, or no longer.
+      const host = typeof d.host === 'string' ? d.host : '';
+      const up = d.connected === true;
+      if (!host || hostUp.get(host) === up) return;
+      hostUp.set(host, up);
+      markAll();
+      return;
+    }
     case EventNames.SESSION_STATUS_CHANGED:
     case EventNames.SESSION_PERMISSION_REQUEST:
     case EventNames.SESSION_PERMISSION_RESOLVED:
@@ -892,7 +918,7 @@ export function startUserStatusSync(): void {
       EventNames.SESSION_ENDED, EventNames.SESSION_STARTED, EventNames.SESSION_USAGE_LIMIT,
       EventNames.HUMAN_INBOX_LETTER, LETTER_ANSWERED, LETTER_STATE, EventNames.BOARD_CHANGED,
       EventNames.CRON_JOB_ADDED, EventNames.CRON_JOB_UPDATED, EventNames.CRON_JOB_REMOVED,
-      EventNames.ORG_THREADS_CHANGED,
+      EventNames.ORG_THREADS_CHANGED, EventNames.HOST_STATUS,
     ],
   });
   // A turn-end report armed, asked or settled changes what the task waits on (user-status.ts).

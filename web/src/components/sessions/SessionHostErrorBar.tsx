@@ -8,6 +8,7 @@
  * the session's own error, and a test server's host says it is off.
  * Sentences come from @open-walnut/host-problem (or the server) only.
  */
+import { useEffect, useState } from 'react';
 import { REMOTE_OFF_NOTE, hostProblemOf } from '@open-walnut/host-problem';
 import { useHostStatus } from '@/hooks/useHostStatus';
 import { useHostActions, RETRY_FAILED_TEXT, CHECK_FAILED_TEXT } from '@/hooks/useHostActions';
@@ -16,6 +17,7 @@ import { HostFailureText } from '@/components/hosts/HostFailureText';
 import { HostCommands } from '@/components/hosts/HostCommands';
 import { InlineCodeText } from '@/components/common/InlineCodeText';
 import { StableButton } from '@/components/common/HostProblemRows';
+import { PanelNotice } from './PanelNotice';
 import '@/styles/attention-banner.css';
 
 export function reconnectingText(label: string): string {
@@ -97,4 +99,38 @@ export function SessionHostErrorText({ host, label, reconnecting, fallback }: {
     );
   }
   return <span className="session-error-banner-text">{fallback}</span>;
+}
+
+/** What the panel says, beside the host line, about messages while nothing reaches the host. */
+export const HOST_DOWN_MESSAGES_NOTE = 'Messages you send wait and go out by themselves once the connection is back; replies written meanwhile show then.';
+
+/**
+ * A live session whose host nothing reaches now, said the moment the link is down (2026-11-06:
+ * a host's sign-in expired and its tasks' panels said nothing; the record turns 'error' only
+ * after five minutes down, and the main banner waits two). Nothing for a host that is fine or
+ * only not ready: the error banner speaks for a session in error.
+ */
+export function SessionHostDownBanner({ host, label }: { host: string; label: string }) {
+  const status = useHostStatus(host);
+  const replica = useIsCloudReplica();
+  const p = hostProblemOf(status, { replica });
+  const down = !!p && (p.type === 'connect' || p.type === 'reconnecting' || p.type === 'off');
+  // Held until the host is connected again: a re-dial in flight reads as no problem for its
+  // first half minute (no failure recorded yet), and the notice must not blink off meanwhile.
+  const [held, setHeld] = useState(false);
+  const connected = status?.connected === true;
+  useEffect(() => {
+    if (down) setHeld(true);
+    else if (connected || !status) setHeld(false);
+  }, [down, connected, status]);
+  if (!down && !held) return null;
+  const l = status?.label || label || host;
+  return (
+    <PanelNotice className="session-error-banner session-error-banner--reconnecting" icon={'\u21BB'} testId="session-host-down" role="status">
+      <div className="session-host-down-body">
+        <SessionHostErrorText host={host} label={label} reconnecting={!down} fallback={`${l} cannot be reached right now`} />
+        <div className="hpb-last" data-testid="session-host-down-note">{HOST_DOWN_MESSAGES_NOTE}</div>
+      </div>
+    </PanelNotice>
+  );
 }

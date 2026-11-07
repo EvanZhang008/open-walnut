@@ -518,6 +518,8 @@ export class DaemonConnection {
   private pendingCommands = new Map<number, PendingCommand>()
   private eventHandlers: EventHandler[] = []
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  /** When the pending backoff timer re-dials (epoch ms; 0 = none pending). */
+  private reconnectTimerAt = 0
   /** The reconnect() attempt running now: a concurrent caller joins it instead of starting a second connect(). */
   private _reconnectInFlight: Promise<void> | null = null
   /** The backoff delay the pending timer continues from (so an expedited attempt keeps its place in the chain). */
@@ -6226,6 +6228,9 @@ export class DaemonConnection {
   /** A backoff timer is waiting to re-dial. */
   get reconnectPending(): boolean { return this.reconnectTimer !== null }
 
+  /** When the pending backoff timer re-dials (epoch ms), or null when none is pending. */
+  get reconnectAt(): number | null { return this.reconnectTimer !== null && this.reconnectTimerAt > 0 ? this.reconnectTimerAt : null }
+
   /** A connect() is running on this instance (the pool's connectingPromises holds it). */
   get connecting(): boolean { return this._connecting }
 
@@ -6280,6 +6285,7 @@ export class DaemonConnection {
       return
     }
 
+    this.reconnectTimerAt = Date.now() + delayMs
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
       if (this._destroyed || this._connected) return
@@ -8092,6 +8098,31 @@ export function isDaemonConnected(hostKey: string): boolean {
   // bare map lookup answered "disconnected" for every '__local__' query and
   // silently excluded local sessions from callers' recovery/liveness logic.
   return getConnectedDaemonConnection(hostKey) !== null
+}
+
+/**
+ * Nothing reaches this remote host now: its link is not up and Walnut is reconnecting, or its
+ * last connect failed. A first dial still under way is not "down". Read from the pool only.
+ */
+export function hostLinkDown(hostKey: string): boolean {
+  if (!hostKey || hostKey === '__local__') return false
+  const conn = connectionPool.get(hostKey)
+  if (conn?.connected || conn?.handoverPending) return false
+  // A link that was up and dropped, through every dial of its reconnect loop (a dial in flight
+  // has no cause recorded yet, and its phase reads as connecting).
+  if (conn?.disconnectedSince) return true
+  const state = getDaemonConnectState(hostKey)
+  if (state.connected || state.handover) return false
+  return state.phase === 'reconnecting' || state.phase === 'failed' || typeof state.reconnectSince === 'number'
+}
+
+/**
+ * When Walnut next tries to reach this host by itself (epoch ms): the reconnect loop's
+ * pending re-dial, or its standing failure's next probe. Null when nothing is scheduled.
+ */
+export function hostReconnectAt(hostKey: string): number | null {
+  const at = connectionPool.get(hostKey)?.reconnectAt ?? getDaemonConnectState(hostKey).retryAt ?? null
+  return typeof at === 'number' && at > Date.now() ? at : null
 }
 
 export function getDaemonDisconnectedSince(hostKey: string): number | null {

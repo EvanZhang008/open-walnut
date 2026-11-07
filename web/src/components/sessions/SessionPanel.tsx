@@ -135,7 +135,7 @@ import { SessionRetryButton } from './SessionRetryButton';
 import type { SessionPassageComment, SessionRecord, SessionThreadMeta, TaskPhase } from '@/types/session';
 import { useEnabledModes } from '@/hooks/useEnabledModes';
 import { getErrorSuggestion } from '@/utils/error-suggestions';
-import { SessionHostErrorText, useSessionHostHasProblem } from './SessionHostErrorBar';
+import { SessionHostDownBanner, SessionHostErrorText, useSessionHostHasProblem } from './SessionHostErrorBar';
 import { ErrorSuggestionLink } from '@/components/common/ErrorSuggestionLink';
 import { useResolvedSessionRecord, useSessionStatus } from '@/hooks/useSessionStatus';
 import { ComposerThreadPill } from './ComposerThreadPill';
@@ -3239,6 +3239,9 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             </PanelNotice>
           );
         })()}
+        {ps !== 'error' && session?.host && !session.archived && !session.cwdGone && (
+          <SessionHostDownBanner host={session.host} label={session.hostname || session.host} />
+        )}
         {ps === 'stopped' && session?.errorMessage && (() => {
           // Idle-timeout reclaim is routine housekeeping, not a failure — the health
           // monitor stops CLI processes after N idle minutes to free memory, and the

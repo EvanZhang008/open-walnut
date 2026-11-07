@@ -477,6 +477,12 @@ export function registerSessionChatRpc(): void {
     // unanswered permission prompt. A confirm hold on a row back in pending (its
     // write failed) is stale until the next attempt releases it, so it says nothing.
     const held = heldRows(data.sessionId)
+    // A row waiting for its host (a slow one, or one nothing reaches now) says so after a
+    // reload too, with its next try; after a server restart no hold is kept, so a pending row
+    // to a host whose link is down now reads the same wait (2026-11-06: messages to a host whose
+    // sign-in expired read "Queued" with no word of the host).
+    const { heldWaitOf } = await import('../../core/sessions/held-wait.js')
+    const waitOf = await heldWaitOf(data.sessionId)
     const { presentAfterTurn } = await import('../../core/sessions/queue-after-turn.js')
     // Walnut's own quiet commands (its /compact) are no message of the person's: a reloaded panel
     // would draw one as his bubble (sessions/walnut-commands.ts).
@@ -494,7 +500,9 @@ export function registerSessionChatRpc(): void {
       const holds = why !== undefined && (m.status === 'processing' || (m.status === 'pending' && why === PROMPT_HOLD_REASON))
       // An App's AI-only brief riding the row shows its fold (lib/ai-only-envelope.ts); an edit keeps the real one (editMessage).
       const shown = { ...(hasAiOnly(m.message) ? { ...m, message: redactAiOnly(m.message) } : m), ...queueRowFacts(m, sid, live) }
-      return holds ? { ...shown, heldReason: why } : shown
+      if (holds) return { ...shown, heldReason: why }
+      const wait = m.status === 'pending' ? waitOf(m.id, why) : null
+      return wait ? { ...shown, heldReason: wait.reason, ...(wait.retryAt ? { heldRetryAt: wait.retryAt } : {}) } : shown
     })
     return { messages, ...(launchPrompt ? { launchPrompt } : {}) }
   })

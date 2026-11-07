@@ -257,6 +257,10 @@ export interface UserStatusInput {
    *  at the reset (sessions/usage-limit-wait.ts), so it waits on the reset, not the user, unless the
    *  user turned that off or the wait gave up. The sync passes it only while no turn runs. */
   usageLimit?: Pick<SessionUsageLimit, 'state' | 'engine' | 'window' | 'resetsAt' | 'dueAt' | 'resetsFrom'> | null;
+  /** Its session's host, when nothing reaches that host now (its link is down): a live session, or
+   *  a task whose work is under way, reads Waiting on its machine at once, not after the five
+   *  minutes the session record takes. */
+  hostDown?: string | null;
   /** Its project has an open lead (a VP), who restarts what Walnut could not. */
   projectLead?: boolean;
   /** A message to its session was parked, never delivered, since the phase last moved: the reason. */
@@ -597,6 +601,29 @@ function machineStop(input: UserStatusInput, w: ReturnType<typeof words>, nowMs:
   return strip<UserStatus>({ state: 'waiting', kind: 'machine', waitingOn, ...w, stoppedBy: 'machine' });
 }
 
+/**
+ * Nothing reaches its host now (2026-11-06: a host's sign-in expired, and its tasks read Working
+ * while the person's messages to them went nowhere): a live session, or work under way, reads
+ * Waiting on its machine, naming the host, on every surface that reads this status. Only over
+ * what the host's outage makes untrue (working, a wait on something else, Walnut's short machine
+ * wait): every ask of the user (a prompt, a letter, a choice, a person's mark, an error), a result
+ * to read, and a machine stop that already went to its lead or the user stay as they are.
+ */
+function hostDownOver(status: UserStatus, input: UserStatusInput): UserStatus {
+  if (!input.hostDown) return status;
+  const live = input.processStatus === 'running' || input.processStatus === 'idle';
+  if (!live && input.phase !== 'IN_PROGRESS') return status;
+  if (status.state !== 'working' && status.state !== 'waiting') return status;
+  if (status.state === 'waiting' && (status.kind === 'you' || (status.stoppedBy === 'machine' && status.kind !== 'machine'))) return status;
+  const { kind: _k, waitingOn: _o, until: _u, ...rest } = status;
+  return strip<UserStatus>({ ...rest, state: 'waiting', kind: 'machine', waitingOn: hostDownWords(input.hostDown), stoppedBy: 'machine' });
+}
+
+/** What a task whose host nothing reaches now waits on, in words. */
+export function hostDownWords(host: string): string {
+  return `Its host ${host}, which cannot be reached right now: Walnut reconnects by itself, and messages to it wait until then`;
+}
+
 /** A machine stop standing this long goes to its lead (or the user when it has none). */
 export const MACHINE_STOP_ESCALATE_MS = 24 * 60 * 60_000;
 
@@ -692,7 +719,7 @@ export function queuedWaitingOn(q: { host?: string; reason?: string }): string {
 }
 
 export function deriveUserStatus(input: UserStatusInput, nowMs: number = Date.now()): UserStatus {
-  const derived = orgNodeNeverNeeds(derive(input, nowMs), input);
+  const derived = orgNodeNeverNeeds(hostDownOver(derive(input, nowMs), input), input);
   // A thread's ask is the thread; the node's own report words are no line of it.
   const line = derived.source === 'thread' ? null : lineOf(input, derived);
   if (line) derived.line = line;

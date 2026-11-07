@@ -1,5 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useSyncExternalStore, memo, isValidElement, type ReactNode } from 'react';
 import { useDraft } from '@/hooks/useDraft';
+import { useHostStatus } from '@/hooks/useHostStatus';
 import { draftHash, draftKey, writeDraft } from '@/utils/drafts';
 import { staleBannerText } from './stale-banner-text';
 import { scrollDebugEnabled } from '@/utils/scroll-debug';
@@ -245,6 +246,8 @@ export interface OptimisticMessage extends SessionHistoryMessage {
   /** The server holds this row behind a line it is still confirming (read back
    *  from session:get-queue on load, so a reload keeps the waiting note). */
   heldReason?: string;
+  /** When Walnut sends a held row again by itself (get-queue's heldRetryAt), so a reload keeps the next try. */
+  heldRetryAt?: string;
   /** Who sent a row this tab did not (the queue's `sentBy`, from the send's
    *  source): an agent's card folds on arrival (queuedFoldRuns). */
   sentBy?: 'person' | 'agent';
@@ -1247,6 +1250,20 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   useEvent('_ws:reconnected', () => {
     runWhenVisible(`sch:reconnect:${sessionId}#${instanceUid.current}`, () => bumpHistory());
   });
+
+  // Its host's link came back: what the session wrote while nothing reached the host (a reply
+  // to a message sent before the link went) reached no stream of ours, so history is read again
+  // (2026-11-06: a host's sign-in expired for hours under its tasks' open panels).
+  const hostLink = useHostStatus(sessionHost || null);
+  const hostConnected = hostLink ? hostLink.connected === true : null;
+  const hostWasDown = useRef(false);
+  useEffect(() => {
+    if (hostConnected === false) { hostWasDown.current = true; return; }
+    if (hostConnected !== true || !hostWasDown.current) return;
+    hostWasDown.current = false;
+    log.info('stream', 'session host reconnected: reading history again', { sessionId, host: sessionHost });
+    runWhenVisible(`sch:host-back:${sessionId}#${instanceUid.current}`, () => bumpHistory());
+  }, [hostConnected, sessionId, sessionHost, bumpHistory]);
 
   // Agent-sent messages: create synthetic optimistic message so it appears in the queue.
   // `side-thread-*` sources are TOOL PLUMBING (the cache warm-up, the self-summary
@@ -3018,8 +3035,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // ── Build interleaved timeline over VISIBLE blocks ──
   // shownHiddenBlocks (absorbed by history, or held for the first check) don't
   // render; visibility is decided here, at render time, not by deleting state.
+  // A message still waiting for its host (held, with its reason) is not on its way to an
+  // answer: no "Waiting for response" under it.
   const isResuming = !isStreaming && foregroundActive !== false && phase === 'IN_PROGRESS'
-    && deduped.length > 0;
+    && deduped.length > 0 && !deduped.every((m) => heldIds.has(m.queueId) || !!m.heldReason);
   // Where Claude Code took each line (its markers): what every placement below reads.
   const takenLines = useMemo(() => takenLinesOf(blocks), [blocks]);
   // Transcript rows still in the CLI's queue that no bubble here stands for (a send
@@ -5259,7 +5278,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         )}
         {(heldIds.has(m.queueId) || !!m.heldReason) && (m.status === 'pending' || m.status === 'received') && (() => {
           const reason = heldIds.get(m.queueId) ?? m.heldReason ?? HELD_DEFAULT_REASON;
-          const retryAt = heldRetryAt.get(m.queueId);
+          const retryAt = heldRetryAt.get(m.queueId) ?? (heldIds.has(m.queueId) ? undefined : m.heldRetryAt);
           // A message the host did not take in time: Walnut sends it again by
           // itself, and Send now does it at once (the same row, no copy).
           const clocked = !!retryAt || isSlowHostReason(reason);

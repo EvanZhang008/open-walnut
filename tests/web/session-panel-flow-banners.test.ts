@@ -30,7 +30,8 @@ function rootClassOf(file: string, name: string): string {
   const fn = src.search(new RegExp(`export function ${name}\\b`))
   const body = src.slice(fn)
   const ret = body.search(/return \(\s*(\/\/[^\n]*\n\s*)*</)
-  const root = body.slice(ret).match(/<div[^>]*?className=(\{`[^`]*`\}|"[^"]*")/)
+  // Its root: a plain element or a PanelNotice, whichever it returns.
+  const root = body.slice(ret).match(/<(?:div|PanelNotice)\b[^>]*?className=(\{`[^`]*`\}|"[^"]*")/)
   return root?.[1] ?? ''
 }
 

@@ -120,6 +120,8 @@ export interface QueueRowWire {
   parkedReason?: string;
   userUuid?: string;
   heldReason?: string;
+  /** When the held row is tried again (a host that cannot be reached: its next re-dial). */
+  heldRetryAt?: string;
   sentBy?: 'person' | 'agent';
   /** waiting: not written to the CLI; written: in its stdin, read after its current step; taken: the CLI read it. */
   stage?: 'waiting' | 'written' | 'taken';
@@ -161,7 +163,7 @@ export function queueRowBubble(m: QueueRowWire): OptimisticMessage | null {
     queueId: m.id,
     status: (held ? 'received' : m.status === 'processing' ? 'delivered' : parked ? 'failed' : 'received') as 'received' | 'delivered' | 'failed',
     ...(parked ? { parked: true, failedError: m.parkedReason } : {}),
-    ...(held ? { heldReason: m.heldReason } : {}),
+    ...(held ? { heldReason: m.heldReason, ...(m.heldRetryAt ? { heldRetryAt: m.heldRetryAt } : {}) } : {}),
     ...(dedupText !== undefined ? { dedupText } : {}),
     // No per-stage badge here: a reloaded tab is never told when the CLI reads a row it
     // already counted delivered at its write, so a "written" note would go stale. A

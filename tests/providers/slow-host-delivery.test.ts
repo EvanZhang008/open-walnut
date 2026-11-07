@@ -123,12 +123,11 @@ describe('a session start the host did not answer in time', () => {
   });
 
   it('any other transient failure still reads as a failed send with Retry', async () => {
-    // A host that is down or refused the login keeps its own words (and its
-    // recovery card): only "up but slow" is a clocked wait.
+    // A failure that says nothing of the host's link keeps its own words: only "up but
+    // slow" and a link that is down (host-link-down-delivery.test.ts) are waits.
     for (const [sid, message] of [
       ['other-transient-sid', 'daemon start failed: publickey denied'],
-      ['not-connected-sid', 'DaemonConnection not connected to devbox'],
-      ['conn-failed-sid', 'Connection to devbox failed 12s ago: Permission denied (publickey)'],
+      ['spawn-emfile-sid', 'spawn claude EMFILE'],
     ] as const) {
       events = [];
       await enqueueMessage(sid, 'host refused the key');

@@ -85,8 +85,9 @@ import { isWalnutOwnToolUse } from './acp-permission-posture.js'
 import { isWakeupArmed } from './daemon-fold.js'
 import { outlivingOf, type OutlivingSource } from '../core/sessions/outliving-work.js'
 import { noteSuppressedErrorReason } from '../core/session-snapshot-gate.js'
-import { BudgetCheckingError, BudgetPausedError, classifyDeliveryFailure, isDaemonCommandOutcomeUnknown, isSlowHostFailure, SendHeldError, SendOutcomeUnknownError, SessionHeldElsewhereError } from './delivery-failure.js'
+import { BudgetCheckingError, BudgetPausedError, classifyDeliveryFailure, isDaemonCommandOutcomeUnknown, isHostLinkFailure, isPermanentDeliveryFailure, isSlowHostFailure, SendHeldError, SendOutcomeUnknownError, SessionHeldElsewhereError } from './delivery-failure.js'
 import { describeClaudeLaunchFailure } from './host-runtime-core.js'
+import { hostLinkReason, isHostWaitReason, slowHostReason } from './host-wait-words.js'
 import { AcpSession, sessionMcpServerToAcp, splitAcpModelId } from './acp-session.js'
 import { engineCaps, isAcpEngine, resolveEngine } from '../core/agents/engine-registry.js'
 import { CLI_ERROR_PREFIX, extractImageFilePathFromInput } from '../core/session-history.js'
@@ -10684,6 +10685,20 @@ export class ClaudeCodeSession {
 
 // ── SessionRunner ──
 
+/**
+ * The clock that sends a session's rows again when its host did not take them: a host that
+ * did not answer in time ('start', 'send'), or one nothing reaches now ('link', `host`), whose
+ * rows the reconnect delivers; the clock then only says the next try.
+ */
+interface SlowHostRetry {
+  timer?: ReturnType<typeof setTimeout>; tries: number; at: number; why: 'start' | 'send' | 'link'
+  /** The host nothing reaches ('link'): its key, and the name a person knows it by. */
+  host?: string; hostName?: string
+}
+
+/** A session's host whose link is down: its key (the daemon pool's) and its name in a sentence. */
+interface DownHost { host: string; name: string }
+
 type HeldSendRetry = {
   timer?: ReturnType<typeof setTimeout>; delay: number; target: ClaudeCodeSession;
   stopEpoch: number; fence: string | null; ids: Set<string>;
@@ -10691,16 +10706,19 @@ type HeldSendRetry = {
   at?: number;
 }
 
-/**
- * What a message waiting on a host that did not answer in time says (the bubble's
- * note, the session's error line). Plain words: the message is kept and goes out by
- * itself; the bubble adds when the next try is and a Send now.
- */
-export function slowHostReason(why: 'start' | 'send'): string {
-  return why === 'start'
-    ? 'Not sent yet: the computer running this session did not start it in time (it may be very busy). Your message is kept and Walnut tries again by itself.'
-    // The line may already be in the CLI: the next try asks the host first, never sends it twice.
-    : 'Not confirmed yet: the computer running this session did not say in time whether it got your message (it may be very busy). Your message is kept and Walnut asks again by itself.'
+export { HOST_LINK_REASON_PREFIX, hostLinkReason, isHostWaitReason, slowHostReason } from './host-wait-words.js'
+
+/** daemon-connection, loaded once a delivery needs a host's link state (it imports this module). */
+let daemonLinks: typeof import('./daemon-connection.js') | null = null
+
+/** Nothing reaches this host now. A link state that cannot be read is not "down". */
+function linkDown(host: string): boolean {
+  try { return daemonLinks?.hostLinkDown(host) === true } catch { return false }
+}
+
+/** When the host's own re-dial runs next (epoch ms), or null. */
+function redialAt(host: string): number | null {
+  try { return daemonLinks?.hostReconnectAt(host) ?? null } catch { return null }
 }
 
 /** The longest a running turn keeps its activeProcessing entry past the 60s check
@@ -10754,7 +10772,7 @@ export class SessionRunner {
   /** Sends the host's budget had not decided yet ('checking'), sent again on a clock (armBudgetRetry). */
   private budgetRetries = new Map<string, { timer?: ReturnType<typeof setTimeout>; tries: number }>()
   /** Sends the host did not answer in time, sent again on a clock (armSlowHostRetry). */
-  private slowHostRetries = new Map<string, { timer?: ReturnType<typeof setTimeout>; tries: number; at: number; why: 'start' | 'send' }>()
+  private slowHostRetries = new Map<string, SlowHostRetry>()
   /** Unregisters this runner from reclaimed-line announcements (line-consumption.ts). */
   private stopReclaimListener?: () => void
   /** Explicit ACP interrupt barrier. A cancelled turn may emit its terminal
@@ -11043,6 +11061,7 @@ export class SessionRunner {
     // the user hits Retry, or the user sends another message.
     import('./daemon-connection.js').then(({ setOnDaemonHostConnected }) => {
       setOnDaemonHostConnected((hostKey, connection) => {
+        this.sendLinkHeld(hostKey)
         this.redeliverPendingForHost(hostKey, connection).catch((err) => {
           log.session.warn('reconnect redelivery failed', { hostKey, error: err instanceof Error ? err.message : String(err) })
         })
@@ -12616,6 +12635,11 @@ export class SessionRunner {
         if (err instanceof BudgetCheckingError) {
           reportBatchFailed(deliverySessionId, rows.map((m) => m.id), err.message)
           this.armBudgetRetry(deliverySessionId)
+        } else {
+          // Nothing reaches the worker's host: the rows wait for it, said as a wait (the
+          // reconnect delivers them), never a grey bubble with no word.
+          const linkHost = await this.linkDownHost(deliverySessionId, err)
+          if (linkHost !== null) this.armSlowHostRetry(deliverySessionId, rows.map((m) => m.id), 'link', linkHost)
         }
       }
       throw err
@@ -13954,8 +13978,11 @@ export class SessionRunner {
       const failed = unanswered
         ? (await getQueue(sessionId)).filter((m) => ids.has(m.id)).map((m) => m.id)
         : msgs.map((m) => m.id)
+      // Nothing reached the host (its link is down): the rows wait for it, said as a wait.
+      const linkHost = slow || unanswered ? null : await this.linkDownHost(sessionId, err)
       let retryAt: string | undefined
       if (slow) retryAt = new Date(this.armSlowHostRetry(sessionId, failed, 'start')).toISOString()
+      else if (linkHost !== null) retryAt = new Date(this.armSlowHostRetry(sessionId, failed, 'link', linkHost)).toISOString()
       else if (failed.length > 0) reportBatchFailed(sessionId, failed, err.message)
       if (err instanceof BudgetCheckingError) this.armBudgetRetry(sessionId)
       // errorKind 'delivery_failed' = connectivity status, NOT a turn outcome.
@@ -13966,7 +13993,7 @@ export class SessionRunner {
       // retry loop + 150 red boxes on 2026-06-10.
       bus.emit(EventNames.SESSION_ERROR, {
         sessionId,
-        error: slow ? slowHostReason('start') : err.message,
+        error: slow ? slowHostReason('start') : linkHost !== null ? slowHostReason('link', linkHost.name) : err.message,
         errorKind: 'delivery_failed' as const,
         ...(verdict.kind === 'permanent' ? { parked: true } : {}),
         // The message waits on a clock: the panel shows the bubble's note, not an error row.
@@ -14660,6 +14687,9 @@ export class SessionRunner {
       this.armBudgetRetry(sessionId)
       return
     }
+    // Nothing reaches the host: the rows wait for the link, and the reconnect delivers them.
+    const linkHost = isSlowHostFailure(err) ? null : await this.linkDownHost(sessionId, err)
+    if (linkHost !== null) { this.armSlowHostRetry(sessionId, left.map((m) => m.id), 'link', linkHost); return }
     const at = this.armHeldSendRetry(sessionId, left)
     if (!isSlowHostFailure(err)) {
       reportBatchFailed(sessionId, left.map((m) => m.id), err.message)
@@ -14712,9 +14742,11 @@ export class SessionRunner {
    * the queue empties), and the bubble says in plain words why it waits and when
    * the next try is, with Send now beside it. Returns the next try's time.
    */
-  private armSlowHostRetry(sessionId: string, ids: readonly string[], why: 'start' | 'send'): number {
-    const entry = this.slowHostRetries.get(sessionId) ?? { tries: 0, at: 0, why }
+  private armSlowHostRetry(sessionId: string, ids: readonly string[], why: 'start' | 'send' | 'link', down?: DownHost): number {
+    const entry: SlowHostRetry = this.slowHostRetries.get(sessionId) ?? { tries: 0, at: 0, why }
     entry.why = why
+    entry.host = why === 'link' ? down?.host : undefined
+    entry.hostName = why === 'link' ? down?.name : undefined
     if (!entry.timer && !this.acpDestroyed) {
       const delay = Math.min(300_000, 15_000 * 2 ** Math.min(entry.tries, 5))
       entry.tries += 1
@@ -14722,7 +14754,13 @@ export class SessionRunner {
       entry.timer = setTimeout(() => {
         entry.timer = undefined
         if (this.acpDestroyed || this.slowHostRetries.get(sessionId) !== entry) return
-        log.session.info('sending again after the host did not answer in time', { sessionId, attempt: entry.tries })
+        // Still nothing reaches the host: no dial of our own (its reconnect loop dials and
+        // delivers the rows), only the next try said again.
+        if (entry.why === 'link' && entry.host && linkDown(entry.host)) {
+          void this.slowHostLookAgain(sessionId, entry)
+          return
+        }
+        log.session.info('sending again after the host did not answer in time', { sessionId, attempt: entry.tries, why: entry.why })
         this.deliverRest(sessionId)
         // A delivery that returned early (a stop request, a spawn still in flight)
         // arms nothing and says nothing: look again, so the rows never sit under a
@@ -14734,16 +14772,55 @@ export class SessionRunner {
       entry.timer.unref?.()
       this.slowHostRetries.set(sessionId, entry)
     }
+    const at = this.slowHostNextTry(entry)
     if (ids.length > 0) {
-      const reason = slowHostReason(why)
+      const reason = slowHostReason(why, entry.hostName)
       // Told it is not delivered: the next proof that the CLI has it reports it again.
       markUnconfirmed(sessionId, [...ids])
       noteHeld(sessionId, [...ids], reason)
       bus.emit(EventNames.SESSION_DELIVERY_HELD, {
-        sessionId, messageIds: [...ids], reason, retryAt: new Date(entry.at).toISOString(),
+        sessionId, messageIds: [...ids], reason, retryAt: new Date(at).toISOString(),
       }, ['main-ai'], { source: 'session-runner' })
     }
-    return entry.at
+    return at
+  }
+
+  /**
+   * The host's link is back: rows held for it go out now, mid-turn into a running turn
+   * (deliverRest), which the reconnect drain skips (redeliverPendingForHost leaves a session
+   * with a turn running alone). The clock is settled; a failure arms it again.
+   */
+  private sendLinkHeld(hostKey: string): void {
+    for (const [sessionId, entry] of this.slowHostRetries) {
+      if (entry.why !== 'link' || entry.host !== hostKey) continue
+      if (entry.timer) clearTimeout(entry.timer)
+      this.slowHostRetries.delete(sessionId)
+      if (!this.activeProcessing.has(sessionId)) continue
+      log.session.info('host link back: sending held rows into the running turn', { sessionId, hostKey })
+      this.deliverRest(sessionId)
+    }
+  }
+
+  /** When the held rows next go out by themselves: the clock, or sooner the host's own re-dial (a link that is down). */
+  private slowHostNextTry(entry: SlowHostRetry): number {
+    const redial = entry.why === 'link' && entry.host ? redialAt(entry.host) : null
+    return redial !== null && redial < entry.at ? redial : entry.at
+  }
+
+  /**
+   * The session's host when the failure is its link being down: the error says nothing reached
+   * the host, or a remote host's link is down now. Null for a slow host, a budget, a permanent
+   * failure or anything else, which keep their own words.
+   */
+  private async linkDownHost(sessionId: string, err: unknown): Promise<DownHost | null> {
+    if (err instanceof BudgetCheckingError || err instanceof BudgetPausedError || isSlowHostFailure(err)) return null
+    if (isPermanentDeliveryFailure(err)) return null
+    daemonLinks ??= await import('./daemon-connection.js').catch(() => null)
+    const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+    const host = (await getSessionByClaudeId(sessionId).catch(() => null))?.host ?? '__local__'
+    if (!isHostLinkFailure(err) && !linkDown(host)) return null
+    const { hostDisplayNameFor } = await import('../core/hosts/host-display-name.js')
+    return { host, name: host === '__local__' ? host : await hostDisplayNameFor(host) }
   }
 
   /**
@@ -14756,25 +14833,28 @@ export class SessionRunner {
     const slow = this.slowHostRetries.get(sessionId)
     const at = (ms: number | undefined) => (ms && ms > 0 ? new Date(ms).toISOString() : undefined)
     if (messageId === undefined) {
-      return slow?.timer ? { reason: slowHostReason(slow.why), retryAt: at(slow.at) } : null
+      return slow?.timer ? { reason: slowHostReason(slow.why, slow.hostName), retryAt: at(this.slowHostNextTry(slow)) } : null
     }
-    // Only a host that did not answer in time: a row held behind a permission prompt
-    // or another line waits for that, and sending it now changes nothing.
+    // Only a host that did not answer in time, or one nothing reaches now: a row held behind
+    // a permission prompt or another line waits for that, and sending it now changes nothing.
     const reason = heldRows(sessionId)?.get(messageId)
-    if (reason !== slowHostReason('start') && reason !== slowHostReason('send')) return null
+    if (!reason || !isHostWaitReason(reason)) return null
     const held = this.heldSendRetries.get(sessionId)
-    const retryAt = slow?.timer && reason === slowHostReason(slow.why) ? at(slow.at)
+    const retryAt = slow?.timer && reason === slowHostReason(slow.why, slow.hostName) ? at(this.slowHostNextTry(slow))
       : held?.timer && held.ids.has(messageId) ? at(held.at) : undefined
     return { reason, ...(retryAt ? { retryAt } : {}) }
   }
 
-  private async slowHostLookAgain(sessionId: string, entry: { timer?: ReturnType<typeof setTimeout>; why: 'start' | 'send' }): Promise<void> {
-    if (this.acpDestroyed || this.slowHostRetries.get(sessionId) !== entry || entry.timer || this.activeProcessing.has(sessionId)) return
+  private async slowHostLookAgain(sessionId: string, entry: SlowHostRetry): Promise<void> {
+    // A link that is down keeps its clock through a running turn: the rows wait for the link,
+    // not for the turn, and go in mid-turn once it is back (2026-11-07 review).
+    const busy = () => entry.why !== 'link' && this.activeProcessing.has(sessionId)
+    if (this.acpDestroyed || this.slowHostRetries.get(sessionId) !== entry || entry.timer || busy()) return
     const held = heldRows(sessionId)
-    const reason = slowHostReason(entry.why)
+    const reason = slowHostReason(entry.why, entry.hostName)
     const ids = (await getQueue(sessionId)).filter((m) => m.status === 'pending' && held?.get(m.id) === reason).map((m) => m.id)
-    if (this.slowHostRetries.get(sessionId) !== entry || entry.timer || this.activeProcessing.has(sessionId)) return
-    if (ids.length > 0) this.armSlowHostRetry(sessionId, ids, entry.why)
+    if (this.slowHostRetries.get(sessionId) !== entry || entry.timer || busy()) return
+    if (ids.length > 0) this.armSlowHostRetry(sessionId, ids, entry.why, entry.host ? { host: entry.host, name: entry.hostName ?? entry.host } : undefined)
   }
 
   private cancelBudgetRetry(sessionId: string): void {
@@ -15263,6 +15343,16 @@ export class SessionRunner {
       // error and offers to continue in a new folder (core/sessions/folder-gone.ts).
       if (verdict.code === 'cwd_missing') await noteFolderGoneOnce(sessionId)
 
+      // Nothing reached the host (its link is down): the rows wait for it, said as a wait,
+      // and the error carries the next try, so the panel shows the bubble's note, no error row.
+      const linkHost = await this.linkDownHost(sessionId, err)
+      if (linkHost !== null) {
+        const at = this.armSlowHostRetry(sessionId, msgs.map((m) => m.id), 'link', linkHost)
+        bus.emit(EventNames.SESSION_ERROR, {
+          sessionId, error: slowHostReason('link', linkHost.name), errorKind: 'delivery_failed' as const, retryAt: new Date(at).toISOString(),
+        }, ['main-ai'], { source: 'session-runner' })
+        return
+      }
       reportBatchFailed(sessionId, msgs.map((m) => m.id), errorMsg)
 
       // delivery_failed: the batch is back in 'pending', or parked (see settleResumeFailure).
