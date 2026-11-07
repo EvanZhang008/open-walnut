@@ -17,7 +17,12 @@ def escape_property(text):
 
 def main():
     leg = sys.argv[1] if len(sys.argv) > 1 else "unit"
-    d = json.load(sys.stdin)
+    try:
+        d = json.load(sys.stdin)
+    except ValueError:
+        # no result bundle (the leg stopped before its tests): one line, not a traceback
+        print(f"no readable {leg} result bundle")
+        return
     print(d.get("result"), d.get("totalTestCount"), "tests,", d.get("failedTests"), "failed")
     for f in d.get("testFailures", []):
         name = f.get("testIdentifierString") or f.get("testName") or "unknown test"

@@ -16,22 +16,38 @@ type Step = { name?: string; run?: string; if?: string }
 const doc = parseYaml(fs.readFileSync(path.join(ROOT, '.github/workflows/ci.yml'), 'utf8')) as { jobs: Record<string, { steps: Step[] }> }
 const UDID = 'F0C70C77-E423-4478-B648-3D25045B311B'
 
-/** Runs the script with a fake xcodebuild that lists the simulator from its `seenFrom`-th call on. */
-function run(seenFrom: number, tries = 3) {
+/**
+ * Runs the script with a fake xcodebuild that lists the simulator from its `seenFrom`-th call
+ * on, or (`afterRecover`) only once the simulator service was restarted and the iPhone booted
+ * again. A fake simctl and service restart log their steps.
+ */
+function run(seenFrom: number, tries = 3, opts: { afterRecover?: boolean; recoverAt?: number } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sim-visible-'))
   const fake = path.join(dir, 'xcodebuild')
+  const seen = opts.afterRecover ? `[ -f "${dir}/rebooted" ]` : `[ $n -ge ${seenFrom} ]`
   fs.writeFileSync(fake, `#!/usr/bin/env bash
 n=$(( $(cat "${dir}/n" 2>/dev/null || echo 0) + 1 )); echo $n > "${dir}/n"
 echo '	{ platform:iOS Simulator, id:dvtdevice-DVTiOSDeviceSimulatorPlaceholder-iphonesimulator:placeholder, name:Any iOS Simulator Device }'
-if [ $n -ge ${seenFrom} ]; then echo '	{ platform:iOS Simulator, arch:arm64, id:${UDID}, OS:26.5, name:iPhone 17 Pro }'; fi
+if ${seen}; then echo '	{ platform:iOS Simulator, arch:arm64, id:${UDID}, OS:26.5, name:iPhone 17 Pro }'; fi
+`, { mode: 0o755 })
+  const simctl = path.join(dir, 'simctl')
+  fs.writeFileSync(simctl, `#!/usr/bin/env bash
+echo "simctl $1" >> "${dir}/steps"
+if [ "$1" = boot ] && grep -q '^restart$' "${dir}/steps"; then touch "${dir}/rebooted"; fi
+if [ "$1" = list ]; then echo '    iPhone 17 Pro (${UDID}) (Booted)'; fi
 `, { mode: 0o755 })
   const r = spawnSync('bash', [SCRIPT, UDID], {
     cwd: dir, encoding: 'utf8',
-    env: { ...process.env, XCODEBUILD: fake, WALNUT_SIM_WAIT_TRIES: String(tries), WALNUT_SIM_WAIT_SECS: '0', PATH: `${dir}:${process.env.PATH}` },
+    env: {
+      ...process.env, XCODEBUILD: fake, SIMCTL: simctl, WALNUT_SIM_SERVICE_RESTART: `echo restart >> "${dir}/steps"`,
+      WALNUT_SIM_WAIT_TRIES: String(tries), WALNUT_SIM_WAIT_SECS: '0', WALNUT_SIM_RECOVER_AT: String(opts.recoverAt ?? 3),
+      PATH: `${dir}:${process.env.PATH}`,
+    },
   })
   const calls = Number(fs.readFileSync(path.join(dir, 'n'), 'utf8'))
+  const steps = fs.existsSync(path.join(dir, 'steps')) ? fs.readFileSync(path.join(dir, 'steps'), 'utf8').trim().split('\n') : []
   fs.rmSync(dir, { recursive: true, force: true })
-  return { code: r.status, out: r.stdout, calls }
+  return { code: r.status, out: r.stdout, calls, steps }
 }
 
 describe('the iOS job waits until xcodebuild sees its simulator', () => {
@@ -40,11 +56,26 @@ describe('the iOS job waits until xcodebuild sees its simulator', () => {
     expect(run(3)).toMatchObject({ code: 0, calls: 3 })
   })
 
-  it('fails with an annotation naming the simulator when xcodebuild never lists it', () => {
+  it('fails with an annotation naming the simulator, and what xcodebuild did list, when it never lists it', () => {
     const r = run(99, 3)
     expect(r.code).toBe(1)
     expect(r.calls).toBe(3)
     expect(r.out).toContain(`::error title=iOS simulator::xcodebuild never listed the booted simulator ${UDID}`)
+    expect(r.out).toContain(`iPhone 17 Pro (${UDID}) (Booted)`)
+    expect(r.out).toMatch(/xcodebuild listed these destinations:\n.*name:Any iOS Simulator Device/)
+  })
+
+  // 2026-11-07, CI run 42339693777: Booted to simctl, absent from xcodebuild for two minutes.
+  it('restarts the simulator service and boots the iPhone again once, halfway, when xcodebuild still does not list it', () => {
+    const r = run(0, 6, { afterRecover: true })
+    expect(r).toMatchObject({ code: 0, calls: 4 })
+    expect(r.steps).toEqual(['simctl shutdown', 'restart', 'simctl boot', 'simctl bootstatus'])
+    expect(r.out).toContain(`xcodebuild sees simulator ${UDID} (try 4)`)
+  })
+
+  it('recovers at most once, and never when the simulator is seen first', () => {
+    expect(run(99, 6, { recoverAt: 2 }).steps.filter((s) => s === 'restart')).toHaveLength(1)
+    expect(run(2, 6).steps).toEqual([])
   })
 
   it("runs after the boot and before either leg's tests", () => {

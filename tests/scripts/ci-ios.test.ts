@@ -5,7 +5,7 @@
  * run-ui-tests.sh, the one way its pairing reaches the XCUITest runner.
  */
 import fs from 'node:fs'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { parse as parseYaml } from 'yaml'
@@ -83,6 +83,9 @@ describe('the iOS job in ci.yml', () => {
     expect(out.split('\n')).toContain('::error title=iOS unit FooTests/testBar(a%3Ab)::x, 100%25%0Ay')
     const ui = execFileSync('python3', [path.join(ROOT, 'ios-native/tests/failed-tests.py'), 'ui'], { input: JSON.stringify(summary), encoding: 'utf8' })
     expect(ui.split('\n')).toContain('::error title=iOS ui FooTests/testBar(a%3Ab)::x, 100%25%0Ay')
+    // 2026-11-07: a leg that stopped before its tests has no bundle; one line, no traceback
+    const none = spawnSync('python3', [path.join(ROOT, 'ios-native/tests/failed-tests.py'), 'ui'], { input: '', encoding: 'utf8' })
+    expect(none).toMatchObject({ status: 0, stdout: 'no readable ui result bundle\n', stderr: '' })
   })
 
   it('names the failed tests of both legs, each from its own result bundle', () => {
