@@ -1198,6 +1198,7 @@ test('typing one sentence into a rich note writes that sentence and nothing else
   const doc = page.locator('.fv-wysiwyg-editor .ProseMirror')
   await expect(doc).toContainText('only when it names a commit')
   await doc.locator('p', { hasText: 'Rule: a row is' }).click()
+  await page.waitForTimeout(200) // the caret from the click settles before the key moves it
   await page.keyboard.press(LINE_END)
   await page.keyboard.type(' Checked by hand.')
   const want = RICH_NOTE.replace('names a commit.', 'names a commit. Checked by hand.')
@@ -1206,9 +1207,23 @@ test('typing one sentence into a rich note writes that sentence and nothing else
   expect(await onDisk(page, abs), 'every other line keeps its own bytes').toBe(want)
   // A second edit is kept against what is on disk now, not the serializer's spelling.
   await doc.locator('li', { hasText: 'second item' }).click()
+  await page.waitForTimeout(200)
   await page.keyboard.press(LINE_END)
   await page.keyboard.type(' again')
   await expect.poll(() => onDisk(page, abs), { timeout: 10_000 }).toBe(want.replace('- second item', '- second item again'))
+  // Typed in the middle of a line, right after a space: the line now holds two
+  // spaces in a row, which loading collapses (2026-11-07, the live walk). Every
+  // other line still keeps its own bytes.
+  const before = await onDisk(page, abs)
+  await doc.locator('p', { hasText: 'Path ~/notes' }).click()
+  await page.waitForTimeout(200)
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowLeft' : 'Home')
+  for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowRight')
+  await page.keyboard.type(' mid')
+  await expect.poll(() => onDisk(page, abs), { timeout: 10_000 }).toContain('mid')
+  await expect(state(page)).toHaveAttribute('data-state', 'saved', { timeout: 10_000 })
+  const others = (t: string) => t.split('\n').filter((l) => !l.startsWith('Path '))
+  expect(others(await onDisk(page, abs)), 'every other line keeps its own bytes').toEqual(others(before))
 })
 
 test('text typed and reloaded at once comes back and saves itself', async ({ page }) => {

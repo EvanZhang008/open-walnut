@@ -131,8 +131,9 @@ export const FileMarkdownEditor = forwardRef<FileSourceEditorHandle, FileMarkdow
     onSaveRef.current = onSave;
 
     /** `body` with every line the user did not edit put back to the seed's own
-     *  bytes. Used only when the editor reads the result as the same document as
-     *  `body` (loading it would serialize to `body` again); anything else writes
+     *  bytes. Used only when the editor loads the result as the same document as
+     *  `body` (both load and serialize to the same text: loading also collapses
+     *  runs of spaces, which typing can leave in `body`); anything else writes
      *  `body` as it is, the editor's own spelling. Not "renders to the same HTML":
      *  the serializer is lossy (inline code ending in a space loses the space after
      *  it), so the file's own bytes can render better than the editor's spelling,
@@ -145,7 +146,7 @@ export const FileMarkdownEditor = forwardRef<FileSourceEditorHandle, FileMarkdow
         const untouched = untouchedOf(ed, seed);
         if (untouched != null) {
           const kept = keepUntouchedSource(seed, untouched, body);
-          if (kept === body || serializeUntouched(ed, kept) === body) text = kept;
+          if (kept === body || serializeUntouched(ed, kept) === serializeUntouched(ed, body)) text = kept;
         }
       } catch { /* the editor's spelling is always a correct save */ }
       keptRef.current = { seed, body, text };
