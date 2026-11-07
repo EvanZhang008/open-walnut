@@ -24,6 +24,7 @@ import { buildBunInstallScript } from '../../src/providers/remote-runtime.js'
 import { buildDaemonDirProbeScript, chooseDaemonDir, parseDaemonDirProbe } from '../../src/providers/remote-daemon-dir.js'
 import { isProdDaemonDir } from '../../src/providers/ephemeral-replica-host.js'
 import { classifyHostConnectError } from '../../src/core/sessions/host-connect-hint.js'
+import { guardedPath } from '../setup/exec-guard.js'
 
 const ON = { WALNUT_EPHEMERAL_REMOTE_HOSTS: '1' }
 const cleanup: string[] = []
@@ -179,7 +180,7 @@ describe('daemonIdentityVerdict: a daemon must say which Walnut it serves', () =
 describe('the isolated dir probe, run for real', () => {
   function runProbe(iso: Extract<RemoteIsolation, { mode: 'isolated' }>, home: string) {
     const script = buildDaemonDirProbeScript(isolatedProbeOpts(iso))
-    const raw = execFileSync('/bin/sh', ['-s'], { input: script, encoding: 'utf-8', env: { PATH: '/usr/bin:/bin', HOME: home } })
+    const raw = execFileSync('/bin/sh', ['-s'], { input: script, encoding: 'utf-8', env: { PATH: guardedPath([], '/usr/bin:/bin'), HOME: home } })
     const probe = parseDaemonDirProbe(raw)
     expect(probe).not.toBeNull()
     return { script, probe: probe! }
@@ -236,7 +237,7 @@ describe('the retire script, run for real', () => {
   /** Async: a blocked event loop would leave the stopped stand-in an unreaped zombie that still "runs". */
   function retire(r: string, opts: Parameters<typeof buildIsolatedRetireScript>[1] = {}): Promise<{ code: number; out: string }> {
     return new Promise((resolve) => {
-      const c = execFile('/bin/sh', ['-s'], { encoding: 'utf-8', env: { PATH: '/usr/bin:/bin' } }, (err, stdout) => {
+      const c = execFile('/bin/sh', ['-s'], { encoding: 'utf-8', env: { PATH: guardedPath([], '/usr/bin:/bin') } }, (err, stdout) => {
         resolve({ code: err ? (typeof (err as { code?: unknown }).code === 'number' ? (err as { code: number }).code : 1) : 0, out: stdout })
       })
       c.stdin!.end(buildIsolatedRetireScript(r, opts))
@@ -308,7 +309,7 @@ describe('the bun install of an isolated daemon, run for real', () => {
     fs.mkdirSync(realHome)
     const out = execFileSync('/bin/sh', ['-s'], {
       input: buildBunInstallScript(path.join(scratch, 'install.log'), 'https://bun.example/install', { installHome: own }),
-      encoding: 'utf-8', env: { PATH: `${bin}:/usr/bin:/bin`, HOME: realHome },
+      encoding: 'utf-8', env: { PATH: guardedPath([bin], '/usr/bin:/bin'), HOME: realHome },
     })
     expect(out).toMatch(/^install_rc=0$/m)
     expect(fs.readFileSync(path.join(own, 'ran'), 'utf8').trim()).toBe(`installer ran HOME=${own} BUN_INSTALL=${own}/.bun`)
@@ -365,7 +366,7 @@ describe('the stale test root sweep, run for real', () => {
     fs.writeFileSync(`${liveTerm}/term/s1.pid`, String(term.pid))
     for (const r of [liveDaemon, liveTerm]) { const t = new Date(Date.now() - 200 * 60_000); fs.utimesSync(r, t, t) }
     const out = await new Promise<string>((resolve, reject) => {
-      const c = execFile('/bin/sh', ['-s'], { encoding: 'utf-8', env: { PATH: '/usr/bin:/bin', HOME: home } }, (err, stdout) => err ? reject(err) : resolve(stdout))
+      const c = execFile('/bin/sh', ['-s'], { encoding: 'utf-8', env: { PATH: guardedPath([], '/usr/bin:/bin'), HOME: home } }, (err, stdout) => err ? reject(err) : resolve(stdout))
       c.stdin!.end(buildStaleIsolatedRootSweepScript(own))
     })
     expect(out).toMatch(/walnut-sweep-done/)

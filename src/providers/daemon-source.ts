@@ -7459,14 +7459,14 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
       // Same for the keep-sessions switch (this daemon's own exit policy): a CLI
       // that starts a daemon of its own must not hand it on.
       WALNUT_DAEMON_KEEP_SESSIONS: undefined,
+      // And the service state dir: a daemon a CLI starts is isolated, and with this var
+      // it could reach the service daemon's journals. Keep in sync with daemon-standalone.ts.
+      WALNUT_DAEMON_STATE_DIR: undefined,
       // A test server's isolated daemon (remote-isolation.ts) is this daemon's own identity: a
       // daemon a CLI starts (a nested test server's) must not claim it. Keep in sync with the twin.
       WALNUT_DAEMON_ISOLATED_FOR: undefined,
       WALNUT_DAEMON_ORPHAN_EXIT_MS: undefined,
       WALNUT_INSTALL_HOME: undefined,
-      // And the service state dir: a daemon a CLI starts is isolated, and with this var
-      // it could reach the service daemon's journals. Keep in sync with daemon-standalone.ts.
-      WALNUT_DAEMON_STATE_DIR: undefined,
       // And the compiled file's runtime dir (src/binary/runtime-tree.ts): it names the
       // SERVING stage's runtime/, which a later deploy deletes. A walnut CLI the session runs
       // would unpack there or, after that deploy, mkdir it back inside a dead stage; without

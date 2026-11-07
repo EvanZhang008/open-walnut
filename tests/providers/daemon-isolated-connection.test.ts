@@ -27,6 +27,7 @@ import { DaemonConnection, DaemonIdentityError } from '../../src/providers/daemo
 import { WALNUT_HOME } from '../../src/constants.js'
 import { isolationKey } from '../../src/providers/remote-isolation.js'
 import type { SshTarget } from '../../src/providers/session-io.js'
+import { guardedPath } from '../setup/exec-guard.js'
 
 const target: SshTarget = { hostname: 'devbox.example.com', user: 'tester', use_daemon: true }
 const priv = (c: DaemonConnection) => c as unknown as Record<string, unknown> & Record<string, (...a: unknown[]) => Promise<unknown>>
@@ -56,7 +57,7 @@ describe('an isolated connection writes only under its own root', () => {
       const s = String(script)
       scripts.push(s)
       // The dir probe runs for real, in a temp HOME; everything else gets a reply that ends its step.
-      if (s.includes('walnut-dir-probe v1')) return execFileSync('/bin/sh', ['-s'], { input: s, encoding: 'utf-8', env: { PATH: '/usr/bin:/bin', HOME: home } })
+      if (s.includes('walnut-dir-probe v1')) return execFileSync('/bin/sh', ['-s'], { input: s, encoding: 'utf-8', env: { PATH: guardedPath([], '/usr/bin:/bin'), HOME: home } })
       if (s.includes('walnut-live')) return 'walnut-live none\n'
       return ''
     })

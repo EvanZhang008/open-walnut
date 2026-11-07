@@ -1334,7 +1334,9 @@ function buildSpawnPreamble(nodeDir?: string, gatewayFirst = false): string {
     // template) so `walnut` — the peer-session CLI shim — is on every session's
     // PATH. Keep in sync with daemon-source.ts.
     'export PATH="$PATH:$HOME/.toolbox/bin:$HOME/.local/bin:$HOME/.npm-global/bin:'
-      + (INSTALL_HOME_BIN ? INSTALL_HOME_BIN + ':' : '') + GATEWAY_SHIM_DIR + '"',
+      + GATEWAY_SHIM_DIR + '"',
+    // A test server's isolated daemon installs its tools under its own HOME (remote-isolation.ts).
+    ...(INSTALL_HOME_BIN ? ['export PATH="$PATH":' + shellQuote(INSTALL_HOME_BIN)] : []),
     // A node hostRuntime.ensureClaude() found outside PATH (e.g. an older nvm
     // version on a host whose newest node needs a newer glibc) is only used when
     // the rc PATH gives no working node.
@@ -6591,16 +6593,15 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
       // daemon's own exit policy, and a CLI that starts a daemon of its own must
       // not hand it on. Keep in sync with daemon-source.ts.
       WALNUT_DAEMON_KEEP_SESSIONS: undefined,
+      // And the service state dir: a daemon a CLI starts (a test, a sandbox) is isolated,
+      // and with this var it could reach the service daemon's journals and state.
+      // Keep in sync with daemon-source.ts.
+      WALNUT_DAEMON_STATE_DIR: undefined,
       // A test server's isolated daemon (remote-isolation.ts) is this daemon's own identity: a
       // daemon a CLI starts (a nested test server's) must not claim it. Keep in sync with the twin.
       WALNUT_DAEMON_ISOLATED_FOR: undefined,
       WALNUT_DAEMON_ORPHAN_EXIT_MS: undefined,
       WALNUT_INSTALL_HOME: undefined,
-      // WALNUT_RUNTIME_DIR is unset below.
-      // And the service state dir: a daemon a CLI starts (a test, a sandbox) is isolated,
-      // and with this var it could reach the service daemon's journals and state.
-      // Keep in sync with daemon-source.ts.
-      WALNUT_DAEMON_STATE_DIR: undefined,
       // And the compiled file's runtime dir (src/binary/runtime-tree.ts): it names the
       // SERVING stage's runtime/, which a later deploy deletes. A walnut CLI the session runs
       // would unpack there or, after that deploy, mkdir it back inside a dead stage; without

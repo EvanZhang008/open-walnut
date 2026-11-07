@@ -45,6 +45,7 @@ const REMOTE_SH_ALLOWED: Record<string, string> = {
   'src/providers/daemon-file-slot.ts': 'the SSH route: daemon deploy',
   'src/providers/remote-daemon-dir.ts': 'the SSH route: daemon dir',
   'src/providers/remote-fold-prewarm.ts': 'the SSH route: prewarm before the daemon answers',
+  'src/providers/remote-isolation.ts': 'the SSH route: a test server\'s isolated daemon scripts',
   'src/providers/remote-runtime.ts': 'the SSH route: runtime bootstrap',
   'src/providers/ssh-control-master.ts': 'the SSH route: control master',
   'src/providers/upload-resume.ts': 'the SSH route: chunked deploy upload',

@@ -21,6 +21,7 @@ import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { isolatedDaemonEnv, isolatedLayout, ISOLATED_TMP_PREFIX } from '../../src/providers/remote-isolation.js'
 import { testBun } from '../helpers/bun-runtime.js'
 import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { guardedPath } from '../setup/exec-guard.js'
 
 let scriptPath = ''
 const BUN: string | undefined = testBun()
@@ -69,7 +70,7 @@ function freshKey(): string {
 function launch(twin: Twin, env: Record<string, string>): ChildProcess {
   const [cmd, args] = twin.command()
   proc = spawn(cmd, args, {
-    env: { ...process.env, SHELL: '/bin/sh', PATH: '/usr/bin:/bin', WALNUT_LEGACY_STREAMS_DIR: '/nonexistent-walnut-legacy-streams', ...env },
+    env: { ...process.env, SHELL: '/bin/sh', PATH: guardedPath([], '/usr/bin:/bin'), WALNUT_LEGACY_STREAMS_DIR: '/nonexistent-walnut-legacy-streams', ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   return proc

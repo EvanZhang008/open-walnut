@@ -27,6 +27,7 @@ import { REMOTE_DTACH_OWN_BIN, REMOTE_DTACH_SOCKET_DIR, resolveSshTarget } from 
 import { buildInstallScript, buildProbeScript } from '../../../src/web/terminal/dtach-probe-script.js'
 import { DTACH_SOURCES } from '../../../src/web/terminal/dtach-sources.js'
 import { REMOTE_TEST_ROOT, dtachOwnerClaimScript, testServerTerminalHosts } from '../../../src/web/terminal/spawn.js'
+import { guardedPath } from '../../setup/exec-guard.js'
 
 const saved = process.env.WALNUT_EPHEMERAL_REMOTE_HOSTS
 afterEach(() => {
@@ -53,7 +54,7 @@ describe('a test server\'s remote terminals stay in its own root', () => {
     try {
       const script = buildProbeScript({ ownBin: REMOTE_DTACH_OWN_BIN })
       expect(script.indexOf(REMOTE_DTACH_OWN_BIN!)).toBeLessThan(script.indexOf('$HOME/.local/bin'))
-      execFileSync('/bin/sh', ['-s'], { input: script, encoding: 'utf-8', env: { PATH: '/usr/bin:/bin', HOME: home } })
+      execFileSync('/bin/sh', ['-s'], { input: script, encoding: 'utf-8', env: { PATH: guardedPath([], '/usr/bin:/bin'), HOME: home } })
       expect(fs.readdirSync(home)).toEqual([])
       expect(fs.existsSync(ROOT)).toBe(false)
     } finally {
@@ -78,7 +79,7 @@ describe('a test server\'s remote terminals stay in its own root', () => {
     fs.symlinkSync(target, ROOT)
     try {
       const run = (input: string) => {
-        try { execFileSync('/bin/sh', ['-s'], { input, encoding: 'utf-8', env: { PATH: '/usr/bin:/bin', HOME: scratch } }); return 0 } catch (e) { return (e as { status: number }).status }
+        try { execFileSync('/bin/sh', ['-s'], { input, encoding: 'utf-8', env: { PATH: guardedPath([], '/usr/bin:/bin'), HOME: scratch } }); return 0 } catch (e) { return (e as { status: number }).status }
       }
       expect(run(buildInstallScript({ sources: DTACH_SOURCES, cc: 'cc', ownBin: REMOTE_DTACH_OWN_BIN, ownRoot: REMOTE_TEST_ROOT }))).toBe(97)
       expect(run(dtachOwnerClaimScript(true))).toBe(97)
@@ -92,7 +93,7 @@ describe('a test server\'s remote terminals stay in its own root', () => {
 
   it('the socket claim makes its own root 0700 and claims the term dir', () => {
     try {
-      execFileSync('/bin/sh', ['-c', dtachOwnerClaimScript(true)], { encoding: 'utf-8', env: { PATH: '/usr/bin:/bin' } })
+      execFileSync('/bin/sh', ['-c', dtachOwnerClaimScript(true)], { encoding: 'utf-8', env: { PATH: guardedPath([], '/usr/bin:/bin') } })
       expect(fs.statSync(ROOT).mode & 0o777).toBe(0o700)
       expect(fs.existsSync(`${ROOT}/term`)).toBe(true)
     } finally {
