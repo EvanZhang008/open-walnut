@@ -283,6 +283,15 @@
 /* The window's one scratchpad editor sits in a box ScratchpadHost moves between the columns: it
    fills the slot as the section did, so the note's body keeps a bounded height and scrolls. */
 .scratchpad-host { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+/* The phone's place for the one scratchpad editor ("Take me there" while it saves): a sheet over the page.
+   Two classes, so it outranks .app-modal-overlay's 9300 in globals.css, which loads later. */
+.app-modal-overlay.scratchpad-sheet-overlay { z-index: 10000; padding: 12px; box-sizing: border-box; }
+.scratchpad-sheet {
+  width: min(560px, calc(100vw - 24px)); height: min(640px, calc(100dvh - 24px));
+  display: flex; flex-direction: column; min-height: 0; overflow: hidden; box-sizing: border-box; padding: 0 12px 12px;
+  background: var(--card-bg, var(--bg-elevated, #1c1f26)); color: var(--fg);
+  border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+}
 .global-notes-loading { display: flex; align-items: center; gap: 8px; padding: 12px 2px; font-size: 13px; color: var(--fg-secondary); }
 .home-companion-scratchpad .global-notes-header { justify-content: flex-start; padding: 8px 10px; border-bottom: 1px solid var(--border); }
 .home-companion-scratchpad .global-notes-label { font-size: 13.5px; font-weight: 700; color: var(--fg); text-transform: none; letter-spacing: 0; }

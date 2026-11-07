@@ -116,6 +116,44 @@ test('a pending Scratchpad save is listed; once it lands Restart goes at once', 
   } finally { release?.() }
 })
 
+test('at phone width, Go there on a Scratchpad still saving opens it in a sheet with the words', async ({ page }) => {
+  let release: (() => void) | undefined
+  await page.route(STATUS, r => r.fulfill({ json: { available: true, token: '12:old:new', version: '1.0' } }))
+  const bodies = await restartRoute(page)
+  await page.route('**/api/notes/global', async r => {
+    if (r.request().method() === 'GET') return r.fulfill({ json: { content: 'Initial scratchpad', contentHash: 'initial' } })
+    await new Promise<void>(resolve => { release = resolve })
+    await r.fulfill({ json: { ok: true, contentHash: 'saved' } })
+  })
+  try {
+    await loadApp(page)
+    await page.getByRole('button', { name: 'Scratchpad', exact: true }).click()
+    const editor = page.locator('.global-notes-section .tiptap')
+    await expect(editor).toBeVisible()
+    await editor.fill('Pending phone scratchpad edit')
+    await expect(page.locator('.global-notes-saving')).toBeVisible()
+    // The phone layout has no column for the scratchpad: the editor waits hidden in the document.
+    await page.setViewportSize({ width: 700, height: 900 })
+    await expect(page.locator('.scratchpad-parking .global-notes-section')).toHaveCount(1)
+    await button(page).click()
+    await expect(unsaved(page)).toContainText('A note that is still saving in Scratchpad')
+    await unsaved(page).getByRole('button', { name: 'Go there' }).click()
+    await expect(unsaved(page)).toHaveCount(0)
+    const sheet = page.getByTestId('scratchpad-sheet')
+    await expect(sheet).toBeVisible()
+    await expect(sheet.locator('.tiptap')).toContainText('Pending phone scratchpad edit')
+    await expect(page.locator('.global-notes-section')).toHaveCount(1)
+    await page.screenshot({ path: `${SHOTS}/installed-scratchpad-phone-sheet-${test.info().project.name}.png` })
+    expect(bodies).toHaveLength(0)
+    // Its close puts the editor back where it waits, still one, with the save going on.
+    await sheet.getByRole('button', { name: 'Close Scratchpad' }).click()
+    await expect(sheet).toHaveCount(0)
+    await expect(page.locator('.scratchpad-parking .global-notes-section')).toHaveCount(1)
+    release!()
+    await expect(page.locator('.global-notes-saving')).toHaveCount(0)
+  } finally { release?.() }
+})
+
 test('another app window that this app cannot check is named, and Restart Anyway closes it', async ({ page }) => {
   await page.route(STATUS, r => r.fulfill({ json: { available: true, token: '12:old:new', windows: 2 } }))
   const bodies = await restartRoute(page)
