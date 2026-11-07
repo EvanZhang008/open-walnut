@@ -328,6 +328,8 @@ async function siteGate(req: Request, owner: string, url: string, holdMs: number
     await new Promise((r) => setTimeout(r, 1000))
     a = await store.getApproval(id!)
   }
+  // This call hands the agent the answer itself: its session needs no note about it (tell-asker.ts).
+  if (a && (a.status === 'approved' || a.status === 'denied')) await store.noteAskerRead(a.id)
   if (a?.status === 'approved') {
     siteAsks.delete(key)
     await s.allowSite(site, `approval:${id}`)

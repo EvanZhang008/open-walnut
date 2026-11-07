@@ -27,7 +27,8 @@ defineOp({
     'Ask the user to approve one step before it goes on: a notification reaches their Mac and their phone with `what` (one line) '
     + 'and `detail`, and they Approve or Deny. `mode: "biometric"` needs Face ID or Touch ID on a device that signs approvals, '
     + 'so no agent and no click-through can say yes (with no such device yet it asks for a tap and says why in `downgraded`). '
-    + 'Returns the approval and a `waitToken`; then call approval_wait with both until it is decided. In a shell script use '
+    + 'Returns the approval and a `waitToken`; then call approval_wait with both until it is decided, or end your turn: once it is '
+    + 'approved, denied or expired, Walnut tells your session (a Walnut note that wakes it), so no trigger is needed to watch it. In a shell script use '
     + '`walnut approve "<what>" [--biometric] [--timeout 10m] [--detail <file>]` instead: it waits and exits 0 only on Approve. '
     + 'No op answers one and the answer route refuses every session: a person answers on their device, and an agent never tries. Use it for a step the user must allow '
     + '(the charter\'s own kinds: an outward send, spending, credentials, deleting data), not for questions you can decide.',
@@ -40,7 +41,7 @@ defineOp({
     command: z.string().optional().describe('A short name for the asking script or command, shown to the person'),
   },
   bind: { method: 'POST', path: '/approvals' },
-  mapResult: ({ body }) => withOutcome(body as Record<string, unknown>, stateLine(body), 'approval_wait with id and token (waitToken) until status is approved, denied, expired or canceled.'),
+  mapResult: ({ body }) => withOutcome(body as Record<string, unknown>, stateLine(body), 'approval_wait with id and token (waitToken) until status is approved, denied, expired or canceled, or end your turn: Walnut tells this session the answer.'),
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
 

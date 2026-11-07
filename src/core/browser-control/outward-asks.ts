@@ -87,6 +87,8 @@ export async function answerOutward(input: { id: string; owner: string; tab: num
   }
   if (rec?.status === 'pending') return { ok: false, status: 202, body: waiting(input.id, a.hold) }
   asks.delete(input.id)
+  // This call hands the agent the answer itself: its session needs no note about it (tell-asker.ts).
+  await store.noteAskerRead(input.id)
   if (rec?.status === 'approved') return { ok: true, sig: a.hold.sig }
   if (rec?.status === 'denied') {
     return { ok: false, status: 403, body: { error: `The person said no to: ${a.hold.what}. Nothing was done; do not try it again unless they ask.`, code: 'denied' } }

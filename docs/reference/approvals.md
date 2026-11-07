@@ -124,6 +124,8 @@ What each strength guards:
 
 Ops for agents: `approval_request`, `approval_wait`, `approval_cancel`, `approval_list`.
 
+The asking session hears the answer (`src/core/approvals/tell-asker.ts`). A `walnut approve` still waiting reads the decision itself; when nothing of the asker read it within 15 seconds of an Approve, a Deny or the deadline (a session that asked with `approval_request` and ended its turn, a command stopped meanwhile), Walnut sends that session one Walnut note with the decision, which wakes it when idle. Every way of answering ends in the store's `announce()`, so the web notice, the phone, Touch ID, Face ID and expiry all tell it; a withdrawal tells no one. `tests/core/approvals/tell-asker.test.ts` fails on a store path that ends an approval without announcing it.
+
 The digest is the SHA-256 hex of these lines joined with `\n` (base64 of UTF-8 where marked):
 `walnut-approval-v1`, `id=<id>`, `mode=<tap|biometric>`, `created=<iso>`, `expires=<iso>`,
 `host=<b64>`, `task=<task id or empty>`, `what=<b64>`, `detail=<b64 or empty>`. A device signs

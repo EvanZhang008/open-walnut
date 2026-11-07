@@ -16,6 +16,7 @@ import { EventEmitter } from 'node:events'
 import { WALNUT_HOME } from '../../constants.js'
 import { readJsonFile, updateJsonFile } from '../../utils/fs.js'
 import { bus } from '../event-bus.js'
+import { tellAskerLater } from './tell-asker.js'
 import { log } from '../../logging/index.js'
 import { answerMessage, approvalDigest, verifySignature } from './digest.js'
 import {
@@ -86,6 +87,8 @@ function announce(recs: ApprovalRecord[]): void {
     const view = viewOf(rec)
     bus.emit(APPROVAL_CHANGED, { id: rec.id, status: rec.status, approval: view }, ['web-ui', 'approvals'], { source: 'approvals' })
     armExpiry(rec)
+    // The asking session hears the decision when nothing of it is waiting to read it (tell-asker.ts).
+    tellAskerLater(rec)
   }
 }
 
@@ -121,6 +124,9 @@ export async function sweepExpired(): Promise<number> {
 export async function initApprovals(): Promise<void> {
   await sweepExpired()
   const file = await readJsonFile<ApprovalsFile>(approvalsFile(), EMPTY)
+  // A decision made just before a restart, inside the asker's grace, is still told.
+  const { rearmAskerNotices } = await import('./tell-asker.js')
+  rearmAskerNotices(file.approvals)
   for (const a of file.approvals) armExpiry(a)
 }
 
@@ -187,8 +193,9 @@ export async function createApproval(input: CreateInput): Promise<{ approval: Ap
     ...(input.testRun ? { testRun: input.testRun } : {}),
     ...(input.guard ? { guard: input.guard } : {}),
   }
+  let settled: ApprovalRecord[] = []
   await serial(() => updateJsonFile<ApprovalsFile>(approvalsFile(), EMPTY, (file) => {
-    settleClock(file, now)
+    settled = settleClock(file, now)
     // A looping script must not flood the phone: past the cap a new ask is refused.
     const open = file.approvals.filter((a) => a.status === 'pending' && (a.testRun ?? null) === (rec.testRun ?? null)).length
     if (open >= APPROVAL_PENDING_MAX) {
@@ -198,7 +205,7 @@ export async function createApproval(input: CreateInput): Promise<{ approval: Ap
     return file
   }))
   log.web.info('approval created', { approvalId: id, mode: rec.mode, host: requester.host, taskId: requester.taskId })
-  announce([rec])
+  announce([...settled, rec])
   return { approval: viewOf(rec), waitToken }
 }
 
@@ -260,8 +267,9 @@ export async function answerApproval(id: string, input: AnswerInput, lookupKey: 
   }
   let out: ApprovalRecord | undefined
   let conflict: ApprovalError | undefined
+  let settled: ApprovalRecord[] = []
   await serial(() => updateJsonFile<ApprovalsFile>(approvalsFile(), EMPTY, (file) => {
-    settleClock(file, Date.now())
+    settled = settleClock(file, Date.now())
     const rec = file.approvals.find((a) => a.id === id)
     if (!rec) { conflict = new ApprovalError(404, 'not_found', 'No such approval.'); return file }
     if (rec.digest !== current.digest) { conflict = new ApprovalError(409, 'changed', 'The approval changed; reload it.'); return file }
@@ -280,6 +288,8 @@ export async function answerApproval(id: string, input: AnswerInput, lookupKey: 
     out = rec
     return file
   }))
+  // Approvals this write found past their deadline are as expired as the sweep would make them.
+  announce(settled)
   if (conflict) throw conflict
   log.web.info('approval answered', { approvalId: id, decision: input.decision, mode: out!.answer!.mode, device: out!.answer!.device.name })
   announce([out!])
@@ -313,7 +323,10 @@ export async function waitApproval(id: string, token: string | undefined, waitMs
   }
   const rec = await getApproval(id)
   if (!rec) throw new ApprovalError(404, 'not_found', 'No such approval.')
-  if (rec.status !== 'approved' && rec.status !== 'denied') return { approval: viewOf(rec), used: false }
+  if (rec.status !== 'approved' && rec.status !== 'denied') {
+    if (isTerminal(rec.status)) await noteAskerRead(id)
+    return { approval: viewOf(rec), used: false }
+  }
   let used = false
   let refused = false
   let consumedAt = rec.consumedAt
@@ -328,11 +341,35 @@ export async function waitApproval(id: string, token: string | undefined, waitMs
       return file
     }
     r.consumedAt = consumedAt = new Date().toISOString()
+    r.readAt ??= consumedAt
     used = true
     return file
   }))
   if (refused) throw new ApprovalError(409, 'approval_used', 'This approval\'s answer was already used; ask again.')
   return { approval: viewOf({ ...rec, consumedAt }), used }
+}
+
+/**
+ * The asker read how its approval ended, by a way of its own (a browser step holding for the
+ * answer, an expiry read in a wait): Walnut need not tell its session (tell-asker.ts).
+ */
+export async function noteAskerRead(id: string): Promise<void> {
+  await serial(() => updateJsonFile<ApprovalsFile>(approvalsFile(), EMPTY, (file) => {
+    const r = file.approvals.find((a) => a.id === id)
+    if (r && isTerminal(r.status) && !r.readAt) r.readAt = new Date().toISOString()
+    return file
+  }))
+}
+
+/** Walnut told the asking session; true only for the one write that marked it (never twice). */
+export async function markAskerTold(id: string): Promise<boolean> {
+  let first = false
+  await serial(() => updateJsonFile<ApprovalsFile>(approvalsFile(), EMPTY, (file) => {
+    const r = file.approvals.find((a) => a.id === id)
+    if (r && !r.askerToldAt && !r.readAt && !r.consumedAt) { r.askerToldAt = new Date().toISOString(); first = true }
+    return file
+  }))
+  return first
 }
 
 /** The asker gave up (Ctrl-C, its own deadline): the card goes away on every device. */
@@ -346,8 +383,9 @@ export async function cancelApproval(id: string, token: string | undefined, reas
 /** Cancel without the asker's token: for Walnut's own approvals (a key enrollment that ended). */
 export async function cancelInternal(id: string, reason: string): Promise<ApprovalView> {
   let out: ApprovalRecord | undefined
+  let settled: ApprovalRecord[] = []
   await serial(() => updateJsonFile<ApprovalsFile>(approvalsFile(), EMPTY, (file) => {
-    settleClock(file, Date.now())
+    settled = settleClock(file, Date.now())
     const rec = file.approvals.find((a) => a.id === id)
     if (!rec) return file
     if (rec.status === 'pending') {
@@ -357,7 +395,7 @@ export async function cancelInternal(id: string, reason: string): Promise<Approv
     }
     return file
   }))
-  if (out) announce([out])
+  announce(out ? [...settled, out] : settled)
   const now = await getApproval(id)
   if (!now) throw new ApprovalError(404, 'not_found', 'No such approval.')
   return viewOf(now)

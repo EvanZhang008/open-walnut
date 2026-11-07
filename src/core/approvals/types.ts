@@ -66,6 +66,10 @@ export interface ApprovalRecord {
   answer?: ApprovalAnswer
   /** When the asker read the decision; an approval is used once. */
   consumedAt?: string
+  /** When the asker first read how it ended, whatever it was (an expiry too): it knows. */
+  readAt?: string
+  /** When Walnut told the asking session the decision (tell-asker.ts), at most once. */
+  askerToldAt?: string
   /** sha256 of the asker's wait token: only it may read and use the decision. */
   waitTokenHash: string
   /** An enrollment approval: approving it activates this pending device key. */
