@@ -6,7 +6,8 @@
  * films the same flow, and runs only in a WebKit run (never in CI's Chromium).
  */
 import { test, expect } from '@playwright/test'
-import { seed, openNote, drawn } from './notes-images-helpers'
+import { clickCaretInto } from './prosemirror-caret'
+import { api, seed, openNote, drawn, placeImage, pngOf } from './notes-images-helpers'
 
 test.use({ video: { mode: 'on', size: { width: 1280, height: 800 } }, viewport: { width: 1280, height: 800 } })
 
@@ -37,4 +38,48 @@ test('image walkthrough', async ({ page }) => {
   await page.waitForTimeout(1200)
   await editor.locator('.notes-image-missing:visible').scrollIntoViewIfNeeded()
   await page.waitForTimeout(2000)
+})
+
+test('paste and tall zoom walkthrough', async ({ page }) => {
+  test.skip(test.info().project.name !== 'webkit', 'a video for WebKit runs only')
+  test.setTimeout(120_000)
+  const root = `ImgPasteTall${Date.now()}`
+  const note = `${root}/Trips/Plan.md`
+  await api('PUT', `/api/notes-v2/content/${note}`, { content: 'seeding\n' })
+  await placeImage(note, `${root}/Trips/tall.png`, [90, 90, 200], 300, 1400)
+  await api('PUT', `/api/notes-v2/content/${note}`, { content: 'Paste here\n\n![tall](tall.png)\n' })
+  const editor = await openNote(page, root, 'Paste here')
+  await page.waitForTimeout(1200)
+
+  // A screenshot on the clipboard, pasted into the note.
+  await clickCaretInto(editor.locator('p', { hasText: 'Paste here' }))
+  await page.keyboard.press('End')
+  const wrote = await page.evaluate(async (b64) => {
+    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
+    try {
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': new Blob([bytes], { type: 'image/png' }) })])
+      return 'ok'
+    } catch (e) { return String(e) }
+  }, pngOf(320, 180, [20, 180, 120]))
+  if (wrote === 'ok') {
+    await page.keyboard.press('ControlOrMeta+v')
+    await expect.poll(() => editor.locator('img').evaluateAll((imgs) =>
+      (imgs as HTMLImageElement[]).filter((i) => i.complete && i.naturalWidth === 320).length), { timeout: 10_000 }).toBe(1)
+  }
+  await page.waitForTimeout(2000)
+
+  // A tall picture: the zoom shows all of it, a click fills the width, the wheel scrolls.
+  const pic = editor.locator('img[alt="tall"]')
+  await pic.scrollIntoViewIfNeeded()
+  await page.waitForTimeout(900)
+  await pic.dblclick()
+  await page.waitForTimeout(1800)
+  await page.locator('.lightbox-image').click()
+  await page.waitForTimeout(1500)
+  for (let i = 0; i < 4; i++) { await page.mouse.wheel(0, 300); await page.waitForTimeout(500) }
+  await page.waitForTimeout(800)
+  await page.locator('.lightbox-image').click()
+  await page.waitForTimeout(1200)
+  await page.keyboard.press('Escape')
+  await page.waitForTimeout(1500)
 })
