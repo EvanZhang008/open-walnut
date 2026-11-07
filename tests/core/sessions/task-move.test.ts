@@ -457,6 +457,21 @@ describe('task_move', () => {
       expect(launch.message.trimEnd().endsWith('follow it exactly.')).toBe(true);
       await clearCloud();
 
+      // The checks before the set-up used up the shared budget (2026-11-07, live: clouddev at
+      // load 80 had the brief, the set-up ran out of time, and the task started without it):
+      // a move for its files sets the repository up in a window of its own.
+      // The slot is taken after the choice and before the set-up: a slow admission spends the rest.
+      const slowAdmit = async () => { await new Promise((r) => setTimeout(r, 8_500)); return () => {}; };
+      process.env.WALNUT_PLACE_SETUP_MS = '8000';
+      try {
+        const late = { host: '', cwd: shared, message: reviewer.description };
+        expect(await placeStartByLoad(reviewer, {}, late, 'claude', { admit: slowAdmit })).toMatchObject({ host: 'cloud', moved: true, cwd: dest, setUp: true });
+        expect(late).toMatchObject({ host: 'cloud', cwd: dest });
+      } finally {
+        delete process.env.WALNUT_PLACE_SETUP_MS;
+      }
+      await clearCloud();
+
       // A task in its own directory (no project folder) gets a new one of its own there.
       const ownDir = `${W.homes.__local__}/tasks/${taskId}`;
       fs.mkdirSync(ownDir, { recursive: true });

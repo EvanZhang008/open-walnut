@@ -45,7 +45,8 @@ export interface SessionStartParams {
   /**
    * How long the answer waits for the session to come up (default START_RESPONSE_BUDGET_MS): an
    * agent's start answers once it really started or failed (2026-11-06, the user: a start is a
-   * sync call, "if it did not start, it must be an error").
+   * sync call, "if it did not start, it must be an error"). Counted from the start's first
+   * step, placement included, so the caller's own op timeout never ends the call first.
    */
   answerWithinMs?: number;
   /** Walnut's own move of the task's work (an engine switch): never waits for a host slot. */
@@ -234,6 +235,7 @@ async function recordStartRefused(taskId: string, error: string, host: string): 
 }
 
 async function startSessionForTaskNow(params: SessionStartParams): Promise<SessionStartResult> {
+  const answerBy = params.answerWithinMs !== undefined ? Date.now() + params.answerWithinMs : undefined;
   // `host: "@ios"` asks for what a host has (host-select.ts): resolved to one host before anything else reads it.
   params = await resolveHostSelector(params);
   let task: Task;
@@ -577,7 +579,7 @@ async function startSessionForTaskNow(params: SessionStartParams): Promise<Sessi
       return await Promise.race([
         work,
         new Promise<SessionStartResult>((resolve) => {
-          timer = setTimeout(() => resolve({ ...result, starting: true }), params.answerWithinMs ?? START_RESPONSE_BUDGET_MS);
+          timer = setTimeout(() => resolve({ ...result, starting: true }), answerBy !== undefined ? Math.max(0, answerBy - Date.now()) : START_RESPONSE_BUDGET_MS);
         }),
       ]);
     } finally {

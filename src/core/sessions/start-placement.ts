@@ -33,10 +33,22 @@ export interface StartPlacement {
   setUp?: boolean;
 }
 
-/** How long placement may hold a start (the task_start op waits 40 s): past it the start stays. */
+/** How long placement may hold a start before it goes ahead where it was (the task_start op waits 130 s). */
 function setupBudgetMs(): number {
   const n = Number(process.env.WALNUT_PLACE_SETUP_MS);
   return Number.isFinite(n) && n > 0 ? n : 25_000;
+}
+
+/**
+ * A move for its files sets the repository up in a window of its own once the host is chosen:
+ * under load the checks before it can use most of the shared budget, and staying on a host
+ * without the files the task names is the very miss the move is for (2026-11-07, live probe:
+ * clouddev had the brief, the set-up ran out of the 25 s budget, and the task started on the
+ * Mac without it).
+ */
+function filesSetupBudgetMs(): number {
+  const n = Number(process.env.WALNUT_PLACE_FILES_SETUP_MS);
+  return Number.isFinite(n) && n > 0 ? n : 60_000;
 }
 
 class PlacementTimeout extends Error {}
@@ -189,7 +201,8 @@ export async function placeStartByLoad(
     return { host: decision.host, from: decision.from, moved: true, reason: decision.reason, cwd: made.path, setUp: true };
   }
   const p = (await probeSource())!;
-  const setup = await within(setUpOn(task, p, sourceHost, target, moveId), deadline, 'setting the repository up').catch((err: unknown) => {
+  const setupBy = decision.forFiles ? Math.max(deadline, Date.now() + filesSetupBudgetMs()) : deadline;
+  const setup = await within(setUpOn(task, p, sourceHost, target, moveId), setupBy, 'setting the repository up').catch((err: unknown) => {
     log.session.warn('placement: the repository could not be prepared in time; the start stays', { taskId: task.id, target, error: err instanceof Error ? err.message : String(err) });
     return null;
   });
@@ -199,7 +212,7 @@ export async function placeStartByLoad(
   // The folder it works in must be in the copy: one only untracked files make is not (review
   // round 4, Sol), and the session could not start in it.
   if (setup.setUp && setup.cwd !== setup.dest) {
-    const there = await within(pathsOnHost(target, [setup.cwd]), deadline, 'checking its folder there').catch(() => null);
+    const there = await within(pathsOnHost(target, [setup.cwd]), decision.forFiles ? Math.max(setupBy, Date.now() + 5_000) : deadline, 'checking its folder there').catch(() => null);
     if (!there || there.missing.length) {
       slot();
       log.session.warn('placement: its folder is not in the committed state; the start stays', { taskId: task.id, target, cwd: setup.cwd });
