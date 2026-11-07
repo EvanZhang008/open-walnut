@@ -200,7 +200,9 @@ describe('L2.1 RemoteSessionManager session_state wire-level contract', () => {
 
   it.each([true, false])('sends markers once using daemon capability=%s', async (supportsMarkers) => {
     const conn = (mgr as unknown as { conn: { hasCapability: (cap: string) => boolean; send: (...args: unknown[]) => Promise<unknown> } }).conn
-    const capability = vi.spyOn(conn, 'hasCapability').mockReturnValue(supportsMarkers)
+    // write-boot-wait-v1 stays off: this test is about markers, and the boot window
+    // (a write right after a spawn waits through the boot) has its own test below.
+    const capability = vi.spyOn(conn, 'hasCapability').mockImplementation((cap: string) => cap !== 'write-boot-wait-v1' && supportsMarkers)
     const send = vi.spyOn(conn, 'send').mockResolvedValue({ ok: true })
     const prepare = vi.spyOn(mgr, 'prepareOutbound').mockResolvedValue('prepared text')
     const markers = [{ message: 'original text', messageId: 'qm-marker' }]
@@ -251,7 +253,10 @@ describe('L2.1 RemoteSessionManager session_state wire-level contract', () => {
   // 120s boot deadline. Only that first ask; never to a daemon without the capability.
   it.each([true, false])('the first line after a start waits through the boot when the daemon can (boot-wait=%s)', async (bootWait) => {
     const conn = (mgr as unknown as { conn: { hasCapability: (cap: string) => boolean; send: (...args: unknown[]) => Promise<unknown> } }).conn
-    const capability = vi.spyOn(conn, 'hasCapability').mockImplementation((cap: string) => cap !== 'send-boot-wait-v1' || bootWait)
+    // A daemon with send-boot-wait-v1 but not write-boot-wait-v1 (one older than
+    // 2026-11-05): only the first line waits. The newer rule is the next test.
+    const capability = vi.spyOn(conn, 'hasCapability').mockImplementation((cap: string) =>
+      cap === 'write-boot-wait-v1' ? false : cap !== 'send-boot-wait-v1' || bootWait)
     const connect = vi.spyOn(mgr as unknown as { ensureConnected(): Promise<unknown> }, 'ensureConnected').mockResolvedValue(conn)
     const send = vi.spyOn(conn, 'send').mockResolvedValue({ ok: true, pid: 4242, offset: 100 })
     const prepare = vi.spyOn(mgr, 'prepareOutbound').mockResolvedValue('prepared resume')
@@ -274,6 +279,38 @@ describe('L2.1 RemoteSessionManager session_state wire-level contract', () => {
       expect(await mgr.writeMessage('next', { markers: [{ message: 'next', messageId: 'qm-next' }] })).toBe(true)
       expect(send.mock.calls[0][1]).not.toHaveProperty('bootWait')
       expect(send.mock.calls[0][2]).toBeUndefined()
+    } finally {
+      connect.mockRestore()
+      capability.mockRestore()
+      send.mockRestore()
+      prepare.mockRestore()
+    }
+  })
+
+  // write-boot-wait-v1 (2026-11-05): a daemon that waits through a boot for EVERY
+  // write answers a send into a CLI still booting only once it read the line, so
+  // within the boot window after a spawn here every send waits as long; past it,
+  // or with a daemon without the capability, a send keeps the plain budget.
+  it.each([
+    ['in the boot window, daemon can', true, 0, 150_000],
+    ['in the boot window, daemon cannot', false, 0, undefined],
+    ['past the boot window, daemon can', true, 151_000, undefined],
+  ] as const)('a later line %s', async (_label, writeBootWait, ageMs, timeout) => {
+    const conn = (mgr as unknown as { conn: { hasCapability: (cap: string) => boolean; send: (...args: unknown[]) => Promise<unknown> } }).conn
+    const capability = vi.spyOn(conn, 'hasCapability').mockImplementation((cap: string) =>
+      cap === 'write-boot-wait-v1' ? writeBootWait : cap !== 'send-boot-wait-v1')
+    const connect = vi.spyOn(mgr as unknown as { ensureConnected(): Promise<unknown> }, 'ensureConnected').mockResolvedValue(conn)
+    const send = vi.spyOn(conn, 'send').mockResolvedValue({ ok: true, pid: 4242, offset: 100 })
+    const prepare = vi.spyOn(mgr, 'prepareOutbound').mockResolvedValue('prepared')
+    try {
+      await mgr.start({ args: [], cwd: '/tmp', message: 'first', resume: true, markers: [{ message: 'first', messageId: 'qm-first' }], onOutput, onExit })
+      const internals = mgr as unknown as { _spawnedAtMs: number }
+      internals._spawnedAtMs -= ageMs
+      send.mockClear()
+      expect(await mgr.writeMessage('next', { markers: [{ message: 'next', messageId: 'qm-next' }] })).toBe(true)
+      expect(send.mock.calls[0][0]).toBe('send')
+      expect(send.mock.calls[0][1]).not.toHaveProperty('bootWait')
+      expect(send.mock.calls[0][2]).toBe(timeout)
     } finally {
       connect.mockRestore()
       capability.mockRestore()

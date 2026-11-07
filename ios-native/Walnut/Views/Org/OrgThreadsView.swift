@@ -821,7 +821,13 @@ struct OrgChipFlow: Layout {
         let width = proposal.width ?? .infinity
         let sizes = sizes(subviews, width: width)
         let lines = Self.lines(sizes, width: width, spacing: spacing)
-        let widest = lines.map { l in l.map { sizes[$0].width }.reduce(0, +) + spacing * CGFloat(max(0, l.count - 1)) }.max() ?? 0
+        // Typed in steps: as one expression it took the compiler past its time limit on CI.
+        let lineWidths: [CGFloat] = lines.map { (line: [Int]) -> CGFloat in
+            let chips: CGFloat = line.map { sizes[$0].width }.reduce(0, +)
+            let gaps: CGFloat = spacing * CGFloat(max(0, line.count - 1))
+            return chips + gaps
+        }
+        let widest: CGFloat = lineWidths.max() ?? 0
         if width.isFinite { cache.width = width }
         return CGSize(width: width.isFinite ? width : widest, height: Self.height(sizes, lines: lines, spacing: spacing))
     }
