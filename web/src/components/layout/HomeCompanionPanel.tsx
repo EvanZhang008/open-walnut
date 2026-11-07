@@ -66,9 +66,7 @@ export function CompanionColumn({ calendarOpen, scratchpadOpen, onCloseCalendar,
     was.current = { calendarOpen, scratchpadOpen, place };
     if (before.place !== place) return;
     if (calendarOpen && !before.calendarOpen) shellRef.current?.querySelector<HTMLButtonElement>('.cal-side-header [title="Close calendar panel"]')?.focus({ preventScroll: true });
-    if (scratchpadOpen && !before.scratchpadOpen) {
-      requestAnimationFrame(() => shellRef.current?.querySelector<HTMLElement>('.home-companion-scratchpad .tiptap')?.focus({ preventScroll: true }));
-    }
+    if (scratchpadOpen && !before.scratchpadOpen && shellRef.current) focusEditorWhenReady(shellRef.current);
   }, [calendarOpen, scratchpadOpen, place]);
   // Each pane stays mounted once shown, so the chosen day, an open create form and the
   // editor's undo history survive closing it.
@@ -111,6 +109,28 @@ export function CompanionColumn({ calendarOpen, scratchpadOpen, onCloseCalendar,
       {children}
     </aside>
   );
+}
+
+/**
+ * Put the caret in the scratchpad once its editor is there: at once, or when the note's first read
+ * lands and the editor mounts (until then no editor takes typing). Only while the focus is still
+ * where the open left it, so a click elsewhere meanwhile is never taken back.
+ */
+function focusEditorWhenReady(shell: HTMLElement): void {
+  const startedOn = document.activeElement;
+  const tryFocus = (): boolean => {
+    const editor = shell.querySelector<HTMLElement>('.home-companion-scratchpad .tiptap');
+    if (!editor) return false;
+    const now = document.activeElement;
+    if (now === startedOn || now === document.body || now === null) editor.focus({ preventScroll: true });
+    return true;
+  };
+  requestAnimationFrame(() => {
+    if (tryFocus()) return;
+    const watch = new MutationObserver(() => { if (tryFocus()) { watch.disconnect(); clearTimeout(stop); } });
+    watch.observe(shell, { childList: true, subtree: true });
+    const stop = setTimeout(() => watch.disconnect(), 30_000);
+  });
 }
 
 /** The column's place for the window's one scratchpad editor (ScratchpadHost moves it here). */

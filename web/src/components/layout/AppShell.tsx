@@ -96,6 +96,12 @@ function AppShellInner({ children }: AppShellProps) {
   // 0 on a phone). It is the side bar's right edge while it shows, beside the page
   // (a wide window) or over it (a narrow one).
   const mainRef = useRef<HTMLElement>(null);
+  // The window's one scratchpad editor (ScratchpadHost) mounts with the first wide layout and then
+  // stays, through a switch to the phone layout too: unmounting it there ended a save under way and
+  // lost the words typed after it. A phone that never was wide never loads it.
+  const scratchpadHostSeen = useRef(false);
+  if (!isMobileSidebar) scratchpadHostSeen.current = true;
+  const scratchpadHostKept = scratchpadHostSeen.current;
   useEffect(() => {
     const main = mainRef.current;
     const area = contentRef.current;
@@ -321,7 +327,7 @@ function AppShellInner({ children }: AppShellProps) {
             mounts (the rail has no toggle for them there). */}
         <div className="main-content-row">
           {!isMobileSidebar && <PageSideBar />}
-          {!isMobileSidebar && <ScratchpadHost />}
+          {scratchpadHostKept && <ScratchpadHost />}
           <div
             ref={contentRef}
             className="app-content-area"

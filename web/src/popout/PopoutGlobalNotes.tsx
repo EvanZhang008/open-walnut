@@ -28,7 +28,7 @@ const GLOBAL_RAW_IO: RawFlushIO = {
  * the pop-out is a full-width surface.
  */
 export function PopoutGlobalNotes() {
-  const { content, onEditorUpdate, saving, saveError } = useGlobalNotes();
+  const { content, onEditorUpdate, saving, saveError, loaded, loadError, retryLoad } = useGlobalNotes();
 
   useEffect(() => {
     document.title = 'Global Notes — Walnut';
@@ -36,6 +36,14 @@ export function PopoutGlobalNotes() {
 
   const saveStatus = saveError ? 'error' : saving ? 'saving' : 'idle';
 
+  // No editor before the note is read: typing into an empty one would save over it.
+  if (!loaded) {
+    return (
+      <div className="global-notes-loading" role="status" data-testid="global-notes-loading">
+        {loadError ? (<><span>Could not load the scratchpad.</span><button type="button" className="btn btn-sm" onClick={retryLoad}>Retry</button></>) : 'Loading the scratchpad…'}
+      </div>
+    );
+  }
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       <MarkdownEditorPanel

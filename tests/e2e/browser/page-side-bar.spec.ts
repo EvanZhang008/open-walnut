@@ -11,6 +11,8 @@
  *     there is saved and is the same note Home's Scratchpad shows; the window has ONE scratchpad
  *     editor wherever it shows, so a line typed on Home whose save is still in flight and a line
  *     typed on Org right after both reach the note (two editors, two savers: one line was lost);
+ *  2b. no editor takes typing before the note is read (an empty editor saved over the note), and the
+ *     one editor survives a switch to the phone layout with a save under way and newer words pending;
  *  3. each page keeps its own: the agenda open on Org is shut on Notes, Notes' scratchpad is shut on
  *     Org, and both come back as left after another page and a reload;
  *  4. the column's width is dragged on its right edge, kept per page across a reload, the other page
@@ -31,6 +33,32 @@ const scratchPane = (page: Page) => page.getByTestId('page-side-bar-scratchpad')
 const agendaToggle = (page: Page) => page.getByTestId('sidebar-toggle-calendar')
 const scratchToggle = (page: Page) => page.getByTestId('sidebar-toggle-scratchpad')
 const area = (page: Page) => page.locator('.main-content-row > .app-content-area')
+
+/**
+ * The scratchpad fills its pane and a note taller than the pane scrolls inside it (the moved
+ * editor box once sat between them as a plain block, so the note grew past the pane, clipped,
+ * with no scrollbar). A tall spacer beside the editor stands for a long note, so the shared
+ * fixture note is not rewritten.
+ */
+async function expectScratchpadScrolls(page: Page, paneTestId: string) {
+  const r = await page.evaluate((id) => {
+    const pane = document.querySelector(`[data-testid="${id}"]`)!
+    const section = pane.querySelector('.global-notes-section')!
+    const body = pane.querySelector<HTMLElement>('.global-notes-body')!
+    const spacer = document.createElement('div')
+    spacer.style.cssText = 'flex: 0 0 4000px; height: 4000px; min-height: 4000px'
+    body.appendChild(spacer)
+    const out = {
+      pane: Math.round(pane.getBoundingClientRect().height), section: Math.round(section.getBoundingClientRect().height),
+      client: body.clientHeight, scroll: body.scrollHeight,
+    }
+    spacer.remove()
+    return out
+  }, paneTestId)
+  expect(Math.abs(r.section - r.pane), `the scratchpad fills its pane (${JSON.stringify(r)})`).toBeLessThanOrEqual(2)
+  expect(r.client, 'its body is bounded by the pane').toBeLessThan(r.pane)
+  expect(r.scroll, 'and scrolls a long note').toBeGreaterThan(r.client)
+}
 
 test.describe.configure({ mode: 'serial' })
 test.setTimeout(120_000)
@@ -110,6 +138,7 @@ test('the Scratchpad opens under the agenda, takes the caret, and is the same no
   await expect(scratchPane(page)).toBeVisible()
   const editor = scratchPane(page).locator('.notes-editor .tiptap')
   await expect(editor).toBeFocused()
+  await expectScratchpadScrolls(page, 'page-side-bar-scratchpad')
   // Agenda on top, scratchpad below, one column.
   const a = (await agendaPane(page).boundingBox())!
   const s = (await scratchPane(page).boundingBox())!
@@ -133,6 +162,7 @@ test('the Scratchpad opens under the agenda, takes the caret, and is the same no
   if (!(await home.isVisible())) await scratchToggle(page).click()
   await expect(home.locator('.notes-editor .tiptap')).toContainText(line)
   await expect(page.locator('.global-notes-section')).toHaveCount(1)
+  await expectScratchpadScrolls(page, 'home-companion-scratchpad')
 
   // A line typed on Home whose save is held, then a line typed on Org at once: both are kept.
   let release!: () => void
@@ -168,6 +198,59 @@ test('the Scratchpad opens under the agenda, takes the caret, and is the same no
   expect(statuses.filter((s) => s === 409), 'no save raced another').toEqual([])
   await expect(orgEditor).toContainText(homeLine)
   await expect(orgEditor).toContainText(orgLine)
+})
+
+test('the scratchpad takes no typing before the note is read, and a phone-width switch loses nothing', async ({ page }) => {
+  // Hold every read of the note until released: the pane says it is loading and offers no editor.
+  let releaseRead!: () => void
+  const readHeld = new Promise<void>((r) => { releaseRead = r })
+  await page.route('**/api/notes/global', async (route) => {
+    if (route.request().method() === 'GET') await readHeld
+    await route.continue()
+  })
+  await openOrg(page)
+  await scratchToggle(page).click()
+  await expect(scratchPane(page).getByTestId('global-notes-loading')).toBeVisible()
+  await expect(scratchPane(page).locator('.tiptap')).toHaveCount(0)
+  const before = (await (await page.request.get('/api/notes/global')).json()).content as string
+  releaseRead()
+  const editor = scratchPane(page).locator('.notes-editor .tiptap')
+  await expect(editor).toBeVisible()
+  // The open asked for the caret: it lands once the editor is there.
+  await expect(editor).toBeFocused()
+  // It opens on the note as stored, never empty over a stored one.
+  const words = before.replace(/^---[\s\S]*?---/, '').match(/[A-Za-z]{4,}/)?.[0]
+  if (words) await expect(editor).toContainText(words)
+  await page.unroute('**/api/notes/global')
+
+  // A save under way, newer words waiting behind it, then the window goes phone width.
+  let releaseSave!: () => void
+  const saveHeld = new Promise<void>((r) => { releaseSave = r })
+  let holdSave = true
+  await page.route('**/api/notes/global', async (route) => {
+    if (route.request().method() === 'PUT' && holdSave) { holdSave = false; await saveHeld }
+    await route.continue()
+  })
+  const a = `phone switch a ${Date.now().toString(36)}`
+  const b = `phone switch b ${Date.now().toString(36)}`
+  await editor.locator('p').last().click()
+  await page.keyboard.press('End')
+  await page.keyboard.press('Enter')
+  await page.keyboard.type(a)
+  await expect.poll(() => holdSave, 'the first save is on its way and held').toBe(false)
+  await page.keyboard.press('Enter')
+  await page.keyboard.type(b)
+  await page.setViewportSize({ width: 700, height: 900 })
+  await expect(bar(page)).toHaveCount(0)
+  // The editor waits in the document, so the save still under way is seen before a reload.
+  await expect(page.locator('.scratchpad-parking .global-notes-section')).toHaveCount(1)
+  releaseSave()
+  await expect.poll(async () => (await (await page.request.get('/api/notes/global')).json()).content as string, { timeout: 15_000 })
+    .toMatch(new RegExp(`${a}\\n+${b}`))
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await expect(scratchPane(page)).toBeVisible()
+  await expect(scratchPane(page).locator('.notes-editor .tiptap')).toContainText(b)
+  await expect(page.locator('.global-notes-section')).toHaveCount(1)
 })
 
 test('each page keeps its own side bar, across pages and a reload', async ({ page }) => {
@@ -280,6 +363,11 @@ test('a full screen sheet lies beside the side bar, and a narrow window overlays
 
   // A real full screen sheet (the Org node's side bar) leaves the side bar usable.
   const full = page.getByTestId('org-rail-fullscreen')
+  // The Org page restores the node it last showed a moment after it loads (org-place.ts), and a
+  // node change moves the full screen sheet to another place: wait until the node stays put.
+  const nodeShown = () => page.evaluate(() => document.querySelector('.org-page h2')?.textContent ?? '')
+  let lastNode = ''
+  await expect.poll(async () => { const now = await nodeShown(); const same = now !== '' && now === lastNode; lastNode = now; return same }, { intervals: [1500] }).toBe(true)
   // The node on screen may have no side bar of its own: pick one that has.
   const channels = page.getByTestId('org-channel')
   for (let i = 0; i < await channels.count() && !(await full.isVisible()); i++) {

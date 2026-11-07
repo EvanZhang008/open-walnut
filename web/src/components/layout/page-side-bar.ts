@@ -81,6 +81,12 @@ export function toggleSideBarPane(page: string, pane: 'agenda' | 'scratchpad'): 
   writeView(VIEW_KEY, page, { ...prev, [pane]: !prev[pane] });
 }
 
+/** Open (or shut) one pane of `page`'s side bar. */
+export function setSideBarPane(page: string, pane: 'agenda' | 'scratchpad', open: boolean): void {
+  const prev = storedView(shownText(VIEW_KEY), page, isPageSideBarView) ?? SIDE_BAR_CLOSED;
+  if (prev[pane] !== open) writeView(VIEW_KEY, page, { ...prev, [pane]: open });
+}
+
 /** The side bar of `page` (Home's id is never written), with a setter per pane and the width. */
 export function usePageSideBar(page: string | null) {
   const [view, setView] = usePageViewOf<PageSideBarView>('side-bar', 'view', page ?? 'home', SIDE_BAR_CLOSED, isPageSideBarView);

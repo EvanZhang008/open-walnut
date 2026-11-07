@@ -9,10 +9,13 @@
  * own, and that box is moved into the slot of the column that shows the scratchpad (`useScratchpadSlot`).
  * Moving a DOM subtree keeps the editor as it is: its unsaved words, its undo history, its save.
  */
-import { useLayoutEffect, useRef, useSyncExternalStore, type RefObject } from 'react';
+import { useEffect, useLayoutEffect, useRef, useSyncExternalStore, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { GlobalNotesSection } from '@/components/notes/GlobalNotesSection';
 import { useGlobalNotes } from '@/hooks/useGlobalNotes';
+import { homePanelOpen } from '@/pages/home-panel-live';
+import { setUnsavedWorkScratchpadOpener } from '@/utils/unsaved-work';
+import { setSideBarPane, sideBarPageOf } from './page-side-bar';
 import type { Task } from '@open-walnut/core';
 
 /** What the column holding the scratchpad hands it: its close and its task links. */
@@ -30,9 +33,27 @@ const listeners = new Set<() => void>();
 function theBox(): HTMLDivElement {
   if (!box) {
     box = document.createElement('div');
+    // A flex column that fills its slot (home-navigation.css), so the editor's body scrolls.
     box.className = 'scratchpad-host';
   }
   return box;
+}
+
+/**
+ * Where the box waits while no column has a slot for it (the phone layout unmounts them): hidden,
+ * but in the document, so a save still under way is seen (utils/unsaved-work.ts scans the page
+ * before a reload or a restart) and the editor's DOM is never detached.
+ */
+function park(): void {
+  if (!box) return;
+  let lot = document.querySelector<HTMLElement>('.scratchpad-parking');
+  if (!lot) {
+    lot = document.createElement('div');
+    lot.className = 'scratchpad-parking';
+    lot.style.display = 'none';
+    document.body.appendChild(lot);
+  }
+  lot.appendChild(box);
 }
 
 function subscribe(fn: () => void) { listeners.add(fn); return () => { listeners.delete(fn); }; }
@@ -54,6 +75,11 @@ export function useScratchpadSlot(slot: RefObject<HTMLElement | null>, open: boo
     owner = { ...nextRef.current };
     for (const fn of [...listeners]) fn();
   }, [open, slot, next.onClose, next.onTaskClick, next.tasks, next.focusedTaskId]);
+  // A slot that goes while it holds the box parks it, never takes it out of the document.
+  useLayoutEffect(() => {
+    const el = slot.current;
+    return () => { if (box && el && box.parentElement === el) park(); };
+  }, [slot]);
 }
 
 /** Mounted once per window (AppShell, not on a phone, where no column shows the scratchpad). */
@@ -62,6 +88,15 @@ export function ScratchpadHost() {
   // and typing that began before a late load landed raced the load and lost the text.
   const notes = useGlobalNotes();
   const who = useSyncExternalStore(subscribe, current, () => null);
+  // "Take me there" on a scratchpad still saving (unsaved-work.ts) opens it where the user is.
+  useEffect(() => {
+    setUnsavedWorkScratchpadOpener(() => {
+      const page = sideBarPageOf(window.location.pathname);
+      if (page !== null) setSideBarPane(page, 'scratchpad', true);
+      else if (homePanelOpen('scratchpad') !== true) window.dispatchEvent(new CustomEvent('sidebar:toggle-scratchpad'));
+    });
+    return () => setUnsavedWorkScratchpadOpener(undefined);
+  }, []);
   // Nothing renders until a column first shows the scratchpad (the editor is not built for nothing).
   if (!who) return null;
   return createPortal(

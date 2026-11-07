@@ -36,7 +36,7 @@ interface GlobalNotesSectionProps extends UseGlobalNotesReturn {
 }
 
 export function GlobalNotesSection(props: GlobalNotesSectionProps) {
-  const { content, onEditorUpdate, saving, saveError, collapsed: collapsedProp, toggleCollapse, popupOpen, openPopup, closePopup, tasks, focusedTaskId, onTaskClick, fill, title, onClose } = props;
+  const { content, onEditorUpdate, saving, saveError, loaded, loadError, retryLoad, collapsed: collapsedProp, toggleCollapse, popupOpen, openPopup, closePopup, tasks, focusedTaskId, onTaskClick, fill, title, onClose } = props;
   // Fill mode can't honor the persisted collapse flag: this IS the visible section,
   // so a stale `collapsed` from the drawer era would render an empty Notes tab.
   const collapsed = fill ? false : collapsedProp;
@@ -122,18 +122,30 @@ export function GlobalNotesSection(props: GlobalNotesSectionProps) {
             {/* Deliberate compact opt-out of MarkdownEditorPanel: this inline
                 panel has its own header row and no room for the shell's
                 toolbar/grip rail. The fullscreen popup/pop-out use the shell. */}
-            <NotesEditor
-              content={content}
-              onDirty={onEditorUpdate}
-              className="global-notes-editor-inline"
-              tasks={tasks}
-              focusedTaskId={focusedTaskId}
-              onTaskClick={onTaskClick}
-            />
+            {loaded ? (
+              <NotesEditor
+                content={content}
+                onDirty={onEditorUpdate}
+                className="global-notes-editor-inline"
+                tasks={tasks}
+                focusedTaskId={focusedTaskId}
+                onTaskClick={onTaskClick}
+              />
+            ) : (
+              // No editor before the note is read: typing into an empty one would save over it.
+              <div className="global-notes-loading" role="status" data-testid="global-notes-loading">
+                {loadError ? (
+                  <>
+                    <span>Could not load the scratchpad.</span>
+                    <button type="button" className="btn btn-sm" onClick={retryLoad}>Retry</button>
+                  </>
+                ) : 'Loading the scratchpad…'}
+              </div>
+            )}
           </div>
         )}
       </div>
-      {popupOpen && (
+      {popupOpen && loaded && (
         <GlobalNotesPopup
           content={content}
           onDirty={onEditorUpdate}

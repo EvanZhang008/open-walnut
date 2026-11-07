@@ -280,6 +280,10 @@
 .home-companion .cal-side-panel { width: 100% !important; flex: 1; min-width: 0; border: 0; border-right: 0; }
 /* Agenda and scratchpad on together share the column, agenda on top. */
 .home-companion-body-calendar + .home-companion-scratchpad { border-top: 1px solid var(--border); }
+/* The window's one scratchpad editor sits in a box ScratchpadHost moves between the columns: it
+   fills the slot as the section did, so the note's body keeps a bounded height and scrolls. */
+.scratchpad-host { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.global-notes-loading { display: flex; align-items: center; gap: 8px; padding: 12px 2px; font-size: 13px; color: var(--fg-secondary); }
 .home-companion-scratchpad .global-notes-header { justify-content: flex-start; padding: 8px 10px; border-bottom: 1px solid var(--border); }
 .home-companion-scratchpad .global-notes-label { font-size: 13.5px; font-weight: 700; color: var(--fg); text-transform: none; letter-spacing: 0; }
 .home-companion-scratchpad .global-notes-body { padding: 8px 14px; }

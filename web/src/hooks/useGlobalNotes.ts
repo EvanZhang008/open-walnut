@@ -17,6 +17,14 @@ export interface UseGlobalNotesReturn {
   saveError: string | null;
   collapsed: boolean;
   toggleCollapse: () => void;
+  /**
+   * The note has been read from the server. Until then no editor may take typing: an editor seeded
+   * with nothing whose words were saved before the read landed wrote over the whole note.
+   */
+  loaded: boolean;
+  /** The read failed (it is tried again by itself, and `retryLoad` tries at once). */
+  loadError: string | null;
+  retryLoad: () => void;
   /** In-app fullscreen overlay state (GlobalNotesPopup) — NOT the new-tab pop-out. */
   popupOpen: boolean;
   openPopup: () => void;
@@ -72,21 +80,39 @@ export function useGlobalNotes(): UseGlobalNotesReturn {
    */
   const frontmatterRef = useRef('');
 
-  // Load on mount with cancellation guard
+  // Load on mount with cancellation guard. A failed read is tried again (2s, 4s, 8s, 16s, then on
+  // Retry) and the editor stays closed until one lands: an empty editor that took typing saved
+  // those words alone over the note.
+  const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const retryLoad = useCallback(() => setLoadAttempt((n) => n + 1), []);
   useEffect(() => {
+    if (loaded) return;
     let mounted = true;
-    fetchGlobalNotes()
-      .then(({ content: c, contentHash }) => {
-        if (mounted) {
+    let retry: ReturnType<typeof setTimeout> | null = null;
+    let tries = 0;
+    const read = () => {
+      fetchGlobalNotes()
+        .then(({ content: c, contentHash }) => {
+          if (!mounted) return;
           const { frontmatter, body } = splitFrontmatter(c);
           frontmatterRef.current = frontmatter;
           setContent(body);
           contentHashRef.current = contentHash;
-        }
-      })
-      .catch(() => {});
-    return () => { mounted = false; };
-  }, []);
+          setLoadError(null);
+          setLoaded(true);
+        })
+        .catch((e) => {
+          if (!mounted) return;
+          setLoadError(e instanceof Error ? e.message : String(e));
+          if (tries < 4) retry = setTimeout(read, 2000 * 2 ** tries++);
+        });
+    };
+    read();
+    return () => { mounted = false; if (retry) clearTimeout(retry); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- a Retry starts the reads again; a landed read ends them
+  }, [loadAttempt]);
 
   // ── Reload helper (used by WS handler and 409 recovery) ──
   const reloadContent = useCallback(() => {
@@ -356,5 +382,5 @@ export function useGlobalNotes(): UseGlobalNotesReturn {
   const openPopup = useCallback(() => setPopupOpen(true), []);
   const closePopup = useCallback(() => setPopupOpen(false), []);
 
-  return { content, onEditorUpdate, saving, saveError, collapsed, toggleCollapse, popupOpen, openPopup, closePopup };
+  return { content, onEditorUpdate, saving, saveError, loaded, loadError, retryLoad, collapsed, toggleCollapse, popupOpen, openPopup, closePopup };
 }

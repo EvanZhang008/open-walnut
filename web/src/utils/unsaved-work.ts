@@ -201,6 +201,10 @@ export type HomeOpener = (sessionId?: string) => void;
 let homeOpener: HomeOpener | undefined;
 export function setUnsavedWorkHomeOpener(open: HomeOpener | undefined): void { homeOpener = open; }
 
+/** Opens the window's one Scratchpad where the user is: Home's column, or the page's side bar (ScratchpadHost). */
+let scratchpadOpener: (() => void) | undefined;
+export function setUnsavedWorkScratchpadOpener(open: (() => void) | undefined): void { scratchpadOpener = open; }
+
 /** The same item after its column re-rendered: the box of that kind in that session. */
 function relocate(target: UnsavedItem): Element | null {
   if (visible(target.element) || !target.sessionId) return target.element;
@@ -222,9 +226,12 @@ function relocate(target: UnsavedItem): Element | null {
 export function revealUnsavedWork(target: UnsavedItem, openHome: HomeOpener | undefined = homeOpener): void {
   log.info('update', 'revealing unsaved work', describeUnsavedWork([target])[0]);
   if (visible(target.element)) { show(target.element); return; }
+  // The Scratchpad is one editor that shows on Home or beside any page: open it where the user is.
+  const scratchpad = !target.sessionId && !!target.element?.closest('.scratchpad-host');
   const onHome = !!target.element?.closest('.main-page-wrapper');
-  if (!openHome || (!target.sessionId && !onHome)) return;
-  openHome(target.sessionId);
+  if (scratchpad && scratchpadOpener) scratchpadOpener();
+  else if (!openHome || (!target.sessionId && !onHome)) return;
+  else openHome(target.sessionId);
   let tries = 0;
   const retry = () => {
     const el = relocate(target);
