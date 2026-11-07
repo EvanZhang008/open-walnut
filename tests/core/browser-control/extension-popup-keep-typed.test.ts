@@ -45,3 +45,25 @@ describe('paint keeps typed fields', () => {
     expect(pw.value).toBe('')
   })
 })
+
+describe('every password field of the extension is kept across a redraw', () => {
+  it('each password input id is in KEEP_TYPED, and each view that draws one carries typed text', async () => {
+    const fs = await import('node:fs')
+    const path = await import('node:path')
+    const { KEEP_TYPED } = await import('../../../packages/browser-extension/src/popup-view')
+    const dir = path.join(__dirname, '../../../packages/browser-extension/src')
+    const missing: string[] = []
+    const uncarried: string[] = []
+    for (const f of fs.readdirSync(dir).filter((n) => n.endsWith('.ts'))) {
+      const src = fs.readFileSync(path.join(dir, f), 'utf-8')
+      for (const m of src.matchAll(/h\('input', \{[^}]*type: 'password'[^}]*\}/g)) {
+        const id = /id: '([^']+)'/.exec(m[0])?.[1]
+        if (!id || !(KEEP_TYPED as readonly string[]).includes(id)) missing.push(`${f}: ${id ?? '(no id)'}`)
+      }
+      // A view that draws a master password field and redraws itself goes through paint or carryTyped.
+      if (/'aria-label': 'Master password'/.test(src) && /replaceChildren\(/.test(src) && !/carryTyped\(|paint\(/.test(src)) uncarried.push(f)
+    }
+    expect(missing).toEqual([])
+    expect(uncarried).toEqual([])
+  })
+})

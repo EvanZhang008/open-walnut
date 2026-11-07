@@ -35,15 +35,19 @@ export function isCurrent(g: number): boolean {
  */
 export type ViewKind = 'home' | 'sub'
 
-/** The fields a redraw must not empty: the master password, the Secret Key, the server address. */
-export const KEEP_TYPED = ['pw', 'sk', 'server'] as const
+/**
+ * The fields a redraw must not empty: the master password and Secret Key (popup and key popover),
+ * the server address, the save bar's password. tests/core/browser-control/extension-popup-keep-typed.test.ts
+ * fails on a password field of the extension whose id is missing here.
+ */
+export const KEEP_TYPED = ['pw', 'sk', 'server', 'key-pw', 'key-sk', 'password'] as const
 
 /**
  * A redraw (the vault watch, a page follow, a state answer) builds a new view from scratch: what
  * the person typed into a field of the same name moves into it, with the focus, so a password typed
  * just before a redraw is still there when they press Unlock.
  */
-function keepTyped(root: HTMLElement, el: HTMLElement): void {
+export function carryTyped(root: HTMLElement, el: HTMLElement): void {
   for (const id of KEEP_TYPED) {
     const was = root.querySelector<HTMLInputElement>(`#${id}`)
     const now = el.querySelector<HTMLInputElement>(`#${id}`)
@@ -56,7 +60,7 @@ function keepTyped(root: HTMLElement, el: HTMLElement): void {
 /** Draws `el` as the view of generation `g`; false (nothing drawn) when a newer view took over. */
 export function paint(root: HTMLElement, el: HTMLElement, g: number, shows: Shows, kind: ViewKind = 'sub'): boolean {
   if (g !== gen) return false
-  keepTyped(root, el)
+  carryTyped(root, el)
   root.replaceChildren(el)
   root.dataset.shows = shows
   root.dataset.view = kind

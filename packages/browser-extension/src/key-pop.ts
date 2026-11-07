@@ -15,7 +15,7 @@ import { pageHost } from './unlock-words'
 import { avatar, h, icon } from './dom'
 import { errLine, hintLine } from './popup-ui'
 import { fillTab, type Item, type PopupCtx } from './popup-fill'
-import { currentView, isCurrent, nextView } from './popup-view'
+import { carryTyped, currentView, isCurrent, nextView } from './popup-view'
 import { sendUnlock, unlockRefusal } from './unlock-send'
 
 export interface KeyPop {
@@ -186,7 +186,10 @@ export function keyPopover(o: {
         h('button', { class: 'link-btn key-pop-settings', type: 'button', 'data-testid': 'key-pop-settings', title: 'Passwords and agents in this browser', onclick: () => { close(); o.onSettings() } }, 'Settings'),
         h('button', { class: 'link-btn key-pop-vault', type: 'button', 'data-testid': 'key-pop-open-vault', onclick: () => { close(); o.onOpenVault() } }, 'Open vault')))
     said = h('p', { class: 'err key-pop-said', role: 'alert', 'data-testid': 'key-pop-said' })
-    el.replaceChildren(head, h('div', { class: 'key-pop-body' }, ...body, said), foot)
+    const bodyEl = h('div', { class: 'key-pop-body' }, ...body, said)
+    // A redraw (the vault watch, a refresh) keeps the password typed into the old form.
+    carryTyped(el, bodyEl)
+    el.replaceChildren(head, bodyEl, foot)
     el.dataset.shows = locked ? 'locked' : 'unlocked'
     el.setAttribute('aria-label', host ? `Passwords for ${host}` : 'Passwords')
     // The focus stays on the popover itself (Tab reaches the first Fill, Escape closes): a Fill
