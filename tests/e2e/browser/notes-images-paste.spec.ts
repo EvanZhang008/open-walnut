@@ -14,6 +14,11 @@ test('a picture pasted from the clipboard is saved beside the note and drawn', a
   const editor = await openNote(page, root)
   const embedsBefore = ((await api('GET', `/api/notes-v2/content/${note}`)).content as string).match(/!\[\[/g)?.length ?? 0
 
+  // What the paste event itself carried (an engine with no system clipboard,
+  // headless Linux WebKit, hands it nothing at all).
+  await page.evaluate(() => document.addEventListener('paste', (e) => {
+    (window as unknown as { pasteTypes: string[] }).pasteTypes = [...(e.clipboardData?.types ?? [])]
+  }, true))
   await clickCaretInto(editor.locator('p', { hasText: 'Image forms' }))
   await page.keyboard.press('End')
   // What a screenshot tool leaves on the clipboard: a PNG and nothing else.
@@ -26,6 +31,8 @@ test('a picture pasted from the clipboard is saved beside the note and drawn', a
   }, pngOf(90, 60, [20, 180, 120]))
   test.skip(wrote !== 'ok', `this engine let no script put a picture on the clipboard: ${wrote}`)
   await page.keyboard.press('ControlOrMeta+v')
+  const carried = await page.evaluate(() => (window as unknown as { pasteTypes?: string[] }).pasteTypes ?? [])
+  test.skip(carried.length === 0, 'this engine has no system clipboard: the paste event carried nothing')
 
   // Saved into the note's _attachment folder as an embed, and drawn there.
   await expect.poll(async () => ((await api('GET', `/api/notes-v2/content/${note}`)).content as string).match(/!\[\[/g)?.length ?? 0, { timeout: 15_000 })
