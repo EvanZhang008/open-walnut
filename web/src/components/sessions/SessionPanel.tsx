@@ -1720,9 +1720,15 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
       setChatCollapsed(true);
       log.info('session-panel', 'changed collapsed the chat (too narrow)', { sessionId, width: split.clientWidth });
     };
-    const ro = new ResizeObserver(check);
+    // Collapsed on the next frame, never inside the observer's own callback: a layout change
+    // there leaves its notifications undelivered (WebKit reports that as a page error).
+    let frame = 0;
+    const ro = new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(check);
+    });
     ro.observe(split);
-    return () => ro.disconnect();
+    return () => { ro.disconnect(); cancelAnimationFrame(frame); };
   }, [activeView, chatCollapsed, changedOnPhone, changedPaneWidthWithChat, sessionId]);
   // The chat the user hid is kept with the view; one the window hid is not.
   // Written only when it moved while the same place showed: a move to another

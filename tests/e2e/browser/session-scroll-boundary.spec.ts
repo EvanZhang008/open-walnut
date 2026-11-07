@@ -72,6 +72,12 @@ test('a built long conversation scrolls in a column, fullscreen and after reload
   await verifyScrolling(page, panel);
   await panel.getByTestId('session-changed-chip').click();
   await expect(panel.locator('.session-panel-split')).toHaveClass(/is-changed-open/);
+  // A 1280 window has no room for the tree, a diff and the chat: Changed opens with the
+  // chat put away, and Show chat brings it back beside the diff, where it scrolls.
+  const showChat = panel.locator('.session-diff-show-chat');
+  await expect(showChat).toBeVisible();
+  await showChat.click();
+  await expect(showChat).toHaveCount(0);
   await verifyScrolling(page, panel);
   await panel.screenshot({ path: `${evidence}/${info.project.name}-split.png` });
   await panel.getByTestId('session-changed-chip').click();

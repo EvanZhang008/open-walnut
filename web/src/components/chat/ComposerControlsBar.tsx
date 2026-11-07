@@ -147,13 +147,16 @@ export function ComposerControlsBar({ controls, className, handleRef }: Composer
     measure();
     const bar = barRef.current;
     if (!bar || typeof ResizeObserver === 'undefined') return;
-    const ro = new ResizeObserver(() => measure());
+    // Measured on the next frame, never inside the observer's callback: condensing the
+    // row there resizes what it watches and leaves its notifications undelivered.
+    let frame = 0;
+    const ro = new ResizeObserver(() => { cancelAnimationFrame(frame); frame = requestAnimationFrame(measure); });
     ro.observe(bar);
     // The row only shrinks when the space around it does, and its own box stops
     // changing once it has collapsed — watch the whole controls row too.
     if (bar.parentElement) ro.observe(bar.parentElement);
     for (const el of bar.querySelectorAll<HTMLElement>('[data-control-id]')) ro.observe(el);
-    return () => ro.disconnect();
+    return () => { ro.disconnect(); cancelAnimationFrame(frame); };
     // `ids` covers "a control appeared or disappeared"; `measure` covers the rest.
   }, [measure, ids]);
 

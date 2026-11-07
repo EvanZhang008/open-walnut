@@ -558,13 +558,17 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     const el = textareaRef.current;
     if (!el) return;
     let lastWidth = el.clientWidth;
+    // Fitted on the next frame, never inside the observer's callback: the new height
+    // there would leave the observer's notifications undelivered (a page error in WebKit).
+    let frame = 0;
     const ro = new ResizeObserver(() => {
       if (el.clientWidth === lastWidth) return;
       lastWidth = el.clientWidth;
-      fitTextarea(el);
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => fitTextarea(el));
     });
     ro.observe(el);
-    return () => ro.disconnect();
+    return () => { ro.disconnect(); cancelAnimationFrame(frame); };
   }, []);
 
   // Ref mirror for palette state — guarantees handleKeyDown always reads latest values

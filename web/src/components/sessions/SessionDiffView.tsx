@@ -893,9 +893,12 @@ export const FileDiffPane = memo(function FileDiffPane({
     if (!el || typeof ResizeObserver === 'undefined') return;
     const measure = () => setNarrowPane(el.clientWidth > 0 && el.clientWidth < AUTO_SPLIT_MIN_W);
     measure();
-    const ro = new ResizeObserver(measure);
+    // Re-measured on the next frame, never inside the observer's callback (the layout it
+    // switches would leave the observer's notifications undelivered).
+    let frame = 0;
+    const ro = new ResizeObserver(() => { cancelAnimationFrame(frame); frame = requestAnimationFrame(measure); });
     ro.observe(el);
-    return () => ro.disconnect();
+    return () => { ro.disconnect(); cancelAnimationFrame(frame); };
   }, []);
   const autoHybrid = viewType === 'auto' && !isWholeFile && !narrowPane;
   // The single-<Diff> layout used when a fixed mode is forced (or the file is
