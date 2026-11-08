@@ -224,7 +224,7 @@ Test knobs (environment): `WALNUT_DESKTOP_PORTS` (comma-separated, instead of
 3456 and 4567) and install.sh's own `OPEN_WALNUT_*` knobs, which pass through.
 For the restart of an installed update on a Mac where the real app keeps running:
 `WALNUT_DESKTOP_E2E_BACKGROUND=1` opens the window behind every other window without
-taking focus, and keeps its page running though covered; `WALNUT_DESKTOP_UPDATE_APP=<path to .app>` lets an isolated daemon
+taking focus, keeps its page running though covered, and leaves the dictation keys to the person's own app; `WALNUT_DESKTOP_UPDATE_APP=<path to .app>` lets an isolated daemon
 (an ephemeral server's) offer that copy's update, which no isolated daemon does
 otherwise; `WALNUT_APPLY_UPDATE_OPEN` (also apply-update.sh's) is the program the
 restart helper runs with the app's path to open it again, so the new copy starts
@@ -236,7 +236,29 @@ page, for a test's own steps (typing a draft, reading what the page shows).
 page's own pixels there once a second (`<epoch ms>.png`), for a test's video:
 WebKit paints the page as it is then (`createPDF`), so the window may be covered
 and the Mac locked. Before the console shows, the loading and error screens are
-drawn from the window's own views the same way.
+drawn from the window's own views the same way, and the memory notice the
+shell draws over the page is drawn into each frame where it sits.
+`WALNUT_DESKTOP_E2E_IDLE_FILE=<file>` (with the background knob) holds `<seconds>`
+or `<seconds> visible`: the user's idle time the page-process watchdog sees, and
+with `visible` a window it takes as in front of the user (read on every check), so
+a test copy plays someone who works and then pauses, whatever the person at the
+Mac does. The watchdog's thresholds are UserDefaults, which a test passes as
+launch arguments (read, never stored): `-walnutWebContentWarnMB 400
+-walnutWebContentRecycleMB 600 -walnutWebContentSampleSec 5
+-walnutWebContentMinAgeSec 20`. `WALNUT_DESKTOP_E2E_NOTICE_CLICK=1,3` (with the
+background knob) presses Reload Page on the memory notices of the run with those
+numbers, three seconds after each shows.
+
+The page-process watchdog (`WebContentPolicy.swift`, `WebContentWatchdog.swift`)
+samples the window's WebKit page process once a minute. Past the recycle
+threshold (2.2 GB) it replaces the process at the user's next 8 s pause in
+input, looked for every 2 s, or at once when the window is hidden; a swap keeps
+the page's URL and the drafts the page stores, and never runs over text a reload
+would lose. While a critical page stays (the user keeps working, unsaved text,
+three swaps already this hour) a native notice over the page says so with
+**Reload Page**: AppKit draws it, so it shows even when the page has stopped
+painting. Going high and again critical, it logs what holds the memory by
+`footprint` category (`webcontent_breakdown`).
 
 A launch next to a Walnut server that already owns the data directory (its lock,
 `<home>/server.lock.json`) waits for that server, up to three minutes, and opens

@@ -146,9 +146,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Register before the server is up: the hotkey reads the port lazily and
         // tells the user to wait if it is not listening yet.
         dictation = GlobalDictation(portProvider: { [weak self] in self?.serverPort })
-        dictation?.registerHotKey()
-        // Only listens if the user opted in and Input Monitoring is granted.
-        dictation?.startFnMonitorIfEnabled()
+        // A test copy beside the person's own app (WALNUT_DESKTOP_E2E_BACKGROUND) never
+        // takes their dictation keys: a press there would start this copy's microphone.
+        if ProcessInfo.processInfo.environment["WALNUT_DESKTOP_E2E_BACKGROUND"] != "1" {
+            dictation?.registerHotKey()
+            // Only listens if the user opted in and Input Monitoring is granted.
+            dictation?.startFnMonitorIfEnabled()
+        }
         // Spotlight and Shortcuts actions run in this process (WalnutIntents.swift).
         WalnutIntentsPort.provider = { [weak self] in self?.serverPort }
 
@@ -238,6 +242,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 NSGraphicsContext.saveGraphicsState()
                 NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
                 page.draw(in: NSRect(origin: .zero, size: size))
+                // The shell's own views over the page (the memory notice) are not in
+                // the page's PDF: draw them on top, where they sit in the window.
+                for view in web.subviews where view is MemoryNoticeView && !view.isHidden {
+                    guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { continue }
+                    view.cacheDisplay(in: view.bounds, to: rep)
+                    let f = view.frame
+                    let y = web.isFlipped ? web.bounds.height - f.maxY : f.minY
+                    let k = size.width / max(web.bounds.width, 1)
+                    rep.draw(in: NSRect(x: f.minX * k, y: y * k, width: f.width * k, height: f.height * k))
+                }
                 NSGraphicsContext.restoreGraphicsState()
                 guard let png = bitmap.representation(using: .png, properties: [:]) else { return }
                 try? png.write(to: URL(fileURLWithPath: dir).appendingPathComponent("\(at).png"))

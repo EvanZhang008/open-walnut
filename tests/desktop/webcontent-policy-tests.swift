@@ -30,7 +30,9 @@ struct WebContentPolicyTests {
         // Over the threshold but the user is typing: hold, and say why.
         precondition(policy.verdict(for: sample(2_300, idle: 5), state: state, now: now)
                      == .suppressed(.footprint, why: "user_active"))
-        // Same process, user stepped away: recycle.
+        // A short pause is enough at critical memory (2026-11-08: a page at 2.4 GB
+        // stopped painting while a 90 s idle gate waited for the user to step away).
+        precondition(policy.verdict(for: sample(2_300, idle: 8), state: state, now: now) == .recycle(.footprint))
         precondition(policy.verdict(for: sample(2_300, idle: 120), state: state, now: now) == .recycle(.footprint))
         // Or the window is not on screen: the swap is invisible, idle is moot.
         precondition(policy.verdict(for: sample(2_300, idle: 0, visible: false), state: state, now: now)
@@ -41,10 +43,19 @@ struct WebContentPolicyTests {
                      == .suppressed(.footprint, why: "process_too_young"))
 
         // Far past the threshold a short pause is enough (the app is already freezing).
-        precondition(policy.verdict(for: sample(3_600, idle: 3), state: state, now: now)
+        precondition(policy.verdict(for: sample(3_600, idle: 2), state: state, now: now)
                      == .suppressed(.footprintForced, why: "user_active"))
-        precondition(policy.verdict(for: sample(3_600, idle: 15), state: state, now: now)
+        precondition(policy.verdict(for: sample(3_600, idle: 3), state: state, now: now)
                      == .recycle(.footprintForced))
+
+        // Between samples the runtime looks for the pause only for a memory swap held by input.
+        precondition(policy.wantsPauseCheck(.suppressed(.footprint, why: "user_active")))
+        precondition(policy.wantsPauseCheck(.suppressed(.footprintForced, why: "user_active")))
+        precondition(!policy.wantsPauseCheck(.suppressed(.staleBundle, why: "user_active")),
+                     "a newer bundle waits for a real break, not a pause")
+        precondition(!policy.wantsPauseCheck(.suppressed(.footprint, why: "rate_limited")))
+        precondition(!policy.wantsPauseCheck(.hold))
+        precondition(!policy.wantsPauseCheck(.recycle(.footprint)))
 
         // A newer server bundle waits for a real break, not a pause.
         precondition(policy.verdict(for: sample(900, idle: 120, stale: true), state: state, now: now)
@@ -80,6 +91,85 @@ struct WebContentPolicyTests {
         precondition(sup.shouldReportSuppression(.suppressed(.footprint, why: "rate_limited")),
                      "after a hold, the same suppression is news again")
 
+        // The memory notice: on at the first held critical sample, kept through the
+        // dips a bloated page makes, gone under the warn level or on a swap.
+        var notice = MemoryNoticeState()
+        let held = WatchdogVerdict.suppressed(.footprint, why: "user_active")
+        precondition(!notice.update(level: .high, verdict: .hold, now: now), "high alone shows nothing")
+        precondition(notice.update(level: .critical, verdict: held, now: now))
+        precondition(notice.update(level: .high, verdict: .suppressed(.staleBundle, why: "user_active"), now: now),
+                     "a dip under the threshold keeps the notice")
+        precondition(!notice.update(level: .normal, verdict: .hold, now: now), "back under warn: gone")
+        precondition(!notice.update(level: .critical, verdict: .recycle(.footprint), now: now),
+                     "a swap that goes now needs no notice")
+        precondition(notice.update(level: .critical, verdict: .suppressed(.footprint, why: "unsaved_work"), now: now))
+        notice.dismiss(at: now)
+        precondition(!notice.update(level: .critical, verdict: held, now: now.addingTimeInterval(60)), "Later holds it back")
+        precondition(notice.update(level: .critical, verdict: held, now: now.addingTimeInterval(MemoryNoticeState.snooze + 1)),
+                     "and it comes back while the page is still critical")
+        notice.reset()
+        precondition(!notice.shown)
+
+        // Guard for the whole class: a page at critical memory is never left as it is.
+        // Every sample a critical page can give (any idle, visibility, age, budget,
+        // unsaved text) either swaps it now, swaps it at the next short pause (the
+        // pause check), or puts the native notice with Reload Page on screen.
+        for mbValue in [2_200, 2_404, 3_016, 3_499, 3_500, 4_200] as [UInt64] {
+            for idle in [0, 1, 2, 3, 5, 7, 8, 9, 15, 60, 89, 120, 400] as [TimeInterval] {
+                for visible in [true, false] {
+                    for age in [30, 299, 300, 7_140] as [TimeInterval] {
+                        for spent in [0, 3] {
+                            for unsaved in [false, true] {
+                                var budget = WebContentWatchdogState()
+                                for i in 0..<spent { budget.recordRecycle(at: now.addingTimeInterval(TimeInterval(-60 * (i + 1)))) }
+                                let s = sample(mbValue, age: age, idle: idle, visible: visible)
+                                precondition(policy.level(for: s.footprintBytes) == .critical)
+                                var verdict = policy.verdict(for: s, state: budget, now: now)
+                                if case let .recycle(reason) = verdict, unsaved {
+                                    verdict = .suppressed(reason, why: "unsaved_work")
+                                }
+                                var n = MemoryNoticeState()
+                                let shown = n.update(level: .critical, verdict: verdict, now: now)
+                                let goesNow: Bool = { if case .recycle = verdict { return true }; return false }()
+                                precondition(goesNow || shown,
+                                             "critical page left with no swap and no notice: \(mbValue)MB idle \(idle) visible \(visible) age \(age) spent \(spent) unsaved \(unsaved) -> \(verdict)")
+                                if !goesNow, idle >= policy.pauseForRecycle, age >= policy.minProcessAge, spent == 0, !unsaved {
+                                    preconditionFailure("a pause of \(idle)s did not swap a critical page: \(verdict)")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // What holds the memory: the category table of `footprint -p`, largest first.
+        let table = """
+        ======================================================================
+        com.apple.WebKit.WebContent [34312]: 64-bit    Footprint: 561 MB (16384 bytes per page)
+        ======================================================================
+
+          Dirty      Clean  Reclaimable    Regions    Category
+            ---        ---          ---        ---    ---
+          77 MB        0 B          0 B        125    Owned physical footprint (unmapped) (graphics)
+         440 MB        0 B          0 B         44    WebKit malloc
+        1.5 GB        0 B          0 B          3    JS JIT generated code
+        5184 KB        0 B          0 B        545    JS VM Gigacage
+            0 B      23 MB          0 B         60    mapped file
+            ---        ---          ---        ---    ---
+         561 MB      23 MB          0 B       6836    TOTAL
+
+        Auxiliary data:
+            phys_footprint: 561 MB
+        """
+        let rows = footprintCategories(table)
+        precondition(rows.count == 5, "five categories, TOTAL and the header skipped: \(rows)")
+        precondition(rows[0].category == "JS JIT generated code" && rows[0].bytes == UInt64(1.5 * 1_073_741_824))
+        precondition(rows[1].category == "WebKit malloc" && rows[1].bytes == 440 * mb)
+        precondition(rows[2].category == "Owned physical footprint (unmapped) (graphics)")
+        precondition(footprintSummary(rows, top: 2) == "JS JIT generated code=1536;WebKit malloc=440")
+        precondition(footprintCategories("footprint: no such process").isEmpty, "unknown text gives nothing, never a guess")
+
         // Defaults: overrides must be sane or ignored, and stay ordered.
         let defaults = UserDefaults(suiteName: "walnut-webcontent-policy-tests")!
         defaults.removePersistentDomain(forName: "walnut-webcontent-policy-tests")
@@ -92,6 +182,15 @@ struct WebContentPolicyTests {
         precondition(tuned.recycleBytes == 1_000 * mb)
         precondition(tuned.warnBytes == 1_000 * mb, "warn can never sit above recycle")
         precondition(tuned.forceBytes >= tuned.recycleBytes)
+        precondition(tuned.sampleInterval == 60 && tuned.minProcessAge == 300, "unset test knobs keep the defaults")
+        defaults.set(2, forKey: WebContentPolicy.sampleKey)      // too fast: ignored
+        defaults.set(0, forKey: WebContentPolicy.minAgeKey)      // never "no minimum": ignored
+        precondition(WebContentPolicy.fromDefaults(defaults).sampleInterval == 60)
+        precondition(WebContentPolicy.fromDefaults(defaults).minProcessAge == 300)
+        defaults.set(5, forKey: WebContentPolicy.sampleKey)
+        defaults.set(20, forKey: WebContentPolicy.minAgeKey)
+        precondition(WebContentPolicy.fromDefaults(defaults).sampleInterval == 5)
+        precondition(WebContentPolicy.fromDefaults(defaults).minProcessAge == 20)
         // Reduce-transparency is the opposite default from the watchdog: it changes
         // how the app LOOKS, so an unset key must mean "leave the design alone".
         precondition(!WebContentPolicy.reduceGlass(defaults), "glass stays on unless asked")

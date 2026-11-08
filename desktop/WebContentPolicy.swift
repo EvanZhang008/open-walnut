@@ -27,7 +27,7 @@ enum FootprintLevel: String {
 }
 
 enum RecycleReason: String {
-    /// Over the recycle threshold and the user is idle or the window is hidden.
+    /// Over the recycle threshold, and the user paused or the window is hidden.
     case footprint
     /// So far over the threshold that a short pause in input is enough.
     case footprintForced = "footprint_forced"
@@ -59,14 +59,24 @@ struct WebContentPolicy {
     var sampleInterval: TimeInterval = 60
     /// Above this the sample is logged at warn level.
     var warnBytes: UInt64 = 1_500 * megabyte
-    /// Above this the page process is replaced once the user is idle.
+    /// Above this the page process is replaced at the user's next short pause.
     var recycleBytes: UInt64 = 2_200 * megabyte
-    /// Above this a short pause in input is enough: at this size the app is
-    /// already freezing for seconds at a time, waiting for idle means waiting
-    /// for the user to give up.
+    /// Above this an even shorter pause is enough: at this size the app is
+    /// already freezing for seconds at a time.
     var forceBytes: UInt64 = 3_500 * megabyte
-    var idleForRecycle: TimeInterval = 90
-    var pauseForForce: TimeInterval = 10
+    /// Critical memory waits only for a short pause, never for the user to step
+    /// away. 2026-11-08: a page at 2.4 GB stopped painting (empty dark blocks where
+    /// the text was) while the user worked on; the old 90 s idle gate held the swap
+    /// back for minutes, and on 11-07 for a whole hour at 2.2 to 3.0 GB, because
+    /// someone working never goes 90 s without input. The swap keeps the URL and
+    /// every draft the page keeps in storage, and never runs over unsaved text
+    /// (the shell asks the page first).
+    var pauseForRecycle: TimeInterval = 8
+    var pauseForForce: TimeInterval = 3
+    /// While critical memory waits for a pause, the pause is looked for this often
+    /// (the user's idle time only, no footprint read): a once-a-minute sample of
+    /// someone working almost never lands inside an 8 s pause.
+    var pauseCheckInterval: TimeInterval = 2
     /// Nothing is wrong with a stale bundle, so it waits for a real break.
     var idleForStaleBundle: TimeInterval = 300
     /// A fresh page legitimately spikes while it boots and hydrates.
@@ -79,6 +89,11 @@ struct WebContentPolicy {
     static let enabledKey = "walnutWebContentWatchdog"
     static let warnKey = "walnutWebContentWarnMB"
     static let recycleKey = "walnutWebContentRecycleMB"
+    /// Seconds between samples and the youngest process a swap may replace: for a
+    /// test copy, usually as launch arguments (`-walnutWebContentSampleSec 5`),
+    /// which UserDefaults reads and never stores.
+    static let sampleKey = "walnutWebContentSampleSec"
+    static let minAgeKey = "walnutWebContentMinAgeSec"
     static let reduceGlassKey = "walnutReduceGlass"
 
     /// Whether the watchdog runs at all. Default on; `-bool NO` turns it off.
@@ -110,6 +125,12 @@ struct WebContentPolicy {
         if recycle >= 512 { policy.recycleBytes = UInt64(recycle) * megabyte }
         if policy.recycleBytes < policy.warnBytes { policy.warnBytes = policy.recycleBytes }
         if policy.forceBytes < policy.recycleBytes { policy.forceBytes = policy.recycleBytes }
+        let sample = defaults.integer(forKey: sampleKey)
+        if sample >= 5 { policy.sampleInterval = TimeInterval(sample) }
+        if defaults.object(forKey: minAgeKey) != nil {
+            let age = defaults.integer(forKey: minAgeKey)
+            if age >= 10 { policy.minProcessAge = TimeInterval(age) }
+        }
         return policy
     }
 
@@ -128,7 +149,7 @@ struct WebContentPolicy {
             gateOpen = hidden || sample.userIdle >= pauseForForce
         } else if sample.footprintBytes >= recycleBytes {
             reason = .footprint
-            gateOpen = hidden || sample.userIdle >= idleForRecycle
+            gateOpen = hidden || sample.userIdle >= pauseForRecycle
         } else if sample.bundleStale {
             reason = .staleBundle
             gateOpen = hidden || sample.userIdle >= idleForStaleBundle
@@ -142,6 +163,50 @@ struct WebContentPolicy {
         }
         return .recycle(reason)
     }
+
+    /// Whether the runtime should look for the user's next pause between samples:
+    /// only for a memory swap held back by input, the one hold a pause ends.
+    func wantsPauseCheck(_ verdict: WatchdogVerdict) -> Bool {
+        guard case let .suppressed(reason, why) = verdict, why == "user_active" else { return false }
+        return reason == .footprint || reason == .footprintForced
+    }
+}
+
+/// The notice the shell draws over the page while a page at critical memory is
+/// not replaced (the user keeps working, text a reload would lose, the hourly
+/// budget spent). It is native, not part of the page, because the failure it is
+/// for is a page process that no longer paints: a notice in the page would be
+/// as blank as the rest of it.
+struct MemoryNoticeState {
+    /// How long a dismissed notice stays away while the page is still critical.
+    static let snooze: TimeInterval = 600
+
+    private(set) var shown = false
+    private var dismissedAt: Date?
+
+    /// One sample in, whether the notice should be on screen out. Shown from the
+    /// first critical sample that is not swapped at once; kept through the dips
+    /// under the threshold a bloated page makes (2404, 2168, 2214, 1993 MB a
+    /// minute apart on 11-08) until the page is back under the warn level or its
+    /// process is replaced (`reset`).
+    mutating func update(level: FootprintLevel, verdict: WatchdogVerdict, now: Date) -> Bool {
+        if level == .normal {
+            shown = false
+            dismissedAt = nil
+            return false
+        }
+        if case .recycle = verdict { shown = false; return false }
+        if let dismissedAt, now.timeIntervalSince(dismissedAt) < Self.snooze { shown = false; return false }
+        if level == .critical { shown = true }
+        return shown
+    }
+
+    mutating func dismiss(at now: Date) {
+        shown = false
+        dismissedAt = now
+    }
+
+    mutating func reset() { self = MemoryNoticeState() }
 }
 
 struct WebContentWatchdogState {
@@ -204,4 +269,35 @@ func bundleId(inHTML html: String) -> String? {
     let start = match.index(match.startIndex, offsetBy: "assets/index-".count)
     let end = match.index(match.endIndex, offsetBy: -".js".count)
     return String(match[start..<end])
+}
+
+/// The dirty bytes per category of `footprint -p <pid>`, largest first. The
+/// watchdog logs the top of it when a page goes high or critical, so the next
+/// bloated page says what holds the memory (the JavaScript and DOM heap is
+/// "WebKit malloc", the compositor's tiles and layers are the "(graphics)" rows)
+/// instead of only how much. Unknown lines are skipped; a changed table format
+/// gives an empty answer, never a wrong one.
+func footprintCategories(_ text: String) -> [(category: String, bytes: UInt64)] {
+    let units: [String: Double] = ["B": 1, "KB": 1_024, "MB": 1_048_576, "GB": 1_073_741_824]
+    var rows: [(category: String, bytes: UInt64)] = []
+    let pattern = #"^\s*([0-9]+(?:\.[0-9]+)?)\s*(B|KB|MB|GB)\s+[0-9.]+\s*(?:B|KB|MB|GB)\s+[0-9.]+\s*(?:B|KB|MB|GB)\s+[0-9]+\s+(.+?)\s*$"#
+    guard let re = try? NSRegularExpression(pattern: pattern) else { return [] }
+    for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
+        let s = String(line)
+        let range = NSRange(s.startIndex..., in: s)
+        guard let m = re.firstMatch(in: s, range: range), m.numberOfRanges == 4,
+              let v = Range(m.range(at: 1), in: s), let u = Range(m.range(at: 2), in: s),
+              let c = Range(m.range(at: 3), in: s),
+              let value = Double(s[v]), let unit = units[String(s[u])] else { continue }
+        let category = String(s[c])
+        if category == "TOTAL" { continue }
+        rows.append((category, UInt64(value * unit)))
+    }
+    return rows.sorted { $0.bytes > $1.bytes }
+}
+
+/// `WebKit malloc=1990;Owned physical footprint (unmapped) (graphics)=312;...`:
+/// the top categories in whole megabytes, for one log field.
+func footprintSummary(_ rows: [(category: String, bytes: UInt64)], top: Int = 5) -> String {
+    rows.prefix(top).map { "\($0.category)=\(megabytes($0.bytes))" }.joined(separator: ";")
 }
