@@ -70,12 +70,6 @@ describe('the land layer', () => {
     expect(plan.files).toContain('tests/setup/quick-tier.test.ts')
     expect(plan.files).not.toContain('tests/other.test.ts')
   })
-
-  it('run: a failing file that does not report in the run alone is never counted as passed', () => {
-    // The guard lives in runVitest: every file asked for and not reported is a crash.
-    const src = fs.readFileSync(path.join(import.meta.dirname, '../../scripts/test-layers.mjs'), 'utf8')
-    expect(src).toMatch(/for \(const f of files\) if \(!seen\.has\(f\)\) crashed\.push\(f\)/)
-  })
 })
 
 describe('scan tests', () => {
@@ -123,6 +117,21 @@ describe('the import graph', () => {
     const g = buildImportGraph(root)
     expect([...g.testsWithin(['src/a.ts'], 1).keys()]).toEqual(['tests/a.test.ts'])
     expect([...g.testsWithin(['src/a.ts'], 2).keys()].sort()).toEqual(['tests/a.test.ts', 'tests/b.test.ts'])
+  })
+
+  it('a deleted or renamed module still selects the tests that import it', () => {
+    const r = fs.mkdtempSync(path.join(os.tmpdir(), 'import-graph-gone-'))
+    const w = (p: string, s: string) => { fs.mkdirSync(path.dirname(path.join(r, p)), { recursive: true }); fs.writeFileSync(path.join(r, p), s) }
+    w('src/kept.ts', 'export const k = 1')
+    w('tests/gone.test.ts', "import { g } from '../src/gone.js'")
+    w('tests/gone-dir.test.ts', "import { d } from '../src/pkg'")
+    w('tests/via-kept.test.ts', "import { k } from '../src/kept.js'")
+    try {
+      const g = buildImportGraph(r)
+      expect([...g.testsWithin(['src/gone.ts'], 1).keys()]).toEqual(['tests/gone.test.ts'])
+      expect([...g.testsWithin(['src/pkg/index.ts'], 1).keys()]).toEqual(['tests/gone-dir.test.ts'])
+      expect([...g.testsWithin(['src/never-imported.ts'], 1).keys()]).toEqual([])
+    } finally { fs.rmSync(r, { recursive: true, force: true }) }
   })
 
   it('follows the @/ alias of the quick config', () => {

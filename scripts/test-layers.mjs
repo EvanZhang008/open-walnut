@@ -106,7 +106,7 @@ function git(args) {
 }
 
 export function changedFiles(base) {
-  const out = `${git(['diff', '--name-only', base])}\n${git(['diff', '--cached', '--name-only'])}\n${git(['ls-files', '--others', '--exclude-standard'])}`
+  const out = `${git(['diff', '--name-only', '--no-renames', base])}\n${git(['diff', '--cached', '--name-only', '--no-renames'])}\n${git(['ls-files', '--others', '--exclude-standard'])}`
   return [...new Set(out.split('\n').map((s) => s.trim()).filter(Boolean))]
 }
 
@@ -176,20 +176,25 @@ function parseArgs(argv) {
   return o
 }
 
-/** Runs vitest on `files` with a JSON report; returns { failed: ["file :: test"], crashed: [file], ms }. */
-function runVitest(files, extra) {
+/**
+ * Runs vitest on `files` with a JSON report; returns { failed: ["file :: test"], crashed: [file], ms, runError }.
+ * runError: vitest exited nonzero (an unhandled error or rejection, a crash) with no failing file
+ * to explain it. The JSON report leaves those errors out, so only the exit status shows them.
+ */
+export function runVitest(files, extra, { config = 'vitest.quick.config.ts', root = ROOT } = {}) {
   const report = path.join(os.tmpdir(), `walnut-layer-${process.pid}-${Date.now()}.json`)
-  const { cmd, args } = vitestCommand(['run', '--config', 'vitest.quick.config.ts', '--reporter=default', '--reporter=json', `--outputFile.json=${report}`, ...extra, ...files])
+  const { cmd, args } = vitestCommand(['run', '--config', config, '--reporter=default', '--reporter=json', `--outputFile.json=${report}`, ...extra, ...files.map((f) => path.join(root, f))])
   const t0 = Date.now()
-  spawnSync(cmd, args, { cwd: ROOT, stdio: 'inherit', env: process.env })
+  const child = spawnSync(cmd, args, { cwd: ROOT, stdio: 'inherit', env: process.env })
   const ms = Date.now() - t0
+  const exit = child.error ? `could not start: ${child.error.message}` : child.signal ? `killed by ${child.signal}` : child.status !== 0 ? `exited ${child.status}` : null
   let r = null
   try { r = JSON.parse(fs.readFileSync(report, 'utf8')) } catch { /* vitest died before writing */ }
   fs.rmSync(report, { force: true })
-  if (!r) return { failed: [], crashed: files, ms }
+  if (!r) return { failed: [], crashed: files, ms, runError: null }
   const failed = [], crashed = [], seen = new Set()
   for (const tf of r.testResults ?? []) {
-    const rel = path.relative(ROOT, tf.name)
+    const rel = path.relative(root, tf.name)
     seen.add(rel)
     const bad = (tf.assertionResults ?? []).filter((a) => a.status === 'failed')
     if (bad.length) for (const a of bad) failed.push(`${rel} :: ${a.fullName ?? a.title}`)
@@ -197,7 +202,17 @@ function runVitest(files, extra) {
   }
   // A file asked for that reported nothing never ran (left the tier, or vitest died first): never a pass.
   for (const f of files) if (!seen.has(f)) crashed.push(f)
-  return { failed, crashed, ms }
+  const runError = exit && !failed.length && !crashed.length ? `vitest ${exit} with every file passing: an unhandled error or rejection (see its "Errors" block above)` : null
+  return { failed, crashed, ms, runError }
+}
+
+/** The verdict of a first run and the rerun of its failing files alone. */
+export function judge(first, again) {
+  const againFiles = new Set([...again.failed.map((f) => f.split(' :: ')[0]), ...again.crashed])
+  // An unhandled error names no file, so it cannot be rerun alone: it fails the run (never a pass).
+  const fails = [...again.failed, ...again.crashed.map((f) => `${f} :: <file failed outside its tests>`), ...[first.runError, again.runError].filter(Boolean).map((e) => `<run> :: ${e}`)]
+  const flaky = [...first.failed, ...first.crashed.map((f) => `${f} :: <file failed outside its tests>`)].filter((t) => !againFiles.has(t.split(' :: ')[0]))
+  return { fails, flaky }
 }
 
 function run(o, files) {
@@ -205,14 +220,12 @@ function run(o, files) {
   console.log(`[test-layers] ${o.layer}: ${files.length} file(s)`)
   const first = runVitest(files, o.extra)
   const failing = [...new Set([...first.failed.map((f) => f.split(' :: ')[0]), ...first.crashed])]
-  let again = { failed: [], crashed: [], ms: 0 }
+  let again = { failed: [], crashed: [], ms: 0, runError: null }
   if (failing.length) {
     console.log(`[test-layers] ${failing.length} file(s) failed: running them once more, alone`)
     again = runVitest(failing, ['--maxWorkers=1', ...o.extra.filter((a) => !a.startsWith('--maxWorkers'))])
   }
-  const againFiles = new Set([...again.failed.map((f) => f.split(' :: ')[0]), ...again.crashed])
-  const fails = [...again.failed, ...again.crashed.map((f) => `${f} :: <file failed outside its tests>`)]
-  const flaky = [...first.failed, ...first.crashed.map((f) => `${f} :: <file failed outside its tests>`)].filter((t) => !againFiles.has(t.split(' :: ')[0]))
+  const { fails, flaky } = judge(first, again)
   const verdict = { layer: o.layer, base: o.base, files: files.length, ms: first.ms + again.ms, fails, flaky, ok: fails.length === 0 }
   if (o.json) fs.writeFileSync(o.json, JSON.stringify(verdict, null, 2))
   if (flaky.length) console.log(`[test-layers] ${flaky.length} test(s) failed in the full run and passed alone (flaky, not counted):\n  ${flaky.join('\n  ')}`)
@@ -222,20 +235,22 @@ function run(o, files) {
 }
 
 /**
- * Writes tests/setup/test-durations.json from a vitest JSON report of the quick tier
- * (`bun --bun vitest run --config vitest.quick.config.ts --reporter=json --outputFile=<file>`).
- * A file's cost is its wall time in that run: imports, setup and its tests.
+ * Writes tests/setup/test-durations.json: runs the whole quick tier (with `extra` vitest options)
+ * through scripts/lib/duration-reporter.mjs, or reads that reporter's output from `costsFile`.
+ * A file's cost is all of it: worker prepare, environment, setup files, collection (its imports)
+ * and its tests.
  */
-function measure(reportFile) {
-  const r = JSON.parse(fs.readFileSync(reportFile, 'utf8'))
-  const files = {}
-  for (const tf of r.testResults ?? []) {
-    const rel = path.relative(ROOT, tf.name)
-    const ms = tf.endTime && tf.startTime ? tf.endTime - tf.startTime : (tf.assertionResults ?? []).reduce((s, a) => s + (a.duration ?? 0), 0)
-    files[rel] = Math.max(0, Math.round(ms))
+function measure(costsFile, extra = []) {
+  let file = costsFile
+  if (!file) {
+    file = path.join(os.tmpdir(), `walnut-durations-${process.pid}.json`)
+    const { cmd, args } = vitestCommand(['run', '--config', 'vitest.quick.config.ts', '--reporter=dot', '--reporter=./scripts/lib/duration-reporter.mjs', ...extra])
+    spawnSync(cmd, args, { cwd: ROOT, stdio: 'inherit', env: { ...process.env, WALNUT_DURATIONS_OUT: file } })
   }
+  const files = JSON.parse(fs.readFileSync(file, 'utf8'))
+  if (!costsFile) fs.rmSync(file, { force: true })
   const sorted = Object.fromEntries(Object.entries(files).sort(([a], [b]) => a.localeCompare(b)))
-  const out = { measuredAt: new Date(r.startTime ?? Date.now()).toISOString(), commit: git(['rev-parse', '--short=9', 'HEAD']).trim(), note: 'per-file wall ms of one quick-tier run (scripts/test-layers.mjs measure)', files: sorted }
+  const out = { measuredAt: new Date().toISOString(), commit: git(['rev-parse', '--short=9', 'HEAD']).trim(), note: 'per-file ms of one quick-tier run: prepare, environment, setup, collection and tests (scripts/test-layers.mjs measure)', files: sorted }
   fs.writeFileSync(DURATIONS, JSON.stringify(out, null, 1) + '\n')
   console.log(`[test-layers] wrote ${Object.keys(sorted).length} file timings to ${path.relative(ROOT, DURATIONS)}`)
 }
@@ -254,9 +269,12 @@ function report() {
 if (import.meta.main) {
   const o = parseArgs(process.argv.slice(2))
   if (o.cmd === 'report') { report(); process.exit(0) }
-  if (o.cmd === 'measure') { measure(o.layer); process.exit(0) }
+  if (o.cmd === 'measure') {
+    const opt = (a) => a?.startsWith('-')
+    measure(o.layer && !opt(o.layer) ? o.layer : null, opt(o.layer) ? [o.layer, ...o.extra] : o.extra); process.exit(0)
+  }
   if (!['list', 'plan', 'run'].includes(o.cmd) || !['local', 'land'].includes(o.layer)) {
-    console.error('usage: bun scripts/test-layers.mjs list|plan|run local|land [--base <ref>] [--json <file>] [vitest options]\n       bun scripts/test-layers.mjs report')
+    console.error('usage: bun scripts/test-layers.mjs list|plan|run local|land [--base <ref>] [--json <file>] [vitest options]\n       bun scripts/test-layers.mjs report\n       bun scripts/test-layers.mjs measure [<costs json>] [vitest options]')
     process.exit(2)
   }
   const universe = quickUniverse(), durations = readDurations()

@@ -61,6 +61,8 @@ function readAliases(root) {
   return out
 }
 
+const stemOf = (p) => p.replace(/\.(d\.ts|tsx?|mts|cts|jsx?|mjs|cjs)$/, '')
+
 /** Build the reverse import graph once; returns helpers over it. */
 export function buildImportGraph(root) {
   const all = []
@@ -84,6 +86,20 @@ export function buildImportGraph(root) {
     c.push(path.join(dir, 'src', sub || 'index'))
     return first(c)
   }
+  // Where a relative or path-alias import points, resolved or not: a test importing a file the
+  // change deletes or renames still points at it, and must still be selected for that change.
+  const pointsAt = (from, specIn) => {
+    const spec = specIn.replace(/\?.*$/, '')
+    let base = null
+    if (spec.startsWith('.')) base = path.resolve(path.dirname(from), spec)
+    else for (const [k, v, ex] of aliases) {
+      if (ex !== undefined) continue
+      if (spec === k) base = v
+      else if (k === '@' ? spec.startsWith('@/') : spec.startsWith(k + '/')) base = path.join(v, spec.slice(k.length + 1))
+      if (base) break
+    }
+    return base && stemOf(base)
+  }
   const resolve = (from, specIn) => {
     const spec = specIn.startsWith('#') ? specIn : specIn.replace(/\?.*$/, '')
     if (spec.startsWith('.')) return first([path.resolve(path.dirname(from), spec)])
@@ -100,12 +116,19 @@ export function buildImportGraph(root) {
   }
 
   const importers = new Map()
+  const dangling = new Map() // stem of a missing target -> the files importing it
   for (const f of code) {
     let src
     try { src = fs.readFileSync(f, 'utf8') } catch { continue }
     for (const m of src.matchAll(IMPORT)) {
-      const t = resolve(f, m[1] || m[2] || m[3] || m[4] || m[5])
-      if (!t || t === f) continue
+      const spec = m[1] || m[2] || m[3] || m[4] || m[5]
+      const t = resolve(f, spec)
+      if (!t) {
+        const stem = pointsAt(f, spec)
+        if (stem) { if (!dangling.has(stem)) dangling.set(stem, new Set()); dangling.get(stem).add(f) }
+        continue
+      }
+      if (t === f) continue
       if (!importers.has(t)) importers.set(t, new Set())
       importers.get(t).add(f)
     }
@@ -116,10 +139,16 @@ export function buildImportGraph(root) {
     const best = new Map()
     for (const rel of changed) {
       const start = path.join(root, rel)
-      if (!known.has(start)) continue
       const level = new Map([[start, 0]])
       let frontier = [start]
-      for (let i = 1; frontier.length && i <= depth; i++) {
+      if (!known.has(start)) {
+        // Deleted or renamed away: its importers are the files still pointing at it, as a file or
+        // as its folder's index.
+        const pointing = [...(dangling.get(stemOf(start)) || []), ...(/\/index\.[^/]+$/.test(start) ? dangling.get(path.dirname(start)) || [] : [])]
+        frontier = []
+        for (const g of pointing) if (!level.has(g)) { level.set(g, 1); frontier.push(g) }
+      }
+      for (let i = known.has(start) ? 1 : 2; frontier.length && i <= depth; i++) {
         const next = []
         for (const f of frontier) for (const g of importers.get(f) || []) if (!level.has(g)) { level.set(g, i); next.push(g) }
         frontier = next
