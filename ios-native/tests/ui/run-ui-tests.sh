@@ -98,6 +98,8 @@ die() { printf '\n!! %s\n' "$*" >&2; exit 1; }
 WALNUT_SIM_QUEUE_NAME="${WALNUT_SIM_QUEUE_NAME:-inbox-items}"
 # shellcheck source=../../../scripts/lib/sim-device.sh
 . "$IOS/../scripts/lib/sim-device.sh"
+# shellcheck source=machine-gate-wait.sh
+. "$(dirname "${BASH_SOURCE[0]}")/machine-gate-wait.sh"
 GATE_RUN=no
 if [ "${WALNUT_UITEST_INBOX_ITEMS:-}" = 1 ] || [ "${WALNUT_UITEST_PRIVATE_TASKS:-}" = 1 ]; then GATE_RUN=yes; fi
 check_gate_device() {
@@ -218,6 +220,7 @@ say "build-for-testing → $DD"
 # It is injected into the .xctestrun below, NOT merely exported: exporting it does
 # exactly nothing, which cost one run to discover even with this file's own warning
 # already written down.
+uitest_machine_gate "$UDID" "the build"
 run_heavy xcodebuild build-for-testing \
   -project "$PROJ" -scheme Walnut \
   -destination "platform=iOS Simulator,id=$UDID" \
@@ -322,6 +325,7 @@ RESULT_ARGS=()
 if [ -n "${WALNUT_UITEST_RESULT_BUNDLE:-}" ]; then
   RESULT_ARGS=(-resultBundlePath "$WALNUT_UITEST_RESULT_BUNDLE")
 fi
+uitest_machine_gate "$UDID" "the test run"
 run_heavy xcodebuild test-without-building \
   -xctestrun "$XCTESTRUN" \
   ${RESULT_ARGS[@]+"${RESULT_ARGS[@]}"} \
