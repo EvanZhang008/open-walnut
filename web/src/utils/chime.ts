@@ -7,6 +7,8 @@
  * browser caps how many a page may open.
  */
 
+import { automatedBrowser } from './automation-silence';
+
 type Ctx = AudioContext;
 let ctx: Ctx | null = null;
 /** One pending "park the device" timer: a second chime must not be cut by the first's. */
@@ -56,7 +58,9 @@ function note(c: Ctx, freq: number, start: number, length: number, peak: number)
 export const UNLOCK_AFTER_MS = 150;
 
 export function armChime(): () => void {
-  if (typeof window === 'undefined') return () => {};
+  // A browser under automation never opens the audio device (automation-silence.ts):
+  // this unlock woke a test Mac's speaker at every page's first click (2026-11-08).
+  if (typeof window === 'undefined' || automatedBrowser()) return () => {};
   let timer: ReturnType<typeof setTimeout> | null = null;
   const unlock = () => {
     disarm();
@@ -82,6 +86,7 @@ export function armChime(): () => void {
 
 export function playChime(kind: 'reminder'): void {
   void kind; // one voice today; the parameter names the call site's intent
+  if (automatedBrowser()) return;
   try {
     const c = audioContext();
     if (!c) return;

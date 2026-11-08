@@ -88,6 +88,7 @@ final class VoiceHistoryDetailModel {
             _testPlaybackStart?()
             #endif
             let preparedPlayer = try AVAudioPlayer(contentsOf: audioURL)
+            preparedPlayer.volume = AudioSilence.volume(preparedPlayer.volume)
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playback, mode: .spokenAudio)
             try session.setActive(true)

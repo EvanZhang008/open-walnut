@@ -10,6 +10,7 @@ enum TalkCue: Equatable {
     case sent
 
     static func play(_ cue: TalkCue) {
+        if AudioSilence.isOn { return }
         // iOS mutes haptics and system sounds while a session records unless
         // the session allows them.
         try? AVAudioSession.sharedInstance().setAllowHapticsAndSystemSoundsDuringRecording(true)

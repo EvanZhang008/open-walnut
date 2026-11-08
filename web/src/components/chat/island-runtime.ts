@@ -20,6 +20,8 @@
  * iOS injects the same protocol (ios-native/Walnut/Markdown/RichHTMLDocument.swift).
  */
 
+import { AUTOMATION_SILENCE_JS } from '../../utils/automation-silence';
+
 /** Message types the frame posts. Keep in step with the iOS twin. */
 export const ISLAND_STATE_MSG = 'wn-island-state';
 export const ISLAND_RESULT_MSG = 'wn-island-result';
@@ -73,7 +75,8 @@ function scriptJson(value: unknown): string {
  * in the document.
  */
 export function islandRuntimeScript(key: string, seed: IslandItems): string {
-  return '<script>(function(){'
+  // The silencer first, so the model's scripts never reach a test machine's speakers.
+  return '<script>' + AUTOMATION_SILENCE_JS.replace(/<\/script/gi, '<\\/script') + '(function(){'
     + `var K=${scriptJson(key)},S=${scriptJson(seed)};`
     + 'var m=Object.create(null),t=null,has=Object.prototype.hasOwnProperty;'
     + 'for(var s in S){if(has.call(S,s))m[s]=String(S[s]);}'

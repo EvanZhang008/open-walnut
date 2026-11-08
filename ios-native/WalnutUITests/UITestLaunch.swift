@@ -39,6 +39,10 @@ enum UITestLaunch {
     /// restores (2026-10-11).
     static let keychainArguments = ["-walnut.uiTestKeychain", "YES"]
 
+    /// Every launch plays no sound (`AudioSilence`): the Simulator's audio is the Mac's
+    /// speakers, and that Mac may have a person at it (2026-11-08).
+    static let silentAudioArguments = ["-walnut.silentAudio", "YES"]
+
     /// An app configured to reach nothing, plus whatever this test asked for.
     ///
     /// Not launched yet: a caller may still want to set `launchEnvironment` or take a
@@ -50,7 +54,7 @@ enum UITestLaunch {
         // for one key in the argument domain and make the winner an ordering detail.
         let pinsItsOwnServer = arguments.contains(serverURLArgument)
         app.launchArguments =
-            (pinsItsOwnServer ? [] : [serverURLArgument, blackholeURL]) + keychainArguments + arguments
+            (pinsItsOwnServer ? [] : [serverURLArgument, blackholeURL]) + keychainArguments + silentAudioArguments + arguments
         return app
     }
 

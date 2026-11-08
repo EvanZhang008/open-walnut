@@ -9,6 +9,8 @@
 import path from 'node:path'
 import { defineConfig, devices } from '@playwright/test'
 import { engageGate } from './pw-gate.js'
+// Every test browser is silent: an init script in every frame, and Chromium's own mute.
+import { CHROMIUM_SILENT } from './pw-silence.js'
 // The fixture server runs on bun; only the Playwright runner stays on Node.
 import { bunCommand } from '../../helpers/bun-runtime.js'
 
@@ -29,7 +31,7 @@ export default defineConfig({
   },
   // A phone-sized window: the page is for a phone first.
   projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'], viewport: { width: 390, height: 844 }, deviceScaleFactor: 1 } },
+    { name: 'chromium', use: { ...devices['Desktop Chrome'], launchOptions: { args: CHROMIUM_SILENT }, viewport: { width: 390, height: 844 }, deviceScaleFactor: 1 } },
     { name: 'webkit', use: { ...devices['Desktop Safari'], viewport: { width: 390, height: 844 }, deviceScaleFactor: 1 } },
   ],
   webServer: {

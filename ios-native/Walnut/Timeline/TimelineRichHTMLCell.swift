@@ -703,6 +703,7 @@ final class TimelineRichHTMLCell: UICollectionViewCell {
         // Still requires a human tap, so no card starts making noise when it
         // scrolls into view.
         config.mediaTypesRequiringUserActionForPlayback = .all
+        AudioSilence.install(on: config)
         return config
     }
 

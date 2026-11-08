@@ -42,6 +42,7 @@ final class SessionMediaPlayback {
         preparing = true
         let item = AVPlayerItem(url: url)
         let player = AVPlayer(playerItem: item)
+        player.isMuted = AudioSilence.isOn
         self.player = player
         playObservation = player.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
             Task { @MainActor [weak self, weak player] in

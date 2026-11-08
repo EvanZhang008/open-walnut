@@ -73,7 +73,7 @@ final class TalkLiveActivity: TalkActivityPresenting {
         // out later, nothing heard.
         let alert = AlertConfiguration(
             title: "\(state.title)", body: "\(state.subtitle)",
-            sound: state.needsAttention ? .default : .named(Self.silentSound)
+            sound: state.needsAttention && !AudioSilence.isOn ? .default : .named(Self.silentSound)
         )
         enqueue {
             await activity.update(content, alertConfiguration: alert)

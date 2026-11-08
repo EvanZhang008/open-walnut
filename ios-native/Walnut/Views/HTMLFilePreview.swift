@@ -336,6 +336,7 @@ final class HTMLPreviewLoader {
         // must NOT turn into remembering web content.
         config.websiteDataStore = .nonPersistent()
         config.defaultWebpagePreferences.allowsContentJavaScript = true
+        AudioSilence.install(on: config)
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.isOpaque = false
         webView.backgroundColor = .systemBackground

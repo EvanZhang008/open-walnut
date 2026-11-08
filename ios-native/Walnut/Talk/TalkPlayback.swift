@@ -19,6 +19,7 @@ final class TalkPlayback: NSObject, AVAudioPlayerDelegate {
         try? AVAudioSession.sharedInstance().setCategory(.playback)
         try? AVAudioSession.sharedInstance().setActive(true)
         player.delegate = self
+        player.volume = AudioSilence.volume(player.volume)
         guard player.play() else { return }
         self.player = player
         playingID = id

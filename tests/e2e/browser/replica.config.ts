@@ -18,6 +18,8 @@
 import path from 'node:path'
 import { defineConfig, devices } from '@playwright/test'
 import { engageGate } from './pw-gate.js'
+// Every test browser is silent: an init script in every frame, and Chromium's own mute.
+import { CHROMIUM_SILENT } from './pw-silence.js'
 import { bunCommand } from '../../helpers/bun-runtime.js'
 
 const port = Number(process.env.PW_TEST_PORT ?? 3472)
@@ -46,8 +48,8 @@ export default defineConfig({
   projects: [
     { name: 'webkit-phone', use: { ...devices['Desktop Safari'], ...phone } },
     { name: 'webkit-desktop', use: { ...devices['Desktop Safari'], ...desktop } },
-    { name: 'chromium-phone', use: { ...devices['Desktop Chrome'], ...phone } },
-    { name: 'chromium-desktop', use: { ...devices['Desktop Chrome'], ...desktop } },
+    { name: 'chromium-phone', use: { ...devices['Desktop Chrome'], launchOptions: { args: CHROMIUM_SILENT }, ...phone } },
+    { name: 'chromium-desktop', use: { ...devices['Desktop Chrome'], launchOptions: { args: CHROMIUM_SILENT }, ...desktop } },
   ],
   webServer: {
     // bun running the fixture itself, one process with one handler (the tsx CLI

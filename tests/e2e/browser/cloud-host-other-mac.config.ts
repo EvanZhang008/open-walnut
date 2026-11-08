@@ -14,6 +14,8 @@
 import path from 'node:path'
 import { defineConfig, devices } from '@playwright/test'
 import { engageGate } from './pw-gate.js'
+// Every test browser is silent: an init script in every frame, and Chromium's own mute.
+import { CHROMIUM_SILENT } from './pw-silence.js'
 // The fixture server runs on bun; only the Playwright runner stays on Node.
 import { bunCommand } from '../../helpers/bun-runtime.js'
 
@@ -47,7 +49,7 @@ export default defineConfig({
     trace: 'retain-on-failure',
   },
   projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'], ...view, baseURL: `http://localhost:${ports.chromium}` } },
+    { name: 'chromium', use: { ...devices['Desktop Chrome'], launchOptions: { args: CHROMIUM_SILENT }, ...view, baseURL: `http://localhost:${ports.chromium}` } },
     { name: 'webkit', use: { ...devices['Desktop Safari'], ...view, baseURL: `http://localhost:${ports.webkit}` } },
   ],
   webServer: [fixtureServer(ports.chromium), fixtureServer(ports.webkit)],

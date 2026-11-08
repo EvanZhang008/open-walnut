@@ -228,7 +228,7 @@ final class FocusMusicPlayer {
 
     func setVolume(_ next: Float) {
         volume = min(1, max(0, next))
-        player?.volume = volume
+        player?.volume = AudioSilence.volume(volume)
         AppPrefs.defaults.set(Double(volume), forKey: Self.volumeKey)
     }
 
@@ -342,7 +342,7 @@ final class FocusMusicPlayer {
     private func startPlayer(_ track: RhythmMusicListing.Track, generation current: Int) {
         guard let first = item(for: track) else { fail("Walnut is not connected."); return }
         let queue = AVQueuePlayer()
-        queue.volume = volume
+        queue.volume = AudioSilence.volume(volume)
         player = queue
         if order == .one || tracks.count == 1 {
             let looper = AVPlayerLooper(player: queue, templateItem: first)

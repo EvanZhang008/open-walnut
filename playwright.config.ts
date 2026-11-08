@@ -3,6 +3,8 @@ import path from 'node:path'
 import { defineConfig, devices } from '@playwright/test'
 import { perRunWorkers } from './tests/e2e/browser/pw-concurrency.js'
 import { engageGate } from './tests/e2e/browser/pw-gate.js'
+// Every test browser is silent: an init script in every frame, and Chromium's own mute.
+import { CHROMIUM_SILENT } from './tests/e2e/browser/pw-silence.js'
 import { sideConfigSpecs } from './tests/e2e/browser/side-config-specs.js'
 import { bunCommand } from './tests/helpers/bun-runtime.js'
 
@@ -65,14 +67,17 @@ export default defineConfig({
   },
 
   projects: [
+    // Chromium mutes itself headless; `--mute-audio` keeps a headed run (--headed, a
+    // debug session) silent too. WebKit has no such switch: pw-silence.ts silences
+    // every frame of every context (2026-11-08).
     {
       name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
+      use: { ...devices['Desktop Chrome'], launchOptions: { args: CHROMIUM_SILENT } },
       testIgnore: [...sideSpecs, ...hostFixtureSpecs],
     },
     {
       name: 'chromium-host-fixture',
-      use: { ...devices['Desktop Chrome'] },
+      use: { ...devices['Desktop Chrome'], launchOptions: { args: CHROMIUM_SILENT } },
       testMatch: hostFixtureSpecs,
       testIgnore: sideSpecs,
       workers: 1,

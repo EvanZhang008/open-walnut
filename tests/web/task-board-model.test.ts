@@ -11,10 +11,12 @@ import {
   newBoardNonce, parseSeen, safeExternalHref, threadAuthorIds, wrapBoardHtml, type BoardMessage,
 } from '../../web/src/components/board/board-model';
 import { adoptCandidates, adoptExclusions } from '../../web/src/components/tasks/adopt-candidates';
+import { AUTOMATION_SILENCE_JS } from '../../web/src/utils/automation-silence';
 
 const JS = 'window.__probe = 1;';
 const CSS = '.wn-task{color:red}';
-const block = `${BOARD_FRAME_CSP}<style id="wn-board-runtime-css">${CSS}</style><script>${JS}</script>`;
+// The silencer runs first: a board's scripts never reach a test machine's speakers.
+const block = `${BOARD_FRAME_CSP}<style id="wn-board-runtime-css">${CSS}</style><script>${AUTOMATION_SILENCE_JS}${JS}</script>`;
 
 describe('wrapBoardHtml', () => {
   it('puts CSP, css and runtime right after an existing <head>', () => {

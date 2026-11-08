@@ -61,6 +61,8 @@ final class SpeechOutput: NSObject {
         utterance.voice = Self.voice(for: language)
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate
         utterance.postUtteranceDelay = 0.1
+        // Spoken at volume zero where a test or an agent runs the app (AudioSilence).
+        utterance.volume = AudioSilence.volume(utterance.volume)
         handingOff = false
         current = utterance
         speakingID = id

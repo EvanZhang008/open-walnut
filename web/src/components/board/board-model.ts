@@ -15,6 +15,7 @@ export type {
 } from '../../../../src/core/boards/board-lanes';
 
 import { taskTokensIn } from '../../utils/task-id-shape';
+import { AUTOMATION_SILENCE_JS } from '../../utils/automation-silence';
 
 export type BoardAuthor = 'user' | 'agent' | `task:${string}`;
 
@@ -224,7 +225,8 @@ export function newBoardNonce(): string {
 
 export function wrapBoardHtml(html: string, runtimeSrc: string, runtimeCss: string, nonce = newBoardNonce()): string {
   const css = runtimeCss.replace(/<\/style/gi, '<\\/style');
-  const js = runtimeSrc.replace('__WN_BOARD_NONCE__', nonce).replace(/<\/script/gi, '<\\/script');
+  // The silencer first: the board's own scripts must not reach a test machine's speakers.
+  const js = (AUTOMATION_SILENCE_JS + runtimeSrc.replace('__WN_BOARD_NONCE__', nonce)).replace(/<\/script/gi, '<\\/script');
   const block = `${BOARD_FRAME_CSP}<style id="wn-board-runtime-css">${css}</style><script>${js}</script>`;
   if (HEAD_OPEN.test(html)) return html.replace(HEAD_OPEN, (m) => `${m}${block}`);
   if (HTML_OPEN.test(html)) return html.replace(HTML_OPEN, (m) => `${m}<head>${block}</head>`);

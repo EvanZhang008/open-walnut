@@ -76,6 +76,7 @@ struct LetterHTMLBody: View {
         // Playback still requires the human to tap: no autoplay, and therefore no
         // letter that starts making noise the moment it is opened.
         config.mediaTypesRequiringUserActionForPlayback = .all
+        AudioSilence.install(on: config)
         return config
     }
 
