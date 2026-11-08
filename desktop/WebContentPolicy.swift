@@ -296,6 +296,28 @@ func footprintCategories(_ text: String) -> [(category: String, bytes: UInt64)] 
     return rows.sorted { $0.bytes > $1.bytes }
 }
 
+/// When the watchdog logs a bloated process's footprint by category: as it goes
+/// high, as it goes critical, and every ten minutes while it stays high, so a
+/// long session draws the curve of each category (2026-11-08: one page at 2.0 GB
+/// held 1.1 GB of compositor surfaces and 0.9 GB of WebKit heap, against 77 MB and
+/// 440 MB fresh, and only a curve over the user's own work can say which grows
+/// with what). One `footprint` run costs about half a second of a utility thread.
+struct BreakdownCadence {
+    static let every: TimeInterval = 600
+    private var level: FootprintLevel?
+    private var at: Date?
+
+    mutating func due(level current: FootprintLevel, now: Date) -> Bool {
+        guard current != .normal else { return false }
+        let rose = level == nil || (level == .high && current == .critical)
+        let stale = at.map { now.timeIntervalSince($0) >= Self.every } ?? true
+        guard rose || stale else { return false }
+        if level != .critical { level = current }
+        at = now
+        return true
+    }
+}
+
 /// `WebKit malloc=1990;Owned physical footprint (unmapped) (graphics)=312;...`:
 /// the top categories in whole megabytes, for one log field.
 func footprintSummary(_ rows: [(category: String, bytes: UInt64)], top: Int = 5) -> String {

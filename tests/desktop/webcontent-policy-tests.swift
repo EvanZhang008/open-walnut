@@ -170,6 +170,16 @@ struct WebContentPolicyTests {
         precondition(footprintSummary(rows, top: 2) == "JS JIT generated code=1536;WebKit malloc=440")
         precondition(footprintCategories("footprint: no such process").isEmpty, "unknown text gives nothing, never a guess")
 
+        // Breakdown cadence: going high, going critical, then every ten minutes while bloated.
+        var cadence2 = BreakdownCadence()
+        precondition(!cadence2.due(level: .normal, now: now), "a healthy page costs no footprint run")
+        precondition(cadence2.due(level: .high, now: now))
+        precondition(!cadence2.due(level: .high, now: now.addingTimeInterval(60)))
+        precondition(cadence2.due(level: .critical, now: now.addingTimeInterval(120)), "going critical logs at once")
+        precondition(!cadence2.due(level: .high, now: now.addingTimeInterval(180)), "a dip back to high is no news")
+        precondition(!cadence2.due(level: .critical, now: now.addingTimeInterval(300)))
+        precondition(cadence2.due(level: .high, now: now.addingTimeInterval(120 + BreakdownCadence.every)), "the curve goes on")
+
         // Defaults: overrides must be sane or ignored, and stay ordered.
         let defaults = UserDefaults(suiteName: "walnut-webcontent-policy-tests")!
         defaults.removePersistentDomain(forName: "walnut-webcontent-policy-tests")

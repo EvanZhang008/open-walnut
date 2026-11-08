@@ -36,8 +36,8 @@ final class WebContentWatchdog {
     private var pauseTimer: Timer?
     private var notice = MemoryNoticeState()
     private var noticeView: MemoryNoticeView?
-    /// The highest level whose footprint breakdown was logged for this process.
-    private var breakdownLevel: FootprintLevel?
+    /// When this process's footprint breakdown was last logged, and at what level.
+    private var breakdowns = BreakdownCadence()
     /// After the page said a swap would lose text, the watchdog asks again only
     /// after this (one sample), not at every pause check two seconds apart.
     private var unsavedHoldUntil: Date?
@@ -124,7 +124,7 @@ final class WebContentWatchdog {
         notice.reset()
         noticeView?.removeFromSuperview()
         noticeView = nil
-        breakdownLevel = nil
+        breakdowns = BreakdownCadence()
         unsavedHoldUntil = nil
     }
 
@@ -182,7 +182,7 @@ final class WebContentWatchdog {
 
         lastSample = sample
         lastFields = fields
-        logBreakdownIfNew(pid: pid, level: level)
+        if breakdowns.due(level: level, now: now) { logBreakdown(pid: pid, level: level) }
         decide(sample: sample, level: level, fields: fields, policy: policy, now: now)
     }
 
@@ -376,12 +376,9 @@ final class WebContentWatchdog {
 
     // MARK: What holds the memory
 
-    /// When a process first goes high, and again when it goes critical, log what
-    /// holds its memory by `footprint` category, off the main thread.
-    private func logBreakdownIfNew(pid: pid_t, level: FootprintLevel) {
-        guard level != .normal else { return }
-        if let done = breakdownLevel, done == level || done == .critical { return }
-        breakdownLevel = level
+    /// What holds the page process's memory, by `footprint` category, off the main
+    /// thread (when, BreakdownCadence).
+    private func logBreakdown(pid: pid_t, level: FootprintLevel) {
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let task = Process()
             task.executableURL = URL(fileURLWithPath: "/usr/bin/footprint")
