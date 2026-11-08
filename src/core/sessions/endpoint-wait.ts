@@ -30,7 +30,7 @@ import { bus, EventNames } from '../event-bus.js'
 import type { BusEvent } from '../event-bus.js'
 import type { SessionRecord, SessionEndpointWait } from '../types.js'
 import { log } from '../../logging/index.js'
-import { isEndpointUnreachableError, endpointWaitTakes, type EndpointResultFacts } from './endpoint-wait-takes.js'
+import { isEndpointUnreachableError, endpointWaitTakes, endpointWaitCause, type EndpointResultFacts } from './endpoint-wait-takes.js'
 import { endpointWaitEnabled, endpointGaveUpWords } from './endpoint-unreachable.js'
 
 export { endpointWaitEnabled, endpointGaveUpWords }
@@ -55,7 +55,7 @@ export const ENDPOINT_BLIND_TRIES_MS: readonly number[] = [3, 15, 60, 180].map((
 export const ENDPOINT_RESUME_CHECK_MS = 5 * 60_000
 
 
-export { isEndpointUnreachableError, endpointWaitTakes, type EndpointResultFacts } from './endpoint-wait-takes.js'
+export { isEndpointUnreachableError, endpointWaitTakes, endpointWaitCause, type EndpointResultFacts } from './endpoint-wait-takes.js'
 
 /** Before the waiter writes its wait, an unreachable error is taken for one only this long. */
 export const ENDPOINT_WAIT_OPENING_MS = 60_000
@@ -211,6 +211,10 @@ export class EndpointWaiter {
         ...(open?.blindTries ? { blindTries: open.blindTries } : {}),
         ...(open?.url ? { url: open.url } : {}),
         error: text.slice(0, 200),
+        // The latest turn's words decide: a drop after a refusal is a path that cuts requests now.
+        ...(endpointWaitCause(text) === 'dropped'
+          ? { cause: 'dropped' as const, droppedAt: nowIso, dropTries: open?.cause === 'dropped' ? open.dropTries ?? 0 : 0 }
+          : {}),
       }
       if (next.resumes >= ENDPOINT_WAIT_MAX_RESUMES) {
         await this.giveUp(rec, next, 'resumes')
@@ -266,7 +270,13 @@ export class EndpointWaiter {
       const answer = await this.deps.probe(w.host, rec.cwd || undefined)
       const checkedAt = new Date(this.deps.now()).toISOString()
       if (answer.kind === 'probed') {
-        if (answer.reachable) { await this.resume(rec, { ...w, url: answer.url, checkedAt }, false); return }
+        if (answer.reachable) {
+          // A dropped request: the probe going through says little (a small request passes a path
+          // that cuts large ones), so each try also waits its turn on the widening clock.
+          if (w.cause === 'dropped') { await this.dropClock(rec, { ...w, url: answer.url, checkedAt }); return }
+          await this.resume(rec, { ...w, url: answer.url, checkedAt }, false)
+          return
+        }
         await this.deps.patchWait(sid, (cur) => cur && cur.state === 'waiting'
           ? { ...cur, url: answer.url, probed: answer.probed, checkedAt, ...(answer.error ? { probeError: answer.error } : {}) }
           : cur ?? null)
@@ -279,6 +289,7 @@ export class EndpointWaiter {
         this.schedule(sid, this.t.slowMs)
         return
       }
+      if (w.cause === 'dropped') { await this.dropClock(rec, { ...w, checkedAt }); return }
       // An older daemon cannot probe: continue on a timer.
       const tries = w.blindTries ?? 0
       const due = this.t.blindTriesMs[tries]
@@ -289,6 +300,19 @@ export class EndpointWaiter {
       log.session.warn('endpoint wait: check failed, trying again', { sessionId: sid, error: err instanceof Error ? err.message : String(err) })
       this.schedule(sid, this.t.slowMs)
     }
+  }
+
+  /**
+   * A dropped wait's next try: due ENDPOINT_BLIND_TRIES_MS[tries] after the latest drop (never after
+   * the wait began, which a long turn or an earlier refusal may have put far back), and counted as a
+   * try whether or not the daemon could probe.
+   */
+  private async dropClock(rec: SessionRecord, w: SessionEndpointWait): Promise<void> {
+    const tries = w.dropTries ?? 0
+    const due = this.t.blindTriesMs[Math.min(tries, this.t.blindTriesMs.length - 1)]!
+    const sinceDrop = this.deps.now() - Date.parse(w.droppedAt ?? w.since)
+    if (sinceDrop < due) { this.schedule(rec.claudeSessionId, due - sinceDrop); return }
+    await this.resume(rec, { ...w, dropTries: tries + 1 }, false)
   }
 
   private async resume(rec: SessionRecord, w: SessionEndpointWait, blind: boolean): Promise<void> {
@@ -309,7 +333,9 @@ export class EndpointWaiter {
     log.session.info('endpoint wait: endpoint answers, continuing the turn', {
       sessionId: sid, taskId: rec.taskId, host: w.host, url: w.url, blind, resumes: next.resumes,
     })
-    this.deps.note(sid, rec.taskId, blind
+    this.deps.note(sid, rec.taskId, w.cause === 'dropped'
+      ? `Trying the turn again on ${w.where}: its connection to the model endpoint dropped mid-request.`
+      : blind
       ? `Trying the model endpoint again on ${w.where}: continuing the turn it cut off.`
       : `The model endpoint${w.url ? ` ${w.url}` : ''} on ${w.where} answers again: continuing the turn it cut off.`)
     this.sending.add(sid)

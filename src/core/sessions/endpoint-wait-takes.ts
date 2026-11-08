@@ -4,7 +4,7 @@
  * rule without importing the waiter (which imports it back for its send source).
  */
 import { classifyTurnError } from '../../providers/daemon-core.js'
-import { matchesEndpointUnreachable, endpointWaitEnabled } from './endpoint-unreachable.js'
+import { matchesEndpointUnreachable, matchesEndpointDropped, endpointWaitEnabled } from './endpoint-unreachable.js'
 
 /** The fields of a session:result this rule reads. */
 export interface EndpointResultFacts {
@@ -16,9 +16,22 @@ export interface EndpointResultFacts {
   wakeupPending?: boolean
 }
 
-/** The error text says the endpoint was never reached (and it is no terminal error). */
+/** The codes that say the connection was never made, whatever wrapper carries them. */
+const NEVER_REACHED = /\bECONNREFUSED\b|connection refused|\bENOTFOUND\b|\bEAI_AGAIN\b|getaddrinfo|\bEHOSTUNREACH\b|\bENETUNREACH\b|\bEHOSTDOWN\b|\bENETDOWN\b/i
+
+/** Why the endpoint wait owns this error text: never reached, or dropped mid-request; null when it does not. */
+export function endpointWaitCause(text: string | null | undefined): 'unreachable' | 'dropped' | null {
+  if (!text || classifyTurnError(text) !== 'retryable') return null
+  // A reset inside a loose wrapper ("Unable to connect to API (ECONNRESET)", "fetch failed ...
+  // ECONNRESET") is a drop: only a refusal, a name that does not resolve or no route is unreachable.
+  if (matchesEndpointDropped(text) && !NEVER_REACHED.test(text)) return 'dropped'
+  if (matchesEndpointUnreachable(text)) return 'unreachable'
+  return null
+}
+
+/** The error text is the endpoint wait's: the endpoint was never reached, or the connection to it dropped (no terminal error). */
 export function isEndpointUnreachableError(text: string | null | undefined): boolean {
-  return !!text && classifyTurnError(text) === 'retryable' && matchesEndpointUnreachable(text)
+  return endpointWaitCause(text) !== null
 }
 
 /**

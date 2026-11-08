@@ -79,12 +79,89 @@ function statusOf(rec: SessionRecord) {
   return deriveUserStatus({
     phase: 'NEED_ACTION', hasSession: true, hasLeader: true, processStatus: rec.process_status,
     errorMessage: rec.errorMessage, errorReason: 'api_error',
-    endpointWait: w ? { state: w.state, url: w.url, where: w.where, since: w.since, resumes: w.resumes, gaveUpWhy: w.gaveUpWhy, probeError: w.probeError } : null,
+    endpointWait: w ? { state: w.state, url: w.url, where: w.where, since: w.since, resumes: w.resumes, gaveUpWhy: w.gaveUpWhy, probeError: w.probeError, cause: w.cause } : null,
   })
 }
 
 describe('the endpoint wait', () => {
   beforeEach(() => { delete process.env.WALNUT_ENDPOINT_WAIT })
+
+  it('a request that dropped mid-way waits on its machine and tries again on a widening clock, then gives up naming the network', async () => {
+    // 2026-11-08: the network cut every large upload, while a small probe went through.
+    const DROPPED = 'API Error: Connection dropped (ECONNRESET)'
+    const up = { kind: 'probed', url: 'http://127.0.0.1:8402', probed: 'http://127.0.0.1:8402', reachable: true } as const
+    const r = rig({ probe: () => up })
+    r.rec.errorMessage = DROPPED
+    await r.result({ isError: true, result: DROPPED })
+    expect(r.rec.endpointWait).toMatchObject({ state: 'waiting', cause: 'dropped', resumes: 0 })
+    const waiting = statusOf(r.rec)
+    expect(waiting).toMatchObject({ state: 'waiting', kind: 'machine' })
+    expect(waiting.waitingOn).toMatch(/connection from this (Mac|machine) to its model endpoint, which keeps dropping mid-request/)
+
+    // The probe answers at once, but the first try waits for the 3-minute mark.
+    await r.advance(2 * MIN)
+    expect(r.sent).toEqual([])
+    await r.advance(2 * MIN)
+    expect(r.sent).toEqual([{ text: 'continue', source: AUTO_CONTINUE_SOURCE }])
+    expect(r.notes.at(-1)).toContain('dropped mid-request')
+
+    // Each try drops again: the next ones come 15, then 60 minutes after the latest drop.
+    const triesAt: number[] = [4]
+    for (let minute = 4; minute < 200 && r.gaveUp.length === 0; minute++) {
+      const before = r.sent.length
+      if (r.rec.endpointWait?.state === 'resumed') await r.result({ isError: true, result: DROPPED })
+      await r.advance(MIN)
+      if (r.sent.length > before) triesAt.push(minute + 1)
+    }
+    expect(triesAt.length).toBe(ENDPOINT_WAIT_MAX_RESUMES)
+    expect(triesAt[1]! - triesAt[0]!).toBeGreaterThanOrEqual(15)
+    expect(triesAt[2]! - triesAt[1]!).toBeGreaterThanOrEqual(60)
+    expect(r.gaveUp).toHaveLength(1)
+    expect(r.gaveUp[0]).toMatch(/kept dropping mid-request .*Check the network there, then Retry the session/)
+    expect(statusOf(r.rec)).toMatchObject({ state: 'needs', source: 'error' })
+  })
+
+  it('a drop after a long refusal still waits its clock from the drop, never at once', async () => {
+    // Review 2026-11-08: the clock ran from the wait's start, so three tries came seconds apart.
+    let up = false
+    const r = rig({ probe: () => ({ kind: 'probed', url: 'http://127.0.0.1:8402', probed: 'http://127.0.0.1:8402', reachable: up, ...(up ? {} : { error: 'ECONNREFUSED' }) }) })
+    await r.result({ isError: true, result: 'API Error: Connection refused' })
+    await r.advance(20 * MIN)
+    expect(r.sent).toEqual([])
+    up = true
+    await r.advance(MIN)
+    expect(r.sent).toHaveLength(1)
+    await r.result({ isError: true, result: 'API Error: Connection dropped (ECONNRESET)' })
+    expect(r.rec.endpointWait).toMatchObject({ state: 'waiting', cause: 'dropped', dropTries: 0, resumes: 1 })
+    await r.advance(2 * MIN)
+    expect(r.sent).toHaveLength(1)
+    await r.advance(2 * MIN)
+    expect(r.sent).toHaveLength(2)
+    expect(r.gaveUp).toEqual([])
+  })
+
+  it('a host whose daemon cannot probe counts each drop try and gives up after the cap', async () => {
+    const DROPPED = 'API Error: Connection dropped (ECONNRESET)'
+    const r = rig({ probe: () => ({ kind: 'unsupported' }) })
+    await r.result({ isError: true, result: DROPPED })
+    for (let minute = 0; minute < 400 && r.gaveUp.length === 0; minute++) {
+      if (r.rec.endpointWait?.state === 'resumed') await r.result({ isError: true, result: DROPPED })
+      await r.advance(MIN)
+    }
+    expect(r.sent).toHaveLength(ENDPOINT_WAIT_MAX_RESUMES)
+    expect(r.gaveUp).toHaveLength(1)
+    expect(r.gaveUp[0]).toMatch(new RegExp(`kept dropping mid-request .*\\(${ENDPOINT_WAIT_MAX_RESUMES} tries\\)`))
+  })
+
+  it('a clean turn after a drop closes the wait', async () => {
+    const DROPPED = 'API Error: read ECONNRESET'
+    const r = rig({ probe: () => ({ kind: 'probed', url: 'http://127.0.0.1:8402', probed: 'http://127.0.0.1:8402', reachable: true }) })
+    await r.result({ isError: true, result: DROPPED })
+    await r.advance(4 * MIN)
+    expect(r.sent).toHaveLength(1)
+    await r.result({ isError: false, result: 'done' })
+    expect(r.rec.endpointWait).toBeUndefined()
+  })
 
   it('waits on its machine while the endpoint refuses, spending nothing, then continues once', async () => {
     let up = false

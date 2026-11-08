@@ -6,6 +6,8 @@
  *
  *   wait       the endpoint was never reached: the endpoint wait probes it and continues once it
  *              answers (sessions/endpoint-wait.ts); the task waits on its machine
+ *   drop       the connection to the endpoint dropped mid-request (2026-11-08): the endpoint wait
+ *              too, trying again on a widening clock; the task waits on its machine
  *   retry      reached and failed in passing (timeouts, 5xx, overload): the daemon's turn retry and
  *              session-auto-continue
  *   terminal   an answer that a retry cannot change (auth, refusal, too long, quota, a cancel)
@@ -21,11 +23,12 @@ import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import { classifyTurnError } from '../../../src/providers/daemon-core.js'
-import { ENDPOINT_UNREACHABLE_PATTERNS, matchesEndpointUnreachable } from '../../../src/core/sessions/endpoint-unreachable.js'
+import { ENDPOINT_UNREACHABLE_PATTERNS, ENDPOINT_DROPPED_PATTERNS, matchesEndpointUnreachable, matchesEndpointDropped } from '../../../src/core/sessions/endpoint-unreachable.js'
 import { isEndpointUnreachableError, endpointWaitTakes } from '../../../src/core/sessions/endpoint-wait.js'
+import { endpointWaitCause } from '../../../src/core/sessions/endpoint-wait-takes.js'
 import { matchesRetryExhaustion } from '../../../src/core/session-auto-continue.js'
 
-type Handling = 'wait' | 'retry' | 'terminal'
+type Handling = 'wait' | 'drop' | 'retry' | 'terminal'
 
 /** Real texts first (where seen), then the shapes each pattern exists for. Names and ids neutral. */
 const CORPUS: Array<[string, Handling]> = [
@@ -60,11 +63,17 @@ const CORPUS: Array<[string, Handling]> = [
   ['API Error: Bad Gateway', 'retry'],
   ['API Error: Gateway Timeout', 'retry'],
   ['API Error: Internal Server Error', 'retry'],
-  ['API Error: Connection reset by peer', 'retry'],
-  ['API Error: Connection closed unexpectedly', 'retry'],
-  ['API Error: read ECONNRESET', 'retry'],
   ['API Error: connect ETIMEDOUT 10.0.0.5:443', 'retry'],
-  ['API Error: write EPIPE', 'retry'],
+  // The connection dropped mid-request.
+  ['API Error: Connection dropped (ECONNRESET)', 'drop'], // 2026-11-08, three sessions on one Mac, 11 times
+  ['ECONNRESET: The socket connection was closed unexpectedly', 'drop'], // the CLI's debug log, same day
+  ['API Error: Connection reset by peer', 'drop'],
+  ['API Error: Connection closed unexpectedly', 'drop'],
+  ['API Error: read ECONNRESET', 'drop'],
+  ['API Error: write EPIPE', 'drop'],
+  // A reset inside a wrapper that otherwise reads as never connected is still a drop.
+  ['API Error: Unable to connect to API (ECONNRESET)', 'drop'],
+  ['API Error: fetch failed (cause: read ECONNRESET)', 'drop'],
   ['API Error: Network error while streaming', 'retry'],
   ['API Error: Premature close', 'retry'],
   ['API Error: terminated', 'retry'],
@@ -99,7 +108,11 @@ const CORPUS: Array<[string, Handling]> = [
 ]
 
 function handlingOf(text: string): Handling {
-  if (isEndpointUnreachableError(text)) return 'wait'
+  const cause = endpointWaitCause(text)
+  if (cause === 'unreachable') return 'wait'
+  if (cause === 'dropped') return 'drop'
+  // isEndpointUnreachableError is the wait's whole territory: both classes.
+  expect(isEndpointUnreachableError(text)).toBe(false)
   return classifyTurnError(text) === 'retryable' ? 'retry' : 'terminal'
 }
 
@@ -128,7 +141,7 @@ describe('every known turn error text is handled as listed', () => {
   it.each(CORPUS)('%s → %s', (text, handling) => {
     expect(handlingOf(text)).toBe(handling)
     // The endpoint wait takes exactly the wait texts at a real turn end, and nothing else.
-    expect(endpointWaitTakes({ isError: true, result: text })).toBe(handling === 'wait')
+    expect(endpointWaitTakes({ isError: true, result: text })).toBe(handling === 'wait' || handling === 'drop')
     // Auto-continue keeps the retries and leaves the wait texts to the endpoint wait.
     expect(matchesRetryExhaustion(text)).toBe(handling === 'retry')
   })
@@ -153,9 +166,15 @@ describe('every pattern is exercised by a known text', () => {
     expect(unused.map(String), 'add the error text this pattern exists for to CORPUS as wait').toEqual([])
   })
 
+  it('ENDPOINT_DROPPED_PATTERNS', () => {
+    const unused = ENDPOINT_DROPPED_PATTERNS.filter((re) => !CORPUS.some(([t, h]) => h === 'drop' && re.test(t)))
+    expect(unused.map(String), 'add the error text this pattern exists for to CORPUS as drop').toEqual([])
+    for (const [text, h] of CORPUS) if (h !== 'drop' && matchesEndpointDropped(text) && !matchesEndpointUnreachable(text)) expect(classifyTurnError(text), text).toBe('terminal')
+  })
+
   it('every wait text is retryable to the daemon (an older server or daemon still retries it)', () => {
-    for (const [text, h] of CORPUS) if (h === 'wait') expect(classifyTurnError(text), text).toBe('retryable')
-    for (const [text, h] of CORPUS) if (h !== 'wait' && matchesEndpointUnreachable(text)) expect(classifyTurnError(text), text).toBe('terminal')
+    for (const [text, h] of CORPUS) if (h === 'wait' || h === 'drop') expect(classifyTurnError(text), text).toBe('retryable')
+    for (const [text, h] of CORPUS) if (h !== 'wait' && h !== 'drop' && matchesEndpointUnreachable(text)) expect(classifyTurnError(text), text).toBe('terminal')
   })
 })
 

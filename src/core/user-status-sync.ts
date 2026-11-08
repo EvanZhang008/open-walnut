@@ -311,7 +311,10 @@ function endpointWaitOf(
   // A continue whose turn ended cleanly is no wait any more, even before the waiter closes it.
   if (rec.endpointWait && (rec.endpointWait.state !== 'resumed' || endpoint.recordInEndpointWait(rec))) return rec.endpointWait;
   if (rec.endpointWait || !endpoint.recordInEndpointWait(rec)) return undefined;
-  return { state: 'waiting', where: endpoint.machineWords(rec.host), since: rec.statusUpdatedAt || rec.last_status_change || new Date().toISOString(), resumes: 0 };
+  return {
+    state: 'waiting', where: endpoint.machineWords(rec.host), since: rec.statusUpdatedAt || rec.last_status_change || new Date().toISOString(), resumes: 0,
+    ...(endpoint.endpointWaitCause(rec.errorMessage) === 'dropped' ? { cause: 'dropped' as const } : {}),
+  };
 }
 
 /** Read every fact source (the slow ones from the cache). Never throws: a store that cannot be

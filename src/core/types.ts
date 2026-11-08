@@ -2445,6 +2445,12 @@ export interface SessionEndpointWait {
   resumedAt?: string;
   gaveUpAt?: string;
   gaveUpWhy?: 'time' | 'resumes';
+  /** Why the turn ended: the endpoint was never reached (absent, older records), or the connection dropped mid-request. */
+  cause?: 'unreachable' | 'dropped';
+  /** When the latest dropped turn ended: the next try of a dropped wait counts from it. */
+  droppedAt?: string;
+  /** Tries of a dropped wait so far (its place on ENDPOINT_BLIND_TRIES_MS). */
+  dropTries?: number;
 }
 
 /**

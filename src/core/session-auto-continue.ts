@@ -44,7 +44,7 @@ import { log } from '../logging/index.js'
 // one didn't. Never maintain two lists again.
 import { classifyTurnError } from '../providers/daemon-core.js'
 
-import { endpointWaitEnabled, matchesEndpointUnreachable } from './sessions/endpoint-unreachable.js'
+import { endpointWaitEnabled, matchesEndpointUnreachable, matchesEndpointDropped } from './sessions/endpoint-unreachable.js'
 import { endpointWaitTakes, isEndpointUnreachableError, type EndpointResultFacts } from './sessions/endpoint-wait-takes.js'
 import { isQuietTurn } from './sessions/quiet-turn.js'
 
@@ -52,7 +52,8 @@ export function matchesRetryExhaustion(text: string | null | undefined): boolean
   if (!text) return false
   // A connection the endpoint never answered is the endpoint wait's (sessions/endpoint-wait.ts):
   // it continues once a probe says the endpoint answers, not on this blind 3-minute timer.
-  if (endpointWaitEnabled() && matchesEndpointUnreachable(text)) return false
+  // So is one that dropped mid-request: it is tried again on a widening clock, not twice an hour.
+  if (endpointWaitEnabled() && (matchesEndpointUnreachable(text) || matchesEndpointDropped(text))) return false
   return classifyTurnError(text) === 'retryable'
 }
 
