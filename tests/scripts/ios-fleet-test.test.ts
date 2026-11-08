@@ -22,6 +22,8 @@ interface Mac {
   host: string; label?: string; tags?: string[]; connected?: boolean; loadPerCpu?: number | null
   /** host_load's CPU busy share and core count (absent: not reported, as an older daemon). */
   cpuBusy?: number | null; cpus?: number
+  /** host_load's runnable threads of our processes and of the others (absent: unknown). */
+  ownThreads?: { ours: number; others: number }
   /** Its CPU busy share at each host_load call in turn (the last one repeats). */
   busySeq?: (number | null)[]
   result?: { exit: number; state: string; xcode?: string; runtime?: string }
@@ -56,7 +58,7 @@ const turn = (name) => { const f = path.join(dir, 'turn-' + name); const n = fs.
 if (op === 'host_list' && turn('list') < listFails) { process.stderr.write('walnut: hub_timeout: primary server timed out'); process.exit(1) }
 if (op === 'host_list') out({ hosts: macs.map((m) => ({ host: m.host, label: m.label || m.host, capabilities: { tags: m.tags || ['macos', 'ios'] }, connection: { connected: m.connected !== false } })) })
 const at = (seq, n) => seq[Math.min(n, seq.length - 1)]
-if (op === 'host_load') { const n = turn('load'); out({ hosts: macs.map((m) => { const l = m.loadSeq ? at(m.loadSeq, n) : m.loadPerCpu; const b = m.busySeq ? at(m.busySeq, n) : m.cpuBusy; return { host: m.host, known: l != null, loadPerCpu: l, cpuBusy: b ?? null, cpus: m.cpus } }) }) }
+if (op === 'host_load') { const n = turn('load'); out({ hosts: macs.map((m) => { const l = m.loadSeq ? at(m.loadSeq, n) : m.loadPerCpu; const b = m.busySeq ? at(m.busySeq, n) : m.cpuBusy; return { host: m.host, known: l != null, loadPerCpu: l, cpuBusy: b ?? null, cpus: m.cpus, ...(m.ownThreads ? { ownThreads: m.ownThreads } : {}) } }) }) }
 if (op === 'host_copy') {
   // As the real op: a copy from or to this computer itself is refused. From a devbox,
   // Walnut's own Mac is another host and the copy goes through (localIsRemote).
@@ -297,6 +299,14 @@ describe('ios-fleet-test.sh', () => {
     const ro = run(['unit'], fakeWalnut(over, outTgz()))
     expect(ro.status, ro.stderr).toBe(0)
     expect(ro.stderr).toContain('using mac-d (mac-d): load 4.5 per CPU, 90% CPU idle (12.6 cores), over 2 per CPU: tried after the others, its own check counts our share of its load')
+    // A share in host_load: over the line, our share of the load is judged (mac-d: 4.5 x 1/5 = 0.9),
+    // so it counts as under the line and its free cores pick it before mac-b.
+    fresh()
+    const shared = macs.map((m) => (m.host === 'mac-d' ? { ...m, ownThreads: { ours: 10, others: 40 } } : m))
+    const rs = run(['unit'], fakeWalnut(shared, outTgz()))
+    expect(rs.status, rs.stderr).toBe(0)
+    expect(rs.stderr).toContain('using mac-d (mac-d): load 0.9 per CPU (our share of 4.5), 90% CPU idle (12.6 cores)')
+    expect(rs.stderr).not.toContain('tried after the others')
     // Over the line with its idle CPU unknown: not tried.
     fresh()
     const ru = run(['--wait', '0', 'unit'], fakeWalnut([{ host: 'mac-u', loadPerCpu: 3, cpus: 14 }], outTgz()))
@@ -805,9 +815,17 @@ describe('mac-share.sh (what the Mac half asks of the Mac before it takes anythi
     const q = run(['unit'], fakeWalnut([{ host: 'mac-mini', loadPerCpu: 0.3 }], outTgz(), { taskText: 'Board layout (\u8bed\u97f3\u8f93\u5165, voice input)' }))
     expect(q.status, q.stderr).toBe(0)
     expect((q.calls.find((c) => c.op === 'host_exec' && c.args.background)!.args.argv as string[])[2]).not.toContain('--audio')
+    // A rule against sound ("the run starts only while its sound is muted") is no audio test.
+    fs.rmSync(path.join(dir, 'calls.jsonl'), { force: true })
+    const rule = run(['unit'], fakeWalnut([{ host: 'mac-mini', loadPerCpu: 0.3 }], outTgz(), { taskText: 'Board layout. lane B \u53ea\u5728\u90a3\u53f0\u7684\u58f0\u97f3\u662f\u9759\u97f3\u65f6\u624d\u5f00\u59cb\u8dd1' }))
+    expect(rule.status, rule.stderr).toBe(0)
+    expect((rule.calls.find((c) => c.op === 'host_exec' && c.args.background)!.args.argv as string[])[2]).not.toContain('--audio')
     const src = fs.readFileSync(REMOTE, 'utf8')
     expect(src).toMatch(/if \[ -n "\$AUDIO_WHY" \] && \{ \[ -f "\$HOME\/\.config\/walnut\/no-audio" \]/)
     expect(src).toContain('refuse 75 "BUSY: this run touches voice, the microphone or audio')
+    // A Mac on hold, or in its quiet nights (2026-11-08, the user: a computer at home made sound at night).
+    expect(src).toContain('for hf in "$HOME/.config/walnut/hold" ${HOLD_DIR:+"$HOLD_DIR/HOLD"}; do')
+    expect(src).toContain('22|23|00|01|02|03|04|05|06|07) refuse 75 "BUSY: this Mac runs nothing from 22:00 to 08:00 Pacific')
   })
 
   it('the Mac half keeps the load line, then memory, then free CPU (fleet_cpu_busy)', () => {

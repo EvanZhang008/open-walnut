@@ -138,7 +138,15 @@ except Exception: sys.exit()
 t=d.get("task") or d
 s=((t.get("title") or "")+"\n"+(t.get("description") or ""))[:6000]
 s=re.sub(r"语音输入|语音转写|voice[- ]?(input|typed|typing|dictated)|by voice|dictated by", " ", s, flags=re.I)
-m=re.search(r"voice|microphone|\bmic\b|audio|dictat|speech|transcrib|\bstt\b|\basr\b|siri|speaker|语音|麦克风|录音|声音|音频|听写|朗读|说一段话", s, re.I)
+# A rule against sound is no audio test (the rule of sim-queue.sh audio_why): sound words alone count
+# only in a sentence with no quiet, mute or "no" in it; the words of a voice feature always count.
+strong=re.compile(r"voice|microphone|\bmic\b|dictat|speech|transcrib|\bstt\b|\basr\b|\btts\b|read aloud|siri|语音|麦克风|录音|听写|朗读|说一段话", re.I)
+weak=re.compile(r"audio|speaker|声音|音频", re.I)
+quiet=re.compile(r"静音|安静|出声|不许|不要|不能|绝不|别开|别用|别放|mute|silent|silence|quiet|never|don.?t|do not|must not|\bno\b|without", re.I)
+m=None
+for c in re.split(r"[。！？；;!?\n，,]|\.(?:\s|$)", s):
+    m=strong.search(c) or (weak.search(c) if not quiet.search(c) else None)
+    if m: break
 if m: print("its task says \""+m.group(0)+"\"")' 2>/dev/null) || AUDIO_WHY=
 fi
 [ -z "$AUDIO_WHY" ] || { say "this run touches voice, the microphone or audio ($AUDIO_WHY): a Mac where a person sits does not take it"; FLAGS+=(--audio "$AUDIO_WHY"); }
@@ -209,11 +217,12 @@ job_log_rest() { # $1 = host, $2 = job id, $3 = bytes already read, $4 = local l
   done
 }
 
-# The Macs to try, best first: connected, tagged ios, under the load line, with free CPU. A Mac over
-# the line with free CPU is tried after those: host_load reads its whole load, and the Mac's own
-# check (remote-run.sh) counts only the share our work holds (scripts/lib/own-load.sh; 2026-11-08,
-# a call app and security agents held this Mac's load at 40 to 80 for hours with a third of the CPU
-# idle, so no fleet run could pick it).
+# The Macs to try, best first: connected, tagged ios, under the load line, with free CPU. Over the
+# line, the load counts only in the share our processes hold of its runnable threads (host_load's
+# ownThreads; scripts/lib/own-load.sh; 2026-11-08, a call app and security agents held this Mac's
+# load at 40 to 80 for hours with a third of the CPU idle, so no fleet run could pick it). A Mac
+# whose share is unknown and is over the line with free CPU is tried after the others: its own
+# check (remote-run.sh) counts our share.
 candidates() {
   local hosts loads
   hosts=$(op_again host_list '{}') || return 1
@@ -239,10 +248,18 @@ for h in hosts:
         continue
     l = loads.get(h["host"], {})
     per = l.get("loadPerCpu")
+    share = l.get("ownThreads") or {}
+    if per is not None and per > cap and (share.get("others") or 0) > 0:
+        whole = per
+        per = round(per * share.get("ours", 0) / (share.get("ours", 0) + share["others"]), 2)
+    else:
+        whole = None
     busy = l.get("cpuBusy")
     idle = None if busy is None else (1 - busy) * 100
     free = None if busy is None else round((1 - busy) * (l.get("cpus") or 1), 1)
     note = f"{h['label']} ({h['host']}): " + (f"load {per} per CPU" if per is not None else "load unknown")
+    if whole is not None:
+        note += f" (our share of {whole})"
     if idle is not None:
         note += f", {round(idle)}% CPU idle" + (f" ({free} cores)" if l.get("cpus") else "")
     if per is None:

@@ -127,6 +127,19 @@ fleet_lent_lane "$HOME/.config/walnut/fleet.env" || refuse 64 "$FLEET_LENT_ERROR
 if [ -n "$AUDIO_WHY" ] && { [ -f "$HOME/.config/walnut/no-audio" ] || { [ -n "${FLEET_LENT_QUEUE:-}" ] && [ -f "$(dirname "$FLEET_LENT_QUEUE")/QUIET-ONLY" ]; }; }; then
   refuse 75 "BUSY: this run touches voice, the microphone or audio ($AUDIO_WHY), and this Mac takes none (a person sits here); try another Mac" busy
 fi
+# A Mac on hold starts no run, and one that keeps its nights quiet none from 22:00 to 08:00 Pacific
+# (2026-11-08, the user: a computer at home made sound at night): HOLD (its first line says why)
+# or NIGHT-QUIET beside its lent simulator queue, or ~/.config/walnut/hold and night-quiet.
+# FLEET_TEST_PACIFIC_HOUR stands for the clock in tests.
+HOLD_DIR=${FLEET_LENT_QUEUE:+$(dirname "$FLEET_LENT_QUEUE")}
+for hf in "$HOME/.config/walnut/hold" ${HOLD_DIR:+"$HOLD_DIR/HOLD"}; do
+  [ -f "$hf" ] && refuse 75 "BUSY: this Mac is on hold ($(head -1 "$hf" 2>/dev/null)); try another Mac" busy
+done
+if [ -f "$HOME/.config/walnut/night-quiet" ] || { [ -n "$HOLD_DIR" ] && [ -f "$HOLD_DIR/NIGHT-QUIET" ]; }; then
+  case ${FLEET_TEST_PACIFIC_HOUR:-$(TZ=America/Los_Angeles date +%H)} in
+    22|23|00|01|02|03|04|05|06|07) refuse 75 "BUSY: this Mac runs nothing from 22:00 to 08:00 Pacific; try another Mac or later" busy ;;
+  esac
+fi
 export SIM_TEST_AUDIO=${AUDIO_WHY:-}
 FREE_KB=$(df -k "$RUN_DIR" | awk 'NR == 2 {print $4}')
 [ "${FREE_KB:-0}" -ge $((6 * 1024 * 1024)) ] || refuse 70 "only $((FREE_KB / 1024 / 1024)) GB free on this Mac, the build needs 6" no-room
