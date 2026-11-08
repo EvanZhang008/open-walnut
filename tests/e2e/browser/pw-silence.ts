@@ -3,7 +3,7 @@
  * Mac with a person at it woke its built-in speaker at every page's first click).
  *
  * Every browser context the runner makes gets the page silencer
- * (web/src/utils/automation-silence.ts) as an init script, which Playwright runs at
+ * (src/lib/automation-silence.ts) as an init script, which Playwright runs at
  * document start in every page and every frame: a plugin's page, a dev server in the
  * Web view, an HTML file preview and a sandboxed frame included, before their own
  * scripts, in every engine (WebKit has no mute switch of its own). It hooks the same
@@ -12,7 +12,7 @@
  * tests/e2e/browser/automation-silence.spec.ts fails if the hook stops working.
  */
 import { createRequire } from 'node:module'
-import { AUTOMATION_SILENCE_JS } from '../../../web/src/utils/automation-silence.js'
+import { AUTOMATION_SILENCE_JS } from '../../../src/lib/automation-silence.js'
 
 interface ContextLike { addInitScript(script: { content: string }): Promise<void> }
 interface Instrumentation { addListener(listener: { runAfterCreateBrowserContext?: (c: ContextLike) => Promise<void> }): void }

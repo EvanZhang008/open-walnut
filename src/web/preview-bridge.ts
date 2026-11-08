@@ -6,8 +6,11 @@
  * a tab of its own (no parent).
  */
 import { PREVIEW_BRIDGE_JS } from './preview-bridge-script.js'
+import { AUTOMATION_SILENCE_JS } from '../lib/automation-silence.js'
 
-const TAG = `<script data-walnut-preview>${PREVIEW_BRIDGE_JS}</script>`
+// The page silencer first: in a browser under automation the previewed page plays no
+// sound, from before its own first script (2026-11-08).
+const TAG = `<script data-walnut-preview>${AUTOMATION_SILENCE_JS.replace(/<\/script/gi, '<\\/script')}${PREVIEW_BRIDGE_JS}</script>`
 
 /** `html` with the bridge put in first thing in its head (after any doctype, so no quirks mode). */
 export function withPreviewBridge(html: string): string {

@@ -142,6 +142,11 @@ describe('the page silencer', () => {
     expect(board.indexOf(AUTOMATION_SILENCE_JS)).toBeLessThan(board.indexOf('new AudioContext'));
     const { islandRuntimeScript } = await import('../../web/src/components/chat/island-runtime');
     expect(islandRuntimeScript('k', {})).toContain(AUTOMATION_SILENCE_JS);
+    // The Files preview's documents, served with the bridge in their head.
+    const { withPreviewBridge } = await import('../../src/web/preview-bridge');
+    const doc = withPreviewBridge('<html><head><script>new Audio("a.mp3").play()</script></head></html>');
+    expect(doc.indexOf(AUTOMATION_SILENCE_JS)).toBeGreaterThan(-1);
+    expect(doc.indexOf(AUTOMATION_SILENCE_JS)).toBeLessThan(doc.indexOf('new Audio'));
   });
 });
 
@@ -200,7 +205,7 @@ describe('ratchet: every sandboxed frame stays silent under automation', () => {
     'web/src/components/board/TaskBoardPane.tsx': 'wrapBoardHtml puts the silencer ahead of the board\'s scripts',
     'web/src/components/chat/RichBlocks.tsx': 'islandRuntimeScript starts with the silencer',
     'web/src/components/chat/IslandPreview.tsx': 'runs no script of its content (the runtime copies markup only) and its CSP loads no media',
-    'web/src/components/common/FileContentView.tsx': 'a test run silences it at document start (pw-silence.ts); the silencer also runs in it on every load',
+    'web/src/components/common/FileContentView.tsx': 'its own origin: the server puts the silencer first in the preview bridge (preview-bridge.ts), and a test run silences it at document start',
     'web/src/components/inbox/LetterBody.tsx': 'a letter: no scripts in its sandbox, media blocked by its CSP',
     'web/src/apps/mail/MailReaderBody.tsx': 'a mail: media elements dropped (mail-html.ts), no scripts',
     'web/src/pages/PluginAppPage.tsx': 'a plugin\'s own page: a test run silences it at document start (pw-silence.ts), and Chromium mutes itself',

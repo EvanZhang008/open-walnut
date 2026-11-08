@@ -37,7 +37,7 @@ enum AudioSilence {
     /// A web view plays no sound either: its page is silenced from document start, every
     /// frame included, before any script of its own (an island's, a previewed file's).
     /// Media muted, Web Audio to the speakers through a gain of zero, speech at volume
-    /// zero, and muted again when the page's own controls unmute it: the web app's silencer (web/src/utils/automation-silence.ts), which a
+    /// zero, and muted again when the page's own controls unmute it: the web app's silencer (src/lib/automation-silence.ts), which a
     /// WKWebView never loads and whose `navigator.webdriver` gate is false here. App user
     /// scripts run even where the page's own JavaScript is off (a letter).
     static func install(on configuration: WKWebViewConfiguration) {
