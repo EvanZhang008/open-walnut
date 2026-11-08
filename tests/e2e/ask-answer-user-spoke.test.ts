@@ -143,10 +143,10 @@ describe('answers_ask after the user wrote in the task', () => {
   })
 
   it('counts from when the task began asking: a reworded ask after his words still needs them', async () => {
-    const t = await asking('ORR review', 'Start the ORR fixes now?')
+    const t = await asking('Launch checklist', 'Start the launch checklist fixes now?')
     await userWrites(t.id, 'discuss before doing anything')
     // Its next turn asks again in other words; it has asked all along.
-    await reports(t.id, t.sid, 'Which ORR fix goes first: alarms or runbook?')
+    await reports(t.id, t.sid, 'Which launch fix goes first: alarms or runbook?')
     const r = await answer({ to: t.id, text: 'Go ahead, stop asking him.' })
     expect(r.status, JSON.stringify(r.json)).toBe(409)
     expect(JSON.stringify(r.json)).toContain('discuss before doing anything')
