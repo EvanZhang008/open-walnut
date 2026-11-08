@@ -17,6 +17,21 @@ import { AUTOMATION_SILENCE_JS } from '../../../src/lib/automation-silence.js'
 interface ContextLike { addInitScript(script: { content: string }): Promise<void> }
 interface Instrumentation { addListener(listener: { runAfterCreateBrowserContext?: (c: ContextLike) => Promise<void> }): void }
 
+/** No sound from Chromium itself either, headed or not. */
+export const CHROMIUM_SILENT = ['--mute-audio']
+
+/**
+ * The launch args an engine gets: WebKit and Firefox refuse to start on Chromium's own
+ * switches (2026-11-08: every spec that switches to WebKit inside a Chromium project, the
+ * *.webkit.spec.ts files, inherited --mute-audio and failed at launch, 113 tests in CI).
+ */
+export function engineArgs(engine: string, args: readonly string[] | undefined): string[] | undefined {
+  if (!args) return undefined
+  return engine === 'chromium' ? [...args] : args.filter((a) => !CHROMIUM_SILENT.includes(a))
+}
+
+interface Launcher { launch(options?: { args?: string[] }): Promise<unknown> }
+
 const FLAG = Symbol.for('walnut.pwSilence')
 const g = globalThis as { [FLAG]?: boolean }
 if (!g[FLAG]) {
@@ -26,10 +41,16 @@ if (!g[FLAG]) {
     core._instrumentation?.addListener({
       runAfterCreateBrowserContext: async (context) => { await context.addInitScript({ content: AUTOMATION_SILENCE_JS }) },
     })
+    // The runner hands every engine the project's launch options (the browser fixture's
+    // defaults), so another engine's launch drops the Chromium switches first.
+    const lib = core as unknown as Record<string, Launcher | undefined> & { _defaultLaunchOptions?: { args?: string[] } }
+    for (const engine of ['webkit', 'firefox']) {
+      const type = lib[engine]
+      if (!type?.launch) continue
+      const launch = type.launch.bind(type)
+      type.launch = (options = {}) => launch({ ...options, args: engineArgs(engine, options.args ?? lib._defaultLaunchOptions?.args) })
+    }
   } catch (e) {
     console.warn(`[pw-silence] could not silence test browsers: ${(e as Error).message}`)
   }
 }
-
-/** No sound from Chromium itself either, headed or not. */
-export const CHROMIUM_SILENT = ['--mute-audio']

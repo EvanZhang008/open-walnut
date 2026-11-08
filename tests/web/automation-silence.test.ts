@@ -247,6 +247,16 @@ describe('every Playwright config', () => {
       for (const [, rest] of uses) expect(rest, f).toContain('launchOptions: { args: CHROMIUM_SILENT }');
     }
   });
+
+  it('a spec that switches to another engine starts it without the Chromium switches', async () => {
+    // The *.webkit.spec.ts files run in a Chromium project with browserName 'webkit', so the
+    // project's launch options reach WebKit, which refuses --mute-audio (2026-11-08).
+    const { engineArgs, CHROMIUM_SILENT } = await import('../e2e/browser/pw-silence');
+    expect(engineArgs('chromium', CHROMIUM_SILENT)).toEqual(CHROMIUM_SILENT);
+    for (const engine of ['webkit', 'firefox']) expect(engineArgs(engine, [...CHROMIUM_SILENT, '--keep'])).toEqual(['--keep']);
+    expect(engineArgs('webkit', undefined)).toBeUndefined();
+    expect(read('tests/e2e/browser/pw-silence.ts')).toMatch(/for \(const engine of \['webkit', 'firefox'\]\)/);
+  });
 });
 
 describe('ratchet: the iOS app makes no sound where a test or an agent runs it', () => {
