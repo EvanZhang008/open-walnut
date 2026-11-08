@@ -9,7 +9,9 @@ import {
   expectHeaderStaysInBlock, expectLongBlockFolds, expectSelectionSkipsHeader, expectStreamingBlock, expectWrapKeepsPlace, expectWrapToggles,
 } from './code-block-actions-helpers';
 
-test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent });
+// The Chromium project's launch args (--mute-audio) stop WebKit from starting on
+// Linux, so this file starts WebKit with none of them.
+test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent, launchOptions: {} });
 
 test('really runs in WebKit', async ({ browserName }) => { expect(browserName).toBe('webkit'); });
 test('each fence is framed with its language and colored', async ({ page }) => { await expectFramedAndColored(page, 'webkit'); });
