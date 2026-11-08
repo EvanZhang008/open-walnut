@@ -108,6 +108,17 @@ test('the + menu compacts the session without typing /compact', async ({ page, r
   await expect(row).not.toHaveAttribute('aria-disabled', 'true')
   await expect(row).toHaveAttribute('title', /400K tokens in context/)
   await panel.locator('.session-panel-input .chat-plus-menu').screenshot({ path: `${SHOTS}/${info.project.name}-plus-menu.png` })
+  // Every wording the working line takes, kept from before the click: the mock's compaction is over in
+  // MOCK_COMPACT_MS (1.5 s), sooner than the steps below on a slow runner (2026-11-08, GitHub's gate).
+  await page.evaluate(() => {
+    const seen: string[] = []
+    ;(window as unknown as { __workingLabels: string[] }).__workingLabels = seen
+    const note = () => document.querySelectorAll('.session-working-label').forEach((el) => {
+      const t = el.textContent ?? ''
+      if (seen[seen.length - 1] !== t) seen.push(t)
+    })
+    new MutationObserver(note).observe(document.body, { subtree: true, childList: true, characterData: true })
+  })
   await row.click()
   await expect(panel.locator('.session-panel-input .chat-plus-menu')).toHaveCount(0)
   // Opened again at once (before the server says the turn runs), the row is already off.
@@ -117,7 +128,8 @@ test('the + menu compacts the session without typing /compact', async ({ page, r
   await row.dispatchEvent('click')
   await page.keyboard.press('Escape')
   // While it runs the working line says what it does, not "is working".
-  await expect(panel.locator('.session-working-label')).toHaveText(/is compacting the context/, { timeout: 10_000 })
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __workingLabels: string[] }).__workingLabels.join('\n')), { timeout: 10_000 })
+    .toMatch(/is compacting the context/)
   await openNotices(panel)
   await expect(compactRows(panel).first()).toBeVisible({ timeout: 25_000 })
   // One row for one compaction: the live row and the transcript's are the same line.
@@ -125,8 +137,11 @@ test('the + menu compacts the session without typing /compact', async ({ page, r
   await expect(compactRows(panel)).toHaveCount(1)
   // Done, the row stays off (the live usage from before the compaction does not turn it back on).
   await expect(panel.locator('.session-working-label')).toHaveCount(0, { timeout: 15_000 })
-  // The context share reads the compacted size at once, not the size before it until a reload.
-  await expect(panel.locator('.session-detail-context-pct').first()).toHaveText(/^\s*\d%$/, { timeout: 10_000 })
+  // The context share reads the compacted size at once, not the size before it until a reload. A share
+  // shows only once the CLI reported its window: on a server whose mock reports one (MOCK_CONTEXT_WINDOW).
+  if (process.env.MOCK_CONTEXT_WINDOW) {
+    await expect(panel.locator('.session-detail-context-pct').first()).toHaveText(/^\s*\d%$/, { timeout: 10_000 })
+  }
   await panel.locator('.session-panel-input .chat-plus-btn').click()
   await expect(row).toHaveAttribute('aria-disabled', 'true')
   await expect(row).toHaveAttribute('title', /Already compacted/)
