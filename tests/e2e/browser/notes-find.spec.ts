@@ -20,6 +20,10 @@ import { test, expect, type Page } from '@playwright/test'
 import { mkdirSync } from 'node:fs'
 
 test.setTimeout(150_000)
+// Every test seeds the same notes (one set per project) and several edit them, so
+// two tests of one project at once rewrite each other's note mid-test (2026-11-08
+// gate: a sibling's seed put back the ledger under a typed word). One after another.
+test.describe.configure({ mode: 'default' })
 
 const NEEDLE = 'zircon4471'
 /** The Notes page's own editor (Home's Scratchpad keeps another one mounted, hidden). */

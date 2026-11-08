@@ -15,6 +15,9 @@
 import { test, expect, type Page, type Response } from '@playwright/test'
 
 test.setTimeout(120_000)
+// Every test seeds the same 40 notes (one set per project): two tests of one project
+// at once rewrite them while the other reads its search answers. One after another.
+test.describe.configure({ mode: 'default' })
 
 const COUNT = 40
 
