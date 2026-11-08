@@ -460,6 +460,21 @@ describe('the forward on a stream (bridge-stream-v1)', () => {
     expect(h.fwd.status().answeredHere).not.toHaveProperty('primary-suspect')
   })
 
+  it('a phone that leaves while the stream still opens is no mark against the Mac either, and the stream is let go', async () => {
+    const s = await setup()
+    let opened: import('node:stream').Duplex | null = null
+    const h = forwardOver(s, {
+      open: () => new Promise((resolve) => setTimeout(() => {
+        void s.bridge.ep!.open('primary', { purpose: 'web' }).then((d) => { opened = d; resolve(d) })
+      }, 800)),
+    })
+    await expect(request(h.app).get('/api/v1/slow').timeout(200)).rejects.toThrow()
+    await new Promise((r) => setTimeout(r, 1_400))
+    expect(h.fwd.status()).toMatchObject({ suspectAt: null, callerGone: 1 })
+    expect(opened).not.toBeNull()
+    expect(opened!.destroyed).toBe(true)
+  })
+
   it('the Mac\'s door refuses what it would not run: answered here, nothing ran there', async () => {
     const s = streamHarness(() => null)
     closers.push(() => s.door.close())

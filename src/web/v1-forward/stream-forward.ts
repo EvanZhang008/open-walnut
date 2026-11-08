@@ -65,6 +65,19 @@ export function forwardOnStream(input: StreamForwardInput): Promise<StreamOutcom
     }, timeoutMs)
     timer.unref?.()
 
+    // A phone that went away takes its call with it, from the first moment: one that leaves
+    // while the stream still opens has already fired 'close' by the time the request exists.
+    // That cut is this side's, never the Mac's silence (2026-11-08: the phone cancelled a
+    // session's controls read, the cut read as "the Mac did not answer", and the Threads read
+    // right after it was refused here with "could not get them from the primary").
+    res.on('close', () => {
+      if (res.writableFinished) return
+      if (!settled) callerGone = true
+      up?.destroy()
+      if (!up) stream?.destroy()
+      if (!settled) done({ kind: 'caller-gone' })
+    })
+    if (res.destroyed || res.closed) { done({ kind: 'caller-gone' }); return }
     input.open().then((s) => {
       stream = s
       if (settled) { s.destroy(); return }
@@ -101,16 +114,6 @@ export function forwardOnStream(input: StreamForwardInput): Promise<StreamOutcom
       up.on('error', (err) => {
         if (settled) { if (!res.writableFinished) res.destroy(); return }
         done(callerGone ? { kind: 'caller-gone' } : { kind: 'unanswered', message: err.message })
-      })
-      // A phone that went away takes its call with it. That cut is this side's, never the
-      // Mac's silence (2026-11-08: the phone cancelled a session's controls read, the cut
-      // read as "the Mac did not answer", and the Threads read right after it was refused
-      // here with "could not get them from the primary").
-      res.on('close', () => {
-        if (res.writableFinished) return
-        if (!settled) callerGone = true
-        up?.destroy()
-        if (!settled) done({ kind: 'caller-gone' })
       })
       if (body) up.end(body)
       else up.end()
