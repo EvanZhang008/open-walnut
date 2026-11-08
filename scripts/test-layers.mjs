@@ -40,8 +40,12 @@ const DURATIONS = path.join(ROOT, 'tests/setup/test-durations.json')
 
 /** A file of the local layer takes at most this long in the measured run. */
 export const LOCAL_MAX_MS = 1500
-/** A scan test (ratchet, guard) the land layer always runs takes at most this long. */
-export const SCAN_MAX_MS = 3000
+/**
+ * The local layer runs the scan tests (ratchet, guard, tree rules) of at most this cost. A cost
+ * counts the file's worker start and imports, about 0.3 s for the smallest file on a busy host,
+ * so this keeps the cheapest third of them and the local run near a minute.
+ */
+export const SCAN_MAX_MS = 500
 /** The land layer runs scan tests up to this long. */
 export const LAND_SCAN_MAX_MS = 6000
 /** A test reached through a changed file runs in the land layer up to this cost; past it, the push gate. */

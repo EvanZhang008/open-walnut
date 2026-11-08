@@ -4,7 +4,7 @@ Layers chosen so the one you run most often is the one that costs least. Run `bu
 
 | Layer | Command | Scope | Time | When |
 |---|---|---|---|---|
-| **L0 local** | `bun run test:local` | the tests of your change: its own tests, the fast direct importers, the fast scan tests | about a minute | every code change |
+| **L0 local** | `bun run test:local` | the tests of your change: its own tests, the fast direct importers, the cheapest scan tests | about a minute | every code change |
 | **Land** | `bun run test:land` | the same with the importers up to 30 s each (at most 200) and the scan tests up to 6 s | a few minutes | before a land; the land check runs it |
 | **L1 quick** | `bun run test:quick` | the whole quick tier, ~3,200 files | ~10 min at 8 workers, much longer at 1 | when a change reaches far; the push gate runs it on GitHub |
 | **L2 focus** | `bun run test:focus <path>` | whatever you name | 0.3 to 30 s | while working on one module |
@@ -49,7 +49,7 @@ What it caught that the cluster could not (2026-10-23): the ControlMaster socket
 
 - the changed test files;
 - the tests importing a changed file directly, and the tests naming a changed path (`scripts/test-changed-refs.mjs`), within the layer's cost per file (1.5 s local, 30 s land) and count (60 local, 200 land), cheapest first; the rest are left to the push gate, which runs the whole tier;
-- the scan tests: a test named `*ratchet*` or `*guard*`, or one that reads the source tree and starts no server, up to 3 s each local and 6 s for a land. They are rule checks over the whole tree, so any change can break one, and in the land history of 2026-11-01..07 they caught most of the real problems;
+- the scan tests: a test named `*ratchet*` or `*guard*`, or one that reads the source tree and starts no server, up to 0.5 s each local (the cheapest third, a cost counting the file's worker start and imports) and 6 s for a land. They are rule checks over the whole tree, so any change can break one, and in the land history of 2026-11-01..07 they caught most of the real problems;
 - for a change to the test setup (a vitest config, `tests/setup/`, `package.json`, `bun.lock`), the setup's own tests.
 
 A file that fails is run once more, alone: failing again fails the run, passing alone is reported as flaky and does not; a file that never reports counts as failed, and so does a vitest exit with an error no file explains (an unhandled rejection: the JSON report leaves those out). A deleted or renamed module still selects the tests that import it. Replayed on the refused lands of 2026-11-05..07, the land layer still selects a real failing test for 24 of 25 real refusals (the files of 4 more were deleted since).
