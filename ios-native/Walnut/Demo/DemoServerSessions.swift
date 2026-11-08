@@ -17,6 +17,10 @@ extension DemoServer {
             return .error(404, "not_found", "Session not found.")
         }
         let action = s.count > 2 ? s[2] : ""
+        if action == "changes" {
+            let cwd = withState { state in state.sessions[state.sessionIndex(id)!].cwd }
+            return routeChanges(r, s, sessionID: id, cwd: cwd)
+        }
         switch (r.method, action) {
         case ("GET", ""):
             return .encoded(sessionDetail(id))

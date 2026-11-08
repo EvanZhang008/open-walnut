@@ -177,6 +177,38 @@ describe('lifecycle relay payloads on a REPLICA', () => {
     )
   })
 
+  it('GET changes/file relays the path and the comparison', async () => {
+    bridgeRequestMock.mockResolvedValue({ ok: true, result: { sessionId: SID, repoRoot: '/r', file: { filePath: '/r/a.ts' } } })
+    const res = await request(createApp())
+      .get(`/api/v1/sessions/${SID}/changes/file?path=${encodeURIComponent('/r/a.ts')}&base=branch&ref=main&repo=${encodeURIComponent('/r')}`)
+    expect(res.status).toBe(200)
+    expect(res.body.file.filePath).toBe('/r/a.ts')
+    expect(bridgeRequestMock).toHaveBeenCalledWith(
+      '__local__', 'session.control',
+      { action: 'changes.file', sessionId: SID, params: { path: '/r/a.ts', base: 'branch', ref: 'main', commit: undefined, repo: '/r' } },
+      30_000,
+    )
+  })
+
+  it('GET changes/file without a path is a 400 that never reaches the Mac', async () => {
+    const res = await request(createApp()).get(`/api/v1/sessions/${SID}/changes/file`)
+    expect(res.status).toBe(400)
+    expect(res.body.error.code).toBe('bad_request')
+    expect(bridgeRequestMock).not.toHaveBeenCalled()
+  })
+
+  it('GET changes/refs relays action changes.refs', async () => {
+    bridgeRequestMock.mockResolvedValue({ ok: true, result: { sessionId: SID, repoRoot: '/r', refs: [], commits: [] } })
+    const res = await request(createApp()).get(`/api/v1/sessions/${SID}/changes/refs`)
+    expect(res.status).toBe(200)
+    expect(res.body.repoRoot).toBe('/r')
+    expect(bridgeRequestMock).toHaveBeenCalledWith(
+      '__local__', 'session.control',
+      { action: 'changes.refs', sessionId: SID },
+      30_000,
+    )
+  })
+
   it('GET history relays tail (clamped to the max)', async () => {
     bridgeRequestMock.mockResolvedValue({ ok: true, result: { messages: [], total: 0 } })
     const res = await request(createApp()).get(`/api/v1/sessions/${SID}/history?tail=99999`)

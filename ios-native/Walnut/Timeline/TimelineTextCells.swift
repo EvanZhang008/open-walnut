@@ -7,6 +7,9 @@ extension NSAttributedString.Key {
     /// What VoiceOver reads for a row whose drawing carries meaning its characters do
     /// not (a pill's status dot): set over the whole string, read by the text cell.
     static let timelineSpoken = NSAttributedString.Key("walnut.timelineSpoken")
+    /// A fenced code block in a user's bubble: drawn on one rounded panel the
+    /// width of the text (`TimelineTextView` lays the panels out).
+    static let timelineCodeBlock = NSAttributedString.Key("walnut.timelineCodeBlock")
 }
 
 final class TimelineTextView: UITextView {
@@ -35,6 +38,56 @@ final class TimelineTextView: UITextView {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+
+    override var attributedText: NSAttributedString! {
+        didSet { setNeedsLayout() }
+    }
+
+    /// One panel per code block, behind the text.
+    private var codePanels: [UIView] = []
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        layoutCodePanels()
+    }
+
+    private func layoutCodePanels() {
+        var frames: [CGRect] = []
+        if let text = attributedText, text.length > 0, let layout = textLayoutManager,
+           let content = layout.textContentManager {
+            text.enumerateAttribute(.timelineCodeBlock, in: NSRange(location: 0, length: text.length)) { value, range, _ in
+                guard value != nil,
+                      let start = content.location(layout.documentRange.location, offsetBy: range.location),
+                      let end = content.location(start, offsetBy: range.length),
+                      let textRange = NSTextRange(location: start, end: end) else { return }
+                layout.ensureLayout(for: textRange)
+                var box = CGRect.null
+                layout.enumerateTextSegments(in: textRange, type: .standard, options: []) { _, frame, _, _ in
+                    box = box.union(frame)
+                    return true
+                }
+                guard !box.isNull else { return }
+                // The text view clips: the panel stays inside it (the block's
+                // indents and spacing leave the room around the code).
+                let top = max(0, box.minY - 4)
+                frames.append(CGRect(x: 0, y: top, width: bounds.width,
+                                     height: min(bounds.height, box.maxY + 4) - top))
+            }
+        }
+        while codePanels.count < frames.count {
+            let panel = UIView()
+            panel.isUserInteractionEnabled = false
+            panel.backgroundColor = .secondarySystemFill
+            panel.layer.cornerRadius = 8
+            panel.layer.cornerCurve = .continuous
+            insertSubview(panel, at: 0)
+            codePanels.append(panel)
+        }
+        for (index, panel) in codePanels.enumerated() {
+            panel.isHidden = index >= frames.count
+            if index < frames.count { panel.frame = frames[index] }
+        }
+    }
 }
 
 extension TimelineTextView: UITextViewDelegate {

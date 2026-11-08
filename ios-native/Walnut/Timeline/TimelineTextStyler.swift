@@ -338,4 +338,71 @@ enum TimelineTextStyler {
             .paragraphStyle: paragraphStyle(spacing: 0, lineSpacing: 3),
         ])
     }
+
+    /// A user's own bubble: inline markdown, except that a fenced block (a line
+    /// starting with ``` up to the next such line) keeps its lines, in the code
+    /// font. Inline parsing alone read a fence as one code span and joined its
+    /// lines with spaces, so a quoted run of code in a diff review read as one line.
+    static func bubbleText(_ text: String, font: UIFont = bodyFont,
+                           color: UIColor = .label) -> NSAttributedString {
+        let lines = text.components(separatedBy: "\n")
+        guard lines.contains(where: isFence) else { return inlineText(text, font: font, color: color) }
+        // Split into prose and closed fences; an unclosed fence stays prose.
+        var parts: [(code: Bool, lines: [String])] = []
+        var prose: [String] = []
+        var index = 0
+        while index < lines.count {
+            let line = lines[index]
+            if isFence(line), let close = lines[(index + 1)...].firstIndex(where: isFence) {
+                parts.append((false, prose))
+                prose = []
+                parts.append((true, Array(lines[(index + 1)..<close])))
+                index = close + 1
+            } else {
+                prose.append(line)
+                index += 1
+            }
+        }
+        parts.append((false, prose))
+        let out = NSMutableAttributedString()
+        let codeFont = UIFont.monospacedSystemFont(ofSize: font.pointSize * 0.88, weight: .regular)
+        for part in parts {
+            var body = part.lines
+            if !part.code {
+                // Blank lines around a fence are its spacing, drawn as one line break.
+                while body.first?.trimmingCharacters(in: .whitespaces).isEmpty == true { body.removeFirst() }
+                while body.last?.trimmingCharacters(in: .whitespaces).isEmpty == true { body.removeLast() }
+                if body.isEmpty { continue }
+            }
+            if out.length > 0 {
+                out.append(NSAttributedString(string: "\n", attributes: [
+                    .font: font, .paragraphStyle: paragraphStyle(spacing: 6, lineSpacing: 3),
+                ]))
+            }
+            if part.code {
+                // One panel behind the block (TimelineTextView), with room above
+                // and below for it.
+                // Each code line is its own paragraph: only the first gets room
+                // above and the last room below, so the lines stay together.
+                for (index, line) in body.enumerated() {
+                    let style = paragraphStyle(spacing: index == body.count - 1 ? 10 : 0, lineSpacing: 2,
+                                               before: index == 0 ? 6 : 0)
+                    style.firstLineHeadIndent = 8
+                    style.headIndent = 8
+                    style.tailIndent = -8
+                    out.append(NSAttributedString(string: index == 0 ? line : "\n" + line, attributes: [
+                        .font: codeFont, .foregroundColor: color,
+                        .paragraphStyle: style, .timelineCodeBlock: true,
+                    ]))
+                }
+            } else {
+                out.append(inlineText(body.joined(separator: "\n"), font: font, color: color))
+            }
+        }
+        return out
+    }
+
+    private static func isFence(_ line: String) -> Bool {
+        line.trimmingCharacters(in: .whitespaces).hasPrefix("```")
+    }
 }

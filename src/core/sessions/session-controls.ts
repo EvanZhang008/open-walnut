@@ -926,6 +926,9 @@ export type SessionControlAction =
   // Wave 1 lifecycle family (2026-08):
   | 'patch' | 'terminate' | 'restart' | 'retry' | 'recheck' | 'interrupt' | 'permission'
   | 'execute-continue' | 'changes' | 'history' | 'detail'
+  // One changed file's before/after, and the compare picker's branches and
+  // commits (the phone's Changed page).
+  | 'changes.file' | 'changes.refs'
   // One transcript page (cursors and all) for a phone on the replica, built here
   // because only the primary can page a session (web/routes/session-transcript-relay.ts).
   | 'transcript'
@@ -1264,6 +1267,19 @@ export async function handleSessionControlRelay(
           base: p.base, scope: p.scope, ref: p.ref, commit: p.commit,
           light: p.light === true, refresh: p.refresh === true,
         }));
+        break;
+      }
+      case 'changes.file': {
+        const { getSessionFileChange, gitFileCompare } = await import('./session-lifecycle.js');
+        if (typeof p.path !== 'string' || !p.path) throw new SessionControlError('path is required', 400);
+        const filePath = p.path;
+        const gitCompare = gitFileCompare(p);
+        result = await boundSessionHostRead(sessionId, () => getSessionFileChange(sessionId, filePath, gitCompare));
+        break;
+      }
+      case 'changes.refs': {
+        const { getSessionGitRefs } = await import('./session-lifecycle.js');
+        result = await boundSessionHostRead(sessionId, () => getSessionGitRefs(sessionId));
         break;
       }
       case 'history': {

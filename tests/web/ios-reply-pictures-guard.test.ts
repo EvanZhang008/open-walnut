@@ -19,6 +19,7 @@ const IOS = path.resolve(import.meta.dirname, '../../ios-native/Walnut')
 /** Files whose text inputs write to an AI but stay text only, and why. */
 const TEXT_ONLY_TO_AI: Record<string, string> = {
   'Views/Chat/ChatView.swift': "a system alert's one text field (the first message of a chat not started yet); the chat that opens next takes pictures",
+  'Views/Sessions/Changes/DiffReviewViews.swift': "a line comment on a diff goes in the review message, text in the web diff's exact format; the session's composer takes pictures",
   'Views/Sessions/NewSessionSheet.swift': "a new session's optional first message rides the start route, which carries text only; the session's composer takes pictures",
   'Views/Sessions/SessionComposerSheets.swift': "a fork's optional first message rides the fork route, which carries text only; the fork's composer takes pictures",
   'Views/Sessions/SessionExtrasSheets.swift': "a side question is asked of the live CLI through its side-question channel, which carries text only",

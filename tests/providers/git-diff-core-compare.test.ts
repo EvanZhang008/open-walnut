@@ -13,6 +13,7 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { countLineChanges } from '../../src/providers/session-changes-core.js'
 import { computeGitDiff, listGitRefs, GitDiffError, isValidGitRef, isValidGitCommit, type ExecFn, type ReadTextFn } from '../../src/providers/git-diff-core.js'
 
 let root = ''
@@ -216,6 +217,45 @@ describe('git-diff core: branch base', () => {
     expect(again!.files.find((f) => f.relPath === 'a.txt')?.wsOnly).toBeUndefined()
     const ws = await computeGitDiff('uncommitted', repo, exec, readText, { namesOnly: true })
     expect(ws!.files.find((f) => f.relPath === 'a.txt')).toMatchObject({ status: 'modified', wsOnly: true })
+  })
+
+  it('names only: each file carries the line counts its content gives, a binary one none', async () => {
+    const { repo } = makeRepo()
+    fs.writeFileSync(inRoot(path.join(repo, 'logo.bin')), Buffer.from([0, 1, 2, 0, 255]))
+    git(repo, ['add', 'logo.bin'])
+    git(repo, ['commit', '-qm', 'binary'])
+    for (const [base, opts] of [['branch', {}], ['commit', { commit: git(repo, ['rev-parse', 'HEAD~1']) }]] as const) {
+      const full = await computeGitDiff(base, repo, exec, readText, opts)
+      const light = await computeGitDiff(base, repo, exec, readText, { ...opts, namesOnly: true })
+      const counted = Object.fromEntries(light!.files.map((f) => [f.relPath, f]))
+      for (const f of full!.files) {
+        // An untracked file is not in git's numstat; a binary one has no lines to count.
+        if (f.untracked || f.relPath === 'logo.bin') continue
+        expect(counted[f.relPath], `${base} ${f.relPath}`).toMatchObject(countLineChanges(f.before, f.after))
+      }
+    }
+    // An untracked file (git diff never reports it) is counted too.
+    write(repo, 'draft.ts', 'one\ntwo\n')
+    const branch = await computeGitDiff('branch', repo, exec, readText, { namesOnly: true })
+    expect(branch!.files.find((f) => f.relPath === 'draft.ts')).toMatchObject({ untracked: true, additions: 2, deletions: 0 })
+    const bin = branch!.files.find((f) => f.relPath === 'logo.bin')!
+    expect(bin.additions).toBeUndefined()
+    expect(bin.deletions).toBeUndefined()
+  })
+
+  it('names only: a CRLF file turned LF and edited counts its edit, as the diff of its content does', async () => {
+    const { repo } = makeRepo()
+    write(repo, 'crlf.txt', 'one\r\ntwo\r\n')
+    write(repo, 'eol.txt', 'a\r\nb\r\n')
+    git(repo, ['add', 'crlf.txt', 'eol.txt'])
+    git(repo, ['commit', '-qm', 'crlf'])
+    write(repo, 'crlf.txt', 'one\nNEW\n')
+    write(repo, 'eol.txt', 'a\nb\n')
+    const light = await computeGitDiff('uncommitted', repo, exec, readText, { namesOnly: true })
+    expect(countLineChanges('one\r\ntwo\r\n', 'one\nNEW\n')).toEqual({ additions: 1, deletions: 1 })
+    expect(light!.files.find((f) => f.relPath === 'crlf.txt')).toMatchObject({ additions: 1, deletions: 1 })
+    // Line endings alone are no change to count.
+    expect(light!.files.find((f) => f.relPath === 'eol.txt')).toMatchObject({ wsOnly: true, additions: 0, deletions: 0 })
   })
 
   it('with no default branch at all it says so', async () => {

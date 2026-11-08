@@ -54,6 +54,7 @@ import {
   headPathForModify,
   isExcludedPath,
   groupMeta,
+  toLightChangesResult,
   type FileAccum,
   type SessionFileChange,
   type SessionRepoGroup,
@@ -547,13 +548,7 @@ function snapshotPath(key: string): string {
 }
 
 function toLightResult(result: SessionChangesResult): SessionChangesResult {
-  return {
-    ...result,
-    groups: result.groups.map((g) => ({
-      ...g,
-      files: g.files.map((f) => ({ ...f, before: '', after: '' })),
-    })),
-  };
+  return toLightChangesResult(result);
 }
 
 async function writeDiskSnapshot(key: string, result: SessionChangesResult): Promise<void> {

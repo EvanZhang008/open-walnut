@@ -266,6 +266,7 @@ export async function computeSessionGitDiff(
       ...(f.sig !== undefined ? { sig: f.sig } : {}),
       ...(f.wsOnly ? { wsOnly: true } : {}),
       ...(f.untracked ? { untracked: true } : {}),
+      ...(f.additions !== undefined ? { additions: f.additions, deletions: f.deletions ?? 0 } : {}),
       ops: 1,
       partial: false,
     }));

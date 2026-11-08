@@ -189,6 +189,8 @@ path on the companion".
 | POST | `/api/v1/sessions/:id/permission` | Answer a CLI tool-permission prompt (cloud relays) |
 | POST | `/api/v1/sessions/:id/execute-continue` | Execute a completed plan with bypass (cloud relays) |
 | GET | `/api/v1/sessions/:id/changes` | Changed-files data for the session (cloud relays) |
+| GET | `/api/v1/sessions/:id/changes/file?path=` | One changed file's full before/after, the pair of a light list (cloud relays) |
+| GET | `/api/v1/sessions/:id/changes/refs` | Branches and recent commits of the session's repo, for a compare picker (cloud relays) |
 | GET | `/api/v1/sessions/:id/history` | Full rich-block history, tail-windowed (cloud relays) |
 | GET | `/api/v1/activity/detail?ref=&part=&offset=` | The FULL text behind one `tool`/`thinking` row (cloud relays) |
 | PATCH | `/api/v1/conversations/:id` | Rename/pin a Personal AI conversation |
@@ -3372,10 +3374,27 @@ an id outside `[A-Za-z0-9_-]`.
 - `GET /api/v1/sessions/:id/changes?base=&scope=&light=1&refresh=1` →
   `200` the same payload as the web Changed tab: `{ "groups": [ { files:
   [ { path, before, after, … } ] } ], … }`. `base` ∈ `session` (default) |
-  `uncommitted` | `previous` | `remote`; `scope` ∈ `session` (default) |
-  `all`; `light=1` strips `before`/`after` content (names/roots only — sized
+  `uncommitted` | `previous` | `remote` | `branch` (`ref=`, default: the
+  repo's default branch) | `commit` (`commit=<sha>`); `scope` ∈ `session`
+  (default) | `all`; `light=1` strips `before`/`after` content (names/roots only — sized
   for a phone list); `refresh=1` bypasses the cache. Unreachable host / git
-  failure → `502` with the underlying message.
+  failure → `502` with the underlying message. Each file (additive, 2026-11)
+  carries `additions` and `deletions`, its line counts, light or not; they are
+  absent when there was no content to count (a binary file, or a host that
+  predates them). A git base's light list counts with `git diff --numstat`.
+- `GET /api/v1/sessions/:id/changes/file?path=<abs>` → `200 { "sessionId",
+  "repoRoot", "file": { filePath, relPath, before, after, status, … } }`: one
+  file of the session's own edits with its full content, for a light list.
+  `&base=uncommitted|remote|previous|branch|commit` (with `ref=` / `commit=`
+  for branch and commit, and `repo=<the list group's repoRoot>`) reads that
+  file of the git comparison instead. Missing `path` →
+  `400 bad_request`; a file not in the changes → `404 not_found`; content not
+  readable now → `503`.
+- `GET /api/v1/sessions/:id/changes/refs` → `200 { "sessionId", "repoRoot",
+  "current", "head", "defaultRef", "refs": [ { name, kind, sha, time } ],
+  "commits": [ { sha, parent, parents, author, time, subject, onBranch } ] }`:
+  what `branch` and `commit` can compare against. `repoRoot: null` when the
+  session works in no git repo.
 - `GET /api/v1/sessions/:id/history?tail=N` → `200 { "messages": [rich
   blocks], "total", "forkedFromSessionId"?, "forkBoundaryIndex"?,
   "historyUnavailable"? }` — the FULL rich-block history (tool detail +

@@ -183,6 +183,7 @@ final class DemoServer: @unchecked Sendable {
         streams.reset()
         DemoPlaces.reset()
         DemoVoice.reset()
+        DemoChanges.reset()
         Self.resetWorkCard()
     }
 

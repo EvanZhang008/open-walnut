@@ -51,6 +51,9 @@ export interface GitDiffFile {
   wsOnly?: boolean;
   /** An added file git does not track yet (it is in the working tree only). */
   untracked?: boolean;
+  /** namesOnly lists: lines added and removed ('git diff --numstat'; absent for a binary file). */
+  additions?: number;
+  deletions?: number;
 }
 
 /** What a 'branch' or 'commit' comparison resolved to, for the UI to name it. */
@@ -154,6 +157,8 @@ export class GitDiffError extends Error {}
  */
 export function createGitDiffCore(exec: ExecFn, readText: ReadTextFn) {
   const SHA_RE = /^[0-9a-f]{7,64}$/i;
+  /** Untracked files a names-only list counts lines of (one git process each). */
+  const UNTRACKED_COUNT_MAX = 100;
   const MAX_REFS = 500;
   const MAX_COMMITS = 100;
   const HASH_BATCH = 100;
@@ -428,7 +433,44 @@ export function createGitDiffCore(exec: ExecFn, readText: ReadTextFn) {
       // whose every change is whitespace is left out of it.
       const wsArgs = ['git', 'diff', '-w', '--numstat', '-z', revs.from];
       if (revs.to) wsArgs.push(revs.to);
-      const ws = entries.some((e) => e.status === 'modified') ? await exec(wsArgs, repoRoot) : null;
+      // The line counts a names-only list shows: --numstat without -w, so they
+      // match a diff of the content, with renames found as the list above found
+      // them; a line's trailing CR is not a change (the list's counts and the
+      // phone's diff both read CRLF and LF lines alike).
+      const countArgs = ['git', 'diff', '--numstat', '--ignore-cr-at-eol', '-z', revs.from];
+      if (revs.to) countArgs.push(revs.to);
+      const [ws, counted] = await Promise.all([
+        entries.some((e) => e.status === 'modified') ? exec(wsArgs, repoRoot) : Promise.resolve(null),
+        exec(countArgs, repoRoot),
+      ]);
+      const counts = new Map<string, { additions: number; deletions: number }>();
+      // Every path the count run names, a binary one ('-') included.
+      const countedPaths = new Set<string>();
+      if (counted.code === 0) {
+        const parts = counted.stdout.split('\0');
+        for (let k = 0; k < parts.length; k++) {
+          const m = /^([0-9-]+)\t([0-9-]+)\t([\s\S]*)$/.exec(parts[k]!.replace(/^\n/, ''));
+          if (!m) continue;
+          let rel = m[3]!;
+          if (!rel) { rel = parts[k + 2] || ''; k += 2; }
+          countedPaths.add(rel);
+          // A binary file prints '-' for both.
+          if (m[1] !== '-' && m[2] !== '-') counts.set(rel, { additions: Number(m[1]), deletions: Number(m[2]) });
+        }
+      }
+      // git diff never reports an untracked file: count each against nothing
+      // ('--no-index', which also says '-' for a binary one). A process per
+      // file, so only the first UNTRACKED_COUNT_MAX of them, a few at a time.
+      const untracked = entries.filter((e) => e.untracked).slice(0, UNTRACKED_COUNT_MAX);
+      for (let k = 0; k < untracked.length; k += 8) {
+        await Promise.all(untracked.slice(k, k + 8).map(async (e) => {
+          const r = await exec(['git', 'diff', '--no-index', '--numstat', '--ignore-cr-at-eol', '-z', '--', '/dev/null', e.relPath], repoRoot);
+          // --no-index exits 1 when the two differ.
+          if (r.code !== 0 && r.code !== 1) return;
+          const m = /^([0-9-]+)\t([0-9-]+)\t/.exec(r.stdout.replace(/^\n/, ''));
+          if (m && m[1] !== '-' && m[2] !== '-') counts.set(e.relPath, { additions: Number(m[1]), deletions: Number(m[2]) });
+        }));
+      }
       let realChange: Set<string> | null = null;
       if (ws && ws.code === 0) {
         realChange = new Set();
@@ -446,6 +488,11 @@ export function createGitDiffCore(exec: ExecFn, readText: ReadTextFn) {
         if (e.oldRelPath !== undefined) f.oldRelPath = e.oldRelPath;
         if (e.untracked) f.untracked = true;
         if (realChange && e.status === 'modified' && !realChange.has(e.relPath)) f.wsOnly = true;
+        const n = counts.get(e.relPath);
+        if (n) { f.additions = n.additions; f.deletions = n.deletions; }
+        // Modified, yet no line left once CRs are set aside: only line endings
+        // changed, which the diff of its content counts as nothing too.
+        else if (counted.code === 0 && e.status === 'modified' && !countedPaths.has(e.relPath)) { f.additions = 0; f.deletions = 0; }
         return f;
       }));
     }

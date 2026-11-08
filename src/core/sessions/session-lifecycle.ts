@@ -1620,6 +1620,15 @@ export interface SessionChangesInput {
 
 const GIT_BASES: ReadonlySet<string> = new Set(['uncommitted', 'previous', 'remote', 'branch', 'commit']);
 
+/** The git comparison a per-file read names (`base` one of GIT_BASES), or none
+ *  for the session's own edits. One rule for the route and the cloud relay. */
+export function gitFileCompare(input: { base?: unknown; ref?: unknown; commit?: unknown; repo?: unknown }):
+  { base: string; ref?: unknown; commit?: unknown; repoRoot?: unknown } | undefined {
+  return typeof input.base === 'string' && GIT_BASES.has(input.base)
+    ? { base: input.base, ref: input.ref, commit: input.commit, repoRoot: input.repo }
+    : undefined;
+}
+
 /** The ref/commit a whole-repo base needs, checked before anything reaches git (400 on bad input). */
 async function compareInput(base: string, input: { ref?: unknown; commit?: unknown }): Promise<{ ref?: string; commit?: string }> {
   const { isValidGitRef, isValidGitCommit } = await import('../../providers/git-diff-core.js');
@@ -1683,17 +1692,27 @@ export async function getSessionChanges(
     throw new SessionControlError(msg, 502);
   }
 
-  if (input.light === true) {
-    const light = result as { groups?: Array<{ files: Array<Record<string, unknown>> }> };
-    return {
-      ...result,
-      groups: (light.groups ?? []).map((g) => ({
-        ...g,
-        files: g.files.map((f) => ({ ...f, before: '', after: '' })),
-      })),
-    };
-  }
-  return result;
+  // Every file carries its line counts ("+12 -3"), light or not: a phone's list
+  // shows them without the content. A light record from a host keeps its own.
+  // One budget for the whole list: a few hundred big files must not hold the event loop.
+  const { fileLineCounts, lineCountBudget } = await import('../../providers/session-changes-core.js');
+  const budget = lineCountBudget();
+  const listed = result as { groups?: Array<{ files: Array<Record<string, unknown>> }> };
+  const counted = (f: Record<string, unknown>) => fileLineCounts({
+    before: typeof f.before === 'string' ? f.before : '',
+    after: typeof f.after === 'string' ? f.after : '',
+    additions: typeof f.additions === 'number' ? f.additions : undefined,
+    deletions: typeof f.deletions === 'number' ? f.deletions : undefined,
+  }, f, budget);
+  return {
+    ...result,
+    groups: (listed.groups ?? []).map((g) => ({
+      ...g,
+      files: g.files.map((f) => (input.light === true
+        ? { ...f, ...counted(f), before: '', after: '' }
+        : { ...f, ...counted(f) })),
+    })),
+  };
 }
 
 /**
@@ -1706,7 +1725,7 @@ export async function getSessionChanges(
 export async function getSessionFileChange(
   sessionId: string,
   filePath: string,
-  /** A whole-repo git comparison ('branch' / 'commit'): that file's diff, from git. */
+  /** A git comparison (any of GIT_BASES): that file's diff, from git. */
   gitCompare?: { base?: unknown; ref?: unknown; commit?: unknown; repoRoot?: unknown },
 ): Promise<Record<string, unknown>> {
   const { getSessionByClaudeId } = await import('../session-tracker.js');
@@ -1714,12 +1733,12 @@ export async function getSessionFileChange(
   if (!record) throw new SessionControlError('Session not found', 404);
 
   const gitBase = gitCompare?.base;
-  if (gitBase === 'branch' || gitBase === 'commit') {
+  if (typeof gitBase === 'string' && GIT_BASES.has(gitBase)) {
     const compare = await compareInput(gitBase, gitCompare!);
     const { computeSessionGitFile } = await import('../session-git-diff.js');
     let found: Awaited<ReturnType<typeof computeSessionGitFile>>;
     try {
-      found = await computeSessionGitFile(sessionId, gitBase, record.cwd, record.host, record.outputFile, filePath, {
+      found = await computeSessionGitFile(sessionId, gitBase as import('../session-git-diff.js').GitDiffBase, record.cwd, record.host, record.outputFile, filePath, {
         ...compare, ...(typeof gitCompare!.repoRoot === 'string' && gitCompare!.repoRoot ? { repoRoot: gitCompare!.repoRoot } : {}),
       });
     } catch (err) {

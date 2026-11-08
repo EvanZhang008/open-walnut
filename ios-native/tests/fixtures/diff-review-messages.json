@@ -1,0 +1,73 @@
+{
+  "about": "Line-comment messages the agent receives. Both the web Changed tab (diffPrefill.ts) and the iOS Changed page (DiffReviewMessage) must produce exactly these; a test on each side reads this file.",
+  "cases": [
+    {
+      "name": "one comment on one line",
+      "comments": [
+        {
+          "loc": "src/pages/pricing/plans.ts:L10",
+          "code": "  { id: 'team', name: 'Team', monthly: 29, annualDiscount: 0.2, featured: true },",
+          "comment": "Should Team really be featured?"
+        }
+      ],
+      "expected": "Re: src/pages/pricing/plans.ts:L10 `{ id: 'team', name: 'Team', monthly: 29, annualDiscount: 0.2, featured: true },`\n\nShould Team really be featured?",
+      "expectedEach": [
+        "Re: src/pages/pricing/plans.ts:L10 `{ id: 'team', name: 'Team', monthly: 29, annualDiscount: 0.2, featured: true },`\n\nShould Team really be featured?"
+      ]
+    },
+    {
+      "name": "one comment on a range",
+      "comments": [
+        {
+          "loc": "src/a.ts:L3-L5",
+          "code": "const a = 1\nconst b = 2\n\tconst c = 3",
+          "comment": "Fold these\ninto one object."
+        }
+      ],
+      "expected": "Re: src/a.ts:L3-L5\n```\nconst a = 1\nconst b = 2\n\tconst c = 3\n```\n\n\nFold these\ninto one object.",
+      "expectedEach": [
+        "Re: src/a.ts:L3-L5\n```\nconst a = 1\nconst b = 2\n\tconst c = 3\n```\n\n\nFold these\ninto one object."
+      ]
+    },
+    {
+      "name": "a comment with no code",
+      "comments": [
+        {
+          "loc": "docs/notes.md",
+          "code": "   ",
+          "comment": "Empty line here."
+        }
+      ],
+      "expected": "Re: docs/notes.md\n\nEmpty line here.",
+      "expectedEach": [
+        "Re: docs/notes.md\n\nEmpty line here."
+      ]
+    },
+    {
+      "name": "three comments, mixed",
+      "comments": [
+        {
+          "loc": "src/x.ts:L1",
+          "code": "import x",
+          "comment": "Unused?"
+        },
+        {
+          "loc": "src/x.ts:L20-L22",
+          "code": "if (a) {\n  b()\n}",
+          "comment": "Early return reads better."
+        },
+        {
+          "loc": "README.md:L4",
+          "code": "",
+          "comment": "Typo: \u00e9t\u00e9 \u4f60\u597d"
+        }
+      ],
+      "expected": "Code review \u2014 3 comments:\n\n1. Re: src/x.ts:L1 `import x`\nUnused?\n\n2. Re: src/x.ts:L20-L22\n```\nif (a) {\n  b()\n}\n```\nEarly return reads better.\n\n3. Re: README.md:L4\nTypo: \u00e9t\u00e9 \u4f60\u597d",
+      "expectedEach": [
+        "Re: src/x.ts:L1 `import x`\n\nUnused?",
+        "Re: src/x.ts:L20-L22\n```\nif (a) {\n  b()\n}\n```\n\n\nEarly return reads better.",
+        "Re: README.md:L4\n\nTypo: \u00e9t\u00e9 \u4f60\u597d"
+      ]
+    }
+  ]
+}

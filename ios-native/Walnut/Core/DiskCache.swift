@@ -56,6 +56,27 @@ enum DiskCache {
         }
     }
 
+    /// Keeps the files whose keys start with `prefix` under `maxBytes` in all:
+    /// the least recently written go first. For a cache that gains a file per
+    /// thing opened (the Changed page's diffs), which nothing else would trim.
+    static func trim(prefix: String, maxBytes: Int) {
+        ioQueue.async(flags: .barrier) {
+            let safe = prefix.replacingOccurrences(of: "/", with: "_")
+            let keys: [URLResourceKey] = [.contentModificationDateKey, .fileSizeKey]
+            guard let urls = try? FileManager.default.contentsOfDirectory(
+                at: directory, includingPropertiesForKeys: keys) else { return }
+            let files = urls.filter { $0.lastPathComponent.hasPrefix(safe) }.map { url -> (URL, Date, Int) in
+                let values = try? url.resourceValues(forKeys: Set(keys))
+                return (url, values?.contentModificationDate ?? .distantPast, values?.fileSize ?? 0)
+            }.sorted { $0.1 > $1.1 }
+            var total = 0
+            for (url, _, size) in files {
+                total += size
+                if total > maxBytes { try? FileManager.default.removeItem(at: url) }
+            }
+        }
+    }
+
     /// Off-main read + decode. Use this everywhere a store hydrates.
     static func loadAsync<T: Decodable>(_ type: T.Type, key: String) async -> T? {
         await withCheckedContinuation { continuation in

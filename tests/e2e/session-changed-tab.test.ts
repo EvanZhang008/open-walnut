@@ -131,6 +131,31 @@ describe('Session Changed view — GET /changes (live server)', () => {
     expect(change.after).toBe('export const NEW_LINE = false;\n')
   })
 
+  // The phone's Changed page: a light list that still says "+1 -1" per file, and
+  // the per-file read on /api/v1 that brings the content.
+  it('v1: the light list carries line counts and changes/file brings the content', async () => {
+    await fs.writeFile(editedFile, 'export const NEW_LINE = true;\n')
+    const res = await fetch(apiUrl(`/api/v1/sessions/${SID}/changes?light=1&refresh=1`))
+    expect(res.status).toBe(200)
+    const body = await res.json() as { groups: Array<{ files: Array<ListedFile & { before: string; after: string; additions?: number; deletions?: number }> }> }
+    const listed = body.groups[0].files[0]
+    expect(listed.before).toBe('')
+    expect(listed.after).toBe('')
+    expect(listed.additions).toBe(1)
+    expect(listed.deletions).toBe(1)
+
+    const one = await fetch(apiUrl(`/api/v1/sessions/${SID}/changes/file?path=${encodeURIComponent(listed.filePath)}`))
+    expect(one.status).toBe(200)
+    const file = (await one.json() as { file: { before: string; after: string } }).file
+    expect(file.before).toBe('export const OLD_LINE = true;\n')
+    expect(file.after).toBe('export const NEW_LINE = true;\n')
+
+    const missing = await fetch(apiUrl(`/api/v1/sessions/${SID}/changes/file?path=${encodeURIComponent(path.join(repoDir, 'nope.ts'))}`))
+    expect(missing.status).toBe(404)
+    const noPath = await fetch(apiUrl(`/api/v1/sessions/${SID}/changes/file`))
+    expect(noPath.status).toBe(400)
+  })
+
   it('404 for an unknown session', async () => {
     const res = await fetch(apiUrl('/api/sessions/does-not-exist/changes'))
     expect(res.status).toBe(404)
@@ -183,6 +208,18 @@ describe('Session Changed view — GET /changes (live server)', () => {
     const deletedChange = await fileChange(bashSid, deleted!.filePath)
     expect(deletedChange.after).toBe('')
     expect(deletedChange.before).toBe('delete me\n') // recovered from git HEAD
+
+    // The phone's Uncommitted list is light too: names and counts, then one file from git.
+    const light = await fetch(apiUrl(`/api/v1/sessions/${bashSid}/changes?base=uncommitted&light=1&refresh=1`))
+    expect(light.status).toBe(200)
+    const lightFiles = (await light.json() as { groups: Array<{ repoRoot: string; files: Array<ListedFile & { before: string; after: string; deletions?: number }> }> })
+      .groups.flatMap(g => g.files.map(f => ({ ...f, repoRoot: g.repoRoot })))
+    const gone = lightFiles.find(f => f.relPath === 'trash.txt')!
+    expect(gone.before).toBe('')
+    expect(gone.deletions).toBe(1)
+    const one = await fetch(apiUrl(`/api/v1/sessions/${bashSid}/changes/file?path=${encodeURIComponent(gone.filePath)}&base=uncommitted&repo=${encodeURIComponent(gone.repoRoot)}`))
+    expect(one.status).toBe(200)
+    expect((await one.json() as { file: { before: string; after: string } }).file).toMatchObject({ before: 'delete me\n', after: '' })
 
     await fs.rm(repo, { recursive: true, force: true }).catch(() => {})
   })

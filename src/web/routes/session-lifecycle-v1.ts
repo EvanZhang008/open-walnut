@@ -551,6 +551,56 @@ sessionLifecycleV1Router.get('/sessions/:id/changes', async (req: Request, res: 
   }
 })
 
+// GET /api/v1/sessions/:id/changes/file?path=<abs>[&base=uncommitted|remote|previous|branch|commit&ref=&commit=&repo=]
+// One changed file with its full before/after: the pair of a light list. A git
+// base reads that file of the git comparison (`repo` = the list's group root
+// for it); no base reads the session's own edits.
+sessionLifecycleV1Router.get('/sessions/:id/changes/file', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const sessionId = validSid(req, res)
+    if (!sessionId) return
+    const filePath = typeof req.query.path === 'string' ? req.query.path : ''
+    if (!filePath) {
+      sendError(res, 400, 'bad_request', 'path is required')
+      return
+    }
+    const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined)
+    const input = {
+      path: filePath,
+      base: str(req.query.base),
+      ref: str(req.query.ref),
+      commit: str(req.query.commit),
+      repo: str(req.query.repo),
+    }
+    if (isCompanion()) {
+      await relayControlAction(res, 'changes.file', sessionId, input, 200)
+      return
+    }
+    const { getSessionFileChange, gitFileCompare } = await import('../../core/sessions/session-lifecycle.js')
+    const gitCompare = gitFileCompare(input)
+    await runLocal(res, next, 200, () => boundSessionRead(sessionId, () => getSessionFileChange(sessionId, filePath, gitCompare)))
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/v1/sessions/:id/changes/refs — the branches and newest 100 commits
+// of the session's main repo, for the Changed page's compare picker.
+sessionLifecycleV1Router.get('/sessions/:id/changes/refs', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const sessionId = validSid(req, res)
+    if (!sessionId) return
+    if (isCompanion()) {
+      await relayControlAction(res, 'changes.refs', sessionId, undefined, 200)
+      return
+    }
+    const { getSessionGitRefs } = await import('../../core/sessions/session-lifecycle.js')
+    await runLocal(res, next, 200, () => boundSessionRead(sessionId, () => getSessionGitRefs(sessionId)))
+  } catch (err) {
+    next(err)
+  }
+})
+
 // GET /api/v1/sessions/:id/history?tail=N — full rich-block history (tool
 // detail/results, subagent lanes, fork-ancestor prefix). Snapshot API: no
 // delta cursors — live rendering rides the SSE stream. The frozen

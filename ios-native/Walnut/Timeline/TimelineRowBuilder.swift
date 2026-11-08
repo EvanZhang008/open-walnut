@@ -379,7 +379,7 @@ final class TimelineRowBuilder {
                 let displayText = sent?.text ?? rawText
                 guard !displayText.isEmpty else { continue }
                 let failed = message.failed == true
-                let text = TimelineTextStyler.inlineText(displayText)
+                let text = TimelineTextStyler.bubbleText(displayText)
                 let size = measurer.measure(text, width: TimelineMetrics.bubbleTextWidth(width))
                 let height = size.height + TimelineMetrics.bubbleVPad * 2 + TimelineMetrics.textVPad * 2
                 rows.append(TimelineRow(

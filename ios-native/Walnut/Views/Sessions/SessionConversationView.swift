@@ -63,6 +63,9 @@ struct SessionConversationView: View {
     @State private var showPlan = false
     @State private var showSideQuestions = false
     @State private var showFiles = false
+    /// Which page the files sheet opens on: Browse Files, or Changed (the diff review).
+    /// One sheet for both: the modifier chain is at what the type checker solves.
+    @State private var filesPage: SessionFilesPage = .browse
     // The composer's `+` menu: the session note and fork.
     @State private var showNote = false
     @State private var showFork = false
@@ -377,7 +380,14 @@ struct SessionConversationView: View {
                 .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showFiles) {
-            SessionFilesSheet(session: session)
+            switch filesPage {
+            case .browse:
+                SessionFilesSheet(session: session)
+            case .changes:
+                SessionChangesSheet(session: session, sender: ReviewSender(
+                    send: { text in await store.sendKeepingCopy(text) },
+                    state: { id in store.heldSendState(id) }))
+            }
         }
         // A successful fork pushes the new session's conversation on top of
         // this one (the enclosing stack already knows WalnutSession pages).
@@ -649,6 +659,14 @@ struct SessionConversationView: View {
             }
             .accessibilityIdentifier("session.plan")
             Button {
+                filesPage = .changes
+                showFiles = true
+            } label: {
+                Label("Changed Files", systemImage: "plus.forwardslash.minus")
+            }
+            .accessibilityIdentifier("session.changes")
+            Button {
+                filesPage = .browse
                 showFiles = true
             } label: {
                 Label("Browse Files", systemImage: "folder")

@@ -158,6 +158,11 @@ final class SessionConversationStore {
     /// Bumps each time the server accepts a message of this page. The queue strip reads the
     /// queue again then: a message sent mid-turn is waiting in it.
     private(set) var acceptedSends = 0
+    /// The message ids the server accepted on this page, for a sender that keeps
+    /// its own copy until delivery (`heldSendState`).
+    @ObservationIgnored private var acceptedMessageIDs = Set<String>()
+    /// `heldSendRecords`, read once.
+    @ObservationIgnored private var heldSendCache: [SessionConversationStore.HeldSendRecord]?
     @ObservationIgnored private var stopResetTask: Task<Void, Never>?
     /// How long Stop shows "stopping" before it offers itself again.
     nonisolated(unsafe) static var stopWait: TimeInterval = 10
@@ -1612,6 +1617,10 @@ final class SessionConversationStore {
         if let idx = pendingUser.firstIndex(where: { $0.id == bubbleID }) {
             // An interrupt goes in at once (`hideWhileGoingOut`): no Queued on its bubble.
             if follow, let messageId = pendingUser[idx].clientMessageId { onAccepted?(messageId) }
+            if let id = pendingUser[idx].clientMessageId {
+                acceptedMessageIDs.insert(id)
+                noteHeldSend(id, .delivered)
+            }
             pendingUser[idx].pending = false
             pendingUser[idx].failed = false
             pendingUser[idx].retryNotice = nil
@@ -1907,6 +1916,7 @@ final class SessionConversationStore {
     }
 
     func discardFailed(_ message: ChatMessage) {
+        if let id = pendingUser.first(where: { $0.id == message.id })?.clientMessageId { noteHeldSend(id, .notSent) }
         // Deleting the bubble must also kill its pending automatic retry, or a
         // timer would re-deliver text the user just threw away.
         retryTasks[message.id]?.cancel()
@@ -2857,6 +2867,70 @@ extension SessionConversationStore {
         let before = Set(pendingUser.map(\.id))
         if await send(text, images: images, files: files, interrupt: interrupt) { return true }
         return pendingUser.contains { !before.contains($0.id) && $0.text == text }
+    }
+
+    /// The send of a sender that keeps its own copy of the words until they are
+    /// delivered (the diff review): the server has them, a bubble holds them for
+    /// its retry (its message id, to ask about later), or nothing holds them. A
+    /// failed bubble lives only in memory, so the sender must not drop its copy
+    /// on `.held`: the app ending would lose the words.
+    func sendKeepingCopy(_ text: String) async -> ReviewSendResult {
+        let before = Set(pendingUser.map(\.id))
+        if await send(text) { return .delivered }
+        if let bubble = pendingUser.first(where: { !before.contains($0.id) && $0.text == text }),
+           let id = bubble.clientMessageId {
+            noteHeldSend(id, .waiting)
+            return .held(messageID: id)
+        }
+        return .notSent
+    }
+
+    /// Where a held send stands now. Its end is kept on disk (`noteHeldSend`), so
+    /// another page or a relaunch reads it too: delivered, or its bubble deleted.
+    /// Else its bubble still waits, or the server has it (accepted here, or its row
+    /// is in the transcript); with neither, the bubble went with an app that ended
+    /// or the row is outside the transcript on hand: this phone cannot tell.
+    func heldSendState(_ messageID: String) -> HeldSendState {
+        switch heldSendRecords().first(where: { $0.id == messageID })?.state {
+        case .delivered?: return .delivered
+        case .notSent?: return .notSent
+        default: break
+        }
+        if pendingUser.contains(where: { $0.clientMessageId == messageID }) { return .waiting }
+        if acceptedMessageIDs.contains(messageID) { return .delivered }
+        if historyMessages.contains(where: { $0.walnutMessageId == messageID }) { return .delivered }
+        return .unknown
+    }
+
+    /// One held send's last known state, kept on disk per session.
+    struct HeldSendRecord: Codable, Equatable {
+        let id: String
+        var state: HeldSendState
+    }
+
+    private var heldSendsKey: String { "review-held-sends.\(sessionId)" }
+
+    private func heldSendRecords() -> [HeldSendRecord] {
+        if let cached = heldSendCache { return cached }
+        let loaded = DurableStore.load([HeldSendRecord].self, key: heldSendsKey) ?? []
+        heldSendCache = loaded
+        return loaded
+    }
+
+    /// Records a held send (`.waiting`), and later its end; ids never held are
+    /// not recorded. The newest 100 are kept.
+    private func noteHeldSend(_ messageID: String, _ state: HeldSendState) {
+        var records = heldSendRecords()
+        if let i = records.firstIndex(where: { $0.id == messageID }) {
+            guard records[i].state != state else { return }
+            records[i].state = state
+        } else {
+            guard state == .waiting else { return }
+            records.append(HeldSendRecord(id: messageID, state: state))
+            if records.count > 100 { records.removeFirst(records.count - 100) }
+        }
+        heldSendCache = records
+        DurableStore.save(records, key: heldSendsKey)
     }
 
     // MARK: - Queued messages

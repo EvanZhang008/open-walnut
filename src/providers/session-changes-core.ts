@@ -45,6 +45,11 @@ export interface SessionFileChange {
   ops: number;
   /** True when before/after could not be fully reconstructed. */
   partial: boolean;
+  /** Lines added and removed between before and after (a light list keeps
+   *  them, so a phone's list can show "+12 -3" without the content). Absent
+   *  when the record carried no content to count. */
+  additions?: number;
+  deletions?: number;
 }
 
 /** A group of changed files sharing a repo root. */
@@ -1191,13 +1196,148 @@ export async function computeHostLocalChanges(opts: HostLocalComputeOptions): Pr
   };
 }
 
-/** Strip before/after for the wire (the list ships light; diffs load per file). */
+/** Strip before/after for the wire (the list ships light; diffs load per file).
+ *  Each file keeps its line counts, counted here while the content is still in hand. */
 export function toLightChangesResult(result: SessionChangesResult): SessionChangesResult {
+  const budget = lineCountBudget();
   return {
     ...result,
     groups: result.groups.map((g) => ({
       ...g,
-      files: g.files.map((f) => ({ ...f, before: '', after: '' })),
+      files: g.files.map((f) => ({ ...f, ...fileLineCounts(f, f, budget), before: '', after: '' })),
     })),
   };
+}
+
+// ── Line counts ("+12 -3") ──
+
+/** Counted once per record object: a cached result is served many times. */
+const lineCountMemo = new WeakMap<object, { additions: number; deletions: number }>();
+
+/**
+ * The record's additions and deletions: the counts it already carries (a light
+ * record from a host), else counted from its before/after, else none (a light
+ * record with no counts has nothing to count, and 0/0 would read "no change").
+ */
+export function fileLineCounts(
+  f: { before: string; after: string; additions?: number; deletions?: number },
+  /** The object to remember the count on, when `f` is a view of it. */
+  memoKey: object = f,
+  /** Steps shared by every file of one list (`lineCountBudget()`). */
+  budget?: LineCountBudget,
+): { additions?: number; deletions?: number } {
+  if (typeof f.additions === 'number' && typeof f.deletions === 'number') return { additions: f.additions, deletions: f.deletions };
+  if (!f.before && !f.after) return {};
+  const memo = lineCountMemo.get(memoKey);
+  if (memo) return memo;
+  if (budget) {
+    const size = f.before.length + f.after.length;
+    if (size > budget.chars) return {};
+    budget.chars -= size;
+  }
+  const counts = countLineChanges(f.before, f.after, budget);
+  lineCountMemo.set(memoKey, counts);
+  return counts;
+}
+
+/** Lines of a text the way a diff counts them: a final newline ends the last
+ *  line, it does not start one, and a line's trailing CR (a CRLF file) is not
+ *  part of it, as the phone's diff reads them (DiffEngine.lines). */
+function splitDiffLines(text: string): string[] {
+  if (!text) return [];
+  const lines = text.split('\n');
+  if (lines[lines.length - 1] === '') lines.pop();
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    if (line.endsWith('\r')) lines[i] = line.slice(0, -1);
+  }
+  return lines;
+}
+
+/** What one list may still spend on counting, across all its files: walk
+ *  steps, and characters of text to split and map at all. */
+export interface LineCountBudget { steps: number; chars: number }
+
+/** One list's budget, held to tens of milliseconds of synchronous work on
+ *  the event loop: a third of one large rewrite's walk, in all. */
+export const LIST_COUNT_MAX_STEPS = 1_000_000;
+/** Past this much text in one list (about 2 MB), the rest of its files go
+ *  uncounted: no numbers rather than more synchronous work. */
+export const LIST_COUNT_MAX_CHARS = 2_000_000;
+
+export function lineCountBudget(): LineCountBudget {
+  return { steps: LIST_COUNT_MAX_STEPS, chars: LIST_COUNT_MAX_CHARS };
+}
+
+/** Past this many changed lines in the middle the exact count is not worth its
+ *  time. The phone's diff stops aligning at the same number
+ *  (DiffEngine.maxAlignedEdits), so its list and its diff count alike. */
+const EXACT_COUNT_MAX_EDITS = 1500;
+/** ...nor past this many steps of the walk (a few milliseconds). */
+const EXACT_COUNT_MAX_STEPS = 3_000_000;
+
+/**
+ * How many lines a line diff of before -> after adds and removes. Exact (an
+ * LCS by Myers' O(ND) walk, after trimming the common head and tail) for any
+ * ordinary change; a whole-file rewrite past EXACT_COUNT_MAX_EDITS edits
+ * (or past EXACT_COUNT_MAX_STEPS steps) is counted by line multiset instead,
+ * which can only undercount moved lines. With a `budget`, the walk also stops
+ * when the list's shared steps run out (the walk's steps come out of it).
+ * Dependency-free: this module is bundled into the host daemon.
+ */
+export function countLineChanges(
+  before: string, after: string, budget?: LineCountBudget,
+): { additions: number; deletions: number } {
+  if (before === after) return { additions: 0, deletions: 0 };
+  const a = splitDiffLines(before);
+  const b = splitDiffLines(after);
+  let head = 0;
+  while (head < a.length && head < b.length && a[head] === b[head]) head++;
+  let tail = 0;
+  while (tail < a.length - head && tail < b.length - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
+  const n = a.length - head - tail;
+  const m = b.length - head - tail;
+  if (n === 0 || m === 0) return { additions: m, deletions: n };
+  // Lines as small ints, so the walk compares numbers.
+  const ids = new Map<string, number>();
+  const idOf = (line: string): number => {
+    let id = ids.get(line);
+    if (id === undefined) { id = ids.size; ids.set(line, id); }
+    return id;
+  };
+  const x = new Float64Array(n);
+  const y = new Float64Array(m);
+  for (let i = 0; i < n; i++) x[i] = idOf(a[head + i]!);
+  for (let j = 0; j < m; j++) y[j] = idOf(b[head + j]!);
+  const maxD = Math.min(n + m, EXACT_COUNT_MAX_EDITS);
+  const offset = maxD + 1;
+  const v = new Float64Array(2 * maxD + 3);
+  // A bound on the walk's steps, so no one file (nor one list) holds the event loop long.
+  const allowed = Math.min(EXACT_COUNT_MAX_STEPS, budget ? budget.steps : EXACT_COUNT_MAX_STEPS);
+  let steps = allowed;
+  const spend = () => { if (budget) budget.steps = Math.max(0, budget.steps - (allowed - Math.max(steps, 0))); };
+  walk: for (let d = 0; d <= maxD; d++) {
+    for (let k = -d; k <= d; k += 2) {
+      let i = (k === -d || (k !== d && v[offset + k - 1]! < v[offset + k + 1]!)) ? v[offset + k + 1]! : v[offset + k - 1]! + 1;
+      let j = i - k;
+      while (i < n && j < m && x[i] === y[j]) { i++; j++; steps--; }
+      if (--steps < 0) break walk;
+      v[offset + k] = i;
+      if (i >= n && j >= m) {
+        spend();
+        // d edits = deletions + additions, and additions - deletions = m - n.
+        const deletions = (d + n - m) / 2;
+        return { additions: d - deletions, deletions };
+      }
+    }
+  }
+  spend();
+  const counts = new Map<number, number>();
+  for (let i = 0; i < n; i++) counts.set(x[i]!, (counts.get(x[i]!) ?? 0) + 1);
+  let common = 0;
+  for (let j = 0; j < m; j++) {
+    const c = counts.get(y[j]!) ?? 0;
+    if (c > 0) { common++; counts.set(y[j]!, c - 1); }
+  }
+  return { additions: m - common, deletions: n - common };
 }
