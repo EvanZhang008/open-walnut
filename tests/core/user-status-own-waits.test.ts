@@ -18,10 +18,12 @@ import type { Task } from '../../src/core/types.js'
 const NOW = Date.parse('2026-11-07T01:00:00Z')
 
 /** Every wait source of UserStatusInput, and how a handed-back worker reads with only it set. */
-const WAIT_SOURCES: Record<string, { input: Partial<UserStatusInput>; reads: 'task' | 'watch' | 'time' | 'not a wait of a hand-back' }> = {
+const WAIT_SOURCES: Record<string, { input: Partial<UserStatusInput>; reads: 'task' | 'watch' | 'machine' | 'time' | 'not a wait of a hand-back' }> = {
   waitingOnTasks: { input: { waitingOnTasks: ['Review: the diff'] }, reads: 'task' },
   workersAtWork: { input: { workersAtWork: ['Review: the diff'] }, reads: 'task' },
   triggers: { input: { triggers: ['CI on main'] }, reads: 'watch' },
+  // Its start waits for room on a host: read before any phase, a hand-back included.
+  startQueue: { input: { startQueue: { host: 'clouddev', reason: 'no free start slot' } }, reads: 'machine' },
   // A routine's next run wakes a task in progress; a handed-back one is not parked on it (wakeSource(..., false)).
   schedules: { input: { schedules: [{ name: 'Nightly digest', nextAt: '2026-11-07T06:00:00Z' }] }, reads: 'not a wait of a hand-back' },
   // A count of every open subtask, handed back ones too: the hand-back reads workersAtWork.
