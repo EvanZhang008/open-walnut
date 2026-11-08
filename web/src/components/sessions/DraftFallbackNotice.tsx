@@ -87,8 +87,9 @@ export function draftFallbackPill(now: EngineFallbackNow | null): string | null 
 }
 
 /** The server's answer for the draft's host while it applies, read again every minute, and at once
- *  when the config changes (Settings saved another fallback) or the page comes back into view. */
-export function useDraftFallback(host: string | null | undefined, applies: boolean): EngineFallbackNow | null {
+ *  when the config changes (Settings saved another fallback) or the page comes back into view. `project`:
+ *  the draft's project when its default engine is the one this launch starts on. */
+export function useDraftFallback(host: string | null | undefined, applies: boolean, project?: string): EngineFallbackNow | null {
   const [now, setNow] = useState<EngineFallbackNow | null>(null);
   const [again, setAgain] = useState(0);
   useEvent('config:changed', () => setAgain((n) => n + 1));
@@ -101,11 +102,11 @@ export function useDraftFallback(host: string | null | undefined, applies: boole
   useEffect(() => {
     if (!applies) { setNow(null); return; }
     let live = true;
-    const read = () => fetchEngineFallbackNow(host).then((n) => { if (live) setNow(n); }, () => {});
+    const read = () => fetchEngineFallbackNow(host, project ? { project } : {}).then((n) => { if (live) setNow(n); }, () => {});
     void read();
     const id = window.setInterval(() => { void read(); }, REFRESH_MS);
     return () => { live = false; window.clearInterval(id); };
-  }, [host, applies, again]);
+  }, [host, applies, again, project]);
   return applies ? now : null;
 }
 

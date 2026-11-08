@@ -99,6 +99,8 @@ export interface ComposerModelPillProps {
   onPickerCancel?: () => void;
   /** What closing the picker does now (an engine switch picked), shown inside the picker. */
   pickerNote?: string;
+  /** Where the session's engine, model and mode came from (LaunchSourceNote), inside the picker. */
+  sourceNote?: ReactNode;
 }
 
 /**
@@ -139,7 +141,7 @@ export function useOpenRequest(
 
 export function ComposerModelPill({
   sessionId, session, engineUi, onOptimistic, fallbackAssistant, pending, title, openNonce, openServedRef,
-  controls, onControl, onProviderSwitch, providerLockReason, onPickerClose, onPickerCancel, pickerNote,
+  controls, onControl, onProviderSwitch, providerLockReason, onPickerClose, onPickerCancel, pickerNote, sourceNote,
 }: ComposerModelPillProps) {
   const { notify } = useNotifications();
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -476,6 +478,7 @@ export function ComposerModelPill({
           onClose={() => { setPickerOpen(false); onPickerClose?.(); }}
           onAnchorLost={() => { setPickerOpen(false); onPickerCancel?.(); }}
           switchNote={pickerNote}
+          sourceNote={sourceNote}
           // A task session's rail is unlocked (onProviderSwitch): another engine
           // takes over when the picker closes, in a new session of the same task.
           // Without it (a side thread) the others stay locked.

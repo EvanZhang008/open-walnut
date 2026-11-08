@@ -9,6 +9,7 @@
  * encodeURIComponent'd and the rename target rides in the request BODY.
  */
 
+import type { SessionEngine, SessionMode } from '@open-walnut/core';
 import { apiGet, apiPost, apiPatch, apiPut, apiDelete } from './client';
 
 export interface ProjectCounts {
@@ -21,6 +22,11 @@ export interface ProjectCounts {
 export interface ProjectMetadata {
   default_cwd?: string;
   default_host?: string;
+  /** Launch defaults: a new task of the project starts on these when its launch names none
+   *  (server: src/core/sessions/project-launch-defaults.ts). A model belongs to the engine. */
+  default_engine?: SessionEngine;
+  default_model?: string;
+  default_mode?: SessionMode;
   /** Fast-model project summary (project-summary.ts), regenerated at task-count thresholds. */
   summary?: string;
   summary_task_count?: number;

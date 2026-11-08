@@ -66,6 +66,9 @@ struct NewSessionSheet: View {
         !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || mode != initialMode || selectedHost != offeredHost || path != offeredPath
     }
+    /// The user picked the mode here: until then the picker shows the task's project's
+    /// default mode (its launch defaults) and the create call leaves it to the server.
+    @State private var modeTouched = false
     @State private var creating = false
     @State private var createError: String?
     /// Start waits for words still being spoken or transcribed into the first
@@ -171,7 +174,10 @@ struct NewSessionSheet: View {
 
     private var modeSection: some View {
         Section {
-            Picker("Permissions", selection: $mode) {
+            Picker("Permissions", selection: Binding(
+                get: { shownMode },
+                set: { mode = $0; modeTouched = true }
+            )) {
                 ForEach(PermissionMode.allCases) { m in
                     Text(m.label).tag(m)
                 }
@@ -181,9 +187,21 @@ struct NewSessionSheet: View {
         } header: {
             Text("Permission Mode")
         } footer: {
-            Text(mode.blurb)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(shownMode.blurb)
+                // Where the values come from when the task's project set them, and the
+                // engine a phone launch cannot run (the model is left to the server).
+                if let line = launchDefaults?.line(modeTouched: modeTouched, modelTouched: false) {
+                    Text(line).accessibilityIdentifier("newSession.projectDefaults")
+                }
+            }
         }
     }
+
+    /// The task's project's launch defaults (engine, model, mode); nil when it sets none.
+    private var launchDefaults: DraftLaunchDefaults? { tasks.launchDefaults(task?.project)?.onHost(selectedHost) }
+
+    private var shownMode: PermissionMode { modeTouched ? mode : launchDefaults?.mode ?? mode }
 
     private var pathSection: some View {
         Section {
@@ -531,16 +549,32 @@ struct NewSessionSheet: View {
         defer { creating = false }
         let cwd = path.trimmingCharacters(in: .whitespaces)
         let firstMessage = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        // The task's sessions before the launch: one answered without an id is the new one after.
+        let known = Set(tasks.sessions.filter { $0.taskId != nil && $0.taskId == task?.id }.map(\.id))
         do {
-            let created = try await api.createSession(
+            let launched = try await api.launchSession(
                 cwd: cwd,
                 host: selectedHost,
                 message: firstMessage,
                 taskId: task?.id,
                 // bypass = the server default; send nil so old servers
                 // (pre-mode contract) behave identically.
-                mode: mode == .bypass ? nil : mode.rawValue
+                mode: DraftLaunchDefaults.wireMode(picked: shownMode, touched: modeTouched, defaults: launchDefaults)
             )
+            // The project's engine issues its own session ids (Codex): wait for the task's session.
+            guard let sessionId = launched.sessionId else {
+                if let session = await DraftLaunchDefaults.awaitSession(taskId: launched.taskId, excluding: known, in: tasks) {
+                    SessionLaunchContext.stash(sessionId: session.id, message: firstMessage)
+                    AppLog.info("session", "created session (provider-issued id)", ["sessionId": session.id, "taskId": launched.taskId])
+                    onCreated(session)
+                    dismiss()
+                } else {
+                    tasks.transientNotice = "Started. The session shows in its task once it is up."
+                    dismiss()
+                }
+                return
+            }
+            let created = SessionCreated(sessionId: sessionId, taskId: launched.taskId, title: launched.title)
             // Hand the first message to the conversation store so the pushed
             // page shows it (+ a Starting-session row) instantly — the message
             // rides SESSION_START server-side and won't reach the transcript
@@ -550,7 +584,7 @@ struct NewSessionSheet: View {
             // race the consume on the same MainActor turn.
             SessionLaunchContext.stash(sessionId: created.sessionId, message: firstMessage)
             AppLog.info("session", "created session", [
-                "sessionId": created.sessionId, "host": selectedHost, "mode": mode.rawValue,
+                "sessionId": created.sessionId, "host": selectedHost, "mode": shownMode.rawValue,
             ])
             // Synthesize the row locally — the projection sweep may lag a
             // few seconds; the conversation view only needs id/host/status.
@@ -567,7 +601,7 @@ struct NewSessionSheet: View {
                 host: selectedHost,
                 processStatus: "idle",
                 model: nil,
-                mode: mode == .bypass ? nil : mode.rawValue,
+                mode: shownMode == .bypass ? nil : shownMode.rawValue,
                 startedAt: now,
                 lastActiveAt: now,
                 messageCount: 0,

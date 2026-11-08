@@ -22,8 +22,8 @@ import { getFrequentDirs, scoreFrequentDir } from '../frequent-dirs.js';
 import { quickStartSession, QuickStartError } from './quick-start.js';
 import { mobileWorkspacePlace } from '../workspaces/launch.js';
 import { resolveModelSwitchValue, VALID_SESSION_MODEL_IDS, VALID_SESSION_MODE_IDS } from '../types.js';
-import type { SessionEngine } from '../types.js';
-import { engineCaps, isAcpEngine, normalizeEngine } from '../agents/engine-registry.js';
+import type { SessionEngine, SessionMode } from '../types.js';
+import { DEFAULT_ENGINE, engineCaps, isAcpEngine, normalizeEngine, resolveEngine } from '../agents/engine-registry.js';
 import {
   ASK_HOST_REFUSAL,
   ASK_LAUNCH_CWD,
@@ -34,6 +34,7 @@ import {
   resolveLaunchAskAgent,
 } from './ask-launch-plan.js';
 import { voiceReplyBlock } from './voice-reply.js';
+import { pickLaunchDefaults, type LaunchSourceRecord } from './project-launch-defaults.js';
 import { log } from '../../logging/index.js';
 
 /** Launch-time permission modes — the full registry set (core/types.ts). */
@@ -78,6 +79,10 @@ export interface MobileLaunchInput {
    *  task there (once Walnut checked it is not private); absent or 'local' keeps it local, the
    *  web draft's Sync chip (private-tasks, 2026-11-01). */
   sync?: 'local' | 'project';
+  /** The client opens a launch answered without a session id (an engine that issues its own ids)
+   *  through its task: a project's default engine of that kind may then run. An older client
+   *  needs the id, so such an engine yields to Claude Code there, as the global default does. */
+  sessionIdOptional?: true;
 }
 
 /** HTTP status → frozen v1 error code (also the relay errorKind vocabulary). */
@@ -97,7 +102,7 @@ export function launchErrorCode(status: number): string {
 function validateLaunchBody(body: unknown): MobileLaunchInput {
   const {
     cwd, host: rawHost, message, taskId, taskTitle, project, model: rawModel, mode, overrideReadiness,
-    walnutAgent, agentId, voice, sync,
+    walnutAgent, agentId, voice, sync, sessionIdOptional, engine,
   } = (body ?? {}) as {
     cwd?: unknown;
     host?: unknown;
@@ -112,6 +117,8 @@ function validateLaunchBody(body: unknown): MobileLaunchInput {
     agentId?: unknown;
     voice?: unknown;
     sync?: unknown;
+    sessionIdOptional?: unknown;
+    engine?: unknown;
   };
 
   // An ask: the same rule as the web quick-start (agentId only with walnutAgent;
@@ -204,6 +211,11 @@ function validateLaunchBody(body: unknown): MobileLaunchInput {
     ...(isAsk && typeof rawModel === 'string' ? { rawModel } : {}),
     ...(voice === true ? { voice: true as const } : {}),
     ...(sync === 'project' ? { sync: 'project' as const } : {}),
+    ...(sessionIdOptional === true ? { sessionIdOptional: true as const } : {}),
+    // Only the native engine, the one a phone launch runs: naming it makes the draft's model (or its
+    // "Default") the task's own pick over its project's default engine and model. Any other value
+    // is ignored, as the frozen contract always did.
+    ...(engine === DEFAULT_ENGINE ? { engine: DEFAULT_ENGINE } : {}),
   };
 }
 
@@ -319,8 +331,11 @@ export async function performMobileLaunch(
     }
   }
 
-  const preassignedSessionId = engineCaps(input.engine).idProvisioning === 'provider-issued' ? undefined : randomUUID();
   const ask = input.walnutAgent ? await planMobileAsk(input) : undefined;
+  // The task's project's launch defaults (project-launch-defaults.ts), for a launch that is no ask.
+  const pick = ask ? undefined : await mobileLaunchDefaults(input);
+  const engine = pick ? pick.engine : input.engine;
+  const preassignedSessionId = engineCaps(engine).idProvisioning === 'provider-issued' ? undefined : randomUUID();
   // A task with a ready isolated workspace launches in it (core/workspaces/launch.ts).
   const wsPlace = input.taskId && !ask ? await mobileWorkspacePlace(input.taskId, input.cwd, input.host) : null;
   const task = await quickStartSession({
@@ -328,8 +343,8 @@ export async function performMobileLaunch(
     ...(input.voice ? { messageSuffix: voiceReplyBlock() } : {}),
     cwd: ask ? ASK_LAUNCH_CWD : wsPlace?.cwd ?? input.cwd,
     host: wsPlace ? wsPlace.host : input.host,
-    model: ask ? ask.model : input.model,
-    mode: input.mode,
+    model: ask ? ask.model : pick?.model ?? input.model,
+    mode: pick?.mode ?? input.mode,
     existingTaskId: input.taskId,
     taskTitle: input.taskTitle,
     project: ask ? ask.project : input.project,
@@ -350,8 +365,13 @@ export async function performMobileLaunch(
     }),
     source,
     requestTs: Date.now(),
-    engine: normalizeEngine(input.engine),
+    engine: normalizeEngine(engine),
     preassignedSessionId,
+    ...(pick ? {
+      launchSource: { ...pick.source, started: { engine: resolveEngine(engine), ...(pick.model ?? input.model ? { model: pick.model ?? input.model } : {}), ...(pick.mode ?? input.mode ? { mode: (pick.mode ?? input.mode) as SessionMode } : {}) } },
+      // The project's engine, or Claude Code the draft named over it: not the global one again.
+      ...(pick.source.engine === 'project' || input.engine ? { engineDecided: true } : {}),
+    } : {}),
     ...(input.overrideReadiness ? { overrideReadiness: true } : {}),
     hostGate: { deadlineMs: MOBILE_HOST_GATE_DEADLINE_MS },
   });
@@ -368,6 +388,34 @@ export async function performMobileLaunch(
     taskId: task.id,
     title: task.title,
   };
+}
+
+/**
+ * A phone launch's engine, model and mode with its project's defaults: the project is the
+ * task's own for a launch from a task, else the one the draft picked. An engine that issues its
+ * own session ids runs only for a client that takes a reply without one (`sessionIdOptional`).
+ */
+async function mobileLaunchDefaults(input: MobileLaunchInput): Promise<{
+  engine: SessionEngine | undefined; model?: string; mode?: string; source: LaunchSourceRecord;
+}> {
+  const { getTask } = await import('../task-manager.js');
+  const project = input.taskId ? (await getTask(input.taskId).catch(() => null))?.project : input.project;
+  const pick = await pickLaunchDefaults({
+    config: await getConfig(), project, host: input.host,
+    named: { engine: input.engine, model: input.model, mode: input.mode }, decidesFallback: false,
+  });
+  const mode = input.mode ?? pick.mode;
+  if (pick.source.engine === 'project' && engineCaps(pick.engine).idProvisioning === 'provider-issued' && !input.sessionIdOptional) {
+    log.web.info('phone launch: the project\'s default engine issues its own session ids, which this client cannot open; it runs on Claude Code', {
+      project, engine: pick.engine,
+    });
+    return { engine: undefined, ...(mode ? { mode } : {}), source: { ...pick.source, engine: 'global', model: 'global' } };
+  }
+  // Not the project's engine: the launch goes on as it always did (quickStartSession inherits the
+  // global default, which yields to the id the phone needs).
+  if (pick.source.engine !== 'project') return { engine: input.engine, ...(mode ? { mode } : {}), source: pick.source };
+  const model = pick.model && !isAcpEngine(pick.engine) ? resolveModelSwitchValue(pick.model) ?? undefined : pick.model;
+  return { engine: pick.engine, ...(model ? { model } : {}), ...(mode ? { mode } : {}), source: pick.source };
 }
 
 /**

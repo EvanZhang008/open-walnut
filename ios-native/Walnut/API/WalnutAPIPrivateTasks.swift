@@ -14,9 +14,54 @@ struct WalnutProjectSource: Codable, Equatable {
     let source: String
     /// The service's name (additive, 2026-11-01); nil from an older server, then the id is shown.
     var sourceName: String? = nil
+    /// The project's launch defaults (additive, 2026-11-08): what a new task of it starts on when
+    /// the launch names none (server `src/core/sessions/project-launch-defaults.ts`). Only these
+    /// keys of the row's settings are read; nil from an older server.
+    var metadata: LaunchDefaults? = nil
+
+    struct LaunchDefaults: Codable, Equatable {
+        var defaultEngine: String? = nil
+        var defaultModel: String? = nil
+        var defaultMode: String? = nil
+
+        init(defaultEngine: String? = nil, defaultModel: String? = nil, defaultMode: String? = nil) {
+            self.defaultEngine = defaultEngine
+            self.defaultModel = defaultModel
+            self.defaultMode = defaultMode
+        }
+
+        /// Tolerant: a value of another shape reads as unset, never fails the project list.
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            defaultEngine = try? c.decodeIfPresent(String.self, forKey: .defaultEngine)
+            defaultModel = try? c.decodeIfPresent(String.self, forKey: .defaultModel)
+            defaultMode = try? c.decodeIfPresent(String.self, forKey: .defaultMode)
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case defaultEngine = "default_engine"
+            case defaultModel = "default_model"
+            case defaultMode = "default_mode"
+        }
+    }
+
+    init(name: String, source: String, sourceName: String? = nil, metadata: LaunchDefaults? = nil) {
+        self.name = name
+        self.source = source
+        self.sourceName = sourceName
+        self.metadata = metadata
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        source = try c.decode(String.self, forKey: .source)
+        sourceName = try c.decodeIfPresent(String.self, forKey: .sourceName)
+        metadata = try? c.decodeIfPresent(LaunchDefaults.self, forKey: .metadata)
+    }
 
     private enum CodingKeys: String, CodingKey {
-        case name, source
+        case name, source, metadata
         case sourceName = "source_name"
     }
 }

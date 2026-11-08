@@ -38,6 +38,13 @@ extension TasksStore {
         }
     }
 
+    /// The launch defaults of `project` (its engine, model and mode for a new task), or nil when
+    /// it sets none, is Inbox or unknown.
+    func launchDefaults(_ project: String?) -> DraftLaunchDefaults? {
+        guard let project, !project.isEmpty else { return nil }
+        return DraftLaunchDefaults(project: project, metadata: projectSources[project.lowercased()]?.metadata)
+    }
+
     /// The outside service a new task in `project` would go to, or nil.
     func projectService(_ project: String?) -> String? {
         ProjectSync.service(of: project, in: projectSources)

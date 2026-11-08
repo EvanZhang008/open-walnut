@@ -129,6 +129,8 @@ export interface SessionPinnedMessage {
 }
 
 export interface SessionRecord {
+  /** A mode was named at the start or picked since (session-lifecycle.ts); absent = the engine's own default. */
+  modeChosen?: boolean;
   autoPermissionDenial?: { tools: string[]; at: string } | null;
   claudeSessionId: string;
   taskId: string;
@@ -182,6 +184,9 @@ export interface SessionRecord {
   rewoundAtMessageUuid?: string;
   /** Claude model used by this session (e.g. "claude-opus-4-6"). */
   model?: string;
+  /** The `--model` value the CLI runs on (e.g. "opus[1m]"); absent = its own default. The
+   *  model picker's "where it comes from" compares it with the task's start (launch-source.ts). */
+  cliModel?: string;
   /** REQUESTED reasoning-effort level (low/medium/high/xhigh/max). User intent — the
    *  CLI may override it. Undefined = API default ('high'). */
   effort?: import('@open-walnut/core').SessionEffort;

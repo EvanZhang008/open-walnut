@@ -159,6 +159,7 @@ const NO_PAINTED_WORDS: Record<string, string> = {
   // A tree line's "Show separately" word, shown on the line's hover (WorkerFoldTree.tsx).
   'web/src/styles/worker-fold.css :: .worker-fold-action': CONTROL,
   'web/src/styles/human-inbox-items.css :: .hii-inert-slot': SLOT,
+  'web/src/styles/launch-source.css :: .launch-source-tag.is-placeholder': SLOT,
   "web/src/styles/composer-controls.css :: .composer-control[data-add-menu='true'] > .mode-toggle-pill, .composer-control[data-add-menu='true'] > .session-notes-pill, .composer-control[data-add-menu='true'] > .side-question-root > .side-question-pill": CONTROL,
   'web/src/styles/board-kanban.css :: .board-kanban .kanban-card-actions': CONTROL,
   'web/src/styles/board-kanban.css :: .board-kanban .kanban-card:hover .kanban-card-foot-right, .board-kanban .kanban-card:focus-within .kanban-card-foot-right': CONTROL,

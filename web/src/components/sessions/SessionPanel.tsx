@@ -98,6 +98,11 @@ import { SessionBrowserChip } from './SessionBrowserChip';
 import { useBrowserView } from './useBrowserView';
 import { UsageLimitBanner, UsageLimitContinuedNote, useContinuingAfterLimit } from './UsageLimitBanner';
 import { EngineFallbackBanner, showsEngineFallback } from './EngineFallbackBanner';
+import { useFallbackModels } from '@/components/settings/sections/FallbackEngineRow';
+import { LaunchSourceNote } from './LaunchSourceNote';
+import { engineName } from '@/components/settings/sections/DefaultEngineRow';
+import { launchSourceRows, sessionLaunchFrom } from '@/utils/launch-source';
+import { formatModelName } from '@/utils/model-name';
 import { isFolderGoneReason } from '@/utils/folder-gone';
 import { terminalPrewarm } from '@/api/terminal';
 import { log } from '@/utils/log';
@@ -150,7 +155,7 @@ import { useEnabledModes } from '@/hooks/useEnabledModes';
 import { getErrorSuggestion } from '@/utils/error-suggestions';
 import { SessionHostDownBanner, SessionHostErrorText, useSessionHostHasProblem } from './SessionHostErrorBar';
 import { ErrorSuggestionLink } from '@/components/common/ErrorSuggestionLink';
-import { useResolvedSessionRecord, useSessionStatus } from '@/hooks/useSessionStatus';
+import { useResolvedSessionRecord, useSessionSettings, useSessionStatus } from '@/hooks/useSessionStatus';
 import { ComposerThreadPill } from './ComposerThreadPill';
 import { useHostStatus } from '@/hooks/useHostStatus';
 import { applySessionSettings, clearSessionSettings } from '@/stores/session-status-store';
@@ -162,7 +167,7 @@ import { EngineSwitchLine, useEngineSwitchPick } from './EngineSwitch';
 import type { SessionEffort } from '@open-walnut/core';
 import { minimizeHandler } from './panel-minimize';
 import { taskNeedsAction } from '@/utils/session-status';
-import { nextSessionControlValue, SessionControlPills } from './SessionControlPills';
+import { nextSessionControlValue, SessionControlPills, sessionModeLabel } from './SessionControlPills';
 import { useNotifications } from '@/contexts/notifications';
 import { useConfirm } from '@/hooks/useConfirm';
 import { setActiveSession } from '@/stores/active-session';
@@ -539,10 +544,17 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   // pane, model backfill) reads this capability view — never the engine id.
   const engineCatalog = useEngineCatalog();
   const engineUi = engineCaps(session?.engine, engineCatalog);
-  const { controls: sessionControls, setControl: setSessionControl } = useSessionControls(
+  const { controls: sessionControls, setControl: setSessionControlRaw } = useSessionControls(
     sessionId,
     session?.engine,
   );
+  // A mode picked in this panel's controls (an engine with its own modes): the model picker's
+  // "where these come from" reads it as the task's own before the record says so.
+  const [modePickedFor, setModePickedFor] = useState<string | null>(null);
+  const setSessionControl = useCallback((id: string, value: string) => {
+    if (id === 'mode') setModePickedFor(sessionId);
+    return setSessionControlRaw(id, value);
+  }, [setSessionControlRaw, sessionId]);
   const [loading, setLoading] = useState(() => !peekSessionRecord(sessionId));
   // Live patches (thread meta, title) go into that copy too, so the next open is not a step behind.
   useEffect(() => { if (sessionRecord) keepSessionRecord(sessionId, sessionRecord); }, [sessionId, sessionRecord]);
@@ -784,6 +796,61 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   const taskTitle = sessionTask ? orgDisplayTitle(sessionTask) : null;
   // Another engine picked in the model picker: the next message switches the task to it.
   const engineSwitch = useEngineSwitchPick({ sessionId, session, task: sessionTask, catalog: engineCatalog, onSessionReplaced });
+  // Where this session's engine, model and mode came from (the task's record of its last new
+  // start, utils/launch-source.ts), in the model picker. A value changed since reads as the task's.
+  // Only on that start's session, the task's current one: an older session started otherwise. A
+  // task event names no session_id (only a full read does), so only a different one hides it.
+  // An ACP engine's models by their names in the note (its catalog's list).
+  const noteModels = useFallbackModels(engineUi.isAcp ? engineUi.id : null);
+  const pillSettings = useSessionSettings(settingsSessionId);
+  const pillModel = pillSettings?.model;
+  const launchSource = sessionTask?.launch_source && session?.taskId === sessionTask.id
+    && (!sessionTask.session_id || sessionTask.session_id === sessionId)
+    ? sessionTask.launch_source : null;
+  const launchSourceNote = useMemo(() => {
+    if (!launchSource || !session) return undefined;
+    // The claude CLI's model: one just picked in this browser's pill (the shared settings overlay,
+    // before any refetch), else the record's --model value (absent = its default; the server
+    // writes it on a switch). An ACP engine reports its model either way, so it is compared only
+    // against a start that named one.
+    const cliModel = pillModel || session.cliModel;
+    // Before the CLI names its model, the one the start asked for.
+    const nowModel = (engineUi.isAcp ? session.acpModel : cliModel) || launchSource.started?.model;
+    const acp = session as { acpConfig?: Record<string, string>; acpStartMode?: string };
+    // An ACP model is someone's pick once it is on the record's acpConfig (only a pick writes it)
+    // or just picked in this browser's pill; before that it is the engine's own default.
+    const acpModelPicked = !!pillSettings?.acpModel || !!acp.acpConfig?.model;
+    const compared = engineUi.isAcp ? (launchSource.started?.model || acpModelPicked ? session.acpModel : undefined) : cliModel;
+    const startFrom = sessionLaunchFrom(launchSource, {
+      engine: engineUi.id, model: compared,
+      mode: engineUi.configModes ? launchSource.started?.mode : session.mode, modeChosen: !engineUi.configModes && !!session.modeChosen,
+    });
+    // An engine with its own modes: its approval preset and, on Codex, its plan collaboration
+    // mode. The start writes its own preset to acpConfig.mode (and as acpStartMode): only another
+    // one, or a preset picked here just now, or plan turned on or off since, is the task's own.
+    const startedMode = launchSource.started?.mode ?? session.mode;
+    const modeControl = engineUi.configModes ? sessionControls.find((c) => c.id === 'mode') : undefined;
+    const planControl = engineUi.configModes ? sessionControls.find((c) => c.id === 'collaboration_mode') : undefined;
+    const planOn = planControl ? planControl.currentValue === 'plan' : startedMode === 'plan';
+    // The live preset against the start's: one picked back to the start's is no pick (before a
+    // reload as after). A record from before acpStartMode has only this panel's pick to go on.
+    const presetNow = modeControl?.currentValue ?? acp.acpConfig?.mode;
+    const presetPicked = acp.acpStartMode ? !!presetNow && presetNow !== acp.acpStartMode : modePickedFor === sessionId;
+    const pickedMode = engineUi.configModes && (presetPicked || planOn !== (startedMode === 'plan'));
+    const from = pickedMode ? { ...startFrom, mode: 'task' as const } : startFrom;
+    // One name for one mode: Walnut's (as the draft said) with the preset the mode pill shows.
+    const preset = modeControl ? sessionModeLabel(modeControl) : undefined;
+    const walnutLabel = (SESSION_MODE_LABELS as Record<string, string>)[pickedMode ? (planOn ? 'plan' : '') : startedMode];
+    const liveModeLabel = !preset ? undefined : walnutLabel && walnutLabel !== preset ? `${walnutLabel} (${preset})` : preset;
+    const rows = launchSourceRows(from, {
+      engineName: engineName(engineUi.displayName),
+      ...(nowModel ? { modelName: noteModels.options.find((o) => o.value === nowModel)?.label || formatModelName(nowModel) || nowModel } : {}),
+      mode: engineUi.configModes ? startedMode : session.mode,
+      ...(liveModeLabel ? { modeLabel: liveModeLabel } : {}),
+      showMode: true, project: launchSource.project,
+    });
+    return <LaunchSourceNote rows={rows} project={launchSource.project} />;
+  }, [launchSource, session, pillModel, pillSettings, engineUi, noteModels.options, sessionControls, modePickedFor, sessionId]);
   // The fallback-engine note this panel closed (its `at`), hidden before the task's update arrives.
   const [fallbackGone, setFallbackGone] = useState<string | null>(null);
 
@@ -2738,6 +2805,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             onPickerClose={engineSwitch.enabled ? engineSwitch.commit : undefined}
             onPickerCancel={engineSwitch.enabled ? engineSwitch.clear : undefined}
             pickerNote={switchPick ? `Closing the picker switches this task to ${engineCaps(switchPick.engine, engineCatalog).displayName} with this conversation${session?.process_status === 'running' ? ', and stops the running turn' : ''}.` : undefined}
+            sourceNote={switchPick ? undefined : launchSourceNote}
           />
         ),
       },

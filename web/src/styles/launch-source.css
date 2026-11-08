@@ -1,0 +1,126 @@
+/* "Where these come from" (components/sessions/LaunchSourceNote.tsx): the model
+   picker's top block and the project settings' source tags. */
+.launch-source-note {
+  margin: 0 0 10px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  /* The border sets it apart where the popover is the same colour (dark). */
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--fg);
+  font-size: 12px;
+  line-height: 1.4;
+  display: grid;
+  gap: 2px;
+}
+.launch-source-note-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  margin-bottom: 2px;
+}
+.launch-source-row {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) auto;
+  align-items: baseline;
+  column-gap: 8px;
+  min-width: 0;
+}
+.launch-source-label { color: var(--fg-muted); min-width: 44px; }
+.launch-source-note-project { color: var(--fg-muted); margin-bottom: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.launch-source-note-project strong { color: var(--fg); font-weight: 600; }
+.launch-source-note-hint { color: var(--fg-muted); font-size: 11px; margin-top: 2px; }
+.launch-source-note-action {
+  justify-self: start;
+  margin-top: 4px;
+  padding: 2px 8px;
+  font-size: 12px;
+  color: var(--accent);
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.launch-source-note-action:hover { background: var(--bg-hover, rgba(0, 0, 0, 0.04)); }
+.launch-source-value {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.launch-source-tag {
+  font-size: 11px;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--fg-muted);
+  white-space: nowrap;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.launch-source-tag.is-project {
+  color: var(--accent-text);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  background: var(--accent-subtle);
+}
+.launch-source-tag.is-task { color: var(--fg); }
+.launch-source-tag.is-fallback { color: var(--priority-important-text); }
+
+/* The project detail pane's "New tasks start on" rows (components/tasks/ProjectLaunchDefaults.tsx). */
+.project-launch-defaults {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.project-launch-defaults-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+.project-launch-defaults-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.project-launch-defaults-clear {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+}
+.project-launch-defaults-clear:hover:not(:disabled) { background: var(--hover-bg, rgba(0, 0, 0, 0.04)); }
+.project-launch-defaults-clear:disabled { opacity: 0.5; cursor: default; }
+.detail-setting-select {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 12px;
+}
+.detail-setting-select:disabled { opacity: 0.6; }
+.project-launch-defaults .launch-source-tag { flex-shrink: 0; max-width: 90px; }
+.project-launch-defaults-hint {
+  margin: 4px 0 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--fg-muted);
+}
+.project-launch-defaults-error {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--danger, #ff3b30);
+}
+
+.launch-source-tag.is-placeholder { visibility: hidden; min-width: 44px; }
+.project-launch-defaults-warning { margin: 4px 0 0; font-size: 12px; font-weight: 500; color: var(--fg); }

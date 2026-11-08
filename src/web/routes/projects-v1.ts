@@ -250,6 +250,11 @@ projectsV1Router.put('/projects/:name/metadata', async (req: Request, res: Respo
     try {
       res.json(await tm.setProjectMetadata(name, normalized))
     } catch (err) {
+      const { ProjectSettingsError } = await import('../../core/sessions/project-launch-defaults.js')
+      if (err instanceof ProjectSettingsError) {
+        sendError(res, 400, 'bad_request', err.message)
+        return
+      }
       if (await sendProjectError(res, err)) return
       throw err
     }

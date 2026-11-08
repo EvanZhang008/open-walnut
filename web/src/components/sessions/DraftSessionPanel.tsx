@@ -43,7 +43,7 @@
 
 import { formatModelName } from '@/utils/model-name';
 import { usePhoneLayerWithBar } from './phone-session-layer';
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { ChatInput } from '@/components/chat/ChatInput';
 import type { ImageAttachment } from '@/api/chat';
 import { quickParseTask, updateTask, fetchTask } from '@/api/tasks';
@@ -55,7 +55,7 @@ import { useModelOptions } from './path-selector/model-options';
 import { useEnabledModes } from '@/hooks/useEnabledModes';
 import { useClaudeLaunchMode } from '@/hooks/useClaudeLaunchMode';
 import { nextSessionMode } from './session-mode-cycle';
-import { SESSION_MODES, SESSION_MODE_LABELS, type SessionEngine, type SessionMode } from '@open-walnut/core';
+import { DEFAULT_SESSION_MODE, SESSION_MODES, SESSION_MODE_LABELS, type SessionEngine, type SessionMode } from '@open-walnut/core';
 import { useEngineCatalog } from '@/hooks/useEngineCatalog';
 import { useHostEngineAvailability } from '@/hooks/useHostEngineAvailability';
 import {
@@ -69,6 +69,13 @@ import {
 import { DraftFallbackNotice, draftFallbackPill, useDraftFallback } from './DraftFallbackNotice';
 import { ModelPicker, shortAcpModelName } from './ModelPicker';
 import { useAcpModelName } from './engine-default-model';
+import { LaunchSourceNote } from './LaunchSourceNote';
+import { useFallbackModels } from '@/components/settings/sections/FallbackEngineRow';
+import { engineName } from '@/components/settings/sections/DefaultEngineRow';
+import { useProjectLaunchDefaults } from '@/hooks/useProjectRegistry';
+import {
+  defaultEngineRuns, draftLaunchChoice, draftLaunchPayload, launchSourceRows, unnamedLaunchIsNotClaude, useGlobalDefaultEngine, type LaunchSourceRow,
+} from '@/utils/launch-source';
 import { fetchEngineModelCatalog } from '@/api/sessions';
 import {
   draftComposerKey, type DraftColumn, type DraftParseInput, type DraftParseKind, type DraftTaskField,
@@ -159,7 +166,7 @@ const prefetchedEngineCatalogs = new Set<string>();
  * provider is clickable (the engine is still a choice here), and picking an ACP
  * engine clears the model (ACP discovers models at session start).
  */
-function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork, fallbackLabel, fallbackEngine, fallbackModel }: {
+function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork, fallbackLabel, fallbackEngine, fallbackModel, sourceNote }: {
   meta: QuickStartTaskMeta;
   onMetaChange: (updater: (m: QuickStartTaskMeta) => QuickStartTaskMeta) => void;
   host?: string | null;
@@ -175,6 +182,8 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork, fallbackL
   fallbackEngine?: SessionEngine | null;
   /** The model the fallback runs (the setting's), ticked on its tab; none = its default row. */
   fallbackModel?: string;
+  /** Where the engine, model and mode come from (the picker's top note); absent = say nothing. */
+  sourceNote?: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   // The provider tab the picker shows while the launch is on the fallback: it opens on the
@@ -269,6 +278,7 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork, fallbackL
           host={host ?? undefined}
           cwd={cwd}
           engine={pickerEngine}
+          {...(sourceNote ? { sourceNote } : {})}
           onSwitch={(model) => {
             setOpen(false);
             backToComposer();
@@ -325,10 +335,13 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork, fallbackL
  * could not see, let alone choose, whether it would run with full trust or in
  * Plan mode until the session was already up (2026-10-01).
  */
-function DraftModePill({ mode, onCycle, nextMode }: {
+function DraftModePill({ mode, onCycle, nextMode, source }: {
   mode: SessionMode;
   nextMode: SessionMode;
   onCycle: () => void;
+  /** Where the mode comes from (its project's default, the global one): said in the title, and a
+   *  project's default also on the pill. */
+  source?: LaunchSourceRow;
 }) {
   const label = (SESSION_MODE_LABELS as Record<string, string>)[mode] ?? mode;
   const description = SESSION_MODES.find((m) => m.id === mode)?.description;
@@ -337,7 +350,8 @@ function DraftModePill({ mode, onCycle, nextMode }: {
       type="button"
       className={`mode-toggle-pill draft-mode-pill${mode === 'plan' ? ' plan-active' : ''}`}
       data-mode={mode}
-      title={`Starts in ${label} mode${description ? ` (${description.toLowerCase()})` : ''}. Click or Shift+Tab to cycle → ${(SESSION_MODE_LABELS as Record<string, string>)[nextMode] ?? nextMode}`}
+      title={`Starts in ${label} mode${description ? ` (${description.toLowerCase()})` : ''}${source ? `: ${source.words.charAt(0).toLowerCase()}${source.words.slice(1)}` : ''}. Click or Shift+Tab to cycle → ${(SESSION_MODE_LABELS as Record<string, string>)[nextMode] ?? nextMode}`}
+      data-source={source?.source}
       aria-label={`Permission mode: ${label}`}
       onClick={onCycle}
     >
@@ -372,8 +386,11 @@ interface Props {
   onProjectChange: (draftId: string, project: string) => void;
   /** Model / engine edit from the composer's model pill. Takes an UPDATER (not a
    *  value) so rapid clicks fold onto the freshest row instead of a props
-   *  snapshot; the owner flips `metaTouched` (the folder launch memory) here. */
-  onMetaChange: (draftId: string, updater: (m: QuickStartTaskMeta) => QuickStartTaskMeta) => void;
+   *  snapshot; the owner flips `metaTouched` (the folder launch memory) here.
+   *  `touched`: the latch's value after the edit (default true). false hands the pair back
+   *  to the defaults (Use the fallback, Use project defaults): a launch that names nothing
+   *  lets the server decide. */
+  onMetaChange: (draftId: string, updater: (m: QuickStartTaskMeta) => QuickStartTaskMeta, opts?: { touched?: boolean }) => void;
   /** The composer's mode pill picked the permission mode the session starts in.
    *  Separate from onMetaChange on purpose: a mode pick is not a model/engine
    *  pick, so the owner must NOT flip `metaTouched` (the folder's remembered
@@ -521,25 +538,77 @@ export function DraftSessionPanel({
   // session of that engine draws none. A fork has none either: the fork route
   // takes no mode, the sibling inherits the source session's.
   const engineCatalog = useEngineCatalog();
+  // The project's launch defaults (its settings; server: project-launch-defaults.ts): what a
+  // launch that names no engine, model or mode starts on. Ask Walnut and a fork take none; a
+  // repair files under Walnut, so Walnut's apply.
+  const projectDefaults = useProjectLaunchDefaults(isWalnut || isFork ? '' : isRepair ? 'Walnut' : draft.project);
+  const globalEngine = useGlobalDefaultEngine();
+  const choice = useMemo(() => (isWalnut || isFork ? null
+    : draftLaunchChoice({ meta: draft.meta, metaTouched: draft.metaTouched }, projectDefaults, globalEngine,
+      (e) => defaultEngineRuns(e, draft.host, engineCatalog))),
+    [isWalnut, isFork, draft.meta, draft.metaTouched, draft.host, projectDefaults, globalEngine, engineCatalog]);
+  // What the pills show: the choice's engine and model over the row's own meta.
+  const shownMeta = useMemo(() => (choice ? { ...draft.meta, engine: choice.engine, model: choice.model } : draft.meta), [choice, draft.meta]);
+  // What the launch sends (MainPage: draftLaunchPayload): the project's values are left to the server.
+  const sent = choice ? draftLaunchPayload(choice, draft.meta, unnamedLaunchIsNotClaude(projectDefaults, globalEngine)) : draft.meta;
   // The default engine is out of usage on the draft's host: where a launch that names no engine
   // and no model starts instead (the line above the composer, the model pill). A draft that
   // names the default engine's model (picked here, or the folder's last launch) waits for the
-  // reset, and the line says so with the way to the fallback.
+  // reset, and the line says so with the way to the fallback. The project's default engine is
+  // the default engine of its drafts.
   const fallbackNow = useDraftFallback(draft.host,
-    !isFork && !isBound && !launchEngineForHost(draft.meta.engine, draft.host, engineCatalog));
+    !isFork && !isBound && sent.engine !== 'claude' && !launchEngineForHost(sent.engine, draft.host, engineCatalog),
+    choice?.from.engine === 'project' ? choice.project : undefined);
   // A model the folder remembered (the draft's meta untouched here) gives way to the fallback,
   // as Auto does: only a pick made in this draft keeps the default engine (MainPage's launch drops
   // the remembered model the same way).
   const remembered = !draft.metaTouched && !!fallbackNow?.fallback;
-  const fallbackNamed = !remembered && draft.meta.model && draft.meta.model !== 'default' ? formatModelName(draft.meta.model) || draft.meta.model : null;
+  const fallbackNamed = !remembered && sent.model && sent.model !== 'default' ? formatModelName(sent.model) || sent.model : null;
   // The launch starts on the fallback engine: the pill and the mode follow it.
   const onFallback = !fallbackNamed && fallbackNow?.fallback ? fallbackNow.fallback : null;
-  const launchEngine = isWalnut ? 'claude' : resolveEngineForHost(draft.meta.engine, draft.host, engineCatalog);
+  const launchEngine = isWalnut ? 'claude' : resolveEngineForHost(shownMeta.engine, draft.host, engineCatalog);
   const claudeModes = engineEntry(engineCatalog, onFallback?.engine ?? launchEngine).capabilities.modeControl === 'claude-modes';
   const showModePill = !!onModeChange && !isFork && claudeModes;
   const enabledModes = useEnabledModes();
   const defaultClaudeMode = useClaudeLaunchMode(draft.host, draft.cwd, claudeModes);
-  const draftMode: SessionMode = draft.meta.mode ?? defaultClaudeMode;
+  // No one picked a mode: Claude Code starts in its own default (claude-launch-mode.ts), another
+  // engine in Walnut's.
+  const draftMode: SessionMode = choice && choice.from.mode !== 'global' ? choice.mode
+    : draft.meta.mode ?? (claudeModes ? defaultClaudeMode : DEFAULT_SESSION_MODE);
+  // Where each value comes from, for the model picker's note and the mode pill's title.
+  const shownModel = onFallback ? onFallback.model : shownMeta.model;
+  // Another engine's models by their names (the picker's list), not their ids.
+  const noteEngine = onFallback?.engine ?? launchEngine;
+  const noteModels = useFallbackModels(choice && noteEngine !== 'claude' ? noteEngine : null);
+  const sourceRows = choice ? launchSourceRows(choice.from, {
+    engineName: engineName(engineEntry(engineCatalog, noteEngine).displayName),
+    ...(shownModel && shownModel !== 'default' ? {
+      modelName: noteModels.options.find((o) => o.value === shownModel)?.label || formatModelName(shownModel) || shownModel,
+    } : {}),
+    // The pill's word for Claude Code's own default.
+    ...(noteEngine === 'claude' ? { defaultModelName: 'Auto' } : {}),
+    // Every engine starts in the mode the chain decided (an ACP engine maps it to its own),
+    // so the note names it even where no mode pill is drawn.
+    mode: draftMode, showMode: !isFork, project: choice.project, onFallback: !!onFallback,
+  }) : null;
+  // The picker's note: the rows, what a pick here does or why the project's engine gave way, and
+  // the way back to the project's values after a pick of this task's own.
+  const ownOverProject = !!choice && ((!!projectDefaults.engine && choice.from.engine === 'task')
+    || (!!projectDefaults.mode && choice.from.mode === 'task'));
+  const resetToProject = useCallback(() => {
+    onMetaChange(draft.id, (m) => ({
+      ...m,
+      ...(projectDefaults.engine ? { engine: undefined, model: undefined } : {}),
+      ...(projectDefaults.mode ? { mode: undefined } : {}),
+    }), { touched: projectDefaults.engine ? false : !!draft.metaTouched });
+  }, [onMetaChange, draft.id, draft.metaTouched, projectDefaults.engine, projectDefaults.mode]);
+  const sourceNote = sourceRows ? (
+    <LaunchSourceNote rows={sourceRows} title="This new task starts on" project={choice?.project}
+      hint={choice?.skipped
+        ? `${engineName(engineEntry(engineCatalog, choice.skipped).displayName)}, the default engine of ${choice.project ?? 'this project'}, can't run here, so this task starts Claude Code.`
+        : sourceRows.some((r) => r.source === 'project') ? 'A pick here is this task\'s own; the project keeps its defaults.' : undefined}
+      {...(ownOverProject ? { action: { label: 'Use project defaults', onClick: resetToProject } } : {})} />
+  ) : undefined;
   const nextDraftMode = nextSessionMode(draftMode, enabledModes);
   const cycleDraftMode = useCallback(() => {
     if (!showModePill) return;
@@ -959,7 +1028,7 @@ export function DraftSessionPanel({
         />}
         {/* The default engine is out of usage here: where this task starts instead. */}
         <DraftFallbackNotice now={fallbackNow} named={fallbackNamed}
-          onUseFallback={() => onMetaChange(draft.id, (m) => ({ ...m, model: undefined, engine: undefined }))} />
+          onUseFallback={() => onMetaChange(draft.id, (m) => ({ ...m, model: undefined, engine: undefined }), { touched: false })} />
         <ChatInput
           onSend={(body, images) => startWith(body, images)}
           // No session yet: files land on this machine and go to the session's host with its first message.
@@ -1051,15 +1120,19 @@ export function DraftSessionPanel({
                   The mode is the one launch choice that changes what the session
                   MAY do, so it is never hidden behind a menu. */}
               {showModePill && (
-                <DraftModePill mode={draftMode} nextMode={nextDraftMode} onCycle={cycleDraftMode} />
+                <DraftModePill mode={draftMode} nextMode={nextDraftMode} onCycle={cycleDraftMode}
+                  source={sourceRows?.find((r) => r.key === 'mode')} />
               )}
               {/* The model belongs with the message — same place a real session
                   keeps its model pill (the mode bar). Opens the SHARED two-pane
                   provider|models picker, so every composer offers the same
                   surface; on a draft both providers stay clickable. */}
               <DraftModelPill
-                meta={draft.meta}
-                onMetaChange={(updater) => onMetaChange(draft.id, updater)}
+                meta={shownMeta}
+                // A pick starts from what the pill shows: the project's or the global engine
+                // becomes this task's own pair (the updater sees it, never the row's raw meta).
+                onMetaChange={(updater) => onMetaChange(draft.id, (m) => updater(choice ? { ...m, engine: choice.engine, model: choice.model } : m))}
+                sourceNote={sourceNote}
                 host={draft.host}
                 cwd={draft.cwd || undefined}
                 walnut={isWalnut}

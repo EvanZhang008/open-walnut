@@ -1226,9 +1226,16 @@ export async function quickStartSession(opts: {
   agentId?: string;
   /** User opted into "create & start": server mkdirs the cwd before starting. */
   createCwd?: boolean;
-  /** Coding-agent engine. undefined = the default engine; any other value is an
-   *  explicitly picked engine (all ACP-backed and local-only today). */
-  engine?: LaunchEngine;
+  /** Coding-agent engine. undefined = the default engine (the project's launch default, else the
+   *  global one); any other value is an explicitly picked engine. 'claude' names Claude Code over
+   *  a default that is not. */
+  engine?: SessionEngine;
+  /** Not sent: the engine the server will start a launch that names none on (its project's
+   *  default), so no session id is minted for one whose provider issues its own. */
+  expectEngine?: SessionEngine;
+  /** The engine and model named are the folder's last pick (the draft's launch memory), not one
+   *  made in this draft: the task's record of where they came from says so. */
+  fromFolder?: boolean;
   /** "Start anyway": skip the outdated / not-signed-in readiness gate (never the hard kinds). */
   overrideReadiness?: boolean;
   /** Isolated workspace (core/workspaces): the server files the task, makes the
@@ -1244,7 +1251,8 @@ export async function quickStartSession(opts: {
    *  whose provider issues its own id (every ACP engine) omits it. */
 }): Promise<{ taskId: string; task: unknown; sessionId?: string; preparing?: boolean; workspaceError?: string }> {
   // Convert ImageAttachment[] to the backend ImagePayload format (data + mediaType only)
-  const payload: Record<string, unknown> = { ...opts };
+  const { expectEngine, ...sent } = opts;
+  const payload: Record<string, unknown> = { ...sent };
   if (opts.images?.length) {
     payload.images = opts.images.map(img => ({ data: img.data, mediaType: img.mediaType }));
   } else {
@@ -1260,8 +1268,8 @@ export async function quickStartSession(opts: {
   // A launch that names no engine and no model may start on the fallback engine (the server
   // decides; the draft's line read the same answer): no id for one whose provider issues its own,
   // or the server would drop it and a lost answer could not be found by it.
-  const fallbackEngine = !opts.engine && !opts.model ? knownFallbackEngine(opts.host) : undefined;
-  const preassignsId = engineEntry(getEngineCatalog(), opts.engine ?? fallbackEngine)
+  const fallbackEngine = !opts.engine && !opts.model ? knownFallbackEngine(opts.host, expectEngine ? opts.project : undefined) : undefined;
+  const preassignsId = engineEntry(getEngineCatalog(), opts.engine ?? fallbackEngine ?? expectEngine)
     .capabilities.idProvisioning === 'preassigned';
   const clientSessionId = preassignsId && typeof crypto?.randomUUID === 'function'
     ? crypto.randomUUID() : undefined;

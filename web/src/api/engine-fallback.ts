@@ -21,20 +21,27 @@ export interface EngineFallbackNow {
 const lastNow = new Map<string, { at: number; now: EngineFallbackNow }>();
 const FRESH_MS = 90_000;
 
-/** `withLimit`: also the default engine's limit when no fallback takes it (Settings' line). */
-export async function fetchEngineFallbackNow(host?: string | null, opts: { withLimit?: boolean } = {}): Promise<EngineFallbackNow> {
+/** `withLimit`: also the default engine's limit when no fallback takes it (Settings' line).
+ *  `project`: a project whose default engine is the launch's default (its launch defaults). */
+export async function fetchEngineFallbackNow(host?: string | null, opts: { withLimit?: boolean; project?: string } = {}): Promise<EngineFallbackNow> {
   const params: Record<string, string> = {};
   if (host) params.host = host;
   if (opts.withLimit) params.limit = '1';
+  if (opts.project) params.project = opts.project;
   const now = await apiGet<EngineFallbackNow>('/api/engines/fallback', params, { quietStatuses: [404] });
-  lastNow.set(host || '__local__', { at: Date.now(), now });
+  lastNow.set(fallbackKey(host, opts.project), { at: Date.now(), now });
   return now;
 }
 
-/** The engine a launch that names none would start on, by the last answer for its host (a draft
- *  that shows the line read it), or undefined when none is fresh or it starts on the default. */
-export function knownFallbackEngine(host?: string | null): string | undefined {
-  const hit = lastNow.get(host || '__local__');
+function fallbackKey(host?: string | null, project?: string): string {
+  return `${host || '__local__'}|${project?.toLowerCase() ?? ''}`;
+}
+
+/** The engine a launch that names none would start on, by the last answer for its host (and its
+ *  project, when its default engine applies) that a draft showing the line read, or undefined
+ *  when none is fresh or it starts on the default. */
+export function knownFallbackEngine(host?: string | null, project?: string): string | undefined {
+  const hit = lastNow.get(fallbackKey(host, project));
   return hit && Date.now() - hit.at < FRESH_MS ? hit.now.fallback?.engine : undefined;
 }
 

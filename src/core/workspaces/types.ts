@@ -37,6 +37,9 @@ export interface WorkspacePendingStart {
   /** Reasoning effort (task-start only; an older Walnut replaying the start ignores it). */
   effort?: string
   engine?: string
+  /** The engine was decided at the click (the project's default or a pick, Claude Code included):
+   *  the replay keeps it instead of inheriting the global default again. */
+  engine_decided?: boolean
   /** The client-owned session id of a draft launch (quick-start only). */
   session_id?: string
   caller_sid?: string

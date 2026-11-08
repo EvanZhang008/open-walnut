@@ -57,6 +57,7 @@ import { syncRulesFor } from './private-tasks/provider-rules.js';
 import { isPrivateTaskBlocked } from './private-tasks/sync-guard.js';
 import { privacyJudgeAvailable, startSyncGate } from './private-tasks/sync-gate.js';
 import { MERGE_EVENT_SOURCE } from './task-deleted-id.js';
+import { checkLaunchDefaultsPatch, checkLaunchDefaultsShape } from './sessions/project-launch-defaults.js';
 import type { TaskMergedInto } from './event-types.js';
 import {
   clearProjectTombstone,
@@ -2334,6 +2335,10 @@ export async function setProjectMetadata(
 ): Promise<Record<string, unknown>> {
   const raw = (project ?? '').trim();
   if (!raw) throw new Error('Inbox has no project settings — pass a project name.');
+  // The launch defaults are checked before the row is made, against the row as it is (a model
+  // needs its engine): a refused write creates nothing. Checked again on the row under the lock.
+  checkLaunchDefaultsShape(settings);
+  checkLaunchDefaultsPatch((await getProjectMetadata(raw).catch(() => null)) ?? {}, settings);
 
   // Create the row first (outside the metadata write lock — ensureProject takes
   // the same lock and would self-deadlock). Use the CANONICAL spelling it returns
@@ -2361,13 +2366,20 @@ export async function setProjectMetadata(
       .get(name) as { name: string; metadata: string | null } | undefined;
     if (!row) throw new Error(`Project "${name}" not found`);
     const existing = parseProjectMetadataJson(row.metadata, row.name) ?? {};
-    const next = { ...existing, ...settings };
+    // The launch defaults are checked against the row (a model needs its engine; a new engine
+    // drops the old engine's model): sessions/project-launch-defaults.ts.
+    const next = { ...existing, ...checkLaunchDefaultsPatch(existing, settings) };
     db.prepare('UPDATE task_projects SET metadata = ? WHERE name = ?').run(
       Object.keys(next).length > 0 ? JSON.stringify(next) : null,
       row.name,
     );
     return next;
   });
+  // A project's new default engine: its availability is read now, not at its first launch.
+  if (typeof merged.default_engine === 'string' && Object.hasOwn(settings, 'default_engine')) {
+    const engine = merged.default_engine;
+    void import('./agents/default-engine.js').then((m) => m.ensureEngineVerdict(engine as never)).catch(() => {});
+  }
 
   // Settings here are read by surfaces that never opened the detail pane (a
   // project's default_cwd answers "which project is this folder?" for the draft

@@ -12805,6 +12805,8 @@ export class SessionRunner {
             ...(session.startAgentMode ? { mode: session.startAgentMode } : {}),
           } }
           : {}),
+        // Kept apart, so a later pick in the session's mode control reads as one.
+        ...(session.startAgentMode ? { acpStartMode: session.startAgentMode } : {}),
         ...(modelAdvertised && draftModel ? { acpModel: draftModel } : {}),
         // A named mode is a choice the next start honours (core/sessions/acp-recorded-mode.ts).
         ...(modeNamed ? { modeChosen: true } : {}),
@@ -12814,6 +12816,14 @@ export class SessionRunner {
         sessionId: sid,
         error: err instanceof Error ? err.message : String(err),
       })
+    }
+
+    // A start in Plan is Codex's plan collaboration mode too, as a change to Plan in the session is
+    // (session-lifecycle.ts applySessionModeControl): the first prompt already plans. After the
+    // record write above, which would drop it from acpConfig.
+    if (session.mode === 'plan' && session.sessionControls.some((c) => c.id === 'collaboration_mode' && c.currentValue !== 'plan')) {
+      const planned = await session.setConfigOption('collaboration_mode', 'plan').catch(() => false)
+      if (!planned) log.session.warn('acp: the start could not turn on plan collaboration mode', { sessionId: sid, engine })
     }
 
     try {

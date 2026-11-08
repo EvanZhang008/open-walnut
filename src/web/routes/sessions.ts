@@ -73,9 +73,9 @@ import {
 import { filterSessionsByQuery, sessionSearchTaskName } from '../../core/session-search.js'
 import { CLOUD_MODE, LOG_DIR, QUICK_START_MESSAGE_HARD_LIMIT } from '../../constants.js'
 import { ensureWalnutSource, isWalnutCheckout, WalnutSourceError } from '../../core/self-repair/walnut-source.js'
-import { engineCaps, isAcpEngine, isKnownEngine, normalizeEngine } from '../../core/agents/engine-registry.js'
-import { resolveDefaultEngine } from '../../core/agents/default-engine.js'
-import { resolveFallbackLaunch, type FallbackDecision } from '../../core/agents/fallback-engine.js'
+import { engineCaps, isAcpEngine, isKnownEngine, normalizeEngine, resolveEngine } from '../../core/agents/engine-registry.js'
+import type { FallbackDecision } from '../../core/agents/fallback-engine.js'
+import { pickLaunchDefaults } from '../../core/sessions/project-launch-defaults.js'
 import { splitAcpModelId } from '../../providers/acp-session.js'
 import { SESSION_ENGINE_IDS } from '../../core/types.js'
 
@@ -476,19 +476,24 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
     // The default engine out of usage on this host: a launch that names neither an engine nor a
     // model starts on the fallback engine (core/agents/fallback-engine.ts). Decided here, before
     // an id is minted, and handed to quickStartSession so both read the limit once.
+    //
+    // A launch that names none of engine, model or mode takes its project's launch defaults
+    // first (core/sessions/project-launch-defaults.ts): the project's engine is then the default
+    // engine the fallback stands in for. Ask Walnut has its own project and rules: none apply.
     const namesModel = typeof rawModel === 'string' && rawModel !== '' && rawModel !== 'default'
-    let fallback: FallbackDecision | null = null
     // Ask Walnut runs the Personal AI profile, which only Claude Code carries: never on the fallback.
     const decidesFallback = engine === undefined && !namesModel && !isWalnutAgent
-    if (decidesFallback) {
-      const config = await getConfig()
-      fallback = await resolveFallbackLaunch(config, resolveDefaultEngine(config, { host }), host).catch(() => null)
-    }
-    const effectiveEngine = fallback
-      ? normalizeEngine(fallback.engine)
-      : engine !== undefined
-        ? normalizeEngine(engine)
-        : normalizeEngine(resolveDefaultEngine(await getConfig(), { host }))
+    const launchProject = isWalnutAgent ? undefined
+      : intent === 'fix-walnut' ? 'Walnut'
+        : existingTaskId ? (await getTask(existingTaskId).catch(() => null))?.project
+          : typeof project === 'string' ? project : undefined
+    const launchPick = await pickLaunchDefaults({
+      config: await getConfig(), project: launchProject, host, named: { engine, model: rawModel, mode }, decidesFallback,
+    })
+    const fallback: FallbackDecision | null = launchPick.fallback
+    const effectiveEngine = launchPick.engine
+    // The project's mode when the body named none (validated with the body's below).
+    const launchMode = mode || launchPick.mode
 
     // Normalize model through the shared switch validator (same ruleset as
     // POST /:sessionId/model): legacy alias ids map to their CLI form, catalog
@@ -524,6 +529,9 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
         }
         model = resolved
       }
+    } else if (launchPick.model) {
+      // The project's default model (checked when it was saved), on the project's engine.
+      model = isAcpEngine(effectiveEngine) ? launchPick.model : resolveModelSwitchValue(launchPick.model) ?? undefined
     } else if (isWalnutAgent && rawModel === undefined && !isAcpEngine(effectiveEngine)) {
       // Native asks only: the remembered id was picked in the claude model picker,
       // so replaying it onto an ACP launch would ask that adapter for a model it
@@ -540,9 +548,9 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       if (remembered) model = remembered
     }
 
-    if (mode) {
-      if (!CLAUDE_SESSION_MODES.includes(mode as SessionMode)) {
-        res.status(400).json({ error: `Invalid mode: ${mode}. Must be one of: ${CLAUDE_SESSION_MODES.join(', ')}` })
+    if (launchMode) {
+      if (!CLAUDE_SESSION_MODES.includes(launchMode as SessionMode)) {
+        res.status(400).json({ error: `Invalid mode: ${launchMode}. Must be one of: ${CLAUDE_SESSION_MODES.join(', ')}` })
         return
       }
     }
@@ -729,7 +737,7 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       const { requestedHintsOf } = await import('../../core/hints/hint-request.js')
       const requestedHints = requestedHintsOf((req.body as { hints?: unknown }).hints)
       const updatedTask = await quickStartSession({
-        message: sessionMessage, messagePrefix, cwd, host, model, mode,
+        message: sessionMessage, messagePrefix, cwd, host, model, mode: launchMode,
         // Hints the first message asks for (the side panel's object-context), beside the words.
         ...(requestedHints ? { hints: requestedHints } : {}),
         ...(inOwnTaskDir ? { ownTaskDir: true } : {}),
@@ -739,6 +747,18 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
         engine: effectiveEngine,
         ...(fallback ? { fallback } : {}),
         ...(decidesFallback ? { fallbackDecided: true } : {}),
+        // Ask Walnut keeps its own rules, and a record of where its values came from would say nothing.
+        ...(isWalnutAgent ? {} : { launchSource: {
+          ...launchPick.source,
+          // The pair the draft sent is the folder's last pick, not one made in this draft.
+          ...((req.body as { fromFolder?: unknown }).fromFolder === true ? {
+            engine: launchPick.source.engine === 'task' ? 'folder' as const : launchPick.source.engine,
+            model: launchPick.source.model === 'task' ? 'folder' as const : launchPick.source.model,
+          } : {}),
+          started: { engine: resolveEngine(effectiveEngine), ...(model ? { model } : {}), ...(launchMode ? { mode: launchMode as SessionMode } : {}) },
+        } }),
+        // Resolved above, the project's default and the global one included.
+        engineDecided: true,
         preassignedSessionId,
         ...(wsPlan?.defer ? { deferStart: true, preassignedSessionId: undefined } : {}),
         ...(overrideReadiness === true ? { overrideReadiness: true } : {}),
@@ -767,7 +787,8 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       // A task's own directory is no folder the person picked: nothing to remember for it. A
       // launch the fallback engine took was not the user's pick either: the folder keeps what it
       // remembered (a remembered model gave way only while the limit holds).
-      if (!existingTaskId && !isFixWalnut && !isWalnutAgent && !inOwnTaskDir && !fallback) {
+      // Nor was the project's default engine and model: the folder keeps its own memory.
+      if (!existingTaskId && !isFixWalnut && !isWalnutAgent && !inOwnTaskDir && !fallback && launchPick.source.engine !== 'project') {
         recordLaunchPrefs(cwd, host ?? null, {
           model: rawPickerModel,
           // LaunchPrefs stores the persisted shape (explicit non-default engine
@@ -789,8 +810,8 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       }
       if (wsPlan?.begin) {
         res.json(await wsPlan.begin(updatedTask, {
-          message: sessionMessage, ...(messagePrefix ? { messagePrefix } : {}), ...(model ? { model } : {}), ...(mode ? { mode } : {}),
-          ...(effectiveEngine ? { engine: effectiveEngine } : {}), ...(preassignedSessionId ? { session_id: preassignedSessionId } : {}),
+          message: sessionMessage, ...(messagePrefix ? { messagePrefix } : {}), ...(model ? { model } : {}), ...(launchMode ? { mode: launchMode } : {}),
+          ...(effectiveEngine ? { engine: effectiveEngine } : {}), engine_decided: true, ...(preassignedSessionId ? { session_id: preassignedSessionId } : {}),
           source: routeSource('quick-start', req.headers), at: new Date(requestTs).toISOString(),
         }))
         return

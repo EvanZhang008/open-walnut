@@ -826,6 +826,10 @@ export interface Task {
   first_completed_at?: string;
   /** Each time the task entered COMPLETE, earliest first, the first COMPLETIONS_KEPT (phase.ts). */
   completions?: string[];
+  /** Where its session's engine, model and permission mode came from at its last new start: the
+   *  launch itself, its project's defaults, the global default or the fallback engine
+   *  (sessions/project-launch-defaults.ts). Local-only, payload blob. */
+  launch_source?: import('./sessions/project-launch-defaults.js').LaunchSourceRecord | null;
   /** The last launch Walnut itself asked for. NOT a substitute for the session's process state. */
   last_start?: {
     id: string;
@@ -3452,6 +3456,9 @@ export interface SessionRecord {
   acpModelName?: string;
   /** ACP sessions only: last values successfully applied through session/set_config_option. */
   acpConfig?: Record<string, string>;
+  /** ACP sessions only: the adapter `mode` preset the start put it in (also written to
+   *  acpConfig.mode). An acpConfig.mode other than this one was picked in the session. */
+  acpStartMode?: string;
   /** Idempotency key of the most recently committed ACP prompt acceptance. */
   lastAcceptedAcpCommandId?: string;
   /** Session type — determines lifecycle and cleanup behavior. Undefined = 'interactive'. */

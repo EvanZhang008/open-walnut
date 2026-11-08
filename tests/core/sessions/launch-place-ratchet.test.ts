@@ -22,7 +22,6 @@ const NOT_A_LAUNCH: Record<string, string> = {
   'src/core/sessions/task-start.ts': 'defines recordedCwd / recordedPlace',
   'src/core/sessions/caller-placement.ts': 'compares a caller cwd with the default, to decide what a create records',
   'src/core/sessions/folder-project.ts': 'maps a folder to the project that declares it',
-  'src/ops/work.ts': 'validates a project_metadata_update body',
 }
 
 const PATTERN = /\??\.default_cwd\b|\brecordedCwd\(|\brecordedPlace\(|\bcwd\s*=\s*current\.cwd\b/

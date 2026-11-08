@@ -289,6 +289,8 @@ interface ModelPickerProps {
   onAnchorLost?: () => void;
   /** What closing the picker does now (another engine picked): shown above the models. */
   switchNote?: string;
+  /** Where the engine, model and mode come from (LaunchSourceNote): shown above the models. */
+  sourceNote?: React.ReactNode;
   /** Which provider's pane is showing. Default 'claude'. */
   engine?: ProviderId;
   /** Provider switch (rail click). Passed by DRAFT surfaces only — a live
@@ -340,7 +342,7 @@ interface ModelPickerProps {
 const lastLiveSettings = new Map<string, SessionLiveSettings>();
 
 export function ModelPicker({
-  currentModel, currentEffort, sessionId, host, cwd, onSwitch, onEffortSwitch, onClose, onAnchorLost, switchNote, speedReadout,
+  currentModel, currentEffort, sessionId, host, cwd, onSwitch, onEffortSwitch, onClose, onAnchorLost, switchNote, sourceNote, speedReadout,
   engine = 'claude', onProviderSwitch, providerLockReason, acpCurrentModelId, onAcpSwitch, autoRow, acpCurrentNote,
   anchorRef, acpLive, acpEffortControl, onAcpEffortControl, acpContext,
 }: ModelPickerProps) {
@@ -1009,6 +1011,7 @@ export function ModelPicker({
       <div className="model-picker-pane">
       {switchNote && <div className="model-picker-switch-note" role="status" data-testid="model-picker-switch-note">{switchNote}</div>}
       {activeEngineUnavailable && <div className="model-picker-switch-note" role="status" data-testid="model-picker-engine-unavailable">{activeEngineUnavailable}</div>}
+      {sourceNote}
       {isAcpPane ? acpPane : (<>
       <div className="model-picker-header">
         <span className="model-picker-title">Switch Model</span>

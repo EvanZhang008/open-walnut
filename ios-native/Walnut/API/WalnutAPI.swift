@@ -278,17 +278,35 @@ struct WalnutAPI {
     func createSession(
         cwd: String, host: String? = nil, message: String = "",
         taskId: String? = nil, mode: String? = nil, model: String? = nil,
-        project: String? = nil, syncToProject: Bool = false
+        project: String? = nil, syncToProject: Bool = false, namesClaude: Bool = false
     ) async throws -> SessionCreated {
         try await send(
             "POST", "/sessions",
             body: Self.createSessionBody(
                 cwd: cwd, host: host, message: message,
                 taskId: taskId, mode: mode, model: model, project: project,
-                syncToProject: syncToProject
+                syncToProject: syncToProject, namesClaude: namesClaude
             ),
             timeout: 60
         )
+    }
+
+    /// `createSession` for a page that can open a launch answered WITHOUT a session id: an engine
+    /// whose provider issues its own ids (Codex, any ACP engine), which a project's default engine
+    /// may be. The answer then names only the task; the page waits for its session
+    /// (`DraftLaunchDefaults.awaitSession`). An older server always answers with an id.
+    func launchSession(
+        cwd: String, host: String? = nil, message: String = "",
+        taskId: String? = nil, mode: String? = nil, model: String? = nil,
+        project: String? = nil, syncToProject: Bool = false, namesClaude: Bool = false
+    ) async throws -> SessionLaunched {
+        var body = Self.createSessionBody(
+            cwd: cwd, host: host, message: message,
+            taskId: taskId, mode: mode, model: model, project: project,
+            syncToProject: syncToProject, namesClaude: namesClaude
+        )
+        body.sessionIdOptional = true
+        return try await send("POST", "/sessions", body: body, timeout: 60)
     }
 
     /// The exact wire body `POST /api/v1/sessions` receives. Split out as a pure
@@ -306,12 +324,17 @@ struct WalnutAPI {
         /// "project": the launch's new task goes to its project's outside service (once Walnut
         /// checked it is not private). Absent keeps it local, the server's rule for a launch.
         var sync: String? = nil
+        /// "claude": the draft's model (or its "Default") is its own pick over the project's
+        /// default engine and model. Absent lets the project's defaults apply.
+        var engine: String? = nil
+        /// true: this client opens a launch answered without a session id (`launchSession`).
+        var sessionIdOptional: Bool? = nil
     }
 
     static func createSessionBody(
         cwd: String, host: String?, message: String,
         taskId: String?, mode: String?, model: String?, project: String? = nil,
-        syncToProject: Bool = false
+        syncToProject: Bool = false, namesClaude: Bool = false
     ) -> CreateSessionBody {
         let filed = taskId != nil || (project?.trimmingCharacters(in: .whitespaces).isEmpty ?? true)
             ? nil : project
@@ -330,7 +353,8 @@ struct WalnutAPI {
             // its task's project, so the field would only be noise there.
             project: filed,
             // Only for a task the launch creates in a project: an existing task's source is decided.
-            sync: syncToProject && filed != nil ? "project" : nil
+            sync: syncToProject && filed != nil ? "project" : nil,
+            engine: namesClaude ? "claude" : nil
         )
     }
 

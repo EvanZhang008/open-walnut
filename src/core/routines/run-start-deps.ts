@@ -14,8 +14,9 @@ export interface RunStartDeps {
   now(): number;
   sleep(ms: number): Promise<void>;
   /** A session id for the launch, or undefined for an engine that issues its own. */
-  /** `model`: a run that names one never falls back (quickStartSession). */
-  mintSessionId(host: string | undefined, model?: string): Promise<string | undefined>;
+  /** `model`: a run that names one never falls back (quickStartSession). `project`: its launch
+   *  defaults may name the engine (project-launch-defaults.ts). */
+  mintSessionId(host: string | undefined, model?: string, project?: string): Promise<string | undefined>;
   /** `continued`: the task already held a conversation, and the message continued it there. */
   launch(launch: RoutineLaunch, opts: { preassignedSessionId?: string; existingTaskId?: string }): Promise<{ task: Task; continued?: string }>;
   getSession(sessionId: string): Promise<SessionRecord | null>;
@@ -52,7 +53,7 @@ export function defaultRunStartDeps(): RunStartDeps {
   return {
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => { setTimeout(resolve, ms).unref?.(); }),
-    async mintSessionId(host, model) {
+    async mintSessionId(host, model, project) {
       const { getConfig } = await import('../config-manager.js');
       const { resolveDefaultEngine } = await import('../agents/default-engine.js');
       const { isAcpEngine, normalizeEngine } = await import('../agents/engine-registry.js');
@@ -60,6 +61,12 @@ export function defaultRunStartDeps(): RunStartDeps {
       // The same resolution quickStartSession makes for an omitted engine: an id
       // is minted only for an engine that accepts one.
       const config = await getConfig();
+      // A project that sets launch defaults decides the engine (and its fallback) the same way.
+      const { hasLaunchDefaults, pickLaunchDefaults, projectLaunchDefaultsOf } = await import('../sessions/project-launch-defaults.js');
+      if (project && hasLaunchDefaults(await projectLaunchDefaultsOf(project))) {
+        const pick = await pickLaunchDefaults({ config, project, host: h, named: { model }, decidesFallback: !model || model === 'default' });
+        return isAcpEngine(pick.engine) ? undefined : randomUUID();
+      }
       const inherited = resolveDefaultEngine(config, { host: h });
       // A run whose default engine is out of usage starts on the fallback (quickStartSession), which
       // may be an engine that issues its own ids: decided the same way here, before minting.

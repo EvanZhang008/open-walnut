@@ -281,3 +281,21 @@ describe('the engine split', () => {
     expect(r.body.projects).toEqual(expect.arrayContaining([{ project: 'Marina', tasks: expect.any(Number) }]))
   }, 60_000)
 })
+
+describe("the engine split and a project's launch defaults", () => {
+  it("a project's default engine comes before the split; a project that sets only a mode keeps the split's pick", async () => {
+    // Order: a named engine, the project's default engine, the split, the default engine.
+    expect((await api('PUT', `/api/projects/${encodeURIComponent('Pinned Lab')}/metadata`, { default_engine: 'claude', default_model: 'haiku' })).status).toBe(200)
+    const pinned = await op('task_create', { title: 'Project engine', project: 'Pinned Lab', cwd: WALNUT_HOME, message: 'Ready' })
+    expect(pinned.enginePick).toBeUndefined()
+    expect((await task(pinned.id)).engine_pick).toBeUndefined()
+    expect((await task(pinned.id)).launch_source).toMatchObject({ engine: 'project', model: 'project', project: 'Pinned Lab' })
+
+    expect((await api('PUT', `/api/projects/${encodeURIComponent('Mode Lab')}/metadata`, { default_mode: 'plan' })).status).toBe(200)
+    const modeOnly = await op('task_create', { title: 'Project mode', project: 'Mode Lab', cwd: WALNUT_HOME, message: 'Ready' })
+    expect(modeOnly.enginePick?.key).toBeTruthy()
+    expect((await task(modeOnly.id)).launch_source).toMatchObject({ engine: 'global', model: 'global', mode: 'project' })
+    const [record] = await getSessionsForTask(modeOnly.id)
+    expect(record?.mode).toBe('plan')
+  }, 60_000)
+})

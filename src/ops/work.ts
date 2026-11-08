@@ -11,6 +11,7 @@ import { MESSAGE_TEXT_HINT } from '../core/team-charter.js';
 import { USER_SPOKE_TEXT, USER_WORDS_BACK, userSaidLine, type UserSaid } from '../core/sessions/user-spoke.js';
 import { WORK_PLACE_RULE } from '../core/work-place.js';
 import { leftOutLine, shapeHistory, type HistoryShape, type ShapeResult } from './task-history-shape.js';
+import { SESSION_ENGINE_IDS, SESSION_MODE_IDS } from '../core/types.js';
 
 defineOp({
   name: 'task_start',
@@ -534,17 +535,22 @@ defineOp({
   name: 'project_metadata_update',
   title: 'Update project settings',
   description:
-    'Merge execution defaults into one project registry row. Use this for default_cwd or default_host; ' +
-    'do not use project rename or merge for settings.',
+    'Merge execution defaults into one project registry row: default_cwd, default_host, and the ' +
+    'launch defaults a new task of the project starts on when its start names none (default_engine, ' +
+    'default_model of that engine, default_mode). A start that names its own engine, model or mode wins; ' +
+    'unset values fall back to the global defaults. Do not use project rename or merge for settings.',
   input: {
     name: z.string().min(1).describe('Project name; Inbox has no metadata row'),
     default_cwd: z.string().nullable().optional().describe('Absolute default working directory; null clears it'),
     default_host: z.string().nullable().optional().describe('Default execution host alias; null clears it'),
+    default_engine: z.enum(SESSION_ENGINE_IDS).nullable().optional().describe('Default coding engine for new tasks; null clears it (and its model)'),
+    default_model: z.string().nullable().optional().describe('Default model id of default_engine; needs default_engine; null clears it'),
+    default_mode: z.enum(SESSION_MODE_IDS).nullable().optional().describe('Default permission mode for new tasks; null clears it'),
   },
   handler: async (args, call) => {
     const { name, ...body } = args;
-    if (body.default_cwd === undefined && body.default_host === undefined) {
-      throw new Error('project_metadata_update needs default_cwd or default_host');
+    if (Object.values(body).every((v) => v === undefined)) {
+      throw new Error('project_metadata_update needs one of default_cwd, default_host, default_engine, default_model, default_mode');
     }
     return call('PUT', `/projects/${encodeURIComponent(String(name))}/metadata`, body);
   },

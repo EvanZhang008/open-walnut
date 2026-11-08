@@ -65,6 +65,10 @@ struct NewSessionChatView: View {
     @State private var host = ""
     @State private var mode: NewSessionSheet.PermissionMode = NewSessionChatView.draftStart(inDemo: DemoMode.isActive).mode
     @State private var model: String?
+    /// The user picked the mode / the model here: until then the pills show the project's
+    /// launch defaults (`launchDefaults`) and the create call leaves them to the server.
+    @State private var modeTouched = false
+    @State private var modelTouched = false
     @State private var showPathPicker = false
     @State private var creating = false
     @State private var launchingMessage: String?
@@ -309,6 +313,15 @@ struct NewSessionChatView: View {
                     .foregroundStyle(.secondary)
                     .accessibilityIdentifier("newSessionChat.linkedTask")
                 }
+                // Where the pills' values come from when the project set them (its
+                // launch defaults), and the engine a phone launch cannot run.
+                if let line = launchDefaults?.line(modeTouched: modeTouched, modelTouched: modelTouched) {
+                    Label(line, systemImage: "slider.horizontal.3")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("newSessionChat.projectDefaults")
+                }
                 // At the accessibility sizes the quick folders scroll with the page
                 // instead of being pinned over the composer: pinned, the bar took
                 // all but about 30 pt of the screen and cut the line above (gate r4,
@@ -501,15 +514,15 @@ struct NewSessionChatView: View {
         let state: ComposerControlsModel.PillState = creating ? .waiting : .ready
         return ComposerBar.pillLayout(stacked: false) {
             PillChip(
-                text: mode.label,
+                text: shownMode.label,
                 glyph: .chevron,
                 state: state,
                 wraps: false,
                 rawID: false,
-                menu: Self.modeMenu(selected: mode),
+                menu: Self.modeMenu(selected: shownMode),
                 menuID: "launchMode",
                 accessibilityID: "newSessionChat.modePill",
-                accessibilityLabel: "Permission mode: \(mode.label)",
+                accessibilityLabel: "Permission mode: \(shownMode.label)\(launchDefaults?.mode != nil && !modeTouched ? ", project default" : "")",
                 onSelect: { choice, _ in pick(choice) },
                 onPresentedChange: { _, _ in }
             )
@@ -519,10 +532,10 @@ struct NewSessionChatView: View {
                 state: state,
                 wraps: false,
                 rawID: false,
-                menu: Self.modelMenu(selected: model),
+                menu: Self.modelMenu(selected: shownModel),
                 menuID: "launchModel",
                 accessibilityID: "newSessionChat.modelPill",
-                accessibilityLabel: "Model: \(model == nil ? "Default" : modelLabel)",
+                accessibilityLabel: "Model: \(shownModel == nil ? "Default" : modelLabel)\(launchDefaults?.shownModel != nil && !modelTouched ? ", project default" : "")",
                 onSelect: { choice, _ in pick(choice) },
                 onPresentedChange: { _, _ in },
                 // The same "Select model" sheet as a live composer's model pill.
@@ -532,14 +545,36 @@ struct NewSessionChatView: View {
         }
     }
 
-    private var modelLabel: String { Self.modelLabel(model) }
+    private var modelLabel: String { Self.modelLabel(shownModel) }
+
+    /// The project whose launch defaults this draft starts on: the one picked here, or the
+    /// task's own for a draft about a task (the server reads the same, `mobileLaunchDefaults`).
+    private var launchProject: String? {
+        isTaskless ? project : tasks?.tasks.first { $0.id == taskId }?.project
+    }
+
+    /// Its engine, model and mode for a new task; nil when it sets none.
+    private var launchDefaults: DraftLaunchDefaults? { tasks?.launchDefaults(launchProject)?.onHost(host) }
+
+    /// What the pills show: the pick, else the project's default, else the draft's start.
+    private var shownMode: NewSessionSheet.PermissionMode {
+        modeTouched ? mode : launchDefaults?.mode ?? mode
+    }
+    private var shownModel: String? {
+        modelTouched ? model : launchDefaults?.shownModel ?? model
+    }
 
     private func pick(_ choice: PillMenu.Choice) {
         switch choice {
         case .model(let id):
             model = id.isEmpty ? nil : id
+            // The project's own model picked again is still the project's (its engine, its line).
+            modelTouched = !DraftLaunchDefaults.keepsProjectPair(picked: model, defaults: launchDefaults)
         case .mode(let raw):
-            if let picked = NewSessionSheet.PermissionMode(rawValue: raw) { mode = picked }
+            if let picked = NewSessionSheet.PermissionMode(rawValue: raw) {
+                mode = picked
+                modeTouched = true
+            }
         case .effort, .retry, .none:
             return
         }
@@ -554,9 +589,11 @@ struct NewSessionChatView: View {
         ("haiku", "Haiku"),
     ]
 
-    /// The model pill's words: the picked alias, or "Default model" for none.
+    /// The model pill's words: the picked alias, a project's model by its id, or "Default
+    /// model" for none.
     static func modelLabel(_ model: String?) -> String {
-        model.flatMap { id in launchModels.first { $0.0 == id }?.1 } ?? "Default model"
+        guard let model else { return "Default model" }
+        return launchModels.first { $0.0 == model }?.1 ?? model
     }
 
     /// The draft's menus never go stale (they are rebuilt from two @State values,
@@ -574,7 +611,11 @@ struct NewSessionChatView: View {
                 title: label, choice: .model(id), checked: selected == id,
                 accessibilityID: "newSessionChat.model.\(id)"
             )
-        }
+        } + (selected.map { id in launchModels.contains { $0.0 == id } ? [] : [PillMenu.Item(
+            // A project's model the stable aliases do not name stays listed and checked.
+            title: id, choice: .model(id), checked: true,
+            accessibilityID: "newSessionChat.model.\(id)"
+        )] } ?? [])
         let current = items.first(where: \.checked)?.title
         return PillMenu(sections: [.init(title: ComposerControlsModel.heading("Model", current: current), items: items)],
                         token: draftMenuToken)
@@ -834,8 +875,11 @@ struct NewSessionChatView: View {
         }
         // Left while the files went up: no session for a page nobody looks at.
         guard !uploads.abandoned else { return leaveLaunch(fromComposer: fromComposer) }
+        let pair = DraftLaunchDefaults.wirePair(picked: shownModel, touched: modelTouched, defaults: launchDefaults)
+        // The task's sessions before the launch: one answered without an id is the new one after.
+        let known = Set((tasks?.sessions ?? []).filter { $0.taskId != nil && $0.taskId == taskId }.map(\.id))
         do {
-            let created = try await api.createSession(
+            let launched = try await api.launchSession(
                 cwd: cwd,
                 host: host,
                 message: wireText,
@@ -844,14 +888,39 @@ struct NewSessionChatView: View {
                 // task that owns the new session.
                 taskId: taskId,
                 // bypass is the server default; send nil so an older server
-                // behaves identically.
-                mode: mode == .bypass ? nil : mode.rawValue,
-                model: model,
+                // behaves identically. What the project's launch defaults decide is
+                // left to the server, which applies and records them.
+                mode: DraftLaunchDefaults.wireMode(picked: shownMode, touched: modeTouched, defaults: launchDefaults),
+                model: pair.model,
                 // Only for a task-less draft, and only when picked: absent keeps the
                 // server's own Inbox + organize behaviour.
                 project: isTaskless && !project.isEmpty ? project : nil,
-                syncToProject: isTaskless && syncService != nil && !syncLocal
+                syncToProject: isTaskless && syncService != nil && !syncLocal,
+                namesClaude: pair.namesClaude
             )
+            // The project's engine issues its own session ids (Codex): the answer names only the
+            // task, and its session appears once the engine is up. The page keeps "Starting".
+            guard let sessionId = launched.sessionId else {
+                // Started either way: the server holds the files and the words.
+                uploads.finish()
+                pendingLaunch = nil
+                NewSessionLaunchWords.release(draftKey: ContentActionLink.newSessionDraftKey)
+                if let tasks, let session = await DraftLaunchDefaults.awaitSession(taskId: launched.taskId, excluding: known, in: tasks) {
+                    SessionLaunchContext.stash(sessionId: session.id, message: wireText)
+                    AppLog.info("session", "created session from chat draft (provider-issued id)", [
+                        "sessionId": session.id, "taskId": launched.taskId, "host": host,
+                    ])
+                    onCreated(session)
+                    return true
+                }
+                // Started, but not up yet: the task holds it. Never false here, or a send
+                // again would start a second session.
+                AppLog.info("session", "chat draft launch: session not up yet", ["taskId": launched.taskId])
+                tasks?.transientNotice = "Started. The session shows in its task once it is up."
+                dismiss()
+                return true
+            }
+            let created = SessionCreated(sessionId: sessionId, taskId: launched.taskId, title: launched.title)
             // ORDER MATTERS (same as NewSessionSheet): stash BEFORE onCreated,
             // because the presenter's push mounts the conversation view whose
             // store consumes the stash in open().
@@ -861,8 +930,8 @@ struct NewSessionChatView: View {
             pendingLaunch = nil
             NewSessionLaunchWords.release(draftKey: ContentActionLink.newSessionDraftKey)
             AppLog.info("session", "created session from chat draft", [
-                "sessionId": created.sessionId, "host": host, "mode": mode.rawValue,
-                "model": model ?? "default",
+                "sessionId": created.sessionId, "host": host, "mode": shownMode.rawValue,
+                "model": shownModel ?? "default",
                 // Logged because "which task owns this session" is the thing that used
                 // to be silently nothing on every draft.
                 "taskId": created.taskId, "linkedTaskId": taskId ?? "-",
@@ -880,8 +949,8 @@ struct NewSessionChatView: View {
                 // 'idle' matches the server's pre-seeded record: 'running' would
                 // paint a working badge on a CLI that hasn't spawned.
                 processStatus: "idle",
-                model: model,
-                mode: mode == .bypass ? nil : mode.rawValue,
+                model: shownModel,
+                mode: shownMode == .bypass ? nil : shownMode.rawValue,
                 startedAt: now,
                 lastActiveAt: now,
                 messageCount: 0,

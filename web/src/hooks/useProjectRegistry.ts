@@ -28,6 +28,7 @@ import { wsClient } from '@/api/ws';
 import { fetchWithRetry } from '@/utils/fetch-retry';
 import { runWhenVisible } from '@/utils/page-visibility';
 import { fetchProjects, type ProjectSummary } from '@/api/projects';
+import type { SessionEngine, SessionMode } from '@open-walnut/core';
 
 /** One registry row, flattened to what the UI actually reads. */
 export interface ProjectRegistryRow {
@@ -36,6 +37,18 @@ export interface ProjectRegistryRow {
   favorite: boolean;
   defaultCwd?: string;
   defaultHost?: string;
+  /** Launch defaults a new task of the project starts on (server: project-launch-defaults.ts). */
+  defaultEngine?: SessionEngine;
+  /** A model of `defaultEngine`; never set without it. */
+  defaultModel?: string;
+  defaultMode?: SessionMode;
+}
+
+/** A project's launch defaults, as the draft and the settings read them. */
+export interface ProjectLaunchDefaults {
+  engine?: SessionEngine;
+  model?: string;
+  mode?: SessionMode;
 }
 
 export interface UseProjectRegistryReturn {
@@ -146,6 +159,9 @@ function toRows(projects: ProjectSummary[]): ProjectRegistryRow[] {
     favorite: p.favorite,
     ...(p.metadata?.default_cwd ? { defaultCwd: p.metadata.default_cwd } : {}),
     ...(p.metadata?.default_host ? { defaultHost: p.metadata.default_host } : {}),
+    ...(p.metadata?.default_engine ? { defaultEngine: p.metadata.default_engine } : {}),
+    ...(p.metadata?.default_engine && p.metadata.default_model ? { defaultModel: p.metadata.default_model } : {}),
+    ...(p.metadata?.default_mode ? { defaultMode: p.metadata.default_mode } : {}),
   })));
 }
 
@@ -156,7 +172,8 @@ function rowsEqual(a: readonly ProjectRegistryRow[], b: readonly ProjectRegistry
     const x = a[i];
     const y = b[i];
     if (x.name !== y.name || x.source !== y.source || x.favorite !== y.favorite
-      || x.defaultCwd !== y.defaultCwd || x.defaultHost !== y.defaultHost) return false;
+      || x.defaultCwd !== y.defaultCwd || x.defaultHost !== y.defaultHost
+      || x.defaultEngine !== y.defaultEngine || x.defaultModel !== y.defaultModel || x.defaultMode !== y.defaultMode) return false;
   }
   return true;
 }
@@ -381,6 +398,9 @@ export function removeProjectLocal(name: string): (ok: boolean) => void {
 export interface ProjectRowPatch {
   defaultCwd?: string | null;
   defaultHost?: string | null;
+  defaultEngine?: SessionEngine | null;
+  defaultModel?: string | null;
+  defaultMode?: SessionMode | null;
   source?: string;
   favorite?: boolean;
 }
@@ -399,6 +419,20 @@ export function patchProjectLocal(name: string, patch: ProjectRowPatch): (ok: bo
       if (patch.defaultHost) next.defaultHost = patch.defaultHost;
       else delete next.defaultHost;
     }
+    if (patch.defaultEngine !== undefined) {
+      if (patch.defaultEngine) next.defaultEngine = patch.defaultEngine;
+      else delete next.defaultEngine;
+    }
+    if (patch.defaultModel !== undefined) {
+      if (patch.defaultModel) next.defaultModel = patch.defaultModel;
+      else delete next.defaultModel;
+    }
+    if (patch.defaultMode !== undefined) {
+      if (patch.defaultMode) next.defaultMode = patch.defaultMode;
+      else delete next.defaultMode;
+    }
+    // The server's rule: a new or cleared engine drops the old engine's model.
+    if (patch.defaultEngine !== undefined && patch.defaultEngine !== r.defaultEngine && patch.defaultModel === undefined) delete next.defaultModel;
     if (patch.source !== undefined) next.source = patch.source;
     if (patch.favorite !== undefined) next.favorite = patch.favorite;
     return next;
@@ -516,4 +550,35 @@ export function useProjectEntry(project: string): { name: string; row: ProjectRe
     const lower = name.toLowerCase();
     return { name, row: snap.rows.find((r) => r.name.toLowerCase() === lower) ?? null };
   }, [snap, project]);
+}
+
+/** A row's launch defaults; empty when it sets none. */
+export function launchDefaultsOfRow(row: ProjectRegistryRow | null | undefined): ProjectLaunchDefaults {
+  if (!row) return {};
+  return {
+    ...(row.defaultEngine ? { engine: row.defaultEngine } : {}),
+    ...(row.defaultEngine && row.defaultModel ? { model: row.defaultModel } : {}),
+    ...(row.defaultMode ? { mode: row.defaultMode } : {}),
+  };
+}
+
+/** The launch defaults of `project` ('' = Inbox, none), live with the registry store. */
+export function useProjectLaunchDefaults(project: string | null | undefined): ProjectLaunchDefaults & { project?: string } {
+  const snap = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  return useMemo(() => {
+    const lower = (project ?? '').trim().toLowerCase();
+    if (!lower) return {};
+    const row = snap.rows.find((r) => r.name.toLowerCase() === lower);
+    const d = launchDefaultsOfRow(row);
+    return row && (d.engine || d.mode) ? { ...d, project: row.name } : {};
+  }, [snap, project]);
+}
+
+/** The launch defaults of `project` as the store holds them now (a launch handler's read). */
+export function projectLaunchDefaultsNow(project: string | null | undefined): ProjectLaunchDefaults & { project?: string } {
+  const lower = (project ?? '').trim().toLowerCase();
+  if (!lower) return {};
+  const row = snapshot.rows.find((r) => r.name.toLowerCase() === lower);
+  const d = launchDefaultsOfRow(row);
+  return row && (d.engine || d.mode) ? { ...d, project: row.name } : {};
 }

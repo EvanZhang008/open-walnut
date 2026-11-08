@@ -109,6 +109,22 @@ function availabilityOf(engine: SessionEngine): EngineVerdict | undefined {
   return known;
 }
 
+/**
+ * Wait for an engine's first verdict when the mirror has none: a project's default engine is
+ * read first at its first launch (the global one is warmed long before), and that launch must
+ * not run an engine the draft already showed as missing. Later launches read the mirror.
+ */
+export async function ensureEngineVerdict(engine: SessionEngine): Promise<void> {
+  if (inTestRunner() || verdicts.has(engine)) return;
+  let first = firstVerdicts.get(engine);
+  if (!first) {
+    first = refreshDefaultEngineAvailability(engine).finally(() => firstVerdicts.delete(engine));
+    firstVerdicts.set(engine, first);
+  }
+  await first;
+}
+const firstVerdicts = new Map<SessionEngine, Promise<void>>();
+
 /** Tests only: forget every mirrored verdict. */
 export function _resetDefaultEngineAvailabilityForTesting(): void {
   verdicts.clear();

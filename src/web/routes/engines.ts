@@ -385,7 +385,7 @@ enginesRouter.post('/:id/claude-code-import', async (req: Request, res: Response
   }
 })
 
-// GET /api/engines/fallback?host=<key>[&limit=1] — would a new task that names no engine start on the
+// GET /api/engines/fallback?host=<key>[&limit=1][&project=<name>] — would a new task that names no engine start on the
 // fallback engine right now (core/agents/fallback-engine.ts)? The draft says so above its composer.
 // `limit` is the default engine's limit in force on that host, `fallback` the decision, `skip` why
 // a fallback that is set does not take new tasks now.
@@ -396,7 +396,12 @@ enginesRouter.get('/fallback', async (req: Request, res: Response) => {
     const config = await getConfig()
     const { resolveDefaultEngine } = await import('../../core/agents/default-engine.js')
     const { engineLimitNow, explainFallbackLaunch, fallbackDeps, fallbackSetting } = await import('../../core/agents/fallback-engine.js')
-    const defaultEngine = resolveDefaultEngine(config, { host })
+    // A project whose launch defaults name its engine: that engine is the default of its launches.
+    const project = typeof req.query.project === 'string' && req.query.project.trim() ? req.query.project : undefined
+    const { inheritedEnginePick, projectLaunchDefaultsOf } = await import('../../core/sessions/project-launch-defaults.js')
+    const defaultEngine = project
+      ? (await inheritedEnginePick(config, await projectLaunchDefaultsOf(project), host)).engine
+      : resolveDefaultEngine(config, { host })
     const setting = fallbackSetting(config)
     // Nothing set and no one asked for the limit itself (only Settings does, ?limit=1): no reads.
     if (!setting && req.query.limit !== '1') { res.json({ host: host ?? '__local__', defaultEngine, setting: null, fallback: null }); return }

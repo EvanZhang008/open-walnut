@@ -946,6 +946,14 @@ struct SessionCreated: Codable {
     let title: String
 }
 
+/// `POST /api/v1/sessions` answered for a client that sent `sessionIdOptional`: no `sessionId`
+/// when the engine's provider issues its own (the task's session appears once it is up).
+struct SessionLaunched: Codable {
+    let sessionId: String?
+    let taskId: String
+    let title: String
+}
+
 // MARK: - Session control (model / effort / fork — additive, 2026-08)
 
 /// GET /api/v1/sessions/:id/model-options — the model picker's data.

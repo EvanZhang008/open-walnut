@@ -10,6 +10,7 @@ import type { Task, EngineFallbackNote, SessionEffort, SessionEngine, SessionMod
 import type { FallbackDecision } from '../agents/fallback-engine.js';
 import type { RouterArea } from '../router/areas.js';
 import { isRouterAreaSession, routerAreaProfile, runsAreaProfile } from '../router/session-policy.js';
+import { inheritedEnginePick, projectLaunchDefaultsOf, type LaunchSourceRecord, type LaunchValueSource, type ProjectLaunchDefaults } from './project-launch-defaults.js';
 import { engineCaps, isAcpEngine, normalizeEngine, resolveEngine } from '../agents/engine-registry.js';
 import { isDaemonCommandOutcomeUnknown } from '../../providers/delivery-failure.js';
 import { log } from '../../logging/index.js';
@@ -203,22 +204,32 @@ export async function refuseOrgStartWhileOff(task: Pick<Task, 'org_role'>, sourc
  * the default is not Claude; a place that does not resolve leaves the default
  * engine and prepareLaunch reports the real error.
  */
-async function inheritedEngine(task: Task, params: SessionStartParams): Promise<{ engine: SessionEngine | undefined; fallback?: FallbackDecision }> {
+async function inheritedEngine(task: Task, params: SessionStartParams, defaults: ProjectLaunchDefaults): Promise<{ engine: SessionEngine | undefined; model?: string; fallback?: FallbackDecision; from: LaunchValueSource }> {
   const { getConfig } = await import('../config-manager.js');
   const { resolveDefaultEngine } = await import('../agents/default-engine.js');
   // Effort and a model are Claude choices (validateLaunchChoices takes only Claude
   // model ids): a start that names either asked for Claude.
-  if (params.effort || (params.model && params.model !== 'default')) return { engine: undefined };
+  if (params.model && params.model !== 'default') return { engine: undefined, from: 'task' };
+  if (params.effort) {
+    // An effort alone tunes a Claude Code project's own model (the native engine's, which takes
+    // Walnut's effort); over another engine it asks for Claude.
+    return defaults.engine !== undefined && !isAcpEngine(defaults.engine)
+      ? { engine: undefined, ...(defaults.model ? { model: defaults.model } : {}), from: 'project' }
+      : { engine: undefined, from: 'task' };
+  }
   const config = await getConfig();
   const { fallbackSetting, resolveFallbackLaunch } = await import('../agents/fallback-engine.js');
-  // The place is read only when it can change the answer: a default that is not Claude, or a
-  // fallback whose use depends on the host's limit.
-  if (normalizeEngine(resolveDefaultEngine(config)) === undefined && !fallbackSetting(config)) return { engine: undefined };
+  // The place is read only when it can change the answer: a default that is not Claude (the
+  // project's or the global one), or a fallback whose use depends on the host's limit.
+  if (!defaults.engine && normalizeEngine(resolveDefaultEngine(config)) === undefined && !fallbackSetting(config)) return { engine: undefined, from: 'global' };
   const host = await resolveTaskLaunchReadOnly(task, params).then((l) => l.host, () => undefined);
-  const engine = resolveDefaultEngine(config, { host });
+  // The project's default engine (and its model) when it set one, else the global one.
+  const pick = await inheritedEnginePick(config, defaults, host);
   // A task that already has its conversation continues it on its own engine: nothing falls back.
-  const fallback = await taskConversation(task.id).then((c) => c ? null : resolveFallbackLaunch(config, engine, host || undefined), () => null);
-  return fallback ? { engine: normalizeEngine(fallback.engine), fallback } : { engine: normalizeEngine(engine) };
+  const fallback = await taskConversation(task.id).then((c) => c ? null : resolveFallbackLaunch(config, pick.engine, host || undefined), () => null);
+  return fallback
+    ? { engine: normalizeEngine(fallback.engine), fallback, from: 'fallback' }
+    : { engine: normalizeEngine(pick.engine), ...(pick.model ? { model: pick.model } : {}), from: pick.from };
 }
 
 /** The task's note of why its session runs on the fallback engine: written at the start, and an
@@ -429,22 +440,39 @@ async function startSessionForTaskNow(params: SessionStartParams, picked: { spli
   }
   // Resolved before the duplicate check: on the normal path nothing awaits between
   // that check and taking the slot below, or two concurrent starts both get through.
+  // The task's project's launch defaults (project-launch-defaults.ts): a switch or a transfer moves
+  // a conversation with its own settings, and an area task is always Claude Code: they take none.
+  const defaults = area || params.source === 'engine-switch' || params.source === 'transfer' ? {} : await projectLaunchDefaultsOf(task.project);
+  const callerNamedModel = !!params.model && params.model !== 'default';
   // An area task is always Claude Code: neither the engine split nor the install's default engine applies to it.
-  // The engine split (engine-split.ts) speaks before the default engine; a named engine is the override.
-  const split = !area && params.engine === undefined ? await splitPick(task, params) : null;
+  // The order: a named engine, the project's default engine, the engine split (engine-split.ts), the default engine.
+  const split = !area && params.engine === undefined && !defaults.engine ? await splitPick(task, params) : null;
   if (split?.model) params = { ...params, model: split.model };
   // A pick that is the default engine itself (no model of its own) still falls back while that
   // engine is out of usage, as every other new task does (fallback-engine.ts).
   const splitFallback = split && !split.model
-    ? await inheritedEngine(task, params).then((i) => i.fallback && normalizeEngine(i.fallback.note.from) === normalizeEngine(split.engine) ? i : undefined)
+    ? await inheritedEngine(task, params, defaults).then((i) => i.fallback && normalizeEngine(i.fallback.note.from) === normalizeEngine(split.engine) ? i : undefined)
     : undefined;
   const inherited = area ? undefined : split ? splitFallback
-    : params.engine !== undefined ? undefined : await inheritedEngine(task, params);
+    : params.engine !== undefined ? undefined : await inheritedEngine(task, params, defaults);
   const engine = params.engine !== undefined ? normalizeEngine(params.engine)
-  : inherited?.fallback ? inherited.engine : split ? normalizeEngine(split.engine) : inherited?.engine;
+    : inherited?.fallback ? inherited.engine : split ? normalizeEngine(split.engine) : inherited?.engine;
   // The fallback's model rides only this launch (prepareLaunch below): a start that waits for its
-  // workspace or a slot replays the start as asked, and decides again then.
+  // workspace or a slot replays the start as asked, and decides again then. So do the project's
+  // model and mode: the replay reads the project again.
   const fallback = inherited?.fallback;
+  const inheritedModel = fallback?.model ?? inherited?.model;
+  const projectMode = params.mode === undefined ? defaults.mode : undefined;
+  const launchSource: LaunchSourceRecord = {
+    // The split's pick and an area task's Claude Code are the global settings', as the default engine is.
+    engine: inherited?.from ?? (params.engine !== undefined ? 'task' : 'global'),
+    // An engine named alone runs its own default model: no one picked that.
+    model: !inherited || inherited.from === 'task' ? (callerNamedModel ? 'task' : 'global')
+      : fallback ? 'fallback' : inherited.model ? 'project' : 'global',
+    mode: params.mode !== undefined ? 'task' : projectMode ? 'project' : 'global',
+  };
+  const usedProject = Object.values(launchSource).includes('project');
+  if (usedProject && task.project) launchSource.project = task.project;
   const pending = pendingStarts.get(task.id);
   if (pending !== undefined) throw alreadyStarted(task, pending);
   if (task.start_queue?.wait_for_slot && !params.queuedAt && params.host === undefined && params.cwd === undefined) {
@@ -553,7 +581,12 @@ async function startSessionForTaskNow(params: SessionStartParams, picked: { spli
         }
       }
     }
-    const launch = await prepareLaunch(task, { ...params, engine, ...(fallback?.model ? { model: fallback.model } : {}) }, area);
+    const launch = await prepareLaunch(task, {
+      ...params, engine, ...(inheritedModel ? { model: inheritedModel } : {}), ...(projectMode ? { mode: projectMode } : {}),
+    }, area);
+    launchSource.started = {
+      engine: resolveEngine(engine), ...(launch.model ? { model: launch.model } : {}), ...(launch.mode ? { mode: launch.mode as SessionMode } : {}),
+    };
     // An engine switch's own start leaves the note to the switch: it clears it once it is done.
     if (params.source !== 'engine-switch') await noteEngineFallback(task, fallback?.note);
     // A first start that names no host goes where there is room (start-placement.ts); an area task
@@ -595,7 +628,7 @@ async function startSessionForTaskNow(params: SessionStartParams, picked: { spli
       await validateInboxStartBoundary(task.id, params.startAttemptId);
     }
     const claimed = await withInboxStartAuthorization(task.id, params.startAttemptId, () => updateTaskRaw(task.id, {
-      last_start: attempt, ...(params.queuedAt ? { start_queue: null as never } : {}), }, {
+      last_start: attempt, launch_source: launchSource, ...(params.queuedAt ? { start_queue: null as never } : {}), }, {
       source: 'task-start', shouldUpdate: (current) => current.last_start?.id === task.last_start?.id
         && (!params.queuedAt || current.start_queue?.at === params.queuedAt)
         && (!params.startAttemptId || stableJson(current.last_start) === stableJson(task.last_start)

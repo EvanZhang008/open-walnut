@@ -36,6 +36,7 @@ import { registry } from '../../core/integration-registry.js'
 import type { TaskSource } from '../../core/types.js'
 import type { SlimTask } from '../../core/task-manager.js'
 import { orgDisplayTitle, pickLead } from '../../core/org/org-tree.js'
+import { ProjectSettingsError } from '../../core/sessions/project-launch-defaults.js'
 
 export const projectsRouter = Router()
 
@@ -361,6 +362,11 @@ projectsRouter.put('/:name/metadata', async (req: Request, res: Response, next: 
     const result = await setProjectMetadata(name, normalized)
     res.json(result)
   } catch (err) {
+    // A launch default that does not check out (project-launch-defaults.ts) is the caller's to fix.
+    if (err instanceof ProjectSettingsError) {
+      res.status(400).json({ error: err.message })
+      return
+    }
     next(err)
   }
 })

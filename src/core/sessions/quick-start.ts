@@ -17,6 +17,7 @@ import { spillLargePromptToFile } from './quick-start-spill.js';
 import { engineCaps, isAcpEngine, normalizeEngine } from '../agents/engine-registry.js';
 import { resolveDefaultEngine } from '../agents/default-engine.js';
 import type { FallbackDecision } from '../agents/fallback-engine.js';
+import type { LaunchSourceRecord } from './project-launch-defaults.js';
 import { buildAskProfilePrefix } from './ask-profile-prefix.js';
 import { isPersonSource } from './send-sent-by.js';
 import { heuristicShortTitle } from './task-title-brake.js';
@@ -121,6 +122,13 @@ export interface QuickStartParams {
   fallback?: FallbackDecision;
   /** The caller ran the fallback decision itself (none came of it when `fallback` is absent). */
   fallbackDecided?: boolean;
+  /** Where the launch's engine, model and mode came from (project-launch-defaults.ts), noted on
+   *  the task for its session's pickers. Absent: a caller that resolved no defaults; an older
+   *  note is taken off, since it described another start. */
+  launchSource?: LaunchSourceRecord;
+  /** The caller resolved the engine itself (its project's default, the global one): an absent
+   *  `engine` is Claude Code then, never the global default again. */
+  engineDecided?: boolean;
   /**
    * Caller-minted session id, forwarded to the CLI as `--session-id`. Lets the
    * HTTP route return the session id in its response instead of making the UI
@@ -242,11 +250,55 @@ export function continuedSessionOf(task: Task): string | undefined {
   return continuedSessions.get(task);
 }
 
+/**
+ * The launch values of a project that sets launch defaults, for a caller that resolved none, or
+ * undefined (no project, or one with none). A caller that minted its session id has promised it,
+ * so a project engine that issues its own ids gives way to Claude Code there, its model with it.
+ */
+async function projectDefaultsLaunch(params: QuickStartParams, model: string | undefined, mode: string | undefined): Promise<{
+  engine: SessionEngine | undefined; model: string | undefined; mode: string | undefined;
+  fallback: FallbackDecision | undefined; source: LaunchSourceRecord;
+} | undefined> {
+  const projectName = params.existingTaskId
+    ? (await getTask(params.existingTaskId).catch(() => null))?.project
+    : params.project;
+  if (!projectName) return undefined;
+  const { hasLaunchDefaults, pickLaunchDefaults, projectLaunchDefaultsOf } = await import('./project-launch-defaults.js');
+  if (!hasLaunchDefaults(await projectLaunchDefaultsOf(projectName))) return undefined;
+  const { getConfig } = await import('../config-manager.js');
+  const { selfDecidesFallback } = await import('../agents/fallback-engine.js');
+  const namesModel = !!model && model !== 'default';
+  const pick = await pickLaunchDefaults({
+    config: await getConfig(), project: projectName, host: params.host,
+    named: { engine: params.engine, model, mode },
+    decidesFallback: params.engine === undefined && !namesModel && selfDecidesFallback(params.source, false),
+  });
+  let engine = pick.engine;
+  let fallback = pick.fallback ?? undefined;
+  let source: LaunchSourceRecord = pick.source;
+  let launchModel = pick.model ?? model;
+  if (params.preassignedSessionId && params.engine === undefined && engine && engineCaps(engine).idProvisioning === 'provider-issued') {
+    log.web.info(`${params.source}: the project's engine issues its own session ids; this launch keeps the id it was given and runs on Claude Code`, {
+      project: projectName, engine, sessionId: params.preassignedSessionId,
+    });
+    engine = undefined;
+    fallback = undefined;
+    launchModel = model;
+    source = { ...source, engine: 'global', model: namesModel ? 'task' : 'global' };
+  }
+  const launchMode = mode ?? pick.mode;
+  return {
+    engine, model: launchModel, mode: launchMode, fallback,
+    source: { ...source, started: { engine: engine ?? 'claude', ...(launchModel ? { model: launchModel } : {}), ...(launchMode ? { mode: launchMode as import('../types.js').SessionMode } : {}) } },
+  };
+}
+
 export async function quickStartSession(params: QuickStartParams): Promise<Task> {
   const {
-    message, messagePrefix, host, mode, existingTaskId, taskMeta,
+    message, messagePrefix, host, existingTaskId, taskMeta,
     source, requestTs = Date.now(), preassignedSessionId, walnutAgent,
   } = params;
+  let mode = params.mode;
   let { cwd } = params;
   // The task's own directory is known only once the task has its id (below).
   const inOwnTaskDir = params.ownTaskDir === true && !cwd && !host && !existingTaskId && !walnutAgent;
@@ -298,10 +350,26 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
   // the fallback (agents/fallback-engine.ts), unless the caller already decided it.
   let fallback = params.fallback;
   const { selfDecidesFallback } = await import('../agents/fallback-engine.js');
-  const selfDecides = !params.fallbackDecided && !fallback && selfDecidesFallback(source, walnutAgent);
+  let fallbackDecided = !!params.fallbackDecided;
+  let engineDecided = !!params.engineDecided;
+  let launchSource = params.launchSource;
+  // The task's project's launch defaults (project-launch-defaults.ts) for a caller that resolved
+  // none (a routine's run, a watcher, a notification repair, an org autostart): new tasks of a
+  // project start on them on every path. The web's new task and the phone resolve them first and
+  // pass launchSource; Ask Walnut keeps its own rules. A project that sets none changes nothing.
+  if (!launchSource && !engineDecided && !fallback && !fallbackDecided && !walnutAgent) {
+    const picked = await projectDefaultsLaunch(params, model, mode);
+    if (picked) {
+      ({ engine, model, mode, fallback } = picked);
+      launchSource = picked.source;
+      engineDecided = true;
+      fallbackDecided = true;
+    }
+  }
+  const selfDecides = !fallbackDecided && !fallback && selfDecidesFallback(source, walnutAgent);
   // Only a launch whose engine was decided here (or by its caller) writes or clears the note: a
   // workspace's replay, the phone or a repair leaves the task's note as it is.
-  const decides = !!fallback || !!params.fallbackDecided || selfDecides;
+  const decides = !!fallback || fallbackDecided || selfDecides;
   if (fallback) {
     engine = normalizeEngine(fallback.engine);
     model = fallback.model;
@@ -317,7 +385,7 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
       model = decided.model;
     }
   }
-  if (engine === undefined && !fallback) {
+  if (engine === undefined && !fallback && !engineDecided) {
     const { getConfig } = await import('../config-manager.js');
     const inherited = normalizeEngine(resolveDefaultEngine(await getConfig(), { host }));
     // A caller that minted its own session id has already PROMISED it: it rides
@@ -643,13 +711,18 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
 
   // Why this task runs on another engine (the session panel's banner, task_get); a retry that
   // starts on the default engine again takes an older note off. Written before a deferred start
-  // returns: its replay runs on the engine decided here.
-  if (fallback || (decides && updatedTask.engine_fallback)) {
+  // returns: its replay runs on the engine decided here. With it, where the launch's engine, model
+  // and mode came from (its session's pickers say so).
+  const notes: Partial<Pick<Task, 'engine_fallback' | 'launch_source'>> = {
+    ...(fallback || (decides && updatedTask.engine_fallback) ? { engine_fallback: fallback?.note ?? null } : {}),
+    ...(launchSource ? { launch_source: launchSource } : decides && updatedTask.launch_source ? { launch_source: null } : {}),
+  };
+  if (Object.keys(notes).length > 0) {
     try {
-      const written = await updateTaskRaw(updatedTask.id, { engine_fallback: fallback?.note ?? null }, { source, emitEvent: true });
+      const written = await updateTaskRaw(updatedTask.id, notes, { source, emitEvent: true });
       if (written.task) updatedTask = written.task;
     } catch (err) {
-      log.web.warn(`${source}: fallback engine note not written`, { taskId: updatedTask.id, error: err instanceof Error ? err.message : String(err) });
+      log.web.warn(`${source}: launch notes not written`, { taskId: updatedTask.id, error: err instanceof Error ? err.message : String(err) });
     }
   }
 

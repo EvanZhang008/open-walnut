@@ -39,6 +39,8 @@ export const LAUNCH_PARITY: Readonly<Record<string, ParityEntry>> = {
   overrideReadiness: { none: '"Start anyway" answers the host readiness gate of a person\'s launch; task_start does not run that gate.' },
   sessionId: { none: 'A browser-minted id so a lost HTTP answer stays reconcilable; the op reads the id from its answer.' },
   ownTaskDir: { none: 'The browser extension\'s New task has no folder picker, so its task starts in its own task directory; an agent names its cwd (a worker\'s task starts beside it), and task_dir makes a task directory.' },
+  fromFolder: { none: 'Says the draft\'s engine and model are the folder\'s remembered pick, for the task\'s record of where they came from; an agent names its own.' },
+  expectEngine: { none: 'Never sent: the browser decides from it whether to mint sessionId (the project\'s engine may issue its own ids).' },
   hints: { none: 'The browser side panel asks for its object-context hint (the page, mail or tab the person asks about); an agent says what it means in its message.' },
 }
 

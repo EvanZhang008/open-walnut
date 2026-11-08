@@ -34,6 +34,7 @@ import { projectDisplayName } from '@/utils/project-display';
 import { ProjectScriptsDialog, scriptRoles } from '@/components/workspaces/ProjectScriptsDialog';
 import type { ProjectScript } from '@/api/workspaces';
 import { AgentText } from '@/components/common/AgentText';
+import { ProjectLaunchDefaults } from './ProjectLaunchDefaults';
 
 interface ProjectDetailPaneProps {
   /** Never '' — Inbox has no registry row. */
@@ -267,6 +268,9 @@ export function ProjectDetailPane({ project, tasks, onClose, style }: ProjectDet
             </span>
           )}
         </div>
+
+        {/* The engine, model and permission mode its new tasks start on. */}
+        <ProjectLaunchDefaults project={entryName} row={row} />
 
         {/* MS To-Do alias: a migrated project keeps pushing to its old remote list. */}
         {metadata.remote_list && metadata.remote_list !== displayName && (

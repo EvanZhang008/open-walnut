@@ -33,8 +33,9 @@ type SerialSave = ReturnType<typeof useSerialSave>;
 const ENGINE_KEY = 'sessions.fallback-engine';
 const MODEL_KEY = 'sessions.fallback-model';
 
-/** One engine's model rows: the host catalog for Claude Code, the adapter's own list otherwise. */
-function useFallbackModels(engine: SessionEngine | null): { options: Array<{ value: string; label: string }>; loading: boolean; error: string | null } {
+/** One engine's model rows: the host catalog for Claude Code, the adapter's own list otherwise
+ *  (also the project settings' default model, components/tasks/ProjectLaunchDefaults.tsx). */
+export function useFallbackModels(engine: SessionEngine | null): { options: Array<{ value: string; label: string }>; loading: boolean; error: string | null } {
   const claude = useModelOptions(null);
   const [acp, setAcp] = useState<{ engine: string; options: Array<{ value: string; label: string }>; error: string | null } | null>(null);
   const isClaude = engine === 'claude';

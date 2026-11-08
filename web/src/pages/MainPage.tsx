@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useLayoutEffect, useMemo, useRef, Fragment } from 'react';
 import { useCommittedRef } from '@/hooks/useCommittedRef';
 import type { NavigateFunction } from 'react-router-dom';
-import type { SessionMode, Task } from '@open-walnut/core';
+import type { SessionEngine, SessionMode, Task } from '@open-walnut/core';
 import { getEngineCatalog } from '@/hooks/useEngineCatalog';
 import { launchEngineForHost, normalizeEngine } from '@/utils/engines';
 import { knownFallbackEngine } from '@/api/engine-fallback';
@@ -15,7 +15,8 @@ import { useNotifications } from '@/contexts/notifications';
 import { useFavorites } from '@/hooks/useFavorites';
 import { useFocusBarContext } from '@/contexts/FocusBarContext';
 import { useOrdering } from '@/hooks/useOrdering';
-import { useProjectRegistry } from '@/hooks/useProjectRegistry';
+import { projectLaunchDefaultsNow, useProjectRegistry } from '@/hooks/useProjectRegistry';
+import { defaultEngineRuns, draftLaunchChoice, draftLaunchPayload, unnamedLaunchIsNotClaude, useGlobalDefaultEngine } from '@/utils/launch-source';
 import { projectService } from '@/components/tasks/private-task-model';
 import { homeColumnsField, isPhoneLayout, usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { isPhoneOverlayOpen } from '@/hooks/usePhoneOverlayHistory';
@@ -427,6 +428,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Display label for a tier value (a built-in's board label, custom id → its label).
   const tierLabel = useCallback((tier: string): string => tierLabelOf(tier, focusBar.customTiers), [focusBar.customTiers]);
   const projectRegistry = useProjectRegistry();
+  // config.defaults.engine, for a draft launch's "names Claude Code" rule (utils/launch-source.ts).
+  const globalEngine = useGlobalDefaultEngine();
+  const globalEngineRef = useRef(globalEngine);
+  globalEngineRef.current = globalEngine;
   const { projectByCwd, projectDefaults } = projectRegistry;
   const ordering = useOrdering();
   // Configured task defaults (platform/project) for quick-add capture. Fetched once;
@@ -1544,9 +1549,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const handleDraftMetaChange = useCallback((
     draftId: string,
     updater: (m: QuickStartTaskMeta) => QuickStartTaskMeta,
+    opts?: { touched?: boolean },
   ) => {
     setDraftColumns(prev => prev.map(d => (d.id === draftId
-      ? { ...d, meta: updater(d.meta), metaTouched: true, userTouched: true }
+      ? { ...d, meta: updater(d.meta), metaTouched: opts?.touched ?? true, userTouched: true }
       : d)));
   }, []);
 
@@ -1990,6 +1996,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       taskId: meta.realTaskId, // reuse existing task if we have one
       ...(meta.walnutAgent ? { walnutAgent: true } : {}),
       ...(meta.mode ? { mode: meta.mode } : {}),
+      ...(meta.engine ? { engine: meta.engine } : {}),
+      ...(meta.model ? { model: meta.model } : {}),
     }).then((result) => {
       // Update refs with (possibly new) taskId
       if (pendingQuickStartRef.current) {
@@ -2027,7 +2035,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Quick-start: track pending taskId, auto-open session panel when it starts
   const pendingQuickStartRef = useRef<string | null>(null);
   // Metadata for the pending session panel (cwd, host, etc.)
-  const pendingQuickStartMetaRef = useRef<{ id: string; cwd: string; host?: string; hostLabel?: string; realTaskId?: string; message?: string; httpError?: string; walnutAgent?: boolean; gated?: boolean; mode?: SessionMode } | null>(null);
+  const pendingQuickStartMetaRef = useRef<{ id: string; cwd: string; host?: string; hostLabel?: string; realTaskId?: string; message?: string; httpError?: string; walnutAgent?: boolean; gated?: boolean; mode?: SessionMode; engine?: SessionEngine; model?: string } | null>(null);
 
   // Fork: pending panel metadata (same pattern as quick-start)
   const pendingForkMetaRef = useRef<{ id: string; cwd: string; host?: string; realTaskId?: string; httpError?: string } | null>(null);
@@ -2942,6 +2950,14 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       overrideReadiness?: boolean;
       /** Isolated workspace: the task is filed now, its session starts once the host made it. */
       workspace?: { provider: string; inputs: Record<string, unknown> };
+      /** The user picked Claude Code over a default that is not (utils/launch-source.ts
+       *  draftLaunchPayload): the launch names it, or the server would start that default. */
+      namesClaude?: boolean;
+      /** The engine the server will pick for a launch that names none (the project's): no
+       *  client-owned session id for one whose provider issues its own. */
+      expectEngine?: SessionEngine;
+      /** The pair named is the folder's last pick (utils/launch-source.ts draftLaunchChoice). */
+      fromFolder?: boolean;
     },
   ) => {
       // Set pending ref BEFORE the async call so WS events that arrive
@@ -3022,6 +3038,14 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       // untouched pill reads the launch default, which the server applies to a
       // launch that names no mode, so the payload stays as it always was.
       const mode = metaSnapshot?.mode;
+      const sentEngine: SessionEngine | undefined = !engine && opts?.namesClaude && !opts?.walnutAgent ? 'claude' : engine;
+      // Retry replays the pair as it was sent: silence would let a project's default replace a pick.
+      if (pendingQuickStartMetaRef.current?.id === pendingColId && !opts?.walnutAgent) {
+        pendingQuickStartMetaRef.current = {
+          ...pendingQuickStartMetaRef.current,
+          ...(sentEngine ? { engine: sentEngine } : {}), ...(model ? { model } : {}),
+        };
+      }
 
       const settled = quickStartSession({
         cwd: qsp.cwd,
@@ -3031,7 +3055,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         taskMeta,
         model,
         ...(mode ? { mode } : {}),
-        engine,
+        engine: sentEngine,
+        ...(opts?.expectEngine && !engine ? { expectEngine: opts.expectEngine } : {}),
+        ...(opts?.fromFolder && (sentEngine || model) ? { fromFolder: true } : {}),
         project,
         projectFromFolder: opts?.projectFromFolder,
         intent: qsp.intent,
@@ -3221,6 +3247,13 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     // while the draft row + its composer key disappear. Splitting these would
     // render either a `pending:` column still holding a DraftSessionPanel, or a
     // draft row with no column — both flash visibly.
+    // The engine, model and mode this launch names, by its project's launch defaults
+    // (utils/launch-source.ts, the chain the draft's pills showed).
+    const launchDefaults = draft.walnut ? {} : projectLaunchDefaultsNow(draft.intent === 'fix-walnut' ? 'Walnut' : draft.project);
+    const launchChoice = (() => {
+      const choice = draftLaunchChoice(draft, launchDefaults, globalEngineRef.current, (e) => defaultEngineRuns(e, draft.host, getEngineCatalog()));
+      return { choice, sent: draftLaunchPayload(choice, draft.meta, unnamedLaunchIsNotClaude(launchDefaults, globalEngineRef.current)) };
+    })();
     forgetDraft(draftId);
     launchQuickStart(
       // createCwd must ride along: the picker's "Create folder & start" row
@@ -3235,8 +3268,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       // A tier the app knows is gone (deleted custom tier) launches as Focus,
       // the same value the ledger records as chosen.
       // A model the folder only remembered gives way to the fallback engine (the draft said so).
-      fallbackLaunchMeta(draft, launchMetaFor(draft, knownTier), knownFallbackEngine(draft.host),
-        !!launchEngineForHost(draft.meta.engine, draft.host, getEngineCatalog())),
+      // What the project's launch defaults decide is left to the server (draftLaunchPayload).
+      fallbackLaunchMeta(draft, { ...launchMetaFor(draft, knownTier), engine: launchChoice.sent.engine === 'claude' ? undefined : launchChoice.sent.engine, model: launchChoice.sent.model, mode: launchChoice.sent.mode },
+        knownFallbackEngine(draft.host, launchChoice.choice.from.engine === 'project' ? launchChoice.choice.project : undefined),
+        !!launchEngineForHost(launchChoice.sent.engine, draft.host, getEngineCatalog()) || launchChoice.sent.engine === 'claude'),
       message,
       images,
       draft.project || undefined,
@@ -3251,6 +3286,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         restore: { draft, composerText: text, ...(images?.length ? { images } : {}) },
         ...(startOpts?.overrideReadiness ? { overrideReadiness: true } : {}),
         ...(wsRequest ? { workspace: wsRequest } : {}),
+        ...(launchChoice.sent.engine === 'claude' ? { namesClaude: true } : {}),
+        ...(launchChoice.choice.from.engine === 'project' ? { expectEngine: launchChoice.choice.engine ?? 'claude' } : {}),
+        ...(launchChoice.choice.from.model === 'folder' ? { fromFolder: true } : {}),
       },
     );
     return true;

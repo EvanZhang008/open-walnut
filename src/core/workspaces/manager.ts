@@ -100,6 +100,7 @@ const realDeps: WorkspaceManagerDeps = {
       cwd: ws.cwd!, host: ws.host === '__local__' ? undefined : ws.host,
       model: pending.model, mode: pending.mode, existingTaskId: task.id,
       source: pending.source ?? 'workspace', engine: pending.engine as never,
+      ...(pending.engine_decided ? { engineDecided: true } : {}),
       ...(pending.session_id ? { preassignedSessionId: pending.session_id } : {}),
     })
   },
