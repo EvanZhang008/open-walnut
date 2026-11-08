@@ -2724,6 +2724,15 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // A count, not a flag: review cards send at once, each from its own box, and
   // one send ending must not let another's bubble move the timeline.
   const cardSendHold = useRef(0);
+  /** A send from a question's card (the open card, a review card's box): the
+   *  reader is at the card, so the timeline stops following its end too. At the
+   *  bottom, the question's row the send adds at the end pulled the timeline (and
+   *  the passage under the card) 42px up (macOS WebKit, 2026-11-08). */
+  const holdForCardSend = useCallback(async (send: () => Promise<boolean>) => {
+    isAtBottom.current = false;
+    cardSendHold.current++;
+    try { return await send(); } finally { cardSendHold.current--; }
+  }, []);
   const ownBubbleCount = useMemo(() => {
     const list = optimisticMessages ?? [];
     if (!stackMode) return list.length;
@@ -4256,10 +4265,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // A review card's reply box: its question's own draft and send, the open
   // card's (a send from the side never moves the timeline, as the card's).
   const reviewDraftKeyOf = useCallback((key: string) => composerDraftKey(sessionId, key, threadTree), [sessionId, threadTree]);
-  const sendFromReview = useCallback(async (key: string, text: string, images?: ImageAttachment[]) => {
-    cardSendHold.current++;
-    try { return await threadsApi.sendToQuestion(key, text, images); } finally { cardSendHold.current--; }
-  }, [threadsApi.sendToQuestion]);
+  const sendFromReview = useCallback(
+    (key: string, text: string, images?: ImageAttachment[]) => holdForCardSend(() => threadsApi.sendToQuestion(key, text, images)),
+    [holdForCardSend, threadsApi.sendToQuestion]);
   const review = useThreadReviewPane({
     sessionId, containerRef, conversationMode: convMode, hasQuestions, tree: threadTree, metaIndex: threadsApi.metaIndex,
     numbers: questionLabel, messages, liveText: reviewLiveText, markStates, openCard,
@@ -5170,10 +5178,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     setCardOpen(false);
     threadsApi.quoteInChat(key, 'card');
   }, [threadsApi.quoteInChat, sessionId, threadTree]);
-  const sendFromCard = useCallback(async (text: string, images?: ImageAttachment[]) => {
-    cardSendHold.current++;
-    try { return await threadsApi.sendToTarget(text, images); } finally { cardSendHold.current--; }
-  }, [threadsApi.sendToTarget]);
+  const sendFromCard = useCallback(
+    (text: string, images?: ImageAttachment[]) => holdForCardSend(() => threadsApi.sendToTarget(text, images)),
+    [holdForCardSend, threadsApi.sendToTarget]);
   const cardMenu = cardKey && cardNode && threadsApi.actions ? (
     <ThreadStackMenu
       variant="page" threadKey={cardKey} visibleDescendants={threadsApi.actions.visibleDescendantCount(cardKey)} hiddenCount={0}

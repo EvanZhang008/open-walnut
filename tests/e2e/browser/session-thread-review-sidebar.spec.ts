@@ -619,6 +619,30 @@ test.describe('the fullscreen review sidebar', () => {
     await page.keyboard.press('Escape')
     await expect(panel.locator('.thread-card')).toHaveCount(0)
     await expect(box).toHaveValue('half a follow-up and more')
+
+    // At the bottom of the timeline (where a live session sits): a send from the
+    // last card's box keeps the timeline still (2026-11-08, macOS WebKit: the
+    // question's row added at the end pulled it 42px), and the keyboard stays in
+    // the box for the next follow-up.
+    const last = sidebarCards(panel).filter({ hasText: REVIEW_TITLES[REVIEW_COUNT - 1] })
+    const lastBox = last.locator('textarea.thread-card-input')
+    const hb = (await history.boundingBox())!
+    await page.mouse.move(hb.x + hb.width * 0.3, hb.y + hb.height / 2)
+    await expect.poll(async () => {
+      await page.mouse.wheel(0, 2000)
+      await page.waitForTimeout(120)
+      return history.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight)
+    }, { timeout: 15_000 }).toBeLessThan(2)
+    await expect(lastBox).toBeInViewport()
+    const atBottom = await settledScrollTop(history)
+    await clickInPlace(page, lastBox)
+    await page.keyboard.type('And at the end?')
+    await page.keyboard.press('Enter')
+    await expect(lastBox).toHaveValue('')
+    await expect(last.locator('.thread-review-body')).toContainText('processed your message: And at the end?', { timeout: 30_000 })
+    await page.waitForTimeout(400)
+    expect(Math.abs((await history.evaluate((el) => el.scrollTop)) - atBottom), 'the timeline stayed put at the bottom').toBeLessThan(2)
+    await expect(lastBox, 'the keyboard is back in the box').toBeFocused()
   })
 
   test('scrolling a long reply with 22 cards stays smooth', async ({ page, browserName }) => {

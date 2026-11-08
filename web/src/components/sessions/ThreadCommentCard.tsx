@@ -297,11 +297,21 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
       }
     } finally {
       setSending(false);
-      boxRef.current?.focus({ preventScroll: true });
+      // Once the box is enabled again (focus on a disabled box goes nowhere).
+      refocus.current = true;
     }
   }, [text, sending, p, draft, pictures]);
   // Send (button or Enter) while the mic is recording waits for its last words.
   const gate = useSendAfterDictation([mic], () => { void send(); });
+  // The keyboard back in the box after a send: done once the box is enabled
+  // again (2026-11-08: focused while still disabled, it fell to the page, and
+  // Esc no longer closed the card).
+  const refocus = useRef(false);
+  useEffect(() => {
+    if (sending || !refocus.current) return;
+    refocus.current = false;
+    boxRef.current?.focus({ preventScroll: true });
+  }, [sending]);
 
   const g = p.style.grown;
   // Worth a button only when expanding gains real room.
