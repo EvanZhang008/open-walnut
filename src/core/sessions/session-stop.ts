@@ -29,6 +29,8 @@ export interface SessionStopDeps {
   /** Every pending stop, on any host (startup arms their deadlines). */
   pendingAll?(): Promise<SessionRecord[]>
   park(sid: string): Promise<void>
+  /** A withdrawn stop: put back what its park set aside (rows parked under the stop's reason since `since`). */
+  unpark?(sid: string, since: string, fence: string): Promise<void>
   connection(host: string): Promise<SessionStopConnection | null>
   /**
    * Whether a host with no live connection answers a fresh connect (host-lost.ts). Absent:
@@ -212,6 +214,32 @@ export class SessionStopCoordinator {
     }
   }
 
+  /**
+   * The asker no longer wants this stop (a switch or move it was for was refused because the
+   * CLI still runs: replaced-session.ts). Its tries end, its fence is lifted and the rows its
+   * park set aside go back, so the session the task stays on works as before; a later stop
+   * request starts afresh. Returns whether it withdrew that pending stop.
+   */
+  withdraw(sid: string, id: string, why: string): Promise<boolean> {
+    return this.serial(sid, async () => {
+      const current = await this.deps.get(sid)
+      const request = current?.stopRequest
+      if (request?.state !== 'pending' || request.id !== id) return false
+      // A lost host's stop is the only thing that ends its CLI when it returns: it stays.
+      if (current?.hostLost && !current.hostLost.endedAt) return false
+      this.retries.get(sid)?.cancel()
+      this.retries.delete(sid)
+      const withdrawn: StopRequest = { id, requestedAt: request.requestedAt, state: 'failed', error: `Withdrawn: ${why}` }
+      const updated = await this.deps.confirm(sid, withdrawn)
+      if (!updated) return false
+      await this.deps.unpark?.(sid, request.requestedAt, id)
+      this.deps.changed(updated)
+      const { log } = await import('../../logging/index.js')
+      log.session.info('session stop: withdrawn by its asker; the session takes messages again', { sessionId: sid, stopRequestId: id, why })
+      return true
+    })
+  }
+
   /** The wait ran out: a stop still pending (the same one) fails with its reason. */
   private fail(sid: string, id: string, tries: number): Promise<void> {
     return this.serial(sid, async () => {
@@ -326,6 +354,19 @@ export const sessionStops = new SessionStopCoordinator({
     if (queue.length) await parkMessages(queue, STOP_PARKED_REASON, true)
     // What a person lined up for the turn's end is set aside with the rest.
     await (await import('./queue-after-turn.js')).setAsideAfterTurnHolds(sid)
+  },
+  unpark: async (sid, since, fence) => {
+    const { mutateStore } = await import('../session-queue-store.js')
+    const { STOP_PARKED_REASON } = await import('../relay-fates.js')
+    await mutateStore((s) => {
+      for (const row of s.queues[sid] ?? []) {
+        if (row.status !== 'parked' || row.parkedReason !== STOP_PARKED_REASON || (row.parkedAt ?? '') < since) continue
+        row.status = 'pending'
+        row.stopFence = fence
+        delete row.parkedAt
+        delete row.parkedReason
+      }
+    }, false, true)
   },
   connection: async (host) => (await import('../../providers/daemon-connection.js')).getConnectedDaemonConnection(host),
   changed: (record) => {

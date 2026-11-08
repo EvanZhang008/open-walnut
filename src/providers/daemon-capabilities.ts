@@ -913,6 +913,13 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // Both twins, not bridge-reachable, not for followers. Optional: without it a move
   // leaves those copies in the shared checkout and its summary says so.
   'task-move-clear-v1',
+  // 'task-move-into-v1' (transfer-pack-core.ts): `transfer.apply {dest, bundleDir, into: true}`
+  // sets a moved repository up in the existing checkout at dest, the copy the work left when it
+  // moved away, only while nothing changed there (clean tree, HEAD an ancestor of the packed
+  // commit); else `dest_changed` with nothing changed. A move back then continues in the task's
+  // own folder. Both twins, not bridge-reachable, not for followers. Optional: without it a move
+  // back sets the work up in a new folder beside the old copy.
+  'task-move-into-v1',
   // 'host-vitals-v1' (host-vitals-core.ts): `host.vitals {days?, bucketMinutes?}` answers
   // how this host is doing (CPU use, load, memory available, uptime, linked, running
   // sessions) and folds the minute ledger the daemon writes under HOME (31 days) into

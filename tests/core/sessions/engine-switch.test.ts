@@ -62,11 +62,13 @@ vi.mock('../../../src/core/sessions/session-lifecycle.js', () => ({
     edges.reads.push({ sid, stopped: edges.stops.includes(sid) });
     return { messages: edges.history[sid] ?? [] };
   },
+  // The real result shape: a confirmed stop reads `terminated`; a stuck one stays `pending`.
   terminateSession: async (sid: string) => {
     edges.stops.push(sid);
-    if (edges.stuck.has(sid)) return;
+    if (edges.stuck.has(sid)) return { status: 'pending', sessionId: sid };
     const { updateSessionRecord } = await import('../../../src/core/session-tracker.js');
     await updateSessionRecord(sid, { process_status: 'stopped' } as never);
+    return { status: 'terminated', sessionId: sid };
   },
 }));
 vi.mock('../../../src/core/sessions/task-start.js', () => ({
@@ -94,7 +96,7 @@ import { closeDb as closeSessionDb } from '../../../src/core/session-db.js';
 import {
   createSessionRecord, getSessionByClaudeId, updateSessionRecord, _resetSessionTrackerForTesting,
 } from '../../../src/core/session-tracker.js';
-import { requestEngineSwitch, cancelPendingSwitch, activeSessionFor } from '../../../src/core/sessions/engine-switch.js';
+import { requestEngineSwitch, cancelPendingSwitch, activeSessionFor, runEngineSwitch } from '../../../src/core/sessions/engine-switch.js';
 import {
   resumeEngineSwitches, watchPendingSwitch, pendingVerdict,
   SWITCH_BACKGROUND_GRACE_MS, SWITCH_PENDING_MAX_MS,
@@ -107,6 +109,10 @@ import { taskConversation } from '../../../src/core/sessions/task-session-claim.
 import { createSessionRequest, getSessionRequest } from '../../../src/core/session-requests.js';
 import { getStore, mutateStore } from '../../../src/core/session-queue-store.js';
 import { bus, EventNames } from '../../../src/core/event-bus.js';
+import { __setOwnerViewForTesting, type OwnerView } from '../../../src/core/sessions/replaced-session.js';
+
+/** What each session's owning daemon says of its CLI; absent = no answer (the record decides). */
+const owner = new Map<string, OwnerView>();
 
 beforeEach(async () => {
   closeTaskDb(); closeSessionDb(); _resetForTesting(); _resetSessionTrackerForTesting();
@@ -116,9 +122,12 @@ beforeEach(async () => {
   edges.reads.length = 0; edges.stuck.clear(); edges.failStart = false; edges.failHistory = false; edges.history = {}; edges.outlives.clear();
   // The queue store keeps a copy in memory: a row an earlier test left (no runner consumes it here) must not make this one busy.
   await mutateStore((st) => { st.queues = {}; }, false, true);
+  owner.clear();
+  __setOwnerViewForTesting(async (rec) => owner.get(rec.claudeSessionId) ?? null);
 });
 
 afterEach(async () => {
+  __setOwnerViewForTesting(null);
   await new Promise((r) => setTimeout(r, 30));
   closeTaskDb(); closeSessionDb();
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true, maxRetries: 3 }).catch(() => {});
@@ -627,6 +636,36 @@ describe('engine switch inside a task', () => {
     const old = await getSessionByClaudeId(sid);
     expect(old?.archived).toBeFalsy();
     expect((await getTask(taskId)).engine_switch).toMatchObject({ state: 'failed' });
+  }, 40_000);
+
+  // 2026-11-08: a daemon restart left a live CLI behind a record that said `stopped`; a move then
+  // ran over its turn and sent it no stop, and the old CLI worked on beside the new session.
+  it('a record that says stopped over a live CLI: the switch waits for its turn, then stops it through its owner', async () => {
+    const { taskId, sid } = await taskOn('claude', { status: 'stopped' });
+    owner.set(sid, { alive: true, hold: 'turn' });
+    const res = await requestEngineSwitch({ taskId, engine: 'codex', message: 'Go on.', source: 'test', when: 'turn_end' });
+    expect(res).toMatchObject({ state: 'pending', fromSessionId: sid });
+    expect(edges.starts).toHaveLength(0);
+    expect(edges.stops).toHaveLength(0);
+    // The turn ends (the daemon's fold says idle): the switch runs, and the old CLI is stopped first.
+    owner.set(sid, { alive: true, hold: 'idle' });
+    const done = await runEngineSwitch(taskId, (await getTask(taskId)).engine_switch!);
+    expect(done).toMatchObject({ state: 'done', fromSessionId: sid });
+    expect(edges.stops).toEqual([sid]);
+    expect(edges.starts).toHaveLength(1);
+    expect((await taskConversation(taskId))?.claudeSessionId).toBe(done.sessionId);
+  }, 40_000);
+
+  it('a stop its owner does not confirm while the old CLI runs: no second session starts, the task stays', async () => {
+    const { taskId, sid } = await taskOn('claude', { status: 'stopped' });
+    owner.set(sid, { alive: true, hold: 'idle' });
+    edges.stuck.add(sid);
+    await expect(requestEngineSwitch({ taskId, engine: 'codex', message: 'Go on.', source: 'test' }))
+      .rejects.toMatchObject({ status: 409, code: 'old_session_live', message: expect.stringContaining('no second session was started') });
+    expect(edges.starts).toHaveLength(0);
+    expect((await taskConversation(taskId))?.claudeSessionId).toBe(sid);
+    expect((await getSessionByClaudeId(sid))?.archived).toBeFalsy();
+    expect((await getTask(taskId)).engine_switch).toMatchObject({ state: 'failed', error: expect.stringContaining('could not be stopped') });
   }, 40_000);
 
   it('a session resumed with a context it never read keeps it through the next round trip', async () => {

@@ -642,6 +642,36 @@ describe('SessionStopCoordinator retries a stop the host did not confirm', () =>
     expect(h.scheduled).toHaveLength(1)
   })
 
+  // 2026-11-08: a move refused because the old CLI still ran left its stop pending; the retries
+  // would later fence the task's messages and end the very session the task was put back on.
+  it('a withdrawn stop ends its tries, lifts its fence and puts back what its park set aside', async () => {
+    const h = makeHarness([makeRecord('s1')])
+    const conn = replying([{ ok: false, error: 'stop: process identity changed; no further signals sent' }])
+    h.setConnection('devbox', conn)
+    const unpark = vi.fn(async () => {})
+    const c = new SessionStopCoordinator({ ...h.deps, unpark })
+    const req = await c.request('s1')
+    expect(req.state).toBe('pending')
+    expect(h.scheduled).toHaveLength(1)
+    expect(await c.withdraw('s1', 'not-this-one', 'x')).toBe(false)
+    expect(await c.withdraw('s1', req.id, 'the move did not go ahead')).toBe(true)
+    expect(h.scheduled[0]!.cancelled).toBe(true)
+    const stop = h.read('s1').stopRequest!
+    expect(stop).toMatchObject({ id: req.id, state: 'failed', error: expect.stringContaining('Withdrawn') })
+    expect(h.read('s1').process_status).toBe('running')
+    await expect(c.fence('s1')).resolves.toBe(req.id)
+    expect(unpark).toHaveBeenCalledWith('s1', req.requestedAt, req.id)
+    // Nothing is sent again, a reconnect included.
+    await c.flush('devbox')
+    expect(conn.send).toHaveBeenCalledTimes(1)
+  })
+
+  it('a lost host keeps its stop: withdrawing it would let its CLI run on when the host returns', async () => {
+    const h = makeHarness([makeRecord('s1', { stopRequest: newRequest('lost-1'), hostLost: { at: 'x', host: 'devbox', why: 'down' } } as Partial<SessionRecord>)])
+    expect(await h.build().withdraw('s1', 'lost-1', 'x')).toBe(false)
+    expect(h.read('s1').stopRequest?.state).toBe('pending')
+  })
+
   it('a host that answers every try without confirming fails the stop once the tries are used up', async () => {
     const h = makeHarness([makeRecord('s1')])
     const conn = replying([{ ok: false, error: 'stop: process group still exists without its original leader; stop confirmation is pending' }])

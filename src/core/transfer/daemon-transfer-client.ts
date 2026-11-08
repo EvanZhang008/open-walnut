@@ -172,10 +172,27 @@ export function scanWorkDir(host: string, dir: string): Promise<ScanReply> {
   return call<ScanReply>(host, TASK_MOVE_CAPABILITY, 'transfer.scan', { dir }, 60_000)
 }
 
-/** Set the pack in `bundleDir` up as a working checkout at `dest` on `host`. */
-export function applyPack(host: string, opts: { dest: string; bundleDir: string; cloneFrom?: string; url?: string; timeoutMs?: number }): Promise<ApplyReply> {
+export const TASK_MOVE_INTO_CAPABILITY = 'task-move-into-v1'
+
+/** The host's daemon can set a moved repository up in the checkout it left ('task-move-into-v1'). Offline throws. */
+export async function hostCanMoveInto(host: string): Promise<boolean> {
+  try { await connectionFor(host, TASK_MOVE_INTO_CAPABILITY); return true } catch (err) {
+    if (err instanceof DaemonNeedsUpgradeError) return false
+    throw err
+  }
+}
+
+/**
+ * Set the pack in `bundleDir` up as a working checkout at `dest` on `host`. `into`: in the
+ * existing checkout there, only while nothing changed in it ('task-move-into-v1').
+ */
+export function applyPack(host: string, opts: {
+  dest: string; bundleDir: string; cloneFrom?: string; url?: string; into?: boolean
+  /** `into`: what that copy held when its work left; its uncommitted files are then no change. */
+  expect?: { head: string; print: string }; timeoutMs?: number
+}): Promise<ApplyReply> {
   const { timeoutMs, ...params } = opts
-  return call<ApplyReply>(host, TASK_MOVE_CAPABILITY, 'transfer.apply', params, timeoutMs ?? 12 * 60_000)
+  return call<ApplyReply>(host, opts.into ? TASK_MOVE_INTO_CAPABILITY : TASK_MOVE_CAPABILITY, 'transfer.apply', params, timeoutMs ?? 12 * 60_000)
 }
 
 /** How busy `host` is now (load, CPU, memory, disk under `path`). */

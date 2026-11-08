@@ -3262,6 +3262,9 @@ export interface SessionRecord {
     carriedTurns: number; trimmedTurns: number; compacted?: boolean; transcriptPath?: string;
     /** Set when the switch moved the task to another host (task_move): where it ran before. */
     fromHost?: string; fromCwd?: string;
+    /** A move: the task directory's repositories as they left `fromHost`, so a move back returns
+     *  each into its copy there while it is unchanged (transfer/task-work.ts). */
+    leftCopies?: Array<{ path: string; head: string; print?: string }>;
   };
   /** Set on the session an engine switch replaced: the session that took over. */
   supersededBy?: string;

@@ -16,6 +16,7 @@
  */
 
 import fs from 'node:fs'
+import { statusReplyAlive } from './daemon-status-reply.js'
 import path from 'node:path'
 import { IS_EPHEMERAL, REMOTE_IMAGES_DIR, WALNUT_HOME } from '../constants.js'
 import { cliStateOf, isConversationActivityLine, type CliTurnState } from './stream-activity.js'
@@ -1262,7 +1263,8 @@ export class RemoteSessionManager implements SessionManager {
 
     try {
       const result = await this.conn.send('status', { sid: this._sid })
-      return result.ok === true && result.alive === true
+      // An error reply (a daemon shutting down) is no answer, never a death (daemon-status-reply.ts).
+      return statusReplyAlive(result) ?? true
     } catch {
       return true // send failed (possibly reconnecting) — assume alive
     }

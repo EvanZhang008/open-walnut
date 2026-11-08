@@ -41,6 +41,12 @@ const W = vi.hoisted(() => {
     /** transfer.apply on the target fails (a clone it cannot make). */
     failApply: false,
     nextSid: 0,
+    /** What each session's owning daemon says of its CLI (replaced-session.ts ownerView); absent = no answer. */
+    owner: new Map<string, { alive: boolean; hold: 'turn' | 'background' | 'idle' }>(),
+    /** Sessions whose stop the owner does not confirm. */
+    stopRefused: new Set<string>(),
+    /** For each start, the sessions stopped before it began. */
+    stopsAtStart: [] as string[][],
     history: {} as Record<string, Array<Record<string, unknown>>>,
     /** The Changed tab's groups for the old session. */
     changes: [] as Array<{ repoRoot: string; label: string; kind: string; files: Array<Record<string, unknown> & { relPath: string }> }>,
@@ -110,8 +116,13 @@ vi.mock('../../../src/core/sessions/session-lifecycle.js', () => ({
   readProviderSessionHistory: async (sid: string) => ({ messages: W.history[sid] ?? [] }),
   terminateSession: async (sid: string) => {
     W.stops.push(sid);
+    // A stop its owner does not confirm (a CLI that will not end): the real result shape.
+    if (W.stopRefused.has(sid)) return { status: 'pending', sessionId: sid };
     const { updateSessionRecord } = await import('../../../src/core/session-tracker.js');
     await updateSessionRecord(sid, { process_status: 'stopped' } as never);
+    // The CLI ended: its owner holds no live process of it any more.
+    W.owner.delete(sid);
+    return { status: 'terminated', sessionId: sid };
   },
 }));
 vi.mock('../../../src/core/session-changes.js', () => ({
@@ -121,6 +132,7 @@ vi.mock('../../../src/core/session-changes.js', () => ({
 vi.mock('../../../src/core/sessions/task-start.js', () => ({
   startSessionForTask: async (params: Record<string, unknown>) => {
     W.starts.push(params);
+    W.stopsAtStart.push([...W.stops]);
     if (W.gate) await W.gate;
     const { createSessionRecord, updateSessionRecord } = await import('../../../src/core/session-tracker.js');
     const sid = `moved-sid-${++W.nextSid}`;
@@ -153,6 +165,8 @@ import { performSessionSend } from '../../../src/core/sessions/session-send-core
 import { MOVE_HELD_REASON } from '../../../src/core/sessions/engine-switch-io.js';
 import { __setHostProbeForTesting } from '../../../src/core/sessions/host-lost.js';
 import { writeHistoryCache, flushHistoryCacheWrites, readHistoryCache } from '../../../src/core/history-disk-cache.js';
+import { __setOwnerViewForTesting } from '../../../src/core/sessions/replaced-session.js';
+import { runEngineSwitch } from '../../../src/core/sessions/engine-switch.js';
 
 const gitconfig = path.join(W.root, 'gitconfig');
 fs.writeFileSync(gitconfig, '[user]\n\tname = Mover\n\temail = mover@example.com\n[init]\n\tdefaultBranch = main\n')
@@ -248,6 +262,8 @@ beforeEach(async () => {
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
   await fsp.mkdir(WALNUT_HOME, { recursive: true });
   for (const h of Object.values(W.homes)) { fs.rmSync(h, { recursive: true, force: true }); fs.mkdirSync(h, { recursive: true }); }
+  W.owner.clear(); W.stopRefused.clear(); W.stopsAtStart.length = 0;
+  __setOwnerViewForTesting(async (rec) => W.owner.get(rec.claudeSessionId) ?? null);
   W.starts.length = 0; W.stops.length = 0; W.failStart = false; W.history = {}; W.changes = []; W.gate = null; W.failList = false; W.failApply = false;
   await mutateStore((st) => { st.queues = {}; }, false, true);
   __setTransferConnectionResolverForTesting(async (host) => (W.homes[host] ? [daemonFor(host)] : []));
@@ -260,6 +276,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  __setOwnerViewForTesting(null);
   __setTransferConnectionResolverForTesting(null);
   __setPathsCheckerForTesting(null);
   await new Promise((r) => setTimeout(r, 30));
@@ -801,4 +818,173 @@ describe('task_move from a host that cannot be reached', () => {
     __setHostProbeForTesting(async () => ({ reachable: true }));
     await expect(requestEngineSwitch({ taskId, engine: 'claude', host: 'local', message: 'x', source: 'test' })).resolves.toMatchObject({ state: 'pending' });
   }, 60_000);
+});
+
+// 2026-11-08: a task moved to another host and back kept its first session's CLI alive the whole
+// time (its record said stopped, so the move neither waited for its turn nor stopped it), and the
+// move back set the work up in a second copy beside the task's own folder; the old CLI then took
+// that copy for a leftover and removed it under the new session.
+describe('task_move leaves exactly one live session, there and back', () => {
+  // Both hosts answer (the test daemons hold no pooled link, so the probe says so).
+  beforeEach(() => { __setHostProbeForTesting(async () => ({ reachable: true })); });
+  afterEach(() => { __setHostProbeForTesting(null); });
+  /** The live sessions of the task: what the owners say still runs, among its sessions. */
+  async function liveSessions(): Promise<string[]> {
+    return [...W.owner.entries()].filter(([, v]) => v.alive).map(([sid]) => sid);
+  }
+
+  it('a record that says stopped over a CLI mid-turn: the move waits for that turn, then stops it through its owner before the new session starts', async () => {
+    const { taskId, sid } = await taskInSharedCheckout();
+    await updateSessionRecord(sid, { process_status: 'stopped', status_reason: 'normal_completion' } as never);
+    W.owner.set(sid, { alive: true, hold: 'turn' });
+    const res = await requestEngineSwitch({ taskId, engine: 'claude', host: 'cloud', message: 'Carry on.', source: 'test' });
+    expect(res).toMatchObject({ state: 'pending', host: 'cloud' });
+    expect(W.starts).toHaveLength(0);
+    expect(W.stops).toHaveLength(0);
+    // Its turn ends: the move runs, and the old CLI is stopped before anything starts.
+    W.owner.set(sid, { alive: true, hold: 'idle' });
+    const done = await runEngineSwitch(taskId, (await getTask(taskId)).engine_switch!);
+    expect(done).toMatchObject({ state: 'done', fromSessionId: sid, host: 'cloud' });
+    expect(W.stopsAtStart).toEqual([[sid]]);
+    expect(await liveSessions()).toEqual([]);
+  }, 120_000);
+
+  it('a stop its owner does not confirm while the old CLI runs: the move is refused, nothing starts, nothing is copied', async () => {
+    const { taskId, sid } = await taskInSharedCheckout();
+    W.owner.set(sid, { alive: true, hold: 'idle' });
+    W.stopRefused.add(sid);
+    await expect(requestEngineSwitch({ taskId, engine: 'claude', host: 'cloud', message: 'Carry on.', source: 'test' }))
+      .rejects.toMatchObject({ status: 409, code: 'old_session_live' });
+    expect(W.starts).toHaveLength(0);
+    expect(fs.existsSync(`${W.homes.cloud}/tasks/${taskId}/marina`)).toBe(false);
+    expect((await taskConversation(taskId))?.claudeSessionId).toBe(sid);
+    expect((await getSessionByClaudeId(sid))?.archived).toBeFalsy();
+  }, 120_000);
+
+  it('there and back: one live session at every step, and the work returns into the copy it left', async () => {
+    const { taskId, sid, clone } = await taskInSharedCheckout();
+    // The task's session runs in its own clone this time (the usual case).
+    await updateSessionRecord(sid, { cwd: clone } as never);
+    W.owner.set(sid, { alive: true, hold: 'idle' });
+    const there = await requestEngineSwitch({ taskId, engine: 'claude', host: 'cloud', message: 'Carry on there.', source: 'test' });
+    expect(there).toMatchObject({ state: 'done', host: 'cloud' });
+    const cloudSid = there.sessionId!;
+    const cloudClone = `${W.homes.cloud}/tasks/${taskId}/marina`;
+    expect(W.starts[0]).toMatchObject({ cwd: cloudClone });
+    expect(W.stopsAtStart[0]).toEqual([sid]);
+    W.owner.set(cloudSid, { alive: true, hold: 'idle' });
+    expect(await liveSessions()).toEqual([cloudSid]);
+    // What it left on the Mac is recorded with the new session, for the way back.
+    const leftCopies = (await getSessionByClaudeId(cloudSid))?.engineSwitch?.leftCopies ?? [];
+    expect(leftCopies.map((l) => l.path)).toContain(clone);
+    // Work on the cloud host: a commit and a new uncommitted edit.
+    write(path.join(cloudClone, 'cloud.txt'), 'made on the cloud\n');
+    git(cloudClone, ['add', 'cloud.txt']);
+    git(cloudClone, ['commit', '-q', '-m', 'work done on the cloud']);
+    write(path.join(cloudClone, 'b.txt'), 'b edited again on the cloud\n');
+    const cloudHead = git(cloudClone, ['rev-parse', 'HEAD']);
+    W.history[cloudSid] = [{ role: 'user', text: 'Carry on there.', timestamp: '2026-11-08T09:00:00Z' }, { role: 'assistant', text: 'Done on the cloud; word OSPREY.', timestamp: '2026-11-08T09:05:00Z' }];
+
+    const back = await requestEngineSwitch({ taskId, engine: 'claude', host: 'local', message: 'Carry on here.', source: 'test' });
+    expect(back).toMatchObject({ state: 'done', host: '__local__', fromSessionId: cloudSid });
+    const macSid = back.sessionId!;
+    // The task's own folder, never a second copy beside it.
+    expect(W.starts[1]).toMatchObject({ cwd: clone, host: '__local__' });
+    expect(fs.existsSync(`${W.homes.__local__}/tasks/${taskId}/marina-2`)).toBe(false);
+    expect(W.stopsAtStart[1]).toEqual([sid, cloudSid]);
+    W.owner.set(macSid, { alive: true, hold: 'idle' });
+    expect(await liveSessions()).toEqual([macSid]);
+    // Everything done on the cloud is in it.
+    expect(git(clone, ['rev-parse', 'HEAD'])).toBe(cloudHead);
+    expect(git(clone, ['rev-parse', '--abbrev-ref', 'HEAD'])).toBe('wt/move');
+    expect(fs.readFileSync(path.join(clone, 'cloud.txt'), 'utf8')).toBe('made on the cloud\n');
+    expect(fs.readFileSync(path.join(clone, 'b.txt'), 'utf8')).toBe('b edited again on the cloud\n');
+    expect(fs.readFileSync(path.join(clone, 'scratch.txt'), 'utf8')).toBe('untracked of the task\n');
+    // What the copy still held from when the work left is kept, never thrown away.
+    expect(git(clone, ['stash', 'list'])).toContain('walnut: what this checkout held when its work moved away');
+    const said = back.moved!.join('\n');
+    expect(said).toContain('back in the folder it left there');
+    expect(said).toContain('git stash');
+    // One task, one active session, the others its history.
+    expect((await taskConversation(taskId))?.claudeSessionId).toBe(macSid);
+    expect(await getSessionByClaudeId(sid)).toMatchObject({ archived: true });
+    expect(await getSessionByClaudeId(cloudSid)).toMatchObject({ archived: true, supersededBy: macSid });
+  }, 180_000);
+
+  it('a move back finds the copy it left changed since: that copy stays as it is, the work comes back in a new folder', async () => {
+    const { taskId, sid, clone } = await taskInSharedCheckout();
+    await updateSessionRecord(sid, { cwd: clone } as never);
+    const there = await requestEngineSwitch({ taskId, engine: 'claude', host: 'cloud', message: 'Carry on there.', source: 'test' });
+    expect(there).toMatchObject({ state: 'done' });
+    // Someone wrote in the copy the work left on the Mac.
+    write(path.join(clone, 'later.txt'), 'written after the move\n');
+    // The Mac knows its own checkout of the repository: the new copy clones from it.
+    await recordRepoPath('__local__', repoKey(URL, 'marina'), shared);
+    const before = git(clone, ['rev-parse', 'HEAD']);
+
+    const back = await requestEngineSwitch({ taskId, engine: 'claude', host: 'local', message: 'Carry on here.', source: 'test' });
+    expect(back).toMatchObject({ state: 'done', host: '__local__' });
+    const fresh = `${W.homes.__local__}/tasks/${taskId}/marina-2`;
+    expect(W.starts[1]).toMatchObject({ cwd: fresh });
+    expect(git(clone, ['rev-parse', 'HEAD'])).toBe(before);
+    expect(fs.readFileSync(path.join(clone, 'later.txt'), 'utf8')).toBe('written after the move\n');
+    expect(git(clone, ['stash', 'list'])).toBe('');
+    expect(back.moved!.join('\n')).toMatch(/marina stayed as it was \(.*changed since the work left it\); this work is in .*marina-2/);
+  }, 180_000);
+
+  /** Moves the task there and back after `meanwhile` ran on both copies; returns where the work came back. */
+  async function thereAndBack(meanwhile: (o: { clone: string; cloudClone: string }) => void) {
+    const { taskId, sid, clone } = await taskInSharedCheckout();
+    await updateSessionRecord(sid, { cwd: clone } as never);
+    const there = await requestEngineSwitch({ taskId, engine: 'claude', host: 'cloud', message: 'Carry on there.', source: 'test' });
+    expect(there).toMatchObject({ state: 'done' });
+    const cloudClone = `${W.homes.cloud}/tasks/${taskId}/marina`;
+    meanwhile({ clone, cloudClone });
+    await recordRepoPath('__local__', repoKey(URL, 'marina'), shared);
+    const back = await requestEngineSwitch({ taskId, engine: 'claude', host: 'local', message: 'Carry on here.', source: 'test' });
+    expect(back).toMatchObject({ state: 'done', host: '__local__' });
+    return { clone, cwd: String(W.starts[1]!.cwd), fresh: `${W.homes.__local__}/tasks/${taskId}/marina-2`, back };
+  }
+
+  it('a copy whose branch moved on while HEAD sat elsewhere stays as it is: checking the branch out would drop that commit', async () => {
+    let later = '';
+    const r = await thereAndBack(({ clone }) => {
+      git(clone, ['stash', 'push', '-q', '--include-untracked']);
+      git(clone, ['commit', '-q', '--allow-empty', '-m', 'made on the Mac after the move']);
+      later = git(clone, ['rev-parse', 'HEAD']);
+      git(clone, ['checkout', '-q', 'main']);
+    });
+    expect(r.cwd).toBe(r.fresh);
+    expect(git(r.clone, ['rev-parse', 'refs/heads/wt/move'])).toBe(later);
+    expect(git(r.clone, ['rev-parse', '--abbrev-ref', 'HEAD'])).toBe('main');
+  }, 180_000);
+
+  it('a copy that holds a file the work brings as untracked (ignored there) stays as it is', async () => {
+    const r = await thereAndBack(({ clone }) => {
+      git(clone, ['stash', 'push', '-q', '--include-untracked']);
+      fs.appendFileSync(path.join(clone, '.git', 'info', 'exclude'), 'scratch.txt\n');
+      write(path.join(clone, 'scratch.txt'), 'the Mac copy of scratch\n');
+    });
+    expect(r.cwd).toBe(r.fresh);
+    expect(fs.readFileSync(path.join(r.clone, 'scratch.txt'), 'utf8')).toBe('the Mac copy of scratch\n');
+    expect(fs.readFileSync(path.join(r.fresh, 'scratch.txt'), 'utf8')).toBe('untracked of the task\n');
+  }, 180_000);
+
+  it('work pushed while away travels with no bundle: the copy it left fetches it from its remote and the work returns into it', async () => {
+    const bare = path.join(W.root, 'world', 'remote.git');
+    let pushed = '';
+    const r = await thereAndBack(({ clone, cloudClone }) => {
+      write(path.join(cloudClone, 'cloud.txt'), 'made on the cloud\n');
+      git(cloudClone, ['add', 'cloud.txt']);
+      git(cloudClone, ['commit', '-q', '-m', 'pushed from the cloud']);
+      git(cloudClone, ['remote', 'add', 'up', bare]);
+      git(cloudClone, ['push', '-q', 'up', 'wt/move']);
+      pushed = git(cloudClone, ['rev-parse', 'HEAD']);
+      // The Mac copy's remote is that repository; its own objects lack the pushed commit.
+      git(clone, ['remote', 'set-url', 'origin', bare]);
+    });
+    expect(r.cwd).toBe(r.clone);
+    expect(git(r.clone, ['rev-parse', 'HEAD'])).toBe(pushed);
+    expect(fs.readFileSync(path.join(r.clone, 'cloud.txt'), 'utf8')).toBe('made on the cloud\n');
+  }, 180_000);
 });

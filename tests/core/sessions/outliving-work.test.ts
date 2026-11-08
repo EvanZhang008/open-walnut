@@ -189,6 +189,7 @@ const RAW_READERS: Record<string, string> = {
   'src/core/human-inbox/item-status.ts': 'an inbox item\'s live status from a snapshot',
   'src/core/session-health-monitor.ts': 'the idle reap: a /loop gets the cron timeout',
   'src/core/sessions/session-lifecycle.ts': 'refuses to terminate a /loop owner (cron_owner)',
+  'src/core/sessions/replaced-session.ts': 'the owning daemon\'s snapshot of a session a move replaces: work its turn left running holds the move, as turnHold does',
   'src/core/session-history.ts': 'carries the team signal across a restart',
   'src/core/event-types.ts': 'the session:result payload',
   'src/web/server.ts': 'a session:result: an intermediate result is no turn end',

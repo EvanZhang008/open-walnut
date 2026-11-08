@@ -429,7 +429,10 @@ export async function transferTask(req: TransferRequest, transferId = `xf-${rand
   // every start on the CLI path, which forks).
   const { startsThroughSessionServer } = await import('../sessions/session-server-state.js');
   if (plan.history === 'native-copy' && startsThroughSessionServer()) plan.history = 'replay';
-  if (session.process_status === 'running') {
+  // Its daemon decides, never the record alone: a record can say stopped over a CLI that is mid-turn (replaced-session.ts).
+  const { turnHold } = await import('../sessions/turn-end-wait.js');
+  const hold = await turnHold(session, { queue: false, owner: true });
+  if (hold === 'turn' || hold === 'background') {
     throw new TransferError('The task\'s session is in the middle of a turn. Wait for it to finish (or stop it), then transfer, so nothing it does is left behind.', 409, 'source_busy');
   }
   void pruneLocalTransfers().catch(() => {});
@@ -555,6 +558,14 @@ export async function transferTask(req: TransferRequest, transferId = `xf-${rand
     } catch (err) {
       log.session.warn('transfer: completing the source task failed', { taskId: task.id, error: err instanceof Error ? err.message : String(err) });
     }
+  }
+  // The work goes on in the new task: the source's CLI is stopped through its owner, never left to
+  // its record (a completion skips a record that reads stopped, and one can over a live CLI).
+  if (sourceCompleted) {
+    const { endReplacedSession } = await import('../sessions/replaced-session.js');
+    await endReplacedSession(session, { taskId: task.id, ...(req.callerSid ? {} : { by: 'human' }) }).catch((err: unknown) => {
+      log.session.warn('transfer: the source session may still run', { transferId, taskId: task.id, sessionId: session.claudeSessionId, error: err instanceof Error ? err.message : String(err) });
+    });
   }
   log.session.info('transfer: started', { transferId, sourceTaskId: task.id, taskId: target.id, sessionId, route: moved?.route });
   return {

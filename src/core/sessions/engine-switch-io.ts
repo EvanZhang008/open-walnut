@@ -90,12 +90,20 @@ export async function takeQueuedRows(sessionId: string): Promise<HeldRow[]> {
 export async function putQueuedRows(sessionId: string, rows: HeldRow[]): Promise<void> {
   if (rows.length === 0) return;
   const { mutateStore } = await import('../session-queue-store.js');
+  // A row's stop fence names a stop of the session it waited in: it takes the fence of the
+  // session it goes to now, so a delivery does not park it as one a stop came ahead of (a
+  // restored session's stop that was withdrawn, a new session with no stop yet). Under a
+  // pending stop the row keeps its own and waits for that stop like the rest.
+  const { getSessionByClaudeId } = await import('../session-tracker.js');
+  const stop = (await getSessionByClaudeId(sessionId).catch(() => null))?.stopRequest;
+  const fence = stop?.state === 'pending' ? undefined : (stop?.id ?? null);
   await mutateStore((s) => {
     // Idempotent: a restart that resumes a switch may put the same rows again.
     const have = new Set((s.queues[sessionId] ?? []).map((r) => r.id));
     const moved = rows.filter((r) => !have.has(r.id)).map((r) => {
-      const { lineUuid: _l, lineTries: _t, lineTracked: _k, ...rest } = r;
-      return { ...rest, sessionId };
+      const { lineUuid: _l, lineTries: _t, lineTracked: _k, stopFence: own, ...rest } = r;
+      const f = fence === undefined ? own : fence;
+      return { ...rest, ...(f ? { stopFence: f } : {}), sessionId };
     });
     s.queues[sessionId] = [...(s.queues[sessionId] ?? []), ...moved];
   }, false, true);

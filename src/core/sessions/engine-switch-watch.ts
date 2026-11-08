@@ -48,6 +48,8 @@ const waiter = new TurnEndWait<{ taskId: string }>({
   name: 'engine-switch-turn-end',
   limits: LIMITS,
   queue: true,
+  // A record can say stopped over a CLI that is mid-turn (replaced-session.ts): its daemon decides.
+  owner: true,
   asked: async (sid, { taskId }) => {
     const pending = await pendingOf(taskId, sid);
     return pending ? { askedAt: Date.parse(pending.at) } : null;
@@ -152,6 +154,15 @@ export async function resumeEngineSwitches(): Promise<number> {
           }));
         }
         await updateSessionRecord(sw.from_session_id, { supersededBy: to }).catch(() => {});
+        // The restart may have come between the start and the old session's stop: it ends now,
+        // through its owner, so the task never keeps two live sessions (replaced-session.ts).
+        const replaced = await getSessionByClaudeId(sw.from_session_id).catch(() => null);
+        if (replaced) {
+          const { endReplacedSession } = await import('./replaced-session.js');
+          await endReplacedSession(replaced, { taskId: task.id }).catch((err: unknown) => log.session.warn('engine switch: the replaced session could not be stopped after a restart', {
+            taskId: task.id, sessionId: sw.from_session_id, error: err instanceof Error ? err.message : String(err),
+          }));
+        }
         const { retargetRequestsToSession } = await import('../session-requests.js');
         await retargetRequestsToSession(sw.from_session_id, to).catch(() => 0);
         const { putQueuedRows } = await import('./engine-switch-io.js');

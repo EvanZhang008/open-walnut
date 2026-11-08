@@ -76,6 +76,9 @@ export interface PackMeta {
   upstreamUrl?: string
   /** Commits in repo.bundle (HEAD past its base). */
   ahead?: number
+  /** A whole repository's pack: what its uncommitted and untracked files were (workPrint), so a
+   *  move back can tell the copy left here is unchanged since ('task-move-into-v1'). */
+  print?: string
   /** Packed with `paths`: only those files' changes rode; the rest of the checkout's
    *  dirty files belong to someone else and were left (counts, and the first names). */
   limited?: {
@@ -131,6 +134,10 @@ export interface ApplyReply {
   steps: string[]
   untracked?: number
   patched?: boolean
+  /** Set up in the existing checkout at dest (`into`, 'task-move-into-v1'). */
+  into?: boolean
+  /** `into`: the uncommitted files that copy held when its work left were set aside as a git stash. */
+  setAside?: boolean
 }
 
 /** Self-contained factory: see the file comment before adding any reference outside it. */
@@ -473,6 +480,7 @@ export function createTransferPack(deps: TransferPackDeps) {
       if (written.indexOf('untracked.tgz') >= 0) rode = rode.concat(u.files)
       meta.limited.files = await packedFiles(root, rode, !!head, hashedBefore, ownBefore)
     }
+    if (!onlySet && head) meta.print = await workPrint(root, outDir)
     meta.dirty = onlySet ? written.indexOf('changes.patch') >= 0 || u.files.length > 0 : !!tracked || u.files.length > 0
 
     // A probe that would never use a whole history (`noFullBundle`) skips it.
@@ -610,6 +618,8 @@ export function createTransferPack(deps: TransferPackDeps) {
       }
       return { dest: dest, kind: 'dir', steps: steps }
     }
+    // A move back ('task-move-into-v1'): the work returns into the copy it left, never over a change made since.
+    if (cmd.into === true) return applyInto(cmd, meta, dest, bundleDir, has, steps)
     if (!(await emptyOrMissing(dest))) throw fail('dest_not_empty', 'dest is not an empty folder: ' + dest)
     // Only what this apply made is removed when it fails: dest was missing or empty here.
     var existed = await deps.fs.promises.stat(dest).then(function () { return true }, function () { return false })
@@ -620,6 +630,159 @@ export function createTransferPack(deps: TransferPackDeps) {
       if (existed) await deps.fs.promises.mkdir(dest, { recursive: true }).catch(function () { /* none */ })
       var data = (err as { data?: Record<string, unknown> }).data
       if (data) data.removed = true
+      throw err
+    }
+  }
+
+  /**
+   * `transfer.apply {dest, bundleDir, into: true}` ('task-move-into-v1'): set a repository's pack
+   * up IN the existing checkout at `dest`, the copy this work left when it moved away, so a move
+   * back continues in the task's own folder instead of a second copy beside it. Only when
+   * nothing changed there since: dest is a repository's top folder with no uncommitted or
+   * untracked file, and its HEAD is an ancestor of the packed commit (the bundle's commits are
+   * fetched first). Then the branch is checked out at the packed commit, and the changes and
+   * untracked files are applied as a fresh apply does. A check that fails answers `dest_changed`
+   * (or `dest_not_repo`) having changed nothing but fetched objects; a later step that fails puts
+   * HEAD, the branch and the tree back as they were. The caller then sets the work up in a new
+   * folder.
+   */
+  /**
+   * What a checkout's uncommitted and untracked files are, as one hash: the diff against HEAD,
+   * then each untracked file's path, size and modification time. Read in the same way when its
+   * work is packed to move away and when that work comes back, so equal prints mean nothing in
+   * the copy changed in between. `scratch` is a folder outside the checkout for the diff.
+   */
+  async function workPrint(root: string, scratch: string): Promise<string> {
+    var tmp = deps.path.join(scratch, '.walnut-print-' + now() + '-' + Math.random().toString(36).slice(2) + '.patch')
+    var h = deps.crypto.createHash('sha256')
+    try {
+      var d = await git(root, ['diff', '--binary', '--no-color', '--no-ext-diff', '--no-textconv', '--src-prefix=a/', '--dst-prefix=b/', 'HEAD'], { outFile: tmp })
+      if (d.code !== 0) throw fail('git_failed', 'git diff: ' + (d.timedOut ? 'timed out' : lastLine(d.stderr)))
+      h.update('diff:' + ((d.outBytes > 0 ? await sha256File(tmp) : '') || '') + '\n')
+    } finally {
+      await deps.fs.promises.unlink(tmp).catch(function () { /* none */ })
+    }
+    var u = await untrackedFiles(root, false)
+    var names = u.files.slice().sort()
+    for (var i = 0; i < names.length; i++) {
+      var st = await deps.fs.promises.lstat(deps.path.join(root, names[i])).then(function (x) { return x }, function () { return null })
+      h.update(names[i] + '\u0000' + (st ? st.size + ':' + Math.floor(st.mtimeMs) : '-') + '\n')
+    }
+    return h.digest('hex')
+  }
+
+  async function applyInto(
+    cmd: Record<string, unknown>, meta: PackMeta, dest: string, bundleDir: string, has: (name: string) => Promise<boolean>, steps: string[],
+  ): Promise<ApplyReply> {
+    var CLONE_MS = 10 * 60000
+    if (meta.kind !== 'git' || meta.noCommits || !meta.head) throw fail('dest_not_repo', 'only a repository with commits returns into a checkout')
+    var top = text(await git(dest, ['rev-parse', '--show-toplevel']))
+    var realDest = await deps.fs.promises.realpath(dest).then(function (p) { return p }, function () { return dest })
+    if (!top || deps.path.resolve(top) !== realDest) throw fail('dest_not_repo', dest + ' is not the top folder of a repository')
+    var dirty = await git(dest, ['status', '--porcelain', '--untracked-files=all'])
+    if (dirty.code !== 0) throw stepFail('read the checkout', dirty, steps, dest)
+    var origHead = text(await git(dest, ['rev-parse', '-q', '--verify', 'HEAD']))
+    if (!origHead) throw fail('dest_changed', dest + ' has no commit checked out')
+    var origBranch = text(await git(dest, ['symbolic-ref', '-q', '--short', 'HEAD']))
+    // What the copy held when its work left (the outbound pack's head and print): uncommitted
+    // files are no change when they are exactly those. They are set aside as a stash, never lost.
+    var expect = cmd.expect && typeof cmd.expect === 'object' ? cmd.expect as { head?: unknown; print?: unknown } : null
+    var stashed = false
+    if (dirty.stdout.toString('utf8').trim()) {
+      if (!expect || typeof expect.head !== 'string' || typeof expect.print !== 'string') throw fail('dest_changed', dest + ' has uncommitted or untracked files')
+      if (expect.head !== origHead) throw fail('dest_changed', dest + ' moved on since the work left it (HEAD ' + origHead.slice(0, 12) + ')')
+      if ((await workPrint(dest, bundleDir)) !== expect.print) throw fail('dest_changed', dest + ': its uncommitted or untracked files changed since the work left it')
+      var sp = await git(dest, ['stash', 'push', '-q', '--include-untracked', '-m', 'walnut: what this checkout held when its work moved away'])
+      if (sp.code !== 0) throw stepFail('set the old uncommitted files aside', sp, steps, dest)
+      stashed = true
+      steps.push('set the uncommitted files it held when the work left aside (git stash list)')
+    }
+    var unstash = async function () {
+      if (stashed) { await git(dest, ['stash', 'pop', '-q']); stashed = false }
+    }
+    var headRef = meta.head
+    try {
+      if (await has('repo.bundle')) {
+        var refspec = meta.branch ? '+refs/heads/' + meta.branch + ':refs/walnut-move/head' : '+HEAD:refs/walnut-move/head'
+        var fb = await git(dest, ['fetch', '-q', '--no-tags', deps.path.join(bundleDir, 'repo.bundle'), refspec], { timeoutMs: CLONE_MS })
+        if (fb.code !== 0) throw fail('dest_changed', dest + ' lacks the commits the moved work builds on (' + (lastLine(fb.stderr) || 'exit ' + fb.code) + ')')
+        steps.push('fetched the commits no remote has')
+      }
+      // A head some remote has (pushed while away) travels with no bundle: fetch it from there.
+      var froms = ['origin']
+      if (typeof cmd.url === 'string' && cmd.url && cmd.url.charAt(0) !== '-' && !/[\s\u0000]/.test(cmd.url)) froms.push(String(cmd.url))
+      for (var fi = 0; fi < froms.length && (await git(dest, ['cat-file', '-e', headRef + '^{commit}'])).code !== 0; fi++) {
+        var fr = await git(dest, ['fetch', '-q', '--no-tags', froms[fi], meta.branch ? '+refs/heads/' + meta.branch + ':refs/walnut-move/head' : '+HEAD:refs/walnut-move/head'], { timeoutMs: CLONE_MS })
+        if (fr.code === 0) steps.push('fetched the moved commits from ' + (fi === 0 ? 'its remote' : froms[fi]))
+      }
+      await git(dest, ['update-ref', '-d', 'refs/walnut-move/head'])
+      if ((await git(dest, ['cat-file', '-e', headRef + '^{commit}'])).code !== 0) throw fail('dest_changed', dest + ' lacks commit ' + headRef)
+      if ((await git(dest, ['merge-base', '--is-ancestor', origHead, headRef])).code !== 0) {
+        throw fail('dest_changed', dest + ' moved on since the work left it (its ' + origHead.slice(0, 12) + ' is not in the moved history)')
+      }
+      // The branch the work is on, when the copy holds it elsewhere than HEAD: a commit made
+      // there since (it is not in the moved history) would be lost to the checkout -B below.
+      var branchBefore = meta.branch ? text(await git(dest, ['rev-parse', '-q', '--verify', 'refs/heads/' + meta.branch])) : ''
+      if (branchBefore && (await git(dest, ['merge-base', '--is-ancestor', branchBefore, headRef])).code !== 0) {
+        throw fail('dest_changed', dest + ': its branch ' + meta.branch + ' moved on since the work left it (' + branchBefore.slice(0, 12) + ' is not in the moved history)')
+      }
+    } catch (err) {
+      await unstash().catch(function () { /* reported by the caller's error */ })
+      throw err
+    }
+    var putBack = async function () {
+      await git(dest, ['checkout', '-q', '-f', origBranch || origHead])
+      if (meta.branch && meta.branch !== origBranch) {
+        if (branchBefore) await git(dest, ['update-ref', 'refs/heads/' + meta.branch, branchBefore])
+        else await git(dest, ['branch', '-q', '-D', meta.branch])
+      }
+      if (origBranch) await git(dest, ['reset', '-q', '--hard', origHead])
+      // The tree was clean before (or set aside): every untracked file is this apply's.
+      await git(dest, ['clean', '-q', '-f', '-d'])
+      await unstash()
+    }
+    try {
+      var co = meta.branch
+        ? await git(dest, ['checkout', '-q', '-B', meta.branch, headRef])
+        : await git(dest, ['checkout', '-q', '--detach', headRef])
+      if (co.code !== 0) throw stepFail('check out', co, steps, dest)
+      steps.push('checked out ' + (meta.branch || headRef.slice(0, 12)) + ' at ' + headRef.slice(0, 12) + ' in the existing checkout')
+      var patched = false
+      if (await has('changes.patch')) {
+        var patch = deps.path.join(bundleDir, 'changes.patch')
+        var ap = await git(dest, ['apply', '--binary', '--whitespace=nowarn', patch])
+        if (ap.code !== 0) {
+          ap = await git(dest, ['apply', '--3way', '--binary', '--whitespace=nowarn', patch])
+          if (ap.code === 0) await git(dest, ['reset', '-q'])
+        }
+        if (ap.code !== 0) throw stepFail('apply the uncommitted changes', ap, steps, dest)
+        patched = true
+        steps.push('applied the uncommitted changes')
+      }
+      var untracked = 0
+      if (await has('untracked.tgz')) {
+        // Never over a file the copy holds (an ignored one, say): the work then goes to a new folder.
+        var lt = await run(['tar', '-tzf', deps.path.join(bundleDir, 'untracked.tgz')], { cwd: dest, timeoutMs: TAR_MS })
+        if (lt.code !== 0) throw stepFail('read the untracked files', lt, steps, dest)
+        var entries = lt.stdout.toString('utf8').split('\n')
+        for (var ei = 0; ei < entries.length; ei++) {
+          var en = entries[ei].replace(/^\.\//, '')
+          if (!en || en.charAt(en.length - 1) === '/') continue
+          var clash = await deps.fs.promises.lstat(deps.path.join(dest, en)).then(function () { return true }, function () { return false })
+          if (clash) throw fail('dest_changed', dest + ' already holds ' + en + ', which the moved work brings as an untracked file')
+        }
+        var ux = await run(['tar', '-xzf', deps.path.join(bundleDir, 'untracked.tgz'), '--no-same-owner', '-C', dest], { cwd: dest, timeoutMs: TAR_MS })
+        if (ux.code !== 0) throw stepFail('unpack the untracked files', ux, steps, dest)
+        untracked = meta.untracked ? meta.untracked.count : 0
+        steps.push('unpacked ' + untracked + ' untracked file' + (untracked === 1 ? '' : 's'))
+      }
+      var nowHead = text(await git(dest, ['rev-parse', '-q', '--verify', 'HEAD'])) || null
+      if (nowHead !== headRef) throw fail('apply_failed', 'check: HEAD is ' + nowHead + ', the source was at ' + headRef)
+      return { dest: dest, kind: 'git', head: nowHead, branch: meta.branch || null, steps: steps, untracked: untracked, patched: patched, into: true, setAside: stashed }
+    } catch (err) {
+      await putBack().catch(function () { /* reported below */ })
+      var data = (err as { data?: Record<string, unknown> }).data
+      if (data) data.putBack = true
       throw err
     }
   }

@@ -21,6 +21,7 @@
  */
 
 import { ACP_HOST_FILES } from './acp-host-artifacts.js'
+import { statusReplyAlive } from './daemon-status-reply.js'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { WebSocket } from '#ws'
 import fs from 'node:fs'
@@ -6713,7 +6714,7 @@ export class DaemonConnection {
           if (!hostResumed) stoppedProbes++
           try {
             const probe = await this.send('status', { sid: s.claudeSessionId })
-            if (!(probe.ok && probe.alive)) continue
+            if (statusReplyAlive(probe) !== true) continue
             rescuedPid = typeof probe.pid === 'number' ? probe.pid : null
           } catch { continue }
           log.session.info('DaemonConnection: live CLI behind a stopped record — rescuing', {
@@ -6896,6 +6897,14 @@ export class DaemonConnection {
               unmarkSnapshotCovered(s.claudeSessionId)
             } catch { /* gate unavailable — legacy patching is the fallback anyway */ }
             result = await this.send('status', { sid: s.claudeSessionId })
+          }
+          // An error reply (a daemon shutting down) is no answer: the record stays as it is, never
+          // relabelled stopped for a CLI the next daemon adopts (daemon-status-reply.ts).
+          if (statusReplyAlive(result) === null) {
+            log.session.info('DaemonConnection: the daemon answered with an error; the session is left as it is', {
+              sessionId: s.claudeSessionId, host: this.hostKey, error: typeof result.error === 'string' ? result.error : undefined,
+            })
+            continue
           }
           if (snapshotHandled) {
             // Record convergence is the projection's job now — but the ws
@@ -8195,9 +8204,11 @@ export async function probeDaemonSession(
   if (!conn) return null
   try {
     const result = await conn.send('status', { sid: sessionId })
-    // result.ok = daemon recognized the session; result.alive = OS process is still running. Both required.
+    // An error reply (a daemon shutting down) is no answer, never a death (daemon-status-reply.ts).
+    const alive = statusReplyAlive(result)
+    if (alive === null) return null
     return {
-      alive: !!(result.ok && result.alive),
+      alive,
       ...(typeof result.pid === 'number' ? { pid: result.pid } : {}),
     }
   } catch (err) {

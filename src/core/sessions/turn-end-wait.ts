@@ -59,8 +59,16 @@ export function turnEndVerdict(input: { hold: TurnHold; askedAt: number; backgro
   return overdue ? 'expire' : 'wait';
 }
 
-/** What holds a session: `queue` counts only when the wait asks for it (a message about to start a turn). */
-export async function turnHold(rec: Pick<SessionRecord, 'claudeSessionId' | 'process_status'>, opts: { queue: boolean }): Promise<TurnHold> {
+/**
+ * What holds a session: `queue` counts only when the wait asks for it (a message about to start a turn).
+ * `owner`: the session's daemon is asked whenever the record says no turn runs, or says one runs
+ * and the daemon has no live CLI of it (replaced-session.ts: a record can say `stopped` over a CLI
+ * that is mid-turn). A switch or a move asks so; no answer keeps the record's word.
+ */
+export async function turnHold(
+  rec: Pick<SessionRecord, 'claudeSessionId' | 'process_status'> & Partial<Pick<SessionRecord, 'host' | 'engine'>>,
+  opts: { queue: boolean; owner?: boolean },
+): Promise<TurnHold> {
   // A session the context recovery holds is mid-work even between turns: its last turn ended on
   // "Prompt is too long", answered nothing, and the recovery compacts and resends (2026-11-06).
   const { contextFullRecovery } = await import('./context-full-recovery.js');
@@ -69,6 +77,12 @@ export async function turnHold(rec: Pick<SessionRecord, 'claudeSessionId' | 'pro
     const { getStore } = await queueStore();
     const rows = (await getStore().catch(() => null))?.queues[rec.claudeSessionId] ?? [];
     if (rows.some((r) => r.status === 'pending' || r.status === 'processing')) return 'queue';
+  }
+  if (opts.owner) {
+    const { ownerView } = await import('./replaced-session.js');
+    const view = await ownerView(rec);
+    if (view && !view.alive) return 'free';
+    if (view && rec.process_status !== 'running') return view.hold === 'idle' ? 'free' : view.hold;
   }
   if (rec.process_status !== 'running') return 'free';
   try {
@@ -88,6 +102,8 @@ export interface TurnEndWaitSpec<T> {
   limits: TurnEndLimits;
   /** Whether a queued message holds it as a turn does. */
   queue: boolean;
+  /** Ask the session's daemon too, never the record alone (turnHold `owner`). */
+  owner?: boolean;
   settleMs?: number;
   /** The first look without an event: at once by default. A wait whose turn is still to start
    *  (a notice just queued) looks first after this long, so an idle moment before that turn
@@ -181,7 +197,7 @@ export class TurnEndWait<T> {
       if (!asked) { this.drop(sessionId, e); return; }
       const { getSessionByClaudeId } = await tracker();
       const rec = await getSessionByClaudeId(sessionId).catch(() => null);
-      let hold: TurnHold = rec ? await turnHold(rec, { queue: this.spec.queue }) : 'free';
+      let hold: TurnHold = rec ? await turnHold(rec, { queue: this.spec.queue, ...(this.spec.owner ? { owner: true } : {}) }) : 'free';
       if (hold === 'free' && this.spec.holdsToo && await this.spec.holdsToo(sessionId, e.data)) hold = 'queue';
       const now = Date.now();
       if (hold === 'background') e.backgroundSince ??= now; else e.backgroundSince = undefined;

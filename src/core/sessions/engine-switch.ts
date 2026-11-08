@@ -128,7 +128,7 @@ function by(callerSid: string | undefined, callerTaskId: string | undefined): st
  * stopped session a switch back just resumed has its message waiting while the CLI
  * starts): a switch waits for that turn.
  */
-export async function sessionBusy(rec: Pick<SessionRecord, 'claudeSessionId' | 'process_status'>): Promise<boolean> {
+export async function sessionBusy(rec: Pick<SessionRecord, 'claudeSessionId' | 'process_status'> & Partial<Pick<SessionRecord, 'host' | 'engine'>>): Promise<boolean> {
   return (await switchHold(rec)) !== 'free';
 }
 
@@ -140,8 +140,9 @@ export async function sessionBusy(rec: Pick<SessionRecord, 'claudeSessionId' | '
  */
 export type SwitchHold = TurnHold;
 
-export async function switchHold(rec: Pick<SessionRecord, 'claudeSessionId' | 'process_status'>): Promise<SwitchHold> {
-  return turnHold(rec, { queue: true });
+export async function switchHold(rec: Pick<SessionRecord, 'claudeSessionId' | 'process_status'> & Partial<Pick<SessionRecord, 'host' | 'engine'>>): Promise<SwitchHold> {
+  // The old CLI's daemon decides, never the record alone (replaced-session.ts).
+  return turnHold(rec, { queue: true, owner: true });
 }
 
 /**
@@ -509,7 +510,7 @@ async function execute(taskId: string, state: EngineSwitchState, opts: SwitchRun
   let retiredEarly = false;
   let rows: SessionRecord[];
   try {
-    if (opts.now && hold !== 'free' && (await turnHold(old, { queue: false })) === 'turn') {
+    if (opts.now && hold !== 'free' && (await turnHold(old, { queue: false, owner: true })) === 'turn') {
       retiredEarly = true;
       // Retired before its turn is stopped, so the stop is history, not the task's (no hand-back,
       // no notice to its leader); a failure from here un-retires it (restore).
@@ -523,10 +524,12 @@ async function execute(taskId: string, state: EngineSwitchState, opts: SwitchRun
     throw err;
   }
 
-  // Retire the old session: from here its stop is history, not the task's.
+  // Retire the old session: from here its stop is history, not the task's. Its CLI is stopped
+  // through its owner whatever its record says, and nothing new starts until that stop is
+  // confirmed (replaced-session.ts; 2026-11-08: a record that said `stopped` over a live CLI got
+  // no stop, and the old CLI worked on beside the new session). A stop that does not take puts
+  // the task back on the old session and fails the switch.
   const retire = async (left?: { fingerprint: string; messages: number }): Promise<HeldRow[]> => {
-    // A lost host's session is stopped here whatever its record last said, so its host ends it on return.
-    const oldWasLive = LIVE.has(old.process_status) || !!state.from_host_lost;
     await tracker.updateSessionRecord(old.claudeSessionId, {
       archived: true, archive_reason: engineSwitchedReason(engine), ...(left ? { leftContext: { ...left, at: new Date().toISOString() } } : {}),
     });
@@ -534,15 +537,15 @@ async function execute(taskId: string, state: EngineSwitchState, opts: SwitchRun
     if (taken.length > 0) {
       await tm.updateTaskRaw(taskId, (cur) => (cur.engine_switch?.id === state.id ? { engine_switch: { ...cur.engine_switch, held_rows: taken } } : null), { source: 'engine-switch', emitEvent: true }).catch(() => {});
     }
-    if (oldWasLive) {
-      try {
-        const { terminateSession } = await import('./session-lifecycle.js');
-        await terminateSession(old.claudeSessionId, { force: true, ...(state.by ? { by: state.by } : {}) });
-      } catch (err) {
-        log.session.warn('engine switch: stopping the old session failed (its process ends with its idle reap)', {
-          taskId, sessionId: old.claudeSessionId, error: err instanceof Error ? err.message : String(err),
-        });
-      }
+    try {
+      const { endReplacedSession } = await import('./replaced-session.js');
+      await endReplacedSession(old, { taskId, ...(state.by ? { by: state.by } : {}) });
+    } catch (err) {
+      const refused = err instanceof EngineSwitchError ? err
+        : new EngineSwitchError(err instanceof Error ? err.message : String(err), 409, 'old_session_live');
+      await restore(taskId, old, undefined, new Date().toISOString(), taken);
+      await fail(taskId, state, refused);
+      throw refused;
     }
     return taken;
   };
@@ -624,7 +627,7 @@ async function execute(taskId: string, state: EngineSwitchState, opts: SwitchRun
       ...((old.cliModel || old.model || old.acpModel) ? { fromModel: old.cliModel || old.model || old.acpModel } : {}),
       at, carriedTurns: prepared.carried.carriedTurns, trimmedTurns: prepared.carried.trimmedTurns,
       compacted: prepared.compacted, ...(prepared.transcriptPath ? { transcriptPath: prepared.transcriptPath } : {}),
-      ...(state.move ? { fromHost: normalizeHost(old.host), ...(old.cwd ? { fromCwd: old.cwd } : {}) } : {}),
+      ...(state.move ? { fromHost: normalizeHost(old.host), ...(old.cwd ? { fromCwd: old.cwd } : {}), ...(prepared.leftCopies?.length ? { leftCopies: prepared.leftCopies } : {}) } : {}),
     },
   }).catch(() => {});
   await tracker.updateSessionRecord(old.claudeSessionId, { supersededBy: sessionId }).catch(() => {});
@@ -682,6 +685,7 @@ async function prepare(task: Task, old: SessionRecord, rows: SessionRecord[], st
   let moveMeta: NonNullable<Parameters<typeof renderCarriedContext>[1]['move']> | undefined;
   let moved: string[] | undefined;
   let clearable: Pick<import('../transfer/task-work.js').MovedWork, 'clearable'> | undefined;
+  let leftCopies: import('../transfer/task-work.js').LeftCopy[] | undefined;
   const label = (h: string) => (h === LOCAL_HOST ? 'this Mac' : h);
   if (state.move && state.from_host_lost) {
     // Nothing can be packed on a host that does not answer: the session starts in its task
@@ -699,10 +703,15 @@ async function prepare(task: Task, old: SessionRecord, rows: SessionRecord[], st
   } else if (state.move) {
     // The task's own work, packed on the old host and set up under its task directory here.
     const { moveTaskWork } = await import('../transfer/task-work.js');
-    const work = await moveTaskWork({ task, session: old, sourceHost: oldHost, targetHost: host, moveId: `xf-${state.id.replace(/^es-/, '')}` });
+    // A move back: what the move here left on that host returns into its copies while they are unchanged.
+    const leftOnTarget = old.engineSwitch?.fromHost !== undefined && normalizeHost(old.engineSwitch.fromHost) === host ? old.engineSwitch.leftCopies : undefined;
+    const work = await moveTaskWork({
+      task, session: old, sourceHost: oldHost, targetHost: host, moveId: `xf-${state.id.replace(/^es-/, '')}`, ...(leftOnTarget ? { leftOnTarget } : {}),
+    });
     cwd = work.cwd;
     moved = work.summary;
     clearable = work;
+    leftCopies = work.leftCopies;
     moveMeta = {
       fromHost: label(oldHost), toHost: label(host), ...(old.cwd ? { fromCwd: old.cwd } : {}), cwd: work.cwd,
       work: work.summary, steps: work.pieces.filter((p) => p.steps).map((p) => `### ${p.dest}\n${p.steps}`),
@@ -777,7 +786,7 @@ async function prepare(task: Task, old: SessionRecord, rows: SessionRecord[], st
   // An old ACP record's unchosen 'default' is no mode to carry (acp-recorded-mode.ts).
   const mode = state.to.permission_mode ?? (recordedSessionMode(old).chosen ? old.mode : undefined);
   return {
-    message, context: words ? undefined : blocks.join('\n'), cwd, carried, transcriptPath, compacted: ctx.compacted, source: ctx.source, mode, left, moved, clearable,
+    message, context: words ? undefined : blocks.join('\n'), cwd, carried, transcriptPath, compacted: ctx.compacted, source: ctx.source, mode, left, moved, clearable, leftCopies,
     ...(resume && resumeBlock ? { resume: { ...resume, message: words ? composeHinted(words, { before: [resumeBlock], after: [] }) : '', context: words ? undefined : resumeBlock } } : {}),
   };
 }
@@ -820,7 +829,7 @@ async function stopTurnForSwitch(sessionId: string): Promise<void> {
   while (Date.now() < until) {
     await new Promise((r) => setTimeout(r, 250));
     const rec = await tracker.getSessionByClaudeId(sessionId).catch(() => null);
-    if (!rec || (await turnHold(rec, { queue: false })) !== 'turn') {
+    if (!rec || (await turnHold(rec, { queue: false, owner: true })) !== 'turn') {
       log.session.info('engine switch: the running turn stopped', { sessionId, waitedMs: SWITCH_TURN_STOP_MS - (until - Date.now()) });
       return;
     }

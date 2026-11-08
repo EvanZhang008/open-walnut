@@ -55,6 +55,12 @@ export interface MovedPiece {
   error?: string;
   /** The new session's steps when the target did not set it up. */
   steps?: string;
+  /** Set up in the copy it left on the target (a move back), not in a new folder. */
+  into?: boolean;
+  /** `into`: the uncommitted files that copy still held from when the work left are kept in a git stash there. */
+  setAside?: boolean;
+  /** That copy was there but changed since the work left it: it stayed as it was, and the work went to `dest`. */
+  intoRefused?: { dest: string; why: string };
 }
 
 export interface MovedWork {
@@ -68,7 +74,12 @@ export interface MovedWork {
   summary: string[];
   /** A shared checkout's own files that rode: cleared from it once the move is done (clearMovedCopies). */
   clearable: Array<{ root: string; files: PackedFile[]; backupFrom: string; leftUntracked?: number }>;
+  /** The task directory's repositories as they left the source host: a move back returns each into its copy while it is unchanged. */
+  leftCopies: LeftCopy[];
 }
+
+/** A repository the move left on its source host, as it was packed (its HEAD and workPrint). */
+export interface LeftCopy { path: string; head: string; print?: string }
 
 export class TaskWorkError extends Error {
   constructor(message: string, readonly status: number, readonly code: string) {
@@ -177,7 +188,8 @@ export function targetNamer(existing: Iterable<string>): (want: string, layout?:
   };
 }
 
-interface Packed { piece: WorkPiece; pack: PackReply }
+/** `into`: the target folder (under its task directory) this repository left on a move away, tried first. */
+interface Packed { piece: WorkPiece; pack: PackReply; into?: string }
 
 /**
  * Pack, copy and set up a task's own work from `sourceHost` onto `targetHost`, under
@@ -185,6 +197,8 @@ interface Packed { piece: WorkPiece; pack: PackReply }
  */
 export async function moveTaskWork(opts: {
   task: Pick<Task, 'id' | 'title'>; session: SessionRecord; sourceHost: string; targetHost: string; moveId: string;
+  /** What an earlier move away from `targetHost` left there (the session's record keeps it): a copy unchanged since takes its work back. */
+  leftOnTarget?: readonly LeftCopy[];
 }): Promise<MovedWork> {
   const { task, session, sourceHost, targetHost, moveId } = opts;
   const client = await import('./daemon-transfer-client.js');
@@ -208,6 +222,10 @@ export async function moveTaskWork(opts: {
     throw new TaskWorkError(`The task directory on ${targetHost} could not be read: ${err instanceof Error ? err.message : String(err)}`, 502, 'target_task_dir');
   });
   const nameFor = targetNamer(existing);
+  // A move back finds the copies the work left there: a repository returns into its own copy
+  // when nothing changed in it since ('task-move-into-v1'), not into a second folder beside it.
+  const present = new Set(existing);
+  const canInto = targetMoves && await client.hostCanMoveInto(targetHost).catch(() => false);
   const packed: Packed[] = [];
   const cleanRepos: MovedWork['cleanRepos'] = [];
   const outDir = (n: number) => `${transfersDir(sourceHost)}/${moveId}/${n}/pack`;
@@ -221,7 +239,11 @@ export async function moveTaskWork(opts: {
       cleanRepos.push({ source: repo.root, ...(cloneUrlOf(m) ? { url: cloneUrlOf(m) } : {}) });
       continue;
     }
-    packed.push({ piece: { kind: 'repo', source: repo.root, rel: nameFor(repo.rel || path.posix.basename(repo.root), true) }, pack });
+    const want = repo.rel || path.posix.basename(repo.root);
+    packed.push({
+      piece: { kind: 'repo', source: repo.root, rel: nameFor(want, true) }, pack,
+      ...(canInto && present.has(want.split('/')[0]!) && m.kind === 'git' && !m.noCommits ? { into: want } : {}),
+    });
   }
 
   // The session's folder outside the task directory: a checkout others may share.
@@ -295,6 +317,22 @@ export async function moveTaskWork(opts: {
         ? { leftOut: { count: m.limited.leftOutTracked + m.limited.leftOutUntracked, sample: m.limited.leftOut } } : {}),
       ...(ownUnknown.has(p) ? { ownUnknown: true } : {}),
     };
+    if (targetMoves && p.into) {
+      const intoDest = `${targetTaskDir}/${p.into}`;
+      const left = opts.leftOnTarget?.find((l) => l.path.replace(/\/+$/, '') === intoDest);
+      try {
+        const done = await client.applyPack(targetHost, {
+          dest: intoDest, bundleDir, into: true, ...(url ? { url } : {}), ...(left?.print ? { expect: { head: left.head, print: left.print } } : {}),
+        });
+        pieces.push({ ...base, dest: intoDest, applied: true, into: true, head: done.head ?? base.head, ...(done.setAside ? { setAside: true } : {}) });
+        log.session.info('task move: a repository returned into the copy it left', { taskId: task.id, dest: intoDest });
+        continue;
+      } catch (err) {
+        const why = err instanceof Error ? err.message.replace(/^transfer\.apply failed: /, '') : String(err);
+        base.intoRefused = { dest: intoDest, why };
+        log.session.info('task move: the copy the work left changed since; the work goes to a new folder', { taskId: task.id, dest: intoDest, newDest: dest, why });
+      }
+    }
     if (targetMoves) {
       try {
         const done = await client.applyPack(targetHost, {
@@ -324,6 +362,8 @@ export async function moveTaskWork(opts: {
     cwd: cwdOnTarget, targetTaskDir, pieces, cleanRepos, summary: [...describeMovedWork(pieces, cleanRepos), ...notes],
     // Only a whole move clears anything: every piece set up on the target.
     clearable: pieces.every((p) => p.applied) ? clearable : [],
+    leftCopies: packed.filter((p) => p.piece.kind === 'repo' && p.pack.meta.kind === 'git' && p.pack.meta.head)
+      .map((p) => ({ path: p.piece.source, head: p.pack.meta.head!, ...(p.pack.meta.print ? { print: p.pack.meta.print } : {}) })),
   };
 }
 
@@ -387,7 +427,9 @@ export function describeMovedWork(pieces: readonly MovedPiece[], cleanRepos: Mov
       if (p.untracked) what.push(`${p.untracked} untracked file${p.untracked === 1 ? '' : 's'}`);
     }
     const from = p.kind === 'checkout' ? `${p.source} (a shared checkout: only this task's own files)` : p.source;
-    lines.push(`${from} -> ${p.dest}: ${what.join(', ')}${p.applied ? '' : `; NOT set up yet (${p.error ?? 'the target daemon cannot'}), the new session does it`}.`);
+    lines.push(`${from} -> ${p.dest}${p.into ? ' (back in the folder it left there)' : ''}: ${what.join(', ')}${p.applied ? '' : `; NOT set up yet (${p.error ?? 'the target daemon cannot'}), the new session does it`}.`);
+    if (p.setAside) lines.push(`  The uncommitted files ${p.dest} still held from when the work left are kept in a git stash there (git stash list).`);
+    if (p.intoRefused) lines.push(`  ${p.intoRefused.dest} stayed as it was (${p.intoRefused.why}); this work is in ${p.dest}.`);
     if (p.leftOut) {
       const sample = `${p.leftOut.sample.slice(0, 5).join(', ')}${p.leftOut.count > 5 ? ', …' : ''}`;
       lines.push(p.ownUnknown
