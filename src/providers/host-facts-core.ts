@@ -96,6 +96,12 @@ export interface HostLoad {
   diskPath: string
   diskFreeBytes: number | null
   diskTotalBytes: number | null
+  /**
+   * Runnable threads of our own processes and of every other, averaged over the samples (macOS;
+   * null elsewhere or unreadable; absent from a daemon older than this field). Gates judge the
+   * load line by our share of the load (hosts/own-load.ts).
+   */
+  ownThreads?: { ours: number; others: number } | null
   at: string
 }
 
@@ -152,10 +158,10 @@ export function createHostFacts(deps: HostFactsDeps) {
 
   interface ExecOut { code: number; stdout: string; stderr: string }
 
-  function exec(file: string, args: string[], ms: number): Promise<ExecOut | null> {
+  function exec(file: string, args: string[], ms: number, maxBuffer?: number): Promise<ExecOut | null> {
     return within(new Promise<ExecOut | null>(function (resolve) {
       try {
-        deps.execFile(file, args, { env: deps.env, timeout: ms, killSignal: 'SIGKILL', maxBuffer: 256 * 1024, encoding: 'utf8', windowsHide: true },
+        deps.execFile(file, args, { env: deps.env, timeout: ms, killSignal: 'SIGKILL', maxBuffer: maxBuffer || 256 * 1024, encoding: 'utf8', windowsHide: true },
           function (err, stdout, stderr) {
             var code = err ? (typeof (err as Error & { code?: unknown }).code === 'number' ? (err as Error & { code: number }).code : -1) : 0
             resolve({ code: code, stdout: String(stdout || ''), stderr: String(stderr || '') })
@@ -284,6 +290,61 @@ export function createHostFacts(deps: HostFactsDeps) {
     return deps.os.freemem ? deps.os.freemem() : null
   }
 
+  // Our own processes' share of the runnable threads (macOS; null elsewhere or unreadable): a
+  // process that is, or descends from, Walnut, an agent CLI, bun, node, a test browser, Xcode's
+  // tools or a simulator, by its path. Two ps -axM samples 300 ms apart, the process tree read
+  // before and after them, so a child started or ended meanwhile is still ours. The same pattern as
+  // OWN_LOAD_RE in tests/setup/cpu-idle.ts and scripts/lib/own-load.sh.
+  var OWN_MS = Math.min(PROBE_MS, 2500)
+  var OWN_RE = /(^|\/)([Ww]alnut[^/]*|claude|codex|bun|bunx|node|launchd_sim|Simulator|xcodebuild|XCBBuildService|swift-frontend|Playwright|chrome-headless-shell|Google Chrome for Testing|maestro|daemon-(darwin|linux)-[^/]*)$|\/CoreSimulator\/|\/Xcode[^/]*\.app\/|\/ms-playwright\//
+  async function ownThreads(): Promise<{ ours: number; others: number } | null> {
+    if (deps.platform !== 'darwin') return null
+    var BIG = 16 * 1024 * 1024
+    // One deadline for the four reads: each gets what is left, and none starts after it.
+    var end = now() + OWN_MS
+    function ps(args: string[]): Promise<ExecOut | null> {
+      var left = end - now()
+      return left > 50 ? exec('/bin/ps', args, left, BIG) : Promise.resolve(null)
+    }
+    var tree1 = await ps(['-axww', '-o', 'pid=,ppid=,comm='])
+    var s1 = tree1 ? await ps(['-axM']) : null
+    if (s1) await new Promise(function (r) { setTimeout(r, 300) })
+    var s2 = s1 ? await ps(['-axM']) : null
+    var tree2 = s2 ? await ps(['-axww', '-o', 'pid=,ppid=,comm=']) : null
+    if (!tree1 || tree1.code !== 0 || !tree2 || tree2.code !== 0 || !s1 || s1.code !== 0 || !s2 || s2.code !== 0) return null
+    var pp: Record<string, string> = {}
+    var mark: Record<string, boolean> = {}
+    ;(tree1.stdout + '\n' + tree2.stdout).split('\n').forEach(function (line) {
+      var m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line)
+      if (!m) return
+      pp[m[1]] = m[2]
+      if (OWN_RE.test(m[3].trim())) mark[m[1]] = true
+    })
+    var memo: Record<string, boolean> = {}
+    function ours(pid: string): boolean {
+      if (pid in memo) return memo[pid]
+      var q = pid
+      for (var i = 0; i < 40 && q && Number(q) > 1; i++) { if (mark[q]) return (memo[pid] = true); q = pp[q] }
+      return (memo[pid] = false)
+    }
+    var o = 0
+    var f = 0
+    ;[s1.stdout, s2.stdout].forEach(function (sample) {
+      sample.split('\n').slice(1).forEach(function (line) {
+        if (!line) return
+        // A process line starts with its user (STAT in field 5), a thread line with spaces (field 3).
+        var w = line.trim().split(/\s+/)
+        var thread = /^\s/.test(line)
+        var pid = thread ? w[0] : w[1]
+        var st = thread ? w[2] : w[4]
+        if (!pid || !st || st.charAt(0) !== 'R') return
+        if (ours(pid)) o++
+        else f++
+      })
+    })
+    return { ours: Math.round((o / 2) * 10) / 10, others: Math.round((f / 2) * 10) / 10 }
+  }
+
   async function load(cmd?: Record<string, unknown>): Promise<HostLoad> {
     var dir = cmd && typeof cmd.path === 'string' && cmd.path ? cmd.path : deps.home
     if (dir === '~' || dir.indexOf('~/') === 0) dir = deps.home + dir.slice(1)
@@ -295,10 +356,13 @@ export function createHostFacts(deps: HostFactsDeps) {
       within(cpuBusy(), PROBE_MS, null),
       within(memAvailable(), PROBE_MS, null),
       within(diskOf(dir), PROBE_MS, null),
+      // About 1.3 s at load 100; bounded under the 4 s a placement waits for the whole answer.
+      within(ownThreads(), OWN_MS + 100, null),
     ])
     return {
       cpus: cpus, load: avg, cpuBusy: got[0], memTotalBytes: deps.os.totalmem(), memAvailBytes: got[1],
       diskPath: dir, diskFreeBytes: got[2] ? got[2].free : null, diskTotalBytes: got[2] ? got[2].total || null : null,
+      ownThreads: got[3],
       at: new Date(now()).toISOString(),
     }
   }

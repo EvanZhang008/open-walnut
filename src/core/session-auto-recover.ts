@@ -658,7 +658,7 @@ export class SessionAutoRecover {
       const slot = this.hostNextStart.get(item.hostKey) ?? 0
       if (slot > now) { next = Math.min(next, slot); continue }
       if (isLocalHost(item.hostKey)) {
-        const load = this.deps.loadPerCpu()
+        const load = this.deps.loadPerCpu(this.cfg.maxLoadPerCpu)
         if (load > this.cfg.maxLoadPerCpu) {
           item.gatedSince ??= now
           // Past the wait the queue goes on, but one at a time.

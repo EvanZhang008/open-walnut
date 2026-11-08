@@ -93,8 +93,8 @@ export interface AutoRecoverDeps {
   noteFolderGone?: (sessionId: string) => Promise<unknown>
   /** Boot time of this machine (ms). */
   bootTimeMs: () => number
-  /** 1-minute load average per CPU of this machine. */
-  loadPerCpu: () => number
+  /** 1-minute load per CPU of this machine; over `line`, our own processes' share of it (hosts/own-load.ts). */
+  loadPerCpu: (line: number) => number
   /** Persist the attempt budget on the record (survives a server restart). */
   noteAttempt: (sessionId: string, attempts: number, cause: StatusReason | undefined) => Promise<void>
   /** Atomically rewrite `restartLoss`; returns the stored value (null = session gone). */
@@ -130,7 +130,12 @@ function syncSessionGetter(): (sessionId: string) => SessionRecord | null {
   return (sessionId) => tracker?.getSessionByClaudeIdSync(sessionId) ?? null
 }
 
+// Placement holds this Mac's last load read, with our own processes' share of it; loaded on first
+// use (it pulls in the config), the whole load until then.
+let placement: typeof import('../hosts/placement.js') | null = null
+
 export function defaultDeps(): AutoRecoverDeps {
+  if (!placement) void import('../hosts/placement.js').then((m) => { placement = m }).catch(() => undefined)
   return {
     pendingMessages: async (sessionId) => {
       const { getQueue } = await import('../session-message-queue.js')
@@ -253,7 +258,7 @@ export function defaultDeps(): AutoRecoverDeps {
       return noteFolderGone(sessionId)
     },
     bootTimeMs: () => Date.now() - os.uptime() * 1000,
-    loadPerCpu: () => os.loadavg()[0] / Math.max(1, os.cpus().length),
+    loadPerCpu: (line) => (placement ? placement.localLoadPerCpu(line) : os.loadavg()[0] / Math.max(1, os.cpus().length)),
     noteAttempt: async (sessionId, attempts, cause) => {
       const { updateSessionRecordConditionally } = await import('../session-tracker.js')
       // Deliberately NOT a status write, so the snapshot gate never drops it.

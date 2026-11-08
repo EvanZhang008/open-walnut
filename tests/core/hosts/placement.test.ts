@@ -15,7 +15,8 @@ vi.mock('../../../src/core/config-manager.js', async (orig) => {
 });
 
 import { WALNUT_HOME } from '../../../src/constants.js';
-import { __setHostLoadProberForTesting, choosePlacement, hostLoads, hostSlots, judgeHost, macOnlyReason, placementCaps, placementWeight } from '../../../src/core/hosts/placement.js';
+import { __setHostLoadProberForTesting, choosePlacement, hostLoads, hostSlots, judgeHost, localLoadPerCpu, macOnlyReason, placementCaps, placementWeight } from '../../../src/core/hosts/placement.js';
+import os from 'node:os';
 import { HostsFullError, __resetHostAdmissionForTesting, __setWaitStepForTesting, admitHostStart, holdSlotFor, isAutomaticStart, slotHoldersOn } from '../../../src/core/sessions/host-admission.js';
 import type { HostLoad } from '../../../src/providers/host-facts-core.js';
 
@@ -71,8 +72,43 @@ describe('judgeHost', () => {
   it('a host that did not answer is unknown, never room', () => {
     expect(judgeHost('c', 'c', undefined, 0, 20, caps, 'no answer in 4 s')).toMatchObject({ known: false, busy: true, score: 0, reasons: ['its load is unknown (no answer in 4 s)'] });
   });
+  it('over the cap, the load is judged by our own share of it; other apps alone never fill a host', () => {
+    // 2026-11-08 on the Mac: load 98 on 14 CPUs, mostly a music app and a security agent; our
+    // processes held 10 of 50 runnable threads.
+    const mac = judgeHost('__local__', 'this Mac', load({ load1: 98, cpuBusy: 0.6, ownThreads: { ours: 10, others: 40 } }), 0, 7, caps);
+    expect(mac).toMatchObject({ busy: false, full: false, loadPerCpu: 7, ownLoadPerCpu: 1.4 });
+    expect(mac.score).toBeGreaterThan(0);
+    // Our own work over the cap still holds a start, and the words say whose load it is.
+    const ours = judgeHost('__local__', 'this Mac', load({ load1: 98, ownThreads: { ours: 45, others: 5 } }), 0, 7, caps);
+    expect(ours).toMatchObject({ busy: true, full: true, fullReasons: ['load past 6 per CPU'] });
+    expect(ours.reasons[0]).toBe('our share of the load 88.2 on 14 CPUs (6.3 per CPU, cap 3; whole load 98)');
+    // No share (Linux, an older daemon), or nothing but ours: the whole load, as before.
+    expect(judgeHost('c', 'c', load({ load1: 98 }), 0, 7, caps)).toMatchObject({ full: true, fullReasons: ['load past 6 per CPU'] });
+    expect(judgeHost('c', 'c', load({ load1: 98, ownThreads: { ours: 9, others: 0 } }), 0, 7, caps).full).toBe(true);
+    expect(judgeHost('c', 'c', load({ load1: 98, ownThreads: null }), 0, 7, caps).ownLoadPerCpu).toBeUndefined();
+    // Other apps' CPU still counts: a CPU 97% busy is over its cap whatever the share.
+    expect(judgeHost('m', 'm', load({ load1: 98, cpuBusy: 0.97, ownThreads: { ours: 10, others: 40 } }), 0, 7, caps).reasons).toEqual(['CPU 97% busy']);
+  });
   it('the caps follow the env', () => {
     expect(placementCaps({ WALNUT_PLACE_MAX_LOAD_PER_CPU: '10', WALNUT_PLACE_MIN_DISK_GB: '5' })).toMatchObject({ loadPerCpu: 10, diskFreeBytes: 5 * GB });
+  });
+});
+
+describe('localLoadPerCpu (restart recovery reads it)', () => {
+  it('callers at once share one probe, and the share of that read scales the load over the line', async () => {
+    let probes = 0;
+    __setHostLoadProberForTesting(async () => { probes++; await new Promise((r) => setTimeout(r, 20)); return load({ ownThreads: { ours: 1, others: 3 } }); });
+    const whole = os.loadavg()[0] / Math.max(1, os.cpus().length);
+    // Before any read: the whole load. Many callers (one per queued session) start one probe.
+    for (let i = 0; i < 20; i++) expect(localLoadPerCpu(0)).toBeCloseTo(whole, 1);
+    await new Promise((r) => setTimeout(r, 60));
+    expect(probes).toBe(1);
+    expect(localLoadPerCpu(0)).toBeCloseTo(os.loadavg()[0] / Math.max(1, os.cpus().length) / 4, 1);
+    // Under the line no probe is asked for and the load is the whole load.
+    __setHostLoadProberForTesting(async () => { probes++; return load(); });
+    expect(localLoadPerCpu(1e9)).toBeCloseTo(os.loadavg()[0] / Math.max(1, os.cpus().length), 1);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(probes).toBe(1);
   });
 });
 

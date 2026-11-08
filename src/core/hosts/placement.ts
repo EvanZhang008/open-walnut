@@ -12,7 +12,8 @@
  *   - over a cap, the eligible host with the most room takes it, when one is under
  *     every cap; when none is, the start stays where it was (no worse place to go).
  * Caps (each env-tunable): load average per CPU 3 (the macOS load also counts threads
- * stalled on memory, which CPU use alone misses), CPU busy 95%, memory available 5%,
+ * stalled on memory, which CPU use alone misses; over the cap, only our own processes' share
+ * of it counts, hosts/own-load.ts), CPU busy 95%, memory available 5%,
  * free disk 20 GB, and the host's slots (hostSlots: sessions in a turn at once). A host's
  * numbers come from its daemon (`host.load`, 'host-load-v1'), the Mac's from this
  * process; one older than 15 s is asked again, and a host that does not answer in 4 s
@@ -39,6 +40,7 @@ import https from 'node:https';
 import { log } from '../../logging/index.js';
 import type { HostLoad } from '../../providers/host-facts-core.js';
 import { isWorkFile, pathsOnHost, type PathsOnHost } from './named-paths.js';
+import { ownLoadPerCpu } from './own-load.js';
 
 export const LOCAL = '__local__';
 /** A host's numbers are asked again after this (a sample older than 15 s is dropped). */
@@ -78,6 +80,10 @@ export interface HostLoadView {
   cpus?: number;
   load1?: number;
   loadPerCpu?: number;
+  /** Our own processes' share of the load per CPU, set when the caps judged by it (hosts/own-load.ts). */
+  ownLoadPerCpu?: number;
+  /** Runnable threads of our processes and of the others (HostLoad.ownThreads), for gates with a line of their own. */
+  ownThreads?: { ours: number; others: number } | null;
   cpuBusy?: number | null;
   /** Cores idle now (cpus x (1 - cpuBusy)): the free CPU a gate judges by, the load being threads. */
   freeCpus?: number | null;
@@ -148,17 +154,39 @@ async function probe(host: string): Promise<HostLoad> {
   return probeHostLoad(host, { path: '~/.local/state', timeoutMs: ASK_MS });
 }
 
+/** One probe per host at a time: callers that ask meanwhile share it (a restart's recovery asks for each queued session). */
+const inFlight = new Map<string, Promise<{ load?: HostLoad; error?: string }>>();
+
 async function loadOf(host: string): Promise<{ load?: HostLoad; error?: string }> {
   const hit = cache.get(host);
   if (hit && Date.now() - hit.at < FRESH_MS) return { load: hit.load };
   const miss = failed.get(host);
   if (miss && Date.now() - miss.at < FRESH_MS) return { error: miss.error };
+  const going = inFlight.get(host);
+  if (going) return going;
+  const p = askLoad(host, hit);
+  inFlight.set(host, p);
+  try { return await p; } finally { inFlight.delete(host); }
+}
+
+/**
+ * Our share of the runnable threads, two samples a few hundred ms apart, averaged with the share
+ * of the read before it (at most two minutes old): the load it scales is a 1-minute average.
+ */
+function smoothShare(load: HostLoad, prev: { at: number; load: HostLoad } | undefined): HostLoad {
+  const now = load.ownThreads, was = prev && Date.now() - prev.at < 120_000 ? prev.load.ownThreads : null;
+  if (!now || !was) return load;
+  const avg = (a: number, b: number) => Math.round(((a + b) / 2) * 10) / 10;
+  return { ...load, ownThreads: { ours: avg(now.ours, was.ours), others: avg(now.others, was.others) } };
+}
+
+async function askLoad(host: string, prev: { at: number; load: HostLoad } | undefined): Promise<{ load?: HostLoad; error?: string }> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const load = await Promise.race([
+    const load = smoothShare(await Promise.race([
       probe(host),
       new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('no answer in 4 s')), ASK_MS); timer.unref?.(); }),
-    ]);
+    ]), prev);
     cache.set(host, { at: Date.now(), load });
     failed.delete(host);
     return { load };
@@ -169,6 +197,20 @@ async function loadOf(host: string): Promise<{ load?: HostLoad; error?: string }
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+/**
+ * This Mac's 1-minute load per CPU for a gate that cannot wait for a probe (sync): over `line`,
+ * our own processes' share of it, by the share of the last read here (at most a minute old); else
+ * the whole load. A read older than FRESH_MS is asked for again in the background.
+ */
+export function localLoadPerCpu(line: number): number {
+  const hit = cache.get(LOCAL);
+  const cpus = Math.max(1, os.cpus().length);
+  // Only over the line is the share needed; loadOf shares one probe among callers.
+  if (os.loadavg()[0] / cpus >= line && (!hit || Date.now() - hit.at >= FRESH_MS)) void loadOf(LOCAL).catch(() => undefined);
+  const share = hit && Date.now() - hit.at < 60_000 ? hit.load.ownThreads : null;
+  return ownLoadPerCpu({ load: [os.loadavg()[0]], cpus, ownThreads: share }, line).perCpu;
 }
 
 /** Judge one host's numbers against the caps (pure). */
@@ -190,14 +232,23 @@ export function judgeHost(
   }
   const cpus = Math.max(1, load.cpus || 1);
   const load1 = load.load[0] ?? 0;
-  const perCpu = Math.round((load1 / cpus) * 100) / 100;
+  // Over the cap, the load is judged by our own processes' share of it: other apps' threads are
+  // not ours to wait for, and what they take of the CPU and memory still counts below.
+  const own = ownLoadPerCpu(load, caps.loadPerCpu);
+  const perCpu = own.rawPerCpu ?? own.perCpu;
+  const judged = own.perCpu;
   const memShare = load.memAvailBytes != null && load.memTotalBytes > 0 ? Math.round((load.memAvailBytes / load.memTotalBytes) * 1000) / 1000 : null;
   Object.assign(view, {
-    cpus, load1, loadPerCpu: perCpu, cpuBusy: load.cpuBusy,
+    cpus, load1, loadPerCpu: perCpu, ...(own.rawPerCpu != null ? { ownLoadPerCpu: judged } : {}),
+    ...(load.ownThreads !== undefined ? { ownThreads: load.ownThreads } : {}), cpuBusy: load.cpuBusy,
     freeCpus: load.cpuBusy != null ? Math.round(cpus * (1 - load.cpuBusy) * 10) / 10 : null, memAvailShare: memShare, diskFreeBytes: load.diskFreeBytes, at: load.at,
     ...(load.memTotalBytes > 0 ? { memTotalBytes: load.memTotalBytes } : {}),
   });
-  if (perCpu >= caps.loadPerCpu) view.reasons.push(`load ${load1} on ${cpus} CPUs (${perCpu} per CPU, cap ${caps.loadPerCpu})`);
+  if (judged >= caps.loadPerCpu) {
+    view.reasons.push(own.rawPerCpu != null
+      ? `our share of the load ${Math.round(judged * cpus * 10) / 10} on ${cpus} CPUs (${judged} per CPU, cap ${caps.loadPerCpu}; whole load ${load1})`
+      : `load ${load1} on ${cpus} CPUs (${perCpu} per CPU, cap ${caps.loadPerCpu})`);
+  }
   if (load.cpuBusy != null && load.cpuBusy >= caps.cpuBusy) view.reasons.push(`CPU ${Math.round(load.cpuBusy * 100)}% busy`);
   if (memShare != null && memShare <= caps.memAvailShare) view.reasons.push(`${Math.round(memShare * 100)}% memory available`);
   if (load.diskFreeBytes != null && load.diskFreeBytes < caps.diskFreeBytes) {
@@ -206,12 +257,12 @@ export function judgeHost(
   if (running >= runningLimit) view.reasons.push(`${running} sessions in a turn (limit ${runningLimit})`);
   view.busy = view.reasons.length > 0;
   if (memShare != null && memShare <= caps.memAvailShare) view.fullReasons.push('memory nearly full');
-  if (perCpu >= caps.loadPerCpu * 2) view.fullReasons.push(`load past ${caps.loadPerCpu * 2} per CPU`);
+  if (judged >= caps.loadPerCpu * 2) view.fullReasons.push(`load past ${caps.loadPerCpu * 2} per CPU`);
   view.full = view.fullReasons.length > 0;
   if (!view.busy) {
     // The score (cores x idle share x memory share), with the load and the sessions in it.
     const idle = load.cpuBusy != null ? 1 - load.cpuBusy : 1;
-    view.score = Math.round(cpus * Math.max(0.05, 1 - perCpu / caps.loadPerCpu) * Math.max(0.05, idle)
+    view.score = Math.round(cpus * Math.max(0.05, 1 - judged / caps.loadPerCpu) * Math.max(0.05, idle)
       * Math.max(0.05, memShare ?? 0.5) * Math.max(0.05, 1 - running / runningLimit) * 1000) / 1000;
   }
   return view;
@@ -418,7 +469,7 @@ export async function choosePlacement(input: {
     const required = files.lacks(from, files.needed);
     const withFiles = hosts.filter((h) => canTake(h) && keeps(h) && files.lacks(h.host, required).length === 0)
       .sort((a, b) => files.count(b.host, lacks) - files.count(a.host, lacks) || files.count(b.host, files.needed) - files.count(a.host, files.needed)
-        || Number(a.busy) - Number(b.busy) || b.score - a.score || (a.loadPerCpu ?? 0) - (b.loadPerCpu ?? 0));
+        || Number(a.busy) - Number(b.busy) || b.score - a.score || (a.ownLoadPerCpu ?? a.loadPerCpu ?? 0) - (b.ownLoadPerCpu ?? b.loadPerCpu ?? 0));
     for (const h of hosts) {
       const missing = h === here ? [] : [...files.lacks(h.host, required), ...files.lacks(h.host, fromHas)];
       if (missing.length) h.reasons.push(`it does not have ${pathList(missing)}, which the task names`);

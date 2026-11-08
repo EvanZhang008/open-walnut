@@ -24,7 +24,9 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 
 const ROOT = path.resolve(__dirname, '../..')
-const READS_LOAD = /os\.loadavg\(|\bloadavg\(\)|vm\.loadavg|\/proc\/loadavg/
+// The load average itself, a host's 1-minute load as host_load reports it, or the
+// restart recovery's load reading.
+const READS_LOAD = /os\.loadavg\(|\bloadavg\(\)|vm\.loadavg|\/proc\/loadavg|\.load\[0\]|loadPerCpu\(/
 
 /** Gates: each must read idle CPU too (the pattern names how). */
 const GATES: Record<string, RegExp> = {
@@ -53,17 +55,29 @@ const OWN_SHARE: Record<string, RegExp> = {
   'tests/setup/test-gate.ts': /load = ownLoadPerCore\(undefined, MAX_LOAD > 0/,
 }
 
+/**
+ * Walnut's own start gates (2026-11-08: no session started on the Mac for an hour at a load near
+ * 98, mostly a music app and a security agent): each judges the load by our own share of it
+ * (hosts/own-load.ts), and where it refuses a start, also by CPU busy and memory (the patterns).
+ */
+const START_GATES: Record<string, RegExp[]> = {
+  'src/core/hosts/own-load.ts': [/t\.ours \+ t\.others/],
+  'src/core/hosts/placement.ts': [/const own = ownLoadPerCpu\(load, caps\.loadPerCpu\)/, /if \(judged >= caps\.loadPerCpu \* 2\)/, /load\.cpuBusy >= caps\.cpuBusy/, /memShare <= caps\.memAvailShare\) view\.fullReasons/, /return ownLoadPerCpu\(\{ load: \[os\.loadavg\(\)\[0\]\]/],
+  'src/core/sessions/auto-recover-env.ts': [/placement\.localLoadPerCpu\(line\)/],
+  'src/core/session-auto-recover.ts': [/this\.deps\.loadPerCpu\(this\.cfg\.maxLoadPerCpu\)/],
+}
+
 /** Readers that never hold a run on the load, with what they do. */
 const REPORTS: Record<string, string> = {
   'scripts/bridge-monitor/collector.mjs': 'records the load in its samples',
   'scripts/desktop-health-monitor.sh': 'logs the load',
   'scripts/ios-perf/kb-loop-probe.sh': 'prints a warning that a timeout may be starvation, never waits',
   'scripts/pw-cleanup.sh': 'prints the load in its status',
-  'src/core/sessions/auto-recover-env.ts': 'restart recovery goes one at a time above 3 per CPU and never stops (after 5 minutes it proceeds)',
   'src/core/stall-recorder-hold.ts': 'writes the load into a stall record',
-  'src/providers/host-facts-core.ts': 'host_load reports the load beside cpuBusy, which gates read',
+  'src/providers/host-facts-core.ts': 'host_load reports the load beside cpuBusy and our own share of the runnable threads, which gates read',
   'src/providers/host-vitals-core.ts': 'reports the host vitals',
   'src/web/server.ts': 'logs a warning at boot',
+  'tests/core/hosts/placement.test.ts': 'compares localLoadPerCpu with the load it scales',
   'tests/core/memory-signals.test.ts': 'fixture text of sysctl output',
   'tests/e2e/browser/board-kanban-layout.spec.ts': 'writes the load into a timing annotation',
   'tests/e2e/browser/cpu-reference.ts': 'decides whether a timing is judged, never holds a run',
@@ -88,7 +102,7 @@ function trackedFiles(): string[] {
 describe('machine gates judge free CPU', () => {
   it('every file that reads the load average is a gate that reads idle CPU too, or a listed report', () => {
     const readers = trackedFiles().filter((f) => READS_LOAD.test(fs.readFileSync(path.join(ROOT, f), 'utf8')))
-    const unlisted = readers.filter((f) => !(f in GATES) && !(f in REPORTS))
+    const unlisted = readers.filter((f) => !(f in GATES) && !(f in REPORTS) && !(f in START_GATES))
     expect(unlisted, 'a new file reads the load average: gate on idle CPU (tests/setup/cpu-idle.ts) or list it in REPORTS with what it does').toEqual([])
     for (const [f, idle] of Object.entries(GATES)) {
       expect(readers, `${f} no longer reads the load: move it out of GATES`).toContain(f)
@@ -110,6 +124,32 @@ describe('machine gates judge free CPU', () => {
     for (const [f, p] of Object.entries(OWN_SHARE)) {
       expect(fs.readFileSync(path.join(ROOT, f), 'utf8'), `${f} judges the whole load again`).toMatch(p)
     }
+  })
+
+  it("Walnut's start gates judge our own share of the load, with CPU busy and memory where they refuse", () => {
+    const readers = trackedFiles().filter((f) => READS_LOAD.test(fs.readFileSync(path.join(ROOT, f), 'utf8')))
+    for (const [f, pats] of Object.entries(START_GATES)) {
+      expect(readers, `${f} no longer reads the load: move it out of START_GATES`).toContain(f)
+      for (const p of pats) expect(fs.readFileSync(path.join(ROOT, f), 'utf8'), `${f} judges the whole load again`).toMatch(p)
+    }
+    // host_load's share and the gates' twins use one pattern for what is ours.
+    const twin = (f: string, re: RegExp) => re.exec(fs.readFileSync(path.join(ROOT, f), 'utf8'))?.[1]
+    const ts = twin('tests/setup/cpu-idle.ts', /export const OWN_LOAD_RE =\s*\/(.*)\/\n/)
+    expect(ts).toBeTruthy()
+    expect(twin('src/providers/host-facts-core.ts', /var OWN_RE = \/(.*)\/\n/)).toBe(ts)
+  })
+
+  it("every reader of host_load's load per CPU also reads our own share of it", () => {
+    // A gate or a picker reading host_load's view (loadPerCpu), in the server, a script or the
+    // web app, would judge the whole load again (2026-11-08 review: the fleet's pick and the Move
+    // to host menu read only loadPerCpu).
+    const r = spawnSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '--', 'scripts', 'src', 'web/src', 'packages'], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+    const files = r.stdout.split('\n').filter((f) => /\.(ts|tsx|mjs|cjs|js|sh|py)$/.test(f) && fs.existsSync(path.join(ROOT, f)))
+    const blind = files.filter((f) => {
+      const text = fs.readFileSync(path.join(ROOT, f), 'utf8')
+      return /loadPerCpu\b/.test(text.replace(/ownLoadPerCpu|localLoadPerCpu|maxLoadPerCpu|caps\.loadPerCpu|loadPerCpu: num\(/g, '')) && !(f in START_GATES) && !/ownLoadPerCpu|ownThreads/.test(text)
+    })
+    expect(blind, "these read host_load's loadPerCpu without our own share (ownLoadPerCpu or ownThreads)").toEqual([])
   })
 
   it('the gates that read the load through a helper judge idle CPU with it', () => {

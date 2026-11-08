@@ -91,7 +91,7 @@ export function loadPerCore(): number {
  * Xcode's tools or a simulator, by its path. The same pattern as scripts/lib/own-load.sh.
  */
 export const OWN_LOAD_RE =
-  /(^|\/)([Ww]alnut[^/]*|claude|codex|bun|bunx|node|launchd_sim|Simulator|xcodebuild|XCBBuildService|swift-frontend|Playwright|chrome-headless-shell|Google Chrome for Testing|maestro)$|\/CoreSimulator\/|\/Xcode[^/]*\.app\/|\/ms-playwright\//
+  /(^|\/)([Ww]alnut[^/]*|claude|codex|bun|bunx|node|launchd_sim|Simulator|xcodebuild|XCBBuildService|swift-frontend|Playwright|chrome-headless-shell|Google Chrome for Testing|maestro|daemon-(darwin|linux)-[^/]*)$|\/CoreSimulator\/|\/Xcode[^/]*\.app\/|\/ms-playwright\//
 
 /**
  * The mean runnable threads of our processes and of the rest, from a process tree

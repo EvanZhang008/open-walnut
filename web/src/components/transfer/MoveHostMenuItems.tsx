@@ -20,6 +20,8 @@ export interface HostLoadRow {
   busy: boolean;
   reasons: string[];
   loadPerCpu?: number;
+  /** Our own processes' share of it, when placement judged by that. */
+  ownLoadPerCpu?: number;
   cpus?: number;
   diskFreeBytes?: number | null;
   running: number;
@@ -31,7 +33,7 @@ export function hostLoadLine(h: HostLoadRow): string {
   if (!h.known) return 'load unknown';
   const free = h.diskFreeBytes != null ? ` · ${Math.round(h.diskFreeBytes / 1024 ** 3)} GB free` : '';
   if (h.busy) return `busy: ${h.reasons[0] ?? 'over a cap'}`;
-  return `room · load ${h.loadPerCpu ?? '?'}/CPU · ${h.running} working${free}`;
+  return `room · load ${h.ownLoadPerCpu ?? h.loadPerCpu ?? '?'}/CPU${h.ownLoadPerCpu != null ? ' ours' : ''} · ${h.running} working${free}`;
 }
 
 const ICON_MOVE = (
@@ -110,7 +112,7 @@ export function MoveHostMenuItems({ task, afterAction }: { task: Task; afterActi
               className="task-kebab-item task-kebab-move-host"
               data-testid={`kebab-move-host-${h.host}`}
               disabled={asking !== null}
-              title={h.reasons.length ? h.reasons.join('; ') : `Has room: load ${h.loadPerCpu ?? '?'} per CPU on ${h.cpus ?? '?'} CPUs, ${h.running} of ${h.runningLimit} sessions in a turn`}
+              title={h.reasons.length ? h.reasons.join('; ') : `Has room: load ${h.loadPerCpu ?? '?'} per CPU${h.ownLoadPerCpu != null ? ` (ours ${h.ownLoadPerCpu})` : ''} on ${h.cpus ?? '?'} CPUs, ${h.running} of ${h.runningLimit} sessions in a turn`}
               onClick={(e) => { e.stopPropagation(); move(h.host); }}
             >
               <span className="task-kebab-icon" aria-hidden="true">→</span>

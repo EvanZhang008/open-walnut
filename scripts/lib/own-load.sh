@@ -15,7 +15,7 @@
 # (`ps -axww -o pid=,ppid=,comm=` output) and OWN_LOAD_PS_AXM (`ps -axM` output).
 # Twin: ownLoadShare in tests/setup/cpu-idle.ts (same rule, same pattern).
 
-OWN_LOAD_RE='(^|/)([Ww]alnut[^/]*|claude|codex|bun|bunx|node|launchd_sim|Simulator|xcodebuild|XCBBuildService|swift-frontend|Playwright|chrome-headless-shell|Google Chrome for Testing|maestro)$|/CoreSimulator/|/Xcode[^/]*\.app/|/ms-playwright/'
+OWN_LOAD_RE='(^|/)([Ww]alnut[^/]*|claude|codex|bun|bunx|node|launchd_sim|Simulator|xcodebuild|XCBBuildService|swift-frontend|Playwright|chrome-headless-shell|Google Chrome for Testing|maestro|daemon-(darwin|linux)-[^/]*)$|/CoreSimulator/|/Xcode[^/]*\.app/|/ms-playwright/'
 OWN_LOAD_SAMPLES=${OWN_LOAD_SAMPLES:-5}
 
 # _ol_ps ARGS: /bin/ps ARGS, killed after 4 s (a ps on a swapping Mac can stall; the gate then

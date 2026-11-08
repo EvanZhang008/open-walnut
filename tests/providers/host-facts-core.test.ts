@@ -270,3 +270,69 @@ describe('host.facts capabilities (host-caps-v1)', () => {
     expect(r.mcp).toEqual([{ name: 'from-config-dir' }])
   })
 })
+
+// host.load's own-thread share (2026-11-08: no session started on the Mac for an hour at a load
+// near 98, mostly a music app and a security agent). Both the imported factory and its text, as
+// daemon-source.ts inlines it.
+describe('host.load: our own share of the runnable threads', () => {
+  const strict = <T>(fn: T): T => new Function('"use strict"; return (' + String(fn) + ')')() as T
+  // A tree with an agent CLI and its shell's child, a bun runner, a music app and an endpoint agent;
+  // the second tree also has a compiler our CLI started between the samples.
+  const tree1 = ['    1     0 /sbin/launchd', '  500     1 /Applications/Music.app/Contents/MacOS/music',
+    '  600     1 /Users/x/.local/bin/claude', '  601   600 /bin/zsh', '  602   601 /usr/bin/python3',
+    '  700     1 /Library/Application Support/Endpoint/agent', '  800     1 /Users/x/.bun/bin/bun'].join('\n')
+  const tree2 = tree1 + '\n  650   601 /usr/bin/clang'
+  // Runnable: 500 x3, 700 x1 (theirs); 602 x1, 800 x1 (a thread line), 650 x2 (ours).
+  const axm = ['USER   PID   TT  %CPU STAT PRI STIME UTIME COMMAND',
+    'x      500   ??   0.3 R    31T 0:00.10 0:00.05 /Applications/Music.app/Contents/MacOS/music',
+    '       500        0.0 R    31T 0:00.01 0:00.01', '       500        0.0 R    31T 0:00.01 0:00.01',
+    '       500        0.0 S    31T 0:00.01 0:00.01',
+    'x      602 s001   9.0 R    31T 0:01.00 0:02.00 /usr/bin/python3',
+    'root   700   ??   1.0 R    4T  0:00.00 0:00.00 /Library/Application Support/Endpoint/agent',
+    'x      800   ??   0.0 S    4T  0:00.00 0:00.00 /Users/x/.bun/bin/bun', '       800        5.0 R    4T  0:00.00 0:00.00',
+    'x      650   ??   9.0 R    31T 0:00.10 0:00.10 /usr/bin/clang', '       650        5.0 R    31T 0:00.00 0:00.00'].join('\n')
+  // The second sample: the music app's threads asleep, so the mean is (4+4)/2 ours, (4+0)/2 theirs.
+  const axmQuiet = axm.split('\n').filter((l) => !/^\S*\s+(500|700)\s/.test(l)).join('\n')
+  function psExec(trees: string[], samples: string[] = [axm, axm], slowMs = 0) {
+    return ((file: string, args: string[], _o: unknown, cb: (e: Error | null, out: string, err: string) => void) => {
+      const reply = (out: string, code = 0) => setTimeout(() => cb(code ? Object.assign(new Error('exit'), { code }) : null, out, ''), file === '/bin/ps' ? slowMs : 0)
+      if (file === '/bin/ps' && args[0] === '-axM') return reply((samples.shift() ?? axm) + '\n')
+      if (file === '/bin/ps') return reply((trees.shift() ?? tree2) + '\n')
+      if (file === 'vm_stat') return reply('Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free: 100.\n')
+      return reply('', 1)
+    }) as unknown as HostFactsDeps['execFile']
+  }
+  for (const [label, factory] of [['imported', createHostFacts], ['inlined', strict(createHostFacts)]] as const) {
+    it(`${label}: counts an agent CLI's children, bun and a child started between the samples as ours`, async () => {
+      const r = await factory({
+        fs, os, execFile: psExec([tree1, tree2]), http: {} as never, https: {} as never,
+        env: {}, home: tmp, platform: 'darwin', arch: 'arm64', timeouts: { probeMs: 1500 },
+      }).load()
+      expect(r.ownThreads).toEqual({ ours: 4, others: 4 })
+    })
+    it(`${label}: averages the two samples`, async () => {
+      const r = await factory({
+        fs, os, execFile: psExec([tree1, tree2], [axm, axmQuiet]), http: {} as never, https: {} as never,
+        env: {}, home: tmp, platform: 'darwin', arch: 'arm64', timeouts: { probeMs: 1500 },
+      }).load()
+      expect(r.ownThreads).toEqual({ ours: 4, others: 2 })
+    })
+    it(`${label}: a ps too slow for the share's deadline leaves no share, and the rest of the answer stands`, async () => {
+      const t0 = Date.now()
+      const r = await factory({
+        fs, os, execFile: psExec([tree1, tree2], [axm, axm], 700), http: {} as never, https: {} as never,
+        env: {}, home: tmp, platform: 'darwin', arch: 'arm64', timeouts: { probeMs: 1000 },
+      }).load()
+      expect(r.ownThreads).toBeNull()
+      expect(r.cpus).toBeGreaterThan(0)
+      expect(Date.now() - t0).toBeLessThan(2500)
+    })
+    it(`${label}: Linux reports no share, and an unreadable ps none either`, async () => {
+      const linux = await factory({ fs, os, execFile: psExec([]), http: {} as never, https: {} as never, env: {}, home: tmp, platform: 'linux', arch: 'x64', timeouts: { probeMs: 500 } }).load()
+      expect(linux.ownThreads).toBeNull()
+      const broken = ((_f: string, _a: string[], _o: unknown, cb: (e: Error | null, out: string, err: string) => void) => setImmediate(() => cb(Object.assign(new Error('x'), { code: 1 }), '', ''))) as unknown as HostFactsDeps['execFile']
+      const mac = await factory({ fs, os, execFile: broken, http: {} as never, https: {} as never, env: {}, home: tmp, platform: 'darwin', arch: 'arm64', timeouts: { probeMs: 500 } }).load()
+      expect(mac.ownThreads).toBeNull()
+    })
+  }
+})
