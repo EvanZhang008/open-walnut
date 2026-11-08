@@ -9,7 +9,7 @@
  *   - a Stop while the debugger still attaches ends the recording: nothing records after it;
  *   - a frame whose tab moved to another page, or was given back, during the capture has no picture.
  */
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 type Listener = (source: { tabId?: number }, method: string, params: unknown) => void
 const fake = {
@@ -228,7 +228,7 @@ describe('Stop while the recording starts', () => {
     let attached!: () => void
     fake.attachWait = new Promise<void>((r) => { attached = r })
     const starting = startRecording(7, rec)
-    await new Promise((r) => setTimeout(r, 5))
+    await vi.waitFor(() => expect(fake.log).toContain('attach'))
     // The person's Stop: the tab is no agent's, its recording ends.
     await agentTabs.delete(7)
     expect(await stopRecording(7)).toBe(false)
@@ -243,7 +243,7 @@ describe('Stop while the recording starts', () => {
     let attached!: () => void
     fake.attachWait = new Promise<void>((r) => { attached = r })
     const starting = startRecording(7, rec)
-    await new Promise((r) => setTimeout(r, 5))
+    await vi.waitFor(() => expect(fake.log).toContain('attach'))
     await stopRecording(7)
     attached()
     expect(await code(starting)).toBe('not_your_tab')
@@ -258,7 +258,7 @@ describe('Cancel on the debugging bar while the debugger attaches', () => {
     let attached!: () => void
     fake.attachWait = new Promise<void>((r) => { attached = r })
     const starting = startRecording(9, rec)
-    await new Promise((r) => setTimeout(r, 5))
+    await vi.waitFor(() => expect(fake.log).toContain('attach'))
     fake.detached.forEach((fn) => fn({ tabId: 9 }, 'canceled_by_user'))
     attached()
     expect(await code(starting)).toBe('recording_cancelled')
@@ -276,8 +276,7 @@ describe('real input turned off', () => {
     await startRecording(7, rec)
     expect(debuggerHeld(7)).toBe(true)
     fake.permRemoved.forEach((fn) => fn({ permissions: ['debugger'] }))
-    await new Promise((r) => setTimeout(r, 5))
-    expect(debuggerHeld(7)).toBe(false)
+    await vi.waitFor(() => expect(debuggerHeld(7)).toBe(false))
     expect(fake.log.at(-1)).toBe('detach')
   })
 })

@@ -477,6 +477,8 @@ export const FIXED_SLEEP_ALLOWLIST: readonly FixedSleepAllowed[] = [
   { file: "tests/web/routes/stt-setup-sse.test.ts", sleep: "await new Promise((r) => setTimeout(r, 200));", reason: "negative: gives the route time to see the close and wrongly stop the install; the finish is awaited by vi.waitFor" },
   { file: "tests/web/routes/user-file-lock-routes.test.ts", sleep: "await new Promise((r) => setTimeout(r, 300));", reason: "negative: neither route writes while the lock is held" },
   { file: "tests/web/routes/voice-archive-cloud.test.ts", sleep: "await new Promise((r) => setTimeout(r, 50))", reason: "negative: after the drop, no further live hop goes out" },
+  { file: "tests/web/routes/voice-archive-cloud.test.ts", sleep: "await new Promise((r) => setTimeout(r, 50))", reason: "negative: after the drop only the live hop already on its way went out, no second one" },
+  { file: "tests/web/routes/voice-archive-cloud.test.ts", sleep: "await new Promise((r) => setTimeout(r, 100))", reason: "negative: daemon activity while the live finish is held sends no chunk copy" },
   { file: "tests/web/sent-draft-stays-sent.test.ts", sleep: "await wait(100)", reason: "fake timers: wait() advances vi fake timers (vi.advanceTimersByTimeAsync)" },
   { file: "tests/web/sent-draft-stays-sent.test.ts", sleep: "await wait(250)                 // the owed save's timer comes due while the send is on its way", reason: "fake timers: wait() advances vi fake timers (vi.advanceTimersByTimeAsync)" },
   { file: "tests/web/sent-draft-stays-sent.test.ts", sleep: "await wait(1_000)               // the server mirror's debounce", reason: "fake timers: wait() advances vi fake timers (vi.advanceTimersByTimeAsync)" },

@@ -441,7 +441,7 @@ describe('durable voice cloud copies', () => {
       return real(...args)
     })
     const work = track(transcribeVoiceRecording(record.id))
-    await new Promise((r) => setTimeout(r, 300))
+    await vi.waitFor(() => expect(ops()).toContain('transcribe'))
     await unansweredProbe('other')
     await unansweredProbe('other')
     expect(await work).toMatchObject({ text: 'primary full text', via: 'primary' })

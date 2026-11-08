@@ -368,7 +368,7 @@ describe('plugin dialog host boundaries', () => {
       const navigate = vi.fn()
       await act(async () => {
         closeModalOverlays(() => { navigate(); history.pushState({ key: 'settings' }) })
-        await new Promise(resolve => setTimeout(resolve, 10))
+        await vi.waitFor(() => expect(navigate).toHaveBeenCalledTimes(1))
       })
       expect(traversals).toEqual([-1, -1])
       expect(taskClose).toHaveBeenCalledTimes(1)
