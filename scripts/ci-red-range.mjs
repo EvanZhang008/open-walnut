@@ -58,17 +58,24 @@ function jobsOf(repo, runId) {
   return jobsCache.get(runId)
 }
 
+// A job missing from this many runs in a row did not exist before them (a new or renamed job,
+// e2e 1/4 becoming e2e 1/6): the walk stops there instead of reading every run left.
+export const ABSENT_RUNS_END = 10
+
 /**
  * For one job name, walking back from the newest run: the newest run where it passed, and the
  * oldest failing run after that one (the run that turned it red). Runs where it was cancelled,
- * skipped or absent are stepped over.
+ * skipped or absent are stepped over; `isNew` when the job had no run before the reds.
  */
 export function redRange(runs, conclusionOf) {
   let firstRed = null
+  let absent = 0
   for (const run of runs) {
     const c = conclusionOf(run)
     if (c === 'success') return { lastGreen: run, firstRed }
     if (c === 'failure') firstRed = run
+    absent = c == null ? absent + 1 : 0
+    if (absent >= ABSENT_RUNS_END) return { lastGreen: null, firstRed, isNew: true }
   }
   return { lastGreen: null, firstRed }
 }
@@ -93,7 +100,7 @@ function main() {
   const older = runs.slice(runs.indexOf(target))
   const report = { repo, run: { id: target.id, sha: target.head_sha, at: target.created_at, conclusion: target.conclusion }, jobs: [] }
   for (const job of failed) {
-    const { lastGreen, firstRed } = redRange(older, (run) => jobsOf(repo, run.id).find((j) => j.name === job.name)?.conclusion ?? null)
+    const { lastGreen, firstRed, isNew } = redRange(older, (run) => jobsOf(repo, run.id).find((j) => j.name === job.name)?.conclusion ?? null)
     let commits = []
     if (lastGreen && firstRed) {
       const cmp = gh(`repos/${repo}/compare/${lastGreen.head_sha}...${firstRed.head_sha}`)
@@ -107,13 +114,14 @@ function main() {
       failures: annotations(repo, job.id),
       lastGreen: lastGreen && { id: lastGreen.id, sha: lastGreen.head_sha.slice(0, 9), at: lastGreen.created_at },
       firstRed: firstRed && { id: firstRed.id, sha: firstRed.head_sha.slice(0, 9), at: firstRed.created_at },
+      isNew: Boolean(isNew),
       commits,
     })
   }
   if (opt('--json')) fs.writeFileSync(opt('--json'), JSON.stringify(report, null, 2))
   console.log(`CI run ${target.id} on main (${target.head_sha.slice(0, 9)}, ${target.created_at}): ${failed.length} failing job(s)`)
   for (const j of report.jobs) {
-    console.log(`\n${j.job}: ${j.firstRed ? `red since run ${j.firstRed.id} (${j.firstRed.at})` : 'red'}${j.lastGreen ? `, last green run ${j.lastGreen.id} (${j.lastGreen.at})` : `, never green in the last ${MAX_RUNS} runs`}`)
+    console.log(`\n${j.job}: ${j.firstRed ? `red since run ${j.firstRed.id} (${j.firstRed.at})` : 'red'}${j.lastGreen ? `, last green run ${j.lastGreen.id} (${j.lastGreen.at})` : j.isNew ? ', a new job, never green yet' : `, never green in the last ${MAX_RUNS} runs`}`)
     for (const f of j.failures.slice(0, 5)) console.log(`  failure: ${f}`)
     for (const c of j.commits) console.log(`  ${c.sha} ${c.subject}${c.owner ? `  [${c.owner}]` : ''}`)
   }

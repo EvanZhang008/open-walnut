@@ -4,7 +4,7 @@
  */
 import { describe, it, expect } from 'vitest'
 // @ts-expect-error plain .mjs without types
-import { redRange } from '../../scripts/ci-red-range.mjs'
+import { redRange, ABSENT_RUNS_END } from '../../scripts/ci-red-range.mjs'
 
 const runs = (list: (string | null)[]) => list.map((c, i) => ({ id: i, c }))
 const of = (r: { c: string | null }) => r.c
@@ -24,5 +24,9 @@ describe('redRange', () => {
 
   it('green on the newest run: nothing turned it red', () => {
     expect(redRange(runs(['success', 'failure']), of)).toEqual({ lastGreen: { id: 0, c: 'success' }, firstRed: null })
+  })
+  it('a job absent from ABSENT_RUNS_END runs in a row is new: the walk stops there', () => {
+    const list = ['failure', 'failure', ...Array(ABSENT_RUNS_END).fill(null), 'success']
+    expect(redRange(runs(list), of)).toEqual({ lastGreen: null, firstRed: { id: 1, c: 'failure' }, isNew: true })
   })
 })
