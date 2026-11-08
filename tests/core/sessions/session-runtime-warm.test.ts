@@ -85,7 +85,7 @@ describe('warmSessionRuntime', () => {
 
   it('runs the mount\'s own command with --version and a session-side env, and the tree is there after', async () => {
     const calls: Array<{ cmd: string; args: string[]; env: NodeJS.ProcessEnv }> = []
-    const env = { PATH: '/usr/bin', WALNUT_RUNTIME_DIR: '/stage/runtime', OPEN_WALNUT_HOME: '/data' }
+    const env = { LANG: 'C', WALNUT_RUNTIME_DIR: '/stage/runtime', OPEN_WALNUT_HOME: '/data' }
     const out = await warmSessionRuntime({ isolated: false, info, mount: mount(), execPath: FILE, env, spawnFn: fakeSpawn(calls) })
     expect(out).toMatchObject({ state: 'warmed', root: path.join(dir, ID), code: 0 })
     expect(calls).toHaveLength(1)
