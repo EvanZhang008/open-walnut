@@ -343,11 +343,11 @@ export class DaemonFileReader implements SessionFileReader {
     return conn
   }
 
-  async readCostState(sessionId: string, cwd?: string): Promise<{ totalCostUsd: number } | null> {
+  async readCostState(sessionId: string, cwd?: string, timeoutMs = 30_000): Promise<{ totalCostUsd: number } | null> {
     await this.resolve()
     const conn = await link(this.host)
     if (!conn.hasCapability('usage-scan-v1')) return null
-    const reply = await conn.send('usage.costState', { sid: sessionId, cwd }, 30_000)
+    const reply = await conn.send('usage.costState', { sid: sessionId, cwd }, timeoutMs)
     if (!reply.ok) throw new Error(String(reply.error ?? 'Cost state read failed'))
     return reply.result as { totalCostUsd: number } | null
   }

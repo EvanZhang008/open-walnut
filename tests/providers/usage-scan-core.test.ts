@@ -462,6 +462,122 @@ describe('cost-state restoration', () => {
   });
 });
 
+describe('cost-state read from the end of the transcript', () => {
+  // The reverse reader's chunk size (COST_TAIL_CHUNK in usage-scan-core.ts).
+  const CHUNK = 256 * 1024;
+
+  async function raw(relative: string, body: string | Buffer) {
+    const target = path.join(root, relative);
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, body);
+    return target;
+  }
+
+  /** The forward fold's answer for the main file (readline, last valid row in file order). */
+  async function forward(sessionId = 'main') {
+    return (await scanCanonicalUsage({ projectsDir: root, sessionIds: [sessionId] })).costStates[0];
+  }
+
+  async function reverse(sessionId = 'main') {
+    const stats = { bytesRead: 0 };
+    const state = await scanCostState({ projectsDir: root, sessionId, stats });
+    return { state, stats };
+  }
+
+  it('gives the forward fold\'s answer over several valid and invalid cost rows', async () => {
+    await raw('project/main.jsonl', [
+      cost('main', 1), assistant('a'), cost('main', 2, { timestamp: TODAY }), cost('other', 50),
+      cost('main', 3, { totalToolDuration: 'invalid' }), '{"type":"cost-state", broken', cost('main', 4, { startTime: -1 }),
+      { type: 'user', text: 'mentions cost-state in passing' },
+    ].map(row => typeof row === 'string' ? row : JSON.stringify(row)).join('\n') + '\n');
+    const expected = await forward();
+    expect(expected).toEqual({ sessionId: 'main', totalCostUsd: 2, timestamp: TODAY, apiDurationMs: 1, durationMs: 3 });
+    expect((await reverse()).state).toEqual(expected);
+  });
+
+  it('joins a row split across the chunk boundary, multibyte characters included', async () => {
+    // Test data: an accented letter (2 bytes), a CJK character (3 bytes) and an emoji (4 bytes).
+    const note = 'a\u00e9\u6f22\u{1F642}'.repeat(40);
+    const row = Buffer.from(JSON.stringify(cost('main', 7, { note })));
+    const emoji = row.indexOf(Buffer.from('\u{1F642}'));
+    const han = row.indexOf(Buffer.from('\u6f22'));
+    // Boundaries inside a 4-byte and a 3-byte character, at a character's start, and near both ends.
+    for (const cut of [emoji + 1, emoji + 2, emoji + 3, han + 1, han + 2, emoji, 1, row.length - 1]) {
+      const inTail = row.length - cut;
+      const before = JSON.stringify(cost('main', 1)) + '\n' + 'p'.repeat(1000) + '\n';
+      const after = 'x'.repeat(CHUNK - inTail - 2) + '\n';
+      const body = Buffer.concat([Buffer.from(before), row, Buffer.from('\n' + after)]);
+      // The boundary falls `cut` bytes into the row.
+      expect(body.length - CHUNK).toBe(Buffer.byteLength(before) + cut);
+      await raw('project/main.jsonl', body);
+      const expected = await forward();
+      expect(expected?.totalCostUsd).toBe(7);
+      expect((await reverse()).state).toEqual(expected);
+    }
+  });
+
+  it('reads CRLF line ends and a lone CR the way readline does', async () => {
+    const rows = [cost('main', 1), cost('main', 2), cost('main', 3, { totalToolDuration: 'invalid' })].map(row => JSON.stringify(row));
+    await raw('project/main.jsonl', rows.join('\r\n') + '\r\n');
+    expect((await reverse()).state).toEqual(await forward());
+    expect((await reverse()).state?.totalCostUsd).toBe(2);
+    // A lone CR ends a line for readline: the second row on that line is the later one.
+    await raw('project/main.jsonl', `${rows[0]}\n${JSON.stringify(cost('main', 5))}\r${JSON.stringify(cost('main', 6))}\n${rows[2]}`);
+    expect(await forward()).toMatchObject({ totalCostUsd: 6 });
+    expect((await reverse()).state).toEqual(await forward());
+  });
+
+  it('reads a last line with no trailing newline and rows behind NUL bytes', async () => {
+    await raw('project/main.jsonl', `${JSON.stringify(cost('main', 1))}\n${JSON.stringify(cost('main', 8))}`);
+    expect((await reverse()).state).toEqual(await forward());
+    expect((await reverse()).state?.totalCostUsd).toBe(8);
+    await raw('project/main.jsonl', `${JSON.stringify(cost('main', 1))}\n\0\0\0${JSON.stringify(cost('main', 9))}\n\0\0\n`);
+    expect(await forward()).toMatchObject({ totalCostUsd: 9 });
+    expect((await reverse()).state).toEqual(await forward());
+  });
+
+  it('answers undefined for a transcript with no valid cost row, and refuses a symlink', async () => {
+    await raw('project/main.jsonl', [assistant('a'), { type: 'user', text: 'cost-state' }, cost('main', 2, { modelUsage: [] })]
+      .map(row => JSON.stringify(row)).join('\n') + '\n');
+    expect(await forward()).toBeUndefined();
+    expect((await reverse()).state).toBeUndefined();
+    await raw('real/target.jsonl', JSON.stringify(cost('linked', 3)) + '\n');
+    await mkdir(path.join(root, 'project'), { recursive: true });
+    await symlink(path.join(root, 'real', 'target.jsonl'), path.join(root, 'project', 'linked.jsonl'));
+    expect((await reverse('linked')).state).toBeUndefined();
+  });
+
+  it('never opens a FIFO named like the transcript', async () => {
+    await mkdir(path.join(root, 'project'), { recursive: true });
+    execFileSync('mkfifo', [path.join(root, 'project', 'piped.jsonl')]);
+    const { state, stats } = await reverse('piped');
+    expect(state).toBeUndefined();
+    expect(stats.bytesRead).toBe(0);
+  });
+
+  it('reads only the tail of a large transcript whose cost row is near its end', async () => {
+    const filler = JSON.stringify(assistant('filler', TODAY, TOKENS, { content: 'y'.repeat(4000) })) + '\n';
+    const body = filler.repeat(Math.ceil((6 * 1024 * 1024) / filler.length)) + JSON.stringify(cost('main', 11)) + '\n'
+      + JSON.stringify({ type: 'user', text: 'after the cost row' }) + '\n';
+    await raw('project/main.jsonl', body);
+    expect(body.length).toBeGreaterThan(6 * 1024 * 1024);
+    const { state, stats } = await reverse();
+    expect(state).toMatchObject({ sessionId: 'main', totalCostUsd: 11 });
+    expect(stats.bytesRead).toBeLessThanOrEqual(CHUNK);
+  });
+
+  it('reads back past chunks when the only valid cost row is far from the end', async () => {
+    const filler = JSON.stringify({ type: 'user', text: 'z'.repeat(2000) }) + '\n';
+    const body = JSON.stringify(cost('main', 12)) + '\n' + filler.repeat(Math.ceil((3 * CHUNK) / filler.length))
+      + JSON.stringify(cost('main', 13, { totalToolDuration: 'invalid' })) + '\n';
+    await raw('project/main.jsonl', body);
+    const { state, stats } = await reverse();
+    expect(state).toEqual(await forward());
+    expect(state?.totalCostUsd).toBe(12);
+    expect(stats.bytesRead).toBe(Buffer.byteLength(body));
+  });
+});
+
 describe('normalizeUsageModel', () => {
   it.each([
     ['bedrock/converse/us.anthropic.claude-opus-4-8-20261001-v1:0[1m]', 'claude-opus-4-8'],

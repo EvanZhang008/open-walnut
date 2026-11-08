@@ -670,7 +670,82 @@ async function scanLogFiles(source: AsyncIterable<LogFile>, diag: UsageScanDiagn
   return { records, diagnostics: diag, costStates: [...costs.values()].filter(state => !selected || selected.has(state.sessionId)) };
 }
 
-export async function scanCostState(options: { projectsDir: string; sessionId: string; cwd?: string }): Promise<CanonicalCostState | undefined> {
+/** What one scanCostState call read, so a test can check it read only the transcript's tail. */
+export interface CostStateScanStats { bytesRead: number }
+
+const COST_TAIL_CHUNK = 256 * 1024;
+
+/** The cost-state of one line's rows, last row first, as the forward reader would parse them. */
+function lineCostState(line: Buffer, sessionId: string): CanonicalCostState | undefined {
+  // Most lines are not cost rows: test the bytes before decoding or parsing anything.
+  if (!line.includes('cost-state')) return;
+  // readline (the forward reader) also ends a line at a lone CR, so split the same way.
+  const parts = line.toString('utf8').split('\r');
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const part = parts[i]!;
+    if (!part.includes('cost-state') || !part.trim()) continue;
+    let parsed: unknown;
+    try { parsed = JSON.parse(part.replace(/^\0+/, '')); } catch { continue; }
+    if (!object(parsed)) continue;
+    const state = costState(parsed, sessionId);
+    if (state) return state;
+  }
+  return undefined;
+}
+
+/**
+ * The last valid cost-state row of one transcript, read from its end backward.
+ * The forward fold keeps the last valid row in file order, so the first valid
+ * row from the end is the same answer, without parsing a 100 MB transcript to
+ * reach it (2026-11-08: a cold resume waited on that parse at high load).
+ * Lines are split on the newline byte, which never occurs inside a UTF-8
+ * sequence, and only whole lines are decoded.
+ */
+/** lastCostState's answer when the file shrank during the read. */
+const SHRANK = Symbol('shrank');
+
+async function lastCostState(file: LogFile, diag: UsageScanDiagnostics, stats: CostStateScanStats): Promise<CanonicalCostState | undefined | typeof SHRANK> {
+  let handle: FileHandle | undefined;
+  try {
+    if (!(await lstat(file.path)).isFile()) { diag.skipped_non_regular_files++; return; }
+    // Nonblocking plus fstat protects the lstat/open race from ever consuming a FIFO.
+    handle = await open(file.path, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
+    const stat = await handle.stat();
+    if (!stat.isFile()) { diag.skipped_non_regular_files++; return; }
+    diag.files_scanned++;
+    const pause = yieldBudget(diag);
+    let position = stat.size;
+    // The later parts, in file order, of a line that starts before the chunk being read.
+    let pieces: Buffer[] = [];
+    while (position > 0) {
+      const size = Math.min(COST_TAIL_CHUNK, position);
+      position -= size;
+      const chunk = Buffer.allocUnsafe(size);
+      const { bytesRead } = await handle.read(chunk, 0, size, position);
+      stats.bytesRead += bytesRead;
+      // A short read means the file shrank under us: answer as the forward fold would.
+      if (bytesRead !== size) return SHRANK;
+      let end = size;
+      let index = chunk.lastIndexOf(NEWLINE, end - 1);
+      while (index >= 0) {
+        const wait = pause();
+        if (wait) await wait;
+        const line = pieces.length ? Buffer.concat([chunk.subarray(index + 1, end), ...pieces]) : chunk.subarray(index + 1, end);
+        pieces = [];
+        const state = lineCostState(line, file.sessionId);
+        if (state) return state;
+        end = index;
+        // lastIndexOf counts a negative offset from the end, so stop at the chunk's start.
+        index = end > 0 ? chunk.lastIndexOf(NEWLINE, end - 1) : -1;
+      }
+      if (end > 0) pieces.unshift(chunk.subarray(0, end));
+    }
+    return pieces.length ? lineCostState(Buffer.concat(pieces), file.sessionId) : undefined;
+  } catch { diag.unreadable_files++; return; }
+  finally { await handle?.close().catch(() => {}); }
+}
+
+export async function scanCostState(options: { projectsDir: string; sessionId: string; cwd?: string; stats?: CostStateScanStats }): Promise<CanonicalCostState | undefined> {
   if (!options.sessionId || path.basename(options.sessionId) !== options.sessionId || options.sessionId === '..') {
     throw new Error('Cost-state session ID must be a filename component');
   }
@@ -686,6 +761,8 @@ export async function scanCostState(options: { projectsDir: string; sessionId: s
   for (const project of projects) {
     const file = { path: path.join(options.projectsDir, project, `${options.sessionId}.jsonl`), sessionId: options.sessionId };
     try { const stat = await lstat(file.path); if (!stat.isFile() || !stat.size) continue; } catch { continue; }
+    const last = await lastCostState(file, diag, options.stats ?? { bytesRead: 0 });
+    if (last !== SHRANK) return last;
     let latest: CanonicalCostState | undefined;
     for await (const row of readObjects(file, diag)) latest = costState(row, file.sessionId) ?? latest;
     return latest;

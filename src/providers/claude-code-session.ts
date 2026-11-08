@@ -719,6 +719,14 @@ export function lineTornDownReason(reason: string | undefined): string {
     + 'Retry sends it again.'
 }
 const LIVENESS_INTERVAL_MS = 3000
+/**
+ * How long a resume's spawn waits for the restored cost state before it starts
+ * the CLI anyway. The read runs on the transcript's host; a late answer still
+ * seeds the baseline if no result came first (billableCostDelta covers the rest).
+ */
+export const SPAWN_COST_STATE_WAIT_MS = 2_000
+/** The cost read's own deadline, so a late answer can still seed the baseline (an older daemon parses the whole transcript). */
+const SPAWN_COST_STATE_TIMEOUT_MS = 30_000
 const INTERRUPT_ACK_TIMEOUT_MS = 5_000
 const INTERRUPT_SETTLE_TIMEOUT_MS = 3_000
 /** Sessions a host reconnect redelivers to at once (redeliverPendingForHost). */
@@ -3026,13 +3034,40 @@ export class ClaudeCodeSession {
     // False once the resume turned out to have no conversation to resume (below).
     let resumeNow = true
     const startSpawn = async (): Promise<{ pid: number | null; outputFile: string; fileSize: number } & SpawnLineOutcome> => {
+      // Each pre-spawn step's ms, logged once before transport.start, so a slow
+      // resume names the step it waited on (2026-11-08: 29 s, step unknown).
+      const steps: Record<string, number> = {}
+      let stepAt = Date.now()
+      const stepDone = (name: string) => { const now = Date.now(); steps[name] = now - stepAt; stepAt = now }
+      // The restored cost state is read from the transcript on its host, which can
+      // be slow on a large one. Start it first and wait for it last, bounded, so it
+      // never holds the spawn. A late answer seeds only this spawn's baseline, and
+      // only while no result has seeded it (a result's seed counts 0, never twice).
+      const costGeneration = this._transportGeneration
+      const seedRestoredCost = (restored: { totalCostUsd: number } | null): boolean => {
+        if (!restored || !resumeNow || this._costBaselineKnown || costGeneration !== this._transportGeneration) return false
+        this._costWatermark.seed(restored.totalCostUsd)
+        this._costBaselineKnown = true
+        return true
+      }
+      const costRead = resumeSessionId
+        ? Promise.resolve()
+          .then(() => new DaemonFileReader(host ?? '__local__').readCostState(resumeSessionId, resolvedCwd, SPAWN_COST_STATE_TIMEOUT_MS))
+          .catch((error: unknown) => {
+            log.session.warn('restored cost state unavailable', { sessionId: resumeSessionId, error: String(error) })
+            return null
+          })
+        : null
       const { sessionStops } = await import('../core/sessions/session-stop.js')
       const stopFence = opts?.stopFence !== undefined ? opts.stopFence : await sessionStops.fence(tmpId)
+      stepDone('fenceMs')
       if (this.taskId) {
         const { restoreOwnTaskDir } = await import('../core/sessions/task-dir-place.js')
         await restoreOwnTaskDir(this.taskId, resolvedCwd, host).catch(() => false)
       }
+      stepDone('taskDirMs')
       const cwdCheck = await checkCwdExists(resolvedCwd, host, sshTarget)
+      stepDone('cwdCheckMs')
       if (!cwdCheck.ok) {
         const errMsg = cwdCheck.error ?? 'Working directory not available'
         log.session.warn('cwd pre-flight failed — aborting spawn', {
@@ -3082,18 +3117,30 @@ export class ClaudeCodeSession {
           })
         }
       }
-      if (resumeNow && resumeSessionId) {
-        try {
-          const reader = new DaemonFileReader(host ?? '__local__')
-          const restored = await reader.readCostState(resumeSessionId, resolvedCwd)
-          if (restored) {
-            this._costWatermark.seed(restored.totalCostUsd)
-            this._costBaselineKnown = true
-          }
-        } catch (error) {
-          log.session.warn('restored cost state unavailable', { sessionId: resumeSessionId, error: String(error) })
+      stepDone('probeMs')
+      // A resume that became a fresh start has no transcript to read: do not wait.
+      let costStateInTime: boolean | undefined
+      if (costRead && resumeNow) {
+        const late = Symbol('late')
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const restored = await Promise.race([
+          costRead,
+          new Promise<typeof late>(resolve => { timer = setTimeout(() => resolve(late), SPAWN_COST_STATE_WAIT_MS); timer.unref?.() }),
+        ])
+        clearTimeout(timer)
+        costStateInTime = restored !== late
+        if (restored !== late) seedRestoredCost(restored)
+        else {
+          const waitedAt = Date.now()
+          void costRead.then((answer) => {
+            log.session.info('spawn: restored cost state landed after the spawn', {
+              taskId: this.taskId, sessionId: resumeSessionId, afterMs: Date.now() - waitedAt,
+              found: !!answer, seeded: seedRestoredCost(answer),
+            })
+          })
         }
       }
+      stepDone('costStateMs')
       // No model named: the CLI would take its own settings default, which may be a
       // model outside Claude (unnamed-model-guard.ts). Start such a session on Claude.
       if (!args.includes('--model')) {
@@ -3108,6 +3155,12 @@ export class ClaudeCodeSession {
           })
         }
       }
+      stepDone('modelGuardMs')
+      log.session.info('spawn: pre-spawn steps', {
+        taskId: this.taskId, sessionId: tmpId, host: host ?? '__local__', resume: isResume && resumeNow,
+        ...steps, ...(costStateInTime !== undefined ? { costStateInTime } : {}),
+        totalMs: Date.now() - this._spawnTs,
+      })
       return transport.start({
       args,
       stopFence,

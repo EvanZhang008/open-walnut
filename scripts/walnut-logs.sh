@@ -12,7 +12,7 @@
 #   <sid>.jsonl / .jsonl.err / .pipe / .pgid   per-session CLI output (source of truth)
 #
 # Usage:
-#   scripts/walnut-logs.sh diagnose [sid] [mins] ⭐⭐ AUTO-CLASSIFY each send's slowness → names the bug (event-loop / Bug D mid-turn stall / slow resume) + p50/p90 summary; a row with no delivery line reads by its fate: CLI-settled (= delivered), PARKED (reason), HELD (prompt), else STUCK
+#   scripts/walnut-logs.sh diagnose [sid] [mins] ⭐⭐ AUTO-CLASSIFY each send's slowness → names the bug (event-loop / Bug D mid-turn stall / slow resume / queued behind a cold resume) + p50/p90 summary; a row with no delivery line reads by its fate: CLI-settled (= delivered), PARKED (reason), HELD (prompt), else STUCK
 #   scripts/walnut-logs.sh flips [mins]         NEED_ACTION moves a new turn undid within 30s (<=5/20/30s), by who moved in/back: the monitor for the 20s hand-back hold (default 30min, 0=all)
 #   scripts/walnut-logs.sh busstorm [sid]       ⭐ quantify high-freq streaming fan-out per global subscriber (verify interest-set; spot a new storm source)
 #   scripts/walnut-logs.sh trace <sid>          per-message timeline: dispatch→RPC→enqueue→route→delivered, w/ deltas + hasPipe/path
@@ -140,6 +140,21 @@ def ms(t):
 # decision (path/hasPipe) or a stall, those fields are LOCKED so a later
 # processNext routing-send for the same message can't overwrite the mid-turn path.
 msgs={}   # messageId -> {enq, deliv, settled, parked, held, sid, path, hasPipe, stall, ...}
+# Cold resumes per session: when the server started one, and when a 'message
+# delivered path=resume' came (the CLI booted). A send routed injectMidTurn with
+# hasPipe=False inside that window waited for the boot, not on Bug D (2026-11-08:
+# a 56 s send was a 29 s pre-spawn wait plus a 27 s CLI boot on a 120 MB transcript).
+resumes={}        # sid -> [start ms]
+resume_delivs={}  # sid -> [delivered ms]
+RESUME_LOOKBACK_MS=120000
+# A line held for the boot goes in moments after the resume's own delivery line.
+RESUME_TAIL_MS=5000
+def cold_resume_for(s,enq,deliv):
+    for r in resumes.get(s,()):
+        if not (enq-RESUME_LOOKBACK_MS <= r <= deliv): continue
+        booted=min((t for t in resume_delivs.get(s,()) if t>=r),default=None)
+        if booted is not None and deliv-RESUME_TAIL_MS <= booted <= deliv+1000: return r
+    return None
 # Exact message names (src/providers/claude-code-session.ts, src/core/session-queue-park.ts).
 SETTLED='queued line settled by the CLI, rows leave the queue'
 PARKED='message parked: permanent delivery failure'
@@ -162,6 +177,10 @@ for f in files:
         if tm is None or tm<cutoff: continue
         s=d.get('sessionId') or ''
         mid=d.get('messageId')
+        if m=='resuming session via CLI' and s:
+            resumes.setdefault(s,[]).append(tm)
+        if m=='message delivered' and d.get('path')=='resume' and s:
+            resume_delivs.setdefault(s,[]).append(tm)
         if m=='message enqueued' and mid:
             msgs.setdefault(mid,{})['enq']=tm; msgs[mid]['sid']=s
         elif m=='handleSend: routing send' and mid is None:
@@ -231,6 +250,9 @@ for mid,v in msgs.items():
         # The routing line names the process state (2026-10-29): a send while a start or an
         # attach is still under way waits for it in injectMidTurn, so the wait is the start.
         label=f'SEND DURING START (process {v.get("processStatus")}; the wait is the start, not Bug D)'
+    elif path=='injectMidTurn' and str(hp)=='False' and not by_fate and e2d is not None and e2d>3000 \
+            and cold_resume_for(v.get('sid'),enq,deliv) is not None:
+        label='QUEUED BEHIND COLD RESUME (waited for the CLI to boot; split the wait with spawn: pre-spawn steps)'
     elif path=='injectMidTurn' and str(hp)=='False' and not by_fate and e2d is not None and e2d>3000:
         label='BUG D: mid-turn stall (injectMidTurn, stale hasPipe=False)'
     elif e2d is not None and e2d>3000 and v.get('held'):
