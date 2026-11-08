@@ -185,6 +185,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: actions/download-artifact@v4
+        # a hung artifact download ends here, not at the job limit (tests/scripts/workflow-download-limit.test.ts)
+        timeout-minutes: 8
         with:
           pattern: archive-*
           path: ${{ runner.temp }}/archives

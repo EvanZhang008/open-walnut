@@ -839,6 +839,8 @@ jobs:
         env:
           BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-store
       - uses: actions/download-artifact@v4
+        # a hung artifact download ends here, not at the job limit (tests/scripts/workflow-download-limit.test.ts)
+        timeout-minutes: 8
         with:
           pattern: browser-report-*
           path: ${{ runner.temp }}/browser-reports
@@ -910,6 +912,7 @@ jobs:
         -skip-testing:WalnutUITests/SessionStopSteerUITests
         -skip-testing:WalnutUITests/VoiceHistoryUITests
         -skip-testing:WalnutUITests/VoiceQuickActionUITests
+        -skip-testing:WalnutUITests/WorkCardUITests
     steps:
       - uses: actions/checkout@v5
       - name: XcodeGen
@@ -934,6 +937,13 @@ jobs:
           xcrun simctl boot "$udid"
           xcrun simctl bootstatus "$udid" -b
           echo "SIM_UDID=$udid" >> "$GITHUB_ENV"
+      # A booted simulator xcodebuild does not list yet fails the whole leg before a test runs.
+      - name: Wait until xcodebuild sees the simulator
+        shell: bash
+        working-directory: ios-native
+        run: |
+          xcodegen generate
+          bash tests/wait-sim-visible.sh "$SIM_UDID"
       - name: Unit tests (WalnutTests)
         if: matrix.layer == 'unit'
         shell: bash

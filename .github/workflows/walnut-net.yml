@@ -115,6 +115,8 @@ jobs:
         with:
           bun-version: 1.4.4
       - uses: actions/download-artifact@v5
+        # a hung artifact download ends here, not at the job limit (tests/scripts/workflow-download-limit.test.ts)
+        timeout-minutes: 8
         with:
           path: out
           merge-multiple: true
