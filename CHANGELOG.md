@@ -6,6 +6,22 @@ breaking changes).
 
 ## [Unreleased]
 
+## [0.6.29] - 2026-11-08
+
+### Fixed
+
+- Sessions Walnut imported because they began outside stay outside, the Walnut and Outside average counts the days that have usage
+- Keep git status out of every task row
+- Reopening a running session shows its turn once; queue list gets a cross; stranded edits are kept
+- Undo keeps the queue steady, Interrupt & send asks first, smaller rough edges from the last review round
+- Folders with the same two-part name read apart, an imported terminal session never moves the bill cutoff
+- A failed compaction reads as failed live as on reload, and Walnut's notice says only the cause
+- Put right an outside look kept for a Walnut session on the server side, and keep the full read repeating while a transcript has not named its entrypoint yet
+- Re-list sessions before routing a page, no throttle on the first look, count older transcripts that named no entrypoint
+- Walnut's compaction notice says what it asked for, and its row says the size once
+- A known session on a Walnut entrypoint is Walnut's even over an older outside look, a re-listed session of another name is not stored twice, label Codex VS Code and Walnut helper
+- A Walnut session begun mid-pass is not Outside, SDK server sessions are Walnut's, the older overview honors the bill rule, big first messages keep their entrypoint, plainer bill note
+
 ## [0.6.28] - 2026-11-07
 
 ### Added
