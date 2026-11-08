@@ -88,6 +88,7 @@ const PAGES: Record<string, () => string> = {
     onchange="Promise.all([...this.files].map(async (f) => f.name + ':' + f.size + ':' + f.type + ':' + await f.text())).then((l) => document.getElementById('o').textContent = l.join(','))"></label><p id="o"></p>`,
   '/login': () => `<h1>Sign in</h1><form id="lf" onsubmit="return false"><label>Email <input id="user" name="email" type="email" autocomplete="username"></label>
     <label>Password <input id="pass" name="password" type="password" autocomplete="current-password"></label><button>Sign in</button></form>`,
+  '/verify': () => `<h1>Two-step verification</h1><form id="vf" onsubmit="return false"><label>Code from your app <input id="otp" name="otp" inputmode="numeric" autocomplete="one-time-code"></label><button>Verify</button></form>`,
 }
 /** The fixture vault's fake master password (shared with the other extension specs). */
 const MASTER = 'Correct Horse Battery Staple 42'
@@ -633,6 +634,37 @@ test('fill_login refuses a page an agent\'s script or real input touched since i
   const ok = await fill()
   expect(ok.status, JSON.stringify(ok.body)).toBe(200)
   expect(ok.body).toMatchObject({ filled: true })  // The next test reads the order page in this tab.
+  expect((await act(page, { action: 'navigate', url: site('shop.example.test', '/order') })).status).toBe(200)
+})
+
+test('fill_code types the saved login\'s one-time code into the page; the agent never sees the code', async () => {
+  const page = ctx.pages()[0]
+  const session = await vaultSession(page)
+  // A made-up base32 seed, the one the other vault tests use.
+  const seed = 'JBSWY3DPEHPK3PXP'
+  const made = await page.request.post(`${base}/api/v1/vault/items`, {
+    headers: { 'x-walnut-vault-session': session },
+    data: { item: { type: 'login', title: 'Test shop code', username: 'code@example.test', password: `Code-Fill-${Date.now().toString(36)}`, totp: seed, urls: [site('shop.example.test', '')], agentAccess: 'allow' } },
+  })
+  expect(made.ok(), await made.text()).toBe(true)
+  const itemId = String((await made.json()).item?.id ?? '')
+  expect((await act(page, { action: 'navigate', url: site('shop.example.test', '/verify') })).status).toBe(200)
+  let r = await act(page, { action: 'fill_code' })
+  if (r.status === 409 && r.body.code === 'which_login') r = await act(page, { action: 'fill_code', item: itemId })
+  expect(r.status, JSON.stringify(r.body)).toBe(200)
+  expect(r.body).toMatchObject({ filled: true, fields: ['code'], item: { title: 'Test shop code' } })
+  const { parseTotp, totpAt } = await import('../../../src/core/vault/totp')
+  const tab = agentPage()!
+  const typed = await tab.locator('#otp').inputValue()
+  expect(typed).toMatch(/^\d{6}$/)
+  // The code of the moment it was filled (one period either side of now, for a slow runner).
+  const p = parseTotp(seed)!
+  const near = await Promise.all([-30_000, 0, 30_000].map(async (d) => (await totpAt(p, Date.now() + d)).code))
+  expect(near).toContain(typed)
+  expect(JSON.stringify(r.body)).not.toContain(typed)
+  const logged = await (await page.request.get(`${base}/api/v1/vault/agent/log`, { headers: { 'x-walnut-vault-session': session } })).json()
+  expect(logged.entries[0]).toMatchObject({ kind: 'fill', itemTitle: 'Test shop code', fields: ['totp'] })
+  // The next test reads the order page in this tab.
   expect((await act(page, { action: 'navigate', url: site('shop.example.test', '/order') })).status).toBe(200)
 })
 

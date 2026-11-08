@@ -41,6 +41,7 @@ their Mac and phone, and only their yes fills (the shell command waits for it).
 walnut browser open https://example.com/orders   # opens a tab in the Walnut agent window
 walnut browser snapshot                          # headings, elements with refs, page text
 walnut browser fill-login                        # a sign-in page: fills the saved login, you never see it
+walnut browser fill-code                         # its one-time code page: fills the code, you never see it
 walnut browser type e7 "order 1234" --submit
 walnut browser click e12
 walnut browser wait "Order details"              # or --gone "Loading", --url /orders\/\d+/
@@ -158,6 +159,13 @@ each (id, name, username): run it again with `--item <id>`. A login that needs t
 `wait_ms`. Then click the sign-in button yourself. `password_use` is only for a value you must
 type somewhere `fill-login` cannot reach. On a page you ran `evaluate` or real input in since it
 loaded, `fill-login` answers `page_tampered`: navigate to the page again (a reload), then fill.
+
+When the site then asks for a one-time code (two-step verification from an authenticator app),
+use `fill-code` (`action: "fill_code"`): Walnut computes the current code of the saved login's
+two-step setup and fills it into the page's code field; you never see the code. The same rules
+as `fill-login` (approvals, `which_login`, `page_tampered`, a site the user has open in their own
+tab); after a fresh sign-in the user approved, the code needs no second yes. No code saved for the
+login answers `no_code`: ask the user to enter it themselves. Then click the verify button.
 
 ## Rules
 

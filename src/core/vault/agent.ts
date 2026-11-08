@@ -382,11 +382,13 @@ function approvalText(item: VaultItem, ask: { fields: string[]; purpose: string;
   const r = ask.requester
   // The title is what the person decides on: which item, which fields, and why. Who asked is
   // the card's next line (the task, or the command and host), and the rest is in the detail.
-  const what = ask.fields.length === 1 && ask.fields[0] === 'password' ? 'password' : ask.fields.join(', ')
+  // A field in the person's words ("totp" is the one-time code).
+  const shown = ask.fields.map((f) => (f === 'totp' ? 'one-time code' : f))
+  const what = ask.fields.length === 1 && ask.fields[0] === 'password' ? 'password' : shown.join(', ')
   const head = `${item.title} ${what}: ${ask.purpose}`
   const lines = [
     `Item: ${item.title}${item.urls?.length ? ` (${item.urls.map(displayHost).join(', ')})` : ''}`,
-    `Fields: ${ask.fields.join(', ')}`,
+    `Fields: ${shown.join(', ')}`,
     `Why: ${ask.purpose}`,
     `Use: ${USE_TEXT[ask.use]}`,
     `For: ${ask.grants ? `this task, ${grantLengthText(ask.grantMs)}` : 'this one use'}`,

@@ -58,6 +58,8 @@ async function request(method: string, route: string, body?: unknown, headers: R
 }
 const login = (extra: Record<string, unknown> = {}) => request('POST', '/browser/act', { action: 'fill_login', device: A.device, tab: 43, ...extra }, AGENT)
 const fills = () => seen.filter((c) => c.action === 'fill_login').length
+const code = (extra: Record<string, unknown> = {}) => request('POST', '/browser/act', { action: 'fill_code', device: A.device, tab: 43, ...extra }, AGENT)
+const codes = () => seen.filter((c) => c.action === 'fill_code').length
 
 /** The person's phone signs a yes. */
 async function approve(id: string) {
@@ -87,7 +89,7 @@ beforeAll(async () => {
   resetVaultForTest(dir)
   await setupVault({ passwordKey: toB64(randomBytes(32)), kdf: { name: 'PBKDF2-SHA256', iterations: 600_000, salt: toB64(randomBytes(16)) }, agentsWhileAway: false })
   await createItems([
-    { type: 'login', title: 'Test Bank', username: 'a@example.test', password: 'fake-bank-Pass', urls: ['https://bank.example.test'] },
+    { type: 'login', title: 'Test Bank', username: 'a@example.test', password: 'fake-bank-Pass', totp: 'JBSWY3DPEHPK3PXP', urls: ['https://bank.example.test'] },
     { type: 'login', title: 'Test Shop', username: 'b@other.test', password: 'fake-shop-Pass', urls: ['https://shop.other.test'] },
   ])
   createSession('test-window', 30)
@@ -131,7 +133,7 @@ beforeEach(async () => {
             ...(cmd.args.all ? [{ id: 99, url: 'https://bank.example.test/account', title: 'Accounts' }, { id: 100, url: 'https://shop.other.test/account', title: 'Shop' }] : []),
           ],
         })
-      } else if (cmd.action === 'fill_login') setTimeout(() => h.answer(A.device, cmd.id, true, { filled: true }), 60)
+      } else if (cmd.action === 'fill_login' || cmd.action === 'fill_code') setTimeout(() => h.answer(A.device, cmd.id, true, { filled: true }), 60)
       else if (cmd.action === 'view_frame') h.answer(A.device, cmd.id, true, { shown: true, image: `data:image/jpeg;base64,frame${++frameN}`, url: 'https://shop.other.test/' })
       else if (cmd.action === 'view_stop') { onStop(); h.answer(A.device, cmd.id, true, { tab: cmd.args.tab, stopped: stopStopped }) }
       else h.answer(A.device, cmd.id, true, {})
@@ -150,6 +152,33 @@ describe('a new sign-in the person approved', () => {
     expect((await login()).body.code).toBe('site_open_in_person_tab')
     expect((await login({ request: id })).body.code).toBe('site_open_in_person_tab')
     expect(fills()).toBe(1)
+  })
+
+  it('covers the sign-in\'s one-time code once: fill_code after the yes\'s fill_login needs no second ask', async () => {
+    // No yes: a code on a site the person has open is refused like a sign-in.
+    expect((await code()).body.code).toBe('site_open_in_person_tab')
+    const id = await freshYes()
+    expect((await login({ request: id })).body.filled).toBe(true)
+    const r = await code()
+    expect(r.status, JSON.stringify(r.body)).toBe(200)
+    expect(r.body).toMatchObject({ filled: true, fields: ['code'] })
+    // The code went only to the browser.
+    const sentCode = String(seen.find((c) => c.action === 'fill_code')?.args.code ?? '')
+    expect(sentCode).toMatch(/^\d{6}$/)
+    expect(JSON.stringify(r.body)).not.toContain(sentCode)
+    // Once: a second code needs the person again.
+    expect((await code()).body.code).toBe('site_open_in_person_tab')
+    expect(codes()).toBe(1)
+  })
+
+  it('the code step is for the login the sign-in filled, whatever login the agent names', async () => {
+    const id = await freshYes()
+    const signedIn = await login({ request: id })
+    expect(signedIn.body.filled).toBe(true)
+    const r = await code({ item: 'Some other login' })
+    expect(r.status, JSON.stringify(r.body)).toBe(200)
+    expect(r.body.item?.id).toBe(signedIn.body.item?.id)
+    expect(codes()).toBe(1)
   })
 
   it('two fills racing for one yes: one fills, the other is refused', async () => {

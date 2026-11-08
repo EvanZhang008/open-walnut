@@ -280,6 +280,24 @@ async function act(cmd: WireCommand): Promise<unknown> {
       const filled = await fillFrames(tabId, undefined, creds, 'login', String(a.url ?? ''))
       return { filled, ...(await where(tabId)) }
     }
+    case 'fill_code': {
+      // The login's one-time code Walnut computed for this page (fill-login.ts, what 'code'): typed
+      // into its code field as the person's own code fill does, and never put in the answer. The
+      // same page rules as fill_login.
+      const { tabId, tab } = await ownTab(a)
+      await checkPage(c.allow, tab.url ?? '')
+      const page = await reached(tabId)
+      if (page.walnut) throw new AgentError(WALNUT_PAGE, 'walnut_page')
+      await checkPage(c.allow, page.href)
+      if (await tamperedNow(tabId, page.doc)) {
+        throw new AgentError('An agent ran its own script or real input in this page since it loaded, so Walnut will not fill a one-time code into it. Reload the page first (navigate to it again), then call fill_code.', 'page_tampered')
+      }
+      if (typeof a.code !== 'string' || !/^[0-9A-Za-z]{4,10}$/.test(a.code)) throw new AgentError('No code to fill.', 'bad_request')
+      const { rec } = await ownTab(a)
+      await noteFilled(rec.owner, page.href)
+      const filled = await fillFrames(tabId, undefined, { totp: a.code }, 'totp', String(a.url ?? ''))
+      return { filled, ...(await where(tabId)) }
+    }
   }
   if (NET_OPS.has(c.action)) {
     const { tabId, tab, rec } = await ownTab(a)

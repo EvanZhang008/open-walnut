@@ -25,7 +25,7 @@ const asks = new Map<string, Scope & { at: number }>()
 const grants = new Map<string, Scope & { at: number }>()
 const same = (a: Scope, b: Scope) => a.owner === b.owner && a.device === b.device && a.tab === b.tab && a.site === b.site
 
-export function _resetFreshSignInForTesting(): void { asks.clear(); grants.clear() }
+export function _resetFreshSignInForTesting(): void { asks.clear(); grants.clear(); codeSteps.clear() }
 
 async function signers(): Promise<SignerKind[]> {
   const { activeKeys } = await import('../approvals/keys.js')
@@ -66,6 +66,36 @@ export function claimGrant(scope: Scope): Claim | undefined {
 export function restoreGrant(c: Claim): void {
   if (Date.now() - c.grant.at <= GRANT_MS) grants.set(c.id, c.grant)
 }
+
+/**
+ * The yes covers the whole sign-in it was given for, its one-time code too: once fill_login used
+ * it, one fill_code in the same task, browser, tab and site may follow within the yes's time
+ * (codeStepAfter), without asking the person a second time.
+ */
+const codeSteps = new Map<string, Scope & { at: number; item?: string }>()
+
+/** fill_login filled the login `item` with this claim: that login's code step may follow. */
+export function codeStepAfter(c: Claim, item?: string): void {
+  if (Date.now() - c.grant.at <= GRANT_MS) codeSteps.set(c.id, { ...c.grant, ...(item ? { item } : {}) })
+}
+
+/** The login a code step is for (the one its sign-in filled). */
+export const codeStepItem = (c: Claim): string | undefined => (c.grant as { item?: string }).item
+
+/** Take the code step a fresh sign-in left for exactly this scope, in one synchronous step. */
+export function claimCodeStep(scope: Scope): Claim | undefined {
+  const now = Date.now()
+  for (const [id, g] of codeSteps) {
+    if (now - g.at > GRANT_MS) { codeSteps.delete(id); continue }
+    if (!same(g, scope)) continue
+    codeSteps.delete(id)
+    return { id, grant: g }
+  }
+  return undefined
+}
+
+/** Nothing was filled with the code step: it stands again. */
+export function restoreCodeStep(c: Claim): void { codeStepAfter(c, codeStepItem(c)) }
 
 export const isFreshAsk = (id: unknown): boolean => { sweep(); return typeof id === 'string' && asks.has(id) }
 

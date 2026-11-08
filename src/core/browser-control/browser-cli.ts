@@ -33,6 +33,7 @@ export const BROWSER_USAGE = [
   '       walnut browser downloads [--wait] [--ms N]',
   '       walnut browser fill-login [--item <id|name>] [--fresh-sign-in] [--tab N]   (signs in with the saved login; you never see the password)',
   '       walnut browser request-sign-in [<what to sign in to>] [--site S] [--tab N]   (the person signs in themselves, Take over; waits for them)',
+  '       walnut browser fill-code [--item <id|name>] [--tab N]   (the saved login\'s one-time code into the page; you never see it)',
   '       walnut browser dialog [read] | accept|dismiss [--text T] [--tab N]   (real input; read: the open dialog\'s type and message)',
   '       walnut browser evaluate <expression> [--tab N]             (real input; a tab you opened)',
   '       walnut browser network [--url part] [--method M] [--status 404|4xx] [--type XHR] [--limit N] [--include-static] [--stop] [--tab N]',
@@ -161,11 +162,12 @@ export function parseBrowserArgv(argv: string[]): ParsedBrowser {
       case 'fill-login': case 'fill_login': return { ok: true, op: 'browser', args: { action: 'fill_login', ...args }, json }
       case 'request-sign-in': case 'request_sign_in':
         return { ok: true, op: 'browser', args: { action: 'request_sign_in', ...args, ...(rest.length ? { text: rest.join(' ') } : {}) }, json }
+      case 'fill-code': case 'fill_code': return { ok: true, op: 'browser', args: { action: 'fill_code', ...args }, json }
       case 'take': {
-        const n = Number(rest[0] ?? args.tab)
-        if (!Number.isInteger(n)) return { ok: false, error: 'take needs a tab id (tabs --all lists them)' }
-        return { ok: true, op: 'browser', args: { action: 'take', ...args, tab: n }, json }
-      }
+      const n = Number(rest[0] ?? args.tab)
+      if (!Number.isInteger(n)) return { ok: false, error: 'take needs a tab id (tabs --all lists them)' }
+      return { ok: true, op: 'browser', args: { action: 'take', ...args, tab: n }, json }
+    }
       case 'find':
         if (!rest.length) return { ok: false, error: 'find needs the text' }
         return { ok: true, op: 'browser', args: { action: 'find', text: rest.join(' '), ...args }, json }

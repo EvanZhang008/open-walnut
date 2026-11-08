@@ -101,7 +101,7 @@ describe('the policy', () => {
     const r = await use('github.com', 'ask', { fields: ['username', 'totp'] })
     expect(r.status).toBe('pending')
     if (r.status !== 'pending') return
-    expect(asked[0].what).toBe('GitHub username, totp: run the nightly test deploy')
+    expect(asked[0].what).toBe('GitHub username, one-time code: run the nightly test deploy')
     expect(asked[0].detail).toContain('Task: Fix the deploy')
     expect(asked[0].detail).toContain('Why: run the nightly test deploy')
     expect(asked[0].detail).toContain('Host: devbox')

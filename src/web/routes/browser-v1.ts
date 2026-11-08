@@ -295,14 +295,14 @@ browserV1Router.post('/browser/adopt', (req, res, next) => {
 
 const ACTIONS = [
   'tabs', 'open', 'navigate', 'back', 'close', 'snapshot', 'text', 'find', 'form_values', 'click', 'hover', 'type', 'fill_form', 'select', 'press',
-  'scroll', 'wait', 'screenshot', 'upload', 'downloads', 'take', 'fill_login', 'dialog', 'evaluate',
+  'scroll', 'wait', 'screenshot', 'upload', 'downloads', 'take', 'fill_login', 'fill_code', 'dialog', 'evaluate',
   'network', 'network_body', 'network_request_body', 'console', 'resize', 'request_sign_in', 'drag', 'zoom', 'click_label',
 ] as const
 type Action = typeof ACTIONS[number]
 /** Actions that go to a page, so the page's site must be allowed. */
 const ON_TAB = new Set<Action>([
   'navigate', 'back', 'close', 'snapshot', 'text', 'find', 'form_values', 'click', 'hover', 'type', 'fill_form', 'select', 'press', 'scroll', 'wait',
-  'screenshot', 'upload', 'fill_login', 'dialog', 'evaluate', 'network', 'network_body', 'network_request_body', 'console', 'resize', 'request_sign_in',
+  'screenshot', 'upload', 'fill_login', 'fill_code', 'dialog', 'evaluate', 'network', 'network_body', 'network_request_body', 'console', 'resize', 'request_sign_in',
   'drag', 'zoom', 'click_label',
 ])
 /** Actions whose step may buy, send or delete (the page judges; outward-asks.ts asks the person): a drag's press and release, a dialog's OK too. */
@@ -463,13 +463,15 @@ browserV1Router.post('/browser/act', (req, res, next) => {
     // yes on the ask an agent's fresh_sign_in starts (fresh-sign-in.ts). A check that cannot be made
     // refuses, never lets it through (review 2026-11-07: a failed tab list skipped it).
     let freshClaim: import('../../core/browser-control/fresh-sign-in.js').Claim | undefined
+    let codeClaim: import('../../core/browser-control/fresh-sign-in.js').Claim | undefined
     // The ask's id was this rule's, not the vault's: it is not passed on (decided before answering it removes it).
     let freshAskHandled = false
     // The site the same-site check judged: the fill refuses a page that moved off it meanwhile.
     let checkedSite: string | undefined
-    if (action === 'fill_login') {
+    // A one-time code (fill_code) is a step of a sign-in: the same rule.
+    if (action === 'fill_login' || action === 'fill_code') {
       const fresh = await import('../../core/browser-control/fresh-sign-in.js')
-      const retry = (why: string) => new h.BrowserError(`Walnut could not check whether the person has this site open in a tab of their own (${why}), so it fills nothing yet. Call fill_login again in a moment.`, 503, 'same_site_unchecked')
+      const retry = (why: string) => new h.BrowserError(`Walnut could not check whether the person has this site open in a tab of their own (${why}), so it fills nothing yet. Call ${action} again in a moment.`, 503, 'same_site_unchecked')
       if (left() < 15_000) throw retry('no time left in this call')
       const listing = await allTabsOf(c.device, owner, { ...s.allowOf(f), walnut: own })
       // Agents only in the tab the person handed over: they hand it over in front of them, and see the sign-in there.
@@ -489,8 +491,10 @@ browserV1Router.post('/browser/act', (req, res, next) => {
           const ans = await fresh.answerFreshSignIn({ ...scope, id: request, holdMs: Math.max(0, Math.min(25_000, Number(b.wait_ms) || 0)) })
           if (!ans.ok) { if (ans.status === 202) { res.status(202).json(ans.body); return undefined } throw new h.BrowserError(String(ans.body.error), ans.status, String(ans.body.code)) }
         }
-        freshClaim = fresh.claimGrant(scope)
-        if (!freshClaim) {
+        // A code right after the sign-in the person said yes to is part of it (fresh-sign-in.ts codeStepAfter).
+        if (action === 'fill_code') codeClaim = fresh.claimCodeStep(scope)
+        if (!codeClaim) freshClaim = fresh.claimGrant(scope)
+        if (!freshClaim && !codeClaim) {
           if (b.fresh_sign_in === true) {
             log.web.info('browser fill_login asks the person for a new sign-in', { device: c.device, owner, tab, tabs: theirs.map((t) => t.id) })
             res.status(202).json(await fresh.askFreshSignIn({ ...scope, theirs, requester, testRun: ambientTestRun() }))
@@ -501,21 +505,31 @@ browserV1Router.post('/browser/act', (req, res, next) => {
         }
       }
     }
-    if (action === 'fill_login') {
+    if (action === 'fill_login' || action === 'fill_code') {
       // The vault's own ask has its own request: the new-sign-in ask's id is not passed on.
-      const vb = freshAskHandled ? { ...b, request: undefined } : b
       const fresh = await import('../../core/browser-control/fresh-sign-in.js')
+      let vb: Record<string, unknown> = freshAskHandled ? { ...b, request: undefined } : b
+      // A code step is for the login its sign-in filled, and no other, whatever item names.
+      const stepItem = codeClaim ? fresh.codeStepItem(codeClaim) : undefined
+      if (stepItem) vb = { ...vb, item: stepItem }
       let out: unknown
       try {
-        out = await fillLoginAct(req, res, vb, { device: c.device, label: c.label, owner, tab: tab!, requester, allow: { ...s.allowOf(f), walnut: own }, site: checkedSite })
+        out = await fillLoginAct(req, res, vb, { device: c.device, label: c.label, owner, tab: tab!, requester, allow: { ...s.allowOf(f), walnut: own }, site: checkedSite, what: action === 'fill_code' ? 'code' : 'login' })
       } catch (err) {
         // A refusal before anything reached the page gives the yes back; a browser that did not
         // answer may have filled, so its yes is spent.
-        if (freshClaim && err instanceof h.BrowserError && err.status < 500 && err.code !== 'browser_timeout') fresh.restoreGrant(freshClaim)
+        if (err instanceof h.BrowserError && err.status < 500 && err.code !== 'browser_timeout') {
+          if (freshClaim) fresh.restoreGrant(freshClaim)
+          if (codeClaim) fresh.restoreCodeStep(codeClaim)
+        }
         throw err
       }
+      const filled = !!(out as { filled?: unknown } | undefined)?.filled
       // Still waiting (the vault asks about the login itself): the yes waits with it.
-      if (freshClaim && !(out as { filled?: unknown } | undefined)?.filled) fresh.restoreGrant(freshClaim)
+      if (freshClaim && !filled) fresh.restoreGrant(freshClaim)
+      if (codeClaim && !filled) fresh.restoreCodeStep(codeClaim)
+      // A sign-in filled with the person's yes: its one-time code may follow without a second ask.
+      if (freshClaim && filled && action === 'fill_login') fresh.codeStepAfter(freshClaim, String((out as { item?: { id?: unknown } }).item?.id ?? '') || undefined)
       return out
     }
     // A step that buys, sends or deletes the person approved: it goes to the page with the approval's mark.
@@ -657,14 +671,16 @@ async function allTabsOf(device: string, owner: string, allow: import('../../cor
 }
 
 /**
- * `fill_login`: the vault decides (core/browser-control/fill-login.ts); the login goes to the
- * extension alone and is never logged or answered. A vault refusal answers as password_use does.
+ * `fill_login` and `fill_code`: the vault decides (core/browser-control/fill-login.ts); the login
+ * or its one-time code goes to the extension alone and is never logged or answered. A vault refusal answers as password_use does.
  */
 async function fillLoginAct(req: Request, res: Response, b: Record<string, unknown>, at: {
   device: string; label: string; owner: string; tab: number; requester: import('../../core/vault/agent.js').AgentRequester
   allow: import('../../core/browser-control/hub.js').WireCommand['allow']
   /** The site the same-site check judged; the fill refuses a page on another one. */
   site?: string
+  /** `code`: fill_code, the login's one-time code. */
+  what: 'login' | 'code'
 }): Promise<unknown> {
   const h = await hub()
   const { isFollower, role } = await import('../../core/server-role.js')
@@ -677,13 +693,13 @@ async function fillLoginAct(req: Request, res: Response, b: Record<string, unkno
   try {
     const out = await fillLogin({
       owner: at.owner, tab: at.tab, item: str(b.item, 200), request: str(b.request, 100), purpose: str(b.purpose, 200),
-      waitMs: Math.max(0, Math.min(25_000, Number(b.wait_ms) || 0)), requester: at.requester, testRun: ambientTestRun(),
+      waitMs: Math.max(0, Math.min(25_000, Number(b.wait_ms) || 0)), requester: at.requester, testRun: ambientTestRun(), what: at.what,
       ...(at.site ? { site: at.site } : {}),
     }, {
       send: (action, args, ms) => h.send(at.device, action, args, at.allow, ms),
       agents: v.agentsSwitch, createApproval: v.createApproval, waitApproval: v.waitApproval,
     })
-    log.web.info('browser act', { action: 'fill_login', device: at.device, owner: at.owner, tab: at.tab, status: out.status })
+    log.web.info('browser act', { action: at.what === 'code' ? 'fill_code' : 'fill_login', device: at.device, owner: at.owner, tab: at.tab, status: out.status })
     lastTab.set(at.owner, { device: at.device, tab: at.tab })
     if (out.status === 202) { res.status(202).json(out.body); return undefined }
     return { browser: at.label, ...out.body }

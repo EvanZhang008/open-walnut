@@ -11,7 +11,7 @@ import { noBrowserLine, type GoneBrowser } from '../core/browser-control/gone-wo
 
 const ACTIONS = [
   'tabs', 'open', 'navigate', 'back', 'close', 'snapshot', 'text', 'find', 'form_values', 'click', 'hover', 'type', 'fill_form', 'select', 'press',
-  'scroll', 'wait', 'screenshot', 'upload', 'downloads', 'take', 'fill_login', 'dialog', 'evaluate',
+  'scroll', 'wait', 'screenshot', 'upload', 'downloads', 'take', 'fill_login', 'fill_code', 'dialog', 'evaluate',
   'network', 'network_body', 'network_request_body', 'console', 'resize', 'request_sign_in', 'drag', 'zoom', 'click_label',
 ] as const
 
@@ -38,7 +38,13 @@ function outcomeOf(args: Record<string, unknown>, body: Record<string, unknown>)
     if (body.code === 'fresh_sign_in_needs_ok') {
       return {
         outcome: String(body.error ?? 'Waiting for the person to approve a new sign-in.'),
-        next: `Call fill_login again with request "${String(body.request ?? '')}" and wait_ms up to 25000 until it goes through. Do not ask them in chat as well.`,
+        next: `Call ${args.action === 'fill_code' ? 'fill_code' : 'fill_login'} again with request "${String(body.request ?? '')}" and wait_ms up to 25000 until it goes through. Do not ask them in chat as well.`,
+      }
+    }
+    if (args.action === 'fill_code') {
+      return {
+        outcome: `Waiting for the person to approve entering the one-time code of "${(body.item as { title?: string } | undefined)?.title ?? 'the login'}" (a notification on their Mac and phone).`,
+        next: `Call fill_code again with request "${String(body.request ?? '')}" and wait_ms up to 25000 until it goes through. Do not ask them in chat as well.`,
       }
     }
     if (args.action === 'fill_login') {
@@ -113,6 +119,7 @@ function outcomeOf(args: Record<string, unknown>, body: Record<string, unknown>)
     case 'request_sign_in': return body.done
       ? { outcome: `The person signed in and handed tab ${String(body.tab ?? '')} back${body.url ? ` (now at ${String(body.url)})` : ''}.`, next: 'snapshot to see where the page is now, then go on.' }
       : { outcome: `The person ended the sign-in ask (${String(body.signIn ?? 'ended')}) without handing the tab back.`, next: 'Ask the person in chat what they want; do not act in that tab again unless it is still yours (tabs).' }
+    case 'fill_code': return { outcome: `Filled the one-time code of "${(body.item as { title?: string } | undefined)?.title ?? ''}"${tab}; you never see the code.`, next: 'click the verify or continue button (snapshot for its ref).' }
     case 'evaluate': return { outcome: `The script ran${tab}${body.cut ? '; its result was cut at 50 KB' : ''}.`, next: 'No further action is required.' }
     case 'close': {
       const which = body.tab ?? args.tab
@@ -155,7 +162,7 @@ defineOp({
     + 'scroll {direction: up|down|left|right, amount? (screens) or by? (px)} or {to: top|bottom} or {ref} (into view); with a direction and a ref or x, y it scrolls that box inside the page; wait {text} or {textGone} or {url: substring or /regex/} or {ms}; '
     + 'screenshot (full: the whole page, cut at 12000 px; annotate: numbers on the elements on screen, labels map number to ref); click_label {label}; '
     + 'zoom {x, y, width, height} (that region of the screen at full pixel resolution); text {all_frames: each frame\'s text on its own}; upload {ref, files: [{name, type, base64}]} (10 MB in all; `walnut browser upload e5 ./a.pdf` in a shell); '
-    + 'downloads {wait?, ms?}; fill_login {item?} (signs in with the user\'s saved login for the page: you never see the password; needs_ok waits for their approval: call again with request). '
+    + 'downloads {wait?, ms?}; fill_login {item?} (signs in with the user\'s saved login for the page: you never see the password; needs_ok waits for their approval: call again with request); fill_code {item?} (on the page that asks for a sign-in\'s one-time code: fills the code of the saved login\'s two-step setup, you never see it; the same approvals). '
     + 'Real input (off unless the user turned it on in the extension: trusted_off): trusted: true on click, hover, type, press, scroll (the wheel), upload {paths on the browser\'s machine}; '
     + 'drag {ref or x, y; to_ref or to_x, to_y; steps?} (always real input, top frame); a trusted step that opens an alert, confirm or prompt answers with it (dialog), and the page waits: '
     + 'dialog {read: true} reads it (type, message, default_prompt), dialog {accept, text?} answers it (text: a prompt\'s answer); evaluate {expression} runs page JavaScript in a tab you opened (result JSON, 50 KB). '
@@ -172,7 +179,7 @@ defineOp({
     + 'request_sign_in {tab, text: what to sign in to} asks them on the task\'s Browser view (they take the tab over, sign in themselves, and hand it back); it answers needs_ok with request: call again with it and wait_ms until it answers done. '
     + 'While the person has a tab (Take over), every action there answers person_driving: work elsewhere or wait. '
     + 'Refusals: browser_not_connected (the user turns agents on in the extension popup), browser_disconnected (the user disconnected the extension: ask them to connect it), site_denied, not_your_tab, person_is_here, trusted_off (its message says which switch the user turns on, and where: pass it on as it is), not_agent_opened (open the page in a tab of your own), filled_here, test_run. '
-    + 'Passwords: sign in with fill_login; never type one you read from elsewhere. A click, Enter or other key that buys or pays, sends or posts, or deletes '
+    + 'Passwords: sign in with fill_login, then fill_code where a one-time code is asked; never type one you read from elsewhere. A click, Enter or other key that buys or pays, sends or posts, or deletes '
     + '(Place order, Pay, Send, Post, Publish, Delete, a form with card details or a message) waits for the user\'s approval: needs_ok with request, call the same action again with it; '
     + 'only the user can approve it. Add to cart, search, sign in, Next, filters and opening pages never ask. The ask does not judge evaluate, the page\'s own scripts '
     + 'or a link that acts on a plain visit (evaluate needs the user\'s real input switch): never use them to take a step the user has not approved.',
@@ -215,13 +222,13 @@ defineOp({
     paths: z.array(z.string().max(4000)).max(20).optional().describe('upload with trusted: files on the browser\'s own machine'),
     all: z.boolean().optional().describe('tabs: every tab of the browser (the user\'s too), title and address only'),
     wait: z.boolean().optional().describe('downloads: wait for the next one to finish'),
-    item: z.string().max(200).optional().describe('fill_login: the login (its id, name or username) when the site has several'),
-    request: z.string().max(100).optional().describe('fill_login, request_sign_in, or a click / press / type that waits for the user: the request id from needs_ok, to wait for their answer'),
+    request: z.string().max(100).optional().describe('fill_login, fill_code, request_sign_in, or a click / press / type that waits for the user: the request id from needs_ok, to wait for their answer'),
     site: z.string().max(200).optional().describe('request_sign_in: the site to sign in to (default the tab\'s)'),
-    purpose: z.string().max(200).optional().describe('fill_login: why, in a few words the user reads on the approval'),
-    fresh_sign_in: z.boolean().optional().describe('fill_login: ask the person to approve a new sign-in here, although they have this site open in a tab of their own (only their yes fills)'),
+    fresh_sign_in: z.boolean().optional().describe('fill_login, fill_code: ask the person to approve a new sign-in here, although they have this site open in a tab of their own (only their yes fills)'),
     trusted: z.boolean().optional().describe('click / hover / type / press / scroll / upload: real mouse and keys through the browser\'s debugger (the user turns it on)'),
     accept: z.boolean().optional().describe('dialog: OK (true, default) or Cancel (false); text is a prompt\'s answer'),
+    item: z.string().max(200).optional().describe('fill_login, fill_code: the login (its id, name or username) when the site has several'),
+    purpose: z.string().max(200).optional().describe('fill_login, fill_code: why, in a few words the user reads on the approval'),
     expression: z.string().max(100_000).optional().describe('evaluate: JavaScript to run in the page (its value comes back as JSON)'),
     inline: z.boolean().optional().describe('screenshot / zoom: put the image (a data URL) in the result; the shell command uses this'),
     wait_ms: z.number().int().min(0).max(25_000).optional().describe('needs_ok: hold this long for the person\'s answer'),
