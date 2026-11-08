@@ -36,6 +36,7 @@ const BOXES: Record<string, Kind> = {
   'components/sessions/ThreadCommentCard.tsx': COMPOSER,
   'components/sessions/QuotePinSelectionBar.tsx': ANSWER,
   'components/board/kanban/KanbanCardComposer.tsx': COMPOSER,
+  'components/tasks/QuickSortReply.tsx': COMPOSER,
   'apps/mail/compose/ComposerPanel.tsx': COMPOSER,
   'components/sessions/SessionChatHistory.tsx': COMPOSER,
   'components/sessions/SessionDiffView.tsx': COMPOSER,

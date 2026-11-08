@@ -43,6 +43,7 @@ const TEXT_ONLY_COMPOSERS: Record<string, string> = {
   'components/sessions/SessionDiffView.tsx': 'a review comment on a diff line, kept until the review goes; the composer takes pictures',
   'components/transfer/TransferDialog.tsx': "the first words of a moved task's new session, carried by the transfer as text",
   'components/sessions/TriggerPickerPopover.tsx': "a trigger's standing prompt, stored for each later fire",
+  'components/tasks/QuickSortReply.tsx': "a one-line reply from the board's Sort deck, which may start the task (the start takes text only); a picture goes in the task's own chat, one tap away on the card",
 }
 
 function walk(dir: string, out: string[] = []): string[] {

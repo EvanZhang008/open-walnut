@@ -20,6 +20,7 @@ import { draftKey } from '@/utils/drafts';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { fetchTask, startTaskAsPerson } from '@/api/tasks';
 import { log } from '@/utils/log';
+import { randomId } from '@/utils/random-id';
 
 const START_FOLLOW_MS = 120_000;
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -68,7 +69,7 @@ export function QuickSortReply({ task, onSent, onClose }: { task: Task; onSent: 
     setSending(true);
     setError('');
     const sentKey = draft.key;
-    if (attempt.current?.text !== message) attempt.current = { text: message, id: `qm-${crypto.randomUUID()}` };
+    if (attempt.current?.text !== message) attempt.current = { text: message, id: `qm-${randomId()}` };
     try {
       await replyToTask(task, message, attempt.current.id);
       log.info('board', 'quick sort reply sent', { taskId: task.id, sessionId, started: !sessionId });
