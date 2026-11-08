@@ -98,6 +98,9 @@ describe('the label', () => {
     const label = L.fromDescription(`\u6BCF 5 \u5206\u949F\u67E5 devbox \u4E0A Mac \u961F\u5217\u91CC\u4EFB\u52A1 ${id} \u7684\u8BF7\u6C42`);
     expect(cols(label)).toBeLessThanOrEqual(L.max);
     expect(label.includes(id) || !/[0-9a-f]-?$/.test(label)).toBe(true);
+    // A long path with no space is cut at a "/", never down to the bare verb.
+    const path_ = L.fromDescription('\u6BCF 30 \u5206\u949F\u68C0\u67E5 /Users/someone/launch-kit/list-prs/watch.txt \u91CC\u6240\u6709\u63D0\u4EA4\u3002');
+    expect(path_).toBe('\u68C0\u67E5 /Users/someone/launch-kit/list-prs');
     const english = L.fromDescription('Checks whether the new pricing page has reached every store region and the signup form still works.');
     expect(cols(english)).toBeLessThanOrEqual(L.max);
     expect(english).not.toMatch(/\s(?:the|of|has|and)$/);

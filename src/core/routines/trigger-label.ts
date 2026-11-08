@@ -67,10 +67,11 @@ export function createTriggerLabel(): TriggerLabels {
     let n = 0
     let cols = 0
     while (n < chars.length && cols + width(chars[n]) <= max) cols += width(chars[n++])
-    // Back to the last break: a space, or a CJK character's edge.
+    // Back to the last break: a space, a CJK character's edge, or a path's "/".
     let at = n
-    while (at > 0 && !(chars[at] === ' ' || CJK.test(chars[at - 1]) || CJK.test(chars[at] ?? ''))) at--
-    return chars.slice(0, at > 0 ? at : n).join('').trim()
+    while (at > 0 && !(chars[at] === ' ' || chars[at - 1] === '/' || CJK.test(chars[at - 1]) || CJK.test(chars[at] ?? ''))) at--
+    // A break that would leave too little to name anything ("\u68C0\u67E5" alone) loses to the cut where it stands.
+    return chars.slice(0, at > 0 && width(chars.slice(0, at).join('').trim()) >= MIN ? at : n).join('').trim()
   }
   function tidy(s: string): string {
     let out = s.trim()
