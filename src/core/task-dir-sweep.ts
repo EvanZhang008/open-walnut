@@ -19,18 +19,29 @@
  * (task-dir-core.ts pruneTaskDirs). Once per use: a directory pruned since its
  * last use is not asked again.
  *
+ * And whatever the phase, running or not, a directory loses the build output
+ * nobody touched for 2 days (WALNUT_TASK_DIR_BUILD_IDLE_DAYS, 0 = off; 6 hours
+ * while this machine's disk is low) on a host with task-dir-prune-builds-v1:
+ * node_modules, Xcode's rebuildable folders, ignored dist, never a repo, a file
+ * of its own, or what lies on the way of a live session (task-dir-core.ts
+ * pruneTaskBuilds). 2026-11-08: open tasks held 70 of the 74
+ * GB of task directories on the Mac, which filled to 99%, because only a
+ * finished task was ever pruned. Once per use too (`buildsPrunedAt`).
+ *
  * Primary only: a replica (the cloud companion) holds a copy of the tasks and
  * must not decide over host files. An ephemeral server sweeps only its own
  * local daemon, whose root sits in its temp dir.
  */
 import { log } from '../logging/index.js'
-import { taskDirKeepDays, taskDirPruneDays } from '../lib/task-dir.js'
+import { taskDirBuildIdleDays, taskDirKeepDays, taskDirPruneDays } from '../lib/task-dir.js'
 import type { TaskDirEntry, RemoveResult, PruneResult } from '../providers/task-dir-core.js'
 
 const DAY_MS = 86_400_000
 const FIRST_SWEEP_MS = 15 * 60_000
 const SWEEP_EVERY_MS = 6 * 60 * 60_000
 const ABSENT_TASK_DAYS = 30
+const LOW_DISK_CHECK_MS = 5 * 60_000
+const LOW_DISK_SWEEP_MS = 60 * 60_000
 
 export interface TaskStateForSweep { id: string; phase: string; completed_at?: string; phase_changed_at?: string; updated_at?: string }
 
@@ -84,14 +95,52 @@ export function pickPrunable(
   return out
 }
 
+/**
+ * The task ids whose build output alone the host should look at now: not
+ * build-pruned since their last use, not removed or fully pruned this round.
+ * Every phase counts, a running task's too (an open task rebuilds what it
+ * needs); the host keeps any build folder changed within the idle time and
+ * whatever lies on the way of a live session (`idleBefore`, pruneTaskBuilds).
+ * A directory of a task this Walnut does not know counts only when this
+ * Walnut made it.
+ */
+export function pickBuildPrunable(
+  dirs: TaskDirEntry[],
+  tasks: Map<string, TaskStateForSweep>,
+  opts: { now: number; idleDays: number; home: string; skip: ReadonlySet<string> },
+): string[] {
+  if (!(opts.idleDays > 0)) return []
+  const out: string[] = []
+  for (const d of dirs) {
+    if (opts.skip.has(d.taskId)) continue
+    if (!tasks.has(d.taskId) && !(d.home && d.home === opts.home)) continue
+    const lastUsed = Math.max(ms(d.lastUsedAt), ms(d.createdAt), d.mtimeMs || 0)
+    if (ms(d.buildsPrunedAt) >= lastUsed) continue
+    out.push(d.taskId)
+  }
+  return out
+}
+
 type SweepConn = { host: string; hasCapability?: (c: string) => boolean; send: (cmd: string, p?: Record<string, unknown>, t?: number) => Promise<unknown> }
+
+type SweepRow = { host: string } & Partial<RemoveResult> & { pruned?: PruneResult['pruned']; buildsPruned?: PruneResult['pruned'] }
+
+/** True while the disk Walnut's data lives on is low (disk-watermark.ts warn or critical). */
+async function localDiskLow(): Promise<boolean> {
+  try {
+    const { getDiskWatermarkState } = await import('./disk-watermark.js')
+    return getDiskWatermarkState().level !== 'ok'
+  } catch { return false }
+}
 
 /** One round over every connected host. Returns per-host results (tests read them). */
 export async function sweepTaskDirsOnce(deps?: {
   conns?: SweepConn[]
   loadTasks?: (ids: string[]) => Promise<TaskStateForSweep[]>
   now?: number
-}): Promise<Array<{ host: string } & Partial<RemoveResult> & { pruned?: PruneResult['pruned'] }>> {
+  /** This machine's disk is low: the local host's idle wait shortens (default: the disk watermark). */
+  lowDisk?: boolean
+}): Promise<SweepRow[]> {
   const { WALNUT_HOME, IS_EPHEMERAL } = await import('../constants.js')
   let conns = deps?.conns
   if (!conns) {
@@ -103,7 +152,8 @@ export async function sweepTaskDirsOnce(deps?: {
     return await listTasksByIds(ids) as TaskStateForSweep[]
   })
   const keepDays = taskDirKeepDays(process.env)
-  const results: Array<{ host: string } & Partial<RemoveResult> & { pruned?: PruneResult['pruned'] }> = []
+  const lowDisk = deps?.lowDisk ?? await localDiskLow()
+  const results: SweepRow[] = []
   for (const conn of conns) {
     if (IS_EPHEMERAL && conn.host !== '__local__') continue
     if (!conn.hasCapability?.('task-dir-v1')) continue
@@ -120,7 +170,7 @@ export async function sweepTaskDirsOnce(deps?: {
         const d = dirs.find((x) => x.taskId === taskId)!
         return { taskId, usedBefore: Math.max(ms(d.lastUsedAt), ms(d.createdAt)) }
       })
-      const row: { host: string } & Partial<RemoveResult> & { pruned?: PruneResult['pruned'] } = { host: conn.host }
+      const row: SweepRow = { host: conn.host }
       const removed = new Set<string>()
       if (removable.length > 0) {
         const res = await conn.send('taskdir.remove', { taskIds: itemsFor(removable) }, 120_000) as RemoveResult & { ok?: boolean; error?: string }
@@ -138,7 +188,18 @@ export async function sweepTaskDirsOnce(deps?: {
         row.pruned = res?.pruned ?? []
         log.session.info('task dirs pruned', { host: conn.host, pruned: row.pruned, kept: res?.kept ?? [] })
       }
-      if (removable.length > 0 || prunable.length > 0) results.push(row)
+      // The disk the watermark measures is this machine's, so only the local host hurries.
+      const idleDays = taskDirBuildIdleDays(process.env, lowDisk && conn.host === '__local__')
+      const buildPrunable = conn.hasCapability?.('task-dir-prune-builds-v1')
+        ? pickBuildPrunable(dirs, tasks, { now, idleDays, home: WALNUT_HOME, skip: new Set([...removed, ...prunable]) })
+        : []
+      if (buildPrunable.length > 0) {
+        const res = await conn.send('taskdir.pruneBuilds', { taskIds: itemsFor(buildPrunable), idleBefore: now - idleDays * DAY_MS }, 300_000) as PruneResult & { ok?: boolean; error?: string }
+        if (res?.ok === false) throw new Error(res.error || 'taskdir.pruneBuilds refused')
+        row.buildsPruned = (res?.pruned ?? []).filter((p) => p.builds.length > 0)
+        log.session.info('task dir builds pruned', { host: conn.host, pruned: row.buildsPruned, kept: res?.kept ?? [] })
+      }
+      if (removable.length > 0 || prunable.length > 0 || buildPrunable.length > 0) results.push(row)
     } catch (err) {
       log.session.warn('task dir sweep failed', { host: conn.host, error: (err as Error).message })
     }
@@ -149,14 +210,22 @@ export async function sweepTaskDirsOnce(deps?: {
 export function startTaskDirSweep(): { stop: () => void } {
   let stopped = false
   let running = false
+  let lastRun = 0
   const run = (): void => {
     if (stopped || running) return
     running = true
+    lastRun = Date.now()
     void sweepTaskDirsOnce().catch(() => { /* next round */ }).finally(() => { running = false })
   }
   const first = setTimeout(run, FIRST_SWEEP_MS)
   first.unref?.()
   const every = setInterval(run, SWEEP_EVERY_MS)
   every.unref?.()
-  return { stop: () => { stopped = true; clearTimeout(first); clearInterval(every) } }
+  // A low disk does not wait out the 6 hours: one round an hour while it lasts.
+  const low = setInterval(() => {
+    if (Date.now() - lastRun < LOW_DISK_SWEEP_MS) return
+    void localDiskLow().then((isLow) => { if (isLow) run() })
+  }, LOW_DISK_CHECK_MS)
+  low.unref?.()
+  return { stop: () => { stopped = true; clearTimeout(first); clearInterval(every); clearInterval(low) } }
 }

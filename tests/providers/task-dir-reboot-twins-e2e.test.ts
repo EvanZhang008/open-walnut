@@ -25,6 +25,7 @@ import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
+import { acpWorkerBundle } from '../helpers/acp-worker-bundle.js'
 
 let scriptPath = ''
 let root = ''
@@ -261,5 +262,56 @@ describe.each(TWINS)('task directory across a reboot: $name', (twin) => {
     expect(fs.readFileSync(path.join(taskDir, 'wip', 'a.txt'), 'utf8')).toBe('changed\n')
     expect(fs.readFileSync(path.join(taskDir, 'report.md'), 'utf8')).toBe('# evidence\n')
     expect((await rpc({ cmd: 'taskdir.list' })).dirs).toEqual([expect.objectContaining({ taskId: 'done-task', prunedAt: expect.any(String) })])
+  }, 60_000)
+
+  it('taskdir.pruneBuilds takes an idle open task\'s build output alone, never a clone', async () => {
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-task-dir-builds-')))
+    await boot(twin)
+    expect((await rpc({ cmd: 'hello' })).capabilities as string[]).toContain('task-dir-prune-builds-v1')
+    const taskDir = (await rpc({ cmd: 'taskdir.ensure', taskId: 'open-task', home: '/data/home' })).path as string
+    fs.mkdirSync(gitHome(), { recursive: true })
+    const remote = path.join(root, 'remote.git')
+    fs.mkdirSync(remote)
+    git(remote, 'init', '--bare', '-q')
+    git(taskDir, 'clone', '-q', remote, 'clean')
+    fs.writeFileSync(path.join(taskDir, 'clean', 'a.txt'), 'a\n')
+    git(path.join(taskDir, 'clean'), 'add', '.')
+    git(path.join(taskDir, 'clean'), 'commit', '-qm', 'a')
+    git(path.join(taskDir, 'clean'), 'push', '-q', 'origin', 'HEAD:main')
+    for (const rel of ['clean/node_modules/pkg/index.js', 'dd/Build/Products/app', 'dd/ModuleCache.noindex/m']) {
+      fs.mkdirSync(path.dirname(path.join(taskDir, rel)), { recursive: true })
+      fs.writeFileSync(path.join(taskDir, rel), '1\n')
+    }
+    const res = await rpc({ cmd: 'taskdir.pruneBuilds', taskIds: ['open-task'], idleBefore: Date.now() + 60_000 })
+    expect(res.pruned).toEqual([{ taskId: 'open-task', repos: [], builds: expect.arrayContaining(['clean/node_modules', 'dd/Build', 'dd/ModuleCache.noindex']) }])
+    expect(fs.readFileSync(path.join(taskDir, 'clean', 'a.txt'), 'utf8')).toBe('a\n')
+    expect(fs.existsSync(path.join(taskDir, 'dd', 'Build'))).toBe(false)
+    expect((await rpc({ cmd: 'taskdir.list' })).dirs).toEqual([expect.objectContaining({ taskId: 'open-task', buildsPrunedAt: expect.any(String) })])
+  }, 60_000)
+
+  // Review round 3 of 2026-11-08: an ACP worker started in a shared checkout works in its task
+  // directory by path, so its cwd alone did not keep the directory busy.
+  it('an ACP worker of the task keeps its directory whole, wherever it was started', async () => {
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-task-dir-acp-')))
+    await boot(twin)
+    const shared = path.join(root, 'shared-checkout')
+    fs.mkdirSync(shared)
+    const taskDir = (await rpc({ cmd: 'taskdir.ensure', taskId: 'acp-task' })).path as string
+    const file = path.join(taskDir, 'copy', 'node_modules', 'index.js')
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, 'build\n')
+    const startedAcp = await rpc({ cmd: 'acpStart', sid: 'acp-busy', cwd: shared, taskId: 'acp-task',
+      workerCmd: [process.execPath, acpWorkerBundle()], adapterCmd: [process.execPath, path.resolve(__dirname, 'mock-acp-agent.mjs')] })
+    // The source twin runs ACP only with its ACP sidecar, which this test does not build:
+    // its hostWorkNow is held to the same kinds by task-dir-busy-twins.test.ts.
+    if (startedAcp.errorKind === 'acp_unsupported' && twin.name.startsWith('source')) return
+    expect(startedAcp.ok, JSON.stringify(startedAcp)).toBe(true)
+    try {
+      const res = await rpc({ cmd: 'taskdir.pruneBuilds', taskIds: ['acp-task'], idleBefore: Date.now() + 60_000 })
+      expect(res.kept).toEqual([{ taskId: 'acp-task', reasons: ['a live session works in it'] }])
+      expect(fs.existsSync(file)).toBe(true)
+    } finally {
+      await rpc({ cmd: 'acpStop', sid: 'acp-busy' }).catch(() => undefined)
+    }
   }, 60_000)
 })

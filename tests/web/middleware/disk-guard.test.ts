@@ -61,6 +61,16 @@ describe('diskGuardMiddleware while the disk is critically full', () => {
     expect((await request(app).post('/api/notifications/1/read').send({})).status).toBe(204);
   });
 
+  it('lets a host command run or stop through: it is how a task frees a host\'s disk', async () => {
+    expect((await request(app).post('/api/v1/hosts/__local__/exec').send({ command: 'df' })).status).toBe(204);
+    expect((await request(app).post('/api/v1/hosts/clouddev/exec/hx-abcd1234/stop').send({})).status).toBe(204);
+    expect((await request(app).post('/api/v1/host-exec/grants/xg-abcd1234/exec').send({ host: 'a' })).status).toBe(204);
+    // Only those shapes: the rest of the host routes stay blocked.
+    expect((await request(app).post('/api/v1/hosts/__local__/daemon-update').send({})).status).toBe(507);
+    expect((await request(app).post('/api/v1/host-exec/grants').send({})).status).toBe(507);
+    expect((await request(app).post('/api/v1/hosts/__local__/exec/x/y').send({})).status).toBe(507);
+  });
+
   it('never blocks a read', async () => {
     expect((await request(app).get('/api/tasks')).status).toBe(204);
   });

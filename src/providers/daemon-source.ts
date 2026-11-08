@@ -230,7 +230,7 @@ export function getDaemonSource(): string {
   // external-scan-core.cjs, path-resolve-core.cjs) and daemonCapabilities() in
   // the template adds the capability back at runtime only when that sidecar
   // actually loads.
-  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'task-dir-v1', 'task-dir-prune-v1', 'host-exec-v1', 'host-exec-v2', 'net-v1', 'net-join-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'acp-model-catalog-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'codex-outside-v1', 'claude-outside-v1', 'budget-v2', 'walnut-mcp-v1'])
+  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'task-dir-v1', 'task-dir-prune-v1', 'task-dir-prune-builds-v1', 'host-exec-v1', 'host-exec-v2', 'net-v1', 'net-join-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'acp-model-catalog-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'codex-outside-v1', 'claude-outside-v1', 'budget-v2', 'walnut-mcp-v1'])
   const capsLiteral = JSON.stringify(
     [...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => !SIDECAR_GATED_CAPABILITIES.has(c)),
   )
@@ -4061,6 +4061,7 @@ function dispatchCommand(ws, id, cmd) {
     case 'taskdir.list': return cmdTaskDirList(ws, id);
     case 'taskdir.remove': return cmdTaskDirRemove(ws, id, cmd);
     case 'taskdir.prune': return cmdTaskDirPrune(ws, id, cmd);
+    case 'taskdir.pruneBuilds': return cmdTaskDirPrune(ws, id, cmd, true);
     // A command for a task on another host (host-exec-v1); not bridge- or
     // follower-reachable: only the trusted walnut socket asks. Mirrors daemon-standalone.ts.
     case 'exec.run': case 'exec.read': case 'exec.kill': case 'exec.list': {
@@ -13391,6 +13392,7 @@ function daemonCapabilities() {
   if (pathResolveCore) caps.push('path-resolve-v1');
   if (taskDirCore) caps.push('task-dir-v1');
   if (taskDirCore && typeof taskDirCore.pruneTaskDirs === 'function') caps.push('task-dir-prune-v1');
+  if (taskDirCore && typeof taskDirCore.pruneTaskBuilds === 'function') caps.push('task-dir-prune-builds-v1');
   if (hostExec) caps.push('host-exec-v1');
   if (hostExec && hostExec.version >= 2) caps.push('host-exec-v2');
   if (netSupervisor) caps.push('net-v1');
@@ -13430,17 +13432,27 @@ async function cmdTaskDirList(ws, id) {
   sendOk(ws, id, { root: TASK_DIR_ROOT, dirs: await taskDirCore.listTaskDirs(TASK_DIR_ROOT) });
 }
 
+// Everything running here now that may work in a task directory: see hostWorkNow in daemon-standalone.ts.
+function hostWorkNow() {
+  const work = [];
+  for (const s of sessions.values()) if (!s.exitedAt) work.push({ task: s.spawnInfo && s.spawnInfo.task, cwd: s.cwd });
+  if (hostExec && typeof hostExec.active === 'function') for (const j of hostExec.active()) work.push({ task: j.taskId, cwd: j.cwd });
+  if (acp && acp.workers) for (const w of acp.workers.values()) work.push({ cwd: w.cwd }, { cwd: w.taskDir });
+  return work;
+}
+function taskDirBusy(dir, taskId) {
+  if (typeof taskDirCore.taskDirInUse === 'function') return taskDirCore.taskDirInUse(dir, taskId, hostWorkNow());
+  for (const w of hostWorkNow()) {
+    if (w.task === taskId) return true;
+    if (typeof w.cwd === 'string' && (w.cwd === dir || w.cwd.startsWith(dir + path.sep))) return true;
+  }
+  return false;
+}
+
 async function cmdTaskDirRemove(ws, id, cmd) {
   if (!taskDirCore) return sendError(ws, id, 'taskdir.remove unsupported: task-dir-core sidecar not loaded');
   const ids = Array.isArray(cmd.taskIds) ? cmd.taskIds : [];
-  const busy = function (dir, taskId) {
-    for (const s of sessions.values()) {
-      if (s.exitedAt) continue;
-      if (s.spawnInfo && s.spawnInfo.task === taskId) return true;
-      if (typeof s.cwd === 'string' && (s.cwd === dir || s.cwd.startsWith(dir + path.sep))) return true;
-    }
-    return false;
-  };
+  const busy = taskDirBusy;
   try {
     const result = await taskDirCore.removeTaskDirs(TASK_DIR_ROOT, ids, { busy: busy });
     if (result.removed.length > 0 || result.kept.length > 0) logMsg('info', 'task dirs swept', { removed: result.removed, kept: result.kept });
@@ -13450,21 +13462,19 @@ async function cmdTaskDirRemove(ws, id, cmd) {
   }
 }
 
-// A finished task's clean clones and build output: see cmdTaskDirPrune in daemon-standalone.ts.
-async function cmdTaskDirPrune(ws, id, cmd) {
+// A finished task's clean clones and build output, or an idle task's build output alone
+// (buildsOnly, taskdir.pruneBuilds): see cmdTaskDirPrune in daemon-standalone.ts.
+async function cmdTaskDirPrune(ws, id, cmd, buildsOnly) {
   if (!taskDirCore || typeof taskDirCore.pruneTaskDirs !== 'function') return sendError(ws, id, 'taskdir.prune unsupported: task-dir-core sidecar not loaded');
+  if (buildsOnly && typeof taskDirCore.pruneTaskBuilds !== 'function') return sendError(ws, id, 'taskdir.pruneBuilds unsupported: task-dir-core sidecar too old');
   const ids = Array.isArray(cmd.taskIds) ? cmd.taskIds : [];
-  const busy = function (dir, taskId) {
-    for (const s of sessions.values()) {
-      if (s.exitedAt) continue;
-      if (s.spawnInfo && s.spawnInfo.task === taskId) return true;
-      if (typeof s.cwd === 'string' && (s.cwd === dir || s.cwd.startsWith(dir + path.sep))) return true;
-    }
-    return false;
-  };
+  const busy = taskDirBusy;
   try {
-    const result = await taskDirCore.pruneTaskDirs(TASK_DIR_ROOT, ids, { busy: busy });
-    if (result.pruned.length > 0 || result.kept.length > 0) logMsg('info', 'task dirs pruned', { pruned: result.pruned, kept: result.kept });
+    const idleBefore = typeof cmd.idleBefore === 'number' && isFinite(cmd.idleBefore) ? cmd.idleBefore : Date.now();
+    const result = buildsOnly
+      ? await taskDirCore.pruneTaskBuilds(TASK_DIR_ROOT, ids, { busy: busy, idleBefore: idleBefore })
+      : await taskDirCore.pruneTaskDirs(TASK_DIR_ROOT, ids, { busy: busy });
+    if (result.pruned.length > 0 || result.kept.length > 0) logMsg('info', buildsOnly ? 'task dir builds pruned' : 'task dirs pruned', { pruned: result.pruned, kept: result.kept });
     sendOk(ws, id, result);
   } catch (err) {
     sendError(ws, id, 'taskdir.prune failed: ' + err.message);

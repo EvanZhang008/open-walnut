@@ -187,7 +187,7 @@ import { buildScheduledMessage, buildTriggerMessage } from './trigger-envelope-c
 import { START_TASK_TOKEN, clockDueMs, clockFireOwed, clockStateOnArm, dropStaleClockFires, type ClockReport } from './trigger-clock-core.js'
 import { createClockSchedule } from './clock-schedule-core.js'
 import { resolvePathHostLocal } from './path-resolve-core.js'
-import { ensureTaskDir, isTaskDirId, listTaskDirs, pruneTaskDirs, removeTaskDirs, taskDirPath, taskDirRoot } from './task-dir-core.js'
+import { ensureTaskDir, isTaskDirId, listTaskDirs, pruneTaskBuilds, pruneTaskDirs, removeTaskDirs, taskDirInUse, taskDirPath, taskDirRoot, type HostWork } from './task-dir-core.js'
 import { createHostExec } from './host-exec-core.js'
 import { createNetSupervisor, netStateDir, resolveNetBinary } from './net-core.js'
 import { createHostMcp } from './host-mcp-core.js'
@@ -2587,6 +2587,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'taskdir.list': return cmdTaskDirList(ws, id as number)
     case 'taskdir.remove': return cmdTaskDirRemove(ws, id as number, cmd)
     case 'taskdir.prune': return cmdTaskDirPrune(ws, id as number, cmd)
+    case 'taskdir.pruneBuilds': return cmdTaskDirPrune(ws, id as number, cmd, true)
     // A command for a task on another host (host-exec-v1, host-exec-core.ts). NOT in
     // BRIDGE_ALLOWED_COMMANDS or FOLLOWER_ALLOWED_COMMANDS: it runs anything the user
     // can, so only the trusted walnut socket asks, after the server checked the
@@ -6003,10 +6004,24 @@ async function cmdTaskDirList(ws: ServerWebSocket<WsData>, id: number) {
   sendOk(ws, id, { root: TASK_DIR_ROOT, dirs: await listTaskDirs(TASK_DIR_ROOT) })
 }
 
+/**
+ * Everything running here now that may work in a task directory: live
+ * sessions, running host commands (a task on another host builds and tests
+ * here through them: 2026-11-08, a simulator check's app was taken mid-run),
+ * ACP workers. Keep in sync with daemon-source.ts.
+ */
+function hostWorkNow(): HostWork[] {
+  const work: HostWork[] = []
+  for (const s of sessions.values()) if (!s.exitedAt) work.push({ task: s.spawnInfo?.task, cwd: s.cwd })
+  for (const j of hostExec.active()) work.push({ task: j.taskId, cwd: j.cwd })
+  for (const w of acp.workers.values()) work.push({ cwd: w.cwd }, { cwd: w.taskDir })
+  return work
+}
+const taskDirBusy = (dir: string, taskId: string) => taskDirInUse(dir, taskId, hostWorkNow())
+
 async function cmdTaskDirRemove(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const ids = Array.isArray(cmd.taskIds) ? cmd.taskIds : []
-  const busy = (dir: string, taskId: string) => [...sessions.values()].some((s) =>
-    !s.exitedAt && (s.spawnInfo?.task === taskId || (typeof s.cwd === 'string' && (s.cwd === dir || s.cwd.startsWith(dir + path.sep)))))
+  const busy = taskDirBusy
   try {
     const result = await removeTaskDirs(TASK_DIR_ROOT, ids, { busy })
     if (result.removed.length > 0 || result.kept.length > 0) logMsg('info', 'task dirs swept', { removed: result.removed, kept: result.kept })
@@ -6016,14 +6031,20 @@ async function cmdTaskDirRemove(ws: ServerWebSocket<WsData>, id: number, cmd: Re
   }
 }
 
-/** A finished task's clean clones and build output (task-dir-prune-v1). Keep in sync with daemon-source.ts. */
-async function cmdTaskDirPrune(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+/**
+ * A finished task's clean clones and build output (task-dir-prune-v1), or with
+ * `buildsOnly` the build output alone of an idle task's directory, open or not
+ * (`taskdir.pruneBuilds`, task-dir-prune-builds-v1). Keep in sync with daemon-source.ts.
+ */
+async function cmdTaskDirPrune(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>, buildsOnly = false) {
   const ids = Array.isArray(cmd.taskIds) ? cmd.taskIds : []
-  const busy = (dir: string, taskId: string) => [...sessions.values()].some((s) =>
-    !s.exitedAt && (s.spawnInfo?.task === taskId || (typeof s.cwd === 'string' && (s.cwd === dir || s.cwd.startsWith(dir + path.sep)))))
+  const busy = taskDirBusy
   try {
-    const result = await pruneTaskDirs(TASK_DIR_ROOT, ids, { busy })
-    if (result.pruned.length > 0 || result.kept.length > 0) logMsg('info', 'task dirs pruned', { pruned: result.pruned, kept: result.kept })
+    const idleBefore = typeof cmd.idleBefore === 'number' && Number.isFinite(cmd.idleBefore) ? cmd.idleBefore : Date.now()
+    const result = buildsOnly
+      ? await pruneTaskBuilds(TASK_DIR_ROOT, ids, { busy, idleBefore })
+      : await pruneTaskDirs(TASK_DIR_ROOT, ids, { busy })
+    if (result.pruned.length > 0 || result.kept.length > 0) logMsg('info', buildsOnly ? 'task dir builds pruned' : 'task dirs pruned', { pruned: result.pruned, kept: result.kept })
     sendOk(ws, id, result)
   } catch (err) {
     sendError(ws, id, 'taskdir.prune failed: ' + (err as Error).message)

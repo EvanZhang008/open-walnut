@@ -65,3 +65,19 @@ export function taskDirPruneDays(env: Env): number {
   const n = Number(env.WALNUT_TASK_DIR_PRUNE_DAYS)
   return Number.isFinite(n) && n >= 0 ? n : TASK_DIR_PRUNE_DAYS
 }
+
+/**
+ * Days a task directory stays unused, whatever its task's phase, before the
+ * host drops its build output (task-dir-core.ts pruneTaskBuilds); 0 turns it
+ * off. An open task's next build reinstalls what it needs.
+ */
+export const TASK_DIR_BUILD_IDLE_DAYS = 2
+/** The same while this machine's disk is low (disk-watermark.ts warn or critical). */
+export const TASK_DIR_BUILD_IDLE_DAYS_LOW_DISK = 0.25
+
+export function taskDirBuildIdleDays(env: Env, lowDisk = false): number {
+  const raw = env.WALNUT_TASK_DIR_BUILD_IDLE_DAYS
+  const n = raw === undefined || raw === '' ? TASK_DIR_BUILD_IDLE_DAYS : Number(raw)
+  const days = Number.isFinite(n) && n >= 0 ? n : TASK_DIR_BUILD_IDLE_DAYS
+  return days > 0 && lowDisk ? Math.min(days, TASK_DIR_BUILD_IDLE_DAYS_LOW_DISK) : days
+}

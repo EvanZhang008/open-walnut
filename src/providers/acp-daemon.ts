@@ -47,6 +47,10 @@ const KILL_GRACE_MS = 750
 interface AcpWorkerEntry<W> {
   sid: string
   proc: ChildProcess
+  /** Where it was started (absent on a worker adopted from an older daemon): task directory cleanup keeps the folder it works in. */
+  cwd?: string
+  /** Its task's directory (WALNUT_TASK_DIR), kept whole while it runs even when it works in a shared checkout. */
+  taskDir?: string
   journalPath: string
   /** Byte offset up to which we've pushed journal lines to subscribers. */
   pushOffset: number
@@ -437,7 +441,7 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     let pushOffset = 0
     try { pushOffset = fs.statSync(journalPath).size } catch {}
     const entry: AcpWorkerEntry<W> = {
-      sid, proc, journalPath, pushOffset,
+      sid, proc, cwd, taskDir: env?.WALNUT_TASK_DIR || undefined, journalPath, pushOffset,
       subscribers: new Set([ws]),
       pendingRpc: new Map(),
       nextRpcId: 1,

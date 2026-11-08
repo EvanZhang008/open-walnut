@@ -452,6 +452,9 @@ export function createHostExec(deps: HostExecDeps) {
     kill: (req: { jobId?: unknown; taskId?: unknown }) => thrown<JobView>(stopJob(req)),
     list: async (req: { taskId?: unknown } = {}) => ({ jobs: list(req) }),
     running,
+    /** The running jobs' task and folder, read at once (task directory cleanup keeps what they work in). */
+    active: (): Array<{ taskId: string | null; cwd: string }> =>
+      [...jobs.values()].filter((j) => j.endedAt === null).map((j) => ({ taskId: j.taskId ?? null, cwd: j.cwd })),
   }
 }
 

@@ -29,7 +29,7 @@ import { TASK_DIR_MARKER, isTaskDirId, taskDirPath } from '../lib/task-dir.js'
 export { taskDirRoot, taskDirPath, isTaskDirId, TASK_DIR_MARKER } from '../lib/task-dir.js'
 
 /** `home` is the data home of the Walnut that first made it: a host two Walnuts share keeps each one's dirs apart. */
-interface Marker { taskId: string; home?: string; createdAt?: string; lastUsedAt?: string; prunedAt?: string }
+interface Marker { taskId: string; home?: string; createdAt?: string; lastUsedAt?: string; prunedAt?: string; buildsPrunedAt?: string }
 
 function readMarker(dir: string): Marker | null {
   try {
@@ -61,7 +61,7 @@ export function ensureTaskDir(root: string, taskId: unknown, home?: unknown, now
   }
 }
 
-export interface TaskDirEntry { taskId: string; path: string; home?: string; createdAt?: string; lastUsedAt?: string; prunedAt?: string; mtimeMs: number }
+export interface TaskDirEntry { taskId: string; path: string; home?: string; createdAt?: string; lastUsedAt?: string; prunedAt?: string; buildsPrunedAt?: string; mtimeMs: number }
 
 export async function listTaskDirs(root: string): Promise<TaskDirEntry[]> {
   let names: string[]
@@ -74,7 +74,7 @@ export async function listTaskDirs(root: string): Promise<TaskDirEntry[]> {
     if (!marker || marker.taskId !== name) continue
     let mtimeMs = 0
     try { mtimeMs = (await fsp.stat(dir)).mtimeMs } catch { continue }
-    out.push({ taskId: name, path: dir, home: marker.home, createdAt: marker.createdAt, lastUsedAt: marker.lastUsedAt, prunedAt: marker.prunedAt, mtimeMs })
+    out.push({ taskId: name, path: dir, home: marker.home, createdAt: marker.createdAt, lastUsedAt: marker.lastUsedAt, prunedAt: marker.prunedAt, buildsPrunedAt: marker.buildsPrunedAt, mtimeMs })
   }
   return out
 }
@@ -84,10 +84,25 @@ export type GitRunner = (cwd: string, args: string[]) => Promise<string>
 const GIT_TIMEOUT_MS = 20_000
 const MAX_REPOS = 40
 const MAX_DEPTH = 6
-const MAX_DIRS = 20_000
+// 2026-11-08: one test data home or one Xcode build tree held more than the old
+// 20,000, so the check gave up and a finished task's directory was never pruned.
+const MAX_DIRS = 100_000
 // Only names that can never hold a repo the session made; ignored dirs
 // (`build/`, `vendor/`, `.claude/worktrees/`) are walked like any other.
 const SKIP_DIRS = new Set(['node_modules', '.git'])
+
+/**
+ * An Xcode derived data folder under any name (`xcodebuild -derivedDataPath
+ * dd-queue`): a `Build` folder beside the module cache or the index. 2026-11-08:
+ * eight such folders held about 9 GB in task directories under names like
+ * `ios-final-derived-data`, and no rule knew them. Only the folders Xcode
+ * rebuilds inside it go (DERIVED_PARTS), never the folder itself: logs, notes
+ * or videos kept beside them stay.
+ */
+const isDerivedData = (entries: fs.Dirent[]): boolean =>
+  entries.some((e) => e.name === 'Build' && e.isDirectory())
+  && entries.some((e) => (e.name === 'ModuleCache.noindex' || e.name === 'Index.noindex') && e.isDirectory())
+const DERIVED_PARTS = new Set(['Build', 'ModuleCache.noindex', 'Index.noindex', 'CompilationCache.noindex', 'SDKStatCaches.noindex'])
 
 /** git with a clean env: an inherited GIT_DIR outranks cwd (src/lib/git-env.ts). */
 export const defaultGitRunner: GitRunner = (cwd, args) => new Promise((resolve, reject) => {
@@ -313,7 +328,7 @@ export async function removeTaskDirs(
 // already done, and the Mac fell under 25 GB free.
 
 /** Rebuildable wherever it is, when git does not track it. */
-const BUILD_DIRS = new Set(['node_modules', 'DerivedData', '.build', '.next', '.turbo'])
+const BUILD_DIRS = new Set(['node_modules', '.build', '.next', '.turbo'])
 /** Rebuildable only when the repo holding it ignores it: outside one (or unignored) a `dist/` or a test report is usually kept as evidence. */
 const IGNORED_BUILD_DIRS = new Set(['dist', 'playwright-report', 'test-results'])
 /** Ignored files a clean clone may hold and still go whole: build output and OS litter. Any other ignored file (an .env, local notes) keeps it. */
@@ -355,17 +370,121 @@ async function borrowedObjectDirs(root: string): Promise<Set<string> | null> {
   return out
 }
 
-/** Build output dirs under dir (not inside .git, not below another build dir, never through a symlink). */
-async function findBuildDirs(dir: string, depth: number, out: string[], budget: { dirs: number }): Promise<void> {
+/** Build output dirs under dir (not inside .git, not below another build dir, never through a symlink); `derived` collects the Xcode derived data folders found by their shape. */
+async function findBuildDirs(dir: string, depth: number, out: string[], budget: { dirs: number; partial?: boolean }, derived: Set<string>, read?: fs.Dirent[]): Promise<void> {
   if (depth > MAX_DEPTH + 2 || --budget.dirs < 0) return
   let entries: fs.Dirent[]
-  try { entries = await fsp.readdir(dir, { withFileTypes: true }) } catch { return }
+  if (read) entries = read
+  else try { entries = await fsp.readdir(dir, { withFileTypes: true }) } catch { budget.partial = true; return }
   for (const e of entries) {
     if (!e.isDirectory() || e.isSymbolicLink() || e.name === '.git') continue
     const p = path.join(dir, e.name)
-    if (BUILD_DIRS.has(e.name) || IGNORED_BUILD_DIRS.has(e.name)) out.push(p)
-    else await findBuildDirs(p, depth + 1, out, budget)
+    if (BUILD_DIRS.has(e.name) || IGNORED_BUILD_DIRS.has(e.name)) { out.push(p); continue }
+    // Deeper than the walk goes: unseen, so the round is not finished.
+    if (depth + 1 > MAX_DEPTH + 2) { budget.partial = true; continue }
+    let inner: fs.Dirent[]
+    try { inner = await fsp.readdir(p, { withFileTypes: true }) } catch { budget.partial = true; continue }
+    if (!inner.some((x) => x.name === '.git') && isDerivedData(inner)) {
+      for (const x of inner) if (x.isDirectory() && !x.isSymbolicLink() && DERIVED_PARTS.has(x.name)) { out.push(path.join(p, x.name)); derived.add(path.join(p, x.name)) }
+      continue
+    }
+    await findBuildDirs(p, depth + 1, out, budget, derived, inner)
   }
+}
+
+/**
+ * The nearest repo above a build folder, up to and including the task
+ * directory: its path, null when none holds it, 'unsure' when an ancestor is a
+ * bare repo or cannot be read. (Repos INSIDE the folder: scanBuild.)
+ */
+function repoHolding(build: string, top: string): string | null | 'unsure' {
+  for (let p = path.dirname(build); within(p, top); p = path.dirname(p)) {
+    let names: string[]
+    try { names = fs.readdirSync(p) } catch { return 'unsure' }
+    if (names.includes('.git')) return p
+    if (['HEAD', 'objects', 'refs'].every((n) => names.includes(n))) return 'unsure'
+    if (p === top) break
+  }
+  return null
+}
+
+const BUILD_SCAN_DIRS = 400_000
+const BUILD_SCAN_FILES = 2_000_000
+
+/**
+ * The whole build folder, walked before it may go: whether a repo (a `.git`,
+ * a bare repo) lives anywhere in it, the folder itself included (a clone kept
+ * in DerivedData or node_modules may hold work of its own: never removed);
+ * whether the walk saw everything (over budget or unreadable: asked again next
+ * round); and the newest time of anything in it.
+ */
+async function scanBuild(root: string): Promise<{ repo: boolean; complete: boolean; newest: number }> {
+  let dirs = BUILD_SCAN_DIRS
+  let files = BUILD_SCAN_FILES
+  let newest = 0
+  const stack = [root]
+  while (stack.length > 0) {
+    if (--dirs < 0) return { repo: false, complete: false, newest }
+    const d = stack.pop()!
+    let entries: fs.Dirent[]
+    try { entries = await fsp.readdir(d, { withFileTypes: true }); newest = Math.max(newest, fs.lstatSync(d).mtimeMs) } catch { return { repo: false, complete: false, newest } }
+    if (entries.some((e) => e.name === '.git')) return { repo: true, complete: true, newest }
+    if (['HEAD', 'objects', 'refs'].every((n) => entries.some((e) => e.name === n))) return { repo: true, complete: true, newest }
+    for (const e of entries) {
+      if (e.isDirectory() && !e.isSymbolicLink()) { stack.push(path.join(d, e.name)); continue }
+      // A file rewritten in place changes no folder's time.
+      if (--files < 0) return { repo: false, complete: false, newest }
+      try { newest = Math.max(newest, fs.lstatSync(path.join(d, e.name)).mtimeMs) } catch { /* gone meanwhile */ }
+    }
+    // Yield now and then: one walk can lstat a million files.
+    if (dirs % 2000 === 0) await new Promise((r) => setImmediate(r))
+  }
+  return { repo: false, complete: true, newest }
+}
+
+/** What runs on the host now: a live session, a running host command, an ACP worker. */
+export interface HostWork { task?: unknown; cwd?: unknown }
+
+/**
+ * Whether the task's directory is in use: work of the task itself, or work
+ * whose folder is the directory or inside it, comparing real paths (macOS
+ * /var is /private/var; a home reached through a link). The daemons' `busy`.
+ */
+export function taskDirInUse(dir: string, taskId: string, work: Iterable<HostWork>): boolean {
+  let realDir: string | undefined
+  for (const w of work) {
+    if (w.task === taskId) return true
+    if (typeof w.cwd !== 'string' || !w.cwd) continue
+    realDir ??= real(dir)
+    if (within(real(w.cwd), realDir)) return true
+  }
+  return false
+}
+
+/** The newest change time of a folder and its direct entries (a build folder that something is writing into reads new). */
+function newestMtime(dir: string): number {
+  let newest = 0
+  try {
+    newest = fs.lstatSync(dir).mtimeMs
+    let n = 0
+    for (const name of fs.readdirSync(dir)) {
+      if (++n > 5000) break
+      try { newest = Math.max(newest, fs.lstatSync(path.join(dir, name)).mtimeMs) } catch { /* gone meanwhile */ }
+    }
+  } catch { return Number.POSITIVE_INFINITY }
+  return newest
+}
+
+export interface PruneOptions {
+  busy?: (dir: string, taskId: string) => boolean
+  git?: GitRunner
+  volatile?: string[]
+  now?: Date
+  dryRun?: boolean
+  /** Only build output, never a repo, and the marker records `buildsPrunedAt` (pruneTaskBuilds). */
+  buildsOnly?: boolean
+  /** Keep a build folder that it, any folder inside it, its parent or a direct entry of those changed at or after this time (ms). */
+  idleBefore?: number
 }
 
 /**
@@ -374,11 +493,7 @@ async function findBuildDirs(dir: string, depth: number, out: string[], budget: 
  * objects from, never tracked files. The directory's mtime is put back, so
  * pruning does not count as a use, and the marker records `prunedAt`.
  */
-export async function pruneTaskDirs(
-  root: string,
-  items: unknown[],
-  opts: { busy?: (dir: string, taskId: string) => boolean; git?: GitRunner; volatile?: string[]; now?: Date; dryRun?: boolean } = {},
-): Promise<PruneResult> {
+export async function pruneTaskDirs(root: string, items: unknown[], opts: PruneOptions = {}): Promise<PruneResult> {
   const res: PruneResult = { pruned: [], kept: [], missing: [] }
   const realRoot = path.resolve(root)
   if (realRoot.split(path.sep).filter(Boolean).length < 2) return res
@@ -400,14 +515,13 @@ export async function pruneTaskDirs(
       return !Number.isFinite(last) || last <= usedBefore
     }
     if (!unused()) { res.kept.push({ taskId: id, reasons: ['a live session works in it'] }); continue }
-    if (borrowed === undefined) borrowed = await borrowedObjectDirs(realRoot)
-    if (borrowed === null) { res.kept.push({ taskId: id, reasons: ['could not check which repos borrow objects'] }); continue }
+    if (!opts.buildsOnly && borrowed === undefined) borrowed = await borrowedObjectDirs(realRoot)
+    if (!opts.buildsOnly && !borrowed) { res.kept.push({ taskId: id, reasons: ['could not check which repos borrow objects'] }); continue }
     let before: fs.Stats | null = null
     try { before = fs.statSync(dir) } catch { /* gone */ }
     const done = { taskId: id, repos: [] as string[], builds: [] as string[] }
     const repos: FoundRepo[] = []
-    // A repo the walk missed would make its build dirs look like loose output: no build pruning then.
-    const sawAll = await findRepos(dir, 0, repos, { dirs: MAX_DIRS }) && repos.length <= MAX_REPOS
+    if (!opts.buildsOnly) await findRepos(dir, 0, repos, { dirs: MAX_DIRS })
     const top = repos.filter((r) => r.dir !== dir && !repos.some((o) => o !== r && within(r.dir, o.dir) && o.dir !== r.dir))
     for (const repo of top) {
       const { reasons, worktreeOwners } = await inspectTaskDir(repo.dir, git, { root: realRoot, volatile: opts.volatile })
@@ -420,7 +534,7 @@ export async function pruneTaskDirs(
       } catch { continue }
       let objects = ''
       try { objects = real(path.resolve(repo.dir, (await git(repo.dir, ['rev-parse', '--git-path', 'objects'])).trim())) } catch { continue }
-      if ([...borrowed].some((b) => within(b, real(repo.dir)) || b === objects)) continue
+      if ([...borrowed!].some((b) => within(b, real(repo.dir)) || b === objects)) continue
       if (!unused()) break
       try {
         if (!opts.dryRun) await fsp.rm(repo.dir, { recursive: true, force: true })
@@ -429,26 +543,71 @@ export async function pruneTaskDirs(
       } catch { /* left for the whole-directory removal */ }
     }
     const builds: string[] = []
-    if (sawAll) await findBuildDirs(dir, 0, builds, { dirs: MAX_DIRS })
+    const derived = new Set<string>()
+    // Each build folder's repo is read from its own ancestors, so a tree too big or too deep
+    // for the repo walk (a copied source tree, a test data home) still has its build output
+    // judged (2026-11-08: every large directory on the Mac had `sawAll` false and kept all of it).
+    const budget: { dirs: number; partial?: boolean } = { dirs: MAX_DIRS }
+    await findBuildDirs(dir, 0, builds, budget, derived)
+    // A round that left something for later is not a finished one: the marker is not stamped.
+    let deferred = budget.dirs < 0 || budget.partial === true
+    // The folder holding a build folder (a clone, a copied tree, a derived data folder) counts too:
+    // tests writing their reports beside node_modules mean someone works there.
+    // `fresh` also reads the time of everything inside the folder (the walk below): a build
+    // something wrote into lately is someone's.
+    const fresh = (b: string, newest = 0) => opts.idleBefore !== undefined
+      && Math.max(newest, newestMtime(b), newestMtime(path.dirname(b))) >= opts.idleBefore
     for (const b of builds) {
       if (!fs.existsSync(b) || !unused()) continue
-      const holder = repos.filter((r) => fs.existsSync(r.dir) && within(b, r.dir)).sort((x, y) => y.dir.length - x.dir.length)[0]
+      if (fresh(b)) { deferred = true; continue }
+      const holder = repoHolding(b, dir)
+      // Could not tell: try again next round.
+      if (holder === 'unsure') { deferred = true; continue }
       if (holder) {
-        const rel = path.relative(holder.dir, b)
-        try { if ((await git(holder.dir, ['ls-files', '-z', '--', rel])).length > 0) continue } catch { continue }
+        const rel = path.relative(holder, b)
+        try { if ((await git(holder, ['ls-files', '-z', '--', rel])).length > 0) continue } catch { deferred = true; continue }
         if (IGNORED_BUILD_DIRS.has(path.basename(b))) {
-          try { await git(holder.dir, ['check-ignore', '-q', '--', rel]) } catch { continue }
+          // check-ignore exits 1 for "not ignored" (kept for good) and 128 on an error (asked again).
+          try { await git(holder, ['check-ignore', '-q', '--', rel]) } catch (err) { if ((err as { code?: unknown }).code !== 1) deferred = true; continue }
         }
-      } else if (!BUILD_DIRS.has(path.basename(b))) continue
+      } else if (!BUILD_DIRS.has(path.basename(b)) && !derived.has(b)) continue
       if (opts.dryRun && done.repos.some((r) => within(b, path.join(dir, r)))) continue
-      try { if (!opts.dryRun) await fsp.rm(b, { recursive: true, force: true }); done.builds.push(path.relative(dir, b)) } catch { /* next round */ }
+      const scan = await scanBuild(b)
+      if (scan.repo) continue
+      if (!scan.complete) { deferred = true; continue }
+      // The checks above awaited git and a walk: a session that started meanwhile, or a write into the folder, wins.
+      if (!unused()) { deferred = true; break }
+      if (fresh(b, scan.newest)) { deferred = true; continue }
+      try {
+        if (!opts.dryRun) {
+          // Put the parent's time back: a removal is not a use, and a sibling build folder judged next must not read new.
+          let parent: fs.Stats | null = null
+          try { parent = fs.statSync(path.dirname(b)) } catch { /* gone */ }
+          await fsp.rm(b, { recursive: true, force: true })
+          if (parent) try { fs.utimesSync(path.dirname(b), parent.atime, parent.mtime) } catch { /* left new: the next round waits */ }
+        }
+        done.builds.push(path.relative(dir, b))
+      } catch { deferred = true }
     }
     if (!opts.dryRun) try {
       const m = readMarker(dir)
-      if (m) fs.writeFileSync(path.join(dir, TASK_DIR_MARKER), JSON.stringify({ ...m, prunedAt: (opts.now ?? new Date()).toISOString() }) + '\n', { mode: 0o600 })
+      const at = (opts.now ?? new Date()).toISOString()
+      const stamp = opts.buildsOnly ? (deferred ? {} : { buildsPrunedAt: at }) : { prunedAt: at }
+      if (m && Object.keys(stamp).length > 0) fs.writeFileSync(path.join(dir, TASK_DIR_MARKER), JSON.stringify({ ...m, ...stamp }) + '\n', { mode: 0o600 })
       if (before) fs.utimesSync(dir, before.atime, before.mtime)
     } catch { /* the next sweep prunes again */ }
     res.pruned.push(done)
   }
   return res
+}
+
+/**
+ * The build output alone of directories whose task may still be open
+ * (task-dir-prune-builds-v1): every repo, file and evidence stays, and so does
+ * a build folder that changed after `idleBefore`. 2026-11-08: open tasks (leads,
+ * long reviews, tasks waiting for days) held 70 of 74 GB of task directories,
+ * and only a finished task was ever pruned, so the Mac filled to 99%.
+ */
+export function pruneTaskBuilds(root: string, items: unknown[], opts: Omit<PruneOptions, 'buildsOnly'> = {}): Promise<PruneResult> {
+  return pruneTaskDirs(root, items, { ...opts, buildsOnly: true })
 }

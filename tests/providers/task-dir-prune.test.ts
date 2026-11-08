@@ -13,7 +13,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { ensureTaskDir, listTaskDirs, pruneTaskDirs } from '../../src/providers/task-dir-core.js'
+import { ensureTaskDir, listTaskDirs, pruneTaskBuilds, pruneTaskDirs, removeTaskDirs, taskDirInUse } from '../../src/providers/task-dir-core.js'
 
 let tmp = ''
 let root = ''
@@ -139,7 +139,7 @@ describe('pruneTaskDirs', { timeout: 180_000 }, () => {
     expect(git(path.join(b, 'objects', 'borrower'), 'log', '-1', '--format=%s').trim()).toBe('seed')
   })
 
-  it('prunes no build output when the repo walk could not see every repo', async () => {
+  it('keeps build output a repo deeper than the repo walk reaches tracks, and prunes an untracked one there', async () => {
     const dir = ensureTaskDir(root, 'done')!
     const deep = path.join(dir, 'a', 'b', 'c', 'd', 'e', 'f', 'g')
     fs.mkdirSync(deep, { recursive: true })
@@ -148,9 +148,32 @@ describe('pruneTaskDirs', { timeout: 180_000 }, () => {
     git(deep, 'add', '-f', '.')
     git(deep, 'commit', '-qm', 'vendored deps')
     write(path.join(deep, 'node_modules', 'x', 'i.js'), 'edited\n')
+    write(path.join(deep, 'web', 'node_modules', 'y', 'i.js'))
     const res = await pruneTaskDirs(root, ['done'])
-    expect(res.pruned[0].builds).toEqual([])
+    expect(res.pruned[0].builds).toEqual(['a/b/c/d/e/f/g/web/node_modules'])
     expect(fs.readFileSync(path.join(deep, 'node_modules', 'x', 'i.js'), 'utf8')).toBe('edited\n')
+  })
+
+  // 2026-11-08: a copied source tree (no .git) deeper than the repo walk made every large
+  // directory on the Mac read as "could not see everything", so none lost any build output.
+  it('a deep tree with no repo beside the build output does not stop the pruning', async () => {
+    const dir = ensureTaskDir(root, 'done')!
+    fs.mkdirSync(path.join(dir, 'verify-v18', 'web', 'src', 'components', 'settings', 'sections', 'deeper', 'still'), { recursive: true })
+    write(path.join(dir, 'verify-v18', 'node_modules', 'pkg', 'i.js'))
+    write(path.join(dir, 'verify-v18', 'web', 'src', 'App.tsx'), 'source\n')
+    write(path.join(dir, 'verify-v18', 'package.json'), '{}\n')
+    write(path.join(dir, 'verify-v18', 'dist', 'cli.js')) // maybe the copy's only code (a package unpacked from npm): stays
+    write(path.join(dir, 'download', 'dist', 'release.tgz')) // no package.json: maybe evidence
+    const nested = path.join(dir, 'node-modules-repo', 'node_modules')
+    fs.mkdirSync(nested, { recursive: true })
+    git(nested, 'init', '-q') // a repo that happens to be named node_modules is never build output
+    write(path.join(nested, 'own.txt'))
+    const res = await pruneTaskBuilds(root, ['done'])
+    expect(res.pruned[0].builds.sort()).toEqual(['verify-v18/node_modules'])
+    expect(fs.existsSync(path.join(dir, 'verify-v18', 'dist', 'cli.js'))).toBe(true)
+    expect(fs.existsSync(path.join(dir, 'download', 'dist', 'release.tgz'))).toBe(true)
+    expect(fs.readFileSync(path.join(dir, 'verify-v18', 'web', 'src', 'App.tsx'), 'utf8')).toBe('source\n')
+    expect(fs.existsSync(path.join(nested, 'own.txt'))).toBe(true)
   })
 
   it('touches nothing in a directory a live session works in, or one used since the server looked', async () => {
@@ -186,5 +209,225 @@ describe('pruneTaskDirs', { timeout: 180_000 }, () => {
     expect(res.pruned.map((p) => p.repos)).toEqual([[]])
     expect(res.missing).toEqual(['nomarker'])
     expect(await pruneTaskDirs('/tmp', ['self'])).toEqual({ pruned: [], kept: [], missing: [] })
+  })
+})
+
+/** An Xcode derived data folder as `xcodebuild -derivedDataPath <dir>` leaves it. */
+function derivedData(dir: string) {
+  write(path.join(dir, 'Build', 'Products', 'Debug-iphonesimulator', 'App.app', 'App'))
+  write(path.join(dir, 'ModuleCache.noindex', 'Session.modulevalidation'))
+  write(path.join(dir, 'Logs', 'Build', 'LogStoreManifest.plist'))
+  write(path.join(dir, 'info.plist'))
+}
+
+/** The folder and everything in it, last changed long ago. */
+const old = (p: string, t = new Date('2026-10-01T00:00:00Z')) => {
+  if (fs.lstatSync(p).isDirectory()) for (const n of fs.readdirSync(p)) old(path.join(p, n), t)
+  fs.utimesSync(p, t, t)
+}
+
+describe('pruneTaskBuilds (an idle task, open or not)', { timeout: 180_000 }, () => {
+  it('takes only build output: clones, work, evidence and the marker\'s prunedAt stay', async () => {
+    const dir = ensureTaskDir(root, 'open', '/data/home', new Date('2026-10-20T00:00:00Z'))!
+    const clean = cloneInto(dir, 'clean', { '.gitignore': 'dist/\n' })
+    write(path.join(clean, 'node_modules', 'pkg', 'index.js'))
+    write(path.join(clean, 'dist', 'cli.js'))
+    const wip = cloneInto(dir, 'wip')
+    write(path.join(wip, 'a.txt'), 'changed\n')
+    write(path.join(wip, 'web', 'node_modules', 'x', 'y.js'))
+    derivedData(path.join(dir, 'ios-final-derived-data'))
+    derivedData(path.join(wip, 'dd-queue')) // untracked inside a repo
+    write(path.join(dir, 'evidence', 'shot.png'))
+    write(path.join(dir, 'home', 'notes', 'n.md'))
+    for (const b of [path.join(clean, 'node_modules'), path.join(clean, 'dist'), path.join(wip, 'web', 'node_modules'), ...['Build', 'ModuleCache.noindex'].flatMap((n) => [path.join(dir, 'ios-final-derived-data', n), path.join(wip, 'dd-queue', n)])]) old(b)
+    for (const p of [clean, path.join(wip, 'web'), path.join(dir, 'ios-final-derived-data'), path.join(wip, 'dd-queue')]) old(p)
+
+    const res = await pruneTaskBuilds(root, ['open'], { now: new Date('2026-10-23T00:00:00Z'), idleBefore: Date.parse('2026-10-21T00:00:00Z') })
+    expect(res.kept).toEqual([])
+    expect(res.pruned[0].repos).toEqual([])
+    expect(res.pruned[0].builds.sort()).toEqual(['clean/dist', 'clean/node_modules', 'ios-final-derived-data/Build', 'ios-final-derived-data/ModuleCache.noindex', 'wip/dd-queue/Build', 'wip/dd-queue/ModuleCache.noindex', 'wip/web/node_modules'])
+    // Xcode's own logs and anything kept beside the build stay: only what Xcode rebuilds goes.
+    expect(fs.existsSync(path.join(dir, 'ios-final-derived-data', 'Logs', 'Build', 'LogStoreManifest.plist'))).toBe(true)
+    expect(git(clean, 'log', '-1', '--format=%s').trim()).toBe('seed')
+    expect(fs.readFileSync(path.join(wip, 'a.txt'), 'utf8')).toBe('changed\n')
+    expect(fs.existsSync(path.join(dir, 'evidence', 'shot.png'))).toBe(true)
+    expect(fs.existsSync(path.join(dir, 'home', 'notes', 'n.md'))).toBe(true)
+    const [entry] = await listTaskDirs(root)
+    expect(entry.buildsPrunedAt).toBe('2026-10-23T00:00:00.000Z')
+    expect(entry.prunedAt).toBeUndefined()
+  })
+
+  it('keeps a build folder written after idleBefore, a tracked derived-data-shaped folder, and anything a live session works in', async () => {
+    const dir = ensureTaskDir(root, 'open')!
+    const repo = cloneInto(dir, 'repo', { 'fixtures/dd/Build/x.txt': 'tracked\n', 'fixtures/dd/ModuleCache.noindex/y.txt': 'tracked\n' })
+    write(path.join(repo, 'node_modules', 'fresh', 'index.js')) // mtime now
+    old(path.join(repo, 'fixtures', 'dd'))
+    const res = await pruneTaskBuilds(root, ['open'], { idleBefore: Date.now() - 3_600_000 })
+    expect(res.pruned[0].builds).toEqual([])
+    expect(fs.existsSync(path.join(repo, 'node_modules', 'fresh', 'index.js'))).toBe(true)
+    expect(fs.readFileSync(path.join(repo, 'fixtures', 'dd', 'Build', 'x.txt'), 'utf8')).toBe('tracked\n')
+
+    old(path.join(repo, 'node_modules'))
+    const busy = await pruneTaskBuilds(root, ['open'], { busy: () => true, idleBefore: Date.now() })
+    expect(busy.kept).toEqual([{ taskId: 'open', reasons: ['a live session works in it'] }])
+    expect(fs.existsSync(path.join(repo, 'node_modules'))).toBe(true)
+  })
+
+  it('a derived data folder with tens of thousands of folders does not make the walk give up', async () => {
+    const dir = ensureTaskDir(root, 'done')!
+    const dd = path.join(dir, 'local-runs', 'DerivedData-queue')
+    derivedData(dd)
+    for (let i = 0; i < 260; i++) for (let j = 0; j < 100; j++) fs.mkdirSync(path.join(dd, 'Build', 'Intermediates.noindex', `t${i}`, `o${j}`), { recursive: true })
+    write(path.join(dir, 'node_modules', 'x.js'))
+    const res = await pruneTaskDirs(root, ['done'])
+    expect(res.pruned[0].builds.sort()).toEqual(['local-runs/DerivedData-queue/Build', 'local-runs/DerivedData-queue/ModuleCache.noindex', 'node_modules'])
+    expect(fs.existsSync(path.join(dd, 'Build'))).toBe(false)
+  })
+
+  // The review of 2026-11-08 (each case deleted unique work in the first draft of this change).
+  it('never removes a build folder that holds a repo, or is a bare one', async () => {
+    const dir = ensureTaskDir(root, 'open')!
+    const capture = path.join(dir, 'capture')
+    derivedData(capture)
+    const custom = path.join(capture, 'Build', 'custom')
+    fs.mkdirSync(custom, { recursive: true })
+    git(custom, 'init', '-q')
+    write(path.join(custom, 'only-here.swift'), 'unique\n')
+    git(custom, 'add', '.')
+    git(custom, 'commit', '-qm', 'only here')
+    write(path.join(capture, 'review.md'), '# notes\n')
+    const bare = path.join(dir, 'DerivedData')
+    fs.mkdirSync(bare)
+    git(bare, 'init', '--bare', '-q')
+    write(path.join(dir, 'node_modules', 'dep', '.git', 'HEAD'), 'ref: refs/heads/main\n') // a git checkout of a dependency
+    const res = await pruneTaskBuilds(root, ['open'])
+    expect(res.pruned[0].builds).toEqual(['capture/ModuleCache.noindex'])
+    expect(git(custom, 'log', '-1', '--format=%s').trim()).toBe('only here')
+    expect(fs.readFileSync(path.join(capture, 'review.md'), 'utf8')).toBe('# notes\n')
+    expect(fs.existsSync(path.join(bare, 'HEAD'))).toBe(true)
+    expect(fs.existsSync(path.join(dir, 'node_modules', 'dep', '.git', 'HEAD'))).toBe(true)
+  })
+
+  it('a session that starts while the checks run keeps the folder', async () => {
+    const dir = ensureTaskDir(root, 'open')!
+    const repo = cloneInto(dir, 'repo')
+    write(path.join(repo, 'node_modules', 'x.js'))
+    let started = false
+    const slowGit = async (cwd: string, args: string[]) => {
+      if (args[0] === 'ls-files') started = true // the session starts during this await
+      return git(cwd, ...args)
+    }
+    const res = await pruneTaskBuilds(root, ['open'], { git: slowGit, busy: () => started })
+    expect(res.pruned[0].builds).toEqual([])
+    expect(fs.existsSync(path.join(repo, 'node_modules', 'x.js'))).toBe(true)
+    const [entry] = await listTaskDirs(root)
+    expect(entry.buildsPrunedAt).toBeUndefined()
+  })
+
+  it('output left for being too new is not stamped done, so a later round takes it', async () => {
+    const dir = ensureTaskDir(root, 'open')!
+    write(path.join(dir, 'node_modules', 'x.js')) // written now
+    const first = await pruneTaskBuilds(root, ['open'], { idleBefore: Date.now() - 3_600_000 })
+    expect(first.pruned[0].builds).toEqual([])
+    expect((await listTaskDirs(root))[0].buildsPrunedAt).toBeUndefined()
+    const later = await pruneTaskBuilds(root, ['open'], { idleBefore: Date.now() + 60_000 })
+    expect(later.pruned[0].builds).toEqual(['node_modules'])
+    expect((await listTaskDirs(root))[0].buildsPrunedAt).toEqual(expect.any(String))
+  })
+
+  it('the whole-directory removal still sees a repo inside build-named folders', async () => {
+    const dir = ensureTaskDir(root, 'done')!
+    const editable = path.join(dir, '.build', 'editable')
+    fs.mkdirSync(editable, { recursive: true })
+    git(editable, 'init', '-q')
+    write(path.join(editable, 'a.txt'))
+    git(editable, 'add', '.')
+    git(editable, 'commit', '-qm', 'unique')
+    const dd = path.join(dir, 'dd')
+    derivedData(dd)
+    const inDd = path.join(dd, 'SourcePackages', 'mine')
+    fs.mkdirSync(inDd, { recursive: true })
+    git(inDd, 'init', '-q')
+    write(path.join(inDd, 'b.txt'))
+    const res = await removeTaskDirs(root, ['done'])
+    expect(res.removed).toEqual([])
+    expect(res.kept[0].reasons.join(' ')).toMatch(/\.build\/editable: commits not on any remote/)
+    expect(res.kept[0].reasons.join(' ')).toMatch(/dd\/SourcePackages\/mine: uncommitted or untracked files/)
+  })
+
+  // Round 2 of the 2026-11-08 review: Xcode's default name holds its logs and other
+  // projects' folders, so only Xcode's own rebuildable parts go.
+  it('a folder named DerivedData keeps its logs: only each project\'s Build and caches go', async () => {
+    const dir = ensureTaskDir(root, 'done')!
+    const proj = path.join(dir, 'DerivedData', 'Walnut-abcdef')
+    derivedData(proj)
+    write(path.join(dir, 'DerivedData', 'notes.md'), 'kept\n')
+    const res = await pruneTaskBuilds(root, ['done'])
+    expect(res.pruned[0].builds.sort()).toEqual(['DerivedData/Walnut-abcdef/Build', 'DerivedData/Walnut-abcdef/ModuleCache.noindex'])
+    expect(fs.existsSync(path.join(proj, 'Logs', 'Build', 'LogStoreManifest.plist'))).toBe(true)
+    expect(fs.readFileSync(path.join(dir, 'DerivedData', 'notes.md'), 'utf8')).toBe('kept\n')
+  })
+
+  it('a deep write inside a build folder keeps it', async () => {
+    const dir = ensureTaskDir(root, 'open')!
+    write(path.join(dir, 'node_modules', 'a', 'b', 'c', 'x.js'))
+    old(path.join(dir, 'node_modules'))
+    write(path.join(dir, 'node_modules', 'a', 'b', 'c', 'new.js')) // c's time is now, the rest is old
+    const res = await pruneTaskBuilds(root, ['open'], { idleBefore: Date.now() - 3_600_000 })
+    expect(res.pruned[0].builds).toEqual([])
+    expect((await listTaskDirs(root))[0].buildsPrunedAt).toBeUndefined()
+  })
+
+  it('a file rewritten in place inside a build folder keeps it', async () => {
+    const dir = ensureTaskDir(root, 'open')!
+    const f = path.join(dir, 'copy', 'node_modules', 'a', 'b', 'c', 'existing.js')
+    write(f)
+    old(path.join(dir, 'copy'))
+    fs.writeFileSync(f, 'rewritten\n') // the file's time moves, no folder's does
+    const res = await pruneTaskBuilds(root, ['open'], { idleBefore: Date.now() - 3_600_000 })
+    expect(res.pruned[0].builds).toEqual([])
+    expect(fs.existsSync(f)).toBe(true)
+  })
+
+  it('build output deeper than the walk goes leaves the round unstamped', async () => {
+    const dir = ensureTaskDir(root, 'open')!
+    const deep = path.join(dir, ...Array.from({ length: 10 }, (_, i) => `level${i}`), 'node_modules')
+    write(path.join(deep, 'x.js'))
+    const res = await pruneTaskBuilds(root, ['open'])
+    expect(res.pruned[0].builds).toEqual([])
+    expect((await listTaskDirs(root))[0].buildsPrunedAt).toBeUndefined()
+  })
+
+  it('a check that could not finish leaves the round unstamped, so it is asked again', async () => {
+    const dir = ensureTaskDir(root, 'open')!
+    const repo = cloneInto(dir, 'repo')
+    write(path.join(repo, 'node_modules', 'x.js'))
+    const failingGit = async (_cwd: string, args: string[]) => { if (args[0] === 'ls-files') throw Object.assign(new Error('timed out'), { code: null }); return '' }
+    const res = await pruneTaskBuilds(root, ['open'], { git: failingGit })
+    expect(res.pruned[0].builds).toEqual([])
+    expect((await listTaskDirs(root))[0].buildsPrunedAt).toBeUndefined()
+    // A folder it cannot read: the same.
+    const locked = path.join(dir, 'locked')
+    write(path.join(locked, 'node_modules', 'y.js'))
+    fs.chmodSync(locked, 0o000)
+    try {
+      if (process.getuid?.() !== 0) {
+        const again = await pruneTaskBuilds(root, ['open'])
+        expect(again.pruned[0].builds).toEqual(['repo/node_modules'])
+        expect((await listTaskDirs(root))[0].buildsPrunedAt).toBeUndefined()
+      }
+    } finally { fs.chmodSync(locked, 0o755) }
+  })
+
+  // 2026-11-08: a cleanup pass took a running simulator check's Walnut.app. The task's
+  // commands ran through host_exec, and the daemon counted only its sessions, by string.
+  it('a task directory is in use for work of the task, or work in it reached through another path', () => {
+    const dir = ensureTaskDir(root, 'live')!
+    const alias = path.join(tmp, 'alias')
+    fs.symlinkSync(root, alias)
+    fs.mkdirSync(path.join(dir, 'verify'), { recursive: true })
+    expect(taskDirInUse(dir, 'live', [{ task: 'live', cwd: '/elsewhere' }])).toBe(true) // a session or a host command of the task
+    expect(taskDirInUse(dir, 'live', [{ cwd: path.join(alias, 'live', 'verify') }])).toBe(true) // another task's host command, via a link
+    expect(taskDirInUse(dir, 'live', [{ cwd: dir + '-other' }, { task: 'other', cwd: '/elsewhere' }, { cwd: undefined }])).toBe(false)
   })
 })

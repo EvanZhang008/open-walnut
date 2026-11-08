@@ -491,6 +491,14 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // (task-dir-core.ts pruneTaskDirs). Sidecar-gated in the source twin. Optional:
   // without it a finished task's directory keeps its clones until it is removed.
   'task-dir-prune-v1',
+  // 'task-dir-prune-builds-v1' — `taskdir.pruneBuilds {taskIds, idleBefore}`: the
+  // build output alone (node_modules, derived data under any name, ignored dist)
+  // of a directory unused for days, whatever its task's phase; no repo, file or
+  // evidence goes, nor a build folder changed after idleBefore (task-dir-core.ts
+  // pruneTaskBuilds). A new command, never a flag on taskdir.prune: an older
+  // daemon refuses it instead of reading it as a full prune of an open task.
+  // Sidecar-gated in the source twin.
+  'task-dir-prune-builds-v1',
   // 'host-exec-v1' — a command for a task on another host (host-exec-core.ts):
   // `exec.run {jobId, taskId, command | argv, cwd, timeoutMs, background}` runs it
   // under the user's login shell (its process group killed at the deadline: 10 min,
