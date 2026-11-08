@@ -209,7 +209,11 @@ job_log_rest() { # $1 = host, $2 = job id, $3 = bytes already read, $4 = local l
   done
 }
 
-# The Macs to try, best first: connected, tagged ios, under the load line, with free CPU.
+# The Macs to try, best first: connected, tagged ios, under the load line, with free CPU. A Mac over
+# the line with free CPU is tried after those: host_load reads its whole load, and the Mac's own
+# check (remote-run.sh) counts only the share our work holds (scripts/lib/own-load.sh; 2026-11-08,
+# a call app and security agents held this Mac's load at 40 to 80 for hours with a third of the CPU
+# idle, so no fleet run could pick it).
 candidates() {
   local hosts loads
   hosts=$(op_again host_list '{}') || return 1
@@ -241,12 +245,18 @@ for h in hosts:
     note = f"{h['label']} ({h['host']}): " + (f"load {per} per CPU" if per is not None else "load unknown")
     if idle is not None:
         note += f", {round(idle)}% CPU idle" + (f" ({free} cores)" if l.get("cpus") else "")
-    if per is None or per > cap:
-        print("SKIP\t" + note + (f", over {cap:g} per CPU" if per is not None else ""), file=sys.stderr); continue
+    if per is None:
+        print("SKIP\t" + note, file=sys.stderr); continue
     if idle is not None and idle < min_idle:
         print("SKIP\t" + note + f", under {min_idle:g}% idle", file=sys.stderr); continue
-    # Most free cores first; a Mac whose idle CPU did not come back after those, least loaded first.
-    rows.append(((free is None, -(free or 0), per), h["host"], note))
+    over = per > cap
+    if over and idle is None:
+        print("SKIP\t" + note + f", over {cap:g} per CPU", file=sys.stderr); continue
+    if over:
+        note += f", over {cap:g} per CPU: tried after the others, its own check counts our share of its load"
+    # Under the line first; then most free cores; a Mac whose idle CPU did not come back after
+    # those, least loaded first.
+    rows.append(((over, free is None, -(free or 0), per), h["host"], note))
 # Every other Mac first; this Walnut's own Mac only after them.
 others = [r for r in rows if r[1] != "__local__"]
 for per, host, note in sorted(rows, key=lambda r: (r[1] == "__local__", r[0])):

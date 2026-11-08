@@ -16,7 +16,8 @@
 #   WALNUT_HEAVY_SLOT=<script>    the heavy-slot wrapper (default $HOME/tmp-evidence/heavy-slot.sh); missing: the run fails
 #   WALNUT_LARGE_RUN_MIN_IDLE=<p> wait while under p percent of the CPU is idle (default 20), at most 20 min
 #   WALNUT_LARGE_RUN_MAX_LOAD=<n> wait while the 1 min load is above n (default: 2 per core, the load
-#                                 watchdog's line, checked first; free CPU is only an extra condition),
+#                                 watchdog's line, checked first; free CPU is only an extra condition;
+#                                 on macOS the share our own processes hold, scripts/lib/own-load.sh),
 #                                 and on macOS while memory is tight (the machine gates' rule)
 #
 # Before it starts: the wp-ref-lint (every WPn mention names its owner), bun is
@@ -69,6 +70,8 @@ find_bun() {
 
 cores() { sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4; }
 load1() { sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}' || awk '{print $1}' /proc/loadavg; }
+# shellcheck source=../../scripts/lib/own-load.sh
+. "$ROOT/scripts/lib/own-load.sh"
 # Idle CPU percent over 5 seconds (iostat on macOS, /proc/stat on Linux); nothing when unreadable.
 idle_pct() {
   if [[ -r /proc/stat ]]; then
@@ -119,8 +122,9 @@ min_idle="${WALNUT_LARGE_RUN_MIN_IDLE:-20}"
 waited=0
 while :; do
   l="$(load1)"; i="$(idle_pct)"
+  own_load "$l" 1 "$max_load"; l=$OWN_LOAD   # one "CPU": max_load is already the whole line
   why=""
-  if ! awk -v l="$l" -v m="$max_load" 'BEGIN { exit !(l <= m) }'; then why="load $l above $max_load"
+  if ! awk -v l="$l" -v m="$max_load" 'BEGIN { exit !(l <= m) }'; then why="load $l above $max_load${OWN_LOAD_NOTE:+ (our share; $OWN_LOAD_NOTE)}"
   elif [[ -n "$(mem_tight)" ]]; then why="$(mem_tight)"
   elif [[ -n "$i" ]] && awk -v i="$i" -v m="$min_idle" 'BEGIN { exit !(i < m) }'; then why="only ${i}% of the CPU idle, under ${min_idle}%"
   fi

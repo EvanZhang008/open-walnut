@@ -30,7 +30,7 @@ import {
   type Memory,
   capacityVerdict,
   cpuIdlePct,
-  loadPerCore,
+  ownLoadPerCore,
   MAX_LOAD_PER_CORE,
   MIN_IDLE_PCT,
   pctFromEnv,
@@ -138,10 +138,10 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 async function capacity(): Promise<Capacity> {
   const cores = Math.max(1, os.cpus().length)
   let idlePct: number | null = null
-  let perCore = 0
+  let load: { perCore: number; rawPerCore?: number } = { perCore: 0 }
   try {
     idlePct = await cpuIdlePct(2_000)
-    perCore = loadPerCore()
+    load = ownLoadPerCore(undefined, MAX_LOAD > 0 ? MAX_LOAD / cores : MAX_LOAD_PER_CORE)
   } catch {
     /* fail open */
   }
@@ -151,7 +151,7 @@ async function capacity(): Promise<Capacity> {
   } catch {
     /* fail open */
   }
-  return { idlePct, loadPerCore: perCore, cores, memory }
+  return { idlePct, loadPerCore: load.perCore, rawLoadPerCore: load.rawPerCore, cores, memory }
 }
 
 /** Wait for the machine itself to calm down before starting a run. */

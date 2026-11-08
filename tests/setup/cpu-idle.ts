@@ -13,6 +13,13 @@
  * core (28 on 14 cores, the load watchdog's line), memory is not tight, and enough CPU is
  * idle, the same rule as lane B's machine-gate.sh.
  *
+ * The load line is the load of our own work (2026-11-08: lane B and the iOS fleet stayed shut
+ * for hours at a load of 40 to 80 while a third of the CPU stood idle; a video call app and
+ * security agents, which we neither own nor can stop, held most of the runnable threads). Over
+ * the line, the load counts only in the share of runnable threads our processes hold
+ * (`ownLoadPerCore`, twin of scripts/lib/own-load.sh); what the others take of the CPU and of
+ * memory still counts through the idle and memory checks.
+ *
  * `os.cpus()` times are the kernel's per-core tick counters (host_processor_info on
  * macOS, /proc/stat on Linux); the share of idle ticks between two samples matches
  * `iostat`'s idle column.
@@ -79,6 +86,90 @@ export function loadPerCore(): number {
   return (os.loadavg()[0] ?? 0) / Math.max(1, os.cpus().length)
 }
 
+/**
+ * Ours: a process that is, or descends from, Walnut, an agent CLI, bun, node, a test browser,
+ * Xcode's tools or a simulator, by its path. The same pattern as scripts/lib/own-load.sh.
+ */
+export const OWN_LOAD_RE =
+  /(^|\/)([Ww]alnut[^/]*|claude|codex|bun|bunx|node|launchd_sim|Simulator|xcodebuild|XCBBuildService|swift-frontend|Playwright|chrome-headless-shell|Google Chrome for Testing|maestro)$|\/CoreSimulator\/|\/Xcode[^/]*\.app\/|\/ms-playwright\//
+
+/**
+ * The mean runnable threads of our processes and of the rest, from a process tree
+ * (`ps -axww -o pid=,ppid=,comm=`) and `ps -axM` samples; null with no sample.
+ */
+export function parseRunnableShare(tree: string, samples: string[]): { ours: number; others: number } | null {
+  if (samples.length === 0) return null
+  const parent = new Map<string, string>()
+  const marked = new Set<string>()
+  for (const line of tree.split('\n')) {
+    const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line)
+    if (!m) continue
+    parent.set(m[1], m[2])
+    if (OWN_LOAD_RE.test(m[3])) marked.add(m[1])
+  }
+  const memo = new Map<string, boolean>()
+  const ours = (pid: string): boolean => {
+    const known = memo.get(pid)
+    if (known !== undefined) return known
+    let q: string | undefined = pid
+    let hit = false
+    for (let i = 0; i < 40 && q !== undefined && Number(q) > 1; i++) {
+      if (marked.has(q)) { hit = true; break }
+      q = parent.get(q)
+    }
+    memo.set(pid, hit)
+    return hit
+  }
+  let o = 0
+  let f = 0
+  for (const sample of samples) {
+    for (const line of sample.split('\n').slice(1)) {
+      // A process line starts with its user (STAT in field 5), a thread line with spaces (field 3).
+      const w = line.trim().split(/\s+/)
+      const thread = /^\s/.test(line)
+      const pid = thread ? w[0] : w[1]
+      const st = thread ? w[2] : w[4]
+      if (!pid || !st || !st.startsWith('R')) continue
+      if (ours(pid)) o++
+      else f++
+    }
+  }
+  return { ours: o / samples.length, others: f / samples.length }
+}
+
+/** The share read now: five `ps -axM` samples a second apart; null off macOS or unreadable. */
+export function readRunnableShareSync(samples = 5): { ours: number; others: number } | null {
+  if (process.platform !== 'darwin') return null
+  // The tree before and after the samples, so a child our work starts or ends meanwhile counts as ours.
+  const before = run('/bin/ps', ['-axww', '-o', 'pid=,ppid=,comm='])
+  if (!before) return null
+  const out: string[] = []
+  for (let i = 0; i < samples; i++) {
+    if (i > 0) sleepSync(1_000)
+    const s = run('/bin/ps', ['-axM'])
+    if (!s) return null
+    out.push(s)
+  }
+  const after = run('/bin/ps', ['-axww', '-o', 'pid=,ppid=,comm='])
+  if (!after) return null
+  return parseRunnableShare(`${before}\n${after}`, out)
+}
+
+/**
+ * The load per core to judge by, and how it was counted. Over `line`, our processes' share of
+ * it when the share can be read and another process holds any runnable thread; else the load.
+ */
+export function ownLoadPerCore(
+  perCore = loadPerCore(),
+  line = MAX_LOAD_PER_CORE,
+  share: () => { ours: number; others: number } | null = readRunnableShareSync,
+): { perCore: number; rawPerCore?: number } {
+  if (perCore <= line) return { perCore }
+  const s = share()
+  if (!s || s.others <= 0) return { perCore }
+  return { perCore: (perCore * s.ours) / (s.ours + s.others), rawPerCore: perCore }
+}
+
 export interface Memory {
   pressureLevel: number
   swapUsedMb: number
@@ -96,7 +187,8 @@ export function memoryTightWhy(m: Memory): string | null {
 }
 
 function run(cmd: string, args: string[]): string {
-  const r = spawnSync(cmd, args, { encoding: 'utf8', timeout: 5_000 })
+  // ps -axM runs to about 600 KB on a busy Mac: room past the default 1 MB.
+  const r = spawnSync(cmd, args, { encoding: 'utf8', timeout: 5_000, maxBuffer: 16 * 1024 * 1024 })
   return r.status === 0 ? r.stdout : ''
 }
 
@@ -127,6 +219,8 @@ export interface Capacity {
   /** Idle CPU percent, null when it could not be read. */
   idlePct: number | null
   loadPerCore: number
+  /** The whole load per core when loadPerCore is our share of it (ownLoadPerCore). */
+  rawLoadPerCore?: number
   cores: number
   /** The memory reading, null or absent when it could not be read (does not block). */
   memory?: Memory | null
@@ -143,10 +237,11 @@ export interface CapacityBars {
  * in plain words, for the wait message.
  */
 export function capacityVerdict(c: Capacity, bars: CapacityBars): { ok: boolean; why: string } {
+  const whole = c.rawLoadPerCore === undefined ? '' : ` (our share of the whole load ${(c.rawLoadPerCore * c.cores).toFixed(0)})`
   if (c.loadPerCore > bars.maxLoadPerCore) {
     return {
       ok: false,
-      why: `load ${(c.loadPerCore * c.cores).toFixed(0)} on ${c.cores} cores is over ${bars.maxLoadPerCore} per core`,
+      why: `load ${(c.loadPerCore * c.cores).toFixed(0)}${whole} on ${c.cores} cores is over ${bars.maxLoadPerCore} per core`,
     }
   }
   const mem = c.memory ? memoryTightWhy(c.memory) : null
@@ -156,7 +251,7 @@ export function capacityVerdict(c: Capacity, bars: CapacityBars): { ok: boolean;
     return { ok: false, why: `only ${Math.floor(c.idlePct)}% of the CPU is idle (${free} of ${c.cores} cores), under ${bars.minIdlePct}%` }
   }
   const idle = c.idlePct === null ? '?' : c.idlePct.toFixed(0)
-  return { ok: true, why: `${idle}% of the CPU idle, load ${(c.loadPerCore * c.cores).toFixed(0)} on ${c.cores} cores` }
+  return { ok: true, why: `${idle}% of the CPU idle, load ${(c.loadPerCore * c.cores).toFixed(0)}${whole} on ${c.cores} cores` }
 }
 
 /** A percent from the environment, else the fallback. */

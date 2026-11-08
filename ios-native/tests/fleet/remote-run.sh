@@ -105,8 +105,15 @@ SIM_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)/scripts/lib/sim-
 
 CPUS=$(sysctl -n hw.ncpu)
 LOAD1=$(sysctl -n vm.loadavg | awk '{print $2}')
+# The load line is our own work's share of the load (scripts/lib/own-load.sh): processes we
+# neither own nor can stop (a call app, security agents) held it at 40 to 80 for hours.
+OWN_LOAD_NOTE=
+if [ -f "$(dirname "$SIM_LIB")/own-load.sh" ]; then
+  . "$(dirname "$SIM_LIB")/own-load.sh"
+  own_load "$LOAD1" "$CPUS" "$MAX_LOAD"; LOAD1=$OWN_LOAD
+fi
 WHY=$(fleet_cpu_busy "$(fleet_idle_pct 5)" "$LOAD1" "$CPUS" "$MIN_IDLE" "$MAX_LOAD" "$(fleet_mem)")
-[ -z "$WHY" ] || refuse 75 "BUSY: $WHY; try another Mac or later" busy
+[ -z "$WHY" ] || refuse 75 "BUSY: $WHY${OWN_LOAD_NOTE:+ (our share; $OWN_LOAD_NOTE)}; try another Mac or later" busy
 # Simulator open = someone uses simulators here, and a device booted now would open its window.
 if pgrep -x Simulator >/dev/null 2>&1; then
   refuse 75 "BUSY: Simulator is open on this Mac; try another Mac or later" busy

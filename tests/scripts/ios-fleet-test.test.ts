@@ -170,7 +170,13 @@ beforeEach(() => {
   fs.mkdirSync(path.join(repo, 'ios-native/DerivedData'), { recursive: true })
   fs.writeFileSync(path.join(repo, 'ios-native/DerivedData/big.o'), 'x')
 })
-afterEach(() => fs.rmSync(dir, { recursive: true, force: true }))
+// Every test here runs the script with spawnSync, and back-to-back sync tests never let the
+// worker's event loop turn: over a minute of them, vitest's own report to the main process
+// timed out ("Timeout calling onTaskUpdate", 2026-11-08). One turn after each test answers it.
+afterEach(async () => {
+  fs.rmSync(dir, { recursive: true, force: true })
+  await new Promise((r) => setTimeout(r, 0))
+})
 
 describe('ios-fleet-test.sh', () => {
   it('picks the least loaded iOS Mac, sends the iOS sources, follows the run and brings the results back', () => {
@@ -265,7 +271,10 @@ describe('ios-fleet-test.sh', () => {
   // 2026-11-07: a unit run (3a2e35ef) waited 110 minutes for this Mac's load to fall under 0.75 per
   // CPU while 30 to 48% of its CPU was idle. 2026-11-08, the Operations VP: free CPU is only an extra
   // condition; at a backstop of 4 a lease booted at load 48 and the load went to 377, so the line is 2.
-  it('free CPU picks among the Macs under the load line of 2 per CPU, never instead of it', () => {
+  // 2026-11-08: a call app and security agents held a Mac's load at 40 to 80 for hours with a third of
+  // its CPU idle. host_load reads the whole load, so a Mac over the line with free CPU is tried after
+  // the others, and its own check (remote-run.sh) counts only our share of its load.
+  it('free CPU picks among the Macs under the load line of 2 per CPU first; one over it with free CPU comes after', () => {
     const macs = [
       { host: 'mac-a', loadPerCpu: 0.2, cpuBusy: 0.7, cpus: 8 },
       { host: 'mac-b', loadPerCpu: 1.8, cpuBusy: 0.55, cpus: 14 },
@@ -278,15 +287,31 @@ describe('ios-fleet-test.sh', () => {
     const r = run(['unit'], fakeWalnut(macs, outTgz()))
     expect(r.status, r.stderr).toBe(0)
     expect(r.stderr).toContain('using mac-b (mac-b): load 1.8 per CPU, 45% CPU idle (6.3 cores)')
-    expect(r.stderr).toContain('not using mac-e (mac-e): load 3.4 per CPU, 80% CPU idle (11.2 cores), over 2 per CPU')
+    expect(r.stderr).not.toContain('not using mac-e')
     expect(r.stderr).toContain('not using mac-c (mac-c): load 0.1 per CPU, 20% CPU idle (2.0 cores), under 25% idle')
-    expect(r.stderr).toContain('not using mac-d (mac-d): load 4.5 per CPU, 90% CPU idle (12.6 cores), over 2 per CPU')
+    expect(r.stderr).not.toContain('not using mac-d')
     expect(r.calls.filter((c) => c.op === 'host_exec' && c.args.background).map((c) => c.args.host)).toEqual(['mac-b'])
+    // Only Macs over the line: the one with the most free cores, saying why it may still run there.
+    fresh()
+    const over = macs.filter((m) => m.loadPerCpu > 2)
+    const ro = run(['unit'], fakeWalnut(over, outTgz()))
+    expect(ro.status, ro.stderr).toBe(0)
+    expect(ro.stderr).toContain('using mac-d (mac-d): load 4.5 per CPU, 90% CPU idle (12.6 cores), over 2 per CPU: tried after the others, its own check counts our share of its load')
+    // Over the line with its idle CPU unknown: not tried.
+    fresh()
+    const ru = run(['--wait', '0', 'unit'], fakeWalnut([{ host: 'mac-u', loadPerCpu: 3, cpus: 14 }], outTgz()))
+    expect(ru.status).toBe(75)
+    expect(ru.stderr).toContain('not using mac-u (mac-u): load 3 per CPU, over 2 per CPU')
     // --min-idle moves the bar, and the Mac half gets the same bar.
     fresh()
     const r2 = run(['--min-idle', '50', '--wait', '0', 'unit'], fakeWalnut(macs, outTgz()))
-    expect(r2.status).toBe(75)
+    expect(r2.status, r2.stderr).toBe(0)
     expect(r2.stderr).toContain('not using mac-b (mac-b): load 1.8 per CPU, 45% CPU idle (6.3 cores), under 50% idle')
+    expect(r2.calls.filter((c) => c.op === 'host_exec' && c.args.background).map((c) => c.args.host)).toEqual(['mac-d'])
+    expect((r2.calls.find((c) => c.op === 'host_exec' && c.args.background)!.args.argv as string[])[2]).toContain('unit --min-idle 50 --max-load 2 --')
+    fresh()
+    const r2b = run(['--min-idle', '95', '--wait', '0', 'unit'], fakeWalnut(macs, outTgz()))
+    expect(r2b.status).toBe(75)
     fresh()
     const r3 = run(['--min-idle', '10', 'unit'], fakeWalnut(macs, outTgz()))
     expect(r3.status, r3.stderr).toBe(0)

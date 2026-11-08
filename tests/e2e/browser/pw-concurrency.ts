@@ -38,7 +38,7 @@ import {
   type Capacity,
   capacityVerdict,
   cpuIdlePctSync,
-  loadPerCore,
+  ownLoadPerCore,
   MAX_LOAD_PER_CORE,
   MIN_IDLE_PCT,
   pctFromEnv,
@@ -180,7 +180,14 @@ function sleepSync(ms: number): void {
  * is busy without many threads.
  */
 function measureCapacity(): Capacity {
-  return { idlePct: cpuIdlePctSync(2_000), loadPerCore: loadPerCore(), cores: Math.max(1, os.cpus().length), memory: readMemorySync() }
+  const load = ownLoadPerCore()
+  return {
+    idlePct: cpuIdlePctSync(2_000),
+    loadPerCore: load.perCore,
+    rawLoadPerCore: load.rawPerCore,
+    cores: Math.max(1, os.cpus().length),
+    memory: readMemorySync(),
+  }
 }
 
 /**

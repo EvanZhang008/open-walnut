@@ -11,6 +11,10 @@
  * the load went to 377), so every gate also keeps the line of 2 per core (28 on 14 cores) and
  * waits while memory is tight, the rule of lane B's machine-gate.sh (tests/setup/cpu-idle.ts).
  *
+ * The load line is the load of our own work (2026-11-08: a call app and security agents held the
+ * Mac's load at 40 to 80 for hours with a third of the CPU idle, and lane B and the fleet stayed
+ * shut): every gate judges the share our processes hold (scripts/lib/own-load.sh, ownLoadPerCore).
+ *
  * This lists every file that reads the load average and what it does with it. A new reader
  * fails here until it is listed: as a gate that also reads idle CPU, or as a report with why.
  */
@@ -37,6 +41,16 @@ const LOAD_LINE_AND_MEMORY: Record<string, RegExp[]> = {
   'scripts/ios-fleet-test.sh': [/MAX_LOAD=2;/],
   'tests/e2e/browser/pw-concurrency.ts': [/maxLoadPerCore: MAX_LOAD_PER_CORE,/, /memory: readMemorySync\(\)/],
   'tests/setup/test-gate.ts': [/: MAX_LOAD_PER_CORE,/, /memory = readMemorySync\(\)/],
+}
+
+/** Each gate judges our own share of the load (the pattern names how; cpu-idle.ts defines it). */
+const OWN_SHARE: Record<string, RegExp> = {
+  'tests/setup/cpu-idle.ts': /export function ownLoadPerCore\(/,
+  'tests/setup/large-run.sh': /own_load "\$l" 1 "\$max_load"; l=\$OWN_LOAD/,
+  'ios-native/tests/fleet/remote-run.sh': /own_load "\$LOAD1" "\$CPUS" "\$MAX_LOAD"; LOAD1=\$OWN_LOAD/,
+  'scripts/ios-fleet-test.sh': /tried after the others, its own check counts our share of its load/,
+  'tests/e2e/browser/pw-concurrency.ts': /const load = ownLoadPerCore\(\)/,
+  'tests/setup/test-gate.ts': /load = ownLoadPerCore\(undefined, MAX_LOAD > 0/,
 }
 
 /** Readers that never hold a run on the load, with what they do. */
@@ -88,6 +102,13 @@ describe('machine gates judge free CPU', () => {
     for (const f of [...Object.keys(GATES), ...Object.keys(HELPER_GATES)]) expect(LOAD_LINE_AND_MEMORY, `${f} has no load line listed`).toHaveProperty([f])
     for (const [f, pats] of Object.entries(LOAD_LINE_AND_MEMORY)) {
       for (const p of pats) expect(fs.readFileSync(path.join(ROOT, f), 'utf8'), `${f} lost its load line or memory check`).toMatch(p)
+    }
+  })
+
+  it('every gate judges the load line by our own share of the load', () => {
+    for (const f of [...Object.keys(GATES), ...Object.keys(HELPER_GATES)]) expect(OWN_SHARE, `${f} does not judge our share of the load`).toHaveProperty([f])
+    for (const [f, p] of Object.entries(OWN_SHARE)) {
+      expect(fs.readFileSync(path.join(ROOT, f), 'utf8'), `${f} judges the whole load again`).toMatch(p)
     }
   })
 
