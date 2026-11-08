@@ -277,6 +277,13 @@ test('a thread the lead opens itself shows its post as the lead\'s, and his Foll
   await openThreads(page)
   const c = card(page, opened.id)
   await expect(c.getByTestId('org-thread-from')).toContainText('Opened by')
+  // The card is the title and a summary line (Walnut's, from the post, until the lead writes one);
+  // the post itself folds behind one line (2026-11-08, the user: "collapsed unless I click to expand").
+  await expect(c.getByTestId('org-thread-reply')).toHaveAttribute('data-by', 'walnut')
+  await expect(c.getByTestId('org-thread-stand-in')).toContainText('post')
+  await expect(c.getByTestId('org-thread-opener')).toHaveCount(0)
+  await expect(c.getByTestId('org-thread-unread-toggle')).toHaveText(/1 new post$/)
+  await c.getByTestId('org-thread-unread-toggle').click()
   await expect(c.getByTestId('org-thread-opener')).toContainText('opened this · Mail: Talk slot')
   await expect(c.getByTestId('org-thread-opener').locator('strong')).toHaveText('confirm the slot by Friday?')
   await c.getByTestId('org-thread-follow-open').click()
@@ -371,6 +378,12 @@ test('a long thread\'s card is its summary and the answer he has not seen; the c
   await expect(c).not.toContainText('what is the small model?')
   await expect(c).not.toContainText('Nobody did.')
   const answer = c.getByTestId('org-thread-answer')
+  // Folded under the summary until a click.
+  await expect(answer).toHaveCount(0)
+  await expect(c.getByTestId('org-thread-unread-toggle')).toHaveAttribute('aria-expanded', 'false')
+  await expect(c.getByTestId('org-thread-unread-toggle')).toHaveText(/1 new answer$/)
+  await c.getByTestId('org-thread-unread-toggle').click()
+  await expect(c.getByTestId('org-thread-unread-toggle')).toHaveAttribute('aria-expanded', 'true')
   await expect(answer).toHaveCount(1)
   await expect(answer).toHaveAttribute('data-known', 'false')
   await expect(answer).toHaveClass(/is-news/)
@@ -731,6 +744,8 @@ test('asks and structured bodies stay whole; plain long answers still expand wit
   if (await page.getByTestId('org-threads-hidden').getAttribute('aria-expanded') === 'false') await page.getByTestId('org-threads-hidden').click()
   for (const t of seeded) {
     const c = card(page, t.id)
+    // Its news folds under the summary: one click shows it.
+    await c.getByTestId('org-thread-unread-toggle').click()
     const body = c.getByTestId('org-thread-answer-body')
     const plainFold = t.state !== 'needs' && / plain(?:-code)? /.test(t.title)
     await expect(body).toHaveCount(1)

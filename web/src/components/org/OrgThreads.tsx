@@ -27,7 +27,7 @@
  * second chip for it, and one reply that covered several threads stays off every card.
  *
  *   a card     state, title, time; the summary; its tasks the summary does not name; the answers
- *              still news; Conversation (N messages); Acknowledge, Follow up (a message filed
+ *              still news folded behind "N new answers"; Conversation (N messages); Acknowledge, Follow up (a message filed
  *              under it). His own messages still waiting for an answer are not echoed back on the
  *              card (2026-11-01, the user, after a Follow up showed "Not answered yet: <his words>":
  *              "you definitely haven't answered ... you don't need to put it in this thread");
@@ -85,6 +85,14 @@ const STAND_IN_NOTE: Record<Exclude<NonNullable<SummaryLine['from']>, 'none'>, (
   opener: (name) => `From ${name}'s post; ${name} has not written a summary yet`,
   ask: (name) => `What you asked, in ${name}'s words; ${name} has not written a summary yet`,
 };
+/** The folded line of a card's news: "1 new answer", "2 new answers", "1 new post", "3 new". */
+function newLine(xs: readonly ThreadExchange<OrgThreadMessage>[]): string {
+  const posts = xs.filter((x) => x.opener).length;
+  const n = xs.length;
+  if (!posts) return `${n} new ${n === 1 ? 'answer' : 'answers'}`;
+  if (posts === n) return `${n} new ${n === 1 ? 'post' : 'posts'}`;
+  return `${n} new`;
+}
 /** How much of his words the line above an answer quotes. */
 const QUOTE_WORDS = 72;
 /** Where a thread the node opened itself came from (src/core/org/threads-model.ts THREAD_SOURCES). */
@@ -318,6 +326,8 @@ function ThreadCard({ t, all, shared, tasks, onOpenTask, state, onFollowUp, name
   /** The whole conversation shown, in place of what the card keeps. */
   const [open, setOpen] = useState(false);
   const [following, setFollowing] = useState(false);
+  /** The answers he has not seen, unfolded under the summary (folded by default). */
+  const [unfolded, setUnfolded] = useState(false);
   const closed = !!t.closed;
   const pinned = pinnedNow(t);
   const card = useMemo(() => cardView(t, shared), [t, shared]);
@@ -369,7 +379,15 @@ function ThreadCard({ t, all, shared, tasks, onOpenTask, state, onFollowUp, name
           </div>
         )}
       {chips.length > 0 && <TaskChips ids={chips} tasks={tasks} onOpenTask={onOpenTask} />}
+      {/* The card is its title and summary: the new answers fold behind one line until a click
+          (2026-11-08, the user: "the history should all be collapsed unless I click to expand"). */}
       {!open && card.unread.length > 0 && (
+        <button type="button" className="org-thread-toggle org-thread-unread-toggle" data-testid="org-thread-unread-toggle" aria-expanded={unfolded} onClick={() => setUnfolded(!unfolded)}>
+          <span aria-hidden="true">{unfolded ? '\u25b4' : '\u25be'}</span>
+          {newLine(card.unread)}
+        </button>
+      )}
+      {!open && unfolded && card.unread.length > 0 && (
         <ol className="org-thread-unread" data-testid="org-thread-unread">
           {card.unread.map((x) => (
             <li key={x.messages[0]?.id ?? 'opener'} className="org-thread-exchange" data-testid="org-thread-exchange" data-n={x.n} data-known="false">
