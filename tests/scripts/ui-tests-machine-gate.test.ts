@@ -9,6 +9,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { guardedPath } from '../setup/exec-guard-core.js'
 
 const LIB = path.resolve(__dirname, '../../ios-native/tests/ui/machine-gate-wait.sh')
 const RUNNER = path.resolve(__dirname, '../../ios-native/tests/ui/run-ui-tests.sh')
@@ -34,7 +35,7 @@ function fakeGate(waits: number): string {
 function run(udid: string, env: Record<string, string>) {
   const r = spawnSync('/bin/bash', ['-c', `. "${LIB}"; uitest_machine_gate "$1" "the build"; echo RETURNED`, '_', udid], {
     encoding: 'utf8',
-    env: { PATH: '/usr/bin:/bin', HOME: dir, WALNUT_UITEST_GATE_POLL: '0', ...env },
+    env: { PATH: guardedPath([], '/usr/bin:/bin'), HOME: dir, WALNUT_UITEST_GATE_POLL: '0', ...env },
   })
   const calls = fs.existsSync(path.join(dir, 'calls')) ? fs.readFileSync(path.join(dir, 'calls'), 'utf8').trim().split('\n') : []
   return { status: r.status, out: r.stdout + r.stderr, calls }
