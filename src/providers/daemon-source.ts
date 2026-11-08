@@ -230,7 +230,7 @@ export function getDaemonSource(): string {
   // external-scan-core.cjs, path-resolve-core.cjs) and daemonCapabilities() in
   // the template adds the capability back at runtime only when that sidecar
   // actually loads.
-  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'task-dir-v1', 'task-dir-prune-v1', 'task-dir-prune-builds-v1', 'host-exec-v1', 'host-exec-v2', 'net-v1', 'net-join-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'acp-model-catalog-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'codex-outside-v1', 'claude-outside-v1', 'budget-v2', 'walnut-mcp-v1'])
+  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'task-dir-v1', 'task-dir-prune-v1', 'task-dir-prune-builds-v1', 'task-dir-sizes-v1', 'host-exec-v1', 'host-exec-v2', 'net-v1', 'net-join-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'acp-model-catalog-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'codex-outside-v1', 'claude-outside-v1', 'budget-v2', 'walnut-mcp-v1'])
   const capsLiteral = JSON.stringify(
     [...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => !SIDECAR_GATED_CAPABILITIES.has(c)),
   )
@@ -4083,6 +4083,7 @@ function dispatchCommand(ws, id, cmd) {
     case 'taskdir.remove': return cmdTaskDirRemove(ws, id, cmd);
     case 'taskdir.prune': return cmdTaskDirPrune(ws, id, cmd);
     case 'taskdir.pruneBuilds': return cmdTaskDirPrune(ws, id, cmd, true);
+    case 'taskdir.sizes': return cmdTaskDirSizes(ws, id, cmd);
     // A command for a task on another host (host-exec-v1); not bridge- or
     // follower-reachable: only the trusted walnut socket asks. Mirrors daemon-standalone.ts.
     case 'exec.run': case 'exec.read': case 'exec.kill': case 'exec.list': {
@@ -13431,6 +13432,7 @@ function daemonCapabilities() {
   if (taskDirCore) caps.push('task-dir-v1');
   if (taskDirCore && typeof taskDirCore.pruneTaskDirs === 'function') caps.push('task-dir-prune-v1');
   if (taskDirCore && typeof taskDirCore.pruneTaskBuilds === 'function') caps.push('task-dir-prune-builds-v1');
+  if (taskDirCore && typeof taskDirCore.taskDirSizes === 'function') caps.push('task-dir-sizes-v1');
   if (hostExec) caps.push('host-exec-v1');
   if (hostExec && hostExec.version >= 2) caps.push('host-exec-v2');
   if (netSupervisor) caps.push('net-v1');
@@ -13468,6 +13470,16 @@ function cmdTaskDirEnsure(ws, id, cmd) {
 async function cmdTaskDirList(ws, id) {
   if (!taskDirCore) return sendError(ws, id, 'taskdir.list unsupported: task-dir-core sidecar not loaded');
   sendOk(ws, id, { root: TASK_DIR_ROOT, dirs: await taskDirCore.listTaskDirs(TASK_DIR_ROOT) });
+}
+
+// Read only: how much each named task directory takes. See cmdTaskDirSizes in daemon-standalone.ts.
+async function cmdTaskDirSizes(ws, id, cmd) {
+  if (!taskDirCore || typeof taskDirCore.taskDirSizes !== 'function') return sendError(ws, id, 'taskdir.sizes unsupported: task-dir-core sidecar too old');
+  try {
+    sendOk(ws, id, { sizes: await taskDirCore.taskDirSizes(TASK_DIR_ROOT, Array.isArray(cmd.taskIds) ? cmd.taskIds : []) });
+  } catch (err) {
+    sendError(ws, id, 'taskdir.sizes failed: ' + err.message);
+  }
 }
 
 // Everything running here now that may work in a task directory: see hostWorkNow in daemon-standalone.ts.

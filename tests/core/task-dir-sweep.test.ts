@@ -4,6 +4,9 @@
  * that can answer. The host half (the unmerged-work check) is
  * tests/providers/task-dir-core.test.ts.
  */
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { describe, it, expect } from 'vitest'
 import { localDiskLow, pickBuildPrunable, pickPrunable, pickRemovable, sweepTaskDirsOnce, type TaskStateForSweep } from '../../src/core/task-dir-sweep.js'
 import { PHASE_ORDER } from '../../src/core/phase.js'
@@ -177,6 +180,63 @@ describe('sweepTaskDirsOnce', () => {
     // This machine's directories in use too (`live`); another host's disk is not the one measured.
     expect(local.calls[1]).toEqual(['taskdir.pruneBuilds', { taskIds: [{ taskId: 'a', usedBefore: Date.parse(iso(0.5)) }], idleBefore: NOW - 0.25 * DAY, live: true }])
     expect(remote.calls[1]).toEqual(['taskdir.pruneBuilds', { taskIds: [{ taskId: 'a', usedBefore: Date.parse(iso(0.5)) }], idleBefore: NOW - 2 * DAY }])
+  })
+
+  // 2026-11-08: the second refill (30 to 8 GiB) was running tasks' own run folders, not build output.
+  // On a low disk the local host measures open tasks' directories and tells each one over the limit.
+  it('a low disk tells an open task over the size limit, once a day or again after 2 GB more, never a done one', async () => {
+    const GiB = 1024 ** 3
+    let sizes = [
+      { taskId: 'big', bytes: 9 * GiB, partial: false, top: [{ name: 'runs', bytes: 8 * GiB }, { name: 'notes.md', bytes: 4096 }] },
+      { taskId: 'small', bytes: 1 * GiB, partial: false, top: [] },
+      { taskId: 'done', bytes: 20 * GiB, partial: false, top: [] },
+      { taskId: 'nosession', bytes: 20 * GiB, partial: false, top: [] },
+    ]
+    const mk = (host: string, caps: string[]) => {
+      const f = fakeConn(host, caps, [dir('big', 0.1), dir('small', 0.1), dir('done', 0.1), dir('nosession', 0.1)])
+      const send = f.conn.send
+      f.conn.send = async (cmd: string, p?: Record<string, unknown>) => {
+        if (cmd === 'taskdir.sizes') { f.calls.push([cmd, p]); return { ok: true, sizes: sizes.filter((s) => (p!.taskIds as string[]).includes(s.taskId)) } }
+        return send(cmd, p)
+      }
+      return f
+    }
+    const loadTasks = async () => [
+      { ...task('big', 'IN_PROGRESS'), session_id: 's-big' }, { ...task('small', 'WAITING'), session_id: 's-small' },
+      { ...task('done', 'COMPLETE', 3), session_id: 's-done' }, task('nosession', 'TODO'),
+    ]
+    const told: Array<{ id: string; text: string; messageId: string }> = []
+    const tellTask = async (t: { id: string }, text: string, messageId: string) => { told.push({ id: t.id, text, messageId }) }
+    const noticeFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-size-notice-')), 'told.json')
+    const caps = ['task-dir-v1', 'task-dir-sizes-v1']
+    const local = mk('__local__', caps)
+    const remote = mk('cloud', caps)
+    const res = await sweepTaskDirsOnce({ conns: [local.conn, remote.conn], loadTasks, now: NOW, lowDisk: true, tellTask, noticeFile })
+    // Only open tasks with a session are measured; only this machine's disk is low.
+    expect(local.calls.find((c) => c[0] === 'taskdir.sizes')?.[1]).toEqual({ taskIds: ['big', 'small'] })
+    expect(remote.calls.some((c) => c[0] === 'taskdir.sizes')).toBe(false)
+    expect(told.map((t) => t.id)).toEqual(['big'])
+    expect(told[0].text).toContain('takes 9.0 GB')
+    expect(told[0].text).toContain('- runs: 8.0 GB')
+    expect(told[0].text).not.toContain('notes.md')
+    expect(told[0].text).toContain('Walnut deletes none of it for you')
+    expect(res.find((r) => r.host === '__local__')?.toldSize).toEqual(['big'])
+    // Not again the same day, also after a restart (the record is on disk) ...
+    await sweepTaskDirsOnce({ conns: [mk('__local__', caps).conn], loadTasks, now: NOW + 3_600_000, lowDisk: true, tellTask, noticeFile })
+    expect(told).toHaveLength(1)
+    // ... unless it grew by 2 GB, or a day went by.
+    sizes = sizes.map((s) => (s.taskId === 'big' ? { ...s, bytes: 11.5 * GiB } : s))
+    await sweepTaskDirsOnce({ conns: [mk('__local__', caps).conn], loadTasks, now: NOW + 7_200_000, lowDisk: true, tellTask, noticeFile })
+    expect(told).toHaveLength(2)
+    await sweepTaskDirsOnce({ conns: [mk('__local__', caps).conn], loadTasks, now: NOW + 7_200_000 + DAY, lowDisk: true, tellTask, noticeFile })
+    expect(told).toHaveLength(3)
+    // A disk that is not low, or a host without the capability, measures nothing.
+    const calm = mk('__local__', caps)
+    await sweepTaskDirsOnce({ conns: [calm.conn], loadTasks, now: NOW + 3 * DAY, lowDisk: false, tellTask, noticeFile })
+    const older = mk('__local__', ['task-dir-v1'])
+    await sweepTaskDirsOnce({ conns: [older.conn], loadTasks, now: NOW + 3 * DAY, lowDisk: true, tellTask, noticeFile })
+    expect([...calm.calls, ...older.calls].some((c) => c[0] === 'taskdir.sizes')).toBe(false)
+    expect(told).toHaveLength(3)
   })
 
   // 2026-11-08: the Mac refilled from 30 to 12 GiB within hours while the watermark (10 GiB) still read ok.

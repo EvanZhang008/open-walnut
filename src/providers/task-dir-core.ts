@@ -27,6 +27,7 @@ import { execFile } from 'node:child_process'
 import { TASK_DIR_MARKER, isTaskDirId, taskDirPath } from '../lib/task-dir.js'
 
 export { taskDirRoot, taskDirPath, isTaskDirId, TASK_DIR_MARKER } from '../lib/task-dir.js'
+export { taskDirSizes, type TaskDirSize } from './task-dir-sizes.js'
 
 /** `home` is the data home of the Walnut that first made it: a host two Walnuts share keeps each one's dirs apart. */
 interface Marker { taskId: string; home?: string; createdAt?: string; lastUsedAt?: string; prunedAt?: string; buildsPrunedAt?: string }

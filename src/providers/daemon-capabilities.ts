@@ -499,6 +499,12 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // daemon refuses it instead of reading it as a full prune of an open task.
   // Sidecar-gated in the source twin.
   'task-dir-prune-builds-v1',
+  // 'task-dir-sizes-v1' — `taskdir.sizes {taskIds}`: read only, the bytes each task
+  // directory takes and its largest top-level folders, walked within a file and a
+  // time budget (`partial` when cut short; task-dir-sizes.ts). The server asks it
+  // while this machine's disk is low and tells an open task whose own folder is
+  // over the limit (src/core/task-dir-size-notice.ts). Sidecar-gated in the source twin.
+  'task-dir-sizes-v1',
   // 'host-exec-v1' — a command for a task on another host (host-exec-core.ts):
   // `exec.run {jobId, taskId, command | argv, cwd, timeoutMs, background}` runs it
   // under the user's login shell (its process group killed at the deadline: 10 min,

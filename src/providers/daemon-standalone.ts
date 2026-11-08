@@ -187,7 +187,7 @@ import { buildScheduledMessage, buildTriggerMessage } from './trigger-envelope-c
 import { START_TASK_TOKEN, clockDueMs, clockFireOwed, clockStateOnArm, dropStaleClockFires, type ClockReport } from './trigger-clock-core.js'
 import { createClockSchedule } from './clock-schedule-core.js'
 import { resolvePathHostLocal } from './path-resolve-core.js'
-import { ensureTaskDir, isTaskDirId, listTaskDirs, pruneTaskBuilds, pruneTaskDirs, readOpenPaths, removeTaskDirs, taskDirInUse, taskDirPath, taskDirRoot, type HostWork } from './task-dir-core.js'
+import { ensureTaskDir, isTaskDirId, listTaskDirs, pruneTaskBuilds, pruneTaskDirs, readOpenPaths, removeTaskDirs, taskDirInUse, taskDirPath, taskDirRoot, taskDirSizes, type HostWork } from './task-dir-core.js'
 import { createHostExec } from './host-exec-core.js'
 import { createNetSupervisor, netStateDir, resolveNetBinary } from './net-core.js'
 import { createHostMcp } from './host-mcp-core.js'
@@ -2613,6 +2613,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'taskdir.remove': return cmdTaskDirRemove(ws, id as number, cmd)
     case 'taskdir.prune': return cmdTaskDirPrune(ws, id as number, cmd)
     case 'taskdir.pruneBuilds': return cmdTaskDirPrune(ws, id as number, cmd, true)
+    case 'taskdir.sizes': return cmdTaskDirSizes(ws, id as number, cmd)
     // A command for a task on another host (host-exec-v1, host-exec-core.ts). NOT in
     // BRIDGE_ALLOWED_COMMANDS or FOLLOWER_ALLOWED_COMMANDS: it runs anything the user
     // can, so only the trusted walnut socket asks, after the server checked the
@@ -6031,6 +6032,16 @@ function cmdTaskDirEnsure(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
 
 async function cmdTaskDirList(ws: ServerWebSocket<WsData>, id: number) {
   sendOk(ws, id, { root: TASK_DIR_ROOT, dirs: await listTaskDirs(TASK_DIR_ROOT) })
+}
+
+/** Read only: how much each named task directory takes (task-dir-sizes.ts). Keep in sync with daemon-source.ts. */
+async function cmdTaskDirSizes(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const ids = Array.isArray(cmd.taskIds) ? cmd.taskIds : []
+  try {
+    sendOk(ws, id, { sizes: await taskDirSizes(TASK_DIR_ROOT, ids) })
+  } catch (err) {
+    sendError(ws, id, `taskdir.sizes failed: ${(err as Error).message}`)
+  }
 }
 
 /**

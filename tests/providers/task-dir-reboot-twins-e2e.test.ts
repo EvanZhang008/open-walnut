@@ -314,6 +314,23 @@ describe.each(TWINS)('task directory across a reboot: $name', (twin) => {
     expect(fs.existsSync(path.join(taskDir, 'copy-a', 'node_modules', 'x.js'))).toBe(true)
   }, 60_000)
 
+  // 2026-11-08: the refill was run folders, which only their task may judge; the host reports sizes.
+  it('taskdir.sizes reports each directory\'s bytes and its largest folders, and skips unknown ids', async () => {
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-task-dir-sizes-')))
+    await boot(twin)
+    expect((await rpc({ cmd: 'hello' })).capabilities as string[]).toContain('task-dir-sizes-v1')
+    const taskDir = (await rpc({ cmd: 'taskdir.ensure', taskId: 'size-task' })).path as string
+    fs.mkdirSync(path.join(taskDir, 'runs', 'r1'), { recursive: true })
+    fs.writeFileSync(path.join(taskDir, 'runs', 'r1', 'data.bin'), Buffer.alloc(3 * 1024 * 1024, 1))
+    fs.writeFileSync(path.join(taskDir, 'note.md'), 'x\n')
+    const res = await rpc({ cmd: 'taskdir.sizes', taskIds: ['size-task', 'no-such-task', '../escape'] }) as { sizes: Array<{ taskId: string; bytes: number; partial: boolean; top: Array<{ name: string; bytes: number }> }> }
+    expect(res.sizes.map((s) => s.taskId)).toEqual(['size-task'])
+    expect(res.sizes[0].partial).toBe(false)
+    expect(res.sizes[0].bytes).toBeGreaterThanOrEqual(3 * 1024 * 1024)
+    expect(res.sizes[0].top[0].name).toBe('runs')
+    expect(res.sizes[0].top[0].bytes).toBeGreaterThanOrEqual(3 * 1024 * 1024)
+  }, 60_000)
+
   // Review round 3 of 2026-11-08: an ACP worker started in a shared checkout works in its task
   // directory by path, so its cwd alone did not keep the directory busy.
   it('an ACP worker of the task keeps its directory whole, wherever it was started', async () => {

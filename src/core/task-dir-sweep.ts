@@ -28,11 +28,16 @@
  * GB of task directories on the Mac, which filled to 99%, because only a
  * finished task was ever pruned. Once per use too (`buildsPrunedAt`).
  *
+ * While the disk is low, an open task whose own directory is over a limit is
+ * told to clear it (task-dir-size-notice.ts): run folders and data copies are
+ * the task's to judge, so nothing of them is deleted here.
+ *
  * Primary only: a replica (the cloud companion) holds a copy of the tasks and
  * must not decide over host files. An ephemeral server sweeps only its own
  * local daemon, whose root sits in its temp dir.
  */
 import fsp from 'node:fs/promises'
+import path from 'node:path'
 import { log } from '../logging/index.js'
 import { taskDirBuildIdleDays, taskDirKeepDays, taskDirLowDiskFloorBytes, taskDirPruneDays } from '../lib/task-dir.js'
 import type { TaskDirEntry, RemoveResult, PruneResult } from '../providers/task-dir-core.js'
@@ -44,7 +49,7 @@ const ABSENT_TASK_DAYS = 30
 const LOW_DISK_CHECK_MS = 5 * 60_000
 const LOW_DISK_SWEEP_MS = 60 * 60_000
 
-export interface TaskStateForSweep { id: string; phase: string; completed_at?: string; phase_changed_at?: string; updated_at?: string }
+export interface TaskStateForSweep { id: string; phase: string; completed_at?: string; phase_changed_at?: string; updated_at?: string; session_id?: string }
 
 const ms = (iso: string | undefined): number => {
   const t = iso ? Date.parse(iso) : NaN
@@ -124,7 +129,7 @@ export function pickBuildPrunable(
 
 type SweepConn = { host: string; hasCapability?: (c: string) => boolean; send: (cmd: string, p?: Record<string, unknown>, t?: number) => Promise<unknown> }
 
-type SweepRow = { host: string } & Partial<RemoveResult> & { pruned?: PruneResult['pruned']; buildsPruned?: PruneResult['pruned'] }
+type SweepRow = { host: string } & Partial<RemoveResult> & { pruned?: PruneResult['pruned']; buildsPruned?: PruneResult['pruned']; toldSize?: string[] }
 
 /** True while the disk Walnut's data lives on is low (disk-watermark.ts warn or critical). */
 /** This machine's disk is low: free space under the floor new work already moves away at, or the watermark says so. */
@@ -147,6 +152,9 @@ export async function sweepTaskDirsOnce(deps?: {
   now?: number
   /** This machine's disk is low: the local host's idle wait shortens (default: the disk watermark). */
   lowDisk?: boolean
+  /** Delivers a size notice to a task (tests); default its session (task-dir-size-notice.ts). */
+  tellTask?: (task: TaskStateForSweep, text: string, messageId: string) => Promise<void>
+  noticeFile?: string
 }): Promise<SweepRow[]> {
   const { WALNUT_HOME, IS_EPHEMERAL } = await import('../constants.js')
   let conns = deps?.conns
@@ -209,7 +217,16 @@ export async function sweepTaskDirsOnce(deps?: {
         row.buildsPruned = (res?.pruned ?? []).filter((p) => p.builds.length > 0)
         log.session.info('task dir builds pruned', { host: conn.host, pruned: row.buildsPruned, kept: res?.kept ?? [] })
       }
-      if (removable.length > 0 || prunable.length > 0 || buildPrunable.length > 0) results.push(row)
+      if (lowDisk && conn.host === '__local__' && conn.hasCapability?.('task-dir-sizes-v1')) {
+        const { tellOversizeTasks } = await import('./task-dir-size-notice.js')
+        const free = await fsp.statfs(WALNUT_HOME).then((f) => Number(f.bavail) * Number(f.bsize)).catch(() => null)
+        const live = dirs.filter((d) => !removed.has(d.taskId))
+        row.toldSize = await tellOversizeTasks(conn, live, tasks, {
+          now, freeBytes: free, file: deps?.noticeFile ?? path.join(WALNUT_HOME, 'cache', 'task-dir-size-notices.json'),
+          ...(deps?.tellTask ? { deliver: deps.tellTask } : {}),
+        }).catch((err) => { log.session.warn('task dir size check failed', { host: conn.host, error: (err as Error).message }); return [] })
+      }
+      if (removable.length > 0 || prunable.length > 0 || buildPrunable.length > 0 || (row.toldSize?.length ?? 0) > 0) results.push(row)
     } catch (err) {
       log.session.warn('task dir sweep failed', { host: conn.host, error: (err as Error).message })
     }
