@@ -8,6 +8,10 @@
 import { test, expect, type Page } from '@playwright/test'
 import { iconInkOffsets, ICON_CENTER_TOLERANCE_PX } from './icon-ink'
 import { setPanelMode } from './draft-helpers'
+import { holdPanelCountLock } from './panel-count-lock'
+
+// One test sets the fixture's panel count (a full strip pushes a column out).
+holdPanelCountLock('test')
 
 const SESSION_ID = 'pw-vscode-session'
 const TASK_ID = 'pw-task-vscode'
