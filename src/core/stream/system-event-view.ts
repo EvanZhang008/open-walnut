@@ -70,11 +70,15 @@ function sentenceFor(subtype: string, sys: Record<string, unknown>): SystemEvent
     const why = str(sys.api_refusal_explanation) ?? str(sys.apiRefusalExplanation)
     return { show: true, variant: 'error', message: 'The model declined this request.', ...(why ? { detail: why.slice(0, DETAIL_MAX) } : {}) }
   }
-  // A Stop hook that held the turn (Walnut's unanswered-request reminder, or the user's own):
-  // the CLI's words are "Stop hook error occurred · ctrl+o to see", a key for its own screen;
-  // the hook's words follow as the turn's next input row.
+  // A Stop hook that held the turn (Walnut's unanswered-request or question reminder, or the
+  // user's own): the CLI's words are "Stop hook error occurred · ctrl+o to see", a key for its
+  // own screen, and the hook's words go in as a meta row the timeline never shows. Nothing of
+  // it is in the saved conversation, so a card for it showed only while the turn ran and was
+  // gone once it was saved (2026-11-07, Tree Mode: "A Stop hook held the turn; its note
+  // follows." flashed on the Main page while a question page answered). What the hold does
+  // shows by itself: the model's next words.
   if (subtype === 'notification' && sys.key === 'stop-hook-error') {
-    return { show: true, variant: 'info', message: 'A Stop hook held the turn; its note follows.' }
+    return { show: false, why: 'bookkeeping' }
   }
   if (subtype === 'plugin_install') {
     const error = str(sys.error)

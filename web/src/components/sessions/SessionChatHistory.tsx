@@ -1,4 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useSyncExternalStore, memo, isValidElement, type ReactNode } from 'react';
+import { pageOfStreamBlock } from '@/utils/stream-block-page';
 import { useDraft } from '@/hooks/useDraft';
 import { useHostStatus } from '@/hooks/useHostStatus';
 import { draftHash, draftKey, writeDraft } from '@/utils/drafts';
@@ -3884,12 +3885,12 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // A strict question (utils/ask-answer.ts) owns only the text blocks that open
   // with its answer tag; every other block it would own by place reads in the
   // main conversation (the transcript's split files the same way, exactly).
-  const pageKeyOfBlock = (index: number): string => {
-    const spanKey = strictSpanKeyOfBlock(blocks[index]);
-    if (spanKey !== null) return spanKey;
-    const key = placeKeyOfBlock(index);
-    return strictAsks.byKey.has(key) ? ROOT_THREAD_KEY : key;
-  };
+  // A block the transcript keeps no row for (a card about the turn, a prompt)
+  // reads on its turn's page (utils/stream-block-page.ts).
+  const pageKeyOfBlock = (index: number): string => pageOfStreamBlock(
+    blocks[index], strictSpanKeyOfBlock(blocks[index]), placeKeyOfBlock(index),
+    (key) => strictAsks.byKey.has(key), ROOT_THREAD_KEY,
+  );
 
   // The page's own rows: the SAME parts, filtered by row identity.
   const visibleHistoryParts = stackMode

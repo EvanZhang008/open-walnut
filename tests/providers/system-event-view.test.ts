@@ -120,6 +120,20 @@ describe('live parser: system lines with no handler', () => {
     }
   })
 
+  // 2026-11-07, Tree Mode: the card for a Stop hook's hold showed only while the turn ran
+  // (nothing of the hold is in the saved conversation) and flashed on the Main page.
+  it('a Stop hook holding the turn makes no card: the saved conversation has none either', () => {
+    const line = sys('notification', { key: 'stop-hook-error', text: 'Stop hook error occurred \u00b7 ctrl+o to see', priority: 'immediate' })
+    expect(systemEventView(line)).toEqual({ show: false, why: 'bookkeeping' })
+    const session = new ClaudeCodeSession('task-sys-4', 'proj')
+    const notices = captureNotices()
+    feed(session, line)
+    expect(notices).toEqual([])
+    // Another notification still shows its words.
+    feed(session, sys('notification', { key: 'other', text: 'A plugin updated.', uuid: 'u-other' }))
+    expect(notices).toEqual([{ variant: 'info', message: 'A plugin updated.' }])
+  })
+
   it('a capped replay still reads as its sentence (handled before the rule)', () => {
     const session = new ClaudeCodeSession('task-sys-3', 'proj')
     const notices = captureNotices()

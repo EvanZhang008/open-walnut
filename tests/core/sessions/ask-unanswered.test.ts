@@ -163,6 +163,27 @@ describe('the Stop hook reads the ids from the transcript on its own host', () =
     });
   });
 
+  // 2026-11-07: the CLI ran the Stop hook before it wrote the turn's final answer to the
+  // transcript, so a question answered inside its tag was named as open and answered twice.
+  it('the turn\'s final text in the hook input counts as the newest answer, written to the transcript or not', () => {
+    const answer = '<walnut-ask-answer thread="6" name="six">\nyes\n</walnut-ask-answer>';
+    withTranscript([user(askHintText('6', 'six')), user(askHintText('7', 'seven'))], (input, dir) => {
+      // Only 6 is answered, by the text the transcript does not hold yet.
+      const args = argsOf(run(input({ hook_event_name: 'Stop', last_assistant_message: answer }), dir));
+      expect(args.asked).toBe('7');
+      expect(args.answered).toBe('6');
+      // The same, as the CLI may print it: spaced, over several lines.
+      const spaced = JSON.stringify(JSON.parse(input({ last_assistant_message: answer })), null, 2);
+      expect(argsOf(run(spaced, dir)).answered).toBe('6');
+      // Text outside the tag, or under another name, answers nothing.
+      expect(argsOf(run(input({ last_assistant_message: 'yes' }), dir)).asked.split(',').sort()).toEqual(['6', '7']);
+      expect(argsOf(run(input({ last_assistant_message: answer.replace('six', 'other') }), dir)).answered).toBe('');
+    });
+    withTranscript([user(askHintText('6', 'six'))], (input, dir) => {
+      expect(argsOf(run(input({ last_assistant_message: answer }), dir))).toEqual({ hook: 'stop' });
+    });
+  });
+
   it('a tool result quoting the ask tag is no ask', () => {
     withTranscript([
       user(askHintText('6', 'six')),
@@ -183,3 +204,21 @@ describe('the Stop hook reads the ids from the transcript on its own host', () =
     });
   });
 });
+
+// The class of 2026-11-07's double answer: a Stop hook that reads the turn from the transcript
+// runs before the CLI wrote the turn's final message there. Every Walnut hook module that reads
+// the transcript in a Stop hook also reads the input's own copy of that message.
+describe('every Stop hook that reads the transcript also reads the turn\'s final text', () => {
+  it('holds for each hook module in src/providers', () => {
+    const dir = path.join(__dirname, '../../../src/providers');
+    const readers = fs.readdirSync(dir).filter((f) => f.endsWith('-hook.ts')).filter((f) => {
+      const src = fs.readFileSync(path.join(dir, f), 'utf8');
+      return /\bStop:/.test(src) && src.includes('transcript_path');
+    });
+    expect(readers).toContain('stop-unanswered-hook.ts');
+    for (const f of readers) {
+      expect(fs.readFileSync(path.join(dir, f), 'utf8'), `${f} reads the transcript at Stop`).toMatch(/walnut-stop-input|last_assistant_message/);
+    }
+  });
+});
+
