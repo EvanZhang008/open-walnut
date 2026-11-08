@@ -61,8 +61,8 @@ enum UITestLaunch {
         let pinsItsOwnServer = arguments.contains(serverURLArgument)
         let keepsViews = arguments.contains(keepViewsArgument)
         app.launchArguments =
-            (pinsItsOwnServer ? [] : [serverURLArgument, blackholeURL]) + keychainArguments + silentAudioArguments
-            + (keepsViews ? [] : freshViewsArguments) + arguments
+            (pinsItsOwnServer ? [] : [serverURLArgument, blackholeURL]) + (keepsViews ? [] : freshViewsArguments)
+            + keychainArguments + silentAudioArguments + arguments
         return app
     }
 
