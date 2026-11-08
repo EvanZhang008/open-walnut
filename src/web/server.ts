@@ -482,6 +482,21 @@ const gitRecoveryTracker = createRecoveryTransitionTracker()
  * boot gave up 1.5s before the daemon came up, and the card stayed for good.
  */
 const LOCAL_DAEMON_RECOVERY_KEY = 'local-daemon'
+
+/** Never throws, never awaited by the boot (src/core/sessions/session-runtime-warm.ts). */
+async function warmSessionRuntimeAtBoot(): Promise<void> {
+  try {
+    const [{ warmSessionRuntime }, { isolatedHere }] = await Promise.all([
+      import('../core/sessions/session-runtime-warm.js'),
+      import('../core/stt/voice-here.js'),
+    ])
+    const result = await warmSessionRuntime({ isolated: isolatedHere() !== null })
+    if (result.state === 'failed') log.web.warn('session runtime tree not unpacked at boot', result)
+    else if (result.state !== 'skipped') log.web.info('session runtime tree ready', result)
+  } catch (err) {
+    log.web.warn('session runtime warm failed to start', { error: err instanceof Error ? err.message : String(err) })
+  }
+}
 const localDaemonTracker = createRecoveryTransitionTracker()
 
 /** The local daemon is serving: the failing→healthy edge retires its start card. */
@@ -1530,6 +1545,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   } else if (bootPolicy('cloud-exec') && !cloudExec?.enabled) {
     log.web.info('cloud mode: skipping local session daemon startup')
   } else try {
+    // The compiled file's runtime tree for the sessions this daemon will start (their
+    // walnut MCP mount): unpacked now in the background, not by the first ask after a deploy.
+    void warmSessionRuntimeAtBoot()
     const { localDaemon } = await import('../providers/local-daemon.js')
     unsubscribeLocalDaemonReady?.()
     unsubscribeLocalDaemonReady = localDaemon.onReady(observeLocalDaemonReady)

@@ -16,12 +16,23 @@ const KEEP_OTHER_BUILDS = 2
 /** A staging dir this old belongs to an unpack that died. */
 const STALE_PARTIAL_MS = 60 * 60_000
 
-function defaultParent(): string {
-  const home = process.env.OPEN_WALNUT_HOME || path.join(os.homedir(), '.open-walnut')
-  return path.join(home, 'local', 'runtime')
+/** The env keys that decide where a build's tree goes (runtimeRootsFor). */
+export const RUNTIME_PLACE_ENV = ['WALNUT_RUNTIME_DIR', 'OPEN_WALNUT_HOME'] as const
+
+/**
+ * Where a run of the file with this env looks for build `id`'s tree, in order:
+ * WALNUT_RUNTIME_DIR's tree alone when set, else the data home's, then the temp
+ * dir's (a data home that is not writable). Reads only RUNTIME_PLACE_ENV.
+ */
+export function runtimeRootsFor(env: NodeJS.ProcessEnv, id: string): string[] {
+  const override = env.WALNUT_RUNTIME_DIR
+  if (override) return [path.join(path.resolve(override), id)]
+  const home = env.OPEN_WALNUT_HOME || path.join(os.homedir(), '.open-walnut')
+  return [path.join(home, 'local', 'runtime', id), path.join(os.tmpdir(), `open-walnut-runtime-${os.userInfo().uid}`, id)]
 }
 
-function isComplete(root: string, id: string): boolean {
+/** True when `root` holds build `id`'s whole tree (its marker is written last). */
+export function isComplete(root: string, id: string): boolean {
   try {
     return fs.readFileSync(path.join(root, RUNTIME_MARKER), 'utf8').trim() === id
   } catch {
@@ -89,9 +100,7 @@ export function pruneRuntimes(parent: string, keepId: string, now = Date.now()):
  */
 export function ensureRuntime(archivePath: string, id: string): string {
   const override = process.env.WALNUT_RUNTIME_DIR
-  const roots = override
-    ? [path.join(path.resolve(override), id)]
-    : [path.join(defaultParent(), id), path.join(os.tmpdir(), `open-walnut-runtime-${os.userInfo().uid}`, id)]
+  const roots = runtimeRootsFor(process.env, id)
   let lastError: unknown = null
   for (const root of roots) {
     if (isComplete(root, id)) return root
