@@ -40,7 +40,7 @@ enum AudioSilence {
     /// zero, and muted again when the page's own controls unmute it: the web app's silencer (web/src/utils/automation-silence.ts), which a
     /// WKWebView never loads and whose `navigator.webdriver` gate is false here. App user
     /// scripts run even where the page's own JavaScript is off (a letter).
-    @MainActor static func install(on configuration: WKWebViewConfiguration) {
+    static func install(on configuration: WKWebViewConfiguration) {
         guard isOn else { return }
         configuration.userContentController.addUserScript(
             WKUserScript(source: webScript, injectionTime: .atDocumentStart, forMainFrameOnly: false))
