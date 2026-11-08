@@ -77,6 +77,22 @@ describe('make_dmg', () => {
     expect(r.made).toBe(false)
   })
 
+  // 2026-11-08, Release archives run 42482179843: the update test's own bare create failed
+  // the arm64 app of 0.6.29. Every DMG the repository makes goes through make_dmg.
+  it('no file but make-dmg.sh runs hdiutil create', () => {
+    const files = spawnSync('git', ['ls-files', '--', ':!tests/', ':!docs/', ':!*.md', ':!desktop/make-dmg.sh'], { cwd: ROOT, encoding: 'utf8' }).stdout.trim().split('\n')
+    const bare = files.filter((f) => {
+      const full = path.join(ROOT, f)
+      if (!fs.statSync(full, { throwIfNoEntry: false })?.isFile()) return false
+      const text = fs.readFileSync(full, 'utf8')
+      // a spawn with an argument list, or a shell line that runs it (comments name it freely)
+      return /hdiutil['"]\s*,\s*\[\s*['"]create['"]/.test(text) || /^[^#\n]*?(^|[;&|(]\s*|\s)(\/usr\/bin\/)?hdiutil\s+create\b/m.test(text)
+    })
+    expect(files.length).toBeGreaterThan(100)
+    expect(bare).toEqual([])
+    expect(fs.readFileSync(path.join(ROOT, 'scripts/desktop-update-e2e.mjs'), 'utf8')).toContain('make_dmg Walnut')
+  })
+
   it('build-release.sh makes its DMG through make_dmg, never a bare hdiutil create', () => {
     const src = fs.readFileSync(path.join(ROOT, 'desktop/build-release.sh'), 'utf8')
     expect(src).toContain('make_dmg "$APP_NAME" "$DMG_TEMP" "$DMG_OUT"')

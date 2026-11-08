@@ -42,6 +42,8 @@ import { carriedFor, installedVersion, machineArch } from './desktop-smoke.mjs'
 import { freePort } from './lib/free-port.mjs'
 import { startAppWindowVideo, writesOwnSnapshots } from './lib/app-window-video.mjs'
 
+const MAKE_DMG = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'desktop', 'make-dmg.sh')
+
 function parseArgs(argv) {
   const out = { old: null, next: null, source: null, work: null, keep: false, readOnly: false, auto: false, video: null }
   for (let i = 0; i < argv.length; i++) {
@@ -138,7 +140,9 @@ export async function runUpdateE2E({ old, next, source, work: made, keep = false
   fs.mkdirSync(dmgSrc, { recursive: true })
   execFileSync('/usr/bin/ditto', [next, path.join(dmgSrc, 'Walnut.app')])
   const dmg = path.join(work, `Walnut-${arch}.dmg`)
-  execFileSync('/usr/bin/hdiutil', ['create', '-volname', 'Walnut', '-srcfolder', dmgSrc, '-ov', '-format', 'UDZO', dmg], { stdio: 'ignore' })
+  // The release build's own sized, retried create (desktop/make-dmg.sh): 2026-11-08, a bare
+  // `hdiutil create` here failed the arm64 app of 0.6.29 after it was signed and notarized.
+  execFileSync('/bin/bash', ['-c', '. "$1"; make_dmg Walnut "$2" "$3"', 'make-dmg', MAKE_DMG, dmgSrc, dmg], { stdio: ['ignore', 'ignore', 'inherit'] })
   const feed = await serveFeed({ version: to, arch, dmg, breakFirstDownload: true })
 
   const home = path.join(work, 'home')
