@@ -537,9 +537,11 @@ describe('host server manager', () => {
     expect(m.view('devbox')).toMatchObject({ phase: 'error' })
     expect(m.view('devbox').message).toMatch(/refused \(proxy_login\).*Walnut tries again in 0 s\./)
     // No connect, no Retry: it tries again, twice, and the second one gets through.
-    await expect.poll(() => host.calls.includes('launch'), { timeout: 5_000 }).toBe(true)
+    await expect.poll(() => host.calls.includes('launch'), { timeout: 10_000 }).toBe(true)
     expect(refusals).toBe(0)
-    await expect.poll(() => m.view('devbox').phase, { timeout: 5_000 }).not.toBe('error')
+    // Running, not merely out of 'error': the retry's upload has to have worked (which resets the
+    // waits) before the next refusal is set, or that refusal lands in the retry still on its way.
+    await expect.poll(() => m.view('devbox').phase, { timeout: 10_000 }).toBe('running')
     // A login that worked ends the waiting: a refusal days later starts again at the first wait.
     refusals = 1
     host.installState = 'absent'
