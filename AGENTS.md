@@ -61,6 +61,11 @@ screen, and check that it worked. Where the maintainer picked one way for himsel
 say), the other reasonable ways stay options for everyone else. Never depend on a file, shortcut or
 setting that exists on one machine only.
 
+**Walnut never sets an engine's own defaults.** The default model and settings of an underlying
+agent (Claude Code, Codex and the rest) belong to that agent's own settings; Walnut only passes a
+model someone chose and lists each engine's models, so it stays generic and works the same on every
+platform.
+
 ## Existing users keep working and keep upgrading
 
 Every change reaches people who already run an older Walnut. Before it lands, make sure:
