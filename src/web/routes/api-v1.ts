@@ -3410,6 +3410,16 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
         await noteResultReport(before.id, { via: 'complete', by }, null, { emit: false })
       }
     }
+    // Another task moving a task that asks the user off NEED_ACTION reads his words there first
+    // (core/sessions/user-spoke.ts).
+    let userSaid: import('../../core/sessions/user-spoke.js').UserSaid | undefined
+    {
+      const rawSid = req.headers['x-walnut-caller-sid']
+      const { admitPhaseByOther } = await import('../../core/sessions/user-spoke.js')
+      const check = await admitPhaseByOther(id, (Array.isArray(rawSid) ? rawSid[0] : rawSid)?.trim() || undefined, phase, (req.body as { user_words?: unknown } | undefined)?.user_words)
+      if (check?.refusal) { sendError(res, 409, 'user_spoke_since', check.refusal); return }
+      userSaid = check?.said
+    }
     // A session parks a task only on a wait outside Walnut and the user (core/sessions/outside-wait.ts).
     if (phase === 'WAITING') {
       const rawSid = req.headers['x-walnut-caller-sid']
@@ -3525,6 +3535,7 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
       // `title_shortened_from` (additive): the long title the session sent.
       res.json({
         task: projectTask(updated),
+        ...(userSaid ? { userSaid } : {}),
         ...(titleShortenedFrom ? { title_shortened_from: titleShortenedFrom } : {}),
         ...(placement ? { placement } : {}),
         ...(phaseIgnored ? { phase_ignored: phaseIgnored } : {}),

@@ -11,6 +11,7 @@
 import type { Task } from '../types.js';
 import { userKindVerdict } from '../org/user-kind.js';
 import { ASK_KINDS, ASK_MORE_MAX, ASK_OPTIONS_MAX, type AskKind, type AskOption, type StatusLineBy, type StatusReport, type WaitKind } from '../user-status.js';
+import { needsSinceOf, settleCheck, type UserSaid } from './user-spoke.js';
 
 export interface ReportChange {
   state: 'needs' | 'working' | 'waiting';
@@ -30,6 +31,8 @@ export interface ReportChange {
   user_kind_why?: string;
   /** needs: why it asks what a task in its tree already asks the user (same-ask.ts). Never stored. */
   same_ask_reason?: string;
+  /** Set by a task over the task's ask after the user wrote there: his words, passed back (user-spoke.ts). Never stored. */
+  user_words?: string;
 }
 
 export class ReportChangeError extends Error {
@@ -127,13 +130,30 @@ function askShapeOf(c: Record<string, unknown>): Pick<StatusReport, 'ask_kind' |
  */
 export async function setTaskReport(
   taskId: string, raw: unknown, setter: { taskId: string; title?: string } | null, nowMs = Date.now(),
-): Promise<{ task: Task; phase: string | null }> {
+): Promise<{ task: Task; phase: string | null; userSaid?: UserSaid }> {
   const { getTask, updateTask, updateTaskRaw } = await import('../task-manager.js');
   const task = await getTask(taskId).catch(() => null);
   if (!task) throw new ReportChangeError(`task ${taskId} not found`, 'not_found', 404);
   if (task.phase === 'COMPLETE' || task.status === 'done') throw new ReportChangeError('the task is complete: reopen it first', 'conflict', 409);
   const by: StatusLineBy = !setter ? 'human' : setter.taskId === task.id ? 'self' : `task:${setter.taskId}`;
-  const report = reportOfChange(raw, by, setter && by !== 'self' ? setter.title : undefined, nowMs);
+  const changed = reportOfChange(raw, by, setter && by !== 'self' ? setter.title : undefined, nowMs);
+  const needsSince = needsSinceOf(changed, task.status_report);
+  const report: StatusReport = needsSince ? { ...changed, needs_since: needsSince } : changed;
+  // Another task taking the ask off the user's Needs you (any line but the same ask) reads his words
+  // in the task first, and passes back any he wrote since it asked (user-spoke.ts).
+  let userSaid: UserSaid | undefined;
+  if (setter && by.startsWith('task:')) {
+    const { openAskOf } = await import('./ask-answer.js');
+    const { askKey } = await import('../same-ask.js');
+    const open = openAskOf(task);
+    if ('ask' in open && !(report.state === 'needs' && askKey(report.ask) === askKey(open.ask))) {
+      const { listTasks } = await import('../task-manager.js');
+      const userWords = typeof (raw as ReportChange | null)?.user_words === 'string' ? (raw as ReportChange).user_words : undefined;
+      const check = await settleCheck(task, setter.taskId, userWords, 'changed', await listTasks().catch(() => []));
+      if (check?.refusal) throw new ReportChangeError(check.refusal, 'user_spoke_since', 409);
+      userSaid = check?.said;
+    }
+  }
   // A Needs you its tree already asks the user is not put on them twice (same-ask.ts); a person's own line is never asked.
   if (report.state === 'needs' && by !== 'human') {
     const { refuseSameAsk } = await import('../same-ask-tree.js');
@@ -163,5 +183,5 @@ export async function setTaskReport(
   }
   const { log } = await import('../../logging/index.js');
   log.task.info('task report set', { taskId: task.id, by, state: report.state, phase });
-  return { task: (await getTask(task.id).catch(() => task)) ?? task, phase };
+  return { task: (await getTask(task.id).catch(() => task)) ?? task, phase, ...(userSaid ? { userSaid } : {}) };
 }

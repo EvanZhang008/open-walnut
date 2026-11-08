@@ -121,6 +121,8 @@ const PHASE_READERS: Record<string, number> = {
   'src/core/sessions/team-stop.ts': 3,
   // the one wake about an ask the task owes the user skips a task that parked itself (WAITING), like request-progress
   'src/core/sessions/user-asks.ts': 1,
+  // The phase a task_update writes (another task moving one off NEED_ACTION), not a read of the state.
+  'src/core/sessions/user-spoke.ts': 1,
   // whether a turn end settled a request: a parked task (WAITING) or a handed-back one (NEED_ACTION) after the report
   'src/core/sessions/request-progress.ts': 2,
   'src/core/status-consistency.ts': 2,

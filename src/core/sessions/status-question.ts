@@ -73,6 +73,10 @@ export async function applyStatusAnswer(
   const answered = opts.midTurn ? !!prev?.answered_person : turnAnsweredPerson(rec?.humanInputAt, turnEndedMs, prev);
   const endedAt = opts.midTurn ? prev?.turn_ended_at : new Date(turnEndedMs).toISOString();
   report = { ...report, rule: STATUS_RULE_VERSION, ...(endedAt ? { turn_ended_at: endedAt } : {}), ...(answered ? { answered_person: true } : {}) };
+  // When it began asking, kept across asks in a row: a caller settling the ask reads the user's words since (user-spoke.ts).
+  const { needsSinceOf } = await import('./user-spoke.js');
+  const needsSince = needsSinceOf(report, prev);
+  if (needsSince) report = { ...report, needs_since: needsSince };
   await updateTaskRaw(taskId, { status_report: report }, {
     emitEvent: true, source: 'status-report', shouldUpdate: (cur) => cur.phase !== 'COMPLETE' && cur.status !== 'done',
   });

@@ -21,6 +21,7 @@
 
 import { log } from '../../logging/index.js';
 import type { SessionRecord } from '../types.js';
+import type { UserSaid } from './user-spoke.js';
 import { buildPeerWrapper } from '../peers/peer-wrapper.js';
 import { pluginCallerName } from '../plugins/plugin-caller.js';
 import { senderTitleOf } from '../peers/sender-name.js';
@@ -64,7 +65,7 @@ export class SendError extends Error {
       | 'bad_request' | 'unknown_target' | 'ambiguous_target' | 'task_has_no_session'
       | 'target_archived' | 'task_starting' | 'self_send' | 'queue_full' | 'throttled' | 'delivery_failed'
       | 'unknown_request' | 'request_already_settled' | 'not_request_target' | 'origin_session_gone'
-      | 'parent_complete' | 'target_complete' | 'lead_handed_over' | 'org_off' | 'not_above' | 'no_open_ask' | 'user_words',
+      | 'parent_complete' | 'target_complete' | 'lead_handed_over' | 'org_off' | 'not_above' | 'no_open_ask' | 'user_words' | 'user_spoke_since',
     message: string,
     public statusCode = 400,
     public detail?: Record<string, unknown>,
@@ -132,6 +133,8 @@ export interface SessionSendResult {
   delivery: 'queued' | 'deferred' | 'recorded';
   /** An answers_ask send to a COMPLETE task or one with no session running: recorded, no turn started. */
   notWoken?: 'complete' | 'stopped';
+  /** An answers_ask send, or a message to a task that still asks (openAsk): what the user wrote there (user-spoke.ts). */
+  userSaid?: UserSaid;
   targetSessionId: string;
   targetTitle: string | null;
   targetTaskId?: string;
@@ -164,7 +167,7 @@ const shortId = (sid: string): string => sid.slice(0, 8);
  * user's list (2026-11-04: Main decided a launch date in a plain message, nothing recorded it, and
  * the task asked the user again the next day).
  */
-async function openAskBelow(callerSid: string | undefined, targetTaskId: string | undefined): Promise<string | null> {
+async function openAskBelow(callerSid: string | undefined, targetTaskId: string | undefined): Promise<{ ask: string; userSaid?: UserSaid } | null> {
   if (!targetTaskId) return null;
   const caller = await resolveCaller(callerSid);
   if (caller.kind !== 'session' || !caller.record.taskId || caller.record.taskId === targetTaskId) return null;
@@ -175,7 +178,11 @@ async function openAskBelow(callerSid: string | undefined, targetTaskId: string 
   if (!from || !target) return null;
   const { openAskOf, standsAbove } = await import('./ask-answer.js');
   const open = openAskOf(target);
-  return 'ask' in open && standsAbove(from, target, everything) ? open.ask : null;
+  if (!('ask' in open) || !standsAbove(from, target, everything)) return null;
+  // What the user wrote there, so a message that decides the ask is not sent past his words (user-spoke.ts).
+  const { userSaidIn } = await import('./user-spoke.js');
+  const said = await userSaidIn(target, everything).catch(() => null);
+  return { ask: open.ask, ...(said?.words.length ? { userSaid: said } : {}) };
 }
 const displayHost = (host: string | undefined): string =>
   !host || host === '__local__' ? 'local' : host;
@@ -599,8 +606,8 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
 export async function performSessionSend(input: SessionSendInput): Promise<SessionSendResult> {
   if (!input.answersAsk) {
     const result = await performPlainSend(input);
-    const openAsk = input.inReplyTo ? null : await openAskBelow(input.callerSid, result.targetTaskId).catch(() => null);
-    return openAsk ? { ...result, openAsk } : result;
+    const open = input.inReplyTo ? null : await openAskBelow(input.callerSid, result.targetTaskId).catch(() => null);
+    return open ? { ...result, openAsk: open.ask, ...(open.userSaid ? { userSaid: open.userSaid } : {}) } : result;
   }
   // An answer for the user (ask-answer.ts): checked and led by Walnut's line, then recorded.
   const caller = await resolveCaller(input.callerSid);
@@ -653,6 +660,7 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
       delivery: 'recorded', notWoken: why, targetSessionId: sid, targetTitle: prepared.target.title, targetTaskId: prepared.target.id,
       target: { handle: sessionHandle(prepared.target.title, sid), sessionId: sid, taskId: prepared.target.id },
       ...(asked ? { repliedTo: asked.id } : {}),
+      ...(prepared.userSaid ? { userSaid: prepared.userSaid } : {}),
     };
   };
   if (!reach.wakes) {
@@ -676,7 +684,7 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
     throw err;
   }
   await prepared.commit();
-  return result;
+  return prepared.userSaid ? { ...result, userSaid: prepared.userSaid } : result;
 }
 
 /** Where an answer to `request` from `replierSid` goes (performReply's own routing), or undefined. */

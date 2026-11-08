@@ -6,6 +6,7 @@ import { defineOp, getOp } from './registry.js';
 import { startTask, TASK_START_INPUT } from './task-execution.js';
 import { deliveryWaitLine, NO_REPLY_ASKED, sendBehindSlowHostLine, REPLY_ARRIVES_HINT, withOutcome } from './outcome.js';
 import { MESSAGE_TEXT_HINT } from '../core/team-charter.js';
+import { USER_SPOKE_TEXT, USER_WORDS_BACK, userSaidLine, type UserSaid } from '../core/sessions/user-spoke.js';
 import { WORK_PLACE_RULE } from '../core/work-place.js';
 import { leftOutLine, shapeHistory, type HistoryShape, type ShapeResult } from './task-history-shape.js';
 
@@ -71,9 +72,11 @@ defineOp({
       'This message decides the question the target task is asking the user, in the user\'s place (you are a task it is under, its lead or VP, or Main). '
       + 'Walnut takes that ask off the user\'s Needs you and leads your message with one line telling the task so. A COMPLETE task, or one whose session is not running, '
       + 'is not woken: the answer is recorded and nothing is delivered (delivery "recorded"); task_start it, or force with a reason, when it must act. 409 not_above when the task is not below you, '
-      + '409 no_open_ask when it has no ask of its own to answer (none, a Board choice, or one shown on another task, named), 409 user_words for an ask only the user approves'),
-    user_words: z.string().min(10).max(2000).optional().describe(
-      'With answers_ask on an ask of a kind only the user approves (an outward send, spending, credentials, permissions, a cloud delete, an irreversible step): the user\'s own words you act on, quoted exactly'),
+      + '409 no_open_ask when it has no ask of its own to answer (none, a Board choice, or one shown on another task, named), 409 user_words for an ask only the user approves, '
+      + `409 user_spoke_since when the user wrote in that task after it asked. ${USER_SPOKE_TEXT}`),
+    user_words: z.string().min(1).max(4000).optional().describe(
+      'With answers_ask: the user\'s own words you act on, quoted exactly. Needed on an ask of a kind only the user approves (an outward send, spending, credentials, permissions, a cloud delete, an irreversible step), '
+      + `and after 409 user_spoke_since: ${USER_WORDS_BACK}`),
     force: z.boolean().optional().describe('Send to (or answer) a task that is COMPLETE, which reopens it. Needs `reason`'),
     reason: z.string().min(1).max(500).optional().describe('With force: what changed and why the complete task must act again. Shown to that task and the user'),
     messageId: z.string().regex(/^qm-[A-Za-z0-9-]{1,64}$/).optional().describe('Stable id for retry deduplication'),
@@ -92,11 +95,12 @@ defineOp({
       : String(args.to ?? args.in_reply_to ?? 'the session');
     // The target's host did not take its last message in time: this one waits behind it.
     const waiting = sendBehindSlowHostLine(b.waiting, b.requestId, b.messageId);
+    const said = userSaidLine(b.userSaid as UserSaid | undefined);
     if (delivery === 'recorded') {
       const who = b.targetTaskId || target;
       return withOutcome(
         { ...b },
-        `Answer recorded on ${who}: Walnut took its ask off the user's Needs you. Not delivered: the task is ${b.notWoken === 'complete' ? 'COMPLETE' : 'not running'}, so no turn was started and it does not know yet.`,
+        `Answer recorded on ${who}: Walnut took its ask off the user's Needs you. Not delivered: the task is ${b.notWoken === 'complete' ? 'COMPLETE' : 'not running'}, so no turn was started and it does not know yet.${said ? ` ${said}` : ''}`,
         `Nothing to wait for. If it must act on this answer, task_start ${who} with the answer in the message${b.notWoken === 'complete' ? ' (it reopens)' : ''}. Do NOT resend.`,
       );
     }
@@ -105,7 +109,7 @@ defineOp({
       delivery === 'deferred'
         ? `Message queued for ${target}: it is parked on a human permission prompt, so the text lands after the human answers. Do NOT resend.`
         : `Message queued for ${b.targetTaskId || b.taskId || target}${args.force === true ? ' (forced: if it was complete, this reopens it)' : ''}. Accepted for delivery, not a completed reply. Do NOT resend.`
-          + (waiting ? ` ${waiting}` : ''),
+          + (waiting ? ` ${waiting}` : '') + (said ? ` ${said}` : ''),
       (args.in_reply_to && (Array.isArray(args.not_done) ? args.not_done.length > 0 : typeof args.not_done === 'string' && args.not_done.trim() !== '')
         ? 'Marked Partial: the Board and the Brief list what is not done. ' : '')
       + (typeof b.requestId === 'string' && b.requestId

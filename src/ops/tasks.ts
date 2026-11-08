@@ -13,6 +13,7 @@ import { agentStatusView, summaryAt, SUMMARY_IS_HISTORY } from '../core/user-sta
 import { USER_KINDS, USER_KIND_PARAM, USER_KIND_WHY_PARAM } from '../core/org/user-kind.js'
 import { laneById, normalizeLanes, placeCard } from '../core/boards/board-lanes.js'
 import { agentMemoryWriterNote, type AgentMemory } from '../core/sessions/agent-memory.js'
+import { USER_SPOKE_TEXT, USER_WORDS_BACK, userSaidLine, type UserSaid } from '../core/sessions/user-spoke.js'
 import type { OpCall } from './core.js'
 import {
   BULK_GET_FIELDS,
@@ -759,12 +760,15 @@ const REPORT_CHANGE = z.object({
   user_kind_why: z.string().max(300).optional().describe(USER_KIND_WHY_PARAM),
   same_ask_reason: z.string().max(300).optional()
     .describe('With needs: only when a task in its tree already asks the user the same (409 same_ask) and this is really a different decision: one line saying why'),
+  user_words: z.string().max(4000).optional()
+    .describe(`Taking a task's ask off the user's Needs you after he wrote in it (409 user_spoke_since quotes his words): ${USER_WORDS_BACK}`),
 })
 const REPORT_SET_TEXT = 'Set what a task waits on next, as its own turn-end report would: its line on the Org page, the Board and the phone, '
   + 'recorded as yours (by). For a task you lead, or as its VP or Main; the task\'s next own report replaces it. It moves the '
   + 'phase as that report would (needs = NEED_ACTION; waiting on something outside = WAITING). Needs always names the ask, '
   + 'at a glance, and says how the user answers in one click when it can (ask_kind, ask_options, ask_more). A task or lead putting a Needs you on the user names which of their kinds it is (user_kind, user_kind_why; 409 user_kind without them); a person\'s own line is never asked. '
-  + 'The user sees one decision once: a Needs you that a task below it (or a decision letter in its tree) already asks is refused with 409 same_ask, naming that task: leave the ask to it.'
+  + 'The user sees one decision once: a Needs you that a task below it (or a decision letter in its tree) already asks is refused with 409 same_ask, naming that task: leave the ask to it. '
+  + `${USER_SPOKE_TEXT}`
 
 defineOp({
   name: 'task_update',
@@ -802,7 +806,8 @@ defineOp({
     due_date: z.string().nullable().optional().describe('ISO-8601 date/datetime, or "" / null to clear'),
     start_date: z.string().nullable().optional().describe('ISO-8601 date/datetime, or "" / null to clear'),
     project: z.string().optional().describe('Project name; "" = Inbox. A worker (a task with a leader) stays in its leader\'s project: moving it to another needs user_words'),
-    user_words: z.string().optional().describe('With project, moving a worker out of its leader\'s project: exactly what the user said asking for that project (quoted, in their language; it must name the project). Without them the move is refused (409 project_elsewhere)'),
+    user_words: z.string().optional().describe('With project, moving a worker out of its leader\'s project: exactly what the user said asking for that project (quoted, in their language; it must name the project). Without them the move is refused (409 project_elsewhere). '
+      + `With phase, moving another task that asks the user off NEED_ACTION after he wrote in it (409 user_spoke_since quotes his words): ${USER_WORDS_BACK}`),
     title: z.string().optional().describe('New title: a few words (under 60 characters from a session, the server cuts a longer one; <= 500)'),
     description: z.string().optional().describe('Replaces the description (write-only)'),
     tags: z.array(z.string()).optional().describe('FULL replacement of the task tags, each key:value (e.g. team:marina, sev:2; a plain word is stored as label:<word>)'),
@@ -834,8 +839,9 @@ defineOp({
     const reported = report === undefined ? undefined
       : await call('PUT', `/tasks/${encodeURIComponent(String(id))}/report`, report) as { task?: unknown } | undefined
     if (Object.keys(body).length === 0) {
+      const said = userSaidLine((reported as { userSaid?: UserSaid } | undefined)?.userSaid)
       return withOutcome({ ...headline(reported?.task), ...(reported ?? {}) },
-        'Task line updated (report). No session was started or stopped by this.', 'No further action is required. Its own next report replaces this.')
+        `Task line updated (report). No session was started or stopped by this.${said ? ` ${said}` : ''}`, 'No further action is required. Its own next report replaces this.')
     }
     const patched = await call('PATCH', `/tasks/${encodeURIComponent(String(id))}`, body) as
       { task?: unknown; title_shortened_from?: string; placement?: LeaderPlacement; phase_ignored?: { message?: string } } | undefined
@@ -858,8 +864,9 @@ defineOp({
     const ignored = patched?.phase_ignored
       ? `phase=WAITING was NOT applied. ${patched.phase_ignored.message ?? ''} `
       : ''
+    const said = userSaidLine((patched as { userSaid?: UserSaid } | undefined)?.userSaid)
     const outcome = `${ignored}${fieldsLine}${cut}No session was started or stopped by this. `
-      + 'Execution is unchanged.'
+      + `Execution is unchanged.${said ? ` ${said}` : ''}`
     const next = ignored
       ? 'Do not park this task again. End your turn as usual; arm a trigger with wait:false only for an outside event that sends no notice.'
       : body.phase === 'NEED_ACTION'
@@ -925,11 +932,12 @@ defineOp({
   routes: [{ method: 'PUT', path: '/tasks/:id/report' }],
   handler: async (args, call) => {
     const out = await call('PUT', `/tasks/${encodeURIComponent(String(args.id))}/report`, args.report) as
-      { task?: Record<string, unknown>; phase?: string | null } | undefined
+      { task?: Record<string, unknown>; phase?: string | null; userSaid?: UserSaid } | undefined
     const line = (out?.task?.user_status as { line?: { text?: string } } | undefined)?.line?.text
+    const said = userSaidLine(out?.userSaid)
     return withOutcome(
-      { ...headline(out?.task), ...(out?.phase ? { phase: out.phase } : {}) },
-      `Its line is set${out?.phase ? ` and its phase moved to ${out.phase}` : ''}${line ? `: "${line}"` : ' (its status shows it once the sync runs, about 2 s)'}. No session was started or stopped.`,
+      { ...headline(out?.task), ...(out?.phase ? { phase: out.phase } : {}), ...(out?.userSaid ? { userSaid: out.userSaid } : {}) },
+      `Its line is set${out?.phase ? ` and its phase moved to ${out.phase}` : ''}${line ? `: "${line}"` : ' (its status shows it once the sync runs, about 2 s)'}. No session was started or stopped.${said ? ` ${said}` : ''}`,
       'No further action is required. Its own next report replaces this.',
     )
   },

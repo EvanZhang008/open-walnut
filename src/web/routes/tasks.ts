@@ -1502,6 +1502,16 @@ tasksRouter.patch('/:id', async (req: Request, res: Response, next: NextFunction
     // here before anything is written: they used to be dropped with a 200.
     const pinParse = parsePinPatch(req.body)
     if (!pinParse.ok) { res.status(pinParse.status).json({ error: pinParse.error }); return }
+    // Another task moving a task that asks the user off NEED_ACTION reads his words there first
+    // (core/sessions/user-spoke.ts).
+    let userSaid: import('../../core/sessions/user-spoke.js').UserSaid | undefined
+    {
+      const rawSid = req.headers['x-walnut-caller-sid']
+      const { admitPhaseByOther } = await import('../../core/sessions/user-spoke.js')
+      const check = await admitPhaseByOther(id, (Array.isArray(rawSid) ? rawSid[0] : rawSid)?.trim() || undefined, req.body.phase, req.body.user_words)
+      if (check?.refusal) { res.status(409).json({ error: check.refusal, code: 'user_spoke_since' }); return }
+      userSaid = check?.said
+    }
     let owedSettle: import('../../core/sessions/owed-to-user.js').CloseSettle | undefined
     // Once the patch is valid: a session's close of a task that still holds something for the user
     // keeps it open (core/sessions/owed-to-user.ts).
@@ -1559,7 +1569,7 @@ tasksRouter.patch('/:id', async (req: Request, res: Response, next: NextFunction
     }
     log.web.info('task updated via REST', { taskId: id, fields: Object.keys(req.body) })
 
-    res.json(result)
+    res.json(userSaid && result ? { ...result, userSaid } : result)
   } catch (err) {
     if (err instanceof ProjectSourceConflictError) {
       res.status(409).json({

@@ -29,6 +29,7 @@ import { log } from '../../logging/index.js';
 import type { Task } from '../types.js';
 import { openOwed, type StructuredReply, type TaskResultReport } from '../peers/structured-reply.js';
 import type { UserStatus } from '../user-status.js';
+import { userSaidLine } from './user-spoke.js';
 
 export type OwedSource = 'progress' | 'ask' | 'letter' | 'choice' | 'held';
 export interface OwedItem { source: OwedSource; text: string }
@@ -170,7 +171,7 @@ function cut(t: string, max = ASK_MAX): string {
  * next close may force it. A second close by a told closer naming the same items writes nothing.
  * A task completed meanwhile is left alone. Throws when the hold could not be recorded.
  */
-async function holdOpen(task: Task, items: OwedItem[], closer: { taskId: string }, callerSid: string, fields?: StructuredReply | null): Promise<void> {
+async function holdOpen(task: Task, items: OwedItem[], closer: { taskId: string }, callerSid: string, fields?: StructuredReply | null, renew = false): Promise<void> {
   const by = `task:${closer.taskId}`;
   const texts = items.map((i) => i.text);
   const ask = cut(items.length === 1 && items[0].source !== 'progress' && items[0].source !== 'held'
@@ -186,7 +187,8 @@ async function holdOpen(task: Task, items: OwedItem[], closer: { taskId: string 
     const open = openOwed(was);
     const same = !!open && open.items.length === texts.length && texts.every((t) => open.items.includes(t));
     const told = [...new Set([...(same ? open!.told ?? [] : []), closer.taskId])];
-    if (same && !fields && (open!.told ?? []).includes(closer.taskId)) return null;
+    // `renew`: the user wrote since this closer was told, so it is told again, from now.
+    if (same && !fields && !renew && (open!.told ?? []).includes(closer.taskId)) return null;
     const own = fields?.not_done ?? ownNotDone(was);
     return {
       result_report: {
@@ -194,7 +196,7 @@ async function holdOpen(task: Task, items: OwedItem[], closer: { taskId: string 
         ...((fields?.result ?? was?.result) ? { result: fields?.result ?? was?.result } : {}),
         ...((fields?.evidence ?? was?.evidence) ? { evidence: fields?.evidence ?? was?.evidence } : {}),
         not_done: [...new Set([...own, ...texts])],
-        owed: same ? { ...open!, told } : { items: texts, ask, at, by, told },
+        owed: same ? { ...open!, told, ...(renew ? { at } : {}) } : { items: texts, ask, at, by, told },
       },
     };
   }, { source: 'result-report', push: false });
@@ -236,14 +238,21 @@ export async function admitSessionClose(
   if (!items.length) return { ok: true };
   const reason = (opts.reason ?? '').replace(/\s+/g, ' ').trim();
   const held = openOwed(task.result_report);
-  const told = !!held && (held.told ?? []).includes(closer.taskId) && items.every((i) => held.items.includes(i.text));
+  // Another task closing one that asks the user is shown what he wrote there (user-spoke.ts): the hold
+  // names his words, and a force after he wrote again is held again, so it never goes past them unseen.
+  const { userSaidIn } = await import('./user-spoke.js');
+  const said = closer.taskId !== task.id && items.some((i) => i.source === 'ask' || i.source === 'held')
+    ? await userSaidIn(task).catch(() => null) : null;
+  const heldMs = held ? Date.parse(held.at) : NaN;
+  const wroteSinceHold = !!said?.spokeSince && said.words.some((w) => !(Date.parse(w.at) <= heldMs));
+  const told = !!held && (held.told ?? []).includes(closer.taskId) && items.every((i) => held.items.includes(i.text)) && !wroteSinceHold;
   if (opts.force === true && reason.length >= REASON_MIN && told) {
     log.task.info('task closed with items of the user settled by its closer', { taskId, by: closer.taskId, reason, items: items.map((i) => i.source) });
     return { ok: true, settle: { taskId: task.id, items, reason, by: `task:${closer.taskId}` } };
   }
   let failed: string | undefined;
   try {
-    await holdOpen(task, items, closer, callerSid, opts.fields);
+    await holdOpen(task, items, closer, callerSid, opts.fields, wroteSinceHold);
   } catch (err) {
     failed = err instanceof Error ? err.message : String(err);
     log.task.warn('close held open, but recording it failed', { taskId, error: failed });
@@ -254,6 +263,7 @@ export async function admitSessionClose(
       ? `Recording this on the task failed (${cut(failed, 160)}), so it may not show as Partial yet; tell the user. `
       : 'It now reads Partial and stays in their Needs you (NEED_ACTION) until they are handled; tell the user if you have not. ')
     + (forcedEarly ? 'force settles only items already named to you, as these are now. ' : '')
+    + (said?.words.length ? `${userSaidLine(said)} Read his words before you settle anything in his place. ` : '')
     + `If they are already done or no longer needed, close it again with force:true and a reason (${REASON_MIN}+ characters) saying so; the reason is kept as how they were settled.`;
   return { ok: false, code: 'owed_to_user', message, items };
 }

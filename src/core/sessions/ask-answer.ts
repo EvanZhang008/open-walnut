@@ -15,15 +15,21 @@
  * a second trigger the VP then had to clean up). Only an open task whose session's CLI is alive takes
  * the answer as a message (`answerReach`); a COMPLETE task, or one with no session running, has it
  * recorded and taken off the user's Needs you, and nothing more: work there needs a task_start.
+ *
+ * An answer in the user's place never goes against what he already wrote in that task unseen
+ * (2026-11-07, Main's reflection: Main said "local only" after his "submit the cr"): the answering
+ * task is shown his words there, and one he wrote after the ask appeared refuses the answer until
+ * it passes them back in user_words (user-spoke.ts).
  */
 import { log } from '../../logging/index.js';
 import type { SessionRecord, Task } from '../types.js';
 import { isLiveSessionStatus } from '../routines/session-target.js';
 import { briefTeam } from '../user-status.js';
+import { settleCheck, type UserSaid } from './user-spoke.js';
 import { APPROVAL_KINDS, ASKS_ANSWERED_MAX, askAnswerLine, askKey, type AskAnswer, type SameAskFold } from '../same-ask.js';
 
 export class AskAnswerError extends Error {
-  constructor(readonly code: 'not_above' | 'no_open_ask' | 'user_words' | 'bad_request', message: string, readonly status = 409) {
+  constructor(readonly code: 'not_above' | 'no_open_ask' | 'user_words' | 'user_spoke_since' | 'bad_request', message: string, readonly status = 409) {
     super(message);
     this.name = 'AskAnswerError';
   }
@@ -127,6 +133,8 @@ export interface PreparedAnswer {
   line: string;
   /** The asking task, as the answer found it. */
   target: Pick<Task, 'id' | 'title' | 'phase'>;
+  /** What the user wrote in it, shown to the task that answers (user-spoke.ts); absent for the person's own answer. */
+  userSaid?: UserSaid;
   /** Record it on the asker once the message is queued. */
   commit: () => Promise<void>;
 }
@@ -163,6 +171,11 @@ export async function prepareAskAnswer(
       `Not sent: "${target.title}" asks the user to approve a step of kind ${kind}, which only the user decides. `
       + 'Answer it in their place only with their own words: pass user_words quoting what they said (task_history rows with sentBy "person", or their thread message). Otherwise leave it for them.');
   }
+  // His words in the task come first: an answer in his place never goes against what he already
+  // wrote there unseen (2026-11-07, Main's reflection: "local only" after his "submit the cr").
+  const check = caller ? await settleCheck(target, caller.id, userWords, 'sent', everything) : null;
+  if (check?.refusal) throw new AskAnswerError('user_spoke_since', check.refusal);
+  const userSaid = check?.said;
   const byTitle = caller ? caller.title : 'The user';
   const answer: AskAnswer = {
     key: askKey(ask), ask, text: text.replace(/\s+/g, ' ').trim().slice(0, 500),
@@ -172,6 +185,7 @@ export async function prepareAskAnswer(
   return {
     line: askAnswerLine(ask, byTitle),
     target: { id: target.id, title: target.title, phase: target.phase },
+    ...(userSaid ? { userSaid } : {}),
     commit: async () => {
       // Kept beside the ones before it, read under the row's lock: one answer never takes another's
       // place, even one recorded while this message was on its way.
