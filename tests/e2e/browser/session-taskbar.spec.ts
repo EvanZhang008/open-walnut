@@ -24,6 +24,9 @@ async function openSessionPanel(page: Page) {
   return panel
 }
 
+/** A beat a person can follow, only while recording (PW_VIDEO, walnut-dev webkit --video). */
+const beat = (page: Page) => (process.env.PW_VIDEO ? page.waitForTimeout(1200) : Promise.resolve())
+
 const chip = (page: Page) => page.locator(`.session-taskbar-chip[data-session-id="${SESSION_ID}"]`)
 
 test('every icon of the header\'s window buttons draws on the row\'s middle, Minimize included', async ({ page }) => {
@@ -39,10 +42,12 @@ test('every icon of the header\'s window buttons draws on the row\'s middle, Min
 
 test('Minimize puts the column on the taskbar; its chip brings it back', async ({ page }) => {
   const panel = await openSessionPanel(page)
+  await beat(page)
   await panel.getByRole('button', { name: 'Minimize session to the taskbar' }).click()
   await expect(panel).toHaveCount(0)
   await expect(chip(page)).toBeVisible()
   await expect(chip(page)).toContainText('Editor fixture task')
+  await beat(page)
 
   await chip(page).locator('.session-taskbar-open').click()
   await expect(page.locator(`.main-page-session-column .session-panel[data-session-id="${SESSION_ID}"]`)).toBeVisible()
@@ -52,9 +57,11 @@ test('Minimize puts the column on the taskbar; its chip brings it back', async (
 
 test('× on a column never makes a chip: the session goes to Recent at the right end, which opens it again', async ({ page }) => {
   const panel = await openSessionPanel(page)
+  await beat(page)
   await panel.getByRole('button', { name: 'Close session panel' }).click()
   await expect(panel).toHaveCount(0)
   await expect(chip(page)).toHaveCount(0)
+  await beat(page)
   const recent = page.getByTestId('session-taskbar-recent')
   const pill = recent.locator(`.session-taskbar-recent-pill[data-session-id="${SESSION_ID}"]`)
   await expect(pill).toBeVisible()
@@ -67,6 +74,7 @@ test('× on a column never makes a chip: the session goes to Recent at the right
   await pill.locator('.session-taskbar-open').click()
   await expect(page.locator(`.main-page-session-column .session-panel[data-session-id="${SESSION_ID}"]`)).toBeVisible()
   await expect(pill).toHaveCount(0)
+  await beat(page)
 
   // × on a Recent pill only takes it off the list.
   await page.locator(`.main-page-session-column .session-panel[data-session-id="${SESSION_ID}"]`).getByRole('button', { name: 'Close session panel' }).click()
@@ -80,6 +88,7 @@ test('a column pushed out by a full strip never makes a chip: it goes to Recent'
   await setPanelMode(page, '1')
   try {
     await openSessionPanel(page)
+    await beat(page)
     // Opening another task's session on a one-panel strip pushes this column out.
     await page.locator('.todo-search-input').fill('')
     const other = page.locator('.todo-panel-item[data-task-id="pw-task-001"]')
@@ -90,6 +99,7 @@ test('a column pushed out by a full strip never makes a chip: it goes to Recent'
     await expect(page.locator('.main-page-session-column .session-panel')).toHaveCount(1)
     await expect(chip(page)).toHaveCount(0)
     await expect(page.locator(`.session-taskbar-recent-pill[data-session-id="${SESSION_ID}"]`)).toBeVisible()
+    await beat(page)
     await page.locator(`.session-taskbar-recent-pill[data-session-id="${SESSION_ID}"]`).getByRole('button', { name: /Remove .* from Recent/ }).click()
   } finally {
     await setPanelMode(page, 'Auto')
@@ -103,10 +113,12 @@ test('Minimize on the Org side panel puts the session on Home\'s chips', async (
   await page.evaluate((sid) => { history.pushState({}, '', `/org?open=session:${sid}`); dispatchEvent(new PopStateEvent('popstate')) }, SESSION_ID)
   const side = page.locator(`[data-testid="org-side"][data-session-id="${SESSION_ID}"]`)
   await expect(side).toBeVisible({ timeout: 20_000 })
+  await beat(page)
   await side.getByRole('button', { name: 'Minimize session to the taskbar' }).click()
   await expect(side).toHaveCount(0)
   await page.getByRole('link', { name: 'Home', exact: true }).click()
   await expect(chip(page)).toBeVisible()
+  await beat(page)
   await chip(page).getByRole('button', { name: /Close .* to the background/ }).click()
 })
 
@@ -121,6 +133,7 @@ test('a taskbar an older Walnut saved (pushed-out sessions mixed in) opens with 
   await page.waitForLoadState('networkidle')
   await expect(page.locator(`.session-taskbar-recent-pill[data-session-id="${SESSION_ID}"]`)).toBeVisible()
   await expect(chip(page)).toHaveCount(0)
+  await beat(page)
   // Read once: a reload keeps it under Recent, never back on the chips.
   await page.reload()
   await page.waitForLoadState('networkidle')
@@ -161,9 +174,11 @@ test('Watch in the header row keeps the task on the Watching list, and lights wh
   const watch = panel.getByTestId('session-panel-watch')
   await expect(watch).toBeEnabled()
   await expect(watch).toHaveAttribute('aria-pressed', 'false')
+  await beat(page)
   await watch.click()
   await expect(watch).toHaveAttribute('aria-pressed', 'true')
   await expect(watch).toHaveAccessibleName('Stop watching')
+  await beat(page)
   await watch.click()
   await expect(watch).toHaveAttribute('aria-pressed', 'false')
 })
@@ -185,9 +200,11 @@ test('the chips survive a reload, and a chip opens a card with the last reply', 
   // bring the column back from the URL.
   await expect.poll(() => page.url()).not.toContain(SESSION_ID)
 
+  await beat(page)
   await page.reload()
   await page.waitForLoadState('networkidle')
   await expect(chip(page)).toBeVisible()
+  await beat(page)
 
   await chip(page).getByRole('button', { name: /Peek at/ }).click()
   const card = page.getByTestId('session-taskbar-card')
