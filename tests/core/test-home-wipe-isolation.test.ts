@@ -140,14 +140,19 @@ describe('a store reached while the wipe is still going on', () => {
     expect(taskDbGeneration()).toBe(taskGen + 1)
   })
 
-  it('opens and recreates nothing once the home is gone (the test is over)', async () => {
+  it('a write made once the home is gone is read back, whatever makes the folder after it', async () => {
+    // The shape of tests/web/routes/sessions-changes.test.ts: remove the home, write without
+    // making it again, then something else makes the folder before the read.
     await createSessionRecord('race-s2', 'task-r2', 'proj', '/tmp', { initialProcessStatus: 'stopped' })
     const sessionGen = sessionDbGeneration()
     await fsp.rm(WALNUT_HOME, { recursive: true, force: true })
 
-    expect((await getSessionByClaudeId('race-s2'))?.claudeSessionId).toBe('race-s2')
-    expect(sessionDbGeneration()).toBe(sessionGen)
-    expect(fs.existsSync(WALNUT_HOME)).toBe(false)
+    expect(await getSessionByClaudeId('race-s2')).toBeNull()
+    await createSessionRecord('race-s3', 'task-r3', 'proj', '/tmp', { initialProcessStatus: 'stopped' })
+    await fsp.mkdir(path.join(WALNUT_HOME, 'other'), { recursive: true })
+    expect((await getSessionByClaudeId('race-s3'))?.claudeSessionId).toBe('race-s3')
+    expect(sessionDbGeneration()).toBe(sessionGen + 1)
+    expect(fs.existsSync(path.join(WALNUT_HOME, 'sessions.sqlite'))).toBe(true)
   })
 })
 
@@ -168,15 +173,21 @@ describe('reopenIfWiped', () => {
     expect(steps).toEqual(['open'])
   })
 
-  it('touches nothing while the file is there, or once the home is gone', async () => {
+  it('touches nothing while the file is there', async () => {
     const steps: string[] = []
     const open = () => { steps.push('open'); return 'new' }
     const close = () => { steps.push('close') }
     await fsp.writeFile(file(), '')
     expect(reopenIfWiped(file(), 'old', open, close)).toBe('old')
-    await fsp.rm(WALNUT_HOME, { recursive: true, force: true })
-    expect(reopenIfWiped(file(), 'old', open, close)).toBe('old')
     expect(steps).toEqual([])
+  })
+
+  it('opens afresh once the home is gone too, so no write stays on the removed file', async () => {
+    const steps: string[] = []
+    await fsp.rm(WALNUT_HOME, { recursive: true, force: true })
+    const got = reopenIfWiped(file(), 'old', () => { steps.push('open'); return 'new' }, (old) => { steps.push(`close ${old}`) })
+    expect(got).toBe('new')
+    expect(steps).toEqual(['open', 'close old'])
   })
 })
 

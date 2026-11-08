@@ -1,6 +1,4 @@
 import fs from 'node:fs';
-import path from 'node:path';
-import { WALNUT_HOME } from '../constants.js';
 
 /**
  * A SQLite handle kept open under the data home must not outlive a test's wipe of it.
@@ -23,14 +21,14 @@ const TEST_PROCESS = !!(process.env.VITEST || process.env.VITEST_WORKER_ID || pr
  * the wipe may still be going on: a write that ends after a test (its afterEach removing the
  * home) used to close the handle and then fail to open the file in a folder being deleted, and
  * a store that failed to open stayed failed (2026-11-07, four tests after one late write). When
- * the open fails, or the home is gone (the test is over: nothing is opened or recreated),
- * `current` stays, writing into the removed file as it did before this check existed.
+ * the open fails, `current` stays, writing into the removed file as it did before this check
+ * existed. A home that is gone is opened afresh like any wiped one (the open makes its folder):
+ * many tests remove the home and write before making it again, and a write kept on the old
+ * handle there was lost to the read that followed once something made the folder
+ * (2026-11-08, tests/web/routes/sessions-changes.test.ts read 404 for a record it had just made).
  */
 export function reopenIfWiped<T>(file: string, current: T, open: () => T, close: (old: T) => void): T {
   if (!TEST_PROCESS || fs.existsSync(file)) return current;
-  const rel = path.relative(WALNUT_HOME, file);
-  const insideHome = rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
-  if (!fs.existsSync(insideHome ? WALNUT_HOME : path.dirname(file))) return current;
   let fresh: T;
   try { fresh = open(); } catch { return current; }
   try { close(current); } catch { /* the fresh handle serves either way */ }
