@@ -26,6 +26,7 @@ import { useConfirm, useAlert, usePrompt } from '@/hooks/useConfirm';
 import { fetchProjectDetail, renameProject, deleteProject } from '@/api/projects';
 import { renameProjectLocal, removeProjectLocal } from '@/hooks/useProjectRegistry';
 import { useTasksContextSafe, type TasksContextValue } from '@/contexts/TasksContext';
+import { projectDisplayName } from '@/utils/project-display';
 
 /**
  * Move every loaded task of `from` onto `to` ('' = Inbox) in the shared task
@@ -103,7 +104,7 @@ export function useProjectActions({ onChanged }: ProjectActionsOptions = {}): Pr
 
   const rename = useCallback(async (project: string) => {
     const next = await prompt({
-      title: `Rename project “${project}”`,
+      title: `Rename project “${projectDisplayName(project)}”`,
       message: 'Renaming onto an existing project merges them (case-insensitive).',
       defaultValue: project,
       confirmLabel: 'Rename',
@@ -118,9 +119,11 @@ export function useProjectActions({ onChanged }: ProjectActionsOptions = {}): Pr
   // tasks and folders inside it. The server's rename is that merge.
   const mergeInto = useCallback(async (project: string, target: string) => {
     if (!project || !target || target.toLowerCase() === project.toLowerCase()) return;
+    const from = projectDisplayName(project);
+    const to = projectDisplayName(target);
     const ok = await confirm({
-      title: `Move “${project}” into “${target}”?`,
-      message: `Every task and folder in “${project}” moves to “${target}”, and “${project}” goes away.`,
+      title: `Move “${from}” into “${to}”?`,
+      message: `Every task and folder in “${from}” moves to “${to}”, and “${from}” goes away.`,
       confirmLabel: 'Move',
     });
     if (!ok) return;
@@ -150,7 +153,7 @@ export function useProjectActions({ onChanged }: ProjectActionsOptions = {}): Pr
     setBusy(false);
     const isClaimed = source !== 'local';
     const ok = await confirm({
-      title: `Delete project “${project}”?`,
+      title: `Delete project “${projectDisplayName(project)}”?`,
       message: isClaimed
         ? `This project is synced with ${source}. Deleting it ALSO DELETES the remote container (e.g. the MS To-Do list) — this cannot be undone. Local tasks are kept and move to the Inbox.`
         : `Its ${total} task${total === 1 ? '' : 's'} move to the Inbox (nothing is deleted).`,

@@ -185,6 +185,25 @@ describe('searchTaskReferences', () => {
   });
 });
 
+describe('the CEO name and its legacy alias', () => {
+  const main = { id: 'org-contact', title: 'CEO', org_role: 'main' } as Task;
+  const ordinary = { id: 'ordinary', title: 'Main' } as Task;
+
+  it.each(['ceo', 'CEO', ' main '])('resolves %s from the live task without an index', (query) => {
+    expect(searchTaskReferences([ordinary, main], query)).toEqual([
+      expect.objectContaining({ taskId: main.id, title: 'CEO', matchField: 'org_name', score: 0.99 }),
+    ]);
+  });
+
+  it.each(['ce', 'main task', 'ceo report'])('does not turn prose or prefixes into a role lookup: %s', (query) => {
+    expect(searchTaskReferences([ordinary, main], query)).toEqual([]);
+  });
+
+  it('does not treat an ordinary task named Main as the CEO', () => {
+    expect(searchTaskReferences([ordinary], 'main')).toEqual([]);
+  });
+});
+
 describe('searchSessionReferences', () => {
   const sessionId = '12345678-1234-4abc-8def-1234567890ab';
   const session = {

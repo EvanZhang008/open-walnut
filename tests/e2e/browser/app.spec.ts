@@ -75,7 +75,7 @@ test('app loads and shows main page elements', async ({ page }) => {
 
   // The chat slot starts hidden here (isolateUiPrefs seeds it closed, as a returning
   // user's layout): the sidebar's Ask Walnut opens it with its composer.
-  await page.getByRole('group', { name: 'Home panels' }).getByRole('button', { name: 'Ask Walnut', exact: true }).click()
+  await page.getByRole('group', { name: 'Home panels' }).getByRole('button', { name: 'Quick question', exact: true }).click()
   await expect(page.locator('.chat-input-textarea')).toBeVisible()
 })
 

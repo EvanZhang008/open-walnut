@@ -166,9 +166,9 @@ describe('#3 an answer the person read in the panel', () => {
 
 describe('#4 #5 the composer: the agent picked, and the selection of the last agent left out', () => {
   it('names the agent', () => {
-    expect(composerPlaceholderOf('Mentor', true)).toBe('Ask Mentor, or ask it to do something here…')
-    expect(composerPlaceholderOf('Walnut', false)).toBe('Ask Walnut anything…')
-    expect(composerPlaceholderOf('', true)).toBe('Ask Walnut, or ask it to do something here…')
+    expect(composerPlaceholderOf('Mentor', true)).toBe('Ask Mentor a quick question, or have it do something here…')
+    expect(composerPlaceholderOf('Walnut', false)).toBe('Ask a quick question…')
+    expect(composerPlaceholderOf('', true)).toBe('Ask a quick question, or have it do something here…')
   })
   it('a switch leaves out the selection of the moment; the same agent\'s new chat keeps it', () => {
     expect(selectionLeftOutOnSwitch('general', 'mentor', ' Uploads retry. ')).toBe('Uploads retry.')

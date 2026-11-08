@@ -59,7 +59,7 @@ struct CalendarCreateSheet: View {
 
     /// The outside service the typed project syncs to, or nil.
     private var syncService: String? {
-        tasks.projectService(project)
+        tasks.projectService(resolvedProject)
     }
 
     private var canCreate: Bool {
@@ -71,6 +71,13 @@ struct CalendarCreateSheet: View {
         var seen = Set<String>()
         for t in tasks.tasks where !t.project.isEmpty { seen.insert(t.project) }
         return seen.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
+    private var resolvedProject: String {
+        let typed = project.trimmingCharacters(in: .whitespacesAndNewlines)
+        return knownProjects.first { $0.localizedCaseInsensitiveCompare(typed) == .orderedSame }
+            ?? knownProjects.first { AskProjectName.display($0).localizedCaseInsensitiveCompare(typed) == .orderedSame }
+            ?? typed
     }
 
     var body: some View {
@@ -105,7 +112,10 @@ struct CalendarCreateSheet: View {
                 }
 
                 Section {
-                    TextField("Inbox (default)", text: $project)
+                    TextField("Inbox (default)", text: Binding(
+                        get: { knownProjects.contains(project) ? AskProjectName.display(project) : project },
+                        set: { project = $0 }
+                    ))
                         .autocorrectionDisabled()
                         .accessibilityIdentifier("calendar.create.project")
                     // The filtered-to project, one tap away — it leads the
@@ -162,18 +172,18 @@ struct CalendarCreateSheet: View {
     /// appends), tapping the chosen one again clears it back to Inbox.
     private func projectRow(_ name: String) -> some View {
         Button {
-            project = (project == name) ? "" : name
+            project = (resolvedProject == name) ? "" : name
         } label: {
             HStack {
                 Image(systemName: "folder")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Text(name)
+                Text(AskProjectName.display(name))
                     .font(.subheadline)
                     .lineLimit(1)
-                    .foregroundStyle(project == name ? Theme.tint : .primary)
+                    .foregroundStyle(resolvedProject == name ? Theme.tint : .primary)
                 Spacer()
-                if project == name {
+                if resolvedProject == name {
                     Image(systemName: "checkmark")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(Theme.tint)
@@ -210,7 +220,7 @@ struct CalendarCreateSheet: View {
         do {
             let created = try await tasks.createTask(
                 title: title.trimmingCharacters(in: .whitespaces),
-                project: project.trimmingCharacters(in: .whitespaces),
+                project: resolvedProject,
                 dueDate: wire.dueDate,
                 startDate: wire.startDate,
                 endDate: wire.endDate,

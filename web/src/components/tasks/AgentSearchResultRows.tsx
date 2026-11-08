@@ -22,6 +22,7 @@ import { binaryPhaseIcon } from '@/components/common/Icons';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { taskStatusLabel, taskUserState } from '@/utils/session-status';
 import type { TaskPhase } from '@/types/session';
+import { projectDisplayName } from '@/utils/project-display';
 
 export interface SearchResultRowView {
   taskId: string;
@@ -52,7 +53,7 @@ function circleClassForPhase(phase: string | undefined): string {
 }
 
 function rowTooltip(row: SearchResultRowView): string {
-  const where = [row.phase ? taskStatusLabel({ phase: row.phase as TaskPhase, status: 'todo', user_status: row.user_status }) : '', row.project || 'Inbox']
+  const where = [row.phase ? taskStatusLabel({ phase: row.phase as TaskPhase, status: 'todo', user_status: row.user_status }) : '', projectDisplayName(row.project)]
     .filter(Boolean).join(' · ');
   return [row.title ?? row.taskId, row.evidence ? `“${row.evidence}”` : '', where].filter(Boolean).join('\n');
 }
@@ -109,7 +110,7 @@ export function AgentSearchResultRows({ rows, onOpenTask, className }: {
                 {binaryPhaseIcon(isDone, row.phase, taskUserState({ phase: row.phase, user_status: row.user_status ?? statusById.get(row.taskId) } as Parameters<typeof taskUserState>[0]))}
               </span>
               <span className="agent-search-row-title">{row.title ?? row.taskId}</span>
-              <span className="agent-search-row-project">{row.project || 'Inbox'}</span>
+              <span className="agent-search-row-project">{projectDisplayName(row.project)}</span>
             </button>
           </li>
         );

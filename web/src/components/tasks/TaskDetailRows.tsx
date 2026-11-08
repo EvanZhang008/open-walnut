@@ -11,6 +11,7 @@ import type { ProcessStatus, SessionRecord, TaskPhase } from '@open-walnut/core'
 import { SessionRecapLine } from '@/components/sessions/SessionRecapTip';
 import { PHASE_LABELS, PROCESS_COLORS, PROCESS_LABELS } from '@/utils/session-status';
 import { timeAgo } from '@/utils/time';
+import { sessionDisplayName, type SessionOwner } from '@/utils/project-display';
 
 const processColor = (status: ProcessStatus) => (PROCESS_COLORS as Record<ProcessStatus, string>)[status] ?? 'var(--fg-muted)';
 
@@ -30,11 +31,15 @@ interface SessionRowProps {
   record?: SessionRecord;
   processStatus: ProcessStatus;
   isPlan: boolean;
+  /** The task the session works for: the CEO's session reads CEO, an ask's placeholder Quick question. */
+  owner?: SessionOwner;
   onOpen: (sessionId: string) => void;
 }
 
-export function SessionRow({ sessionId, record, processStatus, isPlan, onOpen }: SessionRowProps) {
-  const title = record ? (record.title || 'Untitled session') : 'Loading…';
+export function SessionRow({ sessionId, record, processStatus, isPlan, owner, onOpen }: SessionRowProps) {
+  const title = record
+    ? (record.title ? sessionDisplayName(record.title, owner ?? { project: record.project }) : 'Untitled session')
+    : 'Loading…';
   const ago = record ? timeAgo(record.lastActiveAt || record.startedAt || '') : '';
   const running = processStatus === 'running';
   const tip = [title, PROCESS_LABELS[processStatus], record?.cwd ? shortCwd(record.cwd) : '']

@@ -1,10 +1,11 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   getEntityLabelsVersion,
   lookupSessionTitle,
   lookupTaskByRef,
   lookupTaskLabel,
   peekTaskLabel,
+  resolveTaskToken,
   registerSessionTitle,
   resetEntityLabelsForTesting,
   shownTaskTitle,
@@ -140,9 +141,90 @@ describe('org names in labels', () => {
       { id: 't', title: 'Fix the lead pipe' },
     ]);
     expect(['m', 'l', 'r', 't'].map((id) => peekTaskLabel(id)?.title)).toEqual(['CEO', 'Walnut VP', 'My own lead name', 'Fix the lead pipe']);
-    for (const t of [{ title: 'Main', org_role: 'main' }, { title: 'Marina lead', org_role: 'lead' }, { title: 'Marina lead', org_role: 'lead', org_name: 'Docs' }, { title: 'Garden lead' }, { title: 'x' }]) {
+    for (const t of [{ title: 'Main', org_role: 'main' }, { title: 'Marina lead', org_role: 'lead' }, { title: 'Marina lead', org_role: 'lead', org_name: 'Docs' }, { title: 'Ask Walnut', project: 'Ask Walnut' }, { title: 'Ask Mentor', project: 'Ask Mentor' }, { title: 'Ask Bob about the lease', project: 'Ask Walnut' }, { title: 'Garden lead' }, { title: 'x' }]) {
       expect(shownTaskTitle(t)).toBe(orgDisplayTitle(t));
     }
+  });
+
+  it('session labels follow org names but preserve real session titles', () => {
+    resetEntityLabelsForTesting();
+    registerSessionTitle('s-main', 'Main');
+    registerSessionTitle('s-lead', 'Garden lead');
+    registerSessionTitle('s-ask', 'Ask Walnut');
+    registerSessionTitle('s-real', 'Ask Walnut greeting');
+    registerSessionTitle('s-other', 'Release discussion');
+    syncTasks([
+      { id: 'm', title: 'Main', org_role: 'main', session_id: 's-main' },
+      { id: 'l', title: 'Garden lead', org_role: 'lead', session_ids: ['s-lead'] },
+      { id: 'a', title: 'Ask Walnut', project: 'Ask Walnut', session_id: 's-ask' },
+      { id: 'r', title: 'Ask Walnut', project: 'Ask Walnut', session_id: 's-real' },
+      { id: 'o', title: 'Fix release', session_id: 's-other' },
+    ]);
+    expect(['s-main', 's-lead', 's-ask', 's-real', 's-other'].map(lookupSessionTitle)).toEqual([
+      'CEO', 'Garden VP', 'Quick question', 'Ask Walnut greeting', 'Release discussion',
+    ]);
+    syncTasks([
+      { id: 'm', title: 'Main', org_role: 'main', session_id: 's-main' },
+      { id: 'a', title: 'A chosen task name', project: 'Ask Walnut', session_id: 's-ask' },
+    ]);
+    expect(lookupSessionTitle('s-ask')).toBe('Quick question');
+    const version = getEntityLabelsVersion();
+    registerSessionTitle('s-main', 'Old coordinator');
+    expect(lookupSessionTitle('s-main')).toBe('CEO');
+    expect(getEntityLabelsVersion()).toBe(version);
+  });
+
+  it('late owner arrival and removal update an observed session without render-path notifications', () => {
+    resetEntityLabelsForTesting();
+    registerSessionTitle('s-main', 'Main');
+    expect(lookupSessionTitle('s-main')).toBe('Main');
+    const listener = vi.fn();
+    const unsubscribe = subscribeEntityLabels(listener);
+    const task = { id: 'm', title: 'Main', org_role: 'main', session_id: 's-main' };
+    syncTasks([task]);
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(lookupSessionTitle('s-main')).toBe('CEO');
+    expect(listener).toHaveBeenCalledTimes(1);
+    syncTasks([task]);
+    expect(listener).toHaveBeenCalledTimes(1);
+    syncTasks([]);
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(lookupSessionTitle('s-main')).toBe('Main');
+    unsubscribe();
+  });
+
+  it('a task rename updates its observed org session while ordinary session titles stay independent', () => {
+    resetEntityLabelsForTesting();
+    const lead = { id: 'l', title: 'Garden lead', org_role: 'lead', session_ids: ['s-lead'] };
+    syncTasks([lead]);
+    registerSessionTitle('s-lead', 'Garden lead');
+    expect(lookupSessionTitle('s-lead')).toBe('Garden VP');
+    const version = getEntityLabelsVersion();
+    syncTasks([{ ...lead, org_name: 'Design' }]);
+    expect(lookupSessionTitle('s-lead')).toBe('Design VP');
+    expect(getEntityLabelsVersion()).toBe(version + 1);
+  });
+
+  it('old ask placeholder titles read as Quick question without changing a user title', () => {
+    expect(shownTaskTitle({ title: 'Ask Walnut', project: 'Ask Walnut' })).toBe('Quick question');
+    expect(shownTaskTitle({ title: 'Ask Mentor', project: 'Ask Mentor' })).toBe('Quick question · Mentor');
+    expect(shownTaskTitle({ title: 'Ask Bob about the lease', project: 'Ask Walnut' })).toBe('Ask Bob about the lease');
+  });
+
+  it('a dependency token gets the display title and stays live when its stored title changes', () => {
+    resetEntityLabelsForTesting();
+    const task = { id: 'abcd1234-0010', title: 'Ask Walnut', project: 'Ask Walnut' };
+    syncTasks([task]);
+    expect(resolveTaskToken(task.id)?.label.title).toBe('Quick question');
+    const version = getEntityLabelsVersion();
+    const listener = vi.fn();
+    const unsubscribe = subscribeEntityLabels(listener);
+    syncTasks([{ ...task, title: 'Ask Bob about the lease' }]);
+    unsubscribe();
+    expect(getEntityLabelsVersion()).toBe(version + 1);
+    expect(listener).toHaveBeenCalledOnce();
+    expect(resolveTaskToken(task.id)?.label.title).toBe('Ask Bob about the lease');
+    expect(task.title).toBe('Ask Walnut');
   });
 
   it('a send ref names its task by id, unique prefix or session id, and a late task renames its rows', () => {

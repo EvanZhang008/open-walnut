@@ -66,7 +66,7 @@ test.describe('Settings → Cloud Companion', () => {
     await expect(hero).toBeVisible({ timeout: 60_000 })
     await expect(section.getByRole('heading', { name: 'Set up', exact: true })).toBeVisible()
     await expect(hero).toContainText('Your own cloud companion')
-    await expect(section).toContainText(/tell Ask Walnut/i) // N24: one name for the chat agent
+    await expect(section).toContainText(/say it in a quick question/i) // N24: one name for the chat agent
 
     await section.getByRole('button', { name: /Get started/i }).click()
 

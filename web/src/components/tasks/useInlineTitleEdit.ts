@@ -8,8 +8,10 @@
  * The title is a contentEditable span (it keeps the row's wrapping and ellipsis). A double-click
  * (or the caller's own gesture) starts it with the caret where the pointer was; Enter or a click
  * outside saves a changed, non-empty title; Escape puts the old one back.
+ * The span shows the display name and edits the stored title (title-edit-text.ts).
  */
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
+import { titleEditRename, titleSpanText, type TitledTask } from './title-edit-text';
 
 type CaretPositionDoc = { caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null };
 
@@ -43,27 +45,32 @@ export interface InlineTitleEditOptions {
 }
 
 export function useInlineTitleEdit(
-  task: { id: string; title: string },
+  task: TitledTask,
   onUpdateTitle?: (id: string, title: string) => void,
   { doubleClick = true }: InlineTitleEditOptions = {},
 ) {
   const [isEditing, setIsEditing] = useState(false);
   const titleRef = useRef<HTMLSpanElement>(null);
   const clickPosRef = useRef<{ x: number; y: number } | null>(null);
-  const isCommittingRef = useRef(false); // one-shot guard against double-fire (pointerdown + blur)
+  // End the edit before restoring display text, so a late blur cannot save that text as a title.
+  const editingRef = useRef(false);
+  const shown = titleSpanText(task, false);
 
   // A title changed elsewhere (a WS push) shows while not editing.
   useEffect(() => {
     if (!isEditing && titleRef.current) {
-      if (titleRef.current.textContent !== task.title) titleRef.current.textContent = task.title;
+      if (titleRef.current.textContent !== shown) titleRef.current.textContent = shown;
       // Editing auto-scrolls the overflow:hidden span to keep the caret visible;
       // a leftover scrollLeft on a nowrap+ellipsis span paints as a BLANK title.
       titleRef.current.scrollLeft = 0;
     }
-  }, [task.title, isEditing]);
+  }, [shown, isEditing]);
 
   useEffect(() => {
     if (!isEditing || !titleRef.current) return;
+    // The buffer is the stored title, never the display name (read once, as the edit opens).
+    const buffer = titleSpanText(task, true);
+    if (titleRef.current.textContent !== buffer) titleRef.current.textContent = buffer;
     titleRef.current.focus();
     const at = clickPosRef.current;
     clickPosRef.current = null;
@@ -71,19 +78,19 @@ export function useInlineTitleEdit(
   }, [isEditing]);
 
   const commitEdit = useCallback(() => {
-    if (!isEditing || isCommittingRef.current) return;
-    isCommittingRef.current = true;
+    if (!editingRef.current) return;
+    editingRef.current = false;
     setIsEditing(false);
-    const trimmed = (titleRef.current?.textContent ?? '').trim();
-    if (trimmed && trimmed !== task.title && onUpdateTitle) onUpdateTitle(task.id, trimmed);
-    else if (titleRef.current) titleRef.current.textContent = task.title;
-    isCommittingRef.current = false;
-  }, [isEditing, task.title, task.id, onUpdateTitle]);
+    const rename = titleEditRename(task.title, titleRef.current?.textContent ?? '');
+    if (rename && onUpdateTitle) onUpdateTitle(task.id, rename);
+    else if (titleRef.current) titleRef.current.textContent = shown;
+  }, [task.title, task.id, onUpdateTitle, shown]);
 
   const cancelEdit = useCallback(() => {
+    editingRef.current = false;
     setIsEditing(false);
-    if (titleRef.current) titleRef.current.textContent = task.title;
-  }, [task.title]);
+    if (titleRef.current) titleRef.current.textContent = shown;
+  }, [shown]);
 
   // A click outside saves too, for when blur does not fire (a click on a non-focusable element).
   useEffect(() => {
@@ -99,6 +106,7 @@ export function useInlineTitleEdit(
   const startEdit = useCallback((e?: { clientX: number; clientY: number }) => {
     if (!onUpdateTitle) return;
     clickPosRef.current = e ? { x: e.clientX, y: e.clientY } : null;
+    editingRef.current = true;
     setIsEditing(true);
   }, [onUpdateTitle]);
 
@@ -129,5 +137,5 @@ export function useInlineTitleEdit(
     onDoubleClick: isEditing ? undefined : onDoubleClick,
   } as const;
 
-  return { isEditing, titleRef, startEdit, commitEdit, cancelEdit, titleProps, canRename: !!onUpdateTitle };
+  return { isEditing, titleRef, startEdit, commitEdit, cancelEdit, titleProps, canRename: !!onUpdateTitle, shown };
 }

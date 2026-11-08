@@ -153,7 +153,8 @@ struct BoardStatusSectionList: View {
     }
 
     private func projectLabel(_ label: String, first: Bool) -> some View {
-        Text(label)
+        // Read as the user names it; the identifier keeps the stored name.
+        Text(AskProjectName.display(label))
             .font(.system(BoardHeadingType.folderLabel, weight: .semibold))
             .foregroundStyle(BoardHeadingType.ink)
             .lineLimit(1)

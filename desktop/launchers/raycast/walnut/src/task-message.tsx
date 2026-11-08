@@ -6,7 +6,7 @@
 import { Action, ActionPanel, Form, Icon, open, showHUD, showToast, Toast } from "@raycast/api";
 import { useEffect, useState } from "react";
 import { clipboardHasImage, readClipboardImage } from "./clipboard-image";
-import { NOT_RUNNING, openTaskLink, QuickTask, sendToTask } from "./walnut";
+import { NOT_RUNNING, openTaskLink, projectLabel, QuickTask, sendToTask } from "./walnut";
 
 export function TaskMessage(props: { task: QuickTask }) {
   const { task } = props;
@@ -63,7 +63,7 @@ export function TaskMessage(props: { task: QuickTask }) {
         </ActionPanel>
       }
     >
-      <Form.Description title="Task" text={`${task.title}${task.project ? ` · ${task.project}` : ""} · ${task.stateLabel}`} />
+      <Form.Description title="Task" text={`${task.title}${task.project ? ` · ${projectLabel(task.project)}` : ""} · ${task.stateLabel}`} />
       <Form.TextArea id="message" title="Message" placeholder="Goes into the task's chat as your message" value={text} onChange={setText} autoFocus />
       {hasImage ? (
         <Form.Checkbox id="screenshot" label="Attach the copied screenshot" value={attach} onChange={setAttach} />

@@ -187,7 +187,7 @@ describe('the ordinary inbox row', () => {
       'Walnut',
       'Summarize with Walnut',
       'Draft a reply with Walnut',
-      'Ask Walnut about this…',
+      'Ask a quick question about this…',
       // S8, under the three questions: the one Walnut row that acts on the world rather than asking
       // about it, so a stray click lands on it last.
       'Unsubscribe',
@@ -266,7 +266,7 @@ describe('the send gate', () => {
     expect(pressable(items).map((one) => one.label))
       .toEqual([
         'Mark as read', 'Open message', 'Talk to CEO', 'New task', 'Find mail from this sender', 'Copy Walnut link',
-        'Summarize with Walnut', 'Ask Walnut about this…',
+        'Summarize with Walnut', 'Ask a quick question about this…',
       ]);
   });
 
@@ -406,7 +406,7 @@ describe('mail this person wrote is a different menu', () => {
       '-',
       'Walnut',
       'Summarize with Walnut',
-      'Ask Walnut about this…',
+      'Ask a quick question about this…',
     ]);
     // No read toggle: a draft carries no `\Seen`, so the row already draws an unread dot and flipping
     // it is a real provider write against mail nobody has sent. No Reply (to oneself) and no Forward
@@ -435,7 +435,7 @@ describe('mail this person wrote is a different menu', () => {
       '-',
       'Walnut',
       'Summarize with Walnut',
-      'Ask Walnut about this…',
+      'Ask a quick question about this…',
     ]);
     expect(items.find((one) => one.key === 'reply')).toBeUndefined();
     expect(items.find((one) => one.key === 'reply-all')).toBeUndefined();

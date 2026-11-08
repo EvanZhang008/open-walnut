@@ -5,6 +5,7 @@
  * on a row that renders the name another way.
  */
 import { memo } from 'react';
+import { projectDisplayName } from '../../utils/project-display';
 
 export const RowProjectName = memo(function RowProjectName({ project, className, onFilter }: {
   /** `''` = Inbox. */
@@ -12,7 +13,8 @@ export const RowProjectName = memo(function RowProjectName({ project, className,
   className: string;
   onFilter?: (project: string) => void;
 }) {
-  const name = project || 'Inbox';
+  // Shown name only: data-project and onFilter keep the stored project.
+  const name = projectDisplayName(project);
   if (!onFilter) return <span className={className}>{name}</span>;
   return (
     <button

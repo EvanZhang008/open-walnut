@@ -20,6 +20,7 @@ import { TaskMenuRows } from './TaskMenuRows';
 import { AgentMemoryPanel } from '@/components/org/AgentMemoryPanel';
 import type { DraftTaskField } from '@/components/sessions/draft-column';
 import { KebabIcon } from './KebabIcon';
+import { projectDisplayName } from '@/utils/project-display';
 import { rowAnchorOf, scrollMovedRow, type RowAnchor } from '@/utils/cursor-menu-scroll';
 
 type TaskListProjection = Task & {
@@ -466,7 +467,9 @@ export function ProjectPickerFlyout({ open, anchorRef, anchorPoint, align, curre
     ? [...projectNames, current].sort((a, b) => a.localeCompare(b))
     : projectNames;
   const q = filter.trim().toLowerCase();
-  const shown = q ? options.filter((n) => n.toLowerCase().includes(q)) : options;
+  const shown = q
+    ? options.filter((n) => n.toLowerCase().includes(q) || projectDisplayName(n).toLowerCase().includes(q))
+    : options;
   const optionRow = (name: string, label?: string) => (
     <button
       key={name || '·inbox·'}
@@ -474,7 +477,7 @@ export function ProjectPickerFlyout({ open, anchorRef, anchorPoint, align, curre
       onClick={(e) => { e.stopPropagation(); onPick(name); onClose(); }}
     >
       <span className="task-kebab-project-check">{current === name ? '✓' : ''}</span>
-      <span className="task-kebab-project-opt-name">{label ?? name}</span>
+      <span className="task-kebab-project-opt-name">{label ?? projectDisplayName(name)}</span>
     </button>
   );
   return createPortal(
@@ -529,7 +532,7 @@ export function MoveToProjectSection({ current, onMove, afterAction }: {
           onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
         >
           <span className="task-kebab-project-current-name">
-            {current === null ? 'Move to…' : (current || 'Inbox')}
+            {current === null ? 'Move to…' : projectDisplayName(current)}
           </span>
           <span className="task-kebab-project-caret">▾</span>
         </button>

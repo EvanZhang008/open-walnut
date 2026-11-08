@@ -98,6 +98,12 @@ describe('appendTopicToTitle', () => {
 });
 
 describe('applyTitleDirective', () => {
+  it.each(['rewrite: Main', 'topic: Daily Report', 'prefix: Coordinator'])('keeps the CEO task name through automated title directives: %s', async (directive) => {
+    getTaskMock.mockResolvedValue({ id: 't1', title: 'CEO', org_role: 'main' });
+    await applyTitleDirective('t1', directive, 'CEO');
+    expect(updateTaskMock).not.toHaveBeenCalled();
+  });
+
   it('unchanged (any case) and malformed directives are no-ops', async () => {
     await applyTitleDirective('t1', 'unchanged', 'Old title');
     await applyTitleDirective('t1', 'Unchanged.', 'Old title');

@@ -5,9 +5,9 @@
  *
  * Three ways to answer, the first two switched with Cmd+T at any turn:
  *   - Quick Answer: the model alone, about two seconds (POST /quick/ask).
- *   - Ask Walnut: a normal Claude Code session in Walnut, an Ask Walnut chat with everything the
- *     user's Claude Code has (POST /quick/session); Cmd+O opens it in Walnut.
- *   - Main: Walnut's main agent (Tell Main's "Tell Main and wait").
+ *   - Quick Question: a normal Claude Code session in Walnut, filed under the "Ask Walnut" project
+ *     with everything the user's Claude Code has (POST /quick/session); Cmd+O opens it in Walnut.
+ *   - CEO: Walnut's Main task (Tell CEO's "Tell CEO and wait"; mode `main`).
  * A switch carries over the turns the other side has not seen, so the thread is never lost.
  */
 import { Action, ActionPanel, Icon, List } from "@raycast/api";
@@ -34,7 +34,7 @@ function failure(error: unknown): string {
   return /fetch failed|ECONNREFUSED|connect/i.test(message) ? NOT_RUNNING : message;
 }
 
-const TITLE: Record<Mode, string> = { quick: "Quick Answer", session: "Ask Walnut", main: "Main" };
+const TITLE: Record<Mode, string> = { quick: "Quick Answer", session: "Quick Question", main: "CEO" };
 
 export function Conversation(props: { mode: Mode; first?: string; selection?: string; app?: string }) {
   const [mode, setMode] = useState<Mode>(props.mode);
@@ -96,11 +96,11 @@ export function Conversation(props: { mode: Mode; first?: string; selection?: st
           : await askSession(message, taskId, follow);
         setTaskId(got.taskId);
         if (got.held) {
-          const who = via === "main" ? "Main is" : "The session is";
+          const who = via === "main" ? "The CEO is" : "The session is";
           update(id, { status: "held", answer: `${who} waiting for your answer to its question first, so nothing was sent. Open it in Walnut to answer.` });
           return;
         }
-        const who = via === "main" ? "Main" : "The session";
+        const who = via === "main" ? "The CEO" : "The session";
         done(got.text || (got.unfinished
           ? `${who} is still working on it. Its reply will be in its chat in Walnut.`
           : `${who} finished without a written reply. Open it in Walnut to see what it did.`));
@@ -137,11 +137,11 @@ export function Conversation(props: { mode: Mode; first?: string; selection?: st
   const placeholder = turns.length === 0
     ? props.selection
       ? "What should Walnut do with the selected text?"
-      : mode === "main" ? "Tell Main…" : mode === "session" ? "Ask Walnut anything…" : "Ask anything…"
+      : mode === "main" ? "Tell the CEO…" : mode === "session" ? "Ask a quick question…" : "Ask anything…"
     : "Ask a follow-up, then Enter…";
 
   const detailFor = (t: Turn) => {
-    const who = t.via === "main" ? "Main" : "Walnut";
+    const who = t.via === "main" ? "The CEO" : "Walnut";
     const head = t.status === "streaming" && !t.answer
       ? t.via === "quick"
         ? "_…_"
@@ -153,7 +153,7 @@ export function Conversation(props: { mode: Mode; first?: string; selection?: st
 
   const switchMode = mode !== "main" ? (
     <Action
-      title={mode === "quick" ? "Hand to Ask Walnut" : "Switch to Quick Answer"}
+      title={mode === "quick" ? "Hand to Quick Question" : "Switch to Quick Answer"}
       icon={mode === "quick" ? Icon.Terminal : Icon.Bolt}
       shortcut={{ modifiers: ["cmd"], key: "t" }}
       onAction={() => setMode((m) => (m === "quick" ? "session" : "quick"))}
@@ -161,7 +161,7 @@ export function Conversation(props: { mode: Mode; first?: string; selection?: st
   ) : null;
   const openInWalnut = taskId ? (
     <Action.Open
-      title={mode === "main" ? "Open Main in Walnut" : "Open This Chat in Walnut"}
+      title={mode === "main" ? "Open CEO in Walnut" : "Open This Chat in Walnut"}
       target={openTaskLink(taskId)}
       icon={Icon.AppWindow}
       shortcut={{ modifiers: ["cmd"], key: "o" }}

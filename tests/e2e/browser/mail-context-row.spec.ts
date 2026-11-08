@@ -198,7 +198,7 @@ test('C6, C7, C8, C9, C10, C12, C23: a right-click opens the menu and does nothi
     // The Walnut group (28df4326c) and Unsubscribe (432deed2f), added after this spec.
     'Summarize with Walnut',
     'Draft a reply with Walnut',
-    'Ask Walnut about this…',
+    'Ask a quick question about this…',
     'Unsubscribe',
   ])
   // The heading is the TARGET, not a group name, and it is not focusable: the first ArrowDown has to

@@ -93,7 +93,7 @@ struct CalendarFilter: Equatable, Codable {
 
     /// Display label for a raw project value.
     static func label(for project: String) -> String {
-        project.isEmpty ? inboxLabel : project
+        project.isEmpty ? inboxLabel : AskProjectName.display(project)
     }
 }
 

@@ -1212,7 +1212,7 @@ test('the Scratchpad is a Home panel in the rail, sharing the side column with t
     // The Home panels, Scratchpad last. The Ask Walnut toggle is always there now
     // (home-panel-flags.ts). Org is a page with its own entry, outside the group.
     await expect(page.locator('.sidebar-home-panels .sidebar-link .sidebar-label'))
-      .toHaveText(['Task panel', 'Ask Walnut', 'Agenda', 'Scratchpad']);
+      .toHaveText(['Task panel', 'Quick question', 'Agenda', 'Scratchpad']);
     await expect(page.locator('.sidebar-home-panels .sidebar-link').last()).toHaveAttribute('data-testid', 'sidebar-toggle-scratchpad');
     await expect(toggle).not.toHaveClass(/\bactive\b/);
     await toggle.click();

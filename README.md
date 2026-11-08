@@ -4,7 +4,7 @@
 [![GitHub stars](https://img.shields.io/github/stars/EvanZhang008/open-walnut?style=social)](https://github.com/EvanZhang008/open-walnut)
 
 **Replace Notion and your Claude Code terminals with one open-source app where AI agents
-run your work like a small company.** You talk to one CEO agent (Main, in the app), and
+run your work like a small company.** You talk to one CEO agent, and
 each project gets its own lead that runs Claude Code sessions and workers for it.
 
 Install on macOS or Linux with one line (it needs nothing else, not even Node), then open
@@ -42,12 +42,12 @@ self-hosted, local-first, MIT licensed, and has no telemetry.
 
 ## What Open Walnut Does
 
-- **An org that runs your work**: Main, your CEO agent, sees every project. Each project
+- **An org that runs your work**: the CEO agent sees every project. Each project
   has a lead that plans the work and hands it to workers, each one its own Claude Code
   session. The Org page shows what needs you, and you answer right where the question
   waits.
-- **Personal AI**: Ask Walnut to manage tasks, find information, write and search
-  notes, start coding sessions, and run scheduled routines.
+- **Personal AI**: ask a quick question, or have it manage tasks, find information, write
+  and search notes, start coding sessions, and run scheduled routines.
 - **Claude Code workspace**: Run and monitor multiple Claude Code sessions side by side
   with live output, permission controls, terminals, files, and session history.
 - **Local and remote sessions**: Use the same web app for sessions on your laptop and
@@ -76,7 +76,7 @@ self-hosted, local-first, MIT licensed, and has no telemetry.
 - git and [Bun](https://bun.sh) 1.4.4 or newer, only for the checkout route below, and nothing else (git: `xcode-select --install` on macOS, `sudo apt install git` on Ubuntu; Bun: `curl -fsSL https://bun.sh/install | bash`)
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code), signed in once (`curl -fsSL https://claude.ai/install.sh | bash`, then run `claude`)
 
-That is the whole AI setup. Every AI turn Walnut runs is a Claude Code session: Ask Walnut (the Walnut agent), your coding sessions, scheduled routines, and the agents a session hook dispatches all use the `claude` you already have, however it signs in (Anthropic account, Bedrock, or Vertex). An Anthropic API key or AWS Bedrock credentials are optional, and they change only where the small single calls go (session titles, summaries, voice cleanup, quick parses): by default those also go through your Claude Code login, and Settings › Advanced › API provider points them at a provider instead.
+That is the whole AI setup. Every AI turn Walnut runs is a Claude Code session: Quick question (the Walnut agent), your coding sessions, scheduled routines, and the agents a session hook dispatches all use the `claude` you already have, however it signs in (Anthropic account, Bedrock, or Vertex). An Anthropic API key or AWS Bedrock credentials are optional, and they change only where the small single calls go (session titles, summaries, voice cleanup, quick parses): by default those also go through your Claude Code login, and Settings › Advanced › API provider points them at a provider instead.
 
 ### Install
 
@@ -175,14 +175,14 @@ and verifies the connection with a real model request. Review the
 
 ## Product Tour
 
-### Main and a Lead for Each Project
+### The CEO and a Lead for Each Project
 
-The Org page is where you run the company. Main is pinned on top with every lead under
+The Org page is where you run the company. The CEO is pinned on top with every lead under
 it; each lead's row says what it is working on or what it asks you. The org chart shows
 every project's lead and the workers under it, and dragging a task onto another makes it
 that task's worker.
 
-![The org chart: Main on top, a lead per project, and the workers under each task](docs/assets/org/org-chart.png)
+![The org chart: the CEO on top, a lead per project, and the workers under each task](docs/assets/org/org-chart.png)
 
 ### Sessions That Draw
 
@@ -371,7 +371,7 @@ switching works, and [Cloud sync](docs/reference/cloud-sync.md) for the companio
 | Route | Purpose |
 |---|---|
 | `/` | Walnut, tasks, and Claude Code session columns |
-| `/org` | Main and the project leads, with the org chart |
+| `/org` | The CEO and the project leads, with the org chart |
 | `/tasks` | Project and task workspace |
 | `/tasks/:id` | Task details, subtasks, sessions, notes, and dependencies |
 | `/notes` | Markdown notes workspace |

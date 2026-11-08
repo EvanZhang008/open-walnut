@@ -57,7 +57,7 @@ export function OrgSettingsMenu() {
           <div className="org-settings-row">
             <label htmlFor="org-settings-enabled" className="org-settings-label">
               <strong>Org</strong>
-              <span className="org-answer-q">Main and the VPs above your projects, and their updates.</span>
+              <span className="org-answer-q">CEO and the VPs above your projects, and their updates.</span>
             </label>
             <ToggleSwitch id="org-settings-enabled" data-testid="org-settings-enabled" checked={on} busy={busy} onChange={flip} />
           </div>

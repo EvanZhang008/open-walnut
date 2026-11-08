@@ -227,10 +227,10 @@ export function Sidebar({
         <button
           className={`sidebar-link sidebar-panel-toggle${chatVisible ? ' active' : ''}`}
           onClick={handleToggleChat}
-          aria-label="Ask Walnut"
+          aria-label="Quick question"
         >
           <ChatBubbleIcon />
-          <span className="sidebar-label">Ask Walnut</span>
+          <span className="sidebar-label">Quick question</span>
         </button>
       )}
       {!phone && (<>

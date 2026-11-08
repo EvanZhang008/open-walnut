@@ -49,6 +49,8 @@ import { EarlierSessions, taskSessionLayout } from './TaskSessionHistory';
 import { hasTransferLinks, TransferLinks } from '../transfer/TransferLinks';
 import { dateTags } from '../../../../src/core/tag-model';
 import { openTaskOnHome } from '@/utils/open-session';
+import { taskProjectLabel } from '@/utils/project-display';
+import { orgDisplayTitle } from '@open-walnut/org-tree';
 import { TaskFieldEditor } from './TaskFieldEditor';
 import { TaskDependencies, TaskDetailActions, TaskNoteAdd } from './TaskDetailEdits';
 import { StartQueueLine } from './StartQueueLine';
@@ -212,7 +214,7 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
     <div className="todo-detail-pane tdp" style={style} data-task-id={task.id}>
       <header className="tdp-head todo-detail-meta">
         <div className="tdp-head-top">
-          <span className="todo-detail-project">{task.project || 'Inbox'}</span>
+          <span className="todo-detail-project">{taskProjectLabel(task)}</span>
           {/* Watch: keep it at the top of the task panel whatever its state. */}
           <WatchButton task={task} className="tdp-watch" />
           <TaskDetailActions task={task} onDeleted={onClose} onError={reportError} />
@@ -220,7 +222,7 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
             <button className="todo-detail-close" onClick={onClose} aria-label="Close detail panel" title="Close">&times;</button>
           )}
         </div>
-        <h2 className="todo-detail-title">{task.title}</h2>
+        <h2 className="todo-detail-title">{orgDisplayTitle(task)}</h2>
         <div className="todo-detail-badges">
           <TaskStatusBadge task={task} />
           {showPriority && task.priority && PRIORITY_TEXT[task.priority] && (
@@ -253,24 +255,25 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
                     record={record}
                     processStatus={live?.process_status || 'stopped'}
                     isPlan={live?.mode === 'plan' || !!live?.planCompleted}
+                    owner={task}
                     onOpen={openSession}
                   />
                 );
               })()}
-              <EarlierSessions ids={earlierSessionIds} onOpen={openSession} />
+              <EarlierSessions ids={earlierSessionIds} owner={task} onOpen={openSession} />
             </Section>
           )}
 
           {parentTask && (
             <Section label="Parent">
-              <TaskRow title={parentTask.title} phase={parentTask.phase} done={parentTask.status === 'done'} status={taskStatusLabel(parentTask)} onOpen={() => openTask(parentTask)} />
+              <TaskRow title={orgDisplayTitle(parentTask)} phase={parentTask.phase} done={parentTask.status === 'done'} status={taskStatusLabel(parentTask)} onOpen={() => openTask(parentTask)} />
             </Section>
           )}
 
           {childTasks.length > 0 && (
             <Section label="Subtasks" count={childTasks.length}>
               {childTasks.map((child) => (
-                <TaskRow key={child.id} title={child.title} phase={child.phase} done={child.status === 'done'} status={taskStatusLabel(child)} onOpen={() => openTask(child)} />
+                <TaskRow key={child.id} title={orgDisplayTitle(child)} phase={child.phase} done={child.status === 'done'} status={taskStatusLabel(child)} onOpen={() => openTask(child)} />
               ))}
             </Section>
           )}

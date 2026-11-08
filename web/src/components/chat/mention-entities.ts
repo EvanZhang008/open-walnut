@@ -23,6 +23,7 @@
 import type { Task } from '@open-walnut/core';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { extractEntityRefs } from '@/utils/entity-ref-tags';
+import { projectDisplayName } from '@/utils/project-display';
 import type { EntitySearchHit } from '@/stores/mention-search';
 import { fuzzyMatch } from './session-mention';
 
@@ -82,7 +83,7 @@ export function taskEntity(t: Task, live?: TaskLiveStatus | null): MentionEntity
   return {
     id: t.id,
     title: t.title || '(untitled)',
-    meta: [t.phase, t.project || 'Inbox', STATE_WORD[state]].filter(Boolean).join(' · '),
+    meta: [t.phase, projectDisplayName(t.project), STATE_WORD[state]].filter(Boolean).join(' · '),
     pinned: !!t.pinned || t.focus_tier === 'focus',
     live: state !== 'idle',
     active: t.phase !== 'COMPLETE',
@@ -146,7 +147,7 @@ export function hitsAsTasks(
 }
 
 function hitMeta(h: EntitySearchHit): string {
-  return `${h.phase ?? 'task'} · ${h.project || 'Inbox'}`;
+  return `${h.phase ?? 'task'} · ${projectDisplayName(h.project)}`;
 }
 
 function byHints(a: MentionEntity, b: MentionEntity): number {

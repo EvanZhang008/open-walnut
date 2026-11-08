@@ -16,6 +16,7 @@ import type { TaskPhase, TaskPriority } from '@open-walnut/core';
 import type { TaskCompletion } from '@open-walnut/task-query';
 import { TagChip } from './TagChip';
 import { ICON_CLOSE } from '../common/Icons';
+import { projectDisplayName } from '../../utils/project-display';
 import '@/styles/view-menu-choices.css';
 import {
   COMPLETION_OPTIONS,
@@ -79,7 +80,7 @@ export function buildTaskFilterChips(
       key: `project:${value}`,
       label: 'Project',
       // '' is a real, selectable value (the Inbox bucket), not an empty chip.
-      value: value === '' ? 'Inbox' : value,
+      value: projectDisplayName(value),
       onRemove: () => patch({ projects: toggleQueryValue(query.projects, value) }),
     });
   }

@@ -1,5 +1,6 @@
 import type { Task } from '@open-walnut/core';
 import { ParentRefMatcher } from './task-tree-index';
+import { projectDisplayName } from '../../utils/project-display';
 
 /**
  * Who leads whom, read off the task list once per list.
@@ -84,5 +85,5 @@ export function subtaskPlaceLabel(sub: Pick<Task, 'project'>, leaderProject: str
   const here = (leaderProject ?? '').trim().toLowerCase();
   const there = (sub.project ?? '').trim();
   if (there.toLowerCase() === here) return '';
-  return there === '' ? 'Inbox' : there;
+  return projectDisplayName(there);
 }

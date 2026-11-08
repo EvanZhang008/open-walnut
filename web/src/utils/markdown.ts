@@ -24,6 +24,7 @@ import { linkLetterIds } from './letter-links';
 import { ensureReadableText, withReadableInk } from './html-contrast';
 import { taskPath } from './task-path';
 import { beginCodeBlockRender, highlightCodeBlocks, renderCodeBlockFrame } from './code-block';
+import { projectDisplayName } from './project-display';
 import '@/styles/rich-ink.css';
 import '@/styles/code-block.css';
 
@@ -574,7 +575,7 @@ function resolveSessionRefDisplay(id: string, label?: string): string {
  * alias the emitter chose to show instead.
  */
 function resolveProjectRefDisplay(id: string, label?: string): string {
-  return label ? decodeRefAttr(label) : id;
+  return projectDisplayName(label ? decodeRefAttr(label) : id);
 }
 
 /** Hover text for a task pill: `Project / Title` when resolved, the id when
@@ -730,7 +731,7 @@ export function entityRefsToHtml(text: string): string {
     // `id` IS the project's name and arrives attribute-encoded (`"` → `&quot;`);
     // decode before re-escaping so data-project carries the real name.
     const name = decodeRefAttr(id);
-    return `<a href="/tasks" class="project-link" data-project="${escapeHtmlText(name)}" title="${escapeHtmlText(`Project: ${name}`)}">${escaped}</a>`;
+    return `<a href="/tasks" class="project-link" data-project="${escapeHtmlText(name)}" title="${escapeHtmlText(`Project: ${projectDisplayName(name)}`)}">${escaped}</a>`;
   });
   // A source pill is a reference, not a link: the model got its details with the
   // message, and the source (a Slack person, a mail) has no page here to open.

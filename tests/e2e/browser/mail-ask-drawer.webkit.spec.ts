@@ -42,7 +42,7 @@ const DRAWER = 'ask-object-drawer'
 
 const SUMMARIZE = 'Summarize with Walnut'
 const DRAFT_REPLY = 'Draft a reply with Walnut'
-const ASK = 'Ask Walnut about this…'
+const ASK = 'Ask a quick question about this…'
 
 test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent, viewport: { width: 1280, height: 800 } })
 test.describe.configure({ mode: 'default' })
@@ -230,7 +230,7 @@ test('S4-W6: Start Task picks its folder, More closes on Escape, and the launch 
   const draft = drawer(page).locator('.draft-session-panel')
   await expect(draft).toBeVisible({ timeout: 60_000 })
   const card = (label: string) => draft.locator('.draft-intent-card', { hasText: label })
-  await expect(card('Ask Walnut')).toHaveAttribute('aria-pressed', 'true')
+  await expect(card('Quick question')).toHaveAttribute('aria-pressed', 'true')
   await card('Start Task').click()
   await expect(card('Start Task')).toHaveAttribute('aria-pressed', 'true')
 

@@ -439,14 +439,14 @@ struct NewSessionChatView: View {
                         showProjectPicker = true
                     } label: {
                         pill(
-                            project.isEmpty ? NewTaskSeed.inboxHeader : project,
+                            project.isEmpty ? NewTaskSeed.inboxHeader : AskProjectName.display(project),
                             icon: project.isEmpty ? "tray" : "folder",
                             active: !project.isEmpty
                         )
                     }
                     .disabled(creating)
                     .accessibilityIdentifier("newSessionChat.projectPill")
-                    .accessibilityLabel("Project: \(project.isEmpty ? NewTaskSeed.inboxHeader : project)")
+                    .accessibilityLabel("Project: \(project.isEmpty ? NewTaskSeed.inboxHeader : AskProjectName.display(project))")
                     // Local or the project's outside service, only in a project that syncs.
                     if let service = syncService {
                         let name = tasks?.serviceName(service) ?? service

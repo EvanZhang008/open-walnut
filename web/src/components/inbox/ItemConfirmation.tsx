@@ -12,6 +12,7 @@ import { AnswerBox } from '@/components/common/AnswerBox';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import '@/styles/inbox-mic.css';
 import { taskPath } from '@/utils/task-path';
+import { projectDisplayName } from '@/utils/project-display';
 
 export function ItemConfirmation({ draftKey, item, actionId, target, retry, again, submitting, prepare, execute, onClose, onFind, onNavigate }: {
   draftKey: string; item: InboxLetterItem; actionId: string; target?: InboxTaskCandidate; retry?: InboxItemReceipt; again?: boolean; submitting: boolean;
@@ -102,19 +103,19 @@ export function ItemConfirmation({ draftKey, item, actionId, target, retry, agai
       <p>{item.display?.accountLabel || 'Account label unavailable'} {item.display?.accountHint}</p>
     </div>
     {work && <div className="hii-existing"><strong>Existing task: {work.task?.title ?? 'Task title unavailable'}</strong>
-      {work.task && <p>{work.task.project || 'Inbox'} · {PHASE_TEXT[work.task.phase] ?? work.task.phase}</p>}
+      {work.task && <p>{projectDisplayName(work.task.project)} · {PHASE_TEXT[work.task.phase] ?? work.task.phase}</p>}
       {!retry && work.goal && <p>Confirmed work goal: {work.goal}</p>}
       {!retry && work.task?.description && <p>{work.task.description}</p>}
       <button type="button" className="hib-row-btn" onClick={() => onNavigate(taskPath(work.taskId))}>Open existing task</button>
     </div>}
     {target && <div><strong>Selected task</strong><p>{target.title}</p>
-      <p>{target.project || 'Inbox'} · {PHASE_TEXT[target.phase] ?? target.phase}</p>
+      <p>{projectDisplayName(target.project)} · {PHASE_TEXT[target.phase] ?? target.phase}</p>
       <button type="button" className="hib-row-btn" onClick={onFind} disabled={submitting || submitted}>Choose another task</button></div>}
     {!again && !attach && !retry && !work && <>
       <label>Task title<input data-draft-key={itemDraftKey(draftKey, `${field}title`)} value={title} readOnly={submitting || submitted} onChange={e => change(setTitle, e.target.value)} /></label>
       <label>Project</label><div className="hii-projects" role="group" aria-label="Project">
         {(response?.projects ?? [{ name: '' }]).map(p => <button type="button" key={p.name} aria-pressed={project === p.name}
-          className="hib-row-btn" disabled={submitting || submitted} onClick={() => change(setProject, p.name)}>{p.name || 'Inbox'}</button>)}
+          className="hib-row-btn" disabled={submitting || submitted} onClick={() => change(setProject, p.name)}>{projectDisplayName(p.name)}</button>)}
       </div>
     </>}
     {!again && <label htmlFor={goalId}>Work goal<AnswerBox boxRef={goalBox} micRef={goalMic} id={goalId}

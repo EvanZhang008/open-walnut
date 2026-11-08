@@ -63,14 +63,15 @@ struct RecentRow: Identifiable, Equatable {
             let isDone = task?.isDone ?? false
             var parts = [RelativeTime.short(date: entry.openedAt, relativeTo: now)]
             let project = task?.project.isEmpty == false ? task?.project : session?.project
+            let shownTitle = AskProjectName.displayTitle(title, project: project, orgRole: task?.orgRole)
             if let project, !project.isEmpty {
-                parts.append(project)
+                parts.append(AskProjectName.display(project))
             } else if entry.taskId != nil {
                 parts.append("Inbox")
             }
             if isDone { parts.append("Done") }
             return RecentRow(
-                id: entry.id, title: title, meta: parts.joined(separator: " · "),
+                id: entry.id, title: shownTitle, meta: parts.joined(separator: " · "),
                 isDone: isDone, session: session, task: entry.taskId == nil ? nil : task
             )
         }

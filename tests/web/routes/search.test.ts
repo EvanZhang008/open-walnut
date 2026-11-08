@@ -10,6 +10,8 @@ import { searchRouter, semanticDeadlineFor, MACHINE_SEMANTIC_WAIT_MS, MAX_SEMANT
 import { errorHandler } from '../../../src/web/middleware/error-handler.js';
 import { addTask, _resetForTesting } from '../../../src/core/task-manager.js';
 import { WALNUT_HOME } from '../../../src/constants.js';
+import { closeDb } from '../../../src/core/task-db.js';
+import { clearSearchResultCache } from '../../../src/core/search.js';
 
 function createApp() {
   const app = express();
@@ -30,6 +32,8 @@ let previousDisableSearch: string | undefined;
 beforeEach(async () => {
   previousDisableSearch = process.env.WALNUT_DISABLE_SEARCH;
   process.env.WALNUT_DISABLE_SEARCH = '1';
+  closeDb();
+  clearSearchResultCache();
   _resetForTesting();
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
 });
@@ -37,6 +41,8 @@ beforeEach(async () => {
 afterEach(async () => {
   if (previousDisableSearch === undefined) delete process.env.WALNUT_DISABLE_SEARCH;
   else process.env.WALNUT_DISABLE_SEARCH = previousDisableSearch;
+  closeDb();
+  clearSearchResultCache();
   _resetForTesting();
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
 });
@@ -61,6 +67,15 @@ describe('GET /api/search', () => {
     expect(res.body.results.length).toBeGreaterThanOrEqual(1);
     expect(res.body.results[0].title).toBe('Fix authentication bug');
     expect(res.body.results[0].type).toBe('task');
+  });
+
+  it.each(['ceo', 'main'])('finds the CEO by %s immediately without hiding ordinary names', async (query) => {
+    const main = (await addTask({ title: 'CEO', org_role: 'main' })).task;
+    const ordinary = (await addTask({ title: query === 'main' ? 'Main' : 'CEO planning' })).task;
+    const res = await request(createApp()).get(`/api/search?q=${query}&types=task`);
+    expect(res.status).toBe(200);
+    expect(res.body.results[0]).toMatchObject({ taskId: main.id, title: 'CEO' });
+    expect(res.body.results).toEqual(expect.arrayContaining([expect.objectContaining({ taskId: ordinary.id })]));
   });
 
   it('filters by types parameter', async () => {

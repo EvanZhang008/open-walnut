@@ -735,7 +735,8 @@ struct SessionConversationView: View {
         VStack(spacing: 0) {
             HStack(spacing: 3) {
                 // An Org node goes by the name the drawer and its page use (CEO, "X VP").
-                Text(orgNode.map { TaskMentions.shownTitle($0.title, orgRole: $0.orgRole) } ?? session.rowTitle)
+                Text(orgNode.map { TaskMentions.shownTitle($0.title, orgRole: $0.orgRole) }
+                     ?? AskProjectName.displayTitle(session.rowTitle, project: session.project ?? linkedTask?.project ?? fetchedTask?.project))
                     .font(.headline)
                     .lineLimit(1)
                 if opensTask {

@@ -31,6 +31,13 @@ describe('project-ref renders a pill that lands on /tasks', () => {
     );
   });
 
+  it('shows quick question for old ask projects while keeping the click target unchanged', () => {
+    const html = entityRefsToHtml('<project-ref id="Ask Walnut"/>');
+    expect(html).toContain('>Quick question</a>');
+    expect(html).toContain('data-project="Ask Walnut"');
+    expect(stripEntityRefsToText('<project-ref id="Ask Mentor"/>')).toBe('Quick question · Mentor');
+  });
+
   it('unlabeled ref falls back to the name for display AND hover', () => {
     const html = entityRefsToHtml('<project-ref id="Marina"/>');
     expect(html).toContain('>Marina</a>');

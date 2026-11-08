@@ -1,5 +1,6 @@
 /**
- * Tell Main: type, then Enter to tell Main (sent, and Raycast closes: the reply is in Main's chat)
+ * Tell CEO (the command named `ask`): type, then Enter to tell the CEO, Walnut's Main task (sent, and
+ * Raycast closes: the reply is in the CEO's chat)
  * or Cmd+Enter for a quick answer here. The tasks and notes matching the words list below: Enter
  * opens one in Walnut, Cmd+Enter on a task writes a message straight into its chat.
  */
@@ -8,11 +9,11 @@ import { useEffect, useState } from "react";
 import { Conversation } from "./conversation";
 import { clipboardHasImage, readClipboardImage } from "./clipboard-image";
 import { TaskMessage } from "./task-message";
-import { findNotes, findTasks, NOT_RUNNING, openNoteLink, openTaskLink, QuickNote, QuickTask, sendToMain } from "./walnut";
+import { findNotes, findTasks, NOT_RUNNING, openNoteLink, openTaskLink, projectLabel, QuickNote, QuickTask, sendToMain } from "./walnut";
 
 /** Fire and forget: the message goes into Main's chat and the window closes. */
 async function tellMainAndGo(text: string, withScreenshot = false): Promise<void> {
-  const toast = await showToast({ style: Toast.Style.Animated, title: "Sending to Main…" });
+  const toast = await showToast({ style: Toast.Style.Animated, title: "Sending to the CEO…" });
   try {
     const image = withScreenshot ? await readClipboardImage() : null;
     if (withScreenshot && !image) {
@@ -24,16 +25,16 @@ async function tellMainAndGo(text: string, withScreenshot = false): Promise<void
     const got = await sendToMain(text, image ? [image] : undefined);
     if (got.held) {
       toast.style = Toast.Style.Failure;
-      toast.title = "Not sent: Main is waiting for your answer";
+      toast.title = "Not sent: the CEO is waiting for your answer";
       toast.message = "Answer its question in Walnut first.";
-      if (got.taskId) toast.primaryAction = { title: "Open Main", onAction: () => void open(openTaskLink(got.taskId)) };
+      if (got.taskId) toast.primaryAction = { title: "Open CEO", onAction: () => void open(openTaskLink(got.taskId)) };
       return;
     }
-    await showHUD(image ? "Sent to Main with the screenshot" : "Sent to Main");
+    await showHUD(image ? "Sent to the CEO with the screenshot" : "Sent to the CEO");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     toast.style = Toast.Style.Failure;
-    toast.title = "Main did not get it";
+    toast.title = "The CEO did not get it";
     toast.message = /fetch failed|ECONNREFUSED|connect/i.test(message) ? NOT_RUNNING : message;
   }
 }
@@ -93,14 +94,14 @@ export default function Command() {
             id="main"
             icon={Icon.Person}
             title={q}
-            subtitle="Tell Main: sends it to Main's chat"
+            subtitle="Tell CEO: sends it to the CEO's chat"
             accessories={[{ text: "↵" }]}
             actions={
               <ActionPanel>
-                <Action title="Tell Main" icon={Icon.Person} onAction={() => void tellMainAndGo(q)} />
+                <Action title="Tell CEO" icon={Icon.Person} onAction={() => void tellMainAndGo(q)} />
                 {hasImage ? (
                   <Action
-                    title="Tell Main with Screenshot"
+                    title="Tell CEO with Screenshot"
                     icon={Icon.Image}
                     shortcut={{ modifiers: ["opt"], key: "return" }}
                     onAction={() => void tellMainAndGo(q, true)}
@@ -113,13 +114,13 @@ export default function Command() {
                   target={<Conversation mode="quick" first={q} />}
                 />
                 <Action.Push
-                  title="Ask Walnut"
+                  title="Quick Question"
                   icon={Icon.Terminal}
                   shortcut={{ modifiers: ["cmd", "opt"], key: "return" }}
                   target={<Conversation mode="session" first={q} />}
                 />
                 <Action.Push
-                  title="Tell Main and Wait for the Reply"
+                  title="Tell CEO and Wait for the Reply"
                   icon={Icon.Message}
                   shortcut={{ modifiers: ["cmd", "shift"], key: "return" }}
                   target={<Conversation mode="main" first={q} />}
@@ -147,7 +148,7 @@ export default function Command() {
             accessories={[{ text: "⌘⌥↵" }]}
             actions={
               <ActionPanel>
-                <Action.Push title="Ask Walnut" icon={Icon.Terminal} target={<Conversation mode="session" first={q} />} />
+                <Action.Push title="Quick Question" icon={Icon.Terminal} target={<Conversation mode="session" first={q} />} />
               </ActionPanel>
             }
           />
@@ -158,18 +159,18 @@ export default function Command() {
               id="main-screenshot"
               icon={Icon.Image}
               title={q || "The copied screenshot"}
-              subtitle="Tell Main with the copied screenshot"
+              subtitle="Tell CEO with the copied screenshot"
               accessories={[{ text: "⌥↵" }]}
               actions={
                 <ActionPanel>
-                  <Action title="Tell Main with Screenshot" icon={Icon.Image} onAction={() => void tellMainAndGo(q, true)} />
+                  <Action title="Tell CEO with Screenshot" icon={Icon.Image} onAction={() => void tellMainAndGo(q, true)} />
                 </ActionPanel>
               }
             />
           ) : null}
         </List.Section>
       ) : (
-        <List.EmptyView icon={{ source: "walnut-icon.png" }} title="Tell Main" description="Type a question, a text to revise, or words of a task or note to find." />
+        <List.EmptyView icon={{ source: "walnut-icon.png" }} title="Tell CEO" description="Type a question, a text to revise, or words of a task or note to find." />
       )}
       {tasks.length > 0 ? (
         <List.Section title="Tasks">
@@ -179,7 +180,7 @@ export default function Command() {
               id={`task-${t.id}`}
               icon={{ source: Icon.CircleFilled, tintColor: STATE_COLOR[t.state] ?? "#8E8E93" }}
               title={t.title}
-              subtitle={t.project}
+              subtitle={projectLabel(t.project)}
               accessories={[{ text: t.stateLabel }]}
               actions={
                 <ActionPanel>

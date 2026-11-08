@@ -46,6 +46,12 @@ export const GENERAL_AGENT_ID = 'general';
 /** The general agent's project. */
 export const ASK_WALNUT_PROJECT = 'Ask Walnut';
 
+export function askProjectDisplay(project: string): string {
+  const match = /^Ask\s+(.+)$/i.exec(project.trim());
+  if (!match) return project;
+  return match[1].toLowerCase() === 'walnut' ? 'Quick question' : `Quick question · ${match[1]}`;
+}
+
 export interface AskAgentRef {
   id: string;
   name: string;
@@ -177,7 +183,8 @@ export function selectAsks<T extends AskTaskLike>(tasks: readonly T[], agent: As
 
 /** The row's title (see TITLE above). */
 export function askTitle(task: AskTaskLike, agent: AskListAgent): string {
-  return task.title?.trim() || agent.project;
+  const title = task.title?.trim();
+  return !title || sameProject(title, agent.project) ? askProjectDisplay(agent.project) : title;
 }
 
 /** The session a task's conversation opens: the single slot, then the exec and

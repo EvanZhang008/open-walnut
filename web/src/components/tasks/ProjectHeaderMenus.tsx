@@ -28,6 +28,7 @@ import { useState, useRef, useCallback, useEffect, type ReactNode } from 'react'
 import { createPortal } from 'react-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useProjectActions } from '@/hooks/useProjectActions';
+import { projectDisplayName } from '@/utils/project-display';
 import { rowAnchorOf, scrollMovedRow, type RowAnchor } from '@/utils/cursor-menu-scroll';
 import * as ICONS from '../common/Icons';
 
@@ -204,7 +205,7 @@ export function ProjectPlusMenu({ project, onAddSession, onAddTask, onAddSeparat
   /** Create an empty folder inside this project (name prompted inline). */
   onAddFolder?: (project: string) => void;
 }) {
-  const label = project || 'Inbox';
+  const label = projectDisplayName(project);
   const actions: PlusAction[] = [];
   if (onAddTask) actions.push({ key: 'task', icon: ICON_MENU_TASK, label: 'New task', run: () => onAddTask(project) });
   if (onAddSession) actions.push({ key: 'session', icon: ICON_MENU_SESSION, label: 'New task with session', soloTitle: `New session in ${label}`, run: () => onAddSession(project) });

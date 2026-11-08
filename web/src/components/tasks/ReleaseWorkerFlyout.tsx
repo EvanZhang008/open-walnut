@@ -6,6 +6,7 @@ import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { log } from '@/utils/log';
 import { taskStatusLabel } from '@/utils/session-status';
 import { subtaskPlaceLabel } from './subtask-index';
+import { orgDisplayTitle } from '@open-walnut/org-tree';
 import { RELEASE_FILTER_FROM, releaseCandidates } from './team-menu-model';
 import '@/styles/subtask-pill.css';
 
@@ -77,7 +78,7 @@ export function ReleaseWorkerFlyout({ open, anchorRef, leader, onClose, onPicked
     if (!store) { setError('The task list is not loaded here.'); return; }
     // The store may have moved on since the list rendered (released or moved elsewhere).
     if (!releaseCandidates(store.tasks, leader.id).some((t) => t.id === worker.id)) {
-      setError(`“${worker.title}” is no longer a worker of this task.`);
+      setError(`“${orgDisplayTitle(worker)}” is no longer a worker of this task.`);
       return;
     }
     log.info('tasks', 'worker released', { leaderTaskId: leader.id, workerTaskId: worker.id });
@@ -100,13 +101,13 @@ export function ReleaseWorkerFlyout({ open, anchorRef, leader, onClose, onPicked
       ref={rootRef}
       className="adopt-worker-flyout release-worker-flyout"
       role="dialog"
-      aria-label={`Release a worker of ${leader.title}`}
+      aria-label={`Release a worker of ${orgDisplayTitle(leader)}`}
       data-testid="release-worker-flyout"
       style={menuPlacementStyle(placement)}
       onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
     >
-      <div className="adopt-worker-title">Release a worker of &ldquo;{leader.title}&rdquo;</div>
+      <div className="adopt-worker-title">Release a worker of &ldquo;{orgDisplayTitle(leader)}&rdquo;</div>
       {all.length >= RELEASE_FILTER_FROM && (
         <input data-no-draft="search"
           className="adopt-worker-filter"
@@ -132,11 +133,11 @@ export function ReleaseWorkerFlyout({ open, anchorRef, leader, onClose, onPicked
                 className={`adopt-worker-row${i === active ? ' is-active' : ''}`}
                 data-testid="release-worker-row"
                 data-task-id={t.id}
-                title={`Release "${t.title}" from "${leader.title}". It keeps running on its own.`}
+                title={`Release "${orgDisplayTitle(t)}" from "${orgDisplayTitle(leader)}". It keeps running on its own.`}
                 onMouseEnter={() => setActive(i)}
                 onClick={() => pick(t)}
               >
-                <span className="adopt-worker-row-title">{t.title}</span>
+                <span className="adopt-worker-row-title">{orgDisplayTitle(t)}</span>
                 <span className="adopt-worker-row-meta">
                   {taskStatusLabel(t)}
                   {place ? ` · ${place}` : ''}

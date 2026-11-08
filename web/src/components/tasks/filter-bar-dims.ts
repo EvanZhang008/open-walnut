@@ -5,6 +5,7 @@
  * Pure, no React. Relative runtime imports on purpose.
  */
 import { PHASE_LABELS } from '../../utils/session-status';
+import { projectDisplayName } from '../../utils/project-display';
 import type { TaskPhase, TaskPriority } from '@open-walnut/core';
 import {
   QUERY_PRIORITY_OPTIONS,
@@ -182,8 +183,9 @@ export const BLOCKED_OPTIONS: readonly { value: 'true' | 'false'; label: string;
   { value: 'false', label: 'Not blocked', title: 'Tasks with no unfinished dependency' },
 ];
 
+/** Display text only: the filter value stays the stored project name. */
 export function projectLabel(name: string): string {
-  return name === '' ? 'Inbox' : name;
+  return projectDisplayName(name);
 }
 
 export function sourceLabel(id: string, lists: Pick<FilterLists, 'sources'>): string {

@@ -848,7 +848,7 @@ test('a reply during a running turn reads Queued; offline and back, it is sent o
 test('Ask Walnut from the drawer is its own layer: back closes only it (C23)', async ({ page }) => {
   const errors = await boot(page)
   await openDrawer(page)
-  await page.locator('.sidebar.open').getByRole('button', { name: 'Ask Walnut' }).click()
+  await page.locator('.sidebar.open').getByRole('button', { name: 'Quick question' }).click()
   const slot = page.getByTestId('ask-walnut-slot')
   await expect(slot).toBeVisible({ timeout: 15_000 })
   await expect(backButton(page)).toBeVisible()
@@ -903,7 +903,7 @@ for (const vp of [{ width: 390, height: 844 }, { width: 375, height: 667 }, { wi
     await backButton(page).click()
     await expect(overlay(page)).toHaveCount(0)
     await openDrawer(page)
-    await page.locator('.sidebar.open').getByRole('button', { name: 'Ask Walnut' }).click()
+    await page.locator('.sidebar.open').getByRole('button', { name: 'Quick question' }).click()
     await expect(page.getByTestId('ask-walnut-slot')).toBeVisible({ timeout: 15_000 })
     await check('ask walnut', ['.main-page-chat', '.phone-topbar'])
     mkdirSync(SHOTS, { recursive: true })

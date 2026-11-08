@@ -14,6 +14,7 @@ import { dayLabel, periodDays } from '@/components/usage/breakdown-model';
 import { UsageDateRange } from '@/components/usage/UsageDateRange';
 import { collectUsage, type CostLine, type CostOrigin, type CostReport, type CostTaskLine, type Period } from '@/api/usage';
 import { openSessionOnHome } from '@/utils/open-session';
+import { projectDisplayName } from '@/utils/project-display';
 import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel';
 import '@/styles/settings-sections-addons.css';
 import '@/styles/usage-breakdown.css';
@@ -218,7 +219,7 @@ function TaskList({ report, heading }: { report: CostReport; heading: string }) 
   const hostName = useHostDisplayLabels();
   const tasks = report.tasks ?? [];
   if (!tasks.length && !report.shortSessions) return null;
-  const help = (t: CostTaskLine) => [t.project || 'Inbox', t.engines.join(', '), t.hosts.map(hostName).join(', '), volume(t.requests, totalTokens(t))].join(' · ');
+  const help = (t: CostTaskLine) => [projectDisplayName(t.project), t.engines.join(', '), t.hosts.map(hostName).join(', '), volume(t.requests, totalTokens(t))].join(' · ');
   const row = (t: CostTaskLine) => <LineRow key={t.key} line={t} help={help(t)}
     onOpen={t.sessionId ? () => openSessionOnHome(t.sessionId!, navigate) : undefined} />;
   return (

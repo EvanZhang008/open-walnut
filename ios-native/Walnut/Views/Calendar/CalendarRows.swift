@@ -16,7 +16,7 @@ struct CalendarTaskRow: View {
             HStack(alignment: .center, spacing: 10) {
                 StatusCircle(status: item.task.statusKind)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(item.task.title)
+                    Text(AskProjectName.displayTitle(item.task.title, project: item.task.project, orgRole: item.task.orgRole))
                         .font(.subheadline)
                         .foregroundStyle(.primary)
                         .lineLimit(2)
@@ -34,7 +34,7 @@ struct CalendarTaskRow: View {
                                 .foregroundStyle(.secondary)
                         }
                         if !item.task.project.isEmpty {
-                            Text(item.task.project)
+                            Text(AskProjectName.display(item.task.project))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
@@ -158,7 +158,7 @@ struct CalendarTimelineBlock: View {
 
     private var title: String {
         switch block.source {
-        case .task(let item): return item.task.title
+        case .task(let item): return AskProjectName.displayTitle(item.task.title, project: item.task.project, orgRole: item.task.orgRole)
         case .event(let event): return event.title
         }
     }
@@ -225,7 +225,7 @@ struct CalendarAllDayChip: View {
 
     private var title: String {
         switch row.source {
-        case .task(let item): return item.task.title
+        case .task(let item): return AskProjectName.displayTitle(item.task.title, project: item.task.project, orgRole: item.task.orgRole)
         case .event(let event): return event.title
         }
     }

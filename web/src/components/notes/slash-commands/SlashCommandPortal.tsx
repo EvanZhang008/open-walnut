@@ -14,11 +14,13 @@ import { SlashCommandMenu } from './SlashCommandMenu';
 import { TaskSearchPanel } from './TaskSearchPanel';
 import { NoteLinkPanel } from './NoteLinkPanel';
 import { taskPath } from '@/utils/task-path';
+import { taskReferenceLabel } from '@/utils/project-display';
+import { useTasksContextSafe } from '@/contexts/TasksContext';
 
 interface SlashCommandPortalProps {
   editor: Editor;
   state: SlashCommandState & { atBlockStart?: boolean };
-  tasks: Task[];
+  tasks?: Task[];
   focusedTaskId?: string;
   /** Notes for the "Link to note" sub-panel (Obsidian-native [[Title]] insert). */
   wikiLinkNotes?: NoteListItem[];
@@ -26,6 +28,7 @@ interface SlashCommandPortalProps {
 }
 
 export function SlashCommandPortal({ editor, state, tasks, focusedTaskId, wikiLinkNotes, onClose }: SlashCommandPortalProps) {
+  const sharedTasks = useTasksContextSafe();
   const [subPanel, setSubPanel] = useState<'task-search' | 'note-link' | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const [coords, setCoords] = useState<{ left: number; top: number } | null>(null);
@@ -72,7 +75,7 @@ export function SlashCommandPortal({ editor, state, tasks, focusedTaskId, wikiLi
     if (state.phase === 'closed') return;
 
     const handleClickOutside = (e: MouseEvent) => {
-      if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
+      if (panelRef.current && !e.composedPath().includes(panelRef.current)) {
         onClose();
       }
     };
@@ -106,9 +109,7 @@ export function SlashCommandPortal({ editor, state, tasks, focusedTaskId, wikiLi
     const docSize = editor.state.doc.content.size;
     if (range.from >= docSize || range.to > docSize) { onClose(); return; }
 
-    const label = task.project
-      ? `${task.project} / ${task.title}`
-      : task.title;
+    const label = taskReferenceLabel(task);
 
     editor
       .chain()
@@ -156,7 +157,7 @@ export function SlashCommandPortal({ editor, state, tasks, focusedTaskId, wikiLi
   if (subPanel === 'task-search') {
     panel = (
       <TaskSearchPanel
-        tasks={tasks}
+        tasks={tasks ?? sharedTasks?.tasks ?? []}
         focusedTaskId={focusedTaskId}
         onSelect={handleTaskSelect}
         onBack={handleBack}

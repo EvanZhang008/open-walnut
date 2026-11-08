@@ -177,13 +177,13 @@ export function TasksSection({ config, onSave, onReload }: Props) {
           triggered by a session turn; no summarizer agent runs. */}
       <SettingsGroup heading="After a session finishes" data-testid="tasks-after-session">
         <SettingsRow
-          label="Tell Ask Walnut"
+          label="Tell the chat"
           help="The task summary always updates; this only decides whether chat hears about it."
           error={notify.error}
           control={
             <SegmentedControl<TriageNotifyMode>
               id="triage-notify-mode"
-              aria-label="Tell Ask Walnut"
+              aria-label="Tell the chat"
               value={notify.value}
               options={NOTIFY_OPTIONS}
               onChange={notify.set}

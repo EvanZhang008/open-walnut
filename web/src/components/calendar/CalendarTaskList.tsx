@@ -14,6 +14,7 @@ import { PIN_TIER_POLICY } from '@open-walnut/core';
 import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
 import { PriorityBadge } from '@/components/common/PriorityBadge';
 import { useShowPriority } from '@/hooks/useShowPriority';
+import { projectDisplayName } from '@/utils/project-display';
 
 const DONE_PHASES = new Set(['COMPLETE', 'CANCELLED']);
 
@@ -150,7 +151,7 @@ export const CalendarTaskList = memo(function CalendarTaskList({ tasks }: Props)
     for (const [project, list] of projects) {
       // Prefixed key: '' is a legal-but-ambiguous React key, and the prefix
       // also keeps a project literally named 'inbox' distinct from the bucket.
-      out.push({ key: `p:${project}`, label: project || 'Inbox', kind: 'project', tasks: list });
+      out.push({ key: `p:${project}`, label: projectDisplayName(project), kind: 'project', tasks: list });
     }
     return out;
   }, [deferredTasks, filter, focusBar, customTiers]);

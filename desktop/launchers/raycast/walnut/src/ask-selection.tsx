@@ -1,5 +1,5 @@
 /**
- * Ask Walnut About Selection: the text selected in the app you are in comes along; type what to
+ * Quick Question About Selection: the text selected in the app you are in comes along; type what to
  * do with it (revise, translate, reply) and the quick answer is ready to paste back.
  */
 import { getFrontmostApplication, getSelectedText, List } from "@raycast/api";

@@ -336,7 +336,7 @@ test('N2-28: the task panel\'s status sections draw no comma at a line end: each
 test('N2-32: Ask Walnut on a phone has the session composer\'s one-line placeholder', async ({ page }) => {
   const errors = await bootHome(page)
   await openDrawer(page)
-  await page.locator('#primary-sidebar').getByRole('button', { name: 'Ask Walnut', exact: true }).tap()
+  await page.locator('#primary-sidebar').getByRole('button', { name: 'Quick question', exact: true }).tap()
   const slot = page.getByTestId('ask-walnut-slot')
   await expect(slot).toBeVisible({ timeout: 15_000 })
   const input = slot.locator('textarea').first()

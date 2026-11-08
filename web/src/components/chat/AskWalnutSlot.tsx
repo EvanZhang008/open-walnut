@@ -54,7 +54,7 @@ import { recordTaskOpened } from '@/utils/recent-opened';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { seedLaunchPrompt } from '@/components/sessions/launch-prompt-seed';
 import { AskWalnutDrawer, AskWalnutMenuButton, type DrawerRow } from './AskWalnutDrawer';
-import { askTitle } from '@open-walnut/ask-list';
+import { askProjectDisplay, askTitle } from '@open-walnut/ask-list';
 import { pickMain } from '@open-walnut/org-tree';
 import { ensureMainTask } from '@/api/org';
 import {
@@ -202,6 +202,11 @@ export function AskWalnutSlot({
   }, [agentId]);
 
   const isGeneral = agent.id === GENERAL_AGENT_ID;
+  // What the person reads for the agent's list ("Quick question", "Quick question · Mentor");
+  // `agent.project` stays the stored key every payload sends.
+  const agentShown = askProjectDisplay(agent.project);
+  /** In a sentence: "the quick question", "the quick question for Mentor". */
+  const questionShown = isGeneral ? 'the quick question' : `the quick question for ${agent.name}`;
   // Main lives in Walnut's list as its own pinned row, never among the other chats.
   const mainTask = useMemo<Task | null>(() => pickMain(tasks) ?? null, [tasks]);
   const askTasks = useMemo(() => selectAgentTasks(tasks, agent), [tasks, agent]);
@@ -309,7 +314,7 @@ export function AskWalnutSlot({
       // The store check reads the ref OUTSIDE the updater: a state updater must
       // stay pure (React can call it twice), and the log below is a side effect.
       if (askTasksRef.current.some((t) => t.id === launched.taskId)) return;
-      log.warn('ask-walnut-slot', 'the launched Ask Walnut task never reached the task store — dropping its placeholder row', {
+      log.warn('ask-walnut-slot', 'the launched quick question task never reached the task store — dropping its placeholder row', {
         taskId: launched.taskId, sessionId: launched.sessionId ?? null,
       });
       setLaunched((prev) => (prev && prev.taskId === launched.taskId ? null : prev));
@@ -518,7 +523,7 @@ export function AskWalnutSlot({
       const asMain = !!main;
       const payload = main ? { ...launch.payload, taskId: main.id } : launch.payload;
       const result = await quickStartSession(payload);
-      log.info('ask-walnut-slot', 'Ask Walnut launched from the home slot', {
+      log.info('ask-walnut-slot', 'Quick question launched from the home slot', {
         taskId: result.taskId, sessionId: result.sessionId ?? null,
       });
       // RE-WARM the working-dirs cache this launch just invalidated (a new
@@ -528,7 +533,7 @@ export function AskWalnutSlot({
       // memory — both of which read the cache SYNCHRONOUSLY and never fetch.
       void fetchWorkingDirs().catch(() => { /* chips stay hidden until the next launch */ });
       if (gen !== launchGenRef.current) {
-        log.info('ask-walnut-slot', 'Ask Walnut launch landed after the user moved on — leaving the selection alone', {
+        log.info('ask-walnut-slot', 'Quick question launch landed after the user moved on — leaving the selection alone', {
           taskId: result.taskId, sessionId: result.sessionId ?? null,
         });
         return true;
@@ -539,7 +544,7 @@ export function AskWalnutSlot({
       setLaunched({
         taskId: result.taskId,
         ...(result.sessionId ? { sessionId: result.sessionId } : {}),
-        title: asMain ? 'CEO' : launch.message.split('\n')[0]?.trim() || launch.payload.project || 'Ask Walnut',
+        title: asMain ? 'CEO' : launch.message.split('\n')[0]?.trim() || askProjectDisplay(launch.payload.project ?? '') || 'Quick question',
         ...(asMain ? { main: true } : {}),
       });
       setSelectedTaskId(asMain ? MAIN_PICK : result.taskId);
@@ -549,9 +554,9 @@ export function AskWalnutSlot({
       return true;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      log.warn('ask-walnut-slot', 'Ask Walnut launch failed', { error: message });
+      log.warn('ask-walnut-slot', 'Quick question launch failed', { error: message });
       if (gen !== launchGenRef.current) {
-        log.info('ask-walnut-slot', 'Ask Walnut launch failed after the user moved on — not showing Retry over the new view', { error: message });
+        log.info('ask-walnut-slot', 'Quick question launch failed after the user moved on — not showing Retry over the new view', { error: message });
         return false;
       }
       setPending({ ...launch, error: message });
@@ -659,8 +664,8 @@ export function AskWalnutSlot({
   // every slot render (and the slot re-renders on every task-store tick) would
   // defeat that memo and re-render the whole transcript each time.
   const menuButton = useMemo(
-    () => <AskWalnutMenuButton ref={menuBtnRef} open={drawerOpen} onToggle={toggleDrawer} label={agent.project} />,
-    [drawerOpen, toggleDrawer, agent.project],
+    () => <AskWalnutMenuButton ref={menuBtnRef} open={drawerOpen} onToggle={toggleDrawer} label={agentShown} />,
+    [drawerOpen, toggleDrawer, agentShown],
   );
 
   // Phone: the slot is a layer whose bar is the top bar (title = the agent, the
@@ -670,7 +675,7 @@ export function AskWalnutSlot({
     id: 'chat',
     kind: 'chat',
     active: !!phoneOpen,
-    title: agent.name || agent.project,
+    title: agent.name || agentShown,
     subtitle: view === 'session' && sessionId
       ? phoneSessionLabel({ process_status: askStatus?.process_status, pendingPermissionTool: askStatus?.pendingPermissionTool ?? null })
       : undefined,
@@ -692,7 +697,7 @@ export function AskWalnutSlot({
             {inlineMenuButton && <div className="ask-walnut-bare-header">{inlineMenuButton}</div>}
             <p className="ask-walnut-pending-status">
               <span className="spinner ask-walnut-pending-spinner" />
-              Loading your asks…
+              Loading your quick questions…
             </p>
           </div>
         ) : view === 'new' ? (
@@ -739,7 +744,7 @@ export function AskWalnutSlot({
             {inlineMenuButton && <div className="ask-walnut-bare-header">{inlineMenuButton}</div>}
             {pending.error ? (
               <>
-                <p className="ask-walnut-pending-error">{pending.main ? 'The CEO' : agent.project} couldn&apos;t start: {pending.error}</p>
+                <p className="ask-walnut-pending-error">Couldn&apos;t start {pending.main ? 'the CEO' : questionShown}: {pending.error}</p>
                 <div className="ask-walnut-pending-actions">
                   <button
                     className="btn btn-sm btn-primary"
@@ -755,7 +760,7 @@ export function AskWalnutSlot({
             ) : (
               <p className="ask-walnut-pending-status">
                 <span className="spinner ask-walnut-pending-spinner" />
-                Starting {pending.main ? 'the CEO' : agent.project}…
+                Starting {pending.main ? 'the CEO' : questionShown}…
               </p>
             )}
             {pending.message && <p className="ask-walnut-pending-echo">{pending.message}</p>}
@@ -781,8 +786,8 @@ export function AskWalnutSlot({
         ) : (
           <div className="ask-walnut-empty">
             {inlineMenuButton && <div className="ask-walnut-bare-header">{inlineMenuButton}</div>}
-            <p>This ask has no session yet.</p>
-            <button className="btn btn-sm btn-primary" onClick={startNew}>New</button>
+            <p>This quick question has no session yet.</p>
+            <button className="btn btn-sm btn-primary" onClick={startNew}>New quick question</button>
           </div>
         )}
       </div>

@@ -71,7 +71,7 @@ async function openAskWalnut(page: Page): Promise<void> {
     await page.getByRole('button', { name: 'Menu', exact: true }).click()
     await expect(sidebar).toHaveClass(/\bopen\b/)
   }
-  await sidebar.getByRole('button', { name: 'Ask Walnut', exact: true }).click()
+  await sidebar.getByRole('button', { name: 'Quick question', exact: true }).click()
   await expect(slot(page)).toBeVisible({ timeout: 15_000 })
 }
 
@@ -131,7 +131,7 @@ test('a new Ask Walnut while the Mac sleeps runs on the host, its answer streams
     await newChat(page)
     const composer = slotDraft(page).locator('.chat-input-textarea')
     await expect(composer).toBeVisible({ timeout: 30_000 })
-    await expect(composer).toHaveAttribute('placeholder', /Ask Walnut anything/)
+    await expect(composer).toHaveAttribute('placeholder', /Ask a quick question/)
     await shot(page, '1-ask-open')
     const started = page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/sessions/quick-start')
     await composer.click()

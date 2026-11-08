@@ -1,6 +1,8 @@
 /**
- * Walnut's actions for Spotlight, Shortcuts and Siri (App Intents): Ask Walnut (a quick answer),
- * Tell Main (a message into Main's chat) and Open Task. On macOS 26 each one shows in Spotlight's
+ * Walnut's actions for Spotlight, Shortcuts and Siri (App Intents): Quick question (a quick answer),
+ * Tell CEO (a message into the CEO's chat, the Main task) and Open Task. The type names
+ * (AskWalnutIntent, TellMainIntent) are the actions' identifiers and stay, so a quick key or a
+ * Shortcut the user already made keeps working; only the words people read changed. On macOS 26 each one shows in Spotlight's
  * actions and can be given a quick key there, so a key anywhere on the Mac reaches Walnut with
  * nothing else installed. They call the same local routes the Alfred and Raycast launchers use
  * (src/web/routes/quick-input-v1.ts).
@@ -81,14 +83,14 @@ enum WalnutIntentError: Error, CustomLocalizedStringResourceConvertible {
 
 @available(macOS 13.0, *)
 struct AskWalnutIntent: AppIntent {
-    static let title: LocalizedStringResource = "Ask Walnut"
+    static let title: LocalizedStringResource = "Quick Question"
     static let description = IntentDescription("A quick answer from Walnut: a question, a text to revise or translate, a short search.")
     static let openAppWhenRun = false
 
     @Parameter(title: "Question", inputOptions: String.IntentInputOptions(multiline: true))
     var question: String
 
-    static var parameterSummary: some ParameterSummary { Summary("Ask Walnut \(\.$question)") }
+    static var parameterSummary: some ParameterSummary { Summary("Quick question \(\.$question)") }
 
     func perform() async throws -> some IntentResult & ProvidesDialog & ReturnsValue<String> {
         let text = question.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -114,14 +116,14 @@ struct AskWalnutIntent: AppIntent {
 
 @available(macOS 13.0, *)
 struct TellMainIntent: AppIntent {
-    static let title: LocalizedStringResource = "Tell Walnut Main"
-    static let description = IntentDescription("Send a message to Walnut's Main agent. Its reply shows in Main's chat in Walnut.")
+    static let title: LocalizedStringResource = "Tell Walnut CEO"
+    static let description = IntentDescription("Send a message to Walnut's CEO. Its reply shows in the CEO's chat in Walnut.")
     static let openAppWhenRun = false
 
     @Parameter(title: "Message", inputOptions: String.IntentInputOptions(multiline: true))
     var message: String
 
-    static var parameterSummary: some ParameterSummary { Summary("Tell Main \(\.$message)") }
+    static var parameterSummary: some ParameterSummary { Summary("Tell CEO \(\.$message)") }
 
     func perform() async throws -> some IntentResult & ProvidesDialog & ReturnsValue<String> {
         let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -133,10 +135,10 @@ struct TellMainIntent: AppIntent {
         }
         let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         if body?["held"] as? Bool == true {
-            let words = "Main is waiting for your answer to its question first, so nothing was sent. Open Main in Walnut to answer it."
+            let words = "The CEO is waiting for your answer to its question first, so nothing was sent. Open the CEO in Walnut to answer it."
             return .result(value: words, dialog: "\(words)")
         }
-        let words = "Sent to Main. Its reply shows in Main's chat in Walnut."
+        let words = "Sent to the CEO. Its reply shows in the CEO's chat in Walnut."
         return .result(value: words, dialog: "\(words)")
     }
 }
@@ -212,10 +214,12 @@ struct OpenWalnutTaskIntent: AppIntent {
 @available(macOS 13.0, *)
 struct WalnutShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
-        AppShortcut(intent: AskWalnutIntent(), phrases: ["Ask \(.applicationName)"],
-                    shortTitle: "Ask Walnut", systemImageName: "bolt.fill")
-        AppShortcut(intent: TellMainIntent(), phrases: ["Tell \(.applicationName) Main"],
-                    shortTitle: "Tell Main", systemImageName: "person.fill")
+        // The older spoken phrases stay after the new ones, so what a user already says to
+        // Siri still works.
+        AppShortcut(intent: AskWalnutIntent(), phrases: ["Quick question for \(.applicationName)", "Ask \(.applicationName)"],
+                    shortTitle: "Quick Question", systemImageName: "bolt.fill")
+        AppShortcut(intent: TellMainIntent(), phrases: ["Tell \(.applicationName) CEO", "Tell \(.applicationName) Main"],
+                    shortTitle: "Tell CEO", systemImageName: "person.fill")
         AppShortcut(intent: OpenWalnutTaskIntent(), phrases: ["Open \(\.$task) in \(.applicationName)", "Open a task in \(.applicationName)"],
                     shortTitle: "Open Task", systemImageName: "checklist")
     }

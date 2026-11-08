@@ -88,7 +88,7 @@ function writeStamped(storage: AskObjectStorage | undefined, key: string, value:
  * surface and the author (`Mail: Bo Marina`).
  */
 export function askObjectTitle(prefix: string, subject: string): string {
-  const head = (prefix.replace(/\s+/g, ' ').trim() || 'Ask Walnut').slice(0, TITLE_MAX);
+  const head = (prefix.replace(/\s+/g, ' ').trim() || 'Quick question').slice(0, TITLE_MAX);
   const words = subject.replace(/\s+/g, ' ').trim();
   if (!words) return head;
   const room = TITLE_MAX - head.length - 2;

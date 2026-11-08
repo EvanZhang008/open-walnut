@@ -62,7 +62,7 @@ describe('the four states the design names', () => {
       action: 'none',
     });
     // The design's exact wording. It is the one place the menu points at the Ask rows above it.
-    expect(UNSUBSCRIBE_NONE_TITLE).toBe('No unsubscribe link found. Ask Walnut can try.');
+    expect(UNSUBSCRIBE_NONE_TITLE).toBe('No unsubscribe link found. Ask a quick question and Walnut can try.');
     // An absent field reads exactly as `available: 'none'`, which is the documented contract.
     expect(state({ available: 'none' }).status).toBe('none');
   });

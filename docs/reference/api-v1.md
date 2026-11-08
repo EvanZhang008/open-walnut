@@ -404,7 +404,7 @@ Array, most-recent first:
 `title` is omitted while a conversation is still untitled. `limit` defaults to 50 (max 200).
 
 `askTaskId` (additive, 2026-10): the ask this conversation is. Every conversation a
-session has answered is one of its agent's asks, so the Mac's Ask Walnut drawer
+session has answered is one of its agent's asks, so the Mac's Quick question drawer
 lists it and can continue it, and `GET /api/v1/asks` lists it with a
 `conversationId` naming this conversation. A new conversation gets its ask with
 its first message; the conversations that already had a session got theirs once,
@@ -422,7 +422,7 @@ Body (optional): `{ "title": "My thread", "agentId": "general" }` → `201 { "id
 
 ### GET /api/v1/asks?agentId=general&q=&limit=200 (additive, 2026-09)
 
-One agent's asks, exactly as the web console's Ask Walnut drawer lists them. The
+One agent's asks, exactly as the web console's Quick question drawer lists them. The
 rules live in one module (`src/core/sessions/ask-list.ts`) that the drawer imports
 too, so a client renders `asks` in the order given and never sorts, filters or
 retitles them itself.
@@ -1652,7 +1652,7 @@ Every route answers `501 not_supported_cloud` on a cloud companion.
   its delivery and turn generation), never a turn that was running before it; `unfinished` means
   the follow gave up after 15 minutes. Closing the request stops the follow, not Main's turn.
 - `POST /quick/session {text, taskId?, images?}` (added 2026-11-01): a normal Claude Code session
-  in Walnut, the kind the Ask Walnut chat runs. With no `taskId` a new ask starts with the text (the
+  in Walnut, the kind a quick question runs. With no `taskId` a new ask starts with the text (the
   phone's New chat); with the `taskId` the first answer named, the text goes into that ask's chat
   (`404 task_not_found` for any other id). Answers the NDJSON stream of `/quick/main` with
   `follow: true`: `{"type":"sent"|"held",taskId,sessionId,started}`, then the reply to this message.

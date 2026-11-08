@@ -14,6 +14,7 @@ import { useConfirm } from '@/hooks/useConfirm';
 import { yieldFullscreen } from '@/hooks/useFullscreen';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
 import { fetchSession, forkSessionInWalnut } from '@/api/sessions';
+import { sessionRecordTitle } from '@/stores/entity-label-store';
 import type { ImageAttachment } from '@/api/chat';
 import { openPopout, openTaskInApp, popoutPath } from './openPopout';
 import './popout-session.css';
@@ -41,7 +42,7 @@ function PopoutSessionPanel() {
     if (!id) return;
     let cancelled = false;
     fetchSession(id).then(session => {
-      if (!cancelled) document.title = `${session?.title || session?.description || 'Session'} · Walnut`;
+      if (!cancelled) document.title = `${(session && sessionRecordTitle(session)) || session?.description || 'Session'} · Walnut`;
     }).catch(() => {});
     return () => { cancelled = true; };
   }, [id]);

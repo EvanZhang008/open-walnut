@@ -1,5 +1,6 @@
 import type { Task } from '@open-walnut/core';
-import { CEO_LABEL, VP_LABEL } from '@open-walnut/org-tree';
+import { CEO_LABEL, VP_LABEL, orgDisplayTitle } from '@open-walnut/org-tree';
+import { projectDisplayName } from '@/utils/project-display';
 import { isDoneTask } from './adopt-candidates';
 import { subtasksOf } from './subtask-index';
 
@@ -40,7 +41,9 @@ export function releaseCandidates(tasks: readonly Task[], leaderId: string, quer
   const q = query.trim().toLowerCase();
   return subtasksOf(tasks, leaderId).filter((t) => !q
     || t.title.toLowerCase().includes(q)
+    || orgDisplayTitle(t).toLowerCase().includes(q)
     || (t.project ?? '').toLowerCase().includes(q)
+    || projectDisplayName(t.project).toLowerCase().includes(q)
     || t.id.toLowerCase().startsWith(q));
 }
 

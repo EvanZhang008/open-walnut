@@ -132,7 +132,7 @@ final class TasksStore {
 
     // Sessions ride the same panel as a smart-list tab (read-only projection).
     var sessions: [WalnutSession] = [] {
-        didSet { sessionsGen &+= 1 }
+        didSet { sessionsGen &+= 1; scheduleTaskMentionSync() }
     }
     var sessionsSyncedAt: Date?
     var sessionsNotSyncedYet = false
@@ -157,7 +157,7 @@ final class TasksStore {
 
     /// taskId → the ids that task's detail reported, newest LAST (link order).
     var sessionIdsByTask: [String: [String]] = [:] {
-        didSet { detailsGen &+= 1 }
+        didSet { detailsGen &+= 1; scheduleTaskMentionSync() }
     }
 
     /// Record what a task detail said. Cheap and idempotent — every detail read calls

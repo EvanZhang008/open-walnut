@@ -29,6 +29,7 @@ import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import * as ICONS from '../common/Icons';
 import { useProjectContextMenu } from './ProjectContextMenu';
+import { projectDisplayName } from '../../utils/project-display';
 
 export interface TierProjectLabelRowProps {
   /** '' = Inbox (a legal drag participant and a legal fold target; it just has
@@ -135,7 +136,7 @@ export function TierProjectLabelRow({
         {/* SOLID icon + kind-tag = project; folders inside render with the
             hollow icon + indent, so the two levels never read the same. */}
         <span className="tier-project-label-icon">{ICONS.ICON_FOLDER_SOLID}</span>
-        <span className="tier-project-label-name">{project || 'Inbox'}</span>
+        <span className="tier-project-label-name">{projectDisplayName(project)}</span>
         <span className="project-kind-tag">project</span>
         {/* Same rule as the folder chip's badge: draw it only when there is
             something to count. */}
@@ -166,7 +167,7 @@ export function TierProjectLabelRow({
           // would re-arm it mid-drag.
           onPointerLeave={(e) => { const label = e.currentTarget.parentElement; if (label) label.draggable = !inert; }}
         >
-          <button type="button" className="navigation-more" aria-label={`${project || 'Inbox'} menu`} aria-haspopup="menu"
+          <button type="button" className="navigation-more" aria-label={`${projectDisplayName(project)} menu`} aria-haspopup="menu"
             onPointerDown={event => event.stopPropagation()}
             onClick={event => projectMenu.open(event, { project, collapsed, favorite: isFavorite })}>···</button>
         </span>

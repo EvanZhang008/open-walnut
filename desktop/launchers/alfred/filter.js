@@ -1,5 +1,5 @@
-// The keyword's Script Filter: what is typed becomes a quick answer (Enter) or a message to Main
-// (Cmd+Enter), and the tasks matching it list below (Enter opens one in Walnut).
+// The keyword's Script Filter: what is typed becomes a quick answer (Enter) or a message to the
+// CEO (Main, Cmd+Enter), and the tasks matching it list below (Enter opens one in Walnut).
 function run(argv) {
   const entryId = String(Date.now())
   const query = (argv[0] || '').trim()
@@ -7,7 +7,7 @@ function run(argv) {
     return JSON.stringify({
       skipknowledge: true,
       items: [{
-        title: 'Ask Walnut',
+        title: 'Quick question',
         subtitle: 'Type a question, a text to revise, or words of a task to find',
         valid: false,
         icon: { path: 'icon.png' },
@@ -18,13 +18,13 @@ function run(argv) {
     {
       uid: 'walnut-quick',
       title: query,
-      subtitle: 'Quick answer ↵ · Tell Main ⌘↵',
+      subtitle: 'Quick answer ↵ · Tell CEO ⌘↵',
       arg: query,
       icon: { path: 'icon.png' },
       variables: { walnut_kind: 'ask', walnut_mode: 'quick', walnut_entry: 'new', walnut_entry_id: entryId },
       mods: {
         cmd: {
-          subtitle: "Tell Main: goes to Main's chat, and its reply shows here",
+          subtitle: "Tell CEO: goes to the CEO's chat, and its reply shows here",
           arg: query,
           variables: { walnut_kind: 'ask', walnut_mode: 'main', walnut_entry: 'new', walnut_entry_id: entryId },
         },

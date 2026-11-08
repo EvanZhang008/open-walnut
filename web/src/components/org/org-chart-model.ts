@@ -16,6 +16,7 @@ import type { ChannelRow } from './org-channels-model';
 import { projectKey, teamNews, type OrgTaskNode, type TeamNewsTask } from '@open-walnut/org-tree';
 import type { Task } from '@open-walnut/core';
 import { stateCountLabel } from '@open-walnut/user-status';
+import { projectDisplayName } from '../../utils/project-display';
 
 /** One project on a VP card. */
 export interface VpProject {
@@ -68,7 +69,7 @@ export function vpLine(c: ChannelRow['counts']): string {
 
 function projectOf(row: ChannelRow): VpProject {
   return {
-    key: row.key, project: row.project, name: row.project || 'Inbox', line: vpLine(row.counts),
+    key: row.key, project: row.project, name: projectDisplayName(row.project), line: vpLine(row.counts),
     news: row.latest, newsAt: row.latestAt, ...(row.latestTask ? { newsTask: row.latestTask } : {}), needsYou: row.needs, row,
   };
 }
@@ -76,7 +77,7 @@ function projectOf(row: ChannelRow): VpProject {
 /** A VP's name as the chart says it: what the user named its lead, else its project's name. */
 export function vpNameOf(row: ChannelRow): string {
   if (!row.project) return 'Inbox';
-  return (!row.vp && row.vpName) || row.project;
+  return (!row.vp && row.vpName) || projectDisplayName(row.project);
 }
 
 /** The VP cards, in the rows' order: a project under another VP joins that VP's card. */

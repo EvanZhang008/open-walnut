@@ -8,6 +8,7 @@
  * so many words ("New project: x"), because creating one is a write.
  */
 import type { DraftColumn } from './draft-column';
+import { projectDisplayName } from '../../utils/project-display';
 
 type ChipDraft = Pick<DraftColumn, 'project' | 'projectSource' | 'taskId' | 'forkOf' | 'walnut' | 'cwd' | 'aiFields'>;
 
@@ -51,7 +52,8 @@ export function draftProjectIsNew(draft: ChipDraft, isKnownProject: (name: strin
  */
 export function draftProjectChip(draft: ChipDraft, ctx: DraftProjectCtx): DraftProjectChipModel | null {
   if (draft.walnut) return null;
-  const name = draft.project || 'Inbox';
+  // Display text; the pick and the draft keep the stored project.
+  const name = projectDisplayName(draft.project);
   if (draft.forkOf) {
     return {
       key: 'Project:', name, isNew: false, ai: false, action: 'none',

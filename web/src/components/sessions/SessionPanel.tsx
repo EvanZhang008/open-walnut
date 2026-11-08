@@ -166,8 +166,7 @@ import { MacAwayComposer } from '@/components/layout/AwayLine';
 import { useMacSessionAway } from '@/hooks/useLeaderPresence';
 import type { PlusMenuAction } from '@/components/chat/plus-menu-actions';
 import { useMainQuickPlusActions } from '@/components/org/useMainQuickPlusActions';
-import { useToolRowFit } from './useSessionHeaderFit';
-import { SessionHeaderMoreMenu } from './SessionHeaderMore';
+import { SessionHeaderMoreMenu, SessionHeaderToolRow } from './SessionHeaderMore';
 import { SessionHeaderLabels } from './SessionHeaderLabels';
 import { useTitleRowTight } from './useTitleRowTight';
 import { NoticeToken, PanelNotice } from './PanelNotice';
@@ -556,8 +555,6 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   const toolRowRef = useRef<HTMLDivElement>(null);
   // A narrow title row puts its labels on a line under the title (useTitleRowTight.ts).
   const [titleRowRef, titleRowTight] = useTitleRowTight();
-  const toolFit = useToolRowFit(toolRowRef);
-  const hid = (id: string) => (toolFit.hidden.has(id) ? 'true' : 'false');
   // Fork, Board and Locate need the session's task. Whether they exist is decided
   // on the first frame from what this page already knows (the status store, which
   // every list naming the session seeds); a session known to have no task gets
@@ -2525,6 +2522,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
       },
     ];
   };
+  const planComposerControls = session ? composerControls() : [];
   fullComposerShownRef.current = !ownComposerLight || sidePaneKeys.includes(ROOT_THREAD_KEY);
   // Main's page beside a question's: the panel's full composer controls (see ownComposerLight).
   const mainFullComposer = session && !plainChat && ownComposerLight ? {
@@ -2755,7 +2753,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
               next to the title. Open-in-VS-Code lives in the kebab only. */}
           {/* ROW 1 — tool chips + time on the left, window controls pinned right.
               Session id / SSH host / Open-in-VS-Code all live in the ⋮ kebab. */}
-          <div className="session-meta-row-2" ref={toolRowRef}>
+          <SessionHeaderToolRow rowRef={toolRowRef}>{({ hid, inMore }) => <>
             <div className="session-meta-row-2-chips">
             <span className="session-header-item" data-header-id="fork" data-hidden={hid('fork')}>
               <SessionForkButton
@@ -2900,7 +2898,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             plusMenuActions={engineSettingsEntry.plusMenuActions}
             addMenuControls={{ handleRef: planComposerControlsRef, ids: ['output', 'btw', ...(noteState.hasNote ? [] : ['note'])] }}
             controlsSlot={session ? (
-              <ComposerControlsBar className="session-mode-bar" controls={composerControls()} handleRef={planComposerControlsRef} />
+              <ComposerControlsBar className="session-mode-bar" controls={planComposerControls} handleRef={planComposerControlsRef} />
             ) : undefined}
                           onSend={handleSend}
                           onInterruptSend={handleInterruptSendRaw}
@@ -2937,7 +2935,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                 opt-in. */}
             <PinnedSessionFacts sessionId={sessionId} taskId={session?.taskId} hid={hid} />
             {/* The chips the row had no room for, as a menu; renders nothing while all fit. */}
-            <SessionHeaderMoreMenu rowRef={toolRowRef} ids={toolFit.inMore} spacerIds={taskSlot === 'spacer' ? TASK_SLOT_IDS : undefined} />
+            <SessionHeaderMoreMenu rowRef={toolRowRef} ids={inMore} spacerIds={taskSlot === 'spacer' ? TASK_SLOT_IDS : undefined} />
             {activityAge && (
               <time className="session-panel-time" dateTime={session?.lastActiveAt} title={activityTimeTitle} data-header-id="time" data-hidden={hid('time')}>
                 {activityAge}
@@ -3064,7 +3062,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                 </button>
               )}
             </div>
-          </div>{/* .session-meta-row-2 */}
+          </>}</SessionHeaderToolRow>
 
           {/* ROW 2 — the title gets the whole line; only the folded labels and the
               kebab sit beside it (plus the host's one leading control, when

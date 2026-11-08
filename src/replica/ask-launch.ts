@@ -252,12 +252,12 @@ export function createAskLaunch(deps: AskLaunchDeps): AskLaunch {
   async function launch(req: Request, v1: boolean): Promise<PortAnswer> {
     const w = req.replicaWrite!
     const b = bodyOf(req)
-    if (b.walnutAgent !== true) return needsLeaderAnswer('session_writes_need_mac', 'Starting a session in a folder needs your Mac; Ask Walnut works here.')
+    if (b.walnutAgent !== true) return needsLeaderAnswer('session_writes_need_mac', 'Starting a session in a folder needs your Mac; Quick question works here.')
     if (b.taskId !== undefined) return needsLeaderAnswer('ask_needs_mac', 'Starting this ask again needs your Mac.')
     if ((Array.isArray(b.images) && b.images.length > 0) || b.intent !== undefined || (b.engine !== undefined && b.engine !== 'claude')) {
       return needsLeaderAnswer(Array.isArray(b.images) && b.images.length > 0 ? 'images_need_mac' : 'ask_needs_mac', 'This kind of ask needs your Mac.')
     }
-    if (b.host !== undefined && b.host !== null && b.host !== '') return refusalAnswer('bad_request', 'Ask Walnut runs where Walnut runs; it takes no host.')
+    if (b.host !== undefined && b.host !== null && b.host !== '') return refusalAnswer('bad_request', 'Quick questions run where Walnut runs; they take no host.')
     if (deps.capabilities()?.includes(REPLICA_START_CAP) !== true) return needsLeaderAnswer('daemon_needs_upgrade', 'This host\'s Walnut daemon cannot start an ask yet; it updates on your Mac\'s next connect.')
     const actor = deps.actorOf(req)
     if (!actor) return needsLeaderAnswer('device_changes_need_mac', 'This device is not known to this host by its id yet; it needs your Mac.')

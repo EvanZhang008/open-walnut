@@ -51,7 +51,7 @@ function preview(text, max) {
 
 function render(chat, partial) {
   const lines = []
-  lines.push(chat.mode === 'main' ? '### Main' : '### Quick answer')
+  lines.push(chat.mode === 'main' ? '### CEO' : '### Quick answer')
   if (chat.selection) {
     lines.push('> ' + (chat.app ? 'Selected in ' + chat.app : 'Selected text') + ': “' + preview(chat.selection, 160) + '”')
   }
@@ -67,7 +67,7 @@ function render(chat, partial) {
 }
 
 function footer(chat) {
-  const open = chat.mode === 'main' ? ' · ⇧↵ Open Main' : ''
+  const open = chat.mode === 'main' ? ' · ⇧↵ Open CEO' : ''
   return '↵ Follow up · ⌘↵ New · ⌥↵ Paste answer · ⌃↵ Copy answer' + open
 }
 
@@ -165,17 +165,17 @@ function continueStream(p, chat) {
   if (got.done || ended || age > (main ? MAIN_TIMEOUT_MS : QUICK_TIMEOUT_MS)) {
     let answer
     if (ended) answer = '⚠️ ' + NOT_RUNNING
-    else if (got.held) answer = 'Main is waiting for your answer to its question first, so nothing was sent. ⇧↵ opens Main.'
+    else if (got.held) answer = 'The CEO is waiting for your answer to its question first, so nothing was sent. ⇧↵ opens the CEO.'
     else if (got.error) answer = (got.text ? got.text + '\n\n' : '') + '⚠️ ' + got.error
-    else if (got.done && !got.unfinished) answer = got.text || (main ? 'Main finished without a written reply. ⇧↵ opens its chat.' : '⚠️ No answer came back.')
-    else answer = got.text ? got.text + (main ? '\n\n_Main is still working. ⇧↵ opens its chat._' : ' [no more came]') : (main ? 'Main is still working. ⇧↵ opens its chat.' : '⚠️ No answer came back.')
+    else if (got.done && !got.unfinished) answer = got.text || (main ? 'The CEO finished without a written reply. ⇧↵ opens its chat.' : '⚠️ No answer came back.')
+    else answer = got.text ? got.text + (main ? '\n\n_The CEO is still working. ⇧↵ opens its chat._' : ' [no more came]') : (main ? 'The CEO is still working. ⇧↵ opens its chat.' : '⚠️ No answer came back.')
     chat.messages.push({ role: 'assistant', text: answer })
     saveChat(p, chat)
     stopStream(p)
     return output(chat, render(chat))
   }
   saveChat(p, chat)
-  const partial = got.text || (main ? (got.activity ? '_Main is working: ' + got.activity + '…_' : '_Main is reading it…_') : '…')
+  const partial = got.text || (main ? (got.activity ? '_The CEO is working: ' + got.activity + '…_' : '_The CEO is reading it…_') : '…')
   return output(chat, render(chat, partial), { streaming: true })
 }
 
@@ -229,5 +229,5 @@ function run(argv) {
   saveChat(p, chat)
   if (chat.mode === 'main') startMain(p, chat, typed)
   else startQuick(p, chat, typed)
-  return output(chat, render(chat, chat.mode === 'main' ? '_Main is reading it…_' : '…'), { streaming: true })
+  return output(chat, render(chat, chat.mode === 'main' ? '_The CEO is reading it…_' : '…'), { streaming: true })
 }

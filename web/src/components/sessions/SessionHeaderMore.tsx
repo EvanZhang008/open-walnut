@@ -17,8 +17,19 @@ import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObjec
 import { createPortal } from 'react-dom';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { ICON_EYE, ICON_LOCATE, ICON_MINIMIZE, ICON_NEW_TAB } from '../common/Icons';
-import { SLOT_ID_PREFIX, TOOL_ITEMS, toolItemSpec } from './useSessionHeaderFit';
+import { SLOT_ID_PREFIX, TOOL_ITEMS, toolItemSpec, useToolRowFit } from './useSessionHeaderFit';
 import { TASK_SLOT_SPACER } from './header-record-gate';
+
+// A synchronous fit must not recreate the composer's observers during resize delivery.
+export function SessionHeaderToolRow({ rowRef, children }: {
+  rowRef: RefObject<HTMLDivElement | null>;
+  children: (fit: { hid: (id: string) => 'true' | 'false'; inMore: string[] }) => ReactNode;
+}) {
+  const fit = useToolRowFit(rowRef);
+  return <div className="session-meta-row-2" ref={rowRef}>
+    {children({ hid: (id) => fit.hidden.has(id) ? 'true' : 'false', inMore: fit.inMore })}
+  </div>;
+}
 
 const itemOf = (row: HTMLElement | null, id: string) => row?.querySelector<HTMLElement>(`[data-header-id="${id}"]`) ?? null;
 

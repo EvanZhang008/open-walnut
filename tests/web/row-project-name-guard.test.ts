@@ -23,15 +23,15 @@ const SCANNED = ['components/tasks', 'components/org', 'pages'];
 
 /** Every place a project name is drawn as text that is not a row link, keyed `file: expression`. */
 const NOT_A_ROW_LINK: Record<string, string> = {
-  'components/tasks/AgentSearchResultRows.tsx: row.project || \'Inbox\'':
+  'components/tasks/AgentSearchResultRows.tsx: projectDisplayName(row.project)':
     'An AI search answer row is one <button> (a link inside it would be a button in a button), and the same rows are drawn in chat transcripts, where there is no task panel to filter.',
-  'components/tasks/TaskCard.tsx: task.project':
+  'components/tasks/TaskCard.tsx: projectDisplayName(task.project)':
     'TaskCard is drawn only by TaskList, which nothing mounts.',
-  'components/tasks/AdoptWorkerFlyout.tsx: t.project || \'Inbox\'':
+  'components/tasks/AdoptWorkerFlyout.tsx: projectDisplayName(t.project)':
     'A picker flyout listing tasks to adopt: a click picks the task, it is no task list.',
-  'components/tasks/TaskDetailPane.tsx: task.project || \'Inbox\'':
+  'components/tasks/TaskDetailPane.tsx: taskProjectLabel(task)':
     'The open task\'s own detail header, not a row in a list.',
-  'components/tasks/PhoneNeedsYouStrip.tsx: t.project':
+  'components/tasks/PhoneNeedsYouStrip.tsx: projectDisplayName(t.project)':
     'A phone chip that is one tap target; a 15 px name inside it is no target (phone-fixes-r4.css R3-04).',
   'components/org/OrgChannelList.tsx: m.project':
     'A project that moved to another VP on the Org page: a project row, not a task row.',
@@ -47,9 +47,14 @@ function sourceFiles(dir: string): string[] {
   return out;
 }
 
-/** `x.project`, `x?.y.project`, `x.project || 'Inbox'`, `projectName`. */
+/** `x.project`, `x?.y.project`, `x.project || 'Inbox'`, `projectName`, `projectDisplayName(x.project)`, `taskProjectLabel(x)`. */
 function namesProject(e: ts.Expression): boolean {
   if (ts.isParenthesizedExpression(e)) return namesProject(e.expression);
+  // The display helpers (web/src/utils/project-display.ts) still draw the name as text.
+  if (ts.isCallExpression(e) && ts.isIdentifier(e.expression) && e.expression.text === 'taskProjectLabel') return e.arguments.length === 1;
+  if (ts.isCallExpression(e) && ts.isIdentifier(e.expression) && e.expression.text === 'projectDisplayName') {
+    return e.arguments.length === 1 && namesProject(e.arguments[0]!);
+  }
   if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.BarBarToken) {
     return namesProject(e.left) && ts.isStringLiteral(e.right);
   }

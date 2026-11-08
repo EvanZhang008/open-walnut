@@ -28,6 +28,7 @@ import { RowProjectName } from './RowProjectName';
 import { isPhoneLayout, phonePhaseAttrs } from './phone-row-behavior';
 import { formatWaitUntil } from './TaskStatusControl';
 import { formatStartDateDisplay } from '../common/DatePicker';
+import { orgDisplayTitle } from '@open-walnut/org-tree';
 import { recentActivityTime, recentActivityTitle } from './recent-activity-time';
 import {
   STATUS_SECTION_BATCH,
@@ -209,9 +210,9 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
     <span
       {...edit.titleProps}
       className={`todo-pinned-title${edit.isEditing ? ' editing' : ''}${task.walnut_agent ? ' walnut-task-title' : ''}`}
-      title={task.title}
+      title={orgDisplayTitle(task)}
       onClick={edit.isEditing ? (e) => e.stopPropagation() : undefined}
-    >{task.title}</span>
+    >{orgDisplayTitle(task)}</span>
   );
   // A task that started on the fallback engine says so on its row (the banner's
   // words on hover); the note goes when it is switched back or closed.
@@ -263,7 +264,7 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
       role="button"
       // Named by its task alone: from its contents the name would also carry its buttons'
       // ("Mark complete … More actions"), the same as the menu button inside it.
-      aria-label={task.title}
+      aria-label={orgDisplayTitle(task)}
       tabIndex={0}
       onKeyDown={(e) => { if (e.key === 'Enter' && !edit.isEditing) { e.preventDefault(); handlers.onClick(task); } }}
     >

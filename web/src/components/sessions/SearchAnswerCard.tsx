@@ -21,6 +21,7 @@ import { useEffect, useState } from 'react';
 import type { SearchAnswerMessage, SearchAnswerRow } from '@open-walnut/search-transcript';
 import { AgentSearchResultRows, type SearchResultRowView } from '@/components/tasks/AgentSearchResultRows';
 import { fetchTasksBulk } from '@/api/tasks';
+import { orgDisplayTitle } from '@open-walnut/org-tree';
 import { lookupTaskLabel } from '@/stores/entity-label-store';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { log } from '@/utils/log';
@@ -43,7 +44,7 @@ function resolveRows(key: string, ids: readonly string[]): Promise<void> {
   const task = (async () => {
     const asked = ids.filter(sendable);
     try {
-      const fetched = await fetchTasksBulk(asked, ['title', 'phase', 'project']);
+      const fetched = await fetchTasksBulk(asked, ['title', 'phase', 'project', 'org_role']);
       // Aligned by INDEX, not by id: the route resolves a unique id PREFIX (the
       // model does emit 8-char prefixes) and answers with the RESOLVED id, so an
       // id-keyed lookup would call a resolved row missing. One item per input id
@@ -57,7 +58,7 @@ function resolveRows(key: string, ids: readonly string[]): Promise<void> {
           views.set(id, {
             // The resolved id, so a prefix row's click opens the real task.
             taskId: row.id || id,
-            ...(row.title ? { title: row.title } : {}),
+            ...(row.title ? { title: orgDisplayTitle({ title: row.title, project: row.project, org_role: row.org_role }) } : {}),
             ...(row.phase ? { phase: row.phase } : {}),
             ...(row.project ? { project: row.project } : {}),
           });

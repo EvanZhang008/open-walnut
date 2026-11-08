@@ -9,18 +9,18 @@ import { useOrgSettings } from './useOrgSettings';
 
 /** What turning the org off stops, in the words the switch shows. */
 export const ORG_OFF_STOPS = [
-  'Main and the VPs start no session, and Walnut wakes none of them',
+  'CEO and the VPs start no session, and Walnut wakes none of them',
   'Status updates, team notes and Brief refreshes stop going up to them',
   'Their away letters, scheduled reports and the routines aimed at them do not run',
   'Agents cannot reach them with org_send',
 ] as const;
 
-export const ORG_OFF_STILL = 'You can still type to Main or a VP in its chat. Tasks, their sessions, the Board and the inbox keep working.';
+export const ORG_OFF_STILL = 'You can still type to CEO or a VP in its chat. Tasks, their sessions, the Board and the inbox keep working.';
 
 export function orgSwitchFooter(on: boolean): string {
   return on
-    ? 'Main and every VP start by themselves in the background and keep their Brief.'
-    : 'Turning it on again starts Main and the VPs that never started, and they hear their teams again.';
+    ? 'CEO and every VP start by themselves in the background and keep their Brief.'
+    : 'Turning it on again starts CEO and the VPs that never started, and they hear their teams again.';
 }
 
 export interface OrgToggle {

@@ -64,6 +64,18 @@ describe('releaseCandidates', () => {
     expect(releaseCandidates(tasks, lead.id, 'nothing')).toEqual([]);
   });
 
+  it('matches current display names and legacy stored titles without changing the workers', () => {
+    const ask = task({ id: 'ask', title: 'Ask Walnut', project: 'Ask Walnut', parent_task_id: lead.id });
+    const ceo = task({ id: 'ceo', title: 'Main', org_role: 'main', parent_task_id: lead.id });
+    const vp = task({ id: 'vp', title: 'Garden lead', org_role: 'lead', org_name: 'Design', parent_task_id: lead.id });
+    const rows = [lead, ask, ceo, vp];
+    for (const [query, id] of [['Quick question', ask.id], ['Ask Walnut', ask.id], ['CEO', ceo.id], ['Main', ceo.id], ['Design VP', vp.id]]) {
+      expect(releaseCandidates(rows, lead.id, query).map(t => t.id)).toEqual([id]);
+    }
+    expect(ask).toMatchObject({ title: 'Ask Walnut', project: 'Ask Walnut' });
+    expect(ceo.title).toBe('Main');
+  });
+
   it('answers [] for a task that leads nothing', () => {
     expect(releaseCandidates(tasks, stranger.id)).toEqual([]);
   });

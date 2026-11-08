@@ -310,7 +310,7 @@ struct TaskBoardRow: View {
         HStack(alignment: .top, spacing: Self.rowSpacing) {
             ring
             VStack(alignment: .leading, spacing: 2) {
-                Text(row.title)
+                Text(displayTitle)
                     .font(.body)
                     .foregroundStyle(row.isDone ? .secondary : .primary)
                     .strikethrough(row.isDone, color: .secondary)
@@ -344,7 +344,7 @@ struct TaskBoardRow: View {
             // ring outside it leaves the ring addressable.
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier("board.row.\(row.id)")
-            .accessibilityLabel(row.title)
+            .accessibilityLabel(displayTitle)
             // The dot is drawn, never read, so its meaning rides on the row itself, and so
             // does the third line (the label above is the title alone).
             .accessibilityValue([dot?.accessibilityValue, need?.line].compactMap { $0 }.joined(separator: ", "))
@@ -503,12 +503,17 @@ struct TaskBoardRow: View {
         .accessibilityLabel(row.isDone ? "Reopen" : "Mark done")
     }
 
+    /// The title as read: an ask on its placeholder reads "Quick question", Main "CEO".
+    private var displayTitle: String {
+        AskProjectName.displayTitle(row.title, project: row.project, orgRole: row.task?.orgRole)
+    }
+
     /// ONE grey line: the project ("Inbox" for a task in none). Never a second
     /// sentence, and no longer a state word or an age (see the type's doc): the point
     /// of the row is that it is a row. At accessibility sizes it truncates rather than
     /// wraps, because the title is the line worth the height.
     private var projectLine: some View {
-        Text(row.project.isEmpty ? NewTaskSeed.inboxHeader : row.project)
+        Text(row.project.isEmpty ? NewTaskSeed.inboxHeader : AskProjectName.display(row.project))
             .font(.caption)
             .foregroundStyle(.secondary)
             .lineLimit(1)

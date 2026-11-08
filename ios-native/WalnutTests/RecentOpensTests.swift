@@ -145,6 +145,24 @@ final class RecentOpensTests: XCTestCase {
         XCTAssertEqual(opened.processStatus, "idle", "the live session, not the snapshot")
     }
 
+    func testAskRowShowsQuickQuestionAndKeepsItsStoredTask() {
+        let stored = task("t1", title: "Ask Walnut", project: "Ask Walnut")
+        let list = RecentOpens.recordingTask(stored, at: t0, into: [], cap: 40)
+        let row = RecentRow.rows(list, tasks: [stored], sessions: [], now: t0).first
+        XCTAssertEqual(row?.title, "Quick question")
+        XCTAssertEqual(row?.meta, "now · Quick question")
+        XCTAssertEqual(row?.task?.title, "Ask Walnut")
+        XCTAssertEqual(row?.task?.project, "Ask Walnut")
+    }
+
+    func testAskSessionOnlyRowUsesItsStoredProjectForDisplay() {
+        let saved = session("s1", taskId: "t1", taskTitle: "Ask Walnut", project: "Ask Walnut")
+        let list = RecentOpens.recordingSession(saved, at: t0, into: [], cap: 40)
+        let row = RecentRow.rows(list, tasks: [], sessions: [], now: t0).first
+        XCTAssertEqual(row?.title, "Quick question")
+        XCTAssertEqual(row?.session?.taskTitle, "Ask Walnut")
+    }
+
     func testARowForDetailsOnlyOpensTheDetails() {
         let list = RecentOpens.recordingTask(task("t1"), at: t0, into: [], cap: 40)
         let rows = RecentRow.rows(list, tasks: [], sessions: [], now: t0)

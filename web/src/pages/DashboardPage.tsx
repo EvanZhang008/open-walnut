@@ -45,6 +45,7 @@ import {
 } from '@open-walnut/task-query';
 import type { Task } from '@open-walnut/core';
 import { visibleInterval } from '@/utils/page-visibility';
+import { projectDisplayName } from '@/utils/project-display';
 import '@/styles/tasks-page.css';
 
 const LS_GROUPED = 'walnut-tasks-page-grouped';
@@ -388,7 +389,7 @@ export function DashboardPage() {
   if (loading) return <LoadingSpinner />;
   if (error) return <div className="empty-state"><p>Error: {error}</p></div>;
 
-  const boardTitle = activeProject === null ? 'All Tasks' : (activeProject || 'Inbox');
+  const boardTitle = activeProject === null ? 'All Tasks' : projectDisplayName(activeProject);
   const isAll = activeProject === null;
 
   return (

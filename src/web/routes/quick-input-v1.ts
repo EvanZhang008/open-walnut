@@ -65,7 +65,7 @@ export const QUICK_SYSTEM = [
   'When asked to rewrite, fix, polish, translate, shorten or reply to text, answer with only the new text: no preamble, no quotes around it, no notes after it.',
   'Use Markdown only where it helps (a short list, a code block).',
   'Answer in the language of the request unless it asks for another one; text you rewrite keeps its own language unless asked to translate.',
-  "You have no tools: you cannot browse, run anything, or see the user's tasks and files. When a request needs that, say so in one line and suggest Tell Main (Cmd+Enter), Walnut's main agent, which can.",
+  "You have no tools: you cannot browse, run anything, or see the user's tasks and files. When a request needs that, say so in one line and suggest Tell CEO (Cmd+Enter), Walnut's main agent, which can.",
 ].join('\n')
 
 /** Only the leader (the Mac) answers: a replica, the companion or a host server, holds a copy. */

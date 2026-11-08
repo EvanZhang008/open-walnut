@@ -10,7 +10,10 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Task } from '@open-walnut/core';
 import { dependsOnThrough } from '../../../../src/lib/dependency-loop';
-import { addDependency, addNote, deleteTask, fetchTasks, removeDependency, toggleCompleteTask, type TaskDetail } from '@/api/tasks';
+import { addDependency, addNote, deleteTask, fetchTasks, removeDependency, toggleCompleteTask, type TaskDetail, type TaskDependencyReference } from '@/api/tasks';
+import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
+import { lookupTaskLabel, resolveTaskToken } from '@/stores/entity-label-store';
+import { projectDisplayName } from '@/utils/project-display';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { useConfirm } from '@/hooks/useConfirm';
 import { useDraft } from '@/hooks/useDraft';
@@ -20,6 +23,7 @@ import { PHASE_LABELS } from '@/utils/session-status';
 import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
 import type { TaskPhase } from '@open-walnut/core';
 import { Section } from './TaskDetailRows';
+import { orgDisplayTitle } from '@open-walnut/org-tree';
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -39,7 +43,7 @@ export function TaskDetailActions({ task, onDeleted, onError }: {
     try { await toggleCompleteTask(task.id); } catch (e) { onError(errText(e)); }
   };
   const remove = async () => {
-    const ok = await confirm({ title: `Delete task “${task.title}”?`, message: 'This cannot be undone.', confirmLabel: 'Delete', danger: true });
+    const ok = await confirm({ title: `Delete task “${orgDisplayTitle(task)}”?`, message: 'This cannot be undone.', confirmLabel: 'Delete', danger: true });
     if (!ok) return;
     // The store removes the row optimistically and reports the outcome (its banner says why a
     // refusal happened), so the popup closes only once the server accepted it.
@@ -68,6 +72,13 @@ export function TaskDependencies({ task, detail, onChanged, onOpenTask, onError 
   onOpenTask: (taskId: string) => void;
   onError: (message: string) => void;
 }) {
+  useEntityLabelsVersion();
+  const displayTitle = (reference: TaskDependencyReference) => {
+    const live = lookupTaskLabel(reference.id);
+    if (live) return live.title;
+    const project = resolveTaskToken(reference.id)?.label.project;
+    return project && projectDisplayName(reference.title).toLowerCase() === project.toLowerCase() ? project : reference.title;
+  };
   const [picking, setPicking] = useState(false);
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<Task[]>([]);
@@ -88,7 +99,8 @@ export function TaskDependencies({ task, detail, onChanged, onOpenTask, onError 
         const all = await fetchTasks();
         const needle = q.toLowerCase();
         const matching = all.filter((t) => t.id !== task.id && !dependsOn.includes(t.id)
-          && (t.title.toLowerCase().includes(needle) || t.id.startsWith(needle)));
+          && (t.title.toLowerCase().includes(needle) || orgDisplayTitle(t).toLowerCase().includes(needle)
+            || t.id.startsWith(needle)));
         // A task that already depends on this one, directly or through others, would make a loop.
         const pickable = matching.filter((t) => !dependsOnThrough(all, t.id, task.id));
         setResults(pickable.slice(0, 10));
@@ -114,7 +126,7 @@ export function TaskDependencies({ task, detail, onChanged, onOpenTask, onError 
       {rows.map((dep) => (
         <div key={dep.id} className="tdp-row tdp-dep-row" data-testid="task-detail-dependency">
           <div className="tdp-row-line">
-            <button type="button" className="tdp-dep-title" onClick={() => onOpenTask(dep.id)} title={dep.title}>{dep.title}</button>
+            <button type="button" className="tdp-dep-title" onClick={() => onOpenTask(dep.id)} title={displayTitle(dep)}>{displayTitle(dep)}</button>
             {dep.phase && <span className="tdp-row-end">{PHASE_LABELS[dep.phase as TaskPhase] ?? dep.phase}</span>}
             <button type="button" className="tdp-dep-remove" aria-label="Remove dependency" title="Remove dependency" onClick={() => void remove(dep.id)}>&times;</button>
           </div>
@@ -131,7 +143,7 @@ export function TaskDependencies({ task, detail, onChanged, onOpenTask, onError 
             autoFocus
           />
           {results.map((t) => (
-            <button type="button" key={t.id} className="tdp-dep-result" onClick={() => void pickDependency(t.id)}>{t.title}</button>
+            <button type="button" key={t.id} className="tdp-dep-result" onClick={() => void pickDependency(t.id)}>{orgDisplayTitle(t)}</button>
           ))}
           {results.length === 0 && loopHidden !== null && query.trim() && (
             <div className="tdp-dep-empty" data-testid="task-detail-dependency-empty">
@@ -149,7 +161,7 @@ export function TaskDependencies({ task, detail, onChanged, onOpenTask, onError 
         <div className="tdp-dependents">
           <div className="tdp-label tdp-dependents-label">Waiting on this task <span className="tdp-label-count">{dependents.length}</span></div>
           {dependents.map((dep) => (
-            <button type="button" key={dep.id} className="tdp-dep-title" onClick={() => onOpenTask(dep.id)}>{dep.title}</button>
+            <button type="button" key={dep.id} className="tdp-dep-title" onClick={() => onOpenTask(dep.id)}>{displayTitle(dep)}</button>
           ))}
         </div>
       )}

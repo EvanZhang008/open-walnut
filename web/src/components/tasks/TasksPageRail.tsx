@@ -14,6 +14,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { ProjectSourceBadge } from './ProjectSourceBadge';
 import { ProjectKebabMenu, type ProjectMenuExtra } from './ProjectHeaderMenus';
 import { ProjectSourcePicker } from './ProjectSourcePicker';
+import { projectDisplayName } from '@/utils/project-display';
 
 export interface RailProjectItem {
   /** Canonical project name (registry spelling when known). */
@@ -79,13 +80,13 @@ function SortableRailItem({ p, active, onSelect, onToggleFavorite, onProjectChan
       style={{ transform: CSS.Transform.toString(transform), transition }}
       onClick={onSelect}
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(); } }}
-      title={p.name}
+      title={projectDisplayName(p.name)}
       data-rail-project={p.name}
       {...attributes}
       {...listeners}
     >
       <span className="tp-ri-icon">📁</span>
-      <span className="tp-ri-name">{p.name}</span>
+      <span className="tp-ri-name">{projectDisplayName(p.name)}</span>
       <ProjectSourceBadge source={p.source} />
       {p.favorite && <span className="tp-ri-fav">★</span>}
       <span className="tp-ri-count">{p.openCount}</span>

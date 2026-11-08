@@ -39,7 +39,7 @@ export interface OrgStartOutcome {
 
 /** The first message: who started it and what to do first. Plain words, no ask of anyone. */
 export function orgStartMessage(task: Pick<Task, 'org_role' | 'title' | 'org_name' | 'project'>, title: string): string {
-  const who = task.org_role === 'main' ? 'the CEO of the org (Main)' : `the ${title} in the org`;
+  const who = task.org_role === 'main' ? 'the CEO of the org' : `the ${title} in the org`;
   return [
     `Walnut started your session in the background: you are ${who}.`,
     'First read your teams with org_get, then write your Brief (brief_read, then brief_write) so the user sees where the work stands.',

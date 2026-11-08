@@ -111,7 +111,7 @@ export class OrgOffError extends Error {
   }
 }
 
-export const ORG_OFF_MESSAGE = 'The org is off (Settings → Org): Main and the VPs get no messages and start no work. '
+export const ORG_OFF_MESSAGE = 'The org is off (Settings → Org): CEO and the VPs get no messages and start no work. '
   + 'Send to the task that does the work with task_send, or ask the user to turn the org on.';
 
 /**

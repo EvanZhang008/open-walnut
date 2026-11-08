@@ -241,7 +241,7 @@ export function PluginSourceHead(props: PluginSourceHeadProps) {
             {(source.installLink ?? source.shareSnippet) && (
               <SettingsButton
                 reserve={['Copy install link', 'Copied']}
-                title="A link teammates click (Mac app) or paste into the Plugin Store, Ask Walnut or `walnut plugin add`"
+                title="A link teammates click (Mac app) or paste into the Plugin Store, a quick question or `walnut plugin add`"
                 onClick={() => props.onCopy((source.installLink ?? source.shareSnippet)!, source.slug)}
               >
                 {copiedKey === source.slug ? 'Copied' : 'Copy install link'}

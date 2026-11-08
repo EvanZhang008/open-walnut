@@ -22,7 +22,7 @@ export function OrgSection() {
   return (
     <SectionCard id="org" title="Org" showSave={false}>
       <SettingsGroup footer={orgSwitchFooter(org.on)}>
-        <SettingsRow label="Org" help="Main and the VPs above your projects, and their updates." htmlFor="org-enabled" error={org.error}
+        <SettingsRow label="Org" help="CEO and the VPs above your projects, and their updates." htmlFor="org-enabled" error={org.error}
           data-testid="org-enabled-row"
           control={<ToggleSwitch id="org-enabled" checked={org.on} busy={org.busy} onChange={org.set} />} />
       </SettingsGroup>

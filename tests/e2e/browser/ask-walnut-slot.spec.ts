@@ -267,9 +267,9 @@ interface SlotLaunch {
 async function launchFromSlot(page: Page, prompt: string): Promise<SlotLaunch> {
   const composer = slotDraftComposer(page)
   await expect(composer).toBeVisible({ timeout: 30_000 })
-  // The placeholder is the proof this is the Ask Walnut composer and not a
+  // The placeholder is the proof this is the quick question composer and not a
   // folder draft that happens to be mounted in the slot.
-  await expect(composer).toHaveAttribute('placeholder', /Ask Walnut anything/)
+  await expect(composer).toHaveAttribute('placeholder', /Ask a quick question/)
 
   const pendingSeen = slotPending(page)
     .waitFor({ state: 'visible', timeout: 20_000 })
@@ -345,12 +345,12 @@ test('with no Ask Walnut tasks the slot is Main\'s composer, and the drawer list
   await expect(drawerRows(page)).toHaveCount(0)
   await expect(drawerMain(page)).toBeVisible()
   await expect(drawerMain(page)).toHaveAttribute('aria-current', 'true')
-  await expect(drawer(page).getByText('No Ask Walnut sessions yet.')).toHaveCount(0)
+  await expect(drawer(page).getByText('No quick questions yet.')).toHaveCount(0)
   await expect(drawerNew(page)).toBeVisible()
   // The search box takes the keyboard on open, and none of the removed launchers
   // is there (a regression would bring one back as a titled button).
   await expect(drawerSearch(page)).toBeFocused()
-  await expect(drawer(page).getByRole('button', { name: /^(\+ )?(Task|Session|Find sessions|Hide Ask Walnut)$/ })).toHaveCount(0)
+  await expect(drawer(page).getByRole('button', { name: /^(\+ )?(Task|Session|Find sessions|Hide Quick question)$/ })).toHaveCount(0)
   await settleMotion(page)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/1b-empty-drawer.png` })
   // Escape closes it and the composer is back under the keyboard.
@@ -648,7 +648,7 @@ test('Fix Walnut re-arms a pristine draft that is already open', async ({ page }
 
 // ── Focus Dock label + toggle ────────────────────────────────────────────────
 
-test('the Focus Dock chat button is titled Ask Walnut and toggles the slot', async ({ page }) => {
+test('the Focus Dock chat button is titled Quick question and toggles the slot', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('open-walnut-focus-dock-visible', 'true')
   })
@@ -657,7 +657,7 @@ test('the Focus Dock chat button is titled Ask Walnut and toggles the slot', asy
   const dockChat = page.locator('.dock-chat-item')
   await expect(dockChat).toBeVisible({ timeout: 30_000 })
   // The label the slot renamed: "Main Chat" is the thing P1 removed.
-  await expect(dockChat).toHaveAttribute('title', 'Ask Walnut')
+  await expect(dockChat).toHaveAttribute('title', 'Quick question')
 
   await expect(slot(page)).toBeVisible({ timeout: 30_000 })
   await expect(dockChat).toHaveClass(/dock-chat-active/)
@@ -820,7 +820,7 @@ test('the drawer\'s title switches agents: Mentor has its own list, its own comp
   // console agents: Walnut, Mentor, Note Assistant; the background screenshot
   // tracker is NOT a chat persona and must not be offered).
   await openAskWalnutDrawer(page)
-  await expect(agentSwitch(page)).toHaveText(/Ask Walnut/)
+  await expect(agentSwitch(page)).toHaveText(/^Quick question$/)
   await agentSwitch(page).click()
   await expect(agentItem(page, 'general')).toHaveAttribute('aria-pressed', 'true')
   await expect(agentItem(page, 'mentor')).toContainText('Mentor')
@@ -832,10 +832,10 @@ test('the drawer\'s title switches agents: Mentor has its own list, its own comp
   // shows Mentor's list — empty: the Walnut asks are not Mentor's.
   await agentItem(page, 'mentor').click()
   await expect(drawer(page)).toHaveCount(1)
-  await expect(agentSwitch(page)).toHaveText(/Ask Mentor/)
+  await expect(agentSwitch(page)).toHaveText(/Quick question · Mentor/)
   await expect(page.locator('[data-testid="ask-walnut-agent-list"]')).toHaveCount(0)
   await expect(drawerRows(page)).toHaveCount(0)
-  await expect(drawer(page).locator('.ask-walnut-drawer-empty')).toHaveText(/No Ask Mentor sessions yet/)
+  await expect(drawer(page).locator('.ask-walnut-drawer-empty')).toHaveText(/No quick questions for Mentor yet/)
   await settleMotion(page)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/13-mentor-empty.png` })
 
@@ -844,11 +844,11 @@ test('the drawer\'s title switches agents: Mentor has its own list, its own comp
   await page.keyboard.press('Escape')
   await expect(drawer(page)).toHaveCount(0)
   await expect(slotDraft(page)).toBeVisible()
-  await expect(slotDraft(page).locator('.session-panel-title')).toHaveText('Ask Mentor')
+  await expect(slotDraft(page).locator('.session-panel-title')).toHaveText('Quick question · Mentor')
   await expect(page.locator('[data-testid="draft-agent-desc"]')).toContainText(/reflection/i)
   await expect(slotDraft(page).locator('.draft-walnut-suggests')).toHaveCount(0)
   const composer = slotDraftComposer(page)
-  await expect(composer).toHaveAttribute('placeholder', /Ask Mentor anything/)
+  await expect(composer).toHaveAttribute('placeholder', /Ask Mentor a quick question/)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/14-mentor-composer.png` })
 
   // A launch from here is a Mentor launch: filed under Ask Mentor, stamped.
@@ -882,7 +882,7 @@ test('the drawer\'s title switches agents: Mentor has its own list, its own comp
   await expect(drawerMain(page)).toHaveCount(0)
   await agentSwitch(page).click()
   await agentItem(page, 'general').click()
-  await expect(agentSwitch(page)).toHaveText(/Ask Walnut/)
+  await expect(agentSwitch(page)).toHaveText(/^Quick question$/)
   await expect(drawerRow(page, mentorTaskId)).toHaveCount(0)
   await expect(drawerRows(page)).toHaveCount(2)
   // Another file's ask made now stays out of the list (its events are dropped above).
@@ -918,7 +918,7 @@ test('the drawer\'s title switches agents: Mentor has its own list, its own comp
   await page.waitForTimeout(1500)
   await expect(slotSession(page)).toHaveAttribute('data-session-id', payload.sessionId!)
   await openAskWalnutDrawer(page)
-  await expect(agentSwitch(page)).toHaveText(/Ask Mentor/)
+  await expect(agentSwitch(page)).toHaveText(/Quick question · Mentor/)
   await page.unroute('**/api/agents')
 })
 
@@ -927,7 +927,7 @@ async function pickAskAgent(page: Page, id: string): Promise<void> {
   await openAskWalnutDrawer(page)
   await agentSwitch(page).click()
   await agentItem(page, id).click()
-  await expect(agentSwitch(page)).toHaveText(id === 'general' ? /Ask Walnut/ : /Ask /)
+  await expect(agentSwitch(page)).toHaveText(id === 'general' ? /^Quick question$/ : /^Quick question · /)
   await page.keyboard.press('Escape')
   await expect(drawer(page)).toHaveCount(0)
 }

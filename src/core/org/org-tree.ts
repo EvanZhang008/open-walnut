@@ -22,6 +22,7 @@
  */
 
 import type { OrgRole, TaskPhase } from '../types.js';
+import { askProjectDisplay } from '../sessions/ask-list.js';
 import { fallbackUserState, storedUserState, type UserState, type UserStatus } from '../user-status.js';
 // The team's news (its tasks' own words) rides the same import for the web (@open-walnut/org-tree).
 export * from './team-news.js';
@@ -138,11 +139,12 @@ export const ORG_INSTRUCTIONS_MAX = 4000;
 /** A task's title as the UI shows it: Main is the CEO, a lead the name the user gave it on the
  *  Org page as "<name> VP", else its title, an older build's "<project> lead" as "<project> VP"
  *  (a title the user wrote stays as written). */
-export function orgDisplayTitle(task: { title: string; org_role?: string; org_name?: string }): string {
+export function orgDisplayTitle(task: { title: string; project?: string; org_role?: string; org_name?: string }): string {
   if (task.org_role === 'main') return CEO_LABEL;
   if (task.org_role === 'lead' && task.org_name?.trim()) return `${task.org_name.trim()} ${VP_LABEL}`;
   if (task.org_role === 'lead') return task.title.replace(/ lead$/i, ` ${VP_LABEL}`);
-  return task.title;
+  return task.project && task.title.trim().toLowerCase() === task.project.trim().toLowerCase()
+    ? askProjectDisplay(task.title) : task.title;
 }
 
 /** Hidden from the task lists (the board, the dashboard): the chat slot and the org chart show them. */

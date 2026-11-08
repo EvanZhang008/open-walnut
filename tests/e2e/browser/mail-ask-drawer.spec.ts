@@ -58,7 +58,7 @@ const DRAWER = 'ask-object-drawer'
 
 const SUMMARIZE = 'Summarize with Walnut'
 const DRAFT_REPLY = 'Draft a reply with Walnut'
-const ASK = 'Ask Walnut about this…'
+const ASK = 'Ask a quick question about this…'
 /**
  * The group's fourth row, added by the unsubscribe slice. It sits LAST on purpose (it is the one row
  * here that acts on the world instead of opening a chat, so a stray click is least likely to land on
@@ -129,7 +129,7 @@ function draftPanel(page: Page): Locator {
 }
 
 /** One of the draft's two mode cards. */
-function intentCard(page: Page, label: 'Ask Walnut' | 'Start Task'): Locator {
+function intentCard(page: Page, label: 'Quick question' | 'Start Task'): Locator {
   return draftPanel(page).locator('.draft-intent-card', { hasText: label })
 }
 
@@ -306,8 +306,8 @@ test.describe('the Walnut group, on a mailbox whose second account cannot send',
     // `Ask` opens the ordinary draft panel, lands the caret in its composer, and starts nothing.
     await expect(drawer(page)).toHaveAttribute('data-view', 'compose')
     await expect(drawer(page).locator('.draft-session-panel textarea')).toBeFocused()
-    // The Home draft's fork, Ask Walnut chosen, and More for the task fields.
-    await expect(intentCard(page, 'Ask Walnut')).toHaveAttribute('aria-pressed', 'true')
+    // The Home draft's fork, Quick question chosen, and More for the task fields.
+    await expect(intentCard(page, 'Quick question')).toHaveAttribute('aria-pressed', 'true')
     await expect(intentCard(page, 'Start Task')).toHaveAttribute('aria-pressed', 'false')
     await expect(draftPanel(page).locator('.draft-launch-bar button.draft-more-btn')).toBeVisible()
     await expect(userTurns(page)).toHaveCount(0)

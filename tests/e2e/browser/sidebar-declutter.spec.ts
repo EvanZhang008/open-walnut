@@ -41,7 +41,7 @@ test('app sidebar shows only the daily surfaces — no management pages, no Othe
 
   // Org is a page of its own, right under the Home group (not one of Home's panel toggles).
   // Passwords is a built-in app of its own (309a0ecbb, web/src/apps/core-apps.tsx order 60).
-  const CORE_PREFIX = ['Home', 'Task panel', 'Ask Walnut', 'Agenda', 'Scratchpad', 'Org', 'Notes', 'Calendar', 'Mail', 'Tasks', 'Routines', 'Passwords']
+  const CORE_PREFIX = ['Home', 'Task panel', 'Quick question', 'Agenda', 'Scratchpad', 'Org', 'Notes', 'Calendar', 'Mail', 'Tasks', 'Routines', 'Passwords']
   const labels = (await page.locator('.sidebar-nav .sidebar-link').allTextContents()).map((t) => t.trim())
 
   // The core entries come first, in this exact order, and Apps then Settings always close it.

@@ -114,7 +114,7 @@ make refuses too.
 
 - **The web console and the Mac app**, in three places that answer together:
   - **Needs you**: one line first in Home's Needs you section (counted there), in the
-    notification center, and in the Org page's Needs you, on Main for every approval and on a
+    notification center, and in the Org page's Needs you, on the CEO (Main) for every approval and on a
     project's lead for one its own work asked for. It says how many wait; a click opens them,
     in the order they came. The title and the buttons are on the card.
   - **A system notification**, `Approve? <what>`: in the Mac app a macOS notification (allow it

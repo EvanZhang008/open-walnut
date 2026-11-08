@@ -29,10 +29,10 @@
 
 import { forwardRef, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import type { Task } from '@open-walnut/core';
-import { holdOrder, matchesAskQuery, nextHeldOrder, type HeldOrder } from '@open-walnut/ask-list';
+import { holdOrder, matchesAskQuery, nextHeldOrder, type HeldOrder, askProjectDisplay, } from '@open-walnut/ask-list';
 import { isPhoneLayout } from '@/hooks/usePhoneLayout';
 import { ICON_SEARCH, ICON_SLIDERS } from '@/components/common/Icons';
-import type { AskAgent } from './ask-walnut-slot-model';
+import { GENERAL_AGENT_ID, type AskAgent } from './ask-walnut-slot-model';
 import { DrawerItem, heldRowView, TaskDot } from './AskWalnutDrawerItem';
 
 /** A row in the drawer's list. The just-launched task is not in the store yet,
@@ -66,7 +66,7 @@ const ICON_MENU = (
 interface MenuButtonProps {
   open: boolean;
   onToggle: () => void;
-  /** The agent on show ("Ask Walnut", "Ask Mentor"), for the accessible name. */
+  /** The agent on show ("Quick question", "Quick question · Mentor"), for the accessible name. */
   label: string;
 }
 
@@ -79,10 +79,10 @@ export const AskWalnutMenuButton = forwardRef<HTMLButtonElement, MenuButtonProps
         type="button"
         className={`task-action-btn ask-walnut-menu-btn${open ? ' is-open' : ''}`}
         data-testid="ask-walnut-menu"
-        aria-label={`${label} sessions`}
+        aria-label={`${label} list`}
         aria-haspopup="dialog"
         aria-expanded={open}
-        title={`Switch between your ${label} sessions, or switch agent`}
+        title="Switch between your quick questions, or switch agent"
         onClick={onToggle}
       >
         {ICON_MENU}
@@ -236,6 +236,10 @@ export function AskWalnutDrawer({
 
   const act = (fn: () => void) => () => { onClose(); fn(); };
   const canSwitch = agents.length > 1;
+  // The person reads "Quick question" ("Quick question · Mentor"); `agent.project` stays the stored key.
+  const shown = askProjectDisplay(agent.project);
+  const forAgent = agent.id === GENERAL_AGENT_ID ? '' : ` for ${agent.name}`;
+  const mainMatches = !!main && (!query.trim() || matchesAskQuery('CEO', query) || matchesAskQuery('Main', query));
 
   return (
     <div
@@ -252,7 +256,7 @@ export function AskWalnutDrawer({
         data-testid="ask-walnut-drawer"
         role="dialog"
         aria-modal="true"
-        aria-label={`${agent.project} sessions`}
+        aria-label={`${shown} list`}
         tabIndex={-1}
       >
         <div className="ask-walnut-drawer-head">
@@ -266,11 +270,11 @@ export function AskWalnutDrawer({
               title="Switch agent"
               onClick={() => setAgentsOpen((v) => !v)}
             >
-              {agent.project}
+              {shown}
               <span className={`ask-walnut-agent-caret${agentsOpen ? ' is-open' : ''}`} aria-hidden="true">{ICON_CHEVRON}</span>
             </button>
           ) : (
-            <span className="ask-walnut-drawer-title">{agent.project}</span>
+            <span className="ask-walnut-drawer-title">{shown}</span>
           )}
           {panel ? (
             <button
@@ -278,16 +282,16 @@ export function AskWalnutDrawer({
               className="ask-walnut-drawer-new is-head"
               data-testid="ask-walnut-new"
               onClick={act(onNew)}
-              title={`Start a new ${agent.project} session`}
+              title={`Start a new quick question${forAgent}`}
             >
-              <span aria-hidden="true">+</span> New chat
+              <span aria-hidden="true">+</span> New quick question
             </button>
           ) : (
             <button
               type="button"
               className="task-action-btn ask-walnut-drawer-close"
               onClick={onClose}
-              aria-label="Close the session list"
+              aria-label="Close the quick question list"
               title="Close"
             >
               &times;
@@ -336,8 +340,8 @@ export function AskWalnutDrawer({
             type="search"
             className="ask-walnut-drawer-search-input"
             data-testid="ask-walnut-search"
-            placeholder="Search your asks"
-            aria-label={`Search ${agent.project} sessions`}
+            placeholder="Search quick questions"
+            aria-label={`Search quick questions${forAgent}`}
             autoComplete="off"
             spellCheck={false}
             value={query}
@@ -345,8 +349,8 @@ export function AskWalnutDrawer({
           />
         </div>
 
-        <div className="ask-walnut-drawer-list" role="group" aria-label="Your asks" data-testid="ask-walnut-drawer-list">
-          {main && (!query.trim() || (matchesAskQuery('CEO', query) || matchesAskQuery('Main', query))) && (
+        <div className="ask-walnut-drawer-list" role="group" aria-label="Your quick questions" data-testid="ask-walnut-drawer-list">
+          {main && mainMatches && (
             <button
               type="button"
               className={`ask-walnut-drawer-item ask-walnut-drawer-main${main.selected ? ' is-selected' : ''}`}
@@ -373,16 +377,16 @@ export function AskWalnutDrawer({
               )}
             </button>
           )}
-          {main && rows.length > 0 && (panel
-            ? <div className="ask-walnut-drawer-label" role="separator">Asks</div>
+          {mainMatches && visible.length > 0 && (panel
+            ? <div className="ask-walnut-drawer-label" role="separator">Quick questions</div>
             : <div className="ask-walnut-drawer-sep" role="separator" aria-hidden="true" />)}
-          {rows.length === 0 && !loading && !main && (
-            <p className="ask-walnut-drawer-empty">No {agent.project} sessions yet.</p>
+          {rows.length === 0 && !loading && !main && !query.trim() && (
+            <p className="ask-walnut-drawer-empty">No quick questions{forAgent} yet.</p>
           )}
           {/* role=status: a screen reader typing in the search box hears when the
               list filtered down to nothing. */}
-          {rows.length > 0 && visible.length === 0 && (
-            <p className="ask-walnut-drawer-empty" role="status" data-testid="ask-walnut-search-empty">No asks match &ldquo;{query.trim()}&rdquo;.</p>
+          {query.trim() && !loading && visible.length === 0 && !mainMatches && (
+            <p className="ask-walnut-drawer-empty" role="status" data-testid="ask-walnut-search-empty">No quick questions match &ldquo;{query.trim()}&rdquo;.</p>
           )}
           {visible.map((row) => (
             <DrawerItem
@@ -399,7 +403,7 @@ export function AskWalnutDrawer({
           {loading && (
             <p className="ask-walnut-drawer-empty ask-walnut-drawer-loading" role="status" data-testid="ask-walnut-drawer-loading">
               <span className="spinner ask-walnut-pending-spinner" aria-hidden="true" />
-              Loading your asks…
+              Loading your quick questions…
             </p>
           )}
         </div>
@@ -413,9 +417,9 @@ export function AskWalnutDrawer({
             className="ask-walnut-drawer-new"
             data-testid="ask-walnut-new"
             onClick={act(onNew)}
-            title={`Start a new ${agent.project} session`}
+            title={`Start a new quick question${forAgent}`}
           >
-            <span aria-hidden="true">+</span> New chat
+            <span aria-hidden="true">+</span> New quick question
           </button>
           {/* Two links about THIS surface, not launchers: what Walnut sends the
               session (Context) and a shortcut into Walnut's own checkout (Fix). */}

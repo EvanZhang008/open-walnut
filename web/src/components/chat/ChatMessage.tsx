@@ -14,6 +14,7 @@ import { entityRefsToHtml, renderToolResultWithRefs, extractMarkdownFields, rend
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { useShowPriority } from '@/hooks/useShowPriority';
 import { lookupTaskLabel } from '@/stores/entity-label-store';
+import { projectDisplayName } from '@/utils/project-display';
 import { useSelectionFrozen } from '@/utils/selection-guard';
 import { useStableHtml, stableHtml } from '@/hooks/useStableHtml';
 import { SubagentBlock } from './SubagentBlock';
@@ -188,7 +189,7 @@ function TaskContextSection({ ctx, onSessionClick }: TaskContextSectionProps) {
           {/* Metadata row */}
           <div className="chat-task-context-meta">
             <span><strong>ID:</strong> {ctx.id}</span>
-            <span><strong>Project:</strong> {ctx.project || 'Inbox'}</span>
+            <span><strong>Project:</strong> {projectDisplayName(ctx.project)}</span>
             {ctx.source && <span><strong>Source:</strong> {ctx.source}</span>}
             {ctx.due_date && <span><strong>Due:</strong> {ctx.due_date}</span>}
             {ctx.created_at && <span><strong>Created:</strong> {ctx.created_at.slice(0, 10)}</span>}

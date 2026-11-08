@@ -9,7 +9,7 @@
  */
 import { forwardRef, type ReactNode, type RefObject } from 'react';
 import { timeAgo } from '@/utils/time';
-import { askActivityAt } from '@open-walnut/ask-list';
+import { askActivityAt, askProjectDisplay } from '@open-walnut/ask-list';
 import { AskWalnutDrawer, AskWalnutMenuButton, type DrawerRow } from '@/components/chat/AskWalnutDrawer';
 import type { Task } from '@open-walnut/core';
 import type { AskAgent } from '@/components/chat/ask-walnut-slot-model';
@@ -38,9 +38,9 @@ export function KeyGlyph({ locked }: { locked: boolean }) {
 interface HeaderProps {
   surface: 'panel' | 'popup';
   /**
-   * The ask on show ("New chat" before the first question). '' for an ask with no title of its own
-   * yet: the agent's name shows once, as the title line (review R2-7: "Ask Walnut" over "Ask
-   * Walnut ⌄"). The popup shows the agent alone.
+   * The ask on show ("New quick question" before the first question). '' for an ask with no title of
+   * its own yet: the agent's name shows once, as the title line (review R2-7: "Quick question" over
+   * "Quick question ⌄"). The popup shows the agent alone.
    */
   title: string;
   agent: AskAgent;
@@ -57,14 +57,15 @@ interface HeaderProps {
 }
 
 export function ExtAskHeader(p: HeaderProps) {
+  const shown = askProjectDisplay(p.agent.project);
   const agentSwitch = p.canSwitch ? (
     <button type="button" className="ext-ask-agent" data-testid="ext-ask-agent" onClick={p.onAgents} title="Switch agent">
-      {p.agent.project}<span aria-hidden="true">{ICON_CARET}</span>
+      {shown}<span aria-hidden="true">{ICON_CARET}</span>
     </button>
-  ) : <span className="ext-ask-agent is-plain">{p.agent.project}</span>;
+  ) : <span className="ext-ask-agent is-plain">{shown}</span>;
   return (
     <header className={`ext-ask-head is-${p.surface}`} data-testid="ext-ask-head">
-      <AskWalnutMenuButton ref={p.menuRef} open={p.menuOn} onToggle={p.onMenu} label={p.agent.project} />
+      <AskWalnutMenuButton ref={p.menuRef} open={p.menuOn} onToggle={p.onMenu} label={shown} />
       {p.surface === 'panel' && p.title ? (
         <div className="ext-ask-titles">
           <span className="ext-ask-title" data-testid="ext-ask-title" title={p.title}>{p.title}</span>
@@ -73,7 +74,7 @@ export function ExtAskHeader(p: HeaderProps) {
       ) : <div className="ext-ask-titles is-popup">{agentSwitch}</div>}
       {p.keyed && <KeyButton vault={p.vault} pressed={p.keyPressed} />}
       {p.surface === 'panel' ? (
-        <button type="button" className="ext-ask-icon" data-testid="ext-panel-new" aria-label="New chat" title="New chat about this page" onClick={p.onNew}>{ICON_COMPOSE}</button>
+        <button type="button" className="ext-ask-icon" data-testid="ext-panel-new" aria-label="New quick question" title="New quick question about this page" onClick={p.onNew}>{ICON_COMPOSE}</button>
       ) : (
         <button type="button" className="ext-ask-icon" data-testid="ext-ask-side-panel" aria-label="Open in the side panel" title="Open in the side panel" onClick={() => toParent({ type: 'open-side-panel' })}>{ICON_SIDE}</button>
       )}

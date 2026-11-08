@@ -33,7 +33,6 @@ import { bus, EventNames } from '../../src/core/event-bus.js'
 import { taskDepth } from '../../src/core/sessions/subtask-limits.js'
 import { buildSessionContext } from '../../src/core/sessions/session-context.js'
 import { sendLetter } from '../../src/core/human-inbox/store.js'
-import { bus, EventNames } from '../../src/core/event-bus.js'
 
 let server: HttpServer
 let port: number
@@ -88,11 +87,27 @@ describe('/api/v1/org', () => {
     const ids = new Set(answers.map((a) => a.json.task.id))
     expect(ids.size).toBe(1)
     const main = await getTask([...ids][0]!)
-    expect(main).toMatchObject({ title: 'Main', project: 'Ask Walnut', source: 'local', walnut_agent: true, org_role: 'main' })
+    expect(main).toMatchObject({ title: 'CEO', project: 'Ask Walnut', source: 'local', walnut_agent: true, org_role: 'main' })
     expect(main.pinned).toBeFalsy()
     const again = await api<{ task: { id: string } }>('POST', '/org/main')
     expect(again.json.task.id).toBe(main.id)
   })
+
+  it('updates the old default title without replacing the task or overwriting a chosen name', async () => {
+    const first = (await api<{ task: { id: string } }>('POST', '/org/main')).json.task;
+    await updateTask(first.id, { title: 'Main' });
+    const renamed = (await api<{ task: { id: string; title: string } }>('POST', '/org/main')).json.task;
+    expect(renamed).toMatchObject({ id: first.id, title: 'CEO' });
+    for (const query of ['ceo', 'main']) {
+      const result = await fetch(`http://localhost:${port}/api/search?q=${query}&types=task`);
+      expect(result.status).toBe(200);
+      const body = await result.json() as { results: { taskId: string; title: string }[] };
+      expect(body.results[0]).toMatchObject({ taskId: first.id, title: 'CEO' });
+    }
+    await updateTask(first.id, { title: 'My coordinator' });
+    expect((await api<{ task: { title: string } }>('POST', '/org/main')).json.task.title).toBe('My coordinator');
+    await updateTask(first.id, { title: 'CEO' });
+  });
 
   it('a project with two teams gets one local lead on first contact; one team is talked to directly', async () => {
     const a = (await addTask({ title: 'Fix the reconnect bug', project: 'Walnut' })).task

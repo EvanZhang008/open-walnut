@@ -4,8 +4,10 @@ import type { Task } from '@open-walnut/core';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { log } from '@/utils/log';
+import { projectDisplayName } from '@/utils/project-display';
 import { adoptCandidates, resolveParent } from './adopt-candidates';
 import '@/styles/subtask-pill.css';
+import { orgDisplayTitle } from '@open-walnut/org-tree';
 
 /** Rows drawn at once; the filter narrows a longer list (the store can hold thousands). */
 const SHOWN_ROWS = 100;
@@ -90,7 +92,7 @@ export function AdoptWorkerFlyout({ open, anchorRef, anchorPoint, align, leader,
     if (!store) { setError('The task list is not loaded here.'); return; }
     // The store may have moved on since the list rendered (another tab adopted it).
     if (!adoptCandidates(store.tasks, leader.id).some((t) => t.id === candidate.id)) {
-      setError(`“${candidate.title}” can no longer join this team.`);
+      setError(`“${orgDisplayTitle(candidate)}” can no longer join this team.`);
       return;
     }
     log.info('tasks', 'worker adopted', { leaderTaskId: leader.id, workerTaskId: candidate.id, previousLeader: candidate.parent_task_id ?? '' });
@@ -113,13 +115,13 @@ export function AdoptWorkerFlyout({ open, anchorRef, anchorPoint, align, leader,
       ref={rootRef}
       className="adopt-worker-flyout"
       role="dialog"
-      aria-label={`Adopt a worker for ${leader.title}`}
+      aria-label={`Adopt a worker for ${orgDisplayTitle(leader)}`}
       data-testid="adopt-worker-flyout"
       style={menuPlacementStyle(placement)}
       onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
     >
-      <div className="adopt-worker-title">Adopt a worker for &ldquo;{leader.title}&rdquo;</div>
+      <div className="adopt-worker-title">Adopt a worker for &ldquo;{orgDisplayTitle(leader)}&rdquo;</div>
       <input data-no-draft="search"
         className="adopt-worker-filter"
         placeholder="Filter tasks…"
@@ -144,14 +146,14 @@ export function AdoptWorkerFlyout({ open, anchorRef, anchorPoint, align, leader,
                 className={`adopt-worker-row${i === active ? ' is-active' : ''}`}
                 data-testid="adopt-worker-row"
                 data-task-id={t.id}
-                title={`Make "${t.title}" a worker of "${leader.title}"`}
+                title={`Make "${orgDisplayTitle(t)}" a worker of "${orgDisplayTitle(leader)}"`}
                 onMouseEnter={() => setActive(i)}
                 onClick={() => pick(t)}
               >
-                <span className="adopt-worker-row-title">{t.title}</span>
+                <span className="adopt-worker-row-title">{orgDisplayTitle(t)}</span>
                 <span className="adopt-worker-row-meta">
-                  {t.project || 'Inbox'}
-                  {currentLeader ? ` · Worker of ${currentLeader.title}` : ''}
+                  {projectDisplayName(t.project)}
+                  {currentLeader ? ` · Worker of ${orgDisplayTitle(currentLeader)}` : ''}
                 </span>
               </button>
             </li>

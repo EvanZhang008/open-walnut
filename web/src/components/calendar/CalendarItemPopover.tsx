@@ -16,6 +16,7 @@ import type { CalendarItem } from './calendar-items';
 import { calendarEventNeedsApproval, type CalendarEvent } from '@/api/calendar';
 import './visibility.css';
 import { openTaskOnHome } from '@/utils/open-session';
+import { projectDisplayName } from '@/utils/project-display';
 import { useNavigate } from 'react-router-dom';
 
 interface Props {
@@ -253,7 +254,7 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
         <div className="cal-item-sub">
           {isEvent
             ? `${item.event.calendarName} · ${item.event.accountName}${readonly ? ' · read-only' : ''}`
-            : `${item.task.project || 'Inbox'}${item.kind === 'task-due' ? ' · due date' : ' · start date'}`}
+            : `${projectDisplayName(item.task.project)}${item.kind === 'task-due' ? ' · due date' : ' · start date'}`}
         </div>
         {isEvent && item.event.location && <div className="cal-item-location">{item.event.location}</div>}
         {isEvent && !readonly && calendarEventNeedsApproval(item.event) && (

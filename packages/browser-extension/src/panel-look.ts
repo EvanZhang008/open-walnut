@@ -69,10 +69,15 @@ function lookMsg(m: AskSnap['messages'][number]): HTMLElement {
 }
 const ico = (k: keyof typeof LOOK_ICONS, cls = '') => h('span', { class: `look-ico ${cls}`.trim(), 'aria-hidden': 'true' }, svg(LOOK_ICONS[k]))
 
-export const NEW_CHAT_PLACEHOLDER = 'Ask Walnut, or ask it to do something here…'
-/** A new chat's placeholder naming its agent ("Ask Mentor"), as the view words it (web/src/popout/ext-panel-model.ts composerPlaceholderOf). */
+export const NEW_CHAT_PLACEHOLDER = 'Ask a quick question, or have it do something here…'
+/**
+ * A new quick question's placeholder naming its agent, as the view words it
+ * (web/src/popout/ext-panel-model.ts composerPlaceholderOf). The label is the header's:
+ * "Quick question", "Quick question · Mentor", or an older view's stored "Ask Walnut" / "Ask Mentor".
+ */
 export function newChatPlaceholder(agent: string): string {
-  return /^Ask \S/.test(agent) && agent !== 'Ask Walnut' ? `${agent}, or ask it to do something here…` : NEW_CHAT_PLACEHOLDER
+  const name = /^Quick question · (\S.*)$/.exec(agent)?.[1] ?? /^Ask (\S.*)$/.exec(agent)?.[1]
+  return name && name !== 'Walnut' ? `Ask ${name} a quick question, or have it do something here…` : NEW_CHAT_PLACEHOLDER
 }
 export const FOLLOW_UP_PLACEHOLDER = 'Ask a follow-up…'
 
@@ -91,8 +96,8 @@ export function drawAskLook(o: AskLook, el?: HTMLElement): HTMLElement {
   const box = el ?? h('div', { class: `panel-snap panel-snap-ask is-look is-${o.surface}`, 'data-testid': 'panel-snap', 'aria-hidden': 'true' })
   const s = o.snap
   const talking = o.surface === 'panel' && !!s && s.messages.length > 0
-  const agent = s?.agent || o.shell?.agent || o.agentName || 'Ask Walnut'
-  const title = s?.askTitle || 'New chat'
+  const agent = s?.agent || o.shell?.agent || o.agentName || 'Quick question'
+  const title = s?.askTitle || 'New quick question'
   // A conversation whose ask has no title yet: the view's header names the agent once, as its title line.
   const agentOnly = o.surface === 'popup' || (talking && !s?.askTitle)
   const head = h('div', { class: `look-head is-${o.surface}` },

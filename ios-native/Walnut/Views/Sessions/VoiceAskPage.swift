@@ -89,7 +89,8 @@ struct VoiceAskPage: View {
             voice?.shutDown()
             launched = WalnutSession(
                 id: created.sessionId, title: created.title, taskId: created.taskId,
-                taskTitle: created.title, project: nil, host: "", processStatus: "idle",
+                taskTitle: created.title,
+                project: AskProjectName.storedProject(agentID: agentID, agentName: agentName), host: "", processStatus: "idle",
                 model: nil, mode: nil, startedAt: now, lastActiveAt: now, messageCount: 0,
                 cwd: nil, pinned: nil, focusTier: nil, description: nil
             )

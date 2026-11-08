@@ -5,6 +5,8 @@ import { TaskCard, type CardGroupInfo } from './TaskCard';
 import { EmptyState } from '../common/EmptyState';
 import { useConfirm, usePrompt } from '@/hooks/useConfirm';
 import type { BatchTaskOutcome } from '@/api/tasks';
+import { projectDisplayName } from '@/utils/project-display';
+import { orgDisplayTitle } from '@open-walnut/org-tree';
 
 interface TaskListProps {
   tasks: Task[];
@@ -146,7 +148,7 @@ export function TaskList({
     const picked = selectionInfo.tasks;
     if (picked.length === 0) return;
     const ok = await confirm({
-      title: picked.length === 1 ? `Delete “${picked[0].title}”?` : `Delete ${picked.length} tasks?`,
+      title: picked.length === 1 ? `Delete “${orgDisplayTitle(picked[0])}”?` : `Delete ${picked.length} tasks?`,
       message: 'This cannot be undone.',
       confirmLabel: 'Delete',
       danger: true,
@@ -201,7 +203,7 @@ export function TaskList({
         <div key={project || '__inbox__'} className="task-group">
           <button className="task-group-header" onClick={() => toggleProject(project)}>
             <span className="task-group-arrow">{collapsedProjects.has(project) ? '▶︎' : '▼'}</span>
-            <span className="task-group-name">{project || 'Inbox'}</span>
+            <span className="task-group-name">{projectDisplayName(project)}</span>
             <span className="task-group-count text-muted text-xs">{projTasks.length}</span>
           </button>
           {!collapsedProjects.has(project) && (

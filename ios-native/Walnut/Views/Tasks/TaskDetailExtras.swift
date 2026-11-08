@@ -12,22 +12,21 @@ import SwiftUI
 /// so a star control could never latch and had to stop pretending it could.
 struct TaskDetailExtras: View {
     @Bindable var controller: TaskDetailController
+    /// Open the description or note editor. The sheet presents it from its root: a sheet raised
+    /// from inside its scroll content is rebuilt when a text field in it takes focus.
+    var onEditField: (TaskFieldEdit) -> Void
+    /// Open a related task's conversation, from the sheet's root for the same reason.
+    var onOpenTask: (_ id: String, _ title: String?) -> Void
     /// Called after a successful delete — the sheet dismisses.
     var onDeleted: () -> Void
 
     @Environment(TasksStore.self) private var tasks
     @Environment(\.dynamicTypeSize) private var typeSize
 
-    @State private var editingDescription = false
-    @State private var descriptionDraft = ""
-    @State private var editingNote = false
-    @State private var noteDraft = ""
     /// The editors' Save waits for words still being spoken or transcribed into
     /// them (`DictationSendGate`). One sheet shows at a time, so one gate.
-    @State private var editorSendGate = DictationSendGate()
     @State private var confirmDelete = false
     /// A Parent, Subtask or Blocked-by row the user tapped: it opens as every task tap does.
-    @State private var openedRelative: TaskOpenTarget?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -91,21 +90,6 @@ struct TaskDetailExtras: View {
         } message: {
             Text(controller.deleteNeedsForce?.first ?? "")
         }
-        .sheet(isPresented: $editingDescription) {
-            fieldEditor(
-                title: "Description", text: $descriptionDraft,
-                identifier: "task.descriptionEditor", voiceBox: "task-description"
-            ) { content in
-                controller.saveDescription(content)
-            }
-        }
-        .sheet(isPresented: $editingNote) {
-            fieldEditor(
-                title: "Note", text: $noteDraft, identifier: "task.noteEditor", voiceBox: "task-note"
-            ) { content in
-                controller.saveNote(content)
-            }
-        }
     }
 
     // MARK: - Delete (the sheet's one destructive control, at the very bottom)
@@ -166,13 +150,8 @@ struct TaskDetailExtras: View {
     // MARK: - Relations (blocked / parent / children)
 
     private func relationsBlock(_ detail: TaskDetail) -> some View {
+        // A related task opens its conversation (its task page only when it has none).
         relationsList(detail)
-            // A related task opens its conversation (its task page only when it has none).
-            .sheet(item: $openedRelative) { target in
-                TaskSessionSheet(target: target)
-                    .presentationDetents([.large])
-                    .presentationDragIndicator(.visible)
-            }
     }
 
     @ViewBuilder
@@ -212,7 +191,8 @@ struct TaskDetailExtras: View {
         let icon = Image(systemName: done ? "checkmark.circle.fill" : "circle")
             .font(.caption)
             .foregroundStyle(done ? Theme.success : .secondary)
-        let title = Text(relative.title).font(.subheadline)
+        let shownTitle = AskProjectName.displayTitle(full?.title ?? relative.title, project: full?.project, orgRole: full?.orgRole)
+        let title = Text(shownTitle).font(.subheadline)
         @ViewBuilder var state: some View {
             if let full {
                 UserStatePill(state: TeamStatusModel.state(of: full), stuck: TeamStatusModel.isStuck(full))
@@ -226,7 +206,7 @@ struct TaskDetailExtras: View {
             .font(.caption.weight(.semibold))
             .foregroundStyle(.tertiary)
         return Button {
-            openedRelative = TaskOpenTarget(id: relative.id, title: relative.title)
+            onOpenTask(relative.id, shownTitle)
         } label: { Group {
             if typeSize.isAccessibilitySize {
                 VStack(alignment: .leading, spacing: 4) {
@@ -259,8 +239,7 @@ struct TaskDetailExtras: View {
                 sectionHeader("Description")
                 Spacer()
                 Button {
-                    descriptionDraft = detail.description ?? ""
-                    editingDescription = true
+                    onEditField(TaskFieldEdit(field: .description, text: detail.description ?? ""))
                 } label: {
                     Text(detail.description?.isEmpty == false ? "Edit" : "Add")
                         .font(.caption.weight(.medium))
@@ -289,8 +268,7 @@ struct TaskDetailExtras: View {
                     sectionHeader("Note")
                     Spacer()
                     Button {
-                        noteDraft = note
-                        editingNote = true
+                        onEditField(TaskFieldEdit(field: .note, text: note))
                     } label: {
                         Text("Edit")
                             .font(.caption.weight(.medium))
@@ -310,56 +288,6 @@ struct TaskDetailExtras: View {
         Text(text)
             .font(.subheadline.weight(.semibold))
             .foregroundStyle(.secondary)
-    }
-
-    /// Shared plain-text editor sheet for description/note. Save is
-    /// optimistic: the editor closes immediately, the readback text already
-    /// shows the new content, and a failure reverts it + shows the error line
-    /// (never a blocked Save button).
-    private func fieldEditor(
-        title: String, text: Binding<String>, identifier: String, voiceBox: String,
-        onSave: @escaping (String) -> Void
-    ) -> some View {
-        NavigationStack {
-            // Walnut's mic under the editor: the text stays readable while the
-            // person speaks, and the words land at its end, never saved by
-            // themselves.
-            VoiceDictationField(
-                text: text, surface: "\(voiceBox):\(controller.taskId)", box: voiceBox, placement: .below
-            ) {
-                TextEditor(text: text)
-                    .font(.body)
-                    .accessibilityIdentifier(identifier)
-            }
-            .padding(8)
-            .dictationSendGate(editorSendGate)
-            .navigationTitle(title)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") {
-                        editorSendGate.cancelWait()
-                        editingDescription = false
-                        editingNote = false
-                    }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        editorSendGate.send { _ in
-                            onSave(text.wrappedValue)
-                            editingDescription = false
-                            editingNote = false
-                        }
-                    } label: {
-                        DictationSendLabel(gate: editorSendGate, title: "Save")
-                    }
-                    .fontWeight(.semibold)
-                    .accessibilityIdentifier("\(identifier).save")
-                }
-            }
-        }
-        .presentationDetents([.large])
-        .interactiveDismissDisabled()
     }
 
     /// A phase in the user's status words (PhaseWords); an unknown one title-cased.

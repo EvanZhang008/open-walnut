@@ -117,9 +117,39 @@ describe('the makers and the migration, on a real task store', () => {
     expect(await renameLegacyVpTitles()).toBe(0);
   });
 
+  it('renames the old CEO default at boot and preserves a chosen title', async () => {
+    const old = (await addTask({ title: 'Main', org_role: 'main', project: 'Ask Walnut' })).task;
+    expect(await renameLegacyVpTitles()).toBe(1);
+    expect((await getTask(old.id)).title).toBe('CEO');
+    await updateTaskRaw(old.id, { title: 'My coordinator' });
+    expect(await renameLegacyVpTitles()).toBe(0);
+    expect((await getTask(old.id)).title).toBe('My coordinator');
+  });
+
+  it('a concurrent chosen title wins over the default title upgrade', async () => {
+    const old = (await addTask({ title: 'Main', org_role: 'main', project: 'Ask Walnut', description: 'Keep this text' })).task;
+    for (let n = 0; n < 4; n++) {
+      await updateTaskRaw(old.id, { title: 'Main' });
+      await Promise.all([
+        renameLegacyVpTitles(),
+        updateTaskRaw(old.id, { title: 'My coordinator' }),
+      ]);
+      expect(await getTask(old.id)).toMatchObject({
+        id: old.id, title: 'My coordinator', project: 'Ask Walnut', description: 'Keep this text', org_role: 'main',
+      });
+      expect(await renameLegacyVpTitles()).toBe(0);
+    }
+  });
+
   it('legacyVpTitleFix ignores case changes the user made and an empty project', () => {
     expect(legacyVpTitleFix({ title: 'Walnut Lead', org_role: 'lead', phase: 'TODO', project: 'Walnut' })).toBeNull();
     expect(legacyVpTitleFix({ title: ' lead', org_role: 'lead', phase: 'TODO', project: '' })).toBeNull();
     expect(legacyVpTitleFix({ title: 'walnut lead', org_role: 'lead', phase: 'TODO', project: 'Walnut' })).toBe('walnut VP');
+    expect(legacyVpTitleFix({ title: 'Main', org_role: 'main', phase: 'TODO', project: 'Ask Walnut' })).toBe('CEO');
+    for (const title of ['MAIN', 'Main coordinator', 'My coordinator', 'CEO']) {
+      expect(legacyVpTitleFix({ title, org_role: 'main', phase: 'TODO', project: 'Ask Walnut' })).toBeNull();
+    }
+    expect(legacyVpTitleFix({ title: 'Main', org_role: 'main', phase: 'COMPLETE', project: 'Ask Walnut' })).toBeNull();
+    expect(legacyVpTitleFix({ title: 'Main', phase: 'TODO', project: 'Ask Walnut' })).toBeNull();
   });
 });

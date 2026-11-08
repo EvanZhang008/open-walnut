@@ -23,12 +23,21 @@ extension TasksStore {
     func syncTaskMentionsNow() {
         var titles: [String: String] = [:]
         var states: [String: String] = [:]
+        var orgTitles: [String: String] = [:]
+        var sessionTitles: [String: String] = [:]
         titles.reserveCapacity(tasks.count)
         states.reserveCapacity(tasks.count)
         for task in tasks {
-            titles[task.id] = TaskMentions.shownTitle(task.title, orgRole: task.orgRole)
+            titles[task.id] = AskProjectName.displayTitle(TaskMentions.shownTitle(task.title, orgRole: task.orgRole), project: task.project, orgRole: task.orgRole)
             states[task.id] = TeamStatusModel.state(of: task).rawValue
+            if task.orgRole == "main" || task.orgRole == "lead" {
+                orgTitles[task.id] = titles[task.id]
+                for id in sessionIdsByTask[task.id] ?? [] { sessionTitles[id] = titles[task.id] }
+            }
         }
-        TaskMentionResolver.shared.update(titles, states: states)
+        for session in sessions {
+            if let taskID = session.taskId, let title = orgTitles[taskID] { sessionTitles[session.id] = title }
+        }
+        TaskMentionResolver.shared.update(titles, states: states, sessions: sessionTitles)
     }
 }

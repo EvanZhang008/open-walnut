@@ -462,12 +462,12 @@ test('opened before the board loads: says it is loading, then holds the rows it 
   // The board is still on its way: the list says so, never "no sessions yet".
   const loading = page.locator('[data-testid="ask-walnut-drawer-loading"]')
   await expect(loading).toBeVisible()
-  await expect(loading).toHaveText(/Loading your asks/)
+  await expect(loading).toHaveText(/Loading your quick questions/)
   // A list-line spinner, text-sized (the global `.spinner` is 32px). Layout
   // width, not the bounding box: the spinner rotates, and a turned 12px square's
   // box is up to 17px wide.
   expect(await loading.locator('.spinner').evaluate((el) => (el as HTMLElement).offsetWidth)).toBe(12)
-  await expect(drawer(page).getByText(/No .* sessions yet/)).toHaveCount(0)
+  await expect(drawer(page).getByText(/No quick questions.* yet/)).toHaveCount(0)
   await expect(rows(page)).toHaveCount(0)
   await drawer(page).screenshot({ path: `${SHOTS}/early-loading-${test.info().project.name}.png` })
 

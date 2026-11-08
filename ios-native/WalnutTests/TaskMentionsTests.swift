@@ -104,6 +104,18 @@ final class TaskMentionsTests: XCTestCase {
         XCTAssertTrue(taskLinks(unknown).isEmpty)
     }
 
+    func testOrgSessionRefUsesCurrentOwnerAndRefreshesCachedText() {
+        let text = #"see <session-ref id="session-main" label="Main"/>"#
+        XCTAssertEqual(plain(MarkdownParser.inline(text)), "see Main")
+        let version = resolver.version
+        resolver.update([Self.loginID: "Fix the login page"], sessions: ["session-main": "CEO"])
+        XCTAssertGreaterThan(resolver.version, version)
+        XCTAssertEqual(plain(MarkdownParser.inline(text)), "see CEO")
+        XCTAssertTrue(taskLinks(MarkdownParser.inline(text)).isEmpty)
+        resolver.update([Self.loginID: "Fix the login page"], sessions: [:])
+        XCTAssertEqual(plain(MarkdownParser.inline(text)), "see Main")
+    }
+
     func testSessionRefKeepsItsBoldLabel() {
         let out = MarkdownParser.inline(#"see <session-ref id="abc-123" label="The run"/>"#)
         XCTAssertEqual(plain(out), "see The run")
@@ -213,6 +225,29 @@ final class TaskMentionsTests: XCTestCase {
         XCTAssertEqual(TaskMentions.shownTitle("Main", orgRole: "main"), "CEO")
         XCTAssertEqual(TaskMentions.shownTitle("Walnut lead", orgRole: "lead"), "Walnut VP")
         XCTAssertEqual(TaskMentions.shownTitle("Walnut lead", orgRole: nil), "Walnut lead")
+    }
+
+    func testTasksStoreFeedsOrgSessionNamesWithoutOverridingOrdinaryLabels() {
+        let store = TasksStore()
+        store.feedsTaskMentions = false
+        store.tasks = [
+            WalnutTask(id: "mrole001-0a0a", title: "Main", status: "todo", phase: "TODO",
+                       priority: "none", project: "Ask Walnut", dueDate: nil, createdAt: nil, updatedAt: nil,
+                       completedAt: nil, starred: nil, pinned: nil, tags: nil, summary: nil, orgRole: "main"),
+        ]
+        store.noteSessionIds(taskId: "mrole001-0a0a", ids: ["session-main"])
+        store.syncTaskMentionsNow()
+        XCTAssertEqual(resolver.sessionTitle(for: "session-main"), "CEO")
+        XCTAssertNil(resolver.sessionTitle(for: "session-other"))
+        store.sessions = [WalnutSession(id: "session-listed-main", title: "Main", taskId: "mrole001-0a0a",
+                                       taskTitle: "Main", project: "Ask Walnut", host: "", processStatus: "idle",
+                                       model: nil, mode: nil, startedAt: "2026-11-01T00:00:00Z",
+                                       lastActiveAt: "2026-11-01T00:00:00Z", messageCount: 0, cwd: nil,
+                                       pinned: nil, focusTier: nil, description: nil)]
+        store.syncTaskMentionsNow()
+        XCTAssertEqual(resolver.sessionTitle(for: "session-listed-main"), "CEO")
+        let text = #"<session-ref id="session-other" label="Ask Walnut greeting"/>"#
+        XCTAssertEqual(plain(MarkdownParser.inline(text)), "Ask Walnut greeting")
     }
 
     func testTasksStoreFeedsTheTable() {

@@ -16,6 +16,7 @@ import { SessionPanel } from '@/components/sessions/SessionPanel';
 import { ICON_LOCK, ICON_UNLOCK } from '@/components/common/Icons';
 import { locateTaskOnHome, openSessionOnHome } from '@/utils/open-session';
 import { resolveTaskSessionId } from '@/utils/session-status';
+import { projectDisplayName } from '@/utils/project-display';
 
 /** What the panel shows: a task (its session, when it has one) or one session by id. */
 export type OrgSideTarget = { kind: 'task'; id: string } | { kind: 'session'; id: string };
@@ -126,7 +127,7 @@ export function OrgSidePanel({ target, tasks, onClose, onOpenTask, onOpenSession
       </header>
       {task && (
         <div className="org-side-card-body">
-          <p className="org-muted">{[task.project || 'Inbox', task.phase.replace(/_/g, ' ').toLowerCase()].join(' · ')}</p>
+          <p className="org-muted">{[projectDisplayName(task.project), task.phase.replace(/_/g, ' ').toLowerCase()].join(' · ')}</p>
           {task.description && <p className="org-side-card-desc">{task.description}</p>}
           <p className="org-muted">No session yet.</p>
           <div className="org-side-card-actions">

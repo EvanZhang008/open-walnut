@@ -3,7 +3,7 @@
  * sessions list `?q=` parameter and the home-page session finder.
  */
 import { describe, it, expect } from 'vitest';
-import { filterSessionsByQuery, sessionSearchFields } from '../../src/core/session-search.js';
+import { filterSessionsByQuery, sessionSearchFields, sessionSearchTaskName } from '../../src/core/session-search.js';
 
 type S = Parameters<typeof filterSessionsByQuery>[0][number] & { id: string };
 
@@ -92,5 +92,27 @@ describe('sessionSearchFields', () => {
   it('lowercases every field and skips absent ones', () => {
     expect(sessionSearchFields(s('a', { title: 'ABC', host: 'DevBox' }))).toEqual(['abc', 'devbox']);
     expect(sessionSearchFields(s('d', {}))).toEqual([]);
+  });
+});
+
+describe('sessionSearchTaskName', () => {
+  const tasks = new Map([
+    ['ask', sessionSearchTaskName({ title: 'Ask Walnut', project: 'Ask Walnut' })],
+    ['ceo', sessionSearchTaskName({ title: 'CEO', project: '', org_role: 'main' })],
+    ['old-main', sessionSearchTaskName({ title: 'Main', project: '', org_role: 'main' })],
+    ['plain', sessionSearchTaskName({ title: 'Fix the build', project: 'Alpha' })],
+  ]);
+  const sessions = [...tasks.keys()].map((taskId) => s(taskId, { taskId, title: taskId === 'plain' ? 'Fix the build' : 'Main' }));
+  const find = (q: string) => filterSessionsByQuery(sessions, q, (id) => tasks.get(id)).map((x) => x.id);
+
+  it('finds a session by the name its task shows and by its stored title', () => {
+    expect(find('quick question')).toEqual(['ask']);
+    expect(find('ask walnut')).toEqual(['ask']);
+    expect(find('ceo')).toEqual(['ceo', 'old-main']);
+    expect(find('fix build')).toEqual(['plain']);
+  });
+
+  it('keeps one name for a task whose title is what it shows', () => {
+    expect(sessionSearchTaskName({ title: 'Fix the build', project: 'Alpha' })).toBe('Fix the build');
   });
 });

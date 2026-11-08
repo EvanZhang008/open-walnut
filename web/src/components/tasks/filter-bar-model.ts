@@ -40,6 +40,7 @@ import {
   openGroupState,
   orderStatus,
   priorityLabel,
+  projectLabel,
   resetDim,
   sameName,
   selectedValues,
@@ -268,7 +269,7 @@ export function isDimVisible(dim: FilterDim, state: FilterState, lists: FilterLi
 export function valueTitle(dim: FilterDim, value: string, lists: FilterLists): string {
   switch (dim) {
     case 'status': return STATUS_TITLES[value as TaskPhase] ?? value;
-    case 'project': return value === '' ? 'Tasks with no project' : `Tasks in ${value}`;
+    case 'project': return value === '' ? 'Tasks with no project' : `Tasks in ${projectLabel(value)}`;
     case 'date': return DATE_FILTER_OPTIONS.find((o) => o.value === value)?.title ?? value;
     case 'source':
       return value === 'local' ? 'Tasks that live only in Walnut' : `Tasks synced from ${sourceLabel(value, lists)}`;

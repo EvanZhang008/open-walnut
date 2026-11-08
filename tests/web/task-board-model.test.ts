@@ -203,6 +203,18 @@ describe('adoptCandidates', () => {
     expect(adoptCandidates(tasks, 'lead-0001', 'nothing like this')).toEqual([]);
   });
 
+  it('finds renamed task titles and projects while keeping stored candidates intact', () => {
+    const ask = t('ask', { title: 'Ask Walnut', project: 'Ask Walnut' });
+    const ceo = t('ceo', { title: 'Main', org_role: 'main' });
+    const vp = t('vp', { title: 'Garden lead', org_role: 'lead', org_name: 'Design' });
+    const rows = [t('leader'), ask, ceo, vp];
+    for (const [query, id] of [['Quick question', ask.id], ['Ask Walnut', ask.id], ['CEO', ceo.id], ['Main', ceo.id], ['Design VP', vp.id]]) {
+      expect(adoptCandidates(rows, 'leader', query).map(t => t.id)).toEqual([id]);
+    }
+    expect(ask).toMatchObject({ title: 'Ask Walnut', project: 'Ask Walnut' });
+    expect(ceo.title).toBe('Main');
+  });
+
   it('a corrupt parent cycle still terminates', () => {
     const loop = [t('a-0001', { parent_task_id: 'b-0001' }), t('b-0001', { parent_task_id: 'a-0001' }), t('c-0001')];
     expect(adoptCandidates(loop, 'a-0001').map((x) => x.id)).toEqual(['c-0001']);

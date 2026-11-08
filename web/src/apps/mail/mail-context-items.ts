@@ -121,7 +121,7 @@ export const WALNUT_GROUP_LABEL = 'Walnut';
 export const ASK_ROWS = {
   summarize: 'Summarize with Walnut',
   draftReply: 'Draft a reply with Walnut',
-  about: 'Ask Walnut about this…',
+  about: 'Ask a quick question about this…',
 } as const;
 
 /**

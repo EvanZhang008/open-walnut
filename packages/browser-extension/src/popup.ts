@@ -74,7 +74,7 @@ if (!params.has('clipboard')) void ext.windows.getCurrent().then((w) => { window
 function askButton(): HTMLElement | null {
   // Already in the side panel: its Ask tab is right there; opened from Ask, its Back goes there.
   if (embedded || fromAsk) return null
-  const b = h('button', { class: 'btn', type: 'button', 'data-testid': 'popup-ask', title: 'Ask Walnut about this page in the side panel' }, 'Ask Walnut')
+  const b = h('button', { class: 'btn', type: 'button', 'data-testid': 'popup-ask', title: 'A quick question about this page, in the side panel' }, 'Quick question')
   b.onclick = () => {
     if (ext.sidePanel && windowId !== undefined) void ext.sidePanel.open({ windowId }).catch(() => undefined)
     else if (ext.sidebarAction) void ext.sidebarAction.open().catch(() => undefined)
@@ -134,7 +134,7 @@ function connectView(st: State): HTMLElement {
   return h('div', { class: 'center' },
     h('span', { class: 'big-icon' }, icon('askBig')),
     h('h2', {}, 'Connect to Walnut'),
-    h('p', {}, 'Ask Walnut about the page you are on, and let your Walnut agents work in this browser. Passwords from your vault fill here too. Walnut opens a page that connects this browser.'),
+    h('p', {}, 'Ask a quick question about the page you are on, and let your Walnut agents work in this browser. Passwords from your vault fill here too. Walnut opens a page that connects this browser.'),
     h('label', { class: 'field-label', for: 'server', style: 'text-align:left' }, 'Walnut address'), server, found,
     h('div', { style: 'height:12px' }), go, err,
     h('details', { style: 'text-align:left' },

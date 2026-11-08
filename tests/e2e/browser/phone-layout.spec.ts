@@ -323,7 +323,7 @@ test('Ask Walnut opens from the drawer over the board, and its close comes back 
   await openDrawer(page)
   // The home screen cannot be hidden on a phone, so its drawer toggle is not there.
   await expect(drawer(page).locator('.app-task-panel-toggle')).toBeHidden()
-  await drawer(page).getByRole('button', { name: 'Ask Walnut', exact: true }).click()
+  await drawer(page).getByRole('button', { name: 'Quick question', exact: true }).click()
   // A panel toggle is navigation on a phone: the drawer gets out of the way,
   // and the chat is a layer of its own with a Back in the bar.
   await expect(drawer(page)).not.toHaveClass(/\bopen\b/)

@@ -492,7 +492,7 @@ test('C63: Tasks rows, the after-session group and the triage label in General',
   // Off and Right away (On heartbeat went with the heartbeat, 2026-10-27).
   await expect(after.locator('#triage-notify-mode[role="radiogroup"] [role="radio"]')).toHaveCount(2)
   await expect(after.getByTestId('triage-notify-buffered')).toHaveCount(0)
-  await expect(row(after, 'Tell Ask Walnut')).toBeVisible()
+  await expect(row(after, 'Tell the chat')).toBeVisible()
   await expect(row(after, 'Wait before summarizing')).toBeVisible()
   expect(await tasks.innerText()).not.toContain('Default engine')
 

@@ -660,7 +660,8 @@ struct TasksView: View {
                 taskRowButton(task)
             }
         } header: {
-            Text(section.project)
+            // Grouped by the stored name; read as the user names it.
+            Text(AskProjectName.display(section.project))
         }
     }
 

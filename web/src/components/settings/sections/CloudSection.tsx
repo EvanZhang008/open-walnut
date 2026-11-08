@@ -367,7 +367,7 @@ export function CloudSection({ config, onSave }: { config?: Config; onSave?: (pa
           <SettingsGroup
             heading="Set up"
             className="cloud-hero"
-            footer={<>You can also tell Ask Walnut: &ldquo;set up my cloud companion&rdquo;.</>}
+            footer={<>You can also say it in a quick question: &ldquo;set up my cloud companion&rdquo;.</>}
           >
             <SettingsRow
               label="Your own cloud companion"

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { previewItemTask, type InboxTaskCandidate, type InboxTaskPreview } from '@/api/human-inbox-items';
 import { PHASE_TEXT, timeText } from './item-receipt-model';
 import { taskPath } from '@/utils/task-path';
+import { projectDisplayName } from '@/utils/project-display';
 
 export function ItemTaskPreview({ letterId, itemId, task, onBack, onNavigate }: {
   letterId: string; itemId: string; task: InboxTaskCandidate; onBack: () => void; onNavigate: (to: string) => void;
@@ -19,7 +20,7 @@ export function ItemTaskPreview({ letterId, itemId, task, onBack, onNavigate }: 
   return <div className="hii-task-preview">
     <button type="button" className="hib-row-btn" onClick={onBack}>Back to tasks</button>
     <h3>{task.title}</h3>
-    <p>{task.project || 'Inbox'} · {PHASE_TEXT[detail?.phase ?? task.phase] ?? task.phase}</p>
+    <p>{projectDisplayName(task.project)} · {PHASE_TEXT[detail?.phase ?? task.phase] ?? task.phase}</p>
     <details><summary>Task ID</summary><code>{task.id}</code></details>
     {error ? <p>Could not load task details <button type="button" className="hib-row-btn" onClick={() => setAttempt(n => n + 1)}>Try again</button></p>
       : !detail ? <p>Loading task details…</p> : <>

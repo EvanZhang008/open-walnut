@@ -80,13 +80,13 @@ export function manifestFor(browser, build) {
     short_name: 'Walnut',
     version,
     ...(build ? { version_name: `${version} build ${build}` } : {}),
-    description: 'Your own Walnut in the browser: ask Walnut about the page you are on, let your agents work here, and fill passwords from your vault.',
+    description: 'Your own Walnut in the browser: a quick question about this page, agents that work here, and passwords from your vault.',
     icons: { 16: 'icons/16.png', 32: 'icons/32.png', 48: 'icons/48.png', 128: 'icons/128.png' },
     action: { default_title: 'Walnut', default_popup: 'popup-ask.html', default_icon: { 16: 'icons/16.png', 32: 'icons/32.png' } },
     background: browser === 'chrome' ? { service_worker: 'background.js' } : { scripts: ['background.js'] },
     content_scripts: [{ matches: SITES, js: ['content.js'], all_frames: true, run_at: 'document_idle' }],
     // alarms: agents in this browser (agent.ts) come back after the background was stopped.
-    // contextMenus: "Ask Walnut about ..." on a selection or a page, which opens the side panel.
+    // contextMenus: "Quick question about ..." on a selection or a page, which opens the side panel.
     // downloads: an agent sees the downloads it started (agent-downloads.ts).
     // clipboardRead/Write: a copied password or code is cleared after 30 s only if it is still
     // there (bg-clipboard.ts); offscreen: Chrome writes the clipboard from an offscreen page.

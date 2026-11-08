@@ -35,7 +35,7 @@ struct TaskRow: View {
                                 .accessibilityIdentifier("task.tierBadge")
                         }
                     }
-                    Text(task.title)
+                    Text(AskProjectName.displayTitle(task.title, project: task.project, orgRole: task.orgRole))
                         .foregroundStyle(task.isDone ? .secondary : .primary)
                         .strikethrough(task.isDone, color: .secondary)
                         .lineLimit(2)
@@ -58,7 +58,7 @@ struct TaskRow: View {
     private var secondaryLine: some View {
         HStack(spacing: 8) {
             if !task.project.isEmpty {
-                Text(task.project)
+                Text(AskProjectName.display(task.project))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }

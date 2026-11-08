@@ -12,6 +12,8 @@ import { useConfirm } from '@/hooks/useConfirm';
 import { useShowPriority } from '@/hooks/useShowPriority';
 import { ICON_TRASH } from '../common/Icons';
 import { openTaskOnHome } from '@/utils/open-session';
+import { projectDisplayName } from '@/utils/project-display';
+import { orgDisplayTitle } from '@open-walnut/org-tree';
 
 export type TaskListProjection = Task & {
   /** Precomputed by fields=list because that projection intentionally omits ext. */
@@ -181,7 +183,7 @@ export function TaskCard({ task, onComplete, onDelete, childStats, groupInfo, is
           className="task-delete-btn"
           onClick={async (e) => {
             e.stopPropagation();
-            if (await confirm({ title: `Delete task “${task.title}”?`, message: 'This cannot be undone.', confirmLabel: 'Delete', danger: true })) {
+            if (await confirm({ title: `Delete task “${orgDisplayTitle(task)}”?`, message: 'This cannot be undone.', confirmLabel: 'Delete', danger: true })) {
               onDelete(task.id);
             }
           }}
@@ -194,14 +196,14 @@ export function TaskCard({ task, onComplete, onDelete, childStats, groupInfo, is
 
       <div className="task-card-body">
         <span className={`task-card-title${task.walnut_agent ? ' walnut-task-title' : ''}`}>
-          {task.title}
+          {orgDisplayTitle(task)}
           <SyncIndicator task={task} />
         </span>
         <div className="task-card-meta">
           {showPriority && <PriorityBadge priority={task.priority} />}
           <TaskSessionPill task={task} />
           <ImportedPill task={task} className="task-card-imported-pill" />
-          <span className="task-card-project text-xs text-muted">{task.project}</span>
+          <span className="task-card-project text-xs text-muted">{projectDisplayName(task.project)}</span>
           {userTags.length > 0 && (
             <span className="task-card-tags">
               {userTags.slice(0, 2).map(tag => (

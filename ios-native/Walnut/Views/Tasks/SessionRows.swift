@@ -4,6 +4,8 @@ import SwiftUI
 /// host/model chips, relative activity time. Read-only (v1 projection).
 struct SessionRowView: View {
     let session: WalnutSession
+    var project: String? = nil
+    var orgRole: String? = nil
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -21,7 +23,7 @@ struct SessionRowView: View {
                             .foregroundStyle(Theme.tint)
                             .padding(.top, 3)
                     }
-                    Text(session.rowTitle)
+                    Text(AskProjectName.displayTitle(session.rowTitle, project: session.project ?? project, orgRole: orgRole))
                         .font(.body.weight(.medium))
                         .lineLimit(2)
                     if session.forkDepth > 0 {
@@ -55,6 +57,7 @@ struct SessionRowView: View {
             Spacer(minLength: 0)
         }
         .contentShape(Rectangle())
+        .accessibilityIdentifier("task.session.\(session.id)")
     }
 
     private var statusDot: some View {
@@ -138,10 +141,10 @@ struct SessionInfoSheet: View {
                 } else if let taskTitle = session.taskTitle {
                     Section("Task") {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(taskTitle)
+                            Text(AskProjectName.displayTitle(taskTitle, project: session.project))
                             // One grouping layer now: the project, or Inbox.
                             let project = session.project ?? ""
-                            Text(project.isEmpty ? "Inbox" : project)
+                            Text(project.isEmpty ? "Inbox" : AskProjectName.display(project))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }

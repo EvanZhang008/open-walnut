@@ -7,6 +7,7 @@ import { bus, EventNames } from './event-bus.js';
 import { listTasks } from './task-manager.js';
 import { listSessions, isLaneSession } from './session-tracker.js';
 import { matchIdQuery, parseIdQuery } from './search/id-lookup.js';
+import { isMainAgentTask } from './org/main-stays-active.js';
 import { isSearchArtifact } from './task-junk.js';
 import type { SessionRecord, Task } from './types.js';
 import type { QuerySegments } from '../lib/hybrid-search/index.js';
@@ -432,6 +433,12 @@ export function searchTaskReferences(tasks: Task[], rawQuery: string): SearchRes
 
   const results: SearchResult[] = [];
   for (const task of tasks) {
+    if (isMainAgentTask(task) && (query === 'ceo' || query === 'main')) {
+      results.push({
+        type: 'task', title: task.title, snippet: 'CEO (main agent)', taskId: task.id,
+        score: 0.99, matchField: 'org_name',
+      });
+    }
     const candidates: Array<{ field: 'id' | 'session_id' | 'external_url'; value?: string }> = [
       { field: 'id', value: task.id },
       { field: 'session_id', value: task.session_id },
@@ -1239,6 +1246,7 @@ async function searchInner(
     result.matchField === 'id'
     || result.matchField === 'session_id'
     || result.matchField === 'commit_sha'
+    || result.matchField === 'org_name'
     || result.matchField === 'external_url';
 
   // Multi-term queries: rank by term coverage before per-lane score. The

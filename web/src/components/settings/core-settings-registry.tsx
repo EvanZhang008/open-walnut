@@ -132,7 +132,7 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
       { word: 'default priority', rowLabel: 'Default priority', anchor: 'settings-priority' },
       { word: 'default project', rowLabel: 'Default project', anchor: 'settings-project' },
       'quick add', 'smart', 'jev', 'api key', 'pin', 'triage',
-      { word: 'notify', rowLabel: 'Tell Ask Walnut', anchor: 'triage-notify-mode' },
+      { word: 'notify', rowLabel: 'Tell the chat', anchor: 'triage-notify-mode' },
       'summary', 'debounce',
       { word: 'jev model', rowLabel: 'Jev model', anchor: 'jev-model' },
     ],
@@ -225,7 +225,7 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   {
     owner: 'walnut', id: 'org', label: 'Org', title: 'Org', group: 'configure',
     icon: 'two-person', tint: '#AF52DE',
-    description: 'Main and the VPs that lead your projects, and whether they run at all.',
+    description: 'CEO and the VPs that lead your projects, and whether they run at all.',
     keywords: ['org', 'main', 'ceo', 'vp', 'lead', 'brief', 'turn off', 'disable', 'organization'],
     render: () => <OrgSection />,
   },

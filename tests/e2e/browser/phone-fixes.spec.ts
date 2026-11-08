@@ -51,7 +51,7 @@ test('N3: the drawer lists no Home panel a phone does not mount (Agenda, Scratch
   const errors = await bootHome(page)
   await openDrawer(page)
   const drawer = page.locator('#primary-sidebar')
-  await expect(drawer.getByText('Ask Walnut').first()).toBeVisible()
+  await expect(drawer.getByText('Quick question').first()).toBeVisible()
   await expect(drawer.getByTestId('sidebar-toggle-calendar')).toHaveCount(0)
   await expect(drawer.getByTestId('sidebar-toggle-scratchpad')).toHaveCount(0)
   await shot(page, 'n3-drawer')
@@ -409,7 +409,7 @@ test('N29, N2-34: a row whose session record is gone opens under the task title,
 
 async function openAskWalnut(page: Page): Promise<void> {
   await openDrawer(page)
-  await page.locator('#primary-sidebar').getByRole('button', { name: 'Ask Walnut', exact: true }).tap()
+  await page.locator('#primary-sidebar').getByRole('button', { name: 'Quick question', exact: true }).tap()
   await expect(page.getByTestId('ask-walnut-slot')).toBeVisible({ timeout: 15_000 })
   await expect(page.locator('.phone-topbar').getByRole('button', { name: 'Back' })).toBeVisible()
 }

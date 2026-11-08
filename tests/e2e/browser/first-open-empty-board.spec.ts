@@ -54,7 +54,7 @@ const slot = (page: Page) => page.locator('.ask-walnut-slot')
 const drafts = (page: Page) => page.locator(DRAFT_PANEL)
 const navigation = (page: Page) => page.locator('#home-task-navigation')
 const emptyBoard = (page: Page) => navigation(page).getByTestId('todo-empty-board')
-const sidebarAskWalnut = (page: Page) => page.locator('.sidebar-panel-toggle', { hasText: 'Ask Walnut' })
+const sidebarAskWalnut = (page: Page) => page.locator('.sidebar-panel-toggle', { hasText: 'Quick question' })
 const projectsHeading = (page: Page) => navigation(page).locator('.navigation-heading[data-navigation-id="tasks"]')
 const projectsMenu = (page: Page) => page.getByRole('menu', { name: 'Projects actions' })
 /** The heading's ··· takes the pointer only while the heading is hovered
@@ -293,7 +293,7 @@ test('a user who opened the chat keeps it, and the empty board then opens no dra
   await expect(drafts(page)).toHaveCount(0)
   // The spot is open, so its toggle is there to close it with.
   await expect(sidebarAskWalnut(page)).toBeVisible()
-  await expect(sidebarAskWalnut(page)).toHaveAttribute('aria-label', 'Ask Walnut')
+  await expect(sidebarAskWalnut(page)).toHaveAttribute('aria-label', 'Quick question')
   await expect(sidebarAskWalnut(page)).toHaveClass(/active/)
 
   // Closing it from the sidebar stores the choice, and a reload keeps it closed.

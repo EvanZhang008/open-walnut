@@ -36,11 +36,11 @@ describe('kept: the view around the conversation', () => {
   it("the view's fields come back with the open conversation, and the Continue list and suggestions are kept for every page", async () => {
     await keepSnap('ask', {
       title: 'Release notes', host: 'docs.example.test', messages: [],
-      askTitle: 'New chat', agent: 'Ask Walnut', placeholder: NEW_CHAT_PLACEHOLDER, continue: CONT, suggestions: ['Which task is …', 'Schedule my day'], pageOn: true,
+      askTitle: 'New quick question', agent: 'Quick question', placeholder: NEW_CHAT_PLACEHOLDER, continue: CONT, suggestions: ['Which task is …', 'Schedule my day'], pageOn: true,
     }, { key: CURRENT_ASK_KEY, agentId: 'walnut' }, 1000)
     const s = await snapOf('ask', 'https://docs.example.test/notes', 2000) as any
-    expect(s).toMatchObject({ askTitle: 'New chat', agent: 'Ask Walnut', placeholder: NEW_CHAT_PLACEHOLDER, cont: CONT, suggestions: ['Which task is …', 'Schedule my day'], pageOn: true })
-    expect(await shellOf(2000)).toMatchObject({ agent: 'Ask Walnut', cont: CONT, suggestions: ['Which task is …', 'Schedule my day'] })
+    expect(s).toMatchObject({ askTitle: 'New quick question', agent: 'Quick question', placeholder: NEW_CHAT_PLACEHOLDER, cont: CONT, suggestions: ['Which task is …', 'Schedule my day'], pageOn: true })
+    expect(await shellOf(2000)).toMatchObject({ agent: 'Quick question', cont: CONT, suggestions: ['Which task is …', 'Schedule my day'] })
   })
 
   it('an older view (messages alone) keeps no view fields and leaves the shell as it was', async () => {
@@ -65,11 +65,11 @@ describe('kept: the view around the conversation', () => {
 describe('drawn: the view as it will look', () => {
   const page = { title: 'Release notes 4.2', host: 'docs.example.test' }
 
-  it('a new chat in the side panel: ≡, New chat over the agent, the key with its padlock, Continue, suggestions, the composer with the page chip and Act in tab', () => {
-    const el = drawAskLook({ surface: 'panel', snap: null, shell: { at: 1, agent: 'Ask Walnut', cont: CONT, suggestions: ['Schedule my day'] }, page, locked: true })
+  it('a new quick question in the side panel: ≡, New quick question over the agent, the key with its padlock, Continue, suggestions, the composer with the page chip and Act in tab', () => {
+    const el = drawAskLook({ surface: 'panel', snap: null, shell: { at: 1, agent: 'Quick question', cont: CONT, suggestions: ['Schedule my day'] }, page, locked: true })
     expect(el.querySelector('[data-testid="panel-snap-menu"]')).not.toBeNull()
-    expect(text(el, '[data-testid="panel-snap-title"]')).toBe('New chat')
-    expect(text(el, '.look-agent')).toBe('Ask Walnut')
+    expect(text(el, '[data-testid="panel-snap-title"]')).toBe('New quick question')
+    expect(text(el, '.look-agent')).toBe('Quick question')
     expect(el.querySelector('[data-testid="panel-snap-locked"]')).not.toBeNull()
     expect(el.querySelectorAll('.look-cont-row')).toHaveLength(2)
     expect(el.querySelector('.look-dot.is-needs')).not.toBeNull()
@@ -106,20 +106,20 @@ describe('drawn: the view as it will look', () => {
     expect(el.querySelectorAll('.panel-snap-msg')).toHaveLength(0)
     expect(el.querySelector('.look-cont')).toBeNull()
     expect(el.querySelector('.look-sugg')).toBeNull()
-    expect(text(el, '[data-testid="panel-snap-title"]')).toBe('New chat')
+    expect(text(el, '[data-testid="panel-snap-title"]')).toBe('New quick question')
     expect(text(el, '[data-testid="panel-snap-placeholder"]')).toBe(NEW_CHAT_PLACEHOLDER)
   })
 
   it('an agent with none of its words kept yet: the drawing names it as its header does, with no chat', () => {
-    const el = drawAskLook({ surface: 'panel', snap: null, shell: null, page, locked: false, agentName: 'Ask Mentor' })
-    expect(el.querySelector('.look-agent')?.textContent).toBe('Ask Mentor')
+    const el = drawAskLook({ surface: 'panel', snap: null, shell: null, page, locked: false, agentName: 'Quick question · Mentor' })
+    expect(el.querySelector('.look-agent')?.textContent).toBe('Quick question · Mentor')
     expect(el.querySelectorAll('.panel-snap-msg')).toHaveLength(0)
   })
 
   it('the popup: the agent alone in its header, the Continue list, no suggestions; no web page, no chips', () => {
-    const el = drawAskLook({ surface: 'popup', snap: null, shell: { at: 1, agent: 'Ask Walnut', cont: CONT, suggestions: ['Schedule my day'] }, page: null, locked: true })
+    const el = drawAskLook({ surface: 'popup', snap: null, shell: { at: 1, agent: 'Quick question', cont: CONT, suggestions: ['Schedule my day'] }, page: null, locked: true })
     expect(el.querySelector('[data-testid="panel-snap-title"]')).toBeNull()
-    expect(el.querySelector('.look-titles.is-popup .look-agent')?.textContent).toBe('Ask Walnut')
+    expect(el.querySelector('.look-titles.is-popup .look-agent')?.textContent).toBe('Quick question')
     expect(el.querySelectorAll('.look-cont-row')).toHaveLength(2)
     expect(el.querySelector('.look-sugg')).toBeNull()
     expect(el.querySelector('.look-chip')).toBeNull()
@@ -159,10 +159,10 @@ describe('drawn: the view as it will look', () => {
   })
 
   it('a conversation whose ask has no title yet names the agent once, as its title line, as the view does', () => {
-    const snap = { at: 1, title: 'Release notes 4.2', host: 'docs.example.test', agent: 'Ask Walnut', messages: [{ role: 'user' as const, text: 'What changed?' }] }
+    const snap = { at: 1, title: 'Release notes 4.2', host: 'docs.example.test', agent: 'Quick question', messages: [{ role: 'user' as const, text: 'What changed?' }] }
     const el = drawAskLook({ surface: 'panel', snap, shell: null, page, locked: false })
     expect(el.querySelector('[data-testid="panel-snap-title"]')).toBeNull()
-    expect(text(el, '[data-testid="panel-snap-agent-title"]')).toBe('Ask Walnut')
+    expect(text(el, '[data-testid="panel-snap-agent-title"]')).toBe('Quick question')
     expect(el.querySelectorAll('.look-agent')).toHaveLength(1)
   })
 
@@ -215,9 +215,12 @@ describe('every icon the extension draws parses', () => {
 
 describe('a new chat of another agent (review round 4, #5)', () => {
   it('the drawing names the agent in its placeholder, as the view does', () => {
+    expect(newChatPlaceholder('Quick question · Mentor')).toBe(composerPlaceholderOf('Mentor', true))
+    expect(newChatPlaceholder('Quick question')).toBe(composerPlaceholderOf('Walnut', true))
+    // The labels an older view stored before the rename still draw the same words.
     expect(newChatPlaceholder('Ask Mentor')).toBe(composerPlaceholderOf('Mentor', true))
     expect(newChatPlaceholder('Ask Walnut')).toBe(composerPlaceholderOf('Walnut', true))
-    const el = drawAskLook({ surface: 'panel', snap: null, shell: { at: 0, agent: 'Ask Mentor' }, page: null, locked: false } as never)
-    expect(el.querySelector('[data-testid="panel-snap-placeholder"]')?.textContent).toBe('Ask Mentor, or ask it to do something here…')
+    const el = drawAskLook({ surface: 'panel', snap: null, shell: { at: 0, agent: 'Quick question · Mentor' }, page: null, locked: false } as never)
+    expect(el.querySelector('[data-testid="panel-snap-placeholder"]')?.textContent).toBe('Ask Mentor a quick question, or have it do something here…')
   })
 })

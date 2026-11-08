@@ -60,7 +60,7 @@ test('Ask is a plain chat about the page, before and after the first question', 
   await expect(v.locator('.draft-session-panel .session-panel-header')).toHaveCount(0)
   await expect(v.locator('.draft-actions-bar')).toHaveCount(0)
   const composer = v.locator('[data-testid="ask-object-compose"] textarea')
-  await expect(composer).toHaveAttribute('placeholder', 'Ask Walnut, or ask it to do something here…')
+  await expect(composer).toHaveAttribute('placeholder', 'Ask a quick question, or have it do something here…')
   await shot(panel, 'd12-compose')
 
   await composer.fill('slow:2500 Summarize the selected text')

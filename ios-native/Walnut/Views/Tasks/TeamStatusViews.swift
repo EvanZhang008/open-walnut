@@ -140,6 +140,9 @@ struct UserStatePill: View {
 /// Shown only for a task with a team (a subtask at least).
 struct TeamStatusSection: View {
     let ownerId: String
+    /// Open a team task's conversation. The task sheet presents it from its root: a sheet raised
+    /// from inside its scroll content is rebuilt when a text field in it takes focus.
+    var onOpenTask: (_ id: String, _ title: String?) -> Void
     @Environment(TasksStore.self) private var tasks
     /// The state chip picked (nil = All open), kept across a relaunch (`ViewMemory`).
     @AppStorage(ViewMemory.key("team", "filter"), store: AppPrefs.defaults) private var filterRaw = ""
@@ -147,7 +150,6 @@ struct TeamStatusSection: View {
         get { UserState(rawValue: filterRaw) }
         nonmutating set { filterRaw = newValue?.rawValue ?? "" }
     }
-    @State private var opened: WalnutTask?
     @State private var teamBusy = false
     @State private var teamError: String?
     @State private var confirmStop = false
@@ -185,7 +187,7 @@ struct TeamStatusSection: View {
                 } else {
                     VStack(spacing: 0) {
                         ForEach(rows) { row in
-                            Button { opened = row.task } label: { TeamStatusRowView(row: row, flat: filter != nil) }
+                            Button { onOpenTask(row.task.id, AskProjectName.displayTitle(row.task.title, project: row.task.project, orgRole: row.task.orgRole)) } label: { TeamStatusRowView(row: row, flat: filter != nil) }
                                 .buttonStyle(.plain)
                                 // On the button, not its label: the row keeps its own id, and
                                 // `.contain` keeps the ids inside (.checked, .due, .live, .partial).
@@ -206,12 +208,6 @@ struct TeamStatusSection: View {
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("Every working task in it stops, and its triggers and wake clocks go off until you resume it.")
-            }
-            // A team row opens that task's conversation (its task page only when it has none).
-            .sheet(item: $opened) { t in
-                TaskSessionSheet(target: TaskOpenTarget(id: t.id, title: t.title))
-                    .presentationDetents([.large])
-                    .presentationDragIndicator(.visible)
             }
         }
     }
@@ -350,7 +346,7 @@ struct TeamStatusRowView: View {
                             time
                         }
                     }
-                    Text(row.task.title)
+                    Text(AskProjectName.displayTitle(row.task.title, project: row.task.project, orgRole: row.task.orgRole))
                         .font(.subheadline.weight(.semibold))
                         .lineLimit(3)
                     details
@@ -367,7 +363,7 @@ struct TeamStatusRowView: View {
                         .accessibilityLabel(row.state.label)
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Text(row.task.title)
+                            Text(AskProjectName.displayTitle(row.task.title, project: row.task.project, orgRole: row.task.orgRole))
                                 .font(.subheadline.weight(.semibold))
                                 .lineLimit(2)
                             Spacer(minLength: 4)

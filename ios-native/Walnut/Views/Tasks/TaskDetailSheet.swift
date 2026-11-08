@@ -18,6 +18,9 @@ struct TaskDetailSheet: View {
     @State private var saving = false
     @State private var editError: String?
     @State private var showDuePicker = false
+    @State private var showProjectPicker = false
+    @State private var fieldEdit: TaskFieldEdit?
+    @State private var openedTask: TaskOpenTarget?
     @State private var dueDraft = AppClock.now()
     @State private var editingTitle = false
     @State private var titleDraft = ""
@@ -59,7 +62,8 @@ struct TaskDetailSheet: View {
                     header
                     // The one user status, then a lead's team (TeamStatusViews.swift).
                     TaskStatusCard(task: current)
-                    TeamStatusSection(ownerId: task.id)
+                    // A team row opens that task's conversation (its task page only when it has none).
+                    TeamStatusSection(ownerId: task.id) { openedTask = TaskOpenTarget(id: $0, title: $1) }
                     if let editError {
                         Label(editError, systemImage: "exclamationmark.triangle.fill")
                             .font(.caption)
@@ -81,7 +85,11 @@ struct TaskDetailSheet: View {
                     // Wave-1 detail plane: description/note readback with
                     // editing, blocked/children/parent relations, and the one
                     // destructive Delete row at the foot of the sheet.
-                    TaskDetailExtras(controller: detailController) {
+                    TaskDetailExtras(
+                        controller: detailController,
+                        onEditField: { fieldEdit = $0 },
+                        onOpenTask: { openedTask = TaskOpenTarget(id: $0, title: $1) }
+                    ) {
                         // Row already removed optimistically by the store —
                         // just close. (A refetch here could race the DELETE
                         // and resurrect the row from a stale projection.)
@@ -126,6 +134,25 @@ struct TaskDetailSheet: View {
                 .presentationDetents([.medium, .large])
             }
             .sheet(isPresented: $showDuePicker) { duePickerSheet }
+            // Every sheet the task page raises hangs here, on its root, never inside the scroll
+            // content: raised from there, a sheet was rebuilt the moment its text field took focus,
+            // so the first tap on the project search lost the keyboard and reset the list
+            // (2026-11-08, lane B simulator logs). Guard: tests/web/quick-question-name-guard.test.ts.
+            .sheet(isPresented: $showProjectPicker) {
+                TaskProjectPicker(current: current.project) { picked in
+                    if picked != current.project { apply(.init(project: picked)) }
+                }
+            }
+            .sheet(item: $fieldEdit) { edit in
+                TaskFieldEditorSheet(edit: edit, taskId: task.id) { content in
+                    if edit.field == .description { detailController.saveDescription(content) } else { detailController.saveNote(content) }
+                }
+            }
+            .sheet(item: $openedTask) { target in
+                TaskSessionSheet(target: target)
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.visible)
+            }
         }
         // The Tasks drawer's "Recently opened", from every surface that shows this sheet.
         .onAppear { tasks.recents.recordTask(current) }
@@ -141,6 +168,7 @@ struct TaskDetailSheet: View {
                 dueDraft = current.dueDateValue ?? AppClock.startOfToday()
                 showDuePicker = true
             },
+            openProjectPicker: { showProjectPicker = true },
             onPinnedChange: { pinned in
                 fallback = TasksStore.withPinned(fallback, pinned)
                 confirmed = TasksStore.withPinned(confirmed, pinned)
@@ -240,7 +268,7 @@ struct TaskDetailSheet: View {
                 ForEach(taskSessions.prefix(5)) { session in
                     NavigationLink(value: session) {
                         HStack {
-                            SessionRowView(session: session)
+                            SessionRowView(session: session, project: current.project, orgRole: current.orgRole)
                             Image(systemName: "chevron.right")
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.tertiary)
@@ -325,7 +353,7 @@ struct TaskDetailSheet: View {
                 editingTitle = true
                 titleFocused = true
             } label: {
-                Text(current.title)
+                Text(AskProjectName.displayTitle(current.title, project: current.project, orgRole: current.orgRole))
                     .font(.title2.weight(.semibold))
                     .strikethrough(current.isDone, color: .secondary)
                     .foregroundStyle(current.isDone ? .secondary : .primary)

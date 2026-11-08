@@ -338,7 +338,10 @@ struct TaskBoardList: View {
         label: String, color: Color, count: Int, groupKey: String, collapsed: Bool,
         anchorId: String, identifier: String
     ) -> some View {
-        HStack(spacing: 7) {
+        // A project heading reads as the user names it ("Quick question" for the stored
+        // "Ask Walnut"); ids and fold keys keep the stored name.
+        let label = AskProjectName.display(label)
+        return HStack(spacing: 7) {
             dot(color)
             Text(label)
                 .font(.system(BoardHeadingType.label, weight: .semibold))
@@ -375,7 +378,8 @@ struct TaskBoardList: View {
     /// Same type style and dot as an ordinary band heading, because it IS one — it just
     /// happens to live in a nested band's header. It is the project's fold control.
     private func headingBar(label: String, color: Color, groupKey: String, identifier: String) -> some View {
-        HStack(spacing: 7) {
+        let label = AskProjectName.display(label)
+        return HStack(spacing: 7) {
             dot(color)
             Text(label)
                 .font(.system(BoardHeadingType.label, weight: .semibold))

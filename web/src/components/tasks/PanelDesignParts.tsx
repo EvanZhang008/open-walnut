@@ -9,6 +9,7 @@ import { SECTION_ICONS, SectionRows, type SectionRowHandlers } from './StatusSec
 import { FOLD_KEY_ATTR, foldIsOpen, projectFoldKind } from './section-fold-rule';
 import { useFoldStore } from './useFoldStore';
 import { statusFoldTooltip } from './status-sections';
+import { projectDisplayName } from '../../utils/project-display';
 
 /** The open folds, by the one fold rule (section-fold-rule.ts): folded by default, folded again 60 s after the last action in the panel. */
 export function useProjectFolds(): [Set<string>, (key: string) => void] {
@@ -40,7 +41,7 @@ export function ProjectStatusFolds({ region, project, tasks, open, onToggle, han
     <div className="project-status-folds" data-testid="project-status-folds" data-project={project}>
       {label && (
         <div className="tier-project-label recent-project-label project-status-folds-project">
-          <span className="tier-project-label-name">{project || 'Inbox'}</span>
+          <span className="tier-project-label-name">{projectDisplayName(project)}</span>
         </div>
       )}
       <div className="project-status-fold-row">

@@ -4,7 +4,8 @@ import Network
 /// The server `ChatPlaceUITests` pair the app to: a loopback `/api/v1` the test
 /// runner hosts itself, so the tests need no Walnut anywhere (CI runs with none) and
 /// never touch anyone's data. It holds just what the Chat tab's ways back need: one
-/// agent with two conversations, one ask with a session, and an org whose Main (an org node, `org_role` main) has
+/// agent with two conversations, two asks with a session (one still on its placeholder
+/// title), and an org whose Main (an org node, `org_role` main) has
 /// a session. Field names follow `src/web/routes/api-v1.ts` and the app's decoders;
 /// anything else answers the v1 404, which the app reads as "not on this server",
 /// never as offline. Event streams are held open with comments, as the real ones are.
@@ -17,6 +18,11 @@ final class ChatPlaceFixtureServer {
     static let askTaskID = "task-fixture-ask"
     static let askSessionID = "sess-fixture-ask"
     static let conversationIDs = ["conv-fixture-1", "conv-fixture-2"]
+    /// An ask still wearing its placeholder title, filed under the stored "Ask Walnut"
+    /// project, as an older Mac lists it (QuickQuestionRenameUITests reads it).
+    static let placeholderAskTaskID = "task-fixture-ask-placeholder"
+    static let placeholderAskSessionID = "sess-fixture-ask-placeholder"
+    static let askProject = "Ask Walnut"
 
     private let listener: NWListener
     private let queue = DispatchQueue(label: "chat-place-fixture")
@@ -25,6 +31,9 @@ final class ChatPlaceFixtureServer {
     private var held: [ObjectIdentifier: NWConnection] = [:]
     private var ping: DispatchSourceTimer?
     private(set) var port: UInt16 = 0
+    /// Extra projects, each named by one task, so a picker's list is longer than a screen
+    /// with the "Ask Walnut" project in the middle (a list that has to scroll to its row).
+    var extraProjectCount = 0
 
     init() throws {
         let parameters = NWParameters.tcp
@@ -145,12 +154,17 @@ final class ChatPlaceFixtureServer {
     // MARK: - The data
 
     private static let at = "2026-11-02T10:00:00.000Z"
+    /// Older than `at`, so the placeholder ask lists second and `firstMatch` stays the
+    /// ask ChatPlaceUITests opens.
+    private static let earlier = "2026-11-02T09:00:00.000Z"
 
-    private static func session(_ id: String, task: String, title: String) -> [String: Any] {
-        [
+    private static func session(_ id: String, task: String, title: String, project: String? = nil) -> [String: Any] {
+        var row: [String: Any] = [
             "id": id, "title": title, "task_id": task, "task_title": title, "host": "",
             "process_status": "idle", "started_at": at, "last_active_at": at, "message_count": 2,
         ]
+        if let project { row["project"] = project }
+        return row
     }
 
     /// `GET /sessions/:id`, for an open that comes before the session list.
@@ -164,8 +178,10 @@ final class ChatPlaceFixtureServer {
         ]
     }
 
-    private static func task(_ id: String, title: String, session: String) -> [String: Any] {
-        ["id": id, "title": title, "phase": "IN_PROGRESS", "session_ids": [session], "session_id": session]
+    private static func task(_ id: String, title: String, session: String, project: String? = nil) -> [String: Any] {
+        var row: [String: Any] = ["id": id, "title": title, "phase": "IN_PROGRESS", "session_ids": [session], "session_id": session]
+        if let project { row["project"] = project }
+        return row
     }
 
     private func route(method: String, path: String) -> (Int, Any) {
@@ -184,10 +200,14 @@ final class ChatPlaceFixtureServer {
             ])
         case ("GET", "/asks"):
             return (200, [
-                "agentId": "general", "project": "Ask Walnut", "total": 1, "launch": true,
+                "agentId": "general", "project": Self.askProject, "total": 2, "launch": true,
                 "asks": [[
                     "id": Self.askTaskID, "title": "Compare two laptops", "state": "idle",
                     "activityAt": Self.at, "createdAt": Self.at, "sessionId": Self.askSessionID,
+                    "phase": "IN_PROGRESS", "unread": false,
+                ], [
+                    "id": Self.placeholderAskTaskID, "title": Self.askProject, "state": "idle",
+                    "activityAt": Self.earlier, "createdAt": Self.earlier, "sessionId": Self.placeholderAskSessionID,
                     "phase": "IN_PROGRESS", "unread": false,
                 ]],
             ])
@@ -201,6 +221,8 @@ final class ChatPlaceFixtureServer {
             return (200, ["syncedAt": Self.at, "sessions": [
                 Self.session(Self.mainSessionID, task: Self.mainTaskID, title: "Main"),
                 Self.session(Self.askSessionID, task: Self.askTaskID, title: "Compare two laptops"),
+                Self.session(Self.placeholderAskSessionID, task: Self.placeholderAskTaskID,
+                             title: Self.askProject, project: Self.askProject),
             ]])
         case ("GET", "/tasks/\(Self.mainTaskID)"):
             // Main is the org's CEO node, so its chat wears the Threads, Tasks and Brief bar.
@@ -211,10 +233,23 @@ final class ChatPlaceFixtureServer {
             return (200, ["task": Self.task(Self.askTaskID, title: "Compare two laptops", session: Self.askSessionID)])
         case ("GET", "/sessions/\(Self.mainSessionID)"):
             return (200, Self.sessionDetail(Self.mainSessionID, task: Self.mainTaskID, title: "Main"))
+        case ("GET", "/tasks/\(Self.placeholderAskTaskID)"):
+            return (200, ["task": Self.task(Self.placeholderAskTaskID, title: Self.askProject,
+                                            session: Self.placeholderAskSessionID, project: Self.askProject)])
+        case ("GET", "/sessions/\(Self.placeholderAskSessionID)"):
+            return (200, Self.sessionDetail(Self.placeholderAskSessionID, task: Self.placeholderAskTaskID, title: Self.askProject))
         case ("GET", "/sessions/\(Self.askSessionID)"):
             return (200, Self.sessionDetail(Self.askSessionID, task: Self.askTaskID, title: "Compare two laptops"))
         case ("GET", "/tasks"):
             return (200, ["tasks": [] as [Any], "syncedAt": Self.at])
+        case ("GET", "/tasks/groups"):
+            // Projects named by an (empty) folder each: "Aa" ones sort before "Ask Walnut", "Zz" ones after.
+            let before = extraProjectCount * 5 / 8
+            return (200, ["groups": (0..<extraProjectCount).map { i -> [String: Any] in
+                let name = i < before ? String(format: "Aa Project %02d", i) : String(format: "Zz Project %02d", i)
+                return ["group_id": "g-fixture-extra-\(i)", "label": name, "hidden": false,
+                        "member_ids": [] as [Any], "project": name]
+            }])
         case ("GET", "/focus/tasks"):
             return (200, ["pinned_tasks": [] as [Any]])
         case ("GET", "/human-inbox"):

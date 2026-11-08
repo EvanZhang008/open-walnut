@@ -108,10 +108,10 @@ struct InboxItemConfirmation: View {
                                 Menu {
                                     Button("Inbox") { field(\.project).wrappedValue = "" }
                                     ForEach(state.projects.filter { !$0.name.isEmpty }, id: \.name) { project in
-                                        Button(project.name) { field(\.project).wrappedValue = project.name }
+                                        Button(AskProjectName.display(project.name)) { field(\.project).wrappedValue = project.name }
                                     }
                                 } label: {
-                                    Text("Project: \(field(\.project).wrappedValue.isEmpty ? "Inbox" : field(\.project).wrappedValue)")
+                                    Text("Project: \(field(\.project).wrappedValue.isEmpty ? "Inbox" : AskProjectName.display(field(\.project).wrappedValue))")
                                         .frame(minHeight: 44)
                                 }
                             }

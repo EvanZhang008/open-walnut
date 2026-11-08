@@ -108,13 +108,13 @@ export function SubtaskPill({ task, className }: { task: { id?: string; parent_t
         data-testid={role === 'leader' ? 'worker-team-leader' : 'worker-team-row'}
         data-task-id={t.id}
         aria-current={isSelf ? 'true' : undefined}
-        title={`Go to "${t.title}"`}
+        title={`Go to "${orgDisplayTitle(t)}"`}
         onClick={() => goTo(t.id, t)}
       >
         <span className={`task-phase-icon-btn leader-sub-phase ${taskCircleClass(t, null)}`} aria-hidden="true">
           {binaryPhaseIcon(false, t.phase, taskUserState(t))}
         </span>
-        <span className="leader-sub-title">{role === 'leader' ? orgDisplayTitle(t) : t.title}</span>
+        <span className="leader-sub-title">{orgDisplayTitle(t)}</span>
         {place && <span className="leader-sub-place" title={`In project ${place}`}>{place}</span>}
         <span className="leader-sub-phase-label">
           {role === 'leader' ? leaderWord(t) : isSelf ? 'This task' : taskStatusLabel(t)}
@@ -129,7 +129,7 @@ export function SubtaskPill({ task, className }: { task: { id?: string; parent_t
         ref={triggerRef}
         type="button"
         className={`task-team-pill task-row-pill todo-item-subtask-pill${className ? ` ${className}` : ''}`}
-        title={subtaskPillTitle(parent?.title)}
+        title={subtaskPillTitle(parent ? orgDisplayTitle(parent) : undefined)}
         aria-label="Worker"
         aria-haspopup="dialog"
         aria-expanded={open}

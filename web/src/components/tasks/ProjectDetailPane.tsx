@@ -30,6 +30,7 @@ import {
   type ProjectMetadata,
 } from '@/api/projects';
 import { ProjectTrackingBlock } from './ProjectTrackingBlock';
+import { projectDisplayName } from '@/utils/project-display';
 
 interface ProjectDetailPaneProps {
   /** Never '' — Inbox has no registry row. */
@@ -58,6 +59,8 @@ export function ProjectDetailPane({ project, tasks, onClose, style }: ProjectDet
   const { name: entryName, row } = useProjectEntry(project);
 
   const displayName = row?.name ?? detailName;
+  // API calls keep `displayName`.
+  const shownName = projectDisplayName(displayName);
   const source = row?.source ?? detailSource;
 
   /** Current value of an editable setting — the store's row when it has one. */
@@ -125,7 +128,7 @@ export function ProjectDetailPane({ project, tasks, onClose, style }: ProjectDet
   const handleDelete = useCallback(async () => {
     const isClaimed = source !== 'local';
     const ok = await confirm({
-      title: `Delete project “${displayName}”?`,
+      title: `Delete project “${shownName}”?`,
       message: isClaimed
         ? `This project is synced with ${source}. Deleting it ALSO DELETES the remote container (e.g. the MS To-Do list) — this cannot be undone. Local tasks are kept and move to the Inbox.`
         : `Its ${counts.total} task${counts.total === 1 ? '' : 's'} move to the Inbox (nothing is deleted).`,
@@ -167,7 +170,7 @@ export function ProjectDetailPane({ project, tasks, onClose, style }: ProjectDet
     } finally {
       setDeleting(false);
     }
-  }, [confirm, displayName, entryName, source, counts.total, onClose, tasksStore]);
+  }, [confirm, displayName, shownName, entryName, source, counts.total, onClose, tasksStore]);
 
   const saveEdit = useCallback(async (field: string) => {
     setEditingField(null);
@@ -201,7 +204,7 @@ export function ProjectDetailPane({ project, tasks, onClose, style }: ProjectDet
   return (
     <div className="todo-detail-pane project-detail-pane" style={style}>
       <div className="todo-detail-header">
-        <span className="todo-detail-project">{displayName}</span>
+        <span className="todo-detail-project">{shownName}</span>
         {(() => {
           const meta = getIntegrationMeta(integrations, source);
           return meta ? (

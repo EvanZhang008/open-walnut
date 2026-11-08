@@ -109,8 +109,8 @@ describe("an ask's name before Walnut titles it (R2-7)", () => {
   it("the ask's own title wins; the placeholder gives way to the question; else the placeholder, marked untitled", () => {
     expect(panelAskTitle({ id: 't', title: 'Upload retries in 4.2' }, agent, 'What changed?')).toEqual({ title: 'Upload retries in 4.2', untitled: false })
     expect(panelAskTitle({ id: 't', title: 'Ask Walnut' }, agent, 'What changed?')).toEqual({ title: 'What changed?', untitled: false })
-    expect(panelAskTitle({ id: 't', title: 'ask walnut' }, agent, '')).toEqual({ title: 'Ask Walnut', untitled: true })
-    expect(panelAskTitle({ id: 't' }, { project: 'Ask Mentor' }, '')).toEqual({ title: 'Ask Mentor', untitled: true })
+    expect(panelAskTitle({ id: 't', title: 'ask walnut' }, agent, '')).toEqual({ title: 'Quick question', untitled: true })
+    expect(panelAskTitle({ id: 't' }, { project: 'Ask Mentor' }, '')).toEqual({ title: 'Quick question · Mentor', untitled: true })
   })
 })
 

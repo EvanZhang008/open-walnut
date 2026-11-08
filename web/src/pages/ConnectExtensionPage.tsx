@@ -91,7 +91,7 @@ export function ConnectExtensionPage() {
         {(phase === 'ready' || phase === 'connecting' || phase === 'error') && (
           <>
             <h1>Connect this browser to Walnut?</h1>
-            <p>Ask Walnut about the page you are on from the browser's side panel, and let your Walnut agents work in this browser. It also fills and saves passwords from your vault, after you unlock it with your master password.</p>
+            <p>Ask a quick question about the page you are on from the browser's side panel, and let your Walnut agents work in this browser. It also fills and saves passwords from your vault, after you unlock it with your master password.</p>
             <label className="pw-ext-choice" data-testid="connect-extension-agents-row">
               <input type="checkbox" checked={agents} onChange={(e) => setAgents(e.target.checked)} disabled={phase === 'connecting'} data-testid="connect-extension-agents" />
               <span>
@@ -109,19 +109,19 @@ export function ConnectExtensionPage() {
         {phase === 'connected' && (
           <>
             <h1 data-testid="connect-extension-done">Connected</h1>
-            <p>{device ? `${device} is connected.` : 'The extension is connected.'} Click the Walnut icon in the toolbar to ask Walnut about any page{agents ? ', and your agents can now use this browser' : ''}. Your passwords are behind the key in its header. You can close this tab.</p>
+            <p>{device ? `${device} is connected.` : 'The extension is connected.'} Click the Walnut icon in the toolbar to ask a quick question about any page{agents ? ', and your agents can now use this browser' : ''}. Your passwords are behind the key in its header. You can close this tab.</p>
           </>
         )}
         {phase === 'already' && (
           <>
             <h1>Already connected</h1>
-            <p>The Walnut extension in this browser is connected to this Walnut. Click its icon in the toolbar to ask Walnut about the page you are on.</p>
+            <p>The Walnut extension in this browser is connected to this Walnut. Click its icon in the toolbar to ask a quick question about the page you are on.</p>
           </>
         )}
         {phase === 'missing' && (
           <>
             <h1>Install the Walnut extension</h1>
-            <p>Ask Walnut about any page, let your agents work in this browser, and fill passwords from your own Walnut. Then come back to this page.</p>
+            <p>Ask a quick question about any page, let your agents work in this browser, and fill passwords from your own Walnut. Then come back to this page.</p>
             <div className="pw-ext-install"><ExtensionInstallSteps browser={browser} /></div>
             <p className="pw-ext-fine">Already installed? Click the Walnut icon in the toolbar and press Connect there: it opens this page ready to connect.</p>
           </>

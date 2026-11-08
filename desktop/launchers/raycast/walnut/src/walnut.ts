@@ -29,6 +29,16 @@ export function walnutBase(): string {
 
 export const NOT_RUNNING = "Walnut is not answering on this Mac. Open the Walnut app, then try again.";
 
+/**
+ * A project as the user reads it: asks are stored under "Ask Walnut" / "Ask <agent>" and read as
+ * "Quick question" / "Quick question · <agent>". Display only; requests keep the stored name.
+ */
+export function projectLabel(project: string): string {
+  const match = /^Ask\s+(.+)$/i.exec(project.trim());
+  if (!match) return project;
+  return match[1].toLowerCase() === "walnut" ? "Quick question" : `Quick question · ${match[1]}`;
+}
+
 export function openTaskLink(taskId: string): string {
   return `open-walnut://open?to=${encodeURIComponent(`/tasks/${taskId}`)}`;
 }
@@ -128,7 +138,7 @@ export interface MainProgress {
  * Resolves when that turn ends, or `held` when Main waits on the user's answer first.
  */
 export function tellMain(text: string, opts: FollowOpts): Promise<FollowedReply> {
-  return followReply("/api/v1/quick/main", { text, follow: true }, "Main", opts);
+  return followReply("/api/v1/quick/main", { text, follow: true }, "The CEO", opts);
 }
 
 /**
@@ -211,7 +221,7 @@ export async function sendToMain(text: string, images?: QuickImage[], signal?: A
     signal,
   });
   const body = (await res.json().catch(() => ({}))) as { taskId?: string; held?: boolean; error?: string };
-  if (!res.ok) throw new Error(body.error || `Main did not get it (HTTP ${res.status})`);
+  if (!res.ok) throw new Error(body.error || `The CEO did not get it (HTTP ${res.status})`);
   return { taskId: body.taskId ?? "", held: body.held };
 }
 

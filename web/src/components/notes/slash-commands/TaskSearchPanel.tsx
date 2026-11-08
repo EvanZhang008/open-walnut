@@ -7,6 +7,8 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import type { Task } from '@open-walnut/core';
 import { taskStatusLabel } from '@/utils/session-status';
+import { projectDisplayName } from '@/utils/project-display';
+import { orgDisplayTitle } from '@open-walnut/org-tree';
 
 const MAX_RESULTS = 15;
 
@@ -36,7 +38,7 @@ export function TaskSearchPanel({ tasks, focusedTaskId, onSelect, onBack }: Task
     let pool = tasks;
     if (q) {
       pool = tasks.filter(t => {
-        const haystack = `${t.title} ${t.project ?? ''}`.toLowerCase();
+        const haystack = [t.title, orgDisplayTitle(t), t.project ?? '', projectDisplayName(t.project)].join(' ').toLowerCase();
         return haystack.includes(q);
       });
     }
@@ -136,11 +138,11 @@ export function TaskSearchPanel({ tasks, focusedTaskId, onSelect, onBack }: Task
               >
                 <div className="notes-task-search-title">
                   {task.id === focusedTaskId && <span className="notes-task-search-pin" title="Currently selected task">&#x2605;</span>}
-                  {task.title}
+                  {orgDisplayTitle(task)}
                 </div>
                 <div className="notes-task-search-meta">
                   <span className="notes-task-search-project">
-                    {task.project || 'Inbox'}
+                    {projectDisplayName(task.project)}
                   </span>
                   {phase && (
                     <span className={`notes-task-search-phase ${task.status === 'done' ? 'done' : ''}`}>

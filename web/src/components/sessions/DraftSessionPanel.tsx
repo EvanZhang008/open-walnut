@@ -100,10 +100,12 @@ function orgLeadHint(title: string | undefined, project: string | undefined): st
 /** A lead's title as shown ("Walnut lead" reads "Walnut VP"); the draft keeps the real one, which
  *  may become the first message. */
 const leadShown = (title: string) => orgDisplayTitle({ title, org_role: 'lead' });
-const BOUND_WALNUT_HINT = 'Ask Walnut about this task: type what you need, or send with nothing typed to use its title.';
+const BOUND_WALNUT_HINT = 'Ask a quick question about this task: type what you need, or send with nothing typed to use its title.';
 const FORK_HINT = 'Forks the source conversation into a sibling session: type where it should go next, or send with nothing typed to just branch.';
 const FORK_PLACEHOLDER = 'Message for the forked session (optional)';
-const WALNUT_PLACEHOLDER = 'Ask Walnut anything…';
+const WALNUT_PLACEHOLDER = 'Ask a quick question…';
+/** The general agent's draft name: the header, the mode card and the send button's title. */
+const QUICK_QUESTION = 'Quick question';
 /** "Customize Walnut" (the repair draft): the guidance the old chat-anchored repair bar carried. The draft
  *  otherwise looks exactly like an ordinary new session, so nothing would tell the
  *  user their sentence is about to be read as a bug report. */
@@ -282,7 +284,7 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork, fallbackL
           providerLockReason={(provider) => (fork && provider !== engine
             ? 'A fork keeps the source session provider'
             : walnut && provider !== 'claude'
-              ? 'Ask Walnut runs on the claude engine (the Personal AI profile rides its system prompt)'
+              ? 'A quick question runs on the claude engine (the Personal AI profile rides its system prompt)'
               : hostEngineLockReason(engineEntry(catalog, provider), host, hostEngines))}
           // While Auto starts on the fallback, its row says so ("Auto (Codex, fallback)").
           autoRow={{ resolvedLabel: fallbackLabel ? fallbackLabel.replace(/ \(fallback\)$/, ', fallback') : autoResolved, active: isAuto }}
@@ -404,7 +406,7 @@ interface Props {
   /** Where a repair draft runs (Walnut's source, or the clone a first Start
    *  makes): the repair hint names it. */
   repairTarget?: WalnutRepairTarget | null;
-  /** A walnut draft's name in the header and placeholder ("Main" for the main agent); default "Ask Walnut". */
+  /** A walnut draft's name in the header and placeholder ("CEO" for the main agent); default "Quick question". */
   walnutLabel?: string;
   /**
    * A plain chat's first message (the browser side panel's Ask, SessionPanel's `plainChat`): no
@@ -489,7 +491,7 @@ export function DraftSessionPanel({
   // launch shape, its own name in the header/placeholder, and the Walnut seeds
   // (tasks, schedule) give way to the agent's own description.
   const askAgent = isWalnut && draft.agent && draft.agent.id !== GENERAL_AGENT_ID ? draft.agent : null;
-  const askLabel = askAgent ? `Ask ${askAgent.name}` : walnutLabel || 'Ask Walnut';
+  const askLabel = askAgent ? `${QUICK_QUESTION} · ${askAgent.name}` : walnutLabel || QUICK_QUESTION;
   // "Customize Walnut": pre-armed on Walnut's own checkout with the repair intent. No
   // mode fork: an Ask Walnut launch has no cwd and would drop the repair.
   const isRepair = draft.intent === 'fix-walnut';
@@ -826,11 +828,11 @@ export function DraftSessionPanel({
                   <span className="draft-intent-ic" aria-hidden="true">
                     <img src="/walnut-icon.png" alt="" className="draft-intent-walnut-mark" />
                   </span>
-                  <span className="draft-intent-t">Ask Walnut</span>
+                  <span className="draft-intent-t">{QUICK_QUESTION}</span>
                   <span className="draft-intent-d">
                     {isBound
                       ? 'Hand this task to Walnut: plan it, research it, or organize it.'
-                      : 'Search tasks, find notes, schedule your day, quick questions, etc.'}
+                      : 'Search tasks, find notes, schedule your day, or ask anything.'}
                   </span>
                 </button>
               </div>
@@ -955,7 +957,7 @@ export function DraftSessionPanel({
           sendTitle={isFork
             ? 'Fork the source session (an empty message just branches the conversation)'
             : isBound && isWalnut
-              ? 'Ask Walnut about this task (an empty message sends the task title)'
+              ? 'Ask a quick question about this task (an empty message sends the task title)'
               : draft.orgLead
                 ? `Send to ${draft.boundTaskTitle ? leadShown(draft.boundTaskTitle) : 'the VP'}`
                 : isBound
@@ -985,7 +987,7 @@ export function DraftSessionPanel({
           draftKey={draftComposerKey(draft.id)}
           placeholder={placeholder ?? (isFork ? FORK_PLACEHOLDER
             : isRepair ? REPAIR_PLACEHOLDER
-              : askAgent ? `${askLabel} anything…` : isWalnut ? (walnutLabel ? `Ask ${walnutLabel} anything…` : WALNUT_PLACEHOLDER)
+              : askAgent ? `Ask ${askAgent.name} a quick question…` : isWalnut ? (walnutLabel ? `Ask ${walnutLabel} anything…` : WALNUT_PLACEHOLDER)
                 : draft.orgLead ? `Message ${draft.boundTaskTitle ? leadShown(draft.boundTaskTitle) : 'the VP'}…` : PLACEHOLDER)}
           prefillText={prefill.text}
           prefillNonce={prefill.nonce}

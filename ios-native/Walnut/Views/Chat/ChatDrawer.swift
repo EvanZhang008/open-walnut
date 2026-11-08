@@ -413,22 +413,36 @@ struct ChatDrawer: View {
         }
     }
 
-    /// Recents on a server that lists asks: the Mac's list, in the Mac's order.
+    /// The stored project the active agent's asks are filed under ("Ask Walnut").
+    private var asksProject: String {
+        AskProjectName.storedProject(agentID: chat.activeAgentID, agentName: chat.activeAgent?.name)
+    }
+
+    /// The asks' heading names them as the user does: "Quick question" (the Mac
+    /// drawer's title), "Quick question · Mentor" for another agent.
+    private var asksHeading: some View {
+        sectionLabel(AskProjectName.display(asksProject))
+            .accessibilityAddTraits(.isHeader)
+            .accessibilityIdentifier("chat.drawer.asksHeading")
+    }
+
+    /// The asks on a server that lists them: the Mac's list, in the Mac's order,
+    /// under the Quick question heading.
     @ViewBuilder
     private var asksSection: some View {
         if chat.asks.isEmpty {
             // Nothing listed: the empty state only when Earlier is empty too. With
             // chats under Earlier, "no conversations yet" above them is false, and
-            // a Recents heading over nothing heads nothing.
+            // a heading over nothing heads nothing.
             if !chat.loadingList && chat.earlierConversations.isEmpty {
                 VStack(alignment: .leading, spacing: 0) {
-                    sectionLabel("Recents")
+                    asksHeading
                     emptyRecents
                 }
             }
         } else {
             VStack(alignment: .leading, spacing: 0) {
-                sectionLabel("Recents")
+                asksHeading
                 ForEach(Self.uniqueAsks(chat.asks)) { ask in
                     Button {
                         guard !suppressTaps else { return }
@@ -480,7 +494,8 @@ struct ChatDrawer: View {
     private func askRow(_ ask: AskSummary) -> some View {
         let isActive = ask.conversationId != nil && ask.conversationId == chat.activeID
         return VStack(alignment: .leading, spacing: 2) {
-            Text(verbatim: ask.title)
+            // An older Mac still sends the placeholder ("Ask Walnut"); it reads as a quick question.
+            Text(verbatim: AskProjectName.displayTitle(ask.title, project: asksProject))
                 .font(.subheadline)
                 .fontWeight(isActive ? .semibold : .regular)
                 .foregroundStyle(isActive ? Theme.tint : .primary)
@@ -649,7 +664,7 @@ struct ChatDrawer: View {
             chat.startNewConversation()
             close()
         } label: {
-            Label("New chat", systemImage: "plus")
+            Label("New quick question", systemImage: "plus")
                 .font(.subheadline.weight(.semibold))
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)

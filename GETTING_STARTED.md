@@ -44,7 +44,7 @@ bun install
 bun run start
 ```
 
-Open [http://localhost:3456](http://localhost:3456), type "hello" to Main, and it should reply. You're done!
+Open [http://localhost:3456](http://localhost:3456), type "hello" to the CEO, and it should reply. You're done!
 
 > **First start is slower**: The Qwen3-Embedding-0.6B embedding model (~640 MB) downloads automatically on first launch. This is a one-time download that can take 5-30 minutes depending on your connection. The server starts and is usable while the download happens in the background.
 
@@ -95,13 +95,13 @@ Open Walnut uses AI in three places, and by default all three run on the Claude 
 
 | What | How it runs | How to authenticate |
 |---|---|---|
-| **Ask Walnut** (the Walnut agent, on the home page) | A long-lived `claude` session | Run `claude` once in your terminal and sign in |
+| **Quick question** (the Walnut agent, on the home page) | A long-lived `claude` session | Run `claude` once in your terminal and sign in |
 | **Coding sessions, routines, hook-dispatched agents** | Separate `claude` CLI processes | Same login |
 | **Background single calls** (titles, summaries, voice cleanup, quick parses) | One short model call each, no tools | Same login by default, or a provider key |
 
 Claude Code brings its own login, whatever kind it is: an Anthropic account, Bedrock (`CLAUDE_CODE_USE_BEDROCK=1` in `~/.claude/settings.json`), or Vertex. Walnut inherits it as-is and never asks for a key of its own. The first-run banner names what it found ("Walnut runs on your Claude Code, signed in with Bedrock (us-west-2)").
 
-Settings › Advanced › API provider is the one place this is chosen, and it means exactly one thing: where the background single calls go. Ask Walnut and every other session run on the default engine (Claude Code unless you pick another, see Path D) no matter what you pick here, so choosing a provider never changes who answers you in the chat: it changes which model writes your session titles, the compaction summaries, the voice transcript cleanup, and the small parses behind the draft forms. The paths below set up such a provider.
+Settings › Advanced › API provider is the one place this is chosen, and it means exactly one thing: where the background single calls go. Quick questions and every other session run on the default engine (Claude Code unless you pick another, see Path D) no matter what you pick here, so choosing a provider never changes who answers you in the chat: it changes which model writes your session titles, the compaction summaries, the voice transcript cleanup, and the small parses behind the draft forms. The paths below set up such a provider.
 
 ---
 
@@ -261,7 +261,7 @@ Leave `fast_model` out: quick background calls then use `main_model`. Do not set
 
 An OpenAI-compatible server (LM Studio, vLLM, llama.cpp) works the same way as `api: openai-chat` with its `base_url` (for example `http://localhost:1234/v1`) and no key.
 
-**3. A coding engine.** Coding sessions, Main and leads run on the default engine. Install one, point it at your model, check it once on its own, then make it the default:
+**3. A coding engine.** Coding sessions, the CEO and leads run on the default engine. Install one, point it at your model, check it once on its own, then make it the default:
 
 ```yaml
 defaults:
@@ -596,7 +596,7 @@ Or configure via the Settings page. Three schedule types:
 | `every` | `30m`, `2h`, `1d` | Recurring interval |
 | `cron` | `0 9 * * 1-5` (+ timezone) | Complex schedules (cron expression) |
 
-Each job picks an executor, and every executor that thinks runs a `claude` session: `main-agent` sends the instructions into your Ask Walnut conversation, `walnut-agent` starts a fresh Personal AI session of its own with its own task, and `claude-code` starts a coding session in a directory you name (local or on a remote host).
+Each job picks an executor, and every executor that thinks runs a `claude` session: `main-agent` sends the instructions into your Quick question conversation, `walnut-agent` starts a fresh Personal AI session of its own with its own task, and `claude-code` starts a coding session in a directory you name (local or on a remote host).
 
 ### Skills
 

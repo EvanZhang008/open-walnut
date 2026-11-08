@@ -20,6 +20,7 @@ export interface LiteralFields {
   title: string;
   project?: string;
   tags?: string[];
+  org_role?: string;
 }
 
 /**
@@ -34,16 +35,21 @@ export function foldWidth(text: string): string {
     (c === '\u3000' ? ' ' : String.fromCharCode(c.charCodeAt(0) - 0xfee0)));
 }
 
+export function taskMatchesCeoName(task: LiteralFields, lowerQuery: string): boolean {
+  const query = foldWidth(lowerQuery);
+  return task.org_role === 'main' && (query === 'ceo' || query === 'main');
+}
+
 /** The quick lane's test. `lowerQuery` is already trimmed and lowercased. */
 export function taskMatchesLiterally(task: LiteralFields, lowerQuery: string): boolean {
   const query = foldWidth(lowerQuery);
-  return task.title.toLowerCase().includes(query)
+  return taskMatchesCeoName(task, query) || task.title.toLowerCase().includes(query)
     || (task.project ?? '').toLowerCase().includes(query)
     || !!task.tags?.some((tag) => tag.toLowerCase().includes(query));
 }
 
 /** Server hits on an identifier answer exactly what was typed. */
-const REFERENCE_FIELDS = new Set(['id', 'session_id', 'commit_sha', 'external_url']);
+const REFERENCE_FIELDS = new Set(['id', 'session_id', 'commit_sha', 'external_url', 'org_name']);
 
 /** Lowercased whitespace-split terms; one-character terms are noise unless nothing else is left. */
 export function queryTerms(query: string): string[] {

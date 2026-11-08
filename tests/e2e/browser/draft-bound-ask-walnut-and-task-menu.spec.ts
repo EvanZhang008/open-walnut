@@ -101,9 +101,9 @@ test('task-row ▶ opens a bound draft WITH the Start Task / Ask Walnut fork, an
   // arrow is enabled on the EMPTY composer (an empty send uses the title).
   await askWalnutCard(page).click()
   await expect(askWalnutCard(page)).toHaveAttribute('aria-pressed', 'true')
-  await expect(panel.locator('.session-panel-title')).toHaveText('Ask Walnut')
+  await expect(panel.locator('.session-panel-title')).toHaveText('Quick question')
   await expect(panel.locator('.draft-bound-task')).toContainText(title)
-  await expect(panel.locator('.draft-quick-hint')).toContainText('Ask Walnut about this task')
+  await expect(panel.locator('.draft-quick-hint')).toContainText('Ask a quick question about this task')
   await expect(panel.locator('.draft-walnut-suggests')).toHaveCount(0)
   await expect(draftSend(panel)).toBeEnabled()
   // Walnut mode has no folder/project pills (the server owns both) — and the
@@ -116,7 +116,7 @@ test('task-row ▶ opens a bound draft WITH the Start Task / Ask Walnut fork, an
   await expect(panel.locator('.session-panel-title')).toHaveText('New Session')
   await expect(panel.locator('.draft-bound-task')).toContainText(title)
   await askWalnutCard(page).click()
-  await expect(panel.locator('.session-panel-title')).toHaveText('Ask Walnut')
+  await expect(panel.locator('.session-panel-title')).toHaveText('Quick question')
 
   const launch = page.waitForRequest((req) => req.method() === 'POST' && isQuickStart(req.url()))
   await draftSend(panel).click()
@@ -306,7 +306,7 @@ test('the Ask Walnut tab gets a More-only row that never parses; Fix Walnut and 
 
   const panel = await openDraft(page)
   await askWalnutCard(page).click()
-  await expect(panel.locator('.session-panel-title')).toHaveText('Ask Walnut')
+  await expect(panel.locator('.session-panel-title')).toHaveText('Quick question')
   // C1 on the tab: still no header settings button.
   await expect(panel.locator('.session-panel-header .draft-task-menu-btn')).toHaveCount(0)
   await expect(panel.locator('.session-panel-header button[aria-label="Task settings"]')).toHaveCount(0)

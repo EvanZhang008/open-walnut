@@ -36,6 +36,7 @@ import { log } from '@/utils/log';
 import { useShowPriority } from '@/hooks/useShowPriority';
 import { STATUS_OPTIONS } from './TaskStatusControl';
 import { STATUS_FILTER_ORDER, foldQueryStatus, statusChipLabel } from './filter-bar-model';
+import { projectDisplayName } from '@/utils/project-display';
 import {
   QUERY_PRIORITY_OPTIONS,
   QUERY_SORT_OPTIONS,
@@ -408,7 +409,7 @@ function SectionDetail(props: {
       {id === 'q-project' && (
         <ChipGroup label="Project"
           // '' is a real selectable value (the Inbox bucket): it needs a label.
-          options={props.projectOptions.map((p) => ({ value: p, label: p === '' ? 'Inbox' : p }))}
+          options={props.projectOptions.map((p) => ({ value: p, label: projectDisplayName(p) }))}
           selected={query.projects}
           onToggle={(v) => patchQuery({ projects: toggleQueryValue(query.projects, v) })} />
       )}

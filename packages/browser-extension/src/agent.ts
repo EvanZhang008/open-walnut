@@ -416,7 +416,7 @@ async function report(): Promise<Array<{ id: number; owner: string; grant?: stri
 
 let running = false
 
-/** Ask Walnut for work while agents are on and the extension is connected. */
+/** Poll Walnut for work while agents are on and the extension is connected. */
 export async function agentLoop(): Promise<void> {
   if (running) return
   running = true

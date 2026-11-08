@@ -483,8 +483,8 @@ function makeMenus(): void {
   const done = () => void (globalThis as { chrome?: { runtime?: { lastError?: unknown } } }).chrome?.runtime?.lastError
   void Promise.resolve(ext.contextMenus.removeAll()).then(() => {
     ext.contextMenus!.create({ id: 'walnut-fill', title: 'Fill with Walnut', contexts: ['editable'] }, done)
-    ext.contextMenus!.create({ id: 'walnut-ask-selection', title: 'Ask Walnut about "%s"', contexts: ['selection'] }, done)
-    ext.contextMenus!.create({ id: 'walnut-ask-page', title: 'Ask Walnut about this page', contexts: ['page'] }, done)
+    ext.contextMenus!.create({ id: 'walnut-ask-selection', title: 'Quick question about "%s"', contexts: ['selection'] }, done)
+    ext.contextMenus!.create({ id: 'walnut-ask-page', title: 'Quick question about this page', contexts: ['page'] }, done)
   }).catch(() => undefined)
 }
 makeMenus()

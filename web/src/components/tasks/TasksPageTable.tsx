@@ -33,6 +33,8 @@ import { visibleInterval } from '@/utils/page-visibility';
 import * as ICONS from '../common/Icons';
 import '@/styles/walnut-agent.css';
 import { openTaskOnHome } from '@/utils/open-session';
+import { projectDisplayName } from '@/utils/project-display';
+import { orgDisplayTitle } from '@open-walnut/org-tree';
 
 interface TasksPageTableProps {
   tasks: Task[];
@@ -252,7 +254,7 @@ function ProjectCell({ task, sourceByName, projectNames, onUpdate }: {
       >
         <span className="tp-proj-pill">
           {project ? '📁' : '📥'}
-          <span className="tp-proj-name">{project || 'Inbox'}</span>
+          <span className="tp-proj-name">{projectDisplayName(project)}</span>
           <ProjectSourceBadge source={project ? sourceByName.get(project.toLowerCase()) : undefined} />
         </span>
       </button>
@@ -285,7 +287,7 @@ function ProjectCell({ task, sourceByName, projectNames, onUpdate }: {
               className={`tp-pri-opt${project === name ? ' active' : ''}`}
               onClick={() => pick(name)}
             >
-              📁 {name}
+              📁 {projectDisplayName(name)}
             </button>
           ))}
           {q && shown.length === 0 && <div className="tp-proj-empty">No matching project</div>}
@@ -447,7 +449,7 @@ export function TasksPageTable({
   };
 
   const confirmDelete = useCallback(async (task: Task) => {
-    if (await confirm({ title: `Delete task “${task.title}”?`, message: 'This cannot be undone.', confirmLabel: 'Delete', danger: true })) {
+    if (await confirm({ title: `Delete task “${orgDisplayTitle(task)}”?`, message: 'This cannot be undone.', confirmLabel: 'Delete', danger: true })) {
       onDelete(task.id);
     }
   }, [confirm, onDelete]);
@@ -476,8 +478,8 @@ export function TasksPageTable({
 
   const ghostRow = (project: string | undefined, keySuffix: string) => {
     const scopeLabel = project === undefined
-      ? (isAll || activeProject === '' ? 'Inbox' : activeProject)
-      : (project || 'Inbox');
+      ? (isAll || activeProject === '' ? 'Inbox' : projectDisplayName(activeProject))
+      : projectDisplayName(project);
     const ghostKey = `ghost:${keySuffix}`;
     const editing = addingIn === ghostKey;
     return (
@@ -526,7 +528,7 @@ export function TasksPageTable({
             className={`tp-row-title${t.walnut_agent ? ' walnut-task-title' : ''}`}
             onClick={() => openTask(t.id)}
           >
-            {t.title}
+            {orgDisplayTitle(t)}
           </button>
           <SyncIndicator task={t as TaskListProjection} />
           {/* hover quick actions — delete / kebab. Session opens via its pill. */}
@@ -646,7 +648,7 @@ export function TasksPageTable({
           >
             <span className="tp-group-chevron">▾</span>
             <span className="tp-group-icon">{project ? '📁' : '📥'}</span>
-            <span className="tp-group-name">{project || 'Inbox'}</span>
+            <span className="tp-group-name">{projectDisplayName(project)}</span>
             {project && <ProjectSourceBadge source={sourceByName.get(project.toLowerCase())} />}
             <span className="tp-group-count">{groupTasks.length}</span>
             {/* One-click "+" → a draft session in this project, the same control (and

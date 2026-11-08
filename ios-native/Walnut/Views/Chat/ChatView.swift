@@ -340,7 +340,8 @@ struct ChatView: View {
             let now = ISO8601DateFormatter().string(from: Date())
             openedAskSession = WalnutSession(
                 id: created.sessionId, title: created.title, taskId: created.taskId,
-                taskTitle: ask.title, project: nil, host: "",
+                taskTitle: ask.title,
+                project: AskProjectName.storedProject(agentID: chat.activeAgentID, agentName: chat.activeAgent?.name), host: "",
                 processStatus: "idle", model: nil, mode: nil,
                 startedAt: now, lastActiveAt: now, messageCount: 0,
                 cwd: nil, pinned: nil, focusTier: nil, description: nil
@@ -766,6 +767,9 @@ struct ChatView: View {
     /// The active conversation's title, when it has one (`ChatStore.barTitle`).
     private var conversationTitle: String? {
         ChatStore.barTitle(conversationID: chat.activeID, conversations: chat.conversations, asks: chat.asks)
+            // An ask on its placeholder ("Ask Walnut") reads as a quick question.
+            .map { AskProjectName.displayTitle($0, project: AskProjectName.storedProject(
+                agentID: chat.activeAgentID, agentName: chat.activeAgent?.name)) }
     }
 }
 

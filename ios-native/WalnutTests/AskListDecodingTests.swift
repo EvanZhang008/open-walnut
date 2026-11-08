@@ -43,8 +43,7 @@ final class AskListDecodingTests: XCTestCase {
             "ask-moved", "ask-tie-a", "ask-tie-b", "ask-reading",
         ])
         XCTAssertEqual(list.asks.map(\.state), [.running, .idle, .todo, .idle, .idle, .idle, .idle, .done])
-        // The untitled ask reads as its agent's project, as on the Mac.
-        XCTAssertEqual(list.asks[3].title, "Ask Walnut")
+        XCTAssertEqual(list.asks[3].title, "Quick question")
         // Mixed script survives the round trip (U+7814 U+7A76, "research").
         XCTAssertEqual(list.asks[4].title, "Garden \u{7814}\u{7A76} notes")
         // No session yet: no session id to open.

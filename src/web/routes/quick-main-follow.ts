@@ -123,7 +123,7 @@ export function followMainReply(
         // A result of a turn older than the one that took the message is an earlier turn's.
         if (gen !== undefined && typeof d.turnGen === 'number' && d.turnGen < gen) return
         if (d.isError === true) {
-          finish({ type: 'error', code: 'turn_failed', message: typeof d.result === 'string' && d.result ? d.result : 'Main\'s turn failed' })
+          finish({ type: 'error', code: 'turn_failed', message: typeof d.result === 'string' && d.result ? d.result : 'CEO\'s turn failed' })
           return
         }
         if (held) return
@@ -140,7 +140,7 @@ export function followMainReply(
       }
       case EventNames.SESSION_ERROR: {
         if (!delivered) return
-        finish({ type: 'error', code: 'session_error', message: typeof d.error === 'string' ? d.error : 'Main\'s session failed' })
+        finish({ type: 'error', code: 'session_error', message: typeof d.error === 'string' ? d.error : 'CEO\'s session failed' })
         return
       }
     }

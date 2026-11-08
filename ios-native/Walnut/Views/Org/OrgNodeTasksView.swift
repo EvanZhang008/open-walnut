@@ -154,7 +154,7 @@ struct OrgTaskRow: View {
                 .frame(width: 8, height: 8)
                 .padding(.top, 6)
             VStack(alignment: .leading, spacing: 3) {
-                Text(task.title)
+                Text(AskProjectName.displayTitle(task.title, project: task.project, orgRole: task.orgRole))
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.primary)
                     .lineLimit(2)

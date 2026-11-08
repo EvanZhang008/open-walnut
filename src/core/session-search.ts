@@ -5,6 +5,7 @@
  * and reusable by any list surface.
  */
 import type { SessionRecord } from './types.js';
+import { orgDisplayTitle } from './org/org-tree.js';
 
 /** Resolve a session's owning-task title; return undefined when unknown. */
 export type TaskTitleLookup = (taskId: string) => string | undefined;
@@ -13,6 +14,14 @@ export type TaskTitleLookup = (taskId: string) => string | undefined;
  *  Needed because persisted session records carry only the alias — the
  *  `hostname` field is display-time enrichment that happens AFTER filtering. */
 export type HostnameLookup = (hostAlias: string) => string | undefined;
+
+/** The owning task's names a session search matches: its stored title and the name it shows
+ *  (an ask's placeholder reads Quick question, the main task CEO, which "main" still finds). */
+export function sessionSearchTaskName(task: { title: string; project?: string; org_role?: string; org_name?: string }): string {
+  const names = new Set([task.title, orgDisplayTitle(task)]);
+  if (task.org_role === 'main') names.add('Main');
+  return [...names].filter(Boolean).join('\n');
+}
 
 /** Partial: list rows from other surfaces may omit any of these fields. */
 type SearchableSession = Partial<Pick<SessionRecord, 'title' | 'taskId' | 'cwd' | 'host' | 'hostname'>>;

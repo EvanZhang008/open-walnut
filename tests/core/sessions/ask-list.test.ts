@@ -16,7 +16,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   ASK_WALNUT_PROJECT, GENERAL_AGENT_ID,
-  askActivityAt, askProjectFor, askSessionId, askState, askTitle, buildAskList,
+  askActivityAt, askProjectDisplay, askProjectFor, askSessionId, askState, askTitle, buildAskList,
   compareAsks, holdOrder, isAskOf, matchesAskQuery, nextHeldOrder, printedStamp, selectAsks, toAskRow,
   type AskTaskLike, type HeldOrder, type HeldRowView, type PrintedStamp,
 } from '../../../src/core/sessions/ask-list.js'
@@ -42,6 +42,26 @@ function ask(id: string, over: Partial<AskTaskLike> = {}): AskTaskLike {
 }
 
 const ids = (rows: readonly { id: string }[]) => rows.map((r) => r.id)
+
+describe('quick question display names keep stored projects intact', () => {
+  it.each([
+    ['Ask Walnut', 'Quick question'], [' ask walnut ', 'Quick question'],
+    ['Ask Mentor', 'Quick question · Mentor'], ['Ask Note Assistant', 'Quick question · Note Assistant'],
+    ['Roadmap', 'Roadmap'], ['', ''],
+  ])('displays %s as %s', (stored, shown) => {
+    expect(askProjectDisplay(stored)).toBe(shown);
+  });
+
+  it('keeps old projects as the membership and launch keys', () => {
+    expect(askProjectFor({ id: GENERAL_AGENT_ID, name: 'Walnut' })).toBe('Ask Walnut');
+    expect(isAskOf(ask('old'), WALNUT)).toBe(true);
+    expect(askTitle(ask('untitled', { title: '' }), WALNUT)).toBe('Quick question');
+    expect(askTitle(ask('placeholder', { title: 'Ask Walnut' }), WALNUT)).toBe('Quick question');
+    expect(askTitle(ask('mixed-case', { title: '  ASK WALNUT  ' }), WALNUT)).toBe('Quick question');
+    expect(askTitle(ask('user-title', { title: 'Ask Bob about the lease' }), WALNUT)).toBe('Ask Bob about the lease');
+    expect(askTitle(ask('mentor-placeholder', { title: 'Ask Mentor' }), MENTOR)).toBe('Quick question · Mentor');
+  });
+});
 
 describe('membership: several agents', () => {
   const tasks = [
@@ -192,8 +212,8 @@ describe('60+ asks, mixed-script titles, search', () => {
 
   it('an untitled ask reads as the agent project', () => {
     const { asks } = buildAskList(many, WALNUT)
-    expect(asks.filter((r) => r.title === ASK_WALNUT_PROJECT).length).toBeGreaterThan(0)
-    expect(askTitle(ask('u', { title: '   ' }), MENTOR)).toBe('Ask Mentor')
+    expect(asks.filter((r) => r.title === 'Quick question').length).toBeGreaterThan(0)
+    expect(askTitle(ask('u', { title: '   ' }), MENTOR)).toBe('Quick question · Mentor')
   })
 
   it('limit caps the rows but total still says how many matched', () => {

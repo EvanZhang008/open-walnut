@@ -17,39 +17,49 @@ struct TaskProjectPicker: View {
 
     var body: some View {
         NavigationStack {
-            // A vault has dozens of projects and the list is alphabetical, so the
-            // current one is usually off screen. Scrolled to on appear: opening a
-            // picker that does not show what is selected is the same "where am I"
-            // problem the chips had.
-            ScrollViewReader { scroll in
-                List {
-                    Section {
-                        row(name: "", label: NewTaskSeed.inboxHeader, icon: "tray")
-                    }
-                    Section {
-                        ForEach(matches, id: \.self) { name in
-                            row(name: name, label: name, icon: "folder")
-                        }
-                        if let newName {
-                            Button {
-                                pick(newName)
-                            } label: {
-                                Label("Create \"\(newName)\"", systemImage: "plus.circle")
-                                    .font(.body)
-                                    .foregroundStyle(Theme.tint)
-                            }
-                            .accessibilityIdentifier("task.project.create")
-                        }
-                    } header: {
-                        Text(matches.isEmpty && newName == nil ? "No projects yet" : "Projects")
-                    }
+            VStack(spacing: 0) {
+                HStack {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                    TextField("Search or new project name", text: $query)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .accessibilityIdentifier("task.project.search")
                 }
-                .onAppear {
-                    guard !current.isEmpty else { return }
-                    scroll.scrollTo(current, anchor: .center)
+                .padding(12)
+                .background(.background, in: RoundedRectangle(cornerRadius: 12))
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(.bar)
+                ScrollViewReader { scroll in
+                    List {
+                        Section {
+                            row(name: "", label: NewTaskSeed.inboxHeader, icon: "tray")
+                        }
+                        Section {
+                            ForEach(matches, id: \.self) { name in
+                                row(name: name, label: AskProjectName.display(name), icon: "folder")
+                            }
+                            if let newName {
+                                Button {
+                                    pick(newName)
+                                } label: {
+                                    Label("Create \"\(newName)\"", systemImage: "plus.circle")
+                                        .font(.body)
+                                        .foregroundStyle(Theme.tint)
+                                }
+                                .accessibilityIdentifier("task.project.create")
+                            }
+                        } header: {
+                            Text(matches.isEmpty && newName == nil ? "No projects yet" : "Projects")
+                        }
+                    }
+                    .onAppear {
+                        guard !current.isEmpty else { return }
+                        scroll.scrollTo(current, anchor: .center)
+                    }
                 }
             }
-            .searchable(text: $query, prompt: "Search or new project name")
             .navigationTitle("Project")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -105,14 +115,20 @@ struct TaskProjectPicker: View {
     private var matches: [String] {
         let trimmed = query.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return projectNames }
-        return projectNames.filter { $0.localizedCaseInsensitiveContains(trimmed) }
+        return projectNames.filter {
+            $0.localizedCaseInsensitiveContains(trimmed)
+                || AskProjectName.display($0).localizedCaseInsensitiveContains(trimmed)
+        }
     }
 
     /// The search text as a NEW project name, when it is not already one.
     private var newName: String? {
         let trimmed = query.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty,
-              !projectNames.contains(where: { $0.localizedCaseInsensitiveCompare(trimmed) == .orderedSame }),
+              !projectNames.contains(where: {
+                  $0.localizedCaseInsensitiveCompare(trimmed) == .orderedSame
+                      || AskProjectName.display($0).localizedCaseInsensitiveCompare(trimmed) == .orderedSame
+              }),
               trimmed.localizedCaseInsensitiveCompare(NewTaskSeed.inboxHeader) != .orderedSame
         else { return nil }
         return trimmed

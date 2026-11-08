@@ -1858,7 +1858,8 @@ enum BoardModel {
             count: bands.reduce(0) { $0 + $1.count }
         )]
         chips.append(contentsOf: bands.map {
-            BandChip(bandId: $0.bandId, label: $0.label, count: $0.count)
+            // A chip is read, never sent: an ask project's chip says "Quick question".
+            BandChip(bandId: $0.bandId, label: AskProjectName.display($0.label), count: $0.count)
         })
         return chips
     }

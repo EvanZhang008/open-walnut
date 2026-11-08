@@ -6,6 +6,7 @@ import {
   queryTerms,
   serverRowShowsQuery,
   taskMatchesLiterally,
+  taskMatchesCeoName,
 } from '../../web/src/components/tasks/search-relevance';
 import { foldWidth as serverFoldWidth } from '../../src/lib/hybrid-search/tokenizer';
 
@@ -16,6 +17,19 @@ const FW_IOS_18 = '\uff49\uff2f\uff33\u3000\uff11\uff18';
 const row = (id: string) => ({ id });
 
 describe('taskMatchesLiterally', () => {
+  it('finds the CEO by its current and legacy role names before the server answers', () => {
+    for (const title of ['CEO', 'Main', 'My coordinator']) {
+      for (const query of ['ceo', 'main', String.fromCodePoint(0xff43, 0xff45, 0xff4f)]) {
+        expect(taskMatchesLiterally({ title, org_role: 'main' }, query)).toBe(true);
+        expect(taskMatchesCeoName({ title, org_role: 'main' }, query)).toBe(true);
+      }
+    }
+    for (const query of ['cei', 'ceo notes', 'main review', 'coordinator']) {
+      expect(taskMatchesCeoName({ title: 'CEO', org_role: 'main' }, query)).toBe(false);
+    }
+    expect(taskMatchesCeoName({ title: 'Main', org_role: 'lead' }, 'main')).toBe(false);
+    expect(taskMatchesCeoName({ title: 'CEO' }, 'ceo')).toBe(false);
+  });
   it('matches a substring of the title, project or a tag, case-insensitively', () => {
     expect(taskMatchesLiterally({ title: 'Release Gate QX2 review' }, 'qx2')).toBe(true);
     expect(taskMatchesLiterally({ title: 'Plain', project: 'Marina QX2' }, 'qx2')).toBe(true);
@@ -68,7 +82,7 @@ describe('serverRowShowsQuery', () => {
     expect(serverRowShowsQuery({ title: 'anything' }, [])).toBe(false);
   });
   it('treats an identifier hit as evidence whatever its text', () => {
-    for (const matchField of ['id', 'session_id', 'commit_sha', 'external_url']) {
+    for (const matchField of ['id', 'session_id', 'commit_sha', 'external_url', 'org_name']) {
       expect(serverRowShowsQuery({ title: 'Unrelated', matchField }, ['abc123'])).toBe(true);
     }
     expect(serverRowShowsQuery({ title: 'Unrelated', matchField: 'child' }, ['abc123'])).toBe(false);
@@ -112,6 +126,27 @@ describe('arrangeSearchResults', () => {
   };
   const ids = (list: { id: string }[]) => list.map((t) => t.id);
   const ranked = ['ld05', 'lo1', 'sd07', 'so2', 'sd08x', 'so3x', 'lo4'].map(row);
+
+  it('keeps the exact CEO role hit first among dense literal and completed matches', () => {
+    for (const query of ['ceo', 'main']) {
+      const ceo = { id: 'coordinator', title: 'CEO', org_role: 'main', done: false };
+      const noisy = Array.from({ length: 60 }, (_, i) => ({ id: String(i), title: `${query} notes ${i}`, org_role: '', done: i % 2 === 0 }));
+      const metadata = [...noisy, ceo].filter(t => taskMatchesLiterally(t, query))
+        .sort((a, b) => Number(taskMatchesCeoName(b, query)) - Number(taskMatchesCeoName(a, query)));
+      for (const includeDone of [false, true]) {
+        const split = arrangeSearchResults(metadata, {
+          isOpen: t => !t.done,
+          isLiteral: t => taskMatchesLiterally(t, query),
+          showsQuery: () => true,
+          titlePosition: t => t.title.toLowerCase().indexOf(query),
+          completedAt: () => undefined,
+        }, includeDone);
+        expect(split.primary[0].id).toBe(ceo.id);
+        expect(split.primary.filter(t => t.id === ceo.id)).toHaveLength(1);
+        expect(split.primary.length + split.completed.length).toBe(61);
+      }
+    }
+  });
 
   it('shows open literal hits, then completed title hits, then open server hits; folds the rest', () => {
     const { primary, completed, related, looseDone } = arrangeSearchResults(ranked, facts, false);

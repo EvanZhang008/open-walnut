@@ -64,7 +64,7 @@ test('with no plugins installed the sidebar carries no app entries', async ({ pa
 
   const labels = (await page.locator('.sidebar-nav .sidebar-link').allTextContents()).map((t) => t.trim())
   expect(labels).toEqual([
-    'Home', 'Task panel', 'Ask Walnut', 'Agenda', 'Scratchpad', 'Notes', 'Calendar', 'Mail', 'Tasks', 'Routines', 'Settings',
+    'Home', 'Task panel', 'Quick question', 'Agenda', 'Scratchpad', 'Notes', 'Calendar', 'Mail', 'Tasks', 'Routines', 'Settings',
   ])
 
   // Settings lists no Apps at all (they live on the Sidebar or the Apps page), so zero

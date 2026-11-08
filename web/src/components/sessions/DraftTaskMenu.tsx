@@ -36,6 +36,7 @@ import { createPortal } from 'react-dom';
 import type { TaskPriority } from '@open-walnut/core';
 import { KebabDateRow, ProjectPickerFlyout, TaskActionMenuItems } from '@/components/tasks/TaskKebabMenu';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { projectDisplayName } from '@/utils/project-display';
 import type { QuickStartTaskMeta } from './SessionPathSelector';
 import type { DraftTaskField, DraftTaskFieldPatch } from './draft-column';
 import { formatDraftDate } from './draft-decisions';
@@ -266,7 +267,7 @@ function ProjectSection({ project, onDone }: { project: DraftMenuProject; onDone
           aria-expanded={open}
           onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
         >
-          <span className="task-kebab-project-current-name">{project.value || 'Inbox'}</span>
+          <span className="task-kebab-project-current-name">{projectDisplayName(project.value)}</span>
           {project.isNew && <span className="qtc-confirm-new">new</span>}
           <span className="task-kebab-project-caret">▾</span>
         </button>

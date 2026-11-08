@@ -26,6 +26,8 @@ import { PhoneRowExtras } from './PhoneRowExtras';
 import { PhoneTierEmpty } from './PhoneTierEmpty';
 import { TaskTagPills } from './TaskTagPills';
 import * as ICONS from '../common/Icons';
+import { projectDisplayName } from '@/utils/project-display';
+import { orgDisplayTitle } from '@open-walnut/org-tree';
 
 
 // The sentinel id scheme (`group:<gid>:<tier>`) and its helpers live in
@@ -189,7 +191,7 @@ export function GroupChip({ groupId, tier, label, path, leafId, project, showPro
           className="task-group-chip-project"
           style={{ color: 'var(--fg-muted)', fontWeight: 400, whiteSpace: 'nowrap' }}
         >
-          {project || 'Inbox'}&nbsp;/
+          {projectDisplayName(project)}&nbsp;/
         </span>
       )}
       {path && path.length > 0 ? (
@@ -439,10 +441,10 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
       <span
         {...titleProps}
         className={`todo-pinned-title${isEditing ? ' editing' : ''}${task.walnut_agent ? ' walnut-task-title' : ''}`}
-        title={task.title}
+        title={orgDisplayTitle(task)}
         onClick={isEditing ? (e) => e.stopPropagation() : undefined}
       >
-        {task.title}
+        {orgDisplayTitle(task)}
       </span>
       {/* The task's own tags, as on a list row. */}
       <TaskTagPills task={task} />

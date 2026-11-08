@@ -1,7 +1,7 @@
 /**
  * Quick Answer: type anything in Raycast's root search and send it here (set this command as a
  * fallback command), or open it and type. Quick answers come from the model alone; Cmd+T hands
- * the chat to Ask Walnut, a normal Claude Code session in Walnut.
+ * the chat to Quick Question, a normal Claude Code session in Walnut.
  */
 import { LaunchProps } from "@raycast/api";
 import { Conversation } from "./conversation";

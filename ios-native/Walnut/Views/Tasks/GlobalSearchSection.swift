@@ -428,6 +428,11 @@ struct GlobalSearchSection: View {
 
     @ViewBuilder
     private func resultRow(_ result: GlobalSearchResult) -> some View {
+        let task = result.ownerTaskId.flatMap { id in
+            storeTasks.first { $0.id == id } ?? search.answer(for: query)?.tasks?.first { $0.id == id }
+        }
+        let rawTitle = result.type == "task" ? task?.title ?? result.title : result.title
+        let title = AskProjectName.displayTitle(rawTitle, project: task?.project, orgRole: task?.orgRole)
         let row = VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
                 Image(systemName: Self.icon(for: result.type))
@@ -447,7 +452,7 @@ struct GlobalSearchSection: View {
                     .accessibilityHidden(true)
                     .accessibilityRemoveTraits(.isSelected)
                     .accessibilityLabel(Text(verbatim: ""))
-                Text(result.title)
+                Text(title)
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.primary)
                     .lineLimit(1)

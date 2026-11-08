@@ -23,7 +23,7 @@ import {
   pickMain, pickOwnLead, planOrgNote, projectKey, successorOf, vpTaskTitle, type OrgAlert, type OrgDigestState, type OrgTaskLike, type OrgTree,
 } from './org-tree.js';
 
-export const MAIN_TASK_TITLE = 'Main';
+export const MAIN_TASK_TITLE = 'CEO';
 
 const kit = createEnvelopeKit();
 
@@ -66,12 +66,17 @@ export async function getOrgTree(): Promise<OrgTree> {
 /** The main agent's task, made on first use. Never more than one. */
 export function ensureMainTask(): Promise<Task> {
   return serial(async () => {
-    const { addTask, getTask } = await import('../task-manager.js');
+    const { addTask, getTask, updateTask, updateTaskRaw } = await import('../task-manager.js');
     const existing = pickMain(await orgTasks());
     if (existing) {
+      if (existing.title === 'Main') {
+        const { changed, task } = await updateTaskRaw(existing.id,
+          (cur) => cur.org_role === 'main' && cur.title === 'Main' ? { title: MAIN_TASK_TITLE } : null,
+          { source: 'internal' });
+        if (changed && task) bus.emit(EventNames.TASK_UPDATED, { task }, ['web-ui'], { source: 'org' });
+      }
       // A Main parked by an older build comes back onto the list (main-stays-active.ts).
       if (existing.phase === 'WAITING') {
-        const { updateTask } = await import('../task-manager.js');
         await updateTask(existing.id, { phase: 'IN_PROGRESS' }, { source: 'internal' })
           .catch((err) => log.task.warn('org: parked main agent not restored', { taskId: existing.id, error: err instanceof Error ? err.message : String(err) }));
       }
@@ -675,7 +680,7 @@ export function buildDigestText(
     + needs + stopped + moved + `${how} Detail: org_get, or ask that project's lead.`;
   return kit.buildWalnutMessage({
     kind: 'notification',
-    attrs: { from: 'Walnut', about: kit.sessionHandle(mainTask.title, undefined) || 'Main', 'about-task': mainTask.id, outcome: 'org-update', note: 'automated Walnut status notice' },
+    attrs: { from: 'Walnut', about: kit.sessionHandle(mainTask.title, undefined) || MAIN_TASK_TITLE, 'about-task': mainTask.id, outcome: 'org-update', note: 'automated Walnut status notice' },
     body,
   });
 }

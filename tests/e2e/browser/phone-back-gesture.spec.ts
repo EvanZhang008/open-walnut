@@ -135,7 +135,7 @@ test('a home panel from the drawer on another page leaves no stale drawer entry 
   await drawer(page).getByRole('link', { name: 'Settings' }).click()
   await expect(page).toHaveURL(/\/settings/)
   await openDrawer(page)
-  await drawer(page).getByRole('button', { name: 'Ask Walnut', exact: true }).click()
+  await drawer(page).getByRole('button', { name: 'Quick question', exact: true }).click()
   // The chat is a home layer: the drawer's entry became home, the chat pushed one.
   await expect(backButton(page)).toBeVisible({ timeout: 15_000 })
   await expect(page).toHaveURL(/\/$/)
@@ -167,7 +167,7 @@ test('on a slow phone, the drawer opened before Settings is drawn stays open and
     await drawer(page).getByRole('link', { name: 'Settings' }).click()
     await expect(page).toHaveURL(/\/settings/)
     await openDrawer(page)
-    await drawer(page).getByRole('button', { name: 'Ask Walnut', exact: true }).click()
+    await drawer(page).getByRole('button', { name: 'Quick question', exact: true }).click()
     await expect(backButton(page)).toBeVisible({ timeout: 30_000 })
     await expect(page).toHaveURL(/\/$/)
     expect((await historyInfo(page)).marker?.id).toBe('chat')

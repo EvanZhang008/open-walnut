@@ -1,305 +1,315 @@
 {
   "backend": "v2",
-  "generatedAt": "2026-11-01T01:00:01.408Z",
+  "generatedAt": "2026-11-07T12:25:50.692Z",
   "aggregate": {
-    "queries": 93,
-    "passed": 62,
-    "recall10": 0.6829268292682927,
-    "mrr": 0.529,
-    "top1": 0.7857142857142857,
-    "p50LatencyMs": 55,
-    "p90LatencyMs": 193
+    "queries": 95,
+    "passed": 58,
+    "recall10": 0.6585365853658537,
+    "mrr": 0.5441,
+    "top1": 0.6875,
+    "p50LatencyMs": 65,
+    "p90LatencyMs": 248
   },
   "perQuery": {
     "ident-task-ref": {
       "pass": true,
       "rank": null,
-      "ms": 1
+      "ms": 6
     },
     "ident-cr-number": {
       "pass": true,
       "rank": null,
-      "ms": 11
+      "ms": 2
     },
     "ident-commit-sha-prefix": {
       "pass": true,
       "rank": 1,
-      "ms": 15
+      "ms": 1
     },
     "ident-url": {
       "pass": true,
       "rank": null,
-      "ms": 34
+      "ms": 9
     },
     "camel-kind-reconciler": {
       "pass": true,
       "rank": 1,
-      "ms": 38
+      "ms": 15
     },
     "camel-exact-component": {
       "pass": true,
       "rank": 1,
-      "ms": 2
+      "ms": 25
     },
     "camel-kebab-channel": {
       "pass": true,
       "rank": 1,
-      "ms": 3
+      "ms": 6
     },
     "camel-kebab-exact": {
       "pass": true,
       "rank": null,
-      "ms": 0
+      "ms": 2
     },
     "camel-http-subwords": {
       "pass": true,
       "rank": 1,
-      "ms": 3
+      "ms": 7
     },
     "cjk-search-index": {
       "pass": true,
       "rank": 1,
-      "ms": 0
+      "ms": 2
     },
     "cjk-timeout-retry": {
       "pass": true,
       "rank": 2,
-      "ms": 0
+      "ms": 3
     },
     "cjk-phrase-order": {
       "pass": true,
       "rank": 1,
-      "ms": 0
+      "ms": 1
     },
     "cjk-deploy-order": {
       "pass": true,
       "rank": 1,
-      "ms": 0
+      "ms": 1
     },
     "mixed-timeout-retry": {
       "pass": true,
       "rank": 1,
-      "ms": 2
+      "ms": 5
     },
     "mixed-title-partial": {
       "pass": true,
       "rank": 1,
-      "ms": 2
+      "ms": 9
     },
     "para-dropped-events": {
       "pass": true,
       "rank": 1,
-      "ms": 8
+      "ms": 53
     },
     "para-key-rotation": {
       "pass": true,
       "rank": 1,
-      "ms": 5
+      "ms": 70
     },
     "trap-coverage-long-doc": {
       "pass": true,
       "rank": null,
-      "ms": 2
+      "ms": 11
     },
     "trap-recency-tiebreak": {
       "pass": true,
       "rank": null,
-      "ms": 4
+      "ms": 12
     },
     "junk-echo-excluded": {
       "pass": true,
       "rank": null,
-      "ms": 3
+      "ms": 6
     },
     "body-density-outranks-bare-title": {
       "pass": true,
       "rank": 1,
-      "ms": 3
+      "ms": 11
     },
     "body-tail-term-reachable": {
       "pass": true,
       "rank": 1,
-      "ms": 3
+      "ms": 10
     },
     "cjk-long-body": {
       "pass": true,
       "rank": 1,
-      "ms": 0
+      "ms": 1
     },
-    "ident-task-id-exact": {
+    "org-name-current": {
       "pass": false,
       "rank": null,
-      "ms": 1677
+      "ms": 20
+    },
+    "org-name-legacy": {
+      "pass": false,
+      "rank": null,
+      "ms": 184
+    },
+    "ident-task-id-exact": {
+      "pass": true,
+      "rank": null,
+      "ms": 54
     },
     "ident-task-id-prefix": {
       "pass": true,
       "rank": 1,
-      "ms": 80
+      "ms": 46
     },
     "ident-commit-sha-full": {
       "pass": false,
       "rank": null,
-      "ms": 868
+      "ms": 285
     },
     "ident-commit-sha-prefix-live": {
       "pass": false,
       "rank": null,
-      "ms": 224
+      "ms": 128
     },
     "ident-cr-number-live": {
-      "pass": false,
-      "rank": 1,
-      "ms": 274
-    },
-    "gvr-reconciler-failure": {
-      "pass": true,
-      "rank": 2,
-      "ms": 193
-    },
-    "camel-component-exact": {
-      "pass": true,
-      "rank": 10,
-      "ms": 60
-    },
-    "camel-component-subwords": {
-      "pass": true,
-      "rank": 1,
-      "ms": 108
-    },
-    "camel-kebab-channel-live": {
-      "pass": true,
-      "rank": 7,
-      "ms": 115
-    },
-    "camel-kebab-subwords": {
-      "pass": true,
-      "rank": 8,
-      "ms": 173
-    },
-    "cjk-search-index-fix": {
-      "pass": true,
-      "rank": 1,
-      "ms": 140
-    },
-    "cjk-search-quality": {
-      "pass": true,
-      "rank": 1,
-      "ms": 42
-    },
-    "cjk-orphan-pods": {
-      "pass": true,
-      "rank": 1,
-      "ms": 96
-    },
-    "cjk-calendar-view": {
-      "pass": false,
-      "rank": 1,
-      "ms": 253
-    },
-    "mixed-timeout-retry-live": {
-      "pass": true,
-      "rank": 1,
-      "ms": 175
-    },
-    "mixed-qmd-quality": {
       "pass": true,
       "rank": 1,
       "ms": 22
     },
-    "mixed-reconciler-timeout": {
+    "gvr-reconciler-failure": {
+      "pass": true,
+      "rank": 2,
+      "ms": 92
+    },
+    "camel-component-exact": {
+      "pass": false,
+      "rank": null,
+      "ms": 26
+    },
+    "camel-component-subwords": {
       "pass": true,
       "rank": 1,
-      "ms": 76
+      "ms": 122
     },
-    "mixed-title-not-indexed": {
+    "camel-kebab-channel-live": {
       "pass": true,
       "rank": 1,
       "ms": 113
     },
-    "para-duplicate-gvr": {
+    "camel-kebab-subwords": {
       "pass": true,
       "rank": 1,
-      "ms": 152
+      "ms": 120
+    },
+    "cjk-search-index-fix": {
+      "pass": true,
+      "rank": 1,
+      "ms": 36
+    },
+    "cjk-search-quality": {
+      "pass": true,
+      "rank": 1,
+      "ms": 15
+    },
+    "cjk-orphan-pods": {
+      "pass": true,
+      "rank": 1,
+      "ms": 26
+    },
+    "cjk-calendar-view": {
+      "pass": true,
+      "rank": 1,
+      "ms": 17
+    },
+    "mixed-timeout-retry-live": {
+      "pass": true,
+      "rank": 1,
+      "ms": 74
+    },
+    "mixed-qmd-quality": {
+      "pass": true,
+      "rank": 1,
+      "ms": 23
+    },
+    "mixed-reconciler-timeout": {
+      "pass": true,
+      "rank": 1,
+      "ms": 33
+    },
+    "mixed-title-not-indexed": {
+      "pass": true,
+      "rank": 1,
+      "ms": 79
+    },
+    "para-duplicate-gvr": {
+      "pass": false,
+      "rank": 1,
+      "ms": 243
     },
     "para-slack-cron": {
       "pass": false,
       "rank": null,
-      "ms": 258
+      "ms": 357
     },
     "para-client-retry": {
-      "pass": true,
-      "rank": 5,
-      "ms": 194
+      "pass": false,
+      "rank": 6,
+      "ms": 447
     },
     "para-ddb-lambda-timeout": {
       "pass": true,
       "rank": 2,
-      "ms": 152
+      "ms": 131
     },
     "para-stale-pods": {
       "pass": false,
       "rank": null,
-      "ms": 207
+      "ms": 234
     },
     "transcript-bad-record-mac": {
       "pass": false,
       "rank": null,
-      "ms": 178
+      "ms": 248
     },
     "transcript-tcc-calendar": {
       "pass": true,
-      "rank": 2,
-      "ms": 154
+      "rank": 1,
+      "ms": 101
     },
     "transcript-fifo-wedge": {
       "pass": true,
       "rank": 1,
-      "ms": 144
+      "ms": 84
     },
     "junk-burst-echo": {
       "pass": true,
       "rank": null,
-      "ms": 94
+      "ms": 121
     },
     "junk-echo-token": {
       "pass": true,
       "rank": null,
-      "ms": 59
+      "ms": 65
     },
     "hv-go-highlight": {
       "pass": false,
       "rank": null,
-      "ms": 66
+      "ms": 123
     },
     "hv-quarter-call": {
       "pass": true,
       "rank": 7,
-      "ms": 20
+      "ms": 12
     },
     "hv-pin-drag": {
       "pass": false,
       "rank": null,
-      "ms": 34
+      "ms": 24
     },
     "hv-notification-redesign": {
       "pass": false,
       "rank": null,
-      "ms": 52
+      "ms": 47
     },
     "hv-files-viewer": {
       "pass": false,
       "rank": null,
-      "ms": 23
+      "ms": 34
     },
     "hv-session-naming": {
       "pass": false,
       "rank": null,
-      "ms": 37
+      "ms": 30
     },
     "hv-audio-transcribe": {
       "pass": false,
       "rank": null,
-      "ms": 48
+      "ms": 23
     },
     "hv-victoria-trip": {
       "pass": false,
@@ -309,137 +319,137 @@
     "hp-letter-issues": {
       "pass": false,
       "rank": null,
-      "ms": 68
+      "ms": 99
     },
     "hp-tax-2025": {
       "pass": false,
       "rank": null,
-      "ms": 34
+      "ms": 23
     },
     "hp-results-followup": {
       "pass": true,
       "rank": 1,
-      "ms": 50
+      "ms": 70
     },
     "hp-walnut-cloud": {
       "pass": true,
       "rank": 2,
-      "ms": 49
+      "ms": 165
     },
     "hp-clouddev-incident": {
       "pass": false,
       "rank": null,
-      "ms": 34
+      "ms": 116
     },
     "hp-brokerage-account": {
       "pass": true,
       "rank": 1,
-      "ms": 7
+      "ms": 19
     },
     "hp-issue11-server": {
       "pass": false,
       "rank": null,
-      "ms": 67
+      "ms": 123
     },
     "ht-orgchart-typo": {
       "pass": true,
       "rank": 1,
-      "ms": 64
+      "ms": 79
     },
     "ht-notification-feed": {
       "pass": false,
       "rank": null,
-      "ms": 219
+      "ms": 157
     },
     "ht-insurance-provider": {
       "pass": false,
       "rank": null,
-      "ms": 108
+      "ms": 75
     },
     "ht-project-name-typo": {
       "pass": false,
       "rank": null,
-      "ms": 65
+      "ms": 139
     },
     "ht-sesion-naming": {
       "pass": false,
       "rank": null,
-      "ms": 45
+      "ms": 53
     },
     "hp-agent-not-responding": {
       "pass": false,
       "rank": null,
-      "ms": 55
+      "ms": 251
     },
     "hp-docx-file-feature": {
       "pass": false,
       "rank": null,
-      "ms": 94
+      "ms": 279
     },
     "hp-docx-word-preview": {
       "pass": false,
       "rank": null,
-      "ms": 41
+      "ms": 172
     },
     "hm-docx-office-mixed": {
       "pass": true,
       "rank": 1,
-      "ms": 14
+      "ms": 77
     },
     "hr-question-upload-download": {
-      "pass": true,
+      "pass": false,
       "rank": 1,
-      "ms": 130
+      "ms": 353
     },
     "hr-question-cook-rice": {
       "pass": false,
       "rank": null,
-      "ms": 60
+      "ms": 146
     },
     "hr-typo-notification-feed": {
       "pass": true,
       "rank": 2,
-      "ms": 61
+      "ms": 122
     },
     "hr-typo-split-website-deploy": {
-      "pass": true,
+      "pass": false,
       "rank": 1,
-      "ms": 81
+      "ms": 262
     },
     "hr-inflect-loose-alarms": {
       "pass": true,
       "rank": 8,
-      "ms": 52
+      "ms": 64
     },
     "hr-prefix-floss": {
       "pass": false,
       "rank": null,
-      "ms": 27
+      "ms": 80
     },
     "hr-prefix-rare-last-word": {
       "pass": true,
-      "rank": 1,
-      "ms": 112
+      "rank": 4,
+      "ms": 170
     },
     "hr-version-separators": {
       "pass": true,
       "rank": 1,
-      "ms": 36
+      "ms": 73
     },
     "hr-version-prefixed": {
       "pass": true,
       "rank": 1,
-      "ms": 21
+      "ms": 89
     },
     "hr-full-width": {
-      "pass": true,
+      "pass": false,
       "rank": 1,
-      "ms": 160
+      "ms": 201
     },
     "hr-title-head": {
       "pass": false,
       "rank": null,
-      "ms": 85
+      "ms": 268
     },
     "hr-exact-title": {
       "pass": true,
@@ -449,32 +459,32 @@
     "hr-compound-kb-sync-cron": {
       "pass": false,
       "rank": null,
-      "ms": 67
+      "ms": 242
     },
     "hr-typo-crowded-neighbours": {
       "pass": true,
       "rank": 8,
-      "ms": 155
+      "ms": 97
     },
     "hv-describes-deliverables": {
       "pass": false,
-      "rank": 8,
-      "ms": 143
+      "rank": 7,
+      "ms": 360
     },
     "hr-prefix-first-name": {
-      "pass": true,
-      "rank": 8,
-      "ms": 17
+      "pass": false,
+      "rank": null,
+      "ms": 37
     },
     "hr-prefix-first-three-words": {
       "pass": true,
       "rank": 2,
-      "ms": 13
+      "ms": 58
     },
     "hr-prefix-first-rare-word": {
       "pass": true,
       "rank": 3,
-      "ms": 116
+      "ms": 61
     }
   }
 }

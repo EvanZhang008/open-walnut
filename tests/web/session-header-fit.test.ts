@@ -10,6 +10,7 @@
  * the "..." menu), and Lock, Expand and Close never leave. The title row has no
  * fit: its labels are one folded control (session-header-labels-guard.test.ts).
  */
+import fs from 'node:fs';
 import { describe, it, expect } from 'vitest';
 import { SLOT_ID_PREFIX, TOOL_ITEMS, toolItemSpec } from '../../web/src/components/sessions/useSessionHeaderFit';
 import {
@@ -38,6 +39,17 @@ const ROW: ToolRowItem[] = [
 const ROW_WIDTH = 428;
 
 describe('fitToolRow', () => {
+  it('owns synchronous fit state in the tool row, not in the full session panel', () => {
+    const panel = fs.readFileSync(new URL('../../web/src/components/sessions/SessionPanel.tsx', import.meta.url), 'utf8');
+    const row = fs.readFileSync(new URL('../../web/src/components/sessions/SessionHeaderMore.tsx', import.meta.url), 'utf8');
+    expect(panel).not.toContain('useToolRowFit(');
+    expect(panel).toContain('<SessionHeaderToolRow rowRef={toolRowRef}>');
+    expect(panel).toContain('controls={planComposerControls}');
+    expect(panel).not.toContain('controls={composerControls()}');
+    expect(row).toContain('const fit = useToolRowFit(rowRef)');
+    expect(row).toContain('className="session-meta-row-2"');
+  });
+
   it('shows everything when the row fits', () => {
     const full = fitToolRow(ROW, ROW_WIDTH, OPTS);
     expect(full.visible).toEqual(ROW.map((i) => i.id));

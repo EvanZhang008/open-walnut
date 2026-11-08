@@ -62,7 +62,7 @@ const slot = (page: Page) => page.locator('[data-testid="ask-walnut-slot"]')
  *  conversation, its session after (or an ask's session, or the New composer, for a
  *  window that picked one). Every one of them hides the slot with its ×. */
 const slotPanel = (page: Page) => page.locator('[data-testid="ask-walnut-session"], [data-testid="ask-walnut-draft"], [data-testid="ask-walnut-main-draft"]').first()
-const sidebarChat = (page: Page) => page.locator('.sidebar-panel-toggle', { hasText: 'Ask Walnut' })
+const sidebarChat = (page: Page) => page.locator('.sidebar-panel-toggle', { hasText: 'Quick question' })
 const sidebarTodo = (page: Page) => page.locator('.sidebar-panel-toggle', { hasText: 'Task panel' })
 const sidebarAgenda = (page: Page) => page.locator('[data-testid="sidebar-toggle-calendar"]')
 const dockChat = (page: Page) => page.locator('.dock-chat-item')

@@ -58,7 +58,7 @@ export async function forkLaneConversation(
     const convs = await listConversations(agentId);
     const meta = convs.find((c) => c.id === conversationId);
     if (meta) {
-      sourceTitle = meta.isMain ? 'Main' : meta.title;
+      sourceTitle = meta.isMain ? 'CEO' : meta.title;
       if (meta.messageCount === 0) {
         if (!source.forkedFromSessionId) {
           throw new SessionControlError('This conversation is empty — nothing to fork', 409);

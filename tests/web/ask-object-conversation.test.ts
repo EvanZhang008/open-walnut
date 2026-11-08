@@ -72,7 +72,7 @@ describe('askObjectTitle', () => {
     expect(askObjectTitle('Mail: Bo Marina', 'x'.repeat(200))).toHaveLength(60)
     // Nothing to say about: the head stands alone rather than ending in a bare colon.
     expect(askObjectTitle('Mail: Bo Marina', '   ')).toBe('Mail: Bo Marina')
-    expect(askObjectTitle('', '')).toBe('Ask Walnut')
+    expect(askObjectTitle('', '')).toBe('Quick question')
     // Whitespace in a subject is folded, so a quoted mail body cannot make a multi-line title.
     expect(askObjectTitle('Mail', 'two\n\nlines  here')).toBe('Mail: two lines here')
     // A head with no room left for the subject keeps the head, clipped, and adds no colon.

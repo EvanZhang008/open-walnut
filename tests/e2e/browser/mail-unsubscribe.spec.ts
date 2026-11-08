@@ -61,9 +61,9 @@ const DRAWER = 'ask-object-drawer'
 const UNSUB_URL = '**/api/plugins/mail/messages/*/*/unsubscribe'
 
 /** Quoted from `mail-unsubscribe-state.ts`, so a reword there fails here rather than drifting. */
-const NONE_TITLE = 'No unsubscribe link found. Ask Walnut can try.'
+const NONE_TITLE = 'No unsubscribe link found. Ask a quick question and Walnut can try.'
 const RETRY_TITLE = 'Walnut\'s last attempt did not work. Clicking tries again.'
-const ASK_TITLE = 'Walnut got part of the way and the rest needs a person. This opens Ask Walnut about it.'
+const ASK_TITLE = 'Walnut got part of the way and the rest needs a person. This opens a quick question about it.'
 const ASKED_TITLE = 'Walnut asked you about this in your inbox. Answer there and it will finish the job.'
 /** `CANNOT_SEND_TITLE` (web/src/apps/mail/compose/send-status.ts). */
 const CANNOT_SEND = 'This account cannot send; add SMTP settings'

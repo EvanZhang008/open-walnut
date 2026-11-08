@@ -234,7 +234,7 @@ struct NewSessionSheet: View {
             Text("First Message")
         } footer: {
             if let task {
-                Text("The session will be linked to “\(task.title)”.")
+                Text("The session will be linked to “\(AskProjectName.displayTitle(task.title, project: task.project, orgRole: task.orgRole))”.")
             }
         }
     }

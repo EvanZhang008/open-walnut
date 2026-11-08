@@ -65,6 +65,7 @@ import { AskWalnutSlot, MAIN_PICK, showAskInSlot } from '@/components/chat/AskWa
 import { agentOfTask, slotAgents } from '@/components/chat/ask-walnut-slot-model';
 import { getAgentsSnapshot, loadAgents } from '@/stores/agents-store';
 import { log } from '@/utils/log';
+import { projectDisplayName } from '@/utils/project-display';
 import { discardDraft } from '@/utils/drafts';
 import { escapeWasConsumedByOthers } from '@/utils/escape-beep-guard';
 import { visibleInterval } from '@/utils/page-visibility';
@@ -2603,7 +2604,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       input.start_date ? `Starts ${formatQuickTaskDate(input.start_date)}` : undefined,
       input.priority !== 'none' ? `${input.priority[0].toUpperCase()}${input.priority.slice(1)}` : undefined,
       // No project = Inbox; say so rather than leaving the summary silent about placement.
-      input.project?.trim() || 'Inbox',
+      projectDisplayName(input.project?.trim()),
     ].filter((value): value is string => !!value);
     notify({
       kind: 'sort',

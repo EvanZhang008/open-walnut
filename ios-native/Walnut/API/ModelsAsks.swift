@@ -26,6 +26,51 @@ struct AskList: Codable, Equatable {
     var canLaunch: Bool { launch == true }
 }
 
+/// Display only: asks stay stored under "Ask Walnut" / "Ask <agent>" and read as
+/// "Quick question" (the web's `askProjectDisplay`). Requests keep the stored name.
+enum AskProjectName {
+    static let quickQuestion = "Quick question"
+
+    /// "Ask Walnut" -> "Quick question", "Ask Mentor" -> "Quick question · Mentor".
+    static func display(_ project: String) -> String {
+        let trimmed = project.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let agent = agentName(trimmed) else { return project }
+        return agent.lowercased() == "walnut" ? quickQuestion : "\(quickQuestion) · \(agent)"
+    }
+
+    /// Only a placeholder title (equal to its project) is renamed, never a real one;
+    /// the Main task reads "CEO", as its org node does.
+    static func displayTitle(_ title: String, project: String?, orgRole: String? = nil) -> String {
+        if orgRole == "main" { return ChatOrgModel.ceoName }
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard agentName(trimmed) != nil else { return title }
+        let stored = (project ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if stored.lowercased() == trimmed.lowercased() { return display(trimmed) }
+        // No project on the row: only the general agent's placeholder is certain.
+        return project == nil && trimmed.lowercased() == "ask walnut" ? quickQuestion : title
+    }
+
+    // Keep launch project keys consistent with the server's askProjectFor.
+    static func storedProject(agentID: String, agentName: String?) -> String {
+        guard agentID != "general" else { return "Ask Walnut" }
+        func safeName(_ raw: String) -> String {
+            let folded = raw.replacingOccurrences(of: "[/\\\\\\u0000]", with: "-", options: .regularExpression)
+                .replacingOccurrences(of: "\\.{2,}", with: ".", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return String(folded.prefix(60)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let name = safeName(agentName ?? "")
+        let id = safeName(agentID)
+        return "Ask \(!name.isEmpty ? name : !id.isEmpty ? id : "agent")"
+    }
+
+    private static func agentName(_ trimmed: String) -> String? {
+        guard trimmed.count > 4, trimmed.prefix(4).lowercased() == "ask " else { return nil }
+        let rest = trimmed.dropFirst(4).trimmingCharacters(in: .whitespacesAndNewlines)
+        return rest.isEmpty ? nil : rest
+    }
+}
+
 /// One row. `activityAt` is the stamp the row both SORTS by and PRINTS, so a
 /// relative time rendered from it always reads in order down the list.
 struct AskSummary: Codable, Equatable, Hashable, Identifiable {

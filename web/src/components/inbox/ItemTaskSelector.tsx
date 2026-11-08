@@ -5,6 +5,7 @@ import { lockScroll, unlockScroll } from '@/hooks/useModalOverlay';
 import { searchItemTasks, type InboxTaskCandidate, type InboxTaskPage } from '@/api/human-inbox-items';
 import { ItemTaskPreview } from './ItemTaskPreview';
 import { PHASE_TEXT } from './item-receipt-model';
+import { projectDisplayName } from '@/utils/project-display';
 import { itemDraftKey, useItemDraft } from './item-drafts';
 
 export function ItemTaskSelector({ open, letterId, itemId, onClose, onChoose, onNavigate }: {
@@ -88,7 +89,7 @@ export function ItemTaskSelector({ open, letterId, itemId, onClose, onChoose, on
                   e.preventDefault(); const next = index + (e.key === 'ArrowDown' ? 1 : -1);
                   list.current?.querySelectorAll<HTMLButtonElement>('.hii-candidate-pick')[next]?.focus();
                 }
-              }}><span>{task.title}</span><small>{task.project || 'Inbox'} · {PHASE_TEXT[task.phase] ?? task.phase}</small></button>
+              }}><span>{task.title}</span><small>{projectDisplayName(task.project)} · {PHASE_TEXT[task.phase] ?? task.phase}</small></button>
             <button type="button" className="hib-row-btn" data-preview-task={task.id}
               onClick={() => { previewOrigin.current = task.id; setPreview(task); }} aria-label={`Preview task ${task.title}`}>Preview task</button>
             <details><summary>Task ID</summary><code>{task.id}</code></details>

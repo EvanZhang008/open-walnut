@@ -21,6 +21,9 @@ struct TaskPropertiesList: View {
     let reportError: (String) -> Void
     /// Present the sheet's due picker.
     let openDuePicker: () -> Void
+    /// Present the sheet's project picker. The sheet presents it from its root: a sheet raised
+    /// from inside its scroll content is rebuilt when a text field in it takes focus.
+    let openProjectPicker: () -> Void
     var onPinnedChange: (Bool) -> Void = { _ in }
     /// The task's link tags as the server names them (the detail read; nil until it lands).
     var links: [LinkTagView]? = nil
@@ -31,8 +34,6 @@ struct TaskPropertiesList: View {
 
     @Environment(TasksStore.self) private var tasks
     @Environment(\.dynamicTypeSize) private var typeSize
-
-    @State private var showProjectPicker = false
 
     var body: some View {
         TaskPropertyCard {
@@ -48,11 +49,6 @@ struct TaskPropertiesList: View {
             if let tags = task.tags.map({ TaskTagPills.visibleTags($0, links: links, ready: linksReady) }), !tags.isEmpty {
                 TaskPropertyDivider()
                 tagsRow(tags)
-            }
-        }
-        .sheet(isPresented: $showProjectPicker) {
-            TaskProjectPicker(current: task.project) { picked in
-                if picked != task.project { apply(.init(project: picked)) }
             }
         }
     }
@@ -215,11 +211,11 @@ struct TaskPropertiesList: View {
 
     private var projectRow: some View {
         Button {
-            showProjectPicker = true
+            openProjectPicker()
         } label: {
             TaskPropertyRowLabel(
                 label: "Project",
-                value: task.project.isEmpty ? NewTaskSeed.inboxHeader : task.project,
+                value: task.project.isEmpty ? NewTaskSeed.inboxHeader : AskProjectName.display(task.project),
                 icon: task.project.isEmpty ? "tray" : "folder",
                 affordance: .disclosure
             )

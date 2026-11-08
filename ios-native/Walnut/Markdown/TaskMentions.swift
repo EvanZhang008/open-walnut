@@ -97,7 +97,7 @@ enum TaskMentions {
     /// Rewrite every `<task-ref/>` and legacy `[id|label]` into what the reader sees: a
     /// markdown link to the task, titled with its current title, when the id resolves;
     /// else the label (the id when there is none) as plain text, and nothing when both
-    /// are empty. `<session-ref/>` keeps its bold label.
+    /// are empty. `<session-ref/>` keeps its bold label, except for a known org owner.
     ///
     /// Unlike `MarkdownParser.replaceEntityRefs`, which stays the plain-label
     /// NORMALIZATION the chat stores compare rows by, this is display only.
@@ -115,7 +115,7 @@ enum TaskMentions {
                 guard let range = Range(match.range, in: out) else { continue }
                 if kind == "session" {
                     // A ref with neither id nor label has no honest rendering: leave it.
-                    let display = label.isEmpty ? id : label
+                    let display = resolver.sessionTitle(for: id) ?? (label.isEmpty ? id : label)
                     guard !display.isEmpty else { continue }
                     out.replaceSubrange(range, with: "**\(display)**")
                 } else {
@@ -311,6 +311,8 @@ final class TaskMentionResolver: @unchecked Sendable {
 
     private let lock = NSLock()
     private var titles: [String: String] = [:]
+    private var sessionTitles: [String: String] = [:]
+    private var sessionObserved: Set<String> = []
     /// id -> its user state (`UserState.rawValue`), for the status dot of a pill that
     /// shows it (`MessageAboutTag`). A looked-up id's change moves `statesVersion`, never
     /// `version`: a state moves every turn, and only the pill rows draw it, so it must
@@ -333,6 +335,13 @@ final class TaskMentionResolver: @unchecked Sendable {
         lock.withLock { () -> String? in
             noteObserved(id)
             return titles[id]
+        }
+    }
+
+    func sessionTitle(for id: String) -> String? {
+        lock.withLock {
+            if sessionObserved.count < Self.observedLimit { sessionObserved.insert(id) }
+            return sessionTitles[id]
         }
     }
 
@@ -361,7 +370,7 @@ final class TaskMentionResolver: @unchecked Sendable {
     /// Replace the whole table. Returns true when the version moved (and posts
     /// `didChange`, on the calling thread: `TasksStore` calls this on the main actor).
     @discardableResult
-    func update(_ next: [String: String], states nextStates: [String: String]? = nil) -> Bool {
+    func update(_ next: [String: String], states nextStates: [String: String]? = nil, sessions nextSessions: [String: String]? = nil) -> Bool {
         let moved = lock.withLock { () -> Bool in
             var statesMoved = false
             if let nextStates, nextStates != states {
@@ -369,10 +378,18 @@ final class TaskMentionResolver: @unchecked Sendable {
             }
             if let nextStates { states = nextStates }
             if statesMoved { currentStatesVersion &+= 1 }
-            guard next != titles else { return statesMoved }
-            let relevant = titles.isEmpty || observedOverflow || touchesObserved(old: titles, new: next)
-            titles = next
-            sortedIDs = next.keys.sorted()
+            var sessionsMoved = false
+            if let nextSessions {
+                sessionsMoved = sessionObserved.count >= Self.observedLimit ? sessionTitles != nextSessions
+                    : sessionObserved.contains { sessionTitles[$0] != nextSessions[$0] }
+                sessionTitles = nextSessions
+            }
+            let titlesMoved = next != titles
+            let relevant = sessionsMoved || (titlesMoved && (titles.isEmpty || observedOverflow || touchesObserved(old: titles, new: next)))
+            if titlesMoved {
+                titles = next
+                sortedIDs = next.keys.sorted()
+            }
             if relevant { currentVersion &+= 1 }
             return relevant || statesMoved
         }
@@ -385,6 +402,8 @@ final class TaskMentionResolver: @unchecked Sendable {
     func resetForTesting() {
         lock.withLock {
             titles = [:]
+            sessionTitles = [:]
+            sessionObserved = []
             states = [:]
             stateObserved = []
             currentStatesVersion &+= 1

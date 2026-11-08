@@ -176,13 +176,13 @@ export function LeaderPill({ task, className }: { task: Task; className?: string
                         className="leader-sub-row"
                         data-testid="leader-sub-row"
                         data-task-id={sub.id}
-                        title={`Go to "${sub.title}"`}
+                        title={`Go to "${orgDisplayTitle(sub)}"`}
                         onClick={() => goTo(sub)}
                       >
                         <span className={`task-phase-icon-btn leader-sub-phase ${taskCircleClass(sub, null)}`} aria-hidden="true">
                           {binaryPhaseIcon(false, sub.phase, taskUserState(sub))}
                         </span>
-                        <span className="leader-sub-title">{sub.title}</span>
+                        <span className="leader-sub-title">{orgDisplayTitle(sub)}</span>
                         {place && <span className="leader-sub-place" title={`In project ${place}`}>{place}</span>}
                         <span className="leader-sub-phase-label">{taskStatusLabel(sub)}</span>
                       </button>
@@ -191,8 +191,8 @@ export function LeaderPill({ task, className }: { task: Task; className?: string
                         className="leader-sub-unlink"
                         data-testid="leader-sub-unlink"
                         data-task-id={sub.id}
-                        title={`Release "${sub.title}" from this team. It keeps running on its own.`}
-                        aria-label={`Release ${sub.title} from ${task.title}`}
+                        title={`Release "${orgDisplayTitle(sub)}" from this team. It keeps running on its own.`}
+                        aria-label={`Release ${orgDisplayTitle(sub)} from ${orgDisplayTitle(task)}`}
                         onClick={() => release(sub)}
                       >
                         {ICON_UNLINK}
@@ -206,7 +206,7 @@ export function LeaderPill({ task, className }: { task: Task; className?: string
                   type="button"
                   className="leader-sub-row"
                   data-testid="leader-adopt"
-                  title={`Make another open task a worker of "${task.title}"`}
+                  title={`Make another open task a worker of "${orgDisplayTitle(task)}"`}
                   onClick={() => { close(false); setAdoptOpen(true); }}
                 >
                   <span className="leader-sub-title">Adopt a task…</span>

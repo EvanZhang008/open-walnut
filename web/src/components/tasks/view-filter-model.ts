@@ -12,6 +12,7 @@
 // declare the alias; when one didn't (base vitest, before it gained the block),
 // the test died at collection with zero assertions, invisible to the baseline gate.
 import { PHASE_LABELS } from '../../utils/session-status';
+import { projectDisplayName } from '../../utils/project-display';
 import type { TaskPhase, TaskPriority } from '@open-walnut/core';
 import { COMPLETION_TO_PHASES, QUERY_TASK_PHASES } from '@open-walnut/task-query';
 import type {
@@ -294,7 +295,7 @@ export function buildFilterSentence(state: TaskQueryFilterState): SentenceToken[
   pushGroup(tokens, state, 'priorities', state.priorities,
     state.priorities.map((v) => labelOf(QUERY_PRIORITY_OPTIONS, v)), 'priority', 'or');
   pushGroup(tokens, state, 'projects', state.projects,
-    state.projects.map((v) => (v === '' ? 'Inbox' : v)), 'in', 'or');
+    state.projects.map((v) => projectDisplayName(v)), 'in', 'or');
   pushGroup(tokens, state, 'tagsAny', state.tagsAny, state.tagsAny, 'tagged', 'or');
   pushGroup(tokens, state, 'sources', state.sources, state.sources, 'from', 'or');
   pushGroup(tokens, state, 'sprints', state.sprints, state.sprints, 'in sprint', 'or');
@@ -446,7 +447,7 @@ export function searchFilterOptions(
     })));
   arrayDim('q-priority', 'Priority', 'priorities', QUERY_PRIORITY_OPTIONS);
   arrayDim('q-project', 'Project', 'projects',
-    lists.projectOptions.map((p) => ({ value: p, label: p === '' ? 'Inbox' : p })));
+    lists.projectOptions.map((p) => ({ value: p, label: projectDisplayName(p) })));
   arrayDim('q-tags', 'Tag', 'tagsAny',
     tagPickOptions(state.tagsAny, lists.tagOptions ?? []).map((t) => ({ value: t, label: t })));
   arrayDim('q-source', 'Source', 'sources',

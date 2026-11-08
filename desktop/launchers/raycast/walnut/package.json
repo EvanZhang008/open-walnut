@@ -2,7 +2,7 @@
   "$schema": "https://www.raycast.com/schemas/extension.json",
   "name": "walnut",
   "title": "Walnut",
-  "description": "Walnut from Raycast: quick answers, Ask Walnut, Tell Main, find a task. Needs Walnut running on this Mac.",
+  "description": "Walnut from Raycast: quick answers, quick questions, Tell CEO, find a task. Needs Walnut running on this Mac.",
   "icon": "walnut-icon.png",
   "author": "openwalnut",
   "categories": [
@@ -12,14 +12,14 @@
   "commands": [
     {
       "name": "ask",
-      "title": "Tell Main",
+      "title": "Tell CEO",
       "subtitle": "Walnut",
-      "description": "Type, then Enter to tell Main (fire and forget) or Cmd+Enter for a quick answer; matching tasks and notes list below.",
+      "description": "Type, then Enter to tell the CEO (fire and forget) or Cmd+Enter for a quick answer; matching tasks and notes list below.",
       "mode": "view"
     },
     {
       "name": "ask-selection",
-      "title": "Ask Walnut About Selection",
+      "title": "Quick Question About Selection",
       "subtitle": "Walnut",
       "description": "Bring the selected text from the app you are in, then say what to do with it.",
       "mode": "view"
@@ -28,14 +28,14 @@
       "name": "walnut-ai",
       "title": "Quick Answer",
       "subtitle": "Walnut",
-      "description": "A fast answer from the model alone, in a couple of seconds, with follow-ups; Cmd+T hands the chat to Ask Walnut. Works as a fallback command: type anything in Raycast, then pick Quick Answer.",
+      "description": "A fast answer from the model alone, in a couple of seconds, with follow-ups; Cmd+T hands the chat to Quick Question. Works as a fallback command: type anything in Raycast, then pick Quick Answer.",
       "mode": "view"
     },
     {
       "name": "walnut-ai-session",
-      "title": "Ask Walnut",
+      "title": "Quick Question",
       "subtitle": "Walnut",
-      "description": "Walnut does the work: a session in Walnut with your skills and tools (web search, files, your tasks), filed as an Ask Walnut chat; its reply shows here, with follow-ups. Works as a fallback command.",
+      "description": "Walnut does the work: a session in Walnut with your skills and tools (web search, files, your tasks), filed as a quick question; its reply shows here, with follow-ups. Works as a fallback command.",
       "mode": "view"
     }
   ],

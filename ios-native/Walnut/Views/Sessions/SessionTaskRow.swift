@@ -36,14 +36,14 @@ struct SessionTaskRow: View {
                     showDetail = true
                 } label: {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(task?.title ?? fallbackTitle ?? "Task")
+                        Text(task.map { AskProjectName.displayTitle($0.title, project: $0.project, orgRole: $0.orgRole) } ?? fallbackTitle ?? "Task")
                             .foregroundStyle(.primary)
                             .strikethrough(task?.isDone == true, color: .secondary)
                             .lineLimit(2)
                             .multilineTextAlignment(.leading)
                         // One grouping layer: the project, or Inbox.
                         let projectName = task?.project ?? project ?? ""
-                        Text(projectName.isEmpty ? "Inbox" : projectName)
+                        Text(projectName.isEmpty ? "Inbox" : AskProjectName.display(projectName))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

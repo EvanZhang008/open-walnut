@@ -102,6 +102,17 @@ describe('task-ref resolves the CURRENT task title', () => {
     expect(fallback).toContain('>Fallback Name</a>');
   });
 
+  it('a CEO session reference uses its owner name across HTML, text and Markdown', () => {
+    registerSessionTitle('sess-ceo', 'Main');
+    const text = '<session-ref id="sess-ceo" label="Main"/>';
+    expect(renderMarkdownWithRefs(text)).toContain('>Main</a>');
+    syncTasks([{ id: 't-ceo', title: 'CEO', org_role: 'main', session_id: 'sess-ceo' }]);
+    expect(renderMarkdownWithRefs(text)).toContain('>CEO</a>');
+    expect(entityRefsToHtml(text)).toContain('>CEO</a>');
+    expect(stripEntityRefsToText(text)).toBe('CEO');
+    expect(entityRefsToMarkdownLinks(text)).toBe('[CEO](/sessions?id=sess-ceo)');
+  });
+
   it('CACHE COHERENCE: a store change re-renders the same text with the new title', () => {
     const text = 'pill: <task-ref id="t-cache-11" label="Stale"/>';
     // First render: store empty → label fallback (and the id becomes observed).

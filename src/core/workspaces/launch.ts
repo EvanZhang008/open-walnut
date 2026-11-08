@@ -199,7 +199,7 @@ export async function workspaceLaunchPlan(body: Record<string, unknown>, ctx: {
   })
 
   if (asked) {
-    if (ctx.isWalnutAgent) return refuse(400, 'An Ask Walnut session has no isolated workspace.', 'bad-request')
+    if (ctx.isWalnutAgent) return refuse(400, 'A quick question has no isolated workspace.', 'bad-request')
     const providerId = typeof asked.provider === 'string' ? asked.provider : ''
     if (ws && isLaunchReady(ws)) {
       return normHost(ctx.host) === ws.host ? { cwd: ws.cwd } : refuse(409, `This task's workspace lives on ${ws.host === '__local__' ? 'this Mac' : ws.host}.`, 'host-mismatch')

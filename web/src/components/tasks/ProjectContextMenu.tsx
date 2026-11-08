@@ -36,6 +36,7 @@ import {
 import { OptionPickerFlyout, useCursorFlyout } from './CursorFlyout';
 import { ProjectPickerFlyout } from './TaskKebabMenu';
 import { useBulkTaskSettings } from './BulkTaskSettings';
+import { projectDisplayName } from '@/utils/project-display';
 
 export {
   buildProjectMenuItems, PROJECT_SORT_OPTIONS,
@@ -76,7 +77,7 @@ export function useProjectContextMenu(actions: ProjectMenuActions): ProjectConte
           }, settings.rows({ kind: 'project', project: open.payload.project }, open.point, open.origin))}
           onClose={menu.close}
           returnFocus={open.origin}
-          ariaLabel={`Project actions for ${open.payload.project || 'Inbox'}`}
+          ariaLabel={`Project actions for ${projectDisplayName(open.payload.project)}`}
           testId="project-ctx-menu"
         />
       )}
@@ -86,7 +87,7 @@ export function useProjectContextMenu(actions: ProjectMenuActions): ProjectConte
           anchorRef={sortPicker.noTrigger}
           options={PROJECT_SORT_OPTIONS.map(([value, label]) => ({ value, label }))}
           current={sortPicker.state.payload.current}
-          ariaLabel={`Sort tasks of ${sortPicker.state.payload.project || 'Inbox'}`}
+          ariaLabel={`Sort tasks of ${projectDisplayName(sortPicker.state.payload.project)}`}
           onPick={(sort) => actions.onSetSort?.(sortPicker.state!.payload.project, sort)}
           onClose={sortPicker.close}
         />

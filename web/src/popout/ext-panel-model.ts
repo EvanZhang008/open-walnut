@@ -28,6 +28,7 @@
  * person only looks at stay in the browser. The view answers only the first extension page that
  * spoke to it, at its origin.
  */
+import { askProjectDisplay } from '@open-walnut/ask-list';
 import { readRelay, type RelayState } from './ext-relay-model';
 
 export const EXT_PANEL = 'ext-panel';
@@ -242,7 +243,7 @@ export function firstQuestionOf(taskId: string, s: HandedStore | null = store())
 export function panelAskTitle(task: { id: string; title?: string }, agent: { project: string }, question = firstQuestionOf(task.id)): { title: string; untitled: boolean } {
   const own = task.title?.trim() ?? '';
   if (own && own.toLowerCase() !== agent.project.toLowerCase()) return { title: own, untitled: false };
-  return question ? { title: question, untitled: false } : { title: agent.project, untitled: true };
+  return question ? { title: question, untitled: false } : { title: askProjectDisplay(agent.project), untitled: true };
 }
 
 const MAX_SELECTION = 4000;
@@ -456,8 +457,9 @@ export function sentOf(key: string, s: HandedStore | null = store()): string {
  * "Ask Walnut" with Mentor picked). `onPage`: a web page is open beside it.
  */
 export function composerPlaceholderOf(agentName: string, onPage: boolean): string {
-  const name = agentName.trim() || 'Walnut';
-  return onPage ? `Ask ${name}, or ask it to do something here…` : `Ask ${name} anything…`;
+  const name = agentName.trim();
+  const ask = !name || name === 'Walnut' ? 'Ask a quick question' : `Ask ${name} a quick question`;
+  return onPage ? `${ask}, or have it do something here…` : `${ask}…`;
 }
 
 /**

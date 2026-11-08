@@ -170,7 +170,7 @@ test('a new install opens the chat on Main, and the drawer pins Main and links t
   await expect(mainDraft).toBeVisible({ timeout: 30_000 })
   await expect(page.getByTestId('ask-walnut-main-intro')).toContainText('The CEO sees all your work')
   await expect(mainDraft.locator('.chat-input-textarea')).toHaveAttribute('placeholder', /Ask CEO anything/)
-  await expect(page.locator('.sidebar-panel-toggle', { hasText: 'Ask Walnut' })).toBeVisible()
+  await expect(page.locator('.sidebar-panel-toggle', { hasText: 'Quick question' })).toBeVisible()
   await expect(sidebarOrg(page)).toBeVisible()
 
   const drawer = await openAskWalnutDrawer(page)
@@ -242,10 +242,10 @@ test('a send from Main\'s composer makes Main, shows its session, and keeps Main
   expect((await orgTree(request)).main?.id).toBe(taskId)
   await expect(page.locator(`.todo-panel [data-task-id="${taskId}"]`)).toHaveCount(0)
 
-  // New chat composes an ordinary ask; the Main row brings Main back.
+  // New quick question composes an ordinary ask; the CEO row brings Main back.
   let drawer = await openAskWalnutDrawer(page)
   await drawer.getByTestId('ask-walnut-new').click()
-  await expect(page.getByTestId('ask-walnut-draft').locator('.chat-input-textarea')).toHaveAttribute('placeholder', /Ask Walnut anything/)
+  await expect(page.getByTestId('ask-walnut-draft').locator('.chat-input-textarea')).toHaveAttribute('placeholder', /Ask a quick question/)
   drawer = await openAskWalnutDrawer(page)
   await drawer.getByTestId('ask-walnut-drawer-main').click()
   await expect(session).toHaveAttribute('data-session-id', sessionId, { timeout: 30_000 })

@@ -12,12 +12,12 @@ const USAGE_LABELS: Record<string, string> = {
   // sources
   triage: 'Turn summary',
   subagent: 'Subagent',
-  agent: 'Main agent',
-  'agent-cli': 'Main agent (CLI)',
+  agent: 'CEO',
+  'agent-cli': 'CEO (CLI)',
   session: 'Claude Code session',
   // A main-AI turn, answered by the conversation's lane-bound CLI session. Kept
   // apart from 'agent' because historical rows under both ids still exist.
-  chat: 'Main AI (Claude Code engine)',
+  chat: 'CEO (Claude Code engine)',
   compaction: 'Compaction',
   heartbeat: 'Heartbeat',
   cron: 'Cron',
@@ -30,7 +30,7 @@ const USAGE_LABELS: Record<string, string> = {
   'message-send-triage': 'Turn summary (retired per-message)',
   'note-agent': 'Note agent',
   'session-summarizer': 'Session gist (on end)',
-  general: 'Main agent',
+  general: 'CEO',
   unknown: 'Unknown',
   // agent_id-less legacy rows fall back to their source name; 'subagent' here
   // means "some subagent, recorded before per-agent attribution existed".

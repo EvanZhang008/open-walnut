@@ -139,7 +139,7 @@ export async function leaveFullscreen(page: Page): Promise<void> {
  *
  * The slot renders the REGULAR session panel; its only addition is the ≡ button
  * leading that header's title row, which slides in a drawer holding a search
- * box, the asks to switch between, "New chat", and two small links ("Context",
+ * box, the asks to switch between, "New quick question", and two small links ("Context",
  * "Fix Walnut"). Nothing else: task/session creation is the draft column
  * (`openDraft`), hiding the slot is the panel's own ×. Specs that need Context or
  * Fix Walnut route in here: open the drawer, click the link (`data-testid`

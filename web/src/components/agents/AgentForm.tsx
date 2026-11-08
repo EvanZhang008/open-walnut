@@ -24,8 +24,8 @@ const CONTEXT_SOURCE_DEFS: { id: ContextSourceId; label: string; auto: boolean; 
   { id: 'daily_log', label: 'Daily Log', auto: false, defaultBudget: 3000, description: 'Recent daily activity logs' },
   { id: 'session_history', label: 'Session History', auto: false, defaultBudget: 4000, description: 'History of the triggering session' },
   { id: 'conversation_log', label: 'Conversation Log', auto: false, defaultBudget: 1000, description: "Task's conversation_log field" },
-  { id: 'main_global_memory', label: 'Main Agent Memory', auto: false, defaultBudget: 2000, description: "General agent's MEMORY.md (read-only)" },
-  { id: 'main_daily_log', label: 'Main Agent Daily Log', auto: false, defaultBudget: 3000, description: "General agent's daily activity logs (read-only)" },
+  { id: 'main_global_memory', label: 'Quick question memory', auto: false, defaultBudget: 2000, description: "General agent's MEMORY.md (read-only)" },
+  { id: 'main_daily_log', label: 'Quick question daily log', auto: false, defaultBudget: 3000, description: "General agent's daily activity logs (read-only)" },
 ];
 
 type ContextSourcesState = Record<ContextSourceId, { enabled: boolean; budget: number | '' }>;

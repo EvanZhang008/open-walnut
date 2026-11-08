@@ -500,14 +500,18 @@ struct OrgThreadCard: View {
         let named = OrgThreadModel.namedTasks(in: t.reply)
         let ids = (t.tasks ?? []).filter { !named.contains($0) }
         if !ids.isEmpty {
-            let titles = ids.map { id in tasks.tasks.first { $0.id == id }?.title ?? id }
+            let titles = ids.map { id in
+                tasks.tasks.first { $0.id == id }.map {
+                    AskProjectName.displayTitle($0.title, project: $0.project, orgRole: $0.orgRole)
+                } ?? id
+            }
             OrgChipFlow(spacing: 6) {
                 ForEach(ids, id: \.self) { id in
                     let task = tasks.tasks.first { $0.id == id }
-                    let title = task?.title ?? id
+                    let title = task.map { AskProjectName.displayTitle($0.title, project: $0.project, orgRole: $0.orgRole) } ?? id
                     // Two chips with one title say their state, so they can be told apart.
                     let twin = titles.filter { $0 == title }.count > 1
-                    Button { target = TaskOpenTarget(id: id, title: task?.title) } label: {
+                    Button { target = TaskOpenTarget(id: id, title: title) } label: {
                         HStack(spacing: 5) {
                             if let task { Circle().fill(UserStatePill.color(TeamStatusModel.state(of: task))).frame(width: 7, height: 7) }
                             Text(title).lineLimit(1)

@@ -22,7 +22,7 @@ Every executor that thinks runs a `claude` session; they differ in whose session
 
 | type | when to choose | config |
 |---|---|---|
-| `main-agent` | "tell me / remind me / message me": send the instructions into the user's Ask Walnut conversation, so the answer lands where they are already reading | `{ instructions }` |
+| `main-agent` | "tell me / remind me / message me": send the instructions into the user's quick question conversation, so the answer lands where they are already reading | `{ instructions }` |
 | `walnut-agent` | standalone research/summary with no repo: starts a FRESH Personal AI session with its own task under project "Routines", watchable in the session panel | `{ instructions, model?, timeoutSeconds? }` |
 | `claude-code` | coding/repo work, "run in <dir>", "on <host>": starts a coding session in that directory (the default choice in the UI form) | `{ instructions, cwd (required), host? (omit = local), model? }` |
 

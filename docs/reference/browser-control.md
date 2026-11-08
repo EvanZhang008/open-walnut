@@ -195,12 +195,12 @@ every command waiting on it fails, and every agent tab is yours again.
 ## Walnut beside the page: the side panel
 
 The extension also puts Walnut in the browser's side panel (Chrome's side panel, Firefox's
-sidebar; in a browser with neither, the popup's **Ask Walnut** opens the same page in a small
-window beside yours). Open it from the popup's **Ask Walnut**, or right-click a page or a
-selection, **Ask Walnut about ...**.
+sidebar; in a browser with neither, the popup's **Quick question** opens the same page in a small
+window beside yours). Open it from the popup's **Quick question**, or right-click a page or a
+selection, **Quick question about ...**.
 
 - **It knows the page you are on.** The panel shows the page's title and address and what you
-  selected, and follows you to another tab or page. Its conversation is an ordinary Ask Walnut
+  selected, and follows you to another tab or page. Its conversation is an ordinary quick question
   session, and as on Home's Ask it stays until you pick another ask (≡ or Continue) or press
   **New chat**: on another tab or page only the page chip moves, so your next message goes with
   that page. A selection you ask about later leads your next message as a quote.

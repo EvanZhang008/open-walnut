@@ -16,6 +16,8 @@ import { ICON_SEARCH } from '@/components/common/Icons';
 import { timeAgo } from '@/utils/time';
 import { log } from '@/utils/log';
 import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel';
+import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
+import { sessionRecordTitle } from '@/stores/entity-label-store';
 
 interface SessionSearchPanelProps {
   open: boolean;
@@ -41,6 +43,8 @@ export function warmSessionSearch(): void {
 }
 
 export function SessionSearchPanel({ open, onClose, onOpenSession }: SessionSearchPanelProps) {
+  // A search hit is named by its owning task once the label store knows it (CEO, Quick question).
+  useEntityLabelsVersion();
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SessionRecord[]>(() => lastRecent ?? []);
   const [loading, setLoading] = useState(false);
@@ -165,7 +169,7 @@ export function SessionSearchPanel({ open, onClose, onOpenSession }: SessionSear
           >
             <span className={`session-search-dot status-${s.process_status}`} aria-hidden="true" />
             <span className="session-search-title">
-              {s.title || s.cwd?.split('/').pop() || s.claudeSessionId.slice(0, 8)}
+              {sessionRecordTitle(s) || s.cwd?.split('/').pop() || s.claudeSessionId.slice(0, 8)}
             </span>
             {/* The folder's own name (the full path is the tooltip), then when: the time never
                 ellipsizes away behind a long path. */}

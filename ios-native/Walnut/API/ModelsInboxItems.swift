@@ -170,7 +170,7 @@ struct InboxTaskCandidate: Codable, Equatable, Hashable, Identifiable {
     let id: String; let title: String; let project: String; let phase: String
     var canAttach: Bool { !id.isEmpty && ["TODO", "IN_PROGRESS", "NEED_ACTION", "WAITING"].contains(phase) }
     var phaseLabel: String { PhaseWords.label(phase) ?? "Status unavailable" }
-    var projectLabel: String { project.isEmpty ? "Inbox" : InboxEmailItem.safe(project) }
+    var projectLabel: String { project.isEmpty ? "Inbox" : AskProjectName.display(InboxEmailItem.safe(project)) }
 }
 struct InboxTaskPreview: Codable, Equatable, Identifiable {
     struct Activity: Codable, Equatable { let text: String; let at: String? }

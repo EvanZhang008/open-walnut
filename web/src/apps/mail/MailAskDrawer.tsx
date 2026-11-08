@@ -36,7 +36,7 @@ export function MailAskDrawer({ ask, accounts }: { ask: MailAsk; accounts: MailA
       // (and the old one's focus return runs), never from this mail's draft or pending state.
       key={objectKey}
       objectKey={objectKey}
-      title="Ask Walnut"
+      title="Quick question"
       quote={quote}
       agentId={MAIL_ASK_AGENT}
       // `window.location.origin`: the block carries a link back to THIS console, and a hard-coded host

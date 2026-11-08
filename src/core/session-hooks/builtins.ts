@@ -840,6 +840,7 @@ export async function applyTitleDirective(taskId: string, directive: string, exp
 
     const { getTask, updateTask } = await import('../task-manager.js');
     const fresh = await getTask(taskId);
+    if (fresh.org_role === 'main') return;
     // Concurrent rename (human or another fire) wins over an in-flight report.
     if (fresh.title !== expectedTitle) return;
 

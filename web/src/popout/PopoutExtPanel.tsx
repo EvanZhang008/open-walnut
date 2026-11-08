@@ -26,6 +26,7 @@ import { objectContextHints, readAskSession, storeObjectContext, writeAskSession
 import { setPendingHintsSource } from '@/utils/pending-hints';
 import { UserRowAttachmentsContext, type UserRowHints } from '@/components/sessions/user-row-attachments';
 import { GENERAL_AGENT_ID } from '@/components/chat/ask-walnut-slot-model';
+import { askProjectDisplay } from '@open-walnut/ask-list';
 import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from '@/utils/composer-insert';
 import { NotificationToaster } from '@/components/common/NotificationToaster';
 import { OperationErrorBridge } from '@/components/common/OperationErrorBridge';
@@ -488,7 +489,7 @@ function ExtPanel() {
     if (adoptedFor.current === once) return;
     adoptedFor.current = once;
     rememberHanded(tab, key, record.taskId);
-    toParent({ type: 'adopt', tab, task: record.taskId, who: inTaskPage ? 'Walnut task' : 'Ask Walnut' });
+    toParent({ type: 'adopt', tab, task: record.taskId, who: inTaskPage ? 'Walnut task' : 'Quick question' });
   }, [actWanted, tab, record?.taskId, key, inTaskPage]);
 
   const toggleAct = useCallback((on: boolean) => {
@@ -623,7 +624,7 @@ function ExtPanel() {
   const mode: PanelMode = isPopup ? 'home' : keptMode === 'task' && !taskShownHere ? 'home' : keptMode;
   // The Ask page's own words and drawing; the first page sends its own (useHomeSnapshots). The
   // agent picked is told on every page (a pick in the popup's drawer names the panel's next Ask).
-  useAskSnapshots(rootRef, page, key && mode === 'ask' ? conv : '', opts.surface, shownAgent, agent.project);
+  useAskSnapshots(rootRef, page, key && mode === 'ask' ? conv : '', opts.surface, shownAgent, askProjectDisplay(agent.project));
 
   // Which page the view shows (a task's, with its title), for the extension's drawing of the next
   // open (panel-look-home.ts): the drawing is the page the view opens on.
@@ -740,7 +741,7 @@ function ExtPanel() {
   const named = shownTask ? panelAskTitle(shownTask, agent) : null;
   const headTitle = named
     ? (named.untitled ? '' : named.title)
-    : shownTaskId ? (firstQuestionOf(shownTaskId) || page?.title || (page ? hostOf(page.url) : '')) : forMain ? 'CEO' : 'New chat';
+    : shownTaskId ? (firstQuestionOf(shownTaskId) || page?.title || (page ? hostOf(page.url) : '')) : forMain ? 'CEO' : 'New quick question';
   const header = (
     <ExtAskHeader
       surface={opts.surface}
@@ -855,7 +856,7 @@ function ExtPanel() {
         <AskObjectDrawer
           key={conv}
           objectKey={key}
-          title={mode === 'task' ? modeTitle : page ? `Ask ${agent.name} about ${page.title ?? hostOf(page.url)}` : `Ask ${agent.name}`}
+          title={mode === 'task' ? modeTitle : page ? `Quick question about ${page.title ?? hostOf(page.url)}` : askProjectDisplay(agent.project)}
           quote={quote}
           agentId={convAgentId}
           contextBlock=""

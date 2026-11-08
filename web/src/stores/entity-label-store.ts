@@ -26,6 +26,7 @@
 
 export interface TaskLabel {
   title: string;
+  /** Display name (projectDisplayName); never use it as a key. */
   project?: string;
 }
 
@@ -34,11 +35,16 @@ interface TaskLabelEntry {
   /** Source Task reference for the identity early-out: when the tasks array
    *  is re-synced but this row object is unchanged (mergeFetchedTasks
    *  preserves identity), skip field comparison entirely. */
-  src: unknown;
+  src: TaskLike;
 }
 
 import { matchIdRef } from '../../../src/lib/id-ref';
 import { isTaskLookupToken, isTaskPrefixToken } from '../utils/task-id-shape';
+import { projectDisplayName, sessionDisplayName } from '../utils/project-display';
+
+function shownProject(project: string | undefined): string | undefined {
+  return project ? projectDisplayName(project) : undefined;
+}
 
 type TaskLike = { id: string; title?: string; project?: string; org_role?: string; org_name?: string; session_id?: string; session_ids?: readonly string[] };
 
@@ -60,11 +66,12 @@ export type TaskLookupFetcher = (tokens: string[]) => Promise<TaskLookupAnswer[]
 /** Main reads as the CEO, a project's lead ("Walnut lead") as its VP: display only. The same rule
  *  as orgDisplayTitle (src/core/org/org-tree.ts), written here because this module imports
  *  nothing; tests/web/entity-label-store.test.ts pins the two equal. */
-export function shownTaskTitle(task: { title: string; org_role?: string; org_name?: string }): string {
+export function shownTaskTitle(task: { title: string; project?: string; org_role?: string; org_name?: string }): string {
   if (task.org_role === 'main') return 'CEO';
   if (task.org_role === 'lead' && task.org_name?.trim()) return `${task.org_name.trim()} VP`;
   if (task.org_role === 'lead') return task.title.replace(/ lead$/i, ' VP');
-  return task.title;
+  return task.project && task.title.trim().toLowerCase() === task.project.trim().toLowerCase()
+    ? projectDisplayName(task.title) : task.title;
 }
 
 const taskLabels = new Map<string, TaskLabelEntry>();
@@ -114,10 +121,34 @@ export function lookupTaskLabel(id: string): TaskLabel | undefined {
   return taskLabels.get(id)?.label;
 }
 
+function sessionDisplayTitle(id: string): string | undefined {
+  const title = sessionTitles.get(id);
+  const owner = sessionOwner.get(id);
+  const task = owner ? taskLabels.get(owner) : undefined;
+  if (task?.src.org_role === 'main' || task?.src.org_role === 'lead') return task.label.title;
+  return title === undefined ? undefined : sessionDisplayName(title, task?.src);
+}
+
 /** Render-path session lookup. Records the id as observed; never notifies. */
 export function lookupSessionTitle(id: string): string | undefined {
   observed.add(id);
-  return sessionTitles.get(id);
+  return sessionDisplayTitle(id);
+}
+
+/** The shown title of a session record the caller already holds (a search hit, a popout): its
+ *  owning task, when the store knows it, names the CEO's or a VP's session; else the record's own
+ *  project names an ask's placeholder. Records the id as observed; never notifies. */
+export function sessionRecordTitle(record: { claudeSessionId: string; title?: string; taskId?: string; project?: string }): string | undefined {
+  observed.add(record.claudeSessionId);
+  const ownerId = record.taskId || sessionOwner.get(record.claudeSessionId);
+  const owner = ownerId ? taskLabels.get(ownerId) : undefined;
+  if (owner?.src.org_role === 'main' || owner?.src.org_role === 'lead') return owner.label.title;
+  const title = record.title || sessionTitles.get(record.claudeSessionId);
+  return title ? sessionDisplayName(title, owner?.src ?? { project: record.project }) : undefined;
+}
+
+function observedSession(task: TaskLike): boolean {
+  return [task.session_id, ...(task.session_ids ?? [])].some((sid) => !!sid && observed.has(sid));
 }
 
 /** A rendered prefix token (`mvkghc5v` of `mvkghc5v-278c`) that this id's arrival
@@ -243,7 +274,7 @@ function runLookups(): void {
       } else if (fits) {
         fetched.set(a.token, {
           id: task!.id,
-          label: { title: shownTaskTitle({ title: task!.title, org_role: task!.org_role }), project: task!.project || undefined },
+          label: { title: shownTaskTitle({ title: task!.title, project: task!.project, org_role: task!.org_role }), project: shownProject(task!.project) },
         });
         missing.delete(a.token);
         if (observed.has(a.token)) dirty = true;
@@ -344,28 +375,30 @@ export function syncTasks(tasks: readonly TaskLike[]): void {
   for (const task of tasks) {
     if (!task?.id || typeof task.title !== 'string' || !task.title) continue;
     validCount++;
-    const title = shownTaskTitle({ title: task.title, org_role: task.org_role, org_name: task.org_name });
+    const title = shownTaskTitle({ title: task.title, project: task.project, org_role: task.org_role, org_name: task.org_name });
     const existing = taskLabels.get(task.id);
     if (existing) {
       if (existing.src === task) continue; // identity early-out (steady state)
-      if (indexSessions(task)) dirty = refreshRefs(task) || dirty;
-      if (existing.label.title === title && existing.label.project === (task.project || undefined)) {
+      if (indexSessions(task)) dirty = refreshRefs(task) || observedSession(task) || dirty;
+      const project = shownProject(task.project);
+      if (existing.label.title === title && existing.label.project === project) {
+        if ((existing.src.org_role !== task.org_role || existing.src.project !== task.project) && observedSession(task)) dirty = true;
         existing.src = task;
         continue;
       }
       // Mutate in place? No — reuse discipline is for UNCHANGED labels only.
       // A changed label gets a fresh object so useSyncExternalStore snapshots
       // see a new identity exactly when the content changed.
-      taskLabels.set(task.id, { label: { title, project: task.project || undefined }, src: task });
-      if (observed.has(task.id) || namesObservedPrefix(task.id)) dirty = true;
+      taskLabels.set(task.id, { label: { title, project }, src: task });
+      if (observed.has(task.id) || namesObservedPrefix(task.id) || observedSession(task)) dirty = true;
     } else {
-      taskLabels.set(task.id, { label: { title, project: task.project || undefined }, src: task });
+      taskLabels.set(task.id, { label: { title, project: shownProject(task.project) }, src: task });
       indexSessions(task);
       if (refreshRefs(task)) dirty = true;
       sortedDirty = true;
       // A new task can settle a token looked up before it existed.
       missing.delete(task.id);
-      if (observed.has(task.id) || namesObservedPrefix(task.id)) dirty = true;
+      if (observed.has(task.id) || namesObservedPrefix(task.id) || observedSession(task)) dirty = true;
     }
   }
   // Deletion sweep only when the map holds more ids than the incoming list —
@@ -376,7 +409,10 @@ export function syncTasks(tasks: readonly TaskLike[]): void {
     for (const id of taskLabels.keys()) {
       if (!incoming.has(id)) {
         taskLabels.delete(id);
-        for (const [sid, owner] of sessionOwner) if (owner === id) sessionOwner.delete(sid);
+        for (const [sid, owner] of sessionOwner) if (owner === id) {
+          sessionOwner.delete(sid);
+          if (observed.has(sid)) dirty = true;
+        }
         refCache.clear();
         sortedDirty = true;
         if (observed.has(id) || namesObservedPrefix(id)) dirty = true;
@@ -411,8 +447,9 @@ function refreshRefs(task: TaskLike): boolean {
 export function registerSessionTitle(id: string, title: string | null | undefined): void {
   if (!id || typeof title !== 'string' || !title) return;
   if (sessionTitles.get(id) === title) return;
+  const before = sessionDisplayTitle(id);
   sessionTitles.set(id, title);
-  if (observed.has(id)) emit();
+  if (observed.has(id) && before !== sessionDisplayTitle(id)) emit();
 }
 
 export function subscribeEntityLabels(listener: () => void): () => void {

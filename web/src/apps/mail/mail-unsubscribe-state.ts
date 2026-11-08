@@ -26,14 +26,14 @@ import type { MailMessageDto, MailUnsubscribeDto } from '@/api/mail';
 import { CANNOT_SEND_TITLE } from './compose/send-status';
 
 /** Said under a disabled `Unsubscribe`: the design's exact wording, and the one hint that follows it. */
-export const UNSUBSCRIBE_NONE_TITLE = 'No unsubscribe link found. Ask Walnut can try.';
+export const UNSUBSCRIBE_NONE_TITLE = 'No unsubscribe link found. Ask a quick question and Walnut can try.';
 
 /** Said under a `failed` row, where the click is a retry rather than a first attempt. */
 export const UNSUBSCRIBE_RETRY_TITLE = 'Walnut\'s last attempt did not work. Clicking tries again.';
 
 /** Said under `Finish unsubscribing…`, because the click opens a conversation and sends nothing. */
 export const UNSUBSCRIBE_ASK_TITLE =
-  'Walnut got part of the way and the rest needs a person. This opens Ask Walnut about it.';
+  'Walnut got part of the way and the rest needs a person. This opens a quick question about it.';
 
 /**
  * The words each state draws, exported because three surfaces name them: the menu, the reader's button

@@ -1,6 +1,8 @@
 import { matchIdRef } from '../../../../src/lib/id-ref';
 import type { Task } from '@open-walnut/core';
 import { subtasksOf } from './subtask-index';
+import { orgDisplayTitle } from '@open-walnut/org-tree';
+import { projectDisplayName } from '@/utils/project-display';
 
 /**
  * Which tasks a leader may adopt as a worker (AdoptWorkerFlyout.tsx).
@@ -59,7 +61,9 @@ export function adoptCandidates(tasks: readonly Task[], leaderId: string, query 
     .filter((t) => !excluded.has(t.id) && !isDoneTask(t))
     .filter((t) => !q
       || t.title.toLowerCase().includes(q)
+      || orgDisplayTitle(t).toLowerCase().includes(q)
       || (t.project ?? '').toLowerCase().includes(q)
+      || projectDisplayName(t.project).toLowerCase().includes(q)
       || t.id.toLowerCase().startsWith(q))
     .sort((a, b) => stamp(b) - stamp(a));
 }

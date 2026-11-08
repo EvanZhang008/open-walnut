@@ -69,7 +69,7 @@ import {
   removeSessionSideQuestion, getSessionWorkflowPayload, getSessionPlanPayload,
   getSubagentHistoryPayload, executeCompactSession,
 } from '../../core/sessions/session-extras.js'
-import { filterSessionsByQuery } from '../../core/session-search.js'
+import { filterSessionsByQuery, sessionSearchTaskName } from '../../core/session-search.js'
 import { CLOUD_MODE, LOG_DIR, QUICK_START_MESSAGE_HARD_LIMIT } from '../../constants.js'
 import { ensureWalnutSource, isWalnutCheckout, WalnutSourceError } from '../../core/self-repair/walnut-source.js'
 import { engineCaps, isAcpEngine, isKnownEngine, normalizeEngine } from '../../core/agents/engine-registry.js'
@@ -929,7 +929,7 @@ async function applySessionSearch(sessions: SessionRecord[], q: unknown): Promis
     // table read per debounced keystroke was the browser-pool-saturation
     // class fixed in c0320af.
     const tasks = await listTasksByIds([...taskIds] as string[])
-    for (const t of tasks) if (taskIds.has(t.id)) titleById.set(t.id, t.title)
+    for (const t of tasks) if (taskIds.has(t.id)) titleById.set(t.id, sessionSearchTaskName(t))
   }
   let hosts: Record<string, { hostname: string }> = {}
   try {

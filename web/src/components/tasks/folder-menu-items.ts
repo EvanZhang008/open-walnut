@@ -4,6 +4,7 @@
  * The hook that draws them is `useFolderContextMenu` in FolderContextMenu.tsx.
  */
 import type { ContextMenuItem } from '@/utils/context-menu';
+import { projectDisplayName } from '../../utils/project-display';
 
 /** The folder a right-click landed on. */
 export interface FolderMenuTarget {
@@ -66,7 +67,7 @@ export function buildFolderMenuItems(
       // reason instead: the folder registry fetch simply hasn't landed yet.
       key: 'move-project',
       label: 'Project',
-      value: target.project === undefined ? '…' : (target.project || 'Inbox'),
+      value: target.project === undefined ? '…' : projectDisplayName(target.project),
       when: !!onMoveToProject,
       disabled: target.project === undefined,
       title: target.project === undefined ? 'Folder project still loading' : undefined,

@@ -39,8 +39,9 @@ const NOT_TO_AI: Record<string, string> = {
   'Views/Sessions/SessionLifecycleDialogs.swift': "a session's title",
   'Views/Sessions/SessionPathPicker.swift': 'a folder path',
   'Views/SetupView.swift': 'the pairing address and code',
-  'Views/Tasks/TaskDetailExtras.swift': "a task's fields",
   'Views/Tasks/TaskDetailSheet.swift': "a task's fields",
+  'Views/Tasks/TaskFieldEditorSheet.swift': "a task's description or note, a document the task keeps, not a message",
+  'Views/Tasks/TaskProjectPicker.swift': 'a project search or a new project name',
 }
 
 const INPUT_RE = /\b(?:TextField|TextEditor|LetterReplyField)\s*\(/

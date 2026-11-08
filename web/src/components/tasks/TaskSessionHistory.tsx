@@ -9,6 +9,7 @@ import type { SessionRecord, Task } from '@open-walnut/core';
 import { fetchSession } from '@/api/sessions';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { SessionRow } from './TaskDetailRows';
+import type { SessionOwner } from '@/utils/project-display';
 import '@/styles/transfer.css';
 
 type SessionFields = Pick<Task, 'session_id' | 'session_ids' | 'plan_session_id' | 'exec_session_id' | 'legacy_session_ids'>;
@@ -35,7 +36,7 @@ export function taskSessionLayout(task: SessionFields, linked: Iterable<string> 
 }
 
 /** "Earlier sessions (N)": collapsed; the records load when it opens. Each row opens its session. */
-export function EarlierSessions({ ids, onOpen }: { ids: string[]; onOpen: (sessionId: string) => void }) {
+export function EarlierSessions({ ids, owner, onOpen }: { ids: string[]; owner?: SessionOwner; onOpen: (sessionId: string) => void }) {
   const [open, setOpen] = useState(false);
   const [records, setRecords] = useState<Map<string, SessionRecord | null>>(new Map());
   const key = ids.join(',');
@@ -72,6 +73,7 @@ export function EarlierSessions({ ids, onOpen }: { ids: string[]; onOpen: (sessi
                 record={shown}
                 processStatus={rec?.process_status ?? 'stopped'}
                 isPlan={rec?.mode === 'plan'}
+                owner={owner}
                 onOpen={onOpen}
               />
             );

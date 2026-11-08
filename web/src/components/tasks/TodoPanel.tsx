@@ -23,7 +23,7 @@ import type { UseFavoritesReturn } from '@/hooks/useFavorites';
 import type { UseOrderingReturn } from '@/hooks/useOrdering';
 import * as ICONS from '../common/Icons';
 import type { TaskPriority } from '@open-walnut/core';
-import { isHiddenFromTaskLists } from '@open-walnut/org-tree';
+import { isHiddenFromTaskLists, orgDisplayTitle } from '@open-walnut/org-tree';
 import { TodoSearchBar } from './TodoSearchBar';
 import { NavigationHeading, NavigationSection, NavigationSections } from './NavigationSections';
 import { useRecentOpenedTasks } from './useRecentOpenedTasks';
@@ -72,7 +72,7 @@ import {
   mapServerTaskSearchResults,
   taskReferenceMatchField,
 } from './search-results';
-import { arrangeSearchResults, taskMatchesLiterally } from './search-relevance';
+import { arrangeSearchResults, taskMatchesCeoName, taskMatchesLiterally } from './search-relevance';
 import { taskMatchesDateTag } from './date-tag-search';
 import '@/styles/todo-search.css';
 import '@/styles/todo-empty-board.css';
@@ -165,6 +165,7 @@ import { isBuiltinTier, type FocusTier, type CustomTierDef } from '@/api/focus';
 import { useInlineTitleEdit } from './useInlineTitleEdit';
 import { useTaskCircle } from '@/hooks/useSessionStatus';
 import { openTaskOnHome } from '@/utils/open-session';
+import { projectDisplayName, taskProjectLabel } from '@/utils/project-display';
 
 type Task = CoreTask & {
   has_description?: boolean;
@@ -1199,7 +1200,7 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
             className={`todo-item-title${isEditing ? ' editing' : ''}${task.walnut_agent ? ' walnut-task-title' : ''}`}
             onClick={isEditing ? (e) => e.stopPropagation() : handleTitleClick}
           >
-            {task.title}
+            {orgDisplayTitle(task)}
           </span>
           <CronPill sessionId={resolveTaskSessionId(task)} />
           <TriggerPill taskId={task.id} />
@@ -1300,7 +1301,7 @@ function TaskItemOverlay({ task }: { task: Task }) {
   return (
     <div className="todo-panel-item drag-overlay-item">
       <div className="todo-item-content">
-        <span className={`todo-item-title${task.walnut_agent ? ' walnut-task-title' : ''}`}>{task.title}</span>
+        <span className={`todo-item-title${task.walnut_agent ? ' walnut-task-title' : ''}`}>{orgDisplayTitle(task)}</span>
       </div>
       {showPriority && (
         <span className={`badge badge-${task.priority}`}>{task.priority === 'immediate' ? '!!' : task.priority === 'important' ? '!' : task.priority === 'backlog' ? '~' : '--'}</span>
@@ -1443,11 +1444,11 @@ function ProjectHeaderRow({
               <button
                 className="todo-group-name-btn"
                 onClick={(e) => { e.stopPropagation(); onToggleCollapse(project); }}
-                title={`${project || 'Inbox'}: click to ${collapsed ? 'expand' : 'collapse'}`}
+                title={`${projectDisplayName(project)}: click to ${collapsed ? 'expand' : 'collapse'}`}
               >
                 {/* SOLID icon + kind-tag = project (folders inside use the hollow icon + indent). */}
                 <span className="todo-group-project-icon">{ICONS.ICON_FOLDER_SOLID}</span>
-                <span className="todo-group-project-name">{project || 'Inbox'}</span>
+                <span className="todo-group-project-name">{projectDisplayName(project)}</span>
               </button>
               {/* Tag / badge / count sit on the ROW, not inside the name button, and
                   that placement is the feature: the button is the "open the project
@@ -1486,7 +1487,7 @@ function ProjectHeaderRow({
               <button
                 type="button"
                 className="navigation-more"
-                aria-label={`${project || 'Inbox'} menu`}
+                aria-label={`${projectDisplayName(project)} menu`}
                 aria-haspopup="menu"
                 // See the chevron above: the row is a dnd-kit activator, so a 5px
                 // slip on this glyph would arm a project reorder and eat the click.
@@ -2177,10 +2178,10 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isOpe
       <span
         {...titleProps}
         className={`todo-pinned-title${isEditing ? ' editing' : ''}${task.walnut_agent ? ' walnut-task-title' : ''}`}
-        title={task.title}
+        title={orgDisplayTitle(task)}
         onClick={isEditing ? (e) => e.stopPropagation() : undefined}
       >
-        {task.title}
+        {orgDisplayTitle(task)}
       </span>
       <SubtaskPill task={task} />
       <LeaderPill task={task} />
@@ -2222,9 +2223,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   scrollLog('drag-trace-TodoPanel-render', { n: __renderCountRef.current, tasks: rawTasks.length });
   // A phone's host card follows the work that needs you, inside the list (N2-13, N2-15).
   const bannerInList = usePhoneLayout();
-  // Hide .metadata* tasks (legacy project-configuration sentinels, not user-visible) and the org's
-  // own nodes (Main, project leads: the chat slot and the org chart show them; their work stays here).
-  const tasks = useMemo(() => rawTasks.filter((t) => !t.title.startsWith('.metadata') && !isHiddenFromTaskLists(t)), [rawTasks]);
+  const { query: searchQuery, setQuery: setSearchQuery, results: searchResults, isSearching, clearSearch } = useTaskSearch();
+  const deferredSearchQuery = useDeferredValue(searchQuery);
+  const isSearchMode = deferredSearchQuery.trim().length > 0;
+  // Org conversations stay off the board, but an explicit search must find them.
+  const tasks = useMemo(() => rawTasks.filter((t) => !t.title.startsWith('.metadata')
+    && (!isHiddenFromTaskLists(t) || (isSearchMode && !!t.org_role && !t.plugin_only))), [rawTasks, isSearchMode]);
   // Every task id this panel holds: a parent reference that is one of them names that task alone,
   // even where a filtered list left it out (src/lib/id-ref.ts matchParentRef).
   const knownTaskIds = useMemo(() => new Set(rawTasks.map((t) => t.id)), [rawTasks]);
@@ -2615,9 +2619,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   useEffect(() => () => { window.removeEventListener('pointermove', trackPointer); }, []);
   const [detailTarget, setDetailTarget] = useState<DetailTarget>(null);
 
-  // Search state
-  const { query: searchQuery, setQuery: setSearchQuery, results: searchResults, isSearching, clearSearch } = useTaskSearch();
-
   // Vertical splitter for list/detail ratio
   const { ratio: detailRatio, containerRef: splitterContainerRef, handleProps: splitterHandleProps, isResizing: splitterResizing } = useVerticalSplitter();
   // A fold keeps its clicked row in place; only the rows below it move.
@@ -2634,20 +2635,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // taller).
   // (RECENT_VISIBLE_MAX * 30) with no way to pull it taller.
   const recentResize = useResizableHeight('open-walnut-focus-tier-height-recent', { min: 60, max: 1200 });
-
-  // Typing responsiveness (2026-08-26): the search input tracks `searchQuery`
-  // synchronously, but every EXPENSIVE consumer (match recompute over thousands
-  // of tasks, the section-layout flip, the pinned/recent search-mode filters)
-  // reads this deferred copy instead. React renders the keystroke first and the
-  // heavy pass at deferred (interruptible) priority, so fast typing never waits
-  // on a full panel recompute per character.
-  const deferredSearchQuery = useDeferredValue(searchQuery);
-
-  // Determine if search mode is active (query entered). Derived from the
-  // DEFERRED query so mode-dependent consumers flip in the same pass that
-  // computes their matches (an urgent flip with a stale deferred query would
-  // run one frame of "search mode with empty query" = match-everything).
-  const isSearchMode = deferredSearchQuery.trim().length > 0;
 
   // ── Section-tab view resolution ──
   // Search defaults to the All view, where every match lands in ONE flat ranked
@@ -3682,7 +3669,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const members = pinnedTasks.filter((t) => folderWithin(t.group_id, gid, folderParents));
     const label = taskGroups?.[gid] ?? 'Folder';
     if (members.length === 0) return { label, titles: [], count: 0 };
-    return { label, titles: members.map((t) => t.title), count: members.length };
+    return { label, titles: members.map((t) => orgDisplayTitle(t)), count: members.length };
   }, [activeDragPinnedId, pinnedTasks, taskGroups, folderParents]);
 
   // A dragged divider line renders a floating line under the cursor (the in-list
@@ -4934,7 +4921,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // Keep the urgent pass on small metadata fields; descriptions and summaries can
     // contain enough text to block an input frame across a large task collection.
     // `created:…` / `updated:…` name the task's own dates, which are never stored as tags.
-    const metadataMatches = eligibleTasks.filter((t) => taskMatchesLiterally(t, lowerQuery) || taskMatchesDateTag(t, lowerQuery));
+    const metadataMatches = eligibleTasks.filter((t) => taskMatchesLiterally(t, lowerQuery) || taskMatchesDateTag(t, lowerQuery))
+      .sort((a, b) => Number(taskMatchesCeoName(b, lowerQuery)) - Number(taskMatchesCeoName(a, lowerQuery)));
 
     if (!searchResults) {
       const metadataTaskIds = new Set(metadataMatches.map((task) => task.id));
@@ -5480,7 +5468,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     if (migrating > 0) {
       const ok = await confirm({
         title: 'Move across providers?',
-        message: `${migrating} of the ${moving.length} tasks in “${taskGroups?.[groupId] ?? 'this folder'}” leave the service they sync to and become local tasks in “${project || 'Inbox'}”: nothing is sent to another service until you choose Sync on a task. Their original tasks will be archived (renamed “[Moved]” and marked complete).`,
+        message: `${migrating} of the ${moving.length} tasks in “${taskGroups?.[groupId] ?? 'this folder'}” leave the service they sync to and become local tasks in “${projectDisplayName(project)}”: nothing is sent to another service until you choose Sync on a task. Their original tasks will be archived (renamed “[Moved]” and marked complete).`,
         confirmLabel: 'Move',
       });
       if (!ok) return false;
@@ -6022,7 +6010,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       if (sortForProject(project) === 'manual') return;
       if (onBakeOrder && sortOrder.length > 0) onBakeOrder(sortOrder);
       setProjectSort(project, 'manual');
-      showSortToast(`${project || 'Inbox'} switched to Manual order`);
+      showSortToast(`${projectDisplayName(project)} switched to Manual order`);
       return;
     }
     if (sortBy !== 'manual') {
@@ -6057,9 +6045,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       title: 'Move across providers?',
       message: mig.migrates
         ? mig.held
-          ? `“${task?.title ?? taskId}” leaves ${fromName} and stays a local task in “${project}”: nothing is sent to ${sourceDisplayName(mig.to, integrations)} until you choose Sync to ${sourceDisplayName(mig.to, integrations)} on it. The original ${fromName} task will be archived (renamed “[Moved]” and marked complete).`
-          : `“${task?.title ?? taskId}” leaves ${fromName} and becomes a local task in “${project || 'Inbox'}”. The original ${fromName} task will be archived (renamed “[Moved]” and marked complete). Its ${fromName} subtasks become local too.`
-        : `“${task?.title ?? taskId}” is a ${fromName} task and “${project || 'Inbox'}” may belong to a different provider (the project list hasn't loaded). If it does, the original ${fromName} task will be archived (renamed “[Moved]” and marked complete).`,
+          ? `“${task ? orgDisplayTitle(task) : taskId}” leaves ${fromName} and stays a local task in “${projectDisplayName(project)}”: nothing is sent to ${sourceDisplayName(mig.to, integrations)} until you choose Sync to ${sourceDisplayName(mig.to, integrations)} on it. The original ${fromName} task will be archived (renamed “[Moved]” and marked complete).`
+          : `“${task ? orgDisplayTitle(task) : taskId}” leaves ${fromName} and becomes a local task in “${projectDisplayName(project)}”. The original ${fromName} task will be archived (renamed “[Moved]” and marked complete). Its ${fromName} subtasks become local too.`
+        : `“${task ? orgDisplayTitle(task) : taskId}” is a ${fromName} task and “${projectDisplayName(project)}” may belong to a different provider (the project list hasn't loaded). If it does, the original ${fromName} task will be archived (renamed “[Moved]” and marked complete).`,
       confirmLabel: 'Move',
     }).then((ok) => ({ ok, migrates: mig.migrates }));
   }, [tasks, projectRegistry.sourceByName, projectRegistry.loaded, confirm, integrations]);
@@ -6659,7 +6647,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     if (picked.length === 0) return;
     const ok = await confirm({
       title: picked.length === 1
-        ? `Delete “${picked[0].title}”?`
+        ? `Delete “${orgDisplayTitle(picked[0])}”?`
         : `Delete ${picked.length} tasks?`,
       message: 'This cannot be undone.',
       confirmLabel: 'Delete',
@@ -7069,7 +7057,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     <InlineAdd
       key={`runadd:${tier}:${project}`}
       draftId={`run:${tier}:${project}`}
-      label={`Add to ${project || 'Inbox'}…`}
+      label={`Add to ${projectDisplayName(project)}…`}
       openSignal={runAddSignal?.tier === tier && runAddSignal.project === project ? runAddSignal.nonce : undefined}
       onOpenSignalConsumed={() => setRunAddSignal((s) => (s ? { ...s, nonce: 0 } : s))}
       onAdd={(title) => onCreate({ title, priority: 'none', project: project || undefined, pinnedTier: tier as FocusTier })}
@@ -7527,7 +7515,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const tabName = (id: string) => tabBarTabs(customTiers).find((t) => t.id === id)?.label ?? tierDisplayLabel(id, customTiers);
   const offViewNote = offView && offViewTask ? (
     <OffViewNote
-      title={offViewTask.title}
+      title={orgDisplayTitle(offViewTask)}
       here={tabName(offView.from)}
       there={tabName(offView.target)}
       onShow={() => {
@@ -8201,7 +8189,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             {activeDragPinnedTask && (
               <div className="todo-pinned-drag-frame">
                 <div className="todo-pinned-card todo-pinned-card-dragging">
-                  <span className={`todo-pinned-title${activeDragPinnedTask.walnut_agent ? ' walnut-task-title' : ''}`} title={activeDragPinnedTask.title}>{activeDragPinnedTask.title}</span>
+                  <span className={`todo-pinned-title${activeDragPinnedTask.walnut_agent ? ' walnut-task-title' : ''}`} title={orgDisplayTitle(activeDragPinnedTask)}>{orgDisplayTitle(activeDragPinnedTask)}</span>
                 </div>
               </div>
             )}
@@ -8370,7 +8358,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                       onMoveToProject={onMoveTask ? handleMoveToProject : undefined}
                       isPinned={pinnedTaskIds?.has(task.id)}
                       pinnedTier={getTier(task.id)}
-                      searchContext={task.project || 'Inbox'}
+                      searchContext={taskProjectLabel(task)}
                       searchTierLabel={tier ? tierDisplayLabel(tier, customTiers) : undefined}
                       filterOverrideReason={(task.id === filterOverrideId || task.id === fadingOverrideId) ? filterOverrideNode : undefined}
                       isFadingOverride={fadingOverrideId === task.id}
@@ -8441,7 +8429,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   onMoveUp={moveUpMap.has(task.id) ? handleMoveUpById : undefined}
                   onMoveToProject={onMoveTask ? handleMoveToProject : undefined}
                   isPinned={pinnedTaskIds?.has(task.id)}
-                  searchContext={task.project || 'Inbox'}
+                  searchContext={taskProjectLabel(task)}
                   filterOverrideReason={(task.id === filterOverrideId || task.id === fadingOverrideId) ? filterOverrideNode : undefined}
                   isFadingOverride={fadingOverrideId === task.id}
                   groupInfo={listGroupInfo.get(task.id)}
@@ -8579,7 +8567,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                           ))}
                           <InlineAdd
                             draftId={`project:${project}`}
-                            label={`Add to ${project || 'Inbox'}\u2026`}
+                            label={`Add to ${projectDisplayName(project)}\u2026`}
                             openSignal={headerAddSignal?.project === project ? headerAddSignal.nonce : undefined}
                             onOpenSignalConsumed={clearHeaderAddSignal}
                             onAdd={async (title) => {
@@ -8606,7 +8594,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             >
               {activeDragType === 'project-group' && activeDragId ? (
                 <div className="drag-overlay-group">
-                  {activeDragId.slice(5) || 'Inbox'}
+                  {projectDisplayName(activeDragId.slice(5))}
                 </div>
               ) : draggedTask ? (
                 <TaskItemOverlay task={draggedTask} />

@@ -722,7 +722,7 @@ export function NotesEditor({ content, readOnly = false, onDirty, placeholder, c
         <SlashCommandPortal
           editor={editor}
           state={slashState}
-          tasks={tasks ?? []}
+          tasks={tasks}
           focusedTaskId={focusedTaskId}
           wikiLinkNotes={wikiLinkNotes}
           onClose={handleSlashClose}

@@ -205,13 +205,13 @@ const ChatDockItem = memo(function ChatDockItem({ isActive }: ChatDockItemProps)
       role="button"
       tabIndex={0}
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); emitDockActivateChat(); } }}
-      title="Ask Walnut"
-      aria-label="Ask Walnut"
+      title="Quick question"
+      aria-label="Quick question"
     >
       <span className="dock-chat-icon">{ICON_CHAT}</span>
       {/* The dock cell is 56px wide, so the label is the short form; the title
           attribute carries the full name. */}
-      <span className="dock-chat-label">Walnut</span>
+      <span className="dock-chat-label">Question</span>
       {isActive && <span className="dock-chat-active-dot" />}
     </div>
   );

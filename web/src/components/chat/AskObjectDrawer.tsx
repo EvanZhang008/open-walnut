@@ -31,6 +31,7 @@ import { useEvent } from '@/hooks/useWebSocket';
 import { log } from '@/utils/log';
 import { discardDraft } from '@/utils/drafts';
 import { locateTaskOnHome } from '@/utils/open-session';
+import { projectDisplayName } from '@/utils/project-display';
 import { visibleInterval } from '@/utils/page-visibility';
 import { askLaunchBody, askTaskForLater } from './ask-object-draft';
 import { useAskObjectDraft } from './useAskObjectDraft';
@@ -453,7 +454,7 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
         kind: 'sort',
         severity: 'success',
         title: `Task created: ${task.title}`,
-        body: input.project?.trim() || 'Inbox',
+        body: projectDisplayName(input.project?.trim()),
         dedupKey: task.id,
         persistent: false,
         action: { label: 'Find on Home', kind: 'callback' },
@@ -482,7 +483,7 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
       <div className="ask-object-session" data-testid="ask-object-session" data-session-id={view.sessionId}>
         {view.sendError ? (
           <p className="ask-object-error" data-testid="ask-object-error">
-            Could not ask Walnut. {view.sendError.message}
+            Could not send the quick question. {view.sendError.message}
             <button
               type="button"
               className="ask-object-inline-btn"
