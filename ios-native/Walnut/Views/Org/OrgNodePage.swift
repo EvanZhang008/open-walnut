@@ -39,6 +39,7 @@ struct OrgNodePage: View {
     @State private var tab: OrgNodeTab
     @State private var threads: OrgThreadsStore
     @Environment(TasksStore.self) private var tasks
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     init(route: OrgNodeRoute) {
         self.route = route
@@ -50,15 +51,9 @@ struct OrgNodePage: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Picker("View", selection: $tab) {
-                ForEach(OrgNodeTab.allCases) { t in
-                    Text(label(t)).tag(t)
-                }
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .accessibilityIdentifier("org.node.tabs")
+            viewPicker
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
             Divider()
             Group {
                 switch tab {
@@ -82,6 +77,45 @@ struct OrgNodePage: View {
         .accessibilityIdentifier("org.node.page")
     }
 
+    /// Three segments side by side at ordinary sizes. At the accessibility sizes three labels
+    /// never fit one row (each read "T…", and the row grew taller than the page's content), so the
+    /// picker collapses to one full-width button naming the view shown, with the others in its menu.
+    @ViewBuilder private var viewPicker: some View {
+        if OrgNodeBarLayout.collapses(typeSize) {
+            Menu {
+                Picker("View", selection: $tab) {
+                    ForEach(OrgNodeTab.allCases) { t in
+                        Label(label(t), systemImage: t.symbol).tag(t)
+                    }
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: tab.symbol)
+                    Text(label(tab)).lineLimit(1).minimumScaleFactor(0.7)
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.up.chevron.down").font(.footnote)
+                }
+                .font(.body.weight(.medium))
+                .padding(.horizontal, 12)
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .background(Color(uiColor: .tertiarySystemFill).opacity(0.6), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .dynamicTypeSize(...OrgNodeBarLayout.typeCap)
+            .accessibilityLabel("View: \(label(tab))")
+            .accessibilityIdentifier("org.node.tabs")
+        } else {
+            Picker("View", selection: $tab) {
+                ForEach(OrgNodeTab.allCases) { t in
+                    Text(label(t)).tag(t)
+                }
+            }
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier("org.node.tabs")
+        }
+    }
+
     private func label(_ t: OrgNodeTab) -> String {
         guard t == .threads else { return t.label }
         let read = threads.threads.map { OrgThreadModel.sections($0, now: AppClock.now()).open.count }
@@ -96,18 +130,33 @@ struct OrgNodePage: View {
 
 /// The row at the top of an Org node's chat that opens its Threads, Tasks and Brief, each its own
 /// page. Threads lead and carry the count of the ones for him (coloured when one waits on him).
+/// How the Org node's bars give way at the accessibility text sizes (2026-11-08, a QA run at
+/// accessibility XXXL: the three buttons of the chat's bar each read "T…", the bar took a sixth
+/// of the screen and left the chat about one line tall). From the first accessibility size the
+/// bar keeps one row of icons with the threads count, its type capped at the largest standard
+/// size, and a long press shows each button's name large (the Large Content Viewer, as the tab
+/// bar does); the node page's picker becomes one button with a menu.
+enum OrgNodeBarLayout {
+    static let typeCap = DynamicTypeSize.xxxLarge
+    static func collapses(_ size: DynamicTypeSize) -> Bool { size.isAccessibilitySize }
+}
+
 struct OrgNodeBar: View {
     let node: WalnutTask
     let open: (OrgNodeTab) -> Void
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         let counts = node.userStatus?.threads
+        let compact = OrgNodeBarLayout.collapses(typeSize)
         HStack(spacing: 8) {
             ForEach(OrgNodeTab.allCases) { t in
                 Button { open(t) } label: {
                     HStack(spacing: 5) {
-                        Image(systemName: t.symbol).font(.footnote)
-                        Text(t.label).font(.subheadline.weight(.medium))
+                        Image(systemName: t.symbol).font(compact ? .body : .footnote)
+                        if !compact {
+                            Text(t.label).font(.subheadline.weight(.medium))
+                        }
                         if t == .threads {
                             let n = counts?.shown ?? 0
                             Text("\(n)")
@@ -119,15 +168,19 @@ struct OrgNodeBar: View {
                                 .background(n > 0 ? UserStatePill.color(.needs) : Color(.systemGray3), in: Capsule())
                         }
                     }
-                    .frame(maxWidth: .infinity, minHeight: 36)
+                    .frame(maxWidth: .infinity, minHeight: compact ? 44 : 36)
                     .background(Color(uiColor: .tertiarySystemFill).opacity(0.6), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(t == .threads ? "Threads, \(counts?.shown ?? 0)" : t.label)
+                .accessibilityShowsLargeContentViewer {
+                    Label(t == .threads ? "Threads \(counts?.shown ?? 0)" : t.label, systemImage: t.symbol)
+                }
                 .accessibilityIdentifier("org.bar.\(t.rawValue)")
             }
         }
+        .dynamicTypeSize(...OrgNodeBarLayout.typeCap)
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(.bar)

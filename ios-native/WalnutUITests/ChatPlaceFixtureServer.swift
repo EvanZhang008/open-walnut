@@ -4,8 +4,8 @@ import Network
 /// The server `ChatPlaceUITests` pair the app to: a loopback `/api/v1` the test
 /// runner hosts itself, so the tests need no Walnut anywhere (CI runs with none) and
 /// never touch anyone's data. It holds just what the Chat tab's ways back need: one
-/// agent with two conversations, one ask with a session, and an org whose Main has a
-/// session. Field names follow `src/web/routes/api-v1.ts` and the app's decoders;
+/// agent with two conversations, one ask with a session, and an org whose Main (an org node, `org_role` main) has
+/// a session. Field names follow `src/web/routes/api-v1.ts` and the app's decoders;
 /// anything else answers the v1 404, which the app reads as "not on this server",
 /// never as offline. Event streams are held open with comments, as the real ones are.
 ///
@@ -203,7 +203,10 @@ final class ChatPlaceFixtureServer {
                 Self.session(Self.askSessionID, task: Self.askTaskID, title: "Compare two laptops"),
             ]])
         case ("GET", "/tasks/\(Self.mainTaskID)"):
-            return (200, ["task": Self.task(Self.mainTaskID, title: "Main", session: Self.mainSessionID)])
+            // Main is the org's CEO node, so its chat wears the Threads, Tasks and Brief bar.
+            var main = Self.task(Self.mainTaskID, title: "Main", session: Self.mainSessionID)
+            main["org_role"] = "main"
+            return (200, ["task": main])
         case ("GET", "/tasks/\(Self.askTaskID)"):
             return (200, ["task": Self.task(Self.askTaskID, title: "Compare two laptops", session: Self.askSessionID)])
         case ("GET", "/sessions/\(Self.mainSessionID)"):

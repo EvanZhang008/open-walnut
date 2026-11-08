@@ -2594,6 +2594,21 @@ struct OfflineBanner: View {
             .padding(.vertical, 6)
             .background(Theme.warning.opacity(0.15))
             .foregroundStyle(.primary)
+            .modifier(BannerTypeCap(text: text))
+    }
+}
+
+/// A banner over a chat is chrome, not content: at the accessibility sizes its line wrapped to a
+/// quarter of the screen and left the conversation about one line tall (2026-11-08, a QA run at
+/// accessibility XXXL). It stops growing at the largest standard size, and a long press shows its
+/// words large (the Large Content Viewer), as the system's bars do.
+struct BannerTypeCap: ViewModifier {
+    static let cap = DynamicTypeSize.xxxLarge
+    let text: String
+    func body(content: Content) -> some View {
+        content
+            .dynamicTypeSize(...Self.cap)
+            .accessibilityShowsLargeContentViewer { Text(text) }
     }
 }
 
@@ -2616,6 +2631,7 @@ struct ErrorBanner: View {
         .padding(.vertical, 6)
         .background(Theme.danger.opacity(0.12))
         .foregroundStyle(.primary)
+        .modifier(BannerTypeCap(text: text))
     }
 }
 
@@ -2639,6 +2655,7 @@ struct ConfirmationBanner: View {
         .padding(.vertical, 6)
         .background(Theme.success.opacity(0.12))
         .foregroundStyle(.primary)
+        .modifier(BannerTypeCap(text: text))
         .task {
             // Self-dismiss: success lines are transient by nature.
             try? await Task.sleep(for: .seconds(5))
