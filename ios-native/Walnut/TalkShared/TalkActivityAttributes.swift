@@ -57,7 +57,7 @@ extension TalkActivityAttributes.ContentState {
 
     var subtitle: String {
         switch phase {
-        case .listening: return "Pause to send, or tap Send"
+        case .listening: return "Tap Send, or press the Action Button again"
         case .transcribing, .sending: return words ?? "One moment"
         case .sent: return words ?? ""
         case .failed:

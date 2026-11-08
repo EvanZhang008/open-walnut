@@ -178,6 +178,13 @@ enum TalkDebug {
               FileManager.default.fileExists(atPath: path) else { return nil }
         return path
     }
+
+    static let refuseFromBehindKey = "walnut.debug.talkRefuseFromBehind"
+
+    /// The simulator records from behind the app on screen whatever the order; a phone
+    /// may still refuse. True: a take started from behind is refused the way a phone
+    /// refused build 160's, so a test walks the press that opens Walnut instead.
+    static var refuseFromBehind: Bool { UserDefaults.standard.bool(forKey: refuseFromBehindKey) }
 }
 #endif
 

@@ -2,9 +2,11 @@ import Foundation
 
 /// Decides when a Talk to Walnut take is over, from the microphone's loudness.
 ///
-/// The person presses the Action Button and talks; nobody looks at the screen.
-/// So the take ends by itself on a pause after speech, and gives up on its own
-/// when nothing was said at all. Pure value logic: fed one level reading at a
+/// The person presses the Action Button and talks. The take ends when they say
+/// so (Send, or a second press), never on a pause by itself (the user,
+/// 2026-11-07: a pause that sends "adds stress"); it gives up on its own only
+/// when nothing at all was heard, and ends at `maxDuration`. A pause ends it
+/// only with `sendsOnPause`. Pure value logic: fed one level reading at a
 /// time (`feed`), it answers what to do, which is what the unit tests drive.
 ///
 /// The threshold follows the room: the quietest stretch heard so far is the
@@ -17,12 +19,15 @@ struct TalkPauseDetector {
         case pauseAfterSpeech
         /// Nothing that sounded like speech in `noSpeechTimeout`.
         case noSpeech
-        /// The take reached `maxDuration`: send it as it is.
+        /// The take reached `maxDuration`: it ends (and waits for the person to send it).
         case tooLong
     }
 
-    /// How long a quiet stretch after speech ends the take. Long enough for a
-    /// breath between two sentences, short enough to feel immediate.
+    /// Whether a pause after speech ends the take. Off: Talk sends only when the
+    /// person says so.
+    var sendsOnPause = false
+    /// How long a quiet stretch after speech ends the take (with `sendsOnPause`).
+    /// Long enough for a breath between two sentences, short enough to feel immediate.
     var pauseToSend: TimeInterval = 1.8
     var noSpeechTimeout: TimeInterval = 8
     var maxDuration: TimeInterval = 300
@@ -79,8 +84,10 @@ struct TalkPauseDetector {
             quietSince = time
         }
         if time >= maxDuration { return .tooLong }
-        if hasSpeech, let quiet = quietSince, time - quiet >= pauseToSend { return .pauseAfterSpeech }
-        if !hasSpeech, time >= noSpeechTimeout { return .noSpeech }
+        if sendsOnPause, hasSpeech, let quiet = quietSince, time - quiet >= pauseToSend { return .pauseAfterSpeech }
+        // Without a pause to end it, a take that heard something (soft speech the room
+        // hid) listens on until the person sends it: only silence gives up.
+        if !hasSpeech, time >= noSpeechTimeout, sendsOnPause || !heardSomething { return .noSpeech }
         return .keepListening
     }
 }

@@ -9,6 +9,8 @@ protocol TalkActivityPresenting: AnyObject {
     /// Start the Live Activity for a new take. False when iOS refused it (Live
     /// Activities turned off for Walnut), which the caller reports.
     func start(_ state: TalkActivityAttributes.ContentState) -> Bool
+    /// Whether `start` can show one now (Live Activities are on for Walnut).
+    var canShow: Bool { get }
     func update(_ state: TalkActivityAttributes.ContentState)
     /// End it, showing `state` in the Dynamic Island briefly and on the Lock
     /// Screen for `linger` (0: gone at once).
@@ -27,6 +29,8 @@ final class TalkLiveActivity: TalkActivityPresenting {
     /// the end that followed it.
     private var queue: Task<Void, Never>?
 
+    var canShow: Bool { ActivityAuthorizationInfo().areActivitiesEnabled }
+
     func start(_ state: TalkActivityAttributes.ContentState) -> Bool {
         for old in Activity<TalkActivityAttributes>.activities where old.id != activity?.id {
             enqueue { await old.end(nil, dismissalPolicy: .immediate) }
@@ -36,9 +40,11 @@ final class TalkLiveActivity: TalkActivityPresenting {
             return false
         }
         do {
+            // A take ends by the 5-minute cap: past it, a card a dead process left
+            // saying Listening shows as out of date until the next launch ends it.
             activity = try Activity.request(
                 attributes: TalkActivityAttributes(),
-                content: ActivityContent(state: state, staleDate: nil),
+                content: ActivityContent(state: state, staleDate: Date().addingTimeInterval(Self.listenStale)),
                 pushType: nil
             )
             AppLog.info("talk", "live activity started", [:])
@@ -86,6 +92,9 @@ final class TalkLiveActivity: TalkActivityPresenting {
     /// A bundled sound of silence: an alert must name a sound, and a sent take
     /// should only show, never ring.
     static let silentSound = "talk-silent.caf"
+
+    /// Past the take's 5-minute cap, with a margin.
+    static let listenStale: TimeInterval = 6 * 60
 
     /// How long the outcome shows in the Dynamic Island before the activity ends.
     static let islandHold: TimeInterval = 3

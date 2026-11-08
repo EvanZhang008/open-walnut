@@ -1,13 +1,11 @@
 import SwiftUI
 import UIKit
 
-/// The screen a press of the Action Button opens: Walnut comes forward already
-/// listening, and the take shows here until it is sent.
-///
-/// iOS lets no app start recording while it is not on screen (a privacy rule;
-/// only calling apps are exempt), so the shortcut opens Walnut and records in
-/// front instead of in the background. Build 160 tried the background and every
-/// press was refused with "Audio is in use by another app".
+/// The take on Walnut's own screen: a press of the Action Button while Walnut is
+/// in front, or one that could not record from behind the app on screen (Live
+/// Activities off, the microphone never allowed), which opens Walnut already
+/// listening. The take shows here until it is sent. From behind, the take's Live
+/// Activity shows it instead (`TalkToWalnutIntent`).
 ///
 /// It has a window of its own above Walnut's, so it covers any sheet that was
 /// open (the work card's list, an approval) instead of waiting behind it.
@@ -134,6 +132,10 @@ struct TalkPanelView: View {
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(uiColor: .systemBackground))
+        // While it listens the whole screen sends, easy to hit without looking (the user,
+        // 2026-11-07: "the listening screen, tap it and it sends"); Cancel keeps its button.
+        .contentShape(Rectangle())
+        .onTapGesture { if model.error == nil, talk.phase == .listening { talk.finishSoon(source: "panel-tap") } }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("talk.panel")
         .onChange(of: talk.phase) { _, phase in
@@ -200,7 +202,7 @@ struct TalkPanelView: View {
     private var detail: String? {
         if let error = model.error { return error }
         switch talk.phase {
-        case .listening: return "Say anything. Pause, press the Action Button again, or tap Send."
+        case .listening: return "Say anything, then tap anywhere here, or press the Action Button again, to send."
         case .sent(let words): return "\u{201C}\(TalkSession.preview(words))\u{201D}"
         case .notSent(let reason, let kept):
             guard kept else { return reason }
@@ -222,7 +224,8 @@ struct TalkPanelView: View {
                 .buttonStyle(.bordered)
                 .accessibilityIdentifier("talk.panel.cancel")
                 Button { talk.finishSoon(source: "panel-send") } label: {
-                    Text("Send").foregroundStyle(TalkTone.onProminent).frame(maxWidth: .infinity)
+                    Text("Send").font(.title3.weight(.bold)).foregroundStyle(TalkTone.onProminent)
+                        .frame(maxWidth: .infinity, minHeight: 64)
                 }
                 .buttonStyle(.borderedProminent)
                 .accessibilityIdentifier("talk.panel.send")

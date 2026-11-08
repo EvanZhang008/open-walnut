@@ -4,7 +4,9 @@ import Foundation
 /// message, exactly as if they had typed it there (Walnut files it in the CEO's
 /// Threads the same way).
 protocol TalkSending {
-    func send(text: String, messageId: String) async throws
+    /// `beforeStart` runs (and is awaited) before a request that carries no message
+    /// id: the start of the CEO chat with these words.
+    func send(text: String, messageId: String, beforeStart: @escaping @Sendable () async -> Void) async throws
 }
 
 /// The four calls the CEO chat send needs, a seam for the unit tests.
@@ -36,11 +38,12 @@ struct TalkMainSender: TalkSending {
     var transport: () -> TalkMainTransport = { WalnutAPI() }
     var isPaired: () -> Bool = { AppConfig.isConfigured }
 
-    func send(text: String, messageId: String) async throws {
+    func send(text: String, messageId: String, beforeStart: @escaping @Sendable () async -> Void = {}) async throws {
         guard isPaired() else { throw APIError.notConfigured }
         let api = transport()
         let taskId = try await api.orgMain()
         if try await sendToCurrentSession(api, taskId: taskId, text: text, messageId: messageId) { return }
+        await beforeStart()
         // The start carries no message id (the server takes none there), so a
         // start whose answer was lost may still have delivered the words: say so
         // rather than offer a resend as if nothing arrived.

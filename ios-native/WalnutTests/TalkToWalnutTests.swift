@@ -6,8 +6,15 @@ import AppIntents
 // machine, the pause detector, the unsent list, the CEO chat route, and the
 // bundle facts iOS needs to offer the shortcut and show its Live Activity.
 
+/// What the take asked for, in order, across the recorder and the Live Activity.
+@MainActor
+private final class CallOrder {
+    var calls: [String] = []
+}
+
 @MainActor
 private final class FakeTalkRecorder: TalkRecording {
+    var order: CallOrder?
     var beginFailure: String?
     /// Holds `begin` open until released, to press during start-up.
     var holdBegin = false
@@ -29,6 +36,7 @@ private final class FakeTalkRecorder: TalkRecording {
 
     func begin() async -> String? {
         began += 1
+        order?.calls.append("microphone")
         if holdBegin { await withCheckedContinuation { beginGate = $0 } }
         if beginFailure == nil { recording = true }
         return beginFailure
@@ -71,10 +79,19 @@ private final class FakeTalkRecorder: TalkRecording {
 /// sent from inside the cancelled monitor and lost every take.
 private final class FakeTalkSender: TalkSending, @unchecked Sendable {
     var failures: [Error] = []
+    /// The CEO chat has no session: the send starts it (`beforeStart` runs first).
+    var startsChat = false
+    /// Holds a send that starts the chat until released (Walnut ended mid-start).
+    var holdStart = false
     private(set) var sent: [(text: String, messageId: String)] = []
+    private var startGate: CheckedContinuation<Void, Never>?
 
-    func send(text: String, messageId: String) async throws {
+    func send(text: String, messageId: String, beforeStart: @escaping @Sendable () async -> Void) async throws {
         try Task.checkCancellation()
+        if startsChat {
+            await beforeStart()
+            if holdStart { await withCheckedContinuation { startGate = $0 } }
+        }
         if !failures.isEmpty { throw failures.removeFirst() }
         sent.append((text, messageId))
     }
@@ -82,7 +99,9 @@ private final class FakeTalkSender: TalkSending, @unchecked Sendable {
 
 @MainActor
 private final class FakeTalkActivity: TalkActivityPresenting {
+    var order: CallOrder?
     var allow = true
+    var canShow: Bool { allow }
     private(set) var started: [TalkActivityAttributes.ContentState] = []
     private(set) var updates: [TalkActivityAttributes.ContentState] = []
     private(set) var ended: [(state: TalkActivityAttributes.ContentState, linger: TimeInterval)] = []
@@ -92,6 +111,7 @@ private final class FakeTalkActivity: TalkActivityPresenting {
 
     func start(_ state: TalkActivityAttributes.ContentState) -> Bool {
         started.append(state)
+        order?.calls.append("live-activity")
         return allow
     }
 
@@ -139,7 +159,7 @@ final class TalkSessionTests: XCTestCase {
     private var activity: FakeTalkActivity!
     private var outbox: TalkOutbox!
     private var mic: TalkSession.MicAccess = .granted
-    /// A take starts in front: the Action Button opens Walnut first.
+    /// In front unless a test says otherwise (a press from behind the app on screen).
     private var foreground = true
     private var paired = true
     private var cues: [TalkCue] = []
@@ -171,8 +191,8 @@ final class TalkSessionTests: XCTestCase {
         return session
     }
 
-    /// The Action Button opens Walnut before the take: the intent waits until it is in front,
-    /// and says so when it never comes (iOS would refuse the microphone).
+    /// A press that could not record from behind opens Walnut: the intent waits until it is
+    /// in front, and says so when it never comes.
     func testThePressWaitsForWalnutInFrontAndSaysWhenItNeverCame() async {
         let session = session()
         foreground = false
@@ -251,6 +271,27 @@ final class TalkSessionTests: XCTestCase {
         XCTAssertTrue(outbox.unsent.isEmpty)
     }
 
+    /// Every automatic send (Walnut opened, the network back, another take sent) goes
+    /// through `resendKept`, and it sends only what `waits` says goes out by itself: one
+    /// shown as needing the person never leaves without them.
+    func testAKeptTakeThatNeedsThePersonNeverGoesOutBySelf() async throws {
+        let needsPerson = [
+            TalkSession.stoppedAtCap, TalkSendError.startOutcomeUnknown.localizedDescription,
+            "Walnut closed before this was sent.", "Your Walnut server did not accept this iPhone. Open Walnut to check its connection.",
+        ]
+        for (n, reason) in needsPerson.enumerated() {
+            outbox.begin(TalkOutbox.Entry(
+                id: "person-\(n)", messageId: SendRetryPolicy.newMessageId(), createdAt: Date(timeIntervalSinceNow: -60),
+                text: "words \(n)", recordingID: nil, reason: reason, attempts: 1, updatedAt: Date()
+            ))
+        }
+        keep("goes by itself", minutesAgo: 1)
+        let talk = session()
+        for source in ["app-active", "network-back", "after-send"] { await talk.resendKept(source: source) }
+        XCTAssertEqual(sender.sent.map(\.text), ["goes by itself"])
+        XCTAssertEqual(outbox.unsent.count, needsPerson.count)
+    }
+
     func testAnAutomaticResendStopsAtTheFirstFailure() async throws {
         keep("first words", minutesAgo: 30)
         keep("second words", minutesAgo: 5)
@@ -289,7 +330,7 @@ final class TalkSessionTests: XCTestCase {
         let first = try await talk.toggle(source: "test")
         XCTAssertEqual(first, .listening)
         XCTAssertEqual(talk.phase, .listening)
-        XCTAssertTrue(activity.started.isEmpty, "a take shows on Walnut's Talk screen, never as a Live Activity")
+        XCTAssertEqual(activity.started.first?.phase, .listening, "in front too, the take shows its Live Activity")
 
         let second = try await talk.toggle(source: "test")
         XCTAssertEqual(second, .finishing, "the second press returns before the send")
@@ -302,8 +343,31 @@ final class TalkSessionTests: XCTestCase {
         XCTAssertEqual(activity.updates.map(\.phase), [.transcribing, .sending])
     }
 
-    func testAPauseAfterSpeechSendsByItself() async throws {
+    /// A pause never sends by itself (the user, 2026-11-07: it "adds stress"): the take
+    /// listens on, the screen off or not, until Send or a second press.
+    func testAPauseAfterSpeechSendsNothingUntilThePersonSends() async throws {
         var detector = TalkPauseDetector()
+        detector.pauseToSend = 0.05
+        detector.minSpeech = 0.01
+        detector.noSpeechTimeout = 0.05
+        recorder.levels = Array(repeating: -60, count: 3) + Array(repeating: -15, count: 20) + Array(repeating: -60, count: 400)
+        let talk = session()
+        talk.detectorTemplate = detector
+        try await talk.toggle(source: "test")
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertEqual(talk.phase, .listening, "a pause ended the take")
+        XCTAssertTrue(sender.sent.isEmpty)
+        try await talk.toggle(source: "test")
+        await talk.finishing?.value
+        XCTAssertEqual(talk.phase, .sent("hello"))
+        XCTAssertEqual(recorder.discarded, 0)
+    }
+
+    /// With `sendsOnPause` the pause still ends it, in a task of its own: the send must not
+    /// run in the monitor it cancels.
+    func testAPauseSendsOnlyWhenAskedTo() async throws {
+        var detector = TalkPauseDetector()
+        detector.sendsOnPause = true
         detector.pauseToSend = 0.05
         detector.minSpeech = 0.01
         recorder.levels = Array(repeating: -60, count: 3) + Array(repeating: -15, count: 20) + Array(repeating: -60, count: 400)
@@ -313,7 +377,27 @@ final class TalkSessionTests: XCTestCase {
         try await waitUntil { if case .sent = talk.phase { return true }; return talk.phase != .listening && talk.phase != .transcribing && talk.phase != .sending }
         XCTAssertEqual(talk.phase, .sent("hello"), "the send must not run in the cancelled monitor")
         XCTAssertEqual(sender.sent.count, 1)
-        XCTAssertEqual(recorder.discarded, 0)
+    }
+
+    /// Five minutes and nobody said to send it (a press in a pocket): the words wait for
+    /// the person, never go to the CEO by themselves.
+    func testATakeTheCapEndsWaitsForThePerson() async throws {
+        var detector = TalkPauseDetector()
+        detector.maxDuration = 0.05
+        recorder.levels = [-15]
+        let talk = session()
+        talk.detectorTemplate = detector
+        try await talk.toggle(source: "test")
+        try await waitUntil { if case .notSent = talk.phase { return true }; return false }
+        await talk.finishing?.value
+        XCTAssertTrue(sender.sent.isEmpty, "the cap sent the take")
+        let kept = try XCTUnwrap(outbox.unsent.first)
+        XCTAssertEqual(kept.text, "hello")
+        XCTAssertEqual(kept.reason, TalkSession.stoppedAtCap)
+        XCTAssertFalse(TalkSession.waits(kept), "it would go out by itself")
+        let sent = await talk.resend(kept.id)
+        XCTAssertTrue(sent, "the person's Send")
+        XCTAssertEqual(sender.sent.map(\.text), ["hello"])
     }
 
     func testSilenceCancelsAndSendsNothing() async throws {
@@ -333,13 +417,16 @@ final class TalkSessionTests: XCTestCase {
         XCTAssertTrue(outbox.entries.isEmpty)
     }
 
-    func testSoundThatNeverCountedAsSpeechIsStillTranscribed() async throws {
+    func testSoundThatNeverCountedAsSpeechListensOnAndIsNeverDeletedUnheard() async throws {
         var detector = TalkPauseDetector()
         detector.noSpeechTimeout = 0.05
         detector.minSpeech = 10
         recorder.levels = [-35]
         let talk = session()
         talk.detectorTemplate = detector
+        try await talk.toggle(source: "test")
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(talk.phase, .listening, "soft speech was given up on as silence")
         try await talk.toggle(source: "test")
         try await waitUntil { talk.phase == .sent("hello") }
         XCTAssertEqual(recorder.discarded, 0, "audio with sound in it is never deleted unheard")
@@ -455,27 +542,93 @@ final class TalkSessionTests: XCTestCase {
         XCTAssertEqual(talk.phase, .listening, "in the app the system asks for the microphone itself")
     }
 
-    /// Build 160 opened the microphone from the background and a phone refused every press.
-    func testATakeNeverOpensTheMicrophoneFromTheBackground() async throws {
+    /// Build 160 opened the microphone from behind the app on screen BEFORE the take's
+    /// Live Activity, and a phone refused every press ('!int'). iOS records there only
+    /// while that Live Activity shows, so it comes first.
+    func testFromBehindTheLiveActivityStartsBeforeTheMicrophone() async throws {
+        let order = CallOrder()
+        recorder.order = order
+        activity.order = order
         foreground = false
-        await assertThrows(session(), .notInFront)
-        XCTAssertEqual(recorder.began, 0, "the microphone was asked for from the background")
-        XCTAssertTrue(activity.started.isEmpty)
+        let talk = session()
+        try await talk.toggle(source: "test")
+        XCTAssertEqual(order.calls, ["live-activity", "microphone"])
+        XCTAssertEqual(talk.phase, .listening)
+        XCTAssertEqual(activity.started.first?.phase, .listening)
+        try await talk.toggle(source: "test")
+        await talk.finishing?.value
+        XCTAssertEqual(sender.sent.map(\.text), ["hello"])
+        XCTAssertEqual(talk.phase, .sent("hello"))
+        XCTAssertEqual(activity.ended.last?.state.phase, .sent, "the bar says Sent, then goes")
+        XCTAssertEqual(activity.ended.last?.linger, talk.sentLinger)
     }
 
-    func testLiveActivitiesOffChangeNothing() async throws {
+    /// Live Activities off: nothing can record from behind, so the press opens Walnut.
+    func testFromBehindWithLiveActivitiesOffTheTakeMovesToWalnut() async throws {
+        activity.allow = false
+        foreground = false
+        let talk = session()
+        await assertThrows(talk, .needsFront("Live Activities are off for Walnut, so it opened to listen."))
+        XCTAssertEqual(recorder.began, 0, "the microphone was asked for with no Live Activity up")
+        XCTAssertEqual(talk.phase, .idle)
+        XCTAssertTrue(TalkToWalnutIntent.opensWalnut(for: .needsFront("x")))
+    }
+
+    /// iOS refused the microphone from behind anyway: the bar goes at once and the press
+    /// opens Walnut, where the take starts again.
+    func testFromBehindAMicrophoneRefusalEndsTheBarAndMovesToWalnut() async throws {
+        recorder.beginFailure = "Audio is in use by another app."
+        foreground = false
+        let talk = session()
+        await assertThrows(talk, .needsFront("Audio is in use by another app."))
+        XCTAssertEqual(activity.ended.last?.linger, 0, "a bar left saying Listening")
+        XCTAssertEqual(talk.phase, .idle)
+        recorder.beginFailure = nil
+        foreground = true
+        try await talk.toggle(source: "test")
+        XCTAssertEqual(talk.phase, .listening, "the take in Walnut starts")
+        XCTAssertEqual(activity.started.count, 2, "the take in Walnut shows its own Live Activity: AppIntents ends a recording run with none")
+    }
+
+    /// Only an unpaired iPhone and a microphone turned off in Settings stay a refusal:
+    /// opening Walnut fixes neither.
+    func testTheRefusalsThatOpenWalnut() {
+        XCTAssertTrue(TalkToWalnutIntent.opensWalnut(for: .micNotAsked))
+        XCTAssertFalse(TalkToWalnutIntent.opensWalnut(for: .notPaired))
+        XCTAssertFalse(TalkToWalnutIntent.opensWalnut(for: .micDenied))
+        XCTAssertFalse(TalkToWalnutIntent.opensWalnut(for: .busy))
+    }
+
+    /// In front the Talk screen shows the take: no Live Activity, Live Activities on or off.
+    /// In front a take with Live Activities off still records (the Talk screen shows it);
+    /// the intent starts such a take only after its run (see `TalkToWalnutIntent`).
+    func testInFrontATakeWithLiveActivitiesOffStillRecords() async throws {
         activity.allow = false
         let talk = session()
+        XCTAssertFalse(talk.showsLiveActivity)
         try await pressTwice(talk)
         XCTAssertEqual(talk.phase, .sent("hello"))
-        XCTAssertTrue(activity.started.isEmpty)
+        XCTAssertEqual(activity.started.count, 1, "it was asked for, and refused")
+    }
+
+    /// An AudioRecordingIntent that returns with the microphone on and no Live Activity
+    /// is a fatal error in AppIntents: every take starts its Live Activity, in front too.
+    func testInFrontATakeStartsItsLiveActivityBeforeTheMicrophone() async throws {
+        let order = CallOrder()
+        recorder.order = order
+        activity.order = order
+        let talk = session()
+        try await talk.toggle(source: "test")
+        XCTAssertEqual(order.calls, ["live-activity", "microphone"])
+        XCTAssertEqual(activity.started.first?.phase, .listening)
     }
 
     func testAMicrophoneThatWillNotStartIsReportedAndNothingIsLeftListening() async throws {
         recorder.beginFailure = "Another app is using audio (a call?)."
         let talk = session()
         await assertThrows(talk, .couldNotStart("Another app is using audio (a call?)."))
-        XCTAssertTrue(activity.started.isEmpty)
+        XCTAssertEqual(activity.ended.last?.linger, 0, "no bar left saying Listening")
+        XCTAssertEqual(talk.phase, .idle)
     }
 
     func testAPressWhileTheMicrophoneOpensIsBusyNotAStop() async throws {
@@ -494,6 +647,31 @@ final class TalkSessionTests: XCTestCase {
         XCTAssertEqual(talk.phase, .listening)
         XCTAssertEqual(recorder.finished, 0)
         XCTAssertEqual(recorder.began, 1)
+    }
+
+    /// The Live Activity shows its Send and Cancel as soon as it is up, before the
+    /// microphone opens: a tap then is done once it listens, not dropped.
+    func testASendOrCancelTappedWhileTheMicrophoneOpensIsDoneOnceItListens() async throws {
+        foreground = false
+        recorder.holdBegin = true
+        let talk = session()
+        let first = Task { try await talk.toggle(source: "test") }
+        try await waitUntil { talk.phase == .starting }
+        talk.finishSoon(source: "activity-send")
+        recorder.releaseBegin()
+        _ = try await first.value
+        await talk.finishing?.value
+        XCTAssertEqual(sender.sent.map(\.text), ["hello"])
+
+        recorder.holdBegin = true
+        let second = Task { try await talk.toggle(source: "test") }
+        try await waitUntil { talk.phase == .starting }
+        await talk.cancel(source: "activity-cancel")
+        recorder.releaseBegin()
+        _ = try await second.value
+        XCTAssertEqual(talk.phase, .idle)
+        XCTAssertEqual(recorder.discarded, 1)
+        XCTAssertEqual(sender.sent.count, 1)
     }
 
     func testCancelDropsTheTake() async throws {
@@ -535,12 +713,58 @@ final class TalkSessionTests: XCTestCase {
         let recorded = Date(timeIntervalSinceNow: -3_000)
         recorder.keptAudio["rec-orphan"] = TalkKeptAudio(url: URL(fileURLWithPath: "/tmp/rec-orphan.caf"), seconds: 4, recordedAt: recorded)
         _ = session()
-        XCTAssertEqual(outbox.entry("e1")?.reason, "Walnut closed before this was sent.")
+        XCTAssertEqual(outbox.entry("e1")?.reason, TalkReason.closedMidSend)
         let orphan = try XCTUnwrap(outbox.unsent.first { $0.recordingID == "rec-orphan" })
         XCTAssertNil(orphan.text)
         XCTAssertEqual(orphan.createdAt, recorded, "a recovered take keeps the time it was recorded")
         XCTAssertEqual(outbox.entries.count, 2, "a take already listed is not listed twice")
         XCTAssertEqual(activity.leftoversEnded, 1)
+    }
+
+    /// The person tapped Send and left Walnut, and iOS ended it before the send finished:
+    /// the next open sends the words by itself, under the same message id, with no tap.
+    func testASendIOSCutOffGoesOutByItselfOnTheNextOpen() async throws {
+        let messageId = SendRetryPolicy.newMessageId()
+        outbox.begin(TalkOutbox.Entry(
+            id: "e1", messageId: messageId, createdAt: Date(),
+            text: "left mid send", recordingID: nil, reason: nil, attempts: 0, updatedAt: Date()
+        ))
+        let talk = session()
+        let kept = try XCTUnwrap(outbox.entry("e1"))
+        XCTAssertTrue(TalkSession.waits(kept), "it asks for the person instead of going out by itself")
+        await talk.resendKept(source: "app-active")
+        XCTAssertEqual(sender.sent.map(\.text), ["left mid send"])
+        XCTAssertEqual(sender.sent.first?.messageId, messageId, "a new id would let the server take it twice")
+        XCTAssertNil(outbox.entry("e1"))
+    }
+
+    /// Walnut ended while the send was starting the CEO chat (a request with no message
+    /// id): the words may have arrived, so the next open asks the person, never resends.
+    func testASendEndedWhileStartingTheCEOChatIsNeverResentByItself() async throws {
+        sender.startsChat = true
+        sender.holdStart = true
+        let talk = session()
+        try await talk.toggle(source: "test")
+        try await talk.toggle(source: "test")
+        try await waitUntil { self.outbox.entries.first?.startingChat == true }
+        // A new process (Walnut ended there), on the same outbox.
+        let after = FakeTalkSender()
+        let next = session(sender: after)
+        let entry = try XCTUnwrap(outbox.entries.first)
+        XCTAssertEqual(entry.reason, TalkSendError.startOutcomeUnknown.localizedDescription)
+        XCTAssertFalse(TalkSession.waits(entry), "a start that may have arrived goes out again by itself")
+        await next.resendKept(source: "app-active")
+        XCTAssertTrue(after.sent.isEmpty, "sent twice")
+    }
+
+    /// Builds 160 and 161 wrote "Walnut closed before this was sent." for any cut-off send,
+    /// starts included, possibly days ago: those still wait for the person.
+    func testAnOlderBuildsCutOffSendStillWaitsForThePerson() {
+        let old = TalkOutbox.Entry(
+            id: "old", messageId: SendRetryPolicy.newMessageId(), createdAt: Date(timeIntervalSinceNow: -86_400 * 3),
+            text: "old words", recordingID: nil, reason: "Walnut closed before this was sent.", attempts: 0, updatedAt: Date()
+        )
+        XCTAssertFalse(TalkSession.waits(old))
     }
 
     /// A "Waiting to send" card on the Lock Screen speaks of one take: once that
@@ -640,7 +864,7 @@ private final class GatedSender: TalkSending, @unchecked Sendable {
     private var opened = false
     private(set) var count = 0
 
-    func send(text: String, messageId: String) async throws {
+    func send(text: String, messageId: String, beforeStart: @escaping @Sendable () async -> Void) async throws {
         count += 1
         if opened { return }
         await withCheckedContinuation { continuation = $0 }
@@ -654,6 +878,28 @@ private final class GatedSender: TalkSending, @unchecked Sendable {
 }
 
 final class TalkPauseDetectorTests: XCTestCase {
+    /// The pause rules, which hold only for a detector that ends a take on a pause.
+    private func pausing() -> TalkPauseDetector {
+        var detector = TalkPauseDetector()
+        detector.sendsOnPause = true
+        return detector
+    }
+
+    /// By default a pause ends nothing: speech and then a long quiet listen on to the cap,
+    /// and only a take that heard nothing at all gives up.
+    func testByDefaultOnlySilenceOrTheCapEndsATake() {
+        var spoken = TalkPauseDetector()
+        spoken.maxDuration = 30
+        let (decision, time) = run(&spoken, [(0.5, -55), (3, -20), (40, -55)])
+        XCTAssertEqual(decision, .tooLong, "a pause ended the take at \(time) s")
+        XCTAssertGreaterThanOrEqual(time, 30)
+        var silent = TalkPauseDetector()
+        XCTAssertEqual(run(&silent, [(20, -70)]).0, .noSpeech)
+        var soft = TalkPauseDetector()
+        soft.maxDuration = 30
+        XCTAssertEqual(run(&soft, [(40, -45)]).0, .tooLong, "sound that never counted as speech was given up on")
+    }
+
     private func run(_ detector: inout TalkPauseDetector, _ pattern: [(seconds: Double, db: Float)], step: Double = 0.1) -> (TalkPauseDetector.Decision, Double) {
         var time = 0.0
         for (seconds, db) in pattern {
@@ -668,7 +914,7 @@ final class TalkPauseDetectorTests: XCTestCase {
     }
 
     func testSpeechThenAPauseEndsTheTakeAfterThePause() {
-        var detector = TalkPauseDetector()
+        var detector = pausing()
         let (decision, time) = run(&detector, [(0.5, -55), (3, -20), (5, -55)])
         XCTAssertEqual(decision, .pauseAfterSpeech)
         // The pause counts from the first quiet reading (one tick after the speech).
@@ -676,44 +922,44 @@ final class TalkPauseDetectorTests: XCTestCase {
     }
 
     func testABreathBetweenSentencesDoesNotSend() {
-        var detector = TalkPauseDetector()
+        var detector = pausing()
         let (decision, _) = run(&detector, [(0.5, -55), (2, -20), (1, -55), (2, -20)])
         XCTAssertEqual(decision, .keepListening)
     }
 
     func testSilenceGivesUpAfterTheTimeout() {
-        var detector = TalkPauseDetector()
+        var detector = pausing()
         let (decision, time) = run(&detector, [(20, -60)])
         XCTAssertEqual(decision, .noSpeech)
         XCTAssertEqual(time, 8, accuracy: 0.15)
     }
 
     func testACoughIsNotSpeech() {
-        var detector = TalkPauseDetector()
+        var detector = pausing()
         let (decision, _) = run(&detector, [(1, -58), (0.1, -15), (20, -58)])
         XCTAssertEqual(decision, .noSpeech)
     }
 
     func testSpeechInANoisyRoomStillEndsOnAPause() {
-        var detector = TalkPauseDetector()
+        var detector = pausing()
         let (decision, _) = run(&detector, [(0.5, -32), (4, -14), (4, -32)])
         XCTAssertEqual(decision, .pauseAfterSpeech)
     }
 
     func testNormalSpeechFromTheFirstInstantStillEndsOnAPause() {
-        var detector = TalkPauseDetector()
+        var detector = pausing()
         let (decision, _) = run(&detector, [(3, -28), (4, -55)])
         XCTAssertEqual(decision, .pauseAfterSpeech)
     }
 
     func testSpeakingFromTheFirstInstantIsHeard() {
-        var detector = TalkPauseDetector()
+        var detector = pausing()
         let (decision, _) = run(&detector, [(3, -18), (4, -55)])
         XCTAssertEqual(decision, .pauseAfterSpeech)
     }
 
     func testAVeryLongTakeIsSentAtTheCap() {
-        var detector = TalkPauseDetector()
+        var detector = pausing()
         detector.maxDuration = 10
         let (decision, time) = run(&detector, [(30, -18)])
         XCTAssertEqual(decision, .tooLong)
@@ -813,13 +1059,17 @@ final class TalkBundleTests: XCTestCase {
         XCTAssertEqual(info["CFBundleIdentifier"] as? String, "\(Bundle.main.bundleIdentifier ?? "").widgets")
     }
 
-    func testTheIntentOpensWalnutAndStartsNoLiveActivity() {
-        // iOS records only for an app in front, so the press opens Walnut; it is no
-        // AudioRecordingIntent (made to record from the background) and no
-        // LiveActivityIntent (the press shows no Live Activity).
-        XCTAssertTrue(TalkToWalnutIntent.openAppWhenRun)
-        XCTAssertFalse((TalkToWalnutIntent() as Any) is any LiveActivityIntent)
-        XCTAssertFalse((TalkToWalnutIntent() as Any) is any AudioRecordingIntent)
+    func testTheIntentRecordsWithoutOpeningWalnut() {
+        // An AudioRecordingIntent records from behind the app on screen; a
+        // LiveActivityIntent may start the take's Live Activity there; the press
+        // opens Walnut only for the fallback.
+        XCTAssertFalse(TalkToWalnutIntent.openAppWhenRun)
+        XCTAssertTrue((TalkToWalnutIntent() as Any) is any LiveActivityIntent)
+        XCTAssertTrue((TalkToWalnutIntent() as Any) is any AudioRecordingIntent)
+        if #available(iOS 26.0, *) {
+            XCTAssertTrue(TalkToWalnutIntent.supportedModes.contains(.background))
+            XCTAssertTrue(TalkToWalnutIntent.supportedModes.contains(.foreground(.dynamic)))
+        }
     }
 
     func testTheShortcutIsInTheAppsIntentMetadata() throws {

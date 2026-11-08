@@ -29,6 +29,9 @@ final class TalkOutbox {
         var reason: String?
         var attempts: Int
         var updatedAt: Date
+        /// The attempt went on to start the CEO chat with these words, a request that
+        /// carries no message id: if Walnut was ended then, they may have arrived.
+        var startingChat: Bool? = nil
     }
 
     private(set) var entries: [Entry] = []
@@ -80,11 +83,12 @@ final class TalkOutbox {
     func entry(_ id: String) -> Entry? { entries.first { $0.id == id } }
 
     /// An entry whose send was cut off (the app died mid-send) reads as failed
-    /// on the next launch, with a reason, instead of as "sending" forever.
-    func settleInterrupted(reason: String) {
+    /// on the next launch, with a reason, instead of as "sending" forever: one
+    /// that was starting the CEO chat (no message id there) with `whileStarting`.
+    func settleInterrupted(reason: String, whileStarting: String) {
         var changed = false
         for index in entries.indices where entries[index].reason == nil {
-            entries[index].reason = reason
+            entries[index].reason = entries[index].startingChat == true ? whileStarting : reason
             changed = true
         }
         if changed { persist() }
@@ -106,10 +110,19 @@ final class TalkOutbox {
 enum TalkReason {
     static let serverUnavailable = "Walnut server unavailable."
     static let uploadCut = "The upload stopped before your Walnut server got all of it."
+    /// The send was under way when iOS ended Walnut (the person left it, and its
+    /// background time ran out): the words are whole, so they go out by themselves
+    /// on the next open, under the same message id (the server takes it once). A
+    /// send that was starting the CEO chat is never one: that request has no id
+    /// (`TalkSendError.startOutcomeUnknown`). Worded apart from the "Walnut closed
+    /// before this was sent." of builds 160 and 161, whose entries still wait for
+    /// the person: they may be days old, or a start.
+    static let closedMidSend = "Walnut was closed before this went out."
 
-    /// The failures the next try fixes by itself: the server was away.
+    /// The failures the next try fixes by itself: the server was away, or Walnut
+    /// was ended before the send finished.
     static func goesOutLater(_ reason: String) -> Bool {
-        reason == serverUnavailable || reason == uploadCut
+        reason == serverUnavailable || reason == uploadCut || reason == closedMidSend
     }
 
     /// Wordings of the unreachable server that older builds and the voice

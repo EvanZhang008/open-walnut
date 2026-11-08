@@ -1,12 +1,16 @@
 import XCTest
 
-/// iOS starts no recording for an app that is not on screen (a privacy rule; only calling
-/// apps are exempt), and `AudioRecordingIntent` does not lift it. Build 160 ran Talk to
-/// Walnut in the background: on a real iPhone every Action Button press failed with
-/// "Audio is in use by another app" (`'!int'`), and the simulator, which has no such rule,
-/// never showed it. Nor did the work card belong on that press, nor any Live Activity
-/// (the user, 2026-11-07: "walnut don't need live, just make the action button thing"):
-/// since build 162 the press opens Walnut on its Talk screen and nothing else.
+/// iOS records for an app that is not on screen only through an `AudioRecordingIntent`,
+/// and only while that take's Live Activity shows, which must be up BEFORE the
+/// microphone opens (Apple, AudioRecordingIntent: "you must start a Live Activity when
+/// you begin the audio recording and keep it active as long as you record audio").
+/// Build 160 opened the microphone first: on a real iPhone every Action Button press
+/// failed with "Audio is in use by another app" (`'!int'`, a non-mixable session going
+/// active in the background), and the simulator, which has no such rule, never showed
+/// it. Build 161 opened Walnut for every press; since then the press records from
+/// behind, with the Live Activity first, and opens Walnut only when that cannot work.
+/// Nor does the work card belong on that press: a Live Activity started anywhere else
+/// checks that Walnut is in front.
 ///
 /// Read as TEXT, like `UITestLaunchRatchetTests`: the property is about every declaration
 /// in the app's sources, so a new intent or a new Live Activity fails here the day it is
@@ -15,8 +19,8 @@ final class ForegroundRecordingGuardTests: XCTestCase {
     /// `Activity.request` sites that may start a Live Activity without checking that Walnut
     /// is in front, each with why.
     private static let requestsAllowedAnywhere: [String: String] = [
-        // Kept for later, started by nothing: a take shows no Live Activity (guarded below).
-        "TalkActivity.swift": "no caller; TalkSession must not start it",
+        // The take's own bar, started by TalkSession.start before the microphone (guarded below).
+        "TalkActivity.swift": "the take's Live Activity, started before the microphone",
     ]
 
     private func code(_ text: String) -> String {
@@ -71,6 +75,55 @@ final class ForegroundRecordingGuardTests: XCTestCase {
         return found
     }
 
+    /// How an intent that starts a take gets the microphone: by opening Walnut and waiting
+    /// until it is in front, or from behind as an AudioRecordingIntent that may start the
+    /// Live Activity (LiveActivityIntent) and opens Walnut when that fails. Nil: neither,
+    /// with what is missing.
+    static func recordingProblem(_ block: String) -> String? {
+        let header = String(block.prefix(while: { $0 != "{" }))
+        let opensFirst = block.range(of: #"openAppWhenRun(\s*:\s*Bool)?\s*=\s*true"#, options: .regularExpression) != nil
+        if opensFirst {
+            if block.range(of: #"supportedModes[^{]*\{\s*(return\s+)?\.foreground"#, options: .regularExpression) == nil {
+                return "opens Walnut but declares no foreground mode for iOS 26"
+            }
+            return block.contains("waitUntilInFront") ? nil : "opens Walnut but does not wait until it is in front"
+        }
+        guard header.contains("AudioRecordingIntent") else {
+            return "records without opening Walnut and is no AudioRecordingIntent, which iOS refuses on a real phone"
+        }
+        guard header.contains("LiveActivityIntent") else {
+            return "an AudioRecordingIntent that is no LiveActivityIntent cannot start the Live Activity from behind, and iOS stops the recording"
+        }
+        guard block.range(of: #"supportedModes[^{]*\{[^}]*\.background[^}]*\.foreground\(\.dynamic\)"#, options: .regularExpression) != nil else {
+            return "declares no [.background, .foreground(.dynamic)] modes for iOS 26"
+        }
+        guard block.contains("continueInForeground("), block.contains("requestToContinueInForeground("),
+              block.contains("waitUntilInFront") else {
+            return "has no way to open Walnut and record there when the take cannot start from behind"
+        }
+        // AppIntents ends the process when an AudioRecordingIntent returns with the microphone
+        // on and no Live Activity showing (build 162's first run: "performed with an active
+        // audio session but without a Live Activity").
+        guard block.contains("showsLiveActivity") else {
+            return "does not check a Live Activity can show before it touches the take: AppIntents ends the process when it returns with the microphone on and none showing"
+        }
+        return nil
+    }
+
+    /// Whether, in `TalkSession.start`, the Live Activity is asked for before the microphone,
+    /// for every take: in front as well as behind. An AudioRecordingIntent that returns with
+    /// the microphone on and no Live Activity is a fatal error in AppIntents, so a start
+    /// skipped in front (build 162's first try) killed every press that opened Walnut.
+    static func startsTheLiveActivityBeforeTheMicrophone(in session: String) -> Bool {
+        guard let start = session.range(of: "func start(source: String)") else { return false }
+        let rest = session[start.upperBound...]
+        let body = rest.range(of: "\n    func ").map { rest[..<$0.lowerBound] } ?? rest
+        guard let live = body.range(of: "activity.start("), let mic = body.range(of: "recorder.begin(") else { return false }
+        let line = body[..<live.lowerBound].split(separator: "\n", omittingEmptySubsequences: false).last ?? ""
+        if line.contains("foreground") || line.contains("inFront") { return false }
+        return live.lowerBound < mic.lowerBound
+    }
+
     /// Whether `isInFront()` is checked in the function that starts the Live Activity, before it.
     static func checksInFrontBeforeEachRequest(in text: String) -> Bool {
         for request in Self.matches(#"Activity(<[^>]*>)?\.request\("#, in: text) {
@@ -81,39 +134,27 @@ final class ForegroundRecordingGuardTests: XCTestCase {
         return true
     }
 
-    func testEveryIntentThatRecordsOpensWalnutBeforeItRecords() throws {
+    func testEveryIntentThatRecordsCanRecordOnARealPhone() throws {
         var intents = 0
         for (name, text) in try sources() {
             for block in Self.recordingIntents(in: text) {
                 intents += 1
                 let title = block.prefix(while: { $0 != "{" }).trimmingCharacters(in: .whitespacesAndNewlines)
-                XCTAssertNotNil(
-                    block.range(of: #"openAppWhenRun(\s*:\s*Bool)?\s*=\s*true"#, options: .regularExpression),
-                    "\(name), \(title): an intent that records without opening Walnut records in the background, which iOS refuses on a real phone"
-                )
-                XCTAssertNotNil(
-                    block.range(of: #"supportedModes[^{]*\{\s*(return\s+)?\.foreground"#, options: .regularExpression),
-                    "\(name), \(title): an intent that records must declare a foreground mode for iOS 26"
-                )
-                XCTAssertTrue(block.contains("waitUntilInFront"), "\(name), \(title): the take must wait until Walnut is in front before it opens the microphone")
+                XCTAssertNil(Self.recordingProblem(block), "\(name), \(title)")
             }
         }
         XCTAssertGreaterThan(intents, 0, "no intent that starts a take found: the guard reads nothing")
     }
 
-    /// The press does one thing: no Live Activity for a take, and no intent that may run in
-    /// the background to record (`AudioRecordingIntent` invites exactly that).
-    func testATakeStartsNoLiveActivity() throws {
-        let all = try sources()
-        for (name, text) in all {
-            XCTAssertTrue(
-                Self.matches(#":[^{]*\bAudioRecordingIntent\b"#, in: text).isEmpty,
-                "\(name): an AudioRecordingIntent; Talk opens Walnut and records in front, with no Live Activity"
-            )
-        }
-        let session = try XCTUnwrap(all.first { $0.name == "TalkSession.swift" }, "TalkSession.swift not found").text
-        XCTAssertTrue(Self.matches(#"\bactivity\.start\("#, in: session).isEmpty, "TalkSession starts the Talk Live Activity again")
-        XCTAssertTrue(Self.matches(#"Activity(<[^>]*>)?\.request\("#, in: session).isEmpty, "TalkSession asks for a Live Activity")
+    /// iOS keeps a recording from behind only while its Live Activity shows, started first,
+    /// and AppIntents ends a recording run that has none, in front too.
+    func testATakeStartsItsLiveActivityBeforeTheMicrophone() throws {
+        let session = try XCTUnwrap(try sources().first { $0.name == "TalkSession.swift" }, "TalkSession.swift not found").text
+        XCTAssertTrue(
+            Self.startsTheLiveActivityBeforeTheMicrophone(in: session),
+            "TalkSession.start opens the microphone before the take's Live Activity: build 160's '!int'"
+        )
+        XCTAssertTrue(Self.matches(#"Activity(<[^>]*>)?\.request\("#, in: session).isEmpty, "TalkSession asks for a Live Activity itself, around TalkActivity")
     }
 
     func testEveryLiveActivityStartedOutsideATakeChecksWalnutIsInFront() throws {
@@ -127,16 +168,16 @@ final class ForegroundRecordingGuardTests: XCTestCase {
         }
     }
 
-    /// The guard itself: a second intent with no foreground mode fails even beside a good one,
-    /// and a check after the request does not count.
+    /// The guard itself: each declaration is judged on its own, and each way of getting it
+    /// wrong is named.
     func testTheGuardJudgesEachDeclaration() {
-        let good = """
-        struct A: AudioRecordingIntent {
+        let text = """
+        struct A: AppIntent {
             static let openAppWhenRun = true
             static var supportedModes: IntentModes { .foreground(.immediate) }
-            func perform() async throws { await TalkSession.shared.waitUntilInFront() }
+            func perform() async throws { await TalkSession.shared.waitUntilInFront(); try await TalkSession.shared.toggle(source: "x") }
         }
-        struct B: AudioRecordingIntent, LiveActivityIntent {
+        struct B: AudioRecordingIntent {
             func perform() async throws {}
         }
         struct C: AppIntent {
@@ -145,12 +186,40 @@ final class ForegroundRecordingGuardTests: XCTestCase {
         struct D: LiveActivityIntent {
             func perform() async throws { await TalkSession.shared.cancel(source: "x") }
         }
+        struct E: AudioRecordingIntent, LiveActivityIntent, ForegroundContinuableIntent {
+            static var supportedModes: IntentModes { [.background, .foreground(.dynamic)] }
+            func perform() async throws {
+                if !TalkSession.shared.showsLiveActivity { return }
+                try await TalkSession.shared.toggle(source: "x")
+                try await continueInForeground(nil, alwaysConfirm: false)
+                try await requestToContinueInForeground()
+                _ = await TalkSession.shared.waitUntilInFront()
+            }
+        }
+        struct F: AudioRecordingIntent, LiveActivityIntent {
+            static var supportedModes: IntentModes { [.background, .foreground(.dynamic)] }
+            func perform() async throws { try await TalkSession.shared.toggle(source: "x") }
+        }
         """
-        let blocks = Self.recordingIntents(in: good)
-        XCTAssertEqual(blocks.count, 3, "A, B and C start takes; D does not")
-        XCTAssertFalse(blocks[2].contains("openAppWhenRun"))
-        XCTAssertTrue(blocks[0].contains("openAppWhenRun"))
-        XCTAssertFalse(blocks[1].contains("openAppWhenRun"))
+        let blocks = Self.recordingIntents(in: text)
+        XCTAssertEqual(blocks.count, 5, "A, B, C, E and F start takes; D does not")
+        XCTAssertNil(Self.recordingProblem(blocks[0]), "A opens Walnut and waits")
+        XCTAssertNotNil(Self.recordingProblem(blocks[1])?.range(of: "LiveActivityIntent"), "B cannot start the Live Activity")
+        XCTAssertNotNil(Self.recordingProblem(blocks[2])?.range(of: "no AudioRecordingIntent"), "C records from behind as a plain intent")
+        XCTAssertNil(Self.recordingProblem(blocks[3]), "E records from behind and falls back")
+        let blind = blocks[3].replacingOccurrences(of: "showsLiveActivity", with: "isReady")
+        XCTAssertNotNil(Self.recordingProblem(blind)?.range(of: "Live Activity can show"), "an intent that never asks if a Live Activity can show")
+        XCTAssertNotNil(Self.recordingProblem(blocks[4])?.range(of: "open Walnut"), "F has no fallback")
+
+        let good = "func start(source: String) async throws {\n if !activity.start(s) {}\n _ = await recorder.begin()\n }\n    func other() {}"
+        let bad = "func start(source: String) async throws {\n _ = await recorder.begin()\n _ = activity.start(s)\n }"
+        let later = "func start(source: String) async throws {\n _ = await recorder.begin()\n }\n    func other() { activity.start(s) }"
+        XCTAssertTrue(Self.startsTheLiveActivityBeforeTheMicrophone(in: good))
+        XCTAssertFalse(Self.startsTheLiveActivityBeforeTheMicrophone(in: bad))
+        XCTAssertFalse(Self.startsTheLiveActivityBeforeTheMicrophone(in: later), "a start in another function does not count")
+        let behindOnly = "func start(source: String) async throws {\n if !foreground, !activity.start(s) {}\n _ = await recorder.begin()\n }"
+        XCTAssertFalse(Self.startsTheLiveActivityBeforeTheMicrophone(in: behindOnly), "a take in front with no Live Activity")
+
         XCTAssertTrue(Self.checksInFrontBeforeEachRequest(in: "func s() { guard Self.isInFront() else { return }; try Activity.request(x) }"))
         XCTAssertFalse(Self.checksInFrontBeforeEachRequest(in: "func s() { try Activity<W>.request(x); _ = isInFront() }"))
         XCTAssertFalse(Self.checksInFrontBeforeEachRequest(in: "func a() { _ = isInFront() }\nfunc s() { try Activity.request(x) }"))

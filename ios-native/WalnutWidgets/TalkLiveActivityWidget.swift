@@ -4,7 +4,9 @@ import SwiftUI
 import WidgetKit
 
 /// A Talk to Walnut take on the Lock Screen and in the Dynamic Island: what it
-/// is doing, how long it has listened, and Send / Cancel while it listens.
+/// is doing, how long it has listened, and while it listens a big Send (the
+/// take ends only when the person says so, and Walnut stays closed) and a small
+/// Cancel.
 struct TalkLiveActivityWidget: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: TalkActivityAttributes.self) { context in
@@ -36,7 +38,7 @@ struct TalkLiveActivityWidget: Widget {
                         Text(state.subtitle)
                             .font(.subheadline)
                             .foregroundStyle(.white.opacity(0.85))
-                            .lineLimit(2)
+                            .lineLimit(state.phase == .listening ? 1 : 2)
                             .multilineTextAlignment(.center)
                         if state.phase == .listening { TalkButtons() }
                     }
@@ -80,7 +82,7 @@ struct TalkLockScreenView: View {
                         Text(state.subtitle)
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
-                            .lineLimit(3)
+                            .lineLimit(state.phase == .listening ? 1 : 3)
                     }
                 }
                 Spacer(minLength: 0)
@@ -93,27 +95,34 @@ struct TalkLockScreenView: View {
             }
             if state.phase == .listening { TalkButtons() }
         }
-        .padding(16)
+        .padding(14)
     }
 }
 
-/// Send now / Cancel, run in the app's process (LiveActivityIntent).
+/// Send now / Cancel, run in the app's process (LiveActivityIntent). Send is the
+/// big one, easy to hit without looking (the user, 2026-11-07: "a button that is
+/// very easy to press"); Cancel is small, so it is not hit by mistake.
 struct TalkButtons: View {
     var body: some View {
         HStack(spacing: 10) {
             Button(intent: TalkCancelIntent()) {
-                Label("Cancel", systemImage: "xmark")
-                    .frame(maxWidth: .infinity)
+                Image(systemName: "xmark")
+                    .font(.headline)
+                    .frame(width: 30, height: 30)
             }
             .tint(.gray)
+            .accessibilityLabel("Cancel")
             Button(intent: TalkSendNowIntent()) {
+                // A Live Activity is at most 160 pt tall: with the button's own padding
+                // this keeps Send about 44 pt high, the title and one line above it.
                 Label("Send", systemImage: "arrow.up")
-                    .frame(maxWidth: .infinity)
+                    .font(.title3.weight(.bold))
+                    .frame(maxWidth: .infinity, minHeight: 30)
             }
             .tint(.orange)
         }
         .buttonStyle(.borderedProminent)
-        .font(.subheadline.weight(.semibold))
+        .buttonBorderShape(.roundedRectangle(radius: 14))
     }
 }
 

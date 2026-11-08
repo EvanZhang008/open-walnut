@@ -7,8 +7,10 @@ import UIKit
 ///
 /// The Action Button (or Siri, Control Center, a shortcut, the Lock Screen)
 /// runs `TalkToWalnutIntent`, which calls `toggle`: the first press starts
-/// listening in the background with a Live Activity; a pause after speech, a
-/// second press or the activity's Send button ends the take; the words are
+/// listening behind the app on screen with a Live Activity (or on Walnut's Talk
+/// screen when Walnut is in front, or could not listen from behind); a second
+/// press, the activity's Send or the Talk screen ends the take, never a pause by
+/// itself (`TalkPauseDetector.sendsOnPause`); the words are
 /// transcribed by the paired server (the same engine the chat mic uses) and
 /// sent as the person's message. Whatever goes wrong after the take started is
 /// kept in `TalkOutbox` with the reason, for a resend, never dropped: a take a
@@ -41,8 +43,11 @@ final class TalkSession {
         case notPaired
         case micDenied
         case micNotAsked
-        /// Walnut was not on screen: iOS lets no app start recording from the background.
+        /// Walnut was not on screen and could not come forward for the take.
         case notInFront
+        /// The take could not start behind Walnut's back (Live Activities off, or iOS
+        /// refused the microphone there): the press opens Walnut and starts it in front.
+        case needsFront(String)
         case busy
         case couldNotStart(String)
 
@@ -56,6 +61,8 @@ final class TalkSession {
                 return "Open Walnut once and allow the microphone (Walnut's Settings tab, Action Button), then try again."
             case .notInFront:
                 return "Walnut didn't come to the front, so iOS wouldn't let it listen. Open Walnut, then press again."
+            case .needsFront(let reason):
+                return reason
             case .busy:
                 return "Walnut is still sending what you said. Try again in a moment."
             case .couldNotStart(let reason):
@@ -107,6 +114,9 @@ final class TalkSession {
         TalkReason.goesOutLater(entry.reason ?? "") && entry.attempts < autoResendLimit
     }
     @ObservationIgnored private var resendingKept = false
+    /// Send or Cancel tapped on the Live Activity while the microphone still opens:
+    /// done as soon as the take listens, never dropped.
+    @ObservationIgnored private var endWhenListening: (cancel: Bool, source: String)?
 
     init(
         recorder: TalkRecording? = nil,
@@ -163,28 +173,61 @@ final class TalkSession {
         case .undetermined where !foreground: throw StartError.micNotAsked
         default: break
         }
-        // Build 160 opened the microphone from the background: every press on a phone was
-        // refused ('!int', "Audio is in use by another app"), and only a phone refuses it.
-        guard foreground else { throw StartError.notInFront }
         phase = .starting
         startedAt = Date()
+        endWhenListening = nil
+        // Behind Walnut's back iOS records only while the take's Live Activity shows, and it
+        // must be up BEFORE the microphone opens (Apple, AudioRecordingIntent: "you must start
+        // a Live Activity when you begin the audio recording"). Build 160 opened the
+        // microphone first and every press on a phone was refused ('!int'). In front too:
+        // an AudioRecordingIntent that leaves the microphone on with no Live Activity is a
+        // fatal error in AppIntents ("performed with an active audio session but without a
+        // Live Activity"), which killed every press that opened Walnut.
+        let live = activity.start(state(.listening))
+        if !live {
+            guard foreground else {
+                phase = .idle
+                startedAt = nil
+                AppLog.warn("talk", "no live activity, opening Walnut", ["source": source])
+                throw StartError.needsFront("Live Activities are off for Walnut, so it opened to listen.")
+            }
+            AppLog.info("talk", "listening in front with no live activity", ["source": source])
+        }
         // A field report then says whether Walnut was in front when it asked iOS for the
-        // microphone (build 160 asked from the background and was refused, '!int').
+        // microphone, and so which way the take went.
         AppLog.info("talk", "opening microphone", ["source": source, "inFront": foreground ? "true" : "false"])
-        if let failure = await recorder.begin() {
+        var refused = await recorder.begin()
+        #if DEBUG
+        if refused == nil, !foreground, TalkDebug.refuseFromBehind {
+            recorder.discard()
+            refused = "Audio is in use by another app."
+        }
+        #endif
+        if let failure = refused {
             phase = .idle
             startedAt = nil
-            AppLog.warn("talk", "start failed", ["source": source, "reason": failure])
+            endWhenListening = nil
+            AppLog.warn("talk", "start failed", ["source": source, "reason": failure, "inFront": foreground ? "true" : "false"])
+            if live { activity.end(state(.failed, reason: failure, kept: false), linger: 0) }
+            guard foreground else { throw StartError.needsFront(failure) }
             throw StartError.couldNotStart(failure)
         }
-        // No Live Activity: the take shows on Walnut's own Talk screen (the user, 2026-11-07:
-        // "walnut don't need live, just make the action button thing").
         phase = .listening
         cue(.started)
         AppLog.info("talk", "listening", ["source": source])
         detector = detectorTemplate
         startMonitor()
+        if let end = endWhenListening {
+            endWhenListening = nil
+            if end.cancel { await cancel(source: end.source) } else { beginFinish(source: end.source) }
+        }
     }
+
+    /// Whether Walnut is the app on screen now.
+    var inFront: Bool { isForeground() }
+
+    /// Whether a take can show its Live Activity (Live Activities are on for Walnut).
+    var showsLiveActivity: Bool { activity.canShow }
 
     /// Wait (a few seconds at most) until Walnut is the app on screen: the
     /// shortcut opens it, and iOS starts the recording only once it is in front.
@@ -204,6 +247,7 @@ final class TalkSession {
     /// End the take and send it in the background, returning at once (the Live
     /// Activity's Send button).
     func finishSoon(source: String) {
+        if phase == .starting { endWhenListening = (false, source) }
         beginFinish(source: source)
     }
 
@@ -216,6 +260,7 @@ final class TalkSession {
 
     /// Drop the take: nothing is sent (the Cancel button).
     func cancel(source: String) async {
+        if phase == .starting { endWhenListening = (true, source) }
         guard phase == .listening else { return }
         stopMonitor()
         recorder.discard()
@@ -272,8 +317,11 @@ final class TalkSession {
         guard !resendingKept, !isBusy, isPaired() else { return }
         resendingKept = true
         defer { resendingKept = false }
+        // Only what Walnut sends by itself (`waits`): a take that needs the person (a start
+        // that may have arrived, one the 5-minute cap ended, a refusal) is theirs to send,
+        // as the lists and the Lock Screen say.
         let due = outbox.unsent
-            .filter { $0.attempts < Self.autoResendLimit && !resending.contains($0.id) }
+            .filter { Self.waits($0) && !resending.contains($0.id) }
             .sorted { $0.createdAt < $1.createdAt }
         guard !due.isEmpty else { return }
         AppLog.info("talk", "resending kept", ["source": source, "count": String(due.count)])
@@ -311,7 +359,7 @@ final class TalkSession {
     /// Start the finish in its own task, never inside the monitor that may have
     /// asked for it: the monitor is cancelled on the way, and a send running in a
     /// cancelled task fails at once (`URLSession` honours the cancellation).
-    private func beginFinish(source: String) {
+    private func beginFinish(source: String, send: Bool = true) {
         guard phase == .listening else { return }
         stopMonitor()
         phase = .transcribing
@@ -320,12 +368,20 @@ final class TalkSession {
         let background = BackgroundWork.begin("talk-send")
         finishing = Task { @MainActor [weak self] in
             defer { background.end() }
-            await self?.completeTake()
+            await self?.completeTake(send: send)
         }
     }
 
-    private func completeTake() async {
+    /// Why a take the cap ended waits for the person: nobody said to send it (a press
+    /// in a pocket, a take forgotten), and the CEO's agents act on what arrives.
+    static let stoppedAtCap = "Walnut stopped listening after 5 minutes, so this was not sent. Send it if you meant to."
+
+    private func completeTake(send: Bool) async {
         switch await recorder.finish() {
+        case .words(let text, let recordingID) where !send:
+            let entry = newEntry(text: text, recordingID: recordingID, reason: Self.stoppedAtCap)
+            let kept = outbox.begin(entry)
+            finishNotSent(Self.stoppedAtCap, kept: kept, linger: notSentLinger, words: text, take: entry.id)
         case .words(let text, let recordingID):
             await deliver(newEntry(text: text, recordingID: recordingID, reason: nil), live: true)
         case .noWords(let recordingID):
@@ -358,7 +414,10 @@ final class TalkSession {
             activity.update(state(.sending, words: text))
         }
         do {
-            try await sender.send(text: text, messageId: entry.messageId)
+            let outbox = self.outbox
+            try await sender.send(text: text, messageId: entry.messageId) { @MainActor in
+                outbox.update(entry.id) { $0.startingChat = true }
+            }
             drop(entry.id)
             AppLog.info("talk", "sent", ["chars": String(text.count), "live": live ? "true" : "false"])
             if live {
@@ -423,7 +482,8 @@ final class TalkSession {
                 case .pauseAfterSpeech:
                     self.beginFinish(source: "pause")
                 case .tooLong:
-                    self.beginFinish(source: "max-duration")
+                    // Sent only when the person says so; a pause-sending take was asked to.
+                    self.beginFinish(source: "max-duration", send: self.detector.sendsOnPause)
                 case .noSpeech where self.detector.heardSomething:
                     // Not clearly speech, not silence either: let the engine judge.
                     self.beginFinish(source: "no-clear-speech")
@@ -451,8 +511,17 @@ final class TalkSession {
     /// a Live Activity the dead process left saying "Listening" goes, and so does
     /// a "Not sent" card whose take is no longer listed.
     private func recoverFromLastProcess() {
-        outbox.settleInterrupted(reason: "Walnut closed before this was sent.")
+        outbox.settleInterrupted(
+            reason: TalkReason.closedMidSend, whileStarting: TalkSendError.startOutcomeUnknown.localizedDescription
+        )
         let listed = Set(outbox.entries.compactMap(\.recordingID))
+        #if DEBUG
+        // A UI test starts from an empty list: recordings an earlier run left behind (one
+        // a crash cut off, say) are not listed again over the next test's screen.
+        if UserDefaults.standard.bool(forKey: "walnut.debug.talkClearOutbox") {
+            for id in recorder.keptTakeIDs() where !listed.contains(id) { recorder.forget(recordingID: id) }
+        }
+        #endif
         for id in recorder.keptTakeIDs() where !listed.contains(id) {
             // Dated by when it was recorded, not found: the time is how the
             // person tells one take from another.

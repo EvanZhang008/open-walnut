@@ -49,7 +49,7 @@ struct TalkSetupView: View {
             }
 
             Section {
-                Text("Press and hold the Action Button: Walnut opens, already listening. Say anything; it goes to your CEO chat as your message when you pause, press the Action Button again, or tap Send.")
+                Text("Press and hold the Action Button: Walnut listens without opening. Say anything, then tap Send on the Lock Screen or in the Dynamic Island, or press the Action Button again: it goes to your CEO chat as your message.")
                     .accessibilityIdentifier("talk.intro")
                 TalkTryRow(talk: talk, error: $tryError)
                 if mic != .granted { micRow }
@@ -513,6 +513,9 @@ struct TalkUnsentSheetModifier: ViewModifier {
             }
             .onChange(of: scenePhase) { _, phase in
                 guard phase == .active else { return }
+                // A take listening from behind (the person tapped its Live Activity, or
+                // opened Walnut): the Talk screen shows it, the whole screen its Send.
+                if talk.phase == .listening { TalkPanel.shared.show() }
                 // Offered at once; what can go out now goes while the sheet shows,
                 // its rows saying so, and leaves the list by itself.
                 offerIfNew()

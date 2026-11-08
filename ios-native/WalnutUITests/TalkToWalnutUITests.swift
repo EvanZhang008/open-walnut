@@ -2,8 +2,9 @@ import XCTest
 
 /// Talk to Walnut when the words cannot go out, end to end through real taps:
 ///  - the Shortcuts app lists "Talk to Walnut" with no setup, and a tap with Walnut in the
-///    background brings Walnut forward already listening (iOS starts no recording in the
-///    background; a recorded file stands in for the microphone, through the real audio session);
+///    background that iOS will not let record from behind (`talkRefuseFromBehind`, the way a
+///    phone refused build 160) brings Walnut forward already listening (a recorded file
+///    stands in for the microphone, through the real audio session);
 ///  - the server is unreachable, so the take is kept and the panel says so;
 ///  - Settings, Action Button shows it first, then the setup; its list has the reason, its
 ///    length, playback, Send Now and Delete.
@@ -35,6 +36,7 @@ final class TalkToWalnutUITests: XCTestCase {
         let app = UITestLaunch.launch([
             UITestLaunch.serverURLArgument, "http://127.0.0.1:9", "-walnut.deviceToken", "talk-ui-test",
             "-walnut.debug.talkReplayFile", audio, "-walnut.debug.talkClearOutbox", "YES",
+            "-walnut.debug.talkRefuseFromBehind", "YES",
         ])
         XCTAssertTrue(app.tabBars.firstMatch.waitForExistence(timeout: 60), "Walnut never opened")
 
@@ -50,7 +52,7 @@ final class TalkToWalnutUITests: XCTestCase {
         XCTAssertNotEqual(app.state, .runningForeground, "Walnut is in front before the press: the test would not show it coming forward")
         tile.tap()
 
-        // The press brings Walnut forward, already listening, on its own screen.
+        // Refused from behind, the press brings Walnut forward, already listening, on its own screen.
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10), "the shortcut did not bring Walnut forward")
         let panel = element(app, "talk.panel")
         XCTAssertTrue(panel.waitForExistence(timeout: 10), "Walnut came forward without the Talk screen")
@@ -62,7 +64,12 @@ final class TalkToWalnutUITests: XCTestCase {
         XCTAssertTrue(element(app, "talk.panel.cancel").exists, "listening without a Cancel button")
         shot("2-listening")
 
-        // The pause ends it; the server is unreachable, so it waits to send and the panel says so.
+        // A pause never sends by itself: the take listens on until the person sends. A tap
+        // anywhere on the Talk screen (here its title, no button) sends it once the recorded
+        // words have played; the server is unreachable, so it waits to send and says so.
+        sleep(6)
+        XCTAssertEqual(title.label, "Listening", "the take ended by itself on the pause")
+        title.tap()
         let waiting = expectation(for: NSPredicate(format: "label == 'Waiting to send'"), evaluatedWith: title)
         XCTAssertEqual(XCTWaiter().wait(for: [waiting], timeout: 40), .completed, "the take did not end as waiting to send: \(title.label)")
         XCTAssertTrue(labelled(app, "by itself the next time").exists, "the panel does not say the take goes out later")
@@ -93,7 +100,7 @@ final class TalkToWalnutUITests: XCTestCase {
         XCTAssertTrue(element(app, "talk.unsentSheet").waitForExistence(timeout: 5) || labelled(app, "Waiting to Send").exists)
         XCTAssertTrue(labelled(app, "Walnut server unavailable").waitForExistence(timeout: 5), "the reason does not name the server")
         XCTAssertTrue(labelled(app, "tries again each time you open it").exists, "the list does not say when it goes out")
-        // The take runs on past the words until the pause ends it, so it is a little longer
+        // The take runs on past the words until the tap sends it, so it is a little longer
         // than the 4 s file.
         let length = app.staticTexts.matching(NSPredicate(format: "label MATCHES %@", "^Recording \u{00B7} [0-9]+ s$")).firstMatch
         XCTAssertTrue(length.exists, "the recording's length is missing")
@@ -156,6 +163,11 @@ final class TalkToWalnutUITests: XCTestCase {
             let tryIt = element(app, "talk.try")
             for _ in 0..<8 where !tryIt.isHittable { app.swipeUp() }
             tryIt.tap()
+            // It listens until the person sends (a pause never does), once the words have played.
+            let send = element(app, "talk.send")
+            XCTAssertTrue(send.waitForExistence(timeout: 15), "Try It Now did not start listening")
+            sleep(6)
+            send.tap()
             // The kept take's row comes first: back to the top for it.
             for _ in 0..<8 where !open.isHittable { app.swipeDown() }
         }
