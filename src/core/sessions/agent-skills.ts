@@ -130,9 +130,11 @@ export async function writeAgentSkill(
     if (!cur && file.skills.length >= AGENT_SKILLS_MAX) {
       throw new AgentSkillError('agent_skills_full', 409, `${scope === 'org' ? 'The org' : 'This task'} already keeps ${AGENT_SKILLS_MAX} skills. Merge or delete one first (agent_skill_write delete:true).`);
     }
+    // Another's write records itself; the owner's keeps that record unless it rewrote the text.
+    const writer = stamp ?? (content === undefined && cur?.by ? { by: cur.by, by_name: cur.by_name } : null);
     const skill: AgentSkill = {
       name, description: description ?? cur!.description, text: content ?? cur!.text, at: nowIso,
-      ...(stamp ? { by: stamp.by, ...(stamp.by_name ? { by_name: stamp.by_name } : {}) } : {}),
+      ...(writer ? { by: writer.by, ...(writer.by_name ? { by_name: writer.by_name } : {}) } : {}),
     };
     if (cur) file.skills[i] = skill;
     else file.skills.push(skill);

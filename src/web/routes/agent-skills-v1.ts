@@ -98,6 +98,9 @@ agentSkillsV1Router.put('/tasks/:id/agent-skills/:name', route(async (req, res) 
 agentSkillsV1Router.delete('/tasks/:id/agent-skills/:name', route(async (req, res) => {
   const task = await resolveTask(param(req.params.id))
   const scope = scopeOf(req.query.scope)
+  if (scope === 'own' && task.phase === 'COMPLETE') {
+    throw new RouteError(409, 'task_complete', `"${task.title}" is complete: its skills are kept as they were. Reopen the task to change them.`)
+  }
   const name = param(req.params.name)
   const removed = await deleteAgentSkill(scope, task.id, name)
   if (!removed) throw new RouteError(404, 'no_skill', `No ${scope} skill "${name}" to delete.`)

@@ -43,6 +43,14 @@ describe('recentWorkLines', () => {
     expect(recentWorkText([line!], NOW)).toContain('the user wrote: "is it live yet?", not answered yet')
   })
 
+  it('a thread the node opened itself counts its opening post as what it said', () => {
+    const t = thread({ opener: { text: 'The nightly build broke: I opened this to track it.', at: iso(1), from: 'node', by: 'agent' } })
+    const [line] = recentWorkLines([t], NOW)
+    expect(line).toMatchObject({ said: 'The nightly build broke: I opened this to track it.' })
+    // A person's opener is not the node's words.
+    expect(recentWorkLines([thread({ opener: { text: 'x', at: iso(1), from: 'node', by: 'human' } })], NOW)).toEqual([])
+  })
+
   it('a closed thread reads closed; at most ten lines', () => {
     const many = Array.from({ length: 14 }, (_, i) => thread({ wrote: { text: 'q', h: i + 1 }, said: { text: `a${i}`, h: i + 0.5 } }))
     many[0] = { ...many[0]!, closed: { how: 'acknowledged', at: iso(0), by: 'human' } } as OrgThread

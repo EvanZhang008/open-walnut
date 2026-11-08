@@ -14,7 +14,7 @@
  * it off (then the compaction's open_items reads MEMORY.md back as before).
  */
 import type { OrgRole } from '../core/types.js'
-import { OWN_READBACK_MARK } from '../core/sessions/own-readback-mark.js'
+import { OWN_READBACK_MARK, ownReadbackEnabled } from '../core/sessions/own-readback-mark.js'
 
 const command = (hook: 'startup' | 'compact'): string =>
   `walnut tools call agent_memory_read '{"hook":"${hook}"}' 2>/dev/null || true`
@@ -27,7 +27,7 @@ const HOOK_TIMEOUT_SECS = 20
  * prompt this Walnut built); an older one a resume replays reads MEMORY.md in open_items as before.
  */
 export function ownReadbackHooks(orgRole: OrgRole | undefined, prompt: string, env: NodeJS.ProcessEnv = process.env): Record<string, unknown> | null {
-  if (env.WALNUT_OWN_READBACK === '0') return null
+  if (!ownReadbackEnabled(env)) return null
   if (orgRole !== 'main' && orgRole !== 'lead') return null
   if (!prompt.includes(OWN_READBACK_MARK)) return null
   return {

@@ -50,10 +50,12 @@ const ms = (iso: string | undefined): number => {
   return Number.isFinite(t) ? t : 0;
 };
 
-/** The node's newest words in a thread and when: its summary or its last answer, whichever is newer. */
+/** The node's newest words in a thread and when: its summary, its last answer or its opening post, whichever is newer. */
 function newestSaid(t: OrgThread): { text: string; at: number } | null {
   let best: { text: string; at: number } | null = null;
   if (t.reply?.trim()) best = { text: t.reply, at: ms(t.replyAt) || ms(t.updatedAt) };
+  // A thread the node opened itself (thread_create) begins with its own post.
+  if (t.opener?.text.trim() && t.opener.by !== 'human' && (!best || ms(t.opener.at) > best.at)) best = { text: t.opener.text, at: ms(t.opener.at) };
   for (const m of t.messages) {
     const a = m.answer;
     if (a?.text.trim() && (!best || ms(a.at) > best.at)) best = { text: a.text, at: ms(a.at) };

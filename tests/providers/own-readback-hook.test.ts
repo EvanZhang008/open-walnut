@@ -43,6 +43,17 @@ describe('the mark in the prompt', () => {
     expect(orgRoleLine({})).toBe('')
   })
 
+  it('with the readback off, the role lines leave the line out, so no prompt carries the mark', () => {
+    const before = process.env.WALNUT_OWN_READBACK
+    process.env.WALNUT_OWN_READBACK = '0'
+    try {
+      expect(orgRoleLine({ org_role: 'lead', project: 'Acme' })).not.toContain(OWN_READBACK_MARK)
+    } finally {
+      if (before === undefined) delete process.env.WALNUT_OWN_READBACK
+      else process.env.WALNUT_OWN_READBACK = before
+    }
+  })
+
   it('ownReadbackHooked reads it, and is off with the hook', () => {
     expect(ownReadbackHooked({ appliedAppendSystemPrompt: `x ${OWN_READBACK_LINE}` }, {})).toBe(true)
     expect(ownReadbackHooked({ appliedAppendSystemPrompt: 'older prompt' }, {})).toBe(false)

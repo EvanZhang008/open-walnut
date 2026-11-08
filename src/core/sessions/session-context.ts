@@ -93,6 +93,7 @@
  * in the manual, which sessions pull live with `walnut guide`.
  */
 
+import { ownReadbackEnabled } from './own-readback-mark.js'
 import { PROOF_IN_PLACE_RULE, THREAD_ONE_PLACE_RULE, THREADS_KNOWN_RULE, THREADS_OPEN_RULE, THREADS_PENDING_RULE, THREADS_SUMMARY_RULE } from '../org/thread-rules.js'
 import { TEAM_CHARTER } from '../team-charter.js'
 import { WORK_PLACE_RULE, taskDirLine } from '../work-place.js'
@@ -194,6 +195,9 @@ export const OWN_READBACK_LINE =
   + 'Keep state and facts in MEMORY.md; a way of working you will follow again (the steps of a kind of work, the exact '
   + 'op keys) goes into a skill instead, with agent_skill_write (scope "org" when every VP and the main agent should '
   + 'follow it), and you read one whole with agent_skill_read before such work.\n\n'
+
+/** The line, only while the readback is on: the spawn adds the hook to a prompt holding it, and only then. */
+const ownReadbackLine = (): string => (ownReadbackEnabled() ? OWN_READBACK_LINE : '')
 
 export const MAIN_FOLLOW_LINE = ORG_FOLLOW_LINE + 'What you learn goes into your tracking note below.\n\n'
 
@@ -335,7 +339,7 @@ export function orgRoleLine(task: { org_role?: string; project?: string; org_lea
       + MAIN_DELEGATES_LINE
       + MAIN_FOLLOW_LINE
       + MAIN_TRACKING_LINE
-      + OWN_READBACK_LINE
+      + ownReadbackLine()
       + MAIN_STAYS_ACTIVE_LINE
       + TASK_ROUTING_CONTRACT + '\n\n'
   }
@@ -378,7 +382,7 @@ export function orgRoleLine(task: { org_role?: string; project?: string; org_lea
       + THREADS_LINE
       + MESSAGE_ABOUT_LINE
       + LEAD_TRACKING_LINE
-      + OWN_READBACK_LINE
+      + ownReadbackLine()
       + TASK_ROUTING_CONTRACT + '\n\n'
   }
   return ''

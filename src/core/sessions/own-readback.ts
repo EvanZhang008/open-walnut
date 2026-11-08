@@ -22,16 +22,11 @@ import { screenDocumentForPrompt } from '../memory-safety.js';
 import { agentMemoryAfterCompaction } from './agent-memory.js';
 import { HOOK_CONTEXT_MAX } from './open-items.js';
 
-import { OWN_READBACK_MARK } from './own-readback-mark.js';
+import { OWN_READBACK_MARK, ownReadbackEnabled } from './own-readback-mark.js';
 
-export { OWN_READBACK_MARK };
+export { OWN_READBACK_MARK, ownReadbackEnabled };
 
 export type OwnReadbackHook = 'startup' | 'compact';
-
-/** The hook is on unless WALNUT_OWN_READBACK=0. */
-export function ownReadbackEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.WALNUT_OWN_READBACK !== '0';
-}
 
 /** This session was spawned with the own-readback hook: its compaction readback leaves MEMORY.md to it. */
 export function ownReadbackHooked(record: { appliedAppendSystemPrompt?: string }, env: NodeJS.ProcessEnv = process.env): boolean {
@@ -42,7 +37,7 @@ const isNode = (task: Pick<Task, 'org_role'>): boolean => task.org_role === 'mai
 
 /** The block for a task's session; '' when it keeps nothing yet (the hook then injects nothing). */
 export async function ownReadbackText(task: Task, hook: OwnReadbackHook, now = Date.now()): Promise<string> {
-  if (task.phase === 'COMPLETE') return '';
+  if (task.phase === 'COMPLETE' || !ownReadbackEnabled()) return '';
   const parts: string[] = [];
   const memory = agentMemoryAfterCompaction(task);
   if (memory) parts.push(screenDocumentForPrompt(memory, 'agent MEMORY.md'));

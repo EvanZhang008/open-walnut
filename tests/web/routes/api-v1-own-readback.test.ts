@@ -89,6 +89,19 @@ describe('own readback', () => {
     expect(ctxOf(await op('agent_memory_read', { hook: 'compact' }, vp.sid))).toContain('after this compaction')
   })
 
+  it('turned off (WALNUT_OWN_READBACK=0): the hook gets nothing and open_items reads MEMORY.md back again', async () => {
+    const vp = await seedNode('Switched VP', 'lead', OWN_READBACK_LINE)
+    await updateTaskRaw(vp.id, () => ({ agent_memory: { text: '- switched memory line', at: new Date().toISOString() } }))
+    process.env.WALNUT_OWN_READBACK = '0'
+    try {
+      expect((await op('agent_memory_read', { hook: 'compact' }, vp.sid)).result).toEqual({})
+      expect(ctxOf(await op('open_items', { hook: 'compact' }, vp.sid))).toContain('- switched memory line')
+    } finally {
+      delete process.env.WALNUT_OWN_READBACK
+    }
+    expect(ctxOf(await op('open_items', { hook: 'compact' }, vp.sid))).not.toContain('- switched memory line')
+  })
+
   it('nothing kept, or no task: the hook injects nothing', async () => {
     const empty = await seedNode('Empty VP', 'lead', OWN_READBACK_LINE)
     // The org's skills still show to a node: remove the one an earlier test made.
@@ -135,13 +148,18 @@ describe('agent skills', () => {
     expect(gone.ok).toBe(false)
   })
 
-  it('a person writes too, and it records the person', async () => {
+  it('a person writes too, and it records the person until the owner rewrites the text', async () => {
     const t = await seedNode('Person-written', 'lead')
     const res = await fetch(`${apiBase}/api/v1/tasks/${t.id}/agent-skills/review-steps`, {
       method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ description: 'How I review', content: 'Read the diff.' }),
     })
     expect(res.status).toBe(200)
     expect((await op('agent_skill_read', { name: 'review-steps' }, t.sid)).result.skill.by).toBe('human')
+    // The owner changing only the description keeps the person's text, so it keeps their name on it.
+    await op('agent_skill_write', { name: 'review-steps', description: 'How I review a change' }, t.sid)
+    expect((await op('agent_skill_read', { name: 'review-steps' }, t.sid)).result.skill).toMatchObject({ by: 'human', description: 'How I review a change' })
+    await op('agent_skill_write', { name: 'review-steps', content: 'Read the diff, then the tests.' }, t.sid)
+    expect((await op('agent_skill_read', { name: 'review-steps' }, t.sid)).result.skill.by).toBeUndefined()
   })
 
   it('refused whole: a bad name, a new skill missing a field, the size, the 21st, injection text', async () => {
@@ -163,9 +181,13 @@ describe('agent skills', () => {
     expect(list.own.map((s: any) => s.name)).not.toContain('evil')
   })
 
-  it('a completed task\'s own skills are kept as they were', async () => {
+  it('a completed task\'s own skills are kept as they were: no write, no delete', async () => {
     const t = await seedNode('Done keeper', 'lead')
+    expect((await op('agent_skill_write', { name: 'kept', description: 'd', content: 'c' }, t.sid)).ok).toBe(true)
     await completeTask(t.id)
+    const del = await op('agent_skill_write', { name: 'kept', delete: true }, t.sid)
+    expect(del.ok).toBe(false)
+    expect(JSON.stringify(del)).toContain('task_complete')
     const r = await op('agent_skill_write', { name: 'x', description: 'd', content: 'c' }, t.sid)
     expect(r.ok).toBe(false)
     expect(JSON.stringify(r)).toContain('task_complete')
