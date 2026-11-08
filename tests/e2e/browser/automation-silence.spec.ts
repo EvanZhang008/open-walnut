@@ -65,6 +65,36 @@ test('the app tries no audio at all, and nothing a page plays reaches an audio d
   expect(ctx).toEqual(browserName === 'chromium' ? { made: true, sink: 'none' } : { made: false, error: 'NotSupportedError' });
 });
 
+test('media the document never hears of plays nothing either: detached, made in script, in a shadow root', async ({ page }) => {
+  // A second of silence, long enough that a running pipeline shows on currentTime.
+  await page.goto('/');
+  await expect(page.locator('#root')).not.toBeEmpty();
+  await page.mouse.click(5, 5);   // a real gesture first, so an engine's own autoplay rule allows it
+  const r = await page.evaluate(async () => {
+    const rate = 8000, n = rate;
+    const b = new Uint8Array(44 + n); const v = new DataView(b.buffer);
+    const str = (o: number, t: string) => { for (let i = 0; i < t.length; i++) b[o + i] = t.charCodeAt(i); };
+    str(0, 'RIFF'); v.setUint32(4, 36 + n, true); str(8, 'WAVE'); str(12, 'fmt '); v.setUint32(16, 16, true);
+    v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, rate, true); v.setUint32(28, rate, true);
+    v.setUint16(32, 1, true); v.setUint16(34, 8, true); str(36, 'data'); v.setUint32(40, n, true); b.fill(128, 44);
+    const url = URL.createObjectURL(new Blob([b], { type: 'audio/wav' }));
+    const els: Record<string, HTMLMediaElement> = {};
+    const detached = new Audio(); detached.loop = true; detached.autoplay = true; detached.src = url; els.detached = detached;
+    const made = document.createElement('audio'); made.setAttribute('autoplay', ''); made.src = url; els.made = made;
+    for (const mode of ['open', 'closed'] as const) {
+      const host = document.createElement('div'); document.body.appendChild(host);
+      const root = host.attachShadow({ mode });
+      root.innerHTML = `<audio autoplay loop src="${url}"></audio>`;
+      els[mode + 'Shadow'] = root.querySelector('audio')!;
+    }
+    await new Promise((res) => setTimeout(res, 900));
+    const out: Record<string, { paused: boolean; muted: boolean; time: number }> = {};
+    for (const [k, el] of Object.entries(els)) out[k] = { paused: el.paused, muted: el.muted, time: Math.round(el.currentTime * 10) / 10 };
+    return out;
+  });
+  for (const [k, v] of Object.entries(r)) expect(v, k).toEqual({ paused: true, muted: true, time: 0 });
+});
+
 test('every frame is silent from its own first script, an opaque sandbox included', async ({ page }) => {
   // The parent page cannot reach a sandboxed frame without allow-same-origin (a plugin's
   // page, a dev server in the Web view): only the runner's init script (pw-silence.ts) can.

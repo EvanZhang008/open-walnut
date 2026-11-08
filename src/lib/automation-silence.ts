@@ -10,8 +10,9 @@
  * an audio device at all.
  *
  * - media elements (`<audio>`, `<video>`, `new Audio()`) never play: play() rejects as an
- *   autoplay block does (`NotAllowedError`), an `autoplay` element is paused as it starts,
- *   and every element stays muted;
+ *   autoplay block does (`NotAllowedError`), autoplay is off, every element stays muted and
+ *   is paused the moment it starts; each is guarded on its own where it is made or given a
+ *   source (a detached element and one in a shadow root send the document no events);
  * - an AudioContext gets no output device: where the engine can run one without a device
  *   (Chromium's `sinkId: { type: 'none' }`) it is made that way, so a meter, a recorder's
  *   capture node and a synthetic microphone still work; anywhere else (WebKit) making one
@@ -46,38 +47,107 @@ export function silenceAutomatedAudio(target?: unknown): void {
 
     const media = w.HTMLMediaElement && w.HTMLMediaElement.prototype;
     if (media) {
-      const muted = Object.getOwnPropertyDescriptor(media, 'muted');
+      // Native setters, kept to force an element's own state where code never touches it.
+      const native = (k: string) => Object.getOwnPropertyDescriptor(media, k);
+      const muted = native('muted');
+      const setMuted = muted && muted.set;
       if (muted && muted.get && muted.set) {
-        const set = muted.set;
         Object.defineProperty(media, 'muted', {
-          configurable: true,
-          enumerable: muted.enumerable,
-          get: muted.get,
-          set: function () { set.call(this, true); },
+          configurable: true, enumerable: muted.enumerable, get: muted.get,
+          set: function () { setMuted!.call(this, true); },
         });
       }
+      const autoplay = native('autoplay');
+      const setAutoplay = autoplay && autoplay.set;
+      if (autoplay && autoplay.get && autoplay.set) {
+        Object.defineProperty(media, 'autoplay', {
+          configurable: true, enumerable: autoplay.enumerable, get: autoplay.get,
+          set: function () { setAutoplay!.call(this, false); },
+        });
+      }
+      type El = { muted: boolean; pause?: () => void; addEventListener?: (t: string, f: (e: Event) => void, c: boolean) => void };
+      // Muted, no autoplay, and paused the moment it starts (the browser's own autoplay and
+      // its controls play without play(), and their unmute goes past the setter above).
+      const hold = (el: El, e?: Event) => {
+        try {
+          if (setMuted) setMuted.call(el, true); else el.muted = true;
+          if (setAutoplay) setAutoplay.call(el, false);
+          if (e && e.type === 'play' && el.pause) { tried.plays++; el.pause(); }
+        } catch { /* a detached or odd element */ }
+      };
+      const quiet = (e: Event) => { const el = e.target as El | null; if (el && media.isPrototypeOf(el)) hold(el, e); };
+      const listen = (n: { addEventListener?: (t: string, f: (e: Event) => void, c: boolean) => void } | null | undefined) => {
+        if (!n || !n.addEventListener) return;
+        for (const t of ['loadstart', 'play', 'volumechange']) n.addEventListener(t, quiet, true);
+      };
+      // Every element is guarded where it is made or given a source, on its own, since its
+      // events never reach the document when it is detached (`new Audio()`) or in a shadow root.
+      const seen = w.WeakSet ? new w.WeakSet() : null;
+      const guard = <T>(el: T): T => {
+        if (!el || !media.isPrototypeOf(el) || (seen && seen.has(el))) return el;
+        if (seen) seen.add(el);
+        hold(el as unknown as El);
+        listen(el as unknown as El);
+        return el;
+      };
+      listen(w.document);
       if (typeof media.play === 'function') {
-        media.play = function (this: { muted: boolean; pause?: () => void }) {
+        media.play = function (this: El) {
+          guard(this);
           tried.plays++;
-          try { this.muted = true; if (this.pause) this.pause(); } catch { /* a detached element */ }
+          try { if (this.pause) this.pause(); } catch { /* ignore */ }
           return w.Promise.reject(refuse('NotAllowedError'));
         };
       }
-      // An `autoplay` element starts without play(): muted as it starts loading, paused as
-      // it starts playing. The browser's own controls unmute without the setter above:
-      // their volumechange mutes it again.
-      const quiet = (e: Event) => {
-        const el = e.target as { muted?: boolean; pause?: () => void } | null;
-        if (!el || !media.isPrototypeOf(el)) return;
-        try {
-          if (!el.muted) el.muted = true;
-          if (e.type === 'play' && el.pause) { tried.plays++; el.pause(); }
-        } catch { /* ignore */ }
-      };
-      if (w.document && w.document.addEventListener) {
-        w.document.addEventListener('loadstart', quiet, true);
-        w.document.addEventListener('play', quiet, true);
-        w.document.addEventListener('volumechange', quiet, true);
+      const load = media.load;
+      if (typeof load === 'function') {
+        // eslint-disable-next-line prefer-rest-params
+        media.load = function (this: unknown) { guard(this); return load.apply(this, arguments); };
+      }
+      for (const k of ['src', 'srcObject']) {
+        const d = native(k);
+        if (!d || !d.set) continue;
+        const set = d.set;
+        Object.defineProperty(media, k, {
+          configurable: true, enumerable: d.enumerable, get: d.get,
+          set: function (v: unknown) { guard(this); set.call(this, v); },
+        });
+      }
+      const el = w.Element && w.Element.prototype;
+      if (el) {
+        const setAttribute = el.setAttribute;
+        if (typeof setAttribute === 'function') {
+          el.setAttribute = function (this: unknown, name: string) {
+            if (media.isPrototypeOf(this)) {
+              guard(this);
+              if (String(name).toLowerCase() === 'autoplay') return;
+            }
+            // eslint-disable-next-line prefer-rest-params
+            return setAttribute.apply(this, arguments);
+          };
+        }
+        const attachShadow = el.attachShadow;
+        if (typeof attachShadow === 'function') {
+          // eslint-disable-next-line prefer-rest-params
+          el.attachShadow = function (this: unknown) { const root = attachShadow.apply(this, arguments); listen(root); return root; };
+        }
+      }
+      const doc = w.Document && w.Document.prototype;
+      if (doc) {
+        for (const k of ['createElement', 'createElementNS']) {
+          const make = doc[k];
+          // eslint-disable-next-line prefer-rest-params
+          if (typeof make === 'function') doc[k] = function (this: unknown) { return guard(make.apply(this, arguments)); };
+        }
+      }
+      const Audio = w.Audio;
+      if (typeof Audio === 'function') {
+        const SilentAudio = function (src?: string) {
+          // eslint-disable-next-line prefer-rest-params
+          return guard(arguments.length ? new Audio(src) : new Audio());
+        } as unknown as { prototype: unknown };
+        SilentAudio.prototype = Audio.prototype;
+        w.Audio = SilentAudio;
       }
     }
 

@@ -49,24 +49,31 @@ function fakeRealm(webdriver: boolean, { sink = false } = {}) {
   class OfflineAudioContext extends BaseContext {}
   class HTMLMediaElement {
     private m = false;
+    private a = false;
     played = 0;
     paused = true;
+    own: Record<string, (e: unknown) => void> = {};
     get muted() { return this.m; }
     set muted(v: boolean) { this.m = v; }
+    get autoplay() { return this.a; }
+    set autoplay(v: boolean) { this.a = v; }
     play() { this.played++; this.paused = false; return Promise.resolve(); }
     pause() { this.paused = true; }
+    addEventListener(t: string, f: (e: unknown) => void) { this.own[t] = f; }
+    /** What the browser does on its own: autoplay starts it, with no play() call. */
+    autoplayNow() { if (!this.a) return; this.paused = false; this.own.play?.({ type: 'play', target: this }); }
   }
-  Object.defineProperty(HTMLMediaElement.prototype, 'muted', {
-    ...Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'muted'),
-    enumerable: true,
-  });
+  for (const k of ['muted', 'autoplay']) {
+    Object.defineProperty(HTMLMediaElement.prototype, k, { ...Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, k), enumerable: true });
+  }
+  class Audio extends HTMLMediaElement { constructor(public src?: string) { super(); } }
   const spoken: Array<{ volume: number }> = [];
   class SpeechSynthesis { speak(u: { volume: number }) { spoken.push(u); } }
   const listeners: Record<string, (e: unknown) => void> = {};
   const document = { addEventListener: (t: string, f: (e: unknown) => void) => { listeners[t] = f; } };
   const realm = {
     navigator: { webdriver }, document, Promise,
-    AudioNode, AudioDestinationNode, AudioContext, OfflineAudioContext, HTMLMediaElement, SpeechSynthesis,
+    AudioNode, AudioDestinationNode, AudioContext, OfflineAudioContext, HTMLMediaElement, Audio, SpeechSynthesis,
   } as Record<string, unknown>;
   return { realm, connections, spoken, listeners, sinkMoves, AudioContext, OfflineAudioContext, HTMLMediaElement, SpeechSynthesis };
 }
@@ -97,6 +104,18 @@ async function checkSilenced(f: Realm) {
   f.listeners.volumechange({ type: 'volumechange', target: auto });
   expect(auto.muted).toBe(true);
   expect(tried(f).plays).toBe(2);
+  // A detached `new Audio()` sends the document nothing: it is guarded where it is made, and
+  // the browser's own autoplay of it is paused by its own listener.
+  const A = f.realm.Audio as new (src?: string) => InstanceType<typeof f.HTMLMediaElement>;
+  const detached = new A('tone.wav');
+  expect(detached).toBeInstanceOf(f.HTMLMediaElement);
+  expect(detached.muted).toBe(true);
+  detached.autoplay = true;
+  expect(detached.autoplay, 'autoplay stays off').toBe(false);
+  (detached as unknown as { a: boolean }).a = true;   // a parser set the attribute
+  detached.autoplayNow();
+  expect(detached.paused).toBe(true);
+  expect(tried(f).plays).toBe(3);
 
   // An offline context renders into a buffer: left alone.
   const off = new f.OfflineAudioContext();
