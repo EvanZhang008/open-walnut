@@ -7,7 +7,7 @@ import { describe, it, expect } from 'vitest'
 import type { Task } from '../../src/core/types.js'
 import { buildOrgTree, type OrgTaskLike } from '../../src/core/org/org-tree.js'
 import { buildChannels } from '../../web/src/components/org/org-channels-model.js'
-import { ceoLine, dropPlan, vpCards, vpLine } from '../../web/src/components/org/org-chart-model.js'
+import { ceoLine, dropPlan, nowLine, vpCards, vpLine } from '../../web/src/components/org/org-chart-model.js'
 
 let n = 0
 const t = (project: string, over: Partial<OrgTaskLike> = {}): OrgTaskLike => {
@@ -28,6 +28,22 @@ const gardenLead = t('Garden', { org_role: 'lead', title: 'Garden lead' })
 const seedsLead = t('Seeds', { org_role: 'lead', title: 'Seeds lead', session_id: 'sid-seeds-lead' })
 
 describe('org chart cards', () => {
+  it('a closed card says, after its name, how many it has open and what it is doing now', () => {
+    // 2026-11-08, the user: after the name, how many it has, then what it is doing.
+    const all = [...garden, ...seeds, ...inbox, gardenLead, seedsLead]
+    const byId = new Map(all.map((x) => [x.id, x as unknown as Task] as const))
+    const cards = cardsOf(all)
+    const g = cards.find((c) => c.name === 'Garden')!
+    expect(nowLine(g.projects, byId)).toMatchObject({ open: 2, doing: garden[0]!.title })
+    // Nothing at work: the count alone.
+    const quiet = [t('Quiet'), t('Quiet', { phase: 'WAITING' })]
+    const q = cardsOf(quiet).find((c) => c.name === 'Quiet')!
+    expect(nowLine(q.projects, new Map(quiet.map((x) => [x.id, x as unknown as Task] as const)))).toEqual({ open: 2 })
+    // A VP leading two projects counts both and names the newest task at work in either.
+    const led = cardsOf([...garden, ...seeds, { ...gardenLead, org_leads: ['Seeds'] }]).find((c) => c.name === 'Garden')!
+    expect(nowLine(led.projects, byId).open).toBe(4)
+  })
+
   it('one card per project, named after it, the Inbox last and no one\'s VP', () => {
     const cards = cardsOf([...garden, ...seeds, ...inbox, gardenLead, seedsLead])
     expect(cards.map((c) => [c.name, c.role, c.projects.length])).toEqual([['Garden', 'VP', 1], ['Seeds', 'VP', 1], ['Inbox', 'Inbox', 1]])

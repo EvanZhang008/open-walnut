@@ -109,10 +109,15 @@ test('Main is the CEO and each project a VP card with its own name: names alone 
   await expect(page.getByTestId('org-chart-ceo')).toContainText('CEO')
   for (const name of [A, B]) {
     const card = vp(page, name)
-    // Closed: the VP's name and its one project's name, nothing else (2026-11-06, the user:
-    // "just show the name"): no counts, news, time, badge or menu.
+    // Closed: the VP's name and its one project's name (2026-11-06, the user: "just show the
+    // name"), each followed by how many it has open (2026-11-08: "after the name, how many it
+    // has, then what it is doing"; nothing here is at work, so no doing line); no news, time,
+    // badge or menu.
     await expect(card.getByTestId('org-chart-vp-name')).toHaveText(name)
-    expect(await shownWords(card)).toEqual([name, name])
+    await expect(card.getByTestId('org-chart-vp-now')).toHaveText('2 open')
+    await expect(card.getByTestId('org-chart-project-now')).toHaveText('2 open')
+    expect((await shownWords(card)).join(' ')).toBe(`${name} 2 open ${name} 2 open`)
+    await expect(card.getByTestId('org-chart-vp-doing')).toHaveCount(0)
     await expect(card.locator('.oc-badge, .oc-more, [data-testid="org-chart-vp-detail"], [data-testid="org-chart-project-line"]')).toHaveCount(0)
     await expect(card.getByTestId('org-chart-vp-dot')).toHaveCount(0)
     // Opened ("and can expand for more detail"): two tasks not started are Waiting, by the one
@@ -140,7 +145,7 @@ test('Main is the CEO and each project a VP card with its own name: names alone 
     await expect(row(page, name, name).getByTestId('org-chart-project-toggle')).toHaveAttribute('aria-expanded', 'true')
     await row(page, name, name).getByTestId('org-chart-project-toggle').click()
     await vp(page, name).getByTestId('org-chart-vp-toggle').click()
-    expect(await shownWords(vp(page, name))).toEqual([name, name])
+    expect((await shownWords(vp(page, name))).join(' ')).toBe(`${name} 2 open ${name} 2 open`)
   }
 })
 

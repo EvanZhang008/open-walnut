@@ -29,7 +29,7 @@ import { OrgChartCeo, OrgChartVp } from './OrgChartVp';
 import { OrgEditableName } from './OrgEditableName';
 import { OrgNodeEditor, type OrgNodeEditorMode } from './OrgNodeEditor';
 import { useOrgSettings } from './useOrgSettings';
-import { cardOf, ceoLine, dropPlan, theVp, vpCards, type DropPlan, type VpCard, type VpProject } from './org-chart-model';
+import { cardOf, ceoLine, dropPlan, nowLine, theVp, vpCards, type DropPlan, type VpCard, type VpProject } from './org-chart-model';
 import type { ChannelRow } from './org-channels-model';
 import '@/styles/org-chart.css';
 
@@ -336,6 +336,7 @@ export function OrgChartSheet({ main, rows, tasks, onClose, onPick, onOpenTask, 
                   onDragEnd={endDrag}
                   onContextMenu={(from, point) => openNodeMenu(c, from, point)}
                   onOpenChat={() => pick(c.key)}
+                  line={nowLine(c.projects, byId)}
                   more={c.role === 'VP' ? nodeMore(c, `More for ${theVp(c.name)}`) : null}
                 >
                   <ul className="oc-projects" data-testid="org-chart-projects" aria-label={`Projects ${theVp(c.name)} leads`} hidden={c.projects.length === 0}>

@@ -97,6 +97,8 @@ export function OrgChartProject({ project: p, tasks, dragging, onDragStart, onDr
       >
         <span className="oc-chevron" aria-hidden="true">{open ? '▾' : '▸'}</span>
         <span className="oc-project-name">{p.name}</span>
+        {/* How many it has (none: nothing said); what it is doing is on its card and in it opened. */}
+        {p.row.counts.open > 0 && <span className="oc-now" data-testid="org-chart-project-now">{p.row.counts.open} open</span>}
       </div>
       {open && (
         <div className="oc-project-detail" id={detailId}>

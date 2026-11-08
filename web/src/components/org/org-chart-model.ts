@@ -13,7 +13,8 @@
  * projects under (Task.org_vp_only) lists its own project only while it has open work.
  */
 import type { ChannelRow } from './org-channels-model';
-import { projectKey } from '@open-walnut/org-tree';
+import { projectKey, teamNews, type OrgTaskNode, type TeamNewsTask } from '@open-walnut/org-tree';
+import type { Task } from '@open-walnut/core';
 import { stateCountLabel } from '@open-walnut/user-status';
 
 /** One project on a VP card. */
@@ -205,4 +206,23 @@ export function dropPlan(cards: readonly VpCard[], project: VpProject, target: V
 
 function listNames(names: readonly string[]): string {
   return names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0] ?? '';
+}
+
+/** What a closed card says after its name (2026-11-08, the user: after the name, how many it has,
+ *  then what it is doing): its open tasks, and the newest task at work, by its title. */
+export interface NowLine {
+  open: number;
+  /** The newest working task's title, and where it stands in its own words (for the tooltip). */
+  doing?: string;
+  words?: string;
+}
+
+export function nowLine(projects: readonly VpProject[], byId: ReadonlyMap<string, Task>): NowLine {
+  const open = projects.reduce((n, p) => n + p.row.counts.open, 0);
+  const nodes: OrgTaskNode[] = [];
+  const walk = (list: readonly OrgTaskNode[]) => { for (const n of list) { nodes.push(n); walk(n.workers); } };
+  for (const p of projects) walk(p.row.node?.teams ?? []);
+  const tasks = nodes.map((n) => (byId.get(n.id) as TeamNewsTask | undefined) ?? { id: n.id, title: n.title, phase: n.phase });
+  const top = teamNews(tasks).find((i) => i.state === 'working');
+  return top ? { open, doing: top.title, ...(top.words ? { words: top.words } : {}) } : { open };
 }

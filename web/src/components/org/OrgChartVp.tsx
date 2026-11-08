@@ -14,7 +14,7 @@ import { stateCountLabel } from '@open-walnut/user-status';
 import { threadCountLabel, threadLine } from '@open-walnut/thread-view';
 import { isBoolean, usePageViewOf } from '@/utils/view-memory';
 import { shortAgo } from './OrgChannelList';
-import { theVp, type VpCard } from './org-chart-model';
+import { theVp, type NowLine, type VpCard } from './org-chart-model';
 import type { ChannelRow } from './org-channels-model';
 
 /** A clickable div: Enter and Space press it too. */
@@ -89,12 +89,12 @@ export function OrgChartCeo({ main, line, onOpenChat, more }: CeoProps) {
       <div className="oc-card-btn" data-testid="org-chart-ceo" aria-expanded={open} aria-controls="oc-detail-ceo" title={open ? 'Hide the CEO\'s detail' : 'Show what the CEO is doing'} {...pressable(toggle)}>
         <span className="oc-chevron" aria-hidden="true">{open ? '▾' : '▸'}</span>
         <span className="oc-card-title">CEO</span>
+        <span className="oc-now" data-testid="org-chart-ceo-now">{line}</span>
         <Dot sign={sign} testId="org-chart-ceo-dot" />
       </div>
       {open && (
         <div className="oc-detail" id="oc-detail-ceo" data-testid="org-chart-ceo-detail">
           {threadsText(main) && <p className={`oc-detail-line is-clamped${main.threads?.needs ? ' is-alert' : ''}`} data-testid="org-chart-ceo-threads" title={threadsText(main)!}>{threadsText(main)}</p>}
-          <p className="oc-detail-line is-muted">{line}</p>
           <div className="oc-detail-actions">
             <button type="button" className="oc-detail-btn" data-testid="org-chart-ceo-open" onClick={onOpenChat}>Open chat</button>
             {more}
@@ -117,6 +117,8 @@ interface VpProps {
   onDragEnd: () => void;
   onContextMenu: (from: HTMLElement, point: { x: number; y: number }) => void;
   onOpenChat: () => void;
+  /** Its open tasks and what it is doing now, after its name. */
+  line: NowLine;
   /** Its ⋯ menu, for a VP (the Inbox has none). */
   more: ReactNode;
   /** The project rows, and the drop hint. */
@@ -126,7 +128,7 @@ interface VpProps {
 /** "23m · Renew the permit": when the news was written, and the task it is about. */
 const metaLine = (newsAt: number, task: string | undefined, now: number) => [shortAgo(newsAt, now), task].filter(Boolean).join(' · ');
 
-export function OrgChartVp({ card: c, now, className, zone, draggable, onDragStart, onDragEnd, onContextMenu, onOpenChat, more, children }: VpProps) {
+export function OrgChartVp({ card: c, now, line, className, zone, draggable, onDragStart, onDragEnd, onContextMenu, onOpenChat, more, children }: VpProps) {
   // Its own key is its home project's row key too: the card and that row open apart.
   const [open, toggle] = useChartOpen(`vp:${c.key}`);
   const sign = cardSign(c.row, c.needsYou);
@@ -162,7 +164,14 @@ export function OrgChartVp({ card: c, now, className, zone, draggable, onDragSta
           {...pressable(toggle)}
         >
           <span className="oc-chevron" aria-hidden="true">{open ? '▾' : '▸'}</span>
-          <span className="oc-card-title" data-testid="org-chart-vp-name">{c.name}</span>
+          <span className="oc-card-main">
+            <span className="oc-card-headline">
+              <span className="oc-card-title" data-testid="org-chart-vp-name">{c.name}</span>
+              <span className="oc-now" data-testid="org-chart-vp-now">{line.open} open</span>
+            </span>
+            {/* What it is doing now: its newest task at work, one line the card's width. */}
+            {line.doing && <span className="oc-doing" data-testid="org-chart-vp-doing" title={line.words ? `${line.doing}: ${line.words}` : line.doing}>{line.doing}</span>}
+          </span>
           <Dot sign={sign} testId="org-chart-vp-dot" />
         </div>
       </div>
