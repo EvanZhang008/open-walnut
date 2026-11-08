@@ -70,7 +70,8 @@ export const THREADS_PENDING_RULE =
  */
 export const THREADS_SUMMARY_RULE =
   'A card shows only its title, your summary (reply) and your answers he has not reacted to that came after it (a summary you '
-  + 'write replaces your earlier answers on the card); nothing he already knew. Write the '
+  + 'write replaces your earlier answers on the card); nothing he already knew. Every thread you answer gets its summary in that '
+  + 'same turn: until you write one, Walnut shows its own line from your latest answer and asks you for it. Write the '
   + 'summary latest first: the newest question or what he must decide and where it stands, then at most one or two sentences of '
   + 'background; never a log of the thread, never one bare line. Keep the title following the subject as it moves. When news '
   + 'about a thread reaches you (a team\'s notice, a mail, a trigger), update that thread\'s summary and title (thread_update); '

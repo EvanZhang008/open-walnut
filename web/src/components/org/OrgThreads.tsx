@@ -7,7 +7,9 @@
  *
  * A card is kept short (2026-11-01, the user: "the purpose is to keep the thread extremely
  * concise ... I replied from the first one to the ninth, so why still show the first to the
- * eighth?"): its title, the node's summary (latest first, a sentence or two of background), and
+ * eighth?"): its title, the node's summary (latest first, a sentence or two of background; Walnut's
+ * own line from the latest answer until the node writes one, 2026-11-08: "no summary at all ... I
+ * should not need to open it"), and
  * only the node's answers he has not reacted to that the summary did not supersede (2026-11-07: a
  * card showed the new summary and the older answer under it), each folded to a few lines with an Expand /
  * Collapse toggle on the answer itself ("I have to click the corner text ... outrageous"). What he
@@ -44,7 +46,7 @@ import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Task } from '@open-walnut/core';
 import { userStateOf } from '@open-walnut/org-tree';
 import { USER_STATE_LABELS, shownState } from '@open-walnut/user-status';
-import { cardView, exchangesOf, overdueLine, pinnedFirst, pinnedNow, sharedAnswers, shownToHim, snoozedNow, type ThreadExchange } from '@open-walnut/thread-view';
+import { cardView, exchangesOf, overdueLine, pinnedFirst, pinnedNow, sharedAnswers, shownToHim, snoozedNow, type SummaryLine, type ThreadExchange } from '@open-walnut/thread-view';
 import { ThreadPinIcon } from '@/components/sessions/ThreadIcons';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
@@ -76,6 +78,12 @@ const STATE_LABEL: Record<OrgThreadState, string> = {
 const STATE_DOT: Record<OrgThreadState, string> = {
   new: 'var(--accent, #0A84FF)', working: 'var(--success, #34C759)', needs: 'var(--error, #FF3B30)', answered: 'var(--fg-muted, #86868B)',
   pending: 'var(--fg-muted, #86868B)',
+};
+/** What Walnut's stand-in summary line says it is (core/org/thread-view.ts SummaryLine). */
+const STAND_IN_NOTE: Record<Exclude<NonNullable<SummaryLine['from']>, 'none'>, (name: string) => string> = {
+  answer: (name) => `From ${name}'s latest answer; ${name} has not written a summary yet`,
+  opener: (name) => `From ${name}'s post; ${name} has not written a summary yet`,
+  ask: (name) => `What you asked, in ${name}'s words; ${name} has not written a summary yet`,
 };
 /** How much of his words the line above an answer quotes. */
 const QUOTE_WORDS = 72;
@@ -351,7 +359,15 @@ function ThreadCard({ t, all, shared, tasks, onOpenTask, state, onFollowUp, name
       {snoozed && t.snoozed && <p className="org-thread-snoozed" data-testid="org-thread-snoozed-until">Snoozed until {backAt(t.snoozed.until, now)}</p>}
       {follows && <p className="org-thread-follows">Asks again about “{follows.title}”</p>}
       {overdue && <p className="org-thread-overdue" data-testid="org-thread-overdue">{overdue}</p>}
-      {t.reply && <Markdown text={t.reply} className="org-thread-summary" testId="org-thread-reply" />}
+      {card.summary.by === 'node'
+        ? <Markdown text={card.summary.text} className="org-thread-summary" testId="org-thread-reply" />
+        : (
+          // No summary from the node yet: Walnut's own line, so the card never needs the conversation opened (2026-11-08).
+          <div className="org-thread-summary is-stand-in" data-testid="org-thread-reply" data-by="walnut">
+            <p>{card.summary.from === 'none' ? `${name} has not answered yet` : card.summary.text}</p>
+            {card.summary.from !== 'none' && <span className="org-thread-stand-in-note" data-testid="org-thread-stand-in">{STAND_IN_NOTE[card.summary.from ?? 'answer'](name)}</span>}
+          </div>
+        )}
       {chips.length > 0 && <TaskChips ids={chips} tasks={tasks} onOpenTask={onOpenTask} />}
       {!open && card.unread.length > 0 && (
         <ol className="org-thread-unread" data-testid="org-thread-unread">

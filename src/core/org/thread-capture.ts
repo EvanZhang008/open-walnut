@@ -18,7 +18,7 @@ import {
   fileMessage, isOpen, lastUserAt, newThreadId, newThreadMessageId, reactedSince, sortedThreads,
   type FileMessageInput, type ThreadCloseHow, type ThreadsFile, type ThreadState, type ThreadVia, type ThreadWriter,
 } from './threads-model.js';
-import { exchangesOf, pinnedNow, snoozedNow } from './thread-view.js';
+import { exchangesOf, pinnedNow, snoozedNow, summaryOwed } from './thread-view.js';
 
 /** Open threads named to the node with each message (the newest). */
 export const HINT_OPEN_MAX = 12;
@@ -193,7 +193,7 @@ export function threadHintText(s: ThreadHintState): string {
 }
 
 /** A thread the node should look at again: why, in a few words. */
-export interface TidyItem { id: string; title: string; state: ThreadState; why: 'reacted' | 'untitled' | 'state' }
+export interface TidyItem { id: string; title: string; state: ThreadState; why: 'reacted' | 'untitled' | 'state' | 'summary' }
 
 export interface ThreadsTidyState {
   items: TidyItem[];
@@ -227,6 +227,8 @@ export function threadsTidyOf(file: ThreadsFile, nowMs = Date.now()): ThreadsTid
     else if (!reviewed && waiting.some((x) => reactedSince(file, (x.answer ?? x.opener)!.at))) why = 'reacted';
     else if (untitled) why = 'untitled';
     else if (t.state === 'new' && xs.some((x) => x.answer)) why = 'state';
+    // A card he sees always leads with the node's summary (thread-view.ts summaryOwed; 2026-11-08).
+    else if (summaryOwed(t)) why = 'summary';
     if (why) items.push({ id: t.id, title: t.title, state: t.state, why });
     if (items.length >= TIDY_MAX) break;
   }
@@ -238,6 +240,7 @@ const TIDY_WHY: Record<TidyItem['why'], string> = {
   reacted: 'did he react to your answer?',
   untitled: 'needs a title',
   state: 'answered, still new',
+  summary: 'no summary, or one older than your answer: write it',
 };
 
 /** What the `threads-tidy` reminder says: one line, the threads by why (the rules are in the prompt). */

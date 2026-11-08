@@ -17,6 +17,8 @@ import {
 } from '../../../src/core/org/thread-view.js'
 import { THREAD_STATES, emptyThreads, fileMessage, normalizeThreads, openThread, setAnswers, updateThread, type OrgThread } from '../../../src/core/org/threads-model.js'
 import { RETRY_MS, threadRecheckBody, threadRecheckMessage, threadsDueRecheck } from '../../../src/core/org/thread-recheck.js'
+import { threadsTidyOf } from '../../../src/core/org/thread-capture.js'
+import { STAND_IN_MAX, plainLine, summaryOwed } from '../../../src/core/org/thread-view.js'
 import { classifyInjectedLine } from '../../../src/core/task-wait-resume.js'
 
 const T0 = Date.parse('2026-11-07T14:00:00Z')
@@ -189,5 +191,58 @@ describe('the note is an interruption of a wait, never what the wait waited for'
     expect(due).toHaveLength(1)
     // The very text runThreadRecheck sends.
     expect(classifyInjectedLine(threadRecheckMessage(due, T0 + REPLY_DUE_MS))).toBe('walnut-notify')
+  })
+})
+
+describe('4. every card leads with a summary line', () => {
+  // 2026-11-08, the user, on a card with only the node's answer and the Conversation toggle:
+  // "no summary at all ... I should not need to open it".
+  const answer = 'Good: the version that never opens the app.\n\n- a big **Send** button on the lock screen;\n- press the action button again.\n\nAbout <walnut-about ids="t1"/>'
+  const shapes: Record<string, T> = {
+    'node summary': thread({ state: 'answered', reply: 'Ships in the next build.', replyAt: iso(MIN), messages: [msg('tm-1', 0, { atMs: 20_000, text: 'ok' })] }),
+    'answer, no summary': thread({ state: 'working', by: 'task:vp', messages: [msg('tm-1', 0, { atMs: 20_000, text: answer })] }),
+    'opener, no summary': thread({ state: 'needs', opener: { text: 'Click yes on the admin prompt.', at: iso(0), from: 'task' } }),
+    'only his message, an ask': thread({ state: 'working', ask: 'Why is it still queued?', messages: [msg('tm-1', 0)] }),
+    'only his message': thread({ state: 'working', messages: [msg('tm-1', 0)] }),
+    'only a long message of his': thread({ state: 'working', messages: [{ id: 'tm-1', at: iso(0), text: 'Paragraph 1: '.repeat(40) }] }),
+    'shared answer only': thread({ state: 'answered', messages: [msg('tm-1', 0, { atMs: 20_000, text: 'One reply for two threads.' })] }),
+  }
+
+  it('has a non-empty line in every shape, from the node when it wrote one, else Walnut\'s', () => {
+    for (const [name, t] of Object.entries(shapes)) {
+      const c = cardView(t, name === 'shared answer only' ? new Set(['tm-1']) : new Set())
+      expect(c.summary.text.trim(), name).not.toBe('')
+      expect(c.summary.by, name).toBe(name === 'node summary' ? 'node' : 'walnut')
+    }
+    // His own words are never echoed back as the line (2026-11-01: "you don't need to put it in this thread").
+    expect(cardView(shapes['only a long message of his']).summary).toEqual({ text: 'No answer yet', by: 'walnut', from: 'none' })
+    // Every card a view of real-looking threads shows has one too.
+    for (const t of Object.values(shapes)) if (shownToHim(t, new Set(), T0 + NEEDS_QUIET_MS)) expect(cardView(t).summary.text).not.toBe('')
+  })
+
+  it('the stand-in is the first sentence of the latest answer, plain; the answer stays whole below it', () => {
+    const c = cardView(shapes['answer, no summary'])
+    expect(c.summary).toEqual({ text: 'Good: the version that never opens the app.', by: 'walnut', from: 'answer' })
+    expect(c.unread).toHaveLength(1)
+    expect(plainLine('- a big **Send** button;\n- press again')).toBe('a big Send button; press again')
+    // A test of CJK text data: "\u597d\u3002" is a two-character sentence ending in an ideographic full stop.
+    expect(plainLine('\u597d\uff0c\u5c31\u505a\u4e0d\u6253\u5f00 app \u7684\u7248\u672c\u3002\u677e\u624b\u53d1\u4e0d\u4e86\u3002')).toBe('\u597d\uff0c\u5c31\u505a\u4e0d\u6253\u5f00 app \u7684\u7248\u672c\u3002')
+    expect(Array.from(plainLine('x'.repeat(1000))).length).toBe(STAND_IN_MAX)
+    // Left too long, the thread still shows for the answer the stand-in carries.
+    expect(shownToHim(shapes['answer, no summary'], new Set(), T0 + 20_000 + REPLY_DUE_MS + OVERDUE_SHOW_MS)).toBe(true)
+  })
+
+  it('the node is asked for a missing or outdated summary (threads-tidy), never for one that covers its answers', () => {
+    expect(summaryOwed(shapes['answer, no summary'])).toBe(true)
+    expect(summaryOwed(shapes['node summary'])).toBe(false)
+    expect(summaryOwed(shapes['only his message'])).toBe(false)
+    const outdated = thread({ state: 'answered', reply: 'Old', replyAt: iso(MIN), messages: [msg('tm-1', 2 * MIN, { atMs: 3 * MIN, text: 'New result' })] })
+    expect(summaryOwed(outdated)).toBe(true)
+    let f = fileMessage(emptyThreads('vp'), { text: 'can it skip the app?', via: 'chat', at: iso(0) }).file
+    f = updateThread(f, f.threads[0].id, { title: 'Skip the app', state: 'working' }, 'task:vp', iso(10_000)).file
+    f = setAnswers(f, new Map([[f.threads[0].messages[0].id, { text: 'Yes, two ways to send.', at: iso(20_000) }]])).file
+    expect(threadsTidyOf(f, T0 + MIN)?.items).toEqual([expect.objectContaining({ id: f.threads[0].id, why: 'summary' })])
+    f = updateThread(f, f.threads[0].id, { reply: 'Yes: a big Send button, or press again.' }, 'task:vp', iso(30_000)).file
+    expect(threadsTidyOf(f, T0 + MIN)).toBeNull()
   })
 })

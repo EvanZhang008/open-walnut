@@ -74,7 +74,7 @@ describe('a thread as its conversation', () => {
   })
 
   it('no messages: nothing on the card', () => {
-    expect(cardView({ messages: [] })).toEqual({ unread: [], waiting: [] })
+    expect(cardView({ messages: [] })).toMatchObject({ unread: [], waiting: [] })
   })
 
   it('a thread the node opened: its post is on the card until he writes after it', () => {

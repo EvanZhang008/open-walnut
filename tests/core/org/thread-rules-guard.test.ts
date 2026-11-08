@@ -96,6 +96,7 @@ describe('his view shows only what has something for him', () => {
     expect(THREADS_PENDING_RULE).toContain('your chat answer on it included: give every thread you answer its state in that same turn')
     expect(THREADS_PENDING_RULE).toMatch(/is overdue: Walnut reminds you, then shows it to him as having no reply/)
     expect(THREADS_SUMMARY_RULE).toContain('a summary you write replaces your earlier answers on the card')
+    expect(THREADS_SUMMARY_RULE).toContain('Every thread you answer gets its summary in that same turn')
     expect(THREADS_PENDING_RULE).toMatch(/one he just wrote in \(his message makes it working\)/)
     expect(THREADS_PENDING_RULE).toContain('A new summary written without a state is news and shows it')
     expect(THREADS_PENDING_RULE).toContain('Never write a summary that only says who took it')

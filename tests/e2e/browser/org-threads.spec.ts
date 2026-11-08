@@ -461,6 +461,12 @@ test('his view shows only threads with something for him; his reply sends one ou
   await expect.poll(shown).toEqual(['th-0000000000a2', 'th-0000000000a3', 'th-0000000000a4', 'th-0000000000a7', 'th-0000000000a8'])
   await expect(page.getByTestId('org-threads-hidden')).toHaveText(/^3 in progress, nothing for you/)
   await expect(card(page, 'th-0000000000a7').getByTestId('org-thread-overdue')).toHaveText(/^No reply from .+ · last activity .+ ago$/)
+  // Every card his view shows leads with a summary line (2026-11-08: "no summary at all ... I should
+  // not need to open it"): the node's, else Walnut's own, saying so.
+  for (const id of await shown()) await expect(card(page, id!).getByTestId('org-thread-reply')).toBeVisible()
+  await expect(card(page, 'th-0000000000a7').getByTestId('org-thread-reply')).toHaveAttribute('data-by', 'walnut')
+  await expect(card(page, 'th-0000000000a7').getByTestId('org-thread-reply')).toHaveText(/ has not answered yet$/)
+  await expect(card(page, 'th-0000000000a8').getByTestId('org-thread-stand-in')).toHaveCount(0)
   await expect(card(page, 'th-0000000000a2').getByTestId('org-thread-overdue')).toHaveCount(0)
   // The newer summary alone: the older answer is only in the conversation.
   const superseded = card(page, 'th-0000000000a8')

@@ -40,6 +40,9 @@ export interface ViewThread<M extends ViewMessage = ViewMessage> {
   pinned?: { at: string; by?: string };
   /** The node's summary, when it was last rewritten (`replyAt`; absent on threads written before 2026-11-07). */
   reply?: string;
+  /** What he wants, in the node's words; and the thread's title. */
+  ask?: string;
+  title?: string;
   replyAt?: string;
   /** The last change and who made it (his writes are `human`). */
   updatedAt?: string;
@@ -105,22 +108,94 @@ export function unreactedAnswers(t: ViewThread): number {
 }
 
 /**
- * What a card shows: the answers he has not reacted to, and his messages after the last answer
- * still waiting for one (an older message no reply was ever found for is history, not news).
+ * What a card shows: its summary line on top, the answers he has not reacted to, and his messages
+ * after the last answer still waiting for one (an older message no reply was ever found for is
+ * history, not news).
  */
 export interface CardView<M extends ViewMessage = ViewMessage> {
+  summary: SummaryLine;
   unread: ThreadExchange<M>[];
   waiting: ThreadExchange<M>[];
 }
+
+/**
+ * The line on top of every card (2026-11-08, the user, on a card with only the node's answer and the
+ * Conversation toggle: "no summary at all ... I should not need to open it"): the node's summary,
+ * else Walnut's own stand-in until the node writes one: the first sentence of the node's latest
+ * answer (or its first post), else what he asks (`ask`) in the node's words, else that there is no
+ * answer yet. Never empty.
+ */
+export interface SummaryLine {
+  text: string;
+  by: 'node' | 'walnut';
+  /** Where Walnut's stand-in came from. */
+  from?: 'answer' | 'opener' | 'ask' | 'none';
+}
+
+/** How much of an answer Walnut's stand-in line keeps: its first sentence of at least STAND_IN_MIN characters, at most STAND_IN_MAX. */
+export const STAND_IN_MAX = 160;
+const STAND_IN_MIN = 12;
 
 export function cardView<M extends ViewMessage>(t: ViewThread<M>, shared: ReadonlySet<string> = NONE): CardView<M> {
   const exchanges = exchangesOf(t);
   let lastSaid = -1;
   exchanges.forEach((x, i) => { if (x.answer || x.opener) lastSaid = i; });
-  return {
-    unread: exchanges.filter((x) => (x.answer || x.opener) && !x.known && !x.messages.some((m) => shared.has(m.id)) && !supersededBySummary(t, x)),
-    waiting: exchanges.slice(lastSaid + 1).filter((x) => !x.answer && !x.opener),
-  };
+  const unread = unreadOf(t, exchanges, shared);
+  const waiting = exchanges.slice(lastSaid + 1).filter((x) => !x.answer && !x.opener);
+  let summary: SummaryLine;
+  if (t.reply?.trim()) summary = { text: t.reply.trim(), by: 'node' };
+  else {
+    // The newest of the node's own words on the thread, never one reply shared with another thread.
+    const said = exchanges.filter((x) => (x.answer || x.opener) && !x.messages.some((m) => shared.has(m.id)));
+    const src = said[said.length - 1];
+    const text = src ? plainLine(src.answer?.text ?? src.opener!.text) : '';
+    // The answer itself stays on the card whole: the line is its headline, not a replacement.
+    if (src && text) summary = { text, by: 'walnut', from: src.opener ? 'opener' : 'answer' };
+    else if (t.ask?.trim()) summary = { text: t.ask.trim(), by: 'walnut', from: 'ask' };
+    // Nothing from the node yet: say so, never echo his own words back (2026-11-01, the user: "you
+    // definitely haven't answered ... you don't need to put it in this thread").
+    else summary = { text: 'No answer yet', by: 'walnut', from: 'none' };
+  }
+  return { summary, unread, waiting };
+}
+
+/** The node's words he has not reacted to that no summary superseded (the stand-in line not counted). */
+function unreadOf<M extends ViewMessage>(t: ViewThread<M>, exchanges: ThreadExchange<M>[], shared: ReadonlySet<string>): ThreadExchange<M>[] {
+  return exchanges.filter((x) => (x.answer || x.opener) && !x.known && !x.messages.some((m) => shared.has(m.id)) && !supersededBySummary(t, x));
+}
+
+/** Markdown and markup to one plain paragraph of at most STAND_IN_MAX characters (by code point). */
+export function plainLine(text: string): string {
+  const flat = text
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .split('\n')
+    .filter((l) => !/^\s*About\b/.test(l))
+    .map((l) => l.replace(/^\s*(?:#+|>+|[-*+]|\d+[.)])\s+/, '').replace(/[*_`~]+/g, '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').trim())
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  // Its first sentence, when one ends early enough: a headline, the answer below has the rest.
+  const end = flat.slice(STAND_IN_MIN).search(/[\u3002\uff01\uff1f]|[.!?](?=\s|$)/);
+  const head = end >= 0 && STAND_IN_MIN + end < STAND_IN_MAX ? flat.slice(0, STAND_IN_MIN + end + 1) : flat;
+  const points = Array.from(head);
+  return points.length <= STAND_IN_MAX ? head : `${points.slice(0, STAND_IN_MAX - 1).join('').trimEnd()}\u2026`;
+}
+
+/**
+ * The node owes this thread a summary: it has none while its own words are on the thread, or an
+ * answer came after the summary that the summary does not cover (supersededBySummary). Pure; the
+ * `threads-tidy` reminder asks for it.
+ */
+export function summaryOwed(t: ViewThread): boolean {
+  const xs = exchangesOf(t);
+  const said = xs.filter((x) => x.answer || x.opener);
+  if (!said.length) return false;
+  const s = summaryAt(t);
+  if (!t.reply?.trim()) return true;
+  if (!s) return false;
+  return said.some((x) => !!x.answer && x.answer.at > s && !supersededBySummary(t, x));
 }
 
 const NONE: ReadonlySet<string> = new Set();
@@ -292,7 +367,7 @@ export function threadOverdue(t: ViewThread & { state: string }, now: number = D
 function overdueShown<M extends ViewMessage>(t: ViewThread<M> & { state: string }, shared: ReadonlySet<string>, now: number): boolean {
   const o = threadOverdue(t, now);
   if (!o || o.why !== 'reply' || now < Date.parse(o.showAt)) return false;
-  return o.unanswered || cardView(t, shared).unread.length > 0;
+  return o.unanswered || unreadOf(t, exchangesOf(t), shared).length > 0;
 }
 
 /** The plain line his card carries for an overdue thread once it is his to see; null otherwise. */
