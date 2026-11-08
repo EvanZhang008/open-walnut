@@ -18,8 +18,9 @@
 import { test, expect } from './shortcut-test-fixture'
 import type { Locator, Page } from '@playwright/test'
 import { isolateUiPrefs, selectSection } from './todo-panel-helpers'
-import { pausePageClock, wheelSeenByPage } from './page-clock'
+import { pausePageClock } from './page-clock'
 import { LS_STATUS_SECTIONS_KEY, endRunningTurn, presetPanelDesign, setStatusSectionOpen, showSectionCard, startRunningTurn, statusSection, statusSectionCard, statusSectionRows, statusSectionToggle } from './status-section-helpers'
+import { wheelSeenByPage } from './page-clock'
 
 const MIN = 60_000
 const made: string[] = []
