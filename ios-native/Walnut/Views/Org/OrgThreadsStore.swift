@@ -37,7 +37,16 @@ final class OrgThreadsStore {
         loading = true
         defer { if gen == generation { loading = false } }
         do {
-            let read = try await WalnutAPI().orgThreads(taskId: taskId)
+            let read: OrgThreadsRead
+            do {
+                read = try await WalnutAPI().orgThreads(taskId: taskId)
+            } catch let first as APIError where !first.isCancelled && threads == nil {
+                // Threads live on the Mac only: through the companion one read may land in a
+                // moment it cannot reach the Mac (2026-11-08). Once more before the page says so.
+                try await Task.sleep(for: .milliseconds(1_500))
+                guard gen == generation else { return }
+                read = try await WalnutAPI().orgThreads(taskId: taskId)
+            }
             guard gen == generation else { return }
             threads = read.threads
             shownCount = read.shownCount
@@ -46,6 +55,7 @@ final class OrgThreadsStore {
         } catch {
             guard gen == generation else { return }
             if let api = error as? APIError, api.isCancelled { return }
+            if error is CancellationError { return }
             self.error = threads == nil ? "Couldn't load the threads. Pull to try again." : "Couldn't refresh the threads."
             AppLog.warn("org", "threads load failed", ["taskId": taskId, "error": error.localizedDescription])
         }
