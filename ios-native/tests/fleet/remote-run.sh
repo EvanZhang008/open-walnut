@@ -32,7 +32,7 @@
 set -uo pipefail
 
 RUN_DIR=${1:?run dir}; MODE=${2:?mode}; shift 2
-VIDEO=0; KEEP_XCRESULT=0; MIN_IDLE=25; MAX_LOAD=2; ASKED_UDID=""
+VIDEO=0; KEEP_XCRESULT=0; MIN_IDLE=25; MAX_LOAD=2; ASKED_UDID=""; AUDIO_WHY=""
 while [ $# -gt 0 ]; do
   case $1 in
     --video) VIDEO=1 ;;
@@ -40,6 +40,7 @@ while [ $# -gt 0 ]; do
     --keep-xcresult) KEEP_XCRESULT=1 ;;
     --max-load) MAX_LOAD=$2; shift ;;
     --min-idle) MIN_IDLE=$2; shift ;;
+    --audio) AUDIO_WHY=$2; shift ;;
     --) shift; break ;;
     *) echo "remote-run: unknown option $1" >&2; exit 64 ;;
   esac
@@ -114,6 +115,12 @@ fi
 CALL=$(fleet_call_now)
 [ -z "$CALL" ] || refuse 75 "BUSY: a call is on this Mac ($CALL); try another Mac or later" busy
 fleet_lent_lane "$HOME/.config/walnut/fleet.env" || refuse 64 "$FLEET_LENT_ERROR" failed
+# A voice, microphone or audio run never runs where a person sits (2026-11-08, the CEO's rule): a
+# Mac marked ~/.config/walnut/no-audio, or whose lent simulator queue has QUIET-ONLY beside it.
+if [ -n "$AUDIO_WHY" ] && { [ -f "$HOME/.config/walnut/no-audio" ] || { [ -n "${FLEET_LENT_QUEUE:-}" ] && [ -f "$(dirname "$FLEET_LENT_QUEUE")/QUIET-ONLY" ]; }; }; then
+  refuse 75 "BUSY: this run touches voice, the microphone or audio ($AUDIO_WHY), and this Mac takes none (a person sits here); try another Mac" busy
+fi
+export SIM_TEST_AUDIO=${AUDIO_WHY:-}
 FREE_KB=$(df -k "$RUN_DIR" | awk 'NR == 2 {print $4}')
 [ "${FREE_KB:-0}" -ge $((6 * 1024 * 1024)) ] || refuse 70 "only $((FREE_KB / 1024 / 1024)) GB free on this Mac, the build needs 6" no-room
 

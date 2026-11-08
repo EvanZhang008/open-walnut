@@ -39,10 +39,10 @@ interface Mac {
 
 /** A fake `walnut tools call <op> @args.json`: answers from scenario.json, logs every call.
  * `listFails`: host_list drops its answer (hub_timeout) this many times first. */
-function fakeWalnut(macs: Mac[], outTgz: string, fleet: { listFails?: number; localIsRemote?: boolean } = {}): string {
+function fakeWalnut(macs: Mac[], outTgz: string, fleet: { listFails?: number; localIsRemote?: boolean; taskText?: string } = {}): string {
   const bin = path.join(dir, 'bin')
   fs.mkdirSync(bin, { recursive: true })
-  fs.writeFileSync(path.join(dir, 'scenario.json'), JSON.stringify({ macs, outTgz, listFails: fleet.listFails || 0, localIsRemote: !!fleet.localIsRemote }))
+  fs.writeFileSync(path.join(dir, 'scenario.json'), JSON.stringify({ macs, outTgz, listFails: fleet.listFails || 0, localIsRemote: !!fleet.localIsRemote, taskText: fleet.taskText }))
   fs.writeFileSync(path.join(bin, 'walnut'), `#!/usr/bin/env node
 const fs = require('fs'), path = require('path')
 const dir = ${JSON.stringify(dir)}
@@ -78,6 +78,7 @@ if (op === 'host_copy') {
   // A big file: the copy answers running first, host_copy_result has the end.
   out({ running: true, copyId: 'hc-' + args.to_host })
 }
+if (op === 'task_get') out({ task: { title: (JSON.parse(fs.readFileSync(path.join(dir, 'scenario.json'), 'utf8')).taskText) || 'iOS board layout', description: '' } })
 if (op === 'host_copy_result') out({ running: false, outcome: 'Copied to ' + args.copy_id })
 if (op === 'host_exec') {
   // An edit to the script while it runs (a commit, the editor), written in place.
@@ -766,6 +767,22 @@ describe('mac-share.sh (what the Mac half asks of the Mac before it takes anythi
     r = ui('')
     expect(r.stdout).toContain('simulator lease held')
     expect(r.stdout).not.toContain('held by the caller')
+  })
+
+  // 2026-11-08: an iPhone voice recording run went to another person's Mac.
+  it('a voice task tells the Mac half, which refuses it as busy where a person sits', () => {
+    const r = run(['unit'], fakeWalnut([{ host: 'mac-mini', loadPerCpu: 0.3 }], outTgz(), { taskText: 'iPhone action button: \u6309\u4e00\u4e0b\u8bf4\u4e00\u6bb5\u8bdd' }))
+    expect(r.status, r.stderr).toBe(0)
+    expect(r.stderr).toContain('this run touches voice, the microphone or audio (its task says')
+    expect((r.calls.find((c) => c.op === 'host_exec' && c.args.background)!.args.argv as string[])[2]).toMatch(/unit --audio .*its task says/)
+    fs.rmSync(path.join(dir, 'calls.jsonl'), { force: true })
+    // How the user typed a quote ("voice input") is no audio test; a board task is not one either.
+    const q = run(['unit'], fakeWalnut([{ host: 'mac-mini', loadPerCpu: 0.3 }], outTgz(), { taskText: 'Board layout (\u8bed\u97f3\u8f93\u5165, voice input)' }))
+    expect(q.status, q.stderr).toBe(0)
+    expect((q.calls.find((c) => c.op === 'host_exec' && c.args.background)!.args.argv as string[])[2]).not.toContain('--audio')
+    const src = fs.readFileSync(REMOTE, 'utf8')
+    expect(src).toMatch(/if \[ -n "\$AUDIO_WHY" \] && \{ \[ -f "\$HOME\/\.config\/walnut\/no-audio" \]/)
+    expect(src).toContain('refuse 75 "BUSY: this run touches voice, the microphone or audio')
   })
 
   it('the Mac half keeps the load line, then memory, then free CPU (fleet_cpu_busy)', () => {

@@ -41,6 +41,8 @@
 #                    foreground limit: start the script in the background to wait
 #   --udid U         drive that simulator on the Mac instead of the run's own one
 #   --clean          remove this task's build products on that Mac afterwards
+#   --audio WHY      the run touches voice, the microphone or audio (found from the task's own
+#                    words when not given): a Mac where a person sits does not take it
 #   --verbose        print the whole run log (default: the lines that matter; all of it
 #                    is in run.log)
 #
@@ -65,7 +67,7 @@ set -uo pipefail
 die() { printf 'ios-fleet: %s\n' "$1" >&2; exit "${2:-1}"; }
 say() { printf 'ios-fleet: %s\n' "$*" >&2; }
 
-HOST=""; MIN_IDLE=25; MAX_LOAD=2; FLAGS=(); CLEAN=0; VERBOSE=0; WAIT_MIN=30
+HOST=""; AUDIO_WHY=${SIM_TEST_AUDIO:-}; MIN_IDLE=25; MAX_LOAD=2; FLAGS=(); CLEAN=0; VERBOSE=0; WAIT_MIN=30
 KEY_LINES='^(remote-run:|FLEET_RESULT|\*\* (BUILD|TEST)|Test Case .* failed|.*: error: )'
 while [ $# -gt 0 ]; do
   case $1 in
@@ -76,6 +78,7 @@ while [ $# -gt 0 ]; do
     --min-idle) MIN_IDLE=$2; shift ;;
     --wait) WAIT_MIN=$2; shift ;;
     --clean) CLEAN=1 ;;
+    --audio) AUDIO_WHY=$2; shift ;;
     --verbose) VERBOSE=1 ;;
     unit|ui|build|run) break ;;
     -h|--help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 0 ;;
@@ -122,6 +125,23 @@ op() { # $1 = op, $2 = JSON args; prints the answer's JSON only (a notice on std
   printf '%s' "$out"
 }
 js() { python3 -c "import json,sys; d=json.load(sys.stdin); $1"; }
+# Voice, microphone and audio tests never run on a Mac where a person sits (2026-11-08, the Walnut
+# VP: the CEO's rule; an iPhone voice recording run went to another person's Mac). A run is one when --audio
+# or SIM_TEST_AUDIO says why, or this task's title and description name voice, the microphone,
+# audio, dictation, speech or transcription (English or Chinese; how the user typed a quote, "voice
+# input", does not count). The Mac half then refuses it on a Mac marked for no audio, as busy, so
+# the next Mac is tried (remote-run.sh --audio).
+if [ -z "$AUDIO_WHY" ]; then
+  AUDIO_WHY=$(op task_get "$(printf '{"id":"%s"}' "$TASK_ID")" 2>/dev/null | python3 -c 'import json,re,sys
+try: d=json.load(sys.stdin)
+except Exception: sys.exit()
+t=d.get("task") or d
+s=((t.get("title") or "")+"\n"+(t.get("description") or ""))[:6000]
+s=re.sub(r"语音输入|语音转写|voice[- ]?(input|typed|typing|dictated)|by voice|dictated by", " ", s, flags=re.I)
+m=re.search(r"voice|microphone|\bmic\b|audio|dictat|speech|transcrib|\bstt\b|\basr\b|siri|speaker|语音|麦克风|录音|声音|音频|听写|朗读|说一段话", s, re.I)
+if m: print("its task says \""+m.group(0)+"\"")' 2>/dev/null) || AUDIO_WHY=
+fi
+[ -z "$AUDIO_WHY" ] || { say "this run touches voice, the microphone or audio ($AUDIO_WHY): a Mac where a person sits does not take it"; FLAGS+=(--audio "$AUDIO_WHY"); }
 # A call Walnut may drop while the Mac it runs on is loaded (hub_timeout, hub_unreachable,
 # throttled), or that found no Walnut to take it (the server or this host's daemon
 # restarting: a deploy), is asked again, nine times 10 s apart; any other refusal is final.
