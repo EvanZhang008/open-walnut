@@ -63,6 +63,9 @@ const ID_SEGMENT_RE = /^(?=(?:.*\d){2}).{8,}$|^\d+$/
 /** Paths that are polled frequently — log at debug level instead of info. */
 const QUIET_PREFIXES = [
   '/api/browser-logs',
+  // The Browser view's picture stream: a few requests a second while someone watches.
+  '/api/v1/browser/view/push',
+  '/api/v1/browser/view/frame',
 ]
 
 function isQuietPath(path: string): boolean {

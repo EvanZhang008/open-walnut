@@ -125,7 +125,7 @@ const ALLOWED: Record<string, SenderKind | SenderKind[]> = {
   'menu-unlock': 'menu', 'menu-connect': 'menu', 'menu-close': 'menu', 'menu-size': 'menu',
   'savebar-data': 'savebar', 'savebar-action': 'savebar', 'savebar-size': 'savebar',
   // The side panel's first page has the relay switch too (ExtRelay.tsx).
-  'agent-get': ['popup', 'sidepanel'], 'agent-on': ['popup', 'sidepanel'], 'agent-off': ['popup', 'sidepanel'], 'agent-stop': 'content',
+  'agent-get': ['popup', 'sidepanel'], 'agent-on': ['popup', 'sidepanel'], 'agent-off': ['popup', 'sidepanel'], 'agent-stop': 'content', 'agent-handback': 'content',
   'relay-state': 'sidepanel', 'relay-stop-all': 'sidepanel',
   'page-selection': 'content',
   'panel-state': 'sidepanel', 'panel-page': 'sidepanel', 'panel-adopt': 'sidepanel', 'panel-release': 'sidepanel', 'panel-pending': 'sidepanel', 'panel-hand': 'sidepanel',
@@ -170,7 +170,7 @@ async function handle(msg: { type: string; [k: string]: unknown }, sender: Sende
   const tabId = sender.tab?.id
   switch (msg.type) {
     // popup
-    case 'agent-get': case 'agent-on': case 'agent-off': case 'agent-stop': return agentMessage(msg.type, sender)
+    case 'agent-get': case 'agent-on': case 'agent-off': case 'agent-stop': case 'agent-handback': return agentMessage(msg.type, sender)
     // the side panel
     case 'page-selection': {
       // Told to an open panel (an extension page); none open, nobody hears it.
@@ -377,7 +377,7 @@ async function handle(msg: { type: string; [k: string]: unknown }, sender: Sende
       }
       // An agent's tab wears its frame and Stop button (top frame only).
       const agent = sender.frameId === 0 ? await isAgentTab(tabId) : undefined
-      return { ok: true, pageFill, connected: st.connected, unlocked: st.unlocked, count, ...(others ? { others } : {}), codes, cards, identities, ...(offerCode ? { offerCode } : {}), ...(barNonce ? { barNonce } : {}), ...(agent ? { agent: { who: agent.who } } : {}) }
+      return { ok: true, pageFill, connected: st.connected, unlocked: st.unlocked, count, ...(others ? { others } : {}), codes, cards, identities, ...(offerCode ? { offerCode } : {}), ...(barNonce ? { barNonce } : {}), ...(agent ? { agent: { who: agent.who, ...(typeof agent.driving === 'number' ? { driving: true } : {}) } } : {}) }
     }
     case 'frame-ready': {
       if (tabId === undefined || sender.frameId === undefined) return { ok: false }

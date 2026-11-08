@@ -13,6 +13,10 @@ export interface BrowserViewTab {
   windowState?: string;
   connected: boolean;
   pictures: boolean;
+  /** The person took the tab over (Take over): the agent waits until they hand it back. */
+  driving?: boolean;
+  /** The agent asked the person to sign in here themselves (request_sign_in). */
+  signIn?: { id: string; at: string; site?: string; note?: string };
 }
 
 export type BrowserEndWhy = 'closed' | 'given_back' | 'stopped' | 'gone' | 'browser_left';
@@ -34,7 +38,16 @@ export interface BrowserFrame {
   windowState?: string;
   handed?: boolean;
   taken?: boolean;
+  driving?: boolean;
   at?: string;
+  /** The stream's picture number (a browser that streams): the next ask names it as `after`. */
+  seq?: number;
+  /** Which stream `seq` counts in (a restart or a new holding starts another). */
+  epoch?: string;
+  /** Nothing new since `after` (the last picture stays). */
+  unchanged?: boolean;
+  /** The browser streams its pictures (asked again at once, never on a timer). */
+  stream?: boolean;
 }
 
 /** Which window the tab is in, as the person reads it. */
@@ -64,6 +77,7 @@ export function noPictureLine(f: Pick<BrowserFrame, 'why' | 'window'> | null, ha
     case 'old_extension': return "This browser's Walnut extension is older than the Browser view: update it (Settings, Browser extension).";
     case 'busy': case 'changed': case 'slow': case 'failed':
       return hasPicture ? null : 'Waiting for the next picture…';
+    case 'starting': return hasPicture ? null : 'Taking the first picture…';
     default: return null;
   }
 }
@@ -102,5 +116,18 @@ export function followedTab(tabs: BrowserViewTab[], picked: string | null): Brow
 
 /** How long after a frame's answer the next one is asked for. */
 export const FRAME_EVERY_MS = 1200;
+/** A streaming browser's view asks again this soon after an answer with no new picture (the server holds each ask under half a second). */
+export const UNCHANGED_AGAIN_MS = 150;
 /** While the browser does not answer, a slower try. */
 export const FRAME_RETRY_MS = 3000;
+
+/** The line over the picture while the person has the tab, or the agent waits for their sign-in; null when neither. */
+export function handLine(t: { driving?: boolean; signIn?: { site?: string; note?: string } }): string | null {
+  const site = t.signIn?.site ? ` to ${t.signIn.site}` : '';
+  const note = t.signIn?.note ? ` ${t.signIn.note.replace(/\s+$/, '')}` : '';
+  if (t.driving) return t.signIn
+    ? `You have this tab in your browser. Sign in${site} there, then press Done: the agent carries on.`
+    : 'You have this tab in your browser. The agent waits until you hand it back.';
+  if (t.signIn) return `The agent asks you to sign in${site} yourself.${note ? ` It says:${note}` : ''}`;
+  return null;
+}

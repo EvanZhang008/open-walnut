@@ -28,7 +28,8 @@ import { DEBUGGER_OPS, TRUSTED_OPS, trustedAct, trustedReady } from './agent-tru
 import { fillFrames } from './bg-fill'
 import { inHandedReach } from './agent-tab-kind'
 import { openInAgentWindow, resizeAgentWindow, windowOf } from './agent-window'
-import { viewFrame } from './agent-view'
+import { viewFrame, viewWatch, type PushAnswer } from './agent-view'
+import { drivingRefusal, handBack, takeOver } from './agent-takeover'
 import { NET_OPS, netAct, startRecording, stopRecording } from './agent-net'
 import { watchMedia } from './agent-media'
 
@@ -72,7 +73,7 @@ async function tabOnlyCheck(c: WireCommand): Promise<void> {
   throw new AgentError(TAB_ONLY, 'agents_tab_only', { tabs })
 }
 
-export async function isAgentTab(tabId: number | undefined): Promise<{ owner: string; who?: string } | undefined> {
+export async function isAgentTab(tabId: number | undefined): Promise<AgentTab | undefined> {
   return tabId === undefined ? undefined : agentTabs.get(tabId)
 }
 
@@ -294,8 +295,17 @@ function inTurn<T>(tab: unknown, work: () => Promise<T>): Promise<T> {
  * Stop. Neither waits in a tab's turn (a frame behind an agent's 40 s wait would be no live view),
  * and neither is an agent's: the server sends them only for a person's request.
  */
+const VIEW_ACTS = new Set(['view_frame', 'view_watch', 'view_stop', 'view_takeover', 'view_handback'])
+const push = (body: Record<string, unknown>) => call<PushAnswer>('POST', '/browser/view/push', body, { noSession: true, timeoutMs: 10_000 })
+
 async function viewAct(c: WireCommand): Promise<unknown> {
   if (c.action === 'view_frame') return viewFrame(c, (id) => perTab.has(id))
+  if (c.action === 'view_watch') return viewWatch(c, (id) => perTab.has(id), push)
+  if (c.action === 'view_takeover') return takeOver(c)
+  if (c.action === 'view_handback') {
+    const tabId = typeof c.args.tab === 'number' ? c.args.tab : NaN
+    return { tab: tabId, handedBack: await handBack(tabId, typeof c.args.owner === 'string' ? c.args.owner : undefined) }
+  }
   // Stop: the tab is no agent's any more, as the Stop on the page does; it stays open.
   const tabId = typeof c.args.tab === 'number' ? c.args.tab : NaN
   const rec = await agentTabs.get(tabId)
@@ -312,14 +322,22 @@ async function viewAct(c: WireCommand): Promise<unknown> {
 async function run(c: WireCommand): Promise<void> {
   let body: Record<string, unknown>
   try {
-    if (c.action === 'view_frame' || c.action === 'view_stop') {
+    if (VIEW_ACTS.has(c.action)) {
       body = { id: c.id, ok: true, result: await viewAct(c) }
       await call('POST', '/browser/result', body, { noSession: true, timeoutMs: 20_000 }).catch(() => undefined)
       return
     }
     // The person may have turned agents off since this poll left (or let them in one tab only).
     await tabOnlyCheck(c)
-    body = { id: c.id, ok: true, result: await inTurn(c.args.tab, () => act(c)) }
+    // The person took the tab over (agent-takeover.ts): the agent waits until they hand it back.
+    const stopped = typeof c.args.tab === 'number' ? drivingRefusal(await agentTabs.get(c.args.tab)) : null
+    if (stopped) throw stopped
+    body = { id: c.id, ok: true, result: await inTurn(c.args.tab, async () => {
+      // Taken over while this command waited for its turn.
+      const late = typeof c.args.tab === 'number' ? drivingRefusal(await agentTabs.get(c.args.tab)) : null
+      if (late) throw late
+      return act(c)
+    }) }
   } catch (err) {
     body = { id: c.id, ok: false, error: { message: err instanceof Error ? err.message : String(err), code: err instanceof AgentError ? err.code : 'browser_error', ...(err instanceof AgentError ? { extra: err.extra } : {}) } }
   }
@@ -327,12 +345,12 @@ async function run(c: WireCommand): Promise<void> {
 }
 
 /** The agent tabs, who holds each, and where each is (a restarted Walnut shows them in the task's Browser view at once). */
-async function report(): Promise<Array<{ id: number; owner: string; grant?: string; url?: string; title?: string; window?: string; windowState?: string; handed?: boolean }>> {
-  const out: Array<{ id: number; owner: string; grant?: string; url?: string; title?: string; window?: string; windowState?: string; handed?: boolean }> = []
+async function report(): Promise<Array<{ id: number; owner: string; grant?: string; url?: string; title?: string; window?: string; windowState?: string; handed?: boolean; driving?: boolean }>> {
+  const out: Array<{ id: number; owner: string; grant?: string; url?: string; title?: string; window?: string; windowState?: string; handed?: boolean; driving?: boolean }> = []
   for (const id of await agentTabs.keys()) {
     const o = await agentTabs.get(id)
     const t = o ? await ext.tabs.get(id).catch(() => null) : null
-    if (o && t) out.push({ id, owner: o.owner, ...(o.grant ? { grant: o.grant } : {}), url: t.url, title: t.title, ...(await windowOf(ext, t.windowId)), ...(personsTab(o) ? { handed: true } : {}) })
+    if (o && t) out.push({ id, owner: o.owner, ...(o.grant ? { grant: o.grant } : {}), url: t.url, title: t.title, ...(await windowOf(ext, t.windowId)), ...(personsTab(o) ? { handed: true } : {}), ...(typeof o.driving === 'number' ? { driving: true } : {}) })
     else await agentTabs.delete(id)
   }
   return out
@@ -356,6 +374,8 @@ export async function agentLoop(): Promise<void> {
           ...((await ext.permissions.contains({ origins: ['<all_urls>'] }).catch(() => false)) ? ['screenshot'] : []),
           ...(await trustedReady() ? ['trusted-input'] : []),
           ...(more.downloads ? ['downloads'] : []),
+          // The Browser view's picture stream and Take over (agent-view.ts, agent-takeover.ts).
+          'view-stream', 'takeover',
         ]
         const r = await call<{ commands: WireCommand[] }>('POST', '/browser/poll', {
           browser: isFirefox ? 'firefox' : 'chrome', version: ext.runtime.getManifest().version, caps, tabs: await report(), waitMs: 25_000,
@@ -489,6 +509,12 @@ export async function agentMessage(type: string, sender: Sender): Promise<Record
     case 'agent-off': {
       await ext.storage.local.set({ agentControl: false })
       await agentOff()
+      return { ok: true }
+    }
+    case 'agent-handback': {
+      // The pill's Hand back, the person's own click: Walnut hears at once (an agent waiting for them carries on).
+      const id = sender.tab?.id
+      if (id !== undefined && await handBack(id)) await call('POST', '/browser/handback', { tab: id }, { noSession: true, timeoutMs: 8000 }).catch(() => undefined)
       return { ok: true }
     }
     case 'agent-stop': {

@@ -6,11 +6,18 @@
  * task is using browser, we also show a browser screen in the task, it can be a bit slow it is
  * fine, but at least we know".
  *
- * A picture is asked for only while the card is open and on screen (the page visible, the card in
- * view), about every 1.2 s after the last one came back; never in the background. The server
- * shares one capture between viewers, and the extension skips a frame rather than get in an
- * agent's way (packages/browser-extension/src/agent-view.ts). When the last tab goes, the card
- * says why. Hide folds it to one line (kept per task); the line still says the browser is in use.
+ * Pictures come only while the card is open and on screen (the page visible, the card in view),
+ * never in the background. A browser that streams (2026-11-08, the user: "very laggy like it
+ * doesn't show in real time") posts each picture to Walnut as it takes it, at the screen's own
+ * pixels, and the card holds one request open for the next (`after`: the number of the picture it
+ * has), so a picture shows as soon as it is taken; an older extension is asked once a second or so.
+ * Each picture is decoded before it replaces the last, so the view never blinks. When the last tab
+ * goes, the card says why. Hide folds it to one line (kept per task); the line still says the
+ * browser is in use.
+ *
+ * Take over (the person's click) brings the tab forward in their browser and makes every agent
+ * command there wait; Hand back (here or on the tab's own pill) gives it to the agent again. An
+ * agent's request_sign_in shows as an ask over the picture: Take over, sign in, Done.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiGet, apiPost } from '@/api/client';
@@ -18,7 +25,7 @@ import { usePageViewOf } from '@/utils/view-memory';
 import { log } from '@/utils/log';
 import { useBrowserView } from './useBrowserView';
 import {
-  FRAME_EVERY_MS, FRAME_RETRY_MS, agoLine, endedLine, followedTab, noPictureLine, tabKey, windowLine,
+  FRAME_EVERY_MS, FRAME_RETRY_MS, UNCHANGED_AGAIN_MS, agoLine, endedLine, followedTab, handLine, noPictureLine, tabKey, windowLine,
   type BrowserFrame,
 } from './browser-view-model';
 import '@/styles/session-browser-card.css';
@@ -68,6 +75,7 @@ export function SessionBrowserCard({ taskId }: { taskId: string }) {
   const [picture, setPicture] = useState<{ image: string; at: string } | null>(null);
   const [trouble, setTrouble] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
+  const [handing, setHanding] = useState<'take' | 'back' | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [shotEl, setShotEl] = useState<HTMLDivElement | null>(null);
   const onScreen = useOnScreen(shotEl);
@@ -86,27 +94,55 @@ export function SessionBrowserCard({ taskId }: { taskId: string }) {
     if (shownTab.current !== shownKey) { shownTab.current = shownKey; setFrame(null); setPicture(null); setTrouble(null); }
   }, [shownKey]);
 
-  // The picture loop: one request at a time, the next one FRAME_EVERY_MS after the answer.
+  // The picture loop: one request at a time. A streaming browser's next is asked at once (the
+  // server holds it until a newer picture comes); an older one's FRAME_EVERY_MS after the answer.
   useEffect(() => {
     if (!watching || followedId === undefined || followedDevice === undefined) return undefined;
     let alive = true;
     let timer: number | undefined;
+    let after: number | undefined;
+    let epoch: string | undefined;
     const ctl = new AbortController();
     const tick = async () => {
       let wait = FRAME_EVERY_MS;
       try {
-        const f = await apiGet<BrowserFrame>('/api/v1/browser/view/frame', { task: taskId, tab: String(followedId), device: followedDevice },
-          { signal: ctl.signal, priority: 'low', timeoutMs: 12_000, quietStatuses: [404, 409] });
+        const f = await apiGet<BrowserFrame>('/api/v1/browser/view/frame', {
+          task: taskId, tab: String(followedId), device: followedDevice, ...(after !== undefined && epoch ? { after: String(after), epoch } : {}),
+        }, { signal: ctl.signal, priority: 'low', timeoutMs: 10_000, quietStatuses: [404, 409] });
         if (!alive) return;
-        setFrame(f);
+        // A streaming browser: the next at once after a new picture, a moment later after none.
+        if (f.stream) wait = f.unchanged || !f.image ? UNCHANGED_AGAIN_MS : 0;
+        if (typeof f.seq === 'number') after = f.seq;
+        epoch = f.epoch;
         setTrouble(null);
-        if (f.shown && f.image) setPicture({ image: f.image, at: f.at ?? new Date().toISOString() });
+        if (f.unchanged) {
+          // The same picture: only its time moves on.
+          if (f.at) setPicture((p) => (p ? { ...p, at: f.at! } : p));
+        } else {
+          if (f.shown && f.image) {
+            // Decoded first, so the picture never blinks while the next one loads.
+            const img = new Image();
+            img.src = f.image;
+            await img.decode().catch(() => undefined);
+            if (!alive) return;
+            setPicture({ image: f.image, at: f.at ?? new Date().toISOString() });
+          }
+          setFrame(f);
+        }
       } catch (err) {
         if (!alive) return;
         const status = (err as { status?: number }).status;
-        if (status === 404) { reread(); return; }
-        setTrouble(status === 409 ? 'The browser does not answer right now. The picture comes back when it does.' : 'No picture right now. Trying again.');
-        wait = FRAME_RETRY_MS;
+        if (status === 404) {
+          // The holding moved on (Stop, a new hand-over): read the tabs again, and keep asking
+          // while this tab is still the one shown (else the effect ends and starts afresh).
+          reread();
+          after = undefined;
+          epoch = undefined;
+          wait = FRAME_RETRY_MS;
+        } else {
+          setTrouble(status === 409 ? 'The browser does not answer right now. The picture comes back when it does.' : 'No picture right now. Trying again.');
+          wait = FRAME_RETRY_MS;
+        }
       }
       if (alive) timer = window.setTimeout(() => { void tick(); }, wait);
     };
@@ -135,6 +171,21 @@ export function SessionBrowserCard({ taskId }: { taskId: string }) {
     }
   }, [taskId, followedId, followedDevice, reread]);
 
+  // Take over / Hand back: the person's own clicks (the server refuses an agent's).
+  const hand = useCallback(async (verb: 'take' | 'back') => {
+    if (followedId === undefined || followedDevice === undefined) return;
+    setHanding(verb);
+    try {
+      await apiPost(verb === 'take' ? '/api/v1/browser/view/takeover' : '/api/v1/browser/view/handback', { task: taskId, tab: followedId, device: followedDevice });
+      log.info('session-panel', verb === 'take' ? 'browser view take over' : 'browser view hand back', { taskId, tab: followedId, device: followedDevice });
+    } catch (err) {
+      setTrouble(err instanceof Error ? err.message : String(err));
+    } finally {
+      setHanding(null);
+      reread();
+    }
+  }, [taskId, followedId, followedDevice, reread]);
+
   if (!state) return null;
 
   if (!followed) {
@@ -156,12 +207,15 @@ export function SessionBrowserCard({ taskId }: { taskId: string }) {
   const where = windowLine({ window: frame?.window ?? followed.window, windowState: frame?.windowState ?? followed.windowState, handed: frame?.handed, taken: frame?.taken });
   const noPicture = trouble ?? (followed.connected ? (followed.pictures ? noPictureLine(frame, !!picture) : noPictureLine({ why: 'no_permission' }, false)) : 'The browser does not answer right now.');
   const live = !!frame?.shown && !trouble;
+  // The tab list's word (re-read on every change of the tab), never a picture's, which an unchanged answer does not renew.
+  const driving = !!followed.driving;
+  const asks = handLine({ driving, signIn: followed.signIn });
 
   if (prefs.folded) {
     return (
       <div className="session-browser-card session-browser-card--folded" data-testid="session-browser-folded">
         <span className="session-browser-dot" aria-hidden />
-        <span className="session-browser-fold-text">Browser in use: <strong>{title || url || `tab ${followed.tab}`}</strong> <span className="session-browser-muted">· {where}</span></span>
+        <span className="session-browser-fold-text">{followed.signIn && !driving ? <>Browser: <strong>the agent asks you to sign in</strong> </> : driving ? <>Browser: <strong>you have the tab</strong> </> : <>Browser in use: <strong>{title || url || `tab ${followed.tab}`}</strong> </>}<span className="session-browser-muted">· {where}</span></span>
         <button type="button" className="session-browser-btn" onClick={() => setPrefs((p) => ({ ...p, folded: false }))} data-testid="session-browser-show">Show</button>
       </div>
     );
@@ -179,6 +233,11 @@ export function SessionBrowserCard({ taskId }: { taskId: string }) {
         <div className="session-browser-actions">
           <button type="button" className="session-browser-btn" onClick={() => setPrefs((p) => ({ ...p, large: !p.large }))}
             aria-pressed={prefs.large} data-testid="session-browser-size">{prefs.large ? 'Smaller' : 'Larger'}</button>
+          {driving
+            ? <button type="button" className="session-browser-btn session-browser-btn--primary" onClick={() => { void hand('back'); }} disabled={handing !== null}
+                title="The agent may use this tab again" data-testid="session-browser-handback">{handing === 'back' ? 'Handing back…' : followed.signIn ? 'Done, hand back' : 'Hand back'}</button>
+            : <button type="button" className={`session-browser-btn${followed.signIn ? ' session-browser-btn--primary' : ''}`} onClick={() => { void hand('take'); }} disabled={handing !== null || !followed.connected}
+                title="Bring this tab up in your browser and use it yourself; the agent waits until you hand it back" data-testid="session-browser-takeover">{handing === 'take' ? 'Taking over…' : 'Take over'}</button>}
           <button type="button" className="session-browser-btn session-browser-btn--stop" onClick={() => { void stop(); }} disabled={stopping}
             title="The agent stops using this tab. The tab stays open, yours." data-testid="session-browser-stop">{stopping ? 'Stopping…' : 'Stop'}</button>
           <button type="button" className="session-browser-btn" aria-label="Hide the Browser view" title="Hide (one line stays)"
@@ -192,6 +251,14 @@ export function SessionBrowserCard({ taskId }: { taskId: string }) {
               className={`session-browser-tab${tabKey(t) === tabKey(followed) ? ' is-on' : ''}`}
               onClick={() => setPrefs((p) => ({ ...p, pick: tabKey(t) }))}>{t.title || t.url || `tab ${t.tab}`}{tabs.some((o) => o !== t && o.tab === t.tab) ? ` · ${t.browser}` : ''}</button>
           ))}
+        </div>
+      )}
+      {asks && (
+        <div className={`session-browser-hand${driving ? ' is-driving' : ''}`} role="status" data-testid="session-browser-hand">
+          <span className="session-browser-hand-text">{asks}</span>
+          {driving
+            ? <button type="button" className="session-browser-btn session-browser-btn--primary" onClick={() => { void hand('back'); }} disabled={handing !== null}>{followed.signIn ? 'Done' : 'Hand back'}</button>
+            : <button type="button" className="session-browser-btn session-browser-btn--primary" onClick={() => { void hand('take'); }} disabled={handing !== null || !followed.connected}>Take over to sign in</button>}
         </div>
       )}
       <div className="session-browser-shot" ref={setShotEl} data-testid="session-browser-shot">

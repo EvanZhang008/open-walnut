@@ -117,7 +117,7 @@ browserV1Router.post('/browser/poll', (req, res, next) => {
     const b = (req.body ?? {}) as { browser?: unknown; version?: unknown; caps?: unknown; tabs?: unknown; waitMs?: unknown }
     const h = await hub()
     // Each agent tab, who holds it, and where it is (address, title, window: the task's Browser view; hub.ts cuts them to size).
-    const tabs = Array.isArray(b.tabs) ? (b.tabs as Array<{ id?: unknown; owner?: unknown; grant?: unknown; url?: unknown; title?: unknown; window?: unknown; windowState?: unknown }>)
+    const tabs = Array.isArray(b.tabs) ? (b.tabs as Array<{ id?: unknown; owner?: unknown; grant?: unknown; url?: unknown; title?: unknown; window?: unknown; windowState?: unknown; driving?: unknown }>)
       .filter((t) => typeof t?.id === 'number' && typeof t?.owner === 'string')
       .map((t) => ({
         id: t.id as number, owner: t.owner as string,
@@ -126,6 +126,7 @@ browserV1Router.post('/browser/poll', (req, res, next) => {
         ...(typeof t.title === 'string' ? { title: t.title } : {}),
         ...(t.window === 'agent' || t.window === 'person' ? { window: t.window as 'agent' | 'person' } : {}),
         ...(typeof t.windowState === 'string' ? { windowState: t.windowState } : {}),
+        ...(t.driving === true ? { driving: true } : {}),
       })).slice(0, 200) : undefined
     const label = await deviceLabel(device)
     let gone = false
@@ -291,13 +292,13 @@ browserV1Router.post('/browser/adopt', (req, res, next) => {
 const ACTIONS = [
   'tabs', 'open', 'navigate', 'back', 'close', 'snapshot', 'text', 'find', 'form_values', 'click', 'hover', 'type', 'fill_form', 'select', 'press',
   'scroll', 'wait', 'screenshot', 'upload', 'downloads', 'take', 'fill_login', 'dialog', 'evaluate',
-  'network', 'network_body', 'network_request_body', 'console', 'resize',
+  'network', 'network_body', 'network_request_body', 'console', 'resize', 'request_sign_in',
 ] as const
 type Action = typeof ACTIONS[number]
 /** Actions that go to a page, so the page's site must be allowed. */
 const ON_TAB = new Set<Action>([
   'navigate', 'back', 'close', 'snapshot', 'text', 'find', 'form_values', 'click', 'hover', 'type', 'fill_form', 'select', 'press', 'scroll', 'wait',
-  'screenshot', 'upload', 'fill_login', 'dialog', 'evaluate', 'network', 'network_body', 'network_request_body', 'console', 'resize',
+  'screenshot', 'upload', 'fill_login', 'dialog', 'evaluate', 'network', 'network_body', 'network_request_body', 'console', 'resize', 'request_sign_in',
 ])
 /** Actions whose step may buy, send or delete (the page judges; outward-asks.ts asks the person). */
 const OUTWARD_ACTS = new Set<Action>(['click', 'press', 'type'])
@@ -422,6 +423,8 @@ browserV1Router.post('/browser/act', (req, res, next) => {
       if (o !== owner) throw new h.BrowserError(o ? 'That tab belongs to another task.' : 'That tab is not one an agent opened (or the person took it back with Stop).', 403, 'not_your_tab')
       args.tab = tab
     }
+    // The person signs in themselves (Take over in the task's Browser view), the agent waits: never a request to the page.
+    if (action === 'request_sign_in') return signInAct(res, b, { device: c.device, label: c.label, owner, tab: tab!, left: left() })
     const own = await walnutAddresses(req)
     if ((action === 'open' || action === 'navigate') && typeof args.url === 'string') {
       if (isWalnutAddress(own, args.url)) throw new h.BrowserError('Agents never use Walnut\'s own pages in the browser: use Walnut\'s ops instead.', 403, 'walnut_page')
@@ -563,6 +566,9 @@ browserV1Router.post('/browser/act', (req, res, next) => {
     // Which window and tab, every time it may have changed; and the person's own tabs on the site.
     const extra: Record<string, unknown> = {}
     if (WHERE_ACTS.has(action) && typeof r.tab === 'number') extra.where = w.whereLine(action, r)
+    // A sign-in page that refuses this browser (Google's "may not be secure"): the person signs in, not a retry.
+    const refusal = (await import('../../core/browser-control/sign-in-refusal.js')).signInRefusalOf(r as Record<string, unknown>)
+    if (refusal) { extra.hand_off = refusal; log.web.info('browser act met a sign-in refusal', { action, device: c.device, owner, tab: used, why: refusal.why }) }
     if (theirs?.length) { extra.person_tabs = theirs; extra.person_tabs_note = w.personTabsNote(w.siteOf(String(args.url)), theirs) }
     if (action === 'tabs') {
       const all = Array.isArray(r.tabs) ? r.tabs : []
@@ -574,6 +580,44 @@ browserV1Router.post('/browser/act', (req, res, next) => {
     return { browser: c.label, ...(r as Record<string, unknown>), ...extra }
   })
 })
+
+/**
+ * `request_sign_in {tab, text?}`: the person signs in themselves (core/browser-control/sign-in-ask.ts).
+ * The ask shows on the task's Browser view; the call holds up to `wait_ms` and answers `needs_ok`
+ * with the ask's `request` while they have not handed the tab back, then `done` (or `stopped`).
+ */
+async function signInAct(res: Response, b: Record<string, unknown>, at: { device: string; label: string; owner: string; tab: number; left: number }): Promise<unknown> {
+  const h = await hub()
+  // The person answers through Take over and Done: an older extension has neither.
+  if (!h.hasCap(at.device, 'takeover')) {
+    throw new h.BrowserError('This browser\'s Walnut extension is older than the sign-in hand-off: ask the person in your chat to sign in on that tab themselves and to tell you when they are done (or to update the extension).', 409, 'old_extension')
+  }
+  const si = await import('../../core/browser-control/sign-in-ask.js')
+  const w = await import('../../core/browser-control/where-words.js')
+  const id = typeof b.request === 'string' ? b.request.slice(0, 100) : ''
+  let a = id ? si.getAsk(id) : undefined
+  if (a && (a.owner !== at.owner || a.device !== at.device || a.tab !== at.tab)) a = undefined
+  if (!a) {
+    const facts = h.viewOf(at.owner).tabs.find((t) => t.device === at.device && t.tab === at.tab)
+    const note = typeof b.text === 'string' && b.text.trim() ? b.text.trim().slice(0, 300) : undefined
+    const site = (typeof b.site === 'string' && b.site.trim() ? b.site.trim().slice(0, 200) : undefined) ?? (facts?.url ? w.siteOf(facts.url) || undefined : undefined)
+    a = si.askSignIn({ owner: at.owner, device: at.device, tab: at.tab, ...(site ? { site } : {}), ...(note ? { note } : {}) })
+    h.ownerChanged(at.owner)
+    log.web.info('browser asks the person to sign in', { device: at.device, owner: at.owner, tab: at.tab, site })
+  }
+  const hold = Math.max(0, Math.min(25_000, Number(b.wait_ms) || 0, at.left - 5000))
+  const now = await si.waitSignIn(a.id, hold) ?? a
+  lastTab.set(at.owner, { device: at.device, tab: at.tab })
+  if (now.end) {
+    const facts = h.viewOf(at.owner).tabs.find((t) => t.device === at.device && t.tab === at.tab)
+    return { browser: at.label, tab: at.tab, signIn: now.end.why, ...(now.end.why === 'done' ? { done: true } : {}), ...(facts ? { url: facts.url, title: facts.title } : {}) }
+  }
+  res.status(202).json({
+    status: 'needs_ok', code: 'sign_in_waiting', request: now.id, tab: at.tab, ...(now.site ? { site: now.site } : {}),
+    error: `Waiting for the person to sign in${now.site ? ` to ${now.site}` : ''} themselves: the task's Browser view asks them (Take over, sign in, Done)`,
+  })
+  return undefined
+}
 
 /** Actions whose answer names the window and tab (where-words.ts). */
 const WHERE_ACTS = new Set<Action>(['open', 'navigate', 'back', 'take'])
@@ -633,7 +677,7 @@ async function fillLoginAct(req: Request, res: Response, b: Record<string, unkno
 }
 
 // The task's Browser view: its tabs, a live frame, Stop (browser-view-v1.ts).
-mountBrowserView(browserV1Router, { personCaller, run, walnutAddresses })
+mountBrowserView(browserV1Router, { personCaller, run, walnutAddresses, extensionOf })
 
 export function _resetBrowserRoutesForTesting(): void {
   ownCache = null

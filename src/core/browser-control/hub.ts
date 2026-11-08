@@ -37,6 +37,8 @@ export interface TabFacts {
   /** Walnut's agent window, or one of the person's (a tab handed over or taken). */
   window?: 'agent' | 'person'
   windowState?: string
+  /** The person took the tab over from the Browser view (Take over) and has it now; agents wait. */
+  driving?: boolean
 }
 
 /** Why an owner has no browser tab any more (the task's Browser view says so). */
@@ -92,7 +94,27 @@ const tabSetAt = new Map<string, number>()
 const tabGens = new Map<string, number>()
 const tabGrants = new Map<string, string>()
 let genSeq = 0
-const newGen = (k: string) => { tabGens.set(k, ++genSeq) }
+const newGen = (k: string) => {
+  const had = tabGens.has(k)
+  tabGens.set(k, ++genSeq)
+  if (had) holdingEnded(k)
+}
+/**
+ * Told when a holding of a tab ends (released, closed, or the tab held anew): what lived on that
+ * holding (its live pictures, a sign-in ask) ends with it (review 2026-11-08: an ask outlived its
+ * holding and showed on the next task's view).
+ */
+const holdingListeners = new Set<(device: string, tab: number) => void>()
+export function onHoldingEnded(fn: (device: string, tab: number) => void): () => void {
+  holdingListeners.add(fn)
+  return () => { holdingListeners.delete(fn) }
+}
+function holdingEnded(k: string): void {
+  const i = k.lastIndexOf(':')
+  const device = k.slice(0, i)
+  const tab = Number(k.slice(i + 1))
+  for (const fn of holdingListeners) { try { fn(device, tab) } catch { /* a listener's own trouble */ } }
+}
 /**
  * Tabs a report of their browser has listed. One of them missing from a later report is gone (closed,
  * or one the extension let go of, such as Walnut's own page), at once; only a tab known from an
@@ -120,6 +142,9 @@ export function onTabsChanged(fn: (owner: string) => void): () => void {
   return () => { tabListeners.delete(fn) }
 }
 
+/** Something the owner's Browser view shows changed besides its tabs (a sign-in ask): its viewers redraw. */
+export function ownerChanged(owner: string): void { tabsChanged(owner) }
+
 function tabsChanged(owner: string | undefined): void {
   if (!owner) return
   for (const fn of tabListeners) { try { fn(owner) } catch { /* a listener's own trouble */ } }
@@ -131,14 +156,28 @@ function cleanFacts(f: TabFacts): TabFacts {
     ...(typeof f.title === 'string' ? { title: f.title.slice(0, 300) } : {}),
     ...(f.window === 'agent' || f.window === 'person' ? { window: f.window } : {}),
     ...(typeof f.windowState === 'string' ? { windowState: f.windowState.slice(0, 20) } : {}),
+    ...(typeof f.driving === 'boolean' ? { driving: f.driving } : {}),
   }
+}
+
+/** Set the facts; the owner hears when whether the person has the tab changed (the Browser view redraws). */
+function setFacts(k: string, facts: TabFacts): void {
+  const before = tabFacts.get(k)
+  const after = { ...before, ...cleanFacts(facts) }
+  tabFacts.set(k, after)
+  if (!!before?.driving !== !!after.driving) tabsChanged(tabOwners.get(k))
 }
 
 /** What an act's answer or a frame says of a tab (its address and title now, its window). */
 export function noteTab(device: string, tabId: number, facts: TabFacts): void {
   const k = `${device}:${tabId}`
   if (!tabOwners.has(k)) return
-  tabFacts.set(k, { ...tabFacts.get(k), ...cleanFacts(facts) })
+  setFacts(k, facts)
+}
+
+/** Whether the browser said it can do this (`view-stream`, `takeover`, ...). */
+export function hasCap(device: string, cap: string): boolean {
+  return !!controllers.get(device)?.caps.includes(cap)
 }
 
 /** The extension asks for work: the queued commands, or wait for one up to `waitMs`. */
@@ -162,7 +201,8 @@ export function poll(info: ControllerInfo, waitMs = POLL_MAX_MS): Promise<WireCo
       if (grant) tabGrants.set(k, grant)
       if (before !== t.owner || regranted || !tabGens.has(k)) newGen(k)
       if (before !== t.owner) { tabOwners.set(k, t.owner); tabSetAt.set(k, Date.now()); ended.delete(t.owner); tabsChanged(before); tabsChanged(t.owner) }
-      tabFacts.set(k, { ...tabFacts.get(k), ...cleanFacts(t) })
+      // A report names every tab the person has: one it does not mark is not theirs now.
+      setFacts(k, { ...t, driving: t.driving === true })
       tabReported.add(k)
     }
     for (const k of [...tabOwners.keys()]) {
@@ -353,12 +393,14 @@ function forgetTab(k: string, fallback: TabEndWhy = 'gone'): void {
   const why = ending.get(k) ?? fallback
   ending.delete(k)
   const owner = tabOwners.get(k)
+  const held = tabGens.has(k)
   tabOwners.delete(k)
   tabSetAt.delete(k)
   tabGens.delete(k)
   tabGrants.delete(k)
   tabReported.delete(k)
   tabFacts.delete(k)
+  if (held) holdingEnded(k)
   if (!owner) return
   if (![...tabOwners.values()].includes(owner)) ended.set(owner, { at: Date.now(), why })
   tabsChanged(owner)

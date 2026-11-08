@@ -12,7 +12,7 @@ import { noBrowserLine, type GoneBrowser } from '../core/browser-control/gone-wo
 const ACTIONS = [
   'tabs', 'open', 'navigate', 'back', 'close', 'snapshot', 'text', 'find', 'form_values', 'click', 'hover', 'type', 'fill_form', 'select', 'press',
   'scroll', 'wait', 'screenshot', 'upload', 'downloads', 'take', 'fill_login', 'dialog', 'evaluate',
-  'network', 'network_body', 'network_request_body', 'console', 'resize',
+  'network', 'network_body', 'network_request_body', 'console', 'resize', 'request_sign_in',
 ] as const
 
 function outcomeOf(args: Record<string, unknown>, body: Record<string, unknown>): { outcome: string; next: string } {
@@ -21,6 +21,12 @@ function outcomeOf(args: Record<string, unknown>, body: Record<string, unknown>)
       return {
         outcome: String(body.error ?? 'Waiting for the person to approve this step (a notification on their Mac and phone).'),
         next: `Call ${String(args.action)} again with the same arguments, request "${String(body.request ?? '')}" and wait_ms up to 25000 until it goes through (the ask stays open ${String(body.waitsMinutes ?? 10)} minutes). Do not ask them in chat as well.`,
+      }
+    }
+    if (body.code === 'sign_in_waiting') {
+      return {
+        outcome: String(body.error ?? 'Waiting for the person to sign in themselves.'),
+        next: `Tell the person in one line what to sign in to and that the Browser view of this task has Take over. Then call request_sign_in again with request "${String(body.request ?? '')}" and wait_ms 25000 until it answers done.`,
       }
     }
     if (body.code === 'fresh_sign_in_needs_ok') {
@@ -73,6 +79,9 @@ function outcomeOf(args: Record<string, unknown>, body: Record<string, unknown>)
       ? { outcome: `Finished: ${(body.finished as { filename?: string }).filename ?? '?'}.`, next: 'Read the file at that path if it is on this machine.' }
       : { outcome: `${(body.downloads as unknown[] | undefined)?.length ?? 0} download(s) of this task.`, next: 'downloads with wait to wait for the next one to finish.' }
     case 'fill_login': return { outcome: `Filled ${((body.fields as string[] | undefined) ?? []).join(' and ') || 'the login'} of "${(body.item as { title?: string } | undefined)?.title ?? ''}"${tab}; you never see the password.`, next: 'click the sign-in button (snapshot for its ref).' }
+    case 'request_sign_in': return body.done
+      ? { outcome: `The person signed in and handed tab ${String(body.tab ?? '')} back${body.url ? ` (now at ${String(body.url)})` : ''}.`, next: 'snapshot to see where the page is now, then go on.' }
+      : { outcome: `The person ended the sign-in ask (${String(body.signIn ?? 'ended')}) without handing the tab back.`, next: 'Ask the person in chat what they want; do not act in that tab again unless it is still yours (tabs).' }
     case 'evaluate': return { outcome: `The script ran${tab}${body.cut ? '; its result was cut at 50 KB' : ''}.`, next: 'No further action is required.' }
     case 'close': {
       const which = body.tab ?? args.tab
@@ -126,6 +135,9 @@ defineOp({
     + 'Every open, take, navigate and back names the window (Walnut\'s agent window, behind theirs, not minimized; or the person\'s own) and the tab (id, title, address): '
     + 'say which in your first line to the user when you start using the browser. An open or navigate to a site the person already has open in a tab of their own lists those tabs (person_tabs): '
     + 'ask them to hand that tab over, or take it, instead of signing in again; fill_login there answers site_open_in_person_tab; when they asked you for a fresh sign-in, fresh_sign_in: true asks them to approve it (needs_ok, call again with request), and only their yes fills. '
+    + 'A sign-in only the person can do (a login you have no saved login for, a code sent to their phone, a check, or a page that refuses this browser: the answer carries hand_off): '
+    + 'request_sign_in {tab, text: what to sign in to} asks them on the task\'s Browser view (they take the tab over, sign in themselves, and hand it back); it answers needs_ok with request: call again with it and wait_ms until it answers done. '
+    + 'While the person has a tab (Take over), every action there answers person_driving: work elsewhere or wait. '
     + 'Refusals: browser_not_connected (the user turns agents on in the extension popup), browser_disconnected (the user disconnected the extension: ask them to connect it), site_denied, not_your_tab, person_is_here, trusted_off (its message says which switch the user turns on, and where: pass it on as it is), not_agent_opened (open the page in a tab of your own), filled_here, test_run. '
     + 'Passwords: sign in with fill_login; never type one you read from elsewhere. A click, Enter or other key that buys or pays, sends or posts, or deletes '
     + '(Place order, Pay, Send, Post, Publish, Delete, a form with card details or a message) waits for the user\'s approval: needs_ok with request, call the same action again with it; '
@@ -138,7 +150,7 @@ defineOp({
     ref: z.string().max(40).optional().describe('click / hover / type / select / scroll / upload: an element ref from snapshot or find (e12, f3:e12)'),
     x: z.number().optional().describe('click / hover: a point in the page (CSS pixels of the viewport), instead of ref'),
     y: z.number().optional(),
-    text: z.string().max(20_000).optional().describe('type: the text; find: the words to find; wait: text to wait for'),
+    text: z.string().max(20_000).optional().describe('type: the text; find: the words to find; wait: text to wait for; request_sign_in: one line telling the person what to sign in to'),
     exact: z.boolean().optional().describe('find: the whole text must match'),
     role: z.string().max(40).optional().describe('find: only elements of this role (button, link, textbox, ...)'),
     limit: z.number().int().min(1).max(500).optional().describe('find: at most this many (default 20, at most 100); network: requests (default 50, at most 500); console: messages (default 100)'),
@@ -162,7 +174,8 @@ defineOp({
     all: z.boolean().optional().describe('tabs: every tab of the browser (the user\'s too), title and address only'),
     wait: z.boolean().optional().describe('downloads: wait for the next one to finish'),
     item: z.string().max(200).optional().describe('fill_login: the login (its id, name or username) when the site has several'),
-    request: z.string().max(100).optional().describe('fill_login, or a click / press / type that waits for the user: the request id from needs_ok, to wait for their approval'),
+    request: z.string().max(100).optional().describe('fill_login, request_sign_in, or a click / press / type that waits for the user: the request id from needs_ok, to wait for their answer'),
+    site: z.string().max(200).optional().describe('request_sign_in: the site to sign in to (default the tab\'s)'),
     purpose: z.string().max(200).optional().describe('fill_login: why, in a few words the user reads on the approval'),
     fresh_sign_in: z.boolean().optional().describe('fill_login: ask the person to approve a new sign-in here, although they have this site open in a tab of their own (only their yes fills)'),
     trusted: z.boolean().optional().describe('click / hover / type / press / upload: real mouse and keys through the browser\'s debugger (the user turns it on)'),
@@ -191,6 +204,9 @@ defineOp({
     const b = { ...((body ?? {}) as Record<string, unknown>) }
     if (args.action === 'screenshot' && !args.inline) delete b.image
     const { outcome, next } = outcomeOf(args, b)
+    // A page that refuses this browser's sign-in (sign-in-refusal.ts): the person signs in instead.
+    const off = b.hand_off as { note?: string } | undefined
+    if (off?.note) return withOutcome(b, `${outcome} ${off.note}`, 'request_sign_in on this tab, with text saying what to sign in to.')
     return withOutcome(b, outcome, next)
   },
   tags: { readonly: false, remote: 'allow', primaryOnly: true },

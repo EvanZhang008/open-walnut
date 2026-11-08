@@ -336,10 +336,16 @@ function hideBar(): void {
 // ── an agent's tab: the frame around it says so, and Stop gives it back to the person ──
 
 let agentMark: Host | null = null
-function showAgentMark(on: boolean, who?: string): void {
+/** What the pill shows now: the agent's tab, or the person's while they took it over. */
+let agentMarkKey = ''
+function showAgentMark(on: boolean, who?: string, mode?: string): void {
   if (SELF !== 'top') return
-  if (!on) { if (agentMark) { dropHost(agentMark); agentMark = null }; return }
+  const key = `${mode === 'driving' ? 'driving' : 'agent'}\0${who ?? ''}`
+  if (!on || (agentMark && agentMarkKey !== key)) { if (agentMark) { dropHost(agentMark); agentMark = null } }
+  if (!on) return
   if (agentMark) return
+  agentMarkKey = key
+  const driving = mode === 'driving'
   const { host, root } = makeHost(2147483645)
   // The frame lets every click through; only its Stop button takes one.
   hostStyle(host, 'z-index: 2147483645 !important; inset: 0 !important; pointer-events: none !important;')
@@ -350,7 +356,17 @@ function showAgentMark(on: boolean, who?: string): void {
 .stop:focus-visible{outline:2px solid #e8b46a}`
   const pill = document.createElement('div')
   pill.className = 'pill'
-  pill.append(document.createTextNode(who ? `Walnut agent is using this tab · ${who.slice(0, 60)}` : 'Walnut agent is using this tab'))
+  const task = who ? ` · ${who.slice(0, 60)}` : ''
+  pill.append(document.createTextNode(driving ? `You have this tab; the Walnut agent waits${task}` : `Walnut agent is using this tab${task}`))
+  if (driving) {
+    // Take over (agent-takeover.ts): the person gives the tab back to the agent, which carries on.
+    const back = document.createElement('button')
+    back.className = 'stop'
+    back.textContent = 'Hand back'
+    back.title = 'Done: the agent may use this tab again'
+    back.addEventListener('click', (e) => { if (e.isTrusted) void ask({ type: 'agent-handback' }).then(() => showAgentMark(true, who)) })
+    pill.append(back)
+  }
   const stop = document.createElement('button')
   stop.className = 'stop'
   stop.textContent = 'Stop'
@@ -404,7 +420,7 @@ ext.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       setMenuHeight(Number(msg.height))
       sendResponse({ ok: true }); return
     case 'show-savebar': showBar(String(msg.nonce ?? '')); sendResponse({ ok: true }); return
-    case 'agent-mark': showAgentMark(msg.on === true, typeof msg.who === 'string' ? msg.who : undefined); sendResponse({ ok: true }); return
+    case 'agent-mark': showAgentMark(msg.on === true, typeof msg.who === 'string' ? msg.who : undefined, typeof msg.mode === 'string' ? msg.mode : undefined); sendResponse({ ok: true }); return
     case 'agent-check': sendResponse({ ok: true, walnut: isWalnutApp(), href: location.href, doc: DOC_ID }); return
     case 'page-context':
       // The side panel asks about the page the person is on: the top frame answers.
@@ -471,12 +487,12 @@ if (SELF === 'top') {
 
 function start(): void {
   if (isWalnutApp()) return
-  void ask<{ off?: boolean; barNonce?: string; agent?: { who?: string }; offerCode?: boolean; pageFill?: boolean }>({ type: 'page-init', top: SELF === 'top' }).then((r) => {
+  void ask<{ off?: boolean; barNonce?: string; agent?: { who?: string; driving?: boolean }; offerCode?: boolean; pageFill?: boolean }>({ type: 'page-init', top: SELF === 'top' }).then((r) => {
     if (!r.ok || r.off) return
     cs.off = false
     cs.pageFill = r.pageFill !== false
     offerCode = r.offerCode === true
-    if (r.agent) showAgentMark(true, r.agent.who)
+    if (r.agent) showAgentMark(true, r.agent.who, r.agent.driving ? 'driving' : undefined)
     reported = null
     rescan()
     if (r.barNonce) showBar(r.barNonce)

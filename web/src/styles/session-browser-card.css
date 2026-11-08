@@ -103,13 +103,13 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-sm, 6px);
   background: var(--bg-tertiary, var(--bg));
-  height: 200px;
+  height: min(44vh, 440px);
   display: flex;
   align-items: center;
   justify-content: center;
   overflow: hidden;
 }
-.session-browser-card--large .session-browser-shot { height: min(62vh, 640px); }
+.session-browser-card--large .session-browser-shot { height: min(80vh, 960px); }
 .session-browser-shot img {
   max-width: 100%;
   max-height: 100%;
@@ -129,3 +129,21 @@
   min-height: 1.4em;
 }
 .session-browser-note { color: var(--fg-secondary, var(--fg-muted)); }
+.session-browser-btn--primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg, #fff); }
+.session-browser-btn--primary:hover { background: color-mix(in srgb, var(--accent) 86%, #000); }
+.session-browser-hand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 10px 6px;
+  padding: 6px 8px 6px 10px;
+  border-radius: var(--radius-sm, 6px);
+  border: 1px solid color-mix(in srgb, var(--warning, #c98a14) 45%, var(--border));
+  background: color-mix(in srgb, var(--warning, #c98a14) 12%, var(--bg));
+  color: var(--fg);
+}
+.session-browser-hand.is-driving {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg));
+}
+.session-browser-hand-text { flex: 1 1 auto; min-width: 0; }

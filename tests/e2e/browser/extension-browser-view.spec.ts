@@ -234,6 +234,44 @@ test('the Browser view shows itself when the task\'s session opens a page, follo
   await expect(card(page).getByTestId('session-browser-foot')).toContainText('Live', { timeout: 20_000 })
   await expect.poll(() => frames.length, { timeout: 20_000, message: `frame answers: ${answers.join(', ')}` }).toBeGreaterThan(asked)
 
+  // The stream (2026-11-08, the user: "very laggy like it doesn't show in real time"): pictures keep
+  // coming while the view is on screen, each at the screen's own pixels, never on a 1.2 s timer.
+  const shown0 = answers.filter((a) => a.includes('shown')).length
+  await page.waitForTimeout(4000)
+  const perSecond = (answers.filter((a) => a.includes('shown')).length - shown0) / 4
+  console.log(`[browser view] pictures per second while watched: ${perSecond}; answers: ${answers.slice(-12).join(', ')}`)
+  const size = await picture.evaluate((img: HTMLImageElement) => ({ w: img.naturalWidth, shown: img.getBoundingClientRect().width }))
+  expect(size.w).toBeGreaterThanOrEqual(size.shown)
+
+  // The task's tabs sit in one Chrome tab group named walnut-<task name>.
+  const group = await sw.evaluate(async (tab: number) => {
+    const t = await chrome.tabs.get(tab)
+    return t.groupId !== undefined && t.groupId >= 0 ? (await chrome.tabGroups.get(t.groupId)).title : null
+  }, agentTab)
+  expect(group).toBe('walnut-pay-the-electricity-bill')
+
+  // Take over: the tab is the person's, the agent waits; Hand back gives it to the agent again.
+  await press(page, card(page).getByTestId('session-browser-takeover'))
+  await expect(card(page).getByTestId('session-browser-hand')).toContainText('You have this tab in your browser', { timeout: 20_000 })
+  expect((await act(page, { action: 'snapshot', tab: agentTab })).body.code).toBe('person_driving')
+  await column(page).screenshot({ path: path.join(SHOTS, 'taken-over.png') })
+  await press(page, card(page).getByTestId('session-browser-handback'))
+  await expect(card(page).getByTestId('session-browser-hand')).toHaveCount(0, { timeout: 20_000 })
+  expect((await act(page, { action: 'snapshot', tab: agentTab })).status).toBe(200)
+
+  // The agent asks the person to sign in themselves: the view asks, Take over, Done, and the agent goes on.
+  const ask = await act(page, { action: 'request_sign_in', tab: agentTab, text: 'the bank sends a code to your phone' })
+  expect(ask.status, JSON.stringify(ask.body)).toBe(202)
+  const hand = card(page).getByTestId('session-browser-hand')
+  await expect(hand).toContainText('The agent asks you to sign in to bank.test yourself', { timeout: 20_000 })
+  await column(page).screenshot({ path: path.join(SHOTS, 'sign-in-ask.png') })
+  await press(page, hand.getByRole('button', { name: 'Take over to sign in' }))
+  await expect(hand).toContainText('Sign in to bank.test there, then press Done', { timeout: 20_000 })
+  const waiting = act(page, { action: 'request_sign_in', tab: agentTab, request: ask.body.request, wait_ms: 20_000 })
+  await press(page, hand.getByRole('button', { name: 'Done' }))
+  expect((await waiting).body).toMatchObject({ done: true, signIn: 'done' })
+  await expect(hand).toHaveCount(0, { timeout: 20_000 })
+
   // Stop: the agent's use ends, the tab stays open, the view says so, the agent's next command is refused.
   await press(page, card(page).getByTestId('session-browser-stop'))
   const ended = column(page).getByTestId('session-browser-ended')

@@ -29,6 +29,7 @@ export const BROWSER_USAGE = [
   '       walnut browser upload --selector <css> <file>... [--tab N] (a file field the page hides)',
   '       walnut browser downloads [--wait] [--ms N]',
   '       walnut browser fill-login [--item <id|name>] [--fresh-sign-in] [--tab N]   (signs in with the saved login; you never see the password)',
+  '       walnut browser request-sign-in [<what to sign in to>] [--site S] [--tab N]   (the person signs in themselves, Take over; waits for them)',
   '       walnut browser dialog accept|dismiss [--text T] [--tab N]   (real input)',
   '       walnut browser evaluate <expression> [--tab N]             (real input; a tab you opened)',
   '       walnut browser network [--url part] [--method M] [--status 404|4xx] [--type XHR] [--limit N] [--include-static] [--stop] [--tab N]',
@@ -105,6 +106,7 @@ export function parseBrowserArgv(argv: string[]): ParsedBrowser {
       else if (w === '--level') args.level = val()
       else if (w === '--max-chars') args.max_chars = Number(val())
       else if (w === '--viewport') args.viewport = true
+      else if (w === '--site') args.site = val()
       else if (w === '--file' || w === '--path') {
         const key = w === '--file' ? 'files' : 'paths'
         args[key] = [...((args[key] as string[] | undefined) ?? []), val()]
@@ -128,6 +130,8 @@ export function parseBrowserArgv(argv: string[]): ParsedBrowser {
       case 'form-values': case 'form_values': return { ok: true, op: 'browser', args: { action: 'form_values', ...args }, json }
       case 'downloads': return { ok: true, op: 'browser', args: { action: 'downloads', ...args }, json }
       case 'fill-login': case 'fill_login': return { ok: true, op: 'browser', args: { action: 'fill_login', ...args }, json }
+      case 'request-sign-in': case 'request_sign_in':
+        return { ok: true, op: 'browser', args: { action: 'request_sign_in', ...args, ...(rest.length ? { text: rest.join(' ') } : {}) }, json }
       case 'take': {
         const n = Number(rest[0] ?? args.tab)
         if (!Number.isInteger(n)) return { ok: false, error: 'take needs a tab id (tabs --all lists them)' }
@@ -212,7 +216,7 @@ export function parseBrowserArgv(argv: string[]): ParsedBrowser {
   return { ok: false, error: `unknown action ${verb}` }
 }
 
-const REFUSED = new Set(['site_denied', 'not_your_tab', 'test_run', 'which_tab', 'person_is_here', 'trusted_off', 'denied', 'agents_off', 'agent_never', 'which_login', 'other_site', 'agents_tab_only', 'site_open_in_person_tab', 'not_agent_opened', 'filled_here', 'request_site_not_allowed', 'recording_cancelled', 'person_window'])
+const REFUSED = new Set(['site_denied', 'not_your_tab', 'test_run', 'which_tab', 'person_is_here', 'trusted_off', 'denied', 'agents_off', 'agent_never', 'which_login', 'other_site', 'agents_tab_only', 'site_open_in_person_tab', 'not_agent_opened', 'filled_here', 'request_site_not_allowed', 'recording_cancelled', 'person_window', 'person_driving'])
 
 const MIME: Record<string, string> = {
   '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp',

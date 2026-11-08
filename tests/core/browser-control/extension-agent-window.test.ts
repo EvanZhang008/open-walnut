@@ -124,13 +124,16 @@ describe('the agent window', () => {
     expect(calls.some((c) => c.fn === 'windows.update')).toBe(false)
   })
 
-  it('no agent code minimizes a window or brings one forward', () => {
+  // The one exception: the person's own Take over in the Browser view (agent-takeover.ts takeOver),
+  // which the server sends only for a person's request (browser-view-v1.ts personTab).
+  it('no agent code minimizes a window or brings one forward, except the person\'s Take over', () => {
     const dir = path.resolve(__dirname, '../../../packages/browser-extension/src')
     const offenders: string[] = []
     for (const f of fs.readdirSync(dir).filter((x) => /^(agent|capture|page-agent|cdp)/.test(x) && x.endsWith('.ts'))) {
       const text = fs.readFileSync(path.join(dir, f), 'utf8')
       text.split('\n').forEach((line, i) => {
         if (/^\s*(\/\/|\*|\/\*)/.test(line)) return
+        if (f === 'agent-takeover.ts' && line.trim() === 'await ext.windows.update?.(tab.windowId, { focused: true })') return
         if (/state:\s*['"]minimized['"]|focused:\s*true|drawAttention/.test(line)) offenders.push(`${f}:${i + 1}: ${line.trim()}`)
         // A window is updated in one place only, with a size (agent-window.ts resizeAgentWindow).
         if (/windows\.update\??\.?\(/.test(line) && !(f === 'agent-window.ts' && /\{ \.\.\.plain, width, height \}/.test(line))) offenders.push(`${f}:${i + 1}: ${line.trim()}`)

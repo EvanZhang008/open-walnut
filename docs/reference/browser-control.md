@@ -94,16 +94,46 @@ extension's Settings, reached from the key's popover in the side panel or the to
   focused, never minimized (`packages/browser-extension/src/agent-window.ts`). Every `open`,
   `take`, `navigate` and `back` names the window and the tab (id, title, address), and an agent
   says which in its first line to you. While a task's session holds a tab, its session panel
-  shows the **Browser view**: a live picture of that tab (about one a second while you look at
-  it, none while nobody does), its title and address, which window it is in, and **Stop**, which
-  ends the agent's use of the tab (it stays open). The picture is the screenshot path
-  (`captureVisibleTab`), so it works on a window behind yours and takes no focus; a tab of yours
-  is pictured only while it is on screen (Walnut never switches your tabs), and a frame waits
-  for nothing an agent is doing (`agent-view.ts`, `capture-gate.ts`). Hide folds the view to one
-  line. When the last tab goes, the view says why. Frames are for you only (not masked): an
-  agent takes a screenshot instead, which draws a shown password as dots. Routes:
-  `GET /api/v1/browser/view`, `GET /api/v1/browser/view/frame`, `POST /api/v1/browser/view/stop`
-  (`src/web/routes/browser-view-v1.ts`); the web hears `browser:tabs` when a task's tabs change.
+  shows the **Browser view**: a live picture of that tab, its title and address, which window it
+  is in, **Take over** and **Stop** (which ends the agent's use of the tab; it stays open). While
+  you look at it, the extension streams the tab: it takes the next picture as soon as the browser
+  allows one (two a second), at your screen's own pixels, and posts it to Walnut itself
+  (`POST /api/v1/browser/view/push`); the view holds one request open for the next picture, so a
+  picture shows as soon as it is taken, and a picture the same as the last goes without its bytes.
+  Nobody looking, no pictures: a watch nobody renews ends within seconds. The picture is the
+  screenshot path (`captureVisibleTab`), so it works on a window behind yours and takes no focus;
+  a tab of yours is pictured only while it is on screen (Walnut never switches your tabs), and a
+  picture waits for nothing an agent is doing (`agent-view.ts`, `capture-gate.ts`,
+  `src/web/routes/browser-view-stream.ts`). An older extension is asked for one small picture at a
+  time instead. Hide folds the view to one line. When the last tab goes, the view says why.
+  Pictures are for you only (not masked): an agent takes a screenshot instead, which draws a shown
+  password as dots. Routes: `GET /api/v1/browser/view`, `GET /api/v1/browser/view/frame`
+  (`after`: the number of the picture the view has), `POST /api/v1/browser/view/stop`,
+  `/takeover`, `/handback` (`src/web/routes/browser-view-v1.ts`); the web hears `browser:tabs`
+  when a task's tabs change.
+- **Take over.** Your click on **Take over** brings that tab up in your browser, its window in
+  front, so you use it with your own mouse and keys (sign in, solve a check, look around). It is
+  the one time Walnut brings an agent's window forward, and only on your click. While you have the
+  tab, every agent command there is refused (`person_driving`), so the agent never fights you; the
+  tab's pill says "You have this tab" with **Hand back**, and the view says the same. **Hand
+  back**, there or in the view, gives it to the agent again (`agent-takeover.ts`). A tab in your
+  own window (one you handed over) is taken over where it is: your window is never switched or
+  focused. While you have a tab in the agent window, nothing else is brought up there: another
+  task's pictures and screenshots of a tab behind yours wait (`person_driving` for a screenshot).
+- **Signing in yourself.** When only you can sign in (no saved login, a code sent to your phone, a
+  check, or a page that refuses the agent's browser), the agent calls `request_sign_in`: the view
+  asks you over the picture, "The agent asks you to sign in to example.com yourself", with **Take
+  over to sign in**; you sign in in the tab and press **Done**, and the agent carries on
+  (`src/core/browser-control/sign-in-ask.ts`). The sign-in stays in your browser, so the task's
+  later runs are signed in. A page that refuses this browser's sign-in, such as Google's "This
+  browser or app may not be secure", is recognized in the act's answer (`hand_off`,
+  `src/core/browser-control/sign-in-refusal.ts`), which tells the agent to ask you instead of
+  trying again. A saved login is still filled by `fill_login`, which the agent never sees. The
+  ask lives on the tab's holding: it ends (`gone`) when the tab is closed, released or given to
+  another task, and only its own task's view shows or answers it. An extension older than Take
+  over answers `request_sign_in` with `old_extension`, and the agent asks you in its chat instead.
+- **One tab group per task.** The tabs a task opens in Walnut's agent window sit in one Chrome tab
+  group named `walnut-<task name>` (`agent-groups.ts`); your own tabs are never moved or grouped.
   The phone has no Browser view yet: it would need the same frame route polled from the iOS
   session screen.
 - **Never a second sign-in behind your back.** An `open` or `navigate` to a site you already have
@@ -209,6 +239,7 @@ walnut browser screenshot --full              # the whole page; prints the file 
 walnut browser upload e5 ./invoice.pdf        # read here, sent as bytes (10 MB in all)
 walnut browser downloads --wait               # the next download it started, when it finished
 walnut browser fill-login                     # sign in with the saved login for this page
+walnut browser request-sign-in "the code they texted you"   # the person signs in themselves; waits for Done
 walnut browser tabs --all                     # every tab of the browser, title and address
 walnut browser take 812                       # act in one of the person's tabs
 walnut browser close                          # closes a tab it opened, gives back one it took
@@ -225,6 +256,7 @@ walnut browser close                          # closes a tab it opened, gives ba
 | `screenshot` | `full?`, `format?` (`png`, default `jpeg`) | `full` scrolls through the page and draws one image, cut at 12000 CSS px (`cut: true`), without the agent frame in its own tabs; the scroll is put back |
 | `upload` | `ref`, `files: [{ name, type?, base64 }]` | sets the file input's files as a pick would (input and change); 10 MB in all (`too_big`) |
 | `downloads` | `wait?`, `ms?` | downloads started from this task's tabs (filename, url, state, bytes); `wait` for the next to finish |
+| `request_sign_in` | `text?` (what to sign in to), `site?`, `request?`, `wait_ms?` | the person signs in themselves (Take over, Done); answers `needs_ok` with `request` until they hand the tab back, then `done: true` (or `signIn: "stopped"`) |
 | `fill_login` | `item?`, `purpose?`, `request?` | signs in with the saved login for the tab's site; several (`which_login`) list `{ id, title, username }`; an approval answers `needs_ok` with `request`: call again with it |
 | `tabs` | `all?` | this task's tabs, or with `all` every tab of the browser and whose it is |
 | `take` | `tab` | one of the person's tabs becomes this task's (`person_is_here` when they are on it) |
@@ -259,7 +291,7 @@ says what it waits for. After you disconnect the extension (its popup, Settings,
 browser), `walnut browser status` says so at once and every command fails at once with
 `browser_disconnected` ("the person disconnected this browser from Walnut"); turning agents off
 answers `browser_off`. `walnut browser --help` prints the usage. Exit codes: 0 done, 1 refused or a
-choice to make (`site_denied`, `not_your_tab`, `test_run`, `which_tab`, `person_is_here`,
+choice to make (`site_denied`, `not_your_tab`, `test_run`, `which_tab`, `person_is_here`, `person_driving`,
 `trusted_off`, `which_login`, `denied`, `agents_tab_only`; a choice lists its options), 2 no
 answer in time (`browser_timeout`, `outward_expired`, or no approval in 10 minutes), 3 any other
 error. `walnut browser screenshot x.png` asks for a PNG; a JPEG an older extension sends is saved
@@ -317,8 +349,8 @@ command-line unpacked extension after a reload when Developer mode is off.
 
 Screenshots need the extension's site access (`<all_urls>`, asked at install in Chrome; in
 Firefox the person grants it from the extension's page). The extension also asks for
-`downloads` at install, and `debugger` only as an optional permission when you turn real input
-on. Tests: `tests/core/browser-control/`, `tests/e2e/browser-control.test.ts`,
+`downloads` at install, `tabGroups` (Chrome: "View and manage your tab groups", for the task's
+group), and `debugger` only as an optional permission when you turn real input on. Tests: `tests/core/browser-control/`, `tests/e2e/browser-control.test.ts`,
 `tests/e2e/browser/extension-agent.spec.ts`, `tests/e2e/browser/extension-sidepanel.spec.ts`,
 `tests/core/browser-control/cdp.test.ts`, `tests/core/browser-control/extension-outward.test.ts`,
 `tests/e2e/browser/extension-agent-outward.spec.ts`,

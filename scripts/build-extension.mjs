@@ -73,8 +73,9 @@ export function manifestFor(browser, build) {
     // clipboardRead/Write: a copied password or code is cleared after 30 s only if it is still
     // there (bg-clipboard.ts); offscreen: Chrome writes the clipboard from an offscreen page.
     // idle: Passwords lock when the computer locks or goes idle (bg-autolock.ts).
+    // tabGroups: each task's agent tabs sit in one group named walnut-<task name> (agent-groups.ts).
     permissions: ['storage', 'alarms', 'contextMenus', 'scripting', 'downloads', 'clipboardRead', 'clipboardWrite', 'idle',
-      ...(browser === 'chrome' ? ['sidePanel', 'offscreen'] : [])],
+      ...(browser === 'chrome' ? ['sidePanel', 'offscreen', 'tabGroups'] : [])],
     // Real mouse and keys for agents (agent-trusted.ts): Chrome's debugger, only once the person
     // turns it on in Settings (the browser asks them then). Firefox gives extensions none.
     ...(browser === 'chrome' ? { optional_permissions: ['debugger'] } : {}),

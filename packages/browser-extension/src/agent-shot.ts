@@ -8,6 +8,7 @@ import { siteKey } from '../../../src/core/vault/url-match'
 import { toPage } from './page-reach'
 import { framesOf } from './agent-page'
 import { capture, withCapture } from './capture-gate'
+import { frontDriven } from './agent-takeover'
 import { AgentError, WALNUT_PAGE, agentWindowId, checkPage, frameOp, mark, personsTab, reached, sleep, where, type AgentTab, type WireCommand } from './agent-shared'
 
 export const FULL_MAX_PX = 12_000
@@ -78,7 +79,11 @@ export async function screenshot(c: WireCommand, tabId: number, tab: Tab, rec: A
   await checkPage(c.allow, before.href)
   // One capture at a time (capture-gate.ts): the live Browser view's frames wait while this tab is brought up and taken.
   const out = await withCapture(async () => {
-    // Only a tab on screen in its window can be captured: bring it up there, in the agent window.
+    // Only a tab on screen in its window can be captured: bring it up there, in the agent window,
+    // unless the person took over the tab in front (it would be pulled away from under them).
+    if (!(await ext.tabs.get(tabId).catch(() => tab)).active && await frontDriven(tab.windowId)) {
+      throw new AgentError('The person took over another tab in the agent window and is using it: use snapshot for this tab, or wait until they hand it back.', 'person_driving')
+    }
     await ext.tabs.update(tabId, { active: true })
     // A password the page shows as text (its "show" button) is drawn as dots for the capture.
     let out: Record<string, unknown>

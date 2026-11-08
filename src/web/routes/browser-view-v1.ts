@@ -6,14 +6,20 @@
  *   GET  /api/v1/browser/view?task=<id>              the task's agent tabs (title, address, window), or why its last one went
  *   GET  /api/v1/browser/view/frame?task=<id>&tab=N&device=D  a picture of the tab now (a person's request only)
  *   POST /api/v1/browser/view/stop { task, tab, device }      the agent's use of the tab ends; the tab stays open (a person's request only)
+ *   POST /api/v1/browser/view/takeover { task, tab, device }  Take over: the tab comes forward for the person, agents wait (a person's request only)
+ *   POST /api/v1/browser/view/handback { task, tab, device }  Hand back: the agent may use the tab again (a person's request only)
+ *   POST /api/v1/browser/view/push   the extension's pictures while someone watches (browser-view-stream.ts)
+ *   POST /api/v1/browser/handback    the extension: the person pressed Hand back on the tab's own pill
  *
  * A tab id is unique within one browser only: a frame and a Stop name the browser (device) too, and
  * one that leaves it out is answered only when it names one tab. A test run gets nothing of the
  * person's browser: no tabs, no frame, no Stop (as /browser/act refuses it).
  *
- * A frame is taken only when a viewer asks for one (the web asks about once a second and a half,
- * only while the view is on screen), never in the background; two viewers of one tab share one
- * capture. `browser:tabs` tells the web when a task's tabs came or went, so the view appears when
+ * Pictures are taken only while a viewer watches (the web asks only while the view is on screen),
+ * never in the background. A browser that streams (`view-stream`) posts them as it takes them
+ * (browser-view-stream.ts); an older one is asked for one picture at a time, and two viewers of one
+ * tab share one capture. A sign-in the agent asked the person for (request_sign_in,
+ * core/browser-control/sign-in-ask.ts) rides on its tab in the tab list. `browser:tabs` tells the web when a task's tabs came or went, so the view appears when
  * the session starts using the browser and says so when it stops; the extension's own reports
  * bring the tabs back after a restart of Walnut or of the extension.
  */
@@ -21,6 +27,8 @@ import type { Router, Request, Response, NextFunction } from 'express'
 import { log } from '../../logging/index.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { ambientTestRun } from '../../core/test-run.js'
+import { endStream, streamFrame, streamPush, _resetBrowserStreamsForTesting } from './browser-view-stream.js'
+import { endSignIn, openAsk } from '../../core/browser-control/sign-in-ask.js'
 
 const hub = () => import('../../core/browser-control/hub.js')
 const sites = () => import('../../core/browser-control/sites.js')
@@ -29,6 +37,8 @@ export interface ViewDeps {
   personCaller: (req: Request) => boolean
   run: (res: Response, next: NextFunction, work: () => Promise<unknown>) => Promise<void>
   walnutAddresses: (req: Request) => Promise<string[]>
+  /** The extension's own device from its token, else answered 403 (null). */
+  extensionOf: (req: Request, res: Response) => string | null
 }
 
 /** A frame shared by every viewer of the tab while it is taken and for this long after. */
@@ -80,7 +90,13 @@ export function mountBrowserView(r: Router, d: ViewDeps): void {
       if (!taskId) throw new h.BrowserError('Which task: ?task=<id>.', 400, 'bad_request')
       // A test run sees none of the person's browser.
       if (ambientTestRun()) return { taskId, tabs: [], browsers: 0, testRun: true }
-      return { taskId, ...h.viewOf(`task:${taskId}`), browsers: h.connected().length }
+      const view = h.viewOf(`task:${taskId}`)
+      // A sign-in the agent waits for rides on its tab (sign-in-ask.ts).
+      const tabs = view.tabs.map((t) => {
+        const a = openAsk(t.device, t.tab, `task:${taskId}`)
+        return a ? { ...t, signIn: { id: a.id, at: new Date(a.at).toISOString(), ...(a.site ? { site: a.site } : {}), ...(a.note ? { note: a.note } : {}) } } : t
+      })
+      return { taskId, ...view, tabs, browsers: h.connected().length }
     })
   })
 
@@ -100,6 +116,18 @@ export function mountBrowserView(r: Router, d: ViewDeps): void {
       // the picture of an earlier holding (review 2026-11-07).
       const gen = h.tabGen(known.device, tab)
       const stillHeld = () => h.tabOwner(known.device, tab) === owner && h.tabGen(known.device, tab) === gen
+      const notHeld = () => new h.BrowserError('That tab is not this task\'s now.', 404, 'not_your_tab')
+      const allowNow = async () => {
+        const s = await sites()
+        return { ...s.allowOf(await s.readSites()), walnut: await d.walnutAddresses(req) }
+      }
+      // A browser that streams posts its pictures itself while someone watches (browser-view-stream.ts).
+      if (h.hasCap(known.device, 'view-stream')) {
+        return streamFrame(req, res, {
+          device: known.device, tab, gen, browser: known.browser, stillHeld, notHeld,
+          watch: async () => h.send(known.device, 'view_watch', { tab, ms: 6000 }, await allowNow(), FRAME_MS),
+        })
+      }
       const key = `${owner}\0${known.device}:${tab}\0${gen ?? ''}`
       const held = frames.get(key)
       if (held && (held.done === undefined || Date.now() - held.done < FRAME_SHARE_MS)) return held.p.then((o) => {
@@ -158,6 +186,7 @@ export function mountBrowserView(r: Router, d: ViewDeps): void {
       // (review 2026-11-07: a late Stop released the tab the next task had taken meanwhile).
       const gen = h.tabGen(known.device, tab)
       for (const k of [...frames.keys()]) if (k.startsWith(`${owner}\0${known.device}:${tab}\0`)) frames.delete(k)
+      endStream(known.device, tab)
       const undo = h.endingTab(known.device, tab, 'stopped')
       try {
         out = (await h.send(known.device, 'view_stop', { tab, owner }, allow, 10_000) ?? {}) as Record<string, unknown>
@@ -172,15 +201,83 @@ export function mountBrowserView(r: Router, d: ViewDeps): void {
         undo()
         return { ok: true, ...out, tab, device: known.device, stopped: false }
       }
+      // Before the release, which would end the ask as `gone`: the agent hears it was stopped.
+      if (endSignIn(known.device, tab, 'stopped', owner)) h.ownerChanged(owner)
       if (!h.releaseTabIf(known.device, tab, owner, gen, 'stopped')) undo()
       log.web.info('browser view stop', { device: known.device, owner, tab, by: 'person' })
       return { ok: true, ...out, tab, device: known.device, stopped: true }
     })
   })
+
+  // Take over and Hand back (the extension's agent-takeover.ts): the person's own clicks in the view.
+  const personTab = async (req: Request, h: Hub, verb: string) => {
+    if (!d.personCaller(req)) throw new h.BrowserError(`${verb} in the Browser view is the person's: an agent asks them with request_sign_in.`, 403, 'human_only')
+    if (ambientTestRun()) throw new h.BrowserError('A test run does not use the person\'s browser.', 409, 'test_run')
+    const b = (req.body ?? {}) as { task?: unknown; tab?: unknown; device?: unknown }
+    const taskId = taskOf(b.task)
+    const tab = tabOf(b.tab)
+    if (!taskId || tab === undefined) throw new h.BrowserError('A task and a tab are needed.', 400, 'bad_request')
+    const owner = `task:${taskId}`
+    const known = pickTab(h, owner, tab, deviceOf(b.device))
+    if (!known.connected) throw new h.BrowserError(`${known.browser} does not answer right now.`, 409, 'browser_not_connected')
+    if (!h.hasCap(known.device, 'takeover')) throw new h.BrowserError('This browser\'s Walnut extension is older than Take over: update it (Settings, Browser extension), or use the tab in Chrome yourself.', 409, 'old_extension')
+    const s = await sites()
+    return { owner, tab, known, allow: { ...s.allowOf(await s.readSites()), walnut: await d.walnutAddresses(req) } }
+  }
+
+  r.post('/browser/view/takeover', (req, res, next) => {
+    void d.run(res, next, async () => {
+      const h = await hub()
+      const { owner, tab, known, allow } = await personTab(req, h, 'Take over')
+      const out = (await h.send(known.device, 'view_takeover', { tab, owner }, allow, 15_000) ?? {}) as Record<string, unknown>
+      h.noteTab(known.device, tab, { driving: true })
+      log.web.info('browser view take over', { device: known.device, owner, tab, by: 'person' })
+      return { ok: true, ...out, tab, device: known.device, driving: true }
+    })
+  })
+
+  r.post('/browser/view/handback', (req, res, next) => {
+    void d.run(res, next, async () => {
+      const h = await hub()
+      const { owner, tab, known, allow } = await personTab(req, h, 'Hand back')
+      const out = (await h.send(known.device, 'view_handback', { tab, owner }, allow, 10_000) ?? {}) as Record<string, unknown>
+      h.noteTab(known.device, tab, { driving: false })
+      // The sign-in the agent waited for is done: its waiting call answers now.
+      const ask = endSignIn(known.device, tab, 'done', owner)
+      h.ownerChanged(owner)
+      log.web.info('browser view hand back', { device: known.device, owner, tab, by: 'person', signIn: !!ask })
+      return { ok: true, ...out, tab, device: known.device, driving: false, ...(ask ? { signIn: 'done' } : {}) }
+    })
+  })
+
+  // The extension: the person pressed Hand back on the tab's own pill.
+  r.post('/browser/handback', (req, res, next) => {
+    const device = d.extensionOf(req, res)
+    if (!device) return
+    void d.run(res, next, async () => {
+      const h = await hub()
+      const tab = tabOf((req.body as { tab?: unknown } | undefined)?.tab)
+      const owner = tab === undefined ? undefined : h.tabOwner(device, tab)
+      if (tab === undefined || !owner) return { ok: true, handedBack: false }
+      h.noteTab(device, tab, { driving: false })
+      const ask = endSignIn(device, tab, 'done', owner)
+      h.ownerChanged(owner)
+      log.web.info('browser view hand back', { device, owner, tab, by: 'person', from: 'page', signIn: !!ask })
+      return { ok: true, handedBack: true }
+    })
+  })
+
+  // The extension's pictures while someone watches (browser-view-stream.ts).
+  r.post('/browser/view/push', (req, res, next) => {
+    const device = d.extensionOf(req, res)
+    if (!device) return
+    void d.run(res, next, async () => streamPush(await hub(), device, (req.body ?? {}) as Record<string, unknown>))
+  })
 }
 
 export function _resetBrowserViewForTesting(): void {
   frames.clear()
+  _resetBrowserStreamsForTesting()
   for (const t of announcing.values()) clearTimeout(t)
   announcing.clear()
 }

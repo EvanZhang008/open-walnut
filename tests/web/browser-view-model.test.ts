@@ -3,7 +3,7 @@
  * window, why there is no picture now, why the last tab went, and which tab the view follows.
  */
 import { describe, expect, it } from 'vitest'
-import { agoLine, endedLine, followedTab, noPictureLine, tabKey, windowLine, type BrowserViewTab } from '../../web/src/components/sessions/browser-view-model'
+import { agoLine, endedLine, followedTab, handLine, noPictureLine, tabKey, windowLine, type BrowserViewTab } from '../../web/src/components/sessions/browser-view-model'
 
 const tab = (n: number): BrowserViewTab => ({ device: 'extension-aaaaaa', browser: 'Chrome', tab: n, connected: true, pictures: true })
 
@@ -55,5 +55,14 @@ describe('the Browser view\'s words', () => {
     expect(agoLine('2026-11-07T09:59:57Z', now)).toBe('3 s ago')
     expect(agoLine('2026-11-07T09:58:00Z', now)).toBe('2 min ago')
     expect(agoLine(undefined, now)).toBe('')
+  })
+
+  it('says who has the tab and what the agent waits for (Take over, request_sign_in)', () => {
+    expect(handLine({})).toBeNull()
+    expect(handLine({ driving: true })).toBe('You have this tab in your browser. The agent waits until you hand it back.')
+    expect(handLine({ signIn: { site: 'example.test', note: 'a code goes to your phone' } })).toBe('The agent asks you to sign in to example.test yourself. It says: a code goes to your phone')
+    expect(handLine({ driving: true, signIn: { site: 'example.test' } })).toBe('You have this tab in your browser. Sign in to example.test there, then press Done: the agent carries on.')
+    expect(noPictureLine({ why: 'starting' }, false)).toBe('Taking the first picture…')
+    expect(noPictureLine({ why: 'starting' }, true)).toBeNull()
   })
 })

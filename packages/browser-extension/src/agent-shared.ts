@@ -3,6 +3,7 @@
  * agent-downloads.ts and agent-trusted.ts do their parts): the agent tabs and who holds each,
  * the checks every page goes through, and reaching a frame's script.
  */
+import { groupAgentTab, type GroupApi } from './agent-groups'
 import { ext, type Tab } from './ext'
 import { siteKey } from '../../../src/core/vault/url-match'
 import { tabStore } from './tab-store'
@@ -23,7 +24,11 @@ export class AgentError extends Error {
  * `fromPerson`: opened from one of the person's tabs (its page can reach theirs through `opener`).
  * `viaHanded`: opened from a tab the person handed over (agent-tab-kind.ts), which agents may use as that tab.
  */
-export interface AgentTab { owner: string; who?: string; history?: string[]; handed?: string; taken?: boolean; popup?: boolean; fromPerson?: boolean; viaHanded?: boolean; grant?: string }
+export interface AgentTab {
+  owner: string; who?: string; history?: string[]; handed?: string; taken?: boolean; popup?: boolean; fromPerson?: boolean; viaHanded?: boolean; grant?: string
+  /** The person took the tab over from the Browser view (agent-takeover.ts): since when; agents wait. */
+  driving?: number
+}
 const rawAgentTabs = tabStore<AgentTab>('agentTabs')
 /** One holding of a tab, named: every new hold of it gets its own, so work started for one holding can tell when it ended. */
 export const newGrant = (): string => `g${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
@@ -160,8 +165,15 @@ export function settled(tabId: number): Promise<void> {
   })
 }
 
-export async function mark(tabId: number, on: boolean, who?: string): Promise<void> {
-  await toPage(tabId, { type: 'agent-mark', on, ...(who ? { who } : {}) }, 4000)
+/**
+ * The frame and pill on an agent's tab (content.ts): `driving` while the person took it over. A tab
+ * an agent opened in the agent window goes into its task's tab group as it is marked (agent-groups.ts).
+ */
+export async function mark(tabId: number, on: boolean, who?: string, mode?: 'driving'): Promise<void> {
+  const rec = on ? await agentTabs.get(tabId) : undefined
+  const driving = mode === 'driving' || typeof rec?.driving === 'number'
+  await toPage(tabId, { type: 'agent-mark', on, ...(who ? { who } : {}), ...(driving ? { mode: 'driving' } : {}) }, 4000)
+  if (rec && !personsTab(rec)) void groupAgentTab(ext as unknown as GroupApi, tabId, rec.owner, rec.who, await agentWindowId())
 }
 
 const UNREACHED: Record<ReachError, string> = {
