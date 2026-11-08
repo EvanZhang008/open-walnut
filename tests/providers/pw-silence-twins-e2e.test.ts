@@ -73,6 +73,7 @@ async function boot(twin: (typeof TWINS)[number], dir: string, extra: Record<str
     WALNUT_SECRETS_DIR_ROOT: path.join(dir, 'state', 'secrets'),
     // What the daemon's own environment holds: kept, after the preload.
     NODE_OPTIONS: '--max-old-space-size=4096',
+    BUN_OPTIONS: '--smol',
     ...extra,
   }
   for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'WALNUT_PW_SILENCE']) if (!(k in extra)) delete env[k]
@@ -158,13 +159,16 @@ describe.each(TWINS)('$name', (twin) => {
         `(cd /; "${NODE}" '${dir}/scratch/verify-ui.cjs' > '${dir}/script.txt' 2>&1); ` +
         `"${NODE}" -e 'require("node:fs"); process.stdout.write(String(!!globalThis[Symbol.for("walnut.pwSilence")]))' > '${dir}/other.txt' 2>&1;`
       : ''
-    const script = `cd '${dir}'; ${runner} printf '%s|END' "\${NODE_OPTIONS-unset}" > '${seen}'; exec /bin/sleep 60`
+    const bunRun = BUN ? `(cd /; "${BUN}" '${dir}/scratch/verify-ui.cjs' > '${dir}/bun.txt' 2>&1); ` : ''
+    const script = `cd '${dir}'; ${runner} ${bunRun}printf '%s|%s|END' "\${NODE_OPTIONS-unset}" "\${BUN_OPTIONS-unset}" > '${seen}'; exec /bin/sleep 60`
     const reply = await rpc({ cmd: 'start', sid: 'pw-silence-session-1', args: ['/bin/sh', '-c', script], cwd: dir, message: 'init\n' })
     expect(reply.ok, JSON.stringify(reply)).toBe(true)
     const pid = Number((reply as { pid?: unknown }).pid ?? (reply as { result?: { pid?: unknown } }).result?.pid)
     if (pid > 1) started.push(pid)
 
-    expect(await waitFile(seen)).toBe(`--require "${preload}" --max-old-space-size=4096|END`)
+    expect(await waitFile(seen)).toBe(`--require "${preload}" --max-old-space-size=4096|--preload=${preload} --smol|END`)
+    // Bun reads only BUN_OPTIONS: a Bun script of the session's own gets it the same way.
+    if (BUN) expect(fs.readFileSync(path.join(dir, 'bun.txt'), 'utf8')).toBe('1,1,gated|END')
     expect(fs.readFileSync(preload, 'utf8')).toBe(pwSilencePreloadSource())
     if (NODE) {
       // The runner added one listener, which put the gated silencer into the new context.
@@ -185,7 +189,7 @@ describe.each(TWINS)('$name', (twin) => {
     const worker = path.join(dir, 'worker.cjs')
     fs.writeFileSync(worker, [
       "const fs = require('fs')",
-      "fs.writeFileSync(process.env.SEEN_FILE, String(process.env.NODE_OPTIONS) + '|END')",
+      "fs.writeFileSync(process.env.SEEN_FILE, String(process.env.NODE_OPTIONS) + '|' + String(process.env.BUN_OPTIONS) + '|END')",
       "require('readline').createInterface({ input: process.stdin }).on('line', (line) => {",
       '  const m = JSON.parse(line)',
       "  const result = m.op === 'newSession' ? { sessionId: 'fake-acp' } : { ok: true }",
@@ -193,8 +197,8 @@ describe.each(TWINS)('$name', (twin) => {
       '})',
     ].join('\n'))
     for (const [sid, env, want] of [
-      ['pw-acp-inherit', {}, `--require "${preload}" --max-old-space-size=4096|END`],
-      ['pw-acp-cleared', { NODE_OPTIONS: '' }, `--require "${preload}"|END`],
+      ['pw-acp-inherit', {}, `--require "${preload}" --max-old-space-size=4096|--preload=${preload} --smol|END`],
+      ['pw-acp-cleared', { NODE_OPTIONS: '', BUN_OPTIONS: '' }, `--require "${preload}"|--preload=${preload}|END`],
     ] as const) {
       const seen = path.join(dir, `${sid}.txt`)
       const reply = await rpc({ cmd: 'acpStart', sid, cwd: dir, workerCmd: [NODE, worker], adapterCmd: ['/bin/true'], env: { ...env, SEEN_FILE: seen } })
@@ -208,20 +212,20 @@ describe.each(TWINS)('$name', (twin) => {
     const dir = path.join(root, twin.name.replace(/\W+/g, '-') + '-off')
     await boot(twin, dir, { WALNUT_PW_SILENCE: '0' })
     const seen = path.join(dir, 'seen.txt')
-    const script = `printf '%s|END' "\${NODE_OPTIONS-unset}" > '${seen}'; exec /bin/sleep 60`
+    const script = `printf '%s|%s|END' "\${NODE_OPTIONS-unset}" "\${BUN_OPTIONS-unset}" > '${seen}'; exec /bin/sleep 60`
     const reply = await rpc({ cmd: 'start', sid: 'pw-silence-session-off', args: ['/bin/sh', '-c', script], cwd: dir, message: 'init\n' })
     expect(reply.ok, JSON.stringify(reply)).toBe(true)
     const pid = Number((reply as { pid?: unknown }).pid ?? (reply as { result?: { pid?: unknown } }).result?.pid)
     if (pid > 1) started.push(pid)
-    expect(await waitFile(seen)).toBe('--max-old-space-size=4096|END')
+    expect(await waitFile(seen)).toBe('--max-old-space-size=4096|--smol|END')
     expect(fs.existsSync(path.join(dir, 'state', 'pw-silence'))).toBe(false)
   }, 90_000)
 })
 
 describe('every session spawn in both twins carries the silencer', () => {
   // A new spawn env (a Claude Code start, an ACP start) is found by the task-dir key every
-  // session env must set (tests/core/work-place-rule.test.ts); each must set NODE_OPTIONS
-  // through pwSilenceNodeOptions in the same object. The dynamic cases above run both kinds.
+  // session env must set (tests/core/work-place-rule.test.ts); each must set NODE_OPTIONS and
+  // BUN_OPTIONS through pwSilenceOptions or pwSilenceAcpOptions in the same object. The dynamic cases above run both kinds.
   for (const file of ['daemon-standalone.ts', 'daemon-source.ts']) {
     it(file, () => {
       const src = fs.readFileSync(path.resolve(__dirname, '../../src/providers', file), 'utf8')
@@ -229,7 +233,7 @@ describe('every session spawn in both twins carries the silencer', () => {
       expect(sites.length).toBe(2)
       for (const at of sites) {
         const around = src.slice(at, at + 600)
-        expect(around, `${file} at ${src.slice(0, at).split('\n').length}`).toMatch(/NODE_OPTIONS: pwSilenceNodeOptions\(/)
+        expect(around, `${file} at ${src.slice(0, at).split('\n').length}`).toMatch(/\.\.\.pwSilence(Acp)?Options\(/)
       }
     })
   }

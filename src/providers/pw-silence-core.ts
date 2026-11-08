@@ -5,7 +5,8 @@
  * by a task session on that Mac directly, past every runner).
  *
  * The daemon (both twins) writes the page silencer's preload once into this host's state dir
- * and starts every session (Claude Code and ACP) with NODE_OPTIONS="--require <that file>", so
+ * and starts every session (Claude Code and ACP) with NODE_OPTIONS="--require <that file>" and
+ * BUN_OPTIONS="--preload=<that file>" (Bun reads only that), so
  * every Node process under the session loads it, and the Playwright library any of them loads
  * (the runner, its workers, a script of the session's own, from any folder) adds the silencer
  * to every browser context, at document start in every frame. A process that never loads
@@ -65,6 +66,22 @@ export function pwSilencePreloadSource(): string {
     "  return typeof request === 'string' && /(^|[\\\\/])playwright-core([\\\\/]index(\\.js)?)?$/.test(request);",
     '}',
     '',
+    '// Bun (BUN_OPTIONS="--preload=<this file>") loads modules past Module._load: a main script',
+    '// that names Playwright gets the library loaded here first, from its own folder or the cwd,',
+    '// and its own import then finds that same copy in the module cache.',
+    'if (process.versions && process.versions.bun && !globalThis[HOOKED]) {',
+    '  globalThis[HOOKED] = true;',
+    '  try {',
+    "    const main = process.argv[1];",
+    "    if (main && /playwright/.test(require('node:fs').readFileSync(main, 'utf8'))) {",
+    "      const { createRequire } = require('node:module');",
+    "      for (const from of [main, process.cwd() + '/']) {",
+    "        try { install(createRequire(from)('playwright-core')); break; } catch (e) { /* not from here */ }",
+    '      }',
+    '    }',
+    '  } catch (e) { /* no main script to read */ }',
+    '}',
+    '',
     '// Whatever started this process (the runner, a worker, a script of its own, from any folder),',
     '// the Playwright library it loads gets the silencer before it makes a browser.',
     'if (!globalThis[HOOKED]) {',
@@ -115,17 +132,71 @@ export function ensurePwSilencePreload(dir: string, env: NodeJS.ProcessEnv = pro
   } catch { return null }
 }
 
+type Token = { raw: string; value: string }
+
+/** Node's own split of NODE_OPTIONS: spaces separate, double quotes group, a backslash in them escapes. */
+function nodeOptionTokens(s: string): Token[] {
+  const out: Token[] = []
+  let i = 0
+  while (i < s.length) {
+    while (i < s.length && /\s/.test(s[i])) i++
+    if (i >= s.length) break
+    const start = i
+    let value = ''
+    while (i < s.length && !/\s/.test(s[i])) {
+      if (s[i] === '"') {
+        i++
+        while (i < s.length && s[i] !== '"') {
+          if (s[i] === '\\' && i + 1 < s.length) i++
+          value += s[i++]
+        }
+        i++
+      } else value += s[i++]
+    }
+    out.push({ raw: s.slice(start, i), value })
+  }
+  return out
+}
+
+/** The tokens with every load of another copy of the preload (flag and file, or flag=file) left out. */
+function withoutOtherPreloads(tokens: Token[], flags: string[]): string[] {
+  const isPreload = (file: string) => file.split(/[\\/]/).pop() === PW_SILENCE_PRELOAD_NAME
+  const kept: string[] = []
+  for (let k = 0; k < tokens.length; k++) {
+    const v = tokens[k].value
+    const eq = v.indexOf('=')
+    if (eq > 0 && flags.includes(v.slice(0, eq)) && isPreload(v.slice(eq + 1))) continue
+    if (flags.includes(v) && k + 1 < tokens.length && isPreload(tokens[k + 1].value)) { k++; continue }
+    kept.push(tokens[k].raw)
+  }
+  return kept
+}
+
 /**
- * NODE_OPTIONS for a session: the preload first, then whatever the session would have had.
- * Quoted, since a home can hold a space; unchanged when there is no file.
+ * NODE_OPTIONS for a session: the preload first, then whatever the session would have had, each
+ * of its options as written. Another copy of the preload (an older run's, a temp one that may be
+ * gone) gives way to this one: a --require of a missing file stops every Node program. Quoted,
+ * since a home can hold a space; unchanged when there is no file or Node would read the path
+ * otherwise (a backslash is an escape inside its quotes).
  */
 export function withPwSilenceNodeOptions(current: string | undefined, file: string | null): string | undefined {
-  // Node reads a backslash inside quotes as an escape: such a path would name another file.
   if (!file || /["\n\\]/.test(file)) return current
-  const req = `--require "${file}"`
-  // Any other copy of the preload (an older run's, a temp one that may be gone) is dropped:
-  // a --require of a missing file stops every Node program.
-  const other = new RegExp(`(?:--require|-r)(?:=|\\s+)(?:"[^"]*${PW_SILENCE_PRELOAD_NAME.replace(/\./g, '\\.')}"|\\S*${PW_SILENCE_PRELOAD_NAME.replace(/\./g, '\\.')})`, 'g')
-  const cur = (current || '').replace(other, ' ').replace(/\s+/g, ' ').trim()
-  return cur ? `${req} ${cur}` : req
+  const rest = withoutOtherPreloads(nodeOptionTokens(current || ''), ['--require', '-r'])
+  return [`--require "${file}"`, ...rest].join(' ')
+}
+
+/**
+ * BUN_OPTIONS for a session, the same for Bun, which never reads NODE_OPTIONS. Bun splits it on
+ * spaces and reads no quotes, so a path with a space or a quote is never put there.
+ */
+export function withPwSilenceBunOptions(current: string | undefined, file: string | null): string | undefined {
+  if (!file || /[\s"'\\]/.test(file)) return current
+  const tokens = (current || '').split(/\s+/).filter(Boolean).map((t) => ({ raw: t, value: t }))
+  const rest = withoutOtherPreloads(tokens, ['--preload', '--require', '-r'])
+  return [`--preload=${file}`, ...rest].join(' ')
+}
+
+/** Both for one session start: the preload of `file` first in NODE_OPTIONS and BUN_OPTIONS. */
+export function pwSilenceSessionEnv(node: string | undefined, bun: string | undefined, file: string | null): { NODE_OPTIONS: string | undefined; BUN_OPTIONS: string | undefined } {
+  return { NODE_OPTIONS: withPwSilenceNodeOptions(node, file), BUN_OPTIONS: withPwSilenceBunOptions(bun, file) }
 }

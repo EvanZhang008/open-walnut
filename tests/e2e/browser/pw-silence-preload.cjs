@@ -31,6 +31,22 @@ function isPlaywrightCore(request) {
   return typeof request === 'string' && /(^|[\\/])playwright-core([\\/]index(\.js)?)?$/.test(request);
 }
 
+// Bun (BUN_OPTIONS="--preload=<this file>") loads modules past Module._load: a main script
+// that names Playwright gets the library loaded here first, from its own folder or the cwd,
+// and its own import then finds that same copy in the module cache.
+if (process.versions && process.versions.bun && !globalThis[HOOKED]) {
+  globalThis[HOOKED] = true;
+  try {
+    const main = process.argv[1];
+    if (main && /playwright/.test(require('node:fs').readFileSync(main, 'utf8'))) {
+      const { createRequire } = require('node:module');
+      for (const from of [main, process.cwd() + '/']) {
+        try { install(createRequire(from)('playwright-core')); break; } catch (e) { /* not from here */ }
+      }
+    }
+  } catch (e) { /* no main script to read */ }
+}
+
 // Whatever started this process (the runner, a worker, a script of its own, from any folder),
 // the Playwright library it loads gets the silencer before it makes a browser.
 if (!globalThis[HOOKED]) {

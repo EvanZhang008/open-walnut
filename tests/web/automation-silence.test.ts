@@ -19,7 +19,7 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { execFileSync } from 'node:child_process';
 import { silenceAutomatedAudio, AUTOMATION_SILENCE_JS } from '../../web/src/utils/automation-silence';
-import { PW_SILENCE_JS, pwSilenceDir, pwSilencePreloadSource, withPwSilenceNodeOptions } from '../../src/providers/pw-silence-core';
+import { PW_SILENCE_JS, pwSilenceDir, pwSilencePreloadSource, pwSilenceSessionEnv, withPwSilenceBunOptions, withPwSilenceNodeOptions } from '../../src/providers/pw-silence-core';
 
 const ROOT = path.resolve(__dirname, '../..');
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
@@ -231,6 +231,16 @@ describe('the page silencer', () => {
     expect(withPwSilenceNodeOptions('--inspect --require "/tmp/run 1/pw-silence-preload.cjs" -r /old/pw-silence-preload.cjs --require=/o/pw-silence-preload.cjs --no-warnings', f))
       .toBe(`--require "${f}" --inspect --no-warnings`);
     expect(withPwSilenceNodeOptions('--require "/x/other-preload.cjs"', f), 'a preload of the user\'s own stays').toBe(`--require "${f}" --require "/x/other-preload.cjs"`);
+    // Every other option is kept as written, quotes and spaces inside them included.
+    expect(withPwSilenceNodeOptions('--require "/My  Tools/custom.cjs"   --title="a  b"', f)).toBe(`--require "${f}" --require "/My  Tools/custom.cjs" --title="a  b"`);
+    expect(withPwSilenceNodeOptions('-r /x/pw-silence-preload.cjs.backup --require "/x/pw-silence-preload.cjs-old"', f), 'only that exact file name')
+      .toBe(`--require "${f}" -r /x/pw-silence-preload.cjs.backup --require "/x/pw-silence-preload.cjs-old"`);
+    expect(withPwSilenceNodeOptions('--require "/a \\"q\\"/pw-silence-preload.cjs" --inspect', f), 'an escaped quote is read as Node reads it').toBe(`--require "${f}" --inspect`);
+    // Bun reads BUN_OPTIONS, split on spaces, no quotes.
+    expect(withPwSilenceBunOptions(undefined, f)).toBe(`--preload=${f}`);
+    expect(withPwSilenceBunOptions('--smol --preload /old/pw-silence-preload.cjs --preload=/t/pw-silence-preload.cjs -r ./mine.ts', f)).toBe(`--preload=${f} --smol -r ./mine.ts`);
+    expect(withPwSilenceBunOptions('--smol', '/home/a b/pw-silence-preload.cjs'), 'Bun cannot carry a space').toBe('--smol');
+    expect(pwSilenceSessionEnv('--inspect', undefined, null)).toEqual({ NODE_OPTIONS: '--inspect', BUN_OPTIONS: undefined });
     // No file (off, unwritable) or a path the quoting cannot carry: unchanged, never a broken --require.
     expect(withPwSilenceNodeOptions('--inspect', null)).toBe('--inspect');
     expect(withPwSilenceNodeOptions(undefined, '/a"b/pw-silence-preload.cjs')).toBeUndefined();

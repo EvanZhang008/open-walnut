@@ -7085,7 +7085,7 @@ async function cmdAcpStart(ws, id, cmd) {
   params.env = Object.assign({}, secretsSessionEnv(), params.env, {
     WALNUT_AGENT_SOCKET: GATEWAY_SOCK_PATH,
     PATH: sessionPathWithShim(process.env.PATH || '', walnutThroughGateway(params.env)),
-  }, { WALNUT_TASK_DIR: acpTaskDir || '', WALNUT_SECRETS_DIR: SECRETS_ROOT || '', NODE_OPTIONS: pwSilenceNodeOptions(params.env && Object.prototype.hasOwnProperty.call(params.env, 'NODE_OPTIONS') ? (params.env.NODE_OPTIONS == null ? '' : params.env.NODE_OPTIONS) : process.env.NODE_OPTIONS) || '' });
+  }, { WALNUT_TASK_DIR: acpTaskDir || '', WALNUT_SECRETS_DIR: SECRETS_ROOT || '', ...pwSilenceAcpOptions(params.env) });
   return sessionStartGate.run(params.sid, async function () {
     if (!params.providerSessionId && fs.existsSync(cancelledStartPath(params.sid))) throw new Error('Initial start was cancelled; retry task_start on the same task');
     const resp = await acp.acpStart(ws, params);
@@ -7536,7 +7536,7 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
       WALNUT_TASK_DIR: taskDir || undefined,
       WALNUT_SECRETS_DIR: SECRETS_ROOT || undefined,
       // The page silencer, first in NODE_OPTIONS. Keep in sync with daemon-standalone.ts.
-      NODE_OPTIONS: pwSilenceNodeOptions(secretsSessionEnv().NODE_OPTIONS || process.env.NODE_OPTIONS),
+      ...pwSilenceOptions(process.env.NODE_OPTIONS, process.env.BUN_OPTIONS),
       PATH: sessionPathWithShim((launch.nodeDir ? launch.nodeDir + ':' : '') + (process.env.PATH || ''), walnutThroughGateway(settingsEnvOf(launch.args))),
       // Never let OUR watchdog pid leak into the CLI's env — a CLI session that
       // runs a dev:prod deploy would hand this stale pid to the PRODUCTION
@@ -13458,12 +13458,21 @@ async function cmdTranscriptRestore(ws, id, cmd) {
     sendError(ws, id, 'transcript.restore failed: ' + err.message);
   }
 }
-// Every session starts with the page silencer's preload in NODE_OPTIONS (pw-silence-core.ts,
+// Every session starts with the page silencer's preload in NODE_OPTIONS and BUN_OPTIONS (pw-silence-core.ts,
 // carried by the task-dir-core sidecar; an older sidecar adds nothing). Mirrors daemon-standalone.ts.
 const PW_SILENCE_DIR = taskDirCore && TASK_DIR_ROOT && typeof taskDirCore.pwSilenceDir === 'function' ? taskDirCore.pwSilenceDir(TASK_DIR_ROOT) : null;
-function pwSilenceNodeOptions(current) {
-  if (!PW_SILENCE_DIR) return current;
-  try { return taskDirCore.withPwSilenceNodeOptions(current, taskDirCore.ensurePwSilencePreload(PW_SILENCE_DIR)); } catch (err) { return current; }
+function pwSilenceOptions(node, bun) {
+  const none = { NODE_OPTIONS: node == null ? undefined : node, BUN_OPTIONS: bun == null ? undefined : bun };
+  if (!PW_SILENCE_DIR || typeof taskDirCore.pwSilenceSessionEnv !== 'function') return none;
+  try { return taskDirCore.pwSilenceSessionEnv(none.NODE_OPTIONS, none.BUN_OPTIONS, taskDirCore.ensurePwSilencePreload(PW_SILENCE_DIR)); } catch (err) { return none; }
+}
+// A key the engine's env names wins over the daemon's own, null and '' meaning cleared.
+function ownOrDaemon(env, key) {
+  return env && Object.prototype.hasOwnProperty.call(env, key) ? (env[key] == null ? '' : env[key]) : process.env[key];
+}
+function pwSilenceAcpOptions(env) {
+  const o = pwSilenceOptions(ownOrDaemon(env, 'NODE_OPTIONS'), ownOrDaemon(env, 'BUN_OPTIONS'));
+  return { NODE_OPTIONS: o.NODE_OPTIONS || '', BUN_OPTIONS: o.BUN_OPTIONS || '' };
 }
 // Fleet secrets sidecar (secrets-core.cjs): the secrets the user shared with this
 // host. 'secrets-v1' is advertised only when it loads. Mirrors daemon-standalone.ts.

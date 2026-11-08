@@ -190,7 +190,7 @@ import { createClockSchedule } from './clock-schedule-core.js'
 import { resolvePathHostLocal } from './path-resolve-core.js'
 import { createDaemonPorts } from './port-scan-core.js'
 import { archiveTranscripts, bunTranspilerCacheDirs, ensureTaskDir, liveTranscriptIdsFromPs, isTaskDirId, listTaskDirs, plainFindResults, pruneHostCaches, pruneTaskBuilds, pruneTaskDirs, readOpenPaths, removeTaskDirs, restoreForRead, restoreSessionAnywhere, resumeSourceId, setArchiveLog, taskDirInUse, taskDirPath, taskDirRoot, taskDirSizes, type HostWork } from './task-dir-core.js'
-import { ensurePwSilencePreload, pwSilenceDir, withPwSilenceNodeOptions } from './pw-silence-core.js'
+import { ensurePwSilencePreload, pwSilenceDir, pwSilenceSessionEnv } from './pw-silence-core.js'
 import { createHostExec } from './host-exec-core.js'
 import { createNetSupervisor, netStateDir, resolveNetBinary } from './net-core.js'
 import { createHostMcp } from './host-mcp-core.js'
@@ -293,8 +293,17 @@ const TASK_DIR_ROOT = taskDirRoot(process.env, HOME_DIR)
 // Every session starts with the page silencer's preload in NODE_OPTIONS, so any Playwright it
 // runs is silent whatever branch it builds (pw-silence-core.ts). Keep in sync with daemon-source.ts.
 const PW_SILENCE_DIR = pwSilenceDir(TASK_DIR_ROOT)
-function pwSilenceNodeOptions(current: string | undefined): string | undefined {
-  return withPwSilenceNodeOptions(current, ensurePwSilencePreload(PW_SILENCE_DIR))
+/** NODE_OPTIONS and BUN_OPTIONS of a session start, from what it would have had (null = cleared). */
+function pwSilenceOptions(node: string | null | undefined, bun: string | null | undefined): { NODE_OPTIONS: string | undefined; BUN_OPTIONS: string | undefined } {
+  return pwSilenceSessionEnv(node ?? undefined, bun ?? undefined, ensurePwSilencePreload(PW_SILENCE_DIR))
+}
+function pwSilenceAcpOptions(env: Record<string, string | null | undefined> | undefined): Record<string, string> {
+  const o = pwSilenceOptions(ownOrDaemon(env, 'NODE_OPTIONS'), ownOrDaemon(env, 'BUN_OPTIONS'))
+  return { NODE_OPTIONS: o.NODE_OPTIONS ?? '', BUN_OPTIONS: o.BUN_OPTIONS ?? '' }
+}
+/** A key the engine's env names wins over the daemon's own, null and '' meaning cleared. */
+function ownOrDaemon(env: Record<string, string | null | undefined> | undefined, key: string): string | undefined {
+  return env && Object.prototype.hasOwnProperty.call(env, key) ? (env[key] ?? '') : process.env[key]
 }
 // Streams live under the user's HOME so they SURVIVE REBOOTS — /tmp is wiped on
 // macOS/Linux restarts, which vaporized every stream file mid-session and left
@@ -6257,9 +6266,8 @@ async function cmdAcpStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<
     WALNUT_TASK_DIR: taskDir ?? '',
     WALNUT_SECRETS_DIR: SECRETS_ROOT,
     // The page silencer, as for the native spawn (pw-silence-core.ts).
-    // An engine's env that names NODE_OPTIONS (null or '' = cleared) wins over the daemon's own.
-    NODE_OPTIONS: pwSilenceNodeOptions(params.env && Object.prototype.hasOwnProperty.call(params.env, 'NODE_OPTIONS')
-      ? (params.env.NODE_OPTIONS ?? '') : process.env.NODE_OPTIONS) ?? '',
+    // An engine's env that names NODE_OPTIONS or BUN_OPTIONS (null or '' = cleared) wins over the daemon's own.
+    ...pwSilenceAcpOptions(params.env),
   }
   return sessionStartGate.run(params.sid, async () => {
     if (!params.providerSessionId && fs.existsSync(cancelledStartPath(params.sid))) throw new Error('Initial start was cancelled; retry task_start on the same task')
@@ -6743,7 +6751,7 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
       // Where the secrets the user shared with this host are, one file each.
       WALNUT_SECRETS_DIR: SECRETS_ROOT,
       // The page silencer, first in NODE_OPTIONS (pw-silence-core.ts). Keep in sync with daemon-source.ts.
-      NODE_OPTIONS: pwSilenceNodeOptions(secretsSessionEnv().NODE_OPTIONS ?? process.env.NODE_OPTIONS),
+      ...pwSilenceOptions(process.env.NODE_OPTIONS, process.env.BUN_OPTIONS),
       // Never let OUR watchdog pid leak into the CLI's env. A CLI session that
       // runs `npm run dev:prod` would otherwise hand this stale pid to the
       // PRODUCTION daemon, whose watchdog would trip on the long-dead pid and

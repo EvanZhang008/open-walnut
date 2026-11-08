@@ -33,7 +33,7 @@ export { taskDirSizes, type TaskDirSize } from './task-dir-sizes.js'
 export { bunTranspilerCacheDirs, pruneHostCaches, type CachePruneResult } from './host-cache-prune.js'
 export { archiveTranscripts, liveTranscriptIdsFromPs, restoreSessionAnywhere, resumeSourceId, setArchiveLog, restoreForRead, plainFindResults, type ArchiveReport } from './transcript-archive.js'
 // The page silencer's preload rides this sidecar to the source twin (pw-silence-core.ts).
-export { ensurePwSilencePreload, pwSilenceDir, withPwSilenceNodeOptions } from './pw-silence-core.js'
+export { ensurePwSilencePreload, pwSilenceDir, pwSilenceSessionEnv } from './pw-silence-core.js'
 
 /** `home` is the data home of the Walnut that first made it: a host two Walnuts share keeps each one's dirs apart. */
 interface Marker { taskId: string; home?: string; createdAt?: string; lastUsedAt?: string; prunedAt?: string; buildsPrunedAt?: string }
