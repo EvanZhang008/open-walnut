@@ -1,6 +1,6 @@
 [package]
 name = "walnut-net"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 license = "MIT"
 description = "Walnut's host network connector: carries Walnut daemon links between the user's own machines over iroh, direct or through the user's own relay"

@@ -14,19 +14,14 @@ import path from 'node:path'
 import zlib from 'node:zlib'
 
 /** native/walnut-net/Cargo.toml's version (tests/providers/net-binary.test.ts keeps them equal). */
-export const NET_BIN_VERSION = '0.2.0'
+export const NET_BIN_VERSION = '0.2.1'
 export const NET_BIN_TAG = `walnut-net-v${NET_BIN_VERSION}`
 const RELEASE_BASE = 'https://github.com/EvanZhang008/open-walnut/releases/download'
 /**
  * Pinned SHA-256 of each `.gz` asset of NET_BIN_TAG (its SHA256SUMS); a target not here is
  * checked by SHA256SUMS. Empty from a version bump until that release is built and pinned.
  */
-export const NET_BIN_SHA256: Readonly<Record<string, string>> = {
-  'darwin-arm64': 'eb70924e7a8812874e9c9598ad7a616bb5a9c16895e12fa98fe4a9527a549080',
-  'darwin-x64': '140431cc883e5471ca7ad9d9c8069bbd520a64011d06b631bb574a03d95dad60',
-  'linux-arm64': '5d7afe287b3fb6c891f2a5f4c1e8fa1da134299cae459c926cba0126bec4267b',
-  'linux-x64': '89102a932d77fa0c19fff12570a6721f991b69390fd04dda7f6a09160da47359',
-}
+export const NET_BIN_SHA256: Readonly<Record<string, string>> = {}
 const MAX_BYTES = 64 * 1024 * 1024
 /** One download's limit; a join waits longer than this for the network key (commands/net.ts). */
 export const FETCH_TIMEOUT_MS = 180_000

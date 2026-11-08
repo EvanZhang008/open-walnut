@@ -26,6 +26,8 @@ pub const CLOSE_NOT_MEMBER: u32 = 403;
 /// Close code for a member that was removed while connected.
 pub const CLOSE_REMOVED: u32 = 410;
 const DIAL_TIMEOUT: Duration = Duration::from_secs(20);
+/// The relay-first dial (see `Node::connection`); after it, the known addresses get DIAL_TIMEOUT.
+const RELAY_DIAL_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct Node {
     pub ep: Endpoint,
@@ -205,7 +207,8 @@ impl Node {
                     }
                     incoming.entry(peer).or_default().push(conn.clone());
                 }
-                log::info("member connected", json!({"peer": peer.to_string(), "path": selected_kind(&conn)}));
+                log::info("member connected", json!({"peer": peer.to_string(), "path": selected_kind(&conn), "conn": conn.stable_id()}));
+                log_paths(conn.clone(), peer, "server");
                 while let Ok((send, recv)) = conn.accept_bi().await {
                     let port_file = node.daemon_port_file.clone();
                     tokio::spawn(async move {
@@ -225,7 +228,7 @@ impl Node {
                         incoming.remove(&peer);
                     }
                 }
-                log::info("member disconnected", json!({"peer": peer.to_string(), "reason": conn.close_reason().map(|r| r.to_string())}));
+                log::info("member disconnected", json!({"peer": peer.to_string(), "reason": conn.close_reason().map(|r| r.to_string()), "conn": conn.stable_id()}));
             });
         }
     }
@@ -256,6 +259,24 @@ impl Node {
                 }
             }
         }
+        // With a relay, the handshake goes through it first, with no direct address: the first
+        // Initial to arrive pins the handshake to its path, so a direct path whose answers a
+        // firewall drops (or that the peer answers from another address) stalls the whole dial.
+        // Holepunching adds direct paths once connected, and only a path that answers both
+        // ways is validated and used. The known addresses are the fallback when the relay does
+        // not get through.
+        if self.choice == RelayChoice::Public || (self.choice == RelayChoice::Custom && addr.relay_urls().next().is_some()) {
+            match tokio::time::timeout(RELAY_DIAL_TIMEOUT, self.ep.connect(addr.clone(), ALPN_DAEMON)).await {
+                Ok(Ok(conn)) => {
+                    log::info("connected to member", json!({"peer": peer.to_string(), "name": member.name, "path": selected_kind(&conn), "conn": conn.stable_id(), "dial": "relay-first"}));
+                    log_paths(conn.clone(), peer, "client");
+                    self.outgoing.lock().await.insert(peer, conn.clone());
+                    return Ok(conn);
+                }
+                Ok(Err(e)) => log::warn("dial through the relay failed; trying the known addresses", json!({"peer": peer.to_string(), "error": format!("{e:#}")})),
+                Err(_) => log::warn("dial through the relay did not answer; trying the known addresses", json!({"peer": peer.to_string(), "secs": RELAY_DIAL_TIMEOUT.as_secs()})),
+            }
+        }
         for a in &member.addrs {
             if let Ok(sa) = a.parse::<SocketAddr>() {
                 addr = addr.with_ip_addr(sa);
@@ -265,7 +286,8 @@ impl Node {
             .await
             .map_err(|_| anyhow!("{} did not answer in {}s", label(&member, peer), DIAL_TIMEOUT.as_secs()))?
             .with_context(|| format!("connect to {}", label(&member, peer)))?;
-        log::info("connected to member", json!({"peer": peer.to_string(), "name": member.name, "path": selected_kind(&conn)}));
+        log::info("connected to member", json!({"peer": peer.to_string(), "name": member.name, "path": selected_kind(&conn), "conn": conn.stable_id()}));
+        log_paths(conn.clone(), peer, "client");
         self.outgoing.lock().await.insert(peer, conn.clone());
         Ok(conn)
     }
@@ -342,7 +364,9 @@ impl Node {
                 "id": id.to_string(), "name": m.name, "accept": m.accept, "incoming": inc,
                 "forwardPort": forwards.get(id).filter(|(_, t)| !t.is_finished()).map(|(p, _)| *p),
             });
-            let conn = out.or_else(|| incoming.get(id).and_then(|v| v.first()));
+            // The newest live one: while a link flaps, the oldest entry is often a connection
+            // that is about to time out, and its paths say nothing about the current one.
+            let conn = out.or_else(|| incoming.get(id).and_then(|v| v.iter().rev().find(|c| c.close_reason().is_none()).or(v.last())));
             if let Some(c) = conn {
                 p["link"] = link_json(c);
             }
@@ -369,18 +393,55 @@ pub fn selected_kind(conn: &Connection) -> &'static str {
     conn.paths().iter().find(|p| p.is_selected()).map(|p| if p.is_relay() { "relay" } else { "direct" }).unwrap_or("none")
 }
 
+fn ms(d: Duration) -> f64 {
+    (d.as_secs_f64() * 10_000.0).round() / 10.0
+}
+
+/// Each path with both of its ends: the remote address and the local one it is sent from.
+fn path_json(p: &iroh::endpoint::Path<'_>) -> Value {
+    json!({
+        "kind": if p.is_relay() { "relay" } else { "direct" },
+        "addr": format!("{:?}", p.remote_addr()),
+        "local": format!("{:?}", p.local_addr()),
+        "selected": p.is_selected(),
+        "rttMs": ms(p.rtt()),
+    })
+}
+
 fn link_json(conn: &Connection) -> Value {
     let paths = conn.paths();
     let sel = paths.iter().find(|p| p.is_selected());
     json!({
         "path": selected_kind(conn),
-        "rttMs": sel.map(|p| (p.rtt().as_secs_f64() * 10_000.0).round() / 10.0),
-        "paths": paths.iter().map(|p| json!({
-            "kind": if p.is_relay() { "relay" } else { "direct" },
-            "addr": format!("{:?}", p.remote_addr()),
-            "selected": p.is_selected(),
-        })).collect::<Vec<_>>(),
+        "rttMs": sel.map(|p| ms(p.rtt())),
+        "side": if conn.side().is_client() { "client" } else { "server" },
+        "conn": conn.stable_id(),
+        "paths": paths.iter().map(|p| path_json(&p)).collect::<Vec<_>>(),
     })
+}
+
+/// One log line each time a connection's open paths or its selected path change, on both
+/// sides: what is needed to see from the two machines' logs which path each end sends on.
+fn log_paths(conn: Connection, peer: EndpointId, side: &'static str) {
+    tokio::spawn(async move {
+        use n0_future::StreamExt;
+        let id = conn.stable_id();
+        let mut stream = conn.paths_stream();
+        let mut last = String::new();
+        while let Some(list) = stream.next().await {
+            let v: Vec<Value> = list.iter().map(|p| json!({
+                "kind": if p.is_relay() { "relay" } else { "direct" },
+                "addr": format!("{:?}", p.remote_addr()),
+                "local": format!("{:?}", p.local_addr()),
+                "selected": p.is_selected(),
+            })).collect();
+            let s = serde_json::to_string(&v).unwrap_or_default();
+            if s != last {
+                log::info("paths", json!({"peer": peer.to_string(), "side": side, "conn": id, "paths": v}));
+                last = s;
+            }
+        }
+    });
 }
 
 async fn daemon_port(file: &PathBuf) -> Result<u16> {
