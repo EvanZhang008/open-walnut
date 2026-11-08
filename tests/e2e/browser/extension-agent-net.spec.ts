@@ -256,7 +256,7 @@ test('resize sizes the agent window, which stays unfocused and never minimized',
   await act(page, { action: 'close', tab })
 })
 
-test('an agent tab is muted at birth; its media does not play by itself, the agent\'s own click on Play plays it', async () => {
+test('an agent tab is muted at birth; its media does not play by itself, the agent\'s own click on Play asks to play it', async () => {
   const page = ctx.pages()[0]
   const o = await act(page, { action: 'open', url: site('www.portal.test', '/media') })
   const tab = o.body.tab as number
@@ -267,7 +267,14 @@ test('an agent tab is muted at birth; its media does not play by itself, the age
   await media.waitForTimeout(3500)
   expect(await paused()).toBe(true)
   const s = (await act(page, { action: 'snapshot', tab })).body.snapshot as string
+  // A test browser never plays media (src/lib/automation-silence.ts counts every play() it
+  // refuses): the agent's click asked to play, and the hold letting it through is
+  // tests/web/ext-agent-media-hold.test.ts.
+  const plays = () => media.evaluate(() => (window as unknown as { __walnutAudio?: { plays: number } }).__walnutAudio?.plays ?? -1)
+  const before = await plays()
+  expect(before, 'the page silencer runs in an agent tab').toBeGreaterThanOrEqual(0)
   expect((await act(page, { action: 'click', tab, ref: refOf(s, /button "Play"/) })).status).toBe(200)
-  await expect.poll(paused).toBe(false)
+  await expect.poll(plays).toBe(before + 1)
+  expect(await paused()).toBe(true)
   await act(page, { action: 'close', tab })
 })

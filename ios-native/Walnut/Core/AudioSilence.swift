@@ -35,11 +35,12 @@ enum AudioSilence {
     }
 
     /// A web view plays no sound either: its page is silenced from document start, every
-    /// frame included, before any script of its own (an island's, a previewed file's).
-    /// Media muted, Web Audio to the speakers through a gain of zero, speech at volume
-    /// zero, and muted again when the page's own controls unmute it: the web app's silencer (src/lib/automation-silence.ts), which a
-    /// WKWebView never loads and whose `navigator.webdriver` gate is false here. App user
-    /// scripts run even where the page's own JavaScript is off (a letter).
+    /// frame included, before any script of its own (an island's, a previewed file's). Media
+    /// never plays, an AudioContext cannot be made (WebKit has no way to run one without an
+    /// output device), speech is never spoken: the web app's silencer
+    /// (src/lib/automation-silence.ts), which a WKWebView never loads and whose
+    /// `navigator.webdriver` gate is false here. App user scripts run even where the page's
+    /// own JavaScript is off (a letter).
     static func install(on configuration: WKWebViewConfiguration) {
         guard isOn else { return }
         configuration.userContentController.addUserScript(
@@ -48,7 +49,7 @@ enum AudioSilence {
 
     /// ES5, run as it is; tests/web/automation-silence.test.ts runs this exact text against
     /// the same checks as the web silencer.
-    static let webScript = #"(function(){try{var w=globalThis;if(w.__walnutSilent)return;w.__walnutSilent=true;var M=w.HTMLMediaElement&&w.HTMLMediaElement.prototype;if(M){var d=Object.getOwnPropertyDescriptor(M,'muted');if(d&&d.get&&d.set){var s=d.set;Object.defineProperty(M,'muted',{configurable:true,enumerable:d.enumerable,get:d.get,set:function(){s.call(this,true)}})}var p=M.play;if(typeof p==='function'){M.play=function(){try{this.muted=true}catch(e){}return p.apply(this,arguments)}}var q=function(e){var t=e.target;if(t&&M.isPrototypeOf(t)&&!t.muted){try{t.muted=true}catch(x){}}};if(w.document&&w.document.addEventListener){w.document.addEventListener('loadstart',q,true);w.document.addEventListener('play',q,true);w.document.addEventListener('volumechange',q,true)}}var N=w.AudioNode&&w.AudioNode.prototype,D=w.AudioDestinationNode;if(N&&D&&typeof N.connect==='function'){var c=N.connect,z=new WeakMap();N.connect=function(t){var r=Array.prototype.slice.call(arguments,1),x=t instanceof D?t.context:null;if(!x||(w.OfflineAudioContext&&x instanceof w.OfflineAudioContext))return c.apply(this,[t].concat(r));var g=z.get(x);if(!g){g=x.createGain();g.gain.value=0;c.call(g,t);z.set(x,g)}c.apply(this,[g].concat(r));return t}}var S=w.SpeechSynthesis&&w.SpeechSynthesis.prototype;if(S&&typeof S.speak==='function'){var k=S.speak;S.speak=function(u){try{if(u)u.volume=0}catch(e){}return k.call(this,u)}}}catch(e){}})();"#
+    static let webScript = #"(function(){try{var w=globalThis;if(w.__walnutSilent)return;w.__walnutSilent=true;var T={contexts:0,blocked:0,plays:0,speech:0};w.__walnutAudio=T;var R=function(n){var E=w.DOMException;return E?new E('No audio in a test run',n):new Error('No audio in a test run')};var M=w.HTMLMediaElement&&w.HTMLMediaElement.prototype;if(M){var d=Object.getOwnPropertyDescriptor(M,'muted');if(d&&d.get&&d.set){var s=d.set;Object.defineProperty(M,'muted',{configurable:true,enumerable:d.enumerable,get:d.get,set:function(){s.call(this,true)}})}if(typeof M.play==='function'){M.play=function(){T.plays++;try{this.muted=true;if(this.pause)this.pause()}catch(e){}return w.Promise.reject(R('NotAllowedError'))}}var q=function(e){var t=e.target;if(!t||!M.isPrototypeOf(t))return;try{if(!t.muted)t.muted=true;if(e.type==='play'&&t.pause){T.plays++;t.pause()}}catch(x){}};if(w.document&&w.document.addEventListener){w.document.addEventListener('loadstart',q,true);w.document.addEventListener('play',q,true);w.document.addEventListener('volumechange',q,true)}}var names=['AudioContext','webkitAudioContext'];for(var i=0;i<names.length;i++){(function(name){var N=w[name];if(typeof N!=='function'||N.__walnutSilent)return;var dl=!!N.prototype&&typeof N.prototype.setSinkId==='function';var S=function(o){T.contexts++;if(!dl){if(/ WalnutVoiceTest$/.test((w.navigator&&w.navigator.userAgent)||''))return new N(o);T.blocked++;throw R('NotSupportedError')}var p={};if(o)for(var k in o)p[k]=o[k];p.sinkId={type:'none'};return new N(p)};S.prototype=N.prototype;S.__walnutSilent=true;if(dl)N.prototype.setSinkId=function(){return w.Promise.resolve()};w[name]=S})(names[i])}var P=w.AudioNode&&w.AudioNode.prototype,D=w.AudioDestinationNode;if(P&&D&&typeof P.connect==='function'){var c=P.connect,z=new WeakMap();P.connect=function(t){var r=Array.prototype.slice.call(arguments,1),x=t instanceof D?t.context:null;if(!x||(w.OfflineAudioContext&&x instanceof w.OfflineAudioContext))return c.apply(this,[t].concat(r));var g=z.get(x);if(!g){g=x.createGain();g.gain.value=0;c.call(g,t);z.set(x,g)}c.apply(this,[g].concat(r));return t}}var S2=w.SpeechSynthesis&&w.SpeechSynthesis.prototype;if(S2&&typeof S2.speak==='function'){S2.speak=function(){T.speech++}}}catch(e){}})();"#
 
     static var runsInSimulator: Bool {
         #if targetEnvironment(simulator)

@@ -23,8 +23,11 @@ import { silenceAutomatedAudio, AUTOMATION_SILENCE_JS } from '../../web/src/util
 const ROOT = path.resolve(__dirname, '../..');
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
 
-/** A small stand-in for a browser realm: just the classes the silencer touches. */
-function fakeRealm(webdriver: boolean) {
+/**
+ * A small stand-in for a browser realm: just the classes the silencer touches. `sink` makes
+ * its AudioContext one that can run without an output device (Chromium's setSinkId).
+ */
+function fakeRealm(webdriver: boolean, { sink = false } = {}) {
   const connections: Array<[unknown, unknown]> = [];
   class AudioNode {
     context: unknown;
@@ -35,18 +38,23 @@ function fakeRealm(webdriver: boolean) {
   class GainNode extends AudioNode { gain = { value: 1 }; }
   class BaseContext {
     destination: AudioDestinationNode;
-    constructor() { this.destination = new AudioDestinationNode(this); }
+    options: Record<string, unknown> | undefined;
+    constructor(options?: Record<string, unknown>) { this.options = options; this.destination = new AudioDestinationNode(this); }
     createGain() { return new GainNode(this); }
     createOscillator() { return new AudioNode(this); }
   }
   class AudioContext extends BaseContext {}
+  const sinkMoves: unknown[] = [];
+  if (sink) (AudioContext.prototype as unknown as { setSinkId: (id: unknown) => Promise<void> }).setSinkId = (id) => { sinkMoves.push(id); return Promise.resolve(); };
   class OfflineAudioContext extends BaseContext {}
   class HTMLMediaElement {
     private m = false;
     played = 0;
+    paused = true;
     get muted() { return this.m; }
     set muted(v: boolean) { this.m = v; }
-    play() { this.played++; return Promise.resolve(); }
+    play() { this.played++; this.paused = false; return Promise.resolve(); }
+    pause() { this.paused = true; }
   }
   Object.defineProperty(HTMLMediaElement.prototype, 'muted', {
     ...Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'muted'),
@@ -57,42 +65,38 @@ function fakeRealm(webdriver: boolean) {
   const listeners: Record<string, (e: unknown) => void> = {};
   const document = { addEventListener: (t: string, f: (e: unknown) => void) => { listeners[t] = f; } };
   const realm = {
-    navigator: { webdriver }, document,
+    navigator: { webdriver }, document, Promise,
     AudioNode, AudioDestinationNode, AudioContext, OfflineAudioContext, HTMLMediaElement, SpeechSynthesis,
   } as Record<string, unknown>;
-  return { realm, connections, spoken, listeners, AudioContext, OfflineAudioContext, HTMLMediaElement, SpeechSynthesis };
+  return { realm, connections, spoken, listeners, sinkMoves, AudioContext, OfflineAudioContext, HTMLMediaElement, SpeechSynthesis };
 }
 
-function checkSilenced(f: ReturnType<typeof fakeRealm>) {
+type Realm = ReturnType<typeof fakeRealm>;
+const tried = (f: Realm) => f.realm.__walnutAudio as { contexts: number; blocked: number; plays: number; speech: number };
+
+/** Nothing reaches an audio device: no media plays, no context gets an output, no speech. */
+async function checkSilenced(f: Realm) {
   const el = new f.HTMLMediaElement();
   el.muted = false;
-  void el.play();
+  const started = (el.play() as Promise<unknown>).then(() => 'played', (e: Error) => e.message);
+  expect(await started).toBe('No audio in a test run');
+  expect(el.played, 'the native play never runs').toBe(0);
   expect(el.muted).toBe(true);
-  expect(el.played).toBe(1);
   el.muted = false;
   expect(el.muted).toBe(true);
-  // An autoplay element is muted as it starts loading.
+  // An autoplay element is muted as it starts loading and paused as it starts playing.
   const auto = new f.HTMLMediaElement();
-  f.listeners.loadstart?.({ target: auto });
+  f.listeners.loadstart?.({ type: 'loadstart', target: auto });
   expect(auto.muted).toBe(true);
+  auto.paused = false;
+  f.listeners.play?.({ type: 'play', target: auto });
+  expect(auto.paused).toBe(true);
   // The browser's own controls unmute it without the setter: its volumechange mutes it again.
   (auto as unknown as { m: boolean }).m = false;
   expect(f.listeners.volumechange, 'a volumechange listener').toBeTypeOf('function');
-  f.listeners.volumechange({ target: auto });
+  f.listeners.volumechange({ type: 'volumechange', target: auto });
   expect(auto.muted).toBe(true);
-
-  const ctx = new f.AudioContext();
-  const osc = ctx.createOscillator();
-  expect(osc.connect(ctx.destination)).toBe(ctx.destination);
-  const toDest = f.connections.filter(([, to]) => to === ctx.destination);
-  expect(toDest).toHaveLength(1);
-  const gain = toDest[0][0] as { gain: { value: number } };
-  expect(gain).not.toBe(osc);
-  expect(gain.gain.value).toBe(0);
-  expect(f.connections).toContainEqual([osc, gain]);
-  // A second node reuses the same zero gain.
-  ctx.createOscillator().connect(ctx.destination);
-  expect(f.connections.filter(([, to]) => to === ctx.destination)).toHaveLength(1);
+  expect(tried(f).plays).toBe(2);
 
   // An offline context renders into a buffer: left alone.
   const off = new f.OfflineAudioContext();
@@ -101,14 +105,47 @@ function checkSilenced(f: ReturnType<typeof fakeRealm>) {
   expect(f.connections).toContainEqual([o2, off.destination]);
 
   new f.SpeechSynthesis().speak({ volume: 1 });
-  expect(f.spoken[0].volume).toBe(0);
+  expect(f.spoken, 'speech is never spoken').toHaveLength(0);
+  expect(tried(f).speech).toBe(1);
+}
+
+/** Where the engine has no way to run a context without a device, making one fails. */
+function checkNoContext(f: Realm) {
+  const Ctor = f.realm.AudioContext as new () => unknown;
+  expect(() => new Ctor()).toThrow('No audio in a test run');
+  expect(tried(f)).toMatchObject({ contexts: 1, blocked: 1 });
+}
+
+/** Where it has (Chromium), every context is made without a device and stays so. */
+async function checkDevicelessContext(f: Realm) {
+  const Ctor = f.realm.AudioContext as new (o?: Record<string, unknown>) => InstanceType<typeof f.AudioContext>;
+  const ctx = new Ctor({ latencyHint: 'interactive' });
+  expect(ctx).toBeInstanceOf(f.AudioContext);
+  expect(ctx).toBeInstanceOf(Ctor);
+  expect(ctx.options).toEqual({ latencyHint: 'interactive', sinkId: { type: 'none' } });
+  await (ctx as unknown as { setSinkId: (id: string) => Promise<void> }).setSinkId('');
+  expect(f.sinkMoves, 'never moved onto a device').toEqual([]);
+  expect(tried(f)).toMatchObject({ contexts: 1, blocked: 0 });
+  // Wired to its destination, it still goes through a gain of zero.
+  const osc = ctx.createOscillator();
+  expect(osc.connect(ctx.destination)).toBe(ctx.destination);
+  const toDest = f.connections.filter(([, to]) => to === ctx.destination);
+  expect(toDest).toHaveLength(1);
+  const gain = toDest[0][0] as { gain: { value: number } };
+  expect(gain).not.toBe(osc);
+  expect(gain.gain.value).toBe(0);
+  expect(f.connections).toContainEqual([osc, gain]);
+}
+
+/** Every copy of the silencer, run on its own in a realm, against every check. */
+async function checkAll(run: (f: Realm) => void) {
+  const a = fakeRealm(true); run(a); await checkSilenced(a); checkNoContext(a);
+  const b = fakeRealm(true, { sink: true }); run(b); await checkDevicelessContext(b);
 }
 
 describe('the page silencer', () => {
-  it('silences media, Web Audio and speech under automation', () => {
-    const f = fakeRealm(true);
-    silenceAutomatedAudio(f.realm);
-    checkSilenced(f);
+  it('opens no audio output under automation: no media, no context with a device, no speech', async () => {
+    await checkAll((f) => silenceAutomatedAudio(f.realm));
   });
 
   it('leaves a person\'s browser alone', () => {
@@ -119,6 +156,9 @@ describe('the page silencer', () => {
     const el = new f.HTMLMediaElement();
     void el.play();
     expect(el.muted).toBe(false);
+    expect(el.played).toBe(1);
+    expect(f.realm.AudioContext).toBe(f.AudioContext);
+    expect(f.realm.__walnutAudio).toBeUndefined();
   });
 
   it('installs once', () => {
@@ -129,10 +169,32 @@ describe('the page silencer', () => {
     expect(f.HTMLMediaElement.prototype.play).toBe(play);
   });
 
-  it('runs as a frame\'s source on its own, with nothing from this module', () => {
-    const f = fakeRealm(true);
-    vm.runInNewContext(AUTOMATION_SILENCE_JS, f.realm);
-    checkSilenced(f);
+  it('runs as a frame\'s source on its own, with nothing from this module', async () => {
+    await checkAll((f) => vm.runInNewContext(AUTOMATION_SILENCE_JS, f.realm));
+  });
+
+  it('every run a Mac\'s runner starts gets the same rules, whatever branch it builds', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const preload = require('../e2e/browser/pw-silence-preload.cjs') as { SILENCE_JS: string; install: (core: unknown) => boolean };
+    await checkAll((f) => vm.runInNewContext(preload.SILENCE_JS, f.realm));
+    const person = fakeRealm(false);
+    vm.runInNewContext(preload.SILENCE_JS, person.realm);
+    expect(person.realm.__walnutSilent, 'a person\'s browser is untouched').toBeUndefined();
+    // It hands every new browser context that script, through the runner's instrumentation.
+    const listeners: Array<{ runAfterCreateBrowserContext: (c: unknown) => Promise<void> }> = [];
+    const flag = Symbol.for('walnut.pwSilence');
+    const had = (globalThis as Record<symbol, unknown>)[flag];
+    delete (globalThis as Record<symbol, unknown>)[flag];
+    try {
+      expect(preload.install({ _instrumentation: { addListener: (l: (typeof listeners)[number]) => listeners.push(l) } })).toBe(true);
+      expect(preload.install({ _instrumentation: { addListener: (l: (typeof listeners)[number]) => listeners.push(l) } }), 'once per process').toBe(false);
+    } finally { (globalThis as Record<symbol, unknown>)[flag] = had; }
+    const added: string[] = [];
+    await listeners[0].runAfterCreateBrowserContext({ addInitScript: async (x: { content: string }) => { added.push(x.content); } });
+    expect(added).toEqual([preload.SILENCE_JS]);
+    // The iOS web views run the very same text, with no gate.
+    const swift = /static let webScript = #"([\s\S]*?)"#/.exec(read('ios-native/Walnut/Core/AudioSilence.swift'))?.[1];
+    expect(preload.SILENCE_JS).toContain(swift!);
   });
 
   it('every Walnut-built frame runs it before any script of its content', async () => {
@@ -147,6 +209,40 @@ describe('the page silencer', () => {
     const doc = withPreviewBridge('<html><head><script>new Audio("a.mp3").play()</script></head></html>');
     expect(doc.indexOf(AUTOMATION_SILENCE_JS)).toBeGreaterThan(-1);
     expect(doc.indexOf(AUTOMATION_SILENCE_JS)).toBeLessThan(doc.indexOf('new Audio'));
+  });
+});
+
+describe('the WebKit voice specs, the one place a test browser may make an AudioContext', () => {
+  // Their synthetic microphone and the app's meter need one; nothing they make reaches a
+  // destination but through a gain of zero, and no media or speech plays. A new spec that
+  // claims the exemption fails here until it is listed, with why.
+  const VOICE_TEST_SPECS: Record<string, string> = {
+    'tests/e2e/browser/mic-stall.webkit.spec.ts': 'the mic warning in WebKit, from a synthetic mic',
+    'tests/e2e/browser/stt-failure-recovery.webkit.spec.ts': 'dictation failures in WebKit, from a synthetic mic',
+  };
+
+  it('only the listed specs claim it', () => {
+    const found = filesMatching(['tests', 'web', 'src', 'scripts', 'plugin-store', 'packages'], /WalnutVoiceTest'/, /\.(ts|tsx|js|mjs|cjs)$/, /automation-silence\.test\.ts$/);
+    expect(found).toEqual(Object.keys(VOICE_TEST_SPECS).sort());
+  });
+
+  it('gets a context there, still wired through a gain of zero, and nothing else', async () => {
+    for (const run of [
+      (f: Realm) => silenceAutomatedAudio(f.realm),
+      (f: Realm) => vm.runInNewContext(AUTOMATION_SILENCE_JS, f.realm),
+    ]) {
+      const f = fakeRealm(true);
+      (f.realm.navigator as { userAgent?: string }).userAgent = 'Mozilla/5.0 Safari/605.1.15 WalnutVoiceTest';
+      run(f);
+      const Ctor = f.realm.AudioContext as new () => InstanceType<typeof f.AudioContext>;
+      const ctx = new Ctor();
+      expect(ctx).toBeInstanceOf(f.AudioContext);
+      const osc = ctx.createOscillator();
+      osc.connect(ctx.destination);
+      const toDest = f.connections.filter(([, to]) => to === ctx.destination);
+      expect((toDest[0][0] as { gain: { value: number } }).gain.value).toBe(0);
+      await checkSilenced(f);
+    }
   });
 });
 
@@ -277,12 +373,14 @@ describe('ratchet: the iOS app makes no sound where a test or an agent runs it',
     for (const f of found) expect(read(f), f).toMatch(/AudioSilence\.install\(on: /);
   });
 
-  it('its web view script silences a page like the web silencer, with no webdriver gate', () => {
+  it('its web view script silences a page like the web silencer, with no webdriver gate', async () => {
     const src = /static let webScript = #"([\s\S]*?)"#/.exec(read('ios-native/Walnut/Core/AudioSilence.swift'))?.[1];
     expect(src).toBeTruthy();
-    const f = fakeRealm(false);
-    vm.runInNewContext(src!, f.realm);
-    checkSilenced(f);
+    await checkAll((f) => vm.runInNewContext(src!, f.realm));
+    // No webdriver gate: a person's realm in the app is silenced too.
+    const g = fakeRealm(false);
+    vm.runInNewContext(src!, g.realm);
+    await checkSilenced(g);
   });
 
   it('is silent in the Simulator and under tests, never on a device', () => {
