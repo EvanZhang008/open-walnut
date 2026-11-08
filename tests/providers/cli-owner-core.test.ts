@@ -283,9 +283,11 @@ describe('the process table check', () => {
 
   it('reads the env on linux from /proc', async () => {
     const o = owner('b', 200, { platform: 'linux' })
-    // /proc/<pid>/environ of a scripted pid does not exist: unreadable, so it counts.
-    procs.set(407, { startTime: 's', args: cliArgs(SID) })
-    expect(await refusal(o.claim(SID))).toMatchObject({ pid: 407 })
+    // /proc/<pid>/environ of a scripted pid does not exist: unreadable, so it counts. The pid is
+    // above Linux's largest pid_max (2^22), so no real process on the test host can have it.
+    const scripted = 4_194_399
+    procs.set(scripted, { startTime: 's', args: cliArgs(SID) })
+    expect(await refusal(o.claim(SID))).toMatchObject({ pid: scripted })
   })
 })
 
