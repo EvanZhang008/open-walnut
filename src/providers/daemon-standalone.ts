@@ -190,6 +190,7 @@ import { createClockSchedule } from './clock-schedule-core.js'
 import { resolvePathHostLocal } from './path-resolve-core.js'
 import { createDaemonPorts } from './port-scan-core.js'
 import { archiveTranscripts, bunTranspilerCacheDirs, ensureTaskDir, liveTranscriptIdsFromPs, isTaskDirId, listTaskDirs, plainFindResults, pruneHostCaches, pruneTaskBuilds, pruneTaskDirs, readOpenPaths, removeTaskDirs, restoreForRead, restoreSessionAnywhere, resumeSourceId, setArchiveLog, taskDirInUse, taskDirPath, taskDirRoot, taskDirSizes, type HostWork } from './task-dir-core.js'
+import { ensurePwSilencePreload, pwSilenceDir, withPwSilenceNodeOptions } from './pw-silence-core.js'
 import { createHostExec } from './host-exec-core.js'
 import { createNetSupervisor, netStateDir, resolveNetBinary } from './net-core.js'
 import { createHostMcp } from './host-mcp-core.js'
@@ -289,6 +290,12 @@ const HOME_DIR = process.env.WALNUT_HOME_OVERRIDE || process.env.HOME || '/root'
 // Each task's durable working directory on this host (src/lib/task-dir.ts).
 // Keep in sync with daemon-source.ts.
 const TASK_DIR_ROOT = taskDirRoot(process.env, HOME_DIR)
+// Every session starts with the page silencer's preload in NODE_OPTIONS, so any Playwright it
+// runs is silent whatever branch it builds (pw-silence-core.ts). Keep in sync with daemon-source.ts.
+const PW_SILENCE_DIR = pwSilenceDir(TASK_DIR_ROOT)
+function pwSilenceNodeOptions(current: string | undefined): string | undefined {
+  return withPwSilenceNodeOptions(current, ensurePwSilencePreload(PW_SILENCE_DIR))
+}
 // Streams live under the user's HOME so they SURVIVE REBOOTS — /tmp is wiped on
 // macOS/Linux restarts, which vaporized every stream file mid-session and left
 // walnut's stored byte watermarks pointing into dead files (incident 019a7fe5:
@@ -6249,6 +6256,8 @@ async function cmdAcpStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<
     // '' unsets one this daemon inherited (mergeAcpSpawnEnv drops empty values).
     WALNUT_TASK_DIR: taskDir ?? '',
     WALNUT_SECRETS_DIR: SECRETS_ROOT,
+    // The page silencer, as for the native spawn (pw-silence-core.ts).
+    NODE_OPTIONS: pwSilenceNodeOptions(params.env?.NODE_OPTIONS ?? process.env.NODE_OPTIONS) ?? '',
   }
   return sessionStartGate.run(params.sid, async () => {
     if (!params.providerSessionId && fs.existsSync(cancelledStartPath(params.sid))) throw new Error('Initial start was cancelled; retry task_start on the same task')
@@ -6731,6 +6740,8 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
       WALNUT_TASK_DIR: taskDir ?? undefined,
       // Where the secrets the user shared with this host are, one file each.
       WALNUT_SECRETS_DIR: SECRETS_ROOT,
+      // The page silencer, first in NODE_OPTIONS (pw-silence-core.ts). Keep in sync with daemon-source.ts.
+      NODE_OPTIONS: pwSilenceNodeOptions(secretsSessionEnv().NODE_OPTIONS ?? process.env.NODE_OPTIONS),
       // Never let OUR watchdog pid leak into the CLI's env. A CLI session that
       // runs `npm run dev:prod` would otherwise hand this stale pid to the
       // PRODUCTION daemon, whose watchdog would trip on the long-dead pid and

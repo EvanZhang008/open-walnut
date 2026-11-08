@@ -7085,7 +7085,7 @@ async function cmdAcpStart(ws, id, cmd) {
   params.env = Object.assign({}, secretsSessionEnv(), params.env, {
     WALNUT_AGENT_SOCKET: GATEWAY_SOCK_PATH,
     PATH: sessionPathWithShim(process.env.PATH || '', walnutThroughGateway(params.env)),
-  }, { WALNUT_TASK_DIR: acpTaskDir || '', WALNUT_SECRETS_DIR: SECRETS_ROOT || '' });
+  }, { WALNUT_TASK_DIR: acpTaskDir || '', WALNUT_SECRETS_DIR: SECRETS_ROOT || '', NODE_OPTIONS: pwSilenceNodeOptions((params.env && params.env.NODE_OPTIONS) || process.env.NODE_OPTIONS) || '' });
   return sessionStartGate.run(params.sid, async function () {
     if (!params.providerSessionId && fs.existsSync(cancelledStartPath(params.sid))) throw new Error('Initial start was cancelled; retry task_start on the same task');
     const resp = await acp.acpStart(ws, params);
@@ -7535,6 +7535,8 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
       // task's directory. Keep in sync with daemon-standalone.ts.
       WALNUT_TASK_DIR: taskDir || undefined,
       WALNUT_SECRETS_DIR: SECRETS_ROOT || undefined,
+      // The page silencer, first in NODE_OPTIONS. Keep in sync with daemon-standalone.ts.
+      NODE_OPTIONS: pwSilenceNodeOptions(secretsSessionEnv().NODE_OPTIONS || process.env.NODE_OPTIONS),
       PATH: sessionPathWithShim((launch.nodeDir ? launch.nodeDir + ':' : '') + (process.env.PATH || ''), walnutThroughGateway(settingsEnvOf(launch.args))),
       // Never let OUR watchdog pid leak into the CLI's env — a CLI session that
       // runs a dev:prod deploy would hand this stale pid to the PRODUCTION
@@ -13455,6 +13457,13 @@ async function cmdTranscriptRestore(ws, id, cmd) {
   } catch (err) {
     sendError(ws, id, 'transcript.restore failed: ' + err.message);
   }
+}
+// Every session starts with the page silencer's preload in NODE_OPTIONS (pw-silence-core.ts,
+// carried by the task-dir-core sidecar; an older sidecar adds nothing). Mirrors daemon-standalone.ts.
+const PW_SILENCE_DIR = taskDirCore && TASK_DIR_ROOT && typeof taskDirCore.pwSilenceDir === 'function' ? taskDirCore.pwSilenceDir(TASK_DIR_ROOT) : null;
+function pwSilenceNodeOptions(current) {
+  if (!PW_SILENCE_DIR) return current;
+  try { return taskDirCore.withPwSilenceNodeOptions(current, taskDirCore.ensurePwSilencePreload(PW_SILENCE_DIR)); } catch (err) { return current; }
 }
 // Fleet secrets sidecar (secrets-core.cjs): the secrets the user shared with this
 // host. 'secrets-v1' is advertised only when it loads. Mirrors daemon-standalone.ts.

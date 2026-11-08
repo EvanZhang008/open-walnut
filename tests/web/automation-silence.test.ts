@@ -19,6 +19,7 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { execFileSync } from 'node:child_process';
 import { silenceAutomatedAudio, AUTOMATION_SILENCE_JS } from '../../web/src/utils/automation-silence';
+import { PW_SILENCE_JS, pwSilenceDir, pwSilencePreloadSource, withPwSilenceNodeOptions } from '../../src/providers/pw-silence-core';
 
 const ROOT = path.resolve(__dirname, '../..');
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
@@ -214,6 +215,22 @@ describe('the page silencer', () => {
     // The iOS web views run the very same text, with no gate.
     const swift = /static let webScript = #"([\s\S]*?)"#/.exec(read('ios-native/Walnut/Core/AudioSilence.swift'))?.[1];
     expect(preload.SILENCE_JS).toContain(swift!);
+    expect(swift).toBe(PW_SILENCE_JS);
+    // The committed copy is the generated one (scripts/pw-silence-preload.ts writes it).
+    expect(read('tests/e2e/browser/pw-silence-preload.cjs')).toBe(pwSilencePreloadSource());
+  });
+
+  it('a session\'s NODE_OPTIONS gets the preload first, once, and keeps what it had', () => {
+    const f = '/state/pw-silence/pw-silence-preload.cjs';
+    expect(withPwSilenceNodeOptions(undefined, f)).toBe(`--require "${f}"`);
+    expect(withPwSilenceNodeOptions('  ', f)).toBe(`--require "${f}"`);
+    expect(withPwSilenceNodeOptions('--max-old-space-size=8192', f)).toBe(`--require "${f}" --max-old-space-size=8192`);
+    const once = withPwSilenceNodeOptions('--inspect', f);
+    expect(withPwSilenceNodeOptions(once, f), 'never twice').toBe(once);
+    // No file (off, unwritable) or a path the quoting cannot carry: unchanged, never a broken --require.
+    expect(withPwSilenceNodeOptions('--inspect', null)).toBe('--inspect');
+    expect(withPwSilenceNodeOptions(undefined, '/a"b/pw-silence-preload.cjs')).toBeUndefined();
+    expect(pwSilenceDir('/home/u/.local/state/open-walnut/tasks')).toBe('/home/u/.local/state/open-walnut/pw-silence');
   });
 
   it('every Walnut-built frame runs it before any script of its content', async () => {
