@@ -59,6 +59,7 @@ const STORE_LOCKS = new Set<string>([
   'src/utils/fs.ts: filePath',                                  // updateJsonFile, Walnut JSON stores only
   'src/utils/user-file-lock.ts: await userFileLockTarget(filePath)', // withUserFileLock itself
   'src/web/routes/drafts.ts: DRAFTS_FILE()',                    // WALNUT_HOME/local/drafts.json, unsent input drafts
+  'src/web/routes/memory.ts: file',                             // MEMORY.md / USER.md under WALNUT_HOME: bounded-memory.ts's lock
 ]);
 
 /** Files a person's content is written through: each must lock with withUserFileLock. */
