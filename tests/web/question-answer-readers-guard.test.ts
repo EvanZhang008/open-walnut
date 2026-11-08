@@ -131,8 +131,11 @@ Read the split rows (tagged-reply-split.ts) or pageKeyOfBlock (live), never "the
     expect(history.match(/\bblockTagKeys\(/g)?.length ?? 0).toBe(1);
     expect(history).toMatch(/const placeKeyOfBlock = \(index: number\): string => \{\n\s*const byLine = lineOwners\[index\]/);
     // A strict question owns only a block opening with its tag; any other block
-    // it would own by place reads in the main conversation.
-    expect(history).toMatch(/const pageKeyOfBlock = \(index: number\): string => \{\n\s*const spanKey = strictSpanKeyOfBlock\(blocks\[index\]\);\n\s*if \(spanKey !== null\) return spanKey;\n\s*const key = placeKeyOfBlock\(index\);\n\s*return strictAsks\.byKey\.has\(key\) \? ROOT_THREAD_KEY : key;/);
+    // it would own by place reads in the main conversation, except a card about
+    // the turn that the transcript has no row for (utils/stream-block-page.ts).
+    expect(history).toMatch(/const pageKeyOfBlock = \(index: number\): string => pageOfStreamBlock\(\n\s*blocks\[index\], strictSpanKeyOfBlock\(blocks\[index\]\), placeKeyOfBlock\(index\),\n\s*\(key\) => strictAsks\.byKey\.has\(key\), ROOT_THREAD_KEY,\n\s*\);/);
+    const page = read('web/src/utils/stream-block-page.ts');
+    expect(page).toMatch(/if \(spanKey !== null\) return spanKey;\n\s*if \(!isStrictKey\(placeKey\)\) return placeKey;\n\s*return block\?\.type === 'system' && !hasTranscriptTwin\(block\) \? placeKey : rootKey;/);
     expect(history.match(/\bplaceKeyOfBlock\(/g)?.length ?? 0).toBe(1);
     // The `[Qn]` tag never files a strict question's text.
     expect(history.match(/\bkeyBySeq\b/g)?.length ?? 0).toBe(4);
