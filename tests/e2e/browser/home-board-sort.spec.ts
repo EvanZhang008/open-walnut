@@ -1,5 +1,7 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import { isolateUiPrefs } from './todo-panel-helpers';
+import { discoverBrowserFixture } from './codex-test-audit';
+import { kanbanApi, startSession } from './board-kanban-fixture';
 
 // The board's Sort mode and its Move menu's snooze and done rows (2026-11-07, the user: "so many
 // task ... not easy to quick sort"): every decision is one tap, writes the task, and can be undone.
@@ -16,7 +18,8 @@ async function create(request: APIRequestContext, title: string, fields: Record<
 const read = async (request: APIRequestContext, id: string) => (await (await request.get(`/api/tasks/${id}`)).json()).task;
 const tierOf = (t: { pinned?: boolean; focus_tier?: string }) => !t.pinned ? 'unpinned' : t.focus_tier ?? 'satellite';
 
-async function open(page: Page, search: string) {
+/** Opens Sort on these tiers ([] = every tier); the filter is kept, so every test sets its own. */
+async function open(page: Page, search: string, tiers: string[] = ['unpinned']) {
   await isolateUiPrefs(page);
   await page.setContent(`<a href="http://localhost:${process.env.PW_TEST_PORT ?? 3457}/">Open Walnut</a>`);
   await page.getByRole('link', { name: 'Open Walnut', exact: true }).click();
@@ -26,7 +29,17 @@ async function open(page: Page, search: string) {
   await expect(page.getByTestId('home-board')).toBeVisible();
   await page.getByTestId('home-board').getByRole('button', { name: 'Sort', exact: true }).click();
   await expect(page.getByTestId('quick-sort')).toBeVisible();
+  await setTiers(page, tiers);
   await page.getByRole('textbox', { name: 'Search board tasks' }).fill(search);
+}
+async function setTiers(page: Page, tiers: string[]) {
+  const filter = page.getByTestId('quick-sort-filter');
+  await filter.locator('[data-sort-filter-tier=""]').click();
+  for (const tier of tiers) await filter.locator(`[data-sort-filter-tier="${tier}"]`).click();
+}
+async function pickProject(page: Page, name: string) {
+  await page.getByTestId('quick-sort-filter').locator('[data-sort-filter="project"]').click();
+  await page.getByRole('listbox', { name: 'Sort which project' }).getByRole('option', { name, exact: true }).click();
 }
 const sortCard = (page: Page, id: string) => page.locator(`[data-sort-card="${id}"]`);
 
@@ -146,13 +159,16 @@ test('projects: a whole project to one tier, its own queue, and the view is kept
   await expect.poll(async () => tierOf(await read(request, ids.b2))).toBe(before.b2);
   await card.locator('[data-sort-action="tasks"]').click();
   await expect(sort).toHaveAttribute('data-view', 'tasks');
-  await expect(sort).toContainText(`Sorting ${other}`);
+  const projectPick = sort.locator('[data-sort-filter="project"]');
+  await expect(projectPick).toHaveText(`${other} ▾`);
+  // A project's own tasks, every tier of it.
+  await expect(sort.locator('[data-sort-filter-tier=""]')).toHaveAttribute('aria-pressed', 'true');
   await expect(sort.locator('[data-sort-card]')).toHaveCount(2);
   await page.reload();
   await expect(page.getByTestId('home-board')).toHaveAttribute('data-mode', 'sort');
-  await expect(page.getByTestId('quick-sort')).toContainText(`Sorting ${other}`);
-  await page.getByTestId('quick-sort').getByRole('button', { name: 'All projects', exact: true }).click();
-  await expect(page.getByTestId('quick-sort').getByRole('button', { name: /^Unsorted/ })).toBeVisible();
+  await expect(page.getByTestId('quick-sort').locator('[data-sort-filter="project"]')).toHaveText(`${other} ▾`);
+  await pickProject(page, 'All projects');
+  await expect(page.getByTestId('quick-sort').locator('[data-sort-filter="project"]')).toHaveText('All projects ▾');
 });
 
 test('the pin board Move menu snoozes, clears a snooze and marks done', async ({ page, request }) => {
@@ -257,14 +273,14 @@ test('a tier write refused for a subtask keeps the leader sorted, and Undo moves
 
 test('the Inbox project card sorts the Inbox tasks, pinned ones included', async ({ page, request }) => {
   const id = await create(request, 'Sort inbox pinned task', { project: '', pinned: true, focus_tier: 'focus' });
-  await open(page, '');
+  await open(page, '', []);
   const sort = page.getByTestId('quick-sort');
   await sort.getByRole('button', { name: 'Projects', exact: true }).click();
   await page.getByRole('textbox', { name: 'Search board tasks' }).fill('Sort inbox pinned task');
   await page.locator('[data-sort-project=""] [data-sort-action="tasks"]').click();
-  await expect(sort).toContainText('Sorting Inbox');
+  await expect(sort.locator('[data-sort-filter="project"]')).toHaveText('Inbox ▾');
   await expect(sortCard(page, id)).toBeVisible();
-  await sort.getByRole('button', { name: 'All projects', exact: true }).click();
+  await pickProject(page, 'All projects');
 });
 
 test('each board card has Snooze and Done right on it, and Done can be undone', async ({ page, request }) => {
@@ -288,4 +304,163 @@ test('each board card has Snooze and Done right on it, and Done can be undone', 
   await expect(page.locator(`[data-board-task="${id}"]`)).toBeVisible();
   await board.getByRole('button', { name: 'By status', exact: true }).click();
   await expect(board.getByRole('button', { name: 'Snooze Sort card buttons task', exact: true })).toBeVisible();
+});
+
+// 2026-11-07, the user: Sort must not walk every task on the board; it opens on a filter he can see and
+// change (a tier, a project, a folder, how long nothing happened), each card says how long it has sat,
+// and a Reply sends his words to the task, after which the card leaves the deck.
+test('the deck opens on Focus and follows the tier, project, folder and no-action filters', async ({ page, request }) => {
+  const tag = `Sortfilter ${Date.now().toString(36)}`;
+  const focusId = await create(request, `${tag} focus`, { pinned: true, focus_tier: 'focus' });
+  const looseId = await create(request, `${tag} loose`);
+  const betaId = await create(request, `${tag} beta`, { project: other, pinned: true, focus_tier: 'focus' });
+  const folder = await (await request.post('/api/tasks/folders', { data: { label: `${tag} folder`, project } })).json();
+  const sub = await (await request.post('/api/tasks/folders', { data: { label: `${tag} subfolder`, project, parent_id: folder.group_id } })).json();
+  expect((await request.post(`/api/tasks/groups/${sub.group_id}/add`, { data: { task_ids: [looseId] } })).ok()).toBe(true);
+  await page.addInitScript(() => { for (const k of Object.keys(localStorage)) if (k.includes('sortFilter')) localStorage.removeItem(k); });
+  await isolateUiPrefs(page);
+  await page.setContent(`<a href="http://localhost:${process.env.PW_TEST_PORT ?? 3457}/">Open Walnut</a>`);
+  await page.getByRole('link', { name: 'Open Walnut', exact: true }).click();
+  await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 90_000 });
+  await page.getByRole('button', { name: 'Open task board', exact: true }).click();
+  await page.getByTestId('home-board').getByRole('button', { name: 'Sort', exact: true }).click();
+  const sort = page.getByTestId('quick-sort');
+  const filter = page.getByTestId('quick-sort-filter');
+  // The default: Focus only, on screen.
+  await expect(filter.locator('[data-sort-filter-tier="focus"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(filter.locator('[data-sort-filter-tier="unpinned"]')).toHaveAttribute('aria-pressed', 'false');
+  await page.getByRole('textbox', { name: 'Search board tasks' }).fill(tag);
+  await expect(sort.locator('[data-sort-card]')).toHaveCount(2);
+  await expect(sortCard(page, looseId)).toHaveCount(0);
+  // A second tier adds to it; Every tier takes them all.
+  await filter.locator('[data-sort-filter-tier="unpinned"]').click();
+  await expect(sort.locator('[data-sort-card]')).toHaveCount(3);
+  await filter.locator('[data-sort-filter-tier="focus"]').click();
+  await expect(sort.locator('[data-sort-card]')).toHaveCount(1);
+  await setTiers(page, []);
+  await expect(sort.locator('[data-sort-card]')).toHaveCount(3);
+  // A project.
+  await pickProject(page, other);
+  await expect(sort.locator('[data-sort-card]')).toHaveCount(1);
+  await expect(sortCard(page, betaId)).toBeVisible();
+  await pickProject(page, project);
+  // A folder takes its subfolders.
+  await filter.locator('[data-sort-filter="folder"]').click();
+  await page.getByRole('listbox', { name: 'Sort which folder' }).getByRole('option', { name: `${tag} folder`, exact: true }).click();
+  await expect(sort.locator('[data-sort-card]')).toHaveCount(1);
+  await expect(sortCard(page, looseId)).toBeVisible();
+  // Escape closes the menu, not the board.
+  await filter.locator('[data-sort-filter="folder"]').click();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('listbox', { name: 'Sort which folder' })).toHaveCount(0);
+  await expect(page.getByTestId('home-board')).toBeVisible();
+  // Nothing made today has gone 7 days with no action.
+  await filter.locator('[data-sort-filter-idle="7"]').click();
+  await expect(page.getByTestId('quick-sort-empty')).toContainText('No open task left under this filter');
+  await page.getByTestId('quick-sort-empty').getByRole('button', { name: 'Sort every open task' }).click();
+  await expect(filter.locator('[data-sort-filter-tier=""]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(filter.locator('[data-sort-filter-idle="0"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(sort.locator('[data-sort-card]')).toHaveCount(3);
+  // A fresh task has sat less than a day: no age tags.
+  await expect(sortCard(page, focusId).locator('[data-sort-age]')).toHaveCount(0);
+});
+
+test('Reply sends his words to the task\'s session and the card leaves; a task with no session starts with them', async ({ page, request }) => {
+  const { fixtureRoot } = await discoverBrowserFixture(Number(process.env.PW_TEST_PORT ?? 3457));
+  const api = kanbanApi(Number(process.env.PW_TEST_PORT ?? 3457), fixtureRoot);
+  const withSession = await create(request, 'Sort reply live task');
+  const sessionId = await startSession(api, withSession, 'hello from the test');
+  await expect.poll(async () => (await read(request, withSession)).session_id).toBe(sessionId);
+  const fresh = await create(request, 'Sort reply fresh task');
+  await open(page, 'Sort reply', []);
+  const sort = page.getByTestId('quick-sort');
+  const words = `Please wrap this up ${Date.now().toString(36)}`;
+  await sortCard(page, withSession).locator('[data-sort-action="reply"]').click();
+  const box = sortCard(page, withSession).getByRole('textbox', { name: 'Reply to Sort reply live task' });
+  await expect(box).toBeFocused();
+  // Escape closes the reply, keeps the card and the board.
+  await box.fill('draft words');
+  await page.keyboard.press('Escape');
+  await expect(sortCard(page, withSession).getByTestId('quick-sort-reply')).toHaveCount(0);
+  await expect(page.getByTestId('home-board')).toBeVisible();
+  // R opens it again with the words kept (they are the session's draft).
+  await sortCard(page, withSession).click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press('r');
+  await expect(box).toHaveValue('draft words');
+  await box.fill(words);
+  await page.keyboard.press('Enter');
+  await expect(sortCard(page, withSession)).toHaveCount(0);
+  await expect(sort.locator('.quick-sort-toast')).toContainText('Sent your reply to "Sort reply live task"');
+  await expect(sort.locator('.quick-sort-toast').getByRole('button', { name: 'Undo' })).toHaveCount(0);
+  await expect(sort.getByTestId('quick-sort-tally')).toContainText('Replied 1');
+  await expect.poll(async () => JSON.stringify(await (await request.get(`/api/sessions/${sessionId}/history`)).json()), { timeout: 30_000 }).toContain(words);
+
+  // No session yet: the start carries his words as its first message.
+  let startBody: unknown = null;
+  await page.route(`**/api/v1/tasks/${fresh}/start`, async route => { startBody = route.request().postDataJSON(); await route.fulfill({ status: 202, json: { taskId: fresh, started: true } }); });
+  await sortCard(page, fresh).locator('[data-sort-action="reply"]').click();
+  await sortCard(page, fresh).getByRole('textbox', { name: 'Reply to Sort reply fresh task' }).fill('Start on the draft');
+  await sortCard(page, fresh).locator('[data-sort-reply-send]').click();
+  await expect(sortCard(page, fresh)).toHaveCount(0);
+  expect(startBody).toEqual({ message: 'Start on the draft' });
+});
+
+test('a reply the task did not take keeps the card and the words, with the reason', async ({ page, request }) => {
+  const id = await create(request, 'Sort reply refused task');
+  await open(page, 'Sort reply refused task');
+  await page.route(`**/api/v1/tasks/${id}/start`, route => route.fulfill({ status: 409, json: { error: 'No host can run it now' } }));
+  await sortCard(page, id).locator('[data-sort-action="reply"]').click();
+  const box = sortCard(page, id).getByRole('textbox', { name: 'Reply to Sort reply refused task' });
+  await box.fill('Keep these words');
+  await page.keyboard.press('Enter');
+  await expect(sortCard(page, id).getByRole('alert')).toContainText("Couldn't send");
+  await expect(box).toHaveValue('Keep these words');
+  await expect(page.getByTestId('quick-sort')).toContainText('0 sorted this round');
+});
+
+// Review round 2: a reply leaves the deck only once the words are known to be with the task.
+test('a send retried after a lost answer is the same message, and a start that fails later keeps the words', async ({ page, request }) => {
+  const { fixtureRoot } = await discoverBrowserFixture(Number(process.env.PW_TEST_PORT ?? 3457));
+  const api = kanbanApi(Number(process.env.PW_TEST_PORT ?? 3457), fixtureRoot);
+  const live = await create(request, 'Sort retry live task');
+  const sessionId = await startSession(api, live, 'hello again');
+  await expect.poll(async () => (await read(request, live)).session_id).toBe(sessionId);
+  const late = await create(request, 'Sort retry late start task');
+  await open(page, 'Sort retry', []);
+  const ids: string[] = [];
+  let lose = true;
+  await page.route(`**/api/v1/sessions/${sessionId}/messages`, async route => {
+    ids.push(route.request().postDataJSON().messageId);
+    // The first one reaches the server, its answer is lost.
+    if (lose) { lose = false; await route.fetch(); await route.abort('connectionreset'); return; }
+    await route.continue();
+  });
+  await sortCard(page, live).locator('[data-sort-action="reply"]').click();
+  await sortCard(page, live).getByRole('textbox', { name: 'Reply to Sort retry live task' }).fill('Only once please');
+  await page.keyboard.press('Enter');
+  await expect(sortCard(page, live).getByRole('alert')).toContainText("Couldn't send");
+  await sortCard(page, live).locator('[data-sort-reply-send]').click();
+  await expect(sortCard(page, live)).toHaveCount(0);
+  expect(ids).toHaveLength(2);
+  expect(ids[0]).toMatch(/^qm-/);
+  expect(ids[1]).toBe(ids[0]);
+  // The same id is the server's resend of that message: it goes out under the line uuid it went in,
+  // which Claude Code skips when it already ran it (core/session-queue-lines.ts; the mock CLI does
+  // not skip, so the transcript is not the check here).
+
+  // A start the server answered early, whose record then says it failed.
+  await page.route(`**/api/v1/tasks/${late}/start`, route => route.fulfill({ status: 202, json: { taskId: late, started: false, starting: true } }));
+  await page.route(`**/api/tasks/${late}`, async route => {
+    if (route.request().method() !== 'GET') return route.continue();
+    const response = await route.fetch();
+    const json = await response.json();
+    await route.fulfill({ response, json: { ...json, task: { ...json.task, last_start: { id: 'a', at: new Date().toISOString(), state: 'failed', error: 'No host can run it' } } } });
+  });
+  await sortCard(page, late).locator('[data-sort-action="reply"]').click();
+  const box = sortCard(page, late).getByRole('textbox', { name: 'Reply to Sort retry late start task' });
+  await box.fill('Start when you can');
+  await page.keyboard.press('Enter');
+  await expect(sortCard(page, late).getByRole('alert')).toContainText('No host can run it');
+  await expect(box).toHaveValue('Start when you can');
+  await expect(sortCard(page, late)).toBeVisible();
 });

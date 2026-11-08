@@ -13,19 +13,73 @@ import type { CustomTierDef } from '@/api/focus';
 import { boardMoveIds, homeBoardTier } from './home-board-model';
 import { resolveParentRef } from './task-tree-index';
 
-export type SortQueue = 'unsorted' | 'parked' | 'all';
 export type SortView = 'tasks' | 'projects';
 
-/** A Parked task untouched this long comes back for another look. */
-export const PARKED_STALE_DAYS = 7;
 const DAY_MS = 86_400_000;
+
+/**
+ * What the deck shows (2026-11-07, the user: Sort must not walk every task on the board; it opens on a
+ * filter he can see and change). Empty `tiers` means every tier. `folder` takes its subfolders too.
+ */
+export interface SortFilter {
+  tiers: string[];
+  project: string | null;
+  folder: string | null;
+  /** Only tasks with no action for at least this many days (0: any). */
+  idleDays: number;
+}
+/** The deck opens on Focus, the tier the user named, and keeps whatever he picks after that. */
+export const DEFAULT_SORT_FILTER: SortFilter = { tiers: ['focus'], project: null, folder: null, idleDays: 0 };
+export const IDLE_STEPS = [0, 3, 7, 30] as const;
+
+export function isSortFilter(v: unknown): v is SortFilter {
+  const f = v as SortFilter;
+  return !!f && typeof f === 'object' && Array.isArray(f.tiers) && f.tiers.every(t => typeof t === 'string')
+    && (f.project === null || typeof f.project === 'string') && (f.folder === null || typeof f.folder === 'string')
+    && typeof f.idleDays === 'number';
+}
+
+/** How long a task has sat, from Walnut's record (never a guess). */
+export interface TaskAges {
+  /** Days since anything happened on it: it was made, its session started or resumed, or a field a
+   *  person or its work writes moved (phase, tier or pin, title, note, summary, description, dates,
+   *  priority, tags, project, folder, parent). Walnut's own status, read and order writes do not count. */
+  idle: number;
+  /** Days in the tier it is in now: since its pin or tier was last written, else since it was made. */
+  inTier: number;
+}
+
+/** The timed fields (core/task-field-times.ts) whose change is something done to the task. */
+const ACTION_FIELDS = ['title', 'phase', 'priority', 'project', 'group_id', 'due_date', 'start_date', 'end_date', 'pinned', 'focus_tier',
+  'tags', 'summary', 'description', 'note', 'parent_task_id'] as const;
+const ms = (iso: string | undefined) => { const t = iso ? Date.parse(iso) : NaN; return Number.isFinite(t) ? t : 0; };
+const days = (from: number, now: number) => Math.max(0, Math.floor((now - from) / DAY_MS));
+
+export function taskAges(t: Task, now = Date.now()): TaskAges {
+  const at = t.field_at ?? {};
+  const lastAction = Math.max(ms(t.created_at), ms(t.last_session_update), ms(t.phase_changed_at), ...ACTION_FIELDS.map(f => ms(at[f])));
+  const tierSince = Math.max(ms(at.pinned), ms(at.focus_tier)) || ms(t.created_at);
+  return { idle: days(lastAction, now), inTier: days(tierSince, now) };
+}
+
+/** The card's tags in plain words; a day or more only. */
+export function ageTags(tier: string, tierLabel: string, ages: TaskAges): { kind: 'tier' | 'idle'; text: string }[] {
+  const n = (d: number) => `${d} ${d === 1 ? 'day' : 'days'}`;
+  const where = tier === 'unpinned' ? 'Unsorted' : tier === 'wait' ? 'Parked' : `In ${tierLabel}`;
+  // The same span twice reads as one fact: nothing happened since it landed there.
+  if (ages.inTier >= 1 && ages.idle === ages.inTier) return [{ kind: 'idle', text: `${where}, no action for ${n(ages.idle)}` }];
+  const tags: { kind: 'tier' | 'idle'; text: string }[] = [];
+  if (ages.inTier >= 1) tags.push({ kind: 'tier', text: `${where} for ${n(ages.inTier)}` });
+  if (ages.idle >= 1) tags.push({ kind: 'idle', text: `No action for ${n(ages.idle)}` });
+  return tags;
+}
 
 export interface SortItem {
   task: Task;
   tier: string;
   /** The ids a tier move takes along: the task and its subtasks in the same tier (the board's rule). */
   family: string[];
-  idleDays: number;
+  ages: TaskAges;
   /** What the task says it is doing or asking now, if anything. */
   line: string;
 }
@@ -33,7 +87,7 @@ export interface SortItem {
 export interface SortProject {
   key: string;
   label: string;
-  /** The project's open, sortable tasks. */
+  /** The project's open, sortable tasks the filter keeps. */
   tasks: Task[];
   /** Its top-level tasks there: a snooze is written on these, their subtasks inherit it. */
   roots: Task[];
@@ -64,13 +118,6 @@ export function isSnoozed(t: Task, byId: ReadonlyMap<string, Task>, now: number)
   return false;
 }
 
-function inQueue(t: Task, queue: SortQueue, custom: readonly CustomTierDef[], now: number): boolean {
-  const tier = homeBoardTier(t, custom);
-  if (queue === 'unsorted') return tier === 'unpinned';
-  if (queue === 'parked') return tier === 'wait' && now - Date.parse(t.updated_at) >= PARKED_STALE_DAYS * DAY_MS;
-  return true;
-}
-
 export function statusLine(t: Task): string {
   const s = t.user_status;
   // "Not started yet" says what the status label already says.
@@ -81,23 +128,42 @@ export function statusLine(t: Task): string {
 export interface QueueOptions {
   now?: number;
   query?: string;
-  /** Only this project's tasks (a project card's "Sort its tasks"), by projectKey. */
-  project?: string | null;
+  /** The folder ids the folder filter covers (the folder and its subfolders). */
+  folders?: ReadonlySet<string> | null;
   /** Taken out of this round: skipped or already decided. */
   exclude?: ReadonlySet<string>;
 }
 
+function matches(t: Task, filter: SortFilter, custom: readonly CustomTierDef[], folders: ReadonlySet<string> | null | undefined, now: number, withProject = true): boolean {
+  if (filter.tiers.length && !filter.tiers.includes(homeBoardTier(t, custom))) return false;
+  if (withProject && filter.project !== null && projectKey(t) !== filter.project) return false;
+  if (folders && !(t.group_id && folders.has(t.group_id))) return false;
+  return !filter.idleDays || taskAges(t, now).idle >= filter.idleDays;
+}
+
+/** How many open, unsnoozed tasks each tier holds under the rest of the filter (the tier chips' counts). */
+export function tierCounts(tasks: readonly Task[], custom: readonly CustomTierDef[], filter: SortFilter, opts: QueueOptions = {}): Record<string, number> {
+  const now = opts.now ?? Date.now();
+  const byId = new Map(tasks.map(t => [t.id, t]));
+  const out: Record<string, number> = {};
+  for (const t of tasks) {
+    if (!isSortable(t) || isSnoozed(t, byId, now) || !matches(t, { ...filter, tiers: [] }, custom, opts.folders, now)) continue;
+    const tier = homeBoardTier(t, custom);
+    out[tier] = (out[tier] ?? 0) + 1;
+  }
+  return out;
+}
+
 /**
- * The cards to decide, oldest first. A card is a task with its subtasks in the same tier, as a board
- * move takes them; a subtask whose leader is in the queue too is part of that card, not one of its own.
+ * The cards to decide, least recently acted on first. A card is a task with its subtasks in the same
+ * tier, as a board move takes them; a subtask whose leader is in the deck too is part of that card.
  */
-export function buildSortQueue(tasks: readonly Task[], custom: readonly CustomTierDef[], queue: SortQueue, opts: QueueOptions = {}): SortItem[] {
+export function buildSortQueue(tasks: readonly Task[], custom: readonly CustomTierDef[], filter: SortFilter, opts: QueueOptions = {}): SortItem[] {
   const now = opts.now ?? Date.now();
   const text = (opts.query ?? '').trim().toLocaleLowerCase();
   const byId = new Map(tasks.map(t => [t.id, t]));
   const open = tasks.filter(isSortable);
-  const candidates = open.filter(t => inQueue(t, queue, custom, now) && !isSnoozed(t, byId, now)
-    && (opts.project == null || projectKey(t) === opts.project));
+  const candidates = open.filter(t => !isSnoozed(t, byId, now) && matches(t, filter, custom, opts.folders, now));
   const inSet = new Set(candidates.map(t => t.id));
   const items: SortItem[] = [];
   for (const task of candidates) {
@@ -110,18 +176,19 @@ export function buildSortQueue(tasks: readonly Task[], custom: readonly CustomTi
       const t = byId.get(id);
       return t && `${t.title} ${t.project ?? ''}`.toLocaleLowerCase().includes(text);
     })) continue;
-    items.push({ task, tier, family, idleDays: Math.max(0, Math.floor((now - Date.parse(task.updated_at)) / DAY_MS)), line: statusLine(task) });
+    items.push({ task, tier, family, ages: taskAges(task, now), line: statusLine(task) });
   }
-  return items.sort((a, b) => a.task.updated_at.localeCompare(b.task.updated_at) || a.task.created_at.localeCompare(b.task.created_at));
+  return items.sort((a, b) => b.ages.idle - a.ages.idle || a.task.created_at.localeCompare(b.task.created_at));
 }
 
-/** One card per project: the ones with the most unsorted work first, then the least recently touched. */
-export function buildSortProjects(tasks: readonly Task[], custom: readonly CustomTierDef[], opts: Omit<QueueOptions, 'project'> = {}): SortProject[] {
+/** One card per project over the tasks the filter keeps: the most unsorted first, then the least recently touched. */
+export function buildSortProjects(tasks: readonly Task[], custom: readonly CustomTierDef[], filter: SortFilter, opts: QueueOptions = {}): SortProject[] {
   const now = opts.now ?? Date.now();
   const text = (opts.query ?? '').trim().toLocaleLowerCase();
   const byId = new Map(tasks.map(t => [t.id, t]));
   const projects = new Map<string, SortProject>();
   for (const task of tasks.filter(isSortable)) {
+    if (!matches(task, filter, custom, opts.folders, now, false)) continue;
     const key = projectKey(task);
     let p = projects.get(key);
     if (!p) projects.set(key, p = { key, label: task.project?.trim() || 'Inbox', tasks: [], roots: [], tiers: {}, unsorted: 0, snoozed: 0, lastTouched: '' });
@@ -205,9 +272,3 @@ export function todayIso(nowMs = Date.now()): string {
   return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`;
 }
 
-export function idleText(days: number): string {
-  if (days < 1) return 'touched today';
-  if (days < 14) return `${days} ${days === 1 ? 'day' : 'days'} untouched`;
-  if (days < 60) return `${Math.floor(days / 7)} weeks untouched`;
-  return `${Math.floor(days / 30)} months untouched`;
-}

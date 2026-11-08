@@ -656,8 +656,9 @@ export async function cancelQueuedStart(id: string): Promise<{ taskId: string; c
 }
 
 /** The user's own start of a task (the start route with no caller: it never waits for a host slot). */
-export async function startTaskAsPerson(id: string): Promise<{ taskId: string; sessionId?: string }> {
-  return apiPost<{ taskId: string; sessionId?: string }>(`/api/v1/tasks/${encodeURIComponent(id)}/start`, {}, { timeoutMs: 60_000 });
+export async function startTaskAsPerson(id: string, message?: string): Promise<{ taskId: string; sessionId?: string }> {
+  // `message`: the user's own first words to it (the board's Sort reply), sent as his message.
+  return apiPost<{ taskId: string; sessionId?: string }>(`/api/v1/tasks/${encodeURIComponent(id)}/start`, message ? { message } : {}, { timeoutMs: 60_000 });
 }
 
 /** Start a queued start now, as the user's own start (it never waits for a host slot). */

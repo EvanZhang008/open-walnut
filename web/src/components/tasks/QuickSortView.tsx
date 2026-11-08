@@ -1,7 +1,8 @@
 /**
  * The board's Sort mode: three cards at a time, each decided in one tap (a pin tier, a snooze, done,
- * or skip for this round), with Undo for every decision. Projects get the same: one card per project,
- * whose tier or snooze applies to its open tasks. The queue and presets are quick-sort-model.ts.
+ * a reply, or skip for this round), with Undo for every decision but a reply. Projects get the same:
+ * one card per project, whose tier or snooze applies to its open tasks. What the deck holds is a filter
+ * on screen (QuickSortFilter); the queue, ages and presets are quick-sort-model.ts.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Task } from '@open-walnut/core';
@@ -13,10 +14,13 @@ import { taskStatusLabel, taskUserState } from '@/utils/session-status';
 import { shownState } from '@open-walnut/user-status';
 import { useCursorFlyout } from './CursorFlyout';
 import { SnoozeDateFlyout, SnoozeFlyout } from './SnoozeChoices';
+import { QuickSortFilter } from './QuickSortFilter';
+import { QuickSortReply } from './QuickSortReply';
+import { folderSubtreeIds } from '@/hooks/useTasks';
 import { homeBoardTier } from './home-board-model';
 import {
-  buildSortProjects, buildSortQueue, idleText, projectSnoozeTargets, snoozeUntilText,
-  type SortItem, type SortProject, type SortQueue, type SortView,
+  ageTags, buildSortProjects, buildSortQueue, DEFAULT_SORT_FILTER, isSortFilter, projectSnoozeTargets, snoozeUntilText, tierCounts,
+  type SortFilter, type SortItem, type SortProject, type SortView,
 } from './quick-sort-model';
 import '@/styles/quick-sort.css';
 
@@ -26,14 +30,15 @@ const CONFIRM_FROM = 20;
 
 /** One decision of this round. `write` resolves to the ids whose write the server took (none: it
  *  was refused, and the card comes back); Undo waits for it, then reverts exactly those. */
-interface Decision { key: string; outcome: string; label: string; write: Promise<string[]>; revert: (landed: string[]) => Promise<boolean> }
+interface Decision { key: string; outcome: string; label: string; write: Promise<string[]>; revert: ((landed: string[]) => Promise<boolean>) | null }
 type Target = { kind: 'task'; item: SortItem } | { kind: 'project'; project: SortProject };
 
-const isQueue = (v: unknown): v is SortQueue => v === 'unsorted' || v === 'parked' || v === 'all';
 const isView = (v: unknown): v is SortView => v === 'tasks' || v === 'projects';
-const isProjectFilter = (v: unknown): v is string | null => v === null || typeof v === 'string';
+const tierClass = (id: string) => `tier-${['focus', 'satellite', 'wait', 'unpinned'].includes(id) ? id : 'custom'}`;
 
 const typing = (target: EventTarget | null) => !!(target as HTMLElement | null)?.closest?.('input, textarea, select, [contenteditable="true"]');
+/** Keys pressed in an open menu belong to it (its arrows walk its rows). */
+const inMenu = () => !!document.activeElement?.closest?.('.task-kebab-project-flyout');
 
 export function QuickSortView({ query, tiers, onOpen, active }: {
   query: string;
@@ -43,11 +48,12 @@ export function QuickSortView({ query, tiers, onOpen, active }: {
   tiers: { id: string; label: string }[];
   onOpen: (task: Task) => void;
 }) {
-  const { tasks, update, setPhase } = useTasksContext();
+  const { tasks, update, setPhase, folderMeta } = useTasksContext();
   const focus = useFocusBarContext();
   const [view, setView] = usePageView<SortView>('home-board', 'sortView', 'tasks', isView);
-  const [queue, setQueue] = usePageView<SortQueue>('home-board', 'sortQueue', 'unsorted', isQueue);
-  const [projectFilter, setProjectFilter] = usePageView<string | null>('home-board', 'sortProject', null, isProjectFilter);
+  const [filter, setFilterRaw] = usePageView<SortFilter>('home-board', 'sortFilter', DEFAULT_SORT_FILTER, isSortFilter);
+  const [replying, setReplying] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ label: string; undo: boolean } | null>(null);
   const [taken, setTaken] = useState<ReadonlySet<string>>(() => new Set());
   const [decided, setDecided] = useState(0);
   const [tally, setTally] = useState<Record<string, number>>({});
@@ -60,21 +66,21 @@ export function QuickSortView({ query, tiers, onOpen, active }: {
   const rootRef = useRef<HTMLDivElement>(null);
 
   const label = useCallback((tier: string) => tiers.find(t => t.id === tier)?.label ?? tier, [tiers]);
+  const setFilter = (next: SortFilter) => { setFilterRaw(next); setCursor(0); setReplying(null); };
+  // A kept folder that is gone (deleted) matches nothing, never everything; its pick says so.
+  const folders = useMemo(() => filter.folder === null ? null : folderMeta[filter.folder] ? folderSubtreeIds(filter.folder, folderMeta) : new Set<string>(), [filter.folder, folderMeta]);
+  // The Projects view sorts across projects, so its own project pick is left out.
+  const viewFilter = view === 'projects' ? { ...filter, project: null } : filter;
   const items = useMemo(() => view === 'tasks'
-    ? buildSortQueue(tasks, focus.customTiers, projectFilter !== null ? 'all' : queue, { query, project: projectFilter, exclude: taken })
-    : [], [view, tasks, focus.customTiers, queue, query, projectFilter, taken]);
+    ? buildSortQueue(tasks, focus.customTiers, filter, { query, folders, exclude: taken })
+    : [], [view, tasks, focus.customTiers, filter, query, folders, taken]);
   const projects = useMemo(() => view === 'projects'
-    ? buildSortProjects(tasks, focus.customTiers, { query, exclude: taken })
-    : [], [view, tasks, focus.customTiers, query, taken]);
-  const counts = useMemo(() => ({
-    unsorted: buildSortQueue(tasks, focus.customTiers, 'unsorted').length,
-    parked: buildSortQueue(tasks, focus.customTiers, 'parked').length,
-    all: buildSortQueue(tasks, focus.customTiers, 'all').length,
-  }), [tasks, focus.customTiers]);
+    ? buildSortProjects(tasks, focus.customTiers, viewFilter, { query, folders, exclude: taken })
+    : [], [view, tasks, focus.customTiers, filter, query, folders, taken]); // eslint-disable-line react-hooks/exhaustive-deps
+  const counts = useMemo(() => tierCounts(tasks, focus.customTiers, viewFilter, { folders }), [tasks, focus.customTiers, filter, view, folders]); // eslint-disable-line react-hooks/exhaustive-deps
   const left = view === 'tasks' ? items.length : projects.length;
   const shown = view === 'tasks' ? items.slice(0, SHOWN) : projects.slice(0, SHOWN);
   const at = Math.min(cursor, Math.max(0, shown.length - 1));
-  const projectLabel = projectFilter !== null ? (tasks.find(t => (t.project ?? '').trim().toLowerCase() === projectFilter)?.project?.trim() || 'Inbox') : null;
 
   const undosRef = useRef(undos);
   undosRef.current = undos;
@@ -85,7 +91,10 @@ export function QuickSortView({ query, tiers, onOpen, active }: {
     while (i >= 0 && list[i].key !== key) i--;
     if (i >= 0) {
       const gone = list[i];
-      setUndos([...list.slice(0, i), ...list.slice(i + 1)]);
+      const rest = [...list.slice(0, i), ...list.slice(i + 1)];
+      setUndos(rest);
+      const now = rest.at(-1);
+      setToast(t => t?.label === gone.label ? (now ? { label: now.label, undo: true } : null) : t);
       if (gone.outcome !== 'skip') setDecided(n => Math.max(0, n - 1));
       setTally(t => ({ ...t, [gone.outcome]: Math.max(0, (t[gone.outcome] ?? 0) - 1) }));
     }
@@ -96,22 +105,27 @@ export function QuickSortView({ query, tiers, onOpen, active }: {
     setTaken(s => new Set(s).add(decision.key));
     if (decision.outcome !== 'skip') setDecided(n => n + 1);
     setTally(t => ({ ...t, [decision.outcome]: (t[decision.outcome] ?? 0) + 1 }));
-    setUndos(u => [...u.slice(-19), decision]);
+    // A reply cannot be taken back: it is counted and named, never offered to Undo.
+    if (decision.revert) setUndos(u => [...u.slice(-19), decision]);
+    setToast({ label: decision.label, undo: !!decision.revert });
     setConfirming(null);
     void decision.write.then(landed => { if (!keep(landed)) unrecord(decision.key); });
   };
   const undoLast = useCallback(() => {
     const last = undosRef.current.at(-1);
-    if (!last) return;
+    if (!last?.revert) return;
+    const revert = last.revert;
     // Taken off the ref at once too: a second key press before the next render undoes the one before.
     undosRef.current = undosRef.current.slice(0, -1);
     setUndos(u => u.slice(0, -1));
+    const before = undosRef.current.at(-1);
+    setToast(before ? { label: before.label, undo: true } : null);
     setTaken(s => { const next = new Set(s); next.delete(last.key); return next; });
     if (last.outcome !== 'skip') setDecided(n => Math.max(0, n - 1));
     setTally(t => ({ ...t, [last.outcome]: Math.max(0, (t[last.outcome] ?? 0) - 1) }));
     // The reverse write goes out only after the decision's own write answered, so it lands last.
     void last.write.then(async landed => {
-      if (landed.length && !(await last.revert(landed))) setError(`Could not undo: ${last.label}`);
+      if (landed.length && !(await revert(landed))) setError(`Could not undo: ${last.label}`);
     });
   }, []);
 
@@ -155,6 +169,11 @@ export function QuickSortView({ query, tiers, onOpen, active }: {
     });
   };
   const taskSkip = (item: SortItem) => record({ key: item.task.id, outcome: 'skip', label: `Skipped "${item.task.title}"`, write: skipped, revert: async () => true });
+  // The reply is already sent when this runs (QuickSortReply waits for it).
+  const taskReplied = (item: SortItem) => {
+    setReplying(null);
+    record({ key: item.task.id, outcome: 'replied', label: `Sent your reply to "${item.task.title}"`, write: Promise.resolve([item.task.id]), revert: null });
+  };
 
   const projectTier = (project: SortProject, tier: string) => {
     const moving = project.tasks.filter(t => homeBoardTier(t, focus.customTiers) !== tier);
@@ -184,7 +203,8 @@ export function QuickSortView({ query, tiers, onOpen, active }: {
     });
   };
   const projectSkip = (project: SortProject) => record({ key: `project:${project.key}`, outcome: 'skip', label: `Skipped ${project.label}`, write: skipped, revert: async () => true });
-  const sortProjectTasks = (project: SortProject) => { setProjectFilter(project.key); setView('tasks'); setCursor(0); };
+  // A project's own tasks, every tier of it: that is what the user asked to sort.
+  const sortProjectTasks = (project: SortProject) => { setFilter({ ...filter, project: project.key, tiers: [] }); setView('tasks'); };
 
   const onSnoozePick = (target: Target, date: string | null) => target.kind === 'task' ? taskSnooze(target.item, date) : projectSnooze(target.project, date);
   const openSnooze = (target: Target, from: HTMLElement) => {
@@ -218,7 +238,7 @@ export function QuickSortView({ query, tiers, onOpen, active }: {
   useEffect(() => {
     if (!active) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.defaultPrevented || typing(e.target) || snooze.state || pickDate.state) return;
+      if (e.defaultPrevented || typing(e.target) || inMenu() || snooze.state || pickDate.state) return;
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'z') { e.preventDefault(); e.stopPropagation(); undoLast(); return; }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const { shown: cards, at: index, view: mode } = keyState.current;
@@ -238,6 +258,7 @@ export function QuickSortView({ query, tiers, onOpen, active }: {
       if (/^[1-9]$/.test(key)) press(`[data-sort-key="${key}"]`);
       else if (key === 's') press('[data-sort-action="snooze"]');
       else if (key === 'd' && mode === 'tasks') press('[data-sort-action="done"]');
+      else if (key === 'r' && mode === 'tasks') press('[data-sort-action="reply"]');
       else if (key === 'x') press('[data-sort-action="skip"]');
     };
     window.addEventListener('keydown', onKey, true);
@@ -245,24 +266,17 @@ export function QuickSortView({ query, tiers, onOpen, active }: {
   }, [active, undoLast, snooze.state, pickDate.state]);
   useEffect(() => { if (!active) { snooze.close(); pickDate.close(); } }, [active]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const lastUndo = undos.at(-1);
   const total = decided + left;
   const tallyRows = Object.entries(tally).filter(([k, n]) => n > 0 && k !== 'skip');
   const tierKeyed = (choices: string[]) => choices.map((id, i) => ({ id, key: i < 9 ? String(i + 1) : undefined }));
+  const narrowed = filter.tiers.length > 0 || filter.project !== null || filter.folder !== null || filter.idleDays > 0;
 
   return <div ref={rootRef} className="quick-sort" data-testid="quick-sort" data-view={view}>
     <div className="quick-sort-bar">
-      {view === 'tasks' && projectLabel === null && <div className="quick-sort-chips" role="group" aria-label="What to sort">
-        {([['unsorted', 'Unsorted'], ['parked', `Parked over 7 days`], ['all', 'Everything']] as const).map(([id, text]) =>
-          <button key={id} type="button" aria-pressed={queue === id} onClick={() => { setQueue(id); setCursor(0); }}>{text}<b>{counts[id]}</b></button>)}
-      </div>}
-      {view === 'tasks' && projectLabel !== null && <div className="quick-sort-chips">
-        <span className="quick-sort-scope">Sorting {projectLabel}</span>
-        <button type="button" onClick={() => { setProjectFilter(null); setCursor(0); }}>All projects</button>
-      </div>}
+      <QuickSortFilter filter={filter} setFilter={setFilter} tiers={tiers} counts={counts} showProject={view === 'tasks'} />
       <div className="home-board-switch quick-sort-view" aria-label="Sort tasks or projects">
         <button type="button" aria-pressed={view === 'tasks'} onClick={() => { setView('tasks'); setCursor(0); }}>Tasks</button>
-        <button type="button" aria-pressed={view === 'projects'} onClick={() => { setView('projects'); setProjectFilter(null); setCursor(0); }}>Projects</button>
+        <button type="button" aria-pressed={view === 'projects'} onClick={() => { setView('projects'); setCursor(0); setReplying(null); }}>Projects</button>
       </div>
     </div>
     <div className="quick-sort-progress" aria-hidden="true"><i style={{ width: `${total ? Math.round(decided / total * 100) : 0}%` }} /></div>
@@ -270,27 +284,28 @@ export function QuickSortView({ query, tiers, onOpen, active }: {
     {error && <div className="home-board-error quick-sort-error" role="alert"><span>{error}</span></div>}
     {shown.length === 0 ? <div className="quick-sort-empty" data-testid="quick-sort-empty">
       <h2>{decided ? 'All sorted' : 'Nothing to sort here'}</h2>
-      <p>{view === 'tasks'
-        ? (queue === 'unsorted' && projectFilter === null ? 'Every open task has a pin tier or a snooze.' : 'No task left in this list.')
-        : 'No project left in this round.'}</p>
-      {view === 'tasks' && projectFilter === null && queue !== 'parked' && counts.parked > 0 && <button type="button" onClick={() => setQueue('parked')}>Sort Parked over 7 days ({counts.parked})</button>}
+      <p>{view === 'tasks' ? 'No open task left under this filter.' : 'No project left in this round.'}</p>
+      {narrowed && <button type="button" onClick={() => setFilter({ tiers: [], project: null, folder: null, idleDays: 0 })}>Sort every open task</button>}
     </div> : <div className="quick-sort-cards">
       {view === 'tasks'
         ? (shown as SortItem[]).map((item, i) => {
             const state = shownState(taskUserState(item.task));
             const sub = item.family.length - 1;
+            const tags = ageTags(item.tier, label(item.tier), item.ages);
             return <article key={item.task.id} className={`quick-sort-card${i === at ? ' is-current' : ''}`} data-sort-card={item.task.id} data-sort-card-index={i} onPointerDown={() => setCursor(i)} onFocus={() => setCursor(i)}>
-              <div className="quick-sort-card-proj">{item.task.project?.trim() || 'Inbox'} · {idleText(item.idleDays)}{sub > 0 && ` · ${sub} ${sub === 1 ? 'subtask moves' : 'subtasks move'} with it`}</div>
+              <div className="quick-sort-card-proj">{item.task.project?.trim() || 'Inbox'}{sub > 0 && ` · ${sub} ${sub === 1 ? 'subtask moves' : 'subtasks move'} with it`}</div>
               <button type="button" className="quick-sort-card-title" onClick={() => onOpen(item.task)}>{item.task.title}</button>
               <div className="quick-sort-card-meta"><span className={`home-board-state home-board-state-${state}`}><i />{taskStatusLabel(item.task)}</span><span>{label(item.tier)}</span></div>
+              {tags.length > 0 && <div className="quick-sort-tags">{tags.map(t => <span key={t.kind} className={`quick-sort-tag is-${t.kind}${t.kind === 'idle' && item.ages.idle >= 7 ? ' is-old' : ''}`} data-sort-age={t.kind}>{t.text}</span>)}</div>}
               {item.line && <div className="quick-sort-card-line" title={item.line}>{item.line}</div>}
-              <div className="quick-sort-actions"><div className="quick-sort-tiers">
-                {tierKeyed(tierChoices(item.tier)).map(({ id, key }) => <button key={id} type="button" className={`quick-sort-btn tier-${['focus', 'satellite', 'wait', 'unpinned'].includes(id) ? id : 'custom'}`} data-sort-tier={id} data-sort-key={key} onClick={() => taskTier(item, id)}>{label(id)}{key && <small>{key}</small>}</button>)}
+              {replying === item.task.id ? <QuickSortReply task={item.task} onSent={() => taskReplied(item)} onClose={() => setReplying(null)} /> : <div className="quick-sort-actions"><div className="quick-sort-tiers">
+                {tierKeyed(tierChoices(item.tier)).map(({ id, key }) => <button key={id} type="button" className={`quick-sort-btn ${tierClass(id)}`} data-sort-tier={id} data-sort-key={key} onClick={() => taskTier(item, id)}>{label(id)}{key && <small>{key}</small>}</button>)}
                 </div><div className="quick-sort-moves">
-                <button type="button" className="quick-sort-btn is-snooze" data-sort-action="snooze" aria-haspopup="dialog" onClick={e => openSnooze({ kind: 'task', item }, e.currentTarget)}>Snooze ▾<small>S</small></button>
+                <button type="button" className="quick-sort-btn is-reply" data-sort-action="reply" onClick={() => { setCursor(i); setReplying(item.task.id); }}>Reply<small>R</small></button>
+                <button type="button" className="quick-sort-btn is-snooze" data-sort-action="snooze" aria-haspopup="dialog" onClick={e => openSnooze({ kind: 'task', item }, e.currentTarget)}>Snooze<small>S</small></button>
                 <button type="button" className="quick-sort-btn is-done" data-sort-action="done" onClick={() => taskDone(item)}>Done<small>D</small></button>
                 <button type="button" className="quick-sort-btn is-skip" data-sort-action="skip" onClick={() => taskSkip(item)}>Skip<small>X</small></button>
-              </div></div>
+              </div></div>}
             </article>;
           })
         : (shown as SortProject[]).map((project, i) => {
@@ -300,7 +315,7 @@ export function QuickSortView({ query, tiers, onOpen, active }: {
               <div className="quick-sort-card-proj">Project · {open} open{project.snoozed ? ` · ${project.snoozed} snoozed` : ''}</div>
               <div className="quick-sort-card-title is-static">{project.label}</div>
               <div className="quick-sort-mix" aria-label={tiers.map(t => `${project.tiers[t.id] ?? 0} ${t.label}`).join(', ')}>
-                {tiers.map(t => (project.tiers[t.id] ?? 0) > 0 && <i key={t.id} className={`tier-${['focus', 'satellite', 'wait', 'unpinned'].includes(t.id) ? t.id : 'custom'}`} style={{ flexGrow: project.tiers[t.id] }} />)}
+                {tiers.map(t => (project.tiers[t.id] ?? 0) > 0 && <i key={t.id} className={tierClass(t.id)} style={{ flexGrow: project.tiers[t.id] }} />)}
               </div>
               <div className="quick-sort-card-meta">{tiers.filter(t => project.tiers[t.id]).map(t => <span key={t.id}>{project.tiers[t.id]} {t.label}</span>)}</div>
               <ul className="quick-sort-card-list">{project.roots.slice(0, 3).map(t => <li key={t.id} title={t.title}>{t.title}</li>)}{project.roots.length > 3 && <li className="more">and {project.roots.length - 3} more</li>}</ul>
@@ -309,7 +324,7 @@ export function QuickSortView({ query, tiers, onOpen, active }: {
                 <button type="button" className="quick-sort-btn" data-sort-confirm="yes" onClick={() => projectTier(project, ask.tier)}>Move</button>
                 <button type="button" className="quick-sort-btn is-skip" onClick={() => setConfirming(null)}>Cancel</button>
               </div> : <div className="quick-sort-actions"><div className="quick-sort-tiers">
-                {tierKeyed(tiers.map(t => t.id).filter(id => (project.tiers[id] ?? 0) < open)).map(({ id, key }) => <button key={id} type="button" className={`quick-sort-btn tier-${['focus', 'satellite', 'wait', 'unpinned'].includes(id) ? id : 'custom'}`} data-sort-tier={id} data-sort-key={key} onClick={() => projectTier(project, id)}>All {label(id)}{key && <small>{key}</small>}</button>)}
+                {tierKeyed(tiers.map(t => t.id).filter(id => (project.tiers[id] ?? 0) < open)).map(({ id, key }) => <button key={id} type="button" className={`quick-sort-btn ${tierClass(id)}`} data-sort-tier={id} data-sort-key={key} onClick={() => projectTier(project, id)}>All {label(id)}{key && <small>{key}</small>}</button>)}
                 </div><div className="quick-sort-moves">
                 <button type="button" className="quick-sort-btn is-snooze" data-sort-action="snooze" aria-haspopup="dialog" onClick={e => openSnooze({ kind: 'project', project }, e.currentTarget)}>Snooze all ▾<small>S</small></button>
                 <button type="button" className="quick-sort-btn" data-sort-action="tasks" onClick={() => sortProjectTasks(project)}>Sort its tasks ▸</button>
@@ -319,8 +334,8 @@ export function QuickSortView({ query, tiers, onOpen, active }: {
           })}
     </div>}
     <div className="quick-sort-foot">
-      {lastUndo && <div className="quick-sort-toast" role="status"><span>{lastUndo.label}</span><button type="button" onClick={undoLast}>Undo</button><kbd>⌘Z</kbd></div>}
-      {tallyRows.length > 0 && <div className="quick-sort-tally" data-testid="quick-sort-tally"><span>This round:</span>{tallyRows.map(([k, n]) => <span key={k}>{k === 'snoozed' ? 'Snoozed' : k === 'done' ? 'Done' : label(k)} {n}</span>)}</div>}
+      {toast && <div className="quick-sort-toast" role="status"><span>{toast.label}</span>{toast.undo && <><button type="button" onClick={undoLast}>Undo</button><kbd>⌘Z</kbd></>}</div>}
+      {tallyRows.length > 0 && <div className="quick-sort-tally" data-testid="quick-sort-tally"><span>This round:</span>{tallyRows.map(([k, n]) => <span key={k}>{k === 'snoozed' ? 'Snoozed' : k === 'done' ? 'Done' : k === 'replied' ? 'Replied' : label(k)} {n}</span>)}</div>}
     </div>
     {active && snooze.state && <SnoozeFlyout point={snooze.state.point} anchorRef={snooze.noTrigger}
       onSnooze={date => onSnoozePick(snooze.state!.payload, date)}
