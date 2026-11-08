@@ -315,7 +315,9 @@ export const ThreadReviewSidebar = memo(function ThreadReviewSidebar(p: ThreadRe
           >
             {p.renderBody(e.key)}
           </div>
-          <ThreadReplyBox
+          {/* Not while the open card lies over it: two boxes on one draft would
+              each hold their own copy; mounted again, it reads the card's words. */}
+          {p.enlarged !== e.key && <ThreadReplyBox
             draftKey={p.draftKeyOf(e.key)}
             canAsk={p.canAsk}
             placeholder={cardFollowUpPlaceholder(e.title)}
@@ -325,7 +327,7 @@ export const ThreadReviewSidebar = memo(function ThreadReviewSidebar(p: ThreadRe
               const body = cards.current.get(e.key)?.querySelector<HTMLElement>('.thread-review-body');
               if (body) body.scrollTop = body.scrollHeight;
             }}
-          />
+          />}
         </div>
       ))}
     </div>

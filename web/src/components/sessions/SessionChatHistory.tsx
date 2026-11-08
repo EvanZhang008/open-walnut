@@ -2714,14 +2714,16 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // is already true when the content-change scroll fires.
   // A send from the comment card is the exception: the reader is up at the
   // passage with the card, and the answer arrives in the card, so the timeline
-  // stays where it is (the flag is armed by the card's send, consumed here).
+  // stays where it is (held while a card's send is in flight, read here).
   // In Tree Mode every half reads the same bubbles, and a send in one half must
   // never move another (2026-11-04, the user: "talk to right panel, the left
   // panel all of a sudden jumps to bottom"): only a bubble of this page counts.
   // A pending Ask's first bubble is filed under a key the tree learns a render
   // later, so on a pending page a bubble of a question the tree does not know is
   // this page's.
-  const cardSendHold = useRef(false);
+  // A count, not a flag: review cards send at once, each from its own box, and
+  // one send ending must not let another's bubble move the timeline.
+  const cardSendHold = useRef(0);
   const ownBubbleCount = useMemo(() => {
     const list = optimisticMessages ?? [];
     if (!stackMode) return list.length;
@@ -2741,13 +2743,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       prevOptimisticLen.current = len;
       return;
     }
-    if (len > prevOptimisticLen.current) {
-      if (cardSendHold.current) {
-        cardSendHold.current = false;
-      } else {
-        isAtBottom.current = true;
-        setShowScrollArrow(false);
-      }
+    // A card's send still in flight holds it (the count drops when its send returns).
+    if (len > prevOptimisticLen.current && cardSendHold.current === 0) {
+      isAtBottom.current = true;
+      setShowScrollArrow(false);
     }
     prevOptimisticLen.current = len;
   }, [ownBubbleCount, currentKey]);
@@ -4258,8 +4257,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // card's (a send from the side never moves the timeline, as the card's).
   const reviewDraftKeyOf = useCallback((key: string) => composerDraftKey(sessionId, key, threadTree), [sessionId, threadTree]);
   const sendFromReview = useCallback(async (key: string, text: string, images?: ImageAttachment[]) => {
-    cardSendHold.current = true;
-    try { return await threadsApi.sendToQuestion(key, text, images); } finally { cardSendHold.current = false; }
+    cardSendHold.current++;
+    try { return await threadsApi.sendToQuestion(key, text, images); } finally { cardSendHold.current--; }
   }, [threadsApi.sendToQuestion]);
   const review = useThreadReviewPane({
     sessionId, containerRef, conversationMode: convMode, hasQuestions, tree: threadTree, metaIndex: threadsApi.metaIndex,
@@ -5172,8 +5171,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     threadsApi.quoteInChat(key, 'card');
   }, [threadsApi.quoteInChat, sessionId, threadTree]);
   const sendFromCard = useCallback(async (text: string, images?: ImageAttachment[]) => {
-    cardSendHold.current = true;
-    try { return await threadsApi.sendToTarget(text, images); } finally { cardSendHold.current = false; }
+    cardSendHold.current++;
+    try { return await threadsApi.sendToTarget(text, images); } finally { cardSendHold.current--; }
   }, [threadsApi.sendToTarget]);
   const cardMenu = cardKey && cardNode && threadsApi.actions ? (
     <ThreadStackMenu

@@ -611,7 +611,14 @@ test.describe('the fullscreen review sidebar', () => {
     // The card grew with the new round: its head may sit under the glass header now.
     await wheelIntoView(page, history, third.locator('button.thread-review-head'))
     await clickInPlace(page, third.locator('button.thread-review-head'))
-    await expect(panel.locator('.thread-card .thread-card-input')).toHaveValue('half a follow-up')
+    const cardBox = panel.locator('.thread-card .thread-card-input')
+    await expect(cardBox).toHaveValue('half a follow-up')
+    // And back: words added in the open card are the review box's once it closes.
+    await expect(cardBox).toBeFocused()
+    await page.keyboard.type(' and more')
+    await page.keyboard.press('Escape')
+    await expect(panel.locator('.thread-card')).toHaveCount(0)
+    await expect(box).toHaveValue('half a follow-up and more')
   })
 
   test('scrolling a long reply with 22 cards stays smooth', async ({ page, browserName }) => {

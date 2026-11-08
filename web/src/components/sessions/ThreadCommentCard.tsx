@@ -209,8 +209,13 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
     const body = bodyRef.current;
     if (body) body.scrollTop = body.scrollHeight;
     // A card that takes no questions holds the keyboard itself (its Esc).
-    if (p.draft || p.canAsk) boxRef.current?.focus({ preventScroll: true });
-    else cardRef.current?.focus({ preventScroll: true });
+    // The caret after the words already there (a kept draft): typing goes on
+    // from them, never in front of them.
+    const box = boxRef.current;
+    if ((p.draft || p.canAsk) && box) {
+      box.focus({ preventScroll: true });
+      box.setSelectionRange(box.value.length, box.value.length);
+    } else cardRef.current?.focus({ preventScroll: true });
     autoGrowRef.current(false);
   }, [p.threadKey, p.draft, p.canAsk]);
 
