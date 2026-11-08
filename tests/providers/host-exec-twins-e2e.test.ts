@@ -233,7 +233,7 @@ describe.each(TWINS)('$name', (twin) => {
     const hit = await rpc({ cmd: 'exec.read', jobId: 'hx-matcher-one', taskId, wait: 15_000, until: { output: 'READY on \\d+', flags: 'i' } })
     expect(hit).toMatchObject({ ok: true, waitedFor: { matched: 'output', match: 'ready on 4000' } })
     // The matcher is this daemon's child, run as this twin's own program.
-    const children = spawnSync('ps', ['-A', '-o', 'pid=,ppid=,args='], { encoding: 'utf8', maxBuffer: 64 << 20 }).stdout.split('\n')
+    const children = spawnSync('ps', ['-A', '-o', 'pid=', '-o', 'ppid=', '-o', 'args='], { encoding: 'utf8', maxBuffer: 64 << 20 }).stdout.split('\n')
       .map((l) => l.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/)).filter((m): m is RegExpMatchArray => m !== null && Number(m[2]) === proc!.pid)
     const matcher = children.find((m) => /--wait-matcher|runWaitMatcher/.test(m[3]!))
     expect(matcher, children.map((m) => m[3]).join('\n')).toBeDefined()

@@ -154,7 +154,7 @@ const WRITERS: Record<string, Record<string, string>> = {
     'socket.send(JSON.stringify({ ...command, id }))': 'the service handover\'s own commands, a few fields',
   },
   'src/providers/daemon-service-ready.ts': {
-    "socket.on('open', () => socket.send(JSON.stringify({ id: 1, cmd: 'hello' })))": 'a fixed frame',
+    "socket.on('open', () => socket.send(JSON.stringify({ id: 1, cmd: 'hello' })))": 'a fixed frame (the probe that a daemon serves)',
   },
 }
 
