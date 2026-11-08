@@ -69,10 +69,16 @@ jobs:
   # host without the compiled daemon runs it (the Node-free jobs run it on bun).
   # The vitest runs stay on bun; WALNUT_REQUIRE_NPM / WALNUT_REQUIRE_NODE in the
   # scripts make a missing npm or Node fail instead of skip.
+  # Four legs: the suites that start the JS twin took 40 of the job's 50 minutes in one
+  # leg (2026-11-08), so they are split four ways; the short checks run in leg 1.
   node-side:
-    name: Node side (browser specs load, plugin packages, npm channel, JS daemon on Node)
+    name: Node side ${{ matrix.shard }}/4 (browser specs load, plugin packages, npm channel, JS daemon on Node)
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -91,10 +97,14 @@ jobs:
         env:
           BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-store
       - name: browser specs load
+        if: matrix.shard == 1
         run: bun x playwright test --list --project=chromium --project=chromium-host-fixture > /dev/null
-      - run: bun run test:plugin-packages
-      - run: bun run test:npm-channel
-      - run: bun run test:source-twin-node
+      - if: matrix.shard == 1
+        run: bun run test:plugin-packages
+      - if: matrix.shard == 1
+        run: bun run test:npm-channel
+      - if: matrix.shard == 1
+        run: bun run test:source-twin-node
       # Every other suite that starts the JS twin, on Node, retried as the heavy tiers are; they spawn the sidecars the build produces, and one serves the built console.
       - run: bun run build && (cd web && bun x vite build)
       - name: source twin suites on Node
@@ -107,7 +117,7 @@ jobs:
           GIT_AUTHOR_EMAIL: open-walnut@localhost
           GIT_COMMITTER_NAME: Open Walnut CI
           GIT_COMMITTER_EMAIL: open-walnut@localhost
-        run: bun run test:source-twin-node-suites
+        run: bun run test:source-twin-node-suites -- --shard=${{ matrix.shard }}/4
 
   # ── Gate 2: the test tiers that are genuinely green, so they can BLOCK ──────
   #
@@ -215,17 +225,18 @@ jobs:
   # 134 files that start real servers, daemons, git and mock CLIs, judged against
   # the committed e2e baseline (tests/setup/known-failures-e2e.json): a failure
   # absent from it fails the job, and so does a run that crashed or ran too few
-  # files (no report = no verdict). Four shards: one serial run took 45 minutes.
+  # files (no report = no verdict). Six shards: one serial run took 45 minutes, and
+  # four shards still left one leg at 21 minutes (2026-11-08).
   # Each leg uploads its own failures so a new baseline can be read off a run.
   test-e2e:
-    name: Test (e2e ${{ matrix.shard }}/4)
+    name: Test (e2e ${{ matrix.shard }}/6)
     runs-on: ubuntu-24.04
     needs: build
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6]
     steps:
       - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
@@ -259,7 +270,7 @@ jobs:
           GIT_AUTHOR_EMAIL: open-walnut@localhost
           GIT_COMMITTER_NAME: Open Walnut CI
           GIT_COMMITTER_EMAIL: open-walnut@localhost
-        run: bun scripts/test-baseline.mjs check --maxWorkers=1 --retry=2 --shard=${{ matrix.shard }}/4
+        run: bun scripts/test-baseline.mjs check --maxWorkers=1 --retry=2 --shard=${{ matrix.shard }}/6
       - name: Upload this leg's failures
         if: always()
         uses: actions/upload-artifact@v4

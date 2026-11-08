@@ -148,7 +148,7 @@ describe('flake-hunt.yml', () => {
     expect(legs.filter((l) => l.leg.startsWith('quick')).map((l) => `bun run test:baseline -- ${l.args}`)).toEqual(quickCmds)
     const e2eRun = ci.jobs['test-e2e']!.steps.map((s) => s.run ?? '').find((r) => r.includes('test-baseline.mjs'))!
     for (const shard of ci.jobs['test-e2e']!.strategy!.matrix.shard!) {
-      const leg = legs.find((l) => l.leg === `e2e ${shard}/4`)!
+      const leg = legs.find((l) => l.leg === `e2e ${shard}/6`)!
       expect(e2eRun.replace('${{ matrix.shard }}', String(shard))).toBe(`bun scripts/test-baseline.mjs check ${leg.args}`)
       expect(leg.baseline).toBe('tests/setup/known-failures-e2e.json')
     }

@@ -60,10 +60,12 @@ jobs:
           - { leg: quick 6/8, build: plugins, config: vitest.quick.config.ts, baseline: tests/setup/known-failures.json, min: '1400', args: --maxWorkers=1 --shard=6/8 }
           - { leg: quick 7/8, build: plugins, config: vitest.quick.config.ts, baseline: tests/setup/known-failures.json, min: '1400', args: --maxWorkers=1 --shard=7/8 }
           - { leg: quick 8/8, build: plugins, config: vitest.quick.config.ts, baseline: tests/setup/known-failures.json, min: '1400', args: --maxWorkers=1 --shard=8/8 }
-          - { leg: e2e 1/4, build: all, config: vitest.e2e.config.ts, baseline: tests/setup/known-failures-e2e.json, min: '120', args: --maxWorkers=1 --retry=2 --shard=1/4 }
-          - { leg: e2e 2/4, build: all, config: vitest.e2e.config.ts, baseline: tests/setup/known-failures-e2e.json, min: '120', args: --maxWorkers=1 --retry=2 --shard=2/4 }
-          - { leg: e2e 3/4, build: all, config: vitest.e2e.config.ts, baseline: tests/setup/known-failures-e2e.json, min: '120', args: --maxWorkers=1 --retry=2 --shard=3/4 }
-          - { leg: e2e 4/4, build: all, config: vitest.e2e.config.ts, baseline: tests/setup/known-failures-e2e.json, min: '120', args: --maxWorkers=1 --retry=2 --shard=4/4 }
+          - { leg: e2e 1/6, build: all, config: vitest.e2e.config.ts, baseline: tests/setup/known-failures-e2e.json, min: '120', args: --maxWorkers=1 --retry=2 --shard=1/6 }
+          - { leg: e2e 2/6, build: all, config: vitest.e2e.config.ts, baseline: tests/setup/known-failures-e2e.json, min: '120', args: --maxWorkers=1 --retry=2 --shard=2/6 }
+          - { leg: e2e 3/6, build: all, config: vitest.e2e.config.ts, baseline: tests/setup/known-failures-e2e.json, min: '120', args: --maxWorkers=1 --retry=2 --shard=3/6 }
+          - { leg: e2e 4/6, build: all, config: vitest.e2e.config.ts, baseline: tests/setup/known-failures-e2e.json, min: '120', args: --maxWorkers=1 --retry=2 --shard=4/6 }
+          - { leg: e2e 5/6, build: all, config: vitest.e2e.config.ts, baseline: tests/setup/known-failures-e2e.json, min: '120', args: --maxWorkers=1 --retry=2 --shard=5/6 }
+          - { leg: e2e 6/6, build: all, config: vitest.e2e.config.ts, baseline: tests/setup/known-failures-e2e.json, min: '120', args: --maxWorkers=1 --retry=2 --shard=6/6 }
           # The slow tier has no known failures, so its baseline is an empty one.
           - { leg: slow, build: all, config: vitest.slow.config.ts, baseline: '', min: '50', args: --maxWorkers=1 --retry=2 }
     env:

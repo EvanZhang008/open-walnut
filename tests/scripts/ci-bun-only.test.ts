@@ -355,7 +355,18 @@ describe('the daemon\'s JS twin is checked on Node where CI has it', () => {
     // One worker, as the other heavy tiers: these suites start servers, daemons and timed windows.
     for (const part of vitestPartsOf(script)) expect(part).toMatch(/^WALNUT_REQUIRE_NODE=1 bun --bun vitest run .*--maxWorkers=1 /)
     const runs = (workflow('ci.yml').jobs['node-side']!.steps ?? []).map((s) => s.run ?? '')
-    expect(runs).toContain('bun run test:source-twin-node-suites')
+    expect(runs).toContain('bun run test:source-twin-node-suites -- --shard=${{ matrix.shard }}/4')
+  })
+
+  it('node-side runs those suites in four legs, every leg with its own quarter, the short checks in leg 1', () => {
+    // 2026-11-08: the suites took 40 of the one job's 50 minutes, the longest pole of CI.
+    const job = workflow('ci.yml').jobs['node-side'] as unknown as { strategy: { matrix: { shard: number[] } }; steps: Array<{ run?: string; if?: string }> }
+    expect(job.strategy.matrix.shard).toEqual([1, 2, 3, 4])
+    for (const cmd of ['test:plugin-packages', 'test:npm-channel', 'playwright test --list']) {
+      const step = job.steps.find((s) => (s.run ?? '').includes(cmd))
+      expect(step?.if, cmd).toBe('matrix.shard == 1')
+    }
+    expect(job.steps.find((s) => (s.run ?? '').includes('test:source-twin-node-suites'))?.if).toBeUndefined()
   })
 
   it('every file those scripts name exists (vitest skips a filter that matches nothing)', () => {

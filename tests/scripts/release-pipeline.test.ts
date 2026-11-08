@@ -935,9 +935,9 @@ describe('ci.yml', () => {
   it('the slow and e2e tiers block, with retries for runner flakes', () => {
     expect(runs('test-heavy')).toContain('bun run test:slow -- --maxWorkers=1 --retry=2')
     expect(doc.jobs['test-heavy']!.steps.some((s) => s['continue-on-error'])).toBe(false)
-    // e2e: four shards, each judged against the committed baseline, never tolerated.
-    expect(doc.jobs['test-e2e']!.strategy!.matrix.shard).toEqual([1, 2, 3, 4])
-    expect(runs('test-e2e')).toContain('bun scripts/test-baseline.mjs check --maxWorkers=1 --retry=2 --shard=${{ matrix.shard }}/4')
+    // e2e: six shards, each judged against the committed baseline, never tolerated.
+    expect(doc.jobs['test-e2e']!.strategy!.matrix.shard).toEqual([1, 2, 3, 4, 5, 6])
+    expect(runs('test-e2e')).toContain('bun scripts/test-baseline.mjs check --maxWorkers=1 --retry=2 --shard=${{ matrix.shard }}/6')
     expect(doc.jobs['test-e2e']!.steps.some((s) => s['continue-on-error'])).toBe(false)
     const e2e = doc.jobs['test-e2e']!.steps.find((s) => s.run?.includes('test-baseline.mjs')) as { env?: Record<string, string> }
     expect(e2e.env).toMatchObject({
