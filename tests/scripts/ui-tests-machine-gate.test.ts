@@ -1,6 +1,6 @@
 /**
  * ios-native/tests/ui/machine-gate-wait.sh: run-ui-tests.sh waits for a calm machine before EVERY
- * xcodebuild on a test lane's simulator, as the simulator queue does before each round. On
+ * xcodebuild and simulator boot on a test lane's simulator, as the simulator queue does before each round. On
  * 2026-11-07 the XCUITest runs of one held lane were 22.7% of the runnable threads in the Mac's
  * over-limit samples: the queue's gate judged only the lease's start, never the runs inside it.
  */
@@ -73,10 +73,11 @@ describe('a calm machine before every xcodebuild of a test lane', () => {
     expect(run(LANE_UDID, { SIM_LANE: 'b' })).toMatchObject({ status: 0, calls: [] })
   })
 
-  it('RATCHET: every xcodebuild run-ui-tests.sh starts is right after the gate', () => {
+  it('RATCHET: every xcodebuild and simulator boot run-ui-tests.sh starts is right after the gate', () => {
     const lines = fs.readFileSync(RUNNER, 'utf8').split('\n')
-    const runs = lines.map((l, i) => ({ l, i })).filter(({ l }) => /^\s*(run_heavy\s+)?xcodebuild\b/.test(l))
-    expect(runs.length).toBeGreaterThanOrEqual(2)
+    const runs = lines.map((l, i) => ({ l, i })).filter(({ l }) =>
+      /^\s*(run_heavy\s+)?xcodebuild\b/.test(l) || /^\s*xcrun\s+simctl\s+(boot\b|bootstatus\b.*\s-b\b)/.test(l))
+    expect(runs.length).toBeGreaterThanOrEqual(3)
     for (const { i } of runs) expect(lines[i - 1], `line ${i + 1}`).toMatch(/^\s*uitest_machine_gate "\$UDID" /)
     expect(lines.some((l) => /^\. .*machine-gate-wait\.sh"$/.test(l))).toBe(true)
   })

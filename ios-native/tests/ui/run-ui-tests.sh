@@ -315,6 +315,7 @@ done
 
 # 4. Microphone, for the voice tests. A denied mic reads as "the shortcut is
 #    broken", which is the wrong diagnosis for a permission nobody granted.
+uitest_machine_gate "$UDID" "the boot"
 xcrun simctl bootstatus "$UDID" -b >/dev/null 2>&1
 xcrun simctl privacy "$UDID" grant microphone "$BUNDLE" >/dev/null 2>&1 \
   && say "microphone granted to $BUNDLE" \

@@ -1,4 +1,4 @@
-# Sourced by run-ui-tests.sh: before EVERY xcodebuild on a test lane's simulator, wait for a calm
+# Sourced by run-ui-tests.sh: before EVERY xcodebuild and boot on a test lane's simulator, wait for a calm
 # machine, the way the simulator queue's sim-maestro.sh does before each round. A lease covers a
 # whole session of runs, and the queue's gate only judged its start: on 2026-11-07 the XCUITest runs
 # of one held lane were 22.7% of the runnable threads in the Mac's over-limit samples (mean load 88
