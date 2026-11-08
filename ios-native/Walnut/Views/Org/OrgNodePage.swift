@@ -74,6 +74,8 @@ struct OrgNodePage: View {
         .task { await threads.load() }
         // The node's own row moves when its threads change (its status carries their counts).
         .onChange(of: node?.userStatus?.threads) { Task { await threads.load() } }
+        // A container: without it the page's id lands on every child and hides the picker's own.
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("org.node.page")
     }
 
