@@ -129,22 +129,27 @@ op_again() { # $1 = op, $2 = JSON args
 }
 # host_copy, waited for: a big file answers running:true first, host_copy_result waits on.
 copy() { # $1 = JSON args; prints the finished answer
-  local got id
-  # This Walnut's own Mac (the last resort) is no other host: host_copy refuses a copy to itself
-  # (same_host), so the file is copied here.
-  if got=$(printf '%s' "$1" | python3 -c '
+  local got id err
+  # This Walnut's own Mac (the last resort) is no other host when the script runs ON it:
+  # host_copy refuses a copy to itself (same_host), and then the file is copied here. From
+  # any other host (a Linux devbox) that Mac is a remote host like the rest, so host_copy
+  # is always asked first (2026-11-08: the shortcut copied a file onto itself from clouddev).
+  err=$(mktemp)
+  if ! got=$(op_again host_copy "$1" 2>"$err"); then
+    if grep -q same_host "$err" && printf '%s' "$1" | grep -q '"__local__"'; then
+      rm -f "$err"
+      printf '%s' "$1" | python3 -c '
 import json, os, shutil, sys
 a = json.load(sys.stdin)
-if "__local__" not in (a.get("to_host"), a.get("from_host")): sys.exit(3)
 src, dst = os.path.expanduser(a["from"]), os.path.expanduser(a["to"])
 os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
 shutil.copyfile(src, dst)
-print(json.dumps({"outcome": "Copied on this computer to " + dst}))'); then
-    printf '%s' "$got"; return 0
-  elif [ $? -ne 3 ]; then
-    return 1
+print(json.dumps({"outcome": "Copied on this computer to " + dst}))'
+      return
+    fi
+    cat "$err" >&2; rm -f "$err"; return 1
   fi
-  got=$(op_again host_copy "$1") || return 1
+  cat "$err" >&2; rm -f "$err"
   while printf '%s' "$got" | js 'sys.exit(0 if d.get("running") else 1)'; do
     id=$(printf '%s' "$got" | js 'print(d.get("copyId") or "")')
     [ -n "$id" ] || { printf '%s\n' "$got" >&2; return 1; }
