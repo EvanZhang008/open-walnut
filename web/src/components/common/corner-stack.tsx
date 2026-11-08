@@ -227,6 +227,16 @@ function coversWork(left: number, width: number, bottom: number, columnRight: nu
   return false;
 }
 
+/** How much of `el`'s height the corner's own room took: the shrunk scroller it is (or sits in)
+ *  loses its held room; a column cut to end above the stack (or one inside it) was a column when
+ *  it was cut, so it is never judged by the cut height. */
+function ownCut(el: Element): number {
+  if (!reserved?.isConnected || !(reserved === el || reserved.contains(el))) return 0;
+  if (reservedMode === 'fit') return reserved.dataset.cornerFit !== undefined ? window.innerHeight : 0;
+  if (reserved.dataset.cornerRoomShrink === undefined) return 0;
+  return parseFloat(reserved.style.getPropertyValue('--corner-room')) || 0;
+}
+
 /** The left columns leftColumnRight found last, for syncRoom (a column that does not scroll). */
 let columns: HTMLElement[] = [];
 
@@ -255,7 +265,9 @@ function leftColumnRight(sidebarRight: number): number {
       // A navigation column, not a page's content: past MAX_COLUMNS_PX right of the sidebar the
       // corner would sit mid-page (a notes tree, a mail list), so those it lies over instead.
       if (r.right > sidebarRight + MAX_COLUMNS_PX) continue;
-      if (r.height < window.innerHeight * 0.85) continue;
+      // Judged by its height without what the corner itself took from it (a shrunk list it sits
+      // in, a cut to end above the stack): the corner's own room never unmakes the column it is for.
+      if (r.height + ownCut(el) < window.innerHeight * 0.85) continue;
       right = Math.max(right, Math.round(r.right));
       if (el instanceof HTMLElement) found.push(el);
     }
@@ -350,8 +362,12 @@ function shrunkUnder(x: number, y: number): { el: HTMLElement; mode: 'room'; ove
   if (!reserved?.isConnected || reserved.dataset.cornerRoomShrink === undefined) return null;
   const b = reserved.getBoundingClientRect();
   const held = parseFloat(reserved.style.getPropertyValue('--corner-room')) || 0;
-  // It keeps the room it took, and the stack keeps how it sat over it.
-  return x >= b.left && x <= b.right && y >= b.top && y <= b.bottom + held ? { el: reserved, mode: 'room', overColumn: stack?.dataset.over === 'column' } : null;
+  if (x < b.left || x > b.right || y < b.top || y > b.bottom + held) return null;
+  // It keeps the room it took, and the stack keeps how it sat over it, unless it held that room
+  // over the page and a left column is there now: the column takes the stack (roomTaker).
+  const overColumn = stack?.dataset.over === 'column';
+  if (!overColumn && columnsAt(x, y).length > 0) return null;
+  return { el: reserved, mode: 'room', overColumn };
 }
 
 function release(): void {
@@ -470,8 +486,16 @@ function syncSheetInset(): void {
   if (held !== inset) sheet.style.setProperty(CORNER_SHEET_INSET_VAR, `${inset}px`);
 }
 
+/** The page (and window size) the room in `reserved` was taken on. */
+let roomPage: string | null = null;
+
 function syncLeft(): void {
   if (!stack) return;
+  // The room belongs to the page it was taken on: the shell's content area outlives a route, so a
+  // room it took on one page would shorten the next page's left column before it is measured
+  // (2026-11-08: after Apps, the Settings nav was 560px of a 720px window and not read as a column).
+  const here = `${location.pathname}${location.search} ${window.innerWidth}x${window.innerHeight}`;
+  if (roomPage !== here) { roomPage = here; release(); }
   const sidebar = inFlowSidebar();
   const sidebarRight = sidebar ? Math.max(0, Math.round(sidebar.getBoundingClientRect().right)) : 0;
   syncAround(sidebarRight, leftColumnRight(sidebarRight));
