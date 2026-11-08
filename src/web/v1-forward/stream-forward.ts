@@ -28,6 +28,11 @@ export type StreamOutcome =
   | { kind: 'refused'; status: number }
   /** The request went out and no answer came in time (or the stream broke before one). */
   | { kind: 'unanswered'; message: string }
+  /**
+   * The phone left before the Mac answered (it cancelled the call, or its connection
+   * dropped): the call was cut on this side, so it says nothing about the Mac.
+   */
+  | { kind: 'caller-gone' }
 
 export interface StreamForwardInput {
   req: Request
@@ -45,6 +50,7 @@ export function forwardOnStream(input: StreamForwardInput): Promise<StreamOutcom
   const started = Date.now()
   return new Promise<StreamOutcome>((resolve) => {
     let settled = false
+    let callerGone = false
     const done = (o: StreamOutcome) => { if (!settled) { settled = true; clearTimeout(timer); resolve(o) } }
     let stream: Duplex | null = null
     let up: http.ClientRequest | null = null
@@ -94,10 +100,18 @@ export function forwardOnStream(input: StreamForwardInput): Promise<StreamOutcom
       })
       up.on('error', (err) => {
         if (settled) { if (!res.writableFinished) res.destroy(); return }
-        done({ kind: 'unanswered', message: err.message })
+        done(callerGone ? { kind: 'caller-gone' } : { kind: 'unanswered', message: err.message })
       })
-      // A phone that went away takes its call with it.
-      res.on('close', () => { if (!res.writableFinished) up?.destroy() })
+      // A phone that went away takes its call with it. That cut is this side's, never the
+      // Mac's silence (2026-11-08: the phone cancelled a session's controls read, the cut
+      // read as "the Mac did not answer", and the Threads read right after it was refused
+      // here with "could not get them from the primary").
+      res.on('close', () => {
+        if (res.writableFinished) return
+        if (!settled) callerGone = true
+        up?.destroy()
+        if (!settled) done({ kind: 'caller-gone' })
+      })
       if (body) up.end(body)
       else up.end()
     }, (err: Error) => {

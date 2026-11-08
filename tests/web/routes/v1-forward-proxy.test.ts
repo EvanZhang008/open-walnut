@@ -298,6 +298,7 @@ async function macRoutes(): Promise<{ port: number; seen: Array<Record<string, u
     const body = req.body && typeof req.body === 'object' ? JSON.stringify(req.body) : ''
     seen.push({ method: req.method, path: req.originalUrl, origin: req.headers['x-walnut-origin'], auth: req.headers.authorization ?? null, size: body.length })
     if (req.path === '/api/v1/big') { res.status(200).type('application/octet-stream').send(Buffer.alloc(3 * 1024 * 1024 + 5, 7)); return }
+    if (req.path === '/api/v1/slow') { setTimeout(() => { if (!res.writableEnded && !res.destroyed) res.json({ from: 'mac', slow: true }) }, 1_500); return }
     res.status(req.method === 'GET' ? 200 : 201).setHeader('x-walnut-op', 'mac').json({ from: 'mac', size: body.length })
   })
   const server = http.createServer(app)
@@ -443,6 +444,21 @@ describe('the forward on a stream (bridge-stream-v1)', () => {
     expect(Date.now() - again).toBeLessThan(1_000)
     expect(h.calls).toHaveLength(0)
   }, 30_000)
+
+  // 2026-11-08: the phone cancelled a session's controls read, the cut read as the Mac's
+  // silence, and the Threads read right after was refused here ("could not get them").
+  it('a call the phone cancels before the Mac answers is no mark against the Mac: the next read still goes there', async () => {
+    const s = await setup()
+    const h = forwardOver(s)
+    await expect(request(h.app).get('/api/v1/slow').timeout(300)).rejects.toThrow()
+    await new Promise((r) => setTimeout(r, 200))
+    expect(h.fwd.status()).toMatchObject({ suspectAt: null, callerGone: 1 })
+    expect(h.fwd.status().answeredHere).not.toHaveProperty('unanswered')
+    const next = await request(h.app).get('/api/v1/tasks/t1/threads?open=1')
+    expect(next.headers['x-walnut-answered-by']).toBe('primary')
+    expect(next.body).toMatchObject({ from: 'mac' })
+    expect(h.fwd.status().answeredHere).not.toHaveProperty('primary-suspect')
+  })
 
   it('the Mac\'s door refuses what it would not run: answered here, nothing ran there', async () => {
     const s = streamHarness(() => null)

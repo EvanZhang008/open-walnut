@@ -115,6 +115,8 @@ export interface ForwardStatus {
   answeredHere: Record<string, number>
   /** Writes that went out and got no answer (the phone was told it may have been applied). */
   unanswered: number
+  /** Calls the phone left before the Mac answered: never a mark against the Mac. */
+  callerGone: number
   lastForwardAt: number | null
   lastAnsweredHere: { why: string; at: number } | null
 }
@@ -132,7 +134,7 @@ function bodyOf(req: Request): Buffer | null | 'unsupported' {
 }
 
 export function createV1Forward(deps: ForwardDeps) {
-  const status: ForwardStatus = { forwarded: 0, streamed: 0, streamRefused: 0, answeredHere: {}, unanswered: 0, lastForwardAt: null, lastAnsweredHere: null }
+  const status: ForwardStatus = { forwarded: 0, streamed: 0, streamRefused: 0, answeredHere: {}, unanswered: 0, callerGone: 0, lastForwardAt: null, lastAnsweredHere: null }
   let suspectAt = 0
   let unsupportedUntil = 0
   let inflightReads = 0
@@ -319,6 +321,11 @@ export function createV1Forward(deps: ForwardDeps) {
       return
     }
     if (o.kind === 'refused') return answerHere('refused', req, res, next)
+    // The phone left first: nobody to answer, and nothing learned about the Mac.
+    if (o.kind === 'caller-gone') {
+      status.callerGone++
+      return
+    }
     if (o.kind === 'not-sent') {
       // Nothing reached the Mac, whatever the method. Refused at once (no primary
       // socket that takes streams): the server.http frame, as before, cap included.
