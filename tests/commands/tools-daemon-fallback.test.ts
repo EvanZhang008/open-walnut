@@ -99,9 +99,22 @@ describe('walnut tools call with the server down', () => {
       args: { name: 'task_get', args: { id: 'mtask-1' } },
     })
     expect(JSON.parse(out)).toEqual(answer.result)
-    expect(err).toContain("asking this host's daemon")
-    expect(err).not.toContain('server not running')
+    // The "asking this host's daemon" notice is for a terminal only: stderr is a pipe
+    // here, and a caller reading it as JSON (2>&1) must find nothing else there.
+    expect(err).toBe('')
     expect(process.exitCode ?? 0).toBe(0)
+  })
+
+  it('--json reaches the daemon CLI too: its failure is one object on stdout, stderr empty', async () => {
+    process.env.WALNUT_AGENT_SOCKET = sock
+    process.env.WALNUT_SESSION_ID = 'aaaaaaaa-1111-4111-8111-111111111111'
+    const message = 'task_get needs the Walnut server, which is not connected to this host.'
+    answer = { ok: false, error: { code: 'hub_unreachable', message } }
+    await runTools(['call', 'task_get', '{"id":"mtask-1"}'], { json: true })
+    expect(received).toHaveLength(1)
+    expect(err).toBe('')
+    expect(JSON.parse(out)).toEqual({ ok: false, error: { code: 'hub_unreachable', message } })
+    expect(process.exitCode).toBe(5)
   })
 
   it('a daemon refusal is printed and fails the command', async () => {
@@ -178,7 +191,7 @@ describe('walnut tools reaches a plugin op through the host daemon', () => {
     await runTools(['call', 'task_get', '{"id":"mtask-1"}'], {})
     // The server is down in this file, so the ONE daemon call is the outage fallback.
     expect(received).toHaveLength(1)
-    expect(err).toContain("asking this host's daemon")
+    expect(err).not.toContain("asking this host's daemon")
   })
 
   it('call: outside a session an unknown op is the usual error and no daemon is asked', async () => {

@@ -26,7 +26,7 @@ function refusal(o: WalnutOp, args: Record<string, unknown>): string {
 describe('a typo of a declared key', () => {
   it('names the key one swap away', () => {
     expect(refusal(op('task_update'), { id: 't1', titel: 'Rename' }))
-      .toBe('Invalid arguments for task_update: (root): Unrecognized key: "titel"; did you mean "title"?')
+      .toMatch(/^Invalid arguments for task_update: \(root\): Unrecognized key: "titel"; did you mean "title"\?; task_update takes: id, /)
   })
 
   it('names the key one or two edits away', () => {
@@ -133,7 +133,8 @@ describe('several unknown keys, each judged on its own', () => {
 describe('retired fields are still dropped, never hinted or counted', () => {
   it('a retired field next to a typo', () => {
     const msg = refusal(op('task_update'), { id: 't1', wait_report: 'x', titel: 'y' })
-    expect(msg).toBe('Invalid arguments for task_update: (root): Unrecognized key: "titel"; did you mean "title"?')
+    expect(msg).toMatch(/^Invalid arguments for task_update: \(root\): Unrecognized key: "titel"; did you mean "title"\?; task_update takes: /)
+    expect(msg).not.toContain('wait_report')
   })
 
   it('a retired field does not count as a second unknown key', () => {
@@ -162,7 +163,7 @@ describe('a usual other name for a declared key', () => {
   it('task_list called with query, search or keyword', () => {
     for (const key of ['query', 'search', 'keyword']) {
       expect(refusal(op('task_list'), { [key]: 'garden', project: 'Side projects' }))
-        .toBe(`Invalid arguments for task_list: (root): Unrecognized key: "${key}"; did you mean "q"?`)
+        .toMatch(new RegExp(`^Invalid arguments for task_list: \\(root\\): Unrecognized key: "${key}"; did you mean "q"\\?; task_list takes: `))
     }
   })
 
@@ -188,7 +189,70 @@ describe('an unknown key with no clear intended key names the keys the op takes'
     expect(msg).toContain('fake_op opts takes: deep')
   })
 
-  it('a refusal with a "did you mean" does not add the list', () => {
-    expect(refusal(op('task_update'), { id: 't1', titel: 'x' })).not.toContain('takes:')
+  // 2026-11-06: a wrong guess alone still cost a `tools help` round trip.
+  it('a refusal with a "did you mean" adds the list after it', () => {
+    const msg = refusal(op('task_update'), { id: 't1', titel: 'x' })
+    expect(msg.indexOf('did you mean "title"?')).toBeLessThan(msg.indexOf('; task_update takes: '))
+    expect(msg).toContain(' title,')
+  })
+
+  it('shows at most 40 keys, then an ellipsis', () => {
+    const many = Object.fromEntries(Array.from({ length: 45 }, (_, i) => [`key_${String(i).padStart(2, '0')}`, z.string().optional()]))
+    const msg = refusal(fakeOp(many), { banana: 1 })
+    expect(msg).toContain('key_39, …')
+    expect(msg).not.toContain('key_40')
+  })
+})
+
+// 2026-11-06: agents sent the message under another name (prompt for text, text for message).
+describe('a message under another name, only where the op declares one such key', () => {
+  it('prompt reads as text for task_send and as message for task_start', () => {
+    expect(refusal(op('task_send'), { to: 't1', prompt: 'hi' })).toContain('Unrecognized key: "prompt"; did you mean "text"?')
+    expect(refusal(op('task_start'), { id: 't1', prompt: 'hi' })).toContain('Unrecognized key: "prompt"; did you mean "message"?')
+    expect(refusal(op('task_start'), { id: 't1', text: 'hi' })).toContain('Unrecognized key: "text"; did you mean "message"?')
+    expect(refusal(op('task_send'), { to: 't1', message: 'hi' })).toContain('Unrecognized key: "message"; did you mean "text"?')
+  })
+
+  it('no guess when the op declares both keys a name could mean', () => {
+    const o = fakeOp({ text: z.string().optional(), message: z.string().optional() })
+    expect(refusal(o, { prompt: 'hi' })).not.toContain('did you mean')
+  })
+
+  it('no guess when the call already set the key', () => {
+    expect(refusal(op('task_send'), { to: 't1', text: 'a', prompt: 'b' })).not.toContain('did you mean')
+  })
+})
+
+describe('a well-known wrong key says what to do instead', () => {
+  it('task_list with include_completed: completed tasks are in by default, completion leaves them out', () => {
+    const msg = refusal(op('task_list'), { include_completed: true })
+    expect(msg).toContain('Unrecognized key: "include_completed"; "include_completed" is no key here: completed tasks are already listed by default')
+    expect(msg).toContain('pass "completion"')
+    expect(msg).toContain('; task_list takes: completion,')
+  })
+
+  it('only on an op that has the key that does it', () => {
+    expect(refusal(fakeOp({ q: z.string().optional() }), { include_completed: true })).not.toContain('is no key here')
+  })
+})
+
+// 2026-11-06: `walnut tools call search '{"q":"controller","types":["task","session"]}'`.
+describe('a list where the op takes one comma-separated string', () => {
+  it('spells out the string, and still refuses the call', () => {
+    const raw = { q: 'controller', types: ['task', 'session'] }
+    const msg = refusal(op('search'), raw)
+    expect(msg).toBe('Invalid arguments for search: types: Invalid input: expected string, received array; '
+      + 'types takes one comma-separated string, e.g. "task,session", not a list')
+    expect(raw.types).toEqual(['task', 'session'])
+  })
+
+  it('task_list phases too', () => {
+    expect(refusal(op('task_list'), { phases: ['TODO', 'IN_PROGRESS'] })).toContain('e.g. "TODO,IN_PROGRESS", not a list')
+  })
+
+  it('no example for a string field that is no comma list, a list of objects, or an empty list', () => {
+    expect(refusal(op('search'), { q: ['a', 'b'] })).not.toContain('comma-separated')
+    expect(refusal(op('search'), { q: 'x', types: [{ a: 1 }] })).not.toContain('comma-separated')
+    expect(refusal(op('search'), { q: 'x', types: [] })).not.toContain('comma-separated')
   })
 })

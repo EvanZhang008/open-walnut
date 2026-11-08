@@ -115,6 +115,17 @@ describe('every place that renders text as HTML is classified', () => {
   });
 });
 
+describe('task citations are normalized after markdown, not escaped source', () => {
+  it('every task-naming entry point uses the shared anchor normalization', () => {
+    const md = read('web/src/utils/markdown.ts');
+    expect(md).toMatch(/function linkTaskMentions\([^)]*\)[^{]*\{[\s\S]*?normalizeTaskAnchorHtml\(html, taskRefAnchor\)/);
+    expect(md).toMatch(/if \(taskIds !== 'off'\) parsed = linkTaskMentions\(parsed, taskIds\)/);
+    expect(read('web/src/components/board/board-markdown.frame.js')).toContain('literalCitation(code.trim())');
+    expect(read('tests/web/board-markdown.test.ts')).toContain('fixtures/task-anchor-refs.json');
+    expect(read('tests/web/markdown/task-ref-code-safety.test.ts')).toContain('fixtures/task-anchor-refs.json');
+  });
+});
+
 describe('chat surfaces show names, not ids', () => {
   /** Calls that turn task naming down: allowed only on data and file surfaces. */
   const NON_PILL_CALLS: Record<string, string> = {
@@ -171,7 +182,7 @@ describe('a title written beside a mention is absorbed by every renderer that ma
   });
 
   it('the Board frame mirrors the rule and runs it before its inline passes', () => {
-    expect(frame).toMatch(/var s = absorbTaskTitles\(raw\)\.replace\(CODE_RE/);
+    expect(frame).toMatch(/var s = \(sample \? raw : absorbTaskTitles\(raw\)\)\.replace\(CODE_RE/);
     const lits = (src: string, decl: string) => (new RegExp(`${decl} = \\[([\\s\\S]*?)\\];`).exec(src)?.[1] ?? '').split('\n').map((l) => l.trim().replace(/,$/, '')).filter(Boolean);
     expect(lits(md, 'const NOT_PILL_RES')).toHaveLength(3);
     expect(lits(frame, 'var NOT_CHIP_RES')).toEqual(lits(md, 'const NOT_PILL_RES'));
@@ -185,7 +196,12 @@ describe('a title written beside a mention is absorbed by every renderer that ma
 
   it('the phone runs it inside rewriteRefs, which every place that links mentions calls', () => {
     const mentions = read('ios-native/Walnut/Markdown/TaskMentions.swift');
-    expect(mentions).toMatch(/static func rewriteRefs\([^)]*\) -> String \{\n\s+var out = TaskTitleAbsorb\.absorbWrittenTitles\(text, resolver: resolver\)/);
+    // Model-written task anchors become `<task-ref/>` first, so the absorb still sees every mention.
+    expect(mentions).toMatch(/static func rewriteRefs\([^)]*\) -> String \{\n\s+var out = TaskAnchorHTML\.canonicalizeMarkdown\(text\)\n\s+out = TaskTitleAbsorb\.absorbWrittenTitles\(out, resolver: resolver\)/);
+    // A rich card's body takes the same mentions through one rewrite, and its cache key hashes that same rewrite;
+    // anchors inside code and pre keep the author's text through `sample`.
+    const rich = read('ios-native/Walnut/Markdown/RichHTMLDocument.swift');
+    expect(rich.match(/TaskAnchorHTML\.rewriteHTML\(RichHTMLSegments\.inlineMarkdown\(body\), render: taskMentionHTML,\s*sample: taskSampleHTML\)/g)).toHaveLength(2);
     const swift = (function walkSwift(dir: string, out: string[] = []): string[] {
       for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
         const p = path.join(dir, e.name);

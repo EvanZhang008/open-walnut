@@ -36,6 +36,13 @@ const HUB_TIMEOUT = { ok: false, error: { code: 'hub_timeout', message: 'primary
 const HUB_AWAY = { ok: false, error: { code: 'hub_unreachable', message: '"host_exec" needs the Walnut server, which is not answering this host right now.' } }
 const DONE = { ok: true, result: { jobId: 'hx-from-the-server', running: false, exitCode: 0 } }
 
+/** A failed call prints ONE JSON object (src/providers/tool-call-output.ts); the lines it used to print are in its message. */
+function failureOf(text: string): { code: string; message: string } {
+  const parsed = JSON.parse(text) as { ok: boolean; error: { code: string; message: string } }
+  expect(parsed.ok).toBe(false)
+  return parsed.error
+}
+
 /** What a Walnut server older than the field answers: its strict schema has no job_id (the real parser's words). */
 function olderServerRefusal(args: Record<string, unknown>, name = 'host_exec'): { ok: false; error: { code: string; message: string } } {
   const input = name === 'host_copy'
@@ -168,8 +175,10 @@ describe('the in-session CLI (wn-cli.ts)', () => {
     expect(r.code).toBe(5)
     const sent = gw.requests[0].args.args.job_id as string
     expect(sent).toMatch(/^hx-[0-9a-f-]{36}$/)
-    expect(r.err).toContain(`host_exec may have started on studio-mac as job ${sent}: do not run it again`)
-    expect(r.err).toContain(`walnut tools call host_exec_read '{"host":"studio-mac","job_id":"${sent}","wait_ms":10000}'`)
+    const failure = failureOf(r.err)
+    expect(failure.code).toBe('hub_timeout')
+    expect(failure.message).toContain(`host_exec may have started on studio-mac as job ${sent}: do not run it again`)
+    expect(failure.message).toContain(`walnut tools call host_exec_read '{"host":"studio-mac","job_id":"${sent}","wait_ms":10000}'`)
   })
 
   it('an older server refuses the field: the same call once more without it', async () => {
@@ -191,7 +200,7 @@ describe('the in-session CLI (wn-cli.ts)', () => {
     const r = await run(['tools', 'call', 'host_exec', CALL])
     gw.close()
     expect(r.code).toBe(5)
-    expect(r.err).toContain('so nothing ran on studio-mac')
+    expect(failureOf(r.err).message).toContain('so nothing ran on studio-mac')
     expect(r.err).not.toContain('may have started')
   })
 
@@ -200,7 +209,8 @@ describe('the in-session CLI (wn-cli.ts)', () => {
     process.env.WALNUT_SESSION_ID = 'probe-sid'
     const r = await run(['tools', 'call', 'host_exec', CALL])
     expect(r.code).toBe(6)
-    expect(r.err).toContain("host_exec did not reach this host's Walnut daemon, so nothing ran on studio-mac")
+    expect(failureOf(r.err)).toMatchObject({ code: 'daemon_unreachable' })
+    expect(failureOf(r.err).message).toContain("host_exec did not reach this host's Walnut daemon, so nothing ran on studio-mac")
     expect(r.err).not.toContain('may have started')
   })
 })
@@ -229,8 +239,8 @@ describe('the template CLI (daemon-source.ts)', () => {
     expect(r.code).toBe(5)
     const sent = lost.requests[0].args.args.job_id as string
     expect(sent).toMatch(/^hx-[0-9a-f-]{36}$/)
-    expect(r.err).toContain(`host_exec may have started on studio-mac as job ${sent}: do not run it again`)
-    expect(r.err).toContain(`walnut tools call host_exec_read '{"host":"studio-mac","job_id":"${sent}","wait_ms":10000}'`)
+    expect(failureOf(r.err).message).toContain(`host_exec may have started on studio-mac as job ${sent}: do not run it again`)
+    expect(failureOf(r.err).message).toContain(`walnut tools call host_exec_read '{"host":"studio-mac","job_id":"${sent}","wait_ms":10000}'`)
 
     fs.rmSync(path.join(dir, 'gw.sock'), { force: true })
     const old = await gateway(dir, (req, n) => (n === 1 ? olderServerRefusal(req.args.args) : DONE))
@@ -243,21 +253,22 @@ describe('the template CLI (daemon-source.ts)', () => {
     const away = await gateway(dir, () => HUB_AWAY)
     const r3 = await run(away.sock)
     away.close()
-    expect(r3.err).toContain('so nothing ran on studio-mac')
+    expect(failureOf(r3.err).message).toContain('so nothing ran on studio-mac')
     expect(r3.err).not.toContain('may have started')
 
-    // --json: stdout stays the one reply, and the run's id still reaches stderr.
+    // --json before the op (the twin's legacy form): stdout stays the one reply, and the run's id still reaches stderr.
     fs.rmSync(path.join(dir, 'gw.sock'), { force: true })
     const lostJson = await gateway(dir, () => HUB_TIMEOUT)
     const r4 = await run(lostJson.sock, ['--json'])
     lostJson.close()
+    expect(r4.code).toBe(5)
     expect(JSON.parse(r4.out)).toEqual(HUB_TIMEOUT)
     expect(r4.err).toContain(`as job ${lostJson.requests[0].args.args.job_id as string}: do not run it again`)
 
     // A socket that refuses the connection: the call never left.
     const r5 = await run(staleSocket(dir))
     expect(r5.code).toBe(6)
-    expect(r5.err).toContain("host_exec did not reach this host's Walnut daemon, so nothing ran on studio-mac")
+    expect(failureOf(r5.err).message).toContain("host_exec did not reach this host's Walnut daemon, so nothing ran on studio-mac")
     expect(r5.err).not.toContain('may have started')
   }, 60_000)
 
@@ -270,7 +281,7 @@ describe('the template CLI (daemon-source.ts)', () => {
     const sent = lost.requests[0].args.args.copy_id as string
     expect(sent).toMatch(/^hc-[0-9a-f-]{36}$/)
     expect(lost.requests[0].args.args.job_id).toBeUndefined()
-    for (const line of lostRunLines('host_copy', copy, sent)) expect(r.err).toContain(line)
+    for (const line of lostRunLines('host_copy', copy, sent)) expect(failureOf(r.err).message).toContain(line)
 
     fs.rmSync(path.join(dir, 'gw.sock'), { force: true })
     const old = await gateway(dir, (req, n) => (n === 1 ? olderServerRefusal(req.args.args, 'host_copy') : DONE))
@@ -283,7 +294,7 @@ describe('the template CLI (daemon-source.ts)', () => {
     const away = await gateway(dir, () => HUB_AWAY)
     const r3 = await run(away.sock, [], 'host_copy', JSON.stringify(copy))
     away.close()
-    expect(r3.err).toContain(awayLines('host_copy', copy)[0])
+    expect(failureOf(r3.err).message).toContain(awayLines('host_copy', copy)[0])
     expect(r3.err).not.toContain('may have started')
   }, 60_000)
 })

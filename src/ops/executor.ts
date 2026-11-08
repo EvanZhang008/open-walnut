@@ -30,7 +30,7 @@ import {
   LOCAL_ORIGIN, ORIGIN_HEADER, UNKNOWN_ORIGIN, ambientCallerOrigin, isLocalOrigin, isRemoteHostOrigin, lowerOrigin, withCallerOrigin,
 } from '../lib/caller-origin.js'
 import { selfCallRefusal } from './origin-policy.js'
-import { declaredKeysNote, unknownKeyHint } from './arg-hints.js'
+import { declaredKeysNote, invalidTypeHint, unknownKeyHint, unknownKeyNotes } from './arg-hints.js'
 import { isCallId, takeCallIdArg, writeOpId } from '../lib/op-call-id.js'
 import { runOnce } from './op-calls.js'
 
@@ -363,7 +363,8 @@ function dropRetiredInput(op: WalnutOp, raw: Record<string, unknown>): Record<st
 /**
  * Validate `rawArgs` against `op`'s input exactly as every surface does: a
  * retired field is dropped, any other unknown key is refused (with a "did you
- * mean" hint when the intended key is clear, src/ops/arg-hints.ts).
+ * mean" hint when the intended key is clear, and always the keys it takes:
+ * src/ops/arg-hints.ts). Nothing is rewritten or coerced.
  */
 export function parseOpArgs(
   op: WalnutOp,
@@ -374,9 +375,12 @@ export function parseOpArgs(
   const parsed = z.object(op.input).strict().safeParse(input)
   if (!parsed.success) {
     const issues = parsed.error.issues.map((i) => {
-      const hint = i.code !== 'unrecognized_keys' ? ''
-        : unknownKeyHint(op.input, input, i.path, i.keys)
-          || declaredKeysNote(op.input, i.path, i.path.length ? `${op.name} ${i.path.join('.')}` : op.name)
+      // A "did you mean" never stands alone: the keys the object takes follow it, so a wrong guess costs no round trip.
+      const hint = i.code === 'unrecognized_keys'
+        ? unknownKeyHint(op.input, input, i.path, i.keys)
+          + unknownKeyNotes(op.input, i.path, i.keys)
+          + declaredKeysNote(op.input, i.path, i.path.length ? `${op.name} ${i.path.join('.')}` : op.name)
+        : i.code === 'invalid_type' ? invalidTypeHint(op.input, input, i.path, i.expected) : ''
       return `${i.path.join('.') || '(root)'}: ${i.message}${hint}`
     }).join('; ')
     return { ok: false, message: `Invalid arguments for ${op.name}: ${issues}` }

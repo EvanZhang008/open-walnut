@@ -1,4 +1,4 @@
-import { marked, Marked, type MarkedExtension, type Tokens } from 'marked';
+import { Lexer, marked, Marked, type MarkedExtension, type Tokens } from 'marked';
 import DOMPurify from 'dompurify';
 import { trimTrailingPunctuation, trimUrlCjkTail } from './url-display';
 // Relative import on purpose: the markdown test tier runs this file in a bare
@@ -19,12 +19,13 @@ import { absorbWrittenTitles, pillNames, type WrittenMention } from './task-titl
 // traversal" each have exactly one definition; the module is dependency-free by
 // contract (no fs, no async, no imports) and is bundled into the browser here.
 import { hasTraversalSegment, parsePathDestination, parsePathRef, type ParsedRef } from '../../../src/providers/path-ref-parse';
-import { linkBareTaskIds, type BareTaskIdMode, type BareTaskIdRenderer } from './bare-task-ids';
+import { anchorRanges, escapedTagAttrRanges, linkBareTaskIds, splitHtml, type BareTaskIdMode, type BareTaskIdRenderer } from './bare-task-ids';
 import { linkLetterIds } from './letter-links';
 import { ensureReadableText, withReadableInk } from './html-contrast';
 import { taskPath } from './task-path';
 import { beginCodeBlockRender, highlightCodeBlocks, renderCodeBlockFrame } from './code-block';
 import { projectDisplayName } from './project-display';
+import { normalizeTaskAnchorHtml } from './task-anchor-html';
 import '@/styles/rich-ink.css';
 import '@/styles/code-block.css';
 
@@ -605,7 +606,8 @@ const bareTaskIdPills: BareTaskIdRenderer = {
  * way (tests/web/task-mention-surfaces.test.ts).
  */
 export function linkTaskMentions(html: string, mode: BareTaskIdMode = 'pills'): string {
-  return linkBareTaskIds(html, bareTaskIdPills, mode);
+  const normalized = mode === 'pills' ? normalizeTaskAnchorHtml(html, taskRefAnchor) : html;
+  return linkBareTaskIds(normalized, bareTaskIdPills, mode);
 }
 
 const WHOLE_TASK_TOKEN_RE = new RegExp(`^${TASK_TOKEN_SRC}$`);
@@ -716,6 +718,18 @@ export function extractFirstRefIds(text: string): { sessionId?: string; taskId?:
  * Handles both labeled (resolved) and unlabeled (streaming/unresolved) variants.
  */
 export function entityRefsToHtml(text: string): string {
+  const ranges = codeRegions(text).sort((a, b) => a[0] - b[0]);
+  let end = 0;
+  const pieces: string[] = [];
+  for (const [start, stop] of ranges) {
+    pieces.push(entityRefFragment(text.slice(end, start)), text.slice(start, stop));
+    end = stop;
+  }
+  pieces.push(entityRefFragment(text.slice(end)));
+  return pieces.join('');
+}
+
+function entityRefFragment(text: string): string {
   let result = text;
   // Current title first, decode-then-escape for the label fallback (otherwise
   // `&quot;` double-escapes to a literal `&quot;`); see taskRefAnchor.
@@ -1307,6 +1321,23 @@ export function filePathsToHtml(text: string, sessionCwd?: string): string {
   // injected there gets escaped by marked and shows as literal tags. linkifyPathsInCode
   // handles those AFTER parsing, where escaping is no longer a hazard.
   const fenceRanges = codeRegions(text);
+  // Match marked's tag grammar at each opener without slicing the remaining reply.
+  const tagRule = new RegExp(Lexer.rules.inline.normal.tag.source.replace(/(^|\|)\^/g, '$1'), 'y');
+  const htmlRanges: [number, number][] = [];
+  for (let at = text.indexOf('<'); at !== -1; at = text.indexOf('<', at + 1)) {
+    tagRule.lastIndex = at;
+    const tag = tagRule.exec(text);
+    if (tag?.index !== at) continue;
+    htmlRanges.push([at, at + tag[0].length]);
+    at += tag[0].length - 1;
+  }
+  const existingAnchors = anchorRanges(text);
+  const sourceRefs: [number, number][] = [];
+  for (const part of splitHtml(text)) {
+    if (!part.tag || !/^<span\b/i.test(part.s) || !/\bclass="source-link"/.test(part.s)) continue;
+    const end = text.indexOf('</span>', part.at + part.s.length);
+    if (end !== -1) sourceRefs.push([part.at, end + 7]);
+  }
 
   function isInFence(idx: number): boolean {
     return fenceRanges.some(([start, end]) => idx >= start && idx < end);
@@ -1337,6 +1368,10 @@ export function filePathsToHtml(text: string, sessionCwd?: string): string {
     if (isInFence(matchIdx)) return true;
     if (isInUrl(matchIdx)) return true;
     if (isInLink(matchIdx)) return true;
+    const matchEnd = matchIdx + matchStr.length;
+    if (htmlRanges.some(([start, end]) => matchIdx < end && matchEnd > start)) return true;
+    if (existingAnchors.some(([start, end]) => matchIdx < end && matchEnd > start)) return true;
+    if (sourceRefs.some(([start, end]) => matchIdx < end && matchEnd > start)) return true;
     return false;
   }
 
@@ -1367,7 +1402,7 @@ export function filePathsToHtml(text: string, sessionCwd?: string): string {
   // Pass 1b: Absolute DIRECTORY paths (no file extension) — /dir/sub/leaf.
   // Requires ≥3 segments to avoid matching short prose-y roots like "/usr/bin".
   // Skips anything already linkified by Pass 1 (overlap check) and URLs/fences.
-  const absDirRe = new RegExp(`${ABS_START}(~?\\/(?:[\\w@.+-]+\\/){2,}[\\w@.+-]+)\\/?(?=[\\s,;)"'\`\\]]|$)`, 'g');
+  const absDirRe = new RegExp(`${ABS_START}(~?\\/(?:[\\w@.+-]+\\/){2,}[\\w@.+-]+)\\/?(?=[\\s,;)"'\`\\]<]|$)`, 'g');
   while ((m = absDirRe.exec(text)) !== null) {
     const dirPath = m[1];
     if (shouldSkip(m.index, dirPath)) continue;
@@ -1384,7 +1419,7 @@ export function filePathsToHtml(text: string, sessionCwd?: string): string {
   // Pass 2: Relative paths with extension — dir/file.ext or ./file.ext:42
   // Only linkify if sessionCwd is available (needed to resolve absolute path)
   if (sessionCwd) {
-    const relRe = new RegExp(`(?:^|[\\s"'\`(])((\\.\\/|[\\w@][\\w@.+-]*\\/)+[\\w@.+-]+\\.(\\w+))${POS_SUFFIX_SRC}`, 'gm');
+    const relRe = new RegExp(`(?:^|[\\s"'\`(>])((\\.\\/|[\\w@][\\w@.+-]*\\/)+[\\w@.+-]+\\.(\\w+))${POS_SUFFIX_SRC}`, 'gm');
     while ((m = relRe.exec(text)) !== null) {
       // m[1] = the path, m[3] = extension, m[4] = position suffix
       const pathPart = m[1];
@@ -1416,7 +1451,7 @@ export function filePathsToHtml(text: string, sessionCwd?: string): string {
     // Claude frequently emits package-relative paths with no leading ./ and no
     // extension. Require ≥3 segments to avoid prose like "and/or/maybe". Resolved
     // against cwd; if it doesn't exist the explorer just shows "not found".
-    const relDirRe = /(?:^|[\s"'`(])((?:[\w@][\w@.+-]*\/){2,}[\w@][\w@.+-]*)\/?(?=[\s,;)"'`\].]|$)/gm;
+    const relDirRe = /(?:^|[\s"'`(>])((?:[\w@][\w@.+-]*\/){2,}[\w@][\w@.+-]*)\/?(?=[\s,;)"'`\].<]|$)/gm;
     while ((m = relDirRe.exec(text)) !== null) {
       // Trim a trailing sentence period the greedy class may have swallowed
       // (e.g. "…/SomeService." → drop the final ".").
@@ -1482,7 +1517,8 @@ function linkifyPathsInCode(html: string, sessionCwd?: string): string {
     const urlRe = /https?:\/\/[^\s"'`<>]+/g;
     let um: RegExpExecArray | null;
     while ((um = urlRe.exec(inner)) !== null) urlRanges.push([um.index, um.index + um[0].length]);
-    const inUrl = (idx: number) => urlRanges.some(([s, e]) => idx >= s && idx < e);
+    const protectedRanges = [...urlRanges, ...escapedTagAttrRanges(inner)];
+    const inUrl = (idx: number) => protectedRanges.some(([s, e]) => idx >= s && idx < e);
 
     // Absolute paths: /dir/file.ext(:line) — space-in-segment rules per ABS_FILE_RE_SRC
     const absRe = new RegExp(ABS_FILE_CODE_RE_SRC, 'g');
@@ -1511,7 +1547,8 @@ function linkifyPathsInCode(html: string, sessionCwd?: string): string {
       urlRe.lastIndex = 0;
       while ((um = urlRe.exec(out)) !== null) urlR.push([um.index, um.index + um[0].length]);
       const aR = anchorRanges(out);
-      const inU = (idx: number) => urlR.some(([s, e]) => idx >= s && idx < e) || aR.some(([s, e]) => idx >= s && idx < e);
+      const protectedRanges = [...urlR, ...aR, ...escapedTagAttrRanges(out)];
+      const inU = (idx: number) => protectedRanges.some(([s, e]) => idx >= s && idx < e);
       const absDirRe = new RegExp(`${ABS_START_CODE}(~?\\/(?:[\\w@.+-]+\\/){2,}[\\w@.+-]+)\\/?(?=[\\s,;)"'\`\\]<]|$)`, 'g');
       out = out.replace(absDirRe, (m, dirPath: string, offset: number) => {
         if (inU(offset)) return m;
@@ -1530,7 +1567,8 @@ function linkifyPathsInCode(html: string, sessionCwd?: string): string {
       urlRe.lastIndex = 0;
       while ((um = urlRe.exec(out)) !== null) urlRanges2.push([um.index, um.index + um[0].length]);
       const aR2 = anchorRanges(out);
-      const inUrl2 = (idx: number) => urlRanges2.some(([s, e]) => idx >= s && idx < e) || aR2.some(([s, e]) => idx >= s && idx < e);
+      const protectedRanges = [...urlRanges2, ...aR2, ...escapedTagAttrRanges(out)];
+      const inUrl2 = (idx: number) => protectedRanges.some(([s, e]) => idx >= s && idx < e);
 
       const relRe = new RegExp(`(^|[\\s"'\`(>])((?:\\.\\/|[\\w@][\\w@.+-]*\\/)+[\\w@.+-]+\\.(\\w+))${POS_SUFFIX_SRC}`, 'g');
       out = out.replace(relRe, (m, lead: string, pathPart: string, ext: string, suffix: string | undefined, offset: number) => {
@@ -1550,7 +1588,9 @@ function linkifyPathsInCode(html: string, sessionCwd?: string): string {
     // Runs last; file passes left URL text intact, and our file-link anchors carry
     // no http (data-file-path is a fs path), so this won't touch them. Same CJK
     // cut as the autolink tokenizer — code often quotes URLs inside CJK prose.
-    out = out.replace(/https?:\/\/[^\s"'`<>]+/g, (url) => {
+    const urlProtectedRanges = [...anchorRanges(out), ...escapedTagAttrRanges(out)];
+    out = out.replace(/https?:\/\/[^\s"'`<>]+/g, (url, offset: number) => {
+      if (urlProtectedRanges.some(([start, end]) => offset >= start && offset < end)) return url;
       const cut = trimUrlCjkTail(url);
       if (cut.length <= 'https://'.length) return url;
       changed = true;
@@ -1731,7 +1771,7 @@ export function renderMarkdownWithRefs(
     }
     let parsed = typeof raw === 'string' ? raw : '';
     parsed = linkifyPathsInCode(parsed, sessionCwd);
-    if (taskIds !== 'off') parsed = linkBareTaskIds(parsed, bareTaskIdPills, taskIds);
+    if (taskIds !== 'off') parsed = linkTaskMentions(parsed, taskIds);
     // A letter id opens its letter (utils/letter-links.ts); a file's own bytes stay as written.
     if (taskIds !== 'off') parsed = linkLetterIds(parsed);
     // Models write raw HTML in replies now and we render it natively, so this

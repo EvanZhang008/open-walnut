@@ -1,4 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import fs from 'node:fs';
+import { parseHTML } from 'linkedom';
+import { escapedTagAttrRanges, linkBareTaskIds, type BareTaskIdRenderer } from '@/utils/bare-task-ids';
 import {
   markdownToRichHtml,
   renderMarkdownWithRefs,
@@ -221,5 +224,110 @@ describe('bare task ids become task pills', () => {
     const ms = performance.now() - t0;
     expect(pills(html, A)).toHaveLength(4000);
     expect(ms).toBeLessThan(3000);
+  });
+});
+
+describe('ids in escaped markup attributes stay source', () => {
+  const r: BareTaskIdRenderer = {
+    resolve: (t) => (t === A || t === B ? { id: t, title: `Title ${t}` } : undefined),
+    anchor: (id, label, inCode) => `<a data-task-id="${id}"${inCode ? ' data-code' : ''}>${label}</a>`,
+  };
+  const link = (html: string) => linkBareTaskIds(html, r, 'pills');
+
+  beforeEach(() => {
+    resetEntityLabelsForTesting();
+    syncTasks([{ id: A, title: TITLE_A }, { id: B, title: TITLE_B }]);
+  });
+
+  it('every quote form, unquoted values, a &gt; inside a value, several tags', () => {
+    const unchanged = [
+      `<code>send &lt;task-ref id=&quot;${A}&quot; label=&quot;Old title&quot;/&gt;</code>`,
+      `<code>&lt;task-ref id=&#39;${A}&#39;/&gt;</code>`,
+      `<code>&lt;task-ref id=&#34;${A}&#34;/&gt;</code>`,
+      `<code>&lt;task-ref id=&#x27;${A}&#x27;/&gt;</code>`,
+      `<code>&lt;task-ref id="${A}"/&gt;</code>`,
+      `<code>&lt;task-ref id=${A} /&gt;</code>`,
+      `<code>&lt;span title=&quot;a &gt; b&quot; data-id=&quot;${A}&quot;&gt;x&lt;/span&gt;</code>`,
+      `<code>&lt;a href=&quot;/tasks/${A}&quot;&gt;x&lt;/a&gt; and &lt;task-ref id=&quot;${B}&quot;/&gt;</code>`,
+      `<pre><code>&lt;a\n  href=&quot;/tasks/${A}&quot;\n  class=&quot;task-link&quot;&gt;Old&lt;/a&gt;\n</code></pre>`,
+    ];
+    for (const html of unchanged) expect(link(html), html).toBe(html);
+    // Offsets run from after the tag name to past its `&gt;`.
+    expect(escapedTagAttrRanges('x &lt;a id=&quot;q&quot;&gt; y')).toEqual([[7, 28]]);
+  });
+
+  it('a real bare id beside a sample, text between tags, and prose comparisons still link', () => {
+    expect(link(`<code>send &lt;task-ref id=&quot;${A}&quot;/&gt; then ${B}</code>`)).toBe(
+      `<code>send &lt;task-ref id=&quot;${A}&quot;/&gt; then <a data-task-id="${B}" data-code>${B}</a></code>`,
+    );
+    expect(link(`<code>&lt;b&gt;${A}&lt;/b&gt;</code>`)).toContain(`<a data-task-id="${A}" data-code>${A}</a>`);
+    // `&lt;` followed by a space is a comparison, not a tag.
+    expect(link(`<p>x &lt; ${A} &gt; y</p>`)).toContain(`<a data-task-id="${A}">Title ${A}</a>`);
+    // An id written as the tag name itself is not an attribute.
+    expect(link(`<p>&lt;${A}&gt;</p>`)).toContain(`data-task-id="${A}"`);
+  });
+
+  it('long and boolean attributes, and a tag cut off inside an assignment, stay source', () => {
+    const kept = [
+      `<code>&lt;a title=&quot;${'x'.repeat(5000)}&quot; href=&quot;/tasks/${A}&quot;&gt;x&lt;/a&gt;</code>`,
+      `<code>&lt;input disabled data-id=&quot;${A}&quot; hidden&gt;</code>`,
+      `<code>&lt;task-ref id=&quot;${A}</code>`,
+      `<code>&lt;task-ref id=${A}</code>`,
+      `<pre><code>&lt;task-ref label=&quot;x&quot; id=${A}\n</code></pre>`,
+      `<code>&lt;a title=&#39;it ${A} &gt; x</code>`,
+    ];
+    for (const html of kept) expect(link(html), html).toBe(html);
+    // No attribute value confirmed: an open tag with only bare words is not a sample.
+    expect(link(`<code>&lt;a hidden ${A}</code>`)).toContain(`<a data-task-id="${A}" data-code>`);
+  });
+
+  it('comparisons and heredocs are not tags: their ids still link', () => {
+    for (const html of [
+      `<code>if a&lt;b then cat src/core/a.ts ${A}</code>`,
+      `<code>a&lt;b &amp;&amp; c&gt;d ${A}</code>`,
+      `<pre><code>python3 - &lt;&lt;EOF\nimport json\nprint(json.dumps({&quot;task_id&quot;: &quot;${A}&quot;}))\nEOF\n</code></pre>`,
+      `<pre><code>cat &lt;&lt;&#39;EOF&#39; &gt; out.txt\nsee ${A}\nEOF\n</code></pre>`,
+      `<pre><code>cat &lt;&lt;EOF\nx = {&quot;id&quot;: &quot;${A}&quot;}\nEOF\n</code></pre>`,
+    ]) {
+      expect(link(html), html).toContain(`<a data-task-id="${A}" data-code>${A}</a>`);
+    }
+  });
+
+  it('one pass over the input: many tags and quotes stay fast', () => {
+    const big = Array.from({ length: 20000 }, () => `&lt;a t=&quot;x &#39; ${A}&quot;&gt; ${B} &lt;b &quot;`).join('');
+    const t0 = performance.now();
+    const html = link(`<code>${big}</code>`);
+    expect(performance.now() - t0).toBeLessThan(3000);
+    expect(html).not.toContain(`data-task-id="${A}"`);
+    // Failed candidates with long attribute runs and quotes over later tags do not rescan the rest.
+    for (const text of [
+      '&lt;a x '.repeat(160000) + '/ nope',
+      '&lt;a title=&quot;'.repeat(160000) + '&quot; / nope',
+      '&lt;a ' + 'b c=&quot;&lt;d e &#39;f&quot; g=&#39;&lt;h&#39; '.repeat(40000) + '/ nope',
+    ]) {
+      const t1 = performance.now();
+      escapedTagAttrRanges(text);
+      expect(performance.now() - t1).toBeLessThan(3000);
+    }
+  });
+
+  it('shared fixture: samples in longer code, fences and indented blocks keep their source; whole citations are pills', () => {
+    const fixture = JSON.parse(fs.readFileSync(new URL('../../fixtures/task-anchor-refs.json', import.meta.url), 'utf8')) as {
+      tasks: Record<string, string>;
+      cases: { name: string; expect: string; id?: string; in: string }[];
+    };
+    syncTasks(Object.entries(fixture.tasks).map(([id, title]) => ({ id, title })));
+    const samples = fixture.cases.filter((c) => c.expect === 'source' && /sample/.test(c.name));
+    expect(samples.length).toBeGreaterThanOrEqual(4);
+    for (const c of samples) {
+      const { document } = parseHTML(`<html><body>${renderMarkdownWithRefs(c.in)}</body></html>`);
+      expect(document.querySelectorAll('a.task-link').length, c.name).toBe(0);
+      const code = document.querySelector('code')?.textContent ?? '';
+      expect(code, c.name).toContain(c.in.includes('<a ') ? '<a ' : '<task-ref ');
+      if (c.in.includes('class="task-link"')) expect(code, c.name).toContain('class="task-link"');
+    }
+    const whole = fixture.cases.filter((c) => c.expect === 'pill' && /backticks/.test(c.name));
+    expect(whole.length).toBeGreaterThanOrEqual(3);
+    for (const c of whole) expect(renderMarkdownWithRefs(c.in), c.name).toContain(`>${fixture.tasks[c.id!]}</a>`);
   });
 });

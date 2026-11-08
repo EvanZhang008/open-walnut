@@ -17,6 +17,7 @@ import { parseWalnutCliArgs, runWalnutCli } from '../../../src/providers/wn-cli.
 import { parseMcpCliArgs } from '../../../src/providers/mcp-cli-args.js'
 import { trailingArgsMessage } from '../../../src/providers/tool-args-source.js'
 import { runTools } from '../../../src/commands/tools.js'
+import { spyCliStreams } from '../../helpers/cli-streams.js'
 import { getDaemonSource } from '../../../src/providers/daemon-source.js'
 import { SOURCE_TWIN } from '../../helpers/source-twin.js'
 
@@ -58,9 +59,10 @@ describe('the in-session CLI (wn-cli.ts)', () => {
   it('parses an extra word as a usage error, and keeps --help and a stray --json', () => {
     for (const extra of EXTRAS) {
       const p = parseWalnutCliArgs(['tools', 'call', 'task_send', PAYLOAD, ...extra])
-      expect(p).toMatchObject({ kind: 'usage-error', message: expect.stringMatching(/^nothing was run/) })
+      expect(p).toMatchObject({ kind: 'usage-error', message: expect.stringMatching(/^nothing was run/), toolsCall: { json: extra.includes('--json') } })
     }
-    expect(parseWalnutCliArgs(['tools', 'call', 'task_list', '{}', '--json'])).toEqual({ kind: 'tools.call', name: 'task_list', rawJson: '{}' })
+    // A --json after the JSON is the output flag (tool-call-output.ts), not an extra word.
+    expect(parseWalnutCliArgs(['tools', 'call', 'task_list', '{}', '--json'])).toEqual({ kind: 'tools.call', name: 'task_list', rawJson: '{}', json: true })
     expect(parseWalnutCliArgs(['tools', 'call', 'task_send', PAYLOAD, '--help'])).toEqual({ kind: 'tools.help', name: 'task_send' })
   })
 
@@ -71,7 +73,10 @@ describe('the in-session CLI (wn-cli.ts)', () => {
     const err = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
     try {
       expect(await runWalnutCli(['tools', 'call', 'task_send', PAYLOAD, '--dry-run'])).toBe(2)
-      expect(String(err.mock.calls[0]?.[0])).toMatch(/^walnut: nothing was run/)
+      // One JSON object on stderr (tool-call-output.ts), the refusal in its message.
+      expect(err.mock.calls).toHaveLength(1)
+      const failure = JSON.parse(String(err.mock.calls[0]?.[0]))
+      expect(failure).toMatchObject({ ok: false, error: { code: 'usage_error', message: expect.stringMatching(/^nothing was run/) } })
     } finally {
       err.mockRestore()
     }
@@ -92,14 +97,19 @@ describe('the template CLI (daemon-source.ts)', () => {
         stdio: ['ignore', 'pipe', 'pipe'],
       })
       let err = ''
+      let out = ''
       child.stderr.on('data', (d) => { err += d })
-      child.on('close', (code) => resolve({ code, err }))
+      child.stdout.on('data', (d) => { out += d })
+      child.on('close', (code) => resolve({ code, err: err || out }))
     })
     for (const extra of EXTRAS) {
       const r = await run(extra)
       expect(r.code).toBe(2)
-      expect(r.err).toMatch(/^walnut: nothing was run: tools call reads <op> and one argument/)
-      expect(r.err).toContain(`so ${extra.find((a) => a !== '--json')} would have been ignored`)
+      // One JSON object: on stderr, or on stdout with --json (tool-call-output.ts).
+      const failure = JSON.parse(r.err) as { error: { code: string; message: string } }
+      expect(failure.error.code).toBe('usage_error')
+      expect(failure.error.message).toMatch(/^nothing was run: tools call reads <op> and one argument/)
+      expect(failure.error.message).toContain(`so ${extra.find((a) => a !== '--json')} would have been ignored`)
     }
     expect(gw.received()).toBe('')
     gw.close()
@@ -110,16 +120,17 @@ describe('the hub CLI (commands/tools.ts)', () => {
   it('runs nothing, prints the refusal and exits 1', async () => {
     const errors: string[] = []
     const logs: string[] = []
-    const e = vi.spyOn(console, 'error').mockImplementation((...a) => { errors.push(a.join(' ')) })
-    const l = vi.spyOn(console, 'log').mockImplementation((...a) => { logs.push(a.join(' ')) })
+    spyCliStreams({ out: (s) => logs.push(s), err: (s) => errors.push(s) })
     try {
       await runTools(['call', 'task_get', '{"id":"acme-none"}', '--dry-run'], {} as never)
     } finally {
-      e.mockRestore()
-      l.mockRestore()
+      vi.restoreAllMocks()
     }
     expect(process.exitCode).toBe(1)
-    expect(errors).toEqual([expect.stringMatching(/^nothing was run: .* so --dry-run would have been ignored$/)])
+    expect(errors).toHaveLength(1)
+    expect(JSON.parse(errors[0])).toEqual({
+      ok: false, error: { code: 'usage_error', message: expect.stringMatching(/^nothing was run: .* so --dry-run would have been ignored$/) },
+    })
     expect(logs).toEqual([])
   })
 })

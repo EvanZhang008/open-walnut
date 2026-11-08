@@ -8,7 +8,9 @@
  *
  * Same tools-list/help/call contract as other MCP-as-CLI binaries, so agents
  * that know that pattern can drive Walnut with zero new conventions. Output on
- * success is the op result as pretty JSON; errors go to stderr with exit 1.
+ * success is the op result as pretty JSON. A failed call prints ONE JSON object
+ * ({"ok":false,"error":{code,message,detail?}}) on stderr, or on stdout with
+ * --json (src/providers/tool-call-output.ts); the exit codes are unchanged.
  */
 
 import { z } from 'zod'
@@ -35,10 +37,13 @@ function parseFlagArgs(
   rest: string[],
   input: Record<string, z.ZodTypeAny>,
   out: Record<string, unknown>,
+  output: { json: boolean } = { json: false },
 ): string | null {
   for (let i = 0; i < rest.length; i++) {
     const flag = rest[i]
     if (!flag.startsWith('--')) return `unexpected argument: ${flag} (flags look like --status todo)`
+    // A --json where a flag stands (never a flag's value) asks for the JSON failure output.
+    if (flag === '--json' && !input.json) { output.json = true; continue }
     const key = flag.slice(2).replace(/-/g, '_')
     const schema = input[key]
     if (!schema) return `unknown flag --${flag.slice(2)} for this op (see \`walnut tools help\`)`
@@ -65,8 +70,13 @@ function parseFlagArgs(
   return null
 }
 
-export async function runTools(args: string[], globals: GlobalOptions): Promise<void> {
+export async function runTools(argv: string[], globals: GlobalOptions): Promise<void> {
   const { listOps, getOp, executeOp } = await import('../ops/index.js')
+  // --json before the subcommand, between call and the op, or after the JSON argument.
+  const { splitToolsJsonFlag } = await import('../providers/tool-call-output.js')
+  const split = splitToolsJsonFlag(argv)
+  const args = split.args
+  if (split.json && !globals.json) globals = { ...globals, json: true }
   const sub = args[0]
 
   // `walnut tools --help` / `-h`: commander no longer handles this (its help
@@ -150,9 +160,27 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
 
   if (sub === 'call') {
     const name = args[1]
-    if (!name) {
-      console.error('usage: walnut tools call <op> [\'{json}\' | --flag value ...]')
-      process.exitCode = 1
+    // Every failure of a call is ONE JSON object (tool-call-output.ts): on stderr, or on stdout with --json.
+    const { renderToolCallFailure, toolCallFailure, opFailureCode, gatewayFailureCode } = await import('../providers/tool-call-output.js')
+    const output = { json: globals.json === true }
+    const fail = (
+      code: string, message: string, exitCode: number,
+      more: { notes?: readonly string[]; detail?: unknown; partial?: unknown } = {},
+    ): void => {
+      const streams = renderToolCallFailure(toolCallFailure(code, message, more.notes, more.detail), { json: output.json, partial: more.partial })
+      // Raw stream writes, never console.*: bun's console.error paints its text red under
+      // FORCE_COLOR even into a pipe, and the ANSI prefix breaks JSON.parse (wn-cli.ts does the same).
+      if (streams.stdout) process.stdout.write(streams.stdout)
+      if (streams.stderr) process.stderr.write(streams.stderr)
+      process.exitCode = exitCode
+    }
+    if (name === '--help' || name === '-h') {
+      const { helpText } = await import('../providers/wn-cli.js')
+      console.log(helpText('tools'))
+      return
+    }
+    if (!name || name.startsWith('-')) {
+      fail('usage_error', 'usage: walnut tools call <op> [\'{json}\' | --flag value ...]', 1)
       return
     }
     const op = getOp(name)
@@ -172,8 +200,7 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
       const { trailingArgsMessage } = await import('../providers/tool-args-source.js')
       const trailing = trailingArgsMessage(rest.slice(1))
       if (trailing) {
-        console.error(trailing)
-        process.exitCode = 1
+        fail('usage_error', trailing, 1)
         return
       }
     }
@@ -183,7 +210,7 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
     // arguments (JSON, @file or stdin). Outside one, the usual unknown-op error.
     if (!op && !rest[0]?.startsWith('--')) {
       const { callServerOpThroughHostDaemon } = await import('./tools-daemon-fallback.js')
-      const code = await callServerOpThroughHostDaemon([name, ...rest])
+      const code = await callServerOpThroughHostDaemon([name, ...rest, ...(output.json ? ['--json'] : [])])
       if (code !== null) { process.exitCode = code; return }
     }
 
@@ -197,14 +224,12 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
       // coerced from the op's own zod shape, so numbers and booleans arrive
       // typed exactly as the JSON form would deliver them.
       if (!op) {
-        console.error(`Unknown op: ${name}. Run \`walnut tools list\`. A plugin's op takes its arguments as JSON: walnut tools call ${name} '{...}'`)
-        process.exitCode = 1
+        fail('unknown_op', `Unknown op: ${name}. Run \`walnut tools list\`. A plugin's op takes its arguments as JSON: walnut tools call ${name} '{...}'`, 1)
         return
       }
-      const flagErr = parseFlagArgs(rest, op.input, parsed)
+      const flagErr = parseFlagArgs(rest, op.input, parsed, output)
       if (flagErr) {
-        console.error(flagErr)
-        process.exitCode = 1
+        fail('usage_error', flagErr, 1)
         return
       }
     } else {
@@ -215,8 +240,7 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
       const { classifyArgsSource, parseToolArgs } = await import('../providers/tool-args-source.js')
       const source = classifyArgsSource(rest[0], process.stdin.isTTY === true)
       if (source.kind === 'usage-error') {
-        console.error(source.message)
-        process.exitCode = 1
+        fail('usage_error', source.message, 1)
         return
       }
       let rawJson = ''
@@ -236,15 +260,13 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
         try {
           rawJson = await fsp.readFile(source.path, 'utf-8')
         } catch (err) {
-          console.error(`cannot read arguments from ${source.path}: ${err instanceof Error ? err.message : String(err)}`)
-          process.exitCode = 1
+          fail('args_file', `cannot read arguments from ${source.path}: ${err instanceof Error ? err.message : String(err)}`, 1)
           return
         }
       }
       const args = parseToolArgs(rawJson)
       if (!args.ok) {
-        console.error(args.message)
-        process.exitCode = 1
+        fail('invalid_json', args.message, 1)
         return
       }
       parsed = args.args
@@ -254,8 +276,7 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
       const { strippedShellText, strippedShellTextMessage } = await import('../providers/tool-args-source.js')
       const cut = process.env.WALNUT_TEXT_CHECK === '0' ? null : strippedShellText(parsed)
       if (cut) {
-        console.error(strippedShellTextMessage(cut))
-        process.exitCode = 2
+        fail('shell_cut_text', strippedShellTextMessage(cut), 2)
         return
       }
     }
@@ -264,8 +285,7 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
     const { callIdFor, lostCallDetail, lostCallLines, newCallId } = await import('../lib/op-call-id.js')
     const given = callIdFor(parsed)
     if (given.bad) {
-      console.error(given.bad)
-      process.exitCode = 2
+      fail('invalid_call_id', given.bad, 2)
       return
     }
     let callId = given.callId
@@ -292,12 +312,13 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
           console.log(JSON.stringify(resp.result, null, 2))
           return
         }
-        console.error(formatErrorLines(resp.error).join('\n'))
-        if (resp.error.code === 'hub_timeout') {
-          console.error(lostLines())
-          if (resp.error.detail === undefined) console.log(JSON.stringify(lostCallDetail(name, callId), null, 2))
-        }
-        process.exitCode = errorToExitCode(resp.error.code)
+        const lost = resp.error.code === 'hub_timeout'
+        // A lost answer: the call's id and how to read it ride the one error (its notes and its detail); stdout stays empty.
+        const lostDetail = lost && resp.error.detail === undefined ? lostCallDetail(name, callId) : undefined
+        fail(gatewayFailureCode(resp.error.code, resp.error.message), resp.error.message, errorToExitCode(resp.error.code), {
+          notes: [...formatErrorLines(resp.error).slice(1), ...(lost ? lostLines().split('\n') : [])],
+          detail: lostDetail ?? resp.error.detail,
+        })
         return
       }
     }
@@ -318,31 +339,26 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
     if (!r.ok && r.unreachable) {
       const { callThroughHostDaemon } = await import('./tools-daemon-fallback.js')
       // The same call id: a write the server took before its connection reset runs once.
-      const code = await callThroughHostDaemon(name, { ...parsed, _call_id: callId })
+      const code = await callThroughHostDaemon(name, { ...parsed, _call_id: callId }, process.env, { json: output.json })
       if (code !== null) { process.exitCode = code; return }
     }
     if (!r.ok) {
-      if (r.result !== undefined) console.log(JSON.stringify(r.result, null, 2))
-      console.error(r.message)
       if (!r.unreachable) await record(false, r.result, r.message)
       // No answer at all (a timeout, a dropped connection): the call may have run all the same.
       // A server that refused the connection never saw the call: nothing ran.
-      if (r.result === undefined && (r.lost || /^Walnut request (timed out|failed)/.test(r.message))) {
-        console.error(lostLines())
-        console.log(JSON.stringify(lostCallDetail(name, callId), null, 2))
-      } else if (r.unreachable) {
-        const lines = awayLines(name, parsed)
-        if (lines.length) console.error(lines.join('\n'))
-      }
-      process.exitCode = 1
+      const lost = r.result === undefined && (r.lost || /^Walnut request (timed out|failed)/.test(r.message))
+      // A lost answer: the call's id and how to read it ride the one error (its notes and its detail); stdout stays empty.
+      const lostDetail = lost ? lostCallDetail(name, callId) : undefined
+      const notes = lost ? lostLines().split('\n') : r.unreachable ? awayLines(name, parsed) : []
+      // An op's partial result keeps its place on stdout (with --json, it is the error's detail).
+      fail(opFailureCode(r.message), r.message, 1, { notes, detail: lostDetail, partial: r.result })
       return
     }
     // A 200 with an EMPTY body leaves result undefined, and JSON.stringify would
     // print the literal string "undefined" with exit 0 — indistinguishable from a
     // real answer to a caller that only checks the status. Say it and fail.
     if (r.result === undefined) {
-      console.error(`${name} returned an empty response body (no JSON) — the server answered 200 with nothing`)
-      process.exitCode = 1
+      fail('empty_response', `${name} returned an empty response body (no JSON) — the server answered 200 with nothing`, 1)
       return
     }
     console.log(JSON.stringify(r.result, null, 2))

@@ -26,6 +26,7 @@
  *    becomes the title pill too.
  *  - An id inside longer code (a command, a table dump) is linked in place with
  *    its text unchanged: code stays what the model wrote.
+ *  - An id in an escaped tag's attributes is a sample's source and stays text.
  *  - Never inside an anchor (no nested links: the HTML parser splits them), nor
  *    inside elements where a link is invalid or invisible (button, textarea,
  *    svg, style, ...).
@@ -112,6 +113,67 @@ export function anchorRanges(html: string): [number, number][] {
   return ranges;
 }
 
+// Escaped-tag grammar follows marked's inline html tag (open name, attribute, unquoted value).
+const ESC_OPEN_RE = /&lt;[a-zA-Z][\w-]*/y;
+const ESC_ATTR_NAME_RE = /[a-zA-Z:_][\w.:-]*/y;
+const ESC_WS_RE = /\s*/y;
+const ESC_UNQUOTED_RE = /(?:(?!&lt;|&gt;|&quot;|&#34;|&#x22;|&#39;|&#x27;)[^\s"'=`])+/y;
+const ESC_QUOTES: [string, number][] = [['&quot;', 1], ['&#34;', 1], ['&#x22;', 1], ['"', 1], ['&#39;', 2], ['&#x27;', 2], ["'", 2]];
+const ESC_CLOSE_RE = [/(?:)/g, /&quot;|&#34;|&#x22;|"/g, /&#39;|&#x27;|'/g];
+
+function stickyEnd(re: RegExp, text: string, at: number): number {
+  re.lastIndex = at;
+  return re.exec(text) ? re.lastIndex : at;
+}
+
+function quoteAt(text: string, at: number): [string, number] | undefined {
+  return ESC_QUOTES.find(([q]) => text.startsWith(q, at));
+}
+
+/** The attribute span of the escaped open tag at `at`; a tag cut off by the end of the text counts only after `name=`. */
+function escapedTagAt(text: string, at: number): [number, number] | null {
+  const from = stickyEnd(ESC_OPEN_RE, text, at);
+  if (from === at) return null;
+  let i = from;
+  let assigned = false;
+  for (;;) {
+    const j = stickyEnd(ESC_WS_RE, text, i);
+    if (text.startsWith('&gt;', j)) return [from, j + 4];
+    if (text.startsWith('/&gt;', j)) return [from, j + 5];
+    if (j === text.length) return assigned ? [from, j] : null;
+    if (j === i) return null;
+    i = stickyEnd(ESC_ATTR_NAME_RE, text, j);
+    if (i === j) return null;
+    assigned = false;
+    let k = stickyEnd(ESC_WS_RE, text, i);
+    if (text[k] !== '=') continue;
+    k = stickyEnd(ESC_WS_RE, text, k + 1);
+    if (k === text.length) return [from, k];
+    const q = quoteAt(text, k);
+    if (q) {
+      const close = ESC_CLOSE_RE[q[1]]!;
+      close.lastIndex = k + q[0].length;
+      if (!close.exec(text)) return [from, text.length];
+      i = close.lastIndex;
+    } else {
+      i = stickyEnd(ESC_UNQUOTED_RE, text, k);
+      if (i === k) return null;
+    }
+    assigned = true;
+  }
+}
+
+/** Attribute spans of escaped open tags: an id there is a sample's source, not a citation. */
+export function escapedTagAttrRanges(text: string): [number, number][] {
+  const ranges: [number, number][] = [];
+  for (let at = text.indexOf('&lt;'); at !== -1;) {
+    const tag = escapedTagAt(text, at);
+    if (tag) ranges.push(tag);
+    at = text.indexOf('&lt;', tag ? tag[1] : at + 4);
+  }
+  return ranges;
+}
+
 export function linkBareTaskIds(html: string, r: BareTaskIdRenderer, mode: BareTaskIdMode = 'pills'): string {
   const pills = mode === 'pills';
   if (!hasCandidate(html)) return html;
@@ -163,12 +225,18 @@ export function linkBareTaskIds(html: string, r: BareTaskIdRenderer, mode: BareT
     if (noLinkDepth > 0 || inAnchor(p.at)) { out.push(p.s); continue; }
     const text = p.s;
     const tokenRe = new RegExp(TASK_TOKEN_SRC, 'g');
+    const samples = escapedTagAttrRanges(text);
+    let nextSample = 0;
     let m: RegExpExecArray | null;
     let last = 0;
     let piece = '';
     while ((m = tokenRe.exec(text)) !== null) {
       const token = m[0];
       if (!isTaskTokenCandidate(token)) continue;
+      // An id in an escaped tag's attribute is markup source, never a link.
+      while (nextSample < samples.length && samples[nextSample]![1] <= m.index) nextSample++;
+      const sample = samples[nextSample];
+      if (sample && sample[0] <= m.index) continue;
       const task = r.resolve(token);
       if (!task) continue;
       // Code and data keep what was written; prose shows the name.

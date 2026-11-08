@@ -590,6 +590,62 @@ final class RichHTMLTimelineTests: XCTestCase {
                        "the card stopped answering the reader partway through")
     }
 
+    func testCollapsedMarginsKeepTheLastBlockVisibleAndDisclosureCanShrink() async throws {
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: pageWidth, height: 900))
+        let cell = TimelineRichHTMLCell(frame: window.bounds)
+        window.rootViewController = UIViewController()
+        window.rootViewController?.view.addSubview(cell)
+        window.isHidden = false
+        defer { window.isHidden = true; cell.prepareForReuse() }
+        let measured = expectation(description: "document measured")
+        let spy = RichHeightSpy()
+        var didMeasure = false
+        spy.onHeight = { height in
+            cell.frame.size.height = height + TimelineMetrics.richVMargin * 2
+            cell.layoutIfNeeded()
+            if !didMeasure { didMeasure = true; measured.fulfill() }
+        }
+        let html = """
+        <div><p style="margin-top:90px">Start</p>
+        <details open><summary>Details</summary><div style="height:160px">Expanded</div></details>
+        <pre id="last">Last code line</pre></div>
+        """
+        cell.configureContent(html: html, key: "rh-collapsed-margin", streaming: false,
+                              rowID: "rh-collapsed-margin", contentWidth: contentWidth, delegate: spy)
+        cell.layoutIfNeeded()
+        let web = try XCTUnwrap(cell.webViewForTesting)
+        await fulfillment(of: [measured], timeout: 15)
+        var top: CGFloat = 0
+        var bottom: CGFloat = 0
+        let deadline = Date().addingTimeInterval(5)
+        repeat {
+            let dimensions = try await clientJS(web,
+                "[document.body.getBoundingClientRect().top,document.getElementById('last').getBoundingClientRect().bottom]"
+            ) as? [NSNumber]
+            top = CGFloat(try XCTUnwrap(dimensions?.first).doubleValue)
+            bottom = CGFloat(try XCTUnwrap(dimensions?.last).doubleValue)
+            if web.frame.height >= bottom, (spy.heights.last ?? 0) >= bottom { break }
+            try await Task.sleep(for: .milliseconds(100))
+        } while Date() < deadline
+        XCTAssertGreaterThanOrEqual(top, 89, "the fixture must collapse the top margin through body")
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(spy.heights.last), bottom)
+        XCTAssertGreaterThanOrEqual(web.frame.height, bottom)
+        let expanded = try XCTUnwrap(spy.heights.last)
+        let shrunk = expectation(description: "disclosure shrunk")
+        var didShrink = false
+        spy.onHeight = { height in
+            cell.frame.size.height = height + TimelineMetrics.richVMargin * 2
+            cell.layoutIfNeeded()
+            if height < expanded - 100, !didShrink { didShrink = true; shrunk.fulfill() }
+        }
+        _ = try await clientJS(web, "document.querySelector('details').open=false")
+        await fulfillment(of: [shrunk], timeout: 10)
+        let collapsedBottom = try await clientJS(web,
+            "document.getElementById('last').getBoundingClientRect().bottom") as? NSNumber
+        XCTAssertGreaterThanOrEqual(web.frame.height, CGFloat(try XCTUnwrap(collapsedBottom).doubleValue))
+        XCTAssertLessThan(web.frame.height, expanded - 100)
+    }
+
     // MARK: - Reuse
 
     /// A recycled cell must show nothing of the row it came FROM. The still frame is
@@ -831,6 +887,14 @@ final class RichHTMLTimelineTests: XCTestCase {
     }
 }
 
+/// A card's page runs no script of its own, so tests read it in the client world, as the cell does.
+@MainActor
+private func clientJS(_ web: WKWebView, _ script: String) async throws -> Any? {
+    try await withCheckedThrowingContinuation { continuation in
+        web.evaluateJavaScript(script, in: nil, in: .defaultClient) { continuation.resume(with: $0.map { Optional($0) }) }
+    }
+}
+
 /// Stands in for the coordinator, recording the whole `richHeight` request rather
 /// than only the number: which ROW a measurement is banked under is the thing
 /// several of these cases are about, and a spy that dropped it could not see a
@@ -838,10 +902,12 @@ final class RichHTMLTimelineTests: XCTestCase {
 private final class RichHeightSpy: TimelineCellActionDelegate {
     var reports: [(rowID: String, key: String, width: CGFloat, height: CGFloat)] = []
     var heights: [CGFloat] { reports.map(\.height) }
+    var onHeight: ((CGFloat) -> Void)?
 
     func timelineCell(didRequest action: TimelineRowAction) {
         if case .richHeight(let rowID, let key, let width, let height) = action {
             reports.append((rowID: rowID, key: key, width: width, height: height))
+            onHeight?(height)
         }
     }
 }

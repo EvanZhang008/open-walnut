@@ -33,6 +33,7 @@ import {
   classifyTemplateGateway, templateCheckGap, templateCheckInput, templateCheckReplyMs, templateCheckRequestInput,
 } from './trigger-check-core.js'
 import { SKILL_POINTER, formatOpHelp, formatToolsTable, type ToolRow } from '../ops/op-help.js'
+import { gatewayFailureCode, renderToolCallFailure, splitToolsJsonFlag, toolCallFailure } from './tool-call-output.js'
 import { awayLines, callerRunId, dropRunId, lostRunLines, neverSent, refusedRunId } from './host-exec-run-id.js'
 import { CALL_ID_ARG, callIdFor, callIdInJsonText, isCallId, lostCallDetail, lostCallLines, newCallId } from '../lib/op-call-id.js'
 import { RESTART_MARK_FRESH_SECS, RESTART_MARK_NAME, RESTART_POLL_MS, RESTART_RIDE_MAX_MS, restartMarkFresh } from './daemon-restart-mark.js'
@@ -66,13 +67,15 @@ export const CLI_WAIT_NOTICE_MS = 10_000
 
 export type WalnutCliParsed =
   | { kind: 'help'; topic: 'root' | 'tools' }
-  | { kind: 'usage-error'; message: string }
+  // `toolsCall`: the error belongs to a `tools call`, which answers it as one JSON object (tool-call-output.ts).
+  | { kind: 'usage-error'; message: string; toolsCall?: { json: boolean } }
   | { kind: 'guide' }
   // `ids`/`mode` only when more than one id was named: the one-id shape is unchanged.
   | { kind: 'wait'; id: string; ids?: string[]; mode?: WaitMode; timeoutSecs: number; json: boolean }
   | { kind: 'tools.list'; json: boolean }
   | { kind: 'tools.help'; name: string }
-  | { kind: 'tools.call'; name: string; rawJson: string | undefined }
+  // `json` only when --json was given: the failure is then one JSON object on stdout, stderr empty.
+  | { kind: 'tools.call'; name: string; rawJson: string | undefined; json?: true }
   | { kind: 'trigger-check'; template: string; paramsJson: string | undefined }
   | { kind: 'approve'; argv: string[] }
   | { kind: 'pass'; argv: string[] }
@@ -143,11 +146,13 @@ export function parseWalnutCliArgs(argv: string[]): WalnutCliParsed {
 }
 
 /** `walnut tools list | help <op> | call <op> ['{json}']` — same contract as the hub `walnut tools`. */
-function parseToolsArgs(args: string[]): WalnutCliParsed {
-  const [sub, ...rest] = args
+function parseToolsArgs(argv: string[]): WalnutCliParsed {
+  // --json before the subcommand, between call and the op, or after the JSON argument.
+  const split = splitToolsJsonFlag(argv)
+  const [sub, ...rest] = split.args
   if (sub === '--help' || sub === '-h' || sub === undefined) return { kind: 'help', topic: 'tools' }
   if (sub === 'list') {
-    let json = false
+    let json = split.json
     for (const a of rest) {
       if (a === '--json') json = true
       else if (a === '--help' || a === '-h') return { kind: 'help', topic: 'tools' }
@@ -162,7 +167,9 @@ function parseToolsArgs(args: string[]): WalnutCliParsed {
   }
   if (sub === 'call') {
     const name = rest[0]
-    if (!name) return { kind: 'usage-error', message: 'tools call requires <op>' }
+    const toolsCall = { json: split.json }
+    if (name === '--help' || name === '-h') return { kind: 'help', topic: 'tools' }
+    if (!name || name.startsWith('-')) return { kind: 'usage-error', message: 'tools call requires <op>', toolsCall }
     // `--help` after the op name asks for the SCHEMA. Treating it as the args
     // payload sent it to the JSON parser, so the answer to "what does this op
     // take?" was 'invalid JSON arguments: JSON Parse error' (2026-09-01).
@@ -170,8 +177,8 @@ function parseToolsArgs(args: string[]): WalnutCliParsed {
       return { kind: 'tools.help', name }
     }
     const trailing = trailingArgsMessage(rest.slice(2))
-    if (trailing) return { kind: 'usage-error', message: trailing }
-    return { kind: 'tools.call', name, rawJson: rest[1] }
+    if (trailing) return { kind: 'usage-error', message: trailing, toolsCall }
+    return { kind: 'tools.call', name, rawJson: rest[1], ...(split.json ? { json: true as const } : {}) }
   }
   return { kind: 'usage-error', message: `unknown tools subcommand: ${sub} (expected list | help | call)` }
 }
@@ -320,6 +327,7 @@ USAGE
   walnut tools call <op> ['{json}']    execute with inline JSON
   walnut tools call <op> @<file>       execute with the JSON in a file
   walnut tools call <op> -             execute with the JSON on stdin
+  walnut tools call <op> '{json}' --json   the same; a failure is one JSON object on stdout
 
 EXAMPLES
   walnut tools call task_list '{"phases":"TODO"}'
@@ -337,7 +345,24 @@ before walnut starts — so an inline letter with embedded audio fails with
 Requests relay through the Walnut daemon to the hub — works on ANY host with a
 Walnut-managed session, no server or tunnel setup needed. Destructive operations
 (e.g. task_delete) are local-only and refused here. Writes share the peer-send
-rate budget. Results print as pretty JSON.
+rate budget.
+
+OUTPUT
+  Success: the op's result as pretty JSON on stdout, exit 0 (never wrapped).
+  Failure: a non-zero exit, and ONE JSON object
+    {"ok":false,"error":{"code":"...","message":"...","detail":...}}
+  on stderr. stdout keeps what it printed before (an op's partial result, if any).
+  Do not read a normal result through 2>&1: stderr is where the failure goes.
+  For a script, add --json (before call, before the op, or after the JSON):
+  success is still the bare result, a failure is that one object on stdout and
+  stderr stays empty. Check the exit code, or for "ok": false with an "error"
+  object, before reading the output as the result.
+  A success-only parser can mistake a valid error object for an empty result.
+  Capture first and stop on failure before parsing successful fields:
+    out=$(walnut tools call search '{"q":"x"}' --json) || {
+      rc=$?; printf '%s\\n' "$out" >&2; exit "$rc"
+    }
+  Only then parse "$out" as the result.
 
 ${SKILL_POINTER}
 `
@@ -515,8 +540,11 @@ export function daemonRestartingAt(socketPath: string, nowMs = Date.now()): bool
  * 10 s notice landed in its JSON). Such a caller sees the answer, or the error.
  */
 function noticeToStderr(): boolean {
-  return process.stderr.isTTY === true
+  return process.stderr.isTTY === true && !noticesOff
 }
+
+/** Set by `tools call --json`, whose stderr stays empty whatever happens (tool-call-output.ts). */
+let noticesOff = false
 
 /** One notice per process, however many waits it rides (the socket lookup, then the call). */
 let restartWaitTold = false
@@ -777,11 +805,29 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
   if (argv[0] === 'mcp') return runMcpCli(argv.slice(1))
   if (argv[0] === 'mcp-server') return runMcpServer(argv.slice(1))
   const parsed = parseWalnutCliArgs(argv)
+  // A `tools call` answers every failure as ONE JSON object: on stderr, or with
+  // --json on stdout with stderr left empty (tool-call-output.ts).
+  const call = parsed.kind === 'tools.call' ? { json: parsed.json === true }
+    : parsed.kind === 'usage-error' ? parsed.toolsCall : undefined
+  noticesOff = call?.json === true
+  const failCall = async (
+    code: string, message: string, exitCode: number,
+    more: { notes?: readonly string[]; detail?: unknown; partial?: unknown } = {},
+  ): Promise<number> => {
+    const streams = renderToolCallFailure(
+      toolCallFailure(code, message.replace(/^walnut: /, ''), more.notes, more.detail),
+      { json: call?.json === true, partial: more.partial },
+    )
+    if (streams.stdout) await writeStdout(streams.stdout)
+    if (streams.stderr) process.stderr.write(streams.stderr)
+    return exitCode
+  }
   if (parsed.kind === 'help') {
     await writeStdout(helpText(parsed.topic))
     return 0
   }
   if (parsed.kind === 'usage-error') {
+    if (parsed.toolsCall) return failCall('usage_error', parsed.message, 2, { notes: ['run `walnut tools --help` for usage'] })
     process.stderr.write(`walnut: ${parsed.message}\nrun \`walnut --help\` for usage\n`)
     return 2
   }
@@ -796,6 +842,7 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
     endpoint = resolveWalnutCliEndpoint(process.env, probeSocket, uid)
   }
   if (!endpoint.ok) {
+    if (call) return failCall('no_daemon', endpoint.message, 6)
     process.stderr.write(endpoint.message + '\n')
     return 6
   }
@@ -821,29 +868,26 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
   // Every call's id (src/lib/op-call-id.ts), sent beside its name: a resend runs it at most
   // once, and op_result reads what it did when its answer is lost.
   let callId = ''
-  // The call may have run even though no answer came: say under which id, and how to read it,
-  // on stderr and, unless something else is printed there, as JSON on stdout.
-  const lostRun = (stdout = true) => {
-    if (parsed.kind !== 'tools.call' || !callId) return
-    const lines = [...(runId ? lostRunLines(parsed.name, callArgs, runId) : []), ...lostCallLines(parsed.name, argsFile === undefined ? callArgs : undefined, callId)]
-    process.stderr.write(lines.join('\n') + '\n')
-    if (stdout) process.stdout.write(JSON.stringify(lostCallDetail(parsed.name, callId), null, 2) + '\n')
+  // The call may have run even though no answer came: under which id, and how to read it. The
+  // same as JSON in the error's detail, which a caller reading stdout alone gets.
+  const lostRunNotes = (): string[] => {
+    if (parsed.kind !== 'tools.call' || !callId) return []
+    return [...(runId ? lostRunLines(parsed.name, callArgs, runId) : []), ...lostCallLines(parsed.name, argsFile === undefined ? callArgs : undefined, callId)]
   }
+  const lostCallInfo = (): Record<string, unknown> | undefined => (parsed.kind === 'tools.call' && callId ? lostCallDetail(parsed.name, callId) : undefined)
   // Arguments in a file name their own call with "_call_id" (the server takes it from there):
-  // this call is that one. '' = none named; false = a bad one, already said.
+  // this call is that one. '' = none named; false = a bad one, worded in badCallId.
+  let badCallId = ''
   const fileCallId = (text: string): string | false => {
     const named = callIdInJsonText(text)
     if (named === null) return ''
     if (isCallId(named)) return named
-    process.stderr.write(`walnut: ${CALL_ID_ARG} must be a call id a Walnut client printed\n`)
+    badCallId = `${CALL_ID_ARG} must be a call id a Walnut client printed`
     return false
   }
   if (parsed.kind === 'tools.call') {
     const source = classifyArgsSource(parsed.rawJson, process.stdin.isTTY === true)
-    if (source.kind === 'usage-error') {
-      process.stderr.write(`walnut: ${source.message}\n`)
-      return 2
-    }
+    if (source.kind === 'usage-error') return failCall('usage_error', source.message, 2)
     argForm = source.kind
     if (source.kind === 'file') argPath = source.path
     let rawJson = ''
@@ -858,14 +902,11 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
         try {
           fs.writeFileSync(spilledArgsFile, rawJson, { encoding: 'utf-8', mode: 0o600 })
         } catch (err) {
-          process.stderr.write(
-            `walnut: cannot stage a large payload at ${spilledArgsFile}: ${err instanceof Error ? err.message : String(err)}\n`,
-          )
-          return 2
+          return failCall('args_file', `cannot stage a large payload at ${spilledArgsFile}: ${err instanceof Error ? err.message : String(err)}`, 2)
         }
         argsFile = spilledArgsFile
         const named = fileCallId(rawJson)
-        if (named === false) return 2
+        if (named === false) return failCall('invalid_call_id', badCallId, 2)
         callId = named
       }
     } else if (source.kind === 'file') {
@@ -874,50 +915,35 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
       try {
         size = fs.statSync(abs).size
       } catch (err) {
-        process.stderr.write(
-          `walnut: cannot read arguments from ${source.path}: ${err instanceof Error ? err.message : String(err)}\n`,
-        )
-        return 2
+        return failCall('args_file', `cannot read arguments from ${source.path}: ${err instanceof Error ? err.message : String(err)}`, 2)
       }
       if (size > GATEWAY_INLINE_ARGS_MAX_BYTES) {
         argsFile = abs
         let named: string | false = ''
         try { named = fileCallId(fs.readFileSync(abs, 'utf-8')) } catch { /* the server reads it and says */ }
-        if (named === false) return 2
+        if (named === false) return failCall('invalid_call_id', badCallId, 2)
         callId = named
       } else {
         try {
           rawJson = fs.readFileSync(abs, 'utf-8')
         } catch (err) {
-          process.stderr.write(
-            `walnut: cannot read arguments from ${source.path}: ${err instanceof Error ? err.message : String(err)}\n`,
-          )
-          return 2
+          return failCall('args_file', `cannot read arguments from ${source.path}: ${err instanceof Error ? err.message : String(err)}`, 2)
         }
       }
     }
     if (argsFile === undefined) {
       const args = parseToolArgs(rawJson)
-      if (!args.ok) {
-        process.stderr.write(`walnut: ${args.message}\n`)
-        return 2
-      }
+      if (!args.ok) return failCall('invalid_json', args.message, 2)
       callArgs = args.args
       // A caller re-running a lost call names it with "_call_id"; taken out of the op's arguments.
       const given = callIdFor(callArgs)
-      if (given.bad) {
-        process.stderr.write(`walnut: ${given.bad}\n`)
-        return 2
-      }
+      if (given.bad) return failCall('invalid_call_id', given.bad, 2)
       callId = given.callId
       // A run's id chosen here, so an answer lost on the way back still leaves one to read.
       runId = callerRunId(parsed.name, callArgs)
       // A "$14.99" the shell already turned into ".99" on the command line: refused, nothing sent.
       const cut = process.env.WALNUT_TEXT_CHECK === '0' || source.kind !== 'inline' ? null : strippedShellText(callArgs)
-      if (cut) {
-        process.stderr.write(`walnut: ${strippedShellTextMessage(cut)}\n`)
-        return 2
-      }
+      if (cut) return failCall('shell_cut_text', strippedShellTextMessage(cut), 2)
     }
   }
 
@@ -967,18 +993,23 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
     }
   } catch (err) {
     if (err instanceof WalnutCliTimeoutError) {
-      process.stderr.write(`walnut: hub_timeout: no reply from the Walnut daemon within ${Math.round(socketTimeoutMs / 1000)}s\n`)
-      lostRun()
+      const message = `no reply from the Walnut daemon within ${Math.round(socketTimeoutMs / 1000)}s`
+      if (call) {
+        const lost = lostCallInfo()
+        return failCall('hub_timeout', message, 5, { notes: lostRunNotes(), detail: lost })
+      }
+      process.stderr.write(`walnut: hub_timeout: ${message}\n`)
       return 5
     }
-    const msg = err instanceof Error ? err.message : String(err)
-    process.stderr.write(`walnut: Walnut daemon socket unreachable at ${socketPath}: ${msg}\n`)
+    const msg = `Walnut daemon socket unreachable at ${socketPath}: ${err instanceof Error ? err.message : String(err)}`
     // Refused before a byte left: nothing ran. A socket that broke after the request went: it may have.
-    if (!neverSent(err)) lostRun()
-    else if (parsed.kind === 'tools.call') {
-      const lines = awayLines(parsed.name, callArgs, "this host's Walnut daemon")
-      if (lines.length) process.stderr.write(lines.join('\n') + '\n')
+    if (parsed.kind === 'tools.call') {
+      const sent = !neverSent(err)
+      const notes = sent ? lostRunNotes() : awayLines(parsed.name, callArgs, "this host's Walnut daemon")
+      const lost = sent ? lostCallInfo() : undefined
+      return failCall('daemon_unreachable', msg, 6, { notes, detail: lost })
     }
+    process.stderr.write(`walnut: ${msg}\n`)
     return 6
   } finally {
     clearTimeout(waitNotice)
@@ -987,10 +1018,9 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
     if (spilledArgsFile) { try { fs.unlinkSync(spilledArgsFile) } catch { /* already gone */ } }
   }
 
-  if ('json' in parsed && parsed.json) {
+  // tools.list's --json prints the whole answer; a call's success is its result either way.
+  if (parsed.kind !== 'tools.call' && 'json' in parsed && parsed.json) {
     await writeStdout(JSON.stringify(resp) + '\n')
-    // The call's id goes to stderr, so stdout stays one JSON document.
-    if (!resp.ok && resp.error.code === 'hub_timeout') lostRun(false)
     return resp.ok ? 0 : errorToExitCode(resp.error.code)
   }
 
@@ -998,17 +1028,21 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
     await recordCardedCall(socketPath, sid, parsed.name, callArgs, argForm, argPath, resp)
   }
 
+  if (!resp.ok && parsed.kind === 'tools.call') {
+    const { code, message, detail } = resp.error
+    const notes = formatErrorLines(resp.error).slice(1)
+    if (code === 'hub_timeout') notes.push(...lostRunNotes())
+    if (code === 'hub_unreachable') notes.push(...awayLines(parsed.name, callArgs))
+    // A lost answer carries the call's id in the error's detail, unless the op said something of its own.
+    const shown = detail ?? (code === 'hub_timeout' ? lostCallInfo() : undefined)
+    // An op's detail keeps its place on stdout (with --json, it rides in the error), a lost call's does not;
+    // a stopping daemon's {stopping} is no answer of the op's.
+    return failCall(gatewayFailureCode(code, message), message, errorToExitCode(code), {
+      notes, detail: shown, partial: stoppingAnswer(resp) ? undefined : detail,
+    })
+  }
   if (!resp.ok) {
-    const detail = parsed.kind === 'tools.call' && resp.error.detail !== undefined && !stoppingAnswer(resp)
-    if (detail) {
-      await writeStdout(JSON.stringify(resp.error.detail, null, 2) + '\n')
-    }
     process.stderr.write(formatErrorLines(resp.error).join('\n') + '\n')
-    if (resp.error.code === 'hub_timeout') lostRun(!detail)
-    if (resp.error.code === 'hub_unreachable' && parsed.kind === 'tools.call') {
-      const lines = awayLines(parsed.name, callArgs)
-      if (lines.length) process.stderr.write(lines.join('\n') + '\n')
-    }
     return errorToExitCode(resp.error.code)
   }
 

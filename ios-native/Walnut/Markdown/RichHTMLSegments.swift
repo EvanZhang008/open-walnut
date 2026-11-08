@@ -201,6 +201,12 @@ enum RichHTMLSegments {
                 i = end
                 continue
             }
+            // A task anchor waits for its `</a>`.
+            if let anchor = taskAnchorSpan(t, lt: lt, end: end, tag: tag) {
+                if anchor.pending { pendingAt = lt; break }
+                i = anchor.end
+                continue
+            }
             if rawtextTags.contains(tag.name), !tag.closing {
                 guard let close = rawtextClose(t, from: end, name: tag.name) else { pendingAt = lt; break }
                 i = close.end
@@ -928,6 +934,7 @@ enum RichHTMLSegments {
             if skip.contains(lt) { continue }
             guard let tag = tagName(t, at: lt) else { continue }
             let end = tagEnd(t, from: lt)
+            if let anchor = taskAnchorSpan(t, lt: lt, end: end, tag: tag) { i = anchor.end; continue }
             // No jump to `end` here: for a `<br` that is prose ("the <br tag isn't
             // closed"), the quote-aware `tagEnd` can run past a real tag further on.
             if nativeTags.contains(tag.name) { continue }
@@ -1031,6 +1038,16 @@ enum RichHTMLSegments {
             // pill in half.
             assign(end - 1, true)
             i = end
+            // No depth; a pending anchor holds every later boundary.
+            if let anchor = taskAnchorSpan(t, lt: lt, end: end, tag: tag) {
+                guard !anchor.pending else {
+                    assign(t.length, true)
+                    return HTMLState(depth: depth, blocked: blocked, endDepth: stack.count, truncated: true)
+                }
+                assign(anchor.end - 1, true)
+                i = anchor.end
+                continue
+            }
             guard isMarkupTag(t.substring(lt..<end), tag.name) else { continue }
 
             if tag.closing { popTo(tag.name); continue }
@@ -1066,6 +1083,20 @@ enum RichHTMLSegments {
         if isAutolinkForm(raw) { return false }
         if !raw.contains(where: \.isWhitespace), raw.contains("@") { return false }
         return knownElements.contains(name)
+    }
+
+    /// A task anchor (`TaskAnchorHTML`) is a mention like `<task-ref/>`, not markup. `end` is
+    /// past its `</a>`; a pending one claims the rest of the text, so its answer cannot change.
+    private static func taskAnchorSpan(
+        _ t: Text, lt: Int, end: Int, tag: (name: String, closing: Bool)
+    ) -> (end: Int, pending: Bool)? {
+        guard tag.name == "a", !tag.closing, end > 0,
+              TaskAnchorHTML.isTaskOpenTag(t.substring(lt..<end)) else { return nil }
+        switch TaskAnchorHTML.close(length: t.length, from: end, unit: { t[$0] }) {
+        case .closed(_, let close): return (close, false)
+        case .pending: return (t.length, true)
+        case .unclosed: return (end, false)
+        }
     }
 
     /// `<https://x>`, `<mailto:a@b>` — a markdown autolink, not an element.

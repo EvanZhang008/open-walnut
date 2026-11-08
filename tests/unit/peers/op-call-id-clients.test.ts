@@ -85,12 +85,15 @@ describe('the in-session CLI (wn-cli.ts)', () => {
     const callId = gw.requests[0].args.callId!
     expect(callId).toMatch(CALL_ID_RE)
     expect(gw.requests[0].args.args).toEqual(SEND)
-    expect(r.err).toContain('walnut: hub_timeout: primary server timed out')
-    expect(r.err).toContain(`no answer came back for task_send (call ${callId})`)
-    expect(r.err).toContain(`walnut tools call op_result '{"call_id":"${callId}"}'`)
-    expect(r.err).toContain(`walnut tools call task_send '${JSON.stringify({ ...SEND, _call_id: callId })}'`)
-    // A caller reading only stdout is not left with nothing.
-    expect(JSON.parse(r.out)).toMatchObject({ call_id: callId, state: 'unknown' })
+    // One JSON error on stderr (a second document would not parse), nothing on stdout: the call's state is the error's detail.
+    const failure = JSON.parse(r.err) as { ok: boolean; error: { code: string; message: string; detail?: unknown } }
+    expect(failure).toMatchObject({ ok: false, error: { code: 'hub_timeout' } })
+    expect(failure.error.message).toContain('primary server timed out')
+    expect(failure.error.message).toContain(`no answer came back for task_send (call ${callId})`)
+    expect(failure.error.message).toContain(`walnut tools call op_result '{"call_id":"${callId}"}'`)
+    expect(failure.error.message).toContain(`walnut tools call task_send '${JSON.stringify({ ...SEND, _call_id: callId })}'`)
+    expect(failure.error.detail).toMatchObject({ call_id: callId, state: 'unknown' })
+    expect(r.out).toBe('')
   })
 
   it('a re-run with "_call_id" sends that id and takes the key out of the op\'s arguments', async () => {
@@ -103,7 +106,26 @@ describe('the in-session CLI (wn-cli.ts)', () => {
     expect(gw.requests[0].args).toMatchObject({ name: 'task_send', callId: 'oc-0123456789abcdef', args: SEND })
     const bad = await run(['tools', 'call', 'task_send', JSON.stringify({ ...SEND, _call_id: 'not-one' })])
     expect(bad.code).toBe(2)
-    expect(bad.err).toMatch(/_call_id must be/)
+    const badFailure = JSON.parse(bad.err) as { error: { code: string; message: string } }
+    expect(badFailure.error.code).toBe('invalid_call_id')
+    expect(badFailure.error.message).toMatch(/_call_id must be/)
+  })
+
+  it('with --json a lost call is ONE document on stdout: the call id and the safe re-run in the message, the lost state as its detail', async () => {
+    const gw = await gateway(dir, () => HUB_TIMEOUT)
+    process.env.WALNUT_AGENT_SOCKET = gw.sock
+    process.env.WALNUT_SESSION_ID = 'probe-sid'
+    const r = await run(['tools', 'call', 'task_send', JSON.stringify(SEND), '--json'])
+    gw.close()
+    expect(r.code).toBe(5)
+    expect(r.err).toBe('')
+    const callId = gw.requests[0].args.callId!
+    const doc = JSON.parse(r.out) as { ok: boolean; error: { code: string; message: string; detail: unknown } }
+    expect(doc.ok).toBe(false)
+    expect(doc.error.code).toBe('hub_timeout')
+    expect(doc.error.message).toContain(`(call ${callId})`)
+    expect(doc.error.message).toContain(`walnut tools call op_result '{"call_id":"${callId}"}'`)
+    expect(doc.error.detail).toMatchObject({ call_id: callId, state: 'unknown' })
   })
 })
 
@@ -150,8 +172,12 @@ describe('the template CLI (daemon-source.ts)', () => {
     expect(r.code).toBe(5)
     const callId = lost.requests[0].args.callId!
     expect(callId).toMatch(CALL_ID_RE)
-    expect(r.err).toContain(`no answer came back for task_send (call ${callId})`)
-    expect(r.err).toContain(`walnut tools call op_result '{"call_id":"${callId}"}'`)
+    const failure = JSON.parse(r.err) as { error: { code: string; message: string; detail?: unknown } }
+    expect(failure.error.code).toBe('hub_timeout')
+    expect(failure.error.message).toContain(`no answer came back for task_send (call ${callId})`)
+    expect(failure.error.message).toContain(`walnut tools call op_result '{"call_id":"${callId}"}'`)
+    expect(failure.error.detail).toMatchObject({ call_id: callId, state: 'unknown' })
+    expect(r.out).toBe('')
 
     const again = await gateway(dir, () => SENT)
     const r2 = await run(again.sock, JSON.stringify({ ...SEND, _call_id: callId }))
@@ -197,22 +223,28 @@ describe('the Mac\'s own CLI (src/commands/tools.ts)', () => {
     delete process.env.WALNUT_SESSION_ID
     let out = ''
     let err = ''
-    const log = vi.spyOn(console, 'log').mockImplementation((s) => { out += String(s) + '\n' })
-    const error = vi.spyOn(console, 'error').mockImplementation((s) => { err += String(s) + '\n' })
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation((c) => { out += String(c); return true })
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation((c) => { err += String(c); return true })
     try {
       await runTools(['call', 'task_send', JSON.stringify(SEND)], {})
       expect(process.exitCode).toBe(1)
       const callId = /\(call (oc-[A-Za-z0-9_-]+)\)/.exec(err)?.[1]
       expect(callId).toMatch(CALL_ID_RE)
+      const failure = JSON.parse(err) as { ok: boolean; error: { message: string; detail?: unknown } }
+      expect(failure.ok).toBe(false)
+      expect(failure.error.message).toContain(`walnut tools call op_result '{"call_id":"${callId}"}'`)
+      expect(failure.error.detail).toMatchObject({ call_id: callId, state: 'unknown' })
+      expect(out).toBe('')
       expect(seen[0].opId).toBe(writeOpId(callId!, 'POST', '/messages', 0))
-      expect(JSON.parse(out)).toMatchObject({ call_id: callId, state: 'unknown' })
       process.exitCode = 0
       await runTools(['call', 'task_send', JSON.stringify({ ...SEND, _call_id: callId })], {})
       expect(seen[1].opId).toBe(seen[0].opId)
       expect(seen[1].body).not.toHaveProperty('_call_id')
     } finally {
       log.mockRestore()
-      error.mockRestore()
+      stdout.mockRestore()
+      stderr.mockRestore()
       server.close()
     }
   })

@@ -20,6 +20,7 @@ describe('Walnut self-knowledge contract', () => {
     expect(prompt).not.toContain('session_start');
     expect(prompt).not.toContain('session_send');
     expect(prompt).toContain('explicit task ID');
+    expect(prompt).toContain('never backticks or HTML anchors');
     expect(prompt).toContain('Satellite is represented by no stored focus tier');
     expect(prompt).not.toContain('/api/');
     expect(prompt).not.toContain('tasks.sqlite');

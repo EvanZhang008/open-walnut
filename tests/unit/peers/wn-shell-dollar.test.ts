@@ -182,8 +182,11 @@ describe.each(['wn-cli', 'twin'] as const)('the CLI (%s) refuses a text zsh alre
   it.skipIf(!HAS_ZSH)('zsh, double quotes: refused, nothing reaches the gateway; WALNUT_TEXT_CHECK=0 lets it through', async () => {
     const r = await call('zsh', DOUBLE);
     expect(r.code, r.err).toBe(2);
-    expect(r.err).toMatch(/"text" looks cut by the shell: "\.99"/);
-    expect(r.err).toMatch(/Nothing was sent/);
+    // A call's failure is one JSON object on stderr (tool-call-output.ts).
+    const failure = JSON.parse(r.err) as { ok: boolean; error: { code: string; message: string } };
+    expect(failure).toMatchObject({ ok: false, error: { code: 'shell_cut_text' } });
+    expect(failure.error.message).toMatch(/"text" looks cut by the shell: "\.99"/);
+    expect(failure.error.message).toMatch(/Nothing was sent/);
     expect(r.received).toBe('');
     const forced = await call('zsh', DOUBLE, { WALNUT_TEXT_CHECK: '0' });
     expect(forced.code, forced.err).toBe(0);

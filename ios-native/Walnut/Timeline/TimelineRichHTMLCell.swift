@@ -742,29 +742,22 @@ final class TimelineRichHTMLCell: UICollectionViewCell {
     // as a FALLBACK for the one case that would otherwise go unmeasured: the
     // isolated-world evaluation being refused outright.
 
-    /// Ask the DOCUMENT how tall it is, rather than asking the scroll view.
-    ///
-    /// `document.documentElement.scrollHeight` is the real answer and the only one
-    /// that can SHRINK: a `<details>` the reader collapses leaves `contentSize`
-    /// pinned at the frame it already had, so the card kept 83pt of dead space for
-    /// the rest of the session. This evaluates in an ISOLATED content world, which
-    /// is host-side script execution — `allowsContentJavaScript` stays off, so the
-    /// model's own markup still cannot run a line of code. If the evaluation fails
-    /// for any reason, the scroll view's (floored) number is still there as the
-    /// fallback, so a card is never left unmeasured.
+    // Collapsed top margins move the body below zero, so its height alone clips the last block.
+    private static let documentHeightScript = """
+    function () {
+      var b = document.body;
+      if (!b) return 0;
+      var r = b.getBoundingClientRect();
+      return Math.ceil(Math.max(r.bottom, r.top + b.scrollHeight) + window.scrollY);
+    }
+    """
+
+    // The body can shrink; documentElement and the scroll view are floored by the viewport.
     private func measureDocument() {
         guard let webView, documentReady else { return }
         let (rowID, key, width) = (stamp.rowID, stamp.key, stamp.width)
         webView.evaluateJavaScript(
-            // Body box, not `documentElement.scrollHeight` — see the observer
-            // script for why that one is floored by the frame.
-            """
-            (function () {
-              var b = document.body;
-              if (!b) return 0;
-              return Math.ceil(Math.max(b.getBoundingClientRect().height, b.scrollHeight));
-            })()
-            """, in: nil, in: .defaultClient
+            "(\(Self.documentHeightScript))()", in: nil, in: .defaultClient
         ) { [weak self, weak webView] result in
             // `webView` weakly too, not just `self`: a strong capture here keeps the
             // web view — and its share of a web content process — alive for as long
@@ -817,16 +810,7 @@ final class TimelineRichHTMLCell: UICollectionViewCell {
     private static let heightObserverScript = """
     (function () {
       var last = -1;
-      function measure() {
-        // The BODY's own box, never `documentElement.scrollHeight`: that one is
-        // floored by the viewport (which is the web view's frame), so it reports
-        // the height we already set and a collapsing `<details>` looks unchanged.
-        // `scrollHeight` joins it for content that overflows the body box.
-        var b = document.body;
-        if (!b) return 0;
-        var rect = b.getBoundingClientRect().height;
-        return Math.ceil(Math.max(rect, b.scrollHeight));
-      }
+      var measure = \(documentHeightScript);
       var pending = false;
       function post() {
         // Two frames, then measure: a `toggle`/`transitionend` listener can run
@@ -1124,13 +1108,13 @@ extension TimelineRichHTMLCell: WKNavigationDelegate {
         }
         // A real tap on a link goes through the action delegate, so the
         // controller's ONE routing rule applies (a walnut-file:// link or a
-        // bare absolute .html path opens the in-app preview; http(s) opens
-        // Safari). The scheme allowlist is why this isn't just forwarded
+        // bare absolute .html path opens the in-app preview; walnut-task:// opens
+        // the task; http(s) opens Safari). The scheme allowlist is why this isn't just forwarded
         // blindly: `tel:`/`sms:`/`mailto:` in model-written markup should not
         // be able to put the phone in a dialer.
         if navigationAction.navigationType == .linkActivated, let url,
            url.scheme == "http" || url.scheme == "https"
-            || url.scheme == FilePreviewLink.scheme {
+            || url.scheme == FilePreviewLink.scheme || url.scheme == TaskMentionLink.scheme {
             delegate?.timelineCell(didRequest: .openURL(url))
         } else {
             // Logged because a dropped main-frame navigation is invisible from the

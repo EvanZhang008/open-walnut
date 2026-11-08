@@ -624,10 +624,11 @@ final class TimelineRowBuilder {
     /// height" and never hand the cell the markup that just arrived.
     private func richRow(id: String, html: String, key: String,
                          streaming: Bool, width: CGFloat) -> TimelineRow {
-        TimelineRow(
-            id: id, revision: key.hashValue,
-            content: .richHTML(html: html, key: key, streaming: streaming),
-            height: richRowHeight(id: id, html: html, key: key, width: width)
+        let displayedKey = RichHTMLDocument.contentKey(body: html, key: key)
+        return TimelineRow(
+            id: id, revision: displayedKey.hashValue,
+            content: .richHTML(html: html, key: displayedKey, streaming: streaming),
+            height: richRowHeight(id: id, html: html, key: displayedKey, width: width)
         )
     }
 

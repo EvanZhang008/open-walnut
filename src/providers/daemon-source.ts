@@ -1105,8 +1105,11 @@ function runWnMinimal(argv, stdinText) {
     while (r.length && r[0] === '--json') r.shift();
     var s = r.shift();
     while (r.length && r[0] === '--json') r.shift();
-    if (s !== 'call' || r.length < 1) return null;
-    return { name: r[0], raw: r[1] };
+    if (s !== 'call' || r.length < 1 || r[0].charAt(0) === '-'
+      || r.slice(1).some(function (a) { return a === '--help' || a === '-h'; })) return null;
+    var t = r.slice(1);
+    while (t.length && t[0] === '--json') t.shift();
+    return { name: r[0], raw: t[0] };
   };
   // Payloads over this do not travel INSIDE the request — the hub range-reads
   // the file instead. Twin of GATEWAY_INLINE_ARGS_MAX_BYTES in tool-args-source.ts.
@@ -1118,17 +1121,20 @@ function runWnMinimal(argv, stdinText) {
   var wnRunId = null;
   var wnShellWord = function (t) { return "'" + t.replace(/'/g, "'\\\\''") + "'"; };
   var wnLostRunJob = function () {
-    if (!wnRunId) return;
+    if (!wnRunId) return [];
     if (wnRunId.op === 'host_copy') {
-      errOut('walnut: host_copy may have started as copy ' + wnRunId.id + ': do not start it again. Read it first:');
-      errOut('  walnut tools call host_copy_result ' + wnShellWord(JSON.stringify({ copy_id: wnRunId.id, wait_ms: 10000 })));
-      errOut('walnut: (if that read says unknown_copy, the copy never reached the Walnut server: call host_copy again)');
-      return;
+      return [
+        'walnut: host_copy may have started as copy ' + wnRunId.id + ': do not start it again. Read it first:',
+        '  walnut tools call host_copy_result ' + wnShellWord(JSON.stringify({ copy_id: wnRunId.id, wait_ms: 10000 })),
+        'walnut: (if that read says unknown_copy, the copy never reached the Walnut server: call host_copy again)',
+      ];
     }
     var readArgs = JSON.stringify({ host: wnRunId.host, job_id: wnRunId.id, wait_ms: 10000 });
-    errOut('walnut: host_exec may have started on ' + wnRunId.host + ' as job ' + wnRunId.id + ': do not run it again. Read it first:');
-    errOut('  walnut tools call host_exec_read ' + wnShellWord(readArgs));
-    errOut('walnut: (if that read says unknown_job, the run never reached ' + wnRunId.host + ': host_exec_list ' + wnShellWord(JSON.stringify({ host: wnRunId.host })) + " lists this task's jobs there)");
+    return [
+      'walnut: host_exec may have started on ' + wnRunId.host + ' as job ' + wnRunId.id + ': do not run it again. Read it first:',
+      '  walnut tools call host_exec_read ' + wnShellWord(readArgs),
+      'walnut: (if that read says unknown_job, the run never reached ' + wnRunId.host + ': host_exec_list ' + wnShellWord(JSON.stringify({ host: wnRunId.host })) + " lists this task's jobs there)",
+    ];
   };
   // Mirror of src/lib/op-call-id.ts: every call's id, sent beside its name, so a resend runs it
   // at most once and op_result reads what it did when its answer is lost.
@@ -1146,11 +1152,23 @@ function runWnMinimal(argv, stdinText) {
     return end === -1 ? '' : t.slice(i + 1, end);
   };
   var wnLostRun = function () {
-    wnLostRunJob();
-    if (!wnCallId || !args || typeof args.name !== 'string') return;
-    errOut('walnut: no answer came back for ' + args.name + ' (call ' + wnCallId + '). If it changes something, it may have run: do not run it again as a new call. Read what happened:');
-    errOut('  walnut tools call op_result ' + wnShellWord(JSON.stringify({ call_id: wnCallId })));
-    errOut('walnut: to run it again safely, add "_call_id":"' + wnCallId + '" to the same arguments; it runs at most once.');
+    var lines = wnLostRunJob();
+    if (!wnCallId || !args || typeof args.name !== 'string') return lines;
+    return lines.concat([
+      'walnut: no answer came back for ' + args.name + ' (call ' + wnCallId + '). If it changes something, it may have run: do not run it again as a new call. Read what happened:',
+      '  walnut tools call op_result ' + wnShellWord(JSON.stringify({ call_id: wnCallId })),
+      'walnut: to run it again safely, add "_call_id":"' + wnCallId + '" to the same arguments; it runs at most once.',
+    ]);
+  };
+  // Twin of lostCallDetail in op-call-id.ts: the same as JSON, in the error's detail, which a caller reading stdout alone gets.
+  var wnLostDetail = function () {
+    if (!wnCallId || !args || typeof args.name !== 'string') return undefined;
+    return {
+      call_id: wnCallId,
+      state: 'unknown',
+      outcome: 'No answer came back for ' + args.name + '. If it changes something, it may have run.',
+      next: 'Read it: walnut tools call op_result ' + wnShellWord(JSON.stringify({ call_id: wnCallId })) + '. Run it again only with "_call_id":"' + wnCallId + '" in the same arguments, which runs it at most once.',
+    };
   };
   // A server older than the run id refuses it as an unknown argument, before anything ran.
   var wnRefusedRunId = function (msg) {
@@ -1161,16 +1179,68 @@ function runWnMinimal(argv, stdinText) {
   // refused the connection, local true), so nothing ran; a job started before still runs.
   var wnAway = function (local) {
     var call = args && args.args;
-    if (!call || typeof args.name !== 'string') return;
+    if (!call || typeof args.name !== 'string') return [];
     var host = String(call.host || 'that host');
     var missed = local ? "this host's Walnut daemon" : 'the Walnut server';
     var short = local ? "this host's daemon" : 'the server';
-    if (args.name === 'host_copy') errOut('walnut: host_copy did not reach ' + missed + ', so nothing was copied; call it again once ' + short + ' answers.');
-    else if (args.name === 'host_exec' || args.name === 'host_exec_pinned') errOut('walnut: ' + args.name + ' did not reach ' + missed + ', so nothing ran on ' + host + '; call it again once ' + short + ' answers.');
-    else if (args.name === 'host_exec_read' || args.name === 'host_exec_stop' || args.name === 'host_exec_list') {
-      errOut('walnut: a job host_exec already started on ' + host + " keeps running meanwhile, and its log stays in your task's directory there"
-        + (typeof call.job_id === 'string' ? ' (host-exec/' + call.job_id + '.log)' : '') + '; read it once ' + short + ' answers.');
+    if (args.name === 'host_copy') return ['walnut: host_copy did not reach ' + missed + ', so nothing was copied; call it again once ' + short + ' answers.'];
+    if (args.name === 'host_exec' || args.name === 'host_exec_pinned') return ['walnut: ' + args.name + ' did not reach ' + missed + ', so nothing ran on ' + host + '; call it again once ' + short + ' answers.'];
+    if (args.name === 'host_exec_read' || args.name === 'host_exec_stop' || args.name === 'host_exec_list') {
+      return ['walnut: a job host_exec already started on ' + host + " keeps running meanwhile, and its log stays in your task's directory there"
+        + (typeof call.job_id === 'string' ? ' (host-exec/' + call.job_id + '.log)' : '') + '; read it once ' + short + ' answers.'];
     }
+    return [];
+  };
+  // Twin of src/providers/tool-call-output.ts: a tools call answers every failure as ONE
+  // JSON object {ok:false,error:{code,message,detail?}}: on stderr (stdout keeps an op's
+  // partial result, as before), or with --json on stdout with stderr left empty. Lines
+  // that used to follow on stderr join the message. Exit codes are unchanged.
+  var wnIsCall = false;
+  var wnFail = function (code, message, exitCode, notes, detail, partial) {
+    var lines = [String(message).replace(/^walnut: /, '')].concat(notes || [])
+      .map(function (l) { return String(l).replace(/\\s+$/, ''); })
+      .filter(function (l) { return l !== ''; });
+    var error = { code: code, message: lines.join('\\n') };
+    if (detail !== undefined) error.detail = detail;
+    if (json) {
+      if (error.detail === undefined && partial !== undefined) error.detail = partial;
+      out(JSON.stringify({ ok: false, error: error }));
+    } else {
+      if (partial !== undefined) {
+        out(JSON.stringify(partial, null, 2));
+        if (error.detail === partial) delete error.detail;
+      }
+      process.stderr.write(JSON.stringify({ ok: false, error: error }) + '\\n');
+    }
+    return exitWn(exitCode);
+  };
+  // Twin of gatewayFailureCode / opFailureCode in tool-call-output.ts.
+  var wnOpCode = function (code, msg) {
+    if (code !== 'internal' && code !== 'bad_request') return code;
+    msg = String(msg || '');
+    if (msg.indexOf('Invalid arguments for ') === 0) return 'invalid_arguments';
+    if (/^unknown op: /i.test(msg)) return 'unknown_op';
+    var api = /^Walnut API error \\(([^)]+)\\)/.exec(msg);
+    if (api) return /^\\d+$/.test(api[1]) ? 'http_' + api[1] : api[1];
+    if (msg.indexOf('Walnut server not running') === 0) return 'hub_unreachable';
+    if (msg.indexOf('Walnut request timed out') === 0) return 'hub_timeout';
+    if (msg.indexOf('Walnut request failed') === 0) return 'request_failed';
+    return code;
+  };
+  // Twin of formatErrorLines in wn-cli.ts: the lines after its first.
+  var wnErrNotes = function (err) {
+    var notes = [];
+    var cands = err.code === 'ambiguous_peer' && err.detail && typeof err.detail === 'object' ? err.detail.candidates : null;
+    if (Array.isArray(cands) && cands.length > 0) {
+      notes.push('candidates:');
+      cands.forEach(function (c) {
+        var t = c.title || '(untitled)';
+        if (t.length > 40) t = t.slice(0, 39) + '…';
+        notes.push('  ' + c.shortId + '  ' + t + '  ' + (c.host || 'local'));
+      });
+    }
+    if (err.code === 'throttled' && typeof err.retryAfterMs === 'number') notes.push('retry after ' + Math.ceil(err.retryAfterMs / 1000) + 's — do not retry in a loop');
+    return notes;
   };
   var wnSlot = wnCallSlot(argv);
   var wnSrc = wnSlot ? wnArgsSource(wnSlot.raw) : null;
@@ -1201,6 +1271,19 @@ function runWnMinimal(argv, stdinText) {
   while (rest.length && rest[0] === '--json') { json = true; rest.shift(); }
   var sub = rest.shift();
   while (rest.length && rest[0] === '--json') { json = true; rest.shift(); }
+  // A --json before call or the op keeps this twin's old answer: the gateway's whole envelope.
+  var legacyJson = json;
+  // ...and after the op or its JSON argument (twin of splitToolsJsonFlag in tool-call-output.ts):
+  // a whole --json word only, never text inside the argument.
+  if (head === 'tools' && sub === 'call' && rest.length >= 1) {
+    wnIsCall = true;
+    var wnTail = rest.slice(1);
+    while (wnTail.length && wnTail[0] === '--json') { json = true; wnTail.shift(); }
+    if (!(wnTail.length && wnTail[0].indexOf('--') === 0)) {
+      wnTail = wnTail.filter(function (a, k) { if (k > 0 && a === '--json') { json = true; return false; } return true; });
+    }
+    rest = [rest[0]].concat(wnTail);
+  }
   var op, args;
   var guide = false;
   // Set when this tools.list request is really "show me ONE op's schema".
@@ -1216,6 +1299,12 @@ function runWnMinimal(argv, stdinText) {
     // Minimal tools twin: list + call (+ help via a one-op list). Same hub
     // capabilities as the full wn-cli.ts; keep in sync.
     if (sub === 'list' && rest.length === 0) { op = 'tools.list'; args = {}; }
+    else if (sub === 'call' && (rest[0] === '--help' || rest[0] === '-h')) {
+      out(usage); out(wnSkillPointer); return exitWn(0);
+    }
+    else if (sub === 'call' && (!rest[0] || rest[0].charAt(0) === '-')) {
+      return wnFail('usage_error', 'tools call requires <op>', 2, ['run walnut tools --help for usage']);
+    }
     else if ((sub === 'call' || sub === 'help') && rest.length >= 1) {
       // 'tools help <op>' and 'tools call <op> --help' both ask for ONE op's
       // schema. Asking the hub for the whole catalog and printing it (what this
@@ -1233,6 +1322,7 @@ function runWnMinimal(argv, stdinText) {
         }
       }
       if (wantsHelp) {
+        wnIsCall = false;
         if (!helpName || helpName.charAt(0) === '-') { errOut('walnut: tools help requires <op>'); return exitWn(2); }
         op = 'tools.list';
         wnHelpOp = helpName;
@@ -1243,11 +1333,10 @@ function runWnMinimal(argv, stdinText) {
         // tool-args-source.ts (a stray --dry-run there once let a real message go out).
         var wnExtra = rest.slice(2).filter(function (a) { return a !== '--json'; });
         if (wnExtra.length) {
-          errOut('walnut: nothing was run: tools call reads <op> and one argument (inline JSON, @file or -) and nothing after it, so ' + wnExtra[0] + ' would have been ignored');
-          return exitWn(2);
+          return wnFail('usage_error', 'nothing was run: tools call reads <op> and one argument (inline JSON, @file or -) and nothing after it, so ' + wnExtra[0] + ' would have been ignored', 2, ['run walnut tools --help for usage']);
         }
         var src = wnSrc || wnArgsSource(rest[1]);
-        if (src.kind === 'usage-error') { errOut('walnut: ' + src.message); return exitWn(2); }
+        if (src.kind === 'usage-error') return wnFail('usage_error', src.message, 2);
         var rawText = '';
         var wnArgsFile;
         if (src.kind === 'inline') rawText = src.json;
@@ -1258,7 +1347,7 @@ function runWnMinimal(argv, stdinText) {
             wnArgsFile = require('path').join(
               require('os').tmpdir(), 'walnut-args-' + process.pid + '-' + Date.now().toString(36) + '.json');
             try { fs.writeFileSync(wnArgsFile, rawText, { encoding: 'utf-8', mode: 0o600 }); }
-            catch (e) { errOut('walnut: cannot stage a large payload at ' + wnArgsFile + ': ' + e.message); return exitWn(2); }
+            catch (e) { return wnFail('args_file', 'cannot stage a large payload at ' + wnArgsFile + ': ' + e.message, 2); }
             wnSpilledArgsFile = wnArgsFile;
           }
         }
@@ -1266,11 +1355,11 @@ function runWnMinimal(argv, stdinText) {
           var wnAbs = require('path').resolve(src.path);
           var wnSize = -1;
           try { wnSize = fs.statSync(wnAbs).size; }
-          catch (e) { errOut('walnut: cannot read arguments from ' + src.path + ': ' + e.message); return exitWn(2); }
+          catch (e) { return wnFail('args_file', 'cannot read arguments from ' + src.path + ': ' + e.message, 2); }
           if (wnSize > GATEWAY_INLINE_ARGS_MAX_BYTES) wnArgsFile = wnAbs;
           else {
             try { rawText = fs.readFileSync(wnAbs, 'utf-8'); }
-            catch (e) { errOut('walnut: cannot read arguments from ' + src.path + ': ' + e.message); return exitWn(2); }
+            catch (e) { return wnFail('args_file', 'cannot read arguments from ' + src.path + ': ' + e.message, 2); }
           }
         }
         op = 'tools.call';
@@ -1283,19 +1372,19 @@ function runWnMinimal(argv, stdinText) {
           var wnFileText = '';
           try { wnFileText = fs.readFileSync(wnArgsFile, 'utf-8'); } catch (e) { /* the server reads it and says */ }
           var wnNamed = wnCallIdInText(wnFileText);
-          if (wnNamed !== null && !wnCallIdRe.test(wnNamed)) { errOut('walnut: _call_id must be a call id a Walnut client printed'); return exitWn(2); }
+          if (wnNamed !== null && !wnCallIdRe.test(wnNamed)) return wnFail('invalid_call_id', '_call_id must be a call id a Walnut client printed', 2);
           wnCallId = wnNamed || wnNewCallId();
           args = { name: rest[0], argsFile: wnArgsFile, callId: wnCallId };
         } else {
           var parsedCall = wnParseToolArgs(rawText);
-          if (!parsedCall.ok) { errOut('walnut: ' + parsedCall.message); return exitWn(2); }
+          if (!parsedCall.ok) return wnFail('invalid_json', parsedCall.message, 2);
           var wnCut = process.env.WALNUT_TEXT_CHECK === '0' || src.kind !== 'inline' ? null : wnStrippedText(parsedCall.args, '', 0);
-          if (wnCut) { errOut('walnut: ' + wnStrippedMessage(wnCut)); return exitWn(2); }
+          if (wnCut) return wnFail('shell_cut_text', wnStrippedMessage(wnCut), 2);
           // A caller re-running a lost call names it with "_call_id"; never one of the op's own arguments.
           if (Object.prototype.hasOwnProperty.call(parsedCall.args, '_call_id')) {
             var wnGivenCall = parsedCall.args._call_id;
             delete parsedCall.args._call_id;
-            if (typeof wnGivenCall !== 'string' || !wnCallIdRe.test(wnGivenCall)) { errOut('walnut: _call_id must be a call id a Walnut client printed'); return exitWn(2); }
+            if (typeof wnGivenCall !== 'string' || !wnCallIdRe.test(wnGivenCall)) return wnFail('invalid_call_id', '_call_id must be a call id a Walnut client printed', 2);
             wnCallId = wnGivenCall;
           }
           if (!wnCallId) wnCallId = wnNewCallId();
@@ -1308,6 +1397,10 @@ function runWnMinimal(argv, stdinText) {
           args = { name: rest[0], args: parsedCall.args, callId: wnCallId };
         }
       }
+    } else if (sub === 'call') {
+      // A call with no op is still a call: its failure is the one JSON object too.
+      wnIsCall = true;
+      return wnFail('usage_error', 'tools call requires <op>', 2, ['run walnut tools --help for usage']);
     } else { errOut('walnut: ' + usage); return exitWn(2); }
   }
   else if (head === 'wait') {
@@ -1352,12 +1445,16 @@ function runWnMinimal(argv, stdinText) {
       try { sockStat = fs.statSync(candidateSock); wellKnown = candidateSock; } catch (e) { sockStat = null; }
     }
     if (!sockStat) {
-      errOut('walnut: no Walnut daemon on this host (WALNUT_AGENT_SOCKET is unset and ' + wellKnown + ' does not exist)');
+      var wnNoDaemon = 'walnut: no Walnut daemon on this host (WALNUT_AGENT_SOCKET is unset and ' + wellKnown + ' does not exist)';
+      if (wnIsCall) return wnFail('no_daemon', wnNoDaemon, 6);
+      errOut(wnNoDaemon);
       return exitWn(6);
     }
     var myUid = typeof process.getuid === 'function' ? process.getuid() : -1;
     if (!sockStat.isSocket() || (myUid >= 0 && sockStat.uid !== myUid) || (sockStat.mode & 0o077) !== 0) {
-      errOut('walnut: refusing ' + wellKnown + ': not an owner-only socket belonging to this user');
+      var wnRefused = 'walnut: refusing ' + wellKnown + ': not an owner-only socket belonging to this user';
+      if (wnIsCall) return wnFail('no_daemon', wnRefused, 6);
+      errOut(wnRefused);
       return exitWn(6);
     }
     sockPath = wellKnown;
@@ -1449,7 +1546,7 @@ function runWnMinimal(argv, stdinText) {
     if (markFd !== null) { try { fs.closeSync(markFd); } catch (e) {} }
     if (!fresh || Date.now() >= wnRideUntil) return false;
     // To a terminal only: a caller that captures stderr would read it into the answer (twin of wn-cli.ts noticeToStderr).
-    if (!wnRideTold && process.stderr.isTTY === true) { wnRideTold = true; errOut('walnut: the Walnut daemon on this host is restarting; waiting for the next one (up to 45s)'); }
+    if (!wnRideTold && process.stderr.isTTY === true && !json) { wnRideTold = true; errOut('walnut: the Walnut daemon on this host is restarting; waiting for the next one (up to 45s)'); }
     setTimeout(wnConnect, 500);
     return true;
   };
@@ -1463,12 +1560,16 @@ function runWnMinimal(argv, stdinText) {
   var wnWaitEnv = Number(process.env.WALNUT_CLI_WAIT_MS || '');
   var waitMs = op === 'tools.call' ? (Number.isFinite(wnWaitEnv) && wnWaitEnv > 0 ? Math.min(Math.floor(wnWaitEnv), 180000) : 90000) : 0;
   var socketTimeoutMs = waitMs ? waitMs + 10000 : 30000;
-  var waitNotice = waitMs && process.stderr.isTTY === true ? setTimeout(function () {
+  var waitNotice = waitMs && process.stderr.isTTY === true && !json ? setTimeout(function () {
     errOut('walnut: no answer yet; this call waits up to ' + Math.round(waitMs / 1000) + 's');
   }, 10000) : null;
   var finish = function (fn) { if (finished) return; finished = true; clearTimeout(timer); clearTimeout(waitNotice); sock.destroy(); fn(); };
   var timer = setTimeout(function () {
-    finish(function () { errOut('walnut: hub_timeout: no reply from the Walnut daemon within ' + Math.round(socketTimeoutMs / 1000) + 's'); wnLostRun(); exitWn(5); });
+    finish(function () {
+      var wnTimeoutMsg = 'no reply from the Walnut daemon within ' + Math.round(socketTimeoutMs / 1000) + 's';
+      if (wnIsCall) { var wnLostT = wnLostDetail(); return wnFail('hub_timeout', wnTimeoutMsg, 5, wnLostRun(), wnLostT); }
+      errOut('walnut: hub_timeout: ' + wnTimeoutMsg); exitWn(5);
+    });
   }, socketTimeoutMs);
   sock.on('connect', function () { sent = true; sock.write(JSON.stringify(waitMs ? { v: 1, op: op, sid: sid, args: args, waitMs: waitMs } : { v: 1, op: op, sid: sid, args: args }) + '\\n'); });
   sock.on('error', function (e) {
@@ -1476,11 +1577,16 @@ function runWnMinimal(argv, stdinText) {
       if (!sent && (e.code === 'ENOENT' || e.code === 'ECONNREFUSED') && wnRide()) return;
       // Exited with the call unread (Linux only, no byte of an answer yet): nothing ran (twin of wn-cli.ts unreadReset).
       if (process.platform === 'linux' && (e.code === 'ECONNRESET' || e.code === 'EPIPE') && !buf && wnRide()) return;
-      errOut('walnut: Walnut daemon socket unreachable at ' + sockPath + ': ' + e.message); if (sent) wnLostRun(); else wnAway(true); exitWn(6);
+      var wnUnreachable = 'Walnut daemon socket unreachable at ' + sockPath + ': ' + e.message;
+      if (wnIsCall) { var wnLostU = sent ? wnLostDetail() : undefined; return wnFail('daemon_unreachable', wnUnreachable, 6, sent ? wnLostRun() : wnAway(true), wnLostU); }
+      errOut('walnut: ' + wnUnreachable); exitWn(6);
     });
   });
   sock.on('close', function () {
-    finish(function () { errOut('walnut: agent socket closed without a response'); if (sent) wnLostRun(); else wnAway(true); exitWn(6); });
+    finish(function () {
+      if (wnIsCall) { var wnLostC = sent ? wnLostDetail() : undefined; return wnFail('daemon_unreachable', 'agent socket closed without a response', 6, sent ? wnLostRun() : wnAway(true), wnLostC); }
+      errOut('walnut: agent socket closed without a response'); exitWn(6);
+    });
   });
   // One decoder for the whole reply, so a character split across chunks decodes whole.
   sock.setEncoding('utf-8');
@@ -1491,7 +1597,10 @@ function runWnMinimal(argv, stdinText) {
     var line = buf.slice(0, nl);
     finish(function () {
       var resp;
-      try { resp = JSON.parse(line); } catch (e) { errOut('walnut: malformed response from agent socket'); return exitWn(1); }
+      try { resp = JSON.parse(line); } catch (e) {
+        if (wnIsCall) return wnFail('internal', 'malformed response from agent socket', 1);
+        errOut('walnut: malformed response from agent socket'); return exitWn(1);
+      }
       // A stopping daemon took nothing of the call: wait for the next one (wnRide).
       var wnStopping = !resp.ok && resp.error && resp.error.code === 'hub_unreachable' && resp.error.detail && resp.error.detail.stopping === true;
       if (wnStopping && wnRide()) return;
@@ -1501,18 +1610,32 @@ function runWnMinimal(argv, stdinText) {
         wnRunId = null;
         return wnConnect();
       }
-      if (json) {
+      // Legacy --json (before call or the op): the envelope as it came, its run id on stderr, as before.
+      if (json && wnIsCall && legacyJson) {
         out(JSON.stringify(resp));
-        // The run's id goes to stderr, so stdout stays one JSON document.
-        if (!resp.ok && resp.error && resp.error.code === 'hub_timeout') wnLostRun();
+        if (!resp.ok && resp.error && resp.error.code === 'hub_timeout') wnLostRun().forEach(errOut);
+        return exitWn(resp.ok ? 0 : exitFor(resp.error && resp.error.code));
+      }
+      if (!resp.ok && wnIsCall) {
+        var cerr = resp.error || {};
+        var ccode = cerr.code || 'internal';
+        var cmsg = cerr.message || 'gateway request failed';
+        var cnotes = wnErrNotes(cerr);
+        if (ccode === 'hub_timeout') cnotes = cnotes.concat(wnLostRun());
+        if (ccode === 'hub_unreachable') cnotes = cnotes.concat(wnAway());
+        // A lost answer carries the call's id in the error's detail, unless the op said something of its own.
+        var cdetail = cerr.detail !== undefined ? cerr.detail : (ccode === 'hub_timeout' ? wnLostDetail() : undefined);
+        // An op's detail keeps its place on stdout (with --json it rides in the error), a lost call's does not; a stopping daemon's is no answer.
+        return wnFail(wnOpCode(ccode, cmsg), cmsg, exitFor(ccode), cnotes, cdetail, wnStopping ? undefined : cerr.detail);
+      }
+      // A call's success is its result, --json or not; the rest print the whole answer with --json.
+      if (json && !wnIsCall) {
+        out(JSON.stringify(resp));
         return exitWn(resp.ok ? 0 : exitFor(resp.error && resp.error.code));
       }
       if (!resp.ok) {
         var err = resp.error || {};
-        if (op === 'tools.call' && err.detail !== undefined && !wnStopping) out(JSON.stringify(err.detail, null, 2));
         errOut('walnut: ' + (err.code || 'internal') + ': ' + (err.message || 'gateway request failed'));
-        if (err.code === 'hub_timeout') wnLostRun();
-        if (err.code === 'hub_unreachable') wnAway();
         return exitWn(exitFor(err.code));
       }
       if (op === 'tools.list') {

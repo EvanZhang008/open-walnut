@@ -24,11 +24,23 @@ final class ChatPlaceFixtureServer {
     static let placeholderAskSessionID = "sess-fixture-ask-placeholder"
     static let askProject = "Ask Walnut"
 
+    /// Optional test data; the empty default keeps the old answers (transcript 404, no tasks).
+    struct Options {
+        /// Session id to `SessionTranscript.Message` rows, served at `GET /sessions/:id/transcript`.
+        var history: [String: [[String: Any]]] = [:]
+        /// `WalnutTask` rows for `GET /tasks`; `GET /tasks/:id` answers each as a sessionless detail.
+        var tasks: [[String: Any]] = []
+        var tasksInitiallyHidden = false
+    }
+
+    private let options: Options
+    private var tasksVisible: Bool
     private let listener: NWListener
     private let queue = DispatchQueue(label: "chat-place-fixture")
     /// Open event streams, each pinged every 20 s: the app's stream watchdog
     /// reconnects after 50 s of silence.
     private var held: [ObjectIdentifier: NWConnection] = [:]
+    private var events: [ObjectIdentifier: NWConnection] = [:]
     private var ping: DispatchSourceTimer?
     private(set) var port: UInt16 = 0
     /// Extra projects, each named by one task, so a picker's list is longer than a screen
@@ -41,7 +53,9 @@ final class ChatPlaceFixtureServer {
     /// before `start`.
     var answerDelay: ((_ method: String, _ path: String) -> TimeInterval)?
 
-    init() throws {
+    init(options: Options = Options()) throws {
+        self.options = options
+        tasksVisible = !options.tasksInitiallyHidden
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
         parameters.allowLocalEndpointReuse = true
@@ -99,8 +113,28 @@ final class ChatPlaceFixtureServer {
             ping = nil
             for connection in held.values { connection.cancel() }
             held.removeAll()
+            events.removeAll()
         }
         listener.cancel()
+    }
+
+    var taskEventsConnected: Bool { queue.sync { !events.isEmpty } }
+
+    func revealTasks() -> Bool {
+        queue.sync {
+            guard !events.isEmpty else { return false }
+            tasksVisible = true
+            for task in options.tasks {
+                guard let data = try? JSONSerialization.data(withJSONObject: task) else { continue }
+                var frame = Data("event: task-upsert\ndata: ".utf8)
+                frame.append(data)
+                frame.append(Data("\n\n".utf8))
+                for connection in events.values {
+                    connection.send(content: frame, completion: .contentProcessed { _ in })
+                }
+            }
+            return true
+        }
     }
 
     // MARK: - HTTP
@@ -146,22 +180,27 @@ final class ChatPlaceFixtureServer {
         let parts = requestLine.split(separator: " ")
         let method = parts.first.map(String.init) ?? "GET"
         let target = parts.count > 1 ? String(parts[1]) : "/"
-        let path = target.split(separator: "?", maxSplits: 1).first.map(String.init) ?? target
+        let split = target.split(separator: "?", maxSplits: 1).map(String.init)
+        let path = split.first ?? target
+        let query = split.count > 1 ? split[1] : ""
         if method == "GET", Self.isStream(path) {
             let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n"
                 + "Connection: keep-alive\r\n\r\n: fixture\n\n"
             let key = ObjectIdentifier(connection)
             held[key] = connection
+            if path == "/api/v1/events" { events[key] = connection }
             connection.stateUpdateHandler = { [weak self] state in
                 switch state {
-                case .failed, .cancelled: self?.held[key] = nil
+                case .failed, .cancelled:
+                    self?.held[key] = nil
+                    self?.events[key] = nil
                 default: break
                 }
             }
             connection.send(content: Data(head.utf8), completion: .contentProcessed { _ in })
             return
         }
-        let (status, body) = route(method: method, path: path)
+        let (status, body) = route(method: method, path: path, query: query)
         let data = (try? JSONSerialization.data(withJSONObject: body)) ?? Data("{}".utf8)
         let head = "HTTP/1.1 \(status) \(status == 200 ? "OK" : "Not Found")\r\nContent-Type: application/json\r\n"
             + "Content-Length: \(data.count)\r\nConnection: close\r\n\r\n"
@@ -214,11 +253,46 @@ final class ChatPlaceFixtureServer {
         return row
     }
 
-    private func route(method: String, path: String) -> (Int, Any) {
+    /// A `GET /tasks` row: the fields `WalnutTask` requires, nothing else.
+    static func taskRow(id: String, title: String, phase: String = "TODO") -> [String: Any] {
+        ["id": id, "title": title, "status": "todo", "phase": phase, "priority": "none", "project": "",
+         "created_at": at, "updated_at": at]
+    }
+
+    /// One transcript row (`SessionTranscript.Message`): a text row, a user row a person sent.
+    static func historyRow(role: String, text: String, at timestamp: String) -> [String: Any] {
+        var row: [String: Any] = ["role": role, "text": text, "timestamp": timestamp]
+        if role == "user" { row["sentBy"] = "person" }
+        return row
+    }
+
+    /// The whole history as one rich, unpageable page; `before=` has nothing older.
+    private func transcript(_ sessionID: String, query: String) -> [String: Any]? {
+        guard let rows = options.history[sessionID] else { return nil }
+        let older = query.split(separator: "&").contains { $0.hasPrefix("before=") }
+        return [
+            "sessionId": sessionID, "exportedAt": Self.at, "truncated": false,
+            "messages": older ? [] as [Any] : rows, "pageable": false, "rich": true,
+        ]
+    }
+
+    private func route(method: String, path: String, query: String) -> (Int, Any) {
         if let extra = extraRoute?(method, path) { return extra }
         let v1 = "/api/v1"
         guard path.hasPrefix(v1) else { return (404, Self.notFound(path)) }
         let p = String(path.dropFirst(v1.count))
+        if method == "GET", p.hasPrefix("/sessions/"), p.hasSuffix("/transcript") {
+            let id = String(p.dropFirst("/sessions/".count).dropLast("/transcript".count))
+            if let body = transcript(id, query: query) { return (200, body) }
+            return (404, Self.notFound(path))
+        }
+        if method == "GET", p.hasPrefix("/tasks/"),
+           let row = options.tasks.first(where: { "/tasks/\($0["id"] as? String ?? "")" == p }) {
+            guard tasksVisible else { return (404, Self.notFound(path)) }
+            var detail = row
+            detail["session_ids"] = [] as [Any]
+            return (200, ["task": detail])
+        }
         switch (method, p) {
         case ("GET", ""), ("GET", "/"), ("GET", "/status"):
             return (200, ["mode": "LIVE", "cloud": false, "version": "0.0.0-fixture", "serverTime": Self.at])
@@ -272,7 +346,7 @@ final class ChatPlaceFixtureServer {
         case ("GET", "/sessions/\(Self.askSessionID)"):
             return (200, Self.sessionDetail(Self.askSessionID, task: Self.askTaskID, title: "Compare two laptops"))
         case ("GET", "/tasks"):
-            return (200, ["tasks": [] as [Any], "syncedAt": Self.at])
+            return (200, ["tasks": tasksVisible ? options.tasks : [], "syncedAt": Self.at])
         case ("GET", "/tasks/groups"):
             // Projects named by an (empty) folder each: "Aa" ones sort before "Ask Walnut", "Zz" ones after.
             let before = extraProjectCount * 5 / 8

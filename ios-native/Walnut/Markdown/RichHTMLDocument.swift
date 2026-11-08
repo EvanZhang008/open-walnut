@@ -146,7 +146,9 @@ enum RichHTMLDocument {
                      island: IslandRuntime.Seed? = nil) -> String {
         let markdown: String
         switch kind {
-        case .content: markdown = RichHTMLSegments.inlineMarkdown(body)
+        case .content:
+            markdown = TaskAnchorHTML.rewriteHTML(RichHTMLSegments.inlineMarkdown(body), render: taskMentionHTML,
+                                         sample: taskSampleHTML)
         case .island: markdown = body
         case .islandPreview: markdown = islandPreviewBody(body)
         }
@@ -167,6 +169,29 @@ enum RichHTMLDocument {
         \(content)
         </body></html>
         """
+    }
+
+    static func contentKey(body: String, key: String) -> String {
+        guard TaskAnchorHTML.mayHaveTaskMarkup(body as NSString) else { return key }
+        let resolved = TaskAnchorHTML.rewriteHTML(RichHTMLSegments.inlineMarkdown(body), render: taskMentionHTML,
+                                         sample: taskSampleHTML)
+        return key + "|tasks-\(resolved.hashValue)"
+    }
+
+    /// A known task's anchor inside a code sample keeps its author's text and opens the task.
+    static func taskSampleHTML(_ ref: TaskAnchorHTML.Ref, inner: String) -> String {
+        guard !ref.id.isEmpty, let hit = TaskMentionResolver.shared.resolve(ref.id),
+              let url = TaskMentionLink.url(for: hit.id) else { return inner }
+        return "<a href=\"\(TaskAnchorHTML.escapeHTML(url.absoluteString))\">\(inner)</a>"
+    }
+
+    static func taskMentionHTML(_ ref: TaskAnchorHTML.Ref) -> String {
+        if !ref.id.isEmpty, let hit = TaskMentionResolver.shared.resolve(ref.id),
+           let url = TaskMentionLink.url(for: hit.id) {
+            let title = hit.title.isEmpty ? hit.id : hit.title
+            return "<a href=\"\(TaskAnchorHTML.escapeHTML(url.absoluteString))\">\(TaskAnchorHTML.escapeHTML(title))</a>"
+        }
+        return TaskAnchorHTML.escapeHTML(ref.label.isEmpty ? ref.id : ref.label)
     }
 
     /// `media-src` matches the letter renderer's floor (LetterHTMLBody), which

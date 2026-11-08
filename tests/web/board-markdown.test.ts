@@ -299,11 +299,111 @@ describe('task mentions: code and fallbacks (review 2026-10-31)', () => {
   const kit: Record<string, unknown> = { esc: coreEsc(), state: { refs: { 'mpwidref-7c2e': { id: 'mpwidref-7c2e', title: 'T', phase: '', status: '' } } } }
   new Function('window', SRC)({ __wnBoardKit: kit })
   const render = kit.richText as (t: string) => string
-  it('a task-ref written inside backticks stays the code it explains', () => {
-    expect(render('`<task-ref id="mpwidref-7c2e" label="x"/>`')).toBe('<code>&lt;task-ref id=&quot;mpwidref-7c2e&quot; label=&quot;x&quot;/&gt;</code>')
+  it('a task-ref quoted whole in backticks is that task; longer code stays the code it explains', () => {
+    expect(render('`<task-ref id="mpwidref-7c2e" label="x"/>`')).toBe('<walnut-task id="mpwidref-7c2e" data-wn-text="mpwidref-7c2e"></walnut-task>')
+    expect(render('`send <task-ref id="mpwidref-7c2e" label="x"/>`')).toBe('<code>send &lt;task-ref id=&quot;mpwidref-7c2e&quot; label=&quot;x&quot;/&gt;</code>')
+  })
+  it('task anchors in prose or a whole code citation become the existing chip', () => {
+    const anchor = '<a href="/tasks/mpwidref-7c2e" class="task-link" data-task-id="mpwidref-7c2e"><b>Old</b></a>'
+    const chip = '<walnut-task id="mpwidref-7c2e" data-wn-text="mpwidref-7c2e"></walnut-task>'
+    expect(render(`Assigned to ${anchor}.`)).toBe(`Assigned to ${chip}.`)
+    expect(render(`Assigned to \`${anchor}\`.`)).toBe(`Assigned to ${chip}.`)
+    expect(render('<a class="task-link" href="https://example.com">Outside</a>')).toBe('Outside')
+    expect(render('<a href="/tasks/mpwidref-7c2e" data-task-id="other">Conflict</a>')).toBe('Conflict')
   })
   it('an unresolved task-ref with no label shows its id, as the web does', () => {
     expect(render('see <task-ref id="mvghost1-0000"/>')).toBe('see mvghost1-0000')
+  })
+})
+
+describe('task citations written as HTML (tests/fixtures/task-anchor-refs.json, shared with the web and the phone)', () => {
+  const FIXTURE = JSON.parse(fs.readFileSync(fileURLToPath(new URL('../fixtures/task-anchor-refs.json', import.meta.url)), 'utf-8')) as {
+    tasks: Record<string, string>
+    cases: { name: string; expect: 'pill' | 'label' | 'source'; id?: string; label?: string; in: string }[]
+  }
+  const refs: Record<string, unknown> = {}
+  for (const [id, title] of Object.entries(FIXTURE.tasks)) refs[id] = { id, title, phase: '', status: '' }
+  const kit: Record<string, unknown> = { esc: coreEsc(), state: { refs } }
+  new Function('window', SRC)({ __wnBoardKit: kit })
+  const render = kit.richText as (t: string) => string
+  const esc = coreEsc()
+  const chip = (t: string) => `<walnut-task id="${t}" data-wn-text="${t}"></walnut-task>`
+  const id = 'mpwidref-7c2e'
+  const other = 'mvu0ubnq-a02d'
+  const LEAKED = ['&lt;a ', '&lt;task-ref', '&amp;lt;', '&lt;/a&gt;', 'onclick']
+
+  it.each(FIXTURE.cases.map((c) => [c.name, c] as const))('%s', (_name, c) => {
+    const html = render(c.in)
+    if (c.expect === 'pill') {
+      expect(html).toContain(chip(c.id!))
+      for (const leak of LEAKED) expect(html).not.toContain(leak)
+      expectInert(html.replace(/<walnut-task id="[a-z0-9-]+" data-wn-text="[a-z0-9-]+"><\/walnut-task>/g, ''))
+    } else if (c.expect === 'label') {
+      expect(html).toContain(esc(c.label!))
+      expect(html).not.toContain('<walnut-task')
+      for (const leak of LEAKED) expect(html).not.toContain(leak)
+      expectInert(html)
+    } else {
+      const tag = /<a\b[\s\S]*?<\/a>|<task-ref[^>]*>|&lt;b&gt;literal&lt;\/b&gt;/.exec(c.in)![0]
+      expect(html.replace(/<a class="wn-link" href="[^"]*">([^<]*)<\/a>/g, '$1')).toContain(esc(tag))
+      expect(html).not.toContain('<walnut-task')
+      expectInert(html)
+    }
+  })
+
+  it('an escaped task-ref in prose is the chip, or its words when no task is known', () => {
+    expect(render(`see &lt;task-ref id=&quot;${other}&quot; label=&quot;Old&quot;/&gt; now`)).toBe(`see ${chip(other)} now`)
+    expect(render('see &lt;task-ref id=&quot;mzzzzzzz-0000&quot;/&gt; now')).toBe('see mzzzzzzz-0000 now')
+    expect(render('`&amp;lt;a href=&amp;quot;/tasks/mpwidref-7c2e&amp;quot;&amp;gt;x&amp;lt;/a&amp;gt;`')).toBe(chip(id))
+  })
+
+  it('an anchor whose closer never came drops only its opener: a later link, anchor and paragraph survive', () => {
+    const opener = `<a class="task-link" href="/tasks/${id}">`
+    expect(render(`${opener}Old title then read [docs](https://example.com/docs).`))
+      .toBe('Old title then read <a class="wn-link" href="https://example.com/docs">docs</a>.')
+    expect(render(`${opener}Old title\n\nOther paragraph.`)).toBe('<p>Old title</p><p>Other paragraph.</p>')
+    const mixed = render(`${opener}Old <a href="https://example.com">docs</a> and <a href="/tasks/${other}">x</a>`)
+    expect(mixed).toContain(`and ${chip(other)}`)
+    expect(mixed).toContain('Old &lt;a href=&quot;')
+    expect(mixed).toContain('&gt;docs&lt;/a&gt;')
+    expect(mixed).not.toContain(chip(id))
+    const far = render(`<a href="/tasks/${id}">Old ${'y'.repeat(4100)}</a>`)
+    expect(far.startsWith('Old yyy')).toBe(true)
+    expect(far).not.toContain('<walnut-task')
+    expect(render(`&lt;a class=&quot;task-link&quot; href=&quot;/tasks/${id}&quot;&gt;Old`))
+      .toBe(`&amp;lt;a class=&amp;quot;task-link&amp;quot; href=&amp;quot;/tasks/${id}&amp;quot;&amp;gt;Old`)
+  })
+
+  it('a repeated attribute keeps its first value, as the browser does', () => {
+    expect(render(`<a href="/tasks/${id}" href="/tasks/${other}" class="task-link">Old</a>`)).toBe(chip(id))
+    expect(render(`<a data-task-id="${id}" data-task-id="${other}" href="/tasks/${id}">Old</a>`)).toBe(chip(id))
+    expect(render(`<a data-task-id="${other}" data-task-id="${id}" href="/tasks/${id}">Conflict</a>`)).toBe('Conflict')
+  })
+
+  it('an indented block is a sample: its citations stay as written', () => {
+    expect(render(`Example:\n\n    <task-ref id="${id}" label="Old"/>`)).not.toContain('<walnut-task')
+    expect(render(`Example:\n\n    \`<a href="/tasks/${id}">Old</a>\``)).not.toContain('<walnut-task')
+  })
+
+  it('a dense message of broken citations renders in bounded time and recovers after them (CPU time)', () => {
+    const start = process.cpuUsage()
+    const inputs = [
+      `<a class="task-link" href="/tasks/${id}">`.repeat(3000),
+      `&lt;a class=&quot;task-link&quot; href=&quot;/tasks/${id}&quot;&gt;`.repeat(3000) + '&lt;/a&gt;',
+      `<a href="/tasks/${id}">x `.repeat(3000) + '</a>',
+      '<a "'.repeat(30000) + ' task-link',
+      `<a class='task-link' href="/tasks/${id}`.repeat(3000),
+      '&lt;task-ref '.repeat(20000),
+      '&lt;a &lt;a '.repeat(20000) + '&gt;',
+      '`<a href="/tasks/x">`'.repeat(3000),
+    ]
+    for (const text of inputs) {
+      const html = render(`${text}\n\nAfter <a href="/tasks/${id}" class="task-link">t</a> ok.`)
+      expect(html.endsWith(`<p>After ${chip(id)} ok.</p>`), text.slice(0, 40)).toBe(true)
+      expect(html).not.toContain('<a class="task-link"')
+    }
+    const used = process.cpuUsage(start)
+    expect((used.user + used.system) / 1000).toBeLessThan(3000)
   })
 })
 

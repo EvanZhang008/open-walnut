@@ -103,13 +103,17 @@ enum TaskMentions {
     /// NORMALIZATION the chat stores compare rows by, this is display only.
     ///
     /// A title written beside a mention of the same task is dropped first
-    /// (`TaskTitleAbsorb`), so the link names the task once.
+    /// (`TaskTitleAbsorb`), so the link names the task once. Before that, model-written task
+    /// anchors become `<task-ref/>` (`TaskAnchorHTML`); a ref in longer code is left as written.
     static func rewriteRefs(_ text: String, resolver: TaskMentionResolver = .shared) -> String {
-        var out = TaskTitleAbsorb.absorbWrittenTitles(text, resolver: resolver)
+        var out = TaskAnchorHTML.canonicalizeMarkdown(text)
+        out = TaskTitleAbsorb.absorbWrittenTitles(out, resolver: resolver)
         if out.contains("-ref"), let regex = refRegex {
             let ns = out as NSString
             let matches = regex.matches(in: out, range: NSRange(location: 0, length: ns.length))
+            let code = out.contains("`") || out.contains("\n") ? TaskAnchorHTML.codeRegions(ns) : []
             for match in matches.reversed() {
+                if TaskAnchorHTML.inCode(match.range, code) { continue }
                 let kind = ns.substring(with: match.range(at: 1))
                 let (id, label) = refAttributes(ns.substring(with: match.range(at: 2)))
                 guard let range = Range(match.range, in: out) else { continue }
@@ -126,7 +130,9 @@ enum TaskMentions {
         if out.contains("|"), let regex = legacyRefRegex {
             let ns = out as NSString
             let matches = regex.matches(in: out, range: NSRange(location: 0, length: ns.length))
+            let code = out.contains("`") || out.contains("\n") ? TaskAnchorHTML.codeRegions(ns) : []
             for match in matches.reversed() {
+                if TaskAnchorHTML.inCode(match.range, code) { continue }
                 let id = ns.substring(with: match.range(at: 1))
                 let label = ns.substring(with: match.range(at: 2))
                 guard let range = Range(match.range, in: out) else { continue }
@@ -142,8 +148,9 @@ enum TaskMentions {
         let ns = attrs as NSString
         for match in regex.matches(in: attrs, range: NSRange(location: 0, length: ns.length)) {
             let key = ns.substring(with: match.range(at: 1))
-            // The emitter escapes `"` as `&quot;` inside the attribute.
+            // `"` arrives as `&quot;`; `TaskAnchorHTML.markdownMarkup` also escapes `<` and `>`.
             let value = ns.substring(with: match.range(at: 2)).replacingOccurrences(of: "&quot;", with: "\"")
+                .replacingOccurrences(of: "&lt;", with: "<").replacingOccurrences(of: "&gt;", with: ">")
             if key == "id" { id = value } else { label = value }
         }
         return (id, label)

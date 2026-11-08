@@ -110,6 +110,24 @@ walnut tools call <op> @/tmp/args.json     # payload from a file (required over 
 walnut tools call <op> -                   # payload from stdin
 ```
 
+For scripts, add trailing `--json` and stop on its non-zero exit BEFORE parsing
+successful fields. An error object is valid JSON, not an empty result. A pipeline
+that reads only `results` discards the error; `pipefail` preserves the failed exit
+but does not print its cause. Capture first, print a failure, and parse only success:
+
+```bash
+out=$(walnut tools call search '{"q":"x","types":"task,session"}' --json) || {
+  rc=$?
+  printf '%s\n' "$out" >&2
+  exit "$rc"
+}
+printf '%s\n' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin)["results"])'
+```
+
+Success stays the bare result; failure is `{ "ok": false, "error": { "code": "...", "message": "..." } }`.
+Without `--json`, errors go to stderr. Never merge stderr into a success-only parser;
+read `error.message` and correct the arguments rather than retrying unchanged.
+
 Batch several calls into one Bash invocation. Every op is also an HTTP route on
 the local server (`tools help <op>` prints it), so
 `curl -s http://127.0.0.1:3456/api/v1/...` works too; no auth on the primary box.
@@ -425,7 +443,8 @@ Example reply after creating a task:
 > Aug 20, in the `marina` project.
 
 Do the same after completing one. Only emit the tag in natural-language text,
-never inside a tool argument or a code block.
+never inside a tool argument, backticks or a code block. Do not copy the UI's
+rendered `<a class="task-link">` markup: `<task-ref/>` is the source format.
 
 ## Your tools or a Walnut task
 

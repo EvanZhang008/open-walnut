@@ -38,11 +38,16 @@ export async function callThroughHostDaemon(
   name: string,
   args: unknown,
   env: NodeJS.ProcessEnv = process.env,
+  opts: { json?: boolean } = {},
 ): Promise<number | null> {
   if (!hasHostDaemon(env)) return null
-  process.stderr.write('walnut: the Walnut server is not reachable; asking this host\'s daemon instead.\n')
+  // A notice for a person at a terminal only: a caller reading stderr as JSON
+  // (`2>&1`, tool-call-output.ts) would read this line into the answer.
+  if (!opts.json && process.stderr.isTTY === true) {
+    process.stderr.write('walnut: the Walnut server is not reachable; asking this host\'s daemon instead.\n')
+  }
   const { runWalnutCli } = await import('../providers/wn-cli.js')
-  return runWalnutCli(['tools', 'call', name, JSON.stringify(args ?? {})])
+  return runWalnutCli(['tools', 'call', name, JSON.stringify(args ?? {}), ...(opts.json ? ['--json'] : [])])
 }
 
 /**

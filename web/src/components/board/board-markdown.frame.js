@@ -317,7 +317,135 @@
 
   // ── Inline ──
 
-  function inline(raw) {
+  // Models copy the web's task link as HTML; scans only move forward within a window so dense or unclosed input stays linear.
+  var CITE_WINDOW = 4000;
+  var ANCHOR_WHOLE_RE = /^<a\b((?:[^>"']|"[^"]*"|'[^']*')*)>([\s\S]*?)<\/a\s*>$/i;
+  var TASK_REF_WHOLE_RE = /^<task-ref\s+((?:[^>"']|"[^"]*"|'[^']*')*?)\s*\/?>$/i;
+  var ANCHOR_ATTR_RE = /([\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g;
+  var ENTITY_RE = /&(?:quot|apos|lt|gt|amp|#\d{1,7}|#x[\da-f]{1,6});/gi;
+  var ENTITY_NAMED = { quot: '"', apos: "'", lt: '<', gt: '>', amp: '&' };
+  var CITE_HINT_RE = /task-ref|task-link|\/tasks\//i;
+  var ESC_TASK_REF_RE = /&lt;task-ref\s(?:[^&<>\n]|&(?!gt;)){0,600}?\/?&gt;/gi;
+
+  function decodeOnce(s) {
+    return s.replace(ENTITY_RE, function (m) {
+      var name = m.slice(1, -1).toLowerCase();
+      if (Object.prototype.hasOwnProperty.call(ENTITY_NAMED, name)) return ENTITY_NAMED[name];
+      var n = name.charAt(1) === 'x' ? parseInt(name.slice(2), 16) : parseInt(name.slice(1), 10);
+      return n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : m;
+    });
+  }
+  // First value wins, as the browser does.
+  function citeAttrs(text) {
+    var attrs = {}, a;
+    var re = new RegExp(ANCHOR_ATTR_RE.source, 'g');
+    while ((a = re.exec(text)) !== null) {
+      var key = a[1].toLowerCase();
+      if (!Object.prototype.hasOwnProperty.call(attrs, key)) attrs[key] = decodeOnce(a[2] || a[3] || a[4] || '');
+    }
+    return attrs;
+  }
+  function isTaskAnchor(attrs) {
+    return !!attrs['data-task-id'] || (attrs.class || '').split(/\s+/).indexOf('task-link') !== -1
+      || /^\/tasks\//i.test(attrs.href || '');
+  }
+  function taskAnchor(src) {
+    var match = ANCHOR_WHOLE_RE.exec(src);
+    if (!match) return null;
+    var attrs = citeAttrs(match[1]);
+    var dest = /^\/tasks\/([a-z0-9-]+)\/?$/i.exec(attrs.href || '');
+    var marked = attrs['data-task-id'] || (attrs.class || '').split(/\s+/).indexOf('task-link') !== -1;
+    if (!dest && !marked) return null;
+    var words = decodeOnce(match[2].replace(/<[^>]*>/g, ''));
+    if (!dest || (attrs['data-task-id'] && attrs['data-task-id'] !== dest[1])) return { token: '', words: words };
+    return { token: dest[1], words: words };
+  }
+  function wholeTaskRef(src) {
+    var match = TASK_REF_WHOLE_RE.exec(src);
+    if (!match) return null;
+    var attrs = citeAttrs(match[1]);
+    var id = (attrs.id || '').trim();
+    return { token: id, words: attrs.label || id };
+  }
+  function literalCitation(src) {
+    if (!CITE_HINT_RE.test(src)) return null;
+    var once = decodeOnce(src).trim();
+    var text = /^&lt;(?:a\b|task-ref\b)/i.test(once) ? decodeOnce(once).trim() : once;
+    if (/^<a\b/i.test(text)) return taskAnchor(text);
+    return wholeTaskRef(text);
+  }
+  function citationHtml(ref) {
+    return ref.token && taskRef(ref.token) ? taskChip(ref.token) : esc(ref.words);
+  }
+
+  // Callers must query non-decreasing positions: the cached match is what keeps it linear.
+  function forward(re, s) {
+    var at = -2, len = 0;
+    return {
+      next: function (from) {
+        if (at === -1 || at >= from) return at;
+        re.lastIndex = from;
+        var m = re.exec(s);
+        if (!m) { at = -1; return -1; }
+        at = m.index; len = m[0].length;
+        return at;
+      },
+      len: function () { return len; }
+    };
+  }
+  function rawTagEnd(s, from, limit) {
+    var quote = '';
+    for (var i = from; i < s.length && i < limit; i++) {
+      var c = s.charAt(i);
+      if (quote) { if (c === quote) quote = ''; else if (c === '\n') return -1; continue; }
+      if (c === '"' || c === "'") quote = c;
+      else if (c === '>') return i + 1;
+      else if (c === '<') return -1;
+    }
+    return -1;
+  }
+  // An unclosed raw task opener is dropped so its words stay readable without swallowing later text.
+  function citeAnchors(s, escaped, hold) {
+    var opens = forward(escaped ? /&lt;a(?=\s|&gt;)/gi : /<a(?=[\s>])/gi, s);
+    var closes = forward(escaped ? /&lt;\/a\s*&gt;/gi : /<\/a\s*>/gi, s);
+    var gts = escaped ? forward(/&gt;/g, s) : null;
+    var out = '', at = 0, cursor = 0;
+    for (;;) {
+      var start = opens.next(cursor);
+      if (start < 0) break;
+      var limit = start + CITE_WINDOW;
+      var tagEnd;
+      if (escaped) {
+        var gt = gts.next(start + 5);
+        var inner = opens.next(start + 5);
+        if (inner >= 0 && (gt < 0 || inner < gt)) { cursor = inner; continue; }
+        tagEnd = gt < 0 || gt >= limit ? -1 : gt + 4;
+      } else {
+        tagEnd = rawTagEnd(s, start + 2, limit);
+      }
+      if (tagEnd < 0) { cursor = start + (escaped ? 5 : 2); continue; }
+      var opener = s.slice(start, tagEnd);
+      var attrs = citeAttrs(escaped ? decodeOnce(opener) : opener);
+      if (!isTaskAnchor(attrs)) { cursor = tagEnd; continue; }
+      var next = opens.next(tagEnd);
+      var close = closes.next(tagEnd);
+      var closeEnd = close < 0 ? -1 : close + closes.len();
+      var complete = close >= 0 && closeEnd <= limit && (next < 0 || next > close);
+      if (!complete) {
+        if (!escaped) { out += s.slice(at, start); at = tagEnd; }
+        cursor = tagEnd;
+        continue;
+      }
+      var src = s.slice(start, closeEnd);
+      var ref = taskAnchor(escaped ? decodeOnce(src) : src);
+      if (ref) { out += s.slice(at, start) + hold(citationHtml(ref)); at = closeEnd; }
+      cursor = closeEnd;
+    }
+    return at ? out + s.slice(at) : s;
+  }
+
+  // `sample`: the web draws an indented block as code, so it keeps its mentions as written.
+  function inline(raw, sample) {
     var slots = [];
     function hold(html) { slots.push(html); return '\u0000' + (slots.length - 1) + '\u0000'; }
     function restore(s) {
@@ -346,13 +474,15 @@
       return '<a class="wn-letter" role="link" tabindex="0" data-wn-letter="' + esc(id) + '" title="Open this letter">' + inner + '</a>';
     }
 
-    var s = absorbTaskTitles(raw).replace(CODE_RE, function (m, pre, ticks, body) {
+    var s = (sample ? raw : absorbTaskTitles(raw)).replace(CODE_RE, function (m, pre, ticks, body) {
       var code = body.replace(/\n/g, ' ');
       if (code.length > 2 && code.charAt(0) === ' ' && code.charAt(code.length - 1) === ' ' && /[^ ]/.test(code)) {
         code = code.slice(1, -1);
       }
       // A code span holding only a task's id is that task cited in backticks.
-      if (taskRef(code.trim())) return pre + hold(taskChip(code.trim()));
+      if (!sample && taskRef(code.trim())) return pre + hold(taskChip(code.trim()));
+      var cited = sample ? null : literalCitation(code.trim());
+      if (cited) return pre + hold(citationHtml(cited));
       // A code span holding only a path or a letter id opens it, still drawn as code.
       if (WHOLE_PATH_RE.test(code.trim())) return pre + hold(fileLink(code.trim(), '<code>' + esc(code.trim()) + '</code>'));
       if (WHOLE_LETTER_RE.test(code.trim())) return pre + hold(letterLink(code.trim(), '<code>' + esc(code.trim()) + '</code>'));
@@ -360,13 +490,22 @@
     });
     // A <task-ref/> (what sessions are told to write) or a `[id|title]` outside code: the chip,
     // else the words (the id when it has none), as the web's renderer shows them.
-    s = s.replace(TASK_REF_RE, function (m, id, label) {
-      var token = id.trim();
-      var words = String(label || '').replace(/&quot;/g, '"');
-      return taskRef(token) ? hold(taskChip(token)) : (words || token);
-    }).replace(LEGACY_REF_RE, function (m, id, label) {
-      return taskRef(id) ? hold(taskChip(id)) : m;
-    });
+    if (!sample) {
+      s = s.replace(TASK_REF_RE, function (m, id, label) {
+        var token = id.trim();
+        var words = String(label || '').replace(/&quot;/g, '"');
+        return taskRef(token) ? hold(taskChip(token)) : (words || token);
+      });
+      if (CITE_HINT_RE.test(s)) {
+        s = citeAnchors(citeAnchors(s, false, hold), true, hold).replace(ESC_TASK_REF_RE, function (m) {
+          var ref = wholeTaskRef(decodeOnce(m));
+          return ref ? hold(citationHtml(ref)) : m;
+        });
+      }
+      s = s.replace(LEGACY_REF_RE, function (m, id, label) {
+        return taskRef(id) ? hold(taskChip(id)) : m;
+      });
+    }
     s = s.replace(LINK_RE, function (m, text, url) {
       if (!HTTP_RE.test(url)) return m;
       return hold('<a class="wn-link" href="' + esc(url) + '">' + emph(esc(text), 0) + '</a>');
@@ -381,9 +520,11 @@
     s = s.replace(LETTER_RE, function (m, pre, id) {
       return pre + hold(letterLink(id, esc(id)));
     });
-    s = s.replace(new RegExp(TASK_TOKEN_SRC, 'g'), function (m, pre, token) {
-      return taskRef(token) ? pre + hold(taskChip(token)) : m;
-    });
+    if (!sample) {
+      s = s.replace(new RegExp(TASK_TOKEN_SRC, 'g'), function (m, pre, token) {
+        return taskRef(token) ? pre + hold(taskChip(token)) : m;
+      });
+    }
     return restore(emph(esc(s), 0)).replace(/\n/g, '<br>');
   }
 
@@ -491,7 +632,7 @@
   function paragraph(lines, i, depth, out) {
     var text = [lines[i]];
     for (i += 1; i < lines.length && !blank(lines[i]) && !interrupts(lines[i], depth); i++) text.push(lines[i]);
-    out.push({ p: inline(text.join('\n')) });
+    out.push({ p: inline(text.join('\n'), indentOf(text[0]) >= 4) });
     return i;
   }
 
