@@ -30,10 +30,11 @@ const scriptPath = path.join(root, 'daemon.cjs')
 fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-// The source twin finds its sidecars next to it, as deployed; the preload rides task-dir-core.
+// The source twin finds its sidecars next to it, as deployed (the preload rides task-dir-core, ACP needs acp-daemon-core).
 if (BUN) {
-  for (const name of ['task-dir-core', 'secrets-core']) {
-    const built = spawnSync(BUN, ['build', '--target=node', '--format=cjs', '--outfile', path.join(root, `${name}.cjs`),
+  for (const name of ['task-dir-core', 'secrets-core', 'acp-daemon']) {
+    const out = name === 'acp-daemon' ? 'acp-daemon-core.cjs' : `${name}.cjs`
+    const built = spawnSync(BUN, ['build', '--target=node', '--format=cjs', '--outfile', path.join(root, out),
       path.resolve(__dirname, `../../src/providers/${name}.ts`)], { encoding: 'utf8' })
     if (built.status !== 0) throw new Error('sidecar build failed: ' + built.stderr)
   }
@@ -116,7 +117,11 @@ async function waitFile(file: string, ms = 20_000): Promise<string> {
   throw new Error('no file ' + file)
 }
 
-/** A checkout with a stand-in playwright-core and a runner at node_modules/.bin/playwright. */
+/**
+ * A stand-in playwright-core (it records its instrumentation's listeners), a runner at
+ * node_modules/.bin/playwright and a script of a session's own in another folder, each
+ * reporting "<listeners>,<init scripts a new context got>,<gated or none>|END".
+ */
 function fakeCheckout(dir: string): void {
   const core = path.join(dir, 'node_modules', 'playwright-core')
   fs.mkdirSync(core, { recursive: true })
@@ -125,16 +130,20 @@ function fakeCheckout(dir: string): void {
     'const listeners = []',
     'module.exports = { _instrumentation: { addListener: (l) => listeners.push(l) }, listeners }',
   ].join('\n'))
-  const bin = path.join(dir, 'node_modules', '.bin')
-  fs.mkdirSync(bin, { recursive: true })
-  fs.writeFileSync(path.join(bin, 'playwright'), [
-    "const core = require(require('node:path').join(process.cwd(), 'node_modules', 'playwright-core'))",
+  const report = (load: string) => [
+    `const core = require(${load})`,
     'const l = core.listeners[0]',
     'const scripts = []',
     'Promise.resolve(l && l.runAfterCreateBrowserContext({ addInitScript: async (s) => { scripts.push(s.content) } })).then(() => {',
     "  process.stdout.write([core.listeners.length, scripts.length, scripts[0] && scripts[0].includes('webdriver') ? 'gated' : 'none'].join(',') + '|END')",
     '})',
-  ].join('\n'))
+  ].join('\n')
+  const bin = path.join(dir, 'node_modules', '.bin')
+  fs.mkdirSync(bin, { recursive: true })
+  fs.writeFileSync(path.join(bin, 'playwright'), report("'playwright-core'"))
+  // A session's own check script, elsewhere, run from a folder with no node_modules.
+  fs.mkdirSync(path.join(dir, 'scratch'), { recursive: true })
+  fs.writeFileSync(path.join(dir, 'scratch', 'verify-ui.cjs'), report(JSON.stringify(core)))
 }
 
 describe.each(TWINS)('$name', (twin) => {
@@ -145,7 +154,9 @@ describe.each(TWINS)('$name', (twin) => {
     const seen = path.join(dir, 'seen.txt')
     fakeCheckout(dir)
     const runner = NODE
-      ? `"${NODE}" node_modules/.bin/playwright > '${dir}/runner.txt' 2>&1; "${NODE}" -e 'process.stdout.write(String(!!globalThis[Symbol.for("walnut.pwSilence")]))' > '${dir}/other.txt' 2>&1;`
+      ? `"${NODE}" node_modules/.bin/playwright > '${dir}/runner.txt' 2>&1; ` +
+        `(cd /; "${NODE}" '${dir}/scratch/verify-ui.cjs' > '${dir}/script.txt' 2>&1); ` +
+        `"${NODE}" -e 'require("node:fs"); process.stdout.write(String(!!globalThis[Symbol.for("walnut.pwSilence")]))' > '${dir}/other.txt' 2>&1;`
       : ''
     const script = `cd '${dir}'; ${runner} printf '%s|END' "\${NODE_OPTIONS-unset}" > '${seen}'; exec /bin/sleep 60`
     const reply = await rpc({ cmd: 'start', sid: 'pw-silence-session-1', args: ['/bin/sh', '-c', script], cwd: dir, message: 'init\n' })
@@ -158,8 +169,38 @@ describe.each(TWINS)('$name', (twin) => {
     if (NODE) {
       // The runner added one listener, which put the gated silencer into the new context.
       expect(fs.readFileSync(path.join(dir, 'runner.txt'), 'utf8')).toBe('1,1,gated|END')
-      // A Node program that is not Playwright's loads nothing.
+      // So does a script of the session's own, from a folder that has no Playwright of its own.
+      expect(fs.readFileSync(path.join(dir, 'script.txt'), 'utf8')).toBe('1,1,gated|END')
+      // A Node program that never loads Playwright is not touched.
       expect(fs.readFileSync(path.join(dir, 'other.txt'), 'utf8')).toBe('false')
+    }
+  }, 90_000)
+
+  it('an ACP agent gets it too, and an engine env that clears NODE_OPTIONS keeps only the silencer', async () => {
+    if (!NODE) return
+    const dir = path.join(root, twin.name.replace(/\W+/g, '-') + '-acp')
+    await boot(twin, dir)
+    const preload = path.join(dir, 'state', 'pw-silence', PW_SILENCE_PRELOAD_NAME)
+    // A stand-in agent worker: records its NODE_OPTIONS, answers initialize and newSession.
+    const worker = path.join(dir, 'worker.cjs')
+    fs.writeFileSync(worker, [
+      "const fs = require('fs')",
+      "fs.writeFileSync(process.env.SEEN_FILE, String(process.env.NODE_OPTIONS) + '|END')",
+      "require('readline').createInterface({ input: process.stdin }).on('line', (line) => {",
+      '  const m = JSON.parse(line)',
+      "  const result = m.op === 'newSession' ? { sessionId: 'fake-acp' } : { ok: true }",
+      "  process.stdout.write(JSON.stringify({ id: m.id, ok: true, result }) + '\\n')",
+      '})',
+    ].join('\n'))
+    for (const [sid, env, want] of [
+      ['pw-acp-inherit', {}, `--require "${preload}" --max-old-space-size=4096|END`],
+      ['pw-acp-cleared', { NODE_OPTIONS: '' }, `--require "${preload}"|END`],
+    ] as const) {
+      const seen = path.join(dir, `${sid}.txt`)
+      const reply = await rpc({ cmd: 'acpStart', sid, cwd: dir, workerCmd: [NODE, worker], adapterCmd: ['/bin/true'], env: { ...env, SEEN_FILE: seen } })
+      expect(reply.ok, JSON.stringify(reply)).toBe(true)
+      expect(await waitFile(seen), sid).toBe(want)
+      await rpc({ cmd: 'acpStop', sid })
     }
   }, 90_000)
 
@@ -179,7 +220,8 @@ describe.each(TWINS)('$name', (twin) => {
 
 describe('every session spawn in both twins carries the silencer', () => {
   // A new spawn env (a Claude Code start, an ACP start) is found by the task-dir key every
-  // session env sets; each must set NODE_OPTIONS through pwSilenceNodeOptions in the same object.
+  // session env must set (tests/core/work-place-rule.test.ts); each must set NODE_OPTIONS
+  // through pwSilenceNodeOptions in the same object. The dynamic cases above run both kinds.
   for (const file of ['daemon-standalone.ts', 'daemon-source.ts']) {
     it(file, () => {
       const src = fs.readFileSync(path.resolve(__dirname, '../../src/providers', file), 'utf8')

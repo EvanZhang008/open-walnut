@@ -195,20 +195,20 @@ describe('the page silencer', () => {
 
   it('every run a Mac\'s runner starts gets the same rules, whatever branch it builds', async () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const preload = require('../e2e/browser/pw-silence-preload.cjs') as { SILENCE_JS: string; install: (core: unknown) => boolean };
+    const preload = require('../e2e/browser/pw-silence-preload.cjs') as { SILENCE_JS: string; install: (core: unknown) => boolean; isPlaywrightCore: (r: string) => boolean };
     await checkAll((f) => vm.runInNewContext(preload.SILENCE_JS, f.realm));
     const person = fakeRealm(false);
     vm.runInNewContext(preload.SILENCE_JS, person.realm);
     expect(person.realm.__walnutSilent, 'a person\'s browser is untouched').toBeUndefined();
     // It hands every new browser context that script, through the runner's instrumentation.
     const listeners: Array<{ runAfterCreateBrowserContext: (c: unknown) => Promise<void> }> = [];
-    const flag = Symbol.for('walnut.pwSilence');
-    const had = (globalThis as Record<symbol, unknown>)[flag];
-    delete (globalThis as Record<symbol, unknown>)[flag];
-    try {
-      expect(preload.install({ _instrumentation: { addListener: (l: (typeof listeners)[number]) => listeners.push(l) } })).toBe(true);
-      expect(preload.install({ _instrumentation: { addListener: (l: (typeof listeners)[number]) => listeners.push(l) } }), 'once per process').toBe(false);
-    } finally { (globalThis as Record<symbol, unknown>)[flag] = had; }
+    const core = { _instrumentation: { addListener: (l: (typeof listeners)[number]) => listeners.push(l) } };
+    expect(preload.install(core)).toBe(true);
+    expect(preload.install(core), 'once per Playwright library').toBe(false);
+    expect(listeners).toHaveLength(1);
+    // It acts on a load of the library, whatever loads it, and on nothing else.
+    for (const r of ['playwright-core', '/x/node_modules/playwright-core', '/x/node_modules/playwright-core/index.js']) expect(preload.isPlaywrightCore(r), r).toBe(true);
+    for (const r of ['playwright', '@playwright/test', 'playwright-core/lib/utils', './my-playwright-core-notes', 'fs']) expect(preload.isPlaywrightCore(r), r).toBe(false);
     const added: string[] = [];
     await listeners[0].runAfterCreateBrowserContext({ addInitScript: async (x: { content: string }) => { added.push(x.content); } });
     expect(added).toEqual([preload.SILENCE_JS]);
@@ -227,9 +227,14 @@ describe('the page silencer', () => {
     expect(withPwSilenceNodeOptions('--max-old-space-size=8192', f)).toBe(`--require "${f}" --max-old-space-size=8192`);
     const once = withPwSilenceNodeOptions('--inspect', f);
     expect(withPwSilenceNodeOptions(once, f), 'never twice').toBe(once);
+    // Another copy (a temp one that may be gone, an older one, later in the line) gives way to this one, first.
+    expect(withPwSilenceNodeOptions('--inspect --require "/tmp/run 1/pw-silence-preload.cjs" -r /old/pw-silence-preload.cjs --require=/o/pw-silence-preload.cjs --no-warnings', f))
+      .toBe(`--require "${f}" --inspect --no-warnings`);
+    expect(withPwSilenceNodeOptions('--require "/x/other-preload.cjs"', f), 'a preload of the user\'s own stays').toBe(`--require "${f}" --require "/x/other-preload.cjs"`);
     // No file (off, unwritable) or a path the quoting cannot carry: unchanged, never a broken --require.
     expect(withPwSilenceNodeOptions('--inspect', null)).toBe('--inspect');
     expect(withPwSilenceNodeOptions(undefined, '/a"b/pw-silence-preload.cjs')).toBeUndefined();
+    expect(withPwSilenceNodeOptions('--inspect', '/st\\ate/pw-silence-preload.cjs'), 'Node unescapes a backslash in quotes').toBe('--inspect');
     expect(pwSilenceDir('/home/u/.local/state/open-walnut/tasks')).toBe('/home/u/.local/state/open-walnut/pw-silence');
   });
 

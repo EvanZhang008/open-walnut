@@ -7085,7 +7085,7 @@ async function cmdAcpStart(ws, id, cmd) {
   params.env = Object.assign({}, secretsSessionEnv(), params.env, {
     WALNUT_AGENT_SOCKET: GATEWAY_SOCK_PATH,
     PATH: sessionPathWithShim(process.env.PATH || '', walnutThroughGateway(params.env)),
-  }, { WALNUT_TASK_DIR: acpTaskDir || '', WALNUT_SECRETS_DIR: SECRETS_ROOT || '', NODE_OPTIONS: pwSilenceNodeOptions((params.env && params.env.NODE_OPTIONS) || process.env.NODE_OPTIONS) || '' });
+  }, { WALNUT_TASK_DIR: acpTaskDir || '', WALNUT_SECRETS_DIR: SECRETS_ROOT || '', NODE_OPTIONS: pwSilenceNodeOptions(params.env && Object.prototype.hasOwnProperty.call(params.env, 'NODE_OPTIONS') ? (params.env.NODE_OPTIONS == null ? '' : params.env.NODE_OPTIONS) : process.env.NODE_OPTIONS) || '' });
   return sessionStartGate.run(params.sid, async function () {
     if (!params.providerSessionId && fs.existsSync(cancelledStartPath(params.sid))) throw new Error('Initial start was cancelled; retry task_start on the same task');
     const resp = await acp.acpStart(ws, params);

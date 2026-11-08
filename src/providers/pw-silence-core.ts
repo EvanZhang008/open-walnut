@@ -6,10 +6,10 @@
  *
  * The daemon (both twins) writes the page silencer's preload once into this host's state dir
  * and starts every session (Claude Code and ACP) with NODE_OPTIONS="--require <that file>", so
- * every Node process under the session loads it, and the Playwright runner and each of its
- * workers (only those: a process whose script is not Playwright's loads nothing) add the
- * silencer to every browser context, at document start in every frame, before any config is
- * read. The silencer is gated on `navigator.webdriver`, so a person's browser is untouched.
+ * every Node process under the session loads it, and the Playwright library any of them loads
+ * (the runner, its workers, a script of the session's own, from any folder) adds the silencer
+ * to every browser context, at document start in every frame. A process that never loads
+ * playwright-core is not touched. The silencer is gated on `navigator.webdriver`, so a person's browser is untouched.
  *
  * PW_SILENCE_JS is the ES5 form of src/lib/automation-silence.ts (the iOS app's
  * AudioSilence.webScript is the same text, ungated), tests/e2e/browser/pw-silence-preload.cjs
@@ -35,38 +35,56 @@ export function pwSilencePreloadSource(): string {
     '/**',
     ' * Every Playwright run under a Walnut session or a Mac queue runner is silent, whatever branch',
     ' * it builds. Generated from src/providers/pw-silence-core.ts (scripts/pw-silence-preload.ts);',
-    ' * edit it there. Loaded with NODE_OPTIONS="--require <this file>": the Playwright runner and',
-    ' * each of its workers add the page silencer to every browser context, at document start in',
+    ' * edit it there. Loaded with NODE_OPTIONS="--require <this file>": every Playwright library a',
+    ' * Node process loads (the runner, its workers, a script) adds the page silencer to every browser context, at document start in',
     ' * every frame. Gated on navigator.webdriver, so a person\'s browser is untouched; a process',
-    ' * that is not Playwright\'s loads nothing.',
+    ' * that never loads playwright-core is not touched.',
     ' */',
     "'use strict';",
     "const SILENCE_JS = '(function(){if(!(globalThis.navigator&&globalThis.navigator.webdriver))return;' + " + JSON.stringify(PW_SILENCE_JS) + " + '})();';",
     "const FLAG = Symbol.for('walnut.pwSilence');",
+    "const SEEN = Symbol.for('walnut.pwSilence.seen');",
+    "const HOOKED = Symbol.for('walnut.pwSilence.hooked');",
     '',
+    '/** Adds the silencer to every browser context of one Playwright library; once per library. */',
     'function install(core) {',
-    '  if (globalThis[FLAG] || !core || !core._instrumentation) return false;',
+    '  const inst = core && core._instrumentation;',
+    "  if (!inst || typeof inst.addListener !== 'function') return false;",
+    '  const seen = globalThis[SEEN] || (globalThis[SEEN] = new WeakSet());',
+    '  if (seen.has(inst)) return false;',
+    '  seen.add(inst);',
     '  globalThis[FLAG] = true;',
-    '  core._instrumentation.addListener({',
+    '  inst.addListener({',
     '    runAfterCreateBrowserContext: async (context) => { await context.addInitScript({ content: SILENCE_JS }); },',
     '  });',
     '  return true;',
     '}',
     '',
-    '/** The Playwright runner (node_modules/.bin/playwright, its cli.js) and its workers. */',
-    'function isPlaywright(script) {',
-    "  return /(^|[\\\\/])(@playwright[\\\\/]test|playwright(-core)?)([\\\\/]|$)/.test(String(script || ''));",
+    '/** A require of the Playwright library itself: the test runner, playwright, @playwright/test and a script all load it so. */',
+    'function isPlaywrightCore(request) {',
+    "  return typeof request === 'string' && /(^|[\\\\/])playwright-core([\\\\/]index(\\.js)?)?$/.test(request);",
     '}',
     '',
-    'if (isPlaywright(process.argv[1])) {',
+    '// Whatever started this process (the runner, a worker, a script of its own, from any folder),',
+    '// the Playwright library it loads gets the silencer before it makes a browser.',
+    'if (!globalThis[HOOKED]) {',
+    '  globalThis[HOOKED] = true;',
     '  try {',
-    "    install(require('node:module').createRequire(process.cwd() + '/')('playwright-core'));",
+    "    const Module = require('node:module');",
+    '    const load = Module._load;',
+    '    Module._load = function (request) {',
+    '      const exported = load.apply(this, arguments);',
+    '      try { if (isPlaywrightCore(request)) install(exported); } catch (e) {',
+    "        console.warn('[pw-silence-preload] could not silence test browsers: ' + (e && e.message));",
+    '      }',
+    '      return exported;',
+    '    };',
     '  } catch (e) {',
     "    console.warn('[pw-silence-preload] could not silence test browsers: ' + (e && e.message));",
     '  }',
     '}',
     '',
-    'module.exports = { SILENCE_JS, install, isPlaywright };',
+    'module.exports = { SILENCE_JS, install, isPlaywrightCore };',
     '',
   ].join('\n')
 }
@@ -99,12 +117,15 @@ export function ensurePwSilencePreload(dir: string, env: NodeJS.ProcessEnv = pro
 
 /**
  * NODE_OPTIONS for a session: the preload first, then whatever the session would have had.
- * Quoted, since a home can hold a space; unchanged when there is no file or it is already there.
+ * Quoted, since a home can hold a space; unchanged when there is no file.
  */
 export function withPwSilenceNodeOptions(current: string | undefined, file: string | null): string | undefined {
-  if (!file || /["\n]/.test(file)) return current
-  const cur = (current || '').trim()
-  if (cur.includes(PW_SILENCE_PRELOAD_NAME)) return current
+  // Node reads a backslash inside quotes as an escape: such a path would name another file.
+  if (!file || /["\n\\]/.test(file)) return current
   const req = `--require "${file}"`
+  // Any other copy of the preload (an older run's, a temp one that may be gone) is dropped:
+  // a --require of a missing file stops every Node program.
+  const other = new RegExp(`(?:--require|-r)(?:=|\\s+)(?:"[^"]*${PW_SILENCE_PRELOAD_NAME.replace(/\./g, '\\.')}"|\\S*${PW_SILENCE_PRELOAD_NAME.replace(/\./g, '\\.')})`, 'g')
+  const cur = (current || '').replace(other, ' ').replace(/\s+/g, ' ').trim()
   return cur ? `${req} ${cur}` : req
 }

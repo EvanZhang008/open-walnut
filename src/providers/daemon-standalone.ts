@@ -6257,7 +6257,9 @@ async function cmdAcpStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<
     WALNUT_TASK_DIR: taskDir ?? '',
     WALNUT_SECRETS_DIR: SECRETS_ROOT,
     // The page silencer, as for the native spawn (pw-silence-core.ts).
-    NODE_OPTIONS: pwSilenceNodeOptions(params.env?.NODE_OPTIONS ?? process.env.NODE_OPTIONS) ?? '',
+    // An engine's env that names NODE_OPTIONS (null or '' = cleared) wins over the daemon's own.
+    NODE_OPTIONS: pwSilenceNodeOptions(params.env && Object.prototype.hasOwnProperty.call(params.env, 'NODE_OPTIONS')
+      ? (params.env.NODE_OPTIONS ?? '') : process.env.NODE_OPTIONS) ?? '',
   }
   return sessionStartGate.run(params.sid, async () => {
     if (!params.providerSessionId && fs.existsSync(cancelledStartPath(params.sid))) throw new Error('Initial start was cancelled; retry task_start on the same task')
