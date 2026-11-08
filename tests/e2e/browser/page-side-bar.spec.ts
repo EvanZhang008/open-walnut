@@ -161,7 +161,8 @@ test('the Scratchpad opens under the agenda, takes the caret, and is the same no
   await page.evaluate(() => window.dispatchEvent(new Event('focus')))
   await reread
   const afterFocus = page.waitForResponse(res => new URL(res.url()).pathname === '/api/notes/global' && res.request().method() === 'PUT', { timeout: 10_000 })
-  await editor.locator('p').last().click()
+  // The caret at the end of that line (it went in where the caret opened, not always last).
+  await editor.locator('p', { hasText: line }).click()
   await page.keyboard.press('End')
   await page.keyboard.type('!')
   await afterFocus
