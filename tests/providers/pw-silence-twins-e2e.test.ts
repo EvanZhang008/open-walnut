@@ -148,6 +148,14 @@ function fakeCheckout(dir: string): void {
   // The same through a helper: the main script never names Playwright.
   fs.writeFileSync(path.join(dir, 'scratch', 'lib.cjs'), `module.exports = require(${JSON.stringify(core)})`)
   fs.writeFileSync(path.join(dir, 'scratch', 'main.cjs'), report("'./lib.cjs'"))
+  // The same inside a Worker (Bun starts one without BUN_OPTIONS' preload; the preload passes it on).
+  fs.writeFileSync(path.join(dir, 'scratch', 'in-worker.cjs'), report(JSON.stringify(core))
+    .replace("process.stdout.write(", "require('node:worker_threads').parentPort.postMessage("))
+  fs.writeFileSync(path.join(dir, 'scratch', 'worker-main.cjs'), [
+    "const { Worker } = require('node:worker_threads')",
+    "const w = new Worker(require('node:path').join(__dirname, 'in-worker.cjs'))",
+    "w.on('message', (m) => { process.stdout.write(m); w.terminate() })",
+  ].join('\n'))
 }
 
 describe.each(TWINS)('$name', (twin) => {
@@ -159,10 +167,10 @@ describe.each(TWINS)('$name', (twin) => {
     fakeCheckout(dir)
     const runner = NODE
       ? `"${NODE}" node_modules/.bin/playwright > '${dir}/runner.txt' 2>&1; ` +
-        `(cd /; "${NODE}" '${dir}/scratch/verify-ui.cjs' > '${dir}/script.txt' 2>&1; "${NODE}" '${dir}/scratch/main.cjs' > '${dir}/helper.txt' 2>&1); ` +
+        `(cd /; "${NODE}" '${dir}/scratch/verify-ui.cjs' > '${dir}/script.txt' 2>&1; "${NODE}" '${dir}/scratch/main.cjs' > '${dir}/helper.txt' 2>&1; "${NODE}" '${dir}/scratch/worker-main.cjs' > '${dir}/worker.txt' 2>&1); ` +
         `"${NODE}" -e 'require("node:fs"); process.stdout.write(String(!!globalThis[Symbol.for("walnut.pwSilence")]))' > '${dir}/other.txt' 2>&1;`
       : ''
-    const bunRun = BUN ? `(cd /; "${BUN}" '${dir}/scratch/verify-ui.cjs' > '${dir}/bun.txt' 2>&1; "${BUN}" '${dir}/scratch/main.cjs' > '${dir}/bun-helper.txt' 2>&1); ` : ''
+    const bunRun = BUN ? `(cd /; "${BUN}" '${dir}/scratch/verify-ui.cjs' > '${dir}/bun.txt' 2>&1; "${BUN}" '${dir}/scratch/main.cjs' > '${dir}/bun-helper.txt' 2>&1; "${BUN}" '${dir}/scratch/worker-main.cjs' > '${dir}/bun-worker.txt' 2>&1); ` : ''
     const script = `cd '${dir}'; ${runner} ${bunRun}printf '%s|%s|END' "\${NODE_OPTIONS-unset}" "\${BUN_OPTIONS-unset}" > '${seen}'; exec /bin/sleep 60`
     const reply = await rpc({ cmd: 'start', sid: 'pw-silence-session-1', args: ['/bin/sh', '-c', script], cwd: dir, message: 'init\n' })
     expect(reply.ok, JSON.stringify(reply)).toBe(true)
@@ -174,6 +182,7 @@ describe.each(TWINS)('$name', (twin) => {
     if (BUN) {
       expect(fs.readFileSync(path.join(dir, 'bun.txt'), 'utf8')).toBe('1,1,gated|END')
       expect(fs.readFileSync(path.join(dir, 'bun-helper.txt'), 'utf8')).toBe('1,1,gated|END')
+      expect(fs.readFileSync(path.join(dir, 'bun-worker.txt'), 'utf8')).toBe('1,1,gated|END')
     }
     expect(fs.readFileSync(preload, 'utf8')).toBe(pwSilencePreloadSource())
     if (NODE) {
@@ -182,6 +191,7 @@ describe.each(TWINS)('$name', (twin) => {
       // So does a script of the session's own, from a folder that has no Playwright of its own.
       expect(fs.readFileSync(path.join(dir, 'script.txt'), 'utf8')).toBe('1,1,gated|END')
       expect(fs.readFileSync(path.join(dir, 'helper.txt'), 'utf8')).toBe('1,1,gated|END')
+      expect(fs.readFileSync(path.join(dir, 'worker.txt'), 'utf8')).toBe('1,1,gated|END')
       // A Node program that never loads Playwright is not touched.
       expect(fs.readFileSync(path.join(dir, 'other.txt'), 'utf8')).toBe('false')
     }
