@@ -223,8 +223,10 @@ export async function collectOpenItems(
         if (teams) items.text = [items.text, teams].filter(Boolean).join('\n\n');
       }
       // Its own MEMORY.md read back whole: a summary must not be where it lives (agent-memory.ts).
+      // A session spawned with the own-readback hook reads it there instead, once (own-readback.ts).
       const { agentMemoryAfterCompaction } = await import('./agent-memory.js');
-      const memory = task.phase !== 'COMPLETE' ? agentMemoryAfterCompaction(task) : '';
+      const { ownReadbackHooked } = await import('./own-readback.js');
+      const memory = task.phase !== 'COMPLETE' && !ownReadbackHooked(caller.record) ? agentMemoryAfterCompaction(task) : '';
       if (memory) items.text = [items.text, memory].filter(Boolean).join('\n\n');
       // Every default-instruction line that changed since spawn: the summary may have dropped the notices.
       const { instructionNoticeFor, noteInstructionNoticeStatedByHook } = await import('./instruction-notice.js');

@@ -2894,7 +2894,9 @@ export class ClaudeCodeSession {
     const slimOverrides = slim ? slimChildSettingsArg() : undefined
     if (slimOverrides) Object.assign(sessionSettings, JSON.parse(slimOverrides) as Record<string, unknown>)
     // Main's or a VP's session (read from its own prompt) is reminded of its first rule by hooks too.
-    const settingsHooks = slim ? undefined : sessionSettingsHooks(process.env, { orgRole: orgRoleOfPrompt([profile?.systemPrompt ?? '', ...appendParts].join('\n\n')) })
+    // Its own readback too (own-readback-hook.ts), when its prompt says so.
+    const hookPrompt = slim ? '' : [profile?.systemPrompt ?? '', ...appendParts].join('\n\n')
+    const settingsHooks = slim ? undefined : sessionSettingsHooks(process.env, { orgRole: orgRoleOfPrompt(hookPrompt), prompt: hookPrompt })
     if (settingsHooks) sessionSettings.hooks = settingsHooks
     if (Object.keys(sessionSettings).length > 0) {
       args.push('--settings', JSON.stringify(sessionSettings))

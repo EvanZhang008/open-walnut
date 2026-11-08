@@ -2565,6 +2565,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Reads work on a replica; writes are primary-only (501).
   app.use('/api/v1', boardV1Router)
   app.use('/api/v1', (await import('./routes/agent-memory-v1.js')).agentMemoryV1Router)
+  // A task's own skills and the org's, and what a node reads back at a new conversation (sessions/own-readback.ts).
+  app.use('/api/v1', (await import('./routes/agent-skills-v1.js')).agentSkillsV1Router)
   // A watch on a task: who hears where it stands, and how often at least (sessions/task-watch.ts).
   app.use('/api/v1', (await import('./routes/task-watch-v1.js')).taskWatchV1Router)
   app.use('/api/v1', (await import('./routes/brief-v1.js')).briefV1Router)

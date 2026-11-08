@@ -182,6 +182,19 @@ export const LEAD_TRACKING_LINE =
   + 'Keep your own tracking in your MEMORY.md (agent_memory_write; it is read back after every compaction): per task, '
   + 'what you asked of it, what came back, what you watch and why, so you know where each stands without rereading its chat.\n\n'
 
+/**
+ * Main and every VP start each conversation where they left off (sessions/own-readback.ts; 2026-11-08,
+ * the user, after the OpenMausBot report: "learn to use the memory and skill system from that for each
+ * VP"). Its first words are OWN_READBACK_MARK: a prompt holding them was spawned with the hook that
+ * reads these back, so the compaction's open_items leaves MEMORY.md to it.
+ */
+export const OWN_READBACK_LINE =
+  'At the start of every new conversation and after every compaction, Walnut reads back to you your own MEMORY.md, '
+  + 'the index of your skills and your recent work in your Threads (the newest thing you said in each over two days). '
+  + 'Keep state and facts in MEMORY.md; a way of working you will follow again (the steps of a kind of work, the exact '
+  + 'op keys) goes into a skill instead, with agent_skill_write (scope "org" when every VP and the main agent should '
+  + 'follow it), and you read one whole with agent_skill_read before such work.\n\n'
+
 export const MAIN_FOLLOW_LINE = ORG_FOLLOW_LINE + 'What you learn goes into your tracking note below.\n\n'
 
 /**
@@ -322,6 +335,7 @@ export function orgRoleLine(task: { org_role?: string; project?: string; org_lea
       + MAIN_DELEGATES_LINE
       + MAIN_FOLLOW_LINE
       + MAIN_TRACKING_LINE
+      + OWN_READBACK_LINE
       + MAIN_STAYS_ACTIVE_LINE
       + TASK_ROUTING_CONTRACT + '\n\n'
   }
@@ -364,6 +378,7 @@ export function orgRoleLine(task: { org_role?: string; project?: string; org_lea
       + THREADS_LINE
       + MESSAGE_ABOUT_LINE
       + LEAD_TRACKING_LINE
+      + OWN_READBACK_LINE
       + TASK_ROUTING_CONTRACT + '\n\n'
   }
   return ''

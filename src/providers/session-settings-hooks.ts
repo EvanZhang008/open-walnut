@@ -14,17 +14,20 @@ import { patternSignalGuardHooks } from './pattern-kill-guard-hook.js'
 import { codexProviderGuardHooks } from './codex-provider-guard-hook.js'
 import { soundGuardHooks } from './sound-guard-hook.js'
 import { orgWorkGuardHooks } from './org-work-guard-hook.js'
+import { ownReadbackHooks } from './own-readback-hook.js'
 import type { OrgRole } from '../core/types.js'
 
 /**
  * `orgRole`: the session is Main's or a VP's (core/org/org-prompt-role.ts), which adds the hooks that
- * remind it at its few commands of its own in a turn (org-work-guard-hook.ts; it never refuses one).
+ * remind it at its few commands of its own in a turn (org-work-guard-hook.ts; it never refuses one), and
+ * the one that reads back what it keeps across conversations (own-readback-hook.ts), when `prompt`,
+ * its own, says so.
  * The host spawn template starts asks only, never an org node, so it passes none.
  */
-export function sessionSettingsHooks(env: NodeJS.ProcessEnv = process.env, opts: { orgRole?: OrgRole } = {}): Record<string, unknown> | null {
+export function sessionSettingsHooks(env: NodeJS.ProcessEnv = process.env, opts: { orgRole?: OrgRole; prompt?: string } = {}): Record<string, unknown> | null {
   const hooks: Record<string, unknown[]> = {}
   // Concatenate per event, so two sources on the same event never drop one.
-  for (const part of [compactOpenItemsHooks(env), gitTmpGuardHooks(env), tmpWriteNoteHooks(env), cloneIdentityHooks(env), shellDollarGuardHooks(env), patternSignalGuardHooks(env), soundGuardHooks(env), codexProviderGuardHooks(env), stopUnansweredHooks(env), orgWorkGuardHooks(opts.orgRole === 'router' ? undefined : opts.orgRole, env)]) {
+  for (const part of [compactOpenItemsHooks(env), gitTmpGuardHooks(env), tmpWriteNoteHooks(env), cloneIdentityHooks(env), shellDollarGuardHooks(env), patternSignalGuardHooks(env), soundGuardHooks(env), codexProviderGuardHooks(env), stopUnansweredHooks(env), orgWorkGuardHooks(opts.orgRole === 'router' ? undefined : opts.orgRole, env), ownReadbackHooks(opts.orgRole, opts.prompt ?? '', env)]) {
     for (const [event, groups] of Object.entries(part ?? {})) hooks[event] = [...(hooks[event] ?? []), ...(groups as unknown[])]
   }
   return Object.keys(hooks).length > 0 ? hooks : null
