@@ -51,6 +51,18 @@ describe('a browser fixture is ready only once its SPA is compiled', () => {
     expect(stale, 'these NOT_GATED entries are gated or gone now: remove them').toEqual([])
   })
 
+  it('no spec waits for the home page with the 5 s default', () => {
+    // A fresh browser context still fetches the dev graph's ~1,600 modules after the shell's first
+    // request (5 to 6 s on a Linux runner, 2026-11-08: session-vscode.spec.ts stopped on the boot
+    // splash), so a wait for .main-page names a boot-sized timeout, as home-navigation-helpers.ts does.
+    const bare: string[] = []
+    for (const name of fs.readdirSync(BROWSER_DIR).filter((f) => f.endsWith('.ts')).sort()) {
+      const lines = fs.readFileSync(path.join(BROWSER_DIR, name), 'utf8').split('\n')
+      lines.forEach((line, i) => { if (/locator\(\s*['"]\.main-page['"]\s*\)\s*\)\.toBeVisible\(\s*\)/.test(line)) bare.push(`${name}:${i + 1}`) })
+    }
+    expect(bare, 'give the .main-page wait a boot-sized timeout: toBeVisible({ timeout: 45_000 })').toEqual([])
+  })
+
   it('the shared fixture is gated', () => {
     expect(GATED(fs.readFileSync(path.join(BROWSER_DIR, 'test-server.ts'), 'utf8'))).toBe(true)
   })

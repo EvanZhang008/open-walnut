@@ -70,7 +70,7 @@ async function openStubbedDraft(page: Page): Promise<Locator> {
     })
   })
   await page.goto('/')
-  await expect(page.locator('.main-page')).toBeVisible()
+  await expect(page.locator('.main-page')).toBeVisible({ timeout: 45_000 })
   return openDraft(page)
 }
 
@@ -88,7 +88,7 @@ async function openPicker(page: Page): Promise<{ panel: Locator; picker: Locator
  *  Returns the draft panel; its composer is where the first message goes. */
 async function openCodexDraft(page: Page): Promise<Locator> {
   await page.goto('/')
-  await expect(page.locator('.main-page')).toBeVisible()
+  await expect(page.locator('.main-page')).toBeVisible({ timeout: 45_000 })
   return openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`, { engine: 'Codex' })
 }
 
@@ -373,7 +373,7 @@ test('persisted Codex session uses its engine name on Homepage', async ({ page }
   const sessionId = 'pw-codex-customer-session'
 
   await page.goto('/')
-  await expect(page.locator('.main-page')).toBeVisible()
+  await expect(page.locator('.main-page')).toBeVisible({ timeout: 45_000 })
   await page.locator('.todo-search-input').fill(sessionId)
   const task = page.locator('.todo-panel-item[data-task-id="pw-task-codex-customer"]')
   await expect(task).toBeVisible()

@@ -65,7 +65,7 @@ test('asks + unread letters badge amber; read state of the ask is irrelevant', a
     errorRecord('e1', t - 15_000), errorRecord('e2', t - 10_000), errorRecord('e3', t - 5_000),
   ])
   await page.goto('/')
-  await expect(page.locator('.main-page')).toBeVisible()
+  await expect(page.locator('.main-page')).toBeVisible({ timeout: 45_000 })
 
   const badge = page.locator('.sidebar-notification-btn .notification-badge-count')
   await expect(badge).toHaveText('2')
@@ -102,7 +102,7 @@ test('a feed of unread errors alone shows NO count badge', async ({ page }) => {
     errorRecord('e1', t - 15_000), errorRecord('e2', t - 10_000),
   ])
   await page.goto('/')
-  await expect(page.locator('.main-page')).toBeVisible()
+  await expect(page.locator('.main-page')).toBeVisible({ timeout: 45_000 })
 
   const bell = page.locator('.sidebar-notification-btn')
   await expect(bell).toBeVisible()

@@ -68,7 +68,7 @@ test('app loads and shows main page elements', async ({ page }) => {
   await page.goto('/')
   await page.waitForLoadState('networkidle')
 
-  await expect(page.locator('.main-page')).toBeVisible()
+  await expect(page.locator('.main-page')).toBeVisible({ timeout: 45_000 })
 
   // Todo panel should be visible
   await expect(page.locator('.todo-panel')).toBeVisible()

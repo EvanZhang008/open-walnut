@@ -57,7 +57,10 @@ async function openHome(page: Page): Promise<void> {
   await page.setContent(`<a href="${test.info().project.use.baseURL}/">Open Walnut</a>`)
   await page.getByRole('link', { name: 'Open Walnut' }).click()
   await preferences
-  await expect(page.locator('.main-page')).toBeVisible()
+  // ui-prefs is read early in boot, before the shell's dynamic imports: under the fixture's Vite
+  // dev server a fresh browser still fetches ~1,600 modules after it (about 5 to 6 s on a Linux
+  // runner), so the default 5 s ran out on the boot splash (home-navigation-helpers.ts waits 45 s).
+  await expect(page.locator('.main-page')).toBeVisible({ timeout: 45_000 })
   // The tab bar may not show an All tab any more; the helper falls back to Display.
   await selectSection(page, 'All')
 }

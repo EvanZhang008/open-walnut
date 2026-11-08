@@ -36,7 +36,7 @@ async function startFailingQuickSession(page: Page): Promise<void> {
   // main chat" is a claim about a mounted chat.
   await openChatOnLoad(page)
   await page.goto('/')
-  await expect(page.locator('.main-page')).toBeVisible()
+  await expect(page.locator('.main-page')).toBeVisible({ timeout: 45_000 })
 
   await openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`)
 
@@ -85,7 +85,7 @@ test('session errors appear only in Notifications, never in main chat', async ({
   // A refresh reloads persisted chat history and the durable notification feed.
   // The error must stay out of chat and remain available in Notifications.
   await page.reload()
-  await expect(page.locator('.main-page')).toBeVisible()
+  await expect(page.locator('.main-page')).toBeVisible({ timeout: 45_000 })
   const reloadedMainChat = page.locator('.main-page-chat')
   await expect(reloadedMainChat.locator('.chat-message-notification-error')).toHaveCount(0)
   await expect(reloadedMainChat).not.toContainText('Session Error')

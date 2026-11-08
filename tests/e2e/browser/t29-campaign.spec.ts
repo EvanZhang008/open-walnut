@@ -48,7 +48,7 @@ async function openFinder(page: Page) {
 
 async function openHome(page: Page) {
   await page.goto('/')
-  await expect(page.locator('.main-page')).toBeVisible()
+  await expect(page.locator('.main-page')).toBeVisible({ timeout: 45_000 })
 }
 
 test('session finder: ⌘⇧O opens, query filters results, Escape clears then closes', async ({ page }) => {

@@ -265,7 +265,7 @@ test('switching back to 2 evicts the third column and lays out cleanly', async (
   // `config:changed` WS event, so the socket must be connected before we flip the
   // setting — otherwise the event is missed and this asserts against a stale budget.
   await expect(columns).toHaveCount(3, { timeout: 20_000 })
-  await expect(page.locator('.main-page')).toBeVisible()
+  await expect(page.locator('.main-page')).toBeVisible({ timeout: 45_000 })
 
   await setPanelMode(page, '2')
   await page.locator('.sidebar a[href="/"]').first().click()

@@ -108,7 +108,7 @@ test.afterAll(async ({ request }) => {
 async function openHome(page: Page): Promise<void> {
   await page.setContent(`<a href="http://localhost:${TEST_PORT}/">Open Walnut</a>`)
   await page.getByRole('link', { name: 'Open Walnut', exact: true }).click()
-  await expect(page.locator('.main-page')).toBeVisible()
+  await expect(page.locator('.main-page')).toBeVisible({ timeout: 45_000 })
   if (process.env.PW_BUILT_SPA === '1') {
     await expect(page.locator('script[src^="/assets/"]')).toHaveCount(1)
     await expect(page.locator('script[src*="/@vite/client"]')).toHaveCount(0)

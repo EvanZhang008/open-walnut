@@ -92,7 +92,7 @@ async function stubNotifications(page: Page, feed: FeedRecord[]): Promise<void> 
 
 async function openErrorsPane(page: Page): Promise<void> {
   await page.goto('/')
-  await expect(page.locator('.main-page')).toBeVisible()
+  await expect(page.locator('.main-page')).toBeVisible({ timeout: 45_000 })
   await page.getByRole('button', { name: 'Notifications' }).click()
   await expect(page.locator('.notification-panel')).toBeVisible()
   await page.locator('.nfc-rail').getByRole('button', { name: /^Errors/ }).click()

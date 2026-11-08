@@ -75,7 +75,7 @@ test.describe.serial('main chat collapse and thinking rendering', () => {
 
   test('cron message auto-collapses and toggles from its header', async ({ page }) => {
     await page.goto('/')
-    await expect(page.locator('.main-page')).toBeVisible()
+    await expect(page.locator('.main-page')).toBeVisible({ timeout: 45_000 })
 
     const cronMessage = page.locator('.chat-message-cron', { hasText: CRON_FIRST_LINE })
     await expect(cronMessage).toBeVisible()
@@ -95,7 +95,7 @@ test.describe.serial('main chat collapse and thinking rendering', () => {
 
   test('blank thinking is omitted while real thinking expands', async ({ page }) => {
     await page.goto('/')
-    await expect(page.locator('.main-page')).toBeVisible()
+    await expect(page.locator('.main-page')).toBeVisible({ timeout: 45_000 })
 
     const blankThinkingMessage = page.locator('.chat-message-assistant', { hasText: BLANK_THINKING_TEXT })
     await expect(blankThinkingMessage).toBeVisible()
