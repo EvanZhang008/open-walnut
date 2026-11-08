@@ -8,6 +8,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { changeAlarm, fetchAlarm, fetchHealth, type AlarmDetail, type AlarmRow, type AlarmState, type HealthView } from '@/api/health-monitor';
 import { useEvent } from '@/hooks/useWebSocket';
+import { taskPath } from '@/utils/task-path';
 import { SettingsNotice, SettingsLoadingRow } from '../SettingsSection';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { SectionCard } from '../inputs/SectionCard';
@@ -96,7 +97,7 @@ function AlarmDetailView({ id, now, onChanged }: { id: string; now: number; onCh
           ? <SettingsButton busy={busy} onClick={() => void change({ muted_until: null })}>Unmute</SettingsButton>
           : <SettingsButton busy={busy} onClick={() => void change({ muted_for: '24h' })}>Mute 24 hours</SettingsButton>}
         <SettingsButton busy={busy} onClick={() => void change({ enabled: off })}>{off ? 'Turn on' : 'Turn off'}</SettingsButton>
-        {detail.fixTaskId && <Link className="health-task-link" to={`/tasks/${detail.fixTaskId}`}>Open its fix task</Link>}
+        {detail.fixTaskId && <Link className="health-task-link" to={taskPath(detail.fixTaskId)}>Open its fix task</Link>}
       </div>
       {detail.actions.length > 0 && (
         <>
@@ -106,7 +107,7 @@ function AlarmDetailView({ id, now, onChanged }: { id: string; now: number; onCh
               <li key={`${a.kind}-${a.at}`}>
                 <span className="health-when">{ago(a.at, now)}</span>
                 <span className={a.ok ? '' : 'health-failed'}>{a.detail}</span>
-                {a.taskId && <> · <Link to={`/tasks/${a.taskId}`}>task</Link></>}
+                {a.taskId && <> · <Link to={taskPath(a.taskId)}>task</Link></>}
               </li>
             ))}
           </ul>
