@@ -14,6 +14,7 @@
 import type { ComponentType } from 'react';
 import { isPopoutPath } from './popout/openPopout';
 import { loadPopoutView, popoutViewOf } from './popout/popout-views';
+import { publishScrollbarMetrics } from './utils/scrollbar-metrics';
 
 export const shellPath = window.location.pathname;
 export const isPopoutWindow = isPopoutPath(shellPath);
@@ -59,7 +60,12 @@ export const shellReady: Promise<ComponentType> = (() => {
     ? Promise.allSettled([app, pluginLoader]).then(() => import('./styles/global-styles'))
     : import('./styles/global-styles');
   holdLoadForApp();
-  return Promise.all([app, styles]).then(([one]) => one);
+  // The scrollbar's room is measured once the global stylesheets are in: their
+  // `::-webkit-scrollbar` rule is what gives WebKit and Chromium a 6px track, and a probe
+  // read before it measures the engine's own scrollbar (0 where it overlays), so code blocks
+  // reserved 6px and subtracted nothing (2026-11-06 to 11-08, after the stylesheets moved here).
+  // Before shellReady resolves, so every first render already has the right padding.
+  return Promise.all([app, styles]).then(([one]) => { publishScrollbarMetrics(); return one; });
 })();
 
 /** The plugin loader's module (its web modules' host), asked once. */

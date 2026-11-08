@@ -16,7 +16,6 @@ import { initBrowserLogger } from './utils/browser-logger';
 import { initLongTaskMonitor } from './utils/longtask-monitor';
 import { initInputLatencyMonitor } from './utils/input-latency-monitor';
 import { initMainThreadTracer, startPhase, endPhase, tracePhase } from './utils/main-thread-tracer';
-import { publishScrollbarMetrics } from './utils/scrollbar-metrics';
 import { initUiPrefsSync } from './utils/ui-prefs-sync';
 import { initDraftSync } from './utils/drafts';
 import { pressKeepsSelection, selectionIntersects } from './utils/selection-guard';
@@ -168,11 +167,9 @@ function bootApp(): void {
   initInputLatencyMonitor();
   // Cache server version/mode for crash reports (survives to server-down crashes).
   initAppInfo();
-  // Publish how much room a scrollbar takes (`--wn-scrollbar-h`). Code blocks
-  // reserve their horizontal track up front and subtract this from their bottom
-  // padding, so the reserved strip cannot double as dead space. Before mount: the
-  // first painted code block should already have the right padding.
-  publishScrollbarMetrics();
+  // How much room a scrollbar takes (`--wn-scrollbar-h`) is published by boot-shell.ts
+  // once the global stylesheets are in, before shellReady resolves: code blocks reserve
+  // their horizontal track up front and subtract it from their bottom padding.
   // A deploy replaces the build this tab runs. The server keeps the old build's
   // chunks servable so nothing breaks under a click; this pair moves the tab onto
   // the new build at a quiet moment (hidden tab after the reconnect a deploy
