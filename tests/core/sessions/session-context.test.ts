@@ -361,7 +361,9 @@ describe('buildSessionContext (identity note)', () => {
     // 9650 → 9750 (2026-11-06) for one line: a person's words in a message full of notices are answered first.
     // 9750 → 9850 (2026-11-07) for the charter's line that a broader role (an infrastructure or
     // admin credential) never gets past an application's own access control.
-    expect(systemPrompt.length).toBeLessThan(9850)
+    // 9850 → 10000 (2026-11-08) for the charter's done check: re-read the task's description and
+    // every request held and check each item before done (a task did one of five and said done).
+    expect(systemPrompt.length).toBeLessThan(10000)
   })
 
   it('asks for the agent acknowledgement line alone, only for agent messages, never after words', async () => {

@@ -60,7 +60,11 @@ import { TASK_ROUTING_CONTRACT } from './task-routing-contract.js';
 // Raised to 10,100 on 2026-11-07 for the charter's last bullet: a broader role (an
 // infrastructure or admin credential) never gets past an application's own access
 // control (a sync task had used one to pass a self-only route). It renders 10,056.
-export const SELF_KNOWLEDGE_PROMPT_MAX_CHARS = 10_100;
+//
+// Raised to 10,250 on 2026-11-08 for the charter's done check: before done, re-read the
+// task's description and every request held and check each item (a task did one of five
+// items and reported done twice). It renders 10,207.
+export const SELF_KNOWLEDGE_PROMPT_MAX_CHARS = 10_250;
 
 // The phase LIST comes from PHASE_ORDER, so adding or removing a phase updates
 // this prompt with no second edit. The phases the prompt names are typed
