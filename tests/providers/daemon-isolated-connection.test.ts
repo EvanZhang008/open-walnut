@@ -25,9 +25,12 @@ vi.mock('../../src/constants.js', () => {
 
 import { DaemonConnection, DaemonIdentityError } from '../../src/providers/daemon-connection.js'
 import { WALNUT_HOME } from '../../src/constants.js'
-import { isolationKey } from '../../src/providers/remote-isolation.js'
+import { isolatedDaemonEnv, isolationKey } from '../../src/providers/remote-isolation.js'
 import type { SshTarget } from '../../src/providers/session-io.js'
 import { guardedPath } from '../setup/exec-guard.js'
+import { writeBuildBackoff } from '../../src/providers/daemon-build-backoff.js'
+import { pendingReplaces } from '../../src/providers/daemon-update-store.js'
+import { unreadUpdates } from '../../src/providers/daemon-update-readback.js'
 
 const target: SshTarget = { hostname: 'devbox.example.com', user: 'tester', use_daemon: true }
 const priv = (c: DaemonConnection) => c as unknown as Record<string, unknown> & Record<string, (...a: unknown[]) => Promise<unknown>>
@@ -109,6 +112,85 @@ describe('an isolated connection writes only under its own root', () => {
     vi.spyOn(priv(conn), '_sendHandshake').mockResolvedValue({ ok: true, dir: priv(conn)._remoteDir, isolatedFor: iso.key, capabilities: [] })
     // Missing capabilities answer false; the point is that identity let it through.
     await expect(priv(conn).verifyCapabilities()).resolves.toBe(false)
+  })
+})
+
+describe('an isolated connection never acts on the real server\'s update records', () => {
+  // A test server's data is a copy of the real one's, machine-local update records included: each
+  // names the host's real daemon dir, which a restore, a read back or a removal would write in.
+  const seed = async () => {
+    const at = Date.now()
+    await writeBuildBackoff('ssh:devbox', { expected: 'build-held', at, reason: 'it did not stay serving', previous: { runtime: 'bun', bunPath: '/usr/bin/bun' } })
+    await pendingReplaces.write('ssh:devbox', { at, dir: '/tmp/open-walnut', expected: 'build-new', previous: { runtime: 'bun', bunPath: '/usr/bin/bun' } })
+    await unreadUpdates.write('ssh:devbox', { at, directory: '/tmp/walnut-update.real', expected: 'build-new' })
+  }
+  const FILES = { WALNUT_BUILD_BACKOFF_FILE: 'backoff.json', WALNUT_UPDATE_PENDING_FILE: 'pending.json', WALNUT_UPDATE_UNREAD_FILE: 'unread.json' }
+  const before: Record<string, string | undefined> = {}
+  beforeEach(() => {
+    // A test run keeps no store file unless one is named.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-iso-records-'))
+    cleanup.push(dir)
+    for (const [k, f] of Object.entries(FILES)) { before[k] = process.env[k]; process.env[k] = path.join(dir, f) }
+  })
+  afterEach(() => {
+    for (const k of Object.keys(FILES)) { if (before[k] === undefined) delete process.env[k]; else process.env[k] = before[k] }
+  })
+
+  it('reads none of them, so it restores, reads back and removes nothing outside its root', async () => {
+    await seed()
+    const conn = new DaemonConnection('devbox', target)
+    expect(conn.isolation.mode).toBe('isolated')
+    const ssh = vi.spyOn(priv(conn), 'sshExec').mockResolvedValue('')
+    expect(await priv(conn).realDirFailure()).toBeNull()
+    await priv(conn).loadPendingReplace()
+    expect(priv(conn)._replacing ?? null).toBeNull()
+    expect(priv(conn)._previous ?? null).toBeNull()
+    expect(await priv(conn).readBackUnreadOnce()).toBeNull()
+    expect(ssh).not.toHaveBeenCalled()
+  })
+
+  it('a real server reads them as always', async () => {
+    state.ephemeral = false
+    await seed()
+    const conn = new DaemonConnection('devbox', target)
+    expect(conn.isolation).toEqual({ mode: 'shared' })
+    expect(await priv(conn).realDirFailure()).toMatchObject({ expected: 'build-held' })
+    await priv(conn).loadPendingReplace()
+    expect(priv(conn)._replacing).toMatchObject({ dir: '/tmp/open-walnut', expected: 'build-new' })
+  })
+
+  it('its trial of a staged build stays under its own root, in the runtime dir its daemon gets', async () => {
+    const conn = new DaemonConnection('devbox', target)
+    const iso = conn.isolation
+    if (iso.mode !== 'isolated') throw new Error('expected isolated')
+    const dir = String(priv(conn)._remoteDir)
+    const root = path.posix.dirname(dir)
+    priv(conn)._staged = { runtime: 'node', dir, at: Date.now(), bunPath: null }
+    const scripts: string[] = []
+    vi.spyOn(priv(conn), 'sshExec').mockImplementation(async (script: unknown) => { scripts.push(String(script)); return '' })
+    await priv(conn).trialStaged()
+    expect(scripts.length).toBeGreaterThan(0)
+    const runtimeDir = isolatedDaemonEnv(root, iso.key).WALNUT_RUNTIME_DIR
+    for (const s of scripts) {
+      expect(s).toContain(`trd='${runtimeDir}'`)
+      expect(s).toContain(`mktemp -d '${root}'/walnut-proof.`)
+      expect(s).toContain(`for o in '${root}'/walnut-proof.*`)
+      expect(s).not.toMatch(PROD_PATH)
+      expect(s).not.toContain('/tmp/walnut-proof')
+    }
+  })
+
+  it('a real server\'s trial runs as always', async () => {
+    state.ephemeral = false
+    const conn = new DaemonConnection('devbox', target)
+    priv(conn)._staged = { runtime: 'node', dir: '/tmp/open-walnut', at: Date.now(), bunPath: null }
+    const scripts: string[] = []
+    vi.spyOn(priv(conn), 'sshExec').mockImplementation(async (script: unknown) => { scripts.push(String(script)); return '' })
+    await priv(conn).trialStaged()
+    for (const s of scripts) {
+      expect(s).toContain("mktemp -d '/tmp'/walnut-proof.")
+      expect(s).toContain('trd="$HOME/.open-walnut/local/runtime"')
+    }
   })
 })
 

@@ -51,6 +51,11 @@ export interface DaemonTrialOpts {
   preamble?: string
   waitSeconds?: number
   aliveSeconds?: number
+  /**
+   * A test server's isolated daemon (remote-isolation.ts): the proof dir and its sweep go under
+   * this root, and the walnut file's runtime under its runtimeDir, never the account's.
+   */
+  isolated?: { root: string; runtimeDir: string }
 }
 
 function shq(value: string): string {
@@ -76,19 +81,21 @@ export function buildDaemonTrialCmd(o: DaemonTrialOpts): string {
     `WALNUT_DAEMON_LIFETIME_SECONDS=${wait + alive + 30}`,
     'WALNUT_RUNTIME_DIR="$trd"',
   ].join(' ')
+  const parent = o.isolated ? o.isolated.root : '/tmp'
   return [
     o.runtime === 'node' && o.preamble ? o.preamble : ':',
     // The compiled walnut file in the daemon slot unpacks its runtime tree first: where the
     // account's daemon keeps it, read with the real HOME, never under the trial's (2026-11-04
     // review 4: the whole runtime went into the throwaway HOME on every update).
-    'case "${WALNUT_RUNTIME_DIR:-}" in /*) trd=$WALNUT_RUNTIME_DIR;; *) case "${OPEN_WALNUT_HOME:-}" in /*) trd="$OPEN_WALNUT_HOME/local/runtime";; *) trd="$HOME/.open-walnut/local/runtime";; esac;; esac',
+    o.isolated ? `trd=${shq(o.isolated.runtimeDir)}`
+      : 'case "${WALNUT_RUNTIME_DIR:-}" in /*) trd=$WALNUT_RUNTIME_DIR;; *) case "${OPEN_WALNUT_HOME:-}" in /*) trd="$OPEN_WALNUT_HOME/local/runtime";; *) trd="$HOME/.open-walnut/local/runtime";; esac;; esac',
     // A proof dir of this account older than 15 min whose daemon is gone: its prover died.
-    'for o in /tmp/walnut-proof.*; do [ -d "$o" ] && [ -O "$o" ] && [ ! -L "$o" ] || continue',
+    `for o in ${shq(parent)}/walnut-proof.*; do [ -d "$o" ] && [ -O "$o" ] && [ ! -L "$o" ] || continue`,
     '  [ -n "$(find "$o" -maxdepth 0 -mmin +15 2>/dev/null)" ] || continue',
     '  op=$(cat "$o/d/daemon.pid" 2>/dev/null); case "$op" in ""|*[!0-9]*) ;; *) kill -0 "$op" 2>/dev/null && continue;; esac',
     '  rm -rf "$o"',
     'done',
-    `t=$(umask 077; mktemp -d /tmp/walnut-proof.XXXXXXXXXX 2>/dev/null) || { echo "${TRIAL_FAILED} no throwaway dir could be made in /tmp"; exit 0; }`,
+    `t=$(umask 077; mktemp -d ${shq(parent)}/walnut-proof.XXXXXXXXXX 2>/dev/null) || { echo "${TRIAL_FAILED} no throwaway dir could be made in ${parent}"; exit 0; }`,
     'mkdir -p "$t/h" "$t/tmp"',
     // The subshell execs env, which execs the daemon: $! is the daemon itself.
     `(cd "$t/h" && exec env -i ${env} ${program(o)} --start) </dev/null >"$t/out.log" 2>&1 &`,

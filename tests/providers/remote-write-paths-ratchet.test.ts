@@ -47,10 +47,20 @@ const CONNECTION: Record<string, Entry> = {
   resolveRemoteDir: { count: 1, kind: 'own-dir', why: 'an isolated connection probes only isolatedProbeOpts (tests/providers/remote-isolation.test.ts runs it)' },
   detectServiceTakeover: { count: 1, kind: 'not-for-test-server', why: 'returns unmanaged for an isolated connection before probing the host\'s service files' },
   checkDaemonRunning: { count: 2, kind: 'own-dir', why: 'candidateDaemonDirs: only the isolated dirs; --status with dirEnv' },
-  shouldUpgradeDaemon: { count: 1, kind: 'own-dir', why: 'reads the binary in the chosen daemon dir' },
+  shouldUpgradeDaemon: { count: 2, kind: 'own-dir', why: 'reads the binary in the chosen daemon dir, and keeps the build that runs (the way back) there; beside it for an isolated dir (keepsDurable)' },
+  trialStaged: { count: 1, kind: 'own-dir', why: 'the staged build in a throwaway walnut-proof dir with its own HOME and dirs; for an isolated connection that dir, its sweep and the runtime tree are under its own root' },
+  startHeldBack: { count: 1, kind: 'own-dir', why: 'the kept copy back into the chosen daemon dir and started there; an isolated connection reads no held build (ownUpdateRecord)' },
+  restoreUnstopped: { count: 1, kind: 'own-dir', why: 'the kept copy back into the dir this connection kept it from; a stored dir is never read by an isolated connection (ownUpdateRecord)' },
+  startPreviousAfterFail: { count: 1, kind: 'own-dir', why: 'the daemon it replaced started again in the dir it replaced (this connection\'s own, never a stored one for an isolated connection)' },
+  hostBoot: { count: 1, kind: 'read', why: 'the host\'s boot time' },
+  startedAfterStop: { count: 1, kind: 'read', why: 'the pid file of the dir it replaced in, and the boot time' },
+  proveStarted: { count: 1, kind: 'read', why: 'whether the pid in the dir it replaced in is that dir\'s daemon (kill -0, w_daemon)' },
+  settleStartedOnLive: { count: 1, kind: 'read', why: 'daemon.version of the dir it replaced in' },
+  readBackUnreadOnce: { count: 1, kind: 'not-for-test-server', why: 'an isolated connection reads no update record (ownUpdateRecord), so it has no update to read back' },
+  reviveRemoteService: { count: 1, kind: 'not-for-test-server', why: 'revives the host\'s OS service; IS_EPHEMERAL returns before anything runs' },
   prewarmRemoteFolds: { count: 3, kind: 'own-dir', why: 'daemonDir = the chosen dir, env = dirEnv, bun probe with bunScriptOpts' },
   acpTurnsOpen: { count: 1, kind: 'read', why: 'reads acp-busy.json in the chosen daemon dir' },
-  updateManagedDaemon: { count: 2, kind: 'not-for-test-server', why: 'only for an OS-service daemon; an isolated one is never managed (detectServiceTakeover)' },
+  updateManagedDaemon: { count: 3, kind: 'not-for-test-server', why: 'only for an OS-service daemon; an isolated one is never managed (detectServiceTakeover)' },
   stopUnmanagedDaemon: { count: 1, kind: 'own-dir', why: 'buildDaemonStopCmd(the chosen daemon dir), which proves the pid is that dir\'s daemon' },
   probeOrInstallBun: { count: 3, kind: 'own-dir', why: 'bunScriptOpts: the install runs with HOME and BUN_INSTALL under the isolated install home' },
   deployWalnutFile: { count: 5, kind: 'own-dir', why: 'the slot is in the chosen daemon dir; the host server install is not looked at for an isolated daemon' },
@@ -127,6 +137,14 @@ describe('remote write paths ratchet', () => {
     expect(dc).toMatch(/if \(this\.isolation\.mode === 'isolated'\) return 'it is a test server\\'s isolated daemon'/)
     expect(dc).toMatch(/iso\.mode === 'shared' \|\| \(iso\.mode === 'isolated' && iso\.replica\)\) void import\('\.\.\/core\/host-server\/index\.js'\)/)
     expect(dc).toMatch(/isolatedDaemonEnv\(isolatedRootOfDaemonDir\(this\._remoteDir\), iso\.key\)/)
+    // The update records on disk are the real server's: every read of one goes through the one
+    // helper, which reads only for a real server's connection.
+    expect(dc).toMatch(/private ownUpdateRecord<T>\(read: \(key: string\) => Promise<T \| null>\): Promise<T \| null> \{\n {4}return this\.isolation\.mode === 'shared' \?/)
+    const reads = dc.match(/(?:readBuildBackoff|unreadUpdates\.read|pendingReplaces\.read)\(/g) ?? []
+    const helped = dc.match(/this\.ownUpdateRecord\(\(k\) => (?:readBuildBackoff|unreadUpdates\.read|pendingReplaces\.read)\(k\)\)/g) ?? []
+    expect(reads.length).toBeGreaterThan(0)
+    expect(helped.length, 'an update record read that is not through ownUpdateRecord').toBe(reads.length)
+    expect(dc).toMatch(/opts\.isolated = \{ root, runtimeDir: isolatedLayout\(root\)\.runtimeDir \}/)
     expect(fs.readFileSync(path.join(ROOT, 'src/core/plugin-jobs/index.ts'), 'utf-8')).toMatch(/plugin jobs do not run on a test server/)
     expect(fs.readFileSync(path.join(ROOT, 'src/core/plugins/plugin-hosts.ts'), 'utf-8')).toMatch(/remoteIsolationFor\(/)
     expect(fs.readFileSync(path.join(ROOT, 'src/web/terminal/spawn.ts'), 'utf-8')).toMatch(/remoteIsolationFor\(/)

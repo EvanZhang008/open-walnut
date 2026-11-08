@@ -51,6 +51,33 @@ describe('the trial run of a staged daemon on the host', () => {
     expect(alive).toBe(false)
   }, 30_000)
 
+  it('a test server\'s isolated trial keeps its proof dir, its sweep and the runtime under its own root', () => {
+    const iso = path.join(root, 'open-walnut-test-0123456789abcdef')
+    fs.mkdirSync(iso, { recursive: true })
+    // A dead proof dir outside the root is not this trial's to sweep; an old one inside is.
+    const outside = fs.mkdtempSync('/tmp/walnut-proof.isotest')
+    const inside = path.join(iso, 'walnut-proof.Old0001')
+    fs.mkdirSync(inside)
+    const old = new Date(Date.now() - 20 * 60_000)
+    for (const d of [outside, inside]) fs.utimesSync(d, old, old)
+    try {
+      const seen = path.join(root, 'seen-env-iso')
+      const good = stand('daemon-good-iso', [`env > '${seen}'`, 'mkdir -p "$WALNUT_DAEMON_DIR"', 'echo 41000 > "$WALNUT_DAEMON_DIR/daemon.port"', 'exec sleep 30'])
+      const runtimeDir = path.join(iso, 'runtime')
+      expect(parseDaemonTrial(sh(buildDaemonTrialCmd({ runtime: 'binary', execPath: good, dir: root, waitSeconds: 3, aliveSeconds: 1, isolated: { root: iso, runtimeDir } })))).toBeNull()
+      const env = fs.readFileSync(seen, 'utf8')
+      const lines = env.split('\n')
+      expect(lines.some((l) => l.startsWith(`HOME=${iso}/walnut-proof.`))).toBe(true)
+      expect(lines).toContain(`WALNUT_RUNTIME_DIR=${runtimeDir}`)
+      expect(env).not.toMatch(/=\/tmp\/walnut-proof\./)
+      expect(fs.existsSync(outside)).toBe(true)
+      expect(fs.existsSync(inside)).toBe(false)
+      expect(fs.readdirSync(iso).filter((n) => n.startsWith('walnut-proof.'))).toEqual([])
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true })
+    }
+  }, 30_000)
+
   it.each([
     ['dies in its startup', ['echo "Error: Cannot find module ./net-core.cjs" >&2', 'exit 3'], /^it exited with 3 before it listened: Error: Cannot find module/],
     ['never listens', ['exec sleep 30'], /^it did not listen within 3 s/],

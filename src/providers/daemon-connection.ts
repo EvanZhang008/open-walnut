@@ -1252,8 +1252,20 @@ export class DaemonConnection {
 
   /** The build that did not stay serving here: in memory, or first after a restart the kept record. */
   private async realDirFailure(): Promise<BuildBackoffEntry | null> {
-    if (this._realDirFail === undefined) this._realDirFail = await readBuildBackoff(`ssh:${this.hostKey}`)
+    if (this._realDirFail === undefined) this._realDirFail = await this.ownUpdateRecord((k) => readBuildBackoff(k))
     return this._realDirFail ?? null
+  }
+
+  /**
+   * The update records on disk (a held build, a stop on its probation, an update's unread answer)
+   * are the real server's, about the host's real daemon, and a test server's data is a copy of
+   * them. Only a real server's connection reads them: a test server's (its isolated daemon, the
+   * replica check) would read back and remove the real update's dir on the host, and let the real
+   * daemon's held build or probation steer its own starts. What it does itself stays in memory
+   * (remote-write-paths-ratchet.test.ts).
+   */
+  private ownUpdateRecord<T>(read: (key: string) => Promise<T | null>): Promise<T | null> {
+    return this.isolation.mode === 'shared' ? read(`ssh:${this.hostKey}`) : Promise.resolve(null)
   }
 
   /** Kept in memory at once; the promise is the disk write (awaited where a record goes after it). */
@@ -4939,7 +4951,7 @@ export class DaemonConnection {
   private async readBackUnreadOnce(): Promise<'running' | 'read' | null> {
     // This server's own update in flight reads its record itself (a read back would remove its dir).
     if (this._updateWaiting) return 'running'
-    if (this._unreadUpdate === undefined) this._unreadUpdate = await unreadUpdates.read(`ssh:${this.hostKey}`)
+    if (this._unreadUpdate === undefined) this._unreadUpdate = await this.ownUpdateRecord((k) => unreadUpdates.read(k))
     const u = this._unreadUpdate
     if (!u) return null
     let back: ReadBack
@@ -5831,7 +5843,7 @@ export class DaemonConnection {
     if (this._pendingRead) return
     this._pendingRead = true
     if (this._replacing || this._previous?.stopped) return
-    const kept = await pendingReplaces.read(`ssh:${this.hostKey}`)
+    const kept = await this.ownUpdateRecord((k) => pendingReplaces.read(k))
     // One past its time (a host away for longer) is gone: the host is started as a new one.
     if (!kept || !pendingReplaces.fresh(kept)) return
     const runtime = kept.previous?.runtime
@@ -5867,6 +5879,11 @@ export class DaemonConnection {
     const opts: DaemonTrialOpts = staged.runtime === 'bun' && staged.bunPath ? { runtime: 'bun', execPath: staged.bunPath, dir: staged.dir }
       : staged.runtime === 'binary' ? { runtime: 'binary', execPath: await this.getRemoteDaemonPath(), dir: staged.dir }
         : { runtime: 'node', dir: staged.dir, preamble: userShellPathScript(buildRemotePreamble(this.ssh.shell_setup)) }
+    // A test server's trial stays under its own root: its proof dir, and the walnut file's runtime.
+    if (this.isolation.mode === 'isolated') {
+      const root = isolatedRootOfDaemonDir(staged.dir)
+      opts.isolated = { root, runtimeDir: isolatedLayout(root).runtimeDir }
+    }
     return trialStagedDaemon((c, t) => this.sshExec(c, t), opts)
   }
 
