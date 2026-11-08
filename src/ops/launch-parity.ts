@@ -38,6 +38,7 @@ export const LAUNCH_PARITY: Readonly<Record<string, ParityEntry>> = {
   agentId: { none: 'Picks which console agent a Personal AI conversation speaks to; only with walnutAgent.' },
   overrideReadiness: { none: '"Start anyway" answers the host readiness gate of a person\'s launch; task_start does not run that gate.' },
   sessionId: { none: 'A browser-minted id so a lost HTTP answer stays reconcilable; the op reads the id from its answer.' },
+  ownTaskDir: { none: 'The browser extension\'s New task has no folder picker, so its task starts in its own task directory; an agent names its cwd (a worker\'s task starts beside it), and task_dir makes a task directory.' },
   hints: { none: 'The browser side panel asks for its object-context hint (the page, mail or tab the person asks about); an agent says what it means in its message.' },
 }
 
@@ -80,6 +81,7 @@ export const SESSION_ACTION_PARITY: Readonly<Record<string, ParityEntry>> = {
   controls: { none: 'An ACP engine\'s own option pills (approval mode, thought level) for the session it runs; its effort rides the model id.' },
   fork: { op: 'task_transfer', note: 'a new task carrying the conversation' },
   permission: { none: 'The person answers a permission prompt; an agent never approves a tool for another session.' },
+  'permission-decisions': { none: 'Read for the timeline: the person\'s answers label the calls they gated; task_history shows those calls.' },
   plan: { none: 'The person approves or rejects a plan the session proposed.' },
   execute: { none: 'Runs an approved plan; follows the person\'s plan decision.' },
   'execute-continue': { none: 'Continues after an approved plan; follows the person\'s plan decision.' },
