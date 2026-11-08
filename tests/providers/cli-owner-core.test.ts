@@ -1,7 +1,10 @@
 /**
  * One CLI per session id on a host (src/providers/cli-owner-core.ts): the owner
  * record and the process-table check, against a real temp directory and a
- * scripted process table. No process is spawned or signalled.
+ * scripted process table. No process is spawned or signalled, and no real
+ * process is read: /proc reads answer from the scripted table too (2026-11-08: a
+ * land's check on Linux read the real /proc/407/environ, a live process of the
+ * runner with its own HOME, and the scripted CLI 407 no longer counted).
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs'
@@ -10,7 +13,7 @@ import path from 'node:path'
 import { createCliOwner, type CliOwnerDeps, type CliOwnerHolder } from '../../src/providers/cli-owner-core.js'
 import { heldByAnotherProcess, holderKindOf, holderPidOf } from '../../src/providers/delivery-failure.js'
 
-interface Proc { startTime: string; args: string; home?: string | null; configDir?: string; pgid?: number; stat?: string }
+interface Proc { startTime: string; args: string; home?: string | null; configDir?: string; pgid?: number; stat?: string; environ?: string }
 
 let root = ''
 let procs: Map<number, Proc>
@@ -21,10 +24,24 @@ let logs: Array<{ level: string; msg: string }>
 const HOME = '/home/u'
 const SID = 'aaaaaaaa-1111-4111-8111-111111111111'
 
+/** The real fs, except that /proc/<pid>/environ answers from the scripted table (ENOENT when it has none). */
+const procFs = new Proxy(fs, {
+  get(target, prop, receiver) {
+    if (prop !== 'readFileSync') return Reflect.get(target, prop, receiver)
+    return (file: fs.PathOrFileDescriptor, ...rest: unknown[]) => {
+      const m = typeof file === 'string' ? /^\/proc\/(\d+)\/environ$/.exec(file) : null
+      if (!m) return (target.readFileSync as (...a: unknown[]) => unknown)(file, ...rest)
+      const x = procs.get(Number(m[1]))
+      if (!x?.environ) throw Object.assign(new Error(`ENOENT: ${file}`), { code: 'ENOENT' })
+      return x.environ
+    }
+  },
+})
+
 function owner(instance: string, pid: number, extra: Partial<CliOwnerDeps> = {}) {
   let n = 0
   return createCliOwner({
-    fs, path,
+    fs: procFs, path,
     dir: path.join(root, 'cli-owners'),
     configDir: path.join(HOME, '.claude'),
     platform: 'darwin',
@@ -283,10 +300,17 @@ describe('the process table check', () => {
 
   it('reads the env on linux from /proc', async () => {
     const o = owner('b', 200, { platform: 'linux' })
-    // /proc/<pid>/environ of a scripted pid does not exist: unreadable, so it counts. The pid is
-    // above Linux's largest pid_max (2^22), so no real process on the test host can have it.
+    // A pid above Linux's largest pid_max (2^22), so no real process on the test host can have it.
     const scripted = 4_194_399
+    // An environ that cannot be read counts: the process may write here.
     procs.set(scripted, { startTime: 's', args: cliArgs(SID) })
+    expect(await refusal(o.claim(SID))).toMatchObject({ pid: scripted })
+    // One whose environ names another config dir does not.
+    procs.set(scripted, { startTime: 's', args: cliArgs(SID), environ: 'PATH=/usr/bin\0HOME=/home/other\0' })
+    const claim = await o.claim(SID)
+    claim.release()
+    // One that writes into this config dir does.
+    procs.set(scripted, { startTime: 's', args: cliArgs(SID), environ: `PATH=/usr/bin\0HOME=${HOME}\0` })
     expect(await refusal(o.claim(SID))).toMatchObject({ pid: scripted })
   })
 })
