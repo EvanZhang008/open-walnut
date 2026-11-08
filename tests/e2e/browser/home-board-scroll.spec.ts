@@ -103,7 +103,7 @@ test('every nested card body activates only its own drag and leaves controls cli
     await page.keyboard.press('Escape');
   } finally { await page.mouse.up(); }
   const child = board.locator('[data-board-task="board-body-1"]');
-  await child.locator(':scope > .home-board-meta > button').click();
+  await child.locator(':scope > .home-board-meta [data-board-move]').click();
   await expect(page.getByRole('listbox', { name: 'Move to pin tier' })).toBeVisible();
   await expect(board.locator('.home-board-drag-preview')).toHaveCount(0);
   await page.keyboard.press('Escape');

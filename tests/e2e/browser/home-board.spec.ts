@@ -299,7 +299,7 @@ test('late move failures cannot cross a close, reopen or read-only mode change',
         await board.getByRole('textbox', { name: 'Search board tasks' }).fill(project);
       } else {
         await board.getByRole('button', { name: 'By status', exact: true }).click();
-        await expect(board.locator('.home-board-meta > button')).toHaveCount(0);
+        await expect(board.locator('.home-board-meta [data-board-move]')).toHaveCount(0);
       }
       release();
       await expect(board.locator('.home-board-hint')).not.toContainText('Saving pin tier');

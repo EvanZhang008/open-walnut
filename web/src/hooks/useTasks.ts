@@ -337,9 +337,9 @@ interface UseTasksReturn {
   showOperationError: (msg: string) => void;
   refetch: () => void;
   create: (input: tasksApi.CreateTaskInput, hooks?: CreateHooks) => Promise<Task>;
-  update: (id: string, updates: tasksApi.UpdateTaskInput) => void;
+  update: (id: string, updates: tasksApi.UpdateTaskInput) => Promise<boolean>;
   toggleComplete: (id: string) => void;
-  setPhase: (id: string, phase: string) => void;
+  setPhase: (id: string, phase: string) => Promise<boolean>;
   /** Reorder within ONE project group. `project: ''` = Inbox. */
   reorder: (project: string, taskIds: string[]) => void;
   /** Move a task to another project ('' = Inbox), optionally next to a sibling. */
@@ -1090,8 +1090,8 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
       if (!onlyReadMarker) settle = holdOptimistic(id, apply);
       setTasks(apply);
     }
-    withWriteRetry((opId) => tasksApi.updateTask(id, updates, { opId }))
-      .then(() => settle(), (err: Error) => { settle(); onOpError(err, [id]); });
+    return withWriteRetry((opId) => tasksApi.updateTask(id, updates, { opId }))
+      .then(() => { settle(); return true; }, (err: Error) => { settle(); onOpError(err, [id]); return false; });
   }, [guardEcho, onOpError]);
 
   const toggleComplete = useCallback((id: string) => {
@@ -1108,8 +1108,8 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     const apply = (rows: Task[]) => applyPhaseChange(rows, id, phase);
     const settle = holdOptimistic(id, apply);
     setTasks(apply);
-    withWriteRetry((opId) => tasksApi.updateTask(id, { phase }, { opId }))
-      .then(() => settle(), (err: Error) => { settle(); onOpError(err, [id]); });
+    return withWriteRetry((opId) => tasksApi.updateTask(id, { phase }, { opId }))
+      .then(() => { settle(); return true; }, (err: Error) => { settle(); onOpError(err, [id]); return false; });
   }, [guardEcho, onOpError]);
 
   const reorder = useCallback((project: string, taskIds: string[]) => {

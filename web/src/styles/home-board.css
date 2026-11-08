@@ -34,8 +34,12 @@
 .home-board-state i { width: 6px; height: 6px; border-radius: 50%; background: var(--fg-muted); }
 .home-board-state-needs i { background: var(--error, #c96253); }
 .home-board-state-working i { background: var(--success, #29846b); }
-.home-board-meta > button { margin-left: auto; padding: 0 2px; border: 0; background: transparent; color: var(--fg-muted); font: inherit; font-size: 11px; }
-.home-board-meta > button:hover { color: var(--accent); }
+.home-board-actions { display: inline-flex; gap: 10px; margin-left: auto; }
+.home-board-actions > button { padding: 0 2px; border: 0; background: transparent; color: var(--fg-muted); font: inherit; font-size: 11px; }
+.home-board-actions > button:hover { color: var(--accent); }
+.home-board-actions > button[data-board-done-button]:hover { color: var(--success, #29846b); }
+.home-board-done-note { display: flex; align-items: center; gap: 12px; }
+.home-board-done-note button { padding: 3px 10px; border: 1px solid var(--border); border-radius: 5px; background: var(--bg-secondary); color: var(--fg); font: inherit; font-size: 12px; }
 .home-board-parent { margin-top: 6px; color: var(--fg-muted); font-size: 10px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .home-board-family { margin-top: 9px; padding-top: 7px; border-top: 1px solid var(--border); }
 .home-board-family-toggle { display: flex; align-items: center; gap: 5px; width: 100%; padding: 2px 0 7px; border: 0; background: transparent; color: var(--fg-muted); font: inherit; font-size: 11px; text-align: left; }

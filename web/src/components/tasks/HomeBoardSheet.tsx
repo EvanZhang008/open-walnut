@@ -13,13 +13,15 @@ import { taskStatusLabel, taskUserState } from '@/utils/session-status';
 import { ICON_CLOSE, ICON_CHEVRON_DOWN, ICON_CHEVRON_RIGHT } from '@/components/common/Icons';
 import { OptionPickerFlyout, useCursorFlyout } from './CursorFlyout';
 import { QuickSortView } from './QuickSortView';
-import { SnoozeDateFlyout, SnoozeRows } from './SnoozeChoices';
+import { SnoozeDateFlyout, SnoozeFlyout, SnoozeRows } from './SnoozeChoices';
 import { isSnoozed, snoozeUntilText } from './quick-sort-model';
 import { boardMoveIds, buildHomeBoard, homeBoardTier, type BoardFamily, type HomeBoardColumn, type HomeBoardMode, type HomeBoardView } from './home-board-model';
 import '@/styles/home-board.css';
 
-function BoardTask({ family, mode, onOpen, onMove, depth = 0, folded, onFold, tierLabel, moving, snoozed }: {
+function BoardTask({ family, mode, onOpen, onMove, onSnooze, onDone, depth = 0, folded, onFold, tierLabel, moving, snoozed }: {
   family: BoardFamily; mode: HomeBoardMode; onOpen: (task: Task) => void; snoozed: (task: Task) => boolean;
+  /** One tap on the card itself (2026-11-07, the user: not in the Move menu, "several buttons ... including Snooze"). */
+  onSnooze: (task: Task, origin: HTMLElement) => void; onDone: (task: Task) => void;
   onMove: (task: Task, origin: HTMLElement) => void; depth?: number; tierLabel: (task: Task) => string;
   folded: readonly string[]; onFold: (id: string) => void; moving: boolean;
 }) {
@@ -28,6 +30,7 @@ function BoardTask({ family, mode, onOpen, onMove, depth = 0, folded, onFold, ti
   const drag = useDraggable({ id: task.id, data: { family }, disabled: mode !== 'pin' || moving });
   const closed = folded.includes(task.id);
   const until = task.start_date && snoozed(task) ? snoozeUntilText(task.start_date) : '';
+  const open = state !== 'done';
   return <article ref={drag.setNodeRef} className={`home-board-card${depth ? ' home-board-child' : ''}${drag.isDragging ? ' is-dragging' : ''}`} data-board-task={task.id} data-state={state} data-draggable={mode === 'pin' && !moving} onPointerDown={e => {
     const target = e.target as Element;
     if (e.pointerType !== 'mouse' || target.closest('[data-board-task]') !== e.currentTarget || target.closest('button, a, input, textarea, select, [contenteditable="true"]')) return;
@@ -38,13 +41,17 @@ function BoardTask({ family, mode, onOpen, onMove, depth = 0, folded, onFold, ti
       {mode === 'pin' && <button ref={drag.setActivatorNodeRef} type="button" className="home-board-drag" disabled={moving} aria-label={`Drag ${task.title}`} title="Drag to another pin tier" {...drag.attributes} {...drag.listeners}>⠿</button>}
     </div>
     <div className="home-board-meta"><span className={`home-board-state home-board-state-${state}`}><i />{taskStatusLabel(task)}</span>{mode === 'status' && <span>{tierLabel(task)}</span>}
-      {until && <span className="home-board-snoozed" data-board-snoozed>Snoozed until {until}</span>}
-      {mode === 'pin' && <button type="button" disabled={moving} aria-label={`Move ${task.title} to pin tier`} onClick={e => onMove(task, e.currentTarget)}>Move</button>}
+      {until && <span className="home-board-snoozed" data-board-snoozed>{/^snoozed/i.test(taskStatusLabel(task)) ? `until ${until}` : `Snoozed until ${until}`}</span>}
+      {open && <span className="home-board-actions">
+        <button type="button" data-board-snooze aria-haspopup="dialog" aria-label={`Snooze ${task.title}`} onClick={e => onSnooze(task, e.currentTarget)}>Snooze</button>
+        <button type="button" data-board-done-button aria-label={`Mark ${task.title} done`} onClick={() => onDone(task)}>Done</button>
+        {mode === 'pin' && <button type="button" data-board-move disabled={moving} aria-label={`Move ${task.title} to pin tier`} onClick={e => onMove(task, e.currentTarget)}>Move</button>}
+      </span>}
     </div>
     {!depth && parent && <div className="home-board-parent" title={parent.title}>Under {parent.title}</div>}
     {children.length > 0 && <div className="home-board-family">
       <button type="button" className="home-board-family-toggle" aria-expanded={!closed} aria-label={`Subtasks of ${task.title}`} onClick={() => onFold(task.id)}>{closed ? ICON_CHEVRON_RIGHT : ICON_CHEVRON_DOWN}{children.length} {children.length === 1 ? 'subtask' : 'subtasks'}</button>
-      {!closed && children.map(child => <BoardTask key={child.task.id} family={child} mode={mode} onOpen={onOpen} onMove={onMove} depth={depth + 1} folded={folded} onFold={onFold} tierLabel={tierLabel} moving={moving} snoozed={snoozed} />)}
+      {!closed && children.map(child => <BoardTask key={child.task.id} family={child} mode={mode} onOpen={onOpen} onMove={onMove} onSnooze={onSnooze} onDone={onDone} depth={depth + 1} folded={folded} onFold={onFold} tierLabel={tierLabel} moving={moving} snoozed={snoozed} />)}
     </div>}
   </article>;
 }
@@ -88,6 +95,8 @@ export function HomeBoardSheet({ onOpenTask }: { onOpenTask: (task: Task) => voi
   const shown = useContext(RouteShownContext) ?? true;
   const picker = useCursorFlyout<BoardFamily>();
   const datePicker = useCursorFlyout<Task>();
+  const snoozePicker = useCursorFlyout<Task>();
+  const [lastDone, setLastDone] = useState<{ id: string; title: string; phase: string; write: Promise<boolean> } | null>(null);
   const sheetRef = useRef<HTMLElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const keepGrabVisible = useCallback<Modifier>(({ activatorEvent, activeNodeRect, transform }) => {
@@ -198,7 +207,7 @@ export function HomeBoardSheet({ onOpenTask }: { onOpenTask: (task: Task) => voi
     movedTask.current = null;
     setMoveError(null);
     retryMove.current = null;
-    if (!fullscreen.isFullscreen) { dragCancelled.current = true; setQuery(''); picker.close(); datePicker.close(); setDragging(null); }
+    if (!fullscreen.isFullscreen) { dragCancelled.current = true; setQuery(''); picker.close(); datePicker.close(); snoozePicker.close(); setLastDone(null); setDragging(null); }
   }, [fullscreen.isFullscreen, mode]);
   useEffect(() => {
     if (shown && fullscreen.isFullscreen && mode === 'pin') return;
@@ -212,7 +221,7 @@ export function HomeBoardSheet({ onOpenTask }: { onOpenTask: (task: Task) => voi
       event.preventDefault();
       document.dispatchEvent(event);
     }
-    picker.close(); datePicker.close();
+    picker.close(); datePicker.close(); snoozePicker.close();
   }, [shown, fullscreen.isFullscreen, mode, dragging]);
   useEffect(() => { setDoneLimit(30); setSearchFold({ query, ids: [] }); }, [query]);
   const sendMove = useCallback((ids: string[], tier: string) => {
@@ -268,6 +277,18 @@ export function HomeBoardSheet({ onOpenTask }: { onOpenTask: (task: Task) => voi
   const sortTiers = useMemo(() => [{ id: 'focus', label: 'Focus' }, { id: 'satellite', label: 'Satellite' }, { id: 'wait', label: 'Parked' }, ...focus.customTiers.map(t => ({ id: t.id, label: t.label })), { id: 'unpinned', label: 'Unpinned' }], [focus.customTiers]);
   const boardMode: HomeBoardMode = mode === 'status' ? 'status' : 'pin';
   const snoozeFromMenu = (task: Task, date: string | null) => { update(task.id, { start_date: date ?? '' }); };
+  const onSnoozeCard = (task: Task, origin: HTMLElement) => {
+    const box = origin.getBoundingClientRect();
+    picker.close();
+    snoozePicker.open(task, { x: box.left, y: box.bottom }, origin);
+  };
+  const onDoneCard = (task: Task) => {
+    const write = setPhase(task.id, 'COMPLETE');
+    const done = { id: task.id, title: task.title, phase: task.phase, write };
+    setLastDone(done);
+    // A refused completion was reported and rolled back: there is nothing to undo.
+    void write.then(ok => { if (!ok) setLastDone(d => d === done ? null : d); });
+  };
   const total = mode === 'sort' ? tasks.filter(t => !isHiddenFromTaskLists(t) && taskUserState(t) !== 'done').length : columns.filter(c => c.id !== 'done').reduce((n, c) => n + c.count, 0);
   const completed = (columns.find(c => c.id === 'done')?.count ?? 0) + (query.trim() ? 0 : completedHidden);
   if (!fullscreen.isFullscreen) return null;
@@ -276,9 +297,15 @@ export function HomeBoardSheet({ onOpenTask }: { onOpenTask: (task: Task) => voi
     if (e.isPrimary && e.button === 0 && mode === 'pin' && !moving && (target.closest('.home-board-drag') || (e.pointerType === 'mouse' && target.closest('[data-board-task]') && !target.closest('button, a, input, textarea, select, [contenteditable="true"]')))) pointerHeld.current = true;
   }} onKeyDownCapture={e => {
     if (e.defaultPrevented || (e.key === 'Escape' && dragging)) return;
-    if (e.key === 'Escape' && (picker.state || datePicker.state)) { e.preventDefault(); e.stopPropagation(); picker.close(); datePicker.close(); return; }
+    if (e.key === 'Escape' && (picker.state || datePicker.state || snoozePicker.state)) {
+      e.preventDefault(); e.stopPropagation();
+      const origin = snoozePicker.state?.origin;
+      picker.close(); datePicker.close(); snoozePicker.close();
+      if (origin?.isConnected) origin.focus({ preventScroll: true });
+      return;
+    }
     if (e.key === 'Escape' && searching) { e.preventDefault(); e.stopPropagation(); setQuery(''); return; }
-    if (e.key !== 'Tab' || picker.state || datePicker.state) return;
+    if (e.key !== 'Tab' || picker.state || datePicker.state || snoozePicker.state) return;
     const items = [...(sheetRef.current?.querySelectorAll<HTMLElement>('button, input') ?? [])].filter(el => el.getClientRects().length && !el.hasAttribute('disabled'));
     const current = items.indexOf(document.activeElement as HTMLElement);
     if (e.shiftKey && current <= 0) { e.preventDefault(); items.at(-1)?.focus(); }
@@ -294,9 +321,9 @@ export function HomeBoardSheet({ onOpenTask }: { onOpenTask: (task: Task) => voi
       const retry = retryMove.current;
       if (moveError && retry && mode === 'pin') sendMove(retry.ids, retry.tier);
       else refetch();
-    }}>Retry</button></div> : moving ? 'Saving pin tier…' : mode === 'pin' ? 'Grouped by project. Drag or use Move to change pin tier, snooze or mark done. Subtasks in the same tier move with their leader, across projects.' : mode === 'sort' ? 'Decide each card in one tap. Keys: 1 to 9 pin tier, S snooze, D done, X skip, ← → pick a card, ⌘Z undo.' : 'Grouped by project. Status follows each task’s live state.'}</div>
+    }}>Retry</button></div> : lastDone && mode !== 'sort' ? <div className="home-board-done-note" role="status"><span>Marked "{lastDone.title}" done.</span><button type="button" onClick={() => { const { id, phase, write } = lastDone; setLastDone(null); void write.then(ok => { if (ok) void setPhase(id, phase); }); }}>Undo</button></div> : moving ? 'Saving pin tier…' : mode === 'pin' ? 'Grouped by project. Drag or use Move to change pin tier, snooze or mark done. Subtasks in the same tier move with their leader, across projects.' : mode === 'sort' ? 'Decide each card in one tap. Keys: 1 to 9 pin tier, S snooze, D done, X skip, ← → pick a card, ⌘Z undo.' : 'Grouped by project. Status follows each task’s live state.'}</div>
     {loading ? <p className="home-board-empty">Loading your tasks…</p> : mode === 'sort' ? <QuickSortView query={query} tiers={sortTiers} onOpen={onOpen} active={shown} /> : <DndContext sensors={sensors} collisionDetection={boardCollision} autoScroll={autoScroll} onDragStart={e => { dragCancelled.current = false; setDragging(e.active.data.current?.family ?? null); }} onDragEnd={onDrop} onDragCancel={() => setDragging(null)}>
-      <div className="home-board-columns">{columns.map(column => <BoardColumn key={column.id} column={column.id === 'done' ? { ...column, count: column.count + (query.trim() ? 0 : completedHidden) } : column} mode={boardMode} onOpen={onOpen} onMove={onMove} folded={visibleFolds} onFold={onFold} tierLabel={tierLabel} moving={moving} snoozed={snoozedNow} doneLimit={doneLimit} onMoreDone={() => { ensureAllTasks(); setDoneLimit(v => v + 30); }} />)}</div>
+      <div className="home-board-columns">{columns.map(column => <BoardColumn key={column.id} column={column.id === 'done' ? { ...column, count: column.count + (query.trim() ? 0 : completedHidden) } : column} mode={boardMode} onOpen={onOpen} onMove={onMove} onSnooze={onSnoozeCard} onDone={onDoneCard} folded={visibleFolds} onFold={onFold} tierLabel={tierLabel} moving={moving} snoozed={snoozedNow} doneLimit={doneLimit} onMoreDone={() => { ensureAllTasks(); setDoneLimit(v => v + 30); }} />)}</div>
       <DragOverlay dropAnimation={null} modifiers={previewModifiers} style={{ pointerEvents: 'none' }}>{dragging && <div ref={previewRef} className="home-board-card home-board-drag-preview">{dragging.task.title}</div>}</DragOverlay>
     </DndContext>}
     {shown && picker.state && <OptionPickerFlyout anchorPoint={picker.state.point} anchorRef={picker.noTrigger} options={columns.map(c => ({ value: c.id, label: c.label }))} current={homeBoardTier(picker.state.payload.task, focus.customTiers)} ariaLabel="Move to pin tier" onPick={tier => move(picker.state!.payload, tier)} onClose={picker.close}
@@ -312,6 +339,11 @@ export function HomeBoardSheet({ onOpenTask }: { onOpenTask: (task: Task) => voi
           </button>
         </>;
       })()} />}
+    {shown && snoozePicker.state && <SnoozeFlyout point={snoozePicker.state.point} anchorRef={snoozePicker.noTrigger}
+      onSnooze={date => snoozeFromMenu(snoozePicker.state!.payload, date)}
+      onPickDate={() => { const s = snoozePicker.state!; snoozePicker.close(); datePicker.open(s.payload, s.point, s.origin); }}
+      onClear={snoozedNow(snoozePicker.state.payload) && snoozePicker.state.payload.start_date ? () => snoozeFromMenu(snoozePicker.state!.payload, null) : undefined}
+      onClose={snoozePicker.close} />}
     {shown && datePicker.state && <SnoozeDateFlyout point={datePicker.state.point} anchorRef={datePicker.noTrigger} date={datePicker.state.payload.start_date}
       onPick={date => snoozeFromMenu(datePicker.state!.payload, date)} onClose={datePicker.close} />}
   </section>, document.body)}</>;

@@ -67,12 +67,12 @@ function PointFlyout({ point, anchorRef, label, className, onClose, children }: 
   );
 }
 
-export function SnoozeFlyout({ point, anchorRef, onSnooze, onPickDate, onClose }: {
+export function SnoozeFlyout({ point, anchorRef, onSnooze, onPickDate, onClear, onClose }: {
   point: CursorPoint; anchorRef: RefObject<HTMLElement | null>;
-  onSnooze: (date: string) => void; onPickDate: () => void; onClose: () => void;
+  onSnooze: (date: string) => void; onPickDate: () => void; onClear?: () => void; onClose: () => void;
 }) {
   return <PointFlyout point={point} anchorRef={anchorRef} label="Snooze until" onClose={onClose}>
-    <SnoozeRows onSnooze={d => { onSnooze(d); onClose(); }} onPickDate={onPickDate} />
+    <SnoozeRows onSnooze={d => { onSnooze(d); onClose(); }} onPickDate={onPickDate} onClear={onClear ? () => { onClear(); onClose(); } : undefined} />
   </PointFlyout>;
 }
 

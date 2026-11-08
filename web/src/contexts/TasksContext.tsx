@@ -22,9 +22,11 @@ export interface TasksContextValue {
   showOperationError: (msg: string) => void;
   refetch: () => void;
   create: (input: CreateTaskInput, hooks?: CreateHooks) => Promise<Task>;
-  update: (id: string, updates: UpdateTaskInput) => void;
+  /** Resolves true once the server took the write, false when it refused (already reported). */
+  update: (id: string, updates: UpdateTaskInput) => Promise<boolean>;
   toggleComplete: (id: string) => void;
-  setPhase: (id: string, phase: string) => void;
+  /** Resolves true once the server took the write, false when it refused (already reported). */
+  setPhase: (id: string, phase: string) => Promise<boolean>;
   /** Reorder within ONE project group. `project: ''` = Inbox. */
   reorder: (project: string, taskIds: string[]) => void;
   /** Move a task to another project ('' = Inbox), optionally next to a sibling. */

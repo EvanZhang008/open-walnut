@@ -24,7 +24,9 @@ const SHOWN = 3;
 /** A project pick moving this many tasks asks once more first (the group menus' rule). */
 const CONFIRM_FROM = 20;
 
-interface Undo { label: string; run: () => void; key: string; outcome: string }
+/** One decision of this round. `write` resolves to the ids whose write the server took (none: it
+ *  was refused, and the card comes back); Undo waits for it, then reverts exactly those. */
+interface Decision { key: string; outcome: string; label: string; write: Promise<string[]>; revert: (landed: string[]) => Promise<boolean> }
 type Target = { kind: 'task'; item: SortItem } | { kind: 'project'; project: SortProject };
 
 const isQueue = (v: unknown): v is SortQueue => v === 'unsorted' || v === 'parked' || v === 'all';
@@ -50,7 +52,7 @@ export function QuickSortView({ query, tiers, onOpen, active }: {
   const [decided, setDecided] = useState(0);
   const [tally, setTally] = useState<Record<string, number>>({});
   const [cursor, setCursor] = useState(0);
-  const [undos, setUndos] = useState<Undo[]>([]);
+  const [undos, setUndos] = useState<Decision[]>([]);
   const [confirming, setConfirming] = useState<{ key: string; tier: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const snooze = useCursorFlyout<Target>();
@@ -59,7 +61,7 @@ export function QuickSortView({ query, tiers, onOpen, active }: {
 
   const label = useCallback((tier: string) => tiers.find(t => t.id === tier)?.label ?? tier, [tiers]);
   const items = useMemo(() => view === 'tasks'
-    ? buildSortQueue(tasks, focus.customTiers, projectFilter ? 'all' : queue, { query, project: projectFilter, exclude: taken })
+    ? buildSortQueue(tasks, focus.customTiers, projectFilter !== null ? 'all' : queue, { query, project: projectFilter, exclude: taken })
     : [], [view, tasks, focus.customTiers, queue, query, projectFilter, taken]);
   const projects = useMemo(() => view === 'projects'
     ? buildSortProjects(tasks, focus.customTiers, { query, exclude: taken })
@@ -74,26 +76,9 @@ export function QuickSortView({ query, tiers, onOpen, active }: {
   const at = Math.min(cursor, Math.max(0, shown.length - 1));
   const projectLabel = projectFilter !== null ? (tasks.find(t => (t.project ?? '').trim().toLowerCase() === projectFilter)?.project?.trim() || 'Inbox') : null;
 
-  const record = useCallback((key: string, outcome: string, undo: Omit<Undo, 'key' | 'outcome'>) => {
-    setTaken(s => new Set(s).add(key));
-    if (outcome !== 'skip') setDecided(n => n + 1);
-    setTally(t => ({ ...t, [outcome]: (t[outcome] ?? 0) + 1 }));
-    setUndos(u => [...u.slice(-19), { ...undo, key, outcome }]);
-    setConfirming(null);
-  }, []);
-  const undoLast = useCallback(() => {
-    const last = undos.at(-1);
-    if (!last) return;
-    setUndos(u => u.slice(0, -1));
-    setTaken(s => { const next = new Set(s); next.delete(last.key); return next; });
-    if (last.outcome !== 'skip') setDecided(n => Math.max(0, n - 1));
-    setTally(t => ({ ...t, [last.outcome]: Math.max(0, (t[last.outcome] ?? 0) - 1) }));
-    last.run();
-  }, [undos]);
-
-  // A refused move brings its card back with the error: nothing of it was sorted.
   const undosRef = useRef(undos);
   undosRef.current = undos;
+  // A refused decision brings its card back with the error: nothing of it was sorted.
   const unrecord = useCallback((key: string) => {
     const list = undosRef.current;
     let i = list.length - 1;
@@ -101,59 +86,104 @@ export function QuickSortView({ query, tiers, onOpen, active }: {
     if (i >= 0) {
       const gone = list[i];
       setUndos([...list.slice(0, i), ...list.slice(i + 1)]);
-      setDecided(n => Math.max(0, n - 1));
+      if (gone.outcome !== 'skip') setDecided(n => Math.max(0, n - 1));
       setTally(t => ({ ...t, [gone.outcome]: Math.max(0, (t[gone.outcome] ?? 0) - 1) }));
     }
     setTaken(s => { const next = new Set(s); next.delete(key); return next; });
   }, []);
-  const setTier = useCallback((ids: string[], tier: string, key?: string) => focus.setTierBulk(ids, tier === 'unpinned' ? null : tier as FocusTier, message => {
-    setError(message);
-    if (key) unrecord(key);
-  }), [focus, unrecord]);
+  /** Takes the card out at once; `keep` says from the ids that landed whether it stays decided. */
+  const record = (decision: Decision, keep: (landed: string[]) => boolean = landed => landed.length > 0) => {
+    setTaken(s => new Set(s).add(decision.key));
+    if (decision.outcome !== 'skip') setDecided(n => n + 1);
+    setTally(t => ({ ...t, [decision.outcome]: (t[decision.outcome] ?? 0) + 1 }));
+    setUndos(u => [...u.slice(-19), decision]);
+    setConfirming(null);
+    void decision.write.then(landed => { if (!keep(landed)) unrecord(decision.key); });
+  };
+  const undoLast = useCallback(() => {
+    const last = undosRef.current.at(-1);
+    if (!last) return;
+    // Taken off the ref at once too: a second key press before the next render undoes the one before.
+    undosRef.current = undosRef.current.slice(0, -1);
+    setUndos(u => u.slice(0, -1));
+    setTaken(s => { const next = new Set(s); next.delete(last.key); return next; });
+    if (last.outcome !== 'skip') setDecided(n => Math.max(0, n - 1));
+    setTally(t => ({ ...t, [last.outcome]: Math.max(0, (t[last.outcome] ?? 0) - 1) }));
+    // The reverse write goes out only after the decision's own write answered, so it lands last.
+    void last.write.then(async landed => {
+      if (landed.length && !(await last.revert(landed))) setError(`Could not undo: ${last.label}`);
+    });
+  }, []);
+
+  /** A tier write; resolves to the ids the server took. */
+  const writeTier = useCallback(async (ids: string[], tier: string): Promise<string[]> => {
+    if (!ids.length) return [];
+    let failed: string[] | 'all' | null = null;
+    await focus.setTierBulk(ids, tier === 'unpinned' ? null : tier as FocusTier, (message, failedIds) => {
+      setError(message);
+      failed = failedIds ?? 'all';
+    });
+    const refused = failed as string[] | 'all' | null;
+    return refused === 'all' ? [] : refused ? ids.filter(id => !refused.includes(id)) : ids;
+  }, [focus]);
+  const landedIf = (ok: Promise<boolean>, ids: string[]) => ok.then(yes => yes ? ids : []);
+  const skipped: Decision['write'] = Promise.resolve(['skip']);
 
   const taskTier = (item: SortItem, tier: string) => {
     setError(null);
-    void setTier(item.family, tier, item.task.id);
-    record(item.task.id, tier, { label: `Moved "${item.task.title}" to ${label(tier)}`, run: () => { void setTier(item.family, item.tier); } });
+    record({
+      key: item.task.id, outcome: tier, label: `Moved "${item.task.title}" to ${label(tier)}`,
+      write: writeTier(item.family, tier),
+      revert: async landed => (await writeTier(landed, item.tier)).length === landed.length,
+    }, landed => landed.includes(item.task.id));
   };
   const taskSnooze = (item: SortItem, date: string | null) => {
     if (!date) return;
     const before = item.task.start_date ?? '';
-    update(item.task.id, { start_date: date });
-    record(item.task.id, 'snoozed', { label: `Snoozed "${item.task.title}" until ${snoozeUntilText(date)}`, run: () => update(item.task.id, { start_date: before }) });
+    record({
+      key: item.task.id, outcome: 'snoozed', label: `Snoozed "${item.task.title}" until ${snoozeUntilText(date)}`,
+      write: landedIf(update(item.task.id, { start_date: date }), [item.task.id]),
+      revert: () => update(item.task.id, { start_date: before }),
+    });
   };
   const taskDone = (item: SortItem) => {
     const before = item.task.phase;
-    setPhase(item.task.id, 'COMPLETE');
-    record(item.task.id, 'done', { label: `Marked "${item.task.title}" done`, run: () => setPhase(item.task.id, before) });
+    record({
+      key: item.task.id, outcome: 'done', label: `Marked "${item.task.title}" done`,
+      write: landedIf(setPhase(item.task.id, 'COMPLETE'), [item.task.id]),
+      revert: () => setPhase(item.task.id, before),
+    });
   };
-  const taskSkip = (item: SortItem) => record(item.task.id, 'skip', { label: `Skipped "${item.task.title}"`, run: () => {} });
+  const taskSkip = (item: SortItem) => record({ key: item.task.id, outcome: 'skip', label: `Skipped "${item.task.title}"`, write: skipped, revert: async () => true });
 
   const projectTier = (project: SortProject, tier: string) => {
     const moving = project.tasks.filter(t => homeBoardTier(t, focus.customTiers) !== tier);
     if (moving.length >= CONFIRM_FROM && confirming?.key !== project.key) { setConfirming({ key: project.key, tier }); return; }
-    const before = new Map<string, string[]>();
-    for (const t of moving) {
-      const was = homeBoardTier(t, focus.customTiers);
-      before.set(was, [...(before.get(was) ?? []), t.id]);
-    }
+    const was = new Map(moving.map(t => [t.id, homeBoardTier(t, focus.customTiers)]));
     setError(null);
-    if (moving.length) void setTier(moving.map(t => t.id), tier, `project:${project.key}`);
-    record(`project:${project.key}`, tier, {
+    record({
+      key: `project:${project.key}`, outcome: tier,
       label: `Moved ${moving.length} ${moving.length === 1 ? 'task' : 'tasks'} of ${project.label} to ${label(tier)}`,
-      run: () => { for (const [was, ids] of before) void setTier(ids, was); },
+      // Nothing to move still counts as decided: the whole project already sits there.
+      write: moving.length ? writeTier(moving.map(t => t.id), tier) : Promise.resolve(['none']),
+      revert: async landed => {
+        const groups = new Map<string, string[]>();
+        for (const id of landed) { const from = was.get(id); if (from) groups.set(from, [...(groups.get(from) ?? []), id]); }
+        const back = await Promise.all([...groups].map(([from, ids]) => writeTier(ids, from)));
+        return back.flat().length === [...groups.values()].flat().length;
+      },
     });
   };
   const projectSnooze = (project: SortProject, date: string | null) => {
     if (!date) return;
     const targets = projectSnoozeTargets(project, date).map(t => ({ id: t.id, before: t.start_date ?? '' }));
-    for (const t of targets) update(t.id, { start_date: date });
-    record(`project:${project.key}`, 'snoozed', {
-      label: `Snoozed ${project.label} until ${snoozeUntilText(date)}`,
-      run: () => { for (const t of targets) update(t.id, { start_date: t.before }); },
+    record({
+      key: `project:${project.key}`, outcome: 'snoozed', label: `Snoozed ${project.label} until ${snoozeUntilText(date)}`,
+      write: Promise.all(targets.map(t => landedIf(update(t.id, { start_date: date }), [t.id]))).then(r => r.flat()),
+      revert: async landed => (await Promise.all(targets.filter(t => landed.includes(t.id)).map(t => update(t.id, { start_date: t.before })))).every(Boolean),
     });
   };
-  const projectSkip = (project: SortProject) => record(`project:${project.key}`, 'skip', { label: `Skipped ${project.label}`, run: () => {} });
+  const projectSkip = (project: SortProject) => record({ key: `project:${project.key}`, outcome: 'skip', label: `Skipped ${project.label}`, write: skipped, revert: async () => true });
   const sortProjectTasks = (project: SortProject) => { setProjectFilter(project.key); setView('tasks'); setCursor(0); };
 
   const onSnoozePick = (target: Target, date: string | null) => target.kind === 'task' ? taskSnooze(target.item, date) : projectSnooze(target.project, date);
@@ -241,9 +271,9 @@ export function QuickSortView({ query, tiers, onOpen, active }: {
     {shown.length === 0 ? <div className="quick-sort-empty" data-testid="quick-sort-empty">
       <h2>{decided ? 'All sorted' : 'Nothing to sort here'}</h2>
       <p>{view === 'tasks'
-        ? (queue === 'unsorted' && !projectFilter ? 'Every open task has a pin tier or a snooze.' : 'No task left in this list.')
+        ? (queue === 'unsorted' && projectFilter === null ? 'Every open task has a pin tier or a snooze.' : 'No task left in this list.')
         : 'No project left in this round.'}</p>
-      {view === 'tasks' && !projectFilter && queue !== 'parked' && counts.parked > 0 && <button type="button" onClick={() => setQueue('parked')}>Sort Parked over 7 days ({counts.parked})</button>}
+      {view === 'tasks' && projectFilter === null && queue !== 'parked' && counts.parked > 0 && <button type="button" onClick={() => setQueue('parked')}>Sort Parked over 7 days ({counts.parked})</button>}
     </div> : <div className="quick-sort-cards">
       {view === 'tasks'
         ? (shown as SortItem[]).map((item, i) => {

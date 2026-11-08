@@ -165,7 +165,7 @@ test('the pin board Move menu snoozes, clears a snooze and marks done', async ({
   await menu.locator('[data-snooze="next-week"]').click();
   await expect(menu).toHaveCount(0);
   await expect.poll(async () => Date.parse((await read(request, id)).start_date ?? '') > Date.now()).toBe(true);
-  await expect(page.locator(`[data-board-task="${id}"] [data-board-snoozed]`)).toContainText('Snoozed until');
+  await expect(page.locator(`[data-board-task="${id}"] [data-board-snoozed]`)).toContainText('until');
   expect(tierOf(await read(request, id))).toBe('satellite');
   await move.click();
   await menu.locator('[data-snooze="clear"]').click();
@@ -191,4 +191,101 @@ test('a refused tier write brings the card back with the error, and nothing coun
   expect(tierOf(await read(request, id))).toBe('unpinned');
   await sortCard(page, id).locator('[data-sort-tier="focus"]').click();
   await expect.poll(async () => tierOf(await read(request, id))).toBe('focus');
+});
+
+// The review's class: a decision's write and its Undo must end with what the user saw last, whatever
+// order the server answers in, and a refused write never counts as sorted.
+test('Undo while the snooze write is still out lands after it: the task ends unsnoozed', async ({ page, request }) => {
+  const id = await create(request, 'Sort held snooze task');
+  await open(page, 'Sort held snooze task');
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  let first = true;
+  await page.route(`**/api/tasks/${id}`, async route => {
+    if (route.request().method() === 'PATCH' && first) { first = false; await held; }
+    await route.continue();
+  });
+  await sortCard(page, id).locator('[data-sort-action="snooze"]').click();
+  await page.getByRole('dialog', { name: 'Snooze until', exact: true }).locator('[data-snooze="tomorrow"]').click();
+  await page.getByTestId('quick-sort').getByRole('button', { name: 'Undo', exact: true }).click();
+  release();
+  await expect.poll(async () => (await read(request, id)).start_date ?? '', { timeout: 15_000 }).toBe('');
+  await expect(sortCard(page, id)).toBeVisible();
+  await page.waitForTimeout(1000);
+  expect((await read(request, id)).start_date ?? '').toBe('');
+});
+
+test('a refused snooze or done brings the card back and counts nothing', async ({ page, request }) => {
+  const id = await create(request, 'Sort refused patch task');
+  await open(page, 'Sort refused patch task');
+  await page.route(`**/api/tasks/${id}`, route => route.request().method() === 'PATCH'
+    ? route.fulfill({ status: 400, json: { error: 'Refused for the test' } }) : route.continue());
+  const sort = page.getByTestId('quick-sort');
+  await sortCard(page, id).locator('[data-sort-action="snooze"]').click();
+  await page.getByRole('dialog', { name: 'Snooze until', exact: true }).locator('[data-snooze="tomorrow"]').click();
+  await expect(sortCard(page, id)).toBeVisible();
+  await expect(sort).toContainText('0 sorted this round');
+  await sortCard(page, id).locator('[data-sort-action="done"]').click();
+  await expect(sortCard(page, id)).toBeVisible();
+  await expect(sort).toContainText('0 sorted this round');
+  await expect(sort.locator('.quick-sort-toast')).toHaveCount(0);
+  const task = await read(request, id);
+  expect([task.start_date ?? '', task.phase]).toEqual(['', 'TODO']);
+});
+
+test('a tier write refused for a subtask keeps the leader sorted, and Undo moves back only what moved', async ({ page, request }) => {
+  const lead = await create(request, 'Sort partial leader');
+  const child = await create(request, 'Sort partial child', { parent_task_id: lead });
+  await open(page, 'Sort partial');
+  await page.route('**/api/focus/batch', async route => {
+    const body = route.request().postDataJSON();
+    if (body.tier !== 'focus') return route.continue();
+    const response = await route.fetch({ postData: JSON.stringify({ ...body, task_ids: body.task_ids.filter((x: string) => x !== child) }) });
+    const json = await response.json();
+    await route.fulfill({ response, json: { ...json, failed: [...(json.failed ?? []), { id: child, error: 'Refused for the test' }] } });
+  });
+  await sortCard(page, lead).locator('[data-sort-tier="focus"]').click();
+  await expect.poll(async () => tierOf(await read(request, lead))).toBe('focus');
+  expect(tierOf(await read(request, child))).toBe('unpinned');
+  const sort = page.getByTestId('quick-sort');
+  await expect(sort).toContainText('1 sorted this round');
+  await expect(sortCard(page, child)).toBeVisible();
+  await sort.getByRole('button', { name: 'Undo', exact: true }).click();
+  await expect.poll(async () => tierOf(await read(request, lead))).toBe('unpinned');
+  expect(tierOf(await read(request, child))).toBe('unpinned');
+});
+
+test('the Inbox project card sorts the Inbox tasks, pinned ones included', async ({ page, request }) => {
+  const id = await create(request, 'Sort inbox pinned task', { project: '', pinned: true, focus_tier: 'focus' });
+  await open(page, '');
+  const sort = page.getByTestId('quick-sort');
+  await sort.getByRole('button', { name: 'Projects', exact: true }).click();
+  await page.getByRole('textbox', { name: 'Search board tasks' }).fill('Sort inbox pinned task');
+  await page.locator('[data-sort-project=""] [data-sort-action="tasks"]').click();
+  await expect(sort).toContainText('Sorting Inbox');
+  await expect(sortCard(page, id)).toBeVisible();
+  await sort.getByRole('button', { name: 'All projects', exact: true }).click();
+});
+
+test('each board card has Snooze and Done right on it, and Done can be undone', async ({ page, request }) => {
+  const id = await create(request, 'Sort card buttons task', { pinned: true, focus_tier: 'focus' });
+  await open(page, 'Sort card buttons task');
+  const board = page.getByTestId('home-board');
+  await board.getByRole('button', { name: 'By pin', exact: true }).click();
+  await board.getByRole('button', { name: 'Snooze Sort card buttons task', exact: true }).click();
+  const flyout = page.getByRole('dialog', { name: 'Snooze until', exact: true });
+  await flyout.locator('[data-snooze="next-month"]').click();
+  await expect(flyout).toHaveCount(0);
+  await expect(page.locator(`[data-board-task="${id}"] [data-board-snoozed]`)).toContainText('until');
+  await board.getByRole('button', { name: 'Snooze Sort card buttons task', exact: true }).click();
+  await flyout.locator('[data-snooze="clear"]').click();
+  await expect.poll(async () => (await read(request, id)).start_date ?? '').toBe('');
+  await board.getByRole('button', { name: 'Mark Sort card buttons task done', exact: true }).click();
+  await expect.poll(async () => (await read(request, id)).phase).toBe('COMPLETE');
+  await expect(page.locator(`[data-board-task="${id}"]`)).toHaveCount(0);
+  await board.locator('.home-board-done-note').getByRole('button', { name: 'Undo', exact: true }).click();
+  await expect.poll(async () => (await read(request, id)).phase).not.toBe('COMPLETE');
+  await expect(page.locator(`[data-board-task="${id}"]`)).toBeVisible();
+  await board.getByRole('button', { name: 'By status', exact: true }).click();
+  await expect(board.getByRole('button', { name: 'Snooze Sort card buttons task', exact: true })).toBeVisible();
 });
