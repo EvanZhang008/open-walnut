@@ -184,15 +184,19 @@ export function modelNameWindowEstimate(model: string | undefined): number | und
  * lifted to the floor itself.
  */
 export function resolveContextWindow(inputs: ContextWindowInputs): ResolvedContextWindow | null {
-  const own = positive(inputs.cliModelWindow)
-  if (own !== undefined) return resolved(own, 'cli-model-usage')
-
   const floor = Math.max(positive(inputs.observedTokens) ?? 0, positive(inputs.effectiveWindow) ?? 0)
   const lifted = (r: ResolvedContextWindow): ResolvedContextWindow => {
     if (r.window >= floor) return r
     const anthropic = isRecognizedClaudeModel(inputs.model) || /\[1m\]/i.test(inputs.model ?? '')
     return resolved(anthropic ? Math.max(EXTENDED_WINDOW, floor) : floor, 'floor')
   }
+
+  // The CLI's own reading wins, but it too is lifted to what the session holds: a CLI names the
+  // window of the model id it was given, and Claude Code 2.1.284 names 200K for a plain
+  // `claude-opus-5-5` (2.1.312 names 1M), so a session holding more runs a larger window than that
+  // number says (2026-11-08, read on the user's Mac). A session never reads over 100%.
+  const own = positive(inputs.cliModelWindow)
+  if (own !== undefined) return lifted(resolved(own, 'cli-model-usage'))
 
   const unclamped = positive(inputs.cliUnclampedWindow)
   if (unclamped !== undefined) return lifted(resolved(unclamped, 'cli-context-usage'))

@@ -299,3 +299,15 @@ describe('the window from the real source', () => {
     expect(resolveContextWindow({ model: 'claude-opus-4-8', observedTokens: 300_000 })).toEqual({ window: EXTENDED_WINDOW, source: 'floor', estimate: true });
   });
 });
+
+describe('the CLI\'s own reading under a session that holds more', () => {
+  // 2026-11-08, the user's Mac: Claude Code 2.1.284 reports contextWindow 200000 for a plain
+  // `claude-opus-5-5` (2.1.312 on another host reports 1000000). A session holding 324K runs a
+  // larger window than that, so the reading is lifted and shown as an estimate: never 162%.
+  it('is lifted to the floor and flagged, never read over 100%', () => {
+    expect(resolveContextWindow({ cliModelWindow: 200_000, observedTokens: 324_400, model: 'global.anthropic.claude-opus-5-5' }))
+      .toEqual({ window: EXTENDED_WINDOW, source: 'floor', estimate: true });
+    expect(resolveContextWindow({ cliModelWindow: 200_000, observedTokens: 150_000, model: 'claude-opus-5-5' }))
+      .toEqual({ window: 200_000, source: 'cli-model-usage', estimate: false });
+  });
+});
