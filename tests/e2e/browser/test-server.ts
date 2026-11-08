@@ -5094,8 +5094,13 @@ if (!builtSpa) {
   const apiTarget = `http://127.0.0.1:${apiAddress.port}`
   const { createServer: createViteServer } = await import('vite')
   const { restateOwnOrigin } = await import('../../../web/dev-proxy-origin.js')
+  const { holdUntilWarm } = await import('./fixture-warm.js')
+  const warm = holdUntilWarm()
   viteServer = await createViteServer({
     root: path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../../web'),
+    // Every request, the runner's readiness probe included, waits behind the SPA's
+    // first compile (fixture-warm.ts).
+    plugins: [warm.plugin],
     // Its own dependency cache: a Vite that re-optimizes into a cache another server is serving
     // from answers that server's page 504 Outdated Optimize Dep, and the app never mounts
     // (2026-11-01: plugin-hot-reload's own fixture, 4 of 5 CI runs). Every fixture Vite has one.
@@ -5113,6 +5118,7 @@ if (!builtSpa) {
     logLevel: 'warn',
   })
   await viteServer.listen()
+  await warm.warm(viteServer)
 }
 console.log(`Playwright test server ready on http://localhost:${testPort}`)
 
