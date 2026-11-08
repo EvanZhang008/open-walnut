@@ -28,6 +28,13 @@ describe('task directory busy check in both daemon twins', () => {
     for (const kind of ['sessions.values()', 'spawnInfo', 'hostExec', '.active()', 'taskId', 'acp', 'workers.values()', 'w.taskDir']) expect(body).toContain(kind)
   })
 
+  it.each(Object.entries(twins))('%s reads the open files for a low-disk prune of directories in use', (_name, src) => {
+    const body = fnBody(src, 'cmdTaskDirPrune')
+    expect(body).toMatch(/cmd\.live === true/)
+    expect(body).toMatch(/readOpenPaths\(TASK_DIR_ROOT\)/)
+    expect(body).toMatch(/openPaths/)
+  })
+
   it.each(Object.entries(twins))('%s task-dir commands use taskDirBusy, never their own string test', (_name, src) => {
     for (const cmd of ['cmdTaskDirRemove', 'cmdTaskDirPrune']) {
       const body = fnBody(src, cmd)

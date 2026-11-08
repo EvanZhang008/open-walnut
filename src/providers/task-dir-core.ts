@@ -442,6 +442,38 @@ async function scanBuild(root: string): Promise<{ repo: boolean; complete: boole
   return { repo: false, complete: true, newest }
 }
 
+/**
+ * Every path under `under` some process on this host has open right now: a working
+ * directory, an open file, a mapped binary (a running app's executable). From `lsof`, or
+ * /proc where there is no lsof; null when neither answers, so nothing in use is pruned.
+ */
+export async function readOpenPaths(under: string): Promise<string[] | null> {
+  const prefix = real(under)
+  const keep = (p: string) => p === prefix || p.startsWith(prefix + path.sep) || p.startsWith(under + path.sep)
+  let lsofMissing = false
+  const fromLsof = await new Promise<string[] | null>((resolve) => {
+    execFile('lsof', ['-n', '-P', '-w', '-F', 'n'], { timeout: 90_000, maxBuffer: 256 * 1024 * 1024 }, (err, stdout) => {
+      const e = err as (NodeJS.ErrnoException & { killed?: boolean; signal?: string | null }) | null
+      if (e?.code === 'ENOENT') { lsofMissing = true; return resolve(null) }
+      // Only a whole answer counts: exit 0, or 1 (lsof's "some file could not be listed", printed
+      // in full otherwise). A timeout, a kill, a full buffer or any other error is no answer.
+      if (e && !(e.code as unknown === 1 && !e.killed && !e.signal)) return resolve(null)
+      if (!stdout) return resolve(null)
+      resolve(stdout.split('\n').filter((l) => l.startsWith('n')).map((l) => l.slice(1)).filter(keep))
+    })
+  })
+  if (fromLsof) return [...new Set(fromLsof)]
+  if (!lsofMissing || !fs.existsSync('/proc/self/fd')) return null
+  const out = new Set<string>()
+  for (const pid of fs.readdirSync('/proc')) {
+    if (!/^\d+$/.test(pid)) continue
+    const links = ['cwd', 'exe']
+    try { for (const fd of fs.readdirSync(`/proc/${pid}/fd`)) links.push(`fd/${fd}`) } catch { /* not ours or gone */ }
+    for (const l of links) { try { const t = fs.readlinkSync(`/proc/${pid}/${l}`); if (keep(t)) out.add(t) } catch { /* gone */ } }
+  }
+  return [...out]
+}
+
 /** What runs on the host now: a live session, a running host command, an ACP worker. */
 export interface HostWork { task?: unknown; cwd?: unknown }
 
@@ -485,6 +517,27 @@ export interface PruneOptions {
   buildsOnly?: boolean
   /** Keep a build folder that it, any folder inside it, its parent or a direct entry of those changed at or after this time (ms). */
   idleBefore?: number
+  /**
+   * With buildsOnly, while the host's disk is below its floor: a directory in use is pruned
+   * too, but only build output untouched for LIVE_MIN_IDLE_MS whose project folder (the one
+   * holding it) no process has open (a working directory, an open or mapped file). Read once
+   * per directory right before its first removal; null = could not tell, so nothing goes.
+   */
+  openPaths?: () => Promise<string[] | null>
+}
+
+/**
+ * The least a build folder of a task in use stays untouched before a low disk takes it. An app
+ * under test is only read, which changes no time (2026-11-08: a pass took a running simulator
+ * check's app); the open-file check is what protects one in use right now.
+ */
+export const LIVE_MIN_IDLE_MS = 6 * 3_600_000
+
+/** A `dist` beside the package.json and the src it is built from: rebuildable. A lone dist may be a package's only code. */
+const isSourceTreeDist = (b: string): boolean => {
+  if (path.basename(b) !== 'dist') return false
+  const p = path.dirname(b)
+  try { return fs.statSync(path.join(p, 'package.json')).isFile() && fs.statSync(path.join(p, 'src')).isDirectory() } catch { return false }
 }
 
 /**
@@ -508,7 +561,11 @@ export async function pruneTaskDirs(root: string, items: unknown[], opts: PruneO
     const marker = readMarker(dir)
     if (!marker) { res.missing.push(id); continue }
     if (marker.taskId !== id) { res.kept.push({ taskId: id, reasons: ['marker names another task'] }); continue }
+    // A low disk on a host prunes a directory in use too, guarded by the open-file check below.
+    const live = opts.buildsOnly === true && opts.openPaths !== undefined
+    const inUse = opts.busy?.(dir, id) === true
     const unused = (): boolean => {
+      if (live) return true
       if (opts.busy?.(dir, id)) return false
       if (usedBefore === undefined) return true
       const last = Date.parse(readMarker(dir)?.lastUsedAt ?? '')
@@ -550,13 +607,26 @@ export async function pruneTaskDirs(root: string, items: unknown[], opts: PruneO
     const budget: { dirs: number; partial?: boolean } = { dirs: MAX_DIRS }
     await findBuildDirs(dir, 0, builds, budget, derived)
     // A round that left something for later is not a finished one: the marker is not stamped.
-    let deferred = budget.dirs < 0 || budget.partial === true
+    // A directory in use is never stamped done: its next round looks again.
+    let deferred = budget.dirs < 0 || budget.partial === true || (live && inUse)
+    const idleBefore = live ? Math.min(opts.idleBefore ?? Date.now(), Date.now() - LIVE_MIN_IDLE_MS) : opts.idleBefore
+    // Read anew right before each removal: a process may start in another copy while the checks run.
+    const realDir = real(dir)
+    const openNear = async (b: string): Promise<boolean> => {
+      if (!live) return false
+      const open = (await opts.openPaths!().catch(() => null))?.map(real) ?? null
+      if (open === null) return true
+      const project = real(derived.has(b) ? path.dirname(path.dirname(b)) : path.dirname(b))
+      // Inside the project, or a folder above it inside the task directory: a server working
+      // from there reads the build lazily and holds no file of it open between requests.
+      return open.some((o) => within(o, project) || (within(project, o) && within(o, realDir)))
+    }
     // The folder holding a build folder (a clone, a copied tree, a derived data folder) counts too:
     // tests writing their reports beside node_modules mean someone works there.
     // `fresh` also reads the time of everything inside the folder (the walk below): a build
     // something wrote into lately is someone's.
-    const fresh = (b: string, newest = 0) => opts.idleBefore !== undefined
-      && Math.max(newest, newestMtime(b), newestMtime(path.dirname(b))) >= opts.idleBefore
+    const fresh = (b: string, newest = 0) => idleBefore !== undefined
+      && Math.max(newest, newestMtime(b), newestMtime(path.dirname(b))) >= idleBefore
     for (const b of builds) {
       if (!fs.existsSync(b) || !unused()) continue
       if (fresh(b)) { deferred = true; continue }
@@ -570,7 +640,7 @@ export async function pruneTaskDirs(root: string, items: unknown[], opts: PruneO
           // check-ignore exits 1 for "not ignored" (kept for good) and 128 on an error (asked again).
           try { await git(holder, ['check-ignore', '-q', '--', rel]) } catch (err) { if ((err as { code?: unknown }).code !== 1) deferred = true; continue }
         }
-      } else if (!BUILD_DIRS.has(path.basename(b)) && !derived.has(b)) continue
+      } else if (!BUILD_DIRS.has(path.basename(b)) && !derived.has(b) && !isSourceTreeDist(b)) continue
       if (opts.dryRun && done.repos.some((r) => within(b, path.join(dir, r)))) continue
       const scan = await scanBuild(b)
       if (scan.repo) continue
@@ -578,6 +648,8 @@ export async function pruneTaskDirs(root: string, items: unknown[], opts: PruneO
       // The checks above awaited git and a walk: a session that started meanwhile, or a write into the folder, wins.
       if (!unused()) { deferred = true; break }
       if (fresh(b, scan.newest)) { deferred = true; continue }
+      // Last, so the open files are read right before the removal.
+      if (await openNear(b)) { deferred = true; continue }
       try {
         if (!opts.dryRun) {
           // Put the parent's time back: a removal is not a use, and a sibling build folder judged next must not read new.

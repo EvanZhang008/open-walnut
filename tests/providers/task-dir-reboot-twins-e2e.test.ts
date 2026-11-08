@@ -289,6 +289,31 @@ describe.each(TWINS)('task directory across a reboot: $name', (twin) => {
     expect((await rpc({ cmd: 'taskdir.list' })).dirs).toEqual([expect.objectContaining({ taskId: 'open-task', buildsPrunedAt: expect.any(String) })])
   }, 60_000)
 
+  // 2026-11-08: the Mac refilled from 30 to 12 GiB from tasks still running. On a low disk the
+  // server asks with live:true: old build output of a directory in use goes, except where a process works.
+  it('taskdir.pruneBuilds live:true takes a running task\'s old build output, never where a process works', async () => {
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-task-dir-live-')))
+    await boot(twin)
+    const taskDir = (await rpc({ cmd: 'taskdir.ensure', taskId: 'live-task' })).path as string
+    const oldTime = new Date(Date.now() - 2 * 86_400_000)
+    for (const copy of ['copy-a', 'copy-b']) {
+      const f = path.join(taskDir, copy, 'node_modules', 'x.js')
+      fs.mkdirSync(path.dirname(f), { recursive: true })
+      fs.writeFileSync(f, '1\n')
+      for (const p of [f, path.dirname(f), path.join(taskDir, copy)]) fs.utimesSync(p, oldTime, oldTime)
+    }
+    // The task's session works in copy-a.
+    const reply = await rpc({ cmd: 'start', sid: 'live-session', args: ['/bin/sh', '-c', 'exec /bin/sleep 60'], cwd: path.join(taskDir, 'copy-a'), message: 'init\n', origin: { task: 'live-task' } })
+    expect(reply.ok, JSON.stringify(reply)).toBe(true)
+    const pid = Number((reply as { pid?: unknown }).pid ?? (reply as { result?: { pid?: unknown } }).result?.pid)
+    if (pid > 1) started.push(pid)
+    const plain = await rpc({ cmd: 'taskdir.pruneBuilds', taskIds: ['live-task'], idleBefore: Date.now() })
+    expect(plain.kept).toEqual([{ taskId: 'live-task', reasons: ['a live session works in it'] }])
+    const res = await rpc({ cmd: 'taskdir.pruneBuilds', taskIds: ['live-task'], idleBefore: Date.now(), live: true }) as { pruned: Array<{ builds: string[] }> }
+    expect(res.pruned[0].builds).toEqual(['copy-b/node_modules'])
+    expect(fs.existsSync(path.join(taskDir, 'copy-a', 'node_modules', 'x.js'))).toBe(true)
+  }, 60_000)
+
   // Review round 3 of 2026-11-08: an ACP worker started in a shared checkout works in its task
   // directory by path, so its cwd alone did not keep the directory busy.
   it('an ACP worker of the task keeps its directory whole, wherever it was started', async () => {

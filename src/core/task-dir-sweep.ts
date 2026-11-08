@@ -32,8 +32,9 @@
  * must not decide over host files. An ephemeral server sweeps only its own
  * local daemon, whose root sits in its temp dir.
  */
+import fsp from 'node:fs/promises'
 import { log } from '../logging/index.js'
-import { taskDirBuildIdleDays, taskDirKeepDays, taskDirPruneDays } from '../lib/task-dir.js'
+import { taskDirBuildIdleDays, taskDirKeepDays, taskDirLowDiskFloorBytes, taskDirPruneDays } from '../lib/task-dir.js'
 import type { TaskDirEntry, RemoveResult, PruneResult } from '../providers/task-dir-core.js'
 
 const DAY_MS = 86_400_000
@@ -126,10 +127,16 @@ type SweepConn = { host: string; hasCapability?: (c: string) => boolean; send: (
 type SweepRow = { host: string } & Partial<RemoveResult> & { pruned?: PruneResult['pruned']; buildsPruned?: PruneResult['pruned'] }
 
 /** True while the disk Walnut's data lives on is low (disk-watermark.ts warn or critical). */
-async function localDiskLow(): Promise<boolean> {
+/** This machine's disk is low: free space under the floor new work already moves away at, or the watermark says so. */
+export async function localDiskLow(statfs: (dir: string) => Promise<{ bavail: number | bigint; bsize: number | bigint }> = (d) => fsp.statfs(d)): Promise<boolean> {
   try {
     const { getDiskWatermarkState } = await import('./disk-watermark.js')
-    return getDiskWatermarkState().level !== 'ok'
+    if (getDiskWatermarkState().level !== 'ok') return true
+  } catch { /* not measured yet */ }
+  try {
+    const { WALNUT_HOME } = await import('../constants.js')
+    const f = await statfs(WALNUT_HOME)
+    return Number(f.bavail) * Number(f.bsize) < taskDirLowDiskFloorBytes(process.env)
   } catch { return false }
 }
 
@@ -194,7 +201,10 @@ export async function sweepTaskDirsOnce(deps?: {
         ? pickBuildPrunable(dirs, tasks, { now, idleDays, home: WALNUT_HOME, skip: new Set([...removed, ...prunable]) })
         : []
       if (buildPrunable.length > 0) {
-        const res = await conn.send('taskdir.pruneBuilds', { taskIds: itemsFor(buildPrunable), idleBefore: now - idleDays * DAY_MS }, 300_000) as PruneResult & { ok?: boolean; error?: string }
+        // A low disk here also prunes this machine's directories in use (`live`): build output idle 6 hours
+        // that no process has open, the refill that a sweep of idle directories alone never stops.
+        const live = lowDisk && conn.host === '__local__'
+        const res = await conn.send('taskdir.pruneBuilds', { taskIds: itemsFor(buildPrunable), idleBefore: now - idleDays * DAY_MS, ...(live ? { live: true } : {}) }, 300_000) as PruneResult & { ok?: boolean; error?: string }
         if (res?.ok === false) throw new Error(res.error || 'taskdir.pruneBuilds refused')
         row.buildsPruned = (res?.pruned ?? []).filter((p) => p.builds.length > 0)
         log.session.info('task dir builds pruned', { host: conn.host, pruned: row.buildsPruned, kept: res?.kept ?? [] })

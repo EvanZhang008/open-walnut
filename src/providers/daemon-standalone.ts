@@ -187,7 +187,7 @@ import { buildScheduledMessage, buildTriggerMessage } from './trigger-envelope-c
 import { START_TASK_TOKEN, clockDueMs, clockFireOwed, clockStateOnArm, dropStaleClockFires, type ClockReport } from './trigger-clock-core.js'
 import { createClockSchedule } from './clock-schedule-core.js'
 import { resolvePathHostLocal } from './path-resolve-core.js'
-import { ensureTaskDir, isTaskDirId, listTaskDirs, pruneTaskBuilds, pruneTaskDirs, removeTaskDirs, taskDirInUse, taskDirPath, taskDirRoot, type HostWork } from './task-dir-core.js'
+import { ensureTaskDir, isTaskDirId, listTaskDirs, pruneTaskBuilds, pruneTaskDirs, readOpenPaths, removeTaskDirs, taskDirInUse, taskDirPath, taskDirRoot, type HostWork } from './task-dir-core.js'
 import { createHostExec } from './host-exec-core.js'
 import { createNetSupervisor, netStateDir, resolveNetBinary } from './net-core.js'
 import { createHostMcp } from './host-mcp-core.js'
@@ -6070,8 +6070,13 @@ async function cmdTaskDirPrune(ws: ServerWebSocket<WsData>, id: number, cmd: Rec
   const busy = taskDirBusy
   try {
     const idleBefore = typeof cmd.idleBefore === 'number' && Number.isFinite(cmd.idleBefore) ? cmd.idleBefore : Date.now()
+    // `live` (the server's disk is below its floor): directories in use too, behind the open-file check.
+    const openPaths = cmd.live === true ? async () => {
+      const open = await readOpenPaths(TASK_DIR_ROOT)
+      return open && [...open, ...hostWorkNow().map((w) => w.cwd).filter((c): c is string => typeof c === 'string' && !!c)]
+    } : undefined
     const result = buildsOnly
-      ? await pruneTaskBuilds(TASK_DIR_ROOT, ids, { busy, idleBefore })
+      ? await pruneTaskBuilds(TASK_DIR_ROOT, ids, { busy, idleBefore, openPaths })
       : await pruneTaskDirs(TASK_DIR_ROOT, ids, { busy })
     if (result.pruned.length > 0 || result.kept.length > 0) logMsg('info', buildsOnly ? 'task dir builds pruned' : 'task dirs pruned', { pruned: result.pruned, kept: result.kept })
     sendOk(ws, id, result)

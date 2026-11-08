@@ -5,7 +5,7 @@
  * tests/providers/task-dir-core.test.ts.
  */
 import { describe, it, expect } from 'vitest'
-import { pickBuildPrunable, pickPrunable, pickRemovable, sweepTaskDirsOnce, type TaskStateForSweep } from '../../src/core/task-dir-sweep.js'
+import { localDiskLow, pickBuildPrunable, pickPrunable, pickRemovable, sweepTaskDirsOnce, type TaskStateForSweep } from '../../src/core/task-dir-sweep.js'
 import { PHASE_ORDER } from '../../src/core/phase.js'
 import { WALNUT_HOME } from '../../src/constants.js'
 import type { TaskDirEntry } from '../../src/providers/task-dir-core.js'
@@ -174,7 +174,16 @@ describe('sweepTaskDirsOnce', () => {
     const local = fakeConn('__local__', ['task-dir-v1', 'task-dir-prune-builds-v1'], [dir('a', 0.5)])
     const remote = fakeConn('cloud', ['task-dir-v1', 'task-dir-prune-builds-v1'], [dir('a', 0.5)])
     await sweepTaskDirsOnce({ conns: [local.conn, remote.conn], loadTasks: async () => [task('a', 'WAITING')], now: NOW, lowDisk: true })
-    expect(local.calls[1]).toEqual(['taskdir.pruneBuilds', { taskIds: [{ taskId: 'a', usedBefore: Date.parse(iso(0.5)) }], idleBefore: NOW - 0.25 * DAY }])
+    // This machine's directories in use too (`live`); another host's disk is not the one measured.
+    expect(local.calls[1]).toEqual(['taskdir.pruneBuilds', { taskIds: [{ taskId: 'a', usedBefore: Date.parse(iso(0.5)) }], idleBefore: NOW - 0.25 * DAY, live: true }])
     expect(remote.calls[1]).toEqual(['taskdir.pruneBuilds', { taskIds: [{ taskId: 'a', usedBefore: Date.parse(iso(0.5)) }], idleBefore: NOW - 2 * DAY }])
+  })
+
+  // 2026-11-08: the Mac refilled from 30 to 12 GiB within hours while the watermark (10 GiB) still read ok.
+  it('the disk counts as low under the placement floor (20 GiB), before the watermark', async () => {
+    const GiB = 1024 ** 3
+    expect(await localDiskLow(async () => ({ bavail: 12 * GiB / 4096, bsize: 4096 }))).toBe(true)
+    expect(await localDiskLow(async () => ({ bavail: 30 * GiB / 4096, bsize: 4096 }))).toBe(false)
+    expect(await localDiskLow(async () => { throw new Error('statfs failed') })).toBe(false)
   })
 })

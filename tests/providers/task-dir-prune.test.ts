@@ -13,7 +13,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { ensureTaskDir, listTaskDirs, pruneTaskBuilds, pruneTaskDirs, removeTaskDirs, taskDirInUse } from '../../src/providers/task-dir-core.js'
+import { ensureTaskDir, listTaskDirs, pruneTaskBuilds, pruneTaskDirs, readOpenPaths, removeTaskDirs, taskDirInUse } from '../../src/providers/task-dir-core.js'
+import { spawn } from 'node:child_process'
 
 let tmp = ''
 let root = ''
@@ -429,5 +430,110 @@ describe('pruneTaskBuilds (an idle task, open or not)', { timeout: 180_000 }, ()
     expect(taskDirInUse(dir, 'live', [{ task: 'live', cwd: '/elsewhere' }])).toBe(true) // a session or a host command of the task
     expect(taskDirInUse(dir, 'live', [{ cwd: path.join(alias, 'live', 'verify') }])).toBe(true) // another task's host command, via a link
     expect(taskDirInUse(dir, 'live', [{ cwd: dir + '-other' }, { task: 'other', cwd: '/elsewhere' }, { cwd: undefined }])).toBe(false)
+  })
+
+  // 2026-11-08: the Mac refilled from 30 to 12 GiB within hours, all of it in directories of
+  // tasks still running, which the idle sweep never touches. A low disk takes their old build
+  // output too, but never one a process has open, and never one touched in the last 6 hours.
+  it('a low disk prunes a task in use: old build output nobody has open goes, the rest stays', async () => {
+    const dir = ensureTaskDir(root, 'live')!
+    for (const v of ['verify-v19', 'verify-v20', 'verify-v21']) {
+      write(path.join(dir, v, 'package.json'), '{}\n')
+      write(path.join(dir, v, 'src', 'index.ts'), 'source\n')
+      write(path.join(dir, v, 'node_modules', 'x.js'))
+      write(path.join(dir, v, 'dist', 'cli.js'))
+    }
+    derivedData(path.join(dir, 'ios-dd'))
+    for (const v of ['verify-v19', 'verify-v20', 'verify-v21', 'ios-dd']) old(path.join(dir, v))
+    write(path.join(dir, 'verify-v21', 'node_modules', 'new.js')) // touched now
+    const busy = () => true
+    // Without the live mode a directory in use is kept whole.
+    expect((await pruneTaskBuilds(root, ['live'], { busy, idleBefore: Date.now() })).kept).toEqual([{ taskId: 'live', reasons: ['a live session works in it'] }])
+    // v20's copy is some process's working directory; the app inside ios-dd is open (a running simulator).
+    const openPaths = async () => [path.join(dir, 'verify-v20'), path.join(dir, 'ios-dd', 'Build', 'Products', 'Debug-iphonesimulator', 'App.app', 'App')]
+    const res = await pruneTaskBuilds(root, ['live'], { busy, idleBefore: Date.now(), openPaths })
+    expect(res.kept).toEqual([])
+    // v21 was written into just now, so its copy is someone's: its dist stays too.
+    expect(res.pruned[0].builds.sort()).toEqual(['verify-v19/dist', 'verify-v19/node_modules'])
+    expect(fs.existsSync(path.join(dir, 'verify-v21', 'dist', 'cli.js'))).toBe(true)
+    expect(fs.existsSync(path.join(dir, 'verify-v19', 'src', 'index.ts'))).toBe(true)
+    expect(fs.existsSync(path.join(dir, 'verify-v20', 'node_modules', 'x.js'))).toBe(true)
+    expect(fs.existsSync(path.join(dir, 'ios-dd', 'Build'))).toBe(true)
+    // A directory in use is never stamped done.
+    expect((await listTaskDirs(root))[0].buildsPrunedAt).toBeUndefined()
+  })
+
+  it('a low disk keeps everything of a task in use when the open files cannot be read, or the output is under 6 hours old', async () => {
+    const dir = ensureTaskDir(root, 'live')!
+    write(path.join(dir, 'copy', 'node_modules', 'x.js'))
+    old(path.join(dir, 'copy'), new Date(Date.now() - 3 * 3_600_000)) // 3 hours untouched
+    const busy = () => true
+    expect((await pruneTaskBuilds(root, ['live'], { busy, idleBefore: Date.now(), openPaths: async () => [] })).pruned[0].builds).toEqual([])
+    old(path.join(dir, 'copy'))
+    expect((await pruneTaskBuilds(root, ['live'], { busy, idleBefore: Date.now(), openPaths: async () => null })).pruned[0].builds).toEqual([])
+    expect((await pruneTaskBuilds(root, ['live'], { busy, idleBefore: Date.now(), openPaths: async () => { throw new Error('lsof failed') } })).pruned[0].builds).toEqual([])
+    expect(fs.existsSync(path.join(dir, 'copy', 'node_modules', 'x.js'))).toBe(true)
+  })
+
+  it('a dist with no src beside it, outside a repo, stays even on a low disk', async () => {
+    const dir = ensureTaskDir(root, 'live')!
+    write(path.join(dir, 'unpacked', 'package.json'), '{}\n')
+    write(path.join(dir, 'unpacked', 'dist', 'index.js')) // an npm package's only code
+    old(path.join(dir, 'unpacked'))
+    const res = await pruneTaskBuilds(root, ['live'], { busy: () => true, idleBefore: Date.now(), openPaths: async () => [] })
+    expect(res.pruned[0].builds).toEqual([])
+  })
+
+  it('readOpenPaths sees a working directory and an open file under the root', async () => {
+    const dir = ensureTaskDir(root, 'live')!
+    const work = path.join(dir, 'work')
+    write(path.join(work, 'held.txt'))
+    const child = spawn('/bin/sh', ['-c', 'exec 3<held.txt; sleep 30'], { cwd: work, stdio: 'ignore' })
+    try {
+      await new Promise((r) => setTimeout(r, 500))
+      const open = await readOpenPaths(root)
+      if (open === null) return // neither lsof nor /proc on this machine: the caller then prunes nothing in use
+      const realWork = fs.realpathSync(work)
+      expect(open.map((p) => { try { return fs.realpathSync(p) } catch { return p } })).toEqual(expect.arrayContaining([realWork, path.join(realWork, 'held.txt')]))
+    } finally { child.kill('SIGKILL') }
+  })
+
+  // Review round 4 of 2026-11-08: each of these deleted a build in use in the first draft.
+  it('a low disk re-reads the open files before every removal, and a folder above the build inside the task protects it', async () => {
+    const dir = ensureTaskDir(root, 'live')!
+    for (const copy of ['a', 'b']) { cloneInto(dir, copy); write(path.join(dir, copy, 'node_modules', 'x.js')); old(path.join(dir, copy)) }
+    // A process starts in the other copy while the checks of the first build run: that build stays.
+    let openNow: string[] = []
+    let reads = 0
+    let first = ''
+    const slowGit = async (cwd: string, args: string[]) => {
+      if (args[0] === 'ls-files' && !first) { first = path.basename(cwd); openNow = [path.join(dir, first === 'a' ? 'b' : 'a')] }
+      return git(cwd, ...args)
+    }
+    const res = await pruneTaskBuilds(root, ['live'], { busy: () => true, idleBefore: Date.now(), git: slowGit, openPaths: async () => { reads++; return [...openNow] } })
+    const other = first === 'a' ? 'b' : 'a'
+    expect(res.pruned[0].builds).toEqual([`${first}/node_modules`])
+    expect(fs.existsSync(path.join(dir, other, 'node_modules', 'x.js'))).toBe(true)
+    expect(reads).toBeGreaterThanOrEqual(2)
+    // A server whose working directory is the task directory reads builds below it lazily: kept.
+    const above = await pruneTaskBuilds(root, ['live'], { busy: () => true, idleBefore: Date.now(), openPaths: async () => [dir] })
+    expect(above.pruned[0].builds).toEqual([])
+    // A working directory above the task directory (a home, a shared checkout) says nothing about it.
+    const outside = await pruneTaskBuilds(root, ['live'], { busy: () => true, idleBefore: Date.now(), openPaths: async () => [root, tmp] })
+    expect(outside.pruned[0].builds).toEqual([`${other}/node_modules`])
+  })
+
+  it('readOpenPaths takes only a whole lsof answer: a failed or partial run is no answer', async () => {
+    const bin = path.join(tmp, 'fake-lsof-bin')
+    fs.mkdirSync(bin, { recursive: true })
+    const fake = (code: number) => fs.writeFileSync(path.join(bin, 'lsof'), `#!/bin/sh\necho p1\necho n${root}/elsewhere\nexit ${code}\n`, { mode: 0o755 })
+    const savedPath = process.env.PATH
+    process.env.PATH = `${bin}:${savedPath}`
+    try {
+      fake(2)
+      expect(await readOpenPaths(root)).toBeNull()
+      fake(1) // lsof's "some file could not be listed": the rest of its answer stands
+      expect(await readOpenPaths(root)).toEqual([`${root}/elsewhere`])
+    } finally { process.env.PATH = savedPath }
   })
 })

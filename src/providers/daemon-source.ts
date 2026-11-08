@@ -13509,8 +13509,16 @@ async function cmdTaskDirPrune(ws, id, cmd, buildsOnly) {
   const busy = taskDirBusy;
   try {
     const idleBefore = typeof cmd.idleBefore === 'number' && isFinite(cmd.idleBefore) ? cmd.idleBefore : Date.now();
+    // 'live': see cmdTaskDirPrune in daemon-standalone.ts. An older sidecar has no reader: nothing in use goes.
+    const openPaths = cmd.live === true ? async function () {
+      if (typeof taskDirCore.readOpenPaths !== 'function') return null;
+      const open = await taskDirCore.readOpenPaths(TASK_DIR_ROOT);
+      if (!open) return null;
+      for (const w of hostWorkNow()) if (typeof w.cwd === 'string' && w.cwd) open.push(w.cwd);
+      return open;
+    } : undefined;
     const result = buildsOnly
-      ? await taskDirCore.pruneTaskBuilds(TASK_DIR_ROOT, ids, { busy: busy, idleBefore: idleBefore })
+      ? await taskDirCore.pruneTaskBuilds(TASK_DIR_ROOT, ids, { busy: busy, idleBefore: idleBefore, openPaths: openPaths })
       : await taskDirCore.pruneTaskDirs(TASK_DIR_ROOT, ids, { busy: busy });
     if (result.pruned.length > 0 || result.kept.length > 0) logMsg('info', buildsOnly ? 'task dir builds pruned' : 'task dirs pruned', { pruned: result.pruned, kept: result.kept });
     sendOk(ws, id, result);
