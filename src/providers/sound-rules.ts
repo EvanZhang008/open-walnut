@@ -62,7 +62,7 @@ export const OSA_APP_VOLUME_RE = 'set sound volume|soundvolume[ \t]*='
 export const CODE_AUDIO_API_RE = 'nssound|nsspeechsynthesizer|avspeechsynthesizer|avaudioplayer|pyttsx3|playsound|simpleaudio|winsound|pygame\\.mixer|system\\.speech|speechsynthesizer|soundplayer|\\[console\\]::beep'
 /**
  * A call in code that starts a process, up to its first argument: what it starts is judged as a command line,
- * by the same rules as the shell: a string (`os.system("say hi")`, `execSync(...)`), an argv list
+ * by the same rules as the shell: a string (`os.system("say hi")`, Node's synchronous exec), an argv list
  * (`subprocess.run(["afplay", "x"])`), or a program string then its list (`spawn("say", ["hi"])`).
  * Bun's $`...` is one too.
  */

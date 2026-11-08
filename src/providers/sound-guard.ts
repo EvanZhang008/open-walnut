@@ -71,7 +71,7 @@ function listItems(t: string, i: number): string[] {
 /** An argv list as a shell line that means the same words: each single-quoted, so nothing in one expands. */
 const asLine = (words: string[]) => words.map((w) => `'${w.split("'").join("'\"'\"'")}'`).join(' ')
 
-/** Where t has a string literal open: a call named inside a string runs nothing (`console.log("execSync(...)")`). */
+/** Where t has a string literal open: a call named inside a string runs nothing (`console.log("os.system(...)")`). */
 function inString(t: string, at: number): boolean {
   let q = ''
   for (let k = 0; k < at; k++) {
