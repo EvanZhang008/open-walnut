@@ -164,16 +164,23 @@ html .home-navigation-scroll .status-card-meta .git-glance-pill.todo-item-due-pi
 .session-diff-view .session-diff-toolbar-title { white-space: nowrap; }
 
 /* A phone reads nothing under 12px (the session row's line in a task's detail, the
-   Changed tab's strip), and a toolbar button that wrapped into view takes a finger. */
+   Changed tab's strip and its review controls), and every Changed toolbar control
+   (Compare, Hide whitespace, the viewed marks) takes a finger. */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   .git-glance-line,
   .session-diff-gitstrip .git-glance-line,
   .git-glance-line .git-glance-branch,
   .session-diff-gitstrip-when { font-size: 12px; }
-  .app-shell-navigation .session-panel :is(.session-diff-ai-toggle, .session-diff-commit-btn, .session-diff-refresh) {
+  .app-shell-navigation .session-panel :is(
+    .session-diff-ai-toggle, .session-diff-commit-btn, .session-diff-refresh,
+    .session-diff-compare-trigger, .session-diff-ws-toggle, .session-diff-next-unviewed, .session-diff-viewed-toggle
+  ) {
     min-width: 44px;
     min-height: 44px;
   }
+  .app-shell-navigation .session-panel :is(
+    .session-diff-ws-toggle, .session-diff-next-unviewed, .session-diff-viewed-toggle, .session-diff-viewed-changed
+  ) { font-size: 12px; }
 }
 
 /* The Changed toolbar's ↻ keeps its room while idle (SessionDiffView). */

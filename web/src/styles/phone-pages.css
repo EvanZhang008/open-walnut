@@ -175,6 +175,12 @@
     font-size: 12px;
   }
 
+  /* A long project's "Show more" row (list-batch.ts) is a row-wide button: a
+     finger's height here, like the rows it reveals. */
+  .app-shell-navigation .todo-panel .todo-list-show-more {
+    min-height: 44px;
+  }
+
   /* The home list draws its chevrons as a stroke (home-navigation.css) and
      hides the glyph with font-size 0. Here the glyph keeps a readable size but
      no color, and the stroke is centered on its own. */
