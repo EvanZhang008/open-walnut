@@ -67,10 +67,6 @@ async function expand(toggle: Locator): Promise<void> {
   await expect(toggle).toHaveAttribute('aria-expanded', 'true')
 }
 
-/** The words a closed card shows, line by line, chevrons left out. */
-const shownWords = async (card: Locator) =>
-  (await card.innerText()).replace(/[▸▾]/g, '').split('\n').map((l) => l.trim()).filter(Boolean)
-
 /** Drag with the mouse, so the card under the pointer can be read before the drop. */
 async function dragOver(page: Page, from: Locator, to: Locator): Promise<void> {
   await from.scrollIntoViewIfNeeded()
@@ -104,39 +100,46 @@ test.afterAll(async ({ request }) => {
   for (const id of [...made, ...leads]) await removeTask(request, id)
 })
 
-test('Main is the CEO and each project a VP card with its own name: names alone until opened, and opened stays open', async ({ page }) => {
+test('Main is the CEO and each project a VP card: its avatar, name and count; a project opens to its tasks with status icons; opened stays open', async ({ page }) => {
   await openChart(page)
   await expect(page.getByTestId('org-chart-ceo')).toContainText('CEO')
   for (const name of [A, B]) {
     const card = vp(page, name)
-    // Closed: the VP's name and its one project's name (2026-11-06, the user: "just show the
-    // name"), each followed by how many it has open (2026-11-08: "after the name, how many it
-    // has, then what it is doing"; nothing here is at work, so no doing line); no news, time,
-    // badge or menu.
+    // Closed: the VP's avatar, name and role, then how many it has open (2026-11-06, the user:
+    // "just show the name"; 2026-11-08: "after the name, how many it has, then what it is
+    // doing"; nothing here is at work, so no doing line), and its one project's name and count.
+    // No status words, asks, news, time, badge or menu.
+    await expect(card.locator('.org-avatar')).toHaveCount(1)
     await expect(card.getByTestId('org-chart-vp-name')).toHaveText(name)
+    await expect(card.locator('.oc-role')).toHaveText('VP')
     await expect(card.getByTestId('org-chart-vp-now')).toHaveText('2 open')
     await expect(card.getByTestId('org-chart-project-now')).toHaveText('2 open')
-    expect((await shownWords(card)).join(' ')).toBe(`${name} 2 open ${name} 2 open`)
     await expect(card.getByTestId('org-chart-vp-doing')).toHaveCount(0)
-    await expect(card.locator('.oc-badge, .oc-more, [data-testid="org-chart-vp-detail"], [data-testid="org-chart-project-line"]')).toHaveCount(0)
-    await expect(card.getByTestId('org-chart-vp-dot')).toHaveCount(0)
-    // Opened ("and can expand for more detail"): two tasks not started are Waiting, by the one
-    // user status (src/core/user-status.ts); with no words of their own, the news says so too.
+    await expect(card.locator('.oc-badge, .oc-more, .oc-dot, [data-testid="org-chart-vp-detail"], [data-testid="org-chart-tasks"]')).toHaveCount(0)
+    await expect(card).not.toContainText(/Waiting|Needs you|Working|threads/)
+    // Opened, the card holds Open chat and nothing about asks (2026-11-08: the chart is "not for
+    // making decisions").
     await expand(card.getByTestId('org-chart-vp-toggle'))
-    await expect(card.getByTestId('org-chart-vp-news')).toContainText('Waiting: ')
-    await expect(card.getByTestId('org-chart-vp-line')).toHaveText('2 Waiting / snoozed')
     await expect(card.getByTestId('org-chart-vp-open')).toBeVisible()
+    await expect(card.getByTestId('org-chart-vp-detail')).not.toContainText(/Waiting|Needs you|threads/)
     await expect(card).not.toContainText('lead')
-    // Its own project opens apart from the card: the card's key is that row's key too.
+    // Its own project opens apart from the card (the card's key is that row's key too) to its
+    // tasks: each one its title and its status as an icon, no status words, no counts line.
     const own = card.getByTestId('org-chart-project')
     await expect(own).toHaveCount(1)
     await expect(own.getByTestId('org-chart-project-toggle')).toHaveAttribute('aria-expanded', 'false')
     await expand(own.getByTestId('org-chart-project-toggle'))
-    await expect(own.getByTestId('org-chart-project-line')).toHaveText('2 Waiting / snoozed')
-    await expect(own.getByTestId('org-chart-task')).toHaveCount(2)
+    const tasks = own.getByTestId('org-chart-task')
+    await expect(tasks).toHaveCount(2)
+    await expect(own.getByTestId('org-chart-project-now')).toHaveCount(0)
+    await expect(own.getByTestId('org-chart-tasks')).not.toContainText(/Waiting|snoozed|Needs you/)
+    for (const t of await tasks.all()) {
+      await expect(t).toHaveAttribute('data-state', 'waiting')
+      await expect(t.getByTestId('org-chart-task-icon')).toHaveAttribute('aria-label', 'Waiting')
+      await expect(t.locator('svg')).toHaveCount(1)
+    }
+    await expect(own.locator('[data-testid="org-chart-project-line"], [data-testid="org-chart-project-menu"]')).toHaveCount(0)
   }
-  // B's VP has a lead, so its card counts its threads: none here, so no dot, "0 threads" opened.
-  await expect(vp(page, B).getByTestId('org-chart-vp-threads')).toHaveText('0 threads')
   // What was opened is opened again after a reload, and closes again on a click.
   await page.reload()
   await page.getByTestId('org-open-chart').click()
@@ -145,7 +148,7 @@ test('Main is the CEO and each project a VP card with its own name: names alone 
     await expect(row(page, name, name).getByTestId('org-chart-project-toggle')).toHaveAttribute('aria-expanded', 'true')
     await row(page, name, name).getByTestId('org-chart-project-toggle').click()
     await vp(page, name).getByTestId('org-chart-vp-toggle').click()
-    expect((await shownWords(vp(page, name))).join(' ')).toBe(`${name} 2 open ${name} 2 open`)
+    await expect(vp(page, name).locator('[data-testid="org-chart-vp-detail"], [data-testid="org-chart-tasks"]')).toHaveCount(0)
   }
 })
 
@@ -162,9 +165,28 @@ test('a drag onto another VP says what it does, asks first, and puts the project
   await expect(confirm).toContainText('no task changes project')
   await expect(confirm).toContainText('steps down')
 
-  // Cancel changes nothing.
+  // Tab stays in the question: Cancel, Confirm, Cancel again, never the chart's × behind it.
+  await expect(page.getByTestId('org-chart-apply')).toBeFocused()
+  for (let i = 0; i < 3; i++) {
+    await page.keyboard.press('Tab')
+    await expect(page.locator(':focus')).toHaveCount(1)
+    expect(await page.evaluate(() => !!document.activeElement?.closest('[data-testid="org-chart-confirm"]'))).toBe(true)
+  }
+  // Cancel changes nothing, and the focus is back on the project it asked about.
   await confirm.getByRole('button', { name: 'Cancel' }).click()
   await expect(confirm).toHaveCount(0)
+  await expect(row(page, B, B).getByTestId('org-chart-project-toggle')).toBeFocused()
+  expect((await project(request, B))?.vp).toBeUndefined()
+
+  // Right after a drag, a click outside closes the question too (WebKit sends no pointerdown
+  // for that first press), and nothing moves.
+  await dragOver(page, handle(page, B), vp(page, A))
+  await page.mouse.up()
+  await expect(confirm).toBeVisible()
+  const sheetBox = (await page.locator('.org-sheet').boundingBox())!
+  await page.mouse.click(sheetBox.x + sheetBox.width / 2, sheetBox.y + sheetBox.height + 12)
+  await expect(confirm).toHaveCount(0)
+  await expect(page.getByTestId('org-chart')).toBeVisible()
   expect((await project(request, B))?.vp).toBeUndefined()
 
   // The same drop again, confirmed.
@@ -174,8 +196,6 @@ test('a drag onto another VP says what it does, asks first, and puts the project
   const card = vp(page, A)
   await expect(card.getByTestId('org-chart-project')).toHaveCount(2)
   await expect(card.getByTestId('org-chart-project').nth(1)).toContainText(B)
-  await expand(card.getByTestId('org-chart-vp-toggle'))
-  await expect(card.getByTestId('org-chart-vp-line')).toHaveText(/^2 projects · \d+ Waiting \/ snoozed$/)
   await expect(vp(page, B)).toHaveCount(0)
 
   // Both stay projects with their own tasks; B is talked to through A's VP, and B's own
@@ -187,7 +207,7 @@ test('a drag onto another VP says what it does, asks first, and puts the project
   expect((await taskOf(request, bLead))?.phase).toBe('COMPLETE')
   expect((await taskOf(request, aLead.id))?.org_leads).toEqual([B])
 
-  // A project on the card opens to its tasks, each with where it stands.
+  // A project on the card opens to its tasks, each with where it stands as its icon.
   const seeds = row(page, A, B)
   await expect(seeds.getByTestId('org-chart-tasks')).toHaveCount(0)
   await expand(seeds.getByTestId('org-chart-project-toggle'))
@@ -195,8 +215,14 @@ test('a drag onto another VP says what it does, asks first, and puts the project
   await expect(tasks).toHaveCount(2)
   await expect(seeds.getByTestId('org-chart-tasks')).toContainText(`Collect seeds ${STAMP}`)
   await expect(seeds.getByTestId('org-chart-tasks')).toContainText(`Label jars ${STAMP}`)
-  await expect(tasks.first()).toContainText('Waiting')
+  await expect(tasks.first().getByTestId('org-chart-task-icon')).toHaveAttribute('aria-label', 'Waiting')
   await expect(card.locator(`[data-testid="org-chart-project"][data-project="${A}"]`).getByTestId('org-chart-tasks')).toHaveCount(0)
+
+  // A press on a task that moves a little drags no project: the press is the task's.
+  await dragOver(page, tasks.first(), page.getByTestId('org-chart-own'))
+  await page.mouse.up()
+  await expect(page.getByTestId('org-chart-confirm')).toHaveCount(0)
+  await expect(page.getByTestId('org-chart')).toBeVisible()
 
   // A task opens beside the Org page, and the sheet closes.
   const label = seeds.locator('[data-testid="org-chart-task"]', { hasText: `Label jars ${STAMP}` })
@@ -239,15 +265,15 @@ test('a drag onto the drop zone creates a dedicated VP again; the menu asks the 
   expect(b.vp).toBeUndefined()
   expect((await taskOf(request, b.lead!.id))?.phase).not.toBe('COMPLETE')
 
-  // The move menu: the same question, no drag, from the opened project (and a right-click on it
-  // opens the same menu). Escape closes the question first, then the sheet.
+  // The move menu: the same question, no drag, by a right-click on the project (or, on the
+  // keyboard, Shift+F10 on its name). Escape closes the question first, then the sheet.
   await row(page, B, B).click({ button: 'right' })
   await expect(page.getByTestId('org-chart-move-menu')).toContainText(`Move ${B} under`)
   await page.keyboard.press('Escape')
   await expect(page.getByTestId('org-chart-move-menu')).toHaveCount(0)
   await expect(page.getByTestId('org-chart')).toBeVisible()
-  await expand(row(page, B, B).getByTestId('org-chart-project-toggle'))
-  await vp(page, B).getByTestId('org-chart-project-menu').click()
+  await row(page, B, B).getByTestId('org-chart-project-toggle').focus()
+  await page.keyboard.press('Shift+F10')
   const menu = page.getByTestId('org-chart-move-menu')
   await expect(menu).toContainText(`Move ${B} under`)
   await menu.getByText(`${A} VP`, { exact: true }).click()
@@ -268,14 +294,13 @@ test('a click outside the sheet closes it; inside, or with the menu or the quest
   await sheet.locator('.org-sheet-title').click()
   await expect(sheet).toBeVisible()
   // The move menu open: the click outside closes only the menu.
-  await expand(row(page, B, B).getByTestId('org-chart-project-toggle'))
-  await vp(page, B).getByTestId('org-chart-project-menu').click()
+  await row(page, B, B).getByTestId('org-chart-project-toggle').click({ button: 'right' })
   await expect(page.getByTestId('org-chart-move-menu')).toBeVisible()
   await page.mouse.click(box.x + box.width / 2, box.y + box.height + 12)
   await expect(page.getByTestId('org-chart-move-menu')).toHaveCount(0)
   await expect(sheet).toBeVisible()
   // The question open: the click outside closes only the question.
-  await vp(page, B).getByTestId('org-chart-project-menu').click()
+  await row(page, B, B).getByTestId('org-chart-project-toggle').click({ button: 'right' })
   await page.getByTestId('org-chart-move-menu').getByText(`${A} VP`, { exact: true }).click()
   await expect(page.getByTestId('org-chart-confirm')).toBeVisible()
   await page.mouse.click(box.x + box.width / 2, box.y + box.height + 12)

@@ -8,6 +8,8 @@ import type { Task } from '../../src/core/types.js'
 import { buildOrgTree, type OrgTaskLike } from '../../src/core/org/org-tree.js'
 import { buildChannels } from '../../web/src/components/org/org-channels-model.js'
 import { ceoLine, dropPlan, nowLine, vpCards, vpLine } from '../../web/src/components/org/org-chart-model.js'
+import { projectTasks, stateIcon } from '../../web/src/components/org/OrgChartProject.js'
+import * as ICONS from '../../web/src/components/common/Icons.js'
 
 let n = 0
 const t = (project: string, over: Partial<OrgTaskLike> = {}): OrgTaskLike => {
@@ -42,6 +44,31 @@ describe('org chart cards', () => {
     // A VP leading two projects counts both and names the newest task at work in either.
     const led = cardsOf([...garden, ...seeds, { ...gardenLead, org_leads: ['Seeds'] }]).find((c) => c.name === 'Garden')!
     expect(nowLine(led.projects, byId).open).toBe(4)
+  })
+
+  it('an opened project lists every task as a tree, at every depth, each with its status icon', () => {
+    // 2026-11-08, the user: "just list all the tasks", each with its status, the hierarchy first.
+    const team = t('Tree', { phase: 'IN_PROGRESS', title: 'Team' })
+    const worker = t('Tree', { parent_task_id: team.id, title: 'Worker', phase: 'IN_PROGRESS' })
+    const sub = t('Tree', { parent_task_id: worker.id, title: 'Sub worker' })
+    const subSub = t('Tree', { parent_task_id: sub.id, title: 'Sub sub worker' })
+    const many = Array.from({ length: 14 }, (_, i) => t('Tree', { title: `Loose ${i}` }))
+    const all = [team, worker, sub, subSub, ...many]
+    const byId = new Map(all.map((x) => [x.id, x as unknown as Task] as const))
+    const p = cardsOf(all).find((c) => c.name === 'Tree')!.projects[0]!
+    const lines = projectTasks(p, byId)
+    // All of them, no "Show all" cut at ten.
+    expect(lines).toHaveLength(all.length)
+    const at = (title: string) => lines.findIndex((l) => l.title === title)
+    expect([lines[at('Team')]!.depth, lines[at('Worker')]!.depth, lines[at('Sub worker')]!.depth, lines[at('Sub sub worker')]!.depth]).toEqual([0, 1, 2, 3])
+    // A worker sits right under its team.
+    expect([at('Worker'), at('Sub worker'), at('Sub sub worker')]).toEqual([at('Team') + 1, at('Team') + 2, at('Team') + 3])
+    expect(stateIcon({ state: 'working', snoozed: false })).toBe(ICONS.ICON_PHASE_IN_PROGRESS)
+    expect(stateIcon({ state: 'needs', snoozed: false })).toBe(ICONS.ICON_ATTENTION)
+    // To read wears the task list's page icon, as its row there does (sectionRowIcon).
+    expect(stateIcon({ state: 'read', snoozed: false })).toBe(ICONS.ICON_TO_READ)
+    expect(stateIcon({ state: 'waiting', snoozed: false })).toBe(ICONS.ICON_PHASE_WAITING)
+    expect(stateIcon({ state: 'waiting', snoozed: true })).toBe(ICONS.ICON_SNOOZE)
   })
 
   it('one card per project, named after it, the Inbox last and no one\'s VP', () => {

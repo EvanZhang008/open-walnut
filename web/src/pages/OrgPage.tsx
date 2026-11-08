@@ -582,7 +582,6 @@ export function OrgPage() {
           onClose={() => { setChartOpen(false); setChartStart(null); }}
           onPick={(key) => select(rowOf(channels, key)?.key ?? key)}
           onOpenTask={openTask}
-          now={now}
         />
       )}
     </div>

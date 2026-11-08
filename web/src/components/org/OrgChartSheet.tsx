@@ -2,13 +2,13 @@
  * The org chart: Main and its VPs, one screen.
  *
  *   Main · CEO
- *   └ one card per VP: its name and the names of the projects it leads (its own included),
- *     nothing else until it is opened (OrgChartVp.tsx); an open card says what is in it now
- *     (its threads, news, counts, Open chat and its menu), an open project its counts and
- *     tasks, and a task opens beside the Org page (OrgChartProject.tsx)
+ *   └ one card per VP: its avatar, name, how many it has open and what it is doing, then the
+ *     projects it leads (its own included) (OrgChartVp.tsx); an open card holds Open chat and
+ *     its menu, an open project every task in it as a tree with each one's status icon, and a
+ *     task opens beside the Org page (OrgChartProject.tsx)
  *
  * Drag a project onto another VP's card to put it under that VP (or use the move menu: a
- * right-click on it, or Move to another VP… in it opened); drag it
+ * right-click on it); drag it
  * onto "Own VP" to give it back. The card says what a drop would do before it happens, and
  * every change is confirmed first. No task changes project: the server only changes who
  * leads it (POST /api/v1/org/vp), and the VP that lets go sums up its work for the new one.
@@ -49,8 +49,6 @@ interface Props {
   onPick: (key: string) => void;
   /** Open a task beside the Org page. */
   onOpenTask: (taskId: string) => void;
-  /** The page's minute clock, for "23m". */
-  now: number;
   /** Open on this move's question (the Org list's right-click menu). */
   startWith?: ChartStart;
 }
@@ -60,7 +58,7 @@ const DRAG_TYPE = 'application/x-walnut-org-project';
 /** The drop zone that gives a project a dedicated VP again. */
 const OWN = '__own__';
 
-export function OrgChartSheet({ main, rows, tasks, onClose, onPick, onOpenTask, now, startWith }: Props) {
+export function OrgChartSheet({ main, rows, tasks, onClose, onPick, onOpenTask, startWith }: Props) {
   const [panel, setPanel] = useState<HTMLDivElement | null>(null);
   const [dragKey, setDragKey] = useState<string | null>(null);
   const [overKey, setOverKey] = useState<string | null>(null);
@@ -95,7 +93,7 @@ export function OrgChartSheet({ main, rows, tasks, onClose, onPick, onOpenTask, 
     if (menu) { setMenu(null); menu.from.focus(); return; }
     if (nodeMenu) { setNodeMenu(null); nodeMenu.from.focus(); return; }
     if (editor) { if (!editorBusy.current) closeEditor(); return; }
-    if (pending) { if (!busy) setPending(null); return; }
+    if (pending) { if (!busy) cancelAsk(); return; }
     onClose();
   });
   useDialogFocus(panel, 'Org chart');
@@ -108,6 +106,10 @@ export function OrgChartSheet({ main, rows, tasks, onClose, onPick, onOpenTask, 
   // ends outside is a selection or a drag, not a click outside). What was open at the press
   // closes first, as Escape does: the menu (it closes itself on that press), then the question.
   const pressedOutside = useRef<{ menu: boolean; pending: boolean; editor: boolean } | null>(null);
+  const pressAt = (target: EventTarget, layer: EventTarget) => {
+    pressedOutside.current = target === layer ? { menu: !!menu || !!nodeMenu, pending: !!pending, editor: !!editor } : null;
+    if (pressedOutside.current?.menu) { setMenu(null); setNodeMenu(null); }
+  };
   const projectOf = (key: string | null) => (key ? cards.flatMap((c) => c.projects).find((p) => p.key === key) ?? null : null);
   const dragged = projectOf(dragKey);
   // The drag's project, known from dragstart on: the state above is set a tick later, and a
@@ -122,6 +124,13 @@ export function OrgChartSheet({ main, rows, tasks, onClose, onPick, onOpenTask, 
     if (!plan) return;
     setError('');
     setPending(plan);
+  };
+  // The question closed unanswered: the focus goes back to the project it was about.
+  const cancelAsk = () => {
+    const about = pending?.project;
+    setPending(null);
+    if (about === undefined) return;
+    panel?.querySelector<HTMLElement>(`[data-testid="org-chart-project"][data-project="${CSS.escape(about)}"] [data-testid="org-chart-project-toggle"]`)?.focus();
   };
 
   const apply = async () => {
@@ -258,18 +267,17 @@ export function OrgChartSheet({ main, rows, tasks, onClose, onPick, onOpenTask, 
       className="org-sheet-layer"
       data-testid="org-chart"
       // Not part of the board: a pointer here must never start the home page's drag sensors.
-      onPointerDown={(e) => {
-        e.stopPropagation();
-        pressedOutside.current = e.target === e.currentTarget ? { menu: !!menu || !!nodeMenu, pending: !!pending, editor: !!editor } : null;
-        if (pressedOutside.current?.menu) { setMenu(null); setNodeMenu(null); }
-      }}
+      onPointerDown={(e) => { e.stopPropagation(); pressAt(e.target, e.currentTarget); }}
+      // WebKit sends no pointerdown for the first press after a drag, only mousedown (both come
+      // for any other press, and say the same).
+      onMouseDown={(e) => pressAt(e.target, e.currentTarget)}
       onClick={(e) => {
         const press = pressedOutside.current;
         pressedOutside.current = null;
         if (!press || e.target !== e.currentTarget || press.menu) return;
         // A form keeps what was typed: only its Cancel and Escape close it.
         if (press.editor) return;
-        if (press.pending) { if (!busy) setPending(null); return; }
+        if (press.pending) { if (!busy) cancelAsk(); return; }
         onClose();
       }}
     >
@@ -328,7 +336,6 @@ export function OrgChartSheet({ main, rows, tasks, onClose, onPick, onOpenTask, 
                 <OrgChartVp
                   key={c.key}
                   card={c}
-                  now={now}
                   className={`oc-vp${over ? ' is-over' : ''}${dragged && plan ? ' can-drop' : ''}${dragKey === c.key && single ? ' is-dragging' : ''}`}
                   zone={c.role === 'VP' ? dropZone(c.key, c) : {}}
                   draggable={!!c.project && !c.vpOnly}
@@ -369,14 +376,30 @@ export function OrgChartSheet({ main, rows, tasks, onClose, onPick, onOpenTask, 
         )}
         {pending && (
           <div className="oc-confirm-layer">
-            <div className="oc-confirm" role="alertdialog" aria-modal="true" aria-label={pending.title} data-testid="org-chart-confirm">
+            <div
+              className="oc-confirm"
+              role="alertdialog"
+              aria-modal="true"
+              aria-label={pending.title}
+              data-testid="org-chart-confirm"
+              // Tab stays in the question: the chart behind it (its ×) is not reachable until it is answered.
+              onKeyDown={(e) => {
+                if (e.key !== 'Tab') return;
+                const btns = [...e.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];
+                if (btns.length === 0) { e.preventDefault(); return; }
+                const i = btns.indexOf(document.activeElement as HTMLButtonElement);
+                const next = e.shiftKey ? (i <= 0 ? btns.length - 1 : i - 1) : (i === btns.length - 1 ? 0 : i + 1);
+                e.preventDefault();
+                btns[next]!.focus();
+              }}
+            >
               <h3 className="oc-confirm-title">{pending.title}</h3>
               <ul className="oc-confirm-lines">
                 {pending.lines.map((l) => <li key={l}>{l}</li>)}
               </ul>
               {error && <p className="oc-confirm-error" role="alert" data-testid="org-chart-error">Not changed. {error}</p>}
               <div className="oc-confirm-actions">
-                <button type="button" className="btn btn-sm" onClick={() => setPending(null)} disabled={busy}>Cancel</button>
+                <button type="button" className="btn btn-sm" onClick={cancelAsk} disabled={busy}>Cancel</button>
                 <button type="button" className="btn btn-sm btn-primary" data-testid="org-chart-apply" onClick={() => { void apply(); }} disabled={busy} autoFocus>
                   {busy ? 'Working…' : pending.confirm}
                 </button>
