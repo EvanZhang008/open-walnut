@@ -5,7 +5,7 @@
  * intercepted so the fixture config never changes under another spec.
  */
 import { devices, test, expect, type Page, type Request } from '@playwright/test'
-import { backToApps, openPluginDetail } from './apps-store-helpers'
+import { backToApps, openApps, openPluginDetail } from './apps-store-helpers'
 import { withCssColor } from './css-color'
 import { dropFakes } from './route-teardown'
 
@@ -29,13 +29,6 @@ async function clickNav(page: Page, id: string) {
   await item.click()
   await expect(item).toHaveAttribute('aria-current', 'page')
   await expect(page.locator('.settings-pane .settings-section').first()).toBeVisible({ timeout: 20_000 })
-}
-
-/** Plugins moved to the Apps page: the Settings nav's Plugins row is a link there now. */
-async function openApps(page: Page) {
-  await page.getByTestId(NAV('plugin-store')).click()
-  await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 20_000 })
-  await expect(page.locator('#plugin-store')).toBeVisible({ timeout: 20_000 })
 }
 
 /** Ids of the installed plugins that have a card, in page order. */

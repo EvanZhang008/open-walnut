@@ -132,6 +132,24 @@ describe('no text sends anyone to Settings for a plugin', () => {
     }
     expect(out, 'these lines still send people to Settings for a plugin').toBe('')
   }, 20_000)
+
+  // A browser spec that still opens Apps through Settings' old Plugins row times out on a row
+  // that is gone (2026-11-08: six Settings specs failed in CI that way). Every spec reaches Apps
+  // from the side bar (`openApps` in tests/e2e/browser/apps-store-helpers.ts); a line may name
+  // the old row only to say it is absent.
+  it('no browser spec opens Apps through a Settings row', () => {
+    const files = execFileSync('git', ['ls-files', 'tests/e2e/browser'], { cwd: ROOT, encoding: 'utf8' })
+      .split('\n').filter((f) => /\.ts$/.test(f))
+    const OLD_ROW = /settings-nav-plugin-store|['"]plugin-store['"]/
+    const ABSENT = /toHaveCount\(0\)|not\.toContain|\.not\.toBeVisible/
+    const offenders: string[] = []
+    for (const file of files) {
+      read(file).split('\n').forEach((line, i) => {
+        if (OLD_ROW.test(line) && !ABSENT.test(line)) offenders.push(`${file}:${i + 1}: ${line.trim()}`)
+      })
+    }
+    expect(offenders, 'open Apps with openApps(page) from apps-store-helpers instead').toEqual([])
+  }, 20_000)
 })
 
 describe("Walnut's own Settings anchors are never taken for an old plugin link", () => {

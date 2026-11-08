@@ -5,6 +5,7 @@
  */
 import { routeCosts } from './usage-costs-fixture'
 import { devices, test, expect, type Page, type Request } from '@playwright/test'
+import { openApps } from './apps-store-helpers'
 
 if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.setTimeout(120_000)
@@ -135,9 +136,8 @@ test('F27 N03 F31 F33 F36: number fields end on the content edge, no-op bulk lin
 test('F17 F18 F28: plugin slots line up, install rows stack', async ({ page }) => {
   await recordWrites(page)
   await openSettings(page)
-  // Plugins live on the Apps page; the Settings nav's Plugins row links there.
-  await page.getByTestId(NAV('plugin-store')).click()
-  await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 20_000 })
+  // Plugins live on the Apps page, which the side bar opens; Settings has no row for it.
+  await openApps(page, 20_000)
   // The free-form install opens from Get more's "Add from a git or npm link" card.
   await page.getByTestId('apps-add-from-link').click()
   const install = page.locator('.settings-row:has(#plugin-source-url)')

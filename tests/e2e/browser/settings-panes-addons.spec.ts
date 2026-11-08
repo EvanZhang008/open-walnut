@@ -11,7 +11,7 @@
  * WKWebView) with `PW_WEBKIT=1 ... --project=webkit`.
  */
 import { devices, test, expect, type Page, type Route } from '@playwright/test'
-import { backToApps, openPluginDetail } from './apps-store-helpers'
+import { backToApps, openApps, openPluginDetail } from './apps-store-helpers'
 import { dropFakes } from './route-teardown'
 
 if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
@@ -22,13 +22,6 @@ const NAV = (id: string) => `settings-nav-${id}`
 async function openSettings(page: Page) {
   await page.goto('/settings')
   await expect(page.locator('.settings-nav')).toBeVisible({ timeout: 30_000 })
-}
-
-/** Plugins moved to the Apps page: the Settings nav's Plugins row is a link there now. */
-async function openApps(page: Page) {
-  await page.getByTestId(NAV('plugin-store')).click()
-  await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 30_000 })
-  await expect(page.locator('#plugin-store')).toBeVisible({ timeout: 30_000 })
 }
 
 async function clickNav(page: Page, id: string) {

@@ -5,6 +5,7 @@
  * Writes are intercepted with page.route unless a test says otherwise.
  */
 import { devices, test, expect, type Page, type Request } from '@playwright/test'
+import { openApps } from './apps-store-helpers'
 import { routeCosts } from './usage-costs-fixture'
 import { cssColorToRgba, withCssColor } from './css-color'
 import { backToDevices } from './devices-ways-helpers'
@@ -448,9 +449,8 @@ test('F15 F19 C8 C10: Hooks and Plugins show sentence case, unique names, no das
   for (const n of hooks.names) expect(n.split(' ').slice(1).some((w) => /^[A-Z][a-z]/.test(w)), n).toBe(false)
   expect(hooks).toMatchObject({ dash: false, eg: false, inline: false, caps: [] })
   expect(hooks.minHeight).toBeGreaterThanOrEqual(44)
-  // The plugin list (and its update chips) moved to the Apps page; Settings links there.
-  await page.getByTestId(NAV('plugin-store')).click()
-  await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 20_000 })
+  // The plugin list (and its update chips) is on the Apps page, which the side bar opens.
+  await openApps(page, 20_000)
   const chips = page.locator('[data-testid="apps-page"] .plugin-update-chip')
   for (let i = 0; i < await chips.count(); i++) {
     const t = await chips.nth(i).evaluate((el) => ({ tt: getComputedStyle(el).textTransform, ls: getComputedStyle(el).letterSpacing }))

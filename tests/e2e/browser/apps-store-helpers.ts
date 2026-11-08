@@ -5,6 +5,16 @@
  */
 import { expect, type Page } from '@playwright/test'
 
+/**
+ * Open the Apps page the way a person does: its own row in the side bar. Settings holds no
+ * row for it (2026-11-05, the user: "app is not in seting, app it just app").
+ */
+export async function openApps(page: Page, timeout = 30_000): Promise<void> {
+  await page.getByTestId('sidebar-core-app-apps').click()
+  await expect(page.getByTestId('apps-page')).toBeVisible({ timeout })
+  await expect(page.locator('#plugin-store')).toBeVisible({ timeout })
+}
+
 /** Click a plugin's card on the Apps page (already open) and wait for its detail page. */
 export async function openPluginDetail(page: Page, pluginId: string): Promise<void> {
   const open = page.getByTestId(`plugin-card-${pluginId}-details`)

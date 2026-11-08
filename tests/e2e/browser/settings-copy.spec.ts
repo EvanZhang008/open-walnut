@@ -5,6 +5,7 @@
  * never changes under another spec.
  */
 import { devices, test, expect, type Page, type Request } from '@playwright/test'
+import { openApps } from './apps-store-helpers'
 import { backToDevices, openWay } from './devices-ways-helpers'
 
 if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
@@ -98,12 +99,11 @@ test('N15: every disabled push button looks the same, and one outside a dimmed g
   await recordWrites(page)
   await openSettings(page)
   const looks = new Map<string, string>()
-  // Plugins is no longer a Settings pane: it is measured last, on the Apps page its nav row opens.
-  for (const pane of ['devices', 'search', 'audio-capture', 'tasks', 'backup', 'advanced', 'plugin-store']) {
-    const scope = pane === 'plugin-store' ? '#plugin-store' : '.settings-pane'
-    if (pane === 'plugin-store') {
-      await page.getByTestId(NAV(pane)).click()
-      await expect(page.locator('#plugin-store')).toBeVisible({ timeout: 20_000 })
+  // Plugins is no Settings pane: it is measured last, on the Apps page the side bar opens.
+  for (const pane of ['devices', 'search', 'audio-capture', 'tasks', 'backup', 'advanced', 'apps']) {
+    const scope = pane === 'apps' ? '#plugin-store' : '.settings-pane'
+    if (pane === 'apps') {
+      await openApps(page, 20_000)
     } else {
       await clickNav(page, pane)
     }

@@ -6,7 +6,7 @@
  * Screenshots go to /tmp/settings-redesign/shots/r3fix/ (never committed).
  */
 import { devices, test, expect, type Page, type Request } from '@playwright/test'
-import { backToApps, openPluginDetail } from './apps-store-helpers'
+import { backToApps, openApps, openPluginDetail } from './apps-store-helpers'
 import { backToDevices } from './devices-ways-helpers'
 import { dropFakes } from './route-teardown'
 
@@ -24,13 +24,6 @@ async function openSettings(page: Page) {
   await page.goto('/settings')
   await expect(page.locator('.settings-nav')).toBeVisible({ timeout: 30_000 })
   await expect(page.locator('.settings-pane .settings-section').first()).toBeVisible({ timeout: 30_000 })
-}
-
-/** Plugins moved to the Apps page: the Settings nav's Plugins row is a link there now. */
-async function openApps(page: Page) {
-  await page.getByTestId(NAV('plugin-store')).click()
-  await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 20_000 })
-  await expect(page.locator('#plugin-store')).toBeVisible({ timeout: 20_000 })
 }
 
 async function clickNav(page: Page, id: string) {
@@ -414,9 +407,9 @@ test('evidence: 660px panes keep controls inside their groups with no horizontal
   await recordWrites(page)
   await openSettings(page)
   await narrowWithSidebar(page)
-  // Plugins is measured on the Apps page its nav row now opens, with the same rule.
-  for (const id of ['general', 'tasks', 'sessions', 'remote-hosts', 'advanced', 'plugin-store']) {
-    const apps = id === 'plugin-store'
+  // Plugins is measured on the Apps page the side bar opens, with the same rule.
+  for (const id of ['general', 'tasks', 'sessions', 'remote-hosts', 'advanced', 'apps']) {
+    const apps = id === 'apps'
     if (apps) await openApps(page)
     else await clickNav(page, id)
     await page.waitForTimeout(600)
