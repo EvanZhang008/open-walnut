@@ -133,14 +133,25 @@ jobs:
           # Four workers oversubscribe the 4-core runner and have produced
           # different unrelated timeout failures across successive runs, so
           # each leg stays serial for deterministic signal. Serial, the whole
-          # tier took 25 minutes and was the longest blocking job, so it runs
-          # in three legs; each must report every file of its slice.
-          - tier: quick 1/3
-            cmd: bun run test:baseline -- --maxWorkers=1 --shard=1/3
-          - tier: quick 2/3
-            cmd: bun run test:baseline -- --maxWorkers=1 --shard=2/3
-          - tier: quick 3/3
-            cmd: bun run test:baseline -- --maxWorkers=1 --shard=3/3
+          # tier is about 70 runner-minutes (2026-11-08: three legs took 20 to
+          # 28 minutes each and held the push gate for 28), so it runs in eight
+          # legs of about 9 minutes; each must report every file of its slice.
+          - tier: quick 1/8
+            cmd: bun run test:baseline -- --maxWorkers=1 --shard=1/8
+          - tier: quick 2/8
+            cmd: bun run test:baseline -- --maxWorkers=1 --shard=2/8
+          - tier: quick 3/8
+            cmd: bun run test:baseline -- --maxWorkers=1 --shard=3/8
+          - tier: quick 4/8
+            cmd: bun run test:baseline -- --maxWorkers=1 --shard=4/8
+          - tier: quick 5/8
+            cmd: bun run test:baseline -- --maxWorkers=1 --shard=5/8
+          - tier: quick 6/8
+            cmd: bun run test:baseline -- --maxWorkers=1 --shard=6/8
+          - tier: quick 7/8
+            cmd: bun run test:baseline -- --maxWorkers=1 --shard=7/8
+          - tier: quick 8/8
+            cmd: bun run test:baseline -- --maxWorkers=1 --shard=8/8
           # 533 tests, ~10s, baseline ZERO. Plain pass/fail is correct here.
           - tier: frontend
             cmd: bun run test:frontend:ci

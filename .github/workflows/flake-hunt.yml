@@ -52,9 +52,14 @@ jobs:
       max-parallel: 3
       matrix:
         include:
-          - { leg: quick 1/3, build: plugins, config: vitest.quick.config.ts, baseline: tests/setup/known-failures.json, min: '1400', args: --maxWorkers=1 --shard=1/3 }
-          - { leg: quick 2/3, build: plugins, config: vitest.quick.config.ts, baseline: tests/setup/known-failures.json, min: '1400', args: --maxWorkers=1 --shard=2/3 }
-          - { leg: quick 3/3, build: plugins, config: vitest.quick.config.ts, baseline: tests/setup/known-failures.json, min: '1400', args: --maxWorkers=1 --shard=3/3 }
+          - { leg: quick 1/8, build: plugins, config: vitest.quick.config.ts, baseline: tests/setup/known-failures.json, min: '1400', args: --maxWorkers=1 --shard=1/8 }
+          - { leg: quick 2/8, build: plugins, config: vitest.quick.config.ts, baseline: tests/setup/known-failures.json, min: '1400', args: --maxWorkers=1 --shard=2/8 }
+          - { leg: quick 3/8, build: plugins, config: vitest.quick.config.ts, baseline: tests/setup/known-failures.json, min: '1400', args: --maxWorkers=1 --shard=3/8 }
+          - { leg: quick 4/8, build: plugins, config: vitest.quick.config.ts, baseline: tests/setup/known-failures.json, min: '1400', args: --maxWorkers=1 --shard=4/8 }
+          - { leg: quick 5/8, build: plugins, config: vitest.quick.config.ts, baseline: tests/setup/known-failures.json, min: '1400', args: --maxWorkers=1 --shard=5/8 }
+          - { leg: quick 6/8, build: plugins, config: vitest.quick.config.ts, baseline: tests/setup/known-failures.json, min: '1400', args: --maxWorkers=1 --shard=6/8 }
+          - { leg: quick 7/8, build: plugins, config: vitest.quick.config.ts, baseline: tests/setup/known-failures.json, min: '1400', args: --maxWorkers=1 --shard=7/8 }
+          - { leg: quick 8/8, build: plugins, config: vitest.quick.config.ts, baseline: tests/setup/known-failures.json, min: '1400', args: --maxWorkers=1 --shard=8/8 }
           - { leg: e2e 1/4, build: all, config: vitest.e2e.config.ts, baseline: tests/setup/known-failures-e2e.json, min: '120', args: --maxWorkers=1 --retry=2 --shard=1/4 }
           - { leg: e2e 2/4, build: all, config: vitest.e2e.config.ts, baseline: tests/setup/known-failures-e2e.json, min: '120', args: --maxWorkers=1 --retry=2 --shard=2/4 }
           - { leg: e2e 3/4, build: all, config: vitest.e2e.config.ts, baseline: tests/setup/known-failures-e2e.json, min: '120', args: --maxWorkers=1 --retry=2 --shard=3/4 }

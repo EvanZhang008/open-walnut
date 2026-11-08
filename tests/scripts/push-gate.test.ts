@@ -275,7 +275,7 @@ esac
   })
 
   it('decides from the tiers when the verdict job has not run: one failed tier refuses, every tier passed lets it through', () => {
-    const tiers = ['quick 1/3', 'quick 2/3', 'quick 3/3', 'frontend', 'browser specs']
+    const tiers = [...Array.from({ length: 8 }, (_, i) => `quick ${i + 1}/8`), 'frontend', 'browser specs']
     const ok = ghRepo({ statuses: tiers.map((t) => st(`walnut/push-gate (${t})`, 'success', 'passed')) })
     const tip = commit(ok.r, { 'a.txt': '1\n' }, 'one')
     const pass = gateRun(ok, tip)
@@ -407,7 +407,7 @@ cat ${JSON.stringify(path.join(dir, 'statuses.json'))}
     spawnSync('bash', [STATUS, ...args], { encoding: 'utf8', env: { ...env, ...extra } })
   const mine = (tier: string, state: string, url = 'https://github.com/acme/demo/actions/runs/77') =>
     ({ context: `walnut/push-gate (${tier})`, state, updated_at: '2026-11-04T00:00:00Z', target_url: url })
-  const five = ['quick 1/3', 'quick 2/3', 'quick 3/3', 'frontend', 'browser specs']
+  const five = [...Array.from({ length: 8 }, (_, i) => `quick ${i + 1}/8`), 'frontend', 'browser specs']
 
   it('writes a tier\'s outcome with test-baseline\'s verdict line as its description', () => {
     const s = stub([])
@@ -423,11 +423,11 @@ cat ${JSON.stringify(path.join(dir, 'statuses.json'))}
   it('passes the verdict only for every tier of this run passing and every job ending well', () => {
     const ok = stub(five.map((t) => mine(t, 'success')))
     run(ok.env, ['--verdict'], { NEEDS: 'success success' })
-    expect(fs.readFileSync(ok.posts, 'utf8')).toMatch(/state=success -f context=walnut\/push-gate -f description=all 5 tiers passed/)
+    expect(fs.readFileSync(ok.posts, 'utf8')).toMatch(/state=success -f context=walnut\/push-gate -f description=all 10 tiers passed/)
 
-    const other = stub([...five.slice(0, 4).map((t) => mine(t, 'success')), mine('browser specs', 'success', 'https://github.com/acme/demo/actions/runs/76')])
+    const other = stub([...five.slice(0, 9).map((t) => mine(t, 'success')), mine('browser specs', 'success', 'https://github.com/acme/demo/actions/runs/76')])
     run(other.env, ['--verdict'], { NEEDS: 'success success' })
-    expect(fs.readFileSync(other.posts, 'utf8')).toMatch(/state=failure .*4 of 5 tiers reported/)
+    expect(fs.readFileSync(other.posts, 'utf8')).toMatch(/state=failure .*9 of 10 tiers reported/)
 
     const job = stub(five.map((t) => mine(t, 'success')))
     run(job.env, ['--verdict'], { NEEDS: 'success failure' })

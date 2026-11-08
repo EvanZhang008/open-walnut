@@ -11,7 +11,7 @@
 #
 # Runs on a runner, with GH_TOKEN and GitHub's GITHUB_* variables.
 set -uo pipefail
-TIERS=5   # quick 1/3, 2/3, 3/3, frontend, browser specs
+TIERS=10  # quick 1/8 .. 8/8, frontend, browser specs
 repo=$GITHUB_REPOSITORY sha=$GITHUB_SHA
 url="$GITHUB_SERVER_URL/$repo/actions/runs/$GITHUB_RUN_ID"
 

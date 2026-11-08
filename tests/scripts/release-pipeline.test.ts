@@ -926,9 +926,9 @@ describe('ci.yml', () => {
     expect(job.steps.some((s) => s['continue-on-error'])).toBe(false)
   })
 
-  it('the quick tier blocks in three serial legs that cover it once', () => {
+  it('the quick tier blocks in eight serial legs that cover it once', () => {
     const legs = (doc.jobs.test!.strategy!.matrix.include as Array<{ tier: string; cmd: string }>).filter((l) => l.tier.startsWith('quick'))
-    expect(legs.map((l) => l.cmd)).toEqual([1, 2, 3].map((i) => `bun run test:baseline -- --maxWorkers=1 --shard=${i}/3`))
+    expect(legs.map((l) => l.cmd)).toEqual([1, 2, 3, 4, 5, 6, 7, 8].map((i) => `bun run test:baseline -- --maxWorkers=1 --shard=${i}/8`))
     expect(doc.jobs.test!.steps.some((s) => s['continue-on-error'])).toBe(false)
   })
 
