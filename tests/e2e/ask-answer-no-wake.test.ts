@@ -186,8 +186,8 @@ describe('the write itself keeps the check (review of c4abd775f)', () => {
 
 describe('a finished task', () => {
   it('is never reopened by an answer, even with its CLI alive', async () => {
-    const ask = 'Archive the old orchard dashboards?'
-    const t = await asking('Dashboards', ask, 'idle')
+    const ask = 'Archive the old orchard reports?'
+    const t = await asking('Reports', ask, 'idle')
     // Completed with its last status still asking (the sync never rewrites a COMPLETE row).
     await updateTaskRaw(t.id, { phase: 'COMPLETE' } as never, { source: 'test' })
     const r = await answer({ to: t.id, text: 'Keep them.' })
