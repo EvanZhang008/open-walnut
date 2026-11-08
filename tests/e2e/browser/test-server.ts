@@ -26,6 +26,7 @@ import { GIT_GLANCE_SESSION, gitGlanceDemoIdPair, gitGlanceJsonl, gitGlanceRecor
 import { WHALE_ANCHOR_SESSION, WHALE_CEILING_BYTES, WHALE_GAP_SESSION, WHALE_SESSION, whaleJsonl, whaleRecord, whaleTask } from './whale-history-fixture'
 import { fixtureHome, fixtureRealHome } from './fixture-home'
 import { buildCompareFixture, compareFixtureTask } from './compare-fixture'
+import { writeHealthMonitorSeed } from './health-monitor-fixture'
 
 // Set WALNUT_HOME to temp dir BEFORE importing server modules.
 // Ephemeral identity is argv-based (see IS_EPHEMERAL in src/constants.ts) — the
@@ -133,6 +134,8 @@ await fs.rm(tmpBase, { recursive: true, force: true })
 // plus, with PW_GIT_GLANCE_DEMO=1, a board of other git states for a person to look at.
 const gitGlanceRoot = writeGitGlanceRepo(tmpBase)
 const gitGlanceDemo = writeGitGlanceDemo(tmpBase, Date.now())
+// Settings > Walnut Health (health-monitor.spec.ts): a busy day of alarms, loaded at boot.
+writeHealthMonitorSeed(tmpBase, Date.now())
 // The daemon's sidecars and the ACP worker, built from this tree's source in about 2 s
 // (build-daemon.sh's sidecars-only mode) before any server module reads where they are,
 // and after the wipe of tmpBase just above.

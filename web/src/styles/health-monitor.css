@@ -1,0 +1,81 @@
+/* Settings > Walnut Health (HealthMonitorSection.tsx): an alarm list like CloudWatch's. */
+.health-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  font-size: 12px;
+  color: var(--fg-secondary);
+  margin: 0 0 10px;
+}
+.health-count { font-variant-numeric: tabular-nums; }
+.health-count-ALARM { color: var(--error); font-weight: 600; }
+.health-dim { color: var(--fg-muted); }
+.health-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  table-layout: fixed;
+}
+.health-table th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--fg-muted);
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.health-table th:nth-child(1) { width: 72px; }
+.health-table th:nth-child(3) { width: 96px; }
+.health-table th:nth-child(4) { width: 136px; }
+.health-table th:nth-child(5) { width: 30%; }
+.health-row { cursor: pointer; }
+.health-row td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+  color: var(--fg-secondary);
+}
+.health-row:hover td, .health-row.is-open td { background: var(--accent-subtle); }
+.health-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.health-pill {
+  display: inline-block;
+  min-width: 52px;
+  text-align: center;
+  border-radius: 5px;
+  padding: 1px 6px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--fg-muted);
+}
+.health-pill-ALARM { background: var(--error); }
+.health-pill-OK { background: var(--success); }
+.health-name { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.health-title { color: var(--fg); font-weight: 500; }
+.health-label {
+  color: var(--fg-muted);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.health-since { color: var(--fg-muted); font-size: 11px; }
+.health-value { color: var(--fg); }
+.health-did { overflow-wrap: anywhere; }
+.health-spark path { stroke: var(--fg-muted); }
+.health-spark-ALARM path { stroke: var(--error); }
+.health-spark-OK path { stroke: var(--success); }
+.health-spark-empty { color: var(--fg-muted); font-size: 11px; }
+.health-detail-row td { padding: 8px 12px 14px; border-bottom: 1px solid var(--border); background: var(--accent-subtle); }
+.health-detail { display: flex; flex-direction: column; gap: 6px; color: var(--fg-secondary); }
+.health-detail p { margin: 0; }
+.health-detail-desc { color: var(--fg); }
+.health-detail-sig code, .health-detail-sample { font-size: 11px; overflow-wrap: anywhere; }
+.health-detail-cond, .health-detail-by { color: var(--fg-muted); }
+.health-detail-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 4px 0; }
+.health-task-link { color: var(--accent-text); }
+.health-detail-h { margin: 6px 0 0; font-size: 12px; font-weight: 600; color: var(--fg); }
+.health-list { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 2px; }
+.health-when { color: var(--fg-muted); margin-right: 8px; }
+.health-failed { color: var(--warning); }

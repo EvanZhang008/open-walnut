@@ -2045,6 +2045,18 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     startStatusCheck({ ephemeral: IS_EPHEMERAL })
   }
 
+  // ── Walnut's own health alarms, CloudWatch style (src/core/health-monitor/), off the boot path.
+  if (bootPolicy('health-monitor')) {
+    void import('../core/health-monitor/index.js').then((m) => m.startHealthMonitor({
+      exitTraceFile: exitTraceFile(),
+      notify: (alarmId, title, body) => {
+        void publishErrorNotification({ title, body, dedupScope: `health:${alarmId}`, recoveryKey: `health:${alarmId}` })
+      },
+      recover: (alarmId) => { void publishRecovery([`health:${alarmId}`]) },
+      onChange: () => broadcastEvent('health-monitor:changed', {}),
+    })).catch((err) => log.web.warn('health monitor: not started', { error: err instanceof Error ? err.message : String(err) }))
+  }
+
   // ── Answers to the letters that ask for a task's commands on another host (src/core/hosts/exec-grants.ts).
   // ── Fleet secrets: each host that connects gets its copies brought in line (src/core/secrets/fleet-secrets.ts).
   if (bootPolicy('fleet-secrets')) {
@@ -2569,6 +2581,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/v1', quickInputV1Router)
   app.use('/api/v1', contentV1Router)
   app.use('/api/v1', orgV1Router)
+  app.use('/api/v1', (await import('./routes/health-monitor-v1.js')).healthMonitorV1Router)
   // Personal AI conversation management (additive, Wave 1): rename/delete/stop/
   // answer — A-class (the replica runs its own Personal AI).
   app.use('/api/v1', personalAiV1Router)
@@ -7134,6 +7147,7 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   void import('../core/sessions/brief-refresh.js').then((m) => m.stopBriefRefreshLooks()).catch(() => { /* never started */ })
   void import('../core/sessions/status-reconcile.js').then((m) => m.stopStatusReconcile()).catch(() => { /* never started */ })
   void import('../core/status-consistency.js').then((m) => m.stopStatusCheck()).catch(() => { /* never started */ })
+  void import('../core/health-monitor/index.js').then((m) => m.stopHealthMonitor()).catch(() => { /* never started */ })
   void import('../core/human-inbox/complete-archive.js').then((m) => m.stopCompleteArchive()).catch(() => { /* never started */ })
   void import('../core/routines/trigger-completion-pause.js').then((m) => m.stopTriggerCompletionPause()).catch(() => { /* never started */ })
   void import('../core/org/lead-waits.js').then((m) => m.stopLeadWaits()).catch(() => { /* never started */ })

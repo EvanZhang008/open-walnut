@@ -57,6 +57,20 @@ interface Series {
 
 const series = new Map<string, Series>();
 let droppedSeries = 0;
+
+/**
+ * Listeners that see every observation as it happens (the health monitor's
+ * per-minute buckets, src/core/health-monitor/collect.ts). Empty by default, so
+ * the hot path pays one length check. A tap must be as cheap as observe() itself.
+ */
+export type ObserveTap = (name: string, value: number, labels: Record<string, string> | undefined) => void;
+const taps: ObserveTap[] = [];
+
+/** Add a tap; returns its removal. */
+export function addObserveTap(tap: ObserveTap): () => void {
+  taps.push(tap);
+  return () => { const i = taps.indexOf(tap); if (i >= 0) taps.splice(i, 1); };
+}
 let flushTimer: ReturnType<typeof setInterval> | null = null;
 
 /** Canonical series key — label order must not create duplicate series. */
@@ -93,6 +107,7 @@ function getOrCreate(name: string, labels?: Record<string, string>): Series | nu
 export function observe(name: string, value: number, labels?: Record<string, string>): void {
   try {
     if (!Number.isFinite(value)) return;
+    if (taps.length > 0) for (const tap of taps) { try { tap(name, value, labels); } catch { /* a tap never breaks observe */ } }
     const s = getOrCreate(name, labels);
     if (!s) return;
     s.count++; s.sum += value;

@@ -29,6 +29,7 @@ import { TaskProvidersSection } from './sections/TaskProvidersSection'
 import { TasksSection } from './sections/TasksSection'
 import { TriageSection } from './sections/TriageSection'
 import { UsageSection } from './sections/UsageSection'
+import { HealthMonitorSection } from './sections/HealthMonitorSection'
 import type { SettingsGlyphName } from './settings-icons'
 import type { SettingsPaneGate } from './settings-pane-gates'
 
@@ -353,6 +354,13 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
     render: ({ config, saveSection }) => <ProvidersSection config={config} onSave={saveSection} />,
   },
   // Diagnostics: read-mostly panels about what Walnut did, not knobs.
+  {
+    owner: 'walnut', id: 'walnut-health', label: 'Walnut Health', title: 'Walnut Health', group: 'diagnostics',
+    icon: 'heart-pulse', tint: '#FF2D55',
+    description: 'Alarms on Walnut\'s own health, like CloudWatch: what is high, what Walnut fixed itself, and its fix tasks.',
+    keywords: ['health', 'alarm', 'monitor', 'metrics', 'cloudwatch', 'errors', 'disk', 'stall', 'anomaly'],
+    render: () => <HealthMonitorSection />,
+  },
   {
     owner: 'walnut', id: 'usage', label: 'Usage & Costs', title: 'Usage & Costs', group: 'diagnostics',
     icon: 'bar-chart', tint: '#34C759',

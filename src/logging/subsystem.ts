@@ -119,6 +119,27 @@ function forwardToErrorSink(
   }
 }
 
+// ── Warn/error tap ──
+// The health monitor counts every warn and error line by its kind
+// (src/core/health-monitor/signature.ts). On globalThis for the same reason as
+// the sink above: a plugin bundle has its own copy of this module.
+const LEVEL_TAP_KEY = Symbol.for('open-walnut.logLevelTap');
+export type LogLevelTap = (level: 'warn' | 'error' | 'fatal', subsystem: string, message: string) => void;
+type GlobalWithTap = { [LEVEL_TAP_KEY]?: LogLevelTap | null };
+let inLevelTap = false;
+
+/** Install (or clear, with null) the warn/error tap. */
+export function setLogLevelTap(tap: LogLevelTap | null): void {
+  (globalThis as GlobalWithTap)[LEVEL_TAP_KEY] = tap;
+}
+
+function forwardToLevelTap(level: 'warn' | 'error' | 'fatal', subsystem: string, message: string): void {
+  const tap = (globalThis as GlobalWithTap)[LEVEL_TAP_KEY];
+  if (!tap || inLevelTap) return;
+  inLevelTap = true;
+  try { tap(level, subsystem, message); } catch { /* the tap must never break logging */ } finally { inLevelTap = false; }
+}
+
 function emit(
   level: LogLevel,
   subsystem: string,
@@ -147,6 +168,7 @@ function emit(
   if (level === 'error' || level === 'fatal') {
     forwardToErrorSink(subsystem, message, meta);
   }
+  if (level === 'warn' || level === 'error' || level === 'fatal') forwardToLevelTap(level, subsystem, message);
 
   // 3. Terminal (stderr) — colored human-readable
   try {

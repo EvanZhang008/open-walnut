@@ -93,6 +93,7 @@ const OLD_TRUTH: Record<BootJob, (cloud: boolean) => boolean> = {
   'board-kanban-watch': leaderOnly,
   'board-reminders': leaderOnly,
   'wait-until': leaderOnly,
+  'health-monitor': leaderOnly, // new: the health monitor watches the Mac's server and files its fix tasks there
   'user-status': leaderOnly,
   'title-reconciler': leaderOnly,
   'link-tags': leaderOnly, // new: link tags are written on the Mac

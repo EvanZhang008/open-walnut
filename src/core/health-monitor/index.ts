@@ -1,0 +1,235 @@
+/**
+ * Walnut's health monitor: start it, and read it the way the Health page and the
+ * `health_monitor` op do. See types.ts for the model and engine.ts for the clock.
+ *
+ * Runs on the leader (the primary). An isolated server (the test runner, an
+ * ephemeral child, a data home in a temp or task dir) evaluates the same alarms
+ * but takes no action: its tasks and disk are not the user's.
+ * WALNUT_HEALTH_ACTIONS=1 turns actions on there, =0 turns them off anywhere.
+ */
+
+import path from 'node:path'
+import { IS_EPHEMERAL, WALNUT_HOME } from '../../constants.js'
+import { log } from '../../logging/index.js'
+import { BUILTIN_ALARMS, builtinAlarm } from './alarms.js'
+import { MinuteCollector } from './collect.js'
+import { fillPattern, MINUTE_MS } from './evaluate.js'
+import { effectiveOverride, FIX_TASKS_PER_DAY, HealthMonitor, overrideHolds, type FixMode } from './engine.js'
+import { setGaugeSink } from './gauges.js'
+import { HealthStore } from './store.js'
+import type { AlarmDef, AlarmInstanceState, AlarmOverride, AlarmState } from './types.js'
+
+let running: HealthMonitor | null = null
+let actionsOn = false
+
+export function runningHealthMonitor(): HealthMonitor | null {
+  return running
+}
+
+/** Isolated servers act only when asked. */
+export async function healthActionsOn(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
+  if (env.WALNUT_HEALTH_ACTIONS === '1') return true
+  if (env.WALNUT_HEALTH_ACTIONS === '0') return false
+  const { semanticLaneDecision } = await import('../search/semantic-default.js')
+  const { WALNUT_SEARCH_V2_SEMANTIC: _drop, ...rest } = env
+  return semanticLaneDecision({ env: rest, isEphemeral: IS_EPHEMERAL, walnutHome: WALNUT_HOME }).reason === 'default'
+}
+
+export interface StartOptions {
+  exitTraceFile: string | null
+  notify: (alarmId: string, title: string, body: string) => void
+  recover: (alarmId: string) => void
+  onChange: () => void
+}
+
+export async function startHealthMonitor(opts: StartOptions): Promise<HealthMonitor> {
+  if (running) return running
+  actionsOn = await healthActionsOn()
+  const dataDir = WALNUT_HOME
+  const { memoryPressureLevel } = await import('../memory-pressure.js')
+  const collector = new MinuteCollector({
+    dataDir,
+    memoryPressure: memoryPressureLevel,
+    sshCertExpiring: async () => {
+      const { runningCertExpiryAlert } = await import('../hosts/ssh-cert-expiry-alert.js')
+      const alert = runningCertExpiryAlert()
+      if (!alert) return null
+      const ep = await alert.episode()
+      return !!ep && !ep.signInWorks
+    },
+  })
+  const fixMode = async (): Promise<FixMode> => {
+    if (!actionsOn) return 'off'
+    const { getConfig } = await import('../config-manager.js')
+    const v = (await getConfig()).health_monitor?.fix_tasks
+    return v === 'start' || v === 'off' ? v : 'record'
+  }
+  const { openFixTask, isTaskOpen } = await import('./fix-task.js')
+  const { runAutoFix } = await import('./auto-fix.js')
+  const monitor = new HealthMonitor({
+    store: new HealthStore(path.join(dataDir, 'local', 'health-monitor')),
+    collector,
+    pid: process.pid,
+    exitTraceFile: opts.exitTraceFile,
+    fixMode,
+    autoFix: async (id) => (actionsOn ? runAutoFix(id, dataDir) : { ok: false, detail: 'actions are off on an isolated server' }),
+    openFixTask,
+    isTaskOpen,
+    notify: (id, title, body) => { if (actionsOn) opts.notify(id, title, body) },
+    recover: (id) => { if (actionsOn) opts.recover(id) },
+    onChange: debounce(opts.onChange, 1_000),
+  })
+  await monitor.start()
+  setGaugeSink((k, v) => monitor.setGauge(k, v))
+  running = monitor
+  log.obs.info('health monitor started', { actions: actionsOn, alarms: BUILTIN_ALARMS.length })
+  return monitor
+}
+
+export function stopHealthMonitor(): void {
+  setGaugeSink(null)
+  running?.stop()
+  running = null
+}
+
+// ── the read model ──
+
+export interface AlarmRow {
+  id: string
+  defId: string
+  title: string
+  description: string
+  state: AlarmState
+  since: number
+  value: number | null
+  unit: string
+  /** The condition in words, with this alarm's threshold. */
+  condition: string
+  labels?: Record<string, string>
+  signature?: string
+  /** One point per 15 minutes over the last 24 hours, oldest first (null: no data). */
+  spark: Array<number | null>
+  actions: AlarmInstanceState['actions']
+  fixTaskId?: string
+  override?: AlarmOverride
+  /** Actions are held (muted or disabled). */
+  held: boolean
+}
+
+export interface HealthView {
+  checkedAt: number
+  actions: boolean
+  counts: Record<AlarmState, number>
+  fixesToday: number
+  fixesPerDay: number
+  alarms: AlarmRow[]
+}
+
+const ORDER: Record<AlarmState, number> = { ALARM: 0, INSUFFICIENT_DATA: 1, OK: 2 }
+
+function defOf(inst: AlarmInstanceState): AlarmDef | null {
+  if (inst.defId === 'log.spike' || inst.defId === 'log.chronic') return null
+  return builtinAlarm(inst.defId) ?? null
+}
+
+function conditionText(def: AlarmDef, threshold: number): string {
+  const per = def.periodMin >= 60 ? `${def.periodMin / 60} h` : `${def.periodMin} min`
+  const also = def.also ? ` and ${def.also.metric} ${def.also.comparison} ${def.also.threshold}` : ''
+  return `${def.stat} ${def.comparison} ${threshold} ${def.unit}${also}, ${def.datapointsToAlarm} of ${def.evaluationPeriods} periods of ${per}`.replace(/\s+,/, ',')
+}
+
+function sparkOf(m: HealthMonitor, inst: AlarmInstanceState, def: AlarmDef | null): Array<number | null> {
+  if (inst.signature) {
+    return m.signatureHours(inst.signature, 24)
+  }
+  if (!def) return []
+  const key = inst.labels ? fillPattern(def.metric, inst.labels) : def.metric
+  const end = Math.floor(m.now() / MINUTE_MS) * MINUTE_MS
+  const step = 15 * MINUTE_MS
+  const buckets: Array<number[] | null> = Array.from({ length: 96 }, () => null)
+  for (const r of m.minuteRows) {
+    const i = Math.floor((r.t - (end - 96 * step)) / step)
+    if (i < 0 || i >= 96) continue
+    const v = r.v[key]
+    const val = typeof v === 'number' ? v : def.kind === 'counter' ? 0 : null
+    if (val === null) continue
+    ;(buckets[i] ??= []).push(val)
+  }
+  return buckets.map((b) => {
+    if (!b) return null
+    if (def.kind === 'counter') return b.reduce((a, c) => a + c, 0)
+    return Math.max(...b)
+  })
+}
+
+export function alarmRow(m: HealthMonitor, inst: AlarmInstanceState): AlarmRow {
+  const def = defOf(inst)
+  const override = effectiveOverride(m.overrides, inst.id, inst.defId)
+  const held = overrideHolds(override, m.now())
+  const isSpike = inst.defId === 'log.spike'
+  return {
+    id: inst.id,
+    defId: inst.defId,
+    title: def?.title ?? (isSpike ? 'Log line far above its normal' : 'Log line high every day'),
+    description: def?.description ?? (isSpike
+      ? 'This kind of warn/error line came at least 5 times as often as on the same hour of the last week.'
+      : 'This kind of line came very often on each of the last 3 days (200 a day for an error, 1,000 for a warning).'),
+    state: inst.state,
+    since: inst.since,
+    value: inst.value,
+    unit: def?.unit ?? (isSpike ? 'per hour' : 'per day'),
+    condition: def ? conditionText(def, override?.threshold ?? def.threshold) : (isSpike ? '5 times normal and at least 30 in an hour' : 'every day of the last 3 over the daily limit'),
+    ...(inst.labels ? { labels: inst.labels } : {}),
+    ...(inst.signature ? { signature: inst.signature } : {}),
+    spark: sparkOf(m, inst, def),
+    actions: inst.actions,
+    ...(inst.fixTaskId ? { fixTaskId: inst.fixTaskId } : {}),
+    ...(override ? { override } : {}),
+    held,
+  }
+}
+
+export function healthView(m: HealthMonitor): HealthView {
+  const rows = Object.values(m.alarms).map((a) => alarmRow(m, a))
+  rows.sort((a, b) => ORDER[a.state] - ORDER[b.state] || b.since - a.since)
+  const counts: Record<AlarmState, number> = { OK: 0, ALARM: 0, INSUFFICIENT_DATA: 0 }
+  for (const r of rows) counts[r.state]++
+  return { checkedAt: m.now(), actions: actionsOn, counts, fixesToday: m.fixesToday, fixesPerDay: FIX_TASKS_PER_DAY, alarms: rows }
+}
+
+export interface AlarmDetail extends AlarmRow {
+  history: AlarmInstanceState['history']
+  /** The last 24 hours minute by minute (built-in alarms), or by hour for 7 days (log alarms). */
+  series: Array<{ t: number; v: number | null }>
+  sample?: string
+}
+
+export function alarmDetail(m: HealthMonitor, id: string): AlarmDetail | null {
+  const inst = m.alarms[id]
+  if (!inst) return null
+  const def = defOf(inst)
+  let series: AlarmDetail['series'] = []
+  if (inst.signature) {
+    const counts = m.signatureHours(inst.signature, 24 * 7)
+    const h = Math.floor(m.now() / 3_600_000) * 3_600_000
+    series = counts.map((v, i) => ({ t: h - (counts.length - 1 - i) * 3_600_000, v }))
+  } else if (def) {
+    const key = inst.labels ? fillPattern(def.metric, inst.labels) : def.metric
+    series = m.minuteRows.map((r) => ({ t: r.t, v: typeof r.v[key] === 'number' ? r.v[key] : def.kind === 'counter' ? 0 : null }))
+  }
+  return {
+    ...alarmRow(m, inst),
+    history: inst.history,
+    series,
+    ...(inst.signature && m.signatureSample(inst.signature) ? { sample: m.signatureSample(inst.signature) } : {}),
+  }
+}
+
+function debounce(fn: () => void, ms: number): () => void {
+  let t: ReturnType<typeof setTimeout> | null = null
+  return () => {
+    if (t) return
+    t = setTimeout(() => { t = null; fn() }, ms)
+    t.unref?.()
+  }
+}

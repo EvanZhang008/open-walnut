@@ -65,7 +65,8 @@ function errorSection(n: NotificationRecord): string[] {
   return lines;
 }
 
-function whereSection(ctx: FixBriefingContext): string[] {
+/** Where the repair session stands (the checkout, the running build, the logs); shared with the health monitor's fix tasks. */
+export function whereSection(ctx: FixBriefingContext): string[] {
   const logs = `Structured logs: ${ctx.logDir}/open-walnut-<date>.log (UTC timestamps in a local-date filename, so an early-morning event may be in the previous day's file).`;
   if (ctx.source.kind === 'running') {
     return [

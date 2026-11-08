@@ -72,6 +72,7 @@ import { sessionCronMetadata } from '../core/sessions/session-cron-metadata.js'
 import { classifyHostConnectError, CONNECT_IN_FLIGHT_PHASES, credentialRetryDelayMs, PROXY_LOGIN_EVIDENCE } from '../core/sessions/host-connect-hint.js'
 import { isSshTransportFailure, markedUploadCommand, extractMarkedOutput, runRemoteSh, runSshBounded, shq, userShellPathScript } from './remote-sh.js'
 import { chunkListScript, parseChunkList, parseUploadPrecheck, remoteSha256Command, resumeFailureCap, sha256Hex, uploadPrecheckScript } from './upload-resume.js'
+import { count as metricsCount } from '../core/observability/metrics.js'
 import {
   PROD_REMOTE_DAEMON_DIR, buildDaemonDirProbeScript, chooseDaemonDir, daemonDirEnv, parseDaemonDirProbe,
   buildLiveDaemonScanScript, liveDaemonScanFoundNone, parseLiveDaemonScan, productionDaemonDirs, type DaemonDirChoice,
@@ -6229,6 +6230,8 @@ export class DaemonConnection {
     log.session.info('DaemonConnection: connection lost, scheduling reconnect', {
       host: this.hostKey, delayMs: DaemonConnection.RECONNECT_DELAY_MS,
     })
+    // The health monitor's "host link keeps dropping" alarm (core/health-monitor/alarms.ts).
+    metricsCount('host.link.lost', 1, { host: this.hostKey })
 
     // Schedule reconnect with exponential backoff (2s → 4s → 8s → … → 60s max), forever
     this.scheduleReconnect(DaemonConnection.RECONNECT_DELAY_MS)

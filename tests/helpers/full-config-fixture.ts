@@ -65,6 +65,7 @@ export function fullConfigFixture(): Record<string, unknown> {
     ssh_login_files: ['/Users/marina/.ssh/id_planted'],
     ssh_login_hint: 'run the planted login command on this Mac',
     ssh_cert_letter: true,
+    health_monitor: { fix_tasks: 'record' },
     session_limits: { devbox: 4 },
     placement_weights: { local: 25, devbox: 100 },
     external_session_import: { auto_complete_after_days: 7, excluded_cwds: { devbox: ['/Users/marina/scratch'] } },

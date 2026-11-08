@@ -1657,6 +1657,11 @@ export interface Config {
    *  (core/hosts/ssh-cert-expiry-alert.ts). The sign-in letter for a refused login still goes out.
    *  Unset or true: Walnut warns a few hours ahead. */
   ssh_cert_letter?: boolean;
+  /** The health monitor (core/health-monitor/): what an alarm that needs code work does.
+   *  `record` (default): it files one "fix Walnut" task with the evidence, no session runs;
+   *  `start`: it also starts that task's session (one AI run per alarm episode, at most
+   *  5 new ones a day); `off`: it only shows on the Health page. */
+  health_monitor?: { fix_tasks?: 'record' | 'start' | 'off' };
   /** Per-host maximum concurrent CLI session limits.
    *  'local' key = sessions without a host.
    *  Other keys = host aliases from config.hosts (e.g. 'devbox', 'nas-server').

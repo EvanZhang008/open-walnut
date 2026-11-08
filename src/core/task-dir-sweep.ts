@@ -242,15 +242,21 @@ export async function sweepTaskDirsOnce(deps?: {
   return results
 }
 
+let sweepInFlight: Promise<SweepRow[]> | null = null
+
+/** One round now, joined by every caller while it runs (the timers below, the health monitor's disk fix). */
+export function sweepTaskDirsNow(): Promise<SweepRow[]> {
+  sweepInFlight ??= sweepTaskDirsOnce().finally(() => { sweepInFlight = null })
+  return sweepInFlight
+}
+
 export function startTaskDirSweep(): { stop: () => void } {
   let stopped = false
-  let running = false
   let lastRun = 0
   const run = (): void => {
-    if (stopped || running) return
-    running = true
+    if (stopped || sweepInFlight) return
     lastRun = Date.now()
-    void sweepTaskDirsOnce().catch(() => { /* next round */ }).finally(() => { running = false })
+    void sweepTaskDirsNow().catch(() => { /* next round */ })
   }
   const first = setTimeout(run, FIRST_SWEEP_MS)
   first.unref?.()

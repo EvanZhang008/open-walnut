@@ -144,10 +144,19 @@ let timer: ReturnType<typeof setInterval> | null = null;
 let startedAt = 0;
 
 /** One pass: re-derive what is Walnut's to fix, and tell a park on nothing to its task. Exported for tests. */
+/** The mismatches Walnut re-derived on the previous pass, by kind and task. */
+let lastResynced = new Set<string>();
+
 export async function runStatusCheck(nowMs = Date.now(), opts: { send?: boolean } = {}): Promise<StatusMismatch[]> {
   let found: StatusMismatch[] = [];
   try {
     found = await checkStatuses(nowMs);
+    // The health monitor's gauge: mismatches the previous pass already re-derived and that came back,
+    // so its own fix did not hold (a first sighting is fixed below and is no alarm).
+    const resyncedNow = new Set(found.filter((m) => m.kind !== 'parked-on-nothing').map((m) => `${m.kind}:${m.taskId}`));
+    const { reportGauge } = await import('./health-monitor/gauges.js');
+    reportGauge('status.mismatches', [...resyncedNow].filter((k) => lastResynced.has(k)).length);
+    lastResynced = resyncedNow;
     if (!found.length) return found;
     log.task.warn('status check: mismatches', { count: found.length, mismatches: found.map((m) => `${m.kind}:${m.taskId}`) });
     const resync = new Set(found.filter((m) => m.kind !== 'parked-on-nothing').map((m) => m.taskId));

@@ -107,6 +107,7 @@ export const CONFIG_COPY_DROPPED: Readonly<Record<string, string>> = Object.free
   ssh_login_files: 'ssh files on the Mac',
   ssh_login_hint: 'the ssh sign-in letter is sent on the Mac',
   ssh_cert_letter: 'the ssh certificate letter is sent on the Mac',
+  health_monitor: 'the health monitor runs on the Mac, which files its fix tasks',
   triage: 'inbox triage runs on the Mac',
   placement_weights: 'placement by load decides on the Mac',
   backup: 'backup targets of the Mac',

@@ -31,6 +31,7 @@ import { isMainAgentTask } from './org/main-stays-active.js'
 import { memoryPressureShedding } from './memory-pressure.js'
 import { ENDED_SESSION_IDLE_TIMEOUT_MS, isEndedSessionCli } from './sessions/ended-session-clis.js'
 import { transcriptLastActivityMs } from './transcript-last-activity.js'
+import { reportGauge } from './health-monitor/gauges.js'
 
 /** Best effort: an unreadable task is not the main agent's. */
 async function isMainAgentTaskId(taskId: string): Promise<boolean> {
@@ -460,6 +461,8 @@ export class SessionHealthMonitor {
     // message writes refresh the file mtime.
     if (ctx.overBudget()) return
     const hungKilledIds = await this.checkHungSessions(sessions, updateSessionRecord, ctx)
+    // The health monitor's gauge: sessions that look hung right now (core/health-monitor/alarms.ts).
+    reportGauge('session.hung', hungKilledIds.size)
     endPhase('hungSessions')
 
     // Idle timeout — kill sessions with stale outputFile mtime past the configured threshold.

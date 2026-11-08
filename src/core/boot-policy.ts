@@ -120,6 +120,7 @@ export const BOOT_POLICY = [
   { job: 'board-kanban-watch', leader: true, replica: false, why: 'board facts are written on the Mac' },
   { job: 'board-reminders', leader: true, replica: false, why: 'the reminders clock runs on the Mac' },
   { job: 'wait-until', leader: true, replica: false, why: 'the wait_until clock runs on the Mac' },
+  { job: 'health-monitor', leader: true, replica: false, why: 'the health monitor watches the Mac\'s server and files its fix tasks there' },
   { job: 'user-status', leader: true, replica: false, why: 'task statuses are written on the Mac' },
   { job: 'host-exec-grants', leader: true, replica: false, why: 'grants for commands on other hosts are kept on the Mac' },
   { job: 'fleet-secrets', leader: true, replica: false, why: 'the Mac holds the secrets and sends each host its copies' },
