@@ -25,7 +25,9 @@ describe('plugin SessionView', () => {
     const body = functionBody(fs.readFileSync(VIEWS, 'utf8'), 'SessionView')
     const panel = body.slice(body.indexOf('<SessionPanel'), body.indexOf('/>', body.indexOf('<SessionPanel')))
     expect(panel).toMatch(/\n\s*embedded\n/)
-    expect(panel).toMatch(/onClose=\{\(\) => onClose\(\)\}/)
+    // Close still reaches the plugin, through a callback that keeps the panel's memo
+    // (tests/web/plugin-session-view-stable.test.ts).
+    expect(panel).toMatch(/onClose=\{close\}/)
   })
 
   it('embedded is what keeps the crash fallback away from the column layout', () => {

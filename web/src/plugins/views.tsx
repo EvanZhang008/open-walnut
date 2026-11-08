@@ -10,7 +10,7 @@ import { PluginSettingsForm } from '@/components/settings/PluginSettingsForm'
 import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic'
 import { ContentActionButtons } from '@/components/content/ContentActionButtons'
 import type { ContentItem } from '@/utils/content-actions'
-import type { RefObject } from 'react'
+import { useCallback, useRef, type RefObject } from 'react'
 import type {
   AskObjectViewProps,
   ChatViewProps,
@@ -38,6 +38,9 @@ function NoteView() {
   return <NotesPage />
 }
 
+/** One function for every render, so a plugin page's re-renders never re-render its terminal. */
+const noop = () => undefined
+
 function TerminalView({ sessionId, label, host }: TerminalViewProps) {
   return (
     <div className="plugin-terminal-view">
@@ -46,7 +49,7 @@ function TerminalView({ sessionId, label, host }: TerminalViewProps) {
         label={label}
         host={host}
         embedded
-        onClose={() => undefined}
+        onClose={noop}
       />
     </div>
   )
@@ -70,6 +73,15 @@ export function createPluginViews(pluginId: string): PluginViews {
   // Walnut keeps the panel's view and full screen for the plugin's page, by itself: the
   // plugin passes nothing for it (panel-view.ts).
   function SessionView({ sessionId, onClose, locked, onToggleLock }: SessionViewProps) {
+    // The panel is memo'd and a plugin re-renders its page often (an editor on every keystroke, a
+    // clock every second), passing fresh callbacks each time. Hand the panel callbacks that never
+    // change and call the plugin's latest ones, so those renders stop at the panel: a new closure
+    // per render re-rendered the whole session panel, about 0.3 MB of garbage a keystroke
+    // (2026-11-08, the Interview Practice page's memory growth).
+    const latest = useRef({ onClose, onToggleLock })
+    latest.current = { onClose, onToggleLock }
+    const close = useCallback(() => latest.current.onClose(), [])
+    const toggleLock = useCallback(() => latest.current.onToggleLock?.(), [])
     return (
       <div className="plugin-session-view">
         {/* A plugin App hosts this panel inside its own screen, never as a home column. Without
@@ -78,9 +90,9 @@ export function createPluginViews(pluginId: string): PluginViews {
           sessionId={sessionId}
           viewPlace={`plugin:${pluginId}`}
           embedded
-          onClose={() => onClose()}
+          onClose={close}
           locked={locked}
-          onToggleLock={onToggleLock ? () => onToggleLock() : undefined}
+          onToggleLock={onToggleLock ? toggleLock : undefined}
         />
       </div>
     )
