@@ -14,6 +14,7 @@ import { devices, test, expect, type APIRequestContext, type Page } from '@playw
 import path from 'node:path'
 import { openSessionsSection } from './engine-settings-helpers'
 import { routeCosts } from './usage-costs-fixture'
+import { isolateUiPrefs } from './todo-panel-helpers'
 
 if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.describe.configure({ mode: 'serial' })
@@ -48,6 +49,9 @@ function engines(project: string | null) {
   return { range: { start: null, end: null }, rows, tasks, taskCount: 75, projects: [{ project: 'Walnut', tasks: 40 }, { project: 'Walnut Idea', tasks: 20 }],
     split: { on: true, entries: [{ key: 'claude', label: 'Claude Code · Claude', weight: 1 }, { key: 'codex', label: 'Codex · GPT', weight: 1 }] } }
 }
+
+// Opening Settings opens the sidebar, a synced layout pref: keep it to this spec (browser-spec-ratchets).
+test.beforeEach(async ({ page }) => { await isolateUiPrefs(page) })
 
 async function openUsage(page: Page) {
   await page.goto('/')
