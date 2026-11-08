@@ -18,7 +18,7 @@ import {
   fileMessage, isOpen, lastUserAt, newThreadId, newThreadMessageId, reactedSince, sortedThreads,
   type FileMessageInput, type ThreadCloseHow, type ThreadsFile, type ThreadState, type ThreadVia, type ThreadWriter,
 } from './threads-model.js';
-import { exchangesOf, pinnedNow, snoozedNow, summaryOwed } from './thread-view.js';
+import { exchangesOf, pinnedNow, snoozedNow, summaryBehindHim, summaryOwed } from './thread-view.js';
 
 /** Open threads named to the node with each message (the newest). */
 export const HINT_OPEN_MAX = 12;
@@ -224,23 +224,27 @@ export function threadsTidyOf(file: ThreadsFile, nowMs = Date.now()): ThreadsTid
     const untitled = !t.titled && nowMs - Date.parse(t.createdAt) > UNTITLED_MS;
     // A pending thread is the node's call that nothing on it is news: only a stand-in title is asked about.
     if (t.state === 'pending') why = untitled ? 'untitled' : null;
+    // A summary he wrote past comes first (2026-11-08, the user: "Walnut needs to make sure it doesn't happen").
+    else if (summaryBehindHim(t)) why = 'summary';
     else if (!reviewed && waiting.some((x) => reactedSince(file, (x.answer ?? x.opener)!.at))) why = 'reacted';
     else if (untitled) why = 'untitled';
     else if (t.state === 'new' && xs.some((x) => x.answer)) why = 'state';
     // A card he sees always leads with the node's summary (thread-view.ts summaryOwed; 2026-11-08).
     else if (summaryOwed(t)) why = 'summary';
     if (why) items.push({ id: t.id, title: t.title, state: t.state, why });
-    if (items.length >= TIDY_MAX) break;
   }
   if (!items.length) return null;
+  // Summaries first (stable within each group), then the cap.
+  items.sort((a, b) => Number(b.why === 'summary') - Number(a.why === 'summary'));
+  items.splice(TIDY_MAX);
   return { items, key: items.map((i) => `${i.id}:${i.why}`).join(',') };
 }
 
 const TIDY_WHY: Record<TidyItem['why'], string> = {
+  summary: 'summary missing or older than his message or your answer: rewrite it',
   reacted: 'did he react to your answer?',
   untitled: 'needs a title',
   state: 'answered, still new',
-  summary: 'no summary, or one older than your answer: write it',
 };
 
 /** What the `threads-tidy` reminder says: one line, the threads by why (the rules are in the prompt). */

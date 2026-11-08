@@ -12,13 +12,14 @@
  */
 import { describe, it, expect } from 'vitest'
 import {
-  NEEDS_QUIET_MS, OVERDUE_SHOW_MS, REPLY_AT_SINCE, REPLY_DUE_MS, SUMMARY_COVERS_MS, cardView, overdueLine, shownToHim, summaryAt, threadOverdue,
+  NEEDS_QUIET_MS, OVERDUE_SHOW_MS, REPLY_DUE_MS, SUMMARY_COVERS_MS, cardView, overdueLine, shownToHim, summaryAt, threadOverdue,
   type ViewMessage, type ViewThread,
 } from '../../../src/core/org/thread-view.js'
-import { THREAD_STATES, emptyThreads, fileMessage, normalizeThreads, openThread, setAnswers, updateThread, type OrgThread } from '../../../src/core/org/threads-model.js'
+import { THREAD_STATES, emptyThreads, fileMessage, normalizeThreads, openThread, setAnswers, stampLegacyReplyAt, updateThread, type OrgThread } from '../../../src/core/org/threads-model.js'
 import { RETRY_MS, threadRecheckBody, threadRecheckMessage, threadsDueRecheck } from '../../../src/core/org/thread-recheck.js'
 import { threadsTidyOf } from '../../../src/core/org/thread-capture.js'
-import { STAND_IN_MAX, plainLine, summaryOwed } from '../../../src/core/org/thread-view.js'
+import { STAND_IN_MAX, plainLine, summaryBehindHim, summaryOwed } from '../../../src/core/org/thread-view.js'
+import { staleSummaries, staleSummaryReason } from '../../../src/core/org/thread-summary-stop.js'
 import { classifyInjectedLine } from '../../../src/core/task-wait-resume.js'
 
 const T0 = Date.parse('2026-11-07T14:00:00Z')
@@ -85,14 +86,21 @@ describe('2. a newer summary replaces the older answer on the card', () => {
     const answered = [msg('tm-1', 0, { atMs: 20_000, text: 'Both went to the team.' })]
     expect(cardView(base({ updatedAt: iso(2 * MIN), messages: answered })).unread).toEqual([])
     expect(cardView(base({ updatedAt: iso(10_000), messages: answered })).unread).toHaveLength(1)
-    // Review 2026-11-07: after replyAt exists, a legacy summary, then his follow-up, the node's new
-    // result, and a state-only write: the result stays on the card.
-    const after = Date.parse(REPLY_AT_SINCE) - T0
-    const late = [msg('tm-1', after + 2 * MIN, { atMs: after + 3 * MIN, text: 'The new result.' })]
-    expect(cardView(base({ updatedAt: iso(after + 4 * MIN), messages: late })).unread.map((x) => x.answer?.text)).toEqual(['The new result.'])
-    const answered2 = late
+    // Review 2026-11-07: a legacy summary, then his follow-up, the node's new result, and a
+    // state-only write, each through the store (which stamps replyAt first): the result stays.
+    let f = { version: 1 as const, taskId: 'vp', threads: [thread({ id: 'th-1', state: 'answered', reply: 'Old words', by: 'task:vp', updatedAt: iso(MIN),
+      messages: [msg('tm-1', 0, { atMs: 20_000, text: 'Old answer.' })] }) as never] }
+    const write = (fn: (cur: typeof f) => typeof f) => { f = fn(stampLegacyReplyAt(f as never) as never) }
+    write((cur) => fileMessage(cur as never, { text: 'and now?', via: 'follow-up', threadId: 'th-1', at: iso(2 * MIN) }).file as never)
+    write((cur) => setAnswers(cur as never, new Map([[(cur.threads[0] as any).messages[1].id, { text: 'The new result.', at: iso(3 * MIN) }]])).file as never)
+    write((cur) => updateThread(cur as never, 'th-1', { state: 'answered' }, 'task:vp', iso(4 * MIN)).file as never)
+    const late = f.threads[0] as never
+    expect(cardView(late).unread.map((x) => x.answer?.text)).toEqual(['The new result.'])
+    expect(summaryBehindHim(late)).toBe(true)
     // Once the node writes a summary again, replyAt says when.
-    expect(cardView(base({ updatedAt: iso(after + 5 * MIN), replyAt: iso(after + 5 * MIN), messages: answered2 })).unread).toEqual([])
+    write((cur) => updateThread(cur as never, 'th-1', { reply: 'New words.' }, 'task:vp', iso(5 * MIN)).file as never)
+    expect(cardView(f.threads[0] as never).unread).toEqual([])
+    expect(summaryBehindHim(f.threads[0] as never)).toBe(false)
     // His own last change is no summary time.
     expect(summaryAt(base({ by: 'human', updatedAt: iso(2 * MIN) }))).toBeUndefined()
   })
@@ -235,7 +243,8 @@ describe('4. every card leads with a summary line', () => {
   it('the node is asked for a missing or outdated summary (threads-tidy), never for one that covers its answers', () => {
     expect(summaryOwed(shapes['answer, no summary'])).toBe(true)
     expect(summaryOwed(shapes['node summary'])).toBe(false)
-    expect(summaryOwed(shapes['only his message'])).toBe(false)
+    // A thread he wrote in owes a summary even before the node said anything (2026-11-08).
+    expect(summaryOwed(shapes['only his message'])).toBe(true)
     const outdated = thread({ state: 'answered', reply: 'Old', replyAt: iso(MIN), messages: [msg('tm-1', 2 * MIN, { atMs: 3 * MIN, text: 'New result' })] })
     expect(summaryOwed(outdated)).toBe(true)
     let f = fileMessage(emptyThreads('vp'), { text: 'can it skip the app?', via: 'chat', at: iso(0) }).file
@@ -244,5 +253,64 @@ describe('4. every card leads with a summary line', () => {
     expect(threadsTidyOf(f, T0 + MIN)?.items).toEqual([expect.objectContaining({ id: f.threads[0].id, why: 'summary' })])
     f = updateThread(f, f.threads[0].id, { reply: 'Yes: a big Send button, or press again.' }, 'task:vp', iso(30_000)).file
     expect(threadsTidyOf(f, T0 + MIN)).toBeNull()
+  })
+})
+
+describe('5. his message outdates the summary until the node rewrites it', () => {
+  // 2026-11-08, the user, twice: "I already replied, but this thread is not updated at all"; "Walnut
+  // needs to make sure it doesn't happen".
+  const answered = () => {
+    let f = fileMessage(emptyThreads('vp'), { text: 'is it you?', via: 'chat', at: iso(0) }).file
+    const id = f.threads[0].id
+    f = updateThread(f, id, { title: 'Is it you?', reply: 'Is it you on the home PC?', state: 'needs', user_kind: 'user_info', user_kind_why: 'Only he knows who sits at that PC' }, 'task:vp', iso(MIN)).file
+    return { f, id }
+  }
+
+  it('his message in the thread marks the summary stale on the card and in the reminder, first', () => {
+    const { f, id } = answered()
+    expect(summaryBehindHim(f.threads[0])).toBe(false)
+    const replied = fileMessage(f, { text: 'yes, it is me', via: 'follow-up', threadId: id, at: iso(2 * MIN) }).file
+    const t = replied.threads[0]
+    expect(summaryBehindHim(t)).toBe(true)
+    expect(cardView(t).summary).toMatchObject({ by: 'node', stale: true })
+    // Listed first in the threads-tidy line, ahead of other reasons.
+    let other = openThread(replied, { title: 'A mail', text: 'Reply to the organizer', from: 'mail', state: 'answered' }, 'task:vp', iso(0)).file
+    other = fileMessage(other, { text: 'ok', via: 'chat', at: iso(3 * MIN) }).file
+    const tidy = threadsTidyOf(other, T0 + 4 * MIN)!
+    const whys = tidy.items.map((i) => i.why)
+    expect(tidy.items.filter((i) => i.why === 'summary').map((i) => i.id)).toContain(id)
+    // Every stale summary is listed ahead of any other reason.
+    expect(whys.slice(0, whys.filter((w) => w === 'summary').length).every((w) => w === 'summary')).toBe(true)
+    expect(staleSummaries(other.threads, T0 + 4 * MIN).map((x) => x.id)).toContain(id)
+    expect(staleSummaryReason([t])).toContain(`${id} "Is it you?": its summary is older than his message`)
+    // The node rewrites it: no longer stale, off the reminder and the stop check.
+    const fixed = updateThread(replied, id, { reply: 'It is you: the team starts the read-only check now.', state: 'answered' }, 'task:vp', iso(3 * MIN)).file
+    expect(summaryBehindHim(fixed.threads[0])).toBe(false)
+    expect(cardView(fixed.threads[0]).summary.stale).toBeUndefined()
+    expect(staleSummaries(fixed.threads, T0 + 4 * MIN)).toEqual([])
+  })
+
+  it('a state-only write does not make it current; pending, snoozed and closed threads are not held', () => {
+    const { f, id } = answered()
+    let g = fileMessage(f, { text: 'yes', via: 'follow-up', threadId: id, at: iso(2 * MIN) }).file
+    g = updateThread(g, id, { state: 'answered' }, 'task:vp', iso(3 * MIN)).file
+    expect(summaryBehindHim(g.threads[0])).toBe(true)
+    expect(staleSummaries(updateThread(g, id, { state: 'pending' }, 'task:vp', iso(4 * MIN)).file.threads, T0 + 5 * MIN)).toEqual([])
+    expect(staleSummaries(updateThread(g, id, { snooze: iso(60 * MIN) }, 'human', iso(4 * MIN)).file.threads, T0 + 5 * MIN)).toEqual([])
+  })
+
+  it('a legacy summary he answered stays stale through a state-only write (review 2026-11-08)', () => {
+    // His reply was filed by an older build (no replyAt, he the last writer); the node then only sets a state.
+    let f = { version: 1 as const, taskId: 'vp', threads: [thread({ id: 'th-1', state: 'needs', reply: 'Is it you?', by: 'human', updatedAt: iso(2 * MIN),
+      messages: [msg('tm-1', 0, { atMs: MIN, text: 'Is it you?' }), { id: 'tm-2', at: iso(2 * MIN), text: 'Yes, it is me', via: 'follow-up' }] }) as never] }
+    expect(summaryBehindHim(f.threads[0] as never)).toBe(true)
+    f = updateThread(stampLegacyReplyAt(f as never), 'th-1', { state: 'answered' }, 'task:vp', iso(3 * MIN)).file as never
+    expect((f.threads[0] as any).replyAt).toBe(iso(MIN))
+    expect(summaryBehindHim(f.threads[0] as never)).toBe(true)
+    expect(cardView(f.threads[0] as never).summary).toMatchObject({ text: 'Is it you?', stale: true })
+    // The node was the last writer: its last change is the summary's time, once.
+    const nodeLast = stampLegacyReplyAt({ version: 1, taskId: 'vp', threads: [thread({ id: 'th-2', reply: 'Done.', by: 'task:vp', updatedAt: iso(4 * MIN) }) as never] } as never)
+    expect((nodeLast.threads[0] as any).replyAt).toBe(iso(4 * MIN))
+    expect(stampLegacyReplyAt(nodeLast)).toBe(nodeLast)
   })
 })

@@ -130,6 +130,8 @@ export interface SummaryLine {
   by: 'node' | 'walnut';
   /** Where Walnut's stand-in came from. */
   from?: 'answer' | 'opener' | 'ask' | 'none';
+  /** The node's summary predates his latest message (summaryBehindHim): the card says so until it is rewritten. */
+  stale?: boolean;
 }
 
 /** How much of an answer Walnut's stand-in line keeps: its first sentence of at least STAND_IN_MIN characters, at most STAND_IN_MAX. */
@@ -143,7 +145,7 @@ export function cardView<M extends ViewMessage>(t: ViewThread<M>, shared: Readon
   const unread = unreadOf(t, exchanges, shared);
   const waiting = exchanges.slice(lastSaid + 1).filter((x) => !x.answer && !x.opener);
   let summary: SummaryLine;
-  if (t.reply?.trim()) summary = { text: t.reply.trim(), by: 'node' };
+  if (t.reply?.trim()) summary = { text: t.reply.trim(), by: 'node', ...(summaryBehindHim(t) ? { stale: true } : {}) };
   else {
     // The newest of the node's own words on the thread, never one reply shared with another thread.
     const said = exchanges.filter((x) => (x.answer || x.opener) && !x.messages.some((m) => shared.has(m.id)));
@@ -189,6 +191,7 @@ export function plainLine(text: string): string {
  * `threads-tidy` reminder asks for it.
  */
 export function summaryOwed(t: ViewThread): boolean {
+  if (summaryBehindHim(t)) return true;
   const xs = exchangesOf(t);
   const said = xs.filter((x) => x.answer || x.opener);
   if (!said.length) return false;
@@ -198,6 +201,22 @@ export function summaryOwed(t: ViewThread): boolean {
   return said.some((x) => !!x.answer && x.answer.at > s && !supersededBySummary(t, x));
 }
 
+/**
+ * He wrote in the thread after its summary was written (2026-11-08, the user, on a card that kept
+ * the node's old summary after he had answered it: "I already replied, but this thread is not
+ * updated at all ... Walnut needs to make sure it doesn't happen"): the summary no longer says where
+ * it stands, whatever the node then said in its chat. A thread with no summary he wrote in owes one
+ * too. A summary written before replyAt existed gets its time stamped at the first write after
+ * (threads-model.ts stampLegacyReplyAt), so a state-only write never makes it current.
+ */
+export function summaryBehindHim(t: ViewThread): boolean {
+  const lastHis = t.messages.reduce((a, m) => (m.at > a ? m.at : a), '');
+  if (!lastHis) return false;
+  if (!t.reply?.trim()) return true;
+  const s = summaryAt(t);
+  return !s || s < lastHis;
+}
+
 const NONE: ReadonlySet<string> = new Set();
 
 /**
@@ -205,9 +224,6 @@ const NONE: ReadonlySet<string> = new Set();
  * summary's background: within this of the summary it was covered by it.
  */
 export const SUMMARY_COVERS_MS = 10 * 60_000;
-
-/** From this time on, every summary write stamps `replyAt` (a little after the build that added it shipped). */
-export const REPLY_AT_SINCE = '2026-11-08T06:00:00.000Z';
 
 /**
  * When the node last rewrote the thread's summary. A thread written before `replyAt` existed reads
@@ -233,12 +249,12 @@ export function supersededBySummary(t: ViewThread, x: Pick<ThreadExchange, 'mess
   // Every summary was written after the thread's first post.
   if (x.opener) return s >= x.opener.at;
   if (!x.answer) return false;
-  // A thread whose summary predates replyAt: the node's last change stands in, newer than the answer,
-  // and only for answers from before replyAt existed. A later answer on such a thread stays, since a
-  // state or title write after it proves nothing about the summary (review 2026-11-07); every
-  // summary written since stamps replyAt. Checked on the user's real threads: each answer this hides
-  // there is one the newer summary covers (his third card).
-  if (!t.replyAt) return x.answer.at < REPLY_AT_SINCE && s > x.answer.at;
+  // A thread no write has touched since replyAt existed: the node's last change stands in, newer
+  // than the answer. Any write stamps replyAt first (stampLegacyReplyAt), so an answer that came
+  // later is judged by the stamped time, never by a state or title write after it (review
+  // 2026-11-07). Checked on the user's real threads: each answer this hides there is one the newer
+  // summary covers (his third card).
+  if (!t.replyAt) return s > x.answer.at;
   const asked = x.messages[x.messages.length - 1]?.at ?? '';
   return s > asked && Date.parse(x.answer.at) - Date.parse(s) <= SUMMARY_COVERS_MS;
 }

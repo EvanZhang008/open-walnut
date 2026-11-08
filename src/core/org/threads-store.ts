@@ -15,7 +15,7 @@ import type { OrgThreadsChangedEvent } from '../event-types.js';
 import { isCompanion } from '../server-role.js';
 import { walnutLetterLanguage as letterLang } from '../human-inbox/walnut-letters/languages.js';
 import {
-  emptyThreads, enteredNeeds, fileMessage, markClosesTold, markRechecked, mergeThreads, normalizeThreads, openThread, patchHandsToUser, setAnswers, splitThreadMessage, sweepClosed, ThreadError, updateThread,
+  emptyThreads, enteredNeeds, fileMessage, markClosesTold, markRechecked, mergeThreads, normalizeThreads, openThread, patchHandsToUser, setAnswers, splitThreadMessage, stampLegacyReplyAt, sweepClosed, ThreadError, updateThread,
   type FileMessageInput, type FileMessageResult, type OpenThreadInput, type OrgThread, type ThreadAnswer, type ThreadPatch, type ThreadRecheck, type ThreadsFile, type ThreadWriter,
 } from './threads-model.js';
 
@@ -51,7 +51,8 @@ async function mutateThreads<R>(taskId: string, mutate: (cur: ThreadsFile) => { 
   let out: R | undefined;
   let entered: OrgThread[] = [];
   await updateJsonFile<unknown>(threadsFile(taskId), null, (raw) => {
-    const cur = normalizeThreads(raw, taskId);
+    // A summary from before replyAt gets its time before anything else moves (stampLegacyReplyAt).
+    const cur = stampLegacyReplyAt(normalizeThreads(raw, taskId));
     const res = mutate(cur);
     out = res.out;
     entered = enteredNeeds(cur, res.file);

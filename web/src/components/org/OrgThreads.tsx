@@ -370,7 +370,11 @@ function ThreadCard({ t, all, shared, tasks, onOpenTask, state, onFollowUp, name
       {follows && <p className="org-thread-follows">Asks again about “{follows.title}”</p>}
       {overdue && <p className="org-thread-overdue" data-testid="org-thread-overdue">{overdue}</p>}
       {card.summary.by === 'node'
-        ? <Markdown text={card.summary.text} className="org-thread-summary" testId="org-thread-reply" />
+        ? (<>
+          <Markdown text={card.summary.text} className="org-thread-summary" testId="org-thread-reply" />
+          {/* His message came after it: it says so until the node rewrites it (core/org/thread-view.ts summaryBehindHim). */}
+          {card.summary.stale && <span className="org-thread-stand-in-note" data-testid="org-thread-summary-stale">Written before your latest message; {name} has not updated it yet</span>}
+        </>)
         : (
           // No summary from the node yet: Walnut's own line, so the card never needs the conversation opened (2026-11-08).
           <div className="org-thread-summary is-stand-in" data-testid="org-thread-reply" data-by="walnut">

@@ -285,6 +285,32 @@ function normalizeThread(t: unknown): OrgThread | null {
 }
 
 /** A file read from disk, made safe to work on (an old or hand-edited one included). */
+/**
+ * A summary written before `replyAt` existed gets the best time Walnut can still tell, once, at the
+ * first write after (threads-store.ts mutateThreads, before the write itself): the node's last
+ * change when it made the last one, else the node's latest words before his last message, else the
+ * thread's start. Never later than the truth can be once he wrote after it, so a state-only write of
+ * the node afterwards never makes an old summary read current (review 2026-11-08: "Is it you?" stayed
+ * on the card after he answered, once the node set a state). Pure; the same file when none lacks it.
+ */
+export function stampLegacyReplyAt(file: ThreadsFile): ThreadsFile {
+  let changed = false;
+  const threads = file.threads.map((t) => {
+    if (t.replyAt || !t.reply?.trim()) return t;
+    changed = true;
+    return { ...t, replyAt: legacySummaryAt(t) };
+  });
+  return changed ? { ...file, threads } : file;
+}
+
+function legacySummaryAt(t: OrgThread): string {
+  if (t.by && t.by !== 'human' && t.updatedAt) return t.updatedAt;
+  const lastHis = t.messages.reduce((a, m) => (m.at > a ? m.at : a), '');
+  const said = [t.opener?.at, ...t.messages.map((m) => m.answer?.at)]
+    .filter((at): at is string => !!at && (!lastHis || at < lastHis));
+  return said.reduce((a, at) => (at > a ? at : a), '') || t.createdAt;
+}
+
 export function normalizeThreads(raw: unknown, taskId: string): ThreadsFile {
   const f = raw && typeof raw === 'object' ? raw as Partial<ThreadsFile> : {};
   const threads = Array.isArray(f.threads) ? f.threads.map(normalizeThread).filter((t): t is OrgThread => !!t) : [];

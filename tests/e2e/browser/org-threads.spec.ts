@@ -429,7 +429,7 @@ test('his view shows only threads with something for him; his reply sends one ou
   const at = (min: number) => new Date(t0 + min * 60_000).toISOString()
   const one = { at: at(12), text: 'Found who pushed it: **the tracker sync**. The source button is in progress too.' }
   const thread = (id: string, title: string, state: string, more: Record<string, unknown>, messages: unknown[]) => ({
-    id, title, titled: true, state, createdAt: at(0), updatedAt: at(14), messages, ...more,
+    id, title, titled: true, state, createdAt: at(0), updatedAt: at(14), by: 'task:node', messages, ...more,
   })
   const file = {
     version: 1, taskId: node, threads: [
@@ -452,6 +452,11 @@ test('his view shows only threads with something for him; his reply sends one ou
       // A summary written after the answer replaces it on the card (2026-11-07, the user's third card).
       thread('th-0000000000a8', 'Summary after the answer', 'answered', { reply: 'iOS allows it; the next build ships both.', replyAt: at(14), by: 'task:node' },
         [{ id: 'tm-0000000000a8', at: at(12), text: 'can it skip opening the app?', via: 'chat', answer: { at: at(13), text: 'Both went to the action button team.' } }]),
+      // His later message outdated the summary, and the node set a state without rewriting it
+      // (2026-11-08, the user: "I already replied, but this thread is not updated at all").
+      thread('th-0000000000a9', 'Summary before his reply', 'answered', { reply: 'Is it you on the home PC?', replyAt: at(5), by: 'task:node' },
+        [{ id: 'tm-0000000000a9', at: at(4), text: 'who signed in on the home PC?', via: 'chat', answer: { at: at(5), text: 'Is it you?' } },
+          { id: 'tm-0000000000b9', at: at(6), text: 'yes, it is me', via: 'follow-up', answer: { at: at(7), text: 'Noted, starting the check.' } }]),
     ],
   }
   const dir = `${walnutHome}/org/threads`
@@ -471,8 +476,11 @@ test('his view shows only threads with something for him; his reply sends one ou
 
   // Shown: needs, answered, and the one left with no reply too long. Out of sight: the pending one,
   // the working one with only the node's chat answer, and the one he just wrote in.
-  await expect.poll(shown).toEqual(['th-0000000000a2', 'th-0000000000a3', 'th-0000000000a4', 'th-0000000000a7', 'th-0000000000a8'])
+  await expect.poll(shown).toEqual(['th-0000000000a2', 'th-0000000000a3', 'th-0000000000a4', 'th-0000000000a7', 'th-0000000000a8', 'th-0000000000a9'])
   await expect(page.getByTestId('org-threads-hidden')).toHaveText(/^3 in progress, nothing for you/)
+  // A summary older than his latest message says so on the card until the node rewrites it.
+  await expect(card(page, 'th-0000000000a9').getByTestId('org-thread-summary-stale')).toHaveText(/^Written before your latest message; .+ has not updated it yet$/)
+  for (const id of ['th-0000000000a2', 'th-0000000000a3', 'th-0000000000a8']) await expect(card(page, id).getByTestId('org-thread-summary-stale')).toHaveCount(0)
   await expect(card(page, 'th-0000000000a7').getByTestId('org-thread-overdue')).toHaveText(/^No reply from .+ · last activity .+ ago$/)
   // Every card his view shows leads with a summary line (2026-11-08: "no summary at all ... I should
   // not need to open it"): the node's, else Walnut's own, saying so.
@@ -530,6 +538,9 @@ test('his view shows only threads with something for him; his reply sends one ou
     const res = await request.patch(`/api/v1/tasks/${node}/threads/${id}`, { data })
     expect(res.ok(), await res.text()).toBe(true)
   }
+  await patch('th-0000000000a9', { reply: 'It is you: the read-only check starts now.' })
+  await expect(card(page, 'th-0000000000a9').getByTestId('org-thread-reply')).toContainText('the read-only check starts now')
+  await expect(card(page, 'th-0000000000a9').getByTestId('org-thread-summary-stale')).toHaveCount(0)
   await patch('th-0000000000a1', { reply: 'Built; it is live' })
   await expect(open.locator('[data-thread-id="th-0000000000a1"]')).toBeVisible()
   await expect(card(page, 'th-0000000000a1').getByTestId('org-thread-state')).toHaveText('Answered')
@@ -541,7 +552,7 @@ test('his view shows only threads with something for him; his reply sends one ou
   // A reload reads the same: the state is the file's.
   await page.reload()
   await expect(detail.getByTestId('org-top')).toHaveAttribute('data-view', 'threads')
-  await expect.poll(shown).toEqual(['th-0000000000a1', 'th-0000000000a2', 'th-0000000000a4', 'th-0000000000a6', 'th-0000000000a8'])
+  await expect.poll(shown).toEqual(['th-0000000000a1', 'th-0000000000a2', 'th-0000000000a4', 'th-0000000000a6', 'th-0000000000a8', 'th-0000000000a9'])
   await expect(page.getByTestId('org-threads-hidden')).toHaveText(/^3 in progress/)
 })
 

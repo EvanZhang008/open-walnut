@@ -3610,14 +3610,18 @@ apiV1Router.get('/me/open', async (req: Request, res: Response, next: NextFuncti
       const { askUnansweredAtStop } = await import('../../core/sessions/ask-unanswered.js')
       // And the user's messages in the task's own chat it has owed a while (user-asks.ts).
       const { owedAtStop } = await import('../../core/sessions/user-asks.js')
-      const [requests, asks, owed] = await Promise.all([
+      // And, for Main or a lead, a Thread whose summary his latest message outdated (org/thread-summary-stop.ts).
+      const { staleSummariesAtStop } = await import('../../core/org/thread-summary-stop.js')
+      const [requests, asks, owed, summaries] = await Promise.all([
         unansweredAtStop(sid),
         askUnansweredAtStop(sid, { asked: req.query.asked, answered: req.query.answered }),
         owedAtStop(sid),
+        staleSummariesAtStop(sid),
       ])
-      const reason = [requests?.reason, asks?.reason, owed?.reason].filter(Boolean).join('\n\n')
+      const reason = [requests?.reason, asks?.reason, owed?.reason, summaries?.reason].filter(Boolean).join('\n\n')
       res.json({ stop: reason ? {
         reason, ...(requests ? { requests: requests.requests } : {}), ...(asks ? { asks: asks.asks } : {}), ...(owed ? { owedUser: owed.asks } : {}),
+        ...(summaries ? { threads: summaries.threads } : {}),
       } : null })
       return
     }

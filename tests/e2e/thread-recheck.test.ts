@@ -8,7 +8,8 @@
  * thread shows to him through the real route once it stays overdue, and a pending one never does;
  * the lead's own answer on the thread starts a new stretch and takes it off the list; a summary
  * stamps `replyAt` and replaces the older answer on the card; nothing for a team or a session the
- * user stopped, nor while the org is off.
+ * user stopped, nor while the org is off. And a message of his after a thread's summary holds the
+ * lead's turn end (the Stop hook) until it rewrites the summary.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'node:fs/promises';
@@ -71,8 +72,11 @@ describe('a thread with no reply for too long', () => {
     expect(sent).toHaveLength(1);
     expect(sent[0].message).toContain(late);
     expect(sent[0].message).toContain('has no reply on this thread');
-    expect(sent[0].message).not.toContain(fresh);
-    expect(sent[0].message).not.toContain(handed);
+    // The note itself names only the overdue thread (a threads-tidy hint riding it may ask for the
+    // fresh one's summary: that is its own line).
+    const note = sent[0].message.split('<system-reminder>')[0];
+    expect(note).not.toContain(fresh);
+    expect(note).not.toContain(handed);
     const marked = (await readThreads(lead.id)).threads.find((t) => t.id === late)!;
     expect(marked.recheck).toMatchObject({ since: marked.messages[0].at, why: 'reply' });
     // It went in: no longer marked as on its way.
@@ -133,3 +137,68 @@ describe('a thread with no reply for too long', () => {
     }
   });
 });
+
+describe('his message outdates a thread summary', () => {
+  // 2026-11-08, the user: "I already replied, but this thread is not updated at all"; "Walnut needs to
+  // make sure it doesn't happen". The lead's Stop hook names the thread until it rewrites the summary.
+  const stopHook = async (lead: Lead) => {
+    const res = await fetch(`${root}/api/v1/me/open?hook=stop`, { headers: { 'x-walnut-caller-sid': lead.sid } })
+    return ((await res.json()) as { stop: { reason?: string; threads?: string[] } | null }).stop
+  }
+
+  it('holds the turn end with the thread named, shows the card stale, and lets go once rewritten', async () => {
+    const { resetSummaryNudges } = await import('../../src/core/org/thread-summary-stop.js')
+    resetSummaryNudges()
+    const lead = await newLead()
+    const id = (await fileThreadMessage(lead.id, { text: 'who is on the home PC?', via: 'chat', at: ago(20) })).thread.id
+    await run(lead, 'thread_update', { id, title: 'Home PC sign-in', reply: 'Is it you on the home PC?', state: 'answered' })
+    expect(await stopHook(lead)).toBeNull()
+
+    await fileThreadMessage(lead.id, { text: 'yes, it is me', via: 'follow-up', threadId: id, at: new Date().toISOString() })
+    const held = await stopHook(lead)
+    expect(held?.threads).toEqual([id])
+    expect(held?.reason).toContain(`${id} "Home PC sign-in": its summary is older than his message`)
+    const t = (await readThreads(lead.id)).threads.find((x) => x.id === id)!
+    expect(cardView(t).summary).toMatchObject({ by: 'node', stale: true })
+
+    // A state alone does not count as a rewrite.
+    await run(lead, 'thread_update', { id, state: 'working' })
+    expect((await stopHook(lead))?.threads).toEqual([id])
+    // Asked twice for one message of his at most: never an endless loop.
+    expect(await stopHook(lead)).toBeNull()
+
+    resetSummaryNudges()
+    await run(lead, 'thread_update', { id, reply: 'It is you: the read-only check starts now.', state: 'answered' })
+    expect(await stopHook(lead)).toBeNull()
+    expect(cardView((await readThreads(lead.id)).threads.find((x) => x.id === id)!).summary.stale).toBeUndefined()
+  })
+
+  it('a summary written before replyAt existed stays stale through a state-only write (review 2026-11-08)', async () => {
+    const { resetSummaryNudges } = await import('../../src/core/org/thread-summary-stop.js')
+    resetSummaryNudges()
+    const lead = await newLead()
+    // As an older build left it: a summary with no replyAt, then his answer filed as the last write.
+    const legacy = { version: 1, taskId: lead.id, threads: [{
+      id: 'th-00000000aea1', title: 'Is it you', titled: true, state: 'needs', reply: 'Is it you on the home PC?',
+      createdAt: ago(30), updatedAt: ago(10), by: 'human',
+      messages: [
+        { id: 'tm-00000000aea1', at: ago(30), text: 'who is on the home PC?', via: 'chat', answer: { at: ago(29), text: 'Is it you?' } },
+        { id: 'tm-00000000aea2', at: ago(10), text: 'yes, it is me', via: 'follow-up' },
+      ],
+    }] }
+    await fs.mkdir(`${WALNUT_HOME}/org/threads`, { recursive: true })
+    await fs.writeFile(`${WALNUT_HOME}/org/threads/${lead.id}.json`, JSON.stringify(legacy))
+    await run(lead, 'thread_update', { id: 'th-00000000aea1', state: 'answered' })
+    expect((await stopHook(lead))?.threads).toEqual(['th-00000000aea1'])
+    const t = (await readThreads(lead.id)).threads[0]
+    expect(t.replyAt).toBe(legacy.threads[0].messages[0].answer!.at)
+    expect(cardView(t).summary).toMatchObject({ stale: true })
+  })
+
+  it('a worker is never held for threads', async () => {
+    const worker = (await addTask({ title: 'Worker', project: 'RcWorker', source: 'local' } as never)).task
+    await createSessionRecord('trc-worker', worker.id, 'RcWorker')
+    const res = await fetch(`${root}/api/v1/me/open?hook=stop`, { headers: { 'x-walnut-caller-sid': 'trc-worker' } })
+    expect(((await res.json()) as { stop: unknown }).stop).toBeNull()
+  })
+})

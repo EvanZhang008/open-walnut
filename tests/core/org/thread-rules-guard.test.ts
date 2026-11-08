@@ -68,11 +68,14 @@ describe('every place a node reads it carries it', () => {
 
   it('the cleanup reminder, a built-in hint on a schedule, names each thread and why in one line', () => {
     let f = fileMessage(emptyThreads('lead-1'), { text: 'what is the small model?', via: 'chat', at: at(0) }).file
+    f = updateThread(f, f.threads[0].id, { reply: 'The fast one, in the local config.' }, 'task:lead-1', at(1)).file
     f = setAnswers(f, new Map([[f.threads[0].messages[0].id, { text: 'The fast one.', at: at(1) }]])).file
     f = fileMessage(f, { text: 'ok, another thing', via: 'chat', at: at(2) }).file
     const tidy = threadsTidyOf(f, Date.parse(at(3)))
     expect(tidy?.items.map((i) => i.why)).toContain('reacted')
-    expect(threadsTidyText(tidy!)).toBe(`threads to tidy: ${f.threads[0].id} (did he react to your answer?).`)
+    // The new thread he just wrote has no summary yet: named first (2026-11-08).
+    const fresh = f.threads.find((t) => t.messages[0]?.text === 'ok, another thing')!
+    expect(threadsTidyText(tidy!)).toBe(`threads to tidy: ${fresh.id} (summary missing or older than his message or your answer: rewrite it); ${f.threads[0].id} (did he react to your answer?).`)
     const spec = findHint(null, 'threads-tidy')
     expect(spec?.enabled).toBe(true)
     expect(spec?.triggers).toContain('every_n_turns')
@@ -97,6 +100,7 @@ describe('his view shows only what has something for him', () => {
     expect(THREADS_PENDING_RULE).toMatch(/is overdue: Walnut reminds you, then shows it to him as having no reply/)
     expect(THREADS_SUMMARY_RULE).toContain('a summary you write replaces your earlier answers on the card')
     expect(THREADS_SUMMARY_RULE).toContain('Every thread you answer gets its summary in that same turn')
+    expect(THREADS_SUMMARY_RULE).toContain('A message of his in a thread outdates its summary: Walnut marks it so on his card and holds your turn end until you rewrite it')
     expect(THREADS_PENDING_RULE).toMatch(/one he just wrote in \(his message makes it working\)/)
     expect(THREADS_PENDING_RULE).toContain('A new summary written without a state is news and shows it')
     expect(THREADS_PENDING_RULE).toContain('Never write a summary that only says who took it')
