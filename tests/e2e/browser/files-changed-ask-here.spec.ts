@@ -575,7 +575,14 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
     test('Changed: a split diff: the new side and the left copy of an unchanged line are asked about; a removed line only quoted', async ({ page, request }) => {
       const panel = await openSession(page)
       const diff = await openChanged(panel, GO_FILE)
+      // Split needs a diff pane two code columns wide (856fd6db5): beside the
+      // chat at 1400px the pane is about 580px, so Split reads unified and says
+      // so. Hide the chat, as the tag asks, and the same diff splits.
       await diff.getByRole('button', { name: 'Split', exact: true }).click()
+      const tooNarrow = diff.getByText('unified: too narrow to split')
+      await expect(tooNarrow).toBeVisible({ timeout: 10_000 })
+      await panel.getByRole('button', { name: 'Hide chat', exact: true }).click()
+      await expect(tooNarrow).toHaveCount(0)
       await expect(diff.locator('.diff-split').first()).toBeVisible({ timeout: 10_000 })
 
       // The changed line's new side.
