@@ -213,7 +213,7 @@ describe('MODEL_CLI_MAP alias resolution: E2E', () => {
     await fs.writeFile(path.join(cwd, '.claude', 'settings.local.json'), JSON.stringify({ model: 'gpt-6.1-sol' }))
     const ws = await connectWs()
 
-    const resultPromise = waitForWsEvent(ws, 'session:result')
+    const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'cli-map-task-012' })
     const rpcRes = await sendWsRpc(ws, 'session:start', {
       taskId: 'cli-map-task-012', message: 'auto with a proxy default', project: 'Walnut', mode: 'bypass', cwd,
     })
@@ -234,7 +234,7 @@ describe('MODEL_CLI_MAP alias resolution: E2E', () => {
     await fs.writeFile(path.join(cwd, '.claude', 'settings.local.json'), JSON.stringify({ model: 'gpt-6.1-sol' }))
     const ws = await connectWs()
 
-    const resultPromise = waitForWsEvent(ws, 'session:result')
+    const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'cli-map-task-013' })
     const rpcRes = await sendWsRpc(ws, 'session:start', {
       taskId: 'cli-map-task-013', message: 'named with a proxy default', project: 'Walnut', mode: 'bypass', cwd, model: 'gpt-6-astra',
     })
