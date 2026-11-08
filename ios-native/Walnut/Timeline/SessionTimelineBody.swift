@@ -112,6 +112,10 @@ struct SessionTimelineBody: View {
                         if let message = store.messages.first(where: { $0.id == messageID }) {
                             store.discardFailed(message)
                         }
+                    case .removeFile(let messageID, let fileID):
+                        if let message = store.messages.first(where: { $0.id == messageID }) {
+                            Task { await store.removeFile(fileID, from: message) }
+                        }
                     case .loadEarlier:
                         Task { await store.loadEarlier() }
                     case .openActivity(let detail):
@@ -180,7 +184,12 @@ struct SessionTimelineBody: View {
                 .presentationDragIndicator(.visible)
         }
         .task { await WalnutAdditionsSetting.shared.refreshIfStale() }
+        // The sizes of the files the messages name, for their cards, from the
+        // session's host.
+        .task(id: sentFilePaths) { await SentFileSizes.shared.request(sentFilePaths, host: previewHost) }
     }
+
+    private var sentFilePaths: [String] { SentFileSizes.sentFilePaths(in: store.messages) }
 }
 
 struct SessionTimelineLoadingState: View {

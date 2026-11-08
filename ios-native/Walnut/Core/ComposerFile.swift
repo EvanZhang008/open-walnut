@@ -1,14 +1,15 @@
 import Foundation
 import CryptoKit
+import ImageIO
 import UniformTypeIdentifiers
 import PhotosUI
 import SwiftUI
 
-/// A file the person attached to a session message: a video from the photo
-/// library or anything from Files. Unlike a photo (`SelectedImage`, sent inline as
-/// a JPEG), its bytes are uploaded to the session's host in chunks before the
-/// message goes (`SessionFileUploader`), and the message names the saved paths
-/// (`ComposerFile.messageText`).
+/// A file the person attached to a message (a session's, the main chat's, or a
+/// new session's first): a video from the photo library or anything from Files.
+/// Unlike a photo (`SelectedImage`, sent inline as a JPEG), its bytes are uploaded
+/// in chunks before the message goes (`SessionFileUploader`, `UploadTarget`), and
+/// the message names the saved paths (`ComposerFile.messageText`).
 ///
 /// The bytes live in the app's own copy (`ComposerFileStore`), made at pick
 /// time: a Files URL is only readable inside its security scope and a picked
@@ -33,6 +34,9 @@ struct ComposerFile: Identifiable, Equatable, Hashable, Sendable {
     static let maxBytes: Int64 = 4 * 1024 * 1024 * 1024
     /// Files per message.
     static let maxFiles = 10
+    /// The cap as the person reads it: "4 GB". Counted the way the cap is (in
+    /// 1024s), so a limit of exactly 4 GiB does not read as "4.29 GB".
+    static var maxBytesLabel: String { "\(maxBytes >> 30) GB" }
 
     static func kind(for type: UTType?, name: String) -> Kind {
         let type = type ?? UTType(filenameExtension: (name as NSString).pathExtension)
@@ -101,6 +105,36 @@ struct ComposerFile: Identifiable, Equatable, Hashable, Sendable {
         let list = paths.map { "- \($0)" }.joined(separator: "\n")
         return "\(headerLine)\n\(list)\n\n\(text)"
     }
+
+    /// The header pictures go under: byte for byte the server's own for a
+    /// session's photos (session-send-v1.ts), so the server carries them to the
+    /// session's host the way it carries those (its picture lane), and the
+    /// timeline draws them as pictures.
+    static let imagesHeaderLine = "[Images attached \u{2014} use the Read tool to view them]"
+
+    /// `messageText`, with pictures first under their own header.
+    static func messageText(_ text: String, imagePaths: [String], paths: [String]) -> String {
+        let rest = messageText(text, paths: paths)
+        guard !imagePaths.isEmpty else { return rest }
+        let list = imagePaths.map { "- \($0)" }.joined(separator: "\n")
+        return "\(imagesHeaderLine)\n\(list)\n\n\(rest)"
+    }
+
+    /// What the server puts after a listed path whose file it could not copy to
+    /// the session's host: `- <path> (could not be copied to this host: <why>)`,
+    /// byte for byte its `SHIP_FAILED_NOTE` (outbound-uploads.ts).
+    static let copyFailedNote = " (could not be copied to this host: "
+
+    /// One `- ` line's path and, when the server noted one, why its file did not
+    /// reach the host. A path may hold parentheses: only the server's own note,
+    /// at the end of the line, is taken off.
+    static func sentLine(_ line: String) -> (path: String, copyFailure: String?) {
+        guard line.hasSuffix(")"), let note = line.range(of: copyFailedNote, options: .backwards) else {
+            return (line, nil)
+        }
+        let reason = line[note.upperBound...].dropLast()
+        return (String(line[..<note.lowerBound]), String(reason))
+    }
 }
 
 /// The app's copies of attached files, one folder per upload id under
@@ -119,7 +153,7 @@ enum ComposerFileStore {
         var errorDescription: String? {
             switch self {
             case .tooLarge(let size):
-                return "That file is \(ComposerFile.sizeLabel(size)); a file can be at most \(ComposerFile.sizeLabel(ComposerFile.maxBytes))."
+                return "That file is \(ComposerFile.sizeLabel(size)); a file can be at most \(ComposerFile.maxBytesLabel)."
             case .unreadable(let why):
                 return "That file couldn't be read (\(why))."
             }
@@ -139,13 +173,26 @@ enum ComposerFileStore {
             let size = try fileSize(source)
             if size > ComposerFile.maxBytes { throw ImportError.tooLarge(size) }
             let id = newUploadID()
-            let name = ComposerFile.safeName(rawName ?? source.lastPathComponent)
+            var name = ComposerFile.safeName(rawName ?? source.lastPathComponent)
+            var contentType = type
+            // An iPhone photo from Files is HEIC, which most agents and tools
+            // cannot open: it goes as a JPEG. One that does not decode goes as it is.
+            let sourceType = contentType ?? (try? source.resourceValues(forKeys: [.contentTypeKey]))?.contentType
+            let jpeg = isHEIC(type: sourceType, name: name) ? jpegData(fromHEIC: source) : nil
+            if jpeg != nil {
+                name = ComposerFile.safeName((name as NSString).deletingPathExtension + ".jpg")
+                contentType = .jpeg
+            }
             let dir = root.appendingPathComponent(id, isDirectory: true)
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             let dest = dir.appendingPathComponent(name)
             do {
+                if let jpeg {
+                    try jpeg.write(to: dest)
+                    if move { try? FileManager.default.removeItem(at: source) }
+                }
                 // A picked video is our own temporary copy already: moved, not copied twice.
-                if move { try FileManager.default.moveItem(at: source, to: dest) }
+                else if move { try FileManager.default.moveItem(at: source, to: dest) }
                 else { try FileManager.default.copyItem(at: source, to: dest) }
             } catch {
                 try? FileManager.default.removeItem(at: dir)
@@ -157,10 +204,62 @@ enum ComposerFileStore {
             var mutable = dir
             try? mutable.setResourceValues(values)
             let digest = try sha256(of: dest)
-            let resolvedType = type ?? (try? dest.resourceValues(forKeys: [.contentTypeKey]))?.contentType
+            let resolvedType = contentType ?? (try? dest.resourceValues(forKeys: [.contentTypeKey]))?.contentType
             return ComposerFile(id: id, name: name, size: try fileSize(dest), sha256: digest,
                                 kind: ComposerFile.kind(for: resolvedType, name: name), localURL: dest)
         }.value
+    }
+
+    /// Bytes the app made itself (a picked photo's JPEG) as an attached file.
+    static func importData(_ data: Data, name: String) async throws -> ComposerFile {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("made-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent(ComposerFile.safeName(name))
+        try data.write(to: url)
+        return try await importCopy(of: url, scoped: false, move: true)
+    }
+
+    /// HEIC or HEIF, by its type or, without one, its extension.
+    static func isHEIC(type: UTType?, name: String) -> Bool {
+        let ext = (name as NSString).pathExtension.lowercased()
+        if type == nil || type == .data || type == .item, ext == "heic" || ext == "heif" { return true }
+        guard let type else { return false }
+        return type.conforms(to: .heic) || type.conforms(to: .heif)
+    }
+
+    /// The longest side a HEIC becomes as a JPEG. A 48 MP shot decoded whole is
+    /// some 190 MB of pixels; 4096 keeps every detail an agent reads and fits.
+    static let maxHEICPixels = 4096
+
+    /// The picture as a JPEG, its longest side at most `maxHEICPixels` (a smaller
+    /// one keeps its size), turned the way it is meant to be seen (the
+    /// orientation a camera records is applied to the pixels, since not every
+    /// reader honours the tag), at quality 0.9. nil when it does not decode.
+    static func jpegData(fromHEIC url: URL) -> Data? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              CGImageSourceGetCount(source) > 0,
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue,
+              let height = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue,
+              width > 0, height > 0
+        else { return nil }
+        // A "thumbnail" is decoded straight at its size, never the whole picture
+        // first, with the orientation applied: ImageIO's own way to scale and
+        // bake in the rotation at once.
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: min(max(width, height), maxHEICPixels),
+            kCGImageSourceShouldCacheImmediately: true,
+        ]
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+        let out = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(out as CFMutableData, UTType.jpeg.identifier as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: 0.9] as CFDictionary)
+        guard CGImageDestinationFinalize(destination), out.length > 0 else { return nil }
+        return out as Data
     }
 
     /// A video from the photo picker, as the file it is (no re-encode).

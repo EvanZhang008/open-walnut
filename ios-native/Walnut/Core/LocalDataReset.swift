@@ -148,6 +148,8 @@ enum LocalDataReset {
         // 1. In-memory state, through each owner's API.
         tasks?.eraseLocalState()
         chat?.eraseLocalState()
+        // Also with no chat store: kept file sends must never reach the next server.
+        ChatStore.eraseKeptFileSends()
         notes?.eraseLocalState()
         inbox?.eraseLocalState()
         filePreview?.closeDocked()

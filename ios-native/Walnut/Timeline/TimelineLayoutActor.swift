@@ -503,6 +503,7 @@ actor TimelineLayoutActor {
                 guard let held = m.uploadHeld?[file.id] else { return "n" }
                 return String(file.size == 0 ? 0 : Int(held * 100 / max(1, file.size)))
             }.joined(separator: ",")
+            if let failedHere = m.uploadFailedID { key += "|uf" + failedHere }
         }
         if expandedRowIDs.contains("\(namespace)#0") { key += "|x" }
         return key

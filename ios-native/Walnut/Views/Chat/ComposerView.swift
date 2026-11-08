@@ -158,8 +158,7 @@ struct ComposerBar: View {
     /// The send for a message with attached FILES (a video, a PDF, anything from
     /// Files), the same "are these words safe with you" answer as `onSend`.
     /// Present = this composer takes files: the `+` offers Files and the photo
-    /// picker offers videos too. Absent (the chat, the new-session draft) =
-    /// photos only, as before.
+    /// picker offers videos too. Absent = photos only.
     var onSendFiles: ((String, [SelectedImage], [ComposerFile]) async -> Bool)? = nil
     /// Returns **"are these words safe with you"**, which is deliberately NOT "did
     /// the send succeed". Stores here own no-loss: a dead round trip becomes a
@@ -259,6 +258,13 @@ struct ComposerBar: View {
     /// Not private: `attach` is the shared rule and its tests assert against the
     /// real ceiling rather than re-declaring a 5.
     static let maxImages = 5
+
+    /// The `+` menu's last line: the per-message caps, from the constants the
+    /// pickers enforce.
+    static func attachmentLimitsLine(acceptsFiles: Bool) -> String {
+        guard acceptsFiles else { return "Up to \(maxImages) photos per message." }
+        return "Up to \(ComposerFile.maxFiles) files, \(ComposerFile.maxBytesLabel) each, and \(maxImages) photos per message."
+    }
 
     /// The `+` menu's identifiers. Constants because both the view and the menu
     /// model below spell them, and `chat.photo` in particular is a contract with
@@ -1388,6 +1394,15 @@ struct ComposerBar: View {
                 if index > 0 { Divider() }
                 attachmentMenuRow(item)
             }
+            // What one message can carry, said before a pick is refused for it.
+            Divider()
+            Text(Self.attachmentLimitsLine(acceptsFiles: acceptsFiles))
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .accessibilityIdentifier("chat.attachmentLimits")
         }
         // At the accessibility sizes the rows can be taller than the room the
         // popover has above the keyboard: they scroll instead of being cut off.
@@ -1774,6 +1789,12 @@ struct ComposerBar: View {
         let images = selectedImages
         let files = selectedFiles
         guard !text.isEmpty || !images.isEmpty || !files.isEmpty, importingFiles == 0 else { return }
+        // A refused send's files come back on top of what was attached since
+        // (`deliver`), so the draft can hold more than a message carries.
+        if let over = Self.overFileLimitNotice(files.count) {
+            fileNotice = over
+            return
+        }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         pickerItems = []
         refusedNotice = nil
@@ -1855,6 +1876,8 @@ struct ComposerBar: View {
         drafts.clear(draftKey)
         if await onSend(text, images, files) { return .kept }
         restoreRefusedDraft(text, images, draftKey: draftKey, drafts: drafts)
+        // Nothing is dropped here, even past the per-message limit: the send says
+        // so and waits (`overFileLimitNotice`), and the person picks what goes.
         drafts.setFiles(files + drafts.files(draftKey).filter { new in !files.contains { $0.id == new.id } }, key: draftKey)
         return .returnedToDraft
     }
@@ -1937,6 +1960,13 @@ struct ComposerBar: View {
         }
         // Each pick says what it skipped; one that skipped nothing clears the last say.
         fileNotice = Self.fileSkippedNotice(problems)
+    }
+
+    /// Why a draft with more files than a message carries does not send, or nil.
+    static func overFileLimitNotice(_ count: Int) -> String? {
+        guard count > ComposerFile.maxFiles else { return nil }
+        let extra = count - ComposerFile.maxFiles
+        return "A message can carry \(ComposerFile.maxFiles) files. Remove \(extra) to send it."
     }
 
     /// One sentence for the files that did not attach, or nil.
@@ -2470,7 +2500,12 @@ struct ComposerView: View {
             // wherever the server runs. So the honest provenance is which SERVER
             // is answering (primary vs cloud companion), and whether the Mac is
             // still reachable from it.
-            hostProvenance: .chat(status: connection.status, online: connection.online)
+            hostProvenance: .chat(status: connection.status, online: connection.online),
+            // Videos and files go up to the machine Walnut runs on first, where the
+            // main agent reads them (`ChatStore.sendWithFiles`).
+            onSendFiles: { text, images, files in
+                await chat.sendWithFiles(text, images: images, files: files).keptTheWords
+            }
         ) { text, images in
             await Self.sendKeepingWords(chat, text, images)
         }

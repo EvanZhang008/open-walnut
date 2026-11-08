@@ -161,9 +161,19 @@ enum TimelineHostedCell {
             .padding(.horizontal, TimelineMetrics.hMargin)
             .frame(maxWidth: .infinity, alignment: .trailing)
         case .fileAttachment(let chip):
-            TimelineFileChipView(chip: chip) { path in
-                delegate?.timelineCell(didRequest: .previewFile(ref: FilePathRef(path: path)))
-            }
+            TimelineFileChipView(
+                chip: chip,
+                onOpen: { path in
+                    delegate?.timelineCell(didRequest: .previewFile(ref: FilePathRef(path: path)))
+                },
+                onRetry: {
+                    delegate?.timelineCell(didRequest: .retry(messageID: TimelineRow.messageID(fromRowID: row.id)))
+                },
+                onRemove: { fileID in
+                    delegate?.timelineCell(didRequest: .removeFile(
+                        messageID: TimelineRow.messageID(fromRowID: row.id), fileID: fileID))
+                }
+            )
         case .table(let table):
             TimelineTableView(table: table)
         case .truncationChip:
@@ -198,16 +208,20 @@ enum TimelineHostedCell {
                         didRequest: .retry(messageID: TimelineRow.messageID(fromRowID: row.id))
                     )
                 } label: {
+                    // Wrapped, never cut: at the accessibility sizes it read "Not sent. Tap t…"
+                    // (gate r8). The row is measured the same way (`failedNoticeRowHeight(_:width:)`).
                     if let notice {
                         HStack(spacing: 4) {
                             ProgressView().controlSize(.mini)
                             Text(notice).font(.caption)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                         .foregroundStyle(Theme.warning)
                     } else {
-                        Label("Not sent. Tap to retry.", systemImage: "exclamationmark.circle.fill")
+                        Label(TimelineMetrics.notSentWords, systemImage: "exclamationmark.circle.fill")
                             .font(.caption)
                             .foregroundStyle(Theme.danger)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 .buttonStyle(.plain)

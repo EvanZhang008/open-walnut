@@ -65,6 +65,10 @@ struct ChatTimelineBody: View {
                         if let message = chat.messages.first(where: { $0.id == messageID }) {
                             chat.discardFailed(message)
                         }
+                    case .removeFile(let messageID, let fileID):
+                        if let message = chat.messages.first(where: { $0.id == messageID }) {
+                            Task { await chat.removeFile(fileID, from: message) }
+                        }
                     case .withdrawQueued(let messageID):
                         chat.withdrawQueued(messageID)
                     case .loadEarlier:
@@ -141,7 +145,12 @@ struct ChatTimelineBody: View {
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
         }
+        // The sizes of the files the messages name, for their cards: the main
+        // chat's are on the machine Walnut runs on.
+        .task(id: sentFilePaths) { await SentFileSizes.shared.request(sentFilePaths, host: nil) }
     }
+
+    private var sentFilePaths: [String] { SentFileSizes.sentFilePaths(in: chat.messages) }
 }
 
 /// What a conversation looks like while its first page is still being read.

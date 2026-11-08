@@ -8,6 +8,8 @@ struct ComposerFileCard: View {
     var importingCount = 0
     var onRemove: () -> Void = {}
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    /// The icon's tile grows with the text at the accessibility sizes (gate r7).
+    private var iconSide: CGFloat { dynamicTypeSize.isAccessibilitySize ? 52 : 34 }
 
     init(file: ComposerFile, onRemove: @escaping () -> Void) {
         self.file = file
@@ -38,11 +40,11 @@ struct ComposerFileCard: View {
                         ProgressView().controlSize(.small)
                     } else {
                         Image(systemName: file?.symbol ?? ComposerBar.Symbol.files)
-                            .font(.system(size: 17, weight: .semibold))
+                            .font(.system(size: iconSide / 2, weight: .semibold))
                             .foregroundStyle(Theme.tint)
                     }
                 }
-                .frame(width: 34, height: 34)
+                .frame(width: iconSide, height: iconSide)
                 .background(Theme.tintSoft, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                 VStack(alignment: .leading, spacing: 1) {
                     Text(file?.name ?? (importingCount == 1 ? "Adding file…" : "Adding \(importingCount) files…"))

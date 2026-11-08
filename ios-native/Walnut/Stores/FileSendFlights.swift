@@ -26,19 +26,22 @@ enum FileSendFlights {
     private static var attempts: [String: Attempt] = [:]
     /// Bubbles the server took in this run of the app.
     private static var accepted: Set<String> = []
+    /// Counts the resets (`forgetAll`): an attempt that waited on another's
+    /// outcome from before one gives up instead of sending to the next server.
+    private(set) static var generation = 0
 
     // MARK: Uploads
 
     /// The file's path on the host: known, joined while its upload runs, or
     /// uploaded now from `start`.
     static func path(
-        for file: ComposerFile, sessionID: String, transport: SessionUploadTransport, from start: Int64
+        for file: ComposerFile, target: UploadTarget, transport: SessionUploadTransport, from start: Int64
     ) async throws -> String {
         if let path = paths[file.id] { return path }
         if let running = uploads[file.id] { return try await running.value }
         let id = file.id
         let task = Task { @MainActor () throws -> String in
-            try await SessionFileUploader.upload(file, sessionID: sessionID, transport: transport, from: start) { held in
+            try await SessionFileUploader.upload(file, target: target, transport: transport, from: start) { held in
                 for watcher in (watchers[id] ?? [:]).values { watcher(held) }
             }
         }
@@ -53,6 +56,27 @@ enum FileSendFlights {
         }
     }
 
+    /// The path for a file a send still needs, from where the host's copy stood
+    /// (`held`): known already, joined, or uploaded now. When the phone's copy is
+    /// gone but the host holds all of it, the empty last chunk answers the path;
+    /// otherwise the send cannot go without it (`fileGone`).
+    static func resumedPath(
+        for file: ComposerFile, target: UploadTarget, transport: SessionUploadTransport, held: Int64
+    ) async throws -> String {
+        if let known = paths[file.id] { return known }
+        guard FileManager.default.fileExists(atPath: file.localURL.path) else {
+            if held >= file.size, let path = try? await SessionFileUploader.finish(file, target: target, transport: transport) {
+                return path
+            }
+            throw SessionFileUploader.UploadError.fileGone(file.name)
+        }
+        let path = try await self.path(for: file, target: target, transport: transport, from: held)
+        AppLog.info("session-upload", "file uploaded", [
+            "sessionId": target.logLabel, "uploadId": file.id, "bytes": String(file.size), "kind": file.kind.rawValue,
+        ])
+        return path
+    }
+
     /// `onHeld` hears the bytes the host holds of `fileID` until `unwatch`.
     static func watch(_ fileID: String, by owner: UUID, _ onHeld: @escaping (Int64) -> Void) {
         watchers[fileID, default: [:]][owner] = onHeld
@@ -64,6 +88,28 @@ enum FileSendFlights {
     }
 
     static func knownPath(_ fileID: String) -> String? { paths[fileID] }
+
+    /// The pairing is going (`LocalDataReset`): every upload stops, and nothing
+    /// known of the old server's uploads is kept, so no later send can reach
+    /// the next server with them.
+    static func forgetAll() {
+        generation += 1
+        for task in uploads.values { task.cancel() }
+        uploads.removeAll()
+        paths.removeAll()
+        watchers.removeAll()
+        accepted.removeAll()
+        let running = attempts.values
+        attempts.removeAll()
+        for attempt in running { for waiter in attempt.waiters { waiter.resume(returning: false) } }
+    }
+
+    /// Nobody needs the file's upload any more for now: it stops, and what the
+    /// host holds stays, for a later upload of it to resume from.
+    static func cancelUpload(_ fileID: String) {
+        uploads[fileID]?.cancel()
+        uploads[fileID] = nil
+    }
 
     /// The app's copy is going: its upload stops and its path is forgotten.
     static func forget(_ fileID: String) {

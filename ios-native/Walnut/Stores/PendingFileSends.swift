@@ -11,8 +11,9 @@ import Foundation
 /// (`SessionConversationStore.restorePendingFileSends`) once its transcript is read:
 /// a send whose row is already there was taken before the app ended and is only
 /// let go, any other goes under its own message id, and its finished uploads
-/// answer their path again. All of it goes through one serial queue: writes off
-/// the main actor, reads after the writes queued before them.
+/// answer their path again. The main chat keeps its file sends here as well
+/// (`chatKey`, `ChatStore.restoreFileSends`). All of it goes through one serial
+/// queue: writes off the main actor, reads after the writes queued before them.
 enum PendingFileSends {
     struct FileRef: Codable, Equatable {
         let id: String
@@ -25,22 +26,31 @@ enum PendingFileSends {
     struct Entry: Codable, Equatable {
         let bubbleID: String
         let messageID: String?
-        let sessionID: String
+        /// The record it is kept in: a session's id, or the main chat's key (`chatKey`).
+        var sessionID: String
         let text: String
         let createdAt: String
         let voice: Bool
-        let files: [FileRef]
+        var files: [FileRef]
         var held: [String: Int64]
         /// Photos sent with the files, as JPEG files beside the record.
         let imageCount: Int
         /// When it was written, so a send nobody reopened is let go after a week.
         let savedAt: Date
+        /// Its last attempt ended in a failure that does not clear on its own (the
+        /// host has no room, a file is gone): it comes back as not sent, for the
+        /// person to retry or delete, instead of going again by itself.
+        var failed: Bool
+        /// The file whose upload ended that attempt, so its card comes back drawn failed.
+        var failedFile: String?
 
         init(bubbleID: String, messageID: String?, sessionID: String, text: String, createdAt: String,
-             voice: Bool, files: [FileRef], held: [String: Int64], imageCount: Int, savedAt: Date) {
+             voice: Bool, files: [FileRef], held: [String: Int64], imageCount: Int, savedAt: Date,
+             failed: Bool = false, failedFile: String? = nil) {
             self.bubbleID = bubbleID; self.messageID = messageID; self.sessionID = sessionID
             self.text = text; self.createdAt = createdAt; self.voice = voice; self.files = files
-            self.held = held; self.imageCount = imageCount; self.savedAt = savedAt
+            self.held = held; self.imageCount = imageCount; self.savedAt = savedAt; self.failed = failed
+            self.failedFile = failedFile
         }
 
         /// Only what a send cannot go without is required; a record from another
@@ -57,6 +67,8 @@ enum PendingFileSends {
             held = try c.decodeIfPresent([String: Int64].self, forKey: .held) ?? [:]
             imageCount = min(max(0, try c.decodeIfPresent(Int.self, forKey: .imageCount) ?? 0), PendingFileSends.maxImages)
             savedAt = try c.decodeIfPresent(Date.self, forKey: .savedAt) ?? Date()
+            failed = try c.decodeIfPresent(Bool.self, forKey: .failed) ?? false
+            failedFile = try c.decodeIfPresent(String.self, forKey: .failedFile)
         }
     }
 
@@ -79,6 +91,14 @@ enum PendingFileSends {
     static let keepFor: TimeInterval = 7 * 24 * 3600
 
     static var dir: URL { ComposerFileStore.root.appendingPathComponent(ComposerFileStore.outboxName, isDirectory: true) }
+
+    /// The main chat keeps its sends here too, one record per conversation, under
+    /// a key no session id takes (`Entry.sessionID` is then this key). A new chat
+    /// has no conversation yet: its sends are the agent's new chat's.
+    static func chatKey(conversationID: String?, agentID: String) -> String {
+        if let conversationID { return "chat~" + conversationID }
+        return "chat~new~" + agentID
+    }
 
     private static func url(session: String) -> URL? {
         guard let safe = safeComponent(session) else { return nil }
@@ -136,6 +156,56 @@ enum PendingFileSends {
             list[i].held = held
             write(list, session: session)
         }
+    }
+
+    /// The person removed a file from the send: the rest is what it carries now.
+    static func updateFiles(session: String, bubble: String, files: [FileRef]) {
+        queue.async {
+            var list = read(session: session)
+            guard let i = list.firstIndex(where: { $0.bubbleID == bubble }) else { return }
+            list[i].files = files
+            list[i].held = list[i].held.filter { held in files.contains { $0.id == held.key } }
+            write(list, session: session)
+        }
+    }
+
+    /// Whether the send's last attempt failed for good (`Entry.failed`), and
+    /// which file's upload ended it (`Entry.failedFile`), if one did.
+    static func markFailed(session: String, bubble: String, failed: Bool, file: String? = nil) {
+        let failedFile = failed ? file : nil
+        queue.async {
+            var list = read(session: session)
+            guard let i = list.firstIndex(where: { $0.bubbleID == bubble }),
+                  list[i].failed != failed || list[i].failedFile != failedFile else { return }
+            list[i].failed = failed
+            list[i].failedFile = failedFile
+            write(list, session: session)
+        }
+    }
+
+    /// A new chat got its conversation: the sends kept under its key (`chatKey`
+    /// with no conversation) move to that conversation's.
+    static func move(from old: String, to new: String) {
+        guard old != new else { return }
+        queue.async {
+            let moving = read(session: old)
+            guard !moving.isEmpty else { return }
+            var list = read(session: new)
+            for var entry in moving where !list.contains(where: { $0.bubbleID == entry.bubbleID }) {
+                entry.sessionID = new
+                list.append(entry)
+            }
+            write(list, session: new)
+            write([], session: old)
+        }
+    }
+
+    /// The pairing is going (`LocalDataReset`): every kept send, the main chat's
+    /// and every session's, goes with its photos. Waits for the writes queued
+    /// before it, so none of them lands afterwards. The kept files' copies are
+    /// the composer store's (`ComposerFileStore.removeAll`).
+    static func eraseAll() {
+        queue.sync { try? FileManager.default.removeItem(at: dir) }
     }
 
     static func remove(session: String, bubble: String) {

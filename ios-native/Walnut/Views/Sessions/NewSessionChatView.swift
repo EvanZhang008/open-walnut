@@ -68,6 +68,14 @@ struct NewSessionChatView: View {
     @State private var showPathPicker = false
     @State private var creating = false
     @State private var launchingMessage: String?
+    /// The first message's photos and files, uploaded before the create call.
+    @State private var uploads = NewSessionUploads()
+    /// They go up now: the page may be left (the launch then stops), unlike
+    /// during the create call itself.
+    @State private var uploading = false
+    /// Their upload failed: the message stays on the page with Retry and Remove.
+    @State private var launchFailed = false
+    @State private var pendingLaunch: PendingLaunch?
     @State private var createError: String?
     @State private var didPreselect = false
     /// New task opened this draft with an email's context: the composer takes the keyboard.
@@ -94,15 +102,44 @@ struct NewSessionChatView: View {
             if let launchingMessage {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
-                        MessageRow(message: ChatMessage(
-                            id: "launching", role: "user", text: launchingMessage,
-                            createdAt: "", kind: nil
-                        ))
-                        HStack(spacing: 8) {
-                            ProgressView().controlSize(.small)
-                            Text("Starting the session…").font(.subheadline).foregroundStyle(.secondary)
+                        MessageRow(message: launchingRow(launchingMessage))
+                        // One card per file, each with its own progress, and once an
+                        // upload failed, how far each got with its Retry and Remove.
+                        VStack(spacing: 0) {
+                            ForEach(uploads.chips(failed: launchFailed), id: \.self) { chip in
+                                TimelineFileChipView(
+                                    chip: chip, onOpen: { _ in },
+                                    onRetry: { Task { _ = await runLaunch(fromComposer: false) } },
+                                    onRemove: { id in Task { await removeLaunchFile(id) } }
+                                )
+                            }
                         }
-                        .padding(.horizontal, 16)
+                        if launchFailed {
+                            // At the accessibility sizes the banner is not drawn: the
+                            // reason sits here instead.
+                            if let createError, dynamicTypeSize.isAccessibilitySize {
+                                Text(createError)
+                                    .font(.footnote)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .padding(.horizontal, 16)
+                            }
+                            HStack(spacing: 12) {
+                                Button("Retry") { Task { _ = await runLaunch(fromComposer: false) } }
+                                    .buttonStyle(.borderedProminent)
+                                    .accessibilityIdentifier("newSessionChat.retryLaunch")
+                                Button("Edit message") { editFailedLaunch() }
+                                    .buttonStyle(.bordered)
+                                    .accessibilityIdentifier("newSessionChat.editLaunch")
+                            }
+                            .padding(.horizontal, 16)
+                        } else {
+                            HStack(spacing: 8) {
+                                ProgressView().controlSize(.small)
+                                Text(uploading ? "Uploading…" : "Starting the session…")
+                                    .font(.subheadline).foregroundStyle(.secondary)
+                            }
+                            .padding(.horizontal, 16)
+                        }
                     }
                     .padding(.vertical, 16)
                 }
@@ -116,9 +153,10 @@ struct NewSessionChatView: View {
             VStack(spacing: 0) {
                 if launchingMessage == nil && !dynamicTypeSize.isAccessibilitySize { launchBar }
                 ComposerBar(
-                    placeholder: launchingMessage != nil ? "Starting the session…" : canLaunch ? "Describe the first task…" : "Pick a folder to start",
+                    placeholder: launchingMessage != nil ? (launchFailed ? "Retry or edit the message above" : "Starting the session…") : canLaunch ? "Describe the first task…" : "Pick a folder to start",
                     busy: creating,
-                    disabled: !canLaunch,
+                    // A launch that failed waits for its Retry or Edit above.
+                    disabled: !canLaunch || launchFailed,
                     // Not at the accessibility sizes: there the folder pill right
                     // above says "Choose folder…" and the box says "Pick a folder
                     // to start", and this third copy took three more lines of a
@@ -148,18 +186,24 @@ struct NewSessionChatView: View {
                         .chat(status: $0.status, online: $0.online)
                     },
                     secondaryAction: saveAsTodoAction,
-                    onSend: { text, _ in await launch(message: text) }
+                    // No session exists yet: the files go to the machine Walnut runs
+                    // on, and the server takes them on to the session's host.
+                    onSendFiles: { text, images, files in await launch(message: text, images: images, files: files) },
+                    onSend: { text, images in await launch(message: text, images: images) }
                 )
             }
         }
-        .navigationTitle(launchingMessage == nil ? "New Session" : taskTitle ?? "Starting session…")
+        .navigationTitle(launchingMessage == nil ? "New Session" : taskTitle ?? (launchFailed ? "Not started" : "Starting session…"))
         .navigationBarTitleDisplayMode(.inline)
-        .interactiveDismissDisabled(creating)
+        // While files go up the page can be left (the launch stops, `pageLeft`);
+        // during the create call itself it cannot.
+        .interactiveDismissDisabled(creating && !uploading)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Button("Cancel") { dismiss() }.disabled(creating)
+                Button("Cancel") { dismiss() }.disabled(creating && !uploading)
             }
         }
+        .onDisappear { pageLeft() }
         .sheet(isPresented: $showProjectPicker) {
             TaskProjectPicker(current: project) { picked in project = picked }
         }
@@ -175,9 +219,13 @@ struct NewSessionChatView: View {
             }
         }
         .task { await loadOptions() }
-        // At the accessibility sizes the box shows two lines, so a caret at the end would leave
-        // the email's context out of sight and the draft looking empty: it stays unfocused there.
-        .onAppear { if contentLink.takeDraftFocus(), !dynamicTypeSize.isAccessibilitySize { composerFocus += 1 } }
+        .onAppear {
+            // Words of a launch an earlier run of the app did not finish come back.
+            NewSessionLaunchWords.offerBack(draftKey: ContentActionLink.newSessionDraftKey)
+            // At the accessibility sizes the box shows two lines, so a caret at the end would leave
+            // the email's context out of sight and the draft looking empty: it stays unfocused there.
+            if contentLink.takeDraftFocus(), !dynamicTypeSize.isAccessibilitySize { composerFocus += 1 }
+        }
         // One focus per request: back to 0 once the composer has taken it, so a rebuilt
         // composer (a failed create, the launching row) does not pull the keyboard up again.
         .task(id: composerFocus) {
@@ -699,21 +747,82 @@ struct NewSessionChatView: View {
 
     // MARK: - Launch
 
+    /// The words and photos of a launch whose files go up first: kept by the page
+    /// once the composer has let go of them, so a failed upload can be retried
+    /// here or given back (`giveBackToDraft`).
+    struct PendingLaunch {
+        let text: String
+        let images: [SelectedImage]
+    }
+
     /// One create call carrying everything picked here, then hand the pre-seeded
     /// session to the presenter. Returns false on failure so the composer keeps
     /// the text (its no-loss contract) instead of clearing it into the void.
-    private func launch(message: String) async -> Bool {
-        guard !creating, canLaunch else { return false }
+    ///
+    /// Attached photos and files are uploaded first with no session
+    /// (`NewSessionUploads`, `UploadTarget.unbound`), and the first message names
+    /// their paths: photos under the pictures header, so they reach the session
+    /// and its timeline as pictures, files under the files header. The server
+    /// takes them on to the session's host before that message goes. While they
+    /// go up, each file's card shows how far it is; a failed upload keeps the
+    /// message on this page (answering true: the page holds it), each card saying
+    /// how far it got, with Retry and Remove. Leaving the page mid-upload makes
+    /// no session: the words, photos and files go back to the composer's draft,
+    /// and what the host already has is not sent again.
+    private func launch(message: String, images: [SelectedImage] = [], files: [ComposerFile] = []) async -> Bool {
+        guard !creating, canLaunch, !launchFailed else { return false }
+        let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        if images.isEmpty && files.isEmpty {
+            uploads.release()
+        } else {
+            do {
+                try await uploads.prepare(images: images, files: files)
+            } catch {
+                createError = error.localizedDescription
+                AppLog.warn("session", "new session's photos not prepared", ["error": String(describing: error)])
+                return false
+            }
+        }
+        pendingLaunch = PendingLaunch(text: text, images: images)
+        // The composer let go of the words: until the launch ends they are kept
+        // where an app iOS ends finds them again (`NewSessionLaunchWords`).
+        NewSessionLaunchWords.keep(text, draftKey: ContentActionLink.newSessionDraftKey)
+        return await runLaunch(fromComposer: true)
+    }
+
+    /// Upload what the launch carries, then create the session. `fromComposer`:
+    /// the composer is waiting on the answer and puts the message back in its
+    /// draft on false; from this page's own Retry, the page does that itself.
+    private func runLaunch(fromComposer: Bool) async -> Bool {
+        guard let pending = pendingLaunch, !creating else { return false }
         creating = true
         createError = nil
-        defer { creating = false }
-        let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
-        launchingMessage = text
+        launchFailed = false
+        defer { creating = false; uploading = false }
+        launchingMessage = pending.text
+        var wireText = pending.text
+        if !uploads.isEmpty {
+            uploading = true
+            do {
+                let sent = try await uploads.upload()
+                wireText = ComposerFile.messageText(pending.text, imagePaths: sent.imagePaths, paths: sent.filePaths)
+            } catch {
+                uploading = false
+                if uploads.abandoned { return leaveLaunch(fromComposer: fromComposer) }
+                AppLog.warn("session", "new session's files not uploaded", ["error": String(describing: error)])
+                launchFailed = true
+                createError = error.localizedDescription
+                return true
+            }
+            uploading = false
+        }
+        // Left while the files went up: no session for a page nobody looks at.
+        guard !uploads.abandoned else { return leaveLaunch(fromComposer: fromComposer) }
         do {
             let created = try await api.createSession(
                 cwd: cwd,
                 host: host,
-                message: text,
+                message: wireText,
                 // The originating task, when this draft came from one. `nil` (the
                 // toolbar entrance) keeps the server's own behaviour: it creates the
                 // task that owns the new session.
@@ -730,7 +839,11 @@ struct NewSessionChatView: View {
             // ORDER MATTERS (same as NewSessionSheet): stash BEFORE onCreated,
             // because the presenter's push mounts the conversation view whose
             // store consumes the stash in open().
-            SessionLaunchContext.stash(sessionId: created.sessionId, message: text)
+            SessionLaunchContext.stash(sessionId: created.sessionId, message: wireText)
+            // The server holds the files now: the phone's copies are done.
+            uploads.finish()
+            pendingLaunch = nil
+            NewSessionLaunchWords.release(draftKey: ContentActionLink.newSessionDraftKey)
             AppLog.info("session", "created session from chat draft", [
                 "sessionId": created.sessionId, "host": host, "mode": mode.rawValue,
                 "model": model ?? "default",
@@ -765,14 +878,83 @@ struct NewSessionChatView: View {
             onCreated(session)
             return true
         } catch let APIError.server(_, code, msg, _, _) {
-            launchingMessage = nil
             createError = NewSessionSheet.createErrorMessage(code: code, serverMessage: msg)
-            return false
+            return leaveLaunch(fromComposer: fromComposer)
         } catch {
-            launchingMessage = nil
             createError = error.localizedDescription
-            return false
+            return leaveLaunch(fromComposer: fromComposer)
         }
+    }
+
+    /// The launch ends without a session: its words, photos and files go back to
+    /// the composer, by the composer itself when it is the caller (false), else
+    /// here. The files keep their copies and what the host has of them.
+    private func leaveLaunch(fromComposer: Bool) -> Bool {
+        launchingMessage = nil
+        launchFailed = false
+        if !fromComposer { giveBackToDraft() }
+        pendingLaunch = nil
+        NewSessionLaunchWords.release(draftKey: ContentActionLink.newSessionDraftKey)
+        uploads.release()
+        return false
+    }
+
+    /// The failed launch's words, photos and files, back in the composer's draft
+    /// (its Edit, or the page being left): nothing is lost, and the next send
+    /// resumes the uploads.
+    private func giveBackToDraft() {
+        guard let pending = pendingLaunch else { return }
+        let drafts = ComposerDrafts.shared
+        let key = ContentActionLink.newSessionDraftKey
+        ComposerBar.restoreRefusedDraft(pending.text, pending.images, draftKey: key, drafts: drafts)
+        let files = uploads.files
+        drafts.setFiles(files + drafts.files(key).filter { new in !files.contains { $0.id == new.id } }, key: key)
+    }
+
+    /// The failed launch's Edit: everything back in the composer.
+    private func editFailedLaunch() {
+        giveBackToDraft()
+        pendingLaunch = nil
+        NewSessionLaunchWords.release(draftKey: ContentActionLink.newSessionDraftKey)
+        uploads.release()
+        launchingMessage = nil
+        launchFailed = false
+        createError = nil
+    }
+
+    /// One file dropped from the failed launch (its card's Remove), and the rest
+    /// sent again at once. A launch left with nothing at all is over.
+    private func removeLaunchFile(_ id: String) async {
+        uploads.remove(id)
+        guard let pending = pendingLaunch, !(pending.text.isEmpty && uploads.isEmpty) else {
+            pendingLaunch = nil
+            NewSessionLaunchWords.release(draftKey: ContentActionLink.newSessionDraftKey)
+            launchingMessage = nil
+            launchFailed = false
+            createError = nil
+            return
+        }
+        _ = await runLaunch(fromComposer: false)
+    }
+
+    /// The page goes away (Cancel, a swipe, the app moving on): a launch whose
+    /// files go up stops and makes no session, and one that failed goes back to
+    /// the draft.
+    private func pageLeft() {
+        if uploading {
+            uploads.abandon()
+        } else if launchFailed {
+            editFailedLaunch()
+        }
+    }
+
+    /// The launching message as the page draws it: the words and the photos.
+    private func launchingRow(_ text: String) -> ChatMessage {
+        var row = ChatMessage(id: "launching", role: "user", text: text, createdAt: "", kind: nil)
+        let photos = pendingLaunch?.images.map(\.jpegData) ?? []
+        if !photos.isEmpty { row.localImages = photos }
+        row.pending = !launchFailed
+        return row
     }
 
     // MARK: - Save as todo
@@ -842,5 +1024,42 @@ struct NewSessionChatView: View {
         let title = trimmed[..<newline].trimmingCharacters(in: .whitespaces)
         let rest = trimmed[newline...].trimmingCharacters(in: .whitespacesAndNewlines)
         return (title, rest.isEmpty ? nil : rest)
+    }
+}
+
+/// The words of a new session's first message while its launch has not made the
+/// session yet (its files go up, their upload failed, the create call runs). The
+/// composer let go of them on send and the page holds them in its own state,
+/// which ends with the app: so they are also kept in the drafts store, whose
+/// words survive the app being ended, under a key of their own (never in the box
+/// twice while the launch holds them). The next time the page opens, words left
+/// there by a launch that never ended go back into the composer's draft.
+@MainActor
+enum NewSessionLaunchWords {
+    /// A launch of this run holds the words: a page opened meanwhile leaves them.
+    private(set) static var held = false
+
+    static func key(for draftKey: String) -> String { draftKey + "~launching" }
+
+    static func keep(_ text: String, draftKey: String) {
+        held = true
+        ComposerDrafts.shared.setDraft(text, key: key(for: draftKey))
+    }
+
+    /// The launch ended: it made its session, or its words went back to the composer.
+    static func release(draftKey: String) {
+        held = false
+        ComposerDrafts.shared.clear(key(for: draftKey))
+    }
+
+    /// Words an earlier run's launch kept go back into the draft, ahead of what is there.
+    static func offerBack(draftKey: String) {
+        guard !held else { return }
+        let drafts = ComposerDrafts.shared
+        let kept = drafts.draft(key(for: draftKey))
+        guard !kept.isEmpty else { return }
+        AppLog.info("session", "a launch's words were offered back", ["chars": String(kept.count)])
+        ComposerBar.restoreRefusedDraft(kept, [], draftKey: draftKey, drafts: drafts)
+        drafts.clear(key(for: draftKey))
     }
 }

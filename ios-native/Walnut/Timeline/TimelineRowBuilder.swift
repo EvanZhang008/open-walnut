@@ -63,6 +63,16 @@ enum TimelineMetrics {
     static let localImageSide: CGFloat = 120
     static let activityHeight: CGFloat = 28
     static let failedNoticeHeight: CGFloat = 24
+    static let notSentWords = "Not sent. Tap to retry."
+
+    /// The not-sent line's row: one line at the usual sizes (24 pt), as many as its
+    /// words take at the larger ones, measured narrower than drawn so it never clips.
+    static func failedNoticeRowHeight(_ notice: String?, width: CGFloat) -> CGFloat {
+        let font = TimelineTextStyler.captionFont
+        let column = max(40, width - hMargin * 2 - font.lineHeight * 1.6 - 12)
+        let lines = TimelineFileChip.lines(notice ?? notSentWords, font: font, width: column, max: 8)
+        return max(failedNoticeHeight, hostedTextHeight(lines: lines, font: font) + 8)
+    }
     static let loadEarlierHeight: CGFloat = 36
     static let notificationPadding: CGFloat = 12
     static let notificationVMargin: CGFloat = 3
@@ -324,10 +334,11 @@ final class TimelineRowBuilder {
         // Files still on this phone: one card each, with the upload's progress.
         for file in message.localFiles ?? [] {
             let chip = TimelineFileChip.local(file, held: message.uploadHeld?[file.id],
-                                              pending: message.pending == true, failed: message.failed == true)
+                                              pending: message.pending == true, failed: message.failed == true,
+                                              failedHere: message.uploadFailedID == file.id)
             rows.append(TimelineRow(
                 id: nextID(), revision: 0, content: .fileAttachment(chip),
-                height: TimelineFileChip.height(uploading: chip.progress != nil)
+                height: chip.height(rowWidth: width)
             ))
         }
         // A message this phone composed is the user's own words, never an envelope.
@@ -343,8 +354,11 @@ final class TimelineRowBuilder {
             case .text(let rawText):
                 let sent = MessageRow.attachmentSendParts(rawText)
                 if let sent {
-                    // A file that is a picture shows as one, like the photos above it.
-                    let pictures = sent.imagePaths + sent.filePaths.filter { MarkdownParser.isImagePath($0) }
+                    // A file that is a picture shows as one, like the photos above it,
+                    // unless it never reached the host: then its card says why.
+                    let pictures = sent.imagePaths + sent.filePaths.filter {
+                        MarkdownParser.isImagePath($0) && sent.copyFailures[$0] == nil
+                    }
                     for path in pictures {
                         rows.append(TimelineRow(
                             id: nextID(), revision: 0,
@@ -353,10 +367,12 @@ final class TimelineRowBuilder {
                             height: TimelineMetrics.imageSlotHeight
                         ))
                     }
-                    for path in sent.filePaths where !MarkdownParser.isImagePath(path) {
+                    for path in sent.filePaths where !MarkdownParser.isImagePath(path) || sent.copyFailures[path] != nil {
+                        let chip = TimelineFileChip.sent(path: path, copyFailure: sent.copyFailures[path])
                         rows.append(TimelineRow(
-                            id: nextID(), revision: 0, content: .fileAttachment(.sent(path: path)),
-                            height: TimelineFileChip.height(uploading: false)
+                            id: nextID(), revision: 0,
+                            content: .fileAttachment(chip),
+                            height: chip.height(rowWidth: width)
                         ))
                     }
                 }
@@ -383,7 +399,7 @@ final class TimelineRowBuilder {
             rows.append(TimelineRow(
                 id: nextID(), revision: message.retryNotice == nil ? 0 : 1,
                 content: .failedNotice(notice: message.retryNotice),
-                height: TimelineMetrics.failedNoticeHeight
+                height: TimelineMetrics.failedNoticeRowHeight(message.retryNotice, width: width)
             ))
         } else if let queued, queued != .undecided {
             // Never both. A banked message has not been posted, so it cannot also

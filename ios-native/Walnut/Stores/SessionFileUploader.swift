@@ -1,8 +1,10 @@
 import Foundation
 import UIKit
 
-/// Moves one attached file to the session's host, chunk by chunk
-/// (`PUT /api/v1/sessions/:id/uploads/:uploadId`), and answers the path it got.
+/// Moves one attached file to its host, chunk by chunk, and answers the path it
+/// got: a session's host (`PUT /api/v1/sessions/:id/uploads/:uploadId`) or, with
+/// no session, the machine Walnut runs on (`PUT /api/v1/uploads/:uploadId`). The
+/// two routes take the same chunks and answer the same way (`UploadTarget`).
 ///
 /// Resumable by construction: every reply names how many bytes the host holds,
 /// and the next chunk starts there. A chunk whose answer was lost is sent again
@@ -36,9 +38,9 @@ enum SessionFileUploader {
     }
 
     /// Upload `file` from `start`. `onProgress` gets the bytes the host holds after
-    /// each chunk. Returns the file's path on the session's host.
+    /// each chunk. Returns the file's path on the host.
     static func upload(
-        _ file: ComposerFile, sessionID: String, transport: SessionUploadTransport,
+        _ file: ComposerFile, target: UploadTarget, transport: SessionUploadTransport,
         from start: Int64 = 0, pauseBetweenTries: Duration = .seconds(1),
         onProgress: @MainActor @escaping (Int64) -> Void
     ) async throws -> String {
@@ -58,7 +60,7 @@ enum SessionFileUploader {
             // The last chunk carries the checksum: the host checks the whole file
             // with it, and a repeat of it after the rename is recognised by it.
             let isLast = offset + Int64(data.count) >= file.size
-            let outcome = try await sendChunk(file, sessionID: sessionID, transport: transport, offset: offset,
+            let outcome = try await sendChunk(file, target: target, transport: transport, offset: offset,
                                               data: data, sha256: isLast ? file.sha256 : nil, pause: pauseBetweenTries)
             let before = offset
             switch outcome {
@@ -85,8 +87,8 @@ enum SessionFileUploader {
 
     /// The host holds all of `file` but the app's copy is gone: the empty last
     /// chunk, with the checksum, gets the path of the finished upload.
-    static func finish(_ file: ComposerFile, sessionID: String, transport: SessionUploadTransport) async throws -> String {
-        let outcome = try await sendChunk(file, sessionID: sessionID, transport: transport, offset: file.size,
+    static func finish(_ file: ComposerFile, target: UploadTarget, transport: SessionUploadTransport) async throws -> String {
+        let outcome = try await sendChunk(file, target: target, transport: transport, offset: file.size,
                                           data: Data(), sha256: file.sha256, pause: .seconds(1))
         guard case .reply(let reply) = outcome, reply.done, let path = reply.path, !path.isEmpty else {
             throw UploadError.fileGone(file.name)
@@ -95,14 +97,14 @@ enum SessionFileUploader {
     }
 
     private static func sendChunk(
-        _ file: ComposerFile, sessionID: String, transport: SessionUploadTransport,
+        _ file: ComposerFile, target: UploadTarget, transport: SessionUploadTransport,
         offset: Int64, data: Data, sha256: String?, pause: Duration
     ) async throws -> UploadChunkOutcome {
         var attempt = 0
         while true {
             do {
                 return try await transport.uploadChunk(
-                    sessionID: sessionID, uploadID: file.id, name: file.name, size: file.size,
+                    target: target, uploadID: file.id, name: file.name, size: file.size,
                     offset: offset, sha256: sha256, data: data)
             } catch let error as APIError where isMissingRoute(error) {
                 throw UploadError.serverTooOld
@@ -122,10 +124,14 @@ enum SessionFileUploader {
         return false
     }
 
-    /// The answers a chunk retry can fix: no answer, the bridge down, a hop's 502/504.
+    /// The answers a chunk retry can fix: no answer, the bridge down, a hop's
+    /// 502/504, and a 503 that says the machine behind the server is away for now
+    /// (`needs_leader`: the companion answers while the Mac is away and cannot
+    /// take the write; `host_reconnecting`: the host's link is coming back).
     static func clearsOnItsOwn(_ error: Error) -> Bool {
         if SendRetryPolicy.isRetryable(error) { return true }
         if case .server(let status, let code, _, _, _) = error as? APIError {
+            if status == 503, code == "needs_leader" || code == "host_reconnecting" { return true }
             return status == 504 || (status == 502 && code == "upload_failed") || code == "primary_timeout"
         }
         return false

@@ -798,6 +798,9 @@ enum TimelineRowAction {
     case toggleCodeWrap(key: String)
     case retry(messageID: String)
     case discard(messageID: String)
+    /// Drop one attached file from a send that has not gone yet; the rest of it
+    /// is sent again.
+    case removeFile(messageID: String, fileID: String)
     /// Take a banked message back before it is posted. Nothing goes on the wire.
     case withdrawQueued(messageID: String)
     case copyText(String)

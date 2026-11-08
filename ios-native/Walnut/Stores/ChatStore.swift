@@ -62,6 +62,8 @@ final class ChatStore {
     @ObservationIgnored private let transport: ChatMessagesTransport
     /// Writes go through their own seam — see `ChatSendTransport`.
     @ObservationIgnored private let sendTransport: ChatSendTransport
+    /// Where attached files go before their message (`sendWithFiles`).
+    @ObservationIgnored private let uploads: SessionUploadTransport
     private var sse: SSEClient?
     @ObservationIgnored private var trackedTasks: [UUID: Task<Void, Never>] = [:]
     /// In-flight send()s. Kept separate from `trackedTasks` only because they
@@ -237,6 +239,32 @@ final class ChatStore {
     /// Single-flight drain. Two settles landing together must not both start
     /// posting the same head of the queue.
     @ObservationIgnored private var queueDrainTask: Task<Void, Never>?
+
+    // File sends (`sendWithFiles`), by bubble id. Kept apart from `messages`
+    // because a send outlives its bubble: `select` empties the timeline while
+    // the upload goes on.
+    /// The outbox key each is kept under (`PendingFileSends.chatKey`), which names its chat.
+    @ObservationIgnored private var fileSendKeys: [String: String] = [:]
+    /// The ones that have not handed their words over and are going to by
+    /// themselves (uploading, or waiting for their automatic retry): what is
+    /// sent after one in its chat waits behind it.
+    @ObservationIgnored private var fileSendsInFlight: [String: String] = [:]
+    /// The ones whose `deliverFiles` runs now.
+    @ObservationIgnored private var fileDeliveriesRunning: Set<String> = []
+    /// The ones whose words are being handed over now (`handOverFileSend`): their
+    /// bubble gave way to the message's own, so a return to their chat must not
+    /// draw the kept copy again (`restoreFileSends`).
+    @ObservationIgnored private var fileSendsHandingOver: Set<String> = []
+    /// Send order, so each hands its words over after the ones before it.
+    @ObservationIgnored private var fileSendSeq: [String: Int] = [:]
+    @ObservationIgnored private var nextFileSendSeq = 0
+    /// The banked sends made before each: these go before it, the rest after.
+    @ObservationIgnored private var fileSendQueuedBefore: [String: Set<String>] = [:]
+    /// Bytes the host holds of each file, by upload id, on screen or not.
+    @ObservationIgnored private var fileSendHeld: [String: [String: Int64]] = [:]
+    /// Automatic retries armed, and where each is on the ladder.
+    @ObservationIgnored private var fileRetryTasks: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored private var fileRetryLadder: [String: (attempt: Int, firstFailureAt: Date)] = [:]
     /// Accumulated live assistant text for the in-flight turn. Bounded like
     /// SessionConversationStore.liveText (LiveMarkdownWindow.boundedTail in
     /// flushPendingDelta) — retaining an unbounded reply makes every append +
@@ -332,9 +360,11 @@ final class ChatStore {
     /// `WalnutAPI` instance. WalnutTests pass scripted ones to drive the real
     /// conversation-switch ordering and the real queue drain without a network.
     init(transport: ChatMessagesTransport? = nil, sendTransport: ChatSendTransport? = nil,
+         uploads: SessionUploadTransport? = nil,
          cloudMarksDefaults: UserDefaults = .standard) {
         self.transport = transport ?? api
         self.sendTransport = sendTransport ?? api
+        self.uploads = uploads ?? api
         self.cloudMarks = CloudAnswerMarks(defaults: cloudMarksDefaults)
         LifecycleHub.shared.register(self)
     }
@@ -487,7 +517,14 @@ final class ChatStore {
         // process left it, else where the last one did.
         let place = kept.map { $0.open.map(ChatPlace.Remembered.conversation) ?? .newChat }
             ?? ChatPlace.remembered(agentID: agentID)
-        if let open = place.conversationID { select(open) }
+        if let open = place.conversationID {
+            select(open)
+        } else {
+            // Back on the agent's new chat, which `select` is not asked for: its
+            // kept file sends come back here, and what was banked behind them waits.
+            restoreFileSends()
+            scheduleQueueDrain()
+        }
         let returning = place != .nothing
         trackTask { [weak self] in
             guard let self else { return }
@@ -649,6 +686,9 @@ final class ChatStore {
         // not a view state), so the rows that picture them are rebuilt here — the
         // wipe above removed the bubbles, never the queue.
         restoreQueuedBubbles(for: id)
+        // Before the drain below and the stream's: a kept file send holds back
+        // what was banked after it.
+        restoreFileSends()
         connectStream()
         // Explicit, not via the flag above: the conversation being opened may have
         // messages banked from a previous visit and there is no turn here to end.
@@ -1135,7 +1175,12 @@ final class ChatStore {
         // second is the ORDERING INVARIANT (`hasQueuedSendsHere`), without which a
         // send made between one turn settling and the next starting overtakes
         // messages the user typed earlier.
-        if isActive, sending || streaming || hasQueuedSendsHere {
+        // A message with files still going up is ahead of these words too: they
+        // are banked behind it, so the server gets them in the order they were sent.
+        // Not in a new chat: there is no conversation to bank against, so the words
+        // go now and make it, and the file send moves to it (`moveNewChatFileSends`).
+        let fileSendAhead = activeID != nil && hasFileSendAheadHere
+        if isActive, sending || streaming || hasQueuedSendsHere || fileSendAhead {
             return enqueue(text, images: images, messageId: messageId) ? .queued : .refusedKeepingNothing
         }
         guard acceptsNewTurn else { return .refusedKeepingNothing }
@@ -1185,9 +1230,11 @@ final class ChatStore {
         let messageId: String
     }
 
+    /// `position`: where its bubble goes (a file send's words take the place of
+    /// its bubble, above what was banked while its files went up); nil appends.
     private func performSend(
         _ text: String, images: [SelectedImage], drain: DrainContext? = nil,
-        messageId: String? = nil
+        messageId: String? = nil, insertAt position: Int? = nil
     ) async -> SendAttempt {
         sending = true
         errorMessage = nil
@@ -1225,7 +1272,11 @@ final class ChatStore {
         if drain == nil {
             // Append FIRST — even payload preparation or createConversation failure
             // must leave the text + images on screen as a failed bubble, never lose them.
-            messages.append(optimistic)
+            if let position {
+                messages.insert(optimistic, at: min(max(0, position), messages.count))
+            } else {
+                messages.append(optimistic)
+            }
             // Tag the echo with its conversation (a new chat has none yet — tagged
             // below, once createConversation names it).
             if let target { localRowConversation[optimistic.id] = target }
@@ -1268,6 +1319,8 @@ final class ChatStore {
                     activeID = created
                     ChatPlace.save(conversation: created, agentID: activeAgentID)
                     localRowConversation[optimistic.id] = created
+                    // The new chat's other file sends belong to this conversation now.
+                    moveNewChatFileSends(agentID: agentID, to: created)
                     connectStream()
                 }
             }
@@ -1470,6 +1523,25 @@ final class ChatStore {
     /// so removing the bubble first would LOSE the text mid-turn.
     func retry(_ message: ChatMessage) async {
         guard message.failed == true else { return }
+        // Files not on the host yet: the uploads resume in this bubble, and the
+        // message then goes the usual way, banked if a turn is running by then.
+        if message.localFiles?.isEmpty == false {
+            guard let idx = messages.firstIndex(where: { $0.id == message.id }) else { return }
+            messages[idx].pending = true
+            messages[idx].failed = false
+            messages[idx].retryNotice = nil
+            messages[idx].uploadFailedID = nil
+            errorMessage = nil
+            // The person's own try: the ladder starts over, and a later run puts
+            // the send back to go by itself again.
+            fileRetryLadder[message.id] = nil
+            fileRetryTasks.removeValue(forKey: message.id)?.cancel()
+            if let key = fileSendKeys[message.id] {
+                PendingFileSends.markFailed(session: key, bubble: message.id, failed: false)
+            }
+            _ = await deliverFiles(bubbleID: message.id)
+            return
+        }
         guard !sending, !streaming else {
             errorMessage = "Still replying. Retry when the turn finishes."
             return
@@ -1491,10 +1563,526 @@ final class ChatStore {
     }
 
     func discardFailed(_ message: ChatMessage) {
+        for file in messages.first(where: { $0.id == message.id })?.localFiles ?? [] { forgetUpload(file) }
+        if let key = fileSendKeys[message.id] {
+            PendingFileSends.remove(session: key, bubble: message.id)
+            forgetFileSend(message.id)
+        }
         messages.removeAll { $0.id == message.id }
         localRowConversation[message.id] = nil
         inconclusiveSends.remove(message.id)
         dropQueueEntry(message.id)
+    }
+
+    // MARK: - Attached files
+
+    /// The outbox record key of the conversation on screen (`PendingFileSends.chatKey`).
+    private var activeFileOutboxKey: String {
+        PendingFileSends.chatKey(conversationID: activeID, agentID: activeAgentID)
+    }
+
+    /// A file send of the conversation on screen has not handed its words over
+    /// yet (uploading, or waiting for its automatic retry): a message sent now
+    /// goes after it, banked (`sendReportingOutcome`), in a chat that has its
+    /// conversation.
+    var hasFileSendAheadHere: Bool {
+        let key = activeFileOutboxKey
+        return fileSendsInFlight.values.contains(key)
+    }
+
+    /// A message with attached files. Each file goes up first, in chunks, through
+    /// the uploads route that has no session (`UploadTarget.unbound`): it lands on
+    /// the machine Walnut runs on, where the main chat's agent reads it. The
+    /// message then goes the usual way naming the saved paths under the files
+    /// header, in the order the person sent it: after the sends made before it,
+    /// ahead of the ones made while its files went up (`handOverFileSend`).
+    ///
+    /// Until then the bubble is this store's own and the send is kept on disk
+    /// (`PendingFileSends`), like a session's: switching chats, or the app being
+    /// ended, brings it back when its chat is open again (`restoreFileSends`),
+    /// going on from where its uploads stood. A failure that clears on its own
+    /// (no answer, the Mac away for a moment) is retried on the session page's
+    /// ladder (`SendRetryPolicy`); any other leaves the bubble failed with its
+    /// files, to retry or to drop one file from (`removeFile`).
+    func sendWithFiles(_ text: String, images: [SelectedImage] = [], files: [ComposerFile]) async -> SendOutcome {
+        guard !files.isEmpty else { return await sendReportingOutcome(text, images: images) }
+        guard isActive else { return .refusedKeepingNothing }
+        // An answer to a blocked question goes to another endpoint, which takes
+        // words only: the composer keeps the files for the next message.
+        if pendingQuestion {
+            errorMessage = "Answer the question first. Files can go in the next message."
+            return .refusedKeepingNothing
+        }
+        var bubble = ChatMessage(
+            id: "local-files-\(UUID().uuidString.lowercased())", role: "user", text: text,
+            createdAt: ISO8601DateFormatter().string(from: AppClock.now()), kind: nil
+        )
+        bubble.pending = true
+        // The id the message itself goes out under once the files are up, on every
+        // attempt of it, so a repeat is answered once (see ChatSendTransport).
+        bubble.clientMessageId = SendRetryPolicy.newMessageId()
+        bubble.localFiles = files
+        let jpegDatas = images.map(\.jpegData)
+        if !jpegDatas.isEmpty { bubble.localImages = jpegDatas }
+        let key = activeFileOutboxKey
+        PendingFileSends.save(outboxEntry(for: bubble, key: key), images: jpegDatas)
+        adoptFileSend(bubble.id, key: key, queuedBefore: Set(
+            queuedSends.filter { $0.conversationID == activeID && $0.agentID == activeAgentID }.map(\.id)))
+        messages.append(bubble)
+        if let activeID { localRowConversation[bubble.id] = activeID }
+        bottomPinned = true
+        scrollToBottomSignal += 1
+        AppLog.info("chat-upload", "send with files", ["files": String(files.count), "conversationID": activeID ?? "-"])
+        return await deliverFiles(bubbleID: bubble.id)
+    }
+
+    /// The bookkeeping every file send this store knows carries, made once.
+    private func adoptFileSend(_ bubbleID: String, key: String, queuedBefore: Set<String>) {
+        fileSendKeys[bubbleID] = key
+        if fileSendSeq[bubbleID] == nil {
+            nextFileSendSeq += 1
+            fileSendSeq[bubbleID] = nextFileSendSeq
+        }
+        if fileSendQueuedBefore[bubbleID] == nil { fileSendQueuedBefore[bubbleID] = queuedBefore }
+    }
+
+    private func outboxEntry(for bubble: ChatMessage, key: String, failed: Bool = false) -> PendingFileSends.Entry {
+        PendingFileSends.Entry(
+            bubbleID: bubble.id, messageID: bubble.clientMessageId, sessionID: key, text: bubble.text,
+            createdAt: bubble.createdAt, voice: false, files: (bubble.localFiles ?? []).map(PendingFileSends.ref),
+            held: bubble.uploadHeld ?? [:], imageCount: bubble.localImages?.count ?? 0, savedAt: Date(), failed: failed
+        )
+    }
+
+    /// The file sends kept for the conversation now on screen, back as bubbles
+    /// (`select` empties `messages`, and an app that was ended has none). One
+    /// whose delivery still runs is drawn as it goes; one that failed for good
+    /// comes back failed; any other goes on by itself from where its uploads
+    /// stood, its finished ones answering their path again.
+    private func restoreFileSends() {
+        let key = activeFileOutboxKey
+        for entry in PendingFileSends.entries(session: key) where !messages.contains(where: { $0.id == entry.bubbleID })
+            && !fileSendsHandingOver.contains(entry.bubbleID) {
+            let kept = entry.files.map(PendingFileSends.file)
+            var bubble = ChatMessage(id: entry.bubbleID, role: "user", text: entry.text,
+                                     createdAt: entry.createdAt, kind: nil)
+            bubble.clientMessageId = entry.messageID
+            bubble.localFiles = kept.map(\.file)
+            bubble.uploadHeld = fileSendHeld[entry.bubbleID] ?? entry.held
+            let jpegs = PendingFileSends.images(of: entry)
+            if !jpegs.isEmpty { bubble.localImages = jpegs }
+            // After a relaunch the banked sends made before this one are known by
+            // their time only.
+            adoptFileSend(entry.bubbleID, key: key, queuedBefore: Set(queuedSends.filter {
+                $0.conversationID == activeID && $0.agentID == activeAgentID && $0.createdAt < entry.createdAt
+            }.map(\.id)))
+            if let activeID { localRowConversation[entry.bubbleID] = activeID }
+            let running = fileDeliveriesRunning.contains(entry.bubbleID)
+            let waiting = fileRetryLadder[entry.bubbleID] != nil && fileRetryTasks[entry.bubbleID] != nil
+            if running || waiting {
+                bubble.pending = running
+                bubble.failed = !running
+                if waiting, !running { bubble.retryNotice = Self.fileWaitingNotice }
+                messages.append(bubble)
+                fileSendsInFlight[entry.bubbleID] = key
+                continue
+            }
+            if entry.failed || kept.contains(where: { !$0.present }) {
+                // A copy that is gone (storage was cleared) is said by its retry.
+                bubble.failed = true
+                bubble.uploadFailedID = entry.failedFile
+                messages.append(bubble)
+                continue
+            }
+            bubble.pending = true
+            messages.append(bubble)
+            fileSendsInFlight[entry.bubbleID] = key
+            AppLog.info("chat-upload", "file send put back", ["files": String(entry.files.count), "key": key])
+            let id = entry.bubbleID
+            Task { @MainActor [weak self] in _ = await self?.deliverFiles(bubbleID: id) }
+        }
+    }
+
+    /// Upload the bubble's files, then hand its words over with their paths. The
+    /// bubble gives way to the message's own bubble the moment the words go.
+    private func deliverFiles(bubbleID: String) async -> SendOutcome {
+        guard let files = messages.first(where: { $0.id == bubbleID })?.localFiles, !files.isEmpty,
+              var key = fileSendKeys[bubbleID] else {
+            return .refusedKeepingNothing
+        }
+        // One delivery of a bubble at a time; a second ask joins the first.
+        guard !fileDeliveriesRunning.contains(bubbleID) else { return .started(accepted: false) }
+        fileDeliveriesRunning.insert(bubbleID)
+        defer { fileDeliveriesRunning.remove(bubbleID) }
+        fileSendsInFlight[bubbleID] = key
+        fileRetryTasks.removeValue(forKey: bubbleID)?.cancel()
+        let watch = UUID()
+        for file in files {
+            FileSendFlights.watch(file.id, by: watch) { [weak self] held in
+                self?.noteUploadHeld(file.id, bubbleID: bubbleID, held: held)
+            }
+        }
+        defer { for file in files { FileSendFlights.unwatch(file.id, by: watch) } }
+        let paths: [String]
+        do {
+            // A phone locked mid-upload keeps going for the time iOS gives.
+            paths = try await SessionFileUploader.withBackgroundTime("chat-upload") {
+                try await self.uploadedPaths(files, bubbleID: bubbleID)
+            }
+        } catch {
+            return fileSendFailed(bubbleID, key: fileSendKeys[bubbleID] ?? key, error: error)
+        }
+        let whole = Dictionary(uniqueKeysWithValues: files.map { ($0.id, $0.size) })
+        fileSendHeld[bubbleID] = whole
+        PendingFileSends.updateHeld(session: fileSendKeys[bubbleID] ?? key, bubble: bubbleID, held: whole)
+        if let idx = messages.firstIndex(where: { $0.id == bubbleID }) { messages[idx].uploadHeld = whole }
+        // The file sends made before this one hand their words over first.
+        await waitForEarlierFileSends(bubbleID, key: key)
+        // A new chat that got its conversation meanwhile moved this send's key
+        // (`moveNewChatFileSends`).
+        key = fileSendKeys[bubbleID] ?? key
+        guard isActive, key == activeFileOutboxKey, let idx = messages.firstIndex(where: { $0.id == bubbleID }) else {
+            if key == activeFileOutboxKey, let idx = messages.firstIndex(where: { $0.id == bubbleID }) {
+                // The app is in the background: the words wait, their files on the
+                // host, and go when it is back (`rearmFileSends`).
+                messages[idx].pending = false
+                messages[idx].failed = true
+                messages[idx].retryNotice = Self.fileWaitingNotice
+                if fileRetryLadder[bubbleID] == nil { fileRetryLadder[bubbleID] = (attempt: 0, firstFailureAt: Date()) }
+                return .started(accepted: false)
+            }
+            // Its chat is not on screen (another one was opened): the words wait,
+            // their files on the host, and go when the chat is open again
+            // (`restoreFileSends`). The kept copy holds them; nothing is lost.
+            parkFileSend(bubbleID)
+            AppLog.info("chat-upload", "files uploaded; the message waits for its chat", ["key": key])
+            return .started(accepted: false)
+        }
+        // A question the agent asked meanwhile would take these words as its
+        // answer: the bubble waits, its files on the host, for a retry after it.
+        if pendingQuestion {
+            messages[idx].pending = false
+            messages[idx].failed = true
+            settleFileSend(bubbleID, failedForGood: true)
+            if stillViewing(localRowConversation[bubbleID] ?? activeID) {
+                errorMessage = "Answer the question first, then tap the message to send it."
+            }
+            return .started(accepted: false)
+        }
+        let bubble = messages[idx]
+        messages.remove(at: idx)
+        let owner = localRowConversation.removeValue(forKey: bubbleID)
+        // Still in flight until the words are handed over: a later file send, and
+        // the banked sends made after this one, wait until then.
+        fileRetryLadder[bubbleID] = nil
+        // The kept copy stays until something holds the words, so they are never
+        // nowhere. Marked as not sent first: if the app ends while they go, the
+        // next run shows them for the person to send or delete, never sends them
+        // again by itself (the server may already have them).
+        PendingFileSends.markFailed(session: key, bubble: bubbleID, failed: true)
+        let images = (bubble.localImages ?? []).compactMap { SelectedImage(jpegData: $0) }
+        fileSendsHandingOver.insert(bubbleID)
+        let outcome = await handOverFileSend(
+            ComposerFile.messageText(bubble.text, paths: paths), images: images,
+            messageId: bubble.clientMessageId, bubbleID: bubbleID, createdAt: bubble.createdAt, at: idx
+        )
+        fileSendsHandingOver.remove(bubbleID)
+        // The pairing went meanwhile (`eraseLocalState`): nothing of it is kept again.
+        guard let keptKey = fileSendKeys[bubbleID] else { return outcome }
+        if Self.wordsHeld(after: outcome, clientMessageId: bubble.clientMessageId, bubbleID: bubbleID, in: messages) {
+            // The words are an ordinary message now (the server's, the queue, or a
+            // failed bubble to retry under the same id), naming the host's copies:
+            // the kept copy and the phone's copies are done. A bubble drawn for
+            // the kept copy meanwhile would stay pending for good: it goes too.
+            messages.removeAll { $0.id == bubbleID }
+            localRowConversation[bubbleID] = nil
+            PendingFileSends.remove(session: keptKey, bubble: bubbleID)
+            for file in files { forgetUpload(file) }
+            forgetFileSend(bubbleID)
+            scheduleQueueDrain()
+            return outcome
+        }
+        // Nothing holds the words but the kept copy, marked not sent above: the
+        // store went away, the queue is full, or the POST failed while another
+        // chat was open (its failed bubble left with that chat). With its chat on
+        // screen the bubble comes back, failed with every file on the host, so its
+        // retry sends at once; elsewhere its chat brings it back (`restoreFileSends`).
+        if keptKey == activeFileOutboxKey {
+            if let shown = messages.firstIndex(where: { $0.id == bubbleID }) {
+                messages[shown].pending = false
+                messages[shown].failed = true
+                messages[shown].uploadHeld = whole
+            } else {
+                var back = bubble
+                back.pending = false
+                back.failed = true
+                back.uploadHeld = whole
+                messages.insert(back, at: min(idx, messages.count))
+                if let conversation = owner ?? activeID { localRowConversation[bubbleID] = conversation }
+            }
+        }
+        parkFileSend(bubbleID)
+        return .started(accepted: false)
+    }
+
+    /// After a file send's handover, does anything but its kept copy hold the
+    /// words? Banked, or taken by the server, yes. A POST that failed holds them
+    /// only while its failed bubble (the same `clientMessageId`) is still on
+    /// screen: a chat switch while it went took that bubble away. Internal for
+    /// WalnutTests.
+    static func wordsHeld(
+        after outcome: SendOutcome, clientMessageId: String?, bubbleID: String, in messages: [ChatMessage]
+    ) -> Bool {
+        switch outcome {
+        case .queued:
+            return true
+        case .refusedKeepingNothing:
+            return false
+        case .started(let accepted):
+            if accepted { return true }
+            guard let clientMessageId else { return false }
+            return messages.contains { $0.id != bubbleID && $0.clientMessageId == clientMessageId && $0.failed == true }
+        }
+    }
+
+    /// The words of a file send whose files are up, in the order they were sent:
+    /// straight out when nothing is ahead of them, else banked right after the
+    /// banked sends made before them, ahead of the ones made while the files
+    /// went up. Not `sendReportingOutcome`: that banks every send behind
+    /// whatever waits, and the words would go after messages typed later.
+    private func handOverFileSend(
+        _ text: String, images: [SelectedImage], messageId: String?, bubbleID: String,
+        createdAt: String, at position: Int
+    ) async -> SendOutcome {
+        let before = fileSendQueuedBefore[bubbleID] ?? []
+        let earlierWaiting = queuedSends.contains { before.contains($0.id) }
+        if sending || streaming || earlierWaiting {
+            let placement = QueuePlacement(after: before, createdAt: createdAt, bubbleIndex: position)
+            guard let rowID = enqueue(text, images: images, messageId: messageId, placement: placement) else {
+                return .refusedKeepingNothing
+            }
+            // A later file send goes after this one: its banked words count as
+            // made before it.
+            let mine = fileSendSeq[bubbleID] ?? 0
+            for (other, seq) in fileSendSeq where seq > mine { fileSendQueuedBefore[other, default: []].insert(rowID) }
+            return .queued
+        }
+        guard acceptsNewTurn else { return .refusedKeepingNothing }
+        let id = UUID()
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return SendAttempt.failed(provenNeverArrived: true, refused: false) }
+            // Where the file send's bubble was, above what was banked meanwhile.
+            return await self.performSend(text, images: images, messageId: messageId, insertAt: position)
+        }
+        trackedSends[id] = task
+        let attempt = await task.value
+        trackedSends[id] = nil
+        return .started(accepted: attempt == .accepted)
+    }
+
+    /// The new chat on screen got its conversation (the first send created it):
+    /// the file sends it holds that have not handed their words over move to
+    /// that conversation, on disk and here, so they go there instead of waiting
+    /// for a new chat that is no longer on screen.
+    private func moveNewChatFileSends(agentID: String, to conversationID: String) {
+        let old = PendingFileSends.chatKey(conversationID: nil, agentID: agentID)
+        let new = PendingFileSends.chatKey(conversationID: conversationID, agentID: agentID)
+        for (bubbleID, key) in fileSendKeys where key == old {
+            fileSendKeys[bubbleID] = new
+            if fileSendsInFlight[bubbleID] != nil { fileSendsInFlight[bubbleID] = new }
+            if messages.contains(where: { $0.id == bubbleID }) { localRowConversation[bubbleID] = conversationID }
+        }
+        PendingFileSends.move(from: old, to: new)
+    }
+
+    /// Waits while a file send of the same chat made before this one has not
+    /// handed its words over (it uploads, or waits for its retry).
+    private func waitForEarlierFileSends(_ bubbleID: String, key: String) async {
+        guard let mine = fileSendSeq[bubbleID] else { return }
+        // Read each time: a new chat's sends move to its conversation's key.
+        while !Task.isCancelled, fileSendsInFlight.contains(where: { flight in
+            flight.key != bubbleID && flight.value == (fileSendKeys[bubbleID] ?? key)
+                && (fileSendSeq[flight.key] ?? 0) < mine
+        }) {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+    }
+
+    /// Does a file send not yet handed over hold `entry` back? Only one made
+    /// before the entry was banked does (`fileSendQueuedBefore`).
+    private func fileSendHolds(_ entry: QueuedSend) -> Bool {
+        let key = PendingFileSends.chatKey(conversationID: entry.conversationID, agentID: entry.agentID)
+        return fileSendsInFlight.contains { flight in
+            flight.value == key && !(fileSendQueuedBefore[flight.key] ?? []).contains(entry.id)
+        }
+    }
+
+    /// An attempt's upload failed. Away from the screen the send stays kept for
+    /// when its chat is back; on screen, a failure that clears on its own rides
+    /// the retry ladder, and any other leaves the bubble failed.
+    private func fileSendFailed(_ bubbleID: String, key: String, error: Error) -> SendOutcome {
+        let clears = SessionConversationStore.isCancellation(error) || SessionFileUploader.clearsOnItsOwn(error)
+        AppLog.warn("chat-upload", "file upload failed", ["error": String(describing: error), "clears": String(clears)])
+        guard let idx = messages.firstIndex(where: { $0.id == bubbleID }) else {
+            // The bubble left with its chat: the kept copy holds the send.
+            parkFileSend(bubbleID)
+            if !clears { PendingFileSends.markFailed(session: key, bubble: bubbleID, failed: true) }
+            return .started(accepted: false)
+        }
+        messages[idx].pending = false
+        messages[idx].failed = true
+        if clears {
+            let ladder = fileRetryLadder[bubbleID] ?? (attempt: 0, firstFailureAt: Date())
+            let next = ladder.attempt + 1
+            if !isActive || SendRetryPolicy.shouldRetry(attempt: next, elapsed: Date().timeIntervalSince(ladder.firstFailureAt)) {
+                // Still in flight: what was sent after it keeps waiting behind it.
+                fileRetryLadder[bubbleID] = (attempt: next, firstFailureAt: ladder.firstFailureAt)
+                messages[idx].retryNotice = Self.fileWaitingNotice
+                // In the background nothing is armed: the app coming back is (`rearmFileSends`).
+                if isActive { scheduleFileRetry(bubbleID, attempt: next) }
+                return .started(accepted: false)
+            }
+        }
+        messages[idx].retryNotice = nil
+        settleFileSend(bubbleID, failedForGood: true)
+        if stillViewing(localRowConversation[bubbleID] ?? activeID) {
+            errorMessage = error.localizedDescription
+        }
+        return .started(accepted: false)
+    }
+
+    /// Shown under a file send that waits for its automatic retry.
+    static let fileWaitingNotice = SendRetryPolicy.waitingNotice(host: "Walnut")
+
+    private func scheduleFileRetry(_ bubbleID: String, attempt: Int) {
+        let delay = SendRetryPolicy.delay(forAttempt: attempt)
+        fileRetryTasks[bubbleID]?.cancel()
+        fileRetryTasks[bubbleID] = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled, let self else { return }
+            self.fileRetryTasks[bubbleID] = nil
+            guard self.isActive else { return }
+            guard let idx = self.messages.firstIndex(where: { $0.id == bubbleID }) else {
+                // Its chat was left: the kept copy brings it back, to go on then.
+                self.parkFileSend(bubbleID)
+                return
+            }
+            guard self.messages[idx].failed == true else { return }
+            self.messages[idx].pending = true
+            self.messages[idx].failed = false
+            self.messages[idx].retryNotice = nil
+            self.messages[idx].uploadFailedID = nil
+            _ = await self.deliverFiles(bubbleID: bubbleID)
+        }
+    }
+
+    /// The app is back: file sends that waited for it go on, the ladder starting over
+    /// (time in the background says nothing about the Mac).
+    private func rearmFileSends() {
+        for message in messages where message.localFiles?.isEmpty == false && message.failed == true
+            && fileRetryLadder[message.id] != nil && fileRetryTasks[message.id] == nil {
+            fileRetryLadder[message.id] = (attempt: 1, firstFailureAt: Date())
+            scheduleFileRetry(message.id, attempt: 1)
+        }
+    }
+
+    /// The send stops being in flight here; its kept copy brings it back.
+    private func parkFileSend(_ bubbleID: String) {
+        fileSendsInFlight[bubbleID] = nil
+        fileRetryLadder[bubbleID] = nil
+        fileRetryTasks.removeValue(forKey: bubbleID)?.cancel()
+        scheduleQueueDrain()
+    }
+
+    /// The send waits for the person: it no longer holds anything back, and a
+    /// later run brings it back as not sent.
+    private func settleFileSend(_ bubbleID: String, failedForGood: Bool) {
+        parkFileSend(bubbleID)
+        if failedForGood, let key = fileSendKeys[bubbleID] {
+            PendingFileSends.markFailed(session: key, bubble: bubbleID, failed: true,
+                                        file: messages.first(where: { $0.id == bubbleID })?.uploadFailedID)
+        }
+    }
+
+    /// Everything this store kept about a file send that is done or dropped.
+    private func forgetFileSend(_ bubbleID: String) {
+        parkFileSend(bubbleID)
+        fileSendKeys[bubbleID] = nil
+        fileSendSeq[bubbleID] = nil
+        fileSendQueuedBefore[bubbleID] = nil
+        fileSendHeld[bubbleID] = nil
+    }
+
+    /// The paths of `files` on the host, in order, each uploaded from where the
+    /// host's copy stands. The one that fails is marked on the bubble.
+    private func uploadedPaths(_ files: [ComposerFile], bubbleID: String) async throws -> [String] {
+        var paths: [String] = []
+        for file in files {
+            let held = messages.first(where: { $0.id == bubbleID })?.uploadHeld?[file.id]
+                ?? fileSendHeld[bubbleID]?[file.id] ?? 0
+            do {
+                paths.append(try await FileSendFlights.resumedPath(for: file, target: .unbound, transport: uploads, held: held))
+            } catch {
+                if let idx = messages.firstIndex(where: { $0.id == bubbleID }) { messages[idx].uploadFailedID = file.id }
+                throw error
+            }
+        }
+        return paths
+    }
+
+    private func noteUploadHeld(_ uploadID: String, bubbleID: String, held: Int64) {
+        let before = fileSendHeld[bubbleID]?[uploadID] ?? 0
+        guard fileSendHeld[bubbleID]?[uploadID] != held else { return }
+        fileSendHeld[bubbleID, default: [:]][uploadID] = held
+        // Bytes moved: the link works again, so a long upload that drops twice
+        // gets the whole retry budget after each drop, not one for all of them.
+        if held > before, fileRetryLadder[bubbleID] != nil {
+            fileRetryLadder[bubbleID] = (attempt: 0, firstFailureAt: Date())
+        }
+        if let key = fileSendKeys[bubbleID], let all = fileSendHeld[bubbleID] {
+            PendingFileSends.updateHeld(session: key, bubble: bubbleID, held: all)
+        }
+        guard let idx = messages.firstIndex(where: { $0.id == bubbleID }),
+              messages[idx].uploadHeld?[uploadID] != held else { return }
+        messages[idx].uploadHeld = (messages[idx].uploadHeld ?? [:]).merging([uploadID: held]) { _, new in new }
+    }
+
+    private func forgetUpload(_ file: ComposerFile) {
+        FileSendFlights.forget(file.id)
+        ComposerFileStore.remove(file)
+    }
+
+    /// Drop one file from a send that has not gone (its card's Remove): its copy
+    /// on the phone goes, the kept send forgets it, and the rest is sent again at
+    /// once. A send left with nothing at all is discarded; one left with words or
+    /// photos only goes as a plain message (`retry`).
+    func removeFile(_ fileID: String, from message: ChatMessage) async {
+        guard message.failed == true,
+              let idx = messages.firstIndex(where: { $0.id == message.id }),
+              let files = messages[idx].localFiles,
+              let file = files.first(where: { $0.id == fileID }) else { return }
+        let rest = files.filter { $0.id != fileID }
+        if rest.isEmpty, messages[idx].text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           (messages[idx].localImages ?? []).isEmpty {
+            discardFailed(messages[idx])
+            return
+        }
+        forgetUpload(file)
+        messages[idx].localFiles = rest.isEmpty ? nil : rest
+        messages[idx].uploadHeld?[fileID] = nil
+        fileSendHeld[message.id]?[fileID] = nil
+        if messages[idx].uploadFailedID == fileID { messages[idx].uploadFailedID = nil }
+        if let key = fileSendKeys[message.id] {
+            if rest.isEmpty {
+                // Words or photos only: an ordinary failed message now.
+                PendingFileSends.remove(session: key, bubble: message.id)
+                forgetFileSend(message.id)
+            } else {
+                PendingFileSends.updateFiles(session: key, bubble: message.id, files: rest.map(PendingFileSends.ref))
+            }
+        }
+        AppLog.info("chat-upload", "file removed from a send", ["left": String(rest.count)])
+        await retry(messages[idx])
     }
 
     // MARK: - Send queue (mid-turn sends)
@@ -1524,12 +2112,29 @@ final class ChatStore {
         }
     }
 
+    /// Where a file send's words go in the queue (`handOverFileSend`): right
+    /// after the banked sends made before it (`after`), with its own time, and
+    /// its bubble where the file send's bubble was.
+    private struct QueuePlacement {
+        let after: Set<String>
+        let createdAt: String
+        let bubbleIndex: Int
+    }
+
     /// Bank a message behind the running turn. Returns false only when nothing
     /// kept it, which is the answer a caller holding the only copy of the text
     /// acts on (see `SendOutcome.keptTheWords`).
     private func enqueue(_ text: String, images: [SelectedImage], messageId: String? = nil) -> Bool {
+        enqueue(text, images: images, messageId: messageId, placement: nil) != nil
+    }
+
+    /// `enqueue`, at the end of the queue or where `placement` says; the banked
+    /// row's id, nil when nothing kept the words.
+    private func enqueue(
+        _ text: String, images: [SelectedImage], messageId: String?, placement: QueuePlacement?
+    ) -> String? {
         let jpegDatas = images.map(\.jpegData)
-        guard ChatSendQueueRules.hasContent(text: text, images: jpegDatas) else { return false }
+        guard ChatSendQueueRules.hasContent(text: text, images: jpegDatas) else { return nil }
         let bytes = jpegDatas.reduce(0) { $0 + $1.count }
         if let refusal = ChatSendQueueRules.refusal(
             toEnqueueInto: queuedSends, conversationID: activeID,
@@ -1539,11 +2144,11 @@ final class ChatStore {
                 "reason": String(describing: refusal),
                 "conversationID": activeID ?? "-", "queued": "\(queuedSends.count)",
             ])
-            return false
+            return nil
         }
-        guard let conversationID = activeID else { return false }
+        guard let conversationID = activeID else { return nil }
         let rowID = "queued-\(UUID().uuidString)"
-        let createdAt = ISO8601DateFormatter().string(from: AppClock.now())
+        let createdAt = placement?.createdAt ?? ISO8601DateFormatter().string(from: AppClock.now())
         let entry = QueuedSend(
             id: rowID, conversationID: conversationID, agentID: activeAgentID,
             text: text, images: jpegDatas, createdAt: createdAt, messageId: messageId
@@ -1551,17 +2156,27 @@ final class ChatStore {
         // DISK FIRST. The composer clears its draft on the strength of this answer,
         // so "banked" has to mean the words are somewhere that survives a kill. A
         // write that did not land is a refusal, and the composer puts the text back.
-        guard setQueue(queuedSends + [entry]) else {
+        var queue = queuedSends
+        if let placement {
+            queue.insert(entry, at: queue.lastIndex(where: { placement.after.contains($0.id) }).map { $0 + 1 } ?? 0)
+        } else {
+            queue.append(entry)
+        }
+        guard setQueue(queue) else {
             AppLog.error("chat", "refused a send because it could not be persisted", [
                 "conversationID": conversationID,
             ])
-            return false
+            return nil
         }
-        messages.append(bubble(for: entry))
+        if let placement {
+            messages.insert(bubble(for: entry), at: min(placement.bubbleIndex, messages.count))
+        } else {
+            messages.append(bubble(for: entry))
+        }
         localRowConversation[rowID] = conversationID
         bottomPinned = true
         if isActive { scrollToBottomSignal += 1 }
-        return true
+        return rowID
     }
 
     /// The optimistic bubble for a banked message: the SAME shape `performSend`
@@ -1696,9 +2311,9 @@ final class ChatStore {
     private func scheduleQueueDrain() {
         guard isActive, !sending, !streaming, !queuedSends.isEmpty else { return }
         guard connection?.online != false else { return }
-        guard ChatSendQueueRules.nextDeliverable(
+        guard let next = ChatSendQueueRules.nextDeliverable(
             queuedSends, conversationID: activeID, agentID: activeAgentID
-        ) != nil else { return }
+        ), !fileSendHolds(queuedSends[next]) else { return }
         guard queueDrainTask == nil else { return }
         queueDrainTask = Task { @MainActor [weak self] in
             await self?.drainQueue()
@@ -1720,6 +2335,9 @@ final class ChatStore {
                 queuedSends, conversationID: activeID, agentID: activeAgentID
             ) else { return }
             let entry = queuedSends[index]
+            // Made after a message whose files still go up: it goes after that one
+            // (`handOverFileSend`, which drains again once the words are out).
+            guard !fileSendHolds(entry) else { return }
             // `processing`, ON DISK, before the POST goes out. Removing it here (the
             // first cut did) opens a window where a kill leaves the words in no
             // queue, no cache and possibly no server: the pending bubble is never
@@ -1847,6 +2465,9 @@ final class ChatStore {
 
     func closeStream() {
         isActive = false
+        // Armed again when the app is back (`rearmFileSends`).
+        for task in fileRetryTasks.values { task.cancel() }
+        fileRetryTasks.removeAll()
         sse?.stop()
         sse = nil
         turnWatchdog?.cancel()
@@ -2635,7 +3256,10 @@ final class ChatStore {
 
 extension ChatStore: LifecycleSuspendable {
     func suspendForBackground() { closeStream() }
-    func resumeForForeground() { resumeStream() }
+    func resumeForForeground() {
+        resumeStream()
+        rearmFileSends()
+    }
 }
 
 // MARK: - Disconnect: forget everything this store holds
@@ -2643,6 +3267,18 @@ extension ChatStore: LifecycleSuspendable {
 extension ChatStore {
     /// Drop every conversation, message, banked send and attached image, so a
     /// re-pair starts empty (`LocalDataReset`). Same file for the private state.
+    /// Every file send kept on this phone (the main chat's and every session's),
+    /// its uploads and its files' copies.
+    static func eraseKeptFileSends() {
+        FileSendFlights.forgetAll()
+        PendingFileSends.eraseAll()
+        ComposerFileStore.removeAll()
+        // What this run learned of the old server's files: the sizes of the ones
+        // sent, and which photo copy a new session's photo was uploaded as.
+        SentFileSizes.shared.removeAll()
+        NewSessionUploads.forgetPhotoCopies()
+    }
+
     func eraseLocalState() {
         closeStream()
         _ = setQueue([])
@@ -2658,6 +3294,19 @@ extension ChatStore {
         inconclusiveSends.removeAll()
         sendsShownByServer.removeAll()
         sentImages.removeAll()
+        for task in fileRetryTasks.values { task.cancel() }
+        fileRetryTasks.removeAll()
+        fileRetryLadder.removeAll()
+        fileSendKeys.removeAll()
+        fileSendsInFlight.removeAll()
+        fileSendSeq.removeAll()
+        fileSendQueuedBefore.removeAll()
+        fileSendHeld.removeAll()
+        // Every kept file send goes with the pairing, its uploads stopped and its
+        // copies removed: a new chat's key is the same on every server, and the
+        // next pairing's chat would put the old words and files back and send
+        // them there.
+        Self.eraseKeptFileSends()
         cloudMarks.removeAll()
         liveTurnID = nil
         stallNotice = nil

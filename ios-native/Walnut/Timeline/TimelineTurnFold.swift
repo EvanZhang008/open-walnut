@@ -477,6 +477,7 @@ extension ChatMessage {
         copy.localImages = localImages
         copy.localFiles = localFiles
         copy.uploadHeld = uploadHeld
+        copy.uploadFailedID = uploadFailedID
         copy.clientMessageId = clientMessageId
         copy.retryNotice = retryNotice
         copy.added = added

@@ -106,7 +106,7 @@ final class SessionFileUploadTests: XCTestCase {
         let file = try tempFile(SessionFileUploader.chunkBytes * 2 + 1000)
         let host = FakeUploadHost()
         var progress: [Int64] = []
-        let path = try await SessionFileUploader.upload(file, sessionID: "s1", transport: host, pauseBetweenTries: .zero) {
+        let path = try await SessionFileUploader.upload(file, target: .session("s1"), transport: host, pauseBetweenTries: .zero) {
             progress.append($0)
         }
         XCTAssertEqual(path, "/host/uploads/\(file.id)/clip.mov")
@@ -125,7 +125,7 @@ final class SessionFileUploadTests: XCTestCase {
         host.failNext = [APIError.network(underlying: URLError(.networkConnectionLost))]
         // Start claims 2 chunks: the host answers it holds 1, the upload goes from there.
         let path = try await SessionFileUploader.upload(
-            file, sessionID: "s1", transport: host, from: Int64(SessionFileUploader.chunkBytes * 2), pauseBetweenTries: .zero
+            file, target: .session("s1"), transport: host, from: Int64(SessionFileUploader.chunkBytes * 2), pauseBetweenTries: .zero
         ) { _ in }
         XCTAssertFalse(path.isEmpty)
         XCTAssertEqual(host.stored, try Data(contentsOf: file.localURL))
@@ -137,13 +137,13 @@ final class SessionFileUploadTests: XCTestCase {
         let file = try tempFile(1000, name: "r.pdf")
         let once = FakeUploadHost()
         once.restartsLeft = 1
-        _ = try await SessionFileUploader.upload(file, sessionID: "s1", transport: once, pauseBetweenTries: .zero) { _ in }
+        _ = try await SessionFileUploader.upload(file, target: .session("s1"), transport: once, pauseBetweenTries: .zero) { _ in }
         XCTAssertEqual(once.calls.map(\.offset), [0, 0])
 
         let always = FakeUploadHost()
         always.restartsLeft = 5
         do {
-            _ = try await SessionFileUploader.upload(file, sessionID: "s1", transport: always, pauseBetweenTries: .zero) { _ in }
+            _ = try await SessionFileUploader.upload(file, target: .session("s1"), transport: always, pauseBetweenTries: .zero) { _ in }
             XCTFail("a second mismatch must stop")
         } catch SessionFileUploader.UploadError.checksumMismatch {}
     }
@@ -151,7 +151,7 @@ final class SessionFileUploadTests: XCTestCase {
     func testAnEmptyFileIsOneEmptyChunk() async throws {
         let file = try tempFile(0, name: "empty.txt")
         let host = FakeUploadHost()
-        let path = try await SessionFileUploader.upload(file, sessionID: "s1", transport: host, pauseBetweenTries: .zero) { _ in }
+        let path = try await SessionFileUploader.upload(file, target: .session("s1"), transport: host, pauseBetweenTries: .zero) { _ in }
         XCTAssertEqual(host.calls.count, 1)
         XCTAssertEqual(host.calls.first?.length, 0)
         XCTAssertNotNil(host.calls.first?.sha256)
@@ -164,7 +164,7 @@ final class SessionFileUploadTests: XCTestCase {
         host.failNext = Array(repeating: APIError.server(status: 400, code: "files_need_daemon_upgrade", message: "old",
                                                          serverHash: nil, serverContent: nil), count: 5)
         do {
-            _ = try await SessionFileUploader.upload(file, sessionID: "s1", transport: host, pauseBetweenTries: .zero) { _ in }
+            _ = try await SessionFileUploader.upload(file, target: .session("s1"), transport: host, pauseBetweenTries: .zero) { _ in }
             XCTFail("expected the refusal")
         } catch let error as APIError {
             XCTAssertEqual(error.code, "files_need_daemon_upgrade")
@@ -178,7 +178,7 @@ final class SessionFileUploadTests: XCTestCase {
         // An older server's own 404: `{"error":"Not found: PUT ..."}`, read as http_error.
         host.failNext = [APIError.server(status: 404, code: "http_error", message: "Not found", serverHash: nil, serverContent: nil)]
         do {
-            _ = try await SessionFileUploader.upload(file, sessionID: "s1", transport: host, pauseBetweenTries: .zero) { _ in }
+            _ = try await SessionFileUploader.upload(file, target: .session("s1"), transport: host, pauseBetweenTries: .zero) { _ in }
             XCTFail("expected the refusal")
         } catch SessionFileUploader.UploadError.serverTooOld {}
         XCTAssertEqual(host.calls.count, 1)
@@ -244,11 +244,11 @@ final class SessionFileUploadTests: XCTestCase {
         let session = "files-killed-" + UUID().uuidString.lowercased()
         let file = try tempFile(SessionFileUploader.chunkBytes + 10)
         addTeardownBlock { for e in PendingFileSends.entries(session: session) { PendingFileSends.remove(session: session, bubble: e.bubbleID) } }
-        // First run: the host stops answering after the first chunk, and the app is
+        // First run: the host stops answering after the first chunk (no answer, so
+        // the send waits for its retry, not a failure for good), and the app is
         // then ended (the store simply goes away without a word).
         let first = FakeUploadHost()
-        first.failAtOffset[Int64(SessionFileUploader.chunkBytes)] = APIError.server(
-            status: 507, code: "host_disk_full", message: "full", serverHash: nil, serverContent: nil)
+        first.failAtOffset[Int64(SessionFileUploader.chunkBytes)] = APIError.network(underlying: URLError(.notConnectedToInternet))
         let transport1 = MockSessionSendTransport()
         let store1 = SessionConversationStore(session: ScriptedSSE.session(id: session), transport: transport1, uploads: first)
         await store1.open()
@@ -488,20 +488,25 @@ final class SessionFileUploadTests: XCTestCase {
 /// A session host for the uploader: holds the bytes it was sent at the offsets
 /// the real `upload.part` accepts, and answers like the route does.
 final class FakeUploadHost: SessionUploadTransport, @unchecked Sendable {
-    struct Call { let offset: Int64; let length: Int; let sha256: String? }
+    struct Call { let offset: Int64; let length: Int; let sha256: String?; var target: UploadTarget; var uploadID: String }
     private(set) var calls: [Call] = []
+    /// The bytes of the upload being sent. Files of one message go one after
+    /// another, each from offset 0, so one buffer stands for the host.
     var stored = Data()
     var failNext: [Error] = []
     var failAtOffset: [Int64: Error] = [:]
+    /// Every chunk of these uploads is refused with the error.
+    var failUploads: [String: Error] = [:]
     var restartsLeft = 0
     /// Holds the chunk at this offset until the gate opens.
     var holdAt: (Int64, CheckedContinuationGate)?
 
-    func uploadChunk(sessionID: String, uploadID: String, name: String, size: Int64,
+    func uploadChunk(target: UploadTarget, uploadID: String, name: String, size: Int64,
                      offset: Int64, sha256: String?, data: Data) async throws -> UploadChunkOutcome {
-        calls.append(Call(offset: offset, length: data.count, sha256: sha256))
+        calls.append(Call(offset: offset, length: data.count, sha256: sha256, target: target, uploadID: uploadID))
         if let (at, gate) = holdAt, at == offset { await gate.wait() }
         if !failNext.isEmpty { throw failNext.removeFirst() }
+        if let error = failUploads[uploadID] { throw error }
         if let error = failAtOffset[offset] { throw error }
         if offset == 0 { stored = Data() }
         let have = Int64(stored.count)

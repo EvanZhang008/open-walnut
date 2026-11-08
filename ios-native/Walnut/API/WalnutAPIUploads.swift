@@ -1,13 +1,14 @@
 import Foundation
 
-/// The host's answer to one chunk of a session upload
-/// (`PUT /api/v1/sessions/:id/uploads/:uploadId`, docs/reference/api-v1.md).
+/// The host's answer to one chunk of an upload
+/// (`PUT /api/v1/sessions/:id/uploads/:uploadId` or `PUT /api/v1/uploads/:uploadId`,
+/// docs/reference/api-v1.md).
 struct UploadChunkReply: Decodable, Equatable, Sendable {
     /// Bytes the host now holds: send the next chunk from here.
     let received: Int64
     let size: Int64
     let done: Bool
-    /// Where the finished file is on the session's host (the last chunk only).
+    /// Where the finished file is on the host (the last chunk only).
     let path: String?
 }
 
@@ -20,20 +21,38 @@ enum UploadChunkOutcome: Equatable, Sendable {
     case restart
 }
 
-/// The one call the uploader makes, so tests can stand in for the server.
-protocol SessionUploadTransport {
-    func uploadChunk(sessionID: String, uploadID: String, name: String, size: Int64,
-                     offset: Int64, sha256: String?, data: Data) async throws -> UploadChunkOutcome
-}
+/// Where an attached file goes. A session's file lands on that session's host. A
+/// file for the main chat, or for a session that does not exist yet, has no
+/// session: it lands on the machine Walnut runs on, where the main chat's agent
+/// reads it, and the server carries it to a new session's host itself before the
+/// first message goes. Both routes take the same chunks and answer the same way.
+enum UploadTarget: Hashable, Sendable {
+    case session(String)
+    case unbound
 
-extension WalnutAPI: SessionUploadTransport {
-    /// One raw chunk. Safe to retry: the host acknowledges a chunk it already
-    /// holds without writing it again.
-    func uploadChunk(sessionID: String, uploadID: String, name: String, size: Int64,
-                     offset: Int64, sha256: String?, data: Data) async throws -> UploadChunkOutcome {
-        guard let base = AppConfig.serverURL, let token = AppConfig.token,
-              var components = URLComponents(string: base.absoluteString + "/api/v1/sessions/\(escape(sessionID))/uploads/\(escape(uploadID))")
-        else { throw APIError.notConfigured }
+    /// The route's path for one upload, its components escaped.
+    func path(uploadID: String) -> String {
+        let upload = Self.escape(uploadID)
+        switch self {
+        case .session(let id): return "/api/v1/sessions/\(Self.escape(id))/uploads/\(upload)"
+        case .unbound: return "/api/v1/uploads/\(upload)"
+        }
+    }
+
+    /// The session's id for the logs, "-" when there is none.
+    var logLabel: String {
+        if case .session(let id) = self { return id }
+        return "-"
+    }
+
+    private static func escape(_ component: String) -> String {
+        component.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? component
+    }
+
+    /// The whole URL of one chunk. nil when it cannot be built.
+    func chunkURL(base: URL, uploadID: String, name: String, size: Int64,
+                  offset: Int64, sha256: String?) -> URL? {
+        guard var components = URLComponents(string: base.absoluteString + path(uploadID: uploadID)) else { return nil }
         var query = [
             URLQueryItem(name: "offset", value: String(offset)),
             URLQueryItem(name: "size", value: String(size)),
@@ -43,7 +62,25 @@ extension WalnutAPI: SessionUploadTransport {
         components.queryItems = query
         // `+` is a space to some query parsers; a file name may hold one.
         components.percentEncodedQuery = components.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
-        guard let url = components.url else { throw APIError.notConfigured }
+        return components.url
+    }
+}
+
+/// The one call the uploader makes, so tests can stand in for the server.
+protocol SessionUploadTransport {
+    func uploadChunk(target: UploadTarget, uploadID: String, name: String, size: Int64,
+                     offset: Int64, sha256: String?, data: Data) async throws -> UploadChunkOutcome
+}
+
+extension WalnutAPI: SessionUploadTransport {
+    /// One raw chunk. Safe to retry: the host acknowledges a chunk it already
+    /// holds without writing it again.
+    func uploadChunk(target: UploadTarget, uploadID: String, name: String, size: Int64,
+                     offset: Int64, sha256: String?, data: Data) async throws -> UploadChunkOutcome {
+        guard let base = AppConfig.serverURL, let token = AppConfig.token,
+              let url = target.chunkURL(base: base, uploadID: uploadID, name: name, size: size,
+                                        offset: offset, sha256: sha256)
+        else { throw APIError.notConfigured }
         var request = URLRequest(url: url)
         request.httpMethod = "PUT"
         // A 2 MB chunk over a slow uplink, plus the host's write.

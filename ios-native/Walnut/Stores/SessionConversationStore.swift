@@ -117,6 +117,13 @@ final class SessionConversationStore {
     /// supersedes an automatic attempt still in flight, whose failure must then
     /// leave the bubble to the newer one (`deliver`).
     @ObservationIgnored private var deliveryOwners: [String: Int] = [:]
+    /// Bubbles whose delivery attempt runs now (`deliverAttempt`): only these
+    /// move while the page is away (`waitForEarlierFileSends`).
+    @ObservationIgnored private var attemptsRunning: Set<String> = []
+    /// Bubbles whose attempt waited behind an earlier one and has not ended yet
+    /// (`waitForEarlierFileSends`): what was sent after them waits for them, so
+    /// the messages behind a file send go in the order they were sent.
+    @ObservationIgnored private var attemptsBehind: Set<String> = []
     /// Kept file sends put back on the page that still wait to go out: they are
     /// sent once the transcript has been read (`sendRestoredFileSends`).
     @ObservationIgnored private var restoredWaiting: [String] = []
@@ -473,11 +480,14 @@ final class SessionConversationStore {
                 "sessionId": sessionId, "bubbleId": entry.bubbleID,
                 "files": "\(entry.files.count - missing.count)/\(entry.files.count)",
             ])
-            if !missing.isEmpty {
+            if !missing.isEmpty || entry.failed {
                 // A copy is gone (storage was cleared): the message stays, kept, as
                 // not sent. A retry says which file is missing rather than sending
                 // without it; the person deletes it and attaches the file again.
+                // One whose last attempt failed for good (`settleFailed`) comes back
+                // the same way: it waits for the person's Retry, as the main chat's does.
                 bubble.failed = true
+                bubble.uploadFailedID = entry.failedFile
                 pendingUser.append(bubble)
                 continue
             }
@@ -893,6 +903,23 @@ final class SessionConversationStore {
         let hasImages = bubble.localImages?.isEmpty == false
         let hasFiles = bubble.localFiles?.isEmpty == false
         guard hasImages || hasFiles else {
+            // A new session's first message names its files and pictures itself
+            // (`NewSessionChatView`): its row is the one naming the same files and
+            // words. By name, not path: the server may have moved the files to the
+            // session's host and named them there.
+            if let mine = MessageRow.attachmentSendParts(bubble.text) {
+                guard let parts else { return false }
+                let names = { (paths: [String]) in paths.map { ($0 as NSString).lastPathComponent } }
+                // The transcript's clip can end inside the path list: the names it
+                // kept (the last perhaps cut) are this send's first ones.
+                if rowText.hasSuffix("\u{2026}"), parts.text.isEmpty, parts.filePaths.count <= mine.filePaths.count {
+                    let kept = names(parts.filePaths).dropLast()
+                    return Array(names(mine.filePaths).prefix(kept.count)) == Array(kept)
+                }
+                // Its pictures keep their names too (the server's picture lane).
+                return names(parts.filePaths) == names(mine.filePaths)
+                    && names(parts.imagePaths) == names(mine.imagePaths) && sameWords(parts.text, mine.text)
+            }
             return parts == nil && sameWords(rowText, bubble.text)
         }
         let words = bubble.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1397,12 +1424,16 @@ final class SessionConversationStore {
             }
         }
         defer { for file in files { FileSendFlights.unwatch(file.id, by: watch) } }
+        let generation = FileSendFlights.generation
         while !FileSendFlights.begin(bubbleID, owner: me) {
             // Another page's store is sending this message: its outcome is ours.
             if await FileSendFlights.outcome(of: bubbleID) {
                 markAccepted(bubbleID)
                 return true
             }
+            // The pairing went while it waited (`FileSendFlights.forgetAll`): the
+            // send was the old server's, and nothing of it goes now.
+            guard FileSendFlights.generation == generation else { return false }
         }
         var accepted = false
         defer { FileSendFlights.end(bubbleID, owner: me, accepted: accepted) }
@@ -1421,6 +1452,14 @@ final class SessionConversationStore {
         lastDeliveryToken += 1
         let token = lastDeliveryToken
         deliveryOwners[bubbleID] = token
+        attemptsRunning.insert(bubbleID)
+        defer {
+            if deliveryOwners[bubbleID] == token {
+                attemptsRunning.remove(bubbleID)
+                attemptsBehind.remove(bubbleID)
+            }
+        }
+        let heldAtStart = heldTotal(bubbleID)
         let payloads = await Self.buildImagePayloads(jpegDatas)
         // Encoding is a real suspension point (5 large photos take a moment).
         // If this attempt was cancelled meanwhile, do NOT fire the request: the
@@ -1440,6 +1479,20 @@ final class SessionConversationStore {
             // other (the ladder below), and a retry resumes where this one stopped.
             let wireText = try await textWithUploadedFiles(bubbleID: bubbleID, text: text)
             let interrupting = interruptBubbleIDs.contains(bubbleID)
+            // A message with files sent before this one, still going up, goes
+            // first: the server gets messages in the order they were sent. An
+            // interrupt is meant to cut in, so it does not wait.
+            if !interrupting {
+                guard await waitForEarlierFileSends(bubbleID) else {
+                    guard deliveryOwners[bubbleID] == token else { return false }
+                    // The page went away while it waited: it goes on when it is back.
+                    pauseDelivery(bubbleID: bubbleID, messageId: messageId, text: text,
+                                  jpegDatas: jpegDatas, attempt: attempt, firstFailureAt: firstFailureAt)
+                    return false
+                }
+                // A manual retry took over while this one waited: that one posts.
+                guard deliveryOwners[bubbleID] == token else { return false }
+            }
             let receipt = try await api.sendSessionMessage(
                 id: sessionId, text: wireText, images: payloads, messageId: messageId,
                 voice: voiceBubbleIDs.contains(bubbleID), interrupt: interruptBubbleIDs.contains(bubbleID),
@@ -1473,6 +1526,15 @@ final class SessionConversationStore {
             // A newer attempt of this bubble (a manual retry that superseded this
             // automatic one) owns its state: this one's failure says nothing now.
             guard deliveryOwners[bubbleID] == token else { return false }
+            // A file upload's own transient answers (a hop's 504, the Mac away for a
+            // moment) ride the same ladder as a POST's.
+            let hasFiles = pendingUser.first(where: { $0.id == bubbleID })?.localFiles?.isEmpty == false
+            let retryable = SendRetryPolicy.isRetryable(error) || (hasFiles && SessionFileUploader.clearsOnItsOwn(error))
+            // Bytes reached the host in this attempt: the link works again, so the
+            // ladder starts over (two drops in a long upload do not stop it).
+            let progressed = heldTotal(bubbleID) > heldAtStart
+            let ladderAttempt = progressed ? 0 : attempt
+            let ladderStart = progressed ? nil : firstFailureAt
             // PAUSED, NEVER ABANDONED (see `suspend`). An attempt the app's going
             // away cut short (`cancelRetryTasks` cancels a retry's task; a request in
             // flight ends cancelled), or one that met a condition the ladder rides
@@ -1481,9 +1543,9 @@ final class SessionConversationStore {
             // a message it already has once. Settling it as the terminal "Not sent"
             // left nothing to re-arm, so a message the server had stayed on the page
             // as a second, failed copy (App Store gate r8, Q1r).
-            if Self.isCancellation(error) || (!isActive && SendRetryPolicy.isRetryable(error)) {
+            if Self.isCancellation(error) || (!isActive && retryable) {
                 pauseDelivery(bubbleID: bubbleID, messageId: messageId, text: text,
-                              jpegDatas: jpegDatas, attempt: attempt, firstFailureAt: firstFailureAt)
+                              jpegDatas: jpegDatas, attempt: ladderAttempt, firstFailureAt: ladderStart)
                 return false
             }
             // Anything else while away is settled silently, but must NOT leave a
@@ -1503,7 +1565,7 @@ final class SessionConversationStore {
             //    because the ladder only reacted to a 503 RESPONSE. Safe to
             //    retry only because the bubble's `qm-*` id makes the send
             //    idempotent end-to-end (see SendRetryPolicy).
-            if SendRetryPolicy.isRetryable(error) {
+            if retryable {
                 if (error as? APIError)?.isBridgeOffline == true {
                     noteBridgeDown()
                 }
@@ -1511,8 +1573,8 @@ final class SessionConversationStore {
                 // making the user the retry loop. The bubble stays visible and
                 // manually retryable throughout (same id, so a manual tap
                 // racing the timer still can't double-deliver).
-                let failedAt = firstFailureAt ?? Date()
-                let next = attempt + 1
+                let failedAt = ladderStart ?? Date()
+                let next = ladderAttempt + 1
                 let elapsed = Date().timeIntervalSince(failedAt)
                 if SendRetryPolicy.shouldRetry(attempt: next, elapsed: elapsed) {
                     markWaitingForRetry(bubbleID)
@@ -1561,6 +1623,11 @@ final class SessionConversationStore {
         pendingUser[idx].pending = false
         pendingUser[idx].failed = true
         pendingUser[idx].retryNotice = nil
+        // Kept that way: the next run puts it back as not sent, never sends it by itself,
+        // and with how far each upload got (the progress saves come every few seconds).
+        PendingFileSends.updateHeld(session: sessionId, bubble: bubbleID, held: pendingUser[idx].uploadHeld ?? [:])
+        PendingFileSends.markFailed(session: sessionId, bubble: bubbleID, failed: true,
+                                    file: pendingUser[idx].uploadFailedID)
     }
 
     /// Non-terminal failed state: still red (the message is genuinely not
@@ -1571,6 +1638,7 @@ final class SessionConversationStore {
         pendingUser[idx].pending = false
         pendingUser[idx].failed = true
         pendingUser[idx].retryNotice = SendRetryPolicy.waitingNotice(host: hostLabel)
+        PendingFileSends.updateHeld(session: sessionId, bubble: bubbleID, held: pendingUser[idx].uploadHeld ?? [:])
     }
 
     /// An attempt that did not finish, for a reason that is not the message's: it
@@ -1656,6 +1724,44 @@ final class SessionConversationStore {
 
     // MARK: - Attached files
 
+    /// Waits while a message with files sent before `bubbleID` has not gone yet
+    /// (it uploads, or waits for its automatic retry). False only when this
+    /// attempt was cancelled (the caller pauses it, as any cancelled attempt).
+    ///
+    /// Away (the page left or in the background), only an attempt that runs
+    /// still moves: one waiting for its retry, or put back and not sent yet,
+    /// waits for the page, and a page opened again is a new store. Then this
+    /// message goes now, out of order rather than lost: the composer already let
+    /// go of it, and nothing kept it but this store.
+    private func waitForEarlierFileSends(_ bubbleID: String) async -> Bool {
+        // Until this attempt ends (`deliverAttempt`), a message sent after this
+        // one waits for it as well: each wakes on its own timer, and the later
+        // one could otherwise post first.
+        if earlierFileSendInFlight(bubbleID) != nil { attemptsBehind.insert(bubbleID) }
+        while let earlier = earlierFileSendInFlight(bubbleID) {
+            if Task.isCancelled { return false }
+            if !isActive, !attemptsRunning.contains(earlier) { return true }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        return true
+    }
+
+    /// The first bubble before `bubbleID` with files still on its way, or one
+    /// waiting behind such a bubble whose attempt has not ended (`attemptsBehind`), or nil.
+    func earlierFileSendInFlight(_ bubbleID: String) -> String? {
+        guard let idx = pendingUser.firstIndex(where: { $0.id == bubbleID }) else { return nil }
+        return pendingUser[..<idx].first { earlier in
+            attemptsBehind.contains(earlier.id)
+                || (earlier.localFiles?.isEmpty == false
+                    && (earlier.pending == true || (earlier.failed == true && earlier.retryNotice != nil)))
+        }?.id
+    }
+
+    /// Bytes the host holds of the bubble's files, all together.
+    private func heldTotal(_ bubbleID: String) -> Int64 {
+        pendingUser.first(where: { $0.id == bubbleID })?.uploadHeld?.values.reduce(0, +) ?? 0
+    }
+
     /// The words this bubble sends: with attached files, the paths the host saved
     /// them at under the files header (`ComposerFile.messageText`), each file
     /// uploaded first. Files run one after another, so progress reads in order.
@@ -1663,7 +1769,15 @@ final class SessionConversationStore {
         guard let files = pendingUser.first(where: { $0.id == bubbleID })?.localFiles, !files.isEmpty else { return text }
         var paths: [String] = []
         for file in files {
-            paths.append(try await uploadedPath(for: file, bubbleID: bubbleID))
+            do {
+                paths.append(try await uploadedPath(for: file, bubbleID: bubbleID))
+            } catch {
+                // Its card says it is the one that failed (`TimelineFileChip.local`).
+                if let idx = pendingUser.firstIndex(where: { $0.id == bubbleID }) {
+                    pendingUser[idx].uploadFailedID = file.id
+                }
+                throw error
+            }
         }
         return ComposerFile.messageText(text, paths: paths)
     }
@@ -1671,20 +1785,8 @@ final class SessionConversationStore {
     /// One file's path on the host: known already, joined while an upload of it
     /// runs (from any store), or uploaded now from where the host's copy stands.
     private func uploadedPath(for file: ComposerFile, bubbleID: String) async throws -> String {
-        if let known = FileSendFlights.knownPath(file.id) { return known }
         let start = pendingUser.first(where: { $0.id == bubbleID })?.uploadHeld?[file.id] ?? 0
-        guard FileManager.default.fileExists(atPath: file.localURL.path) else {
-            // The host has all of it: its empty last chunk answers the path.
-            if start >= file.size, let path = try? await SessionFileUploader.finish(file, sessionID: sessionId, transport: uploads) {
-                return path
-            }
-            throw SessionFileUploader.UploadError.fileGone(file.name)
-        }
-        let path = try await FileSendFlights.path(for: file, sessionID: sessionId, transport: uploads, from: start)
-        AppLog.info("session-upload", "file uploaded", [
-            "sessionId": sessionId, "uploadId": file.id, "bytes": String(file.size), "kind": file.kind.rawValue,
-        ])
-        return path
+        return try await FileSendFlights.resumedPath(for: file, target: .session(sessionId), transport: uploads, held: start)
     }
 
     private func noteUploadHeld(_ uploadID: String, bubbleID: String, held: Int64) {
@@ -1706,6 +1808,7 @@ final class SessionConversationStore {
             pendingUser[idx].failed = false
             pendingUser[idx].pending = true
             pendingUser[idx].retryNotice = nil
+            pendingUser[idx].uploadFailedID = nil
         }
     }
 
@@ -1749,6 +1852,8 @@ final class SessionConversationStore {
         pendingUser[idx].pending = true
         pendingUser[idx].failed = false
         pendingUser[idx].retryNotice = nil
+        pendingUser[idx].uploadFailedID = nil
+        PendingFileSends.markFailed(session: sessionId, bubble: message.id, failed: false)
         // Backfill an id for a bubble that predates this field (a failed send
         // from an older build restored into this session) so the retry is still
         // idempotent from here on.
@@ -1758,6 +1863,37 @@ final class SessionConversationStore {
             bubbleID: message.id, messageId: messageId, text: message.text,
             jpegDatas: message.localImages ?? [], attempt: 0, firstFailureAt: nil
         )
+    }
+
+    /// Drop one file from a send that has not gone (its card's Remove): its copy
+    /// on the phone goes, the kept send forgets it, and the rest is sent again
+    /// at once. A send left with nothing at all is discarded; one left with words
+    /// or photos only goes as a plain message.
+    func removeFile(_ fileID: String, from message: ChatMessage) async {
+        guard message.failed == true,
+              let idx = pendingUser.firstIndex(where: { $0.id == message.id }),
+              let files = pendingUser[idx].localFiles,
+              let file = files.first(where: { $0.id == fileID }) else { return }
+        let rest = files.filter { $0.id != fileID }
+        let bubble = pendingUser[idx]
+        if rest.isEmpty, bubble.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           (bubble.localImages ?? []).isEmpty {
+            discardFailed(bubble)
+            return
+        }
+        forgetUpload(file)
+        pendingUser[idx].localFiles = rest.isEmpty ? nil : rest
+        pendingUser[idx].uploadHeld?[fileID] = nil
+        if pendingUser[idx].uploadFailedID == fileID { pendingUser[idx].uploadFailedID = nil }
+        if rest.isEmpty {
+            PendingFileSends.remove(session: sessionId, bubble: message.id)
+        } else {
+            PendingFileSends.updateFiles(session: sessionId, bubble: message.id, files: rest.map(PendingFileSends.ref))
+        }
+        AppLog.info("session-upload", "file removed from a send", [
+            "sessionId": sessionId, "bubbleId": message.id, "uploadId": fileID, "left": String(rest.count),
+        ])
+        await retry(pendingUser[idx])
     }
 
     /// The page shows these words as a failed message the person can retry (or
