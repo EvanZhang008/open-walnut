@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { defineOp } from './registry.js';
-import { startTask } from './task-execution.js';
+import { startTask, THREAD_HANDOFF_ARG } from './task-execution.js';
+import { handOffLine, type HandOffResult } from '../core/org/thread-follow.js';
 import { NO_REPLY_ASKED, sendBehindSlowHostLine, REPLY_ARRIVES_HINT, withOutcome } from './outcome.js';
 import { MESSAGE_TEXT_HINT } from '../core/team-charter.js';
 
@@ -52,8 +53,9 @@ defineOp({
     title: z.string().min(1).max(200).optional().describe('One-line TL;DR the reader sees first'),
     text: z.string().min(1).describe(`What you ask or hand over. ${MESSAGE_TEXT_HINT}`),
     expect_reply: z.boolean().optional().describe('Ask for a reply. Default true down or across the org; false for a note up to your own VP or Main (pass true to ask a question up)'),
+    thread: THREAD_HANDOFF_ARG,
   },
-  handler: async ({ to, task, title, text, expect_reply }, call) => {
+  handler: async ({ to, task, title, text, expect_reply, thread }, call) => {
     const contact = await call('POST', '/org/contact', { to, ...(task ? { task } : {}) }) as {
       task?: { id?: string; title?: string }; kind?: string; started?: boolean; project?: string;
       handedOverBy?: { id: string; title: string }; via?: { id?: string; title?: string; kind?: string; org_role?: string };
@@ -67,12 +69,13 @@ defineOp({
       + (contact.handedOverBy ? `, which took ${contact.project ?? 'the project'} over from "${contact.handedOverBy.title}" (${contact.handedOverBy.id})` : '');
     const send = async () => {
       const sent = await call('POST', '/messages', {
-        to: id, text, ...(title ? { title } : {}), ...(expect_reply !== undefined ? { expect_reply } : {}),
+        to: id, text, ...(title ? { title } : {}), ...(expect_reply !== undefined ? { expect_reply } : {}), ...(thread ? { thread } : {}),
       }) as Record<string, unknown>;
       const asked = typeof sent?.requestId === 'string' && sent.requestId;
       // The contact's host did not take its last message in time: this one waits behind it.
       const waiting = sendBehindSlowHostLine(sent?.waiting, sent?.requestId, sent?.messageId);
-      return withOutcome({ ...(sent ?? {}), contact }, `Message queued for ${who}. Do NOT resend.${waiting ? ` ${waiting}` : ''}`,
+      const moved = sent?.thread_handoff ? ` ${handOffLine(sent.thread_handoff as HandOffResult)}` : '';
+      return withOutcome({ ...(sent ?? {}), contact }, `Message queued for ${who}. Do NOT resend.${waiting ? ` ${waiting}` : ''}${moved}`,
         asked ? `You asked for a reply (${sent.requestId}). ${REPLY_ARRIVES_HINT}` : NO_REPLY_ASKED);
     };
     if (contact.started) return send();
@@ -80,6 +83,7 @@ defineOp({
       const started = await startTask(id, {
         message: title ? `${String(title)}\n\n${String(text)}` : String(text),
         ...(expect_reply !== undefined ? { expect_reply } : {}),
+        ...(thread ? { thread } : {}),
       }, call);
       const askedStart = typeof (started as { requestId?: unknown })?.requestId === 'string'
       return withOutcome({ ...started, contact }, `Started ${who} with your message.`, askedStart ? REPLY_ARRIVES_HINT : NO_REPLY_ASKED);

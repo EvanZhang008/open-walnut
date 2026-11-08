@@ -15,8 +15,8 @@ import type { OrgThreadsChangedEvent } from '../event-types.js';
 import { isCompanion } from '../server-role.js';
 import { walnutLetterLanguage as letterLang } from '../human-inbox/walnut-letters/languages.js';
 import {
-  emptyThreads, enteredNeeds, fileMessage, markClosesTold, markRechecked, mergeThreads, normalizeThreads, openThread, patchHandsToUser, setAnswers, splitThreadMessage, stampLegacyReplyAt, sweepClosed, ThreadError, updateThread,
-  type FileMessageInput, type FileMessageResult, type OpenThreadInput, type OrgThread, type ThreadAnswer, type ThreadPatch, type ThreadRecheck, type ThreadsFile, type ThreadTextSource, type ThreadWriter,
+  addMovedMessages, emptyThreads, enteredNeeds, fileMessage, markClosesTold, markRechecked, mergeThreads, movedAway, moveThreadIn, moveThreadOut, normalizeThreads, openThread, patchHandsToUser, setAnswers, splitThreadMessage, stampLegacyReplyAt, sweepClosed, ThreadError, updateThread,
+  type FileMessageInput, type FileMessageResult, type MoveEnd, type OpenThreadInput, type ThreadMoveKind, type OrgThread, type ThreadAnswer, type ThreadPatch, type ThreadRecheck, type ThreadsFile, type ThreadTextSource, type ThreadWriter,
 } from './threads-model.js';
 
 const TASK_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -39,6 +39,13 @@ function leaderOnly(): void {
 export async function readThreads(taskId: string): Promise<ThreadsFile> {
   if (isCompanion()) return emptyThreads(taskId);
   return normalizeThreads(await readJsonFile<unknown>(threadsFile(taskId), null), taskId);
+}
+
+/** Every node that has a threads file (the follow rule reads them all: thread-follow.ts). */
+export async function listThreadNodes(): Promise<string[]> {
+  if (isCompanion()) return [];
+  const names = await fs.readdir(threadsDir()).catch(() => [] as string[]);
+  return names.map((n) => (n.endsWith('.json') ? n.slice(0, -5) : '')).filter((id) => TASK_ID_RE.test(id));
 }
 
 /**
@@ -75,14 +82,40 @@ export async function markNeedsBuzzed(taskId: string, threadId: string, at: stri
   }));
 }
 
-export async function fileThreadMessage(taskId: string, input: FileMessageInput): Promise<FileMessageResult> {
+/** Where a thread lives now: follows a moved thread's movedTo (a few hops at most) from `taskId`. */
+export async function threadHolder(taskId: string, threadId: string): Promise<{ node: string; title?: string; thread: OrgThread } | null> {
+  let node = taskId;
+  let title: string | undefined;
+  for (let hop = 0; hop < 4; hop++) {
+    const t = (await readThreads(node)).threads.find((x) => x.id === threadId);
+    if (!t) return null;
+    if (!movedAway(t) || t.movedTo!.task === node) return { node, ...(title ? { title } : {}), thread: t };
+    node = t.movedTo!.task;
+    title = t.movedTo!.title;
+  }
+  return null;
+}
+
+export async function fileThreadMessage(taskId: string, input: FileMessageInput, hops = 0): Promise<FileMessageResult & { node: string }> {
   const lang = input.lang ?? await letterLang();
+  // A Follow up on a thread that moved on (a card opened before the move): his words go to the
+  // thread where it lives now, never a new thread here (thread-follow.ts). Judged under the lock,
+  // on the file as it is then, so a move that lands while this write waits is seen.
+  let movedTo: string | undefined;
   const res = await mutateThreads(taskId, (cur) => {
+    const there = input.threadId && hops < 3 ? cur.threads.find((t) => t.id === input.threadId) : undefined;
+    if (there && movedAway(there) && there.movedTo!.task !== taskId) {
+      movedTo = there.movedTo!.task;
+      return { file: cur, out: null };
+    }
     const r = fileMessage(cur, { ...input, lang });
     return { file: r.file, out: r };
   });
+  // Its answer is read in the chat of the node holding it (thread-answers.ts), never this node's.
+  if (movedTo) { const { sid: _sid, ...rest } = input; return fileThreadMessage(movedTo, { ...rest, lang }, hops + 1); }
+  if (!res) throw new ThreadError('bad_input', 500, 'The message was not filed.');
   if (!res.duplicate) emit({ taskId, kind: 'filed', threadId: res.thread.id });
-  return res;
+  return { ...res, node: taskId };
 }
 
 /** The node opens a thread itself (thread_create): its first post is what reached it. */
@@ -149,6 +182,86 @@ export async function splitThread(taskId: string, threadId: string, messageId: s
   });
   emit({ taskId, kind: 'split', threadId: res.thread.id });
   return res;
+}
+
+export interface MoveThreadInput {
+  from: MoveEnd;
+  to: MoveEnd;
+  threadId: string;
+  by: ThreadWriter;
+  why?: string;
+  /** `work`: the follow rule moved it after its tasks; `hand`: a node or the user handed it on. */
+  kind?: ThreadMoveKind;
+  /** A hand move: the nodes its tasks work in now (threads-model ThreadMove.owners). */
+  owners?: string;
+}
+
+/** Moves run one at a time on this server: two movers of one thread never interleave their steps. */
+let moveChain: Promise<unknown> = Promise.resolve();
+
+/**
+ * Move one open thread from one node's Threads to another's (thread-follow.ts). The copy goes in
+ * first and the source closes after, pointing at it: a crash between the two leaves two open copies
+ * (the next follow pass moves the source again, and the open copy keeps what it got meanwhile and
+ * gains the source's new messages: moveThreadIn), never none. What he wrote into the source in
+ * between joins the copy, and what was written to the copy meanwhile (his follow-up there, the new
+ * node's summary) stays (addMovedMessages). A source he closed in between keeps his close: the copy
+ * is undone only while nothing was written to it since it came in.
+ */
+export function moveThread(input: MoveThreadInput): Promise<OrgThread> {
+  const run = moveChain.then(() => moveThreadNow(input));
+  moveChain = run.catch(() => {});
+  return run;
+}
+
+async function moveThreadNow(input: MoveThreadInput): Promise<OrgThread> {
+  leaderOnly();
+  const { from, to, threadId, by, why, owners } = input;
+  const kind = input.kind ?? 'work';
+  if (from.task === to.task) throw new ThreadError('same_node', 409, `Thread ${threadId} is already on ${to.title}'s Threads.`);
+  const cur = (await readThreads(from.task)).threads.find((t) => t.id === threadId);
+  if (!cur) throw new ThreadError('no_thread', 404, `No thread ${threadId} on this node.`);
+  if (cur.closed) {
+    throw new ThreadError('thread_closed', 409, cur.movedTo
+      ? `Thread ${threadId} already moved to ${cur.movedTo.title} (${cur.movedTo.task}).`
+      : `Thread ${threadId} is closed: only an open thread moves with its work.`);
+  }
+  const at = new Date().toISOString();
+  let prior: OrgThread | undefined;
+  let moved = await mutateThreads(to.task, (f) => {
+    const r = moveThreadIn(f, cur, from, by, at, why, kind, owners);
+    prior = r.prior;
+    return { file: r.file, out: r.thread };
+  });
+  let left: OrgThread;
+  try {
+    left = await mutateThreads(from.task, (f) => {
+      const r = moveThreadOut(f, threadId, to, by, at, why, kind);
+      return { file: r.file, out: r.thread };
+    });
+  } catch (err) {
+    // He closed it in between (a move of another server's is not possible: only the primary moves):
+    // the source stays as he left it, and the copy goes back to what was there before, unless
+    // something was written to it since (his follow-up there is never thrown away).
+    const mark = (t: OrgThread) => [t.updatedAt, t.state, t.reply ?? '', t.closed?.at ?? '', t.messages.map((m) => `${m.id}:${m.answer?.at ?? ''}`).join(',')].join('|');
+    const came = mark(moved);
+    await mutateThreads(to.task, (f) => {
+      const now = f.threads.find((t) => t.id === threadId);
+      if (!now || mark(now) !== came) return { file: f, out: undefined };
+      const rest = f.threads.filter((t) => t.id !== threadId);
+      return { file: { ...f, threads: prior ? [...rest, prior] : rest }, out: undefined };
+    });
+    throw err;
+  }
+  if (left.messages.length !== cur.messages.length || left.messages.some((m, i) => m.id !== cur.messages[i]?.id)) {
+    moved = await mutateThreads(to.task, (f) => {
+      const next = addMovedMessages(f, left, at);
+      return { file: next, out: next.threads.find((t) => t.id === threadId) ?? moved };
+    });
+  }
+  emit({ taskId: to.task, kind: 'moved', threadId });
+  emit({ taskId: from.task, kind: 'moved', threadId });
+  return moved;
 }
 
 /** The node was told these threads closed. Quiet: nothing the user sees changed. */

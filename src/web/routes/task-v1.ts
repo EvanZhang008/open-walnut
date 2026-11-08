@@ -542,6 +542,10 @@ taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: 
         // 2026-11-06, the user): never a start left to come up later unseen.
         ...(callerSid ? { answerWithinMs: AGENT_START_ANSWER_MS } : {}),
       })
+      // One of the starter's Threads goes with the work it handed on (core/org/thread-follow.ts),
+      // also when the start is still coming up: the work went there either way.
+      const { handOffThread } = await import('../../core/org/thread-follow.js')
+      const threadHandoff = await handOffThread({ callerSid, target: started.taskId, threadId: str('thread'), handsOn: !!str('hands_on') })
       // An agent's start is a sync call (2026-11-06, the user: "if it did not start, it must be an
       // error"): one whose session did not confirm in time answers an error, never a 202 the caller
       // reads as started. The start itself goes on: it may still come up.
@@ -549,11 +553,11 @@ taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: 
         sendError(res, 504, 'start_unconfirmed', `Task ${started.taskId} did not confirm it started within `
           + `${Math.round(AGENT_START_ANSWER_MS / 1000)} seconds. Do not start it again: task_get shows it running once it is up`
           + (started.requestId ? `, and Walnut tells you when it shows nothing for 10 minutes (${started.requestId}).` : '.'), {
-          detail: { taskId: started.taskId, sessionId: started.sessionId, ...(started.requestId ? { requestId: started.requestId } : {}) },
+          detail: { taskId: started.taskId, sessionId: started.sessionId, ...(started.requestId ? { requestId: started.requestId } : {}), ...(threadHandoff ? { thread_handoff: threadHandoff } : {}) },
         })
         return
       }
-      res.status(202).json(started)
+      res.status(202).json(threadHandoff ? { ...started, thread_handoff: threadHandoff } : started)
     } catch (err) {
       if (err instanceof SessionExistsError) {
         // What to do instead, never a dead end: the caller's own open ask to it, or how to send (session-exists-hint.ts).

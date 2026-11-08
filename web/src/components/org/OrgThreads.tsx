@@ -118,6 +118,8 @@ function Markdown({ text, className, testId }: { text: string; className?: strin
 
 function closedWords(t: OrgThread, now: number): string {
   const c = t.closed!;
+  // It went to another node with its work (core/org/thread-follow.ts): open there.
+  if (t.movedTo) return `Moved to ${t.movedTo.title} ${timeAgo(c.at, { now })}`;
   const who = c.by === 'human' ? '' : ' by the agent';
   return `${c.how === 'acked' ? 'Acknowledged' : 'Dropped'}${who} ${timeAgo(c.at, { now })}`;
 }
@@ -353,7 +355,7 @@ function ThreadCard({ t, all, shared, tasks, onOpenTask, state, onFollowUp, name
       <button type="button" className="org-thread-head" aria-expanded={open} aria-controls={`${t.id}-conversation`} data-testid="org-thread-head" onClick={() => setOpen(!open)}>
         <span className="org-thread-state" data-testid="org-thread-state">
           <i style={{ background: closed ? 'var(--fg-muted, #86868B)' : STATE_DOT[t.state] }} />
-          {closed ? (t.closed!.how === 'acked' ? 'Done' : 'Dropped') : STATE_LABEL[t.state]}
+          {closed ? (t.movedTo ? 'Moved' : t.closed!.how === 'acked' ? 'Done' : 'Dropped') : STATE_LABEL[t.state]}
         </span>
         <span className="org-thread-meta">
           {pinned && (<>
@@ -369,6 +371,9 @@ function ThreadCard({ t, all, shared, tasks, onOpenTask, state, onFollowUp, name
       </button>
       {snoozed && t.snoozed && <p className="org-thread-snoozed" data-testid="org-thread-snoozed-until">Snoozed until {backAt(t.snoozed.until, now)}</p>}
       {follows && <p className="org-thread-follows">Asks again about “{follows.title}”</p>}
+      {/* It came here with its work from another node (core/org/thread-follow.ts), or left for one. */}
+      {!closed && t.movedFrom && <p className="org-thread-follows" data-testid="org-thread-moved-from" title={t.movedFrom.why}>Moved here from {t.movedFrom.title}{t.movedFrom.why ? `: ${t.movedFrom.why}` : ''}</p>}
+      {closed && t.movedTo && <p className="org-thread-follows" data-testid="org-thread-moved-to" title={t.movedTo.why}>Moved to {t.movedTo.title}{t.movedTo.why ? `: ${t.movedTo.why}` : ''}</p>}
       {overdue && <p className="org-thread-overdue" data-testid="org-thread-overdue">{overdue}</p>}
       {card.summary.by === 'node'
         ? (<>

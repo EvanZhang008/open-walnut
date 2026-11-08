@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { handOffLine, type HandOffResult } from '../core/org/thread-follow.js'
 import { SESSION_EFFORT_IDS, SESSION_ENGINE_IDS, SESSION_MODE_IDS } from '../core/types.js'
 import { engineCaps } from '../core/agents/engine-registry.js'
 import { fallbackStartWords } from '../core/agents/fallback-engine-words.js'
@@ -8,6 +9,14 @@ import { REPLY_ARRIVES_HINT, SUBTASK_WATCH_HINT, withOutcome } from './outcome.j
 import { summaryAt } from '../core/user-status.js'
 
 type Call = Parameters<NonNullable<WalnutOp['handler']>>[1]
+
+/**
+ * One of the caller's Threads (Main or a lead) handed on with this work (core/org/thread-follow.ts):
+ * it goes to the receiver's node when that is another node, else it lists the task.
+ */
+export const THREAD_HANDOFF_ARG = z.string().regex(/^th-[a-f0-9]{6,32}$/).optional().describe(
+  'Main or a lead: the thread of yours (th-...) this work is for. When the task is in another node\'s team (another VP, Main), the thread moves to that node\'s Threads with everything on it '
+  + 'and closes on yours, so the user hears the result from the one doing the work; in your own team it lists the task. Name it whenever you hand one of his asks on')
 
 export const TASK_START_INPUT = {
   message: z.string().trim().min(1).optional().describe('Instruction for the task; defaults to its description or title'),
@@ -27,6 +36,7 @@ export const TASK_START_INPUT = {
   reply_timeout: z.number().int().min(60).max(86_400).optional().describe('Seconds before a no-reply notification (default 12h: the answer is the task done)'),
   hands_on: z.string().regex(/^rq-[a-f0-9]{6,}$/).optional().describe('A request you owe (rq-…) that you hand to this task instead of answering it now: its asker waits for this task\'s answer, is told where the work went, and gets that answer straight from it (handed to several tasks, the answers come to you to combine)'),
   start_attempt_id: z.string().uuid().optional().describe('Stable attempt identity for a confirmed launch'),
+  thread: THREAD_HANDOFF_ARG,
 }
 
 export function taskExecution(task: Record<string, unknown>): Record<string, unknown> {
@@ -164,7 +174,8 @@ export async function startTask(id: string, body: Record<string, unknown>, call:
       : started.preparing === true ? `Task ${started.taskId}'s isolated workspace is being made; its session starts in it once the workspace is ready.`
       : state === 'running' ? `Task ${started.taskId} started.`
       : started.starting === true ? `Task ${started.taskId}'s session is still starting (its engine takes longer than this answer waits); it has not failed so far, and task_get shows it running once it is up.`
-      : `Start accepted for task ${started.taskId}; execution is not yet confirmed.`) + launchSettingsNote(body, started) + placementNote(started) + fallbackNote(started) + enginePickNote(started),
+      : `Start accepted for task ${started.taskId}; execution is not yet confirmed.`) + launchSettingsNote(body, started) + placementNote(started) + fallbackNote(started) + enginePickNote(started)
+      + (started.thread_handoff ? ` ${handOffLine(started.thread_handoff as HandOffResult)}` : ''),
     typeof started.requestId === 'string'
       ? `Reply request: ${started.requestId}. ${REPLY_ARRIVES_HINT} ${SUBTASK_WATCH_HINT}`
       : `Read task_get for its execution state. Add context with task_send using task id ${started.taskId}.`,

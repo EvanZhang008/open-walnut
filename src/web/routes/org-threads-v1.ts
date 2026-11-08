@@ -13,6 +13,8 @@
  *   PATCH /api/v1/tasks/:id/threads/:thread                { title?, ask?, state?, user_kind?, user_kind_why?, same_ask_reason?, reply?, tasks?, add_tasks?, known?, close?, user_words?, reopen?, snooze?, pin?, merge_into? }
  *   POST  /api/v1/tasks/:id/threads/open                   { title, text, from, ref?, state?, user_kind?, user_kind_why?, same_ask_reason?, tasks? } -> the node opens one itself
  *   POST  /api/v1/tasks/:id/threads/:thread/split          { message } -> that message becomes its own thread
+ *   POST  /api/v1/tasks/:id/threads/:thread/move           { to, why? } -> it goes to another node's Threads with its work
+ *                                                          (core/org/thread-follow.ts): `to` a node, a task in its team, a project or a VP's name
  *
  * The caller comes from `x-walnut-caller-sid`: none = the user. Writes answer 501 on the companion.
  * The session that wrote a summary or a first post is the caller's own, read from its session
@@ -243,4 +245,16 @@ orgThreadsV1Router.post('/tasks/:id/threads/:thread/split', route(async (req, re
   const out = await splitThread(task.id, id, message, by)
   log.task.info('org thread split', { taskId: task.id, threadId: id, newThreadId: out.thread.id, by })
   res.status(201).json({ task_id: task.id, thread: out.thread, from: out.from })
+}))
+
+orgThreadsV1Router.post('/tasks/:id/threads/:thread/move', route(async (req, res) => {
+  const task = await nodeTask(req)
+  const id = threadIdOf(req)
+  const b = body(req)
+  const to = (str(b, 'to') ?? '').trim()
+  if (!to) throw new RouteError(400, 'bad_request', 'to (the node, a task in its team, a project or a VP\'s name) is required')
+  const by = await writerOf(req)
+  const { moveThreadTo } = await import('../../core/org/thread-follow.js')
+  const out = await moveThreadTo({ from: task, threadId: id, to, by, ...(str(b, 'why') ? { why: str(b, 'why') } : {}) })
+  res.json({ task_id: task.id, thread: out.thread, moved_to: out.to })
 }))

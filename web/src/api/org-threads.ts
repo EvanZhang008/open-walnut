@@ -14,6 +14,8 @@ export interface OrgThreadMessage {
   answer?: { text: string; at: string; about?: string[]; clipped?: boolean };
 }
 
+export interface OrgThreadMove { task: string; title: string; at: string; by: string; why?: string; kind?: 'work' | 'hand' }
+
 export interface OrgThread {
   id: string;
   title: string;
@@ -30,6 +32,10 @@ export interface OrgThread {
   updatedAt: string;
   by?: string;
   closed?: { how: 'acked' | 'dropped'; at: string; by: string };
+  /** Closed here because it moved to another node with its work (core/org/thread-follow.ts): the node it lives at now. */
+  movedTo?: OrgThreadMove;
+  /** It came from this node with its work. */
+  movedFrom?: OrgThreadMove;
   /** He reacted to the answers through this message, as the node judged it. */
   known?: { through: string; by: string; at: string };
   /** The node opened the thread itself: its first post and where it came from. */

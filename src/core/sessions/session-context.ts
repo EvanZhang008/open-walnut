@@ -94,7 +94,7 @@
  */
 
 import { ownReadbackEnabled } from './own-readback-mark.js'
-import { PROOF_IN_PLACE_RULE, THREAD_ONE_PLACE_RULE, THREADS_KNOWN_RULE, THREADS_OPEN_RULE, THREADS_PENDING_RULE, THREADS_SUMMARY_RULE } from '../org/thread-rules.js'
+import { PROOF_IN_PLACE_RULE, THREAD_ONE_PLACE_RULE, THREADS_KNOWN_RULE, THREADS_OPEN_RULE, THREADS_PENDING_RULE, THREADS_SUMMARY_RULE, THREADS_MOVE_RULE } from '../org/thread-rules.js'
 import { TEAM_CHARTER } from '../team-charter.js'
 import { WORK_PLACE_RULE, taskDirLine } from '../work-place.js'
 import { PRIVATE_TASK_RULE } from '../private-tasks/rule.js'
@@ -229,7 +229,7 @@ export const THREADS_LINE =
   + 'thread_update: a short title, what he wants, its state (working: you are on it, needs: waiting on him, answered, pending: nothing new for him), the summary (reply) '
   + 'and the tasks you handed it to. Several asks about the same thing are one thread: put a new one under the open thread '
   + 'it belongs to (merge_into). Walnut puts your chat reply under each of his messages by itself. He closes a thread with Acknowledge; a new ask about a closed subject is a new thread. '
-  + THREADS_SUMMARY_RULE + ' ' + PROOF_IN_PLACE_RULE + ' ' + THREADS_PENDING_RULE + ' ' + THREADS_KNOWN_RULE + ' ' + THREADS_OPEN_RULE + '\n\n'
+  + THREADS_SUMMARY_RULE + ' ' + PROOF_IN_PLACE_RULE + ' ' + THREADS_PENDING_RULE + ' ' + THREADS_KNOWN_RULE + ' ' + THREADS_OPEN_RULE + ' ' + THREADS_MOVE_RULE + '\n\n'
 /** The tasks a reply is about, as live pills under it (core/org/message-about.ts; 2026-10-31, the user). */
 export const MESSAGE_ABOUT_LINE =
   'End each reply the user reads with one line of its own naming the tasks it is about: '

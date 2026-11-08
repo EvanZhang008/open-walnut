@@ -91,3 +91,12 @@ export const PROOF_IN_PLACE_RULE =
   + 'the thread\'s summary and in your chat reply itself, never only in a letter. A path there opens on click (a video plays, '
   + 'an image shows). A letter may carry the proof too, never instead. When a thread, a reply or a post refers to a letter, '
   + 'write the letter\'s id (lt-...) or [words](letter:lt-...): it renders as a link that opens that letter.';
+
+/**
+ * A thread goes with its work (2026-11-08, the user, translated: once the task is moved under the other
+ * VP, "then you no longer need to monitor it"; core/org/thread-follow.ts). Rides the prompt and the thread ops.
+ */
+export const THREADS_MOVE_RULE =
+  'A thread goes with its work: when one of his asks belongs to another node, hand it on with the work (task_send, org_send, '
+  + 'task_start or task_create naming thread) or move it (thread_move); Walnut also moves a thread whose tasks are all in another '
+  + 'lead\'s team now. It closes on yours as moved and you stop following it.';

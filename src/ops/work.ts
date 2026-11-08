@@ -4,7 +4,8 @@ import { REVIEW_SCORE_INPUT } from './review-score-input.js';
 // time (the ops modules are imported in a fixed order by ./index.ts).
 import type { OpCall } from './core.js';
 import { defineOp, getOp } from './registry.js';
-import { startTask, TASK_START_INPUT } from './task-execution.js';
+import { startTask, TASK_START_INPUT, THREAD_HANDOFF_ARG } from './task-execution.js';
+import { handOffLine, type HandOffResult } from '../core/org/thread-follow.js';
 import { deliveryWaitLine, NO_REPLY_ASKED, sendBehindSlowHostLine, REPLY_ARRIVES_HINT, withOutcome } from './outcome.js';
 import { MESSAGE_TEXT_HINT } from '../core/team-charter.js';
 import { USER_SPOKE_TEXT, USER_WORDS_BACK, userSaidLine, type UserSaid } from '../core/sessions/user-spoke.js';
@@ -86,6 +87,7 @@ defineOp({
     evidence: z.union([z.string(), z.array(z.string())]).optional().describe('With in_reply_to: paths or links that show the result (a list, or one per line)'),
     not_done: z.union([z.string(), z.array(z.string())]).optional().describe('With in_reply_to: what is NOT done or not verified (a list, or one per line). Non-empty = the reply reads as Partial'),
     score: REVIEW_SCORE_INPUT.optional().describe('With in_reply_to, answering a review request: your verdict out of 10, e.g. {"function":8,"ux":7.5,"ui":9}. Usage & Costs compares the engines by it (function: does it do what the user asked, correctly; ux: how it feels to use; ui: how it looks; or the text "8/7.5/9")'),
+    thread: THREAD_HANDOFF_ARG,
   },
   bind: { method: 'POST', path: '/messages' },
   mapResult: ({ body, args }) => {
@@ -133,7 +135,8 @@ defineOp({
         + (Array.isArray(b.handedOn) && b.handedOn.length ? ` Handed on: ${b.handedOn.join(', ')} now wait for this task's answer, which goes straight to their asker; you read one line. Handed to several tasks, each answer comes to you: combine them and answer.` : '')
         + (Array.isArray(b.handOnRefused) && b.handOnRefused.length
           ? ` Not handed on: ${(b.handOnRefused as { id: string; reason: string }[]).map((r) => `${r.id} (${r.reason})`).join(', ')}.`
-          : ''),
+          : '')
+        + (b.thread_handoff ? ` ${handOffLine(b.thread_handoff as HandOffResult)}` : ''),
     );
   },
   tags: { readonly: false, remote: 'allow', primaryOnly: true },

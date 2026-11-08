@@ -721,6 +721,7 @@ let laneAskSyncStop: (() => void) | null = null
 let foreignWriterWatchdog: { stop: () => void } | null = null
 let sessionProjectionHandle: { stop: () => void } | null = null
 let threadAnswersHandle: { stop: () => void } | null = null
+let threadFollowHandle: { stop: () => void } | null = null
 let projectionSelfHealHandle: { stop: () => void } | null = null
 /** Cloud box only: 60s drain of cache/task-queue/ (see core/task-queue.ts). */
 let taskQueueFlushHandle: { stop: () => void } | null = null
@@ -2090,6 +2091,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     if (role() === 'leader') void import('../core/org/vp-title-migration.js').then((m) => m.renameLegacyVpTitles()).catch(() => {})
     // A settled status change, told to the askers, the leader, the VP and Main (src/core/sessions/status-push.ts).
     void import('../core/sessions/status-push.js').then((m) => m.startStatusPush()).catch(() => {})
+    // A thread goes with its work to the node whose team does it (src/core/org/thread-follow.ts).
+    if (role() === 'leader') void import('../core/org/thread-follow.js').then((m) => { threadFollowHandle?.stop(); threadFollowHandle = m.startThreadFollow() }).catch(() => {})
     // Whether the user is in Main's or a lead's chat (src/core/org/user-away.ts), and the reports he asked for.
     void import('../core/org/user-away.js').then((m) => m.startUserAway()).catch(() => {})
     if (role() === 'leader') void import('../core/org/morning-report.js').then((m) => m.startReportClock()).catch(() => {})
@@ -7287,6 +7290,10 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   if (taskProjectionHandle) {
     taskProjectionHandle.stop()
     taskProjectionHandle = null
+  }
+  if (threadFollowHandle) {
+    threadFollowHandle.stop()
+    threadFollowHandle = null
   }
   if (threadAnswersHandle) {
     threadAnswersHandle.stop()

@@ -1,8 +1,9 @@
 /**
  * /api/v1/messages + /api/v1/requests — the unified send surface.
  *
- *   POST /messages        { to?, text, title?, expect_reply?, reply_timeout?, in_reply_to?, hands_on?, answers_ask?, force?, reason?, messageId? }
- *                         → 202 SessionSendResult (session-send-core.ts)
+ *   POST /messages        { to?, text, title?, expect_reply?, reply_timeout?, in_reply_to?, hands_on?, answers_ask?, force?, reason?, messageId?, thread? }
+ *                         → 202 SessionSendResult (session-send-core.ts), with `thread_handoff` when a Thread
+ *                         of the sender's went with it (core/org/thread-follow.ts)
  *   GET  /requests/:id    → { request, delivery? } — status read for `walnut wait rq-…`;
  *                         `delivery` while the asked message still waits to go in
  *   POST /messages/:id/send-now  (id = qm-… or rq-…) → { sent, messageId, sessionId }:
@@ -79,7 +80,12 @@ messagesV1Router.post('/messages', async (req: Request, res: Response, next: Nex
         await noteRequestMessage(result.requestId, result.messageId).catch(() => {})
       }
       const waiting = result.messageId && result.targetSessionId ? await sessionDeliveryWait(result.targetSessionId) : null
-      res.status(202).json(waiting ? { ...result, waiting } : result)
+      // One of the sender's Threads goes with the work it handed on (core/org/thread-follow.ts).
+      const { handOffThread } = await import('../../core/org/thread-follow.js')
+      const threadHandoff = result.targetTaskId && !result.repliedTo
+        ? await handOffThread({ callerSid: header(req, 'x-walnut-caller-sid'), target: result.targetTaskId, threadId: str(b.thread), handsOn: !!result.handedOn?.length })
+        : null
+      res.status(202).json({ ...result, ...(waiting ? { waiting } : {}), ...(threadHandoff ? { thread_handoff: threadHandoff } : {}) })
     } catch (err) {
       if (err instanceof SendError) {
         sendError(res, err.statusCode, err.code, err.message, err.detail)

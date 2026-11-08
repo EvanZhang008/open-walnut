@@ -179,6 +179,37 @@ export interface ThreadSnoozed {
   by: ThreadWriter;
 }
 
+/** A thread went from one node to another with its work (thread-follow.ts): the other node, and why. */
+export interface ThreadMove {
+  /** The other node's task id. */
+  task: string;
+  /** Its name as the Org page shows it. */
+  title: string;
+  at: string;
+  by: ThreadWriter;
+  /** One line: why it moved (its work is now in that team, or the node handed it on). */
+  why?: string;
+  /** `work`: Walnut's rule moved it after its tasks; `hand`: a node or the user handed it on (thread-follow.ts). */
+  kind?: ThreadMoveKind;
+  /**
+   * A `hand` move only: the nodes its tasks did their work in when it was handed on (ownerKey in
+   * thread-follow.ts). While they still do, the work has not moved since and the follow rule leaves
+   * the thread where it was handed, however many hands it went through.
+   */
+  owners?: string;
+}
+
+export type ThreadMoveKind = 'work' | 'hand';
+
+/**
+ * Closed here because it moved to another node (thread-follow.ts). Stored as a `dropped` close plus
+ * `movedTo`, never a close kind of its own: a release that knows only acked and dropped reads it
+ * closed, so going back to it never reopens a thread that lives elsewhere now.
+ */
+export function movedAway(t: Pick<OrgThread, 'closed' | 'movedTo'>): boolean {
+  return !!t.closed && !!t.movedTo;
+}
+
 /** Kept at the top of his view, whatever its state, until unpinned or closed. */
 export interface ThreadPinned {
   at: string;
@@ -228,6 +259,10 @@ export interface OrgThread {
   needsBuzzedAt?: string;
   /** Walnut woke the node about the overdue stretch that began at `since` (thread-recheck.ts): once per stretch. */
   recheck?: ThreadRecheck;
+  /** Closed here as `moved`: the node it went to (the open copy lives there now). */
+  movedTo?: ThreadMove;
+  /** It came from this node with its work: his messages and that node's answers came with it. */
+  movedFrom?: ThreadMove;
 }
 
 export interface ThreadRecheck {
@@ -244,7 +279,7 @@ export interface ThreadsFile {
   threads: OrgThread[];
 }
 
-export type ThreadErrorCode = 'no_thread' | 'no_message' | 'bad_input' | 'thread_closed' | 'last_message' | 'same_thread' | 'not_reacted' | 'user_kind' | 'pinned_by_user' | 'same_ask';
+export type ThreadErrorCode = 'no_thread' | 'no_message' | 'bad_input' | 'thread_closed' | 'last_message' | 'same_thread' | 'not_reacted' | 'user_kind' | 'pinned_by_user' | 'same_ask' | 'same_node';
 
 export class ThreadError extends Error {
   constructor(public code: ThreadErrorCode, public status: number, message: string) {
@@ -363,7 +398,14 @@ function normalizeThread(t: unknown): OrgThread | null {
   // A closed thread holds no pin (a hand edit, or a file from a build that kept one).
   if (next.closed) delete next.pinned;
   if (next.known && !(typeof next.known === 'object' && isStr(next.known.through) && messages.some((m) => m.id === next.known!.through))) delete next.known;
+  if (!validMove(next.movedTo)) delete next.movedTo;
+  if (!validMove(next.movedFrom)) delete next.movedFrom;
   return next;
+}
+
+function validMove(m: unknown): m is ThreadMove {
+  const x = m as Partial<ThreadMove> | undefined;
+  return !!x && typeof x === 'object' && isStr(x.task) && isStr(x.title) && isStr(x.at);
 }
 
 /** A file read from disk, made safe to work on (an old or hand-edited one included). */
@@ -713,6 +755,10 @@ export function patchHandsToUser(cur: Pick<OrgThread, 'state' | 'closed'>, patch
 export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, by: ThreadWriter, at: string, source?: ThreadTextSource): { file: ThreadsFile; thread: OrgThread } {
   checkPatch(patch);
   const cur = find(file, id);
+  // A thread that moved lives on at the other node: it is changed there, never opened again here.
+  if (movedAway(cur) && (patch.reopen || patch.pin)) {
+    throw new ThreadError('thread_closed', 409, `Thread ${id} moved to ${cur.movedTo!.title} (${cur.movedTo!.task}) with its work: it is open there.`);
+  }
   // Handed to the user: needs, from a state it was not in, or a closed thread reopened into it.
   if (patchHandsToUser(cur, patch)) checkHandedToUser(by, patch);
   if (patch.pin === false && cur.pinned) checkHisPin(cur, by, 'unpinned');
@@ -829,6 +875,87 @@ export function mergeThreads(file: ThreadsFile, fromId: string, intoId: string, 
   return { file: { ...file, threads: file.threads.filter((t) => t.id !== fromId).map((t) => (t.id === intoId ? next : t)) }, thread: next };
 }
 
+export interface MoveEnd { task: string; title: string }
+
+/**
+ * The thread leaves this node for `to` (thread-follow.ts): it is closed here (movedAway), pointing at
+ * the node it went to, and the node is counted as told (the move tells it itself). Returns the thread
+ * as it was the moment it left, the copy the other node gets. Refuses a closed thread.
+ */
+export function moveThreadOut(file: ThreadsFile, id: string, to: MoveEnd, by: ThreadWriter, at: string, why?: string, kind: ThreadMoveKind = 'work'): { file: ThreadsFile; thread: OrgThread } {
+  const cur = find(file, id);
+  if (cur.closed) {
+    throw new ThreadError('thread_closed', 409, cur.movedTo
+      ? `Thread ${id} already moved to ${cur.movedTo.title} (${cur.movedTo.task}).`
+      : `Thread ${id} is closed: only an open thread moves with its work.`);
+  }
+  const { pinned: _p, snoozed: _s, recheck: _r, ...rest } = cur;
+  const gone: OrgThread = {
+    ...rest, updatedAt: at, by,
+    closed: { how: 'dropped', at, by, told: true },
+    movedTo: { task: to.task, title: to.title, at, by, kind, ...(why ? { why: clip(why, THREAD_ASK_MAX) } : {}) },
+  };
+  return { file: replace(file, gone, at), thread: cur };
+}
+
+/**
+ * The thread arrives from `from` with everything on it (his messages, the answers, its state, pin and
+ * links), saying where it came from. A copy already here (a move retried after a crash, or run
+ * again) keeps everything written here, a close he made of it included, and gains what the source
+ * has that it lacks (mergeMovedCopy), so a move is safe to run again; only the tombstone of an
+ * earlier move away is replaced (the thread came back). `prior` is what was here before, for an undo.
+ */
+export function moveThreadIn(file: ThreadsFile, thread: OrgThread, from: MoveEnd, by: ThreadWriter, at: string, why?: string, kind: ThreadMoveKind = 'work', owners?: string): { file: ThreadsFile; thread: OrgThread; prior?: OrgThread } {
+  const { closed: _c, movedTo: _t, recheck: _r, ...rest } = thread;
+  const movedFrom: ThreadMove = {
+    task: from.task, title: from.title, at, by, kind,
+    ...(why ? { why: clip(why, THREAD_ASK_MAX) } : {}), ...(kind === 'hand' && owners !== undefined ? { owners } : {}),
+  };
+  const prior = file.threads.find((t) => t.id === thread.id);
+  let next: OrgThread;
+  if (prior && !movedAway(prior)) {
+    // A copy already here (a move retried after a crash): it keeps everything written here, his
+    // close of it included, and gains what the source has that it lacks.
+    const merged = mergeMovedCopy(prior, rest);
+    next = { ...merged, movedFrom, ...(prior.closed ? { state: prior.state } : {}) };
+  } else next = { ...rest, updatedAt: at, movedFrom };
+  const others = file.threads.filter((t) => t.id !== thread.id);
+  return { file: { ...file, threads: prune([...others, next], at) }, thread: next, ...(prior ? { prior } : {}) };
+}
+
+/** The copy here, plus the source's messages and tasks it lacks (an answer the copy lacks too). */
+function mergeMovedCopy(copy: OrgThread, src: Pick<OrgThread, 'messages' | 'tasks' | 'updatedAt'>): OrgThread {
+  const mine = new Map(copy.messages.map((m) => [m.id, m] as const));
+  const messages = [...copy.messages.map((m) => {
+    const theirs = src.messages.find((x) => x.id === m.id);
+    return !m.answer && theirs?.answer ? { ...m, answer: theirs.answer } : m;
+  }), ...src.messages.filter((m) => !mine.has(m.id))].sort((a, b) => a.at.localeCompare(b.at));
+  const added = messages.length > copy.messages.length;
+  const tasks = [...new Set([...(copy.tasks ?? []), ...(src.tasks ?? [])])];
+  return {
+    ...copy, messages, ...(tasks.length ? { tasks } : {}),
+    updatedAt: src.updatedAt > copy.updatedAt ? src.updatedAt : copy.updatedAt,
+    // He spoke again in the source: an open thread waiting on him or answered is the node's turn again.
+    ...(added && (copy.state === 'answered' || copy.state === 'needs' || copy.state === 'pending') ? { state: 'working' as ThreadState } : {}),
+  };
+}
+
+/**
+ * What he wrote into the source while the copy was on its way (thread-follow.ts): his messages the
+ * copy here lacks join it in time order. Everything written here meanwhile (his follow-up, the new
+ * node's summary, a close) stays. A copy no longer here (he closed it here, it moved on) is left alone.
+ */
+export function addMovedMessages(file: ThreadsFile, left: OrgThread, at: string): ThreadsFile {
+  const cur = file.threads.find((t) => t.id === left.id);
+  if (!cur) return file;
+  const merged = mergeMovedCopy(cur, { messages: left.messages, tasks: cur.tasks, updatedAt: cur.updatedAt });
+  if (merged.messages.length === cur.messages.length) return file;
+  const next: OrgThread = { ...merged, updatedAt: at > cur.updatedAt ? at : cur.updatedAt };
+  // A copy he closed here stays closed with his words kept.
+  if (cur.closed) next.state = cur.state;
+  return { ...file, threads: file.threads.map((t) => (t.id === left.id ? next : t)) };
+}
+
 /** Take one message out of a thread into a thread of its own (a wrong merge undone). */
 export function splitThreadMessage(file: ThreadsFile, threadId: string, messageId: string, by: ThreadWriter, at: string, newId?: string, lang: LetterLang = 'en'): { file: ThreadsFile; thread: OrgThread; from: OrgThread } {
   const cur = find(file, threadId);
@@ -939,6 +1066,8 @@ export function enteredNeeds(before: ThreadsFile, after: ThreadsFile): OrgThread
   return after.threads.filter((t) => {
     if (t.closed || t.state !== 'needs' || !t.by || t.by === 'human') return false;
     const prev = was.get(t.id);
+    // A thread that moved in with its work is no new entry: its buzz, if any, came with it.
+    if (t.movedFrom && (!prev || !!prev.movedTo) && t.updatedAt === t.movedFrom.at) return false;
     return !prev || !!prev.closed || prev.state !== 'needs';
   });
 }

@@ -15,7 +15,7 @@ import type { Task } from '../types.js';
 import { walnutLetterLanguage } from '../human-inbox/walnut-letters/languages.js';
 import { stripReferenceCards } from '../sessions/reference-cards.js';
 import {
-  fileMessage, isOpen, lastUserAt, newThreadId, newThreadMessageId, reactedSince, sortedThreads,
+  fileMessage, isOpen, lastUserAt, movedAway, newThreadId, newThreadMessageId, reactedSince, sortedThreads,
   type FileMessageInput, type ThreadCloseHow, type ThreadsFile, type ThreadState, type ThreadVia, type ThreadWriter,
 } from './threads-model.js';
 import { exchangesOf, pinnedNow, snoozedNow, summaryBehindHim, summaryOwed } from './thread-view.js';
@@ -91,6 +91,8 @@ export interface ThreadHintState {
   open: Array<{ id: string; title: string; state: ThreadState; snoozedUntil?: string; pinnedBy?: ThreadWriter }>;
   /** Threads closed since the node was last told, and by whom. */
   closed: Array<{ id: string; title: string; how: ThreadCloseHow; by: ThreadWriter }>;
+  /** The Follow up named a thread that moved to another node with its work: filed there (thread-follow.ts). */
+  movedTo?: { task: string; title: string };
 }
 
 export interface ThreadCapture {
@@ -126,17 +128,36 @@ export async function prepareThreadCapture(input: {
   const store = await import('./threads-store.js');
   const cur = await store.readThreads(task.id);
   const at = new Date(input.now ?? Date.now()).toISOString();
+  const messageId = newThreadMessageId();
   const draft: FileMessageInput = {
     text: words.text, images: words.images, via: input.threadId ? 'follow-up' : words.via,
     ...(words.about ? { about: words.about } : {}),
     ...(words.letter ? { letter: words.letter } : {}),
     ...(input.threadId ? { threadId: input.threadId } : {}),
-    ...(input.key ? { key: input.key } : {}),
+    // A Follow up carries a key of its own, so a send of it on to the node holding the thread now
+    // (it moved between this plan and the write) finds it filed (thread-follow.ts deliverMovedFollowUp).
+    ...(input.key || input.threadId ? { key: input.key ?? `fu-${messageId}` } : {}),
     ...(input.sid ? { sid: input.sid } : {}),
-    newThreadId: newThreadId(), messageId: newThreadMessageId(), at,
+    newThreadId: newThreadId(), messageId, at,
     // The title the store will give a picture alone, in the letter language.
     lang: await walnutLetterLanguage(),
   };
+  // A Follow up on a thread that moved on: his message goes to the node holding it now, filed in
+  // the thread there; this node is told it is not its own (thread-follow.ts).
+  const away = input.threadId ? cur.threads.find((t) => t.id === input.threadId && movedAway(t)) : undefined;
+  if (away?.movedTo) {
+    const holder = await store.threadHolder(away.movedTo.task, away.id).catch(() => null);
+    const movedTo = { task: holder?.node ?? away.movedTo.task, title: holder?.title ?? away.movedTo.title };
+    const message = input.message;
+    const key = draft.key!;
+    return {
+      hint: { threadId: away.id, title: away.title, created: false, duplicate: false, followUp: true, open: [], closed: [], movedTo },
+      async commit() {
+        const { deliverMovedFollowUp } = await import('./thread-follow.js');
+        await deliverMovedFollowUp({ node: movedTo.task, threadId: away.id, title: away.title, message, key, from: task.id, filed: false });
+      },
+    };
+  }
   // The same pure step the store runs, on the copy read now: the node is told what will be.
   const planned = fileMessage(cur, draft);
   const nowMs = Date.parse(at);
@@ -161,6 +182,11 @@ export async function prepareThreadCapture(input: {
           if (filed.thread.id !== planned.thread.id) {
             log.session.warn('org threads: filed elsewhere than told', { taskId: task.id, told: planned.thread.id, filed: filed.thread.id });
           }
+          // The thread moved to another node between the plan and the write: that node gets his message.
+          if (filed.node !== task.id && !filed.duplicate) {
+            const { deliverMovedFollowUp } = await import('./thread-follow.js');
+            await deliverMovedFollowUp({ node: filed.node, threadId: filed.thread.id, title: filed.thread.title, message: input.message, key: draft.key!, from: task.id, filed: true });
+          }
         }
         if (told) await store.noteClosesTold(task.id, closed.map((t) => t.id));
       } catch (err) {
@@ -180,6 +206,7 @@ function q(s: string): string { return JSON.stringify(s); }
  */
 export function threadHintText(s: ThreadHintState): string {
   let text: string;
+  if (s.movedTo) return `a follow-up in thread ${s.threadId} ${q(s.title)}, which moved to ${s.movedTo.title} (${s.movedTo.task}) with its work: filed there, and ${s.movedTo.title} reads it. Not yours to act on; at most tell him it is with ${s.movedTo.title} now.`;
   if (s.duplicate) text = `already filed under thread ${s.threadId} ${q(s.title)}.`;
   else if (s.followUp) text = `a follow-up in thread ${s.threadId} ${q(s.title)}, filed there.`;
   else if (s.created) {

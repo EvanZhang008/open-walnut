@@ -81,6 +81,7 @@ const CALL_SITES: Record<string, number> = {
   'src/core/sessions/quick-start.ts': 1,           // continues a conversation with the start's own source
   'src/core/sessions/session-lifecycle.ts': 1,     // "continue" pressed by a person
   'src/core/sessions/session-extras.ts': 1,        // "execute plan" pressed by a person
+  'src/core/org/thread-follow.ts': 1,              // his Follow up on a moved thread, sent on to the node holding it now
   'src/core/sessions/side-thread-manager.ts': 2,   // a side-thread question; the digest is Walnut's (framed)
   'src/core/sessions/engine-switch.ts': 3,         // re-sends a held row as stored (an agent's kept its frame)
   'src/core/sessions/engine-switch-resume.ts': 1,
@@ -202,6 +203,7 @@ const PERSON_SOURCE_FILES = new Set([
   'src/core/sessions/side-thread-manager.ts', 'src/core/sessions/engine-switch.ts',
   'src/core/human-inbox/letter-ops.ts', 'src/web/routes/task-v1.ts', 'src/web/routes/cloud-chat-fallback.ts',
   'src/core/human-inbox/item-plans.ts', 'src/core/human-inbox/item-execution.ts',
+  'src/core/org/thread-follow.ts',
 ]);
 
 describe('who counts as a person', () => {

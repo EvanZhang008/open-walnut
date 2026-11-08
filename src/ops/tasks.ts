@@ -4,6 +4,7 @@
 
 import { z } from 'zod'
 import { REVIEW_SCORE_INPUT } from './review-score-input.js'
+import { handOffLine, type HandOffResult } from '../core/org/thread-follow.js'
 import { defineOp, type HttpBinding } from './registry.js'
 import { materializeBinding } from './executor.js'
 import { taskRefTag } from '../utils/entity-refs.js'
@@ -614,7 +615,8 @@ defineOp({
     const launch: Record<string, unknown> = {}
     const fields: Record<string, unknown> = {}
     for (const [key, value] of Object.entries(rest)) {
-      if (value !== undefined) (key in TASK_START_INPUT ? launch : fields)[key] = value
+      // `thread` rides the create (core/org/thread-follow.ts), so a placeholder hands it on too.
+      if (value !== undefined) (key in TASK_START_INPUT && key !== 'thread' ? launch : fields)[key] = value
     }
     // A `@tag` host (host-select.ts) is resolved before the create: a refusal makes no task.
     let hostNote = ''
@@ -648,8 +650,9 @@ defineOp({
       ...(placement?.parent_task_id ? { parent_task_id: placement.parent_task_id } : {}),
     }
     const extra = placement ? { placement } : {}
+    const handoff = (created as { thread_handoff?: HandOffResult } | undefined)?.thread_handoff
     const where = placementSentence(placement) + titleCutSentence(placement, task, fields.description !== undefined)
-      + teamSentence(placement) + hostNote
+      + teamSentence(placement) + hostNote + (handoff ? `${handOffLine(handoff)} ` : '')
     // Where its card sits depends on whether a session started, so it is read after the start answers.
     const parentId = placement?.parent_task_id ?? (task.parent_task_id as string | undefined)
     const cardLine = (started: boolean) => boardCardSentence(parentId, id, started, call)

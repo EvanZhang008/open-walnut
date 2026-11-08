@@ -6,7 +6,7 @@ import { z } from 'zod'
 import { defineOp } from './registry.js'
 import { withOutcome } from './outcome.js'
 import type { OpCall } from './core.js'
-import { PROOF_IN_PLACE_RULE, THREAD_ONE_PLACE_RULE, THREADS_KNOWN_RULE, THREADS_OPEN_RULE, THREADS_PENDING_RULE, THREADS_SUMMARY_RULE } from '../core/org/thread-rules.js'
+import { PROOF_IN_PLACE_RULE, THREAD_ONE_PLACE_RULE, THREADS_MOVE_RULE, THREADS_KNOWN_RULE, THREADS_OPEN_RULE, THREADS_PENDING_RULE, THREADS_SUMMARY_RULE } from '../core/org/thread-rules.js'
 import { THREAD_STATES } from '../core/org/threads-model.js'
 import { USER_KINDS, USER_KIND_PARAM, USER_KIND_WHY_PARAM } from '../core/org/user-kind.js'
 
@@ -16,7 +16,7 @@ const THREADS_SCOPE = 'Your Threads are the user\'s own requests to you, one thr
   + 'its state (working: you are on it; needs: waiting on him; answered: you answered and he may close it; pending: nothing new for him), the summary (reply) and '
   + 'the tasks you handed it to. Several asks about one subject are ONE thread: put a new one under the open thread it belongs to '
   + '(merge_into). Walnut puts your chat reply under each of his messages by itself (answer). He closes a thread with Acknowledge; a '
-  + 'closed one is kept a week, then deleted; a new ask about a closed subject is a new thread. ' + THREADS_SUMMARY_RULE + ' ' + PROOF_IN_PLACE_RULE + ' ' + THREADS_PENDING_RULE + ' ' + THREADS_KNOWN_RULE + ' ' + THREADS_OPEN_RULE + ' ' + THREAD_ONE_PLACE_RULE
+  + 'closed one is kept a week, then deleted; a new ask about a closed subject is a new thread. ' + THREADS_MOVE_RULE + ' ' + THREADS_SUMMARY_RULE + ' ' + PROOF_IN_PLACE_RULE + ' ' + THREADS_PENDING_RULE + ' ' + THREADS_KNOWN_RULE + ' ' + THREADS_OPEN_RULE + ' ' + THREAD_ONE_PLACE_RULE
 
 async function ownTask(args: { task?: unknown }, call: OpCall): Promise<string> {
   const id = typeof args.task === 'string' && args.task.trim()
@@ -158,6 +158,30 @@ defineOp({
     }) as { thread: ThreadView; created: boolean }
     return withOutcome(body, body.created ? `Filed as a new thread ${body.thread.id}.` : `Filed under ${body.thread.id} "${body.thread.title}".`,
       body.created ? `Give it a short title with thread_update {"id":"${body.thread.id}","title":"..."}.` : 'No further action is required.')
+  },
+  tags: { readonly: false, remote: 'allow' },
+})
+
+defineOp({
+  name: 'thread_move',
+  title: 'Move a Thread to another node',
+  description: `${THREADS_SCOPE} Moves one open thread to another node's Threads (another VP, Main, or the node whose team a task is in), `
+    + 'with everything on it: his messages, the answers, its state, pin and tasks; it reads "Moved here from" there, and it closes on yours as moved, '
+    + 'pointing at it. Use it when one of his asks belongs to another node (he said so, or the work is theirs); handing the work on with '
+    + 'task_send, org_send, task_start or task_create naming `thread` does the same in one step. task defaults to your own task.',
+  input: {
+    id: z.string().regex(/^th-[a-f0-9]{6,32}$/).describe('The thread (th-...)'),
+    to: z.string().min(1).describe('Where it goes: a node\'s task id, a task (its team\'s node takes it), a project name or the name the user gave a VP'),
+    why: z.string().max(400).optional().describe('One line both nodes read: why it moves'),
+    task: TASK_ARG,
+  },
+  handler: async (args, call) => {
+    const id = await ownTask(args, call)
+    const body = await call('POST', `/tasks/${encodeURIComponent(id)}/threads/${encodeURIComponent(String(args.id))}/move`, {
+      to: args.to, ...(args.why ? { why: args.why } : {}),
+    }) as { thread: ThreadView; moved_to: { task: string; title: string } }
+    return withOutcome(body, `Thread ${body.thread.id} "${body.thread.title}" moved to ${body.moved_to.title} (${body.moved_to.task}); it is closed on the Threads it left.`,
+      `${body.moved_to.title} keeps it now and was told; you no longer follow it.`)
   },
   tags: { readonly: false, remote: 'allow' },
 })

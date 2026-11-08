@@ -3008,10 +3008,17 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
         void refineShortTitle(task.id, finalTitle, titleShortenedFrom,
           description !== undefined ? description as string : undefined)
       }
+      // One of the creator's Threads goes with the work it handed on (core/org/thread-follow.ts).
+      const threadArg = typeof (req.body as { thread?: unknown } | undefined)?.thread === 'string' ? String((req.body as { thread: string }).thread).trim() : ''
+      const { handOffThread } = await import('../../core/org/thread-follow.js')
+      const threadHandoff = threadArg
+        ? await handOffThread({ callerSid: Array.isArray(rawSid) ? rawSid[0] : rawSid, target: task.id, threadId: threadArg })
+        : null
       // Project-only projection, same as GET /tasks (see the note there).
       // `placement` (additive) says where the task landed and why, because the
       // projection carries no folder.
       res.status(201).json({
+        ...(threadHandoff ? { thread_handoff: threadHandoff } : {}),
         task: projectTask(task),
         placement: {
           project: task.project ?? '',

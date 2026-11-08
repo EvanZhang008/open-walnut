@@ -1375,7 +1375,7 @@ export interface VaultChangedEvent {
 /** An Org node's Threads changed (core/org/threads-store.ts): re-read them. */
 export interface OrgThreadsChangedEvent {
   taskId: string;
-  kind: 'filed' | 'opened' | 'updated' | 'merged' | 'split' | 'answered' | 'swept';
+  kind: 'filed' | 'opened' | 'updated' | 'merged' | 'split' | 'answered' | 'swept' | 'moved';
   threadId?: string;
 }
 
