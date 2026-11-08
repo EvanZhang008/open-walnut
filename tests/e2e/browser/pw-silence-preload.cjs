@@ -26,41 +26,28 @@ function install(core) {
   return true;
 }
 
-/** A require of the Playwright library itself: the test runner, playwright, @playwright/test and a script all load it so. */
-function isPlaywrightCore(request) {
-  return typeof request === 'string' && /(^|[\\/])playwright-core([\\/]index(\.js)?)?$/.test(request);
+/** A file of the Playwright library whose exports are the library (index.js, lib/inprocess.js), in node_modules or Bun's cache. */
+function isPlaywrightCore(file) {
+  return typeof file === 'string' && /[\\/]playwright-core(@[^\\/]*)?[\\/](index|lib[\\/]inprocess)\.js$/.test(file);
 }
 
-// Bun (BUN_OPTIONS="--preload=<this file>") loads modules past Module._load: a main script
-// that names Playwright gets the library loaded here first, from its own folder or the cwd,
-// and its own import then finds that same copy in the module cache.
-if (process.versions && process.versions.bun && !globalThis[HOOKED]) {
-  globalThis[HOOKED] = true;
-  try {
-    const main = process.argv[1];
-    if (main && /playwright/.test(require('node:fs').readFileSync(main, 'utf8'))) {
-      const { createRequire } = require('node:module');
-      for (const from of [main, process.cwd() + '/']) {
-        try { install(createRequire(from)('playwright-core')); break; } catch (e) { /* not from here */ }
-      }
-    }
-  } catch (e) { /* no main script to read */ }
-}
-
-// Whatever started this process (the runner, a worker, a script of its own, from any folder),
-// the Playwright library it loads gets the silencer before it makes a browser.
+// Every CommonJS file Node and Bun load passes the .js loader, whatever imports it (the runner,
+// a worker, a script of its own or its helper, require or import, from any folder): the
+// Playwright library it loads gets the silencer before it can make a browser.
 if (!globalThis[HOOKED]) {
   globalThis[HOOKED] = true;
   try {
-    const Module = require('node:module');
-    const load = Module._load;
-    Module._load = function (request) {
-      const exported = load.apply(this, arguments);
-      try { if (isPlaywrightCore(request)) install(exported); } catch (e) {
-        console.warn('[pw-silence-preload] could not silence test browsers: ' + (e && e.message));
-      }
-      return exported;
-    };
+    const exts = require('node:module')._extensions;
+    const loadJs = exts && exts['.js'];
+    if (typeof loadJs === 'function') {
+      exts['.js'] = function (module, filename) {
+        const result = loadJs.apply(this, arguments);
+        try { if (isPlaywrightCore(filename)) install(module.exports); } catch (e) {
+          console.warn('[pw-silence-preload] could not silence test browsers: ' + (e && e.message));
+        }
+        return result;
+      };
+    }
   } catch (e) {
     console.warn('[pw-silence-preload] could not silence test browsers: ' + (e && e.message));
   }

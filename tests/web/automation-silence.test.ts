@@ -206,9 +206,9 @@ describe('the page silencer', () => {
     expect(preload.install(core)).toBe(true);
     expect(preload.install(core), 'once per Playwright library').toBe(false);
     expect(listeners).toHaveLength(1);
-    // It acts on a load of the library, whatever loads it, and on nothing else.
-    for (const r of ['playwright-core', '/x/node_modules/playwright-core', '/x/node_modules/playwright-core/index.js']) expect(preload.isPlaywrightCore(r), r).toBe(true);
-    for (const r of ['playwright', '@playwright/test', 'playwright-core/lib/utils', './my-playwright-core-notes', 'fs']) expect(preload.isPlaywrightCore(r), r).toBe(false);
+    // It acts on the library's own files as they load, whatever loads them, and on nothing else.
+    for (const f of ['/x/node_modules/playwright-core/index.js', 'C:\\x\\node_modules\\playwright-core\\lib\\inprocess.js', '/h/.bun/install/cache/playwright-core@1.58.2@@@1/lib/inprocess.js']) expect(preload.isPlaywrightCore(f), f).toBe(true);
+    for (const f of ['/x/node_modules/playwright/index.js', '/x/node_modules/playwright-core/lib/utils/index.js', '/x/my-playwright-core/index.js', 'playwright-core']) expect(preload.isPlaywrightCore(f), f).toBe(false);
     const added: string[] = [];
     await listeners[0].runAfterCreateBrowserContext({ addInitScript: async (x: { content: string }) => { added.push(x.content); } });
     expect(added).toEqual([preload.SILENCE_JS]);
