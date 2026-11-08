@@ -18,9 +18,12 @@ export function useWatchToggle(task: Pick<Task, 'id'> & { watched_at?: string | 
   const watched = isWatched(task);
   // Off the board's store (a session menu on the Org page), a plain PATCH; the
   // task:updated it broadcasts refreshes whoever shows the task.
+  // A task the board's store does not hold (an archived one a session panel opened) is a plain
+  // PATCH too: the store's optimistic update only patches rows it has and swallows the echo,
+  // which is the one thing that would bring the task onto the Watching list.
   const toggle = () => {
     const watched_at = watched ? '' : new Date().toISOString();
-    if (store) { store.update(task.id, { watched_at }); return; }
+    if (store && store.tasks.some((t) => t.id === task.id)) { store.update(task.id, { watched_at }); return; }
     void updateTask(task.id, { watched_at }).catch((err) => {
       log.warn('task-watch', 'watch write failed', { taskId: task.id, error: String(err) });
     });

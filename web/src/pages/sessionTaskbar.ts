@@ -1,12 +1,13 @@
 // Pure rules for Home's taskbar: the sessions the user has open but not shown.
 //
-// A session the user opened is in exactly one of three places: a column on the
-// strip (sessionColumns), a chip on the taskbar, or the background (neither).
-// The strip stays the one place that decides what is shown; the taskbar only
-// watches it. A real session that leaves the strip becomes a chip unless the
-// user closed it (×), whatever took it off: Minimize, a sixth open evicting the
-// oldest column, a lower panel count. A session that comes back onto the strip
-// leaves the taskbar, so no id is ever in both.
+// The bar has two parts (2026-11-07, the user: "leftmust be eplixt concisou", and a
+// pushed-out session "can be part of recnetly open task on the mos tirght of the botom
+// line"). LEFT, the chips: only sessions the user minimized himself (the Minimize
+// button or its "..." menu item). RIGHT end, Recent: the last few real sessions that
+// left the strip any other way (a close with ×, a sixth open evicting the oldest
+// column, a lower panel count). The strip stays the one place that decides what is
+// shown; the bar only watches it. A session that comes back onto the strip leaves
+// both lists, and no id is ever in both.
 
 import type { SessionSlot } from './sessionColumns';
 import { isPlaceholderColumnId } from '@/utils/column-ids';
@@ -16,33 +17,59 @@ export function isRealSessionColumn(id: string): boolean {
   return !!id && !isPlaceholderColumnId(id);
 }
 
+/** How many sessions Recent keeps; the oldest drops off past it. */
+export const RECENT_MAX = 4;
+
+export interface TaskbarLists {
+  /** Minimized by the user, in the order they joined (drag to reorder). */
+  chips: string[];
+  /** Left the strip some other way, newest first. */
+  recent: string[];
+}
+
 /**
- * The chips after the strip went from `before` to `after`. `closed` holds the ids the
- * user closed in that change: those go to the background, never to a chip. A column
- * whose id changed in place (a draft becoming its session, plan -> exec) is a swap,
- * not a session leaving: the swapped slot names the id it replaced (SessionSlot.from). Chips keep
- * the order they joined in; a new one goes at the end. Returns `chips` itself when
- * nothing changed.
+ * The bar after the strip went from `before` to `after`. `minimized` holds the ids the
+ * user minimized in that change: only those become chips. Every other real session that
+ * left goes to the front of Recent. A column whose id changed in place (a draft becoming
+ * its session, plan -> exec) is a swap, not a session leaving: the swapped slot names the
+ * id it replaced (SessionSlot.from). Returns `lists` itself when nothing changed.
  */
-export function chipsAfterStripChange(
-  chips: readonly string[],
+export function taskbarAfterStripChange(
+  lists: TaskbarLists,
   before: readonly SessionSlot[],
   after: readonly SessionSlot[],
-  closed: ReadonlySet<string>,
-): string[] {
+  minimized: ReadonlySet<string>,
+): TaskbarLists {
   const shown = new Set(after.map(c => c.id));
   // Only a slot this change wrote can name a swap; an older one's `from` is history.
   const swappedAway = new Set(after.filter(c => c.from && !before.includes(c)).map(c => c.from!));
-  const next = chips.filter(id => !shown.has(id));
+  const chips = lists.chips.filter(id => !shown.has(id));
+  let recent = lists.recent.filter(id => !shown.has(id));
   for (const slot of before) {
-    if (shown.has(slot.id) || !isRealSessionColumn(slot.id) || closed.has(slot.id)) continue;
-    if (swappedAway.has(slot.id)) continue;
-    if (!next.includes(slot.id)) next.push(slot.id);
+    if (shown.has(slot.id) || !isRealSessionColumn(slot.id) || swappedAway.has(slot.id)) continue;
+    if (minimized.has(slot.id)) {
+      if (!chips.includes(slot.id)) chips.push(slot.id);
+      recent = recent.filter(id => id !== slot.id);
+    } else if (!chips.includes(slot.id)) {
+      recent = [slot.id, ...recent.filter(id => id !== slot.id)];
+    }
   }
-  return next.length === chips.length && next.every((id, i) => id === chips[i]) ? (chips as string[]) : next;
+  recent = recent.slice(0, RECENT_MAX);
+  if (sameList(chips, lists.chips) && sameList(recent, lists.recent)) return lists;
+  return { chips, recent };
 }
 
-/** The chips without `id` (its × closes it to the background). */
+/** Put `id` on the chips from outside Home's strip (Minimize on another page's panel). */
+export function minimizeOffStrip(lists: TaskbarLists, id: string): TaskbarLists {
+  if (!isRealSessionColumn(id) || lists.chips.includes(id)) return lists;
+  return { chips: [...lists.chips, id], recent: lists.recent.filter(r => r !== id) };
+}
+
+function sameList(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((id, i) => id === b[i]);
+}
+
+/** The list without `id` (a chip's ×, or a Recent pill's ×). */
 export function removeChip(chips: readonly string[], id: string): string[] {
   return chips.includes(id) ? chips.filter(c => c !== id) : (chips as string[]);
 }
@@ -65,4 +92,24 @@ export function parseChips(value: unknown): string[] {
     if (typeof v === 'string' && isRealSessionColumn(v) && !out.includes(v)) out.push(v);
   }
   return out;
+}
+
+/**
+ * The bar as stored. `minimized` is the chips' own field, written (an empty list included)
+ * since chips became Minimize-only; before that, the one `legacy` field mixed sessions the
+ * user minimized with ones a full strip pushed out, and nothing tells them apart. So until
+ * the chips' field exists, none of those is a chip: they go to Recent, newest first.
+ */
+export function restoreTaskbar(minimized: unknown, recent: unknown, legacy: unknown): TaskbarLists {
+  if (Array.isArray(minimized)) {
+    const chips = parseChips(minimized);
+    return { chips, recent: parseRecent(recent, chips) };
+  }
+  const old = parseChips(legacy).reverse();
+  return { chips: [], recent: parseRecent([...parseChips(recent), ...old], []) };
+}
+
+/** Stored Recent from any shape, without the chips, at most RECENT_MAX. */
+export function parseRecent(value: unknown, chips: readonly string[]): string[] {
+  return parseChips(value).filter(id => !chips.includes(id)).slice(0, RECENT_MAX);
 }

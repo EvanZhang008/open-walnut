@@ -162,7 +162,7 @@ describe('fitToolRow', () => {
     expect(TOOL_ITEMS.lock!.kind).toBe('fixed');
     expect(TOOL_ITEMS.expand!.kind).toBe('fixed');
     expect(TOOL_ITEMS.close!.kind).toBe('fixed');
-    expect(Object.entries(TOOL_ITEMS).filter(([, v]) => v.kind === 'window').map(([k]) => k).sort()).toEqual(['locate', 'minimize', 'popout']);
+    expect(Object.entries(TOOL_ITEMS).filter(([, v]) => v.kind === 'window').map(([k]) => k).sort()).toEqual(['locate', 'minimize', 'popout', 'watch']);
   });
 
   it('keeps the top chip even where it does not fit', () => {

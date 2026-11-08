@@ -44,8 +44,12 @@ export const LAYOUT_VERSION = 1;
 export const LAYOUT_FIELDS = {
   /** The Home session columns on a desktop-width window: ids, locks, order. */
   homeColumns: `${LAYOUT_PREFIX}home-columns`,
-  /** Home's taskbar on a desktop-width window: the sessions minimized off the strip, in order. */
+  /** Home's taskbar before its chips were Minimize-only: read once into Recent, then cleared. */
   homeTaskbar: `${LAYOUT_PREFIX}home-taskbar`,
+  /** Home's taskbar chips on a desktop-width window: the sessions the user minimized, in order. */
+  homeMinimized: `${LAYOUT_PREFIX}home-minimized`,
+  /** The Recent end of that taskbar: sessions that left the strip without a Minimize, newest first. */
+  homeRecent: `${LAYOUT_PREFIX}home-recent`,
   /** The same on a phone-width window (its own strip: one column shows at a time). */
   phoneColumns: `${LAYOUT_PREFIX}phone-columns`,
   /** The panels opened beside the Org page (`task:<id>` / `session:<id>`), locks and order. */

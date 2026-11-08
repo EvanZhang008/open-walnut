@@ -65,8 +65,8 @@ export function taskControlSlot(presence: HeaderTaskPresence, drawnBefore: boole
   return drawnBefore ? 'spacer' : 'absent';
 }
 
-/** The tool row ids of the three (their `data-header-id`). */
-export const TASK_SLOT_IDS: ReadonlySet<string> = new Set(['fork', 'board', 'locate']);
+/** The tool row ids of the controls that need the task (their `data-header-id`): Fork, Board, Locate and Watch. */
+export const TASK_SLOT_IDS: ReadonlySet<string> = new Set(['fork', 'board', 'locate', 'watch']);
 
 /**
  * What a spacer adds to the element it stands in for. CSS makes it invisible

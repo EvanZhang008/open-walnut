@@ -74,7 +74,8 @@ import { useUrlSync } from '@/hooks/useUrlSync';
 import { MAX_PANELS, useSessionPanelMode, type SessionPanelMode } from '@/hooks/useSessionPanelMode';
 import { resolveTaskSessionId, taskOfSession } from '@/utils/session-status';
 import { SessionTaskbar } from '@/components/sessions/SessionTaskbar';
-import { chipsAfterStripChange, moveChip, parseChips, removeChip } from './sessionTaskbar';
+import { minimizeOffStrip, moveChip, removeChip, restoreTaskbar, taskbarAfterStripChange, type TaskbarLists } from './sessionTaskbar';
+import { onMinimizeToTaskbar } from '@/utils/taskbar-minimize';
 import { FocusDock } from '@/components/dock/FocusDock';
 import { AttentionBannerMount } from '@/components/common/AttentionBannerMount';
 import { publishBannerHealth } from '@/components/common/banner-mount-hooks';
@@ -544,29 +545,45 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   );
 
   // ── The taskbar (pages/sessionTaskbar.ts): open sessions that are not on the strip ──
-  // A real session that leaves the strip without a close (Minimize, a sixth open, a
-  // lower panel count) becomes a chip; one the user closed goes to the background. A
-  // desktop strip only: the phone's one-at-a-time strip has no taskbar.
-  const [taskbarChips, setTaskbarChips] = useState<string[]>(() => parseChips(readLayoutField('homeTaskbar')));
-  useEffect(() => { writeLayoutField('homeTaskbar', taskbarChips.length > 0 ? taskbarChips : null); }, [taskbarChips]);
-  const closedColumnIdsRef = useRef(new Set<string>());
+  // Its chips are only the sessions the user minimized (handleMinimizeSession, the one
+  // writer of minimizedIdsRef); any other real session that leaves the strip (×, a sixth
+  // open, a lower panel count) goes to its Recent end. A desktop strip only: the phone's
+  // one-at-a-time strip has no taskbar.
+  const [taskbarLists, setTaskbarLists] = useState<TaskbarLists>(() => restoreTaskbar(
+    readLayoutField('homeMinimized'), readLayoutField('homeRecent'), readLayoutField('homeTaskbar'),
+  ));
+  // The chips' field is always written, an empty list included: its presence says the old
+  // mixed field was already read into Recent (restoreTaskbar), which is then cleared.
+  useEffect(() => { writeLayoutField('homeMinimized', taskbarLists.chips); writeLayoutField('homeTaskbar', null); }, [taskbarLists.chips]);
+  useEffect(() => { writeLayoutField('homeRecent', taskbarLists.recent.length > 0 ? taskbarLists.recent : null); }, [taskbarLists.recent]);
+  const minimizedIdsRef = useRef(new Set<string>());
   const stripBeforeRef = useRef(sessionColumns);
   useEffect(() => {
     const before = stripBeforeRef.current;
     stripBeforeRef.current = sessionColumns;
-    const closed = closedColumnIdsRef.current;
-    closedColumnIdsRef.current = new Set();
+    const minimized = minimizedIdsRef.current;
+    minimizedIdsRef.current = new Set();
     if (before === sessionColumns || phoneLayout) return;
-    setTaskbarChips(chips => chipsAfterStripChange(chips, before, sessionColumns, closed));
+    setTaskbarLists(lists => taskbarAfterStripChange(lists, before, sessionColumns, minimized));
   }, [sessionColumns, phoneLayout]);
   const handleMinimizeSession = useCallback((sessionId: string) => {
+    minimizedIdsRef.current.add(sessionId);
     setSessionColumns(prev => removeSessionColumn(prev, sessionId));
   }, []);
+  // Minimize on a panel of another page (the Org side panel): the same explicit click.
+  useEffect(() => onMinimizeToTaskbar((sessionId) => {
+    if (phoneLayout) return;
+    if (sessionColumnsRef.current.some(c => c.id === sessionId)) { handleMinimizeSession(sessionId); return; }
+    setTaskbarLists(lists => minimizeOffStrip(lists, sessionId));
+  }), [phoneLayout, handleMinimizeSession]);
   const handleCloseChip = useCallback((sessionId: string) => {
-    setTaskbarChips(chips => removeChip(chips, sessionId));
+    setTaskbarLists(lists => ({ ...lists, chips: removeChip(lists.chips, sessionId) }));
+  }, []);
+  const handleCloseRecent = useCallback((sessionId: string) => {
+    setTaskbarLists(lists => ({ ...lists, recent: removeChip(lists.recent, sessionId) }));
   }, []);
   const handleMoveChip = useCallback((sessionId: string, toIndex: number) => {
-    setTaskbarChips(chips => moveChip(chips, sessionId, toIndex));
+    setTaskbarLists(lists => ({ ...lists, chips: moveChip(lists.chips, sessionId, toIndex) }));
   }, []);
 
   // Triage panel state — shares the first column slot with sessions
@@ -1813,8 +1830,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       opener,
       taskId: task?.id,
     };
-    // A close goes to the background, never to the taskbar.
-    closedColumnIdsRef.current.add(sessionId);
+    // A close is no Minimize: the session goes to the taskbar's Recent end, never its chips.
     setSessionColumns(prev => removeSessionColumn(prev, sessionId));
   }, []);
 
@@ -3639,10 +3655,12 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     </div>
     {!phoneLayout && (
       <SessionTaskbar
-        chips={taskbarChips}
+        chips={taskbarLists.chips}
+        recent={taskbarLists.recent}
         tasks={tasks}
         onRestore={openSessionOrToast}
         onClose={handleCloseChip}
+        onCloseRecent={handleCloseRecent}
         onMove={handleMoveChip}
       />
     )}

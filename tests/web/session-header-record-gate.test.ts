@@ -87,7 +87,7 @@ describe('taskControlSlot: drawn, kept as a spacer, or never drawn', () => {
   })
 
   it('names the three by their row ids, and a spacer is out of reach', () => {
-    expect([...TASK_SLOT_IDS].sort()).toEqual(['board', 'fork', 'locate'])
+    expect([...TASK_SLOT_IDS].sort()).toEqual(['board', 'fork', 'locate', 'watch'])
     expect(TASK_SLOT_SPACER).toEqual({ 'aria-hidden': true, tabIndex: -1, disabled: true, 'data-header-spacer': 'true' })
   })
 })

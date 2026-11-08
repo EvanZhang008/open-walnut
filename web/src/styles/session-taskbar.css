@@ -1,5 +1,6 @@
 /* Home's taskbar (components/sessions/SessionTaskbar.tsx): a bar along the bottom of
-   Home holding the minimized sessions as chips, and the small card a chip opens. */
+   Home holding the sessions the user minimized as chips, the small card a chip opens,
+   and at the right end the Recent pills (sessions that left the strip any other way). */
 
 .session-taskbar {
   flex: 0 0 auto;
@@ -75,6 +76,39 @@
   color: var(--fg);
 }
 .session-taskbar-close svg { width: 11px; height: 11px; }
+
+/* Recent: pushed to the bar's right end past a divider, lighter than a chip (dashed, no
+   fill, smaller) so it never reads as one of the sessions the user minimized. */
+.session-taskbar-recent {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  padding-left: 10px;
+  border-left: 1px solid var(--border);
+}
+.session-taskbar-recent-label {
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+.session-taskbar-recent-pill {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  max-width: 150px;
+  height: 22px;
+  border: 1px dashed var(--border);
+  border-radius: 11px;
+  color: var(--fg-muted);
+}
+.session-taskbar-recent-pill:hover { border-color: var(--fg-muted); color: var(--fg); }
+.session-taskbar-recent-pill .session-taskbar-open { gap: 5px; padding: 0 2px 0 8px; font-size: 11.5px; }
+.session-taskbar-recent-pill .session-taskbar-close { width: 18px; height: 18px; border-radius: 9px; }
+.session-taskbar-recent-pill .session-taskbar-close svg { width: 9px; height: 9px; }
+.session-taskbar-recent-pill .session-taskbar-dot { width: 6px; height: 6px; }
 
 /* The state dot: the same reading as a task row's (red needs you, pulse working). */
 .session-taskbar-dot {

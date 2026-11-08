@@ -1,78 +1,160 @@
 import { describe, it, expect } from 'vitest';
-import { chipsAfterStripChange, moveChip, parseChips, removeChip } from '../../web/src/pages/sessionTaskbar';
+import fs from 'node:fs';
+import path from 'node:path';
+import {
+  RECENT_MAX, minimizeOffStrip, moveChip, parseChips, parseRecent, removeChip, restoreTaskbar, taskbarAfterStripChange, type TaskbarLists,
+} from '../../web/src/pages/sessionTaskbar';
 import { addSessionColumn, removeSessionColumn, replaceSessionColumn, trimUnlockedToMax, type SessionSlot } from '../../web/src/pages/sessionColumns';
 
 const slot = (id: string, locked = false): SessionSlot => ({ id, locked });
 const none = new Set<string>();
+const empty: TaskbarLists = { chips: [], recent: [] };
+const after = (lists: TaskbarLists, before: SessionSlot[], next: SessionSlot[], minimized = none) =>
+  taskbarAfterStripChange(lists, before, next, minimized);
 
-describe('sessionTaskbar: a session leaving the strip', () => {
-  it('becomes a chip when minimized (removed without a close)', () => {
+describe('sessionTaskbar: only an explicit Minimize makes a chip (2026-11-07, the user)', () => {
+  it('a Minimize makes a chip', () => {
     const before = [slot('a'), slot('b')];
-    const after = removeSessionColumn(before, 'a');
-    expect(chipsAfterStripChange([], before, after, none)).toEqual(['a']);
+    expect(after(empty, before, removeSessionColumn(before, 'a'), new Set(['a']))).toEqual({ chips: ['a'], recent: [] });
   });
 
-  it('goes to the background when the user closed it', () => {
+  it('a close with × goes to Recent, never to a chip', () => {
     const before = [slot('a'), slot('b')];
-    const after = removeSessionColumn(before, 'a');
-    expect(chipsAfterStripChange(['x'], before, after, new Set(['a']))).toEqual(['x']);
+    expect(after({ chips: ['x'], recent: [] }, before, removeSessionColumn(before, 'a'))).toEqual({ chips: ['x'], recent: ['a'] });
   });
 
-  it('becomes a chip when a sixth open evicts it, never vanishes', () => {
+  it('a sixth open pushing a column out sends it to Recent, never to a chip', () => {
     const before = ['a', 'b', 'c', 'd', 'e'].map(id => slot(id));
-    const after = addSessionColumn(before, 'f', false, 5);
-    const evicted = before.find(s => !after.some(c => c.id === s.id))!;
-    expect(chipsAfterStripChange([], before, after, none)).toEqual([evicted.id]);
+    const next = addSessionColumn(before, 'f', false, 5);
+    const evicted = before.find(s => !next.some(c => c.id === s.id))!;
+    expect(after(empty, before, next)).toEqual({ chips: [], recent: [evicted.id] });
   });
 
-  it('becomes a chip when a lower panel count trims the strip', () => {
+  it('a lower panel count trims to Recent, never to a chip', () => {
     const before = ['a', 'b', 'c'].map(id => slot(id));
-    const after = trimUnlockedToMax(before, 2);
-    expect(chipsAfterStripChange([], before, after, none)).toEqual(['c']);
+    expect(after(empty, before, trimUnlockedToMax(before, 2))).toEqual({ chips: [], recent: ['c'] });
+  });
+
+  it('no strip change without a Minimize ever adds a chip (every way the strip moves)', () => {
+    const ids = ['a', 'b', 'c', 'd', 'e', 'f', 'g'];
+    let strip: SessionSlot[] = [];
+    let lists: TaskbarLists = { chips: ['z'], recent: [] };
+    let seed = 7;
+    const rand = (n: number) => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
+    for (let step = 0; step < 400; step++) {
+      const id = ids[rand(ids.length)]!;
+      const move = rand(4);
+      const next = move === 0 ? addSessionColumn(strip, id, rand(2) === 0, 5)
+        : move === 1 ? removeSessionColumn(strip, id)
+          : move === 2 ? trimUnlockedToMax(strip, 1 + rand(4))
+            : strip.length ? replaceSessionColumn(strip, strip[0]!.id, id) : strip;
+      lists = after(lists, strip, next);
+      strip = next;
+      expect(lists.chips).toEqual(['z']);
+      expect(lists.recent.length).toBeLessThanOrEqual(RECENT_MAX);
+      for (const r of lists.recent) expect(strip.some(c => c.id === r)).toBe(false);
+    }
+  });
+
+  it('Recent is newest first, without repeats, and keeps at most RECENT_MAX', () => {
+    let lists = empty;
+    let strip = ['a', 'b', 'c', 'd', 'e', 'f'].map(id => slot(id));
+    for (const id of ['a', 'b', 'c', 'd', 'e']) {
+      const next = removeSessionColumn(strip, id);
+      lists = after(lists, strip, next);
+      strip = next;
+    }
+    expect(lists.recent).toEqual(['e', 'd', 'c', 'b'].slice(0, RECENT_MAX));
+    const back = addSessionColumn(strip, 'c', false, 5);
+    lists = after(lists, strip, back);
+    expect(lists.recent).not.toContain('c');
+  });
+
+  it('a minimized session leaves Recent, and a chip is never also in Recent', () => {
+    const before = [slot('a'), slot('b')];
+    expect(after({ chips: [], recent: ['a'] }, before, removeSessionColumn(before, 'a'), new Set(['a']))).toEqual({ chips: ['a'], recent: [] });
+    expect(minimizeOffStrip({ chips: [], recent: ['q'] }, 'q')).toEqual({ chips: ['q'], recent: [] });
+    expect(minimizeOffStrip({ chips: [], recent: [] }, 'draft:1')).toEqual({ chips: [], recent: [] });
   });
 
   it('a swap in place (plan -> exec, prefix -> full id) is not a session leaving', () => {
     const before = [slot('plan'), slot('b')];
-    const after = replaceSessionColumn(before, 'plan', 'exec');
-    expect(chipsAfterStripChange([], before, after, none)).toEqual([]);
+    expect(after(empty, before, replaceSessionColumn(before, 'plan', 'exec'))).toBe(empty);
   });
 
   it('a collapse onto an id already open is a swap too', () => {
     const before = [slot('abc'), slot('abcdef')];
-    const after = replaceSessionColumn(before, 'abc', 'abcdef');
-    expect(chipsAfterStripChange([], before, after, none)).toEqual([]);
+    expect(after(empty, before, replaceSessionColumn(before, 'abc', 'abcdef'))).toBe(empty);
   });
 
   it('an old swap does not hide a later minimize of the id it replaced', () => {
     const swapped = replaceSessionColumn([slot('p')], 'p', 'e1');
     const before = [slot('p'), ...swapped];
-    const after = removeSessionColumn(before, 'p');
-    expect(chipsAfterStripChange([], before, after, none)).toEqual(['p']);
+    expect(after(empty, before, removeSessionColumn(before, 'p'), new Set(['p'])).chips).toEqual(['p']);
   });
 
-  it('drafts and launches on their way never become chips', () => {
+  it('an older Walnut\'s mixed taskbar field is read into Recent, never into chips', () => {
+    expect(restoreTaskbar(null, null, ['old1', 'old2'])).toEqual({ chips: [], recent: ['old2', 'old1'] });
+    expect(restoreTaskbar(undefined, ['r'], ['old1'])).toEqual({ chips: [], recent: ['r', 'old1'] });
+    // Once the chips' own field exists (an empty list included), the old field is ignored.
+    expect(restoreTaskbar([], null, ['old1'])).toEqual({ chips: [], recent: [] });
+    expect(restoreTaskbar(['m'], ['m', 'r'], ['old1'])).toEqual({ chips: ['m'], recent: ['r'] });
+  });
+
+  it('drafts and launches on their way never become chips nor Recent', () => {
     const before = [slot('draft:1'), slot('pending:qs'), slot('pending:ws-t1'), slot('a')];
-    expect(chipsAfterStripChange([], before, [slot('a')], none)).toEqual([]);
+    expect(after(empty, before, [slot('a')], new Set(['draft:1', 'pending:qs']))).toBe(empty);
+  });
+});
+
+describe('sessionTaskbar: the one way onto the chips (guard)', () => {
+  const web = path.resolve(__dirname, '../../web/src');
+  const read = (rel: string) => fs.readFileSync(path.join(web, rel), 'utf8');
+  const walk = (dir: string): string[] => fs.readdirSync(dir, { withFileTypes: true }).flatMap(e =>
+    e.isDirectory() ? walk(path.join(dir, e.name)) : /\.tsx?$/.test(e.name) ? [path.join(dir, e.name)] : []);
+
+  it('Home marks a session minimized only inside handleMinimizeSession', () => {
+    const src = read('pages/MainPage.tsx');
+    const marks = [...src.matchAll(/minimizedIdsRef\.current\.add\(/g)];
+    expect(marks.length, 'a new path marks a session minimized: only the Minimize click may').toBe(1);
+    const fn = src.slice(src.indexOf('const handleMinimizeSession = useCallback'));
+    expect(fn.slice(0, fn.indexOf('}, [])'))).toContain('minimizedIdsRef.current.add(');
+  });
+
+  it('every Minimize handed to a session panel, and every off-strip minimize request, is a known click', () => {
+    const allowed: Record<string, string> = {
+      'pages/MainPage.tsx': "Home's columns: the header's Minimize button and its \"...\" row",
+      'components/org/OrgSidePanel.tsx': "the Org side panel's Minimize button",
+    };
+    const found = new Set<string>();
+    for (const file of walk(web)) {
+      const rel = path.relative(web, file).split(path.sep).join('/');
+      const src = fs.readFileSync(file, 'utf8');
+      // The definitions themselves: the event helper, the pure rules, the panel that draws the button.
+      if (['utils/taskbar-minimize.ts', 'pages/sessionTaskbar.ts', 'components/sessions/SessionPanel.tsx'].includes(rel)) continue;
+      // onMinimize counts where a session panel is drawn (an approval card has its own, unrelated one).
+      const givesPanelMinimize = /<SessionPanel\b/.test(src) && /\bonMinimize[=:]/.test(src);
+      if (givesPanelMinimize || /requestMinimizeToTaskbar\(|minimizeOffStrip\(/.test(src)) found.add(rel);
+    }
+    expect([...found].sort(), 'a new place puts sessions on the taskbar chips: list it here with the explicit click it is').toEqual(Object.keys(allowed).sort());
   });
 });
 
 describe('sessionTaskbar: the chip list', () => {
   it('a chip opened back onto the strip leaves the taskbar', () => {
     const before = [slot('b')];
-    const after = addSessionColumn(before, 'a', false, 5);
-    expect(chipsAfterStripChange(['a', 'c'], before, after, none)).toEqual(['c']);
+    expect(after({ chips: ['a', 'c'], recent: [] }, before, addSessionColumn(before, 'a', false, 5)).chips).toEqual(['c']);
   });
 
   it('keeps join order and adds new chips at the end, once', () => {
     const before = [slot('a'), slot('b')];
-    const after: SessionSlot[] = [];
-    expect(chipsAfterStripChange(['z', 'a'], before, after, none)).toEqual(['z', 'a', 'b']);
+    expect(after({ chips: ['z', 'a'], recent: [] }, before, [], new Set(['a', 'b'])).chips).toEqual(['z', 'a', 'b']);
   });
 
-  it('returns the same array when nothing changed', () => {
-    const chips = ['a'];
+  it('returns the same lists when nothing changed', () => {
+    const lists = { chips: ['a'], recent: ['c'] };
     const cols = [slot('b')];
-    expect(chipsAfterStripChange(chips, cols, cols, none)).toBe(chips);
+    expect(after(lists, cols, cols)).toBe(lists);
   });
 
   it('× removes a chip; a drag moves it', () => {
@@ -84,5 +166,6 @@ describe('sessionTaskbar: the chip list', () => {
   it('reads only real session ids back from storage, deduplicated', () => {
     expect(parseChips(['a', 'a', 'draft:1', 'pending:x', 3, null, 'b'])).toEqual(['a', 'b']);
     expect(parseChips('nope')).toEqual([]);
+    expect(parseRecent(['a', 'b', 'c', 'd', 'e', 'f'], ['b'])).toEqual(['a', 'c', 'd', 'e'].slice(0, RECENT_MAX));
   });
 });

@@ -50,6 +50,9 @@ export const TOOL_ITEMS: Record<string, { kind: ToolItemKind; priority: number; 
   // Locate, the way back to the task from the Ask and Mail drawers, is the last
   // of the two movable window buttons to leave.
   locate: { kind: 'window', priority: 9, name: 'Locate task' },
+  // Watch keeps the task at the top of Home's task panel (WatchToggle.tsx); it folds
+  // right after Open in new tab, before Locate.
+  watch: { kind: 'window', priority: 10, name: 'Watch' },
   popout: { kind: 'window', priority: 11, name: 'Open in new tab' },
   // Minimize (Home's columns only) puts the panel on the taskbar: the last window
   // button to fold, after Open in new tab and Locate.

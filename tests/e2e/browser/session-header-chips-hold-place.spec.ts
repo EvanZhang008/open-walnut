@@ -219,6 +219,7 @@ const WAITING: Record<string, string> = {
   fork: 'Fork becomes available once the session has loaded',
   board: 'The Board becomes available once the session has loaded',
   locate: 'Locate becomes available once the session has loaded',
+  watch: 'Watch becomes available once the session has loaded',
 }
 
 /** Open the row's "..." menu and check the rows of whatever is folded into it, then Escape. */
@@ -758,6 +759,7 @@ test('in a narrow column nothing moves into the "..." menu when the record lands
       hold.release()
       await expect(panel.locator('[data-header-id="fork"] button:enabled')).toBeAttached({ timeout: 15_000 })
       await expect(panel.locator('button[data-header-id="locate"]:enabled')).toBeAttached()
+      await expect(panel.locator('button[data-header-id="watch"]:enabled')).toBeAttached()
       await settle(page)
       const after = await rowBoxes(panel)
       if (width === 260) await checkFoldedRows(page, panel, true)

@@ -65,7 +65,7 @@ import {
 } from '@/components/inbox/session-inbox-link';
 import { buildPassagePrefill, buildSelectionPrefill, displayPathForPrefill } from './diffPrefill';
 import type { SessionSplitView } from './sessionSplitView';
-import { ICON_ROBOT, ICON_EXPAND, ICON_COLLAPSE, ICON_CLOSE, ICON_MINIMIZE, ICON_LOCK, ICON_UNLOCK, ICON_LOCATE, ICON_NEW_TAB, ICON_PANEL_RIGHT, ICON_PANEL_RIGHT_FILLED } from '../common/Icons';
+import { ICON_ROBOT, ICON_EXPAND, ICON_COLLAPSE, ICON_CLOSE, ICON_EYE, ICON_MINIMIZE, ICON_LOCK, ICON_UNLOCK, ICON_LOCATE, ICON_NEW_TAB, ICON_PANEL_RIGHT, ICON_PANEL_RIGHT_FILLED } from '../common/Icons';
 import { openPopout } from '@/popout/openPopout';
 import { locateTaskOnHome, navigateToTarget } from '@/utils/open-session';
 import { UserMessagesSummary } from './UserMessagesSummary';
@@ -146,7 +146,8 @@ import { useEngineCatalog } from '@/hooks/useEngineCatalog';
 import { useEngineSettingsEntry } from './useEngineSettingsEntry';
 import { engineCaps } from '@/utils/engine-capabilities';
 import { EngineSwitchLine, useEngineSwitchPick } from './EngineSwitch';
-import type { SessionEffort } from '@open-walnut/core';
+import type { SessionEffort, Task } from '@open-walnut/core';
+import { useWatchToggle } from '@/components/tasks/WatchToggle';
 import { taskNeedsAction } from '@/utils/session-status';
 import { nextSessionControlValue, SessionControlPills } from './SessionControlPills';
 import { useNotifications } from '@/contexts/notifications';
@@ -577,6 +578,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   const boardChipLive = taskSlot === 'live' && boardTab === 'shown';
   if (boardChipLive) boardDrawn.current.drawn = true;
   const locateWaitReason = recordGateReason('Locate', session, loading);
+  const watchWaitReason = recordGateReason('Watch', session, loading);
 
   const handleControlCommand = useCallback((command: string) => {
     if (command === 'model') {
@@ -2937,6 +2939,16 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             )}
             </div>{/* .session-meta-row-2-chips */}
             <div className="session-panel-window-controls">
+              {/* Watch (the task's eye, WatchToggle.tsx) needs the task as Locate does, so it
+                  keeps a spacer the same way. */}
+              {taskSlot === 'spacer' && (
+                <button type="button" className="task-action-btn session-panel-watch" data-header-id="watch" data-hidden={hid('watch')} {...TASK_SLOT_SPACER}>
+                  {ICON_EYE}
+                </button>
+              )}
+              {taskSlot === 'live' && (
+                <HeaderWatchButton task={sessionTask} taskId={linkedTaskId} hidden={hid('watch')} waitReason={watchWaitReason} />
+              )}
               {/* Locate needs the task too, the same way: arriving late it took room
                   from the chips, and in a narrow column that sent Terminal into the
                   "..." menu under a click. */}
@@ -3784,6 +3796,30 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
 
 /** The memoized panel, for the one place a panel renders a panel (a task opened
  *  beside a Board): inside SessionPanel's body its name is the bare function. */
+/** Watch in the window controls: the task's eye (WatchToggle.tsx), lit while watched. It waits,
+ *  disabled and saying why, until the session record and its task are here, the way Locate does. */
+function HeaderWatchButton({ task, taskId, hidden, waitReason }: { task: Task | null | undefined; taskId: string | undefined; hidden: 'true' | 'false'; waitReason: string | null }) {
+  const { watched, toggle } = useWatchToggle({ id: task?.id ?? taskId ?? '', watched_at: task?.watched_at });
+  const ready = !!task && !waitReason;
+  return (
+    <button
+      type="button"
+      className={`task-action-btn session-panel-watch${watched ? ' is-watched' : ''}`}
+      data-testid="session-panel-watch"
+      data-header-id="watch"
+      data-hidden={hidden}
+      data-state={watched ? 'on' : undefined}
+      disabled={!ready}
+      aria-pressed={watched}
+      aria-label={watched ? 'Stop watching' : 'Watch'}
+      title={waitReason ?? (!task ? 'Watch becomes available once the task has loaded' : watched ? 'Watching: kept at the top of the task panel. Click to stop.' : 'Watch: keep it at the top of the task panel, whatever its state')}
+      onClick={() => { if (ready) toggle(); }}
+    >
+      {ICON_EYE}
+    </button>
+  );
+}
+
 function InsetSessionPanel(props: SessionPanelProps) {
   return <SessionPanel {...props} />;
 }

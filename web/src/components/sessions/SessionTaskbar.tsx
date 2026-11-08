@@ -2,12 +2,16 @@
  * SessionTaskbar — Home's bar of open sessions that are not on the strip (2026-11-06,
  * the user: "like a taskbar in computer"; design A, a bar along the bottom of Home).
  *
- * A chip per minimized session, in the order it joined (drag to reorder). Its dot
+ * A chip per session the user minimized, in the order it joined (drag to reorder). Its dot
  * says the session's state: red for Needs you or a prompt waiting on the user, a
  * pulse while a turn runs, a check when its task is done. A click opens it back
  * onto the strip; × closes it to the background (the session keeps running). Hover,
  * or the ^ button, opens the small card: its status line, its last reply and a
  * one-line composer, the way a watch shows a phone's conversation.
+ *
+ * At the bar's right end, past a divider, Recent: the last few sessions that left the
+ * strip without a Minimize (a close, a column pushed out), as lighter pills (2026-11-07,
+ * design A). A click opens one back onto the strip; its × only takes it off the list.
  *
  * The rules of what is a chip live in pages/sessionTaskbar.ts; this file only draws.
  */
@@ -29,9 +33,12 @@ import { log } from '@/utils/log';
 
 export interface SessionTaskbarProps {
   chips: readonly string[];
+  /** Sessions that left the strip without a Minimize, newest first. */
+  recent: readonly string[];
   tasks: readonly Task[];
   onRestore: (sessionId: string) => void;
   onClose: (sessionId: string) => void;
+  onCloseRecent: (sessionId: string) => void;
   onMove: (sessionId: string, toIndex: number) => void;
 }
 
@@ -41,9 +48,9 @@ type ChipState = 'needs' | 'running' | 'error' | 'done' | 'idle';
 const PEEK_OPEN_MS = 350;
 const PEEK_CLOSE_MS = 250;
 
-export function SessionTaskbar({ chips, tasks, onRestore, onClose, onMove }: SessionTaskbarProps) {
+export function SessionTaskbar({ chips, recent, tasks, onRestore, onClose, onCloseRecent, onMove }: SessionTaskbarProps) {
   const [dragged, setDragged] = useState<string | null>(null);
-  if (chips.length === 0) return null;
+  if (chips.length === 0 && recent.length === 0) return null;
   const dropAt = (e: DragEvent, index: number) => {
     e.preventDefault();
     const id = dragged ?? e.dataTransfer.getData('text/x-walnut-chip');
@@ -65,6 +72,14 @@ export function SessionTaskbar({ chips, tasks, onRestore, onClose, onMove }: Ses
           onDrop={(e) => dropAt(e, i)}
         />
       ))}
+      {recent.length > 0 && (
+        <div className="session-taskbar-recent" role="group" aria-label="Recently open" data-testid="session-taskbar-recent">
+          <span className="session-taskbar-recent-label" aria-hidden="true">Recent</span>
+          {recent.map((sid) => (
+            <RecentPill key={sid} sessionId={sid} task={taskOfSession(tasks, sid)} onRestore={onRestore} onClose={onCloseRecent} />
+          ))}
+        </div>
+      )}
     </nav>
   );
 }
@@ -80,12 +95,35 @@ interface ChipProps {
   onDrop: (e: DragEvent) => void;
 }
 
-function TaskbarChip({ sessionId, task, dragging, onRestore, onClose, onDragStart, onDragEnd, onDrop }: ChipProps) {
+/** The dot's state: red for Needs you or a prompt, a pulse while a turn runs, a check when done. */
+function useChipState(sessionId: string, task: Task | undefined) {
   const status = useSessionStatus(sessionId);
   const state: ChipState = status?.pendingPermissionTool || (task && taskNeedsAction(task)) ? 'needs'
     : status?.process_status === 'running' ? 'running'
       : status?.process_status === 'error' ? 'error'
         : task?.phase === 'COMPLETE' ? 'done' : 'idle';
+  return { status, state };
+}
+
+/** A Recent pill: the dot and title open it back onto the strip; × drops it from the list. */
+function RecentPill({ sessionId, task, onRestore, onClose }: { sessionId: string; task: Task | undefined; onRestore: (id: string) => void; onClose: (id: string) => void }) {
+  const { state } = useChipState(sessionId, task);
+  const title = task?.title || 'Session';
+  return (
+    <div className="session-taskbar-recent-pill" data-session-id={sessionId} data-state={state}>
+      <button type="button" className="session-taskbar-open" title={title} onClick={() => onRestore(sessionId)} aria-label={`Open ${title} (recent)`}>
+        <span className="session-taskbar-dot" aria-hidden="true" />
+        <span className="session-taskbar-title">{title}</span>
+      </button>
+      <button type="button" className="session-taskbar-close" onClick={() => onClose(sessionId)} aria-label={`Remove ${title} from Recent`}>
+        {ICON_CLOSE}
+      </button>
+    </div>
+  );
+}
+
+function TaskbarChip({ sessionId, task, dragging, onRestore, onClose, onDragStart, onDragEnd, onDrop }: ChipProps) {
+  const { status, state } = useChipState(sessionId, task);
   const title = task?.title || 'Session';
   const chipRef = useRef<HTMLDivElement>(null);
   // A card the pointer opened closes when the pointer leaves; one opened with ^ stays

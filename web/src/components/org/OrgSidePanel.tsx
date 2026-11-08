@@ -4,8 +4,9 @@
  * the Org page. A task with a session shows that session (the same embedded SessionPanel
  * as the Ask Walnut slot, with its own close, popout and fullscreen), and a Home button
  * opens it on home instead. A task with no session shows what it is and how to start one.
- * On a wide window a panel carries a lock: a locked panel stays beside the page while the
- * next task opens next to it (org-side-columns.ts), and it is still there after a restart.
+ * Minimize puts the session on Home's taskbar and closes the panel. On a wide window a
+ * panel carries a lock: a locked panel stays beside the page while the next task opens
+ * next to it (org-side-columns.ts), and it is still there after a restart.
  */
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -15,6 +16,8 @@ import { SessionPanel } from '@/components/sessions/SessionPanel';
 import { ICON_LOCK, ICON_UNLOCK } from '@/components/common/Icons';
 import { locateTaskOnHome, openSessionOnHome } from '@/utils/open-session';
 import { resolveTaskSessionId } from '@/utils/session-status';
+import { requestMinimizeToTaskbar } from '@/utils/taskbar-minimize';
+import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 
 /** What the panel shows: a task (its session, when it has one) or one session by id. */
 export type OrgSideTarget = { kind: 'task'; id: string } | { kind: 'session'; id: string };
@@ -56,6 +59,7 @@ const HOME_ICON = (
 
 export function OrgSidePanel({ target, tasks, onClose, onOpenTask, onOpenSession, onStartChat, inboxRequest, locked, onToggleLock }: Props) {
   const navigate = useNavigate();
+  const phoneLayout = usePhoneLayout();
   const stored = target.kind === 'task' ? tasks.find((t) => t.id === target.id) : undefined;
   // A task the store does not hold (a completed one, say) is read once.
   const [fetched, setFetched] = useState<{ id: string; task: Task | null } | null>(null);
@@ -82,6 +86,8 @@ export function OrgSidePanel({ target, tasks, onClose, onOpenTask, onOpenSession
           {...(inboxRequest ? { inboxRequest } : {})}
           {...(onToggleLock ? { locked: !!locked, onToggleLock: () => onToggleLock() } : {})}
           onClose={onClose}
+          // Minimize: the session waits on Home's taskbar (it keeps running) and the panel closes.
+          {...(phoneLayout ? {} : { onMinimize: (sid: string) => { requestMinimizeToTaskbar(sid); onClose(); } })}
           headerLeading={(
             <button
               type="button"
