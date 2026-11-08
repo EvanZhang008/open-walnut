@@ -19,13 +19,14 @@
 import { CwdMissingError } from './cwd-check.js';
 import { isSessionStopSuperseded } from '../core/sessions/session-stop.js';
 import { InheritedSessionRefusedError } from './ephemeral-session-gate.js';
+import { DaemonFrameTooLargeError, FRAME_TOO_LARGE } from './daemon-frame-cap.js';
 
 export type DeliveryFailureKind = 'permanent' | 'transient';
 
 export interface DeliveryFailureVerdict {
   kind: DeliveryFailureKind;
   /** Stable label for logs/tests. Absent for transient failures. */
-  code?: 'cwd_missing' | 'session_missing' | 'session_stopped' | 'budget_paused' | 'inherited_session' | 'session_live';
+  code?: 'cwd_missing' | 'session_missing' | 'session_stopped' | 'budget_paused' | 'inherited_session' | 'session_live' | 'too_large';
   /** Human-readable cause, stored on the parked row and shown in the UI. */
   reason: string;
 }
@@ -64,6 +65,10 @@ export function classifyDeliveryFailure(err: unknown): DeliveryFailureVerdict {
   if (err instanceof CwdMissingError) return { kind: 'permanent', code: 'cwd_missing', reason };
   if (CWD_MISSING.test(message)) return { kind: 'permanent', code: 'cwd_missing', reason };
   if (SESSION_MISSING.test(message)) return { kind: 'permanent', code: 'session_missing', reason };
+  // Over the frame cap of the host's daemon: refused before a byte went, the same on every retry.
+  if (err instanceof DaemonFrameTooLargeError || FRAME_TOO_LARGE.test(message)) {
+    return { kind: 'permanent', code: 'too_large', reason: `Not sent: ${reason}. Send it in smaller parts.` };
+  }
 
   return { kind: 'transient', reason };
 }

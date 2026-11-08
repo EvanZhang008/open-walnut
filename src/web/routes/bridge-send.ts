@@ -3,6 +3,7 @@ import { authenticate, parseErrors } from './bridge-ingest.js'
 import { bridgeHasCapability, bridgeRequest, bridgeRequestPrepared, BridgeOfflineError } from '../ws/bridge-registry.js'
 import { decodeCloudSessionSend, InvalidCloudSessionPayloadError } from '../../lib/cloud-session-payload.js'
 import { log } from '../../logging/index.js'
+import { DaemonFrameTooLargeError } from '../../providers/daemon-frame-cap.js'
 
 export const BRIDGE_SEND_PATH = '/bridge/send'
 const ID = /^[A-Za-z0-9_-]{1,128}$/
@@ -50,6 +51,11 @@ async function send(req: Request, res: Response): Promise<void> {
     log.web.info('primary session send via companion', { host, sessionId, uuid, ok: reply.ok === true })
     res.json(reply)
   } catch (err) {
+    // Refused before a byte went out: the same on every retry.
+    if (err instanceof DaemonFrameTooLargeError) {
+      res.status(413).json({ error: 'too_large', message: err.message, sent: false })
+      return
+    }
     const sent = !(err instanceof BridgeOfflineError)
     res.status(503).json({ error: sent ? 'delivery_unconfirmed' : 'host_unavailable', sent })
   }

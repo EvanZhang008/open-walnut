@@ -87,6 +87,7 @@ import { runRemoteFoldPrewarm } from './remote-fold-prewarm.js'
 import { BootStartKeeper, type BootStartView } from './remote-boot-start-keeper.js'
 import { freshLinkWaitMs, hostSliceWaitMs } from './host-slice-pace.js'
 import { AWAKE_TICK_MS, AwakeDownClock } from './awake-down-clock.js'
+import { assertFrameFits, DAEMON_FRAME_MAX_BYTES, DaemonFrameTooLargeError, tooLargeGatewayReply } from './daemon-frame-cap.js'
 import { FOLD_CHECKPOINT_FORMAT } from './fold-checkpoint-core.js'
 import { annotateCredentialFailure, SSH_EVIDENCE_PREFIX } from './ssh-credential-evidence.js'
 import { cancelRecordedForwards, controlSocketPath, exitControlMaster, masterLastWords, planControlMaster, recordForward, startControlMaster } from './ssh-control-master.js'
@@ -1657,7 +1658,8 @@ export class DaemonConnection {
           // Gzipped where the daemon reads it (host-slice-gz-v1): the bytes on the shared link
           // are what pacing and the relay count. Compressed off the event loop.
           const json = JSON.stringify(slice)
-          const sliceGz = this.hostKey !== '__local__' && this.hasCapability('host-slice-gz-v1')
+          // The Mac's own daemon takes it plain, unless plain would be over the frame cap.
+          const sliceGz = (this.hostKey !== '__local__' || json.length * 3 > DAEMON_FRAME_MAX_BYTES) && this.hasCapability('host-slice-gz-v1')
             ? (await gzipAsync(Buffer.from(json))).toString('base64') : null
           const bytes = sliceGz ? sliceGz.length : json.length
           const reply = await this.send('host.slice', sliceGz ? { sliceGz } : { slice: slice as unknown as Record<string, unknown> })
@@ -2069,16 +2071,18 @@ export class DaemonConnection {
     if (!this._connected || !this.ws) {
       throw markLinkFailure(new Error(`DaemonConnection not connected to ${this.hostKey}`), 'no-link')
     }
-    // A test server never resumes or writes into a session it did not start.
-    const gateScope = { host: this.hostKey, url: this._lastWsUrl, instance: this._daemonInstanceId }
-    const gateAttempt = gateSessionCommand(gateScope, cmd, params)
-
     const id = ++this.cmdCounter
     const traceId = typeof params.traceId === 'string' && params.traceId
       ? params.traceId
       : crypto.randomBytes(4).toString('hex')
     const payload = { id, cmd, ...params, traceId }
     const message = JSON.stringify(payload)
+    // A frame over the daemon's cap closes the socket for every session on the host.
+    assertFrameFits(message, `the ${cmd} command`, this.hostKey)
+
+    // A test server never resumes or writes into a session it did not start.
+    const gateScope = { host: this.hostKey, url: this._lastWsUrl, instance: this._daemonInstanceId }
+    const gateAttempt = gateSessionCommand(gateScope, cmd, params)
 
     // Per-command send log — paired with daemon's cmd_recv log (same traceId).
     // Skip `ping` to avoid spamming the logs (it fires every 15s, adds nothing
@@ -2545,13 +2549,13 @@ export class DaemonConnection {
     const seen = key ? DaemonConnection.gatewayRelays.get(key) : undefined
     if (seen) {
       log.session.info('DaemonConnection: gateway relay asked again, answered once', { host: this.hostKey, relayId, capability, callerSid })
-      await this.sendGatewayResult(await seen.reply, relayId)
+      await this.sendGatewayResult(await seen.reply, relayId, seen, { capability, callerSid })
       return
     }
     const reply = this.answerGatewayRequest(receivedAt, relayId, capability, callerSid, payload)
       .catch((err: unknown): Record<string, unknown> => ({ relayId, error: err instanceof Error ? err.message : String(err), errorCode: 'internal' }))
     if (key) this.rememberGatewayRelay(key, reply)
-    const acked = await this.sendGatewayResult(await reply, relayId)
+    const acked = await this.sendGatewayResult(await reply, relayId, key ? DaemonConnection.gatewayRelays.get(key) : undefined, { capability, callerSid })
     // Taken: the daemon holds the relay no more, so a resend still on its way only needs a
     // word it drops (stale), not the whole answer kept five minutes.
     const kept = key ? DaemonConnection.gatewayRelays.get(key) : undefined
@@ -2579,13 +2583,29 @@ export class DaemonConnection {
    * clouddev stopped arriving for two minutes while its events still came, so
    * the ping loop, which counts any byte heard, never called the link dead).
    */
-  private async sendGatewayResult(reply: Record<string, unknown>, relayId: number): Promise<boolean> {
+  private async sendGatewayResult(
+    reply: Record<string, unknown>, relayId: number,
+    kept?: { reply: Promise<Record<string, unknown>> }, about: { capability?: string; callerSid?: string } = {},
+  ): Promise<boolean> {
     const sentAt = Date.now()
     const watch = setTimeout(() => { void this.checkUpstream(sentAt) }, DaemonConnection.UPSTREAM_CHECK_MS)
     watch.unref?.()
     try {
       // Taken only when the daemon says ok (a refusal resolves too).
-      const ack = await this.send('gateway-result', reply) as { ok?: unknown } | undefined
+      let ack: { ok?: unknown } | undefined
+      try {
+        ack = await this.send('gateway-result', reply) as { ok?: unknown } | undefined
+      } catch (err) {
+        if (!(err instanceof DaemonFrameTooLargeError)) throw err
+        // Sent, it would close the link and come back asked again on the next one, forever:
+        // the caller gets why instead, and so does a resend (the memo keeps the small answer).
+        log.session.warn('DaemonConnection: gateway answer too large for one frame, answered with an error', {
+          host: this.hostKey, relayId, bytes: err.bytes, ...about,
+        })
+        const small = tooLargeGatewayReply(relayId, err.bytes, this.hostKey)
+        if (kept) kept.reply = Promise.resolve(small)
+        ack = await this.send('gateway-result', small) as { ok?: unknown } | undefined
+      }
       return ack?.ok === true
     } catch (err) {
       log.session.warn('DaemonConnection: gateway-result send failed', {
@@ -2869,7 +2889,9 @@ export class DaemonConnection {
         send: (frame) => {
           const ws = this.ws
           if (!ws || ws.readyState !== WebSocket.OPEN) throw new Error(`not connected to ${this.hostKey}`)
-          ws.send(JSON.stringify(frame))
+          const message = JSON.stringify(frame)
+          assertFrameFits(message, 'a stream frame', this.hostKey)
+          ws.send(message)
         },
         // A host server's browser reaching this Mac: into the tunnel port, which
         // trusts nothing on loopback (the same door a tunnel here uses).
@@ -4309,6 +4331,7 @@ export class DaemonConnection {
     }
     const id = ++this.cmdCounter
     const message = JSON.stringify({ id, cmd, ...params })
+    try { assertFrameFits(message, `the ${cmd} command`, this.hostKey) } catch (err) { return Promise.reject(err) }
     return new Promise<DaemonCommandResult>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingCommands.delete(id)
@@ -6874,7 +6897,6 @@ export class DaemonConnection {
             } catch { /* gate unavailable — legacy patching is the fallback anyway */ }
             result = await this.send('status', { sid: s.claudeSessionId })
           }
-
           if (snapshotHandled) {
             // Record convergence is the projection's job now — but the ws
             // re-subscription is still ours (the daemon dropped us from

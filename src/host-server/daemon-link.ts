@@ -18,6 +18,7 @@ import path from 'node:path'
 import type { Duplex } from 'node:stream'
 import WebSocket from '#ws'
 import { createStreamEndpoint, type IncomingStreamInfo, type StreamEndpoint } from '../lib/link-stream.js'
+import { assertFrameFits } from '../providers/daemon-frame-cap.js'
 
 export interface FollowerView {
   walnutId: string
@@ -124,7 +125,9 @@ export function createDaemonLink(opts: DaemonLinkOptions): DaemonLink {
       const timer = setTimeout(() => { pending.delete(id); reject(new Error(`${cmd} timed out`)) }, timeoutMs)
       pending.set(id, (m) => { clearTimeout(timer); resolve(m) })
       try {
-        socket.send(JSON.stringify({ id, cmd, ...params }))
+        const message = JSON.stringify({ id, cmd, ...params })
+        assertFrameFits(message, `the ${cmd} command`, 'its daemon')
+        socket.send(message)
       } catch (err) {
         clearTimeout(timer)
         pending.delete(id)

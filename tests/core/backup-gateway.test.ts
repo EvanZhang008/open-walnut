@@ -6,6 +6,7 @@
 import { describe, it, expect } from 'vitest'
 import { createBackupGateway, bridgeAliasOf, LEADER_OPS, type BackupGatewayDeps, type GatewayRequestFrame } from '../../src/core/leader/backup-gateway.js'
 import type { BackupLeader } from '../../src/core/leader/backup-leader.js'
+import { assertFrameFits, DAEMON_FRAME_MAX_BYTES } from '../../src/providers/daemon-frame-cap.js'
 
 const W = 'wprimary0001'
 const CALLER = 'aaaaaaaa-1111-4111-8111-111111111111'
@@ -50,6 +51,23 @@ function harness(over: Partial<BackupGatewayDeps> = {}, leads: Record<string, nu
 }
 
 describe('backup gateway', () => {
+  it('an answer over the daemon frame cap goes back as an error naming its size, never whole', async () => {
+    const written: Array<Record<string, any>> = []
+    const h = harness({
+      // As bridge-registry's dispatch: a frame over the cap is refused before it is written.
+      request: async (_host, cmd, params) => {
+        assertFrameFits(JSON.stringify({ id: 1, cmd, ...params }), `the ${cmd} command`, 'devbox')
+        written.push(params)
+        return { ok: true }
+      },
+      executeOp: async () => ({ ok: true, result: { body: 'x'.repeat(DAEMON_FRAME_MAX_BYTES) } }),
+    })
+    await h.gw.handle('devbox', h.frame({ name: LEADER_OPS[0], args: {} }))
+    expect(written).toHaveLength(1)
+    expect(written[0]).toMatchObject({ relayId: 7, errorCode: 'bad_request', detail: { tooLarge: true } })
+    expect(written[0]!.error).toMatch(/^The answer is 16\.0 MB/)
+  })
+
   it('routes a send to the newest live session of the task, naming the sender and its host', async () => {
     const h = harness()
     await h.gw.handle('devbox', h.frame({ name: 'task_send', args: { to: 'mtaskbbb', text: 'status?', expect_reply: true, reply_timeout: 600 } }))

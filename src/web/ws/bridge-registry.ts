@@ -39,6 +39,7 @@ import {
 } from './bridge-wire.js'
 import { eventLoopP99Ms } from '../../core/event-loop-monitor.js'
 import { onCredentialsRevoked } from '../../core/device-auth.js'
+import { assertFrameFits } from '../../providers/daemon-frame-cap.js'
 import {
   sessionChannelKey, scheduleOfflineAnnouncement, cancelOfflineAnnouncement, offlineAnnouncementPending,
   markAnnouncedOffline, announceOnline, forgetPresence, clearBridgePresence,
@@ -1037,6 +1038,8 @@ export function bridgeRequestPrepared(
 }
 
 function dispatchBridgeRequest(conn: BridgeConn, id: number, cmd: string, frame: string, timeoutMs: number): Promise<Record<string, unknown>> {
+  // A frame over the daemon's cap closes its bridge socket: refused before a byte goes.
+  try { assertFrameFits(frame, `the ${cmd} command`, conn.hostAlias) } catch (err) { return Promise.reject(err) }
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       conn.pending.delete(id)

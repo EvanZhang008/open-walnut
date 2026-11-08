@@ -18,6 +18,7 @@
 
 import { log } from '../../logging/index.js'
 import type { BackupLeader } from './backup-leader.js'
+import { DaemonFrameTooLargeError, tooLargeGatewayReply } from '../../providers/daemon-frame-cap.js'
 
 export interface GatewayRequestFrame {
   relayId?: unknown
@@ -217,7 +218,14 @@ export function createBackupGateway(deps: BackupGatewayDeps) {
       ? { relayId, result: out.result }
       : { relayId, error: out.message, errorCode: out.code, ...(out.detail !== undefined ? { detail: out.detail } : {}) }
     try {
-      await deps.request(host, 'gateway-result', params)
+      try {
+        await deps.request(host, 'gateway-result', params)
+      } catch (err) {
+        if (!(err instanceof DaemonFrameTooLargeError)) throw err
+        // Sent, it would close the host's bridge and come back asked again: the caller gets why.
+        log.leader.warn('backup leader: answer too large for one frame, answered with an error', { host, relayId, bytes: err.bytes })
+        await deps.request(host, 'gateway-result', tooLargeGatewayReply(relayId, err.bytes, host))
+      }
     } catch (err) {
       log.leader.warn('backup leader: could not answer a host', { host, relayId, error: err instanceof Error ? err.message : String(err) })
     }
