@@ -38,8 +38,10 @@ describe('suspects', () => {
       '2026-11-08T00:30:01.2Z  ✓ tests/e2e/ok.test.ts (3 tests) 900ms',
       '2026-11-08T00:30:02.0Z   ✘  12 [chromium] › tests/e2e/browser/board.spec.ts:40:3 › the board › opens (5.1s)',
       '2026-11-08T00:30:03.0Z  FAIL  tests/e2e/a-flow.test.ts > a > c',
+      // The baseline gate's own list (scripts/test-baseline.mjs), as the e2e legs print it.
+      '2026-11-08T00:30:01.1543882Z     tests/e2e/queue-after-turn.test.ts :: afterTurn holds the message while the turn runs',
     ].join('\n')
-    expect(failingTestsOf(log)).toEqual(['tests/e2e/a-flow.test.ts', 'tests/e2e/browser/board.spec.ts'])
+    expect(failingTestsOf(log)).toEqual(['tests/e2e/a-flow.test.ts', 'tests/e2e/browser/board.spec.ts', 'tests/e2e/queue-after-turn.test.ts'])
   })
 
   it('a commit is a suspect when it changed the failing test or a module it imports', () => {

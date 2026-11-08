@@ -87,11 +87,14 @@ export function redRange(runs, conclusionOf) {
 }
 
 const TEST_FILE = /((?:tests|web\/src|packages)\/[\w./@-]+\.(?:test|spec)\.[cm]?[jt]sx?)/
-/** The test files a job's log reports failing: vitest's FAIL lines and Playwright's ✘ lines. */
+/**
+ * The test files a job's log reports failing: vitest's FAIL lines, Playwright's ✘ lines, and the
+ * baseline gate's `<file> :: <test>` lines (scripts/test-baseline.mjs, the quick and e2e legs).
+ */
 export function failingTestsOf(log) {
   const out = new Set()
   for (const line of log.split('\n')) {
-    if (!/\bFAIL\b|✘|\[(?:chromium|webkit)[^\]]*\].*›/.test(line) || /✓|passed/.test(line)) continue
+    if (!/\bFAIL\b|✘|\[(?:chromium|webkit)[^\]]*\].*›|\.[cm]?[jt]sx? :: /.test(line) || /✓|passed/.test(line)) continue
     const m = line.match(TEST_FILE)
     if (m) out.add(m[1])
   }
