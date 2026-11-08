@@ -46,7 +46,7 @@ export class InstanceLockError extends Error {
       `Another Walnut server (pid ${holder.pid}, port ${holder.port ?? '?'}, started ${holder.startedAt}) ` +
       `already owns ${WALNUT_HOME}. Two servers on one data directory silently corrupt each other's ` +
       `writes (stale-cache full-snapshot rewrites delete the other's new tasks). ` +
-      `Use \`--ephemeral\` for a test server on a snapshot copy, or stop the other process first.`,
+      `Use \`--ephemeral\` to run a throwaway server on a snapshot copy, or stop the other process first.`,
     )
     this.name = 'InstanceLockError'
   }

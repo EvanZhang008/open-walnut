@@ -1,4 +1,5 @@
 import { test, expect, type Locator, type Page } from '@playwright/test'
+import { goToSessionFolder } from './todo-panel-helpers'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 
@@ -13,6 +14,8 @@ async function openFiles(page: Page) {
   const panel = page.locator(`.session-panel[data-session-id="${SESSION}"]`)
   await panel.getByRole('button', { name: 'Files', exact: true }).click()
   const tree = panel.locator('.session-file-explorer')
+  await expect(tree).toBeVisible()
+  await goToSessionFolder(tree)
   await expect(row(tree, 'refresh-target.txt')).toBeVisible()
   const response = await page.request.get(`/api/sessions/${SESSION}`)
   expect(response.ok()).toBe(true)
@@ -31,7 +34,8 @@ test.beforeEach(async ({ page, baseURL }) => {
   await page.addInitScript(() => {
     localStorage.setItem('open-walnut-file-explorer-tree-collapsed', '0')
   })
-  await page.evaluate(url => { window.location.href = url }, baseURL!)
+  await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
+  await page.getByRole('link', { name: 'Open Walnut' }).click()
   await expect(page.locator('.todo-search-input')).toBeVisible({ timeout: 30_000 })
 })
 

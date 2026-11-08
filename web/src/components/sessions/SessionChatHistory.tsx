@@ -3,7 +3,7 @@ import { RouteShownContext } from '@/contexts/RouteShownContext';
 import { pageOfStreamBlock } from '@/utils/stream-block-page';
 import { useDraft } from '@/hooks/useDraft';
 import { useHostStatus } from '@/hooks/useHostStatus';
-import { draftHash, draftKey, writeDraft } from '@/utils/drafts';
+import { draftHash, draftKey, writeDraft, type DraftOrigin } from '@/utils/drafts';
 import { staleBannerText } from './stale-banner-text';
 import { scrollDebugEnabled } from '@/utils/scroll-debug';
 import { startFlashProbe } from '@/utils/flash-probe';
@@ -39,6 +39,8 @@ import { COMPACTED_MESSAGE, COMPACTING_MESSAGE } from '@open-walnut/compaction-n
 import { useForegroundActive } from '@/stores/background-agents-store';
 import { streamAgentSettled, knownAgentFromStream, type LiveLane } from './LaneTimeline';
 import { dedupeOptimisticMessages } from './optimistic-dedup';
+import { headsAsLaunch } from './parked-bubbles';
+import { AgentWaitNote } from './AgentWaitNote';
 import { HistoryGapDivider } from './HistoryGapDivider';
 import { gapIndex, type HistoryGap } from '@/hooks/history-gap';
 import { typedUserText } from '@open-walnut/history-injected-banner';
@@ -116,7 +118,7 @@ import { useThreadMapLayout } from '@/hooks/useThreadMapLayout';
 import { counts as threadCounts } from '@/utils/thread-meta-counts';
 import type { TreeRow } from '@/utils/thread-tree-rows';
 import { pageRowsBefore } from '@/utils/thread-page-window';
-import { deriveThreadLiveStates, displayTitleOf, metaOf, viewStatusOf } from '@/utils/thread-meta';
+import { deriveThreadLiveStates, displayTitleOf, latestUnsentRows, metaOf, viewStatusOf } from '@/utils/thread-meta';
 import { newAnswerDating, stepAnswerDating } from '@/utils/thread-answer-dating';
 import {
   MAIN_TITLE, askedFromGroups, blockPageKey, composerDraftKey, deliveryEntries, isPendingKey, deriveThreadStats, markSpecsFor, newTurnBook,
@@ -137,6 +139,7 @@ import type { ImageAttachment } from '@/api/chat';
 import { useSelectionScrollGuard, useSelectionFrozenWith, useSelectionAnchoredScroll } from '@/utils/selection-guard';
 import { runWhenVisible } from '@/utils/page-visibility';
 import { log } from '@/utils/log';
+import { claimFileCardEscape } from '@/utils/file-card-escape';
 import { isFolderGoneReason, goneFolderOf } from '@/utils/folder-gone';
 import { ContinueInNewFolderButton } from './FolderGoneBanner';
 import type { ContinueInNewFolderResult } from '@/api/sessions';
@@ -263,12 +266,22 @@ export interface OptimisticMessage extends SessionHistoryMessage {
   userUuid?: string;
   /** The message hints the send asked for (SessionSendOptions.hints); a retry asks again. */
   requestedHints?: Record<string, { arg?: string }>;
+  /** The composer draft the words came from (SessionSendOptions.draftOrigin): local, never sent. */
+  draftOrigin?: DraftOrigin;
   /** Error message when status is 'failed' */
   failedError?: string;
   /** Server PARKED this row (dead-letter): the failure is permanent, so nothing
    *  will retry it automatically again. Rendered as a 'failed' bubble with its
    *  own label + a Discard that actually deletes the durable row. */
   parked?: boolean;
+  /** Parked only until the coding agent can run on the session's host (QueuedMessage.waitsFor,
+   *  a readiness kind): Walnut sends it by itself then, and the bubble offers the fix. */
+  waitsFor?: string;
+  /** The SERVER reported this row undelivered (parked, or its batch failed). Kept
+   *  across a Retry: such a line may sit in history (Claude Code read it, then
+   *  died), so its uuid proves nothing and only the server's own delivery event
+   *  settles it (optimistic-dedup.ts uuidProves). */
+  serverUndelivered?: boolean;
   /** Server-side text ACTUALLY enqueued to the CLI, when it differs from `text`.
    *  `text` is what the user typed (and what we render); with attachments the
    *  server prepends image refs before enqueueing, so the persisted echo carries
@@ -345,7 +358,7 @@ interface SessionChatHistoryProps {
   queueSync?: { error?: string };
   onMessagesDelivered?: (count: number, messageIds?: string[]) => void;
   onBatchCompleted?: (count: number, messageIds?: string[]) => void;
-  onBatchFailed?: (messageIds: string[], error: string) => void;
+  onBatchFailed?: (messageIds: string[], error: string, info?: { parked?: boolean; waitsFor?: string }) => void;
   /** The server holds these rows on a clock (the host did not take them in time): not delivered. */
   onDeliveryWaiting?: (messageIds: string[]) => void;
   onEditQueued?: (queueId: string, newText: string) => void;
@@ -659,24 +672,19 @@ const FIRST_CHECK_HOLD_MAX_MS = 15_000;
 /** Stable empty mark list for a page (or view) without question marks. */
 const NO_MARKS: MarkSpec[] = [];
 
-/** What this tab's own sent rows say per question (`queuedSig`: `<uuid>:<status>`
- *  in send order): one is on its way (sent), one still waits in the queue
- *  (queued), or its newest one failed to deliver (unsent). */
-function ownRowsOf(queuedSig: string, tree: ThreadTree): { sentKeys: Set<string>; queuedKeys: Set<string>; unsentKeys: Set<string> } {
+/** The unabsorbed rows still queued or being delivered in this tab. */
+function ownRowsOf(queuedSig: string, tree: ThreadTree): { sentKeys: Set<string>; queuedKeys: Set<string> } {
   const sentKeys = new Set<string>();
   const queuedKeys = new Set<string>();
-  const newest = new Map<string, string>();
   for (const entry of queuedSig ? queuedSig.split('|') : []) {
     const at = entry.lastIndexOf(':');
     const key = tree.byRow.get(entry.slice(0, at))?.key;
     if (!key || key === ROOT_THREAD_KEY) continue;
     const status = entry.slice(at + 1);
-    newest.set(key, status);
     if (status === 'pending' || status === 'processing') sentKeys.add(key);
     if (status === 'pending') queuedKeys.add(key);
   }
-  const unsentKeys = new Set([...newest].filter(([, st]) => st === 'failed').map(([k]) => k));
-  return { sentKeys, queuedKeys, unsentKeys };
+  return { sentKeys, queuedKeys };
 }
 
 export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, queueSync, onMessagesDelivered, onBatchCompleted, onBatchFailed, onDeliveryWaiting, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onFolderMoved, folderGoneHistory, onTaskClick, onSessionClick, onFileOpen, onStreamingChange, scrollToBottomNonce, onRequestComposerFocus, onQuoteInChat, chatLane, earlierSessionsTaskId, onOpenEarlierSession, publishTimeline, readTimeline, readerPane, workingText, emptyHistory }: SessionChatHistoryProps) {
@@ -1336,10 +1344,12 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // refresh history here — the messages were never delivered, they remain in the
   // server-side pending queue, and a refresh would wipe the optimistic entries.
   useEvent('session:batch-failed', (data) => {
-    const d = data as { sessionId?: string; messageIds?: string[]; error?: string };
+    const d = data as { sessionId?: string; messageIds?: string[]; error?: string; parked?: boolean; waitsFor?: string };
     if (d.sessionId === sessionId && Array.isArray(d.messageIds)) {
       releaseHeld(d.messageIds);
-      onBatchFailed?.(d.messageIds, d.error ?? 'Send failed');
+      onBatchFailed?.(d.messageIds, d.error ?? 'Send failed', {
+        ...(d.parked ? { parked: true } : {}), ...(typeof d.waitsFor === 'string' ? { waitsFor: d.waitsFor } : {}),
+      });
     }
   });
 
@@ -3276,8 +3286,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // timeline below them. It can arrive after the turn has streamed (a reload
   // mid-turn), and a transcript that never yields its row (a degraded read)
   // must not leave it pinned under the answer.
-  const launchHead = deduped.filter(m => m.launch);
-  const timelineOptimistic = launchHead.length > 0 ? deduped.filter(m => !m.launch) : deduped;
+  // A refused launch prompt is no head: it is the message that was not sent, drawn in
+  // the timeline with its Retry and waiting words (parked-bubbles.ts headsAsLaunch).
+  const launchHead = deduped.filter(headsAsLaunch);
+  const timelineOptimistic = launchHead.length > 0 ? deduped.filter(m => !headsAsLaunch(m)) : deduped;
   // A reader takes the publisher's anchor (timeline-share.ts sentAt): it may have mounted
   // after the reply streamed in, when its own `blocks.length` is past the question's place.
   for (const msg of timelineOptimistic) {
@@ -3301,8 +3313,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // render; visibility is decided here, at render time, not by deleting state.
   // A message still waiting for its host (held, with its reason) is not on its way to an
   // answer: no "Waiting for response" under it.
-  const isResuming = !isStreaming && foregroundActive !== false && phase === 'IN_PROGRESS'
-    && deduped.length > 0 && !deduped.every((m) => heldIds.has(m.queueId) || !!m.heldReason);
+  const isResuming =  !isStreaming && foregroundActive !== false && phase === 'IN_PROGRESS'
+    && deduped.some((m) => m.status !== 'failed') && !deduped.every((m) => heldIds.has(m.queueId) || !!m.heldReason);
   // Where Claude Code took each line (its markers): what every placement below reads.
   const takenLines = useMemo(() => takenLinesOf(blocks), [blocks]);
   // Transcript rows still in the CLI's queue that no bubble here stands for (a send
@@ -4340,6 +4352,13 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       .map((m) => `${m.userUuid}:${m.status === 'failed' ? (m.parked ? 'parked' : 'failed') : m.status === 'delivered' ? 'processing' : 'pending'}`)
       .join('|')
     : '';
+  const localSendOrder = useMemo(() => ({ seen: new Map<string, string>(), latest: new Map<string, string>() }), [sessionId]);
+  const unsentRows = useMemo(
+    () => latestUnsentRows(threadTree, optimisticMessages ?? [], localSendOrder),
+    [threadTree, optimisticMessages, localSendOrder],
+  );
+  const unabsorbed = new Set(deduped.map((m) => m.userUuid));
+  const unsentSig = JSON.stringify([...unsentRows].filter((id) => unabsorbed.has(id)));
   const liveLeftSig = JSON.stringify(liveLeftKeys);
   const liveSpokeKeys: string[] = [];
   // The same, for the turn running now only: its question's mark turns from
@@ -4359,6 +4378,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const threadDerived = useMemo(() => {
     if (!threadStats) return EMPTY_DERIVED;
     const queued: Array<{ rowId: string; status: 'pending' | 'processing' }> = [];
+    const unsent: string[] = JSON.parse(unsentSig);
     const leftKeys = new Set<string>(JSON.parse(liveLeftSig));
     const turnEnds = new Map<string, 'ok' | 'error' | 'interrupted' | 'parked' | 'silent'>(threadStats.turnEnds);
     // Words still on screen as live blocks (the transcript has not absorbed them
@@ -4368,7 +4388,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       const at = entry.lastIndexOf(':');
       const rowId = entry.slice(0, at);
       const status = entry.slice(at + 1);
-      if (status === 'parked') turnEnds.set(rowId, 'parked');
+      if (status === 'parked' && unsent.includes(rowId)) turnEnds.set(rowId, 'parked');
       else if (status === 'pending') queued.push({ rowId, status });
       // Delivered: answering while a turn runs, unless the turn already moved on
       // from its question; once it ended, no longer live.
@@ -4398,7 +4418,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     const awaiting = new Set([...threadStats.unanswered].filter((k) => !spoke.has(k)));
     return {
       live: deriveThreadLiveStates({
-        tree: threadTree, queued, streamingKey, turnEnds, awaiting,
+        tree: threadTree, queued, unsent, streamingKey, turnEnds, awaiting,
         hasAnswerAfter: (id) => threadStats.answered.has(id) || spoke.has(threadTree.byRow.get(id)?.key ?? ROOT_THREAD_KEY),
       }),
       answeredAt,
@@ -4410,8 +4430,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       awaiting: new Set([...awaiting].filter((k) => k !== streamingKey && !queued.some((q) => threadTree.byRow.get(q.rowId)?.key === k))),
       datedAt: streamEnds,
       ...ownRowsOf(queuedSig, threadTree),
+      unsentKeys: new Set(unsent.map((id) => threadTree.byRow.get(id)?.key).filter((key): key is string => !!key)),
     };
-  }, [threadStats, queuedSig, isStreaming, liveStreamKey, threadTree, streamEnds, liveLeftSig, liveSpokeSig, turnSpokeSig]);
+  }, [threadStats, queuedSig, unsentSig, isStreaming, liveStreamKey, threadTree, streamEnds, liveLeftSig, liveSpokeSig, turnSpokeSig]);
   const liveSig = [...threadDerived.live].filter(([, st]) => st !== 'failed').map(([k]) => k).sort().join('\u0002');
   useEffect(() => {
     const words = new Map<string, string>();
@@ -4645,11 +4666,12 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     };
     for (const item of timeline) {
       if (item.kind === 'block' && item.block.type === 'text') push(pageKeyOfBlock(item.index), { block: stripQuestionTag(item.block.content) });
-      else if (item.kind === 'user' && item.msg.role === 'user' && item.msg.status !== 'failed') push(optimisticThreadKey(item.msg), { user: item.msg });
+      else if (item.kind === 'user' && item.msg.role === 'user') push(optimisticThreadKey(item.msg), { user: item.msg });
     }
     for (const [k, seq] of seqs) {
-      const { lead, rounds } = cardLiveRounds(seq);
-      const text = rounds.length > 0 ? rounds[rounds.length - 1].live : lead;
+      const { lead, rounds } = cardLiveRounds(seq, (m) => m.status !== 'failed');
+      const last = rounds.filter((r) => r.bubble.status !== 'failed').at(-1);
+      const text = last ? last.live : lead;
       if (text !== undefined) reviewLive.push([k, text]);
     }
   }
@@ -4686,7 +4708,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         const k = pageKeyOfBlock(item.index);
         if (k !== ROOT_THREAD_KEY) parts.push(`${k}\u0001${item.index}\u0001${item.block.content.length}`);
       } else if (item.kind === 'user' && item.msg.role === 'user') {
-        parts.push(`${item.msg.queueId}\u0001${item.msg.status}`);
+        parts.push(JSON.stringify([item.msg.queueId, item.msg.status, item.msg.failedError, item.msg.parked]));
       }
     }
     reviewBodySig = parts.join('\u0002');
@@ -5709,6 +5731,16 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const cardPending = cardKey && stack.pending?.pageKey === cardKey ? stack.pending : undefined;
   const cardFile = cardKey ? filePlaceOf(cardKey) : null;
   const cardFileHost = cardFile && threadsApi.fileCardHost?.path === cardFile.path ? threadsApi.fileCardHost : null;
+  // One Escape closes a file's card and only it, wherever focus is in the panel
+  // (the source editor keeps focus after Ask here: utils/file-card-escape.ts).
+  const fileCardEl = cardFileHost?.place ? cardFileHost.el : null;
+  useEffect(() => {
+    if (!fileCardEl) return;
+    return claimFileCardEscape(
+      () => ({ card: fileCardEl.querySelector('.thread-card'), scope: fileCardEl.closest('.session-panel') }),
+      () => closeCard('escape'),
+    );
+  }, [fileCardEl, closeCard]);
   const reviewOn = review.on;
   const reviewCardElement = review.cardElement;
   const cardPlace = useThreadCardPlace({
@@ -5779,6 +5811,34 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const cardViewStatus = cardNode ? viewStatusOf(cardNode, threadsApi.metaIndex, threadDerived.live) : undefined;
   const cardStatus = cardWaiting && cardViewStatus !== 'resolved' ? 'queued' : cardViewStatus;
   const cardTitle = cardKey ? displayTitleOf(cardNode, threadsApi.metaIndex) : undefined;
+  const failedSend = (m: OptimisticMessage): ReactNode => m.status !== 'failed' ? null : m.waitsFor ? (
+    // Waiting for the agent to run: its own words, the fix in place, and it goes out by itself.
+    <AgentWaitNote
+      reason={m.failedError}
+      waitsFor={m.waitsFor}
+      local={!sessionHost || sessionHost === '__local__'}
+      onRetry={() => onRetryFailed?.(m.queueId)}
+      onDiscard={() => onDeleteQueued?.(m.queueId)}
+    />
+  ) : (
+    <>
+      <div className="session-msg-failed-badge">
+        {isFolderGoneReason(m.failedError)
+          ? `Not delivered: this session's folder is gone${goneFolderOf(m.failedError) ? ` (${goneFolderOf(m.failedError)})` : ''}. The message is kept and goes out once the session continues in a new folder.`
+          : m.parked
+            ? `Not delivered. Auto-retry stopped${m.failedError ? ` (${m.failedError})` : ''}`
+            : `Send failed${m.failedError ? `: ${m.failedError}` : ''}`}
+      </div>
+      <div className="session-msg-queued-actions">
+        {isFolderGoneReason(m.failedError)
+          ? <ContinueInNewFolderButton sessionId={sessionId} history={folderGoneHistory} className="session-msg-retry-btn" onDone={onFolderMoved} />
+          : <button className="session-msg-retry-btn" onClick={() => onRetryFailed?.(m.queueId)}>Retry</button>}
+        {m.parked
+          ? <button onClick={() => onDeleteQueued?.(m.queueId)}>Discard</button>
+          : <button onClick={() => onDismissFailed?.(m.queueId)}>Dismiss</button>}
+      </div>
+    </>
+  );
   // The card shows one message per turn: the reply's final words, in the chat's
   // own order (stream/chat-order.ts `cardLiveRounds`): each question sent and not
   // persisted yet sits where the timeline put it, answered by the newest live
@@ -5796,7 +5856,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     };
     for (const item of timeline) {
       if (item.kind === 'user') {
-        if (item.msg.status !== 'failed' && item.msg.role === 'user') {
+        if (item.msg.role === 'user') {
           push(optimisticThreadKey(item.msg), { user: item.msg });
           placed.add(item.msg.queueId);
         }
@@ -5808,12 +5868,12 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   /** A question's conversation, as the open card and its review card draw it. */
   const conversationFor = (key: string, asks?: 'lines'): ReactNode => {
     const turns = turnsFor(key);
-    const optimistic = deduped.filter((m) => m.role === 'user' && m.status !== 'failed' && optimisticThreadKey(m) === key);
+    const optimistic = deduped.filter((m) => m.role === 'user' && optimisticThreadKey(m) === key);
     const seq = [...(seqByKey.get(key) ?? [])];
     // A bubble the timeline does not draw (a session's launch line) leads its rounds.
     const unplaced = optimistic.filter((m) => !placed.has(m.queueId));
     if (unplaced.length > 0) seq.unshift(...unplaced.map((m) => ({ user: m })));
-    const order = cardLiveRounds(seq);
+    const order = cardLiveRounds(seq, (m) => m.status !== 'failed');
     const live = order.lead;
     const lastReply = turns[turns.length - 1]?.replies[0];
     // The watermark counts the transcript's own rows; a split part stands for the row it came from.
@@ -5832,6 +5892,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         rounds={order.rounds.map((r) => ({
           bubble: r.bubble, ...(r.live ? { live: { index: r.live.index, block: r.live.block } } : {}),
         }))}
+        failedSend={(queueId) => {
+          const m = optimistic.find((bubble) => bubble.queueId === queueId);
+          return m ? failedSend(m) : null;
+        }}
         {...(live ? { live: { index: live.index, block: live.block } } : {})}
         streaming={isStreaming}
         empty={turns.length === 0 && !deduped.some((m) => m.role === 'user' && optimisticThreadKey(m) === key)}
@@ -5862,7 +5926,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     threadsApi.quoteInChat(key, 'card');
   }, [threadsApi.quoteInChat, sessionId, threadTree]);
   const sendFromCard = useCallback(
-    (text: string, images?: ImageAttachment[]) => holdForCardSend(() => threadsApi.sendToTarget(text, images)),
+     (text: string, images?: ImageAttachment[], origin?: DraftOrigin) => holdForCardSend(() => threadsApi.sendToTarget(text, images, origin)),
     [holdForCardSend, threadsApi.sendToTarget]);
   const cardMenu = cardKey && cardNode && threadsApi.actions ? (
     <ThreadStackMenu
@@ -6005,38 +6069,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         {m.status === 'delivered' && (
           <div className="session-msg-delivered-badge">Delivered ✓</div>
         )}
-        {m.status === 'failed' && isFolderGoneReason(m.failedError) && (
-          // Its folder is gone: Retry would only fail again, so the way on is a new folder.
-          <>
-            <div className="session-msg-failed-badge">
-              {`Not delivered: this session's folder is gone${goneFolderOf(m.failedError) ? ` (${goneFolderOf(m.failedError)})` : ''}. The message is kept and goes out once the session continues in a new folder.`}
-            </div>
-            <div className="session-msg-queued-actions">
-              <ContinueInNewFolderButton sessionId={sessionId} history={folderGoneHistory} className="session-msg-retry-btn" onDone={onFolderMoved} />
-              {m.parked
-                ? <button onClick={() => onDeleteQueued?.(m.queueId)}>Discard</button>
-                : <button onClick={() => onDismissFailed?.(m.queueId)}>Dismiss</button>}
-            </div>
-          </>
-        )}
-        {m.status === 'failed' && !isFolderGoneReason(m.failedError) && (
-          <>
-            <div className="session-msg-failed-badge">
-              {m.parked
-                ? `Not delivered. Auto-retry stopped${m.failedError ? ` (${m.failedError})` : ''}`
-                : `Send failed${m.failedError ? `: ${m.failedError}` : ''}`}
-            </div>
-            <div className="session-msg-queued-actions">
-              <button className="session-msg-retry-btn" onClick={() => onRetryFailed?.(m.queueId)}>Retry</button>
-              {/* A parked row still exists on disk, so Discard must delete it
-                  server-side; Dismiss is local-only (the pending row it hides
-                  still drains on its own). */}
-              {m.parked
-                ? <button onClick={() => onDeleteQueued?.(m.queueId)}>Discard</button>
-                : <button onClick={() => onDismissFailed?.(m.queueId)}>Dismiss</button>}
-            </div>
-          </>
-        )}
+        {failedSend(m)}
       </div>
     );
   };

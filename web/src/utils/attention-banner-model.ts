@@ -70,6 +70,8 @@ export interface BannerInput {
   userRetrying?: ReadonlySet<string>;
   /** Hosts the user pressed Retry / Connect now on in this page (a discovered host needs it for a row). */
   engaged?: ReadonlySet<string>;
+  /** Hosts Home's found-host prompt shows, which says their state there: they take no row. */
+  prompted?: ReadonlySet<string>;
   /** Pointer or focus inside the card. */
   pointerInside?: boolean;
   /** The local Claude Code section renders (the host section then gets a subhead). */
@@ -325,8 +327,9 @@ function collect(input: BannerInput, prev: BannerState): { cands: Ranked[]; read
   return { cands, ready };
 }
 
-/** A discovered host speaks only once the user reached for it. */
+/** A discovered host speaks only once the user reached for it, and never while its found-host prompt shows. */
 function counts(s: { host: string; discovered?: boolean }, input: BannerInput): boolean {
+  if (input.prompted?.has(s.host)) return false;
   return !s.discovered || !!input.engaged?.has(s.host);
 }
 

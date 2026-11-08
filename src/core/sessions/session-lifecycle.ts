@@ -24,6 +24,7 @@ import type { SessionRecord, SessionMode, SessionOutputMode } from '../types.js'
 import { SESSION_MODE_IDS, SESSION_OUTPUT_MODE_IDS } from '../types.js';
 import type { SessionHistoryMessage } from '../session-history.js';
 import { DEFAULT_ENGINE, engineCaps, isAcpEngine } from '../agents/engine-registry.js';
+import { unavailableHistoryReason } from './history-unavailable.js';
 
 // ── Shared helpers (moved from src/web/routes/sessions.ts) ──────────────────
 
@@ -907,24 +908,28 @@ export async function restartSession(sessionId: string): Promise<RestartResult> 
     }
   }
 
-  // Revert any in-flight 'processing' messages back to 'pending' — if the old
-  // CLI was mid-send when we respawn, those messages must survive and re-deliver.
+  // The rows the old CLI holds 'processing', read only: a Restart refused (409 while a
+  // delivery prepares) or failed must leave the queue exactly as it was.
   const { getQueue, revertToPending } = await import('../session-message-queue.js');
-  const queue = await getQueue(sessionId);
-  const stuck = queue.filter((m) => m.status === 'processing');
-  if (stuck.length > 0) {
-    await revertToPending(stuck);
-    log.session.info('session restart: reverted processing → pending', { sessionId, count: stuck.length });
-  }
+  const held = new Map((await getQueue(sessionId)).filter((m) => m.status === 'processing').map((m) => [m.id, m.lineTries]));
 
   // Respawn a fresh CLI (idle — no turn). reinitialize() owns the graceful
   // transport swap that suppresses the old process's exit.
   const { sessionRunner } = await import('../../providers/claude-code-session.js');
   await sessionRunner.reinitialize(sessionId);
 
-  // If messages are pending after the revert, kick processNext so the fresh
-  // CLI drains them (reinitialize itself delivers nothing).
-  const pendingAfterRevert = queue.filter((m) => m.status === 'pending').length + stuck.length;
+  // Only now the old CLI's in-flight rows go back to 'pending' to re-deliver on the fresh
+  // one: a row still 'processing' under the same try count. One a delivery took again after
+  // the restart (its try count moved), or one that left the queue, is not touched.
+  const stuck = (await getQueue(sessionId)).filter((m) => m.status === 'processing' && held.has(m.id) && held.get(m.id) === m.lineTries);
+  if (stuck.length > 0) {
+    await revertToPending(stuck);
+    log.session.info('session restart: reverted processing → pending', { sessionId, count: stuck.length });
+  }
+
+  // If messages are pending now, kick processNext so the fresh CLI drains them
+  // (reinitialize itself delivers nothing).
+  const pendingAfterRevert = (await getQueue(sessionId)).filter((m) => m.status === 'pending').length;
   if (pendingAfterRevert > 0) {
     bus.emit(EventNames.SESSION_SEND, { sessionId, taskId: record.taskId, message: '' }, ['session-runner'], { source: 'restart' });
     log.session.info('session restart: kicked pending queue after reinit', { sessionId, pendingMessages: pendingAfterRevert });
@@ -1062,6 +1067,14 @@ export async function retrySession(sessionId: string): Promise<RetryResult> {
   }
 
   await connectSessionHostForRetry(record);
+
+  // A confirmed cancellation may have failed to persist, whether known at a cold
+  // resume or after a Stop. Finish it before deciding what Retry sends.
+  const { sessionRunner } = await import('../../providers/claude-code-session.js');
+  const stopped = sessionRunner.findSessionByClaudeId(sessionId);
+  if (!(stopped ? await stopped.retryCancelledLines() : await sessionRunner.recoverCancelledForSession(sessionId, true))) {
+    throw new SessionControlError('Could not finish cancelling queued messages. Retry when storage is available', 503);
+  }
 
   if (record.claudeSessionId) {
     const { isSessionProcessAlive } = await import('../../utils/session-liveness.js');
@@ -1314,8 +1327,12 @@ export async function recheckSession(sessionId: string): Promise<RecheckResult> 
 
   const hostKey = record.host ?? '__local__';
   const { classifySessionError } = await import('../session-error-kind.js');
+  // A start that ran nothing (its first start was refused or its CLI stopped before reading the
+  // message: SessionRecord.startRefused) is no substrate death: "send a message to resume it"
+  // would contradict the notice saying why it did not start (2026-11-11 review).
   const kind = classifySessionError(record);
-  const base = { sessionId, processStatus: record.process_status, infraClaim: kind === 'infra' };
+  const infraOf = (r: NonNullable<typeof record>) => classifySessionError(r) === 'infra' && !r.startRefused;
+  const base = { sessionId, processStatus: record.process_status, infraClaim: infraOf(record) };
 
   const { isDaemonConnected, getPooledSnapshotConnection } =
     await import('../../providers/daemon-connection.js');
@@ -1383,7 +1400,7 @@ export async function recheckSession(sessionId: string): Promise<RecheckResult> 
     // Re-classify against the CURRENT record: a converged row may no longer
     // carry the claim, and the client uses this to decide whether the sentence
     // on screen is still true.
-    infraClaim: classifySessionError(after ?? record) === 'infra',
+    infraClaim: infraOf(after ?? record),
   };
 }
 
@@ -1858,19 +1875,6 @@ export function isHistoryStartupWindow(record: SessionRecord, nowMs = Date.now()
   return nowMs - anchor < HISTORY_STARTUP_GRACE_MS;
 }
 
-function unavailableHistoryReason(record: SessionRecord): string {
-  if (engineCaps(record.engine).historySource === 'acp-journal') {
-    if (!record.acpRuntimeId) {
-      return 'Codex session has no ACP runtime ID, so its history journal cannot be located';
-    }
-    return record.host
-      ? `Codex session history journal is unavailable on remote host "${record.host}"`
-      : 'Codex session history journal not found';
-  }
-  return record.host
-    ? `Remote host "${record.host}" is unreachable — session history is stored on that machine`
-    : 'Session history file not found';
-}
 
 /**
  * Full rich-block history for a session (tool detail/results, subagent-lane
@@ -1911,7 +1915,7 @@ export async function readSessionRichHistory(sessionId: string, tail?: number): 
     // of a scary "History unavailable" card (history-not-written.ts: booting, started
     // with no message, or a router waiting for its first mail).
     if (await (await import('./history-not-written.js')).historyNotWrittenYet(record)) return { messages: [], total: 0 };
-    return { messages: [], total: 0, historyUnavailable: unavailableHistoryReason(record) };
+    return { messages: [], total: 0, historyUnavailable: await unavailableHistoryReason(record) };
   }
 
   const { rewriteHistoryRemoteImages } = await import('../session-history.js');
@@ -1973,7 +1977,7 @@ export async function readSessionRichHistory(sessionId: string, tail?: number): 
   // point where "nothing to show" becomes true, so report it here instead.
   if (messages.length === 0 && !sourceAvailable && record.forkedFromSessionId) {
     if (await (await import('./history-not-written.js')).historyNotWrittenYet(record)) return { messages: [], total: 0 };
-    return { messages: [], total: 0, historyUnavailable: unavailableHistoryReason(record) };
+    return { messages: [], total: 0, historyUnavailable: await unavailableHistoryReason(record) };
   }
 
   const total = messages.length;

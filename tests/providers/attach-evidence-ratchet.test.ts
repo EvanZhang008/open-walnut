@@ -8,6 +8,8 @@
  *     bounds them. A new read added inline fails here.
  *  2. Every caller of attachToExisting gives that budget, except the startup
  *     reconnect (no send waits on it). A new on-demand caller without one fails here.
+ *     The session runner attaches through attachNativeRecord, which hands its
+ *     caller's options on: there its callers are the ones held to the rule.
  */
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
@@ -65,25 +67,29 @@ describe('attach evidence ratchet', () => {
     const calls: { where: string; budget: boolean; startup: boolean }[] = []
     for (const f of files) {
       const src = fs.readFileSync(f, 'utf8')
-      const re = /\battachToExisting\(/g
+      const re = /\b(attachToExisting|attachNativeRecord)\(/g
       let m: RegExpExecArray | null
       while ((m = re.exec(src))) {
         const before = src.slice(Math.max(0, m.index - 40), m.index)
-        if (/static async\s*$/.test(before)) continue // the definition
+        if (/static async\s*$/.test(before) || /private\s*$/.test(before)) continue // a definition
         if (!/\.\s*$/.test(before)) continue // prose in a comment (`attachToExisting()`), not a call
         const close = src.indexOf(')', m.index)
         const args = src.slice(m.index, close + 1)
         const line = src.slice(0, m.index).split('\n').length
+        // attachNativeRecord's own attach passes its caller's options on.
+        const wrapperStart = src.lastIndexOf('private attachNativeRecord(', m.index)
+        const inWrapper = m[1] === 'attachToExisting' && wrapperStart >= 0
+          && !src.slice(wrapperStart, m.index).includes('\n  }\n') && /,\s*opts\)$/.test(args)
         calls.push({
           where: `${path.relative(SRC, f)}:${line}`,
-          budget: /evidenceBudgetMs/.test(args),
+          budget: /evidenceBudgetMs/.test(args) || inWrapper,
           startup: src.slice(Math.max(0, m.index - 1500), m.index).includes('Phase 1: reconnect to surviving sessions'),
         })
       }
     }
     expect(calls.length).toBeGreaterThanOrEqual(3)
     const unbounded = calls.filter((c) => !c.budget && !c.startup).map((c) => c.where)
-    expect(unbounded, 'an on-demand attachToExisting caller must pass { evidenceBudgetMs: ON_DEMAND_ATTACH_EVIDENCE_MS }').toEqual([])
+    expect(unbounded, 'an on-demand attachToExisting or attachNativeRecord caller must pass { evidenceBudgetMs: ON_DEMAND_ATTACH_EVIDENCE_MS }').toEqual([])
     expect(calls.filter((c) => c.startup)).toHaveLength(1)
   })
 })

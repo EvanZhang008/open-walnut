@@ -49,7 +49,12 @@ test.describe('Flat layout', () => {
     await page.reload()
     await selectSection(page, 'All')
     const panel = page.locator('.todo-panel').first()
-    await expect(panel.locator('[data-task-id]').first()).toBeAttached({ timeout: 30_000 })
+    // A first visit to a board with work folds every region (first-visit-folds.ts; the user,
+    // 2026-11-06: do not overload people on first open): the Projects list opens by its heading.
+    const list = panel.locator('.todo-tasks-header').getByRole('button', { name: /^Projects \(\d+\)$/ })
+    await expect(list).toHaveAttribute('aria-expanded', 'false', { timeout: 30_000 })
+    await list.click()
+    await expect(list).toHaveAttribute('aria-expanded', 'true')
     // By project draws no Waiting / snoozed section of its own (each project folds its own).
     await expect(panel.getByTestId('status-section-waiting')).toHaveCount(0)
     expect(await page.evaluate(() => localStorage.getItem('walnut-todo-panel-design'))).toBeNull()
@@ -109,6 +114,7 @@ test.describe('Flat layout', () => {
       await expect(waitingRow.getByTestId('status-card-reason')).toHaveText(/\S/)
       await closeDisplayMenu(page)
       await page.reload()
+      await expect(needsRow).toBeVisible({ timeout: 20_000 })
       await expect(needsRow.getByTestId('status-card-needs-line')).toBeVisible()
       await openDisplayMenu(page)
       await displayMenu(page).getByRole('switch', { name: 'Show task status line', exact: true }).click()
@@ -116,6 +122,7 @@ test.describe('Flat layout', () => {
       await expect(needsRow.getByTestId('status-card-needs-line')).toHaveCount(0)
       await expect(waitingRow.getByTestId('status-card-reason')).toHaveCount(0)
       await page.reload()
+      await expect(needsRow).toBeVisible({ timeout: 20_000 })
       await expect(needsRow.getByTestId('status-card-needs-line')).toHaveCount(0)
     }
   })
@@ -124,8 +131,6 @@ test.describe('Flat layout', () => {
     await isolateUiPrefs(page)
     await presetPanelDesign(page, 'status')
     await page.addInitScript(() => localStorage.setItem('open-walnut-view:tasks.statusLines', 'true'))
-    // A user who never picked a tier sees no tier headings while one tier holds cards (5.10).
-    await page.addInitScript(() => localStorage.setItem('walnut-todo-tier-used', '1'))
     const stamp = Date.now()
     const project = `Flatland${stamp}`
     await openHome(page, baseURL!)

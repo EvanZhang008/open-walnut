@@ -246,12 +246,17 @@ const NONE: readonly never[] = [];
  */
 export function cardLiveRounds<U, B>(
   seq: ReadonlyArray<{ user: U } | { block: B }>,
+  canAnswer: (user: U) => boolean = () => true,
 ): { lead?: B; rounds: Array<{ bubble: U; live?: B }> } {
   let lead: B | undefined;
+  let answering: { bubble: U; live?: B } | undefined;
   const rounds: Array<{ bubble: U; live?: B }> = [];
   for (const e of seq) {
-    if ('user' in e) rounds.push({ bubble: e.user });
-    else if (rounds.length > 0) rounds[rounds.length - 1].live = e.block;
+    if ('user' in e) {
+      const round = { bubble: e.user };
+      rounds.push(round);
+      if (canAnswer(e.user)) answering = round;
+    } else if (answering) answering.live = e.block;
     else lead = e.block;
   }
   return lead === undefined ? { rounds } : { lead, rounds };

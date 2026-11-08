@@ -16,6 +16,7 @@
  */
 import '@/styles/truncation-peek.css';
 import { PEEK_OPEN_MS, PEEK_PAD_X, placePeek, placeVertically } from './truncation-peek-place';
+import { clippingAncestors } from './clip-ancestors';
 
 /** How far up from the hovered node the cut-off text is looked for. */
 const MAX_DEPTH = 6;
@@ -39,12 +40,14 @@ function hasOwnText(el: Element): boolean {
  */
 function clipOf(el: Element): { right: number; scrolls: boolean } {
   let right = window.innerWidth;
-  for (let a = el.parentElement; a && a !== document.body; a = a.parentElement) {
-    const cs = getComputedStyle(a);
-    if (cs.overflowX === 'visible') continue;
-    const edge = a.getBoundingClientRect().right - (parseFloat(cs.borderRightWidth) || 0);
-    if (cs.overflowX === 'hidden' || cs.overflowX === 'clip') { right = Math.min(right, edge); continue; }
-    // auto / scroll: the last edge that counts.
+  // The ancestors that really clip it (a fixed or absolute box escapes some): the one clip rule.
+  for (const c of clippingAncestors(el, { stop: document.body })) {
+    if (!c.x) continue;
+    const cs = getComputedStyle(c.el);
+    const edge = c.el.getBoundingClientRect().right - (parseFloat(cs.borderRightWidth) || 0);
+    const scroller = cs.overflowX === 'auto' || cs.overflowX === 'scroll';
+    if (!scroller) { right = Math.min(right, edge); continue; }
+    // A scroller: the last edge that counts.
     return edge < right ? { right: edge, scrolls: true } : { right, scrolls: false };
   }
   return { right, scrolls: false };

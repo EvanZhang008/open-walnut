@@ -142,7 +142,7 @@ export function localPreflight(pathStr: string, env: Env, minVersion?: string): 
   const runEnv = { ...env, PATH: pathStr }
   const runtime = createHostRuntime({
     fs, execFile: trackedExecFile, env: runEnv, platform: process.platform, arch: process.arch,
-    claudeCheck: createClaudeCheck({ fs, execFile: trackedExecFile, env: runEnv, sha256Hex }),
+    claudeCheck: createClaudeCheck({ fs, execFile: trackedExecFile, env: runEnv, platform: process.platform, sha256Hex }),
   })
   return runtime.preflight(minVersion ? { minClaudeVersion: minVersion } : {})
 }

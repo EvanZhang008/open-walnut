@@ -39,6 +39,7 @@ import {
   basenameOf, discoverFixtureRoot, draftComposer, draftCwdPill, draftDecisionChip, draftDecisionChips,
   draftPanel, draftPanels, draftProjectPill, loadHome, mockQuickParse, openDraft, openDraftOnCwd,
   patchClientConfig, pickDraftFolder, seedColumns, typeAndSettle, watchForbiddenRequests, draftSend,
+  HOME_FOLDER,
 } from './draft-helpers'
 import {
   armParse, createTaskForLater, expectSeededTierLands, expectTaskInTier, pickDraftProject,
@@ -238,9 +239,8 @@ test('pin-tier header "+" opens a draft whose task lands in that tier', async ({
   await expect(panel.locator('.draft-model-select')).toHaveAttribute('data-model', '')
 
   // A tier seed leaves everything else neutral (this is not a project route):
-  // no folder, no project. Nothing pre-selects either on an unseeded/tier-only
-  // draft (user rule, 2026-09-02).
-  await expect(draftCwdPill(panel)).toHaveText('Choose folder and host…')
+  // the home folder (draft-home-default.ts), no project (user rule, 2026-09-02).
+  await expect(draftCwdPill(panel)).toHaveText(HOME_FOLDER)
   await expect(draftProjectPill(panel)).toHaveCount(0)
 
   await page.screenshot({ path: `${SCREENSHOT_DIR}/02-tier-plus-seeds-tier.png`, fullPage: false })
@@ -575,8 +575,8 @@ test('a failing quick-parse is a silent no-op — no toast, no pill change, no c
   await loadHome(page)
 
   const panel = await openDraft(page)
-  // The pills BEFORE typing: a fresh draft opens with nothing pre-selected.
-  await expect(draftCwdPill(panel)).toHaveText('Choose folder and host…')
+  // The pills BEFORE typing: a fresh draft opens on the home folder, no project.
+  await expect(draftCwdPill(panel)).toHaveText(HOME_FOLDER)
   await expect(draftProjectPill(panel)).toHaveCount(0)
   const failed = armParse(page, 500)
   await draftComposer(page).type('this sentence will never be understood')
@@ -585,7 +585,7 @@ test('a failing quick-parse is a silent no-op — no toast, no pill change, no c
   // The pills stay untouched, nothing is badged, and no error surfaces. Asserted
   // AFTER the 500 landed, so this is the post-failure state, not a race.
   await expect(draftProjectPill(panel)).toHaveCount(0)
-  await expect(draftCwdPill(panel)).toHaveText('Choose folder and host…')
+  await expect(draftCwdPill(panel)).toHaveText(HOME_FOLDER)
   await expect(panel.locator('.draft-ai-badge')).toHaveCount(0)
   await expect(page.locator('.notification-toast--error')).toHaveCount(0)
   await expect(page.locator('.notification-toast--warning')).toHaveCount(0)

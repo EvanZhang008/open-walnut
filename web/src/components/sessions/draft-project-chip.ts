@@ -9,8 +9,9 @@
  */
 import type { DraftColumn } from './draft-column';
 import { projectDisplayName } from '../../utils/project-display';
+import { shownFolderName } from '@/utils/home-folder';
 
-type ChipDraft = Pick<DraftColumn, 'project' | 'projectSource' | 'taskId' | 'forkOf' | 'walnut' | 'cwd' | 'aiFields'>;
+type ChipDraft = Pick<DraftColumn, 'project' | 'projectSource' | 'taskId' | 'forkOf' | 'walnut' | 'cwd' | 'aiFields'> & Partial<Pick<DraftColumn, 'host'>>;
 
 /** What a click on the chip does. `menu`: opens the draft menu (plain drafts).
  *  `flyout`: opens the project list directly (drafts without More). `none`: a
@@ -37,9 +38,6 @@ export interface DraftProjectCtx {
   always?: boolean;
 }
 
-function folderName(cwd: string): string {
-  return cwd.replace(/\/+$/, '').split('/').pop() || cwd;
-}
 
 /** Start will create this project (same rule the old pill's "new" badge used). */
 export function draftProjectIsNew(draft: ChipDraft, isKnownProject: (name: string) => boolean): boolean {
@@ -109,7 +107,7 @@ export function draftProjectProvenance(draft: ChipDraft, isKnownProject: (name: 
   if (draft.project && draft.projectSource === 'folder') {
     return isNew
       ? 'New, created when you start (named after the folder)'
-      : `Set by the folder ${folderName(draft.cwd)}`;
+      : `Set by the folder ${shownFolderName(draft.cwd, draft.host)}`;
   }
   if (draft.project) return isNew ? 'New, created when you start' : '';
   return 'Inbox until you pick a folder or a project';

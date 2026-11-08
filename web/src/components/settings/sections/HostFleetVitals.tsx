@@ -150,7 +150,7 @@ export function FleetFacts({ host, now, omit = [], fit: judge = true }: { host: 
   const fit = host.placement.longRunning;
   // The reboot reason is already a problem line; the fit says only what it alone says, and never
   // "starts again after a reboot" beside that line (a reading older than the fit's).
-  const rebootGap = !host.local && !!host.daemon && !host.daemon.startsAfterReboot;
+  const rebootGap = !host.local && !!host.daemon && !host.daemon.startsAfterReboot && !host.daemon.throwaway;
   const ok = fit.ok && !rebootGap;
   const reasons = fit.reasons.filter((r) => !/does not start by itself after a reboot/.test(r));
   const fitText = !judge ? null : ok ? 'Good fit: it stays up, and Walnut starts again after a reboot' : reasons.length ? `Not a good fit: ${reasons.join(' ')}` : null;

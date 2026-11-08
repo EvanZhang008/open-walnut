@@ -127,7 +127,8 @@ export async function currentSystemFailure(system: FixSystem): Promise<HostFailu
     if (system === 'backup') {
       const { getGitAutoCommitHealth } = await import('../../web/server.js')
       const health = getGitAutoCommitHealth()
-      if (health.protected && health.consecutiveFailures < 3) return null
+      // A server that keeps no backup by design (the Demo, a test server) has nothing to fix.
+      if (health.off || health.protected && health.consecutiveFailures < 3) return null
       const headline = 'Data backup is failing'
       const identity = { system, headline, protected: health.protected, error: health.error }
       return failure(headline, { ...identity, health }, identity)

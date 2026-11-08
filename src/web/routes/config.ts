@@ -65,6 +65,7 @@ import { getBuildInfo } from '../../lib/build-info.js'
 import { permissionsApplicable } from '../../core/permissions/applicable.js'
 import { withoutCloudBoxHost } from '../../core/hosts/cloud-box-host.js'
 import { walnutRequestTagHeaders } from '../../core/sessions/request-tag.js'
+import { keepFoundHostScan } from '../../core/hosts/found-hosts.js'
 
 // GET /api/config
 configRouter.get('/', async (_req: Request, res: Response, next: NextFunction) => {
@@ -749,7 +750,9 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
           let next = row
           if (row.connect === undefined && was.connect !== undefined) next = { ...next, connect: was.connect, ...(was.connect === 'yes' ? {} : { enabled: false }) }
           if (!('connect_by' in row) && was.connect_by !== undefined && next.connect === was.connect) next = { ...next, connect_by: was.connect_by }
-          sent[key] = next
+          // What ~/.ssh/config said (`scanned`): an editor without the field keeps it, so the
+          // row still follows the file, and a field the person changed here no longer matches it.
+          sent[key] = keepFoundHostScan(next, was as Parameters<typeof keepFoundHostScan>[1])
         }
       }
       // A machine on the host network is written by the network only (core/net/net-mac.ts):

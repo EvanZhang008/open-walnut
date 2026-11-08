@@ -16,7 +16,7 @@
  */
 import { memo, useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useSystemHealth } from '@/hooks/useSystemHealth';
+import { gitSyncNeedsLook, useSystemHealth } from '@/hooks/useSystemHealth';
 import { serverNow, useAllHostStatus } from '@/hooks/useHostStatus';
 import { hostFlapOf, hostProblemOf } from '@open-walnut/host-problem';
 import { openHostSettings } from '@/utils/host-settings-nav';
@@ -125,7 +125,7 @@ export const NotificationSystemPane = memo(function NotificationSystemPane(
     );
   }
 
-  const gitOk = gitSync.protected && gitSync.consecutiveFailures < 3;
+  const gitOk = !gitSyncNeedsLook(gitSync);
 
   return (
     <>
@@ -157,8 +157,8 @@ export const NotificationSystemPane = memo(function NotificationSystemPane(
         );
       })()}
 
-      {/* Git backup status */}
-      <div className={`notification-card ${gitOk ? 'ok' : 'warn'}`}>
+      {/* Git backup status; none where no backup runs by design (the Demo's throwaway home, a test server). */}
+      {!gitSync.off && <div className={`notification-card ${gitOk ? 'ok' : 'warn'}`}>
         <div className="notification-card-row">
           <span className={`notification-card-icon ${gitOk ? 'ok' : 'warn'}`}>
             {gitOk ? '✓' : '⚠'}
@@ -207,7 +207,7 @@ export const NotificationSystemPane = memo(function NotificationSystemPane(
             </div>
           )}
         </div>
-      </div>
+      </div>}
 
       {/* Which Open Walnut runs here, and whether npm has a newer one. */}
       {update.status && (

@@ -23,6 +23,7 @@
  * broken code.
  */
 import { test, expect, type Page, type Locator } from '@playwright/test'
+import { goToSessionFolder } from './todo-panel-helpers'
 
 const SESSION_ID = 'pw-vscode-session'
 const TASK_ID = 'pw-task-vscode'
@@ -46,6 +47,7 @@ async function openFilesPanelWithIframePreview(page: Page) {
   await panel.getByRole('button', { name: 'Files', exact: true }).click()
   const explorer = panel.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 10_000 })
+  await goToSessionFolder(explorer)
 
   await explorer.locator('.sfe-name', { hasText: 'drag-fixture.html' }).click()
   // THE hazard: an iframe covering the area the drag crosses.
@@ -68,7 +70,7 @@ async function bodyDragState(page: Page) {
   }))
 }
 
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page, baseURL }) => {
   // Pin the Files tree EXPANDED before first render: the collapse pref key
   // syncs to the SHARED fixture server (ui-prefs), so a parallel run of
   // file-explorer-tree-collapse.spec.ts would otherwise boot this page with
@@ -76,8 +78,13 @@ test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     try { localStorage.setItem('open-walnut-file-explorer-tree-collapsed', '0') } catch { /* off */ }
   })
-  await page.goto('/')
+  await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
+  await page.getByRole('link', { name: 'Open Walnut' }).click()
   await page.waitForLoadState('networkidle')
+})
+
+test.afterEach(async ({ page }) => {
+  await page.mouse.up()
 })
 
 test('Files divider: drag ACROSS the preview iframe resizes, and release really releases', async ({ page }) => {
@@ -101,8 +108,7 @@ test('Files divider: drag ACROSS the preview iframe resizes, and release really 
 
   // Mid-drag the resize must have tracked the pointer even though the cursor is
   // over the iframe (the old code froze here).
-  const draggedWidth = await treeWidth(explorer)
-  expect(draggedWidth).toBeGreaterThan(startWidth + 40)
+  await expect.poll(() => treeWidth(explorer)).toBeGreaterThan(startWidth + 40)
   expect(await bodyDragState(page)).toMatchObject({ cursor: 'col-resize', dragClass: true })
   await page.screenshot({ path: `${SCREENSHOT_DIR}/step1-mid-drag-over-iframe.png` })
 
@@ -123,22 +129,21 @@ test('Files divider: drag ACROSS the preview iframe resizes, and release really 
 
 test('Files divider: width persists once on release, not once per frame', async ({ page }) => {
   const { explorer, frame } = await openFilesPanelWithIframePreview(page)
+  const startWidth = await treeWidth(explorer)
 
   // Count localStorage.setItem calls for the width key during the drag. The old
   // code wrote synchronously on EVERY mousemove — a blocking disk write per
   // frame, which is what made the drag feel laggy.
   //
-  // Wrap the OWN property, not Storage.prototype: ui-prefs-sync.ts installs its
-  // own `localStorage.setItem` at boot and captured the prototype method by
-  // then, so a prototype patch here would never see app writes at all (it would
-  // silently count zero and the test would pass for the wrong reason).
+  // WebKit treats assignments on localStorage as stored items; wrap the current prototype method.
   await page.evaluate(() => {
     const w = window as unknown as { __setItemCalls: number }
     w.__setItemCalls = 0
-    const orig = localStorage.setItem.bind(localStorage)
-    localStorage.setItem = (k: string, v: string) => {
-      if (k === 'open-walnut-file-explorer-tree-width2') w.__setItemCalls++
-      orig(k, v)
+    const proto = Object.getPrototypeOf(localStorage) as Storage
+    const orig = proto.setItem
+    proto.setItem = function (k: string, v: string) {
+      if (this === localStorage && k === 'open-walnut-file-explorer-tree-width2') w.__setItemCalls++
+      orig.call(this, k, v)
     }
   })
 
@@ -151,13 +156,13 @@ test('Files divider: width persists once on release, not once per frame', async 
   await page.mouse.move(startX, y)
   await page.mouse.down()
   await page.mouse.move(Math.min(fBox.x + fBox.width / 2, startX + 100), y, { steps: 25 })
-  const duringDrag = await page.evaluate(() => (window as unknown as { __setItemCalls: number }).__setItemCalls)
+  await expect.poll(() => treeWidth(explorer)).toBeGreaterThan(startWidth + 40)
+  const writes = () => page.evaluate(() => (window as unknown as { __setItemCalls: number }).__setItemCalls)
+  expect(await writes()).toBe(0)
   await page.mouse.up()
-  const afterRelease = await page.evaluate(() => (window as unknown as { __setItemCalls: number }).__setItemCalls)
-
-  // Zero writes across 25 move steps; exactly one on release.
-  expect(duringDrag).toBe(0)
-  expect(afterRelease).toBe(1)
+  await expect.poll(writes).toBe(1)
+  await page.mouse.move(startX, y, { steps: 10 })
+  expect(await writes()).toBe(1)
 })
 
 test('Files divider: Escape mid-drag releases the gesture', async ({ page }) => {
@@ -191,6 +196,36 @@ test('Files divider: Escape mid-drag releases the gesture', async ({ page }) => 
   expect(await bodyDragState(page)).toEqual({ cursor: '', userSelect: '', dragClass: false })
 })
 
+test('Notes chat divider stays reachable beside the chat and persists its released width', async ({ page }) => {
+  await page.evaluate(() => localStorage.setItem('open-walnut-notes-chat-width', '420'))
+  await page.locator('a[href="/notes"]').first().click()
+  const toggle = page.locator('.notes-ai-toggle')
+  await expect(toggle).toBeVisible()
+  if ((await toggle.getAttribute('aria-pressed')) === 'false') await toggle.click()
+  const pane = page.locator('.notes-chat-pane')
+  const handle = page.locator('.notes-chat-divider')
+  await expect(pane).toBeVisible()
+  await expect.poll(() => pane.evaluate((el) => el.getBoundingClientRect().width)).toBe(420)
+  const startWidth = (await pane.boundingBox())!.width
+  const box = (await handle.boundingBox())!
+  const x = box.x + box.width / 2
+  const y = box.y + box.height / 2
+  for (const at of [x - 2, x, x + 2]) {
+    expect(await page.evaluate(({ x, y }) => !!document.elementFromPoint(x, y)?.closest('.notes-chat-divider'), { x: at, y })).toBe(true)
+  }
+  await page.mouse.move(x, y)
+  await page.mouse.down()
+  await page.mouse.move(x - 120, y, { steps: 12 })
+  await expect.poll(() => pane.evaluate((el) => el.getBoundingClientRect().width)).toBeGreaterThan(startWidth + 80)
+  expect(await bodyDragState(page)).toMatchObject({ cursor: 'col-resize', dragClass: true })
+  await page.mouse.up()
+  expect(await bodyDragState(page)).toEqual({ cursor: '', userSelect: '', dragClass: false })
+  const released = (await pane.boundingBox())!.width
+  await expect.poll(() => page.evaluate(() => Number(localStorage.getItem('open-walnut-notes-chat-width')))).toBeCloseTo(released, 0)
+  await page.mouse.move(x + 160, y, { steps: 10 })
+  expect((await pane.boundingBox())!.width).toBeCloseTo(released, 0)
+})
+
 test('session↔chat splitter: drag over the Files iframe resizes and releases', async ({ page }) => {
   const { panel, frame } = await openFilesPanelWithIframePreview(page)
 
@@ -203,6 +238,9 @@ test('session↔chat splitter: drag over the Files iframe resizes and releases',
   const fBox = (await frame.boundingBox())!
   const startX = hBox.x + hBox.width / 2
   const y = hBox.y + hBox.height / 2
+  for (const x of [startX - 2, startX, startX + 2]) {
+    expect(await page.evaluate(({ x, y }) => !!document.elementFromPoint(x, y)?.closest('.session-panel-chat-resize'), { x, y })).toBe(true)
+  }
 
   // Drag LEFT into the iframe — for this handle that widens the chat column.
   const targetX = Math.max(fBox.x + 20, startX - 120)
@@ -210,8 +248,7 @@ test('session↔chat splitter: drag over the Files iframe resizes and releases',
   await page.mouse.down()
   await page.mouse.move(targetX, y, { steps: 12 })
 
-  const dragged = await chatCol.evaluate((el) => el.getBoundingClientRect().width)
-  expect(dragged).toBeGreaterThan(startWidth + 40)
+  await expect.poll(() => chatCol.evaluate((el) => el.getBoundingClientRect().width)).toBeGreaterThan(startWidth + 40)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/step3-chat-splitter-mid-drag.png` })
 
   await page.mouse.up()

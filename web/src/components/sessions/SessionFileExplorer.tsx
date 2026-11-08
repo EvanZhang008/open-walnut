@@ -26,12 +26,13 @@ import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { isBoolean, usePageView } from '@/utils/view-memory';
 import { useNavigate } from 'react-router-dom';
 import { useDragGesture } from '@/hooks/useDragGesture';
-import { fetchDirList, fetchDirListMany, downloadFileUrl, fetchReferences, isHostReconnectingListing, HOST_RECONNECTING_CODE, type DirEntry, type DirListResponse, type ReferencesResponse } from '@/api/files';
+import { fetchDirList, fetchDirListMany, downloadFileUrl, fetchReferences, isHostReconnectingListing, isComingBackCode, isWalnutUnreachable, type DirEntry, type DirListResponse, type ReferencesResponse } from '@/api/files';
 import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
 import { visibleInterval } from '@/utils/page-visibility';
 import { fetchSessionChangedPaths } from '@/api/session-changes';
 import { useFileContentPrefetch } from '@/hooks/useFileContentPrefetch';
 import { useDirectoryRefresh } from '@/hooks/useDirectoryRefresh';
+import { useEvent } from '@/hooks/useWebSocket';
 import { applyDirectoryListings, removedDirectoryPaths, visibleDirectoryPaths } from './directory-refresh';
 import { FileContentView } from '@/components/common/FileContentView';
 import { ReferencePanel } from '@/components/common/ReferencePanel';
@@ -59,6 +60,7 @@ import {
 import { useRevealFile } from '@/hooks/useRevealFile';
 import { openPopout } from '@/popout/openPopout';
 import { log } from '@/utils/log';
+import { folderNameIn, knownHomeOf, pathCrumbs, rememberHostHome, tildePath, untildePath } from '@/utils/home-folder';
 
 interface SessionFileExplorerProps {
   cwd?: string;
@@ -105,6 +107,8 @@ interface SessionFileExplorerProps {
   /** No host has the clicked path: this line shows above the tree instead of a
    *  stand-in folder (useClickedPathOpener's missingPathLine). */
   missingNote?: string;
+  /** Phone: the layer of the view hosting this explorer; the file layer registers above it. */
+  phoneParentId?: string;
 }
 
 interface TreeNode {
@@ -192,13 +196,6 @@ function joinPath(dir: string, name: string): string {
   return dir.endsWith('/') ? `${dir}${name}` : `${dir}/${name}`;
 }
 
-/** The path as breadcrumb segments: the last three, after an ellipsis when longer. */
-function crumbSegments(p: string): string[] {
-  const segs = p.split('/').filter(Boolean);
-  if (segs.length === 0) return [p || '/'];
-  return segs.length > 3 ? ['…', ...segs.slice(-3)] : segs;
-}
-
 /**
  * The recent-folder suggestions under the path input, as a floating list in a
  * portal. The input sits in the document bar, whose lead clips its overflow so a
@@ -243,7 +240,7 @@ function lastSegment(p: string): string {
   return trimmed.slice(trimmed.lastIndexOf('/') + 1) || trimmed;
 }
 
-export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initialEndLine, initialTerm, openNonce, memoryScope, onSelectCode, barRightSlot, onHostNote, missingNote }: SessionFileExplorerProps) {
+export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initialEndLine, initialTerm, openNonce, memoryScope, onSelectCode, barRightSlot, onHostNote, missingNote, phoneParentId }: SessionFileExplorerProps) {
   const fileHostName = useHostDisplayLabel(onHostNote?.host ?? null);
   const sessionHostName = useHostDisplayLabel(onHostNote?.sessionHost ?? null);
   // Shown per open (the nonce), dismissible like the not-found note below.
@@ -254,6 +251,15 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
   const [deepLinkFile, setDeepLinkFile] = useState<string | null>(null);
   const cwdRef = useRef(cwd);
   cwdRef.current = cwd;
+  // This host's home, so the tree, its head and the crumbs show it as `~` (utils/home-folder.ts):
+  // the Demo's home is named by an id, anyone else's by their user name (2026-11-10 review).
+  const [hostHome, setHostHome] = useState<string | undefined>(() => knownHomeOf(host));
+  useEffect(() => { setHostHome(knownHomeOf(host)); }, [host]);
+  const learnHome = useCallback((resolved: string | undefined) => {
+    if (!resolved) return;
+    rememberHostHome(host, resolved);
+    setHostHome(knownHomeOf(host));
+  }, [host]);
   // Hidden files shown or not stays as it was left, in every session's explorer (utils/view-memory.ts).
   const [showHidden, setShowHidden] = usePageView('files', 'showHidden', false, isBoolean);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -269,16 +275,27 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
   // "Showing the last known contents — couldn't reach the host." Muted, keeps rows.
   const [staleErrors, setStaleErrors] = useState<Map<string, string>>(new Map());
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const selectedFileRef = useRef(selectedFile);
+  const selectionRevisionRef = useRef(0);
+  // Cache/fetch restores are defaults, never a replacement for a newer click.
+  // Root navigation has its own revision: expanding a folder must not prevent
+  // HOME's canonical path or its fresh listing from landing.
+  const directoryIntentRevisionRef = useRef(0);
+  const rootIntentRevisionRef = useRef(0);
+  const rootRestoreRevisionRef = useRef(0);
+  const canonicalRootFromRef = useRef<string | null>(null);
   // Phone: the tree OR one file; an open file is a layer (back returns to the tree, C78).
   const phone = usePhoneLayout();
   usePhoneLayerWithBar({
     id: `file:${selectedFile ?? ''}`, kind: 'file', active: phone && !!selectedFile,
     // The folder: the file's own name is the doc bar's, once on screen.
-    title: selectedFile ? (lastSegment(parentPath(selectedFile)) || selectedFile) : '', withAction: false,
-    onClose: () => setSelectedFile(null),
+    title: selectedFile ? (folderNameIn(parentPath(selectedFile), hostHome) || selectedFile) : '', withAction: false,
+    // A resize to desktop keeps the open file.
+    keepOnBreakpoint: true,
+    // Unset when standalone (Files page, plugin view): not gated.
+    parentId: phoneParentId,
+    onClose: () => { selectionRevisionRef.current++; selectedFileRef.current = null; setSelectedFile(null); },
   });
-  const selectedFileRef = useRef(selectedFile);
-  selectedFileRef.current = selectedFile;
   const [rootError, setRootError] = useState<string | null>(null);
   // The root listing answered "Reconnecting to <host>" (503 host_reconnecting).
   // The host comes back on its own, so the tree asks again on a clock until it
@@ -337,7 +354,8 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
 
   const { onPointerDown: onDividerPointerDown } = useDragGesture({
     cursor: 'col-resize',
-    onStart: () => { startWidthRef.current = treeWidthRef.current; },
+    // From the width on screen: in a narrow window the CSS cap may hold the tree below the stored one.
+    onStart: () => { startWidthRef.current = Math.min(treeWidthRef.current, treeRef.current?.getBoundingClientRect().width || treeWidthRef.current); },
     onMove: ({ dx }) => {
       treeWidthRef.current = Math.min(TREE_WIDTH_MAX, Math.max(TREE_WIDTH_MIN, startWidthRef.current + dx));
       setTreeWidth(treeWidthRef.current);
@@ -400,6 +418,9 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
 
   /** Single writer for "the preview is now showing this file". */
   const commitSelection = useCallback((filePath: string | null, opts: { push?: boolean; line?: number } = {}) => {
+    if (opts.push !== false) selectionRevisionRef.current++;
+    if (opts.push !== false) directoryIntentRevisionRef.current++;
+    selectedFileRef.current = filePath;
     setSelectedFile(filePath);
     saveSelectedFile(host, scopeRef.current, filePath);
     if (!filePath || opts.push === false) return;
@@ -439,6 +460,10 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
   ): Promise<void> => {
     const { isRoot = false, restoreExpanded = false, noCache = false } = opts;
     const gen = resetGenRef.current;
+    const selectionRevision = selectionRevisionRef.current;
+    const directoryIntentRevision = directoryIntentRevisionRef.current;
+    const rootIntentRevision = rootIntentRevisionRef.current;
+    const ownsRoot = () => rootIntentRevisionRef.current === rootIntentRevision;
     // Dedupe concurrent loads of the same dir (rapid double-clicks, overlapping refetch)
     if (inFlightRef.current.has(dirPath)) return;
     bumpDirectoryRead(dirPath);
@@ -462,6 +487,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
     //   would double every invalidation and put a wrong-mode listing (hidden rows
     //   in a hidden-off tree) one mistake away from painting.
     let painted = false;
+    let paintedPath = dirPath;
     let freshLanded = false;
     const cacheRead = (!noCache && !showHidden && !childrenMapRef.current.has(dirPath))
       ? getCachedDirList(host, dirPath).catch(() => null)
@@ -469,8 +495,27 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
     void cacheRead?.then((rec) => {
       if (!stillCurrent() || freshLanded || !rec || rec.entries.length === 0) return;
       painted = true;
-      setChildrenMap((prev) => (prev.has(dirPath) ? prev : new Map(prev).set(dirPath, rec.entries)));
-      setStalePaths((prev) => (prev.has(dirPath) ? prev : new Set(prev).add(dirPath)));
+      const cachedPath = dirPath === '~' ? rec.path : dirPath;
+      if (dirPath === '~') learnHome(rec.path);
+      paintedPath = cachedPath;
+      if (isRoot && ownsRoot()) {
+        if (cachedPath !== dirPath) {
+          rootRestoreRevisionRef.current = directoryIntentRevision;
+          canonicalRootFromRef.current = dirPath;
+          setRoot(cachedPath);
+        }
+        if (restoreExpanded && selectionRevisionRef.current === selectionRevision) {
+          if (directoryIntentRevisionRef.current === directoryIntentRevision) {
+            const remembered = loadSelectedFile(host, scopeRef.current);
+            if (remembered) {
+              commitSelectionRef.current(remembered, { push: false });
+              pendingValidateRef.current = remembered;
+            }
+          }
+        }
+      }
+      setChildrenMap((prev) => (prev.has(cachedPath) ? prev : new Map(prev).set(cachedPath, rec.entries)));
+      setStalePaths((prev) => new Set(prev).add(dirPath).add(cachedPath));
     });
 
     try {
@@ -485,6 +530,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
       // The same applies when the backend HEALED an unlistable path: `res.path` is
       // then a different directory entirely, and every child path must hang off it.
       const canonical = res.path && (isRoot || res.path !== dirPath) ? res.path : dirPath;
+      if (dirPath === '~' && !res.requestedPath) learnHome(res.path);
       if (canonical !== dirPath) bumpDirectoryRead(canonical);
       freshLanded = true;
       freshDirsRef.current.add(dirPath);
@@ -496,14 +542,18 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
       markReconnecting([dirPath, canonical], false);
       // Persist for the next open. Writes on the noCache path too — a Refresh
       // must correct what a later panel-open will paint from, not bypass it.
-      if (!showHidden) void setCachedDirList(host, canonical, res);
+      if (!showHidden) void setCachedDirList(host, dirPath === '~' ? dirPath : canonical, res);
       // A stand-in listing gets a plain "couldn't find X" note, not an error.
-      setNotFound(res.requestedPath ?? null);
-      if (isRoot) {
-        if (canonical !== root) setRoot(canonical);
+      if (!isRoot || ownsRoot()) setNotFound(res.requestedPath ?? null);
+      if (isRoot && ownsRoot()) {
+        if (canonical !== root) {
+          rootRestoreRevisionRef.current = directoryIntentRevision;
+          canonicalRootFromRef.current = dirPath;
+          setRoot(canonical);
+        }
         setRootError(null);
         setRootReconnecting(false);
-        if (restoreExpanded) {
+        if (restoreExpanded && directoryIntentRevisionRef.current === directoryIntentRevision) {
           const restored = loadExpandedSet(host, canonical);
           setExpanded(restored);
           // ROOT-CAUSE fix for "refresh auto-closed my folders + first click is
@@ -528,12 +578,13 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
           if (dirPath === cwdRef.current) setDeepLinkFile(target);
           // A deep-linked file IS a navigation — it joins the back/forward stack.
           commitSelectionRef.current(target);
-        } else if (restoreExpanded) {
+        } else if (restoreExpanded && selectionRevisionRef.current === selectionRevision) {
           // Nothing explicit: reopen the file that was last being read in this
           // scope, so toggling the Files panel resumes instead of showing the empty
           // "Select a file to preview" pane. Validated below once its parent
           // listing arrives (the file may have been deleted since).
-          const remembered = loadSelectedFile(host, scopeRef.current);
+          const remembered = directoryIntentRevisionRef.current === directoryIntentRevision
+            ? loadSelectedFile(host, scopeRef.current) : null;
           if (remembered) {
             // push:false — restoring what you were already reading is not a new
             // navigation, so it must not truncate the forward tail.
@@ -562,16 +613,18 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
       // on screen — from this call's paint OR from the reset effect's bulk prime
       // — the failure is a muted note beside them, not a replacement for them.
       if (painted || stalePathsRef.current.has(dirPath)) {
-        setStaleErrors((prev) => new Map(prev).set(dirPath, msg));
-      } else if (isRoot) setRootError(msg);
-      else setErrorPaths((prev) => new Map(prev).set(dirPath, msg));
-      const waiting = isHostReconnectingListing(err);
-      if (isRoot) {
+        setStaleErrors((prev) => new Map(prev).set(paintedPath, msg));
+      } else if (isRoot) {
+        if (ownsRoot()) setRootError(msg);
+      } else setErrorPaths((prev) => new Map(prev).set(dirPath, msg));
+      // The host, or Walnut itself, is not answering now: asked again on the clock until it lists.
+      const waiting = isHostReconnectingListing(err) || isWalnutUnreachable(err);
+      if (isRoot && ownsRoot()) {
         setRootReconnecting(waiting);
         // The open folders were to be asked with the root's answer: they wait
         // for the host too, so the clock asks for them as well.
-        if (waiting && restoreExpanded) markReconnecting([...loadExpandedSet(host, dirPath)].slice(0, MAX_RESTORE_LOADS), true);
-      } else markReconnecting([dirPath], waiting);
+        if (waiting && restoreExpanded && directoryIntentRevisionRef.current === directoryIntentRevision) markReconnecting([...loadExpandedSet(host, paintedPath)].slice(0, MAX_RESTORE_LOADS), true);
+      } else if (!isRoot) markReconnecting([dirPath], waiting);
     } finally {
       if (resetGenRef.current === gen) {
         bumpDirectoryRead(dirPath);
@@ -579,7 +632,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
         setLoadingPaths((prev) => { const next = new Set(prev); next.delete(dirPath); return next; });
       }
     }
-  }, [host, showHidden, root, cwd, sessionId, clearStale, markReconnecting]);
+  }, [host, showHidden, root, cwd, sessionId, clearStale, markReconnecting, learnHome]);
   loadDirRef.current = loadDir;
 
   /** Refresh every remembered-expanded directory in ONE request.
@@ -642,7 +695,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
         // beside them, never a replacement for them.
         if (stalePathsRef.current.has(l.path)) setStaleErrors((prev) => new Map(prev).set(l.path, l.error));
         else setErrorPaths((prev) => new Map(prev).set(l.path, l.error));
-        markReconnecting([l.path], l.code === HOST_RECONNECTING_CODE);
+        markReconnecting([l.path], isComingBackCode(l.code));
       }
       if (timedOut) {
         log.info('file-explorer', 'tree restore answered partially', { host, asked: wanted.length, got: fresh.length });
@@ -653,6 +706,8 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
       log.warn('file-explorer', 'batch dir restore failed', {
         host, count: wanted.length, error: err instanceof Error ? err.message : String(err),
       });
+      // Walnut did not answer at all (apiPost's network failure): these folders wait for it.
+      if (resetGenRef.current === gen && err instanceof TypeError) markReconnecting(wanted, true);
     } finally {
       if (resetGenRef.current === gen) {
         for (const p of wanted) {
@@ -671,6 +726,10 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
   // loadDir is intentionally omitted: it changes with showHidden, which must not reset.
   useEffect(() => {
     const gen = ++resetGenRef.current;
+    const directoryIntentRevision = ++directoryIntentRevisionRef.current;
+    rootIntentRevisionRef.current++;
+    rootRestoreRevisionRef.current = directoryIntentRevision;
+    canonicalRootFromRef.current = null;
     directoryReadRevisionsRef.current.clear();
     inFlightRef.current = new Set();
     setLoadingPaths(new Set());
@@ -685,6 +744,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
     setStaleErrors(new Map());
     setRootReconnecting(false);
     setReconnectingDirs(new Set());
+    selectedFileRef.current = null;
     setSelectedFile(null);
     setDeepLinkFile(null);
     setFocusedDir(null);
@@ -700,7 +760,17 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
     // a dir the user collapsed left the persisted set, so it can't be resurrected.
     if (!showHidden) {
       const wanted = [initialRoot, ...[...restored].slice(0, MAX_RESTORE_LOADS)];
-      void getCachedDirListsBulk(host, wanted).then((cached) => {
+      const cachedTree = initialRoot === '~'
+        ? getCachedDirList(host, initialRoot).then(async home => {
+          if (!home || resetGenRef.current !== gen || freshDirsRef.current.has(initialRoot)) return getCachedDirListsBulk(host, []);
+          const expandedHome = loadExpandedSet(host, home.path);
+          if (directoryIntentRevisionRef.current === directoryIntentRevision) {
+            setExpanded(expandedHome);
+          }
+          return getCachedDirListsBulk(host, [initialRoot, ...[...expandedHome].slice(0, MAX_RESTORE_LOADS)]);
+        })
+        : getCachedDirListsBulk(host, wanted);
+      void cachedTree.then((cached) => {
         // A newer reset (different session) owns the tree now — its rows are not ours.
         if (resetGenRef.current !== gen || cached.size === 0) return;
         const paintable = [...cached.keys()].filter((p) => cached.get(p)!.entries.length > 0);
@@ -712,9 +782,10 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
           let next = prev;
           for (const p of paintable) {
             // Never clobber: the fetch may already have answered for this dir.
-            if (next.has(p)) continue;
+            const cachedPath = p === '~' ? cached.get(p)!.path : p;
+            if (next.has(cachedPath)) continue;
             if (next === prev) next = new Map(prev);
-            next.set(p, cached.get(p)!.entries);
+            next.set(cachedPath, cached.get(p)!.entries);
           }
           return next;
         });
@@ -723,7 +794,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
         // failure, and with real rows on screen that is the better of the two.
         setStalePaths((prev) => {
           const next = new Set(prev);
-          for (const p of paintable) next.add(p);
+          for (const p of paintable) { next.add(p); next.add(cached.get(p)!.path); }
           return next;
         });
       });
@@ -750,16 +821,38 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
     }, retryMs);
   }, [rootReconnecting, dirsReconnecting, root]);
 
+  // Walnut is back (the socket reconnected): whatever failed to list while it was gone is asked
+  // again now, whatever the failure said, instead of keeping "Load failed" until Refresh (D13).
+  useEvent('_ws:reconnected', () => {
+    if (rootError) void loadDirRef.current?.(root, { isRoot: true, noCache: true, restoreExpanded: childrenMapRef.current.size === 0 });
+    const dirs = [...errorPaths.keys()].filter((p) => p !== root).slice(0, MAX_RESTORE_LOADS);
+    if (dirs.length) void loadDirsBatchRef.current?.(dirs);
+  });
+
   // Keep the open-state key in sync when ~ resolves to the canonical absolute
   // root, restoring any persisted open sections (survives Refresh + reload) and
   // eagerly loading their children so restored sections actually render.
   useEffect(() => {
+    const directoryIntentRevision = rootRestoreRevisionRef.current;
+    const canonicalFrom = canonicalRootFromRef.current;
     const persisted = loadOpenRoots(host, root);
-    setOpenRoots((prev) => {
-      const next = persisted ?? new Set(prev);
-      next.add(root);
-      return next;
-    });
+    if (directoryIntentRevisionRef.current === directoryIntentRevision) {
+      setOpenRoots((prev) => {
+        const next = persisted ? new Set(persisted) : new Set(prev);
+        next.add(root);
+        return next;
+      });
+    } else {
+      // Canonicalization changes a header's identity, not its open/closed choice.
+      // This covers HOME, an explicit file's parent and a healed path alike.
+      setOpenRoots((prev) => {
+        if (!canonicalFrom || canonicalFrom === root || !prev.has(canonicalFrom)) return prev;
+        const next = new Set(prev);
+        next.delete(canonicalFrom);
+        next.add(root);
+        return next;
+      });
+    }
     if (persisted) {
       for (const p of [...persisted].slice(0, 16)) {
         if (!childrenMapRef.current.has(p)) void loadDirRef.current?.(p);
@@ -821,8 +914,12 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
     if (verdict === 'wait') return;
     pendingValidateRef.current = null;
     if (verdict === 'keep') return;
-    setSelectedFile((cur) => (cur === pending ? null : cur));
-    saveSelectedFile(host, scopeRef.current, null);
+    // A dead restored file may prune history, but cannot clear a newer selection.
+    if (selectedFileRef.current === pending) {
+      selectedFileRef.current = null;
+      setSelectedFile((cur) => (cur === pending ? null : cur));
+      saveSelectedFile(host, scopeRef.current, null);
+    }
     const pruned = removeFromFileHistory(historyRef.current, pending);
     if (pruned !== historyRef.current) {
       historyRef.current = pruned;
@@ -854,7 +951,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
             // Name only — g.label is a submodule's whole path under the
             // superproject, which clips from the right and hides the name.
             // The header's title already carries the full path for hover.
-            roots.push({ path: repoRoot, label: lastSegment(repoRoot) || g.label, kind: 'changed', fileCount: g.files.length });
+            roots.push({ path: repoRoot, label: folderNameIn(repoRoot, knownHomeOf(host)) || g.label, kind: 'changed', fileCount: g.files.length });
           }
         }
         setChangedRoots(roots);
@@ -877,6 +974,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
   }, [showHidden]);
 
   const toggleDir = useCallback((node: TreeNode) => {
+    directoryIntentRevisionRef.current++;
     setFocusedDir(node.path);
     setExpanded((prev) => {
       const next = new Set(prev);
@@ -899,6 +997,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
   }, [loadDir]);
 
   const toggleRoot = useCallback((rootPath: string) => {
+    directoryIntentRevisionRef.current++;
     setFocusedDir(rootPath);
     setOpenRoots((prev) => {
       const next = new Set(prev);
@@ -938,11 +1037,11 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
       prefix = isDirectChild ? repoName : `${repoName}/…`;
     }
     const cwdSection: RootSection = {
-      path: root, label: lastSegment(root), prefix, kind: 'cwd', fileCount: cwdChanged?.fileCount,
+      path: root, label: folderNameIn(root, hostHome), prefix, kind: 'cwd', fileCount: cwdChanged?.fileCount,
     };
     const rest = changedRoots.filter((r) => r.path !== rootNorm);
     return [cwdSection, ...rest];
-  }, [root, changedRoots]);
+  }, [root, changedRoots, hostHome]);
 
   // Which paths are SECTION HEADERS: they open via `openRoots`, and they can't be
   // renamed/deleted (the mutation hook needs both facts).
@@ -1053,6 +1152,18 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
   const goUp = useCallback(() => {
     const parent = parentPath(root);
     if (parent !== root) {
+      directoryIntentRevisionRef.current++;
+      rootIntentRevisionRef.current++;
+      // A new root owns its reads too: A -> B -> A must not dedupe the new A
+      // against the abandoned A request or let that request finish its loading.
+      resetGenRef.current++;
+      inFlightRef.current = new Set();
+      directoryReadRevisionsRef.current.clear();
+      setLoadingPaths(new Set());
+      rootRestoreRevisionRef.current = directoryIntentRevisionRef.current;
+      canonicalRootFromRef.current = null;
+      setRoot(parent);
+      setOpenRoots(new Set([parent]));
       setChildrenMap(new Map());
       freshDirsRef.current = new Set();
       setStalePaths(new Set());
@@ -1106,10 +1217,21 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
   }, [editingPath, pathQuery, recents]);
 
   const commitPath = useCallback((raw: string) => {
-    const next = raw.trim();
+    // The field shows the home as ~ (tildePath above): the same folder is not a new root.
+    const next = untildePath(raw.trim(), hostHome);
     setEditingPath(false);
     setPathQuery('');
     if (!next || next === root) return;
+    directoryIntentRevisionRef.current++;
+    rootIntentRevisionRef.current++;
+    resetGenRef.current++;
+    inFlightRef.current = new Set();
+    directoryReadRevisionsRef.current.clear();
+    setLoadingPaths(new Set());
+    rootRestoreRevisionRef.current = directoryIntentRevisionRef.current;
+    canonicalRootFromRef.current = null;
+    setRoot(next);
+    setOpenRoots(new Set([next]));
     setChildrenMap(new Map());
     freshDirsRef.current = new Set();
     setStalePaths(new Set());
@@ -1120,7 +1242,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
     setFocusedDir(null);
     pendingValidateRef.current = null;
     void loadDir(next, { isRoot: true, restoreExpanded: true });
-  }, [root, loadDir]);
+  }, [root, loadDir, hostHome]);
 
   // ── Right-click menu (Walnut's own, not the browser's) ────────────────────
   const navigate = useNavigate();
@@ -1204,6 +1326,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
   }, [editTarget, rootSections, rowsByRoot, openRoots]);
 
   const runTreeMutation = useCallback(async (run: () => Promise<void>) => {
+    directoryIntentRevisionRef.current++;
     mutationPendingRef.current += 1;
     mutationRevisionRef.current += 1;
     try { await run(); }
@@ -1261,10 +1384,13 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
     const nextIdx = cur.index + delta;
     const target = cur.entries[nextIdx];
     if (!target) return;
+    selectionRevisionRef.current++;
+    directoryIntentRevisionRef.current++;
     const next = { entries: cur.entries, index: nextIdx };
     historyRef.current = next;
     setHistory(next);
     saveFileHistory(host, scopeRef.current, next);
+    selectedFileRef.current = target.path;
     setSelectedFile(target.path);
     setFocusedDir(parentPath(target.path));
     saveSelectedFile(host, scopeRef.current, target.path);
@@ -1411,8 +1537,12 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
         <div className="sfe-path-edit" ref={pathEditRef}>
           <input data-no-draft="picker"
             className="sfe-root-path-input"
-            defaultValue={focusedDir ?? root}
+            // The home reads ~ here as in the crumbs; commitPath reads it back (untildePath).
+            defaultValue={hostHome ? tildePath(focusedDir ?? root, hostHome) : focusedDir ?? root}
             autoFocus
+            // Opens on the folder shown, selected, so a path typed in replaces it
+            // instead of landing after it (2026-11-08: ".../Project-002~/Documents/...").
+            onFocus={(e) => e.currentTarget.select()}
             spellCheck={false}
             placeholder="Absolute path, or type to fuzzy-match recent folders"
             onChange={(e) => { setPathQuery(e.target.value); setSuggestIdx(0); }}
@@ -1449,7 +1579,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
           title={`${shownPath}: click to type a path (fuzzy-matches recent folders)`}
           onClick={() => setEditingPath(true)}
         >
-          {crumbSegments(shownPath).map((seg, idx, all) => (
+          {pathCrumbs(tildePath(shownPath, hostHome)).map((seg, idx, all) => (
             <span key={idx} className={`sfe-crumb${idx === all.length - 1 ? ' is-last' : ''}`}>
               {idx > 0 && <span className="sfe-crumb-sep" aria-hidden="true">{ICON_CHEVRON_RIGHT}</span>}
               <span className="sfe-crumb-text">{seg}</span>
@@ -1508,6 +1638,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
       )}
     </div>
   );
+  const headIsHome = folderNameIn(focusedDir ?? root, hostHome) === '~';
   const treeHead = (
     <div className="sfe-tree-head">
       {phone && !selectedFile && editingPath ? pathEditor : (
@@ -1518,8 +1649,9 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
           title={`In ${parentPath(focusedDir ?? root)}: click to type a path`}
         >
           {/* Where the folder below lives (its parent's name); the folder itself
-              is the tree's first row. */}
-          <span className="sfe-tree-head-in">in</span>{lastSegment(parentPath(focusedDir ?? root)) || '/'}
+              is the tree's first row. The home lives nowhere worth naming ("in homes",
+              "in Users"), so its head is `~` itself. */}
+          {headIsHome ? '~' : <><span className="sfe-tree-head-in">in</span>{folderNameIn(parentPath(focusedDir ?? root), hostHome)}</>}
         </button>
       )}
       <span className="sfe-tree-head-tools">
@@ -1808,7 +1940,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
                           {/* Its folder, so two README.md stay two different rows; the
                               time only when the visit was recorded with one. */}
                           <span className="sfe-recent-dir">
-                            {parentPath(p).split('/').filter(Boolean).slice(-2).join('/') || '/'}
+                            {tildePath(parentPath(p), hostHome).split('/').filter(Boolean).slice(-2).join('/') || '/'}
                             {at ? ` · ${timeAgo(new Date(at).toISOString(), { long: true })}` : ''}
                           </span>
                         </span>
@@ -1845,9 +1977,9 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
           onDownload={(p) => { window.location.href = downloadFileUrl(p, host); }}
           onReveal={reveal}
           canReveal={canReveal}
-          onNewFile={(dir) => startCreate(dir, 'create-file')}
-          onNewFolder={(dir) => startCreate(dir, 'create-dir')}
-          onRename={(p) => startRename(p, ctxMenu.type)}
+          onNewFile={(dir) => { directoryIntentRevisionRef.current++; startCreate(dir, 'create-file'); }}
+          onNewFolder={(dir) => { directoryIntentRevisionRef.current++; startCreate(dir, 'create-dir'); }}
+          onRename={(p) => { directoryIntentRevisionRef.current++; startRename(p, ctxMenu.type); }}
           onDuplicate={(p) => { void runTreeMutation(() => duplicate(p, ctxMenu.type)); }}
           onDelete={(p, t) => { void runTreeMutation(() => remove(p, t)); }}
         />

@@ -54,6 +54,14 @@ describe('summarizeConnectFailure', () => {
     expect(out.endsWith('…')).toBe(true)
   })
 
+  it('keeps the evidence whole past the length, so a long key file path is read back from the summary', () => {
+    const file = `/Users/someone/demo/${'deep/'.repeat(24)}.ssh/id_devbox`
+    const raw = `no such identity: ${file}: No such file or directory\nme@devbox: Permission denied (publickey).\nwalnut-ssh-evidence: key-missing (${file})`
+    const out = summarizeConnectFailure(raw)
+    expect(out.endsWith(`[walnut-ssh-evidence: key-missing (${file})]`)).toBe(true)
+    expect(classifyHostConnectError(out, 'me@devbox').hint).toContain(file)
+  })
+
   it('is a no-op for an already-short single-line error', () => {
     expect(summarizeConnectFailure('Connection timed out')).toBe('Connection timed out')
   })

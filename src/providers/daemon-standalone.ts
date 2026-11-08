@@ -208,6 +208,7 @@ import { grepReferencesHostLocal } from './search-grep-core.js'
 import { ensureCodeServer, codeServerStatus, reapIdleCodeServer, stopCodeServer, resolveOpenTarget } from './vscode-server-core.js'
 import {
   GATEWAY_SOCKET_FILENAME,
+  demoGatewaySocketPath,
   GATEWAY_MAX_LINE_BYTES,
   gatewayCallPlan,
   gatewayHubTimeoutMs,
@@ -240,6 +241,7 @@ import { readCronBootId } from './daemon-cron-host.js'
 import { spawnBehindRegistry } from './daemon-spawn-barrier.js'
 import { acquireDaemonInstanceLock, readDaemonInstanceOwner, type DaemonInstanceLockOwner } from './daemon-instance-lock.js'
 import { createDaemonCommandDrain } from './daemon-command-drain.js'
+import { createDemoDaemonQuiesce } from './demo-daemon-quiesce-core.js'
 import { prepareDaemonServiceHandover, consumeDaemonServiceHandover } from './daemon-service-handover.js'
 import { RESTART_MARK_NAME, restartMarkText } from './daemon-restart-mark.js'
 import { createBridgeUplink, createLoopDriftProbe } from './bridge-uplink-core.js'
@@ -339,6 +341,32 @@ const IS_PROD_DAEMON_DIR = path.resolve(DAEMON_DIR) === path.resolve(PROD_DAEMON
   || path.resolve(DAEMON_DIR) === path.resolve(FALLBACK_DAEMON_DIR)
 const STREAMS_DIR = process.env.WALNUT_STREAMS_DIR
   || (IS_PROD_DAEMON_DIR ? PROD_STREAMS_DIR : `${DAEMON_DIR}-streams`)
+// demo.quiesce (demo-daemon-quiesce-core.ts): a Demo's own daemon closes for good before
+// its reset and waits for what it accepted. Refused on every other daemon. Mirror daemon-source.ts.
+const demoQuiesce = createDemoDaemonQuiesce({
+  env: process.env, daemonDir: DAEMON_DIR, isProdDaemonDir: IS_PROD_DAEMON_DIR,
+  serviceMode: SERVICE_MODE, keepSessions: KEEP_SESSIONS_ON_EXIT,
+  resolve: (...parts) => path.resolve(...parts), basename: (p) => path.basename(p),
+  settle: () => daemonCommands.settle(),
+  endWarmPool: () => { oneShot.endWarmPool() },
+  oneShot: () => oneShot.liveChildren(),
+  acpRuntimes: () => acp.listWorkers(),
+  // The daemon's own automatic work for the Demo's data: its trigger checks end, its plugin jobs retire.
+  stopInternalWork: (home) => { demoTriggerChecks.abort(); pluginJobs.quiesce(home) },
+  background: (home) => {
+    const jobs = pluginJobs.pending(home)
+    return {
+      triggerChecks: demoTriggerCheckPids.size, triggerRuns: triggerChecksRunning.size, triggerTests: triggerTestsRunning,
+      triggerDeliveries: hostDeliveriesInFlight.size, pluginJobRuns: jobs.runs, pluginJobsDraining: jobs.draining, pluginJobTimers: jobs.timers,
+    }
+  },
+})
+// MCP and restart readers derive their paths from the socket's parent; Demo uses its checked short dir.
+const GATEWAY_SOCK_PATH = (demoQuiesce.isDemo
+  ? demoGatewaySocketPath(process.env.WALNUT_DEMO_ROOT || '', process.env.WALNUT_DEMO_GENERATION || '', typeof process.getuid === 'function' ? process.getuid() : null, fs, path, crypto)
+  : null) || path.join(DAEMON_DIR, GATEWAY_SOCKET_FILENAME)
+const GATEWAY_SHIM_DIR = path.join(path.dirname(GATEWAY_SOCK_PATH), 'bin')
+const GATEWAY_SHIM_PATH = path.join(GATEWAY_SHIM_DIR, 'walnut')
 // Where Walnut saves a session's pictures on this host (user-line-images-core.ts):
 // the server's images dir (it names this dir to its daemon), an upload from another
 // machine, and image.save. Both spellings of a symlinked /tmp.
@@ -503,7 +531,8 @@ const INSTANCE_ID_FILE = path.join(DAEMON_DIR, 'daemon.instance')
 const SERVICE_FILE = path.join(DAEMON_DIR, 'daemon.service')
 // A stopping production daemon's word that its successor is on the way
 // (daemon-restart-mark.ts): `walnut` calls in between wait instead of failing.
-const RESTART_MARK_FILE = path.join(DAEMON_DIR, RESTART_MARK_NAME)
+// Beside the gateway socket, where `walnut` looks for it (wn-cli.ts daemonRestartingAt).
+const RESTART_MARK_FILE = path.join(path.dirname(GATEWAY_SOCK_PATH), RESTART_MARK_NAME)
 // Written by the RUNNING daemon at startup. This is the source of truth for
 // upgrade decisions: DaemonConnection.shouldUpgradeDaemon `cat`s this file
 // instead of executing the on-disk binary's --version, because the on-disk
@@ -773,7 +802,7 @@ const LOG_FILE = path.join(DAEMON_DIR, `daemon-${DAEMON_INSTANCE_ID}.log`)
 // daemon-source.ts passes none: it spawns claude directly on the daemon PATH.
 const hostRuntime = createHostRuntime({
   fs, execFile, execFileSync, env: process.env, platform: process.platform, arch: process.arch,
-  claudeCheck: createClaudeCheck({ fs, execFile, env: process.env, sha256Hex: (s) => crypto.createHash('sha256').update(s).digest('hex') }),
+  claudeCheck: createClaudeCheck({ fs, execFile, env: process.env, platform: process.platform, sha256Hex: (s) => crypto.createHash('sha256').update(s).digest('hex') }),
   spawnPreamble: () => buildSpawnPreamble(),
 })
 const bootPath = hostRuntime.computeDaemonPath()
@@ -2518,6 +2547,8 @@ const ACP_ARTIFACT_DIR = (() => {
   return fs.existsSync(path.join(dir, ACP_HOST_FILES[ACP_HOST_WORKER] ?? ACP_HOST_WORKER)) ? dir : undefined
 })()
 const acp = createAcpDaemon<ServerWebSocket<WsData>>({
+  maySpawn: () => !demoQuiesce.fenced,
+  strictStop: () => demoQuiesce.isDemo,
   streamsDir: STREAMS_DIR,
   daemonDir: DAEMON_DIR,
   ...(ACP_ARTIFACT_DIR ? { artifactDir: ACP_ARTIFACT_DIR, artifactNames: ACP_HOST_FILES } : {}),
@@ -2612,6 +2643,17 @@ function handleCommand(ws: ServerWebSocket<WsData>, msg: string) {
     sendError(ws, id as number, 'internal daemon error handling ' + cmd.cmd + ': '
       + (err instanceof Error ? err.message : String(err)))
   }
+  // demo.quiesce runs outside the drain (it waits for the drain); once it fenced, only reads and stops.
+  if (cmd.cmd === 'demo.quiesce') {
+    void demoQuiesce.quiesce(ws.data?.origin, cmd).then((reply) => {
+      if (reply.ok) sendOk(ws, id as number, reply)
+      else sendError(ws, id as number, reply.error, reply)
+    }, replyError)
+    return
+  }
+  if (!demoQuiesce.allows(cmd.cmd)) {
+    return sendError(ws, id as number, 'Demo is stopping; no new work is accepted', { errorKind: 'demo_stopping' })
+  }
   try {
     // An answer to a relay is not new work: it is taken while the daemon pauses or drains,
     // so a call the server finished in those seconds gets its result (releaseGatewayRelays).
@@ -2638,6 +2680,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
   switch (cmd.cmd) {
     case 'start': return daemonCommands.run(() => cmdStart(ws, id as number, cmd))
     case 'attach': return daemonCommands.run(() => cmdAttach(ws, id as number, cmd))
+    case 'line.fate': return daemonCommands.run(() => cmdLineFate(ws, id as number, cmd))
     case 'send': return daemonCommands.run(() => cmdSend(ws, id as number, cmd))
     case 'sendRaw': return daemonCommands.run(() => cmdSendRaw(ws, id as number, cmd))
     case 'appendUserMarker': return cmdAppendUserMarker(ws, id as number, cmd)
@@ -3932,10 +3975,7 @@ function cmdMobileEvent(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
 // `gateway-request` event answered by a `gateway-result` command. Shared pure
 // logic (parse/validate/alias resolution) lives in gateway-core.ts.
 // Keep in sync with daemon-source.ts gateway section (hand-inlined there).
-
-const GATEWAY_SOCK_PATH = path.join(DAEMON_DIR, GATEWAY_SOCKET_FILENAME)
-const GATEWAY_SHIM_DIR = path.join(DAEMON_DIR, 'bin')
-const GATEWAY_SHIM_PATH = path.join(GATEWAY_SHIM_DIR, 'walnut')
+// GATEWAY_SOCK_PATH, GATEWAY_SHIM_DIR and GATEWAY_SHIM_PATH are defined right after demoQuiesce.
 
 // oldSid → newSid, maintained by cmdRename. resolveCallerSid follows the
 // chain (max 5 hops) to map a CLI's spawn-time WALNUT_SESSION_ID to the sid
@@ -4137,9 +4177,28 @@ let offlineSweepTimer: ReturnType<typeof setInterval> | null = null
 function migrateJournals(): void {
   journalMigration.boot()
   if (!offlineSweepTimer) {
-    offlineSweepTimer = setInterval(() => { void offlineHost.sweep() }, 60_000)
+    offlineSweepTimer = setInterval(offlineSweepTick, 60_000)
     offlineSweepTimer.unref?.()
   }
+}
+
+// A stopping Demo's sweep would deliver journaled messages into sessions past its fence.
+function offlineSweepTick(): void {
+  if (demoQuiesce.fenced) return
+  void offlineHost.sweep()
+}
+
+// A host delivery is a send outside the command drain: a Demo admits it (quiesce waits for it) and refuses it once fenced, also after it queued at the gate.
+function deliverFromOfflineHost(sid: string, text: string, messageId: string): Promise<{ ok: true; noticeLeftOut?: true } | { ok: false; reason: string }> {
+  if (demoQuiesce.fenced) return Promise.resolve({ ok: false as const, reason: 'demo_stopping' })
+  const work = () => sessionStartGate.run(sid, async () => {
+    if (demoQuiesce.fenced) return { ok: false as const, reason: 'demo_stopping' }
+    cancelTurnRetry(sid, 'superseded-by-send')
+    const r = await core.handleSendCommand(sid, text, undefined, [{ message: text, messageId }], { fromHost: true })
+    if ('ok' in r && r.ok) return r.noticeLeftOut ? { ok: true as const, noticeLeftOut: true as const } : { ok: true as const }
+    return { ok: false as const, reason: 'reason' in r ? String(r.reason) : String((r as { error?: string }).error) }
+  })
+  return demoQuiesce.isDemo && !daemonCommands.closed ? daemonCommands.admit(work) : work()
 }
 
 const offlineHost = createOfflineHostCore({
@@ -4181,12 +4240,7 @@ const offlineHost = createOfflineHostCore({
   turnActive: (sid) => sessions.get(sid)?.foldState.turnActive === true,
   pendingPrompt: (sid) => sessions.get(sid)?.pendingCtrl?.toolName ?? null,
   // The same gate and turn-retry reset a server send goes through (cmdSend).
-  deliver: (sid, text, messageId) => sessionStartGate.run(sid, async () => {
-    cancelTurnRetry(sid, 'superseded-by-send')
-    const r = await core.handleSendCommand(sid, text, undefined, [{ message: text, messageId }], { fromHost: true })
-    if ('ok' in r && r.ok) return r.noticeLeftOut ? { ok: true as const, noticeLeftOut: true as const } : { ok: true as const }
-    return { ok: false as const, reason: 'reason' in r ? String(r.reason) : String((r as { error?: string }).error) }
-  }),
+  deliver: (sid, text, messageId) => deliverFromOfflineHost(sid, text, messageId),
   // A stopped session started again for a trigger fire (trigger-host-resume-v1).
   resume: (home, sid, text, messageId, taskId) => resumeForTrigger(home, sid, text, messageId, taskId),
   streamOffset: (sid) => {
@@ -4663,6 +4717,7 @@ const pluginJobs = createPluginJobSupervisor({
   maxLogBytes: Number(process.env.WALNUT_PLUGIN_JOB_LOG_MAX_BYTES) || undefined,
   // A test knob: never on the production daemon dir.
   minEveryMs: IS_PROD_DAEMON_DIR ? undefined : Number(process.env.WALNUT_PLUGIN_JOB_MIN_EVERY_MS) || undefined,
+  maySpawn: () => !demoQuiesce.fenced,
 })
 
 /** The leader only, on the socket its leader.configure tagged, for its own Walnut. */
@@ -6531,6 +6586,7 @@ async function cmdAcpStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<
   }
   return sessionStartGate.run(params.sid, async () => {
     if (!params.providerSessionId && fs.existsSync(cancelledStartPath(params.sid))) throw new Error('Initial start was cancelled; retry task_start on the same task')
+    if (demoQuiesce.fenced) throw new Error('acpStart: Demo is stopping; no new worker starts')
     const resp = await acp.acpStart(ws, params)
     if (resp.ok) sendOk(ws, id, resp.result ?? {})
     else safeSend(ws, JSON.stringify({ id, ok: false, error: resp.error, errorKind: resp.errorKind }))
@@ -6688,6 +6744,8 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
   await requireBudgetAllowance(sid)
   if (canStart && !canStart()) throw Object.assign(new Error('start: stop request superseded this start'), { code: 'SESSION_STOP_SUPERSEDED' })
   if (isCurrent && !isCurrent()) throw new Error('start: supervision request was superseded')
+  // Every native start comes here (commands, turn retries, host resumes, offline asks).
+  if (demoQuiesce.fenced) throw new Error('start: Demo is stopping; no new session starts')
 
   // Validate cwd exists before spawning — prevents misleading ENOENT on /bin/bash
   // when the real issue is a non-existent working directory (e.g. local Mac path
@@ -7044,6 +7102,8 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
   let barrier: ReturnType<typeof spawnBehindRegistry> | null = null
   let proc: ReturnType<typeof spawn>
   try {
+    // Last synchronous point before the CLI exists: a fence set during the awaits above wins.
+    if (demoQuiesce.fenced) throw new Error('start: Demo is stopping; no new session starts')
     barrier = SERVICE_MODE ? spawnBehindRegistry(userShell, ['-c', shellCmd], spawnOptions) : null
     proc = barrier?.process ?? spawn(userShell, ['-c', shellCmd], spawnOptions)
   } catch (error) {
@@ -7512,6 +7572,13 @@ let triggerTickTimer: ReturnType<typeof setInterval> | null = null
 let runtimeKeepTimer: ReturnType<typeof setInterval> | null = null
 let triggerTestsRunning = 0
 const triggersConfigureGate = new DaemonSessionGate()
+// Check pids not closed yet (runs in flight: triggerChecksRunning): demo.quiesce alone aborts them and waits for 0. Mirror daemon-source.ts.
+const demoTriggerChecks = new AbortController()
+const demoTriggerCheckPids = new Set<number>()
+/** runCheckProcess options every check of this daemon runs with. */
+function checkRunFence(): { maySpawn: () => boolean; signal: AbortSignal; children: Set<number> } {
+  return { maySpawn: () => !demoQuiesce.fenced, signal: demoTriggerChecks.signal, children: demoTriggerCheckPids }
+}
 
 /** Replay cadence for unacked fires; the env override exists for tests. */
 function triggerReplayMs(): number {
@@ -7932,6 +7999,7 @@ function triggerCadenceMs(entry: ArmedTrigger): number {
 }
 
 async function runTrigger(entry: ArmedTrigger): Promise<{ outcome: 'fired' | 'quiet' | 'error'; reason?: string; error?: string }> {
+  if (demoQuiesce.fenced) return { outcome: 'quiet', reason: 'demo_stopping' }
   if (entry.def.clock) return runClock(entry, false) === 'fired' ? { outcome: 'fired' } : { outcome: 'quiet' }
   if (!entry.def.check) return { outcome: 'error', error: 'trigger has no check' }
   entry.running = true
@@ -7946,10 +8014,16 @@ async function runTrigger(entry: ArmedTrigger): Promise<{ outcome: 'fired' | 'qu
     const proc = await runCheckProcess(entry.def.check, buildCheckStdin(entry.state, startedAt), {
       env: { WALNUT_TRIGGER_ID: entry.def.id, WALNUT_TRIGGER_NAME: entry.def.name },
       templateShimDir: GATEWAY_SHIM_DIR,
+      ...checkRunFence(),
     })
     const parsed = parseCheckStdout(proc.stdout)
     const error = checkErrorOf(proc, parsed)
     const now = Date.now()
+    // A stopping Demo writes no state and sends no event for a run its stop ended.
+    if (demoQuiesce.fenced) {
+      logMsg('info', 'trigger run discarded: Demo is stopping', { id: entry.def.id })
+      return { outcome: 'quiet', reason: 'demo_stopping' }
+    }
     if (!stillArmed()) {
       logMsg('info', 'trigger run discarded: disarmed mid-run', { id: entry.def.id })
       return { outcome: error ? 'error' : 'quiet', ...(error ? { error } : {}) }
@@ -8036,6 +8110,7 @@ function replayPendingFires(now: number): void {
  * the fire stays for the server and is tried here again after a minute.
  */
 function deliverUnclaimedFires(now: number): void {
+  if (demoQuiesce.fenced) return
   const grace = hostDeliveryGraceMs()
   for (const entry of fireHolders()) {
     const spec = entry.def.deliver
@@ -8096,7 +8171,7 @@ function startUnclaimedRun(entry: ArmedTrigger, fire: PendingFire, now: number):
   const key = triggerKey(home, id)
   const def = entry.def
   const start = def.start
-  if (!start) return
+  if (!start || demoQuiesce.fenced) return
   const epoch = entry.state.epoch
   const seqs = [fire.seq]
   hostDeliveriesInFlight.set(key, new Set(seqs))
@@ -8128,6 +8203,8 @@ function startUnclaimedRun(entry: ArmedTrigger, fire: PendingFire, now: number):
 
 /** Overlap is SKIPPED, never queued: a slow check must not build a backlog. */
 function tickTriggers(): void {
+  // A stopping Demo starts no check, delivery or routine run, and replays nothing.
+  if (demoQuiesce.fenced) return
   const now = Date.now()
   for (const entry of armedTriggers.values()) {
     if (entry.running || entry.nextRunAtMs > now) continue
@@ -8404,6 +8481,7 @@ async function runTriggerTest(check: unknown, targetId: string | undefined, home
     ...(typeof raw.cwd === 'string' && raw.cwd ? { cwd: raw.cwd } : {}),
     timeoutSeconds: clampTimeoutSeconds(raw.timeoutSeconds),
   }
+  if (demoQuiesce.fenced) throw new Error('triggers.test: Demo is stopping; no check starts')
   if (triggerTestsRunning >= TRIGGER_TEST_MAX_CONCURRENT) {
     throw new Error(`triggers.test: too many concurrent tests (max ${TRIGGER_TEST_MAX_CONCURRENT})`)
   }
@@ -8419,6 +8497,7 @@ async function runTriggerTest(check: unknown, targetId: string | undefined, home
         WALNUT_TRIGGER_NAME: entry ? entry.def.name : 'trigger test',
       },
       templateShimDir: GATEWAY_SHIM_DIR,
+      ...checkRunFence(),
     })
     const parsed = parseCheckStdout(proc.stdout)
     const error = checkErrorOf(proc, parsed)
@@ -9764,6 +9843,11 @@ async function cmdAttach(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
   })
 }
 
+// Read-only recovery query. Not reachable from bridge, follower or lane sockets.
+async function cmdLineFate(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  sendOk(ws, id, await core.handleLineFateQuery(cmd.sid, cmd.uuid, cmd.messageIds))
+}
+
 // ── Send message ──
 // Logic lives in daemon-core.handleSendCommand (strict-ack). This wrapper
 // only maps the SendResult envelope onto the WS reply format.
@@ -10040,6 +10124,13 @@ function pidNowRunsAnotherProgram(sid: string, session: SessionData, recordedSta
   return !files.some((name: string) => argv.includes(name))
 }
 
+/** The pid's own process is gone (ESRCH) while its process group still has members. */
+function leaderGoneWithGroup(pid: number): boolean {
+  try { process.kill(pid, 0); return false } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ESRCH' && isProcessGroupAlive(pid)
+  }
+}
+
 function stopSessionProcess(ws: ServerWebSocket<WsData>, id: number, sid: string) {
   const session = sessions.get(sid)
   if (!session || !session.pid) {
@@ -10129,7 +10220,12 @@ function stopSessionProcess(ws: ServerWebSocket<WsData>, id: number, sid: string
         }
         return reply()
       }
-      if (!sameProcess()) return reply('stop: process identity changed; no further signals sent')
+      // The CLI itself may have exited on the SIGINT (and been reaped) while its children are still
+      // leaving its group (2026-11-12: a Demo reset's stop answered "identity changed" 200 ms after the
+      // CLI ended). With the leader gone and the group alive, no process can hold this pid (a group's
+      // id is not reused while it has members), so the members are the CLI's own: keep waiting, with
+      // the SIGTERM below. Only a live process whose identity changed is refused.
+      if (!sameProcess() && !leaderGoneWithGroup(pid)) return reply('stop: process identity changed; no further signals sent')
       checks++
       if (checks === 25) {
         try { killProcessGroup(pid, 'SIGTERM') } catch (error) { return reply(`stop: ${String(error)}`) }
@@ -12661,6 +12757,8 @@ function cmdList(ws: ServerWebSocket<WsData>, id: number) {
     }
   }
 
+  // A fenced Demo counts a session whose CLI exited while its group lives on (zero-signal probe), so its reset keeps the data.
+  if (demoQuiesce.fenced) for (const row of result) if (!row.alive && row.pid && isProcessGroupAlive(row.pid)) row.alive = true
   sendOk(ws, id, { sessions: ws.data?.origin === 'follower' ? followerReads.ownRows(followerHomeOf(ws), result) : result })
 }
 

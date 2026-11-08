@@ -29,6 +29,7 @@ import {
 } from './thread-meta.js';
 import type { SessionThreadMeta, SessionThreadMetaPatch } from '../types.js';
 import { isQuietTurn } from './quiet-turn.js';
+import { screenTitle } from '../title-answer.js';
 
 export const THREAD_TITLE_REQUIREMENT = 'Name this follow-up question for a navigation tree. 2 to 6 words, a noun phrase naming what the question is about, not the whole conversation. Same language as the question.';
 /** The refine call returns the title AND the verdict. One line, because the
@@ -55,8 +56,9 @@ let idleWaiters: Array<() => void> = [];
 const keyOf = (sessionId: string, headId: string) => `${sessionId}:${headId}`;
 
 /** A title the UI can show: label echo and wrappers off, whitespace collapsed,
- *  cut at a word boundary to the stored cap. `null` when nothing usable is left. */
-export function cleanThreadTitle(raw: string | null | undefined): string | null {
+ *  cut at a word boundary to the stored cap. `null` when nothing usable is left,
+ *  or when it is no title of `words` (the passage and question): title-answer.ts. */
+export function cleanThreadTitle(raw: string | null | undefined, words?: string): string | null {
   const line = (raw ?? '').split('\n').map((l) => l.trim()).find(Boolean) ?? '';
   const text = line
     .replace(/^[#>*`_\s]+|[*`_\s]+$/g, '')
@@ -65,7 +67,7 @@ export function cleanThreadTitle(raw: string | null | undefined): string | null 
     .replace(/[\s.;:,|]+$/, '')
     .replace(/\s+/g, ' ')
     .trim();
-  if (text.length < 2) return null;
+  if (!screenTitle(text, { words })) return null;
   if (text.length <= MAX_THREAD_TITLE_CHARS) return text;
   const cut = text.slice(0, MAX_THREAD_TITLE_CHARS);
   const space = cut.lastIndexOf(' ');
@@ -77,12 +79,12 @@ export function cleanThreadTitle(raw: string | null | undefined): string | null 
  * `X Answered: yes`). No verdict found = a parse failure: keep the title,
  * answered is `false`.
  */
-export function parseRefineAnswer(raw: string | null | undefined): { title: string | null; answered: boolean } {
+export function parseRefineAnswer(raw: string | null | undefined, words?: string): { title: string | null; answered: boolean } {
   if (!raw) return { title: null, answered: false };
   const text = raw.replace(/\s+/g, ' ').trim();
   const m = /\banswered\s*:\s*(yes|no)\b/i.exec(text);
   const head = (m ? text.slice(0, m.index) : text).replace(/[\s|;,]+$/, '');
-  return { title: cleanThreadTitle(head), answered: m?.[1].toLowerCase() === 'yes' };
+  return { title: cleanThreadTitle(head, words), answered: m?.[1].toLowerCase() === 'yes' };
 }
 
 /** What the model sees as the current label: the client's fallback rule. */
@@ -139,14 +141,14 @@ function buildMessage(passage: string, question: string, answer?: string): strin
   ].join('\n');
 }
 
-function patchFor(job: TitleJob, entry: SessionThreadMeta, raw: string | null): SessionThreadMetaPatch {
+function patchFor(job: TitleJob, entry: SessionThreadMeta, raw: string | null, words: string): SessionThreadMetaPatch {
   if (job.kind === 'title') {
-    const title = cleanThreadTitle(raw);
+    const title = cleanThreadTitle(raw, words);
     return title
       ? { headId: job.headId, title, titleSource: 'ai', titleState: 'done' }
       : { headId: job.headId, titleState: 'failed' };
   }
-  const { title, answered } = parseRefineAnswer(raw);
+  const { title, answered } = parseRefineAnswer(raw, words);
   const patch: SessionThreadMetaPatch = { headId: job.headId, refinedAt: new Date().toISOString() };
   if (title) Object.assign(patch, { title, titleSource: 'ai', titleState: 'done' });
   else if (entry.titleState === 'pending') patch.titleState = 'failed';
@@ -175,7 +177,7 @@ async function runJob(job: TitleJob): Promise<void> {
       placeholder: placeholderTitle(passage, question),
       requirement: kind === 'refine' ? THREAD_REFINE_REQUIREMENT : THREAD_TITLE_REQUIREMENT,
     });
-    const patch = patchFor(job, entry, raw);
+    const patch = patchFor(job, entry, raw, `${passage}\n${question}`);
     await writeThreadMetaAsAi(sessionId, [patch]);
     const fields = {
       sessionId, headId, kind, durationMs: Date.now() - started,

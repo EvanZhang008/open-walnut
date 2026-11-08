@@ -8,7 +8,8 @@
  * through the same code.
  */
 
-import { CLOUD_MODE, IS_EPHEMERAL } from '../../constants.js'
+import { CLOUD_MODE, IS_DEMO, IS_EPHEMERAL } from '../../constants.js'
+import { demoIsolationInput, isDemoLiftedHost } from '../../providers/demo-remote-host.js'
 import { foundHostWaitingNote, foundHostWaits } from './found-hosts.js'
 import { log } from '../../logging/index.js'
 import { bus, EventNames } from '../event-bus.js'
@@ -33,9 +34,17 @@ import { isFollower } from '../server-role.js'
 
 export type ConfigHostDef = HostDef & { shell_setup?: string }
 
-/** An ephemeral test server refuses remote hosts by design (daemon-connection.ts ephemeralRemoteRefused). */
-export function remoteHostsOff(): boolean {
+/**
+ * An ephemeral test server refuses remote hosts by design (daemon-connection.ts
+ * ephemeralRemoteRefused), except a host the Demo runs a daemon of its own on
+ * (demo-remote-host.ts, remote-isolation.ts): name the host (and its config entry) to ask about that
+ * one. Without a host the answer is the server's, as for plugin jobs, which the
+ * Demo never runs on a remote host.
+ */
+export function remoteHostsOff(host?: string, def?: { transport?: string; cloud_box?: boolean }): boolean {
   if (hostFixtureMode() && fixtureEphemeral()) return true
+  // Off again once the Demo's stop began: no new connection gets a daemon from it.
+  if (host && isDemoLiftedHost(host, def, IS_DEMO)) return demoIsolationInput(IS_DEMO)?.closed === true
   return IS_EPHEMERAL && process.env.WALNUT_EPHEMERAL_REMOTE_HOSTS !== '1'
 }
 
@@ -53,7 +62,7 @@ export function hostStatusFrame(host: string, def: HostDef, now: number = Date.n
   const refusal = host === CLOUD_BOX_HOST_ALIAS && !state.connected ? cloudBoxRefusal() : null
   if (refusal) state = { ...state, phase: 'failed', error: refusal, retryInMs: undefined, kind: undefined }
   return buildHostStatus(host, def, state, warmup?.stateOf(host), now, getHostReadiness(host), {
-    off: remoteHostsOff(), ...(credentialRetryAt ? { credentialRetryAt } : {}),
+    off: remoteHostsOff(host, def), ...(credentialRetryAt ? { credentialRetryAt } : {}),
   })
 }
 
@@ -139,7 +148,7 @@ export async function connectHostNow(host: string, opts: { deadlineMs?: number; 
     pushHostFrame(host, def)
     return { httpStatus: 200, body: { ok: true, status }, outcome: r.connected ? 'connected' : 'failed', status }
   }
-  if (remoteHostsOff()) return refuse(409, REMOTE_OFF_NOTE, 'host_off')
+  if (remoteHostsOff(host, def)) return refuse(409, REMOTE_OFF_NOTE, 'host_off')
 
   clearDaemonFailureCache(host)
   resetHostAutofixAttempts(host)
@@ -231,7 +240,7 @@ export async function listDirsRoute(
     bumpFixtureCounter('listDirs', host)
     return { kind: 'fixture', connect: () => fixtureListConnection(host), state: (h) => fixtureConnectState(h) ?? getDaemonConnectState(h) }
   }
-  if (remoteHostsOff()) {
+  if (remoteHostsOff(host, IS_DEMO ? await configHostDef(host).catch(() => undefined) : undefined)) {
     return { kind: 'answer', result: { dirs: [], parent: dir, exists: true, hostError: { message: REMOTE_OFF_NOTE, kind: 'ephemeral', hint: '', retryable: false } } }
   }
   if (!CLOUD_MODE) return { kind: 'dial' }

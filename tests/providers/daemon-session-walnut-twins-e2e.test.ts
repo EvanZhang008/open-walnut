@@ -181,7 +181,7 @@ describe('every use of the shim dir in a twin is a known one', () => {
   // back, however it joins the strings. So every line naming GATEWAY_SHIM_DIR must be one of
   // these; a new use fails here until someone decides which rule it follows.
   const KNOWN: Array<[RegExp, string]> = [
-    [/^(const|var) GATEWAY_SHIM_DIR = path\.join\(DAEMON_DIR, 'bin'\);?$/, 'definition'],
+    [/^(const|var) GATEWAY_SHIM_DIR = path\.join\(path\.dirname\(GATEWAY_SOCK_PATH\), 'bin'\);?$/, 'definition'],
     [/path\.join\(GATEWAY_SHIM_DIR, /, 'a file in it'],
     [/fs\.(readdirSync|mkdirSync)\(GATEWAY_SHIM_DIR[,)]/, 'its own upkeep'],
     [/templateShimDir: GATEWAY_SHIM_DIR,$/, 'trigger checks (trigger-check-core.ts puts it first)'],

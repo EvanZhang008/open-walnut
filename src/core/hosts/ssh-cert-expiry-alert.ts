@@ -30,6 +30,7 @@ import { readJsonFile, writeJsonFile } from '../../utils/fs.js'
 import { SSH_CERT_EXPIRY, sshCertExpiredTurn } from '../human-inbox/walnut-letters/ssh-cert-expiry.js'
 import { letterOpKey } from '../human-inbox/walnut-letters/kind.js'
 import type { LetterLang } from '../human-inbox/walnut-letters/languages.js'
+import { sshAliasOptions, sshDestination, type SshTarget } from '../../providers/session-io.js'
 
 /** The first check after start. */
 export const FIRST_CHECK_MS = 2 * 60_000
@@ -359,6 +360,12 @@ export async function certLetterHandedOff(
   return !!(await readSignInOwner(nowMs, dir))
 }
 
+/** The argv of the fresh sign-in check: a new connection, never a master, running `true`. */
+export function certSignInArgs(t: SshTarget): string[] {
+  return ['-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=no', '-o', 'ConnectTimeout=15',
+    '-o', 'ControlMaster=no', '-o', 'ControlPath=none', ...sshAliasOptions(t), ...(t.port ? ['-p', String(t.port)] : []), sshDestination(t), 'true']
+}
+
 let running: CertExpiryAlert | null = null
 
 /** The running alert (host-auth-alert.ts joins its letter), or null. */
@@ -381,10 +388,9 @@ export async function startCertExpiryAlert(opts: { enabled?: boolean }): Promise
   const { CLOUD_BOX_HOST_ALIAS } = await import('./cloud-box-host.js')
   const { sshCertificateExpiry } = await import('../../providers/ssh-credential-evidence.js')
   const { execFile } = await import('node:child_process')
-  const targetOf = async (host: string): Promise<{ dest: string; port?: number } | null> => {
+  const targetOf = async (host: string): Promise<SshTarget | null> => {
     const t = linkTarget(host, await getConfig())
-    if (t.via === 'net' || !t.hostname) return null
-    return { dest: t.user ? `${t.user}@${t.hostname}` : t.hostname, ...(t.port ? { port: t.port } : {}) }
+    return t.via === 'net' || !t.hostname ? null : t
   }
   const alert = createCertExpiryAlert({
     hosts: async () => {
@@ -395,13 +401,12 @@ export async function startCertExpiryAlert(opts: { enabled?: boolean }): Promise
     },
     certExpiry: async (host) => {
       const t = await targetOf(host)
-      return t ? sshCertificateExpiry(t.dest) : null
+      return t ? sshCertificateExpiry(sshDestination(t)) : null
     },
     freshSignIn: async (host) => {
       const t = await targetOf(host)
       if (!t) return { ok: false, unknown: true }
-      const args = ['-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=no', '-o', 'ConnectTimeout=15',
-        '-o', 'ControlMaster=no', '-o', 'ControlPath=none', ...(t.port ? ['-p', String(t.port)] : []), t.dest, 'true']
+      const args = certSignInArgs(t)
       return new Promise((resolve) => {
         execFile('ssh', args, { timeout: 30_000, encoding: 'utf-8' }, (err, _stdout, stderr) => {
           if (!err) { resolve({ ok: true }); return }

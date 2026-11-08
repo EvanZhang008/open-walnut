@@ -148,6 +148,11 @@ describe('informational lines and the running fix', () => {
     expect(hostReadinessInfoNotes(status)).toEqual([fallback.message, 'Disk is almost full on devbox.']);
     expect(hostReadinessInfoNotes(undefined)).toEqual([]);
   });
+  it('a warning that is the same note with its host named first shows once, either way round', () => {
+    const named = { ...fallback, message: `devbox: ${fallback.message}` };
+    expect(hostReadinessInfoNotes(withReadiness({ problems: [named] }, { warnings: [fallback.message] }))).toEqual([named.message]);
+    expect(hostReadinessInfoNotes(withReadiness({ problems: [fallback] }, { warnings: [named.message] }))).toEqual([fallback.message]);
+  });
   it('reads the running fix with its server start time; junk reads as none', () => {
     expect(hostReadinessFixing(withReadiness({ fixing: { action: 'update-claude', text: 'Updating Claude Code', startedAt: 123 } })))
       .toEqual({ action: 'update-claude', text: 'Updating Claude Code', startedAt: 123 });

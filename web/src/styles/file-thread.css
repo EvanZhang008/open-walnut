@@ -56,6 +56,12 @@
   z-index: 2;
   width: 20px;
 }
+/* The rail (left 4px, 20px wide) would cover the source editor's first line numbers
+   and the first letters of the rendered views: they step right of it while it shows
+   (RAIL_SHOWN_ATTR, set by FileThreadLayer). */
+[data-file-rail] .cm-gutters { padding-left: 24px; }
+[data-file-rail] .fv-md-preview,
+[data-file-rail] .fv-wysiwyg-editor { padding-left: 32px; }
 .fv-file-rail > .thread-map-rail {
   border: 1px solid var(--border);
   border-radius: 6px;

@@ -19,7 +19,8 @@
  *
  * The box does not scroll: the file's own surface does (editor scroller, the
  * frame's document), so placement is re-measured on scroll, resize and DOM
- * change, and a passage scrolled past an edge keeps its card docked there.
+ * change. The card follows its passage in every state, and is not drawn while the
+ * passage is scrolled out of the view (placeFileCard, `away`).
  */
 import {
   forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type RefObject,
@@ -35,11 +36,14 @@ import {
 import { ThreadMarkTipLayer } from '@/components/sessions/ThreadStackFrame';
 import { fileOfParent, fileParentOf, findSamePassageThread } from '@/utils/thread-tree';
 import { pendingPageKey } from '@/utils/thread-stack-state';
+import { holdRailGutter, railGutterFileShown, releaseRailGutter } from '@/utils/rail-gutter';
 import type { SessionPinnedQuote } from '@/types/session';
+import { revealRange } from '@/utils/page-find-geometry';
+import { setReadingAnchor } from '@/utils/reading-place';
 import { buildTextIndex, locateQuote, quoteFromRange, quoteFromText, rangeForQuote, rangePieces, type QuoteLines, type QuoteSkip } from '@/utils/text-quote-anchor';
 import { DIFF_FILE_TEXT_SKIP } from '@/utils/diff-passage';
 import {
-  ASK_CHIP_HEIGHT, ASK_CHIP_WIDTH, askableBlockOf, blockQuoteOf, cardNaturalHeight, fileQuestionMarks, fileQuestionRows, lastLineRect, neighbourLines, placeAskChip, placeFileCard,
+  ASK_CHIP_HEIGHT, ASK_CHIP_WIDTH, askableBlockOf, blockQuoteOf, cardNaturalHeight, fileHeaderInset, fileQuestionMarks, fileQuestionRows, lastLineRect, neighbourLines, placeAskChip, placeFileCardBelow,
   rectInHost, toHostRect, type HostRect,
 } from '@/utils/file-thread';
 import { FileQuestionRail } from '@/components/common/FileQuestionRail';
@@ -137,6 +141,25 @@ const LOCATE_FILE = { ignoreWhitespace: true } as const;
  *  drawn unseen until its side is decided (file-thread.css). */
 const CARD_MEASURE_ATTR = 'data-card-measure';
 
+/** One passage's words, whatever the whitespace (a question read back may space them differently from its draft). */
+const squash = (t: string) => t.replace(/\s+/g, ' ').trim();
+
+/** How long a newly opened card holds its passage in place while the view reflows. */
+const PIN_PASSAGE_MS = 1500;
+
+/** Scroll the passage's own scroller so the passage moves up by `dy` (back to where it was). */
+function scrollPassageBy(range: Range, dy: number): boolean {
+  for (let el = range.startContainer.parentElement; el; el = el.parentElement) {
+    const oy = getComputedStyle(el).overflowY;
+    if ((oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight) {
+      const before = el.scrollTop;
+      el.scrollTop = before + dy;
+      return el.scrollTop !== before;
+    }
+  }
+  return false;
+}
+
 /** Where a code surface's text column starts (its line-number gutter ends
  *  there): the card never covers the gutter (2026-11-06: in the read-only code
  *  view it sat over the numbers with a highlighted glyph peeking past its edge). */
@@ -145,6 +168,11 @@ const CODE_COLUMN: Partial<Record<FileThreadSurface, string>> = {
   source: '.cm-content',
   diff: 'td.diff-code, .session-diff-rendered-main',
 };
+
+/** Set on the view while the question rail is shown over a surface that steps right of it. */
+export const RAIL_SHOWN_ATTR = 'data-file-rail';
+/** The surfaces whose first column the rail would cover: their text or numbers start at the left edge. */
+export const RAIL_CLEARED_SURFACES: ReadonlySet<FileThreadSurface> = new Set(['source', 'preview', 'wysiwyg']);
 
 /** The sticky bar at the top of the surface (the rail sits under it). */
 function stickyBarOf(root: HTMLElement, surface: FileThreadSurface): HTMLElement | null {
@@ -212,8 +240,8 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
   // The rail's rows: the same questions, the open card (else the target) current.
   const railCurrent = threads.openCardKey ?? threads.currentThreadKey;
   const railRows = useMemo(
-    () => fileQuestionRows(threads.tree, threads.hiddenKeys, threads.metaIndex, filePath, unsent, railCurrent, threads.unreadKeys),
-    [threads.tree, threads.hiddenKeys, threads.metaIndex, filePath, unsent, railCurrent, threads.unreadKeys],
+    () => fileQuestionRows(threads.tree, threads.hiddenKeys, threads.metaIndex, filePath, unsent, railCurrent, threads.unreadKeys, threads.derived.live),
+    [threads.tree, threads.hiddenKeys, threads.metaIndex, filePath, unsent, railCurrent, threads.unreadKeys, threads.derived.live],
   );
   // Where the rail sits: under the view's toolbar, at the left edge. The toolbar
   // is sticky, so when the view's PARENT scrolls (the HTML preview is a plain
@@ -248,6 +276,26 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
       if (raf) cancelAnimationFrame(raf);
     };
   }, [rootRef, surfaceNonce]);
+  // The rail sits at the left edge, over the first column of a surface that starts
+  // there: the view is marked so its line numbers or text step right of it (file-thread.css).
+  // The room is kept for as long as the surface can hold a question at all, never only while
+  // one exists: opening the first card (or a draft's send, which drops the draft before the
+  // tree reads its question back) must not move the text (2026-11-10 review: the card's rail
+  // chip shifted the text 12px right; 2026-11-09: a gutter that went for one frame reflowed a
+  // long file and the passage slid 250px).
+  const railClears = RAIL_CLEARED_SURFACES.has(surface);
+  // Released after a grace, never at once (utils/rail-gutter.ts): the layer can mount again
+  // (or read its question back) a moment later, and each flip reflows the text.
+  useEffect(() => {
+    const root = rootRef.current;
+    if (root) railGutterFileShown(root, RAIL_SHOWN_ATTR, filePath);
+  }, [rootRef, filePath]);
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root || !railClears) return;
+    holdRailGutter(root, RAIL_SHOWN_ATTR);
+    return () => releaseRailGutter(root, RAIL_SHOWN_ATTR, filePath);
+  }, [rootRef, railClears, filePath]);
   const openFromRail = useCallback((key: string) => {
     log.info('threads', 'file rail row opened', { sessionId, path: filePath, key });
     argsRef.current.threads.requestCard(key, 'file-rail');
@@ -391,6 +439,12 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
    *  the other side: it scrolls inside its max height instead. A close forgets
    *  it, and the next open measures again. */
   const needRef = useRef<{ exact: string | undefined; need: number } | null>(null);
+  /** Where the open card's passage sat when it opened, held for a moment against reflow. */
+  /** `exact` is the passage (a draft and the question its send makes are one passage); `top`
+   *  is null after the reader's own scroll or press, read again at the next measure. */
+  const pinRef = useRef<{ key: string; exact: string | undefined; top: number | null; until: number } | null>(null);
+  /** Where the selection sat when Ask here was pressed, before the card and its gutter reflowed the text. */
+  const armedPinRef = useRef<{ top: number; at: number } | null>(null);
   useEffect(() => {
     const layer = layerRef.current;
     const root = rootRef.current;
@@ -404,7 +458,7 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
       // Its height too, on a close only: a draft's first send moves the open
       // key to a question the tree has not read back yet (no `mine` for a
       // moment), and it must come back on the side it opened on.
-      if (!openKey) { scrolledForRef.current = null; needRef.current = null; }
+      if (!openKey) { scrolledForRef.current = null; needRef.current = null; pinRef.current = null; }
       layer.removeAttribute(CARD_MEASURE_ATTR);
       set({ path: filePath, el: layer, place: null });
       return;
@@ -413,8 +467,21 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
     // quote yet is the same card.)
     if (needRef.current && mine.quote && needRef.current.exact !== mine.quote.exact) needRef.current = null;
     const inFrame = argsRef.current.surface === 'html';
+    // The passage's range, looked up once per change of the text, a miss included: the lookup
+    // walks the whole document (its text index), and this runs every scroll frame (2026-11-10
+    // review: a quote that is not found was looked for again on every frame).
+    let textGen = 0;
+    let found: { b: Element; gen: number; range: Range | null } | null = null;
+    const passageRange = (): Range | null => {
+      const b = body();
+      if (!b || !mine.quote) return null;
+      if (found && found.b === b && found.gen === textGen && (!found.range || found.range.startContainer.isConnected)) return found.range;
+      const range = rangeForQuote(b, mine.quote, skip, LOCATE_FILE);
+      found = { b, gen: textGen, range };
+      return range;
+    };
     /** The passage's box (and its last line's bottom) in the frame's or the top viewport. */
-    const passage = (): { whole: DOMRect; bottom: number; frame: DOMRect | null; bringOn: () => void } | null => {
+    const passage = (): { whole: DOMRect; bottom: number; frame: DOMRect | null; bringOn: () => void; nudge?: (dy: number) => boolean } | null => {
       if (inFrame) {
         const key = cardKeyOf(mine.quote);
         const r = (key && group?.rects(key)?.r) || [];
@@ -422,18 +489,33 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
         const fb = channel?.frameBox() ?? null;
         return whole && fb && key ? { whole, bottom: r[r.length - 1]!.bottom, frame: fb, bringOn: () => group?.reveal(key) } : null;
       }
-      const b = body();
-      const range = b && mine.quote ? rangeForQuote(b, mine.quote, skip, LOCATE_FILE) : null;
+      const range = passageRange();
       if (!range) return null;
       const rects = range.getClientRects();
       const whole = range.getBoundingClientRect();
       const last = rects.length ? rects[rects.length - 1] : whole;
-      return { whole, bottom: last.bottom, frame: null, bringOn: () => range.startContainer.parentElement?.scrollIntoView({ block: 'center' }) };
+      return { whole, bottom: last.bottom, frame: null, bringOn: () => revealRange(range), nudge: (dy) => scrollPassageBy(range, dy) };
     };
+    // The passage is the reader's place while its card is open: a width change keeps it
+    // where it is (utils/reading-place.ts, FileContentView keeps the place).
+    let anchorRange: Range | null = null;
+    if (!inFrame) {
+      setReadingAnchor(root, () => {
+        if (!anchorRange || !anchorRange.startContainer.isConnected) anchorRange = passageRange();
+        const r = anchorRange?.getBoundingClientRect();
+        return r && (r.width || r.height) ? r.top : null;
+      });
+    }
+    /** The passage was found on this surface since the card opened: a miss now means its
+     *  text left the DOM (the source editor draws only the lines near its viewport), so it
+     *  scrolled away and the card is not drawn; it never docks over other lines. */
+    let seenPassage = false;
     /** `canRender`: false inside the effect itself, where no render may run. */
     const measure = (canRender: boolean) => {
       const hostBox = root.getBoundingClientRect();
       const host = { width: hostBox.width, height: hostBox.height };
+      // The card's box is the part under the file header (the bar, the comments chip).
+      const inset = fileHeaderInset(root, stickyBarOf(root, argsRef.current.surface));
       const p = passage();
       // The HTML preview's page reports its passage's place a moment after the
       // card asks (a message from its own origin): until then the card waits
@@ -442,7 +524,8 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
       /** Drawn unseen until `until`, then measured again. */
       const waitUnseen = (until: number) => {
         layer.setAttribute(CARD_MEASURE_ATTR, '');
-        set({ path: filePath, el: layer, place: placeFileCard({ top: 8, bottom: 8, left: 0, right: host.width }, host) });
+        // Under the header like every placed card, so the height it measures is the room it gets.
+        set({ path: filePath, el: layer, place: placeFileCardBelow({ top: inset + 8, bottom: inset + 8, left: 0, right: host.width }, host, inset) });
         if (!waitTimer) waitTimer = window.setTimeout(() => { waitTimer = 0; if (live) measure(true); }, Math.max(0, until - performance.now()));
       };
       if (!p && inFrame && mine.quote && cardInPage.current !== 'missing' && performance.now() < waitUntil) {
@@ -450,13 +533,17 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
         return;
       }
       let anchor: HostRect;
+      if (p) seenPassage = true;
+      const lost = !p && seenPassage;
       if (p) {
         const { whole } = p;
         anchor = toHostRect(new DOMRect(whole.left, whole.top, whole.width, p.bottom - whole.top), hostBox, p.frame);
-        // First time this card opens here: bring its passage on screen.
+        // First time this card opens here: bring its passage on screen (under the header).
         if (scrolledForRef.current !== openKey) {
           scrolledForRef.current = openKey;
-          if (!rectInHost(anchor, host, 24)) {
+          if (pinRef.current && mine.quote?.exact && pinRef.current.exact && squash(pinRef.current.exact) !== squash(mine.quote.exact)) pinRef.current = null;
+          const below = { ...anchor, top: anchor.top - inset, bottom: anchor.bottom - inset };
+          if (!rectInHost(below, { width: host.width, height: host.height - inset }, 24)) {
             p.bringOn();
             // The page scrolls itself and reports later: wait for that report.
             if (inFrame) revealUntil = performance.now() + FRAME_RECTS_WAIT_MS;
@@ -469,13 +556,39 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
           if (!rectInHost(anchor, host, 24) && performance.now() < revealUntil) { waitUnseen(revealUntil); return; }
           revealUntil = 0;
         }
+        // Then keep it where it is while the view settles: the first question of a file
+        // adds its gutter and the text reflows, and WebKit has no scroll anchoring, so
+        // the passage slid away (2026-11-09: Ask here on line 396 left it under the card).
+        // The send of the first question moves it again (2026-11-09: the draft became a
+        // question and the passage slid 250px), so the hold starts over for each new key of
+        // the same passage, back to where the reader last left it.
+        const top = whole.top - hostBox.top;
+        const exact = mine.quote?.exact;
+        const pin = pinRef.current;
+        if (!pin || (exact && pin.exact && squash(pin.exact) !== squash(exact))) {
+          // The text may have reflowed already (the gutter mounts with the card): hold the
+          // passage where the reader selected it, when Ask here said where that was.
+          const armed = armedPinRef.current;
+          armedPinRef.current = null;
+          const at = armed && Date.now() - armed.at < PIN_PASSAGE_MS ? armed.top : top;
+          pinRef.current = { key: openKey, exact, top: at, until: Date.now() + PIN_PASSAGE_MS };
+          if (Math.abs(top - at) > 2 && p.nudge?.(top - at)) return later();
+        } else {
+          if (pin.key !== openKey) { pin.key = openKey; pin.until = Date.now() + PIN_PASSAGE_MS; }
+          pin.exact ??= exact;
+          if (pin.top === null) pin.top = top;
+          else if (Date.now() < pin.until && Math.abs(top - pin.top) > 2 && p.nudge?.(top - pin.top)) return later();
+        }
       } else {
-        anchor = { top: 8, bottom: 8, left: 0, right: host.width };
+        anchor = { top: inset + 8, bottom: inset + 8, left: 0, right: host.width };
       }
       const col = CODE_COLUMN[argsRef.current.surface];
       const colEl = col ? root.querySelector(col) : null;
       const minLeft = colEl ? colEl.getBoundingClientRect().left - hostBox.left : undefined;
-      const placeFor = (need?: number) => ({ path: filePath, el: layer, place: placeFileCard(anchor, host, undefined, minLeft, need) });
+      const placeFor = (need?: number) => {
+        const place = placeFileCardBelow(anchor, host, inset, minLeft, need);
+        return { path: filePath, el: layer, place: lost ? { ...place, away: true } : place };
+      };
       const kept = needRef.current?.need;
       if (kept !== undefined) { set(placeFor(kept)); layer.removeAttribute(CARD_MEASURE_ATTR); return; }
       // Not measured yet: the side waits for the card's height. A place without
@@ -506,7 +619,9 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
     measure(false);
     // While waiting for the card, each mutation is looked at at once (a
     // microtask, before paint), so the card is placed in the frame it first shows in.
-    const mo = new MutationObserver(() => {
+    const mo = new MutationObserver((records) => {
+      // The text may have changed (not only the card's own words): the passage is looked up again.
+      if (records.some((r) => !layer.contains(r.target))) textGen++;
       if (live && !needRef.current && layer.querySelector(':scope > .thread-card')) measure(true);
       else later();
     });
@@ -522,6 +637,15 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
     if (textBody) ro?.observe(textBody);
     document.fonts?.addEventListener?.('loadingdone', later);
     root.addEventListener('scroll', later, true);
+    // The reader's own scroll or press ends the hold at once.
+    // A press or a wheel on the card itself (its Send, its own scroll) is not the reader moving the text.
+    const letGo = (e: Event) => {
+      if (!pinRef.current || (e.target instanceof Node && layer.contains(e.target))) return;
+      pinRef.current.until = 0;
+      pinRef.current.top = null;
+    };
+    root.addEventListener('wheel', letGo, { passive: true, capture: true });
+    root.addEventListener('pointerdown', letGo, true);
     window.addEventListener('resize', later);
     // The page reports its passage's rects (on paint, its scroll and its resize),
     // and its text (a passage it does not hold ends the card's wait at once).
@@ -539,6 +663,8 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
       mo.disconnect();
       ro?.disconnect();
       root.removeEventListener('scroll', later, true);
+      root.removeEventListener('wheel', letGo, { capture: true });
+      root.removeEventListener('pointerdown', letGo, true);
       window.removeEventListener('resize', later);
       document.fonts?.removeEventListener?.('loadingdone', later);
       off?.();
@@ -546,6 +672,7 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
       if (raf) cancelAnimationFrame(raf);
       if (waitTimer) clearTimeout(waitTimer);
       layer.removeAttribute(CARD_MEASURE_ATTR);
+      if (!inFrame) setReadingAnchor(root, null);
     };
   }, [openKey, mine?.quote?.exact, filePath, surfaceNonce, body, skip, rootRef, channel, group]);
   useEffect(() => () => { argsRef.current.threads.setFileCardHost(null); }, []);
@@ -586,6 +713,15 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
     return quoteFromRange(buildTextIndex(b, skip), range) ?? 'no-text';
   }, [body, skip, channel]);
   /** The selection is taken: the page clears its own (the bridge), the top document here. */
+  /** Note where a passage sits now, for the card about to open on it (see pinRef). */
+  const armPin = useCallback((range: Range | null | undefined) => {
+    const root = rootRef.current;
+    if (!range || range.collapsed || !root) return;
+    const r = range.getBoundingClientRect();
+    if (!r.width && !r.height) return;
+    armedPinRef.current = { top: r.top - root.getBoundingClientRect().top, at: Date.now() };
+  }, [rootRef]);
+
   const clearSelection = useCallback((inFrame: boolean) => {
     if (inFrame) channel?.send({ type: 'clear-selection' });
     else document.getSelection()?.removeAllRanges();
@@ -604,15 +740,21 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
         });
         return { ok: false, reason: quote };
       }
+      if (!inFrame) {
+        const sel = document.getSelection();
+        armPin(given && !given.collapsed ? given : sel && sel.rangeCount ? sel.getRangeAt(0) : null);
+      }
       clearSelection(inFrame);
       return askQuote(quote, line, 'file-selection');
     },
     askPassage: ({ quote, line, inFrame }) => {
+      const live = document.getSelection();
+      if (!inFrame && live && live.rangeCount && rootRef.current?.contains(live.getRangeAt(0).commonAncestorContainer)) armPin(live.getRangeAt(0));
       document.getSelection()?.removeAllRanges();
       if (inFrame) clearSelection(true);
       return askQuote(quote, line, argsRef.current.surface === 'diff' ? 'diff-selection' : 'file-selection');
     },
-  }), [askQuote, readQuote, clearSelection, sessionId, filePath]);
+  }), [askQuote, readQuote, clearSelection, armPin, rootRef, sessionId, filePath]);
 
   // ── The inline Ask on the block under the pointer ──
   const [hover, setHover] = useState<{ el: Element; rect: HostRect; spot: { top: number; left: number } } | null>(null);
@@ -626,6 +768,12 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
     const pick = rafThrottle<{ x: number; y: number }>(({ x, y }) => {
       const b = body();
       if (!b) { if (hoverRef.current) setHover(null); return; }
+      // While words are selected the selection's own menu offers Ask here.
+      const sel = document.getSelection();
+      if (sel && !sel.isCollapsed && sel.rangeCount && b.contains(sel.getRangeAt(0).commonAncestorContainer)) {
+        if (hoverRef.current) setHover(null);
+        return;
+      }
       const target = document.elementFromPoint(x, y);
       const block = askableBlockOf(target, b);
       const hostBox = root.getBoundingClientRect();
@@ -642,7 +790,15 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
         if (!inBridge) setHover(null);
         return;
       }
-      const rect = toHostRect(block.getBoundingClientRect(), hostBox, null);
+      // The button sits at the block's top, kept inside the text's own scroller: a block taller
+      // than the view (a file of lines with no blank line between them is one paragraph) put it
+      // at the layer's top, over the file header's buttons (2026-11-09, WebKit review).
+      let clip: Element | null = b;
+      while (clip && clip !== root && !/(auto|scroll)/.test(getComputedStyle(clip).overflowY)) clip = clip.parentElement;
+      const clipTop = (clip ?? root).getBoundingClientRect().top - hostBox.top;
+      const raw = toHostRect(block.getBoundingClientRect(), hostBox, null);
+      if (raw.bottom - 20 < clipTop) { if (hoverRef.current) setHover(null); return; }
+      const rect = { ...raw, top: Math.max(raw.top, clipTop) };
       const prev = hoverRef.current;
       if (prev && prev.el === block && Math.abs(prev.rect.top - rect.top) < 1 && Math.abs(prev.rect.right - rect.right) < 1) return;
       const line = lastLineRect(block);

@@ -12,7 +12,10 @@
 import { describe, expect, it } from 'vitest';
 import { splitLeadingRiders, splitRiders, splitTrailingRiders, withoutLeadingRiders } from '@open-walnut/history-walnut-riders';
 import { typedUserText } from '@open-walnut/history-injected-banner';
+import { isHistoryUserTurn } from '../../src/lib/history-turn-window';
+import { personTextOf } from '../../src/core/sessions/transcript-sent-by';
 import { buildDigestText } from '../../src/core/org/org-store';
+import { questionBodyOf } from '@/utils/thread-card';
 import { buildPlaceNoticeText } from '../../src/core/sessions/place-notice';
 import { statusText } from '../../src/core/sessions/status-push';
 import { createEnvelopeKit } from '../../src/core/peers/envelope-kit';
@@ -94,6 +97,7 @@ describe('splitLeadingRiders: the rows Walnut writes', () => {
 describe('splitLeadingRiders: unsafe shapes return null and lose nothing', () => {
   it('an outcome outside the closed list', () => {
     expect(splitLeadingRiders(row([notice('some-other')], 'Words.'))).toBeNull();
+    expect(splitLeadingRiders(row([notice('future-outcome')], 'Words.'))).toBeNull();
     expect(splitLeadingRiders(row([notice('answered')], 'Words.'))).toBeNull();
   });
 
@@ -193,6 +197,32 @@ describe('typedUserText: one body for previews, counts, thread titles and text d
     expect(typedUserText(row([moved, appState], 'The words.'))).toBe('The words.');
     // Notes the queue put after the words come off too.
     expect(typedUserText(`The words.\n\n${org}\n\n${moved}`)).toBe('The words.');
+  });
+
+  it('a followed task notice never becomes the question text after retry or reload', () => {
+    const words = 'About `/repo/guide.md:63`:\n\n> selected passage\n\nWhy keep the question?';
+    // Every SubtaskNoticeKind (envelope-kit.ts) a followed task's notice carries.
+    for (const kind of ['stopped', 'blocked', 'waiting', 'completed', 'error'] as const) {
+      const child = kit.buildSubtaskNotification({
+        child: { taskId: 'task-child', title: 'A related task', sessionId: 'child-session' },
+        kind,
+        lastMessage: { text: 'Background result that is not this question.' },
+      });
+      const stored = row([org, child], words);
+      expect(typedUserText(stored), kind).toBe(words);
+      expect(questionBodyOf(typedUserText(stored)), kind).toBe('Why keep the question?');
+      expect(stored).toContain('Background result that is not this question.');
+      expect(splitLeadingRiders(child), kind).toBeNull();
+    }
+  });
+
+  it('a task notice before a peer or trigger stays a non-person message', () => {
+    for (const envelope of [peer, trigger]) {
+      const text = row([notice('stopped')], envelope);
+      expect(personTextOf(text)).toBeUndefined();
+      expect(isHistoryUserTurn({ role: 'user', text })).toBe(false);
+      expect(typedUserText(text)).toBe(envelope);
+    }
   });
 
   it('an old row with no riders reads exactly as before', () => {

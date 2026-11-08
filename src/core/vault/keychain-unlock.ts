@@ -14,6 +14,7 @@
  */
 import os from 'node:os'
 import { runVaultHelper } from './child-run.js'
+import { IS_DEMO } from '../../constants.js'
 import { readKeychainSecret } from './keychain-secret.js'
 
 export const KEYCHAIN_SERVICE = 'walnut-vault-master'
@@ -33,7 +34,7 @@ export function keychainForcedForTest(): boolean {
 }
 
 export function keychainAvailable(): boolean {
-  return (platformOverride ?? process.platform) === 'darwin'
+  return !IS_DEMO && (platformOverride ?? process.platform) === 'darwin'
 }
 
 function account(): string {

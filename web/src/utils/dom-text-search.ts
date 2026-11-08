@@ -15,6 +15,7 @@
  */
 
 import { keepWindowHighlightRepaints } from './highlight-repaint';
+import { revealRange } from './page-find-geometry';
 
 /** Highlight registry names. Static because ::highlight(<name>) CSS rules
  *  cannot be parameterized — one search surface owns them at a time, which
@@ -328,6 +329,7 @@ export class DomSearchController {
       this.win.scrollTo({ top: rect.top + this.win.scrollY - this.win.innerHeight / 2 });
       return;
     }
-    (r.startContainer.parentElement ?? null)?.scrollIntoView({ block: 'center' });
+    // The match itself, never its parent: a long paragraph centered by its element jumps away (revealRange).
+    revealRange(r);
   }
 }

@@ -169,16 +169,9 @@ test('git worktree: each task gets its own, the session runs in it, a clean one 
   await openHome(page)
 
   // ── Task 1: the repo root ──
-  // No folder yet: More offers the option, disabled, and says why.
+  // A fresh draft starts in the home folder (draft-home-default.ts), so there is
+  // no "no folder" state to show here any more.
   const draft = await openDraft(page)
-  const noFolderMenu = await openDraftSettings(draft)
-  const noFolderItem = noFolderMenu.getByTestId('draft-menu-workspace')
-  await expect(noFolderItem).toBeDisabled()
-  await expect(noFolderItem).toContainText('Isolated workspace')
-  await expect(noFolderItem.getByTestId('draft-menu-workspace-hint')).toHaveText('Pick a folder first')
-  await shot(page, 'draft-more-no-folder', noFolderMenu, 8)
-  await page.keyboard.press('Escape')
-  await expect(draftTaskMenu(page)).toHaveCount(0)
   await pickDraftFolder(page, draft, repo)
   await expect(draft.getByTestId('draft-workspace-row')).toHaveCount(0)
   const offMenu = await openDraftSettings(draft)

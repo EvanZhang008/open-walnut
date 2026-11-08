@@ -129,6 +129,9 @@ export const PROMPT_BLOCKS: readonly PromptBlockDef[] = [
   { id: 'user-profile', title: 'Your user', part: 'context', kind: 'user', cap: 6_000,
     holds: '',
     why: 'Versioned. USER.md capped at USER_CHAR_BUDGET (4,000 characters) with a version tag per line; measured 4.6 K.' },
+  { id: 'demo', title: 'Walnut Demo', part: 'context', kind: 'rules', cap: 400,
+    holds: '',
+    why: 'Only in the shared Demo (IS_DEMO): the walnut CLI for its API and the generation header a direct request needs; measured 215.' },
   // ── MCP server instructions (src/mcp/instructions.ts): Claude Code puts them in the system prompt too ──
   { id: 'mcp-instructions', title: 'Walnut MCP instructions', part: 'mcp', kind: 'rules', cap: 3_000,
     holds: '',

@@ -22,6 +22,7 @@ import { answerFoundHost } from '@/api/hosts';
 import { useHostActions, RETRY_FAILED_TEXT, CHECK_FAILED_TEXT, type HostActions } from '@/hooks/useHostActions';
 import { HostFailureText } from '@/components/hosts/HostFailureText';
 import { HostCommands } from '@/components/hosts/HostCommands';
+import { demoHostMessage } from '@/utils/demo-generation';
 import { InlineCodeText } from '@/components/common/InlineCodeText';
 import { StableButton } from '@/components/common/HostProblemRows';
 import { HostStatusDot } from './HostStatusDot';
@@ -275,9 +276,9 @@ export function HostNote({ hostKey, label, live, path, dot, onRelist, onOpenSett
     return (
       <div className="sps-host-note" data-host={hostKey} data-type="readiness" data-kind={note.problem.kind}>
         <div className="sps-host-note-head">
-          <HostStatusDot dot={dot ?? { kind: 'warn', title: `${label}: ${note.problem.message}` }} host={hostKey} />
+          <HostStatusDot dot={dot ?? { kind: 'warn', title: `${label}: ${demoHostMessage(note.problem.message, note.problem.commands)}` }} host={hostKey} />
           <div className="sps-host-note-body">
-            <span className="sps-host-note-text"><InlineCodeText text={note.problem.message} /></span>
+            <span className="sps-host-note-text"><InlineCodeText text={demoHostMessage(note.problem.message, note.problem.commands)} /></span>
             <HostCommands commands={note.problem.commands} />
           </div>
         </div>

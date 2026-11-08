@@ -7,9 +7,10 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { noteLineCarries } from '../providers/batch-uuid.js';
 import { log } from '../logging/index.js';
-import { fateOf, isPhoneMessageId, noteDelivered, setFate } from './relay-fates.js';
-import { getStore, mutateStore, type QueuedMessage, type QueueStore } from './session-queue-store.js';
+import { fateOf, isPhoneMessageId, noteDelivered, setFate, STOP_PARKED_REASON } from './relay-fates.js';
+import { compareEnqueueOrder, getStore, mutateStore, type QueuedMessage, type QueueStore } from './session-queue-store.js';
 import { leadsWithNotice, markNoticeDelivering } from './sessions/instruction-notice-flight.js';
 
 /**
@@ -18,35 +19,115 @@ import { leadsWithNotice, markNoticeDelivering } from './sessions/instruction-no
  * must not be delivered again once the CLI says it has it. `ran: false` (a
  * cancelled line): a resend of the row is a new line, not this one again.
  */
-export async function removeTaken(sessionId: string, ids: string[], opts?: { ran?: boolean }): Promise<void> {
-  if (ids.length === 0) return;
+export async function removeTaken(sessionId: string, ids: string[], opts?: { ran?: boolean; rows?: QueuedMessage[]; preserveParked?: boolean; confirmedCancelled?: boolean }): Promise<QueuedMessage[]> {
+  if (ids.length === 0) return [];
   const idSet = new Set(ids);
   const ran = opts?.ran !== false;
   const found = await mutateStore((s) => {
     const queue = s.queues[sessionId];
     if (!queue) return false;
-    const gone = queue.filter((m) => idSet.has(m.id));
-    s.queues[sessionId] = queue.filter((m) => !idSet.has(m.id));
+    const matches = (m: QueuedMessage) => idSet.has(m.id)
+      && !(m.status === 'parked' && (!ran && m.parkedReason === STOP_PARKED_REASON || opts?.preserveParked))
+      && (!opts?.rows || opts.rows.some((r) => r.id === m.id && r.lineUuid === m.lineUuid));
+    if (!ran && opts?.confirmedCancelled) {
+      for (const m of queue) {
+        if (m.status !== 'parked' || m.parkedReason !== STOP_PARKED_REASON || !idSet.has(m.id)
+          || opts?.rows && !opts.rows.some((r) => r.id === m.id && r.lineUuid === m.lineUuid)) continue;
+        // The CLI cancelled this UUID; an explicit Retry must be a new line.
+        m.lineUuid = randomUUID();
+        m.lineTries = 0;
+        delete m.lineTracked;
+        delete m.lineInDoubt;
+      }
+    }
+    const gone = queue.filter(matches);
+    s.queues[sessionId] = queue.filter((m) => !matches(m));
     for (const m of gone) {
       // A cancelled line never ran: sending its text again is a new line.
       if (ran) noteSettledLine(s, m);
-      // A relayed phone message: ran here, or will never run anywhere (relay-fates.ts).
-      else if (fateOf(s, m.id) || isPhoneMessageId(m.id)) setFate(s, m.id, 'removed');
+      else {
+        // Capture only an exact registered line, atomically with its removal.
+        if (m.lineUuid && opts?.rows?.some((r) => r.id === m.id && r.lineUuid === m.lineUuid)) {
+          const sessions = s.cancelled ??= {};
+          const lines = sessions[sessionId] ??= {};
+          const snapshot = lines[m.lineUuid] ??= { rows: [] };
+          if (!snapshot.rows.some((r) => r.id === m.id)) snapshot.rows.push({ ...m });
+        }
+        if (fateOf(s, m.id) || isPhoneMessageId(m.id)) setFate(s, m.id, 'removed');
+      }
     }
     if (ran) noteDelivered(s, gone);
     // Inside the lock: no other line gets a notice until this one is recorded as told.
     if (ran && gone.some((m) => leadsWithNotice(m.message))) markNoticeDelivering(sessionId);
     if (s.queues[sessionId].length === 0) delete s.queues[sessionId];
     if (gone.length === 0) return false;
-    return ran ? gone.map((m) => m.message) : [];
-  });
-  if (found === false) return;
-  log.session.debug('taken messages removed from queue', { sessionId, count: ids.length });
+    return gone;
+  }, !ran, !ran);
+  if (found === false) return [];
+  log.session.debug('taken messages removed from queue', { sessionId, count: found.length });
   // The CLI took a line led by the instruction notice: the session has now been told its lines.
-  if (found.some(leadsWithNotice)) {
+  const messages = ran ? found.map((m) => m.message) : [];
+  if (messages.some(leadsWithNotice)) {
     const { noteInstructionNoticeDelivered } = await import('./sessions/instruction-notice.js');
-    await noteInstructionNoticeDelivered(sessionId, found);
+    await noteInstructionNoticeDelivered(sessionId, messages);
   }
+  return found;
+}
+
+/** Sessions with durable cancellation evidence; no history scan or delivery. */
+export async function cancelledSessionIds(): Promise<string[]> {
+  return Object.keys((await getStore()).cancelled ?? {});
+}
+
+/** Read cancelled rows without making them pending or starting delivery. */
+export async function cancelledRows(sessionId: string, uuid?: string): Promise<QueuedMessage[]> {
+  const lines = (await getStore()).cancelled?.[sessionId];
+  const rows = uuid ? lines?.[uuid]?.rows ?? [] : Object.values(lines ?? {}).flatMap((line) => line.rows);
+  return rows.map((r) => ({ ...r }));
+}
+
+/** Repair only the durable cancellation snapshot (or a still-present exact row), never a RAM claim. */
+export async function repairCancelledTaken(sessionId: string, rows: QueuedMessage[], answered: boolean, _cancelledDelete: boolean, opts?: { pending?: boolean }): Promise<void> {
+  const restored = await mutateStore((s) => {
+    const queue = s.queues[sessionId] ?? [];
+    const lines = s.cancelled?.[sessionId];
+    const taken = new Set<string>();
+    for (const requested of rows) {
+      const snapshot = requested.lineUuid ? lines?.[requested.lineUuid] : undefined;
+      const saved = snapshot?.rows.find((r) => r.id === requested.id && r.lineUuid === requested.lineUuid);
+      const current = queue.find((m) => m.id === requested.id);
+      // A reused id with another line belongs to its new delivery, not this cancellation.
+      if (current && current.lineUuid !== requested.lineUuid) continue;
+      const captured = saved ?? current;
+      if (!captured) continue;
+      if (answered) {
+        if (current) queue.splice(queue.indexOf(current), 1);
+        noteSettledLine(s, captured);
+      } else if (opts?.pending) {
+        // A dead holder never answered it: pending under its own uuid, in doubt, so the delivery asks again.
+        const row = current ?? { ...captured };
+        if (row.status !== 'parked') { row.status = 'pending'; if (row.lineUuid) row.lineInDoubt = true; }
+        // In its enqueue place: an older line goes out before rows sent after it.
+        if (!current) { const at = queue.findIndex((q) => compareEnqueueOrder(row, q) < 0); queue.splice(at < 0 ? queue.length : at, 0, row); }
+      } else {
+        if (!current) queue.push({ ...captured, status: 'processing' });
+        else current.status = 'processing';
+        if (captured.lineUuid) taken.add(captured.lineUuid);
+      }
+      // The exact cancelled row may say removed; the CLI's taken word outranks it.
+      if (isPhoneMessageId(captured.id) || fateOf(s, captured.id)) setFate(s, captured.id, 'taken');
+      if (snapshot) {
+        snapshot.rows = snapshot.rows.filter((r) => r.id !== captured.id);
+        if (!snapshot.rows.length) delete lines![requested.lineUuid!];
+      }
+    }
+    if (queue.length) s.queues[sessionId] = queue;
+    else delete s.queues[sessionId];
+    if (lines && !Object.keys(lines).length) delete s.cancelled![sessionId];
+    if (s.cancelled && !Object.keys(s.cancelled).length) delete s.cancelled;
+    return [...taken].map((uuid) => ({ uuid, ids: queue.filter((r) => r.status === 'processing' && r.lineUuid === uuid).map((r) => r.id) }));
+  }, true, true);
+  for (const line of restored) noteLineCarries(sessionId, line.uuid, line.ids);
 }
 
 /**

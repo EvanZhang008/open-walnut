@@ -62,7 +62,7 @@ const input = (over: Partial<ClaudeCheckInput> = {}): ClaudeCheckInput => ({
 })
 
 describe('version floor', () => {
-  const ck = createClaudeCheck({ env: {} })
+  const ck = createClaudeCheck({ env: {}, platform: 'linux' })
 
   it('compares major.minor.patch numerically and ignores a pre-release tag', () => {
     expect(ck.versionAtLeast('2.1.280', '2.1.280')).toBe(true)
@@ -106,7 +106,7 @@ describe('sign-in: `claude auth status --json` (2.1.41 and newer)', () => {
   })
 
   it('maps every authMethod the CLI prints to a plain phrase', () => {
-    const ck = createClaudeCheck({ env: {} })
+    const ck = createClaudeCheck({ env: {}, platform: 'linux' })
     const detail = (authMethod: string, apiProvider = 'firstParty') => ck.parseAuthStatus(JSON.stringify({ loggedIn: true, authMethod, apiProvider }))?.detail
     expect(detail('third_party', 'vertex')).toBe('Vertex AI')
     expect(detail('third_party', 'foundry')).toBe('Microsoft Foundry')
@@ -326,6 +326,17 @@ describe('sign-in on macOS: the keychain is asked whether an item exists, never 
     expect(blind.calls).toHaveLength(0)
   })
 
+  it('uses the secure storage override even when it explicitly selects the default namespace', async () => {
+    const defaults = mac({ env: { CLAUDE_CONFIG_DIR: '/demo/.claude', CLAUDE_SECURESTORAGE_CONFIG_DIR: '' }, sha: true, items: ['Claude Code-credentials'] })
+    expect(await createClaudeCheck(defaults.deps).check(input())).toMatchObject({ auth: 'ok' })
+    expect(defaults.calls[0].args).toContain('Claude Code-credentials')
+    const dir = '/secure/.claude'
+    const service = 'Claude Code-credentials-' + sha256Hex(dir).slice(0, 8)
+    const custom = mac({ env: { CLAUDE_CONFIG_DIR: '/demo/.claude', CLAUDE_SECURESTORAGE_CONFIG_DIR: dir }, sha: true, items: [service] })
+    expect(await createClaudeCheck(custom.deps).check(input())).toMatchObject({ auth: 'ok' })
+    expect(custom.calls[0].args).toContain(service)
+  })
+
   it('an older CLI on a Mac also reads the keychain item instead of guessing', async () => {
     const { deps, calls } = mac({ items: ['Claude Code-credentials'] })
     expect(await createClaudeCheck(deps).check(input({ version: '2.1.30' }))).toMatchObject({ auth: 'ok' })
@@ -481,6 +492,18 @@ describe('install method', () => {
 })
 
 describe('injection into the source daemon twin', () => {
+  it('a serialized checker uses the running host platform, never the build platform', async () => {
+    const source = createClaudeCheck.toString();
+    expect(source).not.toContain('process.platform');
+    const copy = new Function('return ' + source)() as typeof createClaudeCheck;
+    const { deps, calls } = fake({ platform: 'linux' });
+    expect(await copy(deps).check(input())).toMatchObject({ auth: 'not-logged-in' });
+    expect(calls.map(c => c.file)).toEqual([NATIVE]);
+    const root = path.resolve(import.meta.dirname, '../../src/providers');
+    expect(fs.readFileSync(path.join(root, 'daemon-standalone.ts'), 'utf8')).toMatch(/claudeCheck: createClaudeCheck\(\{[^}]*platform: process\.platform/);
+    expect(fs.readFileSync(path.join(root, 'daemon-source.ts'), 'utf8')).toMatch(/claudeCheck: \(__CREATE_CLAUDE_CHECK__\)\(\{[^}]*platform: process\.platform/);
+  });
+
   it('toString() carries no module-scope or bundler identifiers, and a re-materialized copy answers the same', async () => {
     const src = createClaudeCheck.toString()
     for (const re of [/\b__name\b/, /\b__spreadValues\b/, /\brequire\s*\(/, /\bimport\s*\(/, /\bexports\./]) expect(src).not.toMatch(re)
@@ -502,6 +525,9 @@ describe('injection into the source daemon twin', () => {
     ]
     const good = createClaudeCheck.toString()
     expect(() => validateFoldInjection(fold.concat([['__CREATE_CLAUDE_CHECK__', good]]))).not.toThrow()
+    for (const name of ['platform', 'arch']) {
+      expect(() => validateFoldInjection(fold.concat([['__NEW_FACTORY__', `function probe() { return process.${name} }`]]))).toThrow(/reads the build platform/)
+    }
     const GATE = /return a\[i\] > b\[i\]/
     expect(good).toMatch(GATE)
     const broken = good.replace(GATE, 'return a[i] < b[i]')

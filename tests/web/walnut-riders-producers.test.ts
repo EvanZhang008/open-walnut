@@ -20,7 +20,7 @@ const PRODUCERS: Record<string, { file: string; outcome: string | null }> = {
   folderMoved: { file: 'src/core/sessions/folder-gone.ts', outcome: 'folder-moved' },
   restart: { file: 'src/core/sessions/restart-notice.ts', outcome: 'restarted' },
   digest: { file: 'src/core/org/org-store.ts', outcome: 'org-update' },
-  statusNote: { file: 'src/core/sessions/status-push.ts', outcome: 'status' },
+  statusNote: { file: 'src/core/sessions/status-riding.ts', outcome: 'status' },
   appState: { file: 'src/core/sessions/app-state.ts', outcome: null },
   waitNote: { file: 'src/core/task-wait-resume.ts', outcome: 'waiting' },
   retiredNote: { file: 'src/core/org/retired-lead.ts', outcome: 'handed-over' },

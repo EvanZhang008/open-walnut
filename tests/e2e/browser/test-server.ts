@@ -16,7 +16,7 @@ import fsSync from 'node:fs'
 import zlib from 'node:zlib'
 // Question stack + tree drawer fixtures (slice 1): pure data, see threads-fixture.ts.
 import {
-  allThreadsFixtures, fixtureJsonl, fixtureParkedQueues, fixtureRecord, fixtureTask, MIDTURN_SESSION, STRICT_SESSION, SPLIT_SESSION, RELOAD_SESSION, THREAD_AI_STUB_PREFIX,
+  allThreadsFixtures, fixtureJsonl, fixtureParkedQueues, fixtureRecord, fixtureTask, MIDTURN_SESSION, STRICT_SESSION, SPLIT_SESSION, RELOAD_SESSION, TAGGED_SESSION, THREAD_AI_STUB_PREFIX,
 } from './threads-fixture'
 import { REVIEW_MIXED_SESSION } from './threads-review-fixture'
 // Kanban specs: old completions and a 3 day stall no route can backdate (board-kanban-fixture.ts).
@@ -3014,7 +3014,7 @@ if (process.env.PW_AGENT_TEXT_ENTRIES === '1') {
     // user line, the way the real CLI does. Only this session: every other
     // fixture transcript stays byte-identical across a run.
     process.env.MOCK_CLAUDE_PERSIST_DIR = path.join(tmpBase, '.claude', 'projects')
-    process.env.MOCK_CLAUDE_PERSIST_SESSIONS = `${RELOAD_SESSION},${REVIEW_MIXED_SESSION},${WHALE_SESSION},${WHALE_ANCHOR_SESSION},${WHALE_GAP_SESSION},pw-rider-session,pw-fold-session,pw-hints-session,${MIDTURN_SESSION},${STRICT_SESSION},${SPLIT_SESSION}`
+    process.env.MOCK_CLAUDE_PERSIST_SESSIONS = `${RELOAD_SESSION},${REVIEW_MIXED_SESSION},${WHALE_SESSION},${WHALE_ANCHOR_SESSION},${WHALE_GAP_SESSION},pw-rider-session,pw-fold-session,pw-hints-session,${MIDTURN_SESSION},${STRICT_SESSION},${SPLIT_SESSION},${TAGGED_SESSION}`
     // `PW_MOCK_TRANSCRIPTS=1` (the review lab, extension-panel-reload.spec.ts): every session's
     // turns are filed as its CLI transcript, the way the real CLI does, so a reload reads the
     // person's own messages back instead of only what this run still holds in memory.

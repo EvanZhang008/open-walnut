@@ -442,12 +442,39 @@ export interface SshTarget {
   hostname: string
   user?: string
   port?: number
+  /** A found host's ~/.ssh/config Host alias, dialled so its auth settings apply (runtime only, never stored). */
+  sshAlias?: string
   /** Optional shell snippet run before claude (e.g. nvm/fnm/volta setup). */
   shell_setup?: string
   /** How the daemon is reached: SSH (absent), or the host network (`net`: no SSH at all). */
   via?: 'net'
   /** The machine's host network id (its public key), with `via: 'net'`. */
   endpoint?: string
+}
+
+/** The ssh destination: a found host's alias, else its hostname, with the user. */
+export function sshDestination(t: SshTarget): string {
+  const dest = t.sshAlias ?? t.hostname
+  return t.user ? `${t.user}@${dest}` : dest
+}
+
+/**
+ * Alias-only options for a login: never the alias block's forwards (Walnut's own -L rides
+ * ownedMuxClientArgs); tty for a run passing -tt.
+ *
+ * CanonicalizeHostname=yes makes ssh read the config again with the host's real name, so a
+ * `Host <hostname pattern>` block applies to the alias too (2026-11-12: a found host whose
+ * ProxyCommand sat under `Host dev-*.example.com` did not resolve when dialled by its alias,
+ * while the same host by hostname, as Walnut dials a host added by hand, connected). The
+ * alias's own options still win: ssh keeps the first value it reads.
+ */
+export function sshAliasOptions(t: SshTarget, opts: { tty?: boolean } = {}): string[] {
+  if (!t.sshAlias) return []
+  return [
+    '-o', `HostName=${t.hostname}`, '-o', 'CanonicalizeHostname=yes', '-o', 'RemoteCommand=none',
+    ...(opts.tty ? [] : ['-o', 'RequestTTY=no']),
+    '-o', 'ClearAllForwardings=yes',
+  ]
 }
 
 /**

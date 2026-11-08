@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   gateSessionCommand,
   InheritedSessionRefusedError,
+  inheritedSessionText,
+  isInheritedSessionText,
   refuseRealHomeWrite,
   resetEphemeralSessionGateForTests,
   settleSessionCommand,
@@ -147,7 +149,10 @@ describe('native starts', () => {
     refused(() => gate(A, 'rename', { oldSid: NEW, newSid: 'not-a-uuid' }))
     refused(() => gate(A, 'rename', { oldSid: COPIED, newSid: OTHER }))
     refused(() => gate(A, 'send', { sid: OTHER }))
-    allowed(() => gate(A, 'rename', { oldSid: NEW, newSid: OTHER }))
+    const renamed = { oldSid: NEW, newSid: OTHER }
+    const attempt = gate(A, 'rename', renamed)
+    refused(() => gate(A, 'send', { sid: OTHER }))
+    settle(A, 'rename', { ok: true }, attempt, renamed)
     allowed(() => gate(A, 'send', { sid: OTHER }))
   })
 
@@ -314,6 +319,39 @@ describe('a refused delivery is parked, not retried', () => {
     const err = new InheritedSessionRefusedError(COPIED, 'start')
     expect(classifyDeliveryFailure(err)).toMatchObject({ kind: 'permanent', code: 'inherited_session' })
     expect(classifyDeliveryFailure(new Error(err.message))).toMatchObject({ kind: 'permanent', code: 'inherited_session' })
+  })
+})
+
+// 2026-11-11 review: a task's first start on a host failed (Claude Code there stopped before it
+// read the message), and the retry's resume was refused as "This conversation began outside this
+// Demo", though it began right there.
+describe('a session whose first start failed is still this server\'s', () => {
+  it('its resume goes through, a proven run owns it, and a fork or a write of it is still refused', () => {
+    settle(B, 'start', { ok: false, error: 'start: initial message not delivered (ENXIO)' }, gate(B, 'start', fresh(NEW)))
+    refused(() => gate(B, 'send', { sid: NEW }))
+    refused(() => gate(B, 'start', fork(NEW, FORK)))
+    const attempt = gate(B, 'start', resume(NEW))
+    expect(attempt).toMatchObject({ kind: 'start', host: 'devbox', sid: NEW })
+    settle(B, 'start', spawned(NEW), attempt)
+    allowed(() => gate(B, 'send', { sid: NEW }))
+    // A resume of an id it never minted stays refused, on another host too.
+    refused(() => gate(A, 'start', resume(NEW)))
+    refused(() => gate(B, 'start', resume(OTHER)))
+  })
+
+  it('a refusal says the conversation began outside only when this server never held it', () => {
+    let caught: unknown
+    try { gate(A, 'start', resume(COPIED)) } catch (e) { caught = e }
+    expect((caught as InheritedSessionRefusedError).origin).toBe('earlier')
+    try { gate(A, 'start', resume(OTHER)) } catch (e) { caught = e }
+    expect((caught as InheritedSessionRefusedError).origin).toBe('outside')
+    const earlier = inheritedSessionText(COPIED, true, 'earlier')
+    expect(earlier).not.toMatch(/outside/)
+    expect(inheritedSessionText(OTHER, true, 'outside')).toMatch(/began outside this Demo/)
+    for (const text of [earlier, inheritedSessionText(OTHER, true, 'outside')]) {
+      expect(isInheritedSessionText(text)).toBe(true)
+      expect(classifyDeliveryFailure(new Error(text))).toMatchObject({ kind: 'permanent', code: 'inherited_session' })
+    }
   })
 })
 

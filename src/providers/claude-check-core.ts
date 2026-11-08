@@ -97,8 +97,8 @@ export interface ClaudeCheckDeps {
   /** Live reference (process.env). */
   env: Record<string, string | undefined>
   now?: () => number
-  /** process.platform by default; 'darwin' turns on the keychain rule (file comment). */
-  platform?: string
+  /** The running host's platform, not the platform a serialized factory was built for. */
+  platform: string
   /** sha256 hex of a string: names the keychain items under a custom CLAUDE_CONFIG_DIR. */
   sha256Hex?: (s: string) => string
 }
@@ -261,7 +261,7 @@ export function createClaudeCheck(deps: ClaudeCheckDeps) {
     return { state: 'unknown', detail: why }
   }
 
-  function isMac(): boolean { return (deps.platform || process.platform) === 'darwin' }
+  function isMac(): boolean { return deps.platform === 'darwin' }
 
   /**
    * The CLI's keychain item names under `env` (with settings.json `env` over it,
@@ -274,7 +274,7 @@ export function createClaudeCheck(deps: ClaudeCheckDeps) {
     // An internal build picks its own suffixes from more than the env shows.
     if (e.USER_TYPE === 'ant') return null
     var suffix = typeof e.CLAUDE_CODE_CUSTOM_OAUTH_URL === 'string' && e.CLAUDE_CODE_CUSTOM_OAUTH_URL ? '-custom-oauth' : ''
-    var dir = env.CLAUDE_CONFIG_DIR
+    var dir = env.CLAUDE_SECURESTORAGE_CONFIG_DIR !== undefined ? env.CLAUDE_SECURESTORAGE_CONFIG_DIR : env.CLAUDE_CONFIG_DIR
     var tail = ''
     if (dir) {
       if (!deps.sha256Hex) return null

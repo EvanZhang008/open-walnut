@@ -10,7 +10,8 @@
  *     the user excluded on it stay out of the joined row's scan.
  *   - A new import project goes under the VP of the other import projects, only in the run
  *     that made it (src/core/sessions/import-project-vp.ts), so a project the user gives
- *     back its own VP stays where they put it. The vote reads the org outside its lock, so
+ *     back its own VP stays where they put it. With none, under the Others VP, which a new
+ *     install's first import makes (2026-11-12: a new install's import became its own VP). The vote reads the org outside its lock, so
  *     an org that changed before the move leaves the project where it is; a test run never
  *     places one.
  *
@@ -97,6 +98,8 @@ import { addTask, completeTask, getTask, listTasks, queryTasks, _resetForTesting
 import { ensureProjectLead, getOrgTree, setProjectVp } from '../../src/core/org/org-store.js';
 import { findProjectNode, projectKey } from '../../src/core/org/org-tree.js';
 import { withTestRun } from '../../src/core/test-run.js';
+import { OTHERS_VP_NAME, othersVp } from '../../src/core/sessions/import-project-vp.js';
+import { createOrgNode, editOrgNode } from '../../src/core/org/org-node-edit.js';
 import { closeDb as closeSessionDb } from '../../src/core/session-db.js';
 import { closeDb as closeTaskDb } from '../../src/core/task-db.js';
 import { bus } from '../../src/core/event-bus.js';
@@ -296,7 +299,9 @@ describe('a new import project goes under the VP of the other import projects', 
     expect(await vpOfProject(STUDIO)).toBe('');
   });
 
-  it('nothing moves when no other import project has a VP', async () => {
+  it('an install whose import project stands on its own keeps that: no Others VP is made, nothing moves', async () => {
+    // An older install: "Imported from this Mac" was made before, by a run that placed nothing.
+    await addTask({ title: 'Older import', project: LOCAL, source: 'local' });
     setHost('__local__', [candidate('local-1')]);
     await importExternalSessions();
     await ensureProjectLead('Operations');
@@ -305,6 +310,7 @@ describe('a new import project goes under the VP of the other import projects', 
     expect(await projectOf('studio-1')).toBe(STUDIO);
     expect(await vpOfProject(STUDIO)).toBe('');
     expect(await vpOfProject(LOCAL)).toBe('');
+    expect(othersVp(await listTasks())).toBeUndefined();
   });
 
   it('a closed VP is never reopened for it', async () => {
@@ -315,7 +321,8 @@ describe('a new import project goes under the VP of the other import projects', 
     expect(await projectOf('studio-1')).toBe(STUDIO);
     expect((await getTask(ops.id)).phase).toBe('COMPLETE');
     expect((await getTask(ops.id)).org_leads).toEqual([LOCAL, DEVBOX]);
-    expect(await vpOfProject(STUDIO)).toBe('');
+    // With no open VP to vote for, it goes where what no VP owns goes: the Others VP.
+    expect(await vpOfProject(STUDIO)).toBe(OTHERS_VP_NAME);
     // No lead was made for a sibling, nor for the new project, to put it under.
     for (const p of [LOCAL, DEVBOX, STUDIO]) expect(await ownLeadsOf(p)).toEqual([]);
   });
@@ -360,7 +367,8 @@ describe('a new import project goes under the VP of the other import projects', 
     joinStudio(['studio-1']);
     expect((await importExternalSessions()).imported).toBe(1);
     expect(await projectOf('studio-1')).toBe(STUDIO);
-    expect(await vpOfProject(STUDIO)).toBe('');
+    // It follows this Mac's import (under the Others VP the first import made), never Travel.
+    expect(await vpOfProject(STUDIO)).toBe(OTHERS_VP_NAME);
     expect(await vpOfProject('Imported from Japan')).toBe('Travel');
   });
 
@@ -377,6 +385,87 @@ describe('a new import project goes under the VP of the other import projects', 
     await importExternalSessions();
     // "imported from devbox" sorts before "imported from this mac".
     expect(await vpOfProject(STUDIO)).toBe('Fleet');
+  });
+});
+
+describe('a new install\'s import goes under the Others VP, never a VP of its own (2026-11-12)', () => {
+  it('the first import makes the Others VP and goes under it; no VP is made for the import project', async () => {
+    setHost('__local__', [candidate('local-1')]);
+    await importExternalSessions();
+    expect(await projectOf('local-1')).toBe(LOCAL);
+    expect(await vpOfProject(LOCAL)).toBe(OTHERS_VP_NAME);
+    expect(await ownLeadsOf(LOCAL)).toEqual([]);
+    const leads = (await listTasks()).filter((t) => t.org_role === 'lead');
+    expect(leads).toHaveLength(1);
+    expect(leads[0]).toMatchObject({ project: OTHERS_VP_NAME, org_vp_only: true, org_leads: [LOCAL] });
+    expect(othersVp(leads)?.id).toBe(leads[0]!.id);
+    // The next machine's import joins it (the sibling vote), and no second Others VP is made.
+    joinStudio(['studio-1']);
+    await importExternalSessions();
+    expect(await vpOfProject(STUDIO)).toBe(OTHERS_VP_NAME);
+    expect((await listTasks()).filter((t) => t.org_role === 'lead')).toHaveLength(1);
+  });
+
+  it('two hosts imported in one first run both go under one Others VP', async () => {
+    setHost('__local__', [candidate('local-1')]);
+    setHost('devbox', [candidate('devbox-1')]);
+    configHosts = { devbox: { hostname: 'dev.example.com', user: 'me', enabled: true } };
+    await importExternalSessions();
+    expect(await vpOfProject(LOCAL)).toBe(OTHERS_VP_NAME);
+    expect(await vpOfProject(DEVBOX)).toBe(OTHERS_VP_NAME);
+    expect((await listTasks()).filter((t) => t.org_role === 'lead')).toHaveLength(1);
+  });
+
+  it('a VP the user named Others takes the first import; none is made', async () => {
+    const ops = await ensureProjectLead('Operations');
+    await editOrgNode(ops.id, { name: OTHERS_VP_NAME });
+    setHost('__local__', [candidate('local-1')]);
+    await importExternalSessions();
+    expect(await vpOfProject(LOCAL)).toBe('Operations');
+    expect((await getTask(ops.id)).org_leads).toEqual([LOCAL]);
+    expect((await listTasks()).filter((t) => t.org_role === 'lead').map((t) => t.id)).toEqual([ops.id]);
+  });
+
+  it('a closed Others VP is not reopened: the import stands on its own', async () => {
+    const others = await createOrgNode({ name: OTHERS_VP_NAME }, true);
+    await completeTask(others.id, { source: 'api' });
+    setHost('__local__', [candidate('local-1')]);
+    await importExternalSessions();
+    expect((await getTask(others.id)).phase).toBe('COMPLETE');
+    expect(await vpOfProject(LOCAL)).toBe('');
+    expect((await listTasks()).filter((t) => t.org_role === 'lead' && t.phase !== 'COMPLETE')).toEqual([]);
+  });
+
+  it('a closed Others VP the user renamed is still found, so it is neither made again nor reopened', async () => {
+    const others = await createOrgNode({ name: OTHERS_VP_NAME }, true);
+    await editOrgNode(others.id, { name: 'Misc' });
+    await completeTask(others.id, { source: 'api' });
+    setHost('__local__', [candidate('local-1')]);
+    await importExternalSessions();
+    expect((await getTask(others.id)).phase).toBe('COMPLETE');
+    expect(await vpOfProject(LOCAL)).toBe('');
+    expect((await listTasks()).filter((t) => t.org_role === 'lead' && t.phase !== 'COMPLETE')).toEqual([]);
+  });
+
+  it('an existing "Imported from this Mac" VP is left as it is, and no Others VP is made beside it', async () => {
+    // An install from before: the import project became a VP of its own.
+    await addTask({ title: 'Older import', project: LOCAL, source: 'local' });
+    const own = await ensureProjectLead(LOCAL);
+    setHost('__local__', [candidate('local-1')]);
+    await importExternalSessions();
+    expect(await vpOfProject(LOCAL)).toBe('');
+    expect((await getTask(own.id)).phase).not.toBe('COMPLETE');
+    // The next machine's import stands on its own, as on that install before.
+    joinStudio(['studio-1']);
+    await importExternalSessions();
+    expect(await vpOfProject(STUDIO)).toBe('');
+    expect(othersVp(await listTasks())).toBeUndefined();
+  });
+
+  it('a test run\'s first import makes no Others VP', async () => {
+    setHost('__local__', [candidate('local-1')]);
+    await withTestRun('placement-probe', () => importExternalSessions());
+    expect((await listTasks()).filter((t) => t.org_role === 'lead')).toEqual([]);
   });
 });
 

@@ -113,7 +113,7 @@ describe('every box for an AI takes pictures', () => {
   })
 
   it('every composer with its own textarea takes pasted and dropped pictures, or says why not', () => {
-    const composers = FILES.filter((f) => /<textarea\b/.test(read(f)) && /session:send|onSend|sendAnchored|sendToCardSession/.test(read(f)))
+    const composers = FILES.filter((f) => /<textarea\b/.test(read(f)) && /session:send|sendSessionMessage|onSend|sendAnchored|sendToCardSession/.test(read(f)))
     const missing = composers.filter((f) => !TEXT_ONLY_COMPOSERS[f] && !(/usePictureInput\(/.test(read(f)) && /<PictureStrip\b/.test(read(f))))
     expect(missing, 'a composer for an AI: usePictureInput + PictureStrip + AttachPictureButton, or list it with why').toEqual([])
     for (const rel of Object.keys(TEXT_ONLY_COMPOSERS)) expect(fs.existsSync(path.join(WEB_SRC, rel)), rel).toBe(true)

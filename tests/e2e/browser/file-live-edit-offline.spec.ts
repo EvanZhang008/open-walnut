@@ -29,6 +29,7 @@
  * still sees the real file throughout.
  */
 import { test, expect, type Locator, type Page, type Route } from '@playwright/test'
+import { goToSessionFolder } from './todo-panel-helpers'
 
 test.use({ viewport: { width: 1200, height: 800 } })
 
@@ -58,6 +59,7 @@ async function openFilesPanel(page: Page): Promise<Locator> {
   await panel.getByRole('button', { name: 'Files', exact: true }).click()
   const explorer = panel.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 15_000 })
+  await goToSessionFolder(explorer)
   return explorer
 }
 

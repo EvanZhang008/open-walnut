@@ -5,7 +5,7 @@
  */
 
 import path from 'node:path'
-import { WALNUT_HOME } from '../../constants.js'
+import { IS_DEMO, WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { isFollower } from '../server-role.js'
 import type { CloudReplicaReply } from '../cloud-ingest.js'
@@ -169,7 +169,8 @@ export function hostServerRootSpec(): string | undefined {
 
 export function getHostServerManager(): HostServerManager | null {
   // Only the leader manages hosts' servers: a replica (the companion, a host's own server) never does.
-  if (isFollower()) return null
+  // The Demo never installs a server on a remote host (demo-remote-host.ts): its host daemon is all it runs there.
+  if (isFollower() || IS_DEMO) return null
   if (manager) return manager
   manager = createHostServerManager({
     settingsOf: async (hostKey) => {

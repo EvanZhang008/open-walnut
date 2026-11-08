@@ -15,6 +15,7 @@ import { chipLabel, chipTooltip } from './kanban-filter-model';
 import type { KanbanBoardVM } from './kanban-model';
 import { KanbanChanges } from './KanbanChanges';
 import { KANBAN_PANE_SELECTOR } from './kanban-toasts';
+import { pageShortcutBlocked } from '@/utils/page-shortcut';
 
 export interface KanbanFiltersProps {
   board: KanbanBoardVM;
@@ -58,10 +59,11 @@ function useSlashFocus(inputRef: RefObject<HTMLInputElement | null>): void {
       pointedInside = !!column && e.target instanceof Node && column.contains(e.target);
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== '/' || e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key !== '/') return;
       const active = document.activeElement;
-      if (typingTarget(active)) return;
       const input = inputRef.current;
+      // Never while a sheet it is not in, an editor or a menu has the reader (utils/page-shortcut.ts).
+      if (pageShortcutBlocked(e, input)) return;
       const column = columnOf();
       if (!input || !column || input.offsetParent === null) return;
       const inside = !!active && active !== document.body && column.contains(active);

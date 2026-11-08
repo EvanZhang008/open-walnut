@@ -45,6 +45,19 @@ export function runningJobs(reply: unknown): number {
 }
 
 /**
+ * For a stop that must prove nothing runs (a Demo reset): the host_exec runs going on, 0 when
+ * the daemon has no host_exec at all (no host-exec-v1: it never ran one and refuses
+ * exec.list), and null when a daemon that runs them did not list them.
+ */
+export async function execRunsProven(
+  link: Pick<ExecRunsLink, 'hasCapability' | 'send'>, timeoutMs: number,
+): Promise<number | null> {
+  if (!link.hasCapability('host-exec-v1')) return 0
+  const reply = await link.send('exec.list', {}, timeoutMs)
+  return Array.isArray((reply as { jobs?: unknown } | null)?.jobs) ? runningJobs(reply) : null
+}
+
+/**
  * `reason` while `host`'s wait for its runs is under EXEC_UPGRADE_HOLD_MAX_MS, else null
  * (the update goes ahead, said once in the log). A null reason ends the wait's clock.
  */

@@ -23,9 +23,11 @@
  *  - Flips to the other side (arrow direction follows) when its own side has
  *    no viewport room, instead of covering the selected line at an edge.
  */
-import { useCallback, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type RefObject } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { KEEP_SELECTION_ATTR } from '@/utils/selection-guard';
+import { clipBoxesOf, placeToolbar, roomyBox } from '@/utils/toolbar-bounds';
+import { claimToolbarEscape } from '@/utils/file-card-escape';
 
 /** Bounding rect of the current non-collapsed selection in `doc`, or null. */
 export function selectionClientRect(doc: Document = document): DOMRect | null {
@@ -68,11 +70,25 @@ interface SelectionAskPillProps {
    * the HTML preview passes the events its page's scroll reports raise here.
    */
   listenTo?: EventTarget | null;
+  /**
+   * The element whose visible box the pill stays inside (the file view, the diff pane).
+   * Defaults to the element holding the top document's selection; the pill never sticks
+   * out past the sheet or over the file tree (utils/toolbar-bounds.ts).
+   */
+  boundsOf?: () => Element | null;
+}
+
+/** The element holding the top document's selection, for its visible box. */
+function selectionElement(): Element | null {
+  const sel = document.getSelection();
+  if (!sel || !sel.rangeCount) return null;
+  const n = sel.getRangeAt(0).commonAncestorContainer;
+  return n.nodeType === 1 ? (n as Element) : n.parentElement;
 }
 
 const GAP = 8;
 
-export function SelectionAskPill({ anchor, onCommit, onAskHere, askHereOff, onComment, onDismiss, resolveRect, listenTo }: SelectionAskPillProps) {
+export function SelectionAskPill({ anchor, onCommit, onAskHere, askHereOff, onComment, onDismiss, resolveRect, listenTo, boundsOf }: SelectionAskPillProps) {
   const btnRef = useRef<HTMLElement>(null);
   const [pos, setPos] = useState<{ left: number; top: number; below: boolean } | null>(null);
 
@@ -82,6 +98,14 @@ export function SelectionAskPill({ anchor, onCommit, onAskHere, askHereOff, onCo
   // not derived in place(): re-deriving on scroll compares the STALE anchor
   // against moved rects and made the pill hop sides mid-scroll.
   const preferBelowRef = useRef<boolean | null>(null);
+  // A ref: an inline resolver from the caller must not re-run the placement effect each render.
+  const boundsRef = useRef(boundsOf);
+  boundsRef.current = boundsOf;
+  // One Escape closes the toolbar and only the toolbar: not the card under it, not the sheet
+  // around it (2026-11-10 review: in Changed it closed the whole sheet).
+  const dismissRef = useRef(onDismiss);
+  dismissRef.current = onDismiss;
+  useEffect(() => claimToolbarEscape(() => true, () => dismissRef.current()), []);
 
   const place = useCallback(() => {
     const rect = resolveRect ? resolveRect() : selectionClientRect();
@@ -91,16 +115,11 @@ export function SelectionAskPill({ anchor, onCommit, onAskHere, askHereOff, onCo
     if (preferBelowRef.current === null) {
       preferBelowRef.current = Math.abs(anchor.y - rect.bottom) <= Math.abs(anchor.y - rect.top);
     }
-    // Keep the chosen side unless it has no viewport room → flip.
-    let below = preferBelowRef.current;
-    if (below && rect.bottom + GAP + h > window.innerHeight - 4) below = false;
-    if (!below && rect.top - GAP - h < 4) below = true;
-    // Horizontally at the release point (clamped to the viewport AND to the
-    // selection's span so the arrow still points at selected text).
-    const cx = Math.min(Math.max(anchor.x, rect.left), rect.right);
-    const left = Math.min(Math.max(cx - w / 2, 4), window.innerWidth - w - 4);
-    const top = below ? rect.bottom + GAP : rect.top - GAP - h;
-    setPos({ left, top, below });
+    // Keep the chosen side unless it has no room in the selection's own visible box → flip;
+    // horizontally at the release point, kept over the selection's span and inside that box.
+    const bounds = boundsRef.current;
+    const box = roomyBox(clipBoxesOf(bounds ? bounds() : selectionElement()), w, h);
+    setPos(placeToolbar(rect, anchor.x, { w, h }, box, preferBelowRef.current ?? true, GAP));
   }, [resolveRect, onDismiss, anchor.x, anchor.y]);
 
   useLayoutEffect(() => {

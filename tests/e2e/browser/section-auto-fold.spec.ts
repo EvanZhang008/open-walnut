@@ -5,7 +5,7 @@
  * and working snooze need to auto collapse in 60s if no action ... no action means people not
  * actively scrolling, click in the side bar":
  *
- *   - first visit: Needs you open, Working, Waiting / snoozed and Completed folded;
+ *   - first visit: every status section folded;
  *   - an opened fold folds again 15 minutes after it was opened, also across a reload, but not
  *     so any more: since 2026-11-06 it folds 60 s after the later of the opening and the last
  *     click, scroll, key or touch in the panel, and a resting pointer or an open task row does
@@ -17,10 +17,17 @@
  */
 import { test, expect } from './shortcut-test-fixture'
 import type { Locator, Page } from '@playwright/test'
-import { isolateUiPrefs, selectSection } from './todo-panel-helpers'
-import { pausePageClock } from './page-clock'
+import { isolateUiPrefs, openListProject, selectSection } from './todo-panel-helpers'
+import { pausePageClock, wheelSeenByPage } from './page-clock'
 import { LS_STATUS_SECTIONS_KEY, endRunningTurn, presetPanelDesign, setStatusSectionOpen, showSectionCard, startRunningTurn, statusSection, statusSectionCard, statusSectionRows, statusSectionToggle } from './status-section-helpers'
-import { wheelSeenByPage } from './page-clock'
+async function reloadWithPausedClock(page: Page): Promise<void> {
+  await pausePageClock(page)
+  try {
+    await page.reload({ waitUntil: 'domcontentloaded' })
+  } finally {
+    await page.clock.resume()
+  }
+}
 
 const MIN = 60_000
 const made: string[] = []
@@ -30,8 +37,8 @@ test.afterEach(async ({ request }) => {
   for (const id of made.splice(0)) await request.delete(`/api/tasks/${id}?force=true`).catch(() => {})
 })
 
-async function seed(page: Page, project: string, title: string, patch: Record<string, unknown>): Promise<string> {
-  const res = await page.request.post('/api/tasks', { data: { title, source: 'local', project } })
+async function seed(page: Page, project: string, title: string, patch: Record<string, unknown>, pinned?: boolean): Promise<string> {
+  const res = await page.request.post('/api/tasks', { data: { title, source: 'local', project, ...(pinned === undefined ? {} : { pinned }) } })
   expect(res.ok(), await res.text()).toBe(true)
   const id = ((await res.json()) as { task: { id: string } }).task.id
   made.push(id)
@@ -72,27 +79,36 @@ const firstCardInView = (rows: Locator) => rows.evaluate((list) => {
 
 test.describe('status folds: one rule', () => {
   test.describe.configure({ timeout: 150_000 })
+  // These start from a first visit: none of the status folds every page's storage starts with
+  // (playwright.config.ts storageState), once per tab, so a reload keeps what the test chose.
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript((key) => {
+      if (sessionStorage.getItem('pw-first-fold-visit')) return
+      sessionStorage.setItem('pw-first-fold-visit', '1')
+      localStorage.removeItem(key)
+    }, LS_STATUS_SECTIONS_KEY)
+  })
 
-  test('Flat: folded by default; an opened fold folds 60 s after the last action in the panel, a resting pointer or an open row notwithstanding, across a reload', async ({ page }) => {
+  test('Flat: folded by default; an opened fold folds 60 s after the last action in the panel, a resting pointer or an open row notwithstanding, across a reload', async ({ page, baseURL }) => {
     await isolateUiPrefs(page)
     await presetPanelDesign(page, 'status')
     await page.clock.install()
     const stamp = Date.now()
     const project = `Foldland${stamp}`
-    await page.goto('/')
+    await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
+    await page.getByRole('link', { name: 'Open Walnut' }).click()
     await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 30_000 })
     const needs = await seed(page, project, `fold needs ${stamp}`, { phase: 'NEED_ACTION' })
     const working = await seed(page, project, `fold working ${stamp}`, { phase: 'IN_PROGRESS' })
     turns.push(await startRunningTurn(page.request, working))
     const parked = await seed(page, project, `fold parked ${stamp}`, { phase: 'WAITING' })
     const done = await seed(page, project, `fold done ${stamp}`, { phase: 'COMPLETE' })
-    await page.reload()
+    await reloadWithPausedClock(page)
     await selectSection(page, 'All')
     const panel = page.locator('.todo-panel').first()
 
-    // First visit: Needs you open with its row; the others folded, no rows drawn.
-    await expect(panel.locator(`[data-testid="status-section-needs-rows"] [data-task-id="${needs}"]`)).toBeVisible({ timeout: 30_000 })
-    for (const key of ['working', 'waiting', 'done'] as const) {
+    await expect(panel.locator(`[data-testid="status-section-needs-rows"] [data-task-id="${needs}"]`)).toHaveCount(0)
+    for (const key of ['needs', 'working', 'waiting', 'done'] as const) {
       await expect(statusSectionToggle(panel, key)).toHaveAttribute('aria-expanded', 'false', { timeout: 30_000 })
       await expect(panel.getByTestId(`status-section-${key}-rows`)).toHaveCount(0)
     }
@@ -154,26 +170,30 @@ test.describe('status folds: one rule', () => {
     await page.clock.fastForward(32_000)
     await expect(statusSectionToggle(panel, 'done')).toHaveAttribute('aria-expanded', 'false')
 
-    // The clock is the stored opening time: a reload 30 s in keeps it open and it still folds at
-    // 60 s; a reload after its time opens folded.
+    // A reload 30 s in keeps it open and gives it its full 60 s from the load (it never folds a
+    // few seconds after showing open: home-folds-kept.test.ts); a reload after its time opens folded.
     await setStatusSectionOpen(panel, 'working', true)
     await expect(await showSectionCard(panel, 'working', working)).toBeVisible()
     await page.clock.fastForward(30_000)
-    await page.reload()
-    await selectSection(page, 'All')
+    await reloadWithPausedClock(page)
+    // The All view is kept across the reload (its status sections draw), so nothing is clicked in
+    // the panel: a click would be an action of its own and give the fold 60 s on the old rule too.
     await pointerAway(page)
     await expect(statusSectionToggle(panel, 'working')).toHaveAttribute('aria-expanded', 'true', { timeout: 30_000 })
-    // Picking the tab again after the reload is an action in the panel: 60 s from it at the latest.
-    await page.clock.fastForward(62_000)
+    // 40 s after the load (70 s after the opening) it is still open: the load gave it its full time.
+    // The old rule, counting from the opening, folded it 30 s after the load.
+    await page.clock.fastForward(40_000)
+    await expect(statusSectionToggle(panel, 'working')).toHaveAttribute('aria-expanded', 'true')
+    await page.clock.fastForward(22_000)
     await expect(statusSectionToggle(panel, 'working')).toHaveAttribute('aria-expanded', 'false')
     await setStatusSectionOpen(panel, 'working', true)
     await page.clock.fastForward(2 * MIN)
-    await page.reload()
+    await reloadWithPausedClock(page)
     await selectSection(page, 'All')
     await expect(statusSectionToggle(panel, 'working')).toHaveAttribute('aria-expanded', 'false', { timeout: 30_000 })
   })
 
-  test('a group folding on screen near the end of the list keeps its heading where it shows', async ({ page }) => {
+  test('a group folding on screen near the end of the list keeps its heading where it shows', async ({ page, baseURL }) => {
     await page.setViewportSize({ width: 1280, height: 560 })
     await isolateUiPrefs(page)
     await presetPanelDesign(page, 'status')
@@ -181,14 +201,15 @@ test.describe('status folds: one rule', () => {
     const stamp = Date.now()
     const project = `Endland${stamp}`
     await defineScrollerOf(page)
-    await page.goto('/')
+    await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
+    await page.getByRole('link', { name: 'Open Walnut' }).click()
     await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 30_000 })
     for (let i = 0; i < 10; i++) await seed(page, project, `end needs ${i} ${stamp}`, { phase: 'NEED_ACTION' })
     for (let i = 0; i < 2; i++) {
       const id = await seed(page, project, `end working ${i} ${stamp}`, { phase: 'IN_PROGRESS' })
       turns.push(await startRunningTurn(page.request, id))
     }
-    await page.reload()
+    await reloadWithPausedClock(page)
     await selectSection(page, 'All')
     const panel = page.locator('.todo-panel').first()
     // Working is the last open group (Waiting and Completed are folded by default): scrolled to
@@ -207,7 +228,7 @@ test.describe('status folds: one rule', () => {
     expect(Math.round((await toggle.boundingBox())!.y - before)).toBe(0)
   })
 
-  test('a group scrolled above the panel folds under a resting pointer', async ({ page }) => {
+  test('a group scrolled above the panel folds under a resting pointer', async ({ page, baseURL }) => {
     await page.setViewportSize({ width: 1280, height: 560 })
     await isolateUiPrefs(page)
     await presetPanelDesign(page, 'status')
@@ -215,12 +236,13 @@ test.describe('status folds: one rule', () => {
     const stamp = Date.now()
     const project = `Aboveland${stamp}`
     await defineScrollerOf(page)
-    await page.goto('/')
+    await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
+    await page.getByRole('link', { name: 'Open Walnut' }).click()
     await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 30_000 })
     for (let i = 0; i < 3; i++) await seed(page, project, `above parked ${i} ${stamp}`, { phase: 'WAITING' })
     const done: string[] = []
     for (let i = 0; i < 12; i++) done.push(await seed(page, project, `above done ${i} ${stamp}`, { phase: 'COMPLETE' }))
-    await page.reload()
+    await reloadWithPausedClock(page)
     await selectSection(page, 'All')
     const panel = page.locator('.todo-panel').first()
     await setStatusSectionOpen(panel, 'waiting', true)
@@ -245,21 +267,23 @@ test.describe('status folds: one rule', () => {
     await expect(statusSectionToggle(panel, 'done')).toHaveAttribute('aria-expanded', 'false')
   })
 
-  test('a project jump opens every section, and they fold by the same 60 s', async ({ page }) => {
+  test('a project jump opens every section, and they fold by the same 60 s', async ({ page, baseURL }) => {
     await isolateUiPrefs(page)
     await presetPanelDesign(page, 'status')
     await page.clock.install()
     const stamp = Date.now()
     const project = `Jumpland${stamp}`
-    await page.goto('/')
+    await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
+    await page.getByRole('link', { name: 'Open Walnut' }).click()
     await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 30_000 })
     const needs = await seed(page, project, `jump needs ${stamp}`, { phase: 'NEED_ACTION' })
     const parked = await seed(page, project, `jump parked ${stamp}`, { phase: 'WAITING' })
     const done = await seed(page, project, `jump done ${stamp}`, { phase: 'COMPLETE' })
-    await page.reload()
+    await reloadWithPausedClock(page)
     await selectSection(page, 'All')
     const panel = page.locator('.todo-panel').first()
     const needsRow = panel.locator(`[data-testid="status-section-needs-rows"] [data-task-id="${needs}"]`)
+    await setStatusSectionOpen(panel, 'needs', true)
     await expect(needsRow).toBeVisible({ timeout: 30_000 })
     const savedFolds = () => page.evaluate((k) => localStorage.getItem(k), LS_STATUS_SECTIONS_KEY)
     const savedBefore = await savedFolds()
@@ -276,17 +300,18 @@ test.describe('status folds: one rule', () => {
   })
 
 
-  test('groups opened a moment apart fold together', async ({ page }) => {
+  test('groups opened a moment apart fold together', async ({ page, baseURL }) => {
     await isolateUiPrefs(page)
     await presetPanelDesign(page, 'status')
     await page.clock.install()
     const stamp = Date.now()
     const project = `Pairland${stamp}`
-    await page.goto('/')
+    await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
+    await page.getByRole('link', { name: 'Open Walnut' }).click()
     await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 30_000 })
     await seed(page, project, `pair parked ${stamp}`, { phase: 'WAITING' })
     await seed(page, project, `pair done ${stamp}`, { phase: 'COMPLETE' })
-    await page.reload()
+    await reloadWithPausedClock(page)
     await selectSection(page, 'All')
     const panel = page.locator('.todo-panel').first()
     await setStatusSectionOpen(panel, 'waiting', true)
@@ -302,24 +327,27 @@ test.describe('status folds: one rule', () => {
     await page.clock.resume()
   })
 
-  test('Needs you keeps the user choice across a reload and any time, with no clock', async ({ page }) => {
+  test('Needs you keeps the user choice across a reload and any time, with no clock', async ({ page, baseURL }) => {
     await isolateUiPrefs(page)
     await presetPanelDesign(page, 'status')
     await page.clock.install()
     const stamp = Date.now()
-    await page.goto('/')
+    await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
+    await page.getByRole('link', { name: 'Open Walnut' }).click()
     await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 30_000 })
     const needs = await seed(page, `Stickyland${stamp}`, `sticky needs ${stamp}`, { phase: 'NEED_ACTION' })
-    await page.reload()
+    await reloadWithPausedClock(page)
     await selectSection(page, 'All')
     const panel = page.locator('.todo-panel').first()
     const row = panel.locator(`[data-testid="status-section-needs-rows"] [data-task-id="${needs}"]`)
+    await expect(row).toHaveCount(0)
+    await setStatusSectionOpen(panel, 'needs', true)
     await expect(row).toBeVisible({ timeout: 30_000 })
 
     await setStatusSectionOpen(panel, 'needs', false)
     expect((await stored(page)).needs).toBe(false)
     await page.clock.fastForward(60 * MIN)
-    await page.reload()
+    await reloadWithPausedClock(page)
     await selectSection(page, 'All')
     await expect(statusSectionToggle(panel, 'needs')).toHaveAttribute('aria-expanded', 'false', { timeout: 30_000 })
     await expect(row).toHaveCount(0)
@@ -328,24 +356,26 @@ test.describe('status folds: one rule', () => {
     await pointerAway(page)
     await page.clock.fastForward(60 * MIN)
     await expect(statusSectionToggle(panel, 'needs')).toHaveAttribute('aria-expanded', 'true')
-    await page.reload()
+    await reloadWithPausedClock(page)
     await selectSection(page, 'All')
     await expect(row).toBeVisible({ timeout: 30_000 })
-    expect((await stored(page)).needs).toBeUndefined()
+    expect((await stored(page)).needs).toBe(true)
   })
 
-  test('By project: a per-project fold folds again 60 s after the last action', async ({ page }) => {
+  test('By project: a per-project fold folds again 60 s after the last action', async ({ page, baseURL }) => {
     await isolateUiPrefs(page)
     await presetPanelDesign(page, 'project')
     await page.clock.install()
     const stamp = Date.now()
     const project = `Projfold${stamp}`
-    await page.goto('/')
+    await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
+    await page.getByRole('link', { name: 'Open Walnut' }).click()
     await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 30_000 })
-    await seed(page, project, `pf open ${stamp}`, {})
-    const parked = await seed(page, project, `pf parked ${stamp}`, { phase: 'WAITING' })
-    await page.reload()
+    await seed(page, project, `pf open ${stamp}`, {}, false)
+    const parked = await seed(page, project, `pf parked ${stamp}`, { phase: 'WAITING' }, false)
+    await reloadWithPausedClock(page)
     await selectSection(page, 'All')
+    await openListProject(page, project)
     const folds = page.locator(`[data-testid="project-status-folds"][data-project="${project}"]`).first()
     const toggle = folds.getByTestId('project-status-fold-waiting')
     await expect(toggle).toHaveAttribute('aria-expanded', 'false', { timeout: 30_000 })

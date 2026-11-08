@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect, type KeyboardEvent, type DragEvent, type ClipboardEvent, type RefObject, useLayoutEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo, type KeyboardEvent, type DragEvent, type ClipboardEvent, type RefObject, useLayoutEffect } from 'react';
 import { ICON_READ_SPLIT } from '@/components/common/Icons';
 import { returnInsertsNewline } from './touch-return';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
@@ -27,7 +27,7 @@ import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterD
 import { NO_AUTOFILL_PROPS } from '@/utils/no-autofill';
 import { pasteRichTextAsMarkdown } from '@/utils/html-to-markdown';
 import { DRAFT_FLUSH_EVENT, noteDraftWrite, type DraftFlushDetail } from '@/utils/unsaved-work';
-import { discardedSince, draftSaveMark, isSentDraftCopy, markDraftSent, subscribeDraft, unmarkDraftSent } from '@/utils/drafts';
+import { claimFailedDraft, discardedSince, draftSaveMark, isSentDraftCopy, markDraftSent, onDraftSettled, subscribeDraft, unmarkDraftSent, type DraftOrigin } from '@/utils/drafts';
 import { ComposerDirectControl } from './ComposerDirectControl';
 import { ComposerMoreMenu } from './ComposerMoreMenu';
 import { PlusMenuActionRows } from './PlusMenuActionRows';
@@ -246,8 +246,9 @@ function readKeptAttachments(key: string | null | undefined): ComposerAttachment
 }
 
 interface ChatInputProps {
-  /** May return a Promise<boolean> — false means the send failed and the draft must be preserved. */
-  onSend: (text: string, images?: ImageAttachment[]) => void | Promise<boolean>;
+  /** May return a Promise<boolean> — false means the send failed and the draft must be preserved.
+   *  `origin` names the draft the words came from: a later Retry of a failed send settles it. */
+  onSend: (text: string, images?: ImageAttachment[], origin?: DraftOrigin) => void | Promise<boolean>;
   /**
    * Where files other than pictures go: given, the box takes any file (a log, a
    * PDF, a zip), uploads it as it is attached, and the sent text names its saved
@@ -258,7 +259,7 @@ interface ChatInputProps {
   fileTarget?: UploadTarget;
   onCommand?: (cmd: SlashCommand, args?: string) => void;
   onStop?: () => void;
-  onInterruptSend?: (text: string, images?: ImageAttachment[]) => void | Promise<boolean>;
+  onInterruptSend?: (text: string, images?: ImageAttachment[], origin?: DraftOrigin) => void | Promise<boolean>;
   /** The Send menu's "Send in split": called right before the message is sent as
    *  usual (onSend), so the session's chat splits first and its reading pane keeps
    *  what the reader sees now (reader-split.tsx). Absent: no such item. */
@@ -500,6 +501,11 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onSendIn
   }, []);
 
   const attachments = useComposerAttachments(fileTarget ?? null);
+  // A removed attachment is an edit of the draft: a failed send's words no longer own it.
+  const attachmentsUi = useMemo(() => ({
+    ...attachments,
+    remove: (id: string) => { draftSaveMark(draftKeyRef.current); attachments.remove(id); },
+  }), [attachments]);
   const acceptsFiles = !!fileTarget;
   // What the last attach left out (over a limit, not a picture), said under the strip.
   const [attachNotice, setAttachNotice] = useState<string | null>(null);
@@ -578,7 +584,8 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onSendIn
     // sent since (utils/drafts.ts).
     if (!pending || discardedSince(pending.key, pending.mark) || isSentDraftCopy(pending.key, pending.text, pending.mark)) return;
     try {
-      if (pending.text) localStorage.setItem(pending.key, pending.text);
+      // The same words already stored are no write (it would restamp the draft).
+      if (pending.text) { if (localStorage.getItem(pending.key) !== pending.text) localStorage.setItem(pending.key, pending.text); }
       else localStorage.removeItem(pending.key);
       noteDraftWrite();
     } catch { /* quota exceeded or unavailable */ }
@@ -694,6 +701,16 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onSendIn
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draftKey]);
+
+  // A Retry sent the words a failed send restored here: the box empties, focused or not.
+  useEffect(() => onDraftSettled((origin) => {
+    if (origin.key !== draftKeyRef.current || composeRefs(valueRef.current, tableRef.current).trim() !== origin.text.trim()) return;
+    clearTimeout(draftTimerRef.current);
+    pendingDraftRef.current = null;
+    applyText('', { keepRefs: false });
+    attachments.clear();
+    if (textareaRef.current) textareaRef.current.style.height = 'auto';
+  }), [applyText, attachments.clear]);
 
   // A box mounted in place of the one the person was typing in takes the caret back
   // (utils/composer-caret-keep.ts), so the keys after a re-mount are not typed onto the page.
@@ -987,6 +1004,8 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onSendIn
   const processFiles = useCallback((files: FileList | File[]) => {
     // The reads and uploads start here, never inside a state updater: React may
     // run an updater twice, and a read started there attached every picture twice.
+    // A picked file is an edit of the draft: a failed send's words no longer own it.
+    if (Array.from(files).length) draftSaveMark(draftKeyRef.current);
     void attachments.add(files).then((notice) => {
       clearTimeout(attachNoticeTimer.current);
       setAttachNotice(notice);
@@ -994,11 +1013,11 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onSendIn
     });
   }, [attachments.add]);
 
-  const saveDraft = useCallback((text: string) => {
+  const saveDraft = useCallback((text: string, restoredMark?: number) => {
     clearTimeout(draftTimerRef.current);
     // The key it is typed under now: a key change before the timer fires flushes it there.
     const key = draftKeyRef.current;
-    const mark = draftSaveMark();
+    const mark = restoredMark || draftSaveMark(key);
     typedMarkRef.current = mark;
     pendingDraftRef.current = key ? { key, text, mark } : null;
     if (!key) return;
@@ -1061,7 +1080,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onSendIn
   // Restore the input box to the given text + images after a failed send, and make
   // sure the draft is persisted so a page refresh still recovers it. This is the
   // hard guarantee: the user's input must never silently disappear.
-  const restoreInput = (text: string, sent: ComposerAttachment[]) => {
+  const restoreInput = (text: string, sent: ComposerAttachment[], restoredMark?: number) => {
     // Words typed for the next message while this one was on its way stay: the
     // failed words go back in front of them, never over them.
     const typed = composeRefs(valueRef.current, tableRef.current);
@@ -1075,7 +1094,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onSendIn
     // being tokens. The box was reset on dispatch, hence keepRefs: false.
     const split = applyText(text, { keepRefs: false });
     attachments.restore(sent);
-    saveDraft(text);
+    saveDraft(text, restoredMark);
     requestAnimationFrame(() => {
       const el = textareaRef.current;
       if (el) {
@@ -1090,7 +1109,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onSendIn
   // that resolves to `false` (RPC rejected) restores the input; anything else
   // (success, or a void return) clears the draft.
   const dispatchSend = (
-    cb: (text: string, images?: ImageAttachment[]) => void | Promise<boolean>,
+    cb: (text: string, images?: ImageAttachment[], origin?: DraftOrigin) => void | Promise<boolean>,
     text: string,
     sent: ComposerAttachment[],
   ) => {
@@ -1130,13 +1149,22 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onSendIn
       else writeKeptAttachments(sentKey, readKeptAttachments(sentKey).filter((a) => !keptSent.some((k) => k.id === a.id)));
     };
     resetInput(true);
+    const origin: DraftOrigin | undefined = sentKey ? { key: sentKey, text, sent: sentMark } : undefined;
     const failed = () => {
       // Its attachments go back to the box or stay kept (below): not cleared as sent.
       if (sending && sendingAttachmentsRef.current === sending) sendingAttachmentsRef.current = null;
       if (sentKey) unmarkDraftSent(sentKey, sentMark);
-      if (sentKey === draftKeyRef.current) restoreInput(text, sent);
+      const here = sentKey === draftKeyRef.current;
+      // A session send's refused words live on in their own row (origin, useSessionSend): words
+      // typed (or arrived) since the send stay in the box, alone. With no row to hold them,
+      // restoreInput puts the failed words back in front of what was typed.
+      if (here && origin && composeRefs(valueRef.current, tableRef.current).trim()) return;
+      // The failed words are the draft again unless it was edited since the send (drafts.ts).
+      const restored = origin ? claimFailedDraft(origin) : 0;
+      if (origin && !restored) return;
+      if (here) restoreInput(text, sent, restored);
       else if (sentKey) {
-        try { localStorage.setItem(sentKey, text); } catch { /* unavailable */ }
+        if (!origin) { try { localStorage.setItem(sentKey, text); } catch { /* unavailable */ } }
         // The box shows another draft now: the attachments go back to the one they were sent from.
         if (acceptsFiles) {
           const kept = readKeptAttachments(sentKey);
@@ -1144,7 +1172,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onSendIn
         }
       }
     };
-    const result = cb(message, imgs.length > 0 ? imgs : undefined);
+    const result = cb(message, imgs.length > 0 ? imgs : undefined, origin);
     if (result instanceof Promise) {
       result.then((ok) => {
         if (ok) { clearSentDraft(sentKey); settleAttachments(); accepted(); }
@@ -2070,7 +2098,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onSendIn
             </div>
           )}
           {/* Attachments: pictures and files, each with its own upload state */}
-          <ComposerAttachmentStrip attachments={attachments} notice={attachNotice} sendWhenReady={!!sendWhenReady} kept={acceptsFiles && keepsKeyRef.current} onCancelSend={() => setSendWhenReady(false)} />
+          <ComposerAttachmentStrip attachments={attachmentsUi} notice={attachNotice} sendWhenReady={!!sendWhenReady} kept={acceptsFiles && keepsKeyRef.current} onCancelSend={() => setSendWhenReady(false)} />
           {pills.on && <ComposerRefLayer textareaRef={textareaRef} segments={pills.segments} />}
           <textarea
             ref={textareaRef}

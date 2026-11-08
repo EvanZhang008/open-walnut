@@ -12,6 +12,11 @@ export interface HostSignInParams {
   hint?: string;
   /** Walnut re-dials these on its own (a login failure); a key refusal waits for a Retry. */
   retries?: boolean;
+  /**
+   * A key refusal (the host's own problem, not this machine's login): the step is about the key,
+   * never the login hint. `keyFile`: the key the host's SSH settings name that is not there.
+   */
+  key?: { keyFile?: string };
 }
 
 interface Words {
@@ -24,6 +29,8 @@ interface Words {
   retrying: string;
   retryYourself: string;
   sshSaid: string;
+  keyStep: string;
+  keyFileStep: (file: string) => string;
 }
 
 const WORDS: ByLang<Words> = {
@@ -37,6 +44,8 @@ const WORDS: ByLang<Words> = {
     retrying: 'Walnut keeps retrying and archives this letter by itself once the host connects again.',
     retryYourself: 'Then use Retry on the host (or start work there); this letter archives itself once the host connects.',
     sshSaid: 'What SSH said:',
+    keyStep: 'check that the key your SSH settings use for it is on this computer and that the host accepts it',
+    keyFileStep: (file) => `put the key file ${file} that your SSH settings name for it on this computer, or point IdentityFile at a key you have`,
   },
   zh: {
     someHost: '一台远程主机',
@@ -48,6 +57,8 @@ const WORDS: ByLang<Words> = {
     retrying: 'Walnut 会自动重试；主机重新连上后，这封信会自动归档。',
     retryYourself: '然后在该主机上点"重试"（或在那里开始工作）；主机连上后，这封信会自动归档。',
     sshSaid: 'SSH 的原话：',
+    keyStep: '确认 SSH 设置为它使用的密钥在这台电脑上，并且该主机接受这把密钥',
+    keyFileStep: (file) => `把 SSH 设置为它指定的密钥文件 ${file} 放到这台电脑上，或把 IdentityFile 改成你已有的密钥`,
   },
 };
 
@@ -67,10 +78,10 @@ export const HOST_SIGN_IN = letterKind<HostSignInParams>({
   type: 'review',
   callers: ['src/core/hosts/host-auth-alert.ts'],
   marked: true,
-  render: (lang, { hosts, hint, retries }) => {
+  render: (lang, { hosts, hint, retries, key }) => {
     const w = WORDS[lang];
     const labels = hosts.map((h) => h.label);
-    const step = stepOf(hint, w.genericStep);
+    const step = key ? (key.keyFile ? w.keyFileStep(key.keyFile) : w.keyStep) : stepOf(hint, w.genericStep);
     const names = labels.length <= 1 ? (labels[0] ?? w.someHost) : w.names(labels);
     const subject = w.subject(names, step);
     const bold = labels.map((l) => `**${l}**`);
@@ -83,6 +94,8 @@ export const HOST_SIGN_IN = letterKind<HostSignInParams>({
   samples: [
     { hosts: [{ label: 'Dev box', error: 'Permission denied (publickey)' }], retries: true },
     { hosts: [{ label: 'Dev box' }, { label: 'Build host' }, { label: 'GPU box' }], hint: 'run your login command' },
+    { hosts: [{ label: 'Dev box', error: 'Permission denied (publickey)' }], key: {} },
+    { hosts: [{ label: 'Dev box' }], key: { keyFile: '~/.ssh/id_devbox' } },
   ],
   stillNeeded: { none: 'host-auth-alert.ts archives it itself once a host of its episode connects again, or every host of it left Settings' },
 });

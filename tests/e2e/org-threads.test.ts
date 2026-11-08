@@ -35,6 +35,7 @@ import { CLAUDE_HOME, WALNUT_HOME } from '../../src/constants.js'
 import { encodeProjectPath } from '../../src/core/session-history.js'
 import { bus, EventNames } from '../../src/core/event-bus.js'
 import { startServer, stopServer } from '../../src/web/server.js'
+import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { addTask, listTasksByIds } from '../../src/core/task-manager.js'
 import { createSessionRecord, getSessionByClaudeId, updateSessionRecord } from '../../src/core/session-tracker.js'
 import { ensureProjectLead } from '../../src/core/org/org-store.js'
@@ -99,6 +100,7 @@ beforeAll(async () => {
   process.env.WALNUT_THREAD_JOIN_SECS = '0'
   process.env.WALNUT_THREAD_REOPEN_SECS = '0'
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
+  vi.spyOn(sessionRunner as unknown as { processNext(sessionId: string, mode?: string): Promise<void> }, 'processNext').mockResolvedValue(undefined)
   const server = await startServer({ port: 0, dev: true })
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
   workerId = (await addTask({ title: 'Hint labels', project: 'Garden' })).task.id
@@ -113,6 +115,7 @@ afterAll(async () => {
   delete process.env.WALNUT_THREAD_JOIN_SECS
   delete process.env.WALNUT_THREAD_REOPEN_SECS
   await stopServer()
+  vi.restoreAllMocks()
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 })
 
@@ -234,7 +237,11 @@ describe('Org Threads', () => {
       { type: 'assistant', uuid: 'a-1', text: 'The fast model in the local config, for titles and summaries.' },
     ])
     bus.emit(EventNames.SESSION_RESULT, { sessionId: LEAD_SID, taskId: leadId, result: 'done' }, ['web-ui'], { source: 'test' })
-    await expect.poll(async () => (await threads()).find((x) => x.id === t.id)?.messages[0].answer?.text, { timeout: 15_000 })
+    await expect.poll(async () => {
+      const { readThreads } = await import('../../src/core/org/threads-store.js')
+      return (await readThreads(leadId)).threads.find((x) => x.id === t.id)?.messages[0].answer?.text
+    }, { timeout: 15_000 }).toBe('The fast model in the local config, for titles and summaries.')
+    expect((await threads()).find((x) => x.id === t.id)?.messages[0].answer?.text)
       .toBe('The fast model in the local config, for titles and summaries.')
     // He said nothing since: the lead's close and known mark are refused, the thread stays open.
     const refused = await patch(t.id, { close: 'acked' }, LEAD_SID)
@@ -287,10 +294,12 @@ describe('Org Threads', () => {
     // Bad input is refused.
     const bad = await fetch(`${base}/api/v1/tasks/${leadId}/threads/open`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'x', text: 'y', from: 'fax' }) })
     expect(bad.status).toBe(400)
-    // The open list leaves the closed ones out and counts them.
+    expect((await patch(opened.id, { close: 'acked' })).status).toBe(200)
+    // This case supplies its own closed thread, independent of earlier cases.
     const open = await fetch(`${base}/api/v1/tasks/${leadId}/threads?open=1`)
     const body = (await open.json()) as { threads: OrgThread[]; closed_count: number }
     expect(body.threads.every((x) => !x.closed)).toBe(true)
+    expect(body.threads.some((x) => x.id === opened.id)).toBe(false)
     expect(body.closed_count).toBeGreaterThan(0)
   })
 

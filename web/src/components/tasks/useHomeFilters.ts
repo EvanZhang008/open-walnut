@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Task } from '@open-walnut/core';
 import { log } from '@/utils/log';
-import { hasOpenOverlayLayer } from '@/hooks/useOverlayLayer';
+import { pageShortcutBlocked } from '@/utils/page-shortcut';
 import { useNotifications } from '@/contexts/notifications';
 import { useShowPriority } from '@/hooks/useShowPriority';
 import { useTagDisplay } from '@/stores/tag-display-store';
@@ -99,11 +99,6 @@ export function isTypingTarget(el: Element | null): boolean {
   if (!el) return false;
   const tag = el.tagName;
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (el as HTMLElement).isContentEditable;
-}
-
-/** A menu or dialog outside the overlay-layer stack is open. */
-function otherOverlayOpen(): boolean {
-  return !!document.querySelector('[role="dialog"]:not([hidden]), [role="menu"]:not([hidden]), [role="alertdialog"]');
 }
 
 function persistTab(tab: string): void {
@@ -192,9 +187,10 @@ export function useHomeFilters(opts: HomeFiltersOptions) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'f' && e.key !== 'F') return;
-      if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented || e.repeat) return;
-      if (isTypingTarget(document.activeElement) || hasOpenOverlayLayer() || otherOverlayOpen()) return;
+      if (e.repeat) return;
       const button = buttonRef.current;
+      // Never while a sheet (the Files sheet), an editor or a menu has the reader (utils/page-shortcut.ts).
+      if (pageShortcutBlocked(e, button)) return;
       if (!button || !button.isConnected || button.closest('[inert]') || button.offsetParent === null) return;
       e.preventDefault();
       setMenuOpen(true);

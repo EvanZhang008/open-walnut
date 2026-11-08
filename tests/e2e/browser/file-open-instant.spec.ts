@@ -20,6 +20,7 @@
  * image case is pinned separately in file-image-refresh.spec.ts).
  */
 import { test, expect, type Locator, type Page } from '@playwright/test'
+import { goToSessionFolder } from './todo-panel-helpers'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 
@@ -51,6 +52,7 @@ async function openFilesPanel(page: Page): Promise<Locator> {
   await panel.getByRole('button', { name: 'Files', exact: true }).click()
   const explorer = panel.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 15_000 })
+  await goToSessionFolder(explorer)
   return explorer
 }
 
@@ -63,11 +65,12 @@ function bodyText(page: Page): Locator {
   return page.locator('.file-content-view .ProseMirror, .file-content-view .cm-content, .file-content-view pre').first()
 }
 
-test('a file you have opened before paints before the network answers, and still corrects itself', async ({ page }) => {
+test('a file you have opened before paints before the network answers, and still corrects itself', async ({ page, baseURL }) => {
   await page.addInitScript(() => {
     try { localStorage.setItem('open-walnut-file-explorer-tree-collapsed', '0') } catch { /* off */ }
   })
-  await page.goto('/')
+  await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
+  await page.getByRole('link', { name: 'Open Walnut' }).click()
   await page.waitForLoadState('networkidle')
 
   const cwd = await fixtureCwd(page)
@@ -137,11 +140,12 @@ test('a file you have opened before paints before the network answers, and still
   }
 })
 
-test('resting on a row reads the file ahead of the click, so even the FIRST open paints instantly', async ({ page }) => {
+test('resting on a row reads the file ahead of the click, so even the FIRST open paints instantly', async ({ page, baseURL }) => {
   await page.addInitScript(() => {
     try { localStorage.setItem('open-walnut-file-explorer-tree-collapsed', '0') } catch { /* off */ }
   })
-  await page.goto('/')
+  await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
+  await page.getByRole('link', { name: 'Open Walnut' }).click()
   await page.waitForLoadState('networkidle')
 
   const cwd = await fixtureCwd(page)
@@ -209,11 +213,12 @@ test('resting on a row reads the file ahead of the click, so even the FIRST open
   }
 })
 
-test('an unchanged re-open asks with a validator and transfers no body', async ({ page }) => {
+test('re-opening sends a validator and the server answers without a body', async ({ page, baseURL }) => {
   await page.addInitScript(() => {
     try { localStorage.setItem('open-walnut-file-explorer-tree-collapsed', '0') } catch { /* off */ }
   })
-  await page.goto('/')
+  await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
+  await page.getByRole('link', { name: 'Open Walnut' }).click()
   await page.waitForLoadState('networkidle')
 
   const cwd = await fixtureCwd(page)
@@ -244,31 +249,22 @@ test('an unchanged re-open asks with a validator and transfers no body', async (
     await nodeByName(explorer, otherName).click()
     await expect(bodyText(page)).not.toContainText('unchanged between opens', { timeout: 15_000 })
 
-    // Watch the re-open's read.
-    const reads: Array<{ conditional: boolean; status: number; bytes: number }> = []
-    page.on('response', async (res) => {
-      const url = res.url()
-      if (!url.includes('/api/file-content') || res.request().method() !== 'GET') return
-      if (!url.includes(encodeURIComponent(docName))) return
-      let bytes = -1
-      try { bytes = (await res.body()).length } catch { bytes = 0 }
-      reads.push({
-        conditional: !!res.request().headers()['if-none-match'],
-        status: res.status(),
-        bytes,
-      })
+    const reopened = page.waitForRequest((request) => {
+      const url = new URL(request.url())
+      return request.method() === 'GET' && url.pathname === '/api/file-content'
+        && url.searchParams.get('path') === path.join(dir, docName)
+        && url.searchParams.get('track') === 'baseline'
     })
-
     await docRow.click()
     await expect(bodyText(page)).toContainText('unchanged between opens', { timeout: 15_000 })
-    await expect.poll(() => reads.length, { timeout: 10_000 }).toBeGreaterThan(0)
+    const read = await reopened
+    const validator = read.headers()['if-none-match']
+    expect(validator, 'the re-open sent If-None-Match').toBeTruthy()
 
-    // The client's half of the contract: it says which bytes it already has.
-    expect(reads[0].conditional, 'the re-open sent If-None-Match').toBe(true)
-    // The server's half: an unchanged file answers 304 with no body. Asserted
-    // together so a regression on either side fails here.
-    expect(reads[0].status, 'an unchanged file answers 304').toBe(304)
-    expect(reads[0].bytes, 'a 304 carries no body').toBe(0)
+    // WebKit can report a revalidated response as 200; verify the server exchange directly.
+    const response = await page.request.get(read.url(), { headers: { 'If-None-Match': validator } })
+    expect(response.status(), 'an unchanged file answers 304').toBe(304)
+    expect((await response.body()).length, 'a 304 carries no body').toBe(0)
   } finally {
     await fs.rm(dir, { recursive: true, force: true })
   }

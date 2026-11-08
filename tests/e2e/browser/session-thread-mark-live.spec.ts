@@ -24,9 +24,11 @@
  * before that it waits).
  */
 import { expect, type Locator, type Page } from '@playwright/test'
+import { goToSessionFolder, isolateUiPrefs } from './todo-panel-helpers'
 import fs from 'node:fs/promises'
 import {
-  centreInHistory, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage, sessionPanel, test,
+  centreInHistory, expectDragInViewport, humanPress, openThreadsSession, passageRects, readRecord, resetThreadsFixture,
+  scrollTextIntoView, selectPassage, sessionPanel, test,
 } from './threads-helpers'
 import { RELOAD_PASSAGE, RELOAD_SESSION, TAGGED_PASSAGE, TAGGED_READY, TAGGED_SESSION, TAGGED_TASK, TAGGED_TEXT } from './threads-fixture'
 
@@ -81,12 +83,17 @@ test.describe('The scanning line under a passage being answered', () => {
   test.describe.configure({ mode: 'serial' })
   test.setTimeout(240_000)
 
-  test.beforeEach(async ({ request }) => {
+  test.beforeEach(async ({ page, request }) => {
     await resetThreadsFixture(request, TAGGED_SESSION)
+    // This spec's own reading places only: a file opens at the place it was last read at and holds
+    // it for its first seconds (use-file-reading-place.ts), and the shared fixture's ui-prefs would
+    // bring in a place another spec left for the same fixture file.
+    await isolateUiPrefs(page)
   })
 
-  test('Conversation Mode: a follow-up and a new question each scan their passage until the answer lands', async ({ page }) => {
-    await page.goto('/')
+  test('Conversation Mode: a follow-up and a new question each scan their passage until the answer lands', async ({ page, baseURL }) => {
+    await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
+    await page.getByRole('link', { name: 'Open Walnut' }).click()
     await page.waitForLoadState('networkidle')
     await page.setViewportSize({ width: 1800, height: 800 })
     await page.addStyleTag({ content: `.main-page-session-column:has(.session-panel[data-session-id="${TAGGED_SESSION}"]) {
@@ -160,11 +167,12 @@ test.describe('The scanning line under a passage being answered', () => {
     await expect(lines).toHaveCount(0, { timeout: 15_000 })
   })
 
-  test('a reload while the answer is coming: the panel comes back with the same passage scanning', async ({ page, request }) => {
+  test('a reload while the answer is coming: the panel comes back with the same passage scanning', async ({ page, request, baseURL }) => {
     // The session whose sends reach its transcript (the mock writes a slow
     // turn's user line when the turn starts, as the real CLI does).
     await resetThreadsFixture(request, RELOAD_SESSION)
-    await page.goto('/')
+    await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
+    await page.getByRole('link', { name: 'Open Walnut' }).click()
     await page.waitForLoadState('networkidle')
     await page.setViewportSize({ width: 1400, height: 820 })
     let panel = await openThreadsSession(page, RELOAD_SESSION, RELOAD_TASK, 'What does the reader do after a rotation?', { view: 'linear' })
@@ -206,8 +214,9 @@ test.describe('The scanning line under a passage being answered', () => {
     await expect(panel.locator('.thread-card .thread-card-body')).toContainText('processed your message: What drains first?', { timeout: 30_000 })
   })
 
-  test('Tree Mode: a question answered while its parent page is on screen scans in the state colour', async ({ page }) => {
-    await page.goto('/')
+  test('Tree Mode: a question answered while its parent page is on screen scans in the state colour', async ({ page, baseURL }) => {
+    await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
+    await page.getByRole('link', { name: 'Open Walnut' }).click()
     await page.waitForLoadState('networkidle')
     await page.setViewportSize({ width: 1400, height: 820 })
     const panel = await openThreadsSession(page, TAGGED_SESSION, TAGGED_TASK, TAGGED_READY, { view: 'stack' })
@@ -247,14 +256,16 @@ test.describe('The scanning line under a passage being answered', () => {
     await expect.poll(async () => await hasHighlight(page, 'thread-mark-unread-neutral') || await hasHighlight(page, 'thread-mark-neutral')).toBe(true)
   })
 
-  test('Files tab: the markdown editor and the HTML preview scan the asked passage', async ({ page }) => {
-    await page.goto('/')
+  test('Files tab: the markdown editor and the HTML preview scan the asked passage', async ({ page, baseURL }) => {
+    await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
+    await page.getByRole('link', { name: 'Open Walnut' }).click()
     await page.waitForLoadState('networkidle')
     await page.setViewportSize({ width: 1400, height: 820 })
     const panel = await openThreadsSession(page, TAGGED_SESSION, TAGGED_TASK, TAGGED_READY, { view: 'linear' })
     await panel.getByRole('button', { name: 'Files', exact: true }).click()
     const explorer = panel.locator('.session-file-explorer')
     await expect(explorer).toBeVisible({ timeout: 10_000 })
+    await goToSessionFolder(explorer)
     const openFile = async (name: string) => {
       await explorer.locator('.session-file-explorer-node', { hasText: name }).first().click()
       const view = explorer.locator('.file-content-view')
@@ -274,6 +285,7 @@ test.describe('The scanning line under a passage being answered', () => {
       return []
     }, needle)
     const drag = async (rects: TextRect[]) => {
+      expectDragInViewport(page, rects)
       const first = rects[0]
       const last = rects[rects.length - 1]
       await page.mouse.move(first.left + 1, first.top + first.height / 2)
@@ -290,17 +302,13 @@ test.describe('The scanning line under a passage being answered', () => {
     // The file opens where this session's view of it was last scrolled, and this
     // test itself scrolls the passage up under the toolbar below: on its retry (CI
     // 2026-11-09) the drag landed on the toolbar, nothing was selected and Ask here
-    // never came. The passage is brought to the middle of its scroller first.
-    await editor.evaluate((el, phrase) => {
-      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
-      for (let n = walker.nextNode(); n; n = walker.nextNode()) {
-        if ((n as Text).data.includes(phrase)) { (n.parentElement as HTMLElement).scrollIntoView({ block: 'center' }); return }
-      }
-    }, MD_PASSAGE_FULL)
+    // never came. The passage is wheeled fully into view first, below the toolbar.
+    await scrollTextIntoView(page, editor, MD_PASSAGE_FULL)
     const toolbarBox = (await view.locator('.fv-html-toolbar').first().boundingBox())!
     await expect.poll(async () => (await textRects(editor, MD_PASSAGE_FULL))[0]?.top ?? 0).toBeGreaterThan(toolbarBox.y + toolbarBox.height)
     await drag(await textRects(editor, MD_PASSAGE_FULL))
-    await page.locator('[data-testid="bubble-ask-here"]').dispatchEvent('mousedown')
+    await expect.poll(() => page.evaluate(() => window.getSelection()?.toString())).toBe(MD_PASSAGE_FULL)
+    await humanPress(page, page.locator('[data-testid="bubble-ask-here"]'))
     let card = view.locator('.fv-thread-layer .thread-card')
     await expect(card).toHaveAttribute('data-draft', 'true')
     await card.locator('.thread-card-input').fill(`${SLOW} Why keep both versions?`)

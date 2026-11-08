@@ -7,6 +7,7 @@
  * spawns the CLI (locally or via the remote daemon).
  */
 
+import os from 'node:os';
 import path from 'node:path';
 import { log } from '../../logging/index.js';
 import { addTask, getTask, updateTask, updateTaskRaw, getCustomTiers, ensureFolderProject, resolveProjectForWrite, InvalidProjectNameError, ProjectSourceConflictError } from '../task-manager.js';
@@ -237,6 +238,30 @@ export function matchPlaceholderTitle(
   return cwds.filter((c): c is string => !!c)
     .map(defaultSessionTaskTitle)
     .find((ph) => title === ph);
+}
+
+/** A folder named only by an id (a UUID, a long hex hash): "Session: <it>" would name nothing. */
+export function folderNameIsAnId(cwd: string): boolean {
+  const name = path.basename(cwd.replace(/\/+$/, '') || '/');
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(name) || /^[0-9a-f]{16,}$/i.test(name);
+}
+
+/**
+ * A folder whose name says nothing about the work started in it, so "Session: <its name>" would
+ * be noise: one named by an id, the home folder (`~`, or `home`: a new user's default folder read
+ * "Session: <their user name>", 2026-11-10 review), or the filesystem root. The person's own words
+ * name such a task at once.
+ */
+export function folderNamesNoWork(cwd: string, home?: string): boolean {
+  const dir = cwd.replace(/\/+$/, '');
+  if (!dir || dir === '~') return true;
+  if (home && dir === home.replace(/\/+$/, '')) return true;
+  return folderNameIsAnId(dir);
+}
+
+/** A first line that is a slash command (`/compact`, `/review x`): command grammar, never a title. */
+function isCommandLine(message: string): boolean {
+  return /^\/[a-z][\w-]*(\s|$)/i.test(message.trim());
 }
 
 /**
@@ -544,6 +569,8 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
   }
 
   let updatedTask: Task;
+  // The person's words a new task was titled with ('' = none): the launch auto-title refines it below.
+  let launchWordsTitle = '';
 
   if (existingTaskId) {
     // Retry mode: reuse existing task, archive error sessions.
@@ -615,7 +642,15 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     // A task in its own directory has no folder to name it: the person's own words do, at once,
     // cut as the title brake cuts (the board, search and approvals read it; review round 5: every
     // such task read "Session: <its id>" until a model titled it, and never when none did).
-    const wordsTitle = inOwnTaskDir && !params.taskTitle?.trim() ? titleFromWords(message) : '';
+    // So does a folder whose name is only an id (a Demo's home is named by its generation id:
+    // review round 2 read "Session: 501afb78-..."), which tells the person nothing. And so does
+    // every New task a PERSON typed a first message into (the draft, the phone's New task), from
+    // any folder: "Session: Projects" for "Second task" said only where it runs (review round 2).
+    // "Session: <folder>" stays for a launch with no words, a slash command, an Ask, or one an
+    // agent or a routine made (its own words are not the person's; the launch auto-title names it).
+    const home = !host || host === '__local__' ? os.homedir() : undefined;
+    const personTyped = isPersonSource(source) && !isCommandLine(message);
+    const wordsTitle = (inOwnTaskDir || !askAgent && (personTyped || folderNamesNoWork(cwd, home))) && !params.taskTitle?.trim() ? titleFromWords(message) : '';
     const title = params.taskTitle?.trim() || wordsTitle || placeholderTitle;
     // A folder-derived project is decided HERE, not trusted from the draft:
     // the folder's own project, else a new one named after the folder, made
@@ -726,12 +761,16 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
       if ('error' in made) throw new QuickStartError(`The new task's own directory could not be made: ${made.error}`, made.status);
       cwd = made.path;
       ({ task } = await updateTask(task.id, { cwd, ...(params.taskTitle?.trim() || wordsTitle ? {} : { title: defaultSessionTaskTitle(cwd) }) }, { source }));
-      // A cut of longer words: Walnut's fast model may name it better, in the background, only
-      // while the task still wears the cut.
-      if (wordsTitle && wordsTitle !== message.trim()) {
-        const id = task.id;
-        void import('./task-title-brake.js').then(({ refineShortTitle }) => refineShortTitle(id, wordsTitle, message));
-      }
+    }
+    // Refined in the background, only while the task still wears the words: by the launch
+    // auto-title below (the session's own model, the path that used to replace "Session: <folder>"),
+    // else, for a cut of longer words, by Walnut's fast model (every words title, not only a task in
+    // its own directory).
+    launchWordsTitle = wordsTitle && task.title === wordsTitle ? wordsTitle : '';
+    const launchTitles = !!preassignedSessionId && !isAcpEngine(engine) && !!message.trim() && !!launchWordsTitle;
+    if (wordsTitle && wordsTitle !== message.trim() && !launchTitles) {
+      const id = task.id;
+      void import('./task-title-brake.js').then(({ refineShortTitle }) => refineShortTitle(id, wordsTitle, message));
     }
     // One rare follow-up write left: `unread` doesn't ride AddTaskInput. The
     // tier no longer needs one — it rode the create above.
@@ -864,7 +903,8 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
   // native engine only — ACP mints its own ids and has no control pipe. The
   // placeholder check here skips callers with a real title (fix-walnut,
   // routines, retries of an already-titled task) without the helper's poll.
-  const launchPlaceholder = matchPlaceholderTitle(updatedTask, [cwd]);
+  const launchPlaceholder = matchPlaceholderTitle(updatedTask, [cwd])
+    ?? (launchWordsTitle && updatedTask.title === launchWordsTitle ? launchWordsTitle : undefined);
   if (preassignedSessionId && !isAcpEngine(engine) && message.trim() && launchPlaceholder) {
     import('../session-hooks/builtins.js')
       .then(({ autoTitleFromLaunch }) => autoTitleFromLaunch(preassignedSessionId, updatedTask.id, message, cwd, launchPlaceholder))

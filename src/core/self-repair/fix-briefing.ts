@@ -13,6 +13,7 @@
 
 import type { NotificationRecord } from '../notifications/store.js';
 import type { WalnutSource } from './walnut-source.js';
+import { renderHintBlock } from '../hints/hint-format.js';
 
 export interface FixBriefingContext {
   source: WalnutSource;
@@ -85,6 +86,31 @@ export function whereSection(ctx: FixBriefingContext): string[] {
     'Setup: run `bun install` here first if node_modules is missing (the checkout needs bun, https://bun.sh). Build with `bun run web:build`; run the quick tests with `bun run test:quick`.',
     'Important: the repo\'s CLAUDE.md describes the maintainer\'s own deploy flow (`bun run dev:prod`, port 3456). Do NOT run it, and do NOT kill or restart the user\'s running Walnut: it is not served from this tree. Do not install this tree over the installed Walnut either. Prove the fix here with `bun run dev:ephemeral` (an isolated server on a random port with a copy of the data), then offer to open a pull request upstream, which reaches the user in a release.',
   ];
+}
+
+/**
+ * What the person reads as the repair session's first message: the error they clicked,
+ * in one line. The briefing below is the agent's (paths, the build and test workflow,
+ * the upstream pull request) and rides beside it as a Walnut hint block, which every
+ * surface takes off (hint-format.ts), so a new user never reads developer instructions
+ * in their own bubble (review round 2, D08).
+ */
+export function fixRequestLine(n: Pick<NotificationRecord, 'title'>): string {
+  const flat = n.title.replace(/\s+/g, ' ').trim() || 'an error notification';
+  return `Please find and fix the cause of this error: ${flat}`;
+}
+
+/** The hint kind the briefing rides under (agent-only text, never shown in a bubble). */
+export const REPAIR_BRIEF_HINT = 'repair-brief';
+
+/**
+ * A repair briefing as the block that goes in front of the person's words (a launch's
+ * `messagePrefix`): Walnut text outside the hint registry, read by the agent and taken
+ * off every bubble by structure. Both repair launches use it (an error card's Fix with
+ * agent here, the drawer's Fix Walnut in routes/sessions.ts).
+ */
+export function repairBriefPrefix(brief: string): string {
+  return `${renderHintBlock(REPAIR_BRIEF_HINT, brief)}\n\n`;
 }
 
 export function buildNotificationFixMessage(n: NotificationRecord, ctx: FixBriefingContext): string {

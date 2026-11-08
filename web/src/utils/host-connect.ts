@@ -7,7 +7,7 @@
  * node test, and the surfaces that need them are in three different trees.
  */
 import type { DaemonConnectPhase, HostConnectStep, HostStatus } from '@/api/hosts';
-import { OFF_PHASE_LABEL, hostConnectedWords } from '@open-walnut/host-problem';
+import { OFF_PHASE_LABEL, hostConnectedWords, hostProblemOf, shownFailureSummary } from '@open-walnut/host-problem';
 import { serverNow } from '@/hooks/useHostStatus';
 
 // Host dots and problems come from the shared model (@open-walnut/host-problem);
@@ -133,7 +133,7 @@ export function hostStatusText(status: HostStatus | undefined, hydration?: HostS
     return 'Status unknown';
   }
   if (isHostOff(status)) return OFF_PHASE_LABEL;
-  if (isHostFailed(status)) return status.error || 'Could not connect';
+  if (isHostFailed(status)) return shownFailureSummary(status.error) || 'Could not connect';
   if (isHostConnecting(status)) return status.phaseLabel || `${activeStepLabel(status)}…`;
   if (status.connected) return hostConnectedWords(status, serverNow());
   return 'Not connected';
@@ -151,6 +151,19 @@ export function connectNote(status: HostStatus | undefined, steps: HostConnectSt
   if (status?.note) return status.note;
   const active = steps.find((s) => s.status === 'active')?.phase;
   return active === 'install-runtime' || active === 'upload' ? FIRST_CONNECT_NOTE : undefined;
+}
+
+/**
+ * Why a host that is reconnecting is not back yet, in words: the headline of its last failure
+ * kind, else that failure's own summary (shownFailureSummary, never the raw text). Undefined while
+ * nothing failed yet. 2026-11-11 review: the found-host card read "Reconnecting to demo-devbox,
+ * 0 of 7 steps complete, Connecting for 8m 10s" while the server knew "Connection refused".
+ */
+export function reconnectReasonOf(status: HostStatus | undefined): string | undefined {
+  if (!status || status.connected) return undefined;
+  const problem = hostProblemOf(status);
+  if (problem?.type !== 'reconnecting') return undefined;
+  return problem.headline || shownFailureSummary(status.lastError) || undefined;
 }
 
 /** Short label of the step in flight (for a tooltip / a phase-less fallback). */

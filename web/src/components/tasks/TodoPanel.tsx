@@ -130,7 +130,6 @@ import { FilterBar } from './FilterBar';
 import { DisplayButton } from './DisplayMenu';
 import type { DisplayMenuProps, FilterBarController, FilterDim, FilterState } from './filter-bar-types';
 import { OPEN_PHASES, hasAllOpen, isDefaultStatus } from './filter-bar-model';
-import { markTierUsed, readTierUsed } from './filter-bar-persist';
 import { buildFilterEvalContext, dimPasses, hiddenByReasons, passesChips } from './filter-predicate';
 import { useHomeFilters, useArchiveFetch, useCreatedOutsideToast } from './useHomeFilters';
 import { archiveNarrowed, footerScope } from './TodoFilterFooter';
@@ -138,6 +137,8 @@ import { LimitedSummary, StatusSectionGroup, sectionRowsOf, type SectionRowHandl
 import { ProjectStatusFolds, useProjectFolds } from './PanelDesignParts';
 import { bottomStatusSections, foldTasksByProject, leftoverFoldProjects, projectFoldKey, usePanelDesign, type ProjectFoldTasks } from './panel-design';
 import { FOLD_PANEL_ATTR, statusSectionFoldKind, statusSectionsOpen } from './section-fold-rule';
+import { firstVisitFoldAll, firstVisitFolds } from './first-visit-folds';
+import { parentsToAutoOpen, recordAutoOpened } from './auto-open-parents';
 import { useFoldStore } from './useFoldStore';
 import {
   LS_JUMP_SECTIONS_KEY, LS_STATUS_SECTIONS_KEY, STATUS_SECTION_ORDER, buildStatusSections, drawnSectionOf, isBackground, isWatched, stateSectionNoNeeds, stateSectionOf, type DrawnSectionKey, type StatusSectionKey,
@@ -546,6 +547,8 @@ function effectivePriority(p: string): string {
 
 const LS_COLLAPSED_SECTIONS_KEY = 'walnut-todo-collapsed-sections';
 const LS_EXPANDED_PARENTS_KEY = 'walnut-todo-expanded-parents';
+/** The parents the load-time auto-expand opened once already: it never opens them again. */
+const LS_AUTO_OPENED_PARENTS_KEY = 'walnut-todo-auto-opened-parents';
 /** Project runs in the pinned tiers, folded per (tier, project): place-folds.ts. */
 const LS_RUN_FOLDS_KEY = 'walnut-todo-tier-run-folds';
 const LS_LEGACY_RUN_FOLDS_KEY = 'walnut-todo-collapsed-projs';
@@ -1819,13 +1822,12 @@ const NO_SEPARATORS: TierSeparator[] = [];
 // It reads as the status sections' divider row (name, count, a line). No grip and no
 // per-tier resize handle: the All view is one scroller now, so a per-tier maxHeight
 // would carve a second scrollbar out of it.
-function TierNavigationGroup({ def, isAll, headless, folded, collapsed, onToggle, visibleIds, taskCount, children, isEmpty, onAdd, onAddSession, onAddTask, onAddSeparator, dropProps, addOpenSignal, onAddSignalConsumed, viewMode, onChangeViewMode, sortBy, onChangeSort, anchorPaused }: {
+function TierNavigationGroup({ def, isAll, folded, collapsed, onToggle, visibleIds, taskCount, children, isEmpty, onAdd, onAddSession, onAddTask, onAddSeparator, dropProps, addOpenSignal, onAddSignalConsumed, viewMode, onChangeViewMode, sortBy, onChangeSort, anchorPaused }: {
   /** `id` + `label` of the tier — the four built-ins pass a synthetic def. */
   def: CustomTierDef;
   /** In a stacked view (All or Pinned): the tier draws its heading and takes header drops. */
   isAll: boolean;
   /** 5.10: the only tier with tasks on a board that never picked a tier: no heading. */
-  headless?: boolean;
   /** Chevron-folded in the stacked view (content hidden). */
   folded: boolean;
   /** Raw collapsed-set membership (chevron direction). */
@@ -1887,7 +1889,7 @@ function TierNavigationGroup({ def, isAll, headless, folded, collapsed, onToggle
   ];
   return (
     <div className="todo-pinned-subgroup">
-      {isAll && !headless && (
+      {isAll && (
         <div ref={setNodeRef} className={`todo-pinned-subgroup-heading${isOver ? ' navigation-drop-target' : ''}`}>
         <NavigationHeading
           id={def.id}
@@ -1913,9 +1915,8 @@ function TierNavigationGroup({ def, isAll, headless, folded, collapsed, onToggle
             </TierDropZone>
             {/* No standing "+ Add to Focus…" row under a tier that holds tasks (2026-10-29, the
                 user: "remove"); the tier's "+" → New task still opens it in place. An empty
-                tier keeps it: it is that tier's only way in, and so does a headless tier (no
-                heading, so no "+"). */}
-            <InlineAdd draftId={`tier:${def.id}${headless ? ':pinned' : ''}`} label={headless ? 'Add a pinned task…' : `Add to ${def.label}…`} onAdd={onAdd} openSignal={addOpenSignal} onOpenSignalConsumed={onAddSignalConsumed} hideClosed={!isEmpty && !headless} />
+                tier keeps it: it is that tier's only way in. */}
+            <InlineAdd draftId={`tier:${def.id}`} label={`Add to ${def.label}…`} onAdd={onAdd} openSignal={addOpenSignal} onOpenSignalConsumed={onAddSignalConsumed} hideClosed={!isEmpty} />
           </div>
         </SortableContext>
       )}
@@ -2245,8 +2246,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const pinBar = useFocusBarContextSafe();
   const pinIntoTier = useCallback((id: string, tier: FocusTier, order?: string[]) => {
     if (!pinBar) return;
-    markTierUsed();
-    window.dispatchEvent(new Event('walnut:tier-used'));
     void (async () => {
       if (pinUndo) await pinUndo.pinToTier(id, tier);
       else await pinBar.setTierBulk([id], tier);
@@ -2278,23 +2277,16 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // on filter changes) reads the board predicate through this ref, published
   // from a layout effect below, never during render.
   const passesBoardRef = useRef<(t: Task) => boolean>(() => true);
-  /** Which status section draws a task now (null: none), for the focus effect above the memos. */
   /** Shows a task a status section or a project fold draws (opening it for a locate) and
-   *  says whether one does; published below, read by the focus effect above the memos. */
-  const revealInSectionRef = useRef<(t: Task, locate: boolean) => boolean>(() => false);
+   *  says which one does ('section': a flat status section, 'fold': a project's fold, false:
+   *  neither); published below, read by the focus effect above the memos. */
+  const revealInSectionRef = useRef<(t: Task, locate: boolean) => 'section' | 'fold' | false>(() => false);
+  /** Whether a tier draws a task's row now (its visible ids), published below the memos: a
+   *  locate opens a tier and its project run only when the row is in it. */
+  const tierDrawsRef = useRef<(taskId: string, tier: string) => boolean>(() => true);
   /** The last focus handled, and whether the user asked for it (a page-load restore did not). */
   const focusLocateRef = useRef<{ id: string; locate: boolean } | null>(null);
-  // 5.10: tier headings stay off a one-tier board until the user picks a tier once.
-  const [tierUsed, setTierUsed] = useState(readTierUsed);
-  const noteTierUsed = useCallback(() => { markTierUsed(); setTierUsed(true); }, []);
-  useEffect(() => {
-    window.addEventListener('walnut:tier-used', noteTierUsed);
-    return () => window.removeEventListener('walnut:tier-used', noteTierUsed);
-  }, [noteTierUsed]);
-  const onSetTier = useMemo(() => onSetTierProp && ((...args: Parameters<NonNullable<typeof onSetTierProp>>) => {
-    noteTierUsed();
-    return onSetTierProp(...args);
-  }), [onSetTierProp, noteTierUsed]);
+  const onSetTier = onSetTierProp;
   const [sortBy, setSortBy] = useState<SortBy>(readSortBy);
   // A project's own order (its right-click "Sort tasks by"); the rest follow sortBy.
   // Only the By-project list reads it: "In one list" has one order for everything.
@@ -2435,10 +2427,29 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, [expandProject]);
   // Consume-once acknowledgment from the target InlineAdd (see its effect).
   const clearHeaderAddSignal = useCallback(() => setHeaderAddSignal(null), []);
-  // Every region starts expanded, and the first chevron click persists whatever the
-  // user actually wants. (A first visit used to start Parked folded; Parked is retired
-  // and its tasks draw in Satellite, so a stored 'wait' entry folds nothing.)
-  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(() => readSetFromStorage(LS_COLLAPSED_SECTIONS_KEY));
+  // Stored choices win; a first visit keeps every region folded. (Parked is retired and its
+  // tasks draw in Satellite, so a stored 'wait' entry folds nothing.)
+  const firstSectionsVisit = useRef<boolean | null>(null);
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(() => {
+    try {
+      firstSectionsVisit.current = localStorage.getItem(LS_COLLAPSED_SECTIONS_KEY) === null;
+    } catch { firstSectionsVisit.current = true; }
+    if (firstSectionsVisit.current) return firstVisitFoldAll((customTiersLive ?? []).map(t => t.id));
+    return readSetFromStorage(LS_COLLAPSED_SECTIONS_KEY);
+  });
+  // The first visit's folds are decided once the first load is in (first-visit-folds.ts): an
+  // empty board keeps its regions open, so the first task the person makes is on screen.
+  const firstVisitDecided = useRef(false);
+  useEffect(() => {
+    if (loading || !customTiersLoaded || firstVisitDecided.current) return;
+    firstVisitDecided.current = true;
+    let stored = true;
+    try { stored = localStorage.getItem(LS_COLLAPSED_SECTIONS_KEY) !== null; } catch { /* storage disabled */ }
+    if (stored) return;
+    const next = firstVisitFolds(tasks.length, (customTiersLive ?? []).map(t => t.id));
+    persistSet(LS_COLLAPSED_SECTIONS_KEY, next);
+    setCollapsedSections(next);
+  }, [loading, customTiersLoaded, tasks.length, customTiersLive]);
   // True while a search query is active (assigned during render below). A live
   // search force-expands every region, so chevron clicks are ignored — otherwise
   // a click on a visually-open header would silently flip the PERSISTED collapse
@@ -2561,7 +2572,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Holds the EFFECTIVE section (assigned after search-view resolution below).
   const activeSectionRef = useRef<TodoSection>(activeSection);
   const handleSectionChange = useCallback((section: TodoSection) => {
-    if (isTierSection(section)) noteTierUsed();
     if (isSearchModeRef.current) { setSearchSection(section); return; }
     // A tab picked inside a project jump stays the jump's: the saved tab is what clearing returns to.
     if (jumpLiveRef.current) { setProjectJump((prev) => (prev ? { ...prev, section } : prev)); return; }
@@ -2570,7 +2580,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // freezes the page — typing/scrolling stay responsive while rows mount.
     startTransition(() => setActiveSection(section));
     persistSection(section);
-  }, [noteTierUsed, setProjectJump]);
+  }, [setProjectJump]);
   // Self-heal a stale custom-tier tab: if the active tab is a deleted tier's id
   // (registry loaded, id absent), fall back to Focus instead of an empty panel.
   // MUST wait for customTiersLoaded: the registry starts as [] while the fetch is
@@ -2606,20 +2616,28 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const [listBatch, setListBatch] = useState<Map<string, ListBatchState>>(() => new Map());
   // Tracks which parent tasks the user has EXPANDED (default = all collapsed)
   const [expandedParents, setExpandedParents] = useState<Set<string>>(() => readSetFromStorage(LS_EXPANDED_PARENTS_KEY));
-  // Auto-expand parents with active (non-completed) children on initial load.
+  // Auto-expand parents with active (non-completed) children on initial load, ONCE per parent.
   // Handles edge case: fork created while page was closed (task:created WS never received).
+  // A parent this has opened before is recorded (LS_AUTO_OPENED_PARENTS_KEY), so a parent the
+  // user folded stays folded across every later reload: the opening is never applied again
+  // after the user's choice (2026-11-10 review; tests/web/home-folds-kept.test.ts).
   const didAutoExpandRef = useRef(false);
   useEffect(() => {
     if (loading || tasks.length === 0 || didAutoExpandRef.current) return;
     didAutoExpandRef.current = true;
-    const parentsToExpand: string[] = [];
-    for (const t of tasks) {
-      if (!t.parent_task_id || t.status === 'done') continue;
-      const parent = matchParentRef(tasks, t);
-      if (parent && !expandedParents.has(parent.id)) {
-        parentsToExpand.push(parent.id);
-      }
-    }
+    const opened = readSetFromStorage(LS_AUTO_OPENED_PARENTS_KEY);
+    // A browser an older build ran (its expanded parents saved, no record yet) keeps the folds it
+    // shows now: every parent counts as opened once already.
+    let noRecord = false, older = false;
+    try {
+      noRecord = localStorage.getItem(LS_AUTO_OPENED_PARENTS_KEY) === null;
+      older = noRecord && localStorage.getItem(LS_EXPANDED_PARENTS_KEY) !== null;
+    } catch { /* storage off */ }
+    const candidates = parentsToAutoOpen(tasks, expandedParents, opened);
+    const parentsToExpand = older ? [] : candidates;
+    // Bounded by size, never by the loaded tasks (they leave out archived ones: recordAutoOpened).
+    const kept = recordAutoOpened(opened, candidates);
+    if (noRecord || kept !== opened) persistSet(LS_AUTO_OPENED_PARENTS_KEY, new Set(kept));
     if (parentsToExpand.length === 0) return;
     setExpandedParents((prev) => {
       const next = new Set(prev);
@@ -2965,23 +2983,31 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // never switched away: the focus override below keeps the task on screen and
     // names the chip that hides it (spec 5.12).
     const proj = task.project || '';
-    if (isUserLocate && !pinnedOnly) {
+    // A row the panel already draws (a click on it, a link to a row on screen) needs no fold
+    // opened: the person's folds stay as they left them, and nothing above the row grows under
+    // the pointer (2026-11-10 review: opening a completed task opened the project run the user
+    // had folded in Pinned and pushed the list 260 px down). Only a row nothing draws is revealed,
+    // and only in the place that draws it (locate-fold-writes.test.ts).
+    const reveal = isUserLocate && !rowShownInPanel(focusedTaskId);
+    // A task a status section (or a project fold) draws is on screen there: it opens for a locate.
+    const drawnInSection = revealInSectionRef.current(task, reveal);
+    // A flat status section draws the row on its own: no list project, parent or folder holds it.
+    const inStatusSection = drawnInSection === 'section';
+    if (reveal && !pinnedOnly && !inStatusSection) {
       setRevealedProjects(prev => prev.has(proj) ? prev : new Set(prev).add(proj));
     }
     // Every collapsed parent above it (a grandchild hides under any collapsed ancestor, not
     // only its parent; temporary, not persisted) and every folder fold holding it or them.
-    if (isUserLocate) revealAncestorsRef.current(task);
+    if (reveal && !inStatusSection) revealAncestorsRef.current(task);
 
     // Focus override: instead of clearing filters, temporarily inject the task
     // into the filtered list. It fades out when focus moves away. The SAME board
     // predicate the list uses (read via a ref: this effect's deps deliberately
     // don't include filter state), so "would the list hide this?" cannot drift.
-    // A task a status section (or a project fold) draws is on screen there: it opens for a locate.
-    const drawnInSection = revealInSectionRef.current(task, isUserLocate);
     const wouldBeHidden = !drawnInSection && !passesBoardRef.current(task);
     // A row the list draws (not pinned, no section holds it) hides when the whole list is folded
     // under its Tasks heading in the stacked view: open it, as the tier block below opens a tier.
-    if (isUserLocate && !pinnedOnly && !drawnInSection && !pinnedTaskIds?.has(focusedTaskId) && collapsedSections.has('tasks')) {
+    if (reveal && !pinnedOnly && !drawnInSection && !pinnedTaskIds?.has(focusedTaskId) && collapsedSections.has('tasks')) {
       setCollapsedSections((prev) => {
         if (!prev.has('tasks')) return prev;
         const next = new Set(prev);
@@ -3026,8 +3052,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           if (ids.has(focusedTaskId)) { tierKey = tid; break; }
         }
       }
-      expandProject(proj, { tier: tierKey });
-      if (collapsedSections.has('pinned') || collapsedSections.has(tierKey)) {
+      // Its tier and run open only when the tier draws the row (or will: the focus override puts a
+      // hidden row back in it, and a tier quick-add's new card is there): a completed pin is drawn
+      // in Completed, never in its tier, and opening the tier showed nothing but moved the list.
+      const tierShowsIt = pinnedOnly || wouldBeHidden || tierDrawsRef.current(focusedTaskId, tierKey);
+      if (reveal && tierShowsIt) expandProject(proj, { tier: tierKey });
+      if (reveal && tierShowsIt && (collapsedSections.has('pinned') || collapsedSections.has(tierKey))) {
         setCollapsedSections((prev) => {
           const next = new Set(prev);
           next.delete('pinned');
@@ -5259,6 +5289,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // rebuilding an at-rest cluster inside the callback, and it also keeps the count
   // badges still: one gesture, one label set, exactly like the inert labels promise.
   const tierIdsAtRest = useFrozenWhile(tierIdsByTier, isPinnedDragActive);
+  tierDrawsRef.current = (taskId, tier) => tierIdsByTier.get(tier)?.includes(taskId) ?? false;
   const focusTasksDisplay = useMemo(
     () => visibleFocusIds.map((id) => pinnedTaskMap.get(id)).filter((task): task is Task => !!task),
     [pinnedTaskMap, visibleFocusIds],
@@ -7755,7 +7786,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       const key = t.id === overrideId ? undefined : place.get(t.id);
       if (key) {
         if (locate) openStatusSection(key);
-        return true;
+        return 'section';
       }
       // A folded worker is drawn in its leader's tree: a locate opens that section and the tree.
       const host = workerFolds && foldHostOf(tasks, t, foldView);
@@ -7765,7 +7796,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           openStatusSection(hostKey);
           if (!workerFold.open.includes(host.id)) setWorkerFold((v) => ({ ...v, open: withId(v.open, host.id, true) }));
         }
-        return true;
+        // Drawn by its leader's section: no list project or parent holds it.
+        return 'section';
       }
       // By project: a waiting task sits in its project's fold.
       if (projectFoldsOn && !isWatched(t) && !isBackground(t)) {
@@ -7773,7 +7805,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         if (stateSectionNoNeeds(t, regionRules.snoozed) === 'waiting' && foldRegions.get(region)?.get(t.project || '')?.waiting.some((x) => x.id === t.id)) {
           const fold = projectFoldKey(region, t.project || '', 'waiting');
           if (locate && !openProjectFolds.has(fold)) toggleProjectFold(fold);
-          return true;
+          return 'fold';
         }
       }
       return false;
@@ -7864,23 +7896,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const tierHiddenWhenEmpty = (tier: FocusTier, model: { display: unknown[] }) =>
     isStacked && !isPinnedDragActive && (isBuiltinTier(tier) || homeFilters.chips.length > 0) && model.display.length === 0
     && !(projectFoldsOn && (foldRegions.get(tier)?.size ?? 0) > 0);
-  // 5.10: one tier with tasks and no tier ever picked: the pins sit under Pinned
-  // with no tier heading (a lone `Satellite` title is what makes new users ask).
-  // Latched for a live drag: the empty tiers that open as drop zones get their
-  // headings, while the tier the card came from keeps its headless layout, so no
-  // heading is inserted above the cards (and the card under the pointer does not
-  // jump) the moment a drag starts.
+  // Every tier that holds pins draws its heading, also on a new user's board
+  // (2026-11-12, the user after a demo: "All it si in Pinned, there is no focus
+  // satellight": the old rule kept tier names off a board until a tier was picked).
   const tiersWithTasks = allTierKeys.filter((tier) => showSection(tier) && (tierSectionModel(tier)?.display.length ?? 0) > 0);
-  // F08: a user who never picked a tier sees no tier name, also once a draft (which
-  // lands in Focus) joins pins (which land in Satellite). A task in any other tier
-  // (a custom tier), alone or not, means the board has tiers on purpose: all
-  // keep headings.
-  const headlessKey = useFrozenWhile<string>(
-    !isStacked || tierUsed || tiersWithTasks.length === 0 ? ''
-      : tiersWithTasks.every((t) => t === 'focus' || t === 'satellite') ? tiersWithTasks.join('|') : '',
-    isPinnedDragActive,
-  );
-  const headlessTiers = useMemo(() => new Set(headlessKey ? headlessKey.split('|') : []), [headlessKey]);
   const anyTierDrawn = allTierKeys.some((tier) => {
     const model = tierSectionModel(tier);
     return !!model && !tierHiddenWhenEmpty(tier, model);
@@ -7924,7 +7943,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const pinnedReads = tiersWithTasks.length > 0 ? tiersWithTasks : allTierKeys;
   const pinnedGroup = commonValue(pinnedReads.map((t) => groupOfTierMode(tierViewMode(t))));
   const pinnedSort = commonValue(pinnedReads.map(tierSort));
-  const pinnedHeadless = tiersWithTasks.length > 0 && tiersWithTasks.every((t) => headlessTiers.has(t));
   // One toolbar button: the menu's open state and anchor are the filter controller's.
   const displayProps: DisplayMenuProps = {
     open: homeFilters.menuOpen,
@@ -8111,19 +8129,20 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             <div className={`todo-pinned-section${isStacked ? '' : ' todo-pinned-section-solo'}`}>
               {isStacked && (
               <NavigationHeading id="pinned" label="Pinned" className="todo-pinned-header" collapsed={isFolded('pinned')} onClick={() => toggleSection('pinned')}
+                count={allTierKeys.reduce((n, tier) => n + (showSection(tier) ? tierSectionModel(tier)?.display.length ?? 0 : 0), 0)}
                 actions={[
                   { key: 'organize', label: 'Organize', section: true, when: anyTierDrawn },
                   ...([['project', 'By project'], ['none', 'In one list']] as const).map(([value, label]) => ({
                     key: `group-${value}`, label, checked: pinnedGroup === value, when: anyTierDrawn,
                     onSelect: () => { for (const t of allTierKeys) setTierViewMode(t, tierModeOfGroup(value)); },
                   })),
-                  { key: 'sort', label: pinnedHeadless ? 'Sort by' : 'Sort every tier by', section: true, when: anyTierDrawn },
+                  { key: 'sort', label: 'Sort every tier by', section: true, when: anyTierDrawn },
                   ...PROJECT_SORT_OPTIONS.map(([value, label]) => ({
                     key: `sort-${value}`, label, checked: pinnedSort === value, when: anyTierDrawn,
                     onSelect: () => { for (const t of allTierKeys) setTierSort(t, value); },
                   })),
                   { key: 'folds', divider: true, when: anyTierDrawn },
-                  ...(anyTierDrawn && !tiersWithTasks.every((t) => headlessTiers.has(t)) ? [{ key: 'collapse-all', label: allTiersFolded ? 'Expand all tiers' : 'Collapse all tiers', onSelect: () => setAllTiersFolded(!allTiersFolded) }] : []),
+                  ...(anyTierDrawn ? [{ key: 'collapse-all', label: allTiersFolded ? 'Expand all tiers' : 'Collapse all tiers', onSelect: () => setAllTiersFolded(!allTiersFolded) }] : []),
                   { key: 'collapse', label: isFolded('pinned') ? 'Expand Pinned' : 'Collapse Pinned', onSelect: () => toggleSection('pinned') },
                 ]} />
               )}
@@ -8143,8 +8162,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                         <TierNavigationGroup
                           def={model.def}
                           isAll={isStacked}
-                          headless={headlessTiers.has(tier)}
-                          folded={!headlessTiers.has(tier) && isFolded(tier)}
+                          folded={isFolded(tier)}
                           collapsed={chevronCollapsed(tier)}
                           onToggle={toggleSection}
                           visibleIds={model.visibleIds}
@@ -8376,6 +8394,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           would leave an empty panel with no way back except another tab. */}
       {isAll && !isSearchMode && !phoneFirstLoad && (
       <NavigationHeading id="tasks" label="Projects" className="todo-pinned-header todo-tasks-header" collapsed={tasksCollapsed} onClick={() => toggleSection('tasks')}
+        count={sorted.length}
         actions={[
           { key: 'organize', label: 'Organize', section: true },
           ...([['project', 'By project'], ['none', 'In one list']] as const).map(([value, label]) => ({

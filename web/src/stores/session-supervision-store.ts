@@ -1,10 +1,13 @@
 import { fetchSessionSupervision, setSessionSupervision, terminateSession, type SessionSupervision } from '@/api/sessions';
+import { isBrowserNetworkMessage, readErrorWords } from '@/utils/operation-error-words';
 
 export interface SupervisionSnapshot {
   value: SessionSupervision | null;
   error: string | null;
   loading: boolean;
   unavailable: boolean;
+  /** The last read failed because Walnut itself did not answer (a restart, a crash). */
+  unreachable?: boolean;
   writing: boolean;
   stopping: boolean;
   stopPending: boolean;
@@ -104,7 +107,7 @@ export function refreshSessionSupervision(sid: string): Promise<void> {
       if (value.stale) throw new StaleSupervisionRead(value);
       entry.failingSince = 0;
       if (entry.revision === revision) {
-        publish(entry, { value, loading: false, unavailable: false, error: entry.actionError, stopPending: value.stopRequest?.state === 'pending' });
+        publish(entry, { value, loading: false, unavailable: false, unreachable: false, error: entry.actionError, stopPending: value.stopRequest?.state === 'pending' });
       }
     } catch (error) {
       const now = Date.now();
@@ -119,7 +122,9 @@ export function refreshSessionSupervision(sid: string): Promise<void> {
           // Its title already says the status is unavailable; the last state stays readable under it.
           publish(entry, { value: error.value, loading: false, unavailable: true, error: entry.actionError, stopPending: error.value.stopRequest?.state === 'pending' });
         } else {
-          publish(entry, { loading: false, unavailable: true, error: entry.actionError ?? (error instanceof Error ? error.message : String(error)) });
+          const message = error instanceof Error ? error.message : String(error);
+          // Walnut itself did not answer: plain words, never the browser's "Load failed".
+          publish(entry, { loading: false, unavailable: true, unreachable: isBrowserNetworkMessage(message), error: entry.actionError ?? readErrorWords(message) });
         }
       }
     } finally {

@@ -44,6 +44,35 @@ export function wellKnownGatewaySocketPaths(env?: Record<string, string | undefi
   ];
 }
 
+/** A Demo daemon's socket in its short private terminal dir (lib/demo-terminal-dir.ts, past macOS's 103-byte limit otherwise), or null unless that dir is this account's 0700 dir claimed for this generation; self-contained with explicit deps because the source twin inlines it. */
+export function demoGatewaySocketPath(
+  root: string, generation: string, uid: number | null,
+  fs: typeof import('node:fs'), path: typeof import('node:path'), crypto: typeof import('node:crypto'),
+): string | null {
+  if (typeof root !== 'string' || !path.isAbsolute(root) || path.resolve(root) !== root || path.basename(root) !== 'open-walnut-demo') return null;
+  if (typeof generation !== 'string' || !/^[a-zA-Z0-9-]{1,64}$/.test(generation)) return null;
+  if (uid !== null && (typeof uid !== 'number' || !Number.isInteger(uid) || uid < 0)) return null;
+  var hash = crypto.createHash('sha256').update(root + String.fromCharCode(0) + generation).digest('hex').slice(0, 16);
+  var dir = '/tmp/walnut-demo-' + (uid === null ? 'user' : String(uid)) + '-' + hash;
+  var sock = dir + '/agent-gateway.sock';
+  if (sock.length > 103) return null;
+  try {
+    var st = fs.lstatSync(dir);
+    if (st.isSymbolicLink() || !st.isDirectory() || (uid !== null && st.uid !== uid) || (st.mode & 0o777) !== 0o700) return null;
+    var fd = fs.openSync(dir + '/.owner', fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+    try {
+      var marker = fs.fstatSync(fd);
+      if (!marker.isFile() || (uid !== null && marker.uid !== uid)) return null;
+      if (String(fs.readFileSync(fd, 'utf8')).trim() !== path.join(root, 'data', generation)) return null;
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return null;
+  }
+  return sock;
+}
+
 /**
  * Caller sid a `walnut` invocation sends when it has no WALNUT_SESSION_ID.
  *

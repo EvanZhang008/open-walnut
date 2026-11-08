@@ -17,9 +17,8 @@ const SRC = fs.readFileSync(path.resolve(__dirname, '../../src/providers/daemon-
 const MASTER_USES: Record<string, string> = {
   'get baseSshArgs': 'the getter itself',
   sshExec: 'a script over MASTER_STDIN_MAX_BYTES goes fresh (rideMaster)',
-  dialPortForward: 'a -N port forward: no stdin, its traffic is a service the user opened',
+  forwardSsh: 'the args of the -N forwards, no stdin: createTunnel (the session link itself) and dialPortForward (a service the user opened)',
   retireIsolatedDaemon: "a test server's short retire script",
-  createTunnel: 'the session link itself (-N forward)',
 }
 
 function enclosingMethod(at: number): string {

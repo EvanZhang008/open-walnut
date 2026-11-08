@@ -58,22 +58,6 @@ func recordedSpawnedServerPid() -> Int32? {
     return Int32(raw.trimmingCharacters(in: .whitespacesAndNewlines))
 }
 
-// MARK: - Quiet Key Window
-
-/// Every window Walnut makes for a web view (and every one its native tests make). A key the
-/// page leaves unhandled travels up the responder chain to the window, whose default answer is
-/// NSBeep: an Escape, Enter or arrow press on a part of the page that takes no text played the
-/// alert sound, and a native test driver sending such keys played it on every run (2026-11-08,
-/// heard through the night). A browser plays nothing there, so neither does this window; every
-/// other unhandled action keeps AppKit's own answer. tests/desktop/quiet-window.test.ts fails on
-/// a window made any other way.
-final class QuietKeyWindow: NSWindow {
-    override func noResponder(for eventSelector: Selector) {
-        if eventSelector == #selector(NSResponder.keyDown(with:)) { return }
-        super.noResponder(for: eventSelector)
-    }
-}
-
 // MARK: - App Delegate
 
 class AppDelegate: NSObject, NSApplicationDelegate {
@@ -701,13 +685,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard let label = statusLabel else { return }
         if let fraction = progress.fraction {
             label.stringValue = "\(progress.status) \(Int((fraction * 100).rounded()))%"
+            setupProgressBar?.isIndeterminate = false
+            setupProgressBar?.stopAnimation(nil)
             setupProgressBar?.doubleValue = fraction * 100
             setupProgressBar?.isHidden = false
             setupSpinner?.isHidden = true
         } else {
             label.stringValue = progress.status
-            setupProgressBar?.isHidden = true
-            setupSpinner?.isHidden = false
+            setupProgressBar?.isIndeterminate = true
+            setupProgressBar?.startAnimation(nil)
+            setupProgressBar?.isHidden = false
+            setupSpinner?.isHidden = true
         }
     }
 
@@ -740,13 +728,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         spinner.startAnimation(nil)
         stack.addArrangedSubview(spinner)
         self.setupSpinner = spinner
+        spinner.isHidden = true
 
         let bar = NSProgressIndicator()
         bar.style = .bar
-        bar.isIndeterminate = false
+        bar.isIndeterminate = true
+        bar.startAnimation(nil)
         bar.minValue = 0
         bar.maxValue = 100
-        bar.isHidden = true
+        bar.isHidden = false
         bar.widthAnchor.constraint(equalToConstant: 320).isActive = true
         stack.addArrangedSubview(bar)
         self.setupProgressBar = bar
@@ -926,10 +916,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         stack.alignment = .centerX
         stack.translatesAutoresizingMaskIntoConstraints = false
 
-        let spinner = NSProgressIndicator()
-        spinner.style = .spinning
-        spinner.startAnimation(nil)
-        stack.addArrangedSubview(spinner)
+        let bar = NSProgressIndicator()
+        bar.style = .bar
+        bar.isIndeterminate = true
+        bar.startAnimation(nil)
+        bar.widthAnchor.constraint(equalToConstant: 320).isActive = true
+        stack.addArrangedSubview(bar)
 
         let label = NSTextField(labelWithString: "Starting Walnut server...")
         label.font = NSFont.systemFont(ofSize: 14)
@@ -1658,6 +1650,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // data-theme or the OS switching under 'system') so the strip never
         // disagrees with the page under it.
         config.userContentController.add(self, name: "walnutChrome")
+        config.userContentController.addScriptMessageHandler(ClaudeSignInBridge(consoleURL: URL(string: "http://localhost:\(port)")!), contentWorld: .page, name: "walnutClaudeSignIn")
         // The app's update (AppUpdater.swift): the page asks with
         // webkit.messageHandlers.walnutUpdate.postMessage({op}) and gets a promise;
         // every state change arrives as a `walnut:app-update` event.
@@ -2062,6 +2055,53 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         sender.state = wanted ? .on : .off
     }
 
+    @objc func openDemo() { sendToDemo("walnut-demo://open") }
+    @objc func resetDemo() { sendToDemo("walnut-demo://reset") }
+
+    static let demoBundleID = "com.local.walnut-demo"
+
+    // Prefer a running Demo so another copy cannot replace its open page.
+    func demoAppURL() -> URL? {
+        if let running = NSRunningApplication.runningApplications(withBundleIdentifier: AppDelegate.demoBundleID)
+            .compactMap({ $0.bundleURL }).first {
+            return running
+        }
+        let candidates = [
+            Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/Walnut Demo.app"),
+            Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent("Walnut Demo.app"),
+        ]
+        return candidates.first { url in
+            guard let info = NSDictionary(contentsOf: url.appendingPathComponent("Contents/Info.plist")) else { return false }
+            return info["CFBundleIdentifier"] as? String == AppDelegate.demoBundleID
+        }
+    }
+
+    func sendToDemo(_ command: String) {
+        func fail(_ text: String) {
+            let alert = NSAlert()
+            alert.messageText = "Walnut Demo could not open"
+            alert.informativeText = text
+            if let window = window { alert.beginSheetModal(for: window) } else { alert.runModal() }
+        }
+        guard let app = demoAppURL(), let url = URL(string: command) else {
+            fail("Walnut Demo is missing from this copy of Walnut. Install Walnut again to get it. Your real Walnut is unchanged.")
+            return
+        }
+        let config = NSWorkspace.OpenConfiguration()
+        let env = ProcessInfo.processInfo.environment
+        // A test copy (WALNUT_DESKTOP_E2E_BACKGROUND) opens its Demo behind every window too.
+        if env["WALNUT_DESKTOP_E2E_BACKGROUND"] == "1" { config.activates = false }
+        var demoEnv: [String: String] = [:]
+        for key in ["WALNUT_DESKTOP_E2E_BACKGROUND", "WALNUT_DESKTOP_E2E_DEMO_ROOT"] {
+            if let value = env[key] { demoEnv[key] = value }
+        }
+        if !demoEnv.isEmpty { config.environment = demoEnv }
+        NSWorkspace.shared.open([url], withApplicationAt: app, configuration: config) { _, error in
+            guard let error = error else { return }
+            DispatchQueue.main.async { fail(error.localizedDescription) }
+        }
+    }
+
     @objc func resetConfig() {
         // Destructive (forgets which installation this app points to) — always
         // confirm. This used to run bare off ⌘, and wiped the config silently.
@@ -2103,6 +2143,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         appMenu.addItem(NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ","))
         appMenu.addItem(NSMenuItem(title: "Install 'walnut' Command", action: #selector(installCommandLineTool), keyEquivalent: ""))
         appMenu.addItem(NSMenuItem(title: "Reset Setup...", action: #selector(resetConfig), keyEquivalent: ""))
+        appMenu.addItem(NSMenuItem(title: "Open Demo", action: #selector(openDemo), keyEquivalent: ""))
+        appMenu.addItem(NSMenuItem(title: "Reset Demo", action: #selector(resetDemo), keyEquivalent: ""))
         appMenu.addItem(NSMenuItem.separator())
         // Dictation gets its own submenu: two triggers plus three delivery
         // preferences is too much to inline in the app menu.

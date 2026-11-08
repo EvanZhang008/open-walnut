@@ -42,6 +42,7 @@
 import type { HostPreflightResult } from '../../providers/host-runtime-core.js'
 import type { HostFixAction, HostFixResult } from '../../providers/host-fix-core.js'
 import { wslCommand } from './host-readiness-problems.js'
+import { REMOTE_TERMINALS_HERE } from './remote-terminals-here.js'
 import type { PreflightConnection } from './host-readiness.js'
 import type { ReadinessProblem } from './host-readiness-problems.js'
 
@@ -202,15 +203,16 @@ export function autofixDisabledReason(env: Record<string, string | undefined>, h
  * to do. `prebuiltDtach`: this server ships a dtach for the host's platform/arch
  * that has not been seen failing there.
  */
-export function nextFixAction(p: HostPreflightResult, tried: ReadonlySet<HostFixAction>, ctx: { prebuiltDtach?: boolean; agents?: boolean; agentsOnly?: boolean } = {}): HostFixAction | null {
+export function nextFixAction(p: HostPreflightResult, tried: ReadonlySet<HostFixAction>, ctx: { prebuiltDtach?: boolean; agents?: boolean; agentsOnly?: boolean; terminals?: boolean } = {}): HostFixAction | null {
   const claudeBroken = !p.claude.found || (p.claude.needsNode === true && p.claude.nodeFound === false)
   if (ctx.agents && claudeBroken && !tried.has('install-claude-native')) return 'install-claude-native'
   if (ctx.agents && !claudeBroken && !p.claude.error && p.claude.versionOk === false) {
     const update = fixActionFor('claude_outdated', p)
     if (update && !tried.has(update)) return update
   }
-  // A host whose automatic fixes are off runs only what the person asked for.
-  if (ctx.agentsOnly || p.dtach.found) return null
+  // A host whose automatic fixes are off runs only what the person asked for; a server that opens no
+  // remote terminal (the Demo) needs no dtach there, nor a compiler to build it.
+  if (ctx.agentsOnly || p.dtach.found || !(ctx.terminals ?? REMOTE_TERMINALS_HERE)) return null
   // A compiler only matters while dtach is missing, and not at all while a
   // prebuilt can stand in. A Mac's compiler comes with the Command Line Tools,
   // which only a human can accept.

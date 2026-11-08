@@ -3888,6 +3888,12 @@ export interface SessionRecord {
    *  daemon too old to say who holds it) or ever (`history-conflict`: two copies, `files`; the node
    *  is told once, `told`) (sessions/org-own-folder.ts). */
   ownFolderMove?: { from: string; why: string; at: string; files?: string[]; told?: boolean };
+  /** Its first start was refused on its host before any CLI ran (the coding agent was not
+   *  installed there yet, providers/claude-code-session.ts keepRefusedSession): no
+   *  conversation exists under this id, so its next delivery starts it fresh under the same
+   *  id (`--session-id`), never a `--resume` of a transcript that was never written (which a
+   *  test server's or the Demo's session gate also refuses). Cleared once its CLI starts. */
+  startRefused?: { at: string; kind: string };
   /** An engine switch started (or resumed) this session with no message: the context it carried,
    *  a hint block, rides the session's next message (sessions/engine-switch-io.ts). */
   switchContext?: { text: string; switchId: string; at: string };

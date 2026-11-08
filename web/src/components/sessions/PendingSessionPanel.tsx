@@ -10,6 +10,7 @@
  * On retry, clears error and resets phase to spinner state.
  */
 
+import { shownFolderName } from '@/utils/home-folder';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useEvent } from '../../hooks/useWebSocket';
 import { getErrorSuggestion } from '@/utils/error-suggestions';
@@ -52,7 +53,8 @@ function PendingPrompt({ message }: { message?: string }) {
 }
 
 export function PendingSessionPanel({ cwd, host, hostLabel, label, message, realTaskId, initialError, onRetry, onClose }: PendingSessionPanelProps) {
-  const dirName = cwd.replace(/\/+$/, '').split('/').pop() || '/';
+  // The host's home reads `~`, never its id or user name (utils/home-folder.ts).
+  const dirName = shownFolderName(cwd, host);
   const [error, setError] = useState<string | null>(initialError ?? null);
   const [phase, setPhase] = useState<'starting' | 'slow' | 'timeout'>(initialError ? 'timeout' : 'starting');
   const [retrying, setRetrying] = useState(false);

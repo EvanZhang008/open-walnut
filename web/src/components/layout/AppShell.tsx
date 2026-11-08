@@ -25,10 +25,11 @@ import {
   installPhoneOverlayHistory, usePhoneOverlay, usePhoneOverlayEdgeSwipe, isStandaloneDisplay,
 } from '@/hooks/usePhoneOverlayHistory';
 import { useVisualViewportInset } from '@/hooks/useVisualViewportInset';
-import { usePhoneResync } from '@/hooks/usePhoneResync';
+import { useConnectionWatch, usePhoneResync } from '@/hooks/usePhoneResync';
 import { installStandaloneLinks } from '@/utils/standalone-links';
 import { PhoneTopBar } from './PhoneTopBar';
 import { AwayLine } from './AwayLine';
+import { ConnectionLine } from './ConnectionLine';
 import { PageSideBar } from './PageSideBar';
 import { SIDE_BAR_LAYOUT_EVENT, pageAreaLeft } from './page-side-bar';
 import { ScratchpadHost } from './ScratchpadHost';
@@ -131,6 +132,7 @@ function AppShellInner({ children }: AppShellProps) {
   useEffect(() => { installPhoneOverlayHistory(); }, []);
   useVisualViewportInset(isMobileSidebar);
   usePhoneResync(isMobileSidebar);
+  useConnectionWatch();
   usePhoneOverlayEdgeSwipe();
   useEffect(() => (isMobileSidebar && isStandaloneDisplay() ? installStandaloneLinks() : undefined), [isMobileSidebar]);
 
@@ -328,6 +330,8 @@ function AppShellInner({ children }: AppShellProps) {
       <main ref={mainRef} className="main-content" inert={sidebarOpen && isMobileSidebar}>
         {/* A host replica's console while the Mac is away (nothing otherwise). */}
         <AwayLine />
+        {/* This console's own server is not answering (the phone says it under its top bar). */}
+        {!isMobileSidebar && <ConnectionLine />}
         {/* The page and, on its left edge, the Agenda and Scratchpad side bar (PageSideBar):
             any page but Home, which keeps its own column. Not on a phone, where neither pane
             mounts (the rail has no toggle for them there). */}

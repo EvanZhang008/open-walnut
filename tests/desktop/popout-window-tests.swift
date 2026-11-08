@@ -125,8 +125,8 @@ struct PopoutWindowTests {
         let clipboardBridge = try await js(first, "!!window.webkit.messageHandlers.walnutClipboard")
         precondition(clipboardBridge as? Bool == true)
         let oldChild = first
-        let parentPid = WebContentWatchdog.webContentPid(parent)
-        let childPid = WebContentWatchdog.webContentPid(first)
+        let parentPid = WebContentProcess.pid(parent)
+        let childPid = WebContentProcess.pid(first)
         precondition(parentPid != nil && childPid != nil && parentPid != childPid)
         print("Independent WebContent PIDs: parent \(parentPid!), child \(childPid!)")
         delegate.recyclePopout(first)
@@ -134,8 +134,8 @@ struct PopoutWindowTests {
         precondition(recycled !== oldChild)
         precondition(delegate.popoutWindows.count == 2)
         try await wait { (try? await js(recycled, "!!document.querySelector('.popout-session .session-panel-input textarea')")) as? Bool == true }
-        precondition(WebContentWatchdog.webContentPid(recycled) != childPid)
-        print("Recycled WebContent PID: \(WebContentWatchdog.webContentPid(recycled) ?? 0)")
+        precondition(WebContentProcess.pid(recycled) != childPid)
+        print("Recycled WebContent PID: \(WebContentProcess.pid(recycled) ?? 0)")
         _ = try await js(recycled, "(() => { const t=document.createElement('textarea');t.id='child-draft';t.value='unsent child draft';document.body.append(t); return true })()")
         try pressCloseKey(firstWindow)
         try pressCloseKey(firstWindow)

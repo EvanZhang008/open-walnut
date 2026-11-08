@@ -24,6 +24,7 @@
  *     write that carries no lock at all.
  */
 import { test, expect, type Locator, type Page } from '@playwright/test'
+import { goToSessionFolder } from './todo-panel-helpers'
 
 const SESSION_ID = 'pw-vscode-session'
 const TASK_ID = 'pw-task-vscode'
@@ -51,6 +52,7 @@ async function openFilesPanel(page: Page, opts: { reopened?: boolean } = {}): Pr
   if (opts.reopened) {
     const kept = page.locator(`.session-panel.open-walnut-fullscreen[data-session-id="${SESSION_ID}"] .session-file-explorer`)
     await expect(kept).toBeVisible({ timeout: 30_000 })
+    await goToSessionFolder(kept)
     return kept
   }
   await page.locator('.todo-search-input').fill(SESSION_ID)
@@ -63,6 +65,7 @@ async function openFilesPanel(page: Page, opts: { reopened?: boolean } = {}): Pr
   await panel.getByRole('button', { name: 'Files', exact: true }).click()
   const explorer = panel.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 15_000 })
+  await goToSessionFolder(explorer)
   return explorer
 }
 
@@ -101,24 +104,25 @@ async function externalWrite(page: Page, abs: string, content: string): Promise<
 
 /** Saving is always live (no Live switch since 2026-11-06), so every boot is
  *  armed to write; there is no preference to set. */
-async function bootConsole(page: Page): Promise<void> {
+async function bootConsole(page: Page, baseURL: string | undefined): Promise<void> {
   await page.addInitScript(() => {
     try {
       localStorage.setItem('open-walnut-file-explorer-tree-collapsed', '0')
     } catch { /* off */ }
   })
-  await page.goto('/')
+  await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
+  await page.getByRole('link', { name: 'Open Walnut' }).click()
   await page.waitForLoadState('networkidle')
 }
 
-test('a reload with unsaved text does not put the old copy back over someone else\'s newer file', async ({ page }) => {
+test('a reload with unsaved text does not put the old copy back over someone else\'s newer file', async ({ page, baseURL }) => {
   const name = `staleback-${Date.now()}.md`
   const ORIGINAL = `# Doc\n\nthe original body\n`
   // Deliberately much bigger, like the real incident (28 KB stale copy vs a
   // 40 KB file): a size difference makes the clobber unmistakable.
   const NEWER = `# Doc\n\n${'a paragraph another writer added\n'.repeat(200)}`
 
-  await bootConsole(page)
+  await bootConsole(page, baseURL)
   const abs = await makeScratchFile(page, name, ORIGINAL)
 
   // 1. The user opens the file and types, leaving UNSAVED text (a draft record,
@@ -146,7 +150,7 @@ test('a reload with unsaved text does not put the old copy back over someone els
   //    this time every write the pane makes gets through.
   await page.close()
   const page2 = await page.context().newPage()
-  await bootConsole(page2)
+  await bootConsole(page2, baseURL)
   const explorer2 = await openFilesPanel(page2, { reopened: true })
   await nodeByName(explorer2, name).click()
   await expect(page2.locator('.file-content-view')).toBeVisible({ timeout: 15_000 })
@@ -164,12 +168,12 @@ test('a reload with unsaved text does not put the old copy back over someone els
   expect(disk, 'the pane did not put its old copy back').not.toBe(`${ORIGINAL} plus my sentence`)
 })
 
-test('re-reading a file while the buffer holds older text does not write the older text back', async ({ page }) => {
+test('re-reading a file while the buffer holds older text does not write the older text back', async ({ page, baseURL }) => {
   const name = `staleback-refresh-${Date.now()}.md`
   const ORIGINAL = `# Doc\n\nthe original body\n`
   const NEWER = `# Doc\n\n${'another writer was here\n'.repeat(120)}`
 
-  await bootConsole(page)
+  await bootConsole(page, baseURL)
   const abs = await makeScratchFile(page, name, ORIGINAL)
 
   const explorer = await openFilesPanel(page)
@@ -191,7 +195,7 @@ test('re-reading a file while the buffer holds older text does not write the old
   expect(disk, 'the re-read did not hand the old buffer a valid lock').toContain('another writer was here')
 })
 
-test('a write armed around a re-read never shrinks the file back', async ({ page }) => {
+test('a write armed around a re-read never shrinks the file back', async ({ page, baseURL }) => {
   // The incident's shape: an auto-write is armed (600 ms debounce) and the pane
   // re-reads the file around the same moment, moving the optimistic lock to the
   // newer bytes. Whichever order the two land in, the other writer's file must
@@ -201,7 +205,7 @@ test('a write armed around a re-read never shrinks the file back', async ({ page
   const ORIGINAL = `# Doc\n\nthe original body\n`
   const NEWER = `# Doc\n\n${'a paragraph another writer added\n'.repeat(150)}`
 
-  await bootConsole(page)
+  await bootConsole(page, baseURL)
   const abs = await makeScratchFile(page, name, ORIGINAL)
 
   const writes: Array<{ bytes: number }> = []

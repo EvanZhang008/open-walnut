@@ -8,6 +8,7 @@
  *   - POST /api/hosts/:host/connect a deliberate human retry (connectHostNow,
  *                                   the same function as /api/sessions/host-retry)
  *   - POST /api/hosts/:host/check   Check again: re-run the readiness probe now
+ *   - GET  /api/hosts/ssh-resolve   what `ssh -G` resolves for a name (Add host's empty fields)
  *
  * On a cloud replica there is no ssh and no daemon of our own: reachability is
  * whether that host's bridge is dialled in, and connecting is the primary's job.
@@ -18,6 +19,7 @@ import { randomBytes } from 'node:crypto'
 import { CLOUD_MODE } from '../../constants.js'
 import { hasCapability } from '../../core/capabilities.js'
 import { getConfig } from '../../core/config-manager.js'
+import { role } from '../../core/server-role.js'
 import { buildHostStatus, listStatusHosts, type HostStatus } from '../../core/hosts/host-status.js'
 import { checkHostNow, configHostDef, connectHostNow, hostStatusFrame } from '../../core/hosts/host-connect-action.js'
 import type { DaemonConnectState } from '../../providers/daemon-connection.js'
@@ -58,6 +60,27 @@ hostsRouter.get('/status', async (_req, res, next) => {
     // "off" answer and the warmup's credential clock all ride hostStatusFrame.
     for (const { key, def } of entries) hosts.push(hostStatusFrame(key, def))
     res.json({ hosts })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/hosts/ssh-resolve?name=<host> — what `ssh -G` resolves for a name (its HostName,
+// Port and User from ~/.ssh/config), for the empty Port and User fields of Add host
+// (core/hosts/ssh-resolve.ts). Reads config only, never connects; 204 when there is no answer
+// (no ssh here, a replica, a server under test, a name that is not one).
+hostsRouter.get('/ssh-resolve', async (req, res, next) => {
+  try {
+    const name = typeof req.query.name === 'string' ? req.query.name.trim() : ''
+    const { realSshReachAllowed } = await import('../../lib/real-ssh-guard.js')
+    // Any replica (the companion or a host server) answers nothing: hosts are dialled from the
+    // leader, so this machine's ~/.ssh/config is not the one an added host will connect through.
+    if (role() === 'replica' || !realSshReachAllowed()) { res.status(204).end(); return }
+    const { isResolvableName, resolveSshName } = await import('../../core/hosts/ssh-resolve.js')
+    if (!isResolvableName(name)) { res.status(400).json({ error: 'Not a host name ssh can resolve', code: 'bad_name' }); return }
+    const r = await resolveSshName(name)
+    if (!r) { res.status(204).end(); return }
+    res.json(r)
   } catch (err) {
     next(err)
   }

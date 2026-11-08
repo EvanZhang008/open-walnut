@@ -4,6 +4,7 @@ import { createElement, act } from '../../web/node_modules/react/index.js'
 import { createRoot } from '../../web/node_modules/react-dom/client.js'
 import { renderToStaticMarkup } from '../../web/node_modules/react-dom/server.node.js'
 import { SetupBanner, SETUP_SHOW_EVENT } from '../../web/src/components/common/SetupBanner'
+import { FirstUseSetup } from '../../web/src/components/common/FirstUseSetup'
 import { __resetHostBannerDismissForTests, dismissLocal, readLocalDismissed } from '../../web/src/utils/host-banner-dismiss'
 
 // The always-mounted re-check owns the interval; a card mount asks once (spec 3, C49).
@@ -69,7 +70,31 @@ const SIGN_IN = { kind: 'claude_not_logged_in', message: 'Claude Code is not sig
 const ready = { hasReadyProvider: true, claudeCliAvailable: true }
 const text = (html: string) => html.replace(/<[^>]+>/g, '').replace(/&#x27;/g, "'")
 
+describe('first-use uncertain checks', () => {
+  const first = (health: SystemHealth) => renderToStaticMarkup(createElement(MemoryRouter, null, createElement(FirstUseSetup, { health, loading: false })));
+  it('keeps an executable probe failure actionable without calling it missing', () => {
+    const html = first({ ...ready, localClaude: local({ claude: { found: false, unknown: 'The login shell timed out.' } }) });
+    expect(text(html)).toContain('The login shell timed out.');
+    expect(text(html)).toContain('Check again');
+    expect(text(html)).not.toContain('Install Claude Code');
+  });
+  it('an unrelated Claude failure never replaces the configured provider setup', () => {
+    const html = first({ hasReadyProvider: false, claudeCodeNeeded: false, localClaude: local({ checkError: 'The Claude check timed out.' }) });
+    expect(text(html)).not.toContain('The Claude check timed out.');
+    expect(text(html)).not.toContain('Walnut could not confirm your AI sign-in.');
+    expect(text(html)).toContain('Open API settings');
+  });
+});
+
 describe('setup banner for this machine\'s Claude Code', () => {
+  it('first use keeps an actionable update before sign-in when the installed CLI is too old', () => {
+    const health = { ...ready, localClaude: local({ problems: [OUTDATED, SIGN_IN] }) };
+    const html = renderToStaticMarkup(createElement(MemoryRouter, null, createElement(SetupBanner, { health, firstUse: true, onNavigateSettings: () => {} })));
+    expect(html).toContain('data-testid="setup-banner-outdated"');
+    expect(text(html)).toContain('Update Claude Code');
+    expect(render(health)).toBe('');
+  });
+
   it('missing: one-click install, the command to run by hand, and the API-settings way out', () => {
     const html = render({ hasReadyProvider: true, claudeCliAvailable: false, localClaude: local({ claude: { found: false }, problems: [MISSING] }) })
     expect(html).toContain('data-testid="setup-banner-install"')
@@ -85,6 +110,10 @@ describe('setup banner for this machine\'s Claude Code', () => {
       claude: { found: false }, problems: [{ ...MISSING, fix: { action: 'install-claude-native', state: 'running', text: 'Installing Claude Code' } }],
     }) })
     expect(text(running)).toContain('Installing Claude Code...')
+    const bar = parseHTML(running).document.querySelector('[role="progressbar"]')!
+    expect(bar.getAttribute('aria-label')).toBe('Installing Claude Code...')
+    expect(bar.hasAttribute('aria-valuenow')).toBe(false)
+    expect(running).toContain('data-progress="unknown"')
     expect(running).not.toContain('data-testid="setup-banner-fix"')
     const failed = render({ ...ready, claudeCliAvailable: false, localClaude: local({
       claude: { found: false },
@@ -114,6 +143,21 @@ describe('setup banner for this machine\'s Claude Code', () => {
     expect(html).toContain('Run <code>claude</code> once in a terminal and sign in.')
     expect(text(html)).toContain('Walnut checks again every 15 seconds and hides this once you are signed in.')
     expect(html).toContain('data-testid="setup-banner-check"')
+  })
+
+  it('the native sign-in notice describes its button instead of a competing terminal step', () => {
+    const original = Object.getOwnPropertyDescriptor(globalThis, 'window')
+    vi.stubGlobal('window', { webkit: { messageHandlers: { walnutClaudeSignIn: { postMessage: vi.fn() } } } })
+    try {
+      const html = render({ ...ready, localClaude: local({ claude: { ...local({}).claude, auth: 'not-logged-in' }, problems: [SIGN_IN] }) })
+      expect(text(html)).toContain('Choose Sign in to Claude Code below, then complete sign-in in your browser.')
+      expect(text(html)).not.toContain('Run claude once in a terminal')
+      expect(text(html)).toContain('Sign in to Claude Code')
+      expect(html).toContain('data-testid="setup-banner-check"')
+    } finally {
+      if (original) Object.defineProperty(globalThis, 'window', original)
+      else delete (globalThis as unknown as { window?: unknown }).window
+    }
   })
 
   it('signed in, up to date: nothing at all (the banner removed itself)', () => {
@@ -220,9 +264,17 @@ describe('the local section mounted', () => {
     setInt.mockRestore()
   })
 
-  it('an install notice does not ask', async () => {
+  // 2026-11-08: Claude Code installed by hand with the card's command was never noticed.
+  it('an install notice asks once too, since a terminal can clear it; a running install does not', async () => {
     await mount({ hasReadyProvider: false, claudeCliAvailable: false })
     expect(host.querySelector('[data-testid="setup-banner-install"]')).not.toBeNull()
+    expect(recheck.recheckLocalClaudeNow).toHaveBeenCalledTimes(1)
+    await act(async () => { root!.unmount() })
+    recheck.recheckLocalClaudeNow.mockClear()
+    root = createRoot(host)
+    await mount({ ...ready, claudeCliAvailable: false, localClaude: local({
+      claude: { found: false }, problems: [{ ...MISSING, fix: { action: 'install-claude-native', state: 'running', text: 'Installing Claude Code' } }],
+    }) })
     expect(recheck.recheckLocalClaudeNow).not.toHaveBeenCalled()
   })
 

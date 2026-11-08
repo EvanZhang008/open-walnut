@@ -272,7 +272,7 @@ function scanShell(lines: string[], rawCode: string[], depth = 0): ShellScan {
 
 // ── JS / TS ────────────────────────────────────────────────────────────────
 
-interface JsString { text: string; line: number }
+interface JsString { text: string; line: number; position: number }
 
 /** Read a string literal at src[i]; returns its text (a template's ${...} as $X), the
  *  index after it, and the newlines it spans. */
@@ -336,16 +336,21 @@ function jsScan(src: string): { code: string; strings: JsString[] } {
     }
     if (c === '"' || c === "'" || c === '`') {
       const [text, j, nl] = readString(src, i)
-      strings.push({ text, line })
+      strings.push({ text, line, position: out.length })
       out += `«${strings.length - 1}»` + '\n'.repeat(nl)
       line += nl
       i = j
       continue
     }
     if (c === '/') {
-      const prev = out.trimEnd()
-      const p = prev.slice(-1)
-      const word = /([A-Za-z_$][\w$]*)$/.exec(prev)?.[1] ?? ''
+      let end = out.length
+      while (end > 0 && /\s/.test(out[end - 1]!)) end--
+      const p = out[end - 1] ?? ''
+      let start = end
+      while (start > 0 && /[\w$]/.test(out[start - 1]!)) start--
+      // Match the old identifier suffix exactly, including a leading digit run.
+      while (start < end && !/[A-Za-z_$]/.test(out[start]!)) start++
+      const word = out.slice(start, end)
       if (p === '' || '(,=:[!&|?{};+-*%<>~^'.includes(p) || /^(?:return|typeof|case|in|of|delete|void|throw|new|else|do|yield|await)$/.test(word)) {
         let j = i + 1
         let cls = false
@@ -388,12 +393,11 @@ function scanJs(content: string, test: boolean): KillViolation[] {
     if (!out.some((v) => v.line === line && v.rule === rule)) out.push({ rule, line, text: (lines[line - 1] ?? '').trim() })
   }
   const sources: number[] = []
-  // Each string's place in the code, read in one pass: an indexOf per string made a large file
-  // quadratic (the whole-repo ratchet ran past its timeout on a loaded host).
-  const posOf = new Map<number, number>()
-  for (const m of code.matchAll(/«(\d+)»/g)) if (!posOf.has(Number(m[1]))) posOf.set(Number(m[1]), m.index!)
+  // Each string's place in the code is recorded by jsScan as it writes «n»: an indexOf per
+  // string made a large file quadratic (the whole-repo ratchet ran past its timeout on a
+  // loaded host), and the recorded place is exact even if «n» also appears earlier.
   strings.forEach((s, k) => {
-    const pos = posOf.get(k) ?? -1
+    const pos = s.position
     const before = code.slice(Math.max(0, pos - 240), pos)
     const shellC = SHELL_C.exec(before)
     const isShellScript = shellC && /^(?:\/bin\/|\/usr\/bin\/)?(?:ba|z|da)?sh$/.test(strings[Number(shellC[1])]!.text) && /^-[a-z]*c$/.test(strings[Number(shellC[2])]!.text)

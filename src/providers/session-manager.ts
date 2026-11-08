@@ -32,6 +32,7 @@ import { RemoteSessionManager } from './remote-session-manager.js'
 import { localDaemon } from './local-daemon.js'
 import { testRunnerClaude } from '../core/test-claude-guard.js'
 import type { DaemonTaskState } from './daemon-connection.js'
+import type { LineFate } from './line-fate-core.js'
 
 // ── Output Events ──
 
@@ -249,6 +250,9 @@ export interface SessionManager {
    * read past it (`lostPid`)? Absent or false: such a line is shown as failed.
    */
   canRewriteLostLine?(): boolean
+
+  /** Read-only evidence for an existing line. Null means unknown; never starts or writes to a CLI. */
+  readLineFate?(uuid: string, messageIds: string[]): Promise<LineFate | null>
 
   /**
    * Write a synthetic user event to the output file (for dedup).

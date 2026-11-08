@@ -39,6 +39,8 @@ export interface FoundHostRow {
   discovered?: unknown
   connect?: unknown
   connect_by?: unknown
+  /** What ~/.ssh/config said when the row was taken (FoundHostScan). */
+  scanned?: unknown
   [key: string]: unknown
 }
 
@@ -82,11 +84,117 @@ export function askingAboutFoundHosts(config: Pick<Config, 'hosts_found'>): bool
 }
 
 /**
- * Merge the ~/.ssh/config hosts into config.hosts, in memory. A host is skipped when
- * its alias or its hostname is already there (the person's own entry IS that machine)
- * or its alias is reserved. Once the server asks (`asking`), a new one waits for the
- * yes; before that it is merged on, as an older Walnut did, so the first start of
- * this version reads the rows it decides exactly as they were.
+ * What ~/.ssh/config said of a found host when Walnut took its row (`scanned` on the row,
+ * additive: an older Walnut ignores it). ~/.ssh/config stays the source of each of these
+ * fields while the row's value still equals what was scanned; a value that differs is the
+ * person's own edit (Settings, Remote Hosts) and is kept (2026-11-08: a Port fixed in
+ * ~/.ssh/config was never dialled, the row kept the port scanned when the person said yes).
+ */
+export interface FoundHostScan {
+  hostname: string
+  user?: string
+  port?: number
+}
+
+/** The fields a found host takes from ~/.ssh/config for as long as nobody changed them in Walnut. */
+export const FOUND_HOST_SCAN_FIELDS = ['hostname', 'user', 'port'] as const satisfies readonly (keyof FoundHostScan & keyof DiscoveredHost)[]
+
+export function scanRecordOf(host: Pick<DiscoveredHost, 'hostname' | 'user' | 'port'>): FoundHostScan {
+  return { hostname: host.hostname, ...(host.user ? { user: host.user } : {}), ...(host.port ? { port: host.port } : {}) }
+}
+
+function sameField(key: (typeof FOUND_HOST_SCAN_FIELDS)[number], a: unknown, b: unknown): boolean {
+  return key === 'hostname' ? text(a).toLowerCase() === text(b).toLowerCase() : text(a) === text(b)
+}
+
+function scanRecordOn(row: FoundHostRow): Record<string, unknown> | undefined {
+  const rec = row.scanned
+  return rec && typeof rec === 'object' && !Array.isArray(rec) ? rec as Record<string, unknown> : undefined
+}
+
+/**
+ * A found host's row brought up to what ~/.ssh/config says now: each field whose value still
+ * equals the recorded scan takes the new value, and the record moves with it; a field the
+ * person changed keeps their value (and the old record, so it stays theirs). A row with no
+ * record (written before the record existed) is left alone: its values cannot be told from a
+ * person's edit (the start's settle records one when they still equal the scan). Returns the
+ * same object when nothing changed.
+ */
+export function followScan<T extends FoundHostRow>(row: T, host: DiscoveredHost): T {
+  if (row.discovered !== true) return row
+  const rec = scanRecordOn(row)
+  if (!rec) return row
+  const next: FoundHostRow = { ...row }
+  const nextRec: Record<string, unknown> = { ...rec }
+  let changed = false
+  for (const key of FOUND_HOST_SCAN_FIELDS) {
+    if (!sameField(key, row[key], rec[key])) continue
+    const now = host[key]
+    if (sameField(key, row[key], now) && sameField(key, rec[key], now)) continue
+    if (now === undefined || now === '') { delete next[key]; delete nextRec[key] } else { next[key] = now; nextRec[key] = now }
+    changed = true
+  }
+  if (!changed) return row
+  next.scanned = nextRec
+  return next as T
+}
+
+/**
+ * The record for a row that has none, when its values still equal the scan (so from now on
+ * the row follows ~/.ssh/config). A row whose values differ keeps no record: that may be the
+ * person's edit. Returns the same object when nothing changed.
+ */
+export function recordScanIfSame<T extends FoundHostRow>(row: T, host: DiscoveredHost | undefined): T {
+  if (!host || row.discovered !== true || scanRecordOn(row)) return row
+  for (const key of FOUND_HOST_SCAN_FIELDS) if (!sameField(key, row[key], host[key])) return row
+  return { ...row, scanned: scanRecordOf(host) }
+}
+
+/**
+ * One machine is one sshd: a hostname and its port (22 when none is named). Two aliases on one
+ * hostname with different ports are different machines (containers, forwards).
+ */
+export function foundMachineKey(hostname: unknown, port: unknown): string {
+  return `${text(hostname).toLowerCase()}:${text(port) || '22'}`
+}
+
+/**
+ * The SSH targets a host map already reaches, for `foundTargetTaken`: one machine
+ * (`foundMachineKey`) with the users it is reached as ('' = none named).
+ */
+export function knownFoundTargets(rows: Iterable<{ hostname?: unknown; port?: unknown; user?: unknown } | null | undefined>): Map<string, Set<string>> {
+  const known = new Map<string, Set<string>>()
+  for (const h of rows) addFoundTarget(known, h?.hostname, h?.port, h?.user)
+  return known
+}
+
+export function addFoundTarget(known: Map<string, Set<string>>, hostname: unknown, port: unknown, user: unknown): void {
+  const key = foundMachineKey(hostname, port)
+  let users = known.get(key)
+  if (!users) known.set(key, users = new Set())
+  users.add(text(user))
+}
+
+/**
+ * Is a found host's SSH target already in the map? One target is a hostname, its port and
+ * its user: an alias of the same machine reached as another user is another target (both
+ * listed). A row that names no user is taken for any user, and a found host that names none
+ * for any row of that machine, so the person's own entry for the machine still covers it.
+ */
+export function foundTargetTaken(known: ReadonlyMap<string, ReadonlySet<string>>, host: Pick<DiscoveredHost, 'hostname' | 'port' | 'user'>): boolean {
+  const users = known.get(foundMachineKey(host.hostname, host.port))
+  if (!users) return false
+  const user = text(host.user)
+  return user === '' || users.has('') || users.has(user)
+}
+
+/**
+ * Merge the ~/.ssh/config hosts into config.hosts, in memory. A found host already in
+ * config.hosts first follows ~/.ssh/config (`followScan`). A new one is skipped when its
+ * alias is there, or its SSH target is (`foundTargetTaken`: the person's own entry IS that
+ * machine), or its alias is reserved. Once the server asks (`asking`), a new one waits
+ * for the yes; before that it is merged on, as an older Walnut did, so the first start
+ * of this version reads the rows it decides exactly as they were.
  */
 export function mergeFoundHosts(
   config: Config,
@@ -96,10 +204,15 @@ export function mergeFoundHosts(
   if (discovered.size === 0) return
   if (!config.hosts) config.hosts = {}
   const hosts = config.hosts
-  const known = new Set(Object.values(hosts).map((h) => String(h?.hostname ?? '').toLowerCase()))
   for (const [alias, host] of discovered) {
-    if (opts.reserved?.has(alias) || hosts[alias] || known.has(host.hostname.toLowerCase())) continue
-    const row: HostRow = {
+    if (opts.reserved?.has(alias) || !Object.hasOwn(hosts, alias)) continue
+    const stored = hosts[alias]
+    if (stored && typeof stored === 'object') hosts[alias] = followScan(stored as HostRow & FoundHostRow, host)
+  }
+  const known = knownFoundTargets(Object.values(hosts))
+  for (const [alias, host] of discovered) {
+    if (opts.reserved?.has(alias) || hosts[alias] || foundTargetTaken(known, host)) continue
+    const row = {
       hostname: host.hostname,
       user: host.user,
       port: host.port,
@@ -107,10 +220,23 @@ export function mergeFoundHosts(
       enabled: !opts.asking,
       discovered: true,
       ...(opts.asking ? { connect: 'ask' as const } : {}),
-    }
+      scanned: scanRecordOf(host),
+    } as HostRow
     hosts[alias] = row
-    known.add(host.hostname.toLowerCase())
+    addFoundTarget(known, host.hostname, host.port, host.user)
   }
+}
+
+/**
+ * A host row a settings write sends with no `scanned` record (an editor that does not know
+ * the field) keeps the one it had, so saving Remote Hosts does not stop a found host from
+ * following ~/.ssh/config. A field the person changed in that save no longer equals the
+ * record, so it is theirs from now on. `was` is the row as getConfig read it.
+ */
+export function keepFoundHostScan<T extends FoundHostRow>(sent: T, was: FoundHostRow | undefined): T {
+  if (!was || was.discovered !== true || sent.discovered !== true || 'scanned' in sent) return sent
+  const rec = scanRecordOn(was)
+  return rec ? { ...sent, scanned: rec } : sent
 }
 
 /** What Walnut recorded about each host, by alias: the facts an older found host is decided from. */
@@ -177,9 +303,12 @@ export function decideFoundHost(
 /**
  * A host row with this answer written: `enabled` follows it (yes on, the others off). `by`
  * says who answered: the person (the default, and no field), or Walnut deciding an older row.
+ * `scan` (what ~/.ssh/config says now) brings the row up to it and records it (`followScan`,
+ * `recordScanIfSame`), so the written row keeps following the file.
  */
-export function withFoundHostAnswer<T extends FoundHostRow>(row: T, answer: FoundHostAnswer, by: 'person' | 'walnut' = 'person'): T {
-  const { connect_by: _was, ...rest } = row
+export function withFoundHostAnswer<T extends FoundHostRow>(row: T, answer: FoundHostAnswer, by: 'person' | 'walnut' = 'person', scan?: DiscoveredHost): T {
+  const base = scan ? recordScanIfSame(followScan({ ...row, discovered: true }, scan), scan) : row
+  const { connect_by: _was, ...rest } = base
   return { ...rest, discovered: true, connect: answer, enabled: answer === 'yes', ...(by === 'walnut' ? { connect_by: 'walnut' } : {}) } as T
 }
 

@@ -115,6 +115,10 @@ export function createOneShotCore<W>(deps: OneShotDeps<W>) {
 
   var pool = new Map<string, Pooled>()
   var runs = new Map<string, Run>()
+  // Every child this core spawned, until its own exit event; never judged by `killed` or a run's end.
+  var childrenLive = new Set<OneShotChild>()
+  // Set by endWarmPool (demo.quiesce only): no run or warm child starts after it.
+  var poolClosed = false
 
   function str(v: unknown): string { return typeof v === 'string' ? v : '' }
 
@@ -138,6 +142,10 @@ export function createOneShotCore<W>(deps: OneShotDeps<W>) {
     var opts: Record<string, unknown> = { stdio: ['pipe', 'pipe', 'pipe'], env: spec.env || deps.env }
     if (spec.cwd) opts.cwd = spec.cwd
     var child = deps.spawn(spec.command, spec.args, opts)
+    childrenLive.add(child)
+    child.on('exit', function () { childrenLive.delete(child) })
+    // A spawn that failed has no process; any other error leaves it tracked until its exit.
+    child.on('error', function () { if (typeof child.pid !== 'number') childrenLive.delete(child) })
     // A child that died before reading its input must not crash the daemon on EPIPE.
     if (child.stdin && typeof child.stdin.on === 'function') child.stdin.on('error', function () {})
     if (child.stdout && child.stdout.setEncoding) child.stdout.setEncoding('utf8')
@@ -188,6 +196,7 @@ export function createOneShotCore<W>(deps: OneShotDeps<W>) {
   function prewarm(raw: Record<string, unknown>): { ok: true; warm: 'kept' | 'spawned' } {
     var key = str(raw.warmKey)
     if (!key) throw new Error('warmKey is required')
+    if (poolClosed) throw new Error('one-shot runs are closed on this daemon')
     var existing = pool.get(key)
     if (existing && alive(existing.child)) return { ok: true, warm: 'kept' }
     disposePooled(key)
@@ -250,6 +259,7 @@ export function createOneShotCore<W>(deps: OneShotDeps<W>) {
   function run(ws: W, raw: Record<string, unknown>): { ok: true; runId: string; warm: boolean; pid?: number } {
     var id = str(raw.runId)
     if (!id) throw new Error('runId is required')
+    if (poolClosed) throw new Error('one-shot runs are closed on this daemon')
     if (runs.has(id)) throw new Error('run ' + id + ' already exists')
     var spec = cleanSpec(raw)
     var warmKey = str(raw.warmKey)
@@ -360,5 +370,23 @@ export function createOneShotCore<W>(deps: OneShotDeps<W>) {
     return { runs: runs.size, pool: pool.size }
   }
 
-  return { run: run, prewarm: prewarm, cancel: cancel, dropClient: dropClient, disposeAll: disposeAll, stats: stats }
+  /** demo.quiesce only: close the pool for good; each warm child gets stdin EOF, no signal, and stays counted until it exits. */
+  function endWarmPool(): number {
+    poolClosed = true
+    var n = 0
+    pool.forEach(function (p) {
+      if (p.reap) clearTimeout(p.reap)
+      p.reap = null
+      try { if (p.child.stdin) p.child.stdin.end() } catch (e) { /* already closed: its exit still clears it */ }
+      n++
+    })
+    pool.clear()
+    return n
+  }
+
+  function liveChildren(): { runs: number; pool: number; children: number } {
+    return { runs: runs.size, pool: pool.size, children: childrenLive.size }
+  }
+
+  return { run: run, prewarm: prewarm, cancel: cancel, dropClient: dropClient, disposeAll: disposeAll, stats: stats, endWarmPool: endWarmPool, liveChildren: liveChildren }
 }

@@ -54,8 +54,18 @@ function logParked(rows: QueuedMessage[], reason: string): void {
  * Note revertToPending only un-sticks rows whose stored status is 'processing',
  * so a later transient revert can never resurrect a parked row.
  */
-export async function parkMessages(messages: QueuedMessage[], reason: string, strict = false): Promise<number> {
+/**
+ * Why a batch parks: the words, and (a delivery verdict's `waitsFor`) the readiness kind
+ * a row waits on when the agent cannot run yet, so Walnut sends it once the host can.
+ * Callers holding a verdict pass the verdict itself, never only its `reason`
+ * (tests/core/sessions/agent-wait-resend-guard.test.ts).
+ */
+export type ParkCause = string | { reason: string; waitsFor?: string };
+
+export async function parkMessages(messages: QueuedMessage[], cause: ParkCause, strict = false): Promise<number> {
   if (messages.length === 0) return 0;
+  const reason = typeof cause === 'string' ? cause : cause.reason;
+  const waitsFor = typeof cause === 'string' ? undefined : cause.waitsFor;
   const parkedAt = new Date().toISOString();
   const parked = await mutateStore((s) => {
     const done: QueuedMessage[] = [];
@@ -69,6 +79,8 @@ export async function parkMessages(messages: QueuedMessage[], reason: string, st
       }
       if (row.status === 'parked') continue;
       parkRow(row, reason, parkedAt);
+      if (waitsFor) row.waitsFor = waitsFor;
+      else delete row.waitsFor;
       done.push(row);
     }
     return done;
@@ -188,6 +200,40 @@ export async function unparkMessage(sessionId: string, messageId: string): Promi
   });
   if (ok) log.session.info('parked message un-parked by user action', { sessionId, messageId });
   return ok;
+}
+
+/**
+ * The agent can run on the session's host now: the rows parked only for that
+ * (`waitsFor`) go back in line, as a Retry would put them (sessions/agent-wait-resend.ts).
+ * Never a row parked for anything else, and never one a Stop came after: a row whose
+ * stop fence is not the session's current one stays parked for the person (their Stop
+ * wins), and a deleted row is gone. `onlyWithPending`: only when another row of the
+ * session is going out now (it rides ahead of it, in its own order). Returns the ids.
+ */
+export async function unparkAgentWaitRows(
+  sessionId: string, stopFence: string | null, opts?: { onlyWithPending?: boolean },
+): Promise<string[]> {
+  const ids = await mutateStore((s) => {
+    const queue = s.queues[sessionId];
+    if (!queue) return [] as string[];
+    if (opts?.onlyWithPending && !queue.some((m) => m.status === 'pending')) return [] as string[];
+    const done: string[] = [];
+    for (const msg of queue) {
+      if (msg.status !== 'parked' || !msg.waitsFor) continue;
+      if ((msg.stopFence ?? null) !== stopFence) continue;
+      msg.status = 'pending';
+      delete msg.unansweredResent;
+      if (!msg.lineUuid && !msg.userUuid) {
+        msg.lineUuid = randomUUID();
+        msg.lineTries = 0;
+      }
+      leaveParked(msg);
+      done.push(msg.id);
+    }
+    return done;
+  });
+  if (ids.length > 0) log.session.info('parked messages sent again: the agent can run now', { sessionId, messageIds: ids });
+  return ids;
 }
 
 /**
@@ -398,4 +444,12 @@ export async function rollbackSessionQueueMigration(
     if (remaining.length > 0) s.queues[newSessionId] = remaining;
     else delete s.queues[newSessionId];
   }, true);
+}
+
+/** Sessions holding a row parked only because the agent could not run (QueuedMessage.waitsFor). */
+export async function sessionsWithAgentWaitRows(): Promise<string[]> {
+  const store = await readQueueFileFresh();
+  return Object.entries(store.queues)
+    .filter(([, rows]) => rows.some((m) => m.status === 'parked' && !!m.waitsFor))
+    .map(([sid]) => sid);
 }

@@ -100,6 +100,12 @@ interface NotesEditorProps {
   onAskHere?: (range: Range) => void;
   /** `Comment` in the bubble menu: a doc comment on the selection (the Files tab). */
   onComment?: (range: Range, text: string) => void;
+  /**
+   * A drag never moves or drops text (the Files tab, where a selection is for Ask here and
+   * Comment and every edit saves at once: 2026-11-09 review, a drag inside a selection moved
+   * it). Dropped image files still upload. Notes leave it off: there a drag is a move.
+   */
+  noDragEdits?: boolean;
   /** Frequency-ranked vault tags for #tag autocomplete (from GET /tags; empty = manual typing). */
   tagSuggestions?: TagSuggestion[];
   /**
@@ -209,7 +215,7 @@ function isUrl(text: string): boolean {
   }
 }
 
-export function NotesEditor({ content, readOnly = false, onDirty, placeholder, className, autoFocus, findLabel = 'Find in document', tasks, focusedTaskId, onTaskClick, enableWikiLinks, wikiLinkNotes, onWikiLinkClick, enableBlockTools, onAskSelection, onAskHere, onComment, tagSuggestions, attachmentNotePath, imageBaseDir, imageHost, imageVersion, onEditorReady, dictation = true }: NotesEditorProps) {
+export function NotesEditor({ content, readOnly = false, onDirty, placeholder, className, autoFocus, findLabel = 'Find in document', tasks, focusedTaskId, onTaskClick, enableWikiLinks, wikiLinkNotes, onWikiLinkClick, enableBlockTools, onAskSelection, onAskHere, onComment, noDragEdits = false, tagSuggestions, attachmentNotePath, imageBaseDir, imageHost, imageVersion, onEditorReady, dictation = true }: NotesEditorProps) {
   const isExternalUpdate = useRef(false);
   const editorRef = useRef<Editor | null>(null);
   /**
@@ -374,6 +380,16 @@ export function NotesEditor({ content, readOnly = false, onDirty, placeholder, c
       onDirty(editor);
     },
     editorProps: {
+      handleDOMEvents: {
+        // ProseMirror's own key fallback preventDefaults every Escape it sees, so a sheet
+        // around the editor (the Files full screen) read it as taken and stayed open. The
+        // editor binds nothing to Escape: let it go on untouched, as CodeMirror does.
+        keydown: (_view, event) => event.key === 'Escape' && !event.isComposing,
+        ...(noDragEdits ? {
+          // No text leaves the doc by a drag: the press makes a new selection instead.
+          dragstart: (_view: unknown, event: DragEvent) => { event.preventDefault(); return true; },
+        } : {}),
+      },
       // Intercept clicks on anchors at the ProseMirror level
       handleClick: (view, pos, event) => {
         const target = event.target as HTMLElement;
@@ -425,7 +441,11 @@ export function NotesEditor({ content, readOnly = false, onDirty, placeholder, c
       },
       handleDrop: (view, event) => {
         const files = event.dataTransfer?.files;
-        if (!files?.length) return false;
+        if (!files?.length) {
+          // Dropped text, from the doc or outside it, is not an edit here (noDragEdits).
+          if (noDragEdits) { event.preventDefault(); return true; }
+          return false;
+        }
         for (const file of files) {
           if (file.type.startsWith('image/')) {
             event.preventDefault();

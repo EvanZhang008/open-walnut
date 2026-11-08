@@ -8,7 +8,7 @@ import {
   formatRetryIn, retryCountdownText, middleTruncatePath, hostGateBody, hostReadySentence,
   autofixProgressText, isClaudeFixAction, sameResultReceipt, firstSentence, listingProblemOf, READINESS_ANSWER_GRACE_MS,
   BANNER_READINESS_KINDS, BLOCKING_READINESS_KINDS, bannerReadinessProblem, LOOP_DIAL_PHASES,
-  type HostStatusInput,
+  hostReadinessConfirmed, type HostStatusInput,
 } from '../../../src/core/hosts/host-problem.js'
 import { PREFLIGHT_TIMEOUT_MS } from '../../../src/core/hosts/host-readiness.js'
 import { DAEMON_CONNECT_STEPS } from '../../../src/core/sessions/host-connect-hint.js'
@@ -24,6 +24,24 @@ const outdated = { kind: 'claude_outdated', message: 'Claude Code on Dev box is 
 function ready(o: Partial<HostStatusInput> = {}, problems = [outdated], checkedAt = NOW): HostStatusInput {
   return st({ connected: true, phase: 'connected', connectedAt: NOW - 60_000, readiness: { problems, checkedAt, claude: { version: '2.1.220', minVersion: '2.1.280' } }, ...o })
 }
+
+describe('hostReadinessConfirmed', () => {
+  it('an unknown sign-in or failed check is not a ready engine, without blocking an older daemon', () => {
+    const s = ready({}, []);
+    expect(hostReadinessConfirmed(s)).toBe(true);
+    for (const auth of ['ok', 'unknown', 'not-logged-in']) {
+      const current = { ...s, readiness: { ...s.readiness, claude: { auth } } };
+      expect(hostReadinessConfirmed(current)).toBe(auth === 'ok');
+      expect(hostReadinessConfirmed({ ...current, readiness: { ...current.readiness, checkError: 'Timed out' } })).toBe(false);
+    }
+    expect(hostReadinessConfirmed({ ...s, readiness: { ...s.readiness, claude: { unknown: 'The login shell timed out.' } } })).toBe(false);
+    expect(hostReadinessConfirmed(ready())).toBe(false);
+    expect(hostReadinessConfirmed(ready({}, [], NOW - 120_000))).toBe(false);
+    expect(hostReadinessConfirmed({ ...s, connected: false })).toBe(false);
+    expect(hostReadinessConfirmed({ ...s, readiness: { ...s.readiness, fixing: { action: 'install', text: 'Installing' } } })).toBe(false);
+    expect(hostReadinessConfirmed(undefined)).toBe(false);
+  });
+});
 
 describe('hostFailureHeadline: one headline per kind (spec 2.1)', () => {
   it.each([

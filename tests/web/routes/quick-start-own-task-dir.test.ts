@@ -141,6 +141,47 @@ describe('POST /api/sessions/quick-start: ownTaskDir', () => {
     await expect(fs.stat(path.join(tmpRoot, 'tasks', String(res.body.taskId)))).rejects.toThrow();
   });
 
+  it('a new task from the home folder reads naturally at once: the person\'s words, filed under "Home"', async () => {
+    // 2026-11-10 review: a new user's New task from the default folder (~) read "New project: ~" and
+    // "Session: <their user name>" until a model titled it.
+    const res = await request(createApp()).post('/api/sessions/quick-start')
+      .send({ cwd: '~', message: 'Write a short plan for my week', project: 'Home', projectFromFolder: true });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const task = await getTask(String(res.body.taskId));
+    expect(task.cwd).toBe(os.homedir());
+    expect(task.title).toBe('Write a short plan for my week');
+    expect(task.project).toBe('Home');
+  });
+
+  it('a New task a person typed words into is named by them from any folder; no words, a command or an agent keep "Session: <folder>"', async () => {
+    // Review round 2 (WebKit): "Second task" from ~/Projects read "Session: Projects" until a model titled it.
+    const own = path.join(tmpRoot, 'tidepool');
+    await fs.mkdir(own);
+    const named = await request(createApp()).post('/api/sessions/quick-start')
+      .send({ cwd: own, message: 'Second task', project: 'tidepool', projectFromFolder: true });
+    expect(named.status, JSON.stringify(named.body)).toBe(200);
+    const t2 = await getTask(String(named.body.taskId));
+    expect(t2.title).toBe('Second task');
+    expect(t2.project).toBe('tidepool');
+    // Long words: cut the way the title brake cuts.
+    const long = 'Compare the three internet plans for the new office and pick the cheapest one that has a static address';
+    const cut = await request(createApp()).post('/api/sessions/quick-start').send({ cwd: own, message: long });
+    const t3 = await getTask(String(cut.body.taskId));
+    expect(t3.title.length).toBeLessThanOrEqual(60);
+    expect(long.startsWith(t3.title)).toBe(true);
+    // No words, or a slash command: the folder is all there is to say.
+    const empty = await request(createApp()).post('/api/sessions/quick-start').send({ cwd: own, message: '' });
+    expect(empty.status, JSON.stringify(empty.body)).toBe(200);
+    expect((await getTask(String(empty.body.taskId))).title).toBe('Session: tidepool');
+    const command = await request(createApp()).post('/api/sessions/quick-start').send({ cwd: own, message: '/review the diff' });
+    expect((await getTask(String(command.body.taskId))).title).toBe('Session: tidepool');
+    // An agent's launch through the same route: its words are not the person's.
+    const agent = await request(createApp()).post('/api/sessions/quick-start')
+      .set('x-walnut-caller-kind', 'automation').send({ cwd: own, message: 'Second task' });
+    expect(agent.status, JSON.stringify(agent.body)).toBe(200);
+    expect((await getTask(String(agent.body.taskId))).title).toBe('Session: tidepool');
+  });
+
   it('without the flag (an older client), or on a remote host, an empty cwd is still refused', async () => {
     const plain = await request(createApp()).post('/api/sessions/quick-start').send({ cwd: '', message: 'go' });
     expect(plain.status).toBe(400);

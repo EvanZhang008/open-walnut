@@ -22,8 +22,8 @@ mkdir -p "$MACOS" "$RESOURCES"
 # Compile the Swift source
 SOURCES=(
     "$SCRIPT_DIR/main.swift" "$SCRIPT_DIR/DesktopDiagnostics.swift" "$SCRIPT_DIR/GlobalDictation.swift" \
-    "$SCRIPT_DIR/WebContentPolicy.swift" "$SCRIPT_DIR/WebContentWatchdog.swift" "$SCRIPT_DIR/LinkPolicy.swift" \
-    "$SCRIPT_DIR/SessionHost.swift" "$SCRIPT_DIR/CalendarBridge.swift" "$SCRIPT_DIR/ReaderBridge.swift" \
+    "$SCRIPT_DIR/WebContentPolicy.swift" "$SCRIPT_DIR/WebContentWatchdog.swift" "$SCRIPT_DIR/WebContentProcess.swift" "$SCRIPT_DIR/QuietKeyWindow.swift" "$SCRIPT_DIR/LinkPolicy.swift" \
+    "$SCRIPT_DIR/SessionHost.swift" "$SCRIPT_DIR/CalendarBridge.swift" "$SCRIPT_DIR/ReaderBridge.swift" "$SCRIPT_DIR/ClaudeSignInBridge.swift" \
     "$SCRIPT_DIR/BundledRuntime.swift" "$SCRIPT_DIR/AppBuiltCheckout.swift" "$SCRIPT_DIR/AppUpdateMachine.swift" "$SCRIPT_DIR/AppUpdater.swift" \
     "$SCRIPT_DIR/AppUpdateBridge.swift" "$SCRIPT_DIR/ApprovalBridge.swift" "$SCRIPT_DIR/NotificationBridge.swift" "$SCRIPT_DIR/DesktopUpdateBridge.swift" "$SCRIPT_DIR/AppLink.swift" "$SCRIPT_DIR/CommandLineTool.swift" \
     "$SCRIPT_DIR/../src/data/walnut-calendar.swift" "$SCRIPT_DIR/../src/data/walnut-reader.swift" "$SCRIPT_DIR/WalnutIntents.swift"
@@ -195,6 +195,15 @@ if [ -z "$SIGNED_WITH" ]; then
     echo "No usable signing identity — ad-hoc signing (permission prompts repeat after each rebuild)."
     codesign --force --sign - "$APP_BUNDLE"
 fi
+
+# Embedding before the final signature keeps Demo available when only Walnut.app is installed.
+WALNUT_SIGN_IDENTITY="${SIGNED_WITH:--}" bash "$SCRIPT_DIR/build-demo.sh" "$APP_BUNDLE" "$CONTENTS/Helpers/Walnut Demo.app" --uses-parent-release
+if [ -n "$SIGNED_WITH" ]; then
+    codesign --force --sign "$SIGNED_WITH" "$APP_BUNDLE"
+else
+    codesign --force --sign - "$APP_BUNDLE"
+fi
+codesign --verify --deep --strict "$APP_BUNDLE"
 
 echo ""
 echo "Done! Built: $APP_BUNDLE"

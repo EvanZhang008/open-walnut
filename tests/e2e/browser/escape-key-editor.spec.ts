@@ -23,6 +23,7 @@
  * false while the page can still act, true once it cannot.
  */
 import { devices, test, expect, type Page } from '@playwright/test'
+import { goToSessionFolder } from './todo-panel-helpers'
 
 test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 
@@ -49,14 +50,16 @@ async function openFilesPanel(page: Page) {
   await panel.getByRole('button', { name: 'Files', exact: true }).click()
   const explorer = panel.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 15_000 })
+  await goToSessionFolder(explorer)
   return explorer
 }
 
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page, baseURL }) => {
   await page.addInitScript(() => {
     try { localStorage.setItem('open-walnut-file-explorer-tree-collapsed', '0') } catch { /* off */ }
   })
-  await page.goto('/')
+  await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
+  await page.getByRole('link', { name: 'Open Walnut' }).click()
   await page.waitForLoadState('networkidle')
 })
 

@@ -105,6 +105,44 @@ async function seedTerminalEnvSession(
   });
 }
 
+describe('orphaned cancellation snapshots', () => {
+  it('retries failed snapshot cleanup even when no database record remains to reap', async () => {
+    const { deleteSessionRecords, getSessionByClaudeId } = await import('../../src/core/session-tracker.js');
+    const { SESSION_QUEUE_FILE } = await import('../../src/constants.js');
+    const { resetCache, readQueueFileFresh } = await import('../../src/core/session-queue-store.js');
+    const uuid = '11111111-1111-4111-8111-111111111111';
+    const row = (sessionId: string) => ({
+      id: `qm-${sessionId}`, sessionId, message: 'Cancelled private message',
+      status: 'processing', enqueuedAt: new Date().toISOString(), lineUuid: uuid,
+    });
+    await createSessionRecord('deleted-snapshot', 'deleted-task', 'project');
+    await createSessionRecord('retained-snapshot', 'retained-task', 'project');
+    const snapshots = Object.fromEntries(['deleted-snapshot', 'retained-snapshot'].map(sid =>
+      [sid, { [uuid]: { rows: [row(sid)] } }],
+    ));
+    await fsp.writeFile(SESSION_QUEUE_FILE, JSON.stringify({ version: 1, queues: {}, cancelled: snapshots }));
+    resetCache();
+    const rename = fsp.rename.bind(fsp);
+    const fault = vi.spyOn(fsp, 'rename').mockImplementation(async (from, to) => {
+      if (String(to) === SESSION_QUEUE_FILE) throw new Error('injected snapshot cleanup failure');
+      return rename(from, to);
+    });
+    try {
+      await expect(deleteSessionRecords(new Set(['deleted-snapshot']), 'test')).rejects.toThrow('injected snapshot cleanup failure');
+      expect(await getSessionByClaudeId('deleted-snapshot')).toBeNull();
+      expect((await readQueueFileFresh()).cancelled?.['deleted-snapshot']).toBeDefined();
+      fault.mockRestore();
+      closeDb();
+      _resetSessionTrackerForTesting();
+      resetCache();
+      expect(await new SessionReaper().reap()).toEqual({ reaped: 0, rotated: 0 });
+      const recovered = await readQueueFileFresh();
+      expect(recovered.cancelled?.['deleted-snapshot']).toBeUndefined();
+      expect(recovered.cancelled?.['retained-snapshot']).toEqual(snapshots['retained-snapshot']);
+    } finally { fault.mockRestore(); resetCache(); }
+  });
+});
+
 describe('SessionReaper — reaps terminal environment sessions past retention', () => {
   it('emits deleted session IDs so QMD can remove reaped documents', async () => {
     await seedTerminalEnvSession('triage-qmd-cleanup', { ageDays: 31 });

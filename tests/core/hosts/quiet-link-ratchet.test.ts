@@ -59,6 +59,8 @@ const SENDERS: Record<string, { calls: number; kind: Kind; why: string }> = {
   'src/core/hosts/host-readiness.ts': { calls: 2, kind: 'wake-recheck', why: 'preflight and fixes on a connected link; a lost send fails as a transport error' },
   'src/core/hosts/named-paths.ts': { calls: 4, kind: 'wake-recheck', why: 'placement\'s file reads only on a link already open, under a 4 s deadline; a lost one reads as cannot be asked' },
   'src/core/hosts/placement.ts': { calls: 2, kind: 'wake-recheck', why: 'a load read under a 4 s deadline; a lost one means no load figure' },
+  'src/providers/claude-code-session.ts': { calls: 11, kind: 'wake-recheck', why: 'reads capability flags of pooled links (the local daemon\'s and a mount host\'s MCP), and a cancelled line\'s fate on a link already connected under readDaemonLineFate\'s 10 s deadline; a lost read reads as not known and keeps the rows' },
+  'src/core/sessions/resend-already-ran.ts': { calls: 2, kind: 'wake-recheck', why: 'a line.fate read on a link already connected under readDaemonLineFate\'s 10 s deadline; a lost one sends the line as before' },
   'src/core/human-inbox/item-status.ts': { calls: 1, kind: 'wake-recheck', why: 'a session state read under 1.5 s; a lost one answers unavailable' },
   'src/core/transcript-archive-sweep.ts': { calls: 2, kind: 'wake-recheck', why: 'a background history archive pass under its own timeout; a lost one is logged and the next pass runs it again' },
   'src/core/net/net-mac.ts': { calls: 5, kind: 'wake-recheck', why: 'best-effort host network config pushes and status reads; a lost push is logged' },
@@ -105,6 +107,7 @@ const SENDERS: Record<string, { calls: number; kind: Kind; why: string }> = {
   'src/web/routes/slash-commands.ts': { calls: 1, kind: 'wake-recheck', why: 'command list reads under boundHostRead, with a stale cache on a miss' },
 
   // Only this machine's own daemon.
+  'src/commands/demo-server.ts': { calls: 1, kind: 'local', why: 'the Demo\'s stop confirms with its own daemon on this machine over loopback (demo.quiesce)' },
   'src/core/feature-nodes/feature-service.ts': { calls: 1, kind: 'local', why: 'feature request frames over loopback' },
   'src/core/hosts/host-fixture.ts': { calls: 2, kind: 'local', why: 'a test fixture daemon on a loopback URL' },
   'src/core/hosts/local-readiness.ts': { calls: 2, kind: 'local', why: 'this machine\'s own preflight and fixes' },
@@ -124,7 +127,6 @@ const SENDERS: Record<string, { calls: number; kind: Kind; why: string }> = {
   'src/core/routines/clock-placement.ts': { calls: 2, kind: 'no-send', why: 'asks the pool whether a link is up' },
   'src/core/session-snapshot-apply.ts': { calls: 2, kind: 'no-send', why: 'reads when a pooled link\'s daemon started' },
   'src/core/health-monitor/auto-fix.ts': { calls: 2, kind: 'no-send', why: 'a health fix reads whether the link is up and redials it; it sends no work on it' },
-  'src/providers/claude-code-session.ts': { calls: 7, kind: 'no-send', why: 'reads capability flags of pooled links (the local daemon\'s and a mount host\'s MCP)' },
   'src/web/local-daemon-lane.ts': { calls: 2, kind: 'no-send', why: 'keeps the loopback link dialled' },
   'src/web/server.ts': { calls: 1, kind: 'no-send', why: 'the host warmup dials to fill the pool' },
 }

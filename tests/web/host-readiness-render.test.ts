@@ -122,6 +122,20 @@ describe('RemoteHostReadiness: automatic fixes (C29, C95)', () => {
     expect(asked).not.toContain('rh-readiness-fix-claude_missing')
   })
 
+  it('every non-Claude fix, including a running note without a problem, has an unknown progress bar', () => {
+    const fix = { action: 'install-compiler', state: 'running' as const, text: 'Installing gcc' }
+    const withProblem = render(statusWith({ checkedAt: 5, problems: [{ ...GCC, fix }] }))
+    const unclaimed = render(statusWith({ checkedAt: 5, problems: [], fixing: { ...fix, startedAt: clock } }))
+    for (const html of [withProblem, unclaimed]) {
+      const bars = parseHTML(html).document.querySelectorAll('[role="progressbar"]')
+      expect(bars.length).toBe(1)
+      expect(bars[0].getAttribute('aria-label')).toBe('Installing gcc on Build box...')
+      expect(bars[0].hasAttribute('aria-valuenow')).toBe(false)
+    }
+    const failed = render(statusWith({ checkedAt: 6, problems: [{ ...GCC, fix: { ...fix, state: 'failed' } }] }))
+    expect(failed).not.toContain('role="progressbar"')
+  })
+
   it('the row says how long a fix runs; after 3 minutes Details offer Check again, and only then', () => {
     const gap = statusWith({ checkedAt: 5, claude: claudeNative, problems: [OUTDATED] })
     const at6 = render(gap, { fixing: { verb: 'update', startedAt: clock - 6_000 } })
@@ -138,6 +152,19 @@ describe('RemoteHostReadiness: automatic fixes (C29, C95)', () => {
     expect(text(html)).toContain('Update by hand')
     expect(html).toContain('<code class="hc-chip">claude update</code>')
     expect(text(html)).not.toContain('Try again')
+  })
+})
+
+describe('RemoteHostReadiness: a failed fix of Walnut\'s own parts', () => {
+  it('a failed gcc or dtach fix says what it costs, never a bare "Update failed"', () => {
+    const COMPILER = { kind: 'compiler_missing', message: 'No C compiler on Build box, so its terminals will not survive a disconnect.', commands: ['sudo apt-get install -y gcc libc6-dev'] }
+    for (const action of ['install-compiler', 'build-dtach']) {
+      const html = render(statusWith({ checkedAt: 6, claude: claudeNative, problems: [{ ...COMPILER, fix: { action, state: 'failed', text: 'Could not install gcc automatically (sudo needs a password)' } }] }))
+      expect(text(html)).toContain('No C compiler on Build box, so its terminals will not survive a disconnect. Could not install gcc automatically (sudo needs a password).')
+      expect(text(html)).not.toContain('Update failed')
+      expect(html).toContain('<code class="hc-chip">sudo apt-get install -y gcc libc6-dev</code>')
+      expect(text(html)).toContain('Check again')
+    }
   })
 })
 
@@ -160,6 +187,42 @@ describe('RemoteHostReadiness: notes, receipts, last checked (C41, C77)', () => 
     expect(agoText(30_000)).toBe('just now')
     expect(agoText(3_700_000)).toBe('1h ago')
   })
+
+  it('an unknown sign-in keeps a conditional login instruction and Check again, without an installer', () => {
+    const s = statusWith({ checkedAt: 9, claude: { found: true, auth: 'unknown' }, problems: [] });
+    const html = render(s);
+    expect(text(html)).toContain('Walnut could not confirm the Claude Code sign-in on Build box.');
+    expect(text(html)).toContain('If you have not signed in');
+    expect(html).toContain('claude auth login');
+    expect(html).toContain('rh-readiness-recheck');
+    expect(html).not.toContain('rh-readiness-fix-');
+    const checking = render(s, { pending: 'check' });
+    expect(checking).toContain('role="progressbar"');
+    expect(text(checking)).toContain('Checking Claude Code on Build box...');
+    expect(render(statusWith({ checkedAt: 9, claude: { auth: 'ok' }, problems: [] }))).toBe('');
+  });
+
+  it('an inconclusive executable probe stays visible with retry but no install or sign-in command', () => {
+    const s = statusWith({ checkedAt: 9, claude: { found: false, unknown: 'The login shell timed out.' }, problems: [] });
+    const html = render(s);
+    expect(text(html)).toContain('Walnut could not check Claude Code on Build box.');
+    expect(text(html)).toContain('The login shell timed out.');
+    expect(html).toContain('rh-readiness-recheck');
+    expect(html).not.toContain('claude auth login');
+    expect(html).not.toContain('rh-readiness-fix-');
+    expect(text(html)).not.toContain('is ready');
+    expect(render(s, { pending: 'check' })).toContain('role="progressbar"');
+  });
+
+  it('a failed readiness check leaves its error and retry visible even without problems', () => {
+    const html = render(statusWith({ checkedAt: 9, problems: [], checkError: 'The check timed out.' }));
+    expect(text(html)).toContain('The check timed out.');
+    expect(html).toContain('role="alert"');
+    expect(html).toContain('rh-readiness-recheck');
+    const firstFailure = render(statusWith({ checkedAt: 9, claude: { found: false, auth: 'unknown' }, problems: [], checkError: 'The check timed out.' }));
+    expect(firstFailure).not.toContain('claude auth login');
+    expect(text(firstFailure)).toContain('The check timed out.');
+  });
 
   it('a fine host, or one not connected, renders nothing', () => {
     expect(render(statusWith({ checkedAt: 9, problems: [], fixes: [] }))).toBe('')
@@ -198,6 +261,16 @@ describe('RemoteHostReadiness: lines that leave on their own', () => {
     expect(host.textContent).toBe('')
     await act(async () => { root.unmount() })
   })
+
+  it('installing an engine does not say ready while its sign-in remains unknown', async () => {
+    const { host, root } = await mount(view(statusWith({ checkedAt: 5, problems: [OUTDATED] })));
+    await act(async () => { root.render(view(statusWith({ checkedAt: 6, claude: { found: true, auth: 'unknown' }, problems: [] }))); });
+    expect(host.textContent).toContain('could not confirm');
+    expect(host.textContent).not.toContain('is ready');
+    await act(async () => { root.render(view(statusWith({ checkedAt: 7, claude: { auth: 'ok' }, problems: [] }))); });
+    expect(host.textContent).toContain('Build box is ready');
+    await act(async () => { root.unmount(); });
+  });
 
   it('what a finished fix did is the row line, so Details say nothing of it (remote-host-view.test.ts has the row)', async () => {
     const s = statusWith({

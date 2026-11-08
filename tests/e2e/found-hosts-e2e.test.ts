@@ -156,4 +156,28 @@ describe('found hosts on a real server', () => {
     expect(doc.hosts['used-box']).toMatchObject({ connect: 'yes', connect_by: 'walnut', enabled: true })
     expect(doc.hosts['off-box']).toMatchObject({ connect: 'not_now', enabled: false })
   })
+
+  it('a host the person said yes to follows a port changed in ~/.ssh/config, across a Settings save, until they set one here', async () => {
+    const sshConfig = path.join(isolation.home, '.ssh', 'config')
+    const writeSsh = async (port: number, at: number) => {
+      await fs.writeFile(sshConfig, ['Host lab-mac', '  HostName lab-mac.invalid', `  Port ${port}`, 'Host used-mem', '  HostName used-mem.invalid', 'Host quiet-box', '  HostName quiet-box.invalid', ''].join('\n'))
+      await fs.utimes(sshConfig, at, at)
+    }
+    // The yes above was taken with no port: the fixed config now names one.
+    await writeSsh(2222, 1_900_000_000)
+    expect((await config()).hosts['lab-mac'].port).toBe(2222)
+    // An editor from before the record saves the row as it read it: it still follows the file.
+    const row = (await config()).hosts['lab-mac']
+    const { scanned: _record, ...withoutRecord } = row
+    const save = (hosts: Record<string, unknown>) => api('/api/config', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ hosts }) })
+    expect((await save({ 'lab-mac': withoutRecord })).status).toBe(200)
+    await writeSsh(2300, 1_900_000_100)
+    expect((await config()).hosts['lab-mac'].port).toBe(2300)
+    // The person sets a port in Settings: that one stays, whatever the file says next.
+    const now = (await config()).hosts['lab-mac']
+    const { scanned: _r2, ...edited } = now
+    expect((await save({ 'lab-mac': { ...edited, port: 2999 } })).status).toBe(200)
+    await writeSsh(2400, 1_900_000_200)
+    expect((await config()).hosts['lab-mac'].port).toBe(2999)
+  })
 })

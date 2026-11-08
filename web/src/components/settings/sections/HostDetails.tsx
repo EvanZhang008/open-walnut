@@ -115,7 +115,7 @@ function DetailsBody({ alias, name, card, now, linked, kind, rowProblem, system,
     e.preventDefault();
     onClose();
   };
-  const failure = linked && !local ? <RemoteHostDetail alias={alias} name={name} /> : null;
+  const failure = linked && !local ? <RemoteHostDetail alias={alias} name={name} hintOnRow={rowProblem === 'connect'} /> : null;
   // A host not connected whose failure is said above (RemoteHostDetail draws one for a connect
   // problem) does not say its connection again in the facts, nor "Up for: Not connected"; one with
   // no failure block (a fleet row) keeps its Connection row, the only place its reason is said.

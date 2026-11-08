@@ -20,7 +20,7 @@ import type { ImageAttachment } from '@/api/chat';
 import { apiPost } from '@/api/client';
 import { fetchSession, fetchSessionsForTask } from '@/api/sessions';
 import { createTask } from '@/api/tasks';
-import { wsClient } from '@/api/ws';
+import { sendSessionMessage } from '@/api/session-send';
 import { ICON_CHEVRON_LEFT, ICON_CLOSE } from '@/components/common/Icons';
 import { DraftSessionPanel } from '@/components/sessions/DraftSessionPanel';
 import { SessionPanel } from '@/components/sessions/SessionPanel';
@@ -152,7 +152,7 @@ function isDrawn(el: Element | null): boolean {
 }
 
 async function sendIntoSession(sessionId: string, message: string): Promise<void> {
-  await wsClient.sendRpc<{ messageId: string }>('session:send', { sessionId, message });
+  await sendSessionMessage({ sessionId, message });
 }
 
 export function AskObjectDrawer(props: AskObjectDrawerProps) {

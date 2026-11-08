@@ -125,10 +125,11 @@ async function noTerminalOn(host: string): Promise<SshFailedResult | null> {
  * `fresh` (the UI's Retry) re-probes even when a failure was cached moments ago.
  */
 export async function probeTerminalMode(record: SessionRecord, opts: { fresh?: boolean } = {}): Promise<TerminalModeDecision> {
-  const refused = record.host ? await noTerminalOn(record.host) : null
+  const host = record.host && record.host !== '__local__' ? record.host : undefined
+  const refused = host ? await noTerminalOn(host) : null
   if (refused) return refused
-  const r = record.host ? await resolveRemoteDtach(record.host, opts) : await resolveLocalDtach(opts)
-  const decision = decideTerminalMode(r, record.host)
+  const r = host ? await resolveRemoteDtach(host, opts) : await resolveLocalDtach(opts)
+  const decision = decideTerminalMode(r, host)
   if (r.kind !== 'ok') {
     log.web.warn('terminal dtach probe failed', {
       sessionId: record.claudeSessionId,

@@ -11,9 +11,9 @@
  *   C38  the densest state (D4) fits a 300px column without clipping built-in chip
  *        words, and the composer's bottom edge does not move when it lands;
  *   C55  a mouse click on a chip keeps the textarea focused, the menu pick hands the
- *        caret back, and Enter is Start;
- *   C52  Enter without a folder ("Pick a folder first") leaves chips, badges and the
- *        legend exactly as they were, then and after the text's round trip.
+ *        caret back, and Enter is Start.
+ *   (C52, Enter without a folder, went with the home default: a fresh draft always
+ *   has a folder now, draft-home-default.ts.)
  */
 
 import { test, expect, type Locator, type Page } from '@playwright/test'
@@ -163,32 +163,6 @@ test('a mouse pick from a chip keeps the caret: type on, then Enter is Start', a
   const body = await nthRequest(log, 'quickStart')
   expect(String(body.message ?? '')).toMatch(/x$/)
   expect(body.taskMeta?.priority).toBe('important')
-})
-
-// ── C52 ──────────────────────────────────────────────────────────────────────
-
-test('Enter with no folder shows "Pick a folder first" and leaves every chip, badge and the legend in place', async ({ page }) => {
-  const mock = await bootDecisions(page, FOUR)
-  const panel = await openDraft(page)
-  await typeAndSettle(page, mock, 'pair on the marina release friday 3pm, urgent, due monday')
-  await expect(draftDecisionChips(panel)).toHaveCount(4)
-  const snapshot = () => panel.locator('.draft-launch-bar').evaluate((bar) => ({
-    chips: Array.from(bar.querySelectorAll('.draft-decision-chip')).map((c) => `${c.getAttribute('data-field')}:${c.textContent}`),
-    badges: bar.querySelectorAll('.draft-ai-badge').length,
-    key: bar.querySelector('.draft-decisions-key')?.textContent ?? null,
-  }))
-  const before = await snapshot()
-  const removals = await watchChipRemovals(panel)
-  await draftComposer(page).click()
-  await page.keyboard.press('Enter')
-  await expect(page.locator('[data-testid="draft-needs-folder"]')).toBeVisible()
-  expect(await snapshot()).toEqual(before)
-  // Past the clear debounce: the text's reset/restore round trip must not count as
-  // "the composer was emptied".
-  await page.waitForTimeout(900)
-  expect(await snapshot()).toEqual(before)
-  expect(await removals()).toEqual([])
-  await expect(draftComposer(page)).toHaveValue(/due monday/)
 })
 
 // ── C39: light and dark evidence of the densest state and the open menu ──────

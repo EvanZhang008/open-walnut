@@ -12,6 +12,7 @@
  * would be clean before the event under test arrives.
  */
 import { test, expect, type Page, type Locator } from '@playwright/test'
+import { goToSessionFolder } from './todo-panel-helpers'
 import { readFile, writeFile } from 'node:fs/promises'
 import { pressBarTool } from './doc-bar-helpers'
 
@@ -75,6 +76,8 @@ async function open(p: Page, text: string, ext = 'md') {
   const panel = p.locator(`.session-panel[data-session-id="${SID}"]`)
   await panel.getByRole('button', { name: 'Files', exact: true }).click()
   const explorer = panel.locator('.session-file-explorer')
+  await expect(explorer).toBeVisible()
+  await goToSessionFolder(explorer)
   await explorer.locator('.sfe-name', { hasText: name }).locator('xpath=..').click()
   await expect(preview(p)).toContainText('Design review')
   await expect(state(p)).toHaveText('Saved')
@@ -379,9 +382,11 @@ test('failed disk read recovers on the next event without replacing unsaved Mark
 })
 
 test('a visible Markdown file follows terminal writes with no tool event', async ({ page }) => {
+  await page.clock.install()
   const initial = body()
   const { abs } = await open(page, initial)
   await writeFile(abs, initial.replace('External paragraph: original.', 'External paragraph: terminal-update.'))
+  await page.clock.fastForward('00:30')
   await expect(preview(page)).toContainText('terminal-update', { timeout: 35000 })
   await expect(state(page)).toHaveText('Saved')
   await expect(error(page)).toHaveCount(0)

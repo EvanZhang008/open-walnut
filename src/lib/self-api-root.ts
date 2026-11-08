@@ -68,6 +68,14 @@ export function isSelfCallToken(token: string): boolean {
  * host, not this server, and remote sessions reach Walnut through the daemon
  * gateway instead. Empty when no server is listening in this process.
  */
+export function demoApiHeaders(url: string | URL): Record<string, string> {
+  const generation = process.env.WALNUT_DEMO_GENERATION
+  if (!generation) return {}
+  try {
+    return new URL(url).origin === 'http://127.0.0.1:3458' ? { 'x-walnut-demo-generation': generation } : {}
+  } catch { return {} }
+}
+
 export function walnutApiEnvForSession(host: string | null | undefined): Record<string, string> {
   if (host && host !== '__local__') return {}
   return selfApiRoot ? { OPEN_WALNUT_API_URL: selfApiRoot } : {}

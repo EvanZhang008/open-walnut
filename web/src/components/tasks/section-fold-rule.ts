@@ -6,14 +6,15 @@
  * "auto collapse in 60s if no action ... no action means people not actively scrolling, click".
  *
  * Two kinds of fold:
- *   sticky  Watching, Needs you: open on a first visit, then exactly what the user last chose.
+ *   sticky  Watching, Needs you: folded on a first visit, then exactly what the user last chose.
  *   auto    Working, Waiting / snoozed, Completed, and every per-project fold: folded by default;
  *           opened, it folds again FOLD_AUTO_CLOSE_MS after the later of its opening and the user's
  *           last action in its panel; only a fold the user is typing in or has a menu open from waits.
  *
- * The store is one JSON object per localStorage key: a sticky fold holds the user's boolean (only
- * when it differs from the default), an open auto fold holds the time it was opened (epoch ms),
- * so the 15 minutes survive a reload, a restart and the ui-prefs sync to another device. Any
+ * The store is one JSON object per localStorage key: a sticky fold holds the user's boolean,
+ * an open auto fold holds the time it was opened (epoch ms; the user's last action in its panel
+ * is written into it when the page goes away), so a load folds what ran out while the page was
+ * away and gives a fold still in time its full time again from the load (restartShownFolds). Any
  * other value (a boolean an older build wrote for an auto fold, a corrupt entry) reads as folded
  * for an auto fold and as the default for a sticky one. useFoldStore.ts is the React half.
  * The time is FOLD_AUTO_CLOSE_MS (60 s since 2026-11-06). An action is a click, a scroll, a key or
@@ -40,7 +41,7 @@ export const STATUS_SECTION_FOLD: Record<StatusSectionKey, FoldKind> = {
 };
 
 /** A sticky fold's first-visit state; an auto fold always starts folded. */
-export const STICKY_DEFAULT_OPEN = true;
+export const STICKY_DEFAULT_OPEN = false;
 
 /** One fold kind for a store: the status sections by their key, per-project folds all auto. */
 export type FoldKindOf = (key: string) => FoldKind;
@@ -61,6 +62,19 @@ export function parseFoldStore(raw: string | null): FoldStore {
     }
     return out;
   } catch { return {}; }
+}
+
+export function initialFoldStore(raw: string | null, kind: FoldKindOf, existing = false): FoldStore {
+  const store = { ...parseFoldStore(raw) };
+  let older = false;
+  try {
+    const value = raw ? JSON.parse(raw) : null;
+    older = !!value && typeof value === 'object' && !Array.isArray(value);
+  } catch { /* invalid storage uses first-visit defaults */ }
+  for (const key of STATUS_SECTION_ORDER) {
+    if (kind(key) === 'sticky' && typeof store[key] !== 'boolean') store[key] = older || existing;
+  }
+  return store;
 }
 
 export function serializeFoldStore(store: FoldStore): string | null {
@@ -101,7 +115,7 @@ export function foldIsDue(store: FoldStore, key: string, kind: FoldKindOf, now: 
 export function setFold(store: FoldStore, key: string, open: boolean, kind: FoldKindOf, now: number): FoldStore {
   const next: Record<string, boolean | number> = { ...store };
   if (kind(key) === 'sticky') {
-    if (open === STICKY_DEFAULT_OPEN) delete next[key]; else next[key] = open;
+    next[key] = open;
   } else if (open) {
     next[key] = now;
   } else {
@@ -125,6 +139,44 @@ export function pruneFolds(store: FoldStore, kind: FoldKindOf, now: number): Fol
 }
 
 /**
+ * A load (a reload, a restart, a remount) draws every auto fold still in time open, and gives it
+ * its full time from now: the user sees it open, and a fold that showed open at a reload must
+ * never fold by itself seconds later (2026-11-10 review: a Completed group opened 51 s before a
+ * reload folded 9 s after it, and read as the page undoing the user's choice). Run after
+ * pruneFolds, which folds the ones whose time ran out while the page was away.
+ */
+export function restartShownFolds(store: FoldStore, kind: FoldKindOf, now: number): FoldStore {
+  let changed = false;
+  const next: Record<string, boolean | number> = { ...store };
+  for (const [k, v] of Object.entries(store)) {
+    if (kind(k) === 'auto' && typeof v === 'number' && v !== now) { next[k] = now; changed = true; }
+  }
+  return changed ? next : store;
+}
+
+/**
+ * The user's last action in a fold's panel, written into its opening time before the page goes
+ * away (the last action is kept in memory only), so the next load counts from it and a fold the
+ * user kept using is not folded by that load.
+ *
+ * It refreshes `stored` (what storage holds now), never lays this page's own copy over it: only a
+ * fold storage still holds open, and this page shows open (`shown`), gets the later time. A fold
+ * another tab or device closed meanwhile (dropped from storage) stays closed; writing this page's
+ * open time back would reopen it with a newer time that wins everywhere (2026-11-10 review).
+ * Returns `stored` itself when nothing moved.
+ */
+export function keepLastActions(stored: FoldStore, shown: FoldStore, kind: FoldKindOf, lastAction: LastActionOf): FoldStore {
+  let changed = false;
+  const next: Record<string, boolean | number> = { ...stored };
+  for (const [k, v] of Object.entries(stored)) {
+    if (kind(k) !== 'auto' || typeof v !== 'number' || typeof shown[k] !== 'number') continue;
+    const at = lastAction(k);
+    if (at > v) { next[k] = at; changed = true; }
+  }
+  return changed ? next : stored;
+}
+
+/**
  * One page's change laid over what storage holds now: only the folds this page changed, so a
  * write never puts back another tab's (or, through the ui-prefs sync, another device's) older
  * value of a fold this page did not touch. `undefined` drops the fold.
@@ -135,6 +187,25 @@ export function mergeFoldChanges(stored: FoldStore, changes: Readonly<Record<str
     if (v === undefined) delete next[k]; else next[k] = v;
   }
   return next;
+}
+
+/**
+ * A clock fold's changes, without the folds another tab or device opened again after this page's
+ * opening time (storage holds a later one): the clock folds what this page saw run out, never a
+ * newer opening it did not see. A user's own fold is not a clock fold and always goes through.
+ */
+export function clockFoldChanges(
+  stored: FoldStore,
+  mine: FoldStore,
+  changes: Readonly<Record<string, boolean | number | undefined>>,
+): Record<string, boolean | number | undefined> {
+  const out: Record<string, boolean | number | undefined> = {};
+  for (const [k, v] of Object.entries(changes)) {
+    const s = stored[k], m = mine[k];
+    if (v === undefined && typeof s === 'number' && typeof m === 'number' && s > m) continue;
+    out[k] = v;
+  }
+  return out;
 }
 
 /** The soonest time an open auto fold is due, or null when none is open on a clock. */

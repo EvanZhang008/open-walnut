@@ -92,6 +92,9 @@ export class SessionReaper {
       return { reaped: 0, rotated: 0 }
     }
 
+    const { sweepOrphanedCancelledSnapshots } = await import('./session-tracker.js')
+    await sweepOrphanedCancelledSnapshots()
+
     const now = Date.now()
     const cutoff = now - DEFAULT_RETENTION_MS
 

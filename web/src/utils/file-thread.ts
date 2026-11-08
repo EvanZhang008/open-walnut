@@ -10,8 +10,8 @@
  */
 import type { ThreadCardPlace } from '@/contexts/SessionThreadsContext';
 import type { ThreadPendingPage } from '@/components/sessions/thread-ui-contract';
-import type { ThreadMetaIndex, ThreadViewStatus } from '@/utils/thread-meta';
-import { displayTitleOf, metaOf, statusOf } from '@/utils/thread-meta';
+import type { ThreadLiveState, ThreadMetaIndex, ThreadViewStatus } from '@/utils/thread-meta';
+import { displayTitleOf, metaOf, viewStatusOf } from '@/utils/thread-meta';
 import { questionLabels } from '@/utils/question-tag';
 import type { PassageMarkSpec } from '@/utils/thread-card';
 import { CARD_GAP, CARD_GROWN_WIDTH, CARD_MIN_WIDTH, CARD_WIDTH } from '@/utils/thread-card';
@@ -80,7 +80,7 @@ export interface FileRailRow {
  */
 export function fileQuestionRows(
   tree: ThreadTree, hiddenKeys: ReadonlySet<string>, index: ThreadMetaIndex, path: string,
-  pending: PendingMarks, currentKey: string | null, unreadKeys: ReadonlySet<string>,
+  pending: PendingMarks, currentKey: string | null, unreadKeys: ReadonlySet<string>, live: ReadonlyMap<string, ThreadLiveState>,
 ): FileRailRow[] {
   const numbers = questionLabels(tree, index);
   const out: FileRailRow[] = [];
@@ -90,7 +90,7 @@ export function fileQuestionRows(
     const number = numbers.get(node.key);
     out.push({
       key: node.key, kind: 'thread', ...(number !== undefined ? { number } : {}), title, naming,
-      status: statusOf(node, index), current: node.key === currentKey, unread: unreadKeys.has(node.key),
+      status: viewStatusOf(node, index, live), current: node.key === currentKey, unread: unreadKeys.has(node.key),
     });
   }
   for (const p of pendingList(pending)) {
@@ -288,7 +288,7 @@ export const FILE_CARD_MIN_HEIGHT = 180;
  *  - under the passage's last line when that room is there;
  *  - else over its first line (anchored by its bottom edge, `bottom`, so it grows
  *    upward and its foot never reaches the passage), when it fits there;
- *  - else on the side with more room, at least that tall (the passage is taller
+ *  - else on the side with more room, as tall as that room (the passage is taller
  *    than the box leaves room for).
  * 2026-11-06 (later): a ~70px draft card with 135px free under a passage near
  * the end of the Changed tab's rendered diff still hung above, over the lines
@@ -297,9 +297,13 @@ export const FILE_CARD_MIN_HEIGHT = 180;
  * to keep FILE_CARD_MIN_HEIGHT in the box, so a passage in the box's last 188px
  * (the Changed tab's rendered diff, a selection near the bottom of any view) had
  * the card drawn ON it and the line above it.
- * The host does not scroll (the file's own surface does), so a passage scrolled
- * past an edge keeps its card docked at that edge, the way a comment stays
- * reachable in a document.
+ * The card stays with its passage: it is never pushed off it to keep a height in the
+ * box, it is shorter instead (its body scrolls), and it goes to the other side when
+ * that has more room. A passage out of the box is `away` (placeFileCardBelow) and its
+ * card is not drawn. 2026-11-11 review: a card pushed up to keep its height, or docked
+ * at an edge, stayed put while its passage scrolled on and away, so an answered card
+ * (tall: it docked early) floated over other lines while an empty one (short) seemed
+ * to follow.
  */
 export function placeFileCard(
   anchor: HostRect, host: { width: number; height: number }, preferred = CARD_WIDTH, minLeft?: number, need?: number,
@@ -311,7 +315,11 @@ export function placeFileCard(
   const fits = (w: number) => host.width - floorAt - CARD_GAP >= w;
   const floor = fits(CARD_MIN_WIDTH) ? floorAt : CARD_GAP;
   const band = host.width - floor - CARD_GAP;
-  const width = Math.max(Math.min(preferred, band), Math.min(CARD_MIN_WIDTH, host.width));
+  // Never wider than the box less a gap each side: a box narrower than the
+  // card's minimum (a narrow window, the file tree beside it) shrinks the card
+  // to fit instead of clipping its right edge and its buttons (2026-11-08).
+  const avail = Math.max(0, host.width - 2 * CARD_GAP);
+  const width = Math.min(avail, Math.max(Math.min(preferred, band), CARD_MIN_WIDTH));
   const left = Math.max(floor, Math.min(anchor.right - width, host.width - width - CARD_GAP));
   // The room a side must have: the card's own height when it is smaller.
   const least = need !== undefined && Number.isFinite(need) && need > 0
@@ -319,31 +327,69 @@ export function placeFileCard(
   const roomBelow = host.height - (anchor.bottom + CARD_GAP) - CARD_GAP;
   const roomAbove = anchor.top - CARD_GAP - CARD_GAP;
   const above = roomBelow < least && (roomAbove >= least || roomAbove > roomBelow);
-  const capOf = (room: number) => Math.max(Math.min(FILE_CARD_MIN_HEIGHT, room), Math.min(Math.round(host.height * 0.6), room));
+  const capOf = (room: number) => Math.max(0, Math.min(Math.max(FILE_CARD_MIN_HEIGHT, Math.round(host.height * 0.6)), room));
   // Expanded: the same edge, as wide as the view allows, all the room on its side.
-  const wide = Math.max(Math.min(CARD_GROWN_WIDTH, band), width);
+  const wide = Math.min(Math.max(avail, width), Math.max(Math.min(CARD_GROWN_WIDTH, band), width));
   const wideLeft = Math.max(floor, Math.min(anchor.right - wide, host.width - wide - CARD_GAP));
   const across = { left: Math.round(left), width: Math.round(width) };
   if (above) {
-    // The card's foot: a gap over the passage's first line, kept low enough for
-    // the smallest card and inside the box (a passage below the box docks it there).
-    const highest = Math.min(host.height - CARD_GAP, least + CARD_GAP);
-    const foot = Math.min(Math.max(anchor.top - CARD_GAP, highest), host.height - CARD_GAP);
-    const room = foot - CARD_GAP;
+    // The card's foot: a gap over the passage's first line, wherever that line is.
+    const foot = anchor.top - CARD_GAP;
+    const room = Math.max(0, foot - CARD_GAP);
     const maxHeight = capOf(room);
     return {
       top: Math.round(foot - maxHeight), bottom: Math.round(host.height - foot), ...across, maxHeight: Math.round(maxHeight),
       grown: { left: Math.round(wideLeft), width: Math.round(wide), maxHeight: Math.round(Math.max(maxHeight, room)) },
     };
   }
-  const lowest = Math.max(CARD_GAP, host.height - least - CARD_GAP);
-  const top = Math.max(CARD_GAP, Math.min(anchor.bottom + CARD_GAP, lowest));
-  const room = host.height - top - CARD_GAP;
+  const top = anchor.bottom + CARD_GAP;
+  const room = Math.max(0, host.height - top - CARD_GAP);
   const maxHeight = capOf(room);
   return {
     top: Math.round(top), ...across, maxHeight: Math.round(maxHeight),
     grown: { left: Math.round(wideLeft), width: Math.round(wide), maxHeight: Math.round(Math.max(maxHeight, room)) },
   };
+}
+
+/** Marks an element over the top of a file view that a card never covers (the doc comments
+ *  chip, its error line): the card's box starts under it, as under the file header. */
+export const FILE_HEADER_ITEM_ATTR = 'data-file-header-item';
+
+/**
+ * placeFileCard inside the part of the view under its header (`inset` px from the top: the
+ * file bar, the chips over the text). The card never reaches over the bar's breadcrumb and
+ * buttons (2026-11-10 review: after a widen the card pinned over the header, and the
+ * "1 comment" chip sat on the card's mic and send), and a passage scrolled out of that part
+ * (under the header, past the bottom) is `away`: its card is not drawn.
+ */
+export function placeFileCardBelow(
+  anchor: HostRect, host: { width: number; height: number }, inset: number, minLeft?: number, need?: number,
+): ThreadCardPlace {
+  const top = Math.max(0, Math.min(Math.round(inset), host.height - FILE_CARD_MIN_HEIGHT));
+  const place = placeFileCard(
+    { ...anchor, top: anchor.top - top, bottom: anchor.bottom - top },
+    { width: host.width, height: host.height - top }, undefined, minLeft, need,
+  );
+  // `bottom` (a card over its passage) counts from the host's bottom, which did not move.
+  return { ...place, top: place.top + top, ...(fileCardAway(anchor, host, top) ? { away: true } : {}) };
+}
+
+/** Is the passage wholly out of the part of the view under its header (scrolled past the top
+ *  or the bottom)? Its card is then not drawn, whatever state the card is in. */
+export function fileCardAway(anchor: HostRect, host: { height: number }, inset: number): boolean {
+  return anchor.bottom <= inset || anchor.top >= host.height;
+}
+
+/** How far the view's header reaches into it: the sticky bar and every header item. */
+export function fileHeaderInset(root: Element, bar: Element | null): number {
+  const rootTop = root.getBoundingClientRect().top;
+  let bottom = rootTop;
+  for (const el of [bar, ...root.querySelectorAll(`[${FILE_HEADER_ITEM_ATTR}]`)]) {
+    if (!el) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width || r.height) bottom = Math.max(bottom, r.bottom);
+  }
+  return Math.max(0, bottom - rootTop);
 }
 
 /** How tall a comment card would be with no max height: its box now plus what

@@ -44,10 +44,10 @@ vi.mock('../../../src/core/search/wiring.js', () => ({
 
 import express from 'express';
 import request from 'supertest';
-import { notesV2Router, resetIndexBootstrap } from '../../../src/web/routes/notes-v2.js';
+import { notesV2Router, settleIndexBootstrap } from '../../../src/web/routes/notes-v2.js';
 import { errorHandler } from '../../../src/web/middleware/error-handler.js';
 import { WALNUT_HOME } from '../../../src/constants.js';
-import { closeNotesIndexDb, getNoteIdByPath } from '../../../src/core/notes-index.js';
+import { getNoteIdByPath } from '../../../src/core/notes-index.js';
 import { rebuildIndex, stopNotesIndexer, resetNotesIndexer, scanForDrift } from '../../../src/core/notes-indexer.js';
 
 const NOTES_DIR = path.join(WALNUT_HOME, 'notes');
@@ -96,10 +96,7 @@ async function syncIndex(): Promise<void> {
 }
 
 async function quiesceIndex(): Promise<void> {
-  resetIndexBootstrap();
-  stopNotesIndexer();
-  await new Promise((r) => setTimeout(r, 5));
-  closeNotesIndexDb();
+  await settleIndexBootstrap();
 }
 
 beforeEach(async () => {

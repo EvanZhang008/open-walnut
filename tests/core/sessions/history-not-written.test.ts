@@ -116,7 +116,7 @@ describe('every "History unavailable" answer asks historyNotWrittenYet first', (
     const sites: string[] = []
     for (const { file, lines } of sources()) {
       lines.forEach((line, i) => {
-        if (!/historyUnavailable:\s*(reason|unavailableHistoryReason)\b/.test(line)) return
+        if (!/historyUnavailable:\s*(?:await\s+)?(reason|unavailableHistoryReason)\b/.test(line)) return
         const rel = `${path.relative(ROOT, file)}:${i + 1}`
         sites.push(rel)
         const before = lines.slice(Math.max(0, i - 14), i).join('\n')

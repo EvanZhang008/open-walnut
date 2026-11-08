@@ -144,7 +144,7 @@ describe('one full screen for the tab', () => {
     expect(hook).toMatch(/const isFullscreen = tab \? ownsTab : ownFlag;/);
     expect(hook).not.toMatch(/setIsFullscreen/);
     // Every session panel is one of the tab's sheets.
-    expect(code(read('components/sessions/SessionPanel.tsx'))).toMatch(/useFullscreen\(\{ keepAcrossRoutes: true, place: sheetAt \}\)/);
+    expect(code(read('components/sessions/SessionPanel.tsx'))).toMatch(/useFullscreen\(\{ keepAcrossRoutes: true, place: sheetAt, phoneLayer: !!\(phoneLayer \|\| phoneHostSlot\) \}\)/);
     // Nothing else claims full screen around the hook.
     const claimers = files.filter(({ text }) => /\bclaimFullscreen\(/.test(code(text))).map(({ file }) => file).sort();
     expect(claimers).toEqual(['hooks/fullscreen-owner.ts', 'hooks/useFullscreen.tsx']);

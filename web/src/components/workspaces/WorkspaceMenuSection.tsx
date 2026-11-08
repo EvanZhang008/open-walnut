@@ -24,6 +24,7 @@ import { useAlert, useConfirm } from '@/hooks/useConfirm';
 import { fetchWorkspaceRemoval, removeTaskWorkspace, rerunTaskSetup, retryTaskWorkspace, startTaskAnyway } from '@/api/workspaces';
 import { ScriptRunCard } from './ScriptRunCard';
 import { log } from '@/utils/log';
+import { knownHomeOf, tildePath } from '@/utils/home-folder';
 import type { TaskWorkspace } from './workspace-text';
 import { hostName, isWorkspaceUsable, keptText, setupTone, setupWaitsForYou, workspaceOf, workspaceStateLabel } from './workspace-text';
 import '@/styles/workspaces.css';
@@ -161,8 +162,9 @@ function WorkspaceFlyout({ open, anchorRef, anchorPoint, taskId, taskTitle, ws, 
       {ws.state === 'kept' && <div className="workspace-flyout-note is-warn" data-testid="workspace-kept-reason">Kept: {keptText(ws)}</div>}
       {ws.error && ws.state !== 'failed' && <div className="workspace-flyout-note is-warn">{ws.error}</div>}
       <Fact label="Host" value={hostName(ws.host)} />
-      <Fact label="Folder" value={ws.root} mono />
-      {ws.cwd && ws.cwd !== ws.root && <Fact label="Sessions in" value={ws.cwd} mono />}
+      {/* The home reads ~ here as on every path Walnut shows (utils/home-folder.ts). */}
+      <Fact label="Folder" value={ws.root && tildePath(ws.root, knownHomeOf(ws.host))} mono />
+      {ws.cwd && ws.cwd !== ws.root && <Fact label="Sessions in" value={tildePath(ws.cwd, knownHomeOf(ws.host))} mono />}
       <Fact label="Branch" value={ws.branch} mono />
       {ws.base_ref?.name && <Fact label="From" value={ws.base_ref.name} mono />}
       <Fact label="Made from" value={ws.anchor} mono />

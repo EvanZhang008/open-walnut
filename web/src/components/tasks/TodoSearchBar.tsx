@@ -12,6 +12,7 @@ import { PhoneSearchLayer } from './PhoneSearchLayer';
 import { PhonePullToRefresh } from './PhonePullToRefresh';
 import { PhoneQueuedUpdatesPill } from './PhoneQueuedUpdatesPill';
 import { homeListScroller } from './phone-row-behavior';
+import { pageShortcutBlocked } from '@/utils/page-shortcut';
 
 /** A blur this soon after a keystroke, with no user gesture, was not the user's. */
 const TYPING_GUARD_MS = 2000;
@@ -129,8 +130,9 @@ export function TodoSearchBar({
         ensureVisible();
         return;
       }
-      // / key alone when no editable element is focused (mod+/ is the shortcuts sheet's)
-      if (e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey && document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA' && !(document.activeElement as HTMLElement)?.isContentEditable) {
+      // / key alone when no editable element is focused (mod+/ is the shortcuts sheet's), and
+      // never while a sheet, an editor or a menu has the reader (utils/page-shortcut.ts).
+      if (e.key === '/' && !pageShortcutBlocked(e, inputRef.current)) {
         e.preventDefault();
         ensureVisible();
       }

@@ -10,7 +10,7 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { IS_EPHEMERAL, WALNUT_HOME } from '../../constants.js'
+import { IS_DEMO, IS_EPHEMERAL, WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { bootPolicy } from '../boot-policy.js'
 import { isSecretKey } from '../config-secret-shape.js'
@@ -55,7 +55,8 @@ export function pluginJobsOffReason(env: NodeJS.ProcessEnv = process.env): strin
   if (offCache !== undefined) return offCache
   // The semantic lane's "is this a real install" test, without its own opt-in flag.
   const d = semanticLaneDecision({ env: { ...env, WALNUT_SEARCH_V2_SEMANTIC: undefined }, isEphemeral: IS_EPHEMERAL, walnutHome: WALNUT_HOME })
-  offCache = d.reason === 'default' ? null : 'plugin jobs do not run on a test server (WALNUT_PLUGIN_JOBS_IN_TEST=1 turns them on)'
+  offCache = d.reason === 'default' ? null : IS_DEMO ? 'plugin jobs do not run in the Demo'
+    : 'plugin jobs do not run on a test server (WALNUT_PLUGIN_JOBS_IN_TEST=1 turns them on)'
   return offCache
 }
 
@@ -199,6 +200,8 @@ export function startPluginJobs(): void {
 
 /** A daemon connected (after its leader.configure): it hears which plugin jobs run there. */
 export function pluginJobsConnected(host: JobsHost): Promise<void> {
+  // The Demo runs no plugin job on a remote host: what runs there is only its own daemon (providers/demo-remote-host.ts).
+  if (IS_DEMO && host.hostKey !== LOCAL_HOST) return Promise.resolve()
   return getPluginJobsManager()?.connected(host) ?? Promise.resolve()
 }
 

@@ -3,6 +3,7 @@ import { noteAuthRefusal } from './unpaired';
 import { asDeadlineError } from '../utils/request-failure';
 import { mintOpId, isWriteMethod, OP_ID_HEADER, WAIT_HEADER, DEFAULT_WRITE_WAIT_MS } from './op-id';
 import { leaderErrorMessage, noteResponseHeaders } from './leader-presence';
+import { readsSuspended, onReadLifecycle } from './read-lifecycle';
 
 class ApiError extends Error {
   constructor(
@@ -45,14 +46,23 @@ const QUEUE_DEPTH_WARN_STEP = 10;
 
 type FetchPriority = 'urgent' | 'normal' | 'low';
 
+interface FetchAdmission {
+  deadline: number;
+  waitMs: number;
+  suspended: boolean;
+}
+
 interface QueuedFetch {
   dispatch: () => void;
-  fail: (err: unknown) => void;
   callerSignal?: AbortSignal;
   onCallerAbort?: () => void;
   waitTimer: ReturnType<typeof setTimeout>;
   /** A write: sent at once when the page goes (sendQueuedWritesNow). */
   write: boolean;
+  /** Reads wait for cancellation or pageshow; durable writes can leave the queue. */
+  read: boolean;
+  admission: FetchAdmission;
+  expire: () => void;
   /** `METHOD /path`, for the queue's test hook. */
   label: string;
 }
@@ -63,6 +73,10 @@ const fetchQueue: QueuedFetch[] = [];
 const lowFetchQueue: QueuedFetch[] = [];
 
 function startQueued(next: QueuedFetch, low: boolean): void {
+  if (Date.now() >= next.admission.deadline) {
+    next.expire();
+    return;
+  }
   clearTimeout(next.waitTimer);
   if (next.callerSignal && next.onCallerAbort) {
     next.callerSignal.removeEventListener('abort', next.onCallerAbort);
@@ -72,64 +86,78 @@ function startQueued(next: QueuedFetch, low: boolean): void {
   next.dispatch();
 }
 
+function eligibleIndex(queue: QueuedFetch[]): number {
+  return queue.findIndex((entry) => !entry.read || !readsSuspended());
+}
+
 function pumpFetchQueue(): void {
+  // A restored page's timers may not have run yet. Expire before dispatching.
+  for (const queue of [fetchQueue, lowFetchQueue]) {
+    for (const entry of [...queue]) if (Date.now() >= entry.admission.deadline) entry.expire();
+  }
   while (inFlightFetches < MAX_CONCURRENT_FETCHES) {
-    if (fetchQueue.length > 0) {
-      startQueued(fetchQueue.shift()!, false);
-    } else if (lowFetchQueue.length > 0 && inFlightLowFetches < MAX_LOW_PRIORITY_IN_FLIGHT) {
-      startQueued(lowFetchQueue.shift()!, true);
+    const normal = eligibleIndex(fetchQueue);
+    const low = eligibleIndex(lowFetchQueue);
+    if (normal >= 0) {
+      startQueued(fetchQueue.splice(normal, 1)[0], false);
+    } else if (low >= 0 && inFlightLowFetches < MAX_LOW_PRIORITY_IN_FLIGHT) {
+      startQueued(lowFetchQueue.splice(low, 1)[0], true);
     } else {
       break;
     }
   }
 }
 
-function acquireFetchSlot(priority: FetchPriority, label: string, callerSignal?: AbortSignal, write = false): Promise<void> {
+function fetchAdmission(priority: FetchPriority): FetchAdmission {
+  const waitMs = priority === 'low' ? MAX_LOW_QUEUE_WAIT_MS : MAX_QUEUE_WAIT_MS;
+  return { deadline: Date.now() + waitMs, waitMs, suspended: false };
+}
+
+function acquireFetchSlot(priority: FetchPriority, label: string, callerSignal?: AbortSignal, write = false, read = false, admission = fetchAdmission(priority)): Promise<void> {
+  if (read && readsSuspended()) admission.suspended = true;
   if (callerSignal?.aborted) {
     return Promise.reject(new DOMException('The operation was aborted.', 'AbortError'));
   }
   const low = priority === 'low';
-  const free = inFlightFetches < MAX_CONCURRENT_FETCHES && fetchQueue.length === 0;
-  if (free && (!low || (lowFetchQueue.length === 0 && inFlightLowFetches < MAX_LOW_PRIORITY_IN_FLIGHT))) {
+  const free = inFlightFetches < MAX_CONCURRENT_FETCHES && eligibleIndex(fetchQueue) < 0;
+  if (!(read && readsSuspended()) && Date.now() < admission.deadline && free
+    && (!low || (eligibleIndex(lowFetchQueue) < 0 && inFlightLowFetches < MAX_LOW_PRIORITY_IN_FLIGHT))) {
     inFlightFetches++;
     if (low) inFlightLowFetches++;
     return Promise.resolve();
   }
   const queue = low ? lowFetchQueue : fetchQueue;
-  const waitMs = low ? MAX_LOW_QUEUE_WAIT_MS : MAX_QUEUE_WAIT_MS;
+  const { waitMs } = admission;
   return new Promise<void>((resolve, reject) => {
+    const expire = () => {
+      clearTimeout(entry.waitTimer);
+      const idx = queue.indexOf(entry);
+      if (idx >= 0) queue.splice(idx, 1);
+      if (callerSignal && entry.onCallerAbort) callerSignal.removeEventListener('abort', entry.onCallerAbort);
+      const cause = admission.suspended ? 'page suspended' : 'pool saturated';
+      console.error(`[api] ${label} rejected after ${waitMs}ms in the connection queue (${cause})`, {
+        queued: fetchQueue.length, queuedLow: lowFetchQueue.length, inFlight: inFlightFetches, priority,
+      });
+      reject(new DOMException(admission.suspended
+        ? `Request queued ${waitMs}ms while the page was suspended`
+        : `Request queued ${waitMs}ms without a free connection — pool saturated`, 'TimeoutError'));
+    };
     const entry: QueuedFetch = {
       dispatch: resolve,
-      fail: reject,
       callerSignal,
       write,
+      read,
+      admission,
+      expire,
       label,
-      waitTimer: setTimeout(() => {
-        const idx = queue.indexOf(entry);
-        if (idx >= 0) queue.splice(idx, 1);
-        if (callerSignal && entry.onCallerAbort) {
-          callerSignal.removeEventListener('abort', entry.onCallerAbort);
-        }
-        // This rejection happens BEFORE attemptRequest, so its FAILED log never
-        // fires: without a line here the request vanishes without a trace
-        // (2026-09-17: the folder registry died this way and the only evidence
-        // was the server's request log NOT having it).
-        console.error(`[api] ${label} rejected after ${waitMs}ms in the connection queue (pool saturated)`, {
-          queued: fetchQueue.length, queuedLow: lowFetchQueue.length, inFlight: inFlightFetches, priority,
-        });
-        // TimeoutError so existing timeout handling applies; the message makes
-        // the saturation case distinguishable from a real network timeout.
-        reject(new DOMException(
-          `Request queued ${waitMs}ms without a free connection — pool saturated`,
-          'TimeoutError',
-        ));
-      }, waitMs),
+      waitTimer: setTimeout(expire, Math.max(0, admission.deadline - Date.now())),
     };
     if (callerSignal) {
       entry.onCallerAbort = () => {
         clearTimeout(entry.waitTimer);
         const idx = queue.indexOf(entry);
         if (idx >= 0) queue.splice(idx, 1);
+        callerSignal.removeEventListener('abort', entry.onCallerAbort!);
         reject(new DOMException('The operation was aborted.', 'AbortError'));
       };
       callerSignal.addEventListener('abort', entry.onCallerAbort, { once: true });
@@ -141,6 +169,7 @@ function acquireFetchSlot(priority: FetchPriority, label: string, callerSignal?:
         queued: fetchQueue.length, queuedLow: lowFetchQueue.length, inFlight: inFlightFetches,
       });
     }
+    pumpFetchQueue();
   });
 }
 
@@ -204,7 +233,16 @@ class RetryWithToken {
  * (2026-10-30: every reload in a browser test logged "JSON parse failed" for the
  * requests it cut). A back-forward cache restore brings the page back.
  */
-let pageLeaving = false;
+onReadLifecycle(() => {
+  if (readsSuspended()) {
+    for (const queue of [fetchQueue, lowFetchQueue]) {
+      for (const entry of queue) if (entry.read) entry.admission.suspended = true;
+    }
+  } else {
+    exitEdge = false;
+    pumpFetchQueue();
+  }
+});
 /**
  * True from a hide or pagehide edge until its handlers have run. A write made there (a pending
  * settings save, a visit batch) is a page-exit write: the browser cancels an ordinary request
@@ -220,9 +258,7 @@ function markExitEdge(): void {
   sendQueuedWritesNow();
 }
 if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
-  window.addEventListener('pagehide', () => { pageLeaving = true; markExitEdge(); });
-  // A hidden page's timers are throttled or paused, so the edge also ends when the page is back.
-  window.addEventListener('pageshow', () => { pageLeaving = false; exitEdge = false; });
+  window.addEventListener('pagehide', markExitEdge);
   if (typeof document !== 'undefined') {
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') markExitEdge();
@@ -231,11 +267,11 @@ if (typeof window !== 'undefined' && typeof window.addEventListener === 'functio
   }
 }
 function cutByPageExit(err: unknown): boolean {
-  return pageLeaving && err instanceof TypeError;
+  return readsSuspended() && err instanceof TypeError;
 }
 /** A write now may outlive the page: the page is leaving, at a hide edge, or hidden. */
 function writeMayOutlivePage(): boolean {
-  return pageLeaving || exitEdge || (typeof document !== 'undefined' && document.visibilityState === 'hidden');
+  return readsSuspended() || exitEdge || (typeof document !== 'undefined' && document.visibilityState === 'hidden');
 }
 /** fetch keepalive refuses a request once the keepalive bodies in flight pass 64 KB (UTF-8 bytes). */
 const KEEPALIVE_MAX_BODY = 60_000;
@@ -252,6 +288,7 @@ interface RequestExtra {
   cacheBypass?: boolean;
   quietStatuses?: number[];
   background?: boolean;
+  readOnly?: boolean;
   /** Yield to every normal request; POST also requires background: true. */
   priority?: 'low';
   /** Called the moment the request leaves the admission queue for the network —
@@ -285,34 +322,37 @@ async function request<T>(method: string, path: string, body?: unknown, extra?: 
   // One op id per user action that writes, minted before the queue so every
   // attempt of this call carries the same one (a host replica dedupes by it).
   if (isWriteMethod(method) && !extra?.opId) extra = { ...extra, opId: mintOpId() };
-  if (isWriteMethod(method) && writeMayOutlivePage()) {
+  const read = method === 'GET' || extra?.readOnly === true;
+  const write = isWriteMethod(method) && !read;
+  const outlives = write && (!extra?.background || extra?.keepalive === true);
+  if (write && writeMayOutlivePage()) {
     extra = { ...extra, keepalive: true };
     // The page is going: JS stops before a queued request would get its slot (and before a renewal would land).
-    if (pageLeaving || exitEdge) {
+    if (readsSuspended() || exitEdge) {
       return attemptRequest<T>(method, path, body, extra).catch((err: unknown) => {
         throw err instanceof RetryWithToken ? err.refusal : err;
       });
     }
   }
   const priority = priorityOf(method, extra);
-  // A write that must outlive the page: a person's write, or a background one that asked for
-  // keepalive. A background POST that only reads (list-many, quick-parse) stays in the queue at
-  // a hide, so a burst past the cap never starves the page's own reads when it shows again.
-  const outlives = isWriteMethod(method) && (!extra?.background || extra?.keepalive === true);
-  await acquireFetchSlot(priority, `${method} ${path}`, extra?.signal, outlives);
-  // Queued while the page showed, released by its exit edge (sendQueuedWritesNow): keepalive now.
-  if (outlives && !extra?.keepalive && writeMayOutlivePage()) extra = { ...extra, keepalive: true };
-  let retryWithBypass = false;
+  const admission = fetchAdmission(priority);
   let retryWithToken: RetryWithToken | null = null;
-  try {
-    extra?.onDispatch?.();
-    return await attemptRequest<T>(method, path, body, extra);
-  } catch (err) {
-    if (err === RETRY_WITH_CACHE_BYPASS) retryWithBypass = true;
-    else if (err instanceof RetryWithToken) retryWithToken = err;
-    else throw err;
-  } finally {
-    releaseFetchSlot(priority);
+  for (;;) {
+    await acquireFetchSlot(priority, `${method} ${path}`, extra?.signal, outlives, read, admission);
+    try {
+      // Release a granted slot before rejoining the queue with the same deadline.
+      if (read && readsSuspended()) { admission.suspended = true; continue; }
+      if (outlives && !extra?.keepalive && writeMayOutlivePage()) extra = { ...extra, keepalive: true };
+      extra?.onDispatch?.();
+      if (read && readsSuspended()) { admission.suspended = true; continue; }
+      return await attemptRequest<T>(method, path, body, extra);
+    } catch (err) {
+      if (err instanceof RetryWithToken) retryWithToken = err;
+      else if (err !== RETRY_WITH_CACHE_BYPASS) throw err;
+    } finally {
+      releaseFetchSlot(priority);
+    }
+    break;
   }
   if (retryWithToken) {
     if (retryWithToken.renew) {
@@ -336,7 +376,7 @@ async function fetchOnce(path: string, opts: RequestInit): Promise<Response> {
   try {
     return await fetch(path, opts);
   } catch (err) {
-    if (!opts.keepalive || pageLeaving || !(err instanceof TypeError) || opts.signal?.aborted) throw err;
+    if (!opts.keepalive || readsSuspended() || !(err instanceof TypeError) || opts.signal?.aborted) throw err;
     return fetch(path, { ...opts, keepalive: false });
   }
 }
@@ -503,33 +543,37 @@ export async function apiGetText(path: string, params?: Record<string, string>, 
   const headers: Record<string, string> = {};
   const deviceToken = getDeviceToken();
   if (deviceToken) headers['Authorization'] = `Bearer ${deviceToken}`;
-  await acquireFetchSlot('normal', `GET ${path}`);
-  let res: Response;
-  const deadline = AbortSignal.timeout(opts?.timeoutMs ?? 30_000);
-  try {
+  const admission = fetchAdmission('normal');
+  for (;;) {
+    await acquireFetchSlot('normal', `GET ${path}`, undefined, false, true, admission);
     try {
-      res = await fetch(url, { method: 'GET', headers, signal: deadline });
-    } catch (err) {
-      throw asDeadlineError(err, deadline);
-    }
-    if (!res.ok) {
-      let message = res.statusText;
+      if (readsSuspended()) { admission.suspended = true; continue; }
+      let res: Response;
+      const deadline = AbortSignal.timeout(opts?.timeoutMs ?? 30_000);
       try {
-        const data = await res.json();
-        if (data.error) message = data.error;
-      } catch { /* use statusText */ }
-      throw new ApiError(res.status, message);
+        res = await fetch(url, { method: 'GET', headers, signal: deadline });
+      } catch (err) {
+        throw asDeadlineError(err, deadline);
+      }
+      if (!res.ok) {
+        let message = res.statusText;
+        try {
+          const data = await res.json();
+          if (data.error) message = data.error;
+        } catch { /* use statusText */ }
+        throw new ApiError(res.status, message);
+      }
+      return await res.text();
+    } finally {
+      releaseFetchSlot('normal');
     }
-    return await res.text();
-  } finally {
-    releaseFetchSlot('normal');
   }
 }
 
 // quietStatuses is offered here for the same reason apiGet offers it: a POST can have a DESIGNED
 // non-2xx outcome (a refused credential, a capability the provider does not have), and those must
 // not land in the error-log audit as if something broke.
-export function apiPost<T>(path: string, body?: unknown, opts?: { timeoutMs?: number; quietStatuses?: number[]; signal?: AbortSignal; background?: boolean; priority?: 'low'; opId?: string; keepalive?: boolean }): Promise<T> {
+export function apiPost<T>(path: string, body?: unknown, opts?: { timeoutMs?: number; quietStatuses?: number[]; signal?: AbortSignal; background?: boolean; readOnly?: boolean; priority?: 'low'; opId?: string; keepalive?: boolean }): Promise<T> {
   return request<T>('POST', path, body, opts);
 }
 

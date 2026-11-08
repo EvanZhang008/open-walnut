@@ -18,6 +18,7 @@
  */
 import os from 'node:os'
 import { runVaultHelper } from './child-run.js'
+import { IS_DEMO } from '../../constants.js'
 
 /** The services Walnut may read a secret of, and why. */
 export const KEYCHAIN_SECRETS = {
@@ -50,7 +51,7 @@ function paused(service: string, now: () => number): boolean {
 
 /** The item's secret, or null (not a Mac, no item, a failed read, or reads of it stopped). */
 export async function readKeychainSecret(service: KeychainSecretService, platform: string = process.platform, now: () => number = Date.now): Promise<string | null> {
-  if (platform !== 'darwin' || !(service in KEYCHAIN_SECRETS) || paused(service, now)) return null
+  if (IS_DEMO || platform !== 'darwin' || !(service in KEYCHAIN_SECRETS) || paused(service, now)) return null
   const account = keychainAccount()
   const present = await runVaultHelper('security', ['find-generic-password', '-s', service, '-a', account], { timeoutMs: TIMEOUT_MS, maxBytes: 64 * 1024 })
   if (present.code !== 0) {

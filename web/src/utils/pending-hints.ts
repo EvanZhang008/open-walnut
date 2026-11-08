@@ -12,6 +12,24 @@ export function setPendingHints(sessionId: string, hints: RequestedHints): void 
   pending.set(sessionId, { ...(pending.get(sessionId) ?? {}), ...hints });
 }
 
+/**
+ * Take back a hint asked for one message whose send did not go (refused before it was taken: a
+ * paste that could not be spilled, a guard), so it never rides the next, unrelated send (a
+ * /compact). Only while `kind` still holds this `arg`: another surface's later ask stays.
+ */
+export function dropPendingHint(sessionId: string, kind: string, arg: string | undefined): void {
+  const waiting = pending.get(sessionId);
+  if (!waiting?.[kind] || waiting[kind]!.arg !== arg) return;
+  const { [kind]: _gone, ...rest } = waiting;
+  if (Object.keys(rest).length) pending.set(sessionId, rest);
+  else pending.delete(sessionId);
+}
+
+/** Whether this session's next send already asks for `kind` (a second one would replace it). */
+export function hasPendingHint(sessionId: string, kind: string): boolean {
+  return !!pending.get(sessionId)?.[kind];
+}
+
 /** The hints waiting for this session's send, merged under the send's own; taken once. */
 export function takePendingHints(sessionId: string, own?: RequestedHints): RequestedHints | undefined {
   const waiting = pending.get(sessionId);

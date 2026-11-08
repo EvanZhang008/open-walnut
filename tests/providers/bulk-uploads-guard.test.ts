@@ -48,6 +48,7 @@ const UPLOAD_BY_FLAG: Record<string, string> = {
 /** Byte-carrying commands that stay on the session link, and why. */
 const ON_SESSION_LINK: Record<string, string> = {
   'host.slice': 'without bind:false (an older daemon, a refused leader.configure) the copy binds the socket it arrives on for gateway calls; gzipped and paced (host-slice-pace.ts). Its probe carries no bytes',
+  'demo.quiesce': "carries the Demo's data dir path (`paths.data`), not its bytes; sent to the Demo's own local daemon",
   'http.request': "host_http's request body, a person's API call: small; ordered with the call that asked for it",
   'oneshot.run': 'a one-shot prompt, a few KB',
   'turns.guard': 'its files are paths a rewind would touch, not their bytes',

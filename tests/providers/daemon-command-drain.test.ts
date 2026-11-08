@@ -3,6 +3,7 @@ import path from 'node:path'
 import ts from 'typescript'
 import { describe, expect, it, vi } from 'vitest'
 import { createDaemonCommandDrain } from '../../src/providers/daemon-command-drain.js'
+import { createDemoDaemonQuiesce } from '../../src/providers/demo-daemon-quiesce-core.js'
 import { DaemonSessionGate } from '../../src/providers/daemon-cron-controller.js'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { createHostFix } from '../../src/providers/host-fix-core.js'
@@ -74,9 +75,19 @@ function literalSet(source: string, name: string): Set<string> {
  * reads is handed in (missingNames), whichever branch reads it: what its preamble reads is
  * here, a test's own `environment` adds the handlers it drives.
  */
+/** demo.quiesce on a daemon that is no Demo's: it never fences, as on every production host. */
+function noDemoQuiesce() {
+  return createDemoDaemonQuiesce({
+    env: {}, daemonDir: '/tmp/open-walnut', isProdDaemonDir: true, serviceMode: false, keepSessions: false,
+    resolve: (...parts) => path.resolve(...parts), basename: (p) => path.basename(p),
+    settle: async () => {}, endWarmPool: () => {}, oneShot: () => ({ runs: 0, pool: 0, children: 0 }), acpRuntimes: () => [],
+  })
+}
+
 function compileHandle(source: string, environment: Record<string, unknown>): (ws: unknown, msg: string) => void {
   const text = extract(source, 'handleCommand')
   const env: Record<string, unknown> = {
+    demoQuiesce: noDemoQuiesce(), sendOk: vi.fn(),
     SERVED_PUSHES: literalSet(source, 'SERVED_PUSHES'),
     isServerClient: compile<(ws: unknown) => boolean>(`return ${extract(source, 'isServerClient')};`, {}),
     servedWalnuts: { note: vi.fn() }, walnutScope: { askedHome: () => '' }, gatewayClientHomes: new WeakMap(),
@@ -872,10 +883,95 @@ describe('standalone ACP command lifetime', () => {
       secretsSessionEnv: () => ({}), SECRETS_ROOT: '/fixture/secrets',
       // acpStart starts the agent with the test-browser silencer preload (pw-silence-core.ts).
       pwSilenceAcpOptions: () => ({}),
+      demoQuiesce: noDemoQuiesce(),
     })
     const result = handle({}, 1, { sid: 'fixture', cwd: '/fixture' }, 'getState')
     expect(typeof result?.then).toBe('function')
     operation.resolve({ ok: true })
     await result
+  })
+})
+
+describe('command drain settle (demo.quiesce)', () => {
+  it('waits for admitted and internal work accepted before it, without closing admission', async () => {
+    const drain = createDaemonCommandDrain()
+    const start = deferred<string>()
+    const retry = deferred()
+    drain.admit(() => start.promise)
+    drain.run(() => retry.promise)
+    let settled = false
+    const settle = drain.settle().then(() => { settled = true })
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    start.resolve('spawned')
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    retry.resolve()
+    await settle
+    expect(settled).toBe(true)
+    expect(drain.closed).toBe(false)
+    expect(drain.admit(() => 7)).toBe(7)
+  })
+
+  it('snapshots at the call: work admitted after it is not waited for, and a rejection still settles', async () => {
+    const drain = createDaemonCommandDrain()
+    const early = deferred()
+    drain.admit(() => early.promise).catch(() => {})
+    const settle = drain.settle()
+    const late = deferred()
+    drain.admit(() => late.promise)
+    early.reject(new Error('start failed'))
+    await expect(settle).resolves.toBeUndefined()
+    late.resolve()
+  })
+})
+
+describe.each([
+  ['standalone', standalone],
+  ['template', template],
+] as const)('%s handleCommand demo.quiesce fence', (_kind, source) => {
+  const DATA = '/fixture/open-walnut-demo/data/g1'
+  const demoQuiesce = (settle: () => Promise<void>) => createDemoDaemonQuiesce({
+    env: { WALNUT_DEMO_ROOT: '/fixture/open-walnut-demo', WALNUT_DEMO_GENERATION: 'g1', HOME: '/fixture/open-walnut-demo/homes/g1' },
+    daemonDir: '/fixture/open-walnut-demo/d/g1', isProdDaemonDir: false, serviceMode: false, keepSessions: false,
+    resolve: (...parts) => path.resolve(...parts), basename: (p) => path.basename(p),
+    settle, endWarmPool: () => {}, oneShot: () => ({ runs: 0, pool: 0, children: 0 }), acpRuntimes: () => [{ sid: 'rt', state: 'running', pid: 9, stopping: false }],
+    deadlineMs: 500, pollMs: 5,
+  })
+
+  it('answers after the start it admitted first, outside the drain, then refuses new work and still takes a stop', async () => {
+    const daemonCommands = createDaemonCommandDrain()
+    const start = deferred()
+    const sendOk = vi.fn()
+    const sendError = vi.fn()
+    const cmdStart = vi.fn(() => start.promise)
+    const cmdStop = vi.fn(async () => {})
+    const handle = compileHandle(source, {
+      daemonCommands, demoQuiesce: demoQuiesce(() => daemonCommands.settle()), cmdStart, cmdStop, sendOk, sendError,
+    })
+    handle({}, JSON.stringify({ id: 1, cmd: 'start', sid: 's1' }))
+    handle({}, JSON.stringify({ id: 2, cmd: 'demo.quiesce', home: DATA }))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(sendOk).not.toHaveBeenCalled()
+    handle({}, JSON.stringify({ id: 3, cmd: 'start', sid: 's2' }))
+    handle({}, JSON.stringify({ id: 4, cmd: 'acpStart', sid: 'rt2' }))
+    handle({}, JSON.stringify({ id: 5, cmd: 'stop', sid: 's1' }))
+    expect(cmdStart).toHaveBeenCalledTimes(1)
+    expect(cmdStop).toHaveBeenCalledTimes(1)
+    expect(sendError).toHaveBeenCalledWith({}, 3, expect.stringContaining('Demo is stopping'), { errorKind: 'demo_stopping' })
+    expect(sendError).toHaveBeenCalledWith({}, 4, expect.stringContaining('Demo is stopping'), { errorKind: 'demo_stopping' })
+    start.resolve()
+    await vi.waitFor(() => expect(sendOk).toHaveBeenCalledWith({}, 2, expect.objectContaining({ ok: true, quiet: true, acpRuntimes: [expect.objectContaining({ sid: 'rt' })] })))
+  })
+
+  it('a non-Demo daemon refuses it and keeps starting work', async () => {
+    const daemonCommands = createDaemonCommandDrain()
+    const sendError = vi.fn()
+    const cmdStart = vi.fn(async () => {})
+    const handle = compileHandle(source, { daemonCommands, cmdStart, sendError })
+    handle({}, JSON.stringify({ id: 1, cmd: 'demo.quiesce', home: DATA }))
+    await vi.waitFor(() => expect(sendError).toHaveBeenCalledWith({}, 1, expect.stringContaining('demo.quiesce'), expect.objectContaining({ errorKind: 'demo_quiesce_refused' })))
+    handle({}, JSON.stringify({ id: 2, cmd: 'start', sid: 's1' }))
+    expect(cmdStart).toHaveBeenCalledTimes(1)
   })
 })

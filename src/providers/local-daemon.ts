@@ -63,6 +63,17 @@ import { provenBuilds, stayWatches } from './daemon-update-store.js'
 import { backoffLeftMs, buildBackedOff, readBuildBackoff, writeBuildBackoff, type BuildBackoffEntry } from './daemon-build-backoff.js'
 
 /** True only when the config says nothing runs on Claude Code (core/agents/claude-code-needed.ts); a read that fails says it may. */
+/**
+ * Why the daemon's environment has no claude: `null` when it has one; 'not-installed' when this
+ * server cannot find one either (nothing installed yet, which Home's setup handles); 'env' when
+ * the server finds one the daemon's environment would not (the 2026-08-28 outage: every session
+ * then exits 127).
+ */
+export function claudeMissingAtSpawn(daemonResolves: boolean, serverResolves: () => boolean): null | 'not-installed' | 'env' {
+  if (daemonResolves) return null
+  return serverResolves() ? 'env' : 'not-installed'
+}
+
 async function claudeCodeNotNeeded(): Promise<boolean> {
   try {
     const { getConfig } = await import('../core/config-manager.js')
@@ -1540,10 +1551,16 @@ export class LocalDaemon {
     // put claude on PATH, so a miss is a strong warning rather than a verdict.
     // Under vitest, sessions run the harness's stand-in instead (test-claude-guard.ts).
     this._spawnClaudeCli = testRunnerClaude() ?? resolveClaudeCliExecutable(env)
-    if (!this._spawnClaudeCli && !(await claudeCodeNotNeeded())) {
-      log.session.error(
-        'spawning the local daemon with an environment where the claude CLI cannot be resolved: '
-        + 'sessions will fail with exit 127 unless your shell rc adds it to PATH',
+    const missing = claudeMissingAtSpawn(!!this._spawnClaudeCli, () => !!resolveClaudeCliExecutable(process.env))
+    if (missing && !(await claudeCodeNotNeeded())) {
+      // Not installed on this computer at all is a new user's first run: Home's setup says so
+      // and installs it, so it is no error for the notification center (2026-11-09 review: a
+      // fresh Walnut's bell read "Errors 2" with this line before the user did anything).
+      log.session[missing === 'not-installed' ? 'warn' : 'error'](
+        missing === 'not-installed'
+          ? 'spawning the local daemon before Claude Code is installed: sessions start once it is'
+          : 'spawning the local daemon with an environment where the claude CLI cannot be resolved: '
+            + 'sessions will fail with exit 127 unless your shell rc adds it to PATH',
         {
           daemonDir: this.daemonDir,
           envHome: env.HOME,

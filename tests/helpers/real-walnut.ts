@@ -45,6 +45,40 @@ function treeState(): { head: string; diff: Buffer; built: Buffer; untracked: st
   }
 }
 
+/** Let git expand directories with its ignore rules; refuse opaque nested repositories. */
+export function hashUntrackedFiles(key: crypto.Hash, root: string, entries: string[]): string[] {
+  const files = new Set<string>()
+  const addFile = (entry: string) => {
+    const st = fs.lstatSync(path.join(root, entry))
+    if (st.isDirectory()) throw new Error(`cannot hash untracked repository directory: ${entry}`)
+    if (!st.isFile() && !st.isSymbolicLink()) throw new Error(`unsupported untracked file type: ${entry}`)
+    files.add(entry)
+  }
+  for (const entry of entries) {
+    const absolute = path.join(root, entry)
+    if (!fs.lstatSync(absolute).isDirectory()) { addFile(entry); continue }
+    // Check access explicitly: git may warn and omit an unreadable directory.
+    fs.accessSync(absolute, fs.constants.R_OK | fs.constants.X_OK)
+    const listed = spawnSync('git', ['--literal-pathspecs', 'ls-files', '-o', '--exclude-standard', '-z', '--', entry], { cwd: root, maxBuffer: 1 << 30 })
+    if (listed.error) throw listed.error
+    // A permission warning can omit files even with exit 0; never hash a partial tree.
+    if (listed.status !== 0 || listed.stderr.length) throw new Error(`cannot enumerate untracked directory ${entry}: ${listed.stderr.toString()}`)
+    const children = listed.stdout.toString().split('\0').filter(Boolean)
+    // Ordinary directories expand to files. A nested repository remains a directory:
+    // fail clearly rather than scan its .git, ignored secrets or installed dependencies.
+    for (const child of children) addFile(child)
+  }
+  const untracked = [...files].sort()
+  for (const entry of untracked) {
+    if (/^(tests|docs)\//.test(entry)) continue
+    const absolute = path.join(root, entry)
+    const st = fs.lstatSync(absolute)
+    if (!st.isFile() && !st.isSymbolicLink()) throw new Error(`untracked file type changed: ${entry}`)
+    key.update(entry).update(st.isSymbolicLink() ? fs.readlinkSync(absolute) : fs.readFileSync(absolute))
+  }
+  return untracked
+}
+
 /** Run `cmd` to its end without holding the event loop (a build takes minutes); rejects with its output's tail. */
 function runAsync(cmd: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, what: string): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -74,11 +108,7 @@ export async function realWalnutFiles(versions: string[], target = hostTarget())
   const bun = bunPath()
   const state = treeState()
   const key = crypto.createHash('sha256').update(state.head).update(state.built)
-  for (const f of state.untracked) {
-    if (/^(tests|docs)\//.test(f)) continue
-    const st = fs.lstatSync(path.join(ROOT, f))
-    key.update(f).update(st.isSymbolicLink() ? fs.readlinkSync(path.join(ROOT, f)) : fs.readFileSync(path.join(ROOT, f)))
-  }
+  state.untracked = hashUntrackedFiles(key, ROOT, state.untracked)
   key.update(target).update(execFileSync(bun, ['--version'], { encoding: 'utf8' }))
   const cacheRoot = path.join(os.tmpdir(), CACHE_DIR_NAME)
   const cache = path.join(cacheRoot, key.digest('hex').slice(0, 16))

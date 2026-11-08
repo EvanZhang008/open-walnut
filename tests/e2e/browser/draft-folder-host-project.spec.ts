@@ -1,6 +1,6 @@
 /**
  * The draft launch bar's last row says what each control is (2026-09-24):
- * "Choose folder and host…" / "Folder/Host: x · host", then "Project: y" once
+ * "Folder/Host: ~ · Local" for a fresh draft (its home default) / "Folder/Host: x · host", then "Project: y" once
  * the folder decided one ("New project: y" when Start will create it), then
  * More. The project is changed in More's Project section, and the row's height
  * never depends on whether the project chip is there, so a quick folder click
@@ -12,7 +12,7 @@
 import fs from 'node:fs'
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import {
-  CHOOSE_FOLDER, basenameOf, discoverFixtureRoot, draftCwdPill, draftLaunchBar, draftMenuProject,
+  HOME_FOLDER, basenameOf, discoverFixtureRoot, draftCwdPill, draftLaunchBar, draftMenuProject,
   draftMoreButton, draftPanel, draftProjectPill, draftQuickChips, draftTaskMenu, loadHome, openDraft,
   openDraftOnCwd,
 } from './draft-helpers'
@@ -40,12 +40,12 @@ const flyout = (page: Page) => page.locator('.task-kebab-project-flyout')
 const lastChildClass = (panel: Locator) => panel.locator('.draft-composer-bar')
   .evaluate((el) => el.lastElementChild?.className ?? '')
 
-test('a fresh draft asks for a folder and host, and says nothing about a project', async ({ page }) => {
+test('a fresh draft starts in the home folder, and says nothing about a project', async ({ page }) => {
   await page.setViewportSize({ width: 1800, height: 1000 })
   await loadHome(page)
   const panel = await openDraft(page)
-  await expect(draftCwdPill(panel)).toHaveText(CHOOSE_FOLDER)
-  await expect(draftCwdPill(panel)).toHaveAttribute('aria-label', 'Choose folder and host')
+  await expect(draftCwdPill(panel)).toHaveText(HOME_FOLDER)
+  await expect(draftCwdPill(panel)).toHaveAttribute('aria-label', /^Folder and host: .+ on Local\. Change$/)
   await expect(draftProjectPill(panel)).toHaveCount(0)
   expect(await lastChildClass(panel)).toContain('draft-more-btn')
   // The project is still settable before any folder: More's first section.

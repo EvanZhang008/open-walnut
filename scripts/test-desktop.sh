@@ -57,3 +57,23 @@ swiftc \
     "$ROOT/tests/desktop/server-lock-tests.swift" \
     -o "$OUT_DIR/walnut-server-lock-tests"
 "$OUT_DIR/walnut-server-lock-tests"
+
+if [ "$(uname -s)" = Darwin ]; then
+    swiftc -D WALNUT_DEMO_TESTS \
+        "$ROOT/tests/desktop/demo-app-tests.swift" \
+        "$ROOT/desktop/DemoApp.swift" \
+        "$ROOT/desktop/BundledRuntime.swift" \
+        "$ROOT/desktop/ClaudeSignInBridge.swift" \
+        "$ROOT/desktop/QuietKeyWindow.swift" \
+        "$ROOT/desktop/WebContentProcess.swift" \
+        -framework Cocoa -framework WebKit \
+        -o "$OUT_DIR/walnut-demo-app-tests"
+    "$OUT_DIR/walnut-demo-app-tests"
+
+    swiftc \
+        "$ROOT/tests/desktop/claude-sign-in-tests.swift" \
+        "$ROOT/desktop/ClaudeSignInBridge.swift" \
+        -framework Cocoa -framework WebKit \
+        -o "$OUT_DIR/walnut-claude-sign-in-tests"
+    "$OUT_DIR/walnut-claude-sign-in-tests"
+fi

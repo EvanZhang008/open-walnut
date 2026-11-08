@@ -136,7 +136,8 @@ export async function getCachedDirList(
     // Kicked, never awaited: a cursor walk in front of the first paint is exactly
     // the delay this module exists to remove, and no read depends on the sweep.
     void store.housekeep();
-    return valid(await store.get(dirListKey(host, path)));
+    const record = valid(await store.get(dirListKey(host, path)));
+    return path === '~' && record && record.path !== path ? valid(await store.get(dirListKey(host, record.path))) : record;
   } catch {
     return null;
   }
@@ -157,6 +158,10 @@ export async function getCachedDirListsBulk(
     const unique = [...new Set(paths)];
     if (unique.length === 0) return out;
     const records = await store.getMany(unique.map((p) => dirListKey(host, p)));
+    const homeIndex = unique.indexOf('~');
+    if (homeIndex >= 0 && records[homeIndex] && records[homeIndex].path !== '~') {
+      records[homeIndex] = await store.get(dirListKey(host, records[homeIndex]!.path));
+    }
     unique.forEach((p, i) => {
       const rec = valid(records[i]);
       if (rec) out.set(p, rec);
@@ -179,15 +184,17 @@ export async function setCachedDirList(
     // A WRITE awaits it: housekeeping is the barrier that keeps two writes to one
     // key in the order they were issued (see keyed-idb-store.ts).
     await store.housekeep();
-    await store.put(dirListKey(host, path), {
+    const record: CachedDirList = {
       host: host ?? null,
-      path,
+      path: path === '~' ? res.path : path,
       entries: res.entries,
       ...(res.selectedFile ? { selectedFile: res.selectedFile } : {}),
       ...(res.requestedPath ? { requestedPath: res.requestedPath } : {}),
       ...(res.resolvedVia ? { resolvedVia: res.resolvedVia } : {}),
       updatedAt: Date.now(),
-    });
+    };
+    if (path === '~' && record.path !== path) await store.put(dirListKey(host, record.path), record);
+    await store.put(dirListKey(host, path), record);
   } catch (err) {
     // Losing the persisted copy only costs a slower next open, but a silent loss
     // is what makes "why is it still showing Loading" unexplainable.

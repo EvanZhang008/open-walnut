@@ -38,7 +38,7 @@ function PluginDialog({ request }: { request: PluginDialogRequest }) {
   const dismiss = useCallback(() => closePluginDialog(sequence), [sequence])
   // Leaving the phone layout (a wider window) keeps the dialog: it is the same modal on the desktop, and
   // closing it would end the plugin's work in it (2026-11-10: widening the Mac app cancelled a sign-in).
-  const { close } = usePhoneOverlay({ id: `plugin-dialog:${sequence}`, kind: 'sheet', open: true, onClose: info => { if (!info.breakpoint) dismiss() }, getElement: () => ref.current })
+  const { close } = usePhoneOverlay({ id: `plugin-dialog:${sequence}`, kind: 'sheet', open: true, keepOnBreakpoint: true, onClose: () => dismiss(), getElement: () => ref.current })
   const modalOwner = useModalOverlay(close)
   // The modal is an outside boundary, not a popover. Child portals own their keys.
   useOverlayLayer({ open: true, refs: [ref, overlayRef], closeOnOutside: false, closeOnEscape: false, trapFocus: false, onClose: close })

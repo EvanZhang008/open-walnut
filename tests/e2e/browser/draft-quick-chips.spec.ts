@@ -33,6 +33,7 @@ import {
   draftPanels,
   draftProjectPill, draftQuickChips, draftQuickKey, expectedChips, loadHome, openDraft, openDraftOnCwd,
   watchForbiddenRequests, type WorkingDir, draftSend,
+  HOME_FOLDER,
 } from './draft-helpers'
 import { openSessionFromPlus } from './draft-surface-helpers'
 import { presetPanelView } from './todo-panel-helpers'
@@ -242,10 +243,10 @@ test('a quick-access chip is a bare basename and sets cwd AND project in one off
   }
 
   // The starting point for both pills, so the flip below is a real change rather
-  // than a value that was already there. A fresh draft opens EMPTY by design:
-  // nothing pre-selects a folder or a project (user rule, 2026-09-02) — the chip
-  // click below is what fills them.
-  await expect(draftCwdPill(panel)).toHaveText('Choose folder and host…')
+  // than a value that was already there. A fresh draft opens on the home folder
+  // and no project (draft-home-default.ts; never a guessed folder or a project,
+  // user rule 2026-09-02) — the chip click below is what moves them.
+  await expect(draftCwdPill(panel)).toHaveText(HOME_FOLDER)
   await expect(draftProjectPill(panel)).toHaveCount(0)
 
   const seen = watchForbiddenRequests(page)

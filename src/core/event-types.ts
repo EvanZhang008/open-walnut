@@ -342,8 +342,11 @@ export interface SessionErrorEvent {
    *   caused the 2-req/s infinite retry loop of 2026-06-10).
    */
   errorKind?: 'conversation_lost' | 'delivery_failed';
-  /** delivery_failed only: the batch was parked (it waits for a Retry), not put back to be re-sent. */
+  /** The batch was parked (it waits for a Retry), not put back to be re-sent: a delivery_failed
+   *  batch, or the first line of a start the host refused (Claude Code not installed). */
   parked?: boolean;
+  /** The parked message's own row says this error, with its Retry: the panel adds no error row. */
+  saidOnMessage?: boolean;
   /** delivery_failed only: the host did not answer in time and the batch is sent again then (ISO). */
   retryAt?: string;
   /**
@@ -513,6 +516,10 @@ export interface SessionBatchFailedEvent {
   sessionId: string;
   messageIds: string[];
   error: string;
+  /** The rows were parked: they wait for a Retry, or (`waitsFor`) for the agent to run. */
+  parked?: boolean;
+  /** The readiness kind the parked rows wait on (QueuedMessage.waitsFor). */
+  waitsFor?: string;
 }
 
 /** Messages that wait, not yet written, behind one whose delivery is being confirmed. */
@@ -539,6 +546,9 @@ export interface SessionMessageQueuedEvent {
    *  it carried): what reached the session, read by the context recovery to resend it whole
    *  (sessions/context-full-recovery.ts). The panel ignores it. */
   rowText?: string;
+  /** The user-line uuid the send named (QueuedMessage.userUuid): a client whose send answer
+   *  was lost knows by it that the server kept the message (web api/session-send.ts). */
+  userUuid?: string;
   /** Queue row's enqueue time (server clock): the bubble's time floor for
    *  history matching, see web optimistic-dedup.ts. */
   enqueuedAt?: string;

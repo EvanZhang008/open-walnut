@@ -42,7 +42,7 @@ describe('mergeFoundHosts', () => {
   it('once the server asks, adds a new found host waiting for the yes, off', () => {
     const config = { hosts: {} } as Config
     mergeFoundHosts(config, found, { reserved: new Set(['companion']), asking: true })
-    expect(config.hosts!['lab-mac']).toEqual({ hostname: '10.0.0.9', user: 'sam', port: undefined, label: undefined, enabled: false, discovered: true, connect: 'ask' })
+    expect(config.hosts!['lab-mac']).toEqual({ hostname: '10.0.0.9', user: 'sam', port: undefined, label: undefined, enabled: false, discovered: true, connect: 'ask', scanned: { hostname: '10.0.0.9', user: 'sam' } })
     expect(config.hosts!.companion).toBeUndefined()
     expect(foundHostWaits(config.hosts!['lab-mac'])).toBe(true)
   })
@@ -153,7 +153,7 @@ describe('settleFoundHostsDoc', () => {
     expect(hosts['old-pc']).toMatchObject({ connect: 'yes', enabled: true })
     expect(hosts.decided).toMatchObject({ connect: 'not_now', enabled: false })
     // In memory only, used: written so it never goes quiet. Unused: left to the merge (waits).
-    expect(hosts['home-pc']).toEqual({ hostname: '10.0.0.12', user: 'sam', discovered: true, connect: 'yes', enabled: true, connect_by: 'walnut' })
+    expect(hosts['home-pc']).toEqual({ hostname: '10.0.0.12', user: 'sam', discovered: true, connect: 'yes', enabled: true, connect_by: 'walnut', scanned: { hostname: '10.0.0.12', user: 'sam' } })
     expect(hosts['quiet-pc']).toBeUndefined()
     expect(hosts['devbox-again']).toBeUndefined()
     expect(doc.hosts_found).toEqual({ asking_since: NOW.toISOString() })

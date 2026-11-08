@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  capabilityChips, clip, readingWhy, sessionsTitle, sessionsUnknown, spendUnknown, diskFree, fleetSummary, gauges, isLive, linkLabel, problemsOf, roleChips, sparkPaths, sparks, timeline, topologyLayout, TIMELINE_MS, TOPO,
+  capabilityChips, clip, readingWhy, sessionsTitle, sessionsUnknown, spendUnknown, diskFree, fleetSummary, gauges, isLive, linkLabel, offlineLine, problemsOf, roleChips, sparkPaths, sparks, timeline, topologyLayout, TIMELINE_MS, TOPO,
 } from '../../web/src/components/settings/sections/host-fleet-dashboard-model'
 import type { FleetHost } from '../../web/src/api/hosts-fleet'
 
@@ -295,5 +295,20 @@ describe('diagram', () => {
     const joined = host()
     expect(linkLabel({ ...joined, connection: { ...joined.connection, kind: 'host-network' } })).toBe('Host network, 38 ms')
     expect(clip('Spare box with a rather long label', 17)).toBe('Spare box with...')
+  })
+})
+
+describe('offlineLine', () => {
+  // 2026-11-08: the card was read mid-dial, so a refused Connect read "Opening an SSH
+  // connection" in the Not connected list beside "Could not connect" on the Hosts row.
+  const dialing = offline({ connection: { kind: 'ssh-tunnel', connected: false, phase: 'ssh', phaseLabel: 'Opening an SSH connection to Gone', since: null, rttMs: null, error: null } })
+
+  it('says what the live status says once the dial ended', () => {
+    expect(offlineLine(dialing, { connected: false, phaseLabel: 'Could not connect to Gone' })).toBe('Could not connect to Gone')
+  })
+
+  it("keeps the card's words without a live status, or when the live one is connected", () => {
+    expect(offlineLine(dialing)).toBe('Opening an SSH connection to Gone')
+    expect(offlineLine(dialing, { connected: true, phaseLabel: 'Connected to Gone' })).toBe('Opening an SSH connection to Gone')
   })
 })

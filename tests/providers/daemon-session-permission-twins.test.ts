@@ -72,6 +72,8 @@ function buildTwin(kind: Twin, initial: Pending | null = pending(), owner = '') 
     logMsg: vi.fn(),
     safeSend: (ws: { send: (line: string) => void }, line: string) => ws.send(line),
     daemonCommands: { admit: (fn: () => unknown) => fn(), run },
+    // demo.quiesce on a daemon that is no Demo's: it never fences.
+    demoQuiesce: { fenced: false, allows: () => true, quiesce: async () => ({ ok: false, error: 'not a Demo', errorKind: 'demo_quiesce_refused' }) },
     BRIDGE_ALLOWED_COMMANDS: new Set(literals(sources[kind], 'BRIDGE_ALLOWED_COMMANDS')),
     BRIDGE_SESSION_COMMANDS: new Set(literals(sources[kind], 'BRIDGE_SESSION_COMMANDS')),
     FOLLOWER_ALLOWED_COMMANDS: new Set(literals(sources[kind], 'FOLLOWER_ALLOWED_COMMANDS')),

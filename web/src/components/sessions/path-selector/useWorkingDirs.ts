@@ -28,6 +28,8 @@ export interface WorkingDirsState {
   hosts: ConfiguredHost[];
   /** Found in ~/.ssh/config and not added yet: a tab with Connect. */
   found: FoundHost[];
+  /** This Walnut's own HOME, for folding local rows to `~`; undefined until known. */
+  localHome?: string;
   /** True only while there is nothing to show yet (a cold cache). */
   loading: boolean;
   error: string | null;
@@ -40,6 +42,7 @@ export function useWorkingDirs(open: boolean): WorkingDirsState {
   const [dirs, setDirs] = useState<WorkingDirEntry[]>(() => peekWorkingDirs()?.dirs ?? []);
   const [hosts, setHosts] = useState<ConfiguredHost[]>(() => peekWorkingDirs()?.hosts ?? []);
   const [found, setFound] = useState<FoundHost[]>(() => peekWorkingDirs()?.found ?? NO_FOUND);
+  const [localHome, setLocalHome] = useState<string | undefined>(() => peekWorkingDirs()?.localHome);
   const [loading, setLoading] = useState(() => !peekWorkingDirs());
   const [error, setError] = useState<string | null>(null);
   const hostsRef = useRef<ConfiguredHost[] | null>(null);
@@ -55,6 +58,7 @@ export function useWorkingDirs(open: boolean): WorkingDirsState {
       setDirs(r.dirs);
       setHosts(r.hosts);
       setFound(r.found ?? NO_FOUND);
+      if (r.localHome) setLocalHome(r.localHome);
       setLoading(false);
       setError(null);
       // Pre-warm only once the host statuses are known: prewarmWorkingDirs skips
@@ -86,5 +90,5 @@ export function useWorkingDirs(open: boolean): WorkingDirsState {
     };
   }, [open]);
 
-  return { dirs, hosts, found, loading, error, refresh };
+  return { dirs, hosts, found, loading, error, refresh, localHome };
 }

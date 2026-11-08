@@ -43,6 +43,7 @@ import type { ImageAttachment } from '@/api/chat';
 import { fetchAskWalnutLaunch, fetchWorkingDirs, quickStartSession } from '@/api/sessions';
 import { DraftSessionPanel } from '@/components/sessions/DraftSessionPanel';
 import { SessionPanel } from '@/components/sessions/SessionPanel';
+import { SetupProgress } from '@/components/common/SetupProgress';
 import type { DraftColumn } from '@/components/sessions/draft-column';
 import { freshLauncherMeta } from '@/components/sessions/task-meta-constants';
 import type { QuickStartTaskMeta } from '@/components/sessions/SessionPathSelector';
@@ -58,7 +59,8 @@ import { seedLaunchPrompt } from '@/components/sessions/launch-prompt-seed';
 import { AskWalnutDrawer, AskWalnutMenuButton, type DrawerRow } from './AskWalnutDrawer';
 import { askProjectDisplay, askTitle } from '@open-walnut/ask-list';
 import { pickMain } from '@open-walnut/org-tree';
-import { ensureMainTask } from '@/api/org';
+import { ensureMainTask, startOrgNode } from '@/api/org';
+import { useOrgSettings } from '@/components/org/useOrgSettings';
 import {
   GENERAL_AGENT_ID, GENERAL_ASK_AGENT, agentOfTask, resolveSelection, selectAgentTasks, slotAgents,
   type AskAgent,
@@ -124,6 +126,8 @@ export interface AskWalnutSlotProps {
    *  empty starting list as "no asks yet" and flashes the composer on every single
    *  page load before the real list arrives. */
   tasksLoading?: boolean;
+  setupReady?: boolean;
+  setup?: ReactNode;
   /** Rendered above the body (the setup banner). */
   banner?: ReactNode;
   /** Rendered above the body while the inspector is open. */
@@ -173,7 +177,7 @@ function initialDraftMeta(): QuickStartTaskMeta {
 }
 
 export function AskWalnutSlot({
-  tasks, tasksLoading, banner, inspectorPanel,
+  tasks, tasksLoading, setupReady, setup, banner, inspectorPanel,
   inspectorOpen, onToggleInspector, onFixWalnut, onCloseChat, onOpenOrg, onSelectionChange, phoneOpen,
   onTaskClick, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced, onOpenForkDraft,
 }: AskWalnutSlotProps) {
@@ -228,6 +232,29 @@ export function AskWalnutSlot({
    *  only refresh over WS a beat later: without it the panel could not mount, and
    *  the selection would bounce back to the previous task in the meantime. */
   const [launched, setLaunched] = useState<{ taskId: string; sessionId?: string; title: string; main?: boolean } | null>(null);
+  const mainSetupAsked = useRef(false);
+  const { settings: orgSettings, loaded: orgSettingsLoaded } = useOrgSettings();
+  const [preparingMain, setPreparingMain] = useState(false);
+  const [mainSetupError, setMainSetupError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!orgSettingsLoaded || orgSettings.enabled === false) { mainSetupAsked.current = false; setPreparingMain(false); return; }
+    if (!setupReady || tasksLoading || mainSetupAsked.current) return;
+    mainSetupAsked.current = true;
+    setPreparingMain(true);
+    setMainSetupError(null);
+    void ensureMainTask().then(async task => {
+      if (!task || resolveTaskSessionId(task)) { setPreparingMain(false); return; }
+      const started = await startOrgNode(task.id, true);
+      if (!started.queued) setPreparingMain(false);
+    }).catch(error => {
+      setPreparingMain(false);
+      setMainSetupError(error instanceof Error ? error.message : String(error));
+      log.warn('ask-walnut-slot', 'the CEO could not be prepared', { error: String(error) });
+    });
+  }, [setupReady, tasksLoading, orgSettingsLoaded, orgSettings.enabled]);
+  useEffect(() => {
+    if ((mainTask && resolveTaskSessionId(mainTask)) || mainTask?.org_start?.state === 'failed') setPreparingMain(false);
+  }, [mainTask]);
   /** The ≡ drawer. Closed on every pick; not persisted (it is a gesture, not a view). */
   const [drawerOpen, setDrawerOpen] = useState(false);
   /** The ≡ button, wherever the current body renders it — where the drawer
@@ -684,6 +711,8 @@ export function AskWalnutSlot({
     subtitle: view === 'session' && sessionId
       ? phoneSessionLabel({ process_status: askStatus?.process_status, pendingPermissionTool: askStatus?.pendingPermissionTool ?? null })
       : undefined,
+    // A resize to desktop keeps the slot shown.
+    keepOnBreakpoint: true,
     onClose: hideSlot,
   });
   const asksLayer = usePhoneOverlay({ id: 'asks', kind: 'asks', open: drawerOpen, onClose: closeDrawer });
@@ -697,7 +726,7 @@ export function AskWalnutSlot({
       {inspectorPanel}
 
       <div className="ask-walnut-slot-body">
-        {view === 'loading' ? (
+        {setup ?? (view === 'loading' ? (
           <div className="ask-walnut-loading" data-testid="ask-walnut-loading">
             {inlineMenuButton && <div className="ask-walnut-bare-header">{inlineMenuButton}</div>}
             <p className="ask-walnut-pending-status">
@@ -726,8 +755,14 @@ export function AskWalnutSlot({
               isKnownProject={alwaysKnownProject}
             />
           </div>
+        ) : view === 'main' && (preparingMain || mainTask?.org_start?.state === 'starting' || (setupReady && orgSettingsLoaded && orgSettings.enabled !== false && !mainSetupAsked.current)) ? (
+          <div className="ask-walnut-loading" data-testid="ask-walnut-main-starting">
+            {inlineMenuButton && <div className="ask-walnut-bare-header">{inlineMenuButton}</div>}
+            <SetupProgress label="Starting the CEO..." />
+          </div>
         ) : view === 'main' ? (
           <div className="ask-walnut-draft" data-testid="ask-walnut-main-draft">
+            {(mainSetupError || mainTask?.org_start?.error) && <p role="alert">The CEO could not start: {mainSetupError || mainTask?.org_start?.error}. Send your message to try again.</p>}
             <DraftSessionPanel
               draft={mainDraft}
               headerLeading={inlineMenuButton}
@@ -764,8 +799,7 @@ export function AskWalnutSlot({
               </>
             ) : (
               <p className="ask-walnut-pending-status">
-                <span className="spinner ask-walnut-pending-spinner" />
-                Starting {pending.main ? 'the CEO' : questionShown}…
+                <SetupProgress label={`Starting ${pending.main ? 'the CEO' : questionShown}...`} />
               </p>
             )}
             {pending.message && <p className="ask-walnut-pending-echo">{pending.message}</p>}
@@ -778,8 +812,8 @@ export function AskWalnutSlot({
               viewPlace="ask-slot"
               embedded
               headerLeading={inlineMenuButton}
-              onClose={phoneChat.slot ? phoneChat.close : hideSlot}
-              {...(phoneChat.slot ? { phoneHostSlot: 'chat' } : {})}
+              onClose={phoneChat.phone && phoneOpen && phoneChat.registered ? phoneChat.close : hideSlot}
+              {...(phoneChat.phone && phoneOpen && phoneChat.registered ? { phoneHostSlot: 'chat' } : {})}
               {...(onTaskClick ? { onTaskClick } : {})}
               {...(onLocateTask ? { onLocateTask } : {})}
               {...(onOpenTaskDetail ? { onOpenTaskDetail } : {})}
@@ -794,7 +828,7 @@ export function AskWalnutSlot({
             <p>This quick question has no session yet.</p>
             <button className="btn btn-sm btn-primary" onClick={startNew}>New quick question</button>
           </div>
-        )}
+        ))}
       </div>
 
       {phoneChat.slot && createPortal(menuButton, phoneChat.slot)}

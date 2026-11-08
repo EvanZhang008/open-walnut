@@ -10,9 +10,9 @@
  */
 import { execFile } from 'node:child_process'
 import fs from 'node:fs/promises'
-import os from 'node:os'
 import path from 'node:path'
 import { realSshReachAllowed } from '../../lib/real-ssh-guard.js'
+import { sshHome } from '../../lib/ssh-home.js'
 
 export interface SshKeyOf {
   /** The key file as ssh names it, `~/` for the home directory. */
@@ -29,11 +29,11 @@ export function identityFilesOf(sshG: string): string[] {
     .filter((p): p is string => !!p && p.toLowerCase() !== 'none')
 }
 
-export function tildePath(file: string, home = os.homedir()): string {
+export function tildePath(file: string, home = sshHome()): string {
   return file === home ? '~' : file.startsWith(home + path.sep) ? `~/${file.slice(home.length + 1)}` : file
 }
 
-function expand(file: string, home = os.homedir()): string {
+function expand(file: string, home = sshHome()): string {
   return file.startsWith('~/') ? path.join(home, file.slice(2)) : file
 }
 

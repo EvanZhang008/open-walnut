@@ -226,8 +226,12 @@ async function reconcileNoteInternal(
   let bytes: string
   let stat: fs.Stats
   try {
-    bytes = await fsp.readFile(abs, 'utf-8')
-    stat = await fsp.stat(abs)
+    const snapshot = await withUserFileLock(abs, async () => ({
+      bytes: await fsp.readFile(abs, 'utf-8'),
+      stat: await fsp.stat(abs),
+    }))
+    bytes = snapshot.bytes
+    stat = snapshot.stat
   } catch (err: any) {
     if (err?.code === 'ENOENT') {
       // Deletion.
@@ -255,8 +259,8 @@ async function reconcileNoteInternal(
   // Guarded back-write: only when the file's current hash still equals what we
   // read under lock — never clobber an in-flight edit (§8.3).
   if (!id) {
-    id = generateNoteId()
-    const stamped = stampId(bytes, id)
+    const assignedId = generateNoteId()
+    const stamped = stampId(bytes, assignedId)
     try {
       let wrote = false
       await withUserFileLock(abs, async () => {
@@ -265,7 +269,8 @@ async function reconcileNoteInternal(
         await fsp.writeFile(abs, stamped, 'utf-8')
         wrote = true
       })
-      // Re-read the stamped bytes so the index row matches what's on disk.
+      if (!wrote) return null // no disk identity: do not index a stamp that never landed
+      id = assignedId
       bytes = stamped
       const reparsed = parseFrontmatter(stamped)
       data = reparsed.data
@@ -291,6 +296,7 @@ async function reconcileNoteInternal(
         path: relPath,
         error: err instanceof Error ? err.message : String(err),
       })
+      return null // leave the actual bytes and identity unchanged; a later pass retries
     }
   }
 

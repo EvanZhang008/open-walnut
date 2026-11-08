@@ -774,6 +774,10 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // uuid). Optional: without it the server counts a taken line as delivered, as
   // before, and never holds its rows for the answer.
   'line-answer-v1',
+  // 'line-fate-read-v1': line.fate reads bounded evidence for an existing session,
+  // dead included, without writing a line or starting a CLI. Trusted server only.
+  // Optional: an older daemon leaves cancellation recovery unknown, never resends.
+  'line-fate-read-v1',
   // 'marker-find-v1': markers.find answers which of a session's phone message
   // ids have a delivery marker in its stream, searched host-side newest first
   // (marker-find-core.ts; both twins inline, not sidecar-gated). Bridge-

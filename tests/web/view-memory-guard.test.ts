@@ -71,7 +71,6 @@ const PASSING: Record<string, string> = {
   'components/routines/TriggerPill.tsx#showHistory': 'a trigger\'s history, a popover',
   'components/routines/RoutineCard.tsx#historyOpen': 'one routine\'s run history unfolded in one look',
   'components/inbox/LetterReader.tsx#fileView': 'a file opened from one letter, an overlay',
-  'components/common/FileContentView.tsx#showSource': 'source of the file open now; the next file opens rendered',
   'components/common/MicButton.tsx#showChevron': 'hover state',
   'components/common/NotificationPanel.tsx#section': 'the notification panel opens on the section that has news (it picks one per open)',
   'components/common/NotificationPanel.tsx#showArchived': 'archived letters looked up in one opening of the panel',
@@ -337,7 +336,7 @@ describe('every page keeps its view choices (utils/view-memory.ts)', () => {
     }
     expect(panel).toMatch(/const \[chatCollapsed, setChatCollapsed\] = useState\(\(\) => panelView\.chatHidden\)/);
     // Full screen is kept as the same place.
-    expect(panel).toMatch(/useFullscreen\(\{ keepAcrossRoutes: true, place: sheetAt \}\)/);
+    expect(panel).toMatch(/useFullscreen\(\{ keepAcrossRoutes: true, place: sheetAt[, ]/);
     // Every host names its place: the prop is required, and a plugin's SessionView passes its plugin.
     expect(panel).toMatch(/\n  viewPlace: string;\n/);
     expect(src('plugins/views.tsx')).toMatch(/viewPlace=\{`plugin:\$\{pluginId\}`\}/);

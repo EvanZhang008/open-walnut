@@ -22,6 +22,7 @@ import {
   ageTags, buildSortProjects, buildSortQueue, DEFAULT_SORT_FILTER, isSortFilter, projectSnoozeTargets, snoozeUntilText, tierCounts,
   type SortFilter, type SortItem, type SortProject, type SortView,
 } from './quick-sort-model';
+import { pageShortcutBlocked } from '@/utils/page-shortcut';
 import '@/styles/quick-sort.css';
 
 const SHOWN = 3;
@@ -241,6 +242,8 @@ export function QuickSortView({ query, tiers, onOpen, active }: {
       if (e.defaultPrevented || typing(e.target) || inMenu() || snooze.state || pickDate.state) return;
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'z') { e.preventDefault(); e.stopPropagation(); undoLast(); return; }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
+      // Its keys are the board's: never while another sheet or an editor has the reader (utils/page-shortcut.ts).
+      if (pageShortcutBlocked(e, rootRef.current)) return;
       const { shown: cards, at: index, view: mode } = keyState.current;
       if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
         if (!cards.length) return;

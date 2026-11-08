@@ -9,7 +9,9 @@ import { traceInteraction } from '@/utils/interaction-timer';
 import { useHidesHighlights } from './useHidesHighlights';
 import { keyTargetClaimsEscape } from './usePanelKeyRouter';
 import { escapeWasConsumedByOthers } from '@/utils/escape-beep-guard';
+import { fileCardOpenInFullscreen, selectionToolbarOpen } from '@/utils/file-card-escape';
 import { log } from '@/utils/log';
+import { usePhoneLayout } from './usePhoneLayout';
 import {
   bindFullscreen, claimFullscreen, clearFullscreen, detachFullscreen, fullscreenHeldBy,
   keepsAcrossRoutes, newFullscreenId, releaseFullscreen, sheetPlace, subscribeFullscreen,
@@ -113,6 +115,8 @@ export interface UseFullscreenOptions {
    * sheet that stays mounted is a move to another place.
    */
   place?: string;
+  /** A phone layer replaces desktop chrome while its fullscreen place stays kept. */
+  phoneLayer?: boolean;
 }
 
 export function useFullscreen(options: UseFullscreenOptions = {}) {
@@ -134,7 +138,10 @@ export function useFullscreen(options: UseFullscreenOptions = {}) {
   const away = isFullscreen && keepAcrossRoutes && !shown;
   // An away sheet is portalled out of Home and hidden by visibility: its chat's marks must not paint on the page.
   useHidesHighlights(away);
-  const active = isFullscreen && !away;
+  const phone = usePhoneLayout();
+  const phoneSurface = options.phoneLayer === true && phone;
+  const shownFullscreen = isFullscreen && !phoneSurface;
+  const active = shownFullscreen && !away;
   const leave = useCallback(() => { if (tab) releaseFullscreen(id, place); else setOwnFlag(false); }, [tab, id, place]);
 
   // Timed: "I click outside to get out and it takes like 3 seconds" was reported
@@ -188,6 +195,8 @@ export function useFullscreen(options: UseFullscreenOptions = {}) {
       const kept = hasActiveModalOverlay() ? 'modal-overlay'
         : escapeWasConsumedByOthers(e) ? 'consumed-by-other-handler'
         : keyTargetClaimsEscape() ? 'panel-layer-open'
+        : selectionToolbarOpen(document) ? 'selection-toolbar-open'
+        : fileCardOpenInFullscreen(document) ? 'file-card-open'
         : null;
       if (kept) {
         log.info('fullscreen', 'escape kept fullscreen open', { reason: kept, target: (e.target as HTMLElement | null)?.tagName });
@@ -235,7 +244,7 @@ export function useFullscreen(options: UseFullscreenOptions = {}) {
   // Away, the sheet is hidden outright (fullscreen-tab.css): it is position:fixed,
   // so the hidden home page's overflow does not clip it, and a descendant that
   // sets its own `visibility: visible` would otherwise paint over the other page.
-  const fullscreenClass = isFullscreen ? (away ? ' open-walnut-fullscreen open-walnut-fullscreen-away' : ' open-walnut-fullscreen') : '';
+  const fullscreenClass = shownFullscreen ? (away ? ' open-walnut-fullscreen open-walnut-fullscreen-away' : ' open-walnut-fullscreen') : '';
 
-  return { isFullscreen, enterFullscreen, exitFullscreen, fullscreenClass, FullscreenBackdrop };
+  return { isFullscreen, shownFullscreen, enterFullscreen, exitFullscreen, fullscreenClass, FullscreenBackdrop };
 }

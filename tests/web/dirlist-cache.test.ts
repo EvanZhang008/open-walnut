@@ -108,6 +108,35 @@ describe('dirlist cache: roundtrip', () => {
     expect(rec?.updatedAt).toBeGreaterThan(0);
   });
 
+  it('a home lookup keeps its resolved path and remains isolated per host', async () => {
+    await setCachedDirList(null, '~', listing(['projects'], { path: '/home/local' }));
+    await setCachedDirList('marina', '~', listing(['work'], { path: '/home/remote' }));
+    expect(await getCachedDirList(null, '~')).toMatchObject({ path: '/home/local', entries: [{ name: 'projects' }] });
+    expect(await getCachedDirList('marina', '~')).toMatchObject({ path: '/home/remote', entries: [{ name: 'work' }] });
+    expect(await getCachedDirList('other', '~')).toBeNull();
+  });
+
+  it('refreshing and invalidating the canonical home also updates its lookup', async () => {
+    await setCachedDirList(null, '~', listing(['old'], { path: '/home/local' }));
+    await setCachedDirList(null, '/home/local', listing(['new']));
+    expect((await getCachedDirList(null, '~'))?.entries.map(e => e.name)).toEqual(['new']);
+    await deleteCachedDirList(null, '/home/local');
+    expect(await getCachedDirList(null, '~')).toBeNull();
+    await setCachedDirList(null, '~', listing(['new'], { path: '/home/local' }));
+    await deleteCachedDirListsUnder(null, '/home');
+    expect(await getCachedDirList(null, '~')).toBeNull();
+  });
+
+  it('an older canonical write cannot replace another home lookup', async () => {
+    await setCachedDirList('marina', '~', listing(['first'], { path: '/home/first' }));
+    await setCachedDirList('marina', '~', listing(['second'], { path: '/home/second' }));
+    await setCachedDirList('marina', '/home/first', listing(['late']));
+    await deleteCachedDirListsUnder('marina', '/home/first');
+    expect(await getCachedDirList('marina', '~')).toMatchObject({ path: '/home/second', entries: [{ name: 'second' }] });
+    const bulk = await getCachedDirListsBulk('marina', ['~', '/home/second']);
+    expect(bulk.get('~')).toEqual(bulk.get('/home/second'));
+  });
+
   it('a miss is null, not a throw', async () => {
     expect(await getCachedDirList(null, '/never/listed')).toBeNull();
   });
@@ -357,11 +386,18 @@ describe('dirlist cache: showHidden is a caller-side skip, not a key', () => {
   });
 
   it('the write-through is gated on !showHidden', () => {
-    expect(src).toMatch(/if \(!showHidden\) void setCachedDirList\(/);
+    expect(src).toContain("if (!showHidden) void setCachedDirList(host, dirPath === '~' ? dirPath : canonical, res)");
   });
 
   it('the reopen bulk prime is gated on !showHidden', () => {
     expect(src).toMatch(/if \(!showHidden\) \{\s*\n\s*const wanted = \[initialRoot/);
+  });
+
+  it('every implicit selection restore leaves a later user choice alone', () => {
+    const restores = src.match(/if \(restoreExpanded && selectionRevisionRef\.current === selectionRevision\)/g) ?? [];
+    expect(restores).toHaveLength(2);
+    expect(src).toMatch(/onClose:\s*\(\)\s*=>\s*\{\s*selectionRevisionRef\.current\+\+;\s*selectedFileRef\.current\s*=\s*null;\s*setSelectedFile\(null\);\s*\}/);
+    expect(src).toContain('if (opts.push !== false) selectionRevisionRef.current++;');
   });
 
   it('the network fetch is NOT gated on the cache read', () => {
@@ -372,6 +408,7 @@ describe('dirlist cache: showHidden is a caller-side skip, not a key', () => {
     expect(src).not.toMatch(/await getCachedDirList\(/);
     expect(src).not.toMatch(/await getCachedDirListsBulk\(/);
     // The reopen prime is fire-and-forget too, and the root load runs regardless.
-    expect(src).toMatch(/void getCachedDirListsBulk\(host, wanted\)\.then\(/);
+    expect(src).toContain(': getCachedDirListsBulk(host, wanted)');
+    expect(src).toContain('void cachedTree.then(');
   });
 });

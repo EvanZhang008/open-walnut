@@ -17,7 +17,7 @@ const { needsPrewarm } = vi.hoisted(() => ({ needsPrewarm: vi.fn() }))
 vi.mock('../../src/providers/fold-prewarm.js', () => ({ registryNeedsFoldPrewarm: needsPrewarm, runFoldPrewarm: vi.fn() }))
 
 import { WebSocketServer } from 'ws'
-import { EXEC_UPGRADE_HOLD_MAX_MS, daemonBusyRefusal, execRunsHold, execRunsReason, execRunsWait } from '../../src/providers/exec-runs-hold.js'
+import { EXEC_UPGRADE_HOLD_MAX_MS, daemonBusyRefusal, execRunsHold, execRunsProven, execRunsReason, execRunsWait } from '../../src/providers/exec-runs-hold.js'
 import { setAcpUpgradeHoldFileForTest } from '../../src/providers/acp-upgrade-hold.js'
 import { LocalDaemon } from '../../src/providers/local-daemon.js'
 import { log } from '../../src/logging/index.js'
@@ -225,5 +225,28 @@ describe('the daemon twins', () => {
   it('the refusal reads as a busy daemon to every caller that waits one out', async () => {
     const { handoverBusy } = await import('../../src/providers/daemon-service-cli.js')
     expect(handoverBusy(new Error('service.handover: running host_exec jobs must finish first'))).toBe(true)
+  })
+})
+
+describe('execRunsProven (a stop that must prove nothing runs)', () => {
+  const link = (caps: string[], reply: unknown) => {
+    const send = vi.fn(async () => reply)
+    return { send, hasCapability: (cap: string) => caps.includes(cap) }
+  }
+
+  it('counts the running jobs a daemon with host_exec lists', async () => {
+    await expect(execRunsProven(link(['host-exec-v1'], { jobs: [{ running: true }, { running: false }] }), 1_000)).resolves.toBe(1)
+    await expect(execRunsProven(link(['host-exec-v1'], { jobs: [] }), 1_000)).resolves.toBe(0)
+  })
+
+  it('reads a daemon without host_exec as running none, and never asks it', async () => {
+    const l = link([], { ok: false, error: 'exec.list unsupported: host-exec-core sidecar not loaded' })
+    await expect(execRunsProven(l, 1_000)).resolves.toBe(0)
+    expect(l.send).not.toHaveBeenCalled()
+  })
+
+  it('gives no answer (null) when a daemon with host_exec does not list its jobs', async () => {
+    await expect(execRunsProven(link(['host-exec-v1'], { ok: false, error: 'busy' }), 1_000)).resolves.toBeNull()
+    await expect(execRunsProven(link(['host-exec-v1'], null), 1_000)).resolves.toBeNull()
   })
 })

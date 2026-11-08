@@ -45,6 +45,7 @@
  */
 import path from 'node:path'
 import { shq } from './remote-sh.js'
+import { thisServer } from '../core/server-self-name.js'
 import { walnutKeyOf } from './daemon-shared.js'
 import { DAEMON_PID_SH, buildDaemonStopCmd } from './daemon-start-cmd.js'
 import type { DirProbeScriptOpts } from './remote-daemon-dir.js'
@@ -62,7 +63,7 @@ export function isolationKey(home: string): string {
   return walnutKeyOf(home)
 }
 
-export type RemoteIsolationRefusal = 'remote-hosts-off' | 'not-ssh' | EphemeralReplicaRefusal
+export type RemoteIsolationRefusal = 'remote-hosts-off' | 'not-ssh' | 'demo-stopped' | EphemeralReplicaRefusal
 
 export type RemoteIsolation =
   /** A real server: the host's production daemon, as always. */
@@ -90,13 +91,19 @@ export interface RemoteIsolationInput {
   link: string
   /** The test server's data dir (WALNUT_HOME). */
   home: string
+  /**
+   * A Walnut Demo server (demo-remote-host.ts): its ssh hosts are isolated without
+   * WALNUT_EPHEMERAL_REMOTE_HOSTS, and none once its stop began.
+   */
+  demo?: { closed: boolean }
 }
 
 /** The one decision every remote step of a test server follows. */
 export function remoteIsolationFor(input: RemoteIsolationInput): RemoteIsolation {
-  const { hostKey, env, ephemeral, link, home } = input
+  const { hostKey, env, ephemeral, link, home, demo } = input
   if (!ephemeral || hostKey === '__local__' || link === 'local') return { mode: 'shared' }
-  if (env.WALNUT_EPHEMERAL_REMOTE_HOSTS !== '1') return { mode: 'off', reason: 'remote-hosts-off' }
+  if (demo?.closed) return { mode: 'off', reason: 'demo-stopped' }
+  if (!demo && env.WALNUT_EPHEMERAL_REMOTE_HOSTS !== '1') return { mode: 'off', reason: 'remote-hosts-off' }
   if (link === 'cloud-tunnel') return { mode: 'attach' }
   if (link !== 'ssh') return { mode: 'off', reason: 'not-ssh' }
   const key = isolationKey(home)
@@ -216,14 +223,14 @@ export function daemonIdentityVerdict(hello: Record<string, unknown>, expect: { 
   const said = typeof hello.isolatedFor === 'string' && hello.isolatedFor ? hello.isolatedFor : null
   const dir = typeof hello.dir === 'string' && hello.dir ? hello.dir : null
   if (!expect) {
-    return said ? { ok: false, reason: `the daemon there is a test server's own (it serves ${said}), not this host's daemon` } : { ok: true }
+    return said ? { ok: false, reason: `the daemon there is another Walnut's isolated daemon (it serves ${said}), not this host's daemon` } : { ok: true }
   }
   if (said !== expect.key) {
-    return { ok: false, reason: said ? `the daemon there serves another test server (${said})` : 'the daemon there is not this test server\'s own (its hello names no test server)' }
+    return { ok: false, reason: said ? `the daemon there serves another Walnut (${said}), not ${thisServer()}` : `the daemon there is not ${thisServer()}'s own (its hello names no isolated server)` }
   }
   const norm = (d: string) => path.posix.normalize(d).replace(/(.)\/+$/, '$1')
   if (dir !== null && norm(dir) !== norm(expect.daemonDir)) {
-    return { ok: false, reason: `the daemon there runs from ${dir}, not this test server's ${expect.daemonDir}` }
+    return { ok: false, reason: `the daemon there runs from ${dir}, not ${thisServer()}'s ${expect.daemonDir}` }
   }
   if (dir === null) return { ok: false, reason: 'the daemon there does not say its dir' }
   return { ok: true }
@@ -309,6 +316,7 @@ export function describeIsolationRefusal(hostKey: string, reason: RemoteIsolatio
   switch (reason) {
     case 'remote-hosts-off': return `ephemeral server: remote host '${hostKey}' is off for test servers (set WALNUT_EPHEMERAL_REMOTE_HOSTS=1 to give it a daemon of its own there)`
     case 'not-ssh': return `ephemeral server: remote host '${hostKey}' is not reached over ssh, so its daemon is the host's own and a test server never talks to it`
+    case 'demo-stopped': return `ephemeral server: this Walnut Demo is stopping, so remote host '${hostKey}' gets no daemon of its own from it`
     default: return `ephemeral server: the replica check on '${hostKey}' was refused (${reason}${dir ? `: ${dir}` : ''}), so the host stays off`
   }
 }

@@ -78,7 +78,7 @@ export async function stampAllIds(): Promise<StampAllResult> {
     const abs = path.join(NOTES_DIR, relPath)
     let bytes: string
     try {
-      bytes = await fsp.readFile(abs, 'utf-8')
+      bytes = await withUserFileLock(abs, () => fsp.readFile(abs, 'utf-8'))
     } catch {
       continue // gone since the walk — deletion reconcile handles it
     }
@@ -221,7 +221,7 @@ export async function mergeNoteIds(opts: {
   // onto the loser path (id is the PK). The loser file content (minus the id line)
   // stays on disk verbatim — a redundant duplicate carrying the winner id.
   try {
-    const bytes = await fsp.readFile(abs, 'utf-8')
+    const bytes = await withUserFileLock(abs, () => fsp.readFile(abs, 'utf-8'))
     const baseHash = computeContentHash(bytes)
     const rewritten = stampId(stripId(bytes), winnerId)
     await withUserFileLock(abs, async () => {

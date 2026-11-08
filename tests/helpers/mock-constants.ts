@@ -44,6 +44,7 @@ export function createMockConstants(prefix = 'walnut-test', overrides: Record<st
   const agentPathSegment = (agentId: string) => encodeURIComponent(validateAgentId(agentId));
   return {
     IS_EPHEMERAL: false,
+    IS_DEMO: false,
     CLOUD_MODE: false,
     WALNUT_HOME: tmpBase,
     TASKS_DIR: tasksDir,
@@ -113,6 +114,8 @@ export function createMockConstants(prefix = 'walnut-test', overrides: Record<st
     // registry, so a shared dir means a test server ends the developer's live
     // production terminals. See DTACH_SOCKET_DIR in src/constants.ts.
     DTACH_SOCKET_DIR: path.join(logDir, 'term'),
+    // Not a Demo: terminals use DTACH_SOCKET_DIR above (src/lib/demo-terminal-dir.ts).
+    DEMO_TERMINAL_DIR: null,
     LOG_PREFIX: 'open-walnut-test-',
     FREQUENT_DIRS_FILE: path.join(tmpBase, 'frequent-directories.json'),
     ASK_WALNUT_LAUNCH_FILE: path.join(tmpBase, 'ask-walnut-launch.json'),

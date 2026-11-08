@@ -32,6 +32,7 @@ import { hostDisplayName, hostDisplayNameFor } from '../../core/hosts/host-displ
 import { markHandledFailure } from '../middleware/handled-failure.js'
 import { hostTermsAtExit } from '../middleware/host-terms-at-exit.js'
 import type { DaemonConnection } from '../../providers/daemon-connection.js'
+import { sshDirs } from '../../lib/ssh-home.js'
 
 export const filesRouter = Router()
 // Every sentence these routes answer names a remote host as a person knows it.
@@ -1000,7 +1001,8 @@ export function isRevealSecretPath(resolved: string): boolean {
     path.join(WALNUT_HOME, 'secrets'),
     path.join(WALNUT_HOME, 'sync', 'bridge-tokens.json'),
     path.join(home, '.aws'),
-    path.join(home, '.ssh'),
+    // Every ~/.ssh this server reads: in Walnut Demo, the account's too once it uses it (lib/ssh-home.ts).
+    ...sshDirs(),
     path.join(home, '.config', 'walnut-secrets'),
   ]
   return denied.some((d) => resolved === d || resolved.startsWith(d + path.sep))

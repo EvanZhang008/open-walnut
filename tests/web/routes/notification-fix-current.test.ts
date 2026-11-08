@@ -328,30 +328,22 @@ describe('current host Fix', () => {
     expect(starts).toHaveLength(1)
   })
 
-  it('accepts local missing Claude with all current local problems', async () => {
+  // Review round 2, D08: a repair session runs on Claude Code here, so with it missing (or
+  // signed out) the repair failed like the error it was asked to fix. Refused with the step.
+  it('refuses a repair while Claude Code cannot run on this computer, and starts nothing', async () => {
     vi.mocked(localReadiness.getLocalClaude).mockReturnValue({
       checkedAt: 100, source: 'daemon', claude: { found: false, error: `Local missing ${iteration}` },
       problems: [
-        { kind: 'claude_missing', message: 'Claude Code is missing on this computer', commands: ['claude --version'] },
+        { kind: 'claude_missing', message: 'Claude Code is missing on this computer.', commands: ['claude --version'] },
         { kind: 'claude_not_logged_in', message: 'Claude Code needs sign-in', commands: [] },
       ],
     })
-    const first = await post({ host: '__local__' })
-    expect(first.status).toBe(200)
-    expect(starts[0].message).toContain('Claude Code is missing on this computer')
-    expect(starts[0].message).toContain('Claude Code needs sign-in')
-    expect(starts[0].message).toContain('__local__')
-    const local = localReadiness.getLocalClaude()!
-    vi.mocked(localReadiness.getLocalClaude).mockReturnValue({
-      ...local, checkedAt: 999, checkError: 'Temporary check timeout', claude: { ...local.claude, authDetail: 'New probe detail' },
-      problems: local.problems.map(problem => ({ ...problem, fix: {
-        action: 'install-claude-native' as const, state: 'failed' as const, text: 'Temporary fix failure', detail: '/tmp/partial-999',
-      } })),
-    })
-    const second = await post({ host: '__local__' })
-    expect(second.body).toMatchObject({ reused: true, sessionId: first.body.sessionId })
+    const res = await post({ host: '__local__' })
+    expect(res.status).toBe(409)
+    expect(res.body.error).toMatch(/^Claude Code is missing on this computer\. Fix with agent runs on Claude Code, so set it up first/)
+    expect(starts).toHaveLength(0)
+    await expectNoWrites()
     vi.mocked(localReadiness.getLocalClaude).mockReturnValue(undefined)
-    expect((await post({ host: '__local__' })).status).toBe(409)
   })
 
   it.each([{ host: 'alpha' }, { hosts: ['alpha', 'beta'] }, { system: 'backup' }])('refuses current repairs on a replica %j', async body => {

@@ -49,6 +49,7 @@ const SESSION_FILES: Record<string, string> = {
   'utils/browser-logger.ts': 'a per-tab id for log lines',
   'utils/crash-recovery.ts': 'the crash log must reset with the tab; it clears the layout record too',
   'utils/crash-report.ts': 'reads storage to report a crash',
+  'utils/demo-generation.ts': 'a confirmed Demo resets this tab storage when its isolated data generation changes',
   'utils/layout-record.ts': 'adopts the pre-record sessionStorage keys once',
   'utils/path-machine-memory.ts': "the machine this tab's user named for a path whose writer Walnut did not record: a per-tab answer to a question, not Home or Org layout",
   'utils/scroll-debug.ts': 'a debug timer',

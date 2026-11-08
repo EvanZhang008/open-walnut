@@ -487,8 +487,9 @@ describe('sessionAutoTitleHook', () => {
       const task = await makePluginTaskAndSession(sid);
       const fake = registerFakeSession(
         sid,
-        async () => '还是中文标题', // fallback ignores the rule too
-        async () => '中文标题', // side question ignores the shipped rule
+        // Titles of the message's own words (title-answer.ts keeps them), in the script the rule forbids.
+        async () => '登录页面重定向问题', // fallback ignores the rule too
+        async () => '登录页面重定向', // side question ignores the shipped rule
       );
 
       await sessionAutoTitleHook.handler(payloadFor(sid, task, '登录页面一直重定向'));

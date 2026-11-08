@@ -15,6 +15,7 @@ import { useHostActions, RETRY_FAILED_TEXT, CHECK_FAILED_TEXT } from '@/hooks/us
 import { useIsReplicaServer } from '@/hooks/useServerRole';
 import { HostFailureText } from '@/components/hosts/HostFailureText';
 import { HostCommands } from '@/components/hosts/HostCommands';
+import { demoHostMessage } from '@/utils/demo-generation';
 import { InlineCodeText } from '@/components/common/InlineCodeText';
 import { StableButton } from '@/components/common/HostProblemRows';
 import { PanelNotice } from './PanelNotice';
@@ -73,7 +74,7 @@ export function SessionHostErrorText({ host, label, reconnecting, fallback }: {
     return (
       <div className="session-host-error" data-testid="session-host-readiness" data-kind={p.problem.kind}>
         <span className="session-error-banner-text">{fallback}</span>
-        <div className="hpb-message"><InlineCodeText text={p.problem.message} /></div>
+        <div className="hpb-message"><InlineCodeText text={demoHostMessage(p.problem.message, p.problem.commands)} /></div>
         {p.problem.commands.length > 0 && <HostCommands commands={p.problem.commands} />}
         <div className="session-host-error-actions">
           <StableButton label={check} labels={['Check again', 'Checking...', CHECK_FAILED_TEXT]}

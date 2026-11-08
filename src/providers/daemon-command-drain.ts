@@ -40,6 +40,10 @@ export function createDaemonCommandDrain() {
       check()
       return track(work(), pending)
     },
+    /** Every command accepted before this call has settled. Admission stays as it is (demo.quiesce fences it). */
+    settle(): Promise<void> {
+      return Promise.allSettled([...admitted, ...pending]).then(() => {})
+    },
     async close(): Promise<void> {
       closed = true
       await Promise.allSettled([...pending])

@@ -1,11 +1,18 @@
 /**
- * A new "Imported from <host>" project goes under the VP its sibling import projects
- * are under (external-session-import.ts makes one such project per host).
+ * Where a new "Imported from <host>" project goes on the Org page (external-session-import.ts
+ * makes one such project per host).
  *
- * 2026-11-03: a machine joined over the host network, and ten minutes later the
- * importer made "Imported from <that machine>" with no VP, so it floated alone on the
- * Org page while "Imported from this Mac" and the SSH hosts' import projects sat under
- * the user's Operations VP.
+ *  1. Under the VP its sibling import projects are under. 2026-11-03: a machine joined over the
+ *     host network, and ten minutes later the importer made "Imported from <that machine>" with
+ *     no VP, so it floated alone on the Org page while "Imported from this Mac" and the SSH
+ *     hosts' import projects sat under the user's Operations VP.
+ *  2. With no sibling under a VP, under the Others VP (OTHERS_VP_NAME): the VP the user keeps for
+ *     what no other VP owns. 2026-11-12, the user, on a new install whose first run made
+ *     "Imported from this Mac" its own VP: "the import xxx should default under others". When
+ *     there is no Others VP yet and this is the install's first import project, Walnut makes one
+ *     (a VP made only to put projects under, as the Org page's New VP makes). An install whose
+ *     earlier import projects already stand on their own keeps that: no Others VP is made for
+ *     it and nothing it has is moved. A closed Others VP is never reopened for it.
  *
  * Only the run that MADE the project places it (the project registry had no row for it
  * before that run), never a later one: a project the user gives back its own VP, or
@@ -16,9 +23,24 @@
  * The vote reads the org outside its lock, so the move carries what the vote saw
  * (setProjectVp's guard): when the lead it resolves under the lock is another one, is
  * closed, or is missing, or the project got a lead meanwhile, nothing moves.
+ * tests/core/first-run-no-own-vp-guard.test.ts lists every place that may make a VP.
  */
 import { log } from '../../logging/index.js';
 import { role } from '../server-role.js';
+import type { Task } from '../types.js';
+
+/** The VP for what no other VP owns: where a new install's imports go. */
+export const OTHERS_VP_NAME = 'Others';
+
+/** The Others VP: a lead the user named Others, or whose own project is Others (an open one first). */
+export function othersVp<T extends Pick<Task, 'org_role' | 'org_name' | 'project' | 'phase'>>(tasks: readonly T[]): T | undefined {
+  const key = OTHERS_VP_NAME.toLowerCase();
+  // Either one: a renamed Others VP keeps its own project, and a closed one must stay found so it
+  // is never made again (createOrgNode would reopen it).
+  const is = (v: string | undefined) => (v ?? '').trim().toLowerCase() === key;
+  const named = tasks.filter((t) => t.org_role === 'lead' && (is(t.org_name) || is(t.project)));
+  return named.find((t) => t.phase !== 'COMPLETE') ?? named[0];
+}
 
 /** Does the project registry already hold `project` (names compare without case)? */
 export async function projectRegistered(project: string): Promise<boolean> {
@@ -30,9 +52,10 @@ export async function projectRegistered(project: string): Promise<boolean> {
 /**
  * Put `project`, just made by an import, under the VP that leads the other import
  * projects (`importProjects`: every name the importer can make on this install, so a
- * user's own "Imported from Japan" never votes). Nothing when it already has a lead or
- * a VP, or when no other import project is under an open VP; with several VPs, the one
- * leading the most import projects, a tie going to the sibling first by name.
+ * user's own "Imported from Japan" never votes); with several VPs, the one leading the
+ * most import projects, a tie going to the sibling first by name. With no other import
+ * project under an open VP, under the Others VP (made for a first import, see the module
+ * note). Nothing when it already has a lead or a VP.
  * Returns the VP's own project, or null. Never throws: a failure only logs.
  */
 export async function placeNewImportProject(project: string, importProjects: Iterable<string>): Promise<string | null> {
@@ -72,7 +95,7 @@ export async function placeNewImportProject(project: string, importProjects: Ite
     }
     // A stable sort: among equal counts the first sibling's VP wins.
     const best = [...votes.values()].sort((a, b) => b.count - a.count)[0];
-    if (!best) return null;
+    if (!best) return await placeUnderOthers(project, tasks, isImport);
     const res = await setProjectVp(project, best.sibling, {
       expectLeadId: best.leadId, noCreate: true, noReopen: true, unledOnly: true,
     });
@@ -89,6 +112,58 @@ export async function placeNewImportProject(project: string, importProjects: Ite
   } catch (err) {
     log.session.warn('external import: new import project not put under a VP', {
       project, error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+}
+
+/**
+ * No sibling votes: `project` goes under the Others VP. One is made only for an install's
+ * first import project (no other import project in the registry), so an older install whose
+ * imports stand on their own is left as it is. A closed Others VP stays closed.
+ */
+async function placeUnderOthers(project: string, tasks: readonly Task[], isImport: ReadonlySet<string>): Promise<string | null> {
+  const { setProjectVp } = await import('../org/org-store.js');
+  const { projectKey } = await import('../org/org-tree.js');
+  let others = othersVp(tasks);
+  if (others?.phase === 'COMPLETE') {
+    log.session.info('external import: the Others VP is closed, the new import project stands on its own', { project, leadId: others.id });
+    return null;
+  }
+  if (!others) {
+    const { getStoreProjects } = await import('../task-manager.js');
+    const key = projectKey(project);
+    const earlier = Object.keys(await getStoreProjects()).filter((name) => isImport.has(projectKey(name)) && projectKey(name) !== key);
+    if (earlier.length) return null;
+    others = (await makeOthersVp(project)) ?? undefined;
+    if (!others) return null;
+  }
+  const res = await setProjectVp(project, others.project ?? '', {
+    expectLeadId: others.id, noCreate: true, noReopen: true, unledOnly: true,
+  });
+  if (res.refused) {
+    log.session.info('external import: new import project left where it is, the Others VP changed', { project, leadId: others.id, refused: res.refused });
+    return null;
+  }
+  log.session.info('external import: new import project put under the Others VP', { project, vp: res.vp, leadId: others.id });
+  return res.vp || null;
+}
+
+/** Make the Others VP (a VP only to put projects under); null when that name is taken another way. */
+async function makeOthersVp(forProject: string): Promise<Task | null> {
+  const { createOrgNode } = await import('../org/org-node-edit.js');
+  const { orgTasks } = await import('../org/org-store.js');
+  try {
+    const lead = await createOrgNode({ name: OTHERS_VP_NAME }, true, { writer: { by: 'agent', byName: 'Walnut' } });
+    log.session.info('external import: made the Others VP for the first import project', { project: forProject, leadId: lead.id });
+    return lead;
+  } catch (err) {
+    // Made meanwhile (another host's import in the same moment), or a project of the user's
+    // own is named Others: take an open Others VP when there is one now, else leave it.
+    const now = othersVp(await orgTasks());
+    if (now && now.phase !== 'COMPLETE') return now;
+    log.session.info('external import: no Others VP made, the new import project stands on its own', {
+      project: forProject, error: err instanceof Error ? err.message : String(err),
     });
     return null;
   }

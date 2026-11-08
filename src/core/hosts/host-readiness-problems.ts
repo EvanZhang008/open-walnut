@@ -10,6 +10,7 @@ import { HOST_RUNTIME_MESSAGES, type HostPreflightResult } from '../../providers
 import type { HostFixAction } from '../../providers/host-fix-core.js'
 import { claudeVersionAtLeast, type ClaudeCliFloor } from './claude-version-floor.js'
 import { asPackageManager, compilerInstallCommands } from './compiler-install.js'
+import { REMOTE_TERMINALS_HERE } from './remote-terminals-here.js'
 
 /** Every readiness kind (the last two come from the connect itself: host-status.ts connectReadinessProblems). */
 export const READINESS_PROBLEM_KINDS = [
@@ -46,6 +47,8 @@ export interface ProblemContext {
   sshTarget?: string
   /** The model the version floor comes from ("Opus 5.5"). */
   floorModel?: string
+  /** This server opens terminals on remote hosts (default: all but the Demo); without them dtach is moot. */
+  terminals?: boolean
 }
 
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined)
@@ -101,6 +104,32 @@ export function applyClaudeFloor(p: HostPreflightResult, floor: ClaudeCliFloor |
   if (!floor || !p.claude.found || typeof p.claude.versionOk === 'boolean') return p
   const ok = claudeVersionAtLeast(p.claude.version, floor.minVersion)
   return ok === null ? p : { ...p, claude: { ...p.claude, versionOk: ok, minVersion: floor.minVersion } }
+}
+
+/** How long a definite sign-in answer stands in for re-checks that could not tell. */
+export const AUTH_CARRY_MS = 10 * 60_000
+
+/**
+ * A re-check that could not tell whether Claude Code is signed in (`auth:
+ * 'unknown'`, as a keychain that does not answer in time on a loaded machine
+ * gives) never replaces a definite answer read before it for the same CLI, or
+ * the setup card flips from "Sign in" to "could not confirm" with nothing
+ * changed (2026-11-08). The definite answer stands for AUTH_CARRY_MS after it
+ * was last read; `authAt` carries that time from answer to answer. Every
+ * writer of a fresh preflight answer calls this (guard:
+ * tests/core/conclusive-auth.test.ts).
+ */
+export function withConclusiveAuth(next: HostPreflightResult, prev: HostPreflightResult['claude'] | undefined, now: number): HostPreflightResult {
+  const c = next.claude
+  if (!c.found || !c.auth) return next
+  if (c.auth !== 'unknown') return { ...next, claude: { ...c, authAt: now } }
+  const same = !!prev?.found && prev.path === c.path && prev.version === c.version
+  if (!same || !prev?.auth || prev.auth === 'unknown' || prev.authAt === undefined) return next
+  if (now - prev.authAt < 0 || now - prev.authAt >= AUTH_CARRY_MS) return next
+  const claude = { ...c, auth: prev.auth, authAt: prev.authAt }
+  if (prev.authDetail) claude.authDetail = prev.authDetail
+  else delete claude.authDetail
+  return { ...next, claude }
 }
 
 /**
@@ -196,7 +225,7 @@ export function readinessProblems(p: HostPreflightResult, ctx: ProblemContext = 
     if (p.claude.versionOk === false) out.push(outdatedProblem(p.claude, ctx))
     if (p.claude.auth === 'not-logged-in') out.push(signInProblem(ctx))
   }
-  if (ctx.local) return out
+  if (ctx.local || !(ctx.terminals ?? REMOTE_TERMINALS_HERE)) return out
   // A compiler only matters while dtach is missing: Walnut builds dtach from
   // source, and dtach is what keeps a terminal alive across disconnects. A
   // shipped prebuilt for the host's platform/arch needs no compiler at all.

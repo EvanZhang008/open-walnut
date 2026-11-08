@@ -59,6 +59,8 @@
  * lives.
  */
 
+import { shownFolderName } from '@/utils/home-folder';
+import { onHomeDefault } from './draft-home-default';
 import { useCallback, useLayoutEffect, useMemo, useRef } from 'react';
 import type { WorkingDirEntry } from '@/api/sessions';
 import { serverNow, useAllHostStatus, useHostStatusHydration } from '@/hooks/useHostStatus';
@@ -128,9 +130,9 @@ interface Props {
   workspaces?: boolean;
 }
 
-/** Trailing-slash-tolerant basename: the chip label and the pill label. */
-function basename(cwd: string): string {
-  return cwd.replace(/\/+$/, '').split('/').pop() || '/';
+/** The chip label: the folder's name, the host's home as `~` (utils/home-folder.ts). */
+function chipName(d: { cwd: string; host?: string | null }): string {
+  return shownFolderName(d.cwd, d.host);
 }
 
 export function DraftLaunchBar({
@@ -273,7 +275,7 @@ export function DraftLaunchBar({
                   // The same one sentence as the host's picker tab when the host has something to say.
                   title={saysSomething ? dot!.title : d.host ? `${d.cwd} (on ${hostDisplayLabel(d.host, undefined, d.hostLabel)})` : d.cwd}
                 >
-                  {basename(d.cwd)}
+                  {chipName(d)}
                   {chipHostLabel(d) && <>{' '}<span className="draft-quick-chip-host">· {chipHostLabel(d)}</span></>}
                   {saysSomething && <HostStatusDot dot={dot!} host={d.host ?? undefined} className="draft-pill-dot" />}
                 </button>
@@ -392,7 +394,9 @@ export function DraftLaunchBar({
         // but anchored to the cwd pill, so it opens from the click point instead
         // of centering.
         popoutAnchor={cwdPillRef}
-        initialPath={draft.cwd ? { cwd: draft.cwd, host: draft.host } : undefined}
+        // A chosen folder reopens the picker on itself; the home default opens it on the recent
+        // folders, like no folder (draft-home-default.ts onHomeDefault).
+        initialPath={draft.cwd && !onHomeDefault(draft) ? { cwd: draft.cwd, host: draft.host } : undefined}
         // ALWAYS the row's current meta: a tier "+" seed and any AI-filled date
         // ride `draft.meta` and nothing in this bar shows them, so a picker that
         // started from the defaults would silently reset them on the very folder
@@ -421,11 +425,11 @@ function useQuickChipHostLabels(chips: readonly WorkingDirEntry[]): (d: WorkingD
     const live = new Map(statuses.map((s) => [s.host, s.label]));
     const names = new Map<string, number>();
     for (const d of chips) {
-      const n = basename(d.cwd).toLowerCase();
+      const n = chipName(d).toLowerCase();
       names.set(n, (names.get(n) ?? 0) + 1);
     }
     return (d: WorkingDirEntry) => {
-      if ((names.get(basename(d.cwd).toLowerCase()) ?? 0) < 2) return '';
+      if ((names.get(chipName(d).toLowerCase()) ?? 0) < 2) return '';
       return d.host ? hostDisplayLabel(d.host, live.get(d.host), d.hostLabel) : LOCAL_HOST_LABEL;
     };
   }, [statuses, chips]);

@@ -39,6 +39,7 @@ import { constants as fsConstants } from 'node:fs'
 import { execFile } from 'node:child_process'
 import { TMP_DIR } from '../../constants.js'
 import { REMOTE_DTACH_OWN_BIN, REMOTE_TEST_ROOT, resolveSshTarget, sshControlMasterArgs } from './spawn.js'
+import { sshAliasOptions, sshDestination } from '../../providers/session-io.js'
 import { DTACH_SOURCES, DTACH_VERSION } from './dtach-sources.js'
 import {
   ALL_FILES,
@@ -306,8 +307,8 @@ export async function remoteDtachPath(host: string): Promise<string> {
 /** ssh argv for `sh -s` on a host, over the shared ControlMaster. */
 async function sshArgsFor(host: string): Promise<string[]> {
   const target = await resolveSshTarget(host)
-  const hostString = target.user ? `${target.user}@${target.hostname}` : target.hostname
-  const args = ['-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=no', ...sshControlMasterArgs(host)]
+  const hostString = sshDestination(target)
+  const args = ['-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=no', ...sshAliasOptions(target), ...sshControlMasterArgs(host)]
   if (target.port) args.push('-p', String(target.port))
   args.push(hostString, 'sh -s')
   return args

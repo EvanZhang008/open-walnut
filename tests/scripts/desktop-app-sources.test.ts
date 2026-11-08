@@ -29,6 +29,7 @@ describe('the Mac app sources', () => {
     expect(shared).toContain('desktop/main.swift')
     expect(shared).toContain('src/data/walnut-calendar.swift')
     expect(shared).not.toContain('desktop/make-icon.swift')
+    expect(shared).not.toContain('desktop/DemoApp.swift')
   })
 
   for (const script of ['desktop/build.sh', 'desktop/build-release.sh']) {
@@ -37,7 +38,7 @@ describe('the Mac app sources', () => {
     })
   }
 
-  for (const script of ['scripts/test-desktop-update-windows.sh', 'scripts/test-desktop-popout.sh']) {
+  for (const script of ['scripts/test-desktop-update-windows.sh', 'scripts/test-desktop-popout.sh', 'scripts/build-desktop-recent-test.sh']) {
     it(`${script} compiles the app through the shared list`, () => {
       const text = fs.readFileSync(path.join(ROOT, script), 'utf8')
       expect(text).toContain('scripts/lib/desktop-app-sources.sh')

@@ -11,6 +11,10 @@ import { AI_AUTHOR, USER_AUTHOR, type DocComment } from '@/utils/doc-comments';
 import { draftHash, draftKey } from '@/utils/drafts';
 import { snippetOf } from '@/utils/passage-comments';
 import { timeAgo } from '@/utils/time';
+import { FILE_HEADER_ITEM_ATTR } from '@/utils/file-thread';
+
+/** The chip and its error sit over the top of the file: an Ask card docks below them, never over them (utils/file-thread.ts). */
+const HEADER_ITEM = { [FILE_HEADER_ITEM_ATTR]: '' };
 
 interface CardProps {
   /** The doc: the reply box keeps its words under the doc and the comment. */
@@ -178,13 +182,13 @@ export function DocCommentsHead({ comments, openCount, changed, sourceOnly, erro
   return (
     <>
       {comments.length > 0 && (
-        <button type="button" className="doc-comments-chip" data-testid="doc-comments-chip" aria-expanded={listOpen} onClick={onToggle}>
+        <button type="button" className="doc-comments-chip" data-testid="doc-comments-chip" {...HEADER_ITEM} aria-expanded={listOpen} onClick={onToggle}>
           {openCount === 1 ? '1 comment' : `${openCount} comments`}
           {resolvedCount > 0 && <span className="doc-comments-chip-sub"> · {resolvedCount} resolved</span>}
           {changed.size > 0 && <span className="doc-comments-chip-sub is-outdated"> · {changed.size} changed</span>}
         </button>
       )}
-      {error && <div className="doc-comments-error" role="status">{error}</div>}
+      {error && <div className="doc-comments-error" role="status" {...HEADER_ITEM}>{error}</div>}
       {listOpen && (
         <div className="doc-comments-list" data-testid="doc-comments-list" onPointerDown={(e) => e.stopPropagation()}>
           {comments.map((c) => {

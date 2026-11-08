@@ -183,6 +183,25 @@ describe('annotateCredentialFailure', () => {
   })
 })
 
+describe('annotateCredentialFailure: a key file the settings name that is not there', () => {
+  const refusal = (file: string) => new Error(`Command failed: ssh me@devbox sh -s\nno such identity: ${file}: No such file or directory\nme@devbox: Permission denied (publickey).`)
+
+  it.each([['the account home', os.homedir()], ['a Demo HOME', '/tmp/demo-home-x']])(
+    'names that file whole (%s), before any agent evidence, and reads as auth with the file in the hint', async (_label, home) => {
+      const { run, calls } = stubRun({})
+      const file = `${home}/.ssh/id_devbox`
+      const annotated = await annotateCredentialFailure(refusal(file), 'me@devbox', { env: { HOME: home }, run, now: () => NOW }) as Error
+      expect(annotated.message.endsWith(`\nwalnut-ssh-evidence: key-missing (${file})`)).toBe(true)
+      expect(calls).toHaveLength(0)
+      for (const text of [annotated.message, summarizeConnectFailure(annotated.message)]) {
+        const hint = classifyHostConnectError(text, 'me@devbox')
+        expect(hint.kind).toBe('auth')
+        expect(hint.hint).toContain(file)
+        expect(hint.hint).not.toMatch(/agent/i)
+      }
+    })
+})
+
 const haveTools = ['ssh-agent', 'ssh-add', 'ssh-keygen'].every((t) => spawnSync('/bin/sh', ['-c', `command -v ${t}`]).status === 0)
 
 describe.skipIf(!haveTools)('real tools, private throwaway agent', () => {

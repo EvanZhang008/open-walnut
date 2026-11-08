@@ -40,6 +40,17 @@ vi.mock('../../../src/web/ws/handler.js', () => ({
   registerMethod, broadcastEvent, sendToClient: vi.fn(), sendStreamEvent: vi.fn(),
 }))
 
+// What the session's daemon says became of a line (line.fate): unknown unless a test sets it.
+const { lineFate } = vi.hoisted(() => ({ lineFate: { value: null as unknown, asked: [] as unknown[][] } }))
+vi.mock('../../../src/providers/daemon-connection.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/providers/daemon-connection.js')>()
+  return {
+    ...actual,
+    getConnectedDaemonConnection: vi.fn(() => ({ connected: true })),
+    readDaemonLineFate: vi.fn(async (...args: unknown[]) => { lineFate.asked.push(args); return lineFate.value }),
+  }
+})
+
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { bus, EventNames, type BusEvent } from '../../../src/core/event-bus.js'
 import { registerSessionChatRpc } from '../../../src/web/routes/session-chat.js'
@@ -87,6 +98,8 @@ beforeEach(async () => {
 
   methods.clear()
   registerSessionChatRpc()
+  lineFate.value = null
+  lineFate.asked = []
 })
 
 afterEach(async () => {
@@ -234,6 +247,57 @@ describe('session:send retryOf: the original row already left the queue', () => 
   it('a Retry of a row nobody knows goes out as a new line', async () => {
     await callSend({ sessionId: SID, message: TEXT, retryOf: 'qm-never-seen' })
     expect((await getQueue(SID))[0].lineUuid).toBeUndefined()
+  })
+})
+
+// U22 (2026-11-10): the first send's acknowledgement was lost, not the send. The
+// client never learned the row's id (its Retry names its own temp id), the row left
+// the queue when the line ran, and a fresh enqueue spawned a resume for a turn that
+// never came. The daemon knows the line ran: nothing is enqueued, nothing is started.
+describe('session:send retryOf: a Retry whose first send already ran', () => {
+  const UUID = '0b6c2f0e-5d1a-4c3b-9e8f-7a6b5c4d3e2f'
+
+  it.each([
+    ['answered', { fate: 'ran', state: 'started', answer: 'yes' }],
+    ['finished', { fate: 'ran', state: 'completed' }],
+    ['being answered now', { fate: 'ran', state: 'started', answer: 'pending' }],
+  ])('sends nothing and says it was delivered: %s', async (_name, fate) => {
+    lineFate.value = fate
+    const res = await callSend({ sessionId: SID, message: TEXT, retryOf: 'temp-1794329204411-37jq', userUuid: UUID }) as { messageId?: string; alreadyDelivered?: boolean }
+    expect(res).toEqual({ messageId: 'temp-1794329204411-37jq', alreadyDelivered: true })
+    expect(lineFate.asked[0]?.slice(1, 3)).toEqual([SID, UUID])
+    expect(await getQueue(SID)).toHaveLength(0)
+    expect(sends).toHaveLength(0)
+    expect(queued).toHaveLength(0)
+  })
+
+  it('asks under the uuid the original row went out in when the server knows it', async () => {
+    lineFate.value = { fate: 'ran', state: 'completed' }
+    const original = await enqueueMessage(SID, TEXT)
+    const [sent] = await markProcessing(SID)
+    await removeTaken(SID, [original.id])
+    const res = await callSend({ sessionId: SID, message: TEXT, retryOf: original.id }) as { alreadyDelivered?: boolean }
+    expect(res.alreadyDelivered).toBe(true)
+    expect(lineFate.asked[0]?.[2]).toBe(sent.lineUuid)
+    expect(await getQueue(SID)).toHaveLength(0)
+  })
+
+  it.each([
+    ['a gone process took it and never answered', { fate: 'unanswered', state: 'started' }],
+    ['the daemon cannot say', null],
+  ])('goes out as before when the line did not run: %s', async (_name, fate) => {
+    lineFate.value = fate
+    const res = await callSend({ sessionId: SID, message: TEXT, retryOf: 'temp-1794329204411-37jq', userUuid: UUID }) as { alreadyDelivered?: boolean; messageId?: string }
+    expect(res.alreadyDelivered).toBeUndefined()
+    expect(await getQueue(SID)).toHaveLength(1)
+    expect(sends).toHaveLength(1)
+  })
+
+  it('a plain send never asks', async () => {
+    lineFate.value = { fate: 'ran', state: 'completed' }
+    await callSend({ sessionId: SID, message: TEXT, userUuid: UUID })
+    expect(lineFate.asked).toHaveLength(0)
+    expect(await getQueue(SID)).toHaveLength(1)
   })
 })
 

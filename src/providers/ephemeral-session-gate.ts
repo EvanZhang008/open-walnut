@@ -5,15 +5,46 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { IS_EPHEMERAL, WALNUT_HOME, isValidSessionUuid } from '../constants.js'
+import { IS_DEMO, IS_EPHEMERAL, WALNUT_HOME, isValidSessionUuid } from '../constants.js'
+import { readDemoOwnership, writeDemoOwnership } from './demo-session-ownership.js'
 import { resolveAgentCommand } from './agent-command-map.js'
+import { assertDemoAdmission } from '../core/sessions/demo-admission.js'
+import { ThisServer } from '../core/server-self-name.js'
+
+/**
+ * Where a refused session came from, as far as this server knows: `outside` when its own store
+ * never held it, `earlier` when the store held it at boot (in a Demo, whose data starts empty,
+ * that is the Demo itself before a restart: it began here, and its ownership was not kept).
+ */
+export type RefusedOrigin = 'outside' | 'earlier'
 
 export class InheritedSessionRefusedError extends Error {
   readonly code = 'inherited_session'
-  constructor(readonly sessionId: string, readonly cmd: string) {
-    super(`inherited_session: this test server did not start session ${sessionId || '(unnamed)'}; start a new session instead.`)
+  constructor(readonly sessionId: string, readonly cmd: string, readonly origin: RefusedOrigin = 'outside') {
+    // Words a person reads (a parked row, Retry): no code, and no "test server" in the Demo.
+    super(inheritedSessionText(sessionId, IS_DEMO, origin))
     this.name = 'InheritedSessionRefusedError'
   }
+}
+
+/**
+ * The refusal's sentence: plain in the Demo, naming the session on a developer's test server.
+ * "Began outside this Demo" only when that is so (2026-11-11 review: it was said of a task that
+ * began in this Demo, after its first start failed).
+ */
+export function inheritedSessionText(sessionId: string, demo: boolean, origin: RefusedOrigin = 'outside'): string {
+  if (!demo) return `${ThisServer(false)} did not start session ${sessionId || '(unnamed)'}; start a new session instead.`
+  return origin === 'earlier'
+    ? 'This conversation started before the Demo last restarted, and the Demo continues only conversations it started since. Start a new task instead.'
+    : 'This conversation began outside this Demo, so the Demo cannot continue it. Start a new task instead.'
+}
+
+/** The refusal rebuilt from its text (an error that crossed a boundary as words), old wording too. */
+export function isInheritedSessionText(message: string): boolean {
+  return /^inherited_session:/.test(message)
+    || /^This test server did not start session /.test(message)
+    || message.startsWith('This conversation began outside this Demo')
+    || message.startsWith('This conversation started before the Demo last restarted')
 }
 
 /** Which daemon a command goes to: its host, its socket's URL and the instance that answered hello. */
@@ -24,9 +55,13 @@ export type GateAttempt =
   | { kind: 'start'; host: string; sid: string; instance: string }
   | { kind: 'acp'; host: string; rt: string; adapter: string; thread?: string }
   | { kind: 'acpNew'; host: string; rt: string; adapter: string; generation: number }
+  | { kind: 'rename'; host: string; from: string; to: string }
 
 let inherited: Set<string> | null = null
+let demoSettles: Promise<void> = Promise.resolve()
 const own = new Set<string>()
+/** Fresh ids this server's own starts minted (passed the gate), confirmed or not. */
+const mintedIds = new Set<string>()
 const ownThreads = new Set<string>()
 const runtimeAdapter = new Map<string, string>()
 /** Bumped by every acpStart of a runtime: an older worker's late reply then confirms nothing. */
@@ -61,13 +96,31 @@ function insideTmp(p: string | undefined): boolean {
 }
 
 /** Boot of a test server: every session and runtime id its copied store holds. */
-export function armEphemeralSessionGate(ids: Iterable<string>): void {
+export async function armEphemeralSessionGate(ids: Iterable<string>): Promise<void> {
   inherited = new Set([...ids].filter(Boolean))
+  if (!IS_DEMO) return
+  const saved = await readDemoOwnership(WALNUT_HOME)
+  for (const key of saved.own) { own.add(key); inherited.delete(key.slice('__local__\u0000'.length)) }
+  // A start this server made before its restart that never ran (Claude Code was not
+  // installed yet) is still this server's: its next start under the same id is fresh.
+  for (const key of saved.minted ?? []) { mintedIds.add(key); if (!own.has(key)) inherited.delete(key.slice('__local__\u0000'.length)) }
+  for (const key of saved.threads) { ownThreads.add(key); inherited.delete(key.split('\u0000').at(-1)!) }
+  for (const row of saved.adapters) runtimeAdapter.set(...row)
 }
 
 /** A test server sharing the user's real HOME never writes files other sessions read (team inboxes). */
 export function refuseRealHomeWrite(what: string, enabled: boolean = IS_EPHEMERAL): void {
-  if (enabled && !insideTmp(process.env.HOME)) throw new InheritedSessionRefusedError('', what)
+  const root = process.env.WALNUT_DEMO_ROOT
+  const generation = process.env.WALNUT_DEMO_GENERATION
+  const demoHome = IS_DEMO && root && generation && /^[a-zA-Z0-9-]{1,64}$/.test(generation)
+    && path.basename(root) === 'open-walnut-demo'
+    ? path.resolve(root, 'homes', generation) : null
+  let ownDemo = false
+  try {
+    ownDemo = demoHome !== null && process.env.HOME === demoHome
+      && WALNUT_HOME === path.resolve(root!, 'data', generation!) && fs.realpathSync(demoHome) === demoHome
+  } catch { /* An unavailable HOME grants no write permission. */ }
+  if (enabled && !ownDemo && !insideTmp(process.env.HOME)) throw new InheritedSessionRefusedError('', what)
 }
 
 /** Playwright fixture only: skip the gate for this in-process MockDaemon (its URL and instance id). */
@@ -91,11 +144,14 @@ function canonical(cmd: string, params: Record<string, unknown>): string | null 
 }
 
 function refuse(id: string, cmd: string): never {
-  throw new InheritedSessionRefusedError(id, cmd)
+  throw new InheritedSessionRefusedError(id, cmd, inherited?.has(id) ? 'earlier' : 'outside')
 }
 
 /** Throws before `cmd` is sent if it may not run; returns the attempt its reply may confirm. */
 export function gateSessionCommand(scope: GateScope, cmd: string, params: Record<string, unknown>, enabled: boolean = IS_EPHEMERAL): GateAttempt | undefined {
+  const canonicalCommand = canonical(cmd, params)
+  if (canonicalCommand && (INPUT_COMMANDS.has(canonicalCommand)
+    || ['start', 'acpStart', 'acpNewSession', 'oneshot.run', 'oneshot.prewarm', 'exec.run'].includes(canonicalCommand))) assertDemoAdmission()
   if (skipped(scope, enabled)) return undefined
   const host = scope.host
   const sid = str(params.sid)
@@ -120,11 +176,22 @@ export function gateSessionCommand(scope: GateScope, cmd: string, params: Record
       const minted = valueOf(['--session-id'])
       const fork = args.includes('--fork-session')
       if (fork && resumed === undefined) refuse(sid, cmd)
-      if (resumed !== undefined && !own.has(k(host, resumed))) refuse(resumed, cmd)
+      // An id this server minted is its own even when no process of it was confirmed (its first
+      // start failed: Claude Code missing, or stopped before it read the line): a fresh UUID this
+      // gate let through, so no other Walnut's conversation can sit under it. Resuming it is safe;
+      // a proven run makes it owned below.
+      const mintedHere = resumed !== undefined && mintedIds.has(k(host, resumed))
+      if (resumed !== undefined && !own.has(k(host, resumed)) && !mintedHere) refuse(resumed, cmd)
       if (resumed !== undefined && !fork) {
         if (sid !== resumed || minted !== undefined) refuse(sid, cmd)
-        return undefined // an own session: nothing new to own
+        if (own.has(k(host, resumed))) return undefined // an own session: nothing new to own
+        if (!scope.instance) refuse(sid, cmd)
+        const resumeAttempt: GateAttempt = { kind: 'start', host, sid, instance: scope.instance }
+        pending.set(k(host, sid), resumeAttempt)
+        return resumeAttempt
       }
+      // A fork copies the conversation it names: only a confirmed own one.
+      if (fork && !own.has(k(host, resumed!))) refuse(resumed!, cmd)
       if (params.resume === true) refuse(sid, cmd)
       if (!isValidSessionUuid(minted) || minted !== sid || isCopied(minted) || own.has(k(host, minted))) refuse(minted ?? sid, cmd)
       if (!scope.instance) refuse(sid, cmd)
@@ -152,8 +219,7 @@ export function gateSessionCommand(scope: GateScope, cmd: string, params: Record
       const from = str(params.oldSid)
       const to = str(params.newSid)
       if (!own.has(k(host, from)) || !isValidSessionUuid(to) || isCopied(to)) refuse(from, cmd)
-      own.add(k(host, to))
-      return undefined
+      return { kind: 'rename', host, from, to }
     }
     case 'cron.supervision':
       // Reading the state is free; turning supervision on or off is a write.
@@ -185,14 +251,51 @@ export function gateSessionCommand(scope: GateScope, cmd: string, params: Record
 }
 
 /** Confirms what a well-formed ok reply proves for the attempt this send made, and nothing else. */
-export function settleSessionCommand(scope: GateScope, cmd: string, params: Record<string, unknown>, result: unknown, attempt: GateAttempt | undefined, enabled: boolean = IS_EPHEMERAL): void {
+export function settleSessionCommand(scope: GateScope, cmd: string, params: Record<string, unknown>, result: unknown, attempt: GateAttempt | undefined, enabled: boolean = IS_EPHEMERAL): Promise<void> | void {
+  if (!IS_DEMO || !attempt || scope.host !== '__local__') { settleCommand(scope, cmd, params, result, attempt, enabled); return }
+  const work = demoSettles.catch(() => {}).then(async () => {
+    const beforeOwn = new Set(own)
+    const beforeMinted = new Set(mintedIds)
+    const beforeThreads = new Set(ownThreads)
+    const beforeAdapters = new Map(runtimeAdapter)
+    settleCommand(scope, cmd, params, result, attempt, enabled)
+    const local = (key: string) => key.startsWith('__local__\u0000')
+    const addedOwn = [...own].filter(key => !beforeOwn.has(key))
+    const addedMinted = [...mintedIds].filter(key => !beforeMinted.has(key))
+    const addedThreads = [...ownThreads].filter(key => !beforeThreads.has(key))
+    const changedAdapters = [...runtimeAdapter].filter(([key, value]) => beforeAdapters.get(key) !== value)
+    return writeDemoOwnership({ v: 1, home: WALNUT_HOME, own: [...own].filter(local), threads: [...ownThreads].filter(local), adapters: [...runtimeAdapter].filter(([key]) => local(key)), minted: [...mintedIds].filter(local) }).catch(error => {
+      if (attempt.kind === 'start') pending.set(k(attempt.host, attempt.sid), attempt)
+      for (const key of addedOwn) own.delete(key)
+      for (const key of addedMinted) mintedIds.delete(key)
+      for (const key of addedThreads) ownThreads.delete(key)
+      for (const [key, value] of changedAdapters) {
+        if (runtimeAdapter.get(key) !== value) continue
+        const prior = beforeAdapters.get(key)
+        if (prior === undefined) runtimeAdapter.delete(key); else runtimeAdapter.set(key, prior)
+      }
+      throw error
+    })
+  })
+  demoSettles = work
+  return work
+}
+
+function settleCommand(scope: GateScope, cmd: string, params: Record<string, unknown>, result: unknown, attempt: GateAttempt | undefined, enabled: boolean): void {
   if (!attempt || skipped(scope, enabled)) return
   cmd = canonical(cmd, params) ?? cmd
   const r = (result ?? {}) as Record<string, any>
   const ok = r.ok === true
+  if (attempt.kind === 'rename') {
+    if (ok && own.has(k(attempt.host, attempt.from))) own.add(k(attempt.host, attempt.to))
+    return
+  }
   if (attempt.kind === 'start') {
     const key = k(attempt.host, attempt.sid)
     if (pending.get(key) !== attempt) return
+    // Answered at all: the id is this server's fresh one, whether a process ran or not
+    // (a start refused before Claude Code was installed). Only a Demo stores it.
+    mintedIds.add(key)
     // Same daemon instance as the start went to: a probe after a daemon change proves nothing.
     const proves = ok && scope.instance === attempt.instance && pidOk(r.pid) && r.adopted !== true
       && typeof r.outputFile === 'string' && path.basename(r.outputFile) === `${attempt.sid}.jsonl`
@@ -229,5 +332,5 @@ export function settleSessionCommand(scope: GateScope, cmd: string, params: Reco
 /** Test seam. */
 export function resetEphemeralSessionGateForTests(ids: Iterable<string> | null = []): void {
   inherited = ids === null ? null : new Set(ids)
-  for (const m of [own, ownThreads, runtimeAdapter, runtimeGeneration, pending, fixtureDaemons]) m.clear()
+  for (const m of [own, mintedIds, ownThreads, runtimeAdapter, runtimeGeneration, pending, fixtureDaemons]) m.clear()
 }

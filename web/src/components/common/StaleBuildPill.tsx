@@ -17,6 +17,7 @@ import { applyUpdateStatus, useUpdateStatus } from '@/hooks/useUpdateStatus';
 import { useAppAutoUpdate } from '@/components/layout/useAppAutoUpdate';
 import { HowToUpdateDialog, type UpdateCommand } from './HowToUpdateDialog';
 import { displayVersion, howToUpdateCommands, readSeenVersion, serverPillView, updatedNotice, WORKING_SHORT, writeSeenVersion } from './server-update-pill';
+import { useSystemHealth } from '@/hooks/useSystemHealth';
 import { log } from '@/utils/log';
 
 /** "Walnut updated to X" goes by itself once this window has been looked at this long. */
@@ -55,7 +56,9 @@ export function StaleBuildPill() {
   const update = useUpdateStatus(true);
   useAppAutoUpdate(shell, update.status?.live, shellActions.run, openHome);
   // The server's own update, unless the Mac app shell owns updates here.
-  const server = shell?.enabled ? null : serverPillView(update.status);
+  // Not set up yet (or not known yet, so it never flashes in): the first screen is setup alone.
+  const { setupComplete } = useSystemHealth();
+  const server = shell?.enabled ? null : serverPillView(update.status, { firstRun: !setupComplete });
   const [serverError, setServerError] = useState<{ verb: 'update' | 'restart'; message: string } | null>(null);
   const [howTo, setHowTo] = useState<UpdateCommand[] | null>(null);
   // The version this tab last saw: a different one after a restart is announced once.

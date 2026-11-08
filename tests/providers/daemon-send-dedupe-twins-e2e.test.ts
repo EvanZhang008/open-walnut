@@ -96,6 +96,10 @@ const listen = () => process.stdin.on('data', (chunk) => {
         process.stdout.write(JSON.stringify({ type: 'command_lifecycle', command_uuid: msg.uuid, state }) + '\\n')
       }
     }
+    if (mode === '--fate-query-fixture' && msg.uuid) {
+      const state = String(msg.message.content)
+      process.stdout.write(JSON.stringify({ type: 'command_lifecycle', command_uuid: msg.uuid, state }) + '\\n')
+    }
     if (mode === '--start-then-die' && msg.uuid) {
       // Takes the line and dies before its turn ends (line-answer-v1); a line saying
       // "answer" gets one assistant message first.
@@ -256,6 +260,66 @@ afterEach(async () => {
 })
 
 describe.each(TWINS)('send-dedupe-v1: $name', (twin) => {
+  it('line.fate queries cancelled, pending, completed and unknown lines without writing stdin or the registry', async () => {
+    const dirs = makeDirs()
+    await boot(twin, dirs)
+    expect((await rpc({ cmd: 'hello' })).capabilities).toContain('line-fate-read-v1')
+    const cli = await start(dirs, 'fate-read', ['--fate-query-fixture'])
+    const rows = [
+      ['aaaaaaaa-0000-4000-8000-0000000000c1', 'cancelled'],
+      ['aaaaaaaa-0000-4000-8000-0000000000c2', 'started'],
+      ['aaaaaaaa-0000-4000-8000-0000000000c3', 'completed'],
+    ] as const
+    for (const [uuid, state] of rows) expect(body(await send('fate-read', state, uuid, [`qm-${state}`]))).toEqual({ ok: true })
+    expect(await waitFor(() => rows.every(([uuid, state]) => fs.readFileSync(cli.outputFile, 'utf8').includes(JSON.stringify({ type: 'command_lifecycle', command_uuid: uuid, state }))))).toBe(true)
+    const before = {
+      input: received(dirs),
+      stream: fs.readFileSync(cli.outputFile, 'utf8'),
+      writes: fs.readFileSync(`${cli.outputFile}.lines`, 'utf8'),
+      registry: fs.readFileSync(path.join(dirs.daemon, 'sessions.json'), 'utf8'),
+    }
+    const query = (uuid: string, messageIds: string[]) => rpc({ cmd: 'line.fate', sid: 'fate-read', uuid, messageIds })
+    for (let round = 0; round < 2; round++) {
+      expect(body(await query(rows[0][0], ['qm-cancelled']))).toEqual({ ok: true, fate: 'cancelled', state: 'cancelled' })
+      expect(body(await query(rows[1][0], ['qm-started']))).toEqual({ ok: true, fate: 'ran', state: 'started', answer: 'pending' })
+      expect(body(await query(rows[2][0], ['qm-completed']))).toEqual({ ok: true, fate: 'ran', state: 'completed' })
+      expect(body(await query('aaaaaaaa-0000-4000-8000-0000000000c4', ['qm-missing']))).toEqual({ ok: false, fate: 'unknown', reason: 'unknown' })
+      expect(body(await rpc({ cmd: 'line.fate', sid: 'not-here', uuid: rows[0][0], messageIds: [] }))).toEqual({ ok: false, fate: 'unknown', reason: 'not_found' })
+      expect(body(await rpc({ cmd: 'line.fate', sid: 'fate-read', uuid: rows[0][0], messageIds: Array(201).fill('qm-x') }))).toEqual({ ok: false, fate: 'unknown', reason: 'invalid_query' })
+    }
+    expect(received(dirs)).toEqual(before.input)
+    expect(fs.readFileSync(cli.outputFile, 'utf8')).toBe(before.stream)
+    expect(fs.readFileSync(`${cli.outputFile}.lines`, 'utf8')).toBe(before.writes)
+    expect(fs.readFileSync(path.join(dirs.daemon, 'sessions.json'), 'utf8')).toBe(before.registry)
+    expect((await rpc({ cmd: 'status', sid: 'fate-read' })).state).toBe('running')
+  }, 60_000)
+
+  it('line.fate reads a dead CLI and transcript fallback without starting another process', async () => {
+    const dirs = makeDirs()
+    await boot(twin, dirs)
+    const uuid = 'aaaaaaaa-0000-4000-8000-0000000000d1'
+    const cli = await start(dirs, 'fate-dead', ['--start-then-die'])
+    expect(body(await send('fate-dead', 'die quiet', uuid, ['qm-dead']))).toEqual({ ok: true })
+    // The stand-in CLI exits itself; no query issues a signal, even kill(pid, 0).
+    expect(await waitFor(() => {
+      const registry = JSON.parse(fs.readFileSync(path.join(dirs.daemon, 'sessions.json'), 'utf8'))
+      return !registry.sessions['fate-dead']
+    })).toBe(true)
+    const beforeInput = received(dirs)
+    const beforeRegistry = fs.readFileSync(path.join(dirs.daemon, 'sessions.json'), 'utf8')
+    const query = () => rpc({ cmd: 'line.fate', sid: 'fate-dead', uuid, messageIds: ['qm-dead'] })
+    expect(body(await query())).toEqual({ ok: true, fate: 'unanswered', state: 'started' })
+    fs.writeFileSync(cli.outputFile, '')
+    const project = path.join(dirs.home, '.claude', 'projects', 'p')
+    fs.mkdirSync(project, { recursive: true })
+    fs.writeFileSync(path.join(project, 'fate-dead.jsonl'), JSON.stringify({ type: 'user', uuid, message: { content: 'die quiet' } }) + '\n'
+      + JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'answer kept in transcript' }] } }) + '\n')
+    expect(body(await query())).toEqual({ ok: true, fate: 'ran', state: 'started', answer: 'yes' })
+    expect(received(dirs)).toEqual(beforeInput)
+    expect(fs.readFileSync(path.join(dirs.daemon, 'sessions.json'), 'utf8')).toBe(beforeRegistry)
+    expect((await rpc({ cmd: 'status', sid: 'fate-dead' })).state).toBe('dead')
+  }, 60_000)
+
   it('a resend into the process that has the whole line is not written again (M10)', async () => {
     const dirs = makeDirs()
     await boot(twin, dirs)

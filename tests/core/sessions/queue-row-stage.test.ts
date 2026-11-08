@@ -245,7 +245,7 @@ const INTERNAL_QUEUE_READS: Record<string, number> = {
   'core/user-status-sync.ts': 1,
   'core/org/retired-lead.ts': 1,
   'core/sessions/queue-after-turn.ts': 1,
-  'core/sessions/session-lifecycle.ts': 4,
+  'core/sessions/session-lifecycle.ts': 6, // Restart's held rows, before and after the respawn; the pending count
   'core/sessions/session-stop.ts': 1,
   'core/sessions/team-stop.ts': 1,
   'core/sessions/auto-recover-env.ts': 3,
@@ -256,9 +256,11 @@ const INTERNAL_QUEUE_READS: Record<string, number> = {
   'core/sessions/idle-compaction.ts': 1,
   'core/sessions/prompt-refresh-respawn.ts': 1, // a session with rows waiting is not respawned now
   'core/sessions/request-reached.ts': 1, // takenBackIds: rows the queue took back void their reached stamp
-  'providers/claude-code-session.ts': 9, // +1: the retry clock of a delivery that threw (retryAfterDeliveryThrow); +1: an ACP record that did not attach parks its pending rows (acp-native-guard.ts)
+  'core/sessions/agent-wait-resend.ts': 1, // parked rows waiting for the agent to run on their host, put back in line
+  'providers/claude-code-session.ts': 13, // +1: the retry clock of a delivery that threw (retryAfterDeliveryThrow); +1: an ACP record that did not attach parks its pending rows (acp-native-guard.ts); +4: held, owned and parked rows of a send, kept batch rows, redelivery
   'providers/acp-stranded-rows.ts': 1, // settles an ACP row left 'processing' with no delivery in flight
   'core/sessions/queued-change.ts': 1, // queueOf: was a refused Edit or Delete's row taken or gone
+  'core/sessions/prompt-refresh-respawn.ts': 1, // a prompt respawn goes only with no row waiting or in flight
   'core/sessions/lane-turn.ts': 2, // a joined message: which rows wait, and whether its own row was taken
 }
 const DISPLAY_QUEUE_READS: Record<string, number> = {
@@ -317,6 +319,10 @@ const DELIVERED_REPORTS: Record<string, string> = {
   drainAcpPrompt: 'gone: removeProcessed before the emit',
   steerAcpQueued: 'gone: removeProcessed before the emit',
 }
+/** Reporters outside the runner, each with the stage its rows read; each must take them out first. */
+const OTHER_DELIVERED_REPORTS: Record<string, string> = {
+  'core/sessions/agent-wait-resend.ts': 'gone: a line the daemon says already ran is settled with removeProcessed before the emit',
+}
 
 describe('class guard: every delivered report leaves its rows reading delivered in the queue', () => {
   it('each place that reports rows delivered is listed with the stage its rows read', () => {
@@ -350,7 +356,12 @@ describe('class guard: every delivered report leaves its rows reading delivered 
       }
     }
     walk(root)
-    expect(others).toEqual([])
+    expect(others.sort()).toEqual(Object.keys(OTHER_DELIVERED_REPORTS).sort())
+    for (const rel of others) {
+      const text = readFileSync(path.join(root, rel), 'utf8')
+      const at = text.search(/emit\(\s*(?:EventNames\.SESSION_MESSAGES_DELIVERED|'session:messages-delivered')/)
+      expect(text.slice(0, at), rel).toMatch(/await removeProcessed\(/)
+    }
   })
 })
 

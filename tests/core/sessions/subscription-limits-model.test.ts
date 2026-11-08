@@ -127,7 +127,7 @@ describe('applyRateLimitInfo', () => {
 
 describe('signInKind', () => {
   it('maps the readiness check\'s exact words (as claude-check-core writes them)', () => {
-    const check = createClaudeCheck({ env: {} })
+    const check = createClaudeCheck({ env: {}, platform: 'linux' })
     const detail = (json: object) => check.parseAuthStatus(JSON.stringify(json))?.detail
     expect(signInKind('ok', detail({ loggedIn: true, authMethod: 'claude.ai' }))).toBe('subscription')
     expect(signInKind('ok', detail({ loggedIn: true, authMethod: 'oauth_token' }))).toBe('subscription')

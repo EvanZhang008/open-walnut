@@ -19,7 +19,7 @@
  */
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import {
-  HOST_READY_HOLD_MS, autofixProgressText, autofixVerbFor, BLOCKING_READINESS_KINDS, hostReadySentence, isClaudeFixAction,
+  HOST_READY_HOLD_MS, autofixProgressText, autofixVerbFor, BLOCKING_READINESS_KINDS, hostReadySentence, hostReadinessConfirmed, isClaudeFixAction, readinessAnsweredThisConnection,
 } from '@open-walnut/host-problem';
 import type { HostStatus } from '@/api/hosts';
 import { useServerTick } from '@/hooks/useServerTick';
@@ -28,6 +28,8 @@ import { hostReadinessInfoNotes, hostReadinessProblems, type HostReadinessProble
 import { useFixNotes } from '@/hooks/useFixNotes';
 import { InlineCodeText } from '@/components/common/InlineCodeText';
 import { HostCommands } from '@/components/hosts/HostCommands';
+import { demoHostMessage, demoSignInCopy, DEMO_HOST_SIGN_IN_UNCONFIRMED } from '@/utils/demo-generation';
+import { SetupProgress } from '@/components/common/SetupProgress';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { ChevronGlyph } from '../settings-glyphs';
 import '@/styles/host-picker-settings.css';
@@ -45,15 +47,15 @@ function useReadyLine(status: HostStatus | undefined, label: string): string | n
   const blocking = hostReadinessProblems(status).some((p) => BLOCKING_READINESS_KINDS.includes(p.kind));
   const [ready, setReady] = useState<string | null>(null);
   const was = useRef(false);
-  const connected = !!status?.connected;
+  const confirmed = hostReadinessConfirmed(status);
   const version = status?.readiness?.claude?.version;
   // Layout, not passive: the problem line leaves in this commit, so the ready
   // line must arrive before the paint (never a frame with neither).
   useLayoutEffect(() => {
-    if (was.current && !blocking && connected) setReady(hostReadySentence(label, version));
-    if (blocking) setReady(null);
-    was.current = blocking;
-  }, [blocking, connected, label, version]);
+    if (was.current && confirmed) setReady(hostReadySentence(label, version));
+    if (!confirmed) setReady(null);
+    was.current = blocking || (was.current && !confirmed);
+  }, [blocking, confirmed, label, version]);
   useEffect(() => {
     if (!ready) return;
     const t = setTimeout(() => setReady(null), HOST_READY_HOLD_MS);
@@ -128,7 +130,7 @@ function ProblemLine({ problem, alias, label, installMethod, actions, withRechec
   if (serverRunning && problem.fix) {
     return (
       <div className="rh-readiness-line" data-tone="info">
-        <span className="rh-readiness" {...common} data-fix="running">{`${problem.fix.text} on ${label}...`}</span>
+        <span className="rh-readiness" {...common} data-fix="running"><SetupProgress label={`${problem.fix.text} on ${label}...`} /></span>
       </div>
     );
   }
@@ -136,7 +138,9 @@ function ProblemLine({ problem, alias, label, installMethod, actions, withRechec
   return (
     <div className="rh-readiness-line" data-tone="warn">
       <span className="rh-readiness" {...common} data-fix={failedFix ? 'failed' : undefined} title={failedFix?.detail}>
-        {failedFix ? `Update failed: ${failedFix.text}` : <InlineCodeText text={problem.message} />}
+        {failedFix && isClaudeFixAction(failedFix.action) ? `Update failed: ${failedFix.text}`
+          // gcc or dtach: what it costs first (terminals that survive a disconnect), then why Walnut could not do it.
+          : <InlineCodeText text={failedFix ? `${demoHostMessage(problem.message, problem.commands)} ${failedFix.text}.` : demoHostMessage(problem.message, problem.commands)} />}
       </span>
       <HostCommands commands={problem.commands} testId={`rh-readiness-commands-${problem.kind}`} />
       {withRecheck && <span className="rh-readiness-actions"><CheckAgainButton actions={actions} /></span>}
@@ -167,9 +171,13 @@ export function RemoteHostReadiness({ alias, label, status, actions, rowFixes = 
   const installMethod = status?.readiness?.claude?.installMethod;
   // A problem the row fixes carries its own Check again, folded with its command.
   const recheckAt = problems.findIndex((p) => p.fix?.state !== 'running' && !(rowFixes && BLOCKING_READINESS_KINDS.includes(p.kind) && autofixVerbFor(p, installMethod)));
-  const showLastChecked = typeof checkedAt === 'number' && (problems.length > 0 || actions.lastTriedAt !== null);
+  const checkError = status?.connected ? status.readiness?.checkError : undefined;
+  const unknownProbe = !!status?.connected && readinessAnsweredThisConnection(status) && status.readiness?.claude?.unknown;
+  const unknownSignIn = !!status?.connected && readinessAnsweredThisConnection(status)
+    && status.readiness?.claude?.found === true && status.readiness.claude.auth === 'unknown' && !problems.some(p => BLOCKING_READINESS_KINDS.includes(p.kind)) && !status.readiness?.fixing && !actions.fixing;
+  const showLastChecked = typeof checkedAt === 'number' && (problems.length > 0 || unknownSignIn || !!unknownProbe || !!checkError || actions.lastTriedAt !== null);
 
-  if (problems.length === 0 && info.length === 0 && fixNotes.length === 0 && !ready && !actions.receipt && actions.failed !== 'check') {
+  if (problems.length === 0 && info.length === 0 && fixNotes.length === 0 && !unknownSignIn && !unknownProbe && !checkError && !ready && !actions.receipt && actions.failed !== 'check') {
     return null;
   }
   return (
@@ -180,6 +188,19 @@ export function RemoteHostReadiness({ alias, label, status, actions, rowFixes = 
           actions={actions} withRecheck={idx === recheckAt} now={now} fixStartedAt={fixStartedAt} rowFixes={rowFixes}
         />
       ))}
+      {(unknownSignIn || unknownProbe || checkError) && (
+        <div className="rh-readiness-line" data-tone="info">
+          {unknownSignIn && <span className="rh-readiness" data-host={alias} data-problem="claude_auth_unknown">
+            {actions.pending === 'check' ? <SetupProgress label={`Checking Claude Code on ${label}...`} /> : demoSignInCopy() ? DEMO_HOST_SIGN_IN_UNCONFIRMED : `Walnut could not confirm the Claude Code sign-in on ${label}. If you have not signed in, run the command on that computer, then Check again.`}
+          </span>}
+          {unknownProbe && <span className="rh-readiness" data-host={alias} data-problem="claude_probe_unknown">
+            {actions.pending === 'check' ? <SetupProgress label={`Checking Claude Code on ${label}...`} /> : `Walnut could not check Claude Code on ${label}. ${unknownProbe} You can still open its files. Check again after its shell can answer.`}
+          </span>}
+          {checkError && <span className="rh-action-failed" role="alert">{checkError}</span>}
+          {unknownSignIn && <HostCommands commands={['claude auth login']} testId="rh-readiness-commands-claude_auth_unknown" />}
+          {problems.length === 0 && <span className="rh-readiness-actions"><CheckAgainButton actions={actions} /></span>}
+        </div>
+      )}
       {ready && !fixNotes.some((n) => n.kind === 'done') && (
         <div className="rh-readiness-line" data-tone="success">
           <span className="rh-readiness rh-readiness-ready" data-host={alias} role="status">{ready}</span>
@@ -196,7 +217,7 @@ export function RemoteHostReadiness({ alias, label, status, actions, rowFixes = 
       {/* What a finished fix did is the row's line (useLinkedHostRow); only one running here. */}
       {fixNotes.filter((note) => note.kind === 'running').map((note) => (
         <span key={note.key} className="rh-readiness-note" data-host={alias} data-fix={note.kind} title={note.detail}>
-          {`${note.text} on ${label}...`}
+          <SetupProgress label={`${note.text} on ${label}...`} />
         </span>
       ))}
     </div>

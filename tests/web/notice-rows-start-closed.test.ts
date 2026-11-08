@@ -52,7 +52,6 @@ const ROOTS = [
 const STARTS_OPEN: Record<string, string> = {
   'components/sessions/SessionMessage.tsx:collapsed:false': "a file edit's diff, inside its tool card, which starts closed",
   'components/sessions/SessionMessage.tsx:expanded:!isLarge': "a small diff shown whole, inside its tool card, which starts closed",
-  'components/sessions/SessionMessage.tsx:open:true': "the plan card: the session's plan, the agent's own content, not a notice",
   'components/sessions/SessionMessage.tsx:open:useSoleCall()': 'the one tool card inside a tool run the reader opened by a click',
   'components/sessions/BashToolCall.tsx:open:useSoleCall()': 'the one command card inside a tool run the reader opened by a click',
   'components/sessions/IdleCompactLine.tsx:open:!!inOpenedRun': 'true only inside a notice run the reader opened by a click; alone it starts closed',

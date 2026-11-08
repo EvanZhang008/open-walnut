@@ -33,6 +33,7 @@ import { walnutCoordinationAllowRules } from './claude-walnut-allow.js'
 import { unwritableSettingsFile } from './settings-file-access.js'
 import { registerSessionServerProbe } from '../core/sessions/session-server-state.js'
 import { frameStartData } from '../core/sessions/send-frame.js'
+import { assertDemoAdmission } from '../core/sessions/demo-admission.js'
 import { CostWatermark } from '../core/usage/cost-watermark.js'
 import { readUserSettingsEnv, slimChildSettingsArg } from './inline-subagent.js'
 import { isRouterAreaSession } from '../core/router/session-policy.js'
@@ -52,6 +53,7 @@ import {
   removeProcessed,
   revertToPending,
   parkMessages,
+  unparkAgentWaitRows,
   parkStalePending,
   loadQueue,
   getAllSessionsWithPending,
@@ -65,6 +67,22 @@ import {
 import type { QueuedMessage } from '../core/session-message-queue.js'
 import { RedeliveryGuard, REDELIVERY_LOOP_REASON } from '../core/sessions/redelivery-guard.js'
 import { settleStrandedAcpRows } from './acp-stranded-rows.js'
+import { cancelledRows, cancelledSessionIds, repairCancelledTaken } from '../core/session-queue-lines.js'
+
+interface CancellationScope {
+  uuid: string
+  rows: QueuedMessage[]
+  markers: Array<{ message: string; messageId: string }> | undefined
+  returned: Array<{ message: string; messageId: string }>
+  queuedRows?: QueuedMessage[]
+  registeredRows?: QueuedMessage[]
+  takeover?: 'started' | 'answered'
+  cancelledDelete?: boolean
+  preserveParked?: boolean
+  retainedParked?: boolean
+  /** The cancellation is confirmed, in memory (this process finished it) or durably (its backup on disk). */
+  confirmedCancelled?: boolean
+}
 import { offerStartDeath, setUnreadFirstLineProbe, startRecoveryOwns, withdrawStartDeath } from '../core/sessions/start-recovery.js'
 import { classifySessionError } from '../core/session-error-kind.js'
 import { lineUuidFor, noteTurnUserUuid, pickBatchUuid, rowsCarriedBy, turnUserUuid } from './batch-uuid.js'
@@ -72,7 +90,7 @@ import {
   announceReclaimed, answeredLines, awaitAnswer, awaitLine, orderAnswer, awaitedLines, dropLine, forgetLineState, hasAnsweringLines, heldRows, isLineAwaited, lineRows, markUnconfirmed, noteHeld, noteLineState, noteResumeLine, onLinesReclaimed, releaseHeld, PROMPT_HOLD_REASON,
   takeAnswering, takeLine, takeUntold, unansweredLines, untakenLines, type LineState, type ReclaimReason, type UntakenLine,
 } from './line-consumption.js'
-import { lineAnswerFrame } from './line-fate-core.js'
+import { lineAnswerFrame, type LineFate } from './line-fate-core.js'
 import { registerEchoClaims, revokeEchoClaims } from '../core/echo-claims.js'
 import { matchesRetryExhaustion } from '../core/session-auto-continue.js'
 import { DaemonFileReader } from '../core/daemon-file-reader.js'
@@ -81,7 +99,7 @@ import { readAttachEvidence, ON_DEMAND_ATTACH_EVIDENCE_MS, EVIDENCE_TIMEOUT, typ
 // local images via daemon and rewrites paths inside start() and writeMessage().
 import type { SshTarget } from './session-io.js'
 import { linkTarget } from '../core/hosts/link.js'
-import { createSessionManager, registerSessionManager, unregisterSessionManager } from './session-manager.js'
+import { createSessionManager, getRegisteredSessionManager, registerSessionManager, unregisterSessionManager } from './session-manager.js'
 import type { SessionManager } from './session-manager.js'
 import type { DaemonTaskState } from './daemon-connection.js'
 import { checkCwdExists, CwdMissingError } from './cwd-check.js'
@@ -92,7 +110,7 @@ import { isWalnutOwnToolUse } from './acp-permission-posture.js'
 import { isWakeupArmed } from './daemon-fold.js'
 import { outlivingOf, type OutlivingSource } from '../core/sessions/outliving-work.js'
 import { noteSuppressedErrorReason } from '../core/session-snapshot-gate.js'
-import { BudgetCheckingError, BudgetPausedError, classifyDeliveryFailure, isDaemonCommandOutcomeUnknown, isHostLinkFailure, isPermanentDeliveryFailure, isSlowHostFailure, SendHeldError, SendOutcomeUnknownError, SessionHeldElsewhereError } from './delivery-failure.js'
+import { BudgetCheckingError, BudgetPausedError, ClaudeRuntimeMissingError, classifyDeliveryFailure, isDaemonCommandOutcomeUnknown, isHostLinkFailure, isPermanentDeliveryFailure, isSlowHostFailure, SendHeldError, SendOutcomeUnknownError, SessionHeldElsewhereError } from './delivery-failure.js'
 import { describeClaudeLaunchFailure } from './host-runtime-core.js'
 import { hostLinkReason, isHostWaitReason, slowHostReason } from './host-wait-words.js'
 import { AcpSession, sessionMcpServerToAcp, splitAcpModelId } from './acp-session.js'
@@ -676,10 +694,40 @@ function reportDelivered(sessionId: string, rowIds: string[], turnGen: number | 
   return fresh
 }
 
-/** Tell the user these rows were not delivered (SESSION_BATCH_FAILED): a later proof reports them delivered again. */
-function reportBatchFailed(sessionId: string, rowIds: string[], error: string): void {
+/**
+ * Tell the user these rows were not delivered (SESSION_BATCH_FAILED): a later proof reports them
+ * delivered again. `parked`: the rows were parked (Retry / Discard), `waitsFor` the agent's
+ * readiness kind they wait on (sent by themselves once it can run): the panel offers the fix in place.
+ */
+function reportBatchFailed(sessionId: string, rowIds: string[], error: string, parked?: { waitsFor?: string }): void {
   markUnconfirmed(sessionId, rowIds)
-  bus.emit(EventNames.SESSION_BATCH_FAILED, { sessionId, messageIds: rowIds, error }, ['main-ai'], { source: 'session-runner' })
+  bus.emit(EventNames.SESSION_BATCH_FAILED, {
+    sessionId, messageIds: rowIds, error,
+    ...(parked ? { parked: true, ...(parked.waitsFor ? { waitsFor: parked.waitsFor } : {}) } : {}),
+  }, ['main-ai'], { source: 'session-runner' })
+}
+
+/**
+ * A fresh start the host refused before anything ran (Claude Code not installed): the
+ * line it carried becomes a parked row under the launch bubble's id, so the panel's
+ * bubble is that row (failed, with Retry) and a reload shows it again. The row id, or
+ * null when it could not be stored (the error is then said as before).
+ */
+async function parkUnstartedFirstLine(sessionId: string, line: { text: string; uuid?: string }, reason: string, waitsFor: string): Promise<string | null> {
+  try {
+    const { enqueueMessage } = await import('../core/session-message-queue.js')
+    const { launchPromptId, forgetLaunchPrompt } = await import('../core/sessions/launch-prompts.js')
+    // waitsFor: Walnut sends it by itself once the agent can run (core/sessions/agent-wait-resend.ts).
+    const row = await enqueueMessage(sessionId, line.text, {
+      id: launchPromptId(sessionId), heldReason: reason, waitsFor,
+      ...(line.uuid ? { userUuid: line.uuid, lineUuid: line.uuid } : {}),
+    })
+    forgetLaunchPrompt(sessionId)
+    return row.id
+  } catch (err) {
+    log.session.warn('start refused: keeping the first line failed', { sessionId, error: err instanceof Error ? err.message : String(err) })
+    return null
+  }
 }
 
 /**
@@ -899,6 +947,18 @@ export class ClaudeCodeSession {
    *  until the CLI starts them. Ones a Stop drops go back to the composer. */
   private _queuedLines = new Map<string, Array<{ message: string; messageId: string }>>()
   private _cancelledLines: Array<{ message: string; messageId: string }> = []
+  /** A lifecycle frame and its Stop receipt can cancel the same row before its disk write finishes. */
+  private _cancelReturnsInFlight = new Map<string, Promise<boolean>>()
+  private _cancelRetryPromise: Promise<boolean> | null = null
+  private _activeCancellations = new Set<CancellationScope>()
+  /** Durable terminal evidence is not a failed in-process cancellation and never blocks a new turn. */
+  private _loadedCancellations = new Map<string, CancellationScope>()
+  /** References to only registrations confirmed cancelled by the CLI/daemon or a hard Stop. */
+  private _pendingCancellations = new Map<string, CancellationScope>()
+  private _tentativeStop: {
+    pid: number | null; scopes: Map<string, CancellationScope>
+    death?: { why: 'exit' | 'death' | 'crash' | 'teardown'; announce: boolean }
+  } | null = null
 
   // ── Lines the CLI never names (send-lost-line-v1, see checkLineAck) ──
   /** How long a line written into a CLI that reports its queue may go unnamed before Walnut asks the CLI. */
@@ -2749,6 +2809,7 @@ export class ClaudeCodeSession {
       stopFence?: string | null
     },
   ): void {
+    if (this._pendingCancellations.size > 0 || this._tentativeStop) throw new Error('Queued message cancellation is not saved yet. Retry before starting another turn')
     const args = ['-p', '--output-format', 'stream-json', '--verbose']
 
     // Token-level streaming: emit Anthropic SSE stream_event records so assistant
@@ -3108,6 +3169,7 @@ export class ClaudeCodeSession {
     this._startDeathOffered = false
     this._startDeathAsked = false
     this._quietDeathError = null
+    this._clearStartRefusedAtInit = false
     this._spawnLineRow = null
     // A queue delivery's rows are its own record (_resumeLineHold); a fork or a spilled
     // prompt is not a line a plain resend could repeat.
@@ -3164,6 +3226,11 @@ export class ClaudeCodeSession {
             return null
           })
         : null
+      // Only a plain resume owns the old sid's cancellation backup: a fork keeps its own new id and reads none.
+      if (isResume && resumeSessionId) {
+        this.claudeSessionId = resumeSessionId
+        if (!(await this.recoverCancelledRows())) throw new Error('Cancelled message recovery could not be saved. Retry before starting another turn')
+      }
       const { sessionStops } = await import('../core/sessions/session-stop.js')
       const stopFence = opts?.stopFence !== undefined ? opts.stopFence : await sessionStops.fence(tmpId)
       stepDone('fenceMs')
@@ -3219,8 +3286,15 @@ export class ClaudeCodeSession {
       if (isResume && message) {
         const hostReader = new DaemonFileReader(host ?? '__local__')
         const found = await hostReader.probeSessionPath(resumeSessionId!, resolvedCwd, 10_000)
+        // Its first start was refused before any CLI ran (keepRefusedSession): that record is
+        // the proof of absence a probe cannot always give (a fresh home has no transcripts
+        // root at all, so the probe answers "unknown"). A transcript found, or a stream that
+        // answered, still keeps the resume.
+        const { getSessionByClaudeId: refusedRecord } = await import('../core/session-tracker.js')
+        const neverRan = typeof found !== 'string'
+          && !!(await refusedRecord(resumeSessionId!).catch(() => null))?.startRefused
         let ran: boolean | undefined
-        if (found === null) {
+        if (found === null || neverRan) {
           const { daemonStreamPathCandidates } = await import('../core/session-reconcile.js')
           // A local session's stream may also sit in the pre-daemon streams dir (as
           // session-liveness.ts reads it).
@@ -3228,12 +3302,13 @@ export class ClaudeCodeSession {
           if (!host || host === '__local__') streams.push(path.join(SESSION_STREAMS_DIR, `${resumeSessionId}.jsonl`))
           ran = await hostReader.streamHeldConversation(streams, 10_000)
         }
-        if (found === null && ran !== false) {
+        if (found === null && ran !== false && !neverRan) {
           log.session.info('resume: no transcript found, but the session may have run here; keeping --resume', {
             taskId: this.taskId, sessionId: resumeSessionId, host: host ?? '__local__', streamHeldConversation: ran ?? 'unknown',
           })
         }
-        if (found === null && ran === false) {
+        if ((found === null && ran === false) || (neverRan && ran !== true)) {
+          this._clearStartRefusedAtInit = true
           const at = args.indexOf('--resume')
           if (at !== -1) args.splice(at, 2, '--session-id', resumeSessionId!)
           const cut = args.indexOf('--resume-session-at')
@@ -3490,7 +3565,10 @@ export class ClaudeCodeSession {
       // and its asker already see the recovery. An unknown outcome is the daemon
       // reconnect's to settle (the start may still run), a queue delivery's batch is
       // its own (settleResumeFailure).
-      const startRecovering = this.offerFailedStart(err, !onSpawnSettled && !folderGone)
+      // Claude Code cannot run on the host yet (not installed): nothing was spawned, and
+      // nothing restart recovery could fix. The user's install step is the way on.
+      const runtimeMissing = err instanceof ClaudeRuntimeMissingError
+      const startRecovering = this.offerFailedStart(err, !onSpawnSettled && !folderGone && !runtimeMissing)
       // Never written for a start that did not reach its host: the record needs what the
       // next start of this session reads from it (model, prompt, profile).
       if (startRecovering && this.claudeSessionId) {
@@ -3498,7 +3576,9 @@ export class ClaudeCodeSession {
           sessionId: this.claudeSessionId, error: recErr instanceof Error ? recErr.message : String(recErr),
         }))
       }
-      const quiet = (folderGone && !!onSpawnSettled) || startRecovering
+      // A missing Claude Code is a setup step, not a Walnut fault: the session's own row and
+      // the setup banner say it (no "Couldn't start a session" card on top).
+      const quiet = (folderGone && !!onSpawnSettled) || startRecovering || runtimeMissing
       log.session[quiet ? 'warn' : 'error']('transport start failed', {
         taskId: this.taskId, host: host ?? 'local', cwd, isRemote: !!sshTarget,
         error: err instanceof Error ? err.message : String(err),
@@ -3551,17 +3631,39 @@ export class ClaudeCodeSession {
               : undefined,
           )
           // No errorKind here: without a settle callback this is a NEW-session
-          // start whose message is not in the disk queue (not 'delivery_failed').
+          // start whose message is not in the disk queue (not 'delivery_failed'),
+          // except a first line parked for a Retry below, which is in the queue.
           // (The second SESSION_ERROR was what fed the session-runner's own handler
           // and re-triggered processNext — the infinite redeliver loop of 2026-06-10,
           // 104 cycles/min against a dead SSH host.)
           if (folderGone) void noteFolderGoneOnce(this.claudeSessionId, resolvedCwd, host ?? null)
-          bus.emit(EventNames.SESSION_ERROR, {
+          const startError = {
             sessionId: this.claudeSessionId,
             taskId: this.taskId,
             error: err instanceof Error ? err.message : String(err),
             ...(startRecovering ? { startRecovery: true } : {}),
-          }, ['main-ai', 'session-runner'], { source: 'session-runner' })
+          }
+          // The words the start carried wait in the session's queue, parked with the reason,
+          // so Retry (once Claude Code is installed) sends them instead of the user typing
+          // them again: the launch bubble itself turns into that row (same id).
+          const parkSid = runtimeMissing ? this.claudeSessionId : null
+          const parkLine = parkSid ? this._spawnFirstLine : null
+          if (parkSid && parkLine) {
+            this._spawnFirstLine = null
+            const refused = err as ClaudeRuntimeMissingError
+            const reason = refused.waitingReason
+            void parkUnstartedFirstLine(parkSid, parkLine, reason, refused.errorKind).then(async (rowId) => {
+              // The line waits for the agent (or a Retry): the session stays the task's (record and
+              // link), and its error is a delivery failure, never a turn's outcome, so the runner
+              // neither writes the record `error` nor treats the session as ended (should-fix 8).
+              if (rowId) await this.keepRefusedSession(parkSid, resolvedCwd, reason, refused.errorKind)
+              if (rowId) reportBatchFailed(parkSid, [rowId], reason, { waitsFor: refused.errorKind })
+              bus.emit(EventNames.SESSION_ERROR, { ...startError, ...(rowId ? { errorKind: 'delivery_failed' as const, parked: true, saidOnMessage: true } : {}) },
+                ['main-ai', 'session-runner'], { source: 'session-runner' })
+            })
+          } else {
+            bus.emit(EventNames.SESSION_ERROR, startError, ['main-ai', 'session-runner'], { source: 'session-runner' })
+          }
         } else if ((err instanceof SessionHeldElsewhereError || folderGone) && this._transport === transport) {
           // The host refused the spawn: another process runs this session there, or
           // its folder is gone (the panel then offers to continue in a new folder,
@@ -3617,6 +3719,16 @@ export class ClaudeCodeSession {
     if (!preassignedId) {
       this.startStallDiagTimer('resume-spawn')
     }
+  }
+
+  /** A wrapper named for an old sid that a cold resume will send through; it reads, attaches and spawns nothing. */
+  static forResume(record: SessionRecord, cliCommand?: string, testDaemonUrl?: string): ClaudeCodeSession {
+    const session = new ClaudeCodeSession(record.taskId, record.project, cliCommand)
+    session._testDaemonUrl = testDaemonUrl
+    session.claudeSessionId = record.claudeSessionId
+    session._host = record.host ?? null
+    session._cwd = record.cwd ?? null
+    return session
   }
 
   /**
@@ -3706,6 +3818,7 @@ export class ClaudeCodeSession {
     // already initialized), so a later death must not be reported as an init failure.
     session._sessionReadySettled = true
     session.claudeSessionId = record.claudeSessionId
+    await session.recoverCancelledRows(false)
     session.pid = record.pid ?? null
     session._outputFile = record.outputFile ?? null
     session._cwd = record.cwd ?? null
@@ -4159,6 +4272,7 @@ export class ClaudeCodeSession {
             if (!session.holdDeathForWrite(attachedTransport, judge)) judge()
           },
         })
+        if (attachResult.alive && session.hasPipe) await session.recoverCancelledRows()
         // Recover pending permission from daemon attach response.
         // The daemon tracks control_request state and returns it on attach.
         // Single slot: the `claude -p` protocol has at most one outstanding
@@ -4384,6 +4498,7 @@ export class ClaudeCodeSession {
     onHeld?: () => void
     /** True once the user stopped the session: stop asking about this line. */
     isStopped?: () => boolean
+    onStoppedBeforeWrite?: () => void
     /**
      * Written behind a cut copy of it, or into a process that holds one (cutLineHold):
      * not a delivery yet. The rows are kept for this process; the caller does not tell
@@ -4395,6 +4510,8 @@ export class ClaudeCodeSession {
     if (!this._transport) return false
     const { sessionStops } = await import('../core/sessions/session-stop.js')
     const stopFence = opts?.stopFence !== undefined ? opts.stopFence : await sessionStops.fence(this.claudeSessionId!)
+    // A Stop that came while this write awaited: nothing is written, and the caller settles the line.
+    if (opts?.isStopped?.()) { opts.onStoppedBeforeWrite?.(); return false }
     // Open the turn first: the CLI may emit its result before the send ack returns.
     //
     // A MID-TURN injection (injectMidTurn → writeMessage while _processStatus is
@@ -4680,7 +4797,7 @@ export class ClaudeCodeSession {
     if (known) {
       // The daemon wrote nothing: it told us what became of the line.
       log.session.info('line not written again: the daemon knows its fate', { sessionId: this.claudeSessionId, uuid, ...known, messageIds: rows.map((r) => r.id) })
-      if (known.fate !== 'waiting') { undoDispatch?.(); if (queuedBehindTurn) this._queuedLines.delete(uuid!) }
+      if (known.fate !== 'waiting') { undoDispatch?.(); if (queuedBehindTurn && known.fate !== 'cancelled') this._queuedLines.delete(uuid!) }
       // A line that waits in a process holding a cut copy waits behind that copy (r5 gate N2).
       if (known.fate === 'waiting' && behindCut && !cut.held()) cut.hold('behind')
       if (known.fate === 'waiting' && waited && !cut.held()) cut.awaitWord()
@@ -4813,12 +4930,13 @@ export class ClaudeCodeSession {
   get stopEpoch(): number { return this._stopEpoch }
   private _stopEpoch = 0
 
-  interrupt(): Promise<void> {
+  interrupt(afterSpawn = false): Promise<void> {
     if (this._interruptPromise) return this._interruptPromise
     this._stopEpoch++
-    const pending = this.interruptTurnInPlace().then(async (keptAlive) => {
-      if (!keptAlive) await this.hardInterrupt()
-    }).finally(() => {
+    const pending = (async () => {
+      if (afterSpawn) await this.awaitSpawn()
+      if (!(await this.interruptTurnInPlace())) await this.hardInterrupt()
+    })().finally(() => {
       this._interruptRequested = false
       this._interruptSettle = undefined
       this._interruptPromise = undefined
@@ -4854,7 +4972,7 @@ export class ClaudeCodeSession {
       })
       return false
     }
-    if (Array.isArray(receipt?.cancelled)) this.returnCancelledLines(receipt.cancelled)
+    if (Array.isArray(receipt?.cancelled) && !(await this.returnCancelledLines(receipt.cancelled))) return false
     // A CLI before interrupt_receipt_v1 answers with no still_queued at all: whatever
     // Walnut queued behind the turn may then run after the Stop, so count it as surviving.
     const survivors = Array.isArray(receipt?.still_queued) ? receipt.still_queued : [...this._queuedLines.keys()]
@@ -4924,6 +5042,14 @@ export class ClaudeCodeSession {
       // The process's first init: its first line's answer is any answer read after it.
       if (!this._initSeenThisProcess) this._initAnswerCount = this._answerCount
       this._initSeenThisProcess = true
+      // A CLI runs this session now: its next resume is a real one (SessionRecord.startRefused).
+      if (this._clearStartRefusedAtInit) {
+        this._clearStartRefusedAtInit = false
+        const sid = this.claudeSessionId
+        if (sid) void import('../core/session-tracker.js')
+          .then(({ updateSessionRecord }) => updateSessionRecord(sid, { startRefused: undefined }))
+          .catch((err) => log.session.warn('clearing the refused-start mark failed', { sessionId: sid, error: err instanceof Error ? err.message : String(err) }))
+      }
       // Its exit overtook this init: it read its first line, which must not go out again.
       this.withdrawStartDeathOffer()
       // Read, not answered: a CLI that names its lines is held to its answer (line-answer-v1).
@@ -4959,18 +5085,38 @@ export class ClaudeCodeSession {
   }
 
   /** Queue rows whose line the CLI took, or whose line is gone with a Stop, leave the queue. */
-  private releaseLineRows(rows: QueuedMessage[], why: string): void {
+  private releaseLineRows(rows: QueuedMessage[], why: string): Promise<boolean> {
     const sid = this.claudeSessionId
-    if (!sid || rows.length === 0) return
+    if (!sid) return Promise.resolve(false)
+    if (rows.length === 0) return Promise.resolve(true)
     const ids = rows.map((r) => r.id)
+    if (why !== 'cancelled' && why !== 'stopped') {
+      const deferred = new Set<string>()
+      for (const scope of this.cancellationScopes()) {
+        const captured = scope.queuedRows ?? scope.rows
+        const matching = rows.filter((r) => captured.some((c) => c.id === r.id && c.lineUuid === r.lineUuid))
+        if (!matching.length) continue
+        scope.takeover = 'answered'
+        if (this._loadedCancellations.get(scope.uuid) === scope) this._pendingCancellations.set(scope.uuid, scope)
+        for (const row of matching) deferred.add(row.id)
+      }
+      if (deferred.size) {
+        reportDelivered(sid, ids, this.turnGen)
+        this.settleIdleCancellationTakeovers()
+        const remaining = rows.filter((r) => !deferred.has(r.id))
+        return remaining.length ? this.releaseLineRows(remaining, why) : Promise.resolve(true)
+      }
+    }
     log.session.info('queued line settled by the CLI, rows leave the queue', { sessionId: sid, why, messageIds: ids })
-    removeTaken(sid, ids, { ran: why !== 'cancelled' && why !== 'stopped' }).catch((err) => {
+    const removed = removeTaken(sid, ids, { ran: why !== 'cancelled' && why !== 'stopped', rows }).then(() => true, (err) => {
       log.session.warn('removing taken queue rows failed', { sessionId: sid, error: err instanceof Error ? err.message : String(err) })
+      return false
     })
     // The CLI's word is a proof of delivery: rows not reported yet (a write behind a
     // cut copy, a word that came before the write's answer, rows the user was told
     // were unconfirmed) are reported now, the rest stay quiet (r6 gate L1, L2).
     if (why !== 'cancelled' && why !== 'stopped') reportDelivered(sid, ids, this.turnGen)
+    return removed
   }
 
   // ── Taken is not answered (line-answer-v1) ──
@@ -5149,19 +5295,27 @@ export class ClaudeCodeSession {
       if (untracked) this.removeWrittenRows(rows)
       return
     }
+    if (known.fate === 'cancelled') {
+      const registered = lineRows(sid, uuid)
+      const returned = markers.length ? markers : rows.map((r) => ({ message: r.message, messageId: r.id }))
+      // A cold resume can learn cancellation before any line registration exists.
+      if (uuid && !this._queuedLines.has(uuid)) this._queuedLines.set(uuid, returned)
+      const queued = this._queuedLines.get(uuid)
+      const cancelled = this.cancellationScope(uuid, registered, queued, returned)
+      void this.returnCancelledRows(cancelled.queuedRows ?? (cancelled.rows.length ? cancelled.rows : rows), cancelled.returned, 'cancelled', () => this.clearCancelledLine(uuid, cancelled.rows, cancelled.markers), cancelled).then((removed) => {
+        if (removed && this._pendingCancellations.get(uuid) === cancelled) this._pendingCancellations.delete(uuid)
+      })
+      return
+    }
     if (uuid) takeLine(sid, uuid)
     if (known.fate === 'ran') {
+      this.noteCancellationTaken(uuid, known.state !== 'started' || known.answer === 'yes')
       // A line the CLI took is answered once it says completed or the daemon read its
       // answer; one it only started waits for that answer (line-answer-v1).
       this.settleTakenLine(uuid, rows, known.state ?? 'ran', known.state !== 'started' || known.answer === 'yes')
       return
     }
     if (known.fate === 'unanswered') { this.resendUnanswered(uuid, rows, known.state); return }
-    if (known.fate === 'cancelled') {
-      this.releaseLineRows(rows, 'cancelled')
-      this.returnToComposer(markers.length ? markers : rows.map((r) => ({ message: r.message, messageId: r.id })))
-      return
-    }
     this.parkLineRows(rows, `Claude Code dropped this message without running it (${known.state ?? 'dropped'})`, true)
   }
 
@@ -5327,6 +5481,8 @@ export class ClaudeCodeSession {
   private _startDeathOffered = false
   /** Start recovery was asked about this process's death (once per process, taken or not). */
   private _startDeathAsked = false
+  /** This spawn starts a session whose first start was refused (SessionRecord.startRefused): its init clears that mark. */
+  private _clearStartRefusedAtInit = false
   /** Each offer's number, and the last one withdrawn (a late hold of a withdrawn offer settles nothing). */
   private _offerSeq = 0
   private _withdrawnOffer = 0
@@ -5571,6 +5727,10 @@ export class ClaudeCodeSession {
     this.parkUnreadResumeLine(RESUME_LINE_SETTLE_MS)
     const sid = this.claudeSessionId
     if (!sid) return
+    if (this._tentativeStop && this._tentativeStop.pid === this.pid) {
+      this._tentativeStop.death = { why, announce }
+      return
+    }
     this.handBackLines(sid, untakenLines(sid, this.pid), why, announce)
     // Lines it took and never answered: the daemon judges them on their resend.
     this.handBackAnsweringLines(sid, unansweredLines(sid, this.pid), why, announce)
@@ -5893,15 +6053,287 @@ export class ClaudeCodeSession {
 
   /** Queued lines the CLI dropped go back to the composer, like Esc in Claude Code.
    *  One event per burst: a Stop's cancellations arrive as several frames at once. */
-  private returnCancelledLines(uuids: unknown[]): void {
-    for (const uuid of uuids) {
-      // The CLI dropped the line: its queue rows go too, never to be redelivered.
-      if (typeof uuid === 'string') this.releaseLineRows(takeLine(this.claudeSessionId, uuid), 'cancelled')
-      const markers = typeof uuid === 'string' ? this._queuedLines.get(uuid) : undefined
-      if (!markers) continue
-      this._queuedLines.delete(uuid as string)
-      this.returnToComposer(markers)
+  private async returnCancelledLines(uuids: unknown[]): Promise<boolean> {
+    const results = await Promise.all(uuids.map((uuid) => {
+      if (typeof uuid !== 'string') return true
+      const rows = lineRows(this.claudeSessionId, uuid)
+      const markers = this._queuedLines.get(uuid)
+      const cancelled = this.cancellationScope(uuid, rows, markers, markers ?? rows.map((r) => ({ message: r.message, messageId: r.id })))
+      return this.returnCancelledRows(cancelled.queuedRows ?? cancelled.rows, cancelled.returned, 'cancelled', () => this.clearCancelledLine(uuid, cancelled.rows, cancelled.markers), cancelled).then((removed) => {
+        if (removed && this._pendingCancellations.get(uuid) === cancelled) this._pendingCancellations.delete(uuid)
+        return removed
+      })
+    }))
+    return results.every(Boolean)
+  }
+
+  /** A Stop came before this batch was written: its exact rows leave durably and go back to the composer once. */
+  async cancelUnwrittenBatch(rows: QueuedMessage[]): Promise<boolean> {
+    const uuid = rows[0]?.lineUuid
+    if (!uuid || !this.claudeSessionId) return false
+    const markers = rows.map((r) => ({ message: r.message, messageId: r.id }))
+    // Registered as a cancellation learned before any line (settleLineFate): only this marker list is cleared.
+    this._queuedLines.set(uuid, markers)
+    const scope = this.cancellationScope(uuid, rows, markers, markers)
+    scope.preserveParked = true
+    scope.registeredRows = []
+    const removed = await this.returnCancelledRows(rows, markers, 'stopped', () => this.clearCancelledLine(uuid, scope.registeredRows!, markers), scope)
+    if (removed && this._pendingCancellations.get(uuid) === scope) this._pendingCancellations.delete(uuid)
+    return removed
+  }
+
+  /** Load terminal evidence without requeueing it or spawning a session. */
+  async recoverCancelledRows(query = true, requireKnown = false): Promise<boolean> {
+    const sid = this.claudeSessionId
+    if (!sid) return true
+    const saved = await cancelledRows(sid)
+    for (const row of saved) {
+      if (!row.lineUuid || this._pendingCancellations.has(row.lineUuid)) continue
+      const scope = this._loadedCancellations.get(row.lineUuid) ?? { uuid: row.lineUuid, rows: [], markers: undefined, returned: [], queuedRows: [], cancelledDelete: true }
+      if (!scope.rows.some((r) => r.id === row.id)) {
+        scope.rows.push(row)
+        scope.queuedRows!.push(row)
+      }
+      // removeTaken writes the backup with the removal itself: it is the confirmation.
+      scope.confirmedCancelled = true
+      this._loadedCancellations.set(row.lineUuid, scope)
     }
+    const read = query ? await this.cancellationFateReader() : undefined
+    if (!read) return !requireKnown || [...this._loadedCancellations.values()].every((scope) => (scope.confirmedCancelled || scope.retainedParked) && !scope.takeover)
+    let repaired = true
+    for (const [uuid, scope] of [...this._loadedCancellations]) {
+      const { known, judges } = await read(uuid, (scope.queuedRows ?? scope.rows).map((r) => r.id))
+      // The live stream may have settled this exact owner while the query waited.
+      if (this._loadedCancellations.get(uuid) !== scope) continue
+      if (this.restoringCancellation(scope)) { repaired = false; continue }
+      // A dead holder took it and never answered: a takeover or a cancellation in flight comes first.
+      if (known?.fate === 'unanswered' && !scope.takeover && !this._pendingCancellations.has(uuid)
+        && !(scope.queuedRows ?? scope.rows).some((r) => this._cancelReturnsInFlight.has(r.id))) {
+        if (!(await this.restoreUnansweredCancellation(uuid, scope))) repaired = false
+        continue
+      }
+      if (known?.fate !== 'ran') {
+        if (requireKnown && known?.fate !== 'cancelled' && known?.fate !== 'dropped' && !((scope.confirmedCancelled || scope.retainedParked) && !scope.takeover)) repaired = false
+        continue
+      }
+      const answered = known.state !== 'started' || known.answer === 'yes' || (known.answer === undefined && !judges)
+      // A malformed started word, or a pending answer with no bound transport to hold it for: the backup stays.
+      if (!answered && (known.answer !== 'pending' || !this.transportBound)) { repaired = false; continue }
+      if (answered || scope.takeover !== 'answered') scope.takeover = answered ? 'answered' : 'started'
+      this._pendingCancellations.set(uuid, scope)
+      if (!(await this.finishPendingCancellations())) repaired = false
+    }
+    return repaired
+  }
+
+  /** A bound transport has its own process's word; else the connected pool for this host's daemon, never dialing. */
+  private async cancellationFateReader(): Promise<((uuid: string, ids: string[]) => Promise<{ known: LineFate | null; judges: boolean }>) | undefined> {
+    const transport = this._transport
+    if (transport && transport.bound !== false) {
+      const read = transport.readLineFate
+      return read ? async (uuid, ids) => ({ known: await read.call(transport, uuid, ids).catch(() => null), judges: transport.judgesAnswers === true }) : undefined
+    }
+    const sid = this.claudeSessionId
+    if (!sid) return undefined
+    const { getConnectedDaemonConnection, readDaemonLineFate } = await import('./daemon-connection.js')
+    const conn = getConnectedDaemonConnection(this._host ?? '__local__')
+    // Without line-answer-v1 a daemon counts a taken line as delivered (daemon-capabilities.ts).
+    return async (uuid, ids) => ({ known: await readDaemonLineFate(conn, sid, uuid, ids), judges: conn?.hasCapability('line-answer-v1') === true })
+  }
+
+  /** A transport bound to this session's process (a fresh one is unbound until it starts or attaches). */
+  get transportBound(): boolean { return !!this._transport && this._transport.bound !== false }
+
+  /** Active with nothing claimed: an unanswered restore holds it (a return claims its ids, and is joined instead). */
+  private restoringCancellation(scope: CancellationScope): boolean {
+    return this._activeCancellations.has(scope)
+      && ![...(scope.queuedRows ?? scope.rows).map((r) => r.id), ...scope.returned.map((m) => m.messageId)].some((id) => this._cancelReturnsInFlight.has(id))
+  }
+
+  /** Backup to pending under its own uuid in one write; a takeover seen meanwhile outranks it. */
+  private async restoreUnansweredCancellation(uuid: string, scope: CancellationScope): Promise<boolean> {
+    const sid = this.claudeSessionId
+    if (!sid) return false
+    this._activeCancellations.add(scope)
+    let restored = false
+    try {
+      await repairCancelledTaken(sid, scope.queuedRows ?? scope.rows, false, true, { pending: true })
+      if (scope.takeover) await this.repairCancellationTakeover(scope)
+      restored = true
+    } catch (err) {
+      log.session.warn('restoring an unanswered cancelled line failed', { sessionId: sid, uuid, error: String(err) })
+    } finally {
+      this._activeCancellations.delete(scope)
+    }
+    if (!restored) { this.settleIdleCancellationTakeovers(); return false }
+    if (scope.takeover === 'started') return this._pendingCancellations.get(uuid) === scope ? this.finishPendingCancellations() : true
+    if (this._pendingCancellations.get(uuid) === scope) this._pendingCancellations.delete(uuid)
+    if (this._loadedCancellations.get(uuid) === scope) this._loadedCancellations.delete(uuid)
+    this.settleIdleCancellationTakeovers()
+    return true
+  }
+
+  private cancellationScope(uuid: string, rows: QueuedMessage[], markers: CancellationScope['markers'], returned: CancellationScope['returned']): CancellationScope {
+    const current = this._pendingCancellations.get(uuid)
+    if (current && ((rows.length === 0 && !markers) || (current.markers === markers && current.rows.length === rows.length && current.rows.every((r, i) => r === rows[i])))) return current
+    const scope: CancellationScope = { uuid, rows, markers, returned }
+    this._pendingCancellations.set(uuid, scope)
+    return scope
+  }
+
+  private cancellationScopes(): CancellationScope[] {
+    return [...new Set([...this._pendingCancellations.values(), ...this._loadedCancellations.values(), ...this._activeCancellations, ...(this._tentativeStop?.scopes.values() ?? [])])]
+  }
+
+  private noteCancellationTaken(uuid: string, answered: boolean): void {
+    const current = lineRows(this.claudeSessionId, uuid)
+    for (const scope of this.cancellationScopes()) {
+      if (scope.uuid !== uuid) continue
+      const captured = scope.queuedRows ?? scope.rows
+      if (current.length && !current.some((r) => captured.some((c) => c.id === r.id && c.lineUuid === r.lineUuid))) continue
+      if (this._loadedCancellations.get(uuid) === scope) {
+        this._pendingCancellations.set(uuid, scope)
+        if (!answered) this.awaitLineAnswer(uuid, captured, this._answerCount)
+      }
+      if (answered || scope.takeover !== 'answered') scope.takeover = answered ? 'answered' : 'started'
+    }
+    this.settleIdleCancellationTakeovers()
+  }
+
+  private settleIdleCancellationTakeovers(): void {
+    if (this._tentativeStop) return
+    const idle = [...this._pendingCancellations.values()].some((scope) => scope.takeover && !this._activeCancellations.has(scope)
+      && !(scope.queuedRows ?? scope.rows).some((r) => this._cancelReturnsInFlight.has(r.id)))
+    if (idle) void this.retryCancelledLines().catch((err) => {
+      log.session.warn('settling a taken cancellation failed', { sessionId: this.claudeSessionId, error: String(err) })
+    })
+  }
+
+  private async repairCancellationTakeover(scope: CancellationScope): Promise<void> {
+    const sid = this.claudeSessionId
+    if (!sid) throw new Error('Cancellation session is unavailable')
+    let repaired: CancellationScope['takeover']
+    do {
+      repaired = scope.takeover
+      await repairCancelledTaken(sid, scope.queuedRows ?? scope.rows, repaired === 'answered', scope.cancelledDelete === true)
+    } while (scope.takeover !== repaired)
+  }
+
+  /** Retry finishes this instance's confirmed cancellations, never a process death or an unconfirmed queued line. */
+  retryCancelledLines(): Promise<boolean> {
+    if (this._cancelRetryPromise) return this._cancelRetryPromise
+    const pending = (async () => {
+      if (!(await this.finishPendingCancellations())) return false
+      return this.recoverCancelledRows(true, true)
+    })()
+    this._cancelRetryPromise = pending
+    const clear = () => { if (this._cancelRetryPromise === pending) this._cancelRetryPromise = null }
+    void pending.then(clear, clear)
+    return pending
+  }
+
+  private async finishPendingCancellations(): Promise<boolean> {
+    let removed = true
+    const takeoverState = (scope: CancellationScope): CancellationScope['takeover'] => scope.takeover
+    for (const [uuid, cancelled] of [...this._pendingCancellations]) {
+      if (this.restoringCancellation(cancelled)) { removed = false; continue }
+      const captured = cancelled.queuedRows ?? cancelled.rows
+      const settled = await this.returnCancelledRows(captured, cancelled.returned, 'stopped',
+        () => this.clearCancelledLine(uuid, cancelled.registeredRows ?? cancelled.rows, cancelled.markers), cancelled)
+      if (settled && this._pendingCancellations.get(uuid) === cancelled) {
+        if (this._loadedCancellations.get(uuid) === cancelled && cancelled.takeover === 'started') {
+          const held = (await getQueue(this.claudeSessionId!)).filter((r) => captured.some((c) => c.id === r.id && c.lineUuid === r.lineUuid))
+          if (this._pendingCancellations.get(uuid) !== cancelled || this._loadedCancellations.get(uuid) !== cancelled) continue
+          // Completion may overtake the durable repair or this exact-row read.
+          if (takeoverState(cancelled) === 'answered') {
+            try { await this.repairCancellationTakeover(cancelled) }
+            catch { removed = false; continue }
+          } else this.awaitLineAnswer(uuid, held, this._startedMarks.get(uuid) ?? null)
+        }
+        this._pendingCancellations.delete(uuid)
+        if (this._loadedCancellations.get(uuid) === cancelled && cancelled.takeover) this._loadedCancellations.delete(uuid)
+      }
+      removed = settled && removed
+    }
+    return removed
+  }
+
+  /** Clear only the registration this cancellation read, never a newer write of the same uuid. */
+  private clearCancelledLine(uuid: string, rows: QueuedMessage[], markers: Array<{ message: string; messageId: string }> | undefined): boolean {
+    const current = lineRows(this.claudeSessionId, uuid)
+    const sameRows = current.length === rows.length && current.every((r, i) => r === rows[i])
+    const queued = this._queuedLines.get(uuid)
+    // Changed registrations belong to their own lifecycle, never to this delayed return.
+    if (!sameRows || queued !== markers) return false
+    takeLine(this.claudeSessionId, uuid)
+    this._queuedLines.delete(uuid)
+    return true
+  }
+
+  /** Claim synchronously, remove durably, then return once. A failed delete keeps the existing registration for a later cancellation. */
+  private async returnCancelledRows(rows: QueuedMessage[], markers: Array<{ message: string; messageId: string }>,
+    why: 'cancelled' | 'stopped', clear: () => boolean, scope?: CancellationScope): Promise<boolean> {
+    const ids = new Set([...rows.map((r) => r.id), ...markers.map((m) => m.messageId)])
+    const joined = [...new Set([...ids].map((id) => this._cancelReturnsInFlight.get(id)).filter((p): p is Promise<boolean> => !!p))]
+    const claimed = [...ids].filter((id) => !this._cancelReturnsInFlight.has(id))
+    if (claimed.length === 0) return (await Promise.all(joined)).every(Boolean)
+    let settle!: (removed: boolean) => void
+    const pending = new Promise<boolean>((r) => { settle = r })
+    for (const id of claimed) this._cancelReturnsInFlight.set(id, pending)
+    if (scope) this._activeCancellations.add(scope)
+    const owns = new Set(claimed)
+    let removed = false
+    try {
+      // A late fate may carry rows already cancelled by a lifecycle frame. Marker-only
+      // paths still delete any durable rows they name (a failed cold resume cancellation).
+      const captured = scope?.queuedRows ?? (scope?.rows.length ? scope.rows : rows)
+      const queued = this.claudeSessionId ? (await getQueue(this.claudeSessionId)).filter((r) => owns.has(r.id)
+        && (captured.length === 0 ? !scope || !r.lineUuid || r.lineUuid === scope.uuid : captured.some((c) => c.id === r.id && c.lineUuid === r.lineUuid))) : []
+      if (scope && !scope.queuedRows) scope.queuedRows = queued.map((r) => ({ ...r }))
+      if (scope?.takeover) {
+        await this.repairCancellationTakeover(scope)
+        removed = true
+        return (await Promise.all(joined)).every(Boolean)
+      }
+      const deleted = this.claudeSessionId
+        ? await removeTaken(this.claudeSessionId, queued.map((r) => r.id), { ran: false, rows: queued, preserveParked: scope?.preserveParked, confirmedCancelled: why === 'cancelled' })
+        : []
+      const kept = why === 'stopped' && this.claudeSessionId
+        ? (await getQueue(this.claudeSessionId)).filter((r) => r.status === 'parked'
+          && queued.some((q) => q.id === r.id && q.lineUuid === r.lineUuid))
+        : []
+      if (scope) {
+        if (!scope.confirmedCancelled) scope.queuedRows = [...deleted, ...kept]
+        scope.cancelledDelete = true
+        if (kept.length > 0) {
+          scope.retainedParked = true
+          this._loadedCancellations.set(scope.uuid, scope)
+        }
+      }
+      if (scope?.takeover) {
+        await this.repairCancellationTakeover(scope)
+        removed = true
+        return (await Promise.all(joined)).every(Boolean)
+      }
+      removed = true
+      if (scope && deleted.length > 0) {
+        scope.confirmedCancelled = true
+        this._loadedCancellations.set(scope.uuid, scope)
+      }
+      if (clear() && (deleted.length > 0 || captured.length === 0 && rows.length === 0 && queued.length === 0)) {
+        const returned = deleted.length ? new Set(deleted.map((r) => r.id)) : owns
+        this.returnToComposer(deleted.length
+          ? deleted.filter((r) => owns.has(r.id)).map((r) => ({ message: r.message, messageId: r.id }))
+          : markers.filter((m) => owns.has(m.messageId) && returned.has(m.messageId)))
+      }
+    } catch (err) {
+      log.session.warn('removing taken queue rows failed', { sessionId: this.claudeSessionId, error: err instanceof Error ? err.message : String(err) })
+    } finally {
+      settle(removed)
+      if (scope) this._activeCancellations.delete(scope)
+      for (const id of claimed) if (this._cancelReturnsInFlight.get(id) === pending) this._cancelReturnsInFlight.delete(id)
+    }
+    return removed && (await Promise.all(joined)).every(Boolean)
   }
 
   /** Hand messages back to the composer (one event per burst: a Stop's cancellations arrive as several frames at once). */
@@ -5938,8 +6370,37 @@ export class ClaudeCodeSession {
     this.resultEmitted = true
     this._deferredOutcome = undefined // #870: a cancelled hold never settles later
     this.stopMonitoring()
-    if (this._transport) {
-      await this._transport.interrupt()
+    const tentative = { pid: this.pid, scopes: new Map<string, CancellationScope>(), death: undefined as undefined | { why: 'exit' | 'death' | 'crash' | 'teardown'; announce: boolean } }
+    const cancelled = new Set([...(this._sawCommandLifecycle ? this._queuedLines.keys() : []), ...awaitedLines(this.claudeSessionId).map((l) => l.uuid)])
+    for (const uuid of cancelled) {
+      const rows = lineRows(this.claudeSessionId, uuid)
+      const markers = this._queuedLines.get(uuid)
+      tentative.scopes.set(uuid, this._pendingCancellations.get(uuid) ?? { uuid, rows, markers, returned: markers ?? rows.map((r) => ({ message: r.message, messageId: r.id })) })
+    }
+    this._tentativeStop = tentative
+    try {
+      if (this._transport) await this._transport.interrupt()
+    } catch (err) {
+      if (this._tentativeStop === tentative) this._tentativeStop = null
+      for (const [uuid, scope] of tentative.scopes) {
+        if (!scope.takeover) continue
+        this._pendingCancellations.set(uuid, scope)
+        try {
+          await this.repairCancellationTakeover(scope)
+          if (this._pendingCancellations.get(uuid) === scope) this._pendingCancellations.delete(uuid)
+        } catch (repairError) {
+          log.session.warn('repairing taken rows after a refused Stop failed', { sessionId: this.claudeSessionId, error: String(repairError) })
+        }
+      }
+      if (tentative.death && this.claudeSessionId) {
+        this.handBackLines(this.claudeSessionId, untakenLines(this.claudeSessionId, tentative.pid), tentative.death.why, tentative.death.announce)
+        this.handBackAnsweringLines(this.claudeSessionId, unansweredLines(this.claudeSessionId, tentative.pid), tentative.death.why, tentative.death.announce)
+      }
+      throw err
+    }
+    if (this._tentativeStop === tentative) this._tentativeStop = null
+    for (const [uuid, scope] of tentative.scopes) {
+      if (!this._pendingCancellations.has(uuid)) this._pendingCancellations.set(uuid, scope)
     }
     this._active = false
     this._processStatus = 'stopped'
@@ -5949,14 +6410,11 @@ export class ClaudeCodeSession {
     this._rejectAllSideQuestions('session stopped')
     this._stopEpoch++
     // The CLI's queue died with the process: nothing it held will ever run.
-    if (this._sawCommandLifecycle) this.returnCancelledLines([...this._queuedLines.keys()])
-    this._queuedLines.clear()
+    if (!this._sawCommandLifecycle) this._queuedLines.clear()
     this.clearAllLineAcks()
-    // Lines it held and never started go back to the composer too: a Stop drops
-    // queued lines (as Esc does in Claude Code), it never replays them later.
-    const untaken = untakenLines(this.claudeSessionId).flatMap((line) => line.rows)
-    this.releaseLineRows(untaken, 'stopped')
-    this.returnToComposer(untaken.map((r) => ({ message: r.message, messageId: r.id })))
+    // Lines it held and never started return only after deletion. Retry can finish
+    // this exact disposition if storage failed; nothing is made pending or resent.
+    await this.retryCancelledLines()
     // Lines it took and was still answering: the user stopped that turn, as Esc does
     // in Claude Code (the prompt stays in the conversation). Never sent again.
     this.releaseLineRows(unansweredLines(this.claudeSessionId).flatMap((line) => line.rows), 'started')
@@ -9169,6 +9627,7 @@ export class ClaudeCodeSession {
           }, ['main-ai'], { source: 'session-runner', urgency: 'urgent' })
         }
         if (lc.state === 'started' || lc.state === 'completed') {
+          this.noteCancellationTaken(lc.command_uuid, lc.state === 'completed')
           this._queuedLines.delete(lc.command_uuid)
           const rows = takeLine(this.claudeSessionId, lc.command_uuid)
           if (lc.state === 'completed') {
@@ -11132,7 +11591,43 @@ export class ClaudeCodeSession {
     this._permissionReEmitTimers.clear()
   }
 
-  private async persistSessionRecord(claudeSessionId: string, cwd?: string): Promise<void> {
+  /**
+   * A start the host refused before anything ran (Claude Code not installed), whose first
+   * line now waits parked under the launch id: keep the session the task's. Its record is
+   * written stopped, with what the next start of it reads (cwd, host, model, prompt,
+   * profile), and the task is linked to it, as a start that ran links it at sessionReady
+   * (which this refusal rejected). Retry after the install then resumes this very session;
+   * the resume finds no conversation on the host and starts it under the same id.
+   */
+  private async keepRefusedSession(sid: string, cwd: string, reason: string, kind: string): Promise<void> {
+    try {
+      await this.persistSessionRecord(sid, cwd, { status: 'stopped', reason: 'message_not_delivered' })
+      // No CLI ran: the next delivery starts this id fresh, never --resume (SessionRecord.startRefused).
+      const { updateSessionRecord } = await import('../core/session-tracker.js')
+      await updateSessionRecord(sid, { startRefused: { at: new Date().toISOString(), kind } })
+    } catch (err) {
+      log.session.warn('start refused: keeping the session record failed', { sessionId: sid, error: err instanceof Error ? err.message : String(err) })
+      return
+    }
+    // The status write queued before the record existed found nothing to write: say it now.
+    this.emitStatusChanged('NEED_ACTION', reason.slice(0, 500), { status_reason: 'message_not_delivered', status_changed_by: 'session-runner' })
+    const taskId = this.taskId
+    if (!taskId) return
+    try {
+      const { linkSessionSlot, linkSession } = await import('../core/task-manager.js')
+      await linkSessionSlot(taskId, sid, this._mode === 'plan' ? 'plan' : 'exec')
+      const { task } = await linkSession(taskId, sid)
+      bus.emit(EventNames.TASK_UPDATED, { task }, ['web-ui'], { source: 'session-link' })
+    } catch (err) {
+      log.session.warn('start refused: linking the session to its task failed', { taskId, sessionId: sid, error: err instanceof Error ? err.message : String(err) })
+    }
+  }
+
+  private async persistSessionRecord(
+    claudeSessionId: string, cwd?: string,
+    /** The status a NEW record starts in, when it is not the spawn's own (a refused start: stopped). */
+    initial?: { status: SessionRecord['process_status']; reason: StatusReason },
+  ): Promise<void> {
     const { createSessionRecord } = await import('../core/session-tracker.js')
     await createSessionRecord(claudeSessionId, this.taskId, this.project, cwd, {
       ...(this._modeWasNamed ? { modeChosen: true } : {}),
@@ -11158,7 +11653,8 @@ export class ClaudeCodeSession {
         ? { appliedAppendSystemPrompt: this._spawnAppendPrompt } : {}),
       // Init-only spawn persists while parked ('idle' — no first turn). All
       // other callers persist mid-turn, where the default 'running' is right.
-      initialProcessStatus: this._processStatus === 'idle' ? 'idle' : undefined,
+      initialProcessStatus: initial?.status ?? (this._processStatus === 'idle' ? 'idle' : undefined),
+      ...(initial ? { initialStatusReason: initial.reason } : {}),
     })
   }
 }
@@ -11236,6 +11732,10 @@ async function taskMayBeInArea(taskId: string | undefined): Promise<boolean> {
 
 export class SessionRunner {
   private sessions = new Map<string, ClaudeCodeSession>()
+  /** One native constructor and stream owner per session across every attach entry. */
+  private nativeAttachPromises = new Map<string, Promise<ClaudeCodeSession | undefined>>()
+  /** A wrapper-less cancellation backup write per sid, for attachNativeRecord to wait on. */
+  private cancelRepairWrites = new Map<string, Promise<void>>()
   /** ACP-backed sessions (any ACP engine), keyed by trackingId (providerSessionId or runtimeId). */
   private acpSessions = new Map<string, AcpSession>()
   /** One reattach constructor/consumer per durable session ID. */
@@ -11274,6 +11774,8 @@ export class SessionRunner {
    *  must wait for the operation's completion, not merely that terminal frame. */
   private acpAbortInProgress = new Set<string>()
   private nativeInterrupts = new Map<string, Promise<void>>()
+  /** Per batch, not per transport: a stale wrapper, an attach and a new one all look unsent or sent alike. */
+  private nativeDeliveryPreps = new Map<string, { token: symbol; stopped: boolean }>()
   /** Prompt acceptance and its queue cleanup are separate async operations.
    *  A very fast ACP turn can emit its terminal fact between them; terminal
    *  drain waits on this barrier so the next oldest item cannot be stranded
@@ -11483,6 +11985,205 @@ export class SessionRunner {
   }
 
   /**
+   * Share the native constructor before it can replace a registered stream owner. `opts` go to
+   * attachToExisting (an on-demand attach's evidence budget, a line that follows); a caller that
+   * joins an attach already under way gets that attach, made with its first caller's options.
+   */
+  private attachNativeRecord(
+    record: SessionRecord,
+    opts?: { evidenceBudgetMs?: number; lineFollows?: boolean },
+  ): Promise<ClaudeCodeSession | undefined> {
+    const sid = record.claudeSessionId
+    if (this.acpDestroyed) return Promise.resolve(undefined)
+    const existing = this.findSessionByClaudeId(sid)
+    if (existing) return Promise.resolve(existing)
+    const joined = this.nativeAttachPromises.get(sid)
+    if (joined) return joined
+    const epoch = this.acpLifecycleEpoch
+    // Defer the factory one microtask so every caller sees the promise first.
+    const pending = Promise.resolve().then(async () => {
+      // A candidate reads the cancellation backup: never while a wrapper-less repair writes it.
+      await this.cancelRepairWrites.get(sid)?.catch(() => {})
+      const current = this.findSessionByClaudeId(sid)
+      if (current) return current
+      if (this.acpDestroyed || epoch !== this.acpLifecycleEpoch) return undefined
+      const candidate = await ClaudeCodeSession.attachToExisting(record, this.cliCommand, this._testDaemonUrl, opts)
+      const discard = () => {
+        candidate.detach()
+        if (getRegisteredSessionManager(sid) === candidate.transport) unregisterSessionManager(sid)
+      }
+      if (this.acpDestroyed || epoch !== this.acpLifecycleEpoch || !candidate.hasPipe) {
+        discard()
+        return undefined
+      }
+      const owner = this.findSessionByClaudeId(sid)
+      if (owner && owner !== candidate) {
+        discard()
+        return owner
+      }
+      this.sessions.set(record.taskId || `reconnected-${sid}`, candidate)
+      return candidate
+    })
+    this.nativeAttachPromises.set(sid, pending)
+    const clear = () => { if (this.nativeAttachPromises.get(sid) === pending) this.nativeAttachPromises.delete(sid) }
+    void pending.then(clear, clear)
+    return pending
+  }
+
+  /** Read existing cancellation evidence; only a proven live, answering CLI may be attached, never spawned. */
+  async recoverCancelledForSession(sessionId: string, requireKnown = false): Promise<boolean> {
+    const live = this.findSessionByClaudeId(sessionId)
+    if (live) return live.recoverCancelledRows(true, requireKnown)
+    const rows = await cancelledRows(sessionId)
+    if (!rows.length) return true
+    const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+    const record = await getSessionByClaudeId(sessionId)
+    if (!record || isAcpEngine(record.engine)) return !requireKnown
+    const { getConnectedDaemonConnection, probeDaemonSession, readDaemonLineFate } = await import('./daemon-connection.js')
+    const connection = getConnectedDaemonConnection(record.host ?? '__local__')
+    const groups = new Map<string, QueuedMessage[]>()
+    for (const row of rows) {
+      if (!row.lineUuid) continue
+      groups.set(row.lineUuid, [...(groups.get(row.lineUuid) ?? []), row])
+    }
+    let repaired = true
+    for (const [uuid, captured] of groups) {
+      const known = await readDaemonLineFate(connection, sessionId, uuid, captured.map((r) => r.id))
+      // A wrapper attached while the query waited owns these scopes: never touch them with this fate.
+      const attachedMeanwhile = this.findSessionByClaudeId(sessionId)
+      if (attachedMeanwhile) return (await attachedMeanwhile.recoverCancelledRows(true, requireKnown)) && repaired
+      if (known?.fate === 'ran') {
+        // Without line-answer-v1 a daemon counts a taken line as delivered; with it, a started word names its answer.
+        if (known.state === 'started' && known.answer === undefined && connection?.hasCapability('line-answer-v1')) {
+          repaired = false
+          continue
+        }
+        if (known.state === 'started' && known.answer === 'pending') {
+          // Keep the backup until a live wrapper owns the answer. Restoring a row
+          // alone would strand it here, or let the next boot send it again.
+          const probe = await probeDaemonSession(record.host ?? '__local__', sessionId)
+          if (!probe?.alive || !Number.isSafeInteger(probe.pid) || probe.pid! <= 1) {
+            repaired = !requireKnown && repaired
+            continue
+          }
+          try {
+            const attached = await this.attachNativeRecord({ ...record, pid: probe.pid }, { evidenceBudgetMs: ON_DEMAND_ATTACH_EVIDENCE_MS })
+            if (!attached || !(await attached.recoverCancelledRows(true, requireKnown))) repaired = false
+          } catch (err) {
+            repaired = false
+            log.session.warn('attaching a proven live cancellation answer failed', { sessionId, uuid, error: String(err) })
+          }
+        } else {
+          try {
+            const owner = await this.repairWithoutWrapper(sessionId, () => repairCancelledTaken(sessionId, captured, true, true))
+            if (owner) return (await owner.recoverCancelledRows(true, requireKnown)) && repaired
+          } catch (err) {
+            repaired = false
+            log.session.warn('recovering cancelled rows through a read-only daemon fate failed', { sessionId, uuid, error: String(err) })
+          }
+        }
+      } else if (known?.fate === 'unanswered') {
+        try {
+          const owner = await this.repairWithoutWrapper(sessionId, () => repairCancelledTaken(sessionId, captured, false, true, { pending: true }))
+          if (owner) return (await owner.recoverCancelledRows(true, requireKnown)) && repaired
+        } catch (err) {
+          repaired = false
+          log.session.warn('restoring an unanswered cancelled line failed', { sessionId, uuid, error: String(err) })
+        }
+      }
+      // Any other fate leaves the durable backup: it is the cancellation's own confirmation.
+    }
+    return repaired
+  }
+
+  /** The final ownership check and claim must share one tick. */
+  private async claimFreeSid<T>(sid: string, claim: () => T): Promise<{ owner: ClaudeCodeSession } | { claimed: T }> {
+    for (;;) {
+      const owner = this.findSessionByClaudeId(sid)
+      if (owner) return { owner }
+      const busy: Promise<unknown> | undefined = this.nativeAttachPromises.get(sid) ?? this.cancelRepairWrites.get(sid)
+      if (!busy) return { claimed: claim() }
+      await busy.catch(() => undefined)
+    }
+  }
+
+  /** Write the backup only with no wrapper or attach for the sid; a wrapper found first owns it. */
+  private async repairWithoutWrapper(sid: string, write: () => Promise<void>): Promise<ClaudeCodeSession | undefined> {
+    const got = await this.claimFreeSid(sid, () => {
+      const writing = write()
+      this.cancelRepairWrites.set(sid, writing)
+      return writing
+    })
+    if ('owner' in got) return got.owner
+    try { await got.claimed } finally { if (this.cancelRepairWrites.get(sid) === got.claimed) this.cancelRepairWrites.delete(sid) }
+    return undefined
+  }
+
+  /** Register the old sid before its wrapper can read cancellation evidence. */
+  private async nativeResumeWrapper(record: SessionRecord, key: string): Promise<{ owner: ClaudeCodeSession } | { claimed: ClaudeCodeSession }> {
+    return this.claimFreeSid(record.claudeSessionId, () => {
+      const session = ClaudeCodeSession.forResume(record, this.cliCommand, this._testDaemonUrl)
+      this.sessions.set(key, session)
+      return session
+    })
+  }
+
+  /** A Stop since this delivery read its fence: a new stop id, or one awaiting its host. A storage error throws as itself. */
+  private async stopFenceMoved(sessionId: string, fence: string | null): Promise<boolean> {
+    const { sessionStops, isSessionStopSuperseded } = await import('../core/sessions/session-stop.js')
+    try { return (await sessionStops.fence(sessionId)) !== fence }
+    catch (err) { if (isSessionStopSuperseded(err)) return true; throw err }
+  }
+
+  private beginDeliveryPrep(sessionId: string): symbol {
+    const token = Symbol(sessionId)
+    this.nativeDeliveryPreps.set(sessionId, { token, stopped: false })
+    return token
+  }
+
+  private endDeliveryPrep(sessionId: string, token: symbol): void {
+    if (this.nativeDeliveryPreps.get(sessionId)?.token === token) this.nativeDeliveryPreps.delete(sessionId)
+  }
+
+  private deliveryPrepStopped(sessionId: string, token: symbol): boolean {
+    const prep = this.nativeDeliveryPreps.get(sessionId)
+    return prep?.token === token && prep.stopped
+  }
+
+  /** Restart while a delivery prepares: the delivery sends the batch itself, and a second start would spawn twice. */
+  private async refusePreparing(): Promise<never> {
+    const { SessionControlError } = await import('../core/sessions/session-controls.js')
+    throw new SessionControlError('A message is being delivered to this session right now. Press Restart again in a moment.', 409, { code: 'preparing' })
+  }
+
+  /** `fenceMoved`: the persisted Stop's coordinator owns the rows (it parks them), so nothing is deleted here. */
+  private async cancelBeforeColdSend(sessionId: string, session: ClaudeCodeSession, msgs: QueuedMessage[], fenceMoved = false): Promise<void> {
+    const exact = () => {
+      const ids = this.batchMessageIds.get(sessionId)
+      return this.activeProcessing.has(sessionId) && !!ids && ids.length === msgs.length && msgs.every((m, i) => ids[i] === m.id)
+    }
+    if (fenceMoved) {
+      const ours = exact()
+      if (ours) this.clearActiveProcessing(sessionId, { kind: 'stopped' })
+      const batch = new Set(msgs.map((m) => m.id))
+      const kept = (await getQueue(sessionId)).filter((m) => batch.has(m.id) && (m.status === 'parked' || (ours && m.status === 'processing')))
+      if (kept.length > 0) reportBatchFailed(sessionId, kept.map((m) => m.id), 'Stopped before delivery; retry to send')
+      return
+    }
+    const returned = await session.cancelUnwrittenBatch(msgs)
+    const ids = this.batchMessageIds.get(sessionId)
+    const ours = exact()
+    if (!ours) return
+    const count = this.batchCounts.get(sessionId) ?? msgs.length
+    if (!returned) {
+      this.clearActiveProcessing(sessionId, { kind: 'error', message: 'Could not finish cancelling queued messages. The Stop may not be saved yet: Retry when storage is available' })
+      return
+    }
+    this.clearActiveProcessing(sessionId, { kind: 'stopped' })
+    bus.emit(EventNames.SESSION_BATCH_COMPLETED, { sessionId, count, messageIds: ids }, ['main-ai'], { source: 'session-runner' })
+  }
+
+  /**
    * Set the SDK session server client for SDK-based sessions.
    * When set, new sessions will use the SDK path instead of CLI.
    */
@@ -11496,12 +12197,17 @@ export class SessionRunner {
    * Subscribe to the event bus and handle session lifecycle events.
    * Optionally reconnect to sessions that survived a server restart.
    */
+  /** Settles once init's startup recovery has started its pending drains (tests wait on it). */
+  startupRecoveryDone: Promise<void> = Promise.resolve()
+
   init(reconnectable?: SessionRecord[]): void {
     // Reconnect to surviving sessions + startup recovery (async)
     const startupRecovery = async () => {
       // What earlier servers saw of each host's link, before any queued row is delivered
       // (host-link-ledger.ts): a row that waited across a restart for its host leaves that out.
       await loadHostLinkLedger().catch(() => {})
+      // Read durable rows and cancellation evidence before attaching to a stream.
+      await loadQueue()
       // Phase 1: reconnect to surviving sessions
       if (reconnectable?.length) {
         for (const record of reconnectable) {
@@ -11512,9 +12218,8 @@ export class SessionRunner {
           // They re-attach lazily via maybeAttachAcpSession on first use.
           if (isAcpEngine(record.engine)) continue
           try {
-            const session = await ClaudeCodeSession.attachToExisting(record, this.cliCommand, this._testDaemonUrl)
-            const mapKey = record.taskId || `reconnected-${record.claudeSessionId}`
-            this.sessions.set(mapKey, session)
+            const session = await this.attachNativeRecord(record)
+            if (!session) continue
             log.session.info('reconnected to surviving session', {
               sessionId: record.claudeSessionId,
               taskId: record.taskId,
@@ -11529,7 +12234,10 @@ export class SessionRunner {
         }
       }
 
-      // Phase 2: load queue from disk, re-process pending messages.
+      // Dead sessions can hold cancellation evidence too; query only connected daemons.
+      for (const sessionId of await cancelledSessionIds()) await this.recoverCancelledForSession(sessionId)
+
+      // Phase 2: re-process ordinary pending messages.
       // Race condition: the REST API starts accepting /send requests before SessionRunner
       // initialization completes. Messages received during this window get persisted to
       // the queue file, but the corresponding SESSION_SEND bus events fire before any
@@ -11538,7 +12246,6 @@ export class SessionRunner {
       // queued message never reaches the FIFO because processNext() was never called.
       // Fix: process ALL pending queues including alive sessions. processNext() detects
       // alive sessions and uses the FIFO write path (not --resume spawn), so this is safe.
-      await loadQueue()
       // Age backstop before the drain: a row nobody could deliver in a week is
       // parked, not retried. Without it an unrecognized permanent failure keeps
       // re-attempting (and re-notifying) on every single boot, forever.
@@ -11552,7 +12259,7 @@ export class SessionRunner {
       }
     }
 
-    startupRecovery().catch((err) => {
+    this.startupRecoveryDone = startupRecovery().catch((err) => {
       log.session.error('startup recovery failed', { error: err instanceof Error ? err.message : String(err) })
     })
 
@@ -11586,6 +12293,7 @@ export class SessionRunner {
           log.session.info('session start requested', { taskId: startData.taskId, host: startData.host, cwd: startData.cwd, mode: startData.mode, engine: startData.engine })
           try {
             await this.assertStartRouting(startData)
+            assertDemoAdmission() // a stopping Demo starts no session (core/sessions/demo-admission.ts)
           } catch (err) {
             // A throw here ends in the bus's log; a transfer waiting for this
             // attempt's init would sit out its whole bound, so tell it now.
@@ -11962,6 +12670,7 @@ export class SessionRunner {
   destroy(): void {
     this.acpLifecycleEpoch++
     this.acpDestroyed = true
+    this.nativeAttachPromises.clear()
     this.stopReclaimListener?.()
     this.stopReclaimListener = undefined
     for (const sid of this.heldSendRetries.keys()) this.cancelHeldSendRetry(sid)
@@ -12008,6 +12717,7 @@ export class SessionRunner {
   destroyAndKill(): void {
     this.acpLifecycleEpoch++
     this.acpDestroyed = true
+    this.nativeAttachPromises.clear()
     this.stopReclaimListener?.()
     this.stopReclaimListener = undefined
     for (const sid of this.heldSendRetries.keys()) this.cancelHeldSendRetry(sid)
@@ -12102,19 +12812,7 @@ export class SessionRunner {
       log.session.info('getOrAttachLiveSession: rehydrating via attachToExisting', {
         sessionId: claudeSessionId, host: record.host, pid: record.pid, taskId: record.taskId,
       })
-      const attached = await ClaudeCodeSession.attachToExisting(record, this.cliCommand, this._testDaemonUrl, { evidenceBudgetMs: ON_DEMAND_ATTACH_EVIDENCE_MS })
-
-      // Race guard mirrors processNext: a concurrent path may have populated the
-      // map while attachToExisting awaited — if so, discard ours so we don't
-      // overwrite the live transport's registry entry / orphan its tailer.
-      const collided = this.findByClaudeId(claudeSessionId)
-      if (collided) {
-        attached.detach()
-        return collided
-      }
-      const mapKey = record.taskId || `reconnected-${claudeSessionId}`
-      this.sessions.set(mapKey, attached)
-      return attached
+      return await this.attachNativeRecord(record, { evidenceBudgetMs: ON_DEMAND_ATTACH_EVIDENCE_MS })
     } catch (err) {
       log.session.warn('getOrAttachLiveSession: attach attempt failed', {
         sessionId: claudeSessionId, error: err instanceof Error ? err.message : String(err),
@@ -12381,6 +13079,7 @@ export class SessionRunner {
     const { prepareStartHints } = await import('../core/hints/hint-send.js')
     const started = await prepareStartHints(data)
     data = started.data
+    assertDemoAdmission() // a stopping Demo starts no session (core/sessions/demo-admission.ts)
     if (isAcpEngine(data.engine)) {
       const r = await this.handleAcpStart(data)
       void started.commit(r.claudeSessionId)
@@ -13234,7 +13933,7 @@ export class SessionRunner {
       const goneCwd = err instanceof BudgetPausedError || err instanceof BudgetCheckingError ? null : await acpFolderGone(session)
       if (err instanceof BudgetPausedError) {
         this.cancelBudgetRetry(deliverySessionId)
-        await parkMessages(rows, classifyDeliveryFailure(err).reason).catch(() => {})
+        await parkMessages(rows, classifyDeliveryFailure(err)).catch(() => {})
         reportBatchFailed(deliverySessionId, rows.map((m) => m.id), classifyDeliveryFailure(err).reason)
       } else if (goneCwd) {
         const reason = `Working directory no longer exists: ${goneCwd}`
@@ -14105,21 +14804,29 @@ export class SessionRunner {
     }
   }
 
-  private interruptNativeSession(sessionId: string): Promise<void> {
+  /** `send-now`: a send that interrupts the turn to go out itself, which cancels no batch still preparing. */
+  private interruptNativeSession(sessionId: string, why: 'stop' | 'send-now' = 'stop'): Promise<void> {
     this.cancelHeldSendRetry(sessionId)
     this.cancelBudgetRetry(sessionId)
+    // Marked before any wrapper lookup: the delivery may not have found or built its wrapper yet.
+    const preparing = this.nativeDeliveryPreps.get(sessionId)
+    if (preparing && why === 'stop') preparing.stopped = true
     const existing = this.nativeInterrupts.get(sessionId)
     if (existing) return existing
     const session = this.findSessionByClaudeId(sessionId)
     if (!session) return Promise.resolve()
     const interruptedBatch = this.batchMessageIds.get(sessionId)
+    const stopped = why === 'stop' ? session.interrupt(true) : undefined
+    void stopped?.catch(() => {})
     const pending = Promise.resolve().then(async () => {
       await session.awaitSpawn()
       const turnRan = session.processStatus === 'running'
-      await session.interrupt()
+      await (stopped ?? session.interrupt())
       // The stopped turn wrote its lines to the transcript, whichever way it was
       // stopped, so a cold resume must not rewind past them to a pending anchor.
       if (turnRan) this.clearPendingResumeSessionAt(sessionId)
+      // The preparing delivery settles its batch; settling it here dropped the bubble before the cancel was durable.
+      if (preparing || this.nativeDeliveryPreps.has(sessionId)) return
       if (this.activeProcessing.has(sessionId) && this.batchMessageIds.get(sessionId) === interruptedBatch) {
         const count = this.batchCounts.get(sessionId) ?? 1
         const messageIds = this.batchMessageIds.get(sessionId)
@@ -14145,7 +14852,7 @@ export class SessionRunner {
   }): Promise<void> {
     const { sessionId, mode, interrupt, source } = data
 
-    if (interrupt) await this.interruptNativeSession(sessionId)
+    if (interrupt) await this.interruptNativeSession(sessionId, 'send-now')
     else await this.nativeInterrupts.get(sessionId)
 
     // Model/mode switches no longer come through here — both are applied live at
@@ -14306,6 +15013,8 @@ export class SessionRunner {
       })
       return this.processNext(sessionId)
     }
+    // Read before the first await: a Stop during the spawn wait, prompt or mark must still count.
+    const stops = targetSession.stopEpoch
 
     const { sessionStops } = await import('../core/sessions/session-stop.js')
     const stopFence = await sessionStops.fence(sessionId)
@@ -14351,11 +15060,22 @@ export class SessionRunner {
       // The rest go back to pending and ride the turn's end (its processNext).
       if (await this.parkIfRedeliveryLoop(sessionId, newMsgs)) return
       releaseHeld(sessionId, newMsgs.map((m) => m.id))
+      // A Stop before the write parks the rows unwritten; a delegated resend would deliver them after it.
+      let stoppedFirst: boolean
+      try { stoppedFirst = await this.stopFenceMoved(sessionId, stopFence) || targetSession.stopEpoch !== stops }
+      catch (err) {
+        await revertIfQueued(newMsgs).catch(() => {})
+        reportBatchFailed(sessionId, newMsgs.map((m) => m.id), err instanceof Error ? err.message : String(err))
+        return
+      }
+      if (stoppedFirst) {
+        await this.settleUnansweredLine(sessionId, newMsgs, new Error('stopped'), true)
+        return
+      }
 
       // An App's AI-only brief must lead the line to stay out of every view (lib/ai-only-envelope.ts).
       const combined = joinQueuedRows(newMsgs.map((m) => m.message))
       const uuid = newMsgs[0].lineUuid
-      const stops = targetSession.stopEpoch
       let known: KnownLineFate | undefined
       let behindCut = false
 
@@ -14436,7 +15156,15 @@ export class SessionRunner {
         // delivery_failed (via settleResumeFailure) if the --resume also fails.
         // Emitting here too would double-report the same failure.
         // A Stop during the write: the line is not delivered after it.
-        if (targetSession.stopEpoch !== stops) {
+        let stoppedDuring: boolean
+        try { stoppedDuring = targetSession.stopEpoch !== stops || await this.stopFenceMoved(sessionId, stopFence) }
+        catch (err) {
+          // A Stop record that cannot be read is a failed send, never a Stop.
+          await revertIfQueued(newMsgs).catch(() => {})
+          reportBatchFailed(sessionId, newMsgs.map((m) => m.id), err instanceof Error ? err.message : String(err))
+          return
+        }
+        if (stoppedDuring) {
           await this.settleUnansweredLine(sessionId, newMsgs, new Error('stopped'), true)
           return
         }
@@ -14593,7 +15321,7 @@ export class SessionRunner {
     // Retry that ran while the batch still read 'processing' picked nothing up,
     // leaving the message pending with no send to deliver it.
     if (verdict.kind === 'permanent') this.cancelBudgetRetry(sessionId)
-    const settled = verdict.kind === 'permanent' ? parkMessages(msgs, verdict.reason)
+    const settled = verdict.kind === 'permanent' ? parkMessages(msgs, verdict)
       : unanswered ? revertIfQueued(msgs) : revertToPending(msgs)
     void settled.catch(() => {}).then(async () => {
       // Recorded before the error goes out, as in processNextNow's catch.
@@ -14605,9 +15333,11 @@ export class SessionRunner {
       // Nothing reached the host (its link is down): the rows wait for it, said as a wait.
       const linkHost = slow || unanswered ? null : await this.linkDownHost(sessionId, err)
       let retryAt: string | undefined
+      // Claude Code not installed: the bubble says what to do (the parked row's reason), once.
+      const saidOnMessage = verdict.code === 'claude_missing' && failed.length > 0
       if (slow) retryAt = new Date(this.armSlowHostRetry(sessionId, failed, 'start')).toISOString()
       else if (linkHost !== null) retryAt = new Date(this.armSlowHostRetry(sessionId, failed, 'link', linkHost)).toISOString()
-      else if (failed.length > 0) reportBatchFailed(sessionId, failed, err.message)
+      else if (failed.length > 0) reportBatchFailed(sessionId, failed, saidOnMessage ? verdict.reason : err.message, verdict.kind === 'permanent' ? { waitsFor: verdict.waitsFor } : undefined)
       if (err instanceof BudgetCheckingError) this.armBudgetRetry(sessionId)
       // errorKind 'delivery_failed' = connectivity status, NOT a turn outcome.
       // Consumers (server.ts chat persist, hook dispatcher, push notify, and the
@@ -14620,6 +15350,7 @@ export class SessionRunner {
         error: slow ? slowHostReason('start') : linkHost !== null ? slowHostReason('link', linkHost.name) : err.message,
         errorKind: 'delivery_failed' as const,
         ...(verdict.kind === 'permanent' ? { parked: true } : {}),
+        ...(saidOnMessage ? { saidOnMessage: true } : {}),
         // The message waits on a clock: the panel shows the bubble's note, not an error row.
         ...(retryAt ? { retryAt } : {}),
       }, ['main-ai'], { source: 'session-runner' })
@@ -15040,6 +15771,8 @@ export class SessionRunner {
    * pending queue is left untouched and drains on the next real send.
    */
   reinitialize(sessionId: string, modeOverride?: SessionMode): Promise<void> {
+    // Refused before registering, so the caller has changed nothing and nothing waits on the delivery.
+    if (this.nativeDeliveryPreps.has(sessionId)) return this.refusePreparing()
     // Coalescing rule: a restart WITHOUT a mode override is idempotent — any
     // in-flight restart satisfies it, so join it. A restart WITH an override
     // carries new state and must NOT coalesce: it chains AFTER the current
@@ -15130,6 +15863,12 @@ export class SessionRunner {
     } = {},
   ): Promise<void> {
     const by = opts.by ?? 'user'
+    // A chained restart (a mode override behind another) runs later than its entry check. A
+    // delivery being prepared wins over Walnut's own prompt respawn, which just gives way.
+    if (this.nativeDeliveryPreps.has(sessionId)) {
+      if (by === 'system') return
+      return this.refusePreparing()
+    }
     const { getSessionByClaudeId } = await import('../core/session-tracker.js')
     const record = await getSessionByClaudeId(sessionId)
     if (!record) throw new Error(`reinitialize: no session record for ${sessionId}`)
@@ -15172,12 +15911,42 @@ export class SessionRunner {
     // Reuse the live session object if we have one (send() detaches its old
     // transport + suppresses the dying process's events); otherwise make a fresh one.
     let target: ClaudeCodeSession | undefined = this.findSessionByClaudeId(sessionId)
-    if (!target) {
-      target = new ClaudeCodeSession(record.taskId, record.project, this.cliCommand)
-      target._testDaemonUrl = this._testDaemonUrl
-      this.sessions.set(record.taskId || `reconnected-${sessionId}`, target)
+    const key = record.taskId || `reconnected-${sessionId}`
+    let claimed: ClaudeCodeSession | undefined
+    if (!target && await this.isSessionStillAlive(record)) {
+      // A live CLI is attached and stopped for real, never resumed beside it.
+      target = await this.attachNativeRecord(record, { evidenceBudgetMs: ON_DEMAND_ATTACH_EVIDENCE_MS })
+      if (!target) throw new Error(`reinitialize: could not attach to the live process of ${sessionId}`)
+    } else if (!target) {
+      if (!(await this.recoverCancelledForSession(sessionId, true))) throw new Error('Could not finish cancelling queued messages. Retry when storage is available')
+      const got = await this.nativeResumeWrapper(record, key)
+      target = 'owner' in got ? got.owner : (claimed = got.claimed)
     }
+    // A delivery that began preparing during the awaits above (on any wrapper, bound or not) sends its batch itself.
+    // A wrapper this restart built stays: that delivery may be preparing through it.
+    if (this.nativeDeliveryPreps.has(sessionId)) return by === 'system' ? undefined : this.refusePreparing()
+    const restarted = target
+    const epoch = restarted.stopEpoch
+    let sent = false
+    try {
+      await this.restartThrough(restarted, record, sessionId, stopFence, cfg, sshTarget, modeOverride, () => {
+        if (restarted.stopEpoch !== epoch) throw new Error('reinitialize: stopped before the new process was started')
+      }, () => { sent = true }, { ...opts, by })
+    } catch (err) {
+      // Only the wrapper this restart built, and only before its send went out, leaves the map.
+      if (claimed && !sent && this.sessions.get(key) === claimed) this.sessions.delete(key)
+      throw err
+    }
+  }
 
+  private async restartThrough(target: ClaudeCodeSession, record: SessionRecord, sessionId: string, stopFence: string | null,
+    cfg: Awaited<ReturnType<typeof import('../core/config-manager.js').getConfig>>, sshTarget: SshTarget | undefined, modeOverride: SessionMode | undefined,
+    beforeSend: () => void, onSent: () => void,
+    opts: { by: 'user' | 'system'; prompt?: string; quietCheck?: (target: ClaudeCodeSession) => Promise<boolean>; stillWanted?: () => boolean }): Promise<void> {
+    const by = opts.by
+    const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+    // The last look before the first destructive step: the batch of a delivery preparing now is not settled here.
+    if (this.nativeDeliveryPreps.has(sessionId)) return by === 'system' ? undefined : this.refusePreparing()
     // Mid-turn guard: if the session was actively processing a turn when Restart
     // was hit, the respawn kills that turn. Settle the in-flight batch NOW —
     // clear activeProcessing and tell the UI the batch completed — so the
@@ -15227,11 +15996,12 @@ export class SessionRunner {
     // the cut that creates, AWAITED (bounded) so the anchor is read before the
     // respawn can append anything (see recordDeathWindowResumeCut).
     if (resumeSessionAt) await this.recordDeathWindowResumeCut(sessionId, resumeSessionAt)
+    beforeSend()
 
     // Empty message ⇒ daemon spawns idle: init event + SessionStart hook fire,
     // no user turn runs. onSpawnSettled reports spawn success/failure only.
     await new Promise<void>((resolve, reject) => {
-      target!.send('', record.cwd ?? undefined, sessionId, resumeMode, model, resumePrompt, record.host ?? undefined, sshTarget, undefined, cfg.session?.permission_prompt, undefined, cfg.session?.stream_partial_messages, effort,
+      target.send('', record.cwd ?? undefined, sessionId, resumeMode, model, resumePrompt, record.host ?? undefined, sshTarget, undefined, cfg.session?.permission_prompt, undefined, cfg.session?.stream_partial_messages, effort,
         (ok, err) => {
           if (ok) {
             // No turn runs here, so the record says idle: Running would promise a
@@ -15249,6 +16019,7 @@ export class SessionRunner {
         // Re-emit the profile's spawn-time flags on the replacement CLI —
         // "Restart" must not silently strip a session's identity.
         { ...resumeProfileOpts(profile, lane, resumeSessionAt), stopFence })
+      onSent()
     })
   }
 
@@ -15265,6 +16036,11 @@ export class SessionRunner {
   private async redeliverPendingForHost(hostKey: string, connection?: import('../core/sessions/session-stop.js').SessionStopConnection): Promise<void> {
     const { sessionStops } = await import('../core/sessions/session-stop.js')
     await sessionStops.flush(hostKey, connection)
+    const { getSessionByClaudeId: cancelledRecord } = await import('../core/session-tracker.js')
+    for (const sid of await cancelledSessionIds()) {
+      const record = await cancelledRecord(sid)
+      if ((record?.host ?? '__local__') === hostKey) await this.recoverCancelledForSession(sid)
+    }
     await parkStalePending().catch(() => [])
     const pendingSessions = await getAllSessionsWithPending()
     if (pendingSessions.length === 0) return
@@ -15785,8 +16561,25 @@ export class SessionRunner {
     // A mid-turn write still out holds an earlier line as 'processing': taking the
     // queue's head now would send a later line first (see midTurnWrites).
     await this.midTurnWrites.get(sessionId)
+    // No wrapper and no record: rebuild the record from the JSONL first (inc-2026-08-10), once for this delivery.
+    const rebuilt = live || stopRecord ? undefined : await (await import('../core/sessions/session-record-recovery.js')).recoverSessionRecordFromJsonl(sessionId)
+    // No bound transport holds a backup line's answer here: settle backups first, so a restored older line leads.
+    // A record nothing could rebuild keeps the existing error path below instead of waiting on a check it cannot pass.
+    if (!live?.transportBound && rebuilt !== null && !(await this.recoverCancelledForSession(sessionId, true))) {
+      log.session.warn('processNext: a cancelled line is not settled yet; the queue waits for Retry', { sessionId })
+      return
+    }
+    // A row parked only because the agent could not run (QueuedMessage.waitsFor) goes out
+    // ahead of a row that is going out now, in its own order: the same agent takes both, and
+    // the parked words were told they wait for it (core/sessions/agent-wait-resend.ts).
+    await unparkAgentWaitRows(sessionId, stopFence, { onlyWithPending: true }).catch(() => [])
     const msgs = await markProcessing(sessionId, stopFence, { tracked, midTurn: inTurn })
     if (msgs.length === 0) return
+    // A Restart registered during the awaits above: no preparation may run beside it.
+    if (this.nativeSessionReinitializations.has(sessionId)) {
+      await unmarkUnwritten(msgs)
+      return this.processNextNow(sessionId, mode)
+    }
     if (await this.parkIfRedeliveryLoop(sessionId, msgs)) {
       // What went back to pending goes out as the next line, without the parked row.
       this.deliverRest(sessionId)
@@ -15820,6 +16613,12 @@ export class SessionRunner {
     // after the daemon refused the write (the process is gone), never after a
     // write whose answer was lost: that one is confirmed in place (confirmSend).
     const lineUuid = msgs[0].lineUuid ?? lineUuidFor(msgs)
+    // The cold-resume wrapper this delivery built, until its send went out.
+    let claimedResume: { key: string; session: ClaudeCodeSession } | undefined
+    // The existing wrapper's Stop count from before its refused write, for the cold send that follows.
+    let coldEpoch: number | undefined
+    // Nothing above awaits since markProcessing, so no Stop or Restart can slip in before this.
+    const prep = this.beginDeliveryPrep(sessionId)
 
     try {
       // Find the session that has this Claude session ID
@@ -15884,29 +16683,7 @@ export class SessionRunner {
             log.session.info('processNext: rehydrating session via attachToExisting', {
               sessionId, host: record.host, pid: record.pid, taskId: record.taskId,
             })
-            const attached = await ClaudeCodeSession.attachToExisting(record, this.cliCommand, this._testDaemonUrl, { evidenceBudgetMs: ON_DEMAND_ATTACH_EVIDENCE_MS, lineFollows: true })
-            // Race guard: a concurrent path (startup init() phase 1, or a concurrent
-            // session:start for the same taskId) may have populated this.sessions
-            // while attachToExisting was awaiting. If so, discard ours — registering
-            // a second transport would overwrite the first's entry in the session
-            // manager registry (src/providers/session-manager.ts:296) and orphan its
-            // event listeners / tailer.
-            let collided: ClaudeCodeSession | undefined
-            for (const [, s] of this.sessions) {
-              if (s.sessionId === sessionId) { collided = s; break }
-            }
-            if (collided) {
-              log.session.info('processNext: rehydrate lost race — discarding attached, using existing', { sessionId })
-              attached.detach()
-              targetSession = collided
-            } else {
-              // mapKey mirrors the convention used by startup init() (~line 2860):
-              // taskId when available, else `reconnected-<claudeSessionId>` so taskless
-              // sessions don't collide under an undefined key.
-              const mapKey = record.taskId || `reconnected-${sessionId}`
-              this.sessions.set(mapKey, attached)
-              targetSession = attached
-            }
+            targetSession = await this.attachNativeRecord(record, { evidenceBudgetMs: ON_DEMAND_ATTACH_EVIDENCE_MS, lineFollows: true })
           }
         } catch (err) {
           log.session.warn('processNext: rehydrate attempt failed, will fall back to --resume', {
@@ -15967,11 +16744,15 @@ export class SessionRunner {
         // All sessions now go through daemon. The daemon's `cmdSend` does atomic
         // FIFO liveness detection (O_WRONLY|O_NONBLOCK → ENXIO if nobody is reading).
         // No local PID pre-flight check needed.
+        // A Stop before the write: the batch leaves unwritten, as before a cold send.
+        const liveFenceMoved = await this.stopFenceMoved(sessionId, stopFence)
+        if (liveFenceMoved || this.deliveryPrepStopped(sessionId, prep)) return this.cancelBeforeColdSend(sessionId, targetSession, msgs, liveFenceMoved)
         const reclaimsBefore = targetSession.lineReclaimCount
         const stops = targetSession.stopEpoch
         const target = targetSession
         let known: KnownLineFate | undefined
         let behindCut = false
+        let stoppedBeforeWrite = false
         let written: boolean
         try {
           written = await targetSession.writeMessage(combined, {
@@ -15979,7 +16760,8 @@ export class SessionRunner {
             rows: msgs, dedupe,
             onFate: (f) => { known = f },
             onHeld: () => this.announceHeld(sessionId, msgs),
-            isStopped: () => target.stopEpoch !== stops,
+            isStopped: () => target.stopEpoch !== stops || this.deliveryPrepStopped(sessionId, prep),
+            onStoppedBeforeWrite: () => { stoppedBeforeWrite = true },
             onCut: () => { behindCut = true },
           })
         } catch (error) {
@@ -15991,7 +16773,8 @@ export class SessionRunner {
           await this.settleUnansweredLine(sessionId, msgs, error, target.stopEpoch !== stops)
           return
         }
-        if (written) { this.cancelHeldSendRetry(sessionId); this.cancelBudgetRetry(sessionId) }
+        // The live write answered: from here the batch is the CLI's, and a Stop or Restart treats it as a turn.
+        if (written) { this.endDeliveryPrep(sessionId, prep); this.cancelHeldSendRetry(sessionId); this.cancelBudgetRetry(sessionId) }
         if (written && known && known.fate !== 'waiting') {
           // Nothing was written: the CLI already ran the line (a resend after a
           // restart), a Stop cancelled it, or the CLI dropped it. writeMessage
@@ -16035,6 +16818,8 @@ export class SessionRunner {
           this.deliverRest(sessionId)
           return
         }
+        // Refused at the write's entry for a Stop this preparation saw: nothing went out.
+        if (stoppedBeforeWrite) return this.cancelBeforeColdSend(sessionId, target, msgs)
         // The user stopped the session while this line was on its way: it is not
         // delivered after the Stop, on this process or a fresh one.
         if (target.stopEpoch !== stops) {
@@ -16045,6 +16830,7 @@ export class SessionRunner {
           await this.settleUnansweredLine(sessionId, msgs, new Error('stopped'), true)
           return
         }
+        coldEpoch = stops
         log.session.info('processNext: writeMessage failed, falling back to --resume spawn', {
           sessionId,
           hasPipe: targetSession.hasPipe,
@@ -16058,9 +16844,14 @@ export class SessionRunner {
         // over with them first.
         if (targetSession.lineReclaimCount !== reclaimsBefore) {
           await targetSession.lineReclaimSettled()
+          // A Stop seen before starting over cancels this exact batch; a new pass would forget it.
+          const reclaimFenceMoved = await this.stopFenceMoved(sessionId, stopFence)
+          if (reclaimFenceMoved || this.deliveryPrepStopped(sessionId, prep)) return this.cancelBeforeColdSend(sessionId, targetSession, msgs, reclaimFenceMoved)
           log.session.info('processNext: the dead process held untaken lines; delivering them first', { sessionId })
           await revertIfQueued(msgs)
           this.clearActiveProcessing(sessionId)
+          // Ended before starting over: the next pass waits on an interrupt that may wait on nothing else.
+          this.endDeliveryPrep(sessionId, prep)
           return this.processNextNow(sessionId, mode)
         }
 
@@ -16079,7 +16870,8 @@ export class SessionRunner {
         // Session not in memory — create a new one to resume
         const { getSessionByClaudeId } = await import('../core/session-tracker.js')
         let record = await getSessionByClaudeId(sessionId)
-        if (!record) {
+        // A rebuild this delivery already tried and found nothing for is not tried again.
+        if (!record && rebuilt !== null) {
           // Record lost but the canonical JSONL may survive (inc-2026-08-10):
           // self-heal so the queued message can ride --resume instead of being
           // stranded pending forever and retried on every server boot.
@@ -16087,9 +16879,21 @@ export class SessionRunner {
           record = await recoverSessionRecordFromJsonl(sessionId)
         }
         if (record) {
-          const session = new ClaudeCodeSession(record.taskId, record.project, this.cliCommand)
-          session._testDaemonUrl = this._testDaemonUrl
-          this.sessions.set(record.taskId, session)
+          const got = await this.nativeResumeWrapper(record, record.taskId)
+          if ('owner' in got) {
+            // Checked before the rows are unmarked: the cancel matches them by their line uuid.
+            const ownerFenceMoved = await this.stopFenceMoved(sessionId, stopFence)
+            if (ownerFenceMoved || this.deliveryPrepStopped(sessionId, prep)) return this.cancelBeforeColdSend(sessionId, got.owner, msgs, ownerFenceMoved)
+            // A wrapper came while a backup write or an attach was waited out: deliver through it, from the start.
+            await unmarkUnwritten(msgs)
+            noteTurnUserUuid(sessionId, before.turnUuid)
+            this.clearActiveProcessing(sessionId)
+            this.endDeliveryPrep(sessionId, prep)
+            return this.processNextNow(sessionId, mode)
+          }
+          const session = got.claimed
+          claimedResume = { key: record.taskId, session }
+          const epoch = session.stopEpoch
 
           // Read config for SSH target resolution and permission_prompt setting
           const { getConfig } = await import('../core/config-manager.js')
@@ -16121,6 +16925,13 @@ export class SessionRunner {
           const endsBefore = session.processEndCount
           const spawnPrompt = await this.resumeSpawnPrompt(sessionId, resolvedResumePrompt)
           const spawnProfile = await this.resumeSpawnProfile(sessionId, resolvedProfile)
+          // Last check before the send, with no await between them.
+          const claimedFenceMoved = await this.stopFenceMoved(sessionId, stopFence)
+          if (claimedFenceMoved || this.deliveryPrepStopped(sessionId, prep) || session.stopEpoch !== epoch) {
+            claimedResume = undefined
+            return this.cancelBeforeColdSend(sessionId, session, msgs, claimedFenceMoved)
+          }
+          this.endDeliveryPrep(sessionId, prep)
           session.send(combined, record.cwd ?? undefined, sessionId, resumeMode, resolvedModel, spawnPrompt, record.host ?? undefined, sshTarget, undefined, resumeConfig.session?.permission_prompt, undefined, resumeConfig.session?.stream_partial_messages, resolvedEffort,
             (ok, err, line) => {
               if (ok) { this.settleResumeSuccess(sessionId, session, msgs, { lineUuid, line, endsBefore }); this.deliverRest(sessionId) }
@@ -16133,6 +16944,7 @@ export class SessionRunner {
               stopFence,
               markers: msgs.map((msg) => ({ message: msg.message, messageId: msg.id })),
             })
+          claimedResume = undefined
 
           bus.emit(EventNames.SESSION_STARTED, {
             taskId: record.taskId,
@@ -16176,6 +16988,12 @@ export class SessionRunner {
       const endsBefore = targetSession.processEndCount
       const spawnPrompt = await this.resumeSpawnPrompt(sessionId, resolvedResumePrompt)
       const spawnProfile = await this.resumeSpawnProfile(sessionId, resolvedProfile)
+      // Last check before the send, with no await between them.
+      const fenceMoved = await this.stopFenceMoved(sessionId, stopFence)
+      if (fenceMoved || this.deliveryPrepStopped(sessionId, prep) || targetSession.stopEpoch !== (coldEpoch ?? -1)) {
+        return this.cancelBeforeColdSend(sessionId, targetSession, msgs, fenceMoved)
+      }
+      this.endDeliveryPrep(sessionId, prep)
       targetSession.send(combined, targetSession.cwd ?? undefined, sessionId, existingResumeMode, resolvedModel, spawnPrompt, resumeHost ?? undefined, resumeSshTarget, undefined, resumeConfig2.session?.permission_prompt, undefined, resumeConfig2.session?.stream_partial_messages, resolvedEffort,
         (ok, err, line) => {
           if (ok) { this.settleResumeSuccess(sessionId, settleTarget, msgs, { lineUuid, line, endsBefore }); this.deliverRest(sessionId) }
@@ -16191,6 +17009,7 @@ export class SessionRunner {
         })
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err)
+      if (claimedResume && this.sessions.get(claimedResume.key) === claimedResume.session) this.sessions.delete(claimedResume.key)
       // Clean up activeProcessing + batchCounts on any error (send() EMFILE, lookup failure, etc.)
       this.clearActiveProcessing(sessionId, { kind: 'error', message: errorMsg })
 
@@ -16214,7 +17033,7 @@ export class SessionRunner {
       }
       revokeEchoClaims(sessionId, msgs.map((m) => m.id))
       const verdict = classifyDeliveryFailure(err)
-      if (verdict.kind === 'permanent') await parkMessages(msgs, verdict.reason).catch(() => {})
+      if (verdict.kind === 'permanent') await parkMessages(msgs, verdict).catch(() => {})
       else await revertToPending(msgs).catch(() => {})
       // A gone folder is recorded before the error goes out: the panel reads it on that
       // error and offers to continue in a new folder (core/sessions/folder-gone.ts).
@@ -16230,7 +17049,9 @@ export class SessionRunner {
         }, ['main-ai'], { source: 'session-runner' })
         return
       }
-      reportBatchFailed(sessionId, msgs.map((m) => m.id), errorMsg)
+      // Claude Code not installed: the bubble says what to do (the parked row's reason), once.
+      const saidOnMessage = verdict.code === 'claude_missing' && msgs.length > 0
+      reportBatchFailed(sessionId, msgs.map((m) => m.id), saidOnMessage ? verdict.reason : errorMsg, verdict.kind === 'permanent' ? { waitsFor: verdict.waitsFor } : undefined)
 
       // delivery_failed: the batch is back in 'pending', or parked (see settleResumeFailure).
       bus.emit(EventNames.SESSION_ERROR, {
@@ -16238,7 +17059,10 @@ export class SessionRunner {
         error: errorMsg,
         errorKind: 'delivery_failed' as const,
         ...(verdict.kind === 'permanent' ? { parked: true } : {}),
+        ...(saidOnMessage ? { saidOnMessage: true } : {}),
       }, ['main-ai'], { source: 'session-runner' })
+    } finally {
+      this.endDeliveryPrep(sessionId, prep)
     }
   }
 }

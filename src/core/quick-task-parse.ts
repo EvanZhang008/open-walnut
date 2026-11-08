@@ -1,6 +1,7 @@
 import { sendMessage } from '../model/model.js';
 import { log } from '../logging/index.js';
 import { fastModelFor, fastModelRidesCli, fastCallText } from './cheap-model.js';
+import { screenTitle } from './title-answer.js';
 import { getJevClient, readChoice, type JevClient } from './decision/jev-client.js';
 import { OFFERED_PIN_TIER_POLICY, PIN_TIER_NONE_GUIDANCE, migrateFocusTier } from './types.js';
 import type { Config, CustomTierRecord, LegStatus, QuickTaskParse, QuickTaskParseLegs } from './types.js';
@@ -475,7 +476,8 @@ export async function parseQuickTask(
       ? parsedValue as Record<string, unknown>
       : {};
 
-    const parsedTitle = typeof parsed.title === 'string' ? parsed.title.trim() : '';
+    // The person's own words stand unless the model's cleanup is still a title of them.
+    const parsedTitle = typeof parsed.title === 'string' ? screenTitle(parsed.title.trim(), { words: trimmed }) ?? '' : '';
     const output: QuickTaskParse = { title: parsedTitle || trimmed.slice(0, 200) };
 
     // Weekday backstop: if the note names exactly one weekday, model dates on a

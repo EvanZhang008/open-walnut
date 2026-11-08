@@ -30,7 +30,9 @@ import {
   cmFlashExtension, cmFlashTerm, type CmSearchStatus,
 } from '@/utils/cm-search';
 import { SYMBOL_RE } from '@/utils/dom-text-search';
+import { cmNoDragEdits } from '@/utils/cm-no-drag-edit';
 import { log } from '@/utils/log';
+import { clientBoxOf, pressBelowText } from '@/utils/blank-press';
 
 export interface FileSourceEditorHandle {
   /** Current editor text — pulled by the parent at save time. */
@@ -49,6 +51,8 @@ export interface FileSourceEditorHandle {
    */
   getBase: () => string;
   focus: () => void;
+  /** Focus with the caret at the end of the text (a press in the blank space under it). */
+  focusEnd?: () => void;
   /** 保留光标与撤销历史；磁盘基线必须使用读写结果的原始字节，而不是编辑器序列化结果。 */
   markClean: (diskText: string) => void;
   /**
@@ -149,6 +153,12 @@ interface FileSourceEditorProps {
  * transparent background inside the pane. Height 100% + internal .cm-scroller so
  * it fills the preview pane and scrolls itself.
  */
+/** Focus the editor with the caret after the last character. */
+function caretToEnd(view: EditorView): void {
+  view.focus();
+  view.dispatch({ selection: { anchor: view.state.doc.length }, scrollIntoView: true });
+}
+
 const editorTheme = EditorView.theme({
   '&': {
     height: '100%',
@@ -163,12 +173,14 @@ const editorTheme = EditorView.theme({
     lineHeight: '1.55',
   },
   '.cm-content': { padding: '8px 0 120px', caretColor: 'var(--fg)' },
+  // The gutter is sticky over a sideways-scrolled line, so it needs a solid surface;
+  // opacity on it would let the line show through, so it dims only the numbers.
   '.cm-gutters': {
-    backgroundColor: 'transparent',
+    backgroundColor: 'var(--bg)',
     border: 'none',
     color: 'var(--fg-muted)',
-    opacity: '0.65',
   },
+  '.cm-gutter': { opacity: '0.65' },
   '&:not(.cm-focused) .cm-selectionMatch': { backgroundColor: 'transparent' },
   '.cm-activeLine': { backgroundColor: 'var(--bg-hover, rgba(127, 127, 127, 0.06))' },
   '.cm-activeLineGutter': { backgroundColor: 'transparent', color: 'var(--fg)' },
@@ -204,6 +216,7 @@ export const FileSourceEditor = forwardRef<FileSourceEditorHandle, FileSourceEdi
       getValue: () => viewRef.current?.state.doc.toString() ?? seedRef.current,
       getBase: () => baseRef.current,
       focus: () => viewRef.current?.focus(),
+      focusEnd: () => { const v = viewRef.current; if (v) caretToEnd(v); },
       markClean: (diskText: string) => {
         seedRef.current = viewRef.current?.state.doc.toString() ?? seedRef.current;
         baseRef.current = diskText;
@@ -306,6 +319,8 @@ export const FileSourceEditor = forwardRef<FileSourceEditorHandle, FileSourceEdi
         highlightSelectionMatches({ minSelectionLength: 3, maxMatches: 2000 }),
         cmSearchExtension(),
         cmFlashExtension(),
+        // A drag selects, never moves text (a press inside a selection was a drag-and-drop).
+        cmNoDragEdits(),
         editorTheme,
         EditorView.updateListener.of((u) => {
           // Any doc change or selection collapse retracts a reported selection —
@@ -374,6 +389,18 @@ export const FileSourceEditor = forwardRef<FileSourceEditorHandle, FileSourceEdi
         parent: host,
       });
       viewRef.current = view;
+      // A press in the blank space under the last line (the scroller or the host around a
+      // short file) puts the caret at the end; CodeMirror only hears presses on its text.
+      const onBlankPress = (e: MouseEvent) => {
+        if (e.button !== 0 || e.defaultPrevented || !(e.target instanceof Node)) return;
+        if (view.contentDOM.contains(e.target) || view.dom.querySelector('.cm-gutters')?.contains(e.target)) return;
+        const inScroller = view.scrollDOM.contains(e.target);
+        const end = view.coordsAtPos(view.state.doc.length);
+        if (!pressBelowText(e.clientY, e.clientX, end ? end.bottom : null, inScroller ? clientBoxOf(view.scrollDOM) : null)) return;
+        e.preventDefault();
+        caretToEnd(view);
+      };
+      host.addEventListener('mousedown', onBlankPress);
       // NO auto-focus: the editor now mounts as the default view of every
       // readable file (Files pane, "@" mention preview) — stealing focus there
       // would yank the caret out of the chat input the user is typing in.
@@ -420,6 +447,7 @@ export const FileSourceEditor = forwardRef<FileSourceEditorHandle, FileSourceEdi
       return () => {
         cancelled = true;
         cancelAnimationFrame(lineRaf);
+        host.removeEventListener('mousedown', onBlankPress);
         view.destroy();
         viewRef.current = null;
       };

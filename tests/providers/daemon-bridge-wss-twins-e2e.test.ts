@@ -94,7 +94,7 @@ beforeAll(async () => {
   // The plain case is only meaningful if nothing above it resolves ws, asked of the
   // Node that runs it (Bun builds ws in, so its resolver always finds one).
   if (SOURCE_TWIN.runtime === 'node') {
-    const found = spawnSync(SOURCE_TWIN.file, ['-e', "require.resolve('ws')"], { cwd: path.join(srcDir, 'plain'), stdio: 'ignore' })
+    const found = spawnSync(SOURCE_TWIN.file, ['-e', "require.resolve('ws')"], { cwd: path.join(srcDir, 'plain'), stdio: 'ignore', env: { ...process.env, NODE_PATH: undefined } })
     expect(found.status, 'ws resolves from the install with no ws package').not.toBe(0)
   }
   // A throwaway certificate for localhost, made here and never stored in the

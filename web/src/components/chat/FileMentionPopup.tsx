@@ -420,6 +420,8 @@ export const FileMentionPopup = forwardRef<FileMentionHandle, FileMentionPopupPr
               data-no-draft="picker"
               defaultValue={browseDir}
               autoFocus
+              // Selected on open: a path typed in replaces the folder shown.
+              onFocus={(e) => e.currentTarget.select()}
               spellCheck={false}
               onKeyDown={(e) => {
                 e.stopPropagation(); // don't let popup keyboard nav intercept typing

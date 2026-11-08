@@ -109,6 +109,8 @@ export const FileMarkdownEditor = forwardRef<FileSourceEditorHandle, FileMarkdow
     const onSaveRef = useRef(onSave);
     onSaveRef.current = onSave;
 
+    /** The editor once mounted, for focusEnd only: getValue reads editorRef, which an edit sets. */
+    const readyRef = useRef<Editor | null>(null);
     useImperativeHandle(ref, () => ({
       getValue: () => {
         const ed = editorRef.current;
@@ -124,6 +126,8 @@ export const FileMarkdownEditor = forwardRef<FileSourceEditorHandle, FileMarkdow
       /** See FileSourceEditorHandle.setBase — base moves, document does not. */
       setBase: (text: string) => { baseRef.current = text; },
       focus: () => { editorRef.current?.commands.focus(); },
+      // The mounted editor, edited or not (editorRef is set by the first edit only).
+      focusEnd: () => { const ed = readyRef.current; if (ed && !ed.isDestroyed) ed.commands.focus('end'); },
       /**
        * Replace the document in place (Live Edit's merge/pull path).
        *
@@ -212,6 +216,8 @@ export const FileMarkdownEditor = forwardRef<FileSourceEditorHandle, FileMarkdow
           onAskSelection={onAskSelection}
           onAskHere={onAskHere}
           onComment={onComment}
+          noDragEdits
+          onEditorReady={(ed) => { readyRef.current = ed; }}
           imageBaseDir={imageBaseDir}
           imageHost={host}
           imageVersion={imageVersion}

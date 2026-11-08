@@ -229,7 +229,7 @@ function BlockPicker({ editor, current, disabled }: { editor: Editor; current: B
       if (menuRef.current?.contains(t) || btnRef.current?.contains(t)) return;
       close();
     };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); } };
     document.addEventListener('mousedown', onDown, true);
     document.addEventListener('keydown', onKey, true);
     return () => {

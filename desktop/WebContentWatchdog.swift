@@ -99,7 +99,7 @@ final class WebContentWatchdog {
             "crashesLast10m": String(crashTimes.count),
             "reloadInSec": String(Int(delay)),
             "processAgeMin": String(Int(now.timeIntervalSince(processStartedAt) / 60)),
-            "lastFootprintMB": lastPid > 0 ? (Self.physFootprint(lastPid).map { String(megabytes($0)) } ?? "?") : "?",
+            "lastFootprintMB": lastPid > 0 ? (WebContentProcess.physFootprint(lastPid).map { String(megabytes($0)) } ?? "?") : "?",
         ]
         DesktopLogger.shared.log("webcontent_terminated", fields: fields)
         postToServer(level: "error", message: "page process terminated by WebKit, reloading", fields: fields)
@@ -132,7 +132,7 @@ final class WebContentWatchdog {
 
     private func tick() {
         guard let webView, let window, !recycleInFlight, !webView.isLoading else { return }
-        guard let pid = Self.webContentPid(webView), let bytes = Self.physFootprint(pid) else {
+        guard let pid = WebContentProcess.pid(webView), let bytes = WebContentProcess.physFootprint(pid) else {
             if !reportedNoPid {
                 reportedNoPid = true
                 DesktopLogger.shared.log("webcontent_sample_unavailable")
@@ -541,64 +541,15 @@ final class WebContentWatchdog {
 
     // MARK: The replaced page
 
-    /// The page a recycle replaced ends with it. WebKit closes a page once its view is gone, but on
-    /// 2026-11-11 the old page process of a recycle was still running its page (its timers, its
-    /// socket to the server, 1.7 GB) 17 minutes after the swap, so the app held two pages. The old
-    /// view unloads its page at once (its drafts are written on the way out, like a reload), and
-    /// once the new page has had time to load, a process still serving the old view is ended
-    /// through WebKit's own call. Never the new page's process.
+    /// The Mac app's retire of a replaced page (WebContentProcess.retireReplacedPage), recorded
+    /// in the desktop log.
     static func retireReplacedPage(_ old: WKWebView, replacement: @escaping () -> WKWebView?) {
-        let oldPid = webContentPid(old)
-        let footprintMB = oldPid.flatMap(physFootprint).map { String($0 >> 20) } ?? "?"
-        old.stopLoading()
-        old.loadHTMLString("", baseURL: nil)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
-            let newPid = replacement().flatMap(webContentPid)
-            var end = "exited"
-            if let pid = oldPid, kill(pid, 0) == 0 {
-                let killer = NSSelectorFromString("_killWebContentProcess")
-                if pid != newPid, webContentPid(old) == pid, old.responds(to: killer) {
-                    old.perform(killer)
-                    end = "ended"
-                } else {
-                    end = "kept"
-                }
-            }
-            DesktopLogger.shared.log("webcontent_replaced_page", fields: [
-                "pid": oldPid.map { String($0) } ?? "?",
-                "footprintMB": footprintMB,
-                "end": end,
-            ])
+        WebContentProcess.retireReplacedPage(old, replacement: replacement) { fields in
+            DesktopLogger.shared.log("webcontent_replaced_page", fields: fields)
         }
     }
 
     // MARK: Probes
-
-    /// The WebContent pid is only exposed through WebKit's private KVC key.
-    /// Guarded by `responds(to:)`: an undefined key raises an ObjC exception
-    /// Swift cannot catch, and a WebKit that drops the key should cost us the
-    /// monitoring, not the app.
-    static func webContentPid(_ webView: WKWebView) -> pid_t? {
-        let selector = NSSelectorFromString("_webProcessIdentifier")
-        guard webView.responds(to: selector),
-              let value = webView.value(forKey: "_webProcessIdentifier") as? NSNumber else { return nil }
-        let pid = pid_t(value.int32Value)
-        return pid > 0 ? pid : nil
-    }
-
-    /// `phys_footprint`: the number Activity Monitor and `footprint(1)` report,
-    /// including the IOSurfaces the compositor owns on the process's behalf.
-    /// Verified against `footprint -v` on the live server process.
-    static func physFootprint(_ pid: pid_t) -> UInt64? {
-        var info = rusage_info_v4()
-        let rc = withUnsafeMutablePointer(to: &info) { ptr -> Int32 in
-            ptr.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) { p in
-                proc_pid_rusage(pid, RUSAGE_INFO_V4, p)
-            }
-        }
-        guard rc == 0 else { return nil }
-        return info.ri_phys_footprint
-    }
 
     static func windowVisible(_ window: NSWindow) -> Bool {
         if let e2e = e2eUserState() { return e2e.visible }

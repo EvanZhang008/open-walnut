@@ -28,6 +28,19 @@ function isPathLike(raw: string): boolean {
   return raw.startsWith('/') || raw.startsWith('~');
 }
 
+/**
+ * A path typed after another one starts over, as in a shell's file prompt:
+ * `…/~/x` reads as `~/x` and `…//x` as `/x` (2026-11-08: a new user's picker
+ * opens on their home, `/Users/a/`; typing `~/Documents` there became
+ * `/Users/a/~/Documents`, and Enter offered to create that folder).
+ */
+export function restartTypedPath(raw: string): string {
+  const tilde = Math.max(raw.lastIndexOf('/~/'), raw.endsWith('/~') ? raw.length - 2 : -1);
+  const slash = raw.lastIndexOf('//');
+  const at = Math.max(tilde, slash > 0 ? slash : -1);
+  return at < 0 ? raw : raw.slice(at + 1);
+}
+
 /** Classify raw input into one of the four states.
  *  Space rule: the token after the LAST space is a keyword only if it contains
  *  no '/' — paths with spaces in dir names are resolved later against live data

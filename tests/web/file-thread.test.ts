@@ -2,10 +2,11 @@
  * Questions about a file passage: the pure helpers behind FileThreadLayer.
  */
 import { describe, it, expect } from 'vitest';
+import type { ThreadLiveState } from '@/utils/thread-meta';
 import { buildThreadTree, threadKeyOf, type ThreadTreeMessage } from '@/utils/thread-tree';
 import type { SessionThreadAnchor } from '@/types/session';
 import { CARD_GAP, CARD_GROWN_WIDTH, CARD_WIDTH } from '@/utils/thread-card';
-import { ASK_CHIP_HEIGHT, ASK_CHIP_WIDTH, FILE_CARD_MIN_HEIGHT, fileQuestionMarks, placeAskChip, fileQuestionRows, placeFileCard, rectInHost, toHostRect } from '@/utils/file-thread';
+import { ASK_CHIP_HEIGHT, ASK_CHIP_WIDTH, FILE_CARD_MIN_HEIGHT, fileQuestionMarks, placeAskChip, fileQuestionRows, placeFileCard, placeFileCardBelow, rectInHost, toHostRect } from '@/utils/file-thread';
 
 const user = (msgId: string, text = `q ${msgId}`): ThreadTreeMessage => ({ role: 'user', msgId, text });
 const reply = (msgId: string, text = `a ${msgId}`): ThreadTreeMessage => ({ role: 'assistant', msgId, text });
@@ -39,13 +40,17 @@ describe('placeFileCard', () => {
     expect(place.width).toBe(CARD_WIDTH);
     expect(place.maxHeight).toBe(Math.round(host.height * 0.6));
   });
-  it('a passage scrolled above the box docks the card at the top; one below docks it, by its foot, at the bottom', () => {
-    const high = placeFileCard({ top: -300, bottom: -280, left: 40, right: 600 }, host);
-    expect(high.top).toBe(CARD_GAP);
-    expect(high.bottom).toBeUndefined();
-    const low = placeFileCard({ top: 1200, bottom: 1220, left: 40, right: 600 }, host);
-    expect(low.bottom).toBe(CARD_GAP);
-    expect(low.maxHeight).toBe(Math.round(host.height * 0.6));
+  it('a passage scrolled past an edge keeps its card beside it (never docked over other lines), and the card is away', () => {
+    const highAnchor = { top: -300, bottom: -280, left: 40, right: 600 };
+    const high = placeFileCard(highAnchor, host);
+    expect(high.top).toBe(highAnchor.bottom + CARD_GAP);
+    expect(placeFileCardBelow(highAnchor, host, 0).away).toBe(true);
+    const lowAnchor = { top: 1200, bottom: 1220, left: 40, right: 600 };
+    const low = placeFileCard(lowAnchor, host);
+    expect(host.height - low.bottom!).toBe(lowAnchor.top - CARD_GAP);
+    expect(placeFileCardBelow(lowAnchor, host, 0).away).toBe(true);
+    // On screen, it is not away.
+    expect(placeFileCardBelow({ top: 100, bottom: 120, left: 40, right: 600 }, host, 0).away).toBeUndefined();
   });
   it('a passage near the bottom of the box: the card hangs over its first line, never on it (2026-11-06, the rendered diff)', () => {
     // The old placement pushed the card up onto the passage to keep 180px in the box.
@@ -95,9 +100,9 @@ describe('placeFileCard', () => {
     const place = placeFileCard(anchor, short, undefined, undefined, 50);
     expect(place.bottom).toBe(short.height - (anchor.top - CARD_GAP));
     expect(place.top).toBeGreaterThanOrEqual(CARD_GAP);
-    // Docking still works: a passage scrolled past either edge keeps its card at that edge.
-    expect(placeFileCard({ top: -300, bottom: -280, left: 40, right: 600 }, host, undefined, undefined, 70).top).toBe(CARD_GAP);
-    expect(placeFileCard({ top: 1200, bottom: 1220, left: 40, right: 600 }, host, undefined, undefined, 70).bottom).toBe(CARD_GAP);
+    // A passage scrolled past either edge: the card stays by it (and is away, not drawn).
+    expect(placeFileCard({ top: -300, bottom: -280, left: 40, right: 600 }, host, undefined, undefined, 70).top).toBe(-280 + CARD_GAP);
+    expect(placeFileCardBelow({ top: 1200, bottom: 1220, left: 40, right: 600 }, host, 0, undefined, 70).away).toBe(true);
   });
   it('never leaves the box sideways, and a narrow box gets a card as wide as it allows', () => {
     const right = placeFileCard({ top: 0, bottom: 10, left: 800, right: 1200 }, host);
@@ -108,10 +113,11 @@ describe('placeFileCard', () => {
     expect(narrow.width).toBe(320 - 2 * CARD_GAP);
     expect(narrow.left).toBe(CARD_GAP);
   });
-  it('a short box: the card takes what is left below the passage, never less than it can show', () => {
+  it('a short box: the card takes what is left below the passage, and stays under it (shorter, never pushed onto it)', () => {
     const place = placeFileCard({ top: 100, bottom: 120, left: 0, right: 600 }, { width: 900, height: 300 });
-    expect(place.top).toBe(300 - FILE_CARD_MIN_HEIGHT - CARD_GAP);
-    expect(place.maxHeight).toBe(FILE_CARD_MIN_HEIGHT);
+    expect(place.top).toBe(120 + CARD_GAP);
+    expect(place.maxHeight).toBe(300 - 120 - 2 * CARD_GAP);
+    expect(place.maxHeight).toBeLessThan(FILE_CARD_MIN_HEIGHT);
   });
   it('expanded, the card grows where it is: the same top, wider toward the passage start, all the room below', () => {
     const place = placeFileCard({ top: 100, bottom: 120, left: 40, right: 600 }, host);
@@ -125,6 +131,22 @@ describe('placeFileCard', () => {
     // Never narrower than the card itself.
     const narrow = placeFileCard({ top: 0, bottom: 10, left: 0, right: 300 }, { width: 320, height: 700 });
     expect(narrow.grown!.width).toBe(narrow.width);
+  });
+
+  it('fits inside the box at every width, a box narrower than the card included', () => {
+    // 2026-11-08: a 180px editor beside the file tree drew a 180px card from 8px, its
+    // right edge and buttons clipped. Every width, anchor and gutter stays inside.
+    for (let width = 40; width <= 1400; width += 7) {
+      for (const right of [0, 30, width / 2, width, width + 200]) {
+        for (const gutter of [undefined, 0, 48, width - 20]) {
+          const p = placeFileCard({ top: 100, bottom: 120, left: 0, right }, { width, height: 700 }, undefined, gutter);
+          expect(p.left).toBeGreaterThanOrEqual(CARD_GAP);
+          expect(p.left + p.width).toBeLessThanOrEqual(width - CARD_GAP);
+          expect(p.grown!.left + p.grown!.width).toBeLessThanOrEqual(width - CARD_GAP);
+          expect(p.grown!.width).toBeGreaterThanOrEqual(p.width);
+        }
+      }
+    }
   });
 
   it('a code view: the card stays right of the line-number gutter, narrowed to fit, and gives up only when it cannot', () => {
@@ -187,7 +209,7 @@ describe('fileQuestionRows (the rail)', () => {
   const index = new Map([[ 'u4', { headId: 'u4', status: 'open', seq: 7 } ]]) as never;
 
   it('lists this file\'s questions in order with number, status and the current one', () => {
-    const rows = fileQuestionRows(tree, new Set(), index, '/d/cache.md', null, threadKeyOf(second), new Set([threadKeyOf(first)]));
+    const rows = fileQuestionRows(tree, new Set(), index, '/d/cache.md', null, threadKeyOf(second), new Set([threadKeyOf(first)]), new Map());
     expect(rows.map((r) => [r.kind, r.number, r.current, r.unread, r.status])).toEqual([
       ['thread', '1', false, true, 'older'],
       ['thread', '7', true, false, 'open'],
@@ -196,7 +218,7 @@ describe('fileQuestionRows (the rail)', () => {
   });
   it('adds the draft about this file last, dashed as pending, and skips a hidden question', () => {
     const draft = { pageKey: 'pending:file:/d/cache.md:x', parentMsgId: 'file:/d/cache.md', quote: { exact: 'a passage' }, title: 'New question' };
-    const rows = fileQuestionRows(tree, new Set([threadKeyOf(first)]), new Map(), '/d/cache.md', draft, draft.pageKey, new Set());
+    const rows = fileQuestionRows(tree, new Set([threadKeyOf(first)]), new Map(), '/d/cache.md', draft, draft.pageKey, new Set(), new Map());
     expect(rows.map((r) => [r.kind, r.current])).toEqual([['thread', false], ['pending', true]]);
     expect(rows[1]).toMatchObject({ key: draft.pageKey, title: 'New question', status: 'pending' });
   });
@@ -204,13 +226,25 @@ describe('fileQuestionRows (the rail)', () => {
     const writing = { pageKey: 'pending:file:/d/cache.md:a', parentMsgId: 'file:/d/cache.md', quote: { exact: 'one' }, title: 'One' };
     const kept = { pageKey: 'pending:file:/d/cache.md:b', parentMsgId: 'file:/d/cache.md', quote: { exact: 'two' }, title: 'Two' };
     const elsewhere = { pageKey: 'pending:file:/d/other.md:c', parentMsgId: 'file:/d/other.md', quote: { exact: 'three' }, title: 'Three' };
-    const rows = fileQuestionRows(tree, new Set(), new Map(), '/d/cache.md', [writing, kept, elsewhere], writing.pageKey, new Set());
+    const rows = fileQuestionRows(tree, new Set(), new Map(), '/d/cache.md', [writing, kept, elsewhere], writing.pageKey, new Set(), new Map());
     expect(rows.filter((r) => r.kind === 'pending').map((r) => [r.title, r.current])).toEqual([['One', true], ['Two', false]]);
     expect(fileQuestionMarks(tree, new Set(), new Map(), '/d/cache.md', [writing, kept, elsewhere]).filter((m) => m.key.startsWith('pending:')).map((m) => m.title))
       .toEqual(['One', 'Two']);
   });
+  it('follows the same failure, retry and answering state as the card, then uses persisted status', () => {
+    const key = threadKeyOf(first);
+    for (const status of ['failed', 'queued', 'answering'] as const) {
+      const live = new Map<string, ThreadLiveState>([[key, status]]);
+      const rows = fileQuestionRows(tree, new Set(), new Map(), '/d/cache.md', null, key, new Set(), live);
+      expect(rows.find((r) => r.key === key)?.status).toBe(status);
+      expect(rows.find((r) => r.key === threadKeyOf(second))?.status).toBe('older');
+    }
+    const resolved = new Map([[first.msgId, { headId: first.msgId, status: 'resolved', seq: 1 }]]) as never;
+    expect(fileQuestionRows(tree, new Set(), resolved, '/d/cache.md', null, key, new Set(), new Map([[key, 'failed']]))[0].status).toBe('resolved');
+    expect(fileQuestionRows(tree, new Set(), new Map(), '/d/cache.md', null, key, new Set(), new Map())[0].status).toBe('older');
+  });
   it('is empty for a file nobody asked about', () => {
-    expect(fileQuestionRows(tree, new Set(), new Map(), '/d/none.md', null, null, new Set())).toEqual([]);
+    expect(fileQuestionRows(tree, new Set(), new Map(), '/d/none.md', null, null, new Set(), new Map())).toEqual([]);
   });
 });
 

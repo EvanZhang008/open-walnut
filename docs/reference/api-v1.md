@@ -2924,6 +2924,9 @@ primary box the same endpoints serve directly — no bridge involved.
     message instead of sending twice. Omit it and the server mints one (the
     returned `messageId`). Malformed values are ignored (fresh id minted).
     Clients that retry SHOULD send the `messageId` from their first attempt.
+    When the first attempt's line already ran in the CLI (finished, answered, or being
+    answered now), the retry sends nothing and the `202` carries `"alreadyDelivered": true`
+    (additive, 2026-11): the message and its reply are in the session's history.
   - Durability (cloud): sends land in the primary's persistent message queue
     (the same store desktop sends use) before delivery, so a daemon/CLI death
     mid-flight becomes delayed delivery — retry on `503`, never assume loss.

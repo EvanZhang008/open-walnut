@@ -3,7 +3,7 @@
  * (2026-11-08: a native test driver sent Escape, Enter and arrow keys into a web view on a Mac a
  * person was near, and AppKit's NSBeep for each unhandled key sounded through the night). The
  * window at the end of the responder chain answers an unhandled keyDown with NSBeep unless it
- * says otherwise; QuietKeyWindow (desktop/main.swift) says otherwise. Checked on a muted Mac by
+ * says otherwise; QuietKeyWindow (desktop/QuietKeyWindow.swift) says otherwise. Checked on a muted Mac by
  * the system log, never by listening: a plain NSWindow's process opened its connection to the
  * system sound server on the first such key, a QuietKeyWindow's never did.
  *
@@ -39,14 +39,18 @@ const makesKeys = /NSEvent\s*\.\s*keyEvent\s*\(|CGEvent\s*\(\s*keyboardEventSour
 
 describe('every window of the Mac app swallows a key nobody handles', () => {
   it('QuietKeyWindow swallows only keyDown and leaves every other action to AppKit', () => {
-    const src = read('desktop/main.swift')
+    const src = read('desktop/QuietKeyWindow.swift')
     const body = src.match(/final class QuietKeyWindow: NSWindow \{([\s\S]*?)\n\}/)?.[1] ?? ''
     expect(body).toMatch(/override func noResponder\(for eventSelector: Selector\)/)
     expect(body).toMatch(/if eventSelector == #selector\(NSResponder\.keyDown\(with:\)\) \{ return \}/)
     expect(body).toMatch(/super\.noResponder\(for: eventSelector\)/)
-    // It sits above the entry point, so the native tests (which compile main.swift up to it) get it.
-    const raw = fs.readFileSync(path.join(ROOT, 'desktop/main.swift'), 'utf8')
-    expect(raw.indexOf('// MARK: - Entry Point')).toBeGreaterThan(raw.indexOf('final class QuietKeyWindow'))
+    // Its own file, so every build that makes a window gets it: the app and its native tests
+    // through scripts/lib/desktop-app-sources.sh, the Demo app through its own list.
+    const shared = execFileSync('bash', [path.join(ROOT, 'scripts/lib/desktop-app-sources.sh'), ROOT], { encoding: 'utf8' })
+    expect(shared).toContain(path.join(ROOT, 'desktop/QuietKeyWindow.swift'))
+    for (const build of ['desktop/build-demo.sh', 'scripts/test-desktop.sh']) {
+      expect(fs.readFileSync(path.join(ROOT, build), 'utf8'), `${build} builds the Demo app without QuietKeyWindow`).toContain('/QuietKeyWindow.swift"')
+    }
   })
 
   it('found the files it judges', () => {

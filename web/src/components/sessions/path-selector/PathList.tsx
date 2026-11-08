@@ -9,14 +9,16 @@
  * History matches never impersonate live results — each lives under its own
  * section label.
  */
+import { tildePath } from '@/utils/home-folder';
 import { forwardRef, type ReactNode } from 'react';
-import type { HostDot } from '@open-walnut/host-problem';
+import { type HostDot, shownFailureSummary } from '@open-walnut/host-problem';
 import type { DirListingPending } from '@/api/sessions';
 import type { Section, RankedItem } from './ranking';
 import type { HostLiveState } from './useLiveDirs';
 import { HostConnectSteps } from './HostConnectSteps';
 import { HostStatusDot } from './HostStatusDot';
 import { isMoreRow, moreRowText } from './history-cap';
+import { hostTagTitle } from './host-tag';
 
 interface PathParts {
   parent: string;
@@ -36,8 +38,21 @@ function withTrailingSlash(parent: string): string {
   return parent === '/' ? '/' : `${parent}/`;
 }
 
-function shortenHomePath(path: string): string {
-  return path.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, '~');
+/** A full-path row: its parent shortened, and the home folder itself as `~`, never its own long path. */
+export function fullRowLabel(cwd: string, home?: string): { ghost: string; leaf: string } {
+  const { parent, leaf } = splitPath(cwd);
+  const whole = cwd.replace(/\/+$/, '') || '/';
+  if (whole !== '/' && shortenHomePath(`${whole}/`, home) === '~/') return { ghost: '', leaf: '~' };
+  return { ghost: shortenHomePath(withTrailingSlash(parent), home), leaf };
+}
+
+/** `~` for the host's own home. A home learned from its `~/` listing wins over the
+ *  account-shaped guess: a server whose HOME is not the account's (the Demo) lists
+ *  `~/Documents` under its own HOME, and the guess labelled it
+ *  `~/Library/.../home/Documents` (2026-11-08). */
+export function shortenHomePath(path: string, home?: string): string {
+  // The one home rule (utils/home-folder.ts), shared with the draft pills and the Files tree.
+  return tildePath(path, home);
 }
 
 interface Props {
@@ -74,6 +89,8 @@ interface Props {
   rowDots?: ReadonlyMap<string, HostDot>;
   /** The 'Show N more' row was picked. */
   onShowMore?: () => void;
+  /** Host key ('__local__' for local) → its home, learned from a `~/` listing. */
+  homeByHost?: ReadonlyMap<string, string>;
 }
 
 type LiveNote =
@@ -85,7 +102,7 @@ export const PathList = forwardRef<HTMLDivElement, Props>(function PathList(
   {
     sections, selectedIdx, expandSelected, loading, loadError, hostStates, hostLabels, pathMode,
     activeHostLabel, createOption, emptyHint, onItemClick, onItemHover, onCreate,
-    topNote, renderHostNote, noteHosts, rowDots, onShowMore,
+    topNote, renderHostNote, noteHosts, rowDots, onShowMore, homeByHost,
   },
   ref,
 ) {
@@ -103,7 +120,7 @@ export const PathList = forwardRef<HTMLDivElement, Props>(function PathList(
       if (state.status === 'error') {
         liveNotes.push({
           key: hostKey, kind: 'down', label,
-          message: state.hostError?.message ?? state.error ?? 'not responding',
+          message: shownFailureSummary(state.hostError?.message ?? state.error) || 'not responding',
           hint: state.hostError?.hint,
         });
       } else if (state.status === 'loading' && state.pending) {
@@ -163,7 +180,7 @@ export const PathList = forwardRef<HTMLDivElement, Props>(function PathList(
             const isLive = item.source === 'live';
             const fullCwd = `${item.cwd}${isLive ? '/' : ''}`;
             const hostLabel = item.host ? (item.hostLabel ?? item.host) : 'local';
-            const { parent, leaf } = splitPath(item.cwd);
+            const { leaf } = splitPath(item.cwd);
             // Path mode admits only candidates under the typed parent (live AND
             // history), so rows render just their relative segments — the typed
             // prefix already sits in the input. depth > 0 marks path-mode rows;
@@ -178,6 +195,7 @@ export const PathList = forwardRef<HTMLDivElement, Props>(function PathList(
               : [];
             const relLeaf = relSegments[relSegments.length - 1] ?? leaf;
             const relParent = relSegments.slice(0, -1).join('/');
+            const label = fullRowLabel(item.cwd, homeByHost?.get(item.host ?? '__local__'));
             return (
               <div
                 key={`${item.cwd}::${item.host ?? ''}::${item.source}`}
@@ -197,8 +215,8 @@ export const PathList = forwardRef<HTMLDivElement, Props>(function PathList(
                         </>
                       ) : (
                         <>
-                          <span className="sps-path-ghost">{shortenHomePath(withTrailingSlash(parent))}</span>
-                          <span className="sps-path-leaf">{leaf}</span>
+                          <span className="sps-path-ghost">{label.ghost}</span>
+                          <span className="sps-path-leaf">{label.leaf}</span>
                           {isLive && <span className="sps-path-ghost">/</span>}
                         </>
                       )}
@@ -213,9 +231,9 @@ export const PathList = forwardRef<HTMLDivElement, Props>(function PathList(
                     {hostLabel && (
                       <span
                         className={`sps-path-host-tag${isLive ? ' sps-tag-live' : ''}`}
-                        title={item.host && rowDots?.get(item.host) ? rowDots.get(item.host)!.title : hostLabel}
+                        title={hostTagTitle(hostLabel, item.host ? rowDots?.get(item.host)?.title : undefined)}
                       >
-                        {hostLabel.slice(0, 10)}
+                        {hostLabel}
                       </span>
                     )}
                     {isLive && item.history && (

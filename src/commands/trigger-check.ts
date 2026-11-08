@@ -21,6 +21,8 @@ import {
   type TemplateCheckInput,
 } from '../providers/trigger-check-core.js'
 
+import { demoApiHeaders } from '../lib/self-api-root.js'
+
 const DEFAULT_BASE_URL = 'http://127.0.0.1:3456'
 
 export function triggerCheckBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
@@ -67,7 +69,7 @@ export async function runTriggerCheck(template: string, paramsJson: string | und
   try {
     res = await fetch(url, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...demoApiHeaders(url) },
       body: JSON.stringify({ params, input: templateCheckRequestInput(input) }),
       signal: AbortSignal.timeout(templateCheckReplyMs(performance.now())),
     })

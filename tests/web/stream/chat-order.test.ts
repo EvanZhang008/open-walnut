@@ -110,6 +110,19 @@ describe('cardLiveRounds: a question card\'s live part in the chat\'s order', ()
     expect(r.rounds).toEqual([{ bubble: 'FU1' }, { bubble: 'FU2' }]);
   });
 
+  it('failed questions remain in order without taking another round\'s live answer', () => {
+    const sent = { id: 'sent', status: 'delivered' };
+    const failed = { id: 'failed', status: 'failed' };
+    const canAnswer = (m: { status: string }) => m.status !== 'failed';
+    expect(cardLiveRounds([{ block: 'old answer' }, { user: failed }, { block: 'continued answer' }], canAnswer)).toEqual({
+      lead: 'continued answer', rounds: [{ bubble: failed }],
+    });
+    expect(cardLiveRounds([{ user: sent }, { block: 'answer' }, { user: failed }, { block: 'continued answer' }], canAnswer)).toEqual({
+      rounds: [{ bubble: sent, live: 'continued answer' }, { bubble: failed }],
+    });
+    expect(cardLiveRounds([{ user: failed }], canAnswer)).toEqual({ rounds: [{ bubble: failed }] });
+  });
+
   it('each follow-up takes the newest live text after it and before the next one', () => {
     const r = cardLiveRounds<string, string>([{ user: 'FU1' }, { block: 'step' }, { block: 'A(FU1)' }, { user: 'FU2' }, { block: 'A(FU2)' }]);
     expect(r.lead).toBeUndefined();

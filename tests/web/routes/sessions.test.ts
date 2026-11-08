@@ -284,6 +284,12 @@ describe('GET /api/sessions/working-dirs', () => {
     expect(res.status).toBe(200);
     expect(res.body.hosts).toEqual([]);
   });
+
+  it("names this Walnut's own HOME for the picker's ~ (2026-11-08: the Demo's HOME is not the account's)", async () => {
+    const os = await import('node:os');
+    const res = await request(createApp()).get('/api/sessions/working-dirs');
+    expect(res.body.localHome).toBe(os.homedir());
+  });
 });
 
 describe('GET /api/sessions/recent', () => {

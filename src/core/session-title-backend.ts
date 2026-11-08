@@ -17,6 +17,7 @@
 import { log } from '../logging/index.js';
 import { backgroundAiDisabled, fastCallBudgetMs, fastModelFor } from './cheap-model.js';
 import type { Config } from './types.js';
+import { cleanTitleAnswer } from './title-answer.js';
 
 /** The shared "hidden main-model prompt" question. One prompt for every
  *  channel — session-delivered (side_question / ACP) and backend alike. */
@@ -36,30 +37,9 @@ export function buildTitleQuestion(message: string, placeholder: string, require
   ].join('\n');
 }
 
-/** Answers that carry no title signal — refusals and meta-prose. A null here
- *  keeps the placeholder, and a later trigger retries; writing "I cannot
- *  determine..." as a task title would be strictly worse than the placeholder. */
-const REFUSAL_RE = /^(i can(?:no|')t|i cannot|i'm sorry|i am sorry|sorry[,!]|as an ai|i(?:'| a)m unable|there (?:is|was) no)/i;
-
-/** Models sometimes wrap the answer — take the first non-empty line, strip
- *  quote/markdown/label wrappers, collapse whitespace, cap like every other
- *  title write. Rejects (null) anything that is not usable as a title:
- *  refusal prose, a regenerated placeholder, or sub-2-char noise. */
-export function cleanTitleAnswer(answer: string): string | null {
-  const firstLine = answer.split('\n').map((l) => l.trim()).find(Boolean) ?? '';
-  const cleaned = firstLine
-    // Wrappers come off FIRST: a model that answers `**Title: X**` hides the label
-    // behind the bold markers, so a label-first pass leaves "Title:" in the title.
-    .replace(/^[#>*`_\s]+|[*`_\s]+$/g, '')   // markdown heading/bold/code wrappers
-    .replace(/^["'“”]+|["'“”]+$/g, '')       // quote wrappers
-    .replace(/^(?:title\s*:\s*)/i, '')      // "Title: ..." label echo
-    .replace(/\s+/g, ' ')
-    .trim();
-  if (cleaned.length < 2) return null;
-  if (REFUSAL_RE.test(cleaned)) return null;
-  if (/^session:\s/i.test(cleaned)) return null; // regenerated placeholder shape
-  return cleaned.slice(0, 200);
-}
+// The answer rule (cleaning, CLI errors, reply prose, the words it names) lives in
+// title-answer.ts, shared by every path that writes a model's title.
+export { cleanTitleAnswer } from './title-answer.js';
 
 /** Whether the backend channel may run at all (unprompted-model-call gate). */
 export function backendTitleAvailable(): boolean {
@@ -133,7 +113,8 @@ export async function titleViaBackendModel(
       .map((block) => (block.type === 'text' && 'text' in block ? (block as { text: string }).text : ''))
       .join('')
       .trim();
-    const cleaned = cleanTitleAnswer(text);
+    // Read off the words it names: an answer with none of them is no title of theirs.
+    const cleaned = cleanTitleAnswer(text, { words: message });
     // Empty output is also a failure worth ONE retry — a fast model that returns no
     // text at all is a transport hiccup, not a considered refusal (a refusal arrives
     // as prose and is rejected by cleanTitleAnswer below, with the raw text logged).

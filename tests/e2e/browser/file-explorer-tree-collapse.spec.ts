@@ -13,6 +13,7 @@
  * afterEach resets the server copy even when an assertion failed mid-test.
  */
 import { test, expect, type Page } from '@playwright/test'
+import { goToSessionFolder } from './todo-panel-helpers'
 
 const SESSION_ID = 'pw-vscode-session'
 const TASK_ID = 'pw-task-vscode'
@@ -39,6 +40,7 @@ async function openFilesPanel(page: Page) {
   await panel.getByRole('button', { name: 'Files', exact: true }).click()
   const explorer = panel.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 10_000 })
+  await goToSessionFolder(explorer)
   return { panel, explorer }
 }
 
@@ -50,8 +52,9 @@ test.afterEach(async ({ page }) => {
   await page.waitForTimeout(1200)
 })
 
-test.beforeEach(async ({ page }) => {
-  await page.goto('/')
+test.beforeEach(async ({ page, baseURL }) => {
+  await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
+  await page.getByRole('link', { name: 'Open Walnut' }).click()
   await page.waitForLoadState('networkidle')
 })
 

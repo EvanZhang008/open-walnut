@@ -47,6 +47,8 @@ import { computeExpectedDaemonVersion } from './daemon-version-check.js'
 import { foldLine, initialFoldState, assembleSnapshot, snapshotDiffers } from './daemon-fold.js'
 import { createFoldCheckpoint } from './fold-checkpoint-core.js'
 import { createDaemonCommandDrain } from './daemon-command-drain.js'
+import { createDemoDaemonQuiesce } from './demo-daemon-quiesce-core.js'
+import { demoGatewaySocketPath } from './gateway-core.js'
 import { createCronMetadataTracker, CRON_PROMPT_LIMIT } from './daemon-cron-metadata.js'
 import { createEnvelopeKit } from '../core/peers/envelope-kit.js'
 import { createOfflineHostCore } from './offline-host-core.js'
@@ -68,7 +70,7 @@ import { createStreamRelay } from './stream-relay-core.js'
 import { createHostResume } from './host-resume-core.js'
 import { createCliOwner } from './cli-owner-core.js'
 import { createCliArgvFiles } from './cli-argv-files-core.js'
-import { argvNamesSession, boundedExecFile, createNoticeOnce, keepRuntimeFiles, observedPermissionMode } from './daemon-core.js'
+import { argvNamesSession, boundedExecFile, createNoticeOnce, keepRuntimeFiles, observedPermissionMode, validLineFateQuery } from './daemon-core.js'
 import { userLineContent } from './user-line-images-core.js'
 import { createStreamCompact } from './stream-compact-core.js'
 import { createStreamFold } from './stream-fold-core.js'
@@ -305,6 +307,9 @@ export function getDaemonSource(): string {
     ['__SNAPSHOT_DIFFERS__', snapshotDiffers.toString()],
     ['__CREATE_FOLD_CHECKPOINT__', createFoldCheckpoint.toString()],
     ['__CREATE_COMMAND_DRAIN__', createDaemonCommandDrain.toString()],
+    ['__CREATE_DEMO_QUIESCE__', createDemoDaemonQuiesce.toString()],
+    ['__DEMO_GATEWAY_SOCKET_PATH__', demoGatewaySocketPath.toString()],
+    ['__VALID_LINE_FATE_QUERY__', validLineFateQuery.toString()],
     ['__CREATE_CRON_METADATA__', createCronMetadataTracker.toString()],
     ['__CREATE_HOST_RUNTIME__', createHostRuntime.toString()],
     ['__CREATE_HOST_FIX__', createHostFix.toString()],
@@ -395,6 +400,9 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
   // eslint-disable-next-line @typescript-eslint/no-implied-eval
   const helpers = new Function(`"use strict"; ${INJECTED_HELPERS_SOURCE}\nreturn [${INJECTED_HELPER_NAMES.join(', ')}]`)() as unknown[]
   for (const [ph, body] of injections) {
+    if (/\bprocess\.(platform|arch)\b/.test(body)) {
+      throw new Error(`daemon-source: injected ${ph} reads the build platform; pass the running host platform through its dependencies`)
+    }
     const missing = undefinedInjectedHelpers(body)
     if (missing.length > 0) {
       throw new Error(
@@ -429,6 +437,16 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
       if (drain.closed || drain.run(() => 7) !== 7) throw new Error('Invalid daemon command drain')
       void drain.close()
       if (!drain.closed) throw new Error('Daemon command drain did not close admission')
+    }
+    // demo.quiesce must build and stay open on a daemon that is no Demo's.
+    const createQuiesce = reconstructed['__CREATE_DEMO_QUIESCE__'] as typeof createDemoDaemonQuiesce | undefined
+    if (createQuiesce) {
+      const q = createQuiesce({
+        env: {}, daemonDir: '/tmp/open-walnut', isProdDaemonDir: true, serviceMode: false, keepSessions: false,
+        resolve: (...parts) => path.resolve(...parts), basename: (p) => path.basename(p),
+        settle: async () => {}, endWarmPool: () => {}, oneShot: () => ({ runs: 0, pool: 0, children: 0 }), acpRuntimes: () => [],
+      })
+      if (q.fenced || !q.allows('start')) throw new Error('demo quiesce did not build')
     }
     // Offline host smoke: the envelope wording and the offline answers ride this
     // text, so a reconstructed kit must still escape a forged tag, and a
@@ -563,7 +581,7 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
     const createCompact = reconstructed['__CREATE_STREAM_COMPACT__'] as typeof createStreamCompact | undefined
     if (createCompact) {
       const sc = createCompact({ fs, now: () => 0, pid: 7, maxLineBytes: 1024 })
-      if (sc.tmpPathFor('/x/s.jsonl') !== '/x/s.jsonl.compact-tmp-7' || sc.due('/nonexistent/s.jsonl', { size: 0, ino: 1 }) || sc.isStreamFile('a.acp.jsonl')) {
+      if (sc.tmpPathFor('/x/s.jsonl') !== '/x/s.jsonl.compact-tmp-7' || sc.due('/nonexistent/s.jsonl', { size: 0, dev: 0, ino: 1, birthtimeMs: 0 }) || sc.isStreamFile('a.acp.jsonl')) {
         throw new Error('stream compaction did not build')
       }
     }
@@ -671,7 +689,7 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
     // "loggedIn: false" answer as signed in.
     const createCheck = reconstructed['__CREATE_CLAUDE_CHECK__'] as typeof createClaudeCheck | undefined
     if (createCheck) {
-      const ck = createCheck({ env: {} })
+      const ck = createCheck({ env: {}, platform: 'linux' })
       if (ck.versionAtLeast('2.1.258', '2.1.280') !== false || ck.versionAtLeast('2.1.280', '2.1.280') !== true) throw new Error('claude check compared versions wrongly')
       if (ck.parseAuthStatus('{"loggedIn": false, "authMethod": "none"}')?.state !== 'not-logged-in') throw new Error('claude check misread a signed-out answer')
     }
@@ -1730,7 +1748,7 @@ function runWnMinimal(argv, stdinText) {
 // the daemon PATH, so the daemon PATH is the whole answer here.
 const hostRuntime = (__CREATE_HOST_RUNTIME__)({
   fs: fs, execFile: execFile, execFileSync: execFileSync, env: process.env, platform: process.platform, arch: process.arch,
-  claudeCheck: (__CREATE_CLAUDE_CHECK__)({ fs: fs, execFile: execFile, env: process.env, sha256Hex: function (s) { return crypto.createHash('sha256').update(s).digest('hex'); } }),
+  claudeCheck: (__CREATE_CLAUDE_CHECK__)({ fs: fs, execFile: execFile, env: process.env, platform: process.platform, sha256Hex: function (s) { return crypto.createHash('sha256').update(s).digest('hex'); } }),
 });
 const bootPath = hostRuntime.computeDaemonPath();
 process.env.PATH = bootPath.path;
@@ -1794,6 +1812,43 @@ const IS_PROD_DAEMON_DIR = path.resolve(DAEMON_DIR) === path.resolve(PROD_DAEMON
   || path.resolve(DAEMON_DIR) === path.resolve(FALLBACK_DAEMON_DIR);
 const STREAMS_DIR = process.env.WALNUT_STREAMS_DIR
   || (IS_PROD_DAEMON_DIR ? PROD_STREAMS_DIR : (DAEMON_DIR + '-streams'));
+// demo.quiesce (demo-daemon-quiesce-core.ts, inlined): a Demo's own daemon closes for good
+// before its reset and waits for what it accepted. Refused on every other daemon. Mirror daemon-standalone.ts.
+const demoQuiesce = (__CREATE_DEMO_QUIESCE__)({
+  env: process.env, daemonDir: DAEMON_DIR, isProdDaemonDir: IS_PROD_DAEMON_DIR,
+  serviceMode: SERVICE_MODE, keepSessions: KEEP_SESSIONS_ON_EXIT,
+  resolve: function () { return path.resolve.apply(path, arguments); },
+  basename: function (p) { return path.basename(p); },
+  settle: function () { return daemonCommands.settle(); },
+  endWarmPool: function () { oneShot.endWarmPool(); },
+  oneShot: function () { return oneShot.liveChildren(); },
+  // An older ACP sidecar has no listWorkers: read its worker map the same way.
+  acpRuntimes: function () {
+    if (!acp) return [];
+    if (typeof acp.listWorkers === 'function') return acp.listWorkers();
+    return Array.from(acp.workers.values()).map(function (e) {
+      return { sid: e.sid, state: e.state, pid: e.proc && typeof e.proc.pid === 'number' ? e.proc.pid : null, stopping: !!e.stopping };
+    });
+  },
+  // The daemon's own automatic work for the Demo's data: its trigger checks end, its plugin jobs retire.
+  stopInternalWork: function (home) {
+    if (demoTriggerChecks) demoTriggerChecks.abort();
+    if (typeof pluginJobs.quiesce === 'function') pluginJobs.quiesce(home);
+  },
+  background: function (home) {
+    var jobs = typeof pluginJobs.pending === 'function' ? pluginJobs.pending(home) : { runs: 0, draining: 0, timers: 0 };
+    return {
+      triggerChecks: demoTriggerCheckPids.size, triggerRuns: triggerChecksRunning.size, triggerTests: triggerTestsRunning,
+      triggerDeliveries: hostDeliveriesInFlight.size, pluginJobRuns: jobs.runs, pluginJobsDraining: jobs.draining, pluginJobTimers: jobs.timers,
+    };
+  },
+});
+// MCP and restart readers derive their paths from the socket's parent; Demo uses its checked short dir.
+var GATEWAY_SOCK_PATH = (demoQuiesce.isDemo
+  ? (__DEMO_GATEWAY_SOCKET_PATH__)(process.env.WALNUT_DEMO_ROOT || '', process.env.WALNUT_DEMO_GENERATION || '', typeof process.getuid === 'function' ? process.getuid() : null, fs, path, crypto)
+  : null) || path.join(DAEMON_DIR, 'agent-gateway.sock');
+var GATEWAY_SHIM_DIR = path.join(path.dirname(GATEWAY_SOCK_PATH), 'bin');
+var GATEWAY_SHIM_PATH = path.join(GATEWAY_SHIM_DIR, 'walnut');
 
 // ── Spawn journal ───────────────────────────────────────────────────────────
 // Append-only record of every CLI session ANY Walnut daemon on this host
@@ -1941,8 +1996,9 @@ const INSTANCE_ID_FILE = path.join(DAEMON_DIR, 'daemon.instance');
 // daemon.instance, so a reader can tell a stale hint from the current one.
 // Mirror daemon-standalone.ts.
 const SERVICE_FILE = path.join(DAEMON_DIR, 'daemon.service');
-// Twin of daemon-standalone.ts RESTART_MARK_FILE (daemon-restart-mark.ts RESTART_MARK_NAME).
-const RESTART_MARK_FILE = path.join(DAEMON_DIR, 'restarting');
+// Twin of daemon-standalone.ts RESTART_MARK_FILE (daemon-restart-mark.ts RESTART_MARK_NAME),
+// beside the gateway socket, where walnut looks for it (wn-cli.ts daemonRestartingAt).
+const RESTART_MARK_FILE = path.join(path.dirname(GATEWAY_SOCK_PATH), 'restarting');
 // Source of truth for upgrade decisions — written at startup, read by
 // DaemonConnection.shouldUpgradeDaemon via cat. Must mirror daemon-standalone.ts.
 const VERSION_FILE = path.join(DAEMON_DIR, 'daemon.version');
@@ -4195,6 +4251,18 @@ function handleCommand(ws, msg) {
     sendError(ws, id, 'internal daemon error handling ' + cmd.cmd + ': '
       + (err instanceof Error ? err.message : String(err)));
   };
+  // demo.quiesce runs outside the drain (it waits for the drain); once it fenced, only reads and stops.
+  // Twin of daemon-standalone.ts.
+  if (cmd.cmd === 'demo.quiesce') {
+    demoQuiesce.quiesce(ws.origin, cmd).then(function (reply) {
+      if (reply.ok) sendOk(ws, id, reply);
+      else sendError(ws, id, reply.error, reply);
+    }, replyError);
+    return;
+  }
+  if (!demoQuiesce.allows(cmd.cmd)) {
+    return sendError(ws, id, 'Demo is stopping; no new work is accepted', { errorKind: 'demo_stopping' });
+  }
   try {
     // An answer to a relay is not new work: taken while the daemon pauses or drains (twin of daemon-standalone.ts).
     const work = function () { return dispatchCommand(ws, id, cmd); };
@@ -4255,6 +4323,7 @@ function dispatchCommand(ws, id, cmd) {
   switch (cmd.cmd) {
     case 'start': return daemonCommands.run(function () { return cmdStart(ws, id, cmd); });
     case 'attach': return daemonCommands.run(function () { return cmdAttach(ws, id, cmd); });
+    case 'line.fate': return daemonCommands.run(function () { return cmdLineFate(ws, id, cmd); });
     case 'send': return daemonCommands.run(function () { return cmdSend(ws, id, cmd); });
     case 'sendRaw': return daemonCommands.run(function () { return cmdSendRaw(ws, id, cmd); });
     case 'appendUserMarker': return cmdAppendUserMarker(ws, id, cmd);
@@ -5202,10 +5271,7 @@ function cmdMessageResult(ws, id, cmd) {
 // CURRENT sid via gatewaySidAliases and relays to the Mac hub with the same
 // reverse-RPC shape as cmdLaunchRelay/cmdLaunchResult (relayId + pending map +
 // gateway-request event / gateway-result command).
-
-var GATEWAY_SOCK_PATH = path.join(DAEMON_DIR, 'agent-gateway.sock');
-var GATEWAY_SHIM_DIR = path.join(DAEMON_DIR, 'bin');
-var GATEWAY_SHIM_PATH = path.join(GATEWAY_SHIM_DIR, 'walnut');
+// GATEWAY_SOCK_PATH, GATEWAY_SHIM_DIR and GATEWAY_SHIM_PATH are defined right after demoQuiesce.
 // 28MB (keep in sync with gateway-core.ts): one human_inbox_send is ONE line,
 // and a digest letter that embeds base64 audio or video is megabytes. Bounds the
 // INLINE lane only — a payload over GATEWAY_INLINE_ARGS_MAX_BYTES (1MB) rides a
@@ -5459,9 +5525,30 @@ var offlineSweepTimer = null;
 function migrateJournals() {
   journalMigration.boot();
   if (!offlineSweepTimer) {
-    offlineSweepTimer = setInterval(function () { offlineHost.sweep().catch(function () {}); }, 60000);
+    offlineSweepTimer = setInterval(offlineSweepTick, 60000);
     if (offlineSweepTimer.unref) offlineSweepTimer.unref();
   }
+}
+
+// A stopping Demo's sweep would deliver journaled messages into sessions past its fence.
+function offlineSweepTick() {
+  if (demoQuiesce.fenced) return;
+  offlineHost.sweep().catch(function () {});
+}
+
+// A host delivery is a send outside the command drain: a Demo admits it (quiesce waits for it) and refuses it once fenced, also after it queued at the gate.
+function deliverFromOfflineHost(sid, text, messageId) {
+  if (demoQuiesce.fenced) return Promise.resolve({ ok: false, reason: 'demo_stopping' });
+  var work = function () {
+    return sessionStartGate.run(sid, async function () {
+      if (demoQuiesce.fenced) return { ok: false, reason: 'demo_stopping' };
+      cancelTurnRetry(sid, 'superseded-by-send');
+      var r = await handleSendCommand(sid, text, undefined, [{ message: text, messageId: messageId }], { fromHost: true });
+      if (!r || r.ok !== true) return { ok: false, reason: String((r && (r.reason || r.error)) || 'send failed') };
+      return r.noticeLeftOut ? { ok: true, noticeLeftOut: true } : { ok: true };
+    });
+  };
+  return demoQuiesce.isDemo && !daemonCommands.closed ? daemonCommands.admit(work) : work();
 }
 
 var offlineHost = (__CREATE_OFFLINE_HOST__)({
@@ -5509,14 +5596,7 @@ var offlineHost = (__CREATE_OFFLINE_HOST__)({
   turnActive: function (sid) { var s = sessions.get(sid); return !!(s && s.foldState && s.foldState.turnActive === true); },
   pendingPrompt: function (sid) { var s = sessions.get(sid); return (s && s.pendingCtrl && s.pendingCtrl.toolName) || null; },
   // The same gate and turn-retry reset a server send goes through (cmdSend).
-  deliver: function (sid, text, messageId) {
-    return sessionStartGate.run(sid, async function () {
-      cancelTurnRetry(sid, 'superseded-by-send');
-      var r = await handleSendCommand(sid, text, undefined, [{ message: text, messageId: messageId }], { fromHost: true });
-      if (!r || r.ok !== true) return { ok: false, reason: String((r && (r.reason || r.error)) || 'send failed') };
-      return r.noticeLeftOut ? { ok: true, noticeLeftOut: true } : { ok: true };
-    });
-  },
+  deliver: function (sid, text, messageId) { return deliverFromOfflineHost(sid, text, messageId); },
   // A stopped session started again for a trigger fire (trigger-host-resume-v1).
   resume: function (home, sid, text, messageId, taskId) { return resumeForTrigger(home, sid, text, messageId, taskId); },
   streamOffset: function (sid) {
@@ -5986,6 +6066,7 @@ var pluginJobs = (__CREATE_PLUGIN_JOBS__)({
   maxLogBytes: Number(process.env.WALNUT_PLUGIN_JOB_LOG_MAX_BYTES) || undefined,
   // A test knob: never on the production daemon dir.
   minEveryMs: IS_PROD_DAEMON_DIR ? undefined : Number(process.env.WALNUT_PLUGIN_JOB_MIN_EVERY_MS) || undefined,
+  maySpawn: function () { return !demoQuiesce.fenced; },
 });
 
 // The leader only, on the socket its leader.configure tagged, for its own Walnut.
@@ -7410,6 +7491,7 @@ async function cmdAcpStart(ws, id, cmd) {
   }, { WALNUT_TASK_DIR: acpTaskDir || '', WALNUT_SECRETS_DIR: SECRETS_ROOT || '', ...pwSilenceAcpOptions(params.env) });
   return sessionStartGate.run(params.sid, async function () {
     if (!params.providerSessionId && fs.existsSync(cancelledStartPath(params.sid))) throw new Error('Initial start was cancelled; retry task_start on the same task');
+    if (demoQuiesce.fenced) throw new Error('acpStart: Demo is stopping; no new worker starts');
     const resp = await acp.acpStart(ws, params);
     if (resp.ok) sendOk(ws, id, resp.result || {});
     else { try { ws.send(JSON.stringify({ id, ok: false, error: resp.error, errorKind: resp.errorKind })); } catch {} }
@@ -7564,6 +7646,8 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
   await requireBudgetAllowance(sid);
   if (canStart && !canStart()) throw Object.assign(new Error('start: stop request superseded this start'), { code: 'SESSION_STOP_SUPERSEDED' });
   if (isCurrent && !isCurrent()) throw new Error('start: supervision request was superseded');
+  // Every native start comes here (commands, turn retries, host resumes, offline asks).
+  if (demoQuiesce.fenced) throw new Error('start: Demo is stopping; no new session starts');
 
   // A working directory that is gone fails here, in words the server reads as a gone
   // folder (it then offers to continue the session in a new one), instead of a spawn
@@ -7889,6 +7973,8 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
   let barrier = null;
   let proc;
   try {
+    // Last synchronous point before the CLI exists: a fence set during the awaits above wins.
+    if (demoQuiesce.fenced) throw new Error('start: Demo is stopping; no new session starts');
     // Content arguments go to files: the CLI's argv carries paths (cli-argv-files-core.ts).
     const spawnArgs = cliArgvFiles.toFiles(launch.args);
     barrier = SERVICE_MODE ? cronRuntimeCore.spawnBehindRegistry(launch.command, spawnArgs, spawnOptions) : null;
@@ -8875,6 +8961,15 @@ var triggerTickTimer = null;
 // keepRuntimeFiles clock; cleanup() stops it, so a dying daemon never writes its files back.
 var runtimeKeepTimer = null;
 var triggerTestsRunning = 0;
+// Check pids not closed yet (runs in flight: triggerChecksRunning): demo.quiesce alone aborts them and waits for 0. Mirror daemon-standalone.ts.
+var demoTriggerChecks = typeof AbortController === 'function' ? new AbortController() : null;
+var demoTriggerCheckPids = new Set();
+// runCheckProcess options every check of this daemon runs with.
+function checkRunFence() {
+  var fence = { maySpawn: function () { return !demoQuiesce.fenced; }, children: demoTriggerCheckPids };
+  if (demoTriggerChecks) fence.signal = demoTriggerChecks.signal;
+  return fence;
+}
 
 // Replay cadence for unacked fires; the env override exists for tests.
 function triggerReplayMs() {
@@ -9321,6 +9416,7 @@ function sendTriggerFire(entry, fire, replay) {
 }
 
 async function runTrigger(entry) {
+  if (demoQuiesce.fenced) return { outcome: 'quiet', reason: 'demo_stopping' };
   if (entry.def.clock) return runClock(entry, false) === 'fired' ? { outcome: 'fired' } : { outcome: 'quiet' };
   if (!entry.def.check) return { outcome: 'error', error: 'trigger has no check' };
   entry.running = true;
@@ -9332,12 +9428,17 @@ async function runTrigger(entry) {
   // re-arm has already read from that file.
   var stillArmed = function () { return armedTriggers.get(triggerKey(entry.home, entry.def.id)) === entry; };
   try {
-    var proc = await triggerCheckCore.runCheckProcess(entry.def.check, triggerCheckCore.buildCheckStdin(entry.state, startedAt), {
+    var proc = await triggerCheckCore.runCheckProcess(entry.def.check, triggerCheckCore.buildCheckStdin(entry.state, startedAt), Object.assign({
       env: { WALNUT_TRIGGER_ID: entry.def.id, WALNUT_TRIGGER_NAME: entry.def.name },
-    });
+    }, checkRunFence()));
     var parsed = triggerCheckCore.parseCheckStdout(proc.stdout);
     var error = triggerCheckCore.checkErrorOf(proc, parsed);
     var now = Date.now();
+    // A stopping Demo writes no state and sends no event for a run its stop ended.
+    if (demoQuiesce.fenced) {
+      logMsg('info', 'trigger run discarded: Demo is stopping', { id: entry.def.id });
+      return { outcome: 'quiet', reason: 'demo_stopping' };
+    }
     if (!stillArmed()) {
       logMsg('info', 'trigger run discarded: disarmed mid-run', { id: entry.def.id });
       return error ? { outcome: 'error', error: error } : { outcome: 'quiet' };
@@ -9426,6 +9527,7 @@ function replayPendingFires(now) {
 // it. No live session, a complete task, or a failed write: the fire stays for the
 // server and is tried here again after a minute. Twin of daemon-standalone.ts.
 function deliverUnclaimedFires(now) {
+  if (demoQuiesce.fenced) return;
   if (!triggerCheckCore || typeof triggerCheckCore.buildTriggerMessage !== 'function') return;
   var grace = hostDeliveryGraceMs();
   for (const entry of fireHolders()) {
@@ -9494,7 +9596,7 @@ function startUnclaimedRun(entry, fire, now) {
   var home = entry.home;
   var key = triggerKey(home, id);
   var def = entry.def;
-  if (!def.start) return;
+  if (!def.start || demoQuiesce.fenced) return;
   var epoch = entry.state.epoch;
   var seqs = [fire.seq];
   hostDeliveriesInFlight.set(key, new Set(seqs));
@@ -9530,6 +9632,8 @@ function startUnclaimedRun(entry, fire, now) {
 
 // Overlap is SKIPPED, never queued: a slow check must not build a backlog.
 function tickTriggers() {
+  // A stopping Demo starts no check, delivery or routine run, and replays nothing.
+  if (demoQuiesce.fenced) return;
   var now = Date.now();
   for (const entry of armedTriggers.values()) {
     if (entry.running || entry.nextRunAtMs > now) continue;
@@ -9770,6 +9874,7 @@ async function runTriggerTest(check, targetId, home) {
   }
   var spec = { run: raw.run, timeoutSeconds: triggerCheckCore.clampTimeoutSeconds(raw.timeoutSeconds) };
   if (typeof raw.cwd === 'string' && raw.cwd) spec.cwd = raw.cwd;
+  if (demoQuiesce.fenced) throw new Error('triggers.test: Demo is stopping; no check starts');
   if (triggerTestsRunning >= TRIGGER_TEST_MAX_CONCURRENT) {
     throw new Error('triggers.test: too many concurrent tests (max ' + TRIGGER_TEST_MAX_CONCURRENT + ')');
   }
@@ -9779,12 +9884,12 @@ async function runTriggerTest(check, targetId, home) {
     var held = targetId ? triggerFor(home || '', targetId) : undefined;
     var entry = held && armedTriggers.get(triggerKey(held.home, held.def.id)) === held ? held : undefined;
     var state = entry ? entry.state : triggerCheckCore.emptyHostState(now);
-    var proc = await triggerCheckCore.runCheckProcess(spec, triggerCheckCore.buildCheckStdin(state, now), {
+    var proc = await triggerCheckCore.runCheckProcess(spec, triggerCheckCore.buildCheckStdin(state, now), Object.assign({
       env: {
         WALNUT_TRIGGER_ID: entry ? entry.def.id : (targetId || 'trigger-test'),
         WALNUT_TRIGGER_NAME: entry ? entry.def.name : 'trigger test',
       },
-    });
+    }, checkRunFence()));
     var parsed = triggerCheckCore.parseCheckStdout(proc.stdout);
     var error = triggerCheckCore.checkErrorOf(proc, parsed);
     var output = parsed.ok ? parsed.output : null;
@@ -11414,6 +11519,27 @@ async function scanTail(filePath, max, onText) {
     await fh.close().catch(() => {});
   }
 }
+// Read-only recovery query. Not reachable from bridge, follower or lane sockets.
+const validLineFateQuery = (__VALID_LINE_FATE_QUERY__);
+async function handleLineFateQuery(sid, uuid, messageIds) {
+  if (typeof sid !== 'string' || !sid) return { ok: false, fate: 'unknown', reason: 'not_found' };
+  if (!validLineFateQuery(sid, uuid, messageIds)) return { ok: false, fate: 'unknown', reason: 'invalid_query' };
+  const session = sessions.get(sid);
+  if (!session) return { ok: false, fate: 'unknown', reason: 'not_found' };
+  // A dead record's stored pid is not a running CLI. Never change the record or signal it.
+  const state = session.state;
+  const pid = session.pid;
+  const readView = state === 'dead' ? Object.assign({}, session, { pid: null }) : session;
+  const fate = await lineFateInProcess(readView, uuid, messageIds.slice(), null, undefined, sid);
+  if (sessions.get(sid) !== session || session.state !== state || session.pid !== pid) {
+    return { ok: false, fate: 'unknown', reason: 'unknown' };
+  }
+  return fate ? Object.assign({ ok: true }, fate) : { ok: false, fate: 'unknown', reason: 'unknown' };
+}
+async function cmdLineFate(ws, id, cmd) {
+  sendOk(ws, id, await handleLineFateQuery(cmd.sid, cmd.uuid, cmd.messageIds));
+}
+
 // answersSid (line-answer-v1): the server tells a taken line from an answered one;
 // when the stream no longer holds the line's frames, the CLI's transcript says
 // whether it took the line and answered it (transcriptLineScan).
@@ -11686,6 +11812,13 @@ function pidNowRunsAnotherProgram(sid, session, recordedStartTime) {
   return !files.some(function (name) { return argv.includes(name); });
 }
 
+/** The pid's own process is gone (ESRCH) while its process group still has members. */
+function leaderGoneWithGroup(pid) {
+  try { process.kill(pid, 0); return false; } catch (err) {
+    return !!err && err.code === 'ESRCH' && isProcessGroupAlive(pid);
+  }
+}
+
 function stopSessionProcess(ws, id, sid) {
   const session = sessions.get(sid);
   if (!session || !session.pid) {
@@ -11779,7 +11912,9 @@ function stopSessionProcess(ws, id, sid) {
         }
         return reply();
       }
-      if (!sameProcess()) return reply('stop: process identity changed; no further signals sent');
+      // The CLI may have exited on the SIGINT while its children still leave its group: with the
+      // leader gone and the group alive, the members are the CLI's own (daemon-standalone.ts).
+      if (!sameProcess() && !leaderGoneWithGroup(pid)) return reply('stop: process identity changed; no further signals sent');
       checks++;
       if (checks === 25) {
         try { killProcessGroup(pid, 'SIGTERM'); } catch (err) { return reply('stop: ' + String(err)); }
@@ -14077,6 +14212,8 @@ let acp = null;
 try {
   const acpDaemonCore = require(path.join(__dirname, 'acp-daemon-core.cjs'));
   acp = acpDaemonCore.createAcpDaemon({
+    maySpawn: function () { return !demoQuiesce.fenced; },
+    strictStop: function () { return demoQuiesce.isDemo; },
     streamsDir: STREAMS_DIR,
     daemonDir: DAEMON_DIR,
     sendEvent: sendEvent,
@@ -15019,6 +15156,8 @@ function cmdList(ws, id) {
     }
   }
 
+  // A fenced Demo counts a session whose CLI exited while its group lives on (zero-signal probe), so its reset keeps the data.
+  if (demoQuiesce.fenced) for (const row of result) if (!row.alive && row.pid && isProcessGroupAlive(row.pid)) row.alive = true;
   sendOk(ws, id, { sessions: ws.origin === 'follower' ? followerReads.ownRows(followerHomeOf(ws), result) : result });
 }
 

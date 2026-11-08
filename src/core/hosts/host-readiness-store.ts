@@ -39,7 +39,7 @@ export interface HostReadiness extends HostPreflightResult {
 }
 
 /** What the store keeps: the preflight answer; fix state is merged on read. */
-export type StoredReadiness = Omit<HostReadiness, 'fixing' | 'fixes'>
+export type StoredReadiness = Omit<HostReadiness, 'fixing' | 'fixes'> & { probeEpoch?: number }
 
 // ── Per-host store ──
 
@@ -75,8 +75,10 @@ export const problemCtx = new Map<string, { prebuiltDtach: boolean; hostLabel?: 
 
 /** The stored answer with the fix state merged in, as every surface reads it. */
 export function getHostReadiness(host: string, now: number = Date.now()): HostReadiness | undefined {
-  const base = store.get(host)
-  if (!base) return undefined
+  const stored = store.get(host)
+  if (!stored) return undefined
+  const base = { ...stored }
+  delete base.probeEpoch
   const fx = fixState.get(host)
   const fixes = fx?.fixes ?? []
   const fixing = fx?.fixing
@@ -166,15 +168,13 @@ export function clearHostReadiness(host?: string, opts: { keepFixMemory?: boolea
   problemCtx.delete(host)
 }
 
-/**
- * A re-check that failed still answers the human who asked: keep the previous
- * good answer, stamp the attempt and its error, and push. With no previous
- * answer there is nothing on screen to update, so nothing is stored.
- */
+/** Keep the last good answer, or an unknown first result, and publish the failed check. */
 export function markCheckFailed(host: string, message: string, at: number): void {
   const prev = store.get(host)
-  if (!prev) return
-  store.set(host, { ...prev, checkedAt: at, checkError: message.slice(0, 300) })
+  store.set(host, {
+    ...(prev ?? { claude: { found: false, auth: 'unknown', unknown: 'The readiness check did not finish.' }, compiler: { found: false }, dtach: { found: false }, problems: [] }),
+    checkedAt: at, checkError: message.slice(0, 300),
+  })
   notifyReadiness(host)
 }
 

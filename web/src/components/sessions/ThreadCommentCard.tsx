@@ -23,15 +23,16 @@
  * button (or Esc) brings it back (2026-10-29, the user: Enlarge should be "像正常
  * 的一个 full screen 在右上角", full screen in place).
  */
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import type { CardGrown } from '@/utils/thread-card';
 import type { ThreadViewStatus } from '@/utils/thread-meta';
 import { ICON_COLLAPSE, ICON_EXPAND } from '@/components/common/Icons';
 import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
-import { useImageAttachments } from '@/components/common/image-attachments';
+import { useImageAttachments, type ImageAttachments } from '@/components/common/image-attachments';
 import { AttachPictureButton, PictureStrip, usePictureInput } from '@/components/common/PictureStrip';
 import type { ImageAttachment } from '@/api/chat';
 import { useDraft } from '@/hooks/useDraft';
+import { claimFailedDraft, draftOriginOf, draftSaveMark, onDraftSettled, type DraftOrigin } from '@/utils/drafts';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { ThreadStatusWord } from './ThreadStatusWord';
 import { ThreadCloseIcon } from './ThreadIcons';
@@ -89,7 +90,7 @@ export interface ThreadCommentCardProps {
   canAsk: boolean;
   /** The header's menu (the owner supplies the page menu). */
   menu?: ReactNode;
-  onSend: (text: string, images?: ImageAttachment[]) => Promise<boolean> | boolean;
+  onSend: (text: string, images?: ImageAttachment[], origin?: DraftOrigin) => Promise<boolean> | boolean;
   onClose: () => void;
   /** "Quote in chat": the chat's composer writes to this question from now on. */
   onQuote?: () => void;
@@ -102,7 +103,7 @@ export interface ThreadCommentCardProps {
   onTextChange?: (text: string) => void;
   /** Where the card sits (content coordinates of its layer) and how tall it may
    *  grow; `grown`, how far it reaches expanded (no ⤢ without it). */
-  style: { top: number; bottom?: number; left: number; width: number; maxHeight: number; grown?: CardGrown };
+  style: { top: number; bottom?: number; left: number; width: number; maxHeight: number; grown?: CardGrown; away?: boolean };
   /** The scroll box whose visible area the card fills in full screen (⤢). Given,
    *  ⤢ toggles full screen; without it, ⤢ grows the card where it is. */
   fillRef?: RefObject<HTMLElement | null>;
@@ -171,7 +172,13 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
   // The question is dictated the way the composer's message is: into this box.
   const mic = useRef<BoxMicHandle | null>(null);
   // Pictures go with the question, as in the chat (common/image-attachments.ts).
-  const pictures = useImageAttachments();
+  // Adding (from the moment it starts) or removing a picture is an edit of the draft.
+  const rawPictures = useImageAttachments();
+  const pictures = useMemo<ImageAttachments>(() => ({
+    ...rawPictures,
+    add: (files) => { draftSaveMark(draft.key); rawPictures.add(files); },
+    remove: (index) => { draftSaveMark(draft.key); rawPictures.remove(index); },
+  }), [rawPictures, draft.key]);
   const pictureInput = usePictureInput(pictures, p.canAsk);
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const cardRef = useRef<HTMLDivElement | null>(null);
@@ -218,6 +225,14 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
     } else cardRef.current?.focus({ preventScroll: true });
     autoGrowRef.current(false);
   }, [p.threadKey, p.draft, p.canAsk]);
+
+  // A Retry sent the words this card kept from a send that failed, so its pictures went too (useDraft empties the box).
+  const sentTextRef = useRef(text);
+  sentTextRef.current = text;
+  const clearPictures = pictures.clear;
+  useEffect(() => onDraftSettled((origin) => {
+    if (origin.key === draft.key && sentTextRef.current.trim() === origin.text.trim()) clearPictures();
+  }), [draft.key, clearPictures]);
 
   const onTextChange = p.onTextChange;
   useEffect(() => { onTextChange?.(text); }, [text, onTextChange]);
@@ -286,14 +301,19 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
     setSending(true);
     // A first send turns an Ask into a question with its own key: the words go from the one they were typed under.
     const sentKey = draft.key;
+    const origin = sentKey ? draftOriginOf(sentKey, t) : undefined;
     try {
-      const ok = await p.onSend(t, images.length ? images : undefined);
+      const ok = await p.onSend(t, images.length ? images : undefined, origin);
       if (ok) {
         // A transcription landing after the send would repeat what was just sent.
         mic.current?.clear();
         pictures.clear();
         draft.clear(sentKey, t);
         pinned.current = true;
+      } else if (origin) {
+        // The words stay in the box, stored now, for the failed message's Retry to settle.
+        draft.flush();
+        claimFailedDraft(origin);
       }
     } finally {
       setSending(false);
@@ -378,6 +398,10 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
     : {
       ...(p.style.bottom !== undefined ? { bottom: p.style.bottom } : { top: p.style.top }),
       left: box.left, width: box.width, ['--thread-card-maxh' as string]: `${box.maxHeight}px`,
+      // Its passage scrolled out of the view: not drawn (and no press lands on it) until it is
+      // back, in every state of the card alike (2026-11-11 review: an answered card stayed on
+      // screen over other lines while its passage scrolled away).
+      ...(p.style.away ? { visibility: 'hidden' as const, pointerEvents: 'none' as const } : {}),
     };
   return (
     <div
@@ -394,6 +418,8 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
       data-waiting={p.waiting ? 'true' : undefined}
       data-expanded={grown ? 'true' : undefined}
       data-full={fill ? 'true' : undefined}
+      data-away={p.style.away && !fill ? 'true' : undefined}
+      aria-hidden={p.style.away && !fill ? true : undefined}
       style={place}
       onKeyDown={onCardKeyDown}
     >

@@ -19,10 +19,12 @@
 import { expect, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import {
-  modePill, nextQuestionNumber, openThreadsSession, readRecord, resetThreadsFixture, switchView, unfoldQuestions, test,
+  expectDragInViewport, humanPress, modePill, nextQuestionNumber, openThreadsSession, readRecord, resetThreadsFixture,
+  scrollTextIntoView, switchView, unfoldQuestions, test,
 } from './threads-helpers'
 import { TAGGED_READY, TAGGED_SESSION, TAGGED_TASK } from './threads-fixture'
 import { isolateUiPrefsContext } from './status-section-helpers'
+import { goToSessionFolder } from './todo-panel-helpers'
 
 const MD_FILE = 'cache-design.md'
 const HTML_FILE = 'cache-report.html'
@@ -39,10 +41,11 @@ async function shot(page: Page, name: string): Promise<void> {
   await page.screenshot({ path: `${dir}/${name}.png` })
 }
 
-async function openSession(page: Page): Promise<Locator> {
-  await page.goto('/')
+async function openSession(page: Page, baseURL: string | undefined): Promise<Locator> {
+  await page.setViewportSize({ width: 1280, height: 820 })
+  await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
+  await page.getByRole('link', { name: 'Open Walnut' }).click()
   await page.waitForLoadState('networkidle')
-  await page.setViewportSize({ width: 1400, height: 820 })
   return openThreadsSession(page, TAGGED_SESSION, TAGGED_TASK, TAGGED_READY, { view: 'linear' })
 }
 
@@ -52,6 +55,7 @@ async function openFile(page: Page, panel: Locator, name: string): Promise<Locat
   }
   const explorer = panel.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 10_000 })
+  await goToSessionFolder(explorer)
   const row = explorer.locator('.session-file-explorer-node', { hasText: name }).first()
   await expect(row).toBeVisible({ timeout: 10_000 })
   await row.click()
@@ -101,6 +105,7 @@ async function textRects(root: Locator, needle: string) {
 }
 
 async function dragSelect(page: Page, rects: Array<{ left: number; right: number; top: number; height: number }>) {
+  expectDragInViewport(page, rects)
   const first = rects[0]
   const last = rects[rects.length - 1]
   await page.mouse.move(first.left + 1, first.top + first.height / 2)
@@ -123,8 +128,8 @@ test.describe('Questions about a file passage (Files tab)', () => {
     await isolateUiPrefsContext(context)
   })
 
-  test('Ask here on a selection in the markdown preview: a draft card beside the passage, numbered by its send, the reply inside', async ({ page, request }) => {
-    const panel = await openSession(page)
+  test('Ask here on a selection in the markdown preview: a draft card beside the passage, numbered by its send, the reply inside', async ({ page, request, baseURL }) => {
+    const panel = await openSession(page, baseURL)
     const next = await nextQuestionNumber(request, TAGGED_SESSION)
     const view = await openFile(page, panel, MD_FILE)
     const editor = view.locator('.fv-wysiwyg-editor .ProseMirror')
@@ -133,13 +138,15 @@ test.describe('Questions about a file passage (Files tab)', () => {
 
     // No question about this file yet: no rail.
     await expect(fileRail(view)).toHaveCount(0)
+    await scrollTextIntoView(page, editor, MD_PASSAGE_FULL)
     const rects = await textRects(editor, MD_PASSAGE_FULL)
     await dragSelect(page, rects)
+    await expect.poll(() => page.evaluate(() => window.getSelection()?.toString())).toBe(MD_PASSAGE_FULL)
     const askHere = page.locator('[data-testid="bubble-ask-here"]')
     await expect(askHere).toBeVisible()
     await expect(page.locator('[data-testid="bubble-ask-quote"]')).toHaveText('Quote in chat')
     // mousedown is the bubble's trigger (it keeps the selection alive).
-    await askHere.dispatchEvent('mousedown')
+    await humanPress(page, askHere)
 
     const card = fileCard(view)
     await expect(card).toBeVisible()
@@ -241,13 +248,15 @@ test.describe('Questions about a file passage (Files tab)', () => {
     await expect(card.locator('.thread-card-head .thread-map-num')).toHaveText(String(next))
   })
 
-  test('a sidebar row opens the Files tab on the file with the card beside the passage; Quote in chat targets it; × is plain chat', async ({ page, request }) => {
-    const panel = await openSession(page)
+  test('a sidebar row opens the Files tab on the file with the card beside the passage; Quote in chat targets it; × is plain chat', async ({ page, request, baseURL }) => {
+    const panel = await openSession(page, baseURL)
     const next = await nextQuestionNumber(request, TAGGED_SESSION)
     const view = await openFile(page, panel, MD_FILE)
     const editor = view.locator('.fv-wysiwyg-editor .ProseMirror')
+    await scrollTextIntoView(page, editor, MD_PASSAGE_FULL)
     await dragSelect(page, await textRects(editor, MD_PASSAGE_FULL))
-    await page.locator('[data-testid="bubble-ask-here"]').dispatchEvent('mousedown')
+    await expect.poll(() => page.evaluate(() => window.getSelection()?.toString())).toBe(MD_PASSAGE_FULL)
+    await humanPress(page, page.locator('[data-testid="bubble-ask-here"]'))
     const card = fileCard(view)
     await card.locator('.thread-card-input').fill('Is the ledger bounded?')
     await card.locator('.thread-card-input').press('Enter')
@@ -313,8 +322,8 @@ test.describe('Questions about a file passage (Files tab)', () => {
     await expect(card3.locator('.thread-card-head .thread-map-num')).toHaveText(String(next))
   })
 
-  test('the inline Ask on a hovered block asks about the whole block; Tree Mode names the file on the page', async ({ page, request }) => {
-    const panel = await openSession(page)
+  test('the inline Ask on a hovered block asks about the whole block; Tree Mode names the file on the page', async ({ page, request, baseURL }) => {
+    const panel = await openSession(page, baseURL)
     const next = await nextQuestionNumber(request, TAGGED_SESSION)
     const view = await openFile(page, panel, MD_FILE)
     const editor = view.locator('.fv-wysiwyg-editor .ProseMirror')
@@ -344,8 +353,8 @@ test.describe('Questions about a file passage (Files tab)', () => {
     await switchView(panel, 'linear')
   })
 
-  test('the HTML preview: a selection inside the frame gets the two-action pill, Ask here opens the card over the passage', async ({ page, request }) => {
-    const panel = await openSession(page)
+  test('the HTML preview: a selection inside the frame gets the two-action pill, Ask here opens the card over the passage', async ({ page, request, baseURL }) => {
+    const panel = await openSession(page, baseURL)
     const next = await nextQuestionNumber(request, TAGGED_SESSION)
     const view = await openFile(page, panel, HTML_FILE)
     const frame = view.frameLocator('.fv-html-preview')
@@ -445,8 +454,8 @@ test.describe('Questions about a file passage (Files tab)', () => {
     await shot(page, 'file-q-html')
   })
 
-  test('an Ask here closed with nothing written leaves no card, no mark and no rail', async ({ page }) => {
-    const panel = await openSession(page)
+  test('an Ask here closed with nothing written leaves no card, no mark and no rail', async ({ page, baseURL }) => {
+    const panel = await openSession(page, baseURL)
     const view = await openFile(page, panel, MD_FILE)
     const editor = view.locator('.fv-wysiwyg-editor .ProseMirror')
     await expect(editor).toContainText(MD_PASSAGE_FULL)
@@ -459,11 +468,11 @@ test.describe('Questions about a file passage (Files tab)', () => {
       // reopens at the scroll an earlier test left, and rects of text off screen
       // still measure: bring the passage into view first.
       await expect(async () => {
-        await editor.locator('p', { hasText: MD_PASSAGE_FULL }).first().scrollIntoViewIfNeeded()
+        await scrollTextIntoView(page, editor, MD_PASSAGE_FULL)
         await dragSelect(page, await textRects(editor, MD_PASSAGE_FULL))
         await expect(askHere).toBeVisible({ timeout: 3_000 })
       }).toPass({ timeout: 30_000 })
-      await askHere.dispatchEvent('mousedown')
+      await humanPress(page, askHere)
       await expect(fileCard(view)).toHaveAttribute('data-draft', 'true')
       await expect(fileRail(view).locator('.thread-map-mark[data-kind="pending"]')).toHaveCount(1)
     }
@@ -486,8 +495,8 @@ test.describe('Questions about a file passage (Files tab)', () => {
     await nothingLeft()
   })
 
-  test('a long HTML page keeps the place being read when the view changes width', async ({ page, browserName }) => {
-    const panel = await openSession(page)
+  test('a long HTML page keeps the place being read when the view changes width', async ({ page, browserName, baseURL }) => {
+    const panel = await openSession(page, baseURL)
     const view = await openFile(page, panel, LONG_FILE)
     const frame = view.frameLocator('.fv-html-preview')
     await expect(frame.locator('body')).toContainText(LONG_PASSAGE, { timeout: 15_000 })
@@ -525,8 +534,8 @@ test.describe('Questions about a file passage (Files tab)', () => {
     expect(await frame.locator('body').evaluate(() => Math.round(scrollY)), 'the page stays at its top').toBeLessThan(5)
   })
 
-  test('a long HTML page: a question reopened from the rail after scrolling away brings its passage back, card beside it', async ({ page }) => {
-    const panel = await openSession(page)
+  test('a long HTML page: a question reopened from the rail after scrolling away brings its passage back, card beside it', async ({ page, baseURL }) => {
+    const panel = await openSession(page, baseURL)
     const view = await openFile(page, panel, LONG_FILE)
     const frame = view.frameLocator('.fv-html-preview')
     await expect(frame.locator('body')).toContainText(LONG_PASSAGE, { timeout: 15_000 })
@@ -596,7 +605,11 @@ test.describe('Questions about a file passage (Files tab)', () => {
     // 960px, a gap of 8px each side), inside the view; Esc brings it back to its
     // size. The view's width is the layout's: fullscreen keeps side margins and
     // the chat pane sits beside the files, so the grown width is read from the
-    // layer, never a fixed gain (a narrow view leaves the card its own width).
+    // layer, never a fixed gain. A view no wider than the card offers no ⤢ (the
+    // card fits the view, placeFileCard 2026-11-08), so the window widens first:
+    // the file then has room for the card to grow into.
+    await page.setViewportSize({ width: 1720, height: 820 })
+    await expect.poll(onScreen, { timeout: 5_000 }).toBe(true)
     await expect(card).toBeVisible()
     await page.waitForTimeout(300)
     const small = (await card.boundingBox())!

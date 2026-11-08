@@ -12,16 +12,16 @@ source = source.replace('let config = WKWebViewConfiguration()\n        config.p
 pathlib.Path(sys.argv[2]).write_text(source)
 PY
 cp "$ROOT/tests/desktop/recent-human-touch-tests.swift" "$OUT/RecentTests.swift"
+# The whole app (scripts/lib/desktop-app-sources.sh), with main.swift cut before its entry point.
+SOURCES=()
+while IFS= read -r f; do
+    case "$(basename "$f")" in
+        main.swift) SOURCES+=("$OUT/AppDelegate.swift") ;;
+        *) SOURCES+=("$f") ;;
+    esac
+done < <(bash "$ROOT/scripts/lib/desktop-app-sources.sh" "$ROOT")
 swiftc -j 1 -parse-as-library -D WALNUT_APP -D WALNUT_DESKTOP_TEST \
-    "$OUT/AppDelegate.swift" "$OUT/RecentTests.swift" \
-    "$ROOT/desktop/DesktopDiagnostics.swift" "$ROOT/desktop/GlobalDictation.swift" \
-    "$ROOT/desktop/WebContentPolicy.swift" "$ROOT/desktop/WebContentWatchdog.swift" \
-    "$ROOT/desktop/LinkPolicy.swift" "$ROOT/desktop/SessionHost.swift" \
-    "$ROOT/desktop/CalendarBridge.swift" "$ROOT/desktop/ReaderBridge.swift" \
-    "$ROOT/desktop/BundledRuntime.swift" "$ROOT/desktop/AppBuiltCheckout.swift" "$ROOT/desktop/AppUpdateMachine.swift" \
-    "$ROOT/desktop/AppUpdater.swift" "$ROOT/desktop/DesktopUpdateBridge.swift" "$ROOT/desktop/AppUpdateBridge.swift" "$ROOT/desktop/ApprovalBridge.swift" "$ROOT/desktop/NotificationBridge.swift" \
-    "$ROOT/desktop/AppLink.swift" "$ROOT/desktop/CommandLineTool.swift" "$ROOT/desktop/WalnutIntents.swift" \
-    "$ROOT/src/data/walnut-calendar.swift" "$ROOT/src/data/walnut-reader.swift" \
+    "${SOURCES[@]}" "$OUT/RecentTests.swift" \
     -framework Cocoa -framework WebKit -framework AVFoundation -framework Carbon -framework EventKit -framework Security -framework UserNotifications -Xlinker -weak_framework -Xlinker AppIntents \
     -o "$OUT/recent-tests"
 

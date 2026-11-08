@@ -29,10 +29,11 @@ import {
   fetchRecentlyMissing, noteFetchMissing, noteFetchFound, isNotFoundReply, startMirrorDownload,
 } from '../core/remote-image-mirror.js'
 import { log } from '../logging/index.js'
-import { getConnectedDaemonConnection, getDaemonConnection, getDirectDaemonConnection, DaemonConnection, type DaemonEvent, type DaemonTaskState, type DaemonGetStateResult } from './daemon-connection.js'
-import { BudgetCheckingError, BudgetPausedError, heldByAnotherProcess, holderKindOf, holderPidOf, isDaemonCommandOutcomeUnknown, sendMayHaveLanded, SendHeldError, SendOutcomeUnknownError, SessionHeldElsewhereError } from './delivery-failure.js'
+import { getConnectedDaemonConnection, getDaemonConnection, getDirectDaemonConnection, readDaemonLineFate, DaemonConnection, type DaemonEvent, type DaemonTaskState, type DaemonGetStateResult } from './daemon-connection.js'
+import { BudgetCheckingError, BudgetPausedError, ClaudeRuntimeMissingError, cliStoppedBeforeFirstLine, cliStoppedSentence, startFailureSentence, heldByAnotherProcess, holderKindOf, holderPidOf, isDaemonCommandOutcomeUnknown, sendMayHaveLanded, SendHeldError, SendOutcomeUnknownError, SessionHeldElsewhereError } from './delivery-failure.js'
 import { InheritedSessionRefusedError } from './ephemeral-session-gate.js'
 import { linkFailureKind } from './link-failure.js'
+import type { LineFate } from './line-fate-core.js'
 import { CloudSessionLink } from './cloud-session-link.js'
 import { isSessionStopSuperseded, SessionStopSupersededError } from '../core/sessions/session-stop.js'
 import { describeStopRefusal, STOP_NOT_SENT_NO_OWNERSHIP_CHECK, stopProvenance } from '../core/sessions/stop-provenance.js'
@@ -65,6 +66,25 @@ export function remoteOutputSentinel(hostKey: string, sid: string): string {
 }
 
 /** A `send` carrying `dedupe` writes nothing when the daemon can tell what became of the line. */
+/**
+ * Start refusals under which no CLI of this Walnut runs for the sid: the daemon
+ * spawned nothing (a budget hold, a superseding stop, Claude Code missing) or the
+ * transcript belongs to another Walnut. A transport refused this way writes
+ * nothing and stops nothing (`_startRefused`). Any other refusal (`session_live`:
+ * this host's own daemon may run a CLI under the id, or a start is in progress;
+ * a generic "start failed") may leave a process running, so its writes and stop
+ * still go to the daemon. Every refusal start() reads is listed in one of the two
+ * (tests/providers/remote-session-manager-start-refused.test.ts).
+ */
+export const START_REFUSALS_RUN_NOTHING: ReadonlySet<string> = new Set([
+  'budget_paused', 'budget_checking', 'session_stopped', 'claude_missing', 'claude_needs_node', 'session_other_walnut',
+])
+export const START_REFUSALS_MAY_RUN: ReadonlySet<string> = new Set(['session_live'])
+
+function startRunsNothing(result: Record<string, unknown>): boolean {
+  return [result.errorKind, result.reason].some((k) => typeof k === 'string' && START_REFUSALS_RUN_NOTHING.has(k))
+}
+
 const SEND_DEDUPE_CAPABILITY = 'send-dedupe-v1'
 /** A dedupe `send` carrying `lostPid` writes the line again into the process that read past it. */
 const SEND_LOST_LINE_CAPABILITY = 'send-lost-line-v1'
@@ -122,6 +142,14 @@ export class RemoteSessionManager implements SessionManager {
   private _pid: number | null = null
   private _remoteOutputFile: string | null = null
   private _hasPipe = false
+  /**
+   * This transport's start was refused in a way under which nothing of ours runs
+   * (START_REFUSALS_RUN_NOTHING, or no pid): no process ever ran under it. A line written to
+   * it would only reach the daemon as an unknown session (a test server's gate
+   * refuses it outright), so writes say "not written" and the caller starts
+   * one; a stop has nothing to stop.
+   */
+  private _startRefused = false
   // Byte cursor into the daemon's STREAM file (~/.open-walnut/tmp/streams/<sid>.jsonl).
   // Only an ABSOLUTE position is a valid fromOffset for daemon attach. It is
   // absolute only after start()/attach() adopted the daemon-reported offset —
@@ -381,6 +409,7 @@ export class RemoteSessionManager implements SessionManager {
     this._onExit = opts.onExit
     this._sid = this.tmpId
     if (opts.taskId) this._taskId = opts.taskId
+    this._startRefused = false
     this.rebindEventListener()
 
     // Quick Start spill file: upload to the same absolute path on the remote host
@@ -439,6 +468,7 @@ export class RemoteSessionManager implements SessionManager {
     }
 
     if (!result.ok) {
+      this._startRefused = startRunsNothing(result)
       if (result.reason === 'budget_paused' || result.errorKind === 'budget_paused') throw new BudgetPausedError()
       if (result.reason === 'budget_checking' || result.errorKind === 'budget_checking') throw new BudgetCheckingError()
       if (result.reason === 'session_stopped') throw new SessionStopSupersededError('Session start was superseded by a stop request')
@@ -459,14 +489,20 @@ export class RemoteSessionManager implements SessionManager {
       if (result.errorKind === 'claude_missing' || result.errorKind === 'claude_needs_node') {
         // By code, not the daemon's text: an older daemon words it differently,
         // and every surface must read the same sentence as Settings and the banner.
-        throw new Error(await spawnGateSentence(result.errorKind, this.isRemote ? this.hostKey : null))
+        throw new ClaudeRuntimeMissingError(await spawnGateSentence(result.errorKind, this.isRemote ? this.hostKey : null), result.errorKind)
       }
-      throw new Error(`Daemon start failed on host "${this.hostKey}": ${result.error}`)
+      // Claude Code on the host stopped before it read the first line: nothing started, and the
+      // message waits parked with that cause (the claude_error readiness kind), the way a missing
+      // install waits, so a later start of this id is a fresh one, never a resume.
+      const where = this.isRemote ? this.hostKey : null
+      if (cliStoppedBeforeFirstLine(result.error)) throw new ClaudeRuntimeMissingError(cliStoppedSentence(where), 'claude_error')
+      throw new Error(startFailureSentence(where, result.error))
     }
 
     // Detect spawn failures: daemon returns ok but pid is missing when
     // posix_spawn fails (e.g. cwd doesn't exist on remote host).
     if (!result.pid) {
+      this._startRefused = true
       throw new Error(`Daemon spawn failed on host "${this.hostKey}": no PID returned (cwd: "${opts.cwd}"). The working directory may not exist on the remote host.`)
     }
 
@@ -584,6 +620,7 @@ export class RemoteSessionManager implements SessionManager {
     this._onOutput = opts.onOutput
     this._onExit = opts.onExit
     this._sid = opts.sessionId
+    this._startRefused = false
     this._cliState = null
     this._attachedAt = Date.now()
     this.rebindEventListener()
@@ -778,7 +815,7 @@ export class RemoteSessionManager implements SessionManager {
     // the link proves nothing about that process: try the same line through the
     // cloud send route, or keep it queued. An unanswered native request takes
     // confirmSend instead; it must not switch paths without knowing its fate.
-    if (!this._sid) return false
+    if (!this._sid || this._startRefused) return false
 
     // Capture conn/sid synchronously — they may change during the async image upload
     // (e.g. renameForSession(), detach(), or a concurrent start() call).
@@ -1067,6 +1104,14 @@ export class RemoteSessionManager implements SessionManager {
       && conn.hasCapability(SEND_DEDUPE_CAPABILITY) && conn.hasCapability(SEND_LOST_LINE_CAPABILITY))
   }
 
+  async readLineFate(uuid: string, messageIds: string[]): Promise<LineFate | null> {
+    const conn = this.conn
+    const sid = this._sid
+    if (!sid) return null
+    const fate = await readDaemonLineFate(conn, sid, uuid, messageIds)
+    return this.conn === conn && this._sid === sid ? fate : null
+  }
+
   async writeRaw(json: string): Promise<boolean> {
     // control_response for --permission-prompt-tool stdio. Routed through the
     // daemon's `sendRaw` command (daemon-core.handleSendRawCommand), which
@@ -1185,6 +1230,10 @@ export class RemoteSessionManager implements SessionManager {
   // ── Process Control ──
 
   async stop(reason: 'user' | 'maintenance' | 'idle' = 'maintenance'): Promise<void> {
+    if (this._startRefused) {
+      log.session.info('RemoteSessionManager.stop: nothing runs, its start was refused', { host: this.hostKey, sid: this._sid })
+      return
+    }
     if (!this.conn?.connected || !this._sid) {
       log.session.info('RemoteSessionManager.stop: skipped', {
         host: this.hostKey, sid: this._sid,

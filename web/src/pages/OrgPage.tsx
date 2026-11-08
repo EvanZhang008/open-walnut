@@ -270,6 +270,10 @@ export function OrgPage() {
   // Only the pins are state; the free panel is the URL's (orgStripView). A saved id this build
   // cannot read is dropped, never drawn as an empty panel.
   const [pins, setPins] = useState<SessionSlot[]>(() => readColumns('orgColumns').filter((s) => s.locked && !!parseSideTarget(s.id)));
+  // Panels a restore brought back (the saved pins, the remembered open panel): one whose session
+  // is gone closes itself instead of drawing "Session not found" (SessionPanel onRestoredGone).
+  const restoredSide = useRef<Set<string> | null>(null);
+  if (!restoredSide.current) restoredSide.current = new Set([...pins.map((s) => s.id), ...(restore?.open ? [restore.open] : [])]);
   // `sameSession` changes with `tasks`: a task's panel and its session's become one once the tasks are known.
   const strip = useMemo(() => orgStripView(pins, openParam, sameSession), [pins, openParam, sameSession]);
   // Under each row of the list, the tasks the user keeps in view there: the watched ones (Home's
@@ -406,9 +410,11 @@ export function OrgPage() {
 
   /** × on one panel of the strip: the free one closes through the URL, a pin leaves the strip. */
   const closePanel = useCallback((id: string) => {
+    restoredSide.current?.delete(id);
     setPins((cols) => cols.filter((c) => c.id !== id && !sameSession(c.id, id)));
     if (openParam && (id === openParam || sameSession(id, openParam))) closeSide();
   }, [openParam, closeSide, sameSession]);
+  const restoredGone = (id: string, close: () => void) => (restoredSide.current?.has(id) ? { onRestoredGone: close } : {});
   /** The lock: the free panel joins the pins; an unlocked pin becomes the free panel (one per page). */
   const togglePanelLock = useCallback((id: string) => {
     const wasPinned = pins.some((c) => c.id === id);
@@ -566,6 +572,7 @@ export function OrgPage() {
           target={side}
           tasks={tasks}
           onClose={closeSide}
+          {...restoredGone(sideTargetParam(side), () => { restoredSide.current?.delete(sideTargetParam(side)); closeSide(); })}
           onOpenTask={openTask}
           onOpenSession={openSession}
           onStartChat={chatOnHome}
@@ -599,6 +606,7 @@ export function OrgPage() {
                 locked={slot.locked}
                 onToggleLock={() => togglePanelLock(slot.id)}
                 onClose={() => closePanel(slot.id)}
+                {...restoredGone(slot.id, () => closePanel(slot.id))}
                 onOpenTask={openTask}
                 onOpenSession={openSession}
                 onStartChat={chatOnHome}

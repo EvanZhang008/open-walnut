@@ -38,6 +38,8 @@ function baseView(s: UpdateStatus): UpdateCardView {
         };
       case 'replica':
         return { tone: 'neutral', icon: '○', statusLabel: 'Status', status: 'Cloud replica', statusClass: '', note: 'Updates with the primary console’s deploy', canCheck: false };
+      case 'demo':
+        return { tone: 'neutral', icon: '○', statusLabel: 'Status', status: 'Walnut Demo', statusClass: '', note: 'Updates with the Walnut you started it from', canCheck: false };
       case 'opted-out':
         return { tone: 'neutral', icon: '○', statusLabel: 'Status', status: 'Check turned off', statusClass: '', note: 'WALNUT_NO_UPDATE_CHECK is set', canCheck: false };
       default:
@@ -54,7 +56,7 @@ function baseView(s: UpdateStatus): UpdateCardView {
   }
   if (s.available && s.latest) {
     const note = !s.install.updateCommand
-      ? `No package manager found for this install; see ${s.packageUrl}`
+      ? `This copy does not update itself; the new version is at ${s.packageUrl}`
       : s.live?.canInstall && s.live.updatesAuto && !s.live.held
         ? 'Installs itself in the background, then restarts once you have been away 10 minutes'
       : s.autoUpdate

@@ -35,6 +35,7 @@ const STORE_LOCKS = new Set<string>([
   'src/core/router/handoff-approval.ts: d.file',                // WALNUT_HOME/router/handoff-approvals.json
   'src/core/router/migration.ts: file',                         // a legacy watcher migration record under WALNUT_HOME/router
   'src/core/triage/routing-rules.ts: file',                     // WALNUT_HOME/triage/routing-rules.json
+  'src/commands/demo.ts: root.state',                           // Walnut's own Demo state, not user content
   'src/core/boards/board-store.ts: file',                       // WALNUT_HOME/boards/<task>.json
   'src/core/bounded-memory.ts: this.filePath',                  // an agent's memory under WALNUT_HOME
   'src/core/cron/timer.ts: state.deps.storePath',               // the cron jobs store
@@ -71,11 +72,11 @@ const STORE_LOCKS = new Set<string>([
 /** Files a person's content is written through: each must lock with withUserFileLock. */
 const USER_CONTENT_WRITERS: Record<string, number> = {
   'src/web/routes/file-content.ts': 1,  // Files panel save
-  'src/web/routes/notes-v2.ts': 1,      // notes editor save
-  'src/web/routes/notes.ts': 1,         // global notes save
-  'src/web/routes/api-v1.ts': 2,        // phone / agent note PUT and create
-  'src/core/notes-identity.ts': 2,      // id stamp written into a note
-  'src/core/notes-indexer.ts': 1,       // id written back into a note
+  'src/web/routes/notes-v2.ts': 3,      // content read, save and tag read-modify-write
+  'src/web/routes/notes.ts': 2,         // global notes read and save
+  'src/web/routes/api-v1.ts': 3,        // phone content read, PUT and create
+  'src/core/notes-identity.ts': 4,      // initial reads and guarded id writes
+  'src/core/notes-indexer.ts': 2,       // initial snapshot and id back-write
   'src/utils/file-ops.ts': 2,           // agent edit + checked write
 };
 
@@ -174,7 +175,62 @@ function walkLocks(): Scan {
   return { counts, indirect, userCalls };
 }
 
+const NOTES_LOCKED_MODULES = new Set([
+  'src/core/notes-indexer.ts', 'src/core/notes-identity.ts',
+  'src/web/routes/notes-v2.ts', 'src/web/routes/notes.ts',
+]);
+
+function unlockedNoteTextSites(file: string, text: string): string[] {
+  const sf = ts.createSourceFile(file, text, ts.ScriptTarget.ES2022, true);
+  const out: string[] = [];
+  const excludedFunctions = new Set(file === 'src/web/routes/notes-v2.ts' ? ['readNoteAttachment', 'saveNoteAttachment'] : []);
+  const visit = (node: ts.Node, locked: boolean, functionName: string): void => {
+    if (ts.isFunctionDeclaration(node)) {
+      functionName = node.name?.text ?? '';
+      if (locked && functionName !== 'writeNote') locked = false;
+    }
+    if (ts.isCallExpression(node)) {
+      const name = calleeName(node.expression);
+      if (name === 'withUserFileLock') {
+        node.arguments.forEach((arg, i) => visit(arg, i === 1 || locked, functionName));
+        return;
+      }
+      const isTextIo = name && ['readFile', 'writeFile', 'readFileSync', 'writeFileSync', 'appendFile', 'appendFileSync', 'createWriteStream'].includes(name);
+      if (isTextIo && !locked && !excludedFunctions.has(functionName)) out.push(node.getText(sf));
+      // v1 writeNote is invoked only within its two caller locks, pinned below.
+      if (file === 'src/web/routes/api-v1.ts' && name === 'writeNote' && !locked) out.push(node.getText(sf));
+    }
+    ts.forEachChild(node, child => visit(child, locked, functionName));
+  };
+  if (file === 'src/web/routes/api-v1.ts') {
+    for (const statement of sf.statements) {
+      const body = statement.getText(sf);
+      if (ts.isFunctionDeclaration(statement) && statement.name?.text === 'writeNote') visit(statement, true, 'writeNote');
+      else if (/['"]\/notes(?:\/|['"])/.test(body) || /NOTES_DIR|GLOBAL_NOTES_FILE|writeNote\(/.test(body)) visit(statement, false, '');
+    }
+  } else visit(sf, false, '');
+  return out;
+}
+
 describe('user-file lock ratchet', () => {
+  it('every notes-owned runtime text read or write is inside the shared file lock', () => {
+    const modules = sourceFiles().map(full => path.relative(repoRoot, full).split(path.sep).join('/'))
+      .filter(file => /^(src\/core\/notes-|src\/web\/routes\/notes(?:-|\.))/.test(file));
+    for (const file of [...modules, 'src/web/routes/api-v1.ts']) {
+      // The startup create-only migration is awaited before runtime reads start.
+      if (file === 'src/core/notes-migration.ts') continue;
+      const text = fs.readFileSync(path.join(repoRoot, file), 'utf8');
+      expect(unlockedNoteTextSites(file, text), file).toEqual([]);
+    }
+    for (const file of NOTES_LOCKED_MODULES) expect(modules).toContain(file);
+  });
+
+  it('the snapshot scan rejects a new unlocked note read and accepts the callback lock', () => {
+    expect(unlockedNoteTextSites('src/core/notes-new.ts', "await fsp.readFile(abs, 'utf8')")).toEqual(["fsp.readFile(abs, 'utf8')"]);
+    expect(unlockedNoteTextSites('src/core/notes-new.ts', "await withUserFileLock(abs, () => fsp.readFile(abs, 'utf8'))")).toEqual([]);
+    expect(unlockedNoteTextSites('src/web/routes/api-v1.ts', "router.get('/notes/other', () => fsp.readFile(filePath, 'utf8'))")).toEqual(["fsp.readFile(filePath, 'utf8')"]);
+    expect(unlockedNoteTextSites('src/core/notes-new.ts', "async function readNoteAttachment() { return fsp.readFile(abs) }")).toEqual(['fsp.readFile(abs)']);
+  });
   it('takes withFileLock only at the listed Walnut store sites', () => {
     const { counts } = scan();
     const offenders: string[] = [];

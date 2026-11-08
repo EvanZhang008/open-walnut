@@ -15,6 +15,11 @@ import { useSyncExternalStore } from 'react';
 
 const engaged = new Set<string>();
 const retrying = new Map<string, number>();
+// Hosts Home's found-host prompt shows now (FoundHostPrompts): there it says its own state, so the
+// banner, System attention and the announcer leave it out instead of saying it twice (2026-11-09
+// review). A host the user said Connect to is no longer `discovered`, so this is its own set, not a
+// filter on `engaged`.
+let prompted: ReadonlySet<string> = new Set();
 let engagedSnap: ReadonlySet<string> = new Set();
 let retryingSnap: ReadonlySet<string> = new Set();
 const listeners = new Set<() => void>();
@@ -45,6 +50,14 @@ export function markUserRetry(hosts: readonly string[]): () => void {
   };
 }
 
+/** The hosts the found-host prompt shows; the prompt calls it with every change and [] when it goes. */
+export function setPromptedHosts(hosts: readonly string[]): void {
+  const next = new Set(hosts);
+  if (next.size === prompted.size && [...next].every((h) => prompted.has(h))) return;
+  prompted = next;
+  publish();
+}
+
 export function subscribeUserRetry(cb: () => void): () => void {
   listeners.add(cb);
   return () => { listeners.delete(cb); };
@@ -61,10 +74,18 @@ export function useUserRetryingHosts(): ReadonlySet<string> {
   return useSyncExternalStore(subscribeUserRetry, getUserRetryingHosts, getUserRetryingHosts);
 }
 
+/** The hosts Home's found-host prompt shows: no banner row, no attention dot, no announcement. */
+export const getPromptedHosts = (): ReadonlySet<string> => prompted;
+
+export function usePromptedHosts(): ReadonlySet<string> {
+  return useSyncExternalStore(subscribeUserRetry, getPromptedHosts, getPromptedHosts);
+}
+
 /** Test hook. */
 export function __resetUserRetryForTests(): void {
   engaged.clear();
   retrying.clear();
+  prompted = new Set();
   engagedSnap = new Set();
   retryingSnap = new Set();
   listeners.clear();

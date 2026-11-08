@@ -279,6 +279,13 @@ export function registerSessionChatRpc(): void {
         return { messageId: data.retryOf }
       }
       retryLine = await settledLineUuid(data.retryOf)
+      // The first send's acknowledgement was lost, not the send: its line may have run.
+      // Then a fresh enqueue would only spawn a CLI for a turn that never comes
+      // (core/sessions/resend-already-ran.ts); the bubble learns it was delivered.
+      const { resendAlreadyRan } = await import('../../core/sessions/resend-already-ran.js')
+      if (await resendAlreadyRan({ sessionId: data.sessionId, host: record?.host, lineUuid: retryLine ?? userUuid })) {
+        return { messageId: data.retryOf, alreadyDelivered: true }
+      }
       log.web.info('session:send retry — original row no longer queued, enqueueing fresh', {
         sessionId: data.sessionId, messageId: data.retryOf, lineUuid: retryLine,
       })

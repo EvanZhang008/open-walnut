@@ -23,6 +23,7 @@
  * second burst reaches disk, and no conflict UI appears.
  */
 import { test, expect, type Locator, type Page } from '@playwright/test'
+import { goToSessionFolder } from './todo-panel-helpers'
 
 const SESSION_ID = 'pw-vscode-session'
 const TASK_ID = 'pw-task-vscode'
@@ -46,6 +47,7 @@ async function openFilesPanel(page: Page): Promise<Locator> {
   await panel.getByRole('button', { name: 'Files', exact: true }).click()
   const explorer = panel.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 15_000 })
+  await goToSessionFolder(explorer)
   return explorer
 }
 
@@ -76,7 +78,7 @@ async function openFileLive(page: Page, explorer: Locator, name: string, expectT
   await expect(page.getByTestId('fv-save-state')).toHaveText('Saved')
 }
 
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page, baseURL }) => {
   await page.addInitScript(() => {
     try {
       localStorage.setItem('open-walnut-file-explorer-tree-collapsed', '0')
@@ -84,7 +86,8 @@ test.beforeEach(async ({ page }) => {
       localStorage.setItem('open-walnut-live-edit', '0')
     } catch { /* storage off */ }
   })
-  await page.goto('/')
+  await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
+  await page.getByRole('link', { name: 'Open Walnut' }).click()
   await page.waitForLoadState('networkidle')
 })
 

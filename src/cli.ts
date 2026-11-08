@@ -18,7 +18,7 @@ const program = new Command();
 // the run dir and prunes its logs, and a replica must first prove its run dir is
 // its own (replica/boot-guard.ts); its logger makes the dir at the first flush.
 const args = process.argv.slice(2);
-if (!(args.includes('web') && args.includes('--replica'))) initLogging();
+if (!(args.includes('web') && args.includes('--replica')) && (args[0] !== 'demo' || args.includes('--_child'))) initLogging();
 
 // WALNUT_CLI_DIRECT=1: install the in-process legacy runners for the data
 // commands (tests / rollback lever). Only this full entry may load them — the

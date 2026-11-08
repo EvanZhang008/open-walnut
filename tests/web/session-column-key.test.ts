@@ -35,6 +35,10 @@ const TRANSFORMS: Record<string, (cols: SessionSlot[]) => SessionSlot[]> = {
   replaceSessionColumn: (cols) => columns.replaceSessionColumn(cols, 'a', 'a-full'),
   toggleLockSlot: (cols) => columns.toggleLockSlot(cols, 'sess-full'),
   settleOpenedColumns: (cols) => columns.settleOpenedColumns(cols, cols.slice(1), false, 6),
+  // A widen puts back what a shrink closed: the strip's own slots and the returning ones keep their keys.
+  regrowColumns: (cols) => columns.regrowColumns(cols.filter((c) => c.id !== 'sess-full'), [{ ...keyed }], 6),
+  // The waiting list of a regrow, filtered: a slot still waiting keeps its key for the regrow.
+  pendingRegrow: (cols) => columns.pendingRegrow(cols, [], new Set(['a'])),
 }
 /** Exports that read a strip or build one from saved ids (which carry no key). */
 const NOT_TRANSFORMS = ['columnKey', 'realColumnCount', 'panelBudget', 'splitByLock', 'mergeUrlColumns']

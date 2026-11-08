@@ -173,17 +173,23 @@ describe('session auto-title E2E (text-first quick start)', () => {
     const body = await res.json() as { taskId: string; sessionId?: string }
     expect(body.sessionId).toBeTruthy()
 
+    // The person's words name the task at once; the session's own title replaces them.
+    const first = await getTaskTitle(body.taskId)
+    expect(['title-test:add dark mode to settings page', 'Side title: title-test:add dark mode to settings']).toContain(first)
     const title = await pollUntil(
       () => getTaskTitle(body.taskId),
-      (t) => t !== 'Session: demo-text-first',
+      (t) => t !== 'title-test:add dark mode to settings page',
       30_000,
     )
     expect(title).toBe('Side title: title-test:add dark mode to settings')
 
     // Session record mirrors it.
-    const recRes = await fetch(apiUrl(`/api/sessions/${body.sessionId}`))
-    const rec = await recRes.json() as { session?: { title?: string }; title?: string }
-    expect(rec.session?.title ?? rec.title).toBe('Side title: title-test:add dark mode to settings')
+    const recordTitle = await pollUntil(async () => {
+      const recRes = await fetch(apiUrl(`/api/sessions/${body.sessionId}`))
+      const rec = await recRes.json() as { session?: { title?: string }; title?: string }
+      return rec.session?.title ?? rec.title
+    }, (t) => t === 'Side title: title-test:add dark mode to settings', 30_000)
+    expect(recordTitle).toBe('Side title: title-test:add dark mode to settings')
   }, 60_000)
 
   it('titles an Ask Walnut launch from its "Ask Walnut" placeholder (launch kick)', async () => {
@@ -207,8 +213,11 @@ describe('session auto-title E2E (text-first quick start)', () => {
     )
     expect(title).toBe('Side title: title-test:find my interview prep notes')
 
-    const recRes = await fetch(apiUrl(`/api/sessions/${body.sessionId}`))
-    const rec = await recRes.json() as { session?: { title?: string }; title?: string }
-    expect(rec.session?.title ?? rec.title).toBe('Side title: title-test:find my interview prep notes')
+    const recordTitle = await pollUntil(async () => {
+      const recRes = await fetch(apiUrl(`/api/sessions/${body.sessionId}`))
+      const rec = await recRes.json() as { session?: { title?: string }; title?: string }
+      return rec.session?.title ?? rec.title
+    }, (t) => t === 'Side title: title-test:find my interview prep notes', 30_000)
+    expect(recordTitle).toBe('Side title: title-test:find my interview prep notes')
   }, 60_000)
 })

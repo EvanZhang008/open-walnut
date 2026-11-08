@@ -89,6 +89,18 @@ describe('dropSnapshotQueuedMessages', () => {
     expect(store).toEqual({ version: 1, queues: {}, settled: { 'qm-0': 'uuid-0' }, relay: { 'qm-mobile-1': ['taken', 1] } })
   })
 
+  it.each([undefined, {}, { 'sid-a': [row('qm-1', 'sid-a', 'pending')] }])('removes copied cancellation recovery evidence even without pending rows: %j', queues => {
+    fs.writeFileSync(queueFile(), JSON.stringify({
+      version: 1, queues,
+      cancelled: { 'sid-a': { 'uuid-a': { rows: [{ ...row('qm-cancelled', 'sid-a', 'processing'), lineUuid: 'uuid-a' }] } } },
+      settled: { 'qm-0': 'uuid-0' }, relay: { 'qm-mobile-1': ['taken', 1] },
+    }));
+    expect(dropSnapshotQueuedMessages(dir)).toBe(Object.keys(queues ?? {}).length);
+    expect(JSON.parse(fs.readFileSync(queueFile(), 'utf8'))).toEqual({
+      version: 1, queues: {}, settled: { 'qm-0': 'uuid-0' }, relay: { 'qm-mobile-1': ['taken', 1] },
+    });
+  });
+
   it('a missing store, or one with nothing queued, is left alone and is no failure', () => {
     expect(dropSnapshotQueuedMessages(dir)).toBe(0)
     expect(fs.existsSync(queueFile())).toBe(false)

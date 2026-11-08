@@ -35,6 +35,8 @@ export interface FleetHost {
     bootStart?: { mode: 'boot' | 'login' | 'none'; backend: string | null; reason: string | null; checkedAt: number; setupRunning: boolean; setupError: string | null; next?: 'install' | 'recheck' | null } | null;
     /** That answer in words, from the server. */
     reboot?: string;
+    /** A test server's or the Demo's own daemon, removed when that server stops: no reboot start by design. */
+    throwaway?: boolean;
   } | null;
   placement: { score: number | null; busy: boolean | null; reasons: string[]; weight: number | null; longRunning: { ok: boolean; reasons: string[] } };
   /** What the host can do (src/core/hosts/capabilities.ts); absent from a server older than it. */

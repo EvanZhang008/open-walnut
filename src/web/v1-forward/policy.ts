@@ -66,6 +66,11 @@ const COMPANION_ROUTES: readonly CompanionRoute[] = [
   { methods: ['GET'], re: /^\/sessions\/[^/]+\/messages\/[^/]+$/, why: 'send' },
   { methods: ['GET'], re: /^\/sessions\/[^/]+\/queue$/, why: 'send' },
   { methods: ['POST'], re: /^\/sessions\/[^/]+\/terminate$/, why: 'send' },
+  // A context a later send asks for by id (`object-context`, core/hints/hint-context.ts) lives in
+  // the memory of the server that renders that send's hints: for the console that is this one
+  // (its /ws session:send). Stored on the Mac, the id rendered nothing here and the doc comments'
+  // paths and how to answer them never reached the model (2026-11-10 review).
+  { methods: ['POST'], re: /^\/hints\/context$/, why: 'send' },
   // The Personal AI chat has its own relay to the Mac, and its message list
   // carries the turns the companion answered alone, so the Mac adopts them.
   { re: /^\/conversations(\/|$)/, why: 'chat' },

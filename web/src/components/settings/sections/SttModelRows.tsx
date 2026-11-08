@@ -29,6 +29,7 @@ import { useSerialSave, type OnSave } from './GeneralSection';
 import { refreshSttStatus } from '@/hooks/useSttStatus';
 import { useConfirm } from '@/hooks/useConfirm';
 import { clearSttSetupJob, startSttSetupJob, useSttSetupJob } from './stt-setup-job';
+import { SetupProgress } from '@/components/common/SetupProgress';
 
 export function formatSize(bytes: number): string {
   if (bytes >= 1_000_000_000) return `${(bytes / 1_000_000_000).toFixed(1)} GB`;
@@ -54,15 +55,6 @@ interface CatalogModel { name: string; displayName: string; description: string;
 
 /** The Whisper model the one-button setup installs, and the only one shown by default. */
 const WHISPER_DEFAULT = 'ggml-large-v3-turbo';
-
-function ProgressBar({ percent }: { percent: number | null }) {
-  return (
-    <span className="settings-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent ?? undefined}>
-      <span className="settings-progress-track"><span className="settings-progress-fill" style={{ width: `${percent ?? 0}%` }} /></span>
-      <span className="settings-progress-pct">{percent === null ? '' : `${percent}%`}</span>
-    </span>
-  );
-}
 
 /**
  * One row per catalog model: name, one line of facts, a status tag and the
@@ -99,7 +91,7 @@ function ModelCatalogRows({ models, downloaded, active, busy, onDownload, onActi
                 {isActive && <SettingsTag tone="success">Active</SettingsTag>}
                 {isDownloaded && !isActive && <SettingsTag>Downloaded</SettingsTag>}
                 {isDownloading ? (
-                  <ProgressBar percent={busy.percent} />
+                  <SetupProgress label={`Downloading ${m.displayName}`} percent={busy.percent} compact />
                 ) : !isDownloaded ? (
                   <SettingsButton onClick={() => onDownload(m.name)} disabled={!!busy.downloading}>Download</SettingsButton>
                 ) : !isActive ? (
@@ -140,7 +132,7 @@ function useModelActions(kind: 'ggml' | 'sherpa', onRefresh: () => void, afterDo
 
   const download = async (name: string) => {
     setDownloading(name);
-    setPercent(0);
+    setPercent(null);
     setError(null);
     try {
       await startSetup(kind === 'ggml' ? 'download_ggml_model' : 'download_sherpa_model', { model: name }, (event: SetupEvent) => {
@@ -278,7 +270,7 @@ export function QwenModelRow({ detection, config, onRefresh }: {
         control={
           <span className="settings-control-cluster">
             {state?.status === 'running' ? (
-              <ProgressBar percent={state.percent} />
+              <SetupProgress label={`Downloading ${MLX_MODEL.displayName}`} percent={state.percent} compact />
             ) : cached ? (
               <SettingsTag tone="success">Ready</SettingsTag>
             ) : (

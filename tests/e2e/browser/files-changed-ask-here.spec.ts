@@ -41,17 +41,22 @@ import { pressBarTool } from './doc-bar-helpers'
 import fs from 'node:fs/promises'
 import { humanPress, mainComposer, openThreadsSession, readRecord, resetThreadsFixture, test } from './threads-helpers'
 import { TAGGED_READY, TAGGED_SESSION, TAGGED_TASK } from './threads-fixture'
+import { leaveFullscreen } from './draft-helpers'
+import { goToSessionFolder } from './todo-panel-helpers'
 
 type Rect = { left: number; right: number; top: number; height: number }
 
 async function shot(page: Page, name: string): Promise<void> {
   const dir = `${process.env.WALNUT_TASK_DIR ?? '/tmp'}/shots/files-changed-ask/${test.info().project.name}`
   await fs.mkdir(dir, { recursive: true })
-  await page.screenshot({ path: `${dir}/${name}.png` })
+  const viewport = page.viewportSize()!
+  const width = Math.min(1280, viewport.width)
+  await page.screenshot({ path: `${dir}/${name}.png`, scale: 'css', clip: { x: viewport.width - width, y: 0, width, height: viewport.height } })
 }
 
 async function openSession(page: Page): Promise<Locator> {
-  await page.goto('/')
+  await page.setContent('<a href="http://localhost:3457/">Open Walnut</a>')
+  await page.getByRole('link', { name: 'Open Walnut', exact: true }).click()
   await page.waitForLoadState('networkidle')
   await page.setViewportSize({ width: 1400, height: 820 })
   return openThreadsSession(page, TAGGED_SESSION, TAGGED_TASK, TAGGED_READY, { view: 'linear' })
@@ -63,6 +68,7 @@ async function openFile(panel: Locator, name: string): Promise<Locator> {
   }
   const explorer = panel.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 10_000 })
+  await goToSessionFolder(explorer)
   const row = explorer.locator('.session-file-explorer-node', { hasText: name }).first()
   await expect(row).toBeVisible({ timeout: 10_000 })
   await row.click()
@@ -202,12 +208,13 @@ async function dragSelect(page: Page, rects: Rect[]): Promise<void> {
 }
 
 /** Drag over `phrase` until the button shows (a late layout shift can move the text between measure and drag). */
-async function selectUntil(page: Page, rects: () => Promise<Rect[]>, button: Locator): Promise<void> {
+async function selectUntil(page: Page, rects: () => Promise<Rect[]>, button: Locator, editor?: Locator): Promise<void> {
   let tries = 0
   await expect(async () => {
-    // A second drag must not start on the words still selected: an editor reads
-    // that as dragging them away (CodeMirror moved the text). Collapse first.
-    if (tries++) await page.keyboard.press('ArrowLeft')
+    if (editor) await editor.focus()
+    // Closing a card leaves focus on its button, not on the selected editor.
+    if (editor || tries) await page.keyboard.press('ArrowLeft')
+    tries++
     await dragSelect(page, await rects())
     await expect(button).toBeVisible({ timeout: 3_000 })
   }).toPass({ timeout: 30_000 })
@@ -531,6 +538,254 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
     const preview = view.locator('.fv-md-preview')
     await expect(preview).toContainText(MDX_LINE, { timeout: 10_000 })
     expect((await chipOffWords(page, view, preview)).seen, 'read-only render blocks looked at').toBeGreaterThan(0)
+  })
+  test('Files: a rejected selection send keeps its question and retries the same identity once', async ({ page, request }) => {
+    const sends: Array<{ payload: Record<string, unknown>; rejected: boolean }> = []
+    await page.routeWebSocket(/\/ws(?:\?|$)/, (socket) => {
+      const server = socket.connectToServer()
+      socket.onMessage((message) => {
+        let frame: { type?: string; method?: string; id?: string; payload?: Record<string, unknown> } = {}
+        try { frame = JSON.parse(String(message)) } catch { /* not JSON */ }
+        if (frame.type === 'req' && frame.method === 'session:send') {
+          const rejected = sends.length === 0
+          sends.push({ payload: frame.payload!, rejected })
+          if (rejected) {
+            socket.send(JSON.stringify({ type: 'res', id: frame.id, ok: false, error: 'Connection refused once.' }))
+            return
+          }
+        }
+        server.send(message)
+      })
+      server.onMessage((message) => socket.send(message))
+    })
+    const panel = await openSession(page)
+    const view = await openFile(panel, MD_FILE)
+    await view.getByRole('button', { name: 'Source', exact: true }).click()
+    const cm = view.locator('.cm-content')
+    await expect(cm).toContainText(MD_SOURCE_LINE)
+    await dragSelect(page, await textRects(cm, MD_SOURCE_LINE))
+    await page.getByTestId('file-ask-here').click()
+    const card = view.locator('.fv-thread-layer .thread-card')
+    const question = 'Keep this question after a connection failure.'
+    await expect(card.locator('.thread-card-input')).toBeFocused()
+    await page.keyboard.type(question)
+    await page.keyboard.press('Enter')
+    await expect(card.locator('.thread-card-q')).toHaveText(question)
+    await expect(card.locator('.thread-status-word')).toHaveAttribute('data-kind', 'failed')
+    await expect(card.locator('.session-msg-failed-badge')).toContainText('Connection refused once.')
+    await expect(card.getByRole('button', { name: 'Retry', exact: true })).toBeVisible()
+    await expect(panel.locator('.session-history')).not.toContainText('Waiting for response')
+    expect(sends).toHaveLength(1)
+    const first = sends[0].payload
+    expect(first.userUuid).toBeTruthy()
+    expect(first.hints).toHaveProperty('question')
+    const record = await readRecord(request, TAGGED_SESSION)
+    expect(record.threadAnchors?.filter((a) => a.msgId === first.userUuid)).toHaveLength(1)
+    // The refused Ask's words are kept as its draft until a send of them is accepted.
+    const askDrafts = () => page.evaluate((sid) => Object.keys(localStorage)
+      .filter((k) => k.startsWith(`draft:session:${sid}:pending:`) && localStorage.getItem(k)?.trim())
+      .map((k) => localStorage.getItem(k)), TAGGED_SESSION)
+    await expect.poll(askDrafts).toEqual([question])
+    const reopen = async () => {
+      await card.getByRole('button', { name: 'Close', exact: true }).click()
+      await expect(card).toHaveCount(0)
+      const rail = view.getByTestId('file-question-rail')
+      await rail.locator('.thread-map-rail').click()
+      const latest = rail.locator('.thread-map-row[data-kind="thread"]').last()
+      if (sends.length === 1) await expect(latest.locator('.thread-status-word')).toHaveAttribute('data-kind', 'failed')
+      else await expect(latest.locator('.thread-status-word')).not.toHaveAttribute('data-kind', /failed|waiting/)
+      await latest.click()
+      await expect(card).toBeVisible()
+    }
+    await reopen()
+    await expect(card.locator('.thread-card-q')).toHaveText(question)
+    const rider = '<walnut-message kind="notification" from="Walnut" outcome="stopped">\nBackground notice, not this question.\n</walnut-message>'
+    await page.route(`**/api/sessions/${TAGGED_SESSION}/history*`, async (route) => {
+      const response = await route.fetch()
+      const body = await response.json() as { messages: Array<{ role: string; msgId?: string; text?: string }> }
+      for (const message of body.messages) {
+        if (message.role === 'user' && message.msgId === first.userUuid) message.text = `${rider}\n\n${message.text}`
+      }
+      await route.fulfill({ response, json: body })
+    })
+    await card.getByRole('button', { name: 'Retry', exact: true }).click()
+    await expect(card.getByRole('button', { name: 'Retry', exact: true })).toHaveCount(0)
+    await expect.poll(() => sends.length).toBe(2)
+    expect(sends[1].rejected).toBe(false)
+    expect(sends[1].payload).toMatchObject({ message: first.message, userUuid: first.userUuid, hints: first.hints })
+    expect(sends[1].payload.retryOf).toEqual(expect.stringMatching(/^temp-/))
+    // The Retry sent those words: no draft, no draft row, and nothing to send again.
+    await expect.poll(askDrafts).toEqual([])
+    await expect(panel.locator('.thread-map-row[data-kind="draft"]')).toHaveCount(0)
+    await expect(card.locator('.thread-card-input')).toHaveValue('')
+    await expect(card.locator('.thread-card-send')).toBeDisabled()
+    await expect(mainComposer(panel)).toHaveValue('')
+    await expect(card.locator('.thread-card-body')).toContainText(`processed your message: ${question}`, { timeout: 60_000 })
+    await expect.poll(async () => {
+      const response = await request.get(`/api/sessions/${TAGGED_SESSION}/history`)
+      expect(response.ok()).toBe(true)
+      const history = await response.json() as { messages: Array<{ role: string; msgId?: string; text?: string }> }
+      const users = history.messages.filter((m) => m.role === 'user' && m.msgId === first.userUuid)
+      const answers = history.messages.filter((m) => m.role === 'assistant' && m.text?.includes(`processed your message: ${question}`))
+      if (answers.length === 1) expect(answers[0].text).toContain('walnut-ask-answer')
+      return { users: users.length, answers: answers.length }
+    }, { timeout: 30_000 }).toEqual({ users: 1, answers: 1 })
+    await expect(card.locator('.thread-card-q')).toHaveCount(1)
+    await expect(card.locator('.thread-card-q')).toHaveText(question)
+    await expect(card.locator('.thread-status-word')).not.toHaveAttribute('data-kind', /failed|waiting/)
+    await reopen()
+    await expect(card.locator('.thread-card-q')).toHaveCount(1)
+    await expect(card.locator('.thread-card-body')).toContainText(`processed your message: ${question}`)
+    expect(sends).toHaveLength(2)
+    await card.getByRole('button', { name: 'Close', exact: true }).click()
+    // The reload checks the saved question, not the kept view: leave full screen first.
+    await leaveFullscreen(page)
+    await page.reload()
+    const restoredPanel = page.locator(`.main-page-session-column .session-panel[data-session-id="${TAGGED_SESSION}"]`)
+    await expect(restoredPanel).toBeVisible({ timeout: 30_000 })
+    const restoredView = await openFile(restoredPanel, MD_FILE)
+    const rail = restoredView.getByTestId('file-question-rail')
+    await rail.locator('.thread-map-rail').click()
+    await rail.locator('.thread-map-row[data-kind="thread"]').last().click()
+    const restoredCard = restoredView.locator('.fv-thread-layer .thread-card')
+    await expect(restoredCard.locator('.thread-card-q')).toHaveCount(1)
+    await expect(restoredCard.locator('.thread-card-q')).toHaveText(question)
+    await expect(restoredCard.locator('.thread-card-body')).toContainText(`processed your message: ${question}`)
+    await expect(restoredCard.locator('.thread-card-body')).not.toContainText('Background notice, not this question.')
+    await expect(restoredCard.locator('.thread-card-input')).toHaveValue('')
+    await expect(restoredCard.locator('.thread-card-send')).toBeDisabled()
+    await expect(mainComposer(restoredPanel)).toHaveValue('')
+    await expect(restoredPanel.locator('.thread-map-row[data-kind="draft"]')).toHaveCount(0)
+    expect(await askDrafts()).toEqual([])
+    expect(sends).toHaveLength(2)
+    await shot(page, 'files-rejected-selection-retried')
+  })
+
+  test('Files: saved questions in the full screen Source view survive reloads and a narrow window, with no page error', async ({ page, request }) => {
+    test.setTimeout(300_000)
+    // Raw: a ResizeObserver loop error is a page error too (the header fit re-rendering in its own delivery).
+    const errors: string[] = []
+    page.on('pageerror', (error) => errors.push(String(error)))
+    const panel = await openSession(page)
+    const historyOf = () => page.waitForResponse((r) => r.url().includes(`/api/sessions/${TAGGED_SESSION}/history`) && r.ok(), { timeout: 30_000 })
+    const sourceOf = async (view: Locator) => {
+      const source = view.getByRole('button', { name: 'Source', exact: true })
+      if ((await source.getAttribute('aria-pressed')) !== 'true') await source.click()
+      const cm = view.locator('.cm-content')
+      await expect(cm).toContainText(MD_SOURCE_LINE, { timeout: 15_000 })
+      return cm
+    }
+    const record = await readRecord(request, TAGGED_SESSION)
+    expect(record.cwd).toMatch(/walnut-pw-/)
+    const file = `saved-layout-${Date.now()}.md`
+    const filePath = `${record.cwd}/${file}`
+    const original = await fs.readFile(`${record.cwd}/${MD_FILE}`, 'utf8')
+    expect(original).toContain('Batches are capped at 64 pages.')
+    await fs.writeFile(filePath, original)
+    let view = await openFile(panel, file)
+    let cm = await sourceOf(view)
+    const asked = [
+      { line: MD_SOURCE_LINE, question: 'Which worker flushes first after a restart?' },
+      { line: 'Batches are capped at 64 pages.', question: 'Why is the batch cap 64 pages?' },
+    ]
+    for (const { line, question } of asked) {
+      const askHere = page.getByTestId('file-ask-here')
+      await selectUntil(page, () => textRects(cm, line), askHere, cm)
+      await humanPress(page, askHere)
+      const card = view.locator('.fv-thread-layer .thread-card')
+      await expect(card.locator('.thread-card-input')).toBeFocused()
+      await page.keyboard.type(question)
+      await page.keyboard.press('Enter')
+      await expect(card.locator('.thread-card-q')).toHaveText(question, { timeout: 30_000 })
+      await expect(card.locator('.thread-card-body')).toContainText(`processed your message: ${question}`, { timeout: 60_000 })
+      await card.getByRole('button', { name: 'Close', exact: true }).click()
+      await expect(card).toHaveCount(0)
+      expect(await fs.readFile(filePath, 'utf8')).toBe(original)
+    }
+    await expect(panel).toHaveClass(/open-walnut-fullscreen/)
+    for (let round = 0; round < 3; round++) {
+      const history = historyOf()
+      await page.reload()
+      const live = page.locator(`.main-page-session-column .session-panel[data-session-id="${TAGGED_SESSION}"]`)
+      await expect(live).toBeVisible({ timeout: 30_000 })
+      await history
+      view = await openFile(live, file)
+      cm = await sourceOf(view)
+      await expect(live).toHaveClass(/open-walnut-fullscreen/)
+      // The phone surface replaces desktop chrome, never the file or its saved work.
+      await page.setViewportSize({ width: 760, height: 820 })
+      await expect(cm).toContainText(MD_SOURCE_LINE)
+      await expect(page.locator('.open-walnut-fullscreen-backdrop')).toHaveCount(0)
+      const narrowHistory = historyOf()
+      await page.reload()
+      await narrowHistory
+      await expect(cm).toContainText(MD_SOURCE_LINE)
+      await expect(page.locator('.open-walnut-fullscreen-backdrop')).toHaveCount(0)
+      await expect(page.locator('body')).not.toContainText('Something went wrong rendering the page.')
+      await page.setViewportSize({ width: 1400, height: 820 })
+      await expect(live).toHaveClass(/open-walnut-fullscreen/)
+      await expect(page.locator('.open-walnut-fullscreen-backdrop')).toHaveCount(1)
+      await expect(cm).toContainText(MD_SOURCE_LINE)
+      await expect(live.locator('.session-file-explorer-node', { hasText: file }).first()).toBeVisible()
+      const seen = new Set<string>()
+      for (let i = 0; i < asked.length; i++) {
+        const rail = view.getByTestId('file-question-rail')
+        await rail.locator('.thread-map-rail').click()
+        await rail.locator('.thread-map-row[data-kind="thread"]').nth(i).click()
+        const card = view.locator('.fv-thread-layer .thread-card')
+        await expect(card).toBeVisible()
+        const q = (await card.locator('.thread-card-q').first().textContent())?.trim() ?? ''
+        seen.add(q)
+        await expect(card.locator('.thread-card-body')).toContainText(`processed your message: ${q}`)
+        await card.getByRole('button', { name: 'Close', exact: true }).click()
+        await expect(card).toHaveCount(0)
+      }
+      expect([...seen].sort(), `round ${round + 1}: every saved question opens`).toEqual(asked.map((a) => a.question).sort())
+    }
+    expect(await fs.readFile(filePath, 'utf8')).toBe(original)
+    await expect(page.locator('body')).not.toContainText('Something went wrong rendering the page.')
+    await shot(page, 'files-saved-questions-reload-resize')
+    expect(errors).toEqual([])
+  })
+
+  test('Files: an unscrolled reading mode is kept immediately across reloads and file switches', async ({ page, request }) => {
+    test.setTimeout(120_000)
+    const errors: string[] = []
+    page.on('pageerror', (error) => errors.push(String(error)))
+    let panel = await openSession(page)
+    const record = await readRecord(request, TAGGED_SESSION)
+    expect(record.cwd).toMatch(/walnut-pw-/)
+    const shortFile = `mode-no-scroll-${Date.now()}.md`
+    const original = '# Reading mode\n\nKeep this short file in the chosen view.\n'
+    const filePath = `${record.cwd}/${shortFile}`
+    await fs.writeFile(filePath, original)
+    let view = await openFile(panel, shortFile)
+    const stored = () => view.evaluate((element, file) => {
+      const values = JSON.parse(localStorage.getItem('open-walnut-file-view-scroll') ?? '{}') as Record<string, { top: number; source?: boolean }>
+      return Object.entries(values).find(([key]) => key.endsWith(` ${file}`))?.[1] ?? null
+    }, filePath)
+    await humanPress(page, view.getByRole('button', { name: 'Source', exact: true }))
+    await expect(view.locator('.cm-content')).toContainText('Keep this short file')
+    await expect.poll(stored).toEqual({ top: 0, source: true })
+    await page.reload()
+    panel = page.locator(`.main-page-session-column .session-panel[data-session-id="${TAGGED_SESSION}"]`)
+    view = panel.locator('.file-content-view')
+    await expect(view.locator('.cm-content')).toContainText('Keep this short file', { timeout: 30_000 })
+    await humanPress(page, view.getByRole('button', { name: 'Preview', exact: true }))
+    await expect(view.locator('.cm-content')).toHaveCount(0)
+    await expect.poll(stored).toBeNull()
+    await openFile(panel, MD_FILE)
+    view = await openFile(panel, shortFile)
+    await expect(view.getByRole('button', { name: 'Preview', exact: true })).toHaveAttribute('aria-pressed', 'true')
+    await humanPress(page, view.getByRole('button', { name: 'Source', exact: true }))
+    await expect.poll(stored).toEqual({ top: 0, source: true })
+    await openFile(panel, HTML_FILE)
+    view = await openFile(panel, shortFile)
+    await expect(view.locator('.cm-content')).toContainText('Keep this short file')
+    await expect.poll(stored).toEqual({ top: 0, source: true })
+    expect(await fs.readFile(filePath, 'utf8')).toBe(original)
+    expect(errors).toEqual([])
+    await shot(page, 'files-mode-kept-without-scroll')
   })
 
   test('Files: the markdown Source tab (pill)', async ({ page }) => {

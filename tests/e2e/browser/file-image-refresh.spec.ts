@@ -24,6 +24,7 @@
  * the bug is only reliably visible here.
  */
 import { devices, test, expect, type Locator, type Page } from '@playwright/test'
+import { goToSessionFolder } from './todo-panel-helpers'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import zlib from 'node:zlib'
@@ -92,6 +93,7 @@ async function openFilesPanel(page: Page): Promise<Locator> {
   await panel.getByRole('button', { name: 'Files', exact: true }).click()
   const explorer = panel.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 15_000 })
+  await goToSessionFolder(explorer)
   return explorer
 }
 
@@ -117,12 +119,13 @@ async function embeddedWidth(img: Locator): Promise<number> {
   })
 }
 
-test.beforeEach(async ({ page, browserName }) => {
+test.beforeEach(async ({ page, browserName, baseURL }) => {
   expect(browserName, 'this spec must run in WebKit — see the file header').toBe('webkit')
   await page.addInitScript(() => {
     try { localStorage.setItem('open-walnut-file-explorer-tree-collapsed', '0') } catch { /* off */ }
   })
-  await page.goto('/')
+  await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
+  await page.getByRole('link', { name: 'Open Walnut' }).click()
   await page.waitForLoadState('networkidle')
 })
 

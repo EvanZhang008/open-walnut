@@ -12,6 +12,7 @@
 import type { SttSetupJob, StepStatus } from './stt-setup-job';
 import { SettingsRow, SettingsTag } from '../SettingsSection';
 import { SettingsButton } from '../inputs/SettingsButton';
+import { SetupProgress } from '@/components/common/SetupProgress';
 
 interface Props {
   job: SttSetupJob;
@@ -44,12 +45,7 @@ export function SttSetupProgress({ job, onDone, onRetry, onCancel }: Props) {
           state={step.status === 'error' ? 'warning' : undefined}
           control={
             step.status === 'running' ? (
-              <span className="settings-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={step.percent ?? undefined}>
-                <span className="settings-progress-track">
-                  <span className="settings-progress-fill" style={{ width: `${step.percent ?? 0}%` }} />
-                </span>
-                <span className="settings-progress-pct">{step.percent === null ? '' : `${step.percent}%`}</span>
-              </span>
+              <SetupProgress label={step.label} percent={step.percent} compact />
             ) : (
               <SettingsTag tone={step.status === 'done' ? 'success' : step.status === 'error' ? 'warning' : 'neutral'}>
                 {STEP_TAG[step.status]}

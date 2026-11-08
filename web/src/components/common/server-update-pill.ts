@@ -49,7 +49,18 @@ export const WORKING_SHORT = 'Wait';
 
 export const RESTART_TOOLTIP = 'Restarts by itself once you have been away 10 minutes';
 
-export function serverPillView(s: UpdateStatus | null): ServerPillView | null {
+/**
+ * `firstRun`: Walnut is not set up yet (the Welcome screen). A new user's first screen shows only
+ * what they must do, so an offer to update waits until setup is done (2026-11-10 review: a fresh
+ * install's rail read "How to update" beside "Get Walnut talking"). Work already under way
+ * (installing, restarting) still shows.
+ */
+export function serverPillView(s: UpdateStatus | null, opts: { firstRun?: boolean } = {}): ServerPillView | null {
+  const view = serverPillViewOf(s);
+  return opts.firstRun && view && (view.stage === 'available' || view.stage === 'installed') ? null : view;
+}
+
+function serverPillViewOf(s: UpdateStatus | null): ServerPillView | null {
   const live = s?.live;
   if (!s || !live || !s.enabled) return null;
   const version = live.version ?? s.latest ?? s.installed ?? null;

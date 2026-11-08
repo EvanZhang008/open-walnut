@@ -248,6 +248,7 @@ export const DAEMON_SOURCE_FILES = [
   'src/core/bash-file-ops.ts',
   'src/providers/daemon-instance-lock.ts',
   'src/providers/daemon-command-drain.ts',
+  'src/providers/demo-daemon-quiesce-core.ts',
   'src/providers/daemon-restart-mark.ts',
   'src/providers/daemon-cron-supervision.ts',
   'src/providers/daemon-cron-store.ts',

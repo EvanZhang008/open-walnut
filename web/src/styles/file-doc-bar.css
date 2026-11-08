@@ -284,7 +284,10 @@
 /* ── Explorer: the tree's head ────────────────────────────────────────────── */
 .sfe-tree-head {
   position: sticky;
-  top: 0;
+  /* Sticks at the scroller's top edge, not 4px under it: a sticky box's top is
+     measured inside the scroller's padding, so top:0 left a 4px strip where the
+     scrolled rows showed above the head (2026-11-08). */
+  top: -4px;
   z-index: 3;
   display: flex;
   align-items: center;

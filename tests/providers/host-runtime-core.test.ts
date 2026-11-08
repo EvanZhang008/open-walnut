@@ -451,7 +451,7 @@ describe('injection into the source daemon twin', () => {
       // The server's floor reaches the daemon, and both twins hand the runtime a sign-in check.
       expect(src, label).toMatch(/hostRuntime\.preflight\(cmd\)/)
       // sha256Hex names the CLI's keychain items under a custom CLAUDE_CONFIG_DIR (claude-check-core.ts).
-      expect(src, label).toMatch(/claudeCheck: (createClaudeCheck|\(__CREATE_CLAUDE_CHECK__\))\(\{ fs(: fs)?, execFile(: execFile)?, env: process\.env, sha256Hex: [^\n]*createHash\('sha256'\)/)
+      expect(src, label).toMatch(/claudeCheck: (createClaudeCheck|\(__CREATE_CLAUDE_CHECK__\))\(\{ fs(: fs)?, execFile(: execFile)?, env: process\.env, platform: process\.platform, sha256Hex: [^\n]*createHash\('sha256'\)/)
       expect(src, label).toMatch(/const launch = await gateClaudeLaunch\(args\)/)
       expect(src, label).toMatch(/code: 'CLAUDE_RUNTIME', errorKind: gate\.code/)
       // Inspect the actual cmdStart, not an earlier budget helper or a whole-file text match.

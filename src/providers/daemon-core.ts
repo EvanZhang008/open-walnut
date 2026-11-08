@@ -332,6 +332,21 @@ export type SendResult =
   | { ok: false; reason: 'partial_write' }
   | { error: string; written?: LineWritten }  // missing sid/message or non-classified write failure
 
+/** Read-only line lookup: unknown is never an invitation to write the line. */
+export type LineFateQueryResult = ({ ok: true } & LineFate)
+  | { ok: false; fate: 'unknown'; reason: 'not_found' | 'invalid_query' | 'unknown' }
+
+/** Self-contained for the source twin's text injection. Marker bounds match markers.find. */
+export function validLineFateQuery(sid: unknown, uuid: unknown, messageIds: unknown): boolean {
+  if (typeof sid !== 'string' || !sid || sid.length > 200) return false
+  if (typeof uuid !== 'string' || !uuid || uuid.length > 200) return false
+  if (!Array.isArray(messageIds) || messageIds.length > 200) return false
+  for (const id of messageIds) {
+    if (typeof id !== 'string' || !id || id.length > 200) return false
+  }
+  return true
+}
+
 export interface DaemonCore<S extends CoreSessionData = CoreSessionData> {
   readRegistry: () => Record<string, RegistryEntry>
   persistRegistry: (strict?: boolean) => void
@@ -392,6 +407,8 @@ export interface DaemonCore<S extends CoreSessionData = CoreSessionData> {
    * control envelope and rejects anything wrapped in user-message shape.
    */
   handleSendRawCommand: (sid: string | undefined, raw: string | undefined) => Promise<SendResult>
+  /** Read existing evidence, including dead sessions. Never writes, signals, reaps or starts a CLI. */
+  handleLineFateQuery: (sid: unknown, uuid: unknown, messageIds: unknown) => Promise<LineFateQueryResult>
   /**
    * Append a walnut-injected user marker line to the session's stream file.
    * The CLI never echoes stdin user messages to its stream-json stdout, so
@@ -1362,6 +1379,23 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     }
   }
 
+  async function handleLineFateQuery(sid: unknown, uuid: unknown, messageIds: unknown): Promise<LineFateQueryResult> {
+    if (typeof sid !== 'string' || !sid) return { ok: false, fate: 'unknown', reason: 'not_found' }
+    if (!validLineFateQuery(sid, uuid, messageIds)) return { ok: false, fate: 'unknown', reason: 'invalid_query' }
+    const session = sessions.get(sid)
+    if (!session) return { ok: false, fate: 'unknown', reason: 'not_found' }
+    // A dead record may still hold its old pid. It is not a process awaiting an answer.
+    // Use a read view, never mutate the registry or probe the pid with a signal.
+    const state = session.state
+    const pid = session.pid
+    const readView = state === 'dead' ? { ...session, pid: null } : session
+    const fate = await lineFateInProcess(readView, uuid as string, [...messageIds as string[]], null, undefined, sid)
+    if (sessions.get(sid) !== session || session.state !== state || session.pid !== pid) {
+      return { ok: false, fate: 'unknown', reason: 'unknown' }
+    }
+    return fate ? { ok: true, ...fate } : { ok: false, fate: 'unknown', reason: 'unknown' }
+  }
+
   /**
    * send-dedupe-v1: what became of this line, from the CLI's lifecycle frames in
    * the stream file and this daemon's write records (line-fate-core.ts). Null:
@@ -1696,6 +1730,7 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     broadcastSessionState,
     handleSendCommand,
     handleSendRawCommand,
+    handleLineFateQuery,
     handleAppendUserMarker,
   }
 }

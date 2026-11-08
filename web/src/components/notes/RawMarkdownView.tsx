@@ -26,6 +26,7 @@ import { syntaxHighlighting, defaultHighlightStyle } from '@codemirror/language'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
 import { cmSearchExtension } from '@/utils/cm-search';
+import { cmNoDragEdits } from '@/utils/cm-no-drag-edit';
 
 interface RawMarkdownViewProps {
   /** The note's current markdown body (frontmatter stripped) — the seed value. */
@@ -58,12 +59,14 @@ const rawViewTheme = EditorView.theme({
      it, and scroller bottom-padding is unreliable while scrolled). */
   '.cm-content': { padding: '16px 0 80px', caretColor: 'var(--fg)' },
   '.cm-line': { padding: '0 12px 0 6px' },
+  // The gutter is sticky over a sideways-scrolled line, so it needs a solid surface;
+  // opacity on it would let the line show through, so it dims only the numbers.
   '.cm-gutters': {
-    backgroundColor: 'transparent',
+    backgroundColor: 'var(--bg)',
     border: 'none',
     color: 'var(--fg-muted)',
-    opacity: '0.7',
   },
+  '.cm-gutter': { opacity: '0.7' },
   '.cm-activeLine': { backgroundColor: 'var(--bg-hover, rgba(127, 127, 127, 0.06))' },
   '.cm-activeLineGutter': { backgroundColor: 'transparent', color: 'var(--fg)' },
   '.cm-cursor': { borderLeftColor: 'var(--fg)' },
@@ -96,6 +99,8 @@ export function RawMarkdownView({ value, onChange }: RawMarkdownViewProps) {
         // The page find searches this view through CodeMirror (utils/find-doc.ts):
         // its off-screen lines are not in the DOM.
         cmSearchExtension(),
+        // A drag selects, never moves text: this view auto-saves, so a stray drag rewrote the note.
+        cmNoDragEdits(),
         EditorView.updateListener.of((u) => {
           if (u.docChanged) onChangeRef.current(u.state.doc.toString());
         }),

@@ -65,8 +65,9 @@ export async function openControlsSession(
   await page.addInitScript((list) => {
     sessionStorage.setItem('open-walnut-home-session-columns', JSON.stringify(list.map((id: string) => ({ id, locked: false }))));
   }, ids);
-  await page.setViewportSize({ width: opts.width ?? (opts.narrow ? NARROW_WIDTH : 1600), height: 800 });
-  await page.goto('/');
+  await page.setViewportSize({ width: opts.width ?? (opts.narrow ? NARROW_WIDTH : 1280), height: 800 });
+  await page.setContent(`<a href="${(await page.request.get('/')).url()}">Open Walnut</a>`);
+  await page.getByRole('link', { name: 'Open Walnut', exact: true }).click();
   const panel = page.locator(`.main-page-session-column .session-panel[data-session-id="${CTRL_SESSION}"]`);
   await expect(panel).toBeVisible({ timeout: 20_000 });
   await expect(panel.locator('.session-history')).toContainText('Answer 5.', { timeout: 20_000 });
@@ -88,6 +89,16 @@ export const COLUMN_MODEL_IN_MENU = 220;
 
 /** Clamp every session column to `px`, or lift the clamp with null. */
 export async function clampColumn(page: Page, px: number | null): Promise<void> {
+  const width = px === COLUMN_NAME_ONLY || px === COLUMN_MODEL_IN_MENU
+    ? await page.locator(`.main-page-session-column .session-panel[data-session-id="${CTRL_SESSION}"]`).evaluate((panel, width) => {
+      const column = panel.closest('.main-page-session-column')!;
+      const bar = panel.querySelector('.composer-controls-bar')!;
+      const spacer = bar.parentElement?.querySelector('.chat-input-controls-spacer');
+      const available = bar.getBoundingClientRect().width + (spacer?.getBoundingClientRect().width ?? 0);
+      const chrome = column.getBoundingClientRect().width - available;
+      return Math.round(chrome + (width === 260 ? 120 : 80));
+    }, px)
+    : px;
   await page.evaluate((width) => {
     const id = 'pw-column-clamp';
     let style = document.getElementById(id) as HTMLStyleElement | null;
@@ -95,7 +106,7 @@ export async function clampColumn(page: Page, px: number | null): Promise<void> 
     style.textContent = width == null ? '' : `.main-page-session-column {
       width: ${width}px !important; max-width: ${width}px !important; min-width: 0 !important; flex: 0 0 ${width}px !important;
     }`;
-  }, px);
+  }, width);
 }
 
 export const barOf = (panel: Locator) => panel.locator('.composer-controls-bar').last();
@@ -148,14 +159,14 @@ export async function expectSingleRow(panel: Locator): Promise<void> {
   const state = await rowState(panel);
   expect(state.lines, `the controls wrapped onto ${state.lines} lines`).toBeLessThanOrEqual(1);
   // No mic where the engine cannot record (Linux WebKit has no MediaRecorder):
-  // boundingBox() would wait for it until the test timed out.
-  const micButton = panel.locator('.chat-input-controls .mic-btn-wrapper');
-  const [bar, mic] = await Promise.all([
-    barOf(panel).boundingBox(),
-    (await micButton.count()) ? micButton.first().boundingBox() : null,
-  ]);
+  // boundingBox() would wait for it until the test timed out, so the row is
+  // measured against the send group instead.
+  const mic = panel.locator('.chat-input-controls .mic-btn-wrapper').first();
+  const actions = await mic.count() ? mic : panel.locator('.chat-input-controls .chat-send-group').first();
+  const [bar, cluster] = await Promise.all([barOf(panel).boundingBox(), actions.boundingBox()]);
   expect(bar).toBeTruthy();
-  if (mic) expect(bar!.x + bar!.width, 'the controls row runs under the mic button').toBeLessThanOrEqual(mic.x + 1);
+  expect(cluster).toBeTruthy();
+  expect(bar!.x + bar!.width, 'the controls row runs under the mic/send buttons').toBeLessThanOrEqual(cluster!.x + 1);
 }
 
 /** Every hidden control has a row that NAMES it and repeats whatever its live
@@ -184,14 +195,16 @@ export async function expectMenuNamesHidden(panel: Locator, hidden: string[], na
  * mic/send cluster — the shape of the bug this whole change replaces.
  */
 export async function forceAllVisibleGeometry(panel: Locator): Promise<{ lines: number; overhang: number }> {
-  const micBox = await panel.locator('.chat-input-controls .mic-btn-wrapper').first().boundingBox();
+  const mic = panel.locator('.chat-input-controls .mic-btn-wrapper').first();
+  const actions = await mic.count() ? mic : panel.locator('.chat-input-controls .chat-send-group').first();
+  const actionsBox = await actions.boundingBox();
   return barOf(panel).evaluate((bar, mic) => {
     const items = [...bar.querySelectorAll<HTMLElement>('[data-control-id]')];
     for (const el of items) el.dataset.hidden = 'false';
     const box = bar.getBoundingClientRect();
     const tops = new Set(items.map((el) => Math.round(el.getBoundingClientRect().top)));
     return { lines: tops.size, overhang: mic ? Math.round(box.right - mic.x) : -1 };
-  }, micBox);
+  }, actionsBox);
 }
 
 /** The names SessionPanel gives its five controls. */

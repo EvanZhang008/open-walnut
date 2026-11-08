@@ -447,7 +447,7 @@ export class ClaudeCliAdapter implements ProtocolAdapter {
           // real reply DISCUSSING OAuth expiry is never misclassified.
           const resultText = finalResult?.result || accumulatedText;
           if (resultText && resultText.length < 300
-              && /^\s*failed to authenticate|^\s*api error: 4\d\d/i.test(resultText)) {
+              && /^\s*failed to authenticate|^\s*api error: 4\d\d|^\s*not logged in|please run \/login/i.test(resultText)) {
             reject(new Error(`claude-cli could not authenticate — run \`claude\` once in a terminal to sign in (or check its Bedrock settings). CLI said: ${resultText.slice(0, 200)}`));
             return;
           }

@@ -21,6 +21,7 @@
 import { sendMessage } from '../model/model.js';
 import { log } from '../logging/index.js';
 import { fastCallBudgetMs, fastModelFor, fastCallText } from './cheap-model.js';
+import { screenTitle } from './title-answer.js';
 
 const MAX_WORDS = 4;
 const MAX_LABEL_LEN = 40; // keep the prefix short; the full title also carries "- fork of <parent>"
@@ -108,7 +109,8 @@ export async function summarizeForkPrompt(prompt: string, timeoutMs?: number): P
 
     const text = fastCallText(result);
 
-    const label = normalizeLabel(text);
+    // English by contract, so a prompt in another script is not compared (title-answer.ts).
+    const label = screenTitle(normalizeLabel(text), { words: trimmed });
     if (label) return label;
     log.web.debug('summarizeForkPrompt: empty label from model, falling back to heuristic');
     return heuristicLabel(trimmed);
@@ -170,7 +172,7 @@ export async function summarizeGroupLabel(titles: string[], timeoutMs?: number):
 
     const text = fastCallText(result);
 
-    const label = normalizeLabel(text);
+    const label = screenTitle(normalizeLabel(text), { words: cleaned.join('\n') });
     if (label) return label;
     return groupHeuristicLabel(cleaned);
   } catch (err) {

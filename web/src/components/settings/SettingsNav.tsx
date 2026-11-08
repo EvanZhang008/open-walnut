@@ -24,6 +24,7 @@ import { SettingsPaneTile, useFailedPanes, type SettingsPaneMeta } from './setti
 import { WAY_PANES } from './settings-way-panes'
 import { browserLinkSubtitle, useBrowserLinkName } from './sections/cloud/browser-link-name'
 import { APPS_PATH } from '@/utils/open-link'
+import { pageShortcutBlocked } from '@/utils/page-shortcut'
 import '@/styles/settings-nav.css'
 import '@/styles/settings-nav-state.css'
 
@@ -235,8 +236,9 @@ export function SettingsNav({ model, activePane, onOpenPane }: SettingsNavProps)
   // and its task search also claims `/` from a document listener.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return
-      if (isTypingTarget(e.target)) return
+      if (e.key !== '/') return
+      // Never while a sheet, an editor or a menu has the reader (utils/page-shortcut.ts).
+      if (isTypingTarget(e.target) || pageShortcutBlocked(e, navRef.current)) return
       if (!navRef.current || navRef.current.getClientRects().length === 0) return
       e.preventDefault()
       e.stopPropagation()

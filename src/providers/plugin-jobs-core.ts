@@ -133,6 +133,8 @@ export interface PluginJobDeps {
   maxLogBytes?: number
   /** The shortest `every` period (default 1 min; tests set less, never on a production daemon dir). */
   minEveryMs?: number
+  /** Final spawn gate, read synchronously in `start`: false = no run starts (a Demo daemon that is stopping). */
+  maySpawn?: () => boolean
 }
 
 export function createPluginJobSupervisor(deps: PluginJobDeps) {
@@ -211,6 +213,8 @@ export function createPluginJobSupervisor(deps: PluginJobDeps) {
   const draining = new Map<string, Drain[]>()
   const waiters = new Map<string, { e: Entry; gen: number }>()
   let pruneTimer: unknown = null
+  /** Homes whose jobs were quiesced: nothing of theirs starts again in this daemon. */
+  const quiesced = new Set<string>()
 
   function keyOfJob(s: { plugin: string; job: string }): string { return `${s.plugin}/${s.job}` }
   function drainKey(home: string, key: string): string { return `${home}\n${key}` }
@@ -456,6 +460,8 @@ export function createPluginJobSupervisor(deps: PluginJobDeps) {
 
   function scheduleRun(e: Entry, at: number): void {
     if (e.timer) deps.clearTimer(e.timer)
+    e.timer = undefined
+    if (quiesced.has(e.home)) { e.nextRunAt = undefined; setState(e, 'idle'); return }
     e.nextRunAt = at
     setState(e, 'idle')
     e.timer = deps.setTimer(() => { e.timer = undefined; start(e) }, Math.max(0, at - deps.now()))
@@ -528,10 +534,19 @@ export function createPluginJobSupervisor(deps: PluginJobDeps) {
     deps.log('warn', 'plugin jobs: not started', { job: keyOfJob(e.spec), error: why })
   }
 
+  /** No new run may start now: the entry stays idle with no timer (no retry, no schedule). */
+  function held(e: Entry): boolean {
+    if (!quiesced.has(e.home) && (!deps.maySpawn || deps.maySpawn())) return false
+    setState(e, 'idle')
+    return true
+  }
+
   function start(e: Entry): void {
     clearTimers(e)
     const gen = ++e.gen
     e.nextRunAt = undefined
+    // Nothing from here to the spawn awaits.
+    if (held(e)) return
     const key = keyOfJob(e.spec)
     // Never two runs of one job: a new one waits until the one before has exited.
     const dk = drainKey(e.home, key)
@@ -627,8 +642,33 @@ export function createPluginJobSupervisor(deps: PluginJobDeps) {
     if (p) retire(e.home, keyOfJob(e.spec), p)
   }
 
+  /** A stopping Demo: its jobs' timers end and runs retire through stopRun, so nothing of `home` starts again. */
+  function quiesce(home: string): void {
+    quiesced.add(home)
+    for (const e of homes.get(home)?.values() ?? []) {
+      stopRun(e)
+      e.nextRunAt = undefined
+      setState(e, 'idle')
+    }
+    for (const [dk, w] of waiters) if (w.e.home === home) waiters.delete(dk)
+  }
+
+  /** What of `home` is not over yet: live runs, runs being stopped, and armed timers. */
+  function pending(home: string): { runs: number; draining: number; timers: number } {
+    let runs = 0
+    let timers = 0
+    for (const e of homes.get(home)?.values() ?? []) {
+      if (e.proc) runs += 1
+      for (const k of ['timer', 'poll', 'logPoll', 'killTimer'] as const) if (e[k]) timers += 1
+    }
+    let drainingRuns = 0
+    for (const list of draining.values()) for (const d of list) if (d.home === home) drainingRuns += 1
+    return { runs, draining: drainingRuns, timers }
+  }
+
   /** A long-running job's retry after `delay`. */
   function retryAfter(e: Entry, delay: number): void {
+    if (quiesced.has(e.home)) { e.nextRunAt = undefined; setState(e, 'idle'); return }
     setState(e, 'retrying')
     e.nextRunAt = deps.now() + delay
     e.timer = deps.setTimer(() => { e.timer = undefined; start(e) }, delay)
@@ -922,6 +962,8 @@ export function createPluginJobSupervisor(deps: PluginJobDeps) {
     logs,
     prune,
     homeOfRun,
+    quiesce,
+    pending,
     /** Whether a gateway caller id is a plugin job's (live or not). */
     isRunSid: (sid: unknown): boolean => typeof sid === 'string' && sid.startsWith(RUN_SID_PREFIX),
     homes: (): string[] => [...homes.keys()],

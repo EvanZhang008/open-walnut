@@ -44,6 +44,7 @@ function makeAcp(
     isWsOpen: (ws) => ws.open,
     log: onLog,
     idleKillMs,
+    strictStop: () => true,
     cancelRpcTimeoutMs,
     abortWaitMs: 150,
     killGraceMs: 150,
@@ -289,9 +290,26 @@ describe('lifecycle + repair', () => {
   it('acpStop tears down worker and notifies subscribers with acp_state dead', async () => {
     const ws = makeWs()
     await acp.acpStart(ws, startParams('sid-6'))
+    const pid = acp.workers.get('sid-6')!.proc.pid!
     await acp.acpStop('sid-6')
-    await waitFor(() => !acp.hasWorker('sid-6'))
+    expect(acp.hasWorker('sid-6')).toBe(false)
+    expect(() => process.kill(pid, 0)).toThrow()
     expect(ws.frames.some((f) => f.ev === 'acp_state' && f.state === 'dead')).toBe(true)
+  })
+
+  it('a shutdown acknowledgement is not a stop until the worker process exits', async () => {
+    const ws = makeWs()
+    await acp.acpStart(ws, startParams('sid-stop-delay', { workerCmd: [process.execPath, HUNG_WORKER], env: { MOCK_SHUTDOWN_EXIT_DELAY_MS: '250' } }))
+    const pid = acp.workers.get('sid-stop-delay')!.proc.pid!
+    let stopped = false
+    const stop = acp.acpStop('sid-stop-delay').then(() => { stopped = true })
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect(stopped).toBe(false)
+    expect(acp.hasWorker('sid-stop-delay')).toBe(true)
+    await stop
+    expect(stopped).toBe(true)
+    expect(() => process.kill(pid, 0)).toThrow()
+    expect(acp.hasWorker('sid-stop-delay')).toBe(false)
   })
 
   it('worker SIGKILL mid-turn → journal repaired (turn-interrupted) + subscribers notified', async () => {

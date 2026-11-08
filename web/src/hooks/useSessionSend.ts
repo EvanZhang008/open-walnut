@@ -6,14 +6,19 @@ import { spillOversizedText } from '@/api/paste-spill';
 import { log } from '@/utils/log';
 import type { OptimisticMessage } from '@/components/sessions/SessionChatHistory';
 import type { ImageAttachment } from '@/api/chat';
-import { removeBatchMessages, markDeliveredMessages, statusOnAdopt, unmatchedDeliveredIds } from '@/components/sessions/optimistic-dedup';
+import { failedFromSameBox, removeBatchMessages, markDeliveredMessages, settleShownByUuid, statusOnAdopt, unmatchedDeliveredIds } from '@/components/sessions/optimistic-dedup';
 import { launchSeedFor } from '@/components/sessions/launch-prompt-seed';
+import { markBubblesFailed } from '@/components/sessions/parked-bubbles';
 import { withoutLeadingRiders } from '@open-walnut/history-walnut-riders';
 import { parseHinted } from '@open-walnut/hint-format';
 import { splitAttachmentHeaders } from '@open-walnut/attachment-headers';
-import { adoptSendAnswer, reconcileWithQueue, rowVerdict } from './queue-reconcile';
+import { adoptSendAnswer, reconcileWithQueue, rehydrateFromQueue, rowVerdict } from './queue-reconcile';
 import { useQueueSync, type QueueSyncState } from './useQueueSync';
 import { queuedChangeResult, type QueuedChangeAnswer, type QueuedChangeKind } from '@/components/sessions/queued-change-words';
+import { adoptFailedDraft, bindDraftOrigin, forgetFailedDraft, settleRetriedDraft, type DraftOrigin } from '@/utils/drafts';
+import { newUserUuid } from '@/utils/thread-tree';
+import { onKept, sendSessionMessage, type SendAck } from '@/api/session-send';
+import { applyLateKept, shownSendError, type SendErrorState } from '@/components/sessions/send-acceptance';
 
 /** Per-send extras that ride the `session:send` RPC. */
 export interface SessionSendOptions {
@@ -39,6 +44,9 @@ export interface SessionSendOptions {
   switchEngine?: { engine: string; model?: string; effort?: string };
   /** Sent from this thread's Follow up on an Org node's Threads: the message is filed under it. */
   threadId?: string;
+  /** The composer draft the words came from. Kept on the bubble only, never sent: a Retry
+   *  accepted after a failed send settles that draft (utils/drafts.ts settleRetriedDraft). */
+  draftOrigin?: DraftOrigin;
 }
 
 interface UseSessionSendReturn {
@@ -55,11 +63,13 @@ interface UseSessionSendReturn {
   dismissFailed: (queueId: string) => void;
   handleMessagesDelivered: (count: number, messageIds?: string[]) => void;
   handleBatchCompleted: (count: number, messageIds?: string[]) => void;
-  handleBatchFailed: (messageIds: string[], error: string) => void;
+  handleBatchFailed: (messageIds: string[], error: string, info?: { parked?: boolean; waitsFor?: string }) => void;
   handleDeliveryWaiting: (messageIds: string[]) => void;
   handleEditQueued: (sessionId: string, queueId: string, newText: string) => void;
   handleDeleteQueued: (sessionId: string, queueId: string) => void;
   addExternalQueued: (msg: { queueId: string; text: string; enqueuedAt?: string; sentBy?: 'person' | 'agent'; queuedText?: string }) => void;
+  /** History shows these rows: a bubble whose uuid one carries was delivered (a send whose acknowledgement was lost). */
+  settleShownInHistory: (rows: ReadonlyArray<{ role: string; text: string; msgId?: string; sourceUuid?: string }>) => void;
   clearOptimistic: () => void;
   /** The panel's last read of the server's queue (useQueueSync): its time, or why it failed. */
   queueSync: QueueSyncState;
@@ -123,6 +133,8 @@ export interface QueueRowWire {
   status: string;
   enqueuedAt?: string;
   parkedReason?: string;
+  /** Parked only until the agent can run on the host (QueuedMessage.waitsFor): it goes out by itself. */
+  waitsFor?: string;
   userUuid?: string;
   heldReason?: string;
   /** When the held row is tried again (a host that cannot be reached: its next re-dial). */
@@ -144,7 +156,7 @@ export interface QueueRowWire {
  * bubble beside it was the count that kept growing. Its pictures show as
  * thumbnails, never as the header text.
  */
-export function queueRowBubble(m: QueueRowWire): OptimisticMessage | null {
+export function queueRowBubble(m: QueueRowWire, draftOrigin?: DraftOrigin): OptimisticMessage | null {
   if (m.delivered === true || m.stage === 'taken') return null;
   // The queue stores the ENQUEUED text, which for an attachment send carries the
   // server's headers + paths (and in rich output mode the hint blocks, and for
@@ -171,7 +183,7 @@ export function queueRowBubble(m: QueueRowWire): OptimisticMessage | null {
     timestamp: m.enqueuedAt ?? new Date().toISOString(),
     queueId: m.id,
     status: (verdict.kind === 'sent' ? 'delivered' : parked ? 'failed' : 'received') as 'received' | 'delivered' | 'failed',
-    ...(parked ? { parked: true, failedError: m.parkedReason } : {}),
+    ...(parked ? { parked: true, serverUndelivered: true, failedError: m.parkedReason, ...(m.waitsFor ? { waitsFor: m.waitsFor } : {}) } : {}),
     ...(held ? { heldReason: m.heldReason, ...(m.heldRetryAt ? { heldRetryAt: m.heldRetryAt } : {}) } : {}),
     ...(m.afterTurn && !parked ? { afterTurn: true } : {}),
     ...(dedupText !== undefined ? { dedupText } : {}),
@@ -183,6 +195,7 @@ export function queueRowBubble(m: QueueRowWire): OptimisticMessage | null {
     // question tree across a reload (its own page, and a parked one marks the question failed).
     ...(m.userUuid ? { userUuid: m.userUuid } : {}),
     ...(m.sentBy === 'person' || m.sentBy === 'agent' ? { sentBy: m.sentBy } : {}),
+    ...(draftOrigin ? { draftOrigin } : {}),
   };
 }
 
@@ -271,6 +284,19 @@ export function editedBubble(m: OptimisticMessage, newText: string): OptimisticM
   return { ...m, text: newText, dedupText: `${frame}${newText}` };
 }
 
+/**
+ * Every send names its user line up front: the line is the proof the server kept a send
+ * whose answer was lost (api/session-send.ts), and a composer's refusal the server took
+ * after all is known across a reload by it. An engine switch's send starts another session.
+ */
+function withOwnedUuid(sessionId: string, opts: SessionSendOptions | undefined): SessionSendOptions | undefined {
+  if (opts?.switchEngine) return opts;
+  const userUuid = opts?.userUuid ?? newUserUuid();
+  if (!userUuid) return opts;
+  if (opts?.draftOrigin) bindDraftOrigin(opts.draftOrigin, sessionId, userUuid);
+  return opts?.userUuid ? opts : { ...(opts ?? {}), userUuid };
+}
+
 /** What a panel shows before its queue answer: the launch this tab just made. */
 function seededBubbles(sessionId: string | null): OptimisticMessage[] {
   const seed = sessionId ? launchSeedFor(sessionId) : undefined;
@@ -282,7 +308,11 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
   // Seeded in the initializer, not the effect: the first frame of a freshly
   // promoted panel must already hold the message the pending column showed.
   const [optimisticMsgs, setOptimisticMsgs] = useState<OptimisticMessage[]>(() => seededBubbles(activeSessionId));
-  const [sendError, setSendError] = useState<string | null>(null);
+  // The red line, tied to the send it is about (send-acceptance.ts shownSendError).
+  const [sendErrorState, setSendErrorState] = useState<SendErrorState | null>(null);
+  const setSendError = useCallback((text: string | null, userUuid?: string) => {
+    setSendErrorState(text === null ? null : { text, ...(userUuid ? { userUuid } : {}) });
+  }, []);
   const [redirectedTo, setRedirectedTo] = useState<string | null>(null);
   useEffect(() => { setRedirectedTo(null); }, [activeSessionId]);
   // The session the panel shows now: a send's late answer never moves a panel that went elsewhere.
@@ -308,6 +338,25 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
   const sync = useQueueSync(activeSessionId, optimisticMsgs, msgsRef, setOptimisticMsgs, queueRowBubble);
   const { touch, retire, hold, release, request: requestQueueRead } = sync;
 
+  /** The bubble `clientId` after its accepted answer (a lost answer's stand-in included: api/session-send.ts). */
+  const adoptAnswer = useCallback((clientId: string, res: SendAck) => {
+    const adopted = statusOnAdopt(res.messageId, deliveredEarlyRef.current);
+    touch([res.messageId]);
+    setOptimisticMsgs((prev) => adoptSendAnswer(prev, clientId, res, adopted));
+  }, [touch]);
+
+  // A refused send the server proves it kept after all (its queued event came late): accepted
+  // like any other, so its words leave the composer it was restored to (utils/drafts.ts).
+  useEffect(() => onKept((row) => {
+    if (row.sessionId !== shownRef.current) return;
+    const { settled } = applyLateKept(msgsRef.current, row);
+    if (settled.length === 0) return;
+    log.info('send', 'the server kept a send whose answer was lost', { sessionId: row.sessionId, messageId: row.messageId });
+    for (const m of settled) if (m.draftOrigin) settleRetriedDraft(m.draftOrigin);
+    const early = statusOnAdopt(row.messageId, deliveredEarlyRef.current) === 'delivered';
+    setOptimisticMsgs((prev) => applyLateKept(prev, row, early).next as OptimisticMessage[]);
+  }), []);
+
   // Clear optimistic messages on session switch + rehydrate from server disk queue.
   // The queue only contains messages NOT yet delivered to Claude (pending/processing).
   // Once delivered, removeProcessed() clears them eagerly — so no overlap with JSONL.
@@ -319,6 +368,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
     let stale = false;
 
     if (activeSessionId) {
+      const sid = activeSessionId;
       wsClient.sendRpc<{
         messages: QueueRowWire[];
         launchPrompt?: { id: string; text: string; at: string };
@@ -329,17 +379,15 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
         if (stale) return;
         const launch = res?.launchPrompt ? launchBubbleOf(res.launchPrompt) : null;
         if (res?.messages?.length || launch) {
-          setOptimisticMsgs(prev => {
-            // The rows join in enqueue order (a send made while this read was in flight
-            // keeps its place after them); nothing is judged gone on this first read.
-            const merged = reconcileWithQueue(prev, res.messages ?? [], {
-              known: new Set(), touched: new Set(), retired: sync.retiredIds(), now: Date.now(), toBubble: queueRowBubble,
-            });
-            // The launch prompt opens the first turn, so it goes before anything
-            // the user managed to send while this RPC was in flight.
-            const head = launch && !merged.some(m => m.queueId === launch.queueId) ? [launch] : [];
-            return head.length ? [...head, ...merged] : merged;
-          });
+          // A refused send the server took after all owns its restored draft again (utils/drafts.ts).
+          const owned = new Map((res.messages ?? []).flatMap((m) => {
+            const origin = m.userUuid ? adoptFailedDraft(sid, m.userUuid) : undefined;
+            return origin ? [[m.id, origin] as const] : [];
+          }));
+          setOptimisticMsgs(prev => rehydrateFromQueue(prev, res.messages ?? [], launch, {
+            retired: sync.retiredIds(), now: Date.now(),
+            toBubble: (row) => queueRowBubble(row, owned.get(row.id)),
+          }));
           log.info('send', 'rehydrated from queue', {
             sessionId: activeSessionId,
             count: res.messages?.length ?? 0,
@@ -352,6 +400,15 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
     }
     return () => { stale = true; };
   }, [activeSessionId]);
+
+  /** A send from a box replaces that box's refused rows (optimistic-dedup.ts failedFromSameBox). */
+  const dropSupersededFailed = useCallback((origin: DraftOrigin | undefined) => {
+    const gone = failedFromSameBox(msgsRef.current, origin?.key);
+    if (gone.length === 0) return;
+    for (const m of gone) if (m.draftOrigin && m.draftOrigin !== origin) forgetFailedDraft(m.draftOrigin);
+    const ids = new Set(gone.map((m) => m.queueId));
+    setOptimisticMsgs((prev) => prev.filter((m) => !ids.has(m.queueId)));
+  }, []);
 
   const send = useCallback(async (sessionId: string, message: string, images?: ImageAttachment[], opts?: SessionSendOptions): Promise<boolean> => {
     setSendError(null);
@@ -372,6 +429,8 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
     // Hints a surface asked for on this session's next send (utils/pending-hints.ts), under the send's own.
     const hinted = hasPendingHintsSource(sessionId) ? await takePendingHintsAsync(sessionId, opts?.hints, message) : takePendingHints(sessionId, opts?.hints);
     if (hinted) opts = { ...(opts ?? {}), hints: hinted };
+    opts = withOwnedUuid(sessionId, opts);
+    dropSupersededFailed(opts?.draftOrigin);
     const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     log.info('send', 'dispatching', { sessionId, queueId: tempId });
     const optimistic: OptimisticMessage = {
@@ -383,10 +442,12 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
       images,
       // The uuid the CLI will persist this line under: it is also the id the
       // thread anchor was just recorded against, so the bubble is a member of
-      // its thread NOW rather than after the next history fetch. Dedup never
-      // reads it (it keys on queueId / walnutMessageId / text).
+      // its thread NOW rather than after the next history fetch. Dedup reads it
+      // too: a history row carrying it proves the bubble delivered, failed or not
+      // (optimistic-dedup.ts historyUuidsOf).
       ...(opts?.userUuid ? { userUuid: opts.userUuid } : {}),
       ...(opts?.hints ? { requestedHints: opts.hints } : {}),
+      ...(opts?.draftOrigin ? { draftOrigin: opts.draftOrigin } : {}),
     };
     setOptimisticMsgs((prev) => [...prev, optimistic]);
 
@@ -403,7 +464,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
         ...(opts?.switchEngine ? { switchEngine: opts.switchEngine } : {}),
         ...(opts?.threadId ? { threadId: opts.threadId } : {}),
       };
-      const res = await wsClient.sendRpc<{ messageId: string; dedupText?: string; enqueuedAt?: string; engineSwitch?: { state?: string }; deliveredTo?: string }>('session:send', rpcPayload);
+      const res = await sendSessionMessage(rpcPayload as typeof rpcPayload & { sessionId: string; message: string });
       if (followRedirect(res, tempId, sessionId)) return true;
       if (res?.engineSwitch) {
         // The message starts the task's new session: its bubble shows there, not in this one.
@@ -411,19 +472,15 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
         setOptimisticMsgs((prev) => prev.filter((m) => m.queueId !== tempId));
         return true;
       }
-      if (res?.messageId) {
-        // Adopt dedupText when the server augmented the text (image refs) — the
-        // bubble keeps rendering the user's original, but dedups against what was
-        // actually enqueued. See OptimisticMessage.dedupText.
-        const adopted = statusOnAdopt(res.messageId, deliveredEarlyRef.current);
-        touch([res.messageId]);
-        setOptimisticMsgs((prev) => adoptSendAnswer(prev, tempId, res, adopted));
-      }
+      // Adopt dedupText when the server augmented the text (image refs) — the
+      // bubble keeps rendering the user's original, but dedups against what was
+      // actually enqueued. See OptimisticMessage.dedupText.
+      if (res?.messageId) adoptAnswer(tempId, res);
       return true;
     } catch (e) {
       const err = e as Error;
       log.error('send', 'RPC failed', { sessionId, error: err.message });
-      setSendError(err.message);
+      setSendError(err.message, opts?.userUuid);
       setOptimisticMsgs((prev) => prev.map((m) =>
         m.queueId === tempId ? { ...m, status: 'failed' as const, failedError: err.message } : m
       ));
@@ -446,6 +503,8 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
     // Hints a surface asked for on this session's next send (utils/pending-hints.ts), under the send's own.
     const hinted = hasPendingHintsSource(sessionId) ? await takePendingHintsAsync(sessionId, opts?.hints, message) : takePendingHints(sessionId, opts?.hints);
     if (hinted) opts = { ...(opts ?? {}), hints: hinted };
+    opts = withOwnedUuid(sessionId, opts);
+    dropSupersededFailed(opts?.draftOrigin);
     const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     log.info('send', 'dispatching (interrupt)', { sessionId, queueId: tempId });
     const optimistic: OptimisticMessage = {
@@ -459,6 +518,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
       // thread immediately (see the comment there).
       ...(opts?.userUuid ? { userUuid: opts.userUuid } : {}),
       ...(opts?.hints ? { requestedHints: opts.hints } : {}),
+      ...(opts?.draftOrigin ? { draftOrigin: opts.draftOrigin } : {}),
     };
     setOptimisticMsgs((prev) => [...prev, optimistic]);
 
@@ -471,18 +531,14 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
         ...(opts?.userUuid ? { userUuid: opts.userUuid } : {}),
         ...(opts?.hints ? { hints: opts.hints } : {}),
       };
-      const res = await wsClient.sendRpc<{ messageId: string; dedupText?: string; enqueuedAt?: string; deliveredTo?: string }>('session:send', rpcPayload);
+      const res = await sendSessionMessage(rpcPayload as typeof rpcPayload & { sessionId: string; message: string });
       if (followRedirect(res, tempId, sessionId)) return true;
-      if (res?.messageId) {
-        const adopted = statusOnAdopt(res.messageId, deliveredEarlyRef.current);
-        touch([res.messageId]);
-        setOptimisticMsgs((prev) => adoptSendAnswer(prev, tempId, res, adopted));
-      }
+      if (res?.messageId) adoptAnswer(tempId, res);
       return true;
     } catch (e) {
       const err = e as Error;
       log.error('send', 'RPC failed (interrupt)', { sessionId, error: err.message });
-      setSendError(err.message);
+      setSendError(err.message, opts?.userUuid);
       setOptimisticMsgs((prev) => prev.map((m) =>
         m.queueId === tempId ? { ...m, status: 'failed' as const, failedError: err.message } : m
       ));
@@ -518,7 +574,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
     // Clear `parked` too: the server un-parks the row on this explicit retry, so
     // a second failure must render as an ordinary "Send failed", not a stale park.
     if (!waiting) setOptimisticMsgs((prev) => prev.map((m) =>
-      m.queueId === queueId ? { ...m, status: 'pending' as const, failedError: undefined, parked: undefined, leftQueueAt: undefined, queueNotice: undefined } : m
+      m.queueId === queueId ? { ...m, status: 'pending' as const, failedError: undefined, parked: undefined, waitsFor: undefined, leftQueueAt: undefined, queueNotice: undefined } : m
     ));
 
     // The pre-assigned user-line uuid rides the retry too: the thread anchor recorded
@@ -526,27 +582,24 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
     // land the message at the top level while the chip still promised a thread.
     // Harmless when the server re-drains the original row (it already carries it).
     buildImageRefsPayload(failedMsg.images)
-      .then((imagePayload) => wsClient.sendRpc<{ messageId: string; dedupText?: string; enqueuedAt?: string; deliveredTo?: string }>(
-        'session:send',
-        {
-          sessionId, message: failedMsg.text, retryOf: queueId, ...imagePayload,
-          ...(failedMsg.userUuid ? { userUuid: failedMsg.userUuid } : {}),
-          ...(failedMsg.requestedHints ? { hints: failedMsg.requestedHints } : {}),
-        },
-      ))
+      .then((imagePayload) => sendSessionMessage({
+        sessionId, message: failedMsg.text, retryOf: queueId, ...imagePayload,
+        ...(failedMsg.userUuid ? { userUuid: failedMsg.userUuid } : {}),
+        ...(failedMsg.requestedHints ? { hints: failedMsg.requestedHints } : {}),
+      }))
       .then((res) => {
         release([queueId]);
+        if (failedMsg.draftOrigin) settleRetriedDraft(failedMsg.draftOrigin);
         if (followRedirect(res, queueId, sessionId)) return;
-        if (res?.messageId) {
-          const adopted = statusOnAdopt(res.messageId, deliveredEarlyRef.current);
-          touch([res.messageId]);
-          setOptimisticMsgs((prev) => adoptSendAnswer(prev, queueId, res, adopted));
-        }
+        // alreadyDelivered: the first send's acknowledgement was lost, not the send: its
+        // line already ran (the server sent nothing again). History holds it and its answer.
+        if (res?.alreadyDelivered) log.info('send', 'retry: the message was already delivered', { sessionId, queueId });
+        if (res?.messageId) adoptAnswer(queueId, res);
       })
       .catch((e: Error) => {
         release([queueId]);
         log.error('send', 'Retry failed', { sessionId, error: e.message });
-        setSendError(e.message);
+        setSendError(e.message, failedMsg.userUuid);
         setOptimisticMsgs((prev) => prev.map((m) =>
           m.queueId === queueId ? { ...m, status: 'failed' as const, failedError: e.message } : m
         ));
@@ -556,6 +609,8 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
   /** Remove a failed message from the optimistic list. */
   const dismissFailed = useCallback((queueId: string) => {
     retire([queueId]);
+    const origin = msgsRef.current.find((m) => m.queueId === queueId)?.draftOrigin;
+    if (origin) forgetFailedDraft(origin);
     setOptimisticMsgs((prev) => prev.filter((m) => m.queueId !== queueId));
   }, [retire]);
 
@@ -569,6 +624,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
     while (early.size > 64) early.delete(early.values().next().value!);
     const ids = new Set(messageIds ?? []);
     const revived = msgsRef.current.some((m) => m.status === 'failed' && ids.has(m.queueId));
+    for (const m of msgsRef.current) if (m.draftOrigin && ids.has(m.queueId)) settleRetriedDraft(m.draftOrigin);
     const stillFailed = msgsRef.current.some((m) => m.status === 'failed' && !ids.has(m.queueId));
     setOptimisticMsgs((prev) => markDeliveredMessages(prev, count, messageIds) as OptimisticMessage[]);
     // The red error was about a message that did reach the CLI: nothing failed now.
@@ -596,14 +652,13 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
       : prev);
   }, [touch]);
 
-  const handleBatchFailed = useCallback((messageIds: string[], error: string) => {
-    log.warn('send', 'batch failed', { count: messageIds.length, error });
-    setSendError(error);
-    const idSet = new Set(messageIds);
+  const handleBatchFailed = useCallback((messageIds: string[], error: string, info?: { parked?: boolean; waitsFor?: string }) => {
+    log.warn('send', 'batch failed', { count: messageIds.length, error, ...(info?.waitsFor ? { waitsFor: info.waitsFor } : {}) });
+    // A message waiting for the agent says so on its own bubble, with the fix: no second red line.
+    if (!info?.waitsFor) setSendError(error);
     touch(messageIds);
-    setOptimisticMsgs((prev) => prev.map((m) =>
-      idSet.has(m.queueId) ? { ...m, status: 'failed' as const, failedError: error } : m
-    ));
+    // A refused launch prompt reads as the message that was not sent (parked-bubbles.ts).
+    setOptimisticMsgs((prev) => markBubblesFailed(prev, messageIds, error, info));
   }, [touch]);
 
   /**
@@ -685,6 +740,16 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
     });
   }, []);
 
+  const settleShownInHistory = useCallback((rows: ReadonlyArray<{ role: string; text: string; msgId?: string; sourceUuid?: string }>) => {
+    const next = settleShownByUuid(msgsRef.current, rows);
+    if (next === msgsRef.current) return;
+    const settled = next.filter((m, i) => m !== msgsRef.current[i]);
+    log.info('send', 'history shows sends as delivered', { count: settled.length, queueIds: settled.map((m) => m.queueId) });
+    for (const m of settled) if (m.draftOrigin) settleRetriedDraft(m.draftOrigin);
+    setOptimisticMsgs((prev) => settleShownByUuid(prev, rows) as OptimisticMessage[]);
+    if (!next.some((m) => m.status === 'failed')) setSendError(null);
+  }, []);
+
   const clearOptimistic = useCallback(() => {
     setOptimisticMsgs([]);
     setSendError(null);
@@ -705,7 +770,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
 
   return {
     optimisticMsgs,
-    sendError,
+    sendError: shownSendError(sendErrorState, optimisticMsgs),
     redirectedTo,
     send,
     interruptSend,
@@ -719,6 +784,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
     handleEditQueued,
     handleDeleteQueued,
     addExternalQueued,
+    settleShownInHistory,
     clearOptimistic,
     queueSync: sync.state,
   };

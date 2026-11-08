@@ -32,6 +32,7 @@ const NOT_ROW_STATE: Record<string, string> = {
   'components/common/MicButton.tsx:showChevron': 'the composer mic, not a chat row',
   'components/common/MicButton.tsx:dropdownOpen': 'the composer mic menu',
   'components/common/MicButton.tsx:expandedId': 'the composer mic menu',
+  'components/common/SetupBanner.tsx:opening': 'a busy flag while the Claude Code sign-in opens (ClaudeSignIn), not a disclosure',
   // The chat itself: one long-lived component that no handover rebuilds.
   'components/sessions/SessionChatHistory.tsx:firstCheckShown': 'which held blocks show, not a disclosure',
   'components/sessions/SessionChatHistory.tsx:foldOverrides': 'Conversation Mode fold choices, held by the chat itself',

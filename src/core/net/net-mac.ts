@@ -25,6 +25,12 @@ import { cutOffByNoRelay, relayChoice, relaysOfChoice, type RelayChoice } from '
 import { machineLinks, noteSeen, runningChoice, waitForModes } from './net-seen.js'
 import { keepWhere, noteWhere, withWhere } from './net-where.js'
 
+/** Why a throwaway server (a developer's test server, or the Demo) takes no part in the host network. */
+async function notOnThisServer(): Promise<string> {
+  const { IS_DEMO } = await import('../../constants.js')
+  return `The host network runs only on your own Walnut, not ${IS_DEMO ? 'in the Demo' : 'on a test server'}.`
+}
+
 const CALL_TIMEOUT_MS = 15_000
 const SYNC_EVERY_MS = 10 * 60_000
 
@@ -75,7 +81,7 @@ const MODES_WAIT_MS = 15_000
 export async function companionCall(p: string, init: { method: 'GET' | 'POST' | 'PUT' | 'DELETE'; body?: unknown }): Promise<{ status: number; body: Record<string, unknown> }> {
   // A test server holds a copy of the real pairing: one call from it would put its key in
   // the Mac's place on the user's companion.
-  if (!await netActive()) throw new NetError(409, 'test_server', 'The host network runs only on your own Walnut, not on a test server.')
+  if (!await netActive()) throw new NetError(409, 'test_server', await notOnThisServer())
   const [{ getCloudPairingEndpointAsync }, { machineProofHeaders }] = await Promise.all([
     import('../pairing-targets.js'), import('../../integrations/cloud-bridge-config.js'),
   ])
@@ -235,7 +241,7 @@ function runSync(opts: { enable?: boolean }): Promise<NetState> {
       if (state.companion && cfg.net?.relay !== undefined) await clearPick()
       if (!state.enabled) return { ...state }
       // A test server holds a copy of the real config and pairing.
-      if (!await netActive()) throw new NetError(409, 'test_server', 'The host network runs only on your own Walnut, not on a test server.')
+      if (!await netActive()) throw new NetError(409, 'test_server', await notOnThisServer())
       const local = await localDaemon()
       // An older daemon drops the relay mode, so its walnut-net would run with no relay at all.
       if (state.relay !== 'own' && !local.hasCapability('net-join-v1')) throw new NetError(409, 'daemon_too_old', "This machine's Walnut daemon is too old for public relays or no relay; restart Walnut to update it.")

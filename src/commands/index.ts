@@ -327,6 +327,23 @@ export function registerCommands(program: Command): void {
     });
 
   program
+    .command('demo [action]')
+    .description('Open an isolated Demo, or reset it to a new-user first run')
+    .addOption(new Option('--_child').hideHelp())
+    .addOption(new Option('--_headless').hideHelp())
+    .addOption(new Option('--_root <path>').hideHelp())
+    .addOption(new Option('--_ephemeral-child').hideHelp())
+    .action(async (action: string | undefined, options: { _child?: boolean; _headless?: boolean; _root?: string }, cmd: Command) => {
+      try {
+        await (await import('./demo.js')).runDemo(action, options);
+      } catch (error) {
+        // The Demo's own child keeps its full diagnostics; a person gets one line and exit 1.
+        if (options._child) throw error;
+        cmd.error(error instanceof Error ? error.message : String(error));
+      }
+    });
+
+  program
     .command('host-server')
     .description('Run as a server on this host that follows your Mac (started by this host\'s Walnut daemon)')
     .action(async () => {

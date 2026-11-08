@@ -19,6 +19,7 @@ beforeEach(() => {
 describe('prewarmRemoteHost', () => {
   it('is a no-op for local sessions (no host → no ssh)', async () => {
     await prewarmRemoteHost(undefined);
+    await prewarmRemoteHost('__local__');
     expect(remoteDtachPath).not.toHaveBeenCalled();
     expect(localDtachPath).not.toHaveBeenCalled();
   });

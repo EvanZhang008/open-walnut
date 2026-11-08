@@ -30,3 +30,17 @@ export function cliErrorRowText(raw: CliLine & { message?: { content?: unknown }
       : ''
   return text ? `${CLI_ERROR_PREFIX}${text}` : null
 }
+
+/**
+ * Text that is Claude Code's own error or status line, read by its words alone, for a reader that
+ * got only text (a side question's answer, a `claude -p` result): "Not logged in · Please run
+ * /login", "Invalid API key", "API Error: 529 ...", "Prompt is too long", a usage limit. Short
+ * text only, anchored at its start, so a real answer that DISCUSSES a login error is not one.
+ */
+// Only the CLI's own phrasings: a title like "Rate limit backoff" or "Error 500 on login" is a title.
+const CLI_ERROR_TEXT_RE = /^(?:claude code:\s*)?(?:not logged in\b|please run \/login|invalid api key|failed to authenticate|authentication_error|oauth (?:access )?token (?:has )?expired|api error:|credit balance is too low|prompt is too long|claude ai usage limit|usage limit reached|execution error|no conversation found with session)/i
+
+export function isCliErrorText(text: string): boolean {
+  const t = text.trim()
+  return t.length > 0 && t.length < 300 && (CLI_ERROR_TEXT_RE.test(t) || /·\s*please run \/login/i.test(t))
+}

@@ -240,8 +240,8 @@ show inline after the open ones, other completed hits that show the query fold i
   tier view mode (By project / Flat), Recent sorts by Priority, Created or Updated and groups by
   project or not, the Projects list keeps `sortBy`/`groupBy` (All and Projects act on it; a tier in
   All is sorted and grouped from its heading menu, the same Organize / Sort by groups the Projects
-  heading has, and the Pinned heading menu sets every tier at once, which is the only way in All
-  when the pins draw with no tier heading); Pinned reads every tier it draws (no segment pressed
+  heading has, and the Pinned heading menu sets every tier at once; every tier holding pins draws
+  its heading, a new user's board included, 2026-11-12); Pinned reads every tier it draws (no segment pressed
   when they differ, with a note) and a pick writes them all. A sorted tier draws no
   separator lines, and a drop that reorders inside it switches it to Manual (its drawn order becomes
   the pin order), while any other sorted tier keeps its pin order through the write (`keepPinOrder`).
@@ -349,6 +349,14 @@ show inline after the open ones, other completed hits that show the query fold i
   `needs_leader` why has words in `NEEDS_LEADER_REASONS` (ratchet:
   `tests/replica/needs-leader-reasons-ratchet.test.ts`). Tests: `tests/web/leader-presence*.test.ts`,
   `tests/web/chat-input-away-draft.test.ts`.
+- **One rule decides that a send was accepted: `sendSessionMessage` (`api/session-send.ts`)**
+  (2026-11-11 review, F3: a send whose answer was lost while the server kept it left its words in
+  the Ask card's box, so Enter sent them twice, and a red line over the answered chat). The only
+  `session:send` RPC; every send names a user-line uuid, and a lost or slow answer resolves as
+  accepted when the server's queued event or a queue read shows that line. A refusal the server
+  proves kept later (the event, history) is accepted by `useSessionSend` (`send-acceptance.ts`),
+  settles the restored draft (`settleRetriedDraft`), and the red line, tied to its send, goes.
+  Guard: `tests/web/send-acceptance-guard.test.ts`.
 - **The rail's Agenda and Scratchpad open beside the page on screen, never a trip home**
   (2026-11-06, the user: "any page can show this side bar, I find I sometimes need it for the org
   page"). Home keeps its own column (`HomeCompanionPanel`, right of the task panel, its own
@@ -717,8 +725,10 @@ show inline after the open ones, other completed hits that show the query fold i
   or one a send has claimed is never rewritten (`editComment`; `mergeKeepingClaimed` while the send
   is in flight; `mergeComments` keeps the sent copy's words), and a record read that lacks ours
   (a stale window's write) is written over once (`recordNeedsWrite`). The composer's
-  accepted send carries each one (`composeWithComments`: quote, its comment, in order, then
-  the typed words); a sent comment stays as a quieter `walnut-comment-sent` mark, a sent plain
+  accepted send carries each one (`composeForSend`: quote, its comment, in order, then
+  the typed words; a doc comment shows only its file's name in the bubble, and its path, id,
+  sidecar and how to answer ride the `object-context` hint, for the model only, falling back
+  to the inline `composeWithComments` text when the hint's context cannot be stored); a sent comment stays as a quieter `walnut-comment-sent` mark, a sent plain
   Quote leaves none. A row with no message id yet, or a timeline with no record behind it,
   falls back to the text quote (`buildPassagePrefill`, prefill mode `stack`). On a question page, or with a question as
   Conversation Mode's composer target, `SessionPanel.quoteInChat` goes back to the main
@@ -771,7 +781,10 @@ show inline after the open ones, other completed hits that show the query fold i
   `onFileOpen(path, line)` to open the Files tab first (a sidebar row, a turn label, the quote
   head's back arrow in Tree Mode). The host box does not scroll, so `placeFileCard`
   (`utils/file-thread.ts`) works in host coordinates and re-measures on scroll, resize and
-  mutation; a passage scrolled off keeps its card docked at the edge. The card never covers its
+  mutation. The card follows its passage in every state (draft, sending, answered, failed) and
+  is not drawn while the passage is out of the view (`place.away`, `fileCardAway`; 2026-11-11: an
+  answered card, tall, docked at the edge and floated over other lines while its passage scrolled
+  away; a passage the source editor stopped drawing counts as away). The card never covers its
   passage when the box has room: under the last line when the card fits there, else over the
   first line, hung by its foot (`place.bottom`, so it grows upward; 2026-11-06: pushed up to keep
   its minimum height, it sat ON a passage near the bottom of the view). "Fits" is the card's own

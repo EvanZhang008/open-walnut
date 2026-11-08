@@ -13,8 +13,7 @@ import type { DirListingPending } from '@/api/sessions';
 import { activeStepLabel, isHostConnecting, isHostFailed } from '@/utils/host-connect';
 import {
   hostFailureHeadline, hostProblemOf, isConnectingPhaseWire, listingProblemOf,
-  type HostProblem, type HostReadinessProblemInput,
-} from '@open-walnut/host-problem';
+  type HostProblem, type HostReadinessProblemInput, shownFailureSummary } from '@open-walnut/host-problem';
 import type { HostLiveState } from './useLiveDirs';
 
 /** Poll gap while a host answers `pending` and its status is being pushed. */
@@ -69,7 +68,7 @@ export function mergeHostStateWithStatus(
     // The listing's own hostError is the most specific text (it came from the
     // request the user made), so it wins on message/kind; the store fills the
     // gaps, which is how a bare transport error gets a usable hint.
-    const message = state.hostError?.message || status.error || 'Could not connect';
+    const message = shownFailureSummary(state.hostError?.message || status.error) || 'Could not connect';
     const kind = state.hostError?.kind || status.kind || 'connect-failed';
     const hint = state.hostError?.hint || status.hint || DEFAULT_FAIL_HINT;
     if (state.status === 'error' && state.hostError
@@ -138,7 +137,7 @@ function connectFromListing(state: HostLiveState, host: string, label: string): 
   const kind = state.hostError?.kind || 'unknown';
   return {
     type: 'connect', kind, headline: hostFailureHeadline(kind, label),
-    hint: state.hostError?.hint ?? '', summary: state.hostError?.message ?? state.error ?? '',
+    hint: state.hostError?.hint ?? '', summary: shownFailureSummary(state.hostError?.message ?? state.error),
     retryable: state.hostError?.retryable !== false, dismissKey: `${host}|connect`,
   };
 }

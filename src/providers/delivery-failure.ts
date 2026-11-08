@@ -19,7 +19,8 @@
 import { CwdMissingError } from './cwd-check.js';
 import { AcpSessionNotNativeError } from './acp-native-guard.js';
 import { isSessionStopSuperseded } from '../core/sessions/session-stop.js';
-import { InheritedSessionRefusedError } from './ephemeral-session-gate.js';
+import { InheritedSessionRefusedError, isInheritedSessionText } from './ephemeral-session-gate.js';
+import { thisServer } from '../core/server-self-name.js';
 import { DaemonFrameTooLargeError, FRAME_TOO_LARGE } from './daemon-frame-cap.js';
 
 export type DeliveryFailureKind = 'permanent' | 'transient';
@@ -27,9 +28,15 @@ export type DeliveryFailureKind = 'permanent' | 'transient';
 export interface DeliveryFailureVerdict {
   kind: DeliveryFailureKind;
   /** Stable label for logs/tests. Absent for transient failures. */
-  code?: 'cwd_missing' | 'session_missing' | 'session_stopped' | 'budget_paused' | 'inherited_session' | 'session_live' | 'too_large' | 'acp_session';
+  code?: 'cwd_missing' | 'session_missing' | 'session_stopped' | 'budget_paused' | 'inherited_session' | 'session_live' | 'too_large' | 'acp_session' | 'claude_missing';
   /** Human-readable cause, stored on the parked row and shown in the UI. */
   reason: string;
+  /**
+   * The agent cannot run on the host yet (a readiness kind, host-problem.ts
+   * AGENT_CANNOT_RUN_KINDS): the parked row carries it, and Walnut sends the row by
+   * itself once the host reads runnable (core/sessions/agent-wait-resend.ts).
+   */
+  waitsFor?: string;
 }
 
 /** Cap the stored reason: it lands in a JSON row and in a UI label. */
@@ -58,8 +65,11 @@ export function classifyDeliveryFailure(err: unknown): DeliveryFailureVerdict {
     return { kind: 'permanent', code: 'budget_paused', reason: 'Not sent: the session budget is paused. Raise or remove the limit, then retry.' };
   }
   if (isSessionStopSuperseded(err)) return { kind: 'permanent', code: 'session_stopped', reason };
+  // Claude Code cannot run on the host yet: every retry fails the same way until the
+  // user installs it, so the message waits, said plainly, for their Retry.
+  if (err instanceof ClaudeRuntimeMissingError) return { kind: 'permanent', code: 'claude_missing', reason: err.waitingReason, waitsFor: err.errorKind };
   // A test server refusing a session it did not start: retrying changes nothing.
-  if (err instanceof InheritedSessionRefusedError || /^inherited_session:/.test(message)) return { kind: 'permanent', code: 'inherited_session', reason };
+  if (err instanceof InheritedSessionRefusedError || isInheritedSessionText(message)) return { kind: 'permanent', code: 'inherited_session', reason: reason.replace(/^inherited_session:\s*/, '') };
   // Another process holds the session on its host: every retry is refused the
   // same way until that process ends, so the batch waits for the user's Retry.
   if (err instanceof SessionHeldElsewhereError) return { kind: 'permanent', code: 'session_live', reason: err.message.slice(0, HELD_REASON_MAX) };
@@ -177,7 +187,7 @@ export class SessionHeldElsewhereError extends Error {
 function heldElsewhereText(host: string, kind: SessionHeldElsewhereError['kind'], pid: number | undefined, holder: 'terminal' | 'walnut'): string {
   const where = host === '__local__' ? 'this machine' : `host "${host}"`;
   const proc = pid ? `Claude Code pid ${pid} on ${where}` : `on ${where}`;
-  if (kind === 'session_other_walnut') return `Not delivered: this session belongs to another Walnut on ${where}, and a test server does not run it.`;
+  if (kind === 'session_other_walnut') return `Not delivered: this session belongs to another Walnut on ${where}, and ${thisServer()} does not run it.`;
   if (holder === 'walnut') {
     return `Not delivered yet: another Walnut runs this session right now (${proc}). The task is fine, not broken: `
       + 'this message waits in the session\'s queue, and Retry sends it once that process has ended.';
@@ -208,6 +218,71 @@ export function holderPidOf(text: unknown): number | undefined {
   const m = /\bpid (\d+)/.exec(typeof text === 'string' ? text : '');
   return m ? Number(m[1]) : undefined;
 }
+
+/**
+ * The host's daemon refused to start the CLI because Claude Code cannot run there
+ * (not installed, or the npm build with no Node). Nothing was spawned. The message
+ * is the readiness sentence every surface shows (host-readiness.ts spawnGateSentence).
+ */
+export class ClaudeRuntimeMissingError extends Error {
+  readonly code = 'CLAUDE_RUNTIME';
+  constructor(message: string, readonly errorKind: 'claude_missing' | 'claude_needs_node' | 'claude_error') {
+    super(message);
+    this.name = 'ClaudeRuntimeMissingError';
+  }
+  /** What a message that could not start says while it waits for the install. */
+  get waitingReason(): string {
+    const said = this.message.trim().replace(/\.?$/, '.');
+    if (this.errorKind === 'claude_missing') return `${said} Install Claude Code and this message goes out by itself.`;
+    // claude_error: it is installed and stopped at once, which readiness may not see; Retry is the sure way.
+    if (this.errorKind === 'claude_error') return `${said} Then press Retry to send this message.`;
+    return `${said} Once Claude Code can start, this message goes out by itself.`;
+  }
+}
+
+/**
+ * A daemon start whose CLI ended before it took its first line (both daemon twins say
+ * "start: initial message not delivered (<reason>)": ENXIO, no reader on its stdin; session_dead
+ * or not_found, the process already reaped). Claude Code on that host does not start: no
+ * conversation began, and the words a person reads say so (2026-11-11 review: the raw
+ * "internal daemon error handling start: start: initial message not delivered (ENXIO)").
+ */
+const CLI_GONE_BEFORE_FIRST_LINE = /initial message not delivered \((?:ENXIO|session_dead|not_found)\)/;
+
+export function cliStoppedBeforeFirstLine(daemonError: unknown): boolean {
+  return typeof daemonError === 'string' && CLI_GONE_BEFORE_FIRST_LINE.test(daemonError);
+}
+
+/** Where a host is, in a sentence: its name, or this computer. */
+function hostWords(host: string | null): { on: string; there: string } {
+  return host && host !== '__local__'
+    ? { on: ` on ${host}`, there: ` in a terminal on ${host}` }
+    : { on: '', there: ' in a terminal on this computer' };
+}
+
+/** The sentence for a start whose Claude Code stopped before it read the message. */
+export function cliStoppedSentence(host: string | null): string {
+  const w = hostWords(host);
+  return `Claude Code${w.on} stopped before it read your message, so nothing started. Check that it runs: \`claude --version\`${w.there}.`;
+}
+
+/**
+ * Any other daemon start failure, in plain words: what failed, then the daemon's own cause
+ * with its internal frames ("internal daemon error handling start: start: ...") taken off.
+ */
+export function startFailureSentence(host: string | null, daemonError: unknown): string {
+  const cause = String(daemonError ?? '').replace(/^(?:internal daemon error handling \w+:\s*)?(?:start:\s*)?/i, '').trim();
+  return `Walnut could not start Claude Code${hostWords(host).on}${cause ? `: ${cause}` : '.'}`;
+}
+
+/** By type, or by the daemon/runner's sentence when the error was rebuilt from text. */
+export function isClaudeRuntimeMissing(err: unknown): boolean {
+  if (err instanceof ClaudeRuntimeMissingError) return true;
+  const message = err instanceof Error ? err.message : typeof err === 'string' ? err : '';
+  return CLAUDE_RUNTIME_SENTENCE.test(message);
+}
+/** The two sentences of host-readiness-problems.ts (claudeMissingMessage / claudeNeedsNodeMessage). */
+const CLAUDE_RUNTIME_SENTENCE = /^Claude Code (is not installed on |on .+ is the npm build and no working Node\.js was found|(?:on .+ )?stopped before it read your message)/;
 
 /** The session's budget is paused (over its limit, unpriced, unreadable): nothing is sent until the user raises or removes it. */
 export class BudgetPausedError extends Error {

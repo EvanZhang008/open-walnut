@@ -31,6 +31,7 @@ function judgeAgainstFloor(p: HostPreflightResult, floor: ClaudeCliFloor | null)
 }
 
 function problemsAgainst(host: string, base: StoredReadiness, floor: ClaudeCliFloor | null): { parsed: HostPreflightResult; problems: ReadinessProblem[] } {
+  if (base.checkError && base.claude.unknown) return { parsed: base, problems: base.problems }
   const parsed = judgeAgainstFloor(base, floor)
   const ctx = problemCtx.get(host) ?? { prebuiltDtach: false, hostLabel: host }
   // Lines that came from the connect (daemon dir) are merged later by buildHostStatus.

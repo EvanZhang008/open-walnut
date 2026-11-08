@@ -55,11 +55,31 @@ const SCROLL_MIN_PERSIST = 24;
  *  classify the file as binary, so the change had no reviewable diff. */
 const KEY_SEP = ' ';
 
+/** A view of a file the reading place was measured in: the source editor, the read-only
+ *  code view, the markdown render, the editable markdown, the HTML page. */
+export type FileViewKind = 'cm' | 'pre' | 'md' | 'wys' | 'html';
+
 export interface FileScrollState {
-  /** Scroll offset of the preview/source scroll container, in px. */
+  /** Scroll offset of the view's scroll container, in px, as measured in `topIn`. */
   top: number;
   /** true = the user had switched a md/html file to Source view. */
   source?: boolean;
+  /** The source line at the top of the view (1-based): the place Preview and Source share,
+   *  so a switch or a reopen in the other view lands on the same passage (utils/reading-line.ts). */
+  line?: number;
+  /** The view `top` was measured in: a pixel offset means nothing in another view, where lines
+   *  are other heights (2026-11-11: a Preview offset reopened Source at line 237, not 10).
+   *  Absent on entries from before, which are taken for any view. */
+  topIn?: FileViewKind;
+}
+
+/** Where a saved place puts `kind`'s view: its line when the view can find one (not the HTML
+ *  page), else its pixel offset when that was measured there, else nothing (the top). */
+export function placeForView(saved: FileScrollState | null, kind: FileViewKind): { line: number } | { top: number } | null {
+  if (!saved) return null;
+  if (kind !== 'html' && saved.line !== undefined && saved.line >= 1) return { line: saved.line };
+  if (saved.topIn === undefined || saved.topIn === kind) return saved.top > 0 ? { top: saved.top } : null;
+  return null;
 }
 
 /**
@@ -248,11 +268,15 @@ export function saveFileScroll(
   const map = readScrollMap();
   // Back at the top with default view mode → drop the entry instead of storing a
   // no-op, so "scrolled back up" doesn't leave a stale offset behind.
-  if (state.top < SCROLL_MIN_PERSIST && !state.source) delete map[key];
+  const line = state.line !== undefined && Number.isFinite(state.line) && state.line > 1 ? Math.round(state.line) : undefined;
+  if (state.top < SCROLL_MIN_PERSIST && !state.source && line === undefined) delete map[key];
   else {
     // Re-insert last so JSON key order doubles as LRU-by-write for the cap below.
     delete map[key];
-    map[key] = { top: Math.round(state.top), ...(state.source ? { source: true } : {}) };
+    map[key] = {
+      top: Math.round(state.top), ...(state.source ? { source: true } : {}),
+      ...(line !== undefined ? { line } : {}), ...(state.topIn ? { topIn: state.topIn } : {}),
+    };
   }
   const keys = Object.keys(map);
   if (keys.length > SCROLL_MAX_ENTRIES) {

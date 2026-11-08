@@ -23,10 +23,10 @@
 
 import { execFile } from 'node:child_process'
 import fs from 'node:fs/promises'
-import os from 'node:os'
 import path from 'node:path'
 import { log } from '../../logging/index.js'
 import { sortedNames } from '../../lib/dir-order.js'
+import { sshAgentEnv, sshAgentSock, sshDir, sshHome } from '../../lib/ssh-home.js'
 import { HOST_REDIAL_MIN_INTERVAL_MS } from './host-wake-signal.js'
 
 export const CREDENTIAL_POLL_MS = 15_000
@@ -65,7 +65,7 @@ export interface HostCredentialSignal {
 
 /** Newest mtime among the regular files of `dir` (ms), ignoring non-credentials and future dates. */
 export async function newestSshFileMtime(
-  dir: string = path.join(process.env.HOME || os.homedir(), '.ssh'),
+  dir: string = sshDir(),
   nowMs: number = Date.now(),
 ): Promise<number | null> {
   let names: string[]
@@ -89,7 +89,7 @@ export async function newestSshFileMtime(
 export async function newestLoginFileMtime(
   extra: readonly string[] = [],
   nowMs: number = Date.now(),
-  home: string = process.env.HOME || os.homedir(),
+  home: string = sshHome(),
 ): Promise<number | null> {
   const paths = [path.join(home, '.ssh'), ...extra.map((p) => (p === '~' || p.startsWith('~/') ? path.join(home, p.slice(1)) : p))]
   const each = await Promise.all(paths.map(async (p) => {
@@ -107,9 +107,9 @@ export async function newestLoginFileMtime(
  * (a slow machine must not read as a new login every other poll).
  */
 export function sshAgentListing(env: Record<string, string | undefined> = process.env): Promise<string | null> {
-  if (!env.SSH_AUTH_SOCK) return Promise.resolve(null)
+  if (!sshAgentSock(env)) return Promise.resolve(null)
   return new Promise((resolve) => {
-    execFile('ssh-add', ['-L'], { encoding: 'utf-8', timeout: AGENT_TIMEOUT_MS, maxBuffer: 256 * 1024 }, (err, stdout) => {
+    execFile('ssh-add', ['-L'], { encoding: 'utf-8', timeout: AGENT_TIMEOUT_MS, maxBuffer: 256 * 1024, env: sshAgentEnv() }, (err, stdout) => {
       const code = err ? (err as { code?: unknown }).code : 0
       resolve(typeof code === 'number' ? `${code}\n${String(stdout ?? '')}` : null)
     })

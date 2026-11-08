@@ -49,6 +49,8 @@ export interface WorkingDirsResult {
   hosts: ConfiguredHost[];
   /** Found and not added yet (absent on older servers): never listed, pre-warmed or dialled. */
   found?: FoundHost[];
+  /** This Walnut's own HOME (absent on older servers). */
+  localHome?: string;
 }
 
 export interface WorkingDirsCache {

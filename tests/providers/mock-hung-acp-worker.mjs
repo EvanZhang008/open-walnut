@@ -64,7 +64,8 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       break
     case 'shutdown':
       reply(request.id, { shutdown: true })
-      process.exit(0)
+      if (process.env.MOCK_SHUTDOWN_EXIT_DELAY_MS) setTimeout(() => process.exit(0), Number(process.env.MOCK_SHUTDOWN_EXIT_DELAY_MS))
+      else process.exit(0)
       break
   }
 })

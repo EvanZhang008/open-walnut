@@ -19,6 +19,7 @@ export interface LocalClaudeStatus {
   checkedAt: number;
   claude: {
     found: boolean;
+    unknown?: string;
     version?: string;
     kind?: string;
     auth?: 'ok' | 'not-logged-in' | 'unknown';

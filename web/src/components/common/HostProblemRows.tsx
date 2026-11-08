@@ -24,12 +24,14 @@ import { useHostActions, RETRY_FAILED_TEXT, CHECK_FAILED_TEXT, type HostActions 
 import { HostFailureText } from '@/components/hosts/HostFailureText';
 import { InlineCodeText } from '@/components/common/InlineCodeText';
 import { HostCommands } from '@/components/hosts/HostCommands';
+import { demoHostMessage } from '@/utils/demo-generation';
 import { HostStatusDot } from '@/components/sessions/path-selector/HostStatusDot';
 import { activeStepLabel } from '@/utils/host-connect';
 import type { BannerRow } from '@/utils/attention-banner-model';
 import { useRowExpanded } from '@/utils/attention-banner-session';
 import { log } from '@/utils/log';
 import { HostFixButton } from './HostFixButton';
+import { SetupProgress } from './SetupProgress';
 
 export interface HostRowProps {
   row: BannerRow;
@@ -176,9 +178,7 @@ function FixProgress({ actions, label }: { actions: HostActions; label: string }
   const p = autofixProgressText(actions.fixing.verb, label, actions.fixing.startedAt, now, actions.fixing.action);
   return (
     <div className="hpb-fixing" data-testid="hpb-fixing">
-      <span className="hpb-spinner" aria-hidden="true" />
-      <span>{p.base}</span>
-      {p.elapsed && <span className="hpb-elapsed" aria-hidden="true"> {p.elapsed}</span>}
+      <SetupProgress label={`${p.base}${p.elapsed ? ` ${p.elapsed}` : ''}`} ariaLabel={p.base} inline />
       {p.showCheckAgain && (
         <button type="button" tabIndex={0} className="hft-details" onClick={() => { void actions.checkAgain(); }}>Check again</button>
       )}
@@ -351,7 +351,7 @@ export function SingleHostRow({ row, defaultExpanded, singleLine, dense, leaving
     );
   } else {
     const hasCommands = !!problem && problem.commands.length > 0;
-    const { head, rest } = splitReadinessMessage(fixFailed ? problem!.fix!.text : problem?.message ?? '');
+    const { head, rest } = splitReadinessMessage(fixFailed ? problem!.fix!.text : demoHostMessage(problem?.message ?? '', problem?.commands ?? []));
     const open = expanded || fixFailed;
     body = (
       <>

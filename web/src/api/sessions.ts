@@ -1012,8 +1012,11 @@ export async function executePlanContinue(sessionId: string): Promise<{ status: 
 // may touch hosts: see working-dirs-cache.ts for why the old forever-cache was not
 // enough (a host added in Settings never got a tab until a reload).
 const workingDirsCache = createWorkingDirsCache(() =>
-  apiGet<{ dirs: WorkingDirEntry[]; hosts?: ConfiguredHost[]; found?: FoundHost[] }>('/api/sessions/working-dirs')
-    .then(res => ({ dirs: res.dirs, hosts: res.hosts ?? [], found: res.found ?? [] })));
+  apiGet<{ dirs: WorkingDirEntry[]; hosts?: ConfiguredHost[]; found?: FoundHost[]; localHome?: string }>('/api/sessions/working-dirs')
+    .then(res => ({
+      dirs: res.dirs, hosts: res.hosts ?? [], found: res.found ?? [],
+      ...(typeof res.localHome === 'string' && res.localHome ? { localHome: res.localHome } : {}),
+    })));
 
 export function fetchWorkingDirs(): Promise<WorkingDirsResult> { return workingDirsCache.fetch(); }
 

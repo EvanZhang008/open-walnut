@@ -7,6 +7,7 @@ import {
   buildDtachArgs,
   buildRemoteDtachCommand,
   buildRemoteSshArgs,
+  buildRemotePlainSshArgs,
   buildRemotePlainShellCommand,
   remoteCdTarget,
   localStartDir,
@@ -154,6 +155,31 @@ describe('buildRemoteSshArgs', () => {
     const args = buildRemoteSshArgs('dtach', 'sid3', target, undefined, '/x', 'devbox');
     expect(args).toContain('ControlMaster=auto');
     expect(args.some((a) => a.includes('walnut-term-ssh-devbox'))).toBe(true);
+  });
+});
+
+describe('terminal ssh to a host found in ~/.ssh/config', () => {
+  const found: SshTarget = { hostname: 'devbox.example.test', sshAlias: 'devbox', user: 'alice', port: 2200 };
+  // A terminal keeps its PTY (-tt): no RequestTTY=no.
+  const aliasOpts = ['-o', 'HostName=devbox.example.test', '-o', 'CanonicalizeHostname=yes', '-o', 'RemoteCommand=none', '-o', 'ClearAllForwardings=yes'];
+
+  it('dtach and plain shells dial the alias, name the real hostname, keep user and port', () => {
+    for (const args of [buildRemoteSshArgs('dtach', 'sid4', found, undefined, '/x', 'devbox'), buildRemotePlainSshArgs(found, '/x', 'devbox')]) {
+      expect(args).toContain('alice@devbox');
+      expect(args).not.toContain('alice@devbox.example.test');
+      const at = args.indexOf('HostName=devbox.example.test') - 1;
+      expect(args.slice(at, at + aliasOpts.length)).toEqual(aliasOpts);
+      expect(args[args.indexOf('-p') + 1]).toBe('2200');
+      expect(args).toContain('-tt');
+      expect(args).not.toContain('RequestTTY=no');
+    }
+  });
+
+  it('a manual host gets none of the alias options', () => {
+    for (const args of [buildRemoteSshArgs('dtach', 'sid5', { hostname: 'dev.example.com', user: 'alice' }), buildRemotePlainSshArgs({ hostname: 'dev.example.com', user: 'alice' })]) {
+      expect(args).toContain('alice@dev.example.com');
+      expect(args.some((a) => /^(HostName|CanonicalizeHostname|RemoteCommand|RequestTTY|ClearAllForwardings)=/.test(a))).toBe(false);
+    }
   });
 });
 

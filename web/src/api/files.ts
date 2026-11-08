@@ -50,7 +50,8 @@ export async function fetchFileContent(
   // WANT the conditional exchange use fetchFileContentConditional, which handles
   // 304 explicitly.
   const res = await fetch(`/api/file-content?${params}`, { cache: 'no-store' });
-  if (!res.ok) throw new Error(`Failed to fetch file content: ${res.status}`);
+  // The lookups ask no second time on their own, so a gateway page stays a plain failure here.
+  if (!res.ok) { const said = await walnutWords(res); throw new FileReadError(said.error ?? `Failed to fetch file content: ${res.status}`, res.status, said.code); }
   return res.json();
 }
 
@@ -96,10 +97,11 @@ export async function fetchFileContentConditional(
       ...(opts.ifNoneMatch ? { headers: { 'If-None-Match': `"${opts.ifNoneMatch}"` } } : {}),
     });
   } catch (err) {
+    if (err instanceof TypeError) throw new WalnutUnreachableError(err);
     throw asDeadlineError(err, opts.signal);
   }
   if (res.status === 304) return { notModified: true };
-  if (!res.ok) throw new Error(`Failed to fetch file content: ${res.status}`);
+  if (!res.ok) throw await fileReadFailure(res);
   return { notModified: false, payload: await res.json() };
 }
 
@@ -607,18 +609,84 @@ export async function fetchDirList(
   if (opts.cwd) params.set('cwd', opts.cwd);
   if (opts.sessionId) params.set('sessionId', opts.sessionId);
 
-  const res = await fetch(`/api/files/list?${params}`, opts.noCache ? { cache: 'no-store' } : undefined);
+  let res: Response;
+  try {
+    res = await fetch(`/api/files/list?${params}`, opts.noCache ? { cache: 'no-store' } : undefined);
+  } catch (err) {
+    if (err instanceof TypeError) throw new DirListError(WALNUT_UNREACHABLE_MESSAGE, 0, WALNUT_UNREACHABLE_CODE);
+    throw err;
+  }
   if (!res.ok) {
     let msg = `Failed to list directory: ${res.status}`;
     let code: string | undefined;
-    try {
-      const body = await res.json();
-      if (body?.error) msg = body.error;
-      if (typeof body?.code === 'string') code = body.code;
-    } catch { /* non-JSON error body */ }
+    const said = await walnutWords(res);
+    if (said.error) msg = said.error;
+    code = said.code;
+    if (walnutDidNotAnswer(res.status, said)) throw new DirListError(WALNUT_UNREACHABLE_MESSAGE, res.status, WALNUT_UNREACHABLE_CODE);
     throw new DirListError(msg, res.status, code);
   }
   return res.json();
+}
+
+/**
+ * Walnut itself is not answering: the request never reached it (the browser's own
+ * "Load failed" / "Failed to fetch"), or a gateway answered for it with no word of
+ * Walnut's (a proxy's 502/503/504). Like `host_reconnecting`, it comes back on its own, so a
+ * view that shows this asks again on its clock and on `_ws:reconnected` instead of
+ * keeping the error until a click (D13: the Files tree said "Load failed" after the
+ * Demo server was back, until Refresh was pressed).
+ */
+export const WALNUT_UNREACHABLE_CODE = 'walnut_unreachable';
+export const WALNUT_UNREACHABLE_MESSAGE = "Can't reach Walnut right now. Trying again on its own.";
+
+export class WalnutUnreachableError extends Error {
+  readonly code = WALNUT_UNREACHABLE_CODE;
+  constructor(cause: unknown) {
+    super(WALNUT_UNREACHABLE_MESSAGE);
+    this.name = 'WalnutUnreachableError';
+    this.cause = cause;
+  }
+}
+
+/** What a failed answer's body says, when it is Walnut's own (`{ error, code? }`); a proxy's page says nothing. */
+async function walnutWords(res: Response): Promise<{ error?: string; code?: string }> {
+  try {
+    const body = await res.json() as { error?: unknown; code?: unknown } | null;
+    return {
+      ...(typeof body?.error === 'string' && body.error ? { error: body.error } : {}),
+      ...(typeof body?.code === 'string' ? { code: body.code } : {}),
+    };
+  } catch { return {}; }
+}
+
+/**
+ * A gateway status (502/503/504) with no word of Walnut's: the server behind it is not there.
+ * With Walnut's own error body it is Walnut answering (a host it cannot reach, a server that is
+ * stopping), and its words are shown, never "Can't reach Walnut" (every read here asks this one
+ * question: tests/web/walnut-back-retry-guard.test.ts).
+ */
+export function walnutDidNotAnswer(status: number, said: { error?: string }): boolean {
+  return (status === 502 || status === 503 || status === 504) && !said.error;
+}
+
+/** A file read the server refused, in its own words and code. */
+export class FileReadError extends Error {
+  constructor(message: string, public status: number, public code?: string) {
+    super(message);
+    this.name = 'FileReadError';
+  }
+}
+
+async function fileReadFailure(res: Response): Promise<Error> {
+  const said = await walnutWords(res);
+  if (walnutDidNotAnswer(res.status, said)) return new WalnutUnreachableError(`HTTP ${res.status}`);
+  return new FileReadError(said.error ?? `Failed to fetch file content: ${res.status}`, res.status, said.code);
+}
+
+/** A read failed only because Walnut was not answering (a listing or a file), so asking again later lists it. */
+export function isWalnutUnreachable(err: unknown): boolean {
+  return err instanceof WalnutUnreachableError || err instanceof FileSaveUnreachableError
+    || (err instanceof DirListError && err.code === WALNUT_UNREACHABLE_CODE);
 }
 
 /** A listing the server could not make. `code` is the server's (`host_reconnecting`, ...). */
@@ -635,6 +703,11 @@ export const HOST_RECONNECTING_CODE = 'host_reconnecting';
 /** The host is not answering yet (503 host_reconnecting): asking again in a few seconds may list it. */
 export function isHostReconnectingListing(err: unknown): boolean {
   return err instanceof DirListError && err.code === HOST_RECONNECTING_CODE;
+}
+
+/** Asking again on a clock will answer it: the host or Walnut itself is coming back. */
+export function isComingBackCode(code: string | undefined): boolean {
+  return code === HOST_RECONNECTING_CODE || code === WALNUT_UNREACHABLE_CODE;
 }
 
 /** One listing in a batch: either the directory, or why it could not be read (`code` as for one listing). */
@@ -661,6 +734,7 @@ export async function fetchDirListMany(
     signal: opts.signal,
     timeoutMs: 20_000,
     background: true,
+    readOnly: true,
     ...(opts.background ? { priority: 'low' as const } : {}),
   });
 }
@@ -670,7 +744,7 @@ export async function fetchDirListMany(
 export async function fetchPathsExist(paths: readonly string[], host?: string): Promise<Record<string, boolean>> {
   // Normal, not low: the session header draws its link pills once this answers, and a low
   // request on a busy page waits up to a minute behind every normal one.
-  const body = await apiPost<{ exists?: Record<string, boolean> }>('/api/files/exists', { paths, ...(host ? { host } : {}) }, { background: true, timeoutMs: 10_000 });
+  const body = await apiPost<{ exists?: Record<string, boolean> }>('/api/files/exists', { paths, ...(host ? { host } : {}) }, { background: true, readOnly: true, timeoutMs: 10_000 });
   return body?.exists ?? {};
 }
 

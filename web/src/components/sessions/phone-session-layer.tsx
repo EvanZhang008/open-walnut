@@ -9,7 +9,7 @@
  * panel re-renders on every streamed token.
  */
 import { useCallback, useMemo, useRef, useSyncExternalStore } from 'react';
-import { usePhoneOverlay, type PhoneOverlayCloseInfo, type PhoneOverlayKind } from '@/hooks/usePhoneOverlayHistory';
+import { isPhoneOverlayOpen, subscribePhoneOverlays, usePhoneOverlay, type PhoneOverlayCloseInfo, type PhoneOverlayKind } from '@/hooks/usePhoneOverlayHistory';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 
 const slots = new Map<string, HTMLElement>();
@@ -50,13 +50,17 @@ export interface PhoneLayerInput {
   deepLinkBaseUrl?: string;
   /** false: the layer has no action of its own (the right slot stays empty). */
   withAction?: boolean;
+  /** true: a resize out of phone layout keeps the owner's state (usePhoneOverlay). */
+  keepOnBreakpoint?: boolean;
+  /** The layer this one sits on; it registers after that one (usePhoneOverlay). */
+  parentId?: string;
 }
 
 /**
  * Register a phone layer that has a bar, with a stable action slot. Returns
  * the UI close (through history on a phone) and the slot to portal into.
  */
-export function usePhoneLayerWithBar(o: PhoneLayerInput): { close: () => void; slot: HTMLElement | null; phone: boolean } {
+export function usePhoneLayerWithBar(o: PhoneLayerInput): { close: () => void; slot: HTMLElement | null; phone: boolean; registered: boolean } {
   const phone = usePhoneLayout();
   const tapRef = useRef(o.onTitleTap);
   tapRef.current = o.onTitleTap;
@@ -75,9 +79,12 @@ export function usePhoneLayerWithBar(o: PhoneLayerInput): { close: () => void; s
     onClose: o.onClose,
     bar,
     deepLinkBaseUrl: o.deepLinkBaseUrl,
+    keepOnBreakpoint: o.keepOnBreakpoint,
+    parentId: o.parentId,
   });
+  const registered = useSyncExternalStore(subscribePhoneOverlays, () => isPhoneOverlayOpen(o.id), () => false);
   const slot = usePhoneBarSlot(slotId);
-  return { close, slot: phone && o.active ? slot : null, phone };
+  return { close, slot: phone && o.active ? slot : null, phone, registered };
 }
 
 /**

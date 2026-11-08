@@ -86,7 +86,7 @@ interface AcpWorkerEntry<W> {
 export type AcpProcessInfo = { state: 'gone' } | { state: 'alive'; start: string; command: string } | { state: 'unknown' }
 
 /** A pid file row: a pid alone (older daemons), or the pid with what identifies its worker. */
-type PidRow = number | { pid: number; cmd?: string; adapter?: string; start?: string; boot?: number }
+type PidRow = number | { pid: number; cmd?: string; adapter?: string; start?: string; boot?: number; stopping?: boolean }
 
 /** When this host booted, in minutes (uptime moves a little; two minutes apart is the same boot). */
 function bootMinute(): number { return Math.round((Date.now() / 1000 - os.uptime()) / 60) }
@@ -120,6 +120,9 @@ export interface AcpDaemonDeps<W> {
   artifactDir?: string
   /** The names of those files in `artifactDir` when they are not the host names (acp-host-artifacts.ts). */
   artifactNames?: Readonly<Record<string, string>>
+  /** Read right before a worker spawns; false refuses it (a Demo's demo.quiesce fence). Absent = always. */
+  maySpawn?: () => boolean
+  strictStop?: () => boolean
 }
 
 function psField(pid: number, field: string): Promise<string | null | undefined> {
@@ -195,6 +198,8 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
   const killGraceMs = deps.killGraceMs ?? KILL_GRACE_MS
   const setIntervalFn = deps.setIntervalFn ?? setInterval
   const workers = new Map<string, AcpWorkerEntry<W>>()
+  // A stopping worker that exited while its process group lives on: kept (also in the pid file) until that group is gone.
+  const exitedGroups = new Map<string, { pid: number; cmd: string; adapter: string; boot: number; start?: string }>()
   const pidFile = path.join(daemonDir, 'acp-workers.json')
   const processInfo = deps.processInfo ?? psProcessInfo
   const groupCommands = deps.groupCommands ?? psGroupCommands
@@ -226,6 +231,8 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     for (const [sid, w] of workers) {
       if (w.state === 'running' && w.proc.pid) out[sid] = { pid: w.proc.pid, cmd: w.cmd, adapter: w.adapter, boot: boot(), ...(w.start ? { start: w.start } : {}) }
     }
+    // A running worker of the same runtime wins the row; its stopped group stays in memory.
+    for (const [sid, g] of exitedGroups) if (!out[sid]) out[sid] = { pid: g.pid, cmd: g.cmd, adapter: g.adapter, boot: g.boot, ...(g.start ? { start: g.start } : {}), stopping: true }
     try {
       fs.writeFileSync(pidFile, JSON.stringify(out), { mode: 0o600 })
       fs.chmodSync(pidFile, 0o600)
@@ -386,6 +393,9 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     if (entry.proc.pid && entry.proc.exitCode === null) {
       signalProcessGroup(entry.proc.pid, 'SIGKILL')
     }
+    if (deps.strictStop?.() && entry.stopping && entry.proc.pid && isProcessGroupAlive(entry.proc.pid)) {
+      exitedGroups.set(sid, { pid: entry.proc.pid, cmd: entry.cmd, adapter: entry.adapter, boot: boot(), ...(entry.start ? { start: entry.start } : {}) })
+    }
     workers.delete(sid)
     persistPids()
     writeBusyFile()
@@ -428,6 +438,7 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     // Where a cold start's time goes, for the start log line and the caller's own (acp-session.ts).
     const startedAt = Date.now()
     let proc: ChildProcess
+    if (deps.maySpawn && !deps.maySpawn()) return { ok: false, error: 'acpStart: Demo is stopping; no new worker starts', errorKind: 'demo_stopping' }
     try {
       proc = spawn(workerCmd[0], [...workerCmd.slice(1), '--journal', journalPath], {
         cwd,
@@ -589,9 +600,30 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     if (op === 'cancel') return acpAbortTurn(sid, params)
     const entry = workers.get(sid)
     if (!entry || entry.state !== 'running') {
+      if (exitedGroupAlive(sid)) return { id: -1, ok: false, error: { kind: 'worker_stopping', message: 'the ACP worker for ' + sid + ' exited, and its process group is still running' } }
       return { id: -1, ok: false, error: { kind: 'no_worker', message: 'no live ACP worker for ' + sid } }
     }
     return rpc(entry, op, params)
+  }
+
+  /** True while a stopped worker's process group still runs; forgets it once the group is gone. */
+  function exitedGroupAlive(sid: string): boolean {
+    const group = exitedGroups.get(sid)
+    if (!group) return false
+    if (isProcessGroupAlive(group.pid)) return true
+    exitedGroups.delete(sid)
+    persistPids()
+    return false
+  }
+
+  /** A retried stop of a worker that already exited: no RPC, only its group's own exit. */
+  async function awaitExitedGroup(sid: string): Promise<void> {
+    const group = exitedGroups.get(sid)
+    if (!group) return
+    if (!await waitFor(() => !isProcessGroupAlive(group.pid), 6000)) {
+      throw new Error('ACP worker shutdown is still pending; its process group has not exited')
+    }
+    if (exitedGroups.get(sid) === group) { exitedGroups.delete(sid); persistPids() }
   }
 
   /**
@@ -690,19 +722,26 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
 
   async function acpStop(sid: string): Promise<void> {
     const entry = workers.get(sid)
-    if (!entry || entry.state !== 'running') return
+    if (!entry || entry.state !== 'running') return awaitExitedGroup(sid)
     entry.stopping = true
-    await rpc(entry, 'shutdown')
-    // exit handler reaps; force-reap in case the worker wedged.
-    setTimeout(() => {
-      // The worker normally exits and is reaped before this timer. Check the
-      // original map entry so a recycled PID cannot be signalled later.
-      if (workers.get(sid) !== entry || entry.state !== 'running') return
-      if (entry.proc.pid && entry.proc.exitCode === null) {
-        signalProcessGroup(entry.proc.pid, 'SIGKILL')
-      }
-      reapWorker(sid, 'stopped')
-    }, 6000)
+    if (!deps.strictStop?.()) {
+      await rpc(entry, 'shutdown')
+      setTimeout(() => {
+        if (workers.get(sid) !== entry || entry.state !== 'running') return
+        if (entry.proc.pid && entry.proc.exitCode === null) signalProcessGroup(entry.proc.pid, 'SIGKILL')
+        reapWorker(sid, 'stopped')
+      }, 6000)
+      return
+    }
+    const pid = entry.proc.pid
+    await rpc(entry, 'shutdown', undefined, 6000)
+    if (pid && !await waitFor(() => !isProcessGroupAlive(pid), 6000)) {
+      throw new Error('ACP worker shutdown is still pending; its process group has not exited')
+    }
+    if (workers.get(sid) === entry) reapWorker(sid, 'stopped')
+    // The group this stop waited on is gone; an older one of the same runtime must be too.
+    if (exitedGroups.get(sid)?.pid === pid) { exitedGroups.delete(sid); persistPids() }
+    await awaitExitedGroup(sid)
   }
 
   /**
@@ -737,6 +776,15 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     return !!e && e.state === 'running'
   }
 
+  /** Read only: every worker this daemon holds (demo.quiesce answers with them, so a reset stops each). */
+  function listWorkers(): Array<{ sid: string; state: 'running' | 'dead'; pid: number | null; stopping: boolean }> {
+    const out = [...workers.values()].map((e) => ({ sid: e.sid, state: e.state, pid: e.proc.pid ?? null, stopping: e.stopping }))
+    for (const [sid, group] of [...exitedGroups]) {
+      if (exitedGroupAlive(sid)) out.push({ sid, state: 'dead', pid: group.pid, stopping: true })
+    }
+    return out
+  }
+
   // ── idle sweep ──
 
   setIntervalFn(() => {
@@ -763,7 +811,7 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
       const limit = turnOpen ? Math.max(idleKillMs, ACP_TURN_OPEN_KILL_MS) : idleKillMs
       if (now - entry.lastActivity > limit) {
         log('info', 'acp: idle kill', { sid, idleMs: now - entry.lastActivity, turnOpen })
-        void acpStop(sid)
+        void acpStop(sid).catch(error => log('warn', 'acp: idle stop is still pending', { sid, error: String(error) }))
       }
     }
     // Keep the busy advertisement fresh: a turn parked on a permission emits
@@ -884,10 +932,17 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     ensureOwnerOnlyAcpStorage()
     let rows: Array<[string, PidRow]> = []
     try { rows = Object.entries(JSON.parse(fs.readFileSync(pidFile, 'utf-8')) as Record<string, PidRow>) } catch {}
-    try {
-      fs.writeFileSync(pidFile, '{}', { mode: 0o600 })
-      fs.chmodSync(pidFile, 0o600)
-    } catch {}
+    // A stopped worker's group the last daemon life could not see exit: kept as read-only
+    // stop evidence (never swept or signalled) while it may still run on this boot.
+    rows = rows.filter(([sid, row]) => {
+      if (typeof row === 'number' || row?.stopping !== true) return true
+      const sameBoot = typeof row.boot === 'number' && Math.abs(boot() - row.boot) <= 2
+      if (sameBoot && Number.isInteger(row.pid) && row.pid > 1 && isProcessGroupAlive(row.pid)) {
+        exitedGroups.set(sid, { pid: row.pid, cmd: row.cmd || 'acp-worker', adapter: row.adapter || '', boot: row.boot as number, ...(row.start ? { start: row.start } : {}) })
+      }
+      return false
+    })
+    persistPids()
 
     // Journal repair for every ACP session on this host.
     let files: string[] = []
@@ -973,17 +1028,20 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     }
   }
 
+  /** Gone only when both the group and the pid answer ESRCH; any other answer (EPERM) is not proof of exit. */
   function isProcessGroupAlive(pid: number): boolean {
+    if (!Number.isInteger(pid) || pid <= 1) return false
     try {
       process.kill(-pid, 0)
       return true
-    } catch {
-      try {
-        process.kill(pid, 0)
-        return true
-      } catch {
-        return false
-      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') return true
+    }
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code !== 'ESRCH'
     }
   }
 
@@ -1029,6 +1087,7 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     subscribe,
     removeSubscriber,
     hasWorker,
+    listWorkers,
     startupRepair,
     workers,
   }

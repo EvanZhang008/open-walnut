@@ -338,7 +338,7 @@ export function PlanCard({ content, disclosureId, sessionId, sessionCwd, session
 }) {
   const livePlan = useLivePlanContent();
   const displayContent = livePlan?.content ?? content;
-  const [open, setOpen] = useRowDisclosure(disclosureId, true);
+  const [open, setOpen] = useRowDisclosure(disclosureId, false);
   // A from-plan live plan is another writer's: its machine, never this session's host or opener.
   const foreign = livePlan && livePlan.writerSessionId !== sessionId ? livePlan.writerSessionId : undefined;
   const own = useSessionTextRender({ sessionId, sessionHost, sessionCwd });

@@ -16,7 +16,7 @@
  * attribute (`bodyForMsgId`), and a copy here would be found first. Each
  * question sits in `.thread-card-q` (tests and the fold read it).
  */
-import { memo, useMemo } from 'react';
+import { memo, useMemo, type ReactNode } from 'react';
 import { typedUserText } from '@open-walnut/history-injected-banner';
 import type { SessionHistoryMessage } from '@/types/session';
 import type { StreamingBlock } from '@/hooks/useSessionStream';
@@ -104,6 +104,7 @@ export interface ThreadCardConversationProps extends RowHandlers {
   /** Sent, not in the transcript yet, in the chat's order: each question with
    *  the newest live text answering it (web/src/stream/chat-order.ts). */
   rounds: Array<{ bubble: SessionHistoryMessage & { queueId: string; status: string }; live?: LiveText }>;
+  failedSend?: (queueId: string) => ReactNode;
   /** Live text answering the newest persisted turn (before any round). */
   live?: LiveText;
   streaming: boolean;
@@ -166,7 +167,8 @@ export const ThreadCardConversation = memo(function ThreadCardConversation(p: Th
       {p.rounds.map(({ bubble: m, live }) => (
         <div key={`opt-${m.queueId}`} className="thread-card-turn" data-status={m.status}>
           {question(m)}
-          {live && <LiveAnswer key={`live-${live.index}`} live={live} streaming={p.streaming} h={h} />}
+          {m.status === 'failed' && p.failedSend?.(m.queueId)}
+          {m.status !== 'failed' && live && <LiveAnswer key={`live-${live.index}`} live={live} streaming={p.streaming} h={h} />}
         </div>
       ))}
       {p.empty && <div className="thread-card-empty">No message in this question yet.</div>}

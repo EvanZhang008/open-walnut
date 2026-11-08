@@ -5,7 +5,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
-  composeWithComments, countLabel, DOC_COMMENTS_HOW, editComment, fitsAsComment, isMarked, isPending, markRemoved, markSent,
+  composeForSend, composeVisible, composeWithComments, countLabel, docCommentsContext, DOC_COMMENTS_HINT, DOC_COMMENTS_HOW, editComment, fitsAsComment, isMarked, isPending, markRemoved, markSent,
   MAX_COMMENT_CHARS, MAX_COMMENTS, mergeComments, mergeKeepingClaimed, pruneComments, recordNeedsWrite, settleSent, snippetOf,
 } from '@/utils/passage-comments';
 import type { SessionPassageComment } from '@/types/session';
@@ -87,6 +87,67 @@ describe('doc comments on the way to the model', () => {
     const list = [doc('1', 'The cache is rebuilt.', 'Still true?')];
     expect(isMarked(list[0]!)).toBe(false);
     expect(markSent(list, new Set(['1']), T1)[0]).toMatchObject({ sentAt: T1, removedAt: T1 });
+  });
+});
+
+describe('doc comments: the person sees their words, the model gets where and how (2026-11-10 review)', () => {
+  const doc = (id: string, text: string, comment: string, reply = false) => item(id, text, comment, {
+    msgId: `doc:c-${id}`, role: 'user', doc: { path: '/home/demo/projects/app/long.md', commentId: `c-${id}`, ...(reply ? { reply } : {}) },
+  });
+  const pending = [doc('1', 'Paragraph 60.', 'Rewrite this sentence later'), item('a', 'Quoted.'), doc('2', 'Step two.', 'Done now', true)];
+
+  it('the bubble names each file by its name only, with no instructions and no path', () => {
+    const shown = composeVisible(pending, 'Go.');
+    expect(shown).toBe([
+      '> Quoted.', '',
+      'On `long.md`:', '> Paragraph 60.', '', 'Rewrite this sentence later', '',
+      'My reply on `long.md`:', '> Step two.', '', 'Done now', '',
+      'Go.',
+    ].join('\n'));
+    expect(shown).not.toContain('/home/demo');
+    expect(shown).not.toContain('.comments.md');
+    expect(shown).not.toContain(DOC_COMMENTS_HOW.slice(0, 30));
+  });
+
+  it('the context lists each doc comment in order with its path, id and sidecar, then how to answer', () => {
+    const ctx = docCommentsContext(pending)!;
+    expect(ctx).toContain('1. Comment c-1 on `/home/demo/projects/app/long.md` (thread in `/home/demo/projects/app/long.md.comments.md`)');
+    expect(ctx).toContain('2. My reply in comment c-2 on `/home/demo/projects/app/long.md`');
+    expect(ctx).toContain(DOC_COMMENTS_HOW.trimEnd());
+    expect(docCommentsContext([item('a', 'Quoted.')])).toBeNull();
+  });
+
+  it('a send stores the context and asks for it as a hint; the text is the visible one', async () => {
+    const stored: Array<[string, string]> = [];
+    const out = await composeForSend(pending, 'Go.', async (name, text) => { stored.push([name, text]); return 'hc-0123456789abcdef'; });
+    expect(out).toEqual({ text: composeVisible(pending, 'Go.'), hints: { [DOC_COMMENTS_HINT]: { arg: 'hc-0123456789abcdef' } } });
+    expect(stored).toEqual([['Doc comments', docCommentsContext(pending)]]);
+  });
+
+  it('nothing is lost: a failed store, an empty id or an inline send carries everything in the text', async () => {
+    const full = composeWithComments(pending, 'Go.');
+    expect(await composeForSend(pending, 'Go.', async () => { throw new Error('offline'); })).toEqual({ text: full });
+    expect(await composeForSend(pending, 'Go.', async () => '')).toEqual({ text: full });
+    let asked = false;
+    expect(await composeForSend(pending, 'Go.', async () => { asked = true; return 'hc-0123456789abcdef'; }, { inline: true })).toEqual({ text: full });
+    expect(asked).toBe(false);
+  });
+
+  it('no send path composes the inline text itself: only composeForSend decides', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const root = path.resolve(__dirname, '../../web/src');
+    const walk = (d: string): string[] => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => {
+      const f = path.join(d, e.name);
+      return e.isDirectory() ? walk(f) : /\.(ts|tsx)$/.test(e.name) ? [f] : [];
+    });
+    const callers = walk(root).filter((f) => !f.endsWith('utils/passage-comments.ts') && /\bcomposeWithComments\(/.test(fs.readFileSync(f, 'utf8')));
+    expect(callers.map((f) => path.relative(root, f))).toEqual([]);
+  });
+
+  it('transcript quotes alone need no context and ask for nothing', async () => {
+    const only = [item('a', 'Quoted.', 'Why?')];
+    expect(await composeForSend(only, 'Go.', async () => { throw new Error('not called'); })).toEqual({ text: composeWithComments(only, 'Go.') });
   });
 });
 

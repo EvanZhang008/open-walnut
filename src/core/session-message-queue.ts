@@ -51,6 +51,7 @@ import { isQuietRowId, noteQuietTurnDelivery, noteSessionSend as noteQuietTurnSe
 import { aiOnlyEnvelopes, hasAiOnly, keepAiOnly, withoutAiOnly } from '../lib/ai-only-envelope.js';
 import { forgetBriefsTold } from './sessions/app-brief.js';
 import { keepLeadingFrame } from './sessions/queue-edit-frame.js';
+import { assertDemoAdmission, demoAdmissionClosed, DemoAdmissionClosedError } from './sessions/demo-admission.js';
 
 // ── Types and store (session-queue-store.ts) ──
 
@@ -58,7 +59,7 @@ export type { MessageStatus, QueuedMessage } from './session-queue-store.js';
 export { QueueNotStoredError, resetCache } from './session-queue-store.js';
 // The dead-letter API and the identity move (session-queue-park.ts), re-exported: callers know one module.
 export {
-  MAX_PENDING_AGE_MS, parkIfQueued, parkMessages, parkStalePending, unparkMessage,
+  MAX_PENDING_AGE_MS, parkIfQueued, parkMessages, parkStalePending, unparkMessage, unparkAgentWaitRows, sessionsWithAgentWaitRows, type ParkCause,
   START_RECOVERY_HELD_REASON, holdForStartRecovery, startRecoveryHeld, sessionsWithStartRecoveryHeld, settleStartRecoveryHeld, removeStartRecoveryRows,
   migrateSessionQueue, rollbackSessionQueueMigration, type SessionQueueMigration,
 } from './session-queue-park.js';
@@ -110,8 +111,12 @@ export async function loadQueue(): Promise<void> {
 export async function enqueueMessage(
   sessionId: string,
   message: string,
-  opts?: { id?: string; userUuid?: string; stopFence?: string | null; relayTaken?: boolean; lineUuid?: string; closesPrompt?: boolean; sentBy?: 'person' | 'agent'; recentText?: string; heldReason?: string },
+  opts?: { id?: string; userUuid?: string; stopFence?: string | null; relayTaken?: boolean; lineUuid?: string; closesPrompt?: boolean; sentBy?: 'person' | 'agent'; recentText?: string; heldReason?: string;
+    /** With heldReason: the readiness kind the row waits on (QueuedMessage.waitsFor). */
+    waitsFor?: string },
 ): Promise<QueuedMessage> {
+  // A stopping Demo queues nothing more (sessions/demo-admission.ts); checked again inside the write.
+  assertDemoAdmission();
   if (opts?.id?.startsWith('qm-inbox-') && !opts.id.startsWith('qm-inbox-ai-')) {
     const { validateInboxMessageBoundary } = await import('./human-inbox/item-execution.js');
     await validateInboxMessageBoundary(sessionId, opts.id);
@@ -130,7 +135,7 @@ export async function enqueueMessage(
     sessionId,
     message,
     status: opts?.heldReason ? 'parked' : 'pending',
-    ...(opts?.heldReason ? { parkedAt: new Date().toISOString(), parkedReason: opts.heldReason } : {}),
+    ...(opts?.heldReason ? { parkedAt: new Date().toISOString(), parkedReason: opts.heldReason, ...(opts.waitsFor ? { waitsFor: opts.waitsFor } : {}) } : {}),
     enqueuedAt: new Date().toISOString(),
     seq: nextEnqueueSeq(),
     // Additive: absent ⇒ the key never lands on the row, so an old-shaped row and
@@ -144,7 +149,8 @@ export async function enqueueMessage(
   // (QueueNotStoredError) instead of the row living in this process alone.
   const itemAction = opts?.id?.startsWith('qm-inbox-') === true || opts?.id?.startsWith('qm-route-') === true;
   const relayed = opts?.relayTaken === true;
-  const outcome = await mutateStore((s) => {
+  const outcome = await mutateStore((s): { queueDepth: number; existing: QueuedMessage | null; refused?: true } => {
+    if (demoAdmissionClosed()) return { queueDepth: 0, existing: null, refused: true };
     if (!s.queues[sessionId]) {
       s.queues[sessionId] = [];
     }
@@ -157,6 +163,7 @@ export async function enqueueMessage(
     s.queues[sessionId].push(msg);
     return { queueDepth: s.queues[sessionId].length, existing: null };
   }, relayed || itemAction, relayed || itemAction).catch((err: unknown) => { throw relayed || itemAction ? new QueueNotStoredError(err) : err; });
+  if (outcome.refused) throw new DemoAdmissionClosedError();
   if (outcome.existing) {
     log.session.info('message enqueue deduped by id (already queued)', {
       sessionId, messageId: outcome.existing.id, queueDepth: outcome.queueDepth,
@@ -234,6 +241,8 @@ export async function sendMessageToSession(
     afterTurn?: boolean;
   },
 ): Promise<QueuedMessage> {
+  // A stopping Demo takes no send, a timer's wake or retry included, before any side effect (sessions/demo-admission.ts).
+  assertDemoAdmission();
   // A person's own words: they are using Walnut, so a live update waits (idle-gate.ts).
   if (queueSentBy(opts?.source) === 'person') noteUserActivity();
   // A send of anything but the quiet turn's own ends that quiet turn now, before any reader of
@@ -373,7 +382,7 @@ export async function sendMessageToSession(
   if (holdsRow) noteAfterTurnHold(sessionId);
 
   // Tell session-runner to process the queued message (a row held for a move or for the turn's end waits for it)
-  if (!heldForMove && !holdsRow) bus.emit(EventNames.SESSION_SEND, {
+  if (!heldForMove && !holdsRow && !demoAdmissionClosed()) bus.emit(EventNames.SESSION_SEND, {
   sessionId,
   taskId: opts?.taskId,
   message,
@@ -394,6 +403,8 @@ export async function sendMessageToSession(
     // is its bare text), and the panel shows and folds the card it will become.
     ...(msg.sentBy === 'agent' && msg.message !== message ? { queuedText: msg.message } : {}),
     ...(msg.sentBy !== 'agent' && msg.message !== message ? { rowText: msg.message } : {}),
+    // The send's user line: the proof the row is that send's when its answer is lost (web api/session-send.ts).
+    ...(msg.userUuid ? { userUuid: msg.userUuid } : {}),
     enqueuedAt: msg.enqueuedAt,
   }, ['main-ai'], { source });
 
@@ -432,6 +443,8 @@ export async function markProcessing(
   stopFence?: string | null,
   opts?: { tracked?: boolean; midTurn?: boolean },
 ): Promise<QueuedMessage[]> {
+  // A stopping Demo hands no row to a live write or a cold --resume: the rows stay pending (sessions/demo-admission.ts).
+  if (demoAdmissionClosed()) return [];
   // A session spawned before its default instructions changed learns the changed
   // lines on the first line frozen for it (sessions/instruction-notice.ts). Read before the lock, and
   // only when a fresh row waits to be frozen.
@@ -439,6 +452,7 @@ export async function markProcessing(
   const liveQuietRow = quietTurnRow(sessionId);
   const dropped: string[] = [];
   const pending = await mutateStore((s) => {
+    if (demoAdmissionClosed()) return [];
     const queue = s.queues[sessionId];
     if (!queue) return [];
     for (let i = queue.length - 1; i >= 0; i--) {
@@ -525,8 +539,10 @@ async function pendingTaskRouting(sessionId: string): Promise<PendingInstruction
  * scoped remove/revert APIs identical while guaranteeing a cardinality of 0–1.
  */
 export async function markNextProcessing(sessionId: string): Promise<QueuedMessage[]> {
+  if (demoAdmissionClosed()) return [];
   const routing = await pendingTaskRouting(sessionId);
   const picked = await mutateStore((s) => {
+    if (demoAdmissionClosed()) return null;
     const queue = s.queues[sessionId];
     if (!queue) return null;
     if (queue.some((message) => message.status === 'processing')) return null;

@@ -31,7 +31,7 @@ import {
   describeFixOutcome, fixActionFor, fixingText, hostFixWaitMs, sendHostFix, withFixState,
   type FixOutcome, type HostFixing, type HostFixRecord,
 } from './host-autofix.js'
-import { applyClaudeFloor, parsePreflight, readinessProblems, type ReadinessProblem } from './host-readiness-problems.js'
+import { applyClaudeFloor, parsePreflight, readinessProblems, withConclusiveAuth, type ReadinessProblem } from './host-readiness-problems.js'
 import { configuredClaudeCliFloor, type ClaudeCliFloor } from './claude-version-floor.js'
 import { PREFLIGHT_TIMEOUT_MS, type PreflightConnection } from './host-readiness.js'
 import { captureLoginShellPath, LOGIN_SHELL_TIMEOUT_MS, sessionPath } from '../diagnostics/local-probes.js'
@@ -100,7 +100,7 @@ function notify(): void {
 async function inProcessRuntime(parts: LocalMachineParts) {
   const env: Env = { ...parts.env, PATH: sessionPath(await parts.loginShellPath(), parts.env) }
   const exec = execFile as unknown as NonNullable<HostRuntimeDeps['execFile']>
-  const runtime = createHostRuntime({ fs, execFile: exec, env, platform: process.platform, arch: process.arch, claudeCheck: createClaudeCheck({ fs, execFile: exec, env, sha256Hex }) })
+  const runtime = createHostRuntime({ fs, execFile: exec, env, platform: process.platform, arch: process.arch, claudeCheck: createClaudeCheck({ fs, execFile: exec, env, platform: process.platform, sha256Hex }) })
   return { env, exec, runtime }
 }
 
@@ -195,9 +195,9 @@ export function getLocalClaude(): LocalClaudeStatus | undefined {
   }
 }
 
-function markFailed(message: string): void {
-  if (!stored) return
-  stored = { ...stored, checkedAt: io.now(), checkError: message.slice(0, 300) }
+function markFailed(message: string, source: LocalClaudeStatus['source'] = 'in-process'): void {
+  const preflight: HostPreflightResult = { claude: { found: false, auth: 'unknown' }, compiler: { found: false }, dtach: { found: false } }
+  stored = { ...(stored ?? { claude: preflight.claude, source, preflight, floor: null, problems: [] }), checkedAt: io.now(), checkError: message.slice(0, 300) }
   notify()
 }
 
@@ -213,10 +213,10 @@ export function refreshLocalClaude(opts: { maxAgeMs?: number } = {}): Promise<Lo
     try {
       const floor = await io.floor()
       const answer = await io.preflight(floor?.minVersion)
-      const parsed = answer.result ? applyClaudeFloor(answer.result, floor) : null
+      const parsed = answer.result ? withConclusiveAuth(applyClaudeFloor(answer.result, floor), stored?.claude, io.now()) : null
       if (!parsed) {
         log.session.warn('local claude check returned no usable answer', { error: answer.error, source: answer.source })
-        markFailed(answer.error || 'no usable answer')
+        markFailed(answer.error || 'no usable answer', answer.source)
         return null
       }
       stored = {
@@ -269,11 +269,23 @@ export function startLocalClaudeFix(kind: string): LocalFixStart {
     if (record.ok) log.session.info('local claude fix finished', fields)
     else log.session.warn('local claude fix finished', fields)
     lastFix = record
-    if (fixing === started) fixing = undefined
-    notify()
-    // A probe that started before the fix ended describes the old machine.
-    await inFlight?.catch(() => null)
-    await refreshLocalClaude()
+    // A fix that worked stays "fixing" until the re-check answers, as a host's does
+    // (host-autofix.ts): finishing first put "not installed" and its Install button
+    // back on the card between the install and the sign-in step (2026-11-08).
+    if (!record.ok) {
+      if (fixing === started) fixing = undefined
+      notify()
+    }
+    try {
+      // A probe that started before the fix ended describes the old machine.
+      await inFlight?.catch(() => null)
+      await refreshLocalClaude()
+    } finally {
+      if (fixing === started) {
+        fixing = undefined
+        notify()
+      }
+    }
   })()
   return { ok: true, status: getLocalClaude()! }
 }
@@ -292,8 +304,15 @@ export async function localClaudeConfigChanged(): Promise<void> {
  */
 async function recheckThroughDaemon(): Promise<void> {
   await inFlight?.catch(() => null)
-  if (!stored || stored.source === 'daemon') return
+  if (!stored || (stored.source === 'daemon' && !stored.checkError && !stored.claude.unknown)) return
   await refreshLocalClaude()
+}
+
+/** Every new snapshot, for an observer that is not the server's push (sessions/agent-wait-resend.ts). Returns an unsubscribe. */
+export function onLocalClaudeChange(cb: (status: LocalClaudeStatus | undefined) => void): () => void {
+  const listener = () => cb(getLocalClaude())
+  listeners.add(listener)
+  return () => { listeners.delete(listener) }
 }
 
 /** Server wiring: `onChange` gets every new snapshot. Returns an unsubscribe. */
@@ -312,4 +331,5 @@ export function setLocalClaudeIo(next?: Partial<LocalClaudeIo>): void {
   inFlight = null
   fixing = undefined
   lastFix = undefined
+  notify()
 }

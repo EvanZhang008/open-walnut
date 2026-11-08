@@ -64,7 +64,7 @@ describe('titleViaBackendModel — a failure must look like a failure', () => {
       .mockResolvedValueOnce({ content: [], aborted: true })
       .mockResolvedValueOnce(textResult('Provisioner CloudFormation handler'));
 
-    await expect(titleViaBackendModel('why does bind() need this', 'why does…', null))
+    await expect(titleViaBackendModel('why does the provisioner handler need bind()', 'why does…', null))
       .resolves.toBe('Provisioner CloudFormation handler');
     expect(sendMessage).toHaveBeenCalledTimes(2);
   });
@@ -89,6 +89,13 @@ describe('titleViaBackendModel — a failure must look like a failure', () => {
     sendMessage.mockResolvedValue(textResult('I cannot determine a title from this.'));
     await expect(titleViaBackendModel('q', 'placeholder', null)).resolves.toBeNull();
     expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('an answer with none of the words it names is no title (a CLI error, a reply, another subject)', async () => {
+    for (const answer of ['Not logged in · Please run /login', 'Hello! I processed your message: why', 'Garden fence paint schedule']) {
+      sendMessage.mockResolvedValueOnce(textResult(answer));
+      await expect(titleViaBackendModel('why does the provisioner handler need bind()', 'why does…', null)).resolves.toBeNull();
+    }
   });
 
   it('returns a usable title on the first try without retrying', async () => {

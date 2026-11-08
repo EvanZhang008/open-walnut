@@ -11,6 +11,7 @@
  * directory listing and the currently-previewed file.
  */
 import { test, expect, type Page } from '@playwright/test'
+import { goToSessionFolder } from './todo-panel-helpers'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 
@@ -40,10 +41,11 @@ async function openFilesPanel(page: Page) {
   await panel.getByRole('button', { name: 'Files', exact: true }).click()
   const explorer = panel.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 10_000 })
+  await goToSessionFolder(explorer)
   return explorer
 }
 
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page, baseURL }) => {
   // Pin the Files tree EXPANDED before first render: the collapse pref key
   // syncs to the SHARED fixture server (ui-prefs), so a parallel run of
   // file-explorer-tree-collapse.spec.ts would otherwise boot this page with
@@ -51,7 +53,8 @@ test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     try { localStorage.setItem('open-walnut-file-explorer-tree-collapsed', '0') } catch { /* off */ }
   })
-  await page.goto('/')
+  await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
+  await page.getByRole('link', { name: 'Open Walnut' }).click()
   await page.waitForLoadState('networkidle')
 })
 

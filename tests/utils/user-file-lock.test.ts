@@ -133,6 +133,22 @@ describe('withUserFileLock', () => {
     expect(tree(repo)).toEqual(['README.md']);
   });
 
+  it('a locked in-place write preserves the inode, hardlink, symlink and mode', async () => {
+    const real = path.join(repo, 'note.md');
+    const hard = path.join(repo, 'hard.md');
+    const link = path.join(repo, 'symlink.md');
+    await fsp.writeFile(real, 'old');
+    await fsp.chmod(real, 0o640);
+    await fsp.link(real, hard);
+    await fsp.symlink(real, link);
+    const before = await fsp.stat(real);
+    await withUserFileLock(link, () => fsp.writeFile(link, 'new', 'utf8'));
+    const after = await fsp.stat(real);
+    expect([after.ino, after.mode, after.uid, after.gid, after.nlink]).toEqual([before.ino, before.mode, before.uid, before.gid, before.nlink]);
+    expect((await fsp.lstat(link)).isSymbolicLink()).toBe(true);
+    expect(await fsp.readFile(hard, 'utf8')).toBe('new');
+  });
+
   it('excludes a writer that came in through a symlink while another holds the real path', async () => {
     const real = path.join(repo, 'notes.txt');
     fs.writeFileSync(real, '0');

@@ -74,8 +74,12 @@ export async function listLocalDirs(dir: string, depth: number): Promise<DirList
   let level = [dir]
   for (let currentDepth = 1; currentDepth <= depth && level.length > 0; currentDepth++) {
     const next: string[] = []
+    // The budget bounds the PRELOAD of deeper levels; the asked folder's own children are
+    // always listed. A readdir slowed past the budget (a loaded machine) used to return
+    // none of them, so `~/` read "no subdirectories" while `~/p` listed them (2026-11-11).
+    const outOfTime = (): boolean => currentDepth > 1 && Date.now() >= deadline
     for (const d of level) {
-      if (entries.length >= DIR_LIST_MAX_ENTRIES || Date.now() >= deadline) break
+      if (entries.length >= DIR_LIST_MAX_ENTRIES || outOfTime()) break
       let dirents
       try {
         dirents = sortedByName(await fsp.readdir(d, { withFileTypes: true }))
@@ -91,7 +95,7 @@ export async function listLocalDirs(dir: string, depth: number): Promise<DirList
         linkIsDir.set(e.name, await symlinkPointsToDir(path.join(d, e.name)))
       }))
       for (const dirent of dirents) {
-        if (entries.length >= DIR_LIST_MAX_ENTRIES || Date.now() >= deadline) break
+        if (entries.length >= DIR_LIST_MAX_ENTRIES || outOfTime()) break
         const full = path.join(d, dirent.name)
         const isLink = dirent.isSymbolicLink()
         if (isLink ? !linkIsDir.get(dirent.name) : !dirent.isDirectory()) continue

@@ -49,7 +49,7 @@ import { ErrorCategoryTitle } from './ErrorCategoryTitle';
 import { landingSectionFor } from '@/utils/host-banner-placement';
 import { hostOfCauseKey } from '@/contexts/notifications/notification-model';
 import { useLocalDismissed } from '@/utils/host-banner-dismiss';
-import { localNoticeShows } from '@/utils/local-claude-banner';
+import { agentCannotRun, localNoticeIsFailure, localNoticeShows } from '@/utils/local-claude-banner';
 import { useDialogFocus } from '@/hooks/useDialogFocus';
 import { hasActiveModalOverlay } from '@/hooks/useModalOverlay';
 import { navigateToTarget } from '@/utils/open-session';
@@ -140,7 +140,10 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
   const disabledHosts = useDisabledHosts(open);
   const problemHosts = useProblemHosts(health.daemons, disabledHosts);
   const localDismissed = useLocalDismissed();
-  const localClaude = localNoticeShows(health, localDismissed, healthLoading) !== null;
+  const localNotice = localNoticeShows(health, localDismissed, healthLoading);
+  const localClaude = localNotice !== null;
+  // Only a failure counts as an error: not installed or not signed in yet is a first-run step.
+  const localClaudeFailing = localNotice !== null && localNoticeIsFailure(health, localNotice);
   const { feed, loaded, unreadCount, markAllRead, markLocalRead, dismissFeed } = useNotifications();
   // A card that moved up under the pointer (the one above was answered) waits a beat before a click counts.
   const shiftGuard = useShiftClickGuard('.notification-feed-item');
@@ -182,6 +185,10 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
     void fetchSelfRepair().then(setSelfRepair);
   }, [open]);
   const canFix = selfRepair?.available === true;
+  // A repair session runs on Claude Code on this computer: while it is missing or signed
+  // out, Fix with agent is not offered (it would fail like the error it was asked to fix);
+  // the setup card's own install or sign-in step is the way on.
+  const agentBlocked = agentCannotRun(health);
   // Available but no checkout yet → the first click clones upstream, which takes
   // minutes. The button says that while it runs instead of looking wedged.
   const fixNeedsClone = canFix && selfRepair?.source === null;
@@ -524,6 +531,7 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
             onDismissKey={key => dismissFeed([key])}
             showCategoryChip
             canFix={canFix}
+            agentBlocked={agentBlocked}
             fixNeedsClone={fixNeedsClone}
           />
         ) : null;
@@ -601,7 +609,7 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
                 and this machine's Claude Code, once each. */}
             <RailButton
               label="Errors"
-              count={errorsBadgeCount({ feedErrors: counts.errorsTotal, problemHosts: problemHosts.length, localClaude })}
+              count={errorsBadgeCount({ feedErrors: counts.errorsTotal, problemHosts: problemHosts.length, localClaude: localClaudeFailing })}
               danger
               active={section === 'errors' && !activeErrorCategory}
               onClick={() => pickSection('errors')}
@@ -695,6 +703,7 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
                       // header can't name the family — each card wears the chip.
                       showCategoryChip
                       canFix={canFix}
+                      agentBlocked={agentBlocked}
                       fixNeedsClone={fixNeedsClone}
                     />
                   </div>
@@ -737,6 +746,7 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
                       onNavigate={onNavigate}
                       onDismissKey={key => dismissFeed([key])}
                       canFix={canFix}
+                      agentBlocked={agentBlocked}
                       fixNeedsClone={fixNeedsClone}
                     />
                   </div>
@@ -754,6 +764,7 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
                   onOpenLetter={openLetter}
                   showCategoryChip={section === 'all'}
                   canFix={canFix}
+                  agentBlocked={agentBlocked}
                   fixNeedsClone={fixNeedsClone}
                 />
               </div>
@@ -888,7 +899,7 @@ function collapseSameOrigin(items: Notification[]): FeedGroup[] {
  */
 function FeedGroups({
   groups, expandedGroups, onToggleGroup, onNavigate, onDismissKey, onOpenLetter, showCategoryChip,
-  canFix, fixNeedsClone,
+  canFix, fixNeedsClone, agentBlocked,
 }: {
   groups: FeedGroup[];
   expandedGroups: Set<string>;
@@ -905,6 +916,8 @@ function FeedGroups({
   canFix?: boolean;
   /** The first fix has to clone Walnut's source (minutes) — the button says so. */
   fixNeedsClone?: boolean;
+  /** Claude Code cannot run on this computer: no Fix with agent (agentCannotRun). */
+  agentBlocked?: boolean;
 }) {
   return (
     <>
@@ -938,6 +951,7 @@ function FeedGroups({
                   {...(onOpenLetter ? { onOpenLetter } : {})}
                   showCategoryChip={showCategoryChip}
                   canFix={canFix}
+                  agentBlocked={agentBlocked}
                   fixNeedsClone={fixNeedsClone}
                 />
               )
@@ -1071,7 +1085,7 @@ const fixesInFlight = new Set<string>();
 
 /** Error / automation card: title, body, ×N fold badge, deep-link chips. */
 const FeedItem = memo(function FeedItem({
-  n, onNavigate, onDismiss, onOpenLetter, showCategoryChip, canFix, fixNeedsClone,
+  n, onNavigate, onDismiss, onOpenLetter, showCategoryChip, canFix, fixNeedsClone, agentBlocked,
 }: {
   n: Notification;
   onNavigate: (to: string) => void;
@@ -1080,6 +1094,7 @@ const FeedItem = memo(function FeedItem({
   showCategoryChip?: boolean;
   canFix?: boolean;
   fixNeedsClone?: boolean;
+  agentBlocked?: boolean;
 }) {
   // Entries without a navigation target (e.g. plugin/system errors) expand on
   // click instead — otherwise a truncated error message is simply unreadable.
@@ -1134,8 +1149,11 @@ const FeedItem = memo(function FeedItem({
   // An error card is the one kind that can be handed to a coding session, and
   // only where a source tree exists (canFix) or a session already ran (n.fix) —
   // on a cloud replica or a git-less install the affordance simply isn't there.
-  const showFixActions = n.kind === 'operation-error'
+  const fixKind = n.kind === 'operation-error'
     || (n.severity === 'error' && ['cron', 'skill', 'hook'].includes(n.kind));
+  // Not while Claude Code cannot run here: no agent can start without it. A repair
+  // session that already ran still opens.
+  const showFixActions = fixKind && (!agentBlocked || !!fixTarget);
   // A navigate action the PRODUCER attached (server record `action`), on a card
   // with no session of its own. A session-bound card already opens its session
   // on click, and a second button saying the same would be noise; a recovered
@@ -1287,7 +1305,7 @@ const FeedItem = memo(function FeedItem({
               </button>
               {/* Quiet secondary: the first session may have finished or gone
                   wrong, and a fresh one is the only way forward from the card. */}
-              <button
+              {!agentBlocked && <button
                 className="nfc-card-action nfc-fix-restart"
                 data-testid="nfc-fix-restart"
                 title="Start a fresh repair session for this error"
@@ -1295,7 +1313,7 @@ const FeedItem = memo(function FeedItem({
                 onClick={(e) => { e.stopPropagation(); void startFix(true); }}
               >
                 {fixBusy ? 'Starting…' : 'Fix again'}
-              </button>
+              </button>}
             </>
           ) : (
             <button

@@ -435,6 +435,11 @@ describe('a remote-host session on the phone while the Mac cannot reach the host
     record('upSend', up)
     expectThrough(up, 'send with every link up')
     await waitFor(() => answers(SID_A, 'up-one') === 1, 60_000, 'the host to answer up-one')
+    await waitFor(async () => {
+      const { getQueue } = await import('../../src/core/session-message-queue.js')
+      return !(await getQueue(SID_A)).some((message) => message.id === 'qm-mobile-upone00001')
+        && (await macRecord(SID_A)).process_status === 'idle'
+    }, 60_000, 'the Mac to consume the answer before the next case cuts its link')
   }, 240_000)
 
   it('the link goes silent: the model menu still reads at once, and a send right then is held for the Mac', async () => {

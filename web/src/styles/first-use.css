@@ -1,0 +1,40 @@
+.first-use-setup {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  overflow: auto;
+  padding: 24px;
+  color: var(--fg);
+  background: var(--bg);
+}
+.first-use-card { width: min(100%, 440px); }
+/* The card in the task panel while the Ask slot is closed (home-first-use-card.ts): it takes the
+   room the (still empty) list leaves, and scrolls on a short window. */
+.first-use-in-tasks { flex: 1 1 auto; min-height: 0; overflow: auto; border-top: 1px solid var(--border); }
+.first-use-in-tasks .first-use-setup { height: auto; min-height: 100%; padding: 16px 12px; align-items: start; }
+.first-use-in-tasks .first-use-card h1 { font-size: 20px; }
+.first-use-card h1 { margin: 0 0 12px; font-size: 26px; font-weight: 600; }
+.first-use-intro { color: var(--fg-muted); line-height: 1.6; margin: 0 0 28px; }
+.first-use-card .setup-banner { margin: 0; max-height: none; }
+.first-use-card .setup-banner-title { font-size: 16px; }
+.first-use-card .setup-lead { line-height: 1.6; }
+.first-use-card .setup-step-btn { min-height: 36px; }
+.first-use-card .ab-local-x { display: none; }
+.first-use-alternatives { margin-top: 16px; }
+.first-use-alternatives summary { cursor: pointer; color: var(--fg-muted); font-size: 13px; }
+.first-use-alternatives .setup-alt { margin-top: 12px; }
+.first-use-footnote { margin-top: 24px; color: var(--fg-muted); font-size: 12px; line-height: 1.5; }
+.found-host-prompts { border-top: 1px solid var(--border); padding: 12px; background: var(--bg-secondary); color: var(--fg); }
+.found-host-prompts h2 { margin: 0 0 8px; font-size: 13px; font-weight: 600; }
+.found-host-prompts ul { list-style: none; margin: 0; padding: 0; max-height: min(180px, 28vh); overflow: auto; }
+/* Several hosts: tighter rows, so the card stays a few lines tall on a short window. */
+.found-host-prompts-compact { padding: 8px 12px; }
+.found-host-prompts-compact h2 { margin-bottom: 4px; }
+.found-host-prompts-compact .found-host-prompt { padding: 6px 0; }
+.found-host-prompts-compact .found-host-prompt p { margin-bottom: 4px; }
+.found-host-prompt { padding: 8px 0; }
+.found-host-prompt + .found-host-prompt { border-top: 1px solid var(--border); }
+.found-host-prompt p { margin: 0 0 6px; font-size: 13px; overflow-wrap: anywhere; }
+.found-host-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.found-host-error { color: var(--fg); font-size: 12px; }
+.found-host-fix { margin: 8px 0; }

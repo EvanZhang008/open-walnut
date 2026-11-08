@@ -126,7 +126,9 @@
   padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--bg);
+  /* A raised, opaque layer over the document in both themes (in dark, --bg is the
+     page's own black and the card had no edge against the text it covers). */
+  background: var(--bg-elevated, var(--bg));
   color: var(--fg);
   font-size: 13px;
   line-height: 1.45;
@@ -138,7 +140,9 @@
   box-shadow: 0 4px 16px rgb(0 0 0 / 0.14);
   cursor: default;
 }
-.doc-comment-card.is-resolved { opacity: 0.8; }
+/* A settled one reads quieter by its words, never by opacity: the card lies over
+   the document, which read through a faded card (2026-11-10 review). */
+.doc-comment-card.is-resolved { color: var(--fg-muted); }
 .doc-comment-state {
   margin-bottom: 4px;
   color: var(--fg-muted);

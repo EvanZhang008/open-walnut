@@ -162,6 +162,84 @@ export async function passageRects(panel: Locator, phrase: string, row = '[data-
   return rects!
 }
 
+/** Bring every line of a passage into view with real wheels. DOM reads never
+ *  scroll or create a selection; a dropped wheel fails instead of a DOM fallback. */
+export async function scrollTextIntoView(page: Page, root: Locator, needle: string): Promise<void> {
+  const measure = () => root.evaluate((el, phrase) => {
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      const at = (n as Text).data.indexOf(phrase)
+      if (at === -1) continue
+      const range = document.createRange()
+      range.setStart(n, at)
+      range.setEnd(n, at + phrase.length)
+      const rects = Array.from(range.getClientRects()).map((r) =>
+        ({ left: r.left, right: r.right, top: r.top, bottom: r.bottom }))
+      let scroller: Element | null = n.parentElement
+      while (scroller && !(scroller.scrollHeight > scroller.clientHeight + 1
+        && /auto|scroll/.test(getComputedStyle(scroller).overflowY))) scroller = scroller.parentElement
+      scroller ??= document.scrollingElement!
+      let left = 0, right = innerWidth, top = 0, bottom = innerHeight
+      for (let p = n.parentElement; p && p !== document.scrollingElement; p = p.parentElement) {
+        const cs = getComputedStyle(p), b = p.getBoundingClientRect()
+        if (/auto|scroll|hidden|clip/.test(cs.overflowX)) {
+          left = Math.max(left, b.left + p.clientLeft)
+          right = Math.min(right, b.left + p.clientLeft + p.clientWidth)
+        }
+        if (/auto|scroll|hidden|clip/.test(cs.overflowY)) {
+          top = Math.max(top, b.top + p.clientTop)
+          bottom = Math.min(bottom, b.top + p.clientTop + p.clientHeight)
+        }
+      }
+      const hit = rects.every((r) => [r.left + 1, r.right - 1].every((x) => {
+        const target = document.elementFromPoint(x, (r.top + r.bottom) / 2)
+        return !!target && n!.parentElement!.contains(target)
+      }))
+      return { rects, left, right, top, bottom, scrollTop: scroller.scrollTop, hit }
+    }
+    return null
+  }, needle)
+  const visible = (g: NonNullable<Awaited<ReturnType<typeof measure>>>) => g.rects.every((r) =>
+    r.left >= g.left && r.right <= g.right && r.top >= g.top + 2 && r.bottom <= g.bottom - 2)
+  let previous = '', still = 0
+  for (let i = 0; i < 40; i++) {
+    const g = await measure()
+    expect(g, `passage "${needle}" is not rendered`).not.toBeNull()
+    expect(g!.rects.length, 'the passage has text rects').toBeGreaterThan(0)
+    expect(g!.right - g!.left, 'the scrollbox is visible horizontally').toBeGreaterThan(0)
+    expect(g!.bottom - g!.top, 'the scrollbox is visible vertically').toBeGreaterThan(4)
+    const signature = JSON.stringify(g)
+    if (visible(g!) && g!.hit) {
+      still = signature === previous ? still + 1 : 0
+      if (still >= 3) break
+    } else {
+      still = 0
+      const first = Math.min(...g!.rects.map((r) => r.top)), last = Math.max(...g!.rects.map((r) => r.bottom))
+      const delta = Math.max(-700, Math.min(700, Math.round((first + last - g!.top - g!.bottom) / 2)))
+      await page.mouse.move((g!.left + g!.right) / 2, (g!.top + g!.bottom) / 2)
+      await page.mouse.wheel(0, delta)
+    }
+    previous = signature
+    await page.waitForTimeout(150)
+  }
+  const g = (await measure())!
+  expect(visible(g), `all text rects are inside the scrollbox and viewport: ${JSON.stringify(g)}`).toBe(true)
+  expect(g.hit, 'the text endpoints receive the drag').toBe(true)
+  expect(still, 'the passage has stopped moving before the drag').toBeGreaterThanOrEqual(3)
+}
+
+/** Check every measured line immediately before a mouse drag (top-document coordinates). */
+export function expectDragInViewport(page: Page, rects: Array<{ left: number; right: number; top: number; height: number }>): void {
+  const viewport = page.viewportSize()!
+  expect(rects.length, 'a drag has text rects').toBeGreaterThan(0)
+  for (const r of rects) {
+    expect(r.left, 'the drag stays inside the viewport').toBeGreaterThanOrEqual(0)
+    expect(r.right, 'the drag stays inside the viewport').toBeLessThanOrEqual(viewport.width)
+    expect(r.top, 'the drag stays inside the viewport').toBeGreaterThanOrEqual(0)
+    expect(r.top + r.height, 'the drag stays inside the viewport').toBeLessThanOrEqual(viewport.height)
+  }
+}
+
 export interface CentreOpts {
   /** Where the target should sit, as a fraction of the timeline's height. */
   at?: number

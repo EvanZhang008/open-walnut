@@ -19,6 +19,7 @@
  *     Open in Notes, Copy path…), not the browser's "Back / Reload / View Source".
  */
 import { test, expect, type Locator, type Page } from '@playwright/test'
+import { goToSessionFolder } from './todo-panel-helpers'
 
 const SESSION_ID = 'pw-vscode-session'
 const TASK_ID = 'pw-task-vscode'
@@ -46,6 +47,7 @@ async function openFilesPanel(page: Page) {
   await panel.getByRole('button', { name: 'Files', exact: true }).click()
   const explorer = panel.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 10_000 })
+  await goToSessionFolder(explorer)
   return explorer
 }
 
@@ -99,8 +101,9 @@ async function expectDownloadOffered(page: Page, scope: Locator) {
 // on a loaded box, which showed up as `page.goto` timing out in beforeEach.
 test.describe.configure({ timeout: 90_000 })
 
-test.beforeEach(async ({ page }) => {
-  await page.goto('/', { timeout: 60_000 })
+test.beforeEach(async ({ page, baseURL }) => {
+  await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
+  await page.getByRole('link', { name: 'Open Walnut' }).click({ timeout: 60_000 })
   await page.waitForLoadState('networkidle')
 })
 
@@ -141,10 +144,13 @@ test('DOCX renders as a readable document (docx-preview), not a binary dead-end'
   const explorer = await openFilesPanel(page)
   // The preview itself fetches the raw bytes — capture that request to prove
   // the server labels them with the real OOXML type.
+  // Raw bytes come from /api/file-raw/<host>/<path>. Matching the exact path
+  // keeps the `~$office-doc.docx` lock stub and other folders' copies out.
+  const filePath = await explorer.locator('.session-file-explorer-node[title$="/office-doc.docx"]').first().getAttribute('title')
+  expect(filePath).toBeTruthy()
+  const rawPath = `/api/file-raw/local/${filePath!.split('/').filter(Boolean).map(encodeURIComponent).join('/')}`
   const rawRes = page.waitForResponse(
-    // Raw bytes come from /api/file-raw/<host>/<path> (older builds: ?raw=1).
-    // The leading slash keeps the `~$office-doc.docx` lock stub from matching.
-    (r) => r.url().includes('/office-doc.docx') && (r.url().includes('/api/file-raw/') || r.url().includes('raw=1')),
+    (r) => r.request().method() === 'GET' && new URL(r.url()).pathname === rawPath,
     { timeout: 20_000 },
   )
   await selectFileExact(explorer, 'office-doc.docx')

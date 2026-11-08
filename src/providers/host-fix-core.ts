@@ -501,7 +501,7 @@ export function createHostFix(deps: HostFixDeps) {
     if (ACTIONS.indexOf(name) < 0) return { action: name, ok: false, error: 'unknown-action', log: '', durationMs: 0 }
     if (running) return { action: name, ok: false, error: 'busy', log: 'another fix is running: ' + running, durationMs: 0 }
     if (INSTALL_HOME && name === 'install-compiler') {
-      return { action: name, ok: false, error: 'isolated', log: 'a test server\'s isolated daemon installs nothing system-wide', durationMs: 0 }
+      return { action: name, ok: false, error: 'isolated', log: 'an isolated daemon (it ends with the Walnut that started it) installs nothing system-wide', durationMs: 0 }
     }
     running = name
     cancelled = false

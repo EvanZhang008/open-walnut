@@ -3187,7 +3187,23 @@ export async function deleteSessionRecords(ids: Set<string>, reason = 'unspecifi
       { source: 'session-tracker', urgency: 'normal' },
     );
   }
+  const { removeCancelledSnapshots } = await import('./session-queue-store.js');
+  await removeCancelledSnapshots(ids);
   return removed;
+}
+
+export async function sweepOrphanedCancelledSnapshots(): Promise<void> {
+  const { readQueueFileFresh, removeCancelledSnapshots } = await import('./session-queue-store.js');
+  const ids = Object.keys((await readQueueFileFresh()).cancelled ?? {});
+  if (!ids.length) return;
+  await ensureSessionInit();
+  await withWriteLock(async () => {
+    const db = getDb();
+    if (!db) throw new Error('Cancellation snapshot cleanup requires the session database');
+    const query = db.prepare('SELECT claude_session_id FROM sessions WHERE claude_session_id = ?');
+    const orphaned = new Set(ids.filter(id => !query.get(id)));
+    await removeCancelledSnapshots(orphaned);
+  });
 }
 
 /**

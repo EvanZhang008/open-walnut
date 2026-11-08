@@ -28,6 +28,7 @@ import { avatarColor, initials, rowAvatarColor, type ChannelRow, type ChannelSta
 import { usePointerHold } from './hold-order';
 import { OrgEditableName } from './OrgEditableName';
 import { OrgRouterSection } from './OrgRouterSection';
+import { OrgReorgReminder } from './OrgReorgReminder';
 import { OrgSettingsMenu } from './OrgSettingsMenu';
 import { useOrgSettings } from './useOrgSettings';
 import { USER_STATE_LABELS, stateCountLabel } from '@open-walnut/user-status';
@@ -317,6 +318,7 @@ export function OrgChannelList({ main, rows, routers = [], moved = [], rowMenu, 
         data-testid="org-search"
         onChange={(e) => onQuery(e.target.value)}
       />
+      <OrgReorgReminder vps={vps} onOpenChart={onOpenChart} />
       <div
         ref={listRef}
         className="org-list-scroll"

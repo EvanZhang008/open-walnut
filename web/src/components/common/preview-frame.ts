@@ -30,7 +30,8 @@ import { rawFileContentUrl } from '@/api/files';
 import { classifyPreviewLink, classifyPreviewNavigation } from '@/utils/html-preview-links';
 import { findLinkHandler, openWithHandler } from '@/plugins/link-handlers';
 import { showLinkMenu } from '@/plugins/LinkCaptureHost';
-import { loadFileScroll, saveFileScroll } from '@/utils/file-view-state';
+import { loadFileScroll, placeForView, saveFileScroll } from '@/utils/file-view-state';
+import type { ReadingSeen } from './use-file-reading-place';
 import { log } from '@/utils/log';
 import { readFrameMsg, type FrameMsg, type PreviewRect } from './preview-messages';
 
@@ -72,7 +73,10 @@ export interface PreviewFrameOptions {
   /** A line asked for: no scroll restore then. */
   line?: number;
   reloadToken?: number;
-  lastSeenRef: MutableRefObject<{ key: string; top: number } | null>;
+  lastSeenRef: MutableRefObject<ReadingSeen | null>;
+  /** The view mode the file view holds for a path. A scroll write keeps it: the cleanup
+   *  flush runs when Source turns the preview off, after that switch saved source mode. */
+  sourceModeRef: MutableRefObject<{ key: string; source: boolean }>;
   /** The reader selected text in the page (null: nothing selected), in top-viewport coords. */
   onSelection?: (sel: { x: number; y: number; text: string } | null) => void;
   onOpenPath?: (path: string) => void;
@@ -93,7 +97,7 @@ function activated(): boolean {
 const PRESS_FRESH_MS = 5000;
 
 export function usePreviewFrame(o: PreviewFrameOptions) {
-  const { frameRef, live, filePath, host, line, reloadToken, lastSeenRef } = o;
+  const { frameRef, live, filePath, host, line, reloadToken, lastSeenRef, sourceModeRef } = o;
   const [strayed, setStrayed] = useState<{ path?: string } | null>(null);
   const cb = useRef(o);
   cb.current = o;
@@ -140,9 +144,10 @@ export function usePreviewFrame(o: PreviewFrameOptions) {
 
     const startChase = (fromTop: number) => {
       stopChase();
-      const saved = line ? null : loadFileScroll(host, filePath);
-      if (!saved || saved.top <= 0 || Math.abs(fromTop - saved.top) <= 1) return;
-      chase = { top: saved.top, until: Date.now() + CHASE_MS };
+      // Only an offset measured in the page itself: one from Source is another view's pixels.
+      const place = line ? null : placeForView(loadFileScroll(host, filePath), 'html');
+      if (!place || !('top' in place) || Math.abs(fromTop - place.top) <= 1) return;
+      chase = { top: place.top, until: Date.now() + CHASE_MS };
       const tick = () => {
         if (!chase || Date.now() > chase.until) { stopChase(); return; }
         send({ type: 'scroll-to', top: chase.top });
@@ -192,11 +197,11 @@ export function usePreviewFrame(o: PreviewFrameOptions) {
           scrollEvents.dispatchEvent(new Event('scroll'));
           // A restore's own steps (a page still growing clamps them) are not the reader's position.
           if (chase) return;
-          lastSeenRef.current = { key, top };
+          lastSeenRef.current = { key, top, topIn: 'html' };
           clearTimeout(saveTimer);
           saveTimer = setTimeout(() => {
             const seen = lastSeenRef.current;
-            if (seen?.key === key) saveFileScroll(host, filePath, { top: seen.top });
+            if (seen?.key === key) saveFileScroll(host, filePath, { top: seen.top, topIn: seen.topIn, line: seen.line, source: sourceModeRef.current.key === key ? sourceModeRef.current.source : false });
           }, 250);
           return;
         }
@@ -282,9 +287,9 @@ export function usePreviewFrame(o: PreviewFrameOptions) {
       stopChase();
       // Flush the last value: the debounce would drop the final position when the panel closes.
       const seen = lastSeenRef.current;
-      if (seen?.key === key) saveFileScroll(host, filePath, { top: seen.top });
+      if (seen?.key === key) saveFileScroll(host, filePath, { top: seen.top, topIn: seen.topIn, line: seen.line, source: sourceModeRef.current.key === key ? sourceModeRef.current.source : false });
     };
-  }, [live, filePath, host, line, frameRef, lastSeenRef, scrollEvents, channel]);
+  }, [live, filePath, host, line, frameRef, lastSeenRef, sourceModeRef, scrollEvents, channel]);
 
   /** The "Back to <file>" strip: point the frame back at the file (the same `src` again re-navigates). */
   const returnToFile = useCallback(() => {

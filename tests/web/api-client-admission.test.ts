@@ -33,6 +33,124 @@ function jsonResponse(body: unknown): Response {
   });
 }
 
+describe('suspended GET admission', () => {
+  let win: EventTarget;
+  let calls: string[];
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    vi.resetModules();
+    vi.useFakeTimers();
+    win = new EventTarget();
+    calls = [];
+    vi.stubGlobal('window', win);
+    vi.stubGlobal('fetch', vi.fn((url: string) => {
+      calls.push(url);
+      return Promise.resolve(jsonResponse({}));
+    }));
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); });
+
+  it('aborts suspended normal and low reads without leaving timers or listeners', async () => {
+    const client = await import('../../web/src/api/client');
+    win.dispatchEvent(new Event('pagehide'));
+    const controllers = [new AbortController(), new AbortController()];
+    const removed = controllers.map(ctrl => vi.spyOn(ctrl.signal, 'removeEventListener'));
+    const reads = controllers.map((ctrl, i) => client.apiGet(`/api/abort/${i}`, undefined, {
+      signal: ctrl.signal, ...(i ? { priority: 'low' as const } : {}),
+    }).catch(error => error));
+    expect(client.getFetchQueueStats()).toEqual({ inFlight: 0, queued: 2 });
+    controllers.forEach(ctrl => ctrl.abort());
+    expect((await Promise.all(reads)).map(error => error.name)).toEqual(['AbortError', 'AbortError']);
+    removed.forEach(spy => expect(spy).toHaveBeenCalledWith('abort', expect.any(Function)));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(0);
+    win.dispatchEvent(new Event('pageshow'));
+    expect(calls).toEqual([]);
+    expect(client.getFetchQueueStats()).toEqual({ inFlight: 0, queued: 0 });
+  });
+
+  it('retains both absolute budgets when restored before timers resume', async () => {
+    const client = await import('../../web/src/api/client');
+    const initial = Date.now();
+    win.dispatchEvent(new Event('pagehide'));
+    const normal = client.apiGet('/api/normal-expired').catch(error => error);
+    const low = client.apiGet('/api/low-expired', undefined, { priority: 'low' }).catch(error => error);
+    vi.setSystemTime(initial + 60_001);
+    win.dispatchEvent(new Event('pageshow'));
+    expect((await normal).name).toBe('TimeoutError');
+    expect((await low).name).toBe('TimeoutError');
+    expect(calls).toEqual([]);
+    expect(client.getFetchQueueStats()).toEqual({ inFlight: 0, queued: 0 });
+    expect(errorSpy.mock.calls.map(row => String(row[0]))).toEqual([
+      expect.stringContaining('after 20000ms in the connection queue (page suspended)'),
+      expect.stringContaining('after 60000ms in the connection queue (page suspended)'),
+    ]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('does not renew the original budget when a granted slot suspends', async () => {
+    const client = await import('../../web/src/api/client');
+    const started = Date.now();
+    const read = client.apiGet('/api/granted').catch(error => error);
+    vi.setSystemTime(started + 19_000);
+    win.dispatchEvent(new Event('pagehide'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.getFetchQueueStats()).toEqual({ inFlight: 0, queued: 1 });
+    await vi.advanceTimersByTimeAsync(999);
+    expect(client.getFetchQueueStats().queued).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect((await read).name).toBe('TimeoutError');
+    win.dispatchEvent(new Event('pageshow'));
+    expect(calls).toEqual([]);
+    expect(String(errorSpy.mock.calls[0][0])).toContain('page suspended');
+  });
+
+  it('keeps the original queue deadline across grant and requeue', async () => {
+    const client = await import('../../web/src/api/client');
+    const started = Date.now();
+    win.dispatchEvent(new Event('pagehide'));
+    const read = client.apiGet('/api/requeued').catch(error => error);
+    vi.setSystemTime(started + 19_000);
+    win.dispatchEvent(new Event('pageshow'));
+    win.dispatchEvent(new Event('pagehide'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.getFetchQueueStats()).toEqual({ inFlight: 0, queued: 1 });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect((await read).name).toBe('TimeoutError');
+    expect(calls).toEqual([]);
+  });
+
+  it('lets background POSTs pass a suspended GET head in either lane', async () => {
+    const client = await import('../../web/src/api/client');
+    const pending: Array<() => void> = [];
+    vi.stubGlobal('fetch', vi.fn((url: string) => {
+      calls.push(url);
+      if (url.startsWith('/api/block/')) return new Promise<Response>(resolve => { pending.push(() => resolve(jsonResponse({}))); });
+      return Promise.resolve(jsonResponse({}));
+    }));
+    const blockers = Array.from({ length: 6 }, (_, i) => client.apiGet(`/api/block/${i}`).catch(() => undefined));
+    await vi.advanceTimersByTimeAsync(0);
+    const reads = [client.apiGet('/api/held-normal').catch(error => error),
+      client.apiGet('/api/held-low', undefined, { priority: 'low' }).catch(error => error)];
+    const posts = [client.apiPost('/api/post-normal', {}, { background: true }).catch(error => error),
+      client.apiPost('/api/post-low', {}, { background: true, priority: 'low' }).catch(error => error)];
+    win.dispatchEvent(new Event('pagehide'));
+    pending.splice(0).forEach(resolve => resolve());
+    await Promise.all(blockers);
+    await vi.advanceTimersByTimeAsync(0);
+    await Promise.all(posts);
+    expect(calls.slice(6)).toEqual(['/api/post-normal', '/api/post-low']);
+    expect(client.getFetchQueueStats()).toEqual({ inFlight: 0, queued: 2 });
+    win.dispatchEvent(new Event('pageshow'));
+    await Promise.all(reads);
+    expect(calls.slice(8)).toEqual(['/api/held-normal', '/api/held-low']);
+    expect(client.getLowFetchQueueStats()).toEqual({ inFlight: 0, queued: 0 });
+    expect(client.getFetchQueueStats()).toEqual({ inFlight: 0, queued: 0 });
+  });
+});
+
 describe('fetch admission control', () => {
   let pending: Resolver[];
   let fetchMock: ReturnType<typeof vi.fn>;

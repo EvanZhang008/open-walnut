@@ -4,6 +4,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { accountInfo } from './lib/account.js';
 import { localDaemonDirChoice } from './lib/daemon-dir.js';
+import { demoTerminalDirFromEnv } from './lib/demo-terminal-dir.js';
 
 export const WALNUT_HOME = resolveOpenWalnutHome();
 
@@ -22,6 +23,9 @@ export const WALNUT_HOME = resolveOpenWalnutHome();
  * semantics push '--_ephemeral-child' onto process.argv before importing.
  */
 export const IS_EPHEMERAL = process.argv.includes('--_ephemeral-child');
+export const IS_DEMO = process.argv[2] === 'demo' && process.argv.includes('--_child')
+  || !!process.env.WALNUT_DEMO_ROOT && !!process.env.HOME
+    && path.resolve(process.env.HOME).startsWith(path.resolve(process.env.WALNUT_DEMO_ROOT, 'homes') + path.sep);
 
 /**
  * True when running as a headless cloud companion (WALNUT_CLOUD_MODE=1).
@@ -326,7 +330,9 @@ export const SESSION_STREAMS_DIR = path.join(LOG_DIR, 'streams');
  * both to LOG_DIR makes that invariant structural: isolated runtime dir →
  * isolated sockets → a reaper can only ever see its own instance's terminals.
  */
-export const DTACH_SOCKET_DIR = path.join(LOG_DIR, 'term');
+/** A Demo generation's own short socket dir (src/lib/demo-terminal-dir.ts): its home-based LOG_DIR overflows the socket cap. */
+export const DEMO_TERMINAL_DIR: string | null = IS_DEMO ? demoTerminalDirFromEnv(process.env) : null;
+export const DTACH_SOCKET_DIR = DEMO_TERMINAL_DIR ?? path.join(LOG_DIR, 'term');
 export const SESSION_QUEUE_FILE = path.join(WALNUT_HOME, 'session-message-queue.json');
 export const IMAGES_DIR = path.join(LOG_DIR, 'images');
 export const REMOTE_IMAGES_DIR = path.join(IMAGES_DIR, 'remote');

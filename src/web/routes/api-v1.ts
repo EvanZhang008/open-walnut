@@ -4506,9 +4506,13 @@ apiV1Router.get('/notes/content/*path', async (req: Request, res: Response, next
     let content: string
     let updatedAt: string
     try {
-      content = await fsp.readFile(filePath, 'utf-8')
-      const stat = await fsp.stat(filePath)
-      updatedAt = stat.mtime.toISOString()
+      const snapshot = await withUserFileLock(filePath, async () => {
+        const content = await fsp.readFile(filePath, 'utf-8')
+        const stat = await fsp.stat(filePath)
+        return { content, updatedAt: stat.mtime.toISOString() }
+      })
+      content = snapshot.content
+      updatedAt = snapshot.updatedAt
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
         sendError(res, 404, 'not_found', 'Note not found')

@@ -8,10 +8,10 @@
  * must not block adoption forever (C84).
  */
 import { describe, it, expect } from 'vitest';
-import { buildThreadTree, ROOT_THREAD_KEY, threadKeyOf, type ThreadTreeMessage } from '@/utils/thread-tree';
+import { buildThreadTree, ROOT_THREAD_KEY, threadKeyOf, withPendingUserRows, type ThreadTreeMessage } from '@/utils/thread-tree';
 import {
   counts, deriveThreadLiveStates, descendantsOf, displayTitleOf, fallbackTakeaway, fallbackTitle, hiddenKeysOf,
-  indexMeta, mergeMetaPatch, normalizeForSearch, openBelow, shouldAdoptServerMeta, statusOf, summaryText,
+  indexMeta, latestUnsentRows, mergeMetaPatch, normalizeForSearch, openBelow, shouldAdoptServerMeta, statusOf, summaryText,
   toggleLabel, viewStatusOf, TAKEAWAY_PREAMBLE_PATTERNS, META_PRUNE_AGE_MS, NAMING_TIMEOUT_MS, pluralFollowUps,
 } from '@/utils/thread-meta';
 import { chipCounts, openChipTitle, toggleTitle } from '@/utils/thread-meta-counts';
@@ -227,6 +227,53 @@ describe('live states (queued / answering / failed)', () => {
     expect(live.get(keyOf('Q5'))).toBe('answering');
     expect(live.has(keyOf('Q6'))).toBe(false);
     expect(live.has(ROOT_THREAD_KEY)).toBe(false);
+  });
+  it('a rejected send is failed even after an earlier answer, until its retry is queued', () => {
+    const { tree, index, keyOf, s } = dense();
+    const input = {
+      tree, unsent: [tree.byKey.get(keyOf('Q1'))!.turnIds.at(-1)!, tree.byKey.get(keyOf('Q2'))!.turnIds.at(-1)!], streamingKey: null,
+      turnEnds: new Map(), hasAnswerAfter: () => true, awaiting: new Set([keyOf('Q1')]),
+    };
+    const failed = deriveThreadLiveStates({ ...input, queued: [] });
+    expect(failed.get(keyOf('Q1'))).toBe('failed');
+    expect(viewStatusOf(tree.byKey.get(keyOf('Q1'))!, index, failed)).toBe('failed');
+    expect(failed.get(keyOf('Q2'))).toBe('failed');
+    expect(viewStatusOf(tree.byKey.get(keyOf('Q2'))!, index, failed)).toBe('resolved');
+    const retried = deriveThreadLiveStates({ ...input, queued: [{ rowId: s.ids.head.Q1, status: 'pending' }] });
+    expect(retried.get(keyOf('Q1'))).toBe('queued');
+    expect(deriveThreadLiveStates({ ...input, queued: [], streamingKey: keyOf('Q1') }).get(keyOf('Q1'))).toBe('answering');
+    expect(deriveThreadLiveStates({ ...input, unsent: ['unknown'], queued: [], awaiting: new Set() }).size).toBe(0);
+  });
+  it('an older failed follow-up does not override a newer answer after transcript absorption', () => {
+    const first = { role: 'user' as const, msgId: 'q1', timestamp: '2026-11-01T00:00:00Z' };
+    const failed = { role: 'user' as const, userUuid: 'q2', status: 'failed', timestamp: '2026-11-01T00:00:01Z' };
+    const newer = { role: 'user' as const, userUuid: 'q3', status: 'delivered', timestamp: '2026-11-01T00:00:02Z' };
+    const anchor = (msgId: string) => ({ msgId, parent: 'file:/workspace/readme.md', source: 'selection' as const, quote: { exact: 'same passage' }, at: 't' });
+    const anchors = ['q1', 'q2', 'q3'].map(anchor);
+    const before = buildThreadTree(withPendingUserRows([first], [failed, newer]), anchors);
+    const order = { seen: new Map<string, string>(), latest: new Map<string, string>() };
+    expect([...latestUnsentRows(before, [failed], order)]).toEqual(['q2']);
+    expect(latestUnsentRows(before, [failed, newer], order).size).toBe(0);
+    const saved = [first, { role: 'user' as const, msgId: 'queue-q3', sourceUuid: 'q3', timestamp: '2026-10-31T00:00:00Z' }];
+    const after = buildThreadTree(withPendingUserRows(saved, [failed]), anchors);
+    expect(after.byKey.get(threadKeyOf(anchors[0]))!.turnIds.at(-1)).toBe('q2');
+    const unsent = latestUnsentRows(after, [failed], order);
+    expect(unsent.size).toBe(0);
+    expect(deriveThreadLiveStates({ tree: after, unsent: [...unsent], queued: [], streamingKey: null, turnEnds: new Map(), hasAnswerAfter: () => true }).size).toBe(0);
+    expect(latestUnsentRows(after, [{ ...failed, status: 'pending' }], order).size).toBe(0);
+    expect([...latestUnsentRows(after, [failed], order)]).toEqual(['q2']);
+    const fresh = { seen: new Map<string, string>(), latest: new Map<string, string>() };
+    expect([...latestUnsentRows(after, [{ ...failed, timestamp: undefined }], fresh)]).toEqual(['q2']);
+  });
+  it('a late delivered event for an older failed row cannot hide a newer failure', () => {
+    const rows = ['q2', 'q3'].map((userUuid) => ({ role: 'user' as const, userUuid, status: 'pending' }));
+    const anchors = rows.map((row) => ({ msgId: row.userUuid, parent: 'file:/workspace/readme.md', source: 'selection' as const, at: 't' }));
+    const tree = buildThreadTree(rows, anchors);
+    const order = { seen: new Map<string, string>(), latest: new Map<string, string>() };
+    latestUnsentRows(tree, [{ ...rows[0], status: 'failed' }], order);
+    latestUnsentRows(tree, [{ ...rows[0], status: 'failed' }, rows[1]], order);
+    expect(latestUnsentRows(tree, [{ ...rows[0], status: 'delivered' }, rows[1]], order).size).toBe(0);
+    expect([...latestUnsentRows(tree, [{ ...rows[0], status: 'delivered' }, { ...rows[1], status: 'failed' }], order)]).toEqual(['q3']);
   });
   it('viewStatusOf overlays a live state on anything but resolved', () => {
     const { tree, index, keyOf } = dense();

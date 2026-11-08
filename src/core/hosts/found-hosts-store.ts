@@ -19,7 +19,7 @@ import { CRON_FILE, WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import type { DiscoveredHost } from '../ssh-config-scanner.js'
 import {
-  decideFoundHost, isFoundHostAnswer, withFoundHostAnswer,
+  addFoundTarget, decideFoundHost, foundTargetTaken, isFoundHostAnswer, knownFoundTargets, recordScanIfSame, withFoundHostAnswer,
   type FoundHostAnswer, type FoundHostFacts, type FoundHostReason, type FoundHostRow,
 } from './found-hosts.js'
 
@@ -56,19 +56,27 @@ export function settleFoundHostsDoc(
   const decided: FoundHostDecision[] = []
   const rows: Rows = { ...rowsOf(doc) }
   const runOn = (doc.expose as { run_on?: unknown } | undefined)?.run_on
+  let recorded = false
   for (const [alias, row] of Object.entries(rows)) {
-    if (!row || typeof row !== 'object' || row.discovered !== true || isFoundHostAnswer(row.connect)) continue
+    if (!row || typeof row !== 'object' || row.discovered !== true) continue
+    if (isFoundHostAnswer(row.connect)) {
+      // A row answered before the scan record existed: from now on it follows ~/.ssh/config
+      // when its values still equal it (a value that differs may be the person's edit).
+      const next = recordScanIfSame(row, ctx.scanned.get(alias))
+      if (next !== row) { rows[alias] = next; recorded = true }
+      continue
+    }
     const d = decideFoundHost(alias, row, { facts: ctx.facts, runOn, scanned: ctx.scanned.get(alias), persisted: true })
-    rows[alias] = withFoundHostAnswer(row, d.answer, 'walnut')
+    rows[alias] = withFoundHostAnswer(row, d.answer, 'walnut', ctx.scanned.get(alias))
     decided.push({ alias, ...d })
   }
   const marker = doc.hosts_found as { asking_since?: unknown } | undefined
   const firstStart = !(typeof marker?.asking_since === 'string' && marker.asking_since)
   if (firstStart) {
     // Found hosts an older Walnut kept only in memory, merged on: one in use is kept a yes.
-    const known = new Set(Object.values(rows).map((h) => String(h?.hostname ?? '').toLowerCase()))
+    const known = knownFoundTargets(Object.values(rows))
     for (const [alias, host] of ctx.scanned) {
-      if (ctx.reserved?.has(alias) || rows[alias] || known.has(host.hostname.toLowerCase())) continue
+      if (ctx.reserved?.has(alias) || rows[alias] || foundTargetTaken(known, host)) continue
       const row: FoundHostRow = {
         hostname: host.hostname,
         ...(host.user ? { user: host.user } : {}),
@@ -78,13 +86,13 @@ export function settleFoundHostsDoc(
       }
       const d = decideFoundHost(alias, row, { facts: ctx.facts, runOn, scanned: host, persisted: false })
       if (d.answer !== 'yes') continue
-      rows[alias] = withFoundHostAnswer(row, 'yes', 'walnut')
-      known.add(host.hostname.toLowerCase())
+      rows[alias] = withFoundHostAnswer(row, 'yes', 'walnut', host)
+      addFoundTarget(known, host.hostname, host.port, host.user)
       decided.push({ alias, ...d, added: true })
     }
     doc.hosts_found = { ...(marker && typeof marker === 'object' ? marker : {}), asking_since: ctx.now.toISOString() }
   }
-  if (decided.length > 0) doc.hosts = rows
+  if (decided.length > 0 || recorded) doc.hosts = rows
   return decided
 }
 
@@ -210,11 +218,15 @@ export type AnswerFoundHostResult =
 export async function answerFoundHost(host: string, answer: unknown): Promise<AnswerFoundHostResult> {
   if (answer !== 'yes' && answer !== 'not_now') return { ok: false, status: 400, error: 'answer is "yes" or "not_now"', code: 'bad_answer' }
   if ((await import('../server-role.js')).isFollower()) return { ok: false, status: 409, error: 'Answer this on the computer that keeps the hosts.', code: 'not_here' }
-  const { getConfig, migrateStoredConfig } = await import('../config-manager.js')
+  const [{ getConfig, migrateStoredConfig }, { scanSshConfig }, { realSshReachAllowed }] = await Promise.all([
+    import('../config-manager.js'), import('../ssh-config-scanner.js'), import('../../lib/real-ssh-guard.js'),
+  ])
   const hosts = (await getConfig()).hosts ?? {}
   const def = Object.hasOwn(hosts, host) ? hosts[host] as FoundHostRow | undefined : undefined
   if (!def) return { ok: false, status: 404, error: `Unknown host: ${host}`, code: 'unknown_host' }
   if (def.discovered !== true) return { ok: false, status: 409, error: `${host} was added by hand, not found in ~/.ssh/config.`, code: 'not_found_host' }
+  // What ~/.ssh/config says now: the written row records it and keeps following it.
+  const scan = realSshReachAllowed() ? (await scanSshConfig().catch(() => new Map<string, DiscoveredHost>())).get(host) : undefined
   await migrateStoredConfig((doc) => {
     const rows: Rows = { ...rowsOf(doc) }
     const stored = rows[host]
@@ -223,8 +235,9 @@ export async function answerFoundHost(host: string, answer: unknown): Promise<An
       ...(def.user ? { user: def.user } : {}),
       ...(def.port ? { port: def.port } : {}),
       ...(def.label ? { label: def.label } : {}),
+      ...(def.scanned !== undefined ? { scanned: def.scanned } : {}),
     }
-    const next = withFoundHostAnswer(base, answer)
+    const next = withFoundHostAnswer(base, answer, 'person', scan)
     if (JSON.stringify(next) === JSON.stringify(stored)) return false
     rows[host] = next
     doc.hosts = rows

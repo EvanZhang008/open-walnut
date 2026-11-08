@@ -193,8 +193,19 @@ export async function postSessionMessage(req: Request, res: Response, next: Next
     const { sendMessageToSession, findQueuedMessage, settledLineUuid } = await import('../../core/session-message-queue.js')
     // The same repeat on the primary: a row still queued or already settled under this id is a
     // retry, and it must not stop the turn the first send started.
+    const settledLine = clientMessageId && !(await findQueuedMessage(clientMessageId))
+      ? await settledLineUuid(clientMessageId) : undefined
+    // A repeat after a lost 202 of a line that already ran: nothing to send, and a
+    // fresh enqueue would spawn a CLI for a turn that never comes (core/sessions/resend-already-ran.ts).
+    if (settledLine && clientMessageId) {
+      const { resendAlreadyRan } = await import('../../core/sessions/resend-already-ran.js')
+      if (await resendAlreadyRan({ sessionId, host: record.host, lineUuid: settledLine, messageIds: [clientMessageId] })) {
+        res.status(202).json({ messageId: clientMessageId, alreadyDelivered: true })
+        return
+      }
+    }
     const interruptNow = interrupt && !(clientMessageId
-      && ((await findQueuedMessage(clientMessageId)) || (await settledLineUuid(clientMessageId))))
+      && ((await findQueuedMessage(clientMessageId)) || settledLine))
     const msg = await sendMessageToSession(sessionId, text, {
       source: routeSource('mobile', req.headers),
       taskId: record.taskId,

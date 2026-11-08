@@ -64,11 +64,14 @@ interface HeadingProps {
   icon?: ReactNode;
   /** The divider look the status sections have, "Label (N) ---- >" (status-sections.css). */
   divider?: { count?: number };
+  /** How many items the section holds, "Pinned (4)", so a folded section still says what is in it
+   *  (2026-11-11 review: folded Pinned and Projects headers said nothing). A divider carries its own. */
+  count?: number;
   onClick: () => void;
   actions?: ContextMenuItem[];
 }
 
-export function NavigationHeading({ id, label, className = '', collapsed, icon, divider, onClick, actions = [] }: HeadingProps) {
+export function NavigationHeading({ id, label, className = '', collapsed, icon, divider, count, onClick, actions = [] }: HeadingProps) {
   const order = useContext(NavigationOrder);
   const [tabBar, setTabBar] = useNavigationPreference(TASK_SHORTCUTS_KEY);
   const [menu, setMenu] = useState<{ x: number; y: number; origin: HTMLElement } | null>(null);
@@ -101,7 +104,7 @@ export function NavigationHeading({ id, label, className = '', collapsed, icon, 
         onDragStart={event => { event.stopPropagation(); event.dataTransfer.setData(`text/${order?.storageKey}`, id); event.dataTransfer.effectAllowed = 'move'; }}>
         {icon && !divider && <span className="navigation-icon" aria-hidden="true">{icon}</span>}
         <span className="navigation-label">{label}</span>
-        {divider?.count !== undefined && <span className="navigation-heading-count">{divider.count}</span>}
+        {(divider ? divider.count : count) !== undefined && <span className="navigation-heading-count">{divider ? divider.count : count}</span>}
         {divider && <span className="navigation-heading-rule" aria-hidden="true" />}
         {collapsed !== undefined && <NavigationChevron collapsed={collapsed} />}
       </button>

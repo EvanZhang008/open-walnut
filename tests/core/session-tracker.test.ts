@@ -29,6 +29,7 @@ vi.mock('../../src/providers/daemon-connection.js', () => ({
 
 import {
   createSessionRecord,
+  deleteSessionRecords,
   listSessions,
   listPendingSessionStops,
   listNonTerminalSessions,
@@ -427,6 +428,39 @@ describe('getSessionByClaudeId', () => {
   it('returns null for non-existent ID', async () => {
     const result = await getSessionByClaudeId('nonexistent');
     expect(result).toBeNull();
+  });
+});
+
+describe('deleteSessionRecords', () => {
+  it('removes only the deleted session cancellation snapshots, including orphaned snapshots on retry', async () => {
+    const { SESSION_QUEUE_FILE } = await import('../../src/constants.js');
+    const { resetCache, readQueueFileFresh } = await import('../../src/core/session-queue-store.js');
+    const { cancelledRows } = await import('../../src/core/session-queue-lines.js');
+    const row = (sessionId: string) => ({
+      id: `qm-${sessionId}`, sessionId, message: 'Cancelled private message',
+      status: 'processing', enqueuedAt: new Date().toISOString(),
+      lineUuid: '11111111-1111-4111-8111-111111111111',
+    });
+    await createSessionRecord('deleted-cancellation', 'deleted-task', 'project');
+    await createSessionRecord('retained-cancellation', 'retained-task', 'project');
+    const retained = row('retained-cancellation');
+    await fsp.writeFile(SESSION_QUEUE_FILE, JSON.stringify({
+      version: 1, queues: { 'retained-cancellation': [retained] },
+      cancelled: Object.fromEntries(['deleted-cancellation', 'retained-cancellation', 'orphaned-cancellation'].map(sid =>
+        [sid, { [row(sid).lineUuid]: { rows: [row(sid)] } }],
+      )),
+    }));
+    resetCache();
+    try {
+      expect(await cancelledRows('deleted-cancellation')).toHaveLength(1);
+      expect(await deleteSessionRecords(new Set(['deleted-cancellation']), 'test')).toBe(1);
+      expect(await cancelledRows('deleted-cancellation')).toEqual([]);
+      expect(await cancelledRows('retained-cancellation')).toHaveLength(1);
+      expect((await readQueueFileFresh()).queues['retained-cancellation']).toEqual([retained]);
+      expect(await getSessionByClaudeId('retained-cancellation')).not.toBeNull();
+      expect(await deleteSessionRecords(new Set(['orphaned-cancellation']), 'test')).toBe(0);
+      expect(await cancelledRows('orphaned-cancellation')).toEqual([]);
+    } finally { resetCache(); }
   });
 });
 

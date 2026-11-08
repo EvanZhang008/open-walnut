@@ -18,6 +18,7 @@
  * (same style as launcher-pin-tier.test.ts).
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 
 class FakeStorage {
   private store = new Map<string, string>();
@@ -431,6 +432,29 @@ describe('degrades safely instead of throwing', () => {
     );
     expect(loadFileScroll(undefined, '/repo/a.md')).toBeNull();
     expect(loadFileScroll(undefined, '/repo/b.md')).toBeNull();
+  });
+
+  it('every file view write retains the current mode for its own path, including cleanup', () => {
+    const read = (rel: string) => readFileSync(new URL(rel, import.meta.url), 'utf8');
+    const view = read('../../web/src/components/common/FileContentView.tsx');
+    // The text views' writes live in the reading-place hook; the HTML preview's own scroll
+    // writes in preview-frame.ts (its cleanup flush runs when Source turns it off).
+    const hook = read('../../web/src/components/common/use-file-reading-place.ts');
+    const frame = read('../../web/src/components/common/preview-frame.ts');
+    const linesOf = (text: string) => text.split('\n').filter((l) => /\bsaveFileScroll\(/.test(l));
+    expect(linesOf(view)).toHaveLength(0);
+    const frameWrites = linesOf(frame);
+    expect(frameWrites).toHaveLength(2);
+    for (const l of frameWrites) expect(l).toContain('source: sourceModeRef.current.key === key ? sourceModeRef.current.source :');
+    const hookWrites = linesOf(hook);
+    expect(hookWrites).toHaveLength(2);
+    // The hook's persist asks the view for the mode chosen for THIS path.
+    expect(hookWrites.filter((l) => l.includes('source: chosenRef.current()'))).toHaveLength(1);
+    expect(view).toMatch(/sourceChosen: \(\) => \{\s*const m = sourceModeRef\.current;\s*return m\.key === `\$\{host \?\? 'local'\} \$\{filePath\}` \? m\.source : showSourceRef\.current;/);
+    // A switch records the new mode for the path before the hook writes it, then shows it.
+    expect(hookWrites.filter((l) => l.includes('source: toSource'))).toHaveLength(1);
+    expect(view).toMatch(/sourceModeRef\.current = \{ key, source: toSource \};[\s\S]{0,250}noteSwitch\(toSource\);\s*setShowSource\(toSource\);/);
+    expect(view).toMatch(/sourceModeRef\.current = \{ key: `\$\{host \?\? 'local'\} \$\{filePath\}`, source \};\s*setShowSource\(source\);/);
   });
 
   it('a throwing localStorage (Safari private mode / quota) never propagates', async () => {

@@ -15,6 +15,7 @@
  *    re-click the file every time, and it always reopened scrolled to the top.
  */
 import { test, expect, type Page } from '@playwright/test'
+import { goToSessionFolder, isolateUiPrefs } from './todo-panel-helpers'
 
 const SESSION_ID = 'pw-vscode-session'
 const TASK_ID = 'pw-task-vscode'
@@ -38,6 +39,7 @@ async function openFiles(panel: ReturnType<Page['locator']>) {
   await panel.getByRole('button', { name: 'Files', exact: true }).click()
   const explorer = panel.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 10_000 })
+  await goToSessionFolder(explorer)
   return explorer
 }
 
@@ -55,7 +57,11 @@ function mdPreview(explorer: ReturnType<Page['locator']>) {
   return explorer.locator('.fv-md-preview, .fv-wysiwyg-editor')
 }
 
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page, baseURL }) => {
+  // This spec's own reading places only: a file opens at the place it was last read at and holds
+  // it for its first seconds (use-file-reading-place.ts), and the shared fixture's ui-prefs would
+  // bring in a place another spec left for the same fixture file.
+  await isolateUiPrefs(page)
   // Pin the Files tree EXPANDED before first render: the collapse pref key
   // syncs to the SHARED fixture server (ui-prefs), so a parallel run of
   // file-explorer-tree-collapse.spec.ts would otherwise boot this page with
@@ -63,7 +69,8 @@ test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     try { localStorage.setItem('open-walnut-file-explorer-tree-collapsed', '0') } catch { /* off */ }
   })
-  await page.goto('/')
+  await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
+  await page.getByRole('link', { name: 'Open Walnut' }).click()
   await page.waitForLoadState('networkidle')
 })
 

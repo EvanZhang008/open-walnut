@@ -34,6 +34,7 @@ const ANSWERERS = /\b(respondToPermission|respondToPermissionRequest|respondPerm
 /** A message that carries pictures and no words: an answer's pictures sent on their own. */
 const PICTURES_ALONE = [
   /session:send['"][^\n]*message:\s*''/,
+  /sendSessionMessage\([^\n]*message:\s*''/,
   /\.send\(\s*""\s*,\s*images:/,
   /sendAnswerPictures/,
 ]

@@ -19,6 +19,7 @@
  * listing and on the file payload).
  */
 import { test, expect, type Page, type Route } from '@playwright/test'
+import { goToSessionFolder } from './todo-panel-helpers'
 
 const SESSION_ID = 'pw-vscode-session'
 const TASK_ID = 'pw-task-vscode'
@@ -41,7 +42,7 @@ async function openFilesPanel(page: Page) {
   return explorer
 }
 
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page, baseURL }) => {
   // The open folders are a synced layout preference (ui-prefs-sync.ts) that every test
   // on the fixture server shares: a folder an earlier test left open is open here too,
   // and a click on it closes it. Each test here starts from no synced prefs and writes none.
@@ -52,13 +53,16 @@ test.beforeEach(async ({ page }) => {
     try { localStorage.setItem('open-walnut-file-explorer-tree-collapsed', '0') } catch { /* off */ }
     ;(window as unknown as { __filesRetryMs?: number }).__filesRetryMs = 500
   })
-  await page.goto('/')
+  await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
+  await page.getByRole('link', { name: 'Open Walnut' }).click()
   await page.waitForLoadState('networkidle')
 })
 
 test('a root listing answered "Reconnecting": the tree asks again on its own and shows the files once the host is back', async ({ page }) => {
   let rootAsks = 0
+  const rootPaths: string[] = []
   await page.route('**/api/files/list?**', async (route) => {
+    rootPaths.push(new URL(route.request().url()).searchParams.get('path') ?? '')
     rootAsks += 1
     // The host is back from the third ask on.
     if (rootAsks <= 2) {
@@ -69,7 +73,8 @@ test('a root listing answered "Reconnecting": the tree asks again on its own and
   const explorer = await openFilesPanel(page)
   await expect(explorer.locator('.sfe-error')).toHaveText('Reconnecting to Cloud', { timeout: 10_000 })
   // No click: the retry brings the files, and the sentence goes.
-  await expect(explorer.locator('.sfe-name', { hasText: 'refresh-target.txt' })).toBeVisible({ timeout: 10_000 })
+  await expect(explorer.locator('.sfe-name').filter({ hasText: /^projects$/ })).toBeVisible({ timeout: 10_000 })
+  expect(rootPaths.slice(0, 3)).toEqual(['~', '~', '~'])
   await expect(explorer.locator('.sfe-error')).toHaveCount(0)
   expect(rootAsks).toBeGreaterThanOrEqual(3)
   // Listed: the clock stops.
@@ -86,6 +91,7 @@ test('any other root failure is not polled', async ({ page }) => {
   })
   const explorer = await openFilesPanel(page)
   await expect(explorer.locator('.sfe-error')).toContainText('permission denied', { timeout: 10_000 })
+  expect(asks).toEqual(Array(asks.length).fill('~'))
   const seen = asks.length
   // Six periods of the test's 500ms clock. The panel may still make its own
   // second first load (one more ask, once); a clock would ask about six times.
@@ -134,6 +140,7 @@ for (const sentence of ['Reconnecting to Cloud', "Can't reach Cloud right now."]
   test(`a folder and a file opened while the host is down ("${sentence}") show on their own once it is back`, async ({ page }) => {
     const { down, asks } = await holdHost(page, sentence)
     const explorer = await openFilesPanel(page)
+    await goToSessionFolder(explorer)
     const row = rowIn(explorer)
     await expect(row('refresh-target.txt')).toBeVisible({ timeout: 15_000 })
 
@@ -185,6 +192,7 @@ test('a Refresh that did not get through while the host was down: every folder a
   const sentence = "Can't reach Cloud right now."
   const { down } = await holdHost(page, sentence)
   const explorer = await openFilesPanel(page)
+  await goToSessionFolder(explorer)
   const row = rowIn(explorer)
   await expect(row('refresh-target.txt')).toBeVisible({ timeout: 15_000 })
   await row('report').click()
@@ -206,6 +214,10 @@ test('a tree reopened from its cache while the host is down: the folders\' "last
   const { down } = await holdHost(page, 'Reconnecting to Cloud')
   const explorer = await openFilesPanel(page)
   const row = rowIn(explorer)
+  // Stay rooted at HOME, opening its actual fixture folders through the tree.
+  await expect(row('projects')).toBeVisible({ timeout: 15_000 })
+  await row('projects').click()
+  await row('editor-fixture').click()
   await expect(row('refresh-target.txt')).toBeVisible({ timeout: 15_000 })
   // Open a folder: it is remembered as open and its rows are cached.
   await row('report').click()
@@ -214,13 +226,14 @@ test('a tree reopened from its cache while the host is down: the folders\' "last
   await panel.getByRole('button', { name: 'Files', exact: true }).click()
   await expect(panel.locator('.session-file-explorer')).toHaveCount(0)
 
-  // Reopened while the host is down: the cached rows paint, each folder notes it.
+  // Reopened at HOME while the host is down: cached roots and folders paint.
   down.on = true
   await panel.getByRole('button', { name: 'Files', exact: true }).click()
   const reopened = panel.locator('.session-file-explorer')
   await expect(rowIn(reopened)('summary.html')).toBeVisible({ timeout: 10_000 })
   const notes = reopened.locator('.sfe-notice').filter({ hasText: 'Showing the last known contents' })
-  await expect(notes).toHaveCount(2, { timeout: 10_000 })
+  // HOME, projects, editor-fixture and report each keep their last known rows.
+  await expect(notes).toHaveCount(4, { timeout: 10_000 })
 
   down.on = false
   await expect(notes).toHaveCount(0, { timeout: 10_000 })

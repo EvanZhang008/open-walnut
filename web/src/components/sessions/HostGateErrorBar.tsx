@@ -23,6 +23,7 @@ import { useHostActions, RETRY_FAILED_TEXT, CHECK_FAILED_TEXT } from '@/hooks/us
 import { HostFailureText } from '@/components/hosts/HostFailureText';
 import { InlineCodeText } from '@/components/common/InlineCodeText';
 import { HostCommands } from '@/components/hosts/HostCommands';
+import { demoHostMessage } from '@/utils/demo-generation';
 import { StableButton } from '@/components/common/HostProblemRows';
 import { openHostSettings } from '@/utils/host-settings-nav';
 import '@/styles/attention-banner.css';
@@ -114,7 +115,7 @@ export function HostGateErrorBar({ gate, draftHost, label, onClear, onStartAnywa
         )}
         {problem?.type === 'readiness' && (
           <>
-            <span className="session-error-banner-text"><InlineCodeText text={problem.problem.message} /></span>
+            <span className="session-error-banner-text"><InlineCodeText text={demoHostMessage(problem.problem.message, problem.problem.commands)} /></span>
             {problem.problem.commands.length > 0 && <HostCommands commands={problem.problem.commands} />}
           </>
         )}

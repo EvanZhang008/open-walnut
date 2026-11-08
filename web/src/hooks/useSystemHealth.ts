@@ -7,12 +7,20 @@ import { useEvent } from './useWebSocket';
 import type { LocalClaudeStatus } from '@/api/local-claude';
 import { sharedGet } from '@/api/shared-get';
 import { afterFirstScreen } from '@/utils/after-first-screen';
+import { noteLocalAgentHealth } from '@/utils/local-agent-runnable';
 
 export interface GitSyncHealth {
   protected: boolean;
   error?: string;
   lastCommitAt?: string;
   consecutiveFailures: number;
+  /** This server keeps no backup by design (the Demo, a test server, a replica): never a problem to show. */
+  off?: 'demo' | 'test' | 'copy';
+}
+
+/** Whether the data backup needs a look: unprotected or failing, and only where a backup should run. */
+export function gitSyncNeedsLook(s: GitSyncHealth): boolean {
+  return !s.off && (!s.protected || s.consecutiveFailures >= 3);
 }
 
 export interface DaemonHealth {
@@ -72,6 +80,7 @@ export function useSystemHealth() {
       }), { invalidateOn: ['system:health'] })
       .then((data: SystemHealth) => {
         setHealth(data);
+        noteLocalAgentHealth(data);
         setLoading(false);
       })
       .catch(() => {
@@ -94,6 +103,7 @@ export function useSystemHealth() {
   useEvent('system:health', useCallback((data: unknown) => {
     if (data && typeof data === 'object') {
       setHealth(data as SystemHealth);
+      noteLocalAgentHealth(data as SystemHealth);
     }
   }, []));
 
@@ -104,7 +114,7 @@ export function useSystemHealth() {
     }
   }, []));
 
-  const gitSyncFailing = !gitSync.protected || gitSync.consecutiveFailures >= 3;
+  const gitSyncFailing = gitSyncNeedsLook(gitSync);
   const hasIssues = gitSyncFailing;
 
   // Setup is "complete" once the Personal AI has a provider AND the CLI is present,

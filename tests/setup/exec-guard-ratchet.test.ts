@@ -55,6 +55,7 @@ const PINNED_PATH_FIXTURES = new Set(['tests/e2e/browser/session-commit-server.t
 
 /** Literal PATH values handed to code, per file, as of the guard's arrival. */
 const LITERAL_PATH_BUDGET: Record<string, number> = {
+  'tests/commands/demo-home.test.ts': 1, // fake environment passed only to demoChildEnv, never a child process
   'tests/commands/web-session-identity.test.ts': 4,
   'tests/core/cloud-setup/user-data.test.ts': 1,
   'tests/core/diagnostics/fakes.ts': 1,
@@ -112,6 +113,9 @@ const LITERAL_PATH_BUDGET: Record<string, number> = {
   'tests/unit/ephemeral-snapshot.test.ts': 1,
   'tests/unit/mcp-cli-args.test.ts': 2,
   'tests/unit/peers/walnut-user-shim.test.ts': 1,
+  'tests/web/demo-generation.test.ts': 1, // sign-in command text is compared, never executed
+  'tests/web/demo-host-commands.test.ts': 1, // sign-in command text is compared, never executed
+  'tests/web/demo-sign-in-copy.test.ts': 1, // sign-in command text is rendered, never executed
   'tests/web/routes/diagnostics.test.ts': 1,
   'tests/web/terminal/dtach-probe-classifier.test.ts': 1,
 }

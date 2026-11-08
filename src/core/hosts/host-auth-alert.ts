@@ -40,7 +40,7 @@ import { WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { readJsonFile, writeJsonFile } from '../../utils/fs.js'
 import { CLOUD_BOX_HOST_ALIAS } from './cloud-box-host.js'
-import { classifyHostConnectError } from '../sessions/host-connect-hint.js'
+import { classifyHostConnectError, missingKeyOf } from '../sessions/host-connect-hint.js'
 import { HOST_SIGN_IN, genericSignInStep } from '../human-inbox/walnut-letters/host-sign-in.js'
 import type { LetterLang } from '../human-inbox/walnut-letters/languages.js'
 
@@ -119,9 +119,14 @@ interface EpisodeFile { version: 1; episodes: Episode[] }
 export function signInLetter(
   hosts: Array<{ label: string; error?: string }>,
   hint?: string,
-  opts: { retries?: boolean; lang?: LetterLang } = {},
+  opts: { retries?: boolean; lang?: LetterLang; key?: true } = {},
 ): { subject: string; markdown: string } {
-  const { subject, markdown } = HOST_SIGN_IN.render(opts.lang ?? 'en', { hosts, ...(hint !== undefined ? { hint } : {}), ...(opts.retries ? { retries: true } : {}) })
+  // A key refusal is the host's own problem: its step is about the key (the one named missing, when one is), never the login hint.
+  const keyFile = opts.key ? hosts.map((h) => missingKeyOf(h.error)).find(Boolean) : undefined
+  const { subject, markdown } = HOST_SIGN_IN.render(opts.lang ?? 'en', {
+    hosts, ...(hint !== undefined ? { hint } : {}), ...(opts.retries ? { retries: true } : {}),
+    ...(opts.key ? { key: keyFile ? { keyFile } : {} } : {}),
+  })
   return { subject, markdown }
 }
 
@@ -278,7 +283,7 @@ export function createHostAuthAlert(deps: HostAuthAlertDeps): HostAuthAlert {
     const letter = signInLetter(
       hosts.map(([, f]) => ({ label: f.label, ...(f.error ? { error: f.error } : {}) })),
       await deps.loginHint().catch(() => undefined),
-      { retries: key === 'login', lang: await deps.language?.().catch(() => 'en' as const) ?? 'en' },
+      { retries: key === 'login', ...(key === 'login' ? {} : { key: true as const }), lang: await deps.language?.().catch(() => 'en' as const) ?? 'en' },
     )
     try {
       ep.letterId = await deps.send({ ...letter, opKey: ep.opKey })

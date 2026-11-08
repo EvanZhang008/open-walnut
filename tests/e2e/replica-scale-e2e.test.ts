@@ -25,7 +25,7 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { ADVERTISED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
-import { BUN, HOST_KEY, ROOT, startReplicaCluster, waitFor, type ReplicaCluster, type SeedMac, type Twin } from '../helpers/replica-cluster.js'
+import { BUN, HOST_KEY, ROOT, stallsOutsidePause, startReplicaCluster, waitFor, type ReplicaCluster, type SeedMac, type SignalWindow, type Twin } from '../helpers/replica-cluster.js'
 
 const TASKS = 6_500
 const SESSIONS = 5_000
@@ -186,7 +186,8 @@ describe(`R17: a host replica at real density (${TWIN} twin)`, () => {
       // view can still say away from that sleep while its daemon heard the Mac just now, and a
       // write is forwarded to the Mac this test stops (leader_unsure).
       await c.waitBack(token)
-      c.sleepMac()
+      const stopped = c.sleepMac()
+      let woke: SignalWindow
       try {
         await c.waitAway(token, 90_000)
         // Away for writes too: the quiet window has passed (`away`), not one failed stream
@@ -202,9 +203,9 @@ describe(`R17: a host replica at real density (${TWIN} twin)`, () => {
           fs.writeFileSync(file, base.replace(`Big ${i} line 7 of the drill.`, `Big ${i} line 7, edited on the Mac.`))
         }
       } finally {
-        c.wakeMac()
+        woke = c.wakeMac()
       }
-      const wokeAt = new Date().toISOString()
+      process.stdout.write(`replica-scale-e2e: controlled pause ${JSON.stringify({ stopped, woke })}\n`)
       const copies = () => fs.readdirSync(path.join(vault, 'Acme big')).filter((n) => /^Big \d+ \(conflict .+\)\.md$/.test(n))
       // Copies are written before the winning note. Wait for the apply receipt, not that intermediate file.
       const applied = () => new Set(macLines(c, 'offline handover: note record applied')
@@ -225,9 +226,11 @@ describe(`R17: a host replica at real density (${TWIN} twin)`, () => {
       // The Mac drained 5 MB of notes with its event loop answering throughout.
       // The recorder reports the intentional SIGSTOP only after waking. A real CPU/GC
       // hold, or any hold starting after wake, still fails this drain check.
-      const stalls = macLines(c, 'event-loop stall flight record').filter((l) => String(l.time) >= wokeAt
-        && !(Date.parse(String(l.holdStart)) < Date.parse(wokeAt)
+      const records = macLines(c, 'event-loop stall flight record').filter((l) => Date.parse(String(l.time)) >= stopped.before
+        && !(Date.parse(String(l.holdStart)) < woke.after
           && l.hold?.verdict === 'off-cpu' && l.hold?.holdCpuMs < 250))
+      const stalls = stallsOutsidePause(records, stopped, woke)
+      process.stdout.write(`replica-scale-e2e: pause flight records ${JSON.stringify(records)}\n`)
       expect(stalls, JSON.stringify(stalls.slice(0, 2))).toHaveLength(0)
     }, 600_000)
   })

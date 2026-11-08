@@ -16,6 +16,8 @@
  * bars as a slow pulse instead (`WAIT_LINE_CLASS`), for the same reason.
  */
 
+import { clippingAncestors } from './clip-ancestors';
+
 export interface BoxLike {
   left: number;
   top: number;
@@ -128,15 +130,13 @@ export function overflowClipOf(range: Range, within: Element | null): BoxLike | 
   const view = range.startContainer.ownerDocument?.defaultView;
   if (!view) return null;
   let clip: BoxLike | null = null;
-  const start = range.commonAncestorContainer;
-  for (let el: Element | null = start.nodeType === 1 ? start as Element : start.parentElement; el && el !== within; el = el.parentElement) {
-    const cs = view.getComputedStyle(el);
-    if (cs.overflowX !== 'visible' || cs.overflowY !== 'visible') {
-      const r = el.getBoundingClientRect();
-      clip = clip
-        ? { left: Math.max(clip.left, r.left), top: Math.max(clip.top, r.top), right: Math.min(clip.right, r.right), bottom: Math.min(clip.bottom, r.bottom) }
-        : { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
-    }
+  // Only the ancestors that really clip the passage (utils/clip-ancestors.ts): a fixed sheet
+  // inside a narrower column is not cut by that column.
+  for (const c of clippingAncestors(range.commonAncestorContainer, { self: true, stop: within })) {
+    const r = c.el.getBoundingClientRect();
+    clip = clip
+      ? { left: Math.max(clip.left, r.left), top: Math.max(clip.top, r.top), right: Math.min(clip.right, r.right), bottom: Math.min(clip.bottom, r.bottom) }
+      : { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
   }
   return clip;
 }

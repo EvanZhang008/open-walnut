@@ -82,7 +82,8 @@ const FILES: Record<string, Entry> = {
   'src/core/hosts/ssh-cert-expiry-alert.ts': { count: 1, kind: 'read', why: '`ssh host true`: does the sign-in work' },
   'src/providers/ssh-credential-evidence.ts': { count: 2, kind: 'local', why: '`ssh -G`, reads this machine\'s ssh config' },
   'src/core/hosts/ssh-key-of.ts': { count: 1, kind: 'local', why: '`ssh -G <alias>`, reads which key this machine\'s ssh offers a host (first-run walkthrough)' },
-  'src/providers/stream-lane.ts': { count: 1, kind: 'transport', why: 'a port forward to the connection\'s daemon (`cat >/dev/null`)' },
+  'src/core/hosts/ssh-resolve.ts': { count: 1, kind: 'local', why: '`ssh -G <alias>`: reads this machine\'s ssh config to prefill Add host' },
+  'src/providers/stream-lane.ts': { count: 2, kind: 'transport', why: 'a port forward to the connection\'s daemon (`cat >/dev/null`); one spawn, the other call its test seam (deps.spawn)' },
   'src/providers/transfer-core.ts': { count: 2, kind: 'user-directed', why: 'a task transfer the person asked for: `ssh true` and an scp read into a local temp file' },
   'src/web/terminal/dtach-lifecycle.ts': { count: 1, kind: 'gated', why: 'its socket dir is the test server\'s term dir (REMOTE_DTACH_SOCKET_DIR)' },
   'src/web/terminal/dtach-provision.ts': { count: 2, kind: 'gated', why: 'probe and install use REMOTE_DTACH_OWN_BIN under the test server\'s root' },
@@ -135,7 +136,7 @@ describe('remote write paths ratchet', () => {
     const dc = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-connection.ts'), 'utf-8')
     expect(dc).toMatch(/isolatedProbeOpts\(iso\)/)
     expect(dc).toMatch(/if \(this\.isolation\.mode === 'isolated'\) return \{ managed: false/)
-    expect(dc).toMatch(/if \(this\.isolation\.mode === 'isolated'\) return 'it is a test server\\'s isolated daemon'/)
+    expect(dc).toMatch(/if \(this\.isolation\.mode === 'isolated'\) return 'it is an isolated daemon that ends with the Walnut that started it'/)
     expect(dc).toMatch(/iso\.mode === 'shared' \|\| \(iso\.mode === 'isolated' && iso\.replica\)\) void import\('\.\.\/core\/host-server\/index\.js'\)/)
     expect(dc).toMatch(/isolatedDaemonEnv\(isolatedRootOfDaemonDir\(this\._remoteDir\), iso\.key\)/)
     // The update records on disk are the real server's: every read of one goes through the one

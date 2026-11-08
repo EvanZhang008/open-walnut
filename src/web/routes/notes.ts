@@ -30,14 +30,16 @@ export async function readGlobalNotes(): Promise<{ content: string; contentHash:
   // A host replica reads the daemon's copy (it keeps no vault of its own): never its disk.
   const fromCopy = await hostReplicaGlobalNotes()
   if (fromCopy) return fromCopy
-  let content = ''
-  try {
-    content = await fsp.readFile(GLOBAL_NOTES_FILE, 'utf-8')
-  } catch (err: any) {
-    if (err.code !== 'ENOENT') throw err
-    // File doesn't exist yet — return empty string
-  }
-  return { content, contentHash: computeContentHash(content) }
+  return withUserFileLock(GLOBAL_NOTES_FILE, async () => {
+    let content = ''
+    try {
+      content = await fsp.readFile(GLOBAL_NOTES_FILE, 'utf-8')
+    } catch (err: any) {
+      if (err.code !== 'ENOENT') throw err
+      // File doesn't exist yet — return empty string
+    }
+    return { content, contentHash: computeContentHash(content) }
+  })
 }
 
 /** The global notes from a host replica's copy (replica/notes-source.ts), null anywhere else. */

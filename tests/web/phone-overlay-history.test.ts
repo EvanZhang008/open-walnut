@@ -94,17 +94,28 @@ describe('store against an async history', () => {
   let history: FakeHistory
   let closes: string[]
   let popListeners: ((ev: { state: unknown }) => void)[]
+  let phoneNow: boolean
+  let mediaListeners: ((ev: { matches: boolean }) => void)[]
   const g = globalThis as unknown as { window?: unknown }
+
+  /** The phone media query changes, as a resize or rotation fires it. */
+  const setPhone = (v: boolean) => { phoneNow = v; for (const l of [...mediaListeners]) l({ matches: v }) }
 
   beforeEach(() => {
     __resetPhoneOverlaysForTest()
     closes = []
     popListeners = []
+    phoneNow = true
+    mediaListeners = []
     history = new FakeHistory((state) => { for (const l of popListeners) l({ state }) })
     g.window = {
       history,
       get location() { return { href: history.entries[history.index].url } },
-      matchMedia: () => ({ matches: true, addEventListener() {}, removeEventListener() {} }),
+      matchMedia: () => ({
+        get matches() { return phoneNow },
+        addEventListener: (_t: string, fn: (ev: { matches: boolean }) => void) => { mediaListeners.push(fn) },
+        removeEventListener() {},
+      }),
       addEventListener: (type: string, fn: (ev: { state: unknown }) => void) => { if (type === 'popstate') popListeners.push(fn) },
     }
   })
@@ -203,6 +214,271 @@ describe('store against an async history', () => {
     await tick()
     expect(closes).toEqual([])
     expect(history.index).toBe(0)
+  })
+
+  const keep = (id: string) => open(id, { keepOnBreakpoint: true })
+  /** No overlay marker left anywhere on the browser's stack at or below where it is. */
+  const noGhost = () => {
+    expect(markerDepth(history.state)).toBe(0)
+    for (const x of history.entries.slice(0, history.index + 1)) expect(markerDepth(x.state)).toBe(0)
+  }
+
+  describe('leaving phone layout (a real media change)', () => {
+    it('closes a temporary layer, keeps a keepOnBreakpoint one, and leaves no ghost entry', async () => {
+      keep('session:a')
+      keep('viewer:files:a')
+      keep('file:/r/a.ts')
+      open('sheet:phase')
+      expect(history.index).toBe(4)
+      setPhone(false)
+      // The stack is empty at once; only the sheet's owner heard a close.
+      expect(phoneOverlayIds()).toEqual([])
+      expect(closes).toEqual(['sheet:phase:true'])
+      await tick()
+      expect(history.index).toBe(0)
+      noGhost()
+      expect(closes).toEqual(['sheet:phase:true'])
+    })
+
+    it('the owners releasing their dropped layers afterwards never call onClose or move history', async () => {
+      const s = keep('session:a')
+      const f = keep('file:/r/a.ts')
+      setPhone(false)
+      await tick()
+      const at = history.index
+      store.release(f)
+      store.release(s)
+      await tick()
+      expect(closes).toEqual([])
+      expect(history.index).toBe(at)
+      noGhost()
+    })
+
+    /** A previous route below the base, so an overshoot is seen (a clamp at 0 would hide it). */
+    const withPreviousRoute = () => {
+      history.entries = [{ state: { key: 'prev', idx: 0 }, url: 'https://w.test/prev' }, { state: { key: 'home', idx: 1 }, url: 'https://w.test/' }]
+      history.index = 1
+    }
+
+    it('a kept layer the user was already closing still closes when its back lands after the breakpoint', async () => {
+      keep('session:a')
+      const f = keep('file:/r/a.ts')
+      store.close(f) // back in flight
+      setPhone(false)
+      await tick()
+      await tick()
+      expect(closes).toEqual(['file:/r/a.ts:true'])
+      expect(history.index).toBe(0)
+      noGhost()
+    })
+
+    it('a breakpoint during a UI close unwinds from where that back lands: never past the base into the previous route', async () => {
+      withPreviousRoute()
+      keep('session:a')
+      const f = keep('file:/r/a.ts')
+      expect(history.index).toBe(3)
+      store.close(f) // back(-1) in flight
+      setPhone(false) // a go(-2) counted now would end on 'prev'
+      await tick()
+      await tick()
+      await tick()
+      expect(history.index).toBe(1)
+      expect((history.state as { key?: string }).key).toBe('home')
+      noGhost()
+      expect(closes).toEqual(['file:/r/a.ts:true'])
+    })
+
+    it('a go close (layers above) during a breakpoint also stops at the base', async () => {
+      withPreviousRoute()
+      const s = keep('session:a')
+      keep('viewer:files:a')
+      keep('file:/r/a.ts')
+      store.close(s) // go(-3) in flight
+      setPhone(false)
+      await tick()
+      await tick()
+      await tick()
+      expect(history.index).toBe(1)
+      noGhost()
+      // The go closed all three: every one of them still hears it.
+      expect([...closes].sort()).toEqual(['file:/r/a.ts:true', 'session:a:true', 'viewer:files:a:true'])
+    })
+
+    it('a layer reopened before the deferred unwind is pushed only after it, one above the base', async () => {
+      withPreviousRoute()
+      keep('session:a')
+      const f = keep('file:/r/a.ts')
+      store.close(f)
+      setPhone(false)
+      phoneNow = true
+      keep('session:a') // rotated straight back
+      await tick()
+      await tick()
+      await tick()
+      expect(phoneOverlayIds()).toEqual(['session:a'])
+      expect(markerId(history.state)).toBe('session:a')
+      expect(markerDepth(history.state)).toBe(1)
+      expect(history.index).toBe(2)
+      expect((history.entries[1].state as { key?: string }).key).toBe('home')
+      expect(history.length).toBe(3)
+    })
+
+    it('a layer reopened while the breakpoint back is in flight waits for it, then pushes once at depth 1', async () => {
+      keep('session:a')
+      keep('file:/r/a.ts')
+      setPhone(false)
+      // Rotated straight back: the owner reopens before history.go(-2) has landed.
+      phoneNow = true
+      keep('session:a')
+      expect(markerDepth(history.state)).toBe(2) // nothing pushed on the entry being left
+      await tick()
+      expect(phoneOverlayIds()).toEqual(['session:a'])
+      expect(markerId(history.state)).toBe('session:a')
+      expect(markerDepth(history.state)).toBe(1)
+      expect(history.length).toBe(2)
+      expect(closes).toEqual([])
+    })
+
+    it('repeated rotation never grows history and never closes a kept layer', async () => {
+      for (let round = 0; round < 3; round += 1) {
+        keep('session:a')
+        keep('viewer:files:a')
+        open('sheet:x')
+        setPhone(false)
+        await tick()
+        noGhost()
+        setPhone(true)
+        await tick()
+      }
+      expect(closes).toEqual(['sheet:x:true', 'sheet:x:true', 'sheet:x:true'])
+      expect(history.length).toBeLessThanOrEqual(4)
+      expect(history.index).toBe(0)
+    })
+  })
+
+  /**
+   * Releases in one tick (MainPage remounts a column with key={sid} when a session is
+   * replaced: S/viewer/file unmount in one commit while the new S mounts). Each release
+   * used to see the new S on top, plan a `go` it ignored, and leave its entry behind.
+   */
+  describe('releases settled together (replacement)', () => {
+    const withPreviousRoute = () => {
+      history.entries = [{ state: { key: 'prev', idx: 0 }, url: 'https://w.test/prev' }, { state: { key: 'home', idx: 1 }, url: 'https://w.test/' }]
+      history.index = 1
+    }
+    const settle = async () => { for (let i = 0; i < 4; i += 1) await tick() }
+    const keyNow = () => (history.state as { key?: string }).key
+    const markersAbove = () => history.entries.slice(2, history.index + 1).map((x) => markerId(x.state))
+
+    it('a replaced session with its view and file: one unwind, the new session one above home, no ghost', async () => {
+      withPreviousRoute()
+      const s = keep('session:old'); const v = keep('viewer:files:old'); const f = keep('file:/r/a.ts')
+      expect(history.index).toBe(4)
+      store.release(s); store.release(v); store.release(f)
+      keep('session:new')
+      await settle()
+      expect(phoneOverlayIds()).toEqual(['session:new'])
+      expect(history.index).toBe(2)
+      expect(markersAbove()).toEqual(['session:new'])
+      expect(markerDepth(history.state)).toBe(1)
+      expect(history.length).toBe(3)
+      expect(closes).toEqual([])
+      // Back from the new session lands home and closes it: no ghost in between.
+      history.back(); await settle()
+      expect(keyNow()).toBe('home')
+      expect(closes).toEqual(['session:new:true'])
+    })
+
+    it('a single replaced session leaves no ghost either', async () => {
+      withPreviousRoute()
+      const s = keep('session:old')
+      store.release(s)
+      keep('session:new')
+      await settle()
+      expect(history.index).toBe(2)
+      expect(markersAbove()).toEqual(['session:new'])
+    })
+
+    it('a parent released while its child lives: the child is re-seated right above what stays', async () => {
+      withPreviousRoute()
+      keep('session:a'); const v = keep('viewer:files:a'); keep('file:/r/a.ts')
+      store.release(v)
+      await settle()
+      expect(phoneOverlayIds()).toEqual(['session:a', 'file:/r/a.ts'])
+      expect(markersAbove()).toEqual(['session:a', 'file:/r/a.ts'])
+      expect(markerDepth(history.state)).toBe(2)
+      expect(closes).toEqual([])
+    })
+
+    it('StrictMode: the same ids released and reclaimed in one tick keep their entries and their order', async () => {
+      withPreviousRoute()
+      const s = keep('session:a'); const v = keep('viewer:files:a')
+      const pushes = history.pushes
+      store.release(s); store.release(v)
+      keep('viewer:files:a'); keep('session:a') // child effects remount first
+      await settle()
+      expect(history.pushes).toBe(pushes)
+      expect(phoneOverlayIds()).toEqual(['session:a', 'viewer:files:a'])
+      expect(history.index).toBe(3)
+    })
+
+    it('a release while a UI close is in flight: waits for that back, then unwinds once, never past home', async () => {
+      withPreviousRoute()
+      const s = keep('session:old'); const v = keep('viewer:files:old'); const f = keep('file:/r/a.ts')
+      store.close(f) // back(-1) in flight
+      store.release(s); store.release(v); store.release(f)
+      keep('session:new')
+      await settle()
+      expect(history.index).toBe(2)
+      expect(keyNow()).not.toBe('prev')
+      expect(markersAbove()).toEqual(['session:new'])
+    })
+
+    it('a release and a breakpoint in one tick: one unwind to home', async () => {
+      withPreviousRoute()
+      keep('session:a'); const v = keep('viewer:files:a')
+      store.release(v)
+      setPhone(false)
+      await settle()
+      expect(history.index).toBe(1)
+      expect(keyNow()).toBe('home')
+      expect(closes).toEqual([])
+    })
+
+    it('afterPhoneOverlayBacks waits for the release unwind', async () => {
+      withPreviousRoute()
+      keep('session:a'); const v = keep('viewer:files:a')
+      store.release(v)
+      const ran: number[] = []
+      afterPhoneOverlayBacks(() => ran.push(history.index))
+      expect(ran).toEqual([])
+      await settle()
+      expect(ran).toEqual([2])
+    })
+
+    it('an entry a navigate(replace) already wiped is not unwound again', async () => {
+      withPreviousRoute()
+      const s = keep('session:a')
+      history.replaceState({ key: 'replaced' }, '')
+      store.release(s)
+      await settle()
+      expect(history.index).toBe(2)
+      expect(keyNow()).toBe('replaced')
+    })
+
+    it('no history API: open, release and close do not throw and push nothing', async () => {
+      g.window = {
+        matchMedia: () => ({ get matches() { return true }, addEventListener() {}, removeEventListener() {} }),
+        addEventListener() {},
+      }
+      const s = keep('session:a')
+      store.release(s)
+      const t = open('sheet:x')
+      store.close(t)
+      await settle()
+      expect(closes).toEqual(['sheet:x:false'])
+      expect(phoneOverlayIds()).toEqual([])
+    })
   })
 
   it('a deep link replaces the first entry with its base, so back lands home', () => {

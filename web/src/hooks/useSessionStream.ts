@@ -858,7 +858,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
 
   // Handle session error (streaming done with error)
   useEvent('session:error', (data) => {
-    const { sessionId: sid, error, retryAt } = data as { sessionId: string; error?: string; retryAt?: string };
+    const { sessionId: sid, error, retryAt, saidOnMessage } = data as { sessionId: string; error?: string; retryAt?: string; saidOnMessage?: boolean };
     if (!sessionId || sid !== sessionId) return;
     // A send the host did not answer in time waits on a clock: no turn ran or ended,
     // and its bubble says why it waits (session:delivery-held), not an error row.
@@ -875,7 +875,8 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
 
     // Show the error inline in the session chat timeline. A gone folder is said once, by
     // the panel's banner and the message's own row (FolderGoneBanner), with the way on.
-    if (error && !isFolderGoneReason(error)) {
+    // A message the error parked says it on its own row, with Retry (saidOnMessage): said once.
+    if (error && !isFolderGoneReason(error) && !saidOnMessage) {
       const detail = error.length > 500 ? error.slice(0, 500) + '…' : error;
       setBlocks((prev) => {
         const next = appendSystemBlock(prev, { variant: 'error', message: 'Session error', detail });

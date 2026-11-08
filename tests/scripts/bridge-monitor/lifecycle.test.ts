@@ -219,16 +219,48 @@ describe('orphan sweep: signal only what the collector provably spawned', () => 
   })
 
   // macOS only: a Linux container has a handful of process groups, not a Mac's hundreds (2026-11-07).
-  it.skipIf(process.platform !== 'darwin')("this Mac's real ps output, every group leader's pid 'reused' with its exact start time, kills nothing", () => {
-    const rows = parsePsRows(execFileSync('/bin/ps', ['-A', '-o', 'pid=', '-o', 'pgid=', '-o', 'lstart=', '-o', 'command='], { encoding: 'utf-8', maxBuffer: 64 << 20, env: { ...process.env, LC_ALL: 'C' } }))
-    const leaders = [...rows.values()].filter((p) => p.pid === p.pgid && p.pid > 1)
-    expect(leaders.length).toBeGreaterThan(10)
-    // What the old rule matched on: the tracked binaries alone.
-    const entries = leaders.flatMap((p) => ['/usr/bin/log', '/usr/bin/pmset', '/usr/sbin/system_profiler', '/usr/bin/time'].map((bin) => (
-      { pid: p.pid, pgid: p.pid, lstart: p.lstart, argv: [bin], t: new Date().toISOString(), timeoutMs: 300_000 })))
-    const kills: number[] = []
-    sweepOrphans(entries, rows, { kill: (g: number) => { kills.push(g) } })
-    expect(kills).toEqual([])
+  it.skipIf(process.platform !== 'darwin')("real ps output, every group leader's pid 'reused' with its exact start time, kills nothing", async () => {
+    // A minimal CI process namespace need not contain any other group leaders.
+    // Supply the original >10 sample ourselves, without signaling host processes.
+    const children: ReturnType<typeof spawn>[] = []
+    try {
+      for (let i = 0; i < 11; i++) {
+        const child = spawn('/bin/sleep', [String(30 + i)], { detached: true, stdio: 'ignore' })
+        children.push(child)
+        await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject) })
+      }
+      const identities = await Promise.all(children.map((child) => processIdentity(child.pid!)))
+      const rows = parsePsRows(execFileSync('/bin/ps', ['-A', '-o', 'pid=', '-o', 'pgid=', '-o', 'lstart=', '-o', 'command='], { encoding: 'utf-8', maxBuffer: 64 << 20, env: { ...process.env, LC_ALL: 'C' } }))
+      const leaders = [...rows.values()].filter((p) => p.pid === p.pgid && p.pid > 1)
+      expect(leaders.length).toBeGreaterThan(10)
+      for (const [i, child] of children.entries()) {
+        expect(identities[i]?.pgid).toBe(child.pid)
+        expect(identities[i]?.lstart).toMatch(/^[A-Z][a-z]{2} [A-Z][a-z]{2} \d{1,2} \d{2}:\d{2}:\d{2} \d{4}$/)
+        expect(rows.get(child.pid!)).toMatchObject({ pid: child.pid, pgid: child.pid, lstart: identities[i]!.lstart, command: `/bin/sleep ${30 + i}` })
+      }
+      // What the old rule matched on: the tracked binaries alone. Keep every real
+      // leader, not only our children, and inject the signal for unrelated pids.
+      const entries = leaders.flatMap((p) => ['/usr/bin/log', '/usr/bin/pmset', '/usr/sbin/system_profiler', '/usr/bin/time'].map((bin) => (
+        { pid: p.pid, pgid: p.pid, lstart: p.lstart, argv: [bin], t: new Date().toISOString(), timeoutMs: 300_000 })))
+      const kills: number[] = []
+      const out = sweepOrphans(entries, rows, { kill: (g: number) => { kills.push(g) } })
+      expect(kills).toEqual([])
+      expect(out.killed).toEqual([])
+      expect(out.dropped).toHaveLength(entries.length)
+      for (const child of children) {
+        expect(out.dropped.filter((d: AnyRec) => d.pid === child.pid)).toEqual(
+          Array.from({ length: 4 }, () => ({ pid: child.pid, reason: 'pid reused (command line differs)' })))
+        expect(alive(child.pid!)).toBe(true)
+      }
+    } finally {
+      await Promise.all(children.map(async (child) => {
+        // ChildProcess.kill targets only this unreaped child, never a ps-discovered pid.
+        if (child.exitCode !== null || child.signalCode !== null || !child.pid) return
+        const closed = new Promise<void>((resolve) => child.once('close', () => resolve()))
+        child.kill('SIGTERM')
+        await closed
+      }))
+    }
   })
 })
 

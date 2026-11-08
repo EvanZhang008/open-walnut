@@ -35,7 +35,8 @@ import { createSessionRecord, _resetSessionTrackerForTesting } from '../../src/c
 import { closeDb } from '../../src/core/session-db.js'
 import { ClaudeCodeSession, SessionRunner } from '../../src/providers/claude-code-session.js'
 import { RemoteSessionManager } from '../../src/providers/remote-session-manager.js'
-import { enqueueMessage, markProcessing, resetCache, revertToPending } from '../../src/core/session-message-queue.js'
+import { enqueueMessage, markProcessing, removeTaken, resetCache, revertToPending } from '../../src/core/session-message-queue.js'
+import { repairCancelledTaken } from '../../src/core/session-queue-lines.js'
 import { resetLineConsumption } from '../../src/providers/line-consumption.js'
 import { resetLineCarriesForTesting } from '../../src/providers/batch-uuid.js'
 import { bus, EventNames, type BusEvent } from '../../src/core/event-bus.js'
@@ -137,6 +138,23 @@ describe('the take marker names the rows its line carries', () => {
     expect(markers[0].rowIds).toEqual([a.id])
   })
 
+  it('a restored cancellation names its rows after a server restart without sending again', async () => {
+    const a = await enqueueMessage(SID, 'restored first line')
+    const first = await markProcessing(SID)
+    const b = await enqueueMessage(SID, 'restored second line')
+    const second = await markProcessing(SID)
+    const rows = [...first, ...second]
+    await removeTaken(SID, rows.map((r) => r.id), { ran: false, rows })
+    resetCache()
+    resetLineCarriesForTesting()
+    await repairCancelledTaken(SID, rows, false, true)
+    const p = bareProcess(SID)
+    p.started(first[0].lineUuid!)
+    p.started(second[0].lineUuid!)
+    await vi.waitFor(() => expect(markers).toHaveLength(2))
+    expect(markers.map((m) => m.rowIds)).toEqual([[a.id], [b.id]])
+  })
+
   it('a line names only its own rows, never another session\'s or another line\'s', async () => {
     const OTHER = SID.replace(/.$/, 'f')
     const a = await enqueueMessage(SID, 'mine')
@@ -172,6 +190,7 @@ describe('ratchet: a queue row goes out only through markProcessing, which notes
     // with how the take marker learns the line's rows.
     const OUT: Record<string, string> = {
       'src/core/session-message-queue.ts#markProcessing': 'noteLineCarries',
+      'src/core/session-queue-lines.ts#repairCancelledTaken': 'noteLineCarries after durable restore',
       // ACP engines take one prompt per turn and report no command_lifecycle, so no marker.
       'src/core/session-message-queue.ts#markNextProcessing': 'acp, no marker',
     }
@@ -195,6 +214,8 @@ take marker of that line names no rows and the chat draws its message after the 
     const queue = readFileSync(join(ROOT, 'src/core/session-message-queue.ts'), 'utf8')
     const body = queue.slice(queue.indexOf('export async function markProcessing('), queue.indexOf('export async function markNextProcessing('))
     expect(body).toMatch(/noteLineCarries\(sessionId, pending\[0\]\.lineUuid, pending\.map\(\(m\) => m\.id\)\)/)
+    const repair = readFileSync(join(ROOT, 'src/core/session-queue-lines.ts'), 'utf8')
+    expect(repair).toMatch(/const restored = await mutateStore\([\s\S]*?\}, true, true\);\s*for \(const line of restored\) noteLineCarries\(sessionId, line\.uuid, line\.ids\)/)
     // And the marker reads them.
     const session = readFileSync(join(ROOT, 'src/providers/claude-code-session.ts'), 'utf8')
     expect(session).toMatch(/rowsCarriedBy\(this\.claudeSessionId, lc\.command_uuid\)[\s\S]{0,400}bus\.emit\(EventNames\.SESSION_USER_LINE/)

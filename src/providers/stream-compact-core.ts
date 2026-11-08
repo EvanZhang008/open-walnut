@@ -27,7 +27,7 @@
  * A line too long to hold, a read or write error, or the caller's abort leaves
  * the original untouched.
  *
- * `<file>.compact` is the mark: the inode and size the last look left (a
+ * `<file>.compact` is the mark: the file identity and size the last look left (a
  * compaction's output, or a file judged not worth it), so the file is looked at
  * again only once it has grown enough, and for an output the epoch of the file
  * it replaced (`rewrittenFrom`). A snapshot carries that while the file is still
@@ -61,7 +61,9 @@ export interface StreamCompactPrepared {
   /** The original, as read: commit refuses when any of these moved. */
   size: number
   mtimeMs: number
+  dev: number
   ino: number
+  birthtimeMs: number
   /** Size of the compacted copy. */
   after: number
   droppedBytes: number
@@ -117,7 +119,12 @@ export function createStreamCompact(deps: StreamCompactDeps) {
     return false
   }
 
-  function readMark(jsonlPath: string): { ino?: unknown; size?: unknown; from?: unknown; skipped?: unknown } | null {
+  // Inode reuse can preserve the floored epoch, so identity compares the full birth time.
+  function sameFile(a: { dev?: unknown; ino?: unknown; birthtimeMs?: unknown }, b: { dev: number; ino: number; birthtimeMs: number }): boolean {
+    return a.dev === b.dev && a.ino === b.ino && a.birthtimeMs === b.birthtimeMs
+  }
+
+  function readMark(jsonlPath: string): { dev?: unknown; ino?: unknown; birthtimeMs?: unknown; size?: unknown; from?: unknown; skipped?: unknown } | null {
     try { return JSON.parse(fs.readFileSync(markPathFor(jsonlPath), 'utf-8')) } catch { return null }
   }
 
@@ -135,18 +142,18 @@ export function createStreamCompact(deps: StreamCompactDeps) {
   }
 
   /** Is this file worth a look now? (size floor + growth since the last look) */
-  function due(jsonlPath: string, st: { size: number; ino: number }): boolean {
+  function due(jsonlPath: string, st: { dev: number; ino: number; birthtimeMs: number; size: number }): boolean {
     if (st.size < MIN_BYTES) return false
     const mark = readMark(jsonlPath)
-    if (!mark || mark.ino !== st.ino || typeof mark.size !== 'number') return true
+    if (!mark || !sameFile(mark, st) || typeof mark.size !== 'number') return true
     const grown = st.size - mark.size
     return grown >= Math.max(MIN_BYTES, mark.size / 4)
   }
 
   /** The epoch this file replaced, while it is still exactly a compaction's output; else null. */
-  function rewrittenFrom(jsonlPath: string, st: { ino: number; size: number }): string | null {
+  function rewrittenFrom(jsonlPath: string, st: { dev: number; ino: number; birthtimeMs: number; size: number }): string | null {
     const mark = readMark(jsonlPath)
-    return mark && mark.ino === st.ino && mark.size === st.size && typeof mark.from === 'string' ? mark.from : null
+    return mark && sameFile(mark, st) && mark.size === st.size && typeof mark.from === 'string' ? mark.from : null
   }
 
   /**
@@ -200,7 +207,7 @@ export function createStreamCompact(deps: StreamCompactDeps) {
       const st = await src.stat()
       const size = st.size
       // A file judged not worth it is not read again until it grows (see due).
-      const notWorth = (reason: string) => { writeMark(jsonlPath, { ino: st.ino, size, skipped: reason }); return { skipped: reason } }
+      const notWorth = (reason: string) => { writeMark(jsonlPath, { dev: st.dev, ino: st.ino, birthtimeMs: st.birthtimeMs, size, skipped: reason }); return { skipped: reason } }
       const free = freeBytes(jsonlPath)
       if (free !== null && free < size + RESERVE) return { skipped: 'low-disk' }
       // Read-only first: where the last finished turn ends (the end of its
@@ -273,7 +280,7 @@ export function createStreamCompact(deps: StreamCompactDeps) {
       // Keep the original's times: retention judges a stream file by its mtime.
       fs.utimesSync(tmpPath, st.atime, st.mtime)
       keep = true
-      return { tmpPath, size, mtimeMs: st.mtimeMs, ino: st.ino, after, droppedBytes, droppedLines }
+      return { tmpPath, size, mtimeMs: st.mtimeMs, dev: st.dev, ino: st.ino, birthtimeMs: st.birthtimeMs, after, droppedBytes, droppedLines }
     } catch (err) {
       log('warn', 'stream compaction failed; the original is untouched', { jsonlPath, error: (err as Error).message })
       return { skipped: 'error' }
@@ -290,23 +297,32 @@ export function createStreamCompact(deps: StreamCompactDeps) {
    * session can interleave (the daemon's per-session start gate).
    */
   function commit(jsonlPath: string, prepared: StreamCompactPrepared): boolean {
+    let from: string
     try {
       const st = fs.statSync(jsonlPath)
-      if (st.size !== prepared.size || st.mtimeMs !== prepared.mtimeMs || st.ino !== prepared.ino) {
+      if (st.size !== prepared.size || st.mtimeMs !== prepared.mtimeMs || !sameFile(prepared, st)) {
         discard(jsonlPath)
         return false
       }
-      // The mark first, keyed to the copy's inode (a rename keeps it), so a crash
-      // between the two never leaves an output that does not name its origin.
+      // Keep crash evidence before the rename on platforms with a stable birth time.
       const tmp = fs.statSync(prepared.tmpPath)
-      writeMark(jsonlPath, { ino: tmp.ino, size: tmp.size, from: epochOf(st) })
+      from = epochOf(st)
+      writeMark(jsonlPath, { dev: tmp.dev, ino: tmp.ino, birthtimeMs: tmp.birthtimeMs, size: tmp.size, from })
       fs.renameSync(prepared.tmpPath, jsonlPath)
-      return true
     } catch (err) {
       log('warn', 'stream compaction commit failed; the original is untouched', { jsonlPath, error: (err as Error).message })
       discard(jsonlPath)
       return false
     }
+    // A ctime birth fallback changes on rename: record the actual output identity.
+    try {
+      const output = fs.statSync(jsonlPath)
+      writeMark(jsonlPath, { dev: output.dev, ino: output.ino, birthtimeMs: output.birthtimeMs, size: output.size, from })
+    } catch (err) {
+      // The swap already happened; the strict mark check rejects unproven identity.
+      log('warn', 'stream compaction committed; output metadata could not be read', { jsonlPath, error: (err as Error).message })
+    }
+    return true
   }
 
   function discard(jsonlPath: string): void {

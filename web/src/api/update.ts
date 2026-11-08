@@ -5,7 +5,7 @@
  */
 
 export type InstallKind = 'source' | 'npm' | 'binary' | 'other' | 'replica';
-export type UpdateCheckDisabledReason = 'source' | 'replica' | 'opted-out' | 'test' | 'unknown-version';
+export type UpdateCheckDisabledReason = 'source' | 'replica' | 'opted-out' | 'test' | 'unknown-version' | 'demo';
 
 export interface UpdateInstallInfo {
   kind: InstallKind;

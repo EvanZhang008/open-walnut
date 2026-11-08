@@ -11,6 +11,7 @@
 import type { SystemHealth } from '@/hooks/useSystemHealth';
 import type { LocalClaudeProblem } from '@/api/local-claude';
 import { isLocalDismissed } from '@/utils/host-banner-dismiss';
+import { AGENT_CANNOT_RUN_KINDS } from '@open-walnut/host-problem';
 
 export type ClaudeBannerKind = 'install' | 'outdated' | 'sign-in';
 
@@ -71,8 +72,34 @@ export function claudeBannerView(health: SystemHealth): ClaudeBannerView | null 
   return null;
 }
 
+/**
+ * Claude Code cannot run on this computer (missing, cannot start, or signed out): an agent
+ * session cannot start here, so nothing offers "Fix with agent" (a repair session would fail
+ * the same way); the setup card's install or sign-in step is the way on. Outdated still runs.
+ */
+export function agentCannotRun(health: SystemHealth | undefined): boolean {
+  if (!health) return false;
+  // The server's refusal reads the same list (routes/notifications.ts), so the button and the route agree.
+  const problems = Array.isArray(health.localClaude?.problems) ? health.localClaude!.problems : [];
+  return health.claudeCliAvailable === false || problems.some((p) => AGENT_CANNOT_RUN_KINDS.includes(p.kind));
+}
+
 /** What the local section can show: a Claude Code state, or (nothing needing Claude Code) the main provider not answering. */
 export type LocalNoticeKind = 'install' | 'sign-in' | 'provider';
+
+/**
+ * Is the local notice a FAILURE (the red Errors badge counts it), or a setup step a new user is
+ * expected to take? Claude Code not installed yet, or installed and not signed in yet, is where
+ * every first run starts (2026-11-11 review: the very first open read "Errors 1" for "Claude Code
+ * is not installed"): the setup card says what to do, and nothing is broken. A Claude Code that
+ * cannot start, a fix that failed, or a provider that stopped answering is.
+ */
+export function localNoticeIsFailure(health: SystemHealth, kind: LocalNoticeKind): boolean {
+  if (kind === 'provider') return true;
+  const view = claudeBannerView(health);
+  if (view?.failed) return true;
+  return kind === 'install' && view?.problem?.kind === 'claude_error';
+}
 
 /** A dismissed "provider is not answering" stays dismissed for that provider and address only. */
 export function providerDismissKey(health: Pick<SystemHealth, 'mainProvider' | 'credentialDetail'>): string {
@@ -83,6 +110,20 @@ export function providerDismissKey(health: Pick<SystemHealth, 'mainProvider' | '
 export function providerLabel(name: string | undefined): string {
   if (!name) return 'Your AI provider';
   return name === 'ollama' ? 'Ollama' : name;
+}
+
+/**
+ * Walnut asked about this machine's Claude Code and the answer settled nothing:
+ * the check failed, or Claude Code is there and its sign-in is not ok with no
+ * problem named (`claude auth status` gave no answer). The first-use card says
+ * so, and the Sidebar keeps asking (2026-11-08: right after the one-click
+ * install, under load, the first answer was "no answer"; nothing asked again,
+ * so a user who then signed in stayed on "could not confirm" until a click).
+ */
+export function localAnswerUnsettled(health: SystemHealth | undefined): boolean {
+  const local = health?.localClaude;
+  if (!health || !local || health.claudeCodeNeeded === false) return false;
+  return !!local.checkError || !!local.claude.unknown || (!!local.claude.found && local.claude.auth !== 'ok' && !local.problems.length);
 }
 
 /**

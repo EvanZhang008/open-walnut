@@ -205,10 +205,16 @@
    The second selector exists because the glass header rule
    ".session-panel:not(.pending-session-panel):not(.draft-session-panel)>.session-panel-header"
    sets background:transparent at specificity (0,4,0) — a bare two-class rule
-   loses to it silently. The tint composites over the ::before glass layer. */
+   loses to it silently. The tint is laid over an opaque base, never a bare 8% wash:
+   the header floats over the chat, which read through it (2026-11-10 review). Where
+   the header paints from its ::before layer, the tint goes on that layer, which is
+   drawn over the header's own background. */
 .session-panel-header.session-panel-header-needs-action,
 .session-panel:not(.pending-session-panel):not(.draft-session-panel) > .session-panel-header.session-panel-header-needs-action {
-  background: rgba(255, 59, 48, 0.08);
+  background: linear-gradient(rgba(255, 59, 48, 0.08), rgba(255, 59, 48, 0.08)), var(--bg);
+}
+.session-panel:not(.pending-session-panel):not(.draft-session-panel) > .session-panel-header.session-panel-header-needs-action::before {
+  background: linear-gradient(rgba(255, 59, 48, 0.08), rgba(255, 59, 48, 0.08)), var(--glass-g4-bg);
 }
 
 /* ── Session window unread marker (task.unread) ──

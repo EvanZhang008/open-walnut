@@ -61,12 +61,27 @@ export function applyStripChange(before: readonly SessionSlot[], after: readonly
   set(prev => taskbarAfterStripChange(prev, before, after, minimized, taskbarSettingsNow().leaving));
 }
 
+const closeListeners = new Set<(sessionId: string) => void>();
+
+/** The bar's own x closed a session (a chip or a Recent one): Home forgets it for its regrow, so
+ *  a widen never brings back a column the user closed here. Returns the unsubscribe. */
+export function onTaskbarClose(listener: (sessionId: string) => void): () => void {
+  closeListeners.add(listener);
+  return () => { closeListeners.delete(listener); };
+}
+
+function noteClosed(sessionId: string): void {
+  for (const l of closeListeners) l(sessionId);
+}
+
 export function closeChip(sessionId: string): void {
   set(prev => (prev.chips.includes(sessionId) ? { ...prev, chips: removeChip(prev.chips, sessionId) } : prev));
+  noteClosed(sessionId);
 }
 
 export function closeRecent(sessionId: string): void {
   set(prev => (prev.recent.includes(sessionId) ? { ...prev, recent: removeChip(prev.recent, sessionId) } : prev));
+  noteClosed(sessionId);
 }
 
 export function moveTaskbarChip(sessionId: string, toIndex: number): void {

@@ -7,6 +7,7 @@
  */
 import { test, expect, type Page } from '@playwright/test'
 import { pressBarTool } from './doc-bar-helpers'
+import { goToSessionFolder } from './todo-panel-helpers'
 
 const SESSION_ID = 'pw-vscode-session'
 const TASK_ID = 'pw-task-vscode'
@@ -27,6 +28,7 @@ async function openFilesPanel(page: Page) {
   await panel.getByRole('button', { name: 'Files', exact: true }).click()
   const explorer = panel.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 10_000 })
+  await goToSessionFolder(explorer)
   return { panel, explorer }
 }
 
@@ -67,11 +69,12 @@ async function centerOfText(page: Page, containerSel: string, needle: string) {
 
 const EDITOR_SEL = `.session-panel[data-session-id="${SESSION_ID}"] .fv-source-editor .cm-content`
 
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page, baseURL }) => {
   await page.addInitScript(() => {
     try { localStorage.setItem('open-walnut-file-explorer-tree-collapsed', '0') } catch { /* off */ }
   })
-  await page.goto('/')
+  await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
+  await page.getByRole('link', { name: 'Open Walnut' }).click()
   await page.waitForLoadState('networkidle')
 })
 

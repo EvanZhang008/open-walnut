@@ -27,7 +27,7 @@ import { chooseDtachMaster, dtachProbeScript, parseDtachProbe, stopDtachMaster, 
 import { WALNUT_HOME } from '../../constants.js'
 import { listSessions } from '../../core/session-tracker.js'
 import { getConfig } from '../../core/config-manager.js'
-import { shellQuote } from '../../providers/session-io.js'
+import { shellQuote, sshAliasOptions, sshDestination } from '../../providers/session-io.js'
 import { log } from '../../logging/index.js'
 import { parseTerminalKey, terminalKeyFor } from '../../core/terminal-key.js'
 
@@ -77,8 +77,8 @@ function run(cmd: string, args: string[]): Promise<{ code: number; stdout: strin
 async function runShell(host: string | undefined, script: string): Promise<{ code: number; stdout: string; stderr: string }> {
   if (!host) return run('bash', ['-c', script])
   const target = await resolveSshTarget(host)
-  const hostString = target.user ? `${target.user}@${target.hostname}` : target.hostname
-  const sshArgs = ['-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=no', ...sshControlMasterArgs(host)]
+  const hostString = sshDestination(target)
+  const sshArgs = ['-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=no', ...sshAliasOptions(target), ...sshControlMasterArgs(host)]
   if (target.port) sshArgs.push('-p', String(target.port))
   sshArgs.push(hostString, script)
   return run('ssh', sshArgs)

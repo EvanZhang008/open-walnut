@@ -26,12 +26,22 @@ import { HostDetails } from './HostDetails';
 import { HostRow, RowLine, type RowMenuItem, type RowPrimary } from './HostRow';
 import { ReplicaKeepRows, type ReplicaKeep } from './ReplicaKeepRows';
 import { useLinkedHostRow } from './useLinkedHostRow';
+import { sshNameOf, sshResolvedHints, useSshResolved } from './useSshResolved';
 import { hostnameProblem, untouchedDraft } from './host-row-model';
 import { hostName, waitsForYes, type HostEntry } from './remote-hosts-model';
 import type { ActionState } from './useHostFleet';
 import { hostRowId } from '@/utils/host-settings-nav';
 
 type TextField = 'alias' | 'hostname' | 'user' | 'label';
+
+/**
+ * What Turn off and Remove do, said as it is (core/hosts/host-link-end.ts): Walnut ends its
+ * own connection and SSH masters to the host, so the next Connect signs in again; the session
+ * daemon there and its sessions are left running (2026-11-10 review: the old words claimed the
+ * work there ended, while the link itself stayed up).
+ */
+export const TURN_OFF_NOTE = 'Walnut disconnects and stops connecting to it; the next Connect signs in again. Its daemon and sessions there keep running.';
+export const REMOVE_NOTE = 'Walnut disconnects and stops connecting to it. Nothing on the host is deleted: its daemon and sessions there keep running.';
 
 interface Props {
   host: HostEntry;
@@ -104,6 +114,9 @@ export function RemoteHostSshRow(props: Props) {
   const badHost = hostnameProblem(host.hostname);
   const hostError = props.hostShown ? badHost ?? (!host.hostname.trim() && unsaved ? 'Type the host Walnut reaches with ssh, like build7.example.com.' : null) : null;
   const open = editing || unsaved;
+  // What ssh resolves for the name this row dials: the empty Port and User fields show it.
+  const resolved = useSshResolved(sshNameOf(host), open);
+  const sshHints = sshResolvedHints(resolved, { port: host.port, user: host.user });
 
   let state: ReactNode = live.state;
   let primary: RowPrimary | null = live.primary;
@@ -135,7 +148,7 @@ export function RemoteHostSshRow(props: Props) {
     { key: 'edit', label: editing ? 'Done editing' : 'Edit', onSelect: () => props.onEdit(!editing) },
     ...(found === 'ask' ? [{ key: 'not-now', label: 'Not now', disabled: props.answering !== null, onSelect: () => props.onAnswer('not_now') }] : []),
     ...(linked && !found ? [{ key: 'details', label: detailsOpen ? 'Hide details' : 'Details', onSelect: () => props.onDetails(!detailsOpen) }] : []),
-    ...(linked && !found && host.enabled ? [{ key: 'turn-off', label: 'Turn off', title: 'Walnut stops connecting to it; sessions there stop.', onSelect: () => props.onField('enabled', false) }] : []),
+    ...(linked && !found && host.enabled ? [{ key: 'turn-off', label: 'Turn off', title: TURN_OFF_NOTE, onSelect: () => props.onField('enabled', false) }] : []),
   ];
 
   // Add and connect: the field it still needs takes the focus (its reason is under it).
@@ -194,12 +207,13 @@ export function RemoteHostSshRow(props: Props) {
     <div className="rh-edit" data-testid="rh-edit" onKeyDown={closeEdit} ref={editRef}>
       {text('hostname', 'Hostname', 'host.example.com', 'long', true)}
       {text('alias', 'Alias', props.aliasPlaceholder, 'short', true)}
-      {text('user', 'User', 'Your user name there', 'short')}
+      {text('user', 'User', sshHints.userPlaceholder ?? 'Your user name there', 'short')}
       <SettingsRow
         label="Port"
         htmlFor={`rh-port-${idx}`}
         indent
-        control={<NumberInput id={`rh-port-${idx}`} value={host.port} onChange={(v) => props.onField('port', v)} placeholder="22" min={1} max={65535} />}
+        help={sshHints.line}
+        control={<NumberInput id={`rh-port-${idx}`} value={host.port} onChange={(v) => props.onField('port', v)} placeholder={sshHints.portPlaceholder} min={1} max={65535} />}
       />
       <SettingsDisclosure id={`rh-more-options-${host._key}`} label="More options" summary="Label, setup commands, what it keeps" indent data-testid="rh-more-options">
         {text('label', 'Label', 'Display name', 'short')}
@@ -278,7 +292,7 @@ export function RemoteHostSshRow(props: Props) {
       primary={primary}
       menu={menu}
       onRemove={unsaved ? undefined : props.onRemove}
-      removeNote={linked ? 'Walnut stops connecting to it. Its sessions stop; nothing on the host is deleted.' : undefined}
+      removeNote={linked ? REMOVE_NOTE : undefined}
       off={!host.enabled && !found}
       needsLook={linked && !found && live.needsLook}
       unsaved={unsaved}

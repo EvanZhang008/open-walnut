@@ -13,6 +13,9 @@ import { _setHostsUsedForSessions } from '../../src/core/hosts/host-session-use.
 import {
   clearHostReadiness,
   getHostReadiness,
+  hostReadinessForLaunch,
+  hostReadinessForModel,
+  recomputeHostReadinessFloors,
   onHostReadinessChange,
   parsePreflight,
   readinessProblems,
@@ -131,6 +134,15 @@ describe('refreshHostReadiness', () => {
     expect(getHostReadiness('devbox')).toBeUndefined()
   })
 
+  it('a newly connected old daemon clears even a recently healthy cached answer', async () => {
+    const ready = fakeConn(READY)
+    await refreshHostReadiness('devbox', { getConnection: () => ready.conn, now: () => 1000, autofix: false })
+    const old = fakeConn(READY, [])
+    expect(await refreshHostReadiness('devbox', { getConnection: () => old.conn, now: () => 1001, autofix: false })).toBeNull()
+    expect(old.send).not.toHaveBeenCalled()
+    expect(getHostReadiness('devbox')).toBeUndefined()
+  })
+
   it('a failed re-check keeps the previous answer, stamps the attempt with checkError, pushes, and never throws', async () => {
     let t = 1000
     const now = () => t
@@ -156,10 +168,25 @@ describe('refreshHostReadiness', () => {
     expect(getHostReadiness('devbox')!.checkError).toBeUndefined()
   })
 
-  it('a failure with no previous answer stores nothing (nothing on screen to update)', async () => {
-    const broken: PreflightConnection = { hasCapability: () => true, send: async () => { throw new Error('boom') } }
-    expect(await refreshHostReadiness('devbox', { getConnection: () => broken })).toBeNull()
-    expect(getHostReadiness('devbox')).toBeUndefined()
+  it.each(['exception', 'no-result'])('a first failed check publishes unknown and reconnect can recover: %s', async (failure) => {
+    const broken: PreflightConnection = { hasCapability: () => true, send: async () => {
+      if (failure === 'exception') throw new Error('boom')
+      return { ok: false, error: 'boom' }
+    } }
+    const seen: string[] = []
+    const off = onHostReadinessChange(h => seen.push(h))
+    try {
+      expect(await refreshHostReadiness('devbox', { getConnection: () => broken, now: () => 1000 })).toBeNull()
+      expect(getHostReadiness('devbox')).toMatchObject({ checkedAt: 1000, checkError: 'boom', claude: { found: false, auth: 'unknown' }, problems: [] })
+      expect(seen).toEqual(['devbox'])
+      expect(hostReadinessForLaunch('devbox', null)!.problems).toEqual([])
+      expect(hostReadinessForModel('devbox', 'claude-opus-5-5')!.problems).toEqual([])
+      expect(await recomputeHostReadinessFloors({ minVersion: '2.1.280', model: 'Opus 5.5' })).toEqual([])
+      await refreshHostReadiness('devbox', { getConnection: () => fakeConn(READY).conn, now: () => 1001, autofix: false })
+      expect(getHostReadiness('devbox')).toMatchObject({ checkedAt: 1001, claude: { found: true }, problems: [] })
+      expect(getHostReadiness('devbox')!.checkError).toBeUndefined()
+      expect(seen).toEqual(['devbox', 'devbox'])
+    } finally { off() }
   })
 
   it('never probes __local__ or a disconnected host', async () => {
@@ -175,6 +202,107 @@ describe('refreshHostReadiness', () => {
     ])
     expect(a).toBe(b)
     expect(send).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['ready', 'refused', 'lost'])('rechecks the new connection when an old in-flight probe finishes %s', async (ending) => {
+    let t = 1000
+    let connectedAt = 1000
+    let epoch = 1
+    let finish!: (reply: { ok: boolean; error?: string }) => void
+    let fail!: (error: Error) => void
+    const first = new Promise<{ ok: boolean; error?: string }>((resolve, reject) => { finish = resolve; fail = reject })
+    const send = vi.fn().mockReturnValueOnce(first).mockResolvedValue(READY)
+    const conn: PreflightConnection = {
+      get connectPhaseSince() { return connectedAt }, get connectionEpoch() { return epoch },
+      hasCapability: () => true, send,
+    }
+    const options = { getConnection: () => conn, now: () => t, autofix: false as const }
+    const seen: string[] = []
+    const off = onHostReadinessChange(host => seen.push(host))
+    try {
+      const old = refreshHostReadiness('devbox', options)
+      await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1))
+      t = connectedAt = 2000
+      epoch++
+      expect(refreshHostReadiness('devbox', options)).toBe(old)
+      if (ending === 'lost') fail(new Error('old socket closed'))
+      else finish(ending === 'ready' ? READY : { ok: false, error: 'old daemon refused' })
+      expect(await old).toMatchObject({ checkedAt: 2000, problems: [] })
+      expect(getHostReadiness('devbox')).toMatchObject({ checkedAt: 2000, problems: [] })
+      expect(send).toHaveBeenCalledTimes(2)
+      expect(getHostReadiness('devbox')!.checkError).toBeUndefined()
+      expect(seen).toEqual(['devbox'])
+      await refreshHostReadiness('devbox', options)
+      expect(send).toHaveBeenCalledTimes(2)
+    } finally { off() }
+  })
+
+  it('does not cache across two connection epochs in the same millisecond', async () => {
+    let epoch = 1
+    const probe = fakeConn(READY)
+    const conn: PreflightConnection = { ...probe.conn, connectPhaseSince: 1000, get connectionEpoch() { return epoch } }
+    const options = { getConnection: () => conn, now: () => 1000, autofix: false as const }
+    await refreshHostReadiness('devbox', options)
+    epoch++
+    await refreshHostReadiness('devbox', options)
+    expect(probe.send).toHaveBeenCalledTimes(2)
+    expect(getHostReadiness('devbox')).not.toHaveProperty('probeEpoch')
+  })
+
+  it('a lost probe with no new connection leaves the previous answer unchanged and returns null', async () => {
+    let live = true
+    let epoch = 1
+    let fail!: (error: Error) => void
+    const probe = fakeConn(READY)
+    const conn: PreflightConnection = { ...probe.conn, connectPhaseSince: 1000, get connectionEpoch() { return epoch } }
+    const options = { getConnection: () => live ? conn : null, now: () => 1000, autofix: false as const }
+    await refreshHostReadiness('devbox', options)
+    const before = getHostReadiness('devbox')
+    const held = new Promise<{ ok: boolean }>((_resolve, reject) => { fail = reject })
+    probe.send.mockReturnValueOnce(held)
+    const pending = refreshHostReadiness('devbox', { ...options, force: true })
+    await vi.waitFor(() => expect(probe.send).toHaveBeenCalledTimes(2))
+    live = false
+    epoch++
+    fail(new Error('socket closed before reconnect'))
+    expect(await pending).toBeNull()
+    expect(getHostReadiness('devbox')).toEqual(before)
+  })
+
+  it('retries an inconclusive executable probe without applying the healthy throttle', async () => {
+    const probe = fakeConn({ ...READY, claude: { found: false, unknown: 'The login shell timed out.' } });
+    await refreshHostReadiness('devbox', { getConnection: () => probe.conn, now: () => 1000, autofix: false });
+    await refreshHostReadiness('devbox', { getConnection: () => probe.conn, now: () => 1001, autofix: false });
+    expect(probe.send).toHaveBeenCalledTimes(2);
+    expect(getHostReadiness('devbox')).toMatchObject({ claude: { unknown: 'The login shell timed out.' }, problems: [] });
+  });
+
+  it('a healthy host is throttled within one connection, but checked again after every handshake', async () => {
+    let t = 1000
+    let connectedAt = 1000
+    const probe = fakeConn(READY)
+    const conn: PreflightConnection = { ...probe.conn, get connectPhaseSince() { return connectedAt } }
+    const refresh = () => refreshHostReadiness('devbox', { getConnection: () => conn, now: () => t, autofix: false })
+    let connected: ((host: string) => void) | undefined
+    const pending: Promise<unknown>[] = []
+    const off = wireHostReadiness({
+      onConnected: callback => { connected = callback; return () => { connected = undefined } },
+      isKnownHost: host => host === 'devbox', emit: vi.fn(),
+      refresh: host => { expect(host).toBe('devbox'); const job = refresh(); pending.push(job); return job },
+    })
+    try {
+      for (const time of [1000, 2000, 3000]) {
+        t = connectedAt = time
+        connected!('devbox')
+        await pending.at(-1)
+        expect(getHostReadiness('devbox')!.checkedAt).toBeGreaterThanOrEqual(connectedAt)
+        const count = probe.send.mock.calls.length
+        t++
+        await refresh()
+        expect(probe.send).toHaveBeenCalledTimes(count)
+      }
+      expect(probe.send).toHaveBeenCalledTimes(3)
+    } finally { off() }
   })
 
   it('a healthy host is re-probed at most every 10 minutes unless forced; a host with problems every time', async () => {

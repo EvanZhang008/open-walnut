@@ -14,7 +14,7 @@ import type { Approval } from '@/api/approvals';
 import { apiPatch } from '@/api/client';
 import { buildImageRefsPayload } from '@/api/image-upload';
 import { createTask } from '@/api/tasks';
-import { wsClient } from '@/api/ws';
+import { sendSessionMessage } from '@/api/session-send';
 import { ApprovalButtons, requesterText } from '@/components/approvals/ApprovalPrompts';
 import { useApprovals } from '@/components/approvals/approvals-store';
 import { AgentText } from '@/components/common/AgentText';
@@ -271,7 +271,7 @@ function TaskReply({ task, line, rowState, reply, onChange }: { task: Task; line
     if ((!message && images.length === 0) || !sessionId || state === 'sending') return;
     onChange({ state: 'sending' });
     try {
-      await wsClient.sendRpc('session:send', { sessionId, message, ...(await buildImageRefsPayload(images)) });
+      await sendSessionMessage({ sessionId, message, ...(await buildImageRefsPayload(images)) });
       draft.clear(draft.key, words);
       pictures.clear();
       onChange({ state: 'sent', words: message.length > 120 ? `${message.slice(0, 119)}…` : message });

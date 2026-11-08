@@ -85,8 +85,13 @@
      the tuned floor; never go clearer than 0.84 / blur below 36px.
      Tint matches --bg exactly (pure white): any darker tint (250,250,252 was
      tried) renders as a visible grey slab with a hard edge where the wash
-     meets the untouched white page around it. */
-  --glass-g4-bg: rgba(255, 255, 255, 0.88);
+     meets the untouched white page around it.
+     OPAQUE since 2026-11-10: even at 0.88 the chat read through the session
+     header (under Fork/Changed/Files and the title) in the Mac app's WebKit,
+     where a blur inside a backdrop root is not drawn. Content still scrolls
+     under these bars; it is just never seen through them. Guarded by
+     tests/web/overlay-chrome-opaque.test.ts in every theme block. */
+  --glass-g4-bg: #FFFFFF;
   --glass-g4-blur: blur(44px) saturate(1.8);
   --glass-g4-shadow: 0 6px 24px rgba(0, 0, 0, 0.08);
   /* Distance over which a scroll-under glass wash dissolves into the content
@@ -132,8 +137,8 @@
   --tier-backlog: #40C8E0;
   --tier-wait: #FFB340;
   --tier-custom: #BF5AF2;
-  /* G4 dark = translucent #1C1C1E (bg-secondary), same blur + opacity floor. */
-  --glass-g4-bg: color-mix(in srgb, var(--bg-secondary) 88%, transparent);
+  /* G4 dark = #1C1C1E (bg-secondary), opaque like the light one. */
+  --glass-g4-bg: var(--bg-secondary);
   --glass-g4-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
 }
 
@@ -164,8 +169,8 @@
     --tier-backlog: #40C8E0;
     --tier-wait: #FFB340;
     --tier-custom: #BF5AF2;
-    /* G4 dark = translucent #1C1C1E (bg-secondary), same blur + opacity floor. */
-    --glass-g4-bg: color-mix(in srgb, var(--bg-secondary) 88%, transparent);
+    /* G4 dark = #1C1C1E (bg-secondary), opaque like the light one. */
+    --glass-g4-bg: var(--bg-secondary);
     --glass-g4-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
   }
 }
@@ -18472,6 +18477,11 @@ a.task-kebab-info:hover {
   color: var(--fg-muted);
   white-space: nowrap;
   flex-shrink: 0;
+  /* The whole host name; past this width an ellipsis, and the tooltip names it in
+     full (host-tag.ts). Never cut in code. */
+  max-width: 16em;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .sps-path-meta {
@@ -20302,6 +20312,16 @@ td.usage-share-col {
   margin-right: 8px;
 }
 
+.session-msg-agent-wait-sign-in {
+  display: flex;
+  justify-content: flex-end;
+  max-width: 100%;
+  min-width: 0;
+  margin-top: 4px;
+}
+.session-msg-agent-wait-sign-in .setup-copy-wrap { min-width: 0; max-width: 100%; }
+.session-msg-agent-wait-sign-in .setup-command { overflow-wrap: anywhere; text-align: left; }
+
 .session-msg-queued-actions {
   display: flex;
   flex-wrap: wrap;
@@ -21031,10 +21051,12 @@ td.usage-share-col {
 }
 
 .session-file-explorer-tree {
-  /* width set inline (resizable via .sfe-divider drag; persisted) */
+  /* width set inline (resizable via .sfe-divider drag; persisted). In a narrow window the
+     dragged width yields to the open file: never more than 45% of the row, so a tree
+     widened on a big screen does not leave the file a sliver (2026-11-08, 1200x700). */
   flex-shrink: 0;
   min-width: 140px;
-  max-width: 600px;
+  max-width: min(600px, 45%);
   overflow: auto;
   padding: 4px 0;
 }
@@ -23903,6 +23925,7 @@ a.tag-chip:focus-visible,
   background: var(--border);
   cursor: col-resize;
   position: relative;
+  z-index: 5;
 }
 .notes-chat-divider::after {
   content: '';
@@ -25054,7 +25077,7 @@ a.file-link:hover {
   border-bottom: 1px solid var(--border, #e5e7eb);
   position: sticky;
   top: 0;
-  background: var(--bg-primary, #fff);
+  background: var(--bg);
   z-index: 1;
 }
 
@@ -25432,6 +25455,15 @@ a.file-link:hover {
   max-width: none;
   padding: 0;
 }
+/* The editor's dictation mic is for writing into the file: it shows while the reader writes
+   in it (focus inside), and while it records or reports a problem. Read, it floated over the
+   text as a stray "Set up dictation" button, beside an Ask card's own mic (2026-11-10 review). */
+/* Also kept while a press is on it (`:active`) or one of its menus is open: in WebKit a press on a
+   button takes no focus, so the editor blurred, the dock hid under the pointer and the click on the
+   chevron or a Retry item was lost (2026-11-10 review). */
+.fv-wysiwyg-editor:not(:focus-within) > .editor-mic-dock:not(:has(.mic-recording, .mic-transcribing, .mic-error-bubble, .mic-retry-dropdown, .mic-history-menu, :active)) {
+  display: none;
+}
 .fv-source-editor {
   flex: 1 1 auto;
   /* A concrete floor so the editor is usable even if an ancestor has no
@@ -25745,7 +25777,7 @@ a.file-link:hover {
   position: fixed;
   inset: 0;
   z-index: 10000;
-  background: var(--bg-primary, #fff);
+  background: var(--bg);
   display: flex;
   flex-direction: column;
 }
@@ -27290,6 +27322,7 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   flex: 0 0 1px;
   cursor: col-resize;
   position: relative;
+  z-index: 5;
   background: var(--border);
   transition: background 0.15s;
 }

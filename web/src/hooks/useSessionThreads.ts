@@ -17,7 +17,7 @@ import {
 import { displayTitleOf, hiddenKeysOf, statusOf } from '@/utils/thread-meta';
 import { counts as threadCounts, type ThreadCounts } from '@/utils/thread-meta-counts';
 import { composerDraftKey, isPendingKey, unreadKeysOf } from '@/utils/thread-stack-state';
-import { clearDraft, readDraft, writeDraft } from '@/utils/drafts';
+import { clearDraft, readDraft, writeDraft, type DraftOrigin } from '@/utils/drafts';
 import { carriedRootDraft, composerKeyOf, pendingPageOf } from '@/utils/composer-quote';
 import { nextQuestionPath, nextQuestionSeq, questionHint, questionLabels, questionPaths, withIssued } from '@/utils/question-tag';
 import { markStatesOf, sameMarkStates, type ThreadMarkState } from '@/utils/thread-mark-state';
@@ -298,7 +298,7 @@ export function useSessionViewMode(sessionId: string): {
 
 // ── The panel's question wiring (SessionPanel calls this once) ──
 
-type Dispatch = (sessionId: string, message: string, images?: ImageAttachment[], opts?: { userUuid?: string; hints?: Record<string, { arg?: string }> }) => Promise<boolean>;
+type Dispatch = (sessionId: string, message: string, images?: ImageAttachment[], opts?: { userUuid?: string; hints?: Record<string, { arg?: string }>; draftOrigin?: DraftOrigin }) => Promise<boolean>;
 
 export interface UsePanelThreadsArgs {
   sessionId: string;
@@ -331,7 +331,7 @@ export interface PanelThreads {
   toast: ThreadToastApi;
   /** Filled by <ThreadToastBridge> inside the panel's toast provider. */
   toastRef: MutableRefObject<ThreadToastApi | null>;
-  sendAnchored: (message: string, images: ImageAttachment[] | undefined, interrupt: boolean, targetKey?: string) => Promise<boolean>;
+  sendAnchored: (message: string, images: ImageAttachment[] | undefined, interrupt: boolean, targetKey?: string, origin?: DraftOrigin) => Promise<boolean>;
   composerPlaceholder?: string;
   draftKey: string;
   /** Always true now: a pending Ask with words comes back as a draft row after a
@@ -357,6 +357,7 @@ function samePlace(a: ThreadCardPlace | null, b: ThreadCardPlace | null): boolea
   // `bottom` too: a card hung over its passage moves with it alone (the box
   // grew taller, everything else the same).
   return a.top === b.top && a.bottom === b.bottom && a.left === b.left && a.width === b.width && a.maxHeight === b.maxHeight
+    && !!a.away === !!b.away
     && a.grown?.left === b.grown?.left && a.grown?.width === b.grown?.width && a.grown?.maxHeight === b.grown?.maxHeight;
 }
 
@@ -569,9 +570,10 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
    * Without `crypto.randomUUID` the message still goes, without an anchor.
    */
   const sendAnchored = useCallback(async (
-    message: string, images: ImageAttachment[] | undefined, interrupt: boolean, targetKey?: string,
+    message: string, images: ImageAttachment[] | undefined, interrupt: boolean, targetKey?: string, origin?: DraftOrigin,
   ): Promise<boolean> => {
     const r = refs.current;
+    const local = origin ? { draftOrigin: origin } : undefined;
     const dispatch = interrupt ? r.args.interruptSend : r.args.send;
     const s = r.stack.api;
     // Tree Mode: the page on screen. Conversation Mode: the card's question when
@@ -588,7 +590,8 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
       // once, so the NEXT send (a follow-up on a question page, another root
       // send) is oriented against this turn before history catches up (C58).
       const userUuid = live ? newUserUuid() : undefined;
-      return userUuid ? dispatch(sessionId, text, images, { userUuid }) : dispatch(sessionId, text, images);
+      if (userUuid) return dispatch(sessionId, text, images, { ...local, userUuid });
+      return local ? dispatch(sessionId, text, images, local) : dispatch(sessionId, text, images);
     }
     const node = pending ? undefined : r.tree.byKey.get(key);
     const parent = pending?.parentMsgId ?? node?.parent;
@@ -599,7 +602,7 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
     const userUuid = newUserUuid();
     if (!userUuid || !parent) {
       log.warn('threads', 'sending without a question anchor', { sessionId, hasUuid: !!userUuid });
-      return dispatch(sessionId, message, images);
+      return local ? dispatch(sessionId, message, images, local) : dispatch(sessionId, message, images);
     }
     const at = new Date().toISOString();
     const anchor: SessionThreadAnchor = {
@@ -649,7 +652,7 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
     if (head) r.stack.markHeadViewed(head);
     noteAsked(pending ? threadKeyOf(anchor) : key);
     log.info('threads', pending ? 'question sent' : 'follow-up sent', { sessionId, headId: pending ? userUuid : node?.headId, rowId: userUuid });
-    const sent = dispatch(sessionId, text, images, { userUuid, hints: questionHint(thread) });
+    const sent = dispatch(sessionId, text, images, { ...local, userUuid, hints: questionHint(thread) });
     if (pending) {
       const stack = r.stack;
       sent.then((ok) => stack.settlePending(pending, ok), () => stack.settlePending(pending, false));
@@ -688,10 +691,10 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
 
   /** The comment card's box: into the card's question (the stack's key). */
   const sendToTarget = useCallback(
-    (text: string, images?: ImageAttachment[]) => sendAnchored(text, images, false, refs.current.stack.api.currentKey), [sendAnchored]);
+    (text: string, images?: ImageAttachment[], origin?: DraftOrigin) => sendAnchored(text, images, false, refs.current.stack.api.currentKey, origin), [sendAnchored]);
   /** A review card's box: into that card's question, whichever page is current. */
   const sendToQuestion = useCallback(
-    (key: string, text: string, images?: ImageAttachment[]) => sendAnchored(text, images, false, key), [sendAnchored]);
+    (key: string, text: string, images?: ImageAttachment[], origin?: DraftOrigin) => sendAnchored(text, images, false, key, origin), [sendAnchored]);
 
   const markViewedNow = useCallback((key: string) => {
     const r = refs.current;

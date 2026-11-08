@@ -27,6 +27,7 @@
  */
 import { test, expect, type Page, type Locator } from '@playwright/test'
 import { pressBarTool } from './doc-bar-helpers'
+import { goToSessionFolder } from './todo-panel-helpers'
 
 const SESSION_ID = 'pw-vscode-session'
 const TASK_ID = 'pw-task-vscode'
@@ -47,6 +48,7 @@ async function openFiles(panel: Locator) {
   await panel.getByRole('button', { name: 'Files', exact: true }).click()
   const explorer = panel.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 10_000 })
+  await goToSessionFolder(explorer)
   return explorer
 }
 
@@ -101,7 +103,7 @@ async function distanceFromBottom(scroller: Locator): Promise<number> {
   return scroller.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight)
 }
 
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page, baseURL }) => {
   // Pin the Files tree EXPANDED before first render: the collapse pref key
   // syncs to the SHARED fixture server (ui-prefs), so a parallel run of
   // file-explorer-tree-collapse.spec.ts would otherwise boot this page with
@@ -109,7 +111,8 @@ test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     try { localStorage.setItem('open-walnut-file-explorer-tree-collapsed', '0') } catch { /* off */ }
   })
-  await page.goto('/')
+  await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
+  await page.getByRole('link', { name: 'Open Walnut' }).click()
   await page.waitForLoadState('networkidle')
 })
 

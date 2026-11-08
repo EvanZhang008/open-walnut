@@ -38,11 +38,11 @@ import { getDaemonSource, resolveDaemonSourceVersion } from './daemon-source.js'
 import { REQUIRED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
 import { acpUpgradeHolds } from './acp-upgrade-hold.js'
 import { assertDaemonDialsOpen, daemonDialsClosed } from './daemon-dial-gate.js'
-import { DAEMON_BINARIES_DIR, IS_EPHEMERAL, WALNUT_HOME } from '../constants.js'
+import { DAEMON_BINARIES_DIR, IS_DEMO, IS_EPHEMERAL, WALNUT_HOME } from '../constants.js'
 import { BUILD_BACKOFF_MS, backoffLeftMs, buildBackedOff, readBuildBackoff, writeBuildBackoff, type BuildBackoffEntry } from './daemon-build-backoff.js'
 import { BACK_TRIES_MAX, pendingReplaces } from './daemon-update-store.js'
 import { gateSessionCommand, settleSessionCommand } from './ephemeral-session-gate.js'
-import { buildRemotePreamble } from './session-io.js'
+import { buildRemotePreamble, sshAliasOptions, sshDestination } from './session-io.js'
 import { buildDaemonStartCmd, buildDaemonStopCmd, DAEMON_PID_SH } from './daemon-start-cmd.js'
 import { filesCarryBuild, keepPreviousDaemon, restorePreviousDaemon, restorePreviousOutcome, trialStagedDaemon, type DaemonTrialOpts } from './daemon-trial-cmd.js'
 import { diagnoseDaemonStartLog } from './daemon-start-diagnose.js'
@@ -63,6 +63,7 @@ import { DELTA_BLOCK_BYTES, blockHashScript, parseBlockHashes, planWalnutFileDel
 import { singleFile } from '../lib/single-file.js'
 import { buildTurnRetryEnv } from './daemon-core.js'
 import { CALLER_PROOF_CAPABILITY } from './gateway-core.js'
+import type { LineFate } from './line-fate-core.js'
 import type { SshTarget } from './session-io.js'
 import {
   localDaemon,
@@ -94,6 +95,7 @@ import {
   buildIsolatedRetireScript, daemonIdentityVerdict, describeIsolationRefusal, isOwnIsolatedRoot, isolatedDaemonEnv, isolatedLayout,
   isolatedProbeOpts, isolatedRootOfDaemonDir, remoteIsolationFor, resolveIsolatedRoot, type RemoteIsolation, buildStaleIsolatedRootSweepScript,
 } from './remote-isolation.js'
+import { demoIsolationInput } from './demo-remote-host.js'
 import {
   buildBunInstallScript, buildBunProbeScript, installTailForError, isRuntimeStartFailure, nextRuntimeAfterStartFailure,
   parseBunInstall, parseBunProbe, type RemoteRuntime,
@@ -105,7 +107,7 @@ import { AWAKE_TICK_MS, AwakeDownClock } from './awake-down-clock.js'
 import { assertFrameFits, DAEMON_FRAME_MAX_BYTES, DaemonFrameTooLargeError, tooLargeGatewayReply } from './daemon-frame-cap.js'
 import { FOLD_CHECKPOINT_FORMAT } from './fold-checkpoint-core.js'
 import { annotateCredentialFailure, SSH_EVIDENCE_PREFIX } from './ssh-credential-evidence.js'
-import { cancelRecordedForwards, controlSocketPath, exitControlMaster, masterLastWords, planControlMaster, recordForward, startControlMaster } from './ssh-control-master.js'
+import { cancelRecordedForwards, controlSocketPath, exitControlMaster, masterLastWords, masterTargetIdentity, ownedMuxClientArgs, planControlMaster, recordForward, startControlMaster, type MasterControl } from './ssh-control-master.js'
 import { lastWordsExcerpt, UPLOAD_PARALLEL } from './ssh-last-words.js'
 import { gzip } from 'node:zlib'
 import { promisify } from 'node:util'
@@ -1240,6 +1242,9 @@ export class DaemonConnection {
     return IS_EPHEMERAL && this.hostKey !== '__local__' && this.isolation.mode !== 'isolated'
   }
 
+  /** This connection runs the Demo's own isolated daemon on its host (remote-isolation.ts), never a shared one. */
+  get demoLifted(): boolean { return IS_DEMO && this.isolation.mode === 'isolated' }
+
   private _isolation: { link: string; iso: RemoteIsolation } | null = null
   /**
    * Where a test server stands on this host (remote-isolation.ts): 'shared' for a
@@ -1249,7 +1254,7 @@ export class DaemonConnection {
   get isolation(): RemoteIsolation {
     const link = this.linkKind
     if (this._isolation?.link === link) return this._isolation.iso
-    const iso = remoteIsolationFor({ hostKey: this.hostKey, env: process.env, ephemeral: IS_EPHEMERAL, link, home: WALNUT_HOME })
+    const iso = remoteIsolationFor({ hostKey: this.hostKey, env: process.env, ephemeral: IS_EPHEMERAL, link, home: WALNUT_HOME, demo: demoIsolationInput(IS_DEMO) })
     this._isolation = { link, iso }
     if (iso.mode === 'isolated') {
       // Until the probe chose, every path names the test server's own dir, never /tmp/open-walnut.
@@ -1441,7 +1446,7 @@ export class DaemonConnection {
       off: async () => {
         if (bootStartOff()) return 'automatic boot start setup is turned off (WALNUT_DAEMON_BOOT_START)'
         // A test server's isolated daemon ends with the test server: nothing on the host starts it again.
-        if (this.isolation.mode === 'isolated') return 'it is a test server\'s isolated daemon'
+        if (this.isolation.mode === 'isolated') return 'it is an isolated daemon that ends with the Walnut that started it'
         const { autofixDisabledReason } = await import('../core/hosts/host-autofix.js')
         const { getConfig } = await import('../core/config-manager.js')
         const off = autofixDisabledReason(process.env, (await getConfig().catch(() => null))?.hosts?.[this.hostKey])
@@ -1533,6 +1538,7 @@ export class DaemonConnection {
     if (!a || !b) return a === b
     return a.hostname === b.hostname && (a.user ?? '') === (b.user ?? '') && (a.port ?? 22) === (b.port ?? 22)
       && (a.via ?? 'ssh') === (b.via ?? 'ssh') && (a.endpoint ?? '') === (b.endpoint ?? '')
+      && (a.sshAlias ?? '') === (b.sshAlias ?? '')
   }
 
   /**
@@ -2670,7 +2676,10 @@ export class DaemonConnection {
     return new Promise<DaemonCommandResult>((resolveCmd, rejectCmd) => {
       const resolve = (result: DaemonCommandResult) => {
         reached ??= reachedNow()
-        try { settleSessionCommand(gateScope, cmd, params, result, gateAttempt) } catch { /* the reply still resolves */ }
+        try {
+          const settled = settleSessionCommand(gateScope, cmd, params, result, gateAttempt)
+          if (settled) { void settled.then(() => resolveCmd(result), rejectCmd); return }
+        } catch (error) { rejectCmd(error); return }
         resolveCmd(result)
       }
       const reject = (error: Error) => { reached ??= reachedNow(); rejectCmd(error) }
@@ -3464,6 +3473,7 @@ export class DaemonConnection {
     if (!testForward && (this.noSsh || !this.sshTarget || this._dialledDirect || !remotePort)) return
     const sshArgs = testForward ? [] : this.buildSshArgs({ useControlMaster: false })
     const sshHost = testForward ? '' : this.sshHostString
+    const laneOpts = testForward ? {} : this.laneForwardOpts()
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     const conn = this
     this.lane = new StreamLane({
@@ -3471,7 +3481,7 @@ export class DaemonConnection {
       home: WALNUT_HOME,
       walnutId: async () => (await import('../core/device-auth.js')).getInstanceId(),
       daemonInstanceId: () => conn._daemonInstanceId,
-      forward: () => (testForward ? testForward(conn.hostKey) : sshLaneForward(sshArgs, sshHost, remotePort!)),
+      forward: () => (testForward ? testForward(conn.hostKey) : sshLaneForward(sshArgs, sshHost, remotePort!, laneOpts)),
       accept: (info) => (info.from === 'follower' ? (stream) => { void conn.plugFollowerStream(stream) } : null),
     })
     this.lane.start()
@@ -3572,18 +3582,20 @@ export class DaemonConnection {
       srv.on('error', reject)
     })
 
+    const fwd = this.forwardSsh()
     const args = [
-      ...this.baseSshArgs,
+      ...fwd.args,
       '-L', `${localPort}:${target}:${remotePort}`,
       '-N',
       '-o', 'ExitOnForwardFailure=yes',
       '-o', 'ServerAliveInterval=15',
       '-o', 'ServerAliveCountMax=3',
-      this.sshHostString,
+      fwd.dest,
     ]
     // stderr is DRAINED: without a mux master this ssh owns the listener and
     // logs "channel N: open failed" per refused connection; an unread pipe
     // fills, ssh blocks, and the forward freezes while its port still accepts.
+    const ownedMaster = this.ssh.sshAlias ? this._controlPath : null
     const proc = spawn('ssh', args, { detached: true, stdio: ['ignore', 'ignore', 'pipe'] })
     if (this._controlPath) recordForward(this._controlPath, `${localPort}:${target}:${remotePort}`)
     let stderrTail = ''
@@ -3601,7 +3613,8 @@ export class DaemonConnection {
     if (!ready) {
       try { proc.kill('SIGTERM') } catch {}
       const why = stderrTail.trim().split('\n').pop()
-      throw new Error(`port forward to ${this.hostKey} ${target}:${remotePort} not accepting connections after 10s${why ? ` (${why})` : ''}`)
+      const lost = ownedMaster && !fs.existsSync(ownedMaster) ? ' (SSH master lost)' : ''
+      throw new Error(`port forward to ${this.hostKey} ${target}:${remotePort} not accepting connections after 10s${lost}${why ? ` (${why})` : ''}`)
     }
     this.portForwards.set(key, { localPort, proc, evictable })
     if (evictable) this.evictOldPortForwards()
@@ -3638,7 +3651,6 @@ export class DaemonConnection {
     }
     const controlPath = this._controlPath
     const args = [...this.baseSshArgs, this.sshHostString]
-    const masterArgs = this.buildSshArgs({ useControlMaster: false })
     // First the link, so no reconnect redeploys into the root being removed.
     this.disconnect({ keepSshMaster: true })
     try {
@@ -3653,7 +3665,8 @@ export class DaemonConnection {
       })
       return 'failed'
     } finally {
-      if (controlPath) await exitControlMaster(controlPath, masterArgs, this.sshHostString).catch(() => {})
+      // Through masterControl: a host from ~/.ssh/config reaches its master only with no ssh config.
+      if (controlPath) await this.stopControlMaster({ socket: controlPath }).catch(() => {})
     }
   }
 
@@ -3726,13 +3739,25 @@ export class DaemonConnection {
   // ── Private: SSH helpers ──
 
   private get sshHostString(): string {
-    return this.ssh.user
-      ? `${this.ssh.user}@${this.ssh.hostname}`
-      : this.ssh.hostname
+    return sshDestination(this.ssh)
   }
 
   private get baseSshArgs(): string[] {
     return this.buildSshArgs({ useControlMaster: true })
+  }
+
+  /** Args and destination for a run carrying Walnut's own -L: an alias rides only this Walnut's master, with no ssh config. */
+  private forwardSsh(): { args: string[]; dest: string } {
+    if (!this.ssh.sshAlias) return { args: this.baseSshArgs, dest: this.sshHostString }
+    if (!this._controlPath) throw new Error(`SSH master unavailable for ${this.hostKey}: a host from ~/.ssh/config forwards only through Walnut's own master`)
+    return { args: ownedMuxClientArgs(this._controlPath), dest: this.ssh.hostname }
+  }
+
+  /** How -O check/exit/cancel reach the master at `socketPath`: for an alias, with no ssh config. */
+  private masterControl(socketPath: string): MasterControl {
+    return this.ssh.sshAlias
+      ? { args: ownedMuxClientArgs(socketPath), host: this.ssh.hostname }
+      : { args: this.buildSshArgs({ useControlMaster: false }), host: this.sshHostString }
   }
 
   /**
@@ -3757,7 +3782,7 @@ export class DaemonConnection {
    * mux session on transient proxy errors).
    */
   private buildSshArgs(opts: { useControlMaster: boolean } = { useControlMaster: true }): string[] {
-    const args = ['-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=no']
+    const args = ['-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=no', ...sshAliasOptions(this.ssh)]
     if (this.ssh.port) args.push('-p', String(this.ssh.port))
     if (opts.useControlMaster && this._controlPath) {
       args.push('-o', `ControlPath=${this._controlPath}`)
@@ -3779,10 +3804,11 @@ export class DaemonConnection {
     const socketPath = controlSocketPath({ hostKey: this.hostKey, target: this.sshTargetIdentity, home: WALNUT_HOME })
     const sshArgs = this.buildSshArgs({ useControlMaster: false })
     // Reuse, start, or connect without one; a master that is only slow is kept.
-    const plan = await planControlMaster(socketPath, sshArgs, this.sshHostString)
+    const control = this.masterControl(socketPath)
+    const plan = await planControlMaster(socketPath, sshArgs, this.sshHostString, { control })
     if (plan.action === 'reuse') {
       this._controlPath = socketPath
-      const cancelled = await cancelRecordedForwards(socketPath, sshArgs, this.sshHostString)
+      const cancelled = await cancelRecordedForwards(socketPath, control.args, control.host)
       log.session.info('DaemonConnection: SSH ControlMaster reused', {
         host: this.hostKey, socketPath, staleForwards: cancelled.length, ...(plan.patient ? { answeredLate: true } : {}),
       })
@@ -3823,7 +3849,7 @@ export class DaemonConnection {
 
   /** What decides which machine this connection reaches: the master's identity. */
   private get sshTargetIdentity(): string {
-    return `${this.sshHostString}:${this.ssh.port ?? ''}`
+    return masterTargetIdentity(this.ssh)
   }
 
   /**
@@ -3831,10 +3857,12 @@ export class DaemonConnection {
    * is stopping leaves the master for the next process (ControlPersist ends it
    * if none comes).
    */
-  private async stopControlMaster(opts: { keep?: boolean } = {}): Promise<void> {
-    if (this._controlPath && !opts.keep) {
+  private async stopControlMaster(opts: { keep?: boolean; socket?: string } = {}): Promise<void> {
+    const socket = opts.socket ?? this._controlPath
+    if (socket && !opts.keep) {
       // Nothing to check: a master that is already gone is the usual case here.
-      await exitControlMaster(this._controlPath, this.buildSshArgs({ useControlMaster: false }), this.sshHostString)
+      const control = this.masterControl(socket)
+      await exitControlMaster(socket, control.args, control.host)
     }
     this._controlPath = null
     this._controlMaster = null
@@ -5264,6 +5292,20 @@ export class DaemonConnection {
     } catch (error) {
       throw new DaemonShutdownPendingError(`Daemon shutdown was not confirmed; no replacement was started: ${String(error)}`)
     }
+  }
+
+  /**
+   * The Demo is stopping: retire its isolated daemon on this host
+   * (retireIsolatedDaemon: the stop proves the pid is that root's daemon, then the
+   * root is removed and the ssh master exits). The link leaves the pool first, so
+   * no reconnect starts the daemon again. Refused for any host whose daemon is not
+   * the Demo's own; no service probe, because an isolated daemon is never a service's.
+   */
+  async stopDemoDaemon(timeoutMs: number): Promise<void> {
+    if (!this.demoLifted) throw new Error(`${this.hostKey} is not a Demo host; its daemon is not the Demo's to stop`)
+    releasePooledInstance(this)
+    const outcome = await this.retireIsolatedDaemon(timeoutMs)
+    if (outcome !== 'retired') throw new Error(`${this.hostKey}: the Demo daemon did not confirm its stop (${outcome})`)
   }
 
   /**
@@ -6897,16 +6939,20 @@ export class DaemonConnection {
     })
 
     // Create SSH tunnel (ssh -L localPort:localhost:remotePort -N host)
+    const fwd = this.forwardSsh()
     const args = [
-      ...this.baseSshArgs,
+      ...fwd.args,
       '-L', `${localPort}:127.0.0.1:${remotePort}`,
       '-N',  // No remote command — just tunnel
       '-o', 'ExitOnForwardFailure=yes',
       '-o', 'ServerAliveInterval=15',
       '-o', 'ServerAliveCountMax=3',
-      this.sshHostString,
+      fwd.dest,
     ]
 
+    // An alias tunnel rides only this Walnut's master: its socket gone means the master was lost, not a sign-in.
+    const ownedMaster = this.ssh.sshAlias ? this._controlPath : null
+    const ownedMasterLost = () => !!ownedMaster && !fs.existsSync(ownedMaster)
     this.tunnel = spawn('ssh', args, {
       detached: true,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -6928,7 +6974,7 @@ export class DaemonConnection {
       // master's own log (-E, ssh-control-master.ts) holds why.
       const masterSaid = !tunnelStderr.trim() && this._controlPath ? masterLastWords(this._controlPath) : ''
       log.session.warn('DaemonConnection: SSH tunnel died', {
-        host: this.hostKey, code, localPort, remotePort,
+        host: this.hostKey, code, localPort, remotePort, ...(ownedMasterLost() ? { masterLost: true } : {}),
         ...(tunnelStderr.trim() ? { stderr: lastWordsExcerpt(tunnelStderr) } : {}),
         ...(masterSaid ? { masterSaid: masterSaid.slice(-300) } : {}),
       })
@@ -6941,7 +6987,8 @@ export class DaemonConnection {
     const tunnelReady = await this.waitForTunnel(localPort, 10_000)
     if (!tunnelReady) {
       const said = tunnelStderr.trim().split('\n').slice(-6).join('\n')
-      throw new Error(`SSH tunnel created but port ${localPort} not accepting connections after 10s${said ? `\n${said}` : ''}`)
+      const lost = ownedMasterLost() ? ' (SSH master lost)' : ''
+      throw new Error(`SSH tunnel created but port ${localPort} not accepting connections after 10s${lost}${said ? `\n${said}` : ''}`)
     }
 
     log.session.info('DaemonConnection: SSH tunnel created', {
@@ -7475,10 +7522,20 @@ export class DaemonConnection {
     if (this.noSsh || !this.sshTarget || this._dialledDirect || !remotePort) return null
     const sshArgs = this.buildSshArgs({ useControlMaster: false })
     const sshHost = this.sshHostString
+    const laneOpts = this.laneForwardOpts()
     // Its upload goes at the relay's pace, whatever waited for it (paced-forward.ts).
-    return async () => pacedForward(await sshLaneForward(sshArgs, sshHost, remotePort), {
+    return async () => pacedForward(await sshLaneForward(sshArgs, sshHost, remotePort, laneOpts), {
       bytesPerSec: BULK_UPLOAD_BYTES_PER_SEC, burstBytes: BULK_UPLOAD_BURST_BYTES,
     })
+  }
+
+  /**
+   * Options for a connection of its own (the stream lane, the bulk channel): a host from
+   * ~/.ssh/config gets a master of that connection's own (`ownMaster`) and TCP, never the
+   * session master's, and its client is mux-only.
+   */
+  private laneForwardOpts(): { ownMaster?: { hostname: string } } {
+    return this.ssh.sshAlias ? { ownMaster: { hostname: this.ssh.hostname } } : {}
   }
 
   /** Wait (at most `ms`) for the bulk channel to be up; resolves with the time waited. */
@@ -9253,6 +9310,9 @@ const FAILURE_CACHE_TTL_MS = 60_000  // 60s — longer than the worst-case SSH t
  * text is still logged once, at the moment the connect actually failed.
  * Terminal colour codes are dropped (a proxy prints its errors in red).
  */
+/** How long the evidence part of a connect failure summary may run (it carries a key file path). */
+const EVIDENCE_TAIL_MAX = 480
+
 export function summarizeConnectFailure(raw: string, maxLen = 160): string {
   // eslint-disable-next-line no-control-regex
   const lines = raw.split('\n').map((l) => l.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, '').trim()).filter(Boolean)
@@ -9271,7 +9331,9 @@ export function summarizeConnectFailure(raw: string, maxLen = 160): string {
   const oneLine = signal.replace(/\s+/g, ' ')
   if (!evidence || signal === evidence) return clip(oneLine, maxLen)
   const tail = ` [${evidence.replace(/\s+/g, ' ')}]`
-  return clip(oneLine, Math.max(20, maxLen - tail.length)) + clip(tail, maxLen)
+  // The evidence is read back from the summary (a key file the hint names), so it stays whole past
+  // maxLen, up to EVIDENCE_TAIL_MAX: a Demo HOME key path cut short lost the hint (2026-11-08).
+  return clip(oneLine, Math.max(20, maxLen - tail.length)) + clip(tail, Math.max(maxLen, EVIDENCE_TAIL_MAX))
 }
 
 /**
@@ -9616,6 +9678,21 @@ export function dropDaemonConnection(hostKey: string): boolean {
   connectingPromises.delete(hostKey)
   notifyDaemonPhaseChange(hostKey)
   return true
+}
+
+/** Drop this very instance from the pool under every key that holds it (the Demo's stop: no reconnect after it). */
+function releasePooledInstance(conn: DaemonConnection): void {
+  for (const [key, pooled] of [...connectionPool]) {
+    if (pooled !== conn) continue
+    poolDelete(key)
+    connectingPromises.delete(key)
+    notifyDaemonPhaseChange(conn.host)
+  }
+}
+
+/** Every pooled, connected connection that runs the Demo's own daemon on its host (demo-remote-host.ts). */
+export function demoLiftedConnections(): DaemonConnection[] {
+  return [...new Set(connectionPool.values())].filter((conn) => conn.connected && conn.demoLifted)
 }
 
 /** The pooled connection for `hostKey` dials `sshTarget` (or none is pooled): another machine's dial is not this one's. */
@@ -9974,6 +10051,31 @@ export function getConnectedDaemonConnection(hostKey: string): DaemonConnection 
     if (pooled.connected && pooled.host === hostKey) return pooled
   }
   return null
+}
+
+/** Existing evidence only: never dials, attaches, starts a CLI or writes a user line. */
+export async function readDaemonLineFate(
+  conn: DaemonConnection | null, sid: string, uuid: string, messageIds: string[],
+): Promise<LineFate | null> {
+  if (!sid || !conn?.connected || !conn.hasCapability('line-fate-read-v1')) return null
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    // send's link-progress timeout may renew behind bulk traffic. Recovery has
+    // its own absolute deadline, never extended by bytes arriving on that link.
+    const deadline = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), 10_000) })
+    const reply = await Promise.race([conn.send('line.fate', { sid, uuid, messageIds }, 10_000), deadline])
+    if (!reply || reply.ok !== true) return null
+    const kind = reply.fate
+    if (kind !== 'ran' && kind !== 'cancelled' && kind !== 'dropped' && kind !== 'waiting' && kind !== 'unanswered') return null
+    return {
+      fate: kind,
+      ...(typeof reply.state === 'string' ? { state: reply.state } : {}),
+      ...(reply.answer === 'yes' || reply.answer === 'pending' ? { answer: reply.answer } : {}),
+      ...(typeof reply.writtenAt === 'number' && Number.isFinite(reply.writtenAt) ? { writtenAt: reply.writtenAt } : {}),
+      ...(reply.quiet === true ? { quiet: true as const } : {}),
+    }
+  } catch { return null }
+  finally { if (timer !== undefined) clearTimeout(timer) }
 }
 
 /**

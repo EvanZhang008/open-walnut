@@ -21,6 +21,7 @@
  *    same buildSelectionPrefill composer as the Changed tab). In the WYSIWYG
  *    editor the same action lives in the selection bubble menu ("Ask").
  */
+import { shownFolderName } from '@/utils/home-folder';
 import { useState, useEffect, useRef, useMemo, useCallback, type ReactNode, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { FileAskNotice } from '@/components/common/FileAskNotice';
@@ -29,7 +30,7 @@ import { stableHtml } from '@/hooks/useStableHtml';
 import { useNavigate } from 'react-router-dom';
 import {
   fetchFileContent, fetchFileContentConditional, rawFileContentUrl, downloadFileUrl, saveFileContent,
-  FileSaveConflictError, isNetworkFetchError, HOST_RECONNECTING_CODE, type FileContentResponse,
+  FileSaveConflictError, FileReadError, isNetworkFetchError, isComingBackCode, isWalnutUnreachable, WALNUT_UNREACHABLE_CODE, type FileContentResponse,
 } from '@/api/files';
 import { visibleInterval } from '@/utils/page-visibility';
 import {
@@ -45,7 +46,7 @@ import { isSidecarPath } from '@/utils/doc-comments';
 import { rawKind, isPlayable, isMarkdownExt } from '@/utils/file-kind';
 import { formatSize } from '@/utils/format';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
-import { loadFileScroll, saveFileScroll } from '@/utils/file-view-state';
+import { loadFileScroll } from '@/utils/file-view-state';
 import {
   saveFileDraft, loadFileDraft, deleteFileDraft, planDraftReplay, planStaleDraftRestore, stashFileDraftSync,
 } from '@/utils/file-drafts';
@@ -86,6 +87,11 @@ import { log } from '@/utils/log';
 import { useHidesHighlights } from '@/hooks/useHidesHighlights';
 import '@/styles/live-edit.css';
 import '@/styles/file-doc-bar.css';
+import { fileCardOpenIn, selectionToolbarOpen } from '@/utils/file-card-escape';
+import { keepReadingPlace } from '@/utils/reading-place';
+import { lineSurfaceOf } from '@/utils/reading-line-dom';
+import { useFileReadingPlace, type ReadingSeen } from '@/components/common/use-file-reading-place';
+import { pressBelowText } from '@/utils/blank-press';
 
 /** A ⌘S (or the banner's Try again) that never reached the server. */
 const SAVE_RETRY_MESSAGE = "Can't reach Walnut right now. Your text is still in the editor: press Try again once Walnut is running.";
@@ -267,25 +273,6 @@ const MAX_FILE_LOADING_JOINS = 10;
 const FILE_RECONNECT_RETRY_MS = 5_000;
 
 
-/**
- * The element that actually scrolls the file body.
- *
- * It differs by render mode, which is why this is resolved from the DOM instead
- * of hardcoded: the markdown preview (`.fv-md-preview`) scrolls itself, while the
- * plain-source `<pre>` only scrolls HORIZONTALLY — its vertical scroller is an
- * ancestor (the explorer's preview pane, the fullscreen overlay, or the pop-out
- * root). Walk up until one can actually scroll.
- */
-function findScroller(start: HTMLElement | null): HTMLElement | null {
-  let el: HTMLElement | null = start;
-  while (el && el !== document.body) {
-    const overflowY = getComputedStyle(el).overflowY;
-    if (/auto|scroll|overlay/.test(overflowY) && el.scrollHeight > el.clientHeight + 1) return el;
-    el = el.parentElement;
-  }
-  return null;
-}
-
 export function FileContentView({
   path: filePath, line, lineTerm, lineEnd, host, sessionId, hidePopout, reloadToken = 0,
   onSelectCode, onSaved, onSymbolLookup, onOpenPath, barLeading, barTrailing, extraMenuItems, tightMenuItems,
@@ -324,6 +311,7 @@ export function FileContentView({
   const [loadingFrom, setLoadingFrom] = useState<string | null>(null);
   // For HTML/Markdown files, default to the rendered preview; toggle to source on demand.
   const [showSource, setShowSource] = useState(false);
+  const sourceModeRef = useRef({ key: `${host ?? 'local'} ${filePath}`, source: false });
   // Fullscreen the preview (md/html) — CSS-fixed overlay, no remount.
   const [fullscreen, setFullscreen] = useState(false);
   // Full screen hides the sheet under this one (fullscreen-tab.css) by visibility: its
@@ -689,7 +677,9 @@ export function FileContentView({
   // Source-vs-Preview is restored from the last visit to THIS file (same store as
   // the scroll offset) so reopening a file returns you to how you were reading it.
   useEffect(() => {
-    setShowSource(loadFileScroll(host, filePath)?.source === true);
+    const source = loadFileScroll(host, filePath)?.source === true;
+    sourceModeRef.current = { key: `${host ?? 'local'} ${filePath}`, source };
+    setShowSource(source);
     setFullscreen(false);
     setPlaybackRate(1);
     // In-MEMORY draft/dirty state is per-FILE: switching files resets it. The
@@ -881,6 +871,10 @@ export function FileContentView({
           content: null, size: 0, truncated: false, binary: false,
           error: err instanceof Error ? err.message : String(err),
           extension: '',
+          // Walnut was not answering: asked again on the clock below, like a host that reconnects.
+          ...(isWalnutUnreachable(err) ? { code: WALNUT_UNREACHABLE_CODE }
+            // Walnut's own refusal keeps its code: a host coming back is asked again the same way.
+            : err instanceof FileReadError && err.code ? { code: err.code } : {}),
         });
       } finally {
         if (!cancelled) { setLoading(false); setReloading(false); readingRef.current = false; }
@@ -892,7 +886,16 @@ export function FileContentView({
   // The file's host is not answering now: ask again until it is back, so a file
   // opened while it reconnected shows once it answers, with no click (gate
   // review, 2026-10-07: it kept "Reconnecting to Cloud" until it was clicked).
-  const hostWaiting = !loading && data?.code === HOST_RECONNECTING_CODE && data.content == null;
+  const hostWaiting = !loading && isComingBackCode(data?.code) && data?.content == null;
+  // Walnut is back (the socket reconnected): a read that failed while it was gone is asked again now.
+  const failedRead = !loading && !!data?.error && data.content == null;
+  const failedReadRef = useRef(failedRead);
+  failedReadRef.current = failedRead;
+  useEvent('_ws:reconnected', () => {
+    if (!failedReadRef.current || readingRef.current) return;
+    quietReadRef.current = true;
+    setSelfReload((n) => n + 1);
+  });
   useEffect(() => {
     if (!hostWaiting) return;
     const retryMs = (window as unknown as { __filesRetryMs?: number }).__filesRetryMs || FILE_RECONNECT_RETRY_MS;
@@ -910,122 +913,38 @@ export function FileContentView({
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }, [line, data]);
 
-  // ── Resume reading position ────────────────────────────────────────────────
-  // Restore this file's last scroll offset once its content is on screen, then
-  // keep it up to date. Without this, every reopen of a file (panel toggle,
-  // session switch, reload) dumped you back at line 1 of a long document.
-  //
-  // Skipped when `line` is set — an explicit deep-link to a line wins over the
-  // remembered offset (that effect above owns the scroll in that case).
-  const restoredForRef = useRef<string | null>(null);
-  // Last offset OBSERVED while the scroller was live, per file. The unmount flush
-  // must use this instead of re-reading the element: by teardown the node is
-  // detached, `scrollTop` reads 0, and saving that DELETES the entry we were
-  // trying to preserve — which is exactly why the first version of this restore
-  // silently never worked (localStorage came back as `{}` after closing).
-  const lastSeenRef = useRef<{ key: string; top: number } | null>(null);
+  // ── The reading place (use-file-reading-place.ts) ──────────────────────────
+  // Noted as the source line at the top of the view on every scroll, carried across a
+  // Preview/Source switch, and brought back on every reopen of this file (panel toggle,
+  // session switch, reload). A deep link to a line (`line`) wins over the remembered place.
+  const lastSeenRef = useRef<ReadingSeen | null>(null);
+  const showSourceRef = useRef(showSource);
+  showSourceRef.current = showSource;
+  const { noteSwitch } = useFileReadingPlace({
+    rootRef: contentRef, host, filePath, line, seenRef: lastSeenRef,
+    // Raw kinds (media/PDF/image) have no text body: their place belongs to the native control.
+    active: !!data?.content && !raw,
+    contentNonce: data,
+    textOf: () => draftRef.current ?? dataRef.current?.content ?? '',
+    sourceChosen: () => {
+      const m = sourceModeRef.current;
+      return m.key === `${host ?? 'local'} ${filePath}` ? m.source : showSourceRef.current;
+    },
+  });
+
+  // ── Keep the reading place across width changes (utils/reading-place.ts) ──
+  // The window, a panel divider or the sheet changing width rewraps every line above
+  // the reader; the same scrollTop then shows another part of the file (2026-11-10:
+  // Section 62 became Section 74). CodeMirror keeps its own place, and a frame is its page's.
   useEffect(() => {
-    // Raw kinds (media/PDF/image) have no text body and never fetch `content`;
-    // their scroll position belongs to the native control, not to us.
-    if (!data?.content || raw) return;
-    // Latch per FILE, not per render mode: a Refresh or a Preview⇄Source toggle
-    // re-runs this effect and must only RE-ATTACH the listener. Re-restoring
-    // would yank the user back to the saved offset mid-read (and a Preview
-    // offset is meaningless in Source view, which has different line heights).
-    const key = `${host ?? 'local'} ${filePath}`;
-    const firstRestore = restoredForRef.current !== key;
-    restoredForRef.current = key;
-    // The HTML preview's page scrolls inside its frame, which keeps and restores its own
-    // place (usePreviewFrame). Here no body matches, so the walk up found the explorer's
-    // pane, which full screen lets scroll by its toolbar's height: the saved page offset
-    // scrolled the pane instead (the toolbar went off screen, the question rail docked at
-    // the view's top over the page) and the pane's own small offset was then saved over
-    // the page's under the same key (2026-11-12, every reopen of a long HTML file).
-    if (isHtmlExt(data.extension, filePath) && !showSource) return;
-
-    let raf = 0;
-    let saveTimer: ReturnType<typeof setTimeout> | undefined;
-
-    // ── Save: capture-phase listener on document, not a listener on one node.
-    // The body is an ASYNC-mounting editor now (TipTap fills after mount,
-    // CodeMirror measures on its own rAF), so "find the scroller once, attach
-    // there" raced the mount: when findScroller came up empty on frame 1 the
-    // listener was never attached and NOTHING was ever saved — the reported
-    // "doesn't remember the scroll location". Scroll events don't bubble but
-    // they DO capture, so one document-level listener hears every current and
-    // FUTURE scroller; we filter to elements related to this file's body.
-    const saved = firstRestore && !line ? loadFileScroll(host, filePath) : null;
-    let chaseTop: number | null = saved ? saved.top : null;
-    let lastSetTop = -1;
-    const chaseDeadline = Date.now() + 5000;
-
-    const onScrollCapture = (e: Event) => {
-      const t = e.target;
-      const rootEl = contentRef.current;
-      if (!(t instanceof HTMLElement) || !rootEl) return;
-      // The vertical scroller is either inside the body (editors, md preview)
-      // or an ancestor pane (read-only <pre> case). Anything else on the page
-      // is not ours. Horizontal-only scrollers (the <pre> itself) are skipped —
-      // saving their scrollTop of 0 would delete the entry being preserved.
-      if (!rootEl.contains(t) && !t.contains(rootEl)) return;
-      if (t.scrollHeight <= t.clientHeight + 1) return;
-      const top = t.scrollTop;
-      // A scroll that isn't the echo of our own programmatic set means the
-      // user took over — stop chasing the saved offset, never fight them.
-      if (chaseTop != null && Math.abs(top - lastSetTop) > 1) chaseTop = null;
-      lastSeenRef.current = { key, top };
-      clearTimeout(saveTimer);
-      // Debounced: a scroll gesture fires dozens of events; one write per rest.
-      saveTimer = setTimeout(() => {
-        const seen = lastSeenRef.current;
-        if (seen?.key === key) saveFileScroll(host, filePath, { top: seen.top, source: showSource });
-      }, 250);
-    };
-    document.addEventListener('scroll', onScrollCapture, { capture: true, passive: true });
-
-    // ── Restore: CHASE the saved offset across frames instead of applying it
-    // once. At any single frame the scroller may not exist yet or its
-    // scrollHeight may be a fraction of the final document (editor mount,
-    // syntax highlight, image loads) — a one-shot restore clamped the offset
-    // against that fraction, so long files always "resumed" near the top.
-    // Chasing stops when the full offset is reachable, the user scrolls, or
-    // the deadline passes (never-scrollable short files).
-    const tick = () => {
-      if (chaseTop != null) {
-        const body = contentRef.current?.querySelector<HTMLElement>(
-          '.fv-md-preview, .file-viewer-code, .fv-source-editor .cm-scroller, .fv-wysiwyg-editor',
-        );
-        const scroller = findScroller(body ?? contentRef.current);
-        if (scroller) {
-          const max = scroller.scrollHeight - scroller.clientHeight;
-          // Clamp to what's renderable NOW; keep chasing until the document
-          // has grown enough to hold the full saved offset.
-          const top = Math.max(0, Math.min(chaseTop, max));
-          if (Math.abs(scroller.scrollTop - top) > 1) {
-            lastSetTop = top;
-            scroller.scrollTop = top;
-            // Seed the tracker so an immediate close re-persists the restored
-            // value rather than flushing a 0 (a programmatic scrollTop set
-            // fires no synchronous event).
-            lastSeenRef.current = { key, top };
-          }
-          if (max >= chaseTop) chaseTop = null; // full saved offset reached
-        }
-      }
-      if (chaseTop != null && Date.now() < chaseDeadline) raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-
-    return () => {
-      cancelAnimationFrame(raf);
-      clearTimeout(saveTimer);
-      document.removeEventListener('scroll', onScrollCapture, { capture: true } as EventListenerOptions);
-      // Flush the last LIVE value — closing the panel is the most common way to
-      // leave a file, and the debounce would otherwise drop that last position.
-      const seen = lastSeenRef.current;
-      if (seen?.key === key) saveFileScroll(host, filePath, { top: seen.top, source: showSource });
-    };
-  }, [data, filePath, host, showSource, raw, line]);
+    const view = contentRef.current;
+    if (!view) return;
+    return keepReadingPlace(view, () => {
+      // The surfaces the line keeper knows (utils/reading-line-dom.ts), CodeMirror left to itself.
+      const s = lineSurfaceOf(view);
+      return s && s.kind !== 'cm' ? { scroller: s.scroller, body: s.body } : null;
+    });
+  }, [filePath]);
 
   // Media keyboard shortcuts. Capture phase so we beat the browser's native
   // focused-<video> handling; preventDefault stops a double-seek. Skipped while
@@ -1069,6 +988,9 @@ export function FileContentView({
       // full screen on the next press.
       if (document.querySelector('.wn-context-menu, .app-modal-overlay')) return;
       if (historyOpenRef.current) return; // History's own handler takes this press
+      // A selection toolbar, then a card over the file (Ask here, a comment), close first
+      // (utils/file-card-escape.ts).
+      if (e.defaultPrevented || selectionToolbarOpen() || fileCardOpenIn(contentRef.current)) return;
       e.stopPropagation();
       setFullscreen(false);
     };
@@ -1084,8 +1006,9 @@ export function FileContentView({
     const handler = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.isComposing) return;
       if (document.querySelector('.wn-context-menu, .app-modal-overlay')) return;
-      // The find bar closes itself on Escape first.
+      // The find bar closes itself on Escape first, and so does a selection toolbar.
       if (e.target instanceof Element && e.target.closest('.fv-search-bar')) return;
+      if (selectionToolbarOpen()) return;
       e.preventDefault();
       e.stopPropagation();
       setHistoryOpen(false);
@@ -1130,6 +1053,29 @@ export function FileContentView({
   const editingSource = canEdit && (showSource || !isRenderable);
   const editing = editingWysiwyg || editingSource;
   const showPreview = isRenderable && !showSource && !editingWysiwyg;
+  // A press in the blank space under an editor's text (a short file leaves room in the view)
+  // puts the caret at the end, as a text box does; the editors hear presses on their text
+  // only (2026-11-10 review: nothing took focus, and the next "F" opened the page's filter).
+  // Inside the source editor's own box FileSourceEditor does the same.
+  useEffect(() => {
+    const view = contentRef.current;
+    if (!view || !editing) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target;
+      if (e.button !== 0 || e.defaultPrevented || !(t instanceof Element)) return;
+      const host = view.querySelector<HTMLElement>(':scope > .fv-source-editor, :scope > .fv-wysiwyg-editor');
+      if (!host) return;
+      const text = host.querySelector('.ProseMirror') ?? host;
+      // A control in the margin (a button, a link, a field) is not blank space.
+      const blank = t === view || (t !== text && host.contains(t) && !text.contains(t)
+        && !t.closest('.editor-mic-dock, .notes-bubble-menu, .cm-editor, button, a, input, textarea, select, label, [role=button]'));
+      if (!blank || !pressBelowText(e.clientY, e.clientX, text.getBoundingClientRect().bottom, null)) return;
+      e.preventDefault();
+      editorRef.current?.focusEnd?.();
+    };
+    view.addEventListener('mousedown', onDown);
+    return () => view.removeEventListener('mousedown', onDown);
+  }, [editing]);
   /** Which text surface is on show, for the question layer (marks, Ask here). */
   const threadSurface: FileThreadSurface = loading ? 'none'
     : showPreview && isHtml ? 'html'
@@ -1564,8 +1510,13 @@ export function FileContentView({
       }
       setEditorDirty(false);
     }
+    const key = `${host ?? 'local'} ${filePath}`;
+    sourceModeRef.current = { key, source: toSource };
+    // The outgoing view's line goes with the reader (after the draft is carried: it is the
+    // text the incoming view shows).
+    noteSwitch(toSource);
     setShowSource(toSource);
-  }, [dirty]);
+  }, [dirty, filePath, host, noteSwitch]);
 
   // Last-ditch guard for the whole-tab case (reload, close, navigate away). The
   // in-app paths (file switch, Cancel) have their own explicit confirms.
@@ -1752,7 +1703,7 @@ export function FileContentView({
   const frameFindRef = useRef<{ open: () => void; result: (r: { count: number; index: number }) => void } | null>(null);
   const preview = usePreviewFrame({
     // The URL version a "Back to" strip returns to: the file as it is now.
-    frameRef: htmlFrameRef, live: htmlPreviewLive, filePath, host, line, reloadToken: reloadToken + diskVersion, lastSeenRef,
+    frameRef: htmlFrameRef, live: htmlPreviewLive, filePath, host, line, reloadToken: reloadToken + diskVersion, lastSeenRef, sourceModeRef,
     onSelection: onSelectCode ? onFrameSelection : undefined, onOpenPath,
     onFindKey: () => frameFindRef.current?.open(),
     onFindResult: (r) => frameFindRef.current?.result(r),
@@ -2240,7 +2191,9 @@ export function FileContentView({
   ];
 
   const fileName = filePath.split('/').pop() || filePath;
-  const parentName = filePath.includes('/') ? filePath.slice(0, filePath.lastIndexOf('/')).split('/').pop() : '';
+  // The host's home reads `~`, never its id or user name (utils/home-folder.ts).
+  const parentDir = filePath.includes('/') ? filePath.slice(0, filePath.lastIndexOf('/')) : '';
+  const parentName = parentDir ? shownFolderName(parentDir, host) : '';
   const defaultLead = (
     <span className="fv-doc-crumbs" title={filePath}>
       {parentName && <span className="fv-doc-crumb-dir">{parentName}</span>}
@@ -2831,6 +2784,8 @@ export function FileContentView({
           onDismiss={() => setSelection(null)}
           resolveRect={resolveSelectionRect}
           listenTo={selection.inHtml ? preview.scrollEvents : undefined}
+          // Inside the file view's own box: never past the sheet's edge or over the file tree.
+          boundsOf={() => contentRef.current}
         />
       )}
       {ctxTarget && (

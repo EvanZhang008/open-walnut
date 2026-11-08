@@ -29,6 +29,7 @@ import {
   draftCwdPill, draftDecisionChip, draftDecisionChips, draftModelPill, draftPanel, draftPanels,
   draftProjectPill, draftQuickChipFor, draftTaskMenu, isoDay, nthRequest,
   openDraft, openDraftOnCwd, openDraftSettings, rememberModelFor, typeAndSettle, type ParseSource, draftSend,
+  HOME_FOLDER,
 } from './draft-helpers'
 import { createTaskForLater } from './draft-outcome-helpers'
 import { openSessionFromPlus, pinToTier } from './draft-surface-helpers'
@@ -367,7 +368,7 @@ test('an emptied composer (after the debounce) withdraws AI tier, dates, project
   await draftComposer(page).fill('')
   await expect(draftDecisionChips(panel)).toHaveCount(0, { timeout: 5_000 })
   await expect(draftProjectPill(panel)).toHaveCount(0)
-  await expect(draftCwdPill(panel)).toHaveText('Choose folder and host…')
+  await expect(draftCwdPill(panel)).toHaveText(HOME_FOLDER)
   await expect(panel.locator('.draft-decisions-key')).toHaveCount(0)
   await expect(draftModelPill(panel)).toHaveAttribute('data-model', model ?? '')
 })
@@ -490,7 +491,7 @@ test('a tier "+" that reuses a just-emptied draft lands on Inbox, no folder, and
     await expect(draftPanels(page)).toHaveCount(1)
     const reused = draftPanel(page)
     await expect(draftProjectPill(reused)).toHaveCount(0)
-    await expect(draftCwdPill(reused)).toHaveText('Choose folder and host…')
+    await expect(draftCwdPill(reused)).toHaveText(HOME_FOLDER)
     await expectUserChip(reused, 'pinTier', tierLabel)
     expect(await chipLabel(draftDecisionChip(reused, 'pinTier'))).toBe(tierLabel)
     await expect(draftModelPill(reused)).toHaveAttribute('data-model', model ?? '')

@@ -10,7 +10,7 @@
  * ticket alone does not say which worker hears it.
  */
 import { useEffect, useRef, useState } from 'react';
-import { wsClient } from '@/api/ws';
+import { sendSessionMessage } from '@/api/session-send';
 import { log } from '@/utils/log';
 import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
 import { useImageAttachments } from '@/components/common/image-attachments';
@@ -35,13 +35,8 @@ export function composerPlaceholder(title: string): string {
 export async function sendToCardSession(sessionId: string, message: string, images?: ImageAttachment[]): Promise<void> {
   // Pictures go up over HTTP first, never on the socket; the RPC carries their names (api/image-upload.ts).
   const pictures = await buildImageRefsPayload(images);
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('no answer in 15s')), SEND_TIMEOUT_MS); });
-  try {
-    await Promise.race([wsClient.sendRpc<{ messageId: string }>('session:send', { sessionId, message, ...pictures }), timeout]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
+  // An answer slower than that counts as lost: the server's own record of the line decides (api/session-send.ts).
+  await sendSessionMessage({ sessionId, message, ...pictures }, { timeoutMs: SEND_TIMEOUT_MS });
 }
 
 function reasonOf(err: unknown): string {

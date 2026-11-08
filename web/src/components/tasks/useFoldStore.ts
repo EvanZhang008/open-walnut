@@ -4,8 +4,10 @@
  * (tests/web/section-fold-rule-guard.test.ts holds every drawer to it).
  *
  * The clock runs from the stored opening time and the user's last action in the fold's panel (a
- * click, a scroll, a key or a touch there, kept here in memory): a reload, a restart or another
- * device reading the synced value folds a fold whose time ran out while it was away. A timer
+ * click, a scroll, a key or a touch there, kept here in memory and written into the opening time
+ * when the page goes away): a reload, a restart or another device reading the synced value folds
+ * a fold whose time ran out while it was away, and gives one still in time its full time from the
+ * load, so a fold that shows open at a load never folds a few seconds later. A timer
  * only wakes the page at the next due time; a due fold the user is typing in, or has a menu open
  * from (foldBusy), is looked at again every FOLD_BUSY_RETRY_MS until they are done.
  *
@@ -15,7 +17,9 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { FOLD_PIN_EVENT, FOLD_SETTLE_EVENT, type FoldPinDetail } from '@/hooks/useFoldAnchor';
+import { decodeField, LAYOUT_FIELDS } from '@/utils/layout-record';
 import {
+  clockFoldChanges,
   FOLD_BUSY_RETRY_MS,
   FOLD_KEY_ATTR,
   FOLD_PANEL_ATTR,
@@ -25,10 +29,13 @@ import {
   foldIsDue,
   foldIsOpen,
   inPanelView,
+  initialFoldStore,
+  keepLastActions,
   mergeFoldChanges,
   nextAutoClose,
   parseFoldStore,
   pruneFolds,
+  restartShownFolds,
   serializeFoldStore,
   setFold,
 } from './section-fold-rule';
@@ -141,16 +148,22 @@ export function useFoldStore(lsKey: string, kind: FoldKindOf, now: () => number 
   const drawnRef = useRef(drawn);
   drawnRef.current = drawn;
   const [store, setStore] = useState<FoldStore>(() => {
-    const parsed = readStored(lsKey);
-    const pruned = pruneFolds(parsed, kind, now());
-    if (pruned !== parsed) persist(lsKey, pruned);
+    let raw: string | null = null;
+    try { raw = localStorage.getItem(lsKey); } catch { /* storage off */ }
+    let existing = false;
+    try { existing = Object.values(LAYOUT_FIELDS).some(key => decodeField(localStorage.getItem(key)) !== undefined); } catch { /* storage off */ }
+    const parsed = initialFoldStore(raw, kind, existing);
+    const t = now();
+    const pruned = restartShownFolds(pruneFolds(parsed, kind, t), kind, t);
+    if (serializeFoldStore(pruned) !== raw) persist(lsKey, pruned);
     return pruned;
   });
   const storeRef = useRef(store);
   storeRef.current = store;
 
-  /** This tab's new store; storage gets only the folds that changed, over what it holds now. */
-  const write = useCallback((next: FoldStore) => {
+  /** This tab's new store; storage gets only the folds that changed, over what it holds now. A
+   *  clock fold (`clock`) leaves out a fold another tab opened again since (clockFoldChanges). */
+  const write = useCallback((next: FoldStore, clock = false) => {
     const prev = storeRef.current;
     if (next === prev) return;
     const changes: Record<string, boolean | number | undefined> = {};
@@ -158,7 +171,8 @@ export function useFoldStore(lsKey: string, kind: FoldKindOf, now: () => number 
       if (prev[k] !== next[k]) changes[k] = next[k];
     }
     storeRef.current = next;
-    persist(lsKey, mergeFoldChanges(readStored(lsKey), changes));
+    const stored = readStored(lsKey);
+    persist(lsKey, mergeFoldChanges(stored, clock ? clockFoldChanges(stored, prev, changes) : changes));
     setStore(next);
   }, [lsKey]);
 
@@ -204,7 +218,7 @@ export function useFoldStore(lsKey: string, kind: FoldKindOf, now: () => number 
       clockFoldedRef.current.push(key);
       next = setFold(next, key, false, kind, t);
     }
-    write(next);
+    write(next, true);
     return busy;
   }, [kind, now, write]);
   useEffect(() => {
@@ -231,6 +245,26 @@ export function useFoldStore(lsKey: string, kind: FoldKindOf, now: () => number 
     document.addEventListener('visibilitychange', onVisible);
     return () => document.removeEventListener('visibilitychange', onVisible);
   }, []);
+
+  // The last action lives in memory: before the page goes away it is written into each open
+  // fold's opening time, so the next load counts from it (keepLastActions). It refreshes what
+  // storage holds now and goes around `write`, which would lay this tab's copy over another
+  // tab's close; this tab's own state is left as it is (its clock reads the last action anyway).
+  useEffect(() => {
+    const keep = () => {
+      if (!drawnRef.current) return;
+      const stored = readStored(lsKey);
+      const next = keepLastActions(stored, storeRef.current, kind, lastActionOf);
+      if (next !== stored) persist(lsKey, next);
+    };
+    const onHidden = () => { if (document.visibilityState === 'hidden') keep(); };
+    window.addEventListener('pagehide', keep);
+    document.addEventListener('visibilitychange', onHidden);
+    return () => {
+      window.removeEventListener('pagehide', keep);
+      document.removeEventListener('visibilitychange', onHidden);
+    };
+  }, [kind, lsKey]);
 
   const isOpen = useCallback((key: string) => foldIsOpen(store, key, kind), [store, kind]);
   return { store, isOpen, setOpen, toggle };

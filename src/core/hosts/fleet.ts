@@ -22,6 +22,7 @@
  * (`host_get` from a session still on it, Set up), it is still found.
  */
 import { isCompanion } from '../server-role.js'
+import { IS_EPHEMERAL } from '../../constants.js'
 import { getConfig } from '../config-manager.js'
 import { log } from '../../logging/index.js'
 import type { Config } from '../types.js'
@@ -357,6 +358,7 @@ export function assembleCard(e: HostEntry, conn: VitalsConn | undefined, parts: 
       version: conn.daemonVersion, startedAt: conn.daemonStartedAt, startup: conn.daemonStartup,
       runtime: conn.remoteRuntime ?? null, vitals: conn.hasCapability(VITALS_CAPABILITY),
       bootStart: fleetBootStart(conn.bootStart ?? null),
+      ...(IS_EPHEMERAL && !e.local ? { throwaway: true } : {}),
     } : null,
     declaredCapabilities: e.declared,
     recordedSessions,

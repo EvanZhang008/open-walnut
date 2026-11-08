@@ -24,7 +24,7 @@ import { answerByHeader } from '../lib/answer-by.js'
 const humanCallerScope = new AsyncLocalStorage<boolean>()
 const explicitCallerScope = new AsyncLocalStorage<{ sid?: string; kind: 'person' | 'agent'; pluginId?: string }>()
 import { getOp, type HttpBinding, type WalnutOp } from './registry.js'
-import { getSelfApiRoot, getSelfCallToken } from '../lib/self-api-root.js'
+import { demoApiHeaders, getSelfApiRoot, getSelfCallToken } from '../lib/self-api-root.js'
 import { fetchErrorCode } from '../lib/fetch-error.js'
 import {
   LOCAL_ORIGIN, ORIGIN_HEADER, UNKNOWN_ORIGIN, ambientCallerOrigin, isLocalOrigin, isRemoteHostOrigin, lowerOrigin, withCallerOrigin,
@@ -170,6 +170,7 @@ async function rawRequest(
         // A retry of the same call meets this write's first answer instead of applying it twice.
         ...(opId ? { [OP_ID_HEADER]: opId } : {}),
         ...testRunHeader(),
+        ...demoApiHeaders(url),
         // A relayed call's deadline (src/lib/answer-by.ts), so a route that holds an answer lets go in time.
         ...answerByHeader(),
         // Always sent, so no self-call can reach a loopback-trusting route unlabelled.

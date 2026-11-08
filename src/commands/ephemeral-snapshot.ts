@@ -212,7 +212,7 @@ export function dropSnapshotQueuedMessages(snapshotDir: string): number {
     if (fs.existsSync(file)) throw new Error(`could not remove the copied session queue ${file}`)
     return 0
   }
-  let store: { queues?: unknown }
+  let store: { queues?: unknown; cancelled?: unknown }
   try {
     store = JSON.parse(fs.readFileSync(file, 'utf-8'))
   } catch (err) {
@@ -220,14 +220,15 @@ export function dropSnapshotQueuedMessages(snapshotDir: string): number {
   }
   if (!store || typeof store !== 'object' || Array.isArray(store)) return failClosed('not a queue store')
   const queues = store.queues
-  if (queues === undefined) return 0
-  if (!queues || typeof queues !== 'object' || Array.isArray(queues)) return failClosed('queues is not a map')
+  if (queues === undefined && store.cancelled === undefined) return 0
+  if (queues !== undefined && (!queues || typeof queues !== 'object' || Array.isArray(queues))) return failClosed('queues is not a map')
   let dropped = 0
-  for (const rows of Object.values(queues as Record<string, unknown>)) {
+  for (const rows of Object.values((queues ?? {}) as Record<string, unknown>)) {
     dropped += Array.isArray(rows) ? rows.length : 1
   }
-  if (dropped === 0) return 0
+  if (dropped === 0 && store.cancelled === undefined) return 0
   store.queues = {}
+  delete store.cancelled
   try {
     const tmp = `${file}.${process.pid}.tmp`
     fs.writeFileSync(tmp, JSON.stringify(store, null, 2))

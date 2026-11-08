@@ -24,6 +24,9 @@ const ALLOWED: Record<string, string> = {
   'components/sessions/SessionMessage.tsx': 'the side panel draws the selection the person attached',
   // A mail rule's own hints (its matcher's notes per row, whenOfRows), not a message's.
   'components/settings/sections/MailRuleEditor.tsx': 'mail rule hints, a local of whenOfRows',
+  // The hints a send with passage comments ASKS for (passage-comments.ts composeForSend), handed to
+  // pending-hints for the model and taken back when the send does not go; no row's, never drawn.
+  'components/sessions/SessionPanel.tsx': 'the doc-comments hint an outgoing send asks for, not a row\'s',
 }
 
 /** The code of a file, its comments taken out (a comment may name `.hints`). */

@@ -50,7 +50,7 @@ export interface HostStatusReadinessProblem {
 /** The daemon's host.preflight answer plus the problems the server derived from it. */
 export interface HostStatusReadiness {
   claude?: {
-    found?: boolean; path?: string; version?: string; kind?: string; auth?: string;
+    found?: boolean; unknown?: string; path?: string; version?: string; kind?: string; auth?: string;
     versionOk?: boolean; minVersion?: string; installMethod?: string;
   };
   compiler?: { found: boolean; name?: string };
@@ -162,6 +162,18 @@ export async function connectHost(host: string, opts: { agents?: boolean } = {})
  */
 export async function answerFoundHost(host: string, answer: 'yes' | 'not_now'): Promise<{ ok: true; host: string; answer: 'yes' | 'not_now'; status?: HostStatus }> {
   return apiPost(`/api/hosts/${encodeURIComponent(host)}/found-answer`, { answer });
+}
+
+/** What `ssh -G <name>` resolves on the server's machine (src/core/hosts/ssh-resolve.ts). */
+export interface SshResolved { name: string; hostname: string; port: number; user: string; fromConfig: boolean }
+
+/**
+ * The HostName, Port and User ssh would use for `name`, read from ~/.ssh/config on the Walnut
+ * machine (it never connects). Null when there is no answer (an older server, a replica, no ssh).
+ */
+export async function resolveSshName(name: string): Promise<SshResolved | null> {
+  const res = await apiGet<SshResolved | undefined>('/api/hosts/ssh-resolve', { name }, { quietStatuses: [400, 404], priority: 'low' }).catch(() => undefined);
+  return res && typeof res === 'object' && typeof res.port === 'number' ? res : null;
 }
 
 /**

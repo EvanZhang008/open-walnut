@@ -47,7 +47,7 @@ export const FIRST_CHECK_DELAY_MS = 20_000
 export const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
 export const RETRY_AFTER_FAILURE_MS = 60 * 60 * 1000
 
-export type UpdateCheckDisabledReason = 'source' | 'replica' | 'opted-out' | 'test' | 'unknown-version'
+export type UpdateCheckDisabledReason = 'source' | 'replica' | 'opted-out' | 'test' | 'unknown-version' | 'demo'
 
 export interface UpdateStatus {
   /** False: no check runs in this process; `reason` says why. */
@@ -92,6 +92,11 @@ export function updateCheckOptedOut(env: Record<string, string | undefined>): bo
   return env.NO_UPDATE_NOTIFIER !== undefined && env.NO_UPDATE_NOTIFIER !== ''
 }
 
+/** The env `walnut demo` gives its server (src/commands/demo-home.ts demoChildEnv). */
+export function isDemoEnv(env: Record<string, string | undefined>): boolean {
+  return !!env.WALNUT_DEMO_ROOT && !!env.WALNUT_DEMO_GENERATION
+}
+
 function isTestEnv(env: Record<string, string | undefined>): boolean {
   return !!(env.VITEST || env.VITEST_WORKER_ID || env.NODE_ENV === 'test')
 }
@@ -100,6 +105,9 @@ export function disabledReason(
   install: InstallInfo, env: Record<string, string | undefined>, currentKnown: boolean, registryUrl: string,
 ): UpdateCheckDisabledReason | null {
   if (install.kind === 'replica') return 'replica'
+  // The Walnut Demo is a throwaway first run of the Walnut it was started from: it never offers to
+  // update itself (2026-11-10 review: a new Demo user saw "How to update" and "0.6.30 available").
+  if (isDemoEnv(env)) return 'demo'
   if (install.kind === 'source') return 'source'
   if (updateCheckOptedOut(env)) return 'opted-out'
   if (isTestEnv(env) && registryUrl === DEFAULT_REGISTRY_URL) return 'test'

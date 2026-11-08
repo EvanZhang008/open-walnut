@@ -210,16 +210,16 @@ describe('trigger 2: refine once at the first answer', () => {
 
   it('a refine requested while the name call runs waits for it instead of being lost', async () => {
     let release!: (v: string) => void;
-    answer = (req) => (req.kind === 'title' ? new Promise((r) => { release = r; }) : Promise.resolve('Better name | Answered: no'));
+    answer = (req) => (req.kind === 'title' ? new Promise((r) => { release = r; }) : Promise.resolve('Cache warmup on boot | Answered: no'));
     await patchSession(SID, { thread_anchors: [anchor('head-w')], thread_meta: [{ headId: 'head-w', status: 'open', titleState: 'pending' }] });
     await tick(60);
     noteTurnUserUuid(SID, 'head-w');
     emitResult({});
     await tick(60);
-    release('First name');
+    release('Cache warms');
     await settle();
     expect(calls.map((c) => c.kind)).toEqual(['title', 'refine']);
-    expect(await metaOf(SID, 'head-w')).toMatchObject({ title: 'Better name', status: 'open' });
+    expect(await metaOf(SID, 'head-w')).toMatchObject({ title: 'Cache warmup on boot', status: 'open' });
   });
 });
 

@@ -67,6 +67,37 @@ describe('GET /api/system/health — setup fields', () => {
     expect(body2.claudeCliAvailable).toBe(body.claudeCliAvailable)
   })
 
+  it('a provider reply overtaken by a new config cannot rewind setup health', async () => {
+    const cfg = await getConfig();
+    let release!: () => void;
+    let reached!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve });
+    const started = new Promise<void>(resolve => { reached = resolve });
+    const oldProvider = http.createServer((_req, res) => {
+      reached();
+      void held.then(() => { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"models":[]}') });
+    });
+    await new Promise<void>(resolve => oldProvider.listen(0, '127.0.0.1', resolve));
+    const base = `http://127.0.0.1:${(oldProvider.address() as AddressInfo).port}`;
+    try {
+      await updateConfig({ agent: { ...cfg.agent, main_provider: 'ollama' }, providers: { ...cfg.providers, ollama: { api: 'ollama', base_url: base } } });
+      const oldRead = refreshSystemHealth();
+      await started;
+      await updateConfig({ agent: { ...cfg.agent, main_provider: 'new-provider' }, providers: { 'new-provider': { api: 'anthropic' } } });
+      await refreshSystemHealth();
+      release();
+      await oldRead;
+      const health = await (await fetch(apiUrl('/api/system/health'))).json();
+      expect(health.mainProvider).toBe('new-provider');
+      expect(health.hasReadyProvider).toBe(false);
+    } finally {
+      release();
+      await new Promise<void>(resolve => oldProvider.close(() => resolve()));
+      await updateConfig({ agent: cfg.agent, providers: cfg.providers });
+      await refreshSystemHealth();
+    }
+  });
+
   it('finds Claude Code in its standard user install directory outside PATH', async () => {
     const originalHome = process.env.HOME
     const originalPath = process.env.PATH
@@ -92,6 +123,50 @@ describe('GET /api/system/health — setup fields', () => {
       await refreshSystemHealth()
     }
   })
+
+  it('installing the missing CLI refreshes provider readiness without a page reload', async () => {
+    const originalHome = process.env.HOME;
+    const originalPath = process.env.PATH;
+    const fakeHome = path.join(WALNUT_HOME, 'fresh-install-home');
+    const cli = path.join(fakeHome, '.local', 'bin', 'claude');
+    const config = await getConfig();
+    await fs.mkdir(path.dirname(cli), { recursive: true });
+    try {
+      process.env.HOME = fakeHome;
+      process.env.PATH = '/usr/bin:/bin';
+      await updateConfig({ agent: { ...config.agent, main_provider: 'claude_cli' } });
+      await refreshSystemHealth();
+      expect((await (await fetch(apiUrl('/api/system/health'))).json()).hasReadyProvider).toBe(false);
+      await fs.writeFile(cli, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+      setLocalClaudeIo({
+        floor: async () => null,
+        preflight: async () => ({ result: { claude: { found: true, path: cli, kind: 'native', version: '2.1.318', auth: 'ok' }, compiler: { found: true }, dtach: { found: true } }, source: 'daemon' }),
+      });
+      const checked = await fetch(apiUrl('/api/system/local-claude/check'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      expect(checked.status).toBe(200);
+      await vi.waitFor(async () => {
+        const health = await (await fetch(apiUrl('/api/system/health'))).json();
+        expect(health).toMatchObject({ claudeCliAvailable: true, hasReadyProvider: true, mainProvider: 'claude_cli' });
+        expect(health.localClaude.problems).toEqual([]);
+      });
+      const custom = path.join(fakeHome, 'custom-bin', 'claude');
+      await fs.mkdir(path.dirname(custom), { recursive: true });
+      await fs.rename(cli, custom);
+      setLocalClaudeIo({
+        floor: async () => null,
+        preflight: async () => ({ result: { claude: { found: true, path: custom, kind: 'native', version: '2.1.318', auth: 'ok' }, compiler: { found: true }, dtach: { found: true } }, source: 'daemon' }),
+      });
+      expect((await fetch(apiUrl('/api/system/local-claude/check'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status).toBe(200);
+      await refreshSystemHealth();
+      expect(await (await fetch(apiUrl('/api/system/health'))).json()).toMatchObject({ claudeCliAvailable: true, hasReadyProvider: true, localClaude: { claude: { path: custom, auth: 'ok' } } });
+    } finally {
+      setLocalClaudeIo();
+      if (originalHome === undefined) delete process.env.HOME; else process.env.HOME = originalHome;
+      if (originalPath === undefined) delete process.env.PATH; else process.env.PATH = originalPath;
+      await updateConfig({ agent: config.agent });
+      await refreshSystemHealth();
+    }
+  });
 
   it('hasReadyProvider reflects provider configuration', async () => {
     const res = await fetch(apiUrl('/api/system/health'))
@@ -134,6 +209,27 @@ describe('local Claude Code: /api/system/local-claude/* and health.localClaude',
   let state: HostPreflightResult
   let fixes: string[]
   const post = (p: string, body: unknown) => fetch(apiUrl(p), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+
+  it('a first failed check publishes a retryable health state and a retry clears it', async () => {
+    let fails = true;
+    setLocalClaudeIo({
+      floor: async () => null,
+      preflight: async () => fails
+        ? { result: null, source: 'daemon', error: 'The first sign-in check timed out.' }
+        : { result: { ...OLD, claude: { ...OLD.claude, auth: 'ok', version: '2.1.318', versionOk: true } }, source: 'daemon' },
+    });
+    try {
+      const failed = await post('/api/system/local-claude/check', {});
+      expect(failed.status).toBe(202);
+      const initial = await (await fetch(apiUrl('/api/system/health'))).json();
+      expect(initial.localClaude).toMatchObject({ checkError: 'The first sign-in check timed out.', problems: [], claude: { auth: 'unknown' } });
+      fails = false;
+      expect((await post('/api/system/local-claude/check', {})).status).toBe(200);
+      const recovered = await (await fetch(apiUrl('/api/system/health'))).json();
+      expect(recovered.localClaude.claude.auth).toBe('ok');
+      expect(recovered.localClaude.checkError).toBeUndefined();
+    } finally { setLocalClaudeIo(); }
+  });
 
   it('a check answers with the problems and puts them on health', async () => {
     state = structuredClone(OLD)

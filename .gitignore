@@ -1,6 +1,7 @@
 node_modules
 dist/
 dist-bin/
+desktop/*.app/
 *.tsbuildinfo
 .DS_Store
 coverage/

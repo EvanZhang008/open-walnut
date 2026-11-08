@@ -1,5 +1,6 @@
 import fsSync from 'node:fs';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import os from 'node:os';
 import { getDb as getSessionDb } from './session-db.js';
 import { TASK_SESSION_ROW_SQL, TaskSessionTakenError } from './sessions/one-session-per-task.js';
 import { CLOUD_MODE, TASKS_FILE } from '../constants.js';
@@ -1660,7 +1661,9 @@ export async function ensureFolderProject(
   await ensureInit();
   const result = await withWriteLock(async () => {
     const store = await readStore();
-    const name = folderProjectFor(store.projects ?? {}, cwd, host, isValidProjectName);
+    // A local launch from the home folder files under "Home" (the draft says so for `~`).
+    const home = !host || host === '__local__' ? os.homedir() : undefined;
+    const name = folderProjectFor(store.projects ?? {}, cwd, host, isValidProjectName, home);
     if (!name) return { name: '', source: 'local' as TaskSource, created: false };
     return ensureProjectRowLocked(name, 'local', writer, {
       default_cwd: trimDir(cwd),

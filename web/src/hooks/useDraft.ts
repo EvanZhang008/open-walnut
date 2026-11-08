@@ -17,7 +17,7 @@
  * is no draft.
  */
 import { useCallback, useEffect, useRef, useState, type SetStateAction } from 'react';
-import { discardedSince, draftSaveMark, isSentDraftCopy, markDraftSent, readDraft, subscribeDraft, writeDraft } from '@/utils/drafts';
+import { discardedSince, draftSaveMark, isSentDraftCopy, markDraftSent, onDraftSettled, readDraft, subscribeDraft, writeDraft } from '@/utils/drafts';
 import { DRAFT_FLUSH_EVENT, noteDraftWrite, type DraftFlushDetail } from '@/utils/unsaved-work';
 
 const DEBOUNCE_MS = 300;
@@ -113,7 +113,7 @@ export function useDraft(key: string | null | undefined, opts: { baseline?: stri
     setTextState(value);
     const kk = keyRef.current;
     if (!kk) return;
-    typedMark.current = draftSaveMark();
+    typedMark.current = draftSaveMark(kk);
     pending.current = { key: kk, text: value, mark: typedMark.current };
     clearTimeout(timer.current);
     // An emptied box (or one back at its saved value) is written at once: no draft is left
@@ -136,6 +136,15 @@ export function useDraft(key: string | null | undefined, opts: { baseline?: stri
     textRef.current = baselineRef.current;
     setTextState(baselineRef.current);
   }, []);
+
+  // A Retry sent the words this box kept from a failed send: it empties, focused or not.
+  useEffect(() => onDraftSettled((origin) => {
+    if (origin.key !== keyRef.current || textRef.current.trim() !== origin.text.trim()) return;
+    clearTimeout(timer.current);
+    pending.current = null;
+    textRef.current = baselineRef.current;
+    setTextState(baselineRef.current);
+  }), []);
 
   // A reload or an app restart asks every box to save now; this one claims its elements.
   useEffect(() => {

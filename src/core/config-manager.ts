@@ -285,9 +285,11 @@ export async function getConfig(): Promise<Config> {
 /**
  * Merge the ~/.ssh/config hosts into config.hosts (core/hosts/found-hosts.ts): a
  * found host is listed, and once the server asks it waits for the person's yes
- * before anything dials it. Existing entries are never touched, and a found host
- * is skipped when its alias OR its hostname already exists in config (the user's
- * entry IS that machine). Then the read rule: a found host without the yes is off.
+ * before anything dials it. A found host already written follows ~/.ssh/config for
+ * every field the person did not change in Walnut (`scanned` on the row); any other
+ * entry is never touched, and a found host is skipped when its alias, or its hostname
+ * with the same port, already exists in config (the user's entry IS that machine).
+ * Then the read rule: a found host without the yes is off.
  */
 async function mergeSshDiscoveredHosts(config: Config): Promise<void> {
   // A server under test reads no real ~/.ssh/config: its hosts would be swept

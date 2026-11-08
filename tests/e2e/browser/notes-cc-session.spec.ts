@@ -45,24 +45,27 @@ async function clearNoteAgentSideChats() {
   }
 }
 
-async function gotoNotes(page: Page) {
-  await page.goto('/')
+async function gotoNotes(page: Page, baseURL: string | undefined) {
+  await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
+  await page.getByRole('link', { name: 'Open Walnut' }).click()
   await page.waitForLoadState('networkidle')
+  await page.evaluate(() => localStorage.setItem('open-walnut-notes-chat-width', '420'))
   await page.locator('a[href="/notes"]').first().click()
   await page.waitForLoadState('networkidle')
 }
 
-test('right-click note → Start Claude Code session → full SessionPanel, dropdown switcher, survives reload', async ({ page }) => {
+test('right-click note → Start Claude Code session → full SessionPanel, dropdown switcher, survives reload', async ({ page, baseURL }, testInfo) => {
   // The 500 ms shell budget judges the bundle users run (production-bundle.ts).
   await serveProductionBundle(page)
   await seedNote()
   await clearNoteAgentSideChats()
-  await gotoNotes(page)
+  await gotoNotes(page, baseURL)
   // Fresh state — persisted CC tabs from another spec run were already read
   // into React state at mount, so clear the keys AND reload.
   await page.evaluate(() => {
     localStorage.removeItem('open-walnut-notes-cc-session')
     localStorage.removeItem('open-walnut-notes-chat-mode')
+    localStorage.setItem('open-walnut-notes-chat-width', '420')
   })
   await page.reload()
   await page.waitForLoadState('networkidle')
@@ -84,17 +87,68 @@ test('right-click note → Start Claude Code session → full SessionPanel, drop
 
   const menuItem = page.locator('.notes-context-menu button', { hasText: 'Start Claude Code session' })
   await expect(menuItem).toBeVisible()
-  const clickedAt = Date.now()
-  await menuItem.click()
-
-  // PERCEIVED-INSTANT: the full chat shell (pane + switcher + ENABLED input)
-  // is interactive well under 500ms — no blank spinner phase. The switcher's
-  // TITLE is the session's origin note name.
+  // Measure the browser's real click, not Playwright's actionability wait.
+  type ShellPaintProbe = {
+    ready: Promise<{ clickedAt: number; readyAt: number; trusted: boolean }>
+    cancel: () => void
+  }
+  await menuItem.evaluate((button) => {
+    let frame = 0
+    let onClick: (event: Event) => void
+    const ready = new Promise<{ clickedAt: number; readyAt: number; trusted: boolean }>((resolve) => {
+      onClick = (event) => {
+        const clickedAt = performance.now()
+        const sample = () => {
+          const shell = document.querySelector('.notes-session-chat')
+          const input = shell?.querySelector<HTMLTextAreaElement>('.chat-input-textarea')
+          if (shell?.querySelector('.notes-session-chat-badge.pending') && input && !input.matches(':disabled') && !input.readOnly) {
+            const rect = input.getBoundingClientRect()
+            let visible = rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.right > 0 && rect.top < innerHeight && rect.left < innerWidth
+            for (let el: Element | null = input; visible && el; el = el.parentElement) {
+              const style = getComputedStyle(el)
+              visible = style.display !== 'none' && style.visibility === 'visible' && Number(style.opacity) > 0
+            }
+            if (visible) {
+              resolve({ clickedAt, readyAt: performance.now(), trusted: event.isTrusted })
+              return
+            }
+          }
+          frame = requestAnimationFrame(sample)
+        }
+        frame = requestAnimationFrame(sample)
+      }
+      button.addEventListener('click', onClick, { once: true, capture: true })
+    })
+    ;(window as Window & { __notesShellPaint?: ShellPaintProbe }).__notesShellPaint = {
+      ready,
+      cancel: () => {
+        cancelAnimationFrame(frame)
+        button.removeEventListener('click', onClick, true)
+      },
+    }
+  })
   const switcher = page.locator('.notes-chat-switcher')
-  await expect(switcher).toBeVisible({ timeout: 2000 })
-  await expect(page.locator('.notes-session-chat .chat-input-textarea')).toBeVisible({ timeout: 2000 })
-  const shellReadyMs = Date.now() - clickedAt
-  expect(shellReadyMs).toBeLessThan(500)
+  try {
+    await menuItem.click()
+
+    // The first ready frame must contain the pending shell's visible, enabled input.
+    await expect(switcher).toBeVisible({ timeout: 2000 })
+    await expect(page.locator('.notes-session-chat .chat-input-textarea')).toBeVisible({ timeout: 2000 })
+    const timing = await page.evaluate(() => (window as Window & { __notesShellPaint: ShellPaintProbe }).__notesShellPaint.ready)
+    await testInfo.attach('notes-click-to-ready-frame', {
+      body: JSON.stringify({ ...timing, elapsedMs: timing.readyAt - timing.clickedAt }),
+      contentType: 'application/json',
+    })
+    expect(timing.trusted).toBe(true)
+    expect(timing.readyAt - timing.clickedAt).toBeLessThan(500)
+  } finally {
+    await page.evaluate(() => {
+      const browser = window as Window & { __notesShellPaint?: ShellPaintProbe }
+      browser.__notesShellPaint?.cancel()
+      delete browser.__notesShellPaint
+    })
+  }
+  await expect.poll(() => page.locator('.notes-chat-pane').evaluate((el) => el.getBoundingClientRect().width)).toBe(420)
   await expect(switcher.locator('.notes-chat-switcher-title')).toHaveText('Session Note')
   // Origin-folder context + explicit Claude Code badge, right in the trigger.
   await expect(switcher.locator('.notes-chat-switcher-folder')).toHaveText('CCTest')
@@ -175,10 +229,10 @@ test('right-click note → Start Claude Code session → full SessionPanel, drop
   expect(persisted).toBeNull()
 })
 
-test('right-click note → New Note Agent chat → named deletable Walnut Agent conversation', async ({ page }) => {
+test('right-click note → New Note Agent chat → named deletable Walnut Agent conversation', async ({ page, baseURL }) => {
   await seedNote()
   await clearNoteAgentSideChats()
-  await gotoNotes(page)
+  await gotoNotes(page, baseURL)
   await page.evaluate(() => {
     localStorage.removeItem('open-walnut-notes-cc-session')
     localStorage.removeItem('open-walnut-notes-chat-mode')
@@ -227,14 +281,24 @@ test('right-click note → New Note Agent chat → named deletable Walnut Agent 
   await page.locator('.notes-chat-switcher-trigger').click()
   await page.locator('.notes-chat-switcher-menu .notes-chat-switcher-agent-chat .notes-chat-switcher-close').click()
   await expect(page.locator('.notes-chat-switcher-menu .notes-chat-switcher-agent-chat')).toHaveCount(0)
-  await expect(page.locator('.notes-chat-switcher-title')).toHaveText('Note Agent')
+  await expect(page.locator('.notes-chat-switcher')).toHaveCount(0)
+  const composer = page.locator('.notes-chat-pane').getByPlaceholder('Ask the note assistant…')
+  await expect(composer).toBeVisible()
+  const box = (await composer.boundingBox())!
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  await page.mouse.down()
+  await page.mouse.up()
+  await page.keyboard.type('Continue in the main note chat')
+  await expect(composer).toHaveValue('Continue in the main note chat')
+  await page.keyboard.press('ControlOrMeta+A')
+  await page.keyboard.press('Backspace')
   await page.reload()
   await page.waitForLoadState('networkidle')
   // No side chats and no CC sessions left → the switcher hides entirely.
   await expect(page.locator('.notes-chat-switcher')).toHaveCount(0)
 })
 
-test('attachments do not offer Start Claude Code session', async ({ page }) => {
+test('attachments do not offer Start Claude Code session', async ({ page, baseURL }) => {
   // Upload an attachment next to the seeded note (vault _attachment convention).
   await seedNote()
   const png1x1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
@@ -243,7 +307,7 @@ test('attachments do not offer Start Claude Code session', async ({ page }) => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ notePath: NOTE, data: png1x1, mediaType: 'image/png' }),
   })
-  await gotoNotes(page)
+  await gotoNotes(page, baseURL)
 
   // Folder expansion state persists (server-synced ui-prefs) — a blind click
   // on an already-expanded folder COLLAPSES it, and the async prefs merge can

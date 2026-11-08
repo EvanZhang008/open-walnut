@@ -63,6 +63,8 @@ export function leaveParked(row: QueuedMessage, now: number = Date.now()): void 
   recordParked(row, now);
   delete row.parkedAt;
   delete row.parkedReason;
+  // What an agent-wait park waited on (QueuedMessage.waitsFor) goes with the park.
+  delete row.waitsFor;
 }
 
 /** The same as leaveParked, on a copy. */

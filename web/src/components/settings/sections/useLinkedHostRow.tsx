@@ -38,6 +38,9 @@ import { WalkthroughSteps, useSshKey } from '@/components/hosts/SshWalkthrough';
 
 /** Failures the person fixes outside Walnut: the row walks them through, as first-run setup does. */
 const WALKED_KINDS: ReadonlySet<string> = new Set(['auth', 'agent_missing', 'not_linux']);
+import { SetupProgress } from '@/components/common/SetupProgress';
+import { InlineCodeText } from '@/components/common/InlineCodeText';
+import { isDemoOrigin } from '@/utils/demo-generation';
 
 const plain = (text: string) => text.replace(/\u2026/g, '...');
 
@@ -54,6 +57,21 @@ export const ROW_FIX_NOTE_MS = 20_000;
 export function connectFailedLine(as: 'turn-on' | 'add' | 'connect', reason: string | null, next: string | null): string {
   const lead = as === 'turn-on' ? 'Turned on, but Walnut could not connect' : as === 'add' ? 'Added, but Walnut could not connect' : 'Could not connect';
   return `${lead}: ${reason ?? 'Walnut gave no reason'}.${next ? ` ${next} tries again.` : ''}`;
+}
+
+/**
+ * The reason line of a failed connect: the server's plain-words hint, then what ssh itself said
+ * (its one-line summary), so the cause is on the row ("Nothing is listening for SSH on X. Check
+ * the port and that sshd is running on the host. ssh: connect to host 127.0.0.1 port 3461:
+ * Connection refused"). Null when the server gave neither.
+ */
+export function connectReasonLine(hint: string | undefined, summary: string | undefined): string | null {
+  const h = (hint ?? '').trim();
+  const s = (summary ?? '').trim().replace(/^ssh:\s*/i, '');
+  if (!h && !s) return null;
+  if (!s || h.includes(s)) return h;
+  const said = `ssh: ${s}`;
+  return h ? `${h} ${said}` : said;
 }
 
 export interface LinkedRowInput {
@@ -178,7 +196,10 @@ export function useLinkedHostRow({ alias, name, enabled, saved, card, now, boot,
     if (!hydrating || busy) primary = connect(false, 'connectNow');
   } else if (problem?.type === 'off') {
     state = OFF_PHASE_LABEL;
-    stateTitle = 'This test server never dials remote hosts. Start it with WALNUT_EPHEMERAL_REMOTE_HOSTS=1 to test one.';
+    // The Demo's hosts are off only while it stops; the env switch is a developer's.
+    stateTitle = isDemoOrigin()
+      ? 'The Demo is stopping, so it does not reach remote hosts now.'
+      : 'This test server never dials remote hosts. Start it with WALNUT_EPHEMERAL_REMOTE_HOSTS=1 to test one.';
   } else if (problem?.type === 'connect') {
     state = problem.headline;
     const walk = via === 'ssh' && WALKED_KINDS.has(problem.kind) ? walkthroughOf(problem.kind, alias, label, status?.error || problem.summary, sshKey, undefined, REMOTE_HOSTS_WORDS) : null;
@@ -190,6 +211,15 @@ export function useLinkedHostRow({ alias, name, enabled, saved, card, now, boot,
     primary = problem.kind === 'not_linux' && via === 'ssh'
       ? { label: 'Join with a link', reserve: ['Join with a link'], testId: 'rh-row-join', ariaLabel: `Join ${label} with a link`, onClick: requestJoinWithLink }
       : connect(true, 'retry');
+    // Why, on the row itself (2026-11-10 review: "Could not connect to demo-devbox-c" with no
+    // reason while Details were closed). Details then leave the hint out (rowProblem 'connect').
+    // A walked failure says it in its own steps above.
+    const why = walk ? null : connectReasonLine(problem.hint, problem.summary);
+    // A failed press here says its own failure line below instead (connectFailedLine).
+    if (why && actions.failed !== 'retry') {
+      problemKey = 'connect';
+      lines.push(<Line key="why" tone="bad" testId="rh-row-reason"><InlineCodeText text={why} /></Line>);
+    }
   } else if (problem?.type === 'reconnecting') {
     state = `Reconnecting to ${label}`;
     primary = connect(false, 'connectNow');
@@ -207,7 +237,7 @@ export function useLinkedHostRow({ alias, name, enabled, saved, card, now, boot,
     if (justFixed) lines.push(<Line key="fixed" tone="good" testId="rh-row-fix-note">{`${justFixed.text}.`}</Line>);
     if (fixRunning && verb && !justFixed) {
       const own = actions.fixing && isClaudeFixAction(actions.fixing.action) ? actions.fixing.verb : verb;
-      lines.push(<Line key="fix" tone="note" testId="rh-row-fixing">{autofixProgressText(own, label, actions.fixing?.startedAt ?? status.readiness?.fixing?.startedAt, tick).text}</Line>);
+      lines.push(<Line key="fix" tone="note" testId="rh-row-fixing"><SetupProgress label={autofixProgressText(own, label, actions.fixing?.startedAt ?? status.readiness?.fixing?.startedAt, tick).text} /></Line>);
       primary = { label: verb === 'install' ? 'Installing...' : 'Updating...', disabled: true, reserve: ['Install', 'Installing...', 'Try again'], onClick: () => {}, testId: `rh-readiness-fix-${blocking!.kind}` };
     } else if (blocking && !justFixed) {
       lines.push(<Line key="ready" tone="warn" testId="rh-row-warning">{firstSentence(blocking.message)}</Line>);

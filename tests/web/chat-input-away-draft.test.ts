@@ -161,6 +161,59 @@ describe('textarea width changes', () => {
   })
 })
 
+describe('textarea width refitting', () => {
+  it('fits width changes outside observer delivery and cancels pending work on unmount', async () => {
+    const callbacks: Array<() => void> = []
+    const observers: Array<{ observe: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn> }> = []
+    const frames: Array<() => void> = []
+    const cancel = vi.fn()
+    vi.stubGlobal('ResizeObserver', class {
+      observe = vi.fn()
+      disconnect = vi.fn()
+      constructor(callback: () => void) { callbacks.push(callback); observers.push(this) }
+    })
+    vi.stubGlobal('requestAnimationFrame', (callback: () => void) => { frames.push(callback); return frames.length })
+    vi.stubGlobal('cancelAnimationFrame', cancel)
+    const h = harness()
+    await h.render({ draftKey: 'draft:session:s-resize' })
+    const ta = h.textarea()
+    let width = 300
+    Object.defineProperty(ta, 'clientWidth', { get: () => width, configurable: true })
+    Object.defineProperty(ta, 'scrollHeight', { get: () => width < 200 ? 80 : 40, configurable: true })
+    const index = observers.findIndex(observer => observer.observe.mock.calls.some(call => call[0] === ta))
+    expect(index).toBeGreaterThanOrEqual(0)
+    const observer = observers[index]
+    const resize = callbacks[index]
+    const initial = ta.style.height
+    resize()
+    expect(ta.style.height).toBe(initial)
+    frames.at(-1)!()
+    expect(ta.style.height).toBe('40px')
+    width = 100
+    resize()
+    expect(ta.style.height).toBe('40px')
+    frames.at(-1)!()
+    expect(ta.style.height).toBe('80px')
+    const count = frames.length
+    resize()
+    expect(frames).toHaveLength(count)
+    width = 400
+    resize()
+    const pending = frames.length
+    width = 350
+    resize()
+    expect(cancel).toHaveBeenCalledWith(pending)
+    frames.at(-1)!()
+    expect(ta.style.height).toBe('40px')
+    width = 100
+    resize()
+    const frame = frames.length
+    await h.unmount()
+    expect(cancel).toHaveBeenCalledWith(frame)
+    expect(observer.disconnect).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('the draft survives the composer going away', () => {
   it('unmount persists the last keystrokes still inside the debounce', async () => {
     const h = harness()
@@ -227,7 +280,7 @@ describe('sendBlocked: the editor stays, the send controls go', () => {
     expect(h.el.querySelector('.chat-input-container')!.hasAttribute('data-send-blocked')).toBe(false)
     const send = h.el.querySelector('.chat-send-btn-icon')!
     await act(async () => { reactProps(send).onClick!() })
-    expect(onSend).toHaveBeenCalledWith('hello there, still typing', undefined)
+    expect(onSend).toHaveBeenCalledWith('hello there, still typing', undefined, { key: 'draft:session:s-away-3', text: 'hello there, still typing', sent: expect.any(Number) })
     await h.unmount()
   })
 

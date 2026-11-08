@@ -24,7 +24,6 @@ import { recentKey } from './filter-recent';
 export const LS_FILTERS_KEY = 'walnut-todo-filters';
 export const LS_FILTER_RECENT_KEY = 'walnut-todo-filter-recent';
 export const LS_FILTER_MORE_OPEN_KEY = 'walnut-todo-filter-more-open';
-export const LS_TIER_USED_KEY = 'walnut-todo-tier-used';
 /** The old date key: folded once into LS_FILTERS_KEY, read-only afterwards. */
 export const LS_LEGACY_DATE_KEY = 'walnut-todo-dateFilter';
 
@@ -196,15 +195,6 @@ export function readMoreOpen(): boolean {
 
 export function writeMoreOpen(open: boolean): void {
   setItem(LS_FILTER_MORE_OPEN_KEY, open ? '1' : '0');
-}
-
-/** 5.10: the user has picked a tier at least once (set once, never cleared). */
-export function readTierUsed(): boolean {
-  return getItem(LS_TIER_USED_KEY) === '1';
-}
-
-export function markTierUsed(): void {
-  if (!readTierUsed()) setItem(LS_TIER_USED_KEY, '1');
 }
 
 /** The id of the "Task created" toast for a task, so a later toast about the same create can replace it (F33). */

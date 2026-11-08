@@ -694,10 +694,13 @@ describe('delivery failure: no retry loop, no message loss', () => {
   // runner simply got a healthy mock-claude and a SESSION_RESULT. Fail the spawn
   // at the daemon instead — sticky, so a resurrected retry loop still registers
   // as N failures rather than one failure + N successes.
-  beforeEach(() => {
+  beforeEach(async () => {
     sharedDaemon.injectStartFault('daemon start failed: publickey denied (simulated host outage)');
     runner = useDaemon(new SessionRunner(MOCK_CLI));
     runner.init();
+    // Startup recovery drains every pending queue: a row a test enqueues before it has run
+    // would be sent a second time by it, and counted as a second failure.
+    await runner.startupRecoveryDone;
   });
 
   afterEach(() => {
@@ -2161,7 +2164,8 @@ describe('turn-complete self-report across restart', () => {
     let finishRestart!: () => void;
     const restarting = new Promise<void>((resolve) => { finishRestart = resolve; });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (runner as any).nativeSessionReinitializations = new Map([[sid, restarting]]);
+    vi.spyOn(runner as any, 'performNativeReinitialize').mockReturnValue(restarting);
+    const restart = runner.reinitialize(sid);
     const writeMessage = vi.fn(async () => true);
     const fake = {
       sessionId: sid,
@@ -2182,6 +2186,8 @@ describe('turn-complete self-report across restart', () => {
       // is never reached. That looks exactly like the restart barrier holding
       // forever, so the assertion below would pass for the wrong reason.
       awaitSpawn: async () => {},
+      recoverCancelledRows: vi.fn(async () => true),
+      stopEpoch: 0,
     };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (runner as any).sessions.set('restart-message-task', fake);
@@ -2194,6 +2200,7 @@ describe('turn-complete self-report across restart', () => {
     expect((await getQueue(sid))[0]?.status).toBe('pending');
 
     finishRestart();
+    await restart;
     await delivery;
     expect(writeMessage).toHaveBeenCalledOnce();
   });
@@ -4065,6 +4072,8 @@ describe('processNext while the CLI is still inside a turn', () => {
       host: null,
       lastMessageDeliveryAt: 0,
       awaitSpawn: async () => {},
+      recoverCancelledRows: vi.fn(async () => true),
+      stopEpoch: 0,
       kill: vi.fn(),
     };
   }

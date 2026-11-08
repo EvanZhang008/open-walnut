@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   isClaudeCliInstalled, hasClaudeSubscriptionAuth, detectClaudeCli,
-  resolveClaudeCliExecutable, describeClaudeCliAuth,
+  resolveClaudeCliExecutable, describeClaudeCliAuth, claudeKeychainService,
 } from '../../src/core/claude-cli-detect.js';
 
 const tempDirs: string[] = [];
@@ -22,6 +22,19 @@ afterEach(() => {
  * token value — is guaranteed by construction (no `-w` on the keychain probe,
  * no file content read); see the module. Here we assert the API contract.
  */
+describe('Claude credential namespace', () => {
+  it('keeps the default namespace and respects both explicit config directory settings', () => {
+    expect(claudeKeychainService({})).toBe('Claude Code-credentials');
+    const first = claudeKeychainService({ CLAUDE_CONFIG_DIR: '/demo/first/.claude' });
+    const second = claudeKeychainService({ CLAUDE_CONFIG_DIR: '/demo/second/.claude' });
+    expect(first).toMatch(/^Claude Code-credentials-[a-f0-9]{8}$/);
+    expect(first).not.toBe(second);
+    expect(claudeKeychainService({ CLAUDE_CONFIG_DIR: '/demo/first/.claude', CLAUDE_SECURESTORAGE_CONFIG_DIR: '' })).toBe('Claude Code-credentials');
+    expect(claudeKeychainService({ CLAUDE_CONFIG_DIR: '/other', CLAUDE_SECURESTORAGE_CONFIG_DIR: '/demo/first/.claude' })).toBe(first);
+    expect(claudeKeychainService({ CLAUDE_CODE_CUSTOM_OAUTH_URL: 'https://example.test/oauth' })).toBe('Claude Code-custom-oauth-credentials');
+  });
+});
+
 describe('claude-cli-detect — boolean probes', () => {
   it('isClaudeCliInstalled returns a boolean and never throws', () => {
     expect(typeof isClaudeCliInstalled()).toBe('boolean');

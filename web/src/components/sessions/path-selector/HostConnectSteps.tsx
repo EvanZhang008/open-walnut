@@ -14,7 +14,8 @@
 import { useEffect, useState } from 'react';
 import type { DirListingPending } from '@/api/sessions';
 import { serverNow, useHostStatus } from '@/hooks/useHostStatus';
-import { connectNote, connectSteps, elapsedNow, formatElapsed, hostStatusText } from '@/utils/host-connect';
+import { connectNote, connectSteps, elapsedNow, formatElapsed, hostStatusText, reconnectReasonOf } from '@/utils/host-connect';
+import { SetupProgress } from '@/components/common/SetupProgress';
 
 interface Props {
   /** Store key / config alias. */
@@ -23,8 +24,11 @@ interface Props {
   label: string;
   /** The list-dirs answer, used when the pushed status has not arrived yet. */
   pending?: DirListingPending;
-  /** 'Last attempt: {headline}' while a reconnect retries after a failure. */
+  /** 'Last attempt: {headline}' while a reconnect retries after a failure. Absent: read off the
+   *  pushed status (reconnectReasonOf), so no surface shows a bare clock with no reason. */
   lastHeadline?: string;
+  /** One progress line, no step list or note: a card with several hosts (FoundHostPrompts). */
+  compact?: boolean;
 }
 
 /**
@@ -43,7 +47,7 @@ export function connectElapsed(
   return { phase, total };
 }
 
-export function HostConnectSteps({ hostKey, label, pending, lastHeadline }: Props) {
+export function HostConnectSteps({ hostKey, label, pending, lastHeadline, compact }: Props) {
   const status = useHostStatus(hostKey);
   // 1s tick: the server stamps an elapsed value at `at` and then goes quiet until
   // the next phase, so without this the row freezes mid-install.
@@ -54,24 +58,24 @@ export function HostConnectSteps({ hostKey, label, pending, lastHeadline }: Prop
   }, []);
 
   const steps = connectSteps(status, pending?.phase);
-  const hasActive = steps.some((s) => s.status === 'active');
+  const completed = steps.filter((s) => s.status === 'done').length;
   const phaseText = status ? hostStatusText(status) : (pending?.label ?? `Connecting to ${label}`);
   const elapsed = connectElapsed(status, now);
   const phaseElapsed = status ? elapsed.phase : (pending?.elapsedMs ?? 0);
   const totalElapsed = elapsed.total;
   const note = connectNote(status, steps);
+  // Every surface that draws the steps says why a reconnect is not back yet, not only the picker.
+  const lastAttempt = lastHeadline ?? reconnectReasonOf(status);
 
   return (
     <div className="sps-host-connecting sps-host-steps" role="status" data-host={hostKey}>
       <div className="sps-host-step-phase">
-        {/* Exactly one spinner on the row: on the active step when there is one,
-            here when the chain has no active step (e.g. every step already done
-            while the directory listing itself is still in flight). */}
-        {!hasActive && <span className="sps-host-spinner" aria-hidden="true" />}
-        <span className="sps-host-step-phase-text">{phaseText}</span>
+        <SetupProgress label={phaseText} ariaLabel={`Connecting to ${label}: ${phaseText}`}
+          percent={steps.length ? completed / steps.length * 100 : undefined}
+          valueText={`${completed} of ${steps.length} steps complete`} />
       </div>
 
-      <ol className="sps-host-step-list">
+      {!compact && <ol className="sps-host-step-list">
         {steps.map((step) => (
           <li
             key={step.phase}
@@ -88,10 +92,10 @@ export function HostConnectSteps({ hostKey, label, pending, lastHeadline }: Prop
             )}
           </li>
         ))}
-      </ol>
+      </ol>}
 
-      {note && <div className="sps-host-step-note">{note}</div>}
-      {lastHeadline && <div className="sps-host-step-last">{`Last attempt: ${lastHeadline}`}</div>}
+      {note && !compact && <div className="sps-host-step-note">{note}</div>}
+      {lastAttempt && <div className="sps-host-step-last">{`Last attempt: ${lastAttempt}`}</div>}
       {totalElapsed > 0 && (
         <div className="sps-host-step-total">Connecting for {formatElapsed(totalElapsed)}</div>
       )}

@@ -16,12 +16,18 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { CLAUDE_CREDENTIALS_FILE } from '../constants.js';
+import { createHash } from 'node:crypto';
 import { isTestScratchPath, realClaudeBlocked } from './test-claude-guard.js';
 
 /** Keychain service name Claude Code stores its OAuth (subscription) token under.
  *  Verified against the fork: `Claude Code${OAUTH_FILE_SUFFIX}${'-credentials'}`
  *  where the default (production) OAUTH_FILE_SUFFIX is ''. */
-const KEYCHAIN_OAUTH_SERVICE = 'Claude Code-credentials';
+export function claudeKeychainService(env: NodeJS.ProcessEnv = process.env): string {
+  const configDir = env.CLAUDE_SECURESTORAGE_CONFIG_DIR ?? env.CLAUDE_CONFIG_DIR;
+  const suffix = env.CLAUDE_CODE_CUSTOM_OAUTH_URL ? '-custom-oauth' : '';
+  const tail = configDir ? `-${createHash('sha256').update(configDir.normalize('NFC')).digest('hex').slice(0, 8)}` : '';
+  return `Claude Code${suffix}-credentials${tail}`;
+}
 
 /** Resolve the CLI exactly as Walnut's daemon does: inherited PATH first, then
  * standard per-user install directories that service processes often omit. */
@@ -80,7 +86,7 @@ function probeKeychain(): Promise<boolean> {
     try {
       execFile(
         'security',
-        ['find-generic-password', '-s', KEYCHAIN_OAUTH_SERVICE],
+        ['find-generic-password', '-s', claudeKeychainService()],
         { timeout: KEYCHAIN_PROBE_TIMEOUT_MS },
         (err) => {
           const definite = !err || (!err.killed && typeof err.code === 'number');
@@ -145,7 +151,7 @@ export function hasClaudeSubscriptionAuth(): boolean {
 /** Best-effort existence check of the JSON credential store. No content read. */
 function fileCredentialExists(): boolean {
   try {
-    return fs.existsSync(CLAUDE_CREDENTIALS_FILE);
+    return fs.existsSync(process.env.CLAUDE_CONFIG_DIR ? path.join(process.env.CLAUDE_CONFIG_DIR, '.credentials.json') : CLAUDE_CREDENTIALS_FILE);
   } catch {
     return false;
   }

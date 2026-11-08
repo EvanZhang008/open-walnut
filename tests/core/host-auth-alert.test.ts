@@ -89,6 +89,17 @@ describe('signInLetter', () => {
     expect(signInLetter([{ label: 'A' }], undefined, { lang: 'zh' }).subject).toBe('SSH \u767b\u5f55 A \u5931\u8d25\uff1a\u8bf7\u91cd\u65b0\u767b\u5f55\u4ee5\u5237\u65b0\u51ed\u636e')
   })
 
+  it('a key refusal names the key, never the login hint: the missing key file when SSH said which', () => {
+    const missing = 'no such identity: /tmp/demo/.ssh/id_devbox: No such file or directory Permission denied (publickey). [walnut-ssh-evidence: key-missing (/tmp/demo/.ssh/id_devbox)]'
+    const l = signInLetter([{ label: 'Dev box', error: missing }], 'run mylogin', { key: true })
+    expect(l.subject).toBe('SSH sign-in to Dev box failed: put the key file /tmp/demo/.ssh/id_devbox that your SSH settings name for it on this computer, or point IdentityFile at a key you have')
+    expect(l.markdown).not.toContain('mylogin')
+    expect(l.markdown).not.toContain(GENERIC_LOGIN_HINT)
+    const plain = signInLetter([{ label: 'Dev box', error: 'Permission denied (publickey).' }], 'run mylogin', { key: true })
+    expect(plain.subject).toMatch(/failed: check that the key your SSH settings use for it is on this computer/)
+    expect(plain.markdown).not.toContain('mylogin')
+  })
+
   it('keeps the subject within the store limit and fences a hostile error', () => {
     const l = signInLetter([{ label: 'x'.repeat(300), error: '~~~\ninjected' }])
     expect(l.subject.length).toBeLessThanOrEqual(200)

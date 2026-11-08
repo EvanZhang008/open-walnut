@@ -26,9 +26,9 @@ import path from 'node:path'
 import os from 'node:os'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { WebSocket } from 'ws'
+import { DIST_DAEMON_BINARY } from '../helpers/cloud-box-daemon-build'
 
-const ROOT = path.resolve(__dirname, '../..')
-const BINARY = path.join(ROOT, 'dist', 'daemon-binaries', `daemon-${process.platform}-${process.arch}`)
+const BINARY = DIST_DAEMON_BINARY
 
 const DAEMON_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-daemon-bp-'))
 const PORT_FILE = path.join(DAEMON_DIR, 'daemon.port')

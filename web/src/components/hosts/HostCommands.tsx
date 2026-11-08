@@ -6,6 +6,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { log } from '@/utils/log';
+import { demoCommandCopy } from '@/utils/demo-generation';
 import '@/styles/host-status.css';
 
 type CopyState = 'idle' | 'copied' | 'failed';
@@ -64,6 +65,14 @@ export function HostCommands({ commands, testId }: { commands: readonly string[]
   const [open, setOpen] = useState(false);
   const list = commands.filter((c) => typeof c === 'string' && c.trim());
   if (list.length === 0) return null;
+  const demo = demoCommandCopy(list);
+  if (demo.kind !== 'normal') {
+    return (
+      <div className="hc" data-testid={testId} data-demo="note">
+        <span className="text-sm text-muted" role="note">{demo.note}</span>
+      </div>
+    );
+  }
   const rest = list.slice(1);
   return (
     <div className="hc" data-testid={testId}>

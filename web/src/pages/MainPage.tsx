@@ -27,7 +27,7 @@ import { yieldFullscreen } from '@/hooks/useFullscreen';
 import { TodoPanel } from '@/components/tasks/TodoPanel';
 import { HomeBoardSheet } from '@/components/tasks/HomeBoardSheet';
 import { LS_TAB_KEY } from '@/components/tasks/task-tabs';
-import { createdToastId, readTierUsed } from '@/components/tasks/filter-bar-persist';
+import { createdToastId } from '@/components/tasks/filter-bar-persist';
 import { revealViewOption } from '@/components/tasks/view-dropdown-reveal';
 import { RoutinesView } from '@/components/routines/RoutinesView';
 import { HomeCompanionPanel } from '@/components/layout/HomeCompanionPanel';
@@ -79,10 +79,15 @@ import { useQuickParseEnabled } from '@/hooks/useQuickParse';
 import { useUrlSync } from '@/hooks/useUrlSync';
 import { MAX_PANELS, useSessionPanelMode, type SessionPanelMode } from '@/hooks/useSessionPanelMode';
 import { resolveTaskSessionId, taskOfSession } from '@/utils/session-status';
-import { applyStripChange } from './sessionTaskbarStore';
+import { applyStripChange, onTaskbarClose } from './sessionTaskbarStore';
+import { isRealSessionColumn } from './sessionTaskbar';
 import { onMinimizeToTaskbar } from '@/utils/taskbar-minimize';
 import { FocusDock } from '@/components/dock/FocusDock';
 import { AttentionBannerMount } from '@/components/common/AttentionBannerMount';
+import { FirstUseSetup } from '@/components/common/FirstUseSetup';
+import { FoundHostPrompts } from '@/components/common/FoundHostPrompts';
+import { firstUseCanStartMain, firstUseNeedsSetup } from '@/utils/first-use';
+import { firstUseCardPlace } from './home-first-use-card';
 import { publishBannerHealth } from '@/components/common/banner-mount-hooks';
 import type { DraftGateError } from '@/components/sessions/HostGateErrorBar';
 import { placementFor, setHostBannerPlacement } from '@/utils/host-banner-placement';
@@ -102,6 +107,8 @@ import {
   columnKey,
   toggleLockSlot,
   restoreSessionColumn,
+  regrowColumns,
+  pendingRegrow,
 } from './sessionColumns';
 import { nextLine, useColumnCompleteClose, type AdvanceResult } from './useColumnCompleteClose';
 import { focusColumnComposer, focusTaskRow, noteKeyboardMove, personMovedSince, useHomeKeyboard } from './useHomeKeyboard';
@@ -116,6 +123,7 @@ import { isDraftColumnId, isPendingColumnId, isPlaceholderColumnId, DRAFT_COL_PR
 import { createStripWriter, readColumns, readLayoutField, readString, writeLayoutField, type LayoutField } from '@/utils/layout-record';
 import { recordTaskOpened, recentOpenRecorder } from '@/utils/recent-opened';
 import { restoreDraftColumns, saveDraftColumns } from '@/components/sessions/draft-column-persist';
+import { withHomeFolder } from '@/components/sessions/draft-home-default';
 import { reconcileActiveSession } from '@/stores/active-session';
 import { loadColWeights, saveColWeights, resizeAtBoundary } from './columnSizing';
 import {
@@ -175,6 +183,11 @@ const sessionWidthForCount = (count: number): number =>
 
 /** The strip this window keeps (homeColumnsField: a phone has its own). */
 const COLUMNS_FIELD: LayoutField = homeColumnsField();
+
+/** Remember which columns a restore brought back (see restoredColumnIdsRef). */
+function markRestored(into: Set<string>, ids: readonly string[]): void {
+  for (const id of ids) if (!isPlaceholderColumnId(id)) into.add(id);
+}
 
 /** Load the saved session columns, with migration from the legacy single-session key. */
 function loadSessionColumns(): SessionSlot[] {
@@ -334,7 +347,8 @@ function rebindDraftToSeed(d: DraftColumn, seed: DraftSeed, projectDefault: Proj
   // a pristine repair draft for a project "+" must not keep launching a
   // repair.
   if (seed.intent) next.intent = seed.intent; else delete next.intent;
-  return next;
+  // A reused column the seed left with no folder starts in the home, as a fresh one does.
+  return withHomeFolder(next);
 }
 
 /** A rebind that changes who the draft talks to keeps no folder the seed did not bring. */
@@ -511,9 +525,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   chatVisibleRef.current = chatVisible;
   // The draft column that BORROWED the main chat's spot: a "+" while the chat is
   // open hides the chat for the draft's lifetime (the draft takes its place)
-  // instead of stacking a column beside it. Whoever borrowed gives it back —
-  // every draft exit funnels through forgetDraft, which restores the chat iff
-  // this ref names that draft. EXPLICITLY re-opening the chat (sidebar/dock
+  // instead of stacking a column beside it. The borrow ends with the draft:
+  // every draft exit funnels through forgetDraft, which gives the chat back on a
+  // ✕ close iff this ref names that draft, and leaves it closed on a launch (the
+  // new session is what the user asked to see). EXPLICITLY re-opening the chat (sidebar/dock
   // toggle) while borrowed CANCELS the borrow: the user clearly wants both, so
   // the draft demotes to a plain extra column and closing it later must not
   // touch the chat again.
@@ -559,11 +574,17 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // slots (draft-column-persist.ts); read once, before either list's first render.
   const [restoredDrafts] = useState(() => restoreDraftColumns((id) => ({
     id, cwd: '', host: null, openedCwd: '', openedHost: null, meta: freshLauncherMeta(),
-  })));
+  })).map(withHomeFolder));
+  // Columns that came back from the saved layout or the address rather than a click: one
+  // whose session is gone closes itself (handleRestoredGone) instead of a "Session not found"
+  // card; a reset Demo or a deleted session left it there, not the user (D05).
+  const restoredColumnIdsRef = useRef(new Set<string>());
   // Session columns state — up to 2 sessions displayed side by side
-  const [sessionColumns, setSessionColumns] = useState<SessionSlot[]>(
-    () => restoredDrafts.reduce((cols, d) => forceAddSessionColumn(cols, d.id), loadSessionColumns()),
-  );
+  const [sessionColumns, setSessionColumns] = useState<SessionSlot[]>(() => {
+    const saved = loadSessionColumns();
+    markRestored(restoredColumnIdsRef.current, saved.map((s) => s.id));
+    return restoredDrafts.reduce((cols, d) => forceAddSessionColumn(cols, d.id), saved);
+  });
 
   // ── The taskbar (pages/sessionTaskbarStore.ts, drawn by the app shell on every page) ──
   // Its chips are only the sessions the user minimized (handleMinimizeSession, the one
@@ -571,15 +592,30 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // session that leaves the strip (×, a sixth open, a lower panel count) goes to its
   // Recent end. A desktop strip only: the phone's one-at-a-time strip has no taskbar.
   const minimizedIdsRef = useRef(new Set<string>());
+  // Columns the user closed (×, a completed task's close, a restored one that was gone), read
+  // only by the regrow below.
+  const closedColumnIdsRef = useRef(new Set<string>());
+  // The columns the last capacity shrink closed, for the regrow (regrowColumns). One the user
+  // closed or minimized since, or that came back on the strip some other way, is the user's
+  // again, and never comes back by a widen (pendingRegrow).
+  const resizeClosedRef = useRef<SessionSlot[]>([]);
   const stripBeforeRef = useRef(sessionColumns);
   useEffect(() => {
     const before = stripBeforeRef.current;
     stripBeforeRef.current = sessionColumns;
     const minimized = minimizedIdsRef.current;
     minimizedIdsRef.current = new Set();
+    const closed = closedColumnIdsRef.current;
+    closedColumnIdsRef.current = new Set();
+    // Before the phone return: the phone strip has no taskbar, but its closes count the same.
+    resizeClosedRef.current = pendingRegrow(resizeClosedRef.current, sessionColumns, new Set([...closed, ...minimized]));
     if (before === sessionColumns || phoneLayout) return;
     applyStripChange(before, sessionColumns, minimized);
   }, [sessionColumns, phoneLayout]);
+  // A chip or Recent session the bar's x closed is the user's close too: a widen never brings it back.
+  useEffect(() => onTaskbarClose((sessionId) => {
+    resizeClosedRef.current = pendingRegrow(resizeClosedRef.current, [], new Set([sessionId]));
+  }), []);
   const handleMinimizeSession = useCallback((sessionId: string) => {
     minimizedIdsRef.current.add(sessionId);
     setSessionColumns(prev => removeSessionColumn(prev, sessionId));
@@ -684,9 +720,19 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // never changes the (memo) TodoPanel's props.
   useLayoutEffect(() => { publishBannerHealth(health, healthLoading); }, [health, healthLoading]);
   const startDraftFromBanner = useCallback(() => { openDraftColumnRef.current(); }, []);
+  const needsFirstSetup = firstUseNeedsSetup(tasks, completedHidden, health, loading || healthLoading);
+  // The welcome card (FirstUseSetup) leads the Ask slot while setup is needed. With the slot closed
+  // (the rail's Ask Walnut toggle, the slot's ×) it stays on Home at the top of the task panel
+  // (home-first-use-card.ts): closing the slot used to take the card away and leave an empty page
+  // (2026-11-11 review, F4). One card at a time, so the attention banner waits behind it.
+  const welcomeIn = firstUseCardPlace(needsFirstSetup, chatVisible, todoShown);
   const tasksBanner = useMemo(() => (
-    <AttentionBannerMount where="tasks" onNavigateSettings={handleNavigateSettings} onStartSession={startDraftFromBanner} />
-  ), [handleNavigateSettings, startDraftFromBanner]);
+    <>
+      {todoShown && <FoundHostPrompts />}
+      {welcomeIn === 'tasks' && <div className="first-use-in-tasks" data-testid="first-use-in-tasks"><FirstUseSetup health={health} loading={healthLoading} /></div>}
+      {welcomeIn === null && (!needsFirstSetup || !chatVisible) && <AttentionBannerMount where="tasks" onNavigateSettings={handleNavigateSettings} onStartSession={startDraftFromBanner} />}
+    </>
+  ), [handleNavigateSettings, startDraftFromBanner, needsFirstSetup, chatVisible, todoShown, welcomeIn, health, healthLoading]);
   // "The current session" (stores/active-session.ts) must stay inside the open
   // strip: a closed column stops being the target, an empty strip has none.
   useEffect(() => { reconcileActiveSession(sessionColumnIds); }, [sessionColumnIds]);
@@ -776,13 +822,25 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       followGrownStrip(realColumnCount(before), realColumnCount(settled));
       return;
     }
+    // A capacity change only: what a shrink closed comes back when the room does (regrowColumns).
+    const capacityMoved = prev.loaded && effectiveMaxPanels !== prev.max;
+    const max = triageOpenRef.current ? effectiveMaxPanels - 1 : effectiveMaxPanels;
+    if (capacityMoved && effectiveMaxPanels < prev.max) {
+      const trimmed = trimUnlockedToMax(sessionColumns, max);
+      const gone = sessionColumns.filter(c => isRealSessionColumn(c.id) && !trimmed.includes(c));
+      resizeClosedRef.current = [...gone, ...resizeClosedRef.current.filter(c => !gone.some(g => g.id === c.id))];
+    }
+    // A close not yet seen by the strip effect (its column was off the strip) counts too.
+    const back = capacityMoved && effectiveMaxPanels > prev.max
+      ? pendingRegrow(resizeClosedRef.current, sessionColumns, closedColumnIdsRef.current) : [];
     setSessionColumns(prev2 => {
       // The bare count: the strip is the setting (a grant writes the setting at
       // once, see followGrownStrip), and a lowered count takes the free column
       // even when every other panel is pinned. Pins themselves are never cut.
-      const max = triageOpenRef.current ? effectiveMaxPanels - 1 : effectiveMaxPanels;
-      return trimUnlockedToMax(prev2, max);
+      const trimmed = trimUnlockedToMax(prev2, max);
+      return back.length ? regrowColumns(trimmed, back, max) : trimmed;
     });
+    if (back.length) resizeClosedRef.current = [];
   // Keyed on the count, not the array (see above); followGrownStrip reads refs only.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveMaxPanels, panelModeLoaded, placeholderCount]);
@@ -976,7 +1034,12 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         // not name stays open (a deep link or Back never closes a locked column).
         // Same rationale as the visibility restore below: don't truncate a deep
         // link against the pre-config default panel count.
-        const cols = mergeUrlColumns(p.sessionIds, loadSessionColumns());
+        const saved = loadSessionColumns();
+        const cols = mergeUrlColumns(p.sessionIds, saved);
+        // A reload's address repeats the saved strip: those columns are restores. An id only the
+        // address names is a link someone opened, which keeps the "Session not found" card, and so
+        // does every column of a Back/Forward: the user opened those in this page's life.
+        if (p.fromLoad) markRestored(restoredColumnIdsRef.current, saved.map((s) => s.id));
         const fitted = panelModeLoadedRef.current ? fitRestoredColumns(cols, maxPanelsRef.current) : cols;
         // The URL never names a new-session draft: one kept with its words keeps its slot.
         setSessionColumns(prev => withDraftSlots(fitted, prev.filter(s => isDraftColumnId(s.id)).map(s => s.id)));
@@ -1013,6 +1076,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       }
     }
     if (sessionColumns.length === 0) {
+      // Not marked restored: these are columns the user opened in this page's life, so a gone
+      // one keeps its "Session not found" card (only the first load's columns close quietly).
       const restored = loadSessionColumns();
       // Truncate only once the real panel setting is known — see the eviction
       // effect. Restoring un-truncated is safe: that effect trims as soon as the
@@ -1290,22 +1355,18 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     }
 
     const id = `${DRAFT_COL_PREFIX}${Date.now()}-${draftSeqRef.current++}`;
-    // The folder comes from the SEED only (a task's own cwd, or a project's
-    // default patched in asynchronously). An unseeded "+" opens EMPTY: no folder,
-    // no project. There used to be a "most recently used folder" fallback here;
-    // it was removed on the user's call (2026-09-02: "it should never pre-select
-    // the project or path, just show empty"). A pre-filled pill reads as a
-    // decision already made, and one that is right only some of the time is
-    // worse than a blank one. Start on an empty cwd is not a dead button: the
-    // panel says "Pick a folder first" and opens the picker (see
-    // DraftSessionPanel.startWith).
+    // The folder comes from the SEED (a task's own cwd, or a project's default
+    // patched in asynchronously), else the HOME folder (draft-home-default.ts,
+    // 2026-11-11: New task defaults to home). Never a guess: the "most recently used
+    // folder" fallback stays gone (2026-09-02: a pill that is right only some of the
+    // time reads as the tool guessing wrong), and no project is pre-picked.
     const pinnedSeed = !!(seed?.cwd && seed.cwdPinned);
     const cwd = seed?.cwd ?? '';
     const host = seed?.cwd ? (seed.host ?? null) : null;
     const hostLabel = seed?.cwd ? seed.hostLabel : undefined;
     setDraftColumns(prev => [
       ...prev,
-      {
+      withHomeFolder({
         id, cwd, host,
         ...(hostLabel ? { hostLabel } : {}),
         // 'seed' (not 'user'): a project "+" pre-fills the pill, but the user
@@ -1332,7 +1393,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           ...(seed?.pinTier ? { pinTier: seed.pinTier } : {}),
           ...(seed?.model ? { model: seed.model } : {}),
         },
-      },
+      }),
     ]);
     setSessionColumns(prev => forceAddSessionColumn(prev, id));
     setFocusDraftId(id);
@@ -1386,24 +1447,28 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
    *  its focus claim. The strip SLOT is handled by the caller, because the two
    *  exits differ there — closing removes the column, Start morphs it into the
    *  `pending:` one. */
-  const forgetDraft = useCallback((draftId: string) => {
+  const forgetDraft = useCallback((draftId: string, exit: 'close' | 'launch') => {
     setDraftColumns(prev => prev.filter(d => d.id !== draftId));
     setFocusDraftId(prev => (prev === draftId ? null : prev));
     discardDraft(draftComposerKey(draftId));
-    // Give the main chat its spot back if THIS draft borrowed it. Both exits
-    // funnel here (✕ close and Start), so the borrow can never outlive the
-    // draft; a borrow the user already cancelled (ref cleared on explicit
-    // re-open) is left alone.
+    // The borrow ends with the draft (both exits funnel here, so it can never
+    // outlive it); a borrow the user already cancelled (ref cleared on explicit
+    // re-open) is left alone. A ✕ gives the main chat its spot back: nothing was
+    // made. A launch does not: the new session is what the user asked to see, and
+    // Main coming back beside it read as a panel opening by itself (2026-11-10, the
+    // user: "In New Task ... there was a CEO from the beginning ... weird"). The
+    // chat stays closed, also across a reload, until the user opens it.
     if (chatBorrowedByDraftRef.current === draftId) {
       chatBorrowedByDraftRef.current = null;
-      setChatVisible(true);
+      if (exit === 'close') setChatVisible(true);
+      else persistPanelFlag(LS_CHAT_VISIBLE_KEY, false, HOME_CHAT_VISIBLE_DEFAULT);
     }
   }, []);
 
   /** Discard a draft: column + row + persisted composer text. Close = no trace. */
   const closeDraftColumn = useCallback((draftId: string) => {
     setSessionColumns(prev => removeSessionColumn(prev, draftId));
-    forgetDraft(draftId);
+    forgetDraft(draftId, 'close');
   }, [forgetDraft]);
 
   /** Ref mirror of `projectForDir` (defined below, on the registry's projectByCwd)
@@ -1875,6 +1940,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       opener,
       taskId: task?.id,
     };
+    // A close the user made: the column never comes back by a widen (pendingRegrow).
+    closedColumnIdsRef.current.add(sessionId);
+    restoredColumnIdsRef.current.delete(sessionId);
     const fade = !!opts?.fade && !!columnElement(sessionId);
     if (fade && !prefersReducedMotion()) {
       endFade(sessionId);
@@ -1891,6 +1959,13 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     // A close is no Minimize: the session goes to the taskbar's Recent end, never its chips.
     setSessionColumns(prev => removeSessionColumn(prev, sessionId));
   }, [holdSessionsAreaAnimation, endFade]);
+
+  // A restored column whose session no longer exists: gone quietly, focus left where it is.
+  const handleRestoredGone = useCallback((sessionId: string) => {
+    if (!restoredColumnIdsRef.current.delete(sessionId)) return;
+    closedColumnIdsRef.current.add(sessionId);
+    setSessionColumns(prev => removeSessionColumn(prev, sessionId));
+  }, []);
 
   // Completing a task from its column's header closes the column, with an Undo, and goes
   // on to the next task that needs the person (advanceRef, set below with the locate it uses).
@@ -2874,8 +2949,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       setFocusScope('created');
     }
     const summary = [
-      // A user who never picked a tier never reads a tier name (F08, spec 5.10).
-      input.pinnedTier && readTierUsed() ? tierLabel(input.pinnedTier) : undefined,
+      input.pinnedTier ? tierLabel(input.pinnedTier) : undefined,
       input.due_date ? `Due ${formatQuickTaskDate(input.due_date)}` : undefined,
       input.start_date ? `Starts ${formatQuickTaskDate(input.start_date)}` : undefined,
       input.priority !== 'none' ? `${input.priority[0].toUpperCase()}${input.priority.slice(1)}` : undefined,
@@ -3195,7 +3269,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     // it userTouched, and openDraftColumn's rebind clears the walnut fields) —
     // but if state ever diverges, the fork must win or it would silently not fork.
     if (draft.walnut && !draft.forkOf) {
-      forgetDraft(draftId);
+      forgetDraft(draftId, 'launch');
       const bound = draft.taskId;
       launchQuickStart(
         { cwd: '', host: null },
@@ -3219,7 +3293,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     // and the same pending/promote machinery the Fork button already uses.
     if (draft.forkOf) {
       const src = draft.forkOf.sessionId;
-      forgetDraft(draftId);
+      forgetDraft(draftId, 'launch');
       handleForkPending(draft.cwd, draft.host ?? undefined, { columnId: draftId });
       forkSessionInWalnut(src, {
         ...(text.trim() ? { message: text.trim() } : {}),
@@ -3264,7 +3338,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       const choice = draftLaunchChoice(draft, launchDefaults, globalEngineRef.current, (e) => defaultEngineRuns(e, draft.host, getEngineCatalog()));
       return { choice, sent: draftLaunchPayload(choice, draft.meta, unnamedLaunchIsNotClaude(launchDefaults, globalEngineRef.current)) };
     })();
-    forgetDraft(draftId);
+    forgetDraft(draftId, 'launch');
     launchQuickStart(
       // createCwd must ride along: the picker's "Create folder & start" row
       // confirms a path that does not exist yet, and only this flag makes
@@ -3725,6 +3799,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           // First-load flag, so the slot doesn't read the store's empty starting
           // list as "no asks yet" and flash its composer on every page load.
           tasksLoading={loading}
+          setupReady={!healthLoading && firstUseCanStartMain(health)}
+          setup={welcomeIn === 'slot' ? <FirstUseSetup health={health} loading={healthLoading} /> : undefined}
           inspectorOpen={inspector.isOpen}
           onToggleInspector={inspector.toggle}
           {...(walnutRepairTarget ? { onFixWalnut: handleFixWalnut } : {})}
@@ -3739,13 +3815,16 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onSessionReplaced={handleSessionReplaced}
           onOpenForkDraft={handleOpenForkDraft}
           banner={(
-            <AttentionBannerMount
+            <>
+            {!todoShown && <FoundHostPrompts />}
+            {!needsFirstSetup && <AttentionBannerMount
               where="slot"
               health={health}
               healthLoading={healthLoading}
               onNavigateSettings={handleNavigateSettings}
               onStartSession={startDraftFromBanner}
-            />
+            />}
+            </>
           )}
           inspectorPanel={inspector.isOpen ? (
             /* No ask selected = nothing to describe. The inspector used to GET
@@ -3915,6 +3994,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                   onMinimize={phoneLayout ? undefined : handleMinimizeSession}
                   onTaskCompleted={columnComplete.onTaskCompleted}
                   onClose={handleClosePanel}
+                  {...(restoredColumnIdsRef.current.has(sid) ? { onRestoredGone: handleRestoredGone } : {})}
                   onTaskClick={handleFocusTaskById}
                   onLocateTask={handleLocateTaskById}
                   onOpenTaskDetail={handleOpenTaskDetailById}

@@ -35,11 +35,11 @@ vi.mock('../../../src/core/search/wiring.js', () => ({
 
 import express from 'express';
 import request from 'supertest';
-import { notesV2Router, resetIndexBootstrap } from '../../../src/web/routes/notes-v2.js';
+import { notesV2Router, settleIndexBootstrap } from '../../../src/web/routes/notes-v2.js';
 import { errorHandler } from '../../../src/web/middleware/error-handler.js';
 import { WALNUT_HOME, CONFIG_FILE } from '../../../src/constants.js';
-import { closeNotesIndexDb, upsertAttachmentText, getAttachmentMeta } from '../../../src/core/notes-index.js';
-import { rebuildIndex, stopNotesIndexer, resetNotesIndexer, scanForDrift } from '../../../src/core/notes-indexer.js';
+import { upsertAttachmentText, getAttachmentMeta } from '../../../src/core/notes-index.js';
+import { rebuildIndex, resetNotesIndexer, scanForDrift } from '../../../src/core/notes-indexer.js';
 
 const NOTES_DIR = path.join(WALNUT_HOME, 'notes');
 
@@ -97,10 +97,7 @@ function semanticHit(relPath: string, score: number, title = '') {
 }
 
 async function quiesceIndex(): Promise<void> {
-  resetIndexBootstrap();
-  stopNotesIndexer();
-  await new Promise((r) => setTimeout(r, 5));
-  closeNotesIndexDb();
+  await settleIndexBootstrap();
 }
 
 beforeEach(async () => {

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // ── Mocks ──────────────────────────────────────────────────────────────
 // Fake IPty: records writes/resizes, lets the test drive onData/onExit.
@@ -51,6 +51,9 @@ vi.mock('../../../src/web/terminal/spawn.js', () => ({
 }));
 
 import { terminalManager } from '../../../src/web/terminal/terminal-manager.js';
+import {
+  closeDemoAdmission, DemoAdmissionClosedError, resetDemoAdmissionForTests,
+} from '../../../src/core/sessions/demo-admission.js';
 
 const fakeWs = { readyState: 1 } as unknown as import('ws').WebSocket;
 
@@ -325,6 +328,103 @@ describe('disconnect → detach keeps pty alive (no kill)', () => {
     await terminalManager.open('sess-8', fakeWs, 80, 24);
     terminalManager.close('sess-8', fakeWs);
     expect(currentPty.kill).not.toHaveBeenCalled();
+  });
+});
+
+describe('Demo stop drains in-flight opens (waitForOpening)', () => {
+  type SpawnResult = { pty: FakePty; cwd: string; host: undefined };
+  const releases: (() => void)[] = [];
+
+  async function spawnMock() {
+    const { resolveSpawnForSession } = await import('../../../src/web/terminal/spawn.js');
+    return resolveSpawnForSession as ReturnType<typeof vi.fn>;
+  }
+
+  async function holdSpawn(pty: FakePty): Promise<() => void> {
+    let resolve!: (v: SpawnResult) => void;
+    const answer = new Promise<SpawnResult>((r) => { resolve = r; });
+    (await spawnMock()).mockImplementationOnce(() => answer);
+    const release = () => resolve({ pty, cwd: '/home/u/proj', host: undefined });
+    releases.push(release);
+    return release;
+  }
+
+  afterEach(() => {
+    for (const release of releases.splice(0)) release();
+    vi.useRealTimers();
+    resetDemoAdmissionForTests();
+  });
+
+  it('waits for an open whose spawn is pending, which then is held and killed once by shutdown', async () => {
+    const pty = makeFakePty();
+    const release = await holdSpawn(pty);
+    const open = terminalManager.open('sess-drain-1', fakeWs, 80, 24);
+    await vi.waitFor(async () => expect(await spawnMock()).toHaveBeenCalledTimes(1));
+
+    closeDemoAdmission();
+    let drained = false;
+    const drain = terminalManager.waitForOpening().then(() => { drained = true; });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(drained).toBe(false);
+    expect(terminalManager.listActive()).toEqual([]);
+
+    release();
+    await drain;
+    expect(drained).toBe(true);
+    await expect(open).resolves.toMatchObject({ terminalId: 'sess-drain-1' });
+    expect(terminalManager.listActive()).toEqual([{ sessionId: 'sess-drain-1', terminalKey: 'sess-drain-1', host: undefined }]);
+
+    terminalManager.shutdown();
+    expect(pty.kill).toHaveBeenCalledTimes(1);
+    expect(terminalManager.listActive()).toEqual([]);
+    terminalManager.shutdown();
+    expect(pty.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns at once when nothing is opening', async () => {
+    await expect(terminalManager.waitForOpening()).resolves.toBeUndefined();
+  });
+
+  it('an open after the fence closed is refused, spawns nothing and does not reattach', async () => {
+    await terminalManager.open('sess-drain-2', fakeWs, 80, 24);
+    const spawn = await spawnMock();
+    spawn.mockClear();
+    closeDemoAdmission();
+    await expect(terminalManager.open('sess-drain-2', fakeWs, 80, 24)).rejects.toBeInstanceOf(DemoAdmissionClosedError);
+    await expect(terminalManager.open('sess-drain-3', fakeWs, 80, 24)).rejects.toBeInstanceOf(DemoAdmissionClosedError);
+    expect(spawn).not.toHaveBeenCalled();
+    expect(terminalManager.listActive()).toEqual([{ sessionId: 'sess-drain-2', terminalKey: 'sess-drain-2', host: undefined }]);
+    await expect(terminalManager.waitForOpening()).resolves.toBeUndefined();
+  });
+
+  it('times out after 20s with the open still pending, and a later drain still waits for it', async () => {
+    vi.useFakeTimers();
+    const pty = makeFakePty();
+    const release = await holdSpawn(pty);
+    const open = terminalManager.open('sess-drain-4', fakeWs, 80, 24);
+    await vi.waitFor(async () => expect(await spawnMock()).toHaveBeenCalledTimes(1));
+
+    const first = expect(terminalManager.waitForOpening()).rejects.toThrow(/still pending; data was kept/);
+    await vi.advanceTimersByTimeAsync(19_999);
+    expect(terminalManager.listActive()).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    await first;
+
+    const again = terminalManager.open('sess-drain-4', fakeWs, 80, 24);
+    expect(await spawnMock()).toHaveBeenCalledTimes(1);
+
+    let drained = false;
+    const later = terminalManager.waitForOpening().then(() => { drained = true; });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(drained).toBe(false);
+    release();
+    await later;
+    expect(drained).toBe(true);
+    await expect(open).resolves.toMatchObject({ terminalId: 'sess-drain-4' });
+    await expect(again).resolves.toMatchObject({ terminalId: 'sess-drain-4' });
+    expect(terminalManager.listActive()).toEqual([{ sessionId: 'sess-drain-4', terminalKey: 'sess-drain-4', host: undefined }]);
+    terminalManager.shutdown();
+    expect(pty.kill).toHaveBeenCalledTimes(1);
   });
 });
 

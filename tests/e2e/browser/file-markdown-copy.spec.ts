@@ -15,6 +15,8 @@
  * the text/plain flavour ProseMirror hands the clipboard.
  */
 import { test, expect, type Page } from '@playwright/test'
+import type { Editor } from '@tiptap/core'
+import { goToSessionFolder } from './todo-panel-helpers'
 
 const SESSION_ID = 'pw-vscode-session'
 const TASK_ID = 'pw-task-vscode'
@@ -32,6 +34,7 @@ async function openFilesPanel(page: Page) {
   await panel.getByRole('button', { name: 'Files', exact: true }).click()
   const explorer = panel.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 10_000 })
+  await goToSessionFolder(explorer)
   return explorer
 }
 
@@ -46,6 +49,7 @@ async function selectAndCopy(page: Page, needle: string): Promise<string> {
   await expect(editor).toContainText(needle)
   await page.evaluate((needle) => {
     const root = document.querySelector('.fv-wysiwyg-editor .ProseMirror') as HTMLElement
+    root.focus()
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
     let node: Text | null = null
     while ((node = walker.nextNode() as Text | null)) {
@@ -57,7 +61,6 @@ async function selectAndCopy(page: Page, needle: string): Promise<string> {
       const sel = window.getSelection()!
       sel.removeAllRanges()
       sel.addRange(range)
-      root.focus()
       ;(window as any).__copied = undefined
       document.addEventListener('copy', (e) => {
         ;(window as any).__copied = e.clipboardData?.getData('text/plain')
@@ -66,6 +69,14 @@ async function selectAndCopy(page: Page, needle: string): Promise<string> {
     }
     throw new Error(`text not in editor: ${needle}`)
   }, needle)
+  await expect.poll(() => editor.evaluate((root) => {
+    const view = (root as HTMLElement & { editor: Editor }).editor.view
+    const { from, to } = view.state.selection
+    return {
+      dom: window.getSelection()?.toString(),
+      editor: view.state.doc.textBetween(from, to),
+    }
+  })).toEqual({ dom: needle, editor: needle })
   await page.keyboard.press('ControlOrMeta+C')
   await expect.poll(() => page.evaluate(() => (window as any).__copied)).not.toBeUndefined()
   return page.evaluate(() => (window as any).__copied as string)
@@ -73,8 +84,9 @@ async function selectAndCopy(page: Page, needle: string): Promise<string> {
 
 test.describe.configure({ timeout: 90_000 })
 
-test.beforeEach(async ({ page }) => {
-  await page.goto('/', { timeout: 60_000 })
+test.beforeEach(async ({ page, baseURL }) => {
+  await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
+  await page.getByRole('link', { name: 'Open Walnut' }).click({ timeout: 60_000 })
   await page.waitForLoadState('networkidle')
 })
 

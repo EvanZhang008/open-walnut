@@ -34,6 +34,78 @@ function docHead(c: SessionPassageComment): string {
   return `${what} on ${where} (thread in \`${sidecarPathOf(d.path)}\`):\n`;
 }
 
+/**
+ * Doc comments ride the message the person sees as their own words: each quote and
+ * comment under a short line naming its file, nothing else. Where each one lives (the
+ * full path, its id, its sidecar) and how to answer it is Walnut's, for the model only:
+ * it goes as the `object-context` message hint, beside the message, the way an ask's
+ * object context goes (2026-11-10 review: the instructions and two full paths filled the
+ * user's own bubble). The hint's text is stored first (POST /api/v1/hints/context); when
+ * that fails, the send falls back to composeWithComments, so nothing is lost.
+ */
+export const DOC_COMMENTS_CONTEXT_NAME = 'Doc comments';
+/** The hint kind (src/core/hints/hint-registry.ts `object-context`). */
+export const DOC_COMMENTS_HINT = 'object-context';
+
+const baseName = (p: string): string => p.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || p;
+
+/** The line the person sees above a doc comment's quote: the file's name, never its path. */
+function docLabel(c: SessionPassageComment): string {
+  const name = `\`${baseName(c.doc!.path)}\``;
+  return c.doc!.reply ? `My reply on ${name}:\n` : `On ${name}:\n`;
+}
+
+/** What the person sees: like composeWithComments, with each doc head cut to its file's name and no instructions. */
+export function composeVisible(pending: readonly SessionPassageComment[], typed: string): string {
+  if (pending.length === 0) return typed;
+  const chat = pending.filter((c) => !c.doc).map((c) => buildPassagePrefill(c.text, c.comment)).join('');
+  const doc = pending.filter((c) => c.doc).map((c) => docLabel(c) + buildPassagePrefill(c.text, c.comment)).join('');
+  const head = chat + doc;
+  const tail = typed.trim();
+  return tail ? `${head}${tail}` : head.replace(/\s+$/, '');
+}
+
+/** The model's half: which doc and comment each quoted doc passage is, in order, then how to answer. Null without doc comments. */
+export function docCommentsContext(pending: readonly SessionPassageComment[]): string | null {
+  const docs = pending.filter((c) => c.doc);
+  if (docs.length === 0) return null;
+  const rows = docs.map((c, i) => `${i + 1}. ${docHead(c).replace(/:\n$/, '')}`);
+  return `The person's message carries ${docs.length === 1 ? 'one comment' : `${docs.length} comments`} left in documents, `
+    + `each a quote under an "On \`<file>\`:" line, in this order:\n${rows.join('\n')}\n\n${DOC_COMMENTS_HOW.trimEnd()}`;
+}
+
+export interface ComposedSend {
+  /** The message: the person's bubble shows it. */
+  text: string;
+  /** Message hints the send asks for (the doc comments' context), when its text was stored. */
+  hints?: Record<string, { arg: string }>;
+}
+
+/**
+ * A send carrying comments. Doc comments put their context in a hint when `storeContext`
+ * gives back an id; otherwise (no doc comments, the store failed, or `inline` because
+ * the session's next send already carries an object context) the old inline text.
+ */
+/**
+ * How long a send waits for the server to keep its doc comments' context before it puts them in
+ * the message instead: the person's send must never hang on it (no answer, a host replica whose
+ * Mac is away answering 503, a slow link all fall back inline).
+ */
+export const HINT_CONTEXT_STORE_TIMEOUT_MS = 2500;
+
+export async function composeForSend(
+  pending: readonly SessionPassageComment[],
+  typed: string,
+  storeContext: (name: string, text: string) => Promise<string>,
+  opts: { inline?: boolean } = {},
+): Promise<ComposedSend> {
+  const context = docCommentsContext(pending);
+  if (!context || opts.inline) return { text: composeWithComments(pending, typed) };
+  const id = await storeContext(DOC_COMMENTS_CONTEXT_NAME, context).catch(() => '');
+  if (!id) return { text: composeWithComments(pending, typed) };
+  return { text: composeVisible(pending, typed), hints: { [DOC_COMMENTS_HINT]: { arg: id } } };
+}
+
 /** The server's caps (session-lifecycle.ts): past them a passage keeps the text path. */
 export const MAX_COMMENTS = 100;
 export const MAX_TEXT_CHARS = 4000;

@@ -73,6 +73,106 @@ function manager(conn: unknown): RemoteSessionManager {
 const markers = [{ message: 'hello', messageId: 'qm-1' }]
 const timeout = () => new Error('daemon command timeout: send (30000ms)')
 
+describe('line.fate read-only transport', () => {
+  afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers() })
+
+  it('holds an absolute ten-second deadline even when link progress keeps its RPC pending', async () => {
+    vi.useFakeTimers()
+    const { conn } = fakeConn([], ['line-fate-read-v1'])
+    let answer!: (reply: Record<string, unknown>) => void
+    conn.send.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve }))
+    const mgr = manager(conn)
+    const write = vi.spyOn(mgr, 'writeMessage')
+    const query = mgr.readLineFate('u-1', ['qm-1'])
+    const settled = vi.fn()
+    void query.then(settled)
+    // The RPC never settles while bulk progress renews its own timeout.
+    await vi.advanceTimersByTimeAsync(9_999)
+    expect(settled).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    await expect(query).resolves.toBe(null)
+    expect(settled).toHaveBeenCalledExactlyOnceWith(null)
+    expect(vi.getTimerCount()).toBe(0)
+    expect(conn.send).toHaveBeenCalledOnce()
+    expect(write).not.toHaveBeenCalled()
+    // A late reply cannot change the settled unknown answer or issue another request.
+    answer({ ok: true, fate: 'cancelled' })
+    await vi.advanceTimersByTimeAsync(1)
+    expect(settled).toHaveBeenCalledExactlyOnceWith(null)
+    expect(conn.send).toHaveBeenCalledOnce()
+  })
+
+  it('clears the absolute deadline timer when the query answers early', async () => {
+    vi.useFakeTimers()
+    const { conn } = fakeConn([{ ok: true, fate: 'cancelled' }], ['line-fate-read-v1'])
+    await expect(manager(conn).readLineFate('u-1', ['qm-1'])).resolves.toEqual({ fate: 'cancelled' })
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it.each([
+    { fate: 'cancelled', state: 'cancelled' },
+    { fate: 'ran', state: 'started', answer: 'pending' },
+    { fate: 'ran', state: 'completed' },
+    { fate: 'unanswered', state: 'started' },
+    { fate: 'waiting', writtenAt: 100, quiet: true },
+  ])('reads $fate with one bounded query and no send, attach or start', async (fate) => {
+    const { conn, sent } = fakeConn([{ ok: true, ...fate }], ['line-fate-read-v1'])
+    const mgr = manager(conn)
+    const start = vi.spyOn(mgr, 'start')
+    const attach = vi.spyOn(mgr, 'attach')
+    const write = vi.spyOn(mgr, 'writeMessage')
+    const onExit = vi.fn()
+    Object.assign(mgr, { _hasPipe: false, _pid: null, _onExit: onExit })
+    await expect(mgr.readLineFate('u-1', ['qm-1'])).resolves.toEqual(fate)
+    expect(conn.send).toHaveBeenCalledExactlyOnceWith('line.fate', { sid: 'sid-1', uuid: 'u-1', messageIds: ['qm-1'] }, 10_000)
+    expect(sent.map((r) => r.cmd)).toEqual(['line.fate'])
+    expect(start).not.toHaveBeenCalled()
+    expect(attach).not.toHaveBeenCalled()
+    expect(write).not.toHaveBeenCalled()
+    expect(onExit).not.toHaveBeenCalled()
+    expect(mgr.pid).toBe(null)
+    expect(mgr.hasPipe).toBe(false)
+  })
+
+  it('older, offline and unbound transports stay unknown without dispatch or cloud fallback', async () => {
+    fallback.send.mockClear()
+    fallback.connect.mockClear()
+    for (const caps of [[], ['line-fate-read-v1']]) {
+      const { conn } = fakeConn([{ ok: true, fate: 'cancelled' }], caps)
+      if (caps.length) conn.connected = false
+      await expect(manager(conn).readLineFate('u-1', ['qm-1'])).resolves.toBe(null)
+      expect(conn.send).not.toHaveBeenCalled()
+    }
+    await expect(manager(null).readLineFate('u-1', ['qm-1'])).resolves.toBe(null)
+    await expect(new RemoteSessionManager('sid-1', 'remote-box', null).readLineFate('u-1', ['qm-1'])).resolves.toBe(null)
+    expect(fallback.send).not.toHaveBeenCalled()
+    expect(fallback.connect).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { ok: false, fate: 'unknown', reason: 'not_found' },
+    { ok: false, fate: 'unknown', reason: 'unknown' },
+    { ok: true, fate: 'unexpected' },
+    new Error('daemon command timeout: line.fate (10000ms)'),
+  ])('a failed query stays unknown without a writing retry', async (reply) => {
+    const { conn, sent } = fakeConn([reply], ['line-fate-read-v1'])
+    await expect(manager(conn).readLineFate('u-1', ['qm-1'])).resolves.toBe(null)
+    expect(sent.map((r) => r.cmd)).toEqual(['line.fate'])
+  })
+
+  it('drops a late answer for a manager rebound to another session', async () => {
+    const { conn } = fakeConn([], ['line-fate-read-v1'])
+    let resolve!: (reply: Record<string, unknown>) => void
+    conn.send.mockImplementationOnce(() => new Promise((r) => { resolve = r }))
+    const mgr = manager(conn)
+    const query = mgr.readLineFate('u-1', ['qm-1'])
+    Object.assign(mgr, { _sid: 'sid-2' })
+    resolve({ ok: true, fate: 'cancelled' })
+    await expect(query).resolves.toBe(null)
+    expect(conn.send).toHaveBeenCalledOnce()
+  })
+})
+
 describe('RemoteSessionManager: a send whose answer never came', () => {
   const deadline = RemoteSessionManager.SEND_CONFIRM_DEADLINE_MS
   beforeEach(() => {

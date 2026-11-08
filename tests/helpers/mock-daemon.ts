@@ -125,6 +125,7 @@ export class MockDaemon {
   private _cliCommand = MOCK_CLI
   private readonly exitReportDelayMs: number
   private _attachHistory: Array<{ sid: string; fromOffset: number }> = []
+  private _startHistory: Array<{ sid: string; args: string[]; resume: boolean }> = []
   /** Roles clients announced with client.role ('client-role-v1'). */
   readonly clientRoles: string[] = []
   /** Active WS client connections — for broadcasting session_state events. */
@@ -292,6 +293,11 @@ export class MockDaemon {
     return [...this._attachHistory]
   }
 
+  /** Every start command, in order (refused ones too): its sid, args and resume flag. */
+  getStartHistory(): Array<{ sid: string; args: string[]; resume: boolean }> {
+    return this._startHistory.map((s) => ({ ...s, args: [...s.args] }))
+  }
+
   // ── Protocol Handler ──
 
   private handleMessage(ws: WebSocket, raw: string): void {
@@ -328,7 +334,15 @@ export class MockDaemon {
 
     const canned = typeof cmd.cmd === 'string' ? this._answers.get(cmd.cmd) : undefined
     if (canned) return this.sendOk(ws, id, canned)
-    this.dispatchCommand(ws, id, cmd)
+    // As the real daemon: a command that throws answers an error and never takes the
+    // process down. This daemon lives in the fixture server, so one throw (bun's spawn
+    // throws E2BIG synchronously for a VP's long argv on Linux, 2026-11-12) ended every
+    // browser test after it with ECONNREFUSED.
+    try {
+      this.dispatchCommand(ws, id, cmd)
+    } catch (err) {
+      this.sendError(ws, id, (err as Error)?.message ?? String(err))
+    }
   }
 
   private _answers = new Map<string, Record<string, unknown>>()
@@ -486,6 +500,7 @@ export class MockDaemon {
     const requestedCwd = cmd.cwd as string || this.tmpDir
     const message = cmd.message as string || ''
     const resume = cmd.resume as boolean ?? false
+    this._startHistory.push({ sid, args: [...(args ?? [])], resume })
     // A folder of the virtual tree (the host fixture's remote dirs) runs the mock
     // CLI in the daemon's own dir; any other missing folder is the real daemon's error.
     const virtualCwd = !fs.existsSync(requestedCwd) && !!this._fsLsOverride?.(requestedCwd)
@@ -548,7 +563,8 @@ export class MockDaemon {
     // Spawn mock CLI (use process.execPath to avoid PATH issues in vitest). As the real daemons do
     // (cli-argv-files-core.ts), the content arguments (--settings with its hook scripts, the system
     // prompt) ride files: inline, the settings outgrew one argument's 128 KB on Linux, and the
-    // spawn's E2BIG ended the whole fixture server (2026-11-12, CI's browser shards).
+    // spawn's E2BIG ended the whole fixture server (2026-11-12, CI's browser shards). Bun throws a
+    // failed posix_spawn (E2BIG, a missing cwd) synchronously where Node emits 'error'.
     let proc: ChildProcess
     try {
       proc = spawn(process.execPath, [this._cliCommand, ...this.argvFiles().toFiles(cliArgs)], {

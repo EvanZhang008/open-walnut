@@ -6,8 +6,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { DEFAULT_FILTER_STATE as S0, type FilterLists, type FilterState } from '../../web/src/components/tasks/filter-bar-types';
 import {
-  LS_FILTERS_KEY, LS_FILTER_RECENT_KEY, LS_LEGACY_DATE_KEY, markTierUsed, pushRecent, readMoreOpen,
-  readPersistedFilters, readRecent, readTierUsed, writeMoreOpen, writePersistedFilters,
+  LS_FILTERS_KEY, LS_FILTER_RECENT_KEY, LS_LEGACY_DATE_KEY, pushRecent, readMoreOpen,
+  readPersistedFilters, readRecent, writeMoreOpen, writePersistedFilters,
 } from '../../web/src/components/tasks/filter-bar-persist';
 import { INBOX_TAB, LS_TAB_KEY } from '../../web/src/components/tasks/task-tabs';
 import {
@@ -82,13 +82,10 @@ describe('walnut-todo-filters (4.8)', () => {
     expect(() => writePersistedFilters(S0)).not.toThrow();
     expect(() => pushRecent([{ dim: 'project', value: 'Walnut' }])).not.toThrow();
   });
-  it('More filters and tier-used flags', () => {
+  it('More filters flag', () => {
     expect(readMoreOpen()).toBe(false);
     writeMoreOpen(true);
     expect(readMoreOpen()).toBe(true);
-    expect(readTierUsed()).toBe(false);
-    markTierUsed();
-    expect(readTierUsed()).toBe(true);
   });
 });
 

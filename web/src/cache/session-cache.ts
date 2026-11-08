@@ -495,10 +495,12 @@ function registerGlobalListeners(): void {
 
   // ── error (streaming done with error) ──
   onSessionEvent('session:error', (data: unknown) => {
-    const { sessionId: sid, error, retryAt } = data as {
+    const { sessionId: sid, error, retryAt, saidOnMessage } = data as {
       sessionId: string;
       error?: string;
       retryAt?: string;
+      /** The parked message's own row says it, with Retry: no second error row. */
+      saidOnMessage?: boolean;
     };
     if (!sid || !trackedSessions.has(sid)) return;
     // Waiting on a clock (the host did not answer in time): no turn ran, no error row.
@@ -507,7 +509,7 @@ function registerGlobalListeners(): void {
     flushText(state);
     state.isStreaming = false;
     state.textBuffer = '';
-    if (error) {
+    if (error && !saidOnMessage) {
       const detail =
         error.length > 500 ? error.slice(0, 500) + '\u2026' : error;
       state.blocks = appendSystemBlock(state.blocks, { variant: 'error', message: 'Session error', detail });

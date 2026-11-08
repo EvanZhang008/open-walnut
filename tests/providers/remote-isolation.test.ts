@@ -85,8 +85,26 @@ describe('remoteIsolationFor: who gets what', () => {
     const prod = remoteIsolationFor({ ...base, env: { ...env, WALNUT_EPHEMERAL_REPLICA_DIR: '/tmp/open-walnut' } })
     expect(prod).toMatchObject({ mode: 'off', reason: 'prod-dir' })
   })
+  it('a Walnut Demo isolates its ssh hosts without the opt-in, in the default roots, and none once its stop began', () => {
+    const demo = { ...base, env: {}, demo: { closed: false } }
+    const key = isolationKey('/data/x')
+    expect(remoteIsolationFor(demo)).toEqual({ mode: 'isolated', key, roots: [`/tmp/open-walnut-test-${key}`, `$HOME/.cache/open-walnut-test/${key}`], replica: false })
+    // Each Demo generation has its own data dir, so its own key.
+    expect(remoteIsolationFor({ ...demo, home: '/data/x-next' })).toMatchObject({ mode: 'isolated' })
+    expect((remoteIsolationFor({ ...demo, home: '/data/x-next' }) as { key: string }).key).not.toBe(key)
+    expect(remoteIsolationFor({ ...demo, demo: { closed: true } })).toEqual({ mode: 'off', reason: 'demo-stopped' })
+    expect(remoteIsolationFor({ ...demo, env: ON, demo: { closed: true } })).toEqual({ mode: 'off', reason: 'demo-stopped' })
+    // The rest of the rule holds for a Demo too.
+    expect(remoteIsolationFor({ ...demo, link: 'net' })).toEqual({ mode: 'off', reason: 'not-ssh' })
+    expect(remoteIsolationFor({ ...demo, link: 'cloud-tunnel' })).toEqual({ mode: 'attach' })
+    expect(remoteIsolationFor({ ...demo, hostKey: '__local__' })).toEqual({ mode: 'shared' })
+    expect(remoteIsolationFor({ ...demo, ephemeral: false })).toEqual({ mode: 'shared' })
+    expect(remoteIsolationFor({ ...demo, ephemeral: false, demo: { closed: true } })).toEqual({ mode: 'shared' })
+    // Not a Demo: the opt-in still decides.
+    expect(remoteIsolationFor({ ...base, env: {}, demo: undefined })).toEqual({ mode: 'off', reason: 'remote-hosts-off' })
+  })
   it('every refusal reads as the ephemeral hint, so the connect error says what to do', () => {
-    for (const reason of ['remote-hosts-off', 'not-ssh', 'prod-dir'] as const) {
+    for (const reason of ['remote-hosts-off', 'not-ssh', 'demo-stopped', 'prod-dir'] as const) {
       const msg = describeIsolationRefusal('devbox', reason, '/tmp/open-walnut')
       expect(msg.startsWith('ephemeral server: ')).toBe(true)
       expect(classifyHostConnectError(msg, 'devbox').kind).toBe('ephemeral')
@@ -419,5 +437,47 @@ describe('the stale test root sweep, run for real', () => {
     expect(fs.existsSync(stale)).toBe(false)
     for (const kept of [fresh, mine, notKey, liveDaemon, liveTerm, elsewhere]) expect(fs.existsSync(kept), kept).toBe(true)
     expect(fs.lstatSync(path.join(cache, 'f'.repeat(16))).isSymbolicLink()).toBe(true)
+  })
+})
+
+/**
+ * macOS /bin/sh is bash 3.2, which ends a `$(...)` at the `)` of a case pattern
+ * written inside it: the script is a syntax error on a Mac host and fine on Linux,
+ * so CI never sees it (2026-11-09: the retire script ran the daemon stop, which has
+ * `case ... ) ... esac`, inside `$( (...) )`). Every script built here that runs on a
+ * host keeps each command substitution on one line with no `case` in it.
+ */
+function caseInsideSubstitution(script: string): string[] {
+  const bad: string[] = []
+  for (const line of script.split('\n')) {
+    let at = line.indexOf('$(')
+    while (at !== -1) {
+      let depth = 0
+      let end = -1
+      for (let i = at + 1; i < line.length; i++) {
+        if (line[i] === '(') depth++
+        else if (line[i] === ')' && --depth === 0) { end = i; break }
+      }
+      const inner = end === -1 ? line.slice(at) : line.slice(at, end + 1)
+      if (end === -1 || /\bcase\b/.test(inner)) bad.push(inner.slice(0, 120))
+      at = line.indexOf('$(', at + 2)
+    }
+  }
+  return bad
+}
+
+describe('host scripts parse under bash 3.2 (macOS /bin/sh)', () => {
+  it('no command substitution spans lines or holds a case', () => {
+    const scripts = {
+      retire: buildIsolatedRetireScript(`${ISOLATED_TMP_PREFIX}abc`, { alsoRemove: ['/home/a/.cache/open-walnut-test/abc'] }),
+      retireKeep: buildIsolatedRetireScript(`${ISOLATED_TMP_PREFIX}abc`, { remove: false }),
+      sweep: buildStaleIsolatedRootSweepScript('abc'),
+    }
+    for (const [name, script] of Object.entries(scripts)) expect({ name, bad: caseInsideSubstitution(script) }).toEqual({ name, bad: [] })
+  })
+
+  it('the checker catches the shape that broke', () => {
+    expect(caseInsideSubstitution('S=$( (case "$P" in ""|*[!0-9]*) exit 1;; esac) 2>&1 )')).toHaveLength(1)
+    expect(caseInsideSubstitution('S=$(w_stop 2>&1)')).toEqual([])
   })
 })

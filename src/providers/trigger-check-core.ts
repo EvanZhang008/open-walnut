@@ -948,6 +948,12 @@ export function runCheckProcess(
     nowMs?: () => number;
     /** The daemon's own `walnut` dir, put first on PATH for a plugin template's command (templateCheckPath). */
     templateShimDir?: string;
+    /** Final spawn gate, read synchronously right before the spawn: false = nothing starts. */
+    maySpawn?: () => boolean;
+    /** Aborting it ends this check's own process group the way its deadline does (killGroup). */
+    signal?: AbortSignal;
+    /** The live check pids: each joins at its spawn and leaves only at its real 'close', never at the settle timer. */
+    children?: Set<number>;
   } = {},
 ): Promise<CheckProcessResult> {
   const now = opts.nowMs ?? Date.now;
@@ -983,6 +989,14 @@ export function runCheckProcess(
       });
     };
 
+    // Nothing between this gate and the spawn awaits.
+    if ((opts.maySpawn && !opts.maySpawn()) || opts.signal?.aborted) {
+      resolve({
+        exitCode: null, signal: null, stdout: '', stderrTail: '', timedOut: false, stdoutOverflow: false,
+        durationMs: 0, spawnError: 'check not started: this daemon is stopping',
+      });
+      return;
+    }
     let child: ReturnType<typeof spawn>;
     try {
       child = spawn('/bin/sh', ['-c', spec.run], {
@@ -1005,6 +1019,14 @@ export function runCheckProcess(
       if (typeof pid !== 'number' || pid <= 1) return;
       try { process.kill(-pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch { /* gone */ } }
     };
+    const childPid = typeof child.pid === 'number' && child.pid > 1 ? child.pid : null;
+    if (childPid !== null) opts.children?.add(childPid);
+    const onAbort = () => { killGroup(); };
+    if (opts.signal && childPid !== null) opts.signal.addEventListener('abort', onAbort, { once: true });
+    const gone = () => {
+      if (childPid !== null) opts.children?.delete(childPid);
+      opts.signal?.removeEventListener('abort', onAbort);
+    };
     // Awake time, not wall time: a sleep mid-check is not the script's slowness.
     stopTimer = startAwakeDeadline(timeoutMs, () => {
       timedOut = true;
@@ -1022,6 +1044,8 @@ export function runCheckProcess(
       const msg = code === 'ENOENT' && spec.cwd
         ? `cwd does not exist: ${spec.cwd}`
         : `could not start check: ${err.message}`;
+      // A spawn that failed has no process; one that started leaves at its 'close'.
+      if (childPid === null) gone();
       finish({ spawnError: msg });
     });
     child.stdout?.on('data', (buf: Buffer) => {
@@ -1037,6 +1061,7 @@ export function runCheckProcess(
       stderr = (stderr + errDecoder.write(buf)).slice(-CHECK_STDERR_TAIL * 2);
     });
     child.on('close', (code, signal) => {
+      gone();
       if (!stdoutOverflow) stdout += outDecoder.end();
       stderr = (stderr + errDecoder.end()).slice(-CHECK_STDERR_TAIL * 2);
       finish({ exitCode: code, signal });

@@ -117,6 +117,8 @@
 .home-navigation-scroll.is-stacked > .todo-tasks-section:has(> .todo-tasks-header) ~ .todo-pinned-wrapper .navigation-heading.todo-pinned-header { margin-top: 36px; }
 .navigation-heading.todo-pinned-header .navigation-heading-open { color: var(--fg); font-size: 13px; font-weight: 600; }
 .navigation-heading.todo-tasks-header { border-bottom: 0; }
+/* A section heading's count, "Pinned (4)": muted, beside the name (the divider rows keep theirs). */
+.navigation-heading:not(.navigation-heading-divider) .navigation-heading-count { margin-left: -2px; color: var(--fg-muted); font-weight: 400; flex-shrink: 0; }
 
 /* Tier sub-groups inside Pinned: flat, no rails, same left edge as every heading. */
 .home-navigation-scroll .todo-pinned-subgroup,

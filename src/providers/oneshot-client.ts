@@ -25,6 +25,8 @@ import crypto from 'node:crypto'
 import { isVitestWorker } from '../core/test-claude-guard.js'
 import { linkFailureKind } from './link-failure.js'
 import { log } from '../logging/index.js'
+import { IS_DEMO } from '../constants.js'
+import { assertDemoAdmission } from '../core/sessions/demo-admission.js'
 
 export interface OneShotSpec {
   command: string
@@ -266,6 +268,7 @@ function newRunId(): string {
  * `error`.
  */
 export async function startOneShot(spec: OneShotSpec, listeners: OneShotListeners): Promise<OneShotHandle> {
+  assertDemoAdmission()
   // session.tag_requests: Walnut's own one-shot model calls carry the tag too (sessions/request-tag.ts).
   const tag = await import('../core/sessions/request-tag.js')
   if (tag.requestTagOn()) {
@@ -280,6 +283,9 @@ export async function startOneShot(spec: OneShotSpec, listeners: OneShotListener
     routes.set(runId, { listeners, conn, epoch: conn.connectionEpoch })
     watchLinks()
     let reply: Awaited<ReturnType<OneShotConn['send']>> | null = null
+    if (IS_DEMO) {
+      try { assertDemoAdmission() } catch (error) { endRoute(runId); throw error }
+    }
     try {
       reply = await conn.send('oneshot.run', { runId, ...body }, RUN_RPC_MS)
     } catch (err) {
@@ -324,6 +330,8 @@ function daemonHandle(conn: OneShotConn, runId: string, reply: Record<string, un
 }
 
 function localRun(runId: string, spec: OneShotSpec, listeners: OneShotListeners): OneShotHandle {
+  assertDemoAdmission()
+  if (IS_DEMO) throw new Error('Demo requires its own daemon for AI work; reconnect it and try again')
   noteVia('local')
   const core = local()
   let done = false
@@ -346,7 +354,9 @@ export function prewarmOneShot(spec: OneShotSpec & { warmKey: string }): void {
     log.agent.warn('one-shot prewarm failed', { error: err instanceof Error ? err.message : String(err) })
   }
   const go = (conn: OneShotConn | null): void => {
+    assertDemoAdmission()
     if (!conn) {
+      if (IS_DEMO) return
       try { local().prewarm(payload(spec)) } catch (err) { onError(err) }
       return
     }
@@ -357,7 +367,7 @@ export function prewarmOneShot(spec: OneShotSpec & { warmKey: string }): void {
   try {
     const conn = daemonConn()
     // In-process the child boots now, so a run right after finds it.
-    if (conn instanceof Promise) conn.then(go, onError)
+    if (conn instanceof Promise) void conn.then(go).catch(onError)
     else go(conn)
   } catch (err) { onError(err) }
 }

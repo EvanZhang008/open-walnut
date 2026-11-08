@@ -84,6 +84,12 @@ export interface FleetHost {
     version: string | null; startedAt: number | null; startup: string; startsAfterReboot: boolean; runtime: string | null; vitals: boolean
     bootStart?: FleetBootStart | null
     reboot?: string
+    /**
+     * A test server's or the Demo's own daemon there, removed when that server stops: it never
+     * starts after a reboot, by design, so that is no problem to show (2026-11-10 review: a new
+     * Demo user read "Walnut won't restart on demo-devbox after it reboots").
+     */
+    throwaway?: boolean
   } | null
   placement: {
     /**
@@ -166,7 +172,7 @@ export function longRunningReasons(h: Pick<FleetHost, 'local' | 'connection' | '
     if (!h.server?.enabled) reasons.push('No Walnut server runs on it (Settings, Remote Hosts, host servers).')
     else if (h.server.phase !== 'running') reasons.push(`Its Walnut server is not running (${h.server.phaseLabel}).`)
   }
-  if (h.daemon && !h.daemon.startsAfterReboot && !h.local) reasons.push(`Its daemon does not start by itself after a reboot (${rebootAdvice(h.daemon, h.system?.platform)}).`)
+  if (h.daemon && !h.daemon.startsAfterReboot && !h.daemon.throwaway && !h.local) reasons.push(`Its daemon does not start by itself after a reboot (${rebootAdvice(h.daemon, h.system?.platform)}).`)
   const week = h.history?.windows.find((w) => w.days === 7)
   if (week && week.online !== null && week.minutes >= 24 * 60 && week.online < LONG_RUNNING_MIN_ONLINE) {
     reasons.push(`It was up ${Math.round(week.online * 1000) / 10}% of the last 7 days.`)

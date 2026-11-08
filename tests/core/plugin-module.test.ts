@@ -612,18 +612,20 @@ describe('preparePluginModule: links out of the plugin directory', () => {
   })
 
   it('loads in place when runtime code imports a devDependency that links out', async () => {
-    // A package used at runtime but listed under devDependencies: the copy cannot resolve it.
-    const dir = await fallbackScaffold(
-      'misdeclared',
-      'import { createRequire } from "node:module"\nconst api = createRequire(import.meta.url)("@open-walnut/plugin-api")\nexport function activate() { return api.from }\n',
-    )
+    // A fixture-only package cannot resolve through the runner's NODE_PATH.
+    const tooling = await outsidePackage('runtime-tooling')
+    const dir = await writePlugin('misdeclared', {
+      'package.json': JSON.stringify({ name: 'misdeclared', type: 'module', devDependencies: { '@fixture/runtime-tooling': 'file:../../checkout/runtime-tooling' } }),
+      'dist/server.mjs': 'import { createRequire } from "node:module"\nconst api = createRequire(import.meta.url)("@fixture/runtime-tooling")\nexport function activate() { return api.from }\n',
+    })
+    await link(tooling, path.join(dir, 'node_modules/@fixture/runtime-tooling'))
     const manifest = { id: 'misdeclared', apiVersion: 1 as const, server: 'dist/server.mjs' }
 
     const module = await prepare(dir, manifest)
     expect(await module.activate!({})).toBe('outside')
-    expect(module.reloadUnsafeReason).toMatch(/runtime code imports @open-walnut\/plugin-api, a devDependency that links out/)
+    expect(module.reloadUnsafeReason).toMatch(/runtime code imports @fixture\/runtime-tooling, a devDependency that links out/)
     expect(await generations('misdeclared')).toEqual([])
-    await expect(prepare(dir, manifest, true)).rejects.toThrow(/requires a process restart: runtime code imports @open-walnut\/plugin-api/)
+    await expect(prepare(dir, manifest, true)).rejects.toThrow(/requires a process restart: runtime code imports @fixture\/runtime-tooling/)
     expect(await generations('misdeclared')).toEqual([])
   })
 

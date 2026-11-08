@@ -79,6 +79,7 @@ import { ensureWalnutSource, isWalnutCheckout, WalnutSourceError } from '../../c
 import { engineCaps, isAcpEngine, isKnownEngine, normalizeEngine, resolveEngine } from '../../core/agents/engine-registry.js'
 import type { FallbackDecision } from '../../core/agents/fallback-engine.js'
 import { pickLaunchDefaults } from '../../core/sessions/project-launch-defaults.js'
+import { unavailableHistoryReason } from '../../core/sessions/history-unavailable.js'
 import { splitAcpModelId } from '../../providers/acp-session.js'
 import { SESSION_ENGINE_IDS } from '../../core/types.js'
 
@@ -213,7 +214,10 @@ sessionsRouter.get('/working-dirs', async (_req: Request, res: Response, next: N
     // entry) ignores it.
     const found = foundPickableHosts(hosts, config.net)
       .map(([alias, h]) => ({ alias, label: h.label ?? alias }))
-    res.json({ dirs: result, hosts: configuredHosts, found })
+    // The folder picker folds this to `~` in its rows. A Walnut whose HOME is not the
+    // account's (the Demo's own HOME) would otherwise read its own folders as
+    // `~/<path to that HOME>/...` from a guess on the path's shape.
+    res.json({ dirs: result, hosts: configuredHosts, found, localHome: os.homedir() })
   } catch (err) {
     next(err)
   }
@@ -328,19 +332,15 @@ sessionsRouter.post('/host-retry', async (req: Request, res: Response, next: Nex
 })
 
 /**
- * Fix-Walnut intent: wrap the user's bug report in a repair briefing. Kept
+ * Fix-Walnut intent: the repair briefing beside the user's bug report. Kept
  * server-side so iOS/cloud clients reuse it and copy iterates without a web
  * redeploy. Repo-level safety rules (never kill :3456, dev:prod, log toolkit)
  * are NOT repeated here — the session's cwd is the Walnut checkout, so the CLI
  * auto-loads CLAUDE.md with all of them.
  */
-function buildFixWalnutMessage(userReport: string): string {
+function buildFixWalnutBrief(): string {
   return [
-    `The user reports something wrong with Walnut (this app — you are running inside its source checkout). Their report:`,
-    ``,
-    `"""`,
-    userReport,
-    `"""`,
+    `The user reports something wrong with Walnut (this app — you are running inside its source checkout). Their report is their message below this note.`,
     ``,
     `Fix it end to end:`,
     `1. Reproduce/diagnose first — structured logs live in ${LOG_DIR}/ (start with \`scripts/walnut-logs.sh diagnose\`, see CLAUDE.md for the toolkit). If a screenshot is attached, read it.`,
@@ -689,7 +689,13 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
     // Fix-Walnut intent: wrap the report in the repair briefing and give the
     // task a recognizable title/project (instead of "Session: walnut" / Inbox).
     const isFixWalnut = intent === 'fix-walnut'
-    const sessionMessage = isFixWalnut ? buildFixWalnutMessage(message) : message
+    // The person's bubble reads their own report; the briefing is the agent's and rides as a
+    // Walnut hint block beside it, which every surface takes off (hint-format.ts).
+    const sessionMessage = message
+    if (isFixWalnut) {
+      const { repairBriefPrefix } = await import('../../core/self-repair/fix-briefing.js')
+      messagePrefix = `${repairBriefPrefix(buildFixWalnutBrief())}${messagePrefix ?? ''}`
+    }
     const reportSnippet = message.replace(/\s+/g, ' ').trim().slice(0, 60)
     // Fix Walnut follows the SAME launch defaults as a regular quick session —
     // the web client sends its launcher tier explicitly, and headless clients
@@ -975,21 +981,6 @@ const HISTORY_PAGE_MIN_TEXT = 40
 function isProseRow(m: SessionHistoryMessage): boolean {
   if (m.role === 'user') return !m.injected && m.text.trim() !== ''
   return m.role === 'assistant' && m.text.trim() !== ''
-}
-
-function unavailableHistoryReason(record: SessionRecord): string {
-  const caps = engineCaps(record.engine)
-  if (caps.historySource === 'acp-journal') {
-    if (!record.acpRuntimeId) {
-      return `${caps.displayName} session has no ACP runtime ID, so its history journal cannot be located`
-    }
-    return record.host
-      ? `${caps.displayName} session history journal is unavailable on remote host "${record.host}"`
-      : `${caps.displayName} session history journal not found`
-  }
-  return record.host
-    ? `Remote host "${record.host}" is unreachable — session history is stored on that machine`
-    : 'Session history file not found'
 }
 
 /** Apply the optional `?q=` list filter (title / owning-task title / cwd / host / hostname).
@@ -1878,7 +1869,7 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
       }
       // No disk cache either — return a meaningful reason so the UI can show
       // "host unreachable" instead of generic "No conversation history found".
-      const reason = unavailableHistoryReason(record)
+      const reason = await unavailableHistoryReason(record)
       res.json({ messages: [], total: 0, cursor: 0, delta: false, historyUnavailable: reason })
       return
     }
@@ -2030,7 +2021,7 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
       }
       res.json({
         messages: [], total: 0, cursor: 0, delta: false,
-        historyUnavailable: unavailableHistoryReason(record),
+        historyUnavailable: await unavailableHistoryReason(record),
       })
       return
     }

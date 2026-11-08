@@ -36,7 +36,7 @@ import {
 } from '../../src/core/notes-index.js'
 import {
   rebuildIndex,
-  stopNotesIndexer,
+  settleNotesIndexer,
   resetNotesIndexer,
 } from '../../src/core/notes-indexer.js'
 import {
@@ -55,8 +55,7 @@ async function readNote(relPath: string): Promise<string> {
 }
 
 async function quiesce(): Promise<void> {
-  stopNotesIndexer()
-  await new Promise((r) => setTimeout(r, 5))
+  await settleNotesIndexer()
   closeNotesIndexDb()
 }
 

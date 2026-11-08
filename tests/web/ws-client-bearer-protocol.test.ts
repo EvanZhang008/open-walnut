@@ -59,6 +59,37 @@ describe('the SPA\'s /ws handshake', () => {
     expect(decodeBearerProtocol(offered[1]!)).toBe(TOKEN)
   })
 
+  it('a Demo socket carries this page generation, not a newer tab storage value', async () => {
+    vi.stubGlobal('window', { location: { protocol: 'http:', host: '127.0.0.1:3458', hostname: '127.0.0.1', port: '3458' } })
+    vi.stubGlobal('sessionStorage', { getItem: () => 'first', clear: () => {}, setItem: () => {} })
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ generation: 'first' })))
+    stored['walnut.demo.generation'] = 'first'
+    const { initDemoGeneration } = await import('@/utils/demo-generation')
+    await initDemoGeneration()
+    stored['walnut.demo.generation'] = 'second'
+    const { url } = await connect()
+    expect(url).toBe('ws://127.0.0.1:3458/ws?demo-generation=first')
+  })
+
+  it('a reset detected on socket close reloads before retrying its refused old generation', async () => {
+    const reload = vi.fn()
+    vi.stubGlobal('window', { location: { protocol: 'http:', host: '127.0.0.1:3458', hostname: '127.0.0.1', port: '3458', reload } })
+    vi.stubGlobal('sessionStorage', { getItem: () => 'first', clear: () => {}, setItem: () => {} })
+    const request = vi.fn(async () => Response.json({ generation: 'first' }))
+    vi.stubGlobal('fetch', request)
+    stored['walnut.demo.generation'] = 'first'
+    const { initDemoGeneration } = await import('@/utils/demo-generation')
+    await initDemoGeneration()
+    const { wsClient } = await import('@/api/ws')
+    wsClient.connect()
+    request.mockResolvedValue(Response.json({ generation: 'second' }))
+    const socket = (wsClient as unknown as { ws: { onclose: (event: { code: number; reason: string }) => void } }).ws
+    socket.onclose({ code: 1006, reason: '' })
+    await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1))
+    expect(opened).toHaveLength(1)
+    wsClient.disconnect()
+  })
+
   it('on the server\'s own machine (no token stored): a bare /ws and no subprotocol', async () => {
     const { url, argc } = await connect()
     expect(url).toBe('wss://walnut.example.net/ws')

@@ -75,7 +75,7 @@ export function useSttSetupJob(): SttSetupJob | null {
 async function runSteps(id: number, steps: SetupStep[], signal: AbortSignal, runner: Runner) {
   for (let i = 0; i < steps.length; i++) {
     if (signal.aborted || job?.id !== id) return;
-    patchStep(id, i, { status: 'running', percent: 0, message: 'Starting...' });
+    patchStep(id, i, { status: 'running', percent: null, message: 'Starting...' });
     // Assigned inside the event callback, which control-flow narrowing cannot see.
     let outcome = null as 'done' | 'error' | null;
     try {

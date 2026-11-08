@@ -91,9 +91,10 @@ describe('a session panel follows the task to its new session in every host', ()
     // old one is still a redirect (src/lib/id-ref.ts: the whole id wins).
     expect(read('src/web/routes/session-chat.ts')).toContain('...(msg.sessionId && msg.sessionId !== data.sessionId ? { deliveredTo: msg.sessionId } : {}),');
     const hook = read('web/src/hooks/useSessionSend.ts');
-    const rpcs = hook.match(/sendRpc<[^>]*>\(\s*'session:send'/g) ?? [];
+    // Every send goes through the one acceptance rule (api/session-send.ts), whose answer carries deliveredTo.
+    const rpcs = hook.match(/\bsendSessionMessage\(/g) ?? [];
     expect(rpcs.length).toBeGreaterThanOrEqual(3);
-    for (const r of rpcs) expect(r, 'every session:send answer reads deliveredTo').toContain('deliveredTo');
+    expect(read('web/src/api/session-send.ts'), 'every session:send answer reads deliveredTo').toMatch(/interface SendAck \{[\s\S]*?\n  deliveredTo\?: string;/);
     expect(hook.match(/followRedirect\(res, /g)?.length).toBe(rpcs.length);
     expect(panel).toContain('if (redirectedTo && redirectedTo !== sessionId) onSessionReplaced?.(sessionId, redirectedTo);');
     // The phone's send says the same (api-v1.md, deliveredTo).
@@ -140,11 +141,14 @@ describe('every surface that holds a session id stays on the task\'s current con
   });
 
   it('every send by session id is the composer hook (which follows) or a one-shot sender', () => {
-    const found = files.filter((f) => /['"]session:send['"]/.test(fs.readFileSync(f, 'utf8'))).map(rel).sort();
-    // ws.ts is the transport, not a sender: it only adds a test-run window's label to every send.
-    expect(found).toEqual([...ONE_SHOT_SENDERS, 'web/src/hooks/useSessionSend.ts', 'web/src/api/ws.ts'].sort());
-    expect(read('web/src/api/ws.ts').match(/['"]session:send['"]/g)).toHaveLength(1);
-    expect(read('web/src/api/ws.ts')).toContain("if (method === 'session:send') payload = withSendTestRun(payload);");
+    // One RPC call site (the acceptance rule, api/session-send.ts); its callers are the senders.
+    const rpc = files.filter((f) => /['"]session:send['"]/.test(fs.readFileSync(f, 'utf8'))).map(rel);
+    expect(rpc).toEqual(['web/src/api/session-send.ts']);
+    const found = files.filter((f) => /\bsendSessionMessage\(/.test(fs.readFileSync(f, 'utf8'))).map(rel)
+      .filter((f) => f !== 'web/src/api/session-send.ts').sort();
+    expect(found).toEqual([...ONE_SHOT_SENDERS, 'web/src/hooks/useSessionSend.ts'].sort());
+    // That one call site also adds a test-run window's label to every send (ws.ts, the transport, no longer does).
+    expect(read('web/src/api/session-send.ts')).toContain("wsClient.sendRpc<T>('session:send', withSendTestRun(body))");
   });
 
   it('the server never lets a replaced session take a message', () => {

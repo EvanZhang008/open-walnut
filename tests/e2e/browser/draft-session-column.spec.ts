@@ -56,6 +56,7 @@ import {
   draftPanels,
   draftProjectPill, expectV4Stack, homeColumns, loadHome, lockLeftmostPanel, openDraft,
   openDraftOnCwd, seedColumns, setPanelMode, tasksTitled, watchForbiddenRequests, draftSend,
+  HOME_FOLDER,
 } from './draft-helpers'
 import { openSessionFromPlus } from './draft-surface-helpers'
 import { presetPanelView } from './todo-panel-helpers'
@@ -115,11 +116,11 @@ test('"+" opens a focused draft column with no network in the open path', async 
   // THE requirement: not one request between the click and the visible column.
   expect(seen, 'the open path must be network-free').toEqual([])
 
-  // Nothing is pre-selected. The working-dirs cache is WARM here (the fixture
-  // seeds a history and loadHome primes it), so an empty pill proves the open
-  // path chose not to fill it, not that it had nothing to fill it with. User
-  // rule (2026-09-02): a fresh draft never pre-picks a folder or a project.
-  await expect(draftCwdPill(panel)).toHaveText('Choose folder and host…')
+  // No guess is pre-selected. The working-dirs cache is WARM here (the fixture
+  // seeds a history and loadHome primes it), so the home pill proves the open
+  // path chose the home, not the most-used folder (2026-09-02: never pre-pick
+  // a project or a guessed folder; 2026-11-11: the home is the default).
+  await expect(draftCwdPill(panel)).toHaveText(HOME_FOLDER)
   await expect(draftProjectPill(panel)).toHaveCount(0)
 
   // ── The v4 layout, asserted as GEOMETRY, not as "these classes exist" ──
@@ -156,32 +157,27 @@ test('"+" opens a focused draft column with no network in the open path', async 
   await page.screenshot({ path: `${SCREENSHOT_DIR}/01-instant-open.png`, fullPage: false })
 })
 
-test('Start with no folder picked says so and opens the picker — no request, text kept', async ({ page }) => {
-  // With nothing pre-selected, "+ → type → Start" is the path that USED to be a
-  // silent no-op (a picker opened, nothing said why). The notice is what makes
-  // an empty default acceptable: the refusal is explained next to the pill that
-  // resolves it, and the composer keeps the text.
+test('Start with no folder picked starts in the home folder: no picker, the launch names the home', async ({ page }) => {
+  // A New task with no pick starts in the home (draft-home-default.ts, 2026-11-11):
+  // "+ → type → Start" launches at once, never "Choose folder and host" first.
   await loadHome(page)
   const panel = await openDraft(page)
-  await expect(draftCwdPill(panel)).toHaveText('Choose folder and host…')
+  await expect(draftCwdPill(panel)).toHaveText(HOME_FOLDER)
 
-  const message = `no folder yet ${Date.now()}`
+  const message = `home default ${Date.now()}`
   await draftComposer(page).fill(message)
-
-  const launches: string[] = []
-  page.on('request', (req) => {
-    if (req.method() === 'POST' && new URL(req.url()).pathname === '/api/sessions/quick-start') launches.push(req.url())
-  })
+  const launch = page.waitForRequest((req) => req.method() === 'POST' && new URL(req.url()).pathname === '/api/sessions/quick-start')
   await draftSend(panel).click()
+  const body = (await launch).postDataJSON() as { cwd?: string; host?: string; project?: string }
+  const localHome = await page.evaluate(async () => (await (await fetch('/api/sessions/working-dirs')).json()).localHome as string)
+  expect([localHome, '~']).toContain(body.cwd)
+  expect(body.host ?? null).toBeNull()
+  // No project is pre-picked: the task files in the Inbox.
+  expect(body.project ?? '').toBe('')
+  await expect(panel.getByTestId('draft-needs-folder')).toHaveCount(0)
+  await expect(page.locator('.session-path-selector')).toHaveCount(0)
 
-  await expect(panel.getByTestId('draft-needs-folder')).toBeVisible()
-  await expect(page.locator('.session-path-selector')).toBeVisible()
-  // Still a draft, text intact, nothing launched.
-  await expect(draftComposer(page)).toHaveValue(message)
-  await expect(panel).toBeVisible()
-  expect(launches, 'Start on an empty folder must not launch').toEqual([])
-
-  await page.screenshot({ path: `${SCREENSHOT_DIR}/01b-start-needs-folder.png`, fullPage: false })
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/01b-start-home-default.png`, fullPage: false })
 })
 
 test('the /task slash command opens the same draft column (no launcher popover, no second surface)', async ({ page }) => {

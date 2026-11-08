@@ -39,6 +39,7 @@ import {
   basenameOf, captureDraftRequests, discoverFixtureRoot, draftComposer, draftCwdPill, draftDecisionChip,
   draftPanels, draftProjectPill, isoDay, loadHome, mockQuickParse, nthRequest, openDraft, openDraftOnCwd,
   openDraftSettings, patchClientConfig, dayWords, draftSend,
+  HOME_FOLDER,
 } from './draft-helpers'
 import { armParse, createTaskForLater, pickDraftProject } from './draft-outcome-helpers'
 
@@ -116,7 +117,7 @@ test('an overridden suggestion is recorded, and Settings shows the diff', async 
   const panel = await openDraft(page)
   // The starting state, so every flip below is a real change.
   await expect(draftProjectPill(panel)).toHaveCount(0)
-  await expect(draftCwdPill(panel)).toHaveText('Choose folder and host…')
+  await expect(draftCwdPill(panel)).toHaveText(HOME_FOLDER)
 
   // Typing is the only trigger (the draft OPEN path is contractually network-free).
   // `type`, not `fill`, so the 500ms debounce sees a real keystroke burst.

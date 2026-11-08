@@ -508,8 +508,10 @@ export function DraftSessionPanel({
   const rootRef = useRef<HTMLDivElement>(null);
   const phoneDraft = usePhoneLayerWithBar({
     id: `draft:${draft.id}`, kind: 'draft', active: !!phoneLayer, title: 'New session', withAction: false,
-    // A wider window keeps the draft: the desktop shows it as a column (phone-overlay-breakpoint-guard).
-    onClose: (info) => { if (!info.breakpoint) onClose(draft.id) },
+    // A wider window keeps the draft and its typed text: the desktop shows it as a column
+    // (phone-overlay-breakpoint-guard).
+    keepOnBreakpoint: true,
+    onClose: () => onClose(draft.id),
   });
   // "Start anyway" rides the ordinary send (so images and the settle rules apply) with one flag.
   const overrideNextRef = useRef(false);

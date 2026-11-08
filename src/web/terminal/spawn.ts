@@ -43,16 +43,28 @@ import fs from 'node:fs'
 import { loadPty, type Pty } from '../../lib/pty.js'
 import type { SessionRecord } from '../../core/types.js'
 import type { SshTarget } from '../../providers/session-io.js'
-import { shellQuote } from '../../providers/session-io.js'
+import { shellQuote, sshAliasOptions, sshDestination } from '../../providers/session-io.js'
 import { getConfig } from '../../core/config-manager.js'
 import { hostOffersTerminal } from '../../core/hosts/host-status.js'
-import { DTACH_SOCKET_DIR, IS_EPHEMERAL, WALNUT_HOME } from '../../constants.js'
+import { DEMO_TERMINAL_DIR, DTACH_SOCKET_DIR, IS_EPHEMERAL, IS_DEMO, WALNUT_HOME } from '../../constants.js'
 import { describeIsolationRefusal, isolationKey, remoteIsolationFor, testServerRemoteTermRoot, ownRootGuardSh } from '../../providers/remote-isolation.js'
+import { demoIsolationInput } from '../../providers/demo-remote-host.js'
+import { assertDemoAdmission } from '../../core/sessions/demo-admission.js'
+import { ensureDemoTerminalDir } from '../../lib/demo-terminal-dir.js'
 import { SHARED_DAEMON_DIR, localDaemonDirChoice } from '../../lib/daemon-dir.js'
 import { log } from '../../logging/index.js'
 import { remoteDtachPath, localDtachPath } from './dtach-provision.js'
 import { linkTarget } from '../../core/hosts/link.js'
 import { dtachPidFileFor, dtachRecordScript } from './dtach-master.js'
+
+/**
+ * The control socket of a host's terminal master: Walnut's own, one per alias. A test server
+ * keeps its own master: never one the real Walnut's terminals ride. A host turned off or
+ * removed ends the master at this path (core/hosts/host-link-end.ts).
+ */
+export function terminalControlSocket(host: string): string {
+  return path.join(os.tmpdir(), IS_EPHEMERAL ? `walnut-term-ssh-${host}-${isolationKey(WALNUT_HOME).slice(0, 8)}` : `walnut-term-ssh-${host}`)
+}
 
 /**
  * SSH ControlMaster args shared by the dtach probe/provision AND the terminal
@@ -65,8 +77,7 @@ import { dtachPidFileFor, dtachRecordScript } from './dtach-master.js'
  * `host` is the alias — one socket per alias, stable across probe+spawn+reaper.
  */
 export function sshControlMasterArgs(host: string): string[] {
-  // A test server keeps its own master: never one the real Walnut's terminals ride.
-  const socket = path.join(os.tmpdir(), IS_EPHEMERAL ? `walnut-term-ssh-${host}-${isolationKey(WALNUT_HOME).slice(0, 8)}` : `walnut-term-ssh-${host}`)
+  const socket = terminalControlSocket(host)
   return [
     '-o', 'ControlMaster=auto',
     '-o', `ControlPath=${socket}`,
@@ -210,14 +221,10 @@ export async function resolveSshTarget(host: string): Promise<SshTarget> {
   // server's own guard.
   if (!hostOffersTerminal(def)) throw new Error(`A terminal is not available on ${def.label ?? host}: this Mac reaches it through ${def.transport === 'net' ? 'the host network' : 'the cloud companion'}, not SSH`)
   // A test server reaches a remote host only with remote hosts on, and then only its own dirs there.
-  const iso = remoteIsolationFor({ hostKey: host, env: process.env, ephemeral: IS_EPHEMERAL, link: 'ssh', home: WALNUT_HOME })
+  const iso = remoteIsolationFor({ hostKey: host, env: process.env, ephemeral: IS_EPHEMERAL, link: 'ssh', home: WALNUT_HOME, demo: demoIsolationInput(IS_DEMO) })
   if (iso.mode === 'off') throw new Error(describeIsolationRefusal(host, iso.reason, iso.dir))
   if (iso.mode === 'isolated') TEST_SERVER_TERMINAL_HOSTS.add(host)
   return linkTarget(host, config)
-}
-
-function sshHostString(t: SshTarget): string {
-  return t.user ? `${t.user}@${t.hostname}` : t.hostname
 }
 
 /** SSH options shared by terminal connections: batch mode + keepalive. */
@@ -228,6 +235,7 @@ function sshKeepaliveArgs(t: SshTarget): string[] {
     '-o', 'StrictHostKeyChecking=no',
     '-o', 'ServerAliveInterval=15',
     '-o', 'ServerAliveCountMax=3',
+    ...sshAliasOptions(t, { tty: true }),
   ]
   if (t.port) args.push('-p', String(t.port))
   return args
@@ -355,7 +363,7 @@ export function buildRemotePlainSshArgs(target: SshTarget, cwd?: string, host?: 
   return [
     ...sshKeepaliveArgs(target),
     ...(host ? sshControlMasterArgs(host) : []),
-    sshHostString(target),
+    sshDestination(target),
     buildRemotePlainShellCommand(REMOTE_DEFAULT_SHELL, cwd),
   ]
 }
@@ -373,7 +381,7 @@ export function buildRemoteSshArgs(
   return [
     ...sshKeepaliveArgs(target),
     ...(host ? sshControlMasterArgs(host) : []),
-    sshHostString(target),
+    sshDestination(target),
     buildRemoteDtachCommand(dtachBin, sessionId, shell, cwd),
   ]
 }
@@ -401,7 +409,7 @@ function localShell(): string {
  * cold cost as before. Idempotent: dtach provisioning is memoized.
  */
 export async function prewarmRemoteHost(host: string | undefined): Promise<void> {
-  if (!host) return // local: nothing to warm
+  if (!host || host === '__local__' || IS_DEMO) return // No shared SSH work from Demo.
   try {
     // No SSH door, nothing to warm (the cloud box).
     const def = (await getConfig()).hosts?.[host]
@@ -452,38 +460,46 @@ export async function resolveSpawnForSession(
   rows: number,
   opts: { persistent?: boolean; terminalKey?: string } = {},
 ): Promise<SpawnResult> {
+  assertDemoAdmission()
+  const persistent = opts.persistent !== false
+  if (IS_DEMO && (!persistent || record.host && record.host !== '__local__')) {
+    throw new Error('Demo needs a persistent local terminal so reset can confirm every process stopped. Retry after dtach is available.')
+  }
   const pty = await loadPty()
   // Which of the session's terminals (core/terminal-key.ts): its dtach socket and
   // pid record are named by it. Slot 1's key is the session id.
   const key = opts.terminalKey ?? record.claudeSessionId
   const env = terminalEnv(process.env, record.host ? undefined : key)
-  const persistent = opts.persistent !== false
+  const remoteHost = record.host && record.host !== '__local__' ? record.host : undefined
 
   if (!persistent) {
-    if (record.host) {
-      const target = await resolveSshTarget(record.host)
-      const args = buildRemotePlainSshArgs(target, record.cwd, record.host)
-      log.web.warn('terminal spawn (remote/plain, not persistent)', { sessionId: record.claudeSessionId, host: record.host, cwd: record.cwd })
+    if (remoteHost) {
+      const target = await resolveSshTarget(remoteHost)
+      const args = buildRemotePlainSshArgs(target, record.cwd, remoteHost)
+      log.web.warn('terminal spawn (remote/plain, not persistent)', { sessionId: record.claudeSessionId, host: remoteHost, cwd: record.cwd })
+      assertDemoAdmission()
       const p = pty.spawn('ssh', args, { name: 'xterm-256color', cols, rows, cwd: os.homedir(), env })
-      return { pty: p, cwd: record.cwd, host: record.host }
+      return { pty: p, cwd: record.cwd, host: remoteHost }
     }
     const cwd = await localStartDir(record.cwd, record.claudeSessionId)
     log.web.warn('terminal spawn (local/plain, not persistent)', { sessionId: record.claudeSessionId, cwd })
+    assertDemoAdmission()
     const p = pty.spawn(localShell(), ['-l'], { name: 'xterm-256color', cols, rows, cwd, env })
     return { pty: p, cwd }
   }
 
-  if (record.host) {
-    const target = await resolveSshTarget(record.host)
-    const dtachBin = await remoteDtachPath(record.host)
+  if (remoteHost) {
+    const target = await resolveSshTarget(remoteHost)
+    const dtachBin = await remoteDtachPath(remoteHost)
     // Remote shell: let buildRemoteSshArgs default to the remote `$SHELL` (the
     // login user's actual shell from passwd, e.g. zsh) launched as a LOGIN
     // shell. This loads the full startup chain (PATH + aliases) so the embedded
     // terminal matches what the user sees in tmux — not a bare aliasless bash.
-    const args = buildRemoteSshArgs(dtachBin, key, target, undefined, record.cwd, record.host)
-    log.web.info('terminal spawn (remote/dtach)', { sessionId: record.claudeSessionId, terminalKey: key, host: record.host, cwd: record.cwd })
+    const args = buildRemoteSshArgs(dtachBin, key, target, undefined, record.cwd, remoteHost)
+    log.web.info('terminal spawn (remote/dtach)', { sessionId: record.claudeSessionId, terminalKey: key, host: remoteHost, cwd: record.cwd })
+    assertDemoAdmission()
     const p = pty.spawn('ssh', args, { name: 'xterm-256color', cols, rows, cwd: os.homedir(), env })
-    return { pty: p, cwd: record.cwd, host: record.host }
+    return { pty: p, cwd: record.cwd, host: remoteHost }
   }
 
   const cwd = await localStartDir(record.cwd, record.claudeSessionId)
@@ -492,14 +508,20 @@ export async function resolveSpawnForSession(
   // the ssh command; locally we create it here before spawning), and claim it
   // for this instance's registry (never overwrites an existing claim) — the
   // orphan sweep refuses to reap an unowned dir.
-  try {
-    fs.mkdirSync(DTACH_SOCKET_DIR, { recursive: true })
-    fs.writeFileSync(dtachOwnerMarkerPath(), `${WALNUT_HOME}\n`, { flag: 'wx' })
-  } catch { /* best-effort; EEXIST = already claimed */ }
+  if (DEMO_TERMINAL_DIR) {
+    // In the shared /tmp: this account's private dir claimed for this Demo, or no terminal opens.
+    ensureDemoTerminalDir(DEMO_TERMINAL_DIR, WALNUT_HOME)
+  } else {
+    try {
+      fs.mkdirSync(DTACH_SOCKET_DIR, { recursive: true })
+      fs.writeFileSync(dtachOwnerMarkerPath(), `${WALNUT_HOME}\n`, { flag: 'wx' })
+    } catch { /* best-effort; EEXIST = already claimed */ }
+  }
   const args = buildDtachArgs(dtachBin, key, localShell())
   log.web.info('terminal spawn (local/dtach)', { sessionId: record.claudeSessionId, terminalKey: key, cwd })
   // Start dir comes from the pty's cwd option (a new dtach session inherits
   // the launching process's cwd).
+  assertDemoAdmission()
   const p = pty.spawn(dtachBin, args.slice(1), { name: 'xterm-256color', cols, rows, cwd, env })
   return { pty: p, cwd }
 }

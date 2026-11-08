@@ -83,6 +83,13 @@ vi.mock('../../../src/core/self-repair/walnut-source.js', async (importOriginal)
   };
 });
 
+// The local Claude Code answer startRepair reads (core/hosts/local-readiness.ts), set per test.
+const { localClaude } = vi.hoisted(() => ({ localClaude: { status: undefined as unknown } }));
+vi.mock('../../../src/core/hosts/local-readiness.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  getLocalClaude: () => localClaude.status,
+}));
+
 import express from 'express';
 import request from 'supertest';
 import { notificationsRouter } from '../../../src/web/routes/notifications.js';
@@ -159,6 +166,29 @@ afterEach(async () => {
   }
 });
 
+describe('POST /api/notifications/fix while Claude Code cannot run here', () => {
+  afterEach(() => { localClaude.status = undefined; });
+  for (const kind of ['claude_missing', 'claude_needs_node', 'claude_not_logged_in']) {
+    it(`${kind}: refused with the setup step, and no repair task or session is made`, async () => {
+      localClaude.status = { checkedAt: 1, source: 'daemon', claude: { found: false }, problems: [{ kind, message: 'Claude Code is not installed on this computer.', commands: [] }] };
+      const app = createApp();
+      await seedError();
+      const res = await request(app).post('/api/notifications/fix').send({ dedupKey: DEDUP_KEY });
+      expect(res.status).toBe(409);
+      expect(res.body.error).toMatch(/^Claude Code is not installed on this computer\. Fix with agent runs on Claude Code, so set it up first/);
+      expect(started).toHaveLength(0);
+      expect(await listTasks()).toHaveLength(0);
+    });
+  }
+  it('control: an outdated Claude Code still runs a repair', async () => {
+    localClaude.status = { checkedAt: 1, source: 'daemon', claude: { found: true }, problems: [{ kind: 'claude_outdated', message: 'old', commands: [] }] };
+    const app = createApp();
+    await seedError();
+    const res = await request(app).post('/api/notifications/fix').send({ dedupKey: DEDUP_KEY });
+    expect(res.status).toBe(200);
+  });
+});
+
 describe('POST /api/notifications/fix', () => {
   it('starts a briefed repair session in Walnut\'s own checkout', async () => {
     const app = createApp();
@@ -191,6 +221,10 @@ describe('POST /api/notifications/fix', () => {
     expect(message).toContain('[git] {"sizeGb":3.4}');
     expect(message).toContain('Condition key: git');
     expect(message).toContain(`source checkout at ${CHECKOUT}`);
+    // The briefing is the agent's: the person's bubble reads one line (review round 2, D08).
+    const { parseHinted } = await import('../../../src/core/hints/hint-format.js');
+    expect(parseHinted(message).text).toBe('Please find and fix the cause of this error: Data Repo Growing Too Large');
+    expect(parseHinted(message).hints.map((h) => h.kind)).toEqual(['repair-brief']);
 
     // The card remembers its repair, and every client is told.
     const record = await findNotification(DEDUP_KEY);

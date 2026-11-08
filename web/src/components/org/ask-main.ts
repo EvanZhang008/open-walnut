@@ -10,7 +10,7 @@
  */
 import { ensureMainTask } from '@/api/org';
 import { fetchWorkingDirs, hydrateSessionStatuses, quickStartSession } from '@/api/sessions';
-import { wsClient } from '@/api/ws';
+import { sendSessionMessage } from '@/api/session-send';
 import { GENERAL_ASK_AGENT } from '@/components/chat/ask-walnut-slot-model';
 import { seedLaunchPrompt } from '@/components/sessions/launch-prompt-seed';
 import { sessionStatusStore } from '@/stores/session-status-store';
@@ -49,7 +49,7 @@ export async function askMain(message: string): Promise<AskMainResult> {
     // The store only knows sessions someone asked about: ask for Main's now.
     await hydrateSessionStatuses([sessionId]).catch(() => { /* judged on what the store has */ });
     if (waitsOnUser(sessionId)) return { taskId: main.id, sessionId, started: false, held: true };
-    await wsClient.sendRpc<{ messageId: string }>('session:send', { sessionId, message });
+    await sendSessionMessage({ sessionId, message });
     return { taskId: main.id, sessionId, started: false };
   }
   const result = await quickStartSession({

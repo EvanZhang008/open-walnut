@@ -150,6 +150,7 @@ describe('no path sends a hint around the registry', () => {
       'core/sessions/voice-reply.ts': 'the voice-reply block a phone send asked for (on_request), composed upstream',
       'core/sessions/engine-switch.ts': 'engine-switch, Walnut text outside the registry',
       'providers/acp-session.ts': 'session-context, Walnut text outside the registry',
+      'core/self-repair/fix-briefing.ts': 'repair-brief, a repair launch\'s agent-only briefing outside the registry',
     };
     const users = all.filter((f) => /\brenderHintBlock\s*\(/.test(f.text)).map((f) => f.rel);
     expect(users.filter((f) => !RENDERERS[f])).toEqual([]);

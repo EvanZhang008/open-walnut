@@ -14,6 +14,7 @@
  */
 
 import { peekWorkingDirs, type WorkingDirEntry } from '@/api/sessions';
+import { HOME_PROJECT_NAME, isHomeFolder, namingHomeOf, shownFolderName } from '@/utils/home-folder';
 import { frecencyScore } from './path-selector/ranking';
 import type { LaunchMemory } from '@/utils/engines';
 import type { SuggestField } from '@/api/tasks';
@@ -365,7 +366,7 @@ export function quickDirsFor(current?: { cwd: string; host: string | null; hostL
 /** What a chip shows on its host: the folder name. Two paths that share it would
  *  draw identical chips (sibling checkouts of one repo), so the row keeps one. */
 function chipNameKey(d: { cwd: string; host: string | null }): string {
-  const name = d.cwd.replace(/\/+$/, '').split('/').pop() || '/';
+  const name = shownFolderName(d.cwd, d.host);
   return `${d.host || '__local__'}::${name.toLowerCase()}`;
 }
 
@@ -411,13 +412,20 @@ export function newProjectNameForFolder(
   cwd: string,
   host: string | null,
   isTaken: (name: string) => boolean,
+  // The local home the launch judges the folder against (utils/home-folder.ts namingHomeOf).
+  home: string | undefined = namingHomeOf(host),
 ): string | null {
   const parts = cwd.replace(/\/+$/, '').split('/').filter(Boolean);
+  // The home folder (`~`, or the absolute home the picker stores) reads "Home", as the launch
+  // names it (folder-project.ts folderBaseName); `~` or a home named by an id or the user name
+  // named nobody's work (2026-11-10 review: "New project: ~", then "New project: 3381787b-...").
+  const leaf = (parts[parts.length - 1] ?? '').trim();
   // Trimmed: the registry trims names, so ' kelp ' would land on 'kelp'.
-  const base = (parts[parts.length - 1] ?? '').trim();
+  const base = isHomeFolder(cwd, home) ? HOME_PROJECT_NAME : leaf;
   if (!isDerivableProjectName(base)) return null;
   const candidates = [base];
-  const parent = parts[parts.length - 2]?.trim();
+  // A home folder's parent (`/Users`) says nothing about it.
+  const parent = base === HOME_PROJECT_NAME && base !== leaf ? undefined : parts[parts.length - 2]?.trim();
   if (parent && isDerivableProjectName(`${parent}-${base}`)) candidates.push(`${parent}-${base}`);
   const remote = host && host !== '__local__' ? host : '';
   const withHost = `${candidates[candidates.length - 1]} (${remote})`;
@@ -465,7 +473,11 @@ export function projectForFolderPick(
   if (!cwd || draft.taskId || draft.forkOf) return null;
   const clean = cwd.replace(/\/+$/, '');
   if (!clean) return null;
-  const owned = projectForDir(clean);
+  // `~` and the absolute home are one folder: a "Home" project stamped with either form owns
+  // a pick of the other (the launch's folderProjectFor matches them the same way).
+  const home = namingHomeOf(host);
+  const owned = projectForDir(clean)
+    || (home && isHomeFolder(clean, home) ? projectForDir(clean === '~' ? home.replace(/\/+$/, '') : '~') : '');
   if (owned) return owned;
   if (draft.projectSource === 'user' || draft.projectSource === 'seed') return null;
   return newProjectNameForFolder(clean, host, isTaken);

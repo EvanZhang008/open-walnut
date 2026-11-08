@@ -13,6 +13,7 @@
  */
 
 import type { DaemonConnectPhase } from '../../providers/daemon-connection.js'
+import { IS_DEMO } from '../../constants.js'
 
 /** Connect phases that mean "still working" (the client should keep polling). */
 export const IN_PROGRESS_PHASES: ReadonlySet<DaemonConnectPhase> = new Set<DaemonConnectPhase>([
@@ -185,6 +186,8 @@ export interface HostConnectTarget {
   user?: string
   /** A machine on the host network (`transport: net`): no SSH between, so no SSH kind applies. */
   net?: boolean
+  /** The key file the host's SSH settings name that is not there (an `auth` failure's evidence). */
+  keyFile?: string
 }
 
 /**
@@ -219,14 +222,17 @@ export function hintForKind(kind: HostConnectErrorKind, sshTarget: string, targe
   const who = hintSubject(sshTarget, target)
   const hostname = target.hostname?.trim() || bareHostOf(sshTarget) || sshTarget
   switch (kind) {
-    case 'ephemeral': return 'This is a throwaway test server: it stays off remote hosts and never touches their own daemon. Use the main Walnut server for remote hosts, or start the test server with WALNUT_EPHEMERAL_REMOTE_HOSTS=1 to give it an isolated daemon of its own on each host it reaches over SSH.'
+    case 'ephemeral': return IS_DEMO
+      ? 'The Demo does not reach this host, and never touches its own daemon. Use your own Walnut for it.'
+      : 'This is a throwaway test server: it stays off remote hosts and never touches their own daemon. Use the main Walnut server for remote hosts, or start the test server with WALNUT_EPHEMERAL_REMOTE_HOSTS=1 to give it an isolated daemon of its own on each host it reaches over SSH.'
     case 'shell_noise': return `SSH works, but the login shell on ${who} did not run Walnut's command as written (a ForceCommand, or a login shell that is not a shell). Check that \`ssh ${sshTarget} sh -c 'echo ok'\` prints just ok, then Retry.`
     case 'host_key': return `The host key of ${who} changed since this machine last saw it. If the host was rebuilt, run \`ssh-keygen -R ${knownHostsName(sshTarget, target)}\` and then \`ssh ${sshTarget}\` once to accept the new key; if nothing changed on the host, stop: a changed key can also mean someone is intercepting the connection.`
     case 'cert_expired': return 'Your SSH certificate expired; run your organization\'s login command, then Retry.'
     case 'agent_missing': return 'Walnut could not reach an SSH agent holding your key (no agent running, or no key loaded). Start your agent or run your organization\'s login command, then Retry.'
     case 'proxy_login': return `SSH to ${who} goes through a proxy (ProxyCommand), and the proxy says its own login expired. Run your organization's login command, then Retry.`
     case 'proxy': return `SSH to ${who} goes through a proxy or jump host (ProxyCommand / ProxyJump), and it closed the connection. Check that \`ssh ${sshTarget}\` works in a terminal (VPN, the jump host, or the proxy's own login), then Retry.`
-    case 'auth': return `Walnut runs \`ssh ${sshTarget}\` without a password prompt. Make sure that command works from this machine on its own (an SSH key or ssh-agent, and any VPN or auth step your host needs), then Retry.`
+    case 'auth': if (target.keyFile) return `The SSH settings for ${who} name the key file ${target.keyFile} (IdentityFile), and it is not on this computer. Put that key there, or point IdentityFile at a key you have, then Retry.`
+      return `Walnut runs \`ssh ${sshTarget}\` without a password prompt. Make sure that command works from this machine on its own (an SSH key or ssh-agent, and any VPN or auth step your host needs), then Retry.`
     case 'dns': return `The hostname "${hostname}" does not resolve from this machine. Check the hostname in Settings › Remote Hosts (or your VPN / SSH config).`
     case 'refused': return `Nothing is listening for SSH on ${who}. Check the port and that sshd is running on the host.`
     case 'unreachable': return `${who} is not reachable from this machine right now (VPN down, host asleep, or a firewall). Retry once the network is back.`
@@ -281,6 +287,8 @@ const WALNUT_SENTENCES: Array<[HostConnectErrorKind, RegExp]> = [
 const PATTERNS: Array<[HostConnectErrorKind, RegExp]> = [
   ['host_key', /remote host identification has changed|host key verification failed|host key for \S+ has changed|you have requested strict checking|offending \S+ key in|disabled to avoid man-in-the-middle/],
   ['cert_expired', /walnut-ssh-evidence: cert-expired|certificate (has )?expired|expired certificate|certificate invalid: expired/],
+  // A key file the host's settings name that is not there: the person's own key, and the reason before any agent.
+  ['auth', /walnut-ssh-evidence: key-missing/],
   ['agent_missing', /walnut-ssh-evidence: agent-(missing|empty)|could not open a connection to your authentication agent|error connecting to agent|ssh_auth_sock is not set/],
   // A proxy that says its sign-in is invalid or expired (a cookie, a token, a session).
   // Before 'proxy': the same failure also prints "Connection closed by UNKNOWN port 65535".
@@ -304,6 +312,11 @@ const PATTERNS: Array<[HostConnectErrorKind, RegExp]> = [
  * fail-fast re-throw put the host back on the fast transient retry.
  */
 export const PROXY_LOGIN_EVIDENCE = 'walnut-ssh-evidence: proxy-login (the SSH proxy says its own login is invalid or expired)'
+
+/** The key file a failure's evidence names as missing (ssh-credential-evidence.ts `key-missing`), or undefined. */
+export function missingKeyOf(message: string | undefined): string | undefined {
+  return message ? /walnut-ssh-evidence: key-missing \((.+?)\)(?:\]|$)/m.exec(message)?.[1] : undefined
+}
 
 /**
  * Map a connect failure (the one-line summary from summarizeConnectFailure, or a
@@ -342,7 +355,8 @@ export function classifyHostConnectError(
     kind = PATTERNS.find(([, re]) => re.test(blanked))?.[0] ?? 'unknown'
   }
   if (target.net && !NET_KINDS.has(kind)) kind = 'unknown'
-  return { kind, hint: hintForKind(kind, sshTarget, target), retryable: RETRYABLE[kind] }
+  const keyFile = kind === 'auth' ? missingKeyOf(message) : undefined
+  return { kind, hint: hintForKind(kind, sshTarget, keyFile ? { ...target, keyFile } : target), retryable: RETRYABLE[kind] }
 }
 
 /** A host name as a whole token: a user named `me` must not punch a hole in "permission". */

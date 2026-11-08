@@ -21,6 +21,7 @@
  */
 import { test, expect, type Browser, type Locator, type Page, type Route } from '@playwright/test'
 import { pressBarTool } from './doc-bar-helpers'
+import { goToSessionFolder } from './todo-panel-helpers'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 
@@ -85,7 +86,8 @@ test('recorded walkthrough: create, edit, keep unsaved work, live save + merge, 
     await page.addInitScript(() => {
       try { localStorage.setItem('open-walnut-file-explorer-tree-collapsed', '0') } catch { /* off */ }
     })
-    await page.goto('/')
+    await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
+    await page.getByRole('link', { name: 'Open Walnut' }).click()
     await page.waitForLoadState('networkidle')
 
     const res = await page.request.get(`/api/sessions/${SESSION_ID}`)
@@ -104,6 +106,8 @@ test('recorded walkthrough: create, edit, keep unsaved work, live save + merge, 
     await panel.getByRole('button', { name: 'Files', exact: true }).click()
     const explorer = panel.locator('.session-file-explorer')
     await expect(explorer).toBeVisible({ timeout: 15_000 })
+    // Creation, disk checks and cleanup all belong to the session cwd below.
+    await goToSessionFolder(explorer)
     await beat(page, 1200)
 
     // ── New Folder… ──────────────────────────────────────────────────────────
@@ -167,6 +171,7 @@ test('recorded walkthrough: create, edit, keep unsaved work, live save + merge, 
     await page.unroute('**/api/file-content*', blockWrites)
     await panel.getByRole('button', { name: 'Files', exact: true }).click()
     await expect(panel.locator('.session-file-explorer')).toBeVisible({ timeout: 15_000 })
+    await goToSessionFolder(explorer)
     // The unsaved line came back, and the app SAYS it restored it rather than
     // leaving the user to assume their save had worked.
     await expect(editor).toContainText('This line was never saved.', { timeout: 15_000 })

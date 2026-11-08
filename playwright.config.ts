@@ -65,9 +65,21 @@ export default defineConfig({
     // sections and no list. The specs written against the list remember By project, in
     // every page's storage, so a spec that serves its own ui-prefs keeps it too; a spec
     // about Flat presets it (status-section-helpers.ts presetPanelDesign).
+    // A first visit folds every region of a board that holds work (first-visit-folds.ts) and
+    // every status section (section-fold-rule.ts); the shared fixture board always holds work,
+    // so every page starts as a returning visitor with the folds a first visit kept before (only
+    // Parked folded, Watching and Needs you open). A spec about the first visit removes both
+    // keys (isolateUiPrefs `newInstall`).
     storageState: {
       cookies: [],
-      origins: [{ origin: `http://localhost:${testPort}`, localStorage: [{ name: 'walnut-todo-panel-design', value: 'project' }] }],
+      origins: [{
+        origin: `http://localhost:${testPort}`,
+        localStorage: [
+          { name: 'walnut-todo-panel-design', value: 'project' },
+          { name: 'walnut-todo-collapsed-sections', value: '["wait"]' },
+          { name: 'walnut-todo-status-sections', value: '{}' },
+        ],
+      }],
     },
   },
 

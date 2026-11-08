@@ -10,7 +10,8 @@ import { isSupersededSession } from '../sessions/engine-switch-marker.js';
 import path from 'node:path';
 import { bus, EventNames } from '../event-bus.js';
 import { log } from '../../logging/index.js';
-import { buildTitleQuestion, cleanTitleAnswer } from '../session-title-backend.js';
+import { buildTitleQuestion } from '../session-title-backend.js';
+import { cleanTitleAnswer, screenTitle } from '../title-answer.js';
 import { configuredUiLanguage, nonEnglishUiLanguage, uiLanguageName } from '../ui-language.js';
 import { cutEnd } from '../text-cut.js';
 import { NOT_THE_USERS_DECISION, USER_KINDS, USER_KIND_WORDS, userKindFromLine } from '../org/user-kind.js';
@@ -842,7 +843,9 @@ export async function applyTitleDirective(taskId: string, directive: string, exp
     if (!m) return; // malformed → treat as unchanged (never guess)
     const kind = m[1].toLowerCase() === 'rewrite' ? 'rewrite' : 'topic';
     const value = m[2].replace(/\s+/g, ' ').trim();
-    if (!value) return;
+    // A rewrite names what the work turned out to be, so it is not held to the first words;
+    // it is still never an error line or reply prose (title-answer.ts).
+    if (!value || !screenTitle(value)) return;
 
     const { getTask, updateTask } = await import('../task-manager.js');
     const fresh = await getTask(taskId);
@@ -1530,7 +1533,7 @@ async function controlChannelReadiness(
   return live.controlChannelState;
 }
 
-// buildTitleQuestion / cleanTitleAnswer live in ../session-title-backend.ts —
+// buildTitleQuestion lives in ../session-title-backend.ts, cleanTitleAnswer in ../title-answer.ts —
 // shared with the backend (Walnut-side fast model) channel, which must not
 // import this hooks module.
 
@@ -1568,7 +1571,7 @@ async function titleViaSideQuestion(
       await new Promise((r) => setTimeout(r, autoTitleRetryDelayMs));
       answer = (await live.askSideQuestion(question, 60_000)).trim();
     }
-    return cleanTitleAnswer(answer);
+    return cleanTitleAnswer(answer, { words: message });
   } catch (err) {
     log.session.warn('session-auto-title: side-question title failed', {
       errorKind: err instanceof Error ? err.name : typeof err,
@@ -1597,7 +1600,7 @@ async function titleViaAcpSelfReport(
   try {
     const answer = (await acp.requestTurnCompleteSelfReport(
       buildTitleQuestion(message, placeholder, requirement), 60_000)).trim();
-    return cleanTitleAnswer(answer);
+    return cleanTitleAnswer(answer, { words: message });
   } catch (err) {
     log.session.warn('session-auto-title: acp self-report title failed', {
       errorKind: err instanceof Error ? err.name : typeof err,
@@ -1629,7 +1632,8 @@ async function titleViaCliTitler(
     await new Promise((r) => setTimeout(r, autoTitleRetryDelayMs));
     title = await live.generateSessionTitle(description, 10_000);
   }
-  return title ? title.slice(0, 200) : null;
+  // The CLI's titler answers in prose too (an error line when the CLI cannot reach its model).
+  return title ? cleanTitleAnswer(title, { words: message }) : null;
 }
 
 /**

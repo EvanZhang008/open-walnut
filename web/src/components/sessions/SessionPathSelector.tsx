@@ -14,6 +14,8 @@
  * drills, uses the typed folder, or creates it (path-selector/enter-action.ts); a
  * tab with no history leads its home listing with Quick access (quick-access.ts).
  */
+import { knownHomeOf, rememberHostHome } from '@/utils/home-folder';
+import { homeFromListing, keptFieldPath, resolvedFieldPath, shownFieldPath } from './path-selector/field-home';
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
@@ -22,7 +24,7 @@ import type { WorkingDirEntry } from '@/api/sessions';
 import type { SessionEffort, SessionMode, TaskPriority } from '@open-walnut/core';
 import type { FocusTier } from '@/api/focus';
 import type { LaunchEngine, LaunchMemory } from '@/utils/engines';
-import { classifyInput, resolveSpaceAmbiguity, deleteLastSegment, ghostSuffix, segmentCompletion, pathValidity, liveListingPrefix, HOME_LISTING_DIR, type InputState } from './path-selector/input-model';
+import { classifyInput, resolveSpaceAmbiguity, deleteLastSegment, ghostSuffix, segmentCompletion, pathValidity, liveListingPrefix, restartTypedPath, HOME_LISTING_DIR, type InputState } from './path-selector/input-model';
 import { enterAction } from './path-selector/enter-action';
 import { buildQuickAccessSections } from './path-selector/quick-access';
 import { rankCandidates, buildSections, type Candidate, type RankedItem } from './path-selector/ranking';
@@ -133,7 +135,7 @@ export function SessionPathSelector({
   // History + all hosts from config.hosts (a freshly added remote host must show
   // as a tab even before its first session exists, else the user can't ever start
   // one). Cached answer at once, refetched on every open and on a host change.
-  const { dirs, hosts: configuredHosts, found: foundHosts, loading, error, refresh: refreshDirs } = useWorkingDirs(open);
+  const { dirs, hosts: configuredHosts, found: foundHosts, localHome, loading, error, refresh: refreshDirs } = useWorkingDirs(open);
   const [query, setQuery] = useState('');
   const [selectedIdx, setSelectedIdx] = useState(0);
   // How the current highlight was placed. Mouse hover must NOT expand the row
@@ -256,7 +258,8 @@ export function SessionPathSelector({
     if (!programmaticFillRef.current) return;
     programmaticFillRef.current = false;
     if (editMode && searchRef.current) {
-      const len = editingPath.length;
+      // The field's own text: it shows the home as `~` (field-home.ts), so it can be shorter than the path.
+      const len = searchRef.current.value.length;
       searchRef.current.setSelectionRange(len, len);
     }
   }, [editMode, editingPath]);
@@ -306,19 +309,26 @@ export function SessionPathSelector({
   }, [preState, byHost]);
 
   // ~ → resolved-path rewrite (single-host modes only; in All mode each host
-  // expands ~ differently, so the raw ~ must stay in the input).
+  // expands ~ differently, so the raw ~ must stay in the input). The path is kept
+  // absolute; the FIELD still shows `~` (field-home.ts), so nothing changes on screen.
+  // A lone ~ is left alone: it lists the home already, and rewriting it to the home
+  // under the user's fingers made the next "/" read as `~//`, a restart at the root.
   useEffect(() => {
     if (!editMode || tabInfersHost(hostFilter)) return;
-    if (!editingPath.startsWith('~/') && editingPath !== '~') return;
+    if (!editingPath.startsWith('~/')) return;
     const key = hostFilter === '__local__' ? '__local__' : hostFilter;
     const state = byHost.get(key);
     if (state?.status === 'done' && state.parent && !state.parent.startsWith('~')) {
       // Replace the ~-prefix with the resolved parent, keeping any typed partial.
-      // A lone ~ lists ~/ (classifyInput), so it rewrites to the home itself.
-      const typed = editingPath === '~' ? '~/' : editingPath;
-      const typedDir = typed.endsWith('/') ? typed : typed.slice(0, typed.lastIndexOf('/') + 1);
-      const partial = typed.slice(typedDir.length);
+      const typedDir = editingPath.endsWith('/') ? editingPath : editingPath.slice(0, editingPath.lastIndexOf('/') + 1);
+      const partial = editingPath.slice(typedDir.length);
       const parent = state.parent.endsWith('/') ? state.parent : state.parent + '/';
+      // The listing names the home too: learn it, so the field shows this path as ~.
+      const home = homeFromListing(typedDir, parent);
+      if (home) {
+        rememberHostHome(key, home);
+        setHomeByHost((prev) => (prev.get(key) === home ? prev : new Map(prev).set(key, home)));
+      }
       fillPath(parent + partial);
     }
   }, [editMode, hostFilter, editingPath, byHost, fillPath]);
@@ -335,9 +345,24 @@ export function SessionPathSelector({
       if (homeByHost.get(key) === home) continue;
       next ??= new Map(homeByHost);
       next.set(key, home);
+      // The draft names and shows a pick of this home as the home (utils/home-folder.ts).
+      rememberHostHome(key, home);
     }
     if (next) setHomeByHost(next);
   }, [activePath, byHost, homeByHost]);
+
+  // The rows' `~`: a home a listing resolved, else this Walnut's own HOME for local rows.
+  const rowHomes = useMemo<ReadonlyMap<string, string>>(() => {
+    if (!localHome || homeByHost.has('__local__')) return homeByHost;
+    return new Map([...homeByHost, ['__local__', localHome.replace(/\/+$/, '') || '/']]);
+  }, [homeByHost, localHome]);
+  // A host's home as this picker knows it ('__local__' for local), for the field and the create row.
+  const homeOfKey = useCallback((key: string | null | undefined): string | undefined => {
+    if (!key) return undefined;
+    return rowHomes.get(key) ?? knownHomeOf(key === '__local__' ? null : key);
+  }, [rowHomes]);
+  // The field shows the home as ~ on a single-host tab (All keeps the raw ~: each host has its own).
+  const fieldHome = editMode && !tabInfersHost(hostFilter) ? homeOfKey(hostFilter) : undefined;
 
   const currentHost = hostOfTab(hostFilter);
   const currentHostLabel = hostTabs.find(t => t.key === hostFilter)?.label;
@@ -416,7 +441,9 @@ export function SessionPathSelector({
     });
     // No history on this tab and the input lists the home: lead with Quick access.
     const quick = inputState.kind === 'dir-browse' && hostFiltered.length === 0
-      ? buildQuickAccessSections({ dir: inputState.dir, byHost, homeByHost, hostLabels, perHost: hostFilter === 'all' && byHost.size > 1 })
+      // rowHomes, not only the homes a `~/` listing taught: a typed `~/` is kept absolute at once
+      // (field-home.ts), so the local home comes from this Walnut's own HOME.
+      ? buildQuickAccessSections({ dir: inputState.dir, byHost, homeByHost: rowHomes, hostLabels, perHost: hostFilter === 'all' && byHost.size > 1 })
       : [];
     if (pathMode || !homeWord) return quick.length ? [...quick, ...built] : built;
     // Bare word: history matches first, then the matching home folders.
@@ -426,7 +453,7 @@ export function SessionPathSelector({
       perHost: hostFilter === 'all',
     });
     return home.length ? [...built, ...home] : built;
-  }, [dirs, hostFilter, inputState, pathMode, byHost, hostTabs, homeWord, hostLabels, tabsModel.removedHosts, tabsModel.foundHosts, homeByHost]);
+  }, [dirs, hostFilter, inputState, pathMode, byHost, hostTabs, homeWord, hostLabels, tabsModel.removedHosts, tabsModel.foundHosts, rowHomes]);
 
   // History cap (path-selector/history-cap.ts): up to 8 rows (as many as fit above
   // the HOME FOLDERS header, at least 3) + 'Show N more' when home folders follow.
@@ -566,7 +593,8 @@ export function SessionPathSelector({
   // explicitly chosen.
   const handleConfirm = useCallback((opts?: { createCwd?: boolean }) => {
     if (!editingPath || onFoundTab) return;
-    const trimmed = editingPath.replace(/\/+$/, '') || '/';
+    // A typed `~` or `~/x` the listing has not rewritten yet still names an absolute folder.
+    const trimmed = resolvedFieldPath(editingPath, fieldHome).replace(/\/+$/, '') || '/';
     const anyTab = tabInfersHost(hostFilter);
     const match = anyTab
       ? historyForTab(dirs, hostFilter, tabsModel.removedHosts, tabsModel.foundHosts).find(d => d.cwd === trimmed)
@@ -577,7 +605,7 @@ export function SessionPathSelector({
       hostLabel: anyTab ? match?.hostLabel : currentHostLabel,
       ...(opts?.createCwd ? { createCwd: true } : {}),
     }, withLaunchMemory(match?.lastLaunch));
-  }, [editingPath, onFoundTab, dirs, onSelect, hostFilter, currentHost, currentHostLabel, withLaunchMemory, tabsModel.removedHosts, tabsModel.foundHosts]);
+  }, [editingPath, fieldHome, onFoundTab, dirs, onSelect, hostFilter, currentHost, currentHostLabel, withLaunchMemory, tabsModel.removedHosts, tabsModel.foundHosts]);
 
   // "Create & start" row: confirm the missing path with the createCwd flag.
   // Host comes from createTarget (not hostFilter) so All-tab-with-one-host works.
@@ -839,12 +867,12 @@ export function SessionPathSelector({
       <div className="sps-search" style={{ '--sps-status-w': statusBtnWidth ? `${statusBtnWidth + 20}px` : '0px' } as React.CSSProperties}>
         <GhostTextInput
           ref={searchRef}
-          value={editMode ? editingPath : query}
+          value={editMode ? shownFieldPath(editingPath, fieldHome) : query}
           ghost={ghost}
           editing={editMode}
           placeholder={editMode ? 'Type your path... (Enter select, ⇧Enter use it, Esc back)' : 'Type a folder path, or pick one below'}
           onChange={v => {
-            if (editMode) { setEditingPath(v); return; }
+            if (editMode) { setEditingPath(keptFieldPath(restartTypedPath(v), fieldHome)); return; }
             // Path-like input flips straight into edit mode (shell mental model) —
             // ghost text / Option+Backspace / create-row all live there.
             if (v.startsWith('/') || v.startsWith('~')) {
@@ -918,7 +946,7 @@ export function SessionPathSelector({
         hostLabels={hostLabels}
         pathMode={pathMode || !!homeWord}
         activeHostLabel={currentHostLabel ?? 'Local'}
-        createOption={createOption}
+        createOption={createOption && shownFieldPath(createOption, homeOfKey(createTarget))}
         emptyHint={emptyHint}
         onItemClick={drillOrFill}
         onItemHover={(idx) => { setSelectionByHover(true); setSelectedIdx(idx); }}
@@ -928,6 +956,7 @@ export function SessionPathSelector({
         renderHostNote={renderHostNote}
         rowDots={hostFilter === ALL_TAB ? problemDots : undefined}
         onShowMore={showMoreHistory}
+        homeByHost={rowHomes}
       />
 
       {/* Key hints live here (not in the placeholder) so the placeholder can say

@@ -28,11 +28,51 @@ let dir = ''
 beforeEach(() => { dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'stream-compact-'))) })
 afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }) })
 
-function make(opts: { chunkBytes?: number; maxLineBytes?: number; minBytes?: number; reserveBytes?: number } = {}) {
+function make(opts: { fs?: typeof fs; log?: Parameters<typeof createStreamCompact>[0]['log']; chunkBytes?: number; maxLineBytes?: number; minBytes?: number; reserveBytes?: number } = {}) {
   return createStreamCompact({
-    fs, now: () => 1000, pid: process.pid, minBytes: opts.minBytes ?? 0, reserveBytes: opts.reserveBytes ?? 0,
+    fs: opts.fs ?? fs, log: opts.log, now: () => 1000, pid: process.pid, minBytes: opts.minBytes ?? 0, reserveBytes: opts.reserveBytes ?? 0,
     maxLineBytes: opts.maxLineBytes ?? 1024 * 1024, chunkBytes: opts.chunkBytes,
   })
+}
+
+/** Real file operations; only the unavailable statx birth time falls back to a controlled ctime. */
+function ctimeFallbackFs(file: string, failPostRenameStat = false) {
+  let ctimeMs = 1000.25
+  let renamed = false
+  let failStat = failPostRenameStat
+  let markAtRename: Record<string, unknown> | null = null
+  const fallback = (st: fs.Stats) => Object.assign(st, { ctimeMs, birthtimeMs: ctimeMs })
+  const injectedFs = {
+    ...fs,
+    promises: {
+      ...fs.promises,
+      open: (async (...args: Parameters<typeof fs.promises.open>) => {
+        const handle = await fs.promises.open(...args)
+        const stat = handle.stat.bind(handle)
+        handle.stat = (async () => fallback(await stat())) as typeof handle.stat
+        return handle
+      }) as typeof fs.promises.open,
+    },
+    statSync: ((p: fs.PathLike) => {
+      const st = fs.statSync(p)
+      if (p === file && renamed && failStat) {
+        failStat = false
+        throw new Error('post-rename stat unavailable')
+      }
+      return fallback(st)
+    }) as typeof fs.statSync,
+    renameSync: ((from: fs.PathLike, to: fs.PathLike) => {
+      markAtRename = JSON.parse(fs.readFileSync(file + '.compact', 'utf-8'))
+      fs.renameSync(from, to)
+      renamed = true
+      ctimeMs = 1000.75 // Same floored epoch, different full identity after rename.
+    }) as typeof fs.renameSync,
+    appendFileSync: ((...args: Parameters<typeof fs.appendFileSync>) => {
+      fs.appendFileSync(...args)
+      ctimeMs = 1001.25
+    }) as typeof fs.appendFileSync,
+  }
+  return { fs: injectedFs, markAtRename: () => markAtRename }
 }
 
 /** Two finished turns (with a cron), then an unfinished third with its deltas. */
@@ -105,7 +145,12 @@ describe('stream compaction', () => {
     const open = path.join(dir, 'open.jsonl')
     fs.writeFileSync(open, user('x') + delta('a') + delta('b'))
     expect(await sc.compact(open)).toEqual({ skipped: 'no-finished-turn' })
-    expect(sc.due(open, fs.statSync(open))).toBe(false)
+    const openStat = fs.statSync(open)
+    expect(JSON.parse(fs.readFileSync(sc.markPathFor(open), 'utf-8'))).toMatchObject({
+      dev: openStat.dev, ino: openStat.ino, birthtimeMs: openStat.birthtimeMs, size: openStat.size,
+    })
+    expect(sc.due(open, openStat)).toBe(false)
+    expect(sc.due(open, { ...openStat, birthtimeMs: openStat.birthtimeMs + 0.25 })).toBe(true)
     const lean = path.join(dir, 'lean.jsonl')
     fs.writeFileSync(lean, user('x') + delta('a') + result(1))
     const writes: string[] = []
@@ -197,6 +242,111 @@ describe('stream compaction', () => {
     expect(await make().compact(path.join(dir, 'gone.jsonl'))).toEqual({ skipped: 'error' })
   })
 
+  it.each(['due', 'rewrittenFrom'] as const)('%s does not reuse a mark for another file identity, even at the same size', async (method) => {
+    const sc = make({ minBytes: 64 })
+    const file = path.join(dir, 's.jsonl')
+    fs.writeFileSync(file, sample().text)
+    const prepared = await sc.compact(file) as StreamCompactPrepared
+    expect(sc.commit(file, prepared)).toBe(true)
+    const st = fs.statSync(file)
+    const same = { dev: st.dev, ino: st.ino, size: st.size, birthtimeMs: 1000.25 }
+    const mark = JSON.parse(fs.readFileSync(sc.markPathFor(file), 'utf-8'))
+    fs.writeFileSync(sc.markPathFor(file), JSON.stringify({ ...mark, ...same }))
+    expect(sc[method](file, same)).toBe(method === 'due' ? false : mark.from)
+    for (const changed of [
+      { ...same, birthtimeMs: 1000.75 }, // Same official epoch, different precise identity.
+      { ...same, dev: same.dev + 1 },
+      { ...same, ino: same.ino + 1 },
+    ]) {
+      expect(sc[method](file, changed)).toBe(method === 'due' ? true : null)
+    }
+  })
+
+  it.each([
+    { skipped: 'little-to-drop' },
+    { from: '1:2:1000' },
+  ])('a legacy mark without identity is rechecked and never names an old epoch (%j)', (extra) => {
+    const sc = make({ minBytes: 64 })
+    const file = path.join(dir, 's.jsonl')
+    fs.writeFileSync(file, sample().text)
+    const st = fs.statSync(file)
+    fs.writeFileSync(sc.markPathFor(file), JSON.stringify({ v: 1, ino: st.ino, size: st.size, ...extra }))
+    expect(sc.rewrittenFrom(file, st)).toBe(null)
+    expect(sc.due(file, st)).toBe(true)
+  })
+
+  it.each(['dev', 'birthtimeMs'] as const)('commit rejects a replaced %s at the same inode, size and mtime', async (field) => {
+    const file = path.join(dir, 's.jsonl')
+    const { text } = sample()
+    fs.writeFileSync(file, text)
+    let replacement: fs.Stats | null = null
+    const injectedFs = {
+      ...fs,
+      statSync: ((p: fs.PathLike) => p === file && replacement ? replacement : fs.statSync(p)) as typeof fs.statSync,
+    }
+    const sc = make({ fs: injectedFs })
+    const prepared = await sc.compact(file) as StreamCompactPrepared
+    const st = fs.statSync(file)
+    replacement = { ...st, [field]: st[field] + (field === 'birthtimeMs' ? 0.25 : 1) } as fs.Stats
+    expect(sc.commit(file, prepared)).toBe(false)
+    expect(fs.readFileSync(file, 'utf-8')).toBe(text)
+    expect(fs.existsSync(prepared.tmpPath)).toBe(false)
+    expect(fs.existsSync(sc.markPathFor(file))).toBe(false)
+  })
+
+  it.each([false, true])('commit records the actual renamed identity with a ctime birth fallback (post-rename stat failure: %s)', async (failPostRenameStat) => {
+    const file = path.join(dir, 's.jsonl')
+    const { text, expected } = sample()
+    fs.writeFileSync(file, text)
+    const injected = ctimeFallbackFs(file, failPostRenameStat)
+    const logs: Array<{ level: string; msg: string; meta: Record<string, unknown> }> = []
+    const sc = make({ fs: injected.fs, log: (level, msg, meta) => logs.push({ level, msg, meta }) })
+    const original = injected.fs.statSync(file)
+    expect(original.birthtimeMs).toBe(original.ctimeMs)
+    const from = `${original.dev}:${original.ino}:${Math.floor(original.birthtimeMs)}`
+    const prepared = await sc.compact(file) as StreamCompactPrepared
+    const tmp = injected.fs.statSync(prepared.tmpPath)
+    expect(fs.readFileSync(file, 'utf-8')).toBe(text)
+    expect(fs.readFileSync(prepared.tmpPath, 'utf-8')).toBe(expected)
+
+    // The actual rename has committed, even when reading its metadata then fails.
+    expect(sc.commit(file, prepared)).toBe(true)
+    const after = injected.fs.statSync(file)
+    expect(fs.readFileSync(file, 'utf-8')).toBe(expected)
+    expect(fs.existsSync(prepared.tmpPath)).toBe(false)
+    expect(after.ino).not.toBe(original.ino)
+    expect(after.ino).toBe(tmp.ino)
+    expect(after.dev).toBe(tmp.dev)
+    expect(after.size).toBe(tmp.size)
+    expect(after.birthtimeMs).toBe(after.ctimeMs)
+    expect(after.birthtimeMs).not.toBe(tmp.birthtimeMs)
+    expect(Math.floor(after.birthtimeMs)).toBe(Math.floor(tmp.birthtimeMs))
+    // The pre-rename mark remains crash evidence on platforms with a stable birth time.
+    expect(injected.markAtRename()).toMatchObject({
+      dev: tmp.dev, ino: tmp.ino, birthtimeMs: tmp.birthtimeMs, size: tmp.size, from,
+    })
+    const mark = JSON.parse(fs.readFileSync(sc.markPathFor(file), 'utf-8'))
+    if (failPostRenameStat) {
+      expect(logs).toEqual([{
+        level: 'warn', msg: 'stream compaction committed; output metadata could not be read',
+        meta: { jsonlPath: file, error: 'post-rename stat unavailable' },
+      }])
+      expect(mark.birthtimeMs).toBe(tmp.birthtimeMs)
+      // A later successful stat must not inherit identity from the pre-rename mark.
+      expect(sc.rewrittenFrom(file, after)).toBe(null)
+    } else {
+      expect(logs).toEqual([])
+      expect(mark).toMatchObject({ dev: after.dev, ino: after.ino, birthtimeMs: after.birthtimeMs, size: after.size, from })
+      expect(sc.rewrittenFrom(file, after)).toBe(from)
+    }
+    injected.fs.appendFileSync(file, '\n' + user('next') + delta('new'))
+    const appended = injected.fs.statSync(file)
+    expect(appended.ino).toBe(after.ino)
+    expect(appended.birthtimeMs).not.toBe(after.birthtimeMs)
+    expect(sc.rewrittenFrom(file, appended)).toBe(null)
+    expect(fs.readFileSync(file, 'utf-8')).toBe(expected + '\n' + user('next') + delta('new'))
+  })
+
   it('commit swaps in a new inode only over the exact file that was read, and marks it so it is not copied again until it grows', async () => {
     const sc = make({ minBytes: 64 })
     const file = path.join(dir, 's.jsonl')
@@ -215,6 +365,7 @@ describe('stream compaction', () => {
     fs.writeFileSync(file, text)
     const prepared = await sc.compact(file) as StreamCompactPrepared
     const old = fs.statSync(file)
+    expect(prepared).toMatchObject({ dev: old.dev, ino: old.ino, birthtimeMs: old.birthtimeMs })
     const ino = old.ino
     expect(sc.rewrittenFrom(file, old)).toBe(null)
     expect(sc.commit(file, prepared)).toBe(true)
@@ -222,12 +373,14 @@ describe('stream compaction', () => {
     expect(fs.readFileSync(file, 'utf-8')).toBe(expected)
     expect(after.ino).not.toBe(ino)
     expect(Math.floor(after.mtimeMs / 1000)).toBe(Math.floor(old.mtimeMs / 1000))
-    expect(JSON.parse(fs.readFileSync(sc.markPathFor(file), 'utf-8'))).toMatchObject({ ino: after.ino, size: after.size })
+    expect(JSON.parse(fs.readFileSync(sc.markPathFor(file), 'utf-8'))).toMatchObject({
+      dev: after.dev, ino: after.ino, birthtimeMs: after.birthtimeMs, size: after.size,
+    })
     // The new file names the epoch it replaced (the daemon's streamEpoch format),
     // only while it is still exactly that output.
     const from = `${old.dev}:${old.ino}:${Math.floor(old.birthtimeMs)}`
     expect(sc.rewrittenFrom(file, after)).toBe(from)
-    expect(sc.rewrittenFrom(file, { ino: after.ino, size: after.size + 1 })).toBe(null)
+    expect(sc.rewrittenFrom(file, { ...after, size: after.size + 1 })).toBe(null)
     expect(sc.due(file, after)).toBe(false)
     // Grown by a quarter (and past the size floor): due again.
     fs.appendFileSync(file, delta('x'.repeat(after.size)) + result(9))

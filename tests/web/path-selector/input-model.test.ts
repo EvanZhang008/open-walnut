@@ -5,6 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   classifyInput,
+  restartTypedPath,
   resolveSpaceAmbiguity,
   deleteLastSegment,
   parentDirOf,
@@ -269,5 +270,26 @@ describe('pathValidity', () => {
   it('browse and scoped-search have no path verdict', () => {
     expect(pathValidity(classifyInput('walnut'), [done('/', ['/x'])])).toBe('unknown');
     expect(pathValidity(classifyInput('/a/b kw'), [done('/a/b/', [])])).toBe('unknown');
+  });
+});
+
+// 2026-11-08: the picker opens on the home (`/Users/a/`); a path typed after it
+// started over in a shell would have become `/Users/a/~/Documents`.
+describe('restartTypedPath', () => {
+  it('a home or root typed after another path starts the path over', () => {
+    expect(restartTypedPath('/Users/a/~/Documents/Project-001')).toBe('~/Documents/Project-001');
+    expect(restartTypedPath('/Users/a/~')).toBe('~');
+    expect(restartTypedPath('/Users/a/~/')).toBe('~/');
+    expect(restartTypedPath('/Users/a//tmp/x')).toBe('/tmp/x');
+    expect(restartTypedPath('/Users/a/~/b//c')).toBe('/c');
+  });
+  it('an ordinary path, a lone ~ and a name holding ~ stay as typed', () => {
+    for (const v of ['', '~', '~/', '~/Documents', '/Users/a/', '/Users/a/notes~/x', '/Users/a/~draft', '//server/share']) {
+      expect(restartTypedPath(v)).toBe(v);
+    }
+  });
+  it('the picker reads every typed path through it', async () => {
+    const { readFileSync } = await import('node:fs');
+    expect(readFileSync('web/src/components/sessions/SessionPathSelector.tsx', 'utf8')).toContain('if (editMode) { setEditingPath(keptFieldPath(restartTypedPath(v), fieldHome)); return; }');
   });
 });

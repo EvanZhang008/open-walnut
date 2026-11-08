@@ -218,6 +218,26 @@ describe('CSS supports the pointer-based drag model', () => {
     expect(CSS).toMatch(/body\.walnut-dragging iframe\s*\{[^}]*pointer-events:\s*none/);
   });
 
+  it('expanded resize grab zones stay above adjacent content', () => {
+    const css = CSS.replace(/\/\*[\s\S]*?\*\//g, '')
+    const blocks = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+      .map(([, selector, body]) => ({ selectors: selector.split(',').map((s) => s.trim()), body }))
+    const handles = new Set<string>()
+    for (const block of blocks) {
+      if (!/position:\s*absolute/.test(block.body) || !/left:\s*-\d/.test(block.body) || !/right:\s*-\d/.test(block.body)) continue
+      for (const selector of block.selectors) {
+        if (!/::(?:before|after)$/.test(selector)) continue
+        const handle = selector.replace(/::(?:before|after)$/, '')
+        const rules = blocks.filter((rule) => rule.selectors.includes(handle))
+        if (!rules.some((rule) => /cursor:\s*(?:col|row)-resize/.test(rule.body))) continue
+        handles.add(handle)
+        expect(rules.some((rule) => /z-index:\s*[1-9]\d*\s*(?:;|$)/.test(rule.body)), handle).toBe(true)
+      }
+    }
+    expect(handles.has('.session-panel-chat-resize')).toBe(true)
+    expect(handles.has('.notes-chat-divider')).toBe(true)
+  })
+
   it('sets touch-action:none on every drag handle', () => {
     // Handles listen for POINTER events now; without this a touch drag is
     // claimed by native scrolling and the handle gets pointercancel instead.

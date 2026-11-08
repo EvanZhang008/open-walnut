@@ -87,9 +87,15 @@ export function discardDraft(key: string): void {
   try { localStorage.removeItem(KEPT_ATTACHMENTS_PREFIX + key); } catch { /* storage off */ }
 }
 
-/** A mark for a save a box owes, taken when the words were typed. */
-export function draftSaveMark(): number {
-  return ++saveSeq;
+/** A mark for a save a box owes, taken when the words were typed; with `key`, also the key's newest revision. */
+export function draftSaveMark(key?: string | null): number {
+  const mark = ++saveSeq;
+  if (key) {
+    revisions.set(key, { mark });
+    unbindKey(key);
+    if (failedRecords().some((r) => r.key === key)) dropFailed((r) => r.key === key);
+  }
+  return mark;
 }
 
 /** Was the key discarded after a save marked `mark` was owed? */
@@ -141,6 +147,145 @@ export function isSentDraftCopy(key: string, text: string | null, mark?: number,
 }
 
 const sentAt = new Map<string, { text: string; mark: number; at: number }>();
+
+/** Local composer ownership, never sent to the server. */
+export interface DraftOrigin { readonly key: string; readonly text: string; readonly sent: number }
+
+export function draftOriginOf(key: string, text: string): DraftOrigin {
+  return { key, text, sent: ++saveSeq };
+}
+
+const revisions = new Map<string, { mark: number; origin?: number }>();
+
+/** The draft's words; undefined when storage cannot be read (never taken for empty). */
+const storedDraft = (key: string): string | undefined => { try { return localStorage.getItem(key) ?? ''; } catch { return undefined; } };
+
+// A refused send's ownership across a reload: its session and user-line uuid, the
+// draft key, and a hash and META stamp of the words (never the words). This browser only.
+const FAILED_KEY = 'walnut-failed-drafts';
+interface FailedDraft { sid: string; uuid: string; key: string; hash: string; stamp: number }
+const bound = new WeakMap<DraftOrigin, { sid: string; uuid: string }>();
+/** Claimed (refused) origins only, by session and uuid: an accepted send is never held here. */
+const boundBy = new Map<string, DraftOrigin>();
+const unbindKey = (key: string): void => { for (const [k, o] of boundBy) if (o.key === key) boundBy.delete(k); };
+/** Origins whose claim was written to FAILED_KEY: their settle checks that record again. */
+const persisted = new WeakSet<DraftOrigin>();
+const isFailedDraft = (r: unknown): r is FailedDraft => {
+  const x = r as Partial<FailedDraft> | null;
+  return !!x && typeof x.sid === 'string' && typeof x.uuid === 'string' && typeof x.key === 'string'
+    && typeof x.hash === 'string' && typeof x.stamp === 'number' && Number.isFinite(x.stamp);
+};
+function failedRecords(): FailedDraft[] {
+  try {
+    const v: unknown = JSON.parse(rawLocalStorage.get(FAILED_KEY) ?? '[]');
+    return Array.isArray(v) ? v.filter(isFailedDraft) : [];
+  } catch { return []; }
+}
+function dropFailed(drop: (r: FailedDraft) => boolean): void {
+  const list = failedRecords();
+  const next = list.filter((r) => !drop(r));
+  if (next.length === list.length) return;
+  try { if (next.length) rawLocalStorage.set(FAILED_KEY, JSON.stringify(next)); else rawLocalStorage.remove(FAILED_KEY); } catch { /* storage off */ }
+}
+const failedOf = (origin: DraftOrigin): FailedDraft | undefined => {
+  const b = bound.get(origin);
+  return b ? failedRecords().find((r) => r.sid === b.sid && r.uuid === b.uuid) : undefined;
+};
+/** The record still describes the stored words: same key, hash and META stamp. */
+const recordHolds = (r: FailedDraft | undefined, key: string, stored: string | undefined): boolean =>
+  !!r && r.key === key && !!stored?.trim() && draftHash(stored) === r.hash && readMeta()[key] === r.stamp;
+
+/** The send of `origin` goes to `sid` as the user line `uuid` (useSessionSend). */
+export function bindDraftOrigin(origin: DraftOrigin, sid: string, uuid: string): void {
+  bound.set(origin, { sid, uuid });
+}
+
+/** A failed send's words become the key's revision, unless it was edited (or emptied) since the send: 0. */
+export function claimFailedDraft(origin: DraftOrigin): number {
+  if ((revisions.get(origin.key)?.mark ?? 0) > origin.sent) return 0;
+  const stored = storedDraft(origin.key);
+  if (stored !== undefined && stored.trim() && stored.trim() !== origin.text.trim()) return 0;
+  if (stored !== undefined && !stored.trim()) writeDraft(origin.key, origin.text);
+  const mark = ++saveSeq;
+  revisions.set(origin.key, { mark, origin: origin.sent });
+  // Unreadable storage: the box gets its words back, but nothing is kept across a reload.
+  const b = bound.get(origin);
+  if (b) boundBy.set(`${b.sid}\n${b.uuid}`, origin);
+  const now = stored === undefined ? undefined : storedDraft(origin.key);
+  const stamp = readMeta()[origin.key];
+  if (b && now?.trim() && stamp !== undefined) {
+    try {
+      const list = failedRecords().filter((r) => !(r.sid === b.sid && r.uuid === b.uuid));
+      rawLocalStorage.set(FAILED_KEY, JSON.stringify([...list, { sid: b.sid, uuid: b.uuid, key: origin.key, hash: draftHash(now), stamp }]));
+      persisted.add(origin);
+    } catch { /* storage off: memory ownership only */ }
+  }
+  return mark;
+}
+
+/** The refused send `uuid` of `sid` still owns its draft: the origin it has, or (after a reload) a new one. */
+export function adoptFailedDraft(sid: string, uuid: string): DraftOrigin | undefined {
+  const known = boundBy.get(`${sid}\n${uuid}`);
+  if (known) return !persisted.has(known) || recordHolds(failedOf(known), known.key, storedDraft(known.key)) ? known : undefined;
+  const r = failedRecords().find((x) => x.sid === sid && x.uuid === uuid);
+  // Any revision here (typed, an external write) is newer than the record.
+  if (!r || revisions.has(r.key)) return undefined;
+  const stored = storedDraft(r.key);
+  if (stored === undefined) return undefined;
+  if (!recordHolds(r, r.key, stored)) {
+    dropFailed((x) => x.sid === sid && x.uuid === uuid);
+    return undefined;
+  }
+  const origin: DraftOrigin = { key: r.key, text: stored, sent: ++saveSeq };
+  bindDraftOrigin(origin, sid, uuid);
+  boundBy.set(`${sid}\n${uuid}`, origin);
+  persisted.add(origin);
+  revisions.set(r.key, { mark: ++saveSeq, origin: origin.sent });
+  return origin;
+}
+
+/** Dismissed: the refused send gives up its ownership; the draft stays. */
+export function forgetFailedDraft(origin: DraftOrigin): void {
+  const b = bound.get(origin);
+  if (!b) return;
+  if (boundBy.get(`${b.sid}\n${b.uuid}`) === origin) boundBy.delete(`${b.sid}\n${b.uuid}`);
+  dropFailed((r) => r.sid === b.sid && r.uuid === b.uuid);
+}
+
+/** History holds the user line of a refused send (the server took it after all): settled as a Retry. */
+export function settleConfirmedDrafts(sid: string, rows: ReadonlyArray<{ role: string; msgId?: string; sourceUuid?: string }>): void {
+  const mine = failedRecords().filter((r) => r.sid === sid);
+  if (mine.length === 0) return;
+  const ids = new Set<string>();
+  for (const m of rows) if (m.role === 'user') { if (m.msgId) ids.add(m.msgId); if (m.sourceUuid) ids.add(m.sourceUuid); }
+  for (const r of mine) {
+    if (!ids.has(r.uuid)) continue;
+    const origin = adoptFailedDraft(sid, r.uuid);
+    if (origin) settleRetriedDraft(origin);
+  }
+}
+
+const settledListeners = new Set<(origin: DraftOrigin) => void>();
+export function onDraftSettled(cb: (origin: DraftOrigin) => void): () => void {
+  settledListeners.add(cb);
+  return () => { settledListeners.delete(cb); };
+}
+
+/** A Retry was accepted: the restored words go and count as sent, unless typed again since (the same words too). */
+export function settleRetriedDraft(origin: DraftOrigin): boolean {
+  const stored = storedDraft(origin.key);
+  if (revisions.get(origin.key)?.origin !== origin.sent || stored === undefined || (stored.trim() && stored.trim() !== origin.text.trim())) return false;
+  // Another tab's write of the same words may not have reached this one as an event yet.
+  if (persisted.has(origin) && !recordHolds(failedOf(origin), origin.key, stored)) return false;
+  revisions.delete(origin.key);
+  unbindKey(origin.key);
+  const b = bound.get(origin);
+  dropFailed((r) => r.key === origin.key || (r.sid === b?.sid && r.uuid === b?.uuid));
+  markDraftSent(origin.key, origin.text);
+  for (const cb of [...settledListeners]) { try { cb(origin); } catch { /* one box never stops another */ } }
+  writeDraft(origin.key, '');
+  return true;
+}
 
 /** A draft as a JSON value (a form's several fields under one key). */
 export function readDraftJson<T>(key: string): T | undefined {
@@ -303,6 +448,7 @@ async function pull(notify: boolean, timeoutMs: number): Promise<void> {
       if (entry.v === null) rawLocalStorage.remove(key);
       else rawLocalStorage.set(key, entry.v);
       meta[key] = entry.ts;
+      revisions.set(key, { mark: ++saveSeq });
       adopted.push(key);
     } catch { /* quota */ }
   }
@@ -351,5 +497,9 @@ export async function initDraftSync(): Promise<void> {
   });
   window.addEventListener('online', () => { void flush(); });
   // Another tab of this browser wrote a draft: open boxes here follow it.
-  window.addEventListener('storage', (e) => { if (e.key && isDraftKey(e.key)) emit(e.key); });
+  window.addEventListener('storage', (e) => {
+    if (!e.key || !isDraftKey(e.key)) return;
+    revisions.set(e.key, { mark: ++saveSeq });
+    emit(e.key);
+  });
 }

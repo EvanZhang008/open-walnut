@@ -6,7 +6,7 @@
  *   client  : writes through web/src/api/client.ts, which sends a write made while the page hides
  *             or leaves with keepalive, at once (tests/web/api-client-page-exit.test.ts)
  *   raw     : its own fetch with keepalive, or navigator.sendBeacon
- *   local   : writes only browser storage or posts to a parent frame, nothing over the network
+ *   local   : changes memory or browser storage, or posts to a parent frame, nothing over the network
  */
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
@@ -15,6 +15,7 @@ import path from 'node:path'
 const ROOT = path.resolve(__dirname, '../../web/src')
 const KNOWN: Record<string, 'client' | 'raw' | 'local'> = {
   'api/client.ts': 'client',
+  'api/read-lifecycle.ts': 'local', // only marks suspended reads and notifies in-memory listeners
   'api/page-visits.ts': 'client',
   'components/settings/inputs/useCommitField.ts': 'client',
   'components/settings/inputs/useSettingsAutoSave.ts': 'client',
@@ -33,6 +34,9 @@ const KNOWN: Record<string, 'client' | 'raw' | 'local'> = {
   'popout/useHomeSnapshots.ts': 'local', // the first page's snapshot goes to the parent frame by postMessage
   'components/common/FileContentView.tsx': 'local', // the unsaved text goes to localStorage and the IndexedDB draft store
   'components/sessions/useReadingPlace.ts': 'local', // the reading place it still owed goes to localStorage (reading-place.ts flushPlaces)
+  // The folds' last action goes into localStorage; its server copy rides ui-prefs-sync's keepalive
+  // flush, which carries it because the same write runs at visibilitychange to hidden, before pagehide.
+  'components/tasks/useFoldStore.ts': 'local',
 }
 
 function walk(dir: string): string[] {

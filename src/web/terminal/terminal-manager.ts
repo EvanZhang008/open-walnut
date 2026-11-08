@@ -27,6 +27,7 @@ import type { TerminalMode } from './dtach-check.js'
 import { getSessionByClaudeId } from '../../core/session-tracker.js'
 import { MAX_TERMINAL_SLOTS, parseTerminalKey, terminalKeyFor } from '../../core/terminal-key.js'
 import { log } from '../../logging/index.js'
+import { assertDemoAdmission } from '../../core/sessions/demo-admission.js'
 
 // WebSocket readyState values (the ws package and the browser agree).
 const WS_CLOSING = 2
@@ -307,6 +308,7 @@ class TerminalManager {
    * persistent request, which only comes from a Retry that found dtach.
    */
   async open(sessionId: string, ws: WebSocket, cols: number, rows: number, mode: TerminalMode = PERSISTENT, slot = 1): Promise<OpenResult> {
+    assertDemoAdmission()
     const key = terminalKeyFor(sessionId, slot)
     const existing = this.terminals.get(key)
     if (existing) {
@@ -487,6 +489,20 @@ class TerminalManager {
   /** Is a client actively viewing the terminal under `key` (a terminal key) right now? */
   isViewing(key: string): boolean {
     return this.terminals.get(key)?.hasClient() ?? false
+  }
+
+  async waitForOpening(): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      await Promise.race([
+        Promise.allSettled([...this.opening.values()]),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('Demo terminal open is still pending; data was kept')), 20_000)
+        }),
+      ])
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
   }
 
   /** Release all local ptys on server shutdown (dtach sessions survive). */

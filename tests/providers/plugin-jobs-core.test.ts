@@ -562,3 +562,121 @@ describe('status and logs', () => {
     expect(fs.statSync(`${log}.1`).size).toBe(1_500)
   })
 })
+
+// A stopping Demo daemon (demo.quiesce): the final spawn gate, and quiesce(home), which reuses
+// stopRun (the existing SIGTERM then SIGKILL of the run's own group, recorded by the fake
+// killGroup here) and leaves nothing of that home armed. Fake processes and clock only.
+describe('Demo quiesce', () => {
+  const every = (over: Partial<PluginJobSpec> = {}) => job({ job: 'poll', kind: 'every', everyMs: 5 * 60_000, ...over })
+
+  it('a closed gate starts no run, arms no retry and no schedule, and leaves the job idle', () => {
+    let open = false
+    const sup = createPluginJobSupervisor(deps({ maySpawn: () => open }))
+    const st = sup.configure('/h', spec([job(), every()]))
+    advance(10 * 60_000)
+    expect(spawned).toHaveLength(0)
+    expect(st.jobs.map((j) => j.state).sort()).toEqual(['idle', 'idle'])
+    // The every job's first timer fired into the gate and armed nothing after it.
+    expect(sup.pending('/h')).toEqual({ runs: 0, draining: 0, timers: 0 })
+    open = true
+    expect(sup.status('/h').jobs.every((j) => j.state === 'idle' && j.nextRunAt === undefined)).toBe(true)
+  })
+
+  it('the gate is read in the same tick as the spawn of a retry', () => {
+    let open = true
+    const sup = createPluginJobSupervisor(deps({ maySpawn: () => open }))
+    sup.configure('/h', spec([job()]))
+    expect(spawned).toHaveLength(1)
+    exit(children[0]!, 1)
+    expect(sup.status('/h').jobs[0]!.state).toBe('retrying')
+    open = false
+    advance(60_000)
+    expect(spawned).toHaveLength(1)
+    expect(sup.status('/h').jobs[0]!.state).toBe('idle')
+    expect(sup.pending('/h').timers).toBe(0)
+  })
+
+  it('quiesce retires the running run through stopRun and counts it as draining until it exits; nothing restarts', () => {
+    const sup = createPluginJobSupervisor(deps())
+    sup.configure('/h', spec([job()]))
+    const run = children[0]!
+    expect(sup.pending('/h')).toMatchObject({ runs: 1, draining: 0 })
+    sup.quiesce('/h')
+    expect(signals).toEqual([{ pid: run.pid, signal: 'SIGTERM' }])
+    expect(sup.pending('/h')).toEqual({ runs: 0, draining: 1, timers: 0 })
+    advance(10_000)
+    expect(signals).toEqual([{ pid: run.pid, signal: 'SIGTERM' }, { pid: run.pid, signal: 'SIGKILL' }])
+    expect(sup.pending('/h').draining).toBe(1)
+    exit(run, null, 'SIGKILL')
+    expect(sup.pending('/h')).toEqual({ runs: 0, draining: 0, timers: 0 })
+    advance(30 * 60_000)
+    expect(spawned).toHaveLength(1)
+    expect(sup.status('/h').jobs[0]).toMatchObject({ state: 'idle' })
+  })
+
+  it('a retry already armed and an every schedule are cleared, and a later configure of that home arms nothing', () => {
+    const sup = createPluginJobSupervisor(deps())
+    sup.configure('/h', spec([job(), every()]))
+    exit(children[0]!, 1)
+    expect(sup.pending('/h').timers).toBeGreaterThan(0)
+    sup.quiesce('/h')
+    expect(sup.pending('/h')).toEqual({ runs: 0, draining: 0, timers: 0 })
+    advance(60 * 60_000)
+    expect(spawned).toHaveLength(1)
+    sup.configure('/h', spec([job({ config: { queue: 'q2' } }), every({ everyMs: 6 * 60_000 })]))
+    advance(60 * 60_000)
+    expect(spawned).toHaveLength(1)
+    expect(sup.pending('/h')).toEqual({ runs: 0, draining: 0, timers: 0 })
+  })
+
+  it('a start waiting on a run being stopped never starts after quiesce', () => {
+    const sup = createPluginJobSupervisor(deps())
+    sup.configure('/h', spec([job()]))
+    const old = children[0]!
+    // A changed job: the new run waits for the old one to exit.
+    sup.configure('/h', spec([job({ config: { queue: 'q2' } })]))
+    expect(sup.status('/h').jobs[0]!.state).toBe('starting')
+    sup.quiesce('/h')
+    exit(old, null, 'SIGTERM')
+    advance(60_000)
+    expect(spawned).toHaveLength(1)
+  })
+
+  it('only the quiesced home: another Walnut\'s jobs on this daemon run and restart as before', () => {
+    const sup = createPluginJobSupervisor(deps())
+    sup.configure('/h', spec([job()]))
+    sup.configure('/h2', { v: 1, home: '/h2', walnutId: 'w2', jobs: [job()] })
+    expect(spawned).toHaveLength(2)
+    sup.quiesce('/h')
+    const other = children[1]!
+    expect(signals.map((s) => s.pid)).not.toContain(other.pid)
+    exit(other, 1)
+    advance(5_000)
+    expect(spawned).toHaveLength(3)
+    expect(sup.pending('/h2').runs).toBe(1)
+  })
+
+  it('an adopted run it cannot tell stays counted as draining: not quiet, never signalled', () => {
+    const sup = createPluginJobSupervisor(deps())
+    sup.configure('/h', spec([job()]))
+    const sup2 = createPluginJobSupervisor(deps())
+    psBroken = true
+    sup2.boot()
+    sup2.quiesce('/h')
+    expect(signals).toEqual([])
+    advance(60_000)
+    expect(sup2.pending('/h')).toMatchObject({ draining: 1 })
+  })
+
+  it('built from its own text (the source twin inlines it), the gate and quiesce work the same', () => {
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval
+    const inlined = new Function(`"use strict"; return (${createPluginJobSupervisor.toString()})`)() as typeof createPluginJobSupervisor
+    const sup = inlined(deps())
+    sup.configure('/h', spec([job()]))
+    sup.quiesce('/h')
+    expect(sup.pending('/h')).toEqual({ runs: 0, draining: 1, timers: 0 })
+    const gated = inlined(deps({ maySpawn: () => false }))
+    gated.configure('/h3', { v: 1, home: '/h3', walnutId: 'w3', jobs: [job()] })
+    expect(spawned).toHaveLength(1)
+  })
+})

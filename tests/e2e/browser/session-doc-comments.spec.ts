@@ -29,10 +29,11 @@
 import { expect, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { openThreadsSession, readRecord, resetThreadsFixture, test } from './threads-helpers'
+import { humanPress, openThreadsSession, readRecord, resetThreadsFixture, test } from './threads-helpers'
 import { DOC_COMMENTS_SESSION } from './threads-fixture'
 import { loadHome } from './draft-helpers'
 import { docBarSettled, pressBarTool } from './doc-bar-helpers'
+import { goToSessionFolder, isolateUiPrefs } from './todo-panel-helpers'
 
 const TASK = 'pw-task-threads-doc-comments'
 const READY = 'How should the reader treat stale copies?'
@@ -50,8 +51,9 @@ async function shot(scope: Page | Locator, name: string): Promise<void> {
   await scope.screenshot({ path: `${dir}/${name}.png` })
 }
 
-function captureSends(page: Page): Array<{ sessionId: string; message: string }> {
-  const sent: Array<{ sessionId: string; message: string }> = []
+type SentFrame = { sessionId: string; message: string; hints?: Record<string, { arg?: string }> }
+function captureSends(page: Page): SentFrame[] {
+  const sent: SentFrame[] = []
   page.on('websocket', (socket) => socket.on('framesent', (frame) => {
     if (typeof frame.payload !== 'string') return
     try {
@@ -69,6 +71,7 @@ async function openDoc(page: Page, name = DOC): Promise<{ panel: Locator; view: 
     await panel.getByRole('button', { name: 'Files', exact: true }).click()
   }
   const explorer = panel.locator('.session-file-explorer')
+  await goToSessionFolder(explorer)
   const row = explorer.locator('.session-file-explorer-node', { hasText: name }).first()
   await expect(row).toBeVisible({ timeout: 15_000 })
   await row.click()
@@ -102,7 +105,10 @@ async function textRects(root: Locator, needle: string) {
   return rects!
 }
 
-/** Bring `needle` to the middle of its scroller (vertically only, as a reader scrolls). */
+/** Bring `needle` to the middle of its scroller (vertically only, as a reader scrolls). The
+ *  scroll is the reader's: it starts with a wheel event, which is what ends the file view's
+ *  hold on a place it brought back after an open or a Preview/Source switch
+ *  (use-file-reading-place.ts); a bare scrollTop write would be put back by that hold. */
 async function centre(root: Locator, needle: string): Promise<void> {
   await root.evaluate((el, phrase) => {
     const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
@@ -111,6 +117,7 @@ async function centre(root: Locator, needle: string): Promise<void> {
       let s = n.parentElement
       while (s && !(s.scrollHeight > s.clientHeight + 1 && /(auto|scroll)/.test(getComputedStyle(s).overflowY))) s = s.parentElement
       if (!s) return
+      s.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true }))
       const r = n.parentElement!.getBoundingClientRect()
       const b = s.getBoundingClientRect()
       s.scrollTop += r.top - (b.top + b.height / 2)
@@ -183,7 +190,7 @@ async function commentInEditor(page: Page, view: Locator, needle: string, words:
   await dragSelect(page, editor, needle)
   const btn = page.getByTestId('bubble-comment')
   await expect(btn).toBeVisible()
-  await btn.dispatchEvent('mousedown')
+  await humanPress(page, btn)
   const input = view.getByTestId('doc-comment-draft-input')
   await expect(input).toBeFocused()
   await input.fill(words)
@@ -258,6 +265,10 @@ test.describe('Doc comments: at their words, in their sidecar, to the AI with th
     await fs.writeFile(docPath, original)
     await fs.rm(path.join(rec.cwd as string, SIDECAR), { force: true })
     await page.setViewportSize({ width: 1440, height: 900 })
+    // This spec's own reading places only: a file opens at the place it was last read at and holds
+    // it for its first seconds (use-file-reading-place.ts), and the shared fixture's ui-prefs would
+    // bring in a place another spec left for the same fixture file.
+    await isolateUiPrefs(page)
     await loadHome(page)
   })
   test.afterEach(async ({ request }) => {
@@ -351,17 +362,33 @@ test.describe('Doc comments: at their words, in their sidecar, to the AI with th
     await hoverWords(page, editor, MIDDLE)
     await expectInPlace(view, view.locator(`[data-comment-id="${ids[1]}"].doc-comment-card`), editor, MIDDLE)
 
-    // One send carries both, each with its doc, its id and its sidecar, then how to answer.
+    // One send carries both. The person's bubble shows each quote under its file's name; each
+    // one's doc, id and sidecar, and how to answer, go to the model as the send's object-context
+    // hint (passage-comments.ts composeForSend), stored first.
+    const contexts: Array<{ id: string; text: string }> = []
+    page.on('response', async (res) => {
+      if (res.request().method() !== 'POST' || new URL(res.url()).pathname !== '/api/v1/hints/context') return
+      const id = String(((await res.json().catch(() => ({}))) as { id?: unknown }).id ?? '')
+      contexts.push({ id, text: String((res.request().postDataJSON() as { text?: unknown }).text ?? '') })
+    })
     const composer = panel.locator('.session-panel-input .chat-input-textarea')
     await composer.click()
     await composer.fill('Please answer the comments.')
     await composer.press('Enter')
     await expect.poll(() => sent.filter((s) => s.sessionId === DOC_COMMENTS_SESSION).length, { timeout: 15_000 }).toBe(1)
-    const message = sent.find((s) => s.sessionId === DOC_COMMENTS_SESSION)!.message
-    expect(message).toContain(`Comment ${ids[0]} on \`${docPath}\` (thread in \`${sidecarPath}\`):\n> ${TOP}\n\nDoes it wait for the whole snapshot?`)
-    expect(message).toContain(`Comment ${ids[1]} on \`${docPath}\``)
-    expect(message).toContain('as a list item `- **AI** · <ISO time> · <your words>`')
+    const frame = sent.find((s) => s.sessionId === DOC_COMMENTS_SESSION)!
+    const message = frame.message
+    const name = path.basename(docPath)
+    expect(message).toContain(`On \`${name}\`:\n> ${TOP}\n\nDoes it wait for the whole snapshot?`)
+    expect(message).toContain(`On \`${name}\`:\n> ${MIDDLE}`)
+    expect(message).not.toContain(sidecarPath)
     expect(message.trimEnd().endsWith('Please answer the comments.')).toBe(true)
+    await expect.poll(() => contexts.length).toBe(1)
+    expect(contexts[0].id).not.toBe('')
+    expect(frame.hints?.['object-context']?.arg).toBe(contexts[0].id)
+    expect(contexts[0].text).toContain(`Comment ${ids[0]} on \`${docPath}\` (thread in \`${sidecarPath}\`)`)
+    expect(contexts[0].text).toContain(`Comment ${ids[1]} on \`${docPath}\``)
+    expect(contexts[0].text).toContain('as a list item `- **AI** · <ISO time> · <your words>`')
     await expect(trayRows(panel)).toHaveCount(0)
     // The pointer went to the composer: no card shows; both are still marked.
     await expect(cards(view)).toHaveCount(0)
@@ -473,7 +500,7 @@ test.describe('Doc comments: at their words, in their sidecar, to the AI with th
 
     // Escape gives a draft up: nothing written.
     await dragSelect(page, editor, TOP)
-    await page.getByTestId('bubble-comment').dispatchEvent('mousedown')
+    await humanPress(page, page.getByTestId('bubble-comment'))
     await expect(view.getByTestId('doc-comment-draft-input')).toBeFocused()
     await page.keyboard.press('Escape')
     await expect(view.getByTestId('doc-comment-draft')).toHaveCount(0)
@@ -533,7 +560,7 @@ test.describe('Doc comments: at their words, in their sidecar, to the AI with th
     // In the preview, on words that carry markup in the source (bold, a link).
     await centre(editor, 'until done')
     await dragBetween(page, editor, 'ledger copy', 'until done')
-    await page.getByTestId('bubble-comment').dispatchEvent('mousedown')
+    await humanPress(page, page.getByTestId('bubble-comment'))
     await view.getByTestId('doc-comment-draft-input').fill('Who removes the lock?')
     await view.getByTestId('doc-comment-draft-input').press('Enter')
     await expect(cards(view)).toHaveCount(1)

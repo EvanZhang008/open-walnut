@@ -115,7 +115,7 @@ export async function quickParseTask(text: string, signal?: AbortSignal): Promis
   // Browser timezone rides along so relative dates ("tomorrow 10am") resolve in the
   // user's zone even when the server runs elsewhere (e.g. a UTC cloud instance).
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  return apiPost<QuickTaskParse>('/api/tasks/quick-parse', { text, timeZone }, { signal, background: true });
+  return apiPost<QuickTaskParse>('/api/tasks/quick-parse', { text, timeZone }, { signal, background: true, readOnly: true });
 }
 
 // ── Suggestion accuracy ledger ───────────────────────────────────────────────

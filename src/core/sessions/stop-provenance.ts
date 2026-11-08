@@ -20,6 +20,7 @@
  */
 
 import { IS_EPHEMERAL, WALNUT_HOME } from '../../constants.js'
+import { thisServer } from '../server-self-name.js'
 
 /** Daemon capability that checks a stop's `home` against the spawn journal. */
 export const OWNER_HOME_CAPABILITY = 'owner-home-v1'
@@ -56,7 +57,7 @@ export function stopProvenance(
 
 /** The sentence a caller reports when stopProvenance said "do not send". */
 export const STOP_NOT_SENT_NO_OWNERSHIP_CHECK =
-  'Not stopped: this test server only stops sessions on a host whose daemon can check who started them (owner-home-v1)'
+  `Not stopped: ${thisServer()} only stops sessions on a host whose daemon can check who started them (owner-home-v1)`
 
 /** A daemon refusal reply, as one sentence for logs and pending-stop errors. */
 export function describeStopRefusal(reply: Record<string, unknown>): string {

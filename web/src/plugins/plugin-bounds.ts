@@ -23,6 +23,7 @@
  * `document.body` itself (a portal there, `walnut.unsafe.dom`) has left its box on purpose.
  */
 import { log } from '@/utils/log'
+import { clippingAncestors } from '@/utils/clip-ancestors'
 
 export interface Box {
   left: number
@@ -118,9 +119,8 @@ export function keepInBox(box: HTMLElement): () => void {
   const area = (): Box => {
     const b = box.getBoundingClientRect()
     let shown: Box = { left: b.left, top: b.top, width: b.width, height: b.height }
-    for (let el = box.parentElement; el && el !== document.body; el = el.parentElement) {
-      const style = getComputedStyle(el)
-      if (style.overflowX === 'visible' && style.overflowY === 'visible' && style.clipPath === 'none') continue
+    // Only the ancestors that really clip the box (utils/clip-ancestors.ts).
+    for (const { el } of clippingAncestors(box, { stop: document.body })) {
       const r = el.getBoundingClientRect()
       shown = overlap(shown, { left: r.left, top: r.top, width: r.width, height: r.height })
     }

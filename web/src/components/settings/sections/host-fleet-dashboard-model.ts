@@ -13,6 +13,8 @@ export type Tone = 'good' | 'warn' | 'bad' | 'muted';
 const GB = 1024 ** 3;
 /** Under this much free disk a host reads red: a build or a clone may not fit. */
 export const DISK_LOW_BYTES = 20 * GB;
+/** Under this much the problem line says the disk is almost full (red); between the two it is only low (amber). */
+export const DISK_FULL_BYTES = 5 * GB;
 export const TIMELINE_MS = 12 * 3_600_000;
 
 /** A host the dashboard draws as a full card: this computer, or one Walnut is connected to now. */
@@ -52,7 +54,7 @@ export interface Problem {
 
 function rebootProblem(h: FleetHost): Problem | null {
   const d = h.daemon;
-  if (h.local || !d || d.startsAfterReboot) return null;
+  if (h.local || !d || d.startsAfterReboot || d.throwaway) return null;
   const b = d.bootStart ?? null;
   const detail = d.reboot ?? 'Walnut\'s helper there does not start by itself after a reboot';
   const name = h.label || h.host;
@@ -83,7 +85,10 @@ export function problemsOf(h: FleetHost, now: number): Problem[] {
   const disk = freeDiskBytes(h);
   const measured = !!h.now?.disk && h.now.disk.totalBytes > 0;
   if (typeof disk === 'number' && (disk > 0 || measured) && disk < DISK_LOW_BYTES) {
-    out.push({ key: 'disk', text: `Disk almost full: ${size(disk)} free`, detail: `Only ${size(disk)} of disk is free; a build or a clone may not fit`, tone: 'bad' });
+    // Calm until it is really tight (2026-11-10 review: 12 GB free read red "Disk almost full" on a new user's first screen).
+    out.push(disk < DISK_FULL_BYTES
+      ? { key: 'disk', text: `Disk almost full: ${size(disk)} free`, detail: `Only ${size(disk)} of disk is free; a build or a clone may not fit`, tone: 'bad' }
+      : { key: 'disk', text: `Low on disk space: ${size(disk)} free`, detail: `${size(disk)} of disk is free; a large build or clone may not fit`, tone: 'warn' });
   }
   if (h.now && notAnswering(h)) {
     out.push({ key: 'stale', text: `Last reading ${span(now - h.now.at)} ago`, detail: `The host did not answer in time; this is its reading from ${span(now - h.now.at)} ago`, tone: 'muted' });
@@ -336,11 +341,13 @@ export function linkLabel(h: FleetHost): string {
   return c.rttMs ? `${kind}, ${c.rttMs} ms` : kind;
 }
 
-/** Why a host is not connected, in a few words (the full error is the title). */
-export function offlineLine(h: FleetHost): string {
+/** Why a host is not connected, in a few words (the full error is the title). The live
+ *  status wins over the card's read, which can be from mid-dial: 2026-11-08, a refused
+ *  Connect read "Opening an SSH connection" here beside "Could not connect" below. */
+export function offlineLine(h: FleetHost, live?: { phaseLabel?: string; connected?: boolean } | null): string {
   const c = h.connection;
   if (c.kind === 'bridge') return 'Waits for it to connect in';
-  return c.phaseLabel || 'Not connected';
+  return (live && !live.connected && live.phaseLabel) || c.phaseLabel || 'Not connected';
 }
 
 export interface TopoNode { host: string; x: number; y: number; side: 'left' | 'right' | 'centre'; live: boolean }

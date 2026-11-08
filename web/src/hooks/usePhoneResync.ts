@@ -41,6 +41,7 @@ const listeners = new Set<() => void>();
 let offlineTimer: ReturnType<typeof setTimeout> | null = null;
 let macTimer: ReturnType<typeof setInterval> | null = null;
 let installedCount = 0;
+let watchCount = 0;
 
 function set(patch: Partial<ResyncState>): void {
   const next = { ...state, ...patch };
@@ -123,22 +124,41 @@ function install(): () => void {
   document.addEventListener('visibilitychange', onVisibility);
   window.addEventListener('online', onOnline);
   window.addEventListener('pageshow', onPageShow);
-  wsClient.onConnectionChange(onConnection);
-  onConnection(wsClient.state);
   return () => {
     installedCount -= 1;
     document.removeEventListener('visibilitychange', onVisibility);
     window.removeEventListener('online', onOnline);
     window.removeEventListener('pageshow', onPageShow);
-    wsClient.offConnectionChange(onConnection);
-    if (offlineTimer) { clearTimeout(offlineTimer); offlineTimer = null; }
-    if (macTimer) { clearInterval(macTimer); macTimer = null; }
   };
 }
 
-/** AppShell mounts this on the phone layout. */
+/**
+ * The connection state (`offline`, `macAway`) on every layout: the phone's rows and the
+ * desktop's ConnectionLine read it. A console whose server stopped said nothing on a
+ * desktop before (D13: the Demo was stopped and the page looked as if all was well).
+ */
+function installConnectionWatch(): () => void {
+  watchCount += 1;
+  if (watchCount > 1) return () => { watchCount -= 1; };
+  wsClient.onConnectionChange(onConnection);
+  onConnection(wsClient.state);
+  return () => {
+    watchCount -= 1;
+    wsClient.offConnectionChange(onConnection);
+    if (offlineTimer) { clearTimeout(offlineTimer); offlineTimer = null; }
+    if (macTimer) { clearInterval(macTimer); macTimer = null; }
+    set({ offline: false, macAway: false });
+  };
+}
+
+/** AppShell mounts this on the phone layout: the resync when the phone comes back in front. */
 export function usePhoneResync(enabled: boolean): void {
   useEffect(() => (enabled ? install() : undefined), [enabled]);
+}
+
+/** AppShell mounts this on every layout. */
+export function useConnectionWatch(): void {
+  useEffect(() => installConnectionWatch(), []);
 }
 
 function subscribe(cb: () => void): () => void {

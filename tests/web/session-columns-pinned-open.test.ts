@@ -126,6 +126,10 @@ const CLASSIFIED: Record<string, 'open' | 'not-open'> = {
   removeSessionColumn: 'not-open',
   toggleLockSlot: 'not-open',
   trimUnlockedToMax: 'not-open', // capacity changes; pins exempt
+  // Capacity grows back: refills only free room (no lock grant) with the columns a shrink closed,
+  // after every pin, removing none; never an open the person asked for.
+  regrowColumns: 'not-open',
+  pendingRegrow: 'not-open', // filters the shrink's waiting list; writes no strip
   fitRestoredColumns: 'not-open',
   mergeUrlColumns: 'not-open', // a URL's strip; keeps every saved pin
   panelBudget: 'not-open',

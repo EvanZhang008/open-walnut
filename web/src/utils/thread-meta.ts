@@ -66,6 +66,7 @@ export interface DeriveLiveInput {
   tree: ThreadTree;
   /** Queued sends that carry a pre-assigned uuid, in queue order. */
   queued: ReadonlyArray<{ rowId: string; status: 'pending' | 'processing' }>;
+  unsent?: readonly string[];
   /** Thread key the CLI is currently answering, or null when idle. */
   streamingKey: string | null;
   /** How the turn opened by each user row ended, when it ended. */
@@ -96,6 +97,10 @@ export function deriveThreadLiveStates(input: DeriveLiveInput): Map<string, Thre
     const end = input.turnEnds.get(last);
     if (end && end !== 'ok' && !input.hasAnswerAfter(last)) out.set(node.key, 'failed');
   }
+  for (const rowId of input.unsent ?? []) {
+    const key = tree.byRow.get(rowId)?.key;
+    if (key && key !== ROOT_THREAD_KEY) out.set(key, 'failed');
+  }
   for (const q of input.queued) {
     const key = tree.byRow.get(q.rowId)?.key;
     if (key && key !== ROOT_THREAD_KEY) out.set(key, q.status === 'processing' ? 'answering' : 'queued');
@@ -103,6 +108,35 @@ export function deriveThreadLiveStates(input: DeriveLiveInput): Map<string, Thre
   if (input.streamingKey && input.streamingKey !== ROOT_THREAD_KEY) out.set(input.streamingKey, 'answering');
   for (const key of input.awaiting ?? []) if (!out.has(key)) out.set(key, 'queued');
   return out;
+}
+
+export interface LocalSendOrder {
+  seen: Map<string, string>;
+  latest: Map<string, string>;
+}
+
+export function latestUnsentRows(
+  tree: ThreadTree,
+  optimistic: readonly { role: string; userUuid?: string; status: string }[],
+  order: LocalSendOrder,
+): Set<string> {
+  const unsent = new Set<string>();
+  for (const row of optimistic) {
+    // One optimistic bubble at a time, never a history row: no turn is cut here.
+    if (row.role !== 'user' || !row.userUuid) continue;
+    const id = row.userUuid;
+    const key = tree.byRow.get(id)?.key;
+    if (!key) continue;
+    const prior = order.seen.get(id);
+    if (prior === undefined || (prior === 'failed' && row.status === 'pending')) order.latest.set(key, id);
+    order.seen.set(id, row.status);
+  }
+  for (const row of optimistic) {
+    const id = row.userUuid;
+    const key = id ? tree.byRow.get(id)?.key : undefined;
+    if (id && key && row.status === 'failed' && order.latest.get(key) === id) unsent.add(id);
+  }
+  return unsent;
 }
 
 // ── Hidden subtrees and descendants ──

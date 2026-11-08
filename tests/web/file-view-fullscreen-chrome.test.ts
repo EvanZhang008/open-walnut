@@ -28,6 +28,16 @@ function ruleBody(selectorLine: string): string {
 }
 
 describe('file view fullscreen chrome', () => {
+  it('uses a defined theme background for every file-view chrome rule', () => {
+    expect(ruleBody('.fv-html-toolbar {')).toContain('background: var(--bg)');
+    expect(ruleBody('.file-content-view.fv-fullscreen {')).toContain('background: var(--bg)');
+    const chromeRules = [...CSS_SRC.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+      .filter(([, selectors]) => /\.(?:fv-|file-content-view)/.test(selectors))
+      .map(([, selectors, body]) => `${selectors.trim()} {${body}}`);
+    expect(chromeRules.length).toBeGreaterThan(20);
+    expect(chromeRules.filter(rule => rule.includes('var(--bg-primary'))).toEqual([]);
+  });
+
   it('keeps the toolbar sticky in the pane (base rule intact)', () => {
     expect(ruleBody('.fv-html-toolbar {')).toContain('position: sticky');
     expect(ruleBody('.fv-reloading-badge {')).toContain('position: sticky');

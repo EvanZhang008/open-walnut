@@ -195,7 +195,8 @@ html.walnut-col-resizing * { cursor: col-resize !important; user-select: none !i
 .thread-review-card[data-state="unread"] { --review-edge: hsl(0 80% 55%); --review-word: hsl(0 75% 45%); background: color-mix(in srgb, hsl(0 90% 60%) 6%, var(--bg-elevated)); }
 .thread-review-card[data-state="failed"] { --review-edge: hsl(345 65% 55%); --review-word: hsl(345 60% 45%); border-left-style: dotted; }
 .thread-review-card[data-state="read"] { --review-edge: hsl(140 45% 50%); --review-word: hsl(140 45% 34%); }
-.thread-review-card[data-state="resolved"] { opacity: 0.7; }
+/* Quieter words, never opacity: a faded card shows what lies under it. */
+.thread-review-card[data-state="resolved"] { color: var(--fg-muted); }
 [data-theme="dark"] .thread-review-card { --review-word: var(--fg-muted); }
 [data-theme="dark"] .thread-review-card[data-state="waiting"] { --review-word: hsl(45 95% 62%); }
 [data-theme="dark"] .thread-review-card[data-state="answering"] { --review-word: hsl(140 60% 62%); }

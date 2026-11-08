@@ -83,7 +83,7 @@ import { createSkillsRouter } from './routes/skills.js'
 import { createSlashCommandsRouter } from './routes/slash-commands.js'
 import { CronService } from '../core/cron/index.js'
 import os from 'node:os'
-import { CRON_FILE, IS_EPHEMERAL, LOG_DIR, PLUGIN_STORES_DIR, WALNUT_HOME } from '../constants.js'
+import { CRON_FILE, IS_DEMO, IS_EPHEMERAL, LOG_DIR, PLUGIN_STORES_DIR, WALNUT_HOME } from '../constants.js'
 import { exitTraceFileFor, localDaemonDirChoice, localProductionDaemonDir } from '../lib/daemon-dir.js'
 import { isCompanion, isFollower, isHostReplica, placement, role } from '../core/server-role.js'
 import { capabilityFacts, capabilityList } from '../core/capabilities.js'
@@ -613,6 +613,7 @@ export interface ServerOptions {
   port?: number
   dev?: boolean
   bindAddress?: string
+  beforeRoutes?: import('express').RequestHandler
 }
 
 let httpServer: HttpServer | null = null
@@ -673,6 +674,7 @@ let hostWarmup: import('../core/hosts/host-warmup.js').HostWarmup | null = null
 let unsubscribeHostPhase: (() => void) | null = null
 /** Unhooks the local Claude Code readiness → system:health push. */
 let unsubscribeLocalClaude: (() => void) | null = null
+let unsubscribeAgentWaitResend: (() => void) | null = null
 /** The primary's leader heartbeat, or the companion's takeover loop (core/leader/). */
 let leaderLoopHandle: { stop: () => void } | null = null
 let searchCopyHandle: { stop: () => Promise<void> } | null = null
@@ -941,6 +943,19 @@ interface GitAutoCommitHealth {
   consecutiveFailures: number
   /** True while git-sync refuses auto-commits (mass-revert / torn-worktree guard). */
   safeMode?: boolean
+  /**
+   * This server keeps no backup on purpose, so `protected: false` is no problem to show: the Demo
+   * and a developer's test server run on a throwaway copy, a replica's copy is the Mac's
+   * (2026-11-10 review: a new Demo user's first screen read "Data Backup: Not protected").
+   */
+  off?: 'demo' | 'test' | 'copy'
+}
+
+/** Why this server runs no data backup by design, or undefined when it should run one. */
+export function gitBackupOff(): GitAutoCommitHealth['off'] {
+  if (IS_DEMO) return 'demo'
+  if (IS_EPHEMERAL) return 'test'
+  return bootPolicy('git-auto-commit') ? undefined : 'copy'
 }
 
 // ── Pending cron notifications for next-cycle delivery ──
@@ -1002,15 +1017,24 @@ export function getSystemHealth(): SystemHealthState {
 }
 
 export function getGitAutoCommitHealth(): Readonly<GitAutoCommitHealth> {
-  return gitAutoCommitHandle?.health ?? { protected: false, error: 'not started', consecutiveFailures: 0 }
+  if (gitAutoCommitHandle) return gitAutoCommitHandle.health
+  const off = gitBackupOff()
+  return off ? { protected: false, consecutiveFailures: 0, off } : { protected: false, error: 'not started', consecutiveFailures: 0 }
 }
 
 /** Re-run all health checks, update shared state, and broadcast to clients. */
 export async function refreshSystemHealth(): Promise<SystemHealthState> {
   systemHealth.claudeCliAvailable = checkClaudeCliAvailable()
-  applyCredentialHealth(await resolveCredentialHealth())
+  await refreshCredentialHealth()
   broadcastEvent('system:health', systemHealth)
   return systemHealth
+}
+
+let credentialHealthGeneration = 0
+async function refreshCredentialHealth(): Promise<void> {
+  const own = ++credentialHealthGeneration
+  const cred = await resolveCredentialHealth()
+  if (own === credentialHealthGeneration) applyCredentialHealth(cred)
 }
 
 /** Copy one credential-health result into the shared state. Every refresh path
@@ -1031,7 +1055,8 @@ function applyCredentialHealth(cred: Awaited<ReturnType<typeof resolveCredential
 
 /** Check if Claude Code CLI is available to Walnut. */
 function checkClaudeCliAvailable(): boolean {
-  return isClaudeCliInstalled()
+  const probe = systemHealth.localClaude
+  return probe && !probe.claude.unknown ? probe.claude.found : isClaudeCliInstalled()
 }
 
 /** Resolve provider readiness + where the Bedrock credential came from.
@@ -1061,7 +1086,7 @@ async function resolveCredentialHealth(): Promise<{
     const { isLocalModelProvider, probeLocalProvider, localProviderBaseUrl } = await import('../model/providers/local-provider.js')
     const { claudeCodeNeeded } = await import('../core/agents/claude-code-needed.js')
     const config = await getConfig()
-    const cli = await detectClaudeCliAsync()
+    const cli = { ...await detectClaudeCliAsync(), installed: checkClaudeCliAvailable() }
     const mainProvider = resolveMainProviderName(config, cli.installed)
     const providers = buildProviderMap(config.providers, config)
     const mainProv = providers[mainProvider]
@@ -1273,7 +1298,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Own-server URL for agent-facing skills/tools (e.g. the walnut-install-plugin skill curls
   // the REST API). Sandbox/demo servers on other ports inherit the right value.
   // Set again after listen, where port 0 resolves to a real number.
-  process.env.WALNUT_SERVER_URL = `http://localhost:${port}`
+  process.env.WALNUT_SERVER_URL = `http://${IS_DEMO ? '127.0.0.1' : 'localhost'}:${port}`
 
   // Tripwire: never serve the PRODUCTION port from a test/temp home. A shell with
   // leaked vitest env (VITEST / NODE_ENV=test / OPEN_WALNUT_HOME=…test-global) makes
@@ -1369,7 +1394,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // Arm the session gate before anything can spawn; unarmed, it refuses every start.
     const { sessionIdentitiesInStore } = await import('../core/session-db.js')
     const { armEphemeralSessionGate } = await import('../providers/ephemeral-session-gate.js')
-    armEphemeralSessionGate(sessionIdentitiesInStore())
+    await armEphemeralSessionGate(sessionIdentitiesInStore())
   }
 
   // Route every log.error()/log.fatal() into the notification center (deduped
@@ -1425,8 +1450,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     if (problem) log.web.error(`SQLite: ${problem}`)
   }
   {
-    const cred = await resolveCredentialHealth()
-    applyCredentialHealth(cred)
+    await refreshCredentialHealth()
+    const cred = systemHealth
     // Only a setup that runs on Claude Code needs it (core/agents/claude-code-needed.ts):
     // on another engine and provider (local models) its absence is no news.
     if (!systemHealth.claudeCliAvailable) {
@@ -1437,8 +1462,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       log.web.warn('No AI provider configured — configure one in Settings')
     } else if (cred.mainProvider === 'claude_cli') {
       log.web.info('AI provider: Claude Code', { auth: cred.claudeCliAuth, implicit: cred.mainProviderImplicit })
-    } else if (cred.source && cred.source !== 'config') {
-      log.web.info('Auto-detected Bedrock credential', { source: cred.source, detail: cred.detail })
+    } else if (cred.credentialSource && cred.credentialSource !== 'config') {
+      log.web.info('Auto-detected Bedrock credential', { source: cred.credentialSource, detail: cred.credentialDetail })
     }
   }
 
@@ -1625,12 +1650,24 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         systemHealth.localClaude = status
         systemHealth.claudeCliAvailable = checkClaudeCliAvailable()
         broadcastEvent('system:health', systemHealth)
+        void refreshCredentialHealth().then(() => {
+          broadcastEvent('system:health', systemHealth)
+        }).catch(err => log.web.warn('local setup: provider health could not be refreshed', { error: String(err) }))
       },
     })
+  }
+  // A message parked because the agent could not run (Claude Code missing, signed out) goes out
+  // by itself once its host reads runnable (core/sessions/agent-wait-resend.ts). Where this
+  // machine's readiness is kept (the same boot policy), never on a replica.
+  if (bootPolicy('local-claude-probe')) {
+    const { wireAgentWaitResend } = await import('../core/sessions/agent-wait-resend.js')
+    unsubscribeAgentWaitResend?.()
+    unsubscribeAgentWaitResend = await wireAgentWaitResend()
   }
 
   const app = express()
   currentApp = app
+  if (options.beforeRoutes) app.use(options.beforeRoutes)
 
   // Never auto-generate ETags for API JSON. Express's default weak ETag let the
   // browser turn concurrent duplicate GETs into If-None-Match revalidations; a
@@ -3051,7 +3088,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // Every port of a host replica is a tunnel port (already refused before listen, local-trust.ts).
       if (isHostReplica()) (await import('./middleware/local-trust.js')).markTunnelPort(bound.port)
       setPluginApiBase(`http://127.0.0.1:${bound.port}`)
-      process.env.WALNUT_SERVER_URL = `http://localhost:${bound.port}`
+      process.env.WALNUT_SERVER_URL = `http://${IS_DEMO ? '127.0.0.1' : 'localhost'}:${bound.port}`
       // This server's own ops and every local session it launches must talk to
       // THIS server, never the default :3456 (src/lib/self-api-root.ts). The env
       // copy reaches descendants spawned from here on (a lazily started daemon,
@@ -4557,6 +4594,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // the emit path reads this map and only config:changed refreshes it.
     let hostDefs: HostDefs = {}
     const { pushHostFrame, pushHostRemoved } = await import('../core/hosts/host-connect-action.js')
+    const { endHostLink, hostsThatLeft } = await import('../core/hosts/host-link-end.js')
     const { recomputeHostReadinessFloors } = await import('../core/hosts/host-readiness.js')
     const shown = (d: HostDefs): Set<string> =>
       new Set(Object.entries(d).filter(([k, v]) => k !== '__local__' && v.enabled !== false).map(([k]) => k))
@@ -4570,8 +4608,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         if (!announce) return
         const after = shown(hostDefs)
         // A host that left Settings (removed or disabled) must leave every
-        // surface live: one tombstone on the existing host:status event.
-        for (const host of before) if (!after.has(host)) pushHostRemoved(host)
+        // surface live: one tombstone on the existing host:status event. And
+        // Walnut's own link to it ends now (its connection and SSH masters), so
+        // a later Connect signs in again (core/hosts/host-link-end.ts).
+        for (const host of hostsThatLeft(before, after)) {
+          pushHostRemoved(host)
+          void endHostLink(host)
+        }
         // One a read added gets its frame now: its last phase change may have found no row.
         for (const host of after) if (!before.has(host)) pushHostFrame(host, hostDefs[host])
       } catch { /* config not ready yet */ }
@@ -4787,12 +4830,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     try {
       const prev = systemHealth.hasReadyProvider
       const prevSource = systemHealth.credentialSource
-      const cred = await resolveCredentialHealth()
       const prevProvider = systemHealth.mainProvider
       const prevNeeded = systemHealth.claudeCodeNeeded
-      applyCredentialHealth(cred)
-      if (cred.hasReadyProvider !== prev || cred.source !== prevSource || cred.mainProvider !== prevProvider
-        || cred.claudeCodeNeeded !== prevNeeded) {
+      await refreshCredentialHealth()
+      if (systemHealth.hasReadyProvider !== prev || systemHealth.credentialSource !== prevSource || systemHealth.mainProvider !== prevProvider
+        || systemHealth.claudeCodeNeeded !== prevNeeded) {
         broadcastEvent('system:health', systemHealth)
       }
       // A different model may need a newer Claude Code (claude-version-floor.ts).
@@ -4817,8 +4859,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       const prov = buildProviderMap(config.providers, config)[systemHealth.mainProvider!]
       if (!prov || !isLocalModelProvider(prov)) return
       if ((await probeLocalProvider(prov)).ok === systemHealth.hasReadyProvider) return
-      const cred = await resolveCredentialHealth()
-      applyCredentialHealth(cred)
+      await refreshCredentialHealth()
       broadcastEvent('system:health', systemHealth)
     })().catch(() => { /* non-critical */ })
   }, LOCAL_PROVIDER_RECHECK_MS)
@@ -5771,6 +5812,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // A process that ended before it read its first line: restart recovery sends
       // that line again (sessions/start-recovery.ts), and the task says it waits on the machine.
       if (startRecovery) shouldPublish = false
+      // Claude Code is not installed (or cannot run) yet: a setup step, not a fault. The
+      // session's own row says it with Retry, and the setup banner holds the install, so
+      // no card, and no "Fix with agent" for something an agent cannot run without.
+      if (shouldPublish) {
+        const { isClaudeRuntimeMissing } = await import('../providers/delivery-failure.js')
+        if (isClaudeRuntimeMissing(error)) shouldPublish = false
+      }
 
       // delivery_failed = connectivity status, not a turn outcome. The session is
       // still valid and the message batch is safely back in 'pending'. Avoid
@@ -7233,6 +7281,8 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   unsubscribeHostPhase = null
   unsubscribeLocalClaude?.()
   unsubscribeLocalClaude = null
+  unsubscribeAgentWaitResend?.()
+  unsubscribeAgentWaitResend = null
   bus.unsubscribe('host-status-defs')
   bus.unsubscribe('task-wait-until') // WAIT_UNTIL_SUBSCRIBER, core/task-wait-until.ts
   bus.unsubscribe('user-status-sync') // core/user-status-sync.ts; its timers stop below

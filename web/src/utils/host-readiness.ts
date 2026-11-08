@@ -80,7 +80,8 @@ export function hostReadinessProblems(status: HostStatus | null | undefined): Ho
 export function hostReadinessInfoNotes(status: HostStatus | null | undefined): string[] {
   const out = hostReadinessLines(status).filter((p) => INFO_ONLY_KINDS.includes(p.kind)).map((p) => p.message);
   for (const w of Array.isArray(status?.warnings) ? status!.warnings : []) {
-    if (nonEmpty(w) && !out.includes(w)) out.push(w);
+    // A warning is often the same note with its host named first ("devbox: Using ..."): show it once.
+    if (nonEmpty(w) && !out.some((o) => o === w || w.endsWith(`: ${o}`) || o.endsWith(`: ${w}`))) out.push(w);
   }
   return out;
 }

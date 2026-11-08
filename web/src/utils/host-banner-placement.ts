@@ -19,7 +19,7 @@ import { useLocation } from 'react-router-dom';
 import { getAllHostStatus, serverNow, subscribeHostStatus } from '@/hooks/useHostStatus';
 import { nextBanner, type BannerInput } from '@/utils/attention-banner-model';
 import { getHostDismissed, subscribeHostDismissed } from '@/utils/host-banner-dismiss';
-import { getUserEngagedHosts, subscribeUserRetry } from '@/utils/host-user-retrying';
+import { getPromptedHosts, getUserEngagedHosts, subscribeUserRetry } from '@/utils/host-user-retrying';
 
 export type HostBannerPlacement = 'tasks' | 'slot' | 'draft' | 'none';
 export type HostBannerOwner = HostBannerPlacement;
@@ -171,7 +171,7 @@ export function bellPresentation(i: BellPresentationInput): BellPresentation {
 
 // ── Host attention off the card's own model ──
 
-type AttentionInput = Pick<BannerInput, 'statuses' | 'dismissed' | 'now' | 'engaged'>;
+type AttentionInput = Pick<BannerInput, 'statuses' | 'dismissed' | 'now' | 'engaged' | 'prompted'>;
 
 /**
  * Would the banner give any host a row right now? The SAME model the banner
@@ -186,7 +186,7 @@ export function hostAttentionOf(input: AttentionInput): { on: boolean; wakeAt: n
 }
 
 function inputNow(): AttentionInput {
-  return { statuses: getAllHostStatus(), dismissed: getHostDismissed(), now: serverNow(), engaged: getUserEngagedHosts() };
+  return { statuses: getAllHostStatus(), dismissed: getHostDismissed(), now: serverNow(), engaged: getUserEngagedHosts(), prompted: getPromptedHosts() };
 }
 
 function subscribeAttention(cb: () => void): () => void {

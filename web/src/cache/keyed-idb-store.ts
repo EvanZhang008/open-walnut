@@ -26,6 +26,8 @@
  * existing adapter type (and its tests) unchanged. One caller stores single keys
  * and never batches, another only ever batches; each gets the other for free.
  */
+import { demoDatabaseName } from '../utils/demo-generation';
+
 export interface KeyedIdbAdapter<T> {
   get(key: string): Promise<T | null>;
   put(key: string, record: T): Promise<void>;
@@ -93,7 +95,8 @@ export interface KeyedIdbStore<T> {
 const AFTER_ANY_KEY = '\uffff';
 
 export function createKeyedIdbStore<T>(opts: KeyedIdbStoreOptions): KeyedIdbStore<T> {
-  const { dbName, storeName, maxRecords } = opts;
+  const { storeName, maxRecords } = opts;
+  const dbName = typeof window === 'undefined' ? opts.dbName : demoDatabaseName(opts.dbName);
   const timeField = opts.timeField ?? 'updatedAt';
   const version = opts.version ?? 1;
 

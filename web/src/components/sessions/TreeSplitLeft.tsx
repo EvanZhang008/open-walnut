@@ -37,6 +37,7 @@
  */
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react';
 import type { ImageAttachment } from '@/api/chat';
+import type { DraftOrigin } from '@/utils/drafts';
 import { ChatInput } from '@/components/chat/ChatInput';
 import { MacAwayComposer } from '@/components/layout/AwayLine';
 import { SessionThreadsContext, passiveThreadsApi, useSessionThreadsApi, type SessionThreadsApi, type ThreadStackApi, type ThreadStackNav } from '@/contexts/SessionThreadsContext';
@@ -74,8 +75,8 @@ export interface TreeSplitLeftProps {
   mentionCwd?: string;
   mentionHost?: string;
   /** The panel's composer send into this page's question (SessionPanel's sendFor + withComments). */
-  onSendFor: (key: string, text: string, images?: ImageAttachment[]) => Promise<boolean>;
-  onInterruptSendFor: (key: string, text: string, images?: ImageAttachment[]) => Promise<boolean>;
+  onSendFor: (key: string, text: string, images?: ImageAttachment[], origin?: DraftOrigin) => Promise<boolean>;
+  onInterruptSendFor: (key: string, text: string, images?: ImageAttachment[], origin?: DraftOrigin) => Promise<boolean>;
   onStop: () => void;
   isStreaming: boolean;
   /** The Mac runs this session and is away: sending waits (MacAwayComposer). */
@@ -147,7 +148,7 @@ function usePinnedThreads(base: SessionThreadsApi, leftKey: string, rightKey: st
     currentThreadKey: leftKey,
     // A pin on this page lands here (the page beside the panel's own shows it).
     pinJump: base.pinJump,
-    sendToTarget: (text: string, images?: ImageAttachment[]) => base.sendToQuestion(leftKey, text, images),
+    sendToTarget: (text: string, images?: ImageAttachment[], origin?: DraftOrigin) => base.sendToQuestion(leftKey, text, images, origin),
   }), [base, stack, leftKey]);
 }
 
@@ -186,12 +187,12 @@ export const TreeSplitLeft = memo(function TreeSplitLeft(p: TreeSplitLeftProps) 
     ? MAIN_HALF_PLACEHOLDER
     : followUpPlaceholder(displayTitleOf(base.tree.byKey.get(leftKey), base.metaIndex).title);
   const { onSendFor, onInterruptSendFor } = p;
-  const send = useCallback(async (text: string, images?: ImageAttachment[]): Promise<boolean> => {
-    const ok = await onSendFor(leftKey, text, images);
+  const send = useCallback(async (text: string, images?: ImageAttachment[], origin?: DraftOrigin): Promise<boolean> => {
+    const ok = await onSendFor(leftKey, text, images, origin);
     if (ok) setScrollNonce((x) => x + 1);
     return ok;
   }, [onSendFor, leftKey]);
-  const interruptSend = useCallback((text: string, images?: ImageAttachment[]) => onInterruptSendFor(leftKey, text, images), [onInterruptSendFor, leftKey]);
+  const interruptSend = useCallback((text: string, images?: ImageAttachment[], origin?: DraftOrigin) => onInterruptSendFor(leftKey, text, images, origin), [onInterruptSendFor, leftKey]);
   return (
     <div className={`tree-split-left${p.side === 'S' ? ' tree-split-sibling' : ''}`} data-tree-half={p.side} data-thread-key={leftKey} ref={rootRef} style={{ gridColumn: p.column }}>
       <SessionThreadsContext.Provider value={pinned}>

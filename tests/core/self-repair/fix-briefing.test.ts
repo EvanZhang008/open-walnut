@@ -8,7 +8,7 @@
  *     off `npm run dev:prod` (the repo's own CLAUDE.md tells it to deploy that
  *     way, and the running Walnut was never served from that tree).
  *
- * Pure functions, no fs and no constants: fix-briefing.ts imports types only.
+ * Pure functions, no fs and no constants: fix-briefing.ts imports types and the pure hint format only.
  */
 
 import { describe, it, expect } from 'vitest';

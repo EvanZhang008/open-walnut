@@ -49,6 +49,7 @@ import { FrameMarkGroup, unionOf, type FrameMarkSpec } from './preview-marks';
 import { inPlaceCardPosition } from '@/utils/in-place-card';
 import { log } from '@/utils/log';
 import '@/styles/doc-comments.css';
+import { claimFileCardEscape } from '@/utils/file-card-escape';
 
 export { HL_DOC_COMMENT, HL_DOC_COMMENT_CURRENT };
 const OPEN_LAYER = panelLayer(HL_DOC_COMMENT);
@@ -110,25 +111,11 @@ export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function Do
   const [marks, setMarks] = useState<Marks>(NO_MARKS);
   const anchored = marks.drawn;
   const layerRef = useRef<HTMLDivElement | null>(null);
-  const currentRef = useRef(currentId);
-  currentRef.current = currentId;
-  const draftRef = useRef(draft);
-  draftRef.current = draft;
   const cardEls = useRef(new Map<string, HTMLDivElement>());
   const ranges = useRef(new Map<string, Range>());
   const revealRef = useRef<string | null>(null);
   /** The comment the source editor was last scrolled to for (once per ask). */
   const scrolledFor = useRef<string | null>(null);
-  /** Escape closes the current card or the draft (the frame's window hears it too, see below). */
-  const escapeRef = useRef<(e: KeyboardEvent) => void>(() => {});
-  escapeRef.current = (e) => {
-    if (e.key !== 'Escape' || e.defaultPrevented || (!currentRef.current && !draftRef.current)) return;
-    // Not an Escape meant for something else on the page (an editor's menu, a dialog).
-    const active = document.activeElement;
-    if (active && active !== document.body && !layerRef.current?.contains(active) && !rootRef.current?.contains(active)) return;
-    setCurrentId(null);
-    setDraft(null);
-  };
   // Matched once per text (a scroll that redraws the same text matches nothing again).
   const viewMemo = useRef(new LocateMemo());
   const docMemo = useRef(new LocateMemo());
@@ -450,12 +437,16 @@ export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function Do
       off?.();
     };
   }, [rootRef, filePath, inFrame, channel, group, surface, surfaceNonce]);
+  // One Escape closes the card and only it, ahead of the sheet's own exit (utils/file-card-escape.ts);
+  // in its reply box the box's own handler takes it.
   useEffect(() => {
     if (!currentId && !draft) return;
-    const onKey = (e: KeyboardEvent) => escapeRef.current(e);
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [currentId, draft]);
+    return claimFileCardEscape(
+      () => ({ card: layerRef.current?.querySelector('.doc-comment-card.is-current') ?? null, scope: rootRef.current?.closest('.session-panel') ?? rootRef.current ?? null }),
+      () => { setCurrentId(null); setDraft(null); },
+      'textarea',
+    );
+  }, [currentId, draft, rootRef]);
   useEffect(() => { setCurrentId(null); setDraft(null); setListOpen(false); setPeekId(null); revealRef.current = null; scrolledFor.current = null; }, [filePath]);
   // A new file or a reload: the doc's text is read afresh.
   useEffect(() => { docText.current.at = 0; docText.current.text = null; }, [filePath, surfaceNonce]);

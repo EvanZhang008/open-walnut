@@ -28,7 +28,7 @@ import {
   headIdsOfPath, pathForLeaf, readAskDrafts, readPersistedStack, readUrlLeaf, restorePath, setThreadLeaf,
   writeAskDrafts, writePersistedStack, type PersistedStack,
 } from '@/utils/thread-stack-persist';
-import { subscribeDraft } from '@/utils/drafts';
+import { onDraftSettled, subscribeDraft } from '@/utils/drafts';
 import { nextSamePassageKeys } from '@/utils/thread-same-passage';
 import { VIEWED_PREFIX, readViewed, writeViewed } from '@/utils/thread-viewed-store';
 import { log } from '@/utils/log';
@@ -488,6 +488,18 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
     log.info('threads', 'pending page send refused, kept as a draft', { sessionId: argsRef.current.sessionId });
     queueMicrotask(persist);
   }, [persist]);
+
+  // A Retry sent the words a refused first send left as a draft row: that row goes, no other.
+  useEffect(() => onDraftSettled((origin) => {
+    const a = argsRef.current;
+    const pageKey = [...draftsRef.current.keys()].find((k) => composerDraftKey(a.sessionId, k, a.tree) === origin.key);
+    if (!pageKey) return;
+    const next = new Map(draftsRef.current);
+    next.delete(pageKey);
+    draftsRef.current = next;
+    setDrafts(next);
+    queueMicrotask(persist);
+  }), [persist]);
 
   // ── Reload restore (C69): once per session, when the tree knows its questions.
   // Every head on the stored path must still exist, else the root, silently.

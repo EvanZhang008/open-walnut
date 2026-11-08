@@ -2,7 +2,7 @@
  * A web page the Mac app replaces ends with it (2026-11-11: the page process a recycle replaced
  * was still running its page, its timers and its socket to the server, at 1.7 GB, 17 minutes
  * after the swap, so the app held two pages). Every function that puts a web view into a window
- * where one may already be must hand the old one to WebContentWatchdog.retireReplacedPage, which
+ * where one may already be must hand the old one to WebContentProcess.retireReplacedPage, which
  * unloads its page and ends its process once the new page has loaded.
  *
  * Enumerated from the source: every `contentView = <web view>` in the Mac app, by the function it
@@ -50,7 +50,7 @@ describe('a web view the Mac app replaces is retired', () => {
 
   it('every one retires the old page, or only fills a new window', () => {
     const bad = sites().filter((s) => !(`${s.file}:${s.fn}` in NEW_WINDOW_ONLY) && !s.body.includes('retireReplacedPage('))
-    expect(bad.map((s) => `${s.file}:${s.fn} (${s.line})`), 'hand the old web view to WebContentWatchdog.retireReplacedPage, or list a new-window-only function with why').toEqual([])
+    expect(bad.map((s) => `${s.file}:${s.fn} (${s.line})`), 'hand the old web view to WebContentProcess.retireReplacedPage, or list a new-window-only function with why').toEqual([])
   })
 
   it('the list names only functions that exist', () => {

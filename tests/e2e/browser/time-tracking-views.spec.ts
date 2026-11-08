@@ -10,6 +10,7 @@
  *   PW_WEBKIT=1 npx playwright test time-tracking-views --project webkit
  */
 import { test, expect, type Page } from '@playwright/test'
+import { goToSessionFolder } from './todo-panel-helpers'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 
@@ -26,7 +27,7 @@ async function fixtureCwd(page: Page): Promise<string> {
   return (body?.session?.cwd ?? body?.cwd) as string
 }
 
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page, baseURL }) => {
   await page.addInitScript(() => {
     try {
       // An automated browser is not the human: the tracker stays off unless a test opts in.
@@ -34,7 +35,8 @@ test.beforeEach(async ({ page }) => {
       localStorage.setItem('open-walnut-file-explorer-tree-collapsed', '0')
     } catch { /* off */ }
   })
-  await page.goto('/')
+  await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
+  await page.getByRole('link', { name: 'Open Walnut' }).click()
   await page.waitForLoadState('networkidle')
 })
 
@@ -58,6 +60,7 @@ test('views and the open file reach the heartbeat and the report', async ({ page
     await panel.getByRole('button', { name: 'Files', exact: true }).click()
     const explorer = panel.locator('.session-file-explorer')
     await expect(explorer).toBeVisible({ timeout: 15_000 })
+    await goToSessionFolder(explorer)
 
     // The markers are in the DOM where the resolver looks for them.
     await expect(panel.locator('.session-panel-chat-col')).toHaveAttribute('data-time-view', 'chat')

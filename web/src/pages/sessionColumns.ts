@@ -161,6 +161,31 @@ export function trimUnlockedToMax(cols: SessionSlot[], max: number, keep?: Reado
 }
 
 /**
+ * The columns a capacity shrink (a narrower window, the phone layout) closed, back once the
+ * room is: a resize never closes what the person opened (2026-11-09 review: a window made
+ * narrow, then wide, kept only the CEO's panel, and in the phone layout nothing went to the
+ * taskbar either). Up to the budget, in the order they were closed; ones open again stay put.
+ */
+export function regrowColumns(cols: SessionSlot[], evicted: readonly SessionSlot[], max: number): SessionSlot[] {
+  const room = max - realColumns(cols).length;
+  if (room <= 0) return cols;
+  const back = evicted.filter(s => !cols.some(c => c.id === s.id)).slice(0, room);
+  return back.length ? [...cols, ...back] : cols;
+}
+
+/**
+ * The shrink's closed columns still waiting for a regrow: without the ones the user closed since
+ * (`closed`: a column's ×, a chip's ×, a completed task's close) and the ones on the strip again
+ * (`strip`: opened again by a click, a chip, a link), whose later fate is the user's. A widen
+ * must never bring back a column the user closed (2026-11-10 review). Returns `pending` itself
+ * when nothing dropped out.
+ */
+export function pendingRegrow(pending: readonly SessionSlot[], strip: readonly SessionSlot[], closed: ReadonlySet<string>): SessionSlot[] {
+  const next = pending.filter(s => !closed.has(s.id) && !strip.some(c => c.id === s.id));
+  return next.length === pending.length ? (pending as SessionSlot[]) : next;
+}
+
+/**
  * Returns `cols` unchanged (reference-equal) iff `id` is new and the pins leave no
  * slot even after the lock grant (MAX_PANELS columns locked) — callers use
  * `next === prev` to detect this rejection path and show a toast. Any other case

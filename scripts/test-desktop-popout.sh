@@ -45,5 +45,14 @@ swiftc -parse-as-library -D WALNUT_APP -D WALNUT_DESKTOP_TEST \
     -Xlinker -weak_framework -Xlinker AppIntents \
     -framework Cocoa -framework WebKit -framework AVFoundation -framework Carbon -framework EventKit -framework Security -framework UserNotifications \
     -o "$OUT/popout-tests"
-"$OUT/popout-tests" | tee "$OUT/result.log"
+APP="$OUT/PopoutTests.app"
+mkdir -p "$APP/Contents/MacOS"
+mv "$OUT/popout-tests" "$APP/Contents/MacOS/popout-tests"
+python3 - "$APP/Contents/Info.plist" <<'PY'
+import plistlib, sys
+with open(sys.argv[1], 'wb') as out:
+    plistlib.dump({'CFBundleIdentifier': 'dev.openwalnut.popout-tests', 'CFBundleExecutable': 'popout-tests', 'CFBundlePackageType': 'APPL', 'CFBundleName': 'Popout Tests'}, out)
+PY
+codesign --force --sign - "$APP"
+"$APP/Contents/MacOS/popout-tests" | tee "$OUT/result.log"
 grep -q 'PopoutWindowTests: .* passed' "$OUT/result.log"

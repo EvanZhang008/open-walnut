@@ -647,13 +647,28 @@ describe('both twins wire the migration the same way', () => {
       expect(text, file).toMatch(/migrated: (\(\) => \{ setTimeout\(\(\) => |function \(\) \{ setTimeout\(function \(\) \{ )triggerHoldsChanged\(\)/)
       // Nothing moves v2 records between dirs: no state dir candidates, no conflict view.
       expect(text, file).not.toMatch(/stateDirs:|JOURNAL_STATE_CANDIDATES|conflictOf\(|journalMigration\.afterAck/)
-      // The offline host's minute sweep starts inside migrateJournals() only: a long CLI run
-      // (walnut wait, up to a day) never reads or writes the daemon's journals.
+      // Only daemon boot schedules the sweep; a fenced Demo never delivers its journals.
       const fnAt = text.indexOf('function migrateJournals(')
       const fnEnd = text.indexOf('\n}\n', fnAt)
+      const schedules = [...text.matchAll(/setInterval\(offlineSweepTick, 60_?000\)/g)].map((m) => m.index ?? 0)
+      expect(schedules.length, file).toBe(1)
+      expect(schedules[0] > fnAt && schedules[0] < fnEnd, `${file}: the sweep starts in migrateJournals()`).toBe(true)
+      const tickAt = text.indexOf('function offlineSweepTick(')
+      const tickEnd = text.indexOf('\n}\n', tickAt) + 2
       const sweeps = [...text.matchAll(/offlineHost\.sweep\(\)/g)].map((m) => m.index ?? 0)
       expect(sweeps.length, file).toBe(1)
-      expect(sweeps[0] > fnAt && sweeps[0] < fnEnd, `${file}: the sweep starts in migrateJournals()`).toBe(true)
+      expect(sweeps[0] > tickAt && sweeps[0] < tickEnd, file).toBe(true)
+      const fence = { fenced: false }
+      let calls = 0
+      const tick = new Function('demoQuiesce', 'offlineHost',
+        text.slice(tickAt, tickEnd).replace('(): void', '()') + '\nreturn offlineSweepTick')(
+        fence, { sweep: () => { calls++; return Promise.resolve() } },
+      )
+      tick()
+      expect(calls, file).toBe(1)
+      fence.fenced = true
+      tick()
+      expect(calls, file).toBe(1)
       // Nothing at module load copies, imports or sweeps (the binary also runs as the walnut CLI).
       expect(text, file).not.toMatch(/^(const|var) [^\n]*\.(migrateSlices|sweepBlobs|importLegacy)\(/m)
       expect(text, file).not.toMatch(/^offlineJournal\.(migrateSlices|sweepBlobs)\(/m)

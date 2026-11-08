@@ -16,6 +16,7 @@
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
+import { IS_DEMO } from '../../constants.js'
 import { isFollower } from '../../core/server-role.js'
 import { getConfig, updateHostServerConfig } from '../../core/config-manager.js'
 import { MaskedValueError, maskSecretShapes, restoreMaskedSecrets } from '../../core/config-secret-shape.js'
@@ -63,8 +64,13 @@ async function hostEntry(hostKey: string) {
   }
 }
 
-hostServersRouter.use((_req, res, next) => {
+hostServersRouter.use((req, res, next) => {
   if (isFollower()) { res.status(404).json({ error: 'not_found' }); return }
+  // The Demo runs only its own daemon on a remote host (providers/demo-remote-host.ts), never a server there.
+  if (IS_DEMO && req.method !== 'GET' && req.method !== 'HEAD') {
+    res.status(409).json({ error: 'The Demo does not set up a server on remote hosts.', code: 'demo_host_server_off' })
+    return
+  }
   next()
 })
 

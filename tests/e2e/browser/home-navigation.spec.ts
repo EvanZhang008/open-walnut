@@ -1,7 +1,7 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { isolateUiPrefs, openListProject, seedRecentOpened } from './todo-panel-helpers';
 import { presetPanelDesign } from './status-section-helpers';
-import { openChatOnLoad } from './draft-helpers';
+import { HOME_FOLDER, openChatOnLoad } from './draft-helpers';
 import { activeView, chooseViewOption, closeViewMenu, homeToolbar, openHome, openViewMenu } from './home-navigation-helpers';
 import { addFilter, chooseDisplayOption, closeFilterMenu, displayButton, filterChip, openViewsPage, removeFilterChip } from './filter-bar-helpers';
 import { openKebabGroup } from './kebab-group-helpers';
@@ -18,9 +18,6 @@ async function boot(page: Page, baseURL: string) {
   // The grid checks place a task that needs you in its tier and project; By project
   // keeps it there (Flat, the default, draws it in the Needs you section).
   await presetPanelDesign(page, 'project');
-  // These tests are about tier headings. A user who never picked a tier sees none while one
-  // tier holds cards (spec 5.10, pinned in filter-bar-board.spec.ts), so mark one picked.
-  await page.addInitScript(() => localStorage.setItem('walnut-todo-tier-used', '1'));
   await openHome(page, baseURL);
 }
 /** Locate from the panel's ⋮ menu (its Locate row; the header's crosshair until 2026-11-09). */
@@ -364,9 +361,6 @@ test('empty tiers stay hidden, heading menus organize and fold, and the panel hi
   await page.addInitScript(() => {
     localStorage.setItem('walnut-todo-list-open-projs', JSON.stringify(['Orchard', 'Meadowlark']));
     localStorage.setItem('walnut-todo-list-collapsed-projs', '[]');
-    // A user who has picked tiers before: with one tier holding cards, a new user's board
-    // draws no tier heading at all (spec 5.10); this test is about the headings.
-    localStorage.setItem('walnut-todo-tier-used', '1');
   });
   const ago = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString();
   const task = (id: string, title: string, project: string, extra: Record<string, unknown> = {}) => ({
@@ -847,7 +841,8 @@ test('plain task creation needs no folder and retains the explicit AI launch pat
   await boot(page, baseURL!);
   await navigation(page).getByRole('button', { name: 'New task', exact: true }).click();
   const draft = page.locator('.main-page-session-column .draft-session-panel').first();
-  await expect(draft.locator('.draft-composer-bar')).toContainText('Choose folder');
+  // A New task with no pick starts in the home folder (draft-home-default.ts); no project.
+  await expect(draft.locator('.draft-composer-bar')).toContainText(HOME_FOLDER);
   const title = `Navigation task ${test.info().project.name} ${Date.now()}`;
   await draft.locator('.chat-input-textarea').fill(`${title}\n\nKeep the description.`);
   await expect(draft.locator('.draft-later-btn')).toBeEnabled();
@@ -862,7 +857,7 @@ test('plain task creation needs no folder and retains the explicit AI launch pat
   expect(detail.project).toBe('');
   expect(detail.session_id).toBeFalsy();
   await navigation(page).getByRole('button', { name: 'New task', exact: true }).click();
-  await expect(page.locator('.main-page-session-column .draft-session-panel').first().locator('.draft-composer-bar')).toContainText('Choose folder');
+  await expect(page.locator('.main-page-session-column .draft-session-panel').first().locator('.draft-composer-bar')).toContainText(HOME_FOLDER);
 });
 
 test('a Notes tree failure offers Retry and recovers', async ({ page, baseURL }) => {

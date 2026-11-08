@@ -156,6 +156,9 @@
 .rh-readiness-line[data-tone='info'] .rh-readiness { color: var(--fg-secondary, var(--fg-muted)); }
 .rh-readiness-line[data-tone='success'] .rh-readiness { color: var(--fg); }
 .rh-readiness-actions { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+/* Its lines stack: a note and "Last checked" ran together as one sentence (2026-11-08). */
+.rh-readiness-block { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; }
+.rh-readiness-block > .rh-readiness-line { align-self: stretch; }
 .rh-readiness-note { color: var(--fg-muted); overflow-wrap: anywhere; }
 .rh-last-checked,
 .rh-receipt { color: var(--fg-muted); font-size: 11px; }

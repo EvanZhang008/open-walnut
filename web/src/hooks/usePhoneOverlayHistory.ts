@@ -27,8 +27,12 @@
  * - React StrictMode (dev, so every Playwright fixture) unmounts and remounts
  *   each effect synchronously. A release is settled in a microtask, so a
  *   remount with the same id reclaims its history entry instead of popping it.
- * - Leaving phone layout (rotate, resize) closes every layer and removes their
- *   entries with `history.go(-depth)`, so no empty back survives a breakpoint.
+ *   Every release of a tick is settled together in ONE unwind, and a push made
+ *   while one is unsettled waits for it (a replaced column, `settleReleases`).
+ * - Leaving phone layout (rotate, resize) removes every layer's entry with
+ *   `history.go(-depth)`, so no empty back survives a breakpoint. Menus and
+ *   sheets close; a `keepOnBreakpoint` layer (session, viewer, board, file,
+ *   draft, chat) keeps its owner's state, which desktop then shows.
  */
 import { useCallback, useEffect, useRef, useSyncExternalStore, type ReactNode } from 'react';
 import { PHONE_LAYOUT_QUERY, isPhoneLayout, usePhoneLayout } from './usePhoneLayout';
@@ -65,6 +69,18 @@ export interface PhoneOverlayOptions {
   deepLinkBaseUrl?: string;
   /** The layer's root element, dragged by the standalone edge swipe. */
   getElement?: () => HTMLElement | null;
+  /**
+   * true: leaving phone layout drops this layer's history entry but never calls
+   * onClose, so the owner's own open state (a session, a file, a draft) survives
+   * the resize and shows on desktop. Menus and sheets leave it unset and close.
+   */
+  keepOnBreakpoint?: boolean;
+  /**
+   * The layer this one sits on: it registers only once that one is open, so a
+   * child whose effect runs first (React runs child effects before the parent's)
+   * still lands above it, on a reload or a rotation back to phone.
+   */
+  parentId?: string;
 }
 
 export interface OverlayMarker { id: string; kind: PhoneOverlayKind; depth: number }
@@ -151,17 +167,31 @@ interface LiveEntry extends StackItem {
   onClose: (info: PhoneOverlayCloseInfo) => void;
   getElement?: () => HTMLElement | null;
   deepLinkBaseUrl?: string;
+  keepOnBreakpoint: boolean;
+  /** A UI close whose back has not landed yet: a breakpoint still closes it. */
+  closing?: boolean;
 }
 
 let stack: LiveEntry[] = [];
 let tokenSeq = 0;
 let pendingBacks = 0;
 let pendingBackTimer: ReturnType<typeof setTimeout> | null = null;
+/**
+ * The depth history still has to be taken back to (0: the base entry), done once
+ * every pending back has landed and measured from where they landed: two gos
+ * counted from one depth overshoot the base into the previous route. Set by a
+ * breakpoint during a back, and by released layers.
+ */
+let pendingUnwindTo: number | null = null;
 let pushedThisLoad = false;
 let installed = false;
 const listeners = new Set<() => void>();
 /** Releases waiting one microtask for a StrictMode remount to reclaim them. */
 const releasing = new Map<string, LiveEntry>();
+/** Every release of this tick, settled together (a replaced column releases several at once). */
+let releaseBatch: LiveEntry[] = [];
+let releaseSettleScheduled = false;
+let releaseGeneration = 0;
 
 interface Snapshot { top: PhoneOverlayTopEntry | null; depth: number }
 let snapshot: Snapshot = { top: null, depth: 0 };
@@ -229,8 +259,28 @@ function pushEntry(e: LiveEntry): void {
   window.history.pushState(stateWithMarker(window.history.state, { id: e.id, kind: e.kind, depth: e.depth }), '', href);
 }
 
+/** Nothing in flight: no back landing, no release unsettled, no unwind owed. */
+function historySettled(): boolean {
+  return pendingBacks === 0 && !releaseSettleScheduled && pendingUnwindTo === null;
+}
+
 function flushDeferredPushes(): void {
-  if (pendingBacks > 0) return;
+  if (pendingBacks > 0 || releaseSettleScheduled) return;
+  if (pendingUnwindTo !== null) {
+    // Before any push: a layer opened meanwhile must land above what stays.
+    const target = pendingUnwindTo;
+    pendingUnwindTo = null;
+    const cur = canUseHistory() ? markerDepth(window.history.state) : 0;
+    if (cur > target) {
+      // Layers still open above the target lose their entries to this go: they
+      // are pushed again once it lands, in stack order.
+      for (const x of stack) if (x.pushed && x.depth > target) x.pushed = false;
+      beginBack();
+      window.history.go(target - cur);
+      log.info('phone-overlay', 'unwind after pending backs and releases', { from: cur, to: target });
+      return;
+    }
+  }
   let changed = false;
   for (const e of stack) {
     if (!e.pushed) { pushEntry(e); changed = true; }
@@ -249,7 +299,7 @@ const afterBacks: Array<() => void> = [];
  * trap above), so a caller that closes layers and then navigates waits here.
  */
 export function afterPhoneOverlayBacks(fn: () => void): void {
-  if (pendingBacks === 0) { fn(); return; }
+  if (historySettled()) { fn(); return; }
   afterBacks.push(fn);
 }
 
@@ -275,21 +325,36 @@ function onPopState(event: PopStateEvent): void {
   flushDeferredPushes();
 }
 
-/** Close every layer and take their entries off history (left phone layout). */
+/**
+ * Left phone layout: take every layer and its entry off history. Temporary
+ * layers (menus, sheets) close; a `keepOnBreakpoint` layer is only dropped, its
+ * owner keeps its open state for desktop (2026-11-07: a resize to desktop
+ * closed the open file and its session).
+ */
 function closeAllForBreakpoint(): void {
   if (stack.length === 0) return;
-  const closed = [...stack].reverse();
+  const dropped = [...stack].reverse();
   const depth = canUseHistory() ? markerDepth(window.history.state) : 0;
   stack = [];
   notify();
-  for (const e of closed) {
+  let closed = 0;
+  for (const e of dropped) {
+    // A layer the user was already closing still closes: its back lands after the stack is gone.
+    if (e.keepOnBreakpoint && !e.closing) continue;
+    closed += 1;
     try { e.onClose({ fromHistory: true, breakpoint: true }); } catch { /* owner's problem, keep closing */ }
   }
-  if (depth > 0) {
+  const deferred = pendingBacks > 0;
+  if (deferred) {
+    // A back is still landing: unwind to the base from where it lands (flushDeferredPushes).
+    pendingUnwindTo = 0;
+  } else if (depth > 0) {
     beginBack();
     window.history.go(-depth);
   }
-  log.info('phone-overlay', 'left phone layout, closed layers', { count: closed.length, depth });
+  log.info('phone-overlay', 'left phone layout, dropped layers', {
+    count: dropped.length, closed, kept: dropped.length - closed, depth, deferred,
+  });
 }
 
 function install(): void {
@@ -303,7 +368,7 @@ function install(): void {
   });
   // A reload keeps the browser's state, marker included, while no layer is
   // open any more: strip it so the next push does not count a ghost depth.
-  if (markerDepth(window.history.state) > 0) {
+  if (canUseHistory() && markerDepth(window.history.state) > 0) {
     window.history.replaceState(stateWithoutMarker(window.history.state), '');
   }
 }
@@ -312,19 +377,29 @@ function openEntry(opts: PhoneOverlayOptions): LiveEntry {
   install();
   const reclaimed = releasing.get(opts.id);
   if (reclaimed) {
-    // StrictMode remount (or a same-id reopen in one tick): keep its entry.
+    // StrictMode remount (or a same-id reopen in one tick): keep its entry, at
+    // its depth's place (child effects remount before their parent's).
     releasing.delete(opts.id);
-    stack.push(reclaimed);
+    releaseBatch = releaseBatch.filter((x) => x !== reclaimed);
+    // A new owner may take the id (a replaced column showing the same file): its callbacks now.
+    reclaimed.kind = opts.kind;
+    reclaimed.onClose = opts.onClose;
+    reclaimed.bar = opts.bar ?? null;
+    reclaimed.getElement = opts.getElement;
+    reclaimed.keepOnBreakpoint = opts.keepOnBreakpoint === true;
+    const at = reclaimed.pushed ? stack.findIndex((x) => x.pushed && x.depth > reclaimed.depth) : -1;
+    if (at < 0) stack.push(reclaimed); else stack.splice(at, 0, reclaimed);
     notify();
     return reclaimed;
   }
   const e: LiveEntry = {
     id: opts.id, kind: opts.kind, depth: 0, pushed: false, token: ++tokenSeq,
     bar: opts.bar ?? null, onClose: opts.onClose, getElement: opts.getElement,
-    deepLinkBaseUrl: opts.deepLinkBaseUrl,
+    deepLinkBaseUrl: opts.deepLinkBaseUrl, keepOnBreakpoint: opts.keepOnBreakpoint === true,
   };
   stack.push(e);
-  if (pendingBacks === 0) pushEntry(e);
+  // A release still unsettled may take entries off history first: push after it.
+  if (historySettled()) pushEntry(e);
   notify();
   return e;
 }
@@ -334,23 +409,44 @@ function releaseEntry(e: LiveEntry): void {
   if (!removeFromStack(e)) return;
   notify();
   releasing.set(e.id, e);
-  queueMicrotask(() => {
-    if (releasing.get(e.id) !== e) return; // reclaimed
-    releasing.delete(e.id);
-    if (!e.pushed || !canUseHistory() || !isPhoneLayout()) return;
-    const plan = closePlan(e, window.history.state);
-    // Only the layer's own entry is taken off; one wiped by navigate(replace)
-    // is already gone.
-    if (plan.kind === 'back') { beginBack(); window.history.back(); }
-  });
+  releaseBatch.push(e);
+  if (releaseSettleScheduled) return;
+  releaseSettleScheduled = true;
+  const gen = releaseGeneration;
+  queueMicrotask(() => { if (gen === releaseGeneration) settleReleases(); });
+}
+
+/**
+ * The tick's releases that no remount reclaimed: take their entries off history
+ * in ONE unwind, to just below the lowest of them (a replaced column's session,
+ * view and file used to plan three gos from the new session's entry, ignore them,
+ * and leave three ghost backs). Waits for pending backs; an entry a
+ * navigate(replace) already wiped is not unwound again (the depth check).
+ */
+function settleReleases(): void {
+  releaseSettleScheduled = false;
+  const batch = releaseBatch;
+  releaseBatch = [];
+  for (const e of batch) if (releasing.get(e.id) === e) releasing.delete(e.id);
+  let lowest = Infinity;
+  for (const e of batch) if (e.pushed) lowest = Math.min(lowest, e.depth);
+  // Off phone the breakpoint already unwound everything.
+  if (lowest !== Infinity && canUseHistory() && isPhoneLayout()) {
+    pendingUnwindTo = Math.min(pendingUnwindTo ?? Infinity, lowest - 1);
+  }
+  flushDeferredPushes();
 }
 
 /** The UI close path (Back, x, backdrop, Escape, edge swipe). */
 function closeEntry(e: LiveEntry): void {
   if (!stack.includes(e)) return;
   const plan = canUseHistory() ? closePlan(e, window.history.state) : { kind: 'direct' as const };
-  if (plan.kind === 'back') { beginBack(); window.history.back(); return; }
-  if (plan.kind === 'go') { beginBack(); window.history.go(-plan.steps); return; }
+  if (plan.kind === 'back') { e.closing = true; beginBack(); window.history.back(); return; }
+  if (plan.kind === 'go') {
+    // The go closes every pushed layer from this one up.
+    for (const x of stack) if (x.pushed && x.depth >= e.depth) x.closing = true;
+    beginBack(); window.history.go(-plan.steps); return;
+  }
   removeFromStack(e);
   notify();
   e.onClose({ fromHistory: false });
@@ -406,7 +502,13 @@ export function usePhoneOverlay(o: PhoneOverlayOptions): { close: () => void } {
   const optsRef = useRef(o);
   optsRef.current = o;
   const entryRef = useRef<LiveEntry | null>(null);
-  const active = o.open && phone;
+  const parentId = o.parentId;
+  const parentOpen = useSyncExternalStore(
+    subscribePhoneOverlays,
+    () => !parentId || isPhoneOverlayOpen(parentId),
+    () => !parentId,
+  );
+  const active = o.open && phone && parentOpen;
 
   useEffect(() => {
     if (!active) return undefined;
@@ -437,6 +539,7 @@ export function usePhoneOverlay(o: PhoneOverlayOptions): { close: () => void } {
     const e = entryRef.current;
     if (!e) return;
     e.getElement = o.getElement;
+    e.keepOnBreakpoint = o.keepOnBreakpoint === true;
     const next = o.bar ?? null;
     if (barEqual(e.bar, next)) return;
     e.bar = next;
@@ -478,6 +581,10 @@ export function __resetPhoneOverlaysForTest(): void {
   stack = [];
   releasing.clear();
   pendingBacks = 0;
+  pendingUnwindTo = null;
+  releaseBatch = [];
+  releaseSettleScheduled = false;
+  releaseGeneration += 1;
   afterBacks.length = 0;
   pushedThisLoad = false;
   installed = false;

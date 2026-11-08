@@ -259,6 +259,77 @@ describe('findKillViolations', () => {
   })
 })
 
+describe('JS scanner positions and slash context', () => {
+  it.each([
+    ['exec', "execSync('pkill -f sample')"],
+    ['exec argv', "execFileSync('pkill', ['-f', 'sample'])"],
+    ['ssh', "sshRun(host, 'pkill -f sample')"],
+    ['ssh argv', "spawnSync('ssh', ['host', 'pkill -f sample'])"],
+    ['shell -c', "spawnSync('/bin/sh', ['-c', 'pkill -f sample'])"],
+  ])('keeps the exact %s violation line after a dense literal prefix', (_label, command) => {
+    const prefix = Array.from({ length: 2048 }, (_, i) => `const sample${i} = 'ordinary value ${i}';\n`).join('')
+      + '/* comment with a quote "\nsecond comment line */\n'
+      + 'const multiline = `first line\nsecond line ${"ordinary interpolation"}`;\n'
+      + "const escaped = 'ordinary\\nvalue';\n"
+    const line = prefix.split('\n').length
+    for (const test of [false, true]) {
+      expect(findKillViolations(`${prefix}${command}\n`, 'js', test)).toEqual([
+        { rule: 'pkill', line, text: command },
+      ])
+    }
+  })
+
+  it.each([
+    'value', 'returnValue', 'value_return', '$return', '_return', 'return0', 'a0return', '123',
+    ')', ']', "'ordinary value'", '`ordinary value`',
+    `a${'0'.repeat(4096)}return`,
+    `$${'0'.repeat(4096)}return`,
+  ])('keeps division after the complete identifier or number %s', (identifier) => {
+    const command = `const ratio = ${identifier} \t / execSync('pkill -f sample') / 2;`
+    expect(findKillViolations(`${command}\n`, 'js', true)).toEqual([
+      { rule: 'pkill', line: 1, text: command },
+    ])
+  })
+
+  it.each([
+    ...['return', 'typeof', 'case', 'in', 'of', 'delete', 'void', 'throw', 'new', 'else', 'do', 'yield', 'await']
+      .map((keyword) => `${keyword} \t `),
+    // The original suffix regex starts at the first identifier character after leading digits.
+    '123return ', `123${'0'.repeat(4096)}return `, 'object.return ',
+    ...'(,=:[!&|?{};+-*%<>~^'.split('').map((punctuation) => `${punctuation} \t `),
+    '', ' \t ',
+  ])('keeps a regex literal after the original context %j', (prefix) => {
+    const command = "execSync('killall sample')"
+    const content = `${prefix}/execSync('pkill -f sample')/;\n${command}\n`
+    expect(findKillViolations(content, 'js', true)).toEqual([
+      { rule: 'killall', line: 2, text: command },
+    ])
+  })
+
+  it.each([
+    ['division', 'value', true],
+    ['regex', 'return', false],
+  ] as const)('keeps %s context across multiline whitespace and comments', (_label, tail, division) => {
+    const prefix = `const sample = ${tail}\n \t /* ignored quote ' and keyword throw\nsecond line */\n`
+    const expression = "/execSync('pkill -f sample')/;"
+    const command = "execSync('killall sample')"
+    expect(findKillViolations(`${prefix}${expression}\n${command}\n`, 'js', true)).toEqual([
+      ...(division ? [{ rule: 'pkill' as const, line: 4, text: expression }] : []),
+      { rule: 'killall', line: 5, text: command },
+    ])
+  })
+
+  it('uses recorded literal positions and does not rescan the whole code prefix', () => {
+    const source = fs.readFileSync(path.join(REPO, 'tests/scripts/kill-scan.ts'), 'utf8')
+    expect(source).toMatch(/interface JsString \{[^}]*\bposition: number\b/)
+    expect(source).toContain('position: out.length')
+    expect(source).toContain('const pos = s.position')
+    expect(source).not.toMatch(/\bcode\s*\.\s*indexOf\s*\(/)
+    expect(source).not.toContain('out.trimEnd(')
+    expect(source).not.toContain('/([A-Za-z_$][\\w$]*)$/')
+  })
+})
+
 describe('no tool or test kills by name or pattern', () => {
   const files = guardedFiles()
 

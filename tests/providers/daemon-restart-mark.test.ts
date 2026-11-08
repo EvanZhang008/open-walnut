@@ -215,7 +215,7 @@ describe('one rule in every reader: the TS CLI, the JS twin CLI and both user sh
 
   it('the JS twin names the same file, the same freshness and the same notice', () => {
     expect(RESTART_MARK_NAME).toBe('restarting')
-    expect(source).toContain(`const RESTART_MARK_FILE = path.join(DAEMON_DIR, '${RESTART_MARK_NAME}');`)
+    expect(source).toContain(`const RESTART_MARK_FILE = path.join(path.dirname(GATEWAY_SOCK_PATH), '${RESTART_MARK_NAME}');`)
     expect(source).toContain(`path.join(path.dirname(sockPath), '${RESTART_MARK_NAME}')`)
     expect(source).toContain(`age >= -5 && age < ${RESTART_MARK_FRESH_SECS};`)
     expect(source).toContain(`var wnRideUntil = Date.now() + ${RESTART_RIDE_MAX_MS};`)

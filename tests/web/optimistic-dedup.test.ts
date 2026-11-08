@@ -117,7 +117,7 @@ describe('dedupeOptimisticMessages', () => {
 // ═══════════════════════════════════════════════════════════════════════════
 // Phase 1 (ACP dialect): id-first batch consumption
 // ═══════════════════════════════════════════════════════════════════════════
-import { removeBatchMessages, markDeliveredMessages, statusOnAdopt, unmatchedDeliveredIds } from '@/components/sessions/optimistic-dedup';
+import { failedFromSameBox, removeBatchMessages, markDeliveredMessages, statusOnAdopt, unmatchedDeliveredIds } from '@/components/sessions/optimistic-dedup';
 
 describe('removeBatchMessages', () => {
   it('removes exactly the id-matched bubbles, sparing an identical-text newer one', () => {
@@ -346,3 +346,22 @@ describe('dedupeOptimisticMessages — merged batch (CLI drained N sends into on
     expect(dedupeOptimisticMessages(bubbles, persisted, 0)).toEqual([]);
   });
 });
+
+// 2026-11-08: a refused send in a thread card left its row (with Retry) after the
+// same words were sent again from the box they had been put back into.
+describe('failedFromSameBox', () => {
+  const rows = [
+    { queueId: 'a', status: 'failed', draftOrigin: { key: 'draft:card' } },
+    { queueId: 'b', status: 'failed', draftOrigin: { key: 'draft:chat' } },
+    { queueId: 'c', status: 'received', draftOrigin: { key: 'draft:card' } },
+    { queueId: 'd', status: 'failed' },
+    { queueId: 'e', status: 'parked', draftOrigin: { key: 'draft:card' } },
+  ]
+  it('a send from a box replaces only that box\'s refused rows', () => {
+    expect(failedFromSameBox(rows, 'draft:card').map(r => r.queueId)).toEqual(['a'])
+    expect(failedFromSameBox(rows, 'draft:chat').map(r => r.queueId)).toEqual(['b'])
+  })
+  it('a send that names no box replaces nothing', () => {
+    expect(failedFromSameBox(rows, undefined)).toEqual([])
+  })
+})

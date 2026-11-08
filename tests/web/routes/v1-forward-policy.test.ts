@@ -19,6 +19,8 @@ describe('companionAnswers: the routes the companion keeps', () => {
     ['GET', '/sessions/abc/messages/qm-mobile-1', 'send'],
     ['GET', '/sessions/abc/queue', 'send'],
     ['POST', '/sessions/abc/terminate', 'send'],
+    // The context a send's object-context hint names is kept where the console's send renders it.
+    ['POST', '/hints/context', 'send'],
     ['GET', '/conversations', 'chat'],
     ['POST', '/conversations', 'chat'],
     ['GET', '/conversations/c1/messages', 'chat'],

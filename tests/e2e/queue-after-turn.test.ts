@@ -99,16 +99,32 @@ afterAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 }, 15000)
 
+let startSequence = 0
 async function startSession(ws: WebSocket): Promise<string> {
+  const message = `turn 1: establish ${++startSequence}`
   const first = waitForWsEvent(ws, 'session:result', { taskId: 'aft-local-001' }, 30000)
-  await sendWsRpc(ws, 'session:start', { taskId: 'aft-local-001', message: 'turn 1: establish' })
+  const started = await sendWsRpc(ws, 'session:start', { taskId: 'aft-local-001', message })
+  expect(started.ok).toBe(true)
   return (await first).data!.sessionId as string
 }
 
 async function startSlowTurn(ws: WebSocket, sid: string, ms: number): Promise<void> {
-  const delivered = waitForWsEvent(ws, 'session:messages-delivered', (d) => d.sessionId === sid, 20000)
-  await sendWsRpc(ws, 'session:send', { sessionId: sid, message: `slow:${ms} a long job` })
-  await delivered
+  const delivered = new Set<string>()
+  const listen = (raw: WebSocket.RawData) => {
+    const frame = JSON.parse(raw.toString()) as WsFrame
+    if (frame.type === 'event' && frame.name === 'session:messages-delivered' && frame.data?.sessionId === sid) {
+      for (const id of (frame.data.messageIds ?? []) as string[]) delivered.add(id)
+    }
+  }
+  ws.on('message', listen)
+  try {
+    const sent = await sendWsRpc(ws, 'session:send', { sessionId: sid, message: `slow:${ms} a long job` })
+    expect(sent.ok).toBe(true)
+    const id = (sent.payload as { messageId: string }).messageId
+    await vi.waitFor(() => expect(delivered.has(id)).toBe(true), { timeout: 20_000 })
+  } finally {
+    ws.off('message', listen)
+  }
 }
 
 describe('afterTurn on the phone send route', () => {
@@ -167,7 +183,12 @@ describe('afterTurn on the phone send route', () => {
     try {
       const sid = await startSession(ws)
       await startSlowTurn(ws, sid, 3000)
-      await api('POST', `/sessions/${sid}/messages`, { text: 'never mind', afterTurn: true, messageId: 'qm-mobile-e2eafter02' })
+      const sent = await api('POST', `/sessions/${sid}/messages`, { text: 'never mind', afterTurn: true, messageId: 'qm-mobile-e2eafter02' })
+      expect(sent.status).toBe(202)
+      const snapshot = sent.json.afterTurn === true ? undefined : {
+        response: sent.json, session: (await api('GET', `/sessions/${sid}`)).json, queue: await queueOf(sid),
+      }
+      expect(sent.json.afterTurn, JSON.stringify(snapshot)).toBe(true)
       expect((await api('DELETE', `/sessions/${sid}/queue/qm-mobile-e2eafter02`)).status).toBe(200)
       expect(await rowOf(sid, 'qm-mobile-e2eafter02')).toBeUndefined()
       const results: string[] = []

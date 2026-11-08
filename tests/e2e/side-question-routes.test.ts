@@ -201,6 +201,7 @@ describe('side-question routes', () => {
 
     const attached = {
       sessionId: ALIVE_SID,
+      hasPipe: true,
       askSideQuestion: vi.fn(async (_q: string) => 'attached-on-demand answer'),
       detach: () => {},
       kill: () => {},

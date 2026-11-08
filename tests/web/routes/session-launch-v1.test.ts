@@ -176,7 +176,8 @@ describe('POST /api/v1/sessions', () => {
     expect(res.status).toBe(201);
     expect(typeof res.body.sessionId).toBe('string');
     expect(typeof res.body.taskId).toBe('string');
-    expect(res.body.title).toBe('Session: my-proj');
+    // The person's typed words name the task at once (review round 2: "Session: <folder>" said only where it runs).
+    expect(res.body.title).toBe('fix the bug');
 
     expect(starts.length).toBe(1);
     const data = starts[0].data as Record<string, unknown>;

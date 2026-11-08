@@ -24,6 +24,10 @@ name, grouped under a per-host project: **"Imported from this Mac"** /
 sub-folder per working directory** (label = the cwd's last two segments, home
 collapsed to `~`: `myCode/walnut`, `src/server`, `~/.claude`).
 
+On the Org page a new import project goes under the VP its sibling import
+projects are under, else under the **Others** VP (a new install's first import
+makes it). It never becomes a VP of its own.
+
 ## The imported type (the "Imported" pill)
 
 An imported task carries the tag `walnut:external-sessions`. That tag is the

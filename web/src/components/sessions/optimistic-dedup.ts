@@ -34,6 +34,10 @@ interface PersistedLike {
   walnutMessageId?: string;
   /** Skill dumps / image metadata the CLI writes next to a prompt: never a prompt. */
   injected?: boolean;
+  /** The transcript uuid of the user line, and (a line sent while a turn ran) the
+   *  uuid it was sent under: either one equals a bubble's pre-assigned userUuid. */
+  msgId?: string;
+  sourceUuid?: string;
 }
 /** A stretch of the transcript missing from inside the loaded rows: the rows on
  *  either side of it, by the CLI's timestamps (history-gap.ts). */
@@ -57,6 +61,65 @@ interface OptimisticLike {
    *  prepended). Persisted history echoes THIS, so it is the correct dedup key —
    *  see `dedupKeyOf`. */
   dedupText?: string;
+  /** The uuid the CLI persists the line under (pre-assigned at send): exact proof
+   *  once a history row carries it (`historyUuidsOf`). */
+  userUuid?: string;
+  /** The server reported the row undelivered (parked, batch failed): see `uuidProves`. */
+  serverUndelivered?: boolean;
+  parked?: boolean;
+}
+
+/**
+ * Whether a history row carrying this bubble's uuid proves it delivered. Only
+ * when the doubt is the CLIENT's (a send whose acknowledgement was lost, a
+ * bubble still waiting for its delivery event). A row the SERVER reported
+ * undelivered (parked: "Not answered ... Retry sends it again", or its batch
+ * failed) can have its line in history (Claude Code read it, then its process
+ * ended): its uuid there proves nothing, and settling it would hide the Retry.
+ * Once the server's own delivery event marks such a bubble delivered (a Retry
+ * went out), its line in history is that bubble's again.
+ */
+export function uuidProves(m: OptimisticLike): boolean {
+  if (!m.userUuid || m.launch || m.parked) return false;
+  return !m.serverUndelivered || m.status === 'delivered';
+}
+
+/**
+ * The uuids history's user rows carry (the line's own uuid, or the uuid a line
+ * taken mid-turn was sent under). A bubble whose userUuid is among them reached
+ * the CLI, whatever its send RPC said: a send whose acknowledgement was lost
+ * shows "Send failed" while its line and the answer are in history (2026-11-10).
+ */
+export function historyUuidsOf(messages: readonly PersistedLike[]): Map<string, number> {
+  const at = new Map<string, number>();
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i];
+    if (m.role !== 'user') continue;
+    if (m.msgId && !at.has(m.msgId)) at.set(m.msgId, i);
+    if (m.sourceUuid && !at.has(m.sourceUuid)) at.set(m.sourceUuid, i);
+  }
+  return at;
+}
+
+/**
+ * The bubbles history proves delivered by their uuid, as delivered: a failed one
+ * loses its error and Retry (a Retry would only ask for it again), a pending or
+ * received one moves on. Returns the same array when nothing changes.
+ */
+export function settleShownByUuid<T extends OptimisticLike & { failedError?: string }>(
+  optimistic: readonly T[],
+  messages: readonly PersistedLike[],
+): readonly T[] {
+  if (!optimistic.some((m) => uuidProves(m) && m.status !== 'delivered')) return optimistic;
+  const shown = historyUuidsOf(messages);
+  let changed = false;
+  const next = optimistic.map((m) => {
+    if (!uuidProves(m) || m.status === 'delivered' || !shown.has(m.userUuid!)) return m;
+    changed = true;
+    const { failedError: _error, parked: _parked, ...rest } = m;
+    return { ...rest, status: 'delivered' } as T;
+  });
+  return changed ? next : optimistic;
 }
 
 /**
@@ -185,6 +248,21 @@ export function dedupeOptimisticMessages<T extends OptimisticLike>(
     if (!persistedIdText.has(msg.walnutMessageId)) persistedIdText.set(msg.walnutMessageId, msg.text);
   }
 
+  // Uuid-first evidence: a bubble whose pre-assigned uuid a user row carries IS
+  // that row, whatever its status (a send whose ack was lost too: its line reached
+  // the CLI), unless the server reported it undelivered (`uuidProves`).
+  // Exact, so no window; the row is retired from the text multisets below so it
+  // can never account for a second bubble with the same words.
+  const uuidRows = historyUuidsOf(messages);
+  const uuidProven = new Set<number>();
+  const uuidClaimed = new Set<number>();
+  for (const [i, m] of optimistic.entries()) {
+    const row = uuidProves(m) ? uuidRows.get(m.userUuid!) : undefined;
+    if (row === undefined || uuidClaimed.has(row)) continue;
+    uuidProven.add(i);
+    uuidClaimed.add(row);
+  }
+
   const scanStart = dedupScanStart(prevMsgLen, messages.length);
   // The oldest instant any bubble on screen could have a row at. Rows below the
   // watermark that are older than this can prove nothing, so they are never
@@ -222,7 +300,7 @@ export function dedupeOptimisticMessages<T extends OptimisticLike>(
   const datedRows = new Map<string, number[]>();
   const peeledToRaw = new Map<string, string[]>();
   for (let i = 0; i < messages.length; i++) {
-    if (messages[i].role !== 'user') continue;
+    if (messages[i].role !== 'user' || uuidClaimed.has(i)) continue;
     const t = messages[i].text;
     if (i >= scanStart) {
       newUserTextCounts.set(t, (newUserTextCounts.get(t) ?? 0) + 1);
@@ -284,7 +362,7 @@ export function dedupeOptimisticMessages<T extends OptimisticLike>(
   // Pass 1 — per-bubble evidence. `state[i]` records WHICH evidence proved bubble
   // i, so the merged-run passes below know what is still open and what an
   // id-bound line can anchor. 'open' = nothing proved it yet (⇒ stays rendered).
-  type Evidence = 'failed' | 'id' | 'text' | 'window' | 'open';
+  type Evidence = 'failed' | 'uuid' | 'id' | 'text' | 'window' | 'open';
   const state: Evidence[] = [];
   const idLine: Array<string | undefined> = [];
   const floorOf = (m: OptimisticLike): number | undefined => tsMs(m.timestamp);
@@ -295,7 +373,9 @@ export function dedupeOptimisticMessages<T extends OptimisticLike>(
   // window's first user row is some later message: the launch row is above the
   // window, and the panel's Initial Prompt row stands for it.
   const launchAt = optimistic.findIndex((m) => m.launch && m.status !== 'failed');
-  const launchRow = launchAt >= 0 && historyFromStart ? launchRowIndex(messages) : -1;
+  const launchFound = launchAt >= 0 && historyFromStart ? launchRowIndex(messages) : -1;
+  // A row a bubble's uuid already claimed is that bubble's, never the launch's.
+  const launchRow = uuidClaimed.has(launchFound) ? -1 : launchFound;
   if (launchRow >= scanStart) takeWindowed(messages[launchRow].text);
   else if (launchRow >= 0) {
     const ms = tsMs(messages[launchRow].timestamp);
@@ -306,6 +386,7 @@ export function dedupeOptimisticMessages<T extends OptimisticLike>(
   const launchAbsorbed = !historyFromStart || launchRow >= 0;
 
   for (const [i, m] of optimistic.entries()) {
+    if (uuidProven.has(i)) { state.push('uuid'); idLine.push(undefined); continue; }
     if (m.status === 'failed') { state.push('failed'); idLine.push(undefined); continue; }
     if (m.launch) { state.push(i === launchAt && launchAbsorbed ? 'text' : 'open'); idLine.push(undefined); continue; }
     const line = m.queueId ? persistedIdText.get(m.queueId) : undefined;
@@ -507,4 +588,18 @@ export function unmatchedDeliveredIds(
 /** The status a bubble takes when its send RPC answers with `messageId`. */
 export function statusOnAdopt(messageId: string, deliveredEarly: Set<string>): 'received' | 'delivered' {
   return deliveredEarly.delete(messageId) ? 'delivered' : 'received';
+}
+
+/**
+ * Refused sends a new send from the same composer box replaces: their words went
+ * back into that box, so sending from it is the user's answer to the refusal, and
+ * the old row's Retry would deliver them twice (2026-11-08, a thread card: the
+ * refused row stayed, below the answer, with Retry still live).
+ */
+export function failedFromSameBox<T extends { queueId: string; status?: string; draftOrigin?: { key: string } }>(
+  optimistic: readonly T[],
+  boxKey: string | undefined,
+): T[] {
+  if (!boxKey) return [];
+  return optimistic.filter(m => m.status === 'failed' && m.draftOrigin?.key === boxKey);
 }

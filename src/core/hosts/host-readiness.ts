@@ -21,7 +21,7 @@ import {
   type DtachProvisionOutcome, type HostFixAction, type HostFixing, type HostFixRecord,
 } from './host-autofix.js'
 import {
-  applyClaudeFloor, claudeMissingMessage, claudeNeedsNodeMessage, parsePreflight, readinessProblems,
+  applyClaudeFloor, claudeMissingMessage, claudeNeedsNodeMessage, parsePreflight, readinessProblems, withConclusiveAuth,
 } from './host-readiness-problems.js'
 import { configuredClaudeCliFloor, type ClaudeCliFloor } from './claude-version-floor.js'
 import { FIX_RETRY_AFTER_MS, recentFailedFixes, rememberFixOutcome } from './host-fix-memory.js'
@@ -45,6 +45,8 @@ export {
 
 /** The subset of a daemon connection this module talks to. */
 export interface PreflightConnection {
+  readonly connectPhaseSince?: number
+  readonly connectionEpoch?: number
   hasCapability(cap: string): boolean
   send(cmd: string, params?: Record<string, unknown>, timeoutMs?: number): Promise<{ ok: boolean; error?: string; [key: string]: unknown }>
 }
@@ -54,11 +56,7 @@ export interface PreflightConnection {
  * UI's 15s "Check again" wait, so a hung probe still answers as checkError.
  */
 export const PREFLIGHT_TIMEOUT_MS = 14_000
-/**
- * A reconnect re-probes a HEALTHY host at most this often (a flapping tunnel
- * reconnects dozens of times a day). A host with a problem re-probes on every
- * reconnect, and a human connect always does, so a fix shows up at once.
- */
+/** Healthy results are reused only within the connection that was checked. */
 const HEALTHY_RECHECK_MS = 10 * 60_000
 
 /** How a host's lines name it: its label, the ssh target a user types, and the model floor. */
@@ -323,28 +321,40 @@ export function refreshHostReadiness(
   // A fixture host answers from its seeded store entry, never over the wire.
   if (readinessProbeSkipped(host)) return Promise.resolve(getHostReadiness(host) ?? null)
   const now = opts.now ?? Date.now
-  const known = store.get(host)
-  if (!opts.force && known && known.problems.length === 0 && now() - known.checkedAt < HEALTHY_RECHECK_MS) {
-    return Promise.resolve(getHostReadiness(host) ?? null)
-  }
   const running = inFlight.get(host)
   if (running) return running
+  let conn: PreflightConnection | null = null
+  let epoch: number | undefined
+  let connectedAt: number | undefined
+  let recheck = false
+  let probing = false
+  const superseded = () => probing && !!conn && (conn.connectionEpoch !== epoch || conn.connectPhaseSince !== connectedAt)
   const job = (async (): Promise<HostReadiness | null> => {
     try {
-      const conn = await (opts.getConnection ?? defaultConnection)(host)
+      conn = await (opts.getConnection ?? defaultConnection)(host)
       if (!conn) return null
       if (!conn.hasCapability('preflight-v1')) {
         if (store.delete(host)) notify(host)
         return null
       }
+      const known = store.get(host)
+      if (!opts.force && known && known.probeEpoch === conn.connectionEpoch && known.checkedAt >= (conn.connectPhaseSince ?? 0)
+        && !known.checkError && !known.claude.unknown && known.claude.auth !== 'unknown'
+        && known.problems.length === 0 && now() - known.checkedAt < HEALTHY_RECHECK_MS) {
+        return getHostReadiness(host) ?? null
+      }
       const ctx = await (opts.hostContext ?? defaultHostContext)(host)
       const params: Record<string, unknown> = ctx.floor ? { minClaudeVersion: ctx.floor.minVersion } : {}
       if (ctx.shellSetup) params.shellSetup = ctx.shellSetup
+      epoch = conn.connectionEpoch
+      connectedAt = conn.connectPhaseSince
+      probing = true
       const reply = await conn.send('host.preflight', params, PREFLIGHT_TIMEOUT_MS)
+      if (superseded()) { recheck = true; return null }
       const answered = reply.ok ? parsePreflight(reply) : null
       // The daemon's own word wins; the probed kernel only fills in for an older daemon.
       const raw = answered && !answered.wsl && ctx.wsl && answered.platform === 'linux' ? { ...answered, wsl: ctx.wsl } : answered
-      const parsed = raw ? applyClaudeFloor(raw, ctx.floor) : null
+      const parsed = raw ? withConclusiveAuth(applyClaudeFloor(raw, ctx.floor), store.get(host)?.claude, now()) : null
       if (!parsed) {
         log.session.warn('host preflight returned no usable answer', { host, error: reply.error })
         markCheckFailed(host, reply.error || 'the host gave no usable answer', now())
@@ -353,10 +363,11 @@ export function refreshHostReadiness(
       // Only a host with neither a compiler nor dtach asks whether a prebuilt fits.
       const prebuilt = !parsed.dtach.found && !parsed.compiler.found && !prebuiltUnusable.has(host)
         && !!(await (opts.findPrebuilt ?? defaultFindPrebuilt)(parsed.platform, parsed.arch).catch(() => null))
+      if (superseded()) { recheck = true; return null }
       prebuiltFor.set(host, prebuilt)
       problemCtx.set(host, { prebuiltDtach: prebuilt, hostLabel: ctx.label, sshTarget: ctx.sshTarget })
       store.set(host, {
-        ...parsed, checkedAt: now(),
+        ...parsed, checkedAt: now(), probeEpoch: epoch,
         problems: readinessProblems(parsed, { prebuiltDtach: prebuilt, hostLabel: ctx.label, sshTarget: ctx.sshTarget, floorModel: ctx.floor?.model }),
       })
       const readiness = getHostReadiness(host)!
@@ -369,12 +380,16 @@ export function refreshHostReadiness(
       if (opts.autofix !== false) maybeStartAutofix(host, conn, readiness, opts.autofix ?? {}, now, opts.findPrebuilt, opts.hostContext)
       return readiness
     } catch (err) {
+      if (superseded()) { recheck = true; return null }
       const message = err instanceof Error ? err.message : String(err)
       log.session.warn('host preflight failed', { host, error: message })
       markCheckFailed(host, message, now())
       return null
     }
-  })().finally(() => { if (inFlight.get(host) === job) inFlight.delete(host) })
+  })().finally(() => {
+    if (inFlight.get(host) !== job) return
+    inFlight.delete(host)
+  }).then((answer) => recheck ? refreshHostReadiness(host, opts) : answer)
   inFlight.set(host, job)
   return job
 }

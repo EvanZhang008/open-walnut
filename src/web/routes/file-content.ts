@@ -46,6 +46,7 @@ import { secretsRoot } from '../../providers/secrets-core.js'
 import { masterRoot } from '../../core/secrets/fleet-secrets.js'
 import { sandboxUntrustedDoc } from '../untrusted-doc.js'
 import { takesPreviewBridge, withPreviewBridge } from '../preview-bridge.js'
+import { sshDirs } from '../../lib/ssh-home.js'
 
 /** Why a remote read failed, as the viewer says it: in the host's own name, never its alias. */
 async function remoteReadSentence(host: string, err: unknown): Promise<string> {
@@ -84,6 +85,17 @@ export function cloudLocalReadAllowed(absPath: string): boolean {
   return roots.some((r) => resolved === r || resolved.startsWith(r + path.sep))
 }
 
+/** The env `walnut demo` gives its server (src/commands/demo-home.ts demoChildEnv). */
+const demoServer = (): boolean => !!process.env.WALNUT_DEMO_ROOT && !!process.env.WALNUT_DEMO_GENERATION
+
+/** Is the path (or what it links to) inside one of the person's `.ssh` dirs? */
+function underSshDir(filePath: string): boolean {
+  let real = path.resolve(filePath)
+  try { real = fs.realpathSync(real) } catch { /* not there yet: its own path */ }
+  const dirs = sshDirs().flatMap((d) => { try { return [d, fs.realpathSync(d)] } catch { return [d] } })
+  return [path.resolve(filePath), real].some((p) => dirs.some((d) => p === d || p.startsWith(d + path.sep)))
+}
+
 /** Absolute paths / dirs whose contents are secrets — never served locally. */
 export function isSecretPath(absPath: string): boolean {
   const resolved = path.resolve(absPath)
@@ -93,7 +105,8 @@ export function isSecretPath(absPath: string): boolean {
     path.join(WALNUT_HOME, 'secrets'),
     path.join(WALNUT_HOME, 'sync', 'bridge-tokens.json'),
     path.join(home, '.aws'),
-    path.join(home, '.ssh'),
+    // Every ~/.ssh this server reads: in Walnut Demo, the account's too once it uses it (lib/ssh-home.ts).
+    ...sshDirs(),
     path.join(home, '.config', 'walnut-secrets'),
     // Fleet secrets: this machine's copies and the Mac's master (core/secrets/fleet-secrets.ts).
     secretsRoot(process.env, home),
@@ -441,6 +454,11 @@ export function assertPathAllowed(
     if (intent === 'write') {
       throw new FileContentError('Editing files is not available in cloud mode', 403)
     }
+  }
+  if (!isRemote && !confinesLocalFiles() && demoServer() && underSshDir(filePath)) {
+    // Walnut Demo: the person's own keys never leave through a Demo page or a Demo session,
+    // whether "Use my SSH hosts" is on or not (2026-11-12 review).
+    throw new FileContentError('Path not permitted', 403)
   }
   return { filePath, isRemote }
 }

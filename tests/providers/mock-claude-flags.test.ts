@@ -92,3 +92,150 @@ describe('the mock CLI knows every flag Walnut passes', () => {
     }
   }, 15_000)
 })
+
+/** The mock's source, and the body of the block whose header (ending in `{`) is `header`. */
+const MOCK_SRC = fs.readFileSync(MOCK, 'utf8')
+function blockAfter(header: string, from = 0): string {
+  const open = indexOfOrThrow(header, from) + header.length - 1
+  let depth = 0
+  for (let i = open; i < MOCK_SRC.length; i++) {
+    if (MOCK_SRC[i] === '{') depth++
+    else if (MOCK_SRC[i] === '}' && --depth === 0) return MOCK_SRC.slice(open + 1, i)
+  }
+  throw new Error(`no closed block after: ${header}`)
+}
+function indexOfOrThrow(needle: string, from = 0): number {
+  const at = MOCK_SRC.indexOf(needle, from)
+  if (at < 0) throw new Error(`mock-claude.mjs no longer has: ${needle}`)
+  return at
+}
+/** The text from the `{` that encloses `at` up to `at`. */
+function enclosingBlockBefore(at: number): string {
+  let depth = 0
+  for (let i = at - 1; i >= 0; i--) {
+    if (MOCK_SRC[i] === '}') depth++
+    else if (MOCK_SRC[i] === '{' && depth-- === 0) return MOCK_SRC.slice(i, at)
+  }
+  return MOCK_SRC.slice(0, at)
+}
+
+describe('the mock CLI keeps the input line uuid of the turn it runs', () => {
+  type Seen = Array<[string, string | null]>
+
+  it('a live stdin line handed to onUserLine sets lastInputUserUuid, and a line without one clears it', () => {
+    const body = blockAfter("} else if (parsed.type === 'user' && parsed.message?.content !== undefined && onUserLine) {")
+    const run = new Function('parsed', 'prev', `let lastInputUserUuid = prev; const seen = [];
+      const onUserLine = (c) => seen.push([c, lastInputUserUuid]); const announceStarted = () => {};
+      ${body}
+      return seen;`) as (parsed: unknown, prev: string | null) => Seen
+    expect(run({ type: 'user', uuid: 'in-1', message: { content: 'next' } }, 'old')).toEqual([['next', 'in-1']])
+    expect(run({ type: 'user', message: { content: 'bare' } }, 'old')).toEqual([['bare', null]])
+  })
+
+  it('a queued line armSnapshotNextTurn runs sets lastInputUserUuid, and a line without one clears it', () => {
+    const fn = `function armSnapshotNextTurn(opts = {}) {${blockAfter('function armSnapshotNextTurn(opts = {}) {')}}`
+    const run = new Function('queuedUserLines', 'prev', `let lastInputUserUuid = prev, onUserLine = null, plainStaysAlive, message;
+      const seen = []; const emitRemainingEvents = () => seen.push([message, lastInputUserUuid]);
+      const computeMessageParts = () => {}; const setTimeout = (f) => f();
+      const process = { stdout: { write: () => true }, cwd: () => '/' }; const outputSessionId = 's', modelFlag = '', permissionMode = '';
+      ${fn}
+      armSnapshotNextTurn();
+      return seen;`) as (queued: unknown[], prev: string | null) => Seen
+    expect(run([{ type: 'user', uuid: 'q-1', message: { content: 'queued' } }], 'old')).toEqual([['queued', 'q-1']])
+    expect(run([{ type: 'user', message: { content: 'bare' } }], 'old')).toEqual([['bare', null]])
+  })
+
+  it('emitRemainingEvents reads the turn\'s input uuid first, before any delayed body', () => {
+    const header = 'function emitRemainingEvents() {'
+    const capture = MOCK_SRC.slice(indexOfOrThrow(header) + header.length).split('\n').map((l) => l.trim()).find((l) => l && !l.startsWith('//'))
+    expect(capture).toBe('const turnInputUuid = lastInputUserUuid;')
+  })
+
+  it('every place that hands a user line to onUserLine sets lastInputUserUuid in the same block first', () => {
+    const calls = [...MOCK_SRC.matchAll(/\bonUserLine(?:\?\.)?\(/g)].map((m) => m.index!)
+    expect(calls.length, 'the stdin listener and armSnapshotNextTurn both dispatch').toBeGreaterThanOrEqual(2)
+    const missing = calls.filter((at) => !/lastInputUserUuid = \w+\.uuid \?\? null;/.test(enclosingBlockBefore(at)))
+      .map((at) => `mock-claude.mjs:${MOCK_SRC.slice(0, at).split('\n').length}`)
+    expect(missing, 'set lastInputUserUuid = <line>.uuid ?? null before the dispatch').toEqual([])
+  })
+
+  type Row = { type: string; uuid: string; parentUuid: string | null }
+  /** The real transcript writers (persistMockTurn, file-edit-turn's, the plain turn's) over an in-memory fs: no file is touched. */
+  function loadWriters(files: Record<string, string>, env: Record<string, string> = {}, lastInput: string | null = 'stale') {
+    const fns = ['function chainOntoTranscript(file) {',
+      'function persistMockTurn(sessionId, prompt, answer, root = process.env.MOCK_CLAUDE_TRANSCRIPT_DIR, inputUuid = lastInputUserUuid) {',
+      'function persistFileOf(sid) {', 'function persistPlainUser(sid, prompt) {', 'function persistPlainTurn(sid, prompt, assistantEvent) {']
+      .map((h) => `${h}${blockAfter(h)}}`).join('\n')
+    const fileEdit = blockAfter('if (root) {', indexOfOrThrow("if (effectiveMessage.startsWith('file-edit-turn:')) {"))
+    const plainTail = MOCK_SRC.split('\n').map((l) => l.trim()).find((l) => l.startsWith('if (!persistPlainTurn(outputSessionId'))!
+    const fs = { mkdirSync: () => {}, existsSync: (f: string) => f in files, readFileSync: (f: string) => files[f],
+      readdirSync: (root: string) => [...new Set(Object.keys(files).filter((f) => f.startsWith(`${root}/`)).map((f) => f.slice(root.length + 1).split('/')[0]))],
+      appendFileSync: (f: string, text: string) => { files[f] = (files[f] ?? '') + text } }
+    let n = 0
+    const make = new Function('fs', 'path', 'randomUUID', 'env', 'lastInput', `let transcriptParent = null, lastInputUserUuid = lastInput, persistedUser = null;
+      const process = { cwd: () => '/w', env, pid: 1 };
+      ${fns}
+      function fileEditTurn(sid, rows, effectiveMessage, turnInputUuid) { const root = '/t'; if (root) {${fileEdit}} }
+      function plainTurn(outputSessionId, message, assistantEvent, turnInputUuid) { ${plainTail} }
+      return { persistMockTurn, fileEditTurn, plainTurn };`)
+    const writers = make(fs, { join: (...p: string[]) => p.join('/') }, () => `fresh-${++n}`, env, lastInput) as {
+      persistMockTurn: (sid: string, prompt: string, answer: unknown, root: string, inputUuid?: string | null) => void
+      fileEditTurn: (sid: string, rows: unknown[], effectiveMessage: string, turnInputUuid: string | null) => void
+      plainTurn: (sid: string, message: string, assistantEvent: unknown, turnInputUuid: string | null) => void
+    }
+    const rows = (f: string) => files[f]!.trim().split('\n').map((l) => JSON.parse(l) as Row)
+    return { ...writers, rows }
+  }
+  const FILE = '/t/-w/s1.jsonl'
+  const TAIL = `${JSON.stringify({ type: 'assistant', uuid: 'tail-9', parentUuid: null })}\n`
+  const ANSWER = { message: { id: 'msg_1', role: 'assistant', content: [] } }
+
+  it('persistMockTurn files the prompt row under the input uuid, mints one without it, and chains onto an existing transcript', () => {
+    const a = loadWriters({})
+    a.persistMockTurn('s1', 'hi', ANSWER, '/t', 'in-1')
+    a.persistMockTurn('s1', 'again', ANSWER, '/t', null)
+    const [u1, a1, u2] = a.rows(FILE)
+    expect([u1!.uuid, u1!.parentUuid, a1!.parentUuid]).toEqual(['in-1', null, 'in-1'])
+    expect(u2!.uuid, 'no uuid: a new one, never the stale last input').toBe('fresh-2')
+    expect(u2!.parentUuid).toBe(a1!.uuid)
+    const b = loadWriters({ [FILE]: TAIL })
+    b.persistMockTurn('s1', 'resumed', ANSWER, '/t', 'in-2')
+    expect(b.rows(FILE)[1]).toMatchObject({ type: 'user', uuid: 'in-2', parentUuid: 'tail-9' })
+    expect(() => loadWriters({ [FILE]: '{"type":"assist' }).persistMockTurn('s1', 'x', ANSWER, '/t', 'in-3')).toThrow()
+  })
+
+  it('file-edit-turn files its prompt row under the turn\'s input uuid and chains onto an existing transcript', () => {
+    const tool = { type: 'assistant', message: { role: 'assistant', content: [] } }
+    const a = loadWriters({ [FILE]: TAIL })
+    a.fileEditTurn('s1', [tool], 'file-edit-turn:{}', 'in-1')
+    const [, u1, r1] = a.rows(FILE)
+    expect([u1!.uuid, u1!.parentUuid, r1!.parentUuid]).toEqual(['in-1', 'tail-9', 'in-1'])
+    a.fileEditTurn('s1', [tool], 'file-edit-turn:{}', null)
+    expect(a.rows(FILE)[3]).toMatchObject({ type: 'user', uuid: 'fresh-2', parentUuid: r1!.uuid })
+  })
+
+  it('a plain turn files its rows once: in the persisted transcript when it has one, else in the transcript dir', () => {
+    const both = { MOCK_CLAUDE_PERSIST_DIR: '/t', MOCK_CLAUDE_TRANSCRIPT_DIR: '/t', MOCK_CLAUDE_PERSIST_SESSIONS: 's1' }
+    const a = loadWriters({ [FILE]: TAIL }, both, 'in-1')
+    a.plainTurn('s1', 'hi', ANSWER, 'in-1')
+    expect(a.rows(FILE).map((r) => [r.type, r.uuid === 'in-1' ? 'in-1' : r.parentUuid === 'in-1' ? 'after' : r.uuid]))
+      .toEqual([['assistant', 'tail-9'], ['user', 'in-1'], ['assistant', 'after']])
+    const b = loadWriters({}, { MOCK_CLAUDE_PERSIST_DIR: '/t', MOCK_CLAUDE_TRANSCRIPT_DIR: '/t' }, 'in-1')
+    b.plainTurn('s1', 'hi', ANSWER, 'in-1')
+    expect(b.rows(FILE).map((r) => [r.type, r.uuid === 'in-1' ? 'in-1' : r.parentUuid])).toEqual([['user', 'in-1'], ['assistant', 'in-1']])
+  })
+
+  it('every persistMockTurn call passes the turn\'s turnInputUuid explicitly', () => {
+    const calls = [...MOCK_SRC.matchAll(/(?<!function )\bpersistMockTurn\(/g)].map((m) => {
+      let depth = 0
+      for (let i = m.index! + 'persistMockTurn'.length; i < MOCK_SRC.length; i++) {
+        if (MOCK_SRC[i] === '(') depth++
+        else if (MOCK_SRC[i] === ')' && --depth === 0) return { line: MOCK_SRC.slice(0, m.index).split('\n').length, args: MOCK_SRC.slice(m.index, i) }
+      }
+      throw new Error('unclosed persistMockTurn call')
+    })
+    expect(calls.length).toBeGreaterThanOrEqual(5)
+    expect(calls.filter((c) => !/,\s*turnInputUuid\s*$/.test(c.args)).map((c) => `mock-claude.mjs:${c.line}`),
+      'pass turnInputUuid as the last argument').toEqual([])
+  })
+})

@@ -58,6 +58,15 @@ export interface MasterTarget {
 }
 
 /** The control socket for one data dir and one SSH target, the same in every server process. */
+/**
+ * What decides which machine a master reaches: `user@hostname:port`, the real hostname, never
+ * the alias, so a changed hostname never reuses the old master. The Demo's stop names its
+ * masters with it too (commands/demo-ssh-masters.ts).
+ */
+export function masterTargetIdentity(t: { hostname: string; user?: string; port?: number }): string {
+  return `${t.user ? `${t.user}@` : ''}${t.hostname}:${t.port ?? ''}`
+}
+
 export function controlSocketPath(t: MasterTarget, dir: string = os.tmpdir()): string {
   const digest = crypto.createHash('sha256').update(`${path.resolve(t.home)}\0${t.target}`).digest('hex').slice(0, 12)
   // ssh expands `%` tokens in ControlPath, so only plain characters reach it.
@@ -101,6 +110,14 @@ export function masterLastWords(socketPath: string, maxBytes = 2_000): string {
   }
 }
 
+/** A mux-only client of a master this Walnut owns: no ssh config (so no config forwards), never a login of its own; dial the real hostname. */
+export function ownedMuxClientArgs(socketPath: string): string[] {
+  return ['-F', '/dev/null', '-S', socketPath, '-o', 'ControlMaster=no', '-o', 'ProxyCommand=false', '-o', 'BatchMode=yes']
+}
+
+/** How the control commands (-O check/exit and the verify run) reach a master; absent = the login args. */
+export interface MasterControl { args: string[]; host: string }
+
 export type MasterState =
   | 'live'       // ours, and a command through it came back: multiplex through it
   | 'absent'     // nothing there: start one
@@ -128,7 +145,7 @@ export async function probeControlMaster(
   socketPath: string,
   sshArgs: string[],
   host: string,
-  opts: { run?: SshRunner; uid?: number; verifyTimeoutMs?: number } = {},
+  opts: { run?: SshRunner; uid?: number; verifyTimeoutMs?: number; control?: MasterControl } = {},
 ): Promise<MasterState> {
   let st: fs.Stats
   try {
@@ -142,12 +159,13 @@ export async function probeControlMaster(
   if (!st.isSocket() || uid === undefined || st.uid !== uid) return 'foreign'
   const run = opts.run ?? runSshBounded
   const control = ['-o', `ControlPath=${socketPath}`]
-  const check = await run([...sshArgs, ...control, '-O', 'check', host], { timeoutMs: MASTER_CONTROL_TIMEOUT_MS })
+  const via = opts.control ?? { args: sshArgs, host }
+  const check = await run([...via.args, ...control, '-O', 'check', via.host], { timeoutMs: MASTER_CONTROL_TIMEOUT_MS })
   if (check.timedOut) return 'unanswered'
   if (check.code !== 0) return 'stale'
   // ControlMaster=no: a mux client only, so a master that just died cannot turn
   // this into a fresh login (BatchMode would refuse one anyway).
-  const verify = await run([...sshArgs, ...control, '-o', 'ControlMaster=no', host, 'true'], {
+  const verify = await run([...via.args, ...control, '-o', 'ControlMaster=no', via.host, 'true'], {
     timeoutMs: opts.verifyTimeoutMs ?? MASTER_VERIFY_TIMEOUT_MS,
   })
   if (verify.timedOut) return 'unanswered'
@@ -174,7 +192,7 @@ export async function planControlMaster(
   socketPath: string,
   sshArgs: string[],
   host: string,
-  opts: { run?: SshRunner; uid?: number } = {},
+  opts: { run?: SshRunner; uid?: number; control?: MasterControl } = {},
 ): Promise<MasterPlan> {
   const state = await probeControlMaster(socketPath, sshArgs, host, opts)
   if (state === 'live') return { action: 'reuse', state }
@@ -209,9 +227,9 @@ async function freshLoginWorks(sshArgs: string[], host: string, opts: { run?: Ss
 }
 
 /** End a master that failed its probe and remove what it left. Bounded. */
-export async function removeStaleMaster(socketPath: string, sshArgs: string[], host: string, opts: { run?: SshRunner } = {}): Promise<void> {
+export async function removeStaleMaster(socketPath: string, sshArgs: string[], host: string, opts: { run?: SshRunner; control?: MasterControl } = {}): Promise<void> {
   // A live process with a dead link still holds the path: ask it to go first.
-  await exitControlMaster(socketPath, sshArgs, host, opts)
+  await exitControlMaster(socketPath, opts.control?.args ?? sshArgs, opts.control?.host ?? host, opts)
   try { fs.unlinkSync(socketPath) } catch { /* already gone */ }
 }
 
@@ -223,7 +241,7 @@ export async function startControlMaster(
   socketPath: string,
   sshArgs: string[],
   host: string,
-  opts: { run?: SshRunner } = {},
+  opts: { run?: SshRunner; persistSecs?: number } = {},
 ): Promise<{ previousLastWords: string }> {
   const logFile = masterLogFile(socketPath)
   const previousLastWords = masterLastWords(socketPath)
@@ -233,7 +251,7 @@ export async function startControlMaster(
     '-E', logFile,
     '-o', `ControlPath=${socketPath}`,
     '-o', 'ControlMaster=yes',
-    '-o', `ControlPersist=${MASTER_PERSIST_SECS}`,
+    '-o', `ControlPersist=${opts.persistSecs ?? MASTER_PERSIST_SECS}`,
     '-o', 'ServerAliveInterval=15',
     '-o', 'ServerAliveCountMax=3',
     '-fN', host, // -f: background once authenticated, -N: no command
@@ -258,6 +276,22 @@ export async function exitControlMaster(socketPath: string, sshArgs: string[], h
     await run([...sshArgs, '-o', `ControlPath=${socketPath}`, '-O', 'exit', host], { timeoutMs: MASTER_CONTROL_TIMEOUT_MS })
   } catch { /* already gone */ }
   try { fs.unlinkSync(forwardsFile(socketPath)) } catch { /* none */ }
+}
+
+/**
+ * End a master Walnut made at `socketPath`, only when the socket is this user's (a path in a
+ * shared tmp dir can be planted by another user). No ssh config is read (`-F /dev/null`):
+ * `-O exit` talks to the local socket only. True when one was there to end.
+ */
+export async function exitOwnedControlMaster(
+  socketPath: string, host: string, opts: { run?: SshRunner; uid?: number } = {},
+): Promise<boolean> {
+  let st: fs.Stats
+  try { st = fs.lstatSync(socketPath) } catch { return false }
+  const uid = opts.uid ?? process.getuid?.()
+  if (!st.isSocket() || uid === undefined || st.uid !== uid) return false
+  await exitControlMaster(socketPath, ownedMuxClientArgs(socketPath), host, opts)
+  return true
 }
 
 /** Note a `-L` forward opened through the master, so the next process can cancel it. */

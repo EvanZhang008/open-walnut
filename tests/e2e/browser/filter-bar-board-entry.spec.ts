@@ -14,10 +14,11 @@ import { panelClip, SHOTS, QUICK_VIEWS_KEY, runStamp, boot, seed, cleanup, row, 
 
 test.setTimeout(150_000)
 
-const TIER_WORDS = /\b(Focus|Satellite|Backlog|Parked)\b/
 
 test.describe('board entry points', () => {
-  test('a new user sees no tier heading, also with two tiers holding tasks, until a tier is picked (C51, F08)', async ({ page, baseURL }) => {
+  test('a new user\'s board names every tier that holds pins, from the first pin on (C51)', async ({ page, baseURL }) => {
+    // 2026-11-12, the user after a demo: "All it si in Pinned, there is no focus satellight".
+    // Tier headings no longer wait for the user to pick a tier.
     const stamp = runStamp()
     const home = `Home ${stamp}`
     const garden = `Garden ${stamp}`
@@ -29,30 +30,19 @@ test.describe('board entry points', () => {
       await filterProjects(page, [home, garden])
       await expect(card(page, homeIds[0])).toBeVisible()
       await expect(card(page, gardenIds[0])).toBeVisible()
-      expect(await page.evaluate(() => localStorage.getItem('walnut-todo-tier-used'))).toBeNull()
-      const text = await page.locator('.todo-panel').innerText()
-      expect(text).not.toMatch(TIER_WORDS)
-      await expect(page.locator('.todo-pinned-sublabel')).toHaveCount(0)
-      // With no tier heading to stick under, a project label sits above its first card, not over it.
-      await expect(page.locator('.todo-pinned-section .tier-project-label')).toHaveCount(2)
-      const overlaps = await page.evaluate(() => [...document.querySelectorAll('.todo-pinned-section .tier-project-label')]
-        .filter((el) => {
-          const next = el.nextElementSibling
-          return !!next && el.getBoundingClientRect().bottom > next.getBoundingClientRect().top + 1
-        }).length)
-      expect(overlaps).toBe(0)
-      await page.screenshot({ path: `${SHOTS}/mia-pinned-no-tier.png`, clip: await panelClip(page) })
-      await selectTab(page, 'Pinned')
-      expect(await page.locator('.todo-panel').innerText()).not.toMatch(TIER_WORDS)
-
-      // F08: a second tier with tasks (a new task from a draft lands in Focus) still
-      // names no tier: the user never picked one.
+      // One tier with pins: its heading shows on a board where no tier was ever picked.
+      await expect(page.locator('.todo-pinned-sublabel', { hasText: 'Satellite' })).toBeVisible({ timeout: 15_000 })
+      await page.screenshot({ path: `${SHOTS}/mia-pinned-tier-headings.png`, clip: await panelClip(page) })
+      // A second tier with pins (a draft lands in Focus) names itself too.
       expect((await page.request.put(`/api/focus/tasks/${gardenIds[0]}/tier`, { data: { tier: 'focus' } })).ok()).toBe(true)
       await expect(page.locator(`.todo-focus-card[data-task-id="${gardenIds[0]}"]`)).toBeVisible({ timeout: 15_000 })
-      await expect(card(page, homeIds[0])).toBeVisible()
-      expect(await page.locator('.todo-panel').innerText()).not.toMatch(TIER_WORDS)
-      await expect(page.locator('.todo-pinned-sublabel')).toHaveCount(0)
-      // A task in a custom tier means the board has tiers on purpose: every tier names itself.
+      await expect(page.locator('.todo-pinned-sublabel', { hasText: 'Focus' })).toBeVisible({ timeout: 15_000 })
+      await expect(page.locator('.todo-pinned-sublabel', { hasText: 'Satellite' })).toBeVisible()
+      // An empty built-in tier draws no heading of its own.
+      expect((await page.request.put(`/api/focus/tasks/${homeIds[0]}/tier`, { data: { tier: 'focus' } })).ok()).toBe(true)
+      await expect(page.locator('.todo-pinned-sublabel', { hasText: 'Satellite' })).toHaveCount(0, { timeout: 15_000 })
+      await expect(page.locator('.todo-pinned-sublabel', { hasText: 'Focus' })).toBeVisible()
+      // A custom tier with a pin names itself beside the built-in ones; emptied, its heading goes.
       // (The custom tier is made here and removed right after: an empty one still draws.)
       const shelfLabel = `Shelf ${stamp}`
       const shelf = await page.request.post('/api/focus/tiers', { data: { label: shelfLabel } })
@@ -67,19 +57,16 @@ test.describe('board entry points', () => {
       } finally {
         await page.request.delete(`/api/focus/tiers/${shelfId}`).catch(() => undefined)
       }
-      await expect(page.locator('.todo-pinned-sublabel')).toHaveCount(0, { timeout: 15_000 })
-      // A task stored under the retired `wait` tier (an older client) reads as Satellite, so
-      // the board still names no tier.
+      await expect(page.locator('.todo-pinned-sublabel', { hasText: shelfLabel })).toHaveCount(0, { timeout: 15_000 })
+      // A task stored under the retired `wait` tier (an older client) reads as Satellite: the
+      // Satellite heading comes back and no Parked heading draws.
       expect((await page.request.post(`/api/focus/tasks/${homeIds[1]}`)).ok()).toBe(true)
       expect((await page.request.put(`/api/focus/tasks/${homeIds[1]}/tier`, { data: { tier: 'wait' } })).ok()).toBe(true)
       await expect(card(page, homeIds[1])).toBeVisible({ timeout: 15_000 })
-      await expect(page.locator('.todo-pinned-sublabel')).toHaveCount(0)
+      await expect(page.locator('.todo-pinned-sublabel', { hasText: 'Satellite' })).toBeVisible({ timeout: 15_000 })
+      await expect(page.locator('.todo-pinned-sublabel', { hasText: 'Parked' })).toHaveCount(0)
       expect((await page.request.delete(`/api/focus/tasks/${homeIds[1]}`)).ok()).toBe(true)
-      // Switching to a tier view marks the board as one that uses tiers; from then on
-      // two tiers with tasks draw their headings. The pick on the View page closes the menu.
-      await chooseDisplayOption(page, 'satellite')
-      await expect(filterMenu(page)).toHaveCount(0)
-      expect(await page.evaluate(() => localStorage.getItem('walnut-todo-tier-used'))).toBe('1')
+      await expect(page.locator('.todo-pinned-sublabel', { hasText: 'Satellite' })).toHaveCount(0, { timeout: 15_000 })
       await selectTab(page, 'Pinned')
       await expect(page.locator('.todo-pinned-sublabel', { hasText: 'Focus' })).toBeVisible({ timeout: 15_000 })
     } finally {

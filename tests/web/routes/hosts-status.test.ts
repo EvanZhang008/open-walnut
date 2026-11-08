@@ -449,6 +449,26 @@ describe('POST /api/hosts/:host/connect', () => {
   });
 });
 
+describe('POST /api/hosts/:host/check', () => {
+  it('a first failure answers with an unknown snapshot and the next check recovers', async () => {
+    states.devbox = { connected: true, phase: 'connected' };
+    pooled.devbox = preflightConn(['preflight-v1'], { ok: false, error: 'The first check timed out.' });
+    const failed = await request(createApp()).post('/api/hosts/devbox/check');
+    expect(failed.status).toBe(200);
+    expect(failed.body.status.readiness).toMatchObject({
+      claude: { found: false, auth: 'unknown' }, problems: [], checkError: 'The first check timed out.',
+    });
+    pooled.devbox = preflightConn(['preflight-v1'], {
+      ok: true, claude: { found: true, version: '2.1.318', auth: 'ok', installMethod: 'native' },
+      compiler: { found: true }, dtach: { found: true },
+    });
+    const recovered = await request(createApp()).post('/api/hosts/devbox/check');
+    expect(recovered.status).toBe(200);
+    expect(recovered.body.status.readiness).toMatchObject({ claude: { auth: 'ok' }, problems: [] });
+    expect(recovered.body.status.readiness.checkError).toBeUndefined();
+  });
+});
+
 describe('GET /api/hosts/:host/status', () => {
   it('requires the companion and never starts an SSH connection', async () => {
     const res = await request(createApp()).get('/api/hosts/devbox/status');

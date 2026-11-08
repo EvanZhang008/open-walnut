@@ -20,7 +20,8 @@ import { RemoteHostReadiness } from './RemoteHostReadiness';
 import { useIsReplicaServer } from '@/hooks/useServerRole';
 import '@/styles/host-picker-settings.css';
 
-export function RemoteHostDetail({ alias, name }: { alias: string; name?: string }) {
+/** `hintOnRow`: the row above already says the failure's reason (useLinkedHostRow), so it is not said again here. */
+export function RemoteHostDetail({ alias, name, hintOnRow = false }: { alias: string; name?: string; hintOnRow?: boolean }) {
   const status = useHostStatus(alias);
   const actions = useHostActions(alias);
   const replica = useIsReplicaServer();
@@ -31,7 +32,7 @@ export function RemoteHostDetail({ alias, name }: { alias: string; name?: string
     ? (
       <div className="rh-failure" data-host={alias} data-kind={problem.kind}>
         <HostFailureText
-          headline="" hint={problem.hint} summary={problem.summary} kind={problem.kind}
+          headline="" hint={hintOnRow ? '' : problem.hint} summary={problem.summary} kind={problem.kind}
           retryAt={problem.retryAt} lastFrameAt={status?.at}
         />
       </div>

@@ -1,4 +1,5 @@
 import { registry } from '../integration-registry.js'
+import { demoApiHeaders } from '../../lib/self-api-root.js'
 import { getPluginLifecycleRecords } from '../integration-loader.js'
 import { validatePluginId } from './ids.js'
 import { callPluginOp, getPluginApiBase, listPluginOps, parsePluginOpCaller } from './server-api.js'
@@ -197,6 +198,7 @@ async function fetchLoopback(
   try {
     const response = await fetch(url, {
       ...init,
+      headers: new Headers({ ...Object.fromEntries(new Headers(init.headers)), ...demoApiHeaders(url) }),
       signal: AbortSignal.timeout(timeoutMs),
     })
     return { response, body: await readLimited(response, responseLimit) }

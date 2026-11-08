@@ -18,6 +18,7 @@ import { hostDotOf } from '@open-walnut/host-problem';
 import { HostStatusDot } from './path-selector/HostStatusDot';
 import { CLOUD_BOX_ALIAS, hostDisplayLabel, LOCAL_HOST_LABEL } from '@/utils/host-display-label';
 import type { DraftColumn } from './draft-column';
+import { shownFolderName } from '@/utils/home-folder';
 import type { DraftDecisionMenu } from './DraftDecisionRow';
 import { DRAFT_MENU_OWNER_ATTR, menuTriggerProps } from './DraftDecisionRow';
 import type { DraftProjectChipModel } from './draft-project-chip';
@@ -25,10 +26,6 @@ import '@/styles/draft-launch-pills.css';
 
 function AiBadge({ on }: { on: boolean }) {
   return on ? <span className="draft-ai-badge" aria-label="AI suggested">✦</span> : null;
-}
-
-function basename(cwd: string): string {
-  return cwd.replace(/\/+$/, '').split('/').pop() || '/';
 }
 
 export function DraftFolderPill({ draft, pillRef, pickerOpen, ai, onOpenPicker, emptyFolder }: {
@@ -82,7 +79,7 @@ export function DraftFolderPill({ draft, pillRef, pickerOpen, ai, onOpenPicker, 
         <>
           {/* The spaces are text for copy and specs; flex drops them visually. */}
           <span className="draft-pill-key">Folder/Host:</span>{' '}
-          <span className="draft-pill-name">{basename(draft.cwd)}</span>{' '}
+          <span className="draft-pill-name">{shownFolderName(draft.cwd, draft.host)}</span>{' '}
           <span className="draft-pill-host">· {hostName}</span>
           {saysSomething && <HostStatusDot dot={hostDot!} host={draft.host ?? undefined} className="draft-pill-dot" />}
         </>

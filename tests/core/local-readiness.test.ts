@@ -96,6 +96,28 @@ describe('local Claude Code readiness', () => {
     expect(seen[seen.length - 1]).toEqual([])
   })
 
+  // 2026-11-08: the card read "not installed" with its Install button again for a moment
+  // between a working install and the sign-in step, because the fix ended before the re-check.
+  it.each([
+    ['claude_missing', 'install-claude-native', { ...READY, claude: { found: false } }],
+    ['claude_outdated', 'update-claude', { ...READY, claude: { ...READY.claude, version: '2.1.258', versionOk: false } }],
+  ] as const)('a working %s fix never shows the old problem again before the re-check', async (kind, action, before) => {
+    const signedOut = { ...READY, claude: { ...READY.claude, auth: 'not-logged-in' as const } }
+    machine(before as HostPreflightResult, {
+      [action]: (b: { p: HostPreflightResult }) => { b.p = structuredClone(signedOut); return { action, ok: true, claude: { path: BIN, kind: 'native', version: '2.1.280' } } },
+    })
+    const seen: string[][] = []
+    const off = wireLocalClaude({ onChange: (s) => seen.push((s?.problems ?? []).map((p) => `${p.kind}${p.fix ? ':' + p.fix.state : ''}`)) })
+    await refreshLocalClaude()
+    expect(startLocalClaudeFix(kind).ok).toBe(true)
+    await vi.waitFor(() => expect(getLocalClaude()!.fixing).toBeUndefined())
+    off()
+    const from = seen.findIndex((s) => s.includes(`${kind}:running`))
+    expect(from).toBeGreaterThan(-1)
+    expect(seen.slice(from).filter((s) => s.includes(kind))).toEqual(seen.slice(from).filter((s) => s.includes(kind)).map(() => [`${kind}:running`]))
+    expect(seen[seen.length - 1]).toEqual(['claude_not_logged_in'])
+  })
+
   it('a failed install keeps the line with its reason and the exact command, and can be tried again', async () => {
     const m = machine({ ...READY, claude: { found: false } })
     await refreshLocalClaude()
@@ -141,6 +163,33 @@ describe('local Claude Code readiness', () => {
 })
 
 describe('failed re-check and floor changes', () => {
+  it.each(['no-result', 'exception'] as const)('publishes a first %s failure and recovers on a daemon reconnect', async (kind) => {
+    let fail = true;
+    let connected!: () => void;
+    const seen: Array<ReturnType<typeof getLocalClaude>> = [];
+    setLocalClaudeIo({
+      now: () => 1_000, floor: async () => OPUS_55,
+      onDaemonConnected: cb => { connected = cb; return () => {}; },
+      preflight: async () => {
+        if (!fail) return { result: structuredClone(READY), source: 'daemon' };
+        if (kind === 'exception') throw new Error('The first check timed out.');
+        return { result: null, source: 'daemon', error: 'The first check timed out.' };
+      },
+    });
+    const off = wireLocalClaude({ onChange: status => seen.push(status) });
+    try {
+      expect(await refreshLocalClaude()).toBeNull();
+      expect(getLocalClaude()).toMatchObject({ checkedAt: 1_000, checkError: 'The first check timed out.', problems: [], claude: { auth: 'unknown' } });
+      expect(seen).toHaveLength(1);
+      expect(startLocalClaudeFix('claude_missing')).toEqual({ ok: false, error: 'no-such-problem' });
+      fail = false;
+      connected();
+      await vi.waitFor(() => expect(getLocalClaude()).toMatchObject({ problems: [], claude: { auth: 'ok' } }));
+      expect(getLocalClaude()?.checkError).toBeUndefined();
+      expect(seen).toHaveLength(2);
+    } finally { off(); }
+  });
+
   it('keeps the previous good answer and stamps checkError', async () => {
     let fail = false
     let t = 1_000
@@ -257,6 +306,23 @@ describe('the machine: the local daemon first, else this process', () => {
     off()
     expect(connected).toBeUndefined()
   })
+
+  it('a daemon reconnect retries an inconclusive shell probe', async () => {
+    let connected: (() => void) | undefined;
+    let asked = 0;
+    setLocalClaudeIo({
+      floor: async () => null,
+      onDaemonConnected: cb => { connected = cb; return () => {} },
+      preflight: async () => ({ result: ++asked === 1 ? { ...READY, claude: { found: false, unknown: 'The login shell timed out.' } } : READY, source: 'daemon' }),
+    });
+    const off = wireLocalClaude({ onChange: () => {} });
+    await refreshLocalClaude();
+    expect(getLocalClaude()?.claude.unknown).toBe('The login shell timed out.');
+    connected!();
+    await vi.waitFor(() => expect(getLocalClaude()?.claude.found).toBe(true));
+    expect(asked).toBe(2);
+    off();
+  });
 
   it('a daemon connect asks nothing when nothing was asked before (a test server that opted out)', async () => {
     let connected: (() => void) | undefined

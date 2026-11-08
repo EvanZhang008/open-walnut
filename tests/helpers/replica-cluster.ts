@@ -147,6 +147,25 @@ export function builtAppMissing(): string | null {
 }
 
 export interface ClusterIds { board: string; other: string; macSid: string; hostSid: string }
+export interface SignalWindow { before: number; after: number }
+
+export function stallsOutsidePause<T extends { holdStart?: string; hold?: { holdFromMs?: number; holdToMs?: number; holdCpuMs?: number } }>(
+  records: T[], stop: SignalWindow, wake: SignalWindow,
+): T[] {
+  let excluded = false
+  return records.filter((record) => {
+    const priorProbe = Date.parse(record.holdStart ?? '')
+    const { holdFromMs, holdToMs, holdCpuMs } = record.hold ?? {}
+    if (!Number.isFinite(priorProbe) || holdFromMs === undefined || holdToMs === undefined || holdCpuMs === undefined) return true
+    const start = priorProbe + 1_000 + holdFromMs
+    const end = priorProbe + 1_000 + holdToMs
+    // Only the hold ending at our SIGCONT is excluded; a later hold remains a failure.
+    const paused = start <= stop.after + 2 && end >= wake.before - 2 && end <= wake.after + 2 && holdCpuMs < 250
+    if (!paused || excluded) return true
+    excluded = true
+    return false
+  })
+}
 
 export interface ReplicaCluster {
   base: string
@@ -169,8 +188,8 @@ export interface ReplicaCluster {
   pairDevice(name: string): Promise<string>
   /** A browser sign-in code minted on the Mac (the person at the Mac). */
   browserCode(): Promise<string>
-  sleepMac(): void
-  wakeMac(): void
+  sleepMac(): SignalWindow
+  wakeMac(): SignalWindow
   asleep(): boolean
   /** Waits until the replica answers `token`'s reads from its copies (x-walnut-offline). */
   waitAway(token: string, timeoutMs?: number): Promise<number>
@@ -297,9 +316,14 @@ function stillPinned(p: Pinned): boolean {
 }
 
 /** A signal to a pinned process, only while it is still that process. */
-function signalPinned(p: Pinned | null, sig: NodeJS.Signals): boolean {
+function signalPinned(p: Pinned | null, sig: NodeJS.Signals, timing?: SignalWindow): boolean {
   if (!p || !stillPinned(p)) return false
-  try { process.kill(p.pid, sig); return true } catch { return false }
+  try {
+    if (timing) timing.before = Date.now()
+    process.kill(p.pid, sig)
+    if (timing) timing.after = Date.now()
+    return true
+  } catch { return false }
 }
 
 /** A signal to a direct child, only while it runs (an exited child's pid may be anyone's by now). */
@@ -697,9 +721,11 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
     if (macDaemonPin && !stillPinned(macDaemonPin)) {
       macDaemonPin = pin('mac-daemon', readPid(path.join(d.macDaemon, 'daemon.pid')), (c) => / --start(\s|$)/.test(c)) ?? macDaemonPin
     }
+    const timing = { before: 0, after: 0 }
     for (const p of [macPin, macDaemonPin]) {
-      if (!signalPinned(p, sig)) throw new Error(`replica-cluster: refusing ${sig}: ${p?.name ?? 'a Mac process'} (${p?.pid ?? '?'}) is not the process this cluster started`)
+      if (!signalPinned(p, sig, p === macPin ? timing : undefined)) throw new Error(`replica-cluster: refusing ${sig}: ${p?.name ?? 'a Mac process'} (${p?.pid ?? '?'}) is not the process this cluster started`)
     }
+    return timing
   }
   const offlineOf = (h: http.IncomingHttpHeaders): number | null => (typeof h['x-walnut-offline'] === 'string' ? Number(h['x-walnut-offline']) : null)
 
@@ -721,8 +747,8 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
       if (r.status !== 200 || typeof r.json.code !== 'string') throw new Error(`no browser code: ${r.status} ${JSON.stringify(r.json)}`)
       return r.json.code as string
     },
-    sleepMac() { signalMac('SIGSTOP'); paused = true },
-    wakeMac() { signalMac('SIGCONT'); paused = false },
+    sleepMac() { const timing = signalMac('SIGSTOP'); paused = true; return timing },
+    wakeMac() { const timing = signalMac('SIGCONT'); paused = false; return timing },
     asleep: () => paused,
     async waitAway(token, timeoutMs = WINDOWS.quietMs + 30_000) {
       const t0 = Date.now()

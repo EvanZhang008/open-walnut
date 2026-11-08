@@ -15,7 +15,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { _signalSafetyForTesting as g } from '../helpers/replica-cluster.js'
+import { _signalSafetyForTesting as g, stallsOutsidePause } from '../helpers/replica-cluster.js'
 
 const kids: ChildProcess[] = []
 let dir = ''
@@ -108,6 +108,42 @@ describe('the cluster signals only the processes it started', () => {
     // The script's path is in the command line, but not at its start.
     expect(g.pidsRunning(path.join(dir, 'idle.cjs'))).not.toContain(d.pid)
     expect(g.pidsRunning(path.basename(dir))).toEqual([])
+  })
+
+  it('excludes only one low-CPU hold ending at the exact controlled wake', () => {
+    const stop = { before: 1_200, after: 1_201 }
+    const wake = { before: 8_000, after: 8_001 }
+    const paused = { holdStart: new Date(0).toISOString(), hold: { holdFromMs: 199, holdToMs: 7_000, holdCpuMs: 10 } }
+    expect(stallsOutsidePause([paused], stop, wake)).toEqual([])
+    for (const bad of [
+      { ...paused, hold: { ...paused.hold, holdCpuMs: 250 } },
+      { ...paused, hold: { ...paused.hold, holdToMs: 7_004 } },
+      { ...paused, hold: { ...paused.hold, holdToMs: 6_997 } },
+      { ...paused, hold: { ...paused.hold, holdFromMs: 2_000 } },
+      { ...paused, hold: { ...paused.hold, holdFromMs: 7_002, holdToMs: 9_000 } },
+      { ...paused, hold: { holdFromMs: 199, holdToMs: 7_000 } },
+      { holdStart: 'unknown', hold: paused.hold },
+    ]) expect(stallsOutsidePause([bad], stop, wake)).toEqual([bad])
+    expect(stallsOutsidePause([paused, paused], stop, wake)).toEqual([paused])
+  })
+
+  it('timestamps only the signal itself, after the process identity checks', async () => {
+    const p = idle(path.join(dir, 'idle.cjs'))
+    await started(p)
+    const pinned = g.pin('timed', p.pid!, () => true)!
+    const window = { before: 0, after: 0 }
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => {
+      expect(window.before).toBeGreaterThan(0)
+      expect(window.after).toBe(0)
+      return true
+    })
+    expect(g.signalPinned(pinned, 'SIGCONT', window)).toBe(true)
+    expect(window.after).toBeGreaterThanOrEqual(window.before)
+    kill.mockClear()
+    const refused = { before: 0, after: 0 }
+    expect(g.signalPinned({ ...pinned, started: 'wrong identity' }, 'SIGCONT', refused)).toBe(false)
+    expect(kill).not.toHaveBeenCalled()
+    expect(refused).toEqual({ before: 0, after: 0 })
   })
 
   it('reads a pid file in both shapes, and never a pid of 1 or less', () => {

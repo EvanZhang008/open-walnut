@@ -149,6 +149,8 @@ export function initPushNotifications(): void {
           if (data.errorKind === 'delivery_failed') break
           // Walnut sends the line again by itself: nothing for the user to do.
           if (data.startRecovery) break
+          // The parked message says it, with Retry (Claude Code not installed yet): a setup step at this computer.
+          if (data.saidOnMessage) break
           const error = data.error
           const lane = await laneIdsFor(data.sessionId)
           if (lane === 'silent') break

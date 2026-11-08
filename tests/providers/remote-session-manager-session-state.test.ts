@@ -200,18 +200,15 @@ describe('L2.1 RemoteSessionManager session_state wire-level contract', () => {
 
   it.each([true, false])('sends markers once using daemon capability=%s', async (supportsMarkers) => {
     const conn = (mgr as unknown as { conn: { hasCapability: (cap: string) => boolean; send: (...args: unknown[]) => Promise<unknown> } }).conn
-    // write-boot-wait-v1 stays off: this test is about markers, and the boot window
-    // (a write right after a spawn waits through the boot) has its own test below.
-    const capability = vi.spyOn(conn, 'hasCapability').mockImplementation((cap: string) => cap !== 'write-boot-wait-v1' && supportsMarkers)
+    const capability = vi.spyOn(conn, 'hasCapability').mockImplementation((cap: string) => cap === 'send-markers-v1' && supportsMarkers)
     const send = vi.spyOn(conn, 'send').mockResolvedValue({ ok: true })
     const prepare = vi.spyOn(mgr, 'prepareOutbound').mockResolvedValue('prepared text')
     const markers = [{ message: 'original text', messageId: 'qm-marker' }]
     try {
       expect(await mgr.writeMessage('original text', { markers })).toBe(true)
-      // capability=true answers yes to every capability, cron-supervision-v1
-      // included, so the send also carries the stop fence (null: no stop yet).
+      // Only the marker capability is under test; unrelated capabilities stay off.
       expect(send.mock.calls).toEqual(supportsMarkers ? [
-        ['send', { sid: 'sid-test', message: 'prepared text', stopFence: null, markers }],
+        ['send', { sid: 'sid-test', message: 'prepared text', markers }],
       ] : [
         ['send', { sid: 'sid-test', message: 'prepared text' }],
         ['appendUserMarker', { sid: 'sid-test', message: 'original text', messageId: 'qm-marker' }],
@@ -225,7 +222,7 @@ describe('L2.1 RemoteSessionManager session_state wire-level contract', () => {
 
   it.each([true, false])('resume marker delivery uses the ordered send path when supported=%s', async (supportsMarkers) => {
     const conn = (mgr as unknown as { conn: { hasCapability: (cap: string) => boolean; send: (...args: unknown[]) => Promise<unknown> } }).conn
-    const capability = vi.spyOn(conn, 'hasCapability').mockReturnValue(supportsMarkers)
+    const capability = vi.spyOn(conn, 'hasCapability').mockImplementation((cap) => cap === 'send-markers-v1' && supportsMarkers)
     const connect = vi.spyOn(mgr as unknown as { ensureConnected(): Promise<unknown> }, 'ensureConnected').mockResolvedValue(conn)
     const send = vi.spyOn(conn, 'send').mockResolvedValue({ ok: true, pid: 4242, offset: 100 })
     const prepare = vi.spyOn(mgr, 'prepareOutbound').mockResolvedValue('prepared resume')
@@ -319,10 +316,78 @@ describe('L2.1 RemoteSessionManager session_state wire-level contract', () => {
     }
   })
 
+  it.each([
+    { bootWait: false, writeBootWait: false },
+    { bootWait: true, writeBootWait: false },
+    { bootWait: false, writeBootWait: true },
+    { bootWait: true, writeBootWait: true },
+  ])('write-boot-wait window is independent of send-boot-wait ($bootWait/$writeBootWait)', async ({ bootWait, writeBootWait }) => {
+    const conn = (mgr as unknown as { conn: { hasCapability: (cap: string) => boolean; send: (...args: unknown[]) => Promise<unknown> } }).conn
+    const capability = vi.spyOn(conn, 'hasCapability').mockImplementation((cap) =>
+      cap === 'send-markers-v1'
+      || (cap === 'send-boot-wait-v1' && bootWait)
+      || (cap === 'write-boot-wait-v1' && writeBootWait))
+    const connect = vi.spyOn(mgr as unknown as { ensureConnected(): Promise<unknown> }, 'ensureConnected').mockResolvedValue(conn)
+    const send = vi.spyOn(conn, 'send').mockResolvedValue({ ok: true, pid: 4242, offset: 100 })
+    const prepare = vi.spyOn(mgr, 'prepareOutbound').mockImplementation(async (text) => text)
+    // Mock only the clock: the real socket and its cleanup timers keep running.
+    const spawnedAt = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(spawnedAt)
+    const markers = [{ message: 'first', messageId: 'qm-window' }]
+    try {
+      await mgr.start({ args: [], cwd: '/tmp', message: 'first', resume: true, markers, onOutput, onExit })
+      expect(send.mock.calls.map(([command]) => command)).toEqual(['start', 'send'])
+      expect(send.mock.calls[0][2]).toBeUndefined()
+      expect(send.mock.calls[1]).toEqual([
+        'send', { sid: 'sid-test', message: 'first', markers, ...(bootWait ? { bootWait: true } : {}) },
+        ...((bootWait || writeBootWait) ? [150_000] : []),
+      ])
+      const nextMarkers = [{ message: 'next', messageId: 'qm-window-next' }]
+      const raw = JSON.stringify({ type: 'user', message: { role: 'user', content: 'raw' } })
+      // The last millisecond waits; the exact boundary and every later write do not.
+      for (const elapsed of [0, 149_999, 150_000, 150_001]) {
+        clock.mockReturnValue(spawnedAt + elapsed)
+        send.mockClear()
+        expect(await mgr.writeMessage('next', { markers: nextMarkers })).toBe(true)
+        expect(await mgr.writeRaw(raw)).toBe(true)
+        const timeout = writeBootWait && elapsed < 150_000 ? [150_000] : []
+        expect(send.mock.calls).toEqual([
+          ['send', { sid: 'sid-test', message: 'next', markers: nextMarkers }, ...timeout],
+          ['sendRaw', { sid: 'sid-test', raw }, ...timeout],
+        ])
+      }
+    } finally {
+      clock.mockRestore()
+      connect.mockRestore()
+      capability.mockRestore()
+      send.mockRestore()
+      prepare.mockRestore()
+    }
+  })
+
+  it('an attached manager has no write-boot-wait spawn window', async () => {
+    const attached = new RemoteSessionManager('sid-test', 'testhost', TEST_TARGET, `ws://127.0.0.1:${daemon.port}`)
+    try {
+      await attached.attach({ sessionId: 'sid-test', onOutput, onExit })
+      const conn = (attached as unknown as { conn: { hasCapability: (cap: string) => boolean; send: (...args: unknown[]) => Promise<unknown> } }).conn
+      const capability = vi.spyOn(conn, 'hasCapability').mockImplementation((cap) => cap === 'write-boot-wait-v1')
+      const send = vi.spyOn(conn, 'send').mockResolvedValue({ ok: true })
+      const prepare = vi.spyOn(attached, 'prepareOutbound').mockImplementation(async (text) => text)
+      try {
+        expect(await attached.writeMessage('next')).toBe(true)
+        expect(send.mock.calls).toEqual([['send', { sid: 'sid-test', message: 'next' }]])
+      } finally {
+        capability.mockRestore()
+        send.mockRestore()
+        prepare.mockRestore()
+      }
+    } finally { await attached.cleanup() }
+  })
+
   it('a start that carries its own message waits through the boot when the daemon can', async () => {
     const conn = (mgr as unknown as { conn: { hasCapability: (cap: string) => boolean; send: (...args: unknown[]) => Promise<unknown> } }).conn
     // No send-markers-v1: the message rides the start.
-    const capability = vi.spyOn(conn, 'hasCapability').mockImplementation((cap: string) => cap !== 'send-markers-v1')
+    const capability = vi.spyOn(conn, 'hasCapability').mockImplementation((cap) => cap === 'send-boot-wait-v1')
     const connect = vi.spyOn(mgr as unknown as { ensureConnected(): Promise<unknown> }, 'ensureConnected').mockResolvedValue(conn)
     const send = vi.spyOn(conn, 'send').mockResolvedValue({ ok: true, pid: 4242, offset: 100 })
     const prepare = vi.spyOn(mgr, 'prepareOutbound').mockResolvedValue('prepared first')
@@ -341,7 +406,7 @@ describe('L2.1 RemoteSessionManager session_state wire-level contract', () => {
 
   it('rejects resume success when its first message was not delivered', async () => {
     const conn = (mgr as unknown as { conn: { hasCapability: (cap: string) => boolean; send: (...args: unknown[]) => Promise<unknown> } }).conn
-    const capability = vi.spyOn(conn, 'hasCapability').mockReturnValue(true)
+    const capability = vi.spyOn(conn, 'hasCapability').mockImplementation((cap) => cap === 'send-markers-v1')
     const connect = vi.spyOn(mgr as unknown as { ensureConnected(): Promise<unknown> }, 'ensureConnected').mockResolvedValue(conn)
     const send = vi.spyOn(conn, 'send').mockResolvedValueOnce({ ok: true, pid: 4242, offset: 100 })
       .mockResolvedValueOnce({ ok: false, reason: 'rejected' })

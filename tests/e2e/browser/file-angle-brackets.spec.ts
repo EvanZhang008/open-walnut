@@ -15,6 +15,7 @@
  * edit reaches disk on its own, with no Save button).
  */
 import { test, expect, type Page } from '@playwright/test'
+import { goToSessionFolder } from './todo-panel-helpers'
 import { readFile, writeFile } from 'node:fs/promises'
 
 const SID = 'pw-vscode-session'
@@ -54,6 +55,8 @@ async function open(p: Page, text: string) {
   const panel = p.locator(`.session-panel[data-session-id="${SID}"]`)
   await panel.getByRole('button', { name: 'Files', exact: true }).click()
   const explorer = panel.locator('.session-file-explorer')
+  await expect(explorer).toBeVisible()
+  await goToSessionFolder(explorer)
   await explorer.locator('.sfe-name', { hasText: name }).locator('xpath=..').click()
   await expect(preview(p)).toContainText('Traffic control')
   await expect(saveState(p)).toHaveText('Saved')

@@ -13,7 +13,7 @@ import { useIsReplicaServer } from '@/hooks/useServerRole';
 import { nextBanner } from '@/utils/attention-banner-model';
 import { getHostDismissed, subscribeHostDismissed } from '@/utils/host-banner-dismiss';
 import { subscribeHostActionEvents } from '@/utils/host-action-store';
-import { useUserEngagedHosts } from '@/utils/host-user-retrying';
+import { usePromptedHosts, useUserEngagedHosts } from '@/utils/host-user-retrying';
 import { readySentenceText } from './HostProblemRows';
 import '@/styles/attention-banner.css';
 
@@ -26,6 +26,7 @@ export function HostBannerAnnouncer() {
   const dismissed = useSyncExternalStore(subscribeHostDismissed, getHostDismissed);
   const replica = useIsReplicaServer();
   const engaged = useUserEngagedHosts();
+  const prompted = usePromptedHosts();
   const [message, setMessage] = useState('');
   const seen = useRef<Map<string, string[]> | null>(null);
   const hydrated = hydration === 'done' || hydration === 'unsupported' || hydration === 'failed';
@@ -33,7 +34,7 @@ export function HostBannerAnnouncer() {
   useEffect(() => {
     if (!hydrated) return;
     const at = serverNow();
-    const { state } = nextBanner({ statuses, dismissed, now: at, replica, engaged });
+    const { state } = nextBanner({ statuses, dismissed, now: at, replica, engaged, prompted });
     const problems = state.order.filter((r) => r.type !== 'ready' && r.type !== 'trying');
     const find = (h: string) => statuses.find((x) => x.host === h && !x.removed);
     const healthy = (h: string) => {
@@ -58,7 +59,7 @@ export function HostBannerAnnouncer() {
       ...[...healed].map((h) => readySentenceText(hostReadySentence(find(h)?.label || h, find(h)?.readiness?.claude?.version))),
     ];
     if (lines.length) setMessage(lines.join('. '));
-  }, [hydrated, statuses, dismissed, replica, engaged]);
+  }, [hydrated, statuses, dismissed, replica, engaged, prompted]);
 
   useEffect(() => subscribeHostActionEvents((e) => {
     if (e.kind === 'receipt' && ANNOUNCED_RECEIPTS.includes(e.text)) setMessage(e.text);

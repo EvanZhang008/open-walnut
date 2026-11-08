@@ -23,6 +23,7 @@
 import { getDeviceToken, renewSignIn } from './device-token';
 import { getSignedOutReason, noteAuthRefusal } from './unpaired';
 import { TEST_RUN_HEADER, testRunLabel } from './test-run';
+import { readsSuspended, waitForReadablePage } from './read-lifecycle';
 
 const NO_TOKEN_PATHS = new Set(['/api/v1/browser-pair']);
 
@@ -147,9 +148,18 @@ export function installAuthFetch(): void {
     const href = window.location.href;
     const withToken = initWithDeviceToken(input, init, href, token);
     const next = initWithTestRun(input, withToken ?? init, href, testRun) ?? withToken ?? init;
-    return { tokened: withToken !== null, response: next ? original(input, next) : original(input) };
+    return { tokened: withToken !== null, response: original(input, next ?? init) };
   };
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const request = typeof Request !== 'undefined' && input instanceof Request ? input : undefined;
+    const method = (init?.method ?? request?.method ?? 'GET').toUpperCase();
+    const raw = inputUrl(input);
+    const url = raw === null ? null : new URL(raw, window.location.href);
+    const read = (method === 'GET' || method === 'HEAD')
+      && url?.origin === new URL(window.location.href).origin && url.pathname.startsWith('/api/');
+    const deadline = Date.now() + 20_000;
+    const signal = init?.signal !== undefined ? init.signal ?? undefined : request?.signal;
+    while (read && readsSuspended()) await waitForReadablePage(signal, deadline);
     const token = getDeviceToken();
     if (token && heldOffWhileSignedOut(input, window.location.href, getSignedOutReason())) {
       return new Response(JSON.stringify({ error: 'This browser is signed out.', code: 'signed_out_here' }), { status: 401, headers: { 'Content-Type': 'application/json' } });
@@ -158,6 +168,8 @@ export function installAuthFetch(): void {
     const res = await first.response;
     if (res.status !== 401 || !first.tokened || !token || !replayable(input, init)) return res;
     const again = await tokenForRetry(res, token);
-    return again ? send(input, init, again).response : res;
+    if (!again) return res;
+    while (read && readsSuspended()) await waitForReadablePage(signal, deadline);
+    return send(input, init, again).response;
   };
 }

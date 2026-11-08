@@ -26,8 +26,6 @@ html:root {
 }
 
 @supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) and (background: color-mix(in srgb, red 50%, transparent)) {
-  html .notification-panel,
-  html .notification-panel.voice-panel,
   html .adopt-worker-flyout,
   html .leader-subtasks-flyout,
   html .workspace-flyout,

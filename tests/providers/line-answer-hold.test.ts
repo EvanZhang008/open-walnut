@@ -407,19 +407,31 @@ describe('class guard: every server path that settles a taken line goes through 
     expect(callsOf('this.releaseLineRows').sort()).toEqual([
       // settleTakenLine: answered, no uuid, or a daemon that cannot judge.
       'this.releaseLineRows(rows, state)',
+      // A taken disposition held behind cancellation only forwards unrelated rows.
+      'this.releaseLineRows(remaining, why)',
       // noteLineAnswered: the process answered.
       "this.releaseLineRows(line.rows, 'answered')",
       // completed frame: the turn ended.
       "this.releaseLineRows([...rows, ...takeAnswering(this.claudeSessionId, lc.command_uuid)], 'completed')",
-      // a Stop cancelled or stopped them (not delivered).
-      "this.releaseLineRows(rows, 'cancelled')",
-      "this.releaseLineRows(takeLine(this.claudeSessionId, uuid), 'cancelled')",
-      "this.releaseLineRows(untaken, 'stopped')",
       // a Stop during the turn that took them: the user's choice.
       "this.releaseLineRows(unansweredLines(this.claudeSessionId).flatMap((line) => line.rows), 'started')",
       // awaitLineAnswer: past the registry's bound, the oldest by the old rule (else stranded).
       "this.releaseLineRows(evicted, 'started')",
     ].sort())
+  })
+
+  it('every actual composer return call is behind the durable cancellation barrier', () => {
+    // Enumerate actual calls across the file, not a fixed list of the three callers.
+    expect(callsOf('this.returnToComposer')).toEqual(['this.returnToComposer(deleted.length ? deleted.filter((r) => owns.has(r.id)).map((r) => ({ message: r.message, messageId: r.id })) : markers.filter((m) => owns.has(m.messageId) && returned.has(m.messageId)))'])
+    const barrier = src.slice(src.indexOf('private async returnCancelledRows('), src.indexOf('/** Hand messages back'))
+    expect(barrier).toMatch(/const deleted = this\.claudeSessionId[\s\S]*?await removeTaken\([\s\S]*?ran: false, rows: queued, preserveParked: scope\?\.preserveParked, confirmedCancelled: why === 'cancelled'/)
+    expect(barrier).toMatch(/let removed = false/)
+    expect(barrier).toMatch(/if \(clear\(\) && \(deleted\.length > 0 \|\| captured\.length === 0 && rows\.length === 0 && queued\.length === 0\)\)/)
+    expect(barrier.indexOf('await removeTaken(')).toBeLessThan(barrier.indexOf('this.returnToComposer('))
+    // Unrelated rows may leave through the ordinary settlement path; cancellation owns its durable deletion.
+    expect(callsOf('this.releaseLineRows').filter((c) => /'cancelled'|'stopped'|, why\)/.test(c)))
+      .toEqual(['this.releaseLineRows(remaining, why)'])
+    expect(src.match(/bus\.emit\(EventNames\.SESSION_QUEUED_CANCELLED/g)).toHaveLength(1)
   })
 
   it('every other way rows leave the queue as delivered is pinned, with why it never takes a started-but-unanswered line', () => {
@@ -440,8 +452,11 @@ describe('class guard: every server path that settles a taken line goes through 
       'this.removeWrittenRows(settled)', 'this.removeWrittenRows(evicted)', 'this.removeWrittenRows(evicted)',
       'this.removeWrittenRows(rows)', 'this.removeWrittenRows(rows)', 'this.removeWrittenRows(rows)',
     ].sort())
-    // removeTaken is releaseLineRows' own body (its callers are pinned above).
-    expect(callsOf('removeTaken')).toEqual(["removeTaken(sid, ids, { ran: why !== 'cancelled' && why !== 'stopped' })"])
+    // Cancellation's atomic deletion returns the stored rows; the ordinary release only settles delivered rows.
+    expect(callsOf('removeTaken')).toEqual([
+      "removeTaken(sid, ids, { ran: why !== 'cancelled' && why !== 'stopped', rows })",
+      "removeTaken(this.claudeSessionId, queued.map((r) => r.id), { ran: false, rows: queued, preserveParked: scope?.preserveParked, confirmedCancelled: why === 'cancelled' })",
+    ])
     // settleTakenLine's `answered` is only ever the CLI's or the daemon's proof of an answer.
     expect(callsOf('this.settleTakenLine').sort()).toEqual([
       "this.settleTakenLine(uuid, rows, known.state ?? 'ran', known.state !== 'started' || known.answer === 'yes')",

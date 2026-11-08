@@ -10,8 +10,8 @@ import { getDeviceToken, renewalDue, renewSignIn, tokenExpired } from './device-
 import { getUnpairedState, noteAuthRefusal, subscribeUnpaired } from './unpaired';
 import { wsProtocolsFor } from '../../../src/lib/ws-bearer-protocol';
 import { mintOpId } from './op-id';
-import { withSendTestRun } from './test-run';
 import { leaderErrorMessage, WS_LEADER_AWAY, WS_LEADER_BACK } from './leader-presence';
+import { demoPageGeneration, initDemoGeneration, isDemoOrigin } from '../utils/demo-generation';
 
 /** WebSocket frame types matching the server protocol. */
 export interface WsEventFrame {
@@ -176,26 +176,34 @@ class WsClient {
     // (src/lib/ws-bearer-protocol.ts). On the server's own machine no token is
     // stored → a bare /ws with no subprotocol.
     const deviceToken = getDeviceToken();
-    const url = `${proto}://${window.location.host}/ws`;
+    const generation = demoPageGeneration();
+    const url = `${proto}://${window.location.host}/ws${generation ? '?demo-generation=' + encodeURIComponent(generation) : ''}`;
     log.info('ws', 'connecting', { url });
     const ws = deviceToken ? new WebSocket(url, wsProtocolsFor(deviceToken)) : new WebSocket(url);
 
     ws.onopen = () => {
-      const isReconnect = this.hasConnectedBefore;
-      this.hasConnectedBefore = true;
-      this.reconnectDelay = 1000;
-      this.setState('connected');
-      log.info('ws', isReconnect ? 'connected (reconnect)' : 'connected');
-      // Flush any RPCs buffered while the socket was opening (cold-load race).
-      this.flushPreOpenQueue();
-      // On reconnect, emit a synthetic event so components can re-fetch stale data.
-      // Events during the disconnect window are permanently lost — the server has
-      // no event buffer/replay; events are fire-and-forget over the live socket.
-      // This lets SessionPanel re-fetch status and SessionChatHistory re-fetch history.
-      if (isReconnect) {
-        // seq: -1 is a sentinel meaning client-synthetic event, not a server-sequenced frame.
-        this.dispatchEvent({ type: 'event', name: '_ws:reconnected', data: {}, seq: -1 });
-      }
+      const opened = () => {
+        if (this.disposed || this.ws !== ws) return;
+        const isReconnect = this.hasConnectedBefore;
+        this.hasConnectedBefore = true;
+        this.reconnectDelay = 1000;
+        this.setState('connected');
+        log.info('ws', isReconnect ? 'connected (reconnect)' : 'connected');
+        this.flushPreOpenQueue();
+        if (isReconnect) {
+          this.dispatchEvent({ type: 'event', name: '_ws:reconnected', data: {}, seq: -1 });
+        }
+      };
+      if (!isDemoOrigin()) { opened(); return; }
+      // A reset must not let an old tab send its previous drafts into the new data home.
+      void initDemoGeneration().then(changed => {
+        if (this.disposed || this.ws !== ws) return;
+        if (changed) { this.disconnect(); window.location.reload(); }
+        else opened();
+      }).catch(error => {
+        log.warn('ws', 'Demo generation check failed', { error: String(error) });
+        ws.close();
+      });
     };
 
     ws.onclose = (ev) => {
@@ -225,6 +233,17 @@ class WsClient {
       const renew = ev.code === WS_RENEW_SIGN_IN;
       if (handover || renew) this.reconnectDelay = 1000;
       if (this.disposed) return;
+      if (isDemoOrigin()) {
+        void initDemoGeneration().then(changed => {
+          if (this.disposed) return;
+          if (changed) { this.disconnect(); window.location.reload(); }
+          else this.scheduleReconnect();
+        }).catch(error => {
+          log.warn('ws', 'Demo generation check failed before reconnect', { error: String(error) });
+          if (!this.disposed) this.scheduleReconnect();
+        });
+        return;
+      }
       // The token this socket was opened with ran out: the page usually renewed it already.
       if (renew && (tokenExpired() || renewalDue())) {
         void renewSignIn().then((r) => {
@@ -325,10 +344,8 @@ class WsClient {
   }
 
   sendRpc<T = unknown>(method: string, payload: unknown): Promise<T> {
-    // A test-run window says so on each send, as its HTTP requests do with the header.
-    if (method === 'session:send') payload = withSendTestRun(payload);
     return new Promise((resolve, reject) => {
-      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN || isDemoOrigin() && this._state !== 'connected') {
         // Not open yet. Rather than fail (the cold-load race), buffer and flush
         // on open — UNLESS we're disposed or the buffer is full.
         if (this.disposed) {

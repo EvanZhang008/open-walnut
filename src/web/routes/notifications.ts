@@ -24,7 +24,7 @@ import {
 import { stripEntityRefs } from '../../utils/entity-refs.js'
 import { LOG_DIR, WALNUT_HOME, WALNUT_PACKAGE_ROOT, WALNUT_REPO_URL } from '../../constants.js'
 import { ensureWalnutSource, WalnutSourceError } from '../../core/self-repair/walnut-source.js'
-import { buildNotificationFixMessage, fixTaskTitle } from '../../core/self-repair/fix-briefing.js'
+import { buildNotificationFixMessage, fixRequestLine, fixTaskTitle, repairBriefPrefix } from '../../core/self-repair/fix-briefing.js'
 import {
   currentHostFailures, hostFixRecord, HostFixError, HOST_FIX_INSTRUCTIONS,
   currentSystemFailure, systemFixRecord, SYSTEM_FIX_INSTRUCTIONS,
@@ -32,6 +32,7 @@ import {
 import { quickStartSession, QuickStartError } from '../../core/sessions/quick-start.js'
 import { listTasksByIds } from '../../core/task-manager.js'
 import { getVersion } from '../../core/version.js'
+import { AGENT_CANNOT_RUN_KINDS } from '../../core/hosts/host-problem.js'
 import { isCompanion, isFollower } from '../../core/server-role.js'
 import { broadcastEvent } from '../ws/handler.js'
 import { log } from '../../logging/index.js'
@@ -295,6 +296,8 @@ interface RepairLaunch {
 }
 
 const fixInFlight = new Map<string, Promise<RepairLaunch>>()
+/** Local Claude Code problems no agent can run past: the repair session itself would fail (shared with the web's agentCannotRun). */
+const AGENT_BLOCKING_KINDS = new Set(AGENT_CANNOT_RUN_KINDS)
 interface CurrentRepair {
   fingerprint: string
   hostKeys?: ReadonlyArray<readonly [string, string]>
@@ -345,8 +348,14 @@ async function launchCurrentRepair(
 async function startRepair(
   dedupKey: string, record: NotificationRecord, persist: boolean = true, instructions: string = '',
 ): Promise<RepairLaunch> {
+  // The repair runs on Claude Code on this computer: with Claude Code missing or signed out,
+  // the session would fail the same way as the error it was asked to fix (review round 2,
+  // D08: a "Fix with agent" task that failed too). Say what to do instead.
+  const { getLocalClaude } = await import('../../core/hosts/local-readiness.js')
+  const blocker = getLocalClaude()?.problems.find((p) => AGENT_BLOCKING_KINDS.has(p.kind))
+  if (blocker) throw new HostFixError(`${blocker.message} Fix with agent runs on Claude Code, so set it up first (Get Walnut talking, on Home), then try again.`, 409)
   const { source, cloned } = await ensureWalnutSource()
-  const message = instructions + buildNotificationFixMessage(record, {
+  const brief = instructions + buildNotificationFixMessage(record, {
     source, cloned,
     version: getVersion(),
     packageRoot: WALNUT_PACKAGE_ROOT,
@@ -358,7 +367,9 @@ async function startRepair(
   // once (same contract as quick-start's preassignedSessionId).
   const sessionId = randomUUID()
   const task = await quickStartSession({
-    message,
+    // The person's bubble reads the request; the agent's briefing rides as a hint block.
+    message: fixRequestLine(record),
+    messagePrefix: repairBriefPrefix(brief),
     cwd: source.dir,
     taskTitle: fixTaskTitle(record),
     project: 'Walnut',

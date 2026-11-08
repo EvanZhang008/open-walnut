@@ -213,7 +213,7 @@ describe('POST /api/sessions/quick-start — intent=fix-walnut', () => {
     expect(res.body.error).toContain('Invalid intent');
   });
 
-  it('leaves plain quick-starts untouched (no wrapping, default title, Inbox)', async () => {
+  it('leaves plain quick-starts untouched (no wrapping, the person\'s words as title, Inbox)', async () => {
     const app = createApp();
     const capture = captureSessionStart();
     try {
@@ -223,7 +223,8 @@ describe('POST /api/sessions/quick-start — intent=fix-walnut', () => {
 
       expect(res.status).toBe(200);
       const task = await getTask(res.body.taskId);
-      expect(task!.title).toBe('Session: plain-dir');
+      // A person's typed words name a plain New task (review round 2), never the repair title.
+      expect(task!.title).toBe('just do the thing');
       // No caller-supplied project → Inbox (the old 'Quick Start' staging
       // project is gone; auto-organize is what files it later).
       expect(task!.project).toBe('');

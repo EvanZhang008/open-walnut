@@ -1,11 +1,20 @@
 import { test, expect, type Page, type Locator } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
-import { isolateUiPrefs } from './todo-panel-helpers';
+import { goToSessionFolder, isolateUiPrefs } from './todo-panel-helpers';
 
 async function openPdf(page: Page) {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.waitForLoadState('networkidle');
-  await page.locator('.todo-search-input').fill('pw-vscode-session');
+  const search = page.locator('.todo-search-input');
+  await expect(search).toBeVisible();
+  const searchBox = (await search.boundingBox())!;
+  await page.mouse.move(searchBox.x + searchBox.width / 2, searchBox.y + searchBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.up();
+  await expect(search).toBeFocused();
+  await page.keyboard.press('ControlOrMeta+A');
+  await page.keyboard.type('pw-vscode-session');
+  await expect(search).toHaveValue('pw-vscode-session');
   const task = page.locator('.todo-panel-item[data-task-id="pw-task-vscode"]');
   await expect(task).toBeVisible({ timeout: 30_000 });
   await task.locator('.todo-item-title').click();
@@ -13,6 +22,7 @@ async function openPdf(page: Page) {
   await panel.getByRole('button', { name: 'Files', exact: true }).click();
   const explorer = panel.locator('.session-file-explorer');
   await expect(explorer).toBeVisible();
+  await goToSessionFolder(explorer);
   await explorer.locator('.session-file-explorer-node[title$="/contract.pdf"]').click();
   return explorer;
 }

@@ -634,9 +634,13 @@ notesV2Router.get('/content/*path', async (req: Request, res: Response, next: Ne
     let content = ''
     let updatedAt: string | null = null
     try {
-      content = await fsp.readFile(filePath, 'utf-8')
-      const stat = await fsp.stat(filePath)
-      updatedAt = stat.mtime.toISOString()
+      const snapshot = await withUserFileLock(filePath, async () => {
+        const content = await fsp.readFile(filePath, 'utf-8')
+        const stat = await fsp.stat(filePath)
+        return { content, updatedAt: stat.mtime.toISOString() }
+      })
+      content = snapshot.content
+      updatedAt = snapshot.updatedAt
     } catch (err: any) {
       if (err.code === 'ENOENT') {
         res.status(404).json({ error: 'Note not found' })
@@ -1870,14 +1874,17 @@ export async function renameNoteTag(rawFrom: unknown, rawTo: unknown): Promise<{
     const abs = resolveSafePath(relPath)
     if (!abs) continue
     const filePath = abs.endsWith('.md') ? abs : abs + '.md'
-    let content: string
-    try {
-      content = await fsp.readFile(filePath, 'utf-8')
-    } catch { continue }
-
-    const next = renameTagInContent(content, from, to, normalizeTag)
-    if (next !== null) {
+    const wrote = await withUserFileLock(filePath, async () => {
+      let content: string
+      try {
+        content = await fsp.readFile(filePath, 'utf-8')
+      } catch { return false }
+      const next = renameTagInContent(content, from, to, normalizeTag)
+      if (next === null) return false
       await fsp.writeFile(filePath, next, 'utf-8')
+      return true
+    })
+    if (wrote) {
       updated++
       scheduleNotesIndexUpdate(relPath)
     }

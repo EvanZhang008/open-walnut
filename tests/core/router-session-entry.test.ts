@@ -261,7 +261,10 @@ function textBetween(from: number, to: number): string {
 /** Every CLI spawn passes the session's permission_prompt setting in send()'s spawn signature. */
 const SPAWN_SITE = /\.send\([^\n]*permission_prompt/
 const FRESH_START = 'handleStart'
-const RESUMES = new Set(['performNativeReinitialize', 'processNextNow'])
+// performNativeReinitialize (Restart) spawns through restartThrough.
+const RESUMES = new Set(['restartThrough', 'processNextNow'])
+/** A cold resume's wrapper: it spawns nothing itself; the resume that sends through it is in RESUMES. */
+const RESUME_WRAPPER = 'forResume'
 
 describe('runner spawn sites stay behind the shared gates', () => {
   it('every spawn site lives in a known start or resume method', () => {
@@ -275,7 +278,7 @@ describe('runner spawn sites stay behind the shared gates', () => {
 
   it('every ClaudeCodeSession construction lives in a known method', () => {
     const owners = new Set(linesMatching(/new ClaudeCodeSession\(/).map((i) => enclosingMethod(i).name))
-    expect([...owners].sort()).toEqual(['attachToExisting', FRESH_START, ...RESUMES].sort())
+    expect([...owners].sort()).toEqual(['attachToExisting', FRESH_START, RESUME_WRAPPER].sort())
   })
 
   it('a fresh start is reached only from entries that run assertStartRouting first', () => {

@@ -1,6 +1,7 @@
 import { createContext, useContext } from 'react';
 import type { SessionPinnedQuote, SessionThreadAnchor } from '@/types/session';
 import type { ImageAttachment } from '@/api/chat';
+import type { DraftOrigin } from '@/utils/drafts';
 import { emptyThreadTree, type ThreadTree } from '@/utils/thread-tree';
 import type { SessionViewMode } from '@/hooks/useSessionThreads';
 import type {
@@ -108,6 +109,9 @@ export interface ThreadCardPlace {
   maxHeight: number;
   /** Where the card reaches when the reader expands it (same top, or same bottom). */
   grown?: CardGrown;
+  /** Its passage is out of the view (scrolled past an edge): the card is not drawn until
+   *  the passage comes back, whatever the card's state (utils/file-thread.ts). */
+  away?: boolean;
 }
 
 /**
@@ -185,9 +189,9 @@ export interface SessionThreadsApi {
   requestHeadJump: (threadKey: string) => void;
   /** Send into the open card's question (the card's own box): the same anchored
    *  path the panel's composer takes. False when nothing was sent. */
-  sendToTarget: (text: string, images?: ImageAttachment[]) => Promise<boolean>;
+  sendToTarget: (text: string, images?: ImageAttachment[], origin?: DraftOrigin) => Promise<boolean>;
   /** Send into one question by its key (a fullscreen review card's box). */
-  sendToQuestion: (key: string, text: string, images?: ImageAttachment[]) => Promise<boolean>;
+  sendToQuestion: (key: string, text: string, images?: ImageAttachment[], origin?: DraftOrigin) => Promise<boolean>;
   /** Conversation Mode: the question the chat's composer writes to, set only by
    *  an explicit Quote in chat (utils/composer-quote.ts); null = main. */
   quotedKey: string | null;

@@ -153,6 +153,27 @@ export async function selectSection(
   await closeDisplayMenu(page)
 }
 
+/** Files opens at host HOME; enter the session's real folder through the path picker. */
+export async function goToSessionFolder(explorer: Locator): Promise<void> {
+  const panel = explorer.locator('xpath=ancestor::*[contains(concat(" ", normalize-space(@class), " "), " session-panel ")][1]')
+  const sessionId = await panel.getAttribute('data-session-id')
+  expect(sessionId).toBeTruthy()
+  const response = await explorer.page().request.get(`/api/sessions/${encodeURIComponent(sessionId!)}`)
+  expect(response.ok()).toBe(true)
+  const body = await response.json()
+  const cwd = body.session?.cwd
+  expect(typeof cwd).toBe('string')
+  expect(cwd).not.toBe('')
+
+  const root = explorer.locator('.sfe-root-section').first()
+  if ((await root.getAttribute('data-root-path')) === cwd) return
+  await explorer.locator('.sfe-root-path').click()
+  const input = explorer.locator('.sfe-root-path-input')
+  await input.fill(cwd)
+  await input.press('Enter')
+  await expect(root).toHaveAttribute('data-root-path', cwd, { timeout: 15_000 })
+}
+
 /** Open the home Scratchpad from the rail (no-op when it is open) and return its editor. */
 export async function openScratchpad(page: Page): Promise<Locator> {
   const pane = page.getByTestId('home-companion-scratchpad')
@@ -340,13 +361,16 @@ export async function isolateUiPrefs(page: Page, opts: { newInstall?: boolean } 
   // closed, as the shared fixture's prefs do (test-server.ts). `newInstall` is the
   // real first screen, with nothing stored at all.
   const prefs = opts.newInstall ? {} : { 'open-walnut-home-chat-visible': { v: 'false', ts: 1 } }
-  // Nothing stored: not even the By project layout every page's storage starts with
-  // (playwright.config.ts storageState). Once per tab, so a pick the spec makes survives a reload.
+  // Nothing stored: not even the By project layout and the folds every page's storage
+  // starts with (playwright.config.ts storageState). Once per tab, so a pick the spec makes
+  // survives a reload.
   if (opts.newInstall) {
     await page.addInitScript(() => {
       if (sessionStorage.getItem('pw-new-install')) return
       sessionStorage.setItem('pw-new-install', '1')
       localStorage.removeItem('walnut-todo-panel-design')
+      localStorage.removeItem('walnut-todo-collapsed-sections')
+      localStorage.removeItem('walnut-todo-status-sections')
     })
   }
   // A query too (`?key=`, a window merging one key on its return: utils/recent-opened.ts).

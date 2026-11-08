@@ -9,7 +9,6 @@
  * state: the composer controls row's rule against flicker.
  */
 import { useCallback, useLayoutEffect, useRef, useState, type RefObject } from 'react';
-import { flushSync } from 'react-dom';
 import { fitToolRow, type ToolItemKind, type ToolRowItem } from './session-header-fit';
 
 /** Mirrors `.session-meta-row-2-chips { gap }`, `.session-panel-window-controls { gap }`, `.session-meta-row-2 { gap }`. */
@@ -132,7 +131,17 @@ export function useToolRowFit(rowRef: RefObject<HTMLElement | null>): ToolRowSta
     setState(next);
   }, []);
 
-  useObserved(rowRef, measure, apply, '[data-header-id]');
+  /** The decision on the row's own items, at once: CSS hides `data-hidden="true"`. */
+  const paint = useCallback((next: ToolRowState) => {
+    const row = rowRef.current;
+    if (!row) return;
+    for (const el of row.querySelectorAll<HTMLElement>('[data-header-id]')) {
+      const hidden = next.hidden.has(el.dataset.headerId!) ? 'true' : 'false';
+      if (el.dataset.hidden !== hidden) el.dataset.hidden = hidden;
+    }
+  }, [rowRef]);
+
+  useObserved(rowRef, measure, apply, paint, '[data-header-id]');
   return state;
 }
 
@@ -140,16 +149,21 @@ export function useToolRowFit(rowRef: RefObject<HTMLElement | null>): ToolRowSta
  * Re-measures when the container, the elements `alsoWatch` names, or any item
  * changes size, and when the DOM under the outermost watched element changes
  * (a Trigger pill appearing, a chip the host stops offering, a title renamed).
- * A changed decision renders before the frame paints (flushSync), and that render
- * is measured again by the observers, so the decision converges at once. An
- * unchanged one renders nothing: flushSync would also commit every other update
- * waiting then (the title row's, a neighbour's), and a box above the row changing
- * inside the observer's callback is WebKit's 'ResizeObserver loop' error.
+ * Inside an observer callback a changed decision is painted onto the row's own
+ * items at once (`paint`: only boxes inside the observed row change, so no frame
+ * paints the old fit and the observers measure the new one in the next pass), and
+ * React gets it as an ordinary update. Never flushSync there: it commits every
+ * other update waiting then too (Home's column count after a divider drag, the
+ * title row's, a neighbour's), and a box above the row changing inside the
+ * observer's callback is WebKit's 'ResizeObserver loop completed with undelivered
+ * notifications' (2026-11-07, again 2026-11-10 on a divider drag). An unchanged
+ * decision changes nothing.
  */
 function useObserved<T>(
   ref: RefObject<HTMLElement | null>,
   measure: () => T | null,
   apply: (next: T) => void,
+  paint: (next: T) => void,
   itemSelector: string,
   alsoWatch?: (el: HTMLElement) => HTMLElement[],
 ) {
@@ -160,12 +174,15 @@ function useObserved<T>(
     const first = measure();
     if (first !== null) apply(first);
     if (typeof ResizeObserver === 'undefined') return;
-    // The observers run after layout and before paint; flushSync renders the new fit in that same
-    // frame, so a column that narrows or widens (a draft opening or closing beside it) never paints
-    // one frame with the old fit (2026-11-04: a neighbour's tools showed compact, then expanded).
+    // The observers run after layout and before paint; the new fit is painted onto the items in
+    // that same frame, so a column that narrows or widens (a draft opening or closing beside it)
+    // never paints one frame with the old fit (2026-11-04: a neighbour's tools showed compact,
+    // then expanded). React renders it as an ordinary update, never inside this callback.
     const fit = () => {
       const next = measure();
-      if (next !== null) flushSync(() => apply(next));
+      if (next === null) return;
+      paint(next);
+      apply(next);
     };
     const ro = new ResizeObserver(fit);
     const watched = alsoWatch?.(el) ?? [];
@@ -181,5 +198,5 @@ function useObserved<T>(
     const mo = typeof MutationObserver === 'undefined' ? null : new MutationObserver(() => { observeItems(); fit(); });
     mo?.observe(root, { childList: true, subtree: true, characterData: true });
     return () => { ro.disconnect(); mo?.disconnect(); };
-  }, [ref, measure, apply, itemSelector, alsoWatch]);
+  }, [ref, measure, apply, paint, itemSelector, alsoWatch]);
 }

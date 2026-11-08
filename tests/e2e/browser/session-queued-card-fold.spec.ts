@@ -9,7 +9,7 @@
  */
 import { test, expect, type Page } from '@playwright/test';
 import { createEnvelopeKit } from '../../../src/core/peers/envelope-kit';
-import { MOCK_SESSION_ID as SESSION_ID, injectEvent, mockSession, open, streamTools, waitForWs } from './mock-session-harness';
+import { MOCK_SESSION_ID as SESSION_ID, injectEvent, mockSession, streamTools, waitForWs } from './mock-session-harness';
 
 const SHOTS = '/tmp/queued-card-fold';
 if (process.env.QUEUED_FOLD_VIDEO) test.use({ video: 'on' });
@@ -47,11 +47,12 @@ async function watchForOpenCards(page: Page) {
 // The running turn's steps are its one fold ("Working · ..."), and a card that comes
 // in joins it (every step before the answer is one fold, 2026-11-12).
 const WORKING = '(?:Working \u00b7 )?';
-test('an agent\'s card folds on arrival, mid-turn, and neighbours share the row', async ({ page }) => {
+
+test('an agent\'s card folds on arrival, mid-turn, and neighbours share the row', async ({ page, baseURL }) => {
   await mockSession(page, base, 'running');
-  const hist = await open(page);
+  const hist = await openCancelledComposer(page, baseURL!);
+  await expect(hist).toContainText('QF_ASK', { timeout: 30000 });
   await waitForWs(page);
-  await expect(hist).toContainText('QF_ASK', { timeout: 15000 });
   await streamTools(page, [['qf-1', 'make check'], ['qf-2', 'make test']]);
   await watchForOpenCards(page);
 
@@ -79,11 +80,11 @@ test('an agent\'s card folds on arrival, mid-turn, and neighbours share the row'
   await page.waitForTimeout(600);
 });
 
-test('a person\'s message never folds, and splits two agent cards', async ({ page }) => {
+test('a person\'s message never folds, and splits two agent cards', async ({ page, baseURL }) => {
   await mockSession(page, base, 'running');
-  const hist = await open(page);
+  const hist = await openCancelledComposer(page, baseURL!);
+  await expect(hist).toContainText('QF_ASK', { timeout: 30000 });
   await waitForWs(page);
-  await expect(hist).toContainText('QF_ASK', { timeout: 15000 });
   await streamTools(page, [['qp-1', 'make check']]);
 
   await queued(page, 'qm-qp-1', notice(1), 'agent');
@@ -104,11 +105,11 @@ test('a person\'s message never folds, and splits two agent cards', async ({ pag
   await expect(folds).toHaveCount(1);
 });
 
-test('a peer\'s note (bare on the bus, enveloped in the queue) folds as its card', async ({ page }) => {
+test('a peer\'s note (bare on the bus, enveloped in the queue) folds as its card', async ({ page, baseURL }) => {
   await mockSession(page, base, 'running');
-  const hist = await open(page);
+  const hist = await openCancelledComposer(page, baseURL!);
+  await expect(hist).toContainText('QF_ASK', { timeout: 30000 });
   await waitForWs(page);
-  await expect(hist).toContainText('QF_ASK', { timeout: 15000 });
   const note = kit.buildWalnutMessage({ kind: 'peer-note', attrs: { from: 'Sample lead [abcd1234]', title: 'QF_PEER_TITLE check' }, body: 'QF_PEER_BODY please check the build.' });
   await injectEvent(page, 'session:message-queued', {
     sessionId: SESSION_ID, messageId: 'qm-qpeer-1', message: 'QF_PEER_BODY please check the build.', source: 'peer',
@@ -123,12 +124,85 @@ test('a peer\'s note (bare on the bus, enveloped in the queue) folds as its card
   await expect(fold).toContainText('QF_PEER_TITLE');
 });
 
-test('a row without sentBy (an older server) renders as before', async ({ page }) => {
+test('a row without sentBy (an older server) renders as before', async ({ page, baseURL }) => {
   await mockSession(page, base, 'running');
-  const hist = await open(page);
+  const hist = await openCancelledComposer(page, baseURL!);
+  await expect(hist).toContainText('QF_ASK', { timeout: 30000 });
   await waitForWs(page);
-  await expect(hist).toContainText('QF_ASK', { timeout: 15000 });
   await queued(page, 'qm-ql-1', notice(1));
   await expect(hist.locator('.provenance-card', { hasText: 'QF_NOTICE_1' })).toBeVisible();
   await expect(hist.locator('[data-testid="received-fold"]')).toHaveCount(0);
+});
+
+/**
+ * The composer's real send, with only the model stubbed: the `session:send` RPC is
+ * answered on the captured socket with the queue id the server would give, so the
+ * optimistic bubble carries that id (useSessionSend adopts res.messageId).
+ */
+async function stubSessionSend(page: Page, messageId: string) {
+  await page.evaluate((messageId) => {
+    const ws = (window as any).__capturedWs as WebSocket;
+    const inner = ws.send.bind(ws);
+    (window as any).__sessionSends = [];
+    ws.send = (data: string | ArrayBufferLike | Blob | ArrayBufferView) => {
+      try {
+        const parsed = JSON.parse(data as string);
+        if (parsed.type === 'req' && parsed.method === 'session:send') {
+          (window as any).__sessionSends.push(parsed.payload);
+          setTimeout(() => ws.dispatchEvent(new MessageEvent('message', {
+            data: JSON.stringify({ type: 'res', id: parsed.id, ok: true, payload: { messageId, enqueuedAt: new Date().toISOString() } }),
+          })), 10);
+          return;
+        }
+      } catch { /* non-JSON */ }
+      inner(data);
+    };
+  }, messageId);
+}
+
+/** Type and send through the real composer, then start a new draft in it. */
+async function sendThenDraft(page: Page, text: string, draft: string) {
+  const panel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`);
+  const box = panel.locator('.chat-input-textarea').first();
+  await box.click();
+  await box.pressSequentially(text);
+  await panel.locator('.chat-send-btn-icon:not(.chat-stop-btn-icon)').click();
+  await expect.poll(() => page.evaluate(() => ((window as any).__sessionSends as Array<{ message?: string }>).map((p) => p.message))).toEqual([text]);
+  await expect(box).toHaveValue('');
+  await box.pressSequentially(draft);
+  return box;
+}
+
+async function openCancelledComposer(page: Page, baseURL: string) {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.setContent(`<a href="${baseURL}/sessions?id=${SESSION_ID}">Open session</a>`);
+  await page.getByRole('link', { name: 'Open session', exact: true }).click();
+  return page.locator(`.session-panel[data-session-id="${SESSION_ID}"] .session-history`);
+}
+
+test('a Stop that returns an edited queued message puts the edited words in the composer, ahead of the new draft', async ({ page, baseURL }) => {
+  await mockSession(page, base, 'idle');
+  const hist = await openCancelledComposer(page, baseURL!);
+  await expect(hist).toContainText('QF_ASK', { timeout: 30000 });
+  await waitForWs(page);
+  await stubSessionSend(page, 'qm-qc-edited');
+  const box = await sendThenDraft(page, 'QC_OLD words as first sent', 'QC_DRAFT typed since');
+  // The row was edited in the queue before the Stop cancelled it: the event carries its words now.
+  await injectEvent(page, 'session:queued-cancelled', { sessionId: SESSION_ID, messageIds: ['qm-qc-edited'], messages: ['QC_EDITED words after the edit'] });
+  await expect(box).toHaveValue(/^QC_EDITED words after the edit/);
+  const value = await box.inputValue();
+  expect(value).toContain('QC_DRAFT typed since');
+  expect(value).not.toContain('QC_OLD');
+});
+
+test('a Stop event with no message texts (an older server) returns the bubble\'s own words, draft kept', async ({ page, baseURL }) => {
+  await mockSession(page, base, 'idle');
+  const hist = await openCancelledComposer(page, baseURL!);
+  await expect(hist).toContainText('QF_ASK', { timeout: 30000 });
+  await waitForWs(page);
+  await stubSessionSend(page, 'qm-qc-legacy');
+  const box = await sendThenDraft(page, 'QC_LEGACY words as sent', 'QC_DRAFT typed since');
+  await injectEvent(page, 'session:queued-cancelled', { sessionId: SESSION_ID, messageIds: ['qm-qc-legacy'] });
+  await expect(box).toHaveValue(/^QC_LEGACY words as sent/);
+  expect(await box.inputValue()).toContain('QC_DRAFT typed since');
 });

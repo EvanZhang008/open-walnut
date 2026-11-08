@@ -50,6 +50,7 @@ function updateValue(r: DiagnosticsReport): string {
       case 'source': return `not checked: running from a source checkout${u.install.sourceDir ? ` (${u.install.sourceDir})` : ''}`
       case 'replica': return 'not checked: a cloud replica updates through its own deploy'
       case 'opted-out': return 'not checked: WALNUT_NO_UPDATE_CHECK is set'
+      case 'demo': return 'not checked: Walnut Demo updates with the Walnut it was started from'
       case 'unknown-version': return 'not checked: this build has no version'
       default: return 'not checked'
     }

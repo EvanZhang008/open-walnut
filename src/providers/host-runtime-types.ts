@@ -68,6 +68,8 @@ export interface ClaudeProbe {
   /** From claudeCheck (daemons with it only): see claude-check-core.ts for the exact rule. */
   auth?: ClaudeCheckResult['auth']
   authDetail?: string
+  /** Server side only: when a definite `auth` was last read (host-readiness-problems.ts withConclusiveAuth). */
+  authAt?: number
   versionOk?: boolean
   minVersion?: string
   installMethod?: ClaudeCheckResult['installMethod']

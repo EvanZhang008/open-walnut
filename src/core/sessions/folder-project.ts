@@ -24,6 +24,28 @@ export function trimDir(dir: unknown): string {
   return typeof dir === 'string' ? dir.replace(/\/+$/, '') : '';
 }
 
+/** What a home folder's project is called: `~` (or the home path) names nobody's work (2026-11-10 review: "New project: ~"). */
+export const HOME_PROJECT_NAME = 'Home'
+
+/**
+ * The folder's own name as a project name: its last segment, except that a home folder (`~`, or
+ * `home` when given) reads "Home". The draft's twin (draft-column.ts, through web/src/utils/home-folder.ts)
+ * passes this Walnut's own home for a local folder, as ensureFolderProject does.
+ */
+/** True when `dir` is the home folder: `~`, or `home` when given. */
+function isHomeDir(dir: string, home?: string): boolean {
+  const d = trimDir(dir)
+  return d === '~' || (!!home && d === trimDir(home))
+}
+
+export function folderBaseName(cwd: string, home?: string): string {
+  const dir = trimDir(cwd)
+  if (isHomeDir(dir, home)) return HOME_PROJECT_NAME
+  const parts = dir.split('/').filter(Boolean)
+  // Trimmed: the registry trims names, so ' kelp ' would land on 'kelp'.
+  return (parts[parts.length - 1] ?? '').trim()
+}
+
 /**
  * The name a folder's NEW project gets, or null when the folder's own name
  * could never name a project (`isValid` is the registry's name gate). Each step
@@ -36,13 +58,14 @@ export function folderProjectName(
   host: string | null | undefined,
   isTaken: (name: string) => boolean,
   isValid: (name: string) => boolean,
+  home?: string,
 ): string | null {
   const parts = trimDir(cwd).split('/').filter(Boolean);
-  // Trimmed: the registry trims names, so ' kelp ' would land on 'kelp'.
-  const base = (parts[parts.length - 1] ?? '').trim();
+  const base = folderBaseName(cwd, home);
   if (!isValid(base)) return null;
   const candidates = [base];
-  const parent = parts[parts.length - 2]?.trim();
+  // A home folder's parent (`/Users`) says nothing about it.
+  const parent = base === HOME_PROJECT_NAME && base !== parts[parts.length - 1]?.trim() ? undefined : parts[parts.length - 2]?.trim();
   if (parent && isValid(`${parent}-${base}`)) candidates.push(`${parent}-${base}`);
   const remote = host && host !== '__local__' ? host : '';
   const withHost = `${candidates[candidates.length - 1]} (${remote})`;
@@ -62,13 +85,17 @@ export function folderProjectFor(
   cwd: string,
   host: string | null | undefined,
   isValid: (name: string) => boolean,
+  home?: string,
 ): string | null {
   const dir = trimDir(cwd);
   if (!dir) return null;
   // Registry order (the list the draft reads), so both pick the same declarer.
   const names = Object.keys(projects);
-  const owner = names.find((name) => trimDir(projects[name].metadata?.default_cwd) === dir);
+  const owner = names.find((name) => trimDir(projects[name].metadata?.default_cwd) === dir)
+    // `~` and the home path are one folder: a "Home" project stamped with either form owns the
+    // other (the draft's projectForFolderPick matches them the same way).
+    ?? (isHomeDir(dir, home) ? names.find((name) => isHomeDir(trimDir(projects[name].metadata?.default_cwd), home)) : undefined);
   if (owner) return owner;
   const taken = new Set(names.map((name) => name.toLowerCase()));
-  return folderProjectName(dir, host, (name) => taken.has(name.toLowerCase()), isValid);
+  return folderProjectName(dir, host, (name) => taken.has(name.toLowerCase()), isValid, home);
 }

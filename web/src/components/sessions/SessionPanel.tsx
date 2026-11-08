@@ -1,4 +1,3 @@
-import { apiPost } from '@/api/client';
 import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, Component, lazy, Suspense, type ReactNode, type ErrorInfo, type MouseEvent as ReactMouseEvent, type MutableRefObject, type CSSProperties, memo } from 'react';
 import { stableHtml } from '@/hooks/useStableHtml';
 import { PauseGlyphIcon, PlayGlyphIcon, WarningTriangleIcon } from '@/components/common/PhoneIcons';
@@ -23,7 +22,9 @@ import { useHidesHighlights } from '@/hooks/useHidesHighlights';
 import { SessionPinsContext } from '@/contexts/SessionPinsContext';
 import { SessionCommentsContext, type SessionCommentsApi } from '@/contexts/SessionCommentsContext';
 import { useSessionComments } from '@/hooks/useSessionComments';
-import { composeWithComments } from '@/utils/passage-comments';
+import { composeForSend, DOC_COMMENTS_HINT, HINT_CONTEXT_STORE_TIMEOUT_MS } from '@/utils/passage-comments';
+import { dropPendingHint, hasPendingHint, hasPendingHintsSource, setPendingHints } from '@/utils/pending-hints';
+import { apiPost } from '@/api/client';
 import { PendingCommentsTray } from './PendingCommentsTray';
 import { usePanelThreads } from '@/hooks/useSessionThreads';
 import { SessionThreadsContext } from '@/contexts/SessionThreadsContext';
@@ -92,6 +93,7 @@ import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { useSessionHistory } from '@/hooks/useSessionHistory';
 import { observeSessionOpen } from '@/utils/session-open-latency';
 import type { ImageAttachment } from '@/api/chat';
+import { settleConfirmedDrafts, type DraftOrigin } from '@/utils/drafts';
 import { useEvent } from '@/hooks/useWebSocket';
 import { fetchSession, peekSessionRecord, keepSessionRecord, executePlanContinue, executePlanSession, updateSession, restartSession, recheckSession, investigateSession, type ContinueInNewFolderResult } from '@/api/sessions';
 import { FolderGoneBanner } from './FolderGoneBanner';
@@ -381,6 +383,13 @@ interface SessionPanelProps {
    *  Close. */
   onClose?: (sessionId: string) => void;
   /**
+   * The id came back from a saved layout or the address (a reload, a restart, a Demo reset),
+   * not from a click. When it resolves to no session, the panel calls this and draws nothing,
+   * so the host closes it, instead of the "Session not found" card a link to a gone session
+   * gets: a saved column whose session is gone is not news to show (D05).
+   */
+  onRestoredGone?: (sessionId: string) => void;
+  /**
    * Rendered INSIDE another surface (the home page's Ask Walnut slot) rather than
    * as a session column. The panel behaves exactly like a column's — close (the
    * host decides what closing means: the slot hides itself), popout, fullscreen,
@@ -501,7 +510,7 @@ const PLAIN_CHAT_CONTROLS: ReadonlySet<string> = new Set(['mode', 'model']);
  */
 const carriedTitles = new Map<string, string>();
 
-const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, onClose, embedded, inset, headerLeading, focusComposer, inboxRequest, locked, onToggleLock, onMinimize, onTaskCompleted, onTaskClick, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced: onSessionReplacedProp, onOpenForkDraft, phoneLayer, phoneDeepLinkBaseUrl, phoneHostSlot, headerSlot, onHostBoard, plainChat, composerPill, composerBar, emptyHistory }: SessionPanelProps) {
+const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, onClose, onRestoredGone, embedded, inset, headerLeading, focusComposer, inboxRequest, locked, onToggleLock, onMinimize, onTaskCompleted, onTaskClick, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced: onSessionReplacedProp, onOpenForkDraft, phoneLayer, phoneDeepLinkBaseUrl, phoneHostSlot, headerSlot, onHostBoard, plainChat, composerPill, composerBar, emptyHistory }: SessionPanelProps) {
   // One place decides what "close this panel" means, so every exit (the header
   // button, the error boundary, the missing-session card) goes through the same
   // owner callback.
@@ -568,7 +577,15 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   useEffect(() => { if (sessionRecord) keepSessionRecord(sessionId, sessionRecord); }, [sessionId, sessionRecord]);
   // Set once the ~15s retry window closes on a 404 — the id resolves to nothing.
   const [missing, setMissing] = useState(false);
-  const { optimisticMsgs, sendError, redirectedTo, send, interruptSend, stopTurn, retryFailed, dismissFailed, handleMessagesDelivered, handleBatchCompleted, handleBatchFailed, handleDeliveryWaiting, handleEditQueued, handleDeleteQueued, addExternalQueued, queueSync } = useSessionSend(sessionId);
+  const onRestoredGoneRef = useRef(onRestoredGone);
+  onRestoredGoneRef.current = onRestoredGone;
+  // A restored column whose session is gone closes itself (the host's onRestoredGone).
+  useEffect(() => {
+    if (!missing || !onRestoredGoneRef.current) return;
+    log.info('session-panel', 'restored session is gone: closing its panel', { sessionId });
+    onRestoredGoneRef.current(sessionId);
+  }, [missing, sessionId]);
+  const { optimisticMsgs, sendError, redirectedTo, send, interruptSend, stopTurn, retryFailed, dismissFailed, handleMessagesDelivered, handleBatchCompleted, handleBatchFailed, handleDeliveryWaiting, handleEditQueued, handleDeleteQueued, addExternalQueued, queueSync, settleShownInHistory } = useSessionSend(sessionId);
   // Only the read's failure reaches the timeline, as a stable object: a read that changes nothing re-renders nothing.
   const queueSyncError = queueSync.error;
   const queueSyncProp = useMemo(() => (queueSyncError ? { error: queueSyncError } : undefined), [queueSyncError]);
@@ -605,7 +622,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   // Full screen of the tab: it stays across a trip to another page (useFullscreen), and
   // is kept as this panel's place, so the panel showing it after a remount is full screen again.
   const sheetAt = useSheetPlace(viewPlace, sessionId);
-  const { isFullscreen, enterFullscreen, exitFullscreen, fullscreenClass, FullscreenBackdrop } = useFullscreen({ keepAcrossRoutes: true, place: sheetAt });
+  const { isFullscreen, shownFullscreen, enterFullscreen, exitFullscreen, fullscreenClass, FullscreenBackdrop } = useFullscreen({ keepAcrossRoutes: true, place: sheetAt, phoneLayer: !!(phoneLayer || phoneHostSlot) });
   // What the panel shows beside its chat, kept for this place (panel-view.ts).
   const panelView = usePanelView(sheetAt);
   const { activeView, setActiveView, fileViewTarget: keptFileTarget, setFileViewTarget, webRequest, setWebRequest, inboxLetterId, setInboxLetterId, terminalDock, setTerminalDock } = panelView;
@@ -620,10 +637,10 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   // A fullscreen panel is an overlay over its column: closing the column behind it would
   // show the person nothing, so the host hears about completions only from the normal view.
   const completedInColumn = useMemo(
-    () => (onTaskCompleted && !isFullscreen
+    () => (onTaskCompleted && !shownFullscreen
       ? (info: { taskId: string; from: TaskPhase; title?: string }) => onTaskCompleted(sessionId, info)
       : undefined),
-    [onTaskCompleted, isFullscreen, sessionId],
+    [onTaskCompleted, shownFullscreen, sessionId],
   );
 
 
@@ -739,6 +756,11 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     phase2Pending: historyPhase2Pending, olderHidden: historyOlderHidden,
     olderWindowed: historyOlderWindowed, initialUserText: historyInitialUserText,
   } = useSessionHistory(sessionId);
+  // A refused send that history shows the server took after all: its restored draft goes.
+  useEffect(() => { if (!historyLoading) settleConfirmedDrafts(sessionId, historyMessages); }, [sessionId, historyMessages, historyLoading]);
+  // A send whose acknowledgement was lost reads as failed until history shows its
+  // line: then it was delivered, and its Retry would only ask for it again.
+  useEffect(() => { if (!historyLoading) settleShownInHistory(historyMessages); }, [historyMessages, historyLoading, settleShownInHistory]);
   // The pinned "Initial Prompt" bubble: prefer the server-computed TRUE first
   // user message. historyMessages is a lazy TAIL — its first user row can be
   // mid-conversation (the collapse-mode bubble used to show a recent message as
@@ -916,6 +938,9 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
           // longer over SSH). Treat "not there yet" as retryable, otherwise the
           // panel settles permanently into an empty "Untitled session" header.
           // A genuinely deleted session just costs a few silent retries first.
+          // A restored id waits as long as a launch does: a reload right after a remote launch
+          // restores an id whose record the daemon has not confirmed yet, and closing it sooner
+          // would drop a session that is on its way (the close is quiet, so nobody would know).
           if (s === null && attempt < MISSING_SESSION_RETRIES) {
             retryTimer = setTimeout(() => { if (!cancelled) load(attempt + 1); }, MISSING_SESSION_RETRY_MS);
             return;
@@ -1563,7 +1588,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     const texts = d.messageIds.map((id, i) => {
       const bubble = optimisticMsgs.find((m) => m.queueId === id);
       dismissFailed(id);
-      return bubble?.text ?? stripSendPrefixes(d.messages?.[i] ?? '');
+      return d.messages?.[i] !== undefined ? stripSendPrefixes(d.messages[i]) : bubble?.text ?? '';
     }).filter((t) => t.trim() !== '');
     log.info('session-panel', 'stop returned queued messages to the composer', { sessionId, messageIds: d.messageIds });
     if (texts.length === 0) return;
@@ -1607,7 +1632,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   // a worker's Board shows its leader's. The tabs are remembered per task: leaving the
   // full screen hides them, coming back shows the same tab.
   const revealChat = useCallback(() => collapseChat(false), [collapseChat]);
-  const peek = usePeekTabs({ ownTaskId: session?.taskId, sessionId, enabled: !inset && isFullscreen, onReveal: revealChat });
+  const peek = usePeekTabs({ ownTaskId: session?.taskId, sessionId, enabled: !inset && shownFullscreen, onReveal: revealChat });
   const peekShownId = session?.taskId ? peek.shownId : null;
   // The chat stays mounted under a peek (visibility: hidden): its marks must not paint on the peek.
   useHidesHighlights(!!peekShownId);
@@ -1616,9 +1641,9 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   // Stable (the hook's callbacks are), so the memoized chat history does not re-render for it.
   const openPeekFromChat = useCallback((taskId: string) => peekOpen(taskId, 'chat'), [peekOpen]);
   // A task clicked in the chat: full screen keeps it here, as a tab; a column opens its own.
-  const chatTaskClick = !inset && isFullscreen && session?.taskId ? openPeekFromChat : onTaskClick;
+  const chatTaskClick = !inset && shownFullscreen && session?.taskId ? openPeekFromChat : onTaskClick;
   // Full screen with no split view has no chat bar of its own: the tabs bring one.
-  const peekBarAlone = !inset && isFullscreen && !splitOpen && peek.tabs.length > 0;
+  const peekBarAlone = !inset && shownFullscreen && !splitOpen && peek.tabs.length > 0;
   // Opening a view decides the chat column's fate: below the split floor the Inbox
   // tab opens on the letter alone (the chat column has a 280px floor, and half a
   // letter is worse than one click on "show chat"); any other view clears a
@@ -1675,7 +1700,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   // Toggle a split view: same view → close (exit fullscreen); other/none → open it.
   //
   // Exception kept: Files opened via a file-path click (fileViewTarget set) — the
-  // chip's first click re-roots the explorer to the session cwd so you can browse
+  // chip's first click re-roots the explorer to the host's home so you can browse
   // the whole tree, the second closes. The re-root no longer loses your place: the
   // explorer's memory is scope-keyed, so the same file stays open and the tree
   // expands to it under the new root (that loss WAS the reported bug).
@@ -1692,7 +1717,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     }
     const rerooting = view === 'files' && fileViewTarget !== null && activeView === 'files';
     setFileViewTarget(null);
-    if (rerooting) return; // stay open, explorer re-roots to the session cwd
+    if (rerooting) return; // Keep the selected file while returning the tree to host home.
     // `next` is computed from this render's activeView (already a dependency)
     // rather than inside the updater: the side effects below are not pure, and
     // StrictMode double-invokes an updater.
@@ -2392,12 +2417,12 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
    *  anchor + meta in ONE PATCH, the orientation line) is usePanelThreads'. */
   const threadSend = threads.sendAnchored;
   const sendAnchored = useCallback(async (
-    message: string, images: ImageAttachment[] | undefined, interrupt: boolean, targetKey?: string,
+    message: string, images: ImageAttachment[] | undefined, interrupt: boolean, targetKey?: string, origin?: DraftOrigin,
   ): Promise<boolean> => {
     // A passage the quote pill held through dictation has served its purpose once
     // the user sends.
     releaseSelectionHold(panelRef.current);
-    return threadSend(message, images, interrupt, targetKey);
+    return threadSend(message, images, interrupt, targetKey, origin);
   }, [threadSend]);
 
   // Every send goes to THIS session. An "@" reference in the text is a pill the
@@ -2406,14 +2431,14 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   // ONE send for a composer, the panel's or the split's left half (`targetKey`,
   // its question): an engine picked for this message starts the task's new
   // session on it, else the question wiring (usePanelThreads' sendAnchored).
-  const sendFor = useCallback(async (message: string, images: ImageAttachment[] | undefined, targetKey?: string) => {
+  const sendFor = useCallback(async (message: string, images: ImageAttachment[] | undefined, targetKey?: string, origin?: DraftOrigin) => {
     const switchOpts = engineSwitch.sendOptions;
     if (switchOpts) {
-      const ok = await send(sessionId, message, images, switchOpts);
+      const ok = await send(sessionId, message, images, origin ? { ...switchOpts, draftOrigin: origin } : switchOpts);
       if (ok) { engineSwitch.markSent(); engineSwitch.clear(); }
       return ok;
     }
-    return sendAnchored(message, images, false, targetKey);
+    return sendAnchored(message, images, false, targetKey, origin);
   }, [sendAnchored, send, sessionId, engineSwitch.sendOptions, engineSwitch.clear, engineSwitch.markSent]);
   // Main's quick actions ride its own composer's "+" (the user, 2026-10-26: not a bar of their own).
   // Waiting = deriveDisplayStatus's rule (a live process holds the prompt); a stopped
@@ -2424,10 +2449,10 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     ? (pendingPermission?.toolName === 'AskUserQuestion' ? 'Sending a message dismisses the open question' : 'Sending a message denies the open prompt')
     : null;
   const deniedPromptId = promptWarning ? (pendingPermission && 'requestId' in pendingPermission ? pendingPermission.requestId : undefined) : undefined;
-  const handleSend = useCallback((message: string, images?: ImageAttachment[]) => {
+  const handleSend = useCallback((message: string, images?: ImageAttachment[], origin?: DraftOrigin) => {
     // The message denies the open prompt: its card will say so, not "Denied".
     if (deniedPromptId) markDeniedByMessage(deniedPromptId);
-    return sendFor(message, images);
+    return sendFor(message, images, undefined, origin);
   }, [sendFor, deniedPromptId]);
 
   const mainQuickActions = useMainQuickPlusActions(
@@ -2468,8 +2493,8 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     sendResult: (text: string) => send(sessionId, text),
   }), [sessionId, send]);
 
-  const handleInterruptSendRaw = useCallback((message: string, images?: ImageAttachment[]) => {
-    return sendAnchored(message, images, true);
+  const handleInterruptSendRaw = useCallback((message: string, images?: ImageAttachment[], origin?: DraftOrigin) => {
+    return sendAnchored(message, images, true, undefined, origin);
   }, [sendAnchored]);
 
   // The main composer's sends carry the pending quotes and comments: each quote with
@@ -2485,18 +2510,34 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   const commentPageOfRef = useRef(commentPageOf);
   commentPageOfRef.current = commentPageOf;
   const withComments = useCallback((
-    sendFn: (message: string, images?: ImageAttachment[]) => Promise<boolean>,
+    sendFn: (message: string, images?: ImageAttachment[], origin?: DraftOrigin) => Promise<boolean>,
     pageOf: () => string | null,
-  ) => async (message: string, images?: ImageAttachment[]): Promise<boolean> => {
-    if (message.trimStart().startsWith('/')) return sendFn(message, images);
+  ) => async (message: string, images?: ImageAttachment[], origin?: DraftOrigin): Promise<boolean> => {
+    if (message.trimStart().startsWith('/')) return sendFn(message, images, origin);
     const page = pageOf();
     const carried = claimComments(page === null ? undefined : (c) => commentPageOfRef.current(c) === page);
-    if (carried.length === 0) return sendFn(message, images);
+    if (carried.length === 0) return sendFn(message, images, origin);
     const ids = carried.map((c) => c.id);
     log.info('session-panel', 'sending with passage comments', { sessionId, count: carried.length, page: page === null ? null : page === ROOT_THREAD_KEY ? 'main' : 'question' });
     let ok = false;
     try {
-      ok = await sendFn(composeWithComments(carried, message), images);
+      // Doc comments' paths and how to answer them ride the send as a hint, for the model
+      // only (passage-comments.ts composeForSend); inline when this session's next send
+      // already carries an object context of another surface, which a second would replace.
+      // The store is capped (HINT_CONTEXT_STORE_TIMEOUT_MS): past it, or refused, the comments go inline.
+      const composed = await composeForSend(carried, message,
+        async (name, text) => {
+          const r = await apiPost<{ id?: unknown }>('/api/v1/hints/context', { name, text }, { timeoutMs: HINT_CONTEXT_STORE_TIMEOUT_MS, quietStatuses: [503] });
+          return typeof r?.id === 'string' ? r.id : '';
+        },
+        { inline: hasPendingHintsSource(sessionId) || hasPendingHint(sessionId, DOC_COMMENTS_HINT) });
+      if (composed.hints) setPendingHints(sessionId, composed.hints);
+      try {
+        ok = await sendFn(composed.text, images, origin);
+      } finally {
+        // A send that did not go leaves no hint of its own for the next one.
+        if (!ok && composed.hints) for (const [kind, h] of Object.entries(composed.hints)) dropPendingHint(sessionId, kind, h.arg);
+      }
     } finally {
       settleComments(ids, ok);
     }
@@ -2506,11 +2547,11 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   const handleComposerSend = useMemo(() => withComments(handleSend, ownCommentPage), [withComments, handleSend, ownCommentPage]);
   const handleInterruptSend = useMemo(() => withComments(handleInterruptSendRaw, ownCommentPage), [withComments, handleInterruptSendRaw, ownCommentPage]);
   // A page left of the panel's own: the same rules into ITS question.
-  const sideSend = useCallback((key: string, message: string, images?: ImageAttachment[]) => (
-    withComments((m, im) => sendFor(m, im, key), () => key)(message, images)
+  const sideSend = useCallback((key: string, message: string, images?: ImageAttachment[], origin?: DraftOrigin) => (
+    withComments((m, im, o) => sendFor(m, im, key, o), () => key)(message, images, origin)
   ), [withComments, sendFor]);
-  const sideInterruptSend = useCallback((key: string, message: string, images?: ImageAttachment[]) => (
-    withComments((m, im) => sendAnchored(m, im, true, key), () => key)(message, images)
+  const sideInterruptSend = useCallback((key: string, message: string, images?: ImageAttachment[], origin?: DraftOrigin) => (
+    withComments((m, im, o) => sendAnchored(m, im, true, key, o), () => key)(message, images, origin)
   ), [withComments, sendAnchored]);
 
   const handleStopTurn = useCallback(() => {
@@ -2613,7 +2654,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   // Header content — prefer the linked task title; fall back to session metadata.
   const sessionFallbackTitle = session?.title || session?.description || session?.slug || null;
   const headerTitle = (session?.taskId ? taskTitle : null) || sessionFallbackTitle;
-  const activityAge = isFullscreen && session?.lastActiveAt ? timeAgo(session.lastActiveAt).replace(/ ago$/, '') : '';
+  const activityAge = shownFullscreen && session?.lastActiveAt ? timeAgo(session.lastActiveAt).replace(/ ago$/, '') : '';
   const activityTimeTitle = activityAge ? `Last active: ${new Date(session!.lastActiveAt!).toLocaleString()}` : '';
 
   // With its writer: a from-plan session shows another session's plan.
@@ -2687,6 +2728,8 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
       loading: loading && !session,
     }),
     onClose: () => closePanel(sessionId),
+    // A resize to desktop keeps the column open (the session is not closed by a breakpoint).
+    keepOnBreakpoint: true,
     onTitleTap: () => scrollToLatestTurnStart(
       document.querySelector<HTMLElement>(`.session-panel[data-session-id="${CSS.escape(sessionId)}"]`),
     ),
@@ -2695,20 +2738,24 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   const phoneClose = phoneBar.close;
   const hostSlot = usePhoneBarSlot(phoneHostSlot ?? '');
   // An open view (Board, Files, Changed...) is a layer over the session's chat.
+  const phoneViewerId = activeView === 'board' ? `board:${session?.taskId ?? sessionId}` : `viewer:${activeView ?? 'none'}:${sessionId}`;
   usePhoneLayerWithBar({
-    id: activeView === 'board' ? `board:${session?.taskId ?? sessionId}` : `viewer:${activeView ?? 'none'}:${sessionId}`,
+    id: phoneViewerId,
     kind: activeView === 'board' ? 'board' : 'viewer',
     active: !!(phoneLayer || phoneHostSlot) && !!activeView,
     title: activeView ? activeView.charAt(0).toUpperCase() + activeView.slice(1) : '',
     withAction: false,
-    // A window that stops being a phone shows the view as the desktop split: only a back closes it.
-    onClose: (info) => { if (info.breakpoint) return; setActiveView(null); collapseChat(false); },
+    // The open view survives a resize to desktop; only a back or a close ends it.
+    keepOnBreakpoint: true,
+    // Above the session's own layer, or the host's (the Ask slot's chat).
+    parentId: phoneLayer ? `session:${sessionId}` : phoneHostSlot,
+    onClose: () => { setActiveView(null); collapseChat(false); },
   });
   // Where the kebab goes on a phone: this panel's own bar, or its host's.
   const kebabSlot = phoneLayer ? phoneBar.slot : (phoneHostSlot && phoneBar.phone ? hostSlot : null);
   // A host that draws the header (headerSlot): the badge and the kebab go there, the full desktop menu.
   // Not in fullscreen: the panel is an overlay then, over the host too, and needs its own header to come back.
-  const hostHeader = !kebabSlot && !(phoneLayer || phoneHostSlot) && !!headerSlot && !isFullscreen;
+  const hostHeader = !kebabSlot && !(phoneLayer || phoneHostSlot) && !!headerSlot && !shownFullscreen;
   // The session's link tags (threads, docs, CRs), folded behind one control
   // (SessionHeaderLabels.tsx) and counted there.
   const headerTags = sessionTask
@@ -2745,6 +2792,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   // the previous behaviour rendered an ordinary empty panel, indistinguishable
   // from a slow load, and the column stayed in sessionStorage so every reload
   // replayed the retry loop — which reads as "sessions are broken".
+  if (missing && onRestoredGone) return null;
   if (missing) {
     return (
       <div className="session-panel" data-session-id={sessionId} data-session-missing="true">
@@ -2948,8 +2996,8 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
         },
       } : undefined}
       onPopout={inset ? undefined : () => openPopout('session', { id: sessionId, host: session?.host, cwd: session?.cwd })}
-      onFullscreen={inset ? undefined : (isFullscreen ? exitFullscreen : enterFullscreen)}
-      fullscreenLabel={isFullscreen ? 'Exit full screen' : 'Full screen'}
+      onFullscreen={inset || phoneWidth ? undefined : (shownFullscreen ? exitFullscreen : enterFullscreen)}
+      fullscreenLabel={shownFullscreen ? 'Exit full screen' : 'Full screen'}
     />
     );
   };
@@ -3348,7 +3396,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                   {ICON_NEW_TAB}
                 </button>
               )}
-              {minimize && !isFullscreen && (
+              {minimize && !shownFullscreen && (
                 <button
                   className="task-action-btn session-panel-minimize"
                   data-header-id="minimize"
@@ -3381,23 +3429,23 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                   className="task-action-btn session-panel-expand"
                   data-header-id="expand"
                   data-hidden={hid('expand')}
-                  onClick={isFullscreen ? exitFullscreen : enterFullscreen}
-                  title={isFullscreen ? 'Collapse back' : 'Expand to full screen'}
-                  aria-label={isFullscreen ? 'Collapse session' : 'Expand session to full screen'}
+                  onClick={shownFullscreen ? exitFullscreen : enterFullscreen}
+                  title={shownFullscreen ? 'Collapse back' : 'Expand to full screen'}
+                  aria-label={shownFullscreen ? 'Collapse session' : 'Expand session to full screen'}
                 >
-                  {isFullscreen ? ICON_COLLAPSE : ICON_EXPAND}
+                  {shownFullscreen ? ICON_COLLAPSE : ICON_EXPAND}
                 </button>
               )}
               {/* In fullscreen the panel reads as an overlay, so its X dismisses the
                   overlay (same path as Escape / backdrop click) and never destroys
                   the column underneath. Closing the column needs the normal view. */}
-              {(onClose || isFullscreen) && (
+              {(onClose || shownFullscreen) && (
                 <button
                   className="task-action-btn session-panel-close"
                   data-header-id="close"
-                  onClick={isFullscreen ? exitFullscreen : () => closePanel(sessionId)}
-                  title={isFullscreen ? 'Exit full screen' : inset ? 'Close this tab (the task keeps running)' : 'Close session panel'}
-                  aria-label={isFullscreen ? 'Exit full screen' : inset ? 'Close this tab' : 'Close session panel'}
+                  onClick={shownFullscreen ? exitFullscreen : () => closePanel(sessionId)}
+                  title={shownFullscreen ? 'Exit full screen' : inset ? 'Close this tab (the task keeps running)' : 'Close session panel'}
+                  aria-label={shownFullscreen ? 'Exit full screen' : inset ? 'Close this tab' : 'Close session panel'}
                 >
                   {ICON_CLOSE}
                 </button>
@@ -3409,7 +3457,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
               kebab sit beside it (plus the host's one leading control, when
               embedded). Every window/tool icon button lives on row 1. */}
           <div className="session-panel-header-top" ref={titleRowRef} data-header-fit={titleRowTight ? 'tight' : undefined}>
-            {headerLeading && !isFullscreen && (
+            {headerLeading && !shownFullscreen && (
               <div className="session-panel-header-leading">{headerLeading}</div>
             )}
             <div className="session-panel-title-area">
@@ -3747,7 +3795,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                     )}
                     {activeView === 'files' && (
                       <SessionFileExplorer
-                        cwd={fileViewTarget?.path ?? session?.cwd}
+                        cwd={fileViewTarget?.path ?? '~'}
                         host={fileViewTarget?.onHost ? fileViewTarget.onHost.host : session?.host}
                         // The session's transcript and its changed repos are on its own host.
                         sessionId={fileViewTarget?.onHost ? undefined : sessionId}
@@ -3769,6 +3817,8 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                         // a quote from a diff compose the identical prefill.
                         onSelectCode={handleSelectCode}
                         barRightSlot={dockBarSlot}
+                        // A phone file layer sits on the Files view's layer.
+                        phoneParentId={phoneLayer || phoneHostSlot ? phoneViewerId : undefined}
                       />
                     )}
                     {/* Inbox: this session's letters, reader in place. Same split
@@ -3801,7 +3851,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                         taskId={session.taskId}
                         sessionId={sessionId}
                         barRightSlot={chatBarSlot}
-                        onOpenTask={peek.open}
+                        onOpenTask={shownFullscreen ? peek.open : (onTaskClick ?? onLocateTask)}
                         onLocateTask={onTaskClick ?? onLocateTask}
                         onSendToSession={handleBoardSend}
                         renderSession={(cardSessionId, opts) => (
@@ -3813,7 +3863,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                             inset
                             onClose={opts.onClose}
                             onLocateTask={onTaskClick ?? onLocateTask}
-                            onTaskClick={openPeekFromChat}
+                            onTaskClick={chatTaskClick}
                             onSessionClick={onSessionClick}
                             onOpenTaskDetail={onOpenTaskDetail}
                             onOpenForkDraft={onOpenForkDraft}
@@ -3905,7 +3955,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                   aria-expanded
                 >{ICON_PANEL_RIGHT_FILLED}</button>
               );
-              return !inset && isFullscreen && peek.tabs.length > 0 ? <PeekTabBar peek={peek} rightSlot={hideChat} /> : (
+              return !inset && shownFullscreen && peek.tabs.length > 0 ? <PeekTabBar peek={peek} rightSlot={hideChat} /> : (
                 <div className="session-chat-bar">
                   <span className="session-chat-bar-title">Chat</span>
                   {hideChat}
@@ -4217,7 +4267,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                     inset
                     onClose={closeShownPeek}
                     onLocateTask={jump}
-                    onTaskClick={openPeekFromChat}
+                    onTaskClick={chatTaskClick}
                     onSessionClick={onSessionClick}
                     onOpenTaskDetail={onOpenTaskDetail}
                     onOpenForkDraft={onOpenForkDraft}

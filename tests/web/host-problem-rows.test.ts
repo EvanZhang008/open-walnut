@@ -200,6 +200,10 @@ describe('the autofix verb', () => {
     await render(createElement(SingleHostRow, { row, defaultExpanded: true, onDismiss: noop, onOpenSettings: noop }))
     await click(byText('Install')!)
     expect(host.querySelector('[data-testid="hpb-fixing"]')?.textContent).toContain('Installing Claude Code on Build box...')
+    const bar = host.querySelector('[data-testid="hpb-fixing"] [role="progressbar"]')!
+    expect(bar.getAttribute('aria-label')).toBe('Installing Claude Code on Build box...')
+    expect(bar.hasAttribute('aria-valuenow')).toBe(false)
+    expect(host.querySelector('[data-testid="hpb-fixing"] .hpb-spinner')).toBeNull()
   })
 })
 

@@ -10,7 +10,7 @@
  * events stay the fast path; a read of the queue is the truth they are checked
  * against.
  *
- * Rules, per bubble (a launch prompt and a bubble whose send has not answered
+ * Rules, per bubble (a launch prompt, unless its row is parked, and a bubble whose send has not answered
  * yet, a `temp-` id, are left as they are):
  *   - its row waits (pending, held, after the turn) → Queued, with the row's reason;
  *   - its row is on its way (written, taken, processing and not held) → Delivered;
@@ -29,6 +29,8 @@
  */
 import type { OptimisticMessage } from '@/components/sessions/SessionChatHistory';
 import type { QueueRowWire } from './useSessionSend';
+import type { SendAck } from '@/api/session-send';
+import { acceptedBubble } from '@/components/sessions/send-acceptance';
 
 export interface ReconcileContext {
   /** Real queue ids the panel held when the read began: only these can be judged gone. */
@@ -49,11 +51,11 @@ export const isClientId = (queueId: string): boolean => queueId.startsWith('temp
 type RowVerdict =
   | { kind: 'waiting'; heldReason?: string; afterTurn?: boolean }
   | { kind: 'sent' }
-  | { kind: 'parked'; reason?: string };
+  | { kind: 'parked'; reason?: string; waitsFor?: string };
 
 /** What the server's row says of the message. */
 export function rowVerdict(row: QueueRowWire): RowVerdict {
-  if (row.status === 'parked') return { kind: 'parked', ...(row.parkedReason ? { reason: row.parkedReason } : {}) };
+  if (row.status === 'parked') return { kind: 'parked', ...(row.parkedReason ? { reason: row.parkedReason } : {}), ...(row.waitsFor ? { waitsFor: row.waitsFor } : {}) };
   if (row.delivered === true || row.stage === 'taken' || row.stage === 'written') return { kind: 'sent' };
   const held = (row.status === 'processing' || row.status === 'pending') && !!row.heldReason;
   // The server's stage is its word: `waiting` holds a processing row it cannot vouch for as
@@ -63,7 +65,7 @@ export function rowVerdict(row: QueueRowWire): RowVerdict {
 }
 
 function withoutWaitFacts(m: OptimisticMessage): OptimisticMessage {
-  const { heldReason: _h, afterTurn: _a, failedError: _f, parked: _p, ...rest } = m;
+  const { heldReason: _h, afterTurn: _a, failedError: _f, parked: _p, waitsFor: _w, ...rest } = m;
   return rest as OptimisticMessage;
 }
 
@@ -74,8 +76,14 @@ function applyVerdict(m: OptimisticMessage, v: RowVerdict, touched: boolean): Op
     return { ...withoutWaitFacts(m), status: 'delivered' };
   }
   if (v.kind === 'parked') {
-    if (touched || (m.status === 'failed' && m.parked && m.failedError === v.reason)) return m;
-    return { ...withoutWaitFacts(m), status: 'failed', parked: true, ...(v.reason ? { failedError: v.reason } : {}) };
+    if (touched || (m.status === 'failed' && m.parked && m.failedError === v.reason && m.waitsFor === v.waitsFor)) return m;
+    // A launch prompt the server parked is no launch prompt any more: it reads as the
+    // message that was not sent, with its Retry (parked-bubbles.ts).
+    const { launch: _launch, ...base } = withoutWaitFacts(m);
+    return {
+      ...base, status: 'failed', parked: true, serverUndelivered: true,
+      ...(v.reason ? { failedError: v.reason } : {}), ...(v.waitsFor ? { waitsFor: v.waitsFor } : {}),
+    } as OptimisticMessage;
   }
   // Waiting. A failed bubble keeps its Retry; a Delivered one reads Queued again
   // unless something moved it after the read began.
@@ -122,8 +130,17 @@ export function reconcileWithQueue(prev: OptimisticMessage[], rows: readonly Que
   let changed = false;
   const next: OptimisticMessage[] = [];
   for (const m of prev) {
-    if (m.launch || isClientId(m.queueId)) { next.push(m); continue; }
+    if (isClientId(m.queueId)) { next.push(m); continue; }
     const row = byId.get(m.queueId);
+    // A launch prompt is the head of the conversation: only a park of its row (a refused
+    // first message, same id) changes it (parked-bubbles.ts).
+    if (m.launch) {
+      const v = row ? rowVerdict(row) : undefined;
+      const after = v?.kind === 'parked' ? applyVerdict(m, v, ctx.touched.has(m.queueId)) : m;
+      if (after !== m) changed = true;
+      next.push(after);
+      continue;
+    }
     if (row) {
       const after = applyVerdict(m, rowVerdict(row), ctx.touched.has(m.queueId));
       if (after !== m) changed = true;
@@ -153,28 +170,40 @@ export function reconcileWithQueue(prev: OptimisticMessage[], rows: readonly Que
 }
 
 /**
+ * The panel's first read of the queue (a mount, a session switch): the rows join in
+ * enqueue order (a send made while the read was in flight keeps its place after them)
+ * and nothing is judged gone. The launch prompt opens the first turn, so it leads,
+ * unless a row stands under its id (a refused first message, parked: that row is
+ * the bubble, with its Retry; parked-bubbles.ts).
+ */
+export function rehydrateFromQueue(
+  prev: OptimisticMessage[],
+  rows: readonly QueueRowWire[],
+  launch: OptimisticMessage | null,
+  ctx: Pick<ReconcileContext, 'retired' | 'now' | 'toBubble'>,
+): OptimisticMessage[] {
+  const merged = reconcileWithQueue(prev, rows, { ...ctx, known: new Set(), touched: new Set() });
+  const head = launch && !merged.some((m) => m.queueId === launch.queueId) ? [launch] : [];
+  return head.length ? [...head, ...merged] : merged;
+}
+
+/**
  * A send's answer gives its bubble the server's id. A queue read that answered
  * first may already hold a bubble for that row (it read the row, not knowing the
  * client id): the send's own bubble stays (it has the pictures and hints the
  * person sent) and the read's copy goes, so no message shows twice. A copy the
- * read already saw delivered keeps the bubble delivered.
+ * read already saw delivered keeps the bubble delivered. What the answer itself
+ * says (a lost answer's stand-in, a row the server parked, a line that already
+ * ran) is send-acceptance.ts acceptedBubble.
  */
 export function adoptSendAnswer(
   prev: OptimisticMessage[],
   clientId: string,
-  res: { messageId: string; dedupText?: string; enqueuedAt?: string },
+  res: SendAck,
   adopted: 'received' | 'delivered',
 ): OptimisticMessage[] {
   const copy = clientId !== res.messageId ? prev.find((m) => m.queueId === res.messageId) : undefined;
   const sentAlready = copy?.status === 'delivered';
   const list = copy ? prev.filter((m) => m !== copy) : prev;
-  return list.map((m) => m.queueId === clientId
-    ? {
-        ...m,
-        queueId: res.messageId,
-        status: m.status === 'delivered' || sentAlready ? 'delivered' : adopted,
-        ...(res.dedupText ? { dedupText: res.dedupText } : {}),
-        ...(res.enqueuedAt ? { timestamp: res.enqueuedAt } : {}),
-      }
-    : m);
+  return list.map((m) => (m.queueId === clientId ? acceptedBubble(m, res, adopted === 'delivered' || sentAlready) : m));
 }

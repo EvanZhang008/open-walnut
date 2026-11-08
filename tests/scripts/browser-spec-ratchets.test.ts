@@ -1293,6 +1293,9 @@ describe('a test that loads a page again after it opened full screen or a split 
     // The Files view that comes back holds what they check: the recent files, a
     // replayed draft, the newer words a reload must bring back.
     'file-doc-bar.spec.ts': ['nothing open lists the files read last', 'a draft replayed on open reaches disk on its own', 'an older write landing keeps the newer', 'text typed and reloaded at once comes back'],
+    'first-use-files.spec.ts': ['Files starts at the host home and preserves a chosen file across reopening'],
+    // The full screen Source view and the reading mode that come back after a reload are the check.
+    'files-changed-ask-here.spec.ts': ['Files: saved questions in the full screen Source view survive reloads', 'Files: an unscrolled reading mode is kept immediately across reloads'],
     'session-thread-review-sidebar.spec.ts': ['a card shows its whole thread with its own scroll'],
     // The full-screen split that comes back holds each pane's reading place, the check.
     'session-reading-place.spec.ts': ['a reload brings each pane back to its place'],

@@ -63,6 +63,7 @@ vi.mock('../../../src/providers/claude-code-session.js', () => ({
     reinitialize: (sid: string) => reinitializeMock(sid),
     findAcpSession: () => null,
     findSessionByClaudeId: () => null,
+    recoverCancelledForSession: async () => true,
     settleInFlightTurn: (sid: string) => settleInFlightTurnMock(sid),
     isCronArmed: (sid: string) => isCronArmedMock(sid),
   },

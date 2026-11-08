@@ -34,6 +34,13 @@ export interface QueuedMessage {
   /** A move took it out of its queue at this time (epoch ms); cleared when it is put back. */
   takenAt?: number;
   /**
+   * Parked only because the coding agent cannot run on the session's host yet (a
+   * readiness kind of AGENT_CANNOT_RUN_KINDS, e.g. 'claude_missing'): Walnut sends it
+   * by itself once that host reads runnable (sessions/agent-wait-resend.ts). Cleared
+   * whenever the row leaves 'parked'. Absent on every other park.
+   */
+  waitsFor?: string;
+  /**
    * Process-monotonic enqueue counter: the tiebreaker for messages that share
    * an `enqueuedAt` millisecond. Optional: rows persisted before this field
    * existed don't have it. See compareEnqueueOrder.
@@ -107,6 +114,8 @@ export interface QueueStore {
   relay?: RelayFates;
   /** Row id → uuid of the line it went out in, for rows that left the queue (session-queue-lines.ts). */
   settled?: Record<string, string>;
+  /** Original rows cancelled in the same durable transaction as their removal, retained for a later taken word. */
+  cancelled?: Record<string, Record<string, { rows: QueuedMessage[] }>>;
 }
 
 // ── In-memory cache (backed by disk) ──
@@ -162,6 +171,18 @@ export function normalizeShape(s: QueueStore): QueueStore {
     return { version: 1, queues: {} };
   }
   if (s.settled !== undefined && (typeof s.settled !== 'object' || s.settled === null)) delete s.settled;
+  if (s.cancelled !== undefined) {
+    if (!s.cancelled || typeof s.cancelled !== 'object' || Array.isArray(s.cancelled)) delete s.cancelled;
+    else for (const [sid, lines] of Object.entries(s.cancelled)) {
+      if (!lines || typeof lines !== 'object' || Array.isArray(lines)) { delete s.cancelled[sid]; continue; }
+      for (const [uuid, snapshot] of Object.entries(lines)) {
+        if (!snapshot || !Array.isArray(snapshot.rows)) { delete lines[uuid]; continue; }
+        snapshot.rows = snapshot.rows.filter((r) => r && typeof r.id === 'string' && r.sessionId === sid && r.lineUuid === uuid);
+        if (!snapshot.rows.length) delete lines[uuid];
+      }
+      if (!Object.keys(lines).length) delete s.cancelled[sid];
+    }
+  }
   return s;
 }
 
@@ -353,6 +374,13 @@ async function persist<R>(fn: (s: QueueStore) => R, take: (r: R) => void, durabl
       log.session.warn('session message queue lock busy: waiting on', { attempt, of: LOCK_ATTEMPTS });
     }
   }
+}
+export async function removeCancelledSnapshots(sessionIds: Set<string>): Promise<void> {
+  if (!sessionIds.size || !await readQueueFileFresh().then(s => [...sessionIds].some(id => s.cancelled?.[id]))) return;
+  await mutateStore((s) => {
+    for (const id of sessionIds) delete s.cancelled?.[id];
+    if (s.cancelled && !Object.keys(s.cancelled).length) delete s.cancelled;
+  }, true, true);
 }
 
 /**

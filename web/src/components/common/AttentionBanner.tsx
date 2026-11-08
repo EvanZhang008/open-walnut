@@ -34,7 +34,7 @@ import { setBannerRowsDeferred, type BannerMount } from '@/utils/host-banner-pla
 import {
   cardMounted, getBannerState, isResumingAfterGap, setBannerState, useRowExpanded, withoutReplayedReady,
 } from '@/utils/attention-banner-session';
-import { useUserEngagedHosts, useUserRetryingHosts } from '@/utils/host-user-retrying';
+import { usePromptedHosts, useUserEngagedHosts, useUserRetryingHosts } from '@/utils/host-user-retrying';
 import { useGateBarHosts } from '@/utils/host-gate-shown';
 import { useLocalClaudeNotice } from './SetupBanner';
 import { GroupRow, ReadyRow, SingleHostRow } from './HostProblemRows';
@@ -145,6 +145,7 @@ export function AttentionBanner({
   const replica = useIsReplicaServer();
   const userRetrying = useUserRetryingHosts();
   const engaged = useUserEngagedHosts();
+  const prompted = usePromptedHosts();
   const gateHosts = useGateBarHosts();
   // The draft column's compact card leaves out a host its own gate bar speaks for.
   const statuses = compact && gateHosts.size ? allStatuses.filter((s) => !gateHosts.has(s.host)) : allStatuses;
@@ -165,7 +166,7 @@ export function AttentionBanner({
   let frame = nextBanner({
     statuses: hydrated ? statuses : [], dismissed, now, replica,
     pointerInside: pointerInside || focusInside, localPresent, hiddenIds: activeHiddenIds(hidden, now),
-    userRetrying, engaged,
+    userRetrying, engaged, prompted,
   }, prev);
   // Back after a while with no card anywhere: a heal that happened meanwhile is not replayed.
   if (isResumingAfterGap()) frame = withoutReplayedReady(frame, prev);

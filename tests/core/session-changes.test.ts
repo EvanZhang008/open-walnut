@@ -10,7 +10,7 @@ vi.mock('../../src/core/daemon-file-reader.js', () => mockLocalDaemonReader());
 
 import { CLAUDE_HOME } from '../../src/constants.js';
 import { encodeProjectPath } from '../../src/core/session-file-reader.js';
-import { computeSessionChanges, computeSessionChangesSwr } from '../../src/core/session-changes.js';
+import { _resetChangesCacheForTesting, computeSessionChanges, computeSessionChangesSwr } from '../../src/core/session-changes.js';
 
 const tmpBase = CLAUDE_HOME;
 // A sandbox for the actual edited files (the "current content on disk" the engine
@@ -18,6 +18,7 @@ const tmpBase = CLAUDE_HOME;
 let workRoot: string;
 
 beforeEach(async () => {
+  _resetChangesCacheForTesting();
   await fsp.rm(tmpBase, { recursive: true, force: true });
   await fsp.mkdir(tmpBase, { recursive: true });
   workRoot = path.join(os.tmpdir(), `walnut-changes-${Date.now()}-${Math.random().toString(36).slice(2)}`);

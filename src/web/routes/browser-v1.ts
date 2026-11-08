@@ -26,6 +26,7 @@ import { openAsk } from '../../core/browser-control/sign-in-ask.js'
 import { onCredentialsRevoked } from '../../core/device-auth.js'
 import { mountBrowserView, _resetBrowserViewForTesting } from './browser-view-v1.js'
 import { missingIsNull } from '../../lib/id-ref.js'
+import { IS_DEMO } from '../../constants.js'
 
 export const browserV1Router = Router()
 
@@ -57,7 +58,7 @@ async function walnutAddresses(req: Request): Promise<string[]> {
     const p = await import('../../core/pairing-targets.js')
     add((await p.getCloudPairingEndpointAsync())?.origin, false)
     const port = req.socket.localPort ?? 0
-    for (const t of await p.getPairingTargets(`http://localhost:${port}`, port)) add(t.origin, t.kind !== 'cloud')
+    for (const t of await p.getPairingTargets(ownUrl(req)!, port)) add(t.origin, t.kind !== 'cloud')
   } catch { /* none known */ }
   ownCache = { at: Date.now(), list: [...out].slice(0, 50) }
   return ownCache.list
@@ -227,7 +228,7 @@ browserV1Router.get('/browser/panel', (req, res, next) => {
 })
 
 /** This server as the extension on this machine reaches it. */
-const ownUrl = (req: Request) => (req.socket.localPort ? `http://localhost:${req.socket.localPort}` : undefined)
+const ownUrl = (req: Request) => (req.socket.localPort ? `http://${IS_DEMO ? '127.0.0.1' : 'localhost'}:${req.socket.localPort}` : undefined)
 
 /**
  * Settings, Browser extension, Set up in Chrome: the extension into its folder on this machine,

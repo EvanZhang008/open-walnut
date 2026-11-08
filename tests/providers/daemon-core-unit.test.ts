@@ -4,7 +4,7 @@
  * (compiled Bun binary). Because the core is fully DI'd, we can exercise
  * every death path, idempotency guard, and broadcast with synthetic deps.
  */
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
@@ -190,6 +190,121 @@ let h: Harness
 beforeEach(async () => {
   tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'daemon-core-unit-'))
   h = makeHarness({ tmpDir })
+})
+
+describe('line.fate read-only query', () => {
+  const uuid = 'aaaaaaaa-0000-4000-8000-000000000001'
+  const frame = (state: string, id = uuid) => JSON.stringify({ type: 'command_lifecycle', command_uuid: id, state }) + '\n'
+  const marker = (pid: number) => JSON.stringify({ type: 'user', subtype: 'walnut-injected', walnutPid: pid, walnutMessageId: 'qm-1' }) + '\n'
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    h.dispose()
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  function fixture(text: string, dead = false) {
+    const session = makeSession('query', { jsonlPath: path.join(tmpDir, 'query.jsonl'), state: dead ? 'dead' : 'running' })
+    h.sessions.set('query', session)
+    fs.writeFileSync(session.jsonlPath, text)
+    fs.writeFileSync(`${session.jsonlPath}.lines`, '')
+    fs.writeFileSync(h.registryFile, 'registry must not change')
+    const before = { ...session }
+    const writes = [vi.spyOn(fs, 'openSync'), vi.spyOn(fs, 'writeSync'), vi.spyOn(fs, 'writeFileSync'), vi.spyOn(fs, 'appendFileSync'), vi.spyOn(fs, 'unlinkSync')]
+    const core = createDaemonCore(h.deps)
+    return { core, session, assertReadOnly() {
+      for (const write of writes) expect(write).not.toHaveBeenCalled()
+      expect(h.killHistory).toEqual([])
+      expect(h.broadcasts).toEqual([])
+      expect(h.watcherExits).toEqual([])
+      expect(h.sessions.size).toBe(1)
+      expect(h.sessions.get('query')).toBe(session)
+      expect(session).toEqual(before)
+      expect(fs.readFileSync(h.registryFile, 'utf8')).toBe('registry must not change')
+      expect(fs.readFileSync(session.jsonlPath, 'utf8')).toBe(text)
+      expect(fs.readFileSync(`${session.jsonlPath}.lines`, 'utf8')).toBe('')
+    } }
+  }
+
+  it.each([
+    ['cancelled', frame('cancelled'), false, { ok: true, fate: 'cancelled', state: 'cancelled' }],
+    ['pending', marker(12345) + frame('started'), false, { ok: true, fate: 'ran', state: 'started', answer: 'pending' }],
+    ['completed', frame('completed'), false, { ok: true, fate: 'ran', state: 'completed' }],
+    ['dead with a stale pid', marker(12345) + frame('started'), true, { ok: true, fate: 'unanswered', state: 'started' }],
+    ['dead completed', frame('completed'), true, { ok: true, fate: 'ran', state: 'completed' }],
+    ['unknown body mentioning the uuid', JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: uuid + ' cancelled' }] } }) + '\n', false, { ok: false, fate: 'unknown', reason: 'unknown' }],
+    ['another uuid', frame('cancelled', 'another-uuid'), false, { ok: false, fate: 'unknown', reason: 'unknown' }],
+    ['dead unknown', '', true, { ok: false, fate: 'unknown', reason: 'unknown' }],
+  ])('%s is read without FIFO writes, signals or registry changes', async (_label, text, dead, expected) => {
+    const f = fixture(text, dead)
+    await expect(f.core.handleLineFateQuery('query', uuid, ['qm-1'])).resolves.toEqual(expected)
+    await expect(f.core.handleLineFateQuery('query', uuid, ['qm-1'])).resolves.toEqual(expected)
+    f.assertReadOnly()
+  })
+
+  it.each(['death', 'replacement', 'pid change'])('a %s during the asynchronous scan returns unknown without touching the new state', async (change) => {
+    const f = fixture(marker(12345) + frame('started'))
+    const open = fsp.open.bind(fsp)
+    vi.spyOn(fsp, 'open').mockImplementationOnce(async (...args: Parameters<typeof fsp.open>) => {
+      if (change === 'death') f.session.state = 'dead'
+      else if (change === 'replacement') h.sessions.set('query', makeSession('replacement'))
+      else f.session.pid = 23456
+      return open(...args)
+    })
+    await expect(f.core.handleLineFateQuery('query', uuid, ['qm-1'])).resolves.toEqual({ ok: false, fate: 'unknown', reason: 'unknown' })
+    expect(h.killHistory).toEqual([])
+    expect(h.broadcasts).toEqual([])
+    expect(fs.readFileSync(h.registryFile, 'utf8')).toBe('registry must not change')
+    if (change === 'death') expect(f.session.state).toBe('dead')
+    else if (change === 'replacement') expect(h.sessions.get('query')).not.toBe(f.session)
+    else expect(f.session.pid).toBe(23456)
+  })
+
+  it('missing sessions and invalid bounded identities never read files or signal a pid', async () => {
+    const core = createDaemonCore(h.deps)
+    const open = vi.spyOn(fsp, 'open')
+    await expect(core.handleLineFateQuery(undefined, uuid, [])).resolves.toEqual({ ok: false, fate: 'unknown', reason: 'not_found' })
+    await expect(core.handleLineFateQuery('missing', uuid, [])).resolves.toEqual({ ok: false, fate: 'unknown', reason: 'not_found' })
+    for (const [sid, id, ids] of [
+      ['x'.repeat(201), uuid, []], ['query', '', []], ['query', 1, []], ['query', 'x'.repeat(201), []],
+      ['query', uuid, null], ['query', uuid, ['']], ['query', uuid, [1]], ['query', uuid, ['x'.repeat(201)]],
+      ['query', uuid, Array(201).fill('qm-1')], ['query', uuid, Array(1)],
+    ]) {
+      await expect(core.handleLineFateQuery(sid, id, ids)).resolves.toEqual({ ok: false, fate: 'unknown', reason: 'invalid_query' })
+    }
+    expect(open).not.toHaveBeenCalled()
+    expect(h.killHistory).toEqual([])
+    expect(h.sessions.size).toBe(0)
+    expect(fs.existsSync(h.registryFile)).toBe(false)
+  })
+
+  it('keeps the 8 MB tail bound, chunked reads, and bounded transcript fallback', async () => {
+    const padding = (JSON.stringify({ type: 'system', text: 'x'.repeat(1024) }) + '\n').repeat(8192)
+    const text = frame('cancelled') + padding
+    const f = fixture(text, true)
+    const reads: number[] = []
+    const original = fsp.open.bind(fsp)
+    vi.spyOn(fsp, 'open').mockImplementation(async (...args: Parameters<typeof fsp.open>) => {
+      const handle = await original(...args)
+      const read = handle.read.bind(handle)
+      vi.spyOn(handle, 'read').mockImplementation(async (...readArgs: Parameters<typeof handle.read>) => {
+        reads.push(Number(readArgs[2]))
+        return read(...readArgs)
+      })
+      return handle
+    })
+    await expect(f.core.handleLineFateQuery('query', uuid, ['qm-1'])).resolves.toEqual({ ok: false, fate: 'unknown', reason: 'unknown' })
+    expect(reads.reduce((a, b) => a + b, 0)).toBe(8 * 1024 * 1024)
+    expect(Math.max(...reads)).toBeLessThanOrEqual(256 * 1024)
+    const transcript = path.join(tmpDir, 'transcript.jsonl')
+    // Use the async API: the query's sync-write spies stay armed.
+    await fsp.writeFile(transcript, JSON.stringify({ type: 'user', uuid, message: { content: 'real prompt' } }) + '\n'
+      + JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'real answer' }] } }) + '\n')
+    h.deps.transcriptPathFn = async () => transcript
+    const core = createDaemonCore(h.deps)
+    await expect(core.handleLineFateQuery('query', uuid, ['qm-1'])).resolves.toEqual({ ok: true, fate: 'ran', state: 'started', answer: 'yes' })
+    f.assertReadOnly()
+  })
 })
 
 // ════════════════════════════════════════════════════════════════════════

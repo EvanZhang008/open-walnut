@@ -11,8 +11,12 @@
  * fit: its labels are one folded control (session-header-labels-guard.test.ts).
  */
 import fs from 'node:fs';
-import { describe, it, expect } from 'vitest';
-import { SLOT_ID_PREFIX, TOOL_ITEMS, toolItemSpec } from '../../web/src/components/sessions/useSessionHeaderFit';
+
+import { describe, it, expect, vi } from 'vitest';
+import { parseHTML } from 'linkedom';
+import { createElement, act, useRef } from '../../web/node_modules/react/index.js';
+import { createRoot } from '../../web/node_modules/react-dom/client.js';
+import { SLOT_ID_PREFIX, TOOL_ITEMS, toolItemSpec, useToolRowFit } from '../../web/src/components/sessions/useSessionHeaderFit';
 import {
   fitToolRow, toolRowWidth,
   ASSUMED_TOOL_WIDTH, ASSUMED_WINDOW_WIDTH,
@@ -37,6 +41,94 @@ const ROW: ToolRowItem[] = [
 ];
 // Chips 248 + time 22 + 5 gaps 30 = 300; buttons 110 + 4 gaps 12 = 122; group gap 6.
 const ROW_WIDTH = 428;
+
+describe('tool row observer delivery', () => {
+  // useObserved: nothing renders inside observer delivery (a flushSync there also commits every
+  // other update waiting, Home's column count after a divider drag included: WebKit's
+  // 'ResizeObserver loop' error, 2026-11-07 and 2026-11-10). A changed decision is painted onto
+  // the row's own items inside the delivery, before paint, never a frame later, and React gets it
+  // as an ordinary update.
+  it('commits nothing inside delivery; a changed fit is painted on the items at once and rendered after', async () => {
+    const { window } = parseHTML('<!doctype html><html><body></body></html>');
+    const frames = new Map<number, FrameRequestCallback>();
+    const callbacks: Array<() => void> = [];
+    let nextFrame = 0;
+    let delivery = false;
+    let width = 500;
+    let renders = 0;
+    let rendersDuringDelivery = 0;
+    vi.stubGlobal('window', window);
+    vi.stubGlobal('document', window.document);
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { frames.set(++nextFrame, cb); return nextFrame; });
+    vi.stubGlobal('cancelAnimationFrame', (id: number) => frames.delete(id));
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(cb: () => void) { callbacks.push(cb); }
+      observe() {}
+      disconnect() {}
+    });
+    vi.stubGlobal('MutationObserver', class {
+      constructor(cb: () => void) { callbacks.push(cb); }
+      observe() {}
+      disconnect() {}
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    function Row() {
+      renders++;
+      if (delivery) rendersDuringDelivery++;
+      const ref = useRef<HTMLDivElement | null>(null);
+      const fit = useToolRowFit(ref);
+      return createElement('div', {
+        ref: (el: HTMLDivElement | null) => {
+          ref.current = el;
+          if (!el) return;
+          el.getBoundingClientRect = () => ({ width } as DOMRect);
+          for (const item of el.querySelectorAll<HTMLElement>('[data-header-id]')) {
+            item.getBoundingClientRect = () => ({ width: item.dataset.headerId === 'fork' ? 42 : 58 } as DOMRect);
+          }
+        },
+        'data-fit': fit.inMore.join(','),
+      }, ...['fork', 'changed', 'files', 'terminal'].map(id => createElement('span', { key: id, 'data-header-id': id }, id)));
+    }
+    let hiddenInDelivery: string[] = [];
+    const deliver = async () => {
+      await act(async () => {
+        delivery = true;
+        for (const cb of [...callbacks, ...callbacks]) cb();
+        hiddenInDelivery = [...host.querySelectorAll<HTMLElement>('[data-header-id][data-hidden="true"]')].map((e) => e.dataset.headerId!);
+        delivery = false;
+      });
+    };
+    try {
+      await act(async () => { root.render(createElement(Row)); });
+      const initialRenders = renders;
+      // Same room: the observers fire, nothing renders.
+      await deliver();
+      expect(renders).toBe(initialRenders);
+      expect(rendersDuringDelivery).toBe(0);
+      // Less room: the items leave inside the delivery (no frame paints the old fit), and the
+      // render (the "..." menu's list) comes after it, never inside it, and never a frame later.
+      width = 100;
+      await deliver();
+      expect(hiddenInDelivery).toContain('changed');
+      expect(rendersDuringDelivery).toBe(0);
+      expect(host.firstElementChild?.getAttribute('data-fit')).toContain('changed');
+      expect(renders).toBeGreaterThan(initialRenders);
+      expect(frames.size).toBe(0);
+      // Converged: the same room again renders nothing more.
+      const settled = renders;
+      await deliver();
+      expect(renders).toBe(settled);
+    } finally {
+      await act(async () => { root.unmount(); });
+      expect(frames.size).toBe(0);
+      host.remove();
+      vi.unstubAllGlobals();
+    }
+  });
+});
 
 describe('fitToolRow', () => {
   it('owns synchronous fit state in the tool row, not in the full session panel', () => {
@@ -286,5 +378,34 @@ describe('Watch and Locate are kebab rows, not header buttons (2026-11-09, the u
     // Locate: a top-level row of the session kebab; Watch: the task's row of every task menu.
     expect(src('sessions/SessionMenuOpen.tsx')).toMatch(/\{p\.locate && <Row [^\n]*testId="session-menu-locate"/);
     expect(src('tasks/TaskMenuRows.tsx')).toContain('<WatchMenuItem task={task}');
+  });
+});
+describe('guard: no ResizeObserver callback renders React synchronously', () => {
+  // A flushSync reached from an observer callback commits every update waiting then, whatever
+  // component it belongs to, and a box above the observed one changing inside the callback is
+  // WebKit's 'ResizeObserver loop completed with undelivered notifications'. Every file that
+  // creates a ResizeObserver and calls flushSync is listed with why its flushSync is never on an
+  // observer's path.
+  const ALLOWED: Record<string, string> = {
+    'components/common/FileThreadLayer.tsx': 'flushSync runs from its MutationObserver and effect only; its ResizeObserver goes through requestAnimationFrame (later)',
+  };
+  it('every file with both is listed with why', async () => {
+    const { readdirSync, readFileSync, statSync } = await import('node:fs');
+    const { join, relative } = await import('node:path');
+    const root = join(__dirname, '../../web/src');
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      for (const name of readdirSync(dir)) {
+        const p = join(dir, name);
+        if (statSync(p).isDirectory()) walk(p);
+        else if (/\.(ts|tsx)$/.test(name)) files.push(p);
+      }
+    };
+    walk(root);
+    const both = files
+      .filter((f) => { const src = readFileSync(f, 'utf8'); return /new ResizeObserver\(/.test(src) && /\bflushSync\(/.test(src); })
+      .map((f) => relative(root, f));
+    expect(both.filter((f) => !ALLOWED[f]), 'a ResizeObserver path may reach flushSync: render as an ordinary update, or list it with why').toEqual([]);
+    expect(Object.keys(ALLOWED).filter((f) => !both.includes(f)), 'a listed file no longer has both: drop it').toEqual([]);
   });
 });

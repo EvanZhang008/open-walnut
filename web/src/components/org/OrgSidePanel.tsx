@@ -48,6 +48,8 @@ interface Props {
   /** Whether the panel is pinned beside the page; with onToggleLock, its header shows the lock. */
   locked?: boolean;
   onToggleLock?: () => void;
+  /** The panel came back from the saved strip or place, not a click: a gone session closes it (SessionPanel onRestoredGone). */
+  onRestoredGone?: () => void;
 }
 
 const HOME_ICON = (
@@ -56,7 +58,7 @@ const HOME_ICON = (
   </svg>
 );
 
-export function OrgSidePanel({ target, tasks, onClose, onOpenTask, onOpenSession, onStartChat, inboxRequest, locked, onToggleLock }: Props) {
+export function OrgSidePanel({ target, tasks, onClose, onOpenTask, onOpenSession, onStartChat, inboxRequest, locked, onToggleLock, onRestoredGone }: Props) {
   const navigate = useNavigate();
   const stored = target.kind === 'task' ? tasks.find((t) => t.id === target.id) : undefined;
   // A task the store does not hold (a completed one, say) is read once.
@@ -84,6 +86,7 @@ export function OrgSidePanel({ target, tasks, onClose, onOpenTask, onOpenSession
           {...(inboxRequest ? { inboxRequest } : {})}
           {...(onToggleLock ? { locked: !!locked, onToggleLock: () => onToggleLock() } : {})}
           onClose={onClose}
+          {...(onRestoredGone ? { onRestoredGone: () => onRestoredGone() } : {})}
           headerLeading={(
             <button
               type="button"

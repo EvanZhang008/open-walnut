@@ -23,7 +23,8 @@ describe('Recent human touches', () => {
     // A test run (an automated window, a probe) never writes the person's Recent (2026-11-11).
     expect(read('src/core/recent-task-touch.ts')).toContain('|| ambientTestRun()) return Promise.resolve()')
     expect(read('src/core/recent-task-touch.ts')).toContain('if (ambientTestRun()) return;')
-    expect(read('web/src/api/ws.ts')).toContain("if (method === 'session:send') payload = withSendTestRun(payload);")
+    // Every web send goes through the one acceptance rule (api/session-send.ts), which labels it.
+    expect(read('web/src/api/session-send.ts')).toContain("wsClient.sendRpc<T>('session:send', withSendTestRun(body))")
     expect(read('src/web/routes/session-chat.ts')).toContain("registerMethod('session:send', inSendTestRun(")
     expect(read('src/web/routes/ui-prefs.ts')).toContain('delete patch[RECENT_OPENED_KEY]')
   })

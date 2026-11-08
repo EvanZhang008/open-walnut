@@ -67,7 +67,7 @@ export function SessionSupervisionBar({ sid, snapshot, onRetryStop, archived }: 
   onRetryStop: () => void;
   archived?: boolean;
 }) {
-  const { value, error, unavailable, writing, stopping, stopPending, requestedEnabled } = snapshot;
+  const { value, error, unavailable, unreachable, writing, stopping, stopPending, requestedEnabled } = snapshot;
   const supervision = value?.supervision;
   const activeCron = useActiveSessionCron(sid);
   const recovering = supervision?.enabled && ['watching', 'checking', 'restarting'].includes(supervision.state);
@@ -89,6 +89,7 @@ export function SessionSupervisionBar({ sid, snapshot, onRetryStop, archived }: 
   const title = stopping ? 'Requesting stop'
     : stopPending ? 'Stop pending host confirmation'
     : failedStop ? 'Stop not confirmed'
+    : stale && unreachable ? 'Walnut is not reachable'
     : stale ? 'Recovery status unavailable'
     : supervision ? STATE_LABELS[supervision.state] : 'Automatic recovery';
   const detail = stopping || stopPending
@@ -109,7 +110,7 @@ export function SessionSupervisionBar({ sid, snapshot, onRetryStop, archived }: 
         )}
       </div>
       {detail && <p>{detail}</p>}
-      {error && <p role="alert">{error}</p>}
+      {error && <p role={unreachable ? 'status' : 'alert'}>{error}</p>}
       <div className="session-supervision-footer">
         <span>{STARTUP_LABELS[value?.startup ?? 'unavailable']}</span>
         {requestedEnabled !== null && <span role="status">Saving…</span>}
@@ -118,7 +119,7 @@ export function SessionSupervisionBar({ sid, snapshot, onRetryStop, archived }: 
           <button type="button" disabled={writing} onClick={onRetryStop}>{failedStop ? 'Stop again' : 'Retry stop'}</button>
         ) : supervision?.state === 'blocked' && value?.available && !unavailable && !archived ? (
           <button type="button" disabled={writing} onClick={() => change(true)}>Retry recovery</button>
-        ) : error ? (
+        ) : error && !unreachable ? (
           <button type="button" disabled={writing} onClick={() => { void refreshSessionSupervision(sid); }}>Check again</button>
         ) : null}
       </div>

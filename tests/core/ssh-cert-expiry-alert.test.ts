@@ -12,7 +12,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { createCertExpiryAlert, WARN_AHEAD_MS, type CertExpiryAlertDeps } from '../../src/core/hosts/ssh-cert-expiry-alert.js'
+import { certSignInArgs, createCertExpiryAlert, WARN_AHEAD_MS, type CertExpiryAlertDeps } from '../../src/core/hosts/ssh-cert-expiry-alert.js'
 import { createHostAuthAlert } from '../../src/core/hosts/host-auth-alert.js'
 import { SSH_CERT_EXPIRY, sshCertExpiredTurn } from '../../src/core/human-inbox/walnut-letters/ssh-cert-expiry.js'
 import { sshCertificateExpiry, type RunResult } from '../../src/providers/ssh-credential-evidence.js'
@@ -442,5 +442,22 @@ describe('sshCertificateExpiry', () => {
     expect(await sshCertificateExpiry('dev', { env: { HOME: '/h' }, run: run(''), readFile: async () => '' })).toBeNull()
     expect(await sshCertificateExpiry('dev', { env: { HOME: '/h', SSH_AUTH_SOCK: '/s' }, run: run('        Valid: forever\n'), readFile: async () => '' }))
       .toBe(Infinity)
+  })
+})
+
+describe('certSignInArgs: the fresh sign-in check dials what the session link dials', () => {
+  it('a found host: its alias, the real hostname, Walnut\'s own command, no TTY, no forwards, no master', () => {
+    expect(certSignInArgs({ hostname: 'devbox.example.test', sshAlias: 'devbox', user: 'builder', port: 2200 })).toEqual([
+      '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=no', '-o', 'ConnectTimeout=15', '-o', 'ControlMaster=no', '-o', 'ControlPath=none',
+      '-o', 'HostName=devbox.example.test', '-o', 'CanonicalizeHostname=yes', '-o', 'RemoteCommand=none', '-o', 'RequestTTY=no', '-o', 'ClearAllForwardings=yes',
+      '-p', '2200', 'builder@devbox', 'true',
+    ])
+  })
+
+  it('a manual host: exactly the argv it always had', () => {
+    expect(certSignInArgs({ hostname: 'box.example.com', user: 'dev' })).toEqual([
+      '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=no', '-o', 'ConnectTimeout=15', '-o', 'ControlMaster=no', '-o', 'ControlPath=none',
+      'dev@box.example.com', 'true',
+    ])
   })
 })

@@ -16,7 +16,7 @@
  * `metaTouched`, which locks the folder memory out (`lockLaunchMemory`).
  */
 import { test, expect, type Locator, type Page, type Route } from '@playwright/test'
-import { draftModelPicker, draftModelPill, openDraft } from './draft-helpers'
+import { HOME_FOLDER, draftModelPicker, draftModelPill, openDraft } from './draft-helpers'
 
 const rememberedCwd = '/Users/playwright/memory-fixture/projects/walnut'
 const plainCwd = '/Users/playwright/memory-fixture/projects/scratch'
@@ -223,11 +223,11 @@ test('dismissing (outside click) after picking a path confirms it as the launch 
 test('dismissing with no path picked still just closes (no path adopted)', async ({ page }) => {
   const panel = await openPicker(page)
   // Browse mode, nothing typed — outside click closes and adopts nothing, so the
-  // draft's cwd pill still reads its unpicked placeholder (a fresh draft opens
-  // with no folder pre-selected).
+  // draft's cwd pill still reads the folder it opened on: the home (a New task
+  // with no pick starts there, draft-home-default.ts).
   await clickOutsideUntilClosed(page)
   await expect(page.locator('.session-path-selector')).toHaveCount(0)
-  await expect(cwdPill(panel)).toHaveText('Choose folder and host…')
+  await expect(cwdPill(panel)).toHaveText(HOME_FOLDER)
 })
 
 test('panel height is fixed — drilling into a dir with few children must not shrink it', async ({ page }) => {

@@ -32,7 +32,7 @@ test('the project name on a row filters its own tab to that project, opens every
   ]
   const [gFocus, gNeeds, gTodo, gParked, gDone, kFocus] = ids
   await presetPanelDesign(page, 'status')
-  await boot(page, baseURL!, { 'walnut-todo-tier-used': '1' })
+  await boot(page, baseURL!)
   try {
     const panel = page.locator('.todo-panel').first()
     await selectTab(page, 'Pinned')

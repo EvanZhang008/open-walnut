@@ -12,7 +12,6 @@ import { shownTier, type FocusTier } from '@/api/focus';
 import * as ICONS from '../common/Icons';
 import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
 import { useTaskUndo } from '@/undo/TaskUndoContext';
-import { markTierUsed } from './filter-bar-persist';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
 import { useShowPriority } from '@/hooks/useShowPriority';
 import { DatePicker, formatDateDisplay, formatStartDateDisplay } from '../common/DatePicker';
@@ -285,8 +284,6 @@ export function TaskActionMenuItems({
       onSetTier?.(value);
     } else if (firstLevelPin && task?.id && focusBar) {
       const id = task.id;
-      markTierUsed();
-      window.dispatchEvent(new Event('walnut:tier-used'));
       if (isCurrent) onUnpinTask?.();
       else void (undo ? undo.pinToTier(id, value) : focusBar.setTierBulk([id], value));
     } else if (isPinned) {

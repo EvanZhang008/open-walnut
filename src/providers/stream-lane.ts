@@ -13,13 +13,17 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process'
+import fs from 'node:fs'
 import net from 'node:net'
+import os from 'node:os'
+import path from 'node:path'
 import type { Duplex } from 'node:stream'
 import { WebSocket } from '#ws'
 import { createStreamEndpoint, type StreamEndpoint, type StreamEndpointOptions, type StreamPeer } from '../lib/link-stream.js'
 import { log } from '../logging/index.js'
 import { createUploadPacer, type UploadPacer } from '../lib/upload-pacer.js'
 import { PACED_STREAM_PURPOSES, RELAY_UPLOAD_BURST_BYTES, RELAY_UPLOAD_BYTES_PER_SEC } from './ssh-upload-budget.js'
+import { exitControlMaster, MASTER_CONTROL_TIMEOUT_MS, MAX_SOCKET_PATH, masterLogFile, ownedMuxClientArgs, startControlMaster, type SshRunner } from './ssh-control-master.js'
 
 /** What a forward that this side stopped says when it ends. */
 export const STOPPED = 'stopped'
@@ -333,27 +337,94 @@ async function accepting(port: number, timeoutMs: number, exited: () => boolean)
   return false
 }
 
+/** How long an alias lane's own master outlives its last client: a crashed server's lane master ends by itself. */
+export const LANE_MASTER_PERSIST_SECS = 30
+
+export interface LaneForwardDeps {
+  spawn?: (cmd: string, args: string[], opts: { stdio: ['pipe', 'ignore', 'pipe'] }) => ChildProcess
+  run?: SshRunner
+  freePort?: () => Promise<number>
+  accepting?: (port: number, timeoutMs: number, exited: () => boolean) => Promise<boolean>
+  makeDir?: () => string
+  stopWaitMs?: number
+}
+
+/** A fresh owner-only dir for an alias lane's socket, short enough for MAX_SOCKET_PATH. */
+function makeLaneDir(): string {
+  for (const base of [os.tmpdir(), '/tmp']) {
+    if (path.join(base, 'wl-XXXXXX', 'm').length <= MAX_SOCKET_PATH) return fs.mkdtempSync(path.join(base, 'wl-'))
+  }
+  throw new Error('no temp dir short enough for an SSH control socket')
+}
+
+/** Only once its socket is gone: remove this lane's log and its empty dir. A socket still there keeps them all. */
+function removeOwnLaneFiles(dir: string, socket: string): void {
+  try { fs.lstatSync(socket); return } catch (err) { if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return }
+  try { if (fs.lstatSync(masterLogFile(socket)).isFile()) fs.unlinkSync(masterLogFile(socket)) } catch { /* not there */ }
+  try { fs.rmdirSync(dir) } catch { /* not empty or gone: left as it is */ }
+}
+
+/** An alias lane's own master: its own TCP, alias auth with no config forwards. `end` only sends it `-O exit`. */
+async function startLaneMaster(sshArgs: string[], sshHost: string, hostname: string, deps: LaneForwardDeps): Promise<{ socket: string; end: () => Promise<void> }> {
+  const dir = (deps.makeDir ?? makeLaneDir)()
+  const socket = path.join(dir, 'm')
+  let ended: Promise<void> | null = null
+  const end = () => (ended ??= Promise.resolve()
+    .then(() => exitControlMaster(socket, ownedMuxClientArgs(socket), hostname, { run: deps.run }))
+    .catch(() => undefined).then(() => removeOwnLaneFiles(dir, socket)))
+  // A socket already there is not this lane's: never reused, never removed.
+  if (socket.length > MAX_SOCKET_PATH || fs.existsSync(socket)) throw new Error('its SSH master socket path is not usable')
+  try {
+    await startControlMaster(socket, sshArgs, sshHost, { run: deps.run, persistSecs: LANE_MASTER_PERSIST_SECS })
+  } catch (err) {
+    await end()
+    throw err
+  }
+  return { socket, end }
+}
+
 /**
  * The lane's own SSH forward to the daemon's port: never through the session
  * connection's ControlMaster (`ControlMaster=no`, `ControlPath=none` come
  * before anything a config file says). Its remote command reads stdin, so the
  * forward ends with the server that holds the pipe, also one that crashed.
+ * A host from ~/.ssh/config (`ownMaster`) gets a master of the lane's own, and its client is mux-only.
  */
-export async function sshLaneForward(sshArgs: string[], sshHost: string, remotePort: number): Promise<LaneForward> {
-  const port = await freePort()
-  const args = [
-    // A RemoteCommand in a config file would refuse the command below.
-    '-o', 'ControlMaster=no', '-o', 'ControlPath=none', '-o', 'RemoteCommand=none',
-    ...sshArgs,
-    '-T',
-    '-L', `${port}:127.0.0.1:${remotePort}`,
-    '-o', 'ExitOnForwardFailure=yes',
-    '-o', 'ServerAliveInterval=15',
-    '-o', 'ServerAliveCountMax=3',
-    sshHost,
-    'exec cat >/dev/null',
-  ]
-  const proc: ChildProcess = spawn('ssh', args, { stdio: ['pipe', 'ignore', 'pipe'] })
+export async function sshLaneForward(
+  sshArgs: string[], sshHost: string, remotePort: number,
+  opts: { ownMaster?: { hostname: string }; deps?: LaneForwardDeps } = {},
+): Promise<LaneForward> {
+  const deps = opts.deps ?? {}
+  const port = await (deps.freePort ?? freePort)()
+  const owned = opts.ownMaster ? await startLaneMaster(sshArgs, sshHost, opts.ownMaster.hostname, deps) : null
+  const args = owned
+    ? [
+      ...ownedMuxClientArgs(owned.socket),
+      '-T',
+      '-L', `${port}:127.0.0.1:${remotePort}`,
+      '-o', 'ExitOnForwardFailure=yes',
+      opts.ownMaster!.hostname,
+      'exec cat >/dev/null',
+    ]
+    : [
+      // A RemoteCommand in a config file would refuse the command below.
+      '-o', 'ControlMaster=no', '-o', 'ControlPath=none', '-o', 'RemoteCommand=none',
+      ...sshArgs,
+      '-T',
+      '-L', `${port}:127.0.0.1:${remotePort}`,
+      '-o', 'ExitOnForwardFailure=yes',
+      '-o', 'ServerAliveInterval=15',
+      '-o', 'ServerAliveCountMax=3',
+      sshHost,
+      'exec cat >/dev/null',
+    ]
+  let proc: ChildProcess
+  try {
+    proc = deps.spawn ? deps.spawn('ssh', args, { stdio: ['pipe', 'ignore', 'pipe'] }) : spawn('ssh', args, { stdio: ['pipe', 'ignore', 'pipe'] })
+  } catch (err) {
+    await owned?.end()
+    throw err
+  }
   let stderr = ''
   // Drained: an unread pipe fills and ssh blocks.
   proc.stderr?.on('data', (d: Buffer) => { stderr = (stderr + d.toString()).slice(-2_000) })
@@ -364,16 +435,39 @@ export async function sshLaneForward(sshArgs: string[], sshHost: string, remoteP
   proc.on('exit', (code, signal) => {
     // What ssh said wins: a connection a bad packet ended may close its socket before ssh exits.
     const said = stderr.trim().split('\n').filter((l) => !/^Killed by signal/.test(l)).pop()
-    exited = said ? `${signal ?? `code ${code}`}: ${said}` : stopping ? STOPPED : `${signal ?? `code ${code}`}`
+    const lost = owned && !stopping && !fs.existsSync(owned.socket) ? 'SSH master lost: ' : ''
+    exited = stopping ? STOPPED : said ? `${lost}${signal ?? `code ${code}`}: ${said}` : `${lost}${signal ?? `code ${code}`}`
+    void owned?.end()
     for (const cb of exitCbs.splice(0)) cb(exited)
   })
   proc.on('error', (err) => {
     exited = err.message
+    void owned?.end()
     for (const cb of exitCbs.splice(0)) cb(exited)
   })
-  const stop = () => { if (exited === null) { stopping = true; try { proc.kill('SIGTERM') } catch { /* gone */ } } }
-  if (!(await accepting(port, 10_000, () => exited !== null))) {
-    stop()
+  // An alias lane first asks its own master to exit (bounded); only a client of ours still alive after it gets SIGTERM.
+  let stopped: Promise<void> | null = null
+  const stopOnce = (): Promise<void> => (stopped ??= (async () => {
+    if (exited !== null) return
+    stopping = true
+    if (owned) {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      await Promise.race([owned.end(), new Promise<void>((r) => { timer = setTimeout(r, deps.stopWaitMs ?? MASTER_CONTROL_TIMEOUT_MS + 1_000) })])
+      clearTimeout(timer)
+      if (exited !== null || proc.exitCode !== null) return
+    }
+    try { proc.kill('SIGTERM') } catch { /* gone */ }
+  })())
+  const stop = () => { void stopOnce() }
+  let ready = false
+  try {
+    ready = await (deps.accepting ?? accepting)(port, 10_000, () => exited !== null)
+  } catch (err) {
+    await stopOnce()
+    throw err
+  }
+  if (!ready) {
+    await stopOnce()
     throw new Error(`its SSH forward did not open${exited ? ` (${exited})` : stderr.trim() ? ` (${stderr.trim().split('\n').pop()})` : ''}`)
   }
   // From here on, what ssh says is about the connection (not a known-hosts note from the login).

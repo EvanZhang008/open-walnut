@@ -9,6 +9,7 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import { seeThrough } from './helpers/css-see-through';
 
 const WEB = path.resolve(__dirname, '../../web/src');
 const ORG = path.join(WEB, 'components/org');
@@ -71,25 +72,6 @@ const decl = (body: string, prop: string): string | null => {
   const m = body.match(new RegExp(`(?:^|;|\\s)${prop}\\s*:\\s*([^;]+)`));
   return m ? m[1].trim() : null;
 };
-
-/** A background a reader sees through: transparent, an alpha under 1, or the shared glass. */
-export function seeThrough(value: string): boolean {
-  if (/transparent|--overlay-glass-bg|--glass-bg/.test(value)) return true;
-  for (const m of value.matchAll(/(?:rgba|hsla)\(([^)]*)\)/g)) {
-    const parts = m[1].split(/[,/]/).map((s) => s.trim());
-    const a = parseFloat(parts[3] ?? '1');
-    if (a < 1) return true;
-  }
-  for (const m of value.matchAll(/(?:rgb|hsl)\([^)]*\/\s*([\d.]+%?)\)/g)) {
-    const a = m[1].endsWith('%') ? parseFloat(m[1]) / 100 : parseFloat(m[1]);
-    if (a < 1) return true;
-  }
-  for (const m of value.matchAll(/#([0-9a-f]{8}|[0-9a-f]{4})\b/gi)) {
-    const h = m[1];
-    if (!/^f+$/i.test(h.length === 8 ? h.slice(6) : h.slice(3))) return true;
-  }
-  return false;
-}
 
 describe('the Org page overlays are solid', () => {
   const classes = orgOverlayClasses();

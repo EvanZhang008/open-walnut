@@ -22,6 +22,17 @@ import { ASSETS_ARCHIVE, ASSETS_ID, DAEMON_VERSION } from 'walnut-binary:assets'
 import { BUNDLED_MODULES } from './bundled-modules.js'
 import { ensureRuntime } from './runtime-tree.js'
 import { fileIdentity, setSingleFile } from '../lib/single-file.js'
+import { demoRuntimeForArgv } from '../commands/demo-home.js'
+
+// A refused Demo root is the person's one-line answer, like every other `walnut demo` refusal
+// (commands/index.ts): an uncaught throw here printed the bundle's source around it.
+try {
+  const demoRuntime = await demoRuntimeForArgv(process.argv)
+  if (demoRuntime) process.env.WALNUT_RUNTIME_DIR = demoRuntime
+} catch (error) {
+  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)
+  process.exit(1)
+}
 
 export const runtimeRoot = ensureRuntime(ASSETS_ARCHIVE, ASSETS_ID)
 ;(globalThis as Record<string, unknown>).__WALNUT_BUNDLE_URL__ = pathToFileURL(path.join(runtimeRoot, 'dist', 'cli.js')).href

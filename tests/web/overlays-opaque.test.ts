@@ -11,7 +11,7 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { seeThrough } from './org-overlays-opaque.test';
+import { seeThrough } from './helpers/css-see-through';
 
 const WEB = path.resolve(__dirname, '../../web/src');
 const STYLES = path.join(WEB, 'styles');

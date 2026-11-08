@@ -48,6 +48,62 @@ import { notesV2Router, settleIndexBootstrap } from '../../../src/web/routes/not
 import { errorHandler } from '../../../src/web/middleware/error-handler.js';
 import { computeContentHash } from '../../../src/utils/file-ops.js';
 
+describe('notes-owned read snapshots', () => {
+  it.each(['v2', 'v1', 'global'])('%s waits for the actual id back-write to finish before reading', async surface => {
+    const { resetNotesIndexer, reconcileNoteNow } = await import('../../../src/core/notes-indexer.js');
+    const { apiV1Router } = await import('../../../src/web/routes/api-v1.js');
+    const { notesRouter } = await import('../../../src/web/routes/notes.js');
+    await settleIndexBootstrap();
+    resetNotesIndexer();
+    const rel = surface === 'global' ? 'global-notes.md' : 'snapshot.md';
+    const file = path.join(NOTES_DIR, rel);
+    const original = 'content\n' + 'Neutral paragraph.\r\n'.repeat(4000);
+    await fsp.writeFile(file, original);
+    let release!: () => void;
+    let partial!: () => void;
+    const gate = new Promise<void>(r => { release = r; });
+    const reached = new Promise<void>(r => { partial = r; });
+    const originalWrite = fsp.writeFile.bind(fsp);
+    const spy = vi.spyOn(fsp, 'writeFile').mockImplementation(async (...args: Parameters<typeof fsp.writeFile>) => {
+      if (args[0] === file && String(args[1]).startsWith('---\nid: n_')) {
+        await originalWrite(file, String(args[1]).slice(0, 7), 'utf8');
+        partial();
+        await gate;
+      }
+      return originalWrite(...args);
+    });
+    const writing = reconcileNoteNow(rel);
+    await reached;
+    const readApp = express();
+    let dispatched!: () => void;
+    const dispatch = new Promise<void>(r => { dispatched = r; });
+    readApp.use((_req, _res, next) => { dispatched(); next(); });
+    readApp.use('/api/notes-v2', notesV2Router);
+    readApp.use('/api/v1', apiV1Router);
+    readApp.use('/api/notes', notesRouter);
+    readApp.use(errorHandler);
+    const url = surface === 'global' ? '/api/notes/global' : surface === 'v1' ? `/api/v1/notes/content/${rel}` : `/api/notes-v2/content/${rel}`;
+    let returned = false;
+    const reading = request(readApp).get(url).then(res => { returned = true; return res; });
+    let held = false;
+    let id: string | null = null;
+    let res: Awaited<typeof reading>;
+    try {
+      await dispatch;
+      await new Promise(r => setTimeout(r, 40));
+      held = !returned;
+    } finally { release(); id = await writing; res = await reading; spy.mockRestore(); }
+    expect(held).toBe(true);
+    expect(id).toMatch(/^n_/);
+    const expected = `---\nid: ${id}\n---\n${original}`;
+    expect(res!.status).toBe(200);
+    expect(res!.body.content).toBe(expected);
+    expect(res!.body.contentHash).toBe(computeContentHash(expected));
+    if (surface !== 'global') expect(res!.body.updatedAt).toBe((await fsp.stat(file)).mtime.toISOString());
+    expect(await fsp.readFile(file, 'utf8')).toBe(expected);
+  });
+});
+
 const LOCKS = path.join(WALNUT_HOME, 'locks');
 
 function createApp(): express.Express {

@@ -551,6 +551,14 @@ describe('WS: session:error', () => {
     });
   });
 
+  it('adds no error row when the parked message says it with Retry (saidOnMessage: Claude Code not installed)', () => {
+    trackSession('sid');
+    fireEvent('session:error', { sessionId: 'sid', error: 'Claude Code is not installed on this computer.', parked: true, saidOnMessage: true });
+    const state = getStreamState('sid')!;
+    expect(state.isStreaming).toBe(false);
+    expect(state.blocks).toHaveLength(0);
+  });
+
   it('truncates long error messages to 500 chars', () => {
     trackSession('sid');
     const longError = 'x'.repeat(600);

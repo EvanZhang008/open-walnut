@@ -26,15 +26,21 @@ import { OPTIONAL_VALUE_FLAGS, VALUE_FLAGS } from './mock-claude-flags.mjs';
 const args = process.argv.slice(2);
 let transcriptParent = null;
 
-function persistMockTurn(sessionId, prompt, answer, root = process.env.MOCK_CLAUDE_TRANSCRIPT_DIR) {
+function chainOntoTranscript(file) {
+  if (!transcriptParent && fs.existsSync(file)) transcriptParent = JSON.parse(fs.readFileSync(file, 'utf8').trim().split('\n').at(-1)).uuid;
+}
+
+function persistMockTurn(sessionId, prompt, answer, root = process.env.MOCK_CLAUDE_TRANSCRIPT_DIR, inputUuid = lastInputUserUuid) {
   if (!root) return;
   const cwd = process.cwd();
   const dir = path.join(root, cwd.replace(/[^a-zA-Z0-9]/g, '-'));
   fs.mkdirSync(dir, { recursive: true });
-  const userId = randomUUID();
+  const file = path.join(dir, `${sessionId}.jsonl`);
+  chainOntoTranscript(file);
+  const userId = inputUuid ?? randomUUID();
   const assistantId = randomUUID();
   const shared = { sessionId, cwd, timestamp: new Date().toISOString(), isSidechain: false };
-  fs.appendFileSync(path.join(dir, `${sessionId}.jsonl`), [
+  fs.appendFileSync(file, [
     { ...shared, type: 'user', uuid: userId, parentUuid: transcriptParent, message: { role: 'user', content: prompt } },
     // The real CLI files the API message id it streamed; the stream→archive
     // convergence check (src/core/observability/stream-convergence.ts) compares
@@ -123,7 +129,7 @@ function persistPlainUser(sid, prompt) {
 }
 function persistPlainTurn(sid, prompt, assistantEvent) {
   if (!persistedUser) persistPlainUser(sid, prompt);
-  if (!persistedUser) return;
+  if (!persistedUser) return false;
   const { file, userId } = persistedUser;
   const after = persistedUser.parent;
   persistedUser = null;
@@ -161,6 +167,7 @@ function persistPlainTurn(sid, prompt, assistantEvent) {
     ].join('\n') + '\n');
   }
   fs.appendFileSync(file, JSON.stringify({ ...shared, ...(heavy ?{ timestamp: at(2 * Number(heavy[1]) + 1) } : {}), type: 'assistant', uuid: randomUUID(), parentUuid: parent, message: assistantEvent.message }) + '\n');
+  return true;
 }
 
 // Parse flags
@@ -419,7 +426,12 @@ if (inputFormat === 'stream-json') {
           let src = (msgLine ? msgLine[1] : q).trim();
           src = src.replace(/^(?:(?:slow|chunk-delay):\d+\s+)+/, '');
           const five = src.split(/\s+/).slice(0, 5).join(' ');
-          const response = q.includes('PHASE_SIGNAL:') && q.includes('EXEC_SUMMARY:')
+          // The Changed view's caption question (src/core/diff-summary.ts) gets a caption, as a
+          // real model writes one, never its own prompt echoed back under "Side title:" (2026-11-10
+          // review: a Demo with this mock showed "Side title: Caption YOUR change to notes.md").
+          const caption = q.match(/^Caption YOUR change to `([^`]+)`/);
+          const response = caption ? `Updates \`${caption[1]}\`.`
+            : q.includes('PHASE_SIGNAL:') && q.includes('EXEC_SUMMARY:')
             ? 'EXEC_SUMMARY: The fixture turn finished.\nUSER_REQUEST: Validate the session flow.\nCONTEXT: An isolated test session.\nPROGRESS: The turn finished.\nREFERENCES: unchanged\nWORK_LOG: append: Finished the fixture turn.\nTITLE: unchanged\nRECAP: The fixture turn finished.\nPHASE_SIGNAL: conversational(user-asked-question)\nSTATUS: succeeded\nWHAT_I_DID: Answered the fixture prompt.\nNEXT_STEPS: Continue the conversation.\nBLOCKERS: none\nUSER_INTENT: question-pending\nVERIFIED: not-applicable'
             : `Side title: ${five}`;
           process.stdout.write(JSON.stringify({
@@ -859,7 +871,15 @@ if (outputFormat === 'stream-json') {
       capabilities: ['interrupt_receipt_v1', 'interrupt_cancel_queued_v1', 'msg_lifecycle_v1', 'mcp_read_resource_v1', 'mcp_tool_ui_meta_v1'],
     }),
   };
-  process.stdout.write(JSON.stringify(initEvent) + '\n');
+  // Claude Code prints its init when it takes a line (QueryEngine.submitMessage
+  // yields it per message), never at boot: a resumed CLI given no line prints
+  // nothing at all. Printed at boot, it told Walnut a turn began in a resume the
+  // daemon wrote no line into (the line had already run), and the session read
+  // "working" with nothing running (2026-11-10). So a resume with no message
+  // prints it with its first line (the init-only branch below). A fork keeps the
+  // boot init its tests were written against.
+  const initOnFirstLine = inputFormat === 'stream-json' && !message && resume && !args.includes('--fork-session');
+  if (!initOnFirstLine) process.stdout.write(JSON.stringify(initEvent) + '\n');
 
   // 1b. For "mode-change:<from>-to-<to>" messages, emit a second system event
   //     with a different permissionMode to simulate EnterPlanMode / mode transitions.
@@ -954,6 +974,8 @@ if (outputFormat === 'stream-json') {
 
   // Emit remaining events (optionally delayed for "slow:N" messages)
   function emitRemainingEvents() {
+    // The turn's input line id, read before a delayed body can see a later line's.
+    const turnInputUuid = lastInputUserUuid;
     if (effectiveMessage.startsWith('status-permission-test:')) {
       // `BashRule`: a Bash ask that carries the CLI's suggested rule (permission_suggestions),
       // answered with the rules and the deny message it got back.
@@ -1264,8 +1286,10 @@ if (outputFormat === 'stream-json') {
         if (root) {
           const dir = path.join(root, process.cwd().replace(/[^a-zA-Z0-9]/g, '-'));
           fs.mkdirSync(dir, { recursive: true });
+          const file = path.join(dir, `${sid}.jsonl`);
+          chainOntoTranscript(file);
           const shared = { sessionId: sid, cwd: process.cwd(), isSidechain: false };
-          const promptId = randomUUID();
+          const promptId = turnInputUuid ?? randomUUID();
           const out = [{ ...shared, type: 'user', uuid: promptId, parentUuid: transcriptParent, timestamp: new Date().toISOString(), message: { role: 'user', content: effectiveMessage.split('\n')[0] } }];
           let parent = promptId;
           for (const r of rows) {
@@ -1274,7 +1298,7 @@ if (outputFormat === 'stream-json') {
             parent = uuid;
           }
           transcriptParent = parent;
-          fs.appendFileSync(path.join(dir, `${sid}.jsonl`), out.map((row) => JSON.stringify(row)).join('\n') + '\n');
+          fs.appendFileSync(file, out.map((row) => JSON.stringify(row)).join('\n') + '\n');
         }
         emit({ type: 'result', subtype: 'success', is_error: false, duration_ms: 40, num_turns: 1, result: text, session_id: sid, total_cost_usd: nextSnapshotCost(0.001), usage: { input_tokens: 20, output_tokens: 8 } });
         emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'idle' });
@@ -1348,7 +1372,7 @@ if (outputFormat === 'stream-json') {
           stop_details: { type: 'refusal', category: 'reasoning_extraction', explanation: 'blocked' },
           content: [{ type: 'text', text }], usage: { input_tokens: 0, output_tokens: 0 } };
         emit({ type: 'assistant', session_id: sid, parent_tool_use_id: null, uuid: randomUUID(), is_api_error_message: true, error: 'invalid_request', refused_message_id: 'msg_mock', message: refused });
-        persistMockTurn(sid, effectiveMessage, { message: refused, lineFields: { isApiErrorMessage: true, error: 'invalid_request' } }, process.env.MOCK_CLAUDE_TRANSCRIPT_DIR ?? process.env.MOCK_CLAUDE_PERSIST_DIR);
+        persistMockTurn(sid, effectiveMessage, { message: refused, lineFields: { isApiErrorMessage: true, error: 'invalid_request' } }, process.env.MOCK_CLAUDE_TRANSCRIPT_DIR ?? process.env.MOCK_CLAUDE_PERSIST_DIR, turnInputUuid);
         emit({ type: 'result', subtype: 'success', is_error: true, stop_reason: 'refusal', terminal_reason: 'api_error', duration_ms: 60, num_turns: 1, result: text, session_id: sid,
           total_cost_usd: nextSnapshotCost(0.0001), usage: { input_tokens: 0, output_tokens: 0 } });
         emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'idle' });
@@ -1368,7 +1392,7 @@ if (outputFormat === 'stream-json') {
         emit({ type: 'assistant', session_id: sid, parent_tool_use_id: null, isApiErrorMessage: true, error: 'invalid_request', message: refused });
         // The real CLI files the refused line and its error in the transcript (2026-11-05, a real one).
         // Its transcript line carries the CLI's own marks (utils/messages.ts createAssistantAPIErrorMessage).
-        persistMockTurn(sid, effectiveMessage, { message: refused, lineFields: { isApiErrorMessage: true, error: 'invalid_request' } }, process.env.MOCK_CLAUDE_TRANSCRIPT_DIR ?? process.env.MOCK_CLAUDE_PERSIST_DIR);
+        persistMockTurn(sid, effectiveMessage, { message: refused, lineFields: { isApiErrorMessage: true, error: 'invalid_request' } }, process.env.MOCK_CLAUDE_TRANSCRIPT_DIR ?? process.env.MOCK_CLAUDE_PERSIST_DIR, turnInputUuid);
         emit({ type: 'result', subtype: 'success', is_error: true, duration_ms: 60, num_turns: 1, result: 'Prompt is too long', session_id: sid,
           total_cost_usd: nextSnapshotCost(0.0001), usage: { input_tokens: 0, output_tokens: 0 } });
         emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'idle' });
@@ -1406,7 +1430,7 @@ if (outputFormat === 'stream-json') {
         emit(wrap({ type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: final }));
         emit(wrap({ type: 'message_stop' }));
         persistMockTurn(sid, effectiveMessage, { message: { ...assistant, stop_reason: 'end_turn', usage: final } },
-          process.env.MOCK_CLAUDE_TRANSCRIPT_DIR ?? process.env.MOCK_CLAUDE_PERSIST_DIR);
+          process.env.MOCK_CLAUDE_TRANSCRIPT_DIR ?? process.env.MOCK_CLAUDE_PERSIST_DIR, turnInputUuid);
         // MOCK_CONTEXT_WINDOW: the model's window, reported the way the CLI does (result.modelUsage),
         // which is where the idle compaction's threshold comes from when no auto-compaction window is set.
         const window = Number(process.env.MOCK_CONTEXT_WINDOW) || 0;
@@ -1490,7 +1514,7 @@ if (outputFormat === 'stream-json') {
         emit(wrap({ type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: final }));
         emit(wrap({ type: 'message_stop' }));
         persistMockTurn(sid, effectiveMessage, { message: { ...assistant, stop_reason: 'end_turn', usage: final } },
-          process.env.MOCK_CLAUDE_TRANSCRIPT_DIR ?? process.env.MOCK_CLAUDE_PERSIST_DIR);
+          process.env.MOCK_CLAUDE_TRANSCRIPT_DIR ?? process.env.MOCK_CLAUDE_PERSIST_DIR, turnInputUuid);
         // Every real result carries the CLI's own window for the model (result.modelUsage).
         const modelUsage = { [modelFlag || 'mock-model']: { contextWindow: Number(process.env.MOCK_CONTEXT_WINDOW) || 1_000_000 } };
         emit({ type: 'result', subtype: 'success', is_error: false, duration_ms: 40, num_turns: 1, result: text, session_id: sid, total_cost_usd: nextSnapshotCost(0.001), usage: final, modelUsage });
@@ -1510,7 +1534,7 @@ if (outputFormat === 'stream-json') {
         .replace(/\{env:([A-Z0-9_]+)\}/g, (_m, name) => process.env[name] ?? '<unset>');
       const sid = outputSessionId;
       const emit = (line) => {
-        if (line.type === 'assistant') persistMockTurn(sid, effectiveMessage, line);
+        if (line.type === 'assistant') persistMockTurn(sid, effectiveMessage, line, process.env.MOCK_CLAUDE_TRANSCRIPT_DIR, turnInputUuid);
         process.stdout.write(JSON.stringify(line) + '\n');
       };
       const body = () => {
@@ -2984,7 +3008,7 @@ if (outputFormat === 'stream-json') {
       session_id: outputSessionId,
     };
     process.stdout.write(JSON.stringify(assistantEvent) + '\n');
-    persistPlainTurn(outputSessionId, message, assistantEvent);
+    if (!persistPlainTurn(outputSessionId, message, assistantEvent)) persistMockTurn(outputSessionId, message, assistantEvent, process.env.MOCK_CLAUDE_TRANSCRIPT_DIR, turnInputUuid);
 
     // 4. Final result event
     const resultEvent = {
@@ -3029,6 +3053,7 @@ if (outputFormat === 'stream-json') {
     hardStop.unref?.();
     (async () => {
       message = await new Promise((resolve) => { pendingUserResolve = resolve; });
+      if (initOnFirstLine) process.stdout.write(JSON.stringify(initEvent) + '\n');
       computeMessageParts();
       // Known limits of the adopted-message path (extend when a test needs one):
       // mode-change:* (matched before adoption) and error/parse-error (checked at

@@ -29,6 +29,7 @@
  * it is a row whose first keystroke RE-CREATES the file.
  */
 import { test, expect, type Locator, type Page } from '@playwright/test'
+import { goToSessionFolder } from './todo-panel-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 const FOLDER = 'SyncSurfaces'
@@ -101,7 +102,8 @@ async function putMemory(memPath: string, content: string) {
 }
 
 async function gotoNotes(page: Page) {
-  await page.goto('/')
+  await page.setContent(`<a href="${API}/">Open Walnut</a>`)
+  await page.getByRole('link', { name: 'Open Walnut' }).click()
   await page.waitForLoadState('networkidle')
   await page.locator('a[href="/notes"]').first().click()
   await page.waitForLoadState('networkidle')
@@ -183,6 +185,7 @@ test.describe('the /notes editor and the session Files pane on one note', () => 
     await panel.getByRole('button', { name: 'Files', exact: true }).click()
     const explorer = panel.locator('.session-file-explorer')
     await expect(explorer).toBeVisible({ timeout: 15_000 })
+    await goToSessionFolder(explorer)
 
     const fsNode = (name: string) => explorer.locator('.sfe-name', { hasText: name }).locator('xpath=..').first()
     const noteNode = fsNode('Two Views.md')
@@ -320,8 +323,10 @@ test.describe('one memory document, two write paths', () => {
   })
 
   test('an outside write reaches the open memory editor, and is not written back over', async ({ page }) => {
+    await page.setContent(`<a href="${API}/">Open Walnut</a>`)
+    await page.getByRole('link', { name: 'Open Walnut' }).click()
     // Settings → Memory is the real route in (the page has no sidebar entry).
-    await page.goto('/settings')
+    await page.getByTestId('sidebar-core-app-settings').click()
     await expect(page.locator('.settings-nav')).toBeVisible({ timeout: 30_000 })
     await page.locator('[data-testid="settings-nav-memory"]').click()
 

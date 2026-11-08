@@ -51,8 +51,11 @@ export function linkTarget(host: string, config: Pick<Config, 'hosts'>): SshTarg
   if (def.transport === 'net') {
     return { hostname, via: 'net', ...(typeof def.endpoint === 'string' ? { endpoint: def.endpoint.toLowerCase() } : {}) }
   }
+  // A found host is keyed by its ~/.ssh/config alias; only a plain token, never read as an ssh option.
+  const sshAlias = def.discovered === true && /^[A-Za-z0-9_][A-Za-z0-9._-]*$/.test(host) ? host : undefined
   return {
     hostname,
+    ...(sshAlias ? { sshAlias } : {}),
     ...(def.user ? { user: def.user } : {}),
     ...(def.port ? { port: def.port } : {}),
     ...(def.shell_setup ? { shell_setup: def.shell_setup } : {}),

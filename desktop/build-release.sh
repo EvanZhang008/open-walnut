@@ -53,8 +53,8 @@ mkdir -p "$MACOS" "$RESOURCES"
 # Compile for both architectures and create a universal binary
 SOURCES=(
     "$SCRIPT_DIR/main.swift" "$SCRIPT_DIR/DesktopDiagnostics.swift" "$SCRIPT_DIR/GlobalDictation.swift" \
-    "$SCRIPT_DIR/WebContentPolicy.swift" "$SCRIPT_DIR/WebContentWatchdog.swift" "$SCRIPT_DIR/LinkPolicy.swift" \
-    "$SCRIPT_DIR/SessionHost.swift" "$SCRIPT_DIR/CalendarBridge.swift" "$SCRIPT_DIR/ReaderBridge.swift" \
+    "$SCRIPT_DIR/WebContentPolicy.swift" "$SCRIPT_DIR/WebContentWatchdog.swift" "$SCRIPT_DIR/WebContentProcess.swift" "$SCRIPT_DIR/QuietKeyWindow.swift" "$SCRIPT_DIR/LinkPolicy.swift" \
+    "$SCRIPT_DIR/SessionHost.swift" "$SCRIPT_DIR/CalendarBridge.swift" "$SCRIPT_DIR/ReaderBridge.swift" "$SCRIPT_DIR/ClaudeSignInBridge.swift" \
     "$SCRIPT_DIR/BundledRuntime.swift" "$SCRIPT_DIR/AppBuiltCheckout.swift" "$SCRIPT_DIR/AppUpdateMachine.swift" "$SCRIPT_DIR/AppUpdater.swift" \
     "$SCRIPT_DIR/AppUpdateBridge.swift" "$SCRIPT_DIR/ApprovalBridge.swift" "$SCRIPT_DIR/NotificationBridge.swift" "$SCRIPT_DIR/DesktopUpdateBridge.swift" "$SCRIPT_DIR/AppLink.swift" "$SCRIPT_DIR/CommandLineTool.swift" \
     "$SCRIPT_DIR/../src/data/walnut-calendar.swift" "$SCRIPT_DIR/../src/data/walnut-reader.swift" "$SCRIPT_DIR/WalnutIntents.swift"
@@ -270,7 +270,13 @@ if [ -n "${WALNUT_APP_RUNTIME:-}" ]; then
     echo "Carries: $(basename "$WALNUT_APP_RUNTIME") ($(du -h "$WALNUT_APP_RUNTIME" | cut -f1))"
     if [ -n "$SIGNED_WITH" ]; then sign_app "$SIGNED_WITH"; else codesign --force --sign - "$APP_BUNDLE"; fi
 fi
-codesign --verify --strict --verbose=2 "$APP_BUNDLE"
+
+# Both Demo copies must be embedded and signed before the parent is notarized.
+STANDALONE_DEMO="$SCRIPT_DIR/Walnut Demo.app"
+WALNUT_DEMO_UNIVERSAL=1 WALNUT_SIGN_IDENTITY="${SIGNED_WITH:--}" bash "$SCRIPT_DIR/build-demo.sh" "$APP_BUNDLE" "$STANDALONE_DEMO"
+WALNUT_DEMO_UNIVERSAL=1 WALNUT_SIGN_IDENTITY="${SIGNED_WITH:--}" bash "$SCRIPT_DIR/build-demo.sh" "$APP_BUNDLE" "$CONTENTS/Helpers/Walnut Demo.app" --uses-parent-release
+if [ -n "$SIGNED_WITH" ]; then sign_app "$SIGNED_WITH"; else codesign --force --sign - "$APP_BUNDLE"; fi
+codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
 
 # notarize <file>: submit, wait, fail unless accepted (desktop/notarize.sh).
 source "$SCRIPT_DIR/notarize.sh"
@@ -289,6 +295,18 @@ if [ -n "${WALNUT_NOTARY_KEY:-}" ]; then
     xcrun stapler staple "$APP_BUNDLE"
 fi
 
+# Stapling the standalone Demo leaves the notarized parent unchanged.
+if [ -n "$NOTARIZE" ]; then
+    echo ""
+    echo "=== Notarizing Walnut Demo.app ==="
+    DEMO_ZIP="$SCRIPT_DIR/.notarize-demo.zip"
+    rm -f "$DEMO_ZIP"
+    ditto -c -k --keepParent "$STANDALONE_DEMO" "$DEMO_ZIP"
+    notarize "$DEMO_ZIP"
+    rm -f "$DEMO_ZIP"
+    xcrun stapler staple "$STANDALONE_DEMO"
+fi
+
 echo ""
 echo "=== Creating DMG ==="
 # Create a DMG with the app and a symlink to /Applications
@@ -297,6 +315,7 @@ rm -rf "$DMG_TEMP"
 mkdir -p "$DMG_TEMP"
 # ditto keeps the signature, the stapled ticket and every attribute as they are.
 ditto "$APP_BUNDLE" "$DMG_TEMP/$APP_NAME.app"
+ditto "$STANDALONE_DEMO" "$DMG_TEMP/Walnut Demo.app"
 ln -s /Applications "$DMG_TEMP/Applications"
 
 # make_dmg: a sized, retried hdiutil create (desktop/make-dmg.sh).

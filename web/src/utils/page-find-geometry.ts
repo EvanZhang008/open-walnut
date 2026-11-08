@@ -14,6 +14,8 @@ export function liveRange(r: AbstractRange): Range | null {
   } catch { return null; }
 }
 
+import { clippingAncestors, type ClipFactsCache } from './clip-ancestors';
+
 /** How an element treats overflow, per axis: whether it clips, and whether
  *  that axis scrolls (a hidden axis clips but must never be scrolled). */
 interface Overflow { clips: boolean; x: boolean; y: boolean }
@@ -21,6 +23,8 @@ const NO_OVERFLOW: Overflow = { clips: false, x: false, y: false };
 
 /** Per-operation cache: computed styles are read once per element per pass. */
 export type OverflowCache = Map<Element, Overflow>;
+/** The clip-rule facts of the same pass, kept beside its overflow cache. */
+const factsByPass = new WeakMap<OverflowCache, ClipFactsCache>();
 
 function overflowOf(el: Element, cache: OverflowCache): Overflow {
   let v = cache.get(el);
@@ -36,11 +40,15 @@ function overflowOf(el: Element, cache: OverflowCache): Overflow {
   return v;
 }
 
-/** Clipping ancestors of a node, innermost first. */
+/** Clipping ancestors of a node, innermost first: only those that really clip it
+ *  (utils/clip-ancestors.ts), so a match in a fixed sheet is not judged, or
+ *  scrolled, by the column the sheet left. */
 function clipAncestors(node: Node, cache: OverflowCache): Element[] {
   const out: Element[] = [];
-  for (let el = node.parentElement; el && el !== document.body && el !== document.documentElement; el = el.parentElement) {
-    if (overflowOf(el, cache).clips) out.push(el);
+  let facts = factsByPass.get(cache);
+  if (!facts) { facts = new Map(); factsByPass.set(cache, facts); }
+  for (const c of clippingAncestors(node, { stop: document.body, cache: facts })) {
+    if (overflowOf(c.el, cache).clips) out.push(c.el);
   }
   return out;
 }

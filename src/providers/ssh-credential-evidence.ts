@@ -33,11 +33,11 @@
 
 import { execFile } from 'node:child_process'
 import fs from 'node:fs/promises'
-import os from 'node:os'
+import { sshAgentEnv, sshAgentSock, sshHome } from '../lib/ssh-home.js'
 
 export const SSH_EVIDENCE_PREFIX = 'walnut-ssh-evidence:'
 
-export type SshEvidenceTag = 'agent-missing' | 'agent-empty' | 'cert-expired'
+export type SshEvidenceTag = 'agent-missing' | 'agent-empty' | 'cert-expired' | 'key-missing'
 
 export interface SshEvidence {
   tag: SshEvidenceTag
@@ -60,7 +60,8 @@ const MAX_ITEMS = 8
 
 function defaultRun(file: string, args: string[], input?: string): Promise<RunResult> {
   return new Promise((resolve) => {
-    const child = execFile(file, args, { encoding: 'utf-8', timeout: TIMEOUT_MS, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+    // sshAgentEnv: the agent this process's ssh uses (in Walnut Demo, the account's once it uses the account's ~/.ssh).
+    const child = execFile(file, args, { encoding: 'utf-8', timeout: TIMEOUT_MS, maxBuffer: 1024 * 1024, env: sshAgentEnv() }, (err, stdout, stderr) => {
       const code = err ? (typeof (err as { code?: unknown }).code === 'number' ? (err as { code: number }).code : -1) : 0
       resolve({ code, stdout: String(stdout ?? ''), stderr: String(stderr ?? '') })
     })
@@ -144,7 +145,7 @@ export async function gatherSshCredentialEvidence(sshTarget: string, deps: Evide
   let agent: 'unset' | 'unreachable' | 'empty' | 'ok' = 'unset'
   const agentKeys: string[] = []
   const certs: Array<{ line: string; own: boolean }> = []
-  if (env.SSH_AUTH_SOCK) {
+  if (sshAgentSock(env)) {
     const listed = await run('ssh-add', ['-L'])
     if (listed.code === 2 || /could not open a connection|error connecting to agent/i.test(listed.stderr)) agent = 'unreachable'
     else if (listed.code === 1 && /no identities/i.test(listed.stdout + listed.stderr)) agent = 'empty'
@@ -156,7 +157,7 @@ export async function gatherSshCredentialEvidence(sshTarget: string, deps: Evide
   }
 
   // 2. This host's own configuration: its certificate files and identity files.
-  const home = env.HOME || os.homedir()
+  const home = sshHome(env)
   let identityFiles: string[] = []
   try {
     const g = await run('ssh', ['-G', sshTarget])
@@ -221,7 +222,7 @@ export async function sshCertificateExpiry(sshTarget: string, deps: EvidenceDeps
   const env = deps.env ?? process.env
   const run = deps.run ?? defaultRun
   const readFile = deps.readFile ?? ((p: string) => fs.readFile(p, 'utf-8'))
-  const home = env.HOME || os.homedir()
+  const home = sshHome(env)
   const own: string[] = []
   try {
     const g = await run('ssh', ['-G', sshTarget])
@@ -237,7 +238,7 @@ export async function sshCertificateExpiry(sshTarget: string, deps: EvidenceDeps
     await readAll(named.length ? named : identityFilesFromSshG(g.stdout, home).map((f) => `${f}-cert.pub`))
   } catch { /* ssh -G unavailable */ }
   let lines = own.slice(0, MAX_ITEMS)
-  if (!lines.length && env.SSH_AUTH_SOCK) {
+  if (!lines.length && sshAgentSock(env)) {
     const listed = await run('ssh-add', ['-L']).catch(() => null)
     if (listed?.code === 0) lines = certLines(listed.stdout).slice(0, MAX_ITEMS)
   }
@@ -254,12 +255,27 @@ export function formatSshEvidence(e: SshEvidence): string {
   return `${SSH_EVIDENCE_PREFIX} ${e.tag} (${e.detail})`
 }
 
+/**
+ * The first key file the host's SSH settings name that is not there (ssh's "no such identity"
+ * line), whole, or null. Never shortened to `~`: in Walnut Demo HOME is the Demo's own, and bun's
+ * os.userInfo() reads $HOME too, so a `~` there read as the person's real home (2026-11-08).
+ * ssh prints that line only for an IdentityFile the settings name, so it is the person's own key,
+ * and the reason before any agent: the agent evidence alone sent a person whose config named a
+ * missing key to start an agent.
+ */
+export function missingKeyFile(message: string): string | null {
+  const m = /^no such identity: (.+): no such file or directory$/im.exec(message)
+  return m ? m[1]!.trim() : null
+}
+
 /** Append the evidence line to an auth failure; any other error comes back untouched. */
 export async function annotateCredentialFailure(err: unknown, sshTarget: string, deps: EvidenceDeps = {}): Promise<unknown> {
   const message = err instanceof Error ? err.message : String(err)
   if (!looksLikeCredentialFailure(message)) return err
   let evidence: SshEvidence | null = null
-  try { evidence = await gatherSshCredentialEvidence(sshTarget, deps) } catch { return err }
+  const key = missingKeyFile(message)
+  if (key) evidence = { tag: 'key-missing', detail: key }
+  else try { evidence = await gatherSshCredentialEvidence(sshTarget, deps) } catch { return err }
   if (!evidence) return err
   const annotated = new Error(`${message}\n${formatSshEvidence(evidence)}`)
   if (err instanceof Error && err.stack) annotated.stack = err.stack

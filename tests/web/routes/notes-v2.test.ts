@@ -24,11 +24,10 @@ vi.mock('../../../src/core/search/wiring.js', () => ({
 
 import express from 'express';
 import request from 'supertest';
-import { notesV2Router, resetIndexBootstrap } from '../../../src/web/routes/notes-v2.js';
+import { notesV2Router, settleIndexBootstrap } from '../../../src/web/routes/notes-v2.js';
 import { errorHandler } from '../../../src/web/middleware/error-handler.js';
 import { WALNUT_HOME } from '../../../src/constants.js';
-import { closeNotesIndexDb } from '../../../src/core/notes-index.js';
-import { rebuildIndex, stopNotesIndexer, resetNotesIndexer } from '../../../src/core/notes-indexer.js';
+import { rebuildIndex, resetNotesIndexer } from '../../../src/core/notes-indexer.js';
 
 const NOTES_DIR = path.join(WALNUT_HOME, 'notes');
 
@@ -71,17 +70,9 @@ async function syncIndex(): Promise<void> {
   await rebuildIndex();
 }
 
-// Stop ALL async index work (debounced reconcile + off-loop rebuild + bus listener)
-// and let any in-flight microtask settle before removing WALNUT_HOME. The router
-// self-bootstraps the index off-loop on first request and the reconciler is
-// debounced (~300ms) — without this, that background work re-creates
-// notes-index.sqlite + WAL in the dir we're removing, racing teardown (ENOTEMPTY).
+// Await the router bootstrap and every tracked rebuild before removing its home.
 async function quiesceIndex(): Promise<void> {
-  resetIndexBootstrap(); // unsubscribe bus listener + stopNotesIndexer (synchronous)
-  stopNotesIndexer();
-  // Yield twice: once for a reconcile mid-await, once for fs.promises write settle.
-  await new Promise((r) => setTimeout(r, 5));
-  closeNotesIndexDb();
+  await settleIndexBootstrap();
 }
 
 beforeEach(async () => {
@@ -698,7 +689,8 @@ describe('DELETE /api/notes-v2/content/*path', () => {
 
 describe('POST /api/notes-v2/move', () => {
   it('moves/renames a note', async () => {
-    await writeNote('old-name.md', '# Old Name');
+    const content = '---\nid: n_move_name\n---\n# Old Name';
+    await writeNote('old-name.md', content);
 
     const app = createApp();
     const res = await request(app)
@@ -709,11 +701,12 @@ describe('POST /api/notes-v2/move', () => {
     expect(res.body.ok).toBe(true);
     expect(await fileExists('old-name.md')).toBe(false);
     expect(await fileExists('new-name.md')).toBe(true);
-    expect(await readNote('new-name.md')).toBe('# Old Name');
+    expect(await readNote('new-name.md')).toBe(content);
   });
 
   it('moves note to a different folder', async () => {
-    await writeNote('root-note.md', 'content');
+    const content = '---\nid: n_move_folder\n---\ncontent';
+    await writeNote('root-note.md', content);
 
     const app = createApp();
     const res = await request(app)
@@ -722,7 +715,7 @@ describe('POST /api/notes-v2/move', () => {
 
     expect(res.status).toBe(200);
     expect(await fileExists('root-note.md')).toBe(false);
-    expect(await readNote('archive/root-note.md')).toBe('content');
+    expect(await readNote('archive/root-note.md')).toBe(content);
   });
 
   it('does NOT rewrite link text on rename (links key on target id)', async () => {
@@ -784,6 +777,99 @@ describe('POST /api/notes-v2/move', () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('invalid path');
   });
+});
+
+describe('notes read and write locking', () => {
+  it('tag rename waits for the shared lock and transforms the latest edited body', async () => {
+    const { withUserFileLock } = await import('../../../src/utils/user-file-lock.js');
+    const { renameNoteTag } = await import('../../../src/web/routes/notes-v2.js');
+    await writeNote('tag-race.md', '---\nid: n_tag_race\n---\n#old original');
+    await syncIndex();
+    await settleIndexBootstrap();
+    resetNotesIndexer();
+    const file = path.join(NOTES_DIR, 'tag-race.md');
+    let release!: () => void;
+    let entered!: () => void;
+    const ready = new Promise<void>(r => { entered = r; });
+    const held = new Promise<void>(r => { release = r; });
+    const holder = withUserFileLock(file, async () => {
+      entered();
+      await held;
+      await fs.writeFile(file, '---\nid: n_tag_race\n---\n#old newest unrelated edit', 'utf8');
+    });
+    await ready;
+    let done = false;
+    const rename = renameNoteTag('old', 'new').then(value => { done = true; return value; });
+    try {
+      await new Promise(r => setTimeout(r, 40));
+      expect(done).toBe(false);
+    } finally { release(); await holder; }
+    expect(await rename).toEqual({ ok: true, updated: 1 });
+    expect(await readNote('tag-race.md')).toBe('---\nid: n_tag_race\n---\n#new newest unrelated edit');
+  });
+
+  it('a rejected stamp leaves the disk and index unchanged and emits no update', async () => {
+    const { reconcileNoteNow } = await import('../../../src/core/notes-indexer.js');
+    const { getNoteIdByPath } = await import('../../../src/core/notes-index.js');
+    const { bus } = await import('../../../src/core/event-bus.js');
+    await settleIndexBootstrap();
+    resetNotesIndexer();
+    await writeNote('blocked.md', 'content');
+    const originalWrite = fs.writeFile.bind(fs);
+    const failure = vi.spyOn(fs, 'writeFile').mockImplementation(async (...args: Parameters<typeof fs.writeFile>) => {
+      if (args[0] === path.join(NOTES_DIR, 'blocked.md')) throw new Error('injected stamp write failure');
+      return originalWrite(...args);
+    });
+    const emit = vi.spyOn(bus, 'emit');
+    try {
+      expect(await reconcileNoteNow('blocked.md')).toBeNull();
+      expect(await readNote('blocked.md')).toBe('content');
+      expect(getNoteIdByPath('blocked.md')).toBeUndefined();
+      expect(emit).not.toHaveBeenCalled();
+    } finally { failure.mockRestore(); emit.mockRestore(); }
+  });
+
+  it('a changed note before the stamp lock is not indexed under an unwritten id', async () => {
+    const { reconcileNoteNow } = await import('../../../src/core/notes-indexer.js');
+    const { getNoteIdByPath } = await import('../../../src/core/notes-index.js');
+    await settleIndexBootstrap();
+    resetNotesIndexer();
+    await writeNote('changed.md', 'original');
+    const file = path.join(NOTES_DIR, 'changed.md');
+    const originalRead = fs.readFile.bind(fs);
+    let reads = 0;
+    const spy = vi.spyOn(fs, 'readFile').mockImplementation(async (...args: Parameters<typeof fs.readFile>) => {
+      if (args[0] === file && ++reads === 2) await fs.writeFile(file, 'external edit', 'utf8');
+      return originalRead(...args);
+    });
+    try {
+      expect(await reconcileNoteNow('changed.md')).toBeNull();
+      expect(getNoteIdByPath('changed.md')).toBeUndefined();
+      expect(await readNote('changed.md')).toBe('external edit');
+    } finally { spy.mockRestore(); }
+  });
+
+  it('a failed note replacement emits no update and preserves the original', async () => {
+    const { bus, EventNames } = await import('../../../src/core/event-bus.js');
+    await writeNote('write-failure.md', '---\nid: n_failure\n---\noriginal');
+    await syncIndex();
+    await settleIndexBootstrap();
+    resetNotesIndexer();
+    const originalWrite = fs.writeFile.bind(fs);
+    const spy = vi.spyOn(fs, 'writeFile').mockImplementation(async (...args: Parameters<typeof fs.writeFile>) => {
+      if (args[0] === path.join(NOTES_DIR, 'write-failure.md')) throw new Error('injected note write failure');
+      return originalWrite(...args);
+    });
+    const emit = vi.spyOn(bus, 'emit');
+    try {
+      const res = await request(createApp()).put('/api/notes-v2/content/write-failure.md').send({ content: 'replacement' });
+      expect(res.status).toBe(500);
+      expect(await readNote('write-failure.md')).toBe('---\nid: n_failure\n---\noriginal');
+      expect(emit.mock.calls.filter(call => call[0] === EventNames.NOTES_UPDATED)).toEqual([]);
+    } finally { spy.mockRestore(); emit.mockRestore(); }
+  });
+
+
 });
 
 // ─── GET /search?q= — Hybrid (string leg) Search ─────────────────────

@@ -1,12 +1,5 @@
-/**
- * ONE model of "what is wrong with this remote host", read by every surface:
- * the home banner, the folder picker, Settings › Remote Hosts, the session
- * error bar, and the server's Start refusal (the 409 body). No surface builds
- * its own sentence. Pure: no node imports, so the browser imports this exact
- * file through the `@open-walnut/host-problem` alias.
- */
+/** Shared host problem model, import-free so the browser reads the same answer. */
 
-/** A connect step a reconnect loop's dial runs through (host-connect-hint.ts DAEMON_CONNECT_STEPS). */
 export const LOOP_DIAL_PHASES: ReadonlySet<string> = new Set(['ssh', 'probe', 'install-runtime', 'upload', 'start', 'tunnel', 'handshake'])
 /** Mirrors HostConnectErrorKind (host-connect-hint.ts), kept local so this file stays import-free. */
 export type HostFailureKind =
@@ -58,7 +51,8 @@ export interface HostStatusInput {
   readiness?: {
     problems?: HostReadinessProblemInput[]
     checkedAt?: number
-    claude?: { version?: string; minVersion?: string; installMethod?: string }
+    claude?: { version?: string; minVersion?: string; installMethod?: string; auth?: string; unknown?: string }
+    checkError?: string
     fixing?: { action: string; text: string; startedAt?: number }; usedForSessions?: boolean // false: nothing uses it (host-session-use.ts)
   }
 }
@@ -81,17 +75,11 @@ export const BLOCKING_READINESS_KINDS: readonly string[] = [
 ]
 /** Refused with allowOverride: an old or signed-out CLI may still work for the user. */
 export const OVERRIDABLE_KINDS: readonly string[] = ['claude_outdated', 'claude_not_logged_in']
-/**
- * The readiness kinds the HOME BANNER shows: the ones that stop core Walnut work on the host
- * (no session can start at all). A version floor for one model (`claude_outdated`) is not
- * that: sessions still run with another model, so it stays off the banner and lives where the
- * host is about to be used (the picker note, the Start gate) and in Settings. User rule,
- * 2026-09-26: the banner is for core features with no dependency, a terminal that does not
- * work, a host that does not connect.
- */
-export const BANNER_READINESS_KINDS: readonly string[] = [
-  'claude_missing', 'claude_needs_node', 'claude_error', 'claude_not_logged_in',
-]
+/** The HOME BANNER's readiness kinds: no session can start on the host at all (user rule 2026-09-26). A model's version
+ *  floor (`claude_outdated`) is not that: it lives in the picker note, the Start gate and Settings. */
+export const BANNER_READINESS_KINDS: readonly string[] = ['claude_missing', 'claude_needs_node', 'claude_error', 'claude_not_logged_in']
+/** Claude Code cannot run there at all, so no "Fix with agent" (routes/notifications.ts, web agentCannotRun). */
+export const AGENT_CANNOT_RUN_KINDS: readonly string[] = BANNER_READINESS_KINDS
 /** A reconnect that meets one of these will not heal itself: the screen shows it as failed. */
 export const STANDING_FAILURE_KINDS: readonly string[] = ['auth', 'host_key', 'dns', 'cert_expired', 'agent_missing', 'proxy_login', 'not_linux']
 /** Waiting on the user's login (one row for all hosts that share the kind). */
@@ -288,6 +276,12 @@ export function blockingReadinessProblem(s: HostStatusInput | undefined): HostRe
   return s?.readiness?.problems?.find((p) => BLOCKING_READINESS_KINDS.includes(p.kind))
 }
 
+export function hostReadinessConfirmed(s: HostStatusInput | undefined): boolean {
+  return !!s?.connected && readinessAnsweredThisConnection(s) && !blockingReadinessProblem(s)
+    && !s.readiness?.fixing && !s.readiness?.checkError && !s.readiness?.claude?.unknown
+    && !['unknown', 'not-logged-in'].includes(s.readiness?.claude?.auth ?? '')
+}
+
 /** The banner's readiness problem (BANNER_READINESS_KINDS); none on a host nothing uses for sessions (2026-11-05). */
 export function bannerReadinessProblem(s: HostStatusInput | undefined): HostReadinessProblemInput | undefined {
   return s?.readiness?.usedForSessions === false ? undefined : s?.readiness?.problems?.find((p) => BANNER_READINESS_KINDS.includes(p.kind))
@@ -296,6 +290,11 @@ export function bannerReadinessProblem(s: HostStatusInput | undefined): HostRead
 export function readinessDismissKey(s: HostStatusInput, kind: string): string {
   const c = s.readiness?.claude
   return `${s.host}|${kind}|${c?.minVersion || c?.version || ''}`
+}
+
+/** A failure summary as a person reads it: no `walnut-ssh-evidence:` tags (ssh-credential-evidence.ts), which the hint says in words. */
+export function shownFailureSummary(raw: string | undefined): string {
+  return (raw ?? '').replace(/\s*\[?walnut-ssh-evidence:[^\]\n]*\]?/g, '').replace(/[ \t]+$/gm, '').trim()
 }
 
 /**
@@ -314,7 +313,7 @@ export function hostProblemOf(
     const kind = status.kind || 'unknown'
     return {
       type: 'connect', kind, headline: hostFailureHeadline(kind, label), hint: status.hint ?? '',
-      summary: status.error ?? '', retryable: status.retryable !== false,
+      summary: shownFailureSummary(status.error), retryable: status.retryable !== false,
       ...(typeof status.retryAt === 'number' ? { retryAt: status.retryAt } : {}),
       dismissKey: `${status.host}|connect`,
     }
@@ -343,7 +342,7 @@ export function listingProblemOf(
   if (!hostError || hostError.kind !== 'listing') return null
   return {
     type: 'listing', headline: hostFailureHeadline('listing', label, { path }),
-    hint: hostError.hint ?? '', summary: hostError.message ?? '',
+    hint: hostError.hint ?? '', summary: shownFailureSummary(hostError.message),
   }
 }
 
