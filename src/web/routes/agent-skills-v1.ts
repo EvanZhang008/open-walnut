@@ -4,7 +4,7 @@
  *
  *   GET    /api/v1/tasks/:id/agent-skills          { task_id, title, own: [...], org: [...] } (no text)
  *   GET    /api/v1/tasks/:id/agent-skills/:name    { task_id, scope, skill } (its own first, then the org's)
- *   PUT    /api/v1/tasks/:id/agent-skills/:name    { description?, content?, scope?: 'own' | 'org' }
+ *   PUT    /api/v1/tasks/:id/agent-skills/:name    { description?, content? | edits?, scope?: 'own' | 'org' }
  *   DELETE /api/v1/tasks/:id/agent-skills/:name?scope=own|org
  *   GET    /api/v1/me/own-readback?hook=startup|compact   { text } for the calling session's task
  *
@@ -20,6 +20,7 @@ import {
 } from '../../core/sessions/agent-skills.js'
 import { resolveCaller } from '../../core/sessions/session-send-core.js'
 import { getTask } from '../../core/task-manager.js'
+import { isCompanion } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 import { body, header, param, resolveTask, RouteError } from './board-v1.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
@@ -85,11 +86,13 @@ agentSkillsV1Router.put('/tasks/:id/agent-skills/:name', route(async (req, res) 
   for (const k of ['description', 'content'] as const) {
     if (b[k] !== undefined && typeof b[k] !== 'string') throw new RouteError(400, 'bad_request', `${k} must be a string`)
   }
+  if (b.edits !== undefined && !Array.isArray(b.edits)) throw new RouteError(400, 'bad_request', 'edits must be an array of { old, new }')
   const { stamp, sid, callerTaskId } = await stampOf(req, task.id, scope)
   const out = await writeAgentSkill(scope, task.id, {
     name: param(req.params.name),
     ...(typeof b.description === 'string' ? { description: b.description } : {}),
     ...(typeof b.content === 'string' ? { content: b.content } : {}),
+    ...(Array.isArray(b.edits) ? { edits: b.edits as Array<{ old: string; new: string }> } : {}),
   }, stamp)
   log.task.info('agent skill written', { taskId: task.id, scope, name: out.skill.name, created: out.created, chars: out.skill.text.length, callerSid: sid, callerTaskId })
   res.json({ task_id: task.id, title: task.title, scope, created: out.created, count: out.count, max: AGENT_SKILLS_MAX, skill: listed(out.skill) })
@@ -111,11 +114,12 @@ agentSkillsV1Router.delete('/tasks/:id/agent-skills/:name', route(async (req, re
 agentSkillsV1Router.get('/me/own-readback', route(async (req, res) => {
   const hook = req.query.hook === 'compact' ? 'compact' as const : 'startup' as const
   const sid = header(req, 'x-walnut-caller-sid')
-  const { CLOUD_MODE } = await import('../../constants.js')
-  let caller = sid && !CLOUD_MODE ? await resolveCaller(sid).catch(() => null) : null
+  // The companion keeps no copy of what is read back (as open_items there): nothing.
+  const companion = isCompanion()
+  let caller = sid && !companion ? await resolveCaller(sid).catch(() => null) : null
   // A new conversation's hook can run before its record is written (the spawn persists it right
   // after the host confirms the process): give it a few seconds.
-  for (let i = 0; sid && !CLOUD_MODE && hook === 'startup' && caller?.kind !== 'session' && i < 8; i++) {
+  for (let i = 0; sid && !companion && hook === 'startup' && caller?.kind !== 'session' && i < 8; i++) {
     await new Promise((r) => setTimeout(r, 500))
     caller = await resolveCaller(sid).catch(() => null)
   }

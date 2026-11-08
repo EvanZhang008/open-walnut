@@ -138,6 +138,13 @@ describe('agent skills', () => {
     const upd = await op('agent_skill_write', { name: 'deploy', content: 'my new steps' }, t.sid)
     expect(upd.result).toMatchObject({ created: false })
     expect((await op('agent_skill_read', { name: 'deploy' }, t.sid)).result.skill).toMatchObject({ description: 'My deploy', text: 'my new steps' })
+    // A line edit: exact text, once; all or none.
+    expect((await op('agent_skill_write', { name: 'deploy', edits: [{ old: 'new', new: 'newer' }] }, t.sid)).ok).toBe(true)
+    expect((await op('agent_skill_read', { name: 'deploy' }, t.sid)).result.skill.text).toBe('my newer steps')
+    const missing = await op('agent_skill_write', { name: 'deploy', edits: [{ old: 'newer', new: 'x' }, { old: 'absent', new: 'y' }] }, t.sid)
+    expect(missing.ok).toBe(false)
+    expect(JSON.stringify(missing)).toContain('skill_edit_not_found')
+    expect((await op('agent_skill_read', { name: 'deploy' }, t.sid)).result.skill.text).toBe('my newer steps')
     // The org's records who wrote it, even its own node.
     const org = await fetch(`${apiBase}/api/v1/tasks/${t.id}/agent-skills`).then((r) => r.json()) as any
     expect(org.org.find((s: any) => s.name === 'deploy').by_name).toContain('Skill keeper')

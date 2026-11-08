@@ -91,6 +91,23 @@ export interface AgentSkillWrite {
   name: string;
   description?: string;
   content?: string;
+  /** Exact-string edits on the stored text, in order, each `old` once; all or none. Not with content. */
+  edits?: ReadonlyArray<{ old: string; new: string }>;
+}
+
+/** The stored text after `edits`: each `old` must occur exactly once at its turn. Throws, writing nothing. */
+export function applySkillEdits(text: string, edits: ReadonlyArray<{ old: string; new: string }>): string {
+  let out = text;
+  edits.forEach((e, i) => {
+    if (!e || typeof e.old !== 'string' || typeof e.new !== 'string' || !e.old) {
+      throw new AgentSkillError('bad_request', 400, `edits[${i}] must be { old: non-empty string, new: string }`);
+    }
+    const first = out.indexOf(e.old);
+    if (first === -1) throw new AgentSkillError('skill_edit_not_found', 409, `edits[${i}].old does not occur in the skill: read it again (agent_skill_read).`);
+    if (out.indexOf(e.old, first + 1) !== -1) throw new AgentSkillError('skill_edit_not_unique', 409, `edits[${i}].old occurs more than once in the skill: give more of the text around it.`);
+    out = out.slice(0, first) + e.new + out.slice(first + e.old.length);
+  });
+  return out;
 }
 
 /**
@@ -109,6 +126,8 @@ export async function writeAgentSkill(
   }
   const description = input.description?.replace(/\s+/g, ' ').trim();
   const content = input.content?.trim();
+  if (input.edits && content !== undefined) throw new AgentSkillError('bad_request', 400, 'Give content (the whole text) or edits, not both.');
+  if (input.edits && !input.edits.length) throw new AgentSkillError('bad_request', 400, '`edits` must be a non-empty array of { old, new }.');
   if (description !== undefined && (!description || description.length > AGENT_SKILL_DESCRIPTION_MAX)) {
     throw new AgentSkillError('bad_request', 400, `description must be 1 to ${AGENT_SKILL_DESCRIPTION_MAX} characters: one line saying when to use it.`);
   }
@@ -117,23 +136,39 @@ export async function writeAgentSkill(
       ? `This skill would be ${content.length} characters, over the ${AGENT_SKILL_MAX_CHARS} limit. Nothing was written: write it shorter.`
       : 'content must not be empty.');
   }
-  const screened = screenSkillWrite([description ?? '', content ?? ''].join('\n\n'), `agent skill '${name}'`);
-  if (screened) throw new AgentSkillError('agent_skill_unsafe', 422, screened);
+  const screen = (text: string) => {
+    const screened = screenSkillWrite(text, `agent skill '${name}'`);
+    if (screened) throw new AgentSkillError('agent_skill_unsafe', 422, screened);
+  };
+  screen([description ?? '', content ?? ''].join('\n\n'));
   let out: { skill: AgentSkill; created: boolean; count: number } | undefined;
   await updateJsonFile<unknown>(fileOf(scope, taskId), null, (raw) => {
     const file = normalize(raw);
     const i = file.skills.findIndex((s) => s.name === name);
     const cur = i >= 0 ? file.skills[i] : undefined;
+    if (!cur && input.edits) throw new AgentSkillError('no_skill', 404, `No skill "${name}" to edit: create it with description and content.`);
     if (!cur && (description === undefined || content === undefined)) {
       throw new AgentSkillError('bad_request', 400, `"${name}" is a new skill: give both description and content.`);
     }
+    let edited: string | undefined;
+    if (input.edits && cur) {
+      edited = applySkillEdits(cur.text, input.edits).trim();
+      if (!edited || edited.length > AGENT_SKILL_MAX_CHARS) {
+        throw new AgentSkillError('agent_skill_too_long', edited ? 413 : 400, edited
+          ? `This skill would be ${edited.length} characters, over the ${AGENT_SKILL_MAX_CHARS} limit. Nothing was written.`
+          : 'The edits leave the skill empty: delete it instead (delete:true).');
+      }
+      screen(edited);
+    }
+    const text = content ?? edited;
     if (!cur && file.skills.length >= AGENT_SKILLS_MAX) {
       throw new AgentSkillError('agent_skills_full', 409, `${scope === 'org' ? 'The org' : 'This task'} already keeps ${AGENT_SKILLS_MAX} skills. Merge or delete one first (agent_skill_write delete:true).`);
     }
     // Another's write records itself; the owner's keeps that record unless it rewrote the text.
+    // An edit changes part of the text: the earlier writer's words are still in it.
     const writer = stamp ?? (content === undefined && cur?.by ? { by: cur.by, by_name: cur.by_name } : null);
     const skill: AgentSkill = {
-      name, description: description ?? cur!.description, text: content ?? cur!.text, at: nowIso,
+      name, description: description ?? cur!.description, text: text ?? cur!.text, at: nowIso,
       ...(writer ? { by: writer.by, ...(writer.by_name ? { by_name: writer.by_name } : {}) } : {}),
     };
     if (cur) file.skills[i] = skill;

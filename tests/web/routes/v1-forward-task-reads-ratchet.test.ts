@@ -29,6 +29,8 @@ const EXPECTED: Record<string, { by: 'copy' | 'mac'; why: string }> = {
   '/tasks/:id/agent-memory': { by: 'copy', why: 'task.agent_memory, a field of the record' },
   '/tasks/:id/brief': { by: 'copy', why: 'task.brief and the task list' },
   '/tasks/:id/watch': { by: 'copy', why: 'task.watch, a field of the record' },
+  '/tasks/:id/agent-skills': { by: 'mac', why: 'the agent-skills store, kept only on the primary' },
+  '/tasks/:id/agent-skills/:name': { by: 'mac', why: 'the agent-skills store, kept only on the primary' },
   '/tasks/:id/board': { by: 'mac', why: 'the boards store, which the copy does not keep' },
   '/tasks/:id/board/open-choice': { by: 'mac', why: 'the boards store' },
   '/tasks/:id/board/owner': { by: 'mac', why: 'the boards store' },
