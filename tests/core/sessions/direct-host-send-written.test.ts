@@ -14,11 +14,12 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const bridge = vi.hoisted(() => ({ send: {} as Record<string, unknown> }))
+const bridge = vi.hoisted(() => ({ send: {} as Record<string, unknown>, status: null as Record<string, unknown> | null, calls: [] as string[] }))
 vi.mock('../../../src/web/ws/bridge-registry.js', () => ({
   BridgeOfflineError: class BridgeOfflineError extends Error {},
   bridgeRequest: vi.fn(async (_host: string, cmd: string) => {
-    if (cmd === 'status') return { exists: true, alive: true, sendMarkers: true }
+    bridge.calls.push(cmd)
+    if (cmd === 'status') return bridge.status ?? { exists: true, alive: true, sendMarkers: true }
     if (cmd === 'send') return bridge.send
     return {}
   }),
@@ -32,6 +33,8 @@ import { deliverDirectToHost } from '../../../src/core/sessions/direct-host-send
 const input = { host: 'devbox', sessionId: 'sid-direct', text: 'run the deploy', messageId: 'pm-1', stopFence: null }
 
 beforeEach(() => {
+  bridge.status = null
+  bridge.calls.length = 0
   intents.mark.mockClear()
   intents.clear.mockClear()
 })
@@ -71,5 +74,17 @@ describe('a direct send whose FIFO write failed part way', () => {
     expect(intents.clear).toHaveBeenCalledOnce()
     bridge.send = { ok: false, error: 'send failed: EIO' }
     expect(await deliverDirectToHost(input)).toMatchObject({ kind: 'transport', ambiguous: false })
+  })
+})
+
+// 2026-11-08: a daemon shutting down for a deploy answers every command with an error. Read
+// as a death, the send went on to a resume and the phone was told 409 session_dead.
+describe('a direct send while the daemon answers status with an error', () => {
+  it('sends nothing, starts no resume, and is a transport failure the phone retries', async () => {
+    bridge.status = { ok: false, error: 'internal daemon error handling status: Daemon is shutting down; retry after reconnecting' }
+    const out = await deliverDirectToHost(input)
+    expect(out).toMatchObject({ ok: false, kind: 'transport', offline: false, ambiguous: false })
+    expect(bridge.calls).toEqual(['status'])
+    expect(intents.mark).not.toHaveBeenCalled()
   })
 })

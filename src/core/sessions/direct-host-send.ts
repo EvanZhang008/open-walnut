@@ -140,6 +140,12 @@ async function deliverOnce(input: DirectSendInput): Promise<DirectSendOutcome> {
         log.web.info('mobile send waited for just-launched spawn', { sessionId, host, spawned: status.exists === true });
       }
     }
+    // An error answer (a daemon shutting down) says nothing about the CLI: nothing is sent, and
+    // the phone keeps the message and tries again, never told the session died (daemon-status-reply.ts).
+    if (status.ok === false) {
+      log.web.info('mobile send: the host answered status with an error; not sent', { sessionId, host, error: typeof status.error === 'string' ? status.error : undefined });
+      return { ok: false, kind: 'transport', offline: false, ambiguous: false, message: `The host is busy (${String(status.error ?? 'no answer')}); try again` };
+    }
     // The launch wait above can take seconds: look again.
     const stoppedSince = input.waitForLaunch ? await overtakenByStop(input) : null;
     if (stoppedSince) return stoppedSince;

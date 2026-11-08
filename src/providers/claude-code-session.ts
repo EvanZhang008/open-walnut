@@ -13167,8 +13167,10 @@ export class SessionRunner {
    *     precisely when `this.sessions` is empty (no registered manager available).
    *
    * Strict `probe?.alive === true` guards against contract drift where `alive` might
-   * become truthy-non-boolean; daemon today returns `{ok:true,alive:true}` on live and
-   * `{ok:false}` otherwise (see `src/providers/daemon-connection.ts:probeDaemonSession`).
+   * become truthy-non-boolean; probeDaemonSession answers `{alive}` from the daemon's own
+   * reply and null when it gives none (an error reply, daemon-status-reply.ts): no answer
+   * falls through to `--resume`, which the per-session CLI owner refuses while a CLI of it
+   * lives (cli-owner-core.ts).
    */
   private async isSessionStillAlive(record: SessionRecord): Promise<boolean> {
     if (record.host) {

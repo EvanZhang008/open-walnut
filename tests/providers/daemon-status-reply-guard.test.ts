@@ -66,6 +66,8 @@ const READERS: Record<string, string> = {
   'src/core/sessions/session-lifecycle.ts': "ok checked: 'no_snapshot', nothing written",
   'src/core/sessions/replaced-session.ts': 'ok checked: no answer (null)',
   'src/core/sessions/auto-recover-env.ts': 'ok checked: no evidence (null)',
+  'src/core/sessions/direct-host-send.ts': 'the phone\'s direct send: an error reply (ok false) sends nothing and is a transport failure the phone retries, never session_dead',
+  'src/web/routes/session-lifecycle-v1.ts': 'exists === true checked: an error reply leaves the projection as it is',
 }
 
 describe('every reader of a daemon status is listed', () => {
@@ -78,7 +80,8 @@ describe('every reader of a daemon status is listed', () => {
         else if (/\.tsx?$/.test(e.name)) {
           // Code only: a comment naming the command reads nothing.
           const code = fs.readFileSync(p, 'utf8').split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n')
-          if (/\.send\(\s*['"](status|getState)['"]/.test(code)) found.push(path.relative(REPO, p))
+          // Over the daemon link or the companion's bridge alike.
+          if (/(\.send|\bbridgeRequest)\(\s*(\w+\s*,\s*)?['"](status|getState)['"]/.test(code)) found.push(path.relative(REPO, p))
         }
       }
     }
@@ -94,6 +97,8 @@ describe('every reader of a daemon status is listed', () => {
     const probe = dc.slice(dc.indexOf('export async function probeDaemonSession('), dc.indexOf('export async function probeDaemonSessionArgs('))
     expect(probe).toMatch(/statusReplyAlive\(result\)[\s\S]*if \(alive === null\) return null/)
     expect(probe).not.toMatch(/result\.ok && result\.alive/)
+    const direct = fs.readFileSync(path.join(REPO, 'src/core/sessions/direct-host-send.ts'), 'utf8')
+    expect(direct).toMatch(/if \(status\.ok === false\) \{[\s\S]{0,400}kind: 'transport'/)
     const sweep = dc.slice(dc.indexOf('private async recoverDisconnectedSessions('), dc.indexOf('private async scheduleAutoRecoverIfDead('))
     expect(sweep).toMatch(/if \(statusReplyAlive\(result\) === null\) \{[\s\S]*?continue/)
   })
