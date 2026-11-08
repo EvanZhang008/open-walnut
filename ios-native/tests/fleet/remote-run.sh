@@ -11,9 +11,9 @@
 #   run    ARGS is a command, run in ios-native with WALNUT_SIM_UDID set
 #
 # The Mac may be someone else's computer in use, so the run stays out of their way:
-#   - it refuses to start (exit 75, "BUSY") while under --min-idle percent of the CPU is idle
-#     (default 25, over 5 seconds) or the load per CPU is over --max-load (default 4, a backstop:
-#     the load counts threads, not CPU used), a call is on (mac-share.sh), or another fleet run holds this Mac's test
+#   - it refuses to start (exit 75, "BUSY") while the load per CPU is over --max-load (default 2,
+#     the load watchdog's line), memory is tight, or under --min-idle percent of the CPU is idle
+#     (default 25, over 5 seconds; an extra condition, never instead of the load), a call is on (mac-share.sh), or another fleet run holds this Mac's test
 #     simulator;
 #   - xcodebuild runs at utility QoS and nice 10 with half the cores, so the person's
 #     own apps keep the machine;
@@ -32,7 +32,7 @@
 set -uo pipefail
 
 RUN_DIR=${1:?run dir}; MODE=${2:?mode}; shift 2
-VIDEO=0; KEEP_XCRESULT=0; MIN_IDLE=25; MAX_LOAD=4; ASKED_UDID=""
+VIDEO=0; KEEP_XCRESULT=0; MIN_IDLE=25; MAX_LOAD=2; ASKED_UDID=""
 while [ $# -gt 0 ]; do
   case $1 in
     --video) VIDEO=1 ;;
@@ -104,7 +104,7 @@ SIM_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)/scripts/lib/sim-
 
 CPUS=$(sysctl -n hw.ncpu)
 LOAD1=$(sysctl -n vm.loadavg | awk '{print $2}')
-WHY=$(fleet_cpu_busy "$(fleet_idle_pct 5)" "$LOAD1" "$CPUS" "$MIN_IDLE" "$MAX_LOAD")
+WHY=$(fleet_cpu_busy "$(fleet_idle_pct 5)" "$LOAD1" "$CPUS" "$MIN_IDLE" "$MAX_LOAD" "$(fleet_mem)")
 [ -z "$WHY" ] || refuse 75 "BUSY: $WHY; try another Mac or later" busy
 # Simulator open = someone uses simulators here, and a device booted now would open its window.
 if pgrep -x Simulator >/dev/null 2>&1; then

@@ -6,7 +6,10 @@
  * the load alone and so never opened: lane B's simulator queue (1.2 per CPU, fixed in its own
  * repo), the iOS fleet (0.75 per CPU: a unit run waited 110 minutes) and vitest's admission
  * (load 20); Playwright's overload wait and the large run had the same rule at a higher bar.
- * They now judge idle CPU and keep the load only as a backstop (tests/setup/cpu-idle.ts).
+ * They now judge idle CPU too. 2026-11-08, the Operations VP: free CPU is only an extra condition,
+ * never a replacement for the load line (at a backstop of 4 per core a lease booted at load 48 and
+ * the load went to 377), so every gate also keeps the line of 2 per core (28 on 14 cores) and
+ * waits while memory is tight, the rule of lane B's machine-gate.sh (tests/setup/cpu-idle.ts).
  *
  * This lists every file that reads the load average and what it does with it. A new reader
  * fails here until it is listed: as a gate that also reads idle CPU, or as a report with why.
@@ -24,6 +27,16 @@ const GATES: Record<string, RegExp> = {
   'tests/setup/cpu-idle.ts': /cpuTicks\(\)/,
   'tests/setup/large-run.sh': /idle_pct\)/,
   'ios-native/tests/fleet/remote-run.sh': /fleet_cpu_busy "\$\(fleet_idle_pct/,
+}
+
+/** Each gate's load line of 2 per core and its memory check (the pattern names how). */
+const LOAD_LINE_AND_MEMORY: Record<string, RegExp[]> = {
+  'tests/setup/cpu-idle.ts': [/MAX_LOAD_PER_CORE = 2\n/, /const mem = c\.memory \? memoryTightWhy\(c\.memory\)/],
+  'tests/setup/large-run.sh': [/\$\(cores\) \* 2 \)\)/, /elif \[\[ -n "\$\(mem_tight\)" \]\]/],
+  'ios-native/tests/fleet/remote-run.sh': [/MAX_LOAD=2;/, /"\$MAX_LOAD" "\$\(fleet_mem\)"\)/],
+  'scripts/ios-fleet-test.sh': [/MAX_LOAD=2;/],
+  'tests/e2e/browser/pw-concurrency.ts': [/maxLoadPerCore: MAX_LOAD_PER_CORE,/, /memory: readMemorySync\(\)/],
+  'tests/setup/test-gate.ts': [/: MAX_LOAD_PER_CORE,/, /memory = readMemorySync\(\)/],
 }
 
 /** Readers that never hold a run on the load, with what they do. */
@@ -69,6 +82,13 @@ describe('machine gates judge free CPU', () => {
     }
     const gone = Object.keys(REPORTS).filter((f) => !readers.includes(f))
     expect(gone, 'listed readers that no longer read the load: remove them from REPORTS').toEqual([])
+  })
+
+  it('every gate keeps the load line of 2 per core and waits on tight memory: free CPU never replaces them', () => {
+    for (const f of [...Object.keys(GATES), ...Object.keys(HELPER_GATES)]) expect(LOAD_LINE_AND_MEMORY, `${f} has no load line listed`).toHaveProperty([f])
+    for (const [f, pats] of Object.entries(LOAD_LINE_AND_MEMORY)) {
+      for (const p of pats) expect(fs.readFileSync(path.join(ROOT, f), 'utf8'), `${f} lost its load line or memory check`).toMatch(p)
+    }
   })
 
   it('the gates that read the load through a helper judge idle CPU with it', () => {

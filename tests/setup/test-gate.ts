@@ -27,6 +27,7 @@ import os from 'node:os'
 import path from 'node:path'
 import {
   type Capacity,
+  type Memory,
   capacityVerdict,
   cpuIdlePct,
   loadPerCore,
@@ -34,6 +35,7 @@ import {
   MIN_IDLE_PCT,
   pctFromEnv,
   positiveFromEnv,
+  readMemorySync,
 } from './cpu-idle'
 
 const GATE_DIR = process.env.WALNUT_VITEST_GATE_DIR ?? path.join(os.tmpdir(), 'walnut-vitest-gate')
@@ -66,10 +68,9 @@ const POLL_MS = 3_000
  * Fail-open stays (a busy-forever box must not block tests permanently), but
  * the wait gives recovery storms time to drain instead of piling on.
  *
- * It waits on free CPU (under WALNUT_MIN_IDLE_PCT, 20%, idle), with the load only a
- * backstop (4 per core, or WALNUT_VITEST_MAX_LOAD as a 1-minute load): the load
- * alone sat at 27 to 53 on the Mac with 30 to 48% of its CPU idle (2026-11-07), so
- * the old bar of load 20 waited out its 10 minutes on every run (tests/setup/cpu-idle.ts).
+ * It waits by the machine gates' one rule (tests/setup/cpu-idle.ts): the load at most
+ * 2 per core (or WALNUT_VITEST_MAX_LOAD as a 1-minute load), memory not tight, and
+ * idle CPU (WALNUT_MIN_IDLE_PCT, 20%) only as an extra condition.
  */
 const MIN_IDLE = pctFromEnv(process.env.WALNUT_MIN_IDLE_PCT, MIN_IDLE_PCT)
 const MAX_LOAD = positiveFromEnv(process.env.WALNUT_VITEST_MAX_LOAD, 0)
@@ -144,7 +145,13 @@ async function capacity(): Promise<Capacity> {
   } catch {
     /* fail open */
   }
-  return { idlePct, loadPerCore: perCore, cores }
+  let memory: Memory | null = null
+  try {
+    memory = readMemorySync()
+  } catch {
+    /* fail open */
+  }
+  return { idlePct, loadPerCore: perCore, cores, memory }
 }
 
 /** Wait for the machine itself to calm down before starting a run. */

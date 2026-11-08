@@ -42,6 +42,7 @@ import {
   MAX_LOAD_PER_CORE,
   MIN_IDLE_PCT,
   pctFromEnv,
+  readMemorySync,
 } from '../../setup/cpu-idle.js'
 
 /** Lease dir, shared by every Playwright run for this user. */
@@ -171,15 +172,15 @@ function sleepSync(ms: number): void {
 }
 
 /**
- * Free CPU is what a run needs, so the wait is on idle CPU (MIN_IDLE_PCT, 20%, with
- * WALNUT_MIN_IDLE_PCT to change it), sampled over two seconds. The load stays only as a
- * backstop: above 4 per core adding 4 browsers is what turns "slow" into "wedged", and
- * the fixture's own boot (measured 20s idle, 70s at load 133) blows the webServer budget.
- * The load alone misleads on the Mac: it sat at 27 to 53 on 14 cores with 30 to 48% of
- * the CPU idle (2026-11-07), endpoint agents keeping threads runnable at little CPU.
+ * The wait is the machine gates' one rule (tests/setup/cpu-idle.ts): the load at most
+ * 2 per core first (over it, adding 4 browsers turns "slow" into "wedged", and the
+ * fixture's own boot, measured 20s idle and 70s at load 133, blows the webServer budget),
+ * then memory not tight, then idle CPU (MIN_IDLE_PCT, 20%, WALNUT_MIN_IDLE_PCT to change
+ * it) sampled over two seconds, an extra condition only: the load alone misses a CPU that
+ * is busy without many threads.
  */
 function measureCapacity(): Capacity {
-  return { idlePct: cpuIdlePctSync(2_000), loadPerCore: loadPerCore(), cores: Math.max(1, os.cpus().length) }
+  return { idlePct: cpuIdlePctSync(2_000), loadPerCore: loadPerCore(), cores: Math.max(1, os.cpus().length), memory: readMemorySync() }
 }
 
 /**

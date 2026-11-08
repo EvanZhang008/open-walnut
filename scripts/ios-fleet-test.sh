@@ -31,10 +31,11 @@
 #                    unit tests do not drive the screen, so a unit video shows the app idle
 #   --keep-xcresult  bring the whole result bundle back too (it can be large)
 #   --min-idle P     refuse a Mac with under P percent of its CPU idle (default 25)
-#   --max-load N     refuse a Mac whose load per CPU is over N (default 4). Only a backstop: the
-#                    load counts runnable threads, not CPU used, and a Mac with endpoint agents sat
-#                    at 2 to 4 per CPU with 30 to 48% of its CPU idle (2026-11-07), so the old
-#                    default of 0.75 kept a run waiting for 110 minutes on a Mac with room
+#   --max-load N     refuse a Mac whose load per CPU is over N (default 2, 28 on 14 cores, the load
+#                    watchdog's line). The old 0.75 kept a run waiting 110 minutes on a Mac with room
+#                    (2026-11-07); a backstop of 4 let a lease boot at load 48 and the load reach 377
+#                    (2026-11-08). Free CPU (--min-idle) is an extra condition, never instead of it;
+#                    the Mac itself also refuses while its memory is tight (remote-run.sh)
 #   --wait MIN       when no Mac can take the run now, wait up to MIN minutes for one
 #                    (default 30; 0 gives up at once). A wait outlasts a tool call's
 #                    foreground limit: start the script in the background to wait
@@ -64,7 +65,7 @@ set -uo pipefail
 die() { printf 'ios-fleet: %s\n' "$1" >&2; exit "${2:-1}"; }
 say() { printf 'ios-fleet: %s\n' "$*" >&2; }
 
-HOST=""; MIN_IDLE=25; MAX_LOAD=4; FLAGS=(); CLEAN=0; VERBOSE=0; WAIT_MIN=30
+HOST=""; MIN_IDLE=25; MAX_LOAD=2; FLAGS=(); CLEAN=0; VERBOSE=0; WAIT_MIN=30
 KEY_LINES='^(remote-run:|FLEET_RESULT|\*\* (BUILD|TEST)|Test Case .* failed|.*: error: )'
 while [ $# -gt 0 ]; do
   case $1 in
@@ -188,7 +189,7 @@ job_log_rest() { # $1 = host, $2 = job id, $3 = bytes already read, $4 = local l
   done
 }
 
-# The Macs to try, best first: connected, tagged ios, with free CPU and under the load backstop.
+# The Macs to try, best first: connected, tagged ios, under the load line, with free CPU.
 candidates() {
   local hosts loads
   hosts=$(op_again host_list '{}') || return 1

@@ -108,15 +108,31 @@ fleet_idle_pct() {
   /usr/sbin/iostat -n 0 -c 2 -w "${1:-5}" 2>/dev/null | awk 'END { if ($3 ~ /^[0-9.]+$/) print $3 }'
 }
 
-# fleet_cpu_busy IDLE LOAD1 CPUS MIN_IDLE MAX_LOAD: prints why the Mac is too busy for a run, nothing
-# when it has room. What a run needs is free CPU: the load counts runnable threads, and on a Mac with
-# endpoint agents it sat at 27 to 53 on 14 cores with 30 to 48% of the CPU idle (2026-11-07), so a
-# bar of 0.75 load per CPU never opened. The load stays a backstop (MAX_LOAD per CPU). An idle share
-# that could not be read (empty) does not block.
+# fleet_mem: "<pressure level> <swap used MB> <swap total MB> <compressor MB>", nothing when the
+# pressure level cannot be read.
+fleet_mem() {
+  local pl sw comp
+  pl=$(/usr/sbin/sysctl -n kern.memorystatus_vm_pressure_level 2>/dev/null)
+  case $pl in ''|*[!0-9]*) return 0 ;; esac
+  sw=$(/usr/sbin/sysctl -n vm.swapusage 2>/dev/null | awk '{ gsub(/M/, ""); printf "%d %d", $6, $3 }')
+  comp=$(/usr/bin/vm_stat 2>/dev/null | awk '/page size of/ { for (i = 1; i <= NF; i++) if ($i == "of") ps = $(i + 1) }
+    /occupied by compressor/ { v = $NF; sub(/\./, "", v); c = v } END { printf "%d", c * ps / 1048576 }')
+  printf '%s %s %s\n' "$pl" "${sw:-0 0}" "${comp:-0}"
+}
+
+# fleet_cpu_busy IDLE LOAD1 CPUS MIN_IDLE MAX_LOAD [MEM]: prints why the Mac is too busy for a run,
+# nothing when it has room. The rule of lane B's machine-gate.sh (2026-11-08, the Operations VP: free
+# CPU is only an extra condition, never a replacement for the load line; at a backstop of 4 per CPU a
+# lease booted at load 48 and the load went to 377): the load at most MAX_LOAD per CPU (2, 28 on 14
+# cores) first, then memory not tight (MEM, fleet_mem's reading: pressure level warn or worse, the
+# compressor at 14 GB, or swap 80% full with the compressor at 10 GB), then MIN_IDLE percent of the
+# CPU idle. An idle share or a memory reading that could not be read (empty) does not block.
 fleet_cpu_busy() {
-  awk -v i="$1" -v l="$2" -v c="$3" -v mi="$4" -v ml="$5" 'BEGIN {
+  awk -v i="$1" -v l="$2" -v c="$3" -v mi="$4" -v ml="$5" -v m="${6:-}" 'BEGIN {
     if (c < 1) c = 1
     if (l / c > ml) { printf "load %s on %d CPUs is over %s per CPU\n", l, c, ml; exit }
+    if (split(m, x, " ") == 4 && (x[1] >= 2 || x[4] >= 14336 || (x[3] > 0 && x[2] * 100 >= 80 * x[3] && x[4] >= 10240))) {
+      printf "memory is tight (pressure level %d, swap %d/%dMB, compressor %dMB)\n", x[1], x[2], x[3], x[4]; exit }
     if (i != "" && i + 0 < mi + 0) printf "only %d%% of the CPU is idle (%.1f of %d cores), under %s%%\n", i, i * c / 100, c, mi
   }'
 }

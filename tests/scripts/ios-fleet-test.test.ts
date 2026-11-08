@@ -182,7 +182,7 @@ describe('ios-fleet-test.sh', () => {
     ], outTgz())
     const r = run(['--video', 'unit', '--', '-only-testing:WalnutTests/BoardTests'], bin)
     expect(r.status, r.stderr).toBe(0)
-    expect(r.stderr).toContain('not using mac-busy (mac-busy): load 4.2 per CPU, over 4 per CPU')
+    expect(r.stderr).toContain('not using mac-busy (mac-busy): load 4.2 per CPU, over 2 per CPU')
     expect(r.stderr).toContain('using mac-mini (mac-mini): load 0.3 per CPU')
     // The send came back running; the script waited for its end before starting the run.
     const ops = r.calls.map((c) => c.op)
@@ -200,7 +200,7 @@ describe('ios-fleet-test.sh', () => {
     expect(start.args.host).toBe('mac-mini')
     const line = (start.args.argv as string[])[2]
     expect(line).toContain('.local/state/open-walnut/tasks/task-1/ios-fleet/')
-    expect(line).toMatch(/remote-run\.sh" "\$D" unit --video --min-idle 25 --max-load 4 -- -only-testing:WalnutTests\/BoardTests/)
+    expect(line).toMatch(/remote-run\.sh" "\$D" unit --video --min-idle 25 --max-load 2 -- -only-testing:WalnutTests\/BoardTests/)
     // Followed from the start to the end, then fetched and unpacked into the task directory.
     expect(r.calls.filter((c) => c.op === 'host_exec_read').map((c) => c.args.offset)).toEqual([0, 24, 38])
     // The terminal gets the lines that matter; the whole log is run.log.
@@ -233,12 +233,12 @@ describe('ios-fleet-test.sh', () => {
     expect(r.calls.filter((c) => c.op === 'host_exec' && c.args.background).map((c) => c.args.host)).toEqual(['mac-mini', 'mac-two'])
     const alone = fakeWalnut([
       { host: '__local__', loadPerCpu: 0.2 },
-      { host: 'mac-mini', loadPerCpu: 3.1, cpuBusy: 0.9, cpus: 10 },
+      { host: 'mac-mini', loadPerCpu: 1.5, cpuBusy: 0.9, cpus: 10 },
       { host: 'laptop', loadPerCpu: 0.1, connected: false },
     ], outTgz())
     const r2 = run(['unit'], alone)
     expect(r2.status, r2.stderr).toBe(0)
-    expect(r2.stderr).toContain('not using mac-mini (mac-mini): load 3.1 per CPU, 10% CPU idle (1.0 cores), under 25% idle')
+    expect(r2.stderr).toContain('not using mac-mini (mac-mini): load 1.5 per CPU, 10% CPU idle (1.0 cores), under 25% idle')
     expect(r2.stderr).toMatch(/using __local__ \(__local__\): load 0\.2 per CPU; no other iOS Mac can take the run/)
     // Run on that Mac itself, host_copy refuses a copy to itself (same_host), and then sources
     // out and results back are copied on this computer (2026-11-04: "could not send the
@@ -262,11 +262,13 @@ describe('ios-fleet-test.sh', () => {
   })
 
   // 2026-11-07: a unit run (3a2e35ef) waited 110 minutes for this Mac's load to fall under 0.75 per
-  // CPU while 30 to 48% of its CPU was idle: the load counts endpoint agents' runnable threads.
-  it('free CPU picks the Mac: most idle cores first, a load of 3.8 per CPU with room is used, the load only a backstop', () => {
+  // CPU while 30 to 48% of its CPU was idle. 2026-11-08, the Operations VP: free CPU is only an extra
+  // condition; at a backstop of 4 a lease booted at load 48 and the load went to 377, so the line is 2.
+  it('free CPU picks among the Macs under the load line of 2 per CPU, never instead of it', () => {
     const macs = [
       { host: 'mac-a', loadPerCpu: 0.2, cpuBusy: 0.7, cpus: 8 },
-      { host: 'mac-b', loadPerCpu: 3.8, cpuBusy: 0.55, cpus: 14 },
+      { host: 'mac-b', loadPerCpu: 1.8, cpuBusy: 0.55, cpus: 14 },
+      { host: 'mac-e', loadPerCpu: 3.4, cpuBusy: 0.2, cpus: 14 },
       { host: 'mac-c', loadPerCpu: 0.1, cpuBusy: 0.8, cpus: 10 },
       { host: 'mac-d', loadPerCpu: 4.5, cpuBusy: 0.1, cpus: 14 },
     ]
@@ -274,19 +276,20 @@ describe('ios-fleet-test.sh', () => {
     const fresh = () => fs.rmSync(path.join(dir, 'calls.jsonl'), { force: true })
     const r = run(['unit'], fakeWalnut(macs, outTgz()))
     expect(r.status, r.stderr).toBe(0)
-    expect(r.stderr).toContain('using mac-b (mac-b): load 3.8 per CPU, 45% CPU idle (6.3 cores)')
+    expect(r.stderr).toContain('using mac-b (mac-b): load 1.8 per CPU, 45% CPU idle (6.3 cores)')
+    expect(r.stderr).toContain('not using mac-e (mac-e): load 3.4 per CPU, 80% CPU idle (11.2 cores), over 2 per CPU')
     expect(r.stderr).toContain('not using mac-c (mac-c): load 0.1 per CPU, 20% CPU idle (2.0 cores), under 25% idle')
-    expect(r.stderr).toContain('not using mac-d (mac-d): load 4.5 per CPU, 90% CPU idle (12.6 cores), over 4 per CPU')
+    expect(r.stderr).toContain('not using mac-d (mac-d): load 4.5 per CPU, 90% CPU idle (12.6 cores), over 2 per CPU')
     expect(r.calls.filter((c) => c.op === 'host_exec' && c.args.background).map((c) => c.args.host)).toEqual(['mac-b'])
     // --min-idle moves the bar, and the Mac half gets the same bar.
     fresh()
     const r2 = run(['--min-idle', '50', '--wait', '0', 'unit'], fakeWalnut(macs, outTgz()))
     expect(r2.status).toBe(75)
-    expect(r2.stderr).toContain('not using mac-b (mac-b): load 3.8 per CPU, 45% CPU idle (6.3 cores), under 50% idle')
+    expect(r2.stderr).toContain('not using mac-b (mac-b): load 1.8 per CPU, 45% CPU idle (6.3 cores), under 50% idle')
     fresh()
     const r3 = run(['--min-idle', '10', 'unit'], fakeWalnut(macs, outTgz()))
     expect(r3.status, r3.stderr).toBe(0)
-    expect((r3.calls.find((c) => c.op === 'host_exec' && c.args.background)!.args.argv as string[])[2]).toContain('unit --min-idle 10 --max-load 4 --')
+    expect((r3.calls.find((c) => c.op === 'host_exec' && c.args.background)!.args.argv as string[])[2]).toContain('unit --min-idle 10 --max-load 2 --')
     // A bar that is not a number is refused before anything runs.
     for (const bad of [['--min-idle', 'soon'], ['--min-idle', '150'], ['--max-load', 'x']]) {
       fresh()
@@ -765,17 +768,24 @@ describe('mac-share.sh (what the Mac half asks of the Mac before it takes anythi
     expect(r.stdout).not.toContain('held by the caller')
   })
 
-  it('the Mac half is busy on free CPU, the load only a backstop (fleet_cpu_busy)', () => {
+  it('the Mac half keeps the load line, then memory, then free CPU (fleet_cpu_busy)', () => {
     const busy = (...a: string[]) => sh(`fleet_cpu_busy ${a.map((x) => `'${x}'`).join(' ')}`).stdout.trim()
-    // The 2026-11-07 Mac: load 53 on 14 CPUs, 45% idle: room.
-    expect(busy('45', '53', '14', '25', '4')).toBe('')
-    expect(busy('20', '1', '14', '25', '4')).toBe('only 20% of the CPU is idle (2.8 of 14 cores), under 25%')
-    expect(busy('90', '60', '14', '25', '4')).toBe('load 60 on 14 CPUs is over 4 per CPU')
-    // An idle share that could not be read does not block.
-    expect(busy('', '10', '14', '25', '4')).toBe('')
-    // The Mac half reads it before it takes anything.
+    // 2026-11-08: load 48 on 14 CPUs with 45% idle waits; free CPU never replaces the load.
+    expect(busy('45', '48', '14', '25', '2')).toBe('load 48 on 14 CPUs is over 2 per CPU')
+    expect(busy('45', '28', '14', '25', '2', '1 0 0 2000')).toBe('')
+    expect(busy('20', '1', '14', '25', '2')).toBe('only 20% of the CPU is idle (2.8 of 14 cores), under 25%')
+    // Memory tight by the load watchdog's rule: pressure warn, the compressor at 14 GB, or swap 80% full at 10 GB.
+    expect(busy('90', '1', '14', '25', '2', '2 0 0 0')).toBe('memory is tight (pressure level 2, swap 0/0MB, compressor 0MB)')
+    expect(busy('90', '1', '14', '25', '2', '1 0 0 14336')).toContain('memory is tight')
+    expect(busy('90', '1', '14', '25', '2', '1 900 1000 10240')).toContain('memory is tight')
+    expect(busy('90', '1', '14', '25', '2', '1 900 1000 9000')).toBe('')
+    // An idle share or a memory reading that could not be read does not block.
+    expect(busy('', '10', '14', '25', '2', '')).toBe('')
+    expect(sh('fleet_mem').status).toBe(0)
+    // The Mac half reads it before it takes anything, with the load line of 2 by default.
     const src = fs.readFileSync(REMOTE, 'utf8')
-    expect(src).toContain('WHY=$(fleet_cpu_busy "$(fleet_idle_pct 5)" "$LOAD1" "$CPUS" "$MIN_IDLE" "$MAX_LOAD")')
+    expect(src).toContain('WHY=$(fleet_cpu_busy "$(fleet_idle_pct 5)" "$LOAD1" "$CPUS" "$MIN_IDLE" "$MAX_LOAD" "$(fleet_mem)")')
+    expect(src).toContain('MIN_IDLE=25; MAX_LOAD=2;')
     expect(src.indexOf('WHY=$(fleet_cpu_busy')).toBeLessThan(src.indexOf('CALL=$(fleet_call_now)'))
   })
 

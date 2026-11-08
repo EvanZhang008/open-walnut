@@ -15,9 +15,9 @@
 #   WALNUT_LARGE_RUN_OUT=<dir>    where the logs and the seed list go (default /tmp/replica-plan/large-run-<stamp>)
 #   WALNUT_HEAVY_SLOT=<script>    the heavy-slot wrapper (default $HOME/tmp-evidence/heavy-slot.sh); missing: the run fails
 #   WALNUT_LARGE_RUN_MIN_IDLE=<p> wait while under p percent of the CPU is idle (default 20), at most 20 min
-#   WALNUT_LARGE_RUN_MAX_LOAD=<n> also wait while the 1 min load is above n (default: 4 per core, a
-#                                 backstop: the load counts runnable threads, not CPU used, and sat at
-#                                 2 to 4 per core on the Mac with 30 to 48% of its CPU idle, 2026-11-07)
+#   WALNUT_LARGE_RUN_MAX_LOAD=<n> wait while the 1 min load is above n (default: 2 per core, the load
+#                                 watchdog's line, checked first; free CPU is only an extra condition),
+#                                 and on macOS while memory is tight (the machine gates' rule)
 #
 # Before it starts: the wp-ref-lint (every WPn mention names its owner), bun is
 # REQUIRED (the standalone twin: a missing bun FAILS this run, the quick tier may
@@ -81,6 +81,21 @@ idle_pct() {
   fi
 }
 
+# Why memory is tight on macOS by the machine gates' rule (tests/setup/cpu-idle.ts), nothing when it
+# is not or cannot be read (Linux).
+mem_tight() {
+  [[ "$(uname)" == Darwin ]] || return 0
+  local pl sw comp
+  pl=$(/usr/sbin/sysctl -n kern.memorystatus_vm_pressure_level 2>/dev/null)
+  [[ "$pl" =~ ^[0-9]+$ ]] || return 0
+  sw=$(/usr/sbin/sysctl -n vm.swapusage 2>/dev/null | awk '{ gsub(/M/, ""); printf "%d %d", $6, $3 }')
+  comp=$(/usr/bin/vm_stat 2>/dev/null | awk '/page size of/ { for (i = 1; i <= NF; i++) if ($i == "of") ps = $(i + 1) }
+    /occupied by compressor/ { v = $NF; sub(/\./, "", v); c = v } END { printf "%d", c * ps / 1048576 }')
+  awk -v pl="$pl" -v sw="${sw:-0 0}" -v c="${comp:-0}" 'BEGIN { split(sw, s, " ")
+    if (pl >= 2 || c >= 14336 || (s[2] > 0 && s[1] * 100 >= 80 * s[2] && c >= 10240))
+      printf "memory is tight (pressure level %d, swap %d/%dMB, compressor %dMB)\n", pl, s[1], s[2], c }'
+}
+
 # A fresh 31-bit seed (no Math.random in tests; the shell picks the base, mulberry32 runs from it).
 fresh_seed() { echo $(( ((RANDOM << 16) | (RANDOM << 1) | (RANDOM & 1)) & 0x7fffffff )); }
 
@@ -99,13 +114,14 @@ BUN="$(find_bun || true)"
 say "bun: $BUN"
 say "playwright and fixture state (scripts/pw-cleanup.sh status):"
 bash scripts/pw-cleanup.sh status 2>&1 | sed 's/^/  /' | tee -a "$OUT/summary.txt"
-max_load="${WALNUT_LARGE_RUN_MAX_LOAD:-$(( $(cores) * 4 ))}"
+max_load="${WALNUT_LARGE_RUN_MAX_LOAD:-$(( $(cores) * 2 ))}"
 min_idle="${WALNUT_LARGE_RUN_MIN_IDLE:-20}"
 waited=0
 while :; do
   l="$(load1)"; i="$(idle_pct)"
   why=""
   if ! awk -v l="$l" -v m="$max_load" 'BEGIN { exit !(l <= m) }'; then why="load $l above $max_load"
+  elif [[ -n "$(mem_tight)" ]]; then why="$(mem_tight)"
   elif [[ -n "$i" ]] && awk -v i="$i" -v m="$min_idle" 'BEGIN { exit !(i < m) }'; then why="only ${i}% of the CPU idle, under ${min_idle}%"
   fi
   [[ -z "$why" ]] && break

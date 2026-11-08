@@ -241,13 +241,16 @@ describe('playwright admission gate', () => {
       expect(() => waitForCapacitySync(1_000, at(50, 999))).toThrow(/still overloaded .*: this run did not start/)
       expect(Date.now() - started).toBeLessThan(20_000)
       expect(() => waitForCapacitySync(1_000, at(90, 0))).not.toThrow()
-      // Free CPU decides, not the load: the 2026-11-07 Mac (load 53 on 14 cores, 45% idle) starts,
-      // a machine with its CPU used up waits whatever its load.
-      expect(() => waitForCapacitySync(1_000, at(45, 53 / 14))).not.toThrow()
+      // Free CPU never replaces the load line (2026-11-08): load 48 on 14 cores waits with 45% idle,
+      // and a machine with its CPU used up waits whatever its load.
+      expect(() => waitForCapacitySync(1_000, at(45, 48 / 14))).toThrow(/load 48 on 14 cores is over 2 per core/)
+      expect(() => waitForCapacitySync(1_000, at(45, 2))).not.toThrow()
       expect(() => waitForCapacitySync(1_000, at(5, 0.5))).toThrow(/only 5% of the CPU is idle/)
-      // An idle CPU that cannot be read does not block; the load backstop still does.
+      // An idle CPU that cannot be read does not block; the load line still does, and so does tight memory.
       expect(() => waitForCapacitySync(1_000, at(null, 1))).not.toThrow()
-      expect(() => waitForCapacitySync(1_000, at(null, 5))).toThrow(/over 4 per core/)
+      expect(() => waitForCapacitySync(1_000, at(null, 2.5))).toThrow(/over 2 per core/)
+      const tight = () => ({ idlePct: 90, loadPerCore: 0.5, cores: 14, memory: { pressureLevel: 4, swapUsedMb: 0, swapTotalMb: 0, compressorMb: 0 } })
+      expect(() => waitForCapacitySync(1_000, tight)).toThrow(/memory is tight/)
     } finally {
       if (prev !== undefined) process.env.PW_IGNORE_LOAD = prev
       if (prevCi !== undefined) process.env.CI = prevCi

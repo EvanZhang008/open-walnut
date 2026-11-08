@@ -1,27 +1,47 @@
 /**
- * tests/setup/cpu-idle.ts: the free-CPU rule the machine gates share (Playwright's overload
- * wait, vitest's admission). 2026-11-07: the Mac sat at load 27 to 53 on 14 cores with 30 to
- * 48% of its CPU idle, and every load-only gate stayed shut.
+ * tests/setup/cpu-idle.ts: the rule the machine gates share (Playwright's overload wait,
+ * vitest's admission). The load line first (2 per core, 2026-11-08, the Operations VP: at a
+ * backstop of 4 a lease booted at load 48 and the load went to 377), then memory, then idle
+ * CPU as an extra condition (2026-11-07: a CPU can be busy at a low load).
  */
 import { describe, expect, it } from 'vitest'
 import {
-  capacityVerdict, cpuIdlePct, cpuIdlePctSync, idlePctBetween, MAX_LOAD_PER_CORE, MIN_IDLE_PCT, pctFromEnv, positiveFromEnv,
+  capacityVerdict, cpuIdlePct, cpuIdlePctSync, idlePctBetween, MAX_LOAD_PER_CORE, memoryTightWhy, MIN_IDLE_PCT, parseCompressorMb,
+  parseSwapUsage, pctFromEnv, positiveFromEnv, readMemorySync,
 } from '../setup/cpu-idle.js'
 
 const bars = { minIdlePct: MIN_IDLE_PCT, maxLoadPerCore: MAX_LOAD_PER_CORE }
 
 describe('capacityVerdict', () => {
-  it('free CPU decides: the 2026-11-07 Mac (load 53 on 14 cores, 45% idle) has room', () => {
-    expect(capacityVerdict({ idlePct: 45, loadPerCore: 53 / 14, cores: 14 }, bars)).toEqual({ ok: true, why: '45% of the CPU idle, load 53 on 14 cores' })
+  it('free CPU never replaces the load line: load 48 on 14 cores waits with 45% idle, load 28 starts', () => {
+    expect(capacityVerdict({ idlePct: 45, loadPerCore: 48 / 14, cores: 14 }, bars)).toEqual({ ok: false, why: 'load 48 on 14 cores is over 2 per core' })
+    expect(capacityVerdict({ idlePct: 45, loadPerCore: 2, cores: 14 }, bars)).toEqual({ ok: true, why: '45% of the CPU idle, load 28 on 14 cores' })
   })
   it('a machine with its CPU used up waits, whatever its load', () => {
     expect(capacityVerdict({ idlePct: 10, loadPerCore: 0.5, cores: 14 }, bars))
       .toEqual({ ok: false, why: 'only 10% of the CPU is idle (1.4 of 14 cores), under 20%' })
   })
-  it('the load is a backstop above 4 per core, checked first', () => {
-    expect(capacityVerdict({ idlePct: 90, loadPerCore: 4.5, cores: 14 }, bars))
-      .toEqual({ ok: false, why: 'load 63 on 14 cores is over 4 per core' })
-    expect(capacityVerdict({ idlePct: 90, loadPerCore: 4, cores: 14 }, bars).ok).toBe(true)
+  it('the load line is 2 per core, checked first', () => {
+    expect(MAX_LOAD_PER_CORE).toBe(2)
+    expect(capacityVerdict({ idlePct: 5, loadPerCore: 2.5, cores: 14 }, bars))
+      .toEqual({ ok: false, why: 'load 35 on 14 cores is over 2 per core' })
+  })
+  it('tight memory waits whatever the load and idle CPU, by the load watchdog\'s rule', () => {
+    const calm = { pressureLevel: 1, swapUsedMb: 0, swapTotalMb: 0, compressorMb: 2_000 }
+    const at = (memory: typeof calm) => capacityVerdict({ idlePct: 90, loadPerCore: 0.5, cores: 14, memory }, bars)
+    expect(at(calm).ok).toBe(true)
+    expect(at({ ...calm, pressureLevel: 2 })).toEqual({ ok: false, why: 'memory is tight (pressure level 2, swap 0/0MB, compressor 2000MB)' })
+    expect(at({ ...calm, compressorMb: 14_336 }).ok).toBe(false)
+    expect(at({ ...calm, swapUsedMb: 900, swapTotalMb: 1_000, compressorMb: 10_240 }).ok).toBe(false)
+    expect(at({ ...calm, swapUsedMb: 900, swapTotalMb: 1_000, compressorMb: 10_000 }).ok).toBe(true)
+    expect(memoryTightWhy(calm)).toBeNull()
+  })
+  it('reads sysctl vm.swapusage and vm_stat as the shell gates do', () => {
+    expect(parseSwapUsage('total = 4096.00M  used = 3404.25M  free = 691.75M  (encrypted)')).toEqual({ usedMb: 3404, totalMb: 4096 })
+    expect(parseCompressorMb('Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages occupied by compressor:          420000.\n')).toBe(6562)
+    const m = readMemorySync()
+    if (process.platform === 'darwin') expect(m === null || Number.isInteger(m.pressureLevel)).toBe(true)
+    else expect(m).toBeNull()
   })
   it('an idle share that could not be read does not block', () => {
     expect(capacityVerdict({ idlePct: null, loadPerCore: 1, cores: 8 }, bars)).toEqual({ ok: true, why: '?% of the CPU idle, load 8 on 8 cores' })
