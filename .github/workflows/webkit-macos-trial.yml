@@ -1,0 +1,67 @@
+name: macOS WebKit trial
+
+# A trial: can the WebKit specs that today run only on the maintainer's Mac (macOS fonts and
+# layout; `walnut-dev webkit`) run on GitHub's free macOS runners instead? Three layout specs,
+# Playwright's own macOS WebKit, one worker, no retries. Report only: not in CI OK and nothing
+# waits on it. Once it stays green for a week, more of the Mac's WebKit runs move here
+# (docs/reference/testing-pipeline.md). Voice and recording specs stay on the Mac: a runner
+# has no microphone.
+
+on:
+  schedule:
+    - cron: '17 5 * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/webkit-macos-trial.yml'
+
+concurrency:
+  group: webkit-macos-trial
+  cancel-in-progress: true
+
+env:
+  # The CUDA provider onnxruntime-node fetches by default is never used here.
+  ONNXRUNTIME_NODE_INSTALL: skip
+
+jobs:
+  webkit-macos:
+    name: macOS WebKit (trial, 3 specs)
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      # bun's package store, shared by every job's install (tests/scripts/ci-bun-store.test.ts).
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/bun-store
+          key: bun-store-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'web/bun.lock') }}
+          restore-keys: bun-store-${{ runner.os }}-${{ runner.arch }}-
+      - run: bun install --frozen-lockfile
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-store
+      - run: bun run build && (cd web && bun x vite build)
+      - run: bun x playwright install webkit
+      - name: WebKit specs
+        env:
+          PW_WEBKIT: '1'
+          PW_IGNORE_LOAD: '1'
+          WALNUT_DAEMON_DIR: ${{ runner.temp }}/open-walnut-webkit
+        run: >-
+          bun x playwright test --project webkit --workers=1 --retries=0 --reporter=line
+          tests/e2e/browser/composer-controls-overflow.webkit.spec.ts
+          tests/e2e/browser/code-block-hscroll-overlap.webkit.spec.ts
+          tests/e2e/browser/composer-in-flow.webkit.spec.ts
+      - name: Upload the traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: webkit-macos-trial
+          path: test-results/
+          if-no-files-found: ignore

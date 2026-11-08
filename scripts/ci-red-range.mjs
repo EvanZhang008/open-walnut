@@ -7,6 +7,10 @@
  *
  *   bun scripts/ci-red-range.mjs [--run <id>] [--repo <owner/name>] [--json <file>] [--owners <file>]
  *
+ * A range of a red main is often dozens of commits (CI on main runs every hour or two), so each
+ * job's failing test files are read from its log, and a commit that changed one of them, or a
+ * module one imports directly, is marked a suspect and listed first.
+ *
  * --owners <file>: JSON { "<commit subject>": "<owner>" }; each commit in a range is named with
  * its owner when its subject is listed (a land queue knows which task landed which subject; the
  * hashes on GitHub differ from the ones landed, the subjects do not).
@@ -14,17 +18,19 @@
  */
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
+import path from 'node:path'
 
 const WORKFLOW = 'ci.yml'
 const MAX_RUNS = 300
 // Jobs that only sum up the others: their red says nothing of its own.
 const SUMMARY_JOBS = new Set(['CI OK'])
 
-function gh(path) {
-  const r = spawnSync('gh', ['api', path], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
-  if (r.status !== 0) throw new Error(`gh api ${path}: ${(r.stderr || '').trim()}`)
-  return JSON.parse(r.stdout)
+function ghText(apiPath) {
+  const r = spawnSync('gh', ['api', apiPath], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 })
+  if (r.status !== 0) throw new Error(`gh api ${apiPath}: ${(r.stderr || '').trim()}`)
+  return r.stdout
 }
+const gh = (apiPath) => JSON.parse(ghText(apiPath))
 
 function repoName() {
   const r = spawnSync('gh', ['repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner'], { encoding: 'utf8' })
@@ -80,6 +86,37 @@ export function redRange(runs, conclusionOf) {
   return { lastGreen: null, firstRed }
 }
 
+const TEST_FILE = /((?:tests|web\/src|packages)\/[\w./@-]+\.(?:test|spec)\.[cm]?[jt]sx?)/
+/** The test files a job's log reports failing: vitest's FAIL lines and Playwright's ✘ lines. */
+export function failingTestsOf(log) {
+  const out = new Set()
+  for (const line of log.split('\n')) {
+    if (!/\bFAIL\b|✘|\[(?:chromium|webkit)[^\]]*\].*›/.test(line) || /✓|passed/.test(line)) continue
+    const m = line.match(TEST_FILE)
+    if (m) out.add(m[1])
+  }
+  return [...out].sort()
+}
+
+const stem = (p) => p.replace(/\.[cm]?[jt]sx?$/, '').replace(/\/index$/, '')
+/** The repo paths (without extension) a test file imports or mocks by a relative path. */
+export function importStemsOf(testPath, content) {
+  const out = new Set()
+  for (const m of content.matchAll(/(?:from\s+|import\s*\(\s*|vi\.mock\(\s*|require\(\s*)['"](\.{1,2}\/[^'"]+)['"]/g)) {
+    out.add(stem(path.posix.normalize(path.posix.join(path.posix.dirname(testPath), m[1]))))
+  }
+  return out
+}
+
+/** Why a commit's files make it a suspect for a failing test, or null. */
+export function suspectReason(files, testPath, stems) {
+  for (const f of files) {
+    if (f === testPath) return `changed ${f}`
+    if (stems.has(stem(f))) return `changed ${f}, which ${path.posix.basename(testPath)} imports`
+  }
+  return null
+}
+
 function annotations(repo, jobId) {
   try {
     return gh(`repos/${repo}/check-runs/${jobId}/annotations?per_page=50`)
@@ -102,15 +139,29 @@ function main() {
   for (const job of failed) {
     const { lastGreen, firstRed, isNew } = redRange(older, (run) => jobsOf(repo, run.id).find((j) => j.name === job.name)?.conclusion ?? null)
     let commits = []
+    let failingTests = []
+    try { failingTests = failingTestsOf(ghText(`repos/${repo}/actions/jobs/${job.id}/logs`)) } catch { /* log expired or unreadable */ }
     if (lastGreen && firstRed) {
       const cmp = gh(`repos/${repo}/compare/${lastGreen.head_sha}...${firstRed.head_sha}`)
+      const tests = failingTests.map((t) => {
+        let content = ''
+        try { content = Buffer.from(gh(`repos/${repo}/contents/${t}?ref=${firstRed.head_sha}`).content ?? '', 'base64').toString('utf8') } catch { /* deleted since */ }
+        return { t, stems: importStemsOf(t, content) }
+      })
       commits = (cmp.commits ?? []).map((c) => {
         const subject = c.commit.message.split('\n')[0]
-        return { sha: c.sha.slice(0, 9), subject, owner: owners[subject] ?? null }
+        let suspect = null
+        if (tests.length) {
+          const files = (gh(`repos/${repo}/commits/${c.sha}`).files ?? []).map((f) => f.filename)
+          for (const { t, stems } of tests) suspect ??= suspectReason(files, t, stems)
+        }
+        return { sha: c.sha.slice(0, 9), subject, owner: owners[subject] ?? null, suspect }
       })
+      commits.sort((a, b) => Number(Boolean(b.suspect)) - Number(Boolean(a.suspect)))
     }
     report.jobs.push({
       job: job.name,
+      failingTests,
       failures: annotations(repo, job.id),
       lastGreen: lastGreen && { id: lastGreen.id, sha: lastGreen.head_sha.slice(0, 9), at: lastGreen.created_at },
       firstRed: firstRed && { id: firstRed.id, sha: firstRed.head_sha.slice(0, 9), at: firstRed.created_at },
@@ -122,8 +173,9 @@ function main() {
   console.log(`CI run ${target.id} on main (${target.head_sha.slice(0, 9)}, ${target.created_at}): ${failed.length} failing job(s)`)
   for (const j of report.jobs) {
     console.log(`\n${j.job}: ${j.firstRed ? `red since run ${j.firstRed.id} (${j.firstRed.at})` : 'red'}${j.lastGreen ? `, last green run ${j.lastGreen.id} (${j.lastGreen.at})` : j.isNew ? ', a new job, never green yet' : `, never green in the last ${MAX_RUNS} runs`}`)
+    for (const t of j.failingTests.slice(0, 10)) console.log(`  failing: ${t}`)
     for (const f of j.failures.slice(0, 5)) console.log(`  failure: ${f}`)
-    for (const c of j.commits) console.log(`  ${c.sha} ${c.subject}${c.owner ? `  [${c.owner}]` : ''}`)
+    for (const c of j.commits) console.log(`  ${c.suspect ? 'SUSPECT ' : ''}${c.sha} ${c.subject}${c.owner ? `  [${c.owner}]` : ''}${c.suspect ? `  (${c.suspect})` : ''}`)
   }
 }
 

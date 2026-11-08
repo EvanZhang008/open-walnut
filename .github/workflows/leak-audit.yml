@@ -14,7 +14,7 @@ name: Leak audit
 
 on:
   workflow_run:
-    workflows: [CI, Release, Components, Mac app, Release archives, Binary matrix, Speech runtime, Host network connector, Flake hunt, Push gate, Update star history, Fresh Mac join, Windows join, Windows app]
+    workflows: [CI, Release, Components, Mac app, Release archives, Binary matrix, Speech runtime, Host network connector, Flake hunt, Push gate, Update star history, Fresh Mac join, Windows join, Windows app, macOS WebKit trial]
     types: [completed]
   release:
     types: [published, prereleased]
