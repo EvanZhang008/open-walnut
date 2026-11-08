@@ -15,7 +15,7 @@
  *     until it is heard; a write is a 504 that says it may have been applied;
  *   - a reply too large to carry: a read is answered here; a write says it was applied.
  */
-import { describe, expect, it } from 'vitest'
+import { vi, describe, expect, it } from 'vitest'
 import express from 'express'
 import request from 'supertest'
 import { createV1Forward, macAnswers, type CallOutcome, type PrimarySnapshot } from '../../../src/web/v1-forward/proxy.js'
@@ -451,8 +451,7 @@ describe('the forward on a stream (bridge-stream-v1)', () => {
     const s = await setup()
     const h = forwardOver(s)
     await expect(request(h.app).get('/api/v1/slow').timeout(300)).rejects.toThrow()
-    await new Promise((r) => setTimeout(r, 200))
-    expect(h.fwd.status()).toMatchObject({ suspectAt: null, callerGone: 1 })
+    await vi.waitFor(() => expect(h.fwd.status()).toMatchObject({ suspectAt: null, callerGone: 1 }))
     expect(h.fwd.status().answeredHere).not.toHaveProperty('unanswered')
     const next = await request(h.app).get('/api/v1/tasks/t1/threads?open=1')
     expect(next.headers['x-walnut-answered-by']).toBe('primary')
@@ -469,7 +468,8 @@ describe('the forward on a stream (bridge-stream-v1)', () => {
       }, 800)),
     })
     await expect(request(h.app).get('/api/v1/slow').timeout(200)).rejects.toThrow()
-    await new Promise((r) => setTimeout(r, 1_400))
+    // The stream opens 800 ms in; once it does, the gone caller lets it go.
+    await vi.waitFor(() => expect((opened as { destroyed: boolean } | null)?.destroyed).toBe(true), { timeout: 5_000 })
     expect(h.fwd.status()).toMatchObject({ suspectAt: null, callerGone: 1 })
     expect(opened).not.toBeNull()
     expect(opened!.destroyed).toBe(true)
