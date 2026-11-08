@@ -141,7 +141,12 @@ struct UserStatePill: View {
 struct TeamStatusSection: View {
     let ownerId: String
     @Environment(TasksStore.self) private var tasks
-    @State private var filter: UserState? = nil
+    /// The state chip picked (nil = All open), kept across a relaunch (`ViewMemory`).
+    @AppStorage(ViewMemory.key("team", "filter"), store: AppPrefs.defaults) private var filterRaw = ""
+    private var filter: UserState? {
+        get { UserState(rawValue: filterRaw) }
+        nonmutating set { filterRaw = newValue?.rawValue ?? "" }
+    }
     @State private var opened: WalnutTask?
     @State private var teamBusy = false
     @State private var teamError: String?

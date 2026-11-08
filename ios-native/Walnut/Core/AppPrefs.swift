@@ -58,6 +58,6 @@ enum AppPrefs {
 
     /// The app's own keys (the suite also lists the global domain's).
     static func isOurs(_ key: String) -> Bool {
-        key.hasPrefix("walnut") || key.hasPrefix("tasks.") || key.hasPrefix("notes.")
+        key.hasPrefix("walnut") || key.hasPrefix("tasks.") || key.hasPrefix("notes.") || key.hasPrefix("org.")
     }
 }

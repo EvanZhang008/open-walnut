@@ -314,7 +314,8 @@ struct SessionFileViewer: View {
     /// The whole failure, not just its sentence: the empty state needs the
     /// headline and the retry decision too.
     @State private var loadFailure: FileReadFailure?
-    @State private var showSource = false
+    /// Source or preview of an HTML file: the reader's pick, kept (`ViewMemory`).
+    @AppStorage(ViewMemory.key("files", "showSource"), store: AppPrefs.defaults) private var showSource = false
     /// Set when the resolver found the file somewhere else.
     @State private var healedPath: String?
     @State private var healedNotice: String?

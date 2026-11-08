@@ -192,6 +192,12 @@ struct SessionConversationView: View {
             .navigationDestination(item: $orgRoute) { route in
                 OrgNodePage(route: route)
             }
+            // The page over the chat is kept per node, so a relaunch or a return puts it back;
+            // Back forgets it (`ViewMemory`).
+            .onChange(of: orgRoute) { _, route in
+                guard let nodeId = route?.nodeId ?? orgNode?.id else { return }
+                ViewMemory.write(route?.tab, "org", "page", id: nodeId)
+            }
             .onAppear { openOrgPageOnOpen() }
             .onChange(of: orgNode?.id) { openOrgPageOnOpen() }
             .onChange(of: orgPageOnOpen) { orgPageOnOpenDone = false; openOrgPageOnOpen() }
@@ -707,9 +713,20 @@ struct SessionConversationView: View {
 
     /// The page a push asked for, once, as soon as the chat knows it is an Org node's.
     private func openOrgPageOnOpen() {
-        guard let open = orgPageOnOpen, !orgPageOnOpenDone, orgNode != nil else { return }
-        orgPageOnOpenDone = true
-        openOrgPage(open.tab, threadId: open.threadId)
+        guard !orgPageOnOpenDone, let node = orgNode else { return }
+        if let open = orgPageOnOpen {
+            orgPageOnOpenDone = true
+            openOrgPage(open.tab, threadId: open.threadId)
+        } else if orgRoute == nil, let kept = ViewMemory.readOptional("org", "page", id: node.id, as: OrgNodeTab.self) {
+            // The page he had open over this node's chat when he left it. Pushed once the chat's
+            // own push has settled: pushed in the same moment, Back took both pages off at once
+            // and left the chat under them unopened.
+            orgPageOnOpenDone = true
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(450))
+                if orgRoute == nil { openOrgPage(kept) }
+            }
+        }
     }
 
     private func openOrgPage(_ tab: OrgNodeTab, threadId: String? = nil) {

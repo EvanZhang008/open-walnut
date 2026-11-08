@@ -43,6 +43,12 @@ enum UITestLaunch {
     /// speakers, and that Mac may have a person at it (2026-11-08).
     static let silentAudioArguments = ["-walnut.silentAudio", "YES"]
 
+    /// The app opens on what the user left (`ViewMemory`: the tab, the page over an Org chat,
+    /// the shelves and filters); a UI test starts with none of it kept, whatever the run before
+    /// it left open, unless it tests that memory itself (`keepViewsArgument`).
+    static let freshViewsArguments = ["-walnut.uiTestFreshViews", "YES"]
+    static let keepViewsArgument = "-walnut.uiTestKeepViews"
+
     /// An app configured to reach nothing, plus whatever this test asked for.
     ///
     /// Not launched yet: a caller may still want to set `launchEnvironment` or take a
@@ -53,8 +59,10 @@ enum UITestLaunch {
         // An explicit pairing wins. Prepending unconditionally would leave two values
         // for one key in the argument domain and make the winner an ordering detail.
         let pinsItsOwnServer = arguments.contains(serverURLArgument)
+        let keepsViews = arguments.contains(keepViewsArgument)
         app.launchArguments =
-            (pinsItsOwnServer ? [] : [serverURLArgument, blackholeURL]) + keychainArguments + silentAudioArguments + arguments
+            (pinsItsOwnServer ? [] : [serverURLArgument, blackholeURL]) + keychainArguments + silentAudioArguments
+            + (keepsViews ? [] : freshViewsArguments) + arguments
         return app
     }
 

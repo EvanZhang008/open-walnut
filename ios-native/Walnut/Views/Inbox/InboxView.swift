@@ -21,7 +21,8 @@ struct InboxView: View {
 
     /// Push-navigation path of letter ids. A deep link from a push replaces it.
     @State private var path: [String] = []
-    @State private var showArchived = false
+    /// The Archived shelf, kept across a relaunch like every view choice (`ViewMemory`).
+    @AppStorage(ViewMemory.key("inbox", "showArchived"), store: AppPrefs.defaults) private var showArchived = false
     @State private var deepLink = LetterDeepLink.shared
     /// The clock the Action needed grace window is judged against. Re-taken on
     /// appear and on a filter change, and advanced by ONE timer armed for the

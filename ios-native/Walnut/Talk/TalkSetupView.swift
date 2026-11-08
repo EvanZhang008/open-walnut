@@ -496,7 +496,7 @@ struct TalkUnsentSheetModifier: ViewModifier {
     @State private var showing = false
     /// Entries already offered, kept across launches so a cold start does not
     /// offer the same words again.
-    @AppStorage("walnut.talk.offeredUnsent") private var offeredRaw = ""
+    @AppStorage("walnut.talk.offeredUnsent", store: AppPrefs.defaults) private var offeredRaw = ""
     @Environment(\.scenePhase) private var scenePhase
 
     func body(content: Content) -> some View {

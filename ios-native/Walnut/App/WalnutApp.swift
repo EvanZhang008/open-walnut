@@ -20,6 +20,8 @@ struct WalnutApp: App {
         // Arm the activation gate before anything else so every subsystem
         // below can ask "are we actually in front of the user?".
         _ = LaunchGate.shared
+        // A UI test starts from no kept view choices (UITestLaunch), whatever the run before left.
+        ViewMemory.eraseWhenAsked()
         LaunchTrace.mark(
             LaunchGate.shared.launchedInBackground
                 ? "app init (BACKGROUND launch — prewarm/push)"
@@ -246,7 +248,7 @@ struct MainTabView: View {
     /// and a tapped letter push needs Inbox (its list owns the reader). A warm
     /// launch can land on any tab, so neither consumer can assume it is on
     /// screen when the request arrives.
-    enum Tab: Hashable { case chat, inbox, notes, tasks, settings }
+    enum Tab: String, Hashable { case chat, inbox, notes, tasks, settings }
 
     /// Which time-tracking lane a tab counts as. The Chat tab is the main-agent
     /// conversation, so it is `chat`; every other tab is `triage` — the board,
@@ -277,7 +279,11 @@ struct MainTabView: View {
         }
     }
 
-    @State private var selection: Tab = .chat
+    /// The tab the user left, kept across a relaunch (`ViewMemory`): each tab puts back its
+    /// own page (the Chat tab's session, the Tasks tab's last opened), so a launch that always
+    /// came up on Chat left the VP he had open on Tasks behind Ask Walnut. A push, a link or
+    /// the voice Quick Action still picks its own tab below.
+    @State private var selection: Tab = ViewMemory.read("app", "tab", initial: Tab.chat)
     @State private var quickAction = VoiceQuickAction.shared
     @State private var letterLink = LetterDeepLink.shared
     /// Approvals a script waits on (`walnut approve`): their sheet opens over any tab.
@@ -369,6 +375,7 @@ struct MainTabView: View {
             filePreview?.setComposerSurfaceBase(Self.composerSurface(for: selection))
         }
         .onChange(of: selection) { _, tab in
+            ViewMemory.write(tab, "app", "tab")
             AttentionContext.shared.setBase(Self.attentionTarget(for: tab))
             filePreview?.setComposerSurfaceBase(Self.composerSurface(for: tab))
             // Leaving the Inbox ends the visit the Unread filter was keeping read

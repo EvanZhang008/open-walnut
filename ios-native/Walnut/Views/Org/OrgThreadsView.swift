@@ -16,7 +16,7 @@ struct OrgThreadsView: View {
 
     // Snoozed and In progress stay as he left them, per node (the web keeps a view per node);
     // Closed is history, so every visit starts with it folded.
-    @AppStorage("org.threads.openFolds") private var openFolds = ""
+    @AppStorage("org.threads.openFolds", store: AppPrefs.defaults) private var openFolds = ""
     @State private var showClosed = false
 
     private func isOpen(_ fold: String) -> Bool {

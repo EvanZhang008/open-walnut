@@ -45,7 +45,7 @@ struct ChatDrawer: View {
     var openOrgNode: (ChatOrgModel.Row) -> Void = { _ in }
 
     /// Org (the default) or Chats; the user's pick is kept.
-    @AppStorage(ChatDrawerView.storageKey) private var viewPick = ChatDrawerView.org.rawValue
+    @AppStorage(ChatDrawerView.storageKey, store: AppPrefs.defaults) private var viewPick = ChatDrawerView.org.rawValue
     /// The org as last read (`GET /org`), reloaded each time the drawer comes out.
     @State private var orgTree: OrgTreeWire?
     /// false: this server has no org (an older one), so the drawer is only its list.

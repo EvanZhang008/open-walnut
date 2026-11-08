@@ -15,7 +15,8 @@ struct TaskTagPills: View {
     /// ("Fix plan r5b") after its kind's icon, like the console's, never the raw path or URL.
     var links: [LinkTagView] = []
 
-    @State private var showHidden = false
+    /// Hidden tags shown: the reader's pick, kept (`ViewMemory`).
+    @AppStorage(ViewMemory.key("tags", "showHidden"), store: AppPrefs.defaults) private var showHidden = false
     @State private var shownFile: LinkTagView?
     @Environment(\.openURL) private var openURL
     @Environment(\.dynamicTypeSize) private var typeSize

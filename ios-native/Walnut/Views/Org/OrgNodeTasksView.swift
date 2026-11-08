@@ -8,13 +8,13 @@ struct OrgNodeTasksView: View {
     let isMain: Bool
 
     @Environment(TasksStore.self) private var tasks
-    @AppStorage("org.node.tasksMode") private var modeRaw = OrgNodeTasksModel.Mode.status.rawValue
+    @AppStorage("org.node.tasksMode", store: AppPrefs.defaults) private var modeRaw = OrgNodeTasksModel.Mode.status.rawValue
     @State private var tree: OrgTreeWire?
     @State private var loaded = false
     @State private var error: String?
     /// Sections the user opened or closed, kept per node ("nodeId/section" keys); the rest
     /// follow their default.
-    @AppStorage("org.node.tasksFlipped") private var flippedRaw = ""
+    @AppStorage("org.node.tasksFlipped", store: AppPrefs.defaults) private var flippedRaw = ""
     private var flipped: Set<String> {
         Set(flippedRaw.split(separator: " ").compactMap { key in
             let parts = key.split(separator: "/", maxSplits: 1)
