@@ -108,6 +108,10 @@ export const ThreadReplyBox = memo(function ThreadReplyBox(p: ThreadReplyBoxProp
           onPaste={pictureInput.onPaste}
           onKeyDown={onKeyDown}
           onFocus={p.onFocus}
+          // Written at once as the keyboard leaves (a press on the card's head
+          // opens the card, which reads the draft as it mounts): never left on
+          // the debounce for the card to miss (macOS WebKit, 2026-11-08).
+          onBlur={draft.flush}
         />
         <AttachPictureButton pictures={pictures} className="thread-card-attach" testId="thread-card-attach" disabled={!p.canAsk || sending} />
         <BoxMic className="thread-card-mic" boxRef={boxRef} text={text} setText={setText} handleRef={mic} disabled={!p.canAsk || sending} />
