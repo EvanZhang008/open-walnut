@@ -36,7 +36,7 @@ only on failures absent from the list, so you get a yes/no answer instead of
 eyeballing an aggregate. Fixed some? `bun run test:baseline:record`.
 
 ⚠️ **Never raise the worker budget** (`tests/setup/worker-budget.ts`, 1 worker
-locally). Uncapped fan-out hard-crashed the dev Mac twice in July 2026. `bun run test`
+locally). Uncapped fan-out hard-crashed the dev Mac twice in July 2026. `bun run test:ci`
 runs tiers *sequentially* for the same reason — don't "optimise" it back to parallel.
 
 ### The mergeConfig trap (cost 2× suite runtime for months)
@@ -94,7 +94,7 @@ of everything except e2e/commands/live/frontend-rooted. Membership is decided by
 *measured* time — the >2s list lives in `tests/setup/slow-tests.ts`. Re-measure
 rather than hand-editing it.
 
-`scripts/test-parallel.mjs` (`bun run test`) runs the set CI runs, quick, slow,
+`scripts/test-parallel.mjs` (`bun run test:ci`) runs the set CI runs, quick, slow,
 e2e, then the four frontend configs, **sequentially** (it used to be
 `Promise.all`, which multiplied the worker cap by 6 and crashed the machine).
 Until 2026-10-24 it ran unit + integration instead of quick + slow and missed
@@ -103,7 +103,7 @@ Until 2026-10-24 it ran unit + integration instead of quick + slow and missed
 
 ## Judging whether YOUR change caused a failure (read before you panic)
 
-The suite has a meaningful baseline of **pre-existing failures**: a full `bun run test` /
+The suite has a meaningful baseline of **pre-existing failures**: a full `bun run test:ci` /
 full-integration run reports a large, scary aggregate number that is mostly NOT your fault.
 Do **not** judge regressions from the aggregate count. Instead:
 

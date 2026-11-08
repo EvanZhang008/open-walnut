@@ -153,7 +153,7 @@ New patterns → append to Learned Patterns below. Console-related → also upda
 ## Test Reference
 
 ```bash
-bun run test                # Unit + Integration (~5s)
+bun run test                # the tests of your change (about a minute)
 bun run test:e2e            # E2E real server (~15s)
 bun run test:all            # Everything
 bun run test:focus <file>   # Single test

@@ -1,10 +1,24 @@
 # Testing pipeline
 
-Layers chosen so the one you run most often is the one that costs least. Run `bun run test:local` on every change, `bun run test:land` before you land (the land runs it too), `bun run test:pre-commit` before a bigger commit, and let GitHub Actions run everything on push: Actions is free for this repo (public repos get unlimited minutes on GitHub-hosted runners). Cross-machine features additionally need the L5 live journey before they count as done.
+## Two layers: the repository's own, and a maintainer's setup on top
+
+Anyone develops Walnut with the repository alone: `bun install`, then `bun run test` while
+working (the tests the change touches, about a minute), `bun run test:land` before a pull request
+(every test the change needs, a few minutes), and GitHub's CI runs every tier on the pull request.
+No remote machine, private script or GitHub run is needed to develop or test. The heavier tiers
+(slow, e2e, browser, iOS, release rehearsals) belong on GitHub's runners, not on a laptop.
+
+A maintainer's own setup (a land queue, a deploy, a test gate before a push to main) only adds
+steps on top of those commands, never another copy of them: the light run happens wherever the
+work is, the heavier ones on GitHub, then the merge. Nothing here chooses which machine runs a
+test; the brakes that protect any computer (the Playwright lease on :3457 and its load wait, the
+local worker budget) are in the repository and apply everywhere.
+
+Layers chosen so the one you run most often is the one that costs least. Run `bun run test` (the same as `test:local`) on every change, `bun run test:land` before you land (the land runs it too), `bun run test:pre-commit` before a bigger commit, and let GitHub Actions run everything on push: Actions is free for this repo (public repos get unlimited minutes on GitHub-hosted runners). Cross-machine features additionally need the L5 live journey before they count as done.
 
 | Layer | Command | Scope | Time | When |
 |---|---|---|---|---|
-| **L0 local** | `bun run test:local` | the tests of your change: its own tests, the fast direct importers, the cheapest scan tests | about a minute | every code change |
+| **L0 local** | `bun run test` / `test:local` | the tests of your change: its own tests, the fast direct importers, the cheapest scan tests | about a minute | every code change |
 | **Land** | `bun run test:land` | every test the change needs, run to the end: its own tests (quick and slow tier), every quick test importing or naming a changed file, the scan tests up to 6 s; no timer, no budget | a few minutes | before a land; the land check runs it |
 | **L1 quick** | `bun run test:quick` | the whole quick tier, ~3,200 files | ~10 min at 8 workers, much longer at 1 | when a change reaches far; the push gate runs it on GitHub |
 | **L2 focus** | `bun run test:focus <path>` | whatever you name | 0.3 to 30 s | while working on one module |
@@ -194,6 +208,6 @@ Do not raise the local budget to "speed things up" — run L1, or L2 on the file
 | frontend | 11 | 10 s | 158 tests, baseline **zero** → blocks CI |
 | e2e | 103 | ~120 s | own tier, own config |
 
-`bun run test` (`scripts/test-parallel.mjs`) runs exactly the set CI runs, one tier after another: quick, slow, e2e, then the four frontend configs through `scripts/test-frontend.mjs`. Until 2026-10-24 it ran unit + integration + e2e + three frontend configs instead, which missed 201 files that CI runs (`tests/scripts`, `tests/lib`, `tests/replica`, `tests/setup`, `tests/integration` and others) and the notes-roundtrip config. Every unit and integration file is in quick or slow, so nothing dropped out. `bun run test:unit` and `test:integration` still run those two configs on their own.
+`bun run test:ci` (`scripts/test-parallel.mjs`) runs exactly the set CI runs, one tier after another: quick, slow, e2e, then the four frontend configs through `scripts/test-frontend.mjs`. Until 2026-10-24 it ran unit + integration + e2e + three frontend configs instead, which missed 201 files that CI runs (`tests/scripts`, `tests/lib`, `tests/replica`, `tests/setup`, `tests/integration` and others) and the notes-roundtrip config. Every unit and integration file is in quick or slow, so nothing dropped out. `bun run test:unit` and `test:integration` still run those two configs on their own.
 
 Before 2026-07-25 the unit and integration tiers each collected ~336 files — the whole suite — because `mergeConfig` **concatenates** `include` arrays instead of replacing them, so each tier's narrowing list was appended to the base's `tests/**`. `npm test` therefore ran nearly every test twice (349 s + 397 s). Both configs now assign `include`/`exclude` after the merge; `tests/setup/quick-tier.test.ts` guards against the regression.

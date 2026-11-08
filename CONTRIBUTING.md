@@ -25,17 +25,21 @@ with `bun patch <package>` (Bun applies them on every install).
 ## Running Tests
 
 ```bash
-bun run test          # unit + integration + e2e (parallel)
+bun run test          # the tests your change touches, about a minute: run this while you work
+bun run test:land     # every test your change needs, to the end: a few minutes, before you open a PR
 bun run lint          # TypeScript type check
-bun run test:all      # lint + all tests + Playwright browser tests
+bun run test:ci       # every tier CI runs (hours on a laptop): CI runs it for your PR, so you rarely need to
 ```
+
+Nothing else is needed: no remote machine, no private script. The heavy tiers (slow, e2e,
+browser, iOS, release rehearsals) run on GitHub's runners when you open a pull request.
 
 ## Making Changes
 
 1. **Fork** the repo and create a branch from `main`
 2. **Write tests** for any new functionality
 3. **Run `bun run lint`**: no type errors allowed
-4. **Run `bun run test`**: all tests must pass
+4. **Run `bun run test`** while you work and **`bun run test:land`** before you open the PR: both must pass; CI runs the rest
 5. **Keep changes focused** — one feature or fix per PR
 
 ## Code Style

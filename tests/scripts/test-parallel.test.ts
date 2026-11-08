@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
 
-describe('bun run test', () => {
+describe('bun run test:ci', () => {
   const r = spawnSync(process.execPath, [path.join(ROOT, 'scripts/test-parallel.mjs'), '--list'], { cwd: ROOT, encoding: 'utf-8' })
 
   it('runs quick, slow, e2e and the frontend script, in that order', () => {
@@ -27,6 +27,8 @@ describe('bun run test', () => {
   it('names the same frontend script CI runs', () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf-8'))
     expect(pkg.scripts['test:frontend:ci']).toBe('bun scripts/test-frontend.mjs')
-    expect(pkg.scripts.test).toBe('bun scripts/test-parallel.mjs')
+    expect(pkg.scripts['test:ci']).toBe('bun scripts/test-parallel.mjs')
+    // The default is the light layer (the tests of the change); the whole set CI runs is test:ci.
+    expect(pkg.scripts.test).toBe('bun scripts/test-layers.mjs run local')
   })
 })

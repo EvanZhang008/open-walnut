@@ -2,7 +2,7 @@
 /**
  * The three test layers, chosen by cost and by what a change touches.
  *
- *   L0 local  `bun run test:local`        while coding: the change's own tests, the fast tests (under
+ *   L0 local  `bun run test` (test:local) while coding: the change's own tests, the fast tests (under
  *                                          1.5 s each) importing or naming a changed file, and the
  *                                          cheapest scan tests (ratchets, guards); about a minute.
  *                                          `--all`: every fast file of the quick tier
@@ -184,8 +184,27 @@ export const landLayer = (changed, opts) => scopedLayer('land', changed, opts)
 /** The local layer (L0) for a change: the same shape, only fast files. */
 export const localLayer = (changed, opts) => scopedLayer('local', changed, opts)
 
+// A branch further than this from the main line is no one change (a checkout whose main and
+// its remote's carry the same work under other hashes): only its uncommitted edits count then.
+export const MAX_BRANCH_COMMITS = 50
+
+/**
+ * Where a change starts when no --base or WALNUT_DIFF_BASE names it: where this branch left the
+ * main line (upstream/main for a fork's clone, then origin/main, then a local main), else HEAD,
+ * so `bun run test` in any clone judges the branch's commits and its uncommitted edits alike.
+ */
+export function defaultBase(run = git) {
+  for (const ref of ['upstream/main', 'origin/main', 'main']) {
+    const at = run(['merge-base', 'HEAD', ref]).trim()
+    if (!at) continue
+    const ahead = Number(run(['rev-list', '--count', `${at}..HEAD`]).trim() || 0)
+    return ahead > MAX_BRANCH_COMMITS ? 'HEAD' : at
+  }
+  return 'HEAD'
+}
+
 function parseArgs(argv) {
-  const o = { cmd: argv[0], layer: argv[1], base: process.env.WALNUT_DIFF_BASE || 'HEAD', json: null, all: false, extra: [] }
+  const o = { cmd: argv[0], layer: argv[1], base: process.env.WALNUT_DIFF_BASE || null, json: null, all: false, extra: [] }
   for (let i = 2; i < argv.length; i++) {
     if (argv[i] === '--base') o.base = argv[++i]
     else if (argv[i] === '--json') o.json = argv[++i]
@@ -193,6 +212,7 @@ function parseArgs(argv) {
     else if (argv[i] === '--all') o.all = true
     else o.extra.push(argv[i])
   }
+  o.base ??= defaultBase()
   return o
 }
 

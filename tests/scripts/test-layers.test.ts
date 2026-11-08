@@ -143,3 +143,19 @@ describe('the import graph', () => {
     expect([...buildImportGraph(root).testsWithin(['web/src/c.ts'], 1).keys()]).toEqual(['tests/c.test.ts'])
   })
 })
+
+describe('the default base', () => {
+  const fake = (bases: Record<string, string>, ahead: number) => (args: string[]) =>
+    args[0] === 'merge-base' ? (bases[args[2]!] ?? '') : args[0] === 'rev-list' ? String(ahead) : ''
+
+  it("is where the branch left the main line, a fork's upstream first", () => {
+    expect(layers.defaultBase(fake({ 'upstream/main': 'u1', 'origin/main': 'o1' }, 3))).toBe('u1')
+    expect(layers.defaultBase(fake({ 'origin/main': 'o1' }, 3))).toBe('o1')
+    expect(layers.defaultBase(fake({ main: 'm1' }, 0))).toBe('m1')
+  })
+
+  it('is HEAD with no main line, or one too far behind to be one change', () => {
+    expect(layers.defaultBase(fake({}, 0))).toBe('HEAD')
+    expect(layers.defaultBase(fake({ 'origin/main': 'o1' }, layers.MAX_BRANCH_COMMITS + 1))).toBe('HEAD')
+  })
+})
