@@ -361,6 +361,11 @@ struct MainTabView: View {
                 selection = .chat
             } else if letterLink.pending != nil {
                 selection = .inbox
+            } else if orgLink.pending != nil || contentLink.chat != nil {
+                // A cold launch from a link: its tab, never the one kept from before.
+                selection = .chat
+            } else if contentLink.draft != nil {
+                selection = .tasks
             }
             // The selected tab IS the base time-tracking lane. Read from the
             // selection rather than from each tab's onAppear: TabView keeps

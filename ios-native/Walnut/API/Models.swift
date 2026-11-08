@@ -1277,6 +1277,8 @@ enum APIError: Error, LocalizedError {
     var isConflict: Bool { code == "conflict" }
     /// 503 — the task projection hasn't synced yet on a fresh companion.
     var isUnavailable: Bool { code == "unavailable" }
+    /// 503 — the companion could not get from the Mac what only the Mac keeps (Threads) just now.
+    var isPrimaryOnly: Bool { code == "primary_only" }
     /// 503 — the primary box (this session's host) has no live bridge right now.
     var isBridgeOffline: Bool { code == "bridge_offline" }
     /// 409 — the session's CLI process is gone; can't accept new messages.

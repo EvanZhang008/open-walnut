@@ -302,6 +302,11 @@ struct ChatView: View {
             return
         }
         openedAskSession = session
+        // The page he had open over an Org node's chat comes back over it (`ViewMemory`, kept per
+        // node while it is open); only here, at the launch restore: a chat opened on purpose
+        // later opens as the chat.
+        let keptPage = session.taskId.flatMap { ViewMemory.readOptional("org", "page", id: $0, as: OrgNodeTab.self) }
+        if let keptPage { orgPageOnOpen = (session.id, OrgNodePageOpen(tab: keptPage, threadId: nil)) }
         // The task may have moved on to another session since (Main restarts, an
         // ask resumed elsewhere): its current one is where the user's chat is now.
         guard let taskId = session.taskId, !taskId.isEmpty else { return }
@@ -321,6 +326,7 @@ struct ChatView: View {
             tasks?.noteSessionIds(taskId: taskId, ids: detail.sessionIds ?? [])
             let resolved = await tasks?.resolveSession(id: current, task: tasks?.tasks.first { $0.id == taskId })
             guard let resolved, openedAskSession?.id == session.id else { return }
+            if let keptPage { orgPageOnOpen = (resolved.id, OrgNodePageOpen(tab: keptPage, threadId: nil)) }
             openedAskSession = resolved
         }
     }

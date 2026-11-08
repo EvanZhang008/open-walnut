@@ -40,12 +40,11 @@ final class OrgThreadsStore {
             let read: OrgThreadsRead
             do {
                 read = try await WalnutAPI().orgThreads(taskId: taskId)
-            } catch let first as APIError where !first.isCancelled && threads == nil {
+            } catch let first as APIError where first.isPrimaryOnly && threads == nil {
                 // Threads live on the Mac only: through the companion one read may land in a
-                // moment it cannot reach the Mac (2026-11-08). Once more before the page says so.
-                try await Task.sleep(for: .milliseconds(1_500))
-                guard gen == generation else { return }
-                read = try await WalnutAPI().orgThreads(taskId: taskId)
+                // moment it cannot reach the Mac (2026-11-08). The companion asks the Mac again
+                // once it is heard (its beat is 15 s), so twice more within that before the page says so.
+                read = try await retryUnavailable(gen: gen)
             }
             guard gen == generation else { return }
             threads = read.threads
@@ -59,6 +58,18 @@ final class OrgThreadsStore {
             self.error = threads == nil ? "Couldn't load the threads. Pull to try again." : "Couldn't refresh the threads."
             AppLog.warn("org", "threads load failed", ["taskId": taskId, "error": error.localizedDescription])
         }
+    }
+
+    private func retryUnavailable(gen: Int) async throws -> OrgThreadsRead {
+        var lastError: Error = APIError.cancelled
+        for wait in [2_000, 8_000] {
+            try await Task.sleep(for: .milliseconds(wait))
+            guard gen == generation else { throw CancellationError() }
+            do { return try await WalnutAPI().orgThreads(taskId: taskId) } catch let e as APIError where e.isPrimaryOnly {
+                lastError = e
+            }
+        }
+        throw lastError
     }
 
     /// One thread read whole in place of its cut copy (a Conversation opened). An older server

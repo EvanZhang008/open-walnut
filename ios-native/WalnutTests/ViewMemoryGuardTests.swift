@@ -7,9 +7,10 @@ import XCTest
 /// when a NEW member appears:
 ///
 /// 1. a view choice held in `@State` from a literal: a picker enum of the app (`enum X: String,
-///    CaseIterable`), or a name that says it is one (`show…`, `tab`, `mode`, `filter`, `sort…`,
-///    `grouping`, `view…`, `scope`), not read through `ViewMemory` and not the flag of a sheet,
-///    alert or dialog, unless it is listed below with why;
+///    CaseIterable`, annotated or inferred from `= X.case`), or a name that says it is one
+///    (`show…`, `…Tab`, `…Mode`, `…Filter`, `segment…`, `page`, `sort…`, `grouping`, `view…`,
+///    `scope`), neither read from `ViewMemory` with the file writing it back nor the flag of a
+///    sheet, alert or dialog, unless it is listed below with why;
 /// 2. an `@AppStorage` without `store: AppPrefs.defaults` (it would write the demo's choices
 ///    into the real app's preferences);
 /// 3. the app's tab, or the page over an Org node's chat, no longer kept.
@@ -24,6 +25,9 @@ final class ViewMemoryGuardTests: XCTestCase {
         "Views/Sessions/SessionConversationView.swift:showRename": "the rename alert's flag, passed to the menu by binding",
         "Views/Sessions/NewSessionSheet.swift:mode": "a new draft's permission mode, from the draft start rule",
         "Views/Sessions/NewSessionChatView.swift:mode": "a new draft's permission mode, from the draft start rule",
+        "Views/Calendar/CalendarTimelineView.swift:page": "the timeline's paging position, not a choice",
+        "Views/Inbox/InboxView.swift:editMode": "select mode, a gesture in progress, not a view choice",
+        "Views/Sessions/SessionPathPicker.swift:hostFilter": "typed search text, which starts empty like the web's",
     ]
 
     private static var appRoot: URL {
@@ -60,17 +64,19 @@ final class ViewMemoryGuardTests: XCTestCase {
         let files = try sources()
         let pickerEnums = Set(files.flatMap { Self.matches(#"enum (\w+)\s*:\s*String\s*,[^{]*CaseIterable"#, $0.text).compactMap { $0[1] } })
         XCTAssertTrue(pickerEnums.contains("OrgNodeTab"), "the enum scan found the app's picker enums")
-        let viewName = try NSRegularExpression(pattern: #"^(show[A-Z]\w*|tab|mode|filter|selection|grouping|sort\w*|view\w*|scope)$"#)
+        let viewName = try NSRegularExpression(pattern: #"^(show[A-Z]\w*|\w*[Tt]ab|\w*[Mm]ode|\w*[Ff]ilter|segment\w*|page|sort\w*|grouping|view[A-Z]?\w*|scope)$"#)
         var found: [String] = []
         var seen = Set<String>()
         for (path, text) in files {
             for line in text.components(separatedBy: "\n") where !line.trimmingCharacters(in: .whitespaces).hasPrefix("//") {
-                for m in Self.matches(#"@State\s+(?:private\s+)?var\s+(\w+)\s*(?::\s*([\w.]+)\??)?\s*=\s*(.+)"#, line) {
+                for m in Self.matches(#"@State\s+(?:(?:private|fileprivate)(?:\(set\))?\s+)?var\s+(\w+)\s*(?::\s*([\w.]+)\??)?\s*=\s*(.+)"#, line) {
                     guard let name = m[1], let initial = m[3] else { continue }
+                    // The type as written, else the one `= X.case` infers.
                     let type = m[2]?.split(separator: ".").last.map(String.init)
+                        ?? Self.matches(#"^\s*(\w+)\.\w+"#, initial).first?[1]
                     let named = viewName.firstMatch(in: name, range: NSRange(location: 0, length: (name as NSString).length)) != nil
                     guard named || (type.map(pickerEnums.contains) ?? false) else { continue }
-                    if initial.contains("ViewMemory.") { continue }
+                    if initial.contains("ViewMemory."), text.contains("ViewMemory.write(") { continue }
                     if !Self.matches(#"(isPresented:|item:)\s*\$"# + name + #"\b"#, text).isEmpty { continue }
                     let key = "\(path):\(name)"
                     seen.insert(key)
@@ -91,7 +97,8 @@ final class ViewMemoryGuardTests: XCTestCase {
         var found: [String] = []
         for (path, text) in try sources() {
             for (i, line) in text.components(separatedBy: "\n").enumerated()
-            where line.contains("@AppStorage(") && !line.contains("store: AppPrefs.defaults") {
+            where line.contains("@AppStorage(") && !line.trimmingCharacters(in: .whitespaces).hasPrefix("//")
+                && !line.contains("store: AppPrefs.defaults") {
                 found.append("\(path):\(i + 1)")
             }
         }
@@ -104,7 +111,10 @@ final class ViewMemoryGuardTests: XCTestCase {
         XCTAssertTrue(app.contains(#"ViewMemory.write(tab, "app", "tab")"#), "a tab change is no longer kept")
         let chat = try String(contentsOf: Self.appRoot.appendingPathComponent("Views/Sessions/SessionConversationView.swift"), encoding: .utf8)
         XCTAssertTrue(chat.contains(#"ViewMemory.write(route?.tab, "org", "page""#), "the page over an Org node's chat is no longer kept")
-        XCTAssertTrue(chat.contains(#"ViewMemory.readOptional("org", "page""#), "the kept Org page is no longer put back")
+        for restore in ["Views/Chat/ChatView.swift", "Views/Tasks/TasksTabView.swift"] {
+            let text = try String(contentsOf: Self.appRoot.appendingPathComponent(restore), encoding: .utf8)
+            XCTAssertTrue(text.contains(#"ViewMemory.readOptional("org", "page""#), "\(restore): its launch restore no longer puts the kept Org page back")
+        }
     }
 
     func testReadWriteRoundTrip() {
