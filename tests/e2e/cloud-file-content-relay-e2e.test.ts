@@ -36,6 +36,7 @@ import { startServer, stopServer } from '../../src/web/server.js'
 import { createDevice, _resetDeviceAuthForTesting } from '../../src/core/device-auth.js'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { withPreviewBridge } from '../../src/web/preview-bridge.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const HOST_ALIAS = 'relaybox'
@@ -210,7 +211,9 @@ describe('phone → cloud server → /bridge → real daemon → file bytes', ()
     const res = await authedFetch(`/api/v1/file-content?path=${p}&host=${HOST_ALIAS}&raw=1`)
     expect(res.status).toBe(200)
     expect(res.headers.get('content-type')).toContain('text/html')
-    expect(await res.text()).toBe(HTML)
+    // The file's bytes with the Files preview's bridge put in first (src/web/preview-bridge.ts),
+    // as every HTML document the raw route serves; the bridge does nothing without a parent.
+    expect(await res.text()).toBe(withPreviewBridge(HTML))
   })
 
   it('JSON mode serves the viewer payload with contentHash', async () => {
