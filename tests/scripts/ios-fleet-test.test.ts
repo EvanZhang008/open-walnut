@@ -35,6 +35,8 @@ interface Mac {
   logNoResult?: boolean
   /** Its load at each host_load call in turn (the last one repeats): a Mac that frees up. */
   loadSeq?: (number | null)[]
+  /** The background start fails this many times first, with this error (default: Walnut never took it). */
+  startFails?: number; startError?: string
   /** Each run started there in turn ends with these (the last one repeats): busy, then free. */
   resultSeq?: { exit: number; state: string }[]
 }
@@ -82,6 +84,9 @@ if (op === 'host_copy') {
 }
 if (op === 'task_get') out({ task: { title: (JSON.parse(fs.readFileSync(path.join(dir, 'scenario.json'), 'utf8')).taskText) || 'iOS board layout', description: '' } })
 if (op === 'host_copy_result') out({ running: false, outcome: 'Copied to ' + args.copy_id })
+if (op === 'host_exec' && args.background && turn('start-' + args.host) < (mac(args.host).startFails || 0)) {
+  process.stderr.write(mac(args.host).startError || 'walnut: hub_unreachable: "host_exec" needs the Walnut server, which is not answering this host right now.\\nwalnut: host_exec did not reach the Walnut server, so nothing ran on ' + args.host + '; call it again once the server answers.'); process.exit(1)
+}
 if (op === 'host_exec') {
   // An edit to the script while it runs (a commit, the editor), written in place.
   const edit = path.join(dir, 'edit-script')
@@ -256,6 +261,22 @@ describe('ios-fleet-test.sh', () => {
     expect(r2.stderr).not.toContain('same_host')
     expect(r2.calls.filter((c) => c.op === 'host_copy' && (c.args.to_host === '__local__' || c.args.from_host === '__local__'))).toHaveLength(2)
     expect(r2.stderr).toContain('Passed: 41 passed')
+  })
+
+  it('a start Walnut never took is asked again; one that may have reached the Mac is not', () => {
+    // 2026-11-08: the server was away for a moment, and a run that had waited hours for a
+    // calm Mac gave up with "could not start the run".
+    const r = run(['unit'], fakeWalnut([{ host: 'mac-mini', loadPerCpu: 0.2, startFails: 2 }], outTgz()))
+    expect(r.status, r.stderr).toBe(0)
+    expect(r.calls.filter((c) => c.op === 'host_exec' && c.args.background)).toHaveLength(3)
+    expect(r.stderr).toContain('nothing ran); asking again')
+    expect(r.stderr).toContain('Passed: 41 passed')
+    fs.rmSync(path.join(dir, 'calls.jsonl'), { force: true })
+    for (const f of fs.readdirSync(dir)) if (f.startsWith('turn-')) fs.rmSync(path.join(dir, f))
+    const lost = run(['unit'], fakeWalnut([{ host: 'mac-mini', loadPerCpu: 0.2, startFails: 1, startError: 'walnut: internal: Walnut API error (503): Walnut lost the Mac while it answered' }], outTgz()))
+    expect(lost.status).not.toBe(0)
+    expect(lost.calls.filter((c) => c.op === 'host_exec' && c.args.background)).toHaveLength(1)
+    expect(lost.stderr).toContain('could not start the run on mac-mini')
   })
 
   // 2026-11-08: run from a Linux devbox, the shortcut "copied" the sources onto themselves

@@ -388,8 +388,20 @@ while IFS=$'\t' read -r H NOTE; do
       say "$(printf '%s' "$sent" | js 'print(d.get("outcome") or "sent")')" ;;
   esac
   SCRIPT="${HERE_BECAUSE:+export SIM_LANE_B_HERE=$(q "$HERE_BECAUSE"); }D=\"\$HOME/$REMOTE_REL\"; mkdir -p \"\$D/src\" && tar -xzf \"\$D/src.tgz\" -C \"\$D/src\" && exec /bin/bash \"\$D/src/ios-native/tests/fleet/remote-run.sh\" \"\$D\" $(q "$MODE" ${FLAGS[@]+"${FLAGS[@]}"} --min-idle "$MIN_IDLE" --max-load "$MAX_LOAD" -- ${ARGS[@]+"${ARGS[@]}"})"
-  started=$(op host_exec "$(python3 -c 'import json,sys; print(json.dumps({"host": sys.argv[1], "argv": ["/bin/bash", "-c", sys.argv[2]], "background": True, "timeout_ms": 7200000}))' "$H" "$SCRIPT")") \
-    || die "could not start the run on $H"
+  START_ARGS=$(python3 -c 'import json,sys; print(json.dumps({"host": sys.argv[1], "argv": ["/bin/bash", "-c", sys.argv[2]], "background": True, "timeout_ms": 7200000}))' "$H" "$SCRIPT")
+  # A start Walnut never received (hub_unreachable: "nothing ran") is asked again, nine times
+  # 10 s apart; one that may have reached the Mac (a timeout, a lost answer) is not, so a run
+  # never starts twice (2026-11-08: the server was away for a moment on a loaded Mac, and a
+  # run that had waited hours for a calm Mac gave up).
+  for i in 1 2 3 4 5 6 7 8 9; do
+    started=$(op host_exec "$START_ARGS" 2>"$LOCAL/.start-err") && break
+    if [ "$i" -lt 9 ] && grep -q 'hub_unreachable' "$LOCAL/.start-err" && grep -q 'nothing ran' "$LOCAL/.start-err"; then
+      say "host_exec: Walnut did not take the start (hub_unreachable, nothing ran); asking again in ${IOS_FLEET_RETRY_SECS:-10} s"
+      sleep "${IOS_FLEET_RETRY_SECS:-10}"; continue
+    fi
+    cat "$LOCAL/.start-err" >&2
+    die "could not start the run on $H"
+  done
   JOB=$(printf '%s' "$started" | js 'print(d.get("jobId") or "")')
   [ -n "$JOB" ] || die "host_exec gave no job id: $started"
   say "running on $H as job $JOB (host_exec_stop stops it)"
