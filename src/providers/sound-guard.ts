@@ -18,7 +18,7 @@ import { ASSIGN, BEFORE_COMMAND, EXEC_FLAGS, WRAPPERS, ANY_SHELL, shellInput, si
 import {
   ALWAYS_PLAYS, AUDIO_FILE_RE, CODE_AUDIO_API_RE, CODE_SPAWN_RE, FFMPEG_AUDIO_OUT_RE, JXA_MUTE_ONLY_RE, MEDIA_APPS_RE,
   OSA_BEEP_RE, OSA_JXA_VOLUME_RE, OSA_MEDIA_TELL_RE, OSA_MUTE_ONLY_RE, OSA_PLAY_RE, OSA_SAVING_RE, OSA_SAY_RE,
-  OSA_SET_VOLUME_RE, OSA_SHELL_RE, STRING_RE,
+  OSA_SET_VOLUME_RE, OSA_SHELL_RE, OSA_APP_VOLUME_RE, STRING_RE,
 } from './sound-rules.js'
 
 const re = (s: string) => new RegExp(s)
@@ -27,7 +27,7 @@ const R = {
   audioFile: re(AUDIO_FILE_RE), mediaApp: re(MEDIA_APPS_RE), ffmpegOut: re(FFMPEG_AUDIO_OUT_RE),
   osaSay: all(OSA_SAY_RE), osaSaving: re(OSA_SAVING_RE), osaBeep: re(OSA_BEEP_RE),
   osaTell: re(OSA_MEDIA_TELL_RE), osaPlay: re(OSA_PLAY_RE), osaShell: all(OSA_SHELL_RE),
-  muteOnly: re(OSA_MUTE_ONLY_RE), jxaVol: all(OSA_JXA_VOLUME_RE), jxaMuteOnly: re(JXA_MUTE_ONLY_RE),
+  muteOnly: re(OSA_MUTE_ONLY_RE), appVolume: re(OSA_APP_VOLUME_RE), jxaVol: all(OSA_JXA_VOLUME_RE), jxaMuteOnly: re(JXA_MUTE_ONLY_RE),
   codeApi: re(CODE_AUDIO_API_RE), spawn: all(CODE_SPAWN_RE), string: all(STRING_RE),
 }
 const PLAYS = new Set<string>(ALWAYS_PLAYS)
@@ -49,7 +49,7 @@ function literal(t: string, i: number): { text: string; end: number } | null {
   if (q !== '"' && q !== "'" && q !== '`') return null
   let out = ''
   for (let k = i + 1; k < t.length; k++) {
-    if (t[k] === '\\' && k + 1 < t.length) { out += t[++k]; continue }
+    if (t[k] === '\\' && k + 1 < t.length) { const e = t[++k]; out += e === 'n' ? '\n' : e === 't' ? '\t' : e; continue }
     if (t[k] === q) return { text: out, end: k + 1 }
     out += t[k]
   }
@@ -68,16 +68,34 @@ function listItems(t: string, i: number): string[] {
     i = lit.end
   }
 }
-const asLine = (words: string[]) => words.map((w) => `"${w}"`).join(' ')
+/** An argv list as a shell line that means the same words: each single-quoted, so nothing in one expands. */
+const asLine = (words: string[]) => words.map((w) => `'${w.split("'").join("'\"'\"'")}'`).join(' ')
+
+/** Where t has a string literal open: a call named inside a string runs nothing (`console.log("execSync(...)")`). */
+function inString(t: string, at: number): boolean {
+  let q = ''
+  for (let k = 0; k < at; k++) {
+    const c = t[k]
+    if (q) { if (c === '\\') k++; else if (c === q) q = '' }
+    else if (c === '"' || c === "'" || c === '`') q = c
+  }
+  return q !== ''
+}
 
 /** The command lines a script's code starts: what each process call's first argument (and its argv list) names. */
 function spawnedLines(raw: string): string[] {
   const t = raw.toLowerCase()
   const out: string[] = []
   for (const m of t.matchAll(R.spawn)) {
-    const i = m.index! + m[0].length
+    if (inString(raw, m.index!)) continue
+    let i = m.index! + m[0].length
     if (m[0] === '$`') { const lit = literal(raw, i - 1); if (lit) out.push(lit.text); continue }
+    // Python: args=[...], and f"...", r"...", b"..." strings.
+    const kw = /^args[ \t]*=[ \t]*/.exec(raw.slice(i))
+    if (kw) i += kw[0].length
     if (raw[i] === '[') { out.push(asLine(listItems(raw, i))); continue }
+    if (/[fFrRbBuU]/.test(raw[i] ?? '') && /["']/.test(raw[i + 1] ?? '')) i++
+    else if (/[fFrRbB]{2}/.test(raw.slice(i, i + 2)) && /["']/.test(raw[i + 2] ?? '')) i += 2
     const lit = literal(raw, i)
     if (!lit) continue
     let j = skipSpace(raw, lit.end)
@@ -108,10 +126,12 @@ export function osaHit(raw: string, depth = 0): string | null {
   if (speaks(t0)) return 'AppleScript say'
   if (R.osaBeep.test(t0)) return 'AppleScript beep'
   if (R.osaTell.test(t) && R.osaPlay.test(t0)) return 'a media app told to play'
+  if (R.appVolume.test(t0)) return 'an app volume change'
   for (let at = t0.indexOf(OSA_SET_VOLUME_RE); at >= 0; at = t0.indexOf(OSA_SET_VOLUME_RE, at + 1)) {
-    if (!R.muteOnly.test(t0.slice(at).split(/[\n;]/)[0])) return 'set volume'
+    // An AppleScript comment (-- or #) ends the statement.
+    if (!R.muteOnly.test(t0.slice(at).split(/[\n;]/)[0].replace(/(--|#).*$/, ''))) return 'set volume'
   }
-  for (const m of t0.matchAll(R.jxaVol)) if (!R.jxaMuteOnly.test(t0.slice(m.index!))) return 'setVolume'
+  for (const m of t.matchAll(R.jxaVol)) if (!R.jxaMuteOnly.test(t.slice(m.index!))) return 'setVolume'
   return null
 }
 
@@ -130,15 +150,17 @@ const FFMPEG_FLAGS = new Set(['-y', '-n', '-an', '-vn', '-sn', '-dn', '-nostdin'
 
 /** mpv / mplayer: whether the last option that picks audio output turns it off. */
 function lastAudioSilent(name: string, args: string[]): boolean {
-  let silent = false
+  // Two settings, each last-wins: the output device (--ao) and whether an audio track plays at all.
+  let nullOut = false
+  let noTrack = false
   for (let k = 0; k < args.length; k++) {
     const a = args[k]
     const v = a === (name === 'mpv' ? '--ao' : '-ao') ? args[++k] ?? '' : /^--?ao=/.test(a) ? a.slice(a.indexOf('=') + 1) : null
-    if (v !== null) silent = v === 'null'
-    else if (/^(--no-audio|--audio=no|--aid=no|-nosound)$/.test(a)) silent = true
-    else if (/^--(audio|aid)=/.test(a)) silent = false
+    if (v !== null) nullOut = v === 'null'
+    else if (/^(--no-audio|--audio=no|--aid=no|-nosound)$/.test(a)) noTrack = true
+    else if (/^(--(audio|aid)=.*|-sound)$/.test(a)) noTrack = false
   }
-  return silent
+  return nullOut || noTrack
 }
 
 /** A player or mixer program's own verdict on its arguments, or null. */
@@ -186,7 +208,8 @@ function programHit(name: string, all: string[]): string | null {
     case 'open': case 'xdg-open': {
       const app = valueAfter(args, '-a')
       if (app !== undefined && R.mediaApp.test(app.toLowerCase())) return `open -a ${app}`
-      const file = args.find((a) => !a.startsWith('-') && a !== app && R.audioFile.test(a.toLowerCase()))
+      // Its files include those after `--`.
+      const file = [...args, ...all.slice(args.length + 1)].find((a, k) => (k >= args.length || !a.startsWith('-')) && a !== app && R.audioFile.test(a.toLowerCase()))
       return file ? `${name} ${file}` : null
     }
     // Mixers: muting alone passes; any level (0 too), an unmute or a toggle does not.
@@ -204,7 +227,7 @@ function programHit(name: string, all: string[]): string | null {
       return null
     }
     case 'pamixer':
-      return args.some((a) => /^(-u|--unmute|-t|--toggle-mute|-i|--increase|-d|--decrease|--set-volume|--allow-boost)(=.*)?$/.test(a)) ? 'pamixer' : null
+      return args.some((a) => /^(-u|--unmute|-t|--toggle-mute|-i[0-9]*|--increase|-d[0-9]*|--decrease|--set-volume|--allow-boost)(=.*)?$/.test(a)) ? 'pamixer' : null
   }
   return null
 }

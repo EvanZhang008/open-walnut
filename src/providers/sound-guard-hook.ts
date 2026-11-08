@@ -31,7 +31,7 @@ import { JSON_AWK } from './tmp-path-awk.js'
 import {
   ALWAYS_PLAYS, AUDIO_FILE_RE, CODE_AUDIO_API_RE, CODE_SPAWN_RE, FFMPEG_AUDIO_OUT_RE, JXA_MUTE_ONLY_RE, MEDIA_APPS_RE,
   OSA_BEEP_RE, OSA_JXA_VOLUME_RE, OSA_MEDIA_TELL_RE, OSA_MUTE_ONLY_RE, OSA_PLAY_RE, OSA_SAVING_RE, OSA_SAY_RE,
-  OSA_SET_VOLUME_RE, OSA_SHELL_RE, STRING_RE, soundAdvice,
+  OSA_SET_VOLUME_RE, OSA_SHELL_RE, OSA_APP_VOLUME_RE, STRING_RE, soundAdvice,
 } from './sound-rules.js'
 
 /** A string as an awk string literal (a regex of sound-rules.ts is used as a dynamic regex) ("..."), its backslashes doubled. */
@@ -125,34 +125,55 @@ function lit(s, i,   q, k, c, n) {
   LIT = ""; n = length(s)
   for (k = i + 1; k <= n; k++) {
     c = substr(s, k, 1)
-    if (c == "\\" && k < n) { LIT = LIT substr(s, ++k, 1); continue }
+    if (c == "\\" && k < n) { c = substr(s, ++k, 1); LIT = LIT (c == "n" ? "\n" : c == "t" ? "\t" : c); continue }
     if (c == q) { LITEND = k + 1; return 1 }
     LIT = LIT c
   }
   return 0
 }
 function skipsp(s, i) { while (substr(s, i, 1) ~ /[ \t\n]/) i++; return i }
-# The string items of the list opening at s[i] ("["), as a shell line of double-quoted words.
+# A word single-quoted for a shell line: nothing in it expands.
+function sq(w,   out, k, c) {
+  out = "'"
+  for (k = 1; k <= length(w); k++) { c = substr(w, k, 1); out = out (c == "'" ? "'\"'\"'" : c) }
+  return out "'"
+}
+# The string items of the list opening at s[i] ("["), as a shell line of single-quoted words.
 function items(s, i,   out) {
   out = ""
   for (i++; ; ) {
     i = skipsp(s, i)
     if (substr(s, i, 1) == ",") { i++; continue }
     if (!lit(s, i)) return out
-    out = out (out == "" ? "" : " ") "\"" LIT "\""; i = LITEND
+    out = out (out == "" ? "" : " ") sq(LIT); i = LITEND
   }
+}
+# Whether a string literal is open at s[at]: a call named inside a string runs nothing.
+function instr(s, at,   k, c, q) {
+  q = ""
+  for (k = 1; k < at; k++) {
+    c = substr(s, k, 1)
+    if (q != "") { if (c == "\\") k++; else if (c == q) q = "" }
+    else if (c == "\"" || c == "'" || c == "\140") q = c
+  }
+  return q != ""
 }
 # The command lines a script's code starts (each process call's first argument and its argv list), judged as shell lines.
 function spawned(raw, d,   t, off, i, j, m, line) {
   t = tolower(raw); off = 0
   while (found == "" && match(substr(t, off + 1), ${s(CODE_SPAWN_RE)})) {
     m = substr(t, off + RSTART, RLENGTH); i = off + RSTART + RLENGTH; off += RSTART
+    if (instr(raw, off)) continue
     if (m == "$\140") { if (lit(raw, i - 1)) scan(LIT, d + 1); continue }
+    # Python: args=[...], and f"...", r"...", b"..." strings.
+    if (match(substr(raw, i), /^args[ \t]*=[ \t]*/)) i += RLENGTH
     if (substr(raw, i, 1) == "[") { scan(items(raw, i), d + 1); continue }
+    if (substr(raw, i, 2) ~ /^[fFrRbBuU]["']/) i++
+    else if (substr(raw, i, 3) ~ /^[fFrRbB][fFrRbB]["']/) i += 2
     if (!lit(raw, i)) continue
     line = LIT; j = skipsp(raw, LITEND)
     if (substr(raw, j, 1) == ",") j = skipsp(raw, j + 1)
-    if (substr(raw, j, 1) == "[") line = "\"" line "\" " items(raw, j)
+    if (substr(raw, j, 1) == "[") line = sq(line) " " items(raw, j)
     scan(line, d + 1)
   }
 }
@@ -178,17 +199,19 @@ function osahit(raw, d,   t, t0, off, r, at, j) {
   if (speaks(t0)) return "AppleScript say"
   if (t0 ~ ${s(OSA_BEEP_RE)}) return "AppleScript beep"
   if (t ~ ${s(OSA_MEDIA_TELL_RE)} && t0 ~ ${s(OSA_PLAY_RE)}) return "a media app told to play"
+  if (t0 ~ ${s(OSA_APP_VOLUME_RE)}) return "an app volume change"
   r = t0; at = 0
   while ((j = index(r, ${s(OSA_SET_VOLUME_RE)})) > 0) {
     at += j
     r = substr(t0, at); if (match(r, /[\n;]/)) r = substr(r, 1, RSTART - 1)
+    sub(/(--|#).*$/, "", r)
     if (r !~ ${s(OSA_MUTE_ONLY_RE)}) return "set volume"
     r = substr(t0, at + 1)
   }
   off = 0
-  while (match(substr(t0, off + 1), ${s(OSA_JXA_VOLUME_RE)})) {
+  while (match(substr(t, off + 1), ${s(OSA_JXA_VOLUME_RE)})) {
     off += RSTART
-    if (substr(t0, off) !~ ${s(JXA_MUTE_ONLY_RE)}) return "setVolume"
+    if (substr(t, off) !~ ${s(JXA_MUTE_ONLY_RE)}) return "setVolume"
   }
   return ""
 }
@@ -218,22 +241,30 @@ function inline(A, n, F, deno,   k, e) {
 function anyre(A, n, re,   k) { for (k = 1; k <= n; k++) if (A[k] ~ re) return 1; return 0 }
 # Programs that play unless an argument makes them silent (OK), or only with one (ON).
 # mpv / mplayer: whether the last option that picks audio output turns it off.
-function lastsilent(name, A, n,   k, v, silent) {
-  silent = 0
+# Two settings, each last-wins: the output device (--ao) and whether an audio track plays at all.
+function lastsilent(name, A, n,   k, v, nullout, notrack) {
+  nullout = 0; notrack = 0
   for (k = 1; k <= n; k++) {
     v = "\001"
     if (A[k] == (name == "mpv" ? "--ao" : "-ao")) v = k < n ? A[++k] : ""
     else if (A[k] ~ /^--?ao=/) { v = A[k]; sub(/^[^=]*=/, "", v) }
-    if (v != "\001") silent = v == "null"
-    else if (A[k] ~ /^(--no-audio|--audio=no|--aid=no|-nosound)$/) silent = 1
-    else if (A[k] ~ /^--(audio|aid)=/) silent = 0
+    if (v != "\001") nullout = v == "null"
+    else if (A[k] ~ /^(--no-audio|--audio=no|--aid=no|-nosound)$/) notrack = 1
+    else if (A[k] ~ /^(--(audio|aid)=.*|-sound)$/) notrack = 0
   }
-  return silent
+  return nullout || notrack
 }
 function prog(name, A, n,   k, v, first, dev, j, sub1) {
   if (index(" ${ALWAYS_PLAYS.join(' ')} ", " " name " ")) return name
-  # Options end at --: what follows is text.
-  k = has(A, n, "--"); if (k) n = k - 1
+  # Options end at --: what follows is text, except open's files.
+  k = has(A, n, "--")
+  if (name == "open" || name == "xdg-open") {
+    v = after(A, k ? k - 1 : n, "-a")
+    if (v != "\001" && tolower(v) ~ ${s(MEDIA_APPS_RE)}) return "open -a " v
+    for (j = 1; j <= n; j++) if (j != k && ((k && j > k) || A[j] !~ /^-/) && A[j] != v && tolower(A[j]) ~ ${s(AUDIO_FILE_RE)}) return name " " A[j]
+    return ""
+  }
+  if (k) n = k - 1
   if (name == "mpv" || name == "mplayer") return lastsilent(name, A, n) ? "" : name
   if (name in OK) return anyre(A, n, OK[name]) || (name == "say" && after(A, n, "-v") == "?") ? "" : name
   if (name in ON) return anyre(A, n, ON[name]) ? name : ""
@@ -251,12 +282,6 @@ function prog(name, A, n,   k, v, first, dev, j, sub1) {
     }
     return ""
   }
-  if (name == "open" || name == "xdg-open") {
-    v = after(A, n, "-a")
-    if (v != "\001" && tolower(v) ~ ${s(MEDIA_APPS_RE)}) return "open -a " v
-    for (k = 1; k <= n; k++) if (A[k] !~ /^-/ && A[k] != v && tolower(A[k]) ~ ${s(AUDIO_FILE_RE)}) return name " " A[k]
-    return ""
-  }
   # Mixers: a mute alone passes; any level (0 too), an unmute or a toggle does not.
   if (name == "amixer") {
     for (k = 1; k <= n; k++) if (A[k] ~ /^c?s?set$/) break
@@ -270,7 +295,7 @@ function prog(name, A, n,   k, v, first, dev, j, sub1) {
     if (sub1 ~ /^set-(sink|sink-input)-mute$|^set-mute$/) return A[n] ~ /^(1|true|yes|on)$/ ? "" : name " " sub1
     return ""
   }
-  if (name == "pamixer") return anyre(A, n, "^(-u|--unmute|-t|--toggle-mute|-i|--increase|-d|--decrease|--set-volume|--allow-boost)(=.*)?$") ? "pamixer" : ""
+  if (name == "pamixer") return anyre(A, n, "^(-u|--unmute|-t|--toggle-mute|-i[0-9]*|--increase|-d[0-9]*|--decrease|--set-volume|--allow-boost)(=.*)?$") ? "pamixer" : ""
   return ""
 }
 # Options of a wrapper that take a value.

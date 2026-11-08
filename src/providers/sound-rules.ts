@@ -54,7 +54,9 @@ export const OSA_SHELL_RE = '(do shell script|doshellscript[ \t]*\\()[ \t]*'
 export const OSA_SET_VOLUME_RE = 'set volume'
 export const OSA_MUTE_ONLY_RE = '^set volume[ \t]+(with output muted|output muted (true|yes))[ \t]*$'
 export const OSA_JXA_VOLUME_RE = 'setvolume[ \t]*\\('
-export const JXA_MUTE_ONLY_RE = '^setvolume[ \t]*\\([ \t]*null[ \t]*,[ \t]*\\{[ \t]*outputmuted[ \t]*:[ \t]*true[ \t]*\\}[ \t]*\\)'
+export const JXA_MUTE_ONLY_RE = '^setvolume[ \t]*\\([ \t]*null[ \t]*,[ \t]*\\{[ \t]*["\']?outputmuted["\']?[ \t]*:[ \t]*true[ \t]*\\}[ \t]*\\)'
+/** A media app's own volume: `set sound volume to 70`, JXA `music.soundVolume = 70`. */
+export const OSA_APP_VOLUME_RE = 'set sound volume|soundvolume[ \t]*='
 
 /** In a script's code (python -c, node -e, a heredoc to them), outside its string literals: an audio or speech API. */
 export const CODE_AUDIO_API_RE = 'nssound|nsspeechsynthesizer|avspeechsynthesizer|avaudioplayer|pyttsx3|playsound|simpleaudio|winsound|pygame\\.mixer|system\\.speech|speechsynthesizer|soundplayer|\\[console\\]::beep'
