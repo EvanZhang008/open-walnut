@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { ContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import { useReviewSidebar } from '@/hooks/useReviewSidebar';
+import type { ImageAttachment } from '@/api/chat';
 import type { SessionHistoryMessage } from '@/types/session';
 import type { ThreadMark } from '@/utils/thread-mark-hit';
 import type { ThreadMarkState } from '@/utils/thread-mark-state';
@@ -43,6 +44,11 @@ export interface ThreadReviewPaneArgs {
   renderBody: (key: string) => ReactNode;
   /** Changes whenever any card's conversation would draw differently. */
   bodySig: string;
+  canAsk: boolean;
+  /** A question's composer draft key (its review card's reply box keeps its words there). */
+  draftKeyOf: (key: string) => string | null;
+  /** Send a follow-up into a question from its review card. */
+  sendToQuestion: (key: string, text: string, images?: ImageAttachment[]) => Promise<boolean>;
 }
 
 export interface ThreadReviewPane {
@@ -88,6 +94,7 @@ export function useThreadReviewPane(a: ThreadReviewPaneArgs): ThreadReviewPane {
     openCard(key, 'review-enlarge');
   }, [select, openCard]);
   const openFromCard = useCallback((key: string) => open(key, 'card'), [open]);
+  const pickFromBox = useCallback((key: string) => { if (selected !== key) select(key, 'reply-box'); }, [select, selected]);
 
   // The picked card shows its answer: one that lands while it is picked has
   // been seen (no red "New answer" on the card being read).
@@ -158,6 +165,7 @@ export function useThreadReviewPane(a: ThreadReviewPaneArgs): ThreadReviewPane {
       <ThreadReviewSidebar
         layerRef={review.layerRef} open={review.on} entries={shown} anchors={review.anchors} selected={selected}
         onOpen={openFromCard} enlarged={a.enlargedKey} cardsRef={cardsRef} renderBody={a.renderBody} bodySig={a.bodySig}
+        canAsk={a.canAsk} draftKeyOf={a.draftKeyOf} onSend={a.sendToQuestion} onPick={pickFromBox}
       />
     </>
   ) : null;

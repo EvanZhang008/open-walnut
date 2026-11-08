@@ -525,7 +525,12 @@ show inline after the open ones, other completed hits that show the query fold i
   the chat-order rules hold there too), capped at `min(420px, 55vh)` with its own scroll; no card
   runs past the conversation's last row (the tail cards shrink, at least `REVIEW_BODY_MIN`, so
   "scroll to bottom" never stops in blank space) (2026-10-31, the user: "show everything normally
-  ... a maximum height, but people can scroll"; the one-row card of 2026-10-29 showed nothing). A
+  ... a maximum height, but people can scroll"; the one-row card of 2026-10-29 showed nothing).
+  Under the conversation every review card has the question's reply box (`ThreadReplyBox`: typed,
+  dictated, pictures, Enter sends into that question through `sendToQuestion`, the timeline held as
+  the open card's send holds it; its words are the question's composer draft, shared with the open
+  card; Esc leaves the box, never the full screen) (2026-11-08, the user: the side comments are Ask
+  here and must have an input box; guard `tests/web/ask-card-reply-box-guard.test.ts`). A
   vertical bar on the column's edge (`ThreadReviewBar`, sticky below the glass header) folds the
   column to a strip with the count and back, one preference for every panel and window
   (`useReviewSidebarCollapsed`, `walnut:review-sidebar.v1`). Its head's

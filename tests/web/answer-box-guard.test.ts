@@ -34,6 +34,7 @@ const BOXES: Record<string, Kind> = {
   // Composers: a message to a session or a person, with their own send row.
   'components/chat/ChatInput.tsx': COMPOSER,
   'components/sessions/ThreadCommentCard.tsx': COMPOSER,
+  'components/sessions/ThreadReplyBox.tsx': COMPOSER,
   'components/sessions/QuotePinSelectionBar.tsx': ANSWER,
   'components/board/kanban/KanbanCardComposer.tsx': COMPOSER,
   'components/tasks/QuickSortReply.tsx': COMPOSER,

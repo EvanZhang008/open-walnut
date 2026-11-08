@@ -155,7 +155,8 @@ test.describe('the fullscreen review sidebar', () => {
       expect(r.bodyText).not.toMatch(/\[Q\s?\d+\]/)
     }
     expect(rows.filter((r) => r.answers > 0).length, 'answers show').toBeGreaterThan(REVIEW_COUNT / 2)
-    await expect(sidebarCards(panel).locator('textarea')).toHaveCount(0)
+    // Each card has its one reply box (2026-11-08: a card with none had no way to reply).
+    await expect(sidebarCards(panel).locator('textarea.thread-card-input')).toHaveCount(REVIEW_COUNT)
     // Level with its passage or below it (pushed down), never overlapping.
     const ordered = REVIEW_TITLES.map((t) => cards.find((c) => c.title === t)!)
     for (let i = 0; i < ordered.length; i++) {
@@ -558,6 +559,59 @@ test.describe('the fullscreen review sidebar', () => {
     await expect(card).not.toHaveAttribute('data-full', 'true')
     expect(await card.evaluate((el) => getComputedStyle(el).position)).toBe('absolute')
     await expect(card.getByRole('button', { name: 'Question full screen' })).toHaveCount(0)
+  })
+
+  test('every card has its reply box: a follow-up typed and sent in it goes into that question, the timeline in place', async ({ page, request }) => {
+    // 2026-11-08, the user: the side comments are Ask here and "should have an
+    // input box"; the review card showed the answer with no way to reply.
+    const panel = await openFullscreen(page)
+    await goFullscreen(panel)
+    await expect(sidebarCards(panel)).toHaveCount(REVIEW_COUNT, { timeout: 15_000 })
+    const history = panel.locator('.session-history')
+    const mainBox = panel.locator('.session-panel-input .chat-input-textarea')
+    // Every card, crowded or not, has its box with the mic and Send.
+    for (const c of await sidebarCards(panel).all()) {
+      await expect(c.locator('textarea.thread-card-input')).toHaveCount(1)
+      await expect(c.locator('.thread-card-mic, .mic-btn').first()).toHaveCount(1)
+      await expect(c.locator('button.thread-card-send')).toHaveCount(1)
+    }
+    const seeded = new Set(((await readRecord(request, REVIEW_SESSION)).threadAnchors ?? []).map((x) => x.msgId))
+    const third = sidebarCards(panel).filter({ hasText: REVIEW_TITLES[2] })
+    await wheelIntoView(page, history, third)
+    const box = third.locator('textarea.thread-card-input')
+    await expect(box).toBeInViewport()
+    await expect(box).toHaveAttribute('placeholder', /Point 3 order/)
+    const topBefore = await settledScrollTop(history)
+    // A reader's own pointer and keys.
+    await clickInPlace(page, box)
+    await expect(box).toBeFocused()
+    await page.keyboard.type('What if the flush is retried?')
+    await page.keyboard.press('Enter')
+    await expect(box).toHaveValue('')
+    // Into question 3: its card's conversation reads the new question and its answer.
+    await expect(third.locator('.thread-review-body')).toContainText('What if the flush is retried?', { timeout: 15_000 })
+    await expect(third.locator('.thread-review-body')).toContainText('processed your message: What if the flush is retried?', { timeout: 30_000 })
+    await expect.poll(async () => {
+      const anchors = ((await readRecord(request, REVIEW_SESSION)).threadAnchors ?? []) as Array<{ msgId: string; quote?: { exact?: string } }>
+      return anchors.some((x) => !seeded.has(x.msgId) && x.quote?.exact === reviewPassage(2))
+    }, { timeout: 10_000 }).toBe(true)
+    // The main composer untouched, no question card opened over it, the timeline put.
+    await expect(mainBox).toHaveValue('')
+    await expect(panel.locator('[data-testid="composer-thread-target"]')).toHaveCount(0)
+    await expect(panel.locator('.thread-card')).toHaveCount(0)
+    expect(Math.abs((await history.evaluate((el) => el.scrollTop)) - topBefore), 'the timeline stayed where the reader was').toBeLessThan(40)
+    await shot(page, '8-reply-from-review-card')
+    // Words typed and left stay the question's: the open card holds them too.
+    await clickInPlace(page, box)
+    await page.keyboard.type('half a follow-up')
+    // Esc leaves the box, never the full screen.
+    await page.keyboard.press('Escape')
+    await expect(box).not.toBeFocused()
+    await expect(panel).toHaveClass(/open-walnut-fullscreen/)
+    // The card grew with the new round: its head may sit under the glass header now.
+    await wheelIntoView(page, history, third.locator('button.thread-review-head'))
+    await clickInPlace(page, third.locator('button.thread-review-head'))
+    await expect(panel.locator('.thread-card .thread-card-input')).toHaveValue('half a follow-up')
   })
 
   test('scrolling a long reply with 22 cards stays smooth', async ({ page, browserName }) => {

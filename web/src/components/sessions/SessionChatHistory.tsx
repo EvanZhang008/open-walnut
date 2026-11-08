@@ -4254,11 +4254,19 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
     reviewBodySig = parts.join('\u0002');
   }
+  // A review card's reply box: its question's own draft and send, the open
+  // card's (a send from the side never moves the timeline, as the card's).
+  const reviewDraftKeyOf = useCallback((key: string) => composerDraftKey(sessionId, key, threadTree), [sessionId, threadTree]);
+  const sendFromReview = useCallback(async (key: string, text: string, images?: ImageAttachment[]) => {
+    cardSendHold.current = true;
+    try { return await threadsApi.sendToQuestion(key, text, images); } finally { cardSendHold.current = false; }
+  }, [threadsApi.sendToQuestion]);
   const review = useThreadReviewPane({
     sessionId, containerRef, conversationMode: convMode, hasQuestions, tree: threadTree, metaIndex: threadsApi.metaIndex,
     numbers: questionLabel, messages, liveText: reviewLiveText, markStates, openCard,
     quoteInChat: quoteInChatApi, markViewed: threadsApi.markViewed, enlargedKey, sentText: reviewSentText,
     renderBody: renderReviewBody, bodySig: reviewBodySig,
+    canAsk: threadsApi.canAsk, draftKeyOf: reviewDraftKeyOf, sendToQuestion: sendFromReview,
   });
   reviewShownRef.current = review.on;
   const markTips = useThreadMarks({

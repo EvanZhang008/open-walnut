@@ -146,6 +146,11 @@
 .thread-review-head .thread-map-num { flex: none; background: var(--fg); color: var(--bg-elevated); }
 /* The conversation under the head: everything, scrolling inside past its cap. */
 .thread-review-card { display: flex; flex-direction: column; }
+/* Its reply box (ThreadReplyBox), the open card's composer: always there, under
+   the conversation (or under the head alone when the column is crowded). */
+.thread-review-card .thread-card-pictures { flex: none; padding: 6px 10px 0; border-top: 1px solid var(--border); }
+.thread-review-card .thread-card-pictures .chat-image-preview { width: 48px; height: 48px; }
+.thread-review-card .thread-card-pictures .chat-image-remove { opacity: 1; }
 .thread-review-body {
   max-height: min(420px, 55vh);
   border-top: 1px solid var(--border);

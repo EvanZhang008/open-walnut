@@ -7,8 +7,10 @@
  * (ThreadCardConversation), capped in height with its own scroll (thread-review.css)
  * (2026-10-31, the user: it "must show everything normally ... maybe a maximum
  * height, but people can scroll"; the one-row card of 2026-10-29 showed nothing).
- * The head (or Enter, or a click on its passage) opens the question's full card
- * over it, with its composer and a full-screen button.
+ * Under it, the question's reply box (ThreadReplyBox): a follow-up is typed,
+ * dictated and sent right there (2026-11-08, the user: the side comments are Ask
+ * here and must have an input box). The head (or Enter, or a click on its
+ * passage) opens the question's full card over it, with a full-screen button.
  *
  * A thin vertical bar on the column's edge folds the column away and brings it
  * back (ThreadReviewBar; the choice is one preference, useReviewSidebarCollapsed).
@@ -26,6 +28,9 @@ import { displayTitleOf, type ThreadMetaIndex } from '@/utils/thread-meta';
 import { isTurnHead, type ThreadTree } from '@/utils/thread-tree';
 import { plainExcerpt, REVIEW_BODY_MAX, REVIEW_BODY_MIN, REVIEW_GAP, stackReviewCards } from '@/utils/review-sidebar';
 import { stripQuestionTag } from '@/utils/question-tag';
+import type { ImageAttachment } from '@/api/chat';
+import { cardFollowUpPlaceholder } from './ThreadCommentCard';
+import { ThreadReplyBox } from './ThreadReplyBox';
 import '@/styles/thread-review.css';
 
 export interface ReviewEntry {
@@ -160,6 +165,13 @@ export interface ThreadReviewSidebarProps {
   enlarged: string | null;
   /** Each shown card's element by its key (the pane reads it: an open card lies over it). */
   cardsRef: RefObject<Map<string, HTMLDivElement>>;
+  canAsk: boolean;
+  /** A question's composer draft key (its reply box keeps its words there). */
+  draftKeyOf: (key: string) => string | null;
+  /** Send a follow-up into the question. */
+  onSend: (key: string, text: string, images?: ImageAttachment[]) => Promise<boolean>;
+  /** The card's reply box took the keyboard. */
+  onPick: (key: string) => void;
 }
 
 function answerLine(e: ReviewEntry): string {
@@ -303,6 +315,17 @@ export const ThreadReviewSidebar = memo(function ThreadReviewSidebar(p: ThreadRe
           >
             {p.renderBody(e.key)}
           </div>
+          <ThreadReplyBox
+            draftKey={p.draftKeyOf(e.key)}
+            canAsk={p.canAsk}
+            placeholder={cardFollowUpPlaceholder(e.title)}
+            onSend={(text, images) => p.onSend(e.key, text, images)}
+            onFocus={() => p.onPick(e.key)}
+            onSent={() => {
+              const body = cards.current.get(e.key)?.querySelector<HTMLElement>('.thread-review-body');
+              if (body) body.scrollTop = body.scrollHeight;
+            }}
+          />
         </div>
       ))}
     </div>
