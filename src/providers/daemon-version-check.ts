@@ -121,6 +121,7 @@ const DAEMON_SOURCE_FILES = [
   // Task directories (taskdir.*, WALNUT_TASK_DIR at spawn): bundled into the binary
   // AND shipped as the task-dir-core.cjs sidecar, with the path rules it imports.
   'src/providers/task-dir-core.ts',
+  'src/providers/task-dir-sizes.ts',
   'src/lib/task-dir.ts',
   // Commands for tasks on other hosts (exec.*) — bundled into the binary AND
   // shipped as the host-exec-core.cjs sidecar, with the macOS dialog guards it imports.

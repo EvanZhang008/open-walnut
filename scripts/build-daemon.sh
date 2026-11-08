@@ -92,6 +92,7 @@ SOURCES=(
   src/providers/external-session-scan-core.ts
   src/providers/path-resolve-core.ts
   src/providers/task-dir-core.ts
+  src/providers/task-dir-sizes.ts
   src/lib/task-dir.ts
   src/providers/host-exec-core.ts
   src/providers/host-exec-line.ts

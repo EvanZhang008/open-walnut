@@ -133,6 +133,8 @@ const CALL_SITES: Record<string, number> = {
   'src/core/sessions/user-asks.ts': 1,
   'src/core/sessions/worker-question.ts': 1,       // a worker's question: its own session is the caller
   'src/core/status-consistency.ts': 1,
+  // A low disk: one Walnut notice (walnut-notify) asking an open task to clear its own folder.
+  'src/core/task-dir-size-notice.ts': 1,
   'src/core/task-wait-until.ts': 1,
   'src/core/transfer/transfer.ts': 1,
   'src/core/workspaces/manager.ts': 2,
