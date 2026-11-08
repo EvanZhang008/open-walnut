@@ -43,7 +43,7 @@ export interface ActiveContext {
   messages: SessionHistoryMessage[];
   /** The context starts at a compaction summary. */
   compacted: boolean;
-  source: 'cli-chain' | 'acp-journal' | 'history';
+  source: 'cli-chain' | 'acp-journal' | 'history' | 'history-cache';
   /** The old session's own transcript file (Claude Code's JSONL), when Walnut found it. */
   rawTranscriptPath?: string;
 }
@@ -74,6 +74,19 @@ export async function readActiveContext(record: SessionRecord): Promise<ActiveCo
   const { messages } = await readProviderSessionHistory(record.claudeSessionId, record, record.host, true);
   const cut = lastCompactionIndex(messages);
   return { messages: cut >= 0 ? messages.slice(cut) : messages, compacted: cut >= 0, source: 'history' };
+}
+
+/**
+ * A session whose host cannot be reached (host-lost.ts): the conversation as Walnut last read
+ * it, from its own copy (history-disk-cache.ts), after the last compaction. Nothing when it
+ * holds none. Never reads the host.
+ */
+export async function readCachedContext(record: SessionRecord): Promise<ActiveContext> {
+  const { readHistoryCache } = await import('../history-disk-cache.js');
+  const cached = await readHistoryCache(record.claudeSessionId).catch(() => null);
+  const messages = cached?.messages ?? [];
+  const cut = lastCompactionIndex(messages);
+  return { messages: cut >= 0 ? messages.slice(cut) : messages, compacted: cut >= 0, source: 'history-cache' };
 }
 
 function lastCompactionIndex(messages: readonly SessionHistoryMessage[]): number {
@@ -230,7 +243,12 @@ export interface CarryMeta {
   rawTranscriptPath?: string;
   compacted: boolean;
   /** A move to another host (task_move): the hosts, and what of the work came along. */
-  move?: { fromHost: string; toHost: string; fromCwd?: string; cwd: string; work: string[]; steps: string[] };
+  move?: {
+    fromHost: string; toHost: string; fromCwd?: string; cwd: string; work: string[]; steps: string[];
+    /** The old host could not be reached (host-lost.ts): nothing was copied, and the conversation is
+     *  Walnut's own copy (`cached`), else only what Walnut recorded of the task (`recorded`). */
+    lost?: { error: string; cached?: boolean; recorded?: string };
+  };
 }
 
 /**
@@ -284,7 +302,15 @@ export async function renderCarriedContext(
       + `${meta.compacted ? 'its compaction summary and then every turn after it' : 'every turn'}, in order (the newest last). `
       + 'Continue from where it stands; do not redo work it already did. The user\'s new message, when there is one, follows the context.',
   ];
-  if (meta.move) {
+  if (meta.move?.lost) {
+    const lost = meta.move.lost;
+    lines.push(`${meta.move.fromHost} could not be reached (${lost.error}), so nothing of its work was copied: its task directory, commits and uncommitted changes stay on it. `
+      + 'Walnut stopped the earlier session there; that host ends its process when it reconnects. '
+      + (lost.cached
+        ? 'The conversation below is Walnut\'s own copy, as it last read it: the newest turns may be missing. '
+        : `Walnut holds no copy of the earlier conversation.${lost.recorded ? ` What it recorded of the task: ${lost.recorded}` : ''} `)
+      + `Work in ${meta.move.cwd}. Check what the task needs from the old host before redoing it, and tell the user what stayed there.`);
+  } else if (meta.move) {
     lines.push(meta.move.work.length
       ? `Its own work came along and is set up here: ${meta.move.work.join(' ')}`
       : 'It had no work of its own to carry (no repository in its task directory with anything a remote lacks).');

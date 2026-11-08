@@ -175,6 +175,12 @@ async function cloudSendOnce(
   const { latestKnownStop } = await import('../../core/sessions/cloud-stop-fence.js')
   const latestStop = await latestKnownStop(sessionId, projected.stopRequest)
   if (latestStop?.state === 'pending') {
+    // Stopped because its host could not be reached (sessions/host-lost.ts): no confirmation is coming soon.
+    const { isHostLostStopError } = await import('../../core/sessions/host-lost.js')
+    if (isHostLostStopError((latestStop as { error?: string }).error)) {
+      sendError(res, 409, 'stop_pending', `${hostName} could not be reached, so this session was stopped. Move its task to another host to carry on.`)
+      return
+    }
     sendError(res, 409, 'stop_pending', `Wait for ${hostName} to confirm the stop before sending a new message.`)
     return
   }

@@ -152,7 +152,10 @@ async function prepareNativeFork(session: SessionRecord, plan: TransferPlan, inP
   }
   const sid = session.claudeSessionId;
   const found = await client.findTranscript(plan.source.host, sid);
-  if (found.kind === 'unreachable') throw new TransferError(`The source host did not answer: ${found.error}`, 502, 'source_unreachable');
+  if (found.kind === 'unreachable') {
+    // A copy needs the source; a task whose host is gone goes on with task_move (sessions/host-lost.ts).
+    throw new TransferError(`The source host did not answer: ${found.error}. A transfer copies from it; if it stays away, task_move carries the task on to another host without that work.`, 502, 'source_unreachable');
+  }
   if (found.kind === 'none') throw new TransferError('The source transcript was not found on its host', 409, 'transcript_missing');
   if (found.kind === 'many') throw new TransferError(`The source host has ${found.paths.length} transcripts for this session`, 409, 'transcript_ambiguous');
   if (inPlace) return { from: found.path };

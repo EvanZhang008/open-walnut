@@ -435,7 +435,16 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
       if (cwd && cwd === await taskDirForHost(updatedTask.id, '__local__')) await ensureTaskDirOnHost(updatedTask.id, '__local__');
     }
     if (conversation) {
-      const { refuseDifferentPlace } = await import('./task-start.js');
+      const { refuseDifferentPlace, moveFromLostHost } = await import('./task-start.js');
+      // Its session's host cannot be reached: the launch moves the task there (host-lost.ts).
+      const moved = host !== undefined
+        ? await moveFromLostHost(updatedTask, { taskIdPrefix: updatedTask.id, host, message: sessionMessage, source, ...(params.engine ? { engine: params.engine } : {}) })
+        : null;
+      if (moved) {
+        const movedTask = await getTask(updatedTask.id);
+        if (moved.sessionId) continuedSessions.set(movedTask, moved.sessionId);
+        return movedTask;
+      }
       refuseDifferentPlace(updatedTask, conversation, { ...(host !== undefined ? { host } : {}), ...(params.engine ? { engine: params.engine } : {}) });
       await continueTaskConversation(conversation, { text: sessionMessage, source });
       const continuedTask = await getTask(updatedTask.id);

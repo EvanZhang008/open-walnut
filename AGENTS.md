@@ -594,6 +594,27 @@ first. An ephemeral server's starts carry `strict`, and the daemon refuses one f
 spawn journal records for another Walnut (`session_other_walnut`), live or not. Ratchets:
 `tests/providers/cli-owner-core.test.ts`, `tests/providers/daemon-cli-owner-twins-e2e.test.ts`.
 
+**A task whose session host is gone is never stuck** (`src/core/sessions/host-lost.ts`; 2026-11-07:
+a task on a laptop that went offline answered 502 to task_move, "already has its active session" to
+a start elsewhere, and "its host has not confirmed it yet" to task_stop, for good). A stop on a host
+with no live link and no answer to a fresh connect (8 s) stops the session here at once: the record
+carries `hostLost` (when, which host, why, who), its stop request stays pending, so nothing is sent
+to it from here, and the host's reconnect sends that stop before any redelivery (`sessionStops.flush`),
+which ends the old CLI and stamps `hostLost.endedAt`. Carrying the work on elsewhere is stricter
+(`hostGone`): the link down 2 minutes or more of this machine's AWAKE time (a down link samples
+its own clock, `AWAKE_TICK_MS`, so a Mac's sleep never counts), not for a sign-in failure, and this
+machine online (the move's new host answers, or another host does, or with none it has an address
+and the failure is not its own network); short of that the move or start answers 409
+`host_unreachable` with why and when to try again (it was a 502). Then `task_move` copies nothing
+from the old host and starts on the new one with Walnut's own copy of the conversation (the
+history cache from the last compaction on) or, with none, the task's summary; a start on another
+host (`task_start`, quick start) becomes that move. ACP engines keep the refusal (their thread lives
+on the host). What the lost session wrote on its host after the stop is refused at the journal
+replay (`lostSessionWindow` in `offline-handover.ts`). A send to a task, or to its old session,
+while any move runs is held and goes with the task, never `target_archived` (2026-11-08).
+Ratchet: `tests/core/sessions/host-lost-paths.test.ts` (every refusal on an unreachable host, per
+file, with its way out); live: `tests/fleet/host-lost.fleet.ts`.
+
 **Daemon restart:** old `cleanup()` leaves CLI alive. New daemon reconciles sessions.json then scans `.pgid` files — scan MUST skip sids already adopted (`if (sessions.has(sid)) continue`). All death paths funnel into `reapSession()` in `daemon-core.ts`; it calls `isTurnCompleteExit()` to normalize code to 0 when JSONL tail shows clean turn completion (otherwise every turn-end shows "exit -1" in UI).
 
 **A session's stdin FIFO is write-only (mode 0200), and nothing but its CLI may read it.** A FIFO

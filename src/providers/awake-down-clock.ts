@@ -16,6 +16,8 @@
  * sum follows the real time; across a sleep the gap counts one capped step.
  */
 export const AWAKE_STEP_CAP_MS = 30_000
+/** How often a down link's clock is looked at while nothing else looks (well under the cap). */
+export const AWAKE_TICK_MS = 10_000
 
 export class AwakeDownClock {
   private downMs = 0

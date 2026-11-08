@@ -147,6 +147,27 @@ export function _resetOfflineHandoverForTesting(): void {
   due.clear();
 }
 
+/**
+ * The time this session was stopped as lost (its host unreachable): from the stop until its
+ * host ended it (`endedAt`), or for good while the stop still waits; a stop that ran out
+ * (failed) let the session take messages again, from its deadline on. Null: never lost.
+ */
+async function lostSessionWindow(sid: string): Promise<{ from: number; to: number } | null> {
+  try {
+    const { getSessionByClaudeId } = await import('./session-tracker.js');
+    const rec = await getSessionByClaudeId(sid);
+    const from = Date.parse(rec?.hostLost?.at ?? '');
+    if (!rec?.hostLost || !Number.isFinite(from)) return null;
+    const ended = Date.parse(rec.hostLost.endedAt ?? '');
+    if (Number.isFinite(ended)) return { from, to: ended };
+    if (rec.stopRequest?.state === 'pending') return { from, to: Infinity };
+    const { HOST_LOST_STOP_MAX_MS } = await import('./sessions/host-lost.js');
+    return { from, to: from + HOST_LOST_STOP_MAX_MS };
+  } catch {
+    return null;
+  }
+}
+
 async function handover(conn: HandoverConnection): Promise<HandoverResult> {
   const result: HandoverResult = { rounds: 0, records: 0, imported: 0, settled: 0, replayed: 0, skipped: 0, failed: 0 };
   // A task's updated_at as it was BEFORE this handover wrote anything: a second
@@ -471,6 +492,22 @@ async function takeRecord(batch: Batch, record: OfflineRecord): Promise<'ack' | 
     batch.result.skipped++;
     log.session.warn('offline handover: a change from a device no longer paired is dropped', { host, seq: record.seq, opId, deviceId: actor.deviceId });
     return 'ack';
+  }
+  // A session Walnut stopped here because this host could not be reached (sessions/host-lost.ts):
+  // the task went on elsewhere, so what that session did on this host after the stop is not
+  // applied (kept in the drain's conflict log). Before the stop it was the task's session, and its
+  // writes go through as any.
+  if (callerSid && (record.kind === 'op' || actor?.kind === 'session')) {
+    const lost = await lostSessionWindow(callerSid);
+    const at = record.at + batch.offset;
+    if (lost && at >= lost.from && at < lost.to) {
+      const reason = `its session was stopped when ${host} could not be reached and the task went on elsewhere, so what it did afterwards on ${host} is not applied`;
+      if (!(await letter('refused', reason))) return 'stop';
+      if (key) recordApplied(key, { outcome: 'refused', detail: 'session host lost', source: 'drain' });
+      batch.result.skipped++;
+      log.session.warn('offline handover: a write from a session stopped as lost is dropped', { host, seq: record.seq, opId, op: opName, callerSid, taskId });
+      return 'ack';
+    }
   }
   const fail = failing.get(retryKey);
   if (fail && fail.nextAt > Date.now()) {

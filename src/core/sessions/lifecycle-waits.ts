@@ -68,6 +68,14 @@ export const LIFECYCLE_WAITS: readonly LifecycleWait[] = [
     restart: 'resumes (stopRequest on the record, sent again when the host connects)',
   },
   {
+    id: 'session-stop-host-lost',
+    file: 'src/core/sessions/host-lost.ts',
+    waitsFor: 'a stop on a host that did not answer a fresh connect: the session is stopped here at once and the task is free; only the host\'s process waits, for the host to reconnect and end it',
+    limits: ['HOST_LOST_PROBE_MS', 'HOST_LOST_STOP_MAX_MS'],
+    atEnd: 'stopRequest.state = failed with the reason, and the session takes messages again; a session its task moved away from keeps its stop for the host (no one waits on it, and its CLI must still end)',
+    restart: 'resumes (hostLost and the pending stop on the record, sent first when the host connects)',
+  },
+  {
     id: 'daemon-upgrade-acp-turns',
     file: 'src/providers/acp-upgrade-hold.ts',
     waitsFor: 'a daemon upgrade while ACP turns are open on its host',

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { SessionRecord } from '../types.js'
 import { describeStopRefusal, STOP_NOT_SENT_NO_OWNERSHIP_CHECK, stopProvenance } from './stop-provenance.js'
+import { HOST_LOST_STOP_MAX_MS, hostLostFenceText, hostLostStopError, isHostLostStopError, type HostReach } from './host-lost.js'
 
 type StopRequest = NonNullable<SessionRecord['stopRequest']>
 
@@ -29,6 +30,13 @@ export interface SessionStopDeps {
   pendingAll?(): Promise<SessionRecord[]>
   park(sid: string): Promise<void>
   connection(host: string): Promise<SessionStopConnection | null>
+  /**
+   * Whether a host with no live connection answers a fresh connect (host-lost.ts). Absent:
+   * no probe, the stop waits for the host as before.
+   */
+  probe?(host: string): Promise<HostReach>
+  /** Its host could not be reached: the session is stopped here, its stop kept pending for the host. */
+  lost?(sid: string, request: StopRequest, hostLost: NonNullable<SessionRecord['hostLost']>, extra?: Partial<SessionRecord>): Promise<SessionRecord | null>
   changed(record: SessionRecord): void
   /** Run `fn` after `ms` (tests drive their own clock); returns a cancel. */
   schedule?(fn: () => void, ms: number): () => void
@@ -77,7 +85,9 @@ export class SessionStopCoordinator {
 
   async fence(sid: string): Promise<string | null> {
     const record = await this.deps.get(sid)
-    if (record?.stopRequest?.state === 'pending') throw new SessionStopSupersededError('Session stop is awaiting host confirmation')
+    if (record?.stopRequest?.state === 'pending') {
+      throw new SessionStopSupersededError(record.hostLost && !record.hostLost.endedAt ? hostLostFenceText(record) : 'Session stop is awaiting host confirmation')
+    }
     return record?.stopRequest?.id ?? null
   }
 
@@ -88,7 +98,7 @@ export class SessionStopCoordinator {
     })
   }
 
-  async request(sid: string): Promise<StopRequest> {
+  async request(sid: string, by?: string): Promise<StopRequest> {
     return this.serial(sid, async () => {
       const current = await this.deps.get(sid)
       if (!current) throw new Error('Session not found')
@@ -97,7 +107,7 @@ export class SessionStopCoordinator {
         : { id: randomUUID(), requestedAt: new Date().toISOString(), state: 'pending' }
       const record = await this.deps.save(sid, { stopRequest })
       this.deps.changed(record)
-      return this.settle(sid, await this.deliver(record))
+      return this.settle(sid, await this.deliver(record, undefined, by))
     })
   }
 
@@ -107,6 +117,13 @@ export class SessionStopCoordinator {
     if (request.state !== 'pending') {
       held?.cancel()
       this.retries.delete(sid)
+      return request
+    }
+    // Its host could not be reached: nothing to try until it reconnects (flush), only the deadline.
+    if (isHostLostStopError(request.error)) {
+      if (held?.armed && held.attempt >= STOP_RETRY_DELAYS_MS.length) return request
+      held?.cancel()
+      this.armOfflineDeadline(sid, request, STOP_RETRY_DELAYS_MS.length)
       return request
     }
     if (held?.armed) return request
@@ -152,7 +169,8 @@ export class SessionStopCoordinator {
       return () => clearTimeout(t)
     })
     const asked = Date.parse(request.requestedAt)
-    const left = Number.isFinite(asked) ? Math.max(0, asked + STOP_OFFLINE_MAX_MS - Date.now()) : 0
+    const max = isHostLostStopError(request.error) ? HOST_LOST_STOP_MAX_MS : STOP_OFFLINE_MAX_MS
+    const left = Number.isFinite(asked) ? Math.max(0, asked + max - Date.now()) : 0
     const entry = { attempt, armed: true, cancel: () => {} }
     this.retries.set(sid, entry)
     entry.cancel = schedule(() => {
@@ -200,6 +218,9 @@ export class SessionStopCoordinator {
       const current = await this.deps.get(sid)
       const request = current?.stopRequest
       if (request?.state !== 'pending' || request.id !== id) return
+      // A lost session the task moved away from: nobody needs its fence lifted, and its host's
+      // reconnect must still end it, so its stop stays for that host (host-lost.ts).
+      if (current?.archived && current.hostLost && !current.hostLost.endedAt) return
       const failed: StopRequest = { id, requestedAt: request.requestedAt, state: 'failed', error: stopFailedText(request.error, tries) }
       const updated = await this.deps.confirm(sid, failed)
       if (updated) this.deps.changed(updated)
@@ -208,13 +229,21 @@ export class SessionStopCoordinator {
     }).catch(() => {})
   }
 
-  private async deliver(record: SessionRecord, connection?: SessionStopConnection): Promise<StopRequest> {
+  private async deliver(record: SessionRecord, connection?: SessionStopConnection, by?: string): Promise<StopRequest> {
     const sid = record.claudeSessionId
     const request = record.stopRequest!
     await this.deps.park(sid)
     let error: string | undefined
     try {
-      const conn = connection ?? await this.deps.connection(record.host ?? '__local__')
+      const host = record.host ?? '__local__'
+      let conn = connection ?? await this.deps.connection(host)
+      if (!conn?.connected && !connection && this.deps.probe && this.deps.lost) {
+        // No live link: a fresh connect decides. One that comes up takes the stop now; one
+        // that does not makes the session lost here (host-lost.ts), the task free to go on.
+        const reach = await this.deps.probe(host)
+        if (reach.reachable) conn = await this.deps.connection(host)
+        else return await this.markLost(record, request, host, reach.error, by)
+      }
       // A person's stop names this Walnut, so a daemon that records the session
       // for another Walnut refuses it (owner-home-v1, stop-provenance.ts).
       const provenance = conn?.connected ? stopProvenance(conn, 'human') : null
@@ -224,7 +253,13 @@ export class SessionStopCoordinator {
         const reply = await conn.send('stop', { sid, reason: 'user', stopRequestId: request.id, ...provenance }, 10_000)
         if (reply.ok === true && reply.stopped === true) {
           const confirmed: StopRequest = { id: request.id, requestedAt: request.requestedAt, state: 'confirmed' }
-          const updated = await this.deps.confirm(sid, confirmed)
+          let updated = await this.deps.confirm(sid, confirmed)
+          // A lost session's host came back and ended it: the record says so.
+          if (updated?.hostLost && !updated.hostLost.endedAt) {
+            updated = await this.deps.save(sid, { hostLost: { ...updated.hostLost, endedAt: new Date().toISOString() } }).catch(() => updated)
+            const { log } = await import('../../logging/index.js')
+            log.session.info('host lost: its host came back and ended the session', { sessionId: sid, host: updated?.hostLost?.host, noop: reply.noop === true, reason: reply.reason })
+          }
           if (updated) this.deps.changed(updated)
           return updated?.stopRequest ?? (await this.deps.get(sid))?.stopRequest ?? request
         }
@@ -239,6 +274,23 @@ export class SessionStopCoordinator {
     const updated = await this.deps.confirm(sid, pending)
     if (updated) this.deps.changed(updated)
     return updated?.stopRequest ?? (await this.deps.get(sid))?.stopRequest ?? request
+  }
+
+  private async markLost(record: SessionRecord, request: StopRequest, host: string, why: string, by?: string): Promise<StopRequest> {
+    const sid = record.claudeSessionId
+    const pending: StopRequest = { ...request, error: hostLostStopError(host, why) }
+    const hostLost = record.hostLost && !record.hostLost.endedAt
+      ? record.hostLost
+      : { at: new Date().toISOString(), host, why, ...(by ? { by } : {}) }
+    // A resume restart recovery still had queued for it would undo the stop once the host is back.
+    const loss = record.restartLoss
+    const extra: Partial<SessionRecord> = loss && (loss.state === 'pending' || loss.state === 'queued')
+      ? { restartLoss: { ...loss, state: 'skipped', reason: 'stopped while its host could not be reached' } } : {}
+    const updated = await this.deps.lost!(sid, pending, hostLost, extra)
+    if (updated) this.deps.changed(updated)
+    const { log } = await import('../../logging/index.js')
+    log.session.warn('host lost: the session is stopped here; its host ends it when it reconnects', { sessionId: sid, taskId: record.taskId, host, why, by })
+    return updated?.stopRequest ?? (await this.deps.get(sid))?.stopRequest ?? pending
   }
 }
 
@@ -256,6 +308,15 @@ export const sessionStops = new SessionStopCoordinator({
       } : {}),
     }, (current) => current.stopRequest?.id === request.id && current.stopRequest.state === 'pending')
   },
+  lost: async (sid, request, hostLost, extra) => {
+    const { updateSessionRecordConditionally } = await import('../session-tracker.js')
+    return updateSessionRecordConditionally(sid, {
+      ...(extra ?? {}), stopRequest: request, hostLost,
+      process_status: 'stopped' as const, pid: undefined, errorMessage: undefined, activity: undefined,
+      status_reason: 'user_terminated' as const, status_changed_by: 'user' as const,
+    }, (current) => current.stopRequest?.id === request.id && current.stopRequest.state === 'pending')
+  },
+  probe: async (host) => (await import('./host-lost.js')).probeHost(host),
   pending: async (host) => (await import('../session-tracker.js')).listPendingSessionStops(host),
   pendingAll: async () => (await import('../session-tracker.js')).listPendingSessionStops(),
   park: async (sid) => {

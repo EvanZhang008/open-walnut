@@ -83,7 +83,7 @@ import {
 import { runRemoteFoldPrewarm } from './remote-fold-prewarm.js'
 import { BootStartKeeper, type BootStartView } from './remote-boot-start-keeper.js'
 import { freshLinkWaitMs, hostSliceWaitMs } from './host-slice-pace.js'
-import { AwakeDownClock } from './awake-down-clock.js'
+import { AWAKE_TICK_MS, AwakeDownClock } from './awake-down-clock.js'
 import { FOLD_CHECKPOINT_FORMAT } from './fold-checkpoint-core.js'
 import { annotateCredentialFailure, SSH_EVIDENCE_PREFIX } from './ssh-credential-evidence.js'
 import { cancelRecordedForwards, controlSocketPath, exitControlMaster, masterLastWords, planControlMaster, recordForward, startControlMaster } from './ssh-control-master.js'
@@ -481,6 +481,12 @@ export class DaemonConnection {
   private _disconnectedSince: number | null = null
   /** The same outage in awake time, which is what a session is given up on (awake-down-clock.ts). */
   private _awakeDown = new AwakeDownClock()
+  /** Looks at the down clock while the link is down, so its sum follows awake time with no session checking it (host-lost.ts reads it). */
+  private _awakeTick: ReturnType<typeof setInterval> | null = null
+  private stopAwakeTick(): void {
+    if (this._awakeTick) clearInterval(this._awakeTick)
+    this._awakeTick = null
+  }
   private _phase: DaemonConnectPhase = 'idle'
   private _phaseSince = Date.now()
   /** When the current connect() attempt began (null = no attempt yet). Phase
@@ -1135,6 +1141,7 @@ export class DaemonConnection {
       if (changed) this.endHandover()
       this._disconnectedSince = null
       this._awakeDown.reset()
+      this.stopAwakeTick()
       this._reconnectAttempts = 0
       this._credentialReconnects = 0
       clearReconnectCause(this.hostKey)
@@ -1142,6 +1149,10 @@ export class DaemonConnection {
     } else if (changed) {
       this._disconnectedSince = Date.now()
       this._awakeDown.start(this._disconnectedSince)
+      if (!this._destroyed && !this._awakeTick) {
+        this._awakeTick = setInterval(() => { this._awakeDown.sample(Date.now()) }, AWAKE_TICK_MS)
+        this._awakeTick.unref?.()
+      }
       this.openHandoverWindow()
       this.setPhase('reconnecting')
     }
@@ -2966,6 +2977,7 @@ export class DaemonConnection {
     this._bootStartKeeper?.stop()
     this._netUpdaterInstance?.stop()
     this.setConnected(false)
+    this.stopAwakeTick()
     this._connecting = false
 
     // Cancel reconnect, and a postponed update check (it only runs on a live connection)

@@ -83,3 +83,29 @@ describe('a session behind a link that went down before a sleep', () => {
     expect(conn.disconnectedAwakeMs()).toBe(0)
   })
 })
+
+// 2026-11-08: a laptop's link down for three minutes, with no session left checking it (its
+// session was stopped), read 30 s: one capped step. hostGone (sessions/host-lost.ts) then
+// refused to move the task off the laptop. The connection looks at its own clock while down.
+describe('a down link with no session checking it', () => {
+  afterEach(() => { vi.useRealTimers() })
+
+  it('counts its awake time down on its own, a sleep still one short step, and stops looking once up', () => {
+    vi.useFakeTimers({ now: T0, toFake: ['Date', 'setInterval', 'clearInterval'] })
+    const conn = new DaemonConnection('laptop', null)
+    const set = (v: boolean) => (conn as unknown as { setConnected(v: boolean): void }).setConnected(v)
+    set(true)
+    set(false)
+    vi.advanceTimersByTime(3 * MIN)
+    expect(conn.disconnectedAwakeMs()).toBeGreaterThanOrEqual(3 * MIN - AWAKE_STEP_CAP_MS)
+    // A nine-hour sleep: the clock jumps with no look in between.
+    const before = conn.disconnectedAwakeMs()
+    vi.setSystemTime(Date.now() + 9 * 60 * MIN)
+    expect(conn.disconnectedAwakeMs() - before).toBeLessThanOrEqual(AWAKE_STEP_CAP_MS)
+    const tick = () => (conn as unknown as { _awakeTick: unknown })._awakeTick
+    expect(tick()).toBeTruthy()
+    set(true)
+    expect(conn.disconnectedAwakeMs()).toBe(0)
+    expect(tick()).toBeNull()
+  })
+})

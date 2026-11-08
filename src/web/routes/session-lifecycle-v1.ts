@@ -385,7 +385,8 @@ sessionLifecycleV1Router.post('/sessions/:id/terminate', async (req: Request, re
     const { terminateSession } = await import('../../core/sessions/session-lifecycle.js')
     const { sendStopPending } = await import('./session-stop-v1.js')
     try {
-      const result = await terminateSession(sessionId, { force })
+      const { stopperOf } = await import('../../core/sessions/host-lost.js')
+      const result = await terminateSession(sessionId, { force, by: await stopperOf(req.get('x-walnut-caller-sid') || undefined) })
       if (result.status === 'pending') {
         await sendStopPending(res, sessionId)
         return

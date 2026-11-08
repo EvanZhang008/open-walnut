@@ -15,14 +15,22 @@ export function hostPath(p: string, fromHost: string, toHost: string): string {
 }
 
 /** The task's whole conversation, every session oldest first, as one markdown file on `host`. */
-export async function writeTaskTranscript(task: Task, rows: SessionRecord[], host: string, switchId: string): Promise<string | undefined> {
+export async function writeTaskTranscript(
+  task: Task, rows: SessionRecord[], host: string, switchId: string,
+  /** A host that cannot be reached: its sessions are read from Walnut's own copy (host-lost.ts). */
+  opts?: { cachedFrom?: string },
+): Promise<string | undefined> {
   const { readProviderSessionHistory } = await import('./session-lifecycle.js');
   const { renderTranscriptMarkdownChunked } = await import('../transfer/transcript.js');
   const transfer = await import('../transfer/transfer.js');
   const { transfersDir } = await import('../transfer/workspace.js');
   const ordered = [...rows].sort((a, b) => (a.startedAt ?? '').localeCompare(b.startedAt ?? ''));
   // Read side by side: the user waits on the switch, and each read is its own host round trip.
-  const histories = await Promise.all(ordered.map((r) => readProviderSessionHistory(r.claudeSessionId, r, r.host, true).catch(() => ({ messages: [] }))));
+  const { readHistoryCache } = await import('../history-disk-cache.js');
+  const cachedOnly = (r: SessionRecord) => opts?.cachedFrom !== undefined && normalizeHost(r.host) === normalizeHost(opts.cachedFrom);
+  const histories = await Promise.all(ordered.map((r) => (cachedOnly(r)
+    ? readHistoryCache(r.claudeSessionId).then((c) => ({ messages: c?.messages ?? [] }))
+    : readProviderSessionHistory(r.claudeSessionId, r, r.host, true)).catch(() => ({ messages: [] }))));
   const parts: string[] = [];
   for (const [i, r] of ordered.entries()) {
     const { messages } = histories[i];

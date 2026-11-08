@@ -221,7 +221,7 @@ async function continueNow(sessionId: string, opts: { by?: string }): Promise<Co
     if (sent > 0) return { status: 'continued', sessionId, cwd: from, from: record.folderMoved?.from ?? from, history: 'kept', sent }
     throw new SessionControlError(`The folder ${from} is there; send a message to continue in it`, 409, { code: 'folder_present' })
   }
-  if (state === 'unknown') throw new SessionControlError(`Could not ask ${record.host} whether ${from} still exists; try again when the host answers`, 503, { code: 'host_unreachable' })
+  if (state === 'unknown') throw new SessionControlError(`Could not ask ${record.host} whether ${from} still exists; try again when the host answers, or move the task to another host (task_move)`, 503, { code: 'host_unreachable' })
   // A pid probe answers for a Claude Code CLI; an ACP engine has no pid to probe (the
   // probe says "alive" for it), so its record's own word decides.
   const { isSessionProcessAlive } = await import('../../utils/session-liveness.js')
@@ -239,7 +239,7 @@ async function continueNow(sessionId: string, opts: { by?: string }): Promise<Co
 
   if (historyInFolder(record)) {
     const found = await findTranscript(record)
-    if (found.state === 'unknown') throw new SessionControlError(`Could not look for this conversation's history on ${record.host ?? 'this machine'}; try again`, 503, { code: 'host_unreachable' })
+    if (found.state === 'unknown') throw new SessionControlError(`Could not look for this conversation's history on ${record.host ?? 'this machine'}; try again, or move the task to another host (task_move)`, 503, { code: 'host_unreachable' })
     if (found.state === 'missing') return startFresh(record, from, to, by)
     await moveTranscript(record, found.path, to)
   }

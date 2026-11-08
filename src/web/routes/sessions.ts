@@ -3123,7 +3123,8 @@ sessionsRouter.post('/:sessionId/terminate', async (req: Request, res: Response,
   log.web.info('session terminate: request received', { sessionId })
   try {
     const force = req.body?.force === true || req.query?.force === '1'
-    const result = await terminateSession(sessionId, { force })
+    const { stopperOf } = await import('../../core/sessions/host-lost.js')
+    const result = await terminateSession(sessionId, { force, by: await stopperOf(req.get('x-walnut-caller-sid') || undefined) })
     log.web.info('session terminate: complete', { sessionId, durationMs: Date.now() - startedAt })
     res.json(result)
   } catch (err) {

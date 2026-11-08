@@ -7,7 +7,7 @@ import { QuickStartError } from './quick-start.js';
 import { continueTaskConversation, detachTaskSession, taskConversation } from './task-session-claim.js';
 import { stableJson } from '../task-create-idempotency.js';
 import type { Task, SessionEffort, SessionEngine, SessionMode } from '../types.js';
-import { engineCaps, normalizeEngine, resolveEngine } from '../agents/engine-registry.js';
+import { engineCaps, isAcpEngine, normalizeEngine, resolveEngine } from '../agents/engine-registry.js';
 import { isDaemonCommandOutcomeUnknown } from '../../providers/delivery-failure.js';
 import { log } from '../../logging/index.js';
 import { withInboxStartAuthorization } from '../human-inbox/item-ledger.js';
@@ -101,6 +101,8 @@ export interface SessionStartResult {
    * queue, the host it will run on, and why it waits. Walnut starts it by itself.
    */
   queued?: { position: number; host: string; reason: string; running: string[]; cap?: number };
+  /** The task's session host could not be reached: the start moved the task (host-lost.ts). */
+  hostLost?: { from: string; fromSessionId: string; error: string };
 }
 
 export class SessionExistsError extends QuickStartError {
@@ -254,6 +256,12 @@ async function startSessionForTaskNow(params: SessionStartParams): Promise<Sessi
     if (isSwitching(task.id)) {
       throw new QuickStartError(`Task ${task.id} is switching engines right now. Continue it with task_send {"to":"${task.id}","text":"..."} in a moment.`, 409);
     }
+  }
+  // A start on another host for a task whose session's host cannot be reached: the move does it
+  // (host-lost.ts), instead of a refusal that names a host nobody can reach.
+  if (params.host !== undefined && !params.ownMove && !params.startAttemptId && params.source !== 'engine-switch') {
+    const moved = await moveFromLostHost(task, params);
+    if (moved) return moved;
   }
   let recovery: { previousStartId: string } | undefined;
   if (params.startAttemptId) {
@@ -594,6 +602,60 @@ async function startSessionForTaskNow(params: SessionStartParams): Promise<Sessi
 }
 
 const LOCAL_ALIASES = new Set(['', 'local', '__local__']);
+
+/**
+ * The task's session (a live one, else its conversation) runs on another host than the start
+ * names, and that host is gone (host-lost.ts hostGone): task_move's path carries the task
+ * there, the old session stopped here, and the start's own message then goes to the new
+ * session the usual way (a reply request, hands_on, the task's description when it names no
+ * message). Null when there is no such session, its host is not gone, or it runs on an ACP
+ * engine (whose worker could not be stopped once its host is back): the usual refusal.
+ */
+export async function moveFromLostHost(task: Task, params: SessionStartParams): Promise<SessionStartResult | null> {
+  const records = await getSessionsForTask(task.id);
+  const anchor = records.find((s) => !s.archived && LIVE_STATUSES.has(s.process_status)) ?? await taskConversation(task.id).catch(() => undefined);
+  if (!anchor || sameHost(params.host, anchor.host) || isAcpEngine(anchor.engine)) return null;
+  const { getConnectedDaemonConnection } = await import('../../providers/daemon-connection.js');
+  if (getConnectedDaemonConnection(anchor.host || '__local__')) return null;
+  const { hostGone } = await import('./host-lost.js');
+  const gone = await hostGone(anchor.host, { target: params.host });
+  if (!gone.gone) {
+    if (!gone.unreachable) return null;
+    log.session.info('task start: the session host does not answer, but it is not gone', { taskId: task.id, from: anchor.host, why: gone.why });
+    throw new QuickStartError(`This task's session runs on ${anchor.host}, which does not answer, and it cannot move to ${params.host || 'this Mac'} yet: ${gone.why}.`, 409, { code: 'host_unreachable', host: anchor.host });
+  }
+  log.session.warn('task start: the task\'s session host is gone; moving it instead', { taskId: task.id, from: anchor.host, to: params.host, error: gone.error });
+  const { requestEngineSwitch, EngineSwitchError } = await import('./engine-switch.js');
+  let moved: Awaited<ReturnType<typeof requestEngineSwitch>>;
+  try {
+    // No message: the carried context waits for the start's message, sent below.
+    moved = await requestEngineSwitch({
+      taskId: task.id, engine: (params.engine !== undefined ? normalizeEngine(params.engine) : undefined) ?? resolveEngine(anchor.engine),
+      host: params.host, message: '', source: params.source,
+      ...(params.callerSid ? { callerSid: params.callerSid } : {}), ...(params.model ? { model: params.model } : {}),
+      ...(params.effort ? { effort: params.effort } : {}), ...(params.userRequest ? { userWords: params.userRequest } : {}),
+    });
+  } catch (err) {
+    if (err instanceof EngineSwitchError) throw new QuickStartError(err.message, err.status, { error: err.message, code: err.code });
+    throw err;
+  }
+  const hostLost = { from: anchor.host || '__local__', fromSessionId: anchor.claudeSessionId, error: gone.error };
+  const record = moved.state === 'done' && moved.sessionId ? (await getSessionsForTask(task.id)).find((s) => s.claudeSessionId === moved.sessionId) : undefined;
+  if (!record) {
+    // The host answered after all (the move went the usual way and waits on its turn there), or
+    // another move was under way: the message has nowhere to go yet, so it is refused, never dropped.
+    throw new QuickStartError(`The task is moving off ${anchor.host} (${moved.state}); this start's message was not sent. Send it once the move is done (task_get shows it).`, 409, { code: 'move_under_way' });
+  }
+  const sent = await continueTaskConversation(record, {
+    text: params.message?.trim() || task.description || `Working on task: ${task.title}`,
+    callerSid: params.callerSid, source: params.source, expectReply: params.expectReply, replyTimeoutSecs: params.replyTimeoutSecs,
+    ...(params.handsOn ? { handsOn: params.handsOn } : {}),
+  });
+  return {
+    taskId: task.id, title: task.title, sessionId: sent.sessionId, requestId: sent.requestId, started: true, continued: true, applied: [], hostLost,
+    ...(sent.handedOn ? { handedOn: sent.handedOn } : {}), ...(sent.handOnRefused ? { handOnRefused: sent.handOnRefused } : {}),
+  };
+}
 const sameHost = (a?: string, b?: string) => (LOCAL_ALIASES.has(a ?? '') && LOCAL_ALIASES.has(b ?? '')) || a === b;
 
 /** The start with a `@tag` host resolved to a host; a refusal is a 409 that says which hosts have it. */
@@ -645,6 +707,15 @@ export function refuseDifferentPlace(
         : `Continue it with task_send; work in another directory is a new task: task_transfer {"id":"${task.id}"}.`), 409);
 }
 
+/** The start's host is gone (host-lost.ts hostGone), and the start's session was stopped here as lost. */
+async function stoppedAsLost(record: { claudeSessionId: string }, host: string): Promise<boolean> {
+  const { hostGone } = await import('./host-lost.js');
+  if (!(await hostGone(host)).gone) return false;
+  const { terminateSession } = await import('./session-lifecycle.js');
+  const stopped = await terminateSession(record.claudeSessionId, { force: true }).catch(() => null);
+  return !!stopped?.hostLost;
+}
+
 async function cancelUnconfirmedStart(task: Task, record?: Awaited<ReturnType<typeof getSessionsForTask>>[number], keepRecord = false): Promise<void> {
   const attempt = task.last_start;
   const runtimeId = attempt?.runtime_id || attempt?.session_id || record?.claudeSessionId;
@@ -667,6 +738,12 @@ async function cancelUnconfirmedStart(task: Task, record?: Awaited<ReturnType<ty
     if (record && !keepRecord) await updateSessionRecord(record.claudeSessionId, { process_status: 'error', status_reason: 'api_error', status_changed_by: 'session-runner' });
   } catch (error) {
     if (error instanceof SessionExistsError) throw error;
+    // The host does not answer: that start is stopped here, and its host ends it if it ever
+    // came up (host-lost.ts), so this start goes ahead instead of waiting for a host that is gone.
+    if (record && !keepRecord && await stoppedAsLost(record, host)) {
+      await updateSessionRecord(record.claudeSessionId, { process_status: 'error', status_reason: 'api_error', status_changed_by: 'session-runner' });
+      return;
+    }
     throw new QuickStartError(`Task ${task.id} still has an unconfirmed start: ${String(error)}. Retry task_start with this id after the host reconnects; do not create another task.`, 409);
   } finally {
     if (timer) clearTimeout(timer);

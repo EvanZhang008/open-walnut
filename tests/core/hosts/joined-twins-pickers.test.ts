@@ -78,6 +78,7 @@ describe('the class: every list of hosts to pick from goes through pickableHosts
     'src/core/net/net-mac.ts': 'the joined rows themselves',
     'src/core/session-projection.ts': 'labels by alias',
     'src/core/companion-sessions.ts': 'labels by alias',
+    'src/core/sessions/host-lost.ts': 'counts whether any other row answers (this machine may be the one offline)',
     'src/core/config-manager.ts': 'the rows themselves',
     'src/commands/ephemeral-snapshot.ts': "turns off every row's tunnel in a test copy",
     'src/core/sessions/mobile-launch.ts': 'the reserved-alias check (its list is pickableHosts)',

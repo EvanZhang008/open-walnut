@@ -730,6 +730,11 @@ export async function patchSession(sessionId: string, input: SessionPatchInput):
 export interface TerminateResult {
   status: 'terminated' | 'pending'; sessionId: string; tookMs?: number
   /**
+   * Its host could not be reached (sessions/host-lost.ts): the session is stopped here, and
+   * its host ends the process when it reconnects. `status` reads `terminated`.
+   */
+  hostLost?: { host: string; at: string }
+  /**
    * The stop this call recorded (CLI sessions). The cloud companion fences the
    * next phone message by it at once, rather than by the older stop its copy
    * of the session list shows for a few seconds more.
@@ -745,7 +750,7 @@ export interface TerminateResult {
  */
 export async function terminateSession(
   sessionId: string,
-  opts: { force?: boolean } = {},
+  opts: { force?: boolean; /** 'human' or 'task:<id>', kept on a lost session's record. */ by?: string } = {},
 ): Promise<TerminateResult> {
   const startedAt = Date.now();
   const { getSessionByClaudeId, updateSessionRecord, emitSessionStatusChanged } = await import('../session-tracker.js');
@@ -785,8 +790,12 @@ export async function terminateSession(
     const undoTeardown = live?.markExpectedTeardown('user_terminated');
     let confirmed = false;
     try {
-      const request = await sessionStops.request(sessionId);
-      confirmed = request.state === 'confirmed';
+      const request = await sessionStops.request(sessionId, opts.by);
+      const { isHostLostStopError } = await import('./host-lost.js');
+      const lost = request.state === 'pending' && isHostLostStopError(request.error)
+        ? (await getSessionByClaudeId(sessionId))?.hostLost : undefined;
+      // Stopped here when its host is lost: this server lets go of it as of a confirmed stop.
+      confirmed = request.state === 'confirmed' || !!lost;
       if (confirmed) {
         live?.detach();
         sessionRunner.settleInFlightTurn(sessionId);
@@ -794,6 +803,7 @@ export async function terminateSession(
       return {
         status: confirmed ? 'terminated' : 'pending', sessionId, tookMs: Date.now() - startedAt,
         stopRequest: { id: request.id, requestedAt: request.requestedAt, state: request.state },
+        ...(lost ? { hostLost: { host: lost.host, at: lost.at } } : {}),
       };
     } finally {
       if (!confirmed) undoTeardown?.();
@@ -881,7 +891,13 @@ export async function restartSession(sessionId: string): Promise<RestartResult> 
   const record = await getSessionByClaudeId(sessionId);
   if (!record) throw new SessionControlError('Session not found', 404);
   if (record.archived) throw new SessionControlError('Cannot restart an archived session', 400);
-  if (record.stopRequest?.state === 'pending') throw new SessionControlError('Stop is awaiting host confirmation; retry after it is confirmed', 409);
+  if (record.stopRequest?.state === 'pending') {
+    if (record.hostLost && !record.hostLost.endedAt) {
+      const { hostLostFenceText } = await import('./host-lost.js');
+      throw new SessionControlError(hostLostFenceText(record), 409, { code: 'host_lost' });
+    }
+    throw new SessionControlError('Stop is awaiting host confirmation; retry after it is confirmed', 409);
+  }
   // A respawn in a folder that is gone only fails: recorded, and answered with the way on.
   if (record.cwd) {
     const { noteFolderGone } = await import('./folder-gone.js');

@@ -3143,6 +3143,10 @@ export interface EngineSwitchState {
   /** The host and folder the move left (kept for the outcome and the session list). */
   from_host?: string;
   from_cwd?: string;
+  /** A move from a host that could not be reached (sessions/host-lost.ts): the old session was
+   *  stopped here, nothing of its work was copied, and the conversation came from Walnut's own
+   *  copy of it. `error`: what the connect answered. */
+  from_host_lost?: { at: string; error: string };
   /** What the move carried, one plain line per piece (describeMovedWork). */
   moved?: string[];
   /** The user's words asking for it, when an agent passed them on (task_move user_request). */
@@ -3525,6 +3529,10 @@ export interface SessionRecord {
    *  a hint block, rides the session's next message (sessions/engine-switch-io.ts). */
   switchContext?: { text: string; switchId: string; at: string };
   stopRequest?: { id: string; requestedAt: string; state: 'pending' | 'confirmed' | 'failed'; error?: string };
+  /** Its host could not be reached when it was stopped (sessions/host-lost.ts): stopped here at
+   *  `at`, its stop request kept pending until the host reconnects and ends the process
+   *  (`endedAt`). `by`: 'human' or 'task:<id>'; `why`: what the connect answered. */
+  hostLost?: { at: string; host: string; why: string; by?: string; endedAt?: string };
   /** Why the last process_status change happened (K8s condition style). */
   status_reason?: StatusReason;
   /** Who triggered the last process_status change. */

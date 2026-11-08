@@ -81,6 +81,14 @@ defineOp({
       const out = await call('POST', path, { force: force === true }) as Record<string, unknown> | undefined
       // A start it had queued would start it again later: stopping it cancels that too (best effort: an older server has no queue).
       await call('DELETE', `/tasks/${encodeURIComponent(target.taskId)}/start-queue`).catch(() => {})
+      const lost = out?.hostLost as { host?: string } | undefined
+      if (lost) {
+        return withOutcome(
+          { ...target, ...(out ?? {}), status: 'terminated' },
+          `Task ${target.taskId}'s session is stopped here: its host ${lost.host ?? ''} could not be reached, so Walnut recorded the stop, and that host ends the process when it reconnects. Its conversation is kept.`,
+          `task_move {"id":"${target.taskId}","host":"<another host>"} carries the task on elsewhere now, with its conversation.`,
+        )
+      }
       return withOutcome(
         { ...target, ...(out ?? {}), status: out?.status ?? 'terminated' },
         `Task ${target.taskId}'s session stopped. Its conversation is kept.`,

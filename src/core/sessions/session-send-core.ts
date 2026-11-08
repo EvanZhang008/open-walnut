@@ -746,7 +746,9 @@ async function performPlainSend(input: SessionSendInput): Promise<DeliveredSendR
   }
   const targetSid = target.session.claudeSessionId;
 
-  if (target.session.archived) {
+  // A session its task is moving away from is archived until the move is done: a message for it
+  // is held there and moves with the task (engine-switch.ts movingFrom), never refused.
+  if (target.session.archived && !(await import('./engine-switch.js')).movingFrom({ sessionId: targetSid })) {
     throw new SendError('target_archived', `session ${shortId(targetSid)} is archived`, 409);
   }
   if (caller.kind === 'session' && caller.record.claudeSessionId === targetSid) {

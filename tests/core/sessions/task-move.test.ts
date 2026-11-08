@@ -132,7 +132,7 @@ vi.mock('../../../src/core/sessions/task-start.js', () => ({
 }));
 
 import { WALNUT_HOME } from '../../../src/constants.js';
-import { addTask, getTask, _resetForTesting } from '../../../src/core/task-manager.js';
+import { addTask, getTask, updateTaskRaw, _resetForTesting } from '../../../src/core/task-manager.js';
 import { closeDb as closeTaskDb } from '../../../src/core/task-db.js';
 import { closeDb as closeSessionDb } from '../../../src/core/session-db.js';
 import { createSessionRecord, getSessionByClaudeId, updateSessionRecord, _resetSessionTrackerForTesting } from '../../../src/core/session-tracker.js';
@@ -149,7 +149,10 @@ import { placeStartByLoad } from '../../../src/core/sessions/start-placement.js'
 import { HostsFullError } from '../../../src/core/sessions/host-admission.js';
 import { __setPathsCheckerForTesting } from '../../../src/core/hosts/named-paths.js';
 import { sendMessageToSession } from '../../../src/core/session-message-queue.js';
+import { performSessionSend } from '../../../src/core/sessions/session-send-core.js';
 import { MOVE_HELD_REASON } from '../../../src/core/sessions/engine-switch-io.js';
+import { __setHostProbeForTesting } from '../../../src/core/sessions/host-lost.js';
+import { writeHistoryCache, flushHistoryCacheWrites, readHistoryCache } from '../../../src/core/history-disk-cache.js';
 
 const gitconfig = path.join(W.root, 'gitconfig');
 fs.writeFileSync(gitconfig, '[user]\n\tname = Mover\n\temail = mover@example.com\n[init]\n\tdefaultBranch = main\n')
@@ -649,6 +652,27 @@ describe('task_move', () => {
     expect((await getStore()).queues[sid] ?? []).toEqual([]);
   }, 120_000);
 
+  // 2026-11-08: a task_send to the TASK while its move copied the work answered
+  // "target_archived: session a841c48c is archived" (the move archives the old session first).
+  it('a send to the task, or to its old session, while it moves is held, never refused, and goes with the task', async () => {
+    const { taskId, sid } = await taskInSharedCheckout();
+    let open!: () => void;
+    W.gate = new Promise<void>((r) => { open = r; });
+    const moving = requestEngineSwitch({ taskId, engine: 'claude', host: 'cloud', message: 'Carry on.', source: 'test' });
+    await vi.waitFor(() => expect(W.starts).toHaveLength(1), { timeout: 60_000, interval: 50 });
+    expect((await getSessionByClaudeId(sid))?.archived).toBe(true);
+    const byTask = await performSessionSend({ to: taskId, text: 'Also add a test.', expectReply: false });
+    const bySession = await performSessionSend({ to: sid, text: 'And a second one.', expectReply: false });
+    expect([byTask.targetSessionId, bySession.targetSessionId]).toEqual([sid, sid]);
+    open();
+    const res = await moving;
+    const queued = (await getStore()).queues[res.sessionId!] ?? [];
+    expect(queued.map((r) => r.message)).toEqual(expect.arrayContaining([expect.stringContaining('Also add a test.'), expect.stringContaining('And a second one.')]));
+    expect((await getStore()).queues[sid] ?? []).toEqual([]);
+    // After the move a send to the task reaches its new session.
+    expect((await performSessionSend({ to: taskId, text: "Next.", expectReply: false })).targetSessionId).toBe(res.sessionId);
+  }, 120_000);
+
   it('a held message goes back to the old session when the move fails', async () => {
     const { taskId, sid } = await taskInSharedCheckout();
     let open!: () => void;
@@ -692,5 +716,89 @@ describe('task_move', () => {
     expect(res).toMatchObject({ state: 'pending', host: 'cloud' });
     expect((await getTask(taskId)).engine_switch).toMatchObject({ state: 'pending', move: true, to: { host: 'cloud' } });
     expect(W.starts).toHaveLength(0);
+  }, 60_000);
+});
+
+// 2026-11-07: a task whose session ran on a laptop that went offline could not move (502: the
+// work is packed on the old host) and waited for a turn that could never end. A move from a
+// host that does not answer stops the old session there, copies nothing and carries Walnut's
+// own copy of the conversation (sessions/host-lost.ts).
+describe('task_move from a host that cannot be reached', () => {
+  async function taskOnLostCloud(): Promise<{ taskId: string; sid: string }> {
+    const { task } = await addTask({ title: 'Speed up the parser', project: 'Marina' } as never);
+    await updateTaskRaw(task.id, { summary: 'Parser fast path half done; word ALBATROSS.' } as never, { source: 'test' });
+    const sid = 'cloud-sid';
+    await createSessionRecord(sid, task.id, 'Marina', `${W.homes.cloud}/tasks/${task.id}`);
+    // Its last record says a turn runs: nobody can wait for that turn on a host that is gone.
+    await updateSessionRecord(sid, { host: 'cloud', process_status: 'running', messageCount: 4 } as never);
+    __setTransferConnectionResolverForTesting(async (host) => (host === 'cloud' ? [] : W.homes[host] ? [daemonFor(host)] : []));
+    __setHostProbeForTesting(async (host) => (host === 'cloud' ? { reachable: false, error: 'ssh: connect to host cloud: Operation timed out' } : { reachable: true }));
+    return { taskId: task.id, sid };
+  }
+  afterEach(() => { __setHostProbeForTesting(null); });
+
+  it('moves at once with Walnut\'s copy of the conversation, nothing copied, the old session stopped and told apart', async () => {
+    const { taskId, sid } = await taskOnLostCloud();
+    writeHistoryCache(sid, [
+      { role: 'user', text: 'Make the parser faster', timestamp: '2026-11-07T04:00:00Z' },
+      { role: 'assistant', text: 'Committed the fast path; the word is PETREL.', timestamp: '2026-11-07T04:10:00Z' },
+    ] as never);
+    flushHistoryCacheWrites();
+    await vi.waitFor(async () => expect((await readHistoryCache(sid))?.messages).toHaveLength(2));
+    await mutateStore((st) => {
+      st.queues[sid] = [{ id: 'qm-wait', sessionId: sid, message: 'one more thing', status: 'parked', createdAt: new Date().toISOString() } as never];
+    }, false, true);
+
+    const res = await requestEngineSwitch({ taskId, engine: 'claude', host: 'local', message: 'Carry on.', source: 'test' });
+
+    expect(res).toMatchObject({ state: 'done', taskId, fromSessionId: sid, fromHost: 'cloud' });
+    expect(res.moved?.join(' ')).toMatch(/Nothing was copied: cloud could not be reached/);
+    const destTaskDir = `${W.homes.__local__}/tasks/${taskId}`;
+    expect(W.starts).toHaveLength(1);
+    expect(W.starts[0]).toMatchObject({ taskIdPrefix: taskId, host: '__local__', cwd: destTaskDir });
+    const message = String(W.starts[0].message);
+    expect(message).toContain('This task moved from cloud to this Mac');
+    expect(message).toContain('cloud could not be reached');
+    expect(message).toContain('the word is PETREL');
+    expect(message).toContain('Walnut\'s own copy');
+    expect(message.trimEnd().endsWith('Carry on.')).toBe(true);
+    // The old session was stopped (here: the stubbed stop) and is the task's history now.
+    expect(W.stops).toEqual([sid]);
+    expect(await getSessionByClaudeId(sid)).toMatchObject({ archived: true, supersededBy: res.sessionId });
+    expect((await taskConversation(taskId))?.claudeSessionId).toBe(res.sessionId);
+    expect((await getStore()).queues[res.sessionId!]?.map((r) => r.id)).toContain('qm-wait');
+    expect((await getTask(taskId)).engine_switch).toMatchObject({ state: 'done', move: true, from_host: 'cloud', from_host_lost: { error: expect.stringContaining('timed out') } });
+  }, 60_000);
+
+  it('with no copy of the conversation it starts from what Walnut recorded of the task', async () => {
+    const { taskId } = await taskOnLostCloud();
+    const res = await requestEngineSwitch({ taskId, engine: 'claude', host: 'local', message: '', source: 'test' });
+    expect(res).toMatchObject({ state: 'done' });
+    const carried = String(W.starts[0].message || '') + JSON.stringify((await getSessionByClaudeId(res.sessionId!))?.switchContext ?? {});
+    expect(carried).toContain('Walnut holds no copy of the earlier conversation');
+    expect(carried).toContain('ALBATROSS');
+  }, 60_000);
+
+  it('a host down for only a moment is not gone: the move is refused with why and when to try again (it was a 502)', async () => {
+    const { taskId } = await taskOnLostCloud();
+    __setHostProbeForTesting(async () => ({ reachable: false, error: 'ssh: Operation timed out' }), { lostSince: () => Date.now() - 20_000 });
+    await expect(requestEngineSwitch({ taskId, engine: 'claude', host: 'local', message: 'x', source: 'test' }))
+      .rejects.toMatchObject({ status: 409, code: 'host_unreachable', message: expect.stringMatching(/cannot move off cloud yet: cloud has been unreachable for only 20 s.*2 minutes/) });
+    expect(W.starts).toHaveLength(0);
+    expect(W.stops).toHaveLength(0);
+  }, 60_000);
+
+  it('an ACP session on a gone host is refused: its worker could not be stopped once the host is back', async () => {
+    const { taskId, sid } = await taskOnLostCloud();
+    await updateSessionRecord(sid, { engine: 'codex' } as never);
+    await expect(requestEngineSwitch({ taskId, engine: 'codex', host: 'local', message: 'x', source: 'test' })).rejects.toMatchObject({ code: 'host_lost_acp' });
+    expect(W.starts).toHaveLength(0);
+    expect(W.stops).toHaveLength(0);
+  }, 60_000);
+
+  it('a host that answers keeps the usual rule: the move waits for its running turn', async () => {
+    const { taskId } = await taskOnLostCloud();
+    __setHostProbeForTesting(async () => ({ reachable: true }));
+    await expect(requestEngineSwitch({ taskId, engine: 'claude', host: 'local', message: 'x', source: 'test' })).resolves.toMatchObject({ state: 'pending' });
   }, 60_000);
 });
