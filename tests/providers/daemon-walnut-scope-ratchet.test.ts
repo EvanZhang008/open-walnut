@@ -109,6 +109,7 @@ const FILES: Record<string, string> = {
   HOST_VITALS_DIR: 'host: this machine\'s load and memory',
   NET_STATE_DIR: 'host: one network identity per account (net.configure is the host\'s)',
   SECRETS_ROOT: 'host: one store per account; each secret records the Walnut that wrote it (secrets-core.ts)',
+  PW_SILENCE_DIR: 'host: one generated preload per account, the same text whichever Walnut writes it (pw-silence-core.ts)',
 }
 
 function fileConstants(src: string): string[] {
