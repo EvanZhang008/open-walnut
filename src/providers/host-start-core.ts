@@ -91,11 +91,6 @@ export interface SpawnTemplate {
   models: Record<string, { cli: string; effort: boolean }>
   /** No model (Auto): whether --effort is passed. */
   autoEffort: boolean
-  /**
-   * No model (Auto) while this host's CLI default is not a Claude model: the CLI value such a
-   * start runs instead (unnamed-model-guard.ts on the Mac). Absent: Auto passes no --model.
-   */
-  autoModel?: string
   /** A model value outside `models`: whether it takes --effort. */
   effortRules: EffortRules
   efforts: string[]
@@ -321,7 +316,6 @@ export function createHostStart(deps: HostStartDeps): HostStart {
       if (!CLI_VALUE_RE.test(k) || !isRecord(m) || typeof m.cli !== 'string' || !CLI_VALUE_RE.test(m.cli)) throw new Error('spawn template: bad model')
       models[k] = { cli: m.cli, effort: m.effort === true }
     }
-    if (raw.autoModel !== undefined && (typeof raw.autoModel !== 'string' || !CLI_VALUE_RE.test(raw.autoModel))) throw new Error('spawn template: bad autoModel')
     const efforts = Array.isArray(raw.efforts) ? raw.efforts.filter((e): e is string => typeof e === 'string' && MODE_RE.test(e)) : []
     const rulesRaw = isRecord(raw.effortRules) ? raw.effortRules : {}
     const effortRules: EffortRules = { overrides: [], families: [] }
@@ -347,7 +341,6 @@ export function createHostStart(deps: HostStartDeps): HostStart {
     if (use !== 'routine' && (typeof cwd !== 'string' || !cwd.startsWith('/') || cwd.length > 1024 || cwd.split('/').indexOf('..') !== -1)) throw new Error('spawn template: cwd must be an absolute path')
     return {
       v: 1, home, argv, modes, defaultMode: raw.defaultMode, models, autoEffort: raw.autoEffort === true, effortRules, efforts,
-      ...(typeof raw.autoModel === 'string' ? { autoModel: raw.autoModel } : {}),
       // A routine session gets no agent's tool lists, as a routine run on the Mac gets none.
       agents: use === 'routine' ? {} : agents,
       persona: raw.persona, cwd: cwd as string, builtAt: typeof raw.builtAt === 'number' ? raw.builtAt : deps.now(),
@@ -487,10 +480,7 @@ export function createHostStart(deps: HostStartDeps): HostStart {
    * send() passes an unknown id (SESSION_MODEL_CLI_MAP[model] ?? model). undefined: refused.
    */
   function modelOf(t: SpawnTemplate, raw: unknown): Fields['model'] | undefined {
-    if (raw === undefined || raw === '' || raw === 'default') {
-      const auto = typeof t.autoModel === 'string' && CLI_VALUE_RE.test(t.autoModel) ? t.autoModel : ''
-      return auto ? { id: auto, cli: auto, effort: effortOf(t, auto) } : null
-    }
+    if (raw === undefined || raw === '' || raw === 'default') return null
     const id = typeof raw === 'string' ? raw : ''
     const hit = Object.prototype.hasOwnProperty.call(t.models, id) ? t.models[id] : Object.values(t.models).find((m) => m.cli === id)
     if (hit) return { id, ...hit }

@@ -67,7 +67,7 @@ function deferred<T>() {
   return { promise, resolve }
 }
 
-/** A cold resume carrying a message, with a model named so the unnamed-model guard is not asked. */
+/** A cold resume carrying a message, with a model named. */
 function resume(): ClaudeCodeSession & Internals {
   const s = new ClaudeCodeSession('', 'proj') as ClaudeCodeSession & Internals
   s.send('hello', '/tmp', SID, undefined, 'claude-opus-4-8')
@@ -101,7 +101,7 @@ describe('the restored cost read on a cold resume', () => {
     expect(s.billableCostDelta(5.1)).toBeCloseTo(0.1, 6)
     const line = preSpawnLog()
     expect(line).toMatchObject({ sessionId: SID, costStateInTime: true })
-    for (const key of ['fenceMs', 'taskDirMs', 'cwdCheckMs', 'probeMs', 'costStateMs', 'modelGuardMs', 'totalMs']) {
+    for (const key of ['fenceMs', 'taskDirMs', 'cwdCheckMs', 'probeMs', 'costStateMs', 'totalMs']) {
       expect(typeof line![key]).toBe('number')
     }
     expect(rec.logs.filter((args) => args[0] === 'spawn: pre-spawn steps')).toHaveLength(1)

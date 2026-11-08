@@ -111,21 +111,6 @@ describe('the template filled from fields only', () => {
     expect(haiku.plan.args).toContain('--model')
   })
 
-  it('Auto runs the template\'s autoModel when the host CLI default is not Claude (unnamed-model-guard)', () => {
-    const hs = make()
-    hs.setTemplate(HOME, buildHostSpawnTemplate({ home: HOME, hostKey: 'marina', cwd: dir, env: {}, now, autoModel: 'opus' }))
-    const auto = hs.plan(HOME, fields(), 'marina')
-    if (!auto.ok) throw new Error(auto.message)
-    const a = auto.plan.args
-    expect(a.slice(a.indexOf('--model'), a.indexOf('--model') + 2)).toEqual(['--model', 'opus'])
-    // A named model still wins over it.
-    const named = hs.plan(HOME, fields({ sid: 'cccccccc-1111-4111-8111-111111111111', model: 'sonnet' }), 'marina')
-    if (!named.ok) throw new Error(named.message)
-    expect(named.plan.args.slice(named.plan.args.indexOf('--model'), named.plan.args.indexOf('--model') + 2)).toEqual(['--model', 'sonnet'])
-    // A template with a bad autoModel is refused, as a bad model is.
-    expect(() => hs.setTemplate(HOME, { ...template(), autoModel: '--dangerously-skip-permissions' })).toThrow(/bad autoModel/)
-  })
-
   it('a field outside its allowlist refuses the whole start', () => {
     const hs = make()
     hs.setTemplate(HOME, template())

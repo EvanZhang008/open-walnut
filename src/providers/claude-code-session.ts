@@ -3142,21 +3142,6 @@ export class ClaudeCodeSession {
         }
       }
       stepDone('costStateMs')
-      // No model named: the CLI would take its own settings default, which may be a
-      // model outside Claude (unnamed-model-guard.ts). Start such a session on Claude.
-      if (!args.includes('--model')) {
-        const { guardUnnamedModel, insertModelArg } = await import('../core/sessions/unnamed-model-guard.js')
-        const decision = await guardUnnamedModel(host, resolvedCwd)
-        if (decision.use) {
-          insertModelArg(args, decision.use)
-          this._cliModel = decision.use
-          log.session.warn('unnamed model guard: the CLI default is not a Claude model; starting on Claude', {
-            taskId: this.taskId, sessionId: resumeSessionId ?? opts?.preassignedSessionId, host: host ?? '__local__',
-            cliDefault: decision.cliDefault, resolved: decision.resolved, from: decision.from, model: decision.use,
-          })
-        }
-      }
-      stepDone('modelGuardMs')
       log.session.info('spawn: pre-spawn steps', {
         taskId: this.taskId, sessionId: tmpId, host: host ?? '__local__', resume: isResume && resumeNow,
         ...steps, ...(costStateInTime !== undefined ? { costStateInTime } : {}),
@@ -11895,10 +11880,10 @@ export class SessionRunner {
     }
 
     // Session init timeout. Local new sessions take 1-2s from the console.
-    // Remote adds SSH/wssh/shell overhead (~5-10s). 90s for remote gives margin
+    // Remote adds SSH/relay/shell overhead (~5-10s). 90s for remote gives margin
     // while timing logs (first JSONL line, timeToInitMs) collect data to find
     // the real bottleneck — remote new sessions shouldn't take >10s but sometimes
-    // exceed 30s for unknown reasons (wssh relay? devdesk load?).
+    // exceed 30s for unknown reasons (an SSH relay? remote host load?).
     const isRemote = !!data.host
     const initTimeoutMs = isRemote ? 90_000 : 30_000
 
