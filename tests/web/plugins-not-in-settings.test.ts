@@ -35,6 +35,7 @@ const UI_METHOD_SURFACE: Readonly<Record<string, string>> = {
   page: "the plugin's own route",
   settings: "the plugin's page in Apps (components/apps-page/PluginSettingsPanels.tsx)",
   slot: 'a task, session or status item (PLUGIN_SLOT_TARGETS)',
+  openDialog: 'an owner-scoped modal (plugins/PluginDialogHost.tsx)',
   link: 'the right-click menu of a link',
   injectCss: 'a stylesheet, no surface',
   useView: 'state, no surface',
