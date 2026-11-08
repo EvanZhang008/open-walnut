@@ -20,6 +20,12 @@
  *
  * The baseline file is committed, so it is reviewable: a PR that adds entries is
  * visibly making things worse, which is much harder to miss than a red X.
+ *
+ * A NEW failure gets one more chance: its file runs again alone, and a test that
+ * passes there failed on timing under the full run's load, not on the change. It
+ * is named as a warning and does not fail the gate (the land check's rule; 2026-11-08,
+ * two pushes were refused on one-off timing failures that every later commit passed).
+ * WALNUT_BASELINE_RERUN=0 turns the second chance off.
  */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -268,6 +274,57 @@ if (fixed.length) {
   console.log(`\n✓ ${fixed.length} test(s) in the baseline now PASS — re-record to lock the improvement in:`);
   fixed.slice(0, 15).forEach((f) => console.log(`    ${f}`));
   if (fixed.length > 15) console.log(`    … and ${fixed.length - 15} more`);
+}
+
+/** Options of the caller that take their value as the next argument. */
+const VALUE_OPTIONS = new Set(['--maxWorkers', '--minWorkers', '--retry', '--pool', '--project', '-t', '--testNamePattern', '--testTimeout', '--hookTimeout']);
+/** The caller's options for a run of named files: no --shard, no file filters of its own. */
+function rerunArgs(args) {
+  const out = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '--shard') { i++; continue; }
+    if (a.startsWith('--shard=') || !a.startsWith('-')) continue;
+    out.push(a);
+    if (VALUE_OPTIONS.has(a) && i + 1 < args.length) out.push(args[++i]);
+  }
+  return out;
+}
+
+/** The keys of `keys` that pass when their files run again alone; none when that run reports nothing. */
+function passAlone(keys) {
+  const files = [...new Set(keys.map(fileOf))];
+  const again = path.join(TMP, `walnut-baseline-again-${process.pid}.json`);
+  console.log(`\n${keys.length} new failure(s): running their ${files.length} file(s) once more, alone …`);
+  const cmd = vitestCommand(['run', '--config', CONFIG, ...rerunArgs(vitestArgs), ...files, '--reporter=json', `--outputFile=${again}`]);
+  spawnSync(cmd.cmd, cmd.args, { stdio: ['inherit', 'ignore', 'inherit'], env: process.env });
+  const passed = new Set();
+  if (!fs.existsSync(again)) return passed;
+  const r = JSON.parse(fs.readFileSync(again, 'utf-8'));
+  fs.rmSync(again, { force: true });
+  for (const file of r.testResults ?? []) {
+    const rel = fileKey(file.name);
+    const asserts = file.assertionResults ?? [];
+    for (const a of asserts) if (a.status === 'passed') passed.add(`${rel} :: ${a.fullName}`);
+    if (file.status === 'passed' && asserts.length) {
+      passed.add(`${rel} :: <file failed to load or collect>`);
+      passed.add(`${rel} :: <file failed outside its tests>`);
+    }
+  }
+  return passed;
+}
+
+const flaky = regressions.length && process.env.WALNUT_BASELINE_RERUN !== '0'
+  ? (() => { const ok = passAlone(regressions); return regressions.filter((k) => ok.has(k)); })()
+  : [];
+if (flaky.length) {
+  console.log(`\n⚠ ${flaky.length} test(s) failed in the full run and passed when their file ran again alone: a timing failure under load, not counted against this change. Their owners should make them steady:`);
+  flaky.forEach((f) => {
+    console.log(`    ${f}`);
+    if (reasons.get(f)) console.log(`        ↳ ${reasons.get(f)}`);
+    if (process.env.GITHUB_ACTIONS === 'true') console.log(`::warning title=Flaky test::${f.replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A')}`);
+  });
+  regressions.splice(0, regressions.length, ...regressions.filter((k) => !flaky.includes(k)));
 }
 
 if (regressions.length === 0) {

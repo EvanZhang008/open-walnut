@@ -38,9 +38,12 @@ if (argv[1] === 'list') {
   }
   process.exit(process.env.FAKE_LIST ? 0 : 1)
 }
-fs.writeFileSync(process.env.FAKE_ARGV, JSON.stringify(argv))
+// The second run is the gate's rerun of new failures alone: it reads $FAKE_REPORT_AGAIN when set.
+const again = fs.existsSync(process.env.FAKE_ARGV)
+fs.writeFileSync(again ? process.env.FAKE_ARGV + '.again' : process.env.FAKE_ARGV, JSON.stringify(argv))
 const out = argv.find((a) => a.startsWith('--outputFile='))
-if (process.env.FAKE_REPORT && out) fs.writeFileSync(out.slice('--outputFile='.length), fs.readFileSync(process.env.FAKE_REPORT))
+const src = again && process.env.FAKE_REPORT_AGAIN !== undefined ? process.env.FAKE_REPORT_AGAIN : process.env.FAKE_REPORT
+if (src && out) fs.writeFileSync(out.slice('--outputFile='.length), fs.readFileSync(src))
 process.exit(Number(process.env.FAKE_EXIT || 0))
 `
 
@@ -66,11 +69,13 @@ const reported = (r: object | null | undefined) =>
 
 /** `list` defaults to exactly the report's files; null = `vitest list` fails. */
 function run(mode: 'check' | 'record', opts: {
-  report?: object | null; list?: string[] | null; baseline?: object; minFiles?: number; runOut?: string; args?: string[]; env?: Record<string, string>; cwd?: string
+  report?: object | null; again?: object | null; list?: string[] | null; baseline?: object; minFiles?: number; runOut?: string; args?: string[]; env?: Record<string, string>; cwd?: string
 }): Promise<{ code: number; out: string }> {
   const list = opts.list === undefined ? reported(opts.report) : opts.list
   const reportFile = path.join(tmp, 'report.json')
   if (opts.report) fs.writeFileSync(reportFile, JSON.stringify(opts.report))
+  const againFile = path.join(tmp, 'report-again.json')
+  if (opts.again) fs.writeFileSync(againFile, JSON.stringify(opts.again))
   const baselineFile = path.join(tmp, 'baseline.json')
   if (opts.baseline) fs.writeFileSync(baselineFile, JSON.stringify(opts.baseline))
   return new Promise((resolve) => {
@@ -83,6 +88,7 @@ function run(mode: 'check' | 'record', opts: {
         FAKE_ARGV: path.join(tmp, 'argv.json'),
         FAKE_LIST_ARGV: path.join(tmp, 'list-argv.json'),
         FAKE_REPORT: opts.report ? reportFile : '',
+        ...(opts.again !== undefined ? { FAKE_REPORT_AGAIN: opts.again ? againFile : '' } : {}),
         FAKE_LIST: list ? JSON.stringify(list) : '',
         WALNUT_BASELINE_CONFIG: 'vitest.e2e.config.ts',
         WALNUT_BASELINE_FILE: baselineFile,
@@ -97,6 +103,12 @@ function run(mode: 'check' | 'record', opts: {
     })
   })
 }
+
+/** A rerun's report: `names` of `file` passed this time. */
+const passedAgain = (file: string, names: string[]) => ({
+  numTotalTests: names.length,
+  testResults: [{ name: `/runner/work/repo/${file}`, status: 'passed', assertionResults: names.map((fullName) => ({ fullName, status: 'passed' })) }],
+})
 
 const A = 'tests/e2e/a.test.ts'
 const B = 'tests/e2e/b.test.ts'
@@ -155,6 +167,40 @@ describe('test-baseline.mjs check', () => {
     expect(r.code).toBe(1)
     expect(r.out).toContain(`${B} :: new one`)
     expect(r.out).toContain('AssertionError: new one broke')
+  })
+
+  it('a new failure that passes when its file runs again alone is a warning, named, not a failure', async () => {
+    const r = await run('check', {
+      report: report([A, B], { [B]: ['timing one'] }),
+      again: passedAgain(B, ['timing one']),
+      baseline: baseline([]),
+      args: ['--maxWorkers=1', '--retry', '2', '--shard=2/3'],
+      env: { GITHUB_ACTIONS: 'true' },
+    })
+    expect(r.code, r.out).toBe(0)
+    expect(r.out).toContain('passed when their file ran again alone')
+    expect(r.out).toContain(`::warning title=Flaky test::${B} :: timing one`)
+    // The rerun names only that file, with the caller's options but not its shard.
+    const again = JSON.parse(fs.readFileSync(path.join(tmp, 'argv.json.again'), 'utf8')) as string[]
+    expect(again).toEqual(expect.arrayContaining(['--maxWorkers=1', '--retry', '2', B]))
+    expect(again.some((a) => a.startsWith('--shard'))).toBe(false)
+    expect(again).not.toContain(A)
+  })
+
+  it('a new failure that fails alone too fails the gate; so does a rerun that wrote no report', async () => {
+    const still = await run('check', { report: report([A, B], { [B]: ['real one'] }), again: report([B], { [B]: ['real one'] }), baseline: baseline([]) })
+    expect(still.code).toBe(1)
+    expect(still.out).toContain(`${B} :: real one`)
+    const crashed = await run('check', { report: report([A, B], { [B]: ['real one'] }), again: null, baseline: baseline([]) })
+    expect(crashed.code).toBe(1)
+  })
+
+  it('only the tests that passed alone are forgiven; WALNUT_BASELINE_RERUN=0 forgives none', async () => {
+    const mixed = await run('check', { report: report([A, B], { [A]: ['steady break'], [B]: ['timing one'] }), again: { testResults: [...(report([A], { [A]: ['steady break'] }) as { testResults: object[] }).testResults, ...passedAgain(B, ['timing one']).testResults] }, baseline: baseline([]) })
+    expect(mixed.code).toBe(1)
+    expect(mixed.out).toMatch(/1 NEW failure/)
+    const off = await run('check', { report: report([A, B], { [B]: ['timing one'] }), again: passedAgain(B, ['timing one']), baseline: baseline([]), env: { WALNUT_BASELINE_RERUN: '0' } })
+    expect(off.code).toBe(1)
   })
 
   it('names the failing line in the repo, past the matcher frames', async () => {

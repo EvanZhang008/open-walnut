@@ -116,7 +116,7 @@ WALNUT_BASELINE_CONFIG=vitest.e2e.config.ts WALNUT_BASELINE_FILE=tests/setup/kno
   WALNUT_BASELINE_MIN_FILES=120 bun scripts/test-baseline.mjs check --maxWorkers=1
 ```
 
-`tests/setup/known-failures.json` (quick) and `tests/setup/known-failures-e2e.json` (e2e) are committed, so a PR that adds entries is visibly making things worse. Both gates run per shard on CI: each leg judges only the files it ran (a baseline entry from another shard is neither new nor "fixed" there), and uploads its own failures as the `known-failures-e2e-<shard>` artifact (`WALNUT_BASELINE_RUN_OUT`), so a new e2e baseline is the union of the six artifacts of one run, with no second run of the tier. The slow tier has no baseline: it blocks on any failure.
+`tests/setup/known-failures.json` (quick) and `tests/setup/known-failures-e2e.json` (e2e) are committed, so a PR that adds entries is visibly making things worse. Both gates run per shard on CI: each leg judges only the files it ran (a baseline entry from another shard is neither new nor "fixed" there), and uploads its own failures as the `known-failures-e2e-<shard>` artifact (`WALNUT_BASELINE_RUN_OUT`), so a new e2e baseline is the union of the six artifacts of one run, with no second run of the tier. A failure absent from the baseline gets one more chance before it fails a gate: its file runs again alone, and a test that passes there is named as a flaky-test warning (`::warning` on GitHub) and not counted, the land check's rule for a timing failure under load (2026-11-08: two pushes were refused on one-off timing failures that every later commit passed). `WALNUT_BASELINE_RERUN=0` turns that off. The slow tier has no baseline: it blocks on any failure.
 
 Two properties make this gate trustworthy rather than decorative:
 
