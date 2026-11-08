@@ -858,6 +858,8 @@ export async function bundlePluginForJobs(pluginDir: string, entryFile: string, 
       banner: PLUGIN_BUNDLE_BANNER,
       resolveParent: pluginParentResolver(pluginDir, tree.srcIntegrationsDir ?? BUILTIN_DIR),
       selfContained: true,
+      // The packages the server load gets from Walnut at run time (express, say).
+      fallbackPackageRoot: tree.nodeModulesRoot,
     });
     return {};
   } catch (err) {

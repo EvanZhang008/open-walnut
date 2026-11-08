@@ -11,7 +11,9 @@
  * callers and plugin authors read).
  */
 
+import { existsSync, readFileSync } from 'node:fs'
 import fs from 'node:fs/promises'
+import { isBuiltin } from 'node:module'
 import path from 'node:path'
 import { ON_BUN, bunGlobal } from './runtime.js'
 
@@ -28,6 +30,13 @@ export interface BundleRequest {
    * machine with no node_modules. Default: packages stay imports, for bun.
    */
   selfContained?: boolean
+  /**
+   * With selfContained: the directory a bare package is looked up from when the
+   * importer's own tree has no copy of it. A plugin outside any node_modules tree
+   * imports packages Walnut carries (express); its server load gets them from Walnut
+   * at run time, so its job bundle must inline them from the same tree.
+   */
+  fallbackPackageRoot?: string
 }
 
 
@@ -76,6 +85,8 @@ export async function bundleEsm(req: BundleRequest): Promise<void> {
           const file = req.resolveParent(args.path, args.importer)
           return file ? { path: file } : undefined
         })
+        const fallback = req.selfContained ? req.fallbackPackageRoot : undefined
+        if (fallback) b.onResolve({ filter: /^[^./]/ }, (args) => fallbackPackage(args.path, args.importer, fallback))
       },
     }],
   })
@@ -89,4 +100,76 @@ export async function bundleEsm(req: BundleRequest): Promise<void> {
   }
   await fs.mkdir(path.dirname(req.outfile), { recursive: true })
   await fs.writeFile(req.outfile, await result.outputs[0]!.text())
+}
+
+const NODE_MODULES_SEGMENT = `${path.sep}node_modules${path.sep}`
+
+/**
+ * A bare package the importer's own tree has no copy of, resolved from `root` instead;
+ * undefined (the usual resolution, and its error) for a builtin, an importer inside a
+ * package, or a package found in neither tree. Copies are looked for on disk: bun's
+ * resolveSync also answers from its global install cache, which Bun.build never uses.
+ */
+function fallbackPackage(specifier: string, importer: string, root: string): { path: string } | undefined {
+  if (!importer || importer.includes(NODE_MODULES_SEGMENT) || isBuiltin(specifier)) return undefined
+  const parts = specifier.split('/')
+  const name = specifier.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0]!
+  if (packageDirAbove(path.dirname(importer), name)) return undefined
+  const dir = packageDirAbove(root, name)
+  if (!dir) return undefined
+  const file = exportsTarget(dir, `.${specifier.slice(name.length)}`)
+  if (file !== undefined) return file ? { path: file } : undefined
+  try {
+    return { path: bunGlobal<{ resolveSync(specifier: string, from: string): string }>().resolveSync(specifier, root) }
+  } catch { return undefined }
+}
+
+/** `<dir or a directory above it>/node_modules/<name>`, or null. */
+function packageDirAbove(dir: string, name: string): string | null {
+  for (let d = path.resolve(dir); ; d = path.dirname(d)) {
+    const candidate = path.join(d, 'node_modules', name)
+    if (existsSync(candidate)) return candidate
+    if (path.dirname(d) === d) return null
+  }
+}
+
+/** The conditions a job bundle (Bun.build target node, ES modules) resolves with. */
+const JOB_CONDITIONS = ['node', 'import', 'default']
+
+/**
+ * The file a package's `exports` names for `subpath` under JOB_CONDITIONS: a path,
+ * null when `exports` has no entry for it, or undefined when the package has no
+ * `exports` (main fields, which resolveSync reads the way the bundler does). resolveSync
+ * itself resolves with bun's conditions, which would inline a bun-only entry.
+ */
+function exportsTarget(dir: string, subpath: string): string | null | undefined {
+  let exp: unknown
+  try { exp = (JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8')) as { exports?: unknown }).exports } catch { return undefined }
+  if (exp === undefined) return undefined
+  const isMap = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
+  const subpathMap = isMap(exp) && Object.keys(exp).some((k) => k.startsWith('.'))
+  let target: unknown = subpathMap ? undefined : subpath === '.' ? exp : undefined
+  let star = ''
+  if (subpathMap) {
+    const map = exp as Record<string, unknown>
+    if (subpath in map) target = map[subpath]
+    else {
+      for (const key of Object.keys(map)) {
+        const at = key.indexOf('*')
+        if (at < 0) continue
+        const head = key.slice(0, at), tail = key.slice(at + 1)
+        if (subpath.startsWith(head) && subpath.endsWith(tail) && subpath.length >= key.length - 1) {
+          target = map[key]; star = subpath.slice(head.length, subpath.length - tail.length); break
+        }
+      }
+    }
+  }
+  const pick = (v: unknown): string | null => {
+    if (typeof v === 'string') return v
+    if (Array.isArray(v)) { for (const x of v) { const r = pick(x); if (r) return r } return null }
+    if (isMap(v)) { for (const [k, x] of Object.entries(v)) if (JOB_CONDITIONS.includes(k)) { const r = pick(x); if (r) return r } }
+    return null
+  }
+  const rel = pick(target)
+  return rel ? path.join(dir, rel.replace(/\*/g, star)) : null
 }
