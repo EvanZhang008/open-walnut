@@ -15,6 +15,9 @@ useDefault = true
     '''tests/logging/redact\.test\.ts''',
     # host_exec's redaction test: random bytes between made-up key armour lines.
     '''tests/core/hosts/host-exec-redact\.test\.ts''',
+    # The iOS vault test fixture: a vault sealed with a made-up master password
+    # and Secret Key, and the key derived from them.
+    '''ios-native/WalnutTests/Fixtures/vault-fixture\.json''',
   ]
   # Made-up values in tests that are not credentials: the draft merge's
   # credential detector fixture, and a fake setup claim token.
