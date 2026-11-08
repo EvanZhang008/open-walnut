@@ -155,7 +155,9 @@ test('fullscreen file view steps aside so the composer is visible', async ({ pag
   const explorer = await openFiles(panel)
   await openReportSource(explorer)
 
-  await explorer.getByRole('button', { name: /Fullscreen/ }).click()
+  // Fullscreen is a row of the file line's ⋯ menu since the file page redesign (862b0daea).
+  await explorer.getByRole('button', { name: 'More file actions' }).click()
+  await page.getByTestId('fv-more-menu').getByRole('menuitem', { name: 'Fullscreen' }).click()
   const fullscreenView = page.locator('.file-content-view.fv-fullscreen')
   await expect(fullscreenView).toHaveCount(1)
 
