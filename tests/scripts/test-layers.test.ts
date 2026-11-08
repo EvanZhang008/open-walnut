@@ -38,16 +38,21 @@ describe('the local layer', () => {
 
 describe('the land layer', () => {
   const universe = ['tests/x.test.ts', 'tests/y.test.ts', 'tests/slow-importer.test.ts', 'tests/z-ratchet.test.ts', 'tests/heavy-guard.test.ts', 'tests/other.test.ts']
-  const durations = { 'tests/slow-importer.test.ts': layers.LAND_FILE_MAX_MS + 1, 'tests/heavy-guard.test.ts': layers.LAND_SCAN_MAX_MS + 1, 'tests/other.test.ts': 100 }
+  const durations = { 'tests/slow-importer.test.ts': 600_000, 'tests/heavy-guard.test.ts': layers.LAND_SCAN_MAX_MS + 1, 'tests/other.test.ts': 100 }
 
-  it('runs the changed tests, the direct importers within cost, and the fast scan tests', () => {
+  it('runs the changed tests, every direct importer whatever it costs, and the scan tests: no cut-off', () => {
     const plan = layers.landLayer(['src/m.ts', 'tests/x.test.ts'], { universe, durations, namedBy: () => new Set<string>(), graph: fakeGraph({ 'src/m.ts': ['tests/y.test.ts', 'tests/slow-importer.test.ts'] }) })
-    expect(plan.files).toEqual(['tests/x.test.ts', 'tests/y.test.ts', 'tests/z-ratchet.test.ts'])
+    expect(plan.files).toEqual(['tests/slow-importer.test.ts', 'tests/x.test.ts', 'tests/y.test.ts', 'tests/z-ratchet.test.ts'])
     expect(plan.why.get('tests/x.test.ts')).toBe('changed')
     expect(plan.why.get('tests/y.test.ts')).toBe('imports a changed file')
     expect(plan.why.get('tests/z-ratchet.test.ts')).toBe('scan test')
-    // Too costly for a land: the push gate runs it.
-    expect(plan.leftToGate).toEqual(['tests/slow-importer.test.ts'])
+    expect(plan.leftToGate).toEqual([])
+  })
+
+  it("the change's own test in the slow tier runs too, with the slow config", () => {
+    const plan = layers.landLayer(['tests/own-slow.test.ts', 'src/m.ts'], { universe, slow: ['tests/own-slow.test.ts'], durations, namedBy: () => new Set<string>(), graph: fakeGraph({}) })
+    expect(plan.slowFiles).toEqual(['tests/own-slow.test.ts'])
+    expect(plan.files).not.toContain('tests/own-slow.test.ts')
   })
 
   it('never runs a file outside the quick tier (slow, quarantined, e2e), even one the change edits', () => {
@@ -56,12 +61,12 @@ describe('the land layer', () => {
     expect(plan.files).not.toContain('tests/not-in-tier.test.ts')
   })
 
-  it('a hub module: at most LAND_MAX_IMPORTERS importers, the cheapest first, the rest to the push gate', () => {
-    const many = Array.from({ length: layers.LAND_MAX_IMPORTERS + 5 }, (_, i) => `tests/imp-${String(i).padStart(3, '0')}.test.ts`)
-    const d: Record<string, number> = Object.fromEntries(many.map((f, i) => [f, 1000 + i]))
-    const plan = layers.landLayer(['src/hub.ts'], { universe: many, durations: d, namedBy: () => new Set<string>(), graph: fakeGraph({ 'src/hub.ts': [...many].reverse() }) })
-    expect(plan.files).toEqual(many.slice(0, layers.LAND_MAX_IMPORTERS))
-    expect(plan.leftToGate).toEqual(many.slice(layers.LAND_MAX_IMPORTERS))
+  it('a hub module: the land layer runs all of its importers; the local layer the cheapest 60', () => {
+    const many = Array.from({ length: 250 }, (_, i) => `tests/imp-${String(i).padStart(3, '0')}.test.ts`)
+    const d: Record<string, number> = Object.fromEntries(many.map((f, i) => [f, 100 + i]))
+    const opts = { universe: many, durations: d, namedBy: () => new Set<string>(), read: () => '', graph: fakeGraph({ 'src/hub.ts': [...many].reverse() }) }
+    expect(layers.landLayer(['src/hub.ts'], opts).files).toEqual(many)
+    expect(layers.localLayer(['src/hub.ts'], opts).files).toEqual(many.slice(0, 60))
   })
 
   it("a change to the test setup adds the setup's own tests, never the whole tier", () => {

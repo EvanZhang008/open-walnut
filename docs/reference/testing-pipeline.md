@@ -5,7 +5,7 @@ Layers chosen so the one you run most often is the one that costs least. Run `bu
 | Layer | Command | Scope | Time | When |
 |---|---|---|---|---|
 | **L0 local** | `bun run test:local` | the tests of your change: its own tests, the fast direct importers, the cheapest scan tests | about a minute | every code change |
-| **Land** | `bun run test:land` | the same with the importers up to 30 s each (at most 200) and the scan tests up to 6 s | a few minutes | before a land; the land check runs it |
+| **Land** | `bun run test:land` | every test the change needs, run to the end: its own tests (quick and slow tier), every quick test importing or naming a changed file, the scan tests up to 6 s; no timer, no budget | a few minutes | before a land; the land check runs it |
 | **L1 quick** | `bun run test:quick` | the whole quick tier, ~3,200 files | ~10 min at 8 workers, much longer at 1 | when a change reaches far; the push gate runs it on GitHub |
 | **L2 focus** | `bun run test:focus <path>` | whatever you name | 0.3 to 30 s | while working on one module |
 | **L3 pre-commit** | `bun run test:pre-commit` | the tiers your diff can break | 1 to 6 min | before a larger commit |
@@ -47,8 +47,9 @@ What it caught that the cluster could not (2026-10-23): the ControlMaster socket
 
 `scripts/test-layers.mjs` picks the tests a change can break, from the quick tier only (never the slow, quarantined, e2e or live files), and runs them (`run local|land`; `plan` lists them with the reason for each, `--base <ref>` is the diff base, `--changed-from <file>` reads the changed paths from a file, `--json <file>` writes the verdict). It reads the per-file times of `tests/setup/test-durations.json` (`bun scripts/test-layers.mjs measure [--maxWorkers=N]` runs the whole quick tier and rewrites it; a file's cost counts its worker start, environment, setup files and imports as well as its tests, through `scripts/lib/duration-reporter.mjs`, since vitest's JSON report times only the tests). A layer is the union of:
 
-- the changed test files;
-- the tests importing a changed file directly, and the tests naming a changed path (`scripts/test-changed-refs.mjs`), within the layer's cost per file (1.5 s local, 30 s land) and count (60 local, 200 land), cheapest first; the rest are left to the push gate, which runs the whole tier;
+- the changed test files of the quick tier;
+- the tests importing a changed file directly, and the tests naming a changed path (`scripts/test-changed-refs.mjs`): all of them in the land layer, whatever they cost; the local layer takes only those under 1.5 s, at most 60, cheapest first, and leaves the rest to the land;
+- the change's own test files in the slow tier, run with `vitest.slow.config.ts`, one at a time;
 - the scan tests: a test named `*ratchet*` or `*guard*`, or one that reads the source tree and starts no server, up to 0.5 s each local (the cheapest third, a cost counting the file's worker start and imports) and 6 s for a land. They are rule checks over the whole tree, so any change can break one, and in the land history of 2026-11-01..07 they caught most of the real problems;
 - for a change to the test setup (a vitest config, `tests/setup/`, `package.json`, `bun.lock`), the setup's own tests.
 

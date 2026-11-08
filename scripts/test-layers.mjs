@@ -4,10 +4,12 @@
  *
  *   L0 local  `bun run test:local`        while coding: the change's own tests, the fast tests (under
  *                                          1.5 s each) importing or naming a changed file, and the
- *                                          fast scan tests (ratchets, guards); under a minute.
- *                                          `--all`: every fast file of the quick tier (~9 min)
- *   L1 land   `bun run test:land`         before a land: the same, with tests up to 30 s each and up
- *                                          to 200 reached files; a few minutes
+ *                                          cheapest scan tests (ratchets, guards); about a minute.
+ *                                          `--all`: every fast file of the quick tier
+ *   L1 land   `bun run test:land`         before a land: every test the change needs, run to the end:
+ *                                          its own tests (quick and slow tier), every quick test
+ *                                          importing or naming a changed file, the scan tests up to
+ *                                          6 s; no timer, no budget. A few minutes
  *   L2 deep   push gate + CI              the whole quick, slow, e2e, frontend and browser tiers,
  *                                          on GitHub's runners, after the land (unchanged)
  *
@@ -15,7 +17,7 @@
  *   bun scripts/test-layers.mjs plan local|land [--base <ref>]   counts, predicted time, why
  *   bun scripts/test-layers.mjs run  local|land [--base <ref>] [--json <file>]
  *   bun scripts/test-layers.mjs report                           quarantine and timing upkeep
- *   bun scripts/test-layers.mjs measure <vitest json report>     rewrite tests/setup/test-durations.json
+ *   bun scripts/test-layers.mjs measure [vitest options]        rewrite tests/setup/test-durations.json
  *
  * Why: a land ran 1,000 to 2,000 quick files on a shared host (median 93 min, 2026-11-05 to 07),
  * and of its 61 refusals for tests, 31 were tests failing at random or under load; 25 of the 29
@@ -48,10 +50,6 @@ export const LOCAL_MAX_MS = 1500
 export const SCAN_MAX_MS = 500
 /** The land layer runs scan tests up to this long. */
 export const LAND_SCAN_MAX_MS = 6000
-/** A test reached through a changed file runs in the land layer up to this cost; past it, the push gate. */
-export const LAND_FILE_MAX_MS = 30_000
-/** At most this many importer tests per land; the cheapest go first, the rest to the push gate. */
-export const LAND_MAX_IMPORTERS = 200
 /** These paths change how every test runs: the land layer adds the whole local layer for them. */
 const SETUP_PATH = /^(vitest[^/]*\.config\.ts|tests\/setup\/[^/]+\.ts|bun\.lock|package\.json)$/
 const FOREIGN = ['tests/e2e/', 'tests/web/notes-roundtrip/', 'tests/web/diff-view/', 'tests/web/markdown/', 'tests/web/workflow-graph/']
@@ -71,6 +69,15 @@ export function quickUniverse() {
   const slow = new Set([...SLOW_TEST_FILES, ...QUARANTINED_TEST_FILES])
   const slowDirs = SLOW_TEST_DIRS.map((d) => d.replace(/\*\*$/, ''))
   return all.filter((f) => !f.endsWith('.live.test.ts') && !slow.has(f) && !slowDirs.some((d) => f.startsWith(d)) && !FOREIGN.some((d) => f.startsWith(d))).sort()
+}
+
+/** The slow tier's files (vitest.slow.config.ts): the slow list, the quarantine, the slow dirs. */
+export function slowUniverse() {
+  const all = []
+  walk(path.join(ROOT, 'tests'), all)
+  const slow = new Set([...SLOW_TEST_FILES, ...QUARANTINED_TEST_FILES])
+  const slowDirs = SLOW_TEST_DIRS.map((d) => d.replace(/\*\*$/, ''))
+  return all.filter((f) => !f.endsWith('.live.test.ts') && (slow.has(f) || slowDirs.some((d) => f.startsWith(d)))).sort()
 }
 
 export function readDurations(file = DURATIONS) {
@@ -129,21 +136,27 @@ function namers(changed) {
   return out
 }
 
-/** Per-layer limits: what a reached file may cost, and how many reached files run. */
+/**
+ * What each layer holds. The land layer runs every test the change needs to the end, whatever it
+ * costs: its own tests (of any tier), every test importing or naming a changed file, and the scan
+ * tests; it is fast because it holds only those (2026-11-08, the user: tests in layers, "and the
+ * tests it needs, run them"; no timer, no budget). The local layer is the quick look while
+ * editing: the same, with only fast reached files.
+ */
 export const LIMITS = {
   local: { fileMaxMs: LOCAL_MAX_MS, maxReached: 60, scanMaxMs: SCAN_MAX_MS, depth: 1 },
-  land: { fileMaxMs: LAND_FILE_MAX_MS, maxReached: LAND_MAX_IMPORTERS, scanMaxMs: LAND_SCAN_MAX_MS, depth: 1 },
+  land: { fileMaxMs: Infinity, maxReached: Infinity, scanMaxMs: LAND_SCAN_MAX_MS, depth: 1 },
 }
 
 /**
- * The files a layer runs for a change: { files, why, leftToGate, predictedMs }.
- *   the change's own test files (any cost),
- *   the tests importing a changed file directly and the tests naming one by path, within the
- *     layer's cost per file and count (cheapest first; the rest go to the push gate),
+ * The files a layer runs for a change: { files, slowFiles, why, leftToGate, predictedMs }.
+ *   the change's own test files (any cost; slowFiles: the ones in the slow tier, run with its config),
+ *   the tests importing a changed file directly and the tests naming one by path (the local
+ *     layer: within its cost per file and count, cheapest first, the rest left to the land),
  *   every fast scan test (ratchets, guards: they caught most real problems, in milliseconds),
  *   and for a change to the test setup, the tests of the setup itself.
  */
-export function scopedLayer(layer, changed, { universe = quickUniverse(), durations = readDurations(), graph, namedBy = namers, read, limits = {} } = {}) {
+export function scopedLayer(layer, changed, { universe = quickUniverse(), slow = slowUniverse(), durations = readDurations(), graph, namedBy = namers, read, limits = {} } = {}) {
   const { fileMaxMs, maxReached, scanMaxMs, depth } = { ...LIMITS[layer], ...limits }
   const inTier = new Set(universe)
   const why = new Map()
@@ -160,7 +173,10 @@ export function scopedLayer(layer, changed, { universe = quickUniverse(), durati
   for (const f of scanTests(universe, durations, scanMaxMs, read)) add(f, 'scan test')
   if (changed.some((f) => SETUP_PATH.test(f))) for (const f of universe) if (f.startsWith('tests/setup/')) add(f, 'the change touches the test setup')
   const files = [...why.keys()].sort()
-  return { files, why, leftToGate: leftToGate.sort(), predictedMs: files.reduce((s, f) => s + cost(durations, f), 0) }
+  const slowSet = new Set(slow)
+  const slowFiles = [...new Set(changed)].filter((f) => isTestFile(f) && slowSet.has(f)).sort()
+  for (const f of slowFiles) why.set(f, 'changed (slow tier)')
+  return { files, slowFiles, why, leftToGate: leftToGate.sort(), predictedMs: files.reduce((s, f) => s + cost(durations, f), 0) }
 }
 
 /** The land layer (L1) for a change. */
@@ -219,22 +235,32 @@ export function judge(first, again) {
   return { fails, flaky }
 }
 
-function run(o, files) {
-  if (!files.length) { console.log('[test-layers] nothing to run'); return 0 }
-  console.log(`[test-layers] ${o.layer}: ${files.length} file(s)`)
-  const first = runVitest(files, o.extra)
+/** One tier's run: the files, then the failing ones once more, alone. */
+function runTier(files, extra, config) {
+  const first = runVitest(files, extra, { config })
   const failing = [...new Set([...first.failed.map((f) => f.split(' :: ')[0]), ...first.crashed])]
   let again = { failed: [], crashed: [], ms: 0, runError: null }
   if (failing.length) {
     console.log(`[test-layers] ${failing.length} file(s) failed: running them once more, alone`)
-    again = runVitest(failing, ['--maxWorkers=1', ...o.extra.filter((a) => !a.startsWith('--maxWorkers'))])
+    again = runVitest(failing, ['--maxWorkers=1', ...extra.filter((a) => !a.startsWith('--maxWorkers'))], { config })
   }
-  const { fails, flaky } = judge(first, again)
-  const verdict = { layer: o.layer, base: o.base, files: files.length, ms: first.ms + again.ms, fails, flaky, ok: fails.length === 0 }
+  return { ...judge(first, again), ms: first.ms + again.ms }
+}
+
+function run(o, files, slowFiles = []) {
+  if (!files.length && !slowFiles.length) { console.log('[test-layers] nothing to run'); return 0 }
+  console.log(`[test-layers] ${o.layer}: ${files.length} file(s)${slowFiles.length ? `, and ${slowFiles.length} of the change's own in the slow tier` : ''}`)
+  const tiers = []
+  if (files.length) tiers.push(runTier(files, o.extra, 'vitest.quick.config.ts'))
+  // The slow tier's files start real processes: one at a time, as CI runs them.
+  if (slowFiles.length) tiers.push(runTier(slowFiles, ['--maxWorkers=1', ...o.extra.filter((a) => !a.startsWith('--maxWorkers'))], 'vitest.slow.config.ts'))
+  const fails = tiers.flatMap((t) => t.fails), flaky = tiers.flatMap((t) => t.flaky)
+  const n = files.length + slowFiles.length
+  const verdict = { layer: o.layer, base: o.base, files: n, ms: tiers.reduce((s, t) => s + t.ms, 0), fails, flaky, ok: fails.length === 0 }
   if (o.json) fs.writeFileSync(o.json, JSON.stringify(verdict, null, 2))
   if (flaky.length) console.log(`[test-layers] ${flaky.length} test(s) failed in the full run and passed alone (flaky, not counted):\n  ${flaky.join('\n  ')}`)
   if (fails.length) console.log(`[test-layers] FAILED: ${fails.length} test(s) failed twice:\n  ${fails.join('\n  ')}`)
-  console.log(`[test-layers] ${verdict.ok ? 'passed' : 'failed'}: ${files.length} file(s) in ${Math.round(verdict.ms / 1000)} s`)
+  console.log(`[test-layers] ${verdict.ok ? 'passed' : 'failed'}: ${n} file(s) in ${Math.round(verdict.ms / 1000)} s`)
   return verdict.ok ? 0 : 1
 }
 
@@ -278,18 +304,18 @@ if (import.meta.main) {
     measure(o.layer && !opt(o.layer) ? o.layer : null, opt(o.layer) ? [o.layer, ...o.extra] : o.extra); process.exit(0)
   }
   if (!['list', 'plan', 'run'].includes(o.cmd) || !['local', 'land'].includes(o.layer)) {
-    console.error('usage: bun scripts/test-layers.mjs list|plan|run local|land [--base <ref>] [--json <file>] [vitest options]\n       bun scripts/test-layers.mjs report\n       bun scripts/test-layers.mjs measure [<costs json>] [vitest options]')
+    console.error('usage: bun scripts/test-layers.mjs list|plan|run local|land [--base <ref>] [--changed-from <file>] [--json <file>] [vitest options]\n       bun scripts/test-layers.mjs report\n       bun scripts/test-layers.mjs measure [<costs json>] [vitest options]')
     process.exit(2)
   }
   const universe = quickUniverse(), durations = readDurations()
-  let files, plan = null
+  let files, slowFiles = [], plan = null
   if (o.all) files = fastFiles(universe, durations)
   else {
     // --changed-from <file>: the changed paths, one per line, instead of a diff (a replay of an old land).
     const changed = o.changedFrom ? fs.readFileSync(o.changedFrom, 'utf8').split('\n').filter(Boolean) : changedFiles(o.base)
-    plan = scopedLayer(o.layer, changed, { universe, durations }); files = plan.files
+    plan = scopedLayer(o.layer, changed, { universe, durations }); files = plan.files; slowFiles = plan.slowFiles
   }
-  if (o.cmd === 'list') { for (const f of files) console.log(f); process.exit(0) }
+  if (o.cmd === 'list') { for (const f of [...files, ...slowFiles]) console.log(f); process.exit(0) }
   if (o.cmd === 'plan') {
     const ms = files.reduce((s, f) => s + cost(durations, f), 0)
     console.log(`${o.layer}: ${files.length} file(s), ${Math.round(ms / 1000)} s of measured test time`)
@@ -297,9 +323,9 @@ if (import.meta.main) {
       const by = new Map()
       for (const r of plan.why.values()) by.set(r, (by.get(r) ?? 0) + 1)
       for (const [r, n] of by) console.log(`  ${n} ${r}`)
-      if (plan.leftToGate.length) console.log(`  ${plan.leftToGate.length} reached but left to the push gate (cost or count)`)
+      if (plan.leftToGate.length) console.log(`  ${plan.leftToGate.length} reached but over the local layer's cost or count: the land layer runs them`)
     }
     process.exit(0)
   }
-  process.exit(run(o, files))
+  process.exit(run(o, files, slowFiles))
 }
