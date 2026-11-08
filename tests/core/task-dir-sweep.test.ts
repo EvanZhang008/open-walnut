@@ -211,7 +211,7 @@ describe('sweepTaskDirsOnce', () => {
     const caps = ['task-dir-v1', 'task-dir-sizes-v1']
     const local = mk('__local__', caps)
     const remote = mk('cloud', caps)
-    const res = await sweepTaskDirsOnce({ conns: [local.conn, remote.conn], loadTasks, now: NOW, lowDisk: true, tellTask, noticeFile })
+    const res = await sweepTaskDirsOnce({ conns: [local.conn, remote.conn], loadTasks, now: NOW, lowDisk: true, tellTask, noticeFile, orgOn: true })
     // Only open tasks with a session are measured; only this machine's disk is low.
     expect(local.calls.find((c) => c[0] === 'taskdir.sizes')?.[1]).toEqual({ taskIds: ['big', 'small'] })
     expect(remote.calls.some((c) => c[0] === 'taskdir.sizes')).toBe(false)
@@ -228,6 +228,8 @@ describe('sweepTaskDirsOnce', () => {
     sizes = sizes.map((s) => (s.taskId === 'big' ? { ...s, bytes: 11.5 * GiB } : s))
     await sweepTaskDirsOnce({ conns: [mk('__local__', caps).conn], loadTasks, now: NOW + 7_200_000, lowDisk: true, tellTask, noticeFile })
     expect(told).toHaveLength(2)
+    // A new notice is new news: its own message id, never a retry the queue would skip.
+    expect(told[1].messageId).not.toBe(told[0].messageId)
     await sweepTaskDirsOnce({ conns: [mk('__local__', caps).conn], loadTasks, now: NOW + 7_200_000 + DAY, lowDisk: true, tellTask, noticeFile })
     expect(told).toHaveLength(3)
     // A disk that is not low, or a host without the capability, measures nothing.
@@ -237,6 +239,39 @@ describe('sweepTaskDirsOnce', () => {
     await sweepTaskDirsOnce({ conns: [older.conn], loadTasks, now: NOW + 3 * DAY, lowDisk: true, tellTask, noticeFile })
     expect([...calm.calls, ...older.calls].some((c) => c[0] === 'taskdir.sizes')).toBe(false)
     expect(told).toHaveLength(3)
+  })
+
+  // Review round 5: no Walnut message reaches Main or a VP while the org is off; and a directory the host
+  // did not reach (its deadline) is asked for first next round, so one huge tree cannot starve the rest.
+  it('skips an org node while the org is off, and asks first for the directories measured longest ago', async () => {
+    const GiB = 1024 ** 3
+    const asked: string[][] = []
+    const conn = {
+      host: '__local__', hasCapability: (c: string) => ['task-dir-v1', 'task-dir-sizes-v1'].includes(c),
+      send: async (cmd: string, p?: Record<string, unknown>) => {
+        if (cmd === 'taskdir.list') return { ok: true, dirs: [dir('vp', 0.1), dir('a', 0.1), dir('b', 0.1)] }
+        if (cmd !== 'taskdir.sizes') return { ok: false }
+        const ids = p!.taskIds as string[]
+        asked.push(ids)
+        // The host reaches only the first one before its deadline.
+        return { ok: true, sizes: [{ taskId: ids[0], bytes: 9 * GiB, partial: false, top: [] }] }
+      },
+    }
+    const loadTasks = async () => [
+      { ...task('vp', 'IN_PROGRESS'), session_id: 's-vp', org_role: 'lead' },
+      { ...task('a', 'IN_PROGRESS'), session_id: 's-a' }, { ...task('b', 'IN_PROGRESS'), session_id: 's-b' },
+    ]
+    const told: string[] = []
+    const tellTask = async (t: { id: string }) => { told.push(t.id) }
+    const noticeFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-size-notice-')), 'told.json')
+    const round = (n: number, orgOn: boolean) => sweepTaskDirsOnce({ conns: [conn], loadTasks, now: NOW + n * 3_600_000, lowDisk: true, tellTask, noticeFile, orgOn })
+    await round(0, false)
+    await round(1, false)
+    expect(asked).toEqual([['a', 'b'], ['b', 'a']])
+    expect(told).toEqual(['a', 'b'])
+    await round(2, true)
+    expect(asked[2][0]).toBe('vp')
+    expect(told).toEqual(['a', 'b', 'vp'])
   })
 
   // 2026-11-08: the Mac refilled from 30 to 12 GiB within hours while the watermark (10 GiB) still read ok.

@@ -19,8 +19,10 @@ export const SIZE_NOTICE_REPEAT_MS = 24 * 3_600_000
 export const SIZE_NOTICE_GROWTH_BYTES = 2 * 1024 ** 3
 const TOLD_KEEP_MS = 7 * 24 * 3_600_000
 
-export interface SizeNoticeTask { id: string; phase: string; session_id?: string }
+export interface SizeNoticeTask { id: string; phase: string; session_id?: string; org_role?: string }
 export type ToldSizes = Record<string, { at: number; bytes: number }>
+/** What the sweep remembers across rounds and restarts: who was told, and when each directory was last measured. */
+interface NoticeRecord { told: ToldSizes; measured: Record<string, number> }
 
 export function taskDirNoticeBytes(env: NodeJS.ProcessEnv): number {
   const raw = env.WALNUT_TASK_DIR_NOTICE_GB
@@ -29,16 +31,20 @@ export function taskDirNoticeBytes(env: NodeJS.ProcessEnv): number {
 }
 
 /** The directories to tell their task about now. */
-export function pickSizeNotices(sizes: TaskDirSize[], tasks: Map<string, SizeNoticeTask>, told: ToldSizes, opts: { now: number; floor: number }): TaskDirSize[] {
+export function pickSizeNotices(sizes: TaskDirSize[], tasks: Map<string, SizeNoticeTask>, told: ToldSizes, opts: { now: number; floor: number; orgOn: boolean }): TaskDirSize[] {
   if (!(opts.floor > 0)) return []
   return sizes.filter((s) => {
     const t = tasks.get(s.taskId)
-    if (!t || t.phase === 'COMPLETE' || !t.session_id) return false
+    if (!t || !mayTell(t, opts.orgOn)) return false
     if (!(s.bytes >= opts.floor)) return false
     const prev = told[s.taskId]
     return !prev || opts.now - prev.at >= SIZE_NOTICE_REPEAT_MS || s.bytes - prev.bytes >= SIZE_NOTICE_GROWTH_BYTES
   })
 }
+
+/** An open task with a session; Main or a VP only while the org is on (org-enabled.ts: no Walnut message reaches one while it is off). */
+const mayTell = (t: SizeNoticeTask, orgOn: boolean): boolean =>
+  t.phase !== 'COMPLETE' && !!t.session_id && (orgOn || !t.org_role)
 
 const gb = (b: number): string => `${(b / 1024 ** 3).toFixed(1)} GB`
 
@@ -53,17 +59,19 @@ export function sizeNoticeText(size: TaskDirSize, dir: string, freeBytes: number
   ].join('\n')
 }
 
-async function readTold(file: string, now: number): Promise<ToldSizes> {
+async function readRecord(file: string, now: number): Promise<NoticeRecord> {
   try {
-    const raw = JSON.parse(await fsp.readFile(file, 'utf8')) as ToldSizes
-    return Object.fromEntries(Object.entries(raw).filter(([, v]) => v && now - v.at < TOLD_KEEP_MS))
-  } catch { return {} }
+    const raw = JSON.parse(await fsp.readFile(file, 'utf8')) as Partial<NoticeRecord>
+    const fresh = <T>(o: Record<string, T> | undefined, at: (v: T) => number) =>
+      Object.fromEntries(Object.entries(o && typeof o === 'object' ? o : {}).filter(([, v]) => v != null && now - at(v) < TOLD_KEEP_MS))
+    return { told: fresh(raw.told, (v) => v.at), measured: fresh(raw.measured, (v) => v) }
+  } catch { return { told: {}, measured: {} } }
 }
 
-async function writeTold(file: string, told: ToldSizes): Promise<void> {
+async function writeRecord(file: string, rec: NoticeRecord): Promise<void> {
   await fsp.mkdir(path.dirname(file), { recursive: true })
   const tmp = `${file}.${process.pid}.tmp`
-  await fsp.writeFile(tmp, JSON.stringify(told) + '\n')
+  await fsp.writeFile(tmp, JSON.stringify(rec) + '\n')
   await fsp.rename(tmp, file)
 }
 
@@ -75,30 +83,38 @@ export async function tellOversizeTasks(conn: Conn, dirs: Array<{ taskId: string
   file: string
   freeBytes: number | null
   deliver?: (task: SizeNoticeTask, text: string, messageId: string) => Promise<void>
+  orgOn?: boolean
 }): Promise<string[]> {
   const floor = taskDirNoticeBytes(process.env)
   if (!(floor > 0) || !conn.hasCapability?.('task-dir-sizes-v1')) return []
-  const open = dirs.filter((d) => { const t = tasks.get(d.taskId); return t && t.phase !== 'COMPLETE' && t.session_id })
+  const orgOn = deps.orgOn ?? await import('./org/org-enabled.js').then((m) => m.isOrgEnabled()).catch(() => true)
+  const rec = await readRecord(deps.file, deps.now)
+  // The ones measured longest ago go first: the host stops at its deadline, and the rest come next round.
+  const open = dirs.filter((d) => { const t = tasks.get(d.taskId); return t && mayTell(t, orgOn) })
+    .sort((a, b) => (rec.measured[a.taskId] ?? 0) - (rec.measured[b.taskId] ?? 0))
   if (open.length === 0) return []
   const res = await conn.send('taskdir.sizes', { taskIds: open.map((d) => d.taskId) }, 180_000) as { ok?: boolean; error?: string; sizes?: TaskDirSize[] }
   if (res?.ok === false) throw new Error(res.error || 'taskdir.sizes refused')
-  const told = await readTold(deps.file, deps.now)
-  const due = pickSizeNotices(Array.isArray(res?.sizes) ? res.sizes : [], tasks, told, { now: deps.now, floor })
+  const sizes = Array.isArray(res?.sizes) ? res.sizes : []
+  for (const s of sizes) rec.measured[s.taskId] = deps.now
+  const told = rec.told
+  const due = pickSizeNotices(sizes, tasks, told, { now: deps.now, floor, orgOn })
   const deliver = deps.deliver ?? deliverNotice
   const out: string[] = []
   for (const s of due) {
     const task = tasks.get(s.taskId)!
     const dir = dirs.find((d) => d.taskId === s.taskId)!.path
     try {
-      await deliver(task, sizeNoticeText(s, dir, deps.freeBytes, conn.host), `tds-${s.taskId}-${Math.floor(deps.now / SIZE_NOTICE_REPEAT_MS)}`)
+      // One id per notice: a later notice is new news, never a retry of the last one.
+      await deliver(task, sizeNoticeText(s, dir, deps.freeBytes, conn.host), `tds-${s.taskId}-${deps.now}`)
       told[s.taskId] = { at: deps.now, bytes: s.bytes }
       out.push(s.taskId)
     } catch (err) {
       log.session.warn('task dir size notice not delivered', { taskId: s.taskId, error: (err as Error).message })
     }
   }
-  if (out.length > 0) await writeTold(deps.file, told)
-  log.session.info('task dir sizes checked', { host: conn.host, measured: res?.sizes?.length ?? 0, told: out, floorBytes: floor })
+  await writeRecord(deps.file, rec)
+  log.session.info('task dir sizes checked', { host: conn.host, asked: open.length, measured: sizes.length, told: out, floorBytes: floor })
   return out
 }
 

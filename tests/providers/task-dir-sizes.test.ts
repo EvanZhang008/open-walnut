@@ -36,8 +36,34 @@ describe('taskDirSizes', () => {
     for (let i = 0; i < 20; i++) fs.writeFileSync(path.join(dir, `f${i}`), 'x')
     const [s] = await taskDirSizes(root, ['task-b'], { files: 5 })
     expect(s.partial).toBe(true)
-    const [late] = await taskDirSizes(root, ['task-b'], { deadlineMs: -1 })
+    const [late] = await taskDirSizes(root, ['task-b'], { perDirMs: -1 })
     expect(late.partial).toBe(true)
     expect(late.bytes).toBe(0)
+  })
+
+  // Review round 5: one budget shared by every directory left the later ones measured as 0 forever.
+  it('gives each directory its own budget, and leaves out the ones the deadline did not reach', async () => {
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-sizes-')))
+    for (const t of ['task-c', 'task-d']) {
+      fs.mkdirSync(path.join(root, t))
+      fs.writeFileSync(path.join(root, t, 'data.bin'), Buffer.alloc(8192, 1))
+    }
+    const both = await taskDirSizes(root, ['task-c', 'task-d'], { files: 1 })
+    expect(both.map((s) => [s.taskId, s.bytes >= 8192])).toEqual([['task-c', true], ['task-d', true]])
+    expect(await taskDirSizes(root, ['task-c', 'task-d'], { totalMs: -1 })).toEqual([])
+  })
+
+  it('stops reading a huge directory once the budget is spent, and lets timers run meanwhile', async () => {
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-sizes-')))
+    const dir = path.join(root, 'task-e')
+    fs.mkdirSync(dir)
+    for (let i = 0; i < 3000; i++) fs.writeFileSync(path.join(dir, `f${i}`), '')
+    let ticks = 0
+    const timer = setInterval(() => { ticks++ }, 0)
+    const [s] = await taskDirSizes(root, ['task-e'], { files: 2000 })
+    clearInterval(timer)
+    expect(s.partial).toBe(true)
+    expect(s.top.length).toBeLessThanOrEqual(6)
+    expect(ticks).toBeGreaterThan(0)
   })
 })

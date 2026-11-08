@@ -49,7 +49,7 @@ const ABSENT_TASK_DAYS = 30
 const LOW_DISK_CHECK_MS = 5 * 60_000
 const LOW_DISK_SWEEP_MS = 60 * 60_000
 
-export interface TaskStateForSweep { id: string; phase: string; completed_at?: string; phase_changed_at?: string; updated_at?: string; session_id?: string }
+export interface TaskStateForSweep { id: string; phase: string; completed_at?: string; phase_changed_at?: string; updated_at?: string; session_id?: string; org_role?: string }
 
 const ms = (iso: string | undefined): number => {
   const t = iso ? Date.parse(iso) : NaN
@@ -155,6 +155,7 @@ export async function sweepTaskDirsOnce(deps?: {
   /** Delivers a size notice to a task (tests); default its session (task-dir-size-notice.ts). */
   tellTask?: (task: TaskStateForSweep, text: string, messageId: string) => Promise<void>
   noticeFile?: string
+  orgOn?: boolean
 }): Promise<SweepRow[]> {
   const { WALNUT_HOME, IS_EPHEMERAL } = await import('../constants.js')
   let conns = deps?.conns
@@ -224,6 +225,7 @@ export async function sweepTaskDirsOnce(deps?: {
         row.toldSize = await tellOversizeTasks(conn, live, tasks, {
           now, freeBytes: free, file: deps?.noticeFile ?? path.join(WALNUT_HOME, 'cache', 'task-dir-size-notices.json'),
           ...(deps?.tellTask ? { deliver: deps.tellTask } : {}),
+          ...(deps?.orgOn !== undefined ? { orgOn: deps.orgOn } : {}),
         }).catch((err) => { log.session.warn('task dir size check failed', { host: conn.host, error: (err as Error).message }); return [] })
       }
       if (removable.length > 0 || prunable.length > 0 || buildPrunable.length > 0 || (row.toldSize?.length ?? 0) > 0) results.push(row)
