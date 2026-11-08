@@ -112,7 +112,9 @@ describe('a Claude prompt with suggested rules', () => {
     // A call the rule does not cover gets no line; one already answered keeps its answer.
     state().handleStreamLine(call('toolu_5', 'npm run build'))
     state().handleStreamLine(call('toolu_3', 'npm test'))
-    await new Promise((r) => setTimeout(r, 200))
+    // A covered call sent after them gets its line once the two before it were handled.
+    state().handleStreamLine(call('toolu_9', 'npm test -- --bail'))
+    await vi.waitFor(async () => expect((await getSessionByClaudeId(SID))?.promptAnswerLines?.map((d) => d.toolUseId)).toContain('toolu_9'))
     const lines = (await getSessionByClaudeId(SID))?.promptAnswerLines ?? []
     expect(lines.find((d) => d.toolUseId === 'toolu_5')).toBeUndefined()
     expect(lines.find((d) => d.toolUseId === 'toolu_3')?.line).toBe('Allowed for this session: Bash commands starting with npm test')
