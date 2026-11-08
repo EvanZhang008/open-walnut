@@ -142,6 +142,13 @@ export function listUnsavedWork(doc: Document = document, active: Element | null
     if (!el.closest('.chat-image-previews')) items.push(item('attachment', 'An attached image that is not sent', el));
   }
   for (const el of Array.from(doc.querySelectorAll('.fv-dirty-dot'))) items.push(item('file', 'Unsaved file changes', el));
+  // A plugin's own editor says so itself: an element marked `data-walnut-unsaved` (its value
+  // names what) holds work a reload would lose, such as a buffer whose save is in flight, failed
+  // or in conflict. The document editors above are skipped by design, so without the mark a
+  // plugin's dirty buffer read as nothing to lose (2026-11-08, the memory swap's review).
+  for (const el of Array.from(doc.querySelectorAll('[data-walnut-unsaved]'))) {
+    items.push(item('file', el.getAttribute('data-walnut-unsaved')?.trim() || 'Unsaved changes', el));
+  }
   for (const el of Array.from(doc.querySelectorAll('.notes-save-status.saving, .global-notes-saving'))) {
     items.push(item('note', 'A note that is still saving', el, el.matches('.global-notes-saving') ? 'Scratchpad' : undefined));
   }

@@ -182,7 +182,7 @@ final class WebContentWatchdog {
 
         lastSample = sample
         lastFields = fields
-        if breakdowns.due(level: level, now: now) { logBreakdown(pid: pid, level: level) }
+        if breakdowns.due(level: level, now: now) { logBreakdown(pid: pid, level: level, fields: fields) }
         decide(sample: sample, level: level, fields: fields, policy: policy, now: now)
     }
 
@@ -221,9 +221,20 @@ final class WebContentWatchdog {
         var fields = fields
         recycleInFlight = true
         stopPauseCheck()
-        checkUnsavedWork(reload: true) { [weak self, weak webView] unsaved in
-            guard let self, let webView = webView, self.webView === webView else { return }
-            if unsaved && !ignoreUnsaved {
+        // The person confirmed the loss (Reload Anyway): swap without asking the
+        // page again, which may be the very thing that does not answer.
+        let ask: (@escaping (Bool) -> Void) -> Void = ignoreUnsaved
+            ? { $0(false) }
+            : { [weak self] done in
+                guard let self else { return }
+                self.checkUnsavedWork(reload: true, done)
+            }
+        ask { [weak self, weak webView] unsaved in
+            guard let self, let webView = webView, self.webView === webView else {
+                self?.recycleInFlight = false
+                return
+            }
+            if unsaved {
                 self.recycleInFlight = false
                 self.unsavedHoldUntil = Date().addingTimeInterval(self.policyProvider().sampleInterval)
                 fields["reason"] = reason.rawValue
@@ -340,7 +351,7 @@ final class WebContentWatchdog {
                 let alert = NSAlert()
                 alert.messageText = "Reload this page and lose what is not saved?"
                 let named = items.prefix(5).map { "\u{2022} \($0)" }.joined(separator: "\n")
-                alert.informativeText = (named.isEmpty ? "This window has text a reload would lose." : named)
+                alert.informativeText = (named.isEmpty ? "This page did not say what it holds, and may have text a reload would lose." : named)
                     + "\n\nSave or send it first, then press Reload Page again."
                 alert.addButton(withTitle: "Keep Working")
                 alert.addButton(withTitle: "Reload Anyway")
@@ -361,9 +372,8 @@ final class WebContentWatchdog {
     /// The page's own list of what a reload would lose ("what · where"), empty
     /// when the page cannot say (an older bundle).
     private func listUnsavedWork(_ completion: @escaping ([String]) -> Void) {
-        guard let webView else { completion([]); return }
         let js = "(() => { try { const b = window.__walnutDesktop; return b && b.listUnsavedWork ? b.listUnsavedWork() : null; } catch { return null; } })()"
-        webView.evaluateJavaScript(js) { result, _ in
+        askPage(js, what: "listUnsavedWork") { result in
             let rows = (result as? [[String: Any]]) ?? []
             completion(rows.compactMap { row in
                 let what = (row["what"] as? String) ?? ""
@@ -378,7 +388,9 @@ final class WebContentWatchdog {
 
     /// What holds the page process's memory, by `footprint` category, off the main
     /// thread (when, BreakdownCadence).
-    private func logBreakdown(pid: pid_t, level: FootprintLevel) {
+    /// `fields` are the sample's own, taken now: by the time `footprint` answers,
+    /// the page may run in another process.
+    private func logBreakdown(pid: pid_t, level: FootprintLevel, fields sampleFields: [String: String]) {
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let task = Process()
             task.executableURL = URL(fileURLWithPath: "/usr/bin/footprint")
@@ -396,7 +408,7 @@ final class WebContentWatchdog {
             guard !rows.isEmpty else { return }
             DispatchQueue.main.async {
                 guard let self else { return }
-                var fields = self.lastFields
+                var fields = sampleFields
                 fields["level"] = level.rawValue
                 fields["categories"] = footprintSummary(rows)
                 DesktopLogger.shared.log("webcontent_breakdown", fields: fields)
@@ -413,7 +425,6 @@ final class WebContentWatchdog {
     /// `reload`: the page loads again in place (a recycle), so a draft it keeps in storage comes
     /// back; otherwise the page goes away (a restart, a closing window).
     func checkUnsavedWork(reload: Bool = false, _ completion: @escaping (Bool) -> Void) {
-        guard let webView else { completion(true); return }
         let js = """
         (() => {
           try {
@@ -427,9 +438,25 @@ final class WebContentWatchdog {
           } catch { return true; }
         })()
         """
-        webView.evaluateJavaScript(js) { result, error in
-            if error != nil { completion(true); return }
+        askPage(js, what: "hasUnsavedWork") { result in
             completion((result as? Bool) ?? true)
+        }
+    }
+
+    /// Runs `js` in the page and delivers its result once: nil on an error, on no
+    /// page, or when the page has not answered by `pageAnswerDeadline`.
+    private func askPage(_ js: String, what: String, _ completion: @escaping (Any?) -> Void) {
+        guard let webView else { completion(nil); return }
+        let once = OnceAnswer<Any?>(completion)
+        let deadline = policyProvider().pageAnswerDeadline
+        DispatchQueue.main.asyncAfter(deadline: .now() + deadline) { [weak self] in
+            if once.answer(nil) {
+                DesktopLogger.shared.log("webcontent_page_no_answer",
+                                         fields: (self?.lastFields ?? [:]).merging(["ask": what, "afterSec": String(Int(deadline))]) { $1 })
+            }
+        }
+        webView.evaluateJavaScript(js) { result, error in
+            once.answer(error == nil ? result : nil)
         }
     }
 

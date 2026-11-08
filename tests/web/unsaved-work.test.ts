@@ -56,6 +56,15 @@ describe('unsaved work: what counts', () => {
     expect(list(`${FILE_OPEN}<span class="fv-dirty-dot">●</span>`).map((i) => i.kind)).toEqual(['file']);
   });
 
+  it('a plugin editor that marks its own unsaved buffer counts, with its own words', () => {
+    // A plugin's CodeMirror holds a buffer whose save failed: the document editor is skipped, the
+    // plugin's mark is what tells (2026-11-08: a memory swap would have dropped it).
+    expect(list(`${FILE_OPEN}<div data-walnut-unsaved="Code not saved: Save failed"></div>`))
+      .toMatchObject([{ kind: 'file', what: 'Code not saved: Save failed' }]);
+    expect(list(`${FILE_OPEN}<div data-walnut-unsaved=""></div>`)).toMatchObject([{ kind: 'file', what: 'Unsaved changes' }]);
+    expect(list(FILE_OPEN)).toEqual([]);
+  });
+
   it.each(['notes-save-status saving', 'notes-save-status error', 'global-notes-saving', 'global-notes-error'])('a note with %s counts', (cls) => {
     expect(list(`<span class="${cls}">Save status</span>`).map((i) => i.kind)).toEqual(['note']);
   });

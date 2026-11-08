@@ -214,6 +214,35 @@ struct WebContentPolicyTests {
         precondition(bundleId(inHTML: "<html><body>deploying</body></html>") == nil,
                      "no entry script reads as unknown, never as changed")
 
+        // A page that never answers: the deadline's nil is delivered once, and the
+        // late reply that follows is dropped (so a swap waits at most the deadline,
+        // and nothing runs twice).
+        precondition(WebContentPolicy().pageAnswerDeadline > 0 && WebContentPolicy().pageAnswerDeadline <= 5,
+                     "a hung page holds a swap for seconds, never forever")
+        var delivered: [String?] = []
+        let once = OnceAnswer<String?> { delivered.append($0) }
+        precondition(once.answer(nil), "the deadline answers first")
+        precondition(!once.answer("late reply"), "the page's late reply is dropped")
+        precondition(delivered.count == 1 && delivered[0] == nil)
+        var replied: [Bool] = []
+        let fast = OnceAnswer<Bool> { replied.append($0) }
+        fast.answer(true)
+        fast.answer(false) // the deadline firing after a reply
+        precondition(replied == [true], "a reply in time wins over the deadline")
+
+        // Every question the watchdog asks the page goes through askPage (with the
+        // deadline): a bare evaluateJavaScript whose answer gates a swap left
+        // recycleInFlight set forever on a hung page (review, 2026-11-08). The one
+        // other call reads the loaded bundle id and gates nothing.
+        let watchdogSource = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("desktop/WebContentWatchdog.swift")
+        let source = (try? String(contentsOf: watchdogSource, encoding: .utf8)) ?? ""
+        precondition(!source.isEmpty, "read \(watchdogSource.path)")
+        let calls = source.components(separatedBy: "evaluateJavaScript(").count - 1
+        precondition(calls == 2, "WebContentWatchdog.swift has \(calls) evaluateJavaScript calls: a new one goes through askPage")
+        precondition(source.contains("private func askPage("), "askPage is the one way to ask the page")
+
         print("WebContent policy tests passed")
     }
 }

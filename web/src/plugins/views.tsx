@@ -38,7 +38,7 @@ function NoteView() {
   return <NotesPage />
 }
 
-/** One function for every render, so a plugin page's re-renders never re-render its terminal. */
+/** One function for every render: the terminal's close callback stays the same object across a plugin page's re-renders. */
 const noop = () => undefined
 
 function TerminalView({ sessionId, label, host }: TerminalViewProps) {

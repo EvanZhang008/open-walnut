@@ -77,6 +77,11 @@ struct WebContentPolicy {
     /// (the user's idle time only, no footprint read): a once-a-minute sample of
     /// someone working almost never lands inside an 8 s pause.
     var pauseCheckInterval: TimeInterval = 2
+    /// How long the page has to say whether it holds unsaved text. A page process
+    /// at critical memory can hang, and a question it never answers held every
+    /// later swap behind it (`recycleInFlight`): no answer in time counts as
+    /// "unsaved", so nothing is lost and the person decides.
+    var pageAnswerDeadline: TimeInterval = 3
     /// Nothing is wrong with a stale bundle, so it waits for a real break.
     var idleForStaleBundle: TimeInterval = 300
     /// A fresh page legitimately spikes while it boots and hydrates.
@@ -322,4 +327,20 @@ struct BreakdownCadence {
 /// the top categories in whole megabytes, for one log field.
 func footprintSummary(_ rows: [(category: String, bytes: UInt64)], top: Int = 5) -> String {
     rows.prefix(top).map { "\($0.category)=\(megabytes($0.bytes))" }.joined(separator: ";")
+}
+
+/// One answer from a call that may never answer (a page's JavaScript on a hung
+/// process): the first of the reply and the deadline is delivered, the other is
+/// dropped. Main thread only.
+final class OnceAnswer<T> {
+    private var done = false
+    private let completion: (T) -> Void
+    init(_ completion: @escaping (T) -> Void) { self.completion = completion }
+    /// True when this call was the one delivered.
+    @discardableResult func answer(_ value: T) -> Bool {
+        guard !done else { return false }
+        done = true
+        completion(value)
+        return true
+    }
 }
