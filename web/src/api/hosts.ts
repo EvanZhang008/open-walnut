@@ -105,6 +105,8 @@ export interface HostStatus {
   attemptStartedAt?: number;
   /** Server epoch ms when the current connection came up. */
   connectedAt?: number;
+  /** Server epoch ms of each time the link dropped by itself in the last hour, oldest first. */
+  drops?: number[];
   /** Server clock when the frame was built (clock-skew correction). */
   serverNow?: number;
   warmup?: 'queued' | 'running' | 'done' | 'failed' | 'skipped';

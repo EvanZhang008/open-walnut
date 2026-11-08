@@ -22,7 +22,7 @@ const repoRoot = path.resolve(import.meta.dirname, '../../..')
 const view = { viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 }
 export default defineConfig({
   testDir: '.',
-  testMatch: 'cloud-host-link-down.spec.ts',
+  testMatch: ['cloud-host-link-down.spec.ts', 'cloud-host-flapping.spec.ts'],
   workers: 1,
   retries: 0,
   timeout: 300_000,

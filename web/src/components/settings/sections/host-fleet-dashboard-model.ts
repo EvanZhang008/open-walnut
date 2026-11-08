@@ -40,7 +40,7 @@ export function fleetSummary(hosts: FleetHost[], now: number): FleetSummary {
 }
 
 export interface Problem {
-  key: 'server' | 'reboot' | 'disk' | 'stale' | 'uptime' | 'long-running';
+  key: 'server' | 'unstable' | 'reboot' | 'disk' | 'stale' | 'uptime' | 'long-running';
   /** A few words for the card. */
   text: string;
   /** The whole sentence, for the tooltip. */
@@ -71,6 +71,11 @@ export function problemsOf(h: FleetHost, now: number): Problem[] {
   const sv = h.server;
   if (sv?.enabled && sv.phase !== 'running') {
     out.push({ key: 'server', text: `Walnut server ${sv.phaseLabel}`, detail: sv.message ? `Its Walnut server is ${sv.phaseLabel}: ${sv.message}` : `Its Walnut server is ${sv.phaseLabel}`, tone: sv.phase === 'failed' ? 'bad' : 'warn' });
+  }
+  // A link that keeps dropping reads as such, connected or not (fleet-model.ts connection.unstable).
+  const flap = h.connection.unstable;
+  if (flap) {
+    out.push({ key: 'unstable', text: `Link unstable: dropped ${flap.drops} times in ${flap.windowMin} min`, detail: `Its link dropped ${flap.drops} times in the last ${flap.windowMin} minutes and came back each time: sessions and commands there may fail partway through`, tone: 'warn' });
   }
   const reboot = rebootProblem(h);
   if (reboot) out.push(reboot);

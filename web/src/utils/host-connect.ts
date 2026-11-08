@@ -7,7 +7,8 @@
  * node test, and the surfaces that need them are in three different trees.
  */
 import type { DaemonConnectPhase, HostConnectStep, HostStatus } from '@/api/hosts';
-import { OFF_PHASE_LABEL } from '@open-walnut/host-problem';
+import { OFF_PHASE_LABEL, hostConnectedWords } from '@open-walnut/host-problem';
+import { serverNow } from '@/hooks/useHostStatus';
 
 // Host dots and problems come from the shared model (@open-walnut/host-problem);
 // the helpers below are the phase/step sentences a few surfaces still read.
@@ -134,7 +135,7 @@ export function hostStatusText(status: HostStatus | undefined, hydration?: HostS
   if (isHostOff(status)) return OFF_PHASE_LABEL;
   if (isHostFailed(status)) return status.error || 'Could not connect';
   if (isHostConnecting(status)) return status.phaseLabel || `${activeStepLabel(status)}…`;
-  if (status.connected) return 'Connected';
+  if (status.connected) return hostConnectedWords(status, serverNow());
   return 'Not connected';
 }
 

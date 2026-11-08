@@ -11,6 +11,7 @@ import type { HostLoadView } from './placement.js'
 import type { HostServerPhase } from '../host-server/manager.js'
 import { capabilityWords, hostCapabilities, type HostCapabilities } from './capabilities.js'
 import { bootStartWords } from '../../providers/remote-boot-start.js'
+import { hostFlapOf } from './host-problem.js'
 
 export type FleetConnectionKind = 'local' | 'ssh-tunnel' | 'host-network' | 'bridge'
 
@@ -27,6 +28,8 @@ export interface FleetHost {
     since: number | null
     rttMs: number | null
     error: string | null
+    /** The link keeps dropping: how often in the last `windowMin` minutes (host-problem.ts hostFlapOf). */
+    unstable?: { drops: number; windowMin: number }
   }
   /** What the host is, from its last probe (host.facts). */
   system: {
@@ -157,6 +160,7 @@ function rebootAdvice(d: NonNullable<FleetHost['daemon']>, platform: string | nu
 export function longRunningReasons(h: Pick<FleetHost, 'local' | 'connection' | 'server' | 'daemon' | 'history' | 'system'>): string[] {
   const reasons: string[] = []
   if (!h.connection.connected) reasons.push('Walnut is not connected to it now.')
+  if (h.connection.unstable) reasons.push(`Its link keeps dropping (${h.connection.unstable.drops} times in the last ${h.connection.unstable.windowMin} min).`)
   if (h.local && h.system?.kind === 'laptop') reasons.push('It is a laptop: a job here stops while it sleeps.')
   if (!h.local && h.connection.kind !== 'bridge') {
     if (!h.server?.enabled) reasons.push('No Walnut server runs on it (Settings, Remote Hosts, host servers).')
@@ -175,7 +179,7 @@ export interface FleetInputs {
   label: string
   local: boolean
   kind: FleetConnectionKind
-  status: { connected: boolean; phase: string; phaseLabel: string; connectedAt?: number; error?: string | null }
+  status: { connected: boolean; phase: string; phaseLabel: string; connectedAt?: number; error?: string | null; drops?: number[] }
   rttMs: number | null
   profile: HostProfile | null
   vitals: { value: HostVitals; at: number; stale: boolean } | null
@@ -243,6 +247,7 @@ export function buildFleetHost(i: FleetInputs): FleetHost {
     at: i.vitals!.at, stale: i.vitals!.stale,
   } : null
   const history: FleetHost['history'] = v ? { ...v.history } : null
+  const flap = hostFlapOf(i.status, i.now)
   const base = {
     local: i.local,
     connection: {
@@ -253,6 +258,7 @@ export function buildFleetHost(i: FleetInputs): FleetHost {
       since: i.status.connected ? (i.status.connectedAt ?? null) : null,
       rttMs: i.status.connected && i.rttMs ? i.rttMs : null,
       error: i.status.error ?? null,
+      ...(flap ? { unstable: { drops: flap.drops, windowMin: flap.windowMin } } : {}),
     },
     server: i.server ? { ...i.server, phaseLabel: SERVER_PHASE_WORDS[i.server.phase] ?? 'in a state this Walnut does not know' } : null,
     daemon: i.daemon ? fleetDaemon(i.daemon, i.kind) : null,
@@ -289,6 +295,8 @@ export function withPlacement(h: FleetHost): FleetHost {
 export function fleetHostLine(h: FleetHost): string {
   const parts: string[] = [`${h.label} (${h.host})`]
   parts.push(h.connection.connected ? `connected over ${CONNECTION_KIND_WORDS[h.connection.kind]}` : `not connected (${h.connection.phaseLabel})`)
+  const flap = h.connection.unstable
+  if (flap) parts.push(`unstable: its link dropped ${flap.drops} times in the last ${flap.windowMin} min`)
   if (h.system?.os) parts.push(h.system.os)
   const can = h.capabilities ? capabilityWords(h.capabilities, { os: !h.system?.os }) : ''
   if (can) parts.push(`can: ${can}`)

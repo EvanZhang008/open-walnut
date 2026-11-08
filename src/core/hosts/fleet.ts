@@ -329,7 +329,7 @@ export async function localParts(e: HostEntry, conn: VitalsConn | undefined): Pr
       : { connected: false, phase: 'idle', phaseLabel: 'The local daemon is not connected' }
   } else {
     const f = hostStatusFrame(e.host, e.def!)
-    status = { connected: f.connected, phase: f.phase, phaseLabel: f.phaseLabel, connectedAt: f.connectedAt, error: f.error ?? f.lastError ?? null }
+    status = { connected: f.connected, phase: f.phase, phaseLabel: f.phaseLabel, connectedAt: f.connectedAt, error: f.error ?? f.lastError ?? null, ...(f.drops?.length ? { drops: f.drops } : {}) }
   }
   const [profile, server, counts] = await Promise.all([
     readHostProfile(e.host).catch(() => null),

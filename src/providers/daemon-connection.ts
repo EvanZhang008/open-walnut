@@ -96,8 +96,10 @@ import { lastWordsExcerpt, UPLOAD_PARALLEL } from './ssh-last-words.js'
 import { gzip } from 'node:zlib'
 import { promisify } from 'node:util'
 import {
-  clearReconnectCause, decideReconnectStep, getReconnectCause, isCredentialWaitKind, lastHostSignalAt, recordReconnectCause,
+  clearReconnectCause, decideReconnectStep, getReconnectCause, isCredentialWaitKind, lastHostSignalAt, recordReconnectCause, WAKE_GRACE_MS,
 } from './daemon-reconnect-cause.js'
+import { clearLinkDrops, noteLinkDrop, recentLinkDrops } from './daemon-link-drops.js'
+import { FLAP_WINDOW_MS } from '../core/hosts/host-problem.js'
 // Leaf (no runtime imports): the cloud box alias and the companion's last answer.
 import { CLOUD_BOX_HOST_ALIAS, CLOUD_BOX_OTHER_MAC_SENTENCE, TUNNEL_REFUSAL_HEADER, getCloudBoxState } from '../core/hosts/cloud-box-host.js'
 import { creditCurrentRead } from '../core/hosts/read-progress.js'
@@ -1181,6 +1183,16 @@ export class DaemonConnection {
       if (!this._destroyed && !this._awakeTick) {
         this._awakeTick = setInterval(() => { this._awakeDown.sample(Date.now()) }, AWAKE_TICK_MS)
         this._awakeTick.unref?.()
+      }
+      // A link that fell by itself counts toward "unstable"; a planned daemon swap, a deliberate
+      // teardown, and a drop this Mac's own wake or network change caused do not (daemon-link-drops.ts).
+      const ownChange = this._disconnectedSince - lastHostSignalAt() < WAKE_GRACE_MS
+      if (!this._destroyed && !this._handoverArmed && !ownChange) {
+        noteLinkDrop(this.hostKey, this._disconnectedSince)
+        // The frame changes meaning when this drop ages out of the window: push one then, so an
+        // open dot or row stops saying Unstable without waiting for the next phase change.
+        const host = this.hostKey
+        setTimeout(() => notifyDaemonPhaseChange(host), FLAP_WINDOW_MS + 1_000).unref?.()
       }
       this.openHandoverWindow()
       this.setPhase('reconnecting')
@@ -7675,6 +7687,8 @@ async function getDaemonConnectionOrThrow(hostKey: string, sshTarget: SshTarget)
     log.session.info('DaemonConnection: ssh target changed, replacing the pooled connection', { host: hostKey })
     conn.disconnect()
     poolDelete(hostKey)
+    // Another machine now: the old one's drops are not its own.
+    clearLinkDrops(hostKey)
     conn = undefined
   }
   if (!conn) {
@@ -7838,6 +7852,8 @@ export function dropDaemonConnection(hostKey: string): boolean {
   conn.disconnect()
   poolDelete(hostKey)
   failureCache.delete(hostKey)
+  // The name may come back as another machine: it starts with no drops of the old one.
+  clearLinkDrops(hostKey)
   // A dial of it still running is nobody's: the next caller for the name starts its own.
   connectingPromises.delete(hostKey)
   notifyDaemonPhaseChange(hostKey)
@@ -7942,6 +7958,8 @@ export interface DaemonConnectState {
   daemonDir?: DaemonDirChoice & { home?: string }
   /** A planned daemon swap is under way: the host reads as connected meanwhile (DaemonConnection.handoverPending). */
   handover?: true
+  /** When the link dropped by itself in the last hour (epoch ms, oldest first; daemon-link-drops.ts). */
+  drops?: number[]
 }
 
 export function getDaemonConnectState(hostKey: string): DaemonConnectState {
@@ -7969,6 +7987,8 @@ export function getDaemonConnectState(hostKey: string): DaemonConnectState {
     state.error = failure.error
   }
   foldReconnectCause(state, conn, failure)
+  const drops = recentLinkDrops(hostKey, now)
+  if (drops) state.drops = drops
   if (conn?.handoverPending) return handoverState(state)
   return state
 }

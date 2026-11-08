@@ -287,7 +287,7 @@ export function RemoteHostSshRow(props: Props) {
         host: host.alias, counted: false, found: true, online: false, off: false, local: false, via: 'ssh',
         rttMs: null, sessions: null, spendUsd: null, sub: host.hostname,
       } : linked ? {
-        host: host.alias, counted: true, online: live.online, off: !host.enabled, local: false, via: 'ssh', phone: card?.server?.phone === 'connected',
+        host: host.alias, counted: true, online: live.online, off: !host.enabled, local: false, via: 'ssh', phone: card?.server?.phone === 'connected', unstable: !!card?.connection.unstable,
         rttMs: card?.connection.connected ? card.connection.rttMs ?? null : null,
         sessions: card?.sessions.running ?? null, spendUsd: card?.spend?.last30dUsd ?? null,
         sub: card?.system?.os ?? host.hostname,

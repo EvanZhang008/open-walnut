@@ -17,7 +17,7 @@ export interface FleetHost {
   local: boolean;
   line: string;
   checkedAt: number;
-  connection: { kind: 'local' | 'ssh-tunnel' | 'host-network' | 'bridge'; connected: boolean; phase: string; phaseLabel: string; since: number | null; rttMs: number | null; error: string | null };
+  connection: { kind: 'local' | 'ssh-tunnel' | 'host-network' | 'bridge'; connected: boolean; phase: string; phaseLabel: string; since: number | null; rttMs: number | null; error: string | null; unstable?: { drops: number; windowMin: number } };
   system: { os: string | null; platform?: string | null; arch: string | null; cpus: number | null; memBytes: number | null; diskFreeBytes: number | null; kind: string; probedAt: string | null } | null;
   now: { cpus: number; cpuUtil: number | null; load: [number, number, number] | null; memTotalBytes: number; memAvailBytes: number | null; uptimeSec: number; bootedAt: number; linked: boolean; gpuUtil?: number | null; disk?: { totalBytes: number; freeBytes: number } | null; at: number; stale: boolean } | null;
   history: { coverageFrom: number | null; bucketMinutes: number; buckets: FleetBucket[]; windows: FleetWindow[]; outages: FleetOutage[]; boots: number[]; daemonStarts: number; recent?: FleetRecent } | null;

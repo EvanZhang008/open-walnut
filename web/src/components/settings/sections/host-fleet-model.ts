@@ -74,7 +74,7 @@ export function notAnswering(h: FleetHost): boolean {
 }
 
 export function statusKind(h: FleetHost): 'connected' | 'failed' | 'off' | 'warn' {
-  if (h.connection.connected) return notAnswering(h) ? 'warn' : 'connected';
+  if (h.connection.connected) return notAnswering(h) || h.connection.unstable ? 'warn' : 'connected';
   return h.connection.phase === 'failed' ? 'failed' : 'off';
 }
 

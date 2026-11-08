@@ -22,7 +22,7 @@ function Node({ node, row, onPick }: { node: TopoNode; row: RowReport; onPick: (
   const { nodeW: w, nodeH: h } = TOPO;
   const kind = topoKind(row);
   const mark = row.via === 'bridge' ? 'Cloud' : row.phone ? 'Phone' : null;
-  const sub = row.local ? 'Runs Walnut' : row.off ? 'Off' : row.sub || (row.online ? 'Connected' : 'Not connected');
+  const sub = row.local ? 'Runs Walnut' : row.off ? 'Off' : row.sub || (row.online ? (row.unstable ? 'Unstable' : 'Connected') : 'Not connected');
   return (
     <g
       className="hf-topo-node" data-kind={kind} data-live={node.live ? 'true' : 'false'} data-testid="host-fleet-topo-node" data-host={row.host}

@@ -32,7 +32,9 @@ export function FleetHostRow({ card, now, detailsOpen, onDetails, boot, onBootSt
       alias={card.host}
       name={name}
       tag={card.connection.kind === 'bridge' ? <SettingsTag title="The cloud companion's own box">Cloud</SettingsTag> : undefined}
-      dot={<HostStatusDot dot={{ kind: kind === 'warn' ? 'connected' : kind === 'off' ? 'unknown' : kind, title: `${name}: ${live ? 'Online' : offlineLine(card)}` }} host={card.host} />}
+      // Green while up, the warning line saying what it needs; amber when the link itself keeps
+      // dropping, since being up now is what not to trust (connection.unstable, hostFlapOf).
+      dot={<HostStatusDot dot={{ kind: kind === 'warn' && !card.connection.unstable ? 'connected' : kind === 'off' ? 'unknown' : kind, title: `${name}: ${live ? (card.connection.unstable ? 'Unstable' : 'Online') : offlineLine(card)}` }} host={card.host} />}
       state={live ? liveLine(card) : offlineLine(card)}
       lines={[
         problem && <RowLine key="p" tone={problem.tone === 'bad' ? 'bad' : 'warn'} testId="rh-row-warning">{problem.text}</RowLine>,
@@ -45,7 +47,7 @@ export function FleetHostRow({ card, now, detailsOpen, onDetails, boot, onBootSt
       report={{
         // The way its reading says this Mac reaches it (a host read with no SSH entry here may still
         // ride an SSH tunnel), so the map line says the same.
-        host: card.host, counted: true, online: live, off: false, local: card.local,
+        host: card.host, counted: true, online: live, off: false, local: card.local, unstable: !!card.connection.unstable,
         via: card.local ? 'local' : card.connection.kind === 'ssh-tunnel' ? 'ssh' : card.connection.kind === 'host-network' ? 'net' : 'bridge',
         phone: card.server?.phone === 'connected',
         rttMs: card.connection.connected ? card.connection.rttMs : null,

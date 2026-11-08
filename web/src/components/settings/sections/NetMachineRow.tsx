@@ -56,7 +56,7 @@ export function NetMachineRow({ machine: m, name, relay, error, card, now, detai
       removeNote="It leaves your machines, on this Mac and on your cloud companion: joining again takes a new link."
       needsLook={live.needsLook}
       report={{
-        host: m.host, counted: true, online: live.online, off: !m.enabled, local: false, via: 'net', phone: card?.server?.phone === 'connected',
+        host: m.host, counted: true, online: live.online, off: !m.enabled, local: false, via: 'net', phone: card?.server?.phone === 'connected', unstable: !!card?.connection.unstable,
         rttMs: live.online && typeof m.rttMs === 'number' ? Math.round(m.rttMs) : null,
         sessions: card?.sessions.running ?? null, spendUsd: card?.spend?.last30dUsd ?? null, sub,
       }}

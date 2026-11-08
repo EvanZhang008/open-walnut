@@ -16,7 +16,7 @@
  */
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import {
-  autofixProgressText, autofixVerbFor, BLOCKING_READINESS_KINDS, firstSentence, hostDotOf, hostProblemOf, isClaudeFixAction, isConnectingPhaseWire, OFF_PHASE_LABEL,
+  autofixProgressText, autofixVerbFor, BLOCKING_READINESS_KINDS, firstSentence, hostDotOf, hostFlapOf, hostProblemOf, isClaudeFixAction, isConnectingPhaseWire, OFF_PHASE_LABEL,
 } from '@open-walnut/host-problem';
 import type { FleetHost } from '@/api/hosts-fleet';
 import { serverNow, useHostStatus, useHostStatusHydration } from '@/hooks/useHostStatus';
@@ -183,8 +183,9 @@ export function useLinkedHostRow({ alias, name, enabled, saved, card, now, boot,
     primary = { label: 'Connecting...', disabled: true, reserve: ['Connect now', 'Connecting...'], onClick: () => {}, testId: 'rh-row-connect' };
   } else if (status.connected) {
     state = liveLine(card);
-    // Green: connected. What it still needs is the warning line under it.
-    if (dot.kind === 'warn') dot = { kind: 'connected', title: `${label}: Connected` };
+    // Green: connected. What it still needs is the warning line under it. A link that keeps
+    // dropping stays amber: being up now is the thing not to trust (hostFlapOf).
+    if (dot.kind === 'warn' && !hostFlapOf(status, now)) dot = { kind: 'connected', title: `${label}: Connected` };
     const fleetProblem = card ? problemsOf(card, now).find((p) => p.tone === 'warn' || p.tone === 'bad') : undefined;
     // The fix's result, then the next thing the host needs (its Set up), never the fixed warning.
     if (justFixed) lines.push(<Line key="fixed" tone="good" testId="rh-row-fix-note">{`${justFixed.text}.`}</Line>);

@@ -148,3 +148,16 @@ describe('the Can do row', () => {
     expect(value(host(), 'can')).toBeUndefined()
   })
 })
+
+describe('a host whose link keeps dropping', () => {
+  it('wears the warn dot and an "unstable" problem on its card, while connected', async () => {
+    const { problemsOf } = await import('../../web/src/components/settings/sections/host-fleet-dashboard-model')
+    const h = host()
+    const flapping = host({ connection: { ...h.connection, unstable: { drops: 5, windowMin: 30 } } })
+    expect(statusKind(h)).toBe('connected')
+    expect(statusKind(flapping)).toBe('warn')
+    const p = problemsOf(flapping, NOW).find((x) => x.key === 'unstable')
+    expect(p).toMatchObject({ text: 'Link unstable: dropped 5 times in 30 min', tone: 'warn' })
+    expect(problemsOf(h, NOW).some((x) => x.key === 'unstable')).toBe(false)
+  })
+})

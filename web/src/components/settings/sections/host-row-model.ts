@@ -28,6 +28,8 @@ export interface RowReport {
   /** Switched off here: Walnut does not connect to it. */
   off: boolean;
   needsLook: boolean;
+  /** Up, but its link keeps dropping (FleetHost connection.unstable). */
+  unstable?: boolean;
   local: boolean;
   /** How this Mac reaches it. */
   via: 'local' | 'ssh' | 'net' | 'bridge';
@@ -135,7 +137,9 @@ export function needsLook(h: FleetHost, now: number): boolean {
 /** A live host's state line: "Online, 12% CPU, 2 sessions" (what is not known is left out). */
 export function liveLine(card: FleetHost | undefined, online = 'Online'): string {
   if (!card) return online;
-  const parts = [online];
+  // A link that keeps dropping is up now, but not to be trusted (host-problem.ts hostFlapOf).
+  const flap = card.connection?.unstable;
+  const parts = [flap ? `Unstable: dropped ${flap.drops} times in ${flap.windowMin} min` : online];
   const cpu = card.now?.cpuUtil;
   if (typeof cpu === 'number') parts.push(`${pct(cpu)} CPU`);
   const n = card.sessions.running;

@@ -48,6 +48,8 @@ export interface HostStatusInput {
   attemptStartedAt?: number
   /** Server epoch ms when the current connection came up. */
   connectedAt?: number
+  /** Server epoch ms of each time the link dropped by itself in the last hour, oldest first. */
+  drops?: number[]
   /** Server clock when the frame was built (skew correction). */
   serverNow?: number
   at?: number
@@ -345,6 +347,37 @@ export function listingProblemOf(
   }
 }
 
+/**
+ * A link that dropped by itself this often in the last FLAP_WINDOW_MS reads as unstable,
+ * connected or not, on every surface (2026-11-08: a laptop whose link died every 30 s for
+ * hours read "Connected" between drops in Hosts, the banner and host_list).
+ */
+export const FLAP_WINDOW_MS = 30 * 60_000
+export const FLAP_MIN_DROPS = 3
+export interface HostFlap { drops: number; windowMin: number; last: number }
+
+/** The host's flapping, or null. `now` is the SERVER clock (drops are server times). */
+export function hostFlapOf(status: Pick<HostStatusInput, 'drops'> | undefined, now: number): HostFlap | null {
+  const recent = (status?.drops ?? []).filter((t) => typeof t === 'number' && now - t < FLAP_WINDOW_MS && t <= now + 60_000)
+  if (recent.length < FLAP_MIN_DROPS) return null
+  return { drops: recent.length, windowMin: Math.round(FLAP_WINDOW_MS / 60_000), last: Math.max(...recent) }
+}
+
+/** "its link dropped 6 times in the last 30 min" */
+export function flapWords(flap: HostFlap): string {
+  return `its link dropped ${flap.drops} times in the last ${flap.windowMin} min`
+}
+
+/**
+ * The words for a host whose link is up: "Connected", or "Unstable: ..." while it keeps
+ * dropping. Every surface that says a host is connected says it through this
+ * (tests/core/hosts/host-connected-words-guard.test.ts).
+ */
+export function hostConnectedWords(status: Pick<HostStatusInput, 'drops'> | undefined, now: number): string {
+  const flap = hostFlapOf(status, now)
+  return flap ? `Unstable: ${flapWords(flap)}` : 'Connected'
+}
+
 export type HostDotKindV2 = 'connected' | 'checking' | 'warn' | 'connecting' | 'failed' | 'off' | 'unknown'
 export interface HostDot { kind: HostDotKindV2; title: string }
 
@@ -364,8 +397,10 @@ export function hostDotOf(
   const p = hostProblemOf(status)
   if (p?.type === 'off') return { kind: 'off', title: `${l}: ${OFF_PHASE_LABEL}` }
   if (p?.type === 'connect') return { kind: 'failed', title: `${l}: ${p.headline}` }
-  if (p?.type === 'reconnecting') return { kind: 'connecting', title: `${l}: Reconnecting` }
+  const flap = hostFlapOf(status, opts.now)
+  if (p?.type === 'reconnecting') return { kind: 'connecting', title: `${l}: Reconnecting${flap ? `; ${flapWords(flap)}` : ''}` }
   if (p?.type === 'readiness') return { kind: 'warn', title: `${l}: ${firstSentence(p.problem.message)}` }
+  if (status.connected && flap) return { kind: 'warn', title: `${l}: ${hostConnectedWords(status, opts.now)}` }
   if (status.connected) {
     const fresh = typeof status.connectedAt === 'number' && opts.now - status.connectedAt < READINESS_ANSWER_GRACE_MS
     if (!readinessAnsweredThisConnection(status) && fresh) return { kind: 'checking', title: `${l}: Checking Claude Code` }
@@ -459,40 +494,5 @@ export function sameResultReceipt(
   return b.problem.kind === 'claude_outdated' && vB ? `Checked just now: still ${vB}` : 'Checked just now: same result'
 }
 
-export type HostGateCode = 'host_not_ready' | 'host_unreachable' | 'host_off' | 'host_removed'
-
-export interface HostGateBody {
-  error: string
-  code: HostGateCode
-  kind?: string
-  host: string
-  headline: string
-  hint: string
-  allowOverride?: true
-}
-
-/** 'Headline. Hint' with no doubled or dangling punctuation. */
-export function joinHeadlineHint(headline: string, hint?: string): string {
-  const h = headline.trim()
-  const t = (hint ?? '').trim()
-  // No hint: the headline alone. A sentence keeps its own single period; a
-  // headline never grows a dangling '. '.
-  if (!t) return h
-  return /[.!?:]$/.test(h) ? `${h} ${t}` : `${h}. ${t}`
-}
-
-/** The 409 body for a refused Start. Old clients read `error`; new ones render headline + hint. */
-export function hostGateBody(input: {
-  code: HostGateCode; host: string; kind?: string; headline: string; hint?: string; allowOverride?: boolean
-}): HostGateBody {
-  const hint = (input.hint ?? '').trim()
-  return {
-    error: joinHeadlineHint(input.headline, hint),
-    code: input.code,
-    ...(input.kind ? { kind: input.kind } : {}),
-    host: input.host,
-    headline: input.headline.trim(),
-    hint,
-    ...(input.allowOverride ? { allowOverride: true as const } : {}),
-  }
-}
+// The Start refusal's 409 body lives beside this model, as pure as it (host-gate-body.ts).
+export { hostGateBody, joinHeadlineHint, type HostGateBody, type HostGateCode } from './host-gate-body.js'

@@ -80,7 +80,7 @@ const MARKERS: Record<string, { re: RegExp; files: Record<string, { count: numbe
       'src/core/sessions/task-start.ts': { count: 1, way: 'the same for a start on another host (moveFromLostHost)' },
       'src/core/sessions/folder-gone.ts': { count: 2, way: 'the folder check needs the host; the answer names task_move' },
       'src/core/sessions/host-start-gate.ts': { count: 1, way: 'the NEW host of a start does not answer: no old session involved' },
-      'src/core/hosts/host-problem.ts': { count: 1, way: 'the gate code type' },
+      'src/core/hosts/host-gate-body.ts': { count: 1, way: 'the gate code type' },
       'src/web/routes/engines.ts': { count: 3, way: "an engine's settings on a host that timed out: no session involved" },
     },
   },

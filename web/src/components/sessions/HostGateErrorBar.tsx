@@ -76,7 +76,8 @@ export function HostGateErrorBar({ gate, draftHost, label, onClear, onStartAnywa
 
   const live = hostProblemOf(status);
   const blocking = gate.code === 'host_not_ready' || gate.code === 'host_unreachable';
-  const cleared = blocking && !!status?.connected && !live && hostDotOf(status, { now: serverNow() }).kind === 'connected';
+  // An unstable link (the only warn left once `live` is null) is still a link that is up: the refusal no longer holds.
+  const cleared = blocking && !!status?.connected && !live && ['connected', 'warn'].includes(hostDotOf(status, { now: serverNow() }).kind);
   useEffect(() => {
     if (!cleared || readyUntil !== null) return;
     setReadyUntil(Date.now() + HOST_READY_HOLD_MS);

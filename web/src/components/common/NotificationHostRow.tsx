@@ -18,7 +18,7 @@
  * people look to decide whether to go fix something.
  */
 import { useRef, type ReactNode } from 'react';
-import { BANNER_READINESS_KINDS, firstSentence, hostProblemOf } from '@open-walnut/host-problem';
+import { BANNER_READINESS_KINDS, firstSentence, hostConnectedWords, hostFlapOf, hostProblemOf } from '@open-walnut/host-problem';
 import type { DaemonHealth } from '@/hooks/useSystemHealth';
 import { serverNow, useHostStatus } from '@/hooks/useHostStatus';
 import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
@@ -48,12 +48,12 @@ function HostStatusLine({ daemon, disabled }: { daemon: DaemonHealth; disabled: 
   const failure = !disabled && !connected && !connecting && (problem?.type === 'connect' || problem?.type === 'reconnecting')
     ? problem.type === 'connect' ? problem.headline : `Reconnecting to ${hostDisplayLabel(daemon.host, status?.label, daemon.label)}`
     : null;
-  const phase = disabled ? DISABLED_TEXT : connected ? 'Connected' : connecting ? hostStatusText(status) : failure ?? 'Disconnected';
+  const phase = disabled ? DISABLED_TEXT : connected ? hostConnectedWords(status, serverNow()) : connecting ? hostStatusText(status) : failure ?? 'Disconnected';
   const label = hostDisplayLabel(daemon.host, undefined, daemon.label);
   // Only a banner problem wears the warn colour; a version floor for one model is a quiet
   // note (the user's rule, N14). A failed connect's words take its red dot's tone (N3-15).
   const bannerKind = problem?.type === 'readiness' && BANNER_READINESS_KINDS.includes(problem.problem.kind);
-  const tone = disabled ? 'muted' : blocking ? (bannerKind ? 'warn' : '') : connected ? 'ok' : connecting ? '' : failure ? 'error' : 'muted';
+  const tone = disabled ? 'muted' : blocking ? (bannerKind ? 'warn' : '') : connected ? (hostFlapOf(status, serverNow()) ? 'warn' : 'ok') : connecting ? '' : failure ? 'error' : 'muted';
   return (
     <li className="notification-detail-row nfc-daemon-row" data-host={daemon.host}>
       <span className="notification-daemon-name" title={label}>

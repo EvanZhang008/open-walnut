@@ -17,8 +17,8 @@
 import { memo, useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSystemHealth } from '@/hooks/useSystemHealth';
-import { useAllHostStatus } from '@/hooks/useHostStatus';
-import { hostProblemOf } from '@open-walnut/host-problem';
+import { serverNow, useAllHostStatus } from '@/hooks/useHostStatus';
+import { hostFlapOf, hostProblemOf } from '@open-walnut/host-problem';
 import { openHostSettings } from '@/utils/host-settings-nav';
 import { NotificationHostRow } from './NotificationHostRow';
 import { HostFixButton } from './HostFixButton';
@@ -132,8 +132,12 @@ export const NotificationSystemPane = memo(function NotificationSystemPane(
       {/* Remote daemons status: every host once; a host with a problem is its Home card row. */}
       {health.daemons && health.daemons.length > 0 && (() => {
         // Any host with a banner problem (a failed connect, a banner readiness kind) warns the card.
-        const warn = health.daemons.some((d) => !disabled.has(d.host)
-          && ['connect', 'readiness'].includes(hostProblemOf(statuses.find((x) => x.host === d.host), { surface: 'banner' })?.type ?? ''));
+        // A connected host whose link keeps dropping warns it too (host-problem.ts hostFlapOf).
+        const warn = health.daemons.some((d) => {
+          if (disabled.has(d.host)) return false;
+          const s = statuses.find((x) => x.host === d.host);
+          return ['connect', 'readiness'].includes(hostProblemOf(s, { surface: 'banner' })?.type ?? '') || (!!s?.connected && !!hostFlapOf(s, serverNow()));
+        });
         const tone = warn ? 'warn' : health.daemons.some((d) => d.connected) ? 'ok' : 'neutral';
         return (
         <div className={`notification-card ${tone}`} data-testid="nfc-remote-hosts">

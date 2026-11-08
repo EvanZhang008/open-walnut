@@ -90,6 +90,8 @@ export interface HostStatus {
   attemptStartedAt?: number
   /** When the current connection came up, epoch ms (a readiness answer older than this is stale). */
   connectedAt?: number
+  /** When the link dropped by itself in the last hour, epoch ms, oldest first (host-problem.ts reads "unstable" from it). */
+  drops?: number[]
   /** The server clock when this frame was built (= at): clients correct their skew with it. */
   serverNow?: number
   warmup?: HostWarmupState
@@ -209,6 +211,7 @@ export function buildHostStatus(
   } else if (state.reconnectSince && status.error) status.reconnectSince = state.reconnectSince
   if (state.attemptStartedAt && !state.connected) status.attemptStartedAt = state.attemptStartedAt
   if (state.connectedAt && state.connected) status.connectedAt = state.connectedAt
+  if (state.drops?.length) status.drops = state.drops
   if (state.runtime) status.runtime = state.runtime
   if (state.daemonDir) {
     const d = state.daemonDir

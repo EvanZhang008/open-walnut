@@ -21,6 +21,7 @@ import { getHostWarmup } from './host-warmup-registry.js'
 import { getHostReadiness, refreshHostReadiness, resetHostAutofixAttempts, type HostReadiness } from './host-readiness.js'
 import { agentsAsked } from './host-readiness-store.js'
 import { REMOTE_OFF_NOTE } from './host-problem.js'
+import { clearLinkDrops } from '../../providers/daemon-link-drops.js'
 import {
   bumpFixtureCounter, fixtureConnectAttempt, fixtureEphemeral, fixtureHost, fixtureHostStatus, fixtureNow,
   hostFixtureMode, isFixtureHost, seedFixtureReadiness,
@@ -65,6 +66,8 @@ export function pushHostFrame(host: string, def: HostDef | undefined): void {
 
 /** The host left Settings (removed or disabled): every surface drops it live. */
 export function pushHostRemoved(host: string, now: number = hostFixtureMode() ? fixtureNow() : Date.now()): void {
+  // A host added back under this name starts with no drops of the one removed.
+  clearLinkDrops(host)
   bus.emit(EventNames.HOST_STATUS, { host, removed: true, at: now, serverNow: now } as never, ['web-ui'])
 }
 
