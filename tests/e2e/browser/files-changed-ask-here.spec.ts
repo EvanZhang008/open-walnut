@@ -260,7 +260,10 @@ async function expectCardShown(page: Page, view: Locator, name: string, passage:
   const card = view.locator('.fv-thread-layer .thread-card')
   await expect(card, `${name}: a card opened`).toBeVisible({ timeout: 5_000 })
   await expect(card).toHaveAttribute('data-draft', 'true')
-  // Opaque from its first frame: the card slides in, it never fades from 0
+  // Drawn unseen while it is measured (and, over the HTML preview, until its
+  // page reports where the passage is), then shown in one step.
+  await expect.poll(() => card.evaluate((el) => el.parentElement!.hasAttribute('data-card-measure')), { message: `${name}: the card is measured and shown` }).toBe(false)
+  // Opaque from its first shown frame: the card slides in, it never fades from 0
   // (thread-card.css), so this holds even when frames come ~300ms apart.
   expect(await card.evaluate((el) => getComputedStyle(el).opacity), `${name}: the card is opaque at once`).toBe('1')
   // ...and stays: the same element (not remounted every frame) still opaque later.

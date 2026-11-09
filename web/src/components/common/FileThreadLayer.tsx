@@ -162,8 +162,12 @@ const FRAME_STYLE = `
 ::highlight(thread-mark-done-neutral) { background-color: hsl(0 0% 50% / 0.12); text-decoration: underline 1.5px hsl(0 0% 52% / 0.6); text-underline-offset: 3px; }
 html[data-walnut-mark-hover], html[data-walnut-mark-hover] * { cursor: pointer; }
 `;
-/** The anchor the open card is placed by (painted by nothing: its mark is the question's). */
+/** The anchor the open card is placed by (painted by nothing: its mark is the question's).
+ *  One per passage, so a report about the last card's passage is never read as this one's. */
 const CARD_KEY = '__card__';
+const cardKeyOf = (quote: SessionPinnedQuote | undefined): string | null => (quote ? `${CARD_KEY}${quote.exact}` : null);
+/** How long a card in the HTML preview waits, unseen, for its page to report where its passage is. */
+const FRAME_RECTS_WAIT_MS = 1500;
 
 const within = (a: BoxLike | null, b: BoxLike | null): BoxLike | null => {
   if (!a) return b;
@@ -297,6 +301,9 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
   const cardQuote = mine?.quote;
   /** Which of the page's marks wear the scanning line (scan) or the waiting pulse. */
   const frameLines = useRef(new Map<string, { live: boolean; wait: boolean }>());
+  /** The open card's passage in the page: its anchor key once sent, `missing` when the
+   *  page's text does not hold it, null while the page's text has not come yet. */
+  const cardInPage = useRef<string | null>(null);
   /** The scanning lines under the page's passages, drawn in this layer's overlay. */
   const paintFrameLines = useCallback(() => {
     const layer = liveRef.current;
@@ -334,9 +341,12 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
         });
       }
       const card = cardQuote ? locateQuote(t.text, cardQuote, LOCATE_FILE) : null;
-      if (card) out.push({ key: CARD_KEY, name: '', start: card.start, end: card.end, rects: true });
+      const cardKey = cardKeyOf(cardQuote);
+      if (card && cardKey) out.push({ key: cardKey, name: '', start: card.start, end: card.end, rects: true });
+      cardInPage.current = card ? cardKey : 'missing';
       group.set(t.v, out);
     };
+    cardInPage.current = null;
     send();
     let raf = 0;
     const later = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; paintFrameLines(); }); };
@@ -406,10 +416,11 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
     /** The passage's box (and its last line's bottom) in the frame's or the top viewport. */
     const passage = (): { whole: DOMRect; bottom: number; frame: DOMRect | null; bringOn: () => void } | null => {
       if (inFrame) {
-        const r = group?.rects(CARD_KEY)?.r ?? [];
+        const key = cardKeyOf(mine.quote);
+        const r = (key && group?.rects(key)?.r) || [];
         const whole = unionOf(r);
         const fb = channel?.frameBox() ?? null;
-        return whole && fb ? { whole, bottom: r[r.length - 1]!.bottom, frame: fb, bringOn: () => group?.reveal(CARD_KEY) } : null;
+        return whole && fb && key ? { whole, bottom: r[r.length - 1]!.bottom, frame: fb, bringOn: () => group?.reveal(key) } : null;
       }
       const b = body();
       const range = b && mine.quote ? rangeForQuote(b, mine.quote, skip, LOCATE_FILE) : null;
@@ -424,6 +435,20 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
       const hostBox = root.getBoundingClientRect();
       const host = { width: hostBox.width, height: hostBox.height };
       const p = passage();
+      // The HTML preview's page reports its passage's place a moment after the
+      // card asks (a message from its own origin): until then the card waits
+      // unseen, not drawn at the top and then moved under its passage
+      // (2026-11-09: it showed at the top, 300px off, until the report came).
+      /** Drawn unseen until `until`, then measured again. */
+      const waitUnseen = (until: number) => {
+        layer.setAttribute(CARD_MEASURE_ATTR, '');
+        set({ path: filePath, el: layer, place: placeFileCard({ top: 8, bottom: 8, left: 0, right: host.width }, host) });
+        if (!waitTimer) waitTimer = window.setTimeout(() => { waitTimer = 0; if (live) measure(true); }, Math.max(0, until - performance.now()));
+      };
+      if (!p && inFrame && mine.quote && cardInPage.current !== 'missing' && performance.now() < waitUntil) {
+        waitUnseen(waitUntil);
+        return;
+      }
       let anchor: HostRect;
       if (p) {
         const { whole } = p;
@@ -433,8 +458,16 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
           scrolledForRef.current = openKey;
           if (!rectInHost(anchor, host, 24)) {
             p.bringOn();
+            // The page scrolls itself and reports later: wait for that report.
+            if (inFrame) revealUntil = performance.now() + FRAME_RECTS_WAIT_MS;
             return later();
           }
+        }
+        // Still the place from before the page's scroll (2026-11-09: shown
+        // there, then moved 80px up as the report came).
+        if (revealUntil) {
+          if (!rectInHost(anchor, host, 24) && performance.now() < revealUntil) { waitUnseen(revealUntil); return; }
+          revealUntil = 0;
         }
       } else {
         anchor = { top: 8, bottom: 8, left: 0, right: host.width };
@@ -444,7 +477,7 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
       const minLeft = colEl ? colEl.getBoundingClientRect().left - hostBox.left : undefined;
       const placeFor = (need?: number) => ({ path: filePath, el: layer, place: placeFileCard(anchor, host, undefined, minLeft, need) });
       const kept = needRef.current?.need;
-      if (kept !== undefined) { set(placeFor(kept)); return; }
+      if (kept !== undefined) { set(placeFor(kept)); layer.removeAttribute(CARD_MEASURE_ATTR); return; }
       // Not measured yet: the side waits for the card's height. A place without
       // `need` lets the card mount, unseen (the layer's measure flag); the
       // mutation that mounts it measures it before the frame paints and commits
@@ -466,6 +499,9 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
     };
     let live = true;
     let raf = 0;
+    let waitTimer = 0;
+    const waitUntil = performance.now() + FRAME_RECTS_WAIT_MS;
+    let revealUntil = 0;
     const later = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; measure(true); }); };
     measure(false);
     // While waiting for the card, each mutation is looked at at once (a
@@ -491,6 +527,7 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
       off?.();
       live = false;
       if (raf) cancelAnimationFrame(raf);
+      if (waitTimer) clearTimeout(waitTimer);
       layer.removeAttribute(CARD_MEASURE_ATTR);
     };
   }, [openKey, mine?.quote?.exact, filePath, surfaceNonce, body, skip, rootRef, channel, group]);

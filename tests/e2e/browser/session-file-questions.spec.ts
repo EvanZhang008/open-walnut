@@ -371,9 +371,25 @@ test.describe('Questions about a file passage (Files tab)', () => {
     const card = fileCard(view)
     await expect(card).toHaveAttribute('data-draft', 'true')
     const last = shifted.at(-1)!
-    const cb = (await card.boundingBox())!
-    expect(cb.y).toBeGreaterThanOrEqual(last.top + last.height - 1)
-    expect(cb.y - (last.top + last.height)).toBeLessThan(40)
+    // Every painted frame for 2s: the page reports where the passage is a
+    // moment after the card asks (its own origin), and the card waits for it
+    // unseen. It showed at the top first and then moved, 300px (2026-11-09).
+    const frames = await page.evaluate(async () => {
+      const out: Array<{ top: number; seen: boolean }> = []
+      const t0 = performance.now()
+      while (performance.now() - t0 < 2_000) {
+        await new Promise((r) => requestAnimationFrame(r))
+        const el = document.querySelector<HTMLElement>('.fv-thread-layer > .thread-card')
+        if (el) out.push({ top: el.getBoundingClientRect().top, seen: getComputedStyle(el).opacity !== '0' })
+      }
+      return out
+    })
+    const seen = frames.filter((f) => f.seen)
+    expect(seen.length, 'the card shows within 2s').toBeGreaterThan(0)
+    for (const f of seen) {
+      expect(f.top, 'the card shows under its passage from its first painted frame').toBeGreaterThanOrEqual(last.top + last.height - 1)
+      expect(f.top - (last.top + last.height)).toBeLessThan(40)
+    }
     await card.locator('.thread-card-input').fill('What caused the Thursday spike?')
     await card.locator('.thread-card-input').press('Enter')
     await expect(card.locator('.thread-card-head .thread-map-num')).toHaveText(String(next), { timeout: 30_000 })
@@ -493,7 +509,9 @@ test.describe('Questions about a file passage (Files tab)', () => {
       return q.top > box.y && q.top + q.height < box.y + box.height
     }
     await expect.poll(onScreen, { timeout: 5_000 }).toBe(true)
-    await page.waitForTimeout(300)
+    // Shown only once it is beside the passage: never at the place from before
+    // the page's scroll (2026-11-09: shown there, then moved 80px up).
+    await expect.poll(() => card.evaluate((el) => el.parentElement!.hasAttribute('data-card-measure'))).toBe(false)
     const p = (await frameTextRects(view, LONG_PASSAGE)).at(-1)!
     const cb = (await card.boundingBox())!
     expect(cb.y).toBeGreaterThanOrEqual(p.top + p.height - 1)
