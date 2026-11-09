@@ -188,6 +188,35 @@ export function usageLimitContinuedText(note: SessionUsageLimitContinued, now: n
   return `${who} continued this session at ${at}${who === 'Walnut' ? ', after the limit reset' : ''}.`;
 }
 
+/** How long after a continue went in the panel lets the continued note speak for a session that
+ *  still reads as ended: the new turn's process can take that long to start on a busy machine. */
+export const CONTINUED_GRACE_MS = 60_000;
+
+/** True while a session the usage limit held was just continued (Walnut, Continue now, or a new
+ *  message) and still reads as ended with no recorded cause: its next turn is starting, so the
+ *  generic "Session ended" error would only flash under the continued note. Past the grace, or
+ *  with a cause recorded, the error shows as for any session. Pure, for the unit test. */
+export function continuingAfterLimit(note: SessionUsageLimitContinued | undefined, processStatus: string | undefined,
+  errorMessage: string | undefined, now: number): boolean {
+  if (!note || processStatus !== 'error' || errorMessage) return false;
+  const at = Date.parse(note.at);
+  return Number.isFinite(at) && now - at < CONTINUED_GRACE_MS;
+}
+
+/** continuingAfterLimit, renewed when the grace ends. */
+export function useContinuingAfterLimit(note: SessionUsageLimitContinued | undefined, processStatus: string | undefined,
+  errorMessage: string | undefined): boolean {
+  const [now, setNow] = useState(() => Date.now());
+  const on = continuingAfterLimit(note, processStatus, errorMessage, now);
+  const at = note?.at;
+  useEffect(() => {
+    if (!on || !at) return;
+    const id = window.setTimeout(() => setNow(Date.now()), Math.max(0, Date.parse(at) + CONTINUED_GRACE_MS - Date.now()) + 50);
+    return () => window.clearTimeout(id);
+  }, [on, at]);
+  return on;
+}
+
 /** Walnut's own continue after the reset ran: one quiet line, so a person coming back later reads
  *  why the session went on. Gone at the next message into it, or with its ×. */
 export function UsageLimitContinuedNote({ sessionId, note, onDismiss }: {

@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { SessionUsageLimit } from '@open-walnut/core'
-import { limitIn, usageLimitBannerText, usageLimitContinuedText } from '../../web/src/components/sessions/UsageLimitBanner'
+import { CONTINUED_GRACE_MS, continuingAfterLimit, limitIn, usageLimitBannerText, usageLimitContinuedText } from '../../web/src/components/sessions/UsageLimitBanner'
 
 const T0 = Date.parse('2026-11-04T15:00:00Z')
 const MIN = 60_000
@@ -85,5 +85,20 @@ describe('the banner tag', () => {
     expect(usageLimitTag({ ...w, state: 'off' }, T0)).toBe('Limited')
     expect(usageLimitTag({ ...w, state: 'off' }, T0 + 11 * MIN)).toBe('Reset')
     expect(usageLimitTag({ ...w, state: 'gave_up' }, T0 + 11 * MIN)).toBe('Reset')
+  })
+})
+
+describe('a session just continued after the limit', () => {
+  // 2026-11-09 acceptance: a person's message ended the wait, and until the resumed process
+  // started the panel showed the generic red "Session ended and no cause was recorded".
+  const note = { at: new Date(T0).toISOString(), by: 'your-message' as const }
+  it('reads as continuing, not ended, while its next turn starts', () => {
+    expect(continuingAfterLimit(note, 'error', undefined, T0 + 5_000)).toBe(true)
+  })
+  it('a recorded cause, a status that is not an error, or the grace gone: the error shows as for any session', () => {
+    expect(continuingAfterLimit(note, 'error', 'claude exited 1', T0 + 5_000)).toBe(false)
+    expect(continuingAfterLimit(note, 'running', undefined, T0 + 5_000)).toBe(false)
+    expect(continuingAfterLimit(note, 'error', undefined, T0 + CONTINUED_GRACE_MS)).toBe(false)
+    expect(continuingAfterLimit(undefined, 'error', undefined, T0)).toBe(false)
   })
 })

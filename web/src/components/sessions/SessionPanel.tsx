@@ -93,7 +93,7 @@ import { useEvent } from '@/hooks/useWebSocket';
 import { fetchSession, peekSessionRecord, keepSessionRecord, executePlanContinue, executePlanSession, updateSession, restartSession, recheckSession, investigateSession, type ContinueInNewFolderResult } from '@/api/sessions';
 import { FolderGoneBanner } from './FolderGoneBanner';
 import { SessionBrowserCard } from './SessionBrowserCard';
-import { UsageLimitBanner, UsageLimitContinuedNote } from './UsageLimitBanner';
+import { UsageLimitBanner, UsageLimitContinuedNote, useContinuingAfterLimit } from './UsageLimitBanner';
 import { EngineFallbackBanner, showsEngineFallback } from './EngineFallbackBanner';
 import { isFolderGoneReason } from '@/utils/folder-gone';
 import { terminalPrewarm } from '@/api/terminal';
@@ -2396,6 +2396,8 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per move
   }, [paneFocus?.n]);
   const ps = session?.process_status;
+  // A continue after the usage limit just went in: its turn is starting, not ended.
+  const continuingAfterLimit = useContinuingAfterLimit(session?.usageLimitContinued, ps, session?.errorMessage);
   // Phase is forwarded to SessionChatHistory for resume detection logic,
   // not for UI display in this panel.
   const taskPhase = (sessionTask?.phase ?? 'TODO') as TaskPhase;
@@ -3413,7 +3415,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
           <UsageLimitContinuedNote sessionId={sessionId} note={session.usageLimitContinued}
             onDismiss={() => setSession(prev => prev ? { ...prev, usageLimitContinued: undefined } : prev)} />
         )}
-        {ps === 'error' && !session?.cwdGone && !session?.usageLimit && !(session && needsContextRecovery({ ...session, process_status: ps })) && (() => {
+        {ps === 'error' && !session?.cwdGone && !session?.usageLimit && !continuingAfterLimit && !(session && needsContextRecovery({ ...session, process_status: ps })) && (() => {
           // Render even with NO errorMessage. An error the backend couldn't label
           // used to render nothing at all \u2014 the user got a red "Error" pill and
           // zero explanation, with the Retry button (which lives in this banner)
