@@ -159,3 +159,15 @@ describe('the default base', () => {
     expect(layers.defaultBase(fake({ 'origin/main': 'o1' }, layers.MAX_BRANCH_COMMITS + 1))).toBe('HEAD')
   })
 })
+
+describe('slowTierConfig', () => {
+  it('runs every slow dir under a config that includes it', () => {
+    for (const dir of ['tests/e2e/**', 'tests/commands/**', 'tests/mcp/**']) {
+      const file = `${dir.replace(/\*\*$/, '')}x.test.ts`
+      const config = fs.readFileSync(path.join(__dirname, '../..', layers.slowTierConfig(file)), 'utf8')
+      expect(config, file).toMatch(file.startsWith('tests/e2e/') ? /tests\/e2e\/\*\*\/\*\.test\.ts/ : /SLOW_DIR_GLOBS/)
+    }
+    expect(layers.slowTierConfig('tests/e2e/op-call-gateway-e2e.test.ts')).toBe('vitest.e2e.config.ts')
+    expect(layers.slowTierConfig('tests/mcp/x.test.ts')).toBe('vitest.slow.config.ts')
+  })
+})

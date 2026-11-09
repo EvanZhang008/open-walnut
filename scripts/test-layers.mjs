@@ -288,13 +288,25 @@ function runTier(files, extra, config) {
   return { ...judge(first, again), ms: first.ms + again.ms }
 }
 
+/**
+ * The config a slow-tier file runs with. tests/e2e is a slow dir that vitest.slow.config.ts leaves to
+ * its own config (SLOW_DIR_GLOBS), so a changed e2e test run under the slow config found no file
+ * and read as a failure (2026-11-09).
+ */
+export function slowTierConfig(file) {
+  return file.startsWith('tests/e2e/') ? 'vitest.e2e.config.ts' : 'vitest.slow.config.ts'
+}
+
 function run(o, files, slowFiles = []) {
   if (!files.length && !slowFiles.length) { console.log('[test-layers] nothing to run'); return 0 }
   console.log(`[test-layers] ${o.layer}: ${files.length} file(s)${slowFiles.length ? `, and ${slowFiles.length} of the change's own in the slow tier` : ''}`)
   const tiers = []
   if (files.length) tiers.push(runTier(files, o.extra, 'vitest.quick.config.ts'))
   // The slow tier's files start real processes: one at a time, as CI runs them.
-  if (slowFiles.length) tiers.push(runTier(slowFiles, ['--maxWorkers=1', ...o.extra.filter((a) => !a.startsWith('--maxWorkers'))], 'vitest.slow.config.ts'))
+  const oneAtATime = ['--maxWorkers=1', ...o.extra.filter((a) => !a.startsWith('--maxWorkers'))]
+  for (const config of [...new Set(slowFiles.map(slowTierConfig))]) {
+    tiers.push(runTier(slowFiles.filter((f) => slowTierConfig(f) === config), oneAtATime, config))
+  }
   const fails = tiers.flatMap((t) => t.fails), flaky = tiers.flatMap((t) => t.flaky)
   const n = files.length + slowFiles.length
   const verdict = { layer: o.layer, base: o.base, files: n, ms: tiers.reduce((s, t) => s + t.ms, 0), fails, flaky, ok: fails.length === 0 }
