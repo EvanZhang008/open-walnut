@@ -21,6 +21,8 @@ import { notifyDictationActivity, type DictationControl } from '@/hooks/useSendA
 
 export interface MicControl extends DictationControl {
   discard: () => void;
+  /** A press is opening the microphone: a recording is on its way. */
+  opening?: () => boolean;
 }
 
 interface MicButtonProps {
@@ -57,6 +59,8 @@ interface MicButtonProps {
   insertBox?: () => Element | null;
   /** Recording and transcribing are both over (with words or without: a failure too). */
   onSettled?: () => void;
+  /** Out of the row for now (the clipboard mic beside it records in its place); it stays mounted. */
+  standby?: boolean;
 }
 
 // How long the chevron stays after a SUCCESSFUL transcription. After a failure
@@ -83,7 +87,7 @@ function MicWaveform({ level }: { level: number }) {
   );
 }
 
-export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, language, disabled, size = 'md', insertBox, onSettled }: MicButtonProps) {
+export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, language, disabled, size = 'md', insertBox, onSettled, standby }: MicButtonProps) {
   /**
    * Did this recording deliver a FINAL text? Tracked because the mic now KEEPS the
    * user's selection (see the mousedown note below), and something has to release it
@@ -112,7 +116,7 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
       : {}),
     ...(language ? { language } : {}),
   };
-  const { isSupported, isRecording, isTranscribing, error, toggleRecording, retryWithModel, retryLast, lastDebugPath, hasLastRecording, level, silenceWarning, discardRecording, finishRecording, isBusy } = useSpeechToText(sttOptions);
+  const { isSupported, isRecording, isTranscribing, error, toggleRecording, retryWithModel, retryLast, lastDebugPath, hasLastRecording, level, silenceWarning, discardRecording, finishRecording, isBusy, isOpening } = useSpeechToText(sttOptions);
   // The final words (if any) are delivered before transcribing turns false, so a
   // box that listens here knows no more text is coming for this recording.
   const busyNow = isRecording || isTranscribing;
@@ -149,9 +153,9 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
   // Hand the parent a stable way to abandon a live recording.
   useEffect(() => {
     if (!controlRef) return;
-    controlRef.current = { discard: discardRecording, finish: finishRecording, busy: isBusy };
+    controlRef.current = { discard: discardRecording, finish: finishRecording, busy: isBusy, opening: isOpening };
     return () => { controlRef.current = null; };
-  }, [controlRef, discardRecording, finishRecording, isBusy]);
+  }, [controlRef, discardRecording, finishRecording, isBusy, isOpening]);
   const sttStatus = useSttStatus();
   const navigate = useNavigate();
 
@@ -494,7 +498,7 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
   const fmtLatency = (ms?: number) => (typeof ms === 'number' ? `${(ms / 1000).toFixed(1)}s` : '');
 
   return (
-    <div className="mic-btn-wrapper" ref={wrapperRef}>
+    <div className={standby ? 'mic-btn-wrapper mic-standby' : 'mic-btn-wrapper'} ref={wrapperRef}>
       <button
         className={btnClass}
         // THE BUTTON ONLY, never the wrapper: the wrapper also holds this mic's
