@@ -32,6 +32,8 @@ import { FIRE_DELIVERY_MAX_ATTEMPTS } from '../../src/core/cron/trigger-apply.js
 import { registerExecutor } from '../../src/core/routines/registry.js'
 import { compileTriggersForHost, triggerDefOf } from '../../src/core/routines/trigger-push.js'
 import { getOp } from '../../src/ops/index.js'
+import { testRunDeadlineMs } from '../../src/core/cron/trigger-time-limit.js'
+import { markLinkFailure } from '../../src/providers/link-failure.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 
@@ -391,6 +393,211 @@ describe('POST /api/v1/routines/check-test', () => {
   })
 })
 
+// 2026-11-08, a trigger sweep: scripts whose call timeouts times their retries passed
+// the trigger's limit were killed before the retry ran; nothing showed the limit, a
+// killed run read "check timed out after 434s", and a slow test passed without a word.
+describe('the check\'s time limit, through the real routes', () => {
+  /** A daemon whose test run answers `result`. */
+  const testingDaemon = (result: Record<string, unknown>): TriggerDaemon => ({
+    ...fakeDaemon(),
+    async send(cmd, params = {}) {
+      sends.push({ cmd, params })
+      if (cmd === 'triggers.test') return { ok: true, result: { ...TEST_RESULT, ...result } }
+      return { ok: true }
+    },
+  })
+
+  afterAll(() => withDaemon(fakeDaemon()))
+
+  it('a test run says how long it ran against its limit, and warns over half of it', async () => {
+    withDaemon(testingDaemon({ durationMs: 1_500 }))
+    const fast = await post('/api/v1/routines/check-test', { check: { run: 'bash fast.sh', timeoutSeconds: 60 } })
+    expect(fast.status).toBe(200)
+    expect(fast.json.timeLimit).toMatchObject({ seconds: 60, durationMs: 1_500, killed: false, line: 'ran 1.5 s of its 60 s limit' })
+    expect(fast.json.timeLimit.warning).toBeUndefined()
+
+    withDaemon(testingDaemon({ durationMs: 40_000 }))
+    const slow = await post('/api/v1/routines/check-test', { check: { run: 'bash slow.sh', timeoutSeconds: 60 } })
+    expect(slow.json.timeLimit).toMatchObject({ seconds: 60, share: 0.67, line: 'ran 40 s of its 60 s limit' })
+    expect(slow.json.timeLimit.warning).toMatch(/^This test run took 40 s, 67% of its 60 s time limit/)
+  })
+
+  it('a test the daemon killed at its deadline says so, with the limit, in the error and the outcome', async () => {
+    withDaemon(testingDaemon({ ok: false, durationMs: 30_004, parsed: null, wouldFire: false, newItemCount: 0, error: 'check timed out after 30s' }))
+    const out = await getOp('trigger_test')!.handler!({ run: 'bash hang.sh' }, async (method, p, body) => (await post(`/api/v1${p}`, body)).json) as {
+      result: { error: string }; timeLimit: Record<string, unknown>; outcome: string
+    }
+    expect(out.result.error).toBe('check killed at the 30 s limit (timeoutSeconds): it was still running')
+    expect(out.timeLimit).toMatchObject({ seconds: 30, killed: true, line: 'was killed at its 30 s limit' })
+    expect(out.outcome).toContain('check killed at the 30 s limit')
+    expect(out.outcome).toContain('WARNING: This test run was killed at its 30 s time limit before it finished.')
+  })
+
+  it('trigger_create warns when the last test of the same script came close to the limit it arms', async () => {
+    const base = {
+      every: '5m', prompt: 'Look at the build.', description: 'Checks the build every 5 minutes; the session looks when it breaks.',
+    }
+    withDaemon(testingDaemon({ durationMs: 25_000 }))
+    await post('/api/v1/routines/check-test', { check: { run: 'bash near.sh', cwd: SESSION_CWD } }, { 'x-walnut-caller-sid': sessionId })
+    withDaemon(fakeDaemon())
+    const near = await post('/api/v1/routines/trigger', { ...base, run: 'bash near.sh' }, { 'x-walnut-caller-sid': sessionId })
+    expect(near.status).toBe(201)
+    expect(near.json.timeLimit).toMatchObject({ seconds: 30, tested: { durationMs: 25_000, seconds: 30, killed: false } })
+    expect(near.json.timeLimit.warning).toMatch(/^Its last trigger_test run took 25 s, 83% of its 30 s time limit/)
+    const mapped = getOp('trigger_create')!.mapResult!({ body: near.json, args: {} }) as { outcome: string }
+    expect(mapped.outcome).toContain('WARNING: Its last trigger_test run took 25 s')
+
+    // The same script armed with room to spare: no warning.
+    const roomy = await post('/api/v1/routines/trigger', { ...base, run: 'bash near.sh', timeoutSeconds: 120 }, { 'x-walnut-caller-sid': sessionId })
+    expect(roomy.json.timeLimit).toMatchObject({ seconds: 120 })
+    expect(roomy.json.timeLimit.warning).toBeUndefined()
+    // A script never tested has nothing to warn about.
+    const untested = await post('/api/v1/routines/trigger', { ...base, run: 'bash never-tested.sh' }, { 'x-walnut-caller-sid': sessionId })
+    expect(untested.json.timeLimit).toEqual({ seconds: 30 })
+  })
+
+  // 2026-11-08: a check with a 280 s limit could not be tested (the CLI gave up at 10 s, the
+  // server at 60 s), and a link that dropped mid-test read only "did not answer the test".
+  it('waits for the daemon as long as the check may run, never a fixed minute', async () => {
+    const deadlines: Array<number | undefined> = []
+    withDaemon({ ...fakeDaemon(), async send(cmd, _params, timeoutMs) { deadlines.push(timeoutMs); return cmd === 'triggers.test' ? { ok: true, result: TEST_RESULT } : { ok: true } } })
+    await post('/api/v1/routines/check-test', { check: { run: 'bash long.sh', timeoutSeconds: 280 } })
+    await post('/api/v1/routines/check-test', { check: { run: 'bash short.sh' } })
+    expect(deadlines).toEqual([testRunDeadlineMs(280), testRunDeadlineMs(30)])
+    expect(testRunDeadlineMs(280)).toBeGreaterThan(285_000)
+    // The CLI waits for two runs (the one retry) and the relink, whatever the limit.
+    for (const limit of [1, 30, 120, 280, 300]) {
+      expect(getOp('trigger_test')!.timeoutMs).toBeTypeOf('function')
+      const cli = (getOp('trigger_test')!.timeoutMs as (a: Record<string, unknown>) => number)({ run: 'x', timeoutSeconds: limit })
+      expect(cli).toBeGreaterThan(2 * testRunDeadlineMs(limit))
+    }
+  })
+
+  it('a link that drops mid-test is retried once, and a second drop says it was the link, not the script', async () => {
+    let calls = 0
+    const dropping = (drops: number): TriggerDaemon => ({
+      ...fakeDaemon(),
+      async send(cmd) {
+        if (cmd !== 'triggers.test') return { ok: true }
+        calls += 1
+        if (calls <= drops) throw markLinkFailure(new Error('connection closed'), 'lost')
+        return { ok: true, result: TEST_RESULT }
+      },
+    })
+    calls = 0
+    withDaemon(dropping(1))
+    const once = await post('/api/v1/routines/check-test', { check: { run: 'bash flaky-link.sh' } })
+    expect(once.status).toBe(200)
+    expect(once.json.result).toMatchObject({ wouldFire: true })
+    expect(calls).toBe(2)
+
+    calls = 0
+    withDaemon(dropping(5))
+    const twice = await post('/api/v1/routines/check-test', { check: { run: 'bash flaky-link.sh' } })
+    expect(twice.status).toBe(503)
+    expect(JSON.stringify(twice.json)).toContain('transport failure: the connection to the daemon on __local__ dropped while the test ran')
+    expect(JSON.stringify(twice.json)).toContain('This is the link, not your script')
+    expect(calls).toBe(2)
+
+    // No answer in time is not retried: the check may still be running there.
+    calls = 0
+    withDaemon({ ...fakeDaemon(), async send(cmd) { if (cmd === 'triggers.test') { calls += 1; throw markLinkFailure(new Error('daemon command timeout'), 'no-answer') } return { ok: true } } })
+    const silent = await post('/api/v1/routines/check-test', { check: { run: 'bash silent.sh', timeoutSeconds: 40 } })
+    expect(silent.status).toBe(503)
+    expect(JSON.stringify(silent.json)).toContain(`gave no answer within ${Math.round(testRunDeadlineMs(40) / 1000)} s, though the check's limit is 40 s`)
+    expect(calls).toBe(1)
+  })
+
+  // A session on another host calls through its daemon's gateway, which waits about 20 s for one
+  // relayed call: a longer run answers "still running" with its id, and the next call waits on it.
+  it('a run longer than its caller may wait answers pending, and testId reads the same run\'s result', async () => {
+    let runs = 0
+    withDaemon({ ...fakeDaemon(), async send(cmd) {
+      if (cmd !== 'triggers.test') return { ok: true }
+      runs += 1
+      await new Promise((r) => setTimeout(r, 2_500))
+      return { ok: true, result: { ...TEST_RESULT, durationMs: 2_400 } }
+    } })
+    const answerBy = String(Date.now() + 5_000)
+    const first = await post('/api/v1/routines/check-test', { check: { run: 'bash long-remote.sh', timeoutSeconds: 200 } }, { 'x-walnut-answer-by': answerBy })
+    expect(first.status).toBe(200)
+    expect(first.json.result).toBeUndefined()
+    expect(first.json.pending).toMatchObject({ host: '__local__', limitSeconds: 200 })
+    expect(first.json.pending.testId).toMatch(/^tt_[0-9a-f]{12}$/)
+    const mapped = await getOp('trigger_test')!.handler!({ run: 'bash long-remote.sh', timeoutSeconds: 200 }, async () => first.json) as { outcome: string; next: string }
+    expect(mapped.outcome).toMatch(/^The check is still running on this machine \(\d+ s so far; its limit is 200 s/)
+    expect(mapped.next).toContain(`trigger_test '{"testId":"${first.json.pending.testId}"}'`)
+
+    // The op with testId: the same run, not a new one; its time against the limit is there.
+    const out = await getOp('trigger_test')!.handler!({ testId: first.json.pending.testId }, async (_m, p, body) => (await post(`/api/v1${p}`, body)).json) as {
+      result: { wouldFire: boolean }; timeLimit: { line: string }; outcome: string
+    }
+    expect(out.result.wouldFire).toBe(true)
+    expect(out.timeLimit.line).toBe('ran 2.4 s of its 200 s limit')
+    expect(runs).toBe(1)
+    // A caller with no deadline waits to the end.
+    const whole = await post('/api/v1/routines/check-test', { check: { run: 'bash long-remote.sh', timeoutSeconds: 200 } })
+    expect(whole.json.result).toMatchObject({ wouldFire: true })
+    expect(runs).toBe(2)
+
+    const unknown = await post('/api/v1/routines/check-test', { testId: 'tt_000000000000' })
+    expect(unknown.status).toBe(404)
+    expect(JSON.stringify(unknown.json)).toContain('run trigger_test again')
+  }, 30_000)
+
+  it('a test and a create that both leave cwd out are the same check: the create warns', async () => {
+    // The common call: neither names cwd, and both mean the calling session's (2026-11-09 review).
+    const base = { every: '5m', prompt: 'Look.', description: 'Checks the deploy every 5 minutes; the session looks when it fails.' }
+    sends.length = 0
+    withDaemon(testingDaemon({ durationMs: 22_000 }))
+    await post('/api/v1/routines/check-test', { check: { run: 'bash no-cwd.sh' } }, { 'x-walnut-caller-sid': sessionId })
+    expect(sends.find((x) => x.cmd === 'triggers.test')!.params.check).toMatchObject({ cwd: SESSION_CWD })
+    withDaemon(fakeDaemon())
+    const made = await post('/api/v1/routines/trigger', { ...base, run: 'bash no-cwd.sh' }, { 'x-walnut-caller-sid': sessionId })
+    expect(made.json.timeLimit.warning).toMatch(/^Its last trigger_test run took 22 s, 73% of its 30 s time limit/)
+  })
+
+  it('a caller may name its own wait (the web form): a longer run answers pending inside it', async () => {
+    withDaemon({ ...fakeDaemon(), async send(cmd) {
+      if (cmd !== 'triggers.test') return { ok: true }
+      await new Promise((r) => setTimeout(r, 2_000))
+      return { ok: true, result: TEST_RESULT }
+    } })
+    const t0 = Date.now()
+    const first = await post('/api/routines/check-test', { check: { run: 'bash web-long.sh', timeoutSeconds: 60 }, answerWithinMs: 1_000 })
+    expect(Date.now() - t0).toBeLessThan(1_900)
+    expect(first.json.pending.testId).toMatch(/^tt_/)
+    const done = await post('/api/routines/check-test', { testId: first.json.pending.testId, answerWithinMs: 10_000 })
+    expect(done.json.result).toMatchObject({ wouldFire: true })
+    expect(done.json.timeLimit).toMatchObject({ seconds: 60 })
+  }, 20_000)
+
+  it('a check killed at its limit is recorded as one, in lastCheck, History and the list trigger_list reads', async () => {
+    const created = await post('/api/routines', {
+      name: 'slow watcher',
+      schedule: { kind: 'every', everyMs: 600_000 },
+      check: { run: 'bash slow-watch.sh', timeoutSeconds: 120 },
+      executor: { type: 'session', config: { target: taskId, prompt: 'p' } },
+    })
+    const id = created.json.job.id
+    // An older daemon's words for the kill, with the wall time a sleep stretched.
+    await handleTriggerChecked('__local__', {
+      type: 'trigger.checked', id, atMs: Date.now(), outcome: 'error', error: 'check timed out after 434s',
+      durationMs: 434_000, nextRunAtMs: Date.now() + 600_000, consecutiveErrors: 1,
+    })
+    const job = await jobState(id)
+    const killed = 'check killed at the 120 s limit (timeoutSeconds): it was still running'
+    expect(job.state.lastCheck).toMatchObject({ outcome: 'error', error: killed, killedAtLimit: true, limitSeconds: 120 })
+    expect(job.state.checkLog[0]).toMatchObject({ outcome: 'error', error: killed, killedAtLimit: true, limitSeconds: 120 })
+    expect(job.state.lastError).toBe(killed)
+    const listed = await getOp('trigger_list')!.handler!({ name: 'slow watcher' }, async (_m, p) => (await get(`/api/v1${p}`)).json) as {
+      triggers: Array<Record<string, unknown>>
+    }
+    expect(listed.triggers[0]).toMatchObject({ timeLimit: '120s', lastRun: 'was killed at its 120 s limit' })
+    expect(String(listed.triggers[0].last)).toContain(killed)
+  })
+})
+
 describe('trigger.checked from the daemon', () => {
   let quietJobId = ''
 
@@ -413,6 +620,8 @@ describe('trigger.checked from the daemon', () => {
     const job = await jobState(quietJobId)
     expect(job.state.lastCheck).toEqual({
       atMs: 1_700_000_000_000, outcome: 'quiet', reason: 'all-seen', durationMs: 42,
+      // The limit it ran under (the default 30 s), so a later limit change never rewrites it.
+      limitSeconds: 30,
     })
     expect(job.state.nextRunAtMs).toBe(nextRunAtMs)
     expect(job.enabled).toBe(true)

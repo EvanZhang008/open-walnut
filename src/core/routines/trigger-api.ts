@@ -22,6 +22,11 @@ import { createRoutine } from './routines-core.js';
 import type { CronJob } from '../cron/types.js';
 import { HOST_TRIGGER_ID_RE } from './host-trigger-id.js';
 import { createTriggerLabel } from './trigger-label.js';
+import { ANSWER_MARGIN_MS, startTestRun, waitTestRun, type TestRunWait } from './trigger-test-run.js';
+import {
+  createLimitWarning, isTimeLimitError, killedAtLimitText, limitUse, limitUseLine, limitWarning, recentTestRun,
+  rememberTestRun, TEST_RETRY_RELINK_MS, testRunDeadlineMs, timeLimitSeconds,
+} from '../cron/trigger-time-limit.js';
 import { assertCheckHostAllowed, checkCallerOrigin } from './check-host-policy.js';
 import {
   TriggerTemplateError, exemptTemplateRun, parseTemplateRun, templateOriginRefusal, prepareTemplate, requireTriggerTemplate, templateRun,
@@ -111,15 +116,38 @@ export async function testRoutineCheck(
   body: unknown,
   origin?: string,
   callerSid?: string,
-): Promise<{ result: TriggersTestResult }> {
+  /** The caller's deadline (answer-by.ts): a run still going then is answered `pending`. */
+  answerBy?: number,
+): Promise<TestCheckAnswer> {
   const b = record(body) ?? {};
+  // A caller may name its own wait (the web form, which must not hold one of the browser's few
+  // connections for minutes): the earlier of that and its answer-by deadline.
+  const within = typeof b.answerWithinMs === 'number' && Number.isFinite(b.answerWithinMs)
+    ? Date.now() + Math.min(60_000, Math.max(1_000 + ANSWER_MARGIN_MS, Math.floor(b.answerWithinMs) + ANSWER_MARGIN_MS))
+    : undefined;
+  if (within !== undefined) answerBy = answerBy === undefined ? within : Math.min(answerBy, within);
+  const testId = str(b.testId);
+  if (testId) {
+    // A run an earlier call left running (trigger-test-run.ts): wait on it again.
+    const waited = await waitTestRun<FinishedTest>(testId, answerBy);
+    if (!waited) {
+      throw new SessionControlError(
+        `no test run ${testId} here: it finished over 15 minutes ago, or the server restarted since; run trigger_test again`,
+        404,
+      );
+    }
+    return answerOf(waited);
+  }
   const rawCheck = record(b.check);
   if (!rawCheck) throw new SessionControlError('check is required', 400);
   const run = str(rawCheck.run);
   if (!run) throw new SessionControlError('check.run is required', 400);
   const templateCheck = parseTemplateRun(run) !== null;
-  const host = templateCheck ? triggerHost(str(rawCheck.host) || LOCAL_HOST) : triggerHost(str(rawCheck.host) || await callerSessionHost(callerSid));
-  const cwd = str(rawCheck.cwd);
+  const caller = await callerSessionPlace(callerSid);
+  const host = templateCheck ? triggerHost(str(rawCheck.host) || LOCAL_HOST) : triggerHost(str(rawCheck.host) || caller.host);
+  // The directory trigger_create would arm it in (the calling session's, when it names none), so the
+  // test runs where the trigger will, and its time is remembered under the same check.
+  const cwd = str(rawCheck.cwd) || (templateCheck ? '' : caller.cwd);
   if (!exemptTemplateRun({ run, cwd, host }, checkCallerOrigin(origin))) assertCheckHostAllowed(host, origin);
   const conn = await requireTriggerDaemon(host);
   const check = {
@@ -132,18 +160,44 @@ export async function testRoutineCheck(
   // trace like every other execution path does (who asked is in the request log
   // by reqId; this line says what ran, where).
   log.web.info('trigger check test', { host, run: run.slice(0, 200), ...(cwd ? { cwd } : {}), ...(id ? { jobId: id } : {}) });
-  let reply: Record<string, unknown>;
-  try {
-    // Mandatory deadline: a route that waits on a daemon must always answer.
-    // `triggerId`, never `id`: send() spreads params into {id, cmd, ...params},
-    // so an `id` param overwrites the RPC correlation id and the reply is lost.
-    reply = await conn.send('triggers.test', { check, ...(id ? { triggerId: id } : {}), home: WALNUT_HOME }, 60_000) as Record<string, unknown>;
-  } catch (err) {
-    throw new SessionControlError(
-      `daemon on ${host} did not answer the test: ${err instanceof Error ? err.message : String(err)}`,
-      503,
-    );
-  }
+  const started = startTestRun<FinishedTest>(
+    { host, limitSeconds: check.timeoutSeconds, startedAt: Date.now() },
+    () => runTestOnce(host, conn, { check, ...(id ? { triggerId: id } : {}), home: WALNUT_HOME }),
+  );
+  return answerOf((await waitTestRun<FinishedTest>(started, answerBy))!);
+}
+
+type FinishedTest = { result: TriggersTestResult; timeLimit: TestTimeLimit };
+
+/** A test run that is still going when its caller must be answered. */
+export interface TestPending {
+  testId: string;
+  host: string;
+  limitSeconds: number;
+  startedAt: string;
+  runningForMs: number;
+}
+
+export type TestCheckAnswer = FinishedTest | { pending: TestPending };
+
+function answerOf(waited: TestRunWait<FinishedTest>): TestCheckAnswer {
+  if (waited.done) return waited.value;
+  const { info } = waited;
+  return {
+    pending: {
+      testId: waited.testId, host: info.host, limitSeconds: info.limitSeconds,
+      startedAt: new Date(info.startedAt).toISOString(), runningForMs: Math.max(0, Date.now() - info.startedAt),
+    },
+  };
+}
+
+/** One test run to its end: the daemon's result, its time against the limit, remembered for trigger_create. */
+async function runTestOnce(
+  host: string,
+  conn: Awaited<ReturnType<typeof requireTriggerDaemon>>,
+  params: { check: { run: string; cwd?: string; timeoutSeconds: number }; triggerId?: string; home: string },
+): Promise<FinishedTest> {
+  const reply = await sendTestRun(host, conn, params);
   const payload = record(reply.result) ?? reply;
   if (!('wouldFire' in payload)) {
     throw new SessionControlError(
@@ -151,15 +205,109 @@ export async function testRoutineCheck(
       502,
     );
   }
-  return { result: payload as unknown as TriggersTestResult };
+  const result = { ...(payload as unknown as TriggersTestResult) };
+  // The run's time against its limit, and a deadline kill said as one (trigger-time-limit.ts).
+  const limitS = params.check.timeoutSeconds;
+  const killed = isTimeLimitError(result.error);
+  if (killed) result.error = killedAtLimitText(limitS);
+  const use = limitUse(result.durationMs, limitS, killed);
+  if (use) {
+    rememberTestRun({ run: params.check.run, host, cwd: params.check.cwd ?? '' }, {
+      atMs: Date.now(), durationMs: use.durationMs, limitSeconds: limitS, killed,
+    });
+  }
+  const warning = limitWarning(use, 'This test run');
+  return {
+    result,
+    timeLimit: {
+      seconds: limitS,
+      ...(use ? { durationMs: use.durationMs, share: use.share, killed, line: limitUseLine(use) } : {}),
+      ...(warning ? { warning } : {}),
+    },
+  };
 }
 
-/** The host the calling session runs on, or '' when there is no such session. */
-async function callerSessionHost(callerSid?: string): Promise<string> {
-  if (!callerSid) return '';
+/** A test run's time against the limit it ran under (trigger_test reads it). */
+export interface TestTimeLimit {
+  seconds: number;
+  durationMs?: number;
+  /** durationMs / the limit. */
+  share?: number;
+  killed?: boolean;
+  /** "ran 34 s of its 120 s limit". */
+  line?: string;
+  /** Set when the run took over half the limit or was killed by it. */
+  warning?: string;
+}
+
+/**
+ * One test run on the host's daemon, waited for as long as the check may run (its limit, the
+ * daemon's settle grace and the way back), never a fixed minute. A link that dropped while the
+ * test ran (or that was not there when it was sent) is a transport failure, not the script's: the
+ * test reads and writes no trigger state, so it is sent once more, on the link the host has then.
+ * 2026-11-08: a host's daemon dropped the connection mid-test and the author read only "did not
+ * answer the test", with no word whether the script or the link failed.
+ */
+async function sendTestRun(
+  host: string,
+  first: Awaited<ReturnType<typeof requireTriggerDaemon>>,
+  params: { check: { run: string; cwd?: string; timeoutSeconds: number }; triggerId?: string; home: string },
+): Promise<Record<string, unknown>> {
+  const deadlineMs = testRunDeadlineMs(params.check.timeoutSeconds);
+  const { linkFailureKind } = await import('../../providers/link-failure.js');
+  let conn = first;
+  let lastError = '';
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      // `triggerId`, never `id`: send() spreads params into {id, cmd, ...params},
+      // so an `id` param overwrites the RPC correlation id and the reply is lost.
+      return await conn.send('triggers.test', params, deadlineMs) as Record<string, unknown>;
+    } catch (err) {
+      const kind = linkFailureKind(err);
+      lastError = err instanceof Error ? err.message : String(err);
+      if (kind === 'no-answer') {
+        throw new SessionControlError(
+          `the daemon on ${host} gave no answer within ${Math.round(deadlineMs / 1000)} s, though the check's limit is `
+          + `${params.check.timeoutSeconds} s: the link may be stalled; try again (${lastError})`,
+          503,
+        );
+      }
+      if (kind !== 'lost' && kind !== 'no-link') {
+        throw new SessionControlError(`daemon on ${host} did not answer the test: ${lastError}`, 503);
+      }
+      log.web.warn('trigger check test: link to the daemon dropped', { host, attempt, kind, error: lastError });
+      if (attempt === 2) break;
+      const next = await relinkTriggerDaemon(host);
+      if (!next) break;
+      conn = next;
+    }
+  }
+  throw new SessionControlError(
+    `transport failure: the connection to the daemon on ${host} dropped while the test ran, and the one retry `
+    + `did not get through either (${lastError}). This is the link, not your script: run trigger_test again `
+    + 'once the host is connected (host_list shows it).',
+    503,
+  );
+}
+
+/** The host's daemon once its link is back, waited for briefly; null when it is not back. */
+async function relinkTriggerDaemon(host: string): Promise<Awaited<ReturnType<typeof requireTriggerDaemon>> | null> {
+  const { findTriggerDaemon } = await import('./trigger-daemon.js');
+  const until = Date.now() + TEST_RETRY_RELINK_MS;
+  for (;;) {
+    const conn = await findTriggerDaemon(host).catch(() => null);
+    if (conn) return conn;
+    if (Date.now() >= until) return null;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+}
+
+/** The host and directory the calling session runs in, '' for each when there is no such session. */
+async function callerSessionPlace(callerSid?: string): Promise<{ host: string; cwd: string }> {
+  if (!callerSid) return { host: '', cwd: '' };
   const { getSessionByClaudeId } = await import('../session-tracker.js');
   const rec = await getSessionByClaudeId(callerSid).catch(() => null);
-  return rec?.host ?? '';
+  return { host: rec?.host ?? '', cwd: rec?.cwd ?? '' };
 }
 
 /**
@@ -304,6 +452,8 @@ export async function createTriggerRoutine(body: unknown, callerSid?: string, or
   nextCheckAt: null;
   /** What happened to the task it delivers into (parked only with wait:true). */
   wait: TriggerWaitResult;
+  /** Absent only on a host's replay of a trigger already recorded. */
+  timeLimit?: CreateTimeLimit;
 }> {
   const b = record(body) ?? {};
   // A trigger a host created while this server was away comes back under its own id
@@ -428,10 +578,29 @@ export async function createTriggerRoutine(body: unknown, callerSid?: string, or
       ? { parked: false, task_id: resolved.target, reason: 'main_stays_active' }
       : { parked: false, task_id: resolved.target, reason: b.wait === false || resolved.own ? 'wait_false' : 'other_task' };
 
+  // A recent trigger_test of this script that came close to (or hit) the limit the trigger
+  // now runs under: said at once, before the first real run is killed.
+  const limitS = timeLimitSeconds({ timeoutSeconds: b.timeoutSeconds });
+  const tested = fromTemplate ? null : recentTestRun({ run, host, cwd });
+  const limitWarned = createLimitWarning(tested, limitS);
+  const timeLimit: CreateTimeLimit = {
+    seconds: limitS,
+    ...(tested ? { tested: { durationMs: tested.durationMs, seconds: tested.limitSeconds, killed: tested.killed, at: new Date(tested.atMs).toISOString() } } : {}),
+    ...(limitWarned ? { warning: limitWarned } : {}),
+  };
+
   log.web.info('trigger created', {
     host, target: resolved.target, everyMs, ...(fromTemplate ? { template: fromTemplate.template.id } : {}),
     jobId: (created.job as { id?: string } | undefined)?.id,
     parked: wait.parked, ...(wait.reason ? { notParked: wait.reason } : {}),
   });
-  return { job: created.job, host, nextCheckAt: null, wait };
+  return { job: created.job, host, nextCheckAt: null, wait, timeLimit };
+}
+
+/** The new trigger's time limit and what its last test run says about it (trigger_create reads it). */
+export interface CreateTimeLimit {
+  seconds: number;
+  /** The newest trigger_test of the same run, host and cwd in the last hour. */
+  tested?: { durationMs: number; seconds: number; killed: boolean; at: string };
+  warning?: string;
 }

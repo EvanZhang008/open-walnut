@@ -21,6 +21,7 @@ import {
   appendAudit, auditDelivery, auditWarnings, checkedAuditEntry, firedAuditEntry, injectedPreview, mergeFireAttempt,
   TRIGGER_CHECK_LOG_MAX, TRIGGER_FIRE_LOG_MAX,
 } from './trigger-audit.js';
+import { checkErrorText, isTimeLimitError, timeLimitSeconds } from './trigger-time-limit.js';
 
 /** A fire's delivery must not hang the socket handler that started it. */
 const DELIVER_TIMEOUT_MS = 2 * 60_000;
@@ -39,7 +40,12 @@ export interface TriggerCheckedApplied {
   jobName?: string;
   host?: string;
   consecutiveErrors?: number;
+  /** The check's error as stored and told: a deadline kill names the limit (trigger-time-limit.ts). */
   error?: string;
+  /** The check's time limit in seconds. */
+  timeLimitSeconds?: number;
+  /** The daemon killed this check at its time limit. */
+  killedAtLimit?: boolean;
   /**
    * The fire budget held this check back and its owning task has not been told today.
    * `maxFiresPerDay` is the stored cap (absent = the default), for the notice.
@@ -201,11 +207,15 @@ export async function applyTriggerChecked(
 
     const atMs = Number.isFinite(event.atMs) ? event.atMs : state.deps.nowMs();
     const durationMs = Number.isFinite(event.durationMs) ? event.durationMs : 0;
+    // A deadline kill is said as one, with the limit, whichever daemon version worded it.
+    const limitS = timeLimitSeconds(job.check);
+    const killedAtLimit = event.outcome === 'error' && isTimeLimitError(event.error);
+    const error = checkErrorText(event.error, limitS);
 
     if (event.outcome === 'error') {
       applyJobResult(state, job, {
         status: 'error',
-        error: event.error ?? 'check failed',
+        error: error ?? 'check failed',
         startedAt: atMs,
         endedAt: atMs + durationMs,
       });
@@ -220,15 +230,17 @@ export async function applyTriggerChecked(
       atMs,
       outcome: event.outcome,
       ...(event.reason ? { reason: event.reason } : {}),
-      ...(event.error ? { error: event.error } : {}),
+      ...(error ? { error } : {}),
       durationMs,
+      ...(killedAtLimit ? { killedAtLimit: true } : {}),
+      limitSeconds: limitS,
     };
     // The audit line rides the write lastCheck already does, so recent activity
     // costs no extra persist. Fires are appended in applyTriggerFired instead:
     // the daemon reports a fire through that path, never through checked.
     job.state.checkLog = appendAudit(
       job.state.checkLog,
-      checkedAuditEntry({ atMs, outcome: event.outcome, reason: event.reason, durationMs, error: event.error, warnings: event.warnings }),
+      checkedAuditEntry({ atMs, outcome: event.outcome, reason: event.reason, durationMs, error, warnings: event.warnings, limitSeconds: limitS, ...(killedAtLimit ? { killedAtLimit } : {}) }),
       TRIGGER_CHECK_LOG_MAX,
     );
     const warnings = event.outcome === 'quiet' ? auditWarnings(event.warnings) : undefined;
@@ -270,7 +282,7 @@ export async function applyTriggerChecked(
     emit(state, {
       jobId: job.id,
       action: 'updated',
-      ...(event.outcome === 'error' ? { status: 'error' as const, error: event.error } : {}),
+      ...(event.outcome === 'error' ? { status: 'error' as const, error } : {}),
       nextRunAtMs: job.state.nextRunAtMs,
     });
 
@@ -280,7 +292,9 @@ export async function applyTriggerChecked(
       jobName: job.name,
       host: job.check.host,
       consecutiveErrors: job.state.consecutiveErrors ?? 0,
-      ...(event.error ? { error: event.error } : {}),
+      ...(error ? { error } : {}),
+      timeLimitSeconds: limitS,
+      ...(killedAtLimit ? { killedAtLimit } : {}),
       ...(budgetHeld ? { budgetHeld } : {}),
       ...(routineTargetTask(job) ? { targetTaskId: routineTargetTask(job) } : {}),
       checkRun: job.check.run,
@@ -478,6 +492,7 @@ export async function applyTriggerFired(
         outcome: 'fired',
         items: itemCount,
         ...(Number.isFinite(newestEvent.durationMs) ? { durationMs: newestEvent.durationMs } : {}),
+        ...(target.check ? { limitSeconds: timeLimitSeconds(target.check) } : {}),
         ...(error ? { error } : {}),
         ...(retry ? { retryPending: true } : {}),
       };
@@ -497,6 +512,7 @@ export async function applyTriggerFired(
       firstAtMs,
       deliveredAtMs: Number.isFinite(result.deliveredAtMs) ? result.deliveredAtMs! : deliveryStartedAt,
       ...(Number.isFinite(newestEvent.durationMs) ? { durationMs: newestEvent.durationMs } : {}),
+      ...(target.check ? { limitSeconds: timeLimitSeconds(target.check) } : {}),
       ...(error ? { error } : {}),
       delivery: auditDelivery({
         status: result.status,

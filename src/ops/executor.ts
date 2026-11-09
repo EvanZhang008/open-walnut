@@ -477,7 +477,7 @@ async function runOp(
   base: string,
   prov: CallerProvenance,
 ): Promise<OpOutcome> {
-  const timeoutMs = op.timeoutMs ?? REQUEST_TIMEOUT_MS
+  const timeoutMs = (typeof op.timeoutMs === 'function' ? op.timeoutMs(args) : op.timeoutMs) ?? REQUEST_TIMEOUT_MS
   if (op.handler) {
     try {
       const call = async (method: HttpBinding['method'], path: string, body?: unknown): Promise<unknown> => {

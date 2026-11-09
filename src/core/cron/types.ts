@@ -108,6 +108,10 @@ export type TriggerAuditEntry = {
   warnings?: string[];
   /** A run someone asked for (Run now), not one the schedule made. */
   manual?: true;
+  /** Check errors only: the daemon killed the check at its time limit (trigger-time-limit.ts). */
+  killedAtLimit?: boolean;
+  /** The time limit this run ran under, in seconds (the check's limit may change later). */
+  limitSeconds?: number;
 };
 
 /** The daemon's last report about a check, for the card and the error counter. */
@@ -120,6 +124,10 @@ export type TriggerLastCheck = {
   durationMs?: number;
   /** A fired check whose delivery failed transiently; the daemon will replay it. */
   retryPending?: boolean;
+  /** The daemon killed the check at its time limit (trigger-time-limit.ts). */
+  killedAtLimit?: boolean;
+  /** The time limit this check ran under, in seconds (the check's limit may change later). */
+  limitSeconds?: number;
 };
 
 // ── Executor (routines layer) ──

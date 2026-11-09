@@ -39,6 +39,7 @@ import { log } from '../../logging/index.js'
 import { relayControlAction, sendV1Error as sendError, v1ErrorCode } from './v1-control-relay.js'
 import { requestOrigin } from '../middleware/request-origin.js'
 import { handsToAppErrorHandler } from '../middleware/link-failure-answer.js'
+import { ANSWER_BY_HEADER, parseAnswerBy } from '../../lib/answer-by.js'
 
 export const routinesV1Router = Router()
 
@@ -204,7 +205,7 @@ routinesV1Router.post('/routines/check-test', async (req: Request, res: Response
       return
     }
     const { testRoutineCheck } = await import('../../core/routines/trigger-api.js')
-    await runLocal(res, next, 200, () => testRoutineCheck(req.body, requestOrigin(req), callerSid(req)))
+    await runLocal(res, next, 200, () => testRoutineCheck(req.body, requestOrigin(req), callerSid(req), parseAnswerBy(req.headers[ANSWER_BY_HEADER])))
   } catch (err) {
     next(err)
   }

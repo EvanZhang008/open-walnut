@@ -10,6 +10,9 @@
  */
 
 import { triggerRunState, type TriggerRunState } from '../core/cron/trigger-run-state.js'
+import {
+  checkErrorText, isTimeLimitError, limitUse, limitUseLine, limitWarning, runLimitSeconds, timeLimitSeconds,
+} from '../core/cron/trigger-time-limit.js'
 
 export const DEFAULT_LIMIT = 25
 /** A full row is about 100 times a compact one, so its page is shorter. */
@@ -20,13 +23,14 @@ const ERROR_MAX = 160
 
 type AuditEntry = Record<string, unknown> & {
   atMs?: number; outcome?: string; reason?: string; items?: number; error?: string
-  retryPending?: boolean; coalesced?: number; delivery?: { status?: string }
+  retryPending?: boolean; coalesced?: number; delivery?: { status?: string }; durationMs?: number; killedAtLimit?: boolean
+  limitSeconds?: number
 }
 
 export type ListedJob = {
   id?: string; name?: string; description?: string; enabled?: boolean
   schedule?: { everyMs?: number }
-  check?: { run?: string; host?: string; cwd?: string }
+  check?: { run?: string; host?: string; cwd?: string; timeoutSeconds?: number }
   executor?: { type?: string; config?: { target?: unknown } }
   state?: {
     lastCheck?: AuditEntry; nextRunAtMs?: number; lastRunAtMs?: number; fireCount?: number; pausedAtMs?: number
@@ -58,8 +62,28 @@ function itemsWord(n: unknown): string {
   return typeof n === 'number' ? `${n} item${n === 1 ? '' : 's'}` : ''
 }
 
+/**
+ * The time limit beside the last check's run time: `lastRun` "ran 34 s of its 120 s limit" (or
+ * "was killed at its 120 s limit"), and `limitWarning` when it ran over half of it. A check that was
+ * killed before this was recorded reads from its error's words (trigger-time-limit.ts).
+ */
+function timeFields(job: ListedJob): Record<string, unknown> {
+  if (!job.check) return {}
+  const limitS = timeLimitSeconds(job.check)
+  const last = job.state?.lastCheck
+  const killed = last?.outcome === 'error' && (last.killedAtLimit === true || isTimeLimitError(last.error))
+  // The last run against the limit it ran under, which may not be today's.
+  const use = last ? limitUse(last.durationMs, runLimitSeconds(last, job.check), killed) : null
+  const warning = limitWarning(use, 'The last check')
+  return {
+    timeLimit: `${limitS}s`,
+    ...(use ? { lastRun: limitUseLine(use) } : {}),
+    ...(warning ? { limitWarning: warning } : {}),
+  }
+}
+
 /** The last check as one line: "fired 2 items at <iso>", "quiet (all-seen) at <iso>", "error at <iso>: <text>". */
-export function checkLine(check: AuditEntry | undefined): string | undefined {
+export function checkLine(check: AuditEntry | undefined, limitS?: number): string | undefined {
   if (!check || typeof check.outcome !== 'string') return undefined
   const at = iso(check.atMs)
   const when = at ? ` at ${at}` : ''
@@ -68,7 +92,8 @@ export function checkLine(check: AuditEntry | undefined): string | undefined {
     return `fired${items ? ` ${items}` : ''}${when}${check.retryPending ? ', delivery retrying' : ''}`
   }
   if (check.outcome === 'error') {
-    return `error${when}${check.error ? `: ${clip(String(check.error), ERROR_MAX)}` : ''}`
+    const error = typeof check.error === 'string' && limitS ? checkErrorText(check.error, limitS) : check.error
+    return `error${when}${error ? `: ${clip(String(error), ERROR_MAX)}` : ''}`
   }
   return `${check.outcome}${check.reason ? ` (${check.reason})` : ''}${when}`
 }
@@ -153,7 +178,7 @@ function headOf(job: ListedJob, extra: Record<string, unknown>, description: str
 /** One short row: facts only, the last check and the last fire as one line each. */
 export function compactRow(job: ListedJob, extra: Record<string, unknown> = {}): Record<string, unknown> {
   const target = targetOf(job)
-  const last = checkLine(job.state?.lastCheck)
+  const last = checkLine(job.state?.lastCheck, job.check ? runLimitSeconds(job.state?.lastCheck, job.check) : undefined)
   const lastFire = fireLine(job)
   const next = iso(job.state?.nextRunAtMs)
   return {
@@ -165,6 +190,7 @@ export function compactRow(job: ListedJob, extra: Record<string, unknown> = {}):
     // A plain timed routine (the task view lists those too) has runs, not checks.
     ...(!job.check && iso(job.state?.lastRunAtMs) ? { lastRunAt: iso(job.state?.lastRunAtMs) } : {}),
     ...(next ? { nextCheckAt: next } : {}),
+    ...timeFields(job),
   }
 }
 
@@ -176,6 +202,7 @@ export function fullRow(job: ListedJob, extra: Record<string, unknown> = {}): Re
     ...(target && !('target' in extra) ? { task: target } : {}),
     run: job.check?.run,
     ...(job.check?.cwd ? { cwd: job.check.cwd } : {}),
+    ...timeFields(job),
     fires: job.state?.fireCount ?? 0,
     ...(job.state?.lastCheck ? { lastCheck: job.state.lastCheck } : {}),
     ...(typeof job.state?.nextRunAtMs === 'number'

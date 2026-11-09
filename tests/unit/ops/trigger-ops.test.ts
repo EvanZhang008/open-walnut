@@ -388,3 +388,89 @@ describe('trigger_pause / trigger_resume', () => {
     }
   })
 })
+
+// 2026-11-08, a trigger sweep: check scripts whose call timeouts times their retries
+// passed the trigger's time limit were killed before the retry ran, and trigger_list
+// did not show the limit (the sweep read the routine store by hand).
+describe('trigger time limits', () => {
+  const at = Date.parse('2026-11-08T10:00:00Z')
+  const job = (id: string, check: Record<string, unknown>, lastCheck?: Record<string, unknown>) => ({
+    id, name: id, enabled: true, schedule: { kind: 'every', everyMs: 300_000 },
+    check: { run: `bash ${id}.sh`, host: '__local__', ...check },
+    executor: { type: 'session', config: { target: `task-${id}` } },
+    state: lastCheck ? { lastCheck: { atMs: at, ...lastCheck } } : {},
+  })
+  const rows = async (jobs: unknown[], args: Record<string, unknown> = {}) =>
+    ((await getOp('trigger_list')!.handler!(args, async () => ({ jobs }))) as { triggers: Array<Record<string, unknown>> }).triggers
+
+  it('trigger_list shows each trigger\'s limit and its last run\'s time, compact and full, with a warning over half', async () => {
+    const jobs = [
+      job('fast', { timeoutSeconds: 120 }, { outcome: 'quiet', reason: 'fire-false', durationMs: 4_000 }),
+      job('slow', { timeoutSeconds: 120 }, { outcome: 'fired', items: 1, durationMs: 72_000 }),
+      job('default', {}),
+    ]
+    for (const full of [false, true]) {
+      const [fast, slow, def] = await rows(jobs, { full })
+      expect(fast).toMatchObject({ timeLimit: '120s', lastRun: 'ran 4 s of its 120 s limit' })
+      expect('limitWarning' in fast).toBe(false)
+      expect(slow).toMatchObject({ timeLimit: '120s', lastRun: 'ran 72 s of its 120 s limit' })
+      expect(String(slow.limitWarning)).toMatch(/^The last check took 72 s, 60% of its 120 s time limit/)
+      expect(def).toMatchObject({ timeLimit: '30s' })
+      expect('lastRun' in def).toBe(false)
+    }
+  })
+
+  it('a check killed at the limit says so, also one the server stored in the daemon\'s old words', async () => {
+    const [killed, old] = await rows([
+      job('killed', { timeoutSeconds: 60 }, { outcome: 'error', error: 'check killed at the 60 s limit (timeoutSeconds): it was still running', killedAtLimit: true, durationMs: 60_200 }),
+      job('old', { timeoutSeconds: 120 }, { outcome: 'error', error: 'check timed out after 434s', durationMs: 434_000 }),
+    ])
+    expect(killed).toMatchObject({ lastRun: 'was killed at its 60 s limit', last: `error at ${new Date(at).toISOString()}: check killed at the 60 s limit (timeoutSeconds): it was still running` })
+    expect(String(killed.limitWarning)).toMatch(/^The last check was killed at its 60 s time limit before it finished/)
+    expect(old).toMatchObject({ lastRun: 'was killed at its 120 s limit', last: `error at ${new Date(at).toISOString()}: check killed at the 120 s limit (timeoutSeconds): it was still running` })
+  })
+
+  it('a run recorded under an older limit is read against that limit, not today\'s', async () => {
+    const [raised] = await rows([
+      job('raised', { timeoutSeconds: 120 }, { outcome: 'error', error: 'check killed at the 30 s limit (timeoutSeconds): it was still running', killedAtLimit: true, durationMs: 30_100, limitSeconds: 30 }),
+    ])
+    expect(raised).toMatchObject({ timeLimit: '120s', lastRun: 'was killed at its 30 s limit' })
+    expect(String(raised.last)).toContain('check killed at the 30 s limit')
+    expect(String(raised.limitWarning)).toMatch(/^The last check was killed at its 30 s time limit/)
+  })
+
+  it('trigger_list tells the model about the new fields', () => {
+    expect(getOp('trigger_list')!.description).toMatch(/`timeLimit`.*`lastRun`.*`limitWarning`/)
+  })
+
+  it('trigger_test reports the run time against the limit, and warns over half of it', async () => {
+    const op = getOp('trigger_test')!
+    const run = async (timeLimit: Record<string, unknown>, result: Record<string, unknown> = { parsed: { fire: false }, wouldFire: false }) =>
+      await op.handler!({ run: 'bash x.sh' }, async () => ({ result, timeLimit })) as { outcome: string; next: string }
+    const ok = await run({ seconds: 30, line: 'ran 2 s of its 30 s limit' })
+    expect(ok.outcome).toContain('It ran 2 s of its 30 s limit.')
+    expect(ok.outcome).not.toContain('WARNING')
+    const near = await run({ seconds: 30, line: 'ran 20 s of its 30 s limit', warning: 'This test run took 20 s, 67% of its 30 s time limit: ...' })
+    expect(near.outcome).toContain('WARNING: This test run took 20 s, 67% of its 30 s time limit')
+    expect(near.next).toMatch(/finish well inside its time limit/)
+    const killed = await run({ seconds: 30, line: 'was killed at its 30 s limit', warning: 'This test run was killed at its 30 s time limit before it finished.' },
+      { parsed: null, wouldFire: false, error: 'check killed at the 30 s limit (timeoutSeconds): it was still running' })
+    expect(killed.outcome).toContain('check killed at the 30 s limit')
+    expect(killed.outcome).toContain('It was killed at its 30 s limit.')
+    expect(op.description).toMatch(/how long it ran against its time limit/)
+  })
+
+  it('trigger_create says the limit, and warns when the last test came close', () => {
+    const map = (timeLimit: Record<string, unknown>) => getOp('trigger_create')!.mapResult!({
+      body: { job: { id: 'rt_1', name: 'CI', schedule: { kind: 'every', everyMs: 300_000 } }, host: 'devbox', wait: { parked: false, reason: 'wait_false' }, timeLimit },
+      args: {},
+    }) as { outcome: string; next: string }
+    const quiet = map({ seconds: 120 })
+    expect(quiet.outcome).toContain('runs the check every 5m and kills a check still running after 120 s')
+    expect(quiet.outcome).not.toContain('WARNING')
+    const warned = map({ seconds: 30, warning: 'Its last trigger_test run took 20 s, 67% of its 30 s time limit.' })
+    expect(warned.outcome).toContain('WARNING: Its last trigger_test run took 20 s')
+    expect(warned.next).toMatch(/^Fix the time limit first/)
+    expect(getOp('trigger_create')!.input.timeoutSeconds.description).toMatch(/timeouts times its retries/)
+  })
+})

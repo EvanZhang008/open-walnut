@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef, type RefObject, type SetStateAction } from 'react';
 import type {
   Routine, CreateRoutineInput, RoutineSchedule, RoutineExecutorRef, RoutineCheck,
-  RoutineCheckTestResult, ExecutorInfo, ExecutorOptions, ExecutorFieldSpec,
+  RoutineCheckTestResult, RoutineCheckTimeLimit, ExecutorInfo, ExecutorOptions, ExecutorFieldSpec,
 } from '@/api/routines';
 import { testRoutineCheck } from '@/api/routines';
 import { describeSchedule, describeWake } from '@/utils/routine-format';
@@ -270,7 +270,9 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
   const setConfig = slice('config');
   const setCheck = slice('check');
   const setCheckOpen = slice('checkOpen');
-  const [checkTest, setCheckTest] = useState<{ busy: boolean; result?: RoutineCheckTestResult; error?: string }>({ busy: false });
+  const [checkTest, setCheckTest] = useState<{
+    busy: boolean; result?: RoutineCheckTestResult & { timeLimit?: RoutineCheckTimeLimit }; error?: string
+  }>({ busy: false });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const descRef = useRef<HTMLTextAreaElement | null>(null);
@@ -755,8 +757,12 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
                         : checkTest.result.wouldFire
                           ? `Would fire now (${checkTest.result.newItemCount} new item${checkTest.result.newItemCount === 1 ? '' : 's'})`
                           : 'Would stay quiet now'}
-                      {` · ${checkTest.result.durationMs} ms`}
+                      {` · ${checkTest.result.timeLimit?.line ?? `${checkTest.result.durationMs} ms`}`}
                     </div>
+                    {/* A check near its limit is killed on a slower day: say so before it is armed. */}
+                    {checkTest.result.timeLimit?.warning && (
+                      <div className="routine-check-test-limit" data-testid="routine-check-test-limit">{checkTest.result.timeLimit.warning}</div>
+                    )}
                     {checkTest.result.stdoutTail && (
                       <pre className="routine-check-test-output">{checkTest.result.stdoutTail}</pre>
                     )}

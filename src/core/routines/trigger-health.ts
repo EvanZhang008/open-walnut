@@ -35,6 +35,7 @@ import type { TriggerCheckedApplied } from '../cron/trigger-apply.js';
 import { createEnvelopeKit } from '../peers/envelope-kit.js';
 import type { Task } from '../types.js';
 import { isLiveSessionStatus, pickDeliverySession } from './session-target.js';
+import { limitAdvice, timeLimitSeconds } from '../cron/trigger-time-limit.js';
 
 const kit = createEnvelopeKit();
 /** envelope-kit.ts NOTE_NOTIFICATION: the note every Walnut status notice carries. */
@@ -77,8 +78,15 @@ function at(ms: number): string {
   return Number.isFinite(ms) ? new Date(ms).toISOString() : 'an unknown time';
 }
 
+/** The stored error first: it says a deadline kill as one, with the limit (trigger-time-limit.ts). */
 function errorOf(event: TriggerCheckedEvent, applied: Applied): string {
-  return clip((event.error ?? applied.error ?? '').trim() || 'unknown error', ERROR_TEXT_MAX);
+  return clip((applied.error ?? event.error ?? '').trim() || 'unknown error', ERROR_TEXT_MAX);
+}
+
+/** How long the failed run took, or that the limit cut it off. */
+function ranFor(event: TriggerCheckedEvent, applied: Applied): string {
+  if (applied.killedAtLimit) return `: the daemon killed it at its ${applied.timeLimitSeconds ?? '?'} s time limit`;
+  return Number.isFinite(event.durationMs) ? ` after ${event.durationMs} ms` : '';
 }
 
 function testLine(applied: Applied, id: string): string {
@@ -116,7 +124,7 @@ export function buildCheckFailureNotice(
       ? `${upper(owner ? mine : `${theirs},`)} keeps failing: ${errors} checks in a row failed on ${hostLabel(applied.host)} `
         + `since ${at(since)}. At ${MAX_CONSECUTIVE_CHECK_ERRORS} failures in a row Walnut stops it.`
       : `${owner ? upper(mine) : `${upper(theirs)}: its`} check failed on ${hostLabel(applied.host)} at ${at(event.atMs)}`
-        + `${Number.isFinite(event.durationMs) ? ` after ${event.durationMs} ms` : ''}. `
+        + `${ranFor(event, applied)}. `
         + `After ${MAX_CONSECUTIVE_CHECK_ERRORS} failures in a row Walnut stops the trigger.`;
   const resume = `  walnut tools call trigger_resume '{"id":"${event.id}"}'`;
   const next = stage === 'disabled'
@@ -137,6 +145,7 @@ export function buildCheckFailureNotice(
       lead,
       `Error:\n${errorOf(event, applied)}`,
       ...(applied.checkRun ? [`The check runs: ${clip(applied.checkRun, RUN_TEXT_MAX)}`] : []),
+      ...(applied.killedAtLimit ? [limitAdvice(applied.timeLimitSeconds ?? timeLimitSeconds(null))] : []),
       next.join('\n'),
     ].join('\n\n'),
   });

@@ -102,8 +102,9 @@ export interface WalnutOp {
    * Per-op HTTP timeout override (ms). Search ops need more than the 10s
    * default: a cold embedding model + semantic legs measured 10s+, and a
    * timeout there reads as "search is broken" when the answer was coming.
+   * A function reads the call's args (trigger_test waits as long as the check's own limit).
    */
-  timeoutMs?: number
+  timeoutMs?: number | ((args: Record<string, unknown>) => number)
   tags: {
     /** Read-only ops are advertised in --readonly mode and never prompt. */
     readonly: boolean

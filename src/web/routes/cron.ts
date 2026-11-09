@@ -21,6 +21,7 @@ import type { CronService } from '../../core/cron/index.js'
 import { SessionControlError } from '../../core/sessions/session-controls.js'
 import { isCompanion, isHostReplicaProgram } from '../../core/server-role.js'
 import { requestOrigin } from '../middleware/request-origin.js'
+import { ANSWER_BY_HEADER, parseAnswerBy } from '../../lib/answer-by.js'
 import {
   listRoutines, getRoutine, createRoutine, patchRoutine, deleteRoutine,
   toggleRoutine, runRoutineNow, getRoutinesStatus, listRoutineActions,
@@ -134,7 +135,7 @@ export function createCronRouter(cronServiceArg: CronService): Router {
         return
       }
       const { testRoutineCheck } = await import('../../core/routines/trigger-api.js')
-      res.json(await testRoutineCheck(req.body, requestOrigin(req), callerSid(req)))
+      res.json(await testRoutineCheck(req.body, requestOrigin(req), callerSid(req), parseAnswerBy(req.headers[ANSWER_BY_HEADER])))
     } catch (err) {
       handleCoreError(res, next, err)
     }

@@ -12,6 +12,7 @@ import { z } from 'zod'
 import { defineOp, type HttpBinding } from './registry.js'
 import { withOutcome } from './outcome.js'
 import { triggerRunState } from '../core/cron/trigger-run-state.js'
+import { TIME_LIMIT_MAX_S, testCallTimeoutMs } from '../core/cron/trigger-time-limit.js'
 import {
   byActivity, compactRow, everyLabel, filterWords, fullRow, matchesFilter, pageLimit, MAX_LIMIT,
   type ListedJob, type ListFilter,
@@ -121,7 +122,9 @@ defineOp({
     cwd: z.string().optional().describe('Working directory for the check (defaults to the calling session\'s cwd)'),
     host: z.string().optional().describe('Host whose daemon runs the check (defaults to the calling session\'s host). '
       + 'A session on another host may arm checks only on its own host'),
-    timeoutSeconds: z.number().int().positive().optional().describe('Kill the check after this long (default 30, max 300)'),
+    timeoutSeconds: z.number().int().positive().optional().describe('The check\'s time limit: the daemon kills it after this long '
+      + '(default 30, max 300). Every call in the script needs a shorter timeout of its own, and its timeouts times its retries '
+      + 'must fit inside this limit, or the check is killed before its retry runs'),
     maxFiresPerDay: z.number().int().min(0).optional().describe('Fire budget: up to this many fires in a burst, refilling at this many per 24h (default 24, so once an hour once spent; a held fire comes later, never lost). For a busy source checked often (chat, mail) set it to the checks per day, e.g. 288 for every 5m. 0 = unlimited'),
     wait: z.boolean().optional().describe('Park the task the fire lands in (Waiting) until it fires. Default false. Pass true only when '
       + 'the rest of the work waits on that outside thing and nothing of this turn is for the user to read (never in the turn that answers '
@@ -143,11 +146,14 @@ defineOp({
     const b = (body ?? {}) as {
       job?: { id?: string; name?: string; schedule?: { everyMs?: number } }; host?: string
       wait?: { parked?: boolean; reason?: string; wait_until?: string | null; error?: string }
+      timeLimit?: { seconds?: number; warning?: string }
     }
     const id = b.job?.id ?? ''
     const every = everyLabel(b.job?.schedule?.everyMs)
-    const armed = `Trigger armed on ${b.host ?? 'its host'}: the daemon there runs the check every ${every} and `
+    const limit = typeof b.timeLimit?.seconds === 'number' ? ` and kills a check still running after ${b.timeLimit.seconds} s` : ''
+    const armed = `Trigger armed on ${b.host ?? 'its host'}: the daemon there runs the check every ${every}${limit}, and `
       + 'delivers the prompt when it fires. It keeps polling while Walnut restarts.'
+    const timeWarning = b.timeLimit?.warning ? ` WARNING: ${b.timeLimit.warning}` : ''
     const off = `Turn it off with walnut tools call trigger_delete '{"id":"${id}"}' once it has done its job.`
     const w = b.wait
     // What the call did to the task is said in the outcome, so the model never
@@ -177,8 +183,8 @@ defineOp({
     // caller reading `.id` should not have to know the job sits under `.job`.
     return withOutcome(
       { ...(id ? { id } : {}), ...(b.job?.name ? { name: b.job.name } : {}), ...b },
-      `${armed}${parked}`,
-      `${next} See its last check with trigger_list.`,
+      `${armed}${parked}${timeWarning}`,
+      `${timeWarning ? 'Fix the time limit first (trigger_test, then trigger_delete this one and arm the fixed one). ' : ''}${next} See its last check with trigger_list.`,
     )
   },
   tags: { readonly: false, remote: 'allow', destructive: false },
@@ -251,8 +257,9 @@ defineOp({
     'The triggers, newest activity first, one short row each: id, name, description, interval, host, the task '
     + 'it wakes, its state ("armed" = polling, "paused" = switched off by someone, with pausedAt; "stopped" = '
     + 'switched off by Walnut after its check failed 5 times in a row), how many times it has fired, `last` (the '
-    + 'last check in one line: fired with an item count / quiet with a reason / the error text), `lastFire` and '
-    + 'the next check. To find one trigger, narrow it: `name` (a piece of its name, id or description, any case), '
+    + 'last check in one line: fired with an item count / quiet with a reason / the error text), `lastFire`, '
+    + 'the next check, `timeLimit` (the seconds the daemon lets a check run before it kills it), `lastRun` (how long '
+    + 'the last check ran, or that the limit killed it) and `limitWarning` when it ran over half its limit. To find one trigger, narrow it: `name` (a piece of its name, id or description, any case), '
     + '`task` (what would wake that task), `state:"armed"`; e.g. {"name":"reflection","task":"<the VP\'s task id>"}. '
     + `At most \`limit\` rows (default 25, up to ${MAX_LIMIT}); \`count\` is how many matched and \`more\` how many `
     + 'were left out. `full:true` adds the script, the last check object and the recent check history (default '
@@ -336,7 +343,12 @@ defineOp({
   title: 'Test a trigger check script',
   description:
     'Run a check ONCE on its host and report exactly what the daemon saw: exit code, stdout/stderr tails, '
-    + 'the parsed object, whether it WOULD fire, and how many items are new. Reads and writes no state, so '
+    + 'the parsed object, whether it WOULD fire, how many items are new, and how long it ran against its time '
+    + 'limit (`timeLimit`; over half of it is a warning: the daemon kills a check at its limit, so a script '
+    + 'whose call timeouts times its retries exceed it is killed before its retry runs). It waits as long as the '
+    + 'check may run. A link to the host that drops while the test runs is retried once; a second drop answers '
+    + '"transport failure", which is the link, not the script. A run longer than this call can wait answers '
+    + '"still running" with a testId: call trigger_test {testId} for its result. Reads and writes no state, so '
     + 'it is safe to run repeatedly. Always do this before trigger_create and keep fixing until '
     + '`parsed` is non-null: `error` names the contract violation (not JSON on the last line, "fire" '
     + 'missing, an item with no id). wouldFire:false with parsed set is a WORKING script that simply has '
@@ -344,22 +356,46 @@ defineOp({
     + 'budget is holding the fire (trigger_list shows reason "rate-limited") and it fires on a later check. '
     + CHECK_CONTRACT,
   input: {
-    run: z.string().min(1).describe('The shell command to run once'),
-    cwd: z.string().optional().describe('Working directory for the run'),
+    run: z.string().min(1).optional().describe('The shell command to run once. Required unless testId is given'),
+    testId: z.string().optional().describe('The id a "still running" answer gave (tt_...): wait for that same run\'s result '
+      + 'instead of starting a new one. Pass nothing else with it'),
+    cwd: z.string().optional().describe('Working directory for the run (defaults to the calling session\'s cwd, as trigger_create)'),
     host: z.string().optional().describe('Host whose daemon runs it (default: the calling session\'s host, else this machine). '
       + 'A session on another host may run checks only on its own host'),
-    timeoutSeconds: z.number().int().positive().optional().describe('Kill it after this long (default 30, max 300)'),
+    timeoutSeconds: z.number().int().positive().optional().describe('Kill it after this long (default 30, max 300). '
+      + 'Test with the timeoutSeconds you will arm it with'),
     id: z.string().optional().describe('Existing trigger id — measures newItemCount against ITS seen set'),
   },
   bind: { method: 'POST', path: '/routines/check-test' },
+  // As long as the check may run (its limit, twice for the one retry after a dropped link), never
+  // the 10 s default: a check with a 280 s limit could not be tested at all (2026-11-08).
+  // A wait on an earlier run (testId) may wait for the longest one.
+  timeoutMs: (args) => testCallTimeoutMs(args.testId ? TIME_LIMIT_MAX_S : args.timeoutSeconds),
   // A handler, not a plain binding: the route takes a nested { check } object,
   // while an agent should type the four fields flat.
   handler: async (args, call) => {
-    const { id, ...check } = args
-    const body = await call('POST', '/routines/check-test', {
+    const { id, testId, ...check } = args
+    const waitingOn = typeof testId === 'string' && testId.trim() ? testId.trim() : ''
+    if (!waitingOn && typeof check.run !== 'string') throw new Error('run is required (or testId, to read a run still going)')
+    const body = await call('POST', '/routines/check-test', waitingOn ? { testId: waitingOn } : {
       check,
       ...(typeof id === 'string' && id ? { id } : {}),
-    }) as { result?: Record<string, unknown> } | undefined
+    }) as {
+      result?: Record<string, unknown>; timeLimit?: { seconds?: number; line?: string; warning?: string }
+      pending?: { testId: string; host?: string; limitSeconds?: number; runningForMs?: number }
+    } | undefined
+    // A run longer than the call may wait (a session on another host gets about 20 s) goes on there.
+    if (body?.pending) {
+      const p = body.pending
+      const left = Math.max(1, Math.round((p.limitSeconds ?? 30) - (p.runningForMs ?? 0) / 1000))
+      return withOutcome(
+        { ...body },
+        `The check is still running on ${p.host === '__local__' || !p.host ? 'this machine' : p.host} `
+          + `(${Math.round((p.runningForMs ?? 0) / 1000)} s so far; its limit is ${p.limitSeconds ?? '?'} s, so it ends within about ${left} s).`,
+        `Read its result with walnut tools call trigger_test '${JSON.stringify({ testId: p.testId })}' (it waits for the same run; `
+          + 'do not start a new one).',
+      )
+    }
     const result = (body?.result ?? {}) as {
       parsed?: { warnings?: unknown } | null; wouldFire?: boolean; newItemCount?: number; error?: string | null
     }
@@ -372,11 +408,17 @@ defineOp({
         ? `The script parsed and WOULD fire now (${result.newItemCount ?? 0} new item(s)).${repaired}`
         : `The script parsed and would NOT fire right now — that is a working check with nothing to report.${repaired}`
       : `The script did not produce a usable answer: ${result.error ?? 'no JSON on the last line of stdout'}`
+    // The run's time against its limit, always said: a check near its limit is killed on a slower day.
+    const limit = body?.timeLimit
+    const time = limit?.line ? ` It ${limit.line}.` : ''
+    const timeWarning = limit?.warning ? ` WARNING: ${limit.warning}` : ''
     return withOutcome(
       { ...(body ?? {}) },
-      outcome,
+      `${outcome}${time}${timeWarning}`,
       !result.parsed
         ? 'Fix the script so its LAST stdout line is one JSON object with a boolean "fire", then test again.'
+        : limit?.warning
+          ? 'Make it finish well inside its time limit (or pass a larger timeoutSeconds), test again, then arm it with the same timeoutSeconds.'
         : warnings.length
           ? 'Fix what the daemon repaired (keep each item id under 200 chars, every item an object with a string "id"), then test again.'
           : 'Arm it with trigger_create (same run/cwd/host), then tell the user what is watched and how often.',

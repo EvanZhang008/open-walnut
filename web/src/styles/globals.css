@@ -29464,6 +29464,10 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 .trigger-jobs-last { font-size: 11px; color: var(--fg-secondary); }
 .trigger-jobs-last[data-outcome="fired"] { color: var(--accent); }
 .trigger-jobs-last[data-outcome="error"] { color: var(--error); }
+.trigger-jobs-time { font-size: 11px; color: var(--fg-muted); }
+.trigger-jobs-time[data-near="true"], .routine-check-time[data-near="true"] { color: var(--warning); }
+.routine-check-time { color: var(--fg-muted); }
+.routine-check-test-limit { margin-top: 4px; font-size: 12px; color: var(--warning); }
 .trigger-jobs-error { font-size: 11px; color: var(--error); }
 .trigger-jobs-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
 .trigger-jobs-actions button {

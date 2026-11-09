@@ -7,7 +7,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   auditClock, auditHistory, auditTarget, clockHostTitle, describeAgo, describeAuditEntry, describeCheck, describeClockWait,
-  describeFireTally, describeLastCheck, describeSchedule,
+  describeFireTally, describeLastCheck, describeRunTime, describeSchedule,
 } from '../../web/src/utils/routine-format';
 
 const NOW = Date.parse('2026-09-16T12:00:00Z');
@@ -297,5 +297,46 @@ describe('a clock routine on a host, and the runs this server makes itself', () 
     expect(rows).toHaveLength(3);
     expect(describeAuditEntry(rows[0])).toBe('run now → sent to session [ab12]');
     expect(describeAuditEntry(rows[1])).toBe('fired → sent to session [ab12]');
+  });
+});
+
+// 2026-11-08, a trigger sweep: check scripts whose call timeouts times their retries passed
+// the limit were killed before the retry ran, and no card showed the limit.
+describe('the trigger card\'s time limit', () => {
+  const killedText = 'check killed at the 120 s limit (timeoutSeconds): it was still running';
+
+  it('shows the limit and the last run, and says when the run came close or was killed', () => {
+    expect(describeRunTime(undefined, {})).toEqual({ text: 'time limit 30 s', near: false });
+    expect(describeRunTime({ atMs: NOW, outcome: 'quiet', durationMs: 4_000 }, { timeoutSeconds: 120 }))
+      .toEqual({ text: 'time limit 120 s · last run 4 s', near: false });
+    expect(describeRunTime({ atMs: NOW, outcome: 'fired', items: 1, durationMs: 72_000 }, { timeoutSeconds: 120 }))
+      .toEqual({ text: 'time limit 120 s · last run 72 s, over half of it', near: true });
+    expect(describeRunTime({ atMs: NOW, outcome: 'error', error: killedText, killedAtLimit: true, durationMs: 120_300 }, { timeoutSeconds: 120 }))
+      .toEqual({ text: 'time limit 120 s · last run killed at the limit', near: true });
+    // Stored before Walnut reworded it: the daemon's own words still read as a kill.
+    expect(describeRunTime({ atMs: NOW, outcome: 'error', error: 'check timed out after 434s', durationMs: 434_000 }, { timeoutSeconds: 120 }).text)
+      .toBe('time limit 120 s · last run killed at the limit');
+  });
+
+  it('a run under an older limit says that limit, after the limit was raised', () => {
+    const old30 = { atMs: NOW, outcome: 'error' as const, error: 'check timed out after 30s', durationMs: 30_100, limitSeconds: 30 };
+    expect(describeRunTime(old30, { timeoutSeconds: 120 })).toEqual({ text: 'time limit 120 s · last run killed at its 30 s limit then', near: true });
+    expect(describeAuditEntry(old30, { timeoutSeconds: 120 })).toBe('check error: check killed at the 30 s limit (timeoutSeconds): it was still running');
+    expect(describeRunTime({ atMs: NOW, outcome: 'quiet', durationMs: 20_000, limitSeconds: 30 }, { timeoutSeconds: 120 }))
+      .toEqual({ text: 'time limit 120 s · last run 20 s of its 30 s limit then, over half of it', near: true });
+  });
+
+  it('the last check line and the History row say a kill at the limit, also in the old words', () => {
+    const old = { atMs: NOW - 180_000, outcome: 'error' as const, error: 'check timed out after 434s', durationMs: 434_000 };
+    expect(describeLastCheck(old, NOW, { timeoutSeconds: 120 })).toBe(`error: ${killedText}, 3m ago`);
+    expect(describeAuditEntry(old, { timeoutSeconds: 120 })).toBe(`check error: ${killedText}`);
+    expect(describeAuditEntry({ ...old, error: killedText, killedAtLimit: true }, { timeoutSeconds: 120 })).toBe(`check error: ${killedText}`);
+  });
+
+  it('a History row that finished over half its limit says so; one well inside it does not', () => {
+    expect(describeAuditEntry({ atMs: NOW, outcome: 'quiet', reason: 'fire-false', durationMs: 20_000 }, { timeoutSeconds: 30 }))
+      .toBe('quiet — the script said no · ran 20 s, over half its 30 s limit');
+    expect(describeAuditEntry({ atMs: NOW, outcome: 'quiet', reason: 'fire-false', durationMs: 2_000 }, { timeoutSeconds: 30 }))
+      .toBe('quiet — the script said no');
   });
 });

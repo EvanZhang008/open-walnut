@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { Routine } from '@/api/routines';
 import {
-  describeRoutineTiming, describeExecutorBadge, describeCheck, describeFireTally, describeLastCheck,
+  describeRoutineTiming, describeExecutorBadge, describeCheck, describeFireTally, describeLastCheck, describeRunTime,
   describeClockHost, describeClockWait, clockHostTitle,
   describeTriggerOff, triggerRunState,
 } from '@/utils/routine-format';
@@ -52,6 +52,7 @@ function getStatusLabel(r: Routine): string {
 
 export function RoutineCard({ routine, executorLabels, onToggle, onRunNow, onEdit, onDelete }: RoutineCardProps) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const runTime = routine.check ? describeRunTime(routine.state.lastCheck, routine.check) : null;
   const [confirmDelete, setConfirmDelete] = useState(false);
   const off = describeOff(routine);
   // A paused trigger is disarmed on its daemon, which answers a run with
@@ -136,8 +137,13 @@ export function RoutineCard({ routine, executorLabels, onToggle, onRunNow, onEdi
         <div className="routine-check-line text-xs" title={routine.check.run}>
           <code className="routine-check-run">{describeCheck(routine.check)}</code>
           <span className={`routine-check-status ${routine.state.lastCheck?.outcome ?? 'pending'}`}>
-            last check: {describeLastCheck(routine.state.lastCheck)}
+            last check: {describeLastCheck(routine.state.lastCheck, undefined, routine.check)}
           </span>
+          {runTime && (
+            <span className="routine-check-time" data-near={runTime.near ? 'true' : 'false'} data-testid="routine-check-time">
+              {runTime.text}
+            </span>
+          )}
           {/* Whether it has ever actually fired — a card showing only the newest
               quiet check cannot be told apart from one that never ran. */}
           <span className="routine-check-tally" data-fired={(routine.state.fireCount ?? 0) > 0 ? 'true' : 'false'}>

@@ -60,6 +60,10 @@ export type RoutineLastCheck = {
   durationMs?: number;
   /** A fire whose delivery failed transiently; the daemon will replay it. */
   retryPending?: boolean;
+  /** The daemon killed the check at its time limit. */
+  killedAtLimit?: boolean;
+  /** The time limit this check ran under, in seconds. */
+  limitSeconds?: number;
 };
 
 /** Where a fire ended up. `retrying` = the daemon still owns it, not a failure. */
@@ -82,6 +86,10 @@ export type RoutineAuditEntry = {
   items?: number;
   durationMs?: number;
   error?: string;
+  /** Check errors only: the daemon killed the check at its time limit. */
+  killedAtLimit?: boolean;
+  /** The time limit this run ran under, in seconds. */
+  limitSeconds?: number;
   seq?: number;
   epoch?: string;
   attempts?: number;
@@ -235,13 +243,47 @@ export async function runRoutine(id: string): Promise<unknown> {
   return res.result;
 }
 
-/** Run a check once on its host, writing no state. Throws with the server's reason (cold or old daemon). */
+/** A test run's time against its limit (server: TestTimeLimit in src/core/routines/trigger-api.ts). */
+export interface RoutineCheckTimeLimit {
+  seconds: number;
+  durationMs?: number;
+  share?: number;
+  killed?: boolean;
+  /** "ran 34 s of its 120 s limit". */
+  line?: string;
+  /** Set when the run took over half the limit or was killed by it. */
+  warning?: string;
+}
+
+type CheckTestAnswer =
+  | { result: RoutineCheckTestResult; timeLimit?: RoutineCheckTimeLimit; pending?: undefined }
+  | { pending: { testId: string; limitSeconds: number; runningForMs: number }; result?: undefined };
+
+/** Each call waits this long for the run, then reads it again by its id: a check may run 300 s. */
+const TEST_WAIT_PER_CALL_MS = 10_000;
+
+/**
+ * Run a check once on its host, writing no state. Throws with the server's reason (cold or old
+ * daemon). A run longer than one call's wait answers `pending`, and the same run is read again by
+ * its id until it ends, so no request holds a browser connection for minutes.
+ */
 export async function testRoutineCheck(
   check: Pick<RoutineCheck, 'run'> & Partial<RoutineCheck>,
   id?: string,
-): Promise<RoutineCheckTestResult> {
-  const res = await apiPost<{ result: RoutineCheckTestResult }>('/api/routines/check-test', { check, ...(id ? { id } : {}) });
-  return res.result;
+): Promise<RoutineCheckTestResult & { timeLimit?: RoutineCheckTimeLimit }> {
+  const opts = { timeoutMs: TEST_WAIT_PER_CALL_MS + 15_000 };
+  let res = await apiPost<CheckTestAnswer>('/api/routines/check-test', {
+    check, ...(id ? { id } : {}), answerWithinMs: TEST_WAIT_PER_CALL_MS,
+  }, opts);
+  const limitS = Math.min(300, Math.max(1, Math.floor(check.timeoutSeconds ?? 30)));
+  const giveUpAt = Date.now() + 2 * (limitS + 20) * 1000 + 15_000;
+  while (res.pending && Date.now() < giveUpAt) {
+    res = await apiPost<CheckTestAnswer>('/api/routines/check-test', {
+      testId: res.pending.testId, answerWithinMs: TEST_WAIT_PER_CALL_MS,
+    }, opts);
+  }
+  if (res.pending) throw new Error(`The check is still running after ${Math.round(res.pending.runningForMs / 1000)} s; test it again`);
+  return { ...res.result, ...(res.timeLimit ? { timeLimit: res.timeLimit } : {}) };
 }
 
 export async function fetchExecutors(): Promise<{ executors: ExecutorInfo[]; options: ExecutorOptions }> {

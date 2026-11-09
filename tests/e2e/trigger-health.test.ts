@@ -230,6 +230,30 @@ describe('a check that keeps failing', () => {
   })
 })
 
+// 2026-11-08, a trigger sweep: checks killed at their limit read "check timed out after 434s",
+// which named neither the limit nor what to change.
+describe('a check killed at its time limit', () => {
+  it('the session hears it was killed at the limit, with the limit, and what to change', async () => {
+    const taskId = await newTask('build watch target')
+    await newSession(taskId, 'th-session-limit', 'stopped')
+    const r = await req('POST', '/api/routines', {
+      name: 'build watch',
+      schedule: { kind: 'every', everyMs: 5 * MIN },
+      check: { run: 'bash ~/.open-walnut/triggers/build/check.sh', timeoutSeconds: 120 },
+      executor: { type: 'session', config: { target: taskId, prompt: 'Check the build.' } },
+    })
+    const id = r.json.job.id
+    const t0 = Date.now()
+    await checked(id, t0, 'error', { error: 'check timed out after 120s', durationMs: 120_400 })
+    const [notice] = await waitFor(() => notices(id, 'check_failed'), (n) => n.length > 0)
+    expect(notice).toContain(`Your trigger "build watch" (${id}) check failed on this machine at ${new Date(t0).toISOString()}: the daemon killed it at its 120 s time limit.`)
+    expect(notice).toContain('Error:\ncheck killed at the 120 s limit (timeoutSeconds): it was still running')
+    expect(notice).toContain('its timeouts times its retries fit inside 120 s, or arm the trigger with a larger timeoutSeconds (at most 300)')
+    expect(notice).not.toContain('timed out after')
+    await userHeardNothing(id, 'build watch')
+  })
+})
+
 describe('who hears when the owner cannot', () => {
   it('two failures 30 minutes apart are enough; a task with no session is told through its lead', async () => {
     const leadId = await newTask('slow watch lead')

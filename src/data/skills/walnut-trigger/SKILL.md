@@ -149,6 +149,14 @@ stdout:  {"fire": true, "items": [{"id": "PR-123#c9", "title": "..."}], "input":
 - **Stale fires say so.** A fire delivered over 5 minutes after its check ran,
   or a trigger message that sat over an hour in the session's queue, carries a
   line saying how old it is. Check the current state before you act on it.
+- **Time limit.** The daemon kills a check still running after its
+  `timeoutSeconds` (30 s by default, at most 300). Give every call in the script
+  its own shorter timeout, and keep its timeouts times its retries inside the
+  limit: a `curl --max-time 20 --retry 2` under a 30 s limit is killed before its
+  retry runs. trigger_test says how long the run took against the limit and warns
+  over half of it; trigger_list shows each trigger's `timeLimit` and `lastRun`; a
+  killed run reads "check killed at the N s limit" in History and in the error
+  notice. Test with the `timeoutSeconds` you arm it with.
 - **Limits.** 30s timeout (max 300), one run at a time, never faster than
   every 10s, and a fire budget: `maxFiresPerDay` (default 24) fires in a burst,
   refilling at that many per 24 hours, so a spent budget gives back one fire

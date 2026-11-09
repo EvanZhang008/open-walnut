@@ -29,7 +29,7 @@ import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { removeRoutine, runRoutineNow, setRoutineEnabled } from '@/stores/routines-store';
 import {
   auditClock, auditHistory, clockHostTitle, describeAuditEntry, describeCheck, describeClockHost, describeFireTally,
-  describeLastCheck, describeNextRun, describeSchedule, describeTriggerOff, triggerRunState,
+  describeLastCheck, describeNextRun, describeRunTime, describeSchedule, describeTriggerOff, triggerRunState,
 } from '@/utils/routine-format';
 import { TRIGGER_STOP_AFTER_ERRORS } from '../../../../src/core/cron/trigger-run-state';
 import '@/styles/trigger-state.css';
@@ -61,7 +61,7 @@ export function triggerPillTitle(routines: readonly Routine[], nowMs = Date.now(
     .map((r) => {
       const off = describeTriggerOff(r, nowMs);
       const where = r.check ? describeCheck(r.check) : describeClockHost(r.state);
-      const last = r.check ? `, last check ${describeLastCheck(r.state.lastCheck, nowMs)}` : '';
+      const last = r.check ? `, last check ${describeLastCheck(r.state.lastCheck, nowMs, r.check)}` : '';
       return `${r.name}${off ? ` (${off.toLowerCase()})` : ''}: ${r.description ? `${r.description.replace(/\s+/g, ' ')} · ` : ''}${describeSchedule(r.schedule)}, ${where ? `${where}, ` : ''}${describeFireTally(r.state, nowMs)}${last}`;
     })
     .join('\n');
@@ -80,7 +80,9 @@ function promptOf(routine: Routine): string {
  * (the answer to "what is the injected context") plus a way into that session;
  * a quiet or failed check is the sentence alone, since there is nothing to open.
  */
-function AuditRow({ entry, onOpenSession }: { entry: RoutineAuditEntry; onOpenSession: (sessionId: string) => void }) {
+function AuditRow({ entry, check, onOpenSession }: {
+  entry: RoutineAuditEntry; check?: Routine['check']; onOpenSession: (sessionId: string) => void
+}) {
   const [open, setOpen] = useState(false);
   const rowRef = useRef<HTMLLIElement>(null);
   const sessionId = entry.delivery?.sessionId;
@@ -104,7 +106,7 @@ function AuditRow({ entry, onOpenSession }: { entry: RoutineAuditEntry; onOpenSe
         onClick={() => canOpen && setOpen((v) => !v)}
       >
         <span className="trigger-audit-clock">{auditClock(entry.atMs)}</span>
-        <span className="trigger-audit-what">{describeAuditEntry(entry)}</span>
+        <span className="trigger-audit-what">{describeAuditEntry(entry, check)}</span>
         {canOpen && <span className={`trigger-audit-chevron${open ? ' open' : ''}`}>›</span>}
       </button>
       {open && (
@@ -157,6 +159,7 @@ function TriggerRow({ routine, onOpenSession }: { routine: Routine; onOpenSessio
   // a host's daemon holds the clock (clock-routine-v1).
   const clock = !routine.check;
   const clockWhere = clock ? describeClockHost(routine.state) : null;
+  const runTime = routine.check ? describeRunTime(routine.state.lastCheck, routine.check) : null;
 
   // Delete needs no close step: the store drops the routine from the task's list
   // at once, and the pill closes itself when none is left. Pause keeps the row.
@@ -201,7 +204,13 @@ function TriggerRow({ routine, onOpenSession }: { routine: Routine; onOpenSessio
       </div>
       {!clock && (
         <div className="trigger-jobs-last" data-outcome={routine.state.lastCheck?.outcome ?? 'none'}>
-          last check: {describeLastCheck(routine.state.lastCheck)}
+          last check: {describeLastCheck(routine.state.lastCheck, undefined, routine.check)}
+        </div>
+      )}
+      {/* The check's time limit beside its last run: a script that runs close to it is killed on a slower day. */}
+      {runTime && (
+        <div className="trigger-jobs-time" data-near={runTime.near ? 'true' : 'false'} data-testid="trigger-jobs-time">
+          {runTime.text}
         </div>
       )}
       {/* What switching it back on will do, said before the user presses it. */}
@@ -282,7 +291,7 @@ function TriggerRow({ routine, onOpenSession }: { routine: Routine; onOpenSessio
         {showHistory && (
           <ul className="trigger-audit-list" data-testid="trigger-audit-list">
             {history.map((entry, i) => (
-              <AuditRow key={`${entry.atMs}-${entry.outcome}-${entry.seq ?? i}`} entry={entry} onOpenSession={onOpenSession} />
+              <AuditRow key={`${entry.atMs}-${entry.outcome}-${entry.seq ?? i}`} entry={entry} check={routine.check} onOpenSession={onOpenSession} />
             ))}
           </ul>
         )}

@@ -118,6 +118,8 @@ export function checkedAuditEntry(input: {
   durationMs?: number;
   error?: string;
   warnings?: readonly string[];
+  killedAtLimit?: boolean;
+  limitSeconds?: number;
 }): TriggerAuditEntry {
   return compact({
     atMs: input.atMs,
@@ -126,6 +128,8 @@ export function checkedAuditEntry(input: {
     durationMs: input.durationMs,
     error: input.error,
     warnings: auditWarnings(input.warnings),
+    killedAtLimit: input.killedAtLimit ? true : undefined,
+    limitSeconds: input.limitSeconds,
   });
 }
 
@@ -144,6 +148,8 @@ export function firedAuditEntry(input: {
   seq: number;
   items: number;
   durationMs?: number;
+  /** The time limit the check that made this fire ran under. */
+  limitSeconds?: number;
   error?: string;
   /** The caller's authoritative attempt number for THIS fire (state.fireRetry). */
   attempts?: number;
@@ -165,6 +171,7 @@ export function firedAuditEntry(input: {
     seq: input.seq,
     items: input.items,
     durationMs: input.durationMs,
+    limitSeconds: input.limitSeconds,
     error: input.error,
     attempts: input.attempts !== undefined && input.attempts > 1 ? input.attempts : undefined,
     coalesced: merged ? input.coalesced : undefined,

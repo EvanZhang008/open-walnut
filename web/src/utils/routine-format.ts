@@ -7,6 +7,9 @@
 import type { RoutineAuditEntry, RoutineCheck, RoutineLastCheck, RoutineSchedule, RoutineState, RoutineWake } from '@/api/routines';
 import { describeSpan } from '../../../src/core/cron/trigger-timing';
 import { TRIGGER_STOP_AFTER_ERRORS, triggerRunState } from '../../../src/core/cron/trigger-run-state';
+import {
+  checkErrorText, isTimeLimitError, limitUse, runLimitSeconds, secondsLabel, timeLimitSeconds, type LimitUse,
+} from '../../../src/core/cron/trigger-time-limit';
 
 export { triggerRunState };
 
@@ -153,8 +156,51 @@ export function describeAgo(atMs: number, nowMs = Date.now()): string {
   return `${Math.round(diff / 86_400_000)}d ago`;
 }
 
+/** A check error as shown: a kill at the time limit names the limit (trigger-time-limit.ts). */
+function checkError(
+  entry: { error?: string; limitSeconds?: number },
+  check: Pick<RoutineCheck, 'timeoutSeconds'> | undefined,
+): string {
+  const msg = (entry.error ?? 'check failed').replace(/\s+/g, ' ').trim();
+  return check ? checkErrorText(msg, runLimitSeconds(entry, check)) ?? msg : msg;
+}
+
+/** A run's time against the check's limit; null for a run whose time is unknown. */
+function runUse(
+  entry: Pick<RoutineLastCheck, 'outcome' | 'error' | 'durationMs' | 'killedAtLimit' | 'limitSeconds'> | undefined,
+  check: Pick<RoutineCheck, 'timeoutSeconds'>,
+): LimitUse | null {
+  if (!entry) return null;
+  const killed = entry.outcome === 'error' && (entry.killedAtLimit === true || isTimeLimitError(entry.error));
+  // Against the limit the run ran under, which may not be today's.
+  return limitUse(entry.durationMs, runLimitSeconds(entry, check), killed);
+}
+
+/**
+ * The trigger card's time line: "time limit 120 s · last run 34 s", with "over half of it" or
+ * "killed at the limit" when the last run came close (2026-11-08: check scripts whose call
+ * timeouts times their retries passed the limit were killed before their retry ran, and no
+ * surface showed the limit). `near` is for the warning colour.
+ */
+export function describeRunTime(
+  last: RoutineLastCheck | undefined,
+  check: Pick<RoutineCheck, 'timeoutSeconds'>,
+): { text: string; near: boolean } {
+  const head = `time limit ${timeLimitSeconds(check)} s`;
+  const use = runUse(last, check);
+  if (!use) return { text: head, near: false };
+  // A run under another limit than today's says which.
+  const then = use.limitSeconds !== timeLimitSeconds(check) ? ` of its ${use.limitSeconds} s limit then` : '';
+  if (use.killed) return { text: `${head} · last run killed at ${then ? `its ${use.limitSeconds} s limit then` : 'the limit'}`, near: true };
+  return { text: `${head} · last run ${secondsLabel(use.durationMs)}${then}${use.near ? ', over half of it' : ''}`, near: use.near };
+}
+
 /** "fired, 2 items, 3m ago" / "quiet, 3m ago" / "error: exit 1: ..., 3m ago" / "not checked yet". */
-export function describeLastCheck(last: RoutineLastCheck | undefined, nowMs = Date.now()): string {
+export function describeLastCheck(
+  last: RoutineLastCheck | undefined,
+  nowMs = Date.now(),
+  check?: Pick<RoutineCheck, 'timeoutSeconds'>,
+): string {
   if (!last) return 'not checked yet';
   const ago = describeAgo(last.atMs, nowMs);
   if (last.outcome === 'fired') {
@@ -168,7 +214,7 @@ export function describeLastCheck(last: RoutineLastCheck | undefined, nowMs = Da
     return `${what}, ${ago}`;
   }
   if (last.outcome === 'error') {
-    const msg = (last.error ?? 'check failed').replace(/\s+/g, ' ').trim();
+    const msg = checkError(last, check);
     return `error: ${msg.length > 80 ? `${msg.slice(0, 80)}…` : msg}, ${ago}`;
   }
   // A held fire is late, not lost: the daemon kept its cursor and fires it later.
@@ -263,14 +309,19 @@ export function auditClock(atMs: number, nowMs = Date.now()): string {
  * retrying delivery has not landed, and reading it as landed is how a lost fire
  * gets mistaken for a delivered one.
  */
-export function describeAuditEntry(entry: RoutineAuditEntry): string {
-  const verdict = describeAuditVerdict(entry);
-  return entry.warnings?.length ? `${verdict} · output repaired` : verdict;
+export function describeAuditEntry(entry: RoutineAuditEntry, check?: Pick<RoutineCheck, 'timeoutSeconds'>): string {
+  const verdict = describeAuditVerdict(entry, check);
+  const repaired = entry.warnings?.length ? `${verdict} · output repaired` : verdict;
+  // A run that finished but took over half its limit says so: the next slower one is killed.
+  const use = check ? runUse(entry, check) : null;
+  return use && use.near && !use.killed
+    ? `${repaired} · ran ${secondsLabel(use.durationMs)}, over half its ${use.limitSeconds} s limit`
+    : repaired;
 }
 
-function describeAuditVerdict(entry: RoutineAuditEntry): string {
+function describeAuditVerdict(entry: RoutineAuditEntry, check?: Pick<RoutineCheck, 'timeoutSeconds'>): string {
   if (entry.outcome === 'error') {
-    const msg = (entry.error ?? 'check failed').replace(/\s+/g, ' ').trim();
+    const msg = checkError(entry, check);
     return `check error: ${msg.length > 90 ? `${clip(msg, 90)}…` : msg}`;
   }
   if (entry.outcome === 'quiet') {
