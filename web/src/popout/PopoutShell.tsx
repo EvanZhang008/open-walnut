@@ -23,6 +23,7 @@ import { StaleBuildPill } from '@/components/common/StaleBuildPill';
 import { AnywhereFileViewer } from '@/components/common/AnywhereFileViewer';
 import { SessionRawViewHost } from '@/components/sessions/SessionRawView';
 import { LinkCaptureHost } from '@/plugins/LinkCaptureHost';
+import { PluginDialogHost } from '@/plugins/PluginDialogHost';
 import { isPopoutPath } from './openPopout';
 import { PopoutRoot } from './PopoutRoot';
 
@@ -59,5 +60,7 @@ function PopoutApp() {
   useEffect(() => { recordVisit(pageKeyForPath(location.pathname)); }, [location.pathname]);
   // Home is not mounted here, so no chat's marks are on another page; App passes the same.
   useHidesHighlights(true);
-  return <><StaleBuildPill /><LinkCaptureHost /><SessionRawViewHost /><AnywhereFileViewer /><PopoutRoot /></>;
+  // The hosts App mounts for a pop-out, all of them: a plugin's dialog opened here (a
+  // walnut.ui.openDialog from its events) had nowhere to draw (tests/web/popout-light-entry-guard.test.ts).
+  return <><StaleBuildPill /><LinkCaptureHost /><PluginDialogHost /><SessionRawViewHost /><AnywhereFileViewer /><PopoutRoot /></>;
 }

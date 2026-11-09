@@ -124,6 +124,18 @@ describe('a pop-out loads only its own view', () => {
     expect(root.filter((f) => /^popout\/Popout(ExtPanel|ExtTasks|FileView|GlobalNotes|Note|Session|Task)\.tsx$/.test(f))).toEqual([])
   })
 
+  it('a pop-out mounts every host App mounts for one (2026-11-09: no plugin dialog drew in a pop-out)', () => {
+    const hostsOf = (src: string, from: RegExp) => {
+      const line = src.split('\n').find((l) => from.test(l))
+      expect(line, String(from)).toBeTruthy()
+      return [...line!.matchAll(/<([A-Z]\w*) \/>/g)].map((m) => m[1]).sort()
+    }
+    const app = hostsOf(fs.readFileSync(path.join(WEB, 'App.tsx'), 'utf8'), /if \(isPopoutPath\(location\.pathname\)\) return <>/)
+    const shell = hostsOf(fs.readFileSync(path.join(WEB, 'popout/PopoutShell.tsx'), 'utf8'), /^\s*return <><StaleBuildPill/)
+    expect(app).toContain('PluginDialogHost')
+    expect(shell).toEqual(app)
+  })
+
   it('the scanner sees what it guards (App reaches Home and the plugin loader is reached from it)', () => {
     const app = reach([path.join(WEB, 'App.tsx')])
     expect(app.has(path.join(WEB, 'pages/MainPage.tsx'))).toBe(true)
