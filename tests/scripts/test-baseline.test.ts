@@ -86,6 +86,7 @@ function run(mode: 'check' | 'record', opts: {
         ...process.env,
         TMPDIR: tmp,
         FAKE_ARGV: path.join(tmp, 'argv.json'),
+        WALNUT_FLAKY_LOG: path.join(tmp, 'flaky.jsonl'),
         FAKE_LIST_ARGV: path.join(tmp, 'list-argv.json'),
         FAKE_REPORT: opts.report ? reportFile : '',
         ...(opts.again !== undefined ? { FAKE_REPORT_AGAIN: opts.again ? againFile : '' } : {}),
@@ -193,6 +194,20 @@ describe('test-baseline.mjs check', () => {
     expect(still.out).toContain(`${B} :: real one`)
     const crashed = await run('check', { report: report([A, B], { [B]: ['real one'] }), again: null, baseline: baseline([]) })
     expect(crashed.code).toBe(1)
+  })
+
+  it('records a forgiven test, and fails the gate once its file was flaky twice in a week', async () => {
+    fs.mkdirSync(path.dirname(path.join(tmp, B)), { recursive: true })
+    fs.writeFileSync(path.join(tmp, B), '')
+    const opts = { report: report([A, B], { [B]: ['timing one'] }), again: passedAgain(B, ['timing one']), baseline: baseline([]) }
+    const first = await run('check', opts)
+    expect(first.code, first.out).toBe(0)
+    expect(fs.readFileSync(path.join(tmp, 'flaky.jsonl'), 'utf8')).toContain(`"key":"${B} :: timing one"`)
+    // A fresh run: the fake vitest takes a leftover argv file for the rerun of this one.
+    for (const f of ['argv.json', 'argv.json.again']) fs.rmSync(path.join(tmp, f), { force: true })
+    const second = await run('check', opts)
+    expect(second.code).toBe(1)
+    expect(second.out).toMatch(/failed and then passed alone 2 or more times in 7 days[\s\S]*tests\/e2e\/b\.test\.ts/)
   })
 
   it('only the tests that passed alone are forgiven; WALNUT_BASELINE_RERUN=0 forgives none', async () => {

@@ -327,6 +327,18 @@ if [ -z "$runner" ]; then
     wait "$poll_pid"; poll_pid=
   done
   printf '%s' "$statuses" | jq -r '.[] | select(.context != "walnut/push-gate") | "  \(.state)  \(.context | sub("^walnut/push-gate "; ""))  \(.description // "")"'
+  # The tests that failed and then passed alone in this run (test-baseline.mjs marks each with a
+  # "Flaky test" annotation) go on the flaky record, and a file flaky twice in a week refuses the
+  # push until it is fixed or removed (scripts/flaky-log.mjs).
+  if [ -n "$run" ] && [ -f scripts/flaky-log.mjs ]; then
+    flaky=$(ghcall api "repos/$repo/actions/runs/$run/jobs?per_page=50" 2>/dev/null | jq -r '.jobs[]?.id' 2>/dev/null | while read -r job; do
+      ghcall api "repos/$repo/check-runs/$job/annotations?per_page=100" 2>/dev/null | jq -r '.[]? | select(.title == "Flaky test") | .message' 2>/dev/null
+    done)
+    [ -z "$flaky" ] || { echo "Flaky in this run (failed, then passed alone):"; printf '%s\n' "$flaky" | sed 's/^/    /'; }
+    if ! printf '%s\n' "$flaky" | bun scripts/flaky-log.mjs gate "push-gate $short"; then
+      [ "$state" = success ] && blocked "a test file failed and then passed alone twice within a week: fix it or remove it (above)."
+    fi
+  fi
   [ "$state" = success ] && { echo "✓ Test gate passed."; passed_files "https://github.com/$repo/actions/runs/$run"; exit 0; }
   [ "$state" != pending ] || blocked "the test gate did not answer within $mins minutes, so nothing was judged ($name${run:+, run $run})."
   # The failing tests, from each failed tier's job log.

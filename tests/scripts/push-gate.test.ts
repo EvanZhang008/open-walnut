@@ -22,7 +22,7 @@ let verdictDirs = 0
 function cleanEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
   const verdicts = path.join(os.tmpdir(), `push-gate-verdicts-${process.pid}-${verdictDirs++}`)
   dirs.push(verdicts)
-  const e: NodeJS.ProcessEnv = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', WALNUT_PUSH_GATE_VERDICTS: verdicts }
+  const e: NodeJS.ProcessEnv = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', WALNUT_PUSH_GATE_VERDICTS: verdicts, WALNUT_FLAKY_LOG: path.join(verdicts, 'flaky.jsonl') }
   for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_PREFIX', 'WALNUT_PUSH_GATE']) delete e[k]
   return Object.assign(e, extra)
 }
@@ -216,7 +216,7 @@ describe('push-gate.sh on GitHub', () => {
   const URL = 'https://github.com/acme/demo.git'
   const later = '2999-01-01T00:00:00Z'
   const RUN = 'https://github.com/acme/demo/actions/runs/77'
-  function ghRepo(answers: { before?: unknown[]; statuses?: unknown[]; runs?: unknown[]; jobs?: unknown; log?: string; signedIn?: boolean; dispatch?: 'ok' | '422' | '500' }) {
+  function ghRepo(answers: { before?: unknown[]; statuses?: unknown[]; runs?: unknown[]; jobs?: unknown; log?: string; signedIn?: boolean; dispatch?: 'ok' | '422' | '500'; annotations?: unknown[] }) {
     const g = repo()
     git(g.r, 'config', '--unset', 'walnut.testRunner')
     const dir = path.dirname(g.r)
@@ -245,6 +245,7 @@ case $url in
   *actions/runs\\?*) [ -n "$gate" ] && jq -c '{workflow_runs: .runs}' ${a} || echo '{"workflow_runs":[]}' ;;
   *statuses*) if [ -n "$gate" ]; then jq -c .statuses ${a}; else jq -c .before ${a}; fi ;;
   *jobs\\?*) jq -c .jobs ${a} ;;
+  *annotations*) jq -c '.annotations // []' ${a} ;;
   *logs) jq -r .log ${a} ;;
   *) exit 1 ;;
 esac
@@ -292,6 +293,23 @@ esac
     expect(out.status, out.stdout + out.stderr).toBe(0)
     expect(fs.readFileSync(g.seen, 'utf8')).toContain(`refs/heads/gate/${tip.slice(0, 12)}`)
     expect(gateBranches(g.bare)).toBe('')
+  })
+
+  it('records a run\'s flaky tests, and refuses the push once the same file was flaky twice in a week', () => {
+    const flaky = { title: 'Flaky test', message: 'tests/t.test.ts :: races its timer' }
+    const g = ghRepo({ statuses: [st('walnut/push-gate', 'success', 'all 10 tiers passed')], jobs: { jobs: [{ id: 9, name: 'Gate (quick 1/8)' }] }, annotations: [flaky] })
+    fs.mkdirSync(path.join(g.r, 'scripts'), { recursive: true })
+    fs.copyFileSync(path.join(ROOT, 'scripts/flaky-log.mjs'), path.join(g.r, 'scripts/flaky-log.mjs'))
+    const flakyLog = path.join(path.dirname(g.r), 'flaky.jsonl')
+    const env = { ...g.env, WALNUT_FLAKY_LOG: flakyLog }
+    const run = (tip: string) => spawnSync('bash', [GATE, 'origin', URL], { cwd: g.r, input: line(tip, g.base), encoding: 'utf8', env: cleanEnv(env) })
+    const first = run(commit(g.r, { 'tests/t.test.ts': 'it("races its timer")\n', 't.txt': '1\n' }, 'one'))
+    expect(first.status, first.stdout + first.stderr).toBe(0)
+    expect(first.stdout).toMatch(/Flaky in this run[\s\S]*tests\/t\.test\.ts :: races its timer/)
+    expect(fs.readFileSync(flakyLog, 'utf8')).toContain('"file":"tests/t.test.ts"')
+    const second = run(commit(g.r, { 't.txt': '2\n' }, 'two'))
+    expect(second.status).toBe(1)
+    expect(second.stdout).toMatch(/failed and then passed alone 2 or more times in 7 days[\s\S]*tests\/t\.test\.ts/)
   })
 
   it('tries a failed dispatch once more and stays off the branch (a timeout may have started the run)', () => {
