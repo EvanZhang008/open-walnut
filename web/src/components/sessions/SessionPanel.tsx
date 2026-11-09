@@ -148,6 +148,7 @@ import { engineCaps } from '@/utils/engine-capabilities';
 import { EngineSwitchLine, useEngineSwitchPick } from './EngineSwitch';
 import type { SessionEffort, Task } from '@open-walnut/core';
 import { useWatchToggle } from '@/components/tasks/WatchToggle';
+import { minimizeHandler } from './panel-minimize';
 import { taskNeedsAction } from '@/utils/session-status';
 import { nextSessionControlValue, SessionControlPills } from './SessionControlPills';
 import { useNotifications } from '@/contexts/notifications';
@@ -360,8 +361,9 @@ interface SessionPanelProps {
   locked?: boolean;
   /** Toggle the lock state. Parent re-orders slots so locked panels sit on the right. */
   onToggleLock?: (sessionId: string) => void;
-  /** Minimize to Home's taskbar: the column leaves the strip and waits there as a chip.
-   *  Only Home's columns pass it; every other host draws no Minimize button. */
+  /** Minimize to the app's taskbar, for a host that takes the panel away itself (Home's
+   *  columns leave the strip). Every other panel minimizes by default (minimizeHandler):
+   *  the session joins the taskbar and the panel closes when its host gave a close. */
   onMinimize?: (sessionId: string) => void;
   /** The person completed this panel's task from its header (the ring or the status menu). The
    *  home page's column answers by closing itself. Not called while the panel is fullscreen. */
@@ -2285,6 +2287,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   // Ask Walnut embeds this panel without a phone layer; on a phone its composer
   // takes the same one-line placeholder (N2-32).
   const phoneWidth = usePhoneLayout();
+  const minimize = minimizeHandler({ onMinimize, onClose, phone: phoneWidth || !!phoneLayer, viewPlace, inset: !!inset });
   // An open view is laid out by the layout it is in now, not only by the one it opened
   // in: crossing into or out of the phone layout re-decides what opening decided
   // (onViewClick): full screen on a wide window, and the chat's fate. A Board opened at
@@ -3003,12 +3006,12 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                   {ICON_NEW_TAB}
                 </button>
               )}
-              {onMinimize && !isFullscreen && (
+              {minimize && !isFullscreen && (
                 <button
                   className="task-action-btn session-panel-minimize"
                   data-header-id="minimize"
                   data-hidden={hid('minimize')}
-                  onClick={() => onMinimize(sessionId)}
+                  onClick={() => minimize(sessionId)}
                   title="Minimize to the taskbar (it keeps running)"
                   aria-label="Minimize session to the taskbar"
                 >
@@ -3132,6 +3135,18 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                   )}
                   {headerPills}
                   <SessionHeaderLabels>{headerTags}</SessionHeaderLabels>
+                  {/* This panel's own header, and its Minimize, are hidden under the host's. */}
+                  {minimize && (
+                    <button
+                      type="button"
+                      className="task-action-btn session-panel-minimize"
+                      onClick={() => minimize(sessionId)}
+                      title="Minimize to the taskbar (it keeps running)"
+                      aria-label="Minimize session to the taskbar"
+                    >
+                      {ICON_MINIMIZE}
+                    </button>
+                  )}
                   {sessionId && renderSessionKebab()}
                 </>,
                 headerSlot,

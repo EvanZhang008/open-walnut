@@ -5,6 +5,7 @@ import { NotificationToaster } from '../common/NotificationToaster';
 import { OperationErrorBridge } from '../common/OperationErrorBridge';
 
 import { FocusDock } from '../dock/FocusDock';
+import { AppTaskbar } from '@/components/sessions/AppTaskbar';
 import { TasksProvider } from '@/contexts/TasksContext';
 import { NotificationProvider } from '@/contexts/notifications';
 import { FocusBarProvider, useFocusBarContext } from '@/contexts/FocusBarContext';
@@ -336,6 +337,8 @@ function AppShellInner({ children }: AppShellProps) {
             {children}
           </div>
         </div>
+        {/* The taskbar of minimized and recent sessions, the same on every page. */}
+        <AppTaskbar />
         {!isMainPage && focusBar.visible && <FocusDock focusBar={focusBar} />}
       </main>
       <NotificationToaster />

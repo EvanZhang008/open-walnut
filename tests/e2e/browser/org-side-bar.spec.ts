@@ -134,9 +134,12 @@ test('one header: the name once, the chat\'s labels and kebab on its right, no C
     c.matches('[data-testid="session-header-labels"]') ? 'labels'
       : c.querySelector('.task-kebab-btn') ? 'kebab'
       : c.matches('.thread-mode-pill') ? 'thread-mode'
+      : c.matches('.session-panel-minimize') ? 'minimize'
       : c.matches('.task-row-pill, .task-waiting-chip, [data-header-pill]') ? 'pill'
       : `UNKNOWN:${c.className}`))
   expect(kinds.filter((k) => k.startsWith('UNKNOWN')), `header tools: ${kinds}`).toEqual([])
+  // The app's taskbar is global (2026-11-08): the node's chat minimizes too, from its header.
+  expect(kinds, `header tools: ${kinds}`).toContain('minimize')
   // The pills come before the tags control, and the kebab is last.
   const order = kinds.filter((k) => k !== 'thread-mode')
   expect(order.lastIndexOf('pill') < Math.max(order.indexOf('labels'), order.indexOf('kebab')), `header tools: ${kinds}`).toBe(true)

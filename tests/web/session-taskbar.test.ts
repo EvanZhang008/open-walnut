@@ -121,22 +121,76 @@ describe('sessionTaskbar: the one way onto the chips (guard)', () => {
     expect(fn.slice(0, fn.indexOf('}, [])'))).toContain('minimizedIdsRef.current.add(');
   });
 
-  it('every Minimize handed to a session panel, and every off-strip minimize request, is a known click', () => {
-    const allowed: Record<string, string> = {
-      'pages/MainPage.tsx': "Home's columns: the header's Minimize button and its \"...\" row",
-      'components/org/OrgSidePanel.tsx': "the Org side panel's Minimize button",
-    };
-    const found = new Set<string>();
+  it('only Home hands a panel its own Minimize, and only the panel default asks the taskbar', () => {
+    const found = { onMinimize: new Set<string>(), request: new Set<string>() };
     for (const file of walk(web)) {
       const rel = path.relative(web, file).split(path.sep).join('/');
       const src = fs.readFileSync(file, 'utf8');
-      // The definitions themselves: the event helper, the pure rules, the panel that draws the button.
-      if (['utils/taskbar-minimize.ts', 'pages/sessionTaskbar.ts', 'components/sessions/SessionPanel.tsx'].includes(rel)) continue;
-      // onMinimize counts where a session panel is drawn (an approval card has its own, unrelated one).
-      const givesPanelMinimize = /<SessionPanel\b/.test(src) && /\bonMinimize[=:]/.test(src);
-      if (givesPanelMinimize || /requestMinimizeToTaskbar\(|minimizeOffStrip\(/.test(src)) found.add(rel);
+      if (rel === 'utils/taskbar-minimize.ts') continue;
+      if (/<SessionPanel\b/.test(src) && /\bonMinimize[=:]/.test(src) && rel !== 'components/sessions/SessionPanel.tsx') found.onMinimize.add(rel);
+      if (/requestMinimizeToTaskbar\(/.test(src)) found.request.add(rel);
     }
-    expect([...found].sort(), 'a new place puts sessions on the taskbar chips: list it here with the explicit click it is').toEqual(Object.keys(allowed).sort());
+    expect([...found.onMinimize], "a new host takes Minimize over: list it with the click it is").toEqual(['pages/MainPage.tsx']);
+    expect([...found.request], 'a new place puts sessions on the taskbar chips without the Minimize click').toEqual(['components/sessions/panel-minimize.ts']);
+  });
+});
+
+describe('the taskbar is global (2026-11-08, the user: "this should be global")', () => {
+  const web = path.resolve(__dirname, '../../web/src');
+  const walk = (dir: string): string[] => fs.readdirSync(dir, { withFileTypes: true }).flatMap(e =>
+    e.isDirectory() ? walk(path.join(dir, e.name)) : /\.tsx$/.test(e.name) ? [path.join(dir, e.name)] : []);
+
+  /** Every place a session panel renders, by its viewPlace, and whether it draws Minimize. */
+  const PLACES: Record<string, { minimize: boolean; why: string }> = {
+    'home-column': { minimize: true, why: "Home's columns: the column leaves the strip" },
+    'ask-slot': { minimize: true, why: 'the Ask slot hides' },
+    'ask-object': { minimize: true, why: 'an Ask drawer closes' },
+    'org-side': { minimize: true, why: 'the Org side panel closes' },
+    'org-node': { minimize: true, why: "the Org node's chat (it stays: the page has no other)" },
+    'notes': { minimize: true, why: 'the Notes chat' },
+    'plugin:${pluginId}': { minimize: true, why: "a plugin page's session view" },
+    'org-node-card': { minimize: false, why: 'inset: a card inside the node page, not a window of its own' },
+    'popout': { minimize: false, why: "a pop-out window: the taskbar is the main window's" },
+  };
+
+  it('every session panel render is listed, and draws Minimize unless it is inset or a pop-out', async () => {
+    const { minimizeHandler } = await import('../../web/src/components/sessions/panel-minimize');
+    const seen = new Set<string>();
+    for (const file of walk(web)) {
+      const src = fs.readFileSync(file, 'utf8');
+      for (const m of src.matchAll(/<SessionPanel\b([\s\S]*?)\/>/g)) {
+        const props = m[1]!;
+        const place = /viewPlace=(?:"([^"]+)"|\{`([^`]+)`\})/.exec(props);
+        if (!place) continue; // a pass-through (<SessionPanel {...props} />)
+        const name = place[1] ?? place[2]!;
+        seen.add(name);
+        const known = PLACES[name];
+        expect(known, `${path.relative(web, file)}: a new session panel place "${name}": list it in PLACES`).toBeDefined();
+        const inset = /\binset\b/.test(props);
+        const handler = minimizeHandler({ phone: false, viewPlace: name, inset, onClose: () => {} });
+        expect(!!handler, `${name}: ${known!.why}`).toBe(known!.minimize);
+      }
+    }
+    expect([...seen].sort()).toEqual(Object.keys(PLACES).sort());
+  });
+
+  it('no Minimize on a phone, where there is no taskbar', async () => {
+    const { minimizeHandler } = await import('../../web/src/components/sessions/panel-minimize');
+    expect(minimizeHandler({ phone: true, viewPlace: 'home-column', inset: false, onMinimize: () => {} })).toBeNull();
+  });
+
+  it('the bar is drawn once, by the app shell, under every page', () => {
+    const drawers: string[] = [];
+    for (const file of walk(web)) {
+      const rel = path.relative(web, file).split(path.sep).join('/');
+      const src = fs.readFileSync(file, 'utf8');
+      if (/<SessionTaskbar\b/.test(src)) drawers.push(`SessionTaskbar:${rel}`);
+      if (/<AppTaskbar\b/.test(src)) drawers.push(`AppTaskbar:${rel}`);
+    }
+    expect(drawers.sort()).toEqual(['AppTaskbar:components/layout/AppShell.tsx', 'SessionTaskbar:components/sessions/AppTaskbar.tsx']);
+    const shell = fs.readFileSync(path.join(web, 'components/layout/AppShell.tsx'), 'utf8');
+    // Outside the page area and every route, so no page can leave it out.
+    expect(shell.indexOf('<AppTaskbar')).toBeGreaterThan(shell.indexOf('{children}'));
   });
 });
 

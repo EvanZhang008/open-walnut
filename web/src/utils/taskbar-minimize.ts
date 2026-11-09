@@ -1,6 +1,6 @@
-// Minimize from a panel that is not one of Home's columns (the Org page's side panel):
-// the session joins Home's taskbar chips. Home stays mounted on every route, so it hears
-// the request at once and keeps the one copy of the bar (pages/sessionTaskbar.ts).
+// Minimize from any session panel: the session joins the app's taskbar chips
+// (pages/sessionTaskbarStore.ts), and Home takes it off its strip when it shows it there.
+// One request, heard by both, so a panel never needs to know which page it is on.
 
 const EVENT = 'walnut:minimize-to-taskbar';
 
@@ -8,7 +8,7 @@ export function requestMinimizeToTaskbar(sessionId: string): void {
   window.dispatchEvent(new CustomEvent<string>(EVENT, { detail: sessionId }));
 }
 
-/** Home's listener; returns the unsubscribe. */
+/** Subscribe to the request; returns the unsubscribe. */
 export function onMinimizeToTaskbar(handler: (sessionId: string) => void): () => void {
   const listener = (e: Event) => {
     const id = (e as CustomEvent<unknown>).detail;

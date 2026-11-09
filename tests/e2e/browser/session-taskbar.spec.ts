@@ -110,7 +110,7 @@ test('a column pushed out by a full strip never makes a chip: it goes to Recent'
   }
 })
 
-test('Minimize on the Org side panel puts the session on Home\'s chips', async ({ page }) => {
+test('the bar is the same on every page: Minimize on the Org side panel shows there and on Home, and a chip opens it where you are', async ({ page }) => {
   await page.goto('/')
   await page.waitForLoadState('networkidle')
   // In-app navigation, the way a click on a task on the Org page opens its panel.
@@ -120,6 +120,15 @@ test('Minimize on the Org side panel puts the session on Home\'s chips', async (
   await beat(page)
   await side.getByRole('button', { name: 'Minimize session to the taskbar' }).click()
   await expect(side).toHaveCount(0)
+  // The bar is on the Org page too.
+  await expect(chip(page)).toBeVisible()
+  await beat(page)
+  // A chip on the Org page opens the session in its side panel, and leaves the bar.
+  await chip(page).locator('.session-taskbar-open').click()
+  await expect(side).toBeVisible({ timeout: 20_000 })
+  await expect(chip(page)).toHaveCount(0)
+  await beat(page)
+  await side.getByRole('button', { name: 'Minimize session to the taskbar' }).click()
   await page.getByRole('link', { name: 'Home', exact: true }).click()
   await expect(chip(page)).toBeVisible()
   await beat(page)
