@@ -16,6 +16,10 @@
  *  - after boot: localStorage.setItem/removeItem are wrapped; writes to
  *    syncable keys are stamped + batched and PUT back (debounced), plus a
  *    keepalive flush on pagehide so a quick reload can't lose the last change.
+ *  - a first read that times out (a deploy, a busy Mac) does not wait the render
+ *    out: the page renders on its local values, keeps asking in the background,
+ *    and holds its writes until the server answers; then the server's values win
+ *    over those writes and the app mounts again to show them (initUiPrefsSync).
  *
  * Only layout/preference keys sync (open-walnut-* / walnut-todo-*). Device
  * tokens (walnut.deviceToken), chat drafts (draft:*), per-session diff review
@@ -24,9 +28,12 @@
  */
 
 import { apiGet, apiPut } from '@/api/client';
+import { log } from '@/utils/log';
 import { getDeviceToken } from '@/api/device-token';
 import { SKIP_PREFS_MERGE_FLAG } from './crash-recovery';
 import { LAYOUT_PREFIX, adoptsServerLayout } from './layout-record';
+import { BOOT_TIMEOUT_MS, EVENT_RETRY_TIMEOUT_MS, RETRY_PLAN, SLOW_RETRY_MS, settledRefusal } from './ui-prefs-retry';
+import { forgetStale, showLatePrefs, staleValueOf, touchedSinceLateMerge, watchInteraction, __resetLateRemountForTests } from './ui-prefs-remount';
 import { UNION_PREF_KEYS } from '../../../src/core/recent-opened-list';
 
 const INCLUDE_PREFIXES = ['open-walnut-', 'walnut-todo-'];
@@ -181,11 +188,28 @@ function queue(key: string, value: string | null) {
   // An automated browser that did not read the server's layout record must not write it
   // either: a Playwright look at the live server would replace the user's pins.
   if (key.startsWith(LAYOUT_PREFIX) && !adoptsServerLayout()) return;
-  const ts = Date.now();
   // Re-read meta before mutating: several tabs share this store, and writing
   // a stale in-memory copy would erase another tab's timestamps (its keys
   // would then lose to older server values on the next boot merge).
   meta = readMeta();
+  if (!serverRead) {
+    // Not read yet (the first read timed out): stamped weakest and never sent, so it can
+    // never win over the server's value, now or at the next boot merge (mergeServerPrefs).
+    meta[key] = 0;
+    persistMeta();
+    heldKeys.add(key);
+    return;
+  }
+  const shownAs = staleValueOf(key);
+  if (shownAs !== undefined) {
+    // Read late, not shown yet (ui-prefs-remount.ts): untouched, this is a default re-saved.
+    if (!touchedSinceLateMerge()) {
+      try { if (shownAs === null) rawRemove.call(localStorage, key); else rawSet.call(localStorage, key, shownAs); } catch { /* quota */ }
+      return;
+    }
+    forgetStale(key);
+  }
+  const ts = Date.now();
   meta[key] = ts;
   persistMeta();
   pending.set(key, { v: value, ts });
@@ -211,10 +235,169 @@ function flushKeepalive() {
 }
 
 /**
- * Merge server prefs into localStorage (LWW per key), then start mirroring
- * writes back. Await this BEFORE the first render — components read the keys
- * synchronously in useState initializers. Resolves quickly (short timeout)
- * and never throws, so an offline server falls back to plain localStorage.
+ * Merge the server's prefs into localStorage with the boot rules (last writer wins per key, the
+ * lists both sides add to combined), and say which keys changed and what to send back.
+ *
+ * `held` are the keys this page wrote before it had read the server's prefs: those writes are
+ * a component's defaults far more often than the person's choice (they ran before the user's
+ * own layout could reach the page), so the server's value wins whenever it holds the key, and
+ * only a key it does not hold is sent up.
+ */
+function mergeServerPrefs(server: Record<string, PrefEntry>, held: ReadonlySet<string>): { changed: string[]; push: Record<string, PrefEntry> } {
+  const push: Record<string, PrefEntry> = {};
+  const changed: string[] = [];
+  // Under browser automation the shared fixture server's layout record belongs to
+  // whichever spec wrote it last (layout-record.ts adoptsServerLayout).
+  const adoptLayout = adoptsServerLayout();
+  const setRaw = (key: string, value: string | null): void => {
+    try {
+      if (rawGet.call(localStorage, key) === value) return;
+      if (value === null) rawRemove.call(localStorage, key);
+      else rawSet.call(localStorage, key, value);
+      changed.push(key);
+    } catch { /* quota */ }
+  };
+  for (const [key, entry] of Object.entries(server)) {
+    if (!syncable(key) || !entry || typeof entry.ts !== 'number') continue;
+    if (!adoptLayout && key.startsWith(LAYOUT_PREFIX)) continue;
+    const localVal = rawGet.call(localStorage, key);
+    const localTs = meta[key];
+    // A list both sides add to (the tasks opened lately): one list from the two, never the
+    // newer side replacing the other, so an open whose write never reached the server stays.
+    const merge = MERGED_KEYS[key];
+    if (merge && localVal !== null && typeof entry.v === 'string') {
+      const merged = merge(localVal, entry.v);
+      setRaw(key, merged);
+      meta[key] = Math.max(localTs ?? 0, entry.ts);
+      if (merged !== entry.v) push[key] = { v: merged, ts: Math.max(Date.now(), entry.ts + 1) };
+      continue;
+    }
+    // Server wins when this page wrote the key before reading it (held), when this browser
+    // has nothing for the key, or when the server entry is STRICTLY newer than a tracked
+    // local write. A local value with no timestamp (written by an older bundle / another
+    // code path) is what the user currently sees: never clobber it; push it up.
+    const adoptServer = held.has(key) || localVal === null || (localTs !== undefined && entry.ts > localTs);
+    if (adoptServer) {
+      if (entry.v === null || typeof entry.v === 'string') {
+        setRaw(key, entry.v);
+        meta[key] = entry.ts;
+      }
+    } else if (localVal !== entry.v) {
+      const ts = localTs ?? Date.now();
+      meta[key] = ts;
+      push[key] = { v: localVal, ts };
+    }
+  }
+  for (const key of held) {
+    if (key in server || !syncable(key)) continue;
+    const value = rawGet.call(localStorage, key);
+    if (value === null) continue;
+    const ts = Date.now();
+    meta[key] = ts;
+    push[key] = { v: value, ts };
+  }
+  return { changed, push };
+}
+
+// ── The first read, and its retries ──
+//
+// The first render never waits on more than BOOT_TIMEOUT_MS (a page that opens at once beats
+// one that opens right). When that read fails, the page keeps asking in the background until
+// the server answers (a deploy, a busy Mac: 2026-11 the Mac app opened on the default layout,
+// the CEO chat open, and never took the user's), and until then holds its writes: a write is
+// stamped weakest (0) and never sent, so a default a component saved cannot replace the
+// user's prefs on the server, on this load or the next one. A refusal asking again will not
+// change (a 4xx) ends the wait: the page syncs on its local values, as before.
+
+
+/** True once this page has read the server's prefs (or was told to skip them after a crash heal). */
+let serverRead = false;
+/** Syncable keys written in this page before `serverRead`. */
+const heldKeys = new Set<string>();
+let retryTimer: ReturnType<typeof setTimeout> | undefined;
+let retryStep = 0;
+let reading = false;
+export { setLatePrefsHost, type LatePrefsHost } from './ui-prefs-remount';
+export { RETRY_PLAN, SLOW_RETRY_MS } from './ui-prefs-retry';
+
+const onOnline = (): void => { retryNow(); };
+const onVisible = (): void => { if (typeof document !== 'undefined' && document.visibilityState === 'visible') retryNow(); };
+
+function listenUntilRead(on: boolean): void {
+  const fn = on ? 'addEventListener' : 'removeEventListener';
+  try {
+    window[fn]('online', onOnline);
+    if (typeof document !== 'undefined') document[fn]('visibilitychange', onVisible);
+  } catch { /* no DOM (tests) */ }
+}
+
+async function readServerPrefs(timeoutMs: number): Promise<Record<string, PrefEntry>> {
+  const res = await apiGet<{ prefs: Record<string, PrefEntry> }>('/api/ui-prefs', undefined, { timeoutMs });
+  // No body is no answer (a 204): never read it as "the server holds nothing".
+  if (!res || typeof res !== 'object') throw new Error('ui-prefs: empty answer');
+  return res.prefs ?? {};
+}
+
+function giveUpReading(): void {
+  serverRead = true;
+  heldKeys.clear();
+  clearTimeout(retryTimer);
+  listenUntilRead(false);
+  watchInteraction(false);
+}
+
+function scheduleRetry(): void {
+  clearTimeout(retryTimer);
+  if (serverRead) return;
+  const step = RETRY_PLAN[retryStep];
+  const wait = step ? step.waitMs : SLOW_RETRY_MS;
+  const timeoutMs = step ? step.timeoutMs : RETRY_PLAN[RETRY_PLAN.length - 1].timeoutMs;
+  retryStep++;
+  retryTimer = setTimeout(() => void attemptLateRead(timeoutMs), wait);
+}
+
+function retryNow(): void {
+  if (serverRead || reading) return;
+  clearTimeout(retryTimer);
+  void attemptLateRead(EVENT_RETRY_TIMEOUT_MS);
+}
+
+async function attemptLateRead(timeoutMs: number): Promise<void> {
+  if (serverRead || reading) return;
+  reading = true;
+  let prefs: Record<string, PrefEntry> | null = null;
+  let refused = false;
+  try { prefs = await readServerPrefs(timeoutMs); } catch (err) { prefs = null; refused = settledRefusal(err); } finally { reading = false; }
+  if (serverRead) return;
+  if (refused) { giveUpReading(); return; }
+  if (!prefs) { scheduleRetry(); return; }
+  applyLatePrefs(prefs);
+}
+
+function applyLatePrefs(prefs: Record<string, PrefEntry>): void {
+  meta = readMeta();
+  const { changed, push } = mergeServerPrefs(prefs, heldKeys);
+  persistMeta();
+  serverRead = true;
+  heldKeys.clear();
+  clearTimeout(retryTimer);
+  listenUntilRead(false);
+  if (Object.keys(push).length > 0) void apiPut('/api/ui-prefs', { prefs: push }).catch(() => {});
+  for (const key of changed) {
+    try { window.dispatchEvent(new StorageEvent('storage', { key, newValue: rawGet.call(localStorage, key) })); } catch { /* no DOM */ }
+  }
+  // The UI reads these keys in useState initializers: ui-prefs-remount.ts mounts the app again
+  // (at once on a young untouched page, else once it is hidden). The lists both sides add to
+  // (MERGED_KEYS) are read through their storage listeners and need no remount.
+  const shown = showLatePrefs(changed.filter((k) => !MERGED_KEYS[k]).map((k) => [k, rawGet.call(localStorage, k)] as const));
+  log.info('ui-prefs', 'late prefs applied', { changed: changed.length, pushed: Object.keys(push).length, shown, tries: retryStep + 1 });
+}
+
+/**
+ * Merge server prefs into localStorage (LWW per key), then start mirroring writes back. Await
+ * this BEFORE the first render: components read the keys synchronously in useState
+ * initializers. Resolves within BOOT_TIMEOUT_MS and never throws; when that read fails the
+ * page renders on its local values and the read goes on in the background (see above).
  */
 export async function initUiPrefsSync(): Promise<void> {
   meta = readMeta();
@@ -232,57 +415,45 @@ export async function initUiPrefsSync(): Promise<void> {
     return false;
   })();
 
-  try {
-    if (skipMerge) throw new Error('skip prefs merge (crash recovery)');
-    const res = await apiGet<{ prefs: Record<string, PrefEntry> }>(
-      '/api/ui-prefs', undefined, { timeoutMs: 2500 },
-    );
-    const localOnly: Record<string, PrefEntry> = {};
-    // Under browser automation the shared fixture server's layout record belongs to
-    // whichever spec wrote it last (layout-record.ts adoptsServerLayout).
-    const adoptLayout = adoptsServerLayout();
-    for (const [key, entry] of Object.entries(res.prefs ?? {})) {
-      if (!syncable(key) || !entry || typeof entry.ts !== 'number') continue;
-      if (!adoptLayout && key.startsWith(LAYOUT_PREFIX)) continue;
-      const localVal = rawGet.call(localStorage, key);
-      const localTs = meta[key];
-      // A list both sides add to (the tasks opened lately): one list from the two, never the
-      // newer side replacing the other, so an open whose write never reached the server stays.
-      const merge = MERGED_KEYS[key];
-      if (merge && localVal !== null && typeof entry.v === 'string') {
-        const merged = merge(localVal, entry.v);
-        try { if (merged !== localVal) rawSet.call(localStorage, key, merged); } catch { /* quota */ }
-        meta[key] = Math.max(localTs ?? 0, entry.ts);
-        if (merged !== entry.v) localOnly[key] = { v: merged, ts: Math.max(Date.now(), entry.ts + 1) };
-        continue;
-      }
-      // Server wins ONLY when this browser has nothing for the key, or when
-      // the server entry is STRICTLY newer than a tracked local write. A local
-      // value with no timestamp (written by an older bundle / another code
-      // path) is what the user currently sees — never clobber it; push it up.
-      const adoptServer = localVal === null
-        ? true
-        : localTs !== undefined && entry.ts > localTs;
-      if (adoptServer) {
-        try {
-          if (entry.v === null) rawRemove.call(localStorage, key);
-          else if (typeof entry.v === 'string') rawSet.call(localStorage, key, entry.v);
-          meta[key] = entry.ts;
-        } catch { /* quota */ }
-      } else if (localVal !== entry.v) {
-        const ts = localTs ?? Date.now();
-        meta[key] = ts;
-        localOnly[key] = { v: localVal, ts };
+  if (skipMerge) {
+    // The heal's own writes are meant to reach the server: plain last-writer-wins.
+    serverRead = true;
+  } else {
+    listenUntilRead(true);
+    watchInteraction(true);
+    // `reading` keeps an online/visibility retry from asking a second time meanwhile.
+    reading = true;
+    try {
+      const prefs = await readServerPrefs(BOOT_TIMEOUT_MS).finally(() => { reading = false; });
+      const { push } = mergeServerPrefs(prefs, heldKeys);
+      persistMeta();
+      serverRead = true;
+      listenUntilRead(false);
+      watchInteraction(false);
+      if (Object.keys(push).length > 0) void apiPut('/api/ui-prefs', { prefs: push }).catch(() => {});
+    } catch (err) {
+      if (settledRefusal(err)) {
+        giveUpReading();
+      } else {
+        // Slow or offline: render on the local values, keep asking in the background.
+        log.warn('ui-prefs', 'first read failed, retrying in the background', { error: String((err as Error)?.message ?? err) });
+        scheduleRetry();
       }
     }
-    persistMeta();
-    if (Object.keys(localOnly).length > 0) {
-      void apiPut('/api/ui-prefs', { prefs: localOnly }).catch(() => {});
-    }
-  } catch { /* first boot or offline — keep local values */ }
+  }
 
   wrapLocalStorageWrites();
   window.addEventListener('pagehide', flushKeepalive);
+}
+
+/** Test hook: forget this page's read state (the module is shared across a test file's cases). */
+export function __resetUiPrefsSyncForTests(): void {
+  clearTimeout(retryTimer);
+  serverRead = false;
+  heldKeys.clear();
+  retryStep = 0;
+  reading = false;
+  __resetLateRemountForTests();
 }
 
 let wrapped = false;

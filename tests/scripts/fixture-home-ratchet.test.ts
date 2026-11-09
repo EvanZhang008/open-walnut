@@ -60,6 +60,15 @@ describe('fixture servers own their home', () => {
     expect(orphanRoot(20, ppid({ 20: 10, 10: 5 }), cmd({ 20: server, 10: server }))).toBeNull()
     // A parent that is some other program is never the fixture's wrapper.
     expect(orphanRoot(20, ppid({ 20: 10, 10: 1 }), cmd({ 20: server, 10: 'node runner.js' }))).toBeNull()
+    // The real shape: the parent was started with a relative script path, the re-exec child
+    // (process.argv[1]) names it absolutely. 2026-11-09: never reaped, so later runs tested
+    // another checkout's leftover fixture.
+    const abs = 'bun /Users/me/repo/tests/e2e/browser/test-server.ts'
+    expect(orphanRoot(20, ppid({ 20: 10, 10: 1 }), cmd({ 20: abs, 10: server }))).toBe(10)
+    // A different script that only shares the file name is not the same command.
+    expect(orphanRoot(20, ppid({ 20: 10, 10: 1 }), cmd({ 20: abs, 10: 'bun other/test-server.ts' }))).toBeNull()
+    // Two absolute paths in different checkouts are different commands.
+    expect(orphanRoot(20, ppid({ 20: 10, 10: 1 }), cmd({ 20: abs, 10: 'bun /Users/me/other/tests/e2e/browser/test-server.ts' }))).toBeNull()
   })
 
   it('no function with injectable defaults is handed point-free to an array method', async () => {

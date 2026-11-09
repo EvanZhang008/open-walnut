@@ -16,7 +16,7 @@ import { initBrowserLogger } from './utils/browser-logger';
 import { initLongTaskMonitor } from './utils/longtask-monitor';
 import { initInputLatencyMonitor } from './utils/input-latency-monitor';
 import { initMainThreadTracer, startPhase, endPhase, tracePhase } from './utils/main-thread-tracer';
-import { initUiPrefsSync } from './utils/ui-prefs-sync';
+import { initUiPrefsSync, setLatePrefsHost } from './utils/ui-prefs-sync';
 import { initDraftSync } from './utils/drafts';
 import { pressKeepsSelection, selectionIntersects } from './utils/selection-guard';
 import { initSessionStatusStore } from './stores/init-session-status-store';
@@ -28,7 +28,7 @@ import { silenceAutomatedAudio } from './utils/automation-silence';
 import { installImageSizeHold } from './utils/image-size-hold';
 import { installHighlightRules } from './utils/highlight-rules';
 import { installCodeBlockActions } from './utils/code-block-actions';
-import { initStaleAssetRecovery, initStaleBuildUpgrade } from './utils/stale-assets';
+import { hasUnsavedWork, initStaleAssetRecovery, initStaleBuildUpgrade } from './utils/stale-assets';
 import { installDesktopBridge } from './utils/desktop-bridge';
 import { installPluginHostRuntime } from './plugins/runtime';
 import { installAuthFetch } from './api/auth-fetch';
@@ -246,13 +246,16 @@ function bootApp(): void {
         componentStack: (errorInfo?.componentStack ?? '').slice(0, 2000),
       });
     };
-    appRoot = createRoot(document.getElementById('root')!, {
+    const root = createRoot(document.getElementById('root')!, {
       onUncaughtError: logReactError('uncaught render error (root unmounted)'),
       onCaughtError: logReactError('render error caught by boundary'),
     });
-    appRoot.render(
+    appRoot = root;
+    // `generation` keys the whole tree: a new one mounts it again, so every useState
+    // initializer reads localStorage afresh (the user's prefs that arrived late).
+    const renderApp = (generation: number) => root.render(
       <StrictMode>
-        <BrowserRouter>
+        <BrowserRouter key={generation}>
           <ConfirmProvider>
             <AppErrorBoundary>
               <Shell />
@@ -261,6 +264,14 @@ function bootApp(): void {
         </BrowserRouter>
       </StrictMode>,
     );
+    let generation = 0;
+    renderApp(generation);
+    // The prefs read at boot timed out and answered later (ui-prefs-sync.ts): mount once more
+    // on them, unless that would lose unsaved text or the console has gone (signed out).
+    setLatePrefsHost({
+      remount: () => { if (appRoot === root) renderApp(++generation); },
+      canRemount: () => appRoot === root && !hasUnsavedWork(document, 'reload'),
+    });
     queueMicrotask(leaveConsoleIfSignedOut);
   });
 }

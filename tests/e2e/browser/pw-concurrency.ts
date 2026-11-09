@@ -331,8 +331,28 @@ function commandOf(pid: number): string {
 export function orphanRoot(pid: number, ppid = ppidOf, command = commandOf): number | null {
   const parent = ppid(pid)
   if (parent === 1) return pid
-  if (parent > 1 && ppid(parent) === 1 && command(parent) !== '' && command(parent) === command(pid)) return parent
+  if (parent > 1 && ppid(parent) === 1 && command(parent) !== '' && sameCommand(command(parent), command(pid))) return parent
   return null
+}
+
+/**
+ * The same command line, read as ps shows it. The re-exec child names its script by
+ * absolute path (`process.argv[1]`) where the parent was started with a relative one
+ * (`bun tests/e2e/browser/test-server.ts`), so a plain string compare never matched and
+ * the orphan was never reaped: 2026-11-09, every run on the Mac for hours attached to
+ * another checkout's leftover fixture and tested that tree's web code.
+ */
+export function sameCommand(a: string, b: string): boolean {
+  if (a === b) return true
+  const ta = a.split(/\s+/)
+  const tb = b.split(/\s+/)
+  if (ta.length !== tb.length) return false
+  return ta.every((x, i) => {
+    const y = tb[i]!
+    if (x === y) return true
+    const [short, long] = x.length < y.length ? [x, y] : [y, x]
+    return !short.startsWith('/') && long.startsWith('/') && long.endsWith(`/${short}`)
+  })
 }
 
 /**
