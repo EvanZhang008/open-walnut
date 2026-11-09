@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useEvent } from './useWebSocket';
-import { subscribeProjectMutations, migrateProjectNameList } from './useProjectRegistry';
+import { subscribeProjectMutations, migrateProjectNameList, resolveProjectNameList } from './useProjectRegistry';
 import * as orderingApi from '@/api/ordering';
 import type { TierSeparator } from '@/components/tasks/tier-separators';
 
@@ -28,7 +28,8 @@ export function useOrdering(): UseOrderingReturn {
   const fetchAll = useCallback(() => {
     orderingApi.fetchOrdering()
       .then((data) => {
-        if (pendingProjectWrites.current === 0) setProjectOrder(data.projects ?? []);
+        // A read that crossed this tab's own rename still names the old project.
+        if (pendingProjectWrites.current === 0) setProjectOrder(resolveProjectNameList(data.projects ?? []));
         if (pendingWrites.current === 0) setSeparators(data.separators ?? []);
       })
       .catch(() => {});

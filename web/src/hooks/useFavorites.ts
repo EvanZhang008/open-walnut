@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useEvent } from './useWebSocket';
-import { subscribeProjectMutations, migrateProjectNameList } from './useProjectRegistry';
+import { subscribeProjectMutations, migrateProjectNameList, resolveProjectNameList } from './useProjectRegistry';
 import * as favApi from '@/api/favorites';
 
 export interface UseFavoritesReturn {
@@ -20,7 +20,8 @@ export function useFavorites(): UseFavoritesReturn {
   const fetchAll = useCallback(() => {
     favApi.fetchFavorites()
       .then((data) => {
-        setFavoriteProjects(data.projects ?? []);
+        // A read that crossed this tab's own rename still names the old project.
+        setFavoriteProjects(resolveProjectNameList(data.projects ?? []));
         setFavoriteNotes(data.notes ?? []);
       })
       .catch(() => {});

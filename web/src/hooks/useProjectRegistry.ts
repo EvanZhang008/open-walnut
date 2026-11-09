@@ -425,6 +425,28 @@ export function resolveProjectName(name: string): string {
   }
 }
 
+/**
+ * A config name list (favorites, ordering) read from the server, with each name resolved
+ * forward (resolveProjectName), NOCASE-deduped. A read answered while this tab's rename is
+ * still in flight lists the OLD name; without this a name-keyed list drops the renamed project
+ * for the rest of the round trip (2026-11-09 CI: another writer's favorites change refetched
+ * the list mid-rename and the star went hollow). Returns the SAME array when nothing moved.
+ */
+export function resolveProjectNameList(list: string[]): string[] {
+  let moved = false;
+  const next: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of list) {
+    const name = resolveProjectName(raw);
+    if (name !== (raw ?? '').trim()) moved = true;
+    const key = name.toLowerCase();
+    if (!name || seen.has(key)) { moved = true; continue; }
+    seen.add(key);
+    next.push(name);
+  }
+  return moved ? next : list;
+}
+
 /** Tests only: forget everything the store learned. */
 export function resetProjectRegistryForTests(): void {
   serverRows = [];

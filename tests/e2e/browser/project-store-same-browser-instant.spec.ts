@@ -207,12 +207,21 @@ test('a project rename from the header kebab reaches the board header, the detai
   //     list while the PATCH is held, so its answer still files the task under the OLD
   //     name. The optimistic rows must hold (2026-11-06 CI: they jumped back to the old
   //     header, and on the retry the task's open menu unmounted under the click).
+  //     The bystander is a favorite too, so the favorites list, also keyed by NAME, re-reads
+  //     the same way and its answer still names the old project (2026-11-09 CI: another
+  //     worker's favorites write refetched it mid-rename and the star in step 3 went hollow).
   const refetched = page.waitForResponse(
     (r) => r.request().method() === 'GET' && new URL(r.url()).pathname === '/api/tasks',
     { timeout: HOLD_MS },
   )
+  const favoritesRefetched = page.waitForResponse(
+    (r) => r.request().method() === 'GET' && new URL(r.url()).pathname === '/api/favorites',
+    { timeout: HOLD_MS },
+  )
+  await favoriteProjectViaApi(`bystander${stamp}`)
   await bulkChangeFromAnotherWriter(`bystander${stamp}`)
   await refetched
+  await favoritesRefetched
   await page.waitForTimeout(300)
   await expect(listHeader(page, after)).toBeVisible()
   await expect(listHeader(page, before)).toHaveCount(0)
