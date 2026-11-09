@@ -860,6 +860,8 @@ describe('standalone ACP command lifetime', () => {
       TASK_DIR_ROOT: '/fixture/tasks', ensureTaskDir: () => null,
       // acpStart hands the session the secrets the user shared with this host (secrets-core.ts).
       secretsSessionEnv: () => ({}), SECRETS_ROOT: '/fixture/secrets',
+      // acpStart starts the agent with the test-browser silencer preload (pw-silence-core.ts).
+      pwSilenceAcpOptions: () => ({}),
     })
     const result = handle({}, 1, { sid: 'fixture', cwd: '/fixture' }, 'getState')
     expect(typeof result?.then).toBe('function')
