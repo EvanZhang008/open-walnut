@@ -98,8 +98,11 @@ function useMinuteNow(): number {
   return now;
 }
 
+/** How soon a failed first load of the tasks is tried again while the Org page shows. */
+const FIRST_LOAD_RETRY_MS = 5_000;
+
 export function OrgPage() {
-  const { tasks, loading: tasksLoading, showOperationError, update: updateTaskInStore, refetch } = useTasksContext();
+  const { tasks, loading: tasksLoading, error: tasksError, refetch: refetchTasks, showOperationError, update: updateTaskInStore, refetch } = useTasksContext();
   const navigate = useNavigate();
   const phone = usePhoneLayout();
   const now = useMinuteNow();
@@ -223,13 +226,21 @@ export function OrgPage() {
   // With no node named (or one whose row is gone), the default is picked once the tasks are in and
   // then stays (settleDefaultNode).
   const namedRow = !!nodeParam && !!rowOf(channels, nodeParam);
+  // A first load that failed is no list yet: settling then left the page on Main until it was
+  // opened again (2026-11-08). The load is tried again until it lands, and the node settles then.
+  const tasksUnknown = tasksLoading || (!!tasksError && tasks.length === 0);
+  useEffect(() => {
+    if (tasksLoading || !tasksError || tasks.length > 0) return;
+    const id = window.setTimeout(refetchTasks, FIRST_LOAD_RETRY_MS);
+    return () => window.clearTimeout(id);
+  }, [tasksLoading, tasksError, tasks.length, refetchTasks]);
   const [defaultNode, setDefaultNode] = useState<string | null>(null);
-  const settledDefault = namedRow ? defaultNode : settleDefaultNode(defaultNode, channels, tasksLoading);
+  const settledDefault = namedRow ? defaultNode : settleDefaultNode(defaultNode, channels, tasksUnknown);
   if (settledDefault !== defaultNode) setDefaultNode(settledDefault);
   const selected = pickChannel(channels, namedRow ? nodeParam : settledDefault);
   // The node it names has no row until the tasks arrive: show none rather than Main for a moment
   // (a reload drew Main's Task view, then the lead's Threads). The same with no node named.
-  const nodeArriving = tasksLoading && (nodeParam ? !rowOf(channels, nodeParam) : !settledDefault);
+  const nodeArriving = tasksUnknown && (nodeParam ? !rowOf(channels, nodeParam) : !settledDefault);
   // On a phone the list shows until a row is picked (and again when the picked one is gone).
   const picked = !!rowOf(channels, nodeParam);
   const showDetail = !phone || picked;

@@ -437,6 +437,28 @@ test('the Org page with no node named shows none while the tasks load, then one 
   }
 })
 
+test('the Org page whose first task load fails shows no node, tries again, and settles once it lands', async ({ page }) => {
+  await page.addInitScript(() => localStorage.removeItem('walnut.org.place'))
+  let failing = true
+  let failed = 0
+  await page.route(/\/api\/tasks(\?|$)/, async (route) => {
+    if (failing && route.request().method() === 'GET') { failed++; return route.fulfill({ status: 400, json: { error: 'held down by the test' } }) }
+    await route.continue()
+  })
+  await openOrg(page)
+  await expect.poll(() => failed).toBeGreaterThan(0)
+  await page.waitForTimeout(1500)
+  // The load failed: no node is drawn (it settled on Main here before, and stayed there).
+  await expect(page.getByTestId('org-detail-title')).toHaveCount(0)
+  failing = false
+  // The page tries the load again by itself, and the node settles once it lands.
+  const name = page.getByTestId('org-detail-title')
+  await expect(name).toBeVisible({ timeout: 20_000 })
+  const first = await name.textContent()
+  await page.waitForTimeout(1500)
+  expect(await name.textContent()).toBe(first)
+})
+
 test('Home keeps its own column and flags', async ({ page }) => {
   await openOrg(page)
   await agendaToggle(page).click()
