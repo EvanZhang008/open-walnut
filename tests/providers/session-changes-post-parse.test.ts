@@ -11,6 +11,7 @@
  * reconstructed again on every compute.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { measureLoopHold } from '../helpers/loop-hold'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -53,24 +54,6 @@ function buildSession(n: number): void {
   fs.writeFileSync(transcript, t)
 }
 
-/** Largest gap between ticks of a 10 ms interval while `work` runs. */
-async function largestLoopGap<T>(work: () => Promise<T>): Promise<{ value: T; gapMs: number }> {
-  let last = performance.now()
-  let gapMs = 0
-  const timer = setInterval(() => {
-    const now = performance.now()
-    gapMs = Math.max(gapMs, now - last)
-    last = now
-  }, 10)
-  try {
-    const value = await work()
-    gapMs = Math.max(gapMs, performance.now() - last)
-    return { value, gapMs }
-  } finally {
-    clearInterval(timer)
-  }
-}
-
 beforeEach(() => {
   root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-changes-post-')))
   repo = path.join(root, 'repo')
@@ -85,7 +68,7 @@ afterEach(() => { fs.rmSync(root, { recursive: true, force: true }) })
 describe('changes compute keeps the event loop free', () => {
   it('700 files rewritten in place: few git spawns, no long hold of the loop', async () => {
     buildSession(700)
-    const { value: out, gapMs } = await largestLoopGap(() =>
+    const { value: out, holdMs, gapMs } = await measureLoopHold(() =>
       computeHostLocalChanges({ sessionId: SID, cwd: repo, claudeHome }))
     expect(out!.result.fileCount).toBe(700)
     const f5 = out!.result.groups.flatMap((g) => g.files).find((f) => f.relPath === 'src/f5.ts')!
@@ -93,9 +76,9 @@ describe('changes compute keeps the event loop free', () => {
     // Per repo: a toplevel lookup, a HEAD lookup, then two cat-file runs per
     // 500 files. It was two spawns per file (1,400 here).
     expect(out!.computeStats.gitSpawns).toBeLessThanOrEqual(8)
-    // Measured 47 ms under vitest on a Mac at load ~100 (the old code: 2,001 ms).
-    // 500 leaves room for GC pauses and timer drift on a heavily loaded machine.
-    expect(gapMs).toBeLessThan(500)
+    // Judged on the loop thread's CPU (tests/helpers/loop-hold.ts), so a loaded runner
+    // does not count. Wall gap measured 47 ms under vitest at load ~100; the old code 2,001 ms.
+    expect(holdMs, `longest wall gap ${gapMs} ms`).toBeLessThan(300)
   }, 120_000)
 })
 
