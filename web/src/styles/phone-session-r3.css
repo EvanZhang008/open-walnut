@@ -64,7 +64,8 @@
   /* C19 in the notification center at live density: a letter row's Pin, Mark
      read and Archive were 22 px tall, and its type, time and chips read at
      10 to 11 px. The same rows on the Inbox page and in a letter take the
-     same floor. */
+     same floor, the origin badge that leads every letter (its kind, its From)
+     included. */
   html body .hib-row-actions {
     flex-wrap: wrap;
     gap: 8px;
@@ -77,7 +78,8 @@
   }
   html body :is(
     .hib-type, .hib-time, .hib-chip, .hib-answered-chip, .hib-taskrefs-label, .hib-thread-head,
-    .hib-turn-who, .hib-turn-time, .hib-delivery, .session-inbox-bar-sub
+    .hib-turn-who, .hib-turn-time, .hib-delivery, .session-inbox-bar-sub,
+    .hib-origin-kind, .hib-origin-from
   ) {
     font-size: 12px;
   }
