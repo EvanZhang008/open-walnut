@@ -77,7 +77,7 @@ import { ThreadTurnLabel } from './ThreadTurnLabel';
 import { foldGroupOf, foldOpenKeys, foldParts, isFolded } from '@/utils/thread-fold';
 import { envelopeSteps, foldStepsPhrase, walnutCompactLine, type FoldStep } from './fold-steps';
 import { lookupTaskByRef } from '@/stores/entity-label-store';
-import { joinsQuiet, MSG_KIND_ROLE, SYSTEM_VARIANT_ROLE, toolRole, TOOL_ROLE_FOLDS, type MsgKind, type RowRole } from './fold-rows';
+import { countFoldFailures, joinsQuiet, MSG_KIND_ROLE, SYSTEM_VARIANT_ROLE, toolRole, TOOL_ROLE_FOLDS, type FoldFailures, type MsgKind, type RowRole } from './fold-rows';
 import { chunkByKind, foldsAsOne, leadingStepGroup, stepGroups, type StepGroup, type StepKind } from './stream-step-groups';
 import { isOutboundSendCall } from '@/stream/tool-merge';
 import { isEnvelopeOnly, parseSessionEnvelopes, type EnvelopeSegment } from '@open-walnut/history-session-envelope';
@@ -4894,16 +4894,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   /** The failures a stretch of rows holds, for its fold's red count: the runtime's
    *  error lines and the failed calls (a routed question is an answer; a call the
    *  person denied did not fail, the line counts it as denied). */
-  const failedOf = (parts: readonly HistoryPart[]): number => {
-    let failed = 0;
-    for (const part of parts) {
-      for (const m of rowsOf(part)) {
-        if (m.role === 'system' && m.systemVariant === 'error') failed++;
-        if (!(part.kind === 'msg' && part.suppressTools)) failed += (m.tools ?? []).filter((t) => t.isError && !isRoutedQuestion(t.name, t.result) && !isUserDenied(t.result)).length;
-      }
-    }
-    return failed;
-  };
+  const failedOf = (parts: readonly HistoryPart[]): FoldFailures => countFoldFailures(
+    parts.flatMap((part) => rowsOf(part).map((row) => ({ row, toolsShown: !(part.kind === 'msg' && part.suppressTools) }))),
+    (t: SessionHistoryTool) => !!t.isError && !isRoutedQuestion(t.name, t.result) && !isUserDenied(t.result),
+  );
   // A message to someone: a send card, or Walnut's other messaging ops (to a
   // lead, to the inbox, an answer in it), which render as plain tool rows.
   const isOutboundTool = (t: SessionHistoryTool) => outboundCallsOf(t).length > 0 || MESSAGE_OPS.test(t.name);
@@ -5327,7 +5321,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         const members = [...runMembersOf(stepIdx), ...sendMembersOf(group)];
         // Every failure in it, history's failed calls and error lines too (they are
         // folded with the rest while the turn runs, so the header has to say so).
-        const failed = failedOf(tail) + streamFailedOf(members);
+        const tailFailed = failedOf(tail);
+        const failed: FoldFailures = { calls: tailFailed.calls + streamFailedOf(members), errors: tailFailed.errors };
         const live = isThinkingTail(stepIdx[stepIdx.length - 1] ?? -1);
         // Keyed like the answered turn's fold, so the row and its open state carry
         // over when the turn ends and history takes the tools.

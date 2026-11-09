@@ -10,6 +10,7 @@
  */
 import { createContext, useCallback, useContext, useSyncExternalStore, type ReactNode } from 'react';
 import '@/styles/turn-folds.css';
+import { foldFailureWords, type FoldFailures } from './fold-rows';
 
 // Open folds, for the page (a remount keeps a fold the reader opened open), and
 // openable from outside: a jump to a pinned row inside a closed fold opens it
@@ -56,20 +57,21 @@ function useTurnFold(key: string): [boolean, () => void] {
 
 /**
  * `foldKey` defaults to the process fold's; a whole turn's steps before its
- * answer use the same row under turnFoldKey. `failed` puts the count of failed
- * steps in the header, so a folded failure is never silent.
+ * answer use the same row under turnFoldKey. `failed` puts the count of failed calls (and,
+ * apart, of the runtime's error lines) in the header, so a folded failure is never silent.
  */
 export function ProcessFoldRow({ foldId, phrase, children, foldKey, failed = 0, testId = 'process-fold', running = false }: {
-  foldId: string; phrase: string; children: ReactNode; foldKey?: string; failed?: number; testId?: string;
+  foldId: string; phrase: string; children: ReactNode; foldKey?: string; failed?: number | FoldFailures; testId?: string;
   /** A step inside is still running (the live turn): the row breathes like a running tool run. */
   running?: boolean;
 }) {
   const [open, toggle] = useTurnFold(foldKey ?? processFoldKey(foldId));
+  const failedWords = foldFailureWords(failed);
   return (
     <div className="tool-run-row process-fold" data-testid={testId} data-open={open ? 'true' : 'false'}>
       <button type="button" className="tool-run-toggle" aria-expanded={open} onClick={toggle}>
         <span className="tool-run-label" title={phrase}>{phrase}</span>
-        {failed > 0 && <span className="tool-run-fail">{failed} failed</span>}
+        {failedWords && <span className="tool-run-fail">{failedWords}</span>}
         {running && <span className="tool-run-live-dot" />}
         <span className={`tool-run-chevron${open ? ' tool-run-chevron--open' : ''}`}>{'›'}</span>
       </button>

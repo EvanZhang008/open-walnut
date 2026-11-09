@@ -4,7 +4,7 @@
  *
  * 2026-10-30, the user, the fourth report of this split: between two answers of a
  * coordinating session three fold rows sat back to back, "Received 1 message",
- * "Ran 4 commands · 1 failed", "Received 1 message · Ran 1 tool · 20 failed".
+ * "Ran 4 commands · 1 failed", "Received 1 message · Ran 1 tool · 20 failed" (now "1 failed · 20 errors": failed counts calls only).
  * The first fixture copies that session's structure with neutral words: a trigger
  * notice, four commands with one failed, the no-action line (a turn with a failure
  * is "open"), a re-check notice, twenty API error lines, one more command, the
@@ -16,7 +16,7 @@
 import { test, expect, type Locator } from '@playwright/test';
 import { mockSession, open } from './mock-session-harness';
 
-const SHOTS = '/tmp/fold-combine';
+const SHOTS = process.env.FOLD_SHOTS ?? '/tmp/fold-combine';
 
 // A cold fixture boot on a loaded machine takes most of the default 30 s.
 test.describe.configure({ timeout: 120_000 });
@@ -95,8 +95,8 @@ async function rowsBetween(hist: Locator, from: string, to: string): Promise<str
 }
 
 for (const [name, history, a, b, phrase] of [
-  ['the reported session', reported, 'OR_ANSWER_A', 'OR_ANSWER_B', /^Received 2 messages · Ran 5 tools\s*21 failed/],
-  ['every step kind', everyKind, 'OR_ANSWER_C', 'OR_ANSWER_D', /^Context compacted · Received 2 messages · Sent 1 · Ran 4 tools · 1 notice\s*4 failed/],
+  ['the reported session', reported, 'OR_ANSWER_A', 'OR_ANSWER_B', /^Received 2 messages · Ran 5 tools\s*1 failed · 20 errors/],
+  ['every step kind', everyKind, 'OR_ANSWER_C', 'OR_ANSWER_D', /^Context compacted · Received 2 messages · Sent 1 · Ran 4 tools · 1 notice\s*2 failed · 2 errors/],
 ] as const) {
   test(`${name}: the steps between two answers are one fold row`, async ({ page }) => {
     await mockSession(page, history, 'idle');

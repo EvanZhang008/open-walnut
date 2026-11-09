@@ -60,6 +60,23 @@ describe('which op failures are turn errors', () => {
     // ...and says so at initialize, the only adapter Walnut steers (protocol.ts snapshotAcpCapabilities).
     expect(dist).toMatch(/steering: \{\s*supported: true,\s*injectOnly: true\s*\}/)
   })
+
+  // 2026-11-09: the model catalog Walnut's patch hands Codex's app-server lived in the OS temp dir; a
+  // sweep removed it hours into the session, and every turn after failed with "failed to load
+  // configuration: No such file or directory" (shown as "ACP provider protocol operation failed").
+  it("Walnut's codex-acp patch keeps the files Codex rereads out of temp dirs, and puts a lost one back", () => {
+    const patch = fs.readFileSync(path.join(ROOT, 'patches', '@agentclientprotocol%2Fcodex-acp@1.4.0.patch'), 'utf8')
+    const added = patch.split('\n').filter((l) => l.startsWith('+') && !l.startsWith('+++'))
+    expect(added.filter((l) => /tmpdir\(|\/tmp\//.test(l) && /model_catalog|walnut-codex-models|const file/.test(l))).toEqual([])
+    const dist = fs.readFileSync(createRequire(import.meta.url).resolve('@agentclientprotocol/codex-acp/dist/index.js'), 'utf8')
+    expect(dist).toContain('path.join(walnutCatalogDir(os2), `walnut-codex-models-')
+    // Every entry point that can make Codex read its config again heals the file first.
+    for (const head of ['async prompt(params, signal, onTurnStarted) {', 'async performSteeringRequest(params) {', '  async loadSession(params) {', '  async resumeSession(params) {', '  async newSession(params) {']) {
+      const at = dist.indexOf(head)
+      expect(at, head).toBeGreaterThan(0)
+      expect(dist.slice(at, at + head.length + 40), head).toContain('walnutEnsureCatalog();')
+    }
+  })
 })
 
 let tmpDir: string

@@ -113,3 +113,36 @@ export function joinsQuiet(r: PlaceRead): boolean {
   if (r.turn === 'hidden' || (r.turn === 'answered' && r.beforeAnswer)) return true;
   return r.role === 'step';
 }
+
+/**
+ * What a fold's red count holds: its failed calls, and apart from them the runtime's error lines
+ * (2026-11-09: a Codex session's fold read "Ran 344 tools · 7859 failed", because 7,835 error
+ * lines of a steering retry loop were counted as failed calls). "N failed" counts calls only, so it
+ * never exceeds the calls the fold ran; error lines read "N errors".
+ */
+export interface FoldFailures { calls: number; errors: number }
+
+export interface FailureRowRead<T> {
+  role: string;
+  systemVariant?: string;
+  tools?: readonly T[];
+}
+
+/** Count a stretch of rows' failures; `failedCall` says whether one call failed. */
+export function countFoldFailures<T>(rows: Iterable<{ row: FailureRowRead<T>; toolsShown: boolean }>, failedCall: (t: T) => boolean): FoldFailures {
+  const out: FoldFailures = { calls: 0, errors: 0 };
+  for (const { row, toolsShown } of rows) {
+    if (row.role === 'system' && row.systemVariant === 'error') out.errors++;
+    if (toolsShown) out.calls += (row.tools ?? []).filter(failedCall).length;
+  }
+  return out;
+}
+
+/** The red words of a fold's header: "2 failed", "1 error", "2 failed · 3 errors", or none. */
+export function foldFailureWords(f: number | FoldFailures): string {
+  const { calls, errors } = typeof f === 'number' ? { calls: f, errors: 0 } : f;
+  const parts: string[] = [];
+  if (calls > 0) parts.push(`${calls} failed`);
+  if (errors > 0) parts.push(`${errors} ${errors === 1 ? 'error' : 'errors'}`);
+  return parts.join(' · ');
+}
