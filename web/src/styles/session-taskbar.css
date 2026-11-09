@@ -209,7 +209,7 @@
   padding: 4px;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: var(--bg);
+  background: var(--bg-elevated);
   color: var(--fg);
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
   overflow-y: auto;
@@ -221,7 +221,7 @@
   height: 28px;
   border-radius: 6px;
 }
-.session-taskbar-more-row:hover { background: var(--bg-hover, rgba(127, 127, 127, 0.1)); }
+.session-taskbar-more-row:hover { background: var(--accent-subtle); }
 .session-taskbar-more-row .session-taskbar-open { flex: 1 1 auto; min-width: 0; gap: 7px; padding: 0 4px 0 8px; font-size: 12px; justify-content: flex-start; }
 .session-taskbar-more-row .session-taskbar-close { width: 22px; height: 22px; border-radius: 11px; }
 .session-taskbar-more-row .session-taskbar-close svg { width: 10px; height: 10px; }
