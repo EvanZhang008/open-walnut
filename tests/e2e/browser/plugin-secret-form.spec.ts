@@ -6,6 +6,7 @@ import yaml from 'js-yaml'
 import { expect, test, type Locator, type Page, type Response } from '@playwright/test'
 import { openWay } from './devices-ways-helpers'
 import { openPluginDetail } from './apps-store-helpers'
+import { openHostParts } from './host-problems-fixture-helpers'
 
 /**
  * Editing hidden secrets in Settings, through real clicks, and what lands on disk.
@@ -182,7 +183,10 @@ async function openHostServer(page: Page): Promise<Locator> {
   await expect(row).toBeVisible({ timeout: 60_000 })
   await row.getByTestId('rh-row-more').click()
   await page.getByTestId('rh-row-menu').getByRole('menuitem', { name: 'Details', exact: true }).click()
-  return page.locator(`[data-testid="rh-details"][data-host="${HOST}"] [data-testid="host-server-part"][data-host="${HOST}"]`)
+  // Walnut on this host lives in the Details' This host part, folded until opened (125b564ca).
+  const details = page.locator(`[data-testid="rh-details"][data-host="${HOST}"]`)
+  await openHostParts(details, ['this-host'])
+  return details.locator(`[data-testid="host-server-part"][data-host="${HOST}"]`)
 }
 
 /** The app's entry page once, then the sidebar's Apps entry; every step after it is a click. */

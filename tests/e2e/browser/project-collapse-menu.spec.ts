@@ -1285,11 +1285,14 @@ test('a card drag while another project run is folded lands where it was dropped
   await page.waitForTimeout(1_000)
 
   // The card must NOT have joined the folded project, and must still be on screen.
-  // (Which visible run it ends up in is not this test's business: the Focus tier is
-  // shared state, so another spec's card can legitimately be the nearest target.)
+  // (Which visible run, or tier, it ends up in is not this test's business: the Focus tier
+  // is shared state, so another spec's card can legitimately be the nearest target, and an
+  // empty tier's own zone outranks a tier that has rows (e7bc8ac06), so a release this far
+  // from every row can land in the empty Satellite tier.)
   expect(await taskProjectViaApi(b2.id), 'the drop landed inside the FOLDED run').not.toBe(projA)
-  await expect(tierCard(page, b2.id)).toBeVisible()
-  await expect(tierCard(page, b2.id)).not.toHaveClass(/tier-project-collapsed/)
+  const landed = page.locator(`[data-drop-zone$="-drop-zone"] [data-task-id="${b2.id}"]`).first()
+  await expect(landed).toBeVisible()
+  await expect(landed).not.toHaveClass(/tier-project-collapsed/)
   // The fold itself survived the drag untouched: still shut, still two members.
   await expect(tierLabel(page, projA).locator('.collapse-chevron')).not.toHaveClass(/expanded/)
   await expect(tierLabel(page, projA).locator('.tier-project-label-count')).toHaveText('2')
