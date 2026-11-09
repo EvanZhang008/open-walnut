@@ -367,7 +367,10 @@ test.describe('Tree Mode split screen', () => {
     // A normal session column: as many pages as its width holds (900px a page
     // pair, 1040px three), with the path bar.
     await expect(bar(panel)).toBeVisible()
-    const width = (await panel.locator('.session-panel-chat-col').boundingBox())!.width
+    // The chat column is measured once it is on screen (CI: read while it was not, it had no box).
+    const chatCol = panel.locator('.session-panel-chat-col')
+    await expect(chatCol).toBeVisible()
+    const width = (await chatCol.boundingBox())!.width
     const fit = width >= 1040 ? 3 : width >= 900 ? 2 : 1
     await expect.poll(async () => (await pagesOnScreen(panel)).length || 1).toBe(fit)
     // The platform's own chord only (Cmd on a Mac, Ctrl elsewhere): a press of
