@@ -2,9 +2,11 @@
  * Finished work folds; what the reader must see does not.
  *
  * Against the fixture `pw-fold-session` (test-server.ts), in the real panel:
- *  · turn fold: everything before a turn's answer (narration, two reads, two
- *    edits, a message to the lead; notices, sends and replies) is ONE folded
- *    row and only the answer shows; a failure inside says so in the header;
+ *  · turn fold: the steps before a turn's answer (two reads, two edits, a
+ *    message to the lead; notices, sends and replies) are ONE folded row; the
+ *    session's words after the person's message (its narration too) and the
+ *    answer show (2026-11-09: a whole answer folded under "Sent 1 · Ran 2 tools");
+ *    a failure inside says so in the header;
  *  · quiet turns: a turn a peer's message started that ended with the
  *    no-action line is one folded row that counts what happened ("Received 1
  *    message"), never a count of hidden turns;
@@ -89,8 +91,9 @@ test('everything before a turn\'s answer is one row; the answer shows', async ({
   // Counts only: two reads and two edits are four tools, the task_send one sent.
   await expect(fold.locator(':scope > .tool-run-toggle .tool-run-label')).toHaveText(/^Sent 1(?: to [^·›]+?)? \u00b7 Ran 4 tools$/)
   await expect(fold).toHaveAttribute('data-open', 'false')
-  // Folded, the narration, the steps and the sent card are off screen.
-  expect(await history.innerText()).not.toContain('FOLD_NARRATION_A')
+  // Folded, the steps and the sent card are off screen; the words answering the person are not.
+  await expect(history).toContainText('FOLD_NARRATION_A first result is in.')
+  expect(await fold.innerText()).not.toContain('FOLD_NARRATION_A')
   expect(await history.innerText()).not.toContain('FOLD_SENT_TITLE')
   // The person's own message shows.
   await expect(history.locator('.session-msg-user', { hasText: 'FOLD_ASK_ONE' })).toHaveCount(1)
@@ -99,7 +102,6 @@ test('everything before a turn\'s answer is one row; the answer shows', async ({
 
   await fold.locator('.tool-run-toggle').first().click()
   await expect(fold).toHaveAttribute('data-open', 'true')
-  await expect(fold).toContainText('FOLD_NARRATION_A first result is in.')
   await expect(fold).toContainText('FOLD_SENT_TITLE')
   await shot(page, fold, 'turn-open')
 })
@@ -131,8 +133,10 @@ test('a failure folded before an answer says so in the header', async ({ page })
   await expect(fold).toHaveCount(1)
   await expect(fold.locator('.tool-run-toggle .tool-run-fail')).toHaveText('2 failed')
   await reveal(page, panel, fold)
+  // The words after the person's message stand outside it.
+  await expect(history).toContainText('FOLD_NARRATION_E starting.')
+  expect(await fold.innerText()).not.toContain('FOLD_NARRATION_E')
   await fold.locator('.tool-run-toggle').first().click()
-  await expect(fold).toContainText('FOLD_NARRATION_E starting.')
   await expect(fold.locator('.tool-run-fail').filter({ hasText: '2 failed' })).toHaveCount(2)
 })
 

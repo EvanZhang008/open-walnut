@@ -129,7 +129,7 @@ describe('the rule', () => {
     expect(Object.entries(TOOL_ROLE_FOLDS).filter(([, v]) => v).map(([k]) => k)).toEqual(['step', 'running'])
   })
 
-  const base: PlaceRead = { role: 'step', turn: 'open', personStart: false, labelled: false, beforeAnswer: false }
+  const base: PlaceRead = { role: 'step', turn: 'open', personStart: false, labelled: false, beforeAnswer: false, afterPerson: false }
   it('a step joins the stretch in every turn kind, before or after an answer', () => {
     for (const turn of ['open', 'answered', 'hidden', null] as const) {
       for (const beforeAnswer of [false, true]) expect(joinsQuiet({ ...base, turn, beforeAnswer }), `${turn} ${beforeAnswer}`).toBe(true)
@@ -142,6 +142,15 @@ describe('the rule', () => {
     expect(joinsQuiet({ ...base, role: 'reads', turn: 'hidden' })).toBe(true)
     expect(joinsQuiet({ ...base, personStart: true, turn: 'hidden' })).toBe(false)
     expect(joinsQuiet({ ...base, labelled: true })).toBe(false)
+  })
+  it('words after the person\'s message never fold, in any turn kind; steps there still do', () => {
+    // 2026-11-09: a whole answer folded under "Sent 1 · Ran 2 tools" before one short last line.
+    for (const turn of ['open', 'answered', 'hidden', null] as const) {
+      for (const beforeAnswer of [false, true]) {
+        expect(joinsQuiet({ ...base, role: 'reads', turn, beforeAnswer, afterPerson: true }), `${turn} ${beforeAnswer}`).toBe(false)
+        expect(joinsQuiet({ ...base, role: 'step', turn, beforeAnswer, afterPerson: true }), `${turn} ${beforeAnswer}`).toBe(true)
+      }
+    }
   })
 
   it('the reported stretch reads as one line', () => {
@@ -157,5 +166,74 @@ describe('the rule', () => {
     // Error lines are the red count; the runtime's other lines are named.
     expect(foldStepsPhrase([{ kind: 'notice', error: true }, { kind: 'notice', error: true }])).toBe('2 notices')
     expect(foldStepsPhrase([{ kind: 'calls', tools: [{ name: 'Bash' }] }, { kind: 'notice' }])).toBe('Ran 1 tool · 1 notice')
+  })
+})
+
+/**
+ * The session's words answering the person never sit in a closed fold (2026-11-09,
+ * the user, of a whole answer with its table folded under "Sent 1 · Ran 2 tools"
+ * because one short line came after it: "why this get auto collpes this si nto
+ * right"). Every short timeline over person, peer, words, a call and words with a
+ * call in their row is shaped and placed the way the timeline places it; a row of
+ * words at or after the person's message in its turn must never join a fold. Then
+ * the one place each surface decides it is read from the source.
+ */
+describe('words answering the person are never folded', () => {
+  type Row = 'P' | 'N' | 'W' | 'T' | 'WT'
+  const msg = (r: Row) => r === 'P' ? { role: 'user' as const, text: 'question' }
+    : r === 'N' ? { role: 'user' as const, text: '<walnut-message kind="peer-note" from="A">x</walnut-message>' }
+    : r === 'W' ? { role: 'assistant' as const, text: 'words' }
+    : r === 'T' ? { role: 'assistant' as const, text: '', tools: [{ name: 'Bash', result: 'ok' }] }
+    : { role: 'assistant' as const, text: 'words', tools: [{ name: 'mcp__walnut__task_send', result: 'ok' }] }
+  const rows: Row[] = ['P', 'N', 'W', 'T', 'WT']
+  function* sequences(n: number): Generator<Row[]> {
+    if (n === 0) { yield []; return }
+    for (const s of sequences(n - 1)) for (const r of rows) yield [...s, r]
+  }
+
+  it('in every timeline of up to six rows', async () => {
+    const { shapeTurns } = await import('../../web/src/utils/turn-shape')
+    let checked = 0
+    for (let n = 1; n <= 6; n++) {
+      for (const seq of sequences(n)) {
+        const messages = seq.map(msg)
+        const turns = shapeTurns(messages, {
+          isSent: (m) => m.role === 'user', isPerson: (m) => m.role === 'user' && m.text === 'question',
+          isCleanNoAction: () => false, streaming: false,
+        })
+        seq.forEach((r, g) => {
+          const t = turns.find((x) => g >= Math.max(x.start, 0) && g < x.end)
+          if (!t) return
+          let personAt = -1
+          for (let i = Math.max(t.start, 0); i <= g; i++) if (seq[i] === 'P') { personAt = i; break }
+          const words = r === 'W' || r === 'WT'
+          const role = words || r === 'P' ? 'reads' : 'step'
+          const quiet = joinsQuiet({
+            role, turn: t.kind, personStart: t.byPerson && g === t.start, labelled: false,
+            beforeAnswer: t.kind === 'answered' && g < t.answer, afterPerson: personAt >= 0 && g >= personAt,
+          })
+          if (words && personAt >= 0) {
+            checked++
+            expect(quiet, `${seq.join(' ')} row ${g}`).toBe(false)
+          }
+        })
+      }
+    }
+    expect(checked).toBeGreaterThan(1000)
+  })
+
+  it('the timeline decides it in one place, from the person\'s row in the turn', () => {
+    const calls = [...HISTORY.matchAll(/joinsQuiet\(\{([\s\S]*?)\}\)/g)]
+    expect(calls).toHaveLength(1)
+    expect(calls[0][1]).toMatch(/afterPerson: !!t && personAt\.has\(t\) && g >= personAt\.get\(t\)!/)
+    expect(HISTORY).toMatch(/isHistoryUserTurn\(m\)[\s\S]{0,200}personAt\.set\(t, g\)/)
+  })
+
+  it('the phone folds before an answer only up to the person\'s message', () => {
+    const swift = read('ios-native/Walnut/Timeline/TimelineTurnFold.swift')
+    const bulk = [...swift.matchAll(/quiet \+= mine\[([^\]]+)\]/g)].map((m) => m[1])
+    expect(bulk).toEqual(['lead..<foldTo'])
+    expect(swift).toMatch(/let foldTo = max\(lead, min\(personAt \?\? ans, ans\)\)/)
+    expect(swift).toMatch(/mine\[foldTo\.\.<ans\]\.forEach \{ place\(\$0\.part\) \}/)
   })
 })

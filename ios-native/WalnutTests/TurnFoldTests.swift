@@ -143,6 +143,24 @@ final class TurnFoldTests: XCTestCase {
         ])
     }
 
+    func testTheWordsAnsweringThePersonNeverFoldBeforeALastShortLine() {
+        // 2026-11-09: the answer, its send, then one short line: the answer stayed folded
+        // under "Sent 1 · Ran 2 tools" as narration. Words after the person's message show.
+        let parts = plan([person(), tool("Bash", "grep"), tool("Bash", "read"), said("The whole answer, with its table."),
+                          tool("mcp__walnut__task_send"), said("Replied to the monitor task.")])
+        XCTAssertEqual(outline(parts), [
+            "bubble:Can you check the build?", "run:2", "text",
+            "fold:turn:Sent 1[\"tool:mcp__walnut__task_send\"]", "text",
+        ])
+        // A person's message mid-turn: what came before it folds, the words after it show.
+        let mid = plan([peer(), tool("Bash", "b"), person("And the tests?"), said("They pass."),
+                        tool("Read", "a.md"), said("Done.")])
+        XCTAssertEqual(outline(mid), [
+            "fold:turn:Received 1 message \u{00B7} Ran 1 tool[\"inbound\", \"run:1\"]",
+            "bubble:And the tests?", "text", "run:1", "text",
+        ])
+    }
+
     func testAPersonsMessageAlwaysShowsAndALoneRunIsLeftAsItIs() {
         XCTAssertEqual(outline(plan([person(), tool("Read", "a"), tool("Bash", "b"), said("Done.")])),
                        ["bubble:Can you check the build?", "run:2", "text"])
@@ -328,12 +346,13 @@ final class TurnFoldTests: XCTestCase {
     }
 
     func testFoldKeysNameTheRowsPlaceNotItsPayload() {
-        var rows = [person(), tool("Bash", "b"), said("Narration."), tool("Read", "a"), said("Answer.")]
-        guard case .fold(let before) = plan(rows)[1] else { return XCTFail("no fold") }
+        // A turn a peer started: its narration folds with its steps (one a person started shows its words).
+        var rows = [peer(), tool("Bash", "b"), said("Narration."), tool("Read", "a"), said("Answer.")]
+        guard case .fold(let before) = plan(rows)[0] else { return XCTFail("no fold") }
         // The rich read replaces the first call's payload (and so its store id): same key.
         rows[1] = ChatMessage(id: "other-id", role: "assistant", text: "Bash", createdAt: rows[1].createdAt,
                               kind: .tool, detail: "b", resultPreview: "longer output", inputPreview: "command: b")
-        guard case .fold(let after) = plan(rows)[1] else { return XCTFail("no fold") }
+        guard case .fold(let after) = plan(rows)[0] else { return XCTFail("no fold") }
         XCTAssertEqual(before.kind, .turn)
         XCTAssertEqual(before.key, after.key)
     }

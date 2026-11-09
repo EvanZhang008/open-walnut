@@ -4976,6 +4976,16 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     if (t.rows) for (const g of t.rows) turnOfIndex.set(g, t);
     else for (let g = Math.max(0, t.start); g < t.end; g++) turnOfIndex.set(g, t);
   }
+  // Where a person's own message first comes in each turn: the session's words from there on answer them.
+  const personAt = new Map<TurnShape, number>();
+  for (const part of visibleHistoryParts) {
+    for (const m of rowsOf(part)) {
+      if (m.role !== 'user' || !isHistoryUserTurn(m)) continue;
+      const g = headOf(part).globalIndex;
+      const t = turnOfIndex.get(g);
+      if (t && !personAt.has(t)) personAt.set(t, g);
+    }
+  }
   const askedTurns = new Set<TurnShape>();
   visibleHistoryParts.forEach((part, i) => {
     const t = turnOfIndex.get(headOf(part).globalIndex);
@@ -4993,6 +5003,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       personStart: !!t && t.byPerson && g === t.start,
       labelled: isLabelledRow(item.part),
       beforeAnswer: !!t && t.kind === 'answered' && g < t.answer,
+      afterPerson: !!t && personAt.has(t) && g >= personAt.get(t)!,
     });
     if (quietRow) pushQuiet(item);
     else pushVisible(item);

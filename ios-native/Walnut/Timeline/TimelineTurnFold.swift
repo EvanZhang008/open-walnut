@@ -312,7 +312,14 @@ private final class Planner {
             // after quiet steps it is their last one.
             if ans - 1 == lead, quiet.isEmpty, case .message(let prev) = mine[ans - 1].part, prev.kind == .thinking,
                prev.createdAt == messages[turn.answer].createdAt { ans -= 1 }
-            quiet += mine[lead..<ans].map(\.part)
+            // Before the person's own message (a turn something else started), everything
+            // folds; from it on, each row by the one rule, so the session's words answering
+            // the person show wherever the turn's last line is (the web's `afterPerson`,
+            // fold-rows.ts; 2026-11-09, a whole answer folded under "Sent 1 · Ran 2 tools").
+            let personAt = mine.firstIndex { if case .message(let m) = $0.part { return TimelineTurnShape.isPerson(m) }; return false }
+            let foldTo = max(lead, min(personAt ?? ans, ans))
+            quiet += mine[lead..<foldTo].map(\.part)
+            mine[foldTo..<ans].forEach { place($0.part) }
             flushQuiet()
             out += defaultParts(mine[ans...answerAt].map(\.part))
             // After the answer: each row by the one rule (a line the CLI put in, a

@@ -95,13 +95,21 @@ export interface PlaceRead {
   labelled: boolean;
   /** An answered turn's row before its answer. */
   beforeAnswer: boolean;
+  /** A person's own message is at or before this row in its turn: what the session wrote from
+   *  there on answers the person. */
+  afterPerson: boolean;
 }
 
 /** Does the row join the stretch of quiet steps? The same answer in every turn
  *  kind, plus what a turn's shape folds on top: a whole hidden turn, and
- *  everything before an answer (narration included). */
+ *  everything before an answer (narration included), except that a row the person
+ *  reads after the person's own message never folds: the session's words answering
+ *  them stay on screen wherever the turn's last line is (2026-11-09, the user, of a
+ *  whole answer with its table folded under "Sent 1 · Ran 2 tools" because one short
+ *  line came after it: "why this get auto collpes this si nto right"). */
 export function joinsQuiet(r: PlaceRead): boolean {
   if (r.personStart || r.labelled) return false;
+  if (r.afterPerson && r.role === 'reads') return false;
   if (r.turn === 'hidden' || (r.turn === 'answered' && r.beforeAnswer)) return true;
   return r.role === 'step';
 }
