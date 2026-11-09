@@ -458,13 +458,19 @@ struct MainTabView: View {
         // Closes the launch timeline on the tape: process start →
         // first frame (LaunchTrace) → stores ready. A field report of
         // "the app was stuck on open" is answerable from these three.
-        let elapsedMs: Int = Int(Date().timeIntervalSince(started) * 1000)
-        let sinceStartMs: Int = Int(Date().timeIntervalSince(LaunchTrace.processStart) * 1000)
+        let elapsedMs: Int = Self.millis(since: started)
+        let sinceStartMs: Int = Self.millis(since: LaunchTrace.processStart)
         let fields: [String: String] = [
             "elapsedMs": String(elapsedMs),
             "sinceProcessStartMs": String(sinceStartMs),
             "memoryMB": String(FreezeContext.residentMemoryMB()),
         ]
         AppLog.info("launch", "store hydration done", fields)
+    }
+
+    /// Whole milliseconds from `start` to now, typed in plain steps for CI's compiler.
+    private static func millis(since start: Date) -> Int {
+        let seconds: Double = Date().timeIntervalSince(start)
+        return Int(seconds * 1000.0)
     }
 }
