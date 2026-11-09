@@ -77,7 +77,7 @@ export async function checkNewHost(ctx: StepCtx): Promise<void> {
   await joinPress(page)
   await expect(page.getByTestId('host-network-command')).toHaveText(netCommand(n))
   await expect(draft).toHaveCount(1)
-  // Escape on the join card closes it, as it does every draft (Sol review), the focus on Add host.
+  // Escape on the join card closes it, as it does every draft (second-model review), the focus on Add host.
   await page.getByTestId('host-network-copy').press('Escape')
   await expect(page.getByTestId('host-network-invite')).toHaveCount(0)
   await expect(addButton(page)).toBeFocused()

@@ -4,7 +4,7 @@
  * when a mouse drives them (2026-11-05 review: every one grew to a 44 px box, and Refresh sat on
  * its own line), the pinned bar one row, the join card's system picker inset and its Copy as tall
  * as the command, More settings' groups inside the window, a host's own settings (This host, in
- * its Details) inside the window, and a secret's form, new or edited, in view at 700x800 (Sol
+ * its Details) inside the window, and a secret's form, new or edited, in view at 700x800 (second-model
  * review: only its Name showed, at the window's foot; 2026-11-05 review: Edit opened it at the
  * window's foot with the pinned Save across its first row). The same fixture fleet as
  * remote-hosts-every-button.spec.ts.

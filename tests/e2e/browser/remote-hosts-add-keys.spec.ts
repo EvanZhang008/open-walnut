@@ -111,7 +111,7 @@ test.describe('Settings > Remote Hosts: Add host from the mouse and the keyboard
       await expect(menu(page)).toHaveCount(0)
     }
 
-    // Sol review, three rounds: Escape, ArrowDown opens at the first item, ArrowDown to the second,
+    // second-model review, three rounds: Escape, ArrowDown opens at the first item, ArrowDown to the second,
     // Enter adds an SSH host (its Hostname focused), never the menu again at its first item.
     for (let round = 1; round <= 3; round++) {
       await addButton(page).click()

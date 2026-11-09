@@ -252,7 +252,7 @@ export async function checkJoinLink(ctx: StepCtx): Promise<void> {
   await page.keyboard.press('ArrowLeft')
   await expect(card).toHaveAttribute('data-os', 'mac')
   await expect(macSeg).toBeFocused()
-  // Escape there is Close (Sol review: it did nothing, the focus on a hidden radio): the card goes,
+  // Escape there is Close (second-model review: it did nothing, the focus on a hidden radio): the card goes,
   // the link still works and says so (nothing is called back), the focus is on Add host.
   const deletes = routes.calls.filter((c) => c.method === 'DELETE').length
   await page.keyboard.press('Escape')
@@ -282,7 +282,7 @@ export async function checkJoinLink(ctx: StepCtx): Promise<void> {
   ctx.ran('Hosts/button#host-network-new-link')
 
   // Close: the list says the link still works, in its place, and the focus goes back to Add host
-  // (Sol review: Close and Escape are one act); Join with a link shows the same link again,
+  // (second-model review: Close and Escape are one act); Join with a link shows the same link again,
   // never a second one.
   await page.getByTestId('host-network-done').click()
   await expect(card).toHaveCount(0)

@@ -245,7 +245,7 @@ test.describe('Settings > Remote Hosts: every button', () => {
       await expect(alpha).not.toContainText('needs a look')
       // It says it is off, and nothing older (its Set up note went with it).
       await expect(alpha.locator('.rh-row-line')).toHaveCount(0)
-      // Its name keeps its contrast (Sol review: the off row's name was drawn at 45%).
+      // Its name keeps its contrast (second-model review: the off row's name was drawn at 45%).
       expect(Number(await alpha.locator('.rh-host-name').evaluate((el) => getComputedStyle(el).opacity))).toBe(1)
       await shot(page, 'alpha-turned-off')
       await expect(page.locator('[data-testid="host-fleet-topo-node"][data-host="devbox"]')).toHaveAttribute('data-kind', 'off')
