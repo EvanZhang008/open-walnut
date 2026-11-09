@@ -53,6 +53,8 @@ export async function useSyntheticMic(page: Page): Promise<void> {
       const dst = ctx.createMediaStreamDestination()
       osc.connect(gain).connect(dst)
       osc.start()
+      // A test can fall silent (a pause before the stop) through this node.
+      Object.assign(window, { __syntheticMicGain: gain })
       console.log('[synthetic-mic] stream ready')
       return dst.stream
     }

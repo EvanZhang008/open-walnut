@@ -598,19 +598,16 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
         const lastVoiceAt = pcm ? pcm.lastVoiceSample(VOICE_RMS) : lastVoiceChunkRef.current;
         const draftCovered = pcm ? draftCoveredSampleRef.current : draftCoveredChunksRef.current;
         const draft = lastDraftRef.current;
-        const decided = decideStopAction({
+        // A draft built from the side capture, or one missing a span of speech
+        // the draft loop abandoned, is a preview: hand it over now (still usable)
+        // and let the whole-clip pass below replace it (stt-stop.ts says why).
+        const action = decideStopAction({
           hasDraft: !!draft,
           knowsWhenSpeechEnded: (pcm ? true : analyserAttachedRef.current) && lastVoiceAt > 0,
           draftCoveredChunks: draftCovered,
           lastVoiceChunk: lastVoiceAt,
+          draftIsPreview: !!pcm || skippedSegmentsRef.current > 0,
         });
-        // A span of speech the draft loop had to abandon is missing from the
-        // draft text, so the draft cannot BE the answer however cleanly the user
-        // stopped: hand it over now (still usable) and let the authoritative pass
-        // below replace it with the complete words.
-        const action = decided === 'draft-is-final' && skippedSegmentsRef.current > 0
-          ? 'draft-then-refine'
-          : decided;
         let provisional: string | null = null;
         if (draft && action !== 'wait-for-server') {
           lastDraftRef.current = null;
@@ -627,9 +624,9 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
         if (!isMountedRef.current) return;
         setIsTranscribing(true);
         setVoiceStatus({ transcribing: true });
-        // Set while the final pass rides the draft lane, which stores nothing
-        // server-side (unlike /transcribe): a failure there must store the clip
-        // itself, or dismissing the error, or the next recording, loses it.
+        // Set while the final pass runs: a failure stores the clip itself with
+        // the words the user has, or dismissing the error, or the next
+        // recording, loses it.
         let unstoredClip: string | null = null;
         try {
           // Empty is the honest default: every path below either produces text or
@@ -640,75 +637,45 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
           let via = '';
 
           if (pcm) {
-            // Keep the clip for Retry BEFORE the tail pass, so a failed pass
-            // still leaves the audio recoverable.
+            // The final text is always the whole clip through /transcribe: the
+            // recorder's file, heard in one pass. "Committed segments + open
+            // tail" was the fast path until 2026-11-08, but the segments come
+            // from the side capture, which in the Mac app dropped words the
+            // recorder kept, and a piece of 3 to 12 s mis-hears what the whole
+            // take gets right (stt-stop.ts). The draft is already in the box, so
+            // the user waits only to send, about 1 s per 30 s of speech.
             const retryBase64 = await keepForRetry().catch(() => null);
-            // The whole clip through the authoritative /transcribe lane. Slower,
-            // and only used when the fast assembly below cannot produce the
-            // user's actual words. Returns null when it is unavailable or fails,
-            // so the caller always has the segment assembly to fall back on.
-            const tryWholeClip = async (why: string): Promise<string | null> => {
-              if (!retryBase64) return null;
-              log.warn('stt', `stop → whole-clip pass: ${why}`);
+            if (retryBase64) {
+              // A failure below keeps this clip in history with the words the user has.
+              unstoredClip = retryBase64;
+              log.info('stt', `stop → whole-clip pass${skippedSegmentsRef.current > 0 ? ` (${skippedSegmentsRef.current} segment(s) never got drafted)` : ''}`);
               const t0 = Date.now();
-              return transcribeAudio(retryBase64, format, languageRef.current)
-                .then((r) => {
-                  tookMs = Date.now() - t0;
-                  if (isMountedRef.current && r.debugAudioPath) setLastDebugPath(r.debugAudioPath);
-                  return r.text;
-                })
-                .catch((e) => {
-                  log.warn('stt', `whole-clip pass failed (${e instanceof Error ? e.message : String(e)}) — falling back to committed segments`);
-                  return null;
-                });
-            };
-
-            // A span of SPEECH was abandoned by the draft loop (over the upload
-            // cap, a failed commit, or a clamped window), so "committed segments
-            // + open tail" would hand the user text with words missing in the
-            // middle. Pay for the whole clip once instead: a slower stop, but
-            // complete words. Only in this degraded case — the fast tail-only
-            // assembly stays the normal path.
-            let wholeClip: string | null = null;
-            if (skippedSegmentsRef.current > 0) {
-              wholeClip = await tryWholeClip(`${skippedSegmentsRef.current} segment(s) never got drafted, so committed text alone would be missing words`);
-            }
-
-            if (!wholeClip) {
-              // Segment-committed recording: everything before windowStart is
-              // already frozen text, so the final pass only transcribes the open
-              // tail — this is what makes stopping fast regardless of clip length.
-              const slice = pcm.sliceWavBase64(windowStartRef.current);
-              // The tail obeys the SAME cap as a draft, because it posts to the
-              // same route. An unbounded tail here would 413 exactly like the
-              // runaway drafts did, and then the user would get only the draft.
-              if (slice && slice.base64.length > DRAFT_MAX_BYTES) {
-                wholeClip = await tryWholeClip(`open tail is ${slice.base64.length}B, past the ${DRAFT_MAX_BYTES}B cap the draft lane accepts`);
-              }
-              if (!wholeClip) {
-                if (!slice) {
-                  finalText = confirmedRef.current;
-                } else {
-                  const t0 = Date.now();
-                  unstoredClip = retryBase64;
-                  // The user is waiting on THIS pass, so it gets the final-pass
-                  // budget, not a preview's 20s: a cold engine is still loading.
-                  const { text: tail } = await draftTranscribe(
-                    slice.base64, 'wav', languageRef.current, AbortSignal.timeout(FINAL_PASS_TIMEOUT_MS),
-                  );
-                  unstoredClip = null;
-                  tookMs = Date.now() - t0;
-                  finalText = joinSegments(confirmedRef.current, tail);
-                }
-                via = ', tail-only';
-                if (retryBase64) persistHistory(retryBase64, finalText || provisional || '');
-              }
-            }
-            if (wholeClip) {
+              const r = await transcribeAudio(retryBase64, format, languageRef.current);
+              unstoredClip = null;
+              tookMs = Date.now() - t0;
+              if (isMountedRef.current && r.debugAudioPath) setLastDebugPath(r.debugAudioPath);
               // /transcribe already stored this clip and its text server-side,
               // so writing history again here would duplicate the row.
-              finalText = wholeClip;
-              via = ', whole-clip repair';
+              finalText = r.text;
+              via = ', whole clip';
+            } else {
+              // The clip could not be read back: the committed segments and the
+              // open tail are all there is. The tail obeys the SAME cap as a
+              // draft, because it posts to the same route.
+              const slice = pcm.sliceWavBase64(windowStartRef.current);
+              if (!slice || slice.base64.length > DRAFT_MAX_BYTES) {
+                finalText = confirmedRef.current;
+              } else {
+                const t0 = Date.now();
+                // The user is waiting on THIS pass, so it gets the final-pass
+                // budget, not a preview's 20s: a cold engine is still loading.
+                const { text: tail } = await draftTranscribe(
+                  slice.base64, 'wav', languageRef.current, AbortSignal.timeout(FINAL_PASS_TIMEOUT_MS),
+                );
+                tookMs = Date.now() - t0;
+                finalText = joinSegments(confirmedRef.current, tail);
+              }
+              via = ', tail-only';
             }
           } else {
             const base64 = await readBlobBase64();

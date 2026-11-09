@@ -297,6 +297,24 @@ export function stripVocabEcho(text: string, vocabPrompt: string): string {
   return cleaned;
 }
 
+/**
+ * True when the answer holds a run of three or more context terms in a row, in
+ * the context's list form: the model read its context back instead of hearing
+ * the audio. Qwen3-ASR does it on a 30 s piece of a take (2026-11-08, the user's
+ * recordings: 17 of 542 whole takes, one 131 s take lost about 30 s of speech
+ * to the 313-character list; heard without the context, none of 53 did). Unlike
+ * a trailing echo, the speech it replaced is not in the answer at all, so it
+ * cannot be stripped.
+ */
+export function contextEchoed(text: string, prompt: string): boolean {
+  const terms = prompt.split(',').map((w) => w.trim()).filter(Boolean)
+    .sort((a, b) => b.length - a.length)
+    .map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  if (terms.length < 3) return false;
+  const term = `(?:${terms.join('|')})`;
+  return new RegExp(`(?<![\\p{L}\\p{N}])${term}(?:[,，、]\\s*${term}){2,}(?![\\p{L}\\p{N}])`, 'iu').test(text);
+}
+
 /** Engines that run Qwen3-ASR, whose context is the vocabulary prompt. */
 const QWEN_ENGINES = new Set(['qwen', 'mlx']);
 
@@ -323,9 +341,21 @@ export async function transcribeAudio(config: Config, req: SttRequest): Promise<
   }
 
   log.stt.info(`Transcribing with ${engine.name} (format=${req.format}, lang=${req.language ?? 'auto'}, prompt=${req.prompt ? req.prompt.length + ' chars' : 'none'})`);
-  const result = await engine.transcribe(req);
+  let result = await engine.transcribe(req);
   log.stt.info(`Transcription complete: ${result.text.length} chars in ${result.durationMs}ms`);
-  if (req.prompt) result.text = stripVocabEcho(result.text, req.prompt);
+  if (req.prompt) {
+    // A trailing echo over silence costs nothing to strip; only one left after
+    // that sits where speech was.
+    result.text = stripVocabEcho(result.text, req.prompt);
+    if (contextEchoed(result.text, req.prompt)) {
+      // The words in the audio there are gone from this answer, so hear it again
+      // without the context: its terms are worth less than the speech.
+      log.stt.warn(`Transcription read the context back in place of speech; transcribing again without it`);
+      req.signal?.throwIfAborted();
+      const plain = await engine.transcribe({ ...req, prompt: undefined });
+      result = { ...plain, durationMs: result.durationMs + plain.durationMs };
+    }
+  }
   result.text = correctTranscript(config, result.text);
   return { ...result, engine: engine.name, ...(engine.model ? { model: engine.model } : {}) };
 }
