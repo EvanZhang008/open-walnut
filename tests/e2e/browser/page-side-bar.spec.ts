@@ -329,6 +329,9 @@ test('the width is dragged on its edge and kept per page', async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 })
   await expect.poll(async () => (await edges(page)).barWidth).toBe(600)
   await page.setViewportSize({ width: 1440, height: 900 })
+  // The edge is grabbed where it is once the wide window let it out again (read at once, it was
+  // still at 600 and the drag missed the handle).
+  await expect.poll(async () => (await edges(page)).barWidth).toBe(720)
   // Back to 520 for the rest.
   const now = (await bar(page).boundingBox())!
   await page.mouse.move(now.x + now.width, y)
@@ -367,6 +370,20 @@ test('a full screen sheet lies beside the side bar, and a narrow window overlays
   })
   await expect.poll(gap).toBe(0)
 
+  // The node on screen may have no side bar of its own: pick one that has, while the window is
+  // wide (CI, 2026-11-09: in the narrow window the overlay lies over the channel list and took
+  // every click on it, until the test timed out).
+  const full = page.getByTestId('org-rail-fullscreen')
+  // No wait for the node to settle: the page picks its default node once the tasks are in and
+  // keeps it (settleDefaultNode), so the sheet opened here stays open (it once jumped from Main to
+  // the first VP a moment after load and the sheet went with it).
+  const channels = page.getByTestId('org-channel')
+  for (let i = 0; i < await channels.count() && !(await full.isVisible()); i++) {
+    await channels.nth(i).click()
+    await full.waitFor({ timeout: 3_000 }).catch(() => {})
+  }
+  await expect(full).toBeVisible()
+
   await page.setViewportSize({ width: 1000, height: 800 })
   await expect.poll(async () => page.evaluate(() => getComputedStyle(document.querySelector('[data-testid="page-side-bar"]')!).position)).toBe('absolute')
   const e = await edges(page)
@@ -376,16 +393,6 @@ test('a full screen sheet lies beside the side bar, and a narrow window overlays
   await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-org-narrow.png` })
 
   // A real full screen sheet (the Org node's side bar) leaves the side bar usable.
-  const full = page.getByTestId('org-rail-fullscreen')
-  // No wait for the node to settle: the page picks its default node once the tasks are in and
-  // keeps it (settleDefaultNode), so the sheet opened here stays open (it once jumped from Main to
-  // the first VP a moment after load and the sheet went with it).
-  // The node on screen may have no side bar of its own: pick one that has.
-  const channels = page.getByTestId('org-channel')
-  for (let i = 0; i < await channels.count() && !(await full.isVisible()); i++) {
-    await channels.nth(i).click()
-    await full.waitFor({ timeout: 3_000 }).catch(() => {})
-  }
   await expect(full).toBeVisible()
   await full.click()
   await expect(page.locator('.open-walnut-fullscreen')).toBeVisible()
