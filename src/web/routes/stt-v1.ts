@@ -261,9 +261,8 @@ export function sttEngines(config: Config, follower: boolean): Array<FeatureEngi
     id: 'openai',
     unavailable: () => (!key ? 'no-key' : !follower && stt?.engine === 'openai' ? 'already-tried' : null),
     async run(input) {
-      const [{ createOpenAiEngine }, { correctTranscript }] = await Promise.all([import('../../core/stt/engine-openai.js'), import('../../core/stt/corrections.js')])
-      const result = await createOpenAiEngine({ apiKey: key, baseUrl: stt?.openai_base_url, model: stt?.openai_model }).transcribe(input)
-      return { ...result, text: correctTranscript(config, result.text) }
+      const { createOpenAiEngine } = await import('../../core/stt/engine-openai.js')
+      return createOpenAiEngine({ apiKey: key, baseUrl: stt?.openai_base_url, model: stt?.openai_model }).transcribe(input)
     },
   })
   return engines

@@ -8,8 +8,9 @@
  *
  * The microphone plays an audio FILE (a WAV the test writes and serves), fed
  * into a MediaStream and never to the speakers. The engine is canned the way
- * stt-final-whole-clip-helpers.ts cans it: drafts answer PREVIEW, the stop's
- * tail pass TAIL, the whole clip WHOLE, a slice of silence nothing. The
+ * stt-final-whole-clip-helpers.ts cans it: drafts answer PREVIEW, any draft
+ * pass after the stop TAIL (none comes: the whole clip is the text), the whole
+ * clip WHOLE, a slice of silence nothing. The
  * clipboard is the page's own: its write is recorded with whether the click's
  * activation was still live (Safari and the Mac app refuse a write asked for
  * after it), and the Mac app's native bridge is stood in for where a scenario
@@ -22,7 +23,8 @@ import { clampColumn } from './composer-controls-overflow-helpers'
 
 const PREVIEW = 'copy this for the release notes'
 const TAIL = 'copy this for the release notes and send it later'
-const WHOLE = 'the whole clip heard once more'
+// The whole clip, as the engine gives it: copied byte for byte (\u2026 an ellipsis, a doubled space).
+const WHOLE = 'the whole clip\u2026  heard once, OK'
 const MIC_FILE = '/__voice-test/mic.wav'
 
 /** Ten seconds of a voiced 16 kHz tone (the file loops), loud enough to count as speech. */
@@ -125,7 +127,7 @@ interface Lanes {
   mute: boolean
   /** Every pass after the stop fails (the engine went away mid-dictation). */
   failAfterStop: boolean
-  /** The stop's tail pass answers this late (ms). */
+  /** The whole-clip pass answers this late (ms). */
   slowTailMs: number
 }
 
@@ -149,14 +151,18 @@ async function stubLanes(page: Page): Promise<Lanes> {
       await route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"test: the engine went away"}' })
       return
     }
-    if (seen.stopped && format === 'wav' && seen.slowTailMs) await new Promise((r) => setTimeout(r, seen.slowTailMs))
     const silent = seen.mute || (format === 'wav' && wavLevel(audio) < 0.01)
     const text = silent ? '' : !seen.stopped ? PREVIEW : format === 'wav' ? TAIL : WHOLE
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text, durationMs: 30 }) })
   })
-  await page.route('**/api/stt/transcribe', (route) => seen.failAfterStop
-    ? route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"test: the engine went away"}' })
-    : route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text: seen.mute ? '' : WHOLE, durationMs: 60 }) }))
+  await page.route('**/api/stt/transcribe', async (route) => {
+    if (seen.failAfterStop) {
+      await route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"test: the engine went away"}' })
+      return
+    }
+    if (seen.slowTailMs) await new Promise((r) => setTimeout(r, seen.slowTailMs))
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text: seen.mute ? '' : WHOLE, durationMs: 60 }) })
+  })
   await page.route('**/api/stt/save', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{"recordingId":"rec-clip-1"}' }))
   return seen
 }
@@ -177,7 +183,7 @@ async function open(page: Page, bridge = false) {
 }
 
 export function registerClipboardDictationScenarios(): void {
-  test('stopping mid-sentence copies the final words, shows Copied, and puts nothing in the box', async ({ page }) => {
+  test('stopping mid-sentence copies the whole clip, shows Copied, and puts nothing in the box', async ({ page }) => {
     test.setTimeout(150_000)
     const { seen, d, clip, note, live } = await open(page)
     for (let round = 1; round <= 2; round++) {
@@ -196,7 +202,7 @@ export function registerClipboardDictationScenarios(): void {
       await expect(note).toHaveText('Copied', { timeout: 20_000 })
       const writes = (await clipWrites(page)).slice(before)
       expect(writes.length, JSON.stringify(writes)).toBe(1)
-      expect(writes[0].text).toBe(TAIL)
+      expect(writes[0].text, 'the whole clip, byte for byte').toBe(WHOLE)
       // Asked for inside the stop click, where Safari and the Mac app allow it.
       expect(writes[0].active).not.toBe(false)
       await expect(d.textarea).toHaveValue('')
@@ -207,7 +213,7 @@ export function registerClipboardDictationScenarios(): void {
     }
   })
 
-  test('stopping after a pause copies the words the drafts heard', async ({ page }) => {
+  test('stopping after a pause still copies the whole clip, not the drafts', async ({ page }) => {
     test.setTimeout(120_000)
     const { seen, d, clip, note, live } = await open(page)
     await clip.click()
@@ -219,7 +225,7 @@ export function registerClipboardDictationScenarios(): void {
     seen.stopped = true
     await clip.click()
     await expect(note).toHaveText('Copied', { timeout: 20_000 })
-    expect((await clipWrites(page)).map((w) => w.text)).toEqual([PREVIEW])
+    expect((await clipWrites(page)).map((w) => w.text)).toEqual([WHOLE])
     await expect(d.textarea).toHaveValue('')
   })
 
@@ -231,7 +237,7 @@ export function registerClipboardDictationScenarios(): void {
     seen.stopped = true
     await clip.click()
     await expect(note).toHaveText('Copied', { timeout: 20_000 })
-    expect(await bridgeWrites(page)).toEqual([TAIL])
+    expect(await bridgeWrites(page)).toEqual([WHOLE])
     expect(await clipWrites(page)).toEqual([])
     await expect(d.textarea).toHaveValue('')
   })
@@ -282,7 +288,7 @@ export function registerClipboardDictationScenarios(): void {
     await clip.click()
     await expect(note).toHaveText('Copied', { timeout: 30_000 })
     const writes = await clipWrites(page)
-    expect(writes.map((w) => w.text)).toEqual([TAIL])
+    expect(writes.map((w) => w.text)).toEqual([WHOLE])
     expect(writes[0].active, 'the write was asked while the click was live').toBe(true)
   })
 
@@ -317,7 +323,7 @@ export function registerClipboardDictationScenarios(): void {
     seen.stopped = true
     await clip.click()
     await expect(note).toHaveText('Copied', { timeout: 20_000 })
-    expect((await clipWrites(page)).map((w) => w.text)).toEqual([TAIL])
+    expect((await clipWrites(page)).map((w) => w.text)).toEqual([WHOLE])
     await expect(d.textarea).toHaveValue('')
     // The note gone, the row is the mic's again.
     await expect(note).toBeHidden({ timeout: 5_000 })

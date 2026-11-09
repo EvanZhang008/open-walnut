@@ -59,7 +59,11 @@ export function registerLiveDraftRecorderScenarios(): void {
       drafts.push({ format: body.format, rms: body.format === 'wav' ? wavRms(body.audio) : -1 })
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text: DRAFT_TEXT, durationMs: 30 }) })
     })
-    await page.route('**/api/stt/transcribe', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text: DRAFT_TEXT, durationMs: 60 }) }))
+    let transcribes = 0
+    await page.route('**/api/stt/transcribe', (route) => {
+      transcribes++
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text: DRAFT_TEXT, durationMs: 60 }) })
+    })
     await page.route('**/api/stt/save', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{"recordingId":"rec-live-1"}' }))
     const d = await openComposer(page)
 
@@ -71,13 +75,13 @@ export function registerLiveDraftRecorderScenarios(): void {
     await expect(d.mic).not.toHaveClass(/mic-recording/, { timeout: 15_000 })
 
     // The synthetic mic plays a 220 Hz tone at 0.3: its level is about 0.2.
-    // Every slice (the drafts and the stop's tail) carries the sound the side
-    // capture never saw; the one webm is the whole recording, heard as a check.
-    await expect.poll(() => logs.some((l) => l.includes('live text vs whole recording')), { timeout: 10_000 }).toBe(true)
+    // Every draft slice carries the sound the side capture never saw; the stop
+    // sends the whole recording to /transcribe once, never through the drafts.
+    await expect.poll(() => transcribes, { timeout: 10_000 }).toBe(1)
     const slices = drafts.filter((x) => x.format === 'wav')
     expect(slices.length).toBeGreaterThanOrEqual(2)
     for (const slice of slices) expect(slice.rms, 'the slice carries the recording\'s sound').toBeGreaterThan(0.1)
-    expect(drafts.filter((x) => x.format !== 'wav').map((x) => x.format)).toEqual(['webm'])
+    expect(drafts.filter((x) => x.format !== 'wav').map((x) => x.format)).toEqual([])
     expect(logs.some((l) => l.includes("live draft reads the recorder's own audio")), logs.join('\n')).toBe(true)
   })
 }

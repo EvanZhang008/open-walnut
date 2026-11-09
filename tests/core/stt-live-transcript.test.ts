@@ -379,7 +379,7 @@ describe('POST /api/v1/stt/recordings/:id/live, then the archive', () => {
     await expect(voiceArchive.get(id)).rejects.toMatchObject({ status: 404 })
   })
 
-  it('corrects a heard form a quiet cut split across two pieces', async () => {
+  it('hands the joined pieces back as heard: no correction list rewrites them (2026-11-09)', async () => {
     await updateConfig({ stt_corrections: { clouddev: ['Cloud Deep'] } })
     try {
       let n = 0
@@ -393,7 +393,7 @@ describe('POST /api/v1/stt/recordings/:id/live, then the archive', () => {
       await vi.waitFor(() => expect(n).toBeGreaterThanOrEqual(2))
       const final = wavPcm(cafToWav(caf(pcm, true))!)
       const done = await runVoiceArchiveAction({ operation: 'live-finish', id, body: { pcmBytes: final.byteLength, pcmSha256: pcmSha(final) } })
-      expect((done.body as { text: string }).text).toMatch(/^在 clouddev 上面( x)*$/)
+      expect((done.body as { text: string }).text).toMatch(/^在 Cloud Deep 上面( x)*$/)
     } finally {
       await updateConfig({ stt_corrections: {} })
     }

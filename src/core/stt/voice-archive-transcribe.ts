@@ -205,15 +205,6 @@ export async function localAsr(id: string, language: string | undefined, since: 
   }
 }
 
-/** Joined live pieces through the correction list again: a quiet cut may split a heard form in two. */
-export async function correctedTake(text: string): Promise<string> {
-  try {
-    const [{ getConfig }, { correctTranscript }] = await Promise.all([import('../config-manager.js'), import('./corrections.js')])
-    return correctTranscript(await getConfig(), text)
-  } catch {
-    return text
-  }
-}
 
 async function finishLiveTake(id: string, language?: string): Promise<string | null> {
   if (!hasLiveTake(id)) return null
@@ -222,7 +213,7 @@ async function finishLiveTake(id: string, language?: string): Promise<string | n
     const wav = record.format === 'caf' ? cafToWav(audio) : record.format === 'wav' && isConformingWav(audio) ? audio : null
     if (!wav) return null
     const text = await finishLive(id, wavPcm(wav), localTranscribe, language)
-    return text === null ? null : await correctedTake(text)
+    return text
   } catch {
     // The whole file still goes through the ordinary path.
     return null

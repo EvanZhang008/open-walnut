@@ -2007,8 +2007,9 @@ export interface Config {
   };
   /**
    * Known speech mishearings, by the term the user said: `{ clouddev: ['Cloud Deep'] }`.
-   * Applied to every transcription after the engine (src/core/stt/corrections.ts). Its
-   * own key, not under `stt`, so a replica older than it still takes the `stt` row.
+   * Its terms join the speech engine's context (user-terms.ts); the text is never
+   * rewritten with it (2026-11-09: the engine's words are the text). Its own key, not
+   * under `stt`, so a replica older than it still takes the `stt` row.
    */
   stt_corrections?: Record<string, string[]>;
   /** Speech-to-text configuration for voice input */

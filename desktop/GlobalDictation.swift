@@ -79,11 +79,12 @@ final class GlobalDictation: NSObject {
         get { UserDefaults.standard.object(forKey: "dictationCopyClipboard") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "dictationCopyClipboard") }
     }
-    /// Local polish pass (strip 呃/嗯, stutters, false starts). ON by default:
-    /// the server falls back to the raw transcript instantly when the local
-    /// model is not installed, so enabling it costs nothing where it can't run.
+    /// Local polish pass (strip 呃/嗯, stutters, false starts). OFF by default
+    /// since 2026-11-09: the words the engine heard are what goes out, unedited
+    /// (the user: "just what ever we said it should send it, without modify").
+    /// A user who turned it on keeps it on.
     static var polishEnabled: Bool {
-        get { UserDefaults.standard.object(forKey: "dictationPolish") as? Bool ?? true }
+        get { UserDefaults.standard.object(forKey: "dictationPolish") as? Bool ?? false }
         set { UserDefaults.standard.set(newValue, forKey: "dictationPolish") }
     }
 

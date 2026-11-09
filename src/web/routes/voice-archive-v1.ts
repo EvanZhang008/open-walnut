@@ -92,15 +92,14 @@ async function finishLiveHere(raw: string, body: Record<string, unknown> | undef
     throw new VoiceArchiveError(400, 'bad_request', 'pcmBytes and a hex pcmSha256 are required')
   }
   if (language !== undefined && (typeof language !== 'string' || language.length > 100)) throw new VoiceArchiveError(400, 'bad_request', 'language must be a short string')
-  const [{ finishLiveFromSamples }, { localTranscribe, localAsr, correctedTake }] = await Promise.all([
+  const [{ finishLiveFromSamples }, { localTranscribe, localAsr }] = await Promise.all([
     import('../../core/stt/live-transcript.js'), import('../../core/stt/voice-archive-transcribe.js'),
   ])
   const text = await finishLiveFromSamples(id, pcmBytes as number, pcmSha256, localTranscribe, language as string | undefined)
   if (text === null) throw new VoiceArchiveError(409, 'live_unusable', 'The live pieces do not match the finished recording')
-  const fixed = await correctedTake(text)
   // The Mac answers the take before the companion's copy of it arrives: the user may send it on now.
-  void import('../../core/stt/learn-from-sends.js').then((m) => m.noteDictation(fixed), () => {})
-  return { text: fixed, asr: await localAsr(id, language as string | undefined, since) }
+  void import('../../core/stt/learn-from-sends.js').then((m) => m.noteDictation(text), () => {})
+  return { text, asr: await localAsr(id, language as string | undefined, since) }
 }
 
 function archiveError(err: unknown, res: Response, next: NextFunction): void {

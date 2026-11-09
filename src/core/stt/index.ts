@@ -20,7 +20,6 @@ import { createMlxEngine } from './engine-mlx.js';
 import { createQwenEngine } from './engine-qwen.js';
 import { writeRecordingSecondary } from './recordings.js';
 import { vocabWords } from './vocab.js';
-import { correctTranscript } from './corrections.js';
 import { voiceOffHere } from './voice-here.js';
 
 export type { SttEngine, SttRequest, SttResult } from './types.js';
@@ -356,7 +355,9 @@ export async function transcribeAudio(config: Config, req: SttRequest): Promise<
       result = { ...plain, durationMs: result.durationMs + plain.durationMs };
     }
   }
-  result.text = correctTranscript(config, result.text);
+  // The engine's words are the text: no list rewrites them afterwards
+  // (2026-11-09, the user: "just what ever we said it should send it, without
+  // modify"). Only its read-back of its own context, words never said, goes.
   return { ...result, engine: engine.name, ...(engine.model ? { model: engine.model } : {}) };
 }
 
@@ -392,7 +393,6 @@ export async function runShadowTranscription(
     log.stt.info(`Shadow transcription with ${engine.name} (recording=${recordingId})`);
     const result = await engine.transcribe(req);
     if (req.prompt) result.text = stripVocabEcho(result.text, req.prompt);
-    result.text = correctTranscript(config, result.text);
     await writeRecordingSecondary(recordingId, {
       engine: engine.name,
       text: result.text,

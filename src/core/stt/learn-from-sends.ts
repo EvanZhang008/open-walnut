@@ -10,8 +10,9 @@
  * is then used up. A grammar edit ("is" to "was", "PR" to "PRs") is not a
  * mishearing and is skipped. The term joins the speech context at once
  * (user-terms.ts, a soft bias); the pair is written into config stt_corrections,
- * a hard replacement, only once it was seen on SIGHTING_DAYS different days, and
- * only on the leader, whose config the followers copy.
+ * whose terms the context also carries (the text itself is never rewritten), only
+ * once it was seen on SIGHTING_DAYS different days, and only on the leader, whose
+ * config the followers copy.
  * 2026-10-28: of 35 phone takes the user sent on in a month, 2 were fixed by hand,
  * one of them exactly 泰普 -> typo; a spoken correction is not learned.
  */

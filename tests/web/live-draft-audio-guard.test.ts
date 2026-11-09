@@ -57,19 +57,19 @@ describe('ratchet: Web Audio taps of the mic', () => {
     const timer = hook.slice(hook.indexOf('draftTimerRef.current = setInterval'));
     expect(timer).toMatch(/await liveDraftSource\(\)/);
     expect(timer.slice(0, 600)).not.toMatch(/pcmRef\.current/);
-    // And every finished dictation is checked against its whole recording.
-    expect(hook).toMatch(/draftMismatch\(liveText, text\)/);
-    expect((hook.match(/checkAgainstWholeClip\(clip, /g) ?? []).length).toBe(2);
   });
 
-  it('the stop decodes the recorder\'s audio to its end before it trusts the pieces', () => {
+  it('the stop sends the whole recording once and hands its text over untouched', () => {
+    // 2026-11-09, the user: "just send full ... just what ever we said it should
+    // send it, without modify". The drafts are a preview; the text the stop
+    // delivers is /transcribe's answer for the whole clip, as it came.
     const hook = readFileSync(join(ROOT, 'web/src/hooks/useSpeechToText.ts'), 'utf8');
-    const stop = hook.slice(hook.indexOf('recorder.onstop = async'));
-    const refresh = stop.indexOf('await pcm.refresh(blob)');
-    expect(refresh).toBeGreaterThan(0);
-    expect(refresh).toBeLessThan(stop.indexOf('decideStopAction('));
-    // The pieces stand only on that fresh decode; anything else hears the whole clip.
-    expect(stop).toMatch(/const segmentsHold = recFresh && live\.skipped === 0/);
-    expect(stop).toMatch(/if \(segmentsHold\) \{/);
+    const stop = hook.slice(hook.indexOf('recorder.onstop = async'), hook.indexOf('recorder.onerror ='));
+    expect((stop.match(/await transcribeAudio\(/g) ?? []).length).toBe(1);
+    expect(stop).toMatch(/const finalText = result\.text;/);
+    // No other pass or join makes the final text.
+    expect(stop).not.toMatch(/draftTranscribe\(|joinSegments\(|decideStopAction|segmentsHold/);
+    // The one assignment of the final text is that answer.
+    expect(stop.match(/\bfinalText\s*=(?!=)\s*\S+/g)).toEqual(['finalText = result.text;']);
   });
 });
