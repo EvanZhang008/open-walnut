@@ -392,10 +392,15 @@ async function startSessionForTaskNow(params: SessionStartParams, picked: { spli
   // The engine split (engine-split.ts) speaks before the default engine; a named engine is the override.
   const split = !area && params.engine === undefined ? await splitPick(task, params) : null;
   if (split?.model) params = { ...params, model: split.model };
-  const inherited = area || split ? undefined
+  // A pick that is the default engine itself (no model of its own) still falls back while that
+  // engine is out of usage, as every other new task does (fallback-engine.ts).
+  const splitFallback = split && !split.model
+    ? await inheritedEngine(task, params).then((i) => i.fallback && normalizeEngine(i.fallback.note.from) === normalizeEngine(split.engine) ? i : undefined)
+    : undefined;
+  const inherited = area ? undefined : split ? splitFallback
     : params.engine !== undefined ? undefined : await inheritedEngine(task, params);
   const engine = params.engine !== undefined ? normalizeEngine(params.engine)
-  : split ? normalizeEngine(split.engine) : inherited?.engine;
+  : inherited?.fallback ? inherited.engine : split ? normalizeEngine(split.engine) : inherited?.engine;
   // The fallback's model rides only this launch (prepareLaunch below): a start that waits for its
   // workspace or a slot replays the start as asked, and decides again then.
   const fallback = inherited?.fallback;

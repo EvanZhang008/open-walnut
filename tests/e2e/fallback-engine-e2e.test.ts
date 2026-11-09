@@ -135,7 +135,7 @@ beforeAll(async () => {
   await fs.mkdir(tasksDir, { recursive: true })
   await fs.writeFile(path.join(tasksDir, 'tasks.json'), JSON.stringify({
     version: 1,
-    tasks: [seedTask('fb-session', 'Stopped by the limit'), seedTask('fb-allowed', 'Reads allowed'), seedTask('fb-limited', 'Hits the limit'), seedTask('fb-start', 'Started by an agent'), seedTask('fb-named', 'Names its model')],
+    tasks: [seedTask('fb-session', 'Stopped by the limit'), seedTask('fb-allowed', 'Reads allowed'), seedTask('fb-limited', 'Hits the limit'), seedTask('fb-start', 'Started by an agent'), seedTask('fb-named', 'Names its model'), seedTask('fb-split', 'Picked by the split')],
   }))
   server = await startServer({ port: 0, dev: true })
   port = (server.address() as { port: number }).port
@@ -250,6 +250,24 @@ describe('fallback engine E2E', () => {
       expect((await getTask('fb-start')).engine_fallback).toMatchObject({ model: OTHER })
       const startSid = await until(async () => (await getSessionsForTask('fb-start'))[0]?.claudeSessionId, (v) => !!v)
       expect(await cliModelOf(startSid!)).toBe(OTHER)
+
+      // The engine split picks the default engine itself (no model of its own): while the default is
+      // out of usage that pick falls back too, as any other new task does (task-start.ts).
+      const cfg = await getConfig()
+      await updateConfig({ defaults: { ...cfg.defaults, engine_split: [{ engine: 'claude' }, { engine: 'claude', model: 'sonnet' }] } as never })
+      try {
+        const split = await req('POST', '/api/v1/tasks/fb-split/start', { message: 'go', cwd: '/tmp' })
+        expect([200, 202], JSON.stringify(split.json)).toContain(split.status)
+        expect(split.json.fallback).toMatchObject({ from: 'claude', model: OTHER })
+        expect((await getTask('fb-split')).engine_fallback).toMatchObject({ model: OTHER })
+        const splitSid = await until(async () => (await getSessionsForTask('fb-split'))[0]?.claudeSessionId, (v) => !!v)
+        expect(await cliModelOf(splitSid!)).toBe(OTHER)
+      } finally {
+        const after = await getConfig()
+        const rest = { ...after.defaults } as Record<string, unknown>
+        delete rest.engine_split
+        await updateConfig({ defaults: rest as never })
+      }
 
       // A start that names its model chose for itself.
       const named = await req('POST', '/api/v1/tasks/fb-named/start', { message: 'go', cwd: '/tmp', model: 'opus' })
