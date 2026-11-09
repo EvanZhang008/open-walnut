@@ -11,11 +11,14 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
+import { useNavigate } from 'react-router-dom';
+import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { GlobalNotesSection } from '@/components/notes/GlobalNotesSection';
 import { useGlobalNotes } from '@/hooks/useGlobalNotes';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { isPhoneLayout, usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { homePanelOpen } from '@/pages/home-panel-live';
+import { openTaskOnHome } from '@/utils/open-session';
 import { setUnsavedWorkScratchpadOpener } from '@/utils/unsaved-work';
 import { setSideBarPane, sideBarPageOf } from './page-side-bar';
 import type { Task } from '@open-walnut/core';
@@ -120,13 +123,16 @@ export function ScratchpadHost() {
 }
 
 const NO_TASKS: Task[] = [];
-const noTaskClick = () => {};
 
 /** The phone's place for the one editor: a sheet over the page, holding the moved box. */
 function ScratchpadSheet({ onClose }: { onClose: () => void }) {
   useModalOverlay(onClose);
   const slot = useRef<HTMLDivElement>(null);
-  useScratchpadSlot(slot, true, { onClose, tasks: NO_TASKS, onTaskClick: noTaskClick });
+  const tasks = useTasksContextSafe()?.tasks ?? NO_TASKS;
+  const navigate = useNavigate();
+  // A task link in the note opens that task (on Home, as the side bar's do) and the sheet gives way.
+  const onTaskClick = useCallback((taskId: string) => { onClose(); openTaskOnHome(taskId, navigate); }, [onClose, navigate]);
+  useScratchpadSlot(slot, true, { onClose, tasks, onTaskClick });
   return createPortal(
     <div className="app-modal-overlay scratchpad-sheet-overlay" onPointerDown={(e) => { e.stopPropagation(); if (e.target === e.currentTarget) onClose(); }}>
       <div ref={slot} className="scratchpad-sheet" role="dialog" aria-modal="true" aria-label="Scratchpad" data-testid="scratchpad-sheet" onPointerDown={(e) => e.stopPropagation()} />

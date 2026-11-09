@@ -154,6 +154,39 @@ test('at phone width, Go there on a Scratchpad still saving opens it in a sheet 
   } finally { release?.() }
 })
 
+test('at phone width, a task link in the Scratchpad sheet opens the task and closes the sheet', async ({ page }) => {
+  const { tasks } = await (await page.request.get('/api/tasks')).json() as { tasks: Array<{ id: string }> }
+  const taskId = tasks[0]!.id
+  let release: (() => void) | undefined
+  await page.route(STATUS, r => r.fulfill({ json: { available: true, token: '12:old:new', version: '1.0' } }))
+  await restartRoute(page)
+  await page.route('**/api/notes/global', async r => {
+    if (r.request().method() === 'GET') return r.fulfill({ json: { content: `Linked: [Open the task](/tasks/${taskId})`, contentHash: 'initial' } })
+    await new Promise<void>(resolve => { release = resolve })
+    await r.fulfill({ json: { ok: true, contentHash: 'saved' } })
+  })
+  try {
+    await loadApp(page)
+    await page.getByRole('button', { name: 'Scratchpad', exact: true }).click()
+    const editor = page.locator('.global-notes-section .tiptap')
+    await expect(editor.locator('.task-link')).toBeVisible()
+    await editor.locator('p').last().click()
+    await page.keyboard.press('End')
+    await page.keyboard.type(' pending')
+    await expect(page.locator('.global-notes-saving')).toBeVisible()
+    await page.setViewportSize({ width: 700, height: 900 })
+    await button(page).click()
+    await unsaved(page).getByRole('button', { name: 'Go there' }).click()
+    const sheet = page.getByTestId('scratchpad-sheet')
+    await expect(sheet.locator('.task-link')).toBeVisible()
+    await sheet.locator('.task-link').click()
+    await expect(sheet).toHaveCount(0)
+    // Home, where the task opens (a phone adds the opened task to the URL).
+    await expect.poll(() => new URL(page.url()).pathname).toBe('/')
+    await expect(page.locator('.scratchpad-parking .global-notes-section')).toHaveCount(1)
+  } finally { release?.() }
+})
+
 test('another app window that this app cannot check is named, and Restart Anyway closes it', async ({ page }) => {
   await page.route(STATUS, r => r.fulfill({ json: { available: true, token: '12:old:new', windows: 2 } }))
   const bodies = await restartRoute(page)
