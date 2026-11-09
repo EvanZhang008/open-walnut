@@ -294,7 +294,9 @@ when it is removed is not told, but it can no longer reach anything.
 ## Releases
 
 walnut-net is published as the prerelease `walnut-net-v<version>` by
-`.github/workflows/walnut-net.yml` (run by hand; a published version is never changed).
+`.github/workflows/walnut-net.yml`, which builds a new version as soon as a push to main
+moves it (or by hand; a published version is never changed). The join workflows wait for it
+and a Walnut release holds until it is out (`scripts/net-release-ready.sh`).
 A daemon whose install has no walnut-net downloads its platform's file from there and
 checks it against `NET_BIN_SHA256` in `src/providers/net-binary.ts`, else that release's
 `SHA256SUMS`. `WALNUT_BUILD_NET=1 bash scripts/build-daemon.sh` builds it locally with cargo.

@@ -8,8 +8,20 @@ name: Host network connector
 #
 # A version is published once: a release that already has its files is never changed
 # (a daemon may have pinned them). A new connector is a new version in Cargo.toml.
+#
+# A push to main that moves the version builds it here on its own (2026-11-09: 0.2.1 reached
+# main before anyone ran this by hand, and both join workflows failed on its 404), so the
+# version moves in the commit that brings the connector code it names, never before it. A
+# push whose version is out already builds nothing. What needs the release first waits or
+# holds for it with scripts/net-release-ready.sh: the join workflows, and every Walnut
+# release (release.yml), whose daemons download it on first use.
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'native/walnut-net/Cargo.toml'
+      - 'src/providers/net-binary.ts'
   workflow_dispatch:
 
 permissions:
@@ -24,6 +36,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.v.outputs.version }}
+      publish: ${{ steps.v.outputs.publish }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -37,10 +50,19 @@ jobs:
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          # A push that changed these files without a new version: nothing to build. By hand,
+          # the publish below says the version is out already.
+          if [ "$GITHUB_EVENT_NAME" = push ] && sh scripts/net-release-ready.sh; then
+            echo "::warning::walnut-net-v$version is out already, so this push builds nothing. If it changed the connector, that needs a new version in native/walnut-net/Cargo.toml."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
 
   build:
     name: walnut-net ${{ needs.version.outputs.version }} (${{ matrix.target }})
     needs: version
+    if: needs.version.outputs.publish == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
@@ -101,6 +123,7 @@ jobs:
   release:
     name: Publish walnut-net-v${{ needs.version.outputs.version }}
     needs: [version, build]
+    if: needs.version.outputs.publish == 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: write

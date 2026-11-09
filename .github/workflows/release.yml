@@ -158,6 +158,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: bun scripts/ci-gate.mjs release HEAD
+      # Its daemons download the host network connector it pins on first use.
+      - name: The host network connector it pins is out
+        run: sh scripts/net-release-ready.sh
       # bun's package store, shared by every job's install (tests/scripts/ci-bun-store.test.ts).
       - uses: actions/cache@v4
         with:
@@ -340,6 +343,11 @@ jobs:
             # (`force` overrides, for a last nightly built on a rewritten history).
             echo "publish=false" >> "$GITHUB_OUTPUT"
             echo "::warning::$green is not newer than the last nightly ($last); nothing published"
+          elif ! sh scripts/net-release-ready.sh --at "$green"; then
+            # Its daemons download the host network connector it pins on first use; until
+            # walnut-net.yml has published it, a fresh install could not join (2026-11-09).
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::$green pins a host network connector that is not out yet; the nightly waits for it (last nightly $last)"
           else
             git checkout --quiet "$green"
             echo "publish=true" >> "$GITHUB_OUTPUT"
@@ -521,11 +529,14 @@ jobs:
         env:
           SHA: ${{ steps.plan.outputs.sha }}
         run: |
-          if git cat-file -e "$SHA:scripts/release-build.mjs" 2>/dev/null && git cat-file -e "$SHA:scripts/release-unpack.sh" 2>/dev/null; then
-            echo "publish=true" >> "$GITHUB_OUTPUT"
-          else
+          if ! git cat-file -e "$SHA:scripts/release-build.mjs" 2>/dev/null || ! git cat-file -e "$SHA:scripts/release-unpack.sh" 2>/dev/null; then
             echo "publish=false" >> "$GITHUB_OUTPUT"
             echo "::notice::the soaked nightly ($SHA) predates the compiled file's release build; the stable waits for a nightly that has it"
+          elif ! sh scripts/net-release-ready.sh --at "$SHA"; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::the soaked nightly ($SHA) pins a host network connector that is not out; the stable waits for it"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
           fi
       - if: steps.files.outputs.publish == 'true'
         uses: actions/upload-artifact@v4

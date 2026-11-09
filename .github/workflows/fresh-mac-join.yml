@@ -65,8 +65,23 @@ env:
   ONNXRUNTIME_NODE_INSTALL: skip
 
 jobs:
+  # The connector this commit pins, which the throwaway Walnut's daemon downloads
+  # (src/providers/net-binary.ts). A push that moves its version also starts walnut-net.yml,
+  # which takes a while to build it, so the join waits here for the release first (2026-11-09:
+  # a join started two minutes before walnut-net-v0.2.1 was out and failed on its 404).
+  connector:
+    name: The host network connector this commit pins is out
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - run: sh scripts/net-release-ready.sh --wait 3300
+
   join:
     name: ${{ matrix.mac }} Mac${{ matrix.copy > 1 && format(' {0}', matrix.copy) || '' }}
+    needs: connector
     runs-on: macos-26
     timeout-minutes: 50
     strategy:
