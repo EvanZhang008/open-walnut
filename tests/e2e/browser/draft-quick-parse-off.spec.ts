@@ -418,8 +418,9 @@ test('the "+" menu carries an OFF switch for the parse, one line tall, and toggl
   expect(lines.h, `label ${lines.h}px vs line-height ${lines.lh}px — wrapped to 2 lines`)
     .toBeLessThan(lines.lh * 1.6)
 
-  // Same height as an ordinary row, so the switch reads as part of the same menu.
-  const plainRow = menu.locator('.chat-plus-menu-item:not(.chat-plus-menu-toggle)').first()
+  // Same height as an ordinary one-line row, so the switch reads as part of the same menu
+  // (Attach files or images carries a second line with its limits: not a one-line row).
+  const plainRow = menu.locator('.chat-plus-menu-item:not(.chat-plus-menu-toggle):not(:has(.chat-plus-menu-item-hint))').first()
   const [rowBox, plainBox, before] = await Promise.all([
     row.boundingBox(), plainRow.boundingBox(), menu.boundingBox(),
   ])

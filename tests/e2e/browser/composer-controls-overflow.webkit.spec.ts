@@ -100,7 +100,7 @@ test('WebKit draft add menu remains aligned, scrollable and dismissible', async 
   const add = draft.locator('.chat-plus-btn');
   await add.click();
   const menu = draft.locator('.chat-plus-menu');
-  await expect(menu.getByRole('menuitem', { name: 'Attach image' })).toBeVisible();
+  await expect(menu.getByRole('menuitem', { name: /^Attach files or images/ })).toBeVisible();
   const box = await menu.boundingBox();
   const addBox = await add.boundingBox();
   expect(box).toBeTruthy();
