@@ -191,20 +191,54 @@ export function createGitDiffCore(exec: ExecFn, readText: ReadTextFn) {
     return url.charAt(0) === '/' || url.charAt(0) === '.' || url.charAt(0) === '~' || url.indexOf('file:') === 0 || /^[A-Za-z]:[\\/]/.test(url);
   }
 
-  /** The default branch: origin/HEAD, else the usual names, remote first. A local origin's
-   *  HEAD comes after the usual names (it named a task's work branch as the default). */
+  /** The default branch. Candidates: origin/HEAD (not a local origin's: that is whatever
+   *  branch the other checkout had out), then main and master on each remote, origin first,
+   *  then the local ones. The one HEAD left most recently wins (fewest commits since the
+   *  merge-base), earlier candidates on a tie: a remote's HEAD can name an old work branch,
+   *  and a remote the clone no longer fetches keeps a main days behind (2026-11-09: a task's
+   *  clone had origin/HEAD on another task's branch and a stale origin/main, while it
+   *  tracked a second remote's main). The current branch and its own remote copies are never
+   *  candidates, except a network origin's HEAD naming it: then this IS the default branch. */
   async function defaultBranch(root: string): Promise<string> {
     const sym = await exec(['git', 'symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'], root);
     const originHead = sym.code === 0 ? sym.stdout.trim() : '';
     const url = await exec(['git', 'config', '--get', 'remote.origin.url'], root);
     const local = url.code === 0 && isLocalRemote(url.stdout.trim());
-    if (originHead && !local) return originHead;
-    const names = ['origin/main', 'origin/master', 'main', 'master'];
+    const br = await exec(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], root);
+    const current = br.code === 0 && br.stdout.trim() !== 'HEAD' ? br.stdout.trim() : '';
+    const up = current ? await exec(['git', 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'], root) : null;
+    const upstream = up && up.code === 0 ? up.stdout.trim() : '';
+    const rem = await exec(['git', 'remote'], root);
+    const remotes = rem.code === 0 ? rem.stdout.split('\n').map((r) => r.trim()).filter(Boolean) : [];
+    remotes.sort((a, b) => (a === 'origin' ? -1 : b === 'origin' ? 1 : a < b ? -1 : a > b ? 1 : 0));
+    const ownCopy = (name: string): boolean => {
+      if (!current) return false;
+      if (name === current || name === upstream) return true;
+      const slash = name.indexOf('/');
+      return slash > 0 && remotes.indexOf(name.slice(0, slash)) >= 0 && name.slice(slash + 1) === current;
+    };
+    if (originHead && !local && ownCopy(originHead)) return originHead;
+    const names: string[] = [];
+    if (originHead && !local) names.push(originHead);
+    for (const r of remotes.slice(0, 6)) names.push(r + '/main', r + '/master');
+    names.push('main', 'master');
+    let best = '';
+    let bestDist = -1;
+    const seen: Record<string, boolean> = {};
     for (const name of names) {
-      const full = (name.indexOf('/') >= 0 ? 'refs/remotes/' : 'refs/heads/') + name;
-      if (await verifyCommit(full, root)) return name;
+      if (seen[name] || ownCopy(name)) continue;
+      seen[name] = true;
+      const full = (name === 'main' || name === 'master' ? 'refs/heads/' : 'refs/remotes/') + name;
+      const tip = await verifyCommit(full, root);
+      if (!tip) continue;
+      const mb = await exec(['git', 'merge-base', 'HEAD', tip], root);
+      if (mb.code !== 0 || !mb.stdout.trim()) continue;
+      const count = await exec(['git', 'rev-list', '--count', mb.stdout.trim() + '..HEAD'], root);
+      const dist = count.code === 0 ? Number(count.stdout.trim()) : NaN;
+      if (!isFinite(dist)) continue;
+      if (bestDist < 0 || dist < bestDist) { best = name; bestDist = dist; }
     }
-    return originHead;
+    return best || originHead;
   }
 
   function parseCommitLine(line: string): GitCommitSummary | null {

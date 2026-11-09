@@ -131,6 +131,42 @@ describe('git-diff core: branch base', () => {
     expect((await computeGitDiff('branch', repo, exec, readText))!.compare!.ref).toBe('origin/feature')
   })
 
+  // 2026-11-09, a task's clone: origin/HEAD named another task's old work branch, origin/main
+  // was days behind (the clone fetches a second remote), and "Branch vs" listed 9,975 files.
+  it('the default is the candidate HEAD left most recently: an old work branch as origin/HEAD and a stale origin/main lose to the main this clone tracks', async () => {
+    const { repo, init } = makeRepo()
+    git(repo, ['push', '-q', 'origin', init + ':refs/heads/old-work'])
+    git(repo, ['fetch', '-q', 'origin'])
+    git(repo, ['remote', 'set-head', 'origin', 'old-work'])
+    const mac = path.join(root, 'mac.git')
+    fs.mkdirSync(mac, { recursive: true })
+    git(mac, ['init', '-q', '--bare'])
+    git(repo, ['remote', 'add', 'mac', mac])
+    git(repo, ['stash', '-qu'])
+    git(repo, ['checkout', '-q', 'main'])
+    write(repo, 'later.txt', 'main moved on again\n')
+    git(repo, ['add', '-A'])
+    git(repo, ['commit', '-qm', 'main moves on again'])
+    git(repo, ['push', '-q', 'mac', 'main'])
+    const macMain = git(repo, ['rev-parse', 'HEAD'])
+    git(repo, ['checkout', '-qb', 'work'])
+    write(repo, 'w.txt', 'work\n')
+    git(repo, ['add', '-A'])
+    git(repo, ['commit', '-qm', 'w1'])
+    git(repo, ['remote', 'set-url', 'origin', 'https://example.invalid/app.git'])
+    const res = await computeGitDiff('branch', repo, exec, readText)
+    expect(res!.compare).toMatchObject({ ref: 'mac/main', isDefault: true, baseSha: macMain })
+    expect(res!.files.map((f) => f.relPath)).toEqual(['w.txt'])
+    expect((await listGitRefs(repo, exec))!.defaultRef).toBe('mac/main')
+    // On main itself, ahead of what it tracks: the default stays the branch it pushes to.
+    git(repo, ['checkout', '-q', 'main'])
+    git(repo, ['remote', 'set-head', 'origin', 'main'])
+    write(repo, 'ahead.txt', 'not pushed\n')
+    git(repo, ['add', '-A'])
+    git(repo, ['commit', '-qm', 'ahead'])
+    expect((await computeGitDiff('branch', repo, exec, readText))!.compare!.ref).toBe('origin/main')
+  })
+
   it('an explicit ref compares against its merge-base; a ref this repo lacks answers missing, never an error', async () => {
     const { repo, f1 } = makeRepo()
     git(repo, ['branch', 'checkpoint', f1])
