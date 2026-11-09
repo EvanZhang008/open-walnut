@@ -338,7 +338,12 @@ if [ -z "$runner" ]; then
     [ -n "$job" ] || [ "$tier" != frontend ] || job=$(printf '%s' "$jobs" | jq -r '.jobs[] | select(.name | startswith("Gate (land 1/")) | .id' | head -1)
     [ -n "$job" ] || continue
     echo ""; echo "── $tier (https://github.com/$repo/actions/runs/$run/job/$job)"
-    jlog=$(ghcall api "repos/$repo/actions/jobs/$job/logs" 2>/dev/null | sed -E 's/^[0-9T:.-]+Z //; s/\x1b\[[0-9;]*[A-Za-z]//g')
+    # GitHub serves a job's log a little after the job ends: an empty answer is asked again (a land
+    # refused with no test named, 2026-11-09).
+    for _ in 1 2 3; do
+      jlog=$(ghcall api "repos/$repo/actions/jobs/$job/logs" 2>/dev/null | sed -E 's/^[0-9T:.-]+Z //; s/\x1b\[[0-9;]*[A-Za-z]//g')
+      [ -z "$jlog" ] || break; sleep "${WALNUT_PUSH_GATE_LOG_RETRY_SECS:-10}"
+    done
     if [ "$tier" != frontend ] && printf '%s\n' "$jlog" | grep -aq '^\[test-layers\] FAILED:'; then
       # test-layers.mjs (a land tier): its list of the tests that failed twice, and its verdict.
       printf '%s\n' "$jlog" | awk '/^\[test-layers\] FAILED:/{p=1} p{print; if (/^\[test-layers\] (passed|failed):/ || ++n > 60) exit}'
