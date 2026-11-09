@@ -53,11 +53,12 @@ export function fallbackBannerWords(note: EngineFallbackNote, now: number): {
   const reset = fallbackLimitReset(note, now);
   const model = fallbackModelName(note);
   // A reset read from the limit's own words ("try again in 2 hours") is an estimate.
-  const about = note.resets_from === 'text' ? 'about ' : '';
+  // No-break spaces: "resets 6:31 PM" never wraps apart in a narrow column.
+  const about = note.resets_from === 'text' ? 'about\u00a0' : '';
   // The usage-limit banner's own words for the same limit ("Claude 5-hour limit reached").
   const why = reset
     ? `${limit} has reset`
-    : `${limit} reached${when ? ` · resets ${about}${when}` : ''}`;
+    : `${limit} reached${when ? ` · resets\u00a0${about}${when}` : ''}`;
   // The same engine on another model: switching back is a model change in this session.
   if (note.from === note.to) {
     return {

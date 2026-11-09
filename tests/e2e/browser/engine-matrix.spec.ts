@@ -24,7 +24,7 @@
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture, installBrowserAudit } from './codex-test-audit'
 import {
-  REAL_PANEL, basenameOf, closeDraftModelPicker, draftCwdPill, draftEngineButton, openDraft,
+  REAL_PANEL, basenameOf, closeDraftModelPicker, draftCwdPill, draftEngineButton, draftModelPill, openDraft,
 } from './draft-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -107,6 +107,16 @@ async function openDraftWithEngine(page: Page, cwd: string, id: string): Promise
   }
   await button.click()
   await expect(button).toHaveAttribute('aria-selected', 'true')
+  // Every spec here starts on the engine's default model. The shared folder remembers its last
+  // launch, and one of this engine with a model (the pick test below) comes back with that model,
+  // where the tab is already the engine's and its click changes nothing: back to the default row.
+  const defaultRow = page.locator('.model-picker').getByTestId('acp-default-row')
+  await expect(defaultRow).toBeVisible({ timeout: 15_000 })
+  if ((await defaultRow.getAttribute('aria-selected')) !== 'true') {
+    await defaultRow.click()
+    if (await page.locator('.model-picker').count() === 0) await draftModelPill(panel).click()
+    await expect(page.locator('.model-picker').getByTestId('acp-default-row')).toHaveAttribute('aria-selected', 'true')
+  }
   await closeDraftModelPicker(page)
   return panel
 }

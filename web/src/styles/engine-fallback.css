@@ -81,3 +81,8 @@
   flex: none;
   color: var(--fg-secondary, var(--fg-muted));
 }
+
+/* "on Codex" beside the row's tag (fallback-row.tsx), in the Limited pill's words style. */
+.status-card-fallback { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
+.status-card-fallback-tag { flex: none; }
+.status-card-fallback-words { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; font-size: 11px; color: var(--fg-secondary, var(--fg-muted)); }

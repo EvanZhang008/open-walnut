@@ -67,6 +67,7 @@ import {
 } from '@/utils/engines';
 import { DraftFallbackNotice, draftFallbackPill, useDraftFallback } from './DraftFallbackNotice';
 import { ModelPicker, shortAcpModelName } from './ModelPicker';
+import { useAcpModelName } from './engine-default-model';
 import { fetchEngineModelCatalog } from '@/api/sessions';
 import {
   draftComposerKey, type DraftColumn, type DraftParseInput, type DraftParseKind, type DraftTaskField,
@@ -224,8 +225,12 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork, fallbackL
     // name, never as a provider id like "global.anthropic.claude-..." (N10).
     ? options.find((o) => o.value === meta.model)?.label ?? formatModelName(meta.model)
     : autoResolved ? `Auto (${autoResolved})` : 'Auto';
-  const acpPillLabel = meta.model ? shortAcpModelName(meta.model) : entry.displayName;
+  // Named as the picker's row and a running session's composer name it (the engine's own name).
+  const acpModelName = useAcpModelName(engine, cwd || undefined, meta.model, acpModels);
+  const acpPillLabel = meta.model ? acpModelName ?? shortAcpModelName(meta.model) : entry.displayName;
   const viewing = fallbackView && fallbackLabel ? fallbackView : null;
+  // The launch runs Auto: no model picked, or one the fallback takes over (a remembered model).
+  const runsAuto = isAuto || !!fallbackLabel;
   const pickerEngine = viewing ?? engine;
   const pickerAcp = engineEntry(catalog, pickerEngine).capabilities.modelCatalog === 'provider-advertised';
   // A pick or Escape hands the caret back to the draft's composer, so the next key types the prompt
@@ -258,7 +263,8 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork, fallbackL
       </button>
       {open && (
         <ModelPicker
-          currentModel={isAuto ? undefined : meta.model}
+          // On the fallback, what runs is Auto's: a remembered model is not the current one.
+          currentModel={runsAuto ? undefined : meta.model}
           host={host ?? undefined}
           cwd={cwd}
           engine={pickerEngine}
@@ -287,7 +293,7 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork, fallbackL
               ? 'A quick question runs on the claude engine (the Personal AI profile rides its system prompt)'
               : hostEngineLockReason(engineEntry(catalog, provider), host, hostEngines))}
           // While Auto starts on the fallback, its row says so ("Auto (Codex, fallback)").
-          autoRow={{ resolvedLabel: fallbackLabel ? fallbackLabel.replace(/ \(fallback\)$/, ', fallback') : autoResolved, active: isAuto }}
+          autoRow={{ resolvedLabel: fallbackLabel ? fallbackLabel.replace(/ \(fallback\)$/, ', fallback') : autoResolved, active: runsAuto }}
           // ACP draft: selection lands in meta.model (same field the claude
           // pane uses — the launch payload already carries it) and rides the
           // spawn as acpConfig. '' = back to the engine's default.

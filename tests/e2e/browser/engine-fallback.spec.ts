@@ -18,9 +18,13 @@ import { test, expect, type APIRequestContext, type Page, type Locator } from '@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { isolateUiPrefs } from './todo-panel-helpers'
-import { openDraft } from './draft-helpers'
+import { isolateUiPrefs, openListProject } from './todo-panel-helpers'
+import { openDraft, openDraftOnCwd } from './draft-helpers'
 import { presetPanelDesign, setStatusSectionOpen, showSectionCard } from './status-section-helpers'
+
+// One at a time: the Settings test and the starts on the fallback both write the one fallback
+// setting of the shared fixture server, and in parallel one read back the other's write.
+test.describe.configure({ mode: 'default' })
 
 const SHOTS = process.env.PW_SHOTS_DIR ?? '/tmp/engine-fallback-spec'
 const COLUMNS_KEY = 'open-walnut-home-session-columns'
@@ -142,6 +146,8 @@ const columnFor = (page: Page, sid: string): Locator =>
   page.locator('.main-page-sessions-area > .main-page-session-column').filter({ has: page.locator(`.session-panel[data-session-id="${sid}"]`) })
 
 async function shot(page: Page, loc: Locator, name: string, pad = 16): Promise<void> {
+  // A long list (other specs' tasks on the shared fixture) can put it below the fold.
+  await loc.scrollIntoViewIfNeeded()
   const box = await loc.boundingBox()
   expect(box, `${name}: element has a box`).not.toBeNull()
   const vp = page.viewportSize()!
@@ -220,7 +226,7 @@ test('a task that started on Codex: the Fallback banner, Switch to Claude Code, 
   // The setting names no model: the engine's default runs, named as the model picker names it.
   await expect(banner.getByTestId('engine-fallback-head')).toHaveText(/^Started on Codex \(.+\)$/, { timeout: 30_000 })
   const runsOn = (await banner.getByTestId('engine-fallback-head').textContent())!.replace(/^Started on /, '')
-  await expect(banner.getByTestId('engine-fallback-why')).toHaveText(/^Claude 5-hour limit reached · resets (\w{3}\s)?\d{1,2}:\d{2}\s[AP]M$/)
+  await expect(banner.getByTestId('engine-fallback-why')).toHaveText(/^Claude 5-hour limit reached · resets\s(\w{3}\s)?\d{1,2}:\d{2}\s[AP]M$/)
   await expect(banner.getByTestId('engine-fallback-detail')).toContainText('Claude Code was out of usage, so this task started on Codex, your fallback engine.')
   await expect(banner.getByTestId('engine-fallback-detail')).toContainText(/it goes on there after the reset at (\w{3}\s)?\d{1,2}:\d{2}\s[AP]M\./)
   // One row: icon, words, ×; the button on the line under the words, all inside the banner.
@@ -274,29 +280,35 @@ test('a task that started on Codex: the Fallback banner, Switch to Claude Code, 
   await page.reload()
   await expect(page.getByTestId('engine-fallback-banner')).toHaveCount(0, { timeout: 15_000 })
 
-  // By project, the default Home view, wears the same tag on the task's row.
+  // By project, the default Home view. The Pinned strip first (a new task is pinned): the mark
+  // after the title, the title whole.
   await presetPanelDesign(page, 'project')
   await page.reload()
-  const rowC = page.locator(`.todo-panel [data-task-id="${c.taskId}"]`).first()
+  const pinned = page.locator(`.todo-pinned-card[data-task-id="${c.taskId}"], .todo-focus-card[data-task-id="${c.taskId}"]`).first()
+  await expect(pinned).toHaveCount(1, { timeout: 30_000 })
+  const mark = pinned.getByTestId('task-row-fallback')
+  await expect(mark.getByRole('img', { name: 'Fallback' })).toBeVisible()
+  await expect(mark).toHaveAttribute('title', new RegExp(`^Started on ${runsOn.replace(/[()]/g, '\\$&')} · Claude 5-hour limit reached`))
+  const order = await pinned.evaluate((el) => {
+    const t = el.querySelector('.todo-pinned-title, .status-card-body'), m = el.querySelector('[data-testid="task-row-fallback"]')
+    return !!t && !!m && !!(t.compareDocumentPosition(m) & Node.DOCUMENT_POSITION_FOLLOWING)
+  })
+  expect(order, 'the mark comes after the title').toBe(true)
+  await shot(page, pinned, '2-row-pinned')
+
+  // Unpinned, the task is a row of its project's list: the tag, and where it runs beside it, as the
+  // Limited pill says its reset.
+  await request.delete(`/api/focus/tasks/${c.taskId}`)
+  await page.reload()
+  const projectC = ((await (await request.get(`/api/tasks/${c.taskId}`)).json()) as { task: { project?: string } }).task.project || 'Inbox'
+  await openListProject(page, projectC)
+  const rowC = page.locator(`.todo-panel .todo-panel-item[data-task-id="${c.taskId}"]`).first()
   await rowC.scrollIntoViewIfNeeded({ timeout: 30_000 })
   const tagC = rowC.getByTestId('task-row-fallback')
   await expect(tagC).toBeVisible({ timeout: 30_000 })
   await expect(tagC).toHaveAttribute('title', new RegExp(`^Started on ${runsOn.replace(/[()]/g, '\\$&')} · Claude 5-hour limit reached`))
+  await expect(tagC).toHaveText(/^Fallback\s*on Codex$/)
   await shot(page, rowC, '2-row-by-project')
-
-  // The Pinned strip (a new task is pinned): the mark after the title, the title whole.
-  const pinned = page.locator(`.todo-pinned-card[data-task-id="${c.taskId}"], .todo-focus-card[data-task-id="${c.taskId}"]`).first()
-  {
-    await expect(pinned).toHaveCount(1, { timeout: 15_000 })
-    const mark = pinned.getByTestId('task-row-fallback')
-    await expect(mark.getByRole('img', { name: 'Fallback' })).toBeVisible()
-    const order = await pinned.evaluate((el) => {
-      const t = el.querySelector('.todo-pinned-title, .status-card-body'), m = el.querySelector('[data-testid="task-row-fallback"]')
-      return !!t && !!m && !!(t.compareDocumentPosition(m) & Node.DOCUMENT_POSITION_FOLLOWING)
-    })
-    expect(order, 'the mark comes after the title').toBe(true)
-    await shot(page, pinned, '2-row-pinned')
-  }
 })
 
 test("a new task's draft says where it starts while the default engine is out of usage", async ({ page }) => {
@@ -347,8 +359,9 @@ test("a new task's draft says where it starts while the default engine is out of
     host: '__local__', defaultEngine: 'claude', setting: { engine: 'codex' },
     fallback: { engine: 'codex', note: { from: 'claude', to: 'codex', window: 'five_hour', resets_at: resetsAt, resets_from: 'event', at: new Date().toISOString() } },
   } }))
-  const cfg = await (await page.request.get('/api/config')).json()
-  expect((await page.request.put('/api/config', { data: cfg })).ok()).toBe(true)
+  // An empty write changes nothing (the fixture is shared) and still broadcasts config:changed.
+  const write = await page.request.put('/api/config', { data: {} })
+  expect(write.ok(), await write.text()).toBe(true)
   await expect(notice).toHaveText(/this task starts on Codex \(.+\)\.$/, { timeout: 5_000 })
   // No fallback for this host now (none set, or nothing limited): no line.
   await page.unroute('**/api/engines/fallback*')
@@ -357,5 +370,48 @@ test("a new task's draft says where it starts while the default engine is out of
   const again = await openDraft(page)
   await expect(again.locator('.draft-model-select')).toBeVisible()
   await expect(again.locator('.draft-model-select')).not.toHaveText(/fallback/)
+  await expect(page.getByTestId('draft-fallback-notice')).toHaveCount(0)
+})
+
+test("a folder's remembered model: the picker says what runs, and a remembered engine's model is named as its list names it", async ({ page, request }) => {
+  // WebKit, the Mac app's engine: the Chromium project's draft shows its quick-folder row first, so
+  // the shared folder pick (draftCwdPill: the row's first chip) clicks a quick folder there.
+  test.skip(test.info().project.name !== 'webkit', 'the draft folder pick of this spec is the WebKit layout')
+  const cwd = await fixtureCwd(request)
+  const resetsAt = new Date(Date.now() + 2 * 3600_000).toISOString()
+  await page.route('**/api/engines/fallback*', (route) => route.fulfill({ json: {
+    host: '__local__', defaultEngine: 'claude', setting: { engine: 'codex' },
+    fallback: { engine: 'codex', note: { from: 'claude', to: 'codex', window: 'five_hour', resets_at: resetsAt, resets_from: 'event', at: new Date().toISOString() } },
+  } }))
+  // The folder's last launch, as the server's frequent dirs carry it.
+  let lastLaunch: Record<string, string> = { model: 'sonnet' }
+  await page.route('**/api/sessions/working-dirs*', async (route) => {
+    const res = await route.fetch()
+    const body = (await res.json()) as { dirs: Array<{ cwd: string; lastLaunch?: unknown }> }
+    for (const d of body.dirs) if (d.cwd === cwd) d.lastLaunch = lastLaunch
+    // A fresh answer, not the fetched one's headers (its length no longer fits the body).
+    await route.fulfill({ status: res.status(), json: body })
+  })
+  await page.goto('/')
+
+  // A remembered Claude model gives way to the fallback: on the Claude tab, Auto is what runs.
+  const panel = await openDraftOnCwd(page, cwd)
+  const pill = panel.locator('.draft-model-select')
+  await expect(pill).toHaveText('Codex (fallback)', { timeout: 15_000 })
+  await pill.click()
+  const picker = page.locator('.model-picker')
+  await expect(picker.locator('.provider-rail-item[data-provider="codex"]')).toHaveAttribute('aria-selected', 'true', { timeout: 15_000 })
+  await picker.locator('.provider-rail-item[data-provider="claude"]').click()
+  await expect(picker.locator('.model-picker-current')).toHaveText(/^Current: Auto \(Codex, fallback\)$/)
+  await expect(picker.locator('.model-picker-row[aria-selected="true"]')).toHaveText([/Auto \(Codex, fallback\)/])
+  await page.keyboard.press('Escape')
+  await expect(pill).toHaveText('Codex (fallback)')
+
+  // A remembered Codex model: the draft names its engine, so it runs as remembered, named as the
+  // engine lists it, with no fallback line.
+  lastLaunch = { engine: 'codex', model: 'mock-gpt-fast' }
+  await page.reload()
+  const panel2 = await openDraftOnCwd(page, cwd)
+  await expect(panel2.locator('.draft-model-select')).toHaveText(/Mock GPT Fast/, { timeout: 15_000 })
   await expect(page.getByTestId('draft-fallback-notice')).toHaveCount(0)
 })

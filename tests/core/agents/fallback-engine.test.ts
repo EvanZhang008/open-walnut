@@ -264,7 +264,7 @@ describe('fallback words', () => {
   it('the banner names the engine it runs on, the limit, and the way back', () => {
     const w = fallbackBannerWords(note, NOW);
     expect(w.head).toBe('Started on Codex (gpt-5.5)');
-    expect(w.why).toMatch(/^Claude 5-hour limit reached · resets /);
+    expect(w.why).toMatch(/^Claude 5-hour limit reached · resets\u00a0/);
     expect(w.action).toBe('Switch to Claude Code');
     expect(w.detail).toMatch(/^Claude Code was out of usage, so this task started on Codex, your fallback engine\. Switching back moves it to Claude Code/);
     expect(w.detail).toMatch(/with its conversation; it goes on there after the reset at .+\.$/);
@@ -277,7 +277,7 @@ describe('fallback words', () => {
   });
 
   it('an estimated reset says about; an unknown one names no time', () => {
-    expect(fallbackBannerWords({ ...note, resets_from: 'text' }, NOW).why).toMatch(/resets about /);
+    expect(fallbackBannerWords({ ...note, resets_from: 'text' }, NOW).why).toMatch(/resets\u00a0about\u00a0/);
     const w = fallbackBannerWords({ ...note, resets_at: undefined, window: undefined, model: undefined }, NOW);
     expect(w.head).toBe('Started on Codex');
     expect(w.why).toBe('Claude usage limit reached');

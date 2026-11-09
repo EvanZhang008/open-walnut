@@ -68,3 +68,26 @@ export function useEngineDefaultModel(engine: string | undefined): EngineDefault
 export function withDefaultModel<T extends Pick<EngineFallbackNote, 'model' | 'model_label'>>(note: T, model: EngineDefaultModel | undefined): T {
   return note.model || !model ? note : { ...note, model: model.id, model_label: model.name };
 }
+
+/** A picked model's name as the engine lists it (the draft's pill), read once its list is in. */
+export function useAcpModelName(engine: string, cwd: string | undefined, modelId: string | undefined, enabled: boolean): string | undefined {
+  const cachedName = (): string | undefined => (modelId
+    ? getCachedEngineModelCatalog(engine, cwd)?.models.find((m) => m.modelId === modelId)?.name || undefined : undefined);
+  const [read, setRead] = useState<{ key: string; name: string | undefined } | null>(null);
+  const key = `${engine}|${cwd ?? ''}|${modelId ?? ''}`;
+  useEffect(() => {
+    if (!enabled || !modelId) return;
+    let live = true;
+    // Debounced as the draft's catalog prefetch is: a folder being typed asks nothing.
+    const timer = window.setTimeout(() => {
+      fetchEngineModelCatalog(engine, cwd).then(
+        (c) => { if (live) setRead({ key, name: c.models.find((m) => m.modelId === modelId)?.name || undefined }); },
+        () => {},
+      );
+    }, 1_200);
+    return () => { live = false; window.clearTimeout(timer); };
+  }, [enabled, engine, cwd, modelId, key]);
+  if (!enabled || !modelId) return undefined;
+  const name = (read?.key === key ? read.name : undefined) ?? cachedName();
+  return acpModelDisplayName(modelId, name) ?? undefined;
+}
