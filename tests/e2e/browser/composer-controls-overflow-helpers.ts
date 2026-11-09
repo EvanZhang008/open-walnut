@@ -40,6 +40,8 @@ export async function mockControlsSession(page: Page, id: string, writes?: Setti
           output_mode: 'rich', startedAt: '2026-01-01T00:00:00.000Z',
           lastActiveAt: new Date().toISOString(), messageCount: messages.length,
           title: 'Composer controls', cwd: '/tmp',
+          // The window the CLI reported, so the percentage is the real one and wears no estimate's ~.
+          modelMaxWindow: 200_000, modelMaxWindowSource: 'cli-model-usage',
         },
       },
     });
