@@ -390,7 +390,7 @@ test.describe('Settings host row head', () => {
 
   test('C32: at 1280px a 10-character alias is never cut; the long hostname is, with the full name as its title', async ({ page, request }) => {
     // Longer than the row at 1280px, now that the page grows to about 920px there (round 4).
-    const hostname = 'devcloud01.build-runners.nightly-pool.blue-cluster.eu-central-1.compute.internal.test-lab.example.com'
+    const hostname = 'devcloud01.paint-studio.weekend-batch.green-garden.lighthouse-hill.sample-rack.toy-labs01.example.com'
     const file = fixtureFile('host-problems')
     file.hosts = { devcloud01: { label: 'Dev cloud', hostname, phase: 'connected', claude: { version: '2.1.281', auth: 'ok', installMethod: 'native' } } }
     await hostFixture(request, { action: 'load', file })
