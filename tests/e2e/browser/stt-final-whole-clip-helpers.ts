@@ -23,15 +23,16 @@ const PREVIEW = 'administering this quickly'
 const TAIL = 'as an administrator I think this question is not complete'
 const WHOLE = 'the whole clip heard once more'
 
-interface Lanes { transcribe: number; draftsAfterStop: string[]; stopped: boolean }
+interface Lanes { transcribe: number; drafts: number; draftsAfterStop: string[]; stopped: boolean }
 
 async function stubLanes(page: Page): Promise<Lanes> {
-  const seen: Lanes = { transcribe: 0, draftsAfterStop: [], stopped: false }
+  const seen: Lanes = { transcribe: 0, drafts: 0, draftsAfterStop: [], stopped: false }
   await stubSttStatus(page)
   await page.route('**/api/stt/warmup', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' }))
   await page.route('**/api/stt/draft', async (route) => {
     const { format } = route.request().postDataJSON() as { format: string }
     if (seen.stopped) seen.draftsAfterStop.push(format)
+    else seen.drafts++
     // After the stop: the tail is a WAV slice, the check sends the whole webm.
     const text = !seen.stopped ? PREVIEW : format === 'wav' ? TAIL : WHOLE
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text, durationMs: 30 }) })
@@ -107,6 +108,10 @@ export function registerWholeClipScenarios(): void {
     // Silence long enough that the newest draft has heard every word.
     await setGain(page, 0)
     await page.waitForTimeout(3000)
+    // Two more draft ticks heard the silence (the first may only commit the
+    // phrase before it), so the newest preview covers the last word spoken.
+    const heard = seen.drafts
+    await expect.poll(() => seen.drafts, { timeout: 15_000 }).toBeGreaterThanOrEqual(heard + 2)
     seen.stopped = true
     await d.mic.click()
     await expect.poll(() => seen.draftsAfterStop, { timeout: 15_000 }).toEqual(['webm'])
