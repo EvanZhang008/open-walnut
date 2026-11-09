@@ -78,7 +78,10 @@ describe('drawn: the view as it will look', () => {
     expect(text(el, '.look-chip-label')).toBe('Release notes 4.2 · docs.example.test')
     expect(el.querySelector('.look-chip-page.is-on')).not.toBeNull()
     expect(text(el, '.look-chip-act')).toBe('Act in tab')
-    expect(text(el, '.look-fav')).toBe('D')
+    // The chip says what it is (2026-11-09): a page icon and "Page", on its own line under the words.
+    expect(el.querySelector('.look-fav-file svg')).not.toBeNull()
+    expect(text(el, '.look-chip-kind')).toBe('Page')
+    expect(el.querySelector('.look-pills .look-chip-page')).not.toBeNull()
   })
 
   it("a conversation: its title, its messages, the follow-up placeholder, the page chip as the view had it; unlocked, no padlock", () => {

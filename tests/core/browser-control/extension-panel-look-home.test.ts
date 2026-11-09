@@ -91,7 +91,7 @@ describe('the drawing of the first page', () => {
     // Docked on one line: "This page" (its title on hover) and send; Act in this tab only once it grows.
     const chip = el.querySelector('[data-testid="panel-snap-page"]')!
     expect(chip.textContent).toContain('This page')
-    expect(chip.getAttribute('title')).toBe('Lab Accounts · accounts.example.test')
+    expect(chip.getAttribute('title')).toBe('Walnut reads this page with your next message: Lab Accounts · accounts.example.test')
     expect(el.querySelector('.look-home-act')).toBeNull()
     expect(el.querySelector('.look-home-composer.is-docked .look-send')).not.toBeNull()
     const order = [...el.children].map((c) => c.className.split(' ')[0])

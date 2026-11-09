@@ -29,6 +29,7 @@
  * spoke to it, at its origin.
  */
 import { askProjectDisplay } from '@open-walnut/ask-list';
+import { VALID_SESSION_MODE_IDS, type SessionMode } from '@open-walnut/core';
 import { readRelay, type RelayState } from './ext-relay-model';
 
 export const EXT_PANEL = 'ext-panel';
@@ -59,7 +60,23 @@ export interface VaultState { locked: boolean; siteCount: number | null; host: s
  * may act in the tab; `sel`: the page's selection its quote showed, absent when none showed or the
  * person left it out). What the popup showed is what goes: never a selection it did not show.
  */
-export interface HandedAsk { text: string; page: boolean; act: boolean; sel?: string; task?: boolean }
+export interface HandedAsk { text: string; page: boolean; act: boolean; sel?: string; task?: boolean; launch?: HandedLaunch }
+
+/** The mode, model and engine the popup's New task picked (2026-11-09): the side panel starts the task with them. */
+export interface HandedLaunch { mode?: SessionMode; model?: string; engine?: string }
+
+const LAUNCH_WORD = /^[\w.:\[\]\/@-]{1,120}$/;
+/** What of a handed launch is well formed; nothing when none of it is. */
+export function readHandedLaunch(v: unknown): HandedLaunch | undefined {
+  if (!v || typeof v !== 'object') return undefined;
+  const l = v as Record<string, unknown>;
+  const out: HandedLaunch = {
+    ...(typeof l.mode === 'string' && VALID_SESSION_MODE_IDS.has(l.mode) ? { mode: l.mode as SessionMode } : {}),
+    ...(typeof l.model === 'string' && LAUNCH_WORD.test(l.model) ? { model: l.model } : {}),
+    ...(typeof l.engine === 'string' && LAUNCH_WORD.test(l.engine) ? { engine: l.engine } : {}),
+  };
+  return Object.keys(out).length ? out : undefined;
+}
 
 /** An ask or task the popup handed to the panel to show (`task`: a task picked from the first page's list). */
 export interface HandedOpen { taskId: string; sessionId?: string; task?: boolean }
@@ -114,7 +131,8 @@ export function readInbound(data: unknown, origin: string, fromParent: boolean):
     const a = d.ask as Record<string, unknown> | undefined;
     const o = d.open as Record<string, unknown> | undefined;
     const sel = a && typeof a.sel === 'string' && a.sel.trim() ? a.sel.trim().slice(0, MAX_SELECTION) : '';
-    const ask = a && typeof a.text === 'string' && a.text.trim() ? { text: a.text.slice(0, MAX_TEXT_ASK), page: a.page !== false, act: a.act === true, ...(sel ? { sel } : {}), ...(a.task === true ? { task: true } : {}) } : undefined;
+    const launch = a ? readHandedLaunch(a.launch) : undefined;
+    const ask = a && typeof a.text === 'string' && a.text.trim() ? { text: a.text.slice(0, MAX_TEXT_ASK), page: a.page !== false, act: a.act === true, ...(sel ? { sel } : {}), ...(a.task === true ? { task: true } : {}), ...(launch ? { launch } : {}) } : undefined;
     const open = o && typeof o.taskId === 'string' && ID.test(o.taskId)
       ? { taskId: o.taskId, ...(typeof o.sessionId === 'string' && ID.test(o.sessionId) ? { sessionId: o.sessionId } : {}), ...(o.task === true ? { task: true } : {}) }
       : undefined;

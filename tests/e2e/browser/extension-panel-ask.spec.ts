@@ -54,11 +54,13 @@ test('Ask is a plain chat about the page, before and after the first question', 
   ;({ panel } = await openPanel(lab, 'ask'))
   const v = askView(panel)
   await expect(v.getByTestId('ask-object-quote')).toContainText('retries a failed upload three times', { timeout: 60_000 })
-  // No coding-session fork, no draft header, no model pill: a composer about the page.
+  // No coding-session fork, no draft header: a composer about the page.
   await expect(v.locator('.draft-intent-cards')).toHaveCount(0)
   await expect(v.getByText('Start Task')).toHaveCount(0)
   await expect(v.locator('.draft-session-panel .session-panel-header')).toHaveCount(0)
-  await expect(v.locator('.draft-actions-bar')).toHaveCount(0)
+  // No Start Task bar (folder, project, task fields): only the mode and model pills (2026-11-09).
+  await expect(v.locator('.draft-actions-bar:not(.is-plain-chat-pickers)')).toHaveCount(0)
+  await expect(v.locator('.is-plain-chat-pickers .draft-model-select')).toBeVisible()
   const composer = v.locator('[data-testid="ask-object-compose"] textarea')
   await expect(composer).toHaveAttribute('placeholder', 'Ask a quick question, or have it do something here…')
   await shot(panel, 'd12-compose')
@@ -75,9 +77,12 @@ test('Ask is a plain chat about the page, before and after the first question', 
   await expect(v.getByText('Hello! I processed your message', { exact: false }).first()).toBeVisible({ timeout: 60_000 })
   // None of a coding session's controls are on screen.
   for (const word of ['Changed', 'Files', 'Terminal']) await expect(v.locator('.session-action-chip', { hasText: word })).toBeHidden()
-  await expect(v.locator('.mode-toggle-pill')).toHaveCount(0)
-  await expect(v.locator('.composer-model-pill')).toHaveCount(0)
-  await expect(v.getByText('Bypass')).toHaveCount(0)
+  // Its mode and model are picked here as in every composer (2026-11-09, the user: "why can't i choose
+  // model, and mode etc"), and nothing else of a session's controls row (reply style, side thread, note).
+  await expect(v.locator('.is-plain-chat-pickers .mode-toggle-pill')).toHaveCount(1)
+  await expect(v.locator('.is-plain-chat-pickers .composer-model-pill')).toHaveCount(1)
+  await expect(v.locator('.mode-toggle-pill:not(.is-plain-chat-pickers *)')).toHaveCount(0)
+  await expect(v.locator('.side-question-pill, .output-mode-pill, .session-notes-pill')).toHaveCount(0)
   // Its task is handed back to the person (unread), yet the composer is not drawn red.
   await expect(v.locator('.session-panel-unread')).toHaveCount(0)
   await expect(v.locator('.session-panel.is-plain-chat textarea')).toHaveAttribute('placeholder', 'Ask a follow-up…')

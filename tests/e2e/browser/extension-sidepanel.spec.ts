@@ -151,7 +151,7 @@ test('connect the extension, then open the panel beside a page with a selection'
   // ≡ away: New chat there is Walnut's own Ask, no tab strip, the key in the header.
   await expect(view().getByTestId('ext-home')).toBeVisible({ timeout: 30_000 })
   await expect(view().getByTestId('ext-home-dock-chip')).toHaveText(/This page \+ selection/, { timeout: 30_000 })
-  await expect(view().getByTestId('ext-home-dock-chip')).toHaveAttribute('title', 'Release notes 4.2')
+  await expect(view().getByTestId('ext-home-dock-chip')).toHaveAttribute('title', /Release notes 4\.2/)
   await view().locator('[data-testid="ext-home-composer"] textarea').click()
   await expect(view().getByTestId('ext-panel-include')).toContainText('Release notes 4.2', { timeout: 30_000 })
   await expect(view().getByTestId('ext-panel-include')).toContainText(`docs.example.test:${port}`)

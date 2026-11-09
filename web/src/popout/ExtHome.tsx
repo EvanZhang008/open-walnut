@@ -16,6 +16,7 @@ import type { Task } from '@open-walnut/core';
 import type { ImageAttachment } from '@/api/chat';
 import { apiPost } from '@/api/client';
 import { quickStartSession } from '@/api/sessions';
+import { ICON_FILE } from '@/components/common/Icons';
 import { createTask } from '@/api/tasks';
 import { DraftSessionPanel } from '@/components/sessions/DraftSessionPanel';
 import { useAskObjectDraft } from '@/components/chat/useAskObjectDraft';
@@ -29,6 +30,7 @@ import { ExtComposerChips } from './ExtAskChrome';
 import { toParent } from './ext-frame';
 import { ACT_CONTEXT_NAME, CONTEXT_NAME, actLine, hostOf, pageContextBlock, type PanelPage } from './ext-panel-model';
 import { HOME_PLACEHOLDER, homeLaunchBody, homeTodoInput } from './ext-home-model';
+import type { HandedLaunch } from './ext-panel-model';
 import type { Attached } from './ext-attached';
 import type { OpenTask } from './ExtHomeTasks';
 import { useHomeSnapshots } from './useHomeSnapshots';
@@ -47,7 +49,10 @@ const known = () => true;
  */
 export interface HomeLaunched { taskId: string; sessionId?: string; act: boolean; actTab?: number; question: string; attached: Attached; pageUrl: string }
 /** A first message the popup handed over, sent once with the popup's choices. */
-export interface HomePreset { id: string; text: string; page: boolean; act: boolean; sel: string }
+/** The composer's own pop-overs, drawn outside it: the model picker. */
+const COMPOSER_LAYERS = '.model-picker';
+
+export interface HomePreset { id: string; text: string; page: boolean; act: boolean; sel: string; launch?: HandedLaunch }
 
 interface Props {
   surface: 'panel' | 'popup';
@@ -101,17 +106,21 @@ export function ExtHome(p: Props) {
     // Docked a moment later, never inside the press that moved focus: the list and the line over
     // the composer move when it docks, and the click must land where the pointer went down.
     clearTimeout(dockLater.current);
-    dockLater.current = setTimeout(() => {
+    const dockIfLeft = () => {
       if (composerRef.current?.contains(document.activeElement)) return;
+      // The model picker is the composer's, in a layer of its own (portalled): while it is open the
+      // composer stays grown, else its pill and so the picker's anchor would go (review 2026-11-09).
+      if (document.querySelector(COMPOSER_LAYERS)) { dockLater.current = setTimeout(dockIfLeft, 250); return; }
       // Left with words in it, it stays grown: what is typed shows whole.
       const words = composerRef.current?.querySelector('textarea')?.value.trim() ?? '';
       if (!words) setGrown(false);
-    }, 250);
+    };
+    dockLater.current = setTimeout(dockIfLeft, 250);
   }, []);
   /** One write at a time from this composer: a launch or a save as todo (review round 5, #4). */
   const flight = useRef(false);
 
-  const launch = useCallback(async (text: string, images: ImageAttachment[] | undefined, choice: { page: boolean; act: boolean; sel: string }): Promise<boolean> => {
+  const launch = useCallback(async (text: string, images: ImageAttachment[] | undefined, choice: { page: boolean; act: boolean; sel: string }, picked?: HandedLaunch): Promise<boolean> => {
     const question = text.trim();
     if (!question || flight.current) return false;
     flight.current = true;
@@ -134,8 +143,11 @@ export function ExtHome(p: Props) {
         name = ACT_CONTEXT_NAME;
       }
       const contextId = await storeObjectContext(name, block, (path, b) => apiPost<{ id: string }>(path, b));
+      // The popup's picks win over this panel's own draft: what the person saw there is what starts.
+      const own = draft.draftRef.current;
+      const launchDraft = picked ? { ...own, meta: { ...own.meta, ...picked, engine: (picked.engine ?? own.meta.engine) as typeof own.meta.engine } } : own;
       const body = homeLaunchBody({
-        draft: draft.draftRef.current, message: question, ...(images?.length ? { images } : {}), tierKnown: draft.tierKnown, catalog: getEngineCatalog(),
+        draft: launchDraft, message: question, ...(images?.length ? { images } : {}), tierKnown: draft.tierKnown, catalog: getEngineCatalog(),
         ...(contextId ? { hints: objectContextHints(contextId) } : {}),
       });
       const r = await quickStartSession(body);
@@ -164,11 +176,14 @@ export function ExtHome(p: Props) {
       // The popup closes as soon as focus leaves it: the side panel sends it, with these choices.
       const question = text.trim();
       if (!question) return false;
-      toParent({ type: 'open-side-panel', ask: { text: question, page: choice.page, act: choice.act, ...(quote ? { sel: quote } : {}), task: true } });
+      // With the mode, model and engine picked here: the side panel starts it with them (review 2026-11-09).
+      const m = draft.draftRef.current.meta;
+      const picked = { ...(m.mode ? { mode: m.mode } : {}), ...(m.model ? { model: m.model } : {}), ...(m.engine ? { engine: m.engine } : {}) };
+      toParent({ type: 'open-side-panel', ask: { text: question, page: choice.page, act: choice.act, ...(quote ? { sel: quote } : {}), task: true, ...(Object.keys(picked).length ? { launch: picked } : {}) } });
       return true;
     }
     return launch(text, images, choice);
-  }, [launch, page, pageOn, actOn, quote, p.canAct, p.surface]);
+  }, [launch, page, pageOn, actOn, quote, p.canAct, p.surface, draft.draftRef]);
 
   /**
    * Words that did not become a task go back into the composer, after anything typed there since,
@@ -191,7 +206,7 @@ export function ExtHome(p: Props) {
     if (!preset || !page && preset.page) return;
     onPresetTaken(preset.id);
     const busy = flight.current;
-    void launch(preset.text, undefined, { page: preset.page, act: preset.act && p.canAct, sel: preset.sel }).then((ok) => {
+    void launch(preset.text, undefined, { page: preset.page, act: preset.act && p.canAct, sel: preset.sel }, preset.launch).then((ok) => {
       if (ok) return;
       log.info('ext-home', 'handed question not started: back in the composer', { busy });
       if (busy) setError('another task was still starting. Your words are back in the box: send them again.');
@@ -242,8 +257,8 @@ export function ExtHome(p: Props) {
   ) : undefined;
   // Docked, the bar holds only the page, as one chip ("This page"): a click on it grows the box.
   const dockChip = page && pageOn ? (
-    <span className="ext-home-dock-chip" data-testid="ext-home-dock-chip" title={page.title ?? hostOf(page.url)}>
-      <span className="ext-chip-fav" aria-hidden="true">{(hostOf(page.url).replace(/^www\./, '').match(/[a-z0-9]/i)?.[0] ?? '?').toUpperCase()}</span>
+    <span className="ext-home-dock-chip" data-testid="ext-home-dock-chip" title={`Walnut reads this page with your next message: ${page.title ?? hostOf(page.url)}`}>
+      <span className="ext-chip-fav" aria-hidden="true">{ICON_FILE}</span>
       {quote ? 'This page + selection' : 'This page'}
     </span>
   ) : null;
@@ -267,6 +282,7 @@ export function ExtHome(p: Props) {
           onPathChange={noop}
           onProjectChange={noop}
           onMetaChange={draft.onMetaChange}
+          onModeChange={draft.onModeChange}
           isKnownProject={known}
           plainChat
           ownFolder

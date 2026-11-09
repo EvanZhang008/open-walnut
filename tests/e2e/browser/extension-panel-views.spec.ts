@@ -227,8 +227,9 @@ test('a row\'s buttons leave its name and account whole, in the side panel and t
   await expect(row).toBeVisible({ timeout: 30_000 })
   // The side panel at the widths Chrome gives it (it can be dragged down to 320 px): hovered, every
   // button it shows, Fill and the one-time code included, and still the name and account whole.
-  // The view sits right of the side bar (48 px), so a 440 px panel gives it what 400 px gave before.
-  for (const width of [440, 400, 360, 320]) {
+  // The view sits right of the side bar (68 px since 2026-11-09, so every entry's name fits), so a
+  // 460 px panel gives it what 400 px gave before the bar.
+  for (const width of [460, 400, 360, 320]) {
     await panel.setViewportSize({ width, height: 760 })
     await panel.mouse.move(5, 700)
     await row.hover()
@@ -236,7 +237,7 @@ test('a row\'s buttons leave its name and account whole, in the side panel and t
     await expect(row.getByTestId('copy-totp')).toBeVisible()
     await expect(row.getByTestId('copy-password')).toBeVisible()
     // Wide enough, the row shows a password in place too; narrower, that waits in the item's view.
-    if (width === 440) await expect(row.getByTestId('reveal-password')).toBeVisible()
+    if (width === 460) await expect(row.getByTestId('reveal-password')).toBeVisible()
     expect(await cut(row), `${width} px`).toEqual([0, 0])
     await shot(panel, `r2-15-row-hover-panel-${width}`, true)
   }

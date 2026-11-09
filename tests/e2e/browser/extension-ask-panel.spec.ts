@@ -202,6 +202,15 @@ test('a question starts the conversation; its title takes the header', async () 
   await expect(v.getByText('Hello! I processed your message', { exact: false }).first()).toBeVisible({ timeout: 60_000 })
   await expect(v.getByTestId('ext-ask-title')).not.toHaveText('New quick question', { timeout: 30_000 })
   await expect(v.locator('.session-panel.is-plain-chat textarea')).toHaveAttribute('placeholder', 'Ask a follow-up…')
+  // Its mode and model are picked here as in every composer (2026-11-09: "why can't i choose model,
+  // and mode etc"): a click on the mode pill moves the session's mode.
+  const pickers = v.locator('.session-panel.is-plain-chat .is-plain-chat-pickers')
+  await expect(pickers.locator('.composer-model-pill')).toBeVisible()
+  const modePill = pickers.locator('.mode-toggle-pill').first()
+  await expect(modePill).toBeVisible()
+  const modeBefore = await modePill.innerText()
+  await modePill.click()
+  await expect(modePill).not.toHaveText(modeBefore, { timeout: 10_000 })
   // The conversation's Continue list is gone: the chat has the panel.
   await expect(v.getByTestId('ext-continue')).toHaveCount(0)
   // A real ask is named by Walnut's titler after its first message (quick-start's autoTitleFromLaunch,

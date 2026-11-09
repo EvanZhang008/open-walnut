@@ -55,13 +55,12 @@ export function drawHomeLook(o: HomeLook, box: HTMLElement): HTMLElement {
     o.surface === 'popup' ? h('span', { class: 'look-btn' }, ico(LOOK_ICONS.side)) : null,
     o.settings ? h('span', { class: 'look-btn' }, ico(ICONS.gear)) : null)
   const site = o.page?.host ?? ''
-  const letter = (site.replace(/^www\./, '').match(/[a-z0-9]/i)?.[0] ?? '?').toUpperCase()
   // Docked on one line, as the view draws it until the box is focused.
   const composer = h('div', { class: 'look-composer look-home-composer is-docked' },
     ico(LOOK_ICONS.plus, 'look-plus'),
     h('div', { class: 'look-placeholder', 'data-testid': 'panel-snap-placeholder' }, HOME_PLACEHOLDER),
-    o.page ? h('span', { class: 'look-chip look-chip-page look-home-dock-chip is-on', 'data-testid': 'panel-snap-page', title: o.page.title ? `${o.page.title} · ${site}` : site },
-      h('span', { class: 'look-fav' }, letter),
+    o.page ? h('span', { class: 'look-chip look-chip-page look-home-dock-chip is-on', 'data-testid': 'panel-snap-page', title: `Walnut reads this page with your next message: ${o.page.title ? `${o.page.title} · ${site}` : site}` },
+      h('span', { class: 'look-fav look-fav-file', 'aria-hidden': 'true' }, svg(LOOK_ICONS.file)),
       h('span', { class: 'look-chip-label' }, 'This page')) : null,
     h('span', { class: 'look-send' }, ico(LOOK_ICONS.send)))
   const s = o.home

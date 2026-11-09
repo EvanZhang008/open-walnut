@@ -96,6 +96,8 @@ export interface AskObjectDrawerProps {
   composerPlaceholder?: string;
   /** In plain chat: a pill in the conversation's composer (SessionPanel `composerPill`). */
   composerPill?: ReactNode;
+  /** In plain chat, before the first question: a pill line in the composer (the side panel's page chip). */
+  composerDraftPill?: ReactNode;
   /** In plain chat: controls in the composer's bottom row, before the first question and after (`composerBar`). */
   composerBar?: ReactNode;
   /** In plain chat: no quote of the object over the first question (the host names it in the composer). */
@@ -526,6 +528,8 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
           {...(props.plainChat ? {
             plainChat: true,
             composerBar: props.composerBar,
+            onModeChange: askDraft.onModeChange,
+            ...(props.composerDraftPill ? { composerPill: props.composerDraftPill } : {}),
             ...(props.composerPlaceholder ? { placeholder: props.composerPlaceholder } : {}),
           } : {
             onWalnutToggle: askDraft.onWalnutToggle,

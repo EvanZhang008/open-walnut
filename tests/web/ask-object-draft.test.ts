@@ -138,3 +138,13 @@ describe('a task for later', () => {
     expect(askTaskForLater({ draft, text: 'T', contextBlock: '', tierKnown: TIERS })?.pinned).toBe(false);
   });
 });
+
+describe('the mode picked in a plain chat (the browser side panel) starts the session in it', () => {
+  it('rides the launch in Ask Walnut and in Start Task, and nothing is sent when none was picked', () => {
+    const ask = initialAskDraft(ID);
+    expect(body(ask).mode).toBeUndefined();
+    expect(body({ ...ask, meta: { ...ask.meta, mode: 'plan' } }).mode).toBe('plan');
+    const task = inFolder(leaveWalnutDraft(ask), '/repo');
+    expect(body({ ...task, meta: { ...task.meta, mode: 'acceptEdits' } }).mode).toBe('acceptEdits');
+  });
+});

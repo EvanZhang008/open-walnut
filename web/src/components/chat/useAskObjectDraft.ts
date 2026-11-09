@@ -16,6 +16,7 @@ import {
   returnFieldToWalnut,
 } from '@/components/sessions/draft-ownership';
 import type { DraftTaskField, DraftTaskFieldPatch } from '@/components/sessions/draft-column';
+import type { SessionMode } from '@open-walnut/core';
 import type { QuickStartPath, QuickStartTaskMeta } from '@/components/sessions/SessionPathSelector';
 import { initialAskDraft, type TierKnown } from './ask-object-draft';
 
@@ -30,6 +31,7 @@ export interface AskObjectDraft {
   onPathChange: (draftId: string, path: QuickStartPath, meta: QuickStartTaskMeta, openedMeta?: QuickStartTaskMeta) => void;
   onProjectChange: (draftId: string, project: string) => void;
   onMetaChange: (draftId: string, updater: (m: QuickStartTaskMeta) => QuickStartTaskMeta) => void;
+  onModeChange: (draftId: string, mode: SessionMode) => void;
   onTaskFieldChange: (draftId: string, patch: DraftTaskFieldPatch) => void;
   onReturnFieldToWalnut: (draftId: string, field: DraftTaskField) => void;
   isKnownProject: (name: string) => boolean;
@@ -82,6 +84,10 @@ export function useAskObjectDraft(draftId: string, opts: { task?: boolean } = {}
   const onMetaChange = useCallback((_id: string, updater: (m: QuickStartTaskMeta) => QuickStartTaskMeta) => {
     setDraft((d) => ({ ...d, meta: updater(d.meta), metaTouched: true, userTouched: true }));
   }, []);
+  // The permission mode the first message starts the session in (the side panel's mode pill).
+  const onModeChange = useCallback((_id: string, mode: SessionMode) => {
+    setDraft((d) => ({ ...d, meta: { ...d.meta, mode }, metaTouched: true, userTouched: true }));
+  }, []);
   const onTaskFieldChange = useCallback((_id: string, patch: DraftTaskFieldPatch) => {
     setDraft((d) => applyDraftTaskFieldEdit(d, patch));
   }, []);
@@ -90,7 +96,7 @@ export function useAskObjectDraft(draftId: string, opts: { task?: boolean } = {}
   }, []);
 
   return {
-    draft, draftRef, tierKnown, requestFolder, onWalnutToggle, onPathChange, onProjectChange, onMetaChange,
+    draft, draftRef, tierKnown, requestFolder, onWalnutToggle, onPathChange, onProjectChange, onMetaChange, onModeChange,
     onTaskFieldChange, onReturnFieldToWalnut, isKnownProject,
   };
 }

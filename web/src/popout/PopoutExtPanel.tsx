@@ -363,7 +363,7 @@ function ExtPanel() {
     if (h.ask?.task) {
       // The first page's question from the popup: the first page here sends it, with the popup's choices.
       const a = h.ask;
-      setHomePreset({ id: Math.random().toString(36).slice(2), text: a.text, page: a.page, act: a.act, sel: a.sel ?? '' });
+      setHomePreset({ id: Math.random().toString(36).slice(2), text: a.text, page: a.page, act: a.act, sel: a.sel ?? '', ...(a.launch ? { launch: a.launch } : {}) });
       goHome();
       return;
     }
@@ -809,9 +809,23 @@ function ExtPanel() {
     />
   );
 
-  const chips = (
-    <ExtComposerChips page={page} pageOn={pageOn} onPage={setPageChip} {...(canAct ? { act: { on: actOn, onToggle: toggleAct } } : {})} />
-  );
+  // Under the words, as on the first page: the selection and the page chip on their own line, so the
+  // bar below has room for Act in tab, the mode and the model (2026-11-09).
+  const pagePills = selectionPill || page ? (
+    <div className="ext-home-pills" data-testid="ext-panel-pills">
+      {selectionPill}
+      <ExtComposerChips page={page} pageOn={pageOn} onPage={setPageChip} />
+    </div>
+  ) : undefined;
+  // Before the first question the selection is the quote card over the composer: the page chip alone.
+  const draftPills = page ? (
+    <div className="ext-home-pills" data-testid="ext-panel-pills">
+      <ExtComposerChips page={page} pageOn={pageOn} onPage={setPageChip} />
+    </div>
+  ) : undefined;
+  const chips = canAct ? (
+    <ExtComposerChips page={null} pageOn={false} onPage={setPageChip} act={{ on: actOn, onToggle: toggleAct }} />
+  ) : null;
   const quote: AskObjectQuote = {
     who: page ? hostOf(page.url) : '',
     when: '',
@@ -872,7 +886,8 @@ function ExtPanel() {
           onDropQuote={dropQuote}
           {...(askPreset ? { preset: askPreset, autoSend: true } : {})}
           composerPlaceholder={mode === 'task' ? 'Ask a follow-up…' : forMain ? 'Ask the CEO, or hand it something to do…' : composerPlaceholderOf(agent.name, !!page)}
-          composerPill={selectionPill}
+          composerPill={pagePills}
+          composerDraftPill={draftPills}
           composerBar={chips}
         />
         </UserRowAttachmentsContext.Provider>

@@ -202,3 +202,16 @@ describe('the open conversation stays until another is started', () => {
     expect(currentConversation('blocked-agent', s, 2000)).toBe(k)
   })
 })
+
+describe('a question the popup hands over carries the mode, model and engine picked there (2026-11-09)', () => {
+  const hand = (launch: unknown) => readInbound({ walnut: 'ext-panel', type: 'hand', ask: { text: 'Compare rooms', page: true, act: false, task: true, launch } }, EXT, true)
+  it('keeps a known mode and well-formed model and engine', () => {
+    expect(hand({ mode: 'plan', model: 'sonnet', engine: 'claude' })).toMatchObject({ type: 'hand', ask: { text: 'Compare rooms', launch: { mode: 'plan', model: 'sonnet', engine: 'claude' } } })
+  })
+  it('drops what is not one, and the launch when nothing of it is', () => {
+    const r = hand({ mode: 'root', model: 'a b<script>', engine: 42 }) as { ask?: Record<string, unknown> }
+    expect(r.ask).toBeDefined()
+    expect(r.ask!.launch).toBeUndefined()
+    expect((hand(undefined) as { ask?: Record<string, unknown> }).ask!.launch).toBeUndefined()
+  })
+})

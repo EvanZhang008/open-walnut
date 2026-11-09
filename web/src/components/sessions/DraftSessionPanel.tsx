@@ -1010,7 +1010,24 @@ export function DraftSessionPanel({
           // Shift+Tab cycles the permission mode, as it does in a running session.
           onToggleMode={showModePill ? cycleDraftMode : undefined}
           {...(plainChat && composerPill ? { contextPill: composerPill } : {})}
-          controlsSlot={plainChat ? composerBar : (
+          // A plain chat (the browser side panel) picks its mode and model as every composer does
+          // (2026-11-09, the user: "why can't i choose model, and mode etc"), after its own chips.
+          controlsSlot={plainChat ? (
+            <>
+              {composerBar}
+              <div className="session-mode-bar draft-actions-bar is-plain-chat-pickers">
+                {showModePill && <DraftModePill mode={draftMode} nextMode={nextDraftMode} onCycle={cycleDraftMode} />}
+                <DraftModelPill
+                  meta={draft.meta}
+                  onMetaChange={(updater) => onMetaChange(draft.id, updater)}
+                  host={draft.host}
+                  cwd={draft.cwd || undefined}
+                  walnut={isWalnut}
+                  fork={isFork}
+                />
+              </div>
+            </>
+          ) : (
             <div className="session-mode-bar draft-actions-bar">
               {/* The row reads like a running session's: mode first, then model.
                   The mode is the one launch choice that changes what the session

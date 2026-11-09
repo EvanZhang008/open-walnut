@@ -41,6 +41,7 @@ export const LOOK_ICONS = {
   plus: sv(18, `<path d="M12 5v14"/><path d="M5 12h14"/>`),
   mic: sv(18, `<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/>`),
   send: sv(18, `<path d="M12 19V5"/><path d="m5 12 7-7 7 7"/>`),
+  file: `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3"/></svg>`,
 }
 /** The suggestion chips' and the bubble's icons, as the view draws them (web/src/components/common/Icons.tsx). */
 const LINE = (box: number, stroke: number, body: string) =>
@@ -117,15 +118,19 @@ export function drawAskLook(o: AskLook, el?: HTMLElement): HTMLElement {
   // On a page other than the one the conversation was shown on, the chip is on, as the view draws it.
   const pageOn = s?.pageKey && o.page?.key && s.pageKey !== o.page.key ? true : (s?.pageOn ?? !talking)
   const site = o.page?.host ?? ''
-  const letter = (site.replace(/^www\./, '').match(/[a-z0-9]/i)?.[0] ?? '?').toUpperCase()
-  const chips = h('span', { class: 'look-chips' },
-    o.page ? h('span', { class: `look-chip look-chip-page${pageOn ? ' is-on' : ''}`, 'data-testid': 'panel-snap-page' },
-      h('span', { class: 'look-fav' }, letter),
+  // As the view draws it (ExtAskChrome ExtComposerChips, 2026-11-09): the page on its own line under
+  // the words ("Page" and its name), then the bar with Act in tab.
+  const pageLine = o.page ? h('div', { class: 'look-pills' },
+    h('span', { class: `look-chip look-chip-page${pageOn ? ' is-on' : ''}`, 'data-testid': 'panel-snap-page' },
+      h('span', { class: 'look-fav look-fav-file', 'aria-hidden': 'true' }, svg(LOOK_ICONS.file)),
+      h('span', { class: 'look-chip-kind' }, pageOn ? 'Page' : 'Add page'),
       h('span', { class: 'look-chip-label' }, o.page.title ? `${o.page.title} · ${site}` : site),
-      pageOn ? h('span', { class: 'look-chip-x' }, '×') : null) : null,
+      pageOn ? h('span', { class: 'look-chip-x' }, '×') : null)) : null
+  const chips = h('span', { class: 'look-chips' },
     o.page ? h('span', { class: 'look-chip look-chip-act' }, ico('pointer'), h('span', {}, 'Act in tab')) : null)
   const composer = h('div', { class: 'look-composer' },
     h('div', { class: 'look-placeholder', 'data-testid': 'panel-snap-placeholder' }, s?.placeholder || (talking ? FOLLOW_UP_PLACEHOLDER : newChatPlaceholder(agent))),
+    pageLine,
     h('div', { class: 'look-bar' }, ico('plus', 'look-plus'), chips, h('span', { class: 'look-end' }, ico('mic', 'look-mic'), h('span', { class: 'look-send' }, ico('send')))))
   box.replaceChildren(head, body,
     ...(sugg.length ? [h('div', { class: 'look-sugg' }, ...sugg.map((t, i) => suggChip(t, suggIcons[i] ?? '')))] : []),

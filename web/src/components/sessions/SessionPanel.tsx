@@ -446,6 +446,9 @@ export const SessionPanel = memo(function SessionPanel(props: SessionPanelProps)
   return <SessionPanelBody {...props} sessionId={shown} onSessionReplaced={replaced} />;
 });
 
+/** The composer controls a plain chat (the browser side panel) shows: the mode and the model pill (its effort inside). */
+const PLAIN_CHAT_CONTROLS: ReadonlySet<string> = new Set(['mode', 'model']);
+
 const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, onClose, embedded, inset, headerLeading, focusComposer, inboxRequest, locked, onToggleLock, onMinimize, onTaskCompleted, onTaskClick, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced, onOpenForkDraft, phoneLayer, phoneDeepLinkBaseUrl, phoneHostSlot, headerSlot, onHostBoard, plainChat, composerPill, composerBar }: SessionPanelProps) {
   // One place decides what "close this panel" means, so every exit (the header
   // button, the error boundary, the missing-session card) goes through the same
@@ -2428,7 +2431,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     handleFileOpen, quoteInChat, timelineShare]);
 
   // Shift+Tab in a composer: the session's next mode.
-  const toggleSessionMode = session && !plainChat ? () => {
+  const toggleSessionMode = session ? () => {
     if (engineUi.configModes) {
       const control = sessionControls.find((candidate) => candidate.id === 'mode');
       const next = nextSessionControlValue(control);
@@ -3948,7 +3951,21 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             onDictationInsert={holdDictationSelection}
             controlsSlot={session && !plainChat ? (
               <ComposerControlsBar className="session-mode-bar" controls={composerControls({ openNonce: modelPickerRequest })} handleRef={composerControlsRef} />
-            ) : plainChat ? composerBar : undefined}
+            ) : plainChat ? (
+              // The browser side panel's chat: its own chips, then the same mode and model (with its
+              // effort) pills as every session's composer (2026-11-09, the user: "why can't i choose
+              // model, and mode etc"); the rest (reply style, side thread, note) stays out of it.
+              <>
+                {composerBar}
+                {session && (
+                  <ComposerControlsBar
+                    className="session-mode-bar is-plain-chat-pickers"
+                    controls={composerControls({ openNonce: modelPickerRequest }).filter((c) => PLAIN_CHAT_CONTROLS.has(c.id))}
+                    handleRef={composerControlsRef}
+                  />
+                )}
+              </>
+            ) : undefined}
             addMenuControls={plainChat ? undefined : { handleRef: composerControlsRef, ids: ['output', 'btw', ...(noteState.hasNote ? [] : ['note'])] }}
             contextPill={threads.composerTarget ? (
               <ComposerThreadPill target={threads.composerTarget} onOpen={openComposerTarget} onClear={clearComposerTarget} />

@@ -417,6 +417,10 @@ html.askpop.wide, html.askpop.wide body.sidepanel, html.askpop.wide body.sidepan
 .look-chip-page:not(.is-on) { opacity: .75; }
 .look-chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .look-fav { flex: none; width: 14px; height: 14px; border-radius: 4px; background: #2f6f8f; color: #fff; font-size: 8.5px; font-weight: 700; display: grid; place-items: center; }
+.look-fav.look-fav-file { background: none; color: inherit; }
+.look-chip-kind { flex: none; font-weight: 650; }
+.look-pills { display: flex; padding: 0 10px 2px; min-width: 0; }
+.look-pills .look-chip-page { max-width: 100%; }
 .look-chip-x { flex: none; width: 16px; text-align: center; color: var(--muted); font-size: 14px; line-height: 1; }
 .look-chip-act { flex: none; }
 .look-end { margin-left: auto; flex: none; display: flex; align-items: center; gap: 6px; }
@@ -470,13 +474,28 @@ html.askpop.wide, html.askpop.wide body.sidepanel, html.askpop.wide body.sidepan
 /* ── the side bar (panel-rail.ts, design C): Chat, Passwords, Browser control, Settings ── */
 .panel-shell.has-rail { flex-direction: row; }
 .panel-shell.has-rail > .panel-body { flex: 1; min-width: 0; height: 100%; }
-.panel-rail { flex: none; width: 48px; display: flex; flex-direction: column; align-items: stretch; gap: 2px; padding: 8px 3px; border-right: 1px solid var(--line); background: var(--bg2); }
-.panel-rail-btn { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 0 5px; border: 0; border-radius: 9px; background: none; color: var(--muted); font: inherit; cursor: pointer; }
+/* 2026-11-09, the user: "the side bar seems not designed right" (48px clipped "Passwords", the marked entry
+   was a box of another size than the others, and every entry sat crowded at the top). Now: 68px, so every
+   name fits on one line; one size of entry, the marked one with an accent bar on its left edge; Settings
+   at the foot, apart from the three things the panel does. */
+.panel-rail { flex: none; width: 68px; box-sizing: border-box; display: flex; flex-direction: column; align-items: stretch; gap: 4px; padding: 10px 6px 12px; border-right: 1px solid var(--line); background: var(--bg2); }
+.panel-rail-btn { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; height: 56px; padding: 0; border: 0; border-radius: 10px; background: none; color: var(--muted); font: inherit; cursor: pointer; transition: background-color .12s ease, color .12s ease; }
 .panel-rail-btn:hover { color: var(--fg); background: var(--bg); }
 .panel-rail-btn.is-on { color: var(--accent); background: var(--accent-soft); }
+.panel-rail-btn.is-on::before { content: ""; position: absolute; left: -6px; top: 12px; bottom: 12px; width: 3px; border-radius: 0 3px 3px 0; background: var(--accent); }
 .panel-rail-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.panel-rail-icon { display: inline-grid; }
-.panel-rail-name { font-size: 9.5px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.1; white-space: nowrap; }
+.panel-rail-btn[data-entry="settings"] { margin-top: auto; }
+.panel-rail-icon { display: inline-grid; place-items: center; width: 22px; height: 22px; }
+.panel-rail-icon svg { width: 20px; height: 20px; }
+.panel-rail-name { max-width: 100%; font-size: 10.5px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.15; white-space: nowrap; }
+/* A panel dragged narrow (Chrome lets it go to 320 px) keeps its room for the view: the bar goes back
+   to 48 px with its icons alone (each names itself in its tooltip), never a cut name. */
+@media (max-width: 380px) {
+  .panel-rail { width: 48px; padding: 8px 4px 10px; }
+  .panel-rail-btn { height: 44px; }
+  .panel-rail-btn.is-on::before { left: -4px; }
+  .panel-rail-name { display: none; }
+}
 /* The views under the bar: the bar goes between them, so their own Back is not drawn. */
 html.in-rail .view-bar > .back-btn[data-testid="panel-view-back"] { visibility: hidden; }
 /* Browser control as the panel opens on it (panel-look-home.ts drawControlLook). */

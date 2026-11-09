@@ -8,6 +8,7 @@
  * (the vault's token never enters a Walnut page), so a press sends the button's place up.
  */
 import { forwardRef, type ReactNode, type RefObject } from 'react';
+import { ICON_FILE } from '@/components/common/Icons';
 import { timeAgo } from '@/utils/time';
 import { askActivityAt, askProjectDisplay } from '@open-walnut/ask-list';
 import { AskWalnutDrawer, AskWalnutMenuButton, type DrawerRow } from '@/components/chat/AskWalnutDrawer';
@@ -177,7 +178,10 @@ interface ChipsProps {
 export function ExtComposerChips({ page, pageOn, onPage, act }: ChipsProps) {
   // The page's web address (a site, never a Walnut host).
   const site = page ? hostOf(page.url) : '';
-  const letter = (site.replace(/^www\./, '').match(/[a-z0-9]/i)?.[0] ?? '?').toUpperCase();
+  const named = page ? (page.title ? `${page.title} (${site})` : site) : '';
+  // The chip says what it is (2026-11-09, the user, of "Commits · EvanZhan…": "what is this"):
+  // "Page", the page's name after it; the words over it say Walnut reads it with the next message.
+  const tip = pageOn ? `Walnut reads this page with your next message: ${named}. \u00d7 leaves it out.` : `Send this page with your next message: ${named}`;
   return (
     <div className="ext-chips">
       {page && (
@@ -188,10 +192,12 @@ export function ExtComposerChips({ page, pageOn, onPage, act }: ChipsProps) {
             aria-checked={pageOn}
             className="ext-chip-body"
             data-testid="ext-panel-include"
-            title={pageOn ? `${page.title ?? site} goes with your next message` : 'Send this page with your next message'}
+            aria-label={tip}
+            title={tip}
             onClick={() => onPage(!pageOn)}
           >
-            <span className="ext-chip-fav" aria-hidden="true">{letter}</span>
+            <span className="ext-chip-fav" aria-hidden="true">{ICON_FILE}</span>
+            <span className="ext-chip-kind">{pageOn ? 'Page' : 'Add page'}</span>
             <span className="ext-chip-label">{page.title ? `${page.title} · ${site}` : site}</span>
           </button>
           {pageOn && (

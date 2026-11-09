@@ -215,7 +215,11 @@
 .ext-chips { display: flex; align-items: center; gap: 4px; min-width: 0; flex: 0 1 auto; overflow: hidden; }
 .ext-chip { flex: 0 1 auto; min-width: 0; height: 24px; display: inline-flex; align-items: center; gap: 5px; padding: 0 8px 0 6px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-secondary); color: var(--fg-secondary); font: inherit; font-size: 11.5px; white-space: nowrap; cursor: pointer; }
 .ext-chip.is-on { border-color: color-mix(in srgb, var(--walnut-accent) 45%, transparent); background: var(--hover-bg); color: var(--walnut-accent); }
-.ext-chip-page { max-width: 180px; padding: 0 4px 0 0; overflow: hidden; }
+.ext-chip-page { max-width: 220px; padding: 0 4px 0 0; overflow: hidden; }
+/* The page chip says what it is: a page icon, the word "Page", then the page's name (2026-11-09). */
+.ext-chip-page .ext-chip-fav { width: 14px; height: 14px; background: none; color: inherit; }
+.ext-chip-page .ext-chip-fav svg { width: 13px; height: 13px; }
+.ext-chip-kind { flex: none; font-weight: 650; }
 .ext-chip-page:not(.is-on) { opacity: .75; }
 .ext-chip-body { min-width: 0; height: 100%; display: inline-flex; align-items: center; gap: 5px; padding: 0 2px 0 5px; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
 .ext-chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -355,9 +359,31 @@
 .ext-taskpage-state.state-needs { color: var(--danger, #d64545); }
 .ext-taskpage-state.state-working { color: #1f8a46; }
 /* The first page's composer: the words, then the page chip (and a quote) under them, then the bar. */
-.ext-home-composer .chat-input-box > .chat-input-textarea { order: 1; }
-.ext-home-composer .chat-input-box > .ext-home-pills { order: 2; display: flex; flex-direction: column; gap: 4px; padding: 0 10px 2px; }
-.ext-home-composer .chat-input-box > .chat-input-controls { order: 3; }
+/* A task's or an Ask's composer the same way (PopoutExtPanel `pagePills`). */
+.ext-home-composer .chat-input-box > .chat-input-textarea, .ext-panel-chat .chat-input-box > .chat-input-textarea { order: 1; }
+.ext-home-composer .chat-input-box > .ext-home-pills, .ext-panel-chat .chat-input-box > .ext-home-pills { order: 2; display: flex; flex-direction: column; gap: 4px; padding: 0 10px 2px; }
+.ext-home-composer .chat-input-box > .chat-input-controls, .ext-panel-chat .chat-input-box > .chat-input-controls { order: 3; }
+/* The mode and model pills after the bar's own chips (2026-11-09: "why can't i choose model, and mode
+   etc"): one line, no Shift+Tab hint, and none on the docked one-line composer. */
+.session-mode-bar.is-plain-chat-pickers { flex: 0 1 auto; flex-wrap: nowrap; min-width: 0; }
+.is-plain-chat-pickers .mode-toggle-pill-shortcut { display: none; }
+.ext-home-composer.is-docked .is-plain-chat-pickers { display: none; }
+/* In the panel they read as the chips beside them do (a capsule at the chips' size), so they are
+   seen as the controls they are: "Bypass" and "Auto" as bare grey words were missed. */
+html body .is-plain-chat-pickers .mode-toggle-pill, html body .is-plain-chat-pickers .composer-model-pill {
+  height: 24px; display: inline-flex; align-items: center; padding: 0 9px; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--bg-secondary); color: var(--fg-secondary); font-size: 11.5px; font-weight: 600; line-height: 1;
+}
+.is-plain-chat-pickers .mode-toggle-pill .mode-toggle-pill-label { font-family: inherit; font-size: 11.5px; font-weight: 600; }
+html body .is-plain-chat-pickers .mode-toggle-pill:hover, html body .is-plain-chat-pickers .composer-model-pill:hover { color: var(--walnut-accent); background: var(--hover-bg); }
+/* Where the bar has no room for them beside its own controls (the first page's grown composer, with
+   Act in this tab and Save as todo; any bar under 420 px), they take a line of their own over it. */
+.ext-home-composer.is-grown .chat-input-controls { flex-wrap: wrap; row-gap: 2px; }
+.ext-home-composer.is-grown .session-mode-bar.is-plain-chat-pickers { order: -1; flex-basis: 100%; }
+@container (max-width: 420px) {
+  .ext-panel-chat .chat-input-controls { flex-wrap: wrap; row-gap: 2px; }
+  .ext-panel-chat .session-mode-bar.is-plain-chat-pickers { order: -1; flex-basis: 100%; }
+}
 .ext-home-pills .ext-panel-selection { margin: 0; }
 .ext-home-pills .ext-chips { overflow: visible; }
 .ext-home-pills .ext-chip-page { max-width: 100%; }
@@ -387,7 +413,8 @@
 .ext-home-composer.is-docked .chat-send-group { order: 3; }
 .ext-home-composer.is-docked .chat-input-controls > :not(.chat-plus-group):not(.chat-send-group):not(.ext-home-dock-chip) { display: none; }
 .ext-home-dock-chip { flex: none; display: inline-flex; align-items: center; gap: 5px; max-width: 132px; height: 26px; padding: 0 9px 0 5px; border: 1px solid var(--border); border-radius: 8px; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--fg); }
-.ext-home-dock-chip .ext-chip-fav { width: 16px; height: 16px; font-size: 9.5px; border-radius: 4px; }
+.ext-home-dock-chip .ext-chip-fav { width: 16px; height: 16px; font-size: 9.5px; border-radius: 4px; background: none; color: inherit; }
+.ext-home-dock-chip .ext-chip-fav svg { width: 13px; height: 13px; }
 /* Grown: the full composer; its controls get room in a 400 px popup (review round 5, Sol #4). */
 .ext-home-composer.is-grown .chat-input-controls { gap: 4px; padding-right: 2px; }
 /* Beside the side bar (the row about 330 px) "Save as todo" is its glyph alone, a round button like

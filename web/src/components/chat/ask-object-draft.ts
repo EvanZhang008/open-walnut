@@ -73,6 +73,7 @@ export function askLaunchBody(input: {
       ...(agentId === GENERAL_AGENT_ID ? { project: draft.project || ASK_WALNUT_PROJECT } : { agentId }),
       taskMeta,
       ...(meta.model ? { model: meta.model } : {}),
+      ...(meta.mode ? { mode: meta.mode } : {}),
     };
   }
   const engine = launchEngineForHost(meta.engine, draft.host, catalog);
@@ -86,6 +87,7 @@ export function askLaunchBody(input: {
     taskMeta,
     ...(engine ? { engine } : {}),
     ...(model ? { model } : {}),
+    ...(meta.mode ? { mode: meta.mode } : {}),
     ...(draft.project ? { project: draft.project } : {}),
     ...(draft.project && draft.projectSource === 'folder' ? { projectFromFolder: true } : {}),
     ...(draft.createCwd ? { createCwd: true } : {}),

@@ -168,7 +168,19 @@ test('the side panel opens on Chat: the side bar, the list filling the page, New
   await expect(rail).toBeVisible()
   for (const e of ['chat', 'passwords', 'control', 'settings']) await expect(rail.getByTestId(`panel-rail-${e}`)).toBeVisible()
   await expect(rail.getByTestId('panel-rail-chat')).toHaveAttribute('aria-current', 'page')
-  expect((await rail.boundingBox())!.width).toBeLessThanOrEqual(48)
+  expect((await rail.boundingBox())!.width).toBeLessThanOrEqual(68)
+  // Every entry's name whole on its line (2026-11-09: "Passwords" was cut at 48 px), and Settings at
+  // the foot, apart from the three things the panel does.
+  for (const e of ['chat', 'passwords', 'control', 'settings']) {
+    expect(await rail.getByTestId(`panel-rail-${e}`).locator('.panel-rail-name').evaluate((n) => n.scrollWidth - n.clientWidth), e).toBeLessThanOrEqual(0)
+    const name = (await rail.getByTestId(`panel-rail-${e}`).locator('.panel-rail-name').boundingBox())!
+    const btn = (await rail.getByTestId(`panel-rail-${e}`).boundingBox())!
+    expect(name.x, e).toBeGreaterThanOrEqual(btn.x)
+    expect(name.x + name.width, e).toBeLessThanOrEqual(btn.x + btn.width)
+  }
+  const railBox = (await rail.boundingBox())!
+  const settingsBox = (await rail.getByTestId('panel-rail-settings').boundingBox())!
+  expect(railBox.y + railBox.height - (settingsBox.y + settingsBox.height)).toBeLessThan(24)
   await expect(v.getByTestId('ext-home-head')).toBeVisible()
   await expect(v.getByTestId('ext-relay-pill')).toHaveText('Relay off')
   await expect(v.getByTestId('ext-ask-key')).toBeVisible()
@@ -211,6 +223,21 @@ test('the side panel opens on Chat: the side bar, the list filling the page, New
   await expect(v.getByTestId('ext-panel-include')).toBeChecked()
   await expect(v.getByTestId('ext-home-act')).not.toBeChecked()
   await expect(composer.locator('.draft-later-btn')).toBeVisible()
+  // The chip says what it is, and the task's mode and model are picked here as in every composer
+  // (2026-11-09: "why can't i choose model, and mode etc", "also what is this").
+  await expect(v.getByTestId('ext-panel-include')).toContainText(/^Page/)
+  await expect(composer.locator('.is-plain-chat-pickers .draft-mode-pill')).toBeVisible()
+  await expect(composer.locator('.is-plain-chat-pickers .draft-model-select')).toBeVisible()
+  // Its picker is the composer's: open on an empty draft past the dock's delay, the composer stays
+  // grown and the picker open (review 2026-11-09: it docked and so closed the picker).
+  await composer.locator('.is-plain-chat-pickers .draft-model-select').click()
+  await expect(v.locator('.model-picker')).toBeVisible()
+  await panel.waitForTimeout(1200)
+  await expect(v.locator('.model-picker')).toBeVisible()
+  await expect(composer).toHaveAttribute('data-docked', 'false')
+  await panel.keyboard.press('Escape')
+  await expect(v.locator('.model-picker')).toHaveCount(0)
+  await box.click()
   // Beside the side bar every control keeps its words and room: Act in this tab whole, send inside.
   await expect.poll(() => actWordsCut(v)).toBe(0)
   await expect.poll(() => sendOverhang(v)).toBeLessThanOrEqual(-2)
@@ -825,6 +852,14 @@ test('the popup opens on New task; a question there goes on in the side panel', 
   await expect(v.getByTestId('ext-home')).toBeVisible()
   // A question typed in the popup is started by the side panel, which shows the task.
   await v.locator('[data-testid="ext-home-composer"] textarea').click()
+  // The mode picked here is the one the side panel starts it in (review 2026-11-09: the popup's picks
+  // were dropped on the way).
+  const modePill = v.locator('[data-testid="ext-home-composer"] .is-plain-chat-pickers .draft-mode-pill')
+  const modeBefore = await modePill.getAttribute('data-mode')
+  await modePill.click()
+  await expect(modePill).not.toHaveAttribute('data-mode', modeBefore ?? '')
+  const pickedMode = await modePill.getAttribute('data-mode')
+  await v.locator('[data-testid="ext-home-composer"] textarea').click()
   await pop.keyboard.type('Compare the two hotel rooms')
   // Grown in the popup, the send button keeps its room (review round 5, Sol #4).
   expect(await sendOverhang(v)).toBeLessThanOrEqual(-2)
@@ -839,7 +874,10 @@ test('the popup opens on New task; a question there goes on in the side panel', 
   await expect(sv.getByTestId('ext-task-title')).toHaveText('Compare the two hotel rooms')
   const s = sv.getByTestId('ask-object-session')
   await expect(s).toBeVisible({ timeout: 60_000 })
-  made.push(await taskOfSession((await s.getAttribute('data-session-id')) ?? ''))
+  const handedSid = (await s.getAttribute('data-session-id')) ?? ''
+  made.push(await taskOfSession(handedSid))
+  const rec = await (await lab.doc.request.get(`${lab.base}/api/v1/sessions/${handedSid}`)).json() as Record<string, any>
+  expect(rec.mode ?? rec.session?.mode).toBe(pickedMode)
   await sp.close()
 })
 
