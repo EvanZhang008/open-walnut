@@ -161,9 +161,20 @@ const PARTS = /[A-Z]{2,}(?=[A-Z][a-z]|[0-9]|$)|[A-Z]?[a-z]+|[A-Z]+|[0-9]+/g
  * them (2026-11-05: a test letter id in a CI log read as a name, then a test hook's random
  * suffix). No name or identifier starts with a digit. Such a word is matched whole, never
  * by its parts. `foo2`, `foo2026` and camelCase still are.
+ *
+ * A mixed-case word is a random token (base64url, as `crypto.randomBytes().toString
+ * ('base64url')` makes) when a digit run sits inside it and three or more of its letter
+ * runs are one or two letters: case flips at random, so its parts are mostly that short,
+ * while an identifier's parts are words (2026-11-09: an approval id `apr-` plus nine
+ * random bytes split into `s`, `Kx`, `Ls`, a short term, `1`, `ET`, in a public CI log).
  */
 export function opaqueId(word, parts) {
-  return (parts >= 3 || /^[0-9]/.test(word)) && /^[a-z0-9]+$/.test(word)
+  const n = parts.length
+  if ((n >= 3 || /^[0-9]/.test(word)) && /^[a-z0-9]+$/.test(word)) return true
+  if (!/[a-z]/.test(word) || !/[A-Z]/.test(word)) return false
+  const inner = parts.slice(1, -1).some((p) => /^[0-9]/.test(p))
+  const short = parts.filter((p) => /^[A-Za-z]{1,2}$/.test(p)).length
+  return inner && short >= 3
 }
 
 /**
@@ -205,7 +216,7 @@ export function scanText(rules, text, base = 0) {
         const subs = []
         let p
         while ((p = PARTS.exec(raw)) !== null) subs.push([p[0], p.index])
-        if (subs.length > 1 && !opaqueId(raw, subs.length)) {
+        if (subs.length > 1 && !opaqueId(raw, subs.map(([w]) => w))) {
           for (const [w, at] of subs) {
             const label = ones.get(hashNum(norm(w), rules.seed))
             if (label) (parts ??= []).push([label, at, at + w.length])

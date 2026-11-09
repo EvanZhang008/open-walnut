@@ -131,6 +131,16 @@ describe('leak-scan rules', () => {
     expect(labels('MW35ZORBLAX9')).toEqual(['tool'])
   })
 
+  it('never reads a term out of a random mixed-case token, and still reads it out of identifiers', () => {
+    // 2026-11-09, Leak audit 42556657534: an approval id (`apr-` plus nine random bytes in
+    // base64url) split into `s`, `Kx`, `Ls`, a short term, `1`, `ET` in a public CI log.
+    expect(labels('{"approvalId":"apr-sKxLsZorblax1ET"}')).toEqual([])
+    expect(labels('tok qZorblaxW4mPa_x')).toEqual([])
+    // Identifiers with word parts, a digit only at the end, or no case mix keep matching.
+    expect(labels('getZorblaxById zorblaxV2Client HTTPZorblax2 fooZorblax7Bar')).toEqual(['tool', 'tool', 'tool', 'tool'])
+    expect(labels('aZorblax b2ZorblaxCx')).toEqual(['tool', 'tool'])
+  })
+
   it('keeps short C strings and UTF-8 runs of a binary, drops short noise', () => {
     // test data: two CJK characters (UTF-8, 6 bytes) then the term, so the run is 13 bytes
     const cjk = Buffer.from('\u4f60\u597dzorblax', 'utf8')
