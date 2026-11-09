@@ -27,7 +27,7 @@ export async function openInAgentWindow(api: Api, url: string, before?: (tabId: 
   let tab: Tab | undefined
   if (typeof id === 'number') {
     const w = await api.windows.get(id).catch(() => null)
-    if (w) tab = await api.tabs.create({ url: 'about:blank', windowId: id, active: true })
+    if (w) tab = await newAgentTab(api, id)
   }
   if (!tab) {
     // The window's first tab is its own page (agent-groups.ts AGENT_PAGE: what this window is, in
@@ -36,13 +36,32 @@ export async function openInAgentWindow(api: Api, url: string, before?: (tabId: 
     const w = await api.windows.create({ url: own ?? 'about:blank', ...AGENT_WINDOW })
     await api.storage.session.set({ agentWindow: w.id, ...(own && w.tabs?.[0]?.id !== undefined ? { agentPage: w.tabs[0].id } : {}) })
     tab = own && w.id !== undefined
-      ? await api.tabs.create({ url: 'about:blank', windowId: w.id, active: true })
+      ? await newAgentTab(api, w.id)
       : w.tabs?.[0] ?? (await api.tabs.query({ active: true, windowId: w.id }))[0] ?? {}
   }
   if (tab.id === undefined) return tab
   await api.tabs.update(tab.id, { muted: true })
   if (before) await before(tab.id)
   return api.tabs.update(tab.id, { url })
+}
+
+/**
+ * A new blank tab in the agent window, made in the background and only then put in front of that
+ * window, never while the person is in it. `tabs.create` with `active: true` focuses its window in
+ * Chrome (2026-11-09: the agent window came up over the person's work at its first tab), while
+ * `tabs.update` with `active` changes only which tab the window shows.
+ */
+export async function newAgentTab(api: Api, windowId: number): Promise<Tab> {
+  const tab = await api.tabs.create({ url: 'about:blank', windowId, active: false })
+  if (tab.id !== undefined) await frontInWindow(api, windowId, tab.id)
+  return tab
+}
+
+/** `tabId` in front of its window, unless the person is in that window (their tab stays theirs). */
+export async function frontInWindow(api: Pick<ExtApi, 'windows' | 'tabs'>, windowId: number | undefined, tabId: number): Promise<void> {
+  const w = windowId === undefined ? null : await api.windows.get(windowId).catch(() => null) as { focused?: boolean } | null
+  if (!w || w.focused) return
+  await api.tabs.update(tabId, { active: true }).catch(() => undefined)
 }
 
 /** The sizes a resize takes, in CSS pixels. */

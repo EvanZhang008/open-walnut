@@ -248,6 +248,11 @@ test('resize sizes the agent window, which stays unfocused and never minimized',
   const v = await act(page, { action: 'resize', tab, width: 900, height: 600, viewport: true })
   expect(v.body.viewport).toEqual({ width: 900, height: 600 })
   expect(await win()).toMatchObject({ state: 'normal', focused: false, tabW: 900, tabH: 600 })
+  // A second tab in the agent window comes to its front, and the window stays unfocused
+  // (2026-11-09: tabs.create with active: true focused it).
+  const two = (await act(page, { action: 'open', url: site('www.portal.test', '/hidden-upload') })).body.tab as number
+  expect(await sw.evaluate(async (id: number) => { const t = await chrome.tabs.get(id); const w = await chrome.windows.get(t.windowId); return { active: t.active, focused: w.focused } }, two)).toEqual({ active: true, focused: false })
+  await act(page, { action: 'close', tab: two })
   await act(page, { action: 'close', tab })
 })
 

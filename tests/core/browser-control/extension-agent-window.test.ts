@@ -56,8 +56,11 @@ describe('the agent window', () => {
     await openInAgentWindow(api, 'https://shop.example.test/')
     expect(calls.slice(0, 2)).toEqual([
       { fn: 'windows.create', arg: { url: 'chrome-extension://walnut/agent-window.html', focused: false, width: 1280, height: 900, type: 'normal' } },
-      { fn: 'tabs.create', arg: { url: 'about:blank', windowId: 7, active: true } },
+      { fn: 'tabs.create', arg: { url: 'about:blank', windowId: 7, active: false } },
     ])
+    // Then in front of the agent window alone, which is not focused.
+    expect(calls[2]).toEqual({ fn: 'tabs.update', arg: { id: 71, o: { active: true } } })
+    expect(calls.some((c) => c.fn === 'windows.update')).toBe(false)
     expect(session.agentPage).toBe(70)
   })
 
@@ -80,7 +83,7 @@ describe('the agent window', () => {
     const { api, calls } = fakeApi(7)
     const seen: string[] = []
     await openInAgentWindow(api, 'https://portal.example.test/', async (id) => { seen.push(`before ${id} after ${calls.length} calls`) })
-    expect(seen).toEqual(['before 71 after 2 calls'])
+    expect(seen).toEqual(['before 71 after 3 calls'])
     expect(calls.at(-1)).toEqual({ fn: 'tabs.update', arg: { id: 71, o: { url: 'https://portal.example.test/' } } })
   })
 
@@ -88,11 +91,21 @@ describe('the agent window', () => {
     const { api, calls } = fakeApi(7)
     await openInAgentWindow(api, 'https://shop.example.test/two')
     expect(calls).toEqual([
-      { fn: 'tabs.create', arg: { url: 'about:blank', windowId: 7, active: true } },
+      { fn: 'tabs.create', arg: { url: 'about:blank', windowId: 7, active: false } },
+      { fn: 'tabs.update', arg: { id: 71, o: { active: true } } },
       { fn: 'tabs.update', arg: { id: 71, o: { muted: true } } },
       { fn: 'tabs.update', arg: { id: 71, o: { url: 'https://shop.example.test/two' } } },
     ])
     expect(calls.some((c) => c.fn === 'windows.update')).toBe(false)
+  })
+
+  it('a new tab stays behind while the person is in the agent window', async () => {
+    const { api, calls } = fakeApi(7)
+    await (api as unknown as { windows: { update: (id: number, o: Record<string, unknown>) => Promise<unknown> } }).windows.update(7, { focused: true })
+    calls.length = 0
+    await openInAgentWindow(api, 'https://shop.example.test/three')
+    expect(calls[0]).toEqual({ fn: 'tabs.create', arg: { url: 'about:blank', windowId: 7, active: false } })
+    expect(calls.some((c) => c.fn === 'tabs.update' && (c.arg as { o: Record<string, unknown> }).o.active === true)).toBe(false)
   })
 
   it('a window the person closed is made again, still unfocused', async () => {
@@ -163,10 +176,9 @@ describe('the agent window', () => {
       // The agent's window: made unfocused (AGENT_WINDOW), sized, its tabs opened inside it.
       ['agent-window.ts: const w = await api.windows.create({ url: own ?? \'about:blank\', ...AGENT_WINDOW })', 'agent window, unfocused'],
       ['agent-window.ts: await api.windows.update?.(agentWindow, { ...plain, width, height })', 'agent window size only'],
-      ['agent-window.ts: if (w) tab = await api.tabs.create({ url: \'about:blank\', windowId: id, active: true })', 'inside the unfocused agent window'],
-      ['agent-window.ts: ? await api.tabs.create({ url: \'about:blank\', windowId: w.id, active: true })', 'inside the unfocused agent window'],
+      ['agent-window.ts: const tab = await api.tabs.create({ url: \'about:blank\', windowId, active: false })', 'agent window, in the background (newAgentTab)'],
       ['agent-groups.ts: const t = await api.tabs.create({ url: api.runtime.getURL(AGENT_PAGE), windowId, active: false, index: 0 }).catch(() => null)', 'agent window page, not active'],
-      ['agent-page.ts: const t = await more.tabs.create({ url: href, windowId: tab.windowId, active: !personsTab(rec), openerTabId: tabId }).finally(() => linking.delete(tabId))', 'a link the page opened, in its own window; never active in the person\'s'],
+      ['agent-page.ts: const t = await more.tabs.create({ url: href, windowId: tab.windowId, active: false, openerTabId: tabId }).finally(() => linking.delete(tabId))', 'a link the page opened, in its own window, in the background'],
       // The person's Take over in the Browser view (browser-view-v1.ts sends it only for a person).
       ['agent-takeover.ts: await ext.windows.update?.(tab.windowId, { focused: true })', 'Take over'],
       // The person's own clicks and keys: the toolbar popup, the side panel, the fill shortcut, Connect.
@@ -196,6 +208,22 @@ describe('the agent window', () => {
     expect([...allowed.keys()].filter((k) => !found.includes(k))).toEqual([])
   })
 
+  // 2026-11-09: tabs.create with active: true focused the agent window in Chrome (a spec caught it:
+  // extension-agent-net.spec.ts, resize). A tab the extension opens for an agent is made in the
+  // background; only tabs.update brings it to the front of its window (frontInWindow).
+  it('every tab the agent code opens is made in the background', () => {
+    const dir = path.resolve(__dirname, '../../../packages/browser-extension/src')
+    const PERSONS = new Set(['background.ts', 'bg-fill.ts', 'panel-ask.ts', 'popup.ts'])
+    const bad: string[] = []
+    for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.ts') && !PERSONS.has(x))) {
+      fs.readFileSync(path.join(dir, f), 'utf8').split('\n').forEach((line, i) => {
+        if (/^\s*(\/\/|\*|\/\*)/.test(line) || !/tabs\.create\(/.test(line)) return
+        if (!/active:\s*false\b/.test(line)) bad.push(`${f}:${i + 1}: ${line.trim()}`)
+      })
+    }
+    expect(bad).toEqual([])
+  })
+
   // Review 2026-11-08: a tab switch is as visible as a raised window when the person looks at that
   // window. Every switch is listed with the check that keeps it out of the person's view.
   it('every tab switch is listed, with what keeps it from the person\'s view', () => {
@@ -208,6 +236,7 @@ describe('the agent window', () => {
       ['agent-view.ts: await ext.tabs.update(tabId, { active: true }).catch(() => undefined)', 'bringUpForCommand: agent window only, never focused or under a taken-over tab'],
       ['agent-view.ts: await ext.tabs.update(tabId, { active: true })', 'a picture: agent window only, never focused or under a taken-over tab'],
       ['agent-view.ts: await ext.tabs.update(back, { active: true }).catch(() => undefined)', 'put back after a picture: only while nobody came in'],
+      ['agent-window.ts: await api.tabs.update(tabId, { active: true }).catch(() => undefined)', 'frontInWindow: a new agent tab, never in a window the person is in'],
     ])
     const found: string[] = []
     const walk = (d: string): string[] => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => e.isDirectory() ? walk(path.join(d, e.name)) : e.name.endsWith('.ts') ? [path.join(d, e.name)] : [])

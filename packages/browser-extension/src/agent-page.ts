@@ -12,6 +12,7 @@ import { pageCheck } from './page-reach'
 import { popupRecord } from './agent-tab-kind'
 import { muteAgentTab } from './agent-media'
 import { noteAgentMade } from './agent-tidy'
+import { frontInWindow } from './agent-window'
 import {
   ACTING_MS, AgentError, WALNUT_PAGE, acting, agentTabs, allowed, checkPage, frameOp, loaded, mark, originOf, personsTab, settled, sleep, where,
   walnutCheck, type AgentTab, type WireCommand,
@@ -270,8 +271,9 @@ async function openLink(c: WireCommand, tabId: number, tab: Tab, rec: AgentTab, 
   await checkPage(c.allow, href)
   // In the agent window it comes to the front; in the person's window it stays behind their tab.
   linking.set(tabId, href)
-  const t = await more.tabs.create({ url: href, windowId: tab.windowId, active: !personsTab(rec), openerTabId: tabId }).finally(() => linking.delete(tabId))
+  const t = await more.tabs.create({ url: href, windowId: tab.windowId, active: false, openerTabId: tabId }).finally(() => linking.delete(tabId))
   if (t.id === undefined) return undefined
+  if (!personsTab(rec)) await frontInWindow(ext, tab.windowId, t.id)
   await adoptOpened(t.id, rec, href)
   return (await agentTabs.get(t.id)) ? { tab: t.id, url: href } : undefined
 }
