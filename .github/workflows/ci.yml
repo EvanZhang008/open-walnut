@@ -18,6 +18,14 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# CI_RUNNER_SHARE: the repository runs 20 jobs at a time, and the push gate (push-gate.yml) runs
+# on the same runners before every land writes main, so its wait is how long a ready land takes to
+# go live. A push's run here is after the fact (the gate already ran its quick and frontend tiers
+# and touched browser specs on that commit), so its long matrices take a few runners each, not all
+# (2026-11-09: two runs held 12 to 17 of the 20 for 80 to 90 minutes, gate jobs fell to 3 to 8
+# with 20 to 45 queued, and lands went live at 3 an hour). A pull request runs at full width.
+# tests/scripts/ci-runner-share.test.ts keeps every long matrix capped.
+
 # Runner images are pinned (ubuntu-24.04, macos-26), here and in release.yml and
 # flake-hunt.yml: a `-latest` label moves to a new OS on GitHub's date (ubuntu
 # to 26.04 from 2026-10-19), which would turn CI red without a commit. Moving to
@@ -76,6 +84,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
+      # On a push to main, at most 2 legs at a time (CI_RUNNER_SHARE above).
+      max-parallel: ${{ github.event_name == 'push' && 2 || 32 }}
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
@@ -132,6 +142,8 @@ jobs:
     runs-on: ubuntu-24.04
     needs: build
     strategy:
+      # On a push to main, at most 3 legs at a time (CI_RUNNER_SHARE above).
+      max-parallel: ${{ github.event_name == 'push' && 3 || 32 }}
       fail-fast: false
       matrix:
         include:
@@ -234,6 +246,8 @@ jobs:
     needs: build
     timeout-minutes: 40
     strategy:
+      # On a push to main, at most 2 legs at a time (CI_RUNNER_SHARE above).
+      max-parallel: ${{ github.event_name == 'push' && 2 || 32 }}
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4, 5, 6]
@@ -769,6 +783,8 @@ jobs:
     needs: build
     timeout-minutes: 60
     strategy:
+      # On a push to main, at most 4 legs at a time (CI_RUNNER_SHARE above).
+      max-parallel: ${{ github.event_name == 'push' && 4 || 32 }}
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
