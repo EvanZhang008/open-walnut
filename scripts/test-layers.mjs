@@ -78,7 +78,10 @@ export function slowUniverse() {
   const all = []
   walk(path.join(ROOT, 'tests'), all)
   const slow = new Set([...SLOW_TEST_FILES, ...QUARANTINED_TEST_FILES])
-  const slowDirs = SLOW_TEST_DIRS.map((d) => d.replace(/\*\*$/, ''))
+  // As vitest.slow.config.ts includes them: tests/e2e has a config of its own, and a file the slow
+  // config does not include answers "No test files found" (2026-11-09: every land that edited an
+  // e2e test was refused that way).
+  const slowDirs = SLOW_TEST_DIRS.filter((d) => d !== 'tests/e2e/**').map((d) => d.replace(/\*\*$/, ''))
   return all.filter((f) => !f.endsWith('.live.test.ts') && (slow.has(f) || slowDirs.some((d) => f.startsWith(d)))).sort()
 }
 

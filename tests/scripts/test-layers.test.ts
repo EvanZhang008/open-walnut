@@ -58,6 +58,8 @@ describe('the land layer', () => {
   it('never runs a file outside the quick tier (slow, quarantined, e2e), even one the change edits', () => {
     const plan = layers.landLayer(['tests/e2e/flow.test.ts', 'src/m.ts'], { universe, durations, namedBy: () => new Set<string>(), graph: fakeGraph({ 'src/m.ts': ['tests/not-in-tier.test.ts'] }) })
     expect(plan.files).not.toContain('tests/e2e/flow.test.ts')
+    // Nor with the slow config, which does not include e2e files (vitest answers "No test files found").
+    expect(layers.landLayer(['tests/e2e/flow.test.ts'], { universe, slow: layers.slowUniverse(), durations, namedBy: () => new Set<string>(), graph: fakeGraph({}) }).slowFiles).toEqual([])
     expect(plan.files).not.toContain('tests/not-in-tier.test.ts')
   })
 
@@ -157,6 +159,14 @@ describe('the default base', () => {
   it('is HEAD with no main line, or one too far behind to be one change', () => {
     expect(layers.defaultBase(fake({}, 0))).toBe('HEAD')
     expect(layers.defaultBase(fake({ 'origin/main': 'o1' }, layers.MAX_BRANCH_COMMITS + 1))).toBe('HEAD')
+  })
+})
+
+describe('the slow tier as the land layer sees it', () => {
+  it('holds only files vitest.slow.config.ts includes: none under tests/e2e', () => {
+    const slow = layers.slowUniverse()
+    expect(slow.length).toBeGreaterThan(0)
+    expect(slow.filter((f: string) => f.startsWith('tests/e2e/'))).toEqual([])
   })
 })
 
