@@ -1,7 +1,8 @@
 /**
- * A deleted file's old content comes from `git show HEAD:<rel>`, which costs two
- * git spawns per file. Only a file with a `.git` above it can be in git, so a
- * delete outside every repo must answer without spawning anything.
+ * A deleted file's old content comes from HEAD (read per repo in one
+ * `git cat-file --batch`; it was two git spawns per file). Only a file with a
+ * `.git` above it can be in git, so a delete outside every repo must answer
+ * without spawning anything.
  *
  * Why: a long session deletes hundreds of scratch files in /tmp; on 2026-09-29
  * each compute of one 907 MB transcript spawned git ~800 times (about 2.5 s),
@@ -66,7 +67,7 @@ describe('a deleted file asks git only when a repo can hold it', () => {
     const out = await computeHostLocalChanges({ sessionId: SID, cwd: repo, claudeHome })
     const change = out!.result.groups.flatMap((g) => g.files).find((f) => f.relPath === 'gone.ts')
     expect(change).toMatchObject({ status: 'deleted', before: 'export const dead = 1;\n', after: '', partial: false })
-    expect(spawned.argv.some((a) => a[0] === 'git' && a[1] === 'show')).toBe(true)
+    expect(spawned.argv.some((a) => a[0] === 'git' && a[1] === 'cat-file' && a[2] === '--batch')).toBe(true)
   })
 
   it('spawns nothing for a delete outside every repo, and still reports it', async () => {

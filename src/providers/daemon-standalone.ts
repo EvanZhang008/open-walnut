@@ -11393,6 +11393,11 @@ async function computeChangesCached(sid: string, cwd: string | undefined, refres
         subCache: memo.subCache,
         gitRootByDir: memo.gitRootByDir,
         mainParse: memo.mainParse,
+        // Files whose ops, stat and HEAD content are unchanged reuse their last
+        // reconstruction; it lives and dies with the cached output. Keep in sync
+        // with daemon-source.ts.
+        // Refresh ("re-read the data") rebuilds every file and asks git again.
+        changesMemo: refresh ? undefined : changesCache.get(sid)?.output.changesMemo,
       })
       memo.lastUsed = Date.now()
       memo.light = output
@@ -11404,6 +11409,8 @@ async function computeChangesCached(sid: string, cwd: string | undefined, refres
       logMsg('info', 'changes.compute done', {
         sid, ms: memo.lastUsed - startedAt, resumed: output.parseStats.resumed,
         readBytes: output.parseStats.readBytes, size: output.size, files: output.result.fileCount,
+        reconstructed: output.computeStats.reconstructed, reused: output.computeStats.reused,
+        gitSpawns: output.computeStats.gitSpawns,
       })
       const entry: ChangesCacheEntry = { mtimeMs: output.mtimeMs, size: output.size, output, lastUsed: Date.now() }
       changesCache.set(sid, entry)

@@ -14,8 +14,9 @@
  * Like git-diff-core.ts, this module must stay dependency-lean (node builtins
  * + bash-file-ops only) so bun can bundle it into the daemon binary. No
  * logging imports — callers log around it. daemon-source.ts (the embedded-
- * string fallback twin) deliberately does NOT mirror this pipeline; it strips
- * 'changes-v1' from its hello capabilities so the server uses the fallback.
+ * string twin) does not copy this pipeline: it require()s the bundled sidecar
+ * `changes-core.cjs` (scripts/build-daemon.sh) and advertises 'changes-v1' only
+ * when that loads, so both twins run this exact code.
  */
 
 import fs from 'node:fs';
@@ -496,6 +497,9 @@ export interface HostLocalComputeOptions {
   mainParse?: { state?: MainParseState };
   /** Abort if the whole compute exceeds this (default 100s). */
   deadlineMs?: number;
+  /** The previous compute's `changesMemo` for this session: files whose ops,
+   *  on-disk stat and HEAD content did not change reuse their reconstruction. */
+  changesMemo?: HostLocalChangesMemo;
 }
 
 export interface HostLocalComputeOutput {
@@ -509,10 +513,15 @@ export interface HostLocalComputeOutput {
   /** How the main transcript was read: continued from the caller's
    *  MainParseState, and how many bytes this compute read. */
   parseStats: { resumed: boolean; readBytes: number };
+  /** Pass back as `changesMemo` on the next compute of this session. */
+  changesMemo: HostLocalChangesMemo;
+  computeStats: HostLocalComputeStats;
 }
 
 const STREAM_WINDOW = 1024 * 1024;
 const CONTENT_READ_PARALLELISM = 8;
+/** Transcript text folded between two yields of the parse. */
+const PARSE_PIECE_CHARS = 128 * 1024;
 const TAIL_HASH_BYTES = 4096;
 /** Past this a file is listed without content: no text diff of it is readable. */
 export const MAX_CONTENT_BYTES = 8 * 1024 * 1024;
@@ -653,7 +662,15 @@ async function streamParseHostLocal(
       const lastNl = buf.lastIndexOf(0x0a);
       if (lastNl !== -1) {
         const text = buf.subarray(0, lastNl + 1).toString('utf-8');
-        collectOpsFromJsonl(text, fileMap);
+        // Fold in line-aligned pieces with a yield between: one 1 MB window of
+        // JSON lines can hold the loop for tens of ms on a loaded host.
+        for (let i = 0; i < text.length;) {
+          const cut = i + PARSE_PIECE_CHARS >= text.length ? -1 : text.indexOf('\n', i + PARSE_PIECE_CHARS);
+          const end = cut === -1 ? text.length : cut + 1;
+          collectOpsFromJsonl(i === 0 && end === text.length ? text : text.slice(i, end), fileMap);
+          i = end;
+          if (i < text.length) await new Promise<void>((r) => setImmediate(r));
+        }
         if (!headBlock) headBlock = text;
         carry = Buffer.from(buf.subarray(lastNl + 1));
         consumed = offset - carry.length;
@@ -670,27 +687,191 @@ async function streamParseHostLocal(
   }
 }
 
-/** Recover a deleted file's last-committed content via `git show HEAD:<rel>`. */
-async function readDeletedBeforeHostLocal(absPath: string): Promise<string | null> {
-  const run = (argv: string[], cwd: string) => new Promise<{ stdout: string; code: number }>((resolve) => {
-    execFile(argv[0]!, argv.slice(1), { cwd, timeout: 10_000, maxBuffer: 64 * 1024 * 1024, encoding: 'utf-8' },
-      (err, stdout) => resolve({ stdout: stdout || '', code: err ? 1 : 0 }));
+// ── Post-parse phase: event-loop slicing, batched git, per-file memo ──
+//
+// Why (2026-11-08): one live session with 711 changed files took 18 to 21 s on
+// EVERY recompute, even when the parse was resumed and read 200 KB, and the
+// daemon's loop starved meanwhile (a session start waited 17 s behind it). Each
+// file a shell command rewrote in place reads its HEAD content, which cost two
+// git spawns per file (rev-parse + show: 1,400 spawns), and every file was read
+// and reconstructed again on every compute. Now: one git toplevel lookup per
+// directory (kept across computes), one HEAD lookup per repo, all HEAD contents
+// of a repo in one `cat-file --batch`, and a file whose ops, on-disk stat and
+// HEAD content are unchanged reuses its last reconstruction.
+
+/** Longest stretch of synchronous work before the post-parse phase yields. */
+const SLICE_MS = 20;
+const GIT_TIMEOUT_MS = 10_000;
+/** `git show` ran with a 64 MB maxBuffer: a larger blob read as "not in HEAD". */
+const GIT_SHOW_MAX_BYTES = 64 * 1024 * 1024;
+const CAT_FILE_CHUNK = 500;
+
+/** Yields to the event loop once `sliceMs` of work has run since the last yield. */
+function createSlicer(sliceMs = SLICE_MS): () => Promise<void> {
+  let since = Date.now();
+  return async () => {
+    if (Date.now() - since < sliceMs) return;
+    await new Promise<void>((r) => setImmediate(r));
+    since = Date.now();
+  };
+}
+
+async function eachPooled<T>(items: readonly T[], n: number, fn: (item: T) => Promise<void>): Promise<void> {
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) await fn(items[next++]!);
+  };
+  await Promise.all(Array.from({ length: Math.min(n, items.length) }, worker));
+}
+
+/** Per-file reconstruction kept from the last compute (see HostLocalChangesMemo). */
+interface FileMemo {
+  /** The op objects it was built from: ops are replaced, never mutated, so identity is the key. */
+  ops: FileOp[];
+  /** Stat signature of the file on disk when it was read. */
+  sig: string;
+  deletedBefore: string | null;
+  /** Listed without content (too large or binary): HEAD content plays no part. */
+  contentless: boolean;
+  /** Pristine change (relPath = filePath, absolute oldRelPath); null = not listed. */
+  change: SessionFileChange | null;
+}
+
+/**
+ * What lets a recompute redo only the files that changed. Returned by every
+ * compute and passed back in by the caller; a compute never mutates the memo it
+ * was given (it builds a new one), so a compute that fails part-way leaves the
+ * last good memo intact.
+ */
+export interface HostLocalChangesMemo {
+  files: Map<string, FileMemo>;
+  /** `git rev-parse --show-toplevel` per directory (successful answers only). */
+  topByDir: Map<string, string>;
+  /** `${toplevel}\0${HEAD sha}\0${rel}` → that blob's content (null = not in that commit). */
+  headBlobs: Map<string, string | null>;
+}
+
+export interface HostLocalComputeStats {
+  /** Files listed or considered after filtering (not excluded, not orphan). */
+  files: number;
+  /** Files read from disk and reconstructed by this compute. */
+  reconstructed: number;
+  /** Files whose last reconstruction was reused. */
+  reused: number;
+  gitSpawns: number;
+}
+
+const statSig = (st: fs.Stats): string =>
+  `${st.isFile() ? 'f' : st.isDirectory() ? 'd' : 'o'}:${st.size}:${st.mtimeMs}:${st.ctimeMs}:${st.ino}:${st.dev}`;
+
+function sameOps(a: readonly FileOp[], b: readonly FileOp[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+type GitRun = (args: string[], cwd: string, input?: string, maxBuffer?: number) => Promise<{ stdout: Buffer; code: number }>;
+
+function makeGitRun(stats: HostLocalComputeStats): GitRun {
+  return (args, cwd, input, maxBuffer = GIT_SHOW_MAX_BYTES) => new Promise((resolve) => {
+    stats.gitSpawns++;
+    const done = (code: number, stdout?: Buffer | string) =>
+      resolve({ stdout: Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout ?? ''), code });
+    try {
+      const child = execFile('git', args, { cwd, timeout: GIT_TIMEOUT_MS, maxBuffer, encoding: 'buffer' },
+        (err, stdout) => done(err ? 1 : 0, stdout));
+      if (input !== undefined && child.stdin) {
+        child.stdin.on('error', () => { /* git exited early: its exit code says so */ });
+        child.stdin.end(input);
+      }
+    } catch { done(1); }
   });
-  try {
-    const dir = path.dirname(absPath);
-    const root = await run(['git', 'rev-parse', '--show-toplevel'], dir);
-    if (root.code !== 0) return null;
-    const repoRoot = root.stdout.trim();
-    if (!repoRoot) return null;
-    let realDir = dir;
-    try { realDir = await fsp.realpath(dir); } catch { /* dir also gone */ }
-    const rel = path.relative(repoRoot, path.join(realDir, path.basename(absPath)));
-    if (!rel || rel.startsWith('..')) return null;
-    const show = await run(['git', 'show', `HEAD:${rel}`], repoRoot);
-    return show.code === 0 ? show.stdout : null;
-  } catch {
-    return null;
+}
+
+/** The exact old per-file read, for the names a batch cannot carry (a tree, a newline in the name). */
+async function gitShowHead(git: GitRun, top: string, rel: string): Promise<string | null> {
+  const show = await git(['show', `HEAD:${rel}`], top);
+  return show.code === 0 ? show.stdout.toString('utf-8') : null;
+}
+
+const OBJECT_INFO = /^[0-9a-f]{40,64} (\S+) (\d+)$/;
+
+/**
+ * HEAD content of many files of one repo in two spawns: `cat-file --batch-check`
+ * for type and size, then `--batch` for the blobs. Same answers as the old
+ * `git show HEAD:<rel>` per file: a missing path is null, a tree or gitlink goes
+ * to `git show` itself, a blob over git show's old buffer is null. `transient`
+ * marks answers that came from a failed git run, which are not kept.
+ */
+async function readHeadBlobs(
+  git: GitRun,
+  top: string,
+  sha: string,
+  rels: string[],
+  slice: () => Promise<void>,
+): Promise<Map<string, { value: string | null; transient: boolean }>> {
+  const out = new Map<string, { value: string | null; transient: boolean }>();
+  // The old read, one file at a time: for what a batch cannot carry, and for a
+  // batch that failed (a loaded host can time one out where single reads pass).
+  const oneByOne = async (list: string[]): Promise<void> => {
+    for (const rel of list) {
+      const value = await gitShowHead(git, top, rel);
+      out.set(rel, { value, transient: value === null });
+    }
+  };
+  const batchable: string[] = [];
+  const odd: string[] = [];
+  for (const rel of rels) (rel.includes('\n') || rel.includes('\r') ? odd : batchable).push(rel);
+  await oneByOne(odd);
+  for (let i = 0; i < batchable.length; i += CAT_FILE_CHUNK) {
+    const chunk = batchable.slice(i, i + CAT_FILE_CHUNK);
+    const input = chunk.map((rel) => `${sha}:${rel}`).join('\n') + '\n';
+    const check = await git(['cat-file', '--batch-check'], top, input, 16 * 1024 * 1024);
+    const lines = check.stdout.toString('utf-8').split('\n');
+    if (check.code !== 0 || lines.length < chunk.length) { await oneByOne(chunk); continue; }
+    const blobs: Array<{ rel: string; size: number }> = [];
+    const other: string[] = [];
+    for (let k = 0; k < chunk.length; k++) {
+      const rel = chunk[k]!;
+      const m = OBJECT_INFO.exec(lines[k]!);
+      if (!m) out.set(rel, { value: null, transient: false }); // missing / ambiguous
+      else if (m[1] !== 'blob') other.push(rel); // a tree or a gitlink: git show answers those itself
+      else if (Number(m[2]) > GIT_SHOW_MAX_BYTES) out.set(rel, { value: null, transient: false });
+      else blobs.push({ rel, size: Number(m[2]) });
+    }
+    await oneByOne(other);
+    // One `--batch` run per ~64 MB of blobs, so a run never buffers more than
+    // about what the old per-file read held at once.
+    for (let b = 0; b < blobs.length;) {
+      const run: typeof blobs = [];
+      let bytes = 0;
+      while (b < blobs.length && (run.length === 0 || bytes + blobs[b]!.size <= GIT_SHOW_MAX_BYTES)) {
+        bytes += blobs[b]!.size;
+        run.push(blobs[b++]!);
+      }
+      const maxBuffer = bytes + run.length * 200 + 1024 * 1024;
+      const batch = await git(['cat-file', '--batch'], top, run.map((x) => `${sha}:${x.rel}`).join('\n') + '\n', maxBuffer);
+      if (batch.code !== 0) { await oneByOne(run.map((x) => x.rel)); continue; }
+      const buf = batch.stdout;
+      let pos = 0;
+      const failed: string[] = [];
+      for (const x of run) {
+        await slice();
+        const nl = pos < buf.length ? buf.indexOf(0x0a, pos) : -1;
+        const m = nl === -1 ? null : OBJECT_INFO.exec(buf.subarray(pos, nl).toString('utf-8'));
+        if (!m || m[1] !== 'blob' || nl + 1 + Number(m[2]) > buf.length) {
+          failed.push(x.rel);
+          pos = buf.length;
+          continue;
+        }
+        const size = Number(m[2]);
+        out.set(x.rel, { value: buf.subarray(nl + 1, nl + 1 + size).toString('utf-8'), transient: false });
+        pos = nl + 1 + size + 1;
+      }
+      await oneByOne(failed);
+    }
   }
+  return out;
 }
 
 /** Nearest ancestor dir containing `.git` — plain-fs walk (host-local). */
@@ -734,6 +915,8 @@ export async function computeHostLocalChanges(opts: HostLocalComputeOptions): Pr
   const fileMap = opts.mainParse ? cloneFileMap(state.fileMap) : state.fileMap;
   if (trailing) collectOpsFromJsonl(trailing, fileMap);
   const effectiveCwd = extractCwdFromJsonl(parsed.headBlock) ?? opts.cwd;
+  const slice = createSlicer();
+  await slice();
 
   // 2. Subagent JSONLs — size-keyed cache so finished agents are parsed once.
   const subCache = opts.subCache ?? new Map<string, { size: number; fileMap: Map<string, FileAccum> }>();
@@ -761,6 +944,7 @@ export async function computeHostLocalChanges(opts: HostLocalComputeOptions): Pr
   for (const name of [...present].sort()) {
     const c = subCache.get(name);
     if (c) mergeFileMapInto(c.fileMap, fileMap);
+    await slice();
   }
 
   const gitRootByDir = opts.gitRootByDir ?? new Map<string, string | null>();
@@ -784,61 +968,181 @@ export async function computeHostLocalChanges(opts: HostLocalComputeOptions): Pr
     return { root: dir, orphan: true };
   };
 
-  // 3. Current contents + reconstruction (bounded pool — local fs, still
-  //    keep the daemon's loop responsive). An out-of-repo file is never shown,
-  //    so it is never read: on 2026-09-30 every compute of one session read a
-  //    676 MB SQLite file it had copied into /tmp, as a string, only to drop it
-  //    (1.3 GB of daemon heap, 2-3 s, on every warm).
-  const changesByPath = new Map<string, SessionFileChange>();
+  const prevMemo = opts.changesMemo;
+  const memo: HostLocalChangesMemo = { files: new Map(), topByDir: new Map(), headBlobs: new Map() };
+  const stats: HostLocalComputeStats = { files: 0, reconstructed: 0, reused: 0, gitSpawns: 0 };
+  const git = makeGitRun(stats);
+
+  // 3a. Stat every candidate (bounded pool, local fs). An out-of-repo file is
+  //     never shown, so it is never read: on 2026-09-30 every compute of one
+  //     session read a 676 MB SQLite file it had copied into /tmp, as a string,
+  //     only to drop it (1.3 GB of daemon heap, 2-3 s, on every warm).
+  interface Candidate {
+    accum: FileAccum;
+    sig: string;
+    isFile: boolean;
+    tooBig: boolean;
+    headPath: string | null;
+    headKey: string | null;
+    deletedBefore: string | null;
+  }
+  const candidates: Candidate[] = [];
   const rootByPath = new Map<string, string>();
-  const entries = [...fileMap.values()];
-  let next = 0;
-  const worker = async (): Promise<void> => {
-    while (next < entries.length) {
-      const accum = entries[next++]!;
-      if (isExcludedPath(accum.filePath)) continue;
-      const { root, orphan } = await resolveRepoRoot(accum.filePath, accum.cwd);
-      if (orphan) continue;
-      rootByPath.set(accum.filePath, root);
+  await eachPooled([...fileMap.values()], CONTENT_READ_PARALLELISM, async (accum) => {
+    await slice();
+    if (isExcludedPath(accum.filePath)) return;
+    const { root, orphan } = await resolveRepoRoot(accum.filePath, accum.cwd);
+    if (orphan) return;
+    rootByPath.set(accum.filePath, root);
+    // stat-before-read: transcript ops can name FIFOs/sockets/dirs (a session
+    // that ran mkfifo, or wrote a .pipe path). open() on a writer-less FIFO
+    // blocks a fs-pool thread FOREVER (2026-08-15: wedged all daemon fs RPCs).
+    let cst: fs.Stats | null = null;
+    try { cst = await fsp.stat(accum.filePath); } catch { cst = null; }
+    // A formatter run on a folder (`prettier --write src`) names no file.
+    if (cst?.isDirectory() && accum.ops.every((op) => op.kind === 'modify')) return;
+    const isFile = !!cst?.isFile();
+    const tooBig = isFile && cst!.size > MAX_CONTENT_BYTES;
+    const isDeleted = accum.ops[accum.ops.length - 1]?.kind === 'delete';
+    // A rewrite in place starts from the file at HEAD (at its first name), as a delete does.
+    let headPath = tooBig ? null : isDeleted ? accum.filePath : headPathForModify(accum);
+    // No .git above the file means git can't have it: skip git entirely (a long
+    // session deletes hundreds of scratch files in /tmp).
+    if (headPath && !(await gitRootOf(path.dirname(headPath)))) headPath = null;
+    // The same binary file with the same ops: its listing never reads HEAD.
+    const sig = cst ? statSig(cst) : 'missing';
+    const prev = prevMemo?.files.get(accum.filePath);
+    if (headPath && prev?.contentless && prev.sig === sig && sameOps(prev.ops, accum.ops)) headPath = null;
+    candidates.push({ accum, sig, isFile, tooBig, headPath, headKey: null, deletedBefore: null });
+  });
+
+  // 3b. HEAD content for deletes and in-place rewrites: what `git show HEAD:<rel>`
+  //     run from the file's directory answered, looked up per repo in one batch.
+  const dirTop = new Map<string, Promise<string | null>>();
+  const topOf = (dir: string): Promise<string | null> => {
+    let p = dirTop.get(dir);
+    if (!p) {
+      p = (async () => {
+        // git cannot run in a directory that is gone (the old spawn failed there).
+        try { if (!(await fsp.stat(dir)).isDirectory()) return null; } catch { return null; }
+        const known = prevMemo?.topByDir.get(dir);
+        if (known) { memo.topByDir.set(dir, known); return known; }
+        const r = await git(['rev-parse', '--show-toplevel'], dir);
+        const top = r.code === 0 ? r.stdout.toString('utf-8').trim() : '';
+        if (!top) return null;
+        memo.topByDir.set(dir, top);
+        return top;
+      })();
+      dirTop.set(dir, p);
+    }
+    return p;
+  };
+  const realDirs = new Map<string, Promise<string>>();
+  const realDirOf = (dir: string): Promise<string> => {
+    let p = realDirs.get(dir);
+    if (!p) { p = fsp.realpath(dir).catch(() => dir); realDirs.set(dir, p); }
+    return p;
+  };
+  const shaByTop = new Map<string, Promise<string | null>>();
+  const shaOf = (top: string): Promise<string | null> => {
+    let p = shaByTop.get(top);
+    if (!p) {
+      p = git(['rev-parse', '--verify', '-q', 'HEAD'], top).then((r) => {
+        const sha = r.code === 0 ? r.stdout.toString('utf-8').trim() : '';
+        return /^[0-9a-f]{40,64}$/.test(sha) ? sha : null;
+      });
+      shaByTop.set(top, p);
+    }
+    return p;
+  };
+  const wanted = new Map<string, { top: string; sha: string; rels: Map<string, Candidate[]> }>();
+  await eachPooled(candidates.filter((c) => c.headPath), CONTENT_READ_PARALLELISM, async (c) => {
+    await slice();
+    const headPath = c.headPath!;
+    const dir = path.dirname(headPath);
+    const top = await topOf(dir);
+    if (!top) return;
+    const rel = path.relative(top, path.join(await realDirOf(dir), path.basename(headPath)));
+    if (!rel || rel.startsWith('..')) return;
+    const sha = await shaOf(top);
+    if (!sha) return; // no commit yet: nothing is at HEAD
+    const key = `${top}\0${sha}\0${rel}`;
+    c.headKey = key;
+    if (prevMemo?.headBlobs.has(key)) {
+      const value = prevMemo.headBlobs.get(key)!;
+      memo.headBlobs.set(key, value);
+      c.deletedBefore = value;
+      return;
+    }
+    const w = wanted.get(`${top}\0${sha}`) ?? { top, sha, rels: new Map<string, Candidate[]>() };
+    wanted.set(`${top}\0${sha}`, w);
+    const list = w.rels.get(rel) ?? [];
+    list.push(c);
+    w.rels.set(rel, list);
+  });
+  for (const w of wanted.values()) {
+      const blobs = await readHeadBlobs(git, w.top, w.sha, [...w.rels.keys()], slice);
+    for (const [rel, list] of w.rels) {
+      const got = blobs.get(rel) ?? { value: null, transient: true };
+      if (!got.transient) memo.headBlobs.set(`${w.top}\0${w.sha}\0${rel}`, got.value);
+      for (const c of list) c.deletedBefore = got.value;
+    }
+  }
+
+  // 3c. Read + reconstruct only what changed since the last compute: the same
+  //     ops, the same stat and the same HEAD content give the same change.
+  const changesByPath = new Map<string, SessionFileChange>();
+  stats.files = candidates.length;
+  await eachPooled(candidates, CONTENT_READ_PARALLELISM, async (c) => {
+    await slice();
+    const { accum } = c;
+    const prev = prevMemo?.files.get(accum.filePath);
+    let change: SessionFileChange | null;
+    let contentless = c.tooBig;
+    if (prev && prev.sig === c.sig && sameOps(prev.ops, accum.ops)
+      && (prev.contentless || prev.deletedBefore === c.deletedBefore)) {
+      change = prev.change;
+      contentless = prev.contentless;
+      stats.reused++;
+    } else {
+      stats.reconstructed++;
       let current: string | null = null;
-      let contentless = false;
-      // stat-before-read: transcript ops can name FIFOs/sockets/dirs (a session
-      // that ran mkfifo, or wrote a .pipe path). open() on a writer-less FIFO
-      // blocks a fs-pool thread FOREVER (2026-08-15: wedged all daemon fs RPCs).
-      try {
-        const cst = await fsp.stat(accum.filePath);
-        // A formatter run on a folder (`prettier --write src`) names no file.
-        if (cst.isDirectory() && accum.ops.every((op) => op.kind === 'modify')) continue;
-        if (cst.isFile() && cst.size > MAX_CONTENT_BYTES) {
-          contentless = true;
-        } else if (cst.isFile()) {
+      if (c.isFile && !c.tooBig) {
+        try {
           const buf = await fsp.readFile(accum.filePath);
           if (looksBinary(buf)) contentless = true;
           else current = buf.toString('utf-8');
-        }
-      } catch { current = null; }
-      if (contentless) {
-        changesByPath.set(accum.filePath, contentlessChange(accum));
-        continue;
+        } catch { current = null; }
+        await slice();
       }
-      const isDeleted = accum.ops[accum.ops.length - 1]?.kind === 'delete';
-      // A rewrite in place starts from the file at HEAD (at its first name), as a delete does.
-      const headPath = isDeleted ? accum.filePath : headPathForModify(accum);
-      // No .git above the file means git can't have it: skip the two git
-      // spawns (a long session deletes hundreds of scratch files in /tmp).
-      const deletedBefore = headPath && await gitRootOf(path.dirname(headPath))
-        ? await readDeletedBeforeHostLocal(headPath) : null;
-      const { renamedFrom, ...recon } = reconstructFile(current, accum, deletedBefore);
-      const change: SessionFileChange = { filePath: accum.filePath, relPath: accum.filePath, ...recon };
-      if (renamedFrom !== undefined) change.oldRelPath = renamedFrom;
-      changesByPath.set(accum.filePath, change);
+      if (contentless) {
+        change = contentlessChange(accum);
+      } else {
+        const { renamedFrom, ...recon } = reconstructFile(current, accum, c.deletedBefore);
+        change = { filePath: accum.filePath, relPath: accum.filePath, ...recon };
+        if (renamedFrom !== undefined) change.oldRelPath = renamedFrom;
+      }
     }
-  };
-  await Promise.all(Array.from({ length: Math.min(CONTENT_READ_PARALLELISM, entries.length) }, worker));
+    // Nothing kept that the answer does not need: a binary file's HEAD text, or
+    // the content of a clean no-op (grouping drops it either way).
+    if (contentless && c.headKey) memo.headBlobs.delete(c.headKey);
+    const noop = !!change && change.before === change.after && !change.partial
+      && change.status !== 'renamed' && change.status !== 'deleted';
+    memo.files.set(accum.filePath, {
+      ops: accum.ops.slice(),
+      sig: c.sig,
+      deletedBefore: contentless ? null : c.deletedBefore,
+      contentless,
+      change: noop ? { ...change!, before: '', after: '' } : change,
+    });
+    // Grouping below rewrites relPath/oldRelPath: hand out a copy, keep the memo pristine.
+    if (change) changesByPath.set(accum.filePath, { ...change });
+  });
 
   // 4-6. Group by repo root, drop no-ops/excluded, order.
   const groupsByRoot = new Map<string, SessionRepoGroup>();
   for (const accum of fileMap.values()) {
+    await slice();
     const change = changesByPath.get(accum.filePath);
     const root = rootByPath.get(accum.filePath);
     if (!change || root === undefined) continue;
@@ -867,7 +1171,10 @@ export async function computeHostLocalChanges(opts: HostLocalComputeOptions): Pr
   const groups = [...groupsByRoot.values()]
     .filter((g) => g.files.length > 0)
     .sort((a, b) => (kindOrder[a.kind] - kindOrder[b.kind]) || a.label.localeCompare(b.label));
-  for (const g of groups) g.files.sort((a, b) => a.relPath.localeCompare(b.relPath));
+  for (const g of groups) {
+    g.files.sort((a, b) => a.relPath.localeCompare(b.relPath));
+    await slice();
+  }
 
   const fileCount = groups.reduce((n, g) => n + g.files.length, 0);
   const anyPartial = groups.some((g) => g.files.some((f) => f.partial));
@@ -879,6 +1186,8 @@ export async function computeHostLocalChanges(opts: HostLocalComputeOptions): Pr
     mtimeMs: st.mtimeMs,
     size: st.size,
     parseStats: { resumed, readBytes: state.offset + Buffer.byteLength(trailing) - readFrom },
+    changesMemo: memo,
+    computeStats: stats,
   };
 }
 
