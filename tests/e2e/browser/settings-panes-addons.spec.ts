@@ -423,6 +423,12 @@ test('C54 C79: removing a phone and showing a new QR are two-step, and the butto
 
 test('Remote Hosts: Add host lives in the header, the empty state says so', async ({ page }) => {
   await mockConfig(page, (cfg) => { cfg.hosts = {} })
+  // Empty means no machine at all: This Mac is a row of the list too, and the shared fixture's
+  // cached fleet read carries it once any earlier spec read the hosts, so the read is served here.
+  await page.route((url) => url.pathname === '/api/v1/hosts', (route) =>
+    route.fulfill({ json: { hosts: [], checkedAt: Date.now(), refreshing: false } }))
+  await page.route('**/api/v1/hosts/refresh', (route) =>
+    route.fulfill({ status: 202, json: { started: [], refreshing: [] } }))
   await openSettings(page)
   await clickNav(page, 'remote-hosts')
   await expect(page.locator('#remote-hosts')).toContainText('No remote hosts yet.')
