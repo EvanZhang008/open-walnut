@@ -15,6 +15,7 @@
  * error. Nothing here should ever throw into the launcher's path.
  */
 
+import { exitLineRecorded, recordEphemeralExit } from './ephemeral-exit-record.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
@@ -356,6 +357,7 @@ export function reapStaleEphemeralDirs(walnutHome: string, opts: ReapOptions = {
     try {
       const data = JSON.parse(fs.readFileSync(path.join(dir, 'ephemeral.json'), 'utf-8')) as ControlData
       if (data.pid && (!isProcessAlive(data.pid) || heartbeatLost(dir, data))) {
+        noteReapedServer(dir, data)
         fs.rmSync(dir, { recursive: true, force: true })
         removed = true
       } else if (data.pid) {
@@ -383,6 +385,27 @@ export function reapStaleEphemeralDirs(walnutHome: string, opts: ReapOptions = {
   const kept = rows.filter((r) =>
     !gone.has(r.dir) && Date.now() - r.createdAt < REGISTRY_ROW_TTL_MS)
   if (kept.length !== rows.length) writeRegistry(registryFile, kept)
+}
+
+/**
+ * The exit log's line for a server the reaper finds: one that died without removing its dirs
+ * wrote no line of its own when it was killed outright (SIGKILL, the memory killer, a crash
+ * past the exit event), and one whose beat stopped after its owner went is wedged.
+ */
+function noteReapedServer(dir: string, data: ControlData & { port?: number, startedAt?: string }): void {
+  const pid = data.pid!
+  if (isProcessAlive(pid)) {
+    recordEphemeralExit({ rule: 'reaped', detail: 'its owner is gone and its heartbeat stopped, so the reaper removed its dirs', pid, port: data.port, snapshotDir: dir, ownerPid: data.owner?.pid ?? null })
+    return
+  }
+  if (exitLineRecorded(pid)) return
+  let beatAt = ''
+  try { beatAt = new Date(fs.statSync(path.join(dir, 'ephemeral.json')).mtimeMs).toISOString() } catch { /* gone */ }
+  recordEphemeralExit({
+    rule: 'died-unrecorded',
+    detail: `the process ended without running its exit (killed outright, e.g. SIGKILL or the memory killer); its last heartbeat was ${beatAt || 'unknown'}`,
+    pid, port: data.port, snapshotDir: dir, ownerPid: data.owner?.pid ?? null,
+  })
 }
 
 /**

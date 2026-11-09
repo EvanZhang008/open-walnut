@@ -27,6 +27,7 @@ import {
   EPHEMERAL_SERVER_PID_FILE,
 } from './ephemeral-registry.js'
 import { ephemeralIdleTtlMs } from './ephemeral-idle.js'
+import { ephemeralExitLogFile, recordEphemeralExit, type EphemeralExitRule } from './ephemeral-exit-record.js'
 import { resolveEphemeralOwner, startOwnerWatch, type EphemeralOwner } from './ephemeral-owner.js'
 import { copyDataSnapshot, dropSnapshotQueuedMessages, ephemeralChildEnv, pauseSnapshotCronJobs, stopSnapshotTriage, stopSnapshotTunnels, stripSnapshotPushTokens } from './ephemeral-snapshot.js'
 
@@ -209,7 +210,8 @@ export async function runEphemeralLauncher(): Promise<void> {
     ])
     // 7. Print JSON to stdout (exec tool captures this). daemonDir holds this
     // server's own daemon and logs (open-walnut-<date>.log).
-    console.log(JSON.stringify({ ...data, daemonDir: runtimeDir, owner, snapshot, pausedCronJobs, removedPushTokens, stoppedTunnels, stoppedTriage, droppedQueuedMessages }))
+    // exitLog: where the server writes why it ended (its own logs go with its dirs).
+    console.log(JSON.stringify({ ...data, daemonDir: runtimeDir, exitLog: ephemeralExitLogFile(), owner, snapshot, pausedCronJobs, removedPushTokens, stoppedTunnels, stoppedTriage, droppedQueuedMessages }))
     process.exit(0)
   } catch (err) {
     process.stderr.write(`ephemeral: ${err instanceof Error ? err.message : String(err)}\n`)
@@ -269,10 +271,28 @@ function pollForControlFile(controlFile: string): Promise<{
  * 4. Cleans up tmpdir on exit
  */
 export async function runEphemeralChild(): Promise<void> {
+  // Why this server ends, written to the machine's exit log at exit (ephemeral-exit-record.ts):
+  // its own logs go with its dirs. Every exit below names its rule through exitChild or cleanup.
+  let exitWhy: { rule: EphemeralExitRule; detail: string } | null = null
+  const facts: { port?: number; ownerPid?: number | null; idleMinutes?: () => number } = {}
+  const idleLimitMinutes = EPHEMERAL_IDLE_TTL_MS / 60_000
+  process.on('exit', (code) => {
+    recordEphemeralExit({
+      ...(exitWhy ?? { rule: 'crash' as const, detail: `exited with code ${code} and no reason of its own (an uncaught error, see the line before)` }),
+      pid: process.pid, port: facts.port, snapshotDir: process.env.OPEN_WALNUT_HOME, ownerPid: facts.ownerPid,
+      ...(facts.idleMinutes ? { idleMinutes: facts.idleMinutes(), idleLimitMinutes } : {}),
+      uptimeSec: process.uptime(), code,
+    })
+  })
+  const exitChild = (rule: EphemeralExitRule, detail: string, code: number): never => {
+    exitWhy = { rule, detail }
+    process.stderr.write(`ephemeral child: ${detail}\n`)
+    process.exit(code)
+  }
+
   const tmpDir = process.env.OPEN_WALNUT_HOME
   if (!tmpDir) {
-    process.stderr.write('ephemeral child: OPEN_WALNUT_HOME not set\n')
-    process.exit(1)
+    exitChild('start-failed', 'OPEN_WALNUT_HOME not set', 1)
     return
   }
 
@@ -284,13 +304,14 @@ export async function runEphemeralChild(): Promise<void> {
   const addr = httpServer.address()
   const port = typeof addr === 'object' && addr ? addr.port : 0
   if (!port) {
-    process.stderr.write('ephemeral child: could not determine port\n')
-    process.exit(1)
+    exitChild('start-failed', 'could not determine its port', 1)
     return
   }
+  facts.port = port
 
   let owner: EphemeralOwner | null = null
   try { owner = JSON.parse(fs.readFileSync(path.join(tmpDir, EPHEMERAL_OWNER_FILE), 'utf-8')) as EphemeralOwner } catch { /* none named */ }
+  facts.ownerPid = owner?.pid ?? null
 
   // Write control file so the launcher (and agents) can discover us. `heartbeat`
   // says its mtime is touched every OWNER_CHECK_MS, which the reaper reads.
@@ -310,21 +331,23 @@ export async function runEphemeralChild(): Promise<void> {
   httpServer.on('request', () => {
     lastActivity = Date.now()
   })
+  facts.idleMinutes = () => (Date.now() - lastActivity) / 60_000
 
   const idleChecker = setInterval(() => {
     if (Date.now() - lastActivity > EPHEMERAL_IDLE_TTL_MS) {
-      cleanup('idle timeout')
+      void cleanup('idle', `no HTTP request for ${facts.idleMinutes!().toFixed(1)} min (its limit is ${idleLimitMinutes} min, WALNUT_EPHEMERAL_IDLE_MINUTES)`)
     }
   }, IDLE_CHECK_INTERVAL_MS)
   idleChecker.unref()
 
   // Heartbeat and owner: touch the control file, and end once the owner is surely gone.
-  const stopOwnerWatch = startOwnerWatch(controlFile, owner, (reason) => { void cleanup(reason) })
+  const stopOwnerWatch = startOwnerWatch(controlFile, owner, (reason) => { void cleanup('owner-gone', reason) })
 
   let cleaningUp = false
-  async function cleanup(reason: string): Promise<void> {
+  async function cleanup(rule: EphemeralExitRule, reason: string): Promise<void> {
     if (cleaningUp) return
     cleaningUp = true
+    exitWhy = { rule, detail: reason }
 
     process.stderr.write(`ephemeral child: shutting down (${reason})\n`)
     clearInterval(idleChecker)
@@ -345,6 +368,7 @@ export async function runEphemeralChild(): Promise<void> {
     // Force exit if stopServer() hangs for more than 10 seconds
     const forceExit = setTimeout(() => {
       process.stderr.write('ephemeral child: forced exit after 10s timeout\n')
+      exitWhy = { rule: 'forced', detail: `${reason}, and its shutdown did not finish in 10 s` }
       void removeAll(3_000).finally(() => process.exit(1))
     }, 10_000)
     forceExit.unref()
@@ -377,8 +401,8 @@ export async function runEphemeralChild(): Promise<void> {
     process.exit(0)
   }
 
-  process.on('SIGINT', () => cleanup('SIGINT'))
-  process.on('SIGTERM', () => cleanup('SIGTERM'))
+  process.on('SIGINT', () => cleanup('signal', 'SIGINT from another process'))
+  process.on('SIGTERM', () => cleanup('signal', 'SIGTERM from another process'))
   // Claim ownership of the signal, or startServer()'s own always-fatal handler
   // wins the race: it sees no armed owner, removeAllListeners('SIGTERM') and
   // re-raises with the default disposition, so the process dies instantly and
