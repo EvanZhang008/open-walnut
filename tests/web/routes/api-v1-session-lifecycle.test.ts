@@ -43,7 +43,8 @@ import request from 'supertest'
 import { sessionLifecycleV1Router } from '../../../src/web/routes/session-lifecycle-v1.js'
 import { errorHandler } from '../../../src/web/middleware/error-handler.js'
 import { WALNUT_HOME } from '../../../src/constants.js'
-import { createSessionRecord, getSessionByClaudeId, updateSessionRecord } from '../../../src/core/session-tracker.js'
+import { createSessionRecord, getSessionByClaudeId, listPendingSessionStops, updateSessionRecord } from '../../../src/core/session-tracker.js'
+import { sessionStops } from '../../../src/core/sessions/session-stop.js'
 import { handleSessionControlRelay } from '../../../src/core/sessions/session-controls.js'
 import { sessionRunner } from '../../../src/providers/claude-code-session.js'
 
@@ -64,6 +65,14 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  // A stop left pending (host offline, no ACK) arms a real 5 s retry. The session
+  // database stays open across tests (removing WALNUT_HOME does not close it), so
+  // that retry used to find its record and deliver into whichever test ran 5 s
+  // later, under load, adding a stray call to its stopCalls. Withdraw every
+  // pending stop, which cancels its retry, before the next test starts.
+  for (const record of await listPendingSessionStops()) {
+    await sessionStops.withdraw(record.claudeSessionId, record.stopRequest!.id, 'test over')
+  }
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 })
 
@@ -129,10 +138,10 @@ describe('GET /api/v1/sessions/:id (detail)', () => {
     const attach = vi.spyOn(sessionRunner, 'findOrAttachAcpSession')
       .mockReturnValue(new Promise<never>(() => {}))
 
-    const v1 = await Promise.race([
-      request(createApp()).get('/api/v1/sessions/lc-detail-codex-cold'),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('v1 detail blocked')), 2_000)),
-    ])
+    // The attach above never settles, so a detail read that waited on it could
+    // never answer: answering at all is the proof. (A 2 s wall-clock race here
+    // lost to a cold first request under load.)
+    const v1 = await request(createApp()).get('/api/v1/sessions/lc-detail-codex-cold')
     expect(v1.status).toBe(200)
     expect(v1.body.session.title).toBe('Durable Codex title')
     expect(v1.body.pendingPermissions[0]).toEqual(expect.objectContaining({
@@ -140,10 +149,7 @@ describe('GET /api/v1/sessions/:id (detail)', () => {
       acpOptions: [{ optionId: 'allow-once', kind: 'allow_once', name: 'Allow once' }],
     }))
 
-    const relay = await Promise.race([
-      handleSessionControlRelay('detail', 'lc-detail-codex-cold', {}),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('relay detail blocked')), 2_000)),
-    ])
+    const relay = await handleSessionControlRelay('detail', 'lc-detail-codex-cold', {})
     expect(relay).toMatchObject({
       ok: true,
       result: {

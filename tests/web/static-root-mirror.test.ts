@@ -23,11 +23,17 @@
  * src/web/static-mirror.ts and static-mirror-retention.test.ts), and this file is
  * about the serving contract, not the storage shape.
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import type { Server } from 'node:http';
+import { createMockConstants } from '../helpers/mock-constants.js';
+
+// A data home of this file's own. Without it the server booted on the shared
+// test home, and another test file's server (or another run) holding that home's
+// instance lock made startServer throw InstanceLockError at random.
+vi.mock('../../src/constants.js', () => createMockConstants('walnut-static-root-mirror'));
 
 let tmp: string;
 let mirror: string;
@@ -56,7 +62,12 @@ beforeAll(async () => {
 afterAll(async () => {
   delete process.env.WALNUT_WEB_STATIC_MIRROR;
   delete process.env.WALNUT_WEB_STATIC_DIR;
-  await new Promise<void>((r) => server?.close(() => r()));
+  // A boot that failed leaves no server; awaiting a close that never comes would
+  // then hang the hook and hide the real error behind a hook timeout.
+  if (server) {
+    const { stopServer } = await import('../../src/web/server.js');
+    await stopServer();
+  }
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 

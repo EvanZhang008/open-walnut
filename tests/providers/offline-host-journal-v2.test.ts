@@ -835,7 +835,9 @@ describe('journal v2: a replica retry, coalesced growth, retired inputs (review 
   it('coalesced saves compact the file as they fold: 300 saves of a 20 KB description stay one record in a small file', async () => {
     const dir = journalTmpDir()
     const clock = { now: T0 }
-    const { host, journal } = journalHost(dir, clock)
+    // Not durable: the fold and its compaction do not depend on the sync flag, and 300
+    // synced saves timed out a 15 s budget on a loaded host (2026-11-06/07 land checks).
+    const { host, journal } = journalHost(dir, clock, { journal: { durable: false } })
     host.configure(jslice())
     const big = (i: number) => `${i} `.padEnd(20 * 1024, 'x')
     for (let i = 0; i < 300; i++) {
@@ -879,19 +881,35 @@ describe('journal v2: a held lock, a zombie, the replica overlay, leaked bodies 
   it('a live foreign lock holder costs one short wait, then answers at once; a drain hands out nothing it could not freeze', () => {
     const dir = journalTmpDir()
     const clock = { now: T0 }
-    const j = journalStore(dir, clock)
+    // Counts the tries at the lock (each is one exclusive create of its file): "at once" is
+    // one try, not a time, so a loaded host cannot fail it (2026-11-07: a wall-clock bound did).
+    let tries = 0
+    const counting = new Proxy(fs, {
+      get(target, key: string) {
+        const real = (target as unknown as Record<string, unknown>)[key]
+        if (key !== 'openSync') return real
+        return (...args: Parameters<typeof fs.openSync>) => {
+          if (String(args[0]) === lockFile(dir) && args[1] === 'wx') tries++
+          return fs.openSync(...args)
+        }
+      },
+    })
+    const j = journalStore(dir, clock, { fs: counting })
     expect(j.append(JHOME, { kind: 'settings', sid: SID_A, effort: 'low' })).toMatchObject({ ok: true, seq: 1 })
     // Another live process (this test's parent) holds the lock and does not let go.
     fs.writeFileSync(lockFile(dir), `${process.ppid} -`)
-    let t = Date.now()
+    const t = Date.now()
+    tries = 0
     expect(j.append(JHOME, { kind: 'settings', sid: SID_A, effort: 'high' })).toMatchObject({ ok: false, code: 'journal_unwritable', why: 'locked' })
-    const first = Date.now() - t
-    expect(first).toBeGreaterThanOrEqual(200)
-    expect(first).toBeLessThan(1500)
-    t = Date.now()
+    // It waited out the lock's deadline (a lower bound on the real clock, which a slow host only lengthens).
+    expect(Date.now() - t).toBeGreaterThanOrEqual(200)
+    expect(tries).toBeGreaterThanOrEqual(1)
+    // That hold is remembered: the next append and a drain try once each and answer at once.
+    tries = 0
     expect(j.append(JHOME, { kind: 'settings', sid: SID_A, effort: 'max' })).toMatchObject({ ok: false, why: 'locked' })
+    expect(tries).toBe(1)
     const d = j.drain(JHOME, { kinds: null })
-    expect(Date.now() - t).toBeLessThan(150)
+    expect(tries).toBe(2)
     expect(d).toMatchObject({ records: [], more: false, why: 'locked' })
     expect(j.ack(JHOME, { upTo: 1 }).error).toBeTruthy()
     // The holder lets go: the record was never frozen, so it drains and acks normally.

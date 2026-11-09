@@ -32,6 +32,7 @@ import { addTasksBulk, _resetForTesting as resetTaskStore } from '../../src/core
 import { ClaudeCodeSession, SessionRunner } from '../../src/providers/claude-code-session.js'
 import { RemoteSessionManager } from '../../src/providers/remote-session-manager.js'
 import { enqueueMessage, getQueue, resetCache } from '../../src/core/session-message-queue.js'
+import { mutateStore } from '../../src/core/session-queue-store.js'
 import { resetLineConsumption } from '../../src/providers/line-consumption.js'
 import { bus, EventNames } from '../../src/core/event-bus.js'
 
@@ -47,7 +48,15 @@ type Internals = {
 
 let delivered: string[][] = []
 let held: string[][] = []
-const settle = () => new Promise((r) => setTimeout(r, 80))
+/**
+ * Let every queue write already started land. The runner removes or reverts rows on its own
+ * (removeWrittenRows and the like are fire-and-forget), and the queue's writes run one at a
+ * time in call order, so a no-op write queued now resolves after all of them. A fixed 80 ms
+ * wait was not enough on a loaded host (2026-11-06/07 land checks: rows still "processing").
+ */
+const settle = () => mutateStore(() => undefined)
+const rowStates = async () => (await rows()).map((r) => `${r.text}:${r.status}`)
+const deliveredIds = () => delivered.flat()
 const rows = async () => (await getQueue(SID)).map((m) => ({ text: m.message, status: m.status }))
 
 beforeEach(async () => {
@@ -167,6 +176,8 @@ async function secondLineAroundACut(opts: { tracked: boolean; during: boolean })
   l.respawn(12346)
   await l.internals.processNext(SID)
   await vi.waitFor(() => expect(l.sends.filter((s) => s.pid === 12346)).toHaveLength(2), { timeout: 10_000 })
+  // Told once each, when the next process got the line (the report may follow the write's answer).
+  await vi.waitFor(() => expect(deliveredIds()).toEqual(expect.arrayContaining([rowA.id, rowB.id])), { timeout: 10_000 })
   await settle()
   return { l, rowA, rowB, beforeExit }
 }
@@ -245,7 +256,7 @@ describe('a line that waited behind an unanswered one while the CLI showed it re
     const { l, idA, idB } = await waitedLine({ frame: true })
     expect(l.sends.filter((s) => s.pid === 12345).map((s) => s.message)).toEqual(['first message', 'first message', 'second message'])
     // The first line ran; the second waits for the CLI's word on it.
-    expect((await rows()).map((r) => `${r.text}:${r.status}`)).toEqual(['second message:processing'])
+    await vi.waitFor(async () => expect(await rowStates()).toEqual(['second message:processing']), { timeout: 10_000 })
     await exitAndRespawn(l, 1)
     expect(l.sends.filter((s) => s.pid === 12346).map((s) => s.message)).toEqual(['second message'])
     // Told at its write, and not again when the next process gets it (r7 gate N2, g760).
@@ -255,16 +266,18 @@ describe('a line that waited behind an unanswered one while the CLI showed it re
 
   it('the daemon answers that it waits in the CLI: kept for the word all the same, and the next process gets it (r7 gate N2, g752)', async () => {
     const { l, idB } = await waitedLine({ frame: true, bReply: { ok: true, duplicate: true, fate: 'waiting' } })
-    expect((await rows()).map((r) => `${r.text}:${r.status}`)).toEqual(['second message:processing'])
+    await vi.waitFor(async () => expect(await rowStates()).toEqual(['second message:processing']), { timeout: 10_000 })
     await exitAndRespawn(l, 1)
     expect(l.sends.filter((s) => s.pid === 12346).map((s) => s.message)).toEqual(['second message'])
-    expect(delivered.flat().filter((id) => id === idB)).toHaveLength(1)
+    await vi.waitFor(() => expect(deliveredIds()).toContain(idB), { timeout: 10_000 })
+    await settle()
+    expect(deliveredIds().filter((id) => id === idB)).toHaveLength(1)
     l.runner.destroyAndKill()
   }, 30_000)
 
   it('control: a CLI that showed no lifecycle meanwhile keeps the old rule, the line leaves on its write, told once (r7 gate N2, g753)', async () => {
     const { l, idA, idB } = await waitedLine({ frame: false })
-    expect(await rows()).toEqual([])
+    await vi.waitFor(async () => expect(await rows()).toEqual([]), { timeout: 10_000 })
     expect(delivered).toEqual([[idA], [idB]])
     l.runner.destroyAndKill()
   }, 30_000)

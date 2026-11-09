@@ -232,9 +232,15 @@ describe('stream compaction', () => {
     // Grown by a quarter (and past the size floor): due again.
     fs.appendFileSync(file, delta('x'.repeat(after.size)) + result(9))
     expect(sc.due(file, fs.statSync(file))).toBe(true)
-    // A recreated file (new inode) does not inherit the mark.
-    fs.unlinkSync(file)
+    // A recreated file (new inode) does not inherit the mark. The old file is moved
+    // aside, not unlinked: a freed inode number is often handed straight back to the
+    // next create, and a recreated file of the very same size on the very same inode
+    // is (rightly) indistinguishable from the compacted one. Keeping the old inode
+    // allocated is what makes the new one provably different.
+    const marked = fs.statSync(file).ino
+    fs.renameSync(file, `${file}.old`)
     fs.writeFileSync(file, expected)
+    expect(fs.statSync(file).ino).not.toBe(marked)
     expect(sc.due(file, fs.statSync(file))).toBe(true)
     expect(sc.rewrittenFrom(file, fs.statSync(file))).toBe(null)
   })

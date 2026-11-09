@@ -4,6 +4,12 @@
  * - autoPushTask: per-task dedup
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { createMockConstants } from '../helpers/mock-constants.js';
+// A home of its own: reconcilePulledTasks writes the project registry and reads the
+// sync ledger in the task store, and the global test home is shared by every worker
+// and every concurrent run on the host ("database is locked" left the store unopened,
+// so the list mapped to no project and nothing was created or updated).
+vi.mock('../../src/constants.js', () => createMockConstants('walnut-ms-todo-sync'));
 import { reconcilePulledTasks } from '../../src/integrations/microsoft-todo.js';
 import * as taskManager from '../../src/core/task-manager.js';
 import type { Task, TaskPhase } from '../../src/core/types.js';

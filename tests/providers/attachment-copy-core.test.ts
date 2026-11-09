@@ -188,7 +188,9 @@ describe('a host replica\'s reads (the follower link)', () => {
     const second = copy.readChunk(HOME, 'b/big.pdf', 2 * 1024 * 1024, 4 * 1024 * 1024)!
     // Never more than one 2 MB slice, whatever the reader asks for.
     expect(Buffer.from(first.data, 'base64').length).toBe(2 * 1024 * 1024)
-    expect(Buffer.concat([Buffer.from(first.data, 'base64'), Buffer.from(second.data, 'base64')])).toEqual(big)
+    // Compared by hash: toEqual walks a 3 MB Buffer byte by byte (about 20 s of CPU, past the
+    // quick tier's timeout on a busy host), where sha256 of both takes milliseconds.
+    expect(sha(Buffer.concat([Buffer.from(first.data, 'base64'), Buffer.from(second.data, 'base64')]))).toBe(sha(big))
     expect(copy.readChunk(HOME, 'b/missing.pdf', 0, 1024)).toBeNull()
     expect(copy.readChunk(HOME, '../b/big.pdf', 0, 1024)).toBeNull()
     expect(copy.readChunk(OTHER, 'b/big.pdf', 0, 1024)).toBeNull()

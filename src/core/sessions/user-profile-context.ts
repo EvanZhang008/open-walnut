@@ -109,6 +109,8 @@ function profileOf(raw: string, savedAt: string): UserProfile {
 let cached: { key: string; profile: UserProfile } = { key: '', profile: NONE }
 let checkedAt = 0
 let inflight: Promise<UserProfile> | null = null
+/** The one read queued behind `inflight`, shared by every caller that came while it ran. */
+let again: Promise<UserProfile> | null = null
 const SYNC_STALE_MS = 5_000
 
 /**
@@ -134,7 +136,10 @@ async function companionUserDoc(): Promise<{ key: string; profile: () => UserPro
 
 /** Read USER.md again when it changed since the last read; what a session reads now. Never throws. */
 export function refreshUserProfile(): Promise<UserProfile> {
-  if (inflight) return inflight
+  // A read already running may have looked at the file before this caller's save (a background
+  // refresh a sync builder started): joining it returned the old words, and a session was not
+  // told of the edit. The caller waits for one more read after it instead.
+  if (inflight) return (again ??= inflight.then(() => { again = null; return refreshUserProfile() }))
   const read = (async () => {
     try {
       const copy = await companionUserDoc()

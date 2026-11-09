@@ -20,11 +20,11 @@
  * a real WebSocket, real multi-MB files. What's mocked: nothing — no Claude
  * CLI involved, fs.read doesn't need a session.
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, onTestFailed } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { WebSocket } from 'ws'
 
 const ROOT = path.resolve(__dirname, '../..')
@@ -40,21 +40,33 @@ const BIG_A = path.join(DATA_DIR, 'big-a.jsonl')
 const BIG_B = path.join(DATA_DIR, 'big-b.jsonl')
 const SMALL = path.join(DATA_DIR, 'small.jsonl')
 
-// The darwin-arm64 build runs only on an Apple-silicon Mac: a Linux checkout that cross-built it
-// gets ENOEXEC (2026-11-07).
-const hasBinary = fs.existsSync(BINARY) && process.platform === 'darwin' && process.arch === 'arm64'
+// This machine's own build (a Linux checkout that cross-built darwin-arm64 gets ENOEXEC from it, 2026-11-07).
+const hasBinary = fs.existsSync(BINARY)
 const d = hasBinary ? describe : describe.skip
 
 let daemonPid: number | null = null
 let port = 0
 
-async function waitFor(cond: () => boolean, ms: number): Promise<boolean> {
-  const start = Date.now()
-  while (Date.now() - start < ms) {
-    if (cond()) return true
-    await new Promise((r) => setTimeout(r, 100))
-  }
-  return cond()
+/**
+ * Wait until the daemon has written a port number (the file is created empty before its
+ * write, so its existence alone is not the port), or fail as soon as the daemon exits.
+ * Bounded by the hook's own timeout, never by a shorter clock of its own.
+ */
+function daemonReady(proc: ChildProcess): Promise<{ port: number; pid: number }> {
+  return new Promise((resolve, reject) => {
+    let done = false
+    const finish = (fn: () => void) => { if (!done) { done = true; clearInterval(poll); fn() } }
+    proc.once('error', (err) => finish(() => reject(err)))
+    proc.once('exit', (code, signal) => finish(() => reject(new Error(`daemon exited before it wrote its port (code ${code}, signal ${signal})`))))
+    const poll = setInterval(() => {
+      let text = ''
+      try { text = fs.readFileSync(PORT_FILE, 'utf-8').trim() } catch { return }
+      const port = Number(text)
+      if (!Number.isInteger(port) || port <= 0) return
+      const pid = Number(fs.readFileSync(PID_FILE, 'utf-8').trim())
+      finish(() => resolve({ port, pid }))
+    }, 25)
+  })
 }
 
 d('daemon ws backpressure (real binary)', () => {
@@ -74,15 +86,13 @@ d('daemon ws backpressure (real binary)', () => {
     delete env.VITEST_POOL_ID; delete env.OPEN_WALNUT_HOME
     const proc = spawn(BINARY, ['--start'], { detached: true, stdio: 'ignore', env })
     proc.unref()
-
-    const ok = await waitFor(() => fs.existsSync(PORT_FILE), 10_000)
-    if (!ok) throw new Error('daemon did not write port file')
-    port = parseInt(fs.readFileSync(PORT_FILE, 'utf-8').trim(), 10)
-    daemonPid = parseInt(fs.readFileSync(PID_FILE, 'utf-8').trim(), 10)
+    const ready = await daemonReady(proc)
+    port = ready.port
+    daemonPid = ready.pid
   }, 30_000)
 
   afterAll(() => {
-    if (daemonPid) {
+    if (daemonPid && daemonPid > 1) {
       try { process.kill(daemonPid, 'SIGTERM') } catch {}
     }
     try { fs.rmSync(DAEMON_DIR, { recursive: true, force: true }) } catch {}
@@ -91,7 +101,7 @@ d('daemon ws backpressure (real binary)', () => {
   })
 
   it('delivers ALL responses when concurrent large fs.reads saturate the socket', async () => {
-    const ws = new WebSocket(`ws://localhost:${port}`, { maxPayload: 512 * 1024 * 1024 })
+    const ws = new WebSocket(`ws://127.0.0.1:${port}`, { maxPayload: 512 * 1024 * 1024 })
     await new Promise<void>((res, rej) => { ws.on('open', () => res()); ws.on('error', rej) })
 
     // The prod repro: multiple concurrent reads on ONE socket. Before the fix,
@@ -127,15 +137,12 @@ d('daemon ws backpressure (real binary)', () => {
         : { id: r.id, cmd: 'fs.read', path: r.path, encoding: 'utf-8' }))
     }
 
-    // Generous ceiling: 4 × ~25MB over localhost drains in well under 30s.
-    // Before the fix this times out with 5 of 6 responses missing.
-    await Promise.race([
-      done,
-      new Promise<never>((_, rej) => setTimeout(
-        () => rej(new Error(`only ${received.size}/${reads.length} responses arrived: ids=[${[...received.keys()].sort()}]`)),
-        30_000,
-      )),
-    ])
+    // Before the fix this never resolves: 5 of 6 responses are dropped. Bounded by the test's
+    // own timeout, not a shorter clock: ~100 MB through one socket is slow on a loaded host.
+    onTestFailed(() => {
+      console.error(`only ${received.size}/${reads.length} responses arrived: ids=[${[...received.keys()].sort()}]`)
+    })
+    await done
 
     ws.close()
     expect(received.size).toBe(reads.length)

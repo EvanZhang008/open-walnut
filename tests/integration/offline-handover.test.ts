@@ -11,7 +11,7 @@
  *      acked up to the last record.
  * The daemon side is a recorder standing in for the drain/ack RPCs.
  */
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest'
 import type { Server as HttpServer } from 'node:http'
 import { createMockConstants } from '../helpers/mock-constants.js'
 
@@ -46,7 +46,7 @@ vi.mock('../../src/ops/index.js', async (importOriginal) => {
 import { startServer, stopServer } from '../../src/web/server.js'
 import { closeDb } from '../../src/core/task-db.js'
 import { buildHostSlice } from '../../src/core/host-slice.js'
-import { runOfflineHandover, waitForOfflineHandovers } from '../../src/core/offline-handover.js'
+import { runOfflineHandover, runningHandover, waitForOfflineHandovers, _setHandoverBackoffForTesting } from '../../src/core/offline-handover.js'
 import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js'
 import { createSessionRequest, getSessionRequest } from '../../src/core/session-requests.js'
 import { updateTaskRaw } from '../../src/core/task-manager.js'
@@ -100,6 +100,16 @@ beforeAll(async () => {
   await createSessionRecord(X, elsewhere, 'Acme', '/work', { host: 'otherbox', title: 'Work on another box' })
   await createSessionRecord(L, localTask, 'Acme', '/work', { title: 'Work on this Mac' })
 }, 60_000)
+
+// Every test drains host 'devbox' on a connection of its own, and there is one handover per
+// host: a call while one runs joins it. A drain the test before left running (its retry, its
+// conflict letter) or a retry it left armed took the next test's call, so that test's own
+// records were never drained (R25, 2026-11-06: pending 2, nothing applied). Each test starts
+// with none running and none armed.
+beforeEach(async () => {
+  for (let job = runningHandover('devbox'); job; job = runningHandover('devbox')) await job.catch(() => {})
+  _setHandoverBackoffForTesting(null)
+})
 
 afterAll(async () => {
   await stopServer().catch(() => {})
@@ -444,7 +454,6 @@ describe('runOfflineHandover over journal v2', () => {
   })
 
   it('a record that throws stops the batch (later records wait), is retried with backoff 3 times, then given up with the later records of its task', async () => {
-    const { _setHandoverBackoffForTesting } = await import('../../src/core/offline-handover.js')
     _setHandoverBackoffForTesting([40, 40, 40])
     const stuck = await newTask('Never answered')
     const other = await newTask('Unrelated, after it')

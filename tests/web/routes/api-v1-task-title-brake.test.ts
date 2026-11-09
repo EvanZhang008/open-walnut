@@ -17,7 +17,7 @@
  *   - a short title from a session is stored as sent, with no cut field;
  *   - PATCH from a session meets the same brake; PATCH without a caller does not.
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs/promises'
 import type { Server as HttpServer } from 'node:http'
 import { createMockConstants } from '../../helpers/mock-constants.js'
@@ -32,6 +32,28 @@ vi.mock('../../../src/core/session-title-backend.js', () => ({
   backendTitleAvailable: () => backend.available,
   titleViaBackendModel: vi.fn(async () => { backend.calls += 1; return backend.answer }),
 }))
+
+// The routes fire the background refine and never await it, so a test that only
+// waited a while lost the race under load (and a refine still running from one
+// test bumped the next test's backend.calls after beforeEach reset it). Every
+// refine the server starts is recorded here; tests await the real promises.
+const refines = vi.hoisted(() => ({ pending: new Set<Promise<void>>() }))
+vi.mock('../../../src/core/sessions/task-title-brake.js', async (orig) => {
+  const real = await orig<typeof import('../../../src/core/sessions/task-title-brake.js')>()
+  return {
+    ...real,
+    refineShortTitle: (...args: Parameters<typeof real.refineShortTitle>) => {
+      const p = real.refineShortTitle(...args)
+      refines.pending.add(p)
+      void p.finally(() => refines.pending.delete(p))
+      return p
+    },
+  }
+})
+/** Settle every background refine the server has started so far. */
+async function settleRefines(): Promise<void> {
+  while (refines.pending.size > 0) await Promise.all([...refines.pending])
+}
 
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { startServer, stopServer } from '../../../src/web/server.js'
@@ -74,18 +96,6 @@ async function seedCaller(project: string, opts: { walnutAgent?: boolean; noTask
   return sid
 }
 
-function waitFor(cond: () => Promise<boolean>, ms = 5000): Promise<void> {
-  const start = Date.now()
-  return new Promise((resolve, reject) => {
-    const tick = async () => {
-      if (await cond()) return resolve()
-      if (Date.now() - start > ms) return reject(new Error('timed out'))
-      setTimeout(() => { void tick() }, 25)
-    }
-    void tick()
-  })
-}
-
 const LONG = 'Bakery website launch: build the home page and the menu page, wire the order form to the bakery mailbox, and add the opening hours'
 const CUT = 'Bakery website launch'
 
@@ -104,6 +114,8 @@ afterAll(async () => {
 })
 
 beforeEach(() => { backend.available = true; backend.answer = null; backend.calls = 0 })
+// No refine of one test may run into the next one's backend counters.
+afterEach(async () => { await settleRefines() })
 
 describe('POST /api/v1/tasks', () => {
   it('no caller header: a long title is stored as typed (the phone, the web UI)', async () => {
@@ -159,8 +171,8 @@ describe('POST /api/v1/tasks', () => {
     try {
       const { json } = await post({ title: LONG }, sid)
       expect(json.task.title).toBe(CUT)
-      // The store write and its bus event land in either order under load: wait for both.
-      await waitFor(async () => (await getTask(json.task.id)).title === 'Bakery site launch' && renamed.includes('Bakery site launch'))
+      await settleRefines()
+      expect((await getTask(json.task.id)).title).toBe('Bakery site launch')
       expect(renamed).toContain('Bakery site launch')
       expect(backend.calls).toBe(1)
     } finally {
@@ -172,7 +184,7 @@ describe('POST /api/v1/tasks', () => {
     const sid = await seedCaller('marina')
     backend.available = false
     const { json } = await post({ title: LONG }, sid)
-    await new Promise((r) => setTimeout(r, 50))
+    await settleRefines()
     expect((await getTask(json.task.id)).title).toBe(CUT)
     expect(backend.calls).toBe(0)
   })
@@ -233,7 +245,8 @@ describe('PATCH /api/v1/tasks/:id', () => {
     expect(json.title_shortened_from).toBe(LONG)
     // A rename never touches the description.
     expect((await getTask(task.id)).description ?? '').toBe('')
-    await waitFor(async () => (await getTask(task.id)).title === 'Bakery site launch')
+    await settleRefines()
+    expect((await getTask(task.id)).title).toBe('Bakery site launch')
   })
 
   it('without a caller, a long title is stored as typed; a short title from a session carries no cut field', async () => {

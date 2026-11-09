@@ -13,32 +13,29 @@
  * r6 gate's pop-out crash (MED-1, the same mistake in App). Mounted for real
  * here: react-dom over a linkedom document, as tests/web/use-integrations-cache.test.ts.
  */
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { parseHTML } from 'linkedom';
 import { createElement, act, type ReactElement } from '../../web/node_modules/react/index.js';
 import { createRoot, type Root } from '../../web/node_modules/react-dom/client.js';
 
-let doc: Document;
-let ChatMessage: typeof import('../../web/src/components/chat/ChatMessage').ChatMessage;
-let SessionMessage: typeof import('../../web/src/components/sessions/SessionMessage').SessionMessage;
-let MemoryRouter: typeof import('../../web/node_modules/react-router-dom').MemoryRouter;
+// The document first: the markdown sanitizer binds to it at import.
+const dom = parseHTML('<!DOCTYPE html><html><head></head><body></body></html>');
+const g = globalThis as unknown as Record<string, unknown>;
+g.window = dom.window;
+g.document = dom.document;
+g.IS_REACT_ACT_ENVIRONMENT = true;
+const doc = dom.document as unknown as Document;
+// Imported at module level (the collect phase, which has no deadline), never in a
+// beforeAll: these pull in most of the web app, and a cold transform of that graph
+// in a full run on a busy machine outlasted the 30 s hook timeout, failing the
+// whole file before any test ran ("file failed outside its tests").
+const { ChatMessage } = await import('../../web/src/components/chat/ChatMessage');
+const { SessionMessage } = await import('../../web/src/components/sessions/SessionMessage');
+// The same router module the components import (attention-banner-session.test.ts does the same).
+const { MemoryRouter } = await import('../../web/node_modules/react-router-dom');
 const errors: unknown[] = [];
 let root: Root | null = null;
 let host: Element | null = null;
-
-beforeAll(async () => {
-  const dom = parseHTML('<!DOCTYPE html><html><head></head><body></body></html>');
-  const g = globalThis as unknown as Record<string, unknown>;
-  g.window = dom.window;
-  g.document = dom.document;
-  g.IS_REACT_ACT_ENVIRONMENT = true;
-  doc = dom.document as unknown as Document;
-  // After the document exists: the markdown sanitizer binds to it at import.
-  ({ ChatMessage } = await import('../../web/src/components/chat/ChatMessage'));
-  ({ SessionMessage } = await import('../../web/src/components/sessions/SessionMessage'));
-  // The same router module the components import (attention-banner-session.test.ts does the same).
-  ({ MemoryRouter } = await import('../../web/node_modules/react-router-dom'));
-});
 
 afterEach(async () => {
   if (root) await act(async () => { root!.unmount(); });

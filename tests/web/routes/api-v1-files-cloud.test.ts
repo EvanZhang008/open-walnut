@@ -242,9 +242,12 @@ describe('file-content bounded relay on a REPLICA', () => {
   })
 
   it('a no-host read of a locally-present safe-root file stays LOCAL (no bridge hop)', async () => {
-    const dir = path.join('/tmp/open-walnut', 'files-cloud-test')
+    // A directory of this run's own under the safe root: a fixed name was shared
+    // with every other run of this file, and one run's cleanup removed the file
+    // another was reading (the read then fell through to the bridge).
+    await fs.mkdir('/tmp/open-walnut', { recursive: true })
+    const dir = await fs.mkdtemp(path.join('/tmp/open-walnut', 'files-cloud-test-'))
     const p = path.join(dir, 'local.txt')
-    await fs.mkdir(dir, { recursive: true })
     await fs.writeFile(p, 'replica-local bytes', 'utf-8')
     try {
       const res = await request(createApp()).get(`/api/v1/file-content?path=${encodeURIComponent(p)}`)
@@ -268,6 +271,14 @@ function rangeReply(bytes: Buffer, params: Record<string, unknown>) {
 }
 function mediaDaemon(bytes = MEDIA_BYTES) {
   bridgeRequestMock.mockImplementation(async (_host, _cmd, params) => rangeReply(bytes, params))
+}
+/** Byte equality for media bodies. A deep toEqual walks a Buffer one element at
+ *  a time; on these 2-3 MB bodies that alone took 13-19 s and timed the tests
+ *  out under load. Buffer.equals is a memcmp. */
+function expectBytes(actual: Buffer, expected: Buffer) {
+  expect(Buffer.isBuffer(actual)).toBe(true)
+  expect(actual.length).toBe(expected.length)
+  expect(actual.equals(expected), 'body bytes differ from the expected bytes').toBe(true)
 }
 function binaryParser(res: NodeJS.ReadableStream, cb: (error: Error | null, body: Buffer) => void) {
   const chunks: Buffer[] = []
@@ -359,7 +370,7 @@ describe('raw media uses guarded bridge chunks', () => {
     expect(res.headers['content-type']).toBe('video/mp4')
     expect(res.headers['content-length']).toBe(String(MEDIA_BYTES.length))
     expect(res.headers['accept-ranges']).toBe('bytes')
-    expect(res.body).toEqual(MEDIA_BYTES)
+    expectBytes(res.body, MEDIA_BYTES)
     const calls = bridgeRequestMock.mock.calls
     expect(calls).toHaveLength(5)
     expect(calls[0]).toEqual(['named-host', 'fs.readBounded', { path: '/w/bytes.mp4', range: true, offset: 0, length: 0 }, 15_000])
@@ -381,7 +392,7 @@ describe('raw media uses guarded bridge chunks', () => {
       const res = await rawMedia().set('Range', header)
       expect(res.status).toBe(206)
       expect(res.headers['content-range']).toBe(`bytes ${start}-${end}/${MEDIA_BYTES.length}`)
-      expect(res.body).toEqual(MEDIA_BYTES.subarray(start, end + 1))
+      expectBytes(res.body, MEDIA_BYTES.subarray(start, end + 1))
     }
   })
 
@@ -394,7 +405,7 @@ describe('raw media uses guarded bridge chunks', () => {
     expect(etag).toMatch(/^"[a-f0-9]{64}"$/)
     const matching = await rawMedia().set('Range', 'bytes=2-4').set('If-Range', etag)
     expect(matching.status).toBe(206)
-    expect(matching.body).toEqual(bytes.subarray(2, 5))
+    expectBytes(matching.body, bytes.subarray(2, 5))
     version = 'second|version'
     bytes = Buffer.from('new replacement bytes')
     for (const validator of [etag, `W/${etag}`, 'Thu, 01 Jan 1970 00:00:00 GMT', 'invalid']) {
@@ -402,7 +413,7 @@ describe('raw media uses guarded bridge chunks', () => {
       expect(response.status).toBe(200)
       expect(response.headers['content-range']).toBeUndefined()
       expect(response.headers.etag).not.toBe(etag)
-      expect(response.body).toEqual(bytes)
+      expectBytes(response.body, bytes)
     }
   })
 
@@ -518,7 +529,7 @@ describe('raw media uses guarded bridge chunks', () => {
       })
     }
     mediaDaemon()
-    expect((await rawMedia().set('Range', 'bytes=0-9')).body).toEqual(MEDIA_BYTES.subarray(0, 10))
+    expectBytes((await rawMedia().set('Range', 'bytes=0-9')).body, MEDIA_BYTES.subarray(0, 10))
   })
 
   it('client abort during a pending read ends the route and starts no subsequent chunks', async () => {

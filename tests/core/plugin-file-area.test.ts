@@ -152,8 +152,14 @@ describe('what a synced file may be', () => {
   })
 
   it('at most 1,000 files, empty ones included; rewriting one that is there still works', async () => {
+    // All but the last file come from an earlier run, already published: the count is the
+    // same either way (the area counts published and pending files alike), and a thousand
+    // sequential writes through the area took over 15 s under load, long enough for the
+    // real 10 s publish timer to start moving files under the loop.
+    await fs.mkdir(path.join(root, 'f'), { recursive: true })
+    await Promise.all(Array.from({ length: SYNCED_AREA_MAX_FILES - 1 }, (_, i) => fs.writeFile(path.join(root, 'f', `${i}.txt`), '')))
     const files = synced()
-    for (let i = 0; i < SYNCED_AREA_MAX_FILES; i++) await files.writeText(`f/${i}.txt`, '')
+    await files.writeText(`f/${SYNCED_AREA_MAX_FILES - 1}.txt`, '')
     await expect(files.writeText('one-more.txt', '')).rejects.toThrow(/hold 1000 files/)
     await files.writeText('f/7.txt', 'rewritten')
     await files.delete('f/8.txt')
@@ -231,6 +237,9 @@ describe('writes are coalesced', () => {
     let done = false
     const held = files.flush().then(() => { done = true })
     await vi.advanceTimersByTimeAsync(SYNCED_FLUSH_MIN_GAP_MS - 1_000)
+    // A delete runs after any publish already in flight (they share one queue), so a
+    // publish a timer started inside the minute has finished before the check below.
+    await files.delete('nothing-here.md')
     expect(done).toBe(false)
     expect(await onDisk(root, 'a.md')).toBe('one')
     await vi.advanceTimersByTimeAsync(2_000)

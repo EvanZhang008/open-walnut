@@ -9,10 +9,15 @@
  * recovery signal, and so is a boot that finds its daemon up while a card from
  * an earlier life is still open.
  *
- * Real server, real local daemon in this worker's isolated daemon dir.
+ * Real server, real local daemon in this worker's isolated daemon dir, and a
+ * data home of this file's own: on the shared test home another file's server
+ * (or a second run) held the instance lock and shared the notification store.
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import type { Server } from 'node:http';
+import { createMockConstants } from '../helpers/mock-constants.js';
+
+vi.mock('../../src/constants.js', () => createMockConstants('walnut-local-daemon-recovery'));
 
 let server: (Server & { address: () => { port: number } }) | undefined;
 let previousDisableSearch: string | undefined;
@@ -22,14 +27,13 @@ async function feed() {
   return (await listNotifications()).feed;
 }
 
-async function pollFeed(pred: (f: Awaited<ReturnType<typeof feed>>) => boolean, timeoutMs = 10_000) {
-  const deadline = Date.now() + timeoutMs;
-  let last = await feed();
-  while (!pred(last) && Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 100));
-    last = await feed();
-  }
-  return last;
+/** The feed once it reaches the state `pred` names (the boot's reconcile runs after startServer returns). */
+async function pollFeed(pred: (f: Awaited<ReturnType<typeof feed>>) => boolean) {
+  return vi.waitFor(async () => {
+    const f = await feed();
+    if (!pred(f)) throw new Error('feed not settled yet');
+    return f;
+  }, { timeout: 60_000, interval: 100 });
 }
 
 async function boot(): Promise<void> {
@@ -94,6 +98,8 @@ describe('local-daemon lifecycle', () => {
       dedupKey: 'logerr:web:test-local-daemon-quiet', recoveryKey: 'local-daemon',
     });
     await localDaemon.ensureRunning();
+    // Only confirms that nothing happened: a published recovery is a fire-and-forget
+    // store write with no event to wait on, so give it a short moment to (not) land.
     await new Promise((r) => setTimeout(r, 300));
     expect((await feed()).find((n) => n.id === other.id)?.resolved).toBeUndefined();
     await shutdown();

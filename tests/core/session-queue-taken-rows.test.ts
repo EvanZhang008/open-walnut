@@ -23,7 +23,7 @@ import {
   revertIfQueued, revertToPending, settledLineUuid, unparkMessage, editMessage,
 } from '../../src/core/session-message-queue.js';
 import { lineUuidFor } from '../../src/providers/batch-uuid.js';
-import { WALNUT_HOME } from '../../src/constants.js';
+import { SESSION_QUEUE_FILE, WALNUT_HOME } from '../../src/constants.js';
 
 const SID = 'queue-taken-session';
 
@@ -193,15 +193,27 @@ describe('rows whose line may be in a CLI', () => {
   });
 
   it('M2: the settled record is bounded, oldest first', async () => {
-    for (let i = 0; i < 260; i++) await enqueueMessage(SID, `m${i}`, { id: `qm-s${i}` });
-    // One line per batch: take them all, then settle them in order.
+    // 260 rows as an earlier process left them: one real enqueue gives the row's shape,
+    // the rest are copies written to the queue file in one go. 260 enqueues, each a
+    // locked rewrite of a growing file, took over 15 s on a loaded machine.
+    const model = await enqueueMessage(SID, 'm0', { id: 'qm-s0' });
+    const rows = Array.from({ length: 260 }, (_, i) => ({ ...model, id: `qm-s${i}`, message: `m${i}`, seq: model.seq + i }));
+    const file = JSON.parse(await fsp.readFile(SESSION_QUEUE_FILE, 'utf8'));
+    file.queues[SID] = rows;
+    await fsp.writeFile(SESSION_QUEUE_FILE, JSON.stringify(file));
+    await loadQueue();
+    expect(await getQueue(SID)).toHaveLength(260);
+    // Take them all, then settle them in order, in a few calls: the bound holds across
+    // calls as well as inside one (a call settles its rows in queue order). One call per
+    // row was 260 more locked rewrites.
     const taken: string[] = [];
     for (;;) {
       const batch = await markProcessing(SID);
       if (batch.length === 0) break;
       taken.push(...batch.map((m) => m.id));
     }
-    for (const id of taken) await removeTaken(SID, [id]);
+    expect(taken).toHaveLength(260);
+    for (let i = 0; i < taken.length; i += 65) await removeTaken(SID, taken.slice(i, i + 65));
     expect(await settledLineUuid('qm-s0')).toBeUndefined();
     expect(await settledLineUuid('qm-s3')).toBeUndefined();
     expect(await settledLineUuid('qm-s4')).toBeDefined();

@@ -988,13 +988,38 @@ describe('readSessionHistory in-flight dedup', () => {
   it('does NOT share between different skipSubagents shapes', async () => {
     await writeJsonl('dedup-shape', '/test', [msg('m0', 'user', 'Hello')]);
 
-    // Different option shape ⇒ different key ⇒ must not be served the other's result.
-    const [withSub, withoutSub] = await Promise.all([
-      readSessionHistory('dedup-shape', '/test', undefined, undefined, { skipSubagents: false }),
-      readSessionHistory('dedup-shape', '/test', undefined, undefined, { skipSubagents: true }),
-    ]);
-    expect(withSub[0].text).toBe('Hello');
-    expect(withoutSub[0].text).toBe('Hello');
+    // Hold the first read in flight at its first stat, AFTER it imported the reader.
+    // Starting both reads in the same tick made both import the mocked reader at
+    // once, and vitest serves a factory mock to only one of two concurrent imports
+    // from one module (its requestWithMock callstack check): the other got the real
+    // reader, which spawned a real local daemon and failed when it was slow to answer.
+    const { DaemonFileReader } = await import('../../src/core/daemon-file-reader.js');
+    const realStat = DaemonFileReader.prototype.stat;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let held = 0;
+    const stat = vi.spyOn(DaemonFileReader.prototype, 'stat').mockImplementation(async function (this: InstanceType<typeof DaemonFileReader>, p: string) {
+      if (held++ === 0) await gate;
+      return realStat.call(this, p);
+    });
+    try {
+      const withSubRead = readSessionHistory('dedup-shape', '/test', undefined, undefined, { skipSubagents: false });
+      await vi.waitFor(() => expect(stat).toHaveBeenCalledTimes(1));
+      // Same shape while in flight: the same read.
+      expect(readSessionHistory('dedup-shape', '/test', undefined, undefined, { skipSubagents: false })).toBe(withSubRead);
+      // Different option shape ⇒ different key ⇒ its own read, which finishes while
+      // the other is still held, so it cannot have been served the other's result.
+      const withoutSubRead = readSessionHistory('dedup-shape', '/test', undefined, undefined, { skipSubagents: true });
+      expect(withoutSubRead).not.toBe(withSubRead);
+      const withoutSub = await withoutSubRead;
+      expect(withoutSub[0].text).toBe('Hello');
+      release();
+      const withSub = await withSubRead;
+      expect(withSub[0].text).toBe('Hello');
+    } finally {
+      release();
+      stat.mockRestore();
+    }
   });
 
   it('releases the in-flight entry so later reads still work', async () => {

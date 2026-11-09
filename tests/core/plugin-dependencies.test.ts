@@ -153,6 +153,7 @@ async function load(registry: IntegrationRegistry): Promise<void> {
 
 afterEach(async () => {
   setPluginCodeTimeoutForTesting(null);
+  delete (globalThis as { __deadline?: unknown }).__deadline;
   bus.unsubscribe('p01-observer');
   delete (globalThis as unknown as { __p01?: Markers }).__p01;
   for (const one of loadedRegistries.splice(0)) await disposeLoadedPlugins(one);
@@ -739,6 +740,9 @@ describe('restore pass over a dependent graph', () => {
 /** `reloadLoadedPlugins`: one lane, one preflight over the whole candidate graph, one recovery.
  *  What a per-plugin reload cannot do is swap a dependency and its dependent across a major. */
 describe('batch reload of one source', () => {
+  /** For checks that something did NOT happen: there is no event to wait on, so give a wrong one a moment to show. */
+  const quietMoment = () => new Promise<void>((resolve) => setTimeout(resolve, 100));
+
   /** Activations minus deactivations: one live instance, never a leaked second copy. */
   const live = (id: string) =>
     marks().activated.filter((one) => one === id).length - marks().deactivated.filter((one) => one === id).length;
@@ -756,6 +760,25 @@ describe('batch reload of one source', () => {
   async function writeNextMajor(betaBody = ''): Promise<void> {
     await writePlugin('z-alpha', { id: 'alpha', name: 'alpha', version: '2.0.0' });
     await writePlugin('a-beta', { id: 'beta', name: 'beta', version: '2.0.0', dependencies: { alpha: '^2' } }, betaBody);
+  }
+
+  /**
+   * A plugin whose activation hangs until `globalThis[release]()`, timed out at 50 ms.
+   * The short deadline is set from the plugin's own module scope, so it is armed for the
+   * activation that follows and not for the module's evaluation: a 50 ms deadline on the
+   * evaluation of a fresh module lost to a loaded machine, and the reload then failed on
+   * "module evaluation timed out" before the activation this test is about ever ran.
+   * activate() runs after its deadline is armed and puts the usual deadline back at once,
+   * so the recovery that follows evaluates the previous versions on the usual deadline.
+   */
+  async function writeHangingPlugin(dirName: string, manifest: Record<string, unknown>, release: string): Promise<void> {
+    (globalThis as any).__deadline = {
+      short: () => setPluginCodeTimeoutForTesting(50),
+      usual: () => setPluginCodeTimeoutForTesting(null),
+    };
+    await writePlugin(dirName, manifest,
+      `globalThis.__deadline.usual(); return new Promise(resolve => { globalThis.${release} = resolve; });`);
+    await fsp.appendFile(path.join(WALNUT_HOME, 'plugins', dirName, 'dist', 'server.mjs'), '\nglobalThis.__deadline.short();\n');
   }
 
   it('upgrades a dependency and its dependent across a major, in whatever order they are asked', async () => {
@@ -803,8 +826,8 @@ describe('batch reload of one source', () => {
 
   it.each([false, true])('keeps a timed-out batch member controllable with disabled=%s', async disabled => {
     const registry = await loadUpgradePair();
-    await writeNextMajor('return new Promise(resolve => { globalThis.__releaseBatch = resolve; });');
-    setPluginCodeTimeoutForTesting(50);
+    await writeNextMajor();
+    await writeHangingPlugin('a-beta', { id: 'beta', name: 'beta', version: '2.0.0', dependencies: { alpha: '^2' } }, '__releaseBatch');
     await expect(reloadLoadedPlugins(registry, ['alpha', 'beta'], async () => undefined))
       .rejects.toThrow(/recovery incomplete/);
     expect(record(registry, 'beta')).toBeDefined();
@@ -812,11 +835,14 @@ describe('batch reload of one source', () => {
     (globalThis as any).__releaseBatch();
     delete (globalThis as any).__releaseBatch;
     if (disabled) {
-      await new Promise(resolve => setTimeout(resolve, 100));
+      // Released: nothing should follow (the late activation must not bring beta back), so
+      // there is no event to wait on; a moment lets a wrong late start show.
+      await quietMoment();
       expect(record(registry, 'beta')?.state).toBe('disabled');
       expect(registry.has('beta')).toBe(false);
     } else {
-      await vi.waitFor(() => expect(record(registry, 'beta')?.state).toBe('active'));
+      // A reactivation evaluates the module again: seconds on a loaded machine.
+      await vi.waitFor(() => expect(record(registry, 'beta')?.state).toBe('active'), { timeout: 10_000 });
       expect(registry.get('beta')?.version).toBe('1.0.0');
     }
     expect(registry.get('alpha')?.version).toBe('1.0.0');
@@ -852,18 +878,17 @@ describe('batch reload of one source', () => {
     await writePlugin('alpha', { id: 'alpha', name: 'alpha', version: '1.0.0' });
     const registry = new IntegrationRegistry();
     await load(registry);
-    await writePlugin('alpha', { id: 'alpha', name: 'alpha', version: '2.0.0' },
-      'return new Promise(resolve => { globalThis.__releasePlugin = resolve; });');
-    setPluginCodeTimeoutForTesting(50);
+    await writeHangingPlugin('alpha', { id: 'alpha', name: 'alpha', version: '2.0.0' }, '__releasePlugin');
     await expect(reloadLoadedPlugin(registry, 'alpha')).rejects.toThrow(/timed out/);
     if (disabled) await disableLoadedPlugin(registry, 'alpha');
     (globalThis as any).__releasePlugin();
     delete (globalThis as any).__releasePlugin;
     await vi.waitFor(() => expect(lifecycleEvents.filter(e => e.pluginId === 'alpha').at(-1)?.state)
-      .toBe(disabled ? 'disabled' : 'active'));
+      .toBe(disabled ? 'disabled' : 'active'), { timeout: 10_000 });
     if (!disabled) expect(registry.get('alpha')?.version).toBe('1.0.0');
     else {
-      await new Promise(resolve => setTimeout(resolve, 100));
+      // As above: the released replacement must not come up, so wait a moment for nothing.
+      await quietMoment();
       expect(registry.has('alpha')).toBe(false);
       expect((await readConfigPlugins()).alpha.enabled).toBe(false);
     }
@@ -882,7 +907,7 @@ describe('batch reload of one source', () => {
     await writeConfig({ beta: { sync_interval_ms: 900 } });
     (globalThis as any).__releaseDependent();
     delete (globalThis as any).__releaseDependent;
-    await vi.waitFor(() => expect(record(registry, 'beta')?.state).toBe('active'));
+    await vi.waitFor(() => expect(record(registry, 'beta')?.state).toBe('active'), { timeout: 10_000 });
     expect(registry.get('beta')?.config).toEqual({ sync_interval_ms: 900 });
   });
 

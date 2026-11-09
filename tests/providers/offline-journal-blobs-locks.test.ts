@@ -35,12 +35,15 @@ function hookedFs(hooks: Partial<Record<'renameSync' | 'unlinkSync', (a: string,
 afterEach(() => cleanupJournalDirs())
 
 describe('journal v2: folded note saves free the bodies they replace', () => {
-  it('400 saves of a 256 KB note by one device leave at most two bodies, before and after an ack', () => {
+  it('40 saves of a 256 KB note by one device leave at most two bodies, before and after an ack', () => {
     const dir = journalTmpDir()
     const clock = { now: T0 }
-    const j = journalStore(dir, clock)
+    // 40 saves, not durable: a fold that kept what it replaced would leave 40 bodies, so the
+    // bound is checked as well as with 400, and 400 synced 256 KB saves (100 MB written and
+    // hashed) ran past the 15 s budget on a loaded host (2026-11-06/07 land checks).
+    const j = journalStore(dir, clock, { durable: false })
     const base = Buffer.from('the text before the Mac went away')
-    for (let i = 0; i < 400; i++) {
+    for (let i = 0; i < 40; i++) {
       clock.now += 100
       const r = j.appendNote(JHOME, { path: 'notes/acme.md', mode: 'put', baseHash: 'h-base', base, ours: big(i) }, { actor: DEVICE })
       expect(r.ok).toBe(true)
@@ -64,8 +67,9 @@ describe('journal v2: folded note saves free the bodies they replace', () => {
   it('saves from two stores (two processes) on one dir leave at most two bodies', () => {
     const dir = journalTmpDir()
     const clock = { now: T0 }
-    const a = journalStore(dir, clock)
-    const b = journalStore(dir, clock)
+    // Not durable, as above: the property is which bodies are kept, not the sync flag.
+    const a = journalStore(dir, clock, { durable: false })
+    const b = journalStore(dir, clock, { durable: false })
     for (let i = 0; i < 60; i++) {
       clock.now += 100
       const s = i % 2 ? a : b
@@ -401,6 +405,11 @@ describe('journal v2: a stale lock is removed only while the path names the file
     // A lock file left with the released marker (its holder released while a judge held
     // the file aside, and the judge linked it back). A fresh mark is a release in progress.
     fs.writeFileSync(lockFile, 'free')
+    // Fresh however long this thread is held up before the judge reads it: a mark is free
+    // only once it is a second old by the real clock, which a loaded host can pass between
+    // the write above and the append below.
+    const fresh = new Date(Date.now() + 60_000)
+    fs.utimesSync(lockFile, fresh, fresh)
     expect(j.append(JHOME, { kind: 'settings', sid: SID_A, effort: 'low' })).toMatchObject({ ok: false, code: 'journal_unwritable', why: 'locked' })
     expect(fs.existsSync(lockFile)).toBe(true)
     // Its holder's unlink never came: a second later the mark is free (the wedge memo does not hold it).
@@ -422,6 +431,10 @@ describe('journal v2: a stale lock is removed only while the path names the file
         unlinkSync: (file) => {
           if (file !== lockFile) return true
           expect(fs.readFileSync(lockFile, 'utf8')).toBe('free')
+          // The mark stays fresh however long this thread is held up meanwhile (a mark a
+          // second old is judged free by the real clock, which a loaded host can pass).
+          const fresh = new Date(Date.now() + 60_000)
+          fs.utimesSync(lockFile, fresh, fresh)
           between = other.append(JHOME, { kind: 'settings', sid: SID_A, effort: 'other' }) as { ok: boolean; why?: string }
         },
       }),

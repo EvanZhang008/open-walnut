@@ -327,6 +327,11 @@ export class SyncedFileArea implements Disposable {
   private async publish(): Promise<void> {
     // A replica only reads what git brought; an undeclared area has nothing to publish.
     if (this.cap === null || this.replica) return
+    // This publish takes everything pending, so a timer armed for it (a flush runs before
+    // the write's delay is up) must not publish again moments later: writes after it arm
+    // a new one, measured from this publish.
+    if (this.timer) clearTimeout(this.timer)
+    this.timer = null
     const held = this.heldFlushes.splice(0)
     let again = false
     try {

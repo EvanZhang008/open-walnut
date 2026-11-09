@@ -20,7 +20,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { WebSocket } from 'ws'
 
 const ROOT = path.resolve(__dirname, '../..')
@@ -31,33 +31,44 @@ const PORT_FILE = path.join(DAEMON_DIR, 'daemon.port')
 const PID_FILE = path.join(DAEMON_DIR, 'daemon.pid')
 const STREAMS_DIR = `${DAEMON_DIR}-streams`
 
-// The darwin-arm64 build runs only on an Apple-silicon Mac: a Linux checkout that cross-built it
-// gets ENOEXEC (2026-11-07).
-const hasBinary = fs.existsSync(BINARY) && process.platform === 'darwin' && process.arch === 'arm64'
+// This machine's own build (a Linux checkout that cross-built darwin-arm64 gets ENOEXEC from it, 2026-11-07).
+const hasBinary = fs.existsSync(BINARY)
 const d = hasBinary ? describe : describe.skip
 
 let daemonPid: number | null = null
 let port = 0
 let rpcId = 1
 
-async function waitFor(cond: () => boolean, ms: number): Promise<boolean> {
-  const start = Date.now()
-  while (Date.now() - start < ms) {
-    if (cond()) return true
-    await new Promise((r) => setTimeout(r, 100))
-  }
-  return cond()
+/**
+ * Wait until the daemon has written a port number (the file is created empty before its
+ * write, so its existence alone is not the port), or fail as soon as the daemon exits.
+ * Bounded by the hook's own timeout, never by a shorter clock of its own.
+ */
+function daemonReady(proc: ChildProcess): Promise<{ port: number; pid: number }> {
+  return new Promise((resolve, reject) => {
+    let done = false
+    const finish = (fn: () => void) => { if (!done) { done = true; clearInterval(poll); fn() } }
+    proc.once('error', (err) => finish(() => reject(err)))
+    proc.once('exit', (code, signal) => finish(() => reject(new Error(`daemon exited before it wrote its port (code ${code}, signal ${signal})`))))
+    const poll = setInterval(() => {
+      let text = ''
+      try { text = fs.readFileSync(PORT_FILE, 'utf-8').trim() } catch { return }
+      const port = Number(text)
+      if (!Number.isInteger(port) || port <= 0) return
+      const pid = Number(fs.readFileSync(PID_FILE, 'utf-8').trim())
+      finish(() => resolve({ port, pid }))
+    }, 25)
+  })
 }
 
-function rpc(ws: WebSocket, cmd: Record<string, unknown>, timeoutMs = 10_000): Promise<Record<string, unknown>> {
+/** One RPC's reply (bounded by the test's own timeout: a start spawns a process, slow on a loaded host). */
+function rpc(ws: WebSocket, cmd: Record<string, unknown>): Promise<Record<string, unknown>> {
   const id = rpcId++
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { ws.off('message', onMsg); reject(new Error(`rpc timeout: ${cmd.cmd}`)) }, timeoutMs)
+  return new Promise((resolve) => {
     const onMsg = (data: Buffer | string) => {
       try {
         const msg = JSON.parse(data.toString()) as Record<string, unknown>
         if (msg.id === id) {
-          clearTimeout(timer)
           ws.off('message', onMsg)
           resolve(msg)
         }
@@ -66,6 +77,27 @@ function rpc(ws: WebSocket, cmd: Record<string, unknown>, timeoutMs = 10_000): P
     ws.on('message', onMsg)
     ws.send(JSON.stringify({ id, ...cmd }))
   })
+}
+
+/**
+ * Every live `jsonl` event of one session on this socket, in order. `until` resolves as soon
+ * as the events satisfy it (the test's own timeout bounds the wait, no shorter clock).
+ */
+function jsonlEvents(ws: WebSocket, sid: string) {
+  const events: Array<{ line: string; v?: number }> = []
+  const waiters: Array<{ ok: () => boolean; resolve: () => void }> = []
+  ws.on('message', (data: Buffer | string) => {
+    try {
+      // Daemon event frames are FLAT: { ev: 'jsonl', sid, line, v } (rpc replies carry `id`).
+      const msg = JSON.parse(data.toString()) as { ev?: string; sid?: string; line?: string; v?: number }
+      if (msg.ev !== 'jsonl' || msg.sid !== sid || !msg.line) return
+      events.push({ line: msg.line, v: msg.v })
+      for (const w of waiters.splice(0)) { if (w.ok()) w.resolve(); else waiters.push(w) }
+    } catch { /* rpc frame */ }
+  })
+  const until = (ok: () => boolean) => new Promise<void>((resolve) => { if (ok()) resolve(); else waiters.push({ ok, resolve }) })
+  const count = (line: string) => events.filter((e) => e.line === line).length
+  return { events, until, count }
 }
 
 /** Fake long-running "CLI": reads stdin forever, we append to its jsonl ourselves. */
@@ -82,21 +114,20 @@ d('daemon watcher integrity (real binary)', () => {
     delete env.VITEST_POOL_ID; delete env.OPEN_WALNUT_HOME
     const proc = spawn(BINARY, ['--start'], { detached: true, stdio: 'ignore', env })
     proc.unref()
-    const ok = await waitFor(() => fs.existsSync(PORT_FILE), 10_000)
-    if (!ok) throw new Error('daemon did not write port file')
-    port = parseInt(fs.readFileSync(PORT_FILE, 'utf-8').trim(), 10)
-    daemonPid = parseInt(fs.readFileSync(PID_FILE, 'utf-8').trim(), 10)
+    const ready = await daemonReady(proc)
+    port = ready.port
+    daemonPid = ready.pid
   }, 30_000)
 
   afterAll(() => {
-    if (daemonPid) { try { process.kill(daemonPid, 'SIGTERM') } catch {} }
+    if (daemonPid && daemonPid > 1) { try { process.kill(daemonPid, 'SIGTERM') } catch {} }
     try { fs.rmSync(DAEMON_DIR, { recursive: true, force: true }) } catch {}
     try { fs.rmSync(STREAMS_DIR, { recursive: true, force: true }) } catch {}
   })
 
   it('live jsonl events carry the absolute v cursor', async () => {
     const sid = 'wi-live-v'
-    const ws = new WebSocket(`ws://localhost:${port}`)
+    const ws = new WebSocket(`ws://127.0.0.1:${port}`)
     await new Promise<void>((res, rej) => { ws.on('open', () => res()); ws.on('error', rej) })
 
     const started = await rpc(ws, {
@@ -104,16 +135,7 @@ d('daemon watcher integrity (real binary)', () => {
     })
     expect(started.ok).toBe(true)
 
-    const events: Array<{ line: string; v?: number }> = []
-    ws.on('message', (data: Buffer | string) => {
-      try {
-        // Daemon event frames are FLAT: { ev: 'jsonl', sid, line, v } (rpc replies carry `id`).
-        const msg = JSON.parse(data.toString()) as { ev?: string; sid?: string; line?: string; v?: number }
-        if (msg.ev === 'jsonl' && msg.sid === sid && msg.line) {
-          events.push({ line: msg.line, v: msg.v })
-        }
-      } catch { /* rpc frame */ }
-    })
+    const { events, until } = jsonlEvents(ws, sid)
 
     // Append lines to the jsonl like the CLI would; the watcher polls every 100ms.
     const jsonlPath = path.join(STREAMS_DIR, `${sid}.jsonl`)
@@ -122,8 +144,7 @@ d('daemon watcher integrity (real binary)', () => {
     fs.appendFileSync(jsonlPath, lineA + '\n')
     fs.appendFileSync(jsonlPath, lineB + '\n')
 
-    await waitFor(() => events.length >= 2, 5_000)
-    expect(events.length).toBeGreaterThanOrEqual(2)
+    await until(() => events.length >= 2)
     for (const e of events) {
       // THE regression: live events had no `v` → client relative-cursor drift.
       expect(typeof e.v).toBe('number')
@@ -138,42 +159,36 @@ d('daemon watcher integrity (real binary)', () => {
 
   it('cmdStart replace does not leave the old watcher fanning duplicates', async () => {
     const sid = 'wi-replace'
-    const ws = new WebSocket(`ws://localhost:${port}`)
+    const ws = new WebSocket(`ws://127.0.0.1:${port}`)
     await new Promise<void>((res, rej) => { ws.on('open', () => res()); ws.on('error', rej) })
+
+    // Counts how many times each line is delivered.
+    const { until, count } = jsonlEvents(ws, sid)
 
     // First start — creates session + watcher (addSubscriber on this ws).
     const s1 = await rpc(ws, { cmd: 'start', sid, args: [FAKE_CLI], cwd: DAEMON_DIR, message: 'one' })
     expect(s1.ok).toBe(true)
 
-    // Feed a line so the first watcher is definitely live.
+    // Feed a line and wait until it is delivered, so the first watcher is definitely live.
     const jsonlPath = path.join(STREAMS_DIR, `${sid}.jsonl`)
-    fs.appendFileSync(jsonlPath, JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'warm' }] } }) + '\n')
-    await new Promise((r) => setTimeout(r, 400))
+    const warm = JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'warm' }] } })
+    fs.appendFileSync(jsonlPath, warm + '\n')
+    await until(() => count(warm) >= 1)
 
     // Replace: second start under the SAME sid (resume path appends to the jsonl).
     const s2 = await rpc(ws, { cmd: 'start', sid, args: [FAKE_CLI], cwd: DAEMON_DIR, message: 'two', resume: true })
     expect(s2.ok).toBe(true)
 
-    // Now count how many times each NEW line is delivered.
-    const seen = new Map<string, number>()
-    ws.on('message', (data: Buffer | string) => {
-      try {
-        const msg = JSON.parse(data.toString()) as { ev?: string; sid?: string; line?: string }
-        if (msg.ev === 'jsonl' && msg.sid === sid && msg.line) {
-          seen.set(msg.line, (seen.get(msg.line) ?? 0) + 1)
-        }
-      } catch { /* rpc frame */ }
-    })
-
     const marker = JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'after-replace-' + Date.now() }] } })
     fs.appendFileSync(jsonlPath, marker + '\n')
 
-    await waitFor(() => (seen.get(marker) ?? 0) >= 1, 5_000)
-    // Give a leaked second watcher time to double-deliver (poll = 100ms).
+    await until(() => count(marker) >= 1)
+    // Only a check that something did NOT happen: a leaked second watcher (poll = 100 ms)
+    // gets a few of its ticks to deliver the line again.
     await new Promise((r) => setTimeout(r, 600))
 
     // THE regression: a leaked old watcher delivered every line twice.
-    expect(seen.get(marker)).toBe(1)
+    expect(count(marker)).toBe(1)
 
     ws.close()
   }, 30_000)

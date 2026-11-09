@@ -63,6 +63,7 @@ const rows = async () => (await getQueue(SID)).map((m) => ({ id: m.id, status: m
 
 let delivered: string[][] = []
 let failed: string[][] = []
+/** A short wait before a check that something did NOT happen (no second send, no park before its 2 s settle). */
 const settle = () => new Promise((r) => setTimeout(r, 80))
 
 beforeEach(async () => {
@@ -130,6 +131,7 @@ describe('a cold --resume whose first line went in behind a cut copy (r5 gate N1
 
     await internals.processNext(SID)
     await vi.waitFor(() => expect(first.sent.filter((s) => s.cmd === 'send')).toHaveLength(2), { timeout: 10_000 })
+    // A short wait for something that must NOT happen: the spawn callback removing the batch.
     await new Promise((r) => setTimeout(r, 100))
     // Not removed by the spawn callback, and the user is not told "delivered".
     const held = await rows()
@@ -215,6 +217,8 @@ describe('a cold --resume whose process ends before its init', () => {
     only.emit({ ev: 'exit', sid: SID, code: 1, stderr: 'boom' })
     only.emit(initLine())
     await vi.waitFor(async () => expect(await rows()).toEqual([]), { timeout: 10_000 })
+    // A wait for something that must NOT happen: past the exit's 2 s settle
+    // (RESUME_LINE_SETTLE_MS), the parked-line timer finds nothing to park.
     await new Promise((r) => setTimeout(r, 2_500))
     expect(await rows()).toEqual([])
     runner.destroyAndKill()
@@ -280,7 +284,9 @@ describe('a cold --resume whose first line the daemon already settled, so nothin
     })
     const { row, runner, session } = await resumeWithFate({ fate: 'cancelled', state: 'cancelled' })
     await vi.waitFor(() => expect(cancelled).toEqual([[row.id]]), { timeout: 10_000 })
-    expect(await rows()).toEqual([])
+    // The row's removal (removeTaken, a locked queue write) and the composer event (a
+    // setTimeout 0) are not ordered: wait for the queue's final state, not the event's.
+    await vi.waitFor(async () => expect(await rows()).toEqual([]), { timeout: 10_000 })
     expect(delivered).toEqual([])
     expect(session()?.processStatus).toBe('idle')
     runner.destroyAndKill()

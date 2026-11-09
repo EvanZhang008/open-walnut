@@ -11,8 +11,8 @@ import { randomUUID } from 'node:crypto'
 import { createMockConstants } from '../../helpers/mock-constants.js'
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-user-profile-context'))
 // Each session prompt starts a background fleet read (hosts/fleet-prompt.ts) that opens the session
-// store whenever it gets there; one landing while beforeEach wipes the data home failed that store's
-// open for the rest of this file (2026-11-06, 3 of 4 batch runs).
+// store whenever it gets there; one landing while beforeEach wiped the data home failed that store's
+// open for the rest of this file (2026-11-06, 3 of 4 batch runs). Off here: this file has no hosts.
 process.env.WALNUT_FLEET_PROMPT_REFRESH = '0'
 import { WALNUT_HOME, USER_FILE } from '../../../src/constants.js'
 import { addTask } from '../../../src/core/task-manager.js'
@@ -33,14 +33,26 @@ const RULES = '## Standing rules\n\n- Private repo keys are not a leak.\n- Reply
 /** A section every version keeps, so a small change is told as a change (a block whole is sent when it is shorter). */
 const KEPT = `## Habits\n\n${Array.from({ length: 12 }, (_, i) => `- Habit ${i + 1}, the same in every version of the file.`).join('\n')}`
 
+/**
+ * Every save gets its own mtime, a second after the one before: a version is the words and
+ * when they were saved, and the profile is read again when the file's size or mtime moved.
+ * Two saves inside one tick of the filesystem's coarse clock (an undo back to the same size)
+ * would otherwise read as one.
+ */
+let savedAt = Date.parse('2026-10-28T08:00:00.000Z')
 async function writeUser(text: string) {
   await fs.mkdir(path.dirname(USER_FILE), { recursive: true })
   await fs.writeFile(USER_FILE, text)
+  savedAt += 1_000
+  await fs.utimes(USER_FILE, new Date(savedAt), new Date(savedAt))
 }
 
 beforeEach(async () => {
-  await fs.rm(WALNUT_HOME, { recursive: true, force: true })
+  // Only the profile goes, never the data home: the task and session stores stay open across
+  // tests, and wiping them under a background read failed the session store's open for the
+  // rest of the file (SQLiteError: disk I/O error, 2026-11-06).
   await fs.mkdir(WALNUT_HOME, { recursive: true })
+  await fs.rm(USER_FILE, { force: true })
   resetCache()
   await refreshUserProfile()
 })
@@ -215,7 +227,6 @@ describe('every task session', () => {
     expect(await tell()).toContain('Private repo keys are not a leak.')
     expect(await tell()).toBeNull()
     // Back to the spawn-time words: the added rules are named as removed, the kept one is not repeated.
-    await new Promise((r) => setTimeout(r, 15))
     await pastGap(sid)
     await writeUser(doc(IDENTITY, KEPT))
     const undo = (await tell())!
@@ -239,6 +250,38 @@ describe('every task session', () => {
     expect(currentUserProfile().savedAt).toBe((await fs.stat(USER_FILE)).mtime.toISOString())
     await fs.rm(USER_FILE)
     expect(await refreshUserProfile()).toEqual({ text: '', savedAt: '', exists: false })
+  })
+
+  it('a call made after a save never gets a read that looked at the file before it', async () => {
+    // A background refresh (a sync builder's) stats the file, then the user saves while it
+    // is still running: the next caller used to join it and read the old words, so a running
+    // session was not told of the edit. The stat is held here so the order is fixed.
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let looked!: () => void
+    const lookedAt = new Promise<void>((resolve) => { looked = resolve })
+    const realStat = fs.stat.bind(fs)
+    let held = false
+    const stat = vi.spyOn(fs, 'stat').mockImplementation(async (...args: Parameters<typeof fs.stat>) => {
+      if (held || String(args[0]) !== USER_FILE) return realStat(...args)
+      held = true
+      const st = await realStat(...args).catch((err: unknown) => err)
+      looked()
+      await gate
+      if (st instanceof Error) throw st
+      return st as Awaited<ReturnType<typeof fs.stat>>
+    })
+    try {
+      const running = refreshUserProfile()
+      await lookedAt
+      await writeUser(doc(RULES))
+      const after = refreshUserProfile()
+      release()
+      expect((await after).text).toBe(RULES)
+      await running
+    } finally {
+      stat.mockRestore()
+    }
   })
 })
 
