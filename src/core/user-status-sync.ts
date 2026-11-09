@@ -518,7 +518,7 @@ export function statusInputOf(task: Task, facts: StatusFacts, nowMs = Date.now()
     isLead: task.org_role === 'lead' || task.org_role === 'router',
     dueDate: task.due_date ?? null,
     checkRanAt: facts.checks?.get(task.id) ?? null,
-    askCheckedAt: askCheckedAtOf(task, facts.checks, task.status_report?.state === 'needs' ? task.status_report.ask : null, task.status_report?.state === 'needs' ? task.status_report.ask_id : undefined),
+    askCheckedAt: askCheckedAtOf(task, facts.checks, task.status_report?.state === 'needs' ? task.status_report.ask : null, task.status_report?.state === 'needs' ? task.status_report.ask_id : undefined, task.status_report?.state === 'needs' ? task.status_report.ask_legacy_key : undefined),
     teamStoppedAt: facts.teamStopped?.get(task.id) ?? null,
     snoozedUntil: snoozedUntil(task, facts.tasksById, nowMs),
   };
@@ -667,14 +667,15 @@ function answeredThereOf(t: Task | undefined): boolean {
 
 /** When a trigger the session armed to watch its ask (trigger_create watches:"ask") last checked it
  *  without an error, while it is armed (needs-recheck.ts): a check of the ask, not only of the task. */
-export function askCheckedAtOf(task: Pick<Task, 'recheck_watch'>, checks: ReadonlyMap<string, string> | undefined, ask: string | null | undefined, decisionId?: string): string | null {
+export function askCheckedAtOf(task: Pick<Task, 'recheck_watch'>, checks: ReadonlyMap<string, string> | undefined, ask: string | null | undefined, decisionId?: string, legacyKey?: string): string | null {
   const key = askKey(ask);
   if (!key) return null;
   let best: string | null = null;
   for (const w of task.recheck_watch ?? []) {
     // Only a watch armed for this very ask (2026-11-04 review: one armed for an old ask stamped every
-    // later one): its decision (ask-decision.ts), so the same ask reworded keeps its watch, else its words.
-    if (w.watches !== 'ask' || (w.key !== key && !(decisionId && w.key === decisionId))) continue;
+    // later one): its decision (ask-decision.ts), so the same ask reworded keeps its watch, else its words,
+    // or the words it had when an older Walnut armed the watch before the decision had an id.
+    if (w.watches !== 'ask' || (w.key !== key && !(decisionId && w.key === decisionId) && !(legacyKey && w.key === legacyKey))) continue;
     const at = checks?.get(`trigger:${w.trigger}`);
     if (at && (!best || at > best)) best = at;
   }

@@ -18,8 +18,9 @@
  * org-follow.ts, threads-model.ts) compares that key; tests/core/ask-decision-news-guard.test.ts
  * lists them and runs the real rewordings through each. Pure.
  */
-import { askShape, sameAskReworded, SAME_ASK_MIN_WORDS } from './same-ask.js';
-import type { StatusReport, UserStatus } from './user-status.js';
+import { askKey, askShape, sameAskReworded, sameDirections, SAME_ASK_MIN_WORDS } from './same-ask.js';
+import { normalizeText } from './human-inbox/duplicate-letter.js';
+import type { AskKind, StatusReport, UserStatus } from './user-status.js';
 
 /** How a decision id looks: `ask-` and a few base-36 characters. */
 export const ASK_ID_RE = /\bask-[a-z0-9]{4,12}\b/i;
@@ -29,7 +30,7 @@ export const ASK_ID_RE = /\bask-[a-z0-9]{4,12}\b/i;
 export const ASK_MEMORY_MS = 7 * 24 * 60 * 60_000;
 
 /** Under this share of shared content words, an ask the session did not say was the same is a new
- *  decision: the real rewordings of 2026-11-08 shared 38% to 100%. */
+ *  decision: the rewordings of 2026-11-08 shared 38% to 100%. */
 const DISJOINT_SHARE = 0.15;
 
 /** The decision a report carries, as the next report reads it back. */
@@ -40,6 +41,11 @@ export interface AskMemory {
   /** The last thing the session named as new about it (FOR_USER_ASK_NEW). */
   new?: string;
   at: string;
+  /** How the user answers it and the options it offered: other options are news. */
+  kind?: AskKind;
+  options?: string[];
+  /** The key of its words when an older Walnut asked it with no id (a watch armed then keeps it). */
+  legacy?: string;
 }
 
 /** The decision on a task's shown status (UserStatus.decision). */
@@ -63,12 +69,12 @@ export function askEvidence(text: string | undefined | null): string[] {
   return [...out].sort();
 }
 
-/** The facts of an ask beside its words: its revision, its options, its deadline, its links. */
+/** The facts of an ask beside its words: its revision (a new fact named, other options: counted at
+ *  stamping, stampAskDecision), its deadline, its links. */
 export function askFactsOf(
-  r: Pick<StatusReport, 'ask' | 'ask_kind' | 'ask_options' | 'ask_more' | 'ask_rev'>, dueDate?: string | null,
+  r: Pick<StatusReport, 'ask' | 'ask_more' | 'ask_rev'>, dueDate?: string | null,
 ): string {
-  const options = r.ask_kind === 'single' || r.ask_kind === 'multi' ? r.ask_options?.length ?? 0 : 0;
-  return [`r${r.ask_rev ?? 0}`, `o${options}`, `d${(dueDate ?? '').trim().slice(0, 10)}`, askEvidence(`${r.ask ?? ''} ${r.ask_more ?? ''}`).join(' ')].join('|');
+  return [`r${r.ask_rev ?? 0}`, `d${(dueDate ?? '').trim().slice(0, 10)}`, askEvidence(`${r.ask ?? ''} ${r.ask_more ?? ''}`).join(' ')].join('|');
 }
 
 /** The decision of a needs report, or null for one with no id (an older Walnut wrote it). */
@@ -112,19 +118,103 @@ export function decisionMoved(a: StatusDecision | null | undefined, b: StatusDec
 export function memoryOf(r: StatusReport | null | undefined): AskMemory | null {
   if (!r) return null;
   if (r.state === 'needs' && r.ask && r.ask_id) {
-    return { id: r.ask_id, ...(r.ask_rev ? { rev: r.ask_rev } : {}), ask: r.ask, ...(r.ask_new ? { new: r.ask_new } : {}), at: r.at };
+    return {
+      id: r.ask_id, ...(r.ask_rev ? { rev: r.ask_rev } : {}), ask: r.ask, ...(r.ask_new ? { new: r.ask_new } : {}), at: r.at,
+      ...(r.ask_kind ? { kind: r.ask_kind } : {}), ...(r.ask_options?.length ? { options: r.ask_options.map((o) => o.label) } : {}),
+      ...(r.ask_legacy_key ? { legacy: r.ask_legacy_key } : {}),
+    };
   }
   return r.last_ask ?? null;
 }
 
-/** Whether two asks share almost no content word: not a rewording, whatever the session said or
- *  left out. */
-function disjoint(a: string, b: string): boolean {
+const CJK_WORD = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+
+/**
+ * Whether `b` asks the user what `a` asks, in other words: added detail, clauses moved, a question
+ * tacked on. Not when it turned around (a "not" one has and the other lacks), points elsewhere
+ * ("from staging" against "from production"), names other numbers ("$20" against "$200"), shares
+ * almost no word, or swaps a word or two for others and changes nothing else ("the staging
+ * database" against "the production database": swapsTarget). Pure.
+ */
+export function sameDecisionWords(a: string | undefined | null, b: string | undefined | null): boolean {
+  if (askKey(a) === askKey(b)) return true;
+  const sa = askShape(a);
+  const sb = askShape(b);
+  if (sa.neg !== sb.neg) return false;
+  if (sa.words.length < SAME_ASK_MIN_WORDS || sb.words.length < SAME_ASK_MIN_WORDS) return sameAskReworded(a, b);
+  const nums = (w: readonly string[]) => w.filter((x) => x.startsWith('#'));
+  const na = nums(sa.words);
+  const nb = nums(sb.words);
+  // A number replaced by another; one only added (a time estimate) or only dropped is detail.
+  if (na.some((n) => !nb.includes(n)) && nb.some((n) => !na.includes(n))) return false;
+  if (sa.links && sb.links && !sameDirections(sa.links, sb.links)) return false;
+  const inB = new Set(sb.words);
+  const shared = sa.words.filter((w) => inB.has(w)).length;
+  if (shared / Math.min(sa.words.length, sb.words.length) < DISJOINT_SHARE) return false;
+  return !swapsTarget(a ?? '', b ?? '');
+}
+
+/**
+ * Whether `b` is `a` with a word or two in the middle swapped for others, and the rest as it was
+ * ("Delete the staging database?" and "Delete the production database?"): another target. A word
+ * only added or only dropped is not (a time estimate, "this"). Read on the text itself, so CJK and
+ * Latin alike.
+ */
+function swapsTarget(a: string, b: string): boolean {
+  // Punctuation aside: a comma added beside an inserted word is no swap.
+  const plain = (t: string) => [...normalizeText(t).replace(/\p{P}+/gu, ' ').replace(/\s+/g, ' ').trim()];
+  const x = plain(a);
+  const y = plain(b);
+  let p = 0;
+  while (p < x.length && p < y.length && x[p] === y[p]) p++;
+  let q = 0;
+  while (q < x.length - p && q < y.length - p && x[x.length - 1 - q] === y[y.length - 1 - q]) q++;
+  // Whole Latin words: a common prefix may end inside a word ("the s|taging", "the s|ample").
+  const widen = (t: string[], from: number, to: number) => {
+    let i = from;
+    let j = to;
+    while (i > 0 && /[\p{L}\p{N}]/u.test(t[i - 1]!) && !CJK_WORD.test(t[i - 1]!)) i--;
+    while (j < t.length && /[\p{L}\p{N}]/u.test(t[j]!) && !CJK_WORD.test(t[j]!)) j++;
+    return t.slice(i, j).join('').trim();
+  };
+  const ma = widen(x, p, x.length - q);
+  const mb = widen(y, p, y.length - q);
+  // Only added or only dropped (one middle holds the other) is detail, not another target.
+  if (!ma || !mb || ma.includes(mb) || mb.includes(ma)) return false;
+  const short = (m: string) => m.split(/\s+/).filter(Boolean).length <= 2 && [...m].filter((c) => CJK_WORD.test(c)).length <= 4 && m.length <= 24;
+  return short(ma) && short(mb) && p + q >= Math.min(x.length, y.length) / 2;
+}
+
+/** How the user answers: a choice (single or multi) with its options, or freely (yes or no, text). */
+function choiceOf(kind: AskKind | undefined, options: readonly string[] | undefined): { kind: 'free' | 'single' | 'multi'; options: string[] } {
+  return kind === 'single' || kind === 'multi' ? { kind, options: [...(options ?? [])] } : { kind: 'free', options: [] };
+}
+
+/** Two option labels name one option: the words of one all in the other ("Standard" and "the
+ *  Standard plan"), or the same in other words. */
+function sameLabel(a: string, b: string): boolean {
   const wa = askShape(a).words;
   const wb = askShape(b).words;
-  if (wa.length < SAME_ASK_MIN_WORDS || wb.length < SAME_ASK_MIN_WORDS) return false;
-  const inB = new Set(wb);
-  return wa.filter((w) => inB.has(w)).length / Math.min(wa.length, wb.length) < DISJOINT_SHARE;
+  const within = (x: readonly string[], y: readonly string[]) => x.length > 0 && x.every((w) => y.includes(w));
+  const nums = (w: readonly string[]) => w.filter((v) => v.startsWith('#')).sort().join(' ');
+  if (nums(wa) === nums(wb) && (within(wa, wb) || within(wb, wa))) return true;
+  return sameDecisionWords(a, b);
+}
+
+/** The options the user picks from now differ from those of before: another way to answer, or
+ *  another option (its words compared by sameDecisionWords, so a label reworded is the same one). */
+export function optionsChanged(was: Pick<AskMemory, 'kind' | 'options'>, now: Pick<StatusReport, 'ask_kind' | 'ask_options'>): boolean {
+  const a = choiceOf(was.kind, was.options);
+  const b = choiceOf(now.ask_kind, now.ask_options?.map((o) => o.label));
+  if (a.kind !== b.kind) return true;
+  if (a.options.length !== b.options.length) return true;
+  const used = new Set<number>();
+  return !b.options.every((label) => {
+    const i = a.options.findIndex((x, j) => !used.has(j) && sameLabel(x, label));
+    if (i < 0) return false;
+    used.add(i);
+    return true;
+  });
 }
 
 /** What the session said of its decision (FOR_USER_ASK_ID, FOR_USER_ASK_NEW), read off the report. */
@@ -140,31 +230,40 @@ export function stampAskDecision(
   report: StatusReport, prev: StatusReport | null | undefined,
   declared: AskDeclared = {}, opts: { mint?: () => string; nowMs?: number } = {},
 ): StatusReport {
-  const { ask_id: _id, ask_rev: _rev, ask_new: _new, last_ask: _last, ...rest } = report;
-  const memory = memoryOf(prev);
+  const { ask_id: _id, ask_rev: _rev, ask_new: _new, last_ask: _last, ask_legacy_key: _legacy, ...rest } = report;
+  const mint = opts.mint ?? mintAskId;
+  // An ask an older Walnut stored with no id is the decision it was: it gets one now, the key of its
+  // words kept so a watch armed on them still counts.
+  const legacy = prev?.state === 'needs' && prev.ask && !prev.ask_id;
+  const memory: AskMemory | null = legacy
+    ? { id: mint(), ask: prev!.ask!, at: prev!.at, ...(prev!.ask_kind ? { kind: prev!.ask_kind } : {}), ...(prev!.ask_options?.length ? { options: prev!.ask_options.map((o) => o.label) } : {}), legacy: askKey(prev!.ask) }
+    : memoryOf(prev);
   const nowMs = opts.nowMs ?? Date.parse(report.at);
   const recent = !!memory && (prev?.state === 'needs' || nowMs - Date.parse(memory.at) <= ASK_MEMORY_MS);
   if (report.state !== 'needs' || !report.ask) {
     return recent ? { ...rest, last_ask: memory! } : rest;
   }
-  const mint = opts.mint ?? mintAskId;
-  const asked = prev?.state === 'needs' && !!prev.ask_id;
+  const asked = prev?.state === 'needs' && !!prev.ask;
   let keep = false;
   if (memory && recent && !declared.isNew) {
     if (declared.id && declared.id.toLowerCase() === memory.id.toLowerCase()) keep = true;
-    // Said nothing: the same decision while it kept asking, unless the words share nothing; after a
-    // break only when the words still say the same.
-    else if (asked) keep = !disjoint(memory.ask, report.ask);
+    // Said nothing: the same decision while it kept asking when the words still ask it (sameDecisionWords:
+    // never another target, sign, direction or number); after a break only word for word in other words.
+    else if (asked) keep = sameDecisionWords(memory.ask, report.ask);
     else keep = sameAskReworded(memory.ask, report.ask);
   }
   if (!keep) return { ...rest, ask_id: mint() };
-  const fact = declared.newFact?.replace(/\s+/g, ' ').trim();
+  // Other options, or another way to answer, are news without a word from the session.
+  const options = optionsChanged(memory!, report)
+    ? `new options: ${(report.ask_options ?? []).map((o) => o.label).join(' | ') || 'none, answered freely'}`.slice(0, 240) : undefined;
+  const fact = declared.newFact?.replace(/\s+/g, ' ').trim() || options;
   // A new fact named again in other words is the same fact: one revision.
-  const fresh = !!fact && !(memory!.new && (memory!.new === fact || sameAskReworded(memory!.new, fact)));
+  const fresh = !!options || (!!fact && !(memory!.new && (memory!.new === fact || sameAskReworded(memory!.new, fact))));
   const rev = (memory!.rev ?? 0) + (fresh ? 1 : 0);
   return {
     ...rest, ask_id: memory!.id, ...(rev ? { ask_rev: rev } : {}),
     ...(fresh ? { ask_new: fact } : memory!.new ? { ask_new: memory!.new } : {}),
+    ...(memory!.legacy ? { ask_legacy_key: memory!.legacy } : {}),
   };
 }
 

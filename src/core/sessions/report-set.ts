@@ -174,9 +174,9 @@ export async function setTaskReport(
     const { openAskOf } = await import('./ask-answer.js');
     const { askKey } = await import('../same-ask.js');
     const open = openAskOf(task);
-    // The same ask stays on him, reworded or not: the same decision (ask-decision.ts), else the same words.
-    const sameDecision = report.state === 'needs' && !!report.ask_id && report.ask_id === task.status_report?.ask_id;
-    if ('ask' in open && !sameDecision && !(report.state === 'needs' && askKey(report.ask) === askKey(open.ask))) {
+    // Only the same words leave his ask as it was: a reworded ask is checked against what he wrote
+    // there too (the decision id only keeps it from being news, ask-decision.ts).
+    if ('ask' in open && !(report.state === 'needs' && askKey(report.ask) === askKey(open.ask))) {
       const { listTasks } = await import('../task-manager.js');
       const userWords = typeof (raw as ReportChange | null)?.user_words === 'string' ? (raw as ReportChange).user_words : undefined;
       const check = await settleCheck(task, known.taskId, userWords, 'changed', await listTasks().catch(() => []));

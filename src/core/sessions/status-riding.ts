@@ -68,10 +68,13 @@ async function save(): Promise<void> {
   try {
     const out: Record<string, Record<string, Item>> = {};
     for (const [sid, items] of riding) if (items.size) out[sid] = Object.fromEntries(items);
+    // The decisions each session was told, so a restart does not tell a stop of the same one again.
+    const told: Record<string, Record<string, { key: string; at: number }>> = {};
+    for (const [sid, m] of toldDecisions) if (m.size) told[sid] = Object.fromEntries(m);
     const file = await storePath();
     await fs.mkdir(path.dirname(file), { recursive: true });
     const { writeFileAtomic } = await import('../config-store.js');
-    await writeFileAtomic(file, JSON.stringify({ version: 1, sessions: out }));
+    await writeFileAtomic(file, JSON.stringify({ version: 1, sessions: out, told }));
   } catch (err) {
     log.session.warn('status riding: not saved', { error: err instanceof Error ? err.message : String(err) });
   }
@@ -80,7 +83,15 @@ async function save(): Promise<void> {
 /** Boot: what was riding before the restart. */
 export async function loadRiding(now = Date.now()): Promise<number> {
   try {
-    const raw = JSON.parse(await fs.readFile(await storePath(), 'utf8')) as { sessions?: Record<string, Record<string, Item>> };
+    const raw = JSON.parse(await fs.readFile(await storePath(), 'utf8')) as {
+      sessions?: Record<string, Record<string, Item>>; told?: Record<string, Record<string, { key?: unknown; at?: unknown }>>;
+    };
+    for (const [sid, m] of Object.entries(raw.told ?? {})) {
+      for (const [taskId, d] of Object.entries(m ?? {})) {
+        if (typeof d?.key !== 'string' || typeof d.at !== 'number' || now - d.at > RIDE_MAX_MS || toldDecisions.get(sid)?.has(taskId)) continue;
+        noteToldDecision(sid, taskId, d.key, d.at);
+      }
+    }
     let n = 0;
     for (const [sid, items] of Object.entries(raw.sessions ?? {})) {
       const held = riding.get(sid) ?? new Map<string, Item>();
@@ -145,6 +156,7 @@ function noteToldDecision(sid: string, taskId: string, key: string | undefined, 
   const told = toldDecisions.get(sid) ?? new Map<string, { key: string; at: number }>();
   told.set(taskId, { key, at });
   toldDecisions.set(sid, told);
+  scheduleSave();
 }
 
 function noteTold(sid: string, taskId: string, at: number): void {

@@ -51,6 +51,7 @@ import { userKindVerdict } from './user-kind.js';
 import type { LetterLang } from '../human-inbox/walnut-letters/languages.js';
 import { PICTURE_TITLE_WORDS } from '../human-inbox/walnut-letters/receipt-words.js';
 import { pinnedFirst } from './thread-view.js';
+import { sameDecisionWords } from '../ask-decision.js';
 import crypto from 'node:crypto';
 
 export const THREAD_STATES = ['new', 'working', 'needs', 'answered', 'pending'] as const;
@@ -769,9 +770,10 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
   return { file: replace(file, next, at), thread: next };
 }
 
-/** Whether `next` differs from `cur` in its ask's words alone (and who wrote last). Pure. */
+/** Whether `next` differs from `cur` only in its ask, said in other words (and who wrote last). Pure. */
 export function onlyAskReworded(cur: OrgThread, next: OrgThread): boolean {
-  if (cur.ask === next.ask || !cur.ask || !next.ask) return false;
+  // Its words only: another target, number, "not" or direction is news (ask-decision.ts).
+  if (cur.ask === next.ask || !cur.ask || !next.ask || !sameDecisionWords(cur.ask, next.ask)) return false;
   const skip = new Set(['ask', 'updatedAt', 'by']);
   const keys = new Set([...Object.keys(cur), ...Object.keys(next)].filter((k) => !skip.has(k)));
   const a = cur as unknown as Record<string, unknown>;

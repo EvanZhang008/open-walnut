@@ -32,6 +32,7 @@ import { clearRiding, decisionToldTo, pendingRiding, rideLine, rideNotice } from
 import { emptyThreads, openThread, updateThread } from '../../src/core/org/threads-model.js'
 import { askCheckedAtOf } from '../../src/core/user-status-sync.js'
 import { reportOfChange } from '../../src/core/sessions/report-set.js'
+import { askKey as SAME_KEY } from '../../src/core/same-ask.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const NOW = Date.parse('2026-11-08T12:00:00Z')
@@ -39,7 +40,7 @@ const iso = (ms: number) => new Date(ms).toISOString()
 
 /** Rewordings in the shapes seen on 2026-11-08 (Main's refresh record and the asks then): every
  *  subject is invented, each rewording kept as it was made. */
-const REWORDINGS: Array<{ name: string; asks: string[] }> = [
+const REWORDINGS: Array<{ name: string; asks: string[]; numbersReplaced?: true }> = [
   // The CEO's three: a question tacked on, a time estimate added, a "go with the recommendation?" added.
   { name: 'a deadline question tacked on', asks: [
     '11 \u6708 20 \u65e5\u524d\u53bb\u8bfb\u4e66\u4f1a\u7f51\u7ad9\u770b\u5b8c\u7ea6 7 \u5206\u949f\u7684\u5165\u4f1a\u4ecb\u7ecd\u89c6\u9891\uff0c\u518d\u505a\u5b8c\u5c0f\u6d4b\u9a8c\u3002',
@@ -62,7 +63,8 @@ const REWORDINGS: Array<{ name: string; asks: string[] }> = [
     '\u7b2c\u4e00\u6761\u4fee\u6539\u610f\u89c1\uff1a\u5f00\u5934\u548c\u7ed3\u5c3e\u7528\u201c\u6211\u201d\u5199\u56ed\u4e01\u89c6\u89d2\uff0c\u6b63\u6587\u7ee7\u7eed\u7528 we\uff0c\u53ef\u4ee5\u5417\uff1f',
     '\u6587\u7ae0\u7684\u7b2c\u4e00\u4eba\u79f0\u6539\u6cd5\uff1a\u53ea\u6539\u5f00\u5934\u548c\u7ed3\u5c3e\u4e24\u6bb5\uff0c\u5176\u4f59\u4fdd\u6301 we\uff0c\u6309\u8fd9\u4e2a\u6539\u5417\uff1f',
   ] },
-  { name: 'the picks spelled out', asks: [
+  // Other numbers ("1 to 2" became "2 and 4"): kept only when the session names the decision.
+  { name: 'the picks spelled out', numbersReplaced: true, asks: [
     '\u4eca\u5929\u7684 10 \u6761\u83dc\u8c31\u8349\u7a3f\u91cc\uff0c\u6311 1 \u5230 2 \u6761\u70b9\u94fe\u63a5\u53d1\u51fa\u53bb\uff0c\u597d\u5417\uff1f',
     '\u4eca\u5929\u7684 10 \u6761\u83dc\u8c31\u8349\u7a3f\u5728\u63a8\u5e7f\u804a\u5929\u91cc\uff0c\u5148\u53d1\u6700\u63a8\u8350\u7684\u7b2c 2 \u6761\u548c\u7b2c 4 \u6761\u5417\uff1f\u70b9\u94fe\u63a5\u540e\u6309 Post \u5c31\u53d1\u51fa\u53bb\u4e86\u3002',
   ] },
@@ -165,8 +167,13 @@ const none = (m: Record<string, boolean>) => Object.entries(m).filter(([, v]) =>
 beforeEach(() => { minted = 0 })
 
 describe('a reworded ask is the same decision on every path', () => {
-  for (const { name, asks } of REWORDINGS) {
-    it(`${name}: the session says nothing of the decision`, () => {
+  for (const { name, asks, numbersReplaced } of REWORDINGS) {
+    if (numbersReplaced) {
+      it(`${name}: other numbers unsaid are another decision`, () => {
+        const first = turn(answer(asks[0]!), null, NOW - 3_600_000)
+        expect(turn(answer(asks[1]!), first, NOW).ask_id).not.toBe(first.ask_id)
+      })
+    } else it(`${name}: the session says nothing of the decision`, () => {
       let prev = turn(answer(asks[0]!), null, NOW - 4 * 3_600_000)
       const id = prev.ask_id
       expect(id).toMatch(/^ask-/)
@@ -182,7 +189,9 @@ describe('a reworded ask is the same decision on every path', () => {
       for (const ask of asks.slice(1)) {
         const next = turn(answer(ask, [`FOR_USER_ASK_ID: ${prev.ask_id}`]), prev, NOW - 3_600_000)
         expect(next.ask_id).toBe(prev.ask_id)
-        expect(none(moves(taskOf(prev), taskOf(next)))).toEqual([])
+        // A thread has no id to name: its ask is judged by its words alone.
+        const quiet = none(moves(taskOf(prev), taskOf(next))).filter((k) => !(numbersReplaced && k.startsWith('thread')))
+        expect(quiet).toEqual([])
         prev = next
       }
     })
@@ -242,6 +251,22 @@ describe('what is news is still news', () => {
     const next = turn(answer('Repaint the garden fence blue before Friday?'), b, NOW)
     expect(next.ask_id).not.toBe(b.ask_id)
   })
+  // 2026-11-09 review: words that overlap are not the same decision when the target, the sign, the
+  // direction or a number changed.
+  for (const [from, to] of [
+    ['Delete the staging database?', 'Delete the production database?'],
+    ['Approve the hosting plan at $20 per month?', 'Approve the hosting plan at $200 per month?'],
+    ['Move the photos from the old album to the new one?', 'Move the photos from the new album to the old one?'],
+    ['Publish the draft to the club newsletter?', 'Do not publish the draft to the club newsletter?'],
+    ['\u5220\u9664\u6d4b\u8bd5\u5e93\u91cc\u7684\u65e7\u7167\u7247\u5417\uff1f', '\u5220\u9664\u6b63\u5f0f\u5e93\u91cc\u7684\u65e7\u7167\u7247\u5417\uff1f'],
+  ] as const) {
+    it(`another decision in overlapping words, unsaid: "${to}"`, () => {
+      const b = turn(answer(from), null, NOW - 3_600_000)
+      const next = turn(answer(to), b, NOW)
+      expect(next.ask_id).not.toBe(b.ask_id)
+      expect(changed(b, next)).toContain('status-push (the line to the node above)')
+    })
+  }
   it('a new fact the session names', () => {
     const b = base()
     const next = turn(answer('Approve testing on your real iPhone? It must happen today.', ['FOR_USER_ASK_NEW: the release moved to today']), b, NOW)
@@ -252,6 +277,19 @@ describe('what is news is still news', () => {
     const again = turn(answer('Approve testing on your iPhone today?', ['FOR_USER_ASK_NEW: the release has moved to today']), next, NOW + 60_000)
     expect(again.ask_rev).toBe(1)
     expect(changed(next, again)).toEqual([])
+  })
+  it('other options of the same count, unsaid', () => {
+    const b = turn(answer('Which plan should we buy?', ['FOR_USER_ASK_KIND: single', 'FOR_USER_ASK_OPTIONS: Basic | Standard']), null, NOW - 3_600_000)
+    const next = turn(answer('Which plan should we buy now?', ['FOR_USER_ASK_KIND: single', 'FOR_USER_ASK_OPTIONS: Standard | Enterprise']), b, NOW)
+    expect(next.ask_id).toBe(b.ask_id)
+    expect(next.ask_rev).toBe(1)
+    expect(changed(b, next)).toEqual(ALL_FACT_PATHS)
+    // Several may be picked now, the same two options: another way to answer.
+    const multi = turn(answer('Which plan should we buy now?', ['FOR_USER_ASK_KIND: multi', 'FOR_USER_ASK_OPTIONS: Standard | Enterprise']), next, NOW + 60_000)
+    expect(changed(next, multi)).toEqual(ALL_FACT_PATHS)
+    // The same options in other words are no news.
+    const same = turn(answer('Which plan do we buy?', ['FOR_USER_ASK_KIND: multi', 'FOR_USER_ASK_OPTIONS: the Standard plan | the Enterprise plan']), multi, NOW + 120_000)
+    expect(changed(multi, same)).toEqual([])
   })
   it('new options', () => {
     const b = base()
@@ -269,6 +307,36 @@ describe('what is news is still news', () => {
     const next = turn(answer('Approve testing on your real iPhone? Results: https://example.com/run/42'), b, NOW)
     expect(next.ask_id).toBe(b.ask_id)
     expect(changed(b, next)).toEqual(ALL_FACT_PATHS)
+  })
+})
+
+describe('what keeps the decision quiet survives', () => {
+  it('a restart keeps the decisions a node was told', async () => {
+    const os = await import('node:os')
+    const { loadRiding, flushRidingForTest } = await import('../../src/core/sessions/status-riding.js')
+    clearRiding()
+    rideNotice('s-vp', 'asker', 'stopped', 'its turn ended', NOW, 'ask-keep|r0|d|')
+    pendingRiding('s-vp', NOW)!.markTold()
+    await flushRidingForTest()
+    clearRiding()
+    expect(decisionToldTo('s-vp', 'asker')).toBeUndefined()
+    await loadRiding(NOW)
+    expect(decisionToldTo('s-vp', 'asker')).toBe('ask-keep|r0|d|')
+    expect(os.tmpdir()).toBeTruthy()
+  })
+  it('a watch armed on an ask before it had an id still counts after it is reworded', () => {
+    const legacy = readStatusReport(answer(REWORDINGS[1]!.asks[0]!), new Date(NOW - 7_200_000))!
+    const first = turn(answer(REWORDINGS[1]!.asks[0]!), legacy, NOW - 3_600_000)
+    const reworded = turn(answer(REWORDINGS[1]!.asks[1]!), first, NOW)
+    expect(reworded.ask_id).toBe(first.ask_id)
+    const watch = { recheck_watch: [{ trigger: 'j1', watches: 'ask', at: iso(NOW - 7_000_000), key: SAME_KEY(legacy.ask) }] } as Pick<Task, 'recheck_watch'>
+    expect(askCheckedAtOf(watch, new Map([['trigger:j1', iso(NOW - 30_000)]]), reworded.ask, reworded.ask_id, reworded.ask_legacy_key)).toBe(iso(NOW - 30_000))
+  })
+  it('a thread ask with another number is news; the same ask reworded is not', () => {
+    const opened = openThread(emptyThreads('lead'), { title: 'Hosting', text: 'x', from: 'node', state: 'needs' }, 'human', iso(NOW - 120_000))
+    const asked = updateThread(opened.file, opened.thread.id, { ask: 'Approve the hosting plan at $20 per month?' }, 'task:lead', iso(NOW - 60_000))
+    expect(updateThread(asked.file, opened.thread.id, { ask: 'Approve the hosting plan at $200 per month?' }, 'task:lead', iso(NOW)).thread.updatedAt).toBe(iso(NOW))
+    expect(updateThread(asked.file, opened.thread.id, { ask: 'The hosting plan at $20 per month: approve it?' }, 'task:lead', iso(NOW)).thread.updatedAt).toBe(asked.thread.updatedAt)
   })
 })
 
@@ -338,6 +406,15 @@ describe('every path that tells an ask changed compares the decision', () => {
     }
     const users = filesWith(WORDS)
     expect(users.filter((f) => !Object.hasOwn(ALLOWED, f)), 'a new comparison of ask words: compare the decision (ask-decision.ts taskDecision, decisionMoved) instead, or list it here with why the words are right').toEqual([])
+  })
+
+  it('the user\'s words since the ask are checked on any reworded ask, whatever its decision', () => {
+    // 2026-11-09 review: a lead rewording "staging" into "production" after the user wrote "never
+    // touch production" kept the id and skipped the check. The id only keeps a rewording quiet.
+    const set = code('src/core/sessions/report-set.ts')
+    const gate = set.match(/if \('ask' in open[^\n]*/)?.[0] ?? ''
+    expect(gate).toMatch(/askKey\(report\.ask\) === askKey\(open\.ask\)/)
+    expect(gate).not.toMatch(/ask_id|decision/i)
   })
 
   it('every writer of a task\'s report stamps the decision', () => {

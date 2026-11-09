@@ -196,6 +196,8 @@ export interface StatusReport {
   ask_rev?: number;
   /** needs: the last thing it named as new. */
   ask_new?: string;
+  /** needs: the key of its words when an older Walnut stored it with no id (a watch armed on it then). */
+  ask_legacy_key?: string;
   /** Any other report: the decision the task last asked, so asking it again soon keeps its id. */
   last_ask?: AskMemory;
 }

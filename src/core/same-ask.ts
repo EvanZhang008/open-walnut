@@ -175,7 +175,7 @@ function pointsWithin(part: readonly string[], whole: readonly string[]): boolea
   });
 }
 
-function sameDirections(a: readonly string[], b: readonly string[]): boolean {
+export function sameDirections(a: readonly string[], b: readonly string[]): boolean {
   const targets = (links: readonly string[]) => {
     const by = new Map<string, Array<Set<string>>>();
     for (const l of links) {
