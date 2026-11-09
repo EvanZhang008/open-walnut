@@ -75,3 +75,11 @@
   color: var(--fg-secondary, var(--fg-muted));
   background: color-mix(in srgb, var(--fg, #000) 8%, transparent);
 }
+
+/* The narrow Pinned strip's form (FocusSatelliteCards.tsx): the banner's mark, no fill. */
+.status-card-fallback-mark {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  color: var(--fg-secondary, var(--fg-muted));
+}

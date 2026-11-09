@@ -19,6 +19,7 @@ import { dismissEngineFallback } from '@/api/engine-fallback';
 import { setSessionModel } from '@/api/sessions';
 import { log } from '@/utils/log';
 import { useEngineDefaultModel, withDefaultModel } from './engine-default-model';
+import { acpModelDisplayName } from './acp-model-id';
 import '@/styles/engine-fallback.css';
 
 /** The switched task's first message on the default engine. */
@@ -30,11 +31,13 @@ export function showsEngineFallback(note: EngineFallbackNote | null | undefined,
   return (sessionEngine || 'claude') === note.to;
 }
 
-export function EngineFallbackBanner({ taskId, sessionId, note, onGone }: {
+export function EngineFallbackBanner({ taskId, sessionId, note, runsOn, onGone }: {
   taskId: string;
   /** The session the banner sits on: a same-engine fallback switches its model back. */
   sessionId: string;
   note: EngineFallbackNote;
+  /** The model the session runs, as its record names it (acpModel, acpModelName). */
+  runsOn?: { id?: string; name?: string };
   /** The note was taken off here (dismissed), before the task's own update arrives. */
   onGone?: () => void;
 }) {
@@ -92,9 +95,11 @@ export function EngineFallbackBanner({ taskId, sessionId, note, onGone }: {
     }
   }, [taskId, onGone]);
 
-  // A setting that names no model runs the engine's default: named as the model picker names it.
-  const defaultModel = useEngineDefaultModel(note.model ? undefined : note.to);
-  const words = fallbackBannerWords(withDefaultModel(note, defaultModel), now);
+  // A setting that names no model runs the engine's default: the session's own model when its record
+  // names it (the composer's words under this banner), else the engine's default read from its list.
+  const own = !note.model && runsOn?.id ? { id: runsOn.id, name: acpModelDisplayName(runsOn.id, runsOn.name) ?? runsOn.id } : undefined;
+  const defaultModel = useEngineDefaultModel(note.model || own ? undefined : note.to);
+  const words = fallbackBannerWords(withDefaultModel(note, own ?? defaultModel), now);
   return (
     // session-error-banner: placement under the glass header; engine-fallback.css: its own look.
     <div className="session-error-banner engine-fallback-banner" data-testid="engine-fallback-banner" role="status">

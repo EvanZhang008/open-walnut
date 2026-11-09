@@ -72,6 +72,11 @@ describe('the draft', () => {
     expect(draftFallbackLine(shares, NOW)).toMatchObject({ waits: true });
     expect(draftFallbackWords(shares, NOW)).toMatch(/, and it covers Sonnet too: this task waits for the reset\.$/);
     expect(draftFallbackWords(answer({ setting: { engine: 'codex' }, limit, skip: 'limited_too' }), NOW)).toMatch(/Codex is out of usage too: this task waits/);
+    // No model picked for Claude Code: under a limit that covers every Claude model, a model would not help.
+    expect(draftFallbackWords(answer({ setting: { engine: 'claude' }, limit, skip: 'needs_model' }), NOW))
+      .toMatch(/, and it covers every Claude model: this task waits for the reset \(another engine, or a model of another provider, can take it: Settings > Sessions\)\.$/);
+    expect(draftFallbackWords(answer({ setting: { engine: 'claude' }, limit: { window: 'seven_day_opus', resetsAt: RESET }, skip: 'needs_model' }), NOW))
+      .toMatch(/: this task waits for the reset \(the fallback needs a model, Settings > Sessions\)\.$/);
     // A model named while the fallback is blocked: it still waits, with nothing to offer.
     expect(draftFallbackLine(shares, NOW, 'Opus')).toEqual({ before: expect.stringMatching(/reached here \(resets .+\): on $/), strong: 'Opus', after: ' this task waits for the reset.', waits: true });
     // Nothing limited: nothing to say about a named model.

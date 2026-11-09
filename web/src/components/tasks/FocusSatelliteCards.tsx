@@ -439,7 +439,6 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
       {/* A usage limit holds it: its tag and reset ahead of the title, so a long title never hides
           them (limit-row.tsx; the list row draws the same words). */}
       <TaskLimitPill task={task} />
-      <TaskFallbackTag task={task} />
       {/* Editable title */}
       <span
         {...titleProps}
@@ -449,6 +448,8 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
       >
         {orgDisplayTitle(task)}
       </span>
+      {/* It started on the fallback engine: the mark after the title, so the title keeps its room. */}
+      <TaskFallbackTag task={task} compact />
       {/* The task's own tags, as on a list row. */}
       <TaskTagPills task={task} />
       <SubtaskPill task={task} />

@@ -62,7 +62,11 @@ export function draftFallbackLine(now: EngineFallbackNow | null, nowMs: number, 
     case 'shares_limit': return { before: `${head}, and it covers ${fallbackModelName(now.setting) ?? 'that model'} too: this task waits for the reset.`, waits: true };
     case 'limited_too': return { before: `${head}, and ${engine} is out of usage too: this task waits for the reset.`, waits: true };
     case 'not_runnable': return { before: `${head}, and ${engine} is not installed here: this task waits for the reset.`, waits: true };
-    case 'needs_model': return { before: `${head}: this task waits for the reset (the fallback needs a model, Settings > Sessions).`, waits: true };
+    // Another Claude model helps only under one model's weekly limit (Settings' Model help says so):
+    // under one that covers them all, picking a Claude model would not help.
+    case 'needs_model': return now.setting.engine === 'claude' && !/^seven_day_(opus|sonnet)$/.test(now.limit?.window ?? '')
+      ? { before: `${head}, and it covers every Claude model: this task waits for the reset (another engine, or a model of another provider, can take it: Settings > Sessions).`, waits: true }
+      : { before: `${head}: this task waits for the reset (the fallback needs a model, Settings > Sessions).`, waits: true };
     default: return null;
   }
 }

@@ -248,6 +248,14 @@ test('a task that started on Codex: the Fallback banner, Switch to Claude Code, 
 
   // Switch to Claude Code: the task's new session runs on Claude Code with the conversation, and
   // the panel follows it; the note goes with the switch.
+  // The panel never reads "Untitled session" while the new session's record loads.
+  const titles = new Set<string>()
+  const watching = (async () => {
+    for (let i = 0; i < 60; i++) {
+      for (const t of await page.locator('.session-panel-title').allTextContents().catch(() => [] as string[])) titles.add(t.trim())
+      await page.waitForTimeout(50)
+    }
+  })()
   await banner.getByTestId('engine-fallback-switch').click()
   await expect.poll(async () => {
     const t = ((await (await request.get(`/api/tasks/${a.taskId}`)).json()) as { task: { engine_switch?: { state?: string; session_id?: string }; engine_fallback?: unknown } }).task
@@ -260,6 +268,8 @@ test('a task that started on Codex: the Fallback banner, Switch to Claude Code, 
   expect(rec?.engine ?? 'claude').toBe('claude')
   await expect(page.locator(`.session-panel[data-session-id="${newSid}"]`)).toHaveCount(1, { timeout: 30_000 })
   await expect(page.locator(`.session-panel[data-session-id="${newSid}"]`).getByTestId('engine-fallback-banner')).toHaveCount(0)
+  await watching
+  expect([...titles]).not.toContain('Untitled session')
 
   await page.reload()
   await expect(page.getByTestId('engine-fallback-banner')).toHaveCount(0, { timeout: 15_000 })
@@ -273,6 +283,20 @@ test('a task that started on Codex: the Fallback banner, Switch to Claude Code, 
   await expect(tagC).toBeVisible({ timeout: 30_000 })
   await expect(tagC).toHaveAttribute('title', new RegExp(`^Started on ${runsOn.replace(/[()]/g, '\\$&')} · Claude 5-hour limit reached`))
   await shot(page, rowC, '2-row-by-project')
+
+  // The Pinned strip (a new task is pinned): the mark after the title, the title whole.
+  const pinned = page.locator(`.todo-pinned-card[data-task-id="${c.taskId}"], .todo-focus-card[data-task-id="${c.taskId}"]`).first()
+  {
+    await expect(pinned).toHaveCount(1, { timeout: 15_000 })
+    const mark = pinned.getByTestId('task-row-fallback')
+    await expect(mark.getByRole('img', { name: 'Fallback' })).toBeVisible()
+    const order = await pinned.evaluate((el) => {
+      const t = el.querySelector('.todo-pinned-title, .status-card-body'), m = el.querySelector('[data-testid="task-row-fallback"]')
+      return !!t && !!m && !!(t.compareDocumentPosition(m) & Node.DOCUMENT_POSITION_FOLLOWING)
+    })
+    expect(order, 'the mark comes after the title').toBe(true)
+    await shot(page, pinned, '2-row-pinned')
+  }
 })
 
 test("a new task's draft says where it starts while the default engine is out of usage", async ({ page }) => {

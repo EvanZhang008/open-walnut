@@ -447,11 +447,28 @@ export const SessionPanel = memo(function SessionPanel(props: SessionPanelProps)
 /** The composer controls a plain chat (the browser side panel) shows: the mode and the model pill (its effort inside). */
 const PLAIN_CHAT_CONTROLS: ReadonlySet<string> = new Set(['mode', 'model']);
 
-const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, onClose, embedded, inset, headerLeading, focusComposer, inboxRequest, locked, onToggleLock, onMinimize, onTaskCompleted, onTaskClick, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced, onOpenForkDraft, phoneLayer, phoneDeepLinkBaseUrl, phoneHostSlot, headerSlot, onHostBoard, plainChat, composerPill, composerBar }: SessionPanelProps) {
+/**
+ * The title a replaced session's panel showed, by the session that replaced it: the new session's
+ * panel names its task with it while its record loads, not "Untitled session" (2026-11-09 review:
+ * after an engine switch the bar read "Untitled session" for a moment). Module-level: a host may
+ * mount a new panel for the new id.
+ */
+const carriedTitles = new Map<string, string>();
+
+const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, onClose, embedded, inset, headerLeading, focusComposer, inboxRequest, locked, onToggleLock, onMinimize, onTaskCompleted, onTaskClick, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced: onSessionReplacedProp, onOpenForkDraft, phoneLayer, phoneDeepLinkBaseUrl, phoneHostSlot, headerSlot, onHostBoard, plainChat, composerPill, composerBar }: SessionPanelProps) {
   // One place decides what "close this panel" means, so every exit (the header
   // button, the error boundary, the missing-session card) goes through the same
   // owner callback.
   const closePanel = useCallback((id: string) => { onClose?.(id); }, [onClose]);
+  // Every replacement goes through here: the new session's panel keeps this one's title meanwhile.
+  const shownTitle = useRef<string | null>(null);
+  const onSessionReplaced = useMemo(() => (onSessionReplacedProp ? (oldId: string, newId: string) => {
+    if (shownTitle.current && newId !== oldId) {
+      carriedTitles.set(newId, shownTitle.current);
+      if (carriedTitles.size > 20) carriedTitles.delete(carriedTitles.keys().next().value!);
+    }
+    onSessionReplacedProp(oldId, newId);
+  } : undefined), [onSessionReplacedProp]);
   const navigate = useNavigate();
   const { notify } = useNotifications();
   const confirmDialog = useConfirm();
@@ -2458,6 +2475,9 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   // A session whose record is gone (404) still opened from a task row: the bar
   // names that task, not "Untitled session" (N29).
   const fallbackTaskTitle = useHomeTaskTitleForSession(sessionId, !!phoneLayer && !headerTitle);
+  // The replaced session's title, until this session's own record names its task.
+  const carriedTitle = headerTitle ? null : carriedTitles.get(sessionId) ?? null;
+  shownTitle.current = headerTitle || carriedTitle;
   // The bar and the timeline agree: a card waiting in the timeline names the bar (N2-10).
   const phoneCardTool = usePendingCardTool(sessionId, !!phoneLayer);
   // The home row's task, while the record that names it is still on its way.
@@ -2490,7 +2510,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     id: `session:${sessionId}`,
     kind: 'session',
     active: !!phoneLayer,
-    title: headerTitle || fallbackTaskTitle || 'Untitled session',
+    title: headerTitle || carriedTitle || fallbackTaskTitle || 'Untitled session',
     subtitle: phoneSessionLabel({
       // Before the record loads, the status the home row read (N2-10), never a default Stopped.
       process_status: ps ?? liveStatus?.process_status ?? null,
@@ -3256,7 +3276,9 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                     // Same amber as the task lists — one marker, every surface.
                     className={`session-panel-title${sessionTask?.walnut_agent ? ' walnut-task-title' : ''}`}
                   />
-                : <span className="session-panel-title text-muted">{loading ? 'Opening the session…' : 'Untitled session'}</span>
+                : carriedTitle
+                  ? <span className="session-panel-title">{carriedTitle}</span>
+                  : <span className="session-panel-title text-muted">{loading ? 'Opening the session…' : 'Untitled session'}</span>
               }
             </div>
             {/* The one question control up here: the mode pill (Tree Mode /
@@ -3358,6 +3380,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
           && !session.lane && !session.archive_reason?.startsWith('engine_switched:')
           && showsEngineFallback(sessionTask.engine_fallback, session.engine, session.archived) && (
           <EngineFallbackBanner taskId={sessionTask.id} sessionId={sessionId} note={sessionTask.engine_fallback}
+            runsOn={{ id: session.acpModel, name: session.acpModelName }}
             onGone={() => setFallbackGone(sessionTask.engine_fallback?.at ?? null)} />
         )}
         {(ps === 'error' || ps === 'stopped') && !session?.cwdGone && session && needsContextRecovery({ ...session, process_status: ps }) && (
