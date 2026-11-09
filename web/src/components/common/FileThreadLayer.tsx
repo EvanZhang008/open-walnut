@@ -515,6 +515,12 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
     if (!root.contains(layer)) mo.observe(layer, { childList: true });
     const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(later);
     ro?.observe(root);
+    // The text reflowing under a card that stays put (a font arriving late, a
+    // block growing) moves its passage with no mutation and no scroll: follow it
+    // (2026-11-09: a line's worth, 26px, between the card and its passage).
+    const textBody = body();
+    if (textBody) ro?.observe(textBody);
+    document.fonts?.addEventListener?.('loadingdone', later);
     root.addEventListener('scroll', later, true);
     window.addEventListener('resize', later);
     // The page reports its passage's rects (on paint, its scroll and its resize),
@@ -525,6 +531,7 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
       ro?.disconnect();
       root.removeEventListener('scroll', later, true);
       window.removeEventListener('resize', later);
+      document.fonts?.removeEventListener?.('loadingdone', later);
       off?.();
       live = false;
       if (raf) cancelAnimationFrame(raf);

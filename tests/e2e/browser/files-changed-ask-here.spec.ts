@@ -473,11 +473,18 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
     const askHere = page.locator('[data-testid="bubble-ask-here"]')
     await selectUntil(page, () => textRects(editor, MD_PASSAGE), askHere)
     await humanPress(page, askHere)
-    await expectCardLanded(page, view, 'files-md-wysiwyg', () => textRects(editor, MD_PASSAGE, 0, false), async () => {
+    await expectCardLanded(page, view, 'files-md-wysiwyg', () => textRects(editor, MD_PASSAGE, 0, false), async (card) => {
       // While this file's card is open the chip stays away: it covered a word.
       await hoverPassage()
       await page.waitForTimeout(300)
       await expect(chip, 'no inline Ask over the passage while its card is open').toHaveCount(0)
+      // The text above reflows with no mutation in the view and no scroll (a
+      // stylesheet, as a late font does): the card follows its passage
+      // (2026-11-09: it stayed a line, 26px, below it).
+      await page.addStyleTag({ content: '.fv-wysiwyg-editor .ProseMirror > :first-child { margin-top: 64px !important; }' })
+      await expect(async () => {
+        await expectCardBesidePassage(card, () => textRects(editor, MD_PASSAGE, 0, false), 'files-md-wysiwyg reflowed')
+      }).toPass({ timeout: 5_000 })
     })
   })
 
