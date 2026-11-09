@@ -9,6 +9,7 @@ import { test, expect, type Page } from '@playwright/test'
 import { iconInkOffsets, ICON_CENTER_TOLERANCE_PX } from './icon-ink'
 import { setPanelMode } from './draft-helpers'
 import { holdPanelCountLock } from './panel-count-lock'
+import { closeSessionKebab, kebabRow, openSessionKebab } from './session-kebab-helpers'
 
 // One test sets the fixture's panel count (a full strip pushes a column out).
 holdPanelCountLock('test')
@@ -38,7 +39,7 @@ test('every icon of the header\'s window buttons draws on the row\'s middle, Min
   const controls = panel.locator('.session-panel-window-controls')
   await expect(controls.locator('[data-header-id="minimize"]')).toBeVisible()
   const inks = await iconInkOffsets(controls.locator('button'))
-  expect(inks.map((i) => i.id)).toEqual(expect.arrayContaining(['minimize', 'watch']))
+  expect(inks.map((i) => i.id)).toEqual(expect.arrayContaining(['minimize']))
   for (const ink of inks) {
     expect(Math.abs(ink.dy), `${ink.id} icon is ${ink.dy.toFixed(2)}px off its button's middle`).toBeLessThan(ICON_CENTER_TOLERANCE_PX)
   }
@@ -170,30 +171,55 @@ test('Watch on a task the board does not hold (an archived one) brings it onto t
   await page.goto('/')
   await page.waitForLoadState('networkidle')
   const panel = page.locator(`.main-page-session-column .session-panel[data-session-id="${SESSION_ID}"]`)
-  const watch = panel.getByTestId('session-panel-watch')
-  await expect(watch).toBeEnabled({ timeout: 30_000 })
+  await expect(panel).toBeVisible({ timeout: 30_000 })
   const watching = page.getByRole('region', { name: 'Watching' })
   await expect(watching.getByText('Archived migration plan')).toHaveCount(0)
+  // Watch is the ⋮ menu's task row: a click closes the menu, the next open reads the new state.
+  let watch = await kebabRow(panel, 'task-kebab-watch')
+  await expect(watch).toHaveText('Watch')
   await watch.click()
-  await expect(watch).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.locator('.task-kebab-menu')).toHaveCount(0)
   await expect(watching.getByText('Archived migration plan', { exact: true }).first()).toBeVisible({ timeout: 15_000 })
+  watch = await kebabRow(panel, 'task-kebab-watch')
+  await expect(watch).toHaveText('Stop watching')
   await watch.click()
-  await expect(watch).toHaveAttribute('aria-pressed', 'false')
+  await expect(page.locator('.task-kebab-menu')).toHaveCount(0)
   await expect(watching.getByText('Archived migration plan')).toHaveCount(0)
 })
 
-test('Watch in the header row keeps the task on the Watching list, and lights while on', async ({ page }) => {
+test('Watch in the session menu keeps the task on the Watching list, and reads Stop watching while on', async ({ page }) => {
   const panel = await openSessionPanel(page)
-  const watch = panel.getByTestId('session-panel-watch')
-  await expect(watch).toBeEnabled()
-  await expect(watch).toHaveAttribute('aria-pressed', 'false')
+  // The search that found the task hides the Watching section: clear it.
+  await page.locator('.todo-search-input').fill('')
+  const watching = page.getByRole('region', { name: 'Watching' })
+  let watch = await kebabRow(panel, 'task-kebab-watch')
+  await expect(watch).toHaveText('Watch')
   await beat(page)
   await watch.click()
-  await expect(watch).toHaveAttribute('aria-pressed', 'true')
-  await expect(watch).toHaveAccessibleName('Stop watching')
+  await expect(page.locator('.task-kebab-menu')).toHaveCount(0)
+  // By id: another spec may rename the shared fixture task.
+  const watchedRow = watching.locator(`[data-task-id="${TASK_ID}"]`)
+  await expect(watchedRow.first()).toBeVisible({ timeout: 15_000 })
+  watch = await kebabRow(panel, 'task-kebab-watch')
+  await expect(watch).toHaveText('Stop watching')
   await beat(page)
   await watch.click()
-  await expect(watch).toHaveAttribute('aria-pressed', 'false')
+  await expect(page.locator('.task-kebab-menu')).toHaveCount(0)
+  await expect(watchedRow).toHaveCount(0)
+  await expect((await kebabRow(panel, 'task-kebab-watch'))).toHaveText('Watch')
+  await closeSessionKebab(panel)
+})
+
+test('Locate and Watch are rows of the session menu, not buttons of the header row', async ({ page }) => {
+  const panel = await openSessionPanel(page)
+  // The header is drawn once the record is here (its kebab with it).
+  const menu = await openSessionKebab(panel)
+  await expect(panel.locator('.session-panel-header [data-header-id="watch"], .session-panel-header [data-header-id="locate"]')).toHaveCount(0)
+  await expect(panel.getByTestId('session-panel-watch')).toHaveCount(0)
+  await expect(panel.getByTestId('session-panel-locate')).toHaveCount(0)
+  await expect(menu.getByTestId('session-menu-locate')).toHaveText('Locate task', { timeout: 30_000 })
+  await expect(menu.getByTestId('task-kebab-watch')).toHaveText(/^(Watch|Stop watching)$/, { timeout: 30_000 })
+  await closeSessionKebab(panel)
 })
 
 test('× on a chip closes it to the background', async ({ page }) => {

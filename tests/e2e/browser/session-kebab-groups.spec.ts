@@ -97,13 +97,14 @@ test('the first level holds the frequent rows and the groups; nothing else', asy
   let menu = await openMenu(page, panel)
   const rows = await firstLevel(menu)
   const at = (re: RegExp) => rows.findIndex((r) => re.test(r))
-  const order = [/^Open/, /^Window/, /^Columns/, /^Snooze until/, /^Watch$/, /^Details$/, /^Status: /, /^Pin to/, /^Dates/, /^Move & transfer/, /^Team/, /^Delete$/, /^Session/]
+  const order = [/^Locate task$/, /^Open/, /^Window/, /^Columns/, /^Snooze until/, /^Watch$/, /^Details$/, /^Status: /, /^Pin to/, /^Dates/, /^Move & transfer/, /^Team/, /^Delete$/, /^Session/]
   const seen = order.map(at)
   expect(seen.every((i) => i >= 0), `first level: ${rows.join(' | ')}`).toBe(true)
   expect([...seen].sort((a, b) => a - b), `order: ${rows.join(' | ')}`).toEqual(seen)
+  // Locate leads the menu as a row of its own (2026-11-09: the header's crosshair moved here).
   // Inside a group, not on the first level: the views, the window moves, the pin tiers, the
   // "Local" source row, the copy rows, Restart / Terminate and the read-only times.
-  for (const gone of [/^Changed/, /^Files$/, /^Inbox/, /^Code$/, /^Notes$/, /^Msgs/, /^Usage/, /^Locate/, /^Find on Home/, /^Open in new tab/, /^Full screen/,
+  for (const gone of [/^Changed/, /^Files$/, /^Inbox/, /^Code$/, /^Notes$/, /^Msgs/, /^Usage/, /^Find on Home/, /^Open in new tab/, /^Full screen/,
     /^Focus$/, /^Local$/, /^Copy session ID/, /^Copy resume/, /^Copy folder/, /^Open in VS Code/, /^Created/, /^Capture debug/, /^Raw input/, /^Restart/, /^Terminate/, /^Session info/]) {
     expect(rows.some((r) => gone.test(r)), `${gone} is not on the first level: ${rows.join(' | ')}`).toBe(false)
   }

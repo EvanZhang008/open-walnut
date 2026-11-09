@@ -92,12 +92,14 @@ export function SessionMenuOpen(p: SessionMenuOpenProps) {
   const hintCount = webCount > 0 ? String(webCount) : summary;
   const view = (v: SessionSplitView) => () => { close(); views.onToggleView(v); };
   const windows = [
-    p.locate && <Row key="locate" icon={ICON_LOCATE} label={p.locate.label} onClick={() => { close(); p.locate!.onClick(); }} testId="session-menu-locate" />,
     p.onPopout && <Row key="popout" icon={ICON_NEW_TAB} label="Open in new tab" onClick={() => { close(); p.onPopout!(); }} testId="session-menu-popout" />,
     p.onFullscreen && <Row key="full" icon={ICON_EXPAND} label={p.fullscreenLabel ?? 'Full screen'} onClick={() => { close(); p.onFullscreen!(); }} testId="session-menu-fullscreen" />,
   ].filter(Boolean);
   return (
     <>
+      {/* Locate is a row of its own, by its name, as Watch is among the task's rows below
+          (2026-11-09, the user of the header's crosshair and eye: "this 2 put iot in the drop down"). */}
+      {p.locate && <Row icon={ICON_LOCATE} label={p.locate.label} onClick={() => { close(); p.locate!.onClick(); }} testId="session-menu-locate" />}
       <KebabGroup
         label="Open"
         hint={`changed · files${p.board !== 'none' ? ' · board' : ''} · inbox · code · web${hintCount ? ` (${hintCount})` : ''}`}
@@ -118,7 +120,7 @@ export function SessionMenuOpen(p: SessionMenuOpenProps) {
         <SessionViewItems {...views} onAfterAction={close} />
       </KebabGroup>
       {windows.length > 0 && (
-        <KebabGroup label="Window" hint="locate · new tab · full screen" icon={WINDOW_ICON} testId="session-kebab-window">
+        <KebabGroup label="Window" hint="new tab · full screen" icon={WINDOW_ICON} testId="session-kebab-window">
           {windows}
         </KebabGroup>
       )}

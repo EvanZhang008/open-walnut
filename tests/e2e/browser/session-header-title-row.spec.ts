@@ -18,6 +18,7 @@ import { expect, test, type Page } from '@playwright/test'
 import { openAskWalnutDrawer, openChatOnLoad } from './draft-helpers'
 import { presetPanelView } from './todo-panel-helpers'
 import { expectBareTitleRow } from './session-header-labels-helpers'
+import { closeSessionKebab, kebabRow } from './session-kebab-helpers'
 
 const SESSION_ID = 'pw-vscode-session'
 const TASK_ID = 'pw-task-vscode'
@@ -157,7 +158,9 @@ test('the embedded Ask Walnut panel keeps compact activity time across task upda
   const drawer = await openAskWalnutDrawer(page)
   await drawer.locator(`[data-testid="ask-walnut-drawer-item"][data-task-id="${taskId}"]`).click()
   const panel = page.getByTestId('ask-walnut-session').locator(`.session-panel[data-session-id="${sessionId}"]`)
-  await expect(panel.getByRole('button', { name: 'Locate task', exact: true })).toBeVisible()
+  // Its kebab offers Locate task (the slot gives the panel a Locate handler).
+  await expect(await kebabRow(panel, 'session-menu-locate')).toHaveText('Locate task')
+  await closeSessionKebab(panel)
   await expect(panel.locator('.session-panel-time')).toHaveCount(0)
   await panel.getByRole('button', { name: 'Expand session to full screen', exact: true }).click()
   await expect(panel.locator('.session-panel-time')).toHaveText('6h')
@@ -189,7 +192,7 @@ test('the session title owns the second header row and reveals its full text on 
   const titleBox = (await titleRow.boundingBox())!
   expect(titleBox.y).toBeGreaterThan(toolsBox.y)
   const controls = toolsRow.locator('.session-panel-window-controls')
-  for (const cls of ['locate', 'lock', 'popout', 'expand', 'close']) {
+  for (const cls of ['lock', 'popout', 'expand', 'close']) {
     await expect(controls.locator(`.session-panel-${cls}`)).toHaveCount(1)
   }
   await expect(toolsRow.getByRole('button', { name: 'Changed' })).toHaveCount(1)
@@ -204,7 +207,7 @@ test('the session title owns the second header row and reveals its full text on 
         : c.querySelector('.task-kebab-btn') || c.matches('.task-kebab-btn') ? 'kebab'
           : c.matches('.task-row-pill, .task-waiting-chip, [data-header-pill]') ? 'pill' : c.className))
   expect(metaKids.filter((k) => k !== 'labels' && k !== 'kebab' && k !== 'pill'), `title row extras: ${metaKids}`).toEqual([])
-  for (const cls of ['locate', 'lock', 'popout', 'expand', 'close', 'vscode']) {
+  for (const cls of ['lock', 'popout', 'expand', 'close', 'vscode']) {
     await expect(titleRow.locator(`.session-panel-${cls}`)).toHaveCount(0)
   }
 

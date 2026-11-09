@@ -49,15 +49,11 @@ export const TOOL_ITEMS: Record<string, { kind: ToolItemKind; priority: number; 
   // never pushes Terminal into "..." (2026-10-26).
   board: { kind: 'chip', priority: 6.1, name: 'Board' },
   time: { kind: 'info', priority: 7, name: 'Last activity' },
-  // Locate, the way back to the task from the Ask and Mail drawers, is the last
-  // of the two movable window buttons to leave.
-  locate: { kind: 'window', priority: 9, name: 'Locate task' },
-  // Watch keeps the task at the top of Home's task panel (WatchToggle.tsx); it folds
-  // right after Open in new tab, before Locate.
-  watch: { kind: 'window', priority: 10, name: 'Watch' },
+  // Locate and Watch are no header buttons: they are rows of the kebab, by their names
+  // (2026-11-09, the user of the crosshair and the eye: "this 2 put iot in the drop down").
   popout: { kind: 'window', priority: 11, name: 'Open in new tab' },
-  // Minimize (Home's columns only) puts the panel on the taskbar: the last window
-  // button to fold, after Open in new tab and Locate.
+  // Minimize puts the panel on the taskbar: the last window button to fold, after
+  // Open in new tab.
   minimize: { kind: 'window', priority: 8, name: 'Minimize to taskbar' },
   // Lock, Expand and Close stay at every width: a cramped column is the moment to
   // go full screen (the user: "at the very least keep close and expand",

@@ -36,6 +36,7 @@
  */
 import { test, expect } from '@playwright/test'
 import { DRAFT_PANEL } from './draft-helpers'
+import { locateFromKebab } from './session-kebab-helpers'
 import {
   FULLSCREEN_SESSION, FULLSCREEN_TASK, NONCE, SCREENSHOT_DIR, TARGET_SESSION,
   columnPanel, ensureScreenshotDir, enterFilesFullscreen, expectNoFullscreen, expectOnTop,
@@ -119,15 +120,15 @@ test('5. the sheet yields every time, not only the first: fullscreen â†’ open â†
   await expectNoFullscreen(page)
 })
 
-test('6. "Go to task" in the fullscreen header drops the sheet and shows the task highlighted in the list', async ({ page }) => {
-  // The header button routes through handleLocateTaskById, which yields the sheet
+test('6. "Locate task" in the fullscreen panel\'s menu drops the sheet and shows the task highlighted in the list', async ({ page }) => {
+  // The menu's Locate row (the header's crosshair until 2026-11-09) routes through handleLocateTaskById, which yields the sheet
   // itself: the task's session IS this panel, so no column opens (or moves); what the
   // gesture reveals is the todo row, which sits under the sheet just like a new column
   // would. Decided in useFullscreen.tsx.
   const panel = await openSessionPanel(page)
   await enterFilesFullscreen(page, panel)
 
-  await panel.getByRole('button', { name: 'Locate task' }).click()
+  await locateFromKebab(panel)
 
   await expectNoFullscreen(page)
   await expect(panel).toBeVisible()

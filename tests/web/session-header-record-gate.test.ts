@@ -86,8 +86,8 @@ describe('taskControlSlot: drawn, kept as a spacer, or never drawn', () => {
     expect(taskControlSlot('none', false)).toBe('absent')
   })
 
-  it('names the three by their row ids, and a spacer is out of reach', () => {
-    expect([...TASK_SLOT_IDS].sort()).toEqual(['board', 'fork', 'locate', 'watch'])
+  it('names them by their row ids (Locate and Watch are kebab rows, not header buttons), and a spacer is out of reach', () => {
+    expect([...TASK_SLOT_IDS].sort()).toEqual(['board', 'fork'])
     expect(TASK_SLOT_SPACER).toEqual({ 'aria-hidden': true, tabIndex: -1, disabled: true, 'data-header-spacer': 'true' })
   })
 })
@@ -167,15 +167,15 @@ describe('SessionHeaderMoreMenu: spacers fold like the rest but are never listed
     renderToStaticMarkup(createElement(SessionHeaderMoreMenu, { rowRef, ids, spacerIds }))
 
   it('lists only live items in its count and its title', () => {
-    const html = menu(['board', 'terminal', 'locate'], TASK_SLOT_IDS)
+    const html = menu(['board', 'terminal', 'fork'], TASK_SLOT_IDS)
     expect(html).toContain('aria-label="More (1)"')
     expect(html).toContain('title="More: Terminal"')
     expect(html).not.toContain('data-header-spacer')
-    expect(menu(['board', 'terminal', 'locate'])).toContain('aria-label="More (3)"')
+    expect(menu(['board', 'terminal', 'fork'])).toContain('aria-label="More (3)"')
   })
 
   it('with only spacers folded, keeps its place as one more spacer, the same chip', () => {
-    const html = menu(['board', 'locate'], TASK_SLOT_IDS)
+    const html = menu(['board', 'fork'], TASK_SLOT_IDS)
     expect(html).toMatch(/^<button[^>]*class="session-action-chip session-header-more-btn"/)
     expect(html).toContain('data-header-more="true"')
     expect(html).toContain('data-header-spacer="true"')

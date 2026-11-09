@@ -27,6 +27,7 @@ import path from 'node:path'
 import { devices, expect, test, type Locator, type Page } from '@playwright/test'
 import { draftCwdPill, draftTaskMenu, openDraftSettings, draftSend } from './draft-helpers'
 import { MailFixtureServer, folderRow, openMail, shoot, showAllMail } from './mail-review-helpers'
+import { kebabRow, sessionKebabButton } from './session-kebab-helpers'
 
 // Written for the flat list: open it as All mail (showAllMail, mail-review-helpers.ts).
 test.beforeEach(async ({ page }) => { await showAllMail(page) })
@@ -187,7 +188,11 @@ test('S4-W4: Find on Home from the drawer lands on the ask in the chat slot', as
   const session = drawer(page).getByTestId('ask-object-session')
   await expect(session).toHaveAttribute('data-session-id', /.+/, { timeout: 60_000 })
   const sessionId = await session.getAttribute('data-session-id')
-  await session.getByTestId('session-panel-locate').click()
+  // Locate is a row of the session's ⋮ menu; off Home it reads Find on Home.
+  await expect(sessionKebabButton(session)).toBeVisible({ timeout: 60_000 })
+  const locate = await kebabRow(session, 'session-menu-locate')
+  await expect(locate).toHaveText('Find on Home')
+  await locate.click()
 
   await expect(page).toHaveURL(/\/$/)
   await expect(page.locator(`[data-testid="ask-walnut-session"][data-session-id="${sessionId}"]`))

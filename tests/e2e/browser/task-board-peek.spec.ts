@@ -36,6 +36,7 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL, draftComposer, openDraftOnCwd } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import { showCustomBoard } from './board-view-helpers'
+import { closeSessionKebab, kebabRow, sessionKebabButton } from './session-kebab-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const API = `http://localhost:${TEST_PORT}`
@@ -263,10 +264,11 @@ test('a Board chip opens its task as a tab in place of the chat; the tabs switch
   await expect(peek.getByTestId('board-peek-note')).toHaveText('Messages you send here go to this task, not to the chat you came from.')
   const inset = peek.locator(`.session-panel.session-panel-inset[data-session-id="${workerSid}"]`)
   await expect(inset.getByText('Probe worker ready', { exact: true }).first()).toBeVisible({ timeout: 30_000 })
-  // The inset keeps its title row, phase, kebab, Locate and composer; no split chips, no expand or popout.
+  // The inset keeps its title row, phase, kebab (with its Locate row) and composer; no split chips, no expand or popout.
   await expect(inset.locator('.session-panel-title')).toHaveText(workerTitle)
-  await expect(inset.getByTestId('session-panel-locate')).toBeVisible()
   await expect(inset.getByRole('button', { name: 'More actions' }).first()).toBeVisible()
+  await expect(await kebabRow(inset, 'session-menu-locate')).toBeVisible()
+  await closeSessionKebab(inset)
   await expect(inset.locator('.chat-input-textarea')).toBeVisible()
   await expect(inset.locator('.session-action-chip', { hasText: /^(Changed|Files|Board|Terminal)$/ })).toHaveCount(0)
   await expect(inset.locator('.session-panel-expand, .session-panel-popout, .session-panel-lock')).toHaveCount(0)
@@ -376,10 +378,11 @@ test('a Board chip opens its task as a tab in place of the chat; the tabs switch
   await expect(leaderComposer).toHaveValue(leaderDraft)
   await tabs.button(worker).click()
   await expect(inset).toBeVisible()
-  // Locate is drawn disabled until the worker's record loads, and a disabled button
-  // cannot take focus: Escape would then reach the tab and close the whole split.
-  await expect(inset.getByTestId('session-panel-locate')).toBeEnabled()
-  await inset.getByTestId('session-panel-locate').focus()
+  // Focus inside the inset (its kebab button, drawn once the worker's record loads): with nothing
+  // focused there, Escape would reach the tab and close the whole split.
+  const insetKebab = sessionKebabButton(inset)
+  await expect(insetKebab).toBeEnabled()
+  await insetKebab.focus()
   await page.keyboard.press('Escape')
   await expect(peek).toHaveCount(0)
   await expect(tabs.chat).toHaveAttribute('aria-selected', 'true')

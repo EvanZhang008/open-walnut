@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { isolateUiPrefs } from './todo-panel-helpers';
 import { openHome } from './home-navigation-helpers';
+import { locateFromKebab } from './session-kebab-helpers';
 
 test.use({ viewport: { width: 1280, height: 840 }, deviceScaleFactor: 1 });
 test.setTimeout(120_000);
@@ -78,7 +79,7 @@ test('6481 tasks remain browsable without duplicate pins or expanded project wal
   await page.mouse.move(rect.x + 30, rect.y + 40);
   await page.mouse.wheel(0, -12_000);
   await expect.poll(() => scroller.evaluate(el => el.scrollTop)).toBe(0);
-  await page.locator('.main-page-session-column [data-session-id="pw-store-sync-session"]').getByRole('button', { name: 'Locate task', exact: true }).click();
+  await locateFromKebab(page.locator('.main-page-session-column [data-session-id="pw-store-sync-session"]'));
   const located = page.locator('.todo-panel-list [data-task-id="pw-task-store-sync"]');
   await expect(located).toBeVisible();
   // The located task sits past its project's first batch; the locate draws it anyway.
@@ -125,7 +126,7 @@ test('a task located deep in a long project is drawn after the first batch, with
   const firstIds = (n: number) => tasks.slice(0, n).map(t => t.id);
 
   // Locate: the first batch, the "Show more" row, then the located row on its own.
-  await page.locator('.main-page-session-column [data-session-id="pw-store-sync-session"]').getByRole('button', { name: 'Locate task', exact: true }).click();
+  await locateFromKebab(page.locator('.main-page-session-column [data-session-id="pw-store-sync-session"]'));
   const located = group.locator('[data-task-id="pw-task-store-sync"]');
   await expect(located).toBeVisible();
   expect(await drawn()).toEqual([...firstIds(30), 'more', 'pw-task-store-sync']);

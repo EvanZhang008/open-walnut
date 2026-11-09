@@ -10140,20 +10140,6 @@ body.walnut-dragging {
   font-family: inherit;
 }
 
-.session-panel-locate {
-  flex-shrink: 0;
-  transition: opacity 0.15s;
-}
-/* Drawn before the session record names the task (so it never takes its room
-   late), it waits disabled: dimmed, no hover wash, the reason in its title. */
-.session-panel-locate:disabled { cursor: default; opacity: 0.45; }
-.session-panel-locate:disabled:hover { color: var(--fg-muted); background: transparent; }
-/* Watch, beside Locate: the same wait while the task loads, the accent while watched. */
-.session-panel-watch { flex-shrink: 0; }
-.session-panel-watch:disabled { cursor: default; opacity: 0.45; }
-.session-panel-watch:disabled:hover { color: var(--fg-muted); background: transparent; }
-.session-panel-watch.is-watched { color: var(--accent); }
-
 .session-panel-badge {
   display: inline-flex;
   align-items: center;

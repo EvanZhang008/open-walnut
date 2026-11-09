@@ -26,6 +26,7 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { openKebabGroup } from './kebab-group-helpers'
+import { kebabRow } from './session-kebab-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const STAMP = `${Date.now().toString(36)}${process.pid.toString(36)}`
@@ -136,14 +137,14 @@ test('one header: the name once, the chat\'s labels and kebab on its right, no C
       : c.querySelector('.task-kebab-btn') ? 'kebab'
       : c.matches('.thread-mode-pill') ? 'thread-mode'
       : c.matches('.session-panel-minimize') ? 'minimize'
-      : c.matches('.session-panel-watch') ? 'watch'
       : c.matches('.task-row-pill, .task-waiting-chip, [data-header-pill]') ? 'pill'
       : `UNKNOWN:${c.className}`))
   expect(kinds.filter((k) => k.startsWith('UNKNOWN')), `header tools: ${kinds}`).toEqual([])
   // The app's taskbar is global (2026-11-08): the node's chat minimizes too, from its header.
   expect(kinds, `header tools: ${kinds}`).toContain('minimize')
-  // And its Watch (2026-11-07, the user: "add thsi and the watch to ... this org apnnel").
-  expect(kinds, `header tools: ${kinds}`).toContain('watch')
+  // Its Watch is no header button since 2026-11-09 (the user: "this 2 put iot in the drop down"):
+  // it is the kebab's task row (the Watch test below).
+  await expect(tools.locator('[data-header-id="watch"], [data-testid="session-panel-watch"], [data-header-id="locate"], [data-testid="session-panel-locate"]')).toHaveCount(0)
   // The pills come before the tags control, and the kebab is last.
   const order = kinds.filter((k) => k !== 'thread-mode')
   expect(order.lastIndexOf('pill') < Math.max(order.indexOf('labels'), order.indexOf('kebab')), `header tools: ${kinds}`).toBe(true)
@@ -186,20 +187,26 @@ test('Minimize in the node\'s header puts its chat on the taskbar; the chip brin
   await beat(page)
 })
 
-test('Watch in the node\'s header lights while the node\'s task is watched, and a second click ends it', async ({ page }) => {
+test('Watch in the node\'s header kebab reads Stop watching while the node\'s task is watched, and a second click ends it', async ({ page }) => {
   await isolateUiPrefs(page)
   await page.setViewportSize({ width: 1440, height: 900 })
   await loadHome(page)
   await openNode(page, LED)
-  const watch = page.getByTestId('org-detail-chat-tools').getByTestId('session-panel-watch')
-  await expect(watch).toBeEnabled({ timeout: 30_000 })
-  await expect(watch).toHaveAttribute('aria-pressed', 'false')
+  const tools = page.getByTestId('org-detail-chat-tools')
+  const menu = page.locator('.task-kebab-menu')
+  let watch = await kebabRow(tools, 'task-kebab-watch')
+  await expect(watch).toHaveText('Watch')
   await beat(page)
   await watch.click()
-  await expect(watch).toHaveAttribute('aria-pressed', 'true')
+  await expect(menu).toHaveCount(0)
+  watch = await kebabRow(tools, 'task-kebab-watch')
+  await expect(watch).toHaveText('Stop watching')
   await beat(page)
   await watch.click()
-  await expect(watch).toHaveAttribute('aria-pressed', 'false')
+  await expect(menu).toHaveCount(0)
+  await expect(await kebabRow(tools, 'task-kebab-watch')).toHaveText('Watch')
+  await tools.locator('.task-kebab-btn').click()
+  await expect(menu).toHaveCount(0)
 })
 
 test('the kebab\'s Open group holds Changed, Files, Terminal and Board: Files opens beside the chat, Board opens the side bar on it', async ({ page }) => {

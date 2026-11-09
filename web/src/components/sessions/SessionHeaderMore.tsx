@@ -16,7 +16,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
-import { ICON_EYE, ICON_LOCATE, ICON_MINIMIZE, ICON_NEW_TAB } from '../common/Icons';
+import { ICON_MINIMIZE, ICON_NEW_TAB } from '../common/Icons';
 import { SLOT_ID_PREFIX, TOOL_ITEMS, toolItemSpec, useToolRowFit } from './useSessionHeaderFit';
 import { TASK_SLOT_SPACER } from './header-record-gate';
 
@@ -216,15 +216,12 @@ function MoreRow({ id, rowRef, onChoose }: { id: string; rowRef: RefObject<HTMLE
 /** A hidden window button's row in the "..." menu, with the button's icon and its live label. */
 function WindowRow({ id, rowRef, onChoose }: { id: string; rowRef: RefObject<HTMLElement | null>; onChoose: (id: string) => void }) {
   const { value, label: ariaLabel, disabled } = useItemState(rowRef, id);
-  // Locate reads as the real button does ("Find on Home" off the home page), and Watch as
-  // its live state ("Stop watching" while watched).
-  const label = (id === 'locate' || id === 'watch') && ariaLabel ? ariaLabel : TOOL_ITEMS[id]?.name ?? id;
+  const label = TOOL_ITEMS[id]?.name ?? ariaLabel ?? id;
   return (
     <button
       type="button"
       className="task-kebab-item"
       role="menuitem"
-      // Locate waits, disabled, while the session record loads: so does its row.
       disabled={!!disabled}
       title={disabled ?? undefined}
       onClick={(e) => { e.stopPropagation(); onChoose(id); }}
@@ -237,4 +234,4 @@ function WindowRow({ id, rowRef, onChoose }: { id: string; rowRef: RefObject<HTM
   );
 }
 
-const WINDOW_ICONS: Record<string, ReactNode> = { watch: ICON_EYE, locate: ICON_LOCATE, popout: ICON_NEW_TAB, minimize: ICON_MINIMIZE };
+const WINDOW_ICONS: Record<string, ReactNode> = { popout: ICON_NEW_TAB, minimize: ICON_MINIMIZE };

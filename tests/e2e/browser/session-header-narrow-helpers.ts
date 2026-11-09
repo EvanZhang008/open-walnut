@@ -223,7 +223,7 @@ async function shootHeader(panel: Locator, name: string, below = 0): Promise<voi
 
 /** The order the chips leave the tool row, first to go first. Lock, Expand and Close never leave. */
 const CHIP_LEAVE_ORDER = ['board', 'terminal', 'files', 'changed', 'fork']
-const WINDOW_BUTTONS = ['locate', 'popout']
+const WINDOW_BUTTONS = ['popout']
 /** The chips a "..." row stands in for. */
 const VIEW_CHIPS = ['changed', 'files', 'board', 'terminal']
 /** Everything the "..." menu lists: the time is the one hidden item it does not. */
@@ -332,14 +332,15 @@ export function headerNarrowTests(): void {
     for (const id of states[180].toolRow.hidden.filter((h) => VIEW_CHIPS.includes(h))) {
       await expect(more.getByTestId(`session-header-more-item-${id}`)).toHaveText(id[0]!.toUpperCase() + id.slice(1))
     }
-    await expect(more.getByTestId('session-header-more-item-locate')).toHaveText(/Locate task/)
+    // Locate is a row of the kebab, never of "..." (2026-11-09).
+    await expect(more.getByTestId('session-header-more-item-locate')).toHaveCount(0)
     await expect(more.getByTestId('session-header-more-item-lock')).toHaveCount(0)
     await expect(more.getByTestId('session-header-more-item-popout')).toHaveText(/Open in new tab/)
     // Home's columns also carry Minimize (the taskbar), the third movable window button.
     await expect(more.getByTestId('session-header-more-item-minimize')).toHaveText(/Minimize/)
     await expect(more.getByTestId('session-header-more-item-expand')).toHaveCount(0)
     const moreRows = await more.locator('[role="menuitem"]').evaluateAll((els) => els.map((el) => el.getAttribute('data-testid')!.replace('session-header-more-item-', '')))
-    expect(moreRows.slice(-3), 'window buttons come after the views').toEqual(['locate', 'popout', 'minimize'])
+    expect(moreRows.slice(-2), 'window buttons come after the views').toEqual(['popout', 'minimize'])
     // Each window button's icon draws on its menu row's middle, as on the header row.
     for (const ink of await iconInkOffsets(more.locator('[role="menuitem"]'))) {
       expect(Math.abs(ink.dy), `${ink.id} icon is ${ink.dy.toFixed(2)}px off its row's middle`).toBeLessThan(ICON_CENTER_TOLERANCE_PX)
@@ -355,12 +356,13 @@ export function headerNarrowTests(): void {
     expect(back180.toolRow.hidden).toEqual(states[180].toolRow.hidden)
 
     // The kebab is the task's menu: no pill rows (the labels control holds them) and no window
-    // button from the row above.
+    // button from the row above. Locate is its own first-level row (2026-11-09), not a copy of one.
     await meta.locator('.task-kebab-btn').click()
     const kebab = page.locator('.task-kebab-menu').last()
     await expect(kebab).toBeVisible()
     await expect(kebab.locator('[data-testid^="session-header-kebab-pill-"]')).toHaveCount(0)
-    await expect(kebab.getByText(/Locate task|Lock panel|Open in new tab/)).toHaveCount(0)
+    await expect(kebab.getByText(/Lock panel|Open in new tab/)).toHaveCount(0)
+    await expect(kebab.getByTestId('session-menu-locate')).toHaveText('Locate task')
     await page.keyboard.press('Escape')
     await expect(kebab).toHaveCount(0, { timeout: 10_000 })
 

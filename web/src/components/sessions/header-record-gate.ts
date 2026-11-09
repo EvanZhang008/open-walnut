@@ -65,8 +65,9 @@ export function taskControlSlot(presence: HeaderTaskPresence, drawnBefore: boole
   return drawnBefore ? 'spacer' : 'absent';
 }
 
-/** The tool row ids of the controls that need the task (their `data-header-id`): Fork, Board, Locate and Watch. */
-export const TASK_SLOT_IDS: ReadonlySet<string> = new Set(['fork', 'board', 'locate', 'watch']);
+/** The tool row ids of the controls that need the task (their `data-header-id`): Fork and Board.
+ *  Locate and Watch are kebab rows (2026-11-09, the user: "this 2 put iot in the drop down"). */
+export const TASK_SLOT_IDS: ReadonlySet<string> = new Set(['fork', 'board']);
 
 /**
  * What a spacer adds to the element it stands in for. CSS makes it invisible

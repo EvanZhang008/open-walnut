@@ -5,6 +5,7 @@ import { openChatOnLoad } from './draft-helpers';
 import { activeView, chooseViewOption, closeViewMenu, homeToolbar, openHome, openViewMenu } from './home-navigation-helpers';
 import { addFilter, chooseDisplayOption, closeFilterMenu, displayButton, filterChip, openViewsPage, removeFilterChip } from './filter-bar-helpers';
 import { openKebabGroup } from './kebab-group-helpers';
+import { locateFromKebab } from './session-kebab-helpers';
 import { answerTaskList } from './task-list-stub';
 
 const SHOTS = '/tmp/walnut-home-navigation';
@@ -22,14 +23,9 @@ async function boot(page: Page, baseURL: string) {
   await page.addInitScript(() => localStorage.setItem('walnut-todo-tier-used', '1'));
   await openHome(page, baseURL);
 }
-async function locateInPanel(page: Page, panel: Locator) {
-  const button = panel.getByTestId('session-panel-locate');
-  await expect(button).toBeAttached();
-  if (await button.isVisible()) await button.click();
-  else {
-    await panel.getByTestId('session-header-more-btn').click();
-    await page.getByTestId('session-header-more-menu').getByTestId('session-header-more-item-locate').click();
-  }
+/** Locate from the panel's ⋮ menu (its Locate row; the header's crosshair until 2026-11-09). */
+async function locateInPanel(_page: Page, panel: Locator) {
+  await locateFromKebab(panel);
 }
 
 const navigation = (page: Page) => page.locator('#home-task-navigation');
@@ -1038,10 +1034,10 @@ test('Locate from a session panel never changes the tab: a tab without the task 
   await showTabBar();
   const bar = page.locator('.todo-section-tabs');
   const tab = (name: string) => bar.locator('[role="tab"]').filter({ has: page.locator('.todo-section-tab-label', { hasText: new RegExp(`^${name}$`) }) });
-  const locateButton = page.locator(`.main-page-session-column [data-session-id="pw-store-sync-session"]`).getByRole('button', { name: 'Locate task', exact: true });
+  const locatePanel = page.locator(`.main-page-session-column [data-session-id="pw-store-sync-session"]`);
   // Locate finds the task and nothing else: the panel it was pressed in stays where it is.
   const locate = { click: async () => {
-    await locateButton.click();
+    await locateFromKebab(locatePanel);
     expect(await sessionColumnOrder(page)).toEqual(seededColumns);
   } };
   const card = navigation(page).locator(`.todo-pinned-section [data-task-id="${located}"]`);
@@ -1765,7 +1761,8 @@ test('headings stay stacked at the top while the list scrolls, and hand over to 
 
   // 6. Locate lands a row below the stuck headings, never under them: a tier card, then a
   //    list row. Both start hidden under the stack.
-  const locate = page.locator('.main-page-session-column [data-session-id="pw-store-sync-session"]').getByRole('button', { name: 'Locate task', exact: true });
+  const locatePanel = page.locator('.main-page-session-column [data-session-id="pw-store-sync-session"]');
+  const locate = { click: () => locateFromKebab(locatePanel) };
   const shown = (el: ReturnType<typeof card>) => el.evaluate(node => {
     const list = node.closest('.home-navigation-scroll')!.getBoundingClientRect();
     const r = node.getBoundingClientRect();

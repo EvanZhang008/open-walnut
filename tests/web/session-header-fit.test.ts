@@ -29,7 +29,7 @@ const ROW: ToolRowItem[] = [
   { id: 'board', kind: 'chip', priority: 5, width: 46 },
   { id: 'terminal', kind: 'chip', priority: 6, width: 58 },
   { id: 'time', kind: 'info', priority: 7, width: 22 },
-  { id: 'locate', kind: 'window', priority: 9, width: 22 },
+  { id: 'minimize', kind: 'window', priority: 9, width: 22 },
   { id: 'popout', kind: 'window', priority: 10, width: 22 },
   { id: 'lock', kind: 'fixed', priority: 0, width: 22 },
   { id: 'expand', kind: 'fixed', priority: 0, width: 22 },
@@ -77,7 +77,7 @@ describe('fitToolRow', () => {
     const r = fitToolRow(ROW, ROW_WIDTH - 1, OPTS);
     expect(r.dropped).toEqual(['time']);
     expect(r.inMore).toEqual([]);
-    expect(r.visible).toEqual(['fork', 'changed', 'files', 'board', 'terminal', 'locate', 'popout', 'lock', 'expand', 'close']);
+    expect(r.visible).toEqual(['fork', 'changed', 'files', 'board', 'terminal', 'minimize', 'popout', 'lock', 'expand', 'close']);
     expect(fitToolRow(ROW, 400, OPTS).inMore).toEqual([]);
   });
 
@@ -86,10 +86,10 @@ describe('fitToolRow', () => {
     // room for neither: chips 248 + "..." 22 + 5 gaps 30 = 300; Lock, Expand, Close 66 + 2 gaps 6 = 72;
     // group gap 6 → 378. One more button (97 + 300 + 6 = 403) does not fit.
     const r = fitToolRow(ROW, 399, OPTS);
-    expect(r.inMore).toEqual(['locate', 'popout']);
+    expect(r.inMore).toEqual(['minimize', 'popout']);
     expect(r.visible).toEqual(['fork', 'changed', 'files', 'board', 'terminal', 'lock', 'expand', 'close']);
     expect(r.dropped).toEqual(['time']);
-    expect(fitToolRow(ROW, 378, OPTS).inMore).toEqual(['locate', 'popout']);
+    expect(fitToolRow(ROW, 378, OPTS).inMore).toEqual(['minimize', 'popout']);
   });
 
   it('moves chips into the "..." menu lowest priority first, listed before the window buttons', () => {
@@ -97,20 +97,20 @@ describe('fitToolRow', () => {
     // Fork..Board 190 + "..." 22 + 4 gaps 24 = 236; five buttons 122; group gap 6 → 364.
     const r = fitToolRow(ROW, 377, OPTS);
     expect(r.inMore).toEqual(['terminal']);
-    expect(r.visible).toEqual(['fork', 'changed', 'files', 'board', 'locate', 'popout', 'lock', 'expand', 'close']);
-    // 363 lets go of Open in new tab first (Locate alone: 236 + 97 + 6 = 339), then of Locate below that.
+    expect(r.visible).toEqual(['fork', 'changed', 'files', 'board', 'minimize', 'popout', 'lock', 'expand', 'close']);
+    // 363 lets go of Open in new tab first (Minimize alone: 236 + 97 + 6 = 339), then of Minimize below that.
     expect(fitToolRow(ROW, 363, OPTS).inMore).toEqual(['terminal', 'popout']);
     expect(fitToolRow(ROW, 339, OPTS).inMore).toEqual(['terminal', 'popout']);
-    expect(fitToolRow(ROW, 338, OPTS).inMore).toEqual(['terminal', 'locate', 'popout']);
+    expect(fitToolRow(ROW, 338, OPTS).inMore).toEqual(['terminal', 'minimize', 'popout']);
     // 313: Board goes; Files stays down to 262 (144 + 22 + 3 gaps 18 + 72 + 6).
     const r2 = fitToolRow(ROW, 285, OPTS);
     expect(r2.visible).toEqual(['fork', 'changed', 'files', 'lock', 'expand', 'close']);
-    expect(r2.inMore).toEqual(['board', 'terminal', 'locate', 'popout']);
+    expect(r2.inMore).toEqual(['board', 'terminal', 'minimize', 'popout']);
     expect(fitToolRow(ROW, 262, OPTS).visible).toContain('files');
     // 152 (a 180px column): Fork + "..." + Lock, Expand, Close = 42 + 28 + 72 + 6 = 148; Changed (58 + 6) would need 212.
     const r3 = fitToolRow(ROW, 152, OPTS);
     expect(r3.visible).toEqual(['fork', 'lock', 'expand', 'close']);
-    expect(r3.inMore).toEqual(['changed', 'files', 'board', 'terminal', 'locate', 'popout']);
+    expect(r3.inMore).toEqual(['changed', 'files', 'board', 'terminal', 'minimize', 'popout']);
   });
 
   it('stops the chips at the first that does not fit: the order is the contract', () => {
@@ -118,12 +118,12 @@ describe('fitToolRow', () => {
     // The two window buttons do not fit either (one more button is 148 + 25 = 173).
     const r = fitToolRow(ROW, 150, OPTS);
     expect(r.visible).toEqual(['fork', 'lock', 'expand', 'close']);
-    expect(r.inMore).toEqual(['changed', 'files', 'board', 'terminal', 'locate', 'popout']);
+    expect(r.inMore).toEqual(['changed', 'files', 'board', 'terminal', 'minimize', 'popout']);
     expect(r.dropped).toEqual(['time']);
     // 200: Fork + "..." 70 + five buttons 122 + group gap 6 = 198: the buttons fill, the chips still stop at
     // Changed (Files, 44 wide, would need 198 + 64 + 50 and could not fit by skipping either).
     const r2 = fitToolRow(ROW, 200, OPTS);
-    expect(r2.visible).toEqual(['fork', 'locate', 'popout', 'lock', 'expand', 'close']);
+    expect(r2.visible).toEqual(['fork', 'minimize', 'popout', 'lock', 'expand', 'close']);
     expect(r2.inMore).toEqual(['changed', 'files', 'board', 'terminal']);
   });
 
@@ -133,7 +133,7 @@ describe('fitToolRow', () => {
     let checked = 0;
     for (let w = 150; w <= ROW_WIDTH; w++) {
       const r = fitToolRow(ROW, w, OPTS);
-      if (!r.inMore.some((id) => id === 'locate' || id === 'popout')) continue;
+      if (!r.inMore.some((id) => id === 'minimize' || id === 'popout')) continue;
       const spare = w - toolRowWidth(ROW.filter((i) => r.visible.includes(i.id)), true, OPTS);
       expect(spare, `${w}px: ${spare}px spare while a window button sits in the menu`).toBeLessThan(22 + OPTS.windowGap);
       checked++;
@@ -143,15 +143,15 @@ describe('fitToolRow', () => {
 
   it('fills the room a wide hidden chip leaves with the window buttons (the 2026-10-04 report)', () => {
     // A 90px chip after Terminal (the report's was the heavy pill, since removed). With all five chips on
-    // the row it is the first item that does not fit; the old strict prefix stopped there and left Locate,
+    // the row it is the first item that does not fit; the old strict prefix stopped there and left Minimize,
     // Open in new tab and Lock in the menu beside 60px of empty row.
     const wide: ToolRowItem = { id: 'wide', kind: 'chip', priority: 8, width: 90 };
     const row = ROW.filter((i) => i.id !== 'time');
     const withWide = [...row.slice(0, 5), wide, ...row.slice(5)];
-    // Five chips 248 + "..." 22 + 5 gaps 30 = 300; Lock, Expand, Close 72; group gap 6 → 378, plus Locate 25 → 403.
+    // Five chips 248 + "..." 22 + 5 gaps 30 = 300; Lock, Expand, Close 72; group gap 6 → 378, plus Minimize 25 → 403.
     const r = fitToolRow(withWide, 403, OPTS);
     expect(r.inMore).toEqual(['wide', 'popout']);
-    expect(r.visible).toEqual(['fork', 'changed', 'files', 'board', 'terminal', 'locate', 'lock', 'expand', 'close']);
+    expect(r.visible).toEqual(['fork', 'changed', 'files', 'board', 'terminal', 'minimize', 'lock', 'expand', 'close']);
     expect(fitToolRow(withWide, 428, OPTS).visible).toContain('popout');
     // The chips stay in order: the wide chip never jumps the queue, and Terminal is not evicted for it.
     for (let w = 150; w <= 540; w++) {
@@ -174,7 +174,7 @@ describe('fitToolRow', () => {
     expect(TOOL_ITEMS.lock!.kind).toBe('fixed');
     expect(TOOL_ITEMS.expand!.kind).toBe('fixed');
     expect(TOOL_ITEMS.close!.kind).toBe('fixed');
-    expect(Object.entries(TOOL_ITEMS).filter(([, v]) => v.kind === 'window').map(([k]) => k).sort()).toEqual(['locate', 'minimize', 'popout', 'watch']);
+    expect(Object.entries(TOOL_ITEMS).filter(([, v]) => v.kind === 'window').map(([k]) => k).sort()).toEqual(['minimize', 'popout']);
   });
 
   it('keeps the top chip even where it does not fit', () => {
@@ -199,11 +199,11 @@ describe('fitToolRow', () => {
     }
     // Where the row has no room for it, Plan waits in the menu, first in line after the host chips.
     const narrow = fitToolRow(withPlan, 285, OPTS);
-    expect(narrow.inMore).toEqual(['board', 'terminal', 'plan', 'locate', 'popout']);
+    expect(narrow.inMore).toEqual(['board', 'terminal', 'plan', 'minimize', 'popout']);
   });
 
   it('assumes a 24px button, not a chip, for a window button that has never been on screen', () => {
-    // A panel drawn narrow from its first frame never shows Locate, Open in new tab, Lock, Expand or
+    // A panel drawn narrow from its first frame never shows Minimize, Open in new tab, Lock, Expand or
     // Close to be measured. 2026-10-04 they were priced like chips (44 each), so a 70px gap sat beside
     // a "..." menu that held three of them. Fork..Board 190 + 3 gaps 18 = 208; 5 buttons 120 + 4 gaps
     // 12 = 132; group gap 6 → 346 (446 at 44px each).
@@ -240,7 +240,7 @@ describe('fitToolRow', () => {
     for (let w = 499; w >= 60; w--) {
       const now = fitToolRow(ROW, w, OPTS).visible;
       for (const id of shownChips(now)) expect(previous.includes(id), `${id} came back at ${w}px`).toBe(true);
-      for (const id of ['locate', 'popout']) {
+      for (const id of ['minimize', 'popout']) {
         if (now.includes(id) && !previous.includes(id)) {
           expect(shownChips(now).length, `${id} came back at ${w}px with no chip gone`).toBeLessThan(shownChips(previous).length);
         }
@@ -266,8 +266,25 @@ describe('a session fact the user pinned to the tool row', () => {
     // The first chip to go is the slot, ahead of Terminal; Terminal follows only after it.
     const order: string[] = [];
     for (let w = ROW_WIDTH + 76; w >= 100; w--) {
-      for (const id of fitToolRow(row, w, OPTS).inMore) if (!order.includes(id) && id !== 'locate' && id !== 'popout') order.push(id);
+      for (const id of fitToolRow(row, w, OPTS).inMore) if (!order.includes(id) && id !== 'minimize' && id !== 'popout') order.push(id);
     }
     expect(order.slice(0, 2)).toEqual([slot.id, 'terminal']);
+  });
+});
+
+describe('Watch and Locate are kebab rows, not header buttons (2026-11-09, the user: "this 2 put iot in the drop down")', () => {
+  it('no header item, no header button, and the kebab draws both by name', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const src = (f: string) => fs.readFileSync(path.join(__dirname, '../../web/src/components', f), 'utf8');
+    expect(Object.keys(TOOL_ITEMS)).not.toContain('locate');
+    expect(Object.keys(TOOL_ITEMS)).not.toContain('watch');
+    const panel = src('sessions/SessionPanel.tsx');
+    expect(panel).not.toMatch(/data-header-id="(locate|watch)"/);
+    expect(panel).not.toContain('session-panel-locate');
+    expect(panel).not.toContain('session-panel-watch');
+    // Locate: a top-level row of the session kebab; Watch: the task's row of every task menu.
+    expect(src('sessions/SessionMenuOpen.tsx')).toMatch(/\{p\.locate && <Row [^\n]*testId="session-menu-locate"/);
+    expect(src('tasks/TaskMenuRows.tsx')).toContain('<WatchMenuItem task={task}');
   });
 });

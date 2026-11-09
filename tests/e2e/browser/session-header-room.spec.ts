@@ -29,7 +29,7 @@ test.use({ viewport: { width: 1280, height: 800 } })
 
 /** The order chips come back as the row widens; the movable window buttons fill whatever room the chips leave. */
 const CHIP_ORDER = ['plan', 'fork', 'changed', 'files', 'terminal', 'board']
-const WINDOW_BUTTONS = ['locate', 'popout']
+const WINDOW_BUTTONS = ['popout']
 const ALWAYS_ON_THE_ROW = ['lock', 'expand', 'close']
 
 /** A fresh page per call: the panel is drawn at `width` from its first frame. */
@@ -60,9 +60,9 @@ async function openAtWidth(context: BrowserContext, width: number | null): Promi
   const panel = page.locator(`.main-page-session-column .session-panel[data-session-id="${CTRL_SESSION}"]`)
   await expect(panel).toBeVisible({ timeout: 90_000 })
   await expect(panel.locator('.session-meta-row-2 [data-header-id="close"]')).toBeVisible({ timeout: 20_000 })
-  // Locate is on the row from the first frame and acts once the session's task has loaded; a sweep
+  // Fork is on the row from the first frame and acts once the session's task has loaded; a sweep
   // that reads the row before that would measure a row still waiting for its record.
-  await expect(panel.locator('.session-meta-row-2 [data-header-id="locate"]:enabled')).toBeAttached({ timeout: 30_000 })
+  await expect(panel.locator('.session-meta-row-2 [data-header-id="fork"] button:enabled')).toBeAttached({ timeout: 30_000 })
   return { page, panel }
 }
 

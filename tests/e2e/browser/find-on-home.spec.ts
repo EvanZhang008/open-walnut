@@ -9,6 +9,7 @@
  * column; that half is graded in mail-ask-drawer.spec.ts (S4-11).
  */
 import { test, expect, type Page } from '@playwright/test'
+import { kebabRow } from './session-kebab-helpers'
 
 const NOTE = 'FindOnHome/Locate Note.md'
 
@@ -52,9 +53,9 @@ test('a Notes session panel finds its task on Home and opens the session in a co
 
   const panel = page.locator('.notes-chat-pane .session-panel')
   await expect(panel).toBeVisible({ timeout: 30_000 })
-  const locate = panel.getByTestId('session-panel-locate')
-  await expect(locate).toBeVisible({ timeout: 30_000 })
-  await expect(locate).toHaveAttribute('aria-label', 'Find on Home')
+  // Locate is a row of the panel's ⋮ menu; off Home it reads Find on Home.
+  const locate = await kebabRow(panel, 'session-menu-locate')
+  await expect(locate).toHaveText('Find on Home')
   const sessionId = await panel.getAttribute('data-session-id')
   expect(sessionId).toBeTruthy()
   await locate.click()
