@@ -206,7 +206,11 @@ if [ -z "$runner" ]; then
   # The ref goes however the hook ends: a signal exits through the EXIT trap too (a land stopped
   # mid-gate left its branch on GitHub, 2026-11-07).
   trap 'git push -q --no-verify "$remote_url" ":$ref" >/dev/null 2>&1 || true; rm -f "$errf"' EXIT
-  trap 'exit 130' INT TERM HUP
+  # A signal also ends the poll's sleep: left running, it would hold this hook's output open for
+  # up to a poll, so whoever reads that output (a land, a test) would wait as long (GitHub's runner,
+  # 2026-11-09: 30 s after the TERM).
+  poll_pid=
+  trap '[ -z "$poll_pid" ] || kill "$poll_pid" 2>/dev/null; exit 130' INT TERM HUP
   # A dispatch runs main's copy of the gate workflow, so a commit that changes it runs its own
   # copy on the gate branch (a new tier would otherwise never report, and the push never pass).
   mode=dispatch
@@ -263,7 +267,8 @@ if [ -z "$runner" ]; then
     [ $fails -lt 10 ] || blocked "GitHub did not answer the test gate 10 times in a row ($(tail -1 "$errf")), so nothing was judged."
     [ "$(date +%s)" -lt "$deadline" ] || break
     # In the background, so a signal ends the wait at once (bash runs a trap only between commands).
-    sleep "${WALNUT_PUSH_GATE_POLL:-30}" & wait $!
+    sleep "${WALNUT_PUSH_GATE_POLL:-30}" </dev/null >/dev/null 2>&1 & poll_pid=$!
+    wait "$poll_pid"; poll_pid=
   done
   printf '%s' "$statuses" | jq -r '.[] | select(.context != "walnut/push-gate") | "  \(.state)  \(.context | sub("^walnut/push-gate "; ""))  \(.description // "")"'
   [ "$state" = success ] && { echo "✓ Test gate passed."; passed_files "https://github.com/$repo/actions/runs/$run"; exit 0; }
