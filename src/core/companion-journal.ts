@@ -24,7 +24,8 @@
  * its bytes as a blob: companion-note-attachments.ts), 4d `conversation-edit` (a chat
  * made, renamed, pinned or deleted here: companion-conversations.ts), `inbox-reply` (the human's
  * reply to a letter, or the option picked on it, while the Mac was away: replica-state.ts
- * shows it at once, offline-merge/apply-inbox-reply.ts delivers it); the other queues are unchanged until their slice. A record carries no device actor
+ * shows it at once, offline-merge/apply-inbox-reply.ts delivers it), `inbox-reply-pictures`
+ * (the same with pictures, their bytes as blobs); the other queues are unchanged until their slice. A record carries no device actor
  * yet: the companion's pairing ids are not always the Mac's, and the Mac drops a
  * record whose device it does not know.
  *
@@ -318,10 +319,24 @@ export function journalInboxState(input: { letterId: string; field: 'read' | 'pi
   return r
 }
 
+/**
+ * A picture sent with a human turn: its file name in this box's images folder (the name the
+ * Mac saves it under too, so the turn names the same file on both) and its bytes.
+ */
+export interface InboxReplyPicture { name: string; bytes: Buffer }
+
 /** A human turn on a letter, as the companion takes it while the Mac is away (`inbox-reply`). */
 export type InboxReplyInput =
-  | { letterId: string; op: 'reply'; text: string; clientId: string; madeAt: number }
-  | { letterId: string; op: 'answer'; actionId: string; freeText?: string; madeAt: number }
+  | { letterId: string; op: 'reply'; text: string; clientId: string; madeAt: number; pictures?: InboxReplyPicture[] }
+  | { letterId: string; op: 'answer'; actionId: string; freeText?: string; madeAt: number; pictures?: InboxReplyPicture[] }
+
+/** The kinds of a human turn on a letter: words only, or words with pictures (a newer Mac). */
+export const INBOX_TURN_KINDS: readonly string[] = ['inbox-reply', 'inbox-reply-pictures']
+
+/** The journal kind a turn needs: a Mac that drains `inbox-reply` only would drop its pictures. */
+export function inboxTurnKind(input: { pictures?: readonly unknown[] }): 'inbox-reply' | 'inbox-reply-pictures' {
+  return input.pictures?.length ? 'inbox-reply-pictures' : 'inbox-reply'
+}
 
 const shortSha = (text: string): string => crypto.createHash('sha256').update(text, 'utf8').digest('hex').slice(0, 24)
 
@@ -345,17 +360,26 @@ export function inboxReplyOpId(input: InboxReplyInput): string {
  * same action is the first record (`duplicate`, inboxReplyOpId). The Mac records the turn
  * and delivers it to the letter's session (offline-merge/apply-inbox-reply.ts). Null when
  * the Mac does not drain the kind: the caller keeps its 503 (an older Mac never gets a
- * record it cannot take). The checks (the letter in this box's copy, no pictures, the
- * human's own turn) are the caller's (web/routes/human-inbox-replica.ts).
+ * record it cannot take). The checks (the letter in this box's copy, the human's own turn)
+ * are the caller's (web/routes/human-inbox-replica.ts).
+ *
+ * With pictures the kind is `inbox-reply-pictures` (a Mac that drains only `inbox-reply`
+ * would deliver the words and drop the pictures): `images` names them in order, each one's
+ * bytes a blob named by `image<i>` (appendBlobs: the bodies stay while the record waits).
  */
 export function journalInboxReply(input: InboxReplyInput): AppendResult | null {
-  if (!macDrains('inbox-reply')) return null
+  if (!macDrains(inboxTurnKind(input))) return null
+  const pictures = input.pictures ?? []
   const body = input.op === 'reply'
-    ? { kind: 'inbox-reply', letterId: input.letterId, op: 'reply', text: input.text, clientId: input.clientId, madeAt: input.madeAt }
-    : { kind: 'inbox-reply', letterId: input.letterId, op: 'answer', actionId: input.actionId, ...(input.freeText ? { freeText: input.freeText } : {}), madeAt: input.madeAt }
-  const r = journalOf().append(COMPANION_JOURNAL_HOME, body, { opId: inboxReplyOpId(input), limit: true, coalesce: false })
+    ? { letterId: input.letterId, op: 'reply', text: input.text, clientId: input.clientId, madeAt: input.madeAt }
+    : { letterId: input.letterId, op: 'answer', actionId: input.actionId, ...(input.freeText ? { freeText: input.freeText } : {}), madeAt: input.madeAt }
+  const opts = { opId: inboxReplyOpId(input), limit: true, coalesce: false }
+  const r = pictures.length
+    ? journalOf().appendBlobs(COMPANION_JOURNAL_HOME, { kind: 'inbox-reply-pictures', ...body, images: pictures.map((p) => p.name) },
+      Object.fromEntries(pictures.map((p, i) => [`image${i}`, p.bytes])), opts)
+    : journalOf().append(COMPANION_JOURNAL_HOME, { kind: 'inbox-reply', ...body }, opts)
   if (r.ok) {
-    log.notif.info('companion journal: saved a reply to a letter for the Mac', { letterId: input.letterId, op: input.op, opId: r.opId, seq: r.seq, ...(r.duplicate ? { duplicate: true } : {}) })
+    log.notif.info('companion journal: saved a reply to a letter for the Mac', { letterId: input.letterId, op: input.op, opId: r.opId, seq: r.seq, ...(pictures.length ? { pictures: pictures.length } : {}), ...(r.duplicate ? { duplicate: true } : {}) })
     for (const fn of listeners) { try { fn() } catch { /* a listener never loses the record */ } }
   } else {
     log.notif.error('companion journal: a reply to a letter was refused', { letterId: input.letterId, op: input.op, code: r.code, why: r.why, error: r.message })
@@ -516,7 +540,7 @@ export async function ackCompanionJournal(seqs: unknown, macNow?: unknown): Prom
   }
   // A reply to a letter the same way: shown on the box's inbox until its copy holds the turn
   // (replica-state.ts), so it never blinks out between the ack and the next copy round.
-  const replies = acked.filter((x) => x.kind === 'inbox-reply')
+  const replies = acked.filter((x) => INBOX_TURN_KINDS.includes(x.kind))
   if (replies.length) {
     const { noteJournalTurnsAcked } = await import('./human-inbox/replica-state.js')
     await noteJournalTurnsAcked(replies)

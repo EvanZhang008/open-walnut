@@ -8,7 +8,9 @@
  * routes keep a person's write and which do not, so the gap was found by the user.
  *
  * The route files below are read for their write routes, and each must have a row here:
- *   journal   kept in the companion's journal under `kind`, which the Mac applies
+ *   journal   kept in the companion's journal under `kind`, which the Mac applies; a route
+ *             that takes pictures names the kind they go under too (`pictures`): a turn's
+ *             words never go to the Mac without the pictures sent with them
  *   queue     kept in another store on the companion that the Mac's return drains
  *   local     this box's own state, nothing for the Mac
  *   agent     written by sessions, not by a person on the companion
@@ -22,7 +24,7 @@ import path from 'node:path'
 import { APPLIED_V2_KINDS } from '../../src/core/offline-merge/apply-v2.js'
 
 type Row =
-  | { offline: 'journal'; kind: string }
+  | { offline: 'journal'; kind: string; pictures?: string }
   | { offline: 'queue'; store: string }
   | { offline: 'local' | 'agent' }
   | { offline: 'leader'; why: string }
@@ -44,8 +46,8 @@ const TABLE: Record<string, Row> = {
   'POST /human-inbox/:id/read': { offline: 'journal', kind: 'inbox-state' },
   'POST /human-inbox/:id/pin': { offline: 'journal', kind: 'inbox-state' },
   'POST /human-inbox/:id/archive': { offline: 'journal', kind: 'inbox-state' },
-  'POST /human-inbox/:id/answer': { offline: 'journal', kind: 'inbox-reply' },
-  'POST /human-inbox/:id/human-reply': { offline: 'journal', kind: 'inbox-reply' },
+  'POST /human-inbox/:id/answer': { offline: 'journal', kind: 'inbox-reply', pictures: 'inbox-reply-pictures' },
+  'POST /human-inbox/:id/human-reply': { offline: 'journal', kind: 'inbox-reply', pictures: 'inbox-reply-pictures' },
   'POST ${ROOT}/prepare': { offline: 'leader', why: 'a mail item acts on an account only the Mac signs in to' },
   'POST ${ROOT}/execute': { offline: 'leader', why: 'a mail item acts on an account only the Mac signs in to' },
   // Org threads: only the Mac keeps them; the companion holds no copy to write to.
@@ -94,17 +96,28 @@ const TABLE: Record<string, Row> = {
   'DELETE /notes/*path': { offline: 'journal', kind: 'note' },
 }
 
-/** `METHOD /path` for every write route the files register on a router. */
-function writeRoutes(): string[] {
-  const out: string[] = []
+const ROUTE_RE = /\b[A-Za-z0-9]+[Rr]outer\.(get|post|put|patch|delete)\(\s*(?:'([^']+)'|`([^`]+)`)/g
+
+/** `METHOD /path` for every write route the files register on a router, with its handler's text. */
+function writeRouteTexts(): Map<string, string> {
+  const out = new Map<string, string>()
   for (const name of FILES) {
     const text = fs.readFileSync(path.join(ROUTES_DIR, name), 'utf8')
-    for (const m of text.matchAll(/\b[A-Za-z0-9]+[Rr]outer\.(post|put|patch|delete)\(\s*(?:'([^']+)'|`([^`]+)`)/g)) {
-      out.push(`${m[1].toUpperCase()} ${m[2] ?? m[3]}`)
-    }
+    const found = [...text.matchAll(ROUTE_RE)]
+    found.forEach((m, i) => {
+      if (m[1] === 'get') return
+      // The handler runs to the next route the file registers.
+      out.set(`${m[1].toUpperCase()} ${m[2] ?? m[3]}`, text.slice(m.index, found[i + 1]?.index ?? text.length))
+    })
   }
   return out
 }
+function writeRoutes(): string[] {
+  return [...writeRouteTexts().keys()]
+}
+
+/** A handler that takes the person's pictures (`images` inline or `imageRefs` uploaded). */
+const TAKES_PICTURES = /\bimageRefs\b|withInlinePictures\(|savePicturesOnce\(|saveAnswerPictures\(/
 
 describe('companion person writes', () => {
   const routes = writeRoutes()
@@ -130,6 +143,20 @@ describe('companion person writes', () => {
       // A note record is built by the journal core's appendNote (offline-journal-core.ts).
       const writes = journal.includes(`kind: '${row.kind}'`) || (row.kind === 'note' && journal.includes('.appendNote('))
       expect(writes, `${route}: the companion journal writes no ${row.kind} record`).toBe(true)
+    }
+  })
+
+  it('a journal route that takes pictures names their kind, applied on the Mac and written by the companion', () => {
+    const journal = fs.readFileSync(path.resolve(__dirname, '../../src/core/companion-journal.ts'), 'utf8')
+    const texts = writeRouteTexts()
+    const takers = [...texts].filter(([, t]) => TAKES_PICTURES.test(t)).map(([r]) => r)
+    expect(takers).toContain('POST /human-inbox/:id/human-reply')
+    for (const route of takers) {
+      const row = TABLE[route]
+      if (row?.offline !== 'journal') continue
+      expect(row.pictures, `${route} takes pictures: name the journal kind they go under`).toBeTruthy()
+      expect((APPLIED_V2_KINDS as readonly string[]).includes(row.pictures!), `${route}: ${row.pictures} is not applied on the Mac`).toBe(true)
+      expect(journal.includes(`kind: '${row.pictures}'`), `${route}: the companion journal writes no ${row.pictures} record`).toBe(true)
     }
   })
 

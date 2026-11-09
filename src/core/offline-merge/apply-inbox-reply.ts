@@ -21,8 +21,18 @@
  * (deliverPendingAnswer), and nothing is answered twice. A refusal the store makes (the letter is
  * gone, the option unknown, already answered otherwise) is a RefusedWrite: the drain
  * letters it, so the user learns the words did not arrive. Anything else is retried.
+ *
+ * `inbox-reply-pictures` is the same turn with pictures: `images` names them in order (the
+ * companion's file names), each one's bytes a blob named by `image<i>`, fetched through the
+ * journal door and saved in the images folder under the same name (never over another
+ * file: a different picture already there gets the bytes beside it under a name carrying
+ * their hash, apply-note-attachment.ts place), so the turn names the same picture on both
+ * boxes and a redrain writes nothing more. A picture whose bytes the companion no longer
+ * holds is refused with the turn (a RefusedWrite, lettered): the words never arrive
+ * without the pictures sent with them.
  */
 
+import path from 'node:path';
 import { log } from '../../logging/index.js';
 import { RefusedWrite } from './patch-check.js';
 import type { V2Context, V2Record } from './apply-v2.js';
@@ -38,13 +48,43 @@ function excerpt(v: unknown): string {
   return s.length > 60 ? `${s.slice(0, 60)}...` : s;
 }
 
+/** The record's pictures saved here, in order: their file names in the images folder. */
+async function savedPictures(ctx: V2Context, record: V2Record, what: string): Promise<string[]> {
+  if (record.kind !== 'inbox-reply-pictures') return [];
+  const { cleanPictureNames, MAX_ANSWER_PICTURES } = await import('../answer-pictures.js');
+  const listed = Array.isArray(record.images) ? record.images : [];
+  const names = cleanPictureNames(listed);
+  if (names.length === 0 || names.length !== Math.min(listed.length, MAX_ANSWER_PICTURES)) {
+    throw new RefusedWrite(`${what}: its pictures could not be read`);
+  }
+  if (!ctx.conn) throw new Error('a reply with pictures needs its host link for the bytes');
+  const [{ fetchOfflineBlob }, { place }, { IMAGES_DIR }] = await Promise.all([
+    import('./blob.js'), import('./apply-note-attachment.js'), import('../../constants.js'),
+  ]);
+  const out: string[] = [];
+  for (let i = 0; i < names.length; i++) {
+    const sha = record[`image${i}`];
+    if (typeof sha !== 'string' || !sha) throw new RefusedWrite(`${what}: a picture came without its bytes`);
+    let bytes: Buffer;
+    try {
+      bytes = await fetchOfflineBlob(ctx.conn, sha);
+    } catch (err) {
+      if ((err as { code?: unknown }).code === 'not_found') throw new RefusedWrite(`${what}: a picture's bytes are gone from the companion`);
+      throw err;
+    }
+    const at = await place(path.join(IMAGES_DIR, names[i]), bytes);
+    out.push(path.basename(at.at));
+  }
+  return out;
+}
+
 export async function applyInboxReply(ctx: V2Context, record: V2Record): Promise<void> {
   const { letterId, op, text, clientId, actionId, freeText, madeAt } = record as {
     letterId?: unknown; op?: unknown; text?: unknown; clientId?: unknown; actionId?: unknown; freeText?: unknown; madeAt?: unknown;
   };
   const what = op === 'answer'
     ? `your answer "${excerpt(actionId)}"${excerpt(freeText) ? ` ("${excerpt(freeText)}")` : ''} to a letter was not recorded`
-    : `your reply "${excerpt(text)}" to a letter was not delivered`;
+    : `your reply ${excerpt(text) ? `"${excerpt(text)}"` : 'with pictures'} to a letter was not delivered`;
   const { LETTER_ID_RE, CLIENT_ID_RE } = await import('../human-inbox/normalize.js');
   const readable = typeof letterId === 'string' && LETTER_ID_RE.test(letterId) && (op === 'reply'
     ? typeof text === 'string' && typeof clientId === 'string' && CLIENT_ID_RE.test(clientId)
@@ -55,17 +95,21 @@ export async function applyInboxReply(ctx: V2Context, record: V2Record): Promise
   const { humanReplyAndDeliver, answerLetterAndDeliver, deliverPendingAnswer, LetterError } = await import('../human-inbox/letter-ops.js');
   const { getLetter, repeatsRecordedTurn, boundThreadText } = await import('../human-inbox/store.js');
   try {
+    // A letter that is gone (the store refuses the turn) gets no pictures saved for nothing.
+    const letter = await getLetter(letterId as string, { deferBodies: true });
     if (op === 'reply') {
       const again = await repeatsRecordedTurn(letterId as string, { kind: 'reply', clientId });
-      const out = await humanReplyAndDeliver(letterId as string, { text: text as string, clientId: clientId as string, flagsAt: since });
+      // A turn already on its letter keeps the pictures it has: nothing is saved twice.
+      const images = again || !letter ? [] : await savedPictures(ctx, record, what);
+      const out = await humanReplyAndDeliver(letterId as string, { text: text as string, clientId: clientId as string, flagsAt: since, ...(images.length ? { images } : {}) });
       log.notif.info('offline handover: a reply written on the companion is on its letter', {
-        host: ctx.hostKey, seq: record.seq, opId: record.opId, letterId, delivery: out.delivery.status, ...(again ? { duplicate: true } : {}),
+        host: ctx.hostKey, seq: record.seq, opId: record.opId, letterId, delivery: out.delivery.status, ...(images.length ? { pictures: images.length } : {}), ...(again ? { duplicate: true } : {}),
       });
       if (again) ctx.result.skipped++; else ctx.result.replayed++;
       return;
     }
     const note = typeof freeText === 'string' ? freeText.trim() : '';
-    const answered = (await getLetter(letterId as string, { deferBodies: true }))?.answered;
+    const answered = letter?.answered;
     // The store keeps the note bounded: compare it the way it was kept.
     if (answered && !answered.by && answered.actionId === actionId && (answered.freeText ?? '') === boundThreadText(note)
       && answered.at >= since - ANSWER_CLOCK_SLACK_MS) {
@@ -76,9 +120,10 @@ export async function applyInboxReply(ctx: V2Context, record: V2Record): Promise
       ctx.result.skipped++;
       return;
     }
-    const out = await answerLetterAndDeliver(letterId as string, { actionId: actionId as string, ...(note ? { freeText: note } : {}), flagsAt: since }, 'phone');
+    const images = letter ? await savedPictures(ctx, record, what) : [];
+    const out = await answerLetterAndDeliver(letterId as string, { actionId: actionId as string, ...(note ? { freeText: note } : {}), flagsAt: since, ...(images.length ? { images } : {}) }, 'phone');
     log.notif.info('offline handover: an answer written on the companion is on its letter', {
-      host: ctx.hostKey, seq: record.seq, opId: record.opId, letterId, delivery: out.delivery.status,
+      host: ctx.hostKey, seq: record.seq, opId: record.opId, letterId, delivery: out.delivery.status, ...(images.length ? { pictures: images.length } : {}),
     });
     ctx.result.replayed++;
   } catch (err) {

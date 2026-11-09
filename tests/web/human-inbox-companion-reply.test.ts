@@ -16,8 +16,12 @@
  *    for at most ten minutes;
  *  - a relay that may have reached the Mac (a timeout after the send) journals a reply (the
  *    Mac keeps one turn per clientId) but not an answer;
- *  - kept as before: a Mac that does not drain the kind (503), pictures (503, a known gap),
- *    a session answering for the user (503), and every answer the Mac itself gives.
+ *  - pictures (inline from the phone, or uploaded here) go with the turn once the Mac drains
+ *    `inbox-reply-pictures`: saved in this box's images folder, shown on the turn at once,
+ *    their bytes journal blobs with the words; a Mac that drains only `inbox-reply`, or a
+ *    picture this box cannot keep, keeps the 503 (the words never go without them);
+ *  - kept as before: a Mac that does not drain the kind (503), a session answering for the
+ *    user (503), and every answer the Mac itself gives.
  *
  * Real express app, real router, real journal, real copy on disk. The ONLY mock is the
  * bridge hop (tryControlRelay / callPrimaryControl): this box has no Mac.
@@ -65,10 +69,10 @@ vi.mock('../../src/web/routes/v1-control-relay.js', async (importOriginal) => {
   }
 })
 
-import { WALNUT_HOME, HUMAN_INBOX_QUEUE_DIR } from '../../src/constants.js'
+import { WALNUT_HOME, HUMAN_INBOX_QUEUE_DIR, IMAGES_DIR } from '../../src/constants.js'
 import { humanInboxPaths, sendLetter } from '../../src/core/human-inbox/store.js'
 import {
-  _resetCompanionJournalForTesting, ackCompanionJournal, companionJournalDir, companionJournalRecords, drainCompanionJournal,
+  _resetCompanionJournalForTesting, ackCompanionJournal, companionJournalBlobBody, companionJournalDir, companionJournalRecords, drainCompanionJournal,
 } from '../../src/core/companion-journal.js'
 import { humanInboxV1Router } from '../../src/web/routes/human-inbox-v1.js'
 import type { LetterRecord, LetterSender, ThreadEntry } from '../../src/core/human-inbox/types.js'
@@ -101,9 +105,12 @@ beforeEach(async () => {
   mac.mode = 'offline'
   mac.calls.length = 0
   mac.answer = null
-  // The Mac drained once and named the kind (its last `offline.drain`).
-  await drainCompanionJournal(['inbox-state', 'inbox-reply'])
+  fs.rmSync(IMAGES_DIR, { recursive: true, force: true })
+  // The Mac drained once and named the kinds (its last `offline.drain`).
+  await drainCompanionJournal(MAC_KINDS)
 })
+
+const MAC_KINDS = ['inbox-state', 'inbox-reply', 'inbox-reply-pictures']
 
 async function api(method: string, p: string, body?: unknown): Promise<{ status: number; json: Record<string, any> }> {
   const res = await fetch(base + p, {
@@ -131,10 +138,10 @@ function syncCopy(patch: (letters: LetterRecord[]) => void): void {
 
 /** The Mac drains the journal (a record is handed out first) and acks `seqs`. */
 async function macTakes(seqs: number[]) {
-  await drainCompanionJournal(['inbox-state', 'inbox-reply'])
+  await drainCompanionJournal(MAC_KINDS)
   return ackCompanionJournal(seqs, Date.now())
 }
-const replyRecords = () => companionJournalRecords().filter((r) => r.kind === 'inbox-reply')
+const replyRecords = () => companionJournalRecords().filter((r) => r.kind === 'inbox-reply' || r.kind === 'inbox-reply-pictures')
 const humanTurns = (letter: { thread: ThreadEntry[] }) => letter.thread.filter((t) => t.from === 'human')
 
 describe('a reply while the Mac is away', () => {
@@ -291,11 +298,22 @@ describe('kept as before', () => {
     expect(replyRecords()).toEqual([])
   })
 
-  it('pictures still need the Mac (a known gap): 503 and no record', async () => {
+  it('a Mac that drains only inbox-reply: a turn with pictures keeps its 503 and no record', async () => {
+    await drainCompanionJournal(['inbox-state', 'inbox-reply'])
     const id = await seedLetter()
-    const inline = [{ data: Buffer.from('not really a png').toString('base64'), mediaType: 'image/png' }]
-    expect((await api('POST', `/human-inbox/${id}/human-reply`, { text: 'See this', clientId: 'ios-7', images: inline })).status).toBe(503)
-    expect((await api('POST', `/human-inbox/${id}/human-reply`, { text: 'See this', clientId: 'ios-8', imageRefs: ['img-1.png'] })).status).toBe(503)
+    expect((await api('POST', `/human-inbox/${id}/human-reply`, { text: 'See this', clientId: 'ios-7', images: [PNG] })).status).toBe(503)
+    expect((await api('POST', `/human-inbox/${id}/answer`, { actionId: 'a', images: [PNG] })).status).toBe(503)
+    expect(replyRecords()).toEqual([])
+    // The words alone still go.
+    expect((await api('POST', `/human-inbox/${id}/human-reply`, { text: 'See this', clientId: 'ios-7' })).status).toBe(202)
+  })
+
+  it('a picture this box cannot keep: 503 and no record (the words never go without it)', async () => {
+    const id = await seedLetter()
+    // An upload that is not on this box.
+    expect((await api('POST', `/human-inbox/${id}/human-reply`, { text: 'See this', clientId: 'ios-8', imageRefs: ['1700000000000-aaaaaaaaaaaa.png'] })).status).toBe(503)
+    // One good picture and one that is not a picture at all.
+    expect((await api('POST', `/human-inbox/${id}/human-reply`, { text: 'See this', clientId: 'ios-8', images: [PNG, { data: 'x', mediaType: 'text/plain' }] })).status).toBe(503)
     expect(replyRecords()).toEqual([])
   })
 
@@ -326,5 +344,87 @@ describe('kept as before', () => {
     expect(refused.status).toBe(409)
     expect(refused.json.error.message).toBe('Letter was already answered (a)')
     expect(replyRecords()).toEqual([])
+  })
+})
+
+/** A real 1x1 PNG, as the phone posts it inline. */
+const PNG_BYTES = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYPj/HwADAgH/hAh0WQAAAABJRU5ErkJggg==', 'base64')
+const PNG = { data: PNG_BYTES.toString('base64'), mediaType: 'image/png' }
+const RED_PNG = { data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC', mediaType: 'image/png' }
+
+describe('a reply with pictures while the Mac is away', () => {
+  it('inline pictures: saved here, shown on the turn, journaled with their bytes, once per clientId', async () => {
+    const id = await seedLetter()
+    const r = await api('POST', `/human-inbox/${id}/human-reply`, { text: 'Like this one', clientId: 'ios-p1', images: [PNG, RED_PNG] })
+    expect(r.status).toBe(202)
+    const turn = humanTurns(r.json.letter)[0]
+    expect(turn).toMatchObject({ text: 'Like this one', clientId: 'ios-p1', delivery: { status: 'pending' } })
+    expect(turn.images).toHaveLength(2)
+    // Each one a file in this box's images folder: the letter here shows it at once.
+    for (const name of turn.images!) expect(fs.existsSync(path.join(IMAGES_DIR, name))).toBe(true)
+    const recs = replyRecords()
+    expect(recs).toHaveLength(1)
+    expect(recs[0]).toMatchObject({ kind: 'inbox-reply-pictures', letterId: id, op: 'reply', text: 'Like this one', clientId: 'ios-p1', images: turn.images })
+    for (let i = 0; i < 2; i++) {
+      const body = companionJournalBlobBody(recs[0][`image${i}`])
+      expect(body?.equals(fs.readFileSync(path.join(IMAGES_DIR, turn.images![i])))).toBe(true)
+    }
+    // The phone resends its draft: the same turn, no second record.
+    const again = await api('POST', `/human-inbox/${id}/human-reply`, { text: 'Like this one', clientId: 'ios-p1', images: [PNG, RED_PNG] })
+    expect(again.status).toBe(202)
+    expect(humanTurns(again.json.letter)).toHaveLength(1)
+    expect(replyRecords()).toHaveLength(1)
+    // Its pictures are not saved a second time.
+    expect(fs.readdirSync(IMAGES_DIR).filter((n) => !n.startsWith('.') && fs.statSync(path.join(IMAGES_DIR, n)).isFile())).toHaveLength(2)
+    // Every read here shows the turn with its pictures.
+    const read = await api('GET', `/human-inbox/${id}`)
+    expect(humanTurns(read.json.letter)[0].images).toEqual(turn.images)
+  })
+
+  it('an upload made here, and a picture alone with no words', async () => {
+    const id = await seedLetter()
+    fs.mkdirSync(IMAGES_DIR, { recursive: true })
+    const name = '1700000000000-bbbbbbbbbbbb.png'
+    fs.writeFileSync(path.join(IMAGES_DIR, name), PNG_BYTES)
+    const r = await api('POST', `/human-inbox/${id}/human-reply`, { text: '', clientId: 'ios-p2', imageRefs: [{ filename: name }] })
+    expect(r.status).toBe(202)
+    expect(humanTurns(r.json.letter)[0]).toMatchObject({ text: '', images: [name] })
+    const [rec] = replyRecords()
+    expect(rec).toMatchObject({ kind: 'inbox-reply-pictures', text: '', images: [name] })
+    expect(companionJournalBlobBody(rec.image0)?.equals(PNG_BYTES)).toBe(true)
+  })
+
+  it('an answer with a picture: the option, its words and the picture on the turn', async () => {
+    const id = await seedLetter()
+    const r = await api('POST', `/human-inbox/${id}/answer`, { actionId: 'b', freeText: 'like this', images: [PNG] })
+    expect(r.status).toBe(202)
+    expect(r.json.letter.answered).toMatchObject({ actionId: 'b', freeText: 'like this' })
+    const turn = humanTurns(r.json.letter)[0]
+    expect(turn).toMatchObject({ text: 'Layout B: like this' })
+    expect(turn.images).toHaveLength(1)
+    expect(replyRecords()).toMatchObject([{ kind: 'inbox-reply-pictures', op: 'answer', actionId: 'b', freeText: 'like this', images: turn.images }])
+  })
+
+  it('pictures with an answer the letter already has (from the copy): the 503, nothing kept', async () => {
+    const id = await seedLetter()
+    syncCopy((letters) => { letters.find((l) => l.id === id)!.answered = { actionId: 'a', label: 'Layout A', at: Date.now() } })
+    expect((await api('POST', `/human-inbox/${id}/answer`, { actionId: 'a', images: [PNG] })).status).toBe(503)
+    expect(replyRecords()).toEqual([])
+    // The same answer with no pictures is the letter as it stands, as before.
+    expect((await api('POST', `/human-inbox/${id}/answer`, { actionId: 'a' })).status).toBe(202)
+  })
+
+  it('after the Mac takes it: still shown with its pictures until the copy holds the turn', async () => {
+    const id = await seedLetter()
+    const r = await api('POST', `/human-inbox/${id}/human-reply`, { text: 'This', clientId: 'ios-p3', images: [PNG] })
+    const images = humanTurns(r.json.letter)[0].images
+    const [rec] = replyRecords()
+    expect(await macTakes([rec.seq])).toMatchObject({ ok: true, remaining: 0 })
+    expect(humanTurns((await api('GET', `/human-inbox/${id}`)).json.letter)).toMatchObject([{ clientId: 'ios-p3', images }])
+    // The copy holds it (the Mac saved the picture under the same name): shown once, from the copy.
+    syncCopy((letters) => {
+      letters.find((l) => l.id === id)!.thread.push({ from: 'human', text: 'This', at: Date.now(), clientId: 'ios-p3', images, delivery: { status: 'delivered', at: Date.now() } } as ThreadEntry)
+    })
+    expect(humanTurns((await api('GET', `/human-inbox/${id}`)).json.letter)).toMatchObject([{ clientId: 'ios-p3', images }])
   })
 })

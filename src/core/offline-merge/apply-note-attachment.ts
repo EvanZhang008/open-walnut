@@ -55,8 +55,11 @@ async function placeNew(abs: string, bytes: Buffer): Promise<boolean> {
   }
 }
 
-/** Where the bytes are now: the path itself, or a name beside it; `copy` when not the path. */
-async function place(abs: string, bytes: Buffer): Promise<{ at: string; copy: boolean; wrote: boolean }> {
+/**
+ * Where the bytes are now: the path itself, or a name beside it; `copy` when not the path.
+ * A letter's pictures from the companion are placed the same way (apply-inbox-reply.ts).
+ */
+export async function place(abs: string, bytes: Buffer): Promise<{ at: string; copy: boolean; wrote: boolean }> {
   const ext = path.extname(abs);
   const stem = abs.slice(0, abs.length - ext.length);
   const tag = crypto.createHash('sha256').update(bytes).digest('hex').slice(0, 8);

@@ -39,6 +39,7 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
+import zlib from 'node:zlib'
 import { LiveProcs, realProcTable, type Owned } from '../helpers/live-procs.js'
 import { liveEnv, liveWallsAvailable } from '../helpers/live-isolation.js'
 import { BOOT_HEAD, BOOT_TAIL, blankServer, bootLiveServer, claudeLogOf, finishLive, guardLogOf, liveBase, prepareServer, resumeOnTerm, type LiveServer } from '../helpers/live-run.js'
@@ -54,6 +55,22 @@ const SILENT_MS = T
 // LIVE_VIDEO_DIR=<dir>: the servers serve the built web app (bun run build first), and the
 // inbox steps are also done in a real WebKit page on each box, recorded there as video.
 const VIDEO_DIR = process.env.LIVE_VIDEO_DIR ?? ''
+
+/** A solid-colour RGB PNG of w x h (CRC-32 by hand: zlib.crc32 is not in every runtime). */
+function solidPng(w: number, h: number, rgb: [number, number, number]): Buffer {
+  const crcTable = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0 })
+  const crc = (b: Buffer): number => { let c = 0xffffffff; for (const x of b) c = crcTable[(c ^ x) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0 }
+  const chunk = (type: string, data: Buffer): Buffer => {
+    const t = Buffer.concat([Buffer.from(type, 'ascii'), data])
+    const len = Buffer.alloc(4); len.writeUInt32BE(data.length)
+    const sum = Buffer.alloc(4); sum.writeUInt32BE(crc(t))
+    return Buffer.concat([len, t, sum])
+  }
+  const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr.set([8, 2, 0, 0, 0], 8)
+  const row = Buffer.concat([Buffer.from([0]), Buffer.concat(Array.from({ length: w }, () => Buffer.from(rgb)))])
+  const raw = Buffer.concat(Array.from({ length: h }, () => row))
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))])
+}
 
 const sha256 = (t: string): string => crypto.createHash('sha256').update(t, 'utf-8').digest('hex')
 const newToken = (): string => crypto.randomBytes(16).toString('hex')
@@ -357,6 +374,7 @@ describe.skipIf(!liveWallsAvailable())('one request path on the companion (real 
   // companion could only relay and answered 503, and the reply reached the Mac 1h45m later.
   // Now it is kept in the companion's journal (`inbox-reply`) and the Mac drains it once.
   let letterId = ''
+  let pictureName = ''
   const REPLY = 'Is the questionnaire required to keep the policy?'
   const REPLY_ID = 'rp-live-away-reply-1'
   const fileHolds = (dir: string, needle: string): boolean => {
@@ -370,6 +388,16 @@ describe.skipIf(!liveWallsAvailable())('one request path on the companion (real 
     return false
   }
   const VIDEO_REPLY = 'Typed on the companion while the Mac sleeps'
+  const PICTURE_REPLY = 'This picture, from the phone while the Mac sleeps'
+  const PICTURE_ID = 'rp-live-away-picture-1'
+  const VIDEO_PICTURE_REPLY = 'With a picture, on the companion while the Mac sleeps'
+  const PICTURE = solidPng(240, 140, [0x2e, 0x7d, 0x32])
+  const VIDEO_PICTURE = solidPng(240, 140, [0xc6, 0x28, 0x28])
+  /** A picture's bytes as a box serves them (GET /api/images/<name>), or null. */
+  async function servedPicture(port: number, token: string | null, name: string): Promise<Buffer | null> {
+    const res = await fetch(`http://127.0.0.1:${port}/api/images/${encodeURIComponent(name)}`, { headers: token ? { Authorization: `Bearer ${token}` } : {}, signal: AbortSignal.timeout(CALL_MS) })
+    return res.status === 200 ? Buffer.from(await res.arrayBuffer()) : null
+  }
   /** One recorded WebKit page on a box: the letter open in the inbox, then `steps`. */
   async function filmLetter(port: number, token: string | null, clip: string, steps: (reader: import('@playwright/test').Locator) => Promise<void>): Promise<void> {
     const { webkit, expect: see } = await import('@playwright/test')
@@ -474,6 +502,19 @@ describe.skipIf(!liveWallsAvailable())('one request path on the companion (real 
     const read = await phone(`/api/v1/human-inbox/${encodeURIComponent(letterId)}`)
     expect(read.status).toBe(200)
     expect(turns(read.json.letter)).toHaveLength(1)
+    // A reply with a picture, as the phone posts it (inline): kept with its picture, shown at once.
+    await waitFor(() => drainsKnown().includes('inbox-reply-pictures'), 30_000, 'the Mac to drain inbox-reply-pictures records')
+    const withPicture = JSON.stringify({ text: PICTURE_REPLY, clientId: PICTURE_ID, images: [{ data: PICTURE.toString('base64'), mediaType: 'image/png' }] })
+    const p = await phone(`/api/v1/human-inbox/${encodeURIComponent(letterId)}/human-reply`, { method: 'POST', body: withPicture })
+    expect(p.status, JSON.stringify(p.json)).toBe(202)
+    const [pictureTurn] = (p.json.letter?.thread ?? []).filter((t: Record<string, any>) => t.clientId === PICTURE_ID)
+    expect(pictureTurn).toMatchObject({ text: PICTURE_REPLY, delivery: { status: 'pending' } })
+    expect(pictureTurn.images).toHaveLength(1)
+    // The companion serves the picture itself while the Mac sleeps.
+    expect(await servedPicture(companion.port, tokens.phone, pictureTurn.images[0])).not.toBeNull()
+    pictureName = pictureTurn.images[0]
+    expect((await phone(`/api/v1/human-inbox/${encodeURIComponent(letterId)}/human-reply`, { method: 'POST', body: withPicture })).status).toBe(202)
+    expect(journalRecords().filter((x) => x.kind === 'inbox-reply-pictures' && x.letterId === letterId && x.clientId === PICTURE_ID)).toMatchObject([{ images: [pictureName] }])
     if (!VIDEO_DIR) return
     // The same, by hand in the companion's web app: the reply typed and sent, shown at once, no error.
     await filmLetter(companion.port, tokens.phone, '1-companion-mac-asleep', async (reader) => {
@@ -485,8 +526,19 @@ describe.skipIf(!liveWallsAvailable())('one request path on the companion (real 
       await see(reader.locator('.hib-thread')).toContainText(VIDEO_REPLY, { timeout: 20_000 })
       await see(reader.locator('.hib-composer-input')).toHaveValue('')
       await see(reader.locator('.hib-error, [role="alert"]')).toHaveCount(0)
+      // A picture attached in the composer and sent with words: on the turn at once, no error.
+      await reader.locator('.hib-composer input[type="file"]').setInputFiles({ name: 'red.png', mimeType: 'image/png', buffer: VIDEO_PICTURE })
+      await see(reader.locator('.hib-composer img')).toHaveCount(1, { timeout: 10_000 })
+      await reader.locator('.hib-composer-input').pressSequentially(VIDEO_PICTURE_REPLY, { delay: 40 })
+      await reader.locator('.hib-send-btn').click()
+      const sent = reader.locator('.hib-turn--human').filter({ hasText: VIDEO_PICTURE_REPLY })
+      await see(sent.locator('.hib-turn-images img')).toHaveCount(1, { timeout: 20_000 })
+      await see(sent.locator('.hib-turn-images img')).toHaveJSProperty('complete', true)
+      expect(await sent.locator('.hib-turn-images img').evaluate((i) => (i as HTMLImageElement).naturalWidth)).toBe(240)
+      await see(reader.locator('.hib-error, [role="alert"]')).toHaveCount(0)
     })
     expect(journalRecords().filter((x) => x.kind === 'inbox-reply' && x.letterId === letterId && x.text === VIDEO_REPLY)).toHaveLength(1)
+    expect(journalRecords().filter((x) => x.kind === 'inbox-reply-pictures' && x.letterId === letterId && x.text === VIDEO_PICTURE_REPLY)).toHaveLength(1)
   }, 240_000)
 
   it('keeps seven-minute voice and completed text on the companion while the Mac sleeps, then copies both after wake', async () => {
@@ -541,15 +593,30 @@ describe.skipIf(!liveWallsAvailable())('one request path on the companion (real 
     await sleep(3_000)
     const l = (await mac(`/api/v1/human-inbox/${encodeURIComponent(letterId)}`)).json.letter as Record<string, any>
     expect((l.thread ?? []).filter((t: Record<string, any>) => t.clientId === REPLY_ID)).toHaveLength(1)
+    // The picture reply: once, its picture saved on the Mac under the same name, the same bytes.
+    const pictureTurns = await waitFor(async () => {
+      const x = (await mac(`/api/v1/human-inbox/${encodeURIComponent(letterId)}`)).json.letter as Record<string, any> | undefined
+      const mine = (x?.thread ?? []).filter((t: Record<string, any>) => t.clientId === PICTURE_ID)
+      return mine.length > 0 ? mine : null
+    }, 120_000, 'the picture reply on the Mac\'s letter')
+    expect(pictureTurns).toMatchObject([{ text: PICTURE_REPLY, images: [pictureName] }])
+    expect((await servedPicture(primary.port, null, pictureName))?.equals((await servedPicture(companion.port, tokens.phone, pictureName))!)).toBe(true)
     if (!VIDEO_DIR) return
     await waitFor(() => journalRecords().every((x) => x.letterId !== letterId), 60_000, 'the journal to let the typed reply go')
     const onMacNow = (await mac(`/api/v1/human-inbox/${encodeURIComponent(letterId)}`)).json.letter as Record<string, any>
     expect((onMacNow.thread ?? []).filter((t: Record<string, any>) => t.from === 'human' && t.text === VIDEO_REPLY)).toHaveLength(1)
-    // The Mac's own web app: both replies on the letter, once each.
+    expect((onMacNow.thread ?? []).filter((t: Record<string, any>) => t.from === 'human' && t.text === VIDEO_PICTURE_REPLY && t.images?.length === 1)).toHaveLength(1)
+    // The Mac's own web app: the four replies on the letter, once each, both pictures shown.
     await filmLetter(primary.port, null, '2-mac-back', async (reader) => {
       const { expect: see } = await import('@playwright/test')
-      await see(reader.locator('.hib-thread')).toContainText(VIDEO_REPLY, { timeout: 30_000 })
-      await see(reader.locator('.hib-turn--human')).toHaveCount(2)
+      await see(reader.locator('.hib-thread')).toContainText(VIDEO_PICTURE_REPLY, { timeout: 30_000 })
+      await see(reader.locator('.hib-turn--human')).toHaveCount(4)
+      await see(reader.locator('.hib-turn-images img')).toHaveCount(2)
+      for (const img of await reader.locator('.hib-turn-images img').all()) {
+        await see(img).toHaveJSProperty('complete', true)
+        expect(await img.evaluate((i) => (i as HTMLImageElement).naturalWidth)).toBe(240)
+      }
+      await reader.locator('.hib-turn--human').last().scrollIntoViewIfNeeded()
     })
   }, 300_000)
 

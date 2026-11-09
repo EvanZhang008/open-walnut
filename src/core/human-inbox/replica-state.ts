@@ -46,6 +46,7 @@ import { CLOUD_MODE, HUMAN_INBOX_QUEUE_DIR } from '../../constants.js';
 import { writeJsonFile } from '../../utils/fs.js';
 import { log } from '../../logging/index.js';
 import { normalizeStore, LETTER_ID_RE, type LetterStoreFile } from './normalize.js';
+import { cleanPictureNames } from '../answer-pictures.js';
 import type { LetterStateField } from './store.js';
 import type { LetterDetail, LetterList, LetterRecord, ThreadEntry } from './types.js';
 
@@ -74,6 +75,8 @@ export interface LetterTurnEntry {
   clientId?: string;
   actionId?: string;
   freeText?: string;
+  /** The pictures sent with it: file names in this box's images folder (`inbox-reply-pictures`). */
+  images?: string[];
   /** When the human made it (this box's clock, epoch ms): the turn's `at` on every read here. */
   at: number;
   /** acked only: when the Mac acked the record (this box's clock), for the TTL. */
@@ -313,6 +316,7 @@ function isTurnEntry(v: unknown): v is LetterTurnEntry {
   if (!e || typeof e.letterId !== 'string' || !LETTER_ID_RE.test(e.letterId)) return false;
   if (typeof e.at !== 'number' || !Number.isFinite(e.at)) return false;
   if (e.ackedAt !== undefined && (typeof e.ackedAt !== 'number' || !Number.isFinite(e.ackedAt))) return false;
+  if (e.images !== undefined && (!Array.isArray(e.images) || e.images.some(n => typeof n !== 'string'))) return false;
   if (e.op === 'reply') return typeof e.text === 'string' && typeof e.clientId === 'string' && e.clientId.length > 0;
   return e.op === 'answer' && typeof e.actionId === 'string' && e.actionId.length > 0
     && (e.freeText === undefined || typeof e.freeText === 'string');
@@ -323,6 +327,8 @@ function turnOf(r: Record<string, unknown>, ackedAt?: number): LetterTurnEntry |
   const e: LetterTurnEntry = r.op === 'reply'
     ? { letterId: r.letterId as string, op: 'reply', text: r.text as string, clientId: r.clientId as string, at: (r.madeAt ?? r.at) as number }
     : { letterId: r.letterId as string, op: 'answer', actionId: r.actionId as string, ...(r.freeText !== undefined ? { freeText: r.freeText as string } : {}), at: (r.madeAt ?? r.at) as number };
+  const images = cleanPictureNames(r.images);
+  if (images.length) e.images = images;
   if (ackedAt !== undefined) e.ackedAt = ackedAt;
   return isTurnEntry(e) ? e : null;
 }
@@ -330,10 +336,10 @@ function turnOf(r: Record<string, unknown>, ackedAt?: number): LetterTurnEntry |
 /** The `inbox-reply` records still in the companion's journal (the Mac has not acked them). */
 async function journalTurns(): Promise<LetterTurnEntry[]> {
   try {
-    const { companionJournalRecords } = await import('../companion-journal.js');
+    const { companionJournalRecords, INBOX_TURN_KINDS } = await import('../companion-journal.js');
     const out: LetterTurnEntry[] = [];
     for (const r of companionJournalRecords()) {
-      if (r.kind !== 'inbox-reply') continue;
+      if (!INBOX_TURN_KINDS.includes(r.kind)) continue;
       const e = turnOf(r);
       if (e) out.push(e);
     }
@@ -376,7 +382,8 @@ async function editAckedTurns(edit: (turns: LetterTurnEntry[]) => LetterTurnEntr
  */
 export async function noteJournalTurnsAcked(records: ReadonlyArray<Record<string, unknown>>): Promise<void> {
   const now = Date.now();
-  const add = records.filter(r => r.kind === 'inbox-reply').map(r => turnOf(r, now)).filter((e): e is LetterTurnEntry => !!e);
+  const { INBOX_TURN_KINDS } = await import('../companion-journal.js');
+  const add = records.filter(r => INBOX_TURN_KINDS.includes(r.kind as string)).map(r => turnOf(r, now)).filter((e): e is LetterTurnEntry => !!e);
   if (!add.length) return;
   try {
     await editAckedTurns(turns => [...turns, ...add]);
@@ -429,14 +436,14 @@ function overlayTurn<T extends LetterRecord>(letter: T, turn: LetterTurnEntry): 
   let answered = letter.answered;
   if (turn.op === 'reply') {
     if (letter.thread.some(t => t.from === 'human' && t.clientId === turn.clientId)) return letter;
-    entry = { from: 'human', text: bound((turn.text ?? '').trim()), at: turn.at, clientId: turn.clientId, delivery };
+    entry = { from: 'human', text: bound((turn.text ?? '').trim()), at: turn.at, clientId: turn.clientId, delivery, ...(turn.images?.length ? { images: turn.images } : {}) };
   } else {
     if (letter.answered && !letter.answered.by) return letter;
     const action = letter.actions?.find(a => a.id === turn.actionId);
     if (!action) return letter;
     const note = bound((turn.freeText ?? '').trim());
     answered = { actionId: action.id, label: action.label, at: turn.at, ...(note ? { freeText: note } : {}) };
-    entry = { from: 'human', text: note ? `${action.label}: ${note}` : action.label, at: turn.at, delivery };
+    entry = { from: 'human', text: note ? `${action.label}: ${note}` : action.label, at: turn.at, delivery, ...(turn.images?.length ? { images: turn.images } : {}) };
   }
   const out = { ...letter, thread: [...letter.thread, entry], ...(answered ? { answered } : {}) } as T;
   if (!out.read) { out.read = true; out.readAt = turn.at; }

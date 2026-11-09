@@ -196,6 +196,45 @@ function hasPictures(b: Record<string, unknown>): boolean {
   return (Array.isArray(b.images) && b.images.length > 0) || (Array.isArray(b.imageRefs) && b.imageRefs.length > 0)
 }
 
+/** The route's time kept for saving and journaling a turn's pictures after a relay that hung. */
+const PICTURE_SAVE_MARGIN_MS = 5_000
+
+/**
+ * How many different pictures the request sends (the store keeps at most MAX_ANSWER_PICTURES,
+ * and one picture sent twice may be saved once).
+ */
+function pictureCount(b: Record<string, unknown>, max: number): number {
+  const list: unknown[] = Array.isArray(b.imageRefs) && b.imageRefs.length > 0 ? b.imageRefs : Array.isArray(b.images) ? b.images : []
+  const key = (p: unknown): string => JSON.stringify(p && typeof p === 'object' ? [(p as Record<string, unknown>).filename, (p as Record<string, unknown>).data, (p as Record<string, unknown>).mediaType] : p)
+  return Math.min(new Set(list.slice(0, max).map(key)).size, max)
+}
+
+/**
+ * The request's pictures saved in this box's images folder, with their bytes, in order; null
+ * when any one is not kept (a bad picture, an upload not here, a full disk).
+ */
+async function keptPictures(b: Record<string, unknown>): Promise<Array<{ name: string; bytes: Buffer }> | null> {
+  const { saveAnswerPictures, MAX_ANSWER_PICTURES } = await import('../../core/answer-pictures.js')
+  const names = await saveAnswerPictures(b)
+  if (names.length === 0 || names.length < pictureCount(b, MAX_ANSWER_PICTURES)) return null
+  const { IMAGES_DIR } = await import('../../constants.js')
+  const fsp = await import('node:fs/promises')
+  const path = await import('node:path')
+  try {
+    return await Promise.all(names.map(async (name) => ({ name, bytes: await fsp.readFile(path.join(IMAGES_DIR, name)) })))
+  } catch {
+    return null
+  }
+}
+
+/** Pictures saved here for a turn the journal then refused (the inline ones: an upload stays). */
+async function dropPictures(names: string[]): Promise<void> {
+  const { IMAGES_DIR } = await import('../../constants.js')
+  const fsp = await import('node:fs/promises')
+  const path = await import('node:path')
+  await Promise.all(names.map((n) => fsp.rm(path.join(IMAGES_DIR, n), { force: true }).catch(() => {})))
+}
+
 /** 202 when the turn is on record and its delivery is still running, else 200 (human-inbox-v1.ts). */
 function deliveringStatus(result: Record<string, unknown>): number {
   return (result.delivery as { status?: unknown } | undefined)?.status === 'pending' ? 202 : 200
@@ -223,8 +262,12 @@ function deliveringStatus(result: Record<string, unknown>): number {
  * a session answering for the user (`callerSid`: the Mac resolves the caller and records
  * its task); a letter not in this box's copy; a turn the Mac would refuse (no words, a bad
  * clientId, an option the letter does not offer, a letter already answered otherwise).
- * KNOWN GAP: a reply or answer with pictures (`images` / `imageRefs`) still needs the Mac,
- * whose image store keeps them; the journal would have to carry the bytes as blobs.
+ *
+ * Pictures (`images` inline from the phone, `imageRefs` uploaded here) go with the turn
+ * once the Mac drains `inbox-reply-pictures`: saved in this box's images folder (the letter
+ * here shows them at once), their bytes journaled with the words, and the Mac saves each
+ * under the same name before it records the turn. A picture this box cannot keep keeps the
+ * 503 for the whole turn: the words never go without the pictures sent with them.
  */
 export async function replicaLetterTurn(
   res: Response,
@@ -237,12 +280,15 @@ export async function replicaLetterTurn(
   // The human's moment, taken before any wait.
   const madeAt = Date.now()
   const action = op === 'reply' ? 'server.human-inbox.human-reply' : 'server.human-inbox.answer'
-  const { macDrains, journalInboxReply } = await import('../../core/companion-journal.js')
-  const journalable = macDrains('inbox-reply') && !opts.callerSid && !hasPictures(body)
+  const { macDrains, journalInboxReply, companionJournalRecords, inboxReplyOpId } = await import('../../core/companion-journal.js')
+  const journalable = macDrains(hasPictures(body) ? 'inbox-reply-pictures' : 'inbox-reply') && !opts.callerSid
   const madeId = op === 'reply' && journalable && body.clientId === undefined ? `rp-${crypto.randomUUID()}` : undefined
   const params = madeId ? { ...relayParams, clientId: madeId } : relayParams
-  // A journalable turn answers inside the route's deadline even when the relay hangs.
-  const out = await tryControlRelay(action, SERVER_RELAY_SID, params, journalable ? Math.max(1_000, opts.answerBy - Date.now()) : undefined)
+  // A journalable turn answers inside the route's deadline even when the relay hangs, its
+  // pictures saved and journaled inside it too (a client that gave up would resend a reply
+  // with no clientId as a second turn).
+  const margin = hasPictures(body) ? PICTURE_SAVE_MARGIN_MS : 0
+  const out = await tryControlRelay(action, SERVER_RELAY_SID, params, journalable ? Math.max(1_000, opts.answerBy - margin - Date.now()) : undefined)
   if (out.ok) {
     const reply = out.reply
     if (reply.ok === true && reply.result && typeof reply.result === 'object') {
@@ -261,6 +307,10 @@ export async function replicaLetterTurn(
     return
   }
   const fail = (): void => { if (out.ok) sendRelayReplyError(res, out.reply); else out.answer(res) }
+  const waiting = (turn: Parameters<typeof inboxReplyOpId>[0]): boolean => {
+    const opId = inboxReplyOpId(turn)
+    return companionJournalRecords().some((r) => r.opId === opId)
+  }
   const q = await replicaState()
   const record = await q.mirrorRecord(id)
   if (!record) { fail(); return }
@@ -269,26 +319,38 @@ export async function replicaLetterTurn(
     const text = typeof body.text === 'string' ? body.text.trim() : ''
     const clientId = madeId ?? body.clientId
     const { CLIENT_ID_RE } = await import('../../core/human-inbox/normalize.js')
-    if (!text || typeof clientId !== 'string' || !CLIENT_ID_RE.test(clientId)) { fail(); return }
+    // A picture alone is a reply, as on the Mac.
+    if ((!text && !hasPictures(body)) || typeof clientId !== 'string' || !CLIENT_ID_RE.test(clientId)) { fail(); return }
     input = { letterId: id, op: 'reply', text, clientId, madeAt }
   } else {
     const actionId = typeof body.actionId === 'string' ? body.actionId.trim() : ''
     const freeText = typeof body.freeText === 'string' ? body.freeText.trim() : ''
     if (!record.actions?.some((a) => a.id === actionId)) { fail(); return }
-    if (record.answered && !record.answered.by) {
+    input = { letterId: id, op: 'answer', actionId, ...(freeText ? { freeText } : {}), madeAt }
+    if (record.answered && !record.answered.by && !waiting(input)) {
       // The same answer again (a retry, its record waiting or taken): the letter as it stands.
       // Another answer the Mac refuses (one answer per letter), so it gets the old answer.
       // Notes compared as the store keeps them (bounded), whichever side was cut.
       const { boundThreadText } = await import('../../core/human-inbox/store.js')
       const same = record.answered.actionId === actionId && boundThreadText(record.answered.freeText ?? '') === boundThreadText(freeText)
-      if (!same) { fail(); return }
+      // Pictures with it are not on that answer, and would go nowhere: the 503, as the Mac's 409.
+      if (!same || hasPictures(body)) { fail(); return }
       res.status(202).json({ letter: (await q.mirrorLetter(id)) ?? record, delivery: { status: 'pending' }, queued: true })
       return
     }
-    input = { letterId: id, op: 'answer', actionId, ...(freeText ? { freeText } : {}), madeAt }
+  }
+  // A retry of a turn still waiting for the Mac is that record: its pictures are not saved again.
+  if (hasPictures(body) && !waiting(input)) {
+    const pictures = await keptPictures(body)
+    if (!pictures) { fail(); return }
+    input.pictures = pictures
   }
   const saved = journalInboxReply(input)
-  if (!saved?.ok) { fail(); return }
+  if (!saved?.ok) {
+    if (input.pictures && !Array.isArray(body.imageRefs)) await dropPictures(input.pictures.map((p) => p.name))
+    fail()
+    return
+  }
   log.notif.info('human-inbox replica: a reply kept for the Mac (primary unreachable)', {
     letterId: id, op, opId: saved.opId, seq: saved.seq, ...(saved.duplicate ? { duplicate: true } : {}),
     relay: out.ok ? classifyRelayReply(out.reply).kind : out.notSent ? 'not_sent' : 'maybe_sent',
