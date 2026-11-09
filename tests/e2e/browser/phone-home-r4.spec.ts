@@ -7,7 +7,7 @@
 import fs from 'node:fs/promises'
 import { expect, test, type Page } from '@playwright/test'
 import { PHONE, findSmallTargets } from './phone-helpers'
-import { isolateUiPrefs } from './todo-panel-helpers'
+import { isolateUiPrefs, seedRecentOpened } from './todo-panel-helpers'
 import { presetPanelDesign } from './status-section-helpers'
 import { bpSetup } from './banner-placement-helpers'
 import { banner, expandSystemAttention, failed, resetServerHostFixture } from './host-problems-helpers'
@@ -35,6 +35,20 @@ async function phoneHome(page: Page): Promise<void> {
   await page.addInitScript(() => {
     try { localStorage.setItem('open-walnut-home-chat-visible', 'false') } catch { /* storage off */ }
   })
+}
+
+/**
+ * Recent lists the tasks the person opened (2026-11-07), so these specs give it a screenful of
+ * the fixture's open tasks as opens: top-level ones first, in the list's own order, since
+ * R3-04's route dresses up the first of those.
+ */
+async function seedRecentWithOpenTasks(page: Page): Promise<void> {
+  const listed = await (await page.request.get('/api/tasks', { params: { fields: 'list' } })).json() as {
+    tasks: Array<{ id: string; status?: string; phase?: string; parent_task_id?: string }>
+  }
+  const open = listed.tasks.filter((t) => t.phase !== 'COMPLETE' && t.status !== 'done')
+  const ordered = [...open.filter((t) => !t.parent_task_id), ...open.filter((t) => t.parent_task_id)]
+  await seedRecentOpened(page, ordered.slice(0, 30).map((t) => t.id))
 }
 
 /** Slow the first task list (the window where the old home painted controls, then pushed them down) and record every move. */
@@ -122,6 +136,7 @@ for (const size of TAB_SIZES) {
     })
     await page.setViewportSize(size.viewport)
     await page.goto('/')
+    await seedRecentWithOpenTasks(page)
     const tab = page.locator('.todo-section-tabs .todo-section-tab').filter({ hasText: 'Recent' }).first()
     await expect(tab).toBeVisible({ timeout: 30_000 })
     await tab.click()
@@ -203,6 +218,7 @@ test('R3-04: a card with Needs you, a Leader pill and tags keeps most of the row
     await route.fulfill({ response: res, json: body })
   })
   await page.goto('/')
+  await seedRecentWithOpenTasks(page)
   const tab = page.locator('.todo-section-tabs .todo-section-tab').filter({ hasText: 'Recent' }).first()
   await expect(tab).toBeVisible({ timeout: 30_000 })
   await tab.click()

@@ -193,14 +193,14 @@ test('a view picked on the View page switches the list and the tab bar, closes t
   expect(await displayMenu(page).innerText()).not.toMatch(/Tier layout|Recent order|Only in/)
   await closeDisplayMenu(page)
 
-  // Recent: the same two rows; its Sort has no Manual (a feed has no hand order).
+  // Recent: the tasks the person opened, newest first, in one flat list (2026-11-07): its
+  // Sort and Group rows say that order instead of offering choices.
   await pickView(page, 'recent')
   await openDisplayMenu(page)
   await expect(viewSummary(page)).toHaveText('Recent')
-  await expect(option(page, 'sort').locator('[data-choice="manual"]')).toHaveCount(0)
-  for (const [row, key] of [['sort', 'date'], ['sort', 'updated'], ['group', 'project'], ['group', 'none']] as const) {
-    await option(page, row).locator(`[data-choice="${key}"]`).click()
-    await expect(option(page, row).locator(`[data-choice="${key}"]`)).toHaveAttribute('aria-pressed', 'true')
+  for (const row of ['sort', 'group'] as const) {
+    await expect(option(page, row).locator('[data-choice]')).toHaveCount(0)
+    await expect(option(page, row)).toContainText('Newest opened first')
   }
   await closeDisplayMenu(page)
 
