@@ -572,11 +572,21 @@ test('a create whose task:created broadcast beats its HTTP response shows the ta
   })
   // A list refetch inside the window would ALSO leave one real row (the temp row
   // is never noteInserted, so the merge drops it) — with the bug still present.
-  // Make that path a failure, not a false pass.
+  // The board refetches on its own (1 s after its socket connects, on another
+  // worker's bulk task events, on a resync), so a refetch is held until the
+  // window closes rather than counted: only the broadcast can reconcile the row.
+  // CI 2026-11-09: the post-connect refetch of a socket that came up late landed
+  // twice inside the window and failed the count.
   let listRefetches = 0
+  const isList = (url: URL) => url.pathname === '/api/tasks'
+  await page.route(isList, async (route) => {
+    if (route.request().method() !== 'GET') return route.fallback()
+    await Promise.race([held, new Promise((r) => setTimeout(r, 25_000))])
+    await route.fallback()
+  })
   const onResponse = (res: import('@playwright/test').Response) => {
     const u = new URL(res.url())
-    if (res.request().method() === 'GET' && u.pathname === '/api/tasks') listRefetches++
+    if (res.request().method() === 'GET' && isList(u) && !responseDelivered) listRefetches++
   }
   page.on('response', onResponse)
 
@@ -618,5 +628,6 @@ test('a create whose task:created broadcast beats its HTTP response shows the ta
   const tiers = (await (await page.request.get('/api/focus/tasks')).json()) as { focus_tasks: string[] }
   expect(tiers.focus_tasks).toContain(id)
   page.off('response', onResponse)
+  await page.unroute(isList)
   await page.unroute('**/api/tasks')
 })
