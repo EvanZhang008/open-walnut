@@ -5,7 +5,8 @@
  */
 import { describe, expect, it } from 'vitest';
 import { buildThreadTree, quoteBlockOf, type ThreadTreeMessage } from '@/utils/thread-tree';
-import { allPassageMarks, cardTurnsOf, hasWords, placeCard, placeCardOver, questionBodyOf, CARD_ENLARGED_WIDTH, CARD_GAP, CARD_GROWN_WIDTH, CARD_MIN_WIDTH, CARD_WIDTH, ENLARGED_MIN_HEIGHT, ENLARGED_MIN_SHARE } from '@/utils/thread-card';
+import { allPassageMarks, cardTurnsOf, hasWords, placeCard, placeCardOver, questionBodyOf, questionPartsOf, CARD_ENLARGED_WIDTH, CARD_GAP, CARD_GROWN_WIDTH, CARD_MIN_WIDTH, CARD_WIDTH, ENLARGED_MIN_HEIGHT, ENLARGED_MIN_SHARE } from '@/utils/thread-card';
+import { attachmentHeaderBlock } from '@open-walnut/attachment-headers'
 import type { SessionThreadAnchor } from '@/types/session';
 
 const quote = { exact: 'the flush order', prefix: '', suffix: '' };
@@ -96,6 +97,34 @@ describe('questionBodyOf', () => {
     expect(questionBodyOf('a multi\nline question')).toBe('a multi\nline question');
   });
 });
+
+describe('questionPartsOf (what a question was sent with)', () => {
+  const img = attachmentHeaderBlock('images', ['/var/folders/x/T/daemon/images/a.png'])
+  const files = attachmentHeaderBlock('files', ['/repo/notes.txt'])
+  const banner = '[Question Q2]\nThis message is question 2. Begin your reply with the line "[Q2]".\n[/Question Q2]'
+  it('takes a picture header off the front, before or after the composed lines', () => {
+    for (const text of [
+      `${img}${banner}\n\n> the flush order\n\nWhat is this?`,
+      `${banner}\n\n${img}> the flush order\n\nWhat is this?`,
+      `${banner}\n\n> the flush order\n\n${img}What is this?`,
+    ]) {
+      expect(questionPartsOf(text)).toEqual({ body: 'What is this?', images: ['/var/folders/x/T/daemon/images/a.png'], files: [] })
+      expect(questionBodyOf(text)).toBe('What is this?')
+    }
+  })
+  it('a picture and a file sent together, and a picture with no words', () => {
+    expect(questionPartsOf(`${img}${files}Look.`)).toEqual({ body: 'Look.', images: ['/var/folders/x/T/daemon/images/a.png'], files: ['/repo/notes.txt'] })
+    expect(questionPartsOf(`${banner}\n\n${img}`.trim())).toEqual({ body: '', images: ['/var/folders/x/T/daemon/images/a.png'], files: [] })
+  })
+  it('no header text is left anywhere a question is shown', () => {
+    const body = questionBodyOf(`${banner}\n\n${img}Why?`)
+    expect(body).not.toMatch(/attached|daemon\/images/)
+  })
+  it('a person\'s own quote after the composed lines stays, as do header words typed mid-message', () => {
+    expect(questionBodyOf(`${img}> the flush order\n\n> as the doc says\nwhy?`)).toBe('> as the doc says\nwhy?')
+    expect(questionBodyOf('See [Images attached] above')).toBe('See [Images attached] above')
+  })
+})
 
 describe('placeCardOver (a review card enlarged in place)', () => {
   // A review card in the history's right gutter: past the layer's own width.

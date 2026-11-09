@@ -4371,6 +4371,52 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     canAsk: threadsApi.canAsk, draftKeyOf: reviewDraftKeyOf, sendToQuestion: sendFromReview,
   });
   reviewShownRef.current = review.on;
+  // The review column has a card for each question beside its passage in the
+  // timeline, so a passage above the rendered window had no card (2026-11-09:
+  // after a reload, 1 of 4 cards, the rest back only after "Load earlier
+  // turns"). While the column shows, the window reaches back to the earliest
+  // question's passage; one older than the rows fetched fetches the rest, once.
+  const reviewFetchedFor = useRef<string | null>(null);
+  const anchorsForReview = threadsApi.anchors;
+  const metaForReview = threadsApi.metaIndex;
+  useEffect(() => {
+    if (!review.on) { reviewFetchedFor.current = null; return; }
+    // The questions that have a card: a passage in a reply, not hidden
+    // (allPassageMarks keeps the same ones).
+    const asks = anchorsForReview.filter((a) => a.quote?.exact && a.parent && !fileOfParent(a.parent)
+      && metaOf({ headId: a.msgId }, metaForReview)?.hidden !== true);
+    if (asks.length === 0) return;
+    const at = new Map<string, number>();
+    messages.forEach((m, i) => { const id = m.msgId ?? m.walnutMessageId; if (id) at.set(id, i); });
+    let earliest = -1;
+    let unfetched = false;
+    for (const a of asks) {
+      const i = at.get(a.parent);
+      if (i === undefined) { unfetched = true; continue; }
+      if (earliest < 0 || i < earliest) earliest = i;
+    }
+    // Where the reader is stays put; one following the live end keeps following.
+    const keepPlace = () => {
+      const el = containerRef.current;
+      if (!el) return;
+      const fromBottom = el.scrollHeight - el.scrollTop;
+      if (fromBottom - el.clientHeight > 2) isAtBottom.current = false;
+      pendingBottomDistance.current = fromBottom;
+    };
+    if (earliest >= 0 && earliest < hiddenCount && messages.length - earliest > truncationOffset) {
+      log.info('threads', 'review column: the window reaches back to the earliest question', {
+        sessionId, rows: messages.length - earliest, hidden: hiddenCount,
+      });
+      keepPlace();
+      setTruncationOffset(messages.length - earliest);
+    }
+    if (unfetched && (olderHidden > 0 || olderWindowed) && !phase2Pending && reviewFetchedFor.current !== sessionId) {
+      reviewFetchedFor.current = sessionId;
+      log.info('threads', 'review column: a question is older than the rows fetched, fetching the rest', { sessionId });
+      keepPlace();
+      loadFullHistory();
+    }
+  }, [review.on, messages, anchorsForReview, metaForReview, hiddenCount, truncationOffset, olderHidden, olderWindowed, phase2Pending, loadFullHistory, sessionId]);
   const markTips = useThreadMarks({
     sessionId, panelKey: quotePanelKey, enabled: stackMode || convMode, containerRef, specs: markSpecs,
     renderNonce: `${messages.length}:${truncationOffset}:${currentKey}`,

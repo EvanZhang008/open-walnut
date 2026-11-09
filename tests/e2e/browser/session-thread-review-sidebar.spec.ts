@@ -16,7 +16,7 @@
 import { expect, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import { centreInHistory, clickInPlace, openThreadsSession, settledScrollTop, passageRects, readRecord, resetThreadsFixture, test } from './threads-helpers'
-import { REVIEW_COUNT, REVIEW_OLD_PASSAGES, REVIEW_OLD_READY, REVIEW_OLD_SESSION, REVIEW_OLD_TASK, REVIEW_READY, REVIEW_ROUNDS, REVIEW_ROUND_CODE, REVIEW_SESSION, REVIEW_TASK, REVIEW_TITLES, reviewPassage } from './threads-review-fixture'
+import { REVIEW_COUNT, REVIEW_MIXED_PASSAGES, REVIEW_MIXED_READY, REVIEW_MIXED_SESSION, REVIEW_MIXED_TASK, REVIEW_OLD_PASSAGES, REVIEW_OLD_READY, REVIEW_OLD_SESSION, REVIEW_OLD_TASK, REVIEW_READY, REVIEW_ROUNDS, REVIEW_ROUND_CODE, REVIEW_SESSION, REVIEW_TASK, REVIEW_TITLES, reviewPassage } from './threads-review-fixture'
 
 const SHOTS = () => `/tmp/ask-review/e2e/${test.info().project.name}`
 async function shot(page: Page, name: string): Promise<void> {
@@ -674,7 +674,60 @@ test.describe('the fullscreen review sidebar', () => {
 
 test.describe('asks on turns that are not loaded', () => {
   test.setTimeout(180_000)
-  test.beforeEach(async ({ request }) => { await resetThreadsFixture(request, REVIEW_OLD_SESSION) })
+  test.beforeEach(async ({ request }) => {
+    await resetThreadsFixture(request, REVIEW_OLD_SESSION)
+    await resetThreadsFixture(request, REVIEW_MIXED_SESSION)
+  })
+
+  test('one card on screen: the column brings every older ask in with its card, no "Load earlier turns" pressed', async ({ page }) => {
+    // 2026-11-09: after a few follow-ups and a reload, full screen showed 1 of 4
+    // cards; the rest came back only after "Load earlier turns".
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await page.goto('/')
+    await page.waitForLoadState('networkidle')
+    const panel = await openThreadsSession(page, REVIEW_MIXED_SESSION, REVIEW_MIXED_TASK, REVIEW_MIXED_READY, { view: 'linear' })
+    const history = panel.locator('.session-history')
+    await expect(history.getByText(REVIEW_MIXED_PASSAGES[0])).toHaveCount(0)
+    await panel.getByRole('button', { name: 'Expand session to full screen' }).click()
+    await expect(panel).toHaveClass(/open-walnut-fullscreen/)
+    await expect(sidebarCards(panel)).toHaveCount(3, { timeout: 20_000 })
+    for (const t of ['Mixed point 1', 'Mixed point 2', 'Mixed point 3']) {
+      await expect(sidebarCards(panel).filter({ hasText: t })).toHaveCount(1)
+    }
+    // The reader stays where they were: the recent ask's passage is still on screen.
+    await expect(history.getByText(REVIEW_MIXED_PASSAGES[2].slice(0, 24))).toBeInViewport()
+
+    // A picture sent from a card's box, read back from the transcript after a
+    // reload: its bubble shows the picture and the words, never Walnut's
+    // attachment header and its saved path (2026-11-09).
+    const recent = sidebarCards(panel).filter({ hasText: 'Mixed point 3' })
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64')
+    await wheelIntoView(page, history, recent.locator('[data-testid="thread-card-attach"]'))
+    const chooser = page.waitForEvent('filechooser')
+    await clickInPlace(page, recent.locator('[data-testid="thread-card-attach"]'))
+    await (await chooser).setFiles({ name: 'board.png', mimeType: 'image/png', buffer: png })
+    await expect(recent.locator('[data-testid="thread-card-pictures"] img')).toHaveCount(1)
+    await clickInPlace(page, recent.locator('textarea.thread-card-input'))
+    await page.keyboard.type('What is in this picture?')
+    await page.keyboard.press('Enter')
+    await expect(recent.locator('.thread-review-body')).toContainText('processed your message', { timeout: 30_000 })
+    await page.reload()
+    await page.waitForLoadState('networkidle')
+    const again = await openThreadsSession(page, REVIEW_MIXED_SESSION, REVIEW_MIXED_TASK, undefined, { view: 'linear' })
+    if (!/open-walnut-fullscreen/.test((await again.getAttribute('class')) ?? '')) {
+      await again.getByRole('button', { name: 'Expand session to full screen' }).click()
+    }
+    const card3 = sidebarCards(again).filter({ hasText: 'Mixed point 3' })
+    const asked = card3.locator('.thread-card-q').filter({ hasText: 'What is in this picture?' })
+    await expect(asked).toHaveCount(1, { timeout: 30_000 })
+    await expect(asked.locator('img')).toHaveCount(1, { timeout: 15_000 })
+    // (The mock engine's answer echoes the whole message it got: only the
+    // question's own bubble and the card's head are the card's words.)
+    for (const own of [asked, card3.locator('button.thread-review-head')]) {
+      await expect(own).not.toContainText('Images attached')
+      await expect(own).not.toContainText('/images/')
+    }
+  })
 
   test('no bar while every ask sits above "Load earlier turns"; loading them brings the cards and the bar', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 })

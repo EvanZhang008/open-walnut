@@ -18,6 +18,7 @@ import zlib from 'node:zlib'
 import {
   allThreadsFixtures, fixtureJsonl, fixtureParkedQueues, fixtureRecord, fixtureTask, MIDTURN_SESSION, STRICT_SESSION, SPLIT_SESSION, RELOAD_SESSION, THREAD_AI_STUB_PREFIX,
 } from './threads-fixture'
+import { REVIEW_MIXED_SESSION } from './threads-review-fixture'
 // Kanban specs: old completions and a 3 day stall no route can backdate (board-kanban-fixture.ts).
 import { kanbanSeedTasks } from './board-kanban-seed'
 import { chatEarlierSessionRecords, writeChatEarlierFiles } from './chat-earlier-fixture'
@@ -2877,7 +2878,7 @@ const codepathValidationGo = path.join(codepathFixtureRoot, 'k8s-src', 'objectme
     // user line, the way the real CLI does. Only this session: every other
     // fixture transcript stays byte-identical across a run.
     process.env.MOCK_CLAUDE_PERSIST_DIR = path.join(tmpBase, '.claude', 'projects')
-    process.env.MOCK_CLAUDE_PERSIST_SESSIONS = `${RELOAD_SESSION},${WHALE_SESSION},${WHALE_ANCHOR_SESSION},${WHALE_GAP_SESSION},pw-rider-session,pw-fold-session,pw-hints-session,${MIDTURN_SESSION},${STRICT_SESSION},${SPLIT_SESSION}`
+    process.env.MOCK_CLAUDE_PERSIST_SESSIONS = `${RELOAD_SESSION},${REVIEW_MIXED_SESSION},${WHALE_SESSION},${WHALE_ANCHOR_SESSION},${WHALE_GAP_SESSION},pw-rider-session,pw-fold-session,pw-hints-session,${MIDTURN_SESSION},${STRICT_SESSION},${SPLIT_SESSION}`
     // `PW_MOCK_TRANSCRIPTS=1` (the review lab, extension-panel-reload.spec.ts): every session's
     // turns are filed as its CLI transcript, the way the real CLI does, so a reload reads the
     // person's own messages back instead of only what this run still holds in memory.

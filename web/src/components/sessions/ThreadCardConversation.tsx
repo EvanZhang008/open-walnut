@@ -15,7 +15,8 @@ import { typedUserText } from '@open-walnut/history-injected-banner';
 import type { SessionHistoryMessage } from '@/types/session';
 import type { StreamingBlock } from '@/hooks/useSessionStream';
 import type { CardTurn } from '@/utils/thread-card';
-import { questionBodyOf } from '@/utils/thread-card';
+import { questionPartsOf } from '@/utils/thread-card';
+import { MessageAttachments } from './MessageAttachments';
 import { SessionMessage, StableMarkdownBody } from './SessionMessage';
 import { StreamingBlockView, StreamingReplyMeta, useStreamReplyRows } from './StreamingBlockView';
 
@@ -30,14 +31,21 @@ interface RowHandlers {
 
 /** The question as the user typed it, without the anchor lines it was sent
  *  with: the chat's blue bubble and the same plain markdown the chat gives a
- *  person's words (StableMarkdownBody, memoized by its text). No hover strip:
- *  the card is not where a message is pinned or rewound. */
-const QuestionBubble = memo(function QuestionBubble({ message, cwd }: { message: SessionHistoryMessage; cwd?: string }) {
-  const text = useMemo(() => questionBodyOf(typedUserText(message.text ?? '')), [message.text]);
+ *  person's words (StableMarkdownBody, memoized by its text), its pictures and
+ *  files drawn above the words as the chat draws them (MessageAttachments). No
+ *  hover strip: the card is not where a message is pinned or rewound. */
+const QuestionBubble = memo(function QuestionBubble({ message, h }: { message: SessionHistoryMessage; h: RowHandlers }) {
+  const parts = useMemo(() => questionPartsOf(typedUserText(message.text ?? '')), [message.text]);
+  const attached = parts.images.length + parts.files.length > 0;
   return (
     <div className="thread-card-q">
       <div className="session-msg session-msg-user">
-        <div className="session-msg-content"><StableMarkdownBody text={text} cwd={cwd} /></div>
+        <div className="session-msg-content">
+          {attached && (
+            <MessageAttachments images={parts.images} files={parts.files} host={h.sessionHost} {...(h.onFileOpen ? { onFileOpen: h.onFileOpen } : {})} />
+          )}
+          {parts.body && <StableMarkdownBody text={parts.body} cwd={h.sessionCwd} />}
+        </div>
       </div>
     </div>
   );
@@ -109,7 +117,7 @@ export const ThreadCardConversation = memo(function ThreadCardConversation(p: Th
         if (liveReply && last) replies.push(liveReply);
         return (
           <div key={t.user.msgId ?? t.user.walnutMessageId} className="thread-card-turn">
-            <QuestionBubble message={t.user} cwd={h.sessionCwd} />
+            <QuestionBubble message={t.user} h={h} />
             {replies.map(reply)}
             {t.replies.length === 0 && last && p.awaiting && !liveReply && !p.live && (
               <div className="thread-card-noanswer" data-awaiting="true">Waiting for its answer…</div>
@@ -123,7 +131,7 @@ export const ThreadCardConversation = memo(function ThreadCardConversation(p: Th
       {p.live && !liveReply && <LiveAnswer key={`live-${p.live.index}`} live={p.live} streaming={p.streaming} h={h} />}
       {p.rounds.map(({ bubble: m, live }) => (
         <div key={`opt-${m.queueId}`} className="thread-card-turn" data-status={m.status}>
-          <QuestionBubble message={m} cwd={h.sessionCwd} />
+          <QuestionBubble message={m} h={h} />
           {live && <LiveAnswer key={`live-${live.index}`} live={live} streaming={p.streaming} h={h} />}
         </div>
       ))}

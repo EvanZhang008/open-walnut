@@ -109,3 +109,46 @@ export function buildReviewOldSession(nowMs: number): ThreadsFixtureSession {
     rows, threadAnchors: anchors, threadMeta: meta, pinnedMessages: [], parked: [],
   }
 }
+
+export const REVIEW_MIXED_SESSION = 'pw-threads-askmixed-session'
+export const REVIEW_MIXED_TASK = 'pw-task-threads-askmixed'
+export const REVIEW_MIXED_READY = 'Anything else before the release?'
+export const REVIEW_MIXED_PASSAGES = ['The mixed seal step runs before the flush.', 'The mixed trim pass never reads a sealed page.', 'The fresh index keeps one row per slot.'] as const
+
+/**
+ * Two asks on an early answer, a dozen turns, then one ask on a recent answer:
+ * on open only the recent one is in the rendered window (2026-11-09: full
+ * screen showed 1 of 4 cards after a reload, the rest only after "Load earlier
+ * turns").
+ */
+export function buildReviewMixedSession(nowMs: number): ThreadsFixtureSession {
+  const P = '0199fc'
+  const at = (k: number) => new Date(nowMs - 1_500_000 + k * 1000).toISOString()
+  const rows: FixtureRow[] = []
+  let n = 0
+  const turn = (q: string, a: string) => {
+    n += 1
+    const u = fxUuid(P, n, 'u')
+    const aId = fxUuid(P, n, 'a')
+    rows.push({ role: 'user', uuid: u, text: q }, { role: 'assistant', uuid: aId, text: a })
+    return { u, a: aId }
+  }
+  const anchors: FixtureAnchor[] = []
+  const meta: FixtureMeta[] = []
+  const ask = (parent: string, passage: string, seq: number) => {
+    const t = turn(`> ${passage}\n\nWhy does that hold?`, `[Q${seq}]\n${filler(820 + seq, 40)}`)
+    anchors.push({ msgId: t.u, parent, quote: { exact: passage }, source: 'selection', at: at(n) })
+    meta.push({ headId: t.u, status: 'open', title: `Mixed point ${seq}`, titleSource: 'ai', titleState: 'done', seq, updatedAt: at(100) })
+  }
+  const early = turn('Walk me through the mixed storage path.', REVIEW_MIXED_PASSAGES.slice(0, 2).map((p, i) => `${p} ${filler(800 + i, 60).replace(/\n\n/g, ' ')}`).join('\n\n'))
+  ask(early.a, REVIEW_MIXED_PASSAGES[0], 1)
+  ask(early.a, REVIEW_MIXED_PASSAGES[1], 2)
+  for (let k = 0; k < 12; k++) turn(`Mixed step ${k + 1}?`, filler(840 + k, 30))
+  const recent = turn('And the index?', `${REVIEW_MIXED_PASSAGES[2]} ${filler(870, 60).replace(/\n\n/g, ' ')}`)
+  ask(recent.a, REVIEW_MIXED_PASSAGES[2], 3)
+  turn(REVIEW_MIXED_READY, filler(890, 40))
+  return {
+    sessionId: REVIEW_MIXED_SESSION, taskId: REVIEW_MIXED_TASK, title: 'Threads review mixed-asks fixture session',
+    rows, threadAnchors: anchors, threadMeta: meta, pinnedMessages: [], parked: [],
+  }
+}

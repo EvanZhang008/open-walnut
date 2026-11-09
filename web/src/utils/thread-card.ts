@@ -10,6 +10,7 @@ import type { ThreadMetaIndex } from '@/utils/thread-meta';
 import { displayTitleOf, metaOf } from '@/utils/thread-meta';
 import type { ThreadNode, ThreadTree } from '@/utils/thread-tree';
 import { BACK_TO_MAIN_LINE, FILE_ABOUT_LINE_RE, ROOT_THREAD_KEY, fileOfParent, isTurnHead } from '@/utils/thread-tree';
+import { splitAttachmentHeaders } from '@open-walnut/attachment-headers';
 import { stripQuestionTag } from '@/utils/question-tag';
 import { stripTurnMarker } from '@/utils/turn-end-marker';
 
@@ -85,7 +86,48 @@ export function cardTurnsOf<M extends CardRowLike>(messages: readonly M[], node:
 const BACK_TO_LINE_RE = /^\(Back to the earlier (?:thread|question) about /;
 
 export function questionBodyOf(text: string): string {
-  const lines = text.replace(/\r\n/g, '\n').split('\n');
+  return questionPartsOf(text).body;
+}
+
+/** A question's words and what was sent with it: the pictures and files ride
+ *  as `[Images attached …]` / `[Files attached …]` headers naming saved paths
+ *  (src/lib/attachment-headers.ts), at the very front or after the lines a
+ *  send composes (banner, orientation, quote). Every place that shows the
+ *  question shows the words; the card's bubble draws the attachments
+ *  (2026-11-09: a picture follow-up's bubble showed the header and a temp path). */
+export interface QuestionParts {
+  body: string;
+  images: string[];
+  files: string[];
+}
+
+export function questionPartsOf(text: string): QuestionParts {
+  const images: string[] = [];
+  const files: string[] = [];
+  let rest = text.replace(/\r\n/g, '\n').trim();
+  // Headers and composed lines in either order: the composed lines come off
+  // once, and once more after each header found (a person's own quote after
+  // them stays).
+  let peeled = false;
+  for (let n = 0; n < 6; n++) {
+    const split = splitAttachmentHeaders(rest);
+    if (split.images.length + split.files.length > 0) {
+      images.push(...split.images);
+      files.push(...split.files);
+      rest = split.text.trim();
+      peeled = false;
+    } else if (!peeled) {
+      rest = composedLinesOff(rest);
+      peeled = true;
+    } else break;
+  }
+  const had = images.length + files.length > 0;
+  return { body: rest || (had ? '' : text.trim()), images, files };
+}
+
+/** The text with the lines a send composed in front of the words taken off. */
+function composedLinesOff(text: string): string {
+  const lines = text.split('\n');
   let i = 0;
   const skipBlank = () => { while (i < lines.length && !lines[i].trim()) i++; };
   skipBlank();
@@ -107,7 +149,7 @@ export function questionBodyOf(text: string): string {
     while (i < lines.length && lines[i].startsWith('>')) i++;
     skipBlank();
   }
-  return lines.slice(i).join('\n').trim() || text.trim();
+  return lines.slice(i).join('\n').trim();
 }
 
 export interface CardAnchorRect {
