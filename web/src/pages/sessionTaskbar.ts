@@ -18,7 +18,11 @@ export function isRealSessionColumn(id: string): boolean {
 }
 
 /** How many sessions Recent keeps; the oldest drops off past it. */
-export const RECENT_MAX = 4;
+export const RECENT_MAX = 12;
+
+/** How many of them the bar shows as pills; the rest are in its "N more" menu (2026-11-09,
+ *  the user: "max shoudl be 2 and a drop down that has more"). */
+export const RECENT_SHOWN = 2;
 
 export interface TaskbarLists {
   /** Minimized by the user, in the order they joined (drag to reorder). */

@@ -11,7 +11,9 @@
  *
  * At the bar's right end, past a divider, Recent: the last few sessions that left the
  * strip without a Minimize (a close, a column pushed out), as lighter pills (2026-11-07,
- * design A). A click opens one back onto the strip; its × only takes it off the list.
+ * design A). A click opens one back onto the strip; its × only takes it off the list. Only
+ * the newest RECENT_SHOWN are pills; the rest are rows of one "N more" menu after them, in
+ * the same order with the same open and × (2026-11-09).
  *
  * The rules of what is a chip live in pages/sessionTaskbar.ts; this file only draws.
  */
@@ -24,6 +26,8 @@ import { stripMarkdown } from '@open-walnut/board-summary-text';
 import { useSessionStatus } from '@/hooks/useSessionStatus';
 import { useSessionSend } from '@/hooks/useSessionSend';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
+import { RECENT_SHOWN } from '@/pages/sessionTaskbar';
 import { fetchSessionHistory } from '@/api/sessions';
 import { taskNeedsAction, taskOfSession, taskStatusLabel } from '@/utils/session-status';
 import { ICON_CLOSE } from '@/components/common/Icons';
@@ -75,9 +79,12 @@ export function SessionTaskbar({ chips, recent, tasks, onRestore, onClose, onClo
       {recent.length > 0 && (
         <div className="session-taskbar-recent" role="group" aria-label="Recently open" data-testid="session-taskbar-recent">
           <span className="session-taskbar-recent-label" aria-hidden="true">Recent</span>
-          {recent.map((sid) => (
+          {recent.slice(0, RECENT_SHOWN).map((sid) => (
             <RecentPill key={sid} sessionId={sid} task={taskOfSession(tasks, sid)} onRestore={onRestore} onClose={onCloseRecent} />
           ))}
+          {recent.length > RECENT_SHOWN && (
+            <RecentMore ids={recent.slice(RECENT_SHOWN)} tasks={tasks} onRestore={onRestore} onClose={onCloseRecent} />
+          )}
         </div>
       )}
     </nav>
@@ -112,6 +119,71 @@ function RecentPill({ sessionId, task, onRestore, onClose }: { sessionId: string
   return (
     <div className="session-taskbar-recent-pill" data-session-id={sessionId} data-state={state}>
       <button type="button" className="session-taskbar-open" title={title} onClick={() => onRestore(sessionId)} aria-label={`Open ${title} (recent)`}>
+        <span className="session-taskbar-dot" aria-hidden="true" />
+        <span className="session-taskbar-title">{title}</span>
+      </button>
+      <button type="button" className="session-taskbar-close" onClick={() => onClose(sessionId)} aria-label={`Remove ${title} from Recent`}>
+        {ICON_CLOSE}
+      </button>
+    </div>
+  );
+}
+
+/** "N more": the older Recent sessions, one row each, opened by a click and placed by the menu rules. */
+function RecentMore({ ids, tasks, onRestore, onClose }: { ids: readonly string[]; tasks: readonly Task[]; onRestore: (id: string) => void; onClose: (id: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const placement = useMenuPlacement(open, btnRef, menuRef, { align: 'right', preferSide: 'up', minHeight: 120, onAnchorLost: () => setOpen(false) });
+  useOverlayLayer({
+    open,
+    refs: [menuRef, btnRef],
+    onClose: (reason) => { setOpen(false); if (reason === 'escape') btnRef.current?.focus({ preventScroll: true }); },
+  });
+  return (
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        className={`session-taskbar-more${open ? ' is-open' : ''}`}
+        data-testid="session-taskbar-recent-more"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={`${ids.length} more recent`}
+        onClick={() => setOpen(!open)}
+      >{ids.length} more</button>
+      {open && createPortal(
+        <div
+          ref={menuRef}
+          className="session-taskbar-more-menu"
+          role="menu"
+          aria-label="More recent sessions"
+          data-testid="session-taskbar-recent-more-menu"
+          style={menuPlacementStyle(placement)}
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          {ids.map((sid) => (
+            <RecentMoreRow
+              key={sid}
+              sessionId={sid}
+              task={taskOfSession(tasks, sid)}
+              onRestore={(id) => { setOpen(false); onRestore(id); }}
+              onClose={onClose}
+            />
+          ))}
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
+function RecentMoreRow({ sessionId, task, onRestore, onClose }: { sessionId: string; task: Task | undefined; onRestore: (id: string) => void; onClose: (id: string) => void }) {
+  const { state } = useChipState(sessionId, task);
+  const title = task?.title || 'Session';
+  return (
+    <div className="session-taskbar-more-row" role="none" data-session-id={sessionId} data-state={state}>
+      <button type="button" role="menuitem" className="session-taskbar-open" title={title} onClick={() => onRestore(sessionId)} aria-label={`Open ${title} (recent)`}>
         <span className="session-taskbar-dot" aria-hidden="true" />
         <span className="session-taskbar-title">{title}</span>
       </button>

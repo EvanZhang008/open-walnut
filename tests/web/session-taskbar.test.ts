@@ -58,16 +58,18 @@ describe('sessionTaskbar: only an explicit Minimize makes a chip (2026-11-07, th
 
   it('Recent is newest first, without repeats, and keeps at most RECENT_MAX', () => {
     let lists = empty;
-    let strip = ['a', 'b', 'c', 'd', 'e', 'f'].map(id => slot(id));
-    for (const id of ['a', 'b', 'c', 'd', 'e']) {
+    const ids = Array.from({ length: RECENT_MAX + 2 }, (_, i) => `s${i}`);
+    let strip = ids.map(id => slot(id));
+    for (const id of ids.slice(0, RECENT_MAX + 1)) {
       const next = removeSessionColumn(strip, id);
       lists = after(lists, strip, next);
       strip = next;
     }
-    expect(lists.recent).toEqual(['e', 'd', 'c', 'b'].slice(0, RECENT_MAX));
-    const back = addSessionColumn(strip, 'c', false, 5);
+    // Newest first, the oldest (s0) dropped past RECENT_MAX.
+    expect(lists.recent).toEqual(ids.slice(1, RECENT_MAX + 1).reverse());
+    const back = addSessionColumn(strip, 's3', false, 5);
     lists = after(lists, strip, back);
-    expect(lists.recent).not.toContain('c');
+    expect(lists.recent).not.toContain('s3');
   });
 
   it('a minimized session leaves Recent, and a chip is never also in Recent', () => {
@@ -220,7 +222,8 @@ describe('sessionTaskbar: the chip list', () => {
   it('reads only real session ids back from storage, deduplicated', () => {
     expect(parseChips(['a', 'a', 'draft:1', 'pending:x', 3, null, 'b'])).toEqual(['a', 'b']);
     expect(parseChips('nope')).toEqual([]);
-    expect(parseRecent(['a', 'b', 'c', 'd', 'e', 'f'], ['b'])).toEqual(['a', 'c', 'd', 'e'].slice(0, RECENT_MAX));
+    const ids = Array.from({ length: RECENT_MAX + 3 }, (_, i) => `s${i}`);
+    expect(parseRecent([...ids, 's0'], ['s1'])).toEqual(ids.filter(id => id !== 's1').slice(0, RECENT_MAX));
   });
 });
 

@@ -186,3 +186,43 @@
 }
 .session-taskbar-card-muted { color: var(--fg-muted); }
 .session-taskbar-card-error { color: var(--error, #ff3b30); }
+
+/* "N more": the older Recent sessions behind one button, in a menu above the bar. */
+.session-taskbar-more {
+  flex: 0 0 auto;
+  height: 22px;
+  padding: 0 9px;
+  border: 1px dashed var(--border);
+  border-radius: 11px;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 11.5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.session-taskbar-more:hover,
+.session-taskbar-more.is-open { border-color: var(--fg-muted); color: var(--fg); }
+.session-taskbar-more-menu {
+  width: 260px;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--fg);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+  overflow-y: auto;
+}
+.session-taskbar-more-row {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  height: 28px;
+  border-radius: 6px;
+}
+.session-taskbar-more-row:hover { background: var(--bg-hover, rgba(127, 127, 127, 0.1)); }
+.session-taskbar-more-row .session-taskbar-open { flex: 1 1 auto; min-width: 0; gap: 7px; padding: 0 4px 0 8px; font-size: 12px; justify-content: flex-start; }
+.session-taskbar-more-row .session-taskbar-close { width: 22px; height: 22px; border-radius: 11px; }
+.session-taskbar-more-row .session-taskbar-close svg { width: 10px; height: 10px; }
+.session-taskbar-more-row .session-taskbar-dot { width: 6px; height: 6px; }
