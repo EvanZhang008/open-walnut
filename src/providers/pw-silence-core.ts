@@ -79,7 +79,7 @@ export function pwSilencePreloadSource(): string {
     "    if (typeof loadJs === 'function') {",
     "      exts['.js'] = function (module, filename) {",
     '        const result = loadJs.apply(this, arguments);',
-    '        try { if (isPlaywrightCore(filename)) { install(module.exports); quietWebkit(module.exports); } } catch (e) {',
+    "        try { if (isPlaywrightCore(filename)) { install(module.exports); quietWebkit(filename.replace(/[\\\\/](index|lib[\\\\/]inprocess)\\.js$/, '')); } else if (isWebkitServer(filename)) quietWebkitServer(module.exports); } catch (e) {",
     "          console.warn('[pw-silence-preload] could not silence test browsers: ' + (e && e.message));",
     '        }',
     '        return result;',
@@ -117,7 +117,7 @@ export function pwSilencePreloadSource(): string {
     '  }',
     '}',
     '',
-    'module.exports = { SILENCE_JS, install, isPlaywrightCore, quietWebkit };',
+    'module.exports = { SILENCE_JS, install, isPlaywrightCore, quietWebkit, quietWebkitServer, isWebkitServer };',
     '',
   ].join('\n')
 }

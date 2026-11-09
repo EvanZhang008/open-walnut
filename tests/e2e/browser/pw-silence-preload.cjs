@@ -43,7 +43,7 @@ if (!globalThis[HOOKED]) {
     if (typeof loadJs === 'function') {
       exts['.js'] = function (module, filename) {
         const result = loadJs.apply(this, arguments);
-        try { if (isPlaywrightCore(filename)) { install(module.exports); quietWebkit(module.exports); } } catch (e) {
+        try { if (isPlaywrightCore(filename)) { install(module.exports); quietWebkit(filename.replace(/[\\/](index|lib[\\/]inprocess)\.js$/, '')); } else if (isWebkitServer(filename)) quietWebkitServer(module.exports); } catch (e) {
           console.warn('[pw-silence-preload] could not silence test browsers: ' + (e && e.message));
         }
         return result;
@@ -75,6 +75,13 @@ function clangPath() {
   return null;
 }
 
+/** A name no other process or worker thread uses: two cold-cache workers of one process build at once. */
+function tmpTag() {
+  let thread = 0;
+  try { thread = require('node:worker_threads').threadId; } catch (e) {}
+  return process.pid + '.' + thread + '.' + require('node:crypto').randomBytes(6).toString('hex');
+}
+
 /** A runner script that starts this WebKit build with the no-activation library loaded, or null. */
 function quietRunner(pwRun) {
   const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), crypto = require('node:crypto');
@@ -91,7 +98,7 @@ function quietRunner(pwRun) {
   if (!fs.existsSync(lib)) {
     const clang = clangPath();
     if (!clang) throw new Error('no Command Line Tools clang to build the no-activation library');
-    const tmp = lib + '.' + process.pid;
+    const tmp = lib + '.' + tmpTag();
     fs.writeFileSync(tmp + '.m', NOACT_M);
     try {
       require('node:child_process').execFileSync(clang[0], ['-isysroot', clang[1], '-dynamiclib', '-fobjc-arc', '-arch', 'arm64', '-arch', 'x86_64', '-framework', 'AppKit', '-o', tmp, tmp + '.m'], { stdio: 'pipe', timeout: 120000 });
@@ -103,36 +110,46 @@ function quietRunner(pwRun) {
   const body = '#!/bin/bash\nDYLD_FRAMEWORK_PATH=' + q(dir) + ' DYLD_LIBRARY_PATH=' + q(dir) + ' DYLD_INSERT_LIBRARIES=' + q(lib) + ' exec ' + q(app) + ' "$@"\n';
   const sh = path.join(base, 'webkit-' + hash(body) + '.sh');
   if (!fs.existsSync(sh)) {
-    const tmp = sh + '.' + process.pid;
+    const tmp = sh + '.' + tmpTag();
     fs.writeFileSync(tmp, body, { mode: 0o755 });
     fs.renameSync(tmp, sh);
   }
   return sh;
 }
 
-/** Every WebKit launch of this library (launch, a persistent context, a server) on a Mac starts through the runner. */
-function quietWebkit(core) {
+/** Playwright's own WebKit browser type (lib/server/webkit/webkit.js), where every launch picks its
+  * executable: a client in this process, a test runner, a run-server or launchServer alike. A launch
+  * that names its own executablePath (an option or the config default) keeps it. */
+function quietWebkitServer(mod) {
   if (process.platform !== 'darwin' || process.env.WALNUT_PW_ACTIVATE === '1') return false;
-  const wk = core && core.webkit;
-  if (!wk || typeof wk !== 'object' || wk[QUIET]) return false;
-  wk[QUIET] = true;
-  for (const name of ['launch', 'launchPersistentContext', 'launchServer']) {
-    const orig = wk[name];
-    if (typeof orig !== 'function') continue;
-    wk[name] = function () {
-      const args = Array.prototype.slice.call(arguments);
-      const at = name === 'launchPersistentContext' ? 1 : 0;
-      try {
-        const options = Object.assign({}, args[at]);
-        if (!options.executablePath) {
-          const run = quietRunner(this.executablePath());
-          if (run) { options.executablePath = run; args[at] = options; }
-        }
-      } catch (e) { noActWarn(e); }
-      return orig.apply(this, args);
-    };
-  }
+  const proto = mod && mod.WebKit && mod.WebKit.prototype;
+  if (!proto || Object.prototype.hasOwnProperty.call(proto, QUIET)) return false;
+  const prepare = proto._prepareToLaunch;
+  if (typeof prepare !== 'function') { noActWarn(new Error('this Playwright picks its executable elsewhere')); return false; }
+  proto[QUIET] = true;
+  proto._prepareToLaunch = async function (options) {
+    const prepared = await prepare.apply(this, arguments);
+    try {
+      if (!(options && options.executablePath) && prepared && /[\\/]pw_run\.sh$/.test(String(prepared.executable))) {
+        const run = quietRunner(prepared.executable);
+        if (run) prepared.executable = run;
+      }
+    } catch (e) { noActWarn(e); }
+    return prepared;
+  };
   return true;
+}
+
+/** The same, from a Playwright library's folder (playwright-core's package root). */
+function quietWebkit(root) {
+  if (process.platform !== 'darwin' || process.env.WALNUT_PW_ACTIVATE === '1') return false;
+  try { return quietWebkitServer(require(require('node:path').join(root, 'lib', 'server', 'webkit', 'webkit.js'))); }
+  catch (e) { noActWarn(e); return false; }
+}
+
+/** Playwright's WebKit browser type file, in node_modules or Bun's cache. */
+function isWebkitServer(file) {
+  return typeof file === 'string' && /[\\/]playwright-core(@[^\\/]*)?[\\/]lib[\\/]server[\\/]webkit[\\/]webkit\.js$/.test(file);
 }
 
 // A Bun Worker (the web one and node:worker_threads') starts without BUN_OPTIONS' preload,
@@ -160,4 +177,4 @@ if (process.versions && process.versions.bun && !globalThis[WORKERS]) {
   }
 }
 
-module.exports = { SILENCE_JS, install, isPlaywrightCore, quietWebkit };
+module.exports = { SILENCE_JS, install, isPlaywrightCore, quietWebkit, quietWebkitServer, isWebkitServer };

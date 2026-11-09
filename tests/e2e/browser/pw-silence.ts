@@ -12,6 +12,7 @@
  * tests/e2e/browser/automation-silence.spec.ts fails if the hook stops working.
  */
 import { createRequire } from 'node:module'
+import path from 'node:path'
 import { AUTOMATION_SILENCE_JS } from '../../../src/lib/automation-silence.js'
 import { guardWebkitPasteboard } from './pw-pasteboard.js'
 
@@ -65,7 +66,7 @@ if (!g[FLAG]) {
 // branch's copy knows the runner. It wraps each library once.
 try {
   const req = createRequire(import.meta.url)
-  ;(req('./pw-silence-preload.cjs') as { quietWebkit(core: unknown): boolean }).quietWebkit(req('playwright-core'))
+  ;(req('./pw-silence-preload.cjs') as { quietWebkit(root: string): boolean }).quietWebkit(path.dirname(req.resolve('playwright-core')))
 } catch (e) {
   console.warn(`[pw-silence] a WebKit test browser may come to the front: ${(e as Error).message}`)
 }
