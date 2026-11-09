@@ -154,9 +154,11 @@ test('a limited session: the banner, the Limited row, and its three buttons', as
   const flashed = page.locator(`.status-section-card.is-limit-flash[data-task-id="${taskId}"]`)
   await expect(flashed).toHaveCount(1, { timeout: 5_000 })
   await expect(flashed).toBeInViewport()
-  // At the top of the list, just under the stuck headings, never mid-list under unrelated rows.
-  const flashedRow = page.locator(`.status-section-card[data-task-id="${taskId}"]`).first()
-  await expect.poll(() => flashedRow.evaluate((el) => {
+  // The topmost limited row at the top of the list, just under the stuck headings, never mid-list
+  // under unrelated rows. Another worker's limited rows may sit above this one, so the check reads
+  // the section's first limited row, not this task's.
+  const firstLimited = page.getByTestId('status-section-waiting-rows').locator('.status-section-card:has(.status-card-limit-tag)').first()
+  await expect.poll(() => firstLimited.evaluate((el) => {
     let sc = el.parentElement
     while (sc && !(/(auto|scroll)/.test(getComputedStyle(sc).overflowY) && sc.scrollHeight > sc.clientHeight)) sc = sc.parentElement
     if (!sc) return 'no scroller'

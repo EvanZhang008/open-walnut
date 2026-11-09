@@ -4798,7 +4798,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     window.clearTimeout(limitFlashTimer.current);
     limitFlashTimer.current = window.setTimeout(() => setLimitFlash(new Set()), 1800);
     requestAnimationFrame(() => requestAnimationFrame(() => {
-      const first = taskIds.map((id) => document.querySelector<HTMLElement>(`.status-section-card[data-task-id="${window.CSS.escape(id)}"]`)).find(Boolean);
+      // The topmost of the rows on screen, whatever order the ids came in: scrolling to a lower one
+      // would push the rows above it out of view.
+      const first = taskIds.map((id) => document.querySelector<HTMLElement>(`.status-section-card[data-task-id="${window.CSS.escape(id)}"]`))
+        .filter((el): el is HTMLElement => !!el)
+        .sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1))[0];
       // To the top, just under the stuck headings (the card's scroll margin): the rows it led to
       // come first in what the user sees, never mid-list under unrelated ones.
       (first ?? document.querySelector(`[data-testid="status-section-${key}"]`))?.scrollIntoView({ block: 'start', behavior: 'smooth' });
