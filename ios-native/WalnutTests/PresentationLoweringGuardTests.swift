@@ -214,7 +214,8 @@ final class PresentationLoweringGuardTests: XCTestCase {
             }
         }
         XCTAssertGreaterThanOrEqual(presentations, 60, "the walk finds the app's presentations")
-        XCTAssertGreaterThanOrEqual(inViews, 50, "the walk finds the presentations under Views/")
+        // 48 under Views/ on 2026-11-09: the task page raises its sheets from its root now (main's 467a29f93).
+        XCTAssertGreaterThanOrEqual(inViews, 45, "the walk finds the presentations under Views/")
     }
 
     func testEverySheetThatRefusesToCloseIsListed() throws {
