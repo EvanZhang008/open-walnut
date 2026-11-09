@@ -55,7 +55,17 @@ export const SCAN_MAX_MS = 500
 export const LAND_SCAN_MAX_MS = 6000
 /** These paths change how every test runs: the land layer adds the whole local layer for them. */
 const SETUP_PATH = /^(vitest[^/]*\.config\.ts|tests\/setup\/[^/]+\.ts|bun\.lock|package\.json)$/
-const FOREIGN = ['tests/e2e/', 'tests/web/notes-roundtrip/', 'tests/web/diff-view/', 'tests/web/markdown/', 'tests/web/workflow-graph/']
+// Directories with a vitest config of their own: never in the quick or the slow tier.
+const OWN_CONFIG = [
+  ['tests/e2e/', 'vitest.e2e.config.ts'],
+  ['tests/web/notes-roundtrip/', 'vitest.notes-roundtrip.config.ts'],
+  ['tests/web/diff-view/', 'vitest.diff-view.config.ts'],
+  ['tests/web/markdown/', 'vitest.markdown.config.ts'],
+  ['tests/web/workflow-graph/', 'vitest.workflow-graph.config.ts'],
+]
+const FOREIGN = OWN_CONFIG.map(([d]) => d)
+/** The config a test file outside the quick tier runs under: its directory's own, else the slow tier's. */
+export const configOf = (f) => OWN_CONFIG.find(([d]) => f.startsWith(d))?.[1] ?? 'vitest.slow.config.ts'
 const SCAN_NAME = /(ratchet|guard)[^/]*\.test\.ts$/
 
 function walk(dir, out) {
@@ -83,7 +93,7 @@ export function slowUniverse() {
   // config does not include answers "No test files found" (2026-11-09: every land that edited an
   // e2e test was refused that way).
   const slowDirs = SLOW_TEST_DIRS.filter((d) => d !== 'tests/e2e/**').map((d) => d.replace(/\*\*$/, ''))
-  return all.filter((f) => !f.endsWith('.live.test.ts') && (slow.has(f) || slowDirs.some((d) => f.startsWith(d)))).sort()
+  return all.filter((f) => !f.endsWith('.live.test.ts') && !FOREIGN.some((d) => f.startsWith(d)) && (slow.has(f) || slowDirs.some((d) => f.startsWith(d)))).sort()
 }
 
 export function readDurations(file = DURATIONS) {
@@ -156,13 +166,14 @@ export const LIMITS = {
 
 /**
  * The files a layer runs for a change: { files, slowFiles, why, leftToGate, predictedMs }.
- *   the change's own test files (any cost; slowFiles: the ones in the slow tier, run with its config),
+ *   the change's own test files (any cost; slowFiles: the ones outside the quick tier, each run with
+ *     its own tier's config: configOf),
  *   the tests importing a changed file directly and the tests naming one by path (the local
  *     layer: within its cost per file and count, cheapest first, the rest left to the land),
  *   every fast scan test (ratchets, guards: they caught most real problems, in milliseconds),
  *   and for a change to the test setup, the tests of the setup itself.
  */
-export function scopedLayer(layer, changed, { universe = quickUniverse(), slow = slowUniverse(), durations = readDurations(), graph, namedBy = namers, read, limits = {} } = {}) {
+export function scopedLayer(layer, changed, { universe = quickUniverse(), slow = slowUniverse(), durations = readDurations(), graph, namedBy = namers, read, limits = {}, exists = (f) => fs.existsSync(path.join(ROOT, f)) } = {}) {
   const { fileMaxMs, maxReached, scanMaxMs, depth } = { ...LIMITS[layer], ...limits }
   const inTier = new Set(universe)
   const why = new Map()
@@ -180,8 +191,10 @@ export function scopedLayer(layer, changed, { universe = quickUniverse(), slow =
   if (changed.some((f) => SETUP_PATH.test(f))) for (const f of universe) if (f.startsWith('tests/setup/')) add(f, 'the change touches the test setup')
   const files = [...why.keys()].sort()
   const slowSet = new Set(slow)
-  const slowFiles = [...new Set(changed)].filter((f) => isTestFile(f) && slowSet.has(f)).sort()
-  for (const f of slowFiles) why.set(f, 'changed (slow tier)')
+  const own = (f) => !f.endsWith('.live.test.ts') && FOREIGN.some((d) => f.startsWith(d))
+  // A test file the change deleted is no test to run (vitest: "No test files found").
+  const slowFiles = [...new Set(changed)].filter((f) => isTestFile(f) && (slowSet.has(f) || own(f)) && exists(f)).sort()
+  for (const f of slowFiles) why.set(f, `changed (${configOf(f) === 'vitest.slow.config.ts' ? 'slow tier' : configOf(f)})`)
   return { files, slowFiles, why, leftToGate: leftToGate.sort(), predictedMs: files.reduce((s, f) => s + cost(durations, f), 0) }
 }
 
@@ -293,24 +306,21 @@ function runTier(files, extra, config) {
 }
 
 /**
- * The config a slow-tier file runs with. tests/e2e is a slow dir that vitest.slow.config.ts leaves to
- * its own config (SLOW_DIR_GLOBS), so a changed e2e test run under the slow config found no file
- * and read as a failure (2026-11-09).
+ * The config a file outside the quick tier runs with: tests/e2e and the other dirs with a config of
+ * their own (OWN_CONFIG) run under it, every other one under vitest.slow.config.ts; a file run
+ * under a config that does not include it found no file and read as a failure (2026-11-09).
  */
-export function slowTierConfig(file) {
-  return file.startsWith('tests/e2e/') ? 'vitest.e2e.config.ts' : 'vitest.slow.config.ts'
-}
+export const slowTierConfig = configOf
 
 function run(o, files, slowFiles = []) {
   if (!files.length && !slowFiles.length) { console.log('[test-layers] nothing to run'); return 0 }
-  console.log(`[test-layers] ${o.layer}: ${files.length} file(s)${slowFiles.length ? `, and ${slowFiles.length} of the change's own in the slow tier` : ''}`)
+  console.log(`[test-layers] ${o.layer}: ${files.length} file(s)${slowFiles.length ? `, and ${slowFiles.length} of the change's own outside the quick tier` : ''}`)
   const tiers = []
   if (files.length) tiers.push(runTier(files, o.extra, 'vitest.quick.config.ts'))
-  // The slow tier's files start real processes: one at a time, as CI runs them.
+  // Files outside the quick tier start real processes: one at a time, as CI runs them, each under
+  // its own tier's config (a file a config does not include is "No test files found" there).
   const oneAtATime = ['--maxWorkers=1', ...o.extra.filter((a) => !a.startsWith('--maxWorkers'))]
-  for (const config of [...new Set(slowFiles.map(slowTierConfig))]) {
-    tiers.push(runTier(slowFiles.filter((f) => slowTierConfig(f) === config), oneAtATime, config))
-  }
+  for (const [config, group] of Map.groupBy(slowFiles, slowTierConfig)) tiers.push(runTier(group, oneAtATime, config))
   const fails = tiers.flatMap((t) => t.fails), flaky = tiers.flatMap((t) => t.flaky)
   const n = files.length + slowFiles.length
   const verdict = { layer: o.layer, base: o.base, files: n, ms: tiers.reduce((s, t) => s + t.ms, 0), fails, flaky, ok: fails.length === 0 }

@@ -50,9 +50,22 @@ describe('the land layer', () => {
   })
 
   it("the change's own test in the slow tier runs too, with the slow config", () => {
-    const plan = layers.landLayer(['tests/own-slow.test.ts', 'src/m.ts'], { universe, slow: ['tests/own-slow.test.ts'], durations, namedBy: () => new Set<string>(), graph: fakeGraph({}) })
+    const plan = layers.landLayer(['tests/own-slow.test.ts', 'src/m.ts'], { universe, slow: ['tests/own-slow.test.ts'], durations, namedBy: () => new Set<string>(), graph: fakeGraph({}), exists: () => true })
     expect(plan.slowFiles).toEqual(['tests/own-slow.test.ts'])
     expect(plan.files).not.toContain('tests/own-slow.test.ts')
+  })
+
+  it("the change's own e2e test runs under the e2e config, never the slow tier's, which does not include it", () => {
+    // 2026-11-09: 22 changed e2e files ran under vitest.slow.config.ts, all "failed outside their
+    // tests", and their rerun alone found "No test files found": a whole land layer red for nothing.
+    const exists = (f: string) => f !== 'tests/e2e/deleted.test.ts'
+    const plan = layers.landLayer(['tests/e2e/flow.test.ts', 'tests/web/markdown/m.test.ts', 'tests/e2e/x.live.test.ts', 'tests/e2e/deleted.test.ts'], { universe, durations, namedBy: () => new Set<string>(), graph: fakeGraph({}), exists })
+    // A test file the change deleted is not run: vitest answers "No test files found".
+    expect(plan.slowFiles).toEqual(['tests/e2e/flow.test.ts', 'tests/web/markdown/m.test.ts'])
+    expect(layers.configOf('tests/e2e/flow.test.ts')).toBe('vitest.e2e.config.ts')
+    expect(layers.configOf('tests/web/markdown/m.test.ts')).toBe('vitest.markdown.config.ts')
+    expect(layers.configOf('tests/own-slow.test.ts')).toBe('vitest.slow.config.ts')
+    expect(layers.slowUniverse().filter((f: string) => f.startsWith('tests/e2e/'))).toEqual([])
   })
 
   it('never runs a file outside the quick tier (slow, quarantined, e2e), even one the change edits', () => {
