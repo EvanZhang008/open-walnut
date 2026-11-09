@@ -286,6 +286,18 @@ test.describe('The scanning line under a passage being answered', () => {
     let view = await openFile(MD_FILE)
     const editor = view.locator('.fv-wysiwyg-editor .ProseMirror')
     await expect(editor).toContainText(MD_PASSAGE_FULL)
+    // The file opens where this session's view of it was last scrolled, and this
+    // test itself scrolls the passage up under the toolbar below: on its retry (CI
+    // 2026-11-09) the drag landed on the toolbar, nothing was selected and Ask here
+    // never came. The passage is brought to the middle of its scroller first.
+    await editor.evaluate((el, phrase) => {
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+      for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+        if ((n as Text).data.includes(phrase)) { (n.parentElement as HTMLElement).scrollIntoView({ block: 'center' }); return }
+      }
+    }, MD_PASSAGE_FULL)
+    const toolbarBox = (await view.locator('.fv-html-toolbar').first().boundingBox())!
+    await expect.poll(async () => (await textRects(editor, MD_PASSAGE_FULL))[0]?.top ?? 0).toBeGreaterThan(toolbarBox.y + toolbarBox.height)
     await drag(await textRects(editor, MD_PASSAGE_FULL))
     await page.locator('[data-testid="bubble-ask-here"]').dispatchEvent('mousedown')
     let card = view.locator('.fv-thread-layer .thread-card')
@@ -359,8 +371,20 @@ test.describe('The scanning line under a passage being answered', () => {
     expectUnder(await boxes(lines), await frameRects())
     await expectScanning(lines.first(), /^thread-live-scan$/)
     await shot(page, 'file-html-cell', (await frameRects())[0])
-    // The page scrolls: the line rides with the cell.
-    await frame.locator('body').evaluate(() => window.scrollBy(0, -120))
+    // The page scrolls: the line rides with the cell. By at most what keeps the cell
+    // on screen: the cell does not always sit at the frame's middle (a page near its
+    // end), and a fixed 120px took it past the view's bottom, where no line is drawn
+    // (CI 2026-11-09: the passage at y=845 in an 820px window).
+    const frameBox = (await view.locator('.fv-html-preview').boundingBox())!
+    const shownTop = Math.max(frameBox.y, 0)
+    const shownBottom = Math.min(frameBox.y + frameBox.height, page.viewportSize()!.height)
+    const cell = await frameRects()
+    const below = Math.floor(shownBottom - Math.max(...cell.map((r) => r.top + r.height)) - 24)
+    const above = Math.floor(Math.min(...cell.map((r) => r.top)) - shownTop - 24)
+    // Down when there is room below, else up.
+    const dy = below >= 40 ? -Math.min(120, below) : Math.min(120, above)
+    expect(Math.abs(dy), `room to scroll the cell and keep it on screen (above ${above}, below ${below})`).toBeGreaterThanOrEqual(40)
+    await frame.locator('body').evaluate((_, by) => window.scrollBy(0, by), dy)
     await expect(async () => {
       expectUnder(await boxes(lines), await frameRects())
     }).toPass({ timeout: 3_000 })
