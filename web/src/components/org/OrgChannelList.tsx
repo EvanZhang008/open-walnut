@@ -233,6 +233,8 @@ interface Props {
   /** `origin`: the row right-clicked, for a picker the menu opens (focus goes back to it). */
   rowMenu?: (target: ChannelMenuTarget, point: { x: number; y: number }, origin: HTMLElement | null) => ContextMenuItem[];
   total: number;
+  /** The header's VP count (vpCount): every project row but the Inbox's. */
+  vps: number;
   selectedKey: string | null;
   query: string;
   onQuery: (q: string) => void;
@@ -248,7 +250,7 @@ interface Props {
   now: number;
 }
 
-export function OrgChannelList({ main, rows, routers = [], moved = [], rowMenu, total, selectedKey, query, onQuery, onSelect, onOpenChart, onNewRouter, keptOf, openTaskIds, onOpenTask, onUnwatch, now }: Props) {
+export function OrgChannelList({ main, rows, routers = [], moved = [], rowMenu, total, vps, selectedKey, query, onQuery, onSelect, onOpenChart, onNewRouter, keptOf, openTaskIds, onOpenTask, onUnwatch, now }: Props) {
   const listRef = useRef<HTMLDivElement>(null);
   const orgName = useOrgSettings();
   // A right-click selects a word in WebKit before the menu opens: that selection is the
@@ -328,7 +330,7 @@ export function OrgChannelList({ main, rows, routers = [], moved = [], rowMenu, 
         {keptUnder(main)}
         {/* Routers sit above the VPs: there are few, and below dozens of VPs nobody would see them. */}
         <OrgRouterSection rows={routers} selectedKey={selectedKey} now={now} onSelect={onSelect} />
-        <div className="org-list-section" role="presentation" data-testid="org-vps-head">VPs · {total}</div>
+        <div className="org-list-section" role="presentation" data-testid="org-vps-head">VPs · {vps}</div>
         {shown.map((r) => (
           <div key={r.key} className="org-channel-wrap" role="presentation">
             <Row row={r} selected={selectedKey === r.key} now={now} onSelect={onSelect} onMenu={onMenu} />

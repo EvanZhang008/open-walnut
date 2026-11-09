@@ -1575,10 +1575,21 @@
   padding: 0 0 8px;
   border-bottom: 1px solid var(--border);
 }
-.mail-router-row { gap: 8px; padding-left: 8px; }
-.mail-router-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); }
-.mail-router-state { flex: 0 0 auto; font-size: 11.5px; color: var(--fg-secondary); }
-.mail-router-dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: var(--fg-muted); }
+/* The name sits above its state and wraps (two lines at most) rather than being cut beside it: the
+   pane is as narrow as 200px and a router's name is the one word that says which area it reads. */
+.mail-router-row { gap: 8px; padding-left: 8px; align-items: flex-start; text-align: left; }
+.mail-router-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.mail-router-name {
+  color: var(--fg);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+.mail-router-state { font-size: 11.5px; color: var(--fg-secondary); }
+.mail-router-dot { flex: 0 0 auto; width: 8px; height: 8px; margin-top: 5px; border-radius: 50%; background: var(--fg-muted); }
 .mail-router-dot[data-tone='ready'] { background: var(--success, #2f9e44); }
 .mail-router-dot[data-tone='working'] { background: var(--accent); }
 .mail-router-dot[data-tone='needs'] { background: var(--error, #d70015); }

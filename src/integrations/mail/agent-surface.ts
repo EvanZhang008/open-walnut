@@ -56,6 +56,7 @@ import {
 import { replyHeaders } from './drafts.js'
 import type { MailApprovals } from './approvals.js'
 import type { MailDrafts } from './drafts.js'
+import { firstCopyEach } from './one-copy.js'
 import type { MailService } from './service.js'
 import type { MailUnsubscribe } from './unsubscribe.js'
 import {
@@ -337,11 +338,10 @@ export async function mailThread(deps: MailAgentDeps, input: Record<string, unkn
     )
   }
 
-  const found = new Map<string, MailMessageDto>([[anchor.messageId, anchor]])
-  for (const one of await deps.service.threadMessages(account.accountId, threadId, THREAD_MAX)) {
-    found.set(one.messageId, one)
-  }
-  const messages = [...found.values()].sort((a, b) => a.sentAt - b.sentAt || a.messageId.localeCompare(b.messageId))
+  // The message it was opened on goes first, so it is the copy kept when another folder holds the
+  // same mail (an All Mail id opened, its INBOX copy in the thread).
+  const found = firstCopyEach([anchor, ...await deps.service.threadMessages(account.accountId, threadId, THREAD_MAX)])
+  const messages = found.sort((a, b) => a.sentAt - b.sentAt || a.messageId.localeCompare(b.messageId))
   // The cap is stated only when it was actually reached: an unconditional hedge on every thread
   // teaches the agent to distrust a complete answer.
   const bound = messages.length > THREAD_MAX

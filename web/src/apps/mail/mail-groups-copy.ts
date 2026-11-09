@@ -78,8 +78,13 @@ export const ALL_CAUGHT_UP_EMPTY = 'No unread mail.';
 export const IMPORTANT_EMPTY = 'Nothing needs you right now.';
 export const IMPORTANT_EMPTY_UNREAD = 'No unread important mail.';
 
-/** The `Mark N read` action (the ✓ button's title and the open group's footer). */
+/**
+ * The `Mark N read` action (the ✓ button's title, the open group's footer and its menu). `unread` is
+ * the share this Walnut may mark; with none (every unread in a read-only account) it says so, never
+ * "Mark 0 read".
+ */
 export function markLabel(unread: number): string {
+  if (unread <= 0) return CANT_MARK_HERE;
   return `Mark ${formatCount(unread)} read`;
 }
 

@@ -81,6 +81,8 @@ interface WorldOptions {
   missingVersion?: string[];
   classifyDuringList?: string[];
   classifyDuringBody?: string[];
+  /** Another folder's copy of a row (same RFC id, time and subject), listed ahead of it as an inbox copy is. */
+  copyOf?: Array<{ id: string; of: string }>;
 }
 
 function world(options: WorldOptions = {}) {
@@ -91,7 +93,12 @@ function world(options: WorldOptions = {}) {
   }));
   const reads: Array<{ cacheOnly?: boolean } | undefined> = [];
   const searches: Array<{ cacheOnly?: boolean }> = [];
-  const all = ROWS.map(dto)
+  const threads: Array<{ allCopies?: boolean } | undefined> = [];
+  const copies = (options.copyOf ?? []).map(({ id, of }) => {
+    const source = dto(ROWS.find(([one]) => one === of)!);
+    return { ...source, messageId: id, mailboxId: 'INBOX' } as MailMessageDto;
+  });
+  const all = [...copies, ...ROWS.map(dto)]
     .map((m) => options.laterInCache?.includes(m.messageId) ? redelivered(m) : m)
     .map((m) => options.newMessageInCache?.includes(m.messageId)
       ? redelivered({ ...m, rfcMessageId: `<new-${m.messageId}@example.invalid>` } as MailMessageDto) : m)
@@ -120,7 +127,7 @@ function world(options: WorldOptions = {}) {
         if (options.redeliverDuringBody?.includes(id)) all[all.indexOf(row)] = redelivered(row);
         return { message: options.bodyFromLaterDelivery?.includes(id) ? redelivered(row) : row, body: { text: `Body words of ${id}` } };
       },
-      async threadMessages() { calls.push('thread'); return all; },
+      async threadMessages(_a: string, _t: string, _l: number, threadOptions?: { allCopies?: boolean }) { threads.push(threadOptions); calls.push('thread'); return all; },
       async replyTarget(_a: string, id: string) {
         calls.push(`replyTarget:${id}`);
         const row = find(id);
@@ -171,7 +178,7 @@ function world(options: WorldOptions = {}) {
   const tools = guardMailTools(createMailTools(deps), deps, createMailTools, options2);
   const op = (name: string, args: Record<string, unknown>, ctx: unknown) => ops.find((one) => one.name === name)!.handler(args, ctx);
   const tool = (name: string, input: Record<string, unknown>, meta?: unknown) => tools.find((one) => one.name === name)!.execute(input, meta);
-  return { calls, reads, searches, op, tool, ledgerKeys, failLedger: () => { ledgerError = true; } };
+  return { calls, reads, searches, threads, op, tool, ledgerKeys, failLedger: () => { ledgerError = true; } };
 }
 
 const call = async () => undefined;
@@ -280,6 +287,28 @@ describe('guardMailOps: reads', () => {
     expect(await w.op('thread', { message: 'm-beta' }, as('sid-alpha'))).toContain('area_forbidden');
     // An ordinary session's thread still carries unassigned mail.
     expect(await w.op('thread', { message: 'm-plain' }, VP)).toContain('Subject m-plain');
+  });
+
+  it('one mail in two folders: an area reads its confirmed copy once, and a thread keeps the copy it was opened on', async () => {
+    const count = (text: string) => text.split('Subject m-beta').length - 1;
+    const plain = world();
+    const w = world({ copyOf: [{ id: 'INBOX:beta', of: 'm-beta' }] });
+    const beta = as('sid-beta');
+    // The guard asks for every folder's copy and judges each, so the inbox copy listed first (which
+    // the store would keep) never hides the confirmed one from its area.
+    for (const name of ['search', 'thread'] as const) {
+      const args = name === 'search' ? { q: 'Subject' } : { message: 'm-beta' };
+      const out = await w.op(name, args, beta);
+      expect(count(out), name).toBe(count(await plain.op(name, args, beta)));
+      expect(count(out), name).toBeGreaterThan(0);
+      expect(out).not.toContain('INBOX:beta');
+    }
+    expect(w.searches).toEqual([expect.objectContaining({ cacheOnly: true, allCopies: true })]);
+    expect(w.threads).toEqual([{ allCopies: true }]);
+    // A person opening the inbox copy's thread sees that mail once, as the copy opened.
+    const opened = await w.op('thread', { message: 'INBOX:beta' }, PERSON);
+    expect(opened).toContain('INBOX:beta');
+    expect(count(opened)).toBe(count(await plain.op('thread', { message: 'm-beta' }, PERSON)));
   });
 
   it('an area caller reads no unassigned mail; an ordinary session does; each area reads its own exact item', async () => {

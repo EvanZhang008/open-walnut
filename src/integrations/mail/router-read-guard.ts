@@ -1,5 +1,6 @@
 // The gateway and tool belts run these in-process, past router-area-reader.ts, so the area check lives here.
 import { routerStore } from '../../core/router/runtime.js'
+import { firstCopyEach } from './one-copy.js'
 import { sourceReaderFor, type ScopedSourceReader, type SourceCaller, type SourceReader } from '../../core/router/source-reader.js'
 import { MailServiceError, type DraftDto, type MailMessageDto } from './contract.js'
 import type { MailAgentDeps } from './agent-surface.js'
@@ -121,9 +122,11 @@ export function scopeMailDeps(
       if (!(await judgeRows(await currentReader(), [result.message], ledger))[0]) throw forbidden()
       return result
     },
+    // Every folder's copy is judged, then one per mail: the copy this area may read is often not the
+    // one the store would keep (its inbox copy), and keeping that one first left the router nothing.
     async threadMessages(accountId, threadId, limit) {
       if (reader.kind === 'unverifiable') throw unverifiable()
-      return keep(await raw.threadMessages(accountId, threadId, limit))
+      return firstCopyEach(await keep(await raw.threadMessages(accountId, threadId, limit, { allCopies: true })))
     },
     async listMessages(query) {
       if (reader.kind === 'unverifiable') throw unverifiable()
@@ -132,8 +135,8 @@ export function scopeMailDeps(
     },
     async search(query) {
       if (reader.kind === 'unverifiable') throw unverifiable()
-      const found = await raw.search({ ...query, cacheOnly: true })
-      return { ...found, messages: await keep(found.messages) }
+      const found = await raw.search({ ...query, cacheOnly: true, allCopies: true })
+      return { ...found, messages: firstCopyEach(await keep(found.messages)) }
     },
     async replyTarget(accountId, messageId) {
       const before = await envelope(accountId, messageId)

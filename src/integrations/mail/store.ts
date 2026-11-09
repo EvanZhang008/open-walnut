@@ -703,9 +703,9 @@ export class MailStore {
    * summary of it, but the bound applies to the THREAD rather than to how far back the scan was
    * willing to look, so a reply months old is still found (see the v5 index in db.ts).
    */
-  threadMessages(accountId: string, threadId: string, limit: number): Promise<MessageRow[]> {
+  threadMessages(accountId: string, threadId: string, limit: number, copies: MessageCopies = 'one'): Promise<MessageRow[]> {
     return this.db.all<MessageRow>(
-      `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE account_id = ? AND thread_id = ?`
+      rowsOf('account_id = ? AND thread_id = ?', copies)
       + ' ORDER BY sent_at ASC, message_id ASC LIMIT ?',
       [accountId, threadId, limit],
     )
@@ -1015,13 +1015,40 @@ export class MailStore {
     )
   }
 
-  searchMessages(match: string, accountId: string, limit: number): Promise<MessageRow[]> {
+  searchMessages(match: string, accountId: string, limit: number, copies: MessageCopies = 'one'): Promise<MessageRow[]> {
     return this.db.all<MessageRow>(
-      `SELECT ${MESSAGE_COLUMNS} FROM messages`
-      + ' WHERE rowid IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?)'
-      + (accountId ? ' AND account_id = ?' : '')
+      rowsOf('rowid IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?)'
+        + (accountId ? ' AND account_id = ?' : ''), copies)
       + ' ORDER BY sent_at DESC LIMIT ?',
       accountId ? [match, accountId, limit] : [match, limit],
     )
   }
+}
+
+/**
+ * The rows matching `where`, one per message: a read across folders (search, a thread) finds the same
+ * mail once per folder that holds it (Gmail keeps one copy in INBOX, `[Gmail]/All Mail` and
+ * `[Gmail]/Important`; Outlook moves keep the Message-ID), and drew it two or three times (review
+ * 2026-11-08). A message is its account, its RFC Message-ID (its own id when it has none), its time
+ * and its subject: a sender may reuse a Message-ID, and two such mails are two deliveries. The copy
+ * kept is the inbox one, then one whose body is cached, then a folder of the person's own before a
+ * Gmail system folder, then the newest row. The caller adds ORDER BY and LIMIT.
+ */
+/**
+ * `one`: a message once (`oneCopyEach`). `all`: every folder's row, for a caller that picks the copy
+ * itself (the router read guard keeps the copy its area may read, then one per message).
+ */
+export type MessageCopies = 'one' | 'all'
+
+function rowsOf(where: string, copies: MessageCopies): string {
+  return copies === 'all' ? `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE ${where}` : oneCopyEach(where)
+}
+
+export function oneCopyEach(where: string): string {
+  return `SELECT ${MESSAGE_COLUMNS} FROM (SELECT ${MESSAGE_COLUMNS}, ROW_NUMBER() OVER (`
+    + " PARTITION BY account_id, CASE WHEN rfc_message_id = '' THEN 'id:' || message_id ELSE rfc_message_id END, sent_at, subject"
+    + " ORDER BY CASE WHEN lower(mailbox_id) = 'inbox' THEN 0 ELSE 1 END,"
+    + ' CASE WHEN body_ref IS NULL THEN 1 ELSE 0 END,'
+    + " CASE WHEN mailbox_id LIKE '[Gmail]/%' THEN 1 ELSE 0 END, rowid DESC) AS copy_n"
+    + ` FROM messages WHERE ${where}) WHERE copy_n = 1`
 }

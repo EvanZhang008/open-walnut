@@ -363,6 +363,15 @@ function vpNodes(projects: readonly OrgProjectNode[]): { node: OrgProjectNode; l
     });
 }
 
+/**
+ * How many VPs the rows are: every project's row. The Inbox row (tasks in no project) has no VP, so
+ * it is never counted (review 2026-11-08: "VPs · 6" with five VPs); the chart and the phone count the
+ * same way (`ceoLine`, `ChatOrgModel`).
+ */
+export function vpCount(rows: readonly ChannelRow[]): number {
+  return rows.filter((row) => row.kind === 'project' && row.project !== '').length;
+}
+
 export function buildChannels(tree: OrgTree, tasks: readonly Task[], probe: AlertProbe, areaNames: Readonly<Record<string, string>> = {}): OrgChannels {
   const byId = new Map(tasks.map((t) => [t.id, t] as const));
   const projects = sortChannels(tree.projects.map((p) => projectRow(p, byId, probe)));
@@ -379,7 +388,8 @@ export function buildChannels(tree: OrgTree, tasks: readonly Task[], probe: Aler
   const working = tree.counts.running;
   const mainThreads = threadsOf(mainTask);
   // Its own Threads lead the line, 0 included; the teams' asks are in its Tasks, never a Needs you here.
-  const summary = [threadCountLabel(mainThreads?.shown ?? 0), `${rows.length} ${rows.length === 1 ? VP_LABEL : `${VP_LABEL}s`}`];
+  const vps = vpCount(rows);
+  const summary = [threadCountLabel(mainThreads?.shown ?? 0), `${vps} ${vps === 1 ? VP_LABEL : `${VP_LABEL}s`}`];
   if (working) summary.push(stateCountLabel('working', working));
   const main: ChannelRow = {
     key: MAIN_KEY,

@@ -616,8 +616,9 @@ export class MailService {
    * and compares, which keeps the honesty about a truncated thread in the one place that renders
    * it. See `mailThread`.
    */
-  async threadMessages(accountId: string, threadId: string, limit: number): Promise<MailMessageDto[]> {
-    const rows = await this.deps.store.threadMessages(accountId, threadId, limit)
+  /** One row per mail; `allCopies` keeps every folder's copy for a caller that picks one itself. */
+  async threadMessages(accountId: string, threadId: string, limit: number, options: { allCopies?: boolean } = {}): Promise<MailMessageDto[]> {
+    const rows = await this.deps.store.threadMessages(accountId, threadId, limit, options.allCopies ? 'all' : 'one')
     return this.decorate(rows)
   }
 
@@ -729,7 +730,11 @@ export class MailService {
     }
   }
 
-  async search(query: { accountId?: string; q: string; limit: number; cacheOnly?: boolean }): Promise<{
+  async search(query: {
+    accountId?: string; q: string; limit: number; cacheOnly?: boolean
+    /** Every folder's copy of a cached mail, for a caller that keeps one itself (the router read guard). */
+    allCopies?: boolean
+  }): Promise<{
     messages: MailMessageDto[]
     source: 'provider' | 'cache'
   }> {
@@ -753,7 +758,7 @@ export class MailService {
     }
     const match = ftsMatchFor(query.q)
     if (!match) return { source: 'cache', messages: [] }
-    const rows = await this.deps.store.searchMessages(match, query.accountId ?? '', query.limit)
+    const rows = await this.deps.store.searchMessages(match, query.accountId ?? '', query.limit, query.allCopies ? 'all' : 'one')
     return { source: 'cache', messages: await this.decorate(rows) }
   }
 

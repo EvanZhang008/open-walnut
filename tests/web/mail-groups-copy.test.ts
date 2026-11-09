@@ -2,10 +2,12 @@
  * The grouped inbox's sentences. The unread places (badge tooltip, header count title, IMPORTANT head
  * title) all call `unreadExplain()`, so pinning it here pins all of them.
  */
+import fs from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   bulkResultText, groupRowAria, groupsErrorText, importantCardBody, importantCardTitle, importantSavedText,
-  markLabel, moreLabel, progressLabel, readOnlyTitle, readerWhyText, renamedText, rulesErrorText, sortProgressText,
+  CANT_MARK_HERE, markLabel, moreLabel, progressLabel, readOnlyTitle, readerWhyText, renamedText, rulesErrorText, sortProgressText,
   sortingText, unreadExplain, unreadWord,
 } from '../../web/src/apps/mail/mail-groups-copy';
 
@@ -64,6 +66,8 @@ describe('header and row words', () => {
 describe('bulk read sentences', () => {
   it('walks the progress labels', () => {
     expect(markLabel(11)).toBe('Mark 11 read');
+    // Unread mail only in read-only accounts leaves nothing to mark: the label says so (review 2026-11-08).
+    expect(markLabel(0)).toBe(CANT_MARK_HERE);
     expect(progressLabel('read', null, 11)).toBe('Marking…');
     expect(progressLabel('read', 6, 11)).toBe('Marking 6 of 11…');
     expect(progressLabel('unread', 6, 11)).toBe('Undoing 6 of 11…');
@@ -107,5 +111,14 @@ describe('state lines', () => {
   it('falls back to all mail in words', () => {
     expect(groupsErrorText('Group counts are taking too long.'))
       .toBe("Walnut couldn't sort this inbox: Group counts are taking too long. Showing all mail.");
+  });
+});
+
+describe('the Mark N read label has one source', () => {
+  it('no mail file builds a "Mark <count> read" label of its own', () => {
+    const dir = path.join(process.cwd(), 'web/src/apps/mail');
+    const own = fs.readdirSync(dir).filter((f) => /\.tsx?$/.test(f) && f !== 'mail-groups-copy.ts')
+      .filter((f) => /`Mark \$\{/.test(fs.readFileSync(path.join(dir, f), 'utf8')));
+    expect(own).toEqual([]);
   });
 });

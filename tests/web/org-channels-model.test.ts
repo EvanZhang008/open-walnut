@@ -4,7 +4,7 @@ import type { Task } from '../../src/core/types.js'
 import { buildOrgTree } from '../../src/core/org/org-tree.js'
 import {
   MAIN_KEY, alertText, buildChannels, cardChecked, channelState, filterChannels, initials, mainTeamColumns, movedProjects, pickChannel,
-  projectRowKey, rowOf, settleDefaultNode, teamColumns, type AlertProbe,
+  projectRowKey, rowOf, settleDefaultNode, teamColumns, vpCount, type AlertProbe,
 } from '../../web/src/components/org/org-channels-model.js'
 
 const at = (min: number) => new Date(Date.UTC(2026, 9, 25, 12, min)).toISOString()
@@ -69,6 +69,24 @@ describe('org channels', () => {
     expect(personal.contactTitle).toBe('Personal VP')
     expect(main.key).toBe(MAIN_KEY)
     expect(main.latest).toBe('0 threads · 4 VPs · 1 Working')
+  })
+
+  it('counts VPs without the Inbox row: tasks in no project have no VP', () => {
+    const withInbox = [...tasks, t('i1', '', 'TODO', { updated_at: at(3) }), t('i2', '', 'NEED_ACTION', { updated_at: at(4) })]
+    const { main, rows } = buildChannels(buildOrgTree(withInbox), withInbox, noAlerts)
+    // The Inbox still has its row (its tasks are reachable), but it is no VP.
+    expect(rows.some((r) => r.project === '' && r.name === 'Inbox')).toBe(true)
+    expect(rows.length).toBe(5)
+    expect(vpCount(rows)).toBe(4)
+    expect(main.latest).toBe('0 threads · 4 VPs · 1 Working')
+  })
+
+  it('the Org list header reads its VP count from vpCount, never from the row total', async () => {
+    const fs = await import('node:fs')
+    const list = fs.readFileSync('web/src/components/org/OrgChannelList.tsx', 'utf8')
+    const page = fs.readFileSync('web/src/pages/OrgPage.tsx', 'utf8')
+    expect(list).toMatch(/data-testid="org-vps-head">VPs · \{vps\}</)
+    expect(page).toContain('vps={vpCount(channels.rows)}')
   })
 
   it('puts a project whose work waits on a prompt first, with the prompt as its line', () => {

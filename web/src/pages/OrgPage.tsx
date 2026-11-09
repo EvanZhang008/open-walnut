@@ -49,7 +49,7 @@ import {
   orgStripToggleLock, orgStripView, type SameSession,
 } from '@/components/org/org-side-columns';
 import {
-  MAIN_KEY, buildChannels, filterChannels, flattenNodes, movedProjects, pickChannel, projectRowKey, rowOf, settleDefaultNode, type AlertProbe, type ChannelRow,
+  MAIN_KEY, buildChannels, filterChannels, flattenNodes, movedProjects, pickChannel, projectRowKey, rowOf, settleDefaultNode, vpCount, type AlertProbe, type ChannelRow,
 } from '@/components/org/org-channels-model';
 import {
   ANSWERED_HOLD_MS, phaseMark, promptAnswered, promptKey, settleHolds, withAnswered, without, type AnsweredHolds,
@@ -481,6 +481,7 @@ export function OrgPage() {
           moved={moved}
           rowMenu={rowMenu}
           total={channels.rows.length}
+          vps={vpCount(channels.rows)}
           selectedKey={phone ? null : selected.key}
           query={query}
           onQuery={setQuery}

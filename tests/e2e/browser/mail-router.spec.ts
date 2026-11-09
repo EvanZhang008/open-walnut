@@ -305,6 +305,16 @@ test('Mail lists the area router with its live state, and it opens at Org level,
   await expect(row).toHaveCount(1);
   await expect(row.getByTestId('mail-router-state')).toHaveText('Paused');
   await expect(row).toHaveAttribute('data-router-state', 'paused');
+  // At the narrowest pane the whole name still shows: it wraps above its state, never "Personal mail r…".
+  const splitter = page.getByTestId('mail-splitter-accounts');
+  await splitter.focus();
+  for (let i = 0; i < 20; i++) await page.keyboard.press('ArrowLeft');
+  await expect(splitter).toHaveAttribute('aria-valuenow', '168');
+  const cut = await row.getByTestId('mail-router-name').evaluate((el) => el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1);
+  expect(cut).toBe(false);
+  const [nameBox, stateBox] = await Promise.all([row.getByTestId('mail-router-name').boundingBox(), row.getByTestId('mail-router-state').boundingBox()]);
+  expect(stateBox!.y).toBeGreaterThanOrEqual(nameBox!.y + nameBox!.height - 1);
+  await capture(page, { path: '/tmp/router-mail/router-row-narrow.png' });
   const routerId = await row.getAttribute('data-task-id');
   await row.click();
   await expect(page.getByTestId('org-detail-title')).toContainText('Personal mail router');

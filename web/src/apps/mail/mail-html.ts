@@ -70,11 +70,18 @@ export function mailFrameCsp(allowRemoteImages: boolean): string {
  * gap between every two rows, so the borders read as a column of separate boxes (a real account
  * notice, 143 nested tables). Fixed pixel widths on those tables are handled by `fitFixedTables`,
  * in the string pass, not here: see that function for the WebKit reason.
+ *
+ * A table also grows to its widest unbreakable line, and both engines then cut it at the paper's
+ * edge behind an overlay scrollbar nobody sees (2026-11-08: a CI mail whose result cells say
+ * `white-space: nowrap` laid its 544px card out at 996px, its button and title cut in half). So a
+ * cell's text always wraps (`pre` keeps its lines), and `overflow-wrap: anywhere` lets a long word
+ * or link break where nothing else can, which, unlike `break-word`, also narrows the table.
  */
 const FRAME_RESET = `<style>
   :root { color-scheme: light; }
   html { background: #fff; }
-  body { margin: 0; padding: 20px 24px; font: 15px/1.65 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; color: #1d1d1f; background: #fff; overflow-wrap: break-word; }
+  body { margin: 0; padding: 20px 24px; font: 15px/1.65 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; color: #1d1d1f; background: #fff; overflow-wrap: anywhere; }
+  td, th, :is(td, th) :not(pre, pre *) { white-space: normal !important; }
   img, table, pre { max-width: 100%; }
   img { height: auto; }
   pre { overflow-x: auto; white-space: pre-wrap; }

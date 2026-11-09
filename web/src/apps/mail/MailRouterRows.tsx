@@ -46,8 +46,11 @@ export function MailRouterRows({ onPicked }: { onPicked: () => void }) {
               onClick={() => go(r.path)}
             >
               <span className="mail-router-dot" data-tone={r.tone} aria-hidden="true" />
-              <span className="mail-router-name">{r.name}</span>
-              <span className="mail-router-state" data-testid="mail-router-state">{r.state}</span>
+              {/* Name above its state: in the narrow pane a name beside the state was cut to "Personal mail r…". */}
+              <span className="mail-router-text">
+                <span className="mail-router-name" data-testid="mail-router-name">{r.name}</span>
+                <span className="mail-router-state" data-testid="mail-router-state">{r.state}</span>
+              </span>
             </button>
           </li>
         ))}
