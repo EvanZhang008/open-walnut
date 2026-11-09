@@ -493,7 +493,9 @@ test('C90: pulling the home list down 64 px refetches in place and says Updated'
   const scroller = '.todo-panel .home-navigation-scroll'
   await page.evaluate((sel) => { const b = document.querySelector<HTMLElement>(sel); if (b) b.scrollTop = 0 }, scroller)
   expect(await touchDrag(page, `${scroller} .todo-panel-item`, 200, 300)).toBe(true)
-  await expect(page.getByTestId('phone-pull-home')).toHaveText('Updated', { timeout: 10_000 })
+  // "Updated" shows for one second (UPDATED_SHOW_MS), and expect's polls a second apart on a
+  // loaded runner stepped over it (read "Updating...", then nothing): read it on every frame.
+  await page.waitForFunction((id) => document.querySelector(`[data-testid="${id}"]`)?.textContent === 'Updated', 'phone-pull-home', { timeout: 10_000, polling: 'raf' })
   await expect.poll(() => refetched).toBeGreaterThan(0)
   await expect(page.getByTestId('phone-pull-home')).toHaveCount(0, { timeout: 3_000 })
   expect(page.url()).toBe(url)

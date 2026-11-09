@@ -229,7 +229,9 @@ test('C90: pulling the center down 64 px runs the resync in place and says Updat
     for (let i = 1; i <= 8; i++) { fire('touchmove', 220 + i * 12, 0); await new Promise((r) => setTimeout(r, 16)) }
     fire('touchend', null, 316)
   })
-  await expect(page.getByTestId('phone-pull-notifications')).toHaveText('Updated', { timeout: 10_000 })
+  // "Updated" shows for one second (UPDATED_SHOW_MS), and expect's polls a second apart on a
+  // loaded runner stepped over it (read "Updating...", then nothing): read it on every frame.
+  await page.waitForFunction((id) => document.querySelector(`[data-testid="${id}"]`)?.textContent === 'Updated', 'phone-pull-notifications', { timeout: 10_000, polling: 'raf' })
   await expect(center(page)).toBeVisible()
   expect(new URL(page.url()).pathname).toBe('/')
   // The same resync as coming back to the foreground: this lane never answers,
