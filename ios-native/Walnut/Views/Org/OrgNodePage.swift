@@ -295,43 +295,16 @@ struct OrgNodePage: View {
         .accessibilityIdentifier("org.node.page")
     }
 
-    /// Three segments side by side at ordinary sizes. At the accessibility sizes three labels
-    /// never fit one row (each read "T…", and the row grew taller than the page's content), so the
-    /// picker collapses to one full-width button naming the view shown, with the others in its menu.
-    @ViewBuilder private var viewPicker: some View {
-        if OrgNodeBarLayout.collapses(typeSize) {
-            Menu {
-                Picker("View", selection: $page.tab) {
-                    ForEach(OrgNodeTab.allCases) { t in
-                        Label(label(t), systemImage: t.symbol).tag(t)
-                    }
-                }
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: page.tab.symbol)
-                    Text(label(page.tab)).lineLimit(1).minimumScaleFactor(0.7)
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.up.chevron.down").font(.footnote)
-                }
-                .font(.body.weight(.medium))
-                .padding(.horizontal, 12)
-                .frame(maxWidth: .infinity, minHeight: 44)
-                .background(Color(uiColor: .tertiarySystemFill).opacity(0.6), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .dynamicTypeSize(...OrgNodeBarLayout.typeCap)
-            .accessibilityLabel("View: \(label(page.tab))")
-            .accessibilityIdentifier("org.node.tabs")
-        } else {
-            Picker("View", selection: $page.tab) {
-                ForEach(OrgNodeTab.allCases) { t in
-                    Text(label(t)).tag(t)
-                }
-            }
-            .pickerStyle(.segmented)
-            .accessibilityIdentifier("org.node.tabs")
-        }
+    /// The view switch, drawn by `OrgNodeViewPicker` from plain values: the page's body runs again
+    /// on every read of its threads (a failed read is tried again every few seconds), and a menu
+    /// rebuilt while it is open dropped the row he tapped (OrgLargeTypeUITests: "picking Brief left
+    /// the picker on View: Tasks"). Equal values leave the open menu alone.
+    private var viewPicker: some View {
+        OrgNodeViewPicker(
+            tab: page.tab, labels: OrgNodeTab.allCases.map { label($0) },
+            collapses: OrgNodeBarLayout.collapses(typeSize),
+            pick: { page.tab = $0 })
+            .equatable()
     }
 
     @ViewBuilder
@@ -449,5 +422,66 @@ struct OrgNodeBar: View {
         .zIndex(1)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("org.bar")
+    }
+}
+
+/// An Org node page's view switch. Three segments side by side at ordinary sizes. At the
+/// accessibility sizes three labels never fit one row (each read "T…", and the row grew taller than
+/// the page's content), so the picker collapses to one full-width button naming the view shown,
+/// with the others in its menu. Equal by what it draws, never by `pick`, so its page redrawing for
+/// another reason does not rebuild a menu he has open.
+struct OrgNodeViewPicker: View, Equatable {
+    let tab: OrgNodeTab
+    /// One per `OrgNodeTab.allCases`, in that order.
+    let labels: [String]
+    let collapses: Bool
+    let pick: (OrgNodeTab) -> Void
+
+    static func == (a: Self, b: Self) -> Bool {
+        a.tab == b.tab && a.labels == b.labels && a.collapses == b.collapses
+    }
+
+    private func label(_ t: OrgNodeTab) -> String {
+        OrgNodeTab.allCases.firstIndex(of: t).flatMap { labels.indices.contains($0) ? labels[$0] : nil } ?? t.label
+    }
+
+    private var selection: Binding<OrgNodeTab> {
+        Binding(get: { tab }, set: { pick($0) })
+    }
+
+    var body: some View {
+        if collapses {
+            Menu {
+                Picker("View", selection: selection) {
+                    ForEach(OrgNodeTab.allCases) { t in
+                        Label(label(t), systemImage: t.symbol).tag(t)
+                    }
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: tab.symbol)
+                    Text(label(tab)).lineLimit(1).minimumScaleFactor(0.7)
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.up.chevron.down").font(.footnote)
+                }
+                .font(.body.weight(.medium))
+                .padding(.horizontal, 12)
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .background(Color(uiColor: .tertiarySystemFill).opacity(0.6), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .dynamicTypeSize(...OrgNodeBarLayout.typeCap)
+            .accessibilityLabel("View: \(label(tab))")
+            .accessibilityIdentifier("org.node.tabs")
+        } else {
+            Picker("View", selection: selection) {
+                ForEach(OrgNodeTab.allCases) { t in
+                    Text(label(t)).tag(t)
+                }
+            }
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier("org.node.tabs")
+        }
     }
 }
