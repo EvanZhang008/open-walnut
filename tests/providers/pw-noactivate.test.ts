@@ -111,7 +111,12 @@ describe('every way a Playwright run starts goes through it', () => {
   it('the preload calls it for every Playwright library it sees, beside the silencer', () => {
     expect(pwSilencePreloadSource()).toContain('install(module.exports); quietWebkit(module.exports);')
   })
-  it('the repo silencer every Playwright config imports calls it', () => {
-    expect(fs.readFileSync(path.join(ROOT, 'tests/e2e/browser/pw-silence.ts'), 'utf8')).toMatch(/\.quietWebkit\(core\)/)
+  it('the repo silencer every Playwright config imports calls it, even when a runner\'s older preload silenced the pages first', () => {
+    // 2026-11-09: a Mac run's preload came from the Mac's main; it set the silenced flag, and a call
+    // inside the flag's block never ran.
+    const src = fs.readFileSync(path.join(ROOT, 'tests/e2e/browser/pw-silence.ts'), 'utf8')
+    const flagBlockEnd = src.indexOf('\n}\n', src.indexOf('if (!g[FLAG])'))
+    expect(flagBlockEnd).toBeGreaterThan(0)
+    expect(src.indexOf(".quietWebkit(req('playwright-core'))")).toBeGreaterThan(flagBlockEnd)
   })
 })

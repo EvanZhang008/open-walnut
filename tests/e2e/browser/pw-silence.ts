@@ -38,8 +38,7 @@ const g = globalThis as { [FLAG]?: boolean }
 if (!g[FLAG]) {
   g[FLAG] = true
   try {
-    const req = createRequire(import.meta.url)
-    const core = req('playwright-core') as { _instrumentation?: Instrumentation }
+    const core = createRequire(import.meta.url)('playwright-core') as { _instrumentation?: Instrumentation }
     core._instrumentation?.addListener({
       runAfterCreateBrowserContext: async (context) => { await context.addInitScript({ content: AUTOMATION_SILENCE_JS }) },
     })
@@ -52,8 +51,6 @@ if (!g[FLAG]) {
       const launch = type.launch.bind(type)
       type.launch = (options = {}) => launch({ ...options, args: engineArgs(engine, options.args ?? lib._defaultLaunchOptions?.args) })
     }
-    // On a Mac, no WebKit test browser ever becomes the frontmost app (src/providers/pw-noactivate-core.ts).
-    ;(req('./pw-silence-preload.cjs') as { quietWebkit(core: unknown): boolean }).quietWebkit(core)
   } catch (e) {
     console.warn(`[pw-silence] could not silence test browsers: ${(e as Error).message}`)
   }
@@ -61,4 +58,14 @@ if (!g[FLAG]) {
   // Outside the try above: when it cannot be put in place, the run stops instead of going on.
   const core = createRequire(import.meta.url)('playwright-core') as Record<string, unknown> & { _defaultLaunchOptions?: { env?: Record<string, string>; executablePath?: string } }
   guardWebkitPasteboard(core.webkit as Parameters<typeof guardWebkitPasteboard>[0], process.platform, undefined, () => core._defaultLaunchOptions)
+}
+
+// On a Mac, no WebKit test browser ever becomes the frontmost app (src/providers/pw-noactivate-core.ts).
+// Outside the flag: a runner's older preload may have silenced the pages already, and only this
+// branch's copy knows the runner. It wraps each library once.
+try {
+  const req = createRequire(import.meta.url)
+  ;(req('./pw-silence-preload.cjs') as { quietWebkit(core: unknown): boolean }).quietWebkit(req('playwright-core'))
+} catch (e) {
+  console.warn(`[pw-silence] a WebKit test browser may come to the front: ${(e as Error).message}`)
 }
