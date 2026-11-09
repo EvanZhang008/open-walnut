@@ -587,3 +587,24 @@ test("a phone draws no session header: its top bar's menu has a Scripts row", as
     await phoneCtx.close()
   }
 })
+
+test("a host that cannot read the repository's walnut.json: the draft says no setup will run, and why", async ({ page }) => {
+  test.setTimeout(120_000)
+  const repo = path.join(home, 'ws-fixture', 'web')
+  // The host's answer an older daemon gives (it has no scripts capability).
+  const why = 'The Walnut daemon on this Mac needs an update before it can run project scripts.'
+  await page.route(/\/api\/workspaces\/scripts\?/, (route) => route.request().method() === 'GET'
+    ? route.fulfill({ json: { host: '__local__', scripts: [], dir: repo, file_unavailable: why } })
+    : route.continue())
+  await openHome(page)
+  const draft = await openDraft(page)
+  await pickDraftFolder(page, draft, repo)
+  const menu = await openDraftSettings(draft)
+  await menu.getByTestId('draft-menu-workspace').click()
+  const row = draft.getByTestId('draft-workspace-row')
+  await expect(row.getByTestId('draft-workspace-provider-git-worktree')).toHaveAttribute('aria-checked', 'true', { timeout: 30_000 })
+  const note = row.getByTestId('draft-workspace-setup-unavailable')
+  await expect(note).toHaveText(`No setup will run: the repository's walnut.json could not be read. ${why}`, { timeout: 30_000 })
+  await expect(row.getByTestId('draft-workspace-setup')).toHaveCount(0)
+  await shot(page, 'setup-unavailable', row, 4)
+})

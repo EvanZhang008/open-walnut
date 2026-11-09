@@ -94,7 +94,7 @@ export function DraftWorkspaceRow({ draftId, cwd, host, boundTaskId, project }: 
   // The setup script the new workspace will run (scripts.ts), said before Start.
   // A walnut.json the user has not allowed yet does not run by itself: the
   // notice says so and allows it in one click.
-  type SetupView = { place: string; script: ResolvedProjectScript | null; needsOk: boolean; key?: string };
+  type SetupView = { place: string; script: ResolvedProjectScript | null; needsOk: boolean; key?: string; unavailable?: string };
   const [setup, setSetup] = useState<SetupView | null>(null);
   const [allowing, setAllowing] = useState(false);
   const [allowError, setAllowError] = useState<string | null>(null);
@@ -110,7 +110,7 @@ export function DraftWorkspaceRow({ draftId, cwd, host, boundTaskId, project }: 
     fetchScripts({ cwd, host: host ?? undefined, project: project ?? boundTask?.project, ref: baseRef }).then((v) => {
       if (!alive) return;
       const script = v.scripts.find((s) => s.id === v.setup) ?? null;
-      setSetup({ place: setupPlace, script, needsOk: !!script && script.source !== 'project' && !v.file_trusted, key: v.file?.key });
+      setSetup({ place: setupPlace, script, needsOk: !!script && script.source !== 'project' && !v.file_trusted, key: v.file?.key, unavailable: v.file_unavailable });
     }, () => { if (alive) setSetup({ place: setupPlace, script: null, needsOk: false }); });
     return () => { alive = false; };
   }, [choice.enabled, cwd, host, project, boundTask?.project, baseRef, setupPlace, reload]);
@@ -285,6 +285,12 @@ export function DraftWorkspaceRow({ draftId, cwd, host, boundTaskId, project }: 
                 onClick={() => setCommandOpen((v) => !v)} data-testid="draft-workspace-setup-command">
                 {setupScript.command}
               </code>
+            </span>
+          )}
+          {!setupScript && shownSetup?.unavailable && picked && isPickable(picked) && (
+            // A host that cannot read the repository's walnut.json (an older daemon, offline): no setup will run, say why.
+            <span className="draft-workspace-note is-warn" data-testid="draft-workspace-setup-unavailable">
+              No setup will run: the repository's walnut.json could not be read. {shownSetup.unavailable}
             </span>
           )}
           {allowError && <span className="draft-workspace-note is-error">{allowError}</span>}
