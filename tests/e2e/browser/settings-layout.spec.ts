@@ -81,6 +81,9 @@ test('F02: Remote Hosts still saves a real edit', async ({ page }) => {
   // Hostname first, then the alias (its placeholder is one no host has).
   await page.locator('#remote-hosts input[id^="rh-hostname-"]').fill('box-one.example.test')
   await page.locator('#remote-hosts input[id^="rh-alias-"]').fill('box-one')
+  // A new host saves only on Add and connect, never while typed; its dial is answered here.
+  await page.route(/\/api\/hosts\/box-one\/connect$/, (route) => route.fulfill({ status: 502, json: { error: 'not reachable' } }))
+  await page.getByTestId('rh-add-connect').click()
   await expect.poll(() => writes.filter((w) => w.includes('/api/config') && w.includes('box-one')).length,
     { timeout: 10_000 }).toBeGreaterThan(0)
 })

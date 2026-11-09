@@ -210,7 +210,9 @@ test('N10: an off host keeps its controls at full strength', async ({ page }) =>
   expect(ops.length).toBeGreaterThan(0)
   for (const o of ops) expect(o.op, o.text).toBe(1)
   const label = await effectiveOpacity(page, '.rh-host-row[data-host-off="true"] .settings-row-label')
-  expect(label[0].op).toBeCloseTo(0.45, 2)
+  // Its name stays readable too: only its dot and its Off line are muted (2026-11-05 review:
+  // at 45% the name read as a host that was gone, though it still turns on).
+  expect(label[0].op).toBe(1)
   // N11 (the Engines Reset slot's edge) went with the Engines pane on 2026-10-27.
 })
 

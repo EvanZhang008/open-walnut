@@ -148,6 +148,8 @@ test('F17 F18 F28: plugin slots line up, install rows stack', async ({ page }) =
     return { labelLines: Math.round(label.getBoundingClientRect().height / 19), inputBelow: input.getBoundingClientRect().top > label.getBoundingClientRect().bottom }
   })
   expect(lines).toEqual({ labelLines: 1, inputBelow: true })
+  // The installed cards come with the plugin registry, which may answer after the page shows.
+  await expect(page.locator('[data-testid="plugin-store-installed"] .apps-grid > .apps-card').first()).toBeVisible({ timeout: 20_000 })
   // The slots line up on the card grid: cards side by side share one height, so their
   // footers (status, Open, where it comes from) sit on one line.
   const footRows = await page.locator('[data-testid="plugin-store-installed"] .apps-grid').evaluateAll((grids) => grids.map((grid) => {
