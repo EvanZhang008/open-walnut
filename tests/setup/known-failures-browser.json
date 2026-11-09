@@ -1,6 +1,6 @@
 {
   "suite": "playwright: chromium, chromium-host-fixture",
-  "count": 225,
+  "count": 226,
   "failures": [
     "action-cards-and-time.spec.ts :: suggest action cards › card renders, its button runs the real op, and the receipt survives a reload",
     "action-cards-and-time.spec.ts :: time tracking › real interaction earns human time banked against the right task and kind",
@@ -117,6 +117,7 @@
     "notification-system-hosts.spec.ts :: one attempt, Open Settings, cards under their host (c, d, e) › NSH-d: Open Settings in All's problem row (a readiness problem) closes the panel, then lands on #rh-host-signbox",
     "org-alert-answer.spec.ts :: Quote puts the ask in this VP's chat, ahead of what was typed, not in its Home column",
     "page-find.spec.ts :: chromium: every way a selection ends clears its echo, and a new one moves it",
+    "page-find.webkit.spec.ts :: webkit: every way a selection ends clears its echo, and a new one moves it",
     "panel-resize-drag.spec.ts :: session↔chat splitter: drag over the Files iframe resizes and releases",
     "pdf-preview.spec.ts :: PDF links remain clickable and unsafe URLs are excluded",
     "pdf-preview.spec.ts :: trackpad pinch zooms only the PDF and normal scrolling still works",
@@ -344,6 +345,7 @@
     "notification-system-hosts.spec.ts :: one attempt, Open Settings, cards under their host (c, d, e) › NSH-d: Open Settings in All's problem row (a readiness problem) closes the panel, then lands on #rh-host-signbox": "[host-problem card, owner task 4d59d947 (after its fix 949465594); fails on a clean main too (A/B 2026-10-31)] Error: expect(locator).toHaveAttribute(expected) failed",
     "org-alert-answer.spec.ts :: Quote puts the ask in this VP's chat, ahead of what was typed, not in its Home column": "Error: expect(locator).toHaveValue(expected) failed",
     "page-find.spec.ts :: chromium: every way a selection ends clears its echo, and a new one moves it": "Error: locator.evaluate: Error: no visible zebra",
+    "page-find.webkit.spec.ts :: webkit: every way a selection ends clears its echo, and a new one moves it": "[the same flake as its chromium twin; passes alone on a clean main and on the branch (A/B 2026-11-09); this job's WebKit specs could not start before then] Error: locator.evaluate: Error: no visible zebra",
     "panel-resize-drag.spec.ts :: session↔chat splitter: drag over the Files iframe resizes and releases": "Error: expect(received).toBeGreaterThan(expected)",
     "pdf-preview.spec.ts :: PDF links remain clickable and unsafe URLs are excluded": "Error: expect(locator).toHaveText(expected) failed",
     "pdf-preview.spec.ts :: trackpad pinch zooms only the PDF and normal scrolling still works": "Error: Timeout 5000ms exceeded while waiting on the predicate",
