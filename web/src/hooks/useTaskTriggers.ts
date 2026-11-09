@@ -15,7 +15,7 @@
 import { useEffect, useMemo, useSyncExternalStore } from 'react';
 import type { Routine } from '@/api/routines';
 import { wsClient } from '@/api/ws';
-import { getRoutinesSnapshot, loadRoutines, onRoutinesChanged, subscribeRoutines } from '@/stores/routines-store';
+import { getRoutinesSnapshot, loadRoutines, onRoutinesChanged, onRoutinesStale, subscribeRoutines, type RoutineChange } from '@/stores/routines-store';
 import { isPhoneLayout } from '@/hooks/usePhoneLayout';
 
 export function isTriggerForTask(routine: Routine, taskId: string): boolean {
@@ -34,12 +34,19 @@ export function triggersForTask(routines: readonly Routine[], taskId: string | n
 // but N rows must not mean N listeners on each `cron:job-*` broadcast.
 const CRON_EVENTS = ['cron:job-added', 'cron:job-updated', 'cron:job-removed', 'cron:job-started', 'cron:job-finished'];
 let liveRefs = 0;
-const onCronEvent = () => onRoutinesChanged();
+const onCronEvent = (data: unknown) => onRoutinesChanged(data as RoutineChange);
+const onReconnected = () => onRoutinesStale();
 function retainLive(): void {
-  if (liveRefs++ === 0) for (const ev of CRON_EVENTS) wsClient.onEvent(ev, onCronEvent);
+  if (liveRefs++ === 0) {
+    for (const ev of CRON_EVENTS) wsClient.onEvent(ev, onCronEvent);
+    wsClient.onEvent('_ws:reconnected', onReconnected);
+  }
 }
 function releaseLive(): void {
-  if (--liveRefs === 0) for (const ev of CRON_EVENTS) wsClient.offEvent(ev, onCronEvent);
+  if (--liveRefs === 0) {
+    for (const ev of CRON_EVENTS) wsClient.offEvent(ev, onCronEvent);
+    wsClient.offEvent('_ws:reconnected', onReconnected);
+  }
 }
 
 const EMPTY: Routine[] = [];

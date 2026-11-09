@@ -15,6 +15,8 @@ import {
   getRoutinesSnapshot,
   loadRoutines,
   onRoutinesChanged,
+  onRoutinesStale,
+  type RoutineChange,
   removeRoutine,
   runRoutineNow,
   setRoutineEnabled,
@@ -43,11 +45,13 @@ export function useRoutines(includeDisabled = true): UseRoutinesReturn {
   useEffect(() => { void loadRoutines(); }, []);
 
   // Engine still emits cron:job-* — event names unchanged by design
-  useEvent('cron:job-added', () => onRoutinesChanged());
-  useEvent('cron:job-updated', () => onRoutinesChanged());
-  useEvent('cron:job-removed', () => onRoutinesChanged());
-  useEvent('cron:job-started', () => onRoutinesChanged());
-  useEvent('cron:job-finished', () => onRoutinesChanged());
+  useEvent('cron:job-added', (data) => onRoutinesChanged(data as RoutineChange));
+  useEvent('cron:job-updated', (data) => onRoutinesChanged(data as RoutineChange));
+  useEvent('cron:job-removed', (data) => onRoutinesChanged(data as RoutineChange));
+  useEvent('cron:job-started', (data) => onRoutinesChanged(data as RoutineChange));
+  useEvent('cron:job-finished', (data) => onRoutinesChanged(data as RoutineChange));
+  // The server replays no push sent while the socket was down.
+  useEvent('_ws:reconnected', () => onRoutinesStale());
 
   const routines = useMemo(
     () => (includeDisabled ? shared.routines : shared.routines.filter((r) => r.enabled)),

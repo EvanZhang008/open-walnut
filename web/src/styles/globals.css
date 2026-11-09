@@ -3439,26 +3439,28 @@ select {
   font-weight: 500;
   position: relative;
   padding-bottom: 3px;
+  /* Clips the sweeping band without overflow: hidden, which would let a long label shrink under its text. */
+  clip-path: inset(0);
 }
-/* Indeterminate scan: a soft light-brown light band sweeps under the static text. */
+/* Indeterminate scan: a soft light-brown light band sweeps under the static text. It moves with
+   transform, which the compositor runs: animating background-position repainted the layer about 90
+   times a second for every visible working line in WebKit (2026-11-09, the Mac app's 2 GB page). */
 .session-working-label::after {
   content: "";
   position: absolute;
   left: 0;
   bottom: 0;
   height: 1.5px;
-  width: 100%;
+  width: 40%;
   background: linear-gradient(90deg, transparent, #d4b59a, transparent);
-  background-size: 40% 100%;
-  background-repeat: no-repeat;
   animation: session-working-scan 1.6s ease-in-out infinite;
 }
 @keyframes session-working-scan {
-  0% { background-position: -40% 0; }
-  100% { background-position: 140% 0; }
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(250%); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .session-working-label::after { animation: none; opacity: 0.5; background-size: 100% 100%; }
+  .session-working-label::after { animation: none; opacity: 0.5; width: 100%; transform: none; }
 }
 .session-working-meta {
   font-size: 12px;

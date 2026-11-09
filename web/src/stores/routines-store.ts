@@ -86,19 +86,81 @@ function settleWrite(): void {
     writesInFlight = 0;
     if (pendingRefetch) {
       pendingRefetch = false;
-      void loadRoutines(true);
+      flushChanges();
     }
   }
 }
 
-/** A `cron:job-*` push (a tick finished, another client edited a routine). */
-export function onRoutinesChanged(): void {
+/** The fields of a `cron:job-*` push the store reads. */
+export interface RoutineChange { action?: string; jobId?: string }
+
+/** Past this many changed jobs in one burst, one list fetch is cheaper than one fetch each. */
+const PER_JOB_LIMIT = 20;
+/** Jobs a burst changed, with the last action each had; `null` = refetch the whole list. */
+let changed: Map<string, string> | null = new Map();
+
+/**
+ * A `cron:job-*` push (a tick finished, another client edited a routine). One that names its job
+ * reads that job alone: every quiet trigger check sends one, and refetching the whole list (1.2 MB
+ * for 182 routines) on each was about 95% of the JSON the page parsed, 15 to 40 MB a minute, the
+ * floor and most of the swing of the Mac app's 2 GB page (2026-11-09). A push with no job id,
+ * or a burst over PER_JOB_LIMIT, still refetches the list.
+ */
+export function onRoutinesChanged(change?: RoutineChange): void {
+  const jobId = typeof change?.jobId === 'string' && change.jobId ? change.jobId : null;
+  if (changed && jobId) changed.set(jobId, change?.action ?? 'updated');
+  else changed = null;
   if (writesInFlight > 0) { pendingRefetch = true; return; }
   if (refreshTimer) clearTimeout(refreshTimer);
   refreshTimer = setTimeout(() => {
     refreshTimer = null;
-    void loadRoutines(true);
+    flushChanges();
   }, REFRESH_DEBOUNCE_MS);
+}
+
+/**
+ * The socket came back: the server replays no push it sent meanwhile, so a routine added or removed
+ * then is named by no later push. One list fetch heals it.
+ */
+export function onRoutinesStale(): void {
+  changed = null;
+  onRoutinesChanged();
+}
+
+function takeChanges(): Map<string, string> | null {
+  const taken = changed;
+  changed = new Map();
+  return taken;
+}
+
+function flushChanges(): void {
+  const taken = takeChanges();
+  // A list that never loaded (or failed to) is fetched whole: one row at a time would build a partial list.
+  if (!taken || !loaded || snapshot.error || inflight || taken.size > PER_JOB_LIMIT) { void loadRoutines(true); return; }
+  for (const [id, action] of taken) void refreshOne(id, action);
+}
+
+/** The newest read of each job: an older answer that lands after it is dropped. */
+const readSeq = new Map<string, number>();
+
+/** Read one job and put it in place; an unchanged job keeps its object, so nothing re-renders. */
+async function refreshOne(id: string, action: string): Promise<void> {
+  const seq = (readSeq.get(id) ?? 0) + 1;
+  readSeq.set(id, seq);
+  if (action === 'removed') { dropRoutine(id); return; }
+  try {
+    const job = await api.fetchRoutine(id);
+    if (readSeq.get(id) !== seq) return;
+    if (writesInFlight > 0) { onRoutinesChanged({ action, jobId: id }); return; }
+    const current = snapshot.routines.find((r) => r.id === id);
+    if (current && JSON.stringify(current) === JSON.stringify(job)) return;
+    replaceRoutine(job);
+  } catch (err) {
+    if (readSeq.get(id) !== seq) return;
+    // A 404 for a job just added may be a copy (the companion's) that has not caught up yet.
+    if ((err as { status?: number })?.status === 404 && action !== 'added') { dropRoutine(id); return; }
+    void loadRoutines(true);
+  }
 }
 
 function patchRoutine(id: string, patch: Partial<Routine>): void {
@@ -119,6 +181,7 @@ function replaceRoutineId(id: string, next: Routine): void {
 }
 
 function dropRoutine(id: string): void {
+  if (!snapshot.routines.some((r) => r.id === id)) return;
   setSnapshot({ routines: snapshot.routines.filter((r) => r.id !== id) });
 }
 
@@ -266,6 +329,8 @@ export function __resetRoutinesStore(): void {
   loaded = false;
   writesInFlight = 0;
   pendingRefetch = false;
+  changed = new Map();
+  readSeq.clear();
   provisionalSeq = 0;
   if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null; }
 }

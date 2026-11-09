@@ -206,6 +206,11 @@ export async function fetchRoutines(includeDisabled = true): Promise<Routine[]> 
   return res.jobs;
 }
 
+export async function fetchRoutine(id: string): Promise<Routine> {
+  const res = await apiGet<{ job: Routine }>(`/api/routines/${encodeURIComponent(id)}`);
+  return res.job;
+}
+
 export async function createRoutine(input: CreateRoutineInput): Promise<Routine> {
   const res = await apiPost<{ job: Routine }>('/api/routines', input);
   return res.job;
