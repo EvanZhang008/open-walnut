@@ -38,7 +38,8 @@ const g = globalThis as { [FLAG]?: boolean }
 if (!g[FLAG]) {
   g[FLAG] = true
   try {
-    const core = createRequire(import.meta.url)('playwright-core') as { _instrumentation?: Instrumentation }
+    const req = createRequire(import.meta.url)
+    const core = req('playwright-core') as { _instrumentation?: Instrumentation }
     core._instrumentation?.addListener({
       runAfterCreateBrowserContext: async (context) => { await context.addInitScript({ content: AUTOMATION_SILENCE_JS }) },
     })
@@ -51,6 +52,8 @@ if (!g[FLAG]) {
       const launch = type.launch.bind(type)
       type.launch = (options = {}) => launch({ ...options, args: engineArgs(engine, options.args ?? lib._defaultLaunchOptions?.args) })
     }
+    // On a Mac, no WebKit test browser ever becomes the frontmost app (src/providers/pw-noactivate-core.ts).
+    ;(req('./pw-silence-preload.cjs') as { quietWebkit(core: unknown): boolean }).quietWebkit(core)
   } catch (e) {
     console.warn(`[pw-silence] could not silence test browsers: ${(e as Error).message}`)
   }
