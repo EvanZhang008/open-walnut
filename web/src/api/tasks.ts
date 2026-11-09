@@ -42,9 +42,7 @@ let nextListHydration: string[] | null = null;
 
 function hydrateListInBackground(sessionIds: string[]): void {
   if (listHydration) {
-    // Every queued id stays queued: a small read (a few rows by id) landing after the
-    // board list must not take the board's place in line.
-    nextListHydration = nextListHydration ? [...new Set([...nextListHydration, ...sessionIds])] : sessionIds;
+    nextListHydration = sessionIds;
     return;
   }
   // hydrateSessionStatuses logs and swallows per-batch failures; the catch is
