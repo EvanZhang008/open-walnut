@@ -273,6 +273,15 @@ describe('output piping + scrollback', () => {
     expect(sentEvents.map((e) => (e.data as { data: string }).data)).toEqual(['logout\r\n']);
   });
 
+  it("keeps the window's screen when dtach attaches again (its clear is dropped once, a later clear is the user's)", async () => {
+    await terminalManager.open('sess-clr', fakeWs, 80, 24);
+    sentEvents.length = 0;
+    currentPty._emitData('\x1b[H\x1b[J');
+    currentPty._emitData('A-31\r\n');
+    currentPty._emitData('\x1b[H\x1b[J$ ');
+    expect(sentEvents.map((e) => (e.data as { data: string }).data)).toEqual(['A-31\r\n', '\x1b[H\x1b[J$ ']);
+  });
+
   it('replays scrollback on attach (reconnect)', async () => {
     await terminalManager.open('sess-4', fakeWs, 80, 24);
     currentPty._emitData('line-A');

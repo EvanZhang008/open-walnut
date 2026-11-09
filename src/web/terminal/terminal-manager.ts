@@ -38,6 +38,15 @@ const IDLE_MS = 30 * 60_000 // detach pty (not dtach) after 30min no activity
 const RESERVE_MS = 60_000 // a reserved slot is held this long for its open
 /** What `dtach -a` prints as its master goes (attach.c: cursor to the bottom, then this line). */
 export const DTACH_EOF_RE = /(?:\x1b\[999H)?(?:\r?\n)?\[EOF - dtach terminating\]\r?\n?/g
+/**
+ * What `dtach -a` writes as it attaches (attach.c: "Clear the screen"). On a reattach (a server
+ * restart, a reopen after the grace period) it would wipe the output the window still shows,
+ * though the shell under it never stopped; the window keeps its screen and the shell's own
+ * redraw (SIGWINCH, `-r winch`) repaints what needs it.
+ */
+const DTACH_ATTACH_CLEAR = '\x1b[H\x1b[J'
+/** The attach's clear comes first; look for it only in this much of the start of the output. */
+const ATTACH_CLEAR_WINDOW = 4096
 
 /** Fixed-size byte ring; drops oldest bytes when full. */
 class RingBuffer {
@@ -85,6 +94,8 @@ class TerminalSession {
   private graceTimer: ReturnType<typeof setTimeout> | null = null
   private idleTimer: ReturnType<typeof setTimeout> | null = null
   private exited = false
+  /** Bytes of output seen before dtach's attach clear was dropped (-1: dropped, or not looked for). */
+  private beforeAttachClear = 0
   /** Replaced on purpose (plain → persistent upgrade): exit is not news. */
   private disposed = false
   cols: number
@@ -113,9 +124,15 @@ class TerminalSession {
     this.rows = opts.rows
     this.onDestroy = opts.onDestroy
 
+    if (!this.mode.persistent) this.beforeAttachClear = -1
     this.pty.onData((raw: string) => {
       // dtach's own goodbye when the shell ends (the page says that itself).
-      const data = this.mode.persistent ? raw.replace(DTACH_EOF_RE, '') : raw
+      let data = this.mode.persistent ? raw.replace(DTACH_EOF_RE, '') : raw
+      if (this.beforeAttachClear >= 0) {
+        const at = data.indexOf(DTACH_ATTACH_CLEAR)
+        if (at >= 0) { data = data.slice(0, at) + data.slice(at + DTACH_ATTACH_CLEAR.length); this.beforeAttachClear = -1 }
+        else if ((this.beforeAttachClear += data.length) > ATTACH_CLEAR_WINDOW) this.beforeAttachClear = -1
+      }
       if (!data) return
       const buf = Buffer.from(data, 'utf-8')
       this.ring.push(buf)
