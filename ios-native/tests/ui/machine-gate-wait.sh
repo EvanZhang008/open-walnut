@@ -11,6 +11,8 @@
 # nothing waits (a machine without a simulator queue).
 # Knobs: WALNUT_UITEST_GATE_WAIT (seconds, default 600), WALNUT_UITEST_GATE_POLL (default 30).
 # A wait that runs out exits the run with 6, as sim-maestro.sh does: give the lease back and queue again.
+# A gate that exits 5 (the lane's daily budget on this machine is spent: waiting changes nothing)
+# exits the run with 6 at once.
 
 uitest_gate_env() { # $1 = key: its value from the env, else ~/.config/walnut/machine-gate.env
   local v=${!1:-} f=${WALNUT_MACHINE_GATE_ENV:-$HOME/.config/walnut/machine-gate.env}
@@ -20,7 +22,7 @@ uitest_gate_env() { # $1 = key: its value from the env, else ~/.config/walnut/ma
 
 # uitest_machine_gate <udid> <what>: returns once the machine is calm; exits 6 after the wait.
 uitest_machine_gate() {
-  local udid=$1 what=$2 gate lane_udid out end said=
+  local udid=$1 what=$2 gate lane_udid out end said= rc
   gate=$(uitest_gate_env WALNUT_MACHINE_GATE)
   if [ -z "$gate" ]; then
     local q; q=$(uitest_gate_env WALNUT_SIM_QUEUE_SCRIPT)
@@ -32,7 +34,13 @@ uitest_machine_gate() {
     return 0
   fi
   end=$(( $(date +%s) + ${WALNUT_UITEST_GATE_WAIT:-600} ))
-  while ! out=$(bash "$gate" --exclude "$udid" 2>&1); do
+  while :; do
+    rc=0; out=$(bash "$gate" --exclude "$udid" 2>&1) || rc=$?
+    [ "$rc" = 0 ] && break
+    if [ "$rc" = 5 ]; then
+      printf '\n!! %s\n' "the lane's daily budget on this machine is spent: $what does not run today (${out#WAIT }); give the simulator back" >&2
+      exit 6
+    fi
     if [ "$(date +%s)" -ge "$end" ]; then
       printf '\n!! %s\n' "the machine stayed busy for ${WALNUT_UITEST_GATE_WAIT:-600}s before $what (${out#WAIT }); give the simulator back and queue again" >&2
       exit 6

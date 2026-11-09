@@ -57,6 +57,16 @@ describe('a calm machine before every xcodebuild of a test lane', () => {
     expect(r.out).not.toContain('RETURNED')
   })
 
+  it('exits 6 at once when the gate says the day is spent (exit 5)', () => {
+    const gate = path.join(dir, 'machine-gate.sh')
+    fs.writeFileSync(gate, `#!/bin/bash\necho "$*" >> "${dir}/calls"\necho "WAIT lane b's simulator was booted 4h 00m today"; exit 5\n`)
+    const r = run(LANE_UDID, { WALNUT_MACHINE_GATE: gate, SIM_LANE: 'b', WALNUT_UITEST_GATE_WAIT: '600' })
+    expect(r.status).toBe(6)
+    expect(r.out).toContain("the lane's daily budget on this machine is spent: the build does not run today (lane b")
+    expect(r.calls).toHaveLength(1)
+    expect(r.out).not.toContain('RETURNED')
+  })
+
   it('finds the gate and the lane simulator through ~/.config/walnut/machine-gate.env, and the queue script', () => {
     const gate = fakeGate(0)
     fs.mkdirSync(path.join(dir, '.config/walnut'), { recursive: true })
