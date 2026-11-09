@@ -3,8 +3,10 @@
  * is shown what the user wrote in that task, and is refused (409 user_spoke_since, his words quoted)
  * when he wrote there after the ask appeared, until it passes his words back in user_words
  * (2026-11-07, Main's reflection: Main answered "local only" to a task where the user had just
- * written "submit the cr"). A real server, real task, session and user-ask stores, the real send path
- * for the user's own message.
+ * written "submit the cr"). A real server, real task, session and user-ask stores; the user's own
+ * message is filed by the capture his chat send runs (hint-send.ts), so no CLI wakes to race the test
+ * (2026-11-09: a send through the chat route woke the mock CLI, whose clean exit stopped the session
+ * on a slow CI runner and turned a delivered answer into a recorded one).
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -32,10 +34,9 @@ import { addTask, getTask, updateTask, updateTaskRaw } from '../../src/core/task
 import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js'
 import { syncUserStatuses } from '../../src/core/user-status-sync.js'
 import { ensureProjectLead } from '../../src/core/org/org-store.js'
-import { readUserAsks } from '../../src/core/sessions/user-asks.js'
+import { prepareUserAskCapture, readUserAsks } from '../../src/core/sessions/user-asks.js'
 import { applyStatusAnswer } from '../../src/core/sessions/status-question.js'
 import type { StatusReport } from '../../src/core/user-status.js'
-import { markNextProcessing, removeProcessed } from '../../src/core/session-message-queue.js'
 
 const LEAD_SID = 'ffffffff-aaaa-4bbb-8ccc-dddddddddddd'
 const PROJECT = 'Pear'
@@ -59,10 +60,7 @@ async function asking(title: string, ask: string): Promise<{ id: string; sid: st
 /** The task's own turn-end report asking `ask`, stored by the real writer (status-question.ts). */
 async function reports(id: string, sid: string, ask: string): Promise<void> {
   await tick()
-  // The turn took what was queued for it (the user's message), as a running CLI does.
-  await markNextProcessing(sid)
-  await removeProcessed(sid)
-  // ...and its turn ended: the CLI is idle again.
+  // Its turn ended: the CLI is idle.
   await updateSessionRecord(sid, { process_status: 'idle' } as never)
   const report: StatusReport = { state: 'needs', ask, ask_own: { kind: 'user_own', why: 'It is his own decision' }, at: new Date().toISOString() }
   expect(await applyStatusAnswer(id, sid, report, Date.now())).toBe(true)
@@ -78,17 +76,14 @@ async function settle(): Promise<void> {
   for (let i = 0; i < 4; i++) await syncUserStatuses(null, Date.now() + 60_000)
 }
 
-/** The user types into the task's chat: the chat's own send route, no caller session (a person). */
+/** The user types into the task's chat: filed as his chat send files it (hint-send.ts captureUserAsk). */
 async function userWrites(taskId: string, text: string): Promise<void> {
   await tick()
-  const sid = (await getTask(taskId)).session_id
-  const res = await fetch(`${base}/api/v1/sessions/${sid}/messages`, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ text }),
-  })
-  expect(res.status, await res.clone().text()).toBe(202)
-  // Filed by the send's own commit, not awaited by the route (hint-send.ts).
-  await vi.waitFor(async () => expect((await readUserAsks(taskId)).asks.map((a) => a.text)).toContain(text), { timeout: 5000 })
+  const task = await getTask(taskId)
+  const capture = await prepareUserAskCapture({ task, message: text, inChat: true, ...(task.session_id ? { sid: task.session_id } : {}) })
+  expect(capture, 'his words are filed').not.toBeNull()
+  await capture!.commit()
+  expect((await readUserAsks(taskId)).asks.map((a) => a.text)).toContain(text)
   await tick()
 }
 
