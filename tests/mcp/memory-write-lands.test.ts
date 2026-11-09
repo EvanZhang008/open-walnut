@@ -52,12 +52,13 @@ const WHOLE_REPLACE_KNOWN: Record<string, string> = {
 /** Creates, or short fields set whole: nothing a script would edit one line of. */
 const CREATE_OR_SHORT = new Set([
   'task_create', 'org_node_create', 'trigger_create', 'task_not_done_settle', 'board_project_set',
-  'board_card_set', 'board_remind', 'thread_update', 'hint_set',
+  'board_card_set', 'board_remind', 'thread_update', 'hint_set', 'triage_rule_set',
 ])
 /** Messages and request bodies: sent, not stored as a document. */
 const MESSAGE = new Set([
   'api', 'host_http', 'browser', 'task_send', 'board_post', 'org_send', 'thread_create', 'thread_file',
   'human_inbox_send', 'human_inbox_reply', 'human_inbox_answer', 'task_switch_engine', 'task_move',
+  'triage_route',
 ])
 
 describe('every whole-document write op has a partial path', () => {
