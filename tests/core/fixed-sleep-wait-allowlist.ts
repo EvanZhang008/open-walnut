@@ -65,6 +65,7 @@ export const FIXED_SLEEP_ALLOWLIST: readonly FixedSleepAllowed[] = [
   { file: "tests/core/host-server-manager.test.ts", sleep: "await new Promise((r) => setTimeout(r, 30))", reason: "negative: a poll seeing the same server tells nothing again" },
   { file: "tests/core/host-server-manager.test.ts", sleep: "await new Promise((r) => setTimeout(r, 40))", reason: "negative: nothing is sent while the quiet window lasts (clock at 29 min)" },
   { file: "tests/core/host-server-manager.test.ts", sleep: "await new Promise((r) => setTimeout(r, 40))", reason: "negative: nothing is sent before the 6 h cap (clock at 359 min)" },
+  { file: "tests/core/hosts/placement.test.ts", sleep: "await new Promise((r) => setTimeout(r, 20));", reason: "negative: under the line no probe is asked for, so the count stays at one" },
   { file: "tests/core/human-inbox-complete-archive.test.ts", sleep: "await new Promise((r) => setTimeout(r, 5))", reason: "time under test: the clock moves so the next letter is sent after the completion" },
   { file: "tests/core/human-inbox-late-state.test.ts", sleep: "await new Promise(r => setTimeout(r, 5))", reason: "time under test: the clock moves so the new archivedAt stamp is greater" },
   { file: "tests/core/human-inbox-notifications.test.ts", sleep: "await new Promise(r => setTimeout(r, 120));", reason: "negative: a duplicate event must not create a second envelope" },

@@ -101,9 +101,9 @@ describe('localLoadPerCpu (restart recovery reads it)', () => {
     const whole = os.loadavg()[0] / Math.max(1, os.cpus().length);
     // Before any read: the whole load. Many callers (one per queued session) start one probe.
     for (let i = 0; i < 20; i++) expect(localLoadPerCpu(0)).toBeCloseTo(whole, 1);
-    await new Promise((r) => setTimeout(r, 60));
+    // The one probe's share lands: wait for the read, not a clock.
+    await vi.waitFor(() => expect(localLoadPerCpu(0)).toBeCloseTo(os.loadavg()[0] / Math.max(1, os.cpus().length) / 4, 1));
     expect(probes).toBe(1);
-    expect(localLoadPerCpu(0)).toBeCloseTo(os.loadavg()[0] / Math.max(1, os.cpus().length) / 4, 1);
     // Under the line no probe is asked for and the load is the whole load.
     __setHostLoadProberForTesting(async () => { probes++; return load(); });
     expect(localLoadPerCpu(1e9)).toBeCloseTo(os.loadavg()[0] / Math.max(1, os.cpus().length), 1);
