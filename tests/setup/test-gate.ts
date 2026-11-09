@@ -7,15 +7,17 @@
  * 2026-07-25: three simultaneous runs = 13 live fork workers while the machine
  * was already swapping. Nothing coordinated between runs; this gate does.
  *
- * Design (deliberately approximate, always fails open):
+ * Design (deliberately approximate; fails open on its own errors, never past a live run):
  *   - A "run group" = one logical test invocation. scripts/test-parallel.mjs
  *     launches 6 tiers in parallel as ONE group (they share WALNUT_TEST_RUN_ID);
  *     a bare `bun --bun vitest run` is its own group (keyed by runner pid).
  *   - Each group registers a dir under $TMPDIR/walnut-vitest-gate/ with one
  *     pid file per runner process. A group is "live" if any of its pids is.
- *   - At most MAX_GROUPS live groups may run; later groups poll-wait, log a
- *     clear "queuing" line, and proceed anyway after WAIT_TIMEOUT (a stuck
- *     gate must never be why tests can't run).
+ *   - At most MAX_GROUPS live groups may run; later groups poll-wait and log a
+ *     clear "queuing" line, again every WAIT_TIMEOUT. They wait as long as a
+ *     live group holds the slot (2026-11-09: runs that proceeded after 15
+ *     minutes ran together at a load of 200 to 400); a stuck gate cannot hold
+ *     them for good, since a dead group or one past GROUP_TTL is swept.
  *   - Self-heals: groups whose pids are all dead (SIGKILLed runner) or whose
  *     registration outlived GROUP_TTL are swept before counting.
  *
@@ -55,7 +57,8 @@ const MAX_GROUPS = (() => {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : 1
 })()
 const GROUP_TTL_MS = 45 * 60_000
-const WAIT_TIMEOUT_MS = 15 * 60_000
+/** How often a queued run says it still waits (WALNUT_VITEST_SLOT_WAIT_MS stands in for tests). */
+const WAIT_TIMEOUT_MS = positiveFromEnv(process.env.WALNUT_VITEST_SLOT_WAIT_MS, 15 * 60_000)
 const POLL_MS = 3_000
 
 /**
@@ -189,7 +192,7 @@ export async function acquireTestSlot(): Promise<void> {
   if (process.env.WALNUT_VITEST_GATE === '0' || process.env.CI) return
   try {
     fs.mkdirSync(GATE_DIR, { recursive: true })
-    const deadline = Date.now() + WAIT_TIMEOUT_MS
+    let deadline = Date.now() + WAIT_TIMEOUT_MS
     let announced = false
     for (;;) {
       const now = Date.now()
@@ -205,10 +208,12 @@ export async function acquireTestSlot(): Promise<void> {
         return
       }
       if (now >= deadline) {
-        console.warn(`[vitest-gate] wait timed out after ${WAIT_TIMEOUT_MS / 60_000}min — proceeding anyway (fail open)`)
-        await waitForSaneLoad()
-        register()
-        return
+        // A live run holds the slot, so this one waits on: a run that died, or one holding it past
+        // GROUP_TTL_MS, is swept above, so the wait never hangs on a dead run. (2026-11-09: queued
+        // runs that each started after 15 minutes of waiting ran together beside a deploy build and
+        // an iOS build, at a load of 200 to 400.)
+        console.log(`[vitest-gate] still queued behind ${live.join(', ')}; a run holds the slot at most ${GROUP_TTL_MS / 60_000} min. WALNUT_VITEST_GATE=0 skips.`)
+        deadline = now + WAIT_TIMEOUT_MS
       }
       if (!announced) {
         announced = true

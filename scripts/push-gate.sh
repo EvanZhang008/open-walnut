@@ -351,22 +351,28 @@ if [ -z "$runner" ]; then
     [ -n "$job" ] || continue
     echo ""; echo "── $tier (https://github.com/$repo/actions/runs/$run/job/$job)"
     # GitHub serves a job's log a little after the job ends: an empty answer is asked again (a land
-    # refused with no test named, 2026-11-09).
-    for _ in 1 2 3; do
+    # refused with no test named, 2026-11-09; three tries 10 s apart were not enough later that day,
+    # when a job's log came more than 30 s after its end), for up to two minutes, and a log that
+    # never came says so instead of naming nothing.
+    for _ in 1 2 3 4 5 6 7 8 9; do
       jlog=$(ghcall api "repos/$repo/actions/jobs/$job/logs" 2>/dev/null | sed -E 's/^[0-9T:.-]+Z //; s/\x1b\[[0-9;]*[A-Za-z]//g')
-      [ -z "$jlog" ] || break; sleep "${WALNUT_PUSH_GATE_LOG_RETRY_SECS:-10}"
+      [ -z "$jlog" ] || break; sleep "${WALNUT_PUSH_GATE_LOG_RETRY_SECS:-15}"
     done
+    [ -n "$jlog" ] || echo "GitHub did not serve this job's log within two minutes, so its failing tests are not named here: read them at the link above."
     if [ "$tier" = "iOS build" ]; then
       # The iOS app's build names no test: its compiler errors (a path, a line, a column), and its
       # verdict line; never the step's own script, which the job log echoes.
       printf '%s\n' "$jlog" | grep -aE '^/[^ ]*:[0-9]+:[0-9]+: error: |^the iOS app failed to build: ' | awk '!seen[$0]++' | sed -n '1,40p'
-    elif [ "$tier" != frontend ] && printf '%s\n' "$jlog" | grep -aq '^\[test-layers\] FAILED:'; then
+    # Here-strings, never `printf | grep -q`: grep -q stops at its first match, the printf of a large
+    # log then dies on SIGPIPE, and under pipefail the test reads false (2026-11-09: a land tier's
+    # failures went unnamed, "printf: write error: Broken pipe").
+    elif [ "$tier" != frontend ] && grep -aq '^\[test-layers\] FAILED:' <<< "$jlog"; then
       # test-layers.mjs (a land tier): its list of the tests that failed twice, and its verdict.
-      printf '%s\n' "$jlog" | awk '/^\[test-layers\] FAILED:/{p=1} p{print; if (/^\[test-layers\] (passed|failed):/ || ++n > 60) exit}'
+      awk '/^\[test-layers\] FAILED:/{p=1} p{print; if (/^\[test-layers\] (passed|failed):/ || ++n > 60) exit}' <<< "$jlog"
     else
       # A frontend step in a land job: from that step on.
-      [ "$tier" != frontend ] || ! printf '%s\n' "$jlog" | grep -aq 'test:frontend:ci' || jlog=$(printf '%s\n' "$jlog" | awk '/test:frontend:ci/{p=1} p')
-      printf '%s\n' "$jlog" | awk '/^Fix them|^##\[error\]|^##\[group\]Run /{if (p) exit} /NEW failure|New failures|FAIL |✗/{p=1} p{print; if (++n > 60) exit}' | grep -avE '^[0-9]{2}:[0-9]{2}:[0-9]{2} '
+      [ "$tier" != frontend ] || ! grep -aq 'test:frontend:ci' <<< "$jlog" || jlog=$(printf '%s\n' "$jlog" | awk '/test:frontend:ci/{p=1} p')
+      awk '/^Fix them|^##\[error\]|^##\[group\]Run /{if (p) exit} /NEW failure|New failures|FAIL |✗/{p=1} p{print; if (++n > 60) exit}' <<< "$jlog" | grep -avE '^[0-9]{2}:[0-9]{2}:[0-9]{2} '
     fi
   done
   blocked "the test gate failed on $short. The failing tests are listed above."

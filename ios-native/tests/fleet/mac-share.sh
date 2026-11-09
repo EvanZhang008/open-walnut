@@ -44,6 +44,24 @@ fleet_call_now() {
   fleet_call_apps < "$f"; rm -f "$f"
 }
 
+# fleet_deploy_now: the commit a Walnut production deploy is building on this Mac now, from the
+# deploy queue's own record (scripts/lib/deploy-queue.sh: `current`, written while its runner, whose
+# pid is in runner.lock/pid, deploys), else nothing. A record its runner left behind is no deploy.
+# 2026-11-09: a deploy build, a fleet build with its simulator and a test run together took this
+# Mac to a load of 411, and every message to a session waited on the server's queue lock.
+# WALNUT_DEPLOY_QUEUE_DIR names another queue (tests, a rehearsal).
+fleet_deploy_now() {
+  local q=${WALNUT_DEPLOY_QUEUE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/open-walnut/deploy-queue} c p
+  [ -f "$q/current" ] || return 0
+  p=$(cat "$q/runner.lock/pid" 2>/dev/null) || return 0
+  case $p in ''|*[!0-9]*|0|1) return 0 ;; esac
+  kill -0 "$p" 2>/dev/null || return 0
+  # A pid the system gave to another process since (a runner that was killed) is no deploy.
+  case $(ps -o command= -p "$p" 2>/dev/null) in *deploy-committed*) ;; *) return 0 ;; esac
+  c=$(awk 'NR == 1 { print substr($1, 1, 12) }' "$q/current" 2>/dev/null)
+  echo "${c:-a commit}"
+}
+
 # fleet_lent_lane <file>: a Mac owner who runs a simulator queue (the protocol in
 # scripts/lib/sim-device.sh) lends fleet runs one of its test lanes, instead of each run making a
 # simulator of its own there, with two lines in that file (remote-run.sh reads

@@ -33,6 +33,26 @@
 DQ_GAP="${WALNUT_DEPLOY_MIN_GAP_SECS:-600}"
 [[ "$DQ_GAP" =~ ^[0-9]+$ ]] || DQ_GAP=600
 DQ_ATTEMPT_GAP=125
+# A busy Mac stretches the gap (2026-11-09: four deploys an hour, each a full build of the web app
+# and five compiled files, took this Mac's load to 200 to 400 with an iOS build and a test run, and
+# messages to sessions waited on the server's queue lock): once the gap is over, a deploy waits
+# while the Mac's 1-minute load stays over WALNUT_DEPLOY_BUSY_LOAD per CPU (4), until
+# WALNUT_DEPLOY_BUSY_GAP_SECS (1200) after the last restart; then it goes whatever the load, so
+# the commits waiting go out together in one build.
+DQ_BUSY_GAP="${WALNUT_DEPLOY_BUSY_GAP_SECS:-1200}"
+[[ "$DQ_BUSY_GAP" =~ ^[0-9]+$ ]] || DQ_BUSY_GAP=1200
+DQ_BUSY_LOAD="${WALNUT_DEPLOY_BUSY_LOAD:-4}"
+[[ "$DQ_BUSY_LOAD" =~ ^[0-9]+(\.[0-9]+)?$ ]] || DQ_BUSY_LOAD=4
+# The 1-minute load when it is over the busy line, else nothing. WALNUT_DEPLOY_LOAD_TEST stands in
+# for the machine's load in tests.
+dq_busy_load() {
+  local l c
+  l="${WALNUT_DEPLOY_LOAD_TEST:-}"
+  [[ -n "$l" ]] || l="$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}')"
+  [[ -n "$l" ]] || l="$(awk '{print $1}' /proc/loadavg 2>/dev/null)"
+  c="$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 1)"
+  awk -v l="$l" -v c="$c" -v m="$DQ_BUSY_LOAD" 'BEGIN { if (c < 1) c = 1; if (l != "" && l / c > m) print l }'
+}
 
 dq_rehearsal() {
   [[ "${WALNUT_DEVPROD_REHEARSAL:-0}" == "1" && "${WALNUT_DEVPROD_REHEARSAL_DIR:-}" == /* && -d "${WALNUT_DEVPROD_REHEARSAL_DIR:-}" ]]
@@ -201,6 +221,18 @@ dq_runner() {
       sleep $(( wait < 10 ? wait : 10 ))
       continue
     fi
+    if [[ "${WALNUT_DEPLOY_NO_GAP:-0}" != "1" ]] && (( last + DQ_BUSY_GAP > now )); then
+      busy="$(dq_busy_load)"
+      if [[ -n "$busy" ]]; then
+        [[ -n "${busy_said:-}" ]] || dq_log "the Mac is busy (load $busy, over $DQ_BUSY_LOAD per CPU): the deploy waits for it to ease, until $(dq_clock "$(( last + DQ_BUSY_GAP ))") at the latest"
+        busy_said=1
+        dq_put "$q/next-at" "$(( last + DQ_BUSY_GAP ))"; dq_put "$q/busy" "$busy"
+        wait=$(( last + DQ_BUSY_GAP - now ))
+        sleep $(( wait < 10 ? wait : 10 ))
+        continue
+      fi
+    fi
+    busy_said=; rm -f "$q/busy"
     rm -f "$q/next-at"
     # The newest commit of now. A waiting commit it does not carry goes alone, in
     # turn, unless that would take production back past the build it serves (a
@@ -301,7 +333,9 @@ dq_request() {
     echo "Deploy queued: ${sha:0:12} goes out with the next deploy (at most one restart per $(( DQ_GAP / 60 )) min); not waiting. State: $q"
     return 0
   fi
-  now="$(date +%s)"; deadline=$(( now + ${WALNUT_DEPLOY_WAIT_SECS:-2400} ))
+  # The default wait covers a busy Mac's longer gap too (a commit that comes just after a deploy
+  # started waits for that build, the busy gap and its own build).
+  now="$(date +%s)"; deadline=$(( now + ${WALNUT_DEPLOY_WAIT_SECS:-$(( 2400 + DQ_BUSY_GAP ))} ))
   while :; do
     rc=0; dq_answer "$q" "$id" "$sha" || rc=$?
     (( rc == 2 )) || return "$rc"
@@ -324,6 +358,9 @@ dq_request() {
       else
         line="Deploying ${target:0:12}; your commit ${sha:0:12} goes with the next one."
       fi
+    elif [[ -f "$q/next-at" && -f "$q/busy" ]]; then
+      next="$(dq_num "$q/next-at")"
+      line="Deploy queued: this Mac is busy (load $(cat "$q/busy" 2>/dev/null)); the next deploy goes once it eases, at $(dq_clock "$next") at the latest, with the newest commit then, which includes ${sha:0:12}."
     elif [[ -f "$q/next-at" ]]; then
       next="$(dq_num "$q/next-at")"
       line="Deploy queued: production restarted recently, and restarts at most once per $(( DQ_GAP / 60 )) min; the next deploy goes at $(dq_clock "$next") with the newest commit then, which includes ${sha:0:12}."
@@ -331,7 +368,7 @@ dq_request() {
     if [[ -n "$line" && "$line" != "$said" ]]; then echo "$line"; said="$line"; fi
     now="$(date +%s)"
     if (( now >= deadline )); then
-      echo "Still waiting after ${WALNUT_DEPLOY_WAIT_SECS:-2400}s; the queue goes on without this call (state $q). Run the deploy again to wait for it." >&2
+      echo "Still waiting after ${WALNUT_DEPLOY_WAIT_SECS:-$(( 2400 + DQ_BUSY_GAP ))}s; the queue goes on without this call (state $q). Run the deploy again to wait for it." >&2
       return 3
     fi
     sleep 3

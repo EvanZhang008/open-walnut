@@ -340,6 +340,14 @@ describe('ios-fleet-test.sh', () => {
     expect(rs.status, rs.stderr).toBe(0)
     expect(rs.stderr).toContain('using mac-d (mac-d): load 0.9 per CPU (our share of 4.5), 90% CPU idle (12.6 cores)')
     expect(rs.stderr).not.toContain('tried after the others')
+    // Over the ceiling of 6 per CPU the whole load counts, however small our share (2026-11-09: 371
+    // on 14 CPUs, 26.5 per CPU, passed as our share while other processes' threads grew with it).
+    fresh()
+    const peak = [{ host: 'mac-p', loadPerCpu: 26.5, cpuBusy: 0.6, cpus: 14, ownThreads: { ours: 2, others: 98 } }]
+    const rp = run(['--wait', '0', 'unit'], fakeWalnut(peak, outTgz()))
+    expect(rp.status).toBe(75)
+    expect(rp.stderr).toContain('not using mac-p (mac-p): load 26.5 per CPU, 40% CPU idle (5.6 cores), over 6 per CPU, where the whole load counts')
+    expect(rp.stderr).not.toContain('our share of 26.5')
     // Over the line with its idle CPU unknown: not tried.
     fresh()
     const ru = run(['--wait', '0', 'unit'], fakeWalnut([{ host: 'mac-u', loadPerCpu: 3, cpus: 14 }], outTgz()))
@@ -556,7 +564,7 @@ describe('ios-fleet-test.sh', () => {
 
   it('a reason that only changes its load figure is not printed again on every check', () => {
     const bin = fakeWalnut([
-      { host: 'mac-hot', loadSeq: [4.5, 5, 6.1] },
+      { host: 'mac-hot', loadSeq: [4.5, 5, 5.9] }, // under the ceiling of 6, where the reason itself changes
       { host: 'mac-mini', loadPerCpu: 0.1, resultSeq: [{ exit: 75, state: 'busy' }, { exit: 75, state: 'busy' }, { exit: 0, state: 'passed' }] },
     ], outTgz())
     const r = run(['unit'], bin, SCRIPT, { IOS_FLEET_WAIT_SECS: '60' })
@@ -880,6 +888,30 @@ describe('mac-share.sh (what the Mac half asks of the Mac before it takes anythi
     expect(src).toContain('WHY=$(fleet_cpu_busy "$(fleet_idle_pct 5)" "$LOAD1" "$CPUS" "$MIN_IDLE" "$MAX_LOAD" "$(fleet_mem)")')
     expect(src).toContain('MIN_IDLE=25; MAX_LOAD=2;')
     expect(src.indexOf('WHY=$(fleet_cpu_busy')).toBeLessThan(src.indexOf('CALL=$(fleet_call_now)'))
+  })
+
+  it('a production deploy building on the Mac makes it busy; a record its runner left does not', () => {
+    const q = path.join(dir, 'dq')
+    fs.mkdirSync(path.join(q, 'runner.lock'), { recursive: true })
+    const now = (pid: string) => {
+      fs.writeFileSync(path.join(q, 'runner.lock', 'pid'), pid)
+      return sh('echo "[$(fleet_deploy_now)]"', '', { WALNUT_DEPLOY_QUEUE_DIR: q }).stdout.trim()
+    }
+    // The runner: a live process whose command names deploy-committed (as dq_runner_pid reads it).
+    const runner = spawn('bash', ['-c', 'sleep 60; : deploy-committed.sh'], { stdio: 'ignore' })
+    try {
+      expect(now(String(runner.pid))).toBe('[]') // no deploy running: no `current`
+      fs.writeFileSync(path.join(q, 'current'), '5f32e967f31b0aa4c8055f045970710ada256f3b 1794257932 /x/logs/a.log\n')
+      expect(now(String(runner.pid))).toBe('[5f32e967f31b]')
+      // A live process that is not the runner (its pid given to another since): no deploy.
+      expect(now(String(process.pid))).toBe('[]')
+    } finally { runner.kill() }
+    // A runner that is gone, and pids that would signal a group or launchd, count as no deploy.
+    const dead = spawnSync('/bin/sh', ['-c', 'echo $$'], { encoding: 'utf8' }).stdout.trim()
+    for (const p of [dead, '0', '1', '', 'x1']) expect(now(p), `pid ${p}`).toBe('[]')
+    const src = fs.readFileSync(REMOTE, 'utf8')
+    expect(src).toContain('DEPLOY=$(fleet_deploy_now)')
+    expect(src.indexOf('DEPLOY=$(fleet_deploy_now)')).toBeLessThan(src.indexOf('simctl create'))
   })
 
   it('the Mac half asks before it takes a simulator, and never powers a lent one itself', () => {

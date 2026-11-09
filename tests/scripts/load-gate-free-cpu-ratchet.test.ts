@@ -48,11 +48,25 @@ const LOAD_LINE_AND_MEMORY: Record<string, RegExp[]> = {
 /** Each gate judges our own share of the load (the pattern names how; cpu-idle.ts defines it). */
 const OWN_SHARE: Record<string, RegExp> = {
   'tests/setup/cpu-idle.ts': /export function ownLoadPerCore\(/,
-  'tests/setup/large-run.sh': /own_load "\$l" 1 "\$max_load"; l=\$OWN_LOAD/,
+  'tests/setup/large-run.sh': /own_load "\$l" "\$\(cores\)" .*; l=\$OWN_LOAD/,
   'ios-native/tests/fleet/remote-run.sh': /own_load "\$LOAD1" "\$CPUS" "\$MAX_LOAD"; LOAD1=\$OWN_LOAD/,
   'scripts/ios-fleet-test.sh': /tried after the others, its own check counts our share of its load/,
   'tests/e2e/browser/pw-concurrency.ts': /const load = ownLoadPerCore\(\)/,
   'tests/setup/test-gate.ts': /load = ownLoadPerCore\(undefined, MAX_LOAD > 0/,
+}
+
+/**
+ * Each gate's share stops at the ceiling, where the whole load counts again (2026-11-09: a load
+ * of 371 on 14 cores passed as our small share, because other processes' threads grow with
+ * our own builds). The shell gates get it from own_load, the TypeScript ones from ownLoadPerCore.
+ */
+const OWN_SHARE_CEILING: Record<string, RegExp> = {
+  'tests/setup/cpu-idle.ts': /if \(perCore <= line \|\| perCore > ceiling\) return \{ perCore \}/,
+  'tests/setup/large-run.sh': /\. "\$ROOT\/scripts\/lib\/own-load\.sh"/,
+  'ios-native/tests/fleet/remote-run.sh': /own-load\.sh/,
+  'scripts/ios-fleet-test.sh': /cap < per <= ceiling/,
+  'tests/e2e/browser/pw-concurrency.ts': /ownLoadPerCore\(\)/,
+  'tests/setup/test-gate.ts': /ownLoadPerCore\(/,
 }
 
 /**
@@ -72,6 +86,7 @@ const REPORTS: Record<string, string> = {
   'scripts/bridge-monitor/collector.mjs': 'records the load in its samples',
   'scripts/desktop-health-monitor.sh': 'logs the load',
   'scripts/ios-perf/kb-loop-probe.sh': 'prints a warning that a timeout may be starvation, never waits',
+  'scripts/lib/deploy-queue.sh': 'stretches the deploy gap while the Mac is busy, up to a fixed bound; it holds no test run',
   'scripts/pw-cleanup.sh': 'prints the load in its status',
   'src/core/stall-recorder-hold.ts': 'writes the load into a stall record',
   'src/providers/host-facts-core.ts': 'host_load reports the load beside cpuBusy and our own share of the runnable threads, which gates read',
@@ -123,6 +138,14 @@ describe('machine gates judge free CPU', () => {
     for (const f of [...Object.keys(GATES), ...Object.keys(HELPER_GATES)]) expect(OWN_SHARE, `${f} does not judge our share of the load`).toHaveProperty([f])
     for (const [f, p] of Object.entries(OWN_SHARE)) {
       expect(fs.readFileSync(path.join(ROOT, f), 'utf8'), `${f} judges the whole load again`).toMatch(p)
+    }
+  })
+
+  it('every gate stops counting only our share over the ceiling', () => {
+    expect(Object.keys(OWN_SHARE_CEILING).sort()).toEqual(Object.keys(OWN_SHARE).sort())
+    expect(fs.readFileSync(path.join(ROOT, 'scripts/lib/own-load.sh'), 'utf8')).toMatch(/l \/ c > k/)
+    for (const [f, p] of Object.entries(OWN_SHARE_CEILING)) {
+      expect(fs.readFileSync(path.join(ROOT, f), 'utf8'), `${f} counts only our share at any load`).toMatch(p)
     }
   })
 

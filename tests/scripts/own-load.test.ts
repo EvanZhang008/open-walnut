@@ -10,7 +10,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { capacityVerdict, OWN_LOAD_RE, ownLoadPerCore, parseRunnableShare } from '../setup/cpu-idle'
+import { capacityVerdict, OWN_LOAD_CEILING_PER_CORE, OWN_LOAD_RE, ownLoadPerCore, parseRunnableShare } from '../setup/cpu-idle'
 
 const ROOT = path.resolve(__dirname, '../..')
 const LIB = path.join(ROOT, 'scripts/lib/own-load.sh')
@@ -96,6 +96,24 @@ describe('our own share of the load', () => {
     expect(ok.ok).toBe(true)
     // What the others take of the CPU still counts.
     expect(capacityVerdict({ idlePct: 10, loadPerCore: 1, rawLoadPerCore: 4, cores: 14 }, { minIdlePct: 20, maxLoadPerCore: 2 }).ok).toBe(false)
+  })
+
+  it('over the ceiling the whole load counts again, whoever holds the threads (2026-11-09: 371 on 14 cores)', () => {
+    expect(shell('own_load 371 14 2; echo "$OWN_LOAD|$OWN_LOAD_NOTE"')).toBe(
+      "371|the Mac's whole load is 371, over 6 per CPU, where the whole load counts whoever holds it",
+    )
+    // The 2026-11-08 case stays a share: 80 on 14 CPUs is under 6 per CPU.
+    expect(shell('own_load 80 14 2; echo "$OWN_LOAD"')).toBe('40.00')
+    expect(shell('OWN_LOAD_CEILING=3; own_load 80 14 2; echo "$OWN_LOAD"')).toBe('80')
+    const share = () => ({ ours: 1, others: 9 })
+    expect(ownLoadPerCore(371 / 14, 2, share)).toEqual({ perCore: 371 / 14 })
+    expect(ownLoadPerCore(80 / 14, 2, share)).toEqual({ perCore: 8 / 14, rawPerCore: 80 / 14 })
+    expect(ownLoadPerCore(80 / 14, 2, share, 3)).toEqual({ perCore: 80 / 14 })
+  })
+
+  it('the shell and TypeScript twins use the same ceiling', () => {
+    const sh = /^OWN_LOAD_CEILING=\$\{OWN_LOAD_CEILING:-([0-9.]+)\}$/m.exec(fs.readFileSync(LIB, 'utf8'))?.[1]
+    expect(Number(sh)).toBe(OWN_LOAD_CEILING_PER_CORE)
   })
 
   it('the shell and TypeScript twins use the same pattern', () => {

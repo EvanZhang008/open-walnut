@@ -216,7 +216,7 @@ describe('push-gate.sh on GitHub', () => {
   const URL = 'https://github.com/acme/demo.git'
   const later = '2999-01-01T00:00:00Z'
   const RUN = 'https://github.com/acme/demo/actions/runs/77'
-  function ghRepo(answers: { before?: unknown[]; statuses?: unknown[]; runs?: unknown[]; jobs?: unknown; log?: string; signedIn?: boolean; dispatch?: 'ok' | '422' | '500'; annotations?: unknown[] }) {
+  function ghRepo(answers: { before?: unknown[]; statuses?: unknown[]; runs?: unknown[]; jobs?: unknown; log?: string; logAfter?: number; signedIn?: boolean; dispatch?: 'ok' | '422' | '500'; annotations?: unknown[] }) {
     const g = repo()
     git(g.r, 'config', '--unset', 'walnut.testRunner')
     const dir = path.dirname(g.r)
@@ -246,7 +246,8 @@ case $url in
   *statuses*) if [ -n "$gate" ]; then jq -c .statuses ${a}; else jq -c .before ${a}; fi ;;
   *jobs\\?*) jq -c .jobs ${a} ;;
   *annotations*) jq -c '.annotations // []' ${a} ;;
-  *logs) jq -r .log ${a} ;;
+  *logs) n=$(cat ${JSON.stringify(path.join(dir, 'log-asks'))} 2>/dev/null || echo 0); echo $((n + 1)) > ${JSON.stringify(path.join(dir, 'log-asks'))}
+    [ "$n" -lt "$(jq -r '.logAfter // 0' ${a})" ] || jq -r .log ${a} ;;
   *) exit 1 ;;
 esac
 `, { mode: 0o755 })
@@ -399,6 +400,40 @@ esac
     expect(section.split(err).length - 1).toBe(1)
     expect(section).toMatch(/the iOS app failed to build/)
     expect(section).not.toMatch(/TEST BUILD FAILED|##\[group\]|grep|echo/)
+  })
+
+  it('asks again for a job log GitHub has not served yet, for up to two minutes, and says so when it never comes', () => {
+    // 2026-11-09: a land tier's log came more than 30 s after its job ended; three tries 10 s apart
+    // read nothing, and the land was refused with no test named.
+    const failed = ['[test-layers] FAILED: 1 test(s) failed twice:', '  tests/scripts/x.test.ts :: a case', '[test-layers] failed: 364 file(s) in 216 s']
+    const answers = (logAfter: number) => ({
+      statuses: [st('walnut/push-gate (land 1/2)', 'failure', '[test-layers] failed: 364 file(s) in 216 s'), st('walnut/push-gate', 'failure', 'failed: land 1/2')],
+      jobs: { jobs: [{ id: 9, name: 'Gate (land 1/2)' }] },
+      log: failed.map((l) => `2026-11-09T00:00:00.0Z ${l}`).join('\n') + '\n',
+      logAfter,
+    })
+    const late = ghRepo(answers(5))
+    const out = spawnSync('bash', [GATE, 'origin', URL], { cwd: late.r, input: line(commit(late.r, { 'a.txt': '1\n' }, 'one'), late.base), encoding: 'utf8', env: cleanEnv({ ...late.env, WALNUT_PUSH_GATE_LOG_RETRY_SECS: '0' }) })
+    expect(out.status).toBe(1)
+    expect(out.stdout).toContain('  tests/scripts/x.test.ts :: a case')
+    const never = ghRepo(answers(99))
+    const none = spawnSync('bash', [GATE, 'origin', URL], { cwd: never.r, input: line(commit(never.r, { 'a.txt': '1\n' }, 'one'), never.base), encoding: 'utf8', env: cleanEnv({ ...never.env, WALNUT_PUSH_GATE_LOG_RETRY_SECS: '0' }) })
+    expect(none.status).toBe(1)
+    expect(none.stdout).toContain("GitHub did not serve this job's log within two minutes, so its failing tests are not named here")
+    // A large log whose failed list comes early: a `printf | grep -q` test of it died on SIGPIPE under
+    // pipefail and read false, and the tier's failures went unnamed.
+    const big = ghRepo({ ...answers(0), log: [...failed, ...Array.from({ length: 6000 }, (_, i) => `noise line ${i} ${'x'.repeat(60)}`)].map((l) => `2026-11-09T00:00:00.0Z ${l}`).join('\n') + '\n' })
+    const named = spawnSync('bash', [GATE, 'origin', URL], { cwd: big.r, input: line(commit(big.r, { 'a.txt': '1\n' }, 'one'), big.base), encoding: 'utf8', env: cleanEnv({ ...big.env, WALNUT_PUSH_GATE_LOG_RETRY_SECS: '0' }) })
+    expect(named.status).toBe(1)
+    expect(named.stdout).toContain('[test-layers] FAILED: 1 test(s) failed twice:')
+    expect(named.stdout).toContain('  tests/scripts/x.test.ts :: a case')
+    expect(named.stderr).not.toMatch(/Broken pipe/)
+  })
+
+  it('never tests a job log with `printf | grep -q`, which a large log turns false under pipefail', () => {
+    const src = fs.readFileSync(GATE, 'utf8')
+    // Nor feeds one through a pipe to a reader that stops early (grep -q, an awk that exits).
+    expect(src.match(/printf '%s\\n' "\$jlog" \| (grep -a?q|awk '[^']*exit)/g) ?? []).toEqual([])
   })
 
   it('decides from the tiers when the verdict job has not run: one failed tier refuses, every tier passed lets it through', () => {

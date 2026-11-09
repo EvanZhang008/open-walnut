@@ -87,7 +87,8 @@ function call(f: Fixture, env: Record<string, string> = {}, args: string[] = [])
     cwd: f.repo,
     env: {
       ...gitChildEnv(), TMPDIR: f.tmp, WALNUT_DEPLOY_QUEUE_DIR: f.queue, WALNUT_DEPLOY_CONFIG_URL: `file://${f.config}`,
-      WALNUT_DEPLOY_MIN_GAP_SECS: String(GAP), STUB_DEPLOYS: f.deploys, STUB_CONFIG: f.config, STUB_FAIL: f.fail, ...env,
+      // The machine's own load never stretches a test's gap (WALNUT_DEPLOY_BUSY_GAP_SECS).
+      WALNUT_DEPLOY_MIN_GAP_SECS: String(GAP), WALNUT_DEPLOY_LOAD_TEST: '0', STUB_DEPLOYS: f.deploys, STUB_CONFIG: f.config, STUB_FAIL: f.fail, ...env,
     },
   })
   let stdout = ''
@@ -153,6 +154,30 @@ describe('the deploy queue', () => {
     expect(rb.stdout).toContain(`Deployed ${second.slice(0, 12)}: production serves it now.`)
     await runnerGone(f)
   }, 60_000)
+
+  it('a busy Mac stretches the gap up to the busy gap, and an easy one does not (2026-11-09: load 200 to 400)', async () => {
+    const f = fixture()
+    stampNow(f) // production just restarted
+    const t0 = Math.floor(Date.now() / 1000)
+    const head = git(f.repo, 'rev-parse', 'HEAD')
+    const busy = await call(f, { WALNUT_DEPLOY_MIN_GAP_SECS: '1', WALNUT_DEPLOY_BUSY_GAP_SECS: '12', WALNUT_DEPLOY_LOAD_TEST: '9999' }).done
+    expect(busy.code, busy.stderr).toBe(0)
+    const s1 = deploys(f).filter((d) => d.kind === 'start')
+    expect(s1.map((d) => d.sha)).toEqual([head])
+    expect(s1[0].at).toBeGreaterThanOrEqual(t0 + 12)
+    expect(fs.readFileSync(path.join(f.queue, 'runner.log'), 'utf8')).toMatch(/the Mac is busy \(load 9999, over 4 per CPU\): the deploy waits/)
+    expect(busy.stdout).toMatch(/Deploy queued: this Mac is busy \(load 9999\); the next deploy goes once it eases, at .* at the latest, with the newest commit then, which includes /)
+    expect(fs.existsSync(path.join(f.queue, 'busy'))).toBe(false)
+    await runnerGone(f)
+    // An easy Mac: only the plain gap.
+    const g = fixture()
+    stampNow(g)
+    const t1 = Math.floor(Date.now() / 1000)
+    const easy = await call(g, { WALNUT_DEPLOY_MIN_GAP_SECS: '1', WALNUT_DEPLOY_BUSY_GAP_SECS: '60', WALNUT_DEPLOY_LOAD_TEST: '0.5' }).done
+    expect(easy.code, easy.stderr).toBe(0)
+    expect(deploys(g).filter((d) => d.kind === 'start')[0].at).toBeLessThan(t1 + 30)
+    await runnerGone(g)
+  }, 90_000)
 
   it('a commit that lands while a deploy runs goes with the next one, a gap after it', async () => {
     const f = fixture()

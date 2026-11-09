@@ -240,7 +240,12 @@ candidates() {
   hosts_f=$(mktemp) loads_f=$(mktemp)
   printf '%s' "$hosts" > "$hosts_f"; printf '%s' "$loads" > "$loads_f"
   python3 - "$MAX_LOAD" "$hosts_f" "$loads_f" "$MIN_IDLE" <<'PY'
-import json, sys
+import json, os, sys
+# Over the ceiling the whole load counts again, whoever holds it (scripts/lib/own-load.sh).
+try:
+    ceiling = float(os.environ.get("OWN_LOAD_CEILING") or 6)
+except ValueError:
+    ceiling = 6.0
 cap = float(sys.argv[1]); min_idle = float(sys.argv[4]); hosts = json.load(open(sys.argv[2]))["hosts"]; loads = {h["host"]: h for h in json.load(open(sys.argv[3]))["hosts"]}
 # No host tagged ios at all (an offline one keeps its tags): nothing to wait for.
 if not any("ios" in ((h.get("capabilities") or {}).get("tags") or []) for h in hosts):
@@ -252,7 +257,7 @@ for h in hosts:
     l = loads.get(h["host"], {})
     per = l.get("loadPerCpu")
     share = l.get("ownThreads") or {}
-    if per is not None and per > cap and (share.get("others") or 0) > 0:
+    if per is not None and cap < per <= ceiling and (share.get("others") or 0) > 0:
         whole = per
         per = round(per * share.get("ours", 0) / (share.get("ours", 0) + share["others"]), 2)
     else:
@@ -269,6 +274,8 @@ for h in hosts:
         print("SKIP\t" + note, file=sys.stderr); continue
     if idle is not None and idle < min_idle:
         print("SKIP\t" + note + f", under {min_idle:g}% idle", file=sys.stderr); continue
+    if per > ceiling:
+        print("SKIP\t" + note + f", over {ceiling:g} per CPU, where the whole load counts", file=sys.stderr); continue
     over = per > cap
     if over and idle is None:
         print("SKIP\t" + note + f", over {cap:g} per CPU", file=sys.stderr); continue

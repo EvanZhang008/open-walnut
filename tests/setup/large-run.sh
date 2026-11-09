@@ -122,9 +122,9 @@ min_idle="${WALNUT_LARGE_RUN_MIN_IDLE:-20}"
 waited=0
 while :; do
   l="$(load1)"; i="$(idle_pct)"
-  own_load "$l" 1 "$max_load"; l=$OWN_LOAD   # one "CPU": max_load is already the whole line
+  own_load "$l" "$(cores)" "$(awk -v m="$max_load" -v c="$(cores)" 'BEGIN { printf "%.2f", m / (c < 1 ? 1 : c) }')"; l=$OWN_LOAD   # the line per CPU, so the ceiling reads per CPU too
   why=""
-  if ! awk -v l="$l" -v m="$max_load" 'BEGIN { exit !(l <= m) }'; then why="load $l above $max_load${OWN_LOAD_NOTE:+ (our share; $OWN_LOAD_NOTE)}"
+  if ! awk -v l="$l" -v m="$max_load" 'BEGIN { exit !(l <= m) }'; then why="load $l above $max_load${OWN_LOAD_NOTE:+ ($OWN_LOAD_NOTE)}"
   elif [[ -n "$(mem_tight)" ]]; then why="$(mem_tight)"
   elif [[ -n "$i" ]] && awk -v i="$i" -v m="$min_idle" 'BEGIN { exit !(i < m) }'; then why="only ${i}% of the CPU idle, under ${min_idle}%"
   fi

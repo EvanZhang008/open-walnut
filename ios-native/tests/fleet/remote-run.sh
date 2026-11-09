@@ -113,11 +113,14 @@ if [ -f "$(dirname "$SIM_LIB")/own-load.sh" ]; then
   own_load "$LOAD1" "$CPUS" "$MAX_LOAD"; LOAD1=$OWN_LOAD
 fi
 WHY=$(fleet_cpu_busy "$(fleet_idle_pct 5)" "$LOAD1" "$CPUS" "$MIN_IDLE" "$MAX_LOAD" "$(fleet_mem)")
-[ -z "$WHY" ] || refuse 75 "BUSY: $WHY${OWN_LOAD_NOTE:+ (our share; $OWN_LOAD_NOTE)}; try another Mac or later" busy
+[ -z "$WHY" ] || refuse 75 "BUSY: $WHY${OWN_LOAD_NOTE:+ ($OWN_LOAD_NOTE)}; try another Mac or later" busy
 # Simulator open = someone uses simulators here, and a device booted now would open its window.
 if pgrep -x Simulator >/dev/null 2>&1; then
   refuse 75 "BUSY: Simulator is open on this Mac; try another Mac or later" busy
 fi
+# A production deploy builds here now: a build and a booting simulator beside it starve both.
+DEPLOY=$(fleet_deploy_now)
+[ -z "$DEPLOY" ] || refuse 75 "BUSY: a Walnut production deploy of $DEPLOY is building on this Mac; try another Mac or later" busy
 # Its person is on a call: a build and a booting simulator would compete with it.
 CALL=$(fleet_call_now)
 [ -z "$CALL" ] || refuse 75 "BUSY: a call is on this Mac ($CALL); try another Mac or later" busy

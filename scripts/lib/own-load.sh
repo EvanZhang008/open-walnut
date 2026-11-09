@@ -17,6 +17,13 @@
 
 OWN_LOAD_RE='(^|/)([Ww]alnut[^/]*|claude|codex|bun|bunx|node|launchd_sim|Simulator|xcodebuild|XCBBuildService|swift-frontend|Playwright|chrome-headless-shell|Google Chrome for Testing|maestro|daemon-(darwin|linux)-[^/]*)$|/CoreSimulator/|/Xcode[^/]*\.app/|/ms-playwright/'
 OWN_LOAD_SAMPLES=${OWN_LOAD_SAMPLES:-5}
+# Over this load per CPU the whole load counts again, whoever holds the threads (2026-11-09: a
+# deploy build, an iOS fleet build with its simulator and a test run took this Mac to a load of
+# 371 to 411, 26 to 29 per CPU, with 40% of the CPU idle; other processes there react to every exec
+# and file write, so the runnable threads they hold grow with our own work, and counting only
+# our share let each gate start more of it). The 2026-11-08 case the share was made for, 40 to 80
+# from a call app on 14 CPUs, stays under it. Twin: OWN_LOAD_CEILING_PER_CORE in cpu-idle.ts.
+OWN_LOAD_CEILING=${OWN_LOAD_CEILING:-6}
 
 # _ol_ps ARGS: /bin/ps ARGS, killed after 4 s (a ps on a swapping Mac can stall; the gate then
 # counts the whole load).
@@ -66,12 +73,16 @@ $_ol_s
     END { if (!ns) exit 1; printf "%.1f %.1f\n", o / ns, f / ns }'
 }
 
-# own_load LOAD1 CPUS MAX_PER_CPU: sets OWN_LOAD, the load to judge by: over MAX_PER_CPU per CPU,
-# our share of LOAD1 (two decimals); else, or when the share cannot be read, LOAD1 itself. And
+# own_load LOAD1 CPUS MAX_PER_CPU: sets OWN_LOAD, the load to judge by: over MAX_PER_CPU per CPU
+# and under OWN_LOAD_CEILING, our share of LOAD1 (two decimals); else, or when the share cannot be read, LOAD1 itself. And
 # OWN_LOAD_NOTE, how it was counted ("" when it is the whole load). Call it directly, not in $(...).
 own_load() {
   OWN_LOAD=$1 OWN_LOAD_NOTE=
   awk -v l="$1" -v c="$2" -v m="$3" 'BEGIN { if (c < 1) c = 1; exit !(l / c > m) }' || return 0
+  if awk -v l="$1" -v c="$2" -v k="$OWN_LOAD_CEILING" 'BEGIN { if (c < 1) c = 1; exit !(l / c > k) }'; then
+    OWN_LOAD_NOTE="the Mac's whole load is $1, over $OWN_LOAD_CEILING per CPU, where the whole load counts whoever holds it"
+    return 0
+  fi
   _ol_sh=$(own_load_share) || return 0
   _ol_o=${_ol_sh%% *} _ol_f=${_ol_sh#* }
   awk -v f="$_ol_f" 'BEGIN { exit !(f > 0) }' || return 0

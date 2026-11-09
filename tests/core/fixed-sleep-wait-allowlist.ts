@@ -397,6 +397,7 @@ export const FIXED_SLEEP_ALLOWLIST: readonly FixedSleepAllowed[] = [
   { file: "tests/replica/suspect-no-cut.test.ts", sleep: "await sleep(300)", reason: "negative: a spliced socket must not close through a suspect mark" },
   { file: "tests/scripts/bridge-monitor/lifecycle.test.ts", sleep: "await new Promise((r) => setTimeout(r, 300)) // a late identity answer must not re-add it", reason: "negative: a late identity answer must not re-add the entry (removal is synchronous in run())" },
   { file: "tests/scripts/npm-launcher-exit.test.ts", sleep: "await new Promise((r) => setTimeout(r, 2_500))", reason: "negative: the file must get no SIGTERM when not asked to" },
+  { file: "tests/scripts/test-gate-slot.test.ts", sleep: "await new Promise((r) => setTimeout(r, 1500))", reason: "negative: a queued run must not start beside a live holder, past its announce interval" },
   { file: "tests/unit/ephemeral-dtach-masters.test.ts", sleep: "await sleep(200)", reason: "negative: the lookalike and lister processes and the sibling/prod masters must not be signalled" },
   { file: "tests/unit/ephemeral-owner.test.ts", sleep: "await new Promise((r) => setTimeout(r, 300))", reason: "negative: onGone must not be called a second time" },
   { file: "tests/unit/ephemeral-owner.test.ts", sleep: "await new Promise((r) => setTimeout(r, 500))", reason: "negative: onGone must not be called while the next ancestor lives" },

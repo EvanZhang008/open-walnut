@@ -156,15 +156,24 @@ export function readRunnableShareSync(samples = 5): { ours: number; others: numb
 }
 
 /**
- * The load per core to judge by, and how it was counted. Over `line`, our processes' share of
- * it when the share can be read and another process holds any runnable thread; else the load.
+ * Over this load per core the whole load counts again (OWN_LOAD_CEILING in
+ * scripts/lib/own-load.sh, which says why: 2026-11-09, a load of 26 to 29 per core grown by
+ * other processes reacting to our own builds).
+ */
+export const OWN_LOAD_CEILING_PER_CORE = Number(process.env.OWN_LOAD_CEILING) > 0 ? Number(process.env.OWN_LOAD_CEILING) : 6
+
+/**
+ * The load per core to judge by, and how it was counted. Over `line` and up to `ceiling`, our
+ * processes' share of it when the share can be read and another process holds any runnable
+ * thread; else the load.
  */
 export function ownLoadPerCore(
   perCore = loadPerCore(),
   line = MAX_LOAD_PER_CORE,
   share: () => { ours: number; others: number } | null = readRunnableShareSync,
+  ceiling = OWN_LOAD_CEILING_PER_CORE,
 ): { perCore: number; rawPerCore?: number } {
-  if (perCore <= line) return { perCore }
+  if (perCore <= line || perCore > ceiling) return { perCore }
   const s = share()
   if (!s || s.others <= 0) return { perCore }
   return { perCore: (perCore * s.ours) / (s.ours + s.others), rawPerCore: perCore }
