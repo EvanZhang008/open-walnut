@@ -11,7 +11,7 @@
  * `sleep`; the only signals are signal 0 to the daemon this file started, and SIGKILL to it after
  * each twin.
  */
-import { afterAll, afterEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { WebSocket } from 'ws'
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
@@ -121,7 +121,10 @@ describe.each(TWINS)('$name', (twin) => {
 
     const taskId = 'update-force-task'
     void rpc({ cmd: 'exec.run', jobId: 'hx-update-force', taskId, command: 'sleep 20', cwd: '~', caller: { task: taskId, host: 'devbox' } }, 60_000).catch(() => {})
-    await new Promise((r) => setTimeout(r, 300))
+    // The run is under way once the daemon lists it.
+    await vi.waitFor(async () => {
+      expect(((await rpc({ cmd: 'exec.list', taskId })).jobs as Array<{ jobId: string }> | undefined)?.map((j) => j.jobId)).toContain('hx-update-force')
+    }, { timeout: 10_000, interval: 50 })
 
     const plain = await rpc({ cmd: 'service.update', instanceId, stateDir })
     expect(plain.ok).not.toBe(true)
