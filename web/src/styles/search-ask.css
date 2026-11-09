@@ -83,13 +83,43 @@
    paints white-ish text on `--accent`: a code block that only sets its own light
    background then renders grey-on-grey (measured on screen, 2026-09-16). The
    disclosure exists to be read, so pin both halves here. */
-.session-msg-user .injected-banner-row .tool-run-body pre {
+.session-msg-user .injected-banner-row .tool-run-body pre,
+.session-msg-user .injected-banner-row .tool-run-body .md-code.md-code > pre {
   background: rgba(255, 255, 255, 0.94);
   border: 1px solid rgba(0, 0, 0, 0.08);
 }
 
 .session-msg-user .injected-banner-row .tool-run-body pre code,
 .session-msg-user .injected-banner-row .tool-run-body code {
-  color: var(--fg);
+  /* Fixed dark ink: the block's background above is light in both themes, so the
+     theme's --fg (near white in dark) would vanish on it. */
+  color: #1d1d1f;
   background: transparent;
+}
+
+/* A fenced block in the person's bubble wears code-block.css's dark shade and
+   white ink, from a rule that outranks the one above. The disclosure's block sits on the
+   recap's light card instead, so it keeps a light code palette in both themes
+   (ink fixed, not the theme's), header and tokens too. Five classes:
+   above code-block.css's tripled `.session-msg-user .md-code` rule. */
+.session-msg-user .injected-banner-row .tool-run-body .md-code.md-code {
+  --md-code-bg: rgba(255, 255, 255, 0.94);
+  --md-code-ink: #6e6e73;
+  --md-code-ink-strong: #1d1d1f;
+  --md-code-rule: rgba(0, 0, 0, 0.12);
+  --md-code-hover: rgba(0, 0, 0, 0.06);
+  --md-code-link: var(--accent);
+  --md-code-ok: initial;
+  --md-code-warn: initial;
+  --md-code-focus: initial;
+  --md-code-thumb: rgba(0, 0, 0, 0.45);
+  --md-code-thumb-hover: rgba(0, 0, 0, 0.6);
+  --tk-comment: #6e7781;
+  --tk-keyword: #cf222e;
+  --tk-deleted: initial;
+  --tk-string: #0a3069;
+  --tk-number: #0550ae;
+  --tk-function: #8250df;
+  --tk-variable: #953800;
+  --tk-tag: #116329;
 }
