@@ -358,11 +358,12 @@ function ThreadCard({ t, all, shared, tasks, onOpenTask, state, onFollowUp, name
         <span className="org-thread-meta">
           {pinned && (<>
             <span className="org-thread-pin" data-testid="org-thread-pinned" title={t.pinned!.by === 'human' ? 'You pinned this thread' : `${name} pinned this thread`}>
-              <ThreadPinIcon size={11} />{t.pinned!.by === 'human' ? 'Pinned' : `Pinned by ${name}`}
+              <ThreadPinIcon size={11} /><span className="org-thread-pin-who">{t.pinned!.by === 'human' ? 'Pinned' : `Pinned by ${name}`}</span>
             </span>{' \u00b7 '}
           </>)}
-          {t.opener && <span data-testid="org-thread-from">Opened by {name} · </span>}
-          {timeAgo(last?.at ?? t.updatedAt, { now })}
+          {t.opener && <span className="org-thread-from" data-testid="org-thread-from" title={`Opened by ${name}`}>Opened by {name}</span>}
+          {t.opener && ' \u00b7 '}
+          <span className="org-thread-time" data-testid="org-thread-time">{timeAgo(last?.at ?? t.updatedAt, { now })}</span>
         </span>
         <span className="org-thread-title" data-testid="org-thread-title">{t.title}</span>
       </button>

@@ -22,10 +22,17 @@
 }
 .org-thread-state i, .org-thread-task i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex: none; }
 .org-thread-title { grid-column: 1 / -1; grid-row: 2; min-width: 0; font-weight: 600; font-size: 13px; line-height: 1.4; overflow-wrap: break-word; }
+/* The row beside the state fills its column and lays its pieces out right-aligned; only the node's
+   name gives way (ellipsis, the full name on hover), the state and the time stay whole. An
+   end-aligned item at its text width overflowed to the left over the state in WebKit (2026-11-09). */
 .org-thread-meta {
-  grid-column: 2; grid-row: 1; justify-self: end; min-width: 0; max-width: 100%; font-size: 11px; color: var(--fg-muted, #86868b);
-  font-variant-numeric: tabular-nums; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  grid-column: 2; grid-row: 1; min-width: 0; display: flex; justify-content: flex-end; align-items: baseline;
+  font-size: 11px; color: var(--fg-muted, #86868b); font-variant-numeric: tabular-nums; white-space: pre; overflow: hidden;
 }
+.org-thread-from, .org-thread-meta .org-thread-pin { min-width: 0; flex: 0 1 auto; }
+.org-thread-from, .org-thread-pin-who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.org-thread-pin-who { min-width: 0; }
+.org-thread-time { flex: none; }
 .org-thread-head:focus-visible { outline: 2px solid var(--accent, #0a84ff); outline-offset: 2px; border-radius: 4px; }
 .org-thread-follows { margin: 0; font-size: 12px; color: var(--fg-muted, #86868b); }
 .org-thread-summary.is-stand-in p { margin: 0; }
