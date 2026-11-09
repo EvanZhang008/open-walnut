@@ -419,7 +419,7 @@ const SELF_REPORT_LABELS = [
   'TITLE', 'OVERVIEW', 'LINKS', 'RECAP',
   'TASK_SUMMARY', 'WHAT_I_DID', 'STATUS', 'CHANGES_TRIED', 'PHASE_SIGNAL', 'NEXT_STEPS',
   'BLOCKERS', 'USER_INTENT', 'VERIFIED', 'ARTIFACTS',
-  'FOR_USER_STATE', 'FOR_USER_ASK', 'FOR_USER_ASK_OWN', 'FOR_USER_ASK_KIND', 'FOR_USER_ASK_OPTIONS', 'FOR_USER_ASK_MORE', 'FOR_USER_WAITING_ON', 'FOR_USER_NOW', 'FOR_USER_NEXT', 'FOR_USER_OWED', 'FOR_USER_ASK_SAME', 'FOR_USER_BRIEF', 'AGENT_MEMORY',
+  'FOR_USER_STATE', 'FOR_USER_ASK', 'FOR_USER_ASK_OWN', 'FOR_USER_ASK_KIND', 'FOR_USER_ASK_OPTIONS', 'FOR_USER_ASK_MORE', 'FOR_USER_WAITING_ON', 'FOR_USER_NOW', 'FOR_USER_NEXT', 'FOR_USER_OWED', 'FOR_USER_ASK_SAME', 'FOR_USER_ASK_ID', 'FOR_USER_ASK_NEW', 'FOR_USER_BRIEF', 'AGENT_MEMORY',
 ] as const;
 const NEXT_LABEL_LOOKAHEAD = `(?:${[
   ...SELF_REPORT_LABELS,
@@ -561,6 +561,11 @@ export function readStatusReport(report: string, now: Date = new Date()): Status
     const id = /\b([a-z0-9]{8}-[a-z0-9]{4}(?:-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12})?)\b/i.exec(same)?.[1];
     if (/^different\b/i.test(same)) out.ask_distinct = true;
     else if (id) out.same_as = id;
+    // Its word on its own decision (ask-decision.ts), as said: the store resolves it (stampSaidDecision).
+    const decisionId = read('FOR_USER_ASK_ID');
+    const newFact = read('FOR_USER_ASK_NEW');
+    if (decisionId) out.ask_id = decisionId;
+    if (newFact) out.ask_new = newFact;
   }
   const waiting = read('FOR_USER_WAITING_ON');
   if (state === 'waiting' && waiting) {

@@ -61,7 +61,7 @@ describe('requestBriefRefresh', () => {
       seed(role, true)
       const r = await requestBriefRefresh('L', 'web', NOW)
       expect(r).toEqual({ sent: true, sessionId: 's-L', moved: 1 })
-      expect(tasks.get('L')!.brief_refresh).toEqual({ at: new Date(NOW).toISOString(), by: 'web', moved: 1, told: {} })
+      expect(tasks.get('L')!.brief_refresh).toEqual({ at: new Date(NOW).toISOString(), by: 'web', moved: 1, told: {}, toldDecisions: {} })
       expect(sends).toHaveLength(1)
       expect(sends[0]!.source).toBe(BRIEF_REFRESH_SOURCE)
       expect(sends[0]!.text).toContain('kind="trigger"')

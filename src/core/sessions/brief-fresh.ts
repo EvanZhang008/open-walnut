@@ -22,6 +22,7 @@
 import { fallbackUserState, needsLineText, type BriefSectionTask, type TaskBrief, type UserState } from '../user-status.js';
 import { briefAskScope, briefSectionOf, headingSection, type BriefSectionKey } from './brief-structure.js';
 import { askShape, sameAskShape } from '../same-ask.js';
+import { statusDecision } from '../ask-decision.js';
 
 const WORDS_MAX = 160;
 const REF_RE = /<task-ref\b[^>]*\bid="([^"]+)"/;
@@ -46,7 +47,9 @@ function stateOf(task: MarkTask): UserState {
 export function statusMark(task: MarkTask): string {
   const state = stateOf(task);
   const s = state === 'done' ? undefined : task.user_status;
-  const words = state === 'needs' ? clip(s?.ask) : state === 'waiting' || state === 'read' ? clip(s?.waitingOn) : '';
+  // An ask is its decision (ask-decision.ts): the same one in other words is no move.
+  const decision = state === 'needs' ? statusDecision(s) : null;
+  const words = decision ? `#${decision.key}` : state === 'needs' ? clip(s?.ask) : state === 'waiting' || state === 'read' ? clip(s?.waitingOn) : '';
   return `${state}|${state === 'waiting' ? s?.kind ?? '' : ''}|${words}`;
 }
 
@@ -55,7 +58,9 @@ export function briefMark(task: MarkTask): string {
   const state = stateOf(task);
   // A node's Thread waiting on the user is his own request, no move of the letter (2026-11-03).
   if (state === 'needs' && task.user_status?.source === 'thread') return 'open';
-  return state === 'needs' ? `needs|${clip(task.user_status?.ask)}` : state === 'done' ? 'done' : 'open';
+  if (state !== 'needs') return state === 'done' ? 'done' : 'open';
+  const decision = statusDecision(task.user_status);
+  return decision ? `needs|#${decision.key}` : `needs|${clip(task.user_status?.ask)}`;
 }
 
 /**
@@ -76,6 +81,8 @@ function askIdentity(task: MarkTask): string {
 
 /** The prefix of a Needs you line's stored mark that keeps its ask's words (briefLineMark). */
 const NEEDS_MARK = 'n1:';
+/** The prefix of a Needs you line's mark that keeps its decision (ask-decision.ts) instead of its words. */
+const DECISION_MARK = 'n2:';
 const MARK_WORDS_MAX = 40;
 
 /**
@@ -87,6 +94,15 @@ const MARK_WORDS_MAX = 40;
 export function briefLineMark(task: MarkTask): string {
   const mark = briefMark(task);
   if (!mark.startsWith('needs|')) return markHash(mark);
+  // The decision it asks, whatever its words (2026-11-09: every line a refresh named moved was the
+  // same ask reworded).
+  const decision = statusDecision(task.user_status);
+  if (decision) return `${DECISION_MARK}${markHash(decision.key)}`;
+  return wordsLineMark(task);
+}
+
+/** The mark of a Needs you line with no decision (a status an older Walnut derived): its words' shape. */
+function wordsLineMark(task: MarkTask): string {
   // The ask's shape, its words hashed in order (numbers stay `#3`): sameAskShape compares them.
   const shape = askShape(task.user_status?.ask, markHash);
   return `${NEEDS_MARK}${markHash(askIdentity(task))}:${shape.neg ? 1 : 0}:${shape.words.slice(0, MARK_WORDS_MAX).join('.')}:${(shape.links ?? []).join('.')}`;
@@ -98,8 +114,11 @@ export function briefLineMark(task: MarkTask): string {
  * NEEDS_MARK compares as it was written.
  */
 export function lineMoved(stored: string, task: MarkTask): boolean {
+  // Stored with its decision: moved when it asks another decision, the same with new facts, or none.
+  if (stored.startsWith(DECISION_MARK)) return briefLineMark(task) !== stored;
   if (!stored.startsWith(NEEDS_MARK)) return markHash(briefMark(task)) !== stored;
-  const now = briefLineMark(task);
+  // Stored by its words before decisions: read the line by its words now too.
+  const now = briefMark(task).startsWith('needs|') ? wordsLineMark(task) : briefLineMark(task);
   if (!now.startsWith(NEEDS_MARK)) return true;
   const read = (mark: string) => {
     const [id, neg, words = '', links] = mark.slice(NEEDS_MARK.length).split(':');
@@ -257,6 +276,9 @@ export interface BriefRefreshRecord {
   /** The asks of the user this note handed the node (task id -> the ask's words): the next
    *  refresh restates only what changed since (brief-refresh.ts needsChanges). */
   told?: Record<string, string>;
+  /** The decision of each (task id -> its decision key, ask-decision.ts) when it has one: the next
+   *  refresh tells a changed ask by it, never by its words. */
+  toldDecisions?: Record<string, string>;
 }
 
 /** Whether the page shows the Brief as updating: a refresh asked after the letter, not long ago. */

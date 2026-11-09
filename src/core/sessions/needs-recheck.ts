@@ -23,6 +23,7 @@ import { log } from '../../logging/index.js';
 import type { Task } from '../types.js';
 import { NEEDS_RECHECK_MS, agoWords } from '../user-status.js';
 import { snoozeEndedMs } from '../snooze.js';
+import { statusDecision } from '../ask-decision.js';
 
 /** A "needs you" checked longer ago than this is checked again (user-status.ts reads it as not
  *  verified a little later, once the re-check had its turn). */
@@ -42,13 +43,21 @@ export interface NeedsRecheck {
   count: number;
   /** The ask the last note was about. */
   ask: string;
+  /** Its decision (ask-decision.ts): another decision starts its own count; other words do not. */
+  decision?: string;
+}
+
+/** The count of the next note: on from the last while the task asks the same decision, in any words. */
+export function nextRecheckCount(prev: NeedsRecheck | null | undefined, decisionId: string | undefined): number {
+  if (!prev) return 1;
+  return prev.decision && decisionId && prev.decision !== decisionId ? 1 : prev.count + 1;
 }
 
 /** The note the re-check brings into the session. */
-export function recheckBody(ask: string, checkedAt: string | undefined, nowMs: number): string {
+export function recheckBody(ask: string, checkedAt: string | undefined, nowMs: number, decisionId?: string): string {
   const at = Date.parse(checkedAt ?? '');
   return [
-    `Your status asks the user: "${ask}"${Number.isFinite(at) ? `, last checked ${agoWords(nowMs - at)}` : ''}.`,
+    `Your status asks the user: "${ask}"${decisionId ? ` (decision ${decisionId})` : ''}${Number.isFinite(at) ? `, last checked ${agoWords(nowMs - at)}` : ''}.`,
     'The user may have done it outside Walnut (a sign-in in a terminal, a tap on the phone, a review), and nothing told you. Check it now yourself: run the command, look for the file, read the letter, the review or the state it needed.',
     'Done: carry on with the work, and your report no longer asks it; if a letter of yours asked it, settle that letter (human_inbox_mark with "settled": one line saying why). '
       + 'Still needed and nothing changed: answer with only the agent-ack line, <walnut-turn status="agent-ack"/>, so the user\'s chat does not repeat the same status; your report still counts as checked now. '
@@ -105,7 +114,8 @@ export function recheckDue(task: Pick<Task, 'phase' | 'status' | 'user_status' |
   if (opts.notBefore !== undefined && checked < opts.notBefore) return false;
   const last = task.needs_recheck;
   if (last) {
-    const gap = last.count >= MAX_RECHECKS ? RECHECK_AFTER_CAP_MS : NEEDS_RECHECK_MS;
+    // Another decision has its own count; the same in other words carries on (ask-decision.ts).
+    const gap = nextRecheckCount(last, statusDecision(s)?.id) > MAX_RECHECKS ? RECHECK_AFTER_CAP_MS : NEEDS_RECHECK_MS;
     if (opts.nowMs - Date.parse(last.at) < gap) return false;
   }
   return true;
@@ -156,7 +166,8 @@ export async function runNeedsRecheck(nowMs = Date.now()): Promise<string[]> {
       const target = pickDeliverySession(await getSessionsForTask(owner.id).catch(() => []));
       if (!target) continue;
       const prev = task.needs_recheck;
-      const next: NeedsRecheck = { at: new Date(nowMs).toISOString(), count: (prev?.count ?? 0) + 1, ask };
+      const decision = statusDecision(task.user_status)?.id;
+      const next: NeedsRecheck = { at: new Date(nowMs).toISOString(), count: nextRecheckCount(prev, decision), ask, ...(decision ? { decision } : {}) };
       // Recorded first: a failed wake never repeats every scan.
       await updateTaskRaw(task.id, { needs_recheck: next }, { push: false, source: 'needs-recheck' }).catch(() => null);
       const { buildWalnutMessage } = await import('../peers/walnut-message-tag.js');
@@ -166,7 +177,7 @@ export async function runNeedsRecheck(nowMs = Date.now()): Promise<string[]> {
         await sendMessageToSession(target.claudeSessionId, buildWalnutMessage({
           kind: 'trigger',
           attrs: { from: 'Walnut: re-check', note: choice ? 'is the choice on your Board still needed' : 'is what you asked the user still needed' },
-          body: choice ? choiceRecheckBody(choice, ask, task, task.user_status!.checkedAt, nowMs) : recheckBody(ask, task.user_status!.checkedAt, nowMs),
+          body: choice ? choiceRecheckBody(choice, ask, task, task.user_status!.checkedAt, nowMs) : recheckBody(ask, task.user_status!.checkedAt, nowMs, decision),
         // A Board owner asked about a choice only gives words: its own wait comes back (task-wait-resume.ts).
         }), { source: choice ? 'choice-recheck' : WAIT_UNTIL_SEND_SOURCE, taskId: owner.id });
         woken.push(task.id);

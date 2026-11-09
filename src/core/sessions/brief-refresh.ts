@@ -17,8 +17,8 @@
  *    team is not stopped and it is not snoozed;
  *  - the request is not a test run on the real Walnut (the route answers those itself).
  * Its turn updates the Brief itself (brief_write) and tells the user in the chat only the Needs you
- * items that changed since the last refresh told it (new, asking something else, gone; `told` on
- * the record; an ask in other words is no change); with none, it ends with the agent-ack line, so his chat does not repeat an unchanged list. The
+ * items that changed since the last refresh told it (new, asking something else, gone; `told` and
+ * `toldDecisions` on the record; the same decision in other words is no change); with none, it ends with the agent-ack line, so his chat does not repeat an unchanged list. The
  * page says "Updating" until the new letter lands (briefUpdating), never after a failed send. A
  * parked node comes back to its wait at that turn's end, clock included (task-wait-resume.ts).
  */
@@ -26,7 +26,7 @@ import { log } from '../../logging/index.js';
 import type { Task } from '../types.js';
 import { agoWords, needsLineText, storedUserState } from '../user-status.js';
 import { briefFreshness, type BriefFreshness, type BriefRefreshRecord } from './brief-fresh.js';
-import { briefNeedsAsks } from './brief.js';
+import { briefNeedsAsks, briefNeedsDecisions } from './brief.js';
 import { sameAskReworded } from '../same-ask.js';
 
 /** At most one refresh turn per node in this long. */
@@ -64,7 +64,7 @@ export function briefRefreshDue(owner: Task, tasks: readonly Task[], opts: { now
 
 /** The note the refresh brings into the node's session. */
 export function refreshBody(owner: Task, fresh: BriefFreshness, tasks: readonly Task[], now: number,
-  changes: readonly NeedsChange[] = needsChanges(briefNeedsAsks(owner, tasks), owner.brief_refresh?.told)): string {
+  changes: readonly NeedsChange[] = needsChanges(briefNeedsAsks(owner, tasks), owner.brief_refresh?.told, briefNeedsDecisions(owner, tasks), owner.brief_refresh?.toldDecisions)): string {
   const byId = new Map(tasks.map((t) => [t.id, t] as const));
   const name = (id: string) => `"${(byId.get(id)?.title ?? id).replace(/\s+/g, ' ').replace(/"/g, "'").slice(0, 80)}" (${id})`;
   const at = Date.parse(fresh.writtenAt);
@@ -96,14 +96,22 @@ export interface NeedsChange { id: string; kind: 'new' | 'changed' | 'gone'; ask
 /**
  * What needs the user changed since the last refresh told the node (2026-11-02 org review: a lead
  * repeated the same three asks at three refreshes with nothing changed). With no earlier note,
- * every ask is new. The same ask in other words is no change (sameAskReworded; 2026-11-04: three
- * VPs each told the user "nothing changed, only reworded"). Pure.
+ * every ask is new. The same decision in other words is no change: two asks with a decision each
+ * (ask-decision.ts) are compared by its key alone (2026-11-09: all five "changes" of one refresh of
+ * Main's were rewordings); an ask told before decisions existed is judged by its words
+ * (sameAskReworded; 2026-11-04: three VPs each told the user "nothing changed, only reworded"). Pure.
  */
-export function needsChanges(now: Record<string, string>, told: Record<string, string> | undefined): NeedsChange[] {
+export function needsChanges(
+  now: Record<string, string>, told: Record<string, string> | undefined,
+  nowDecisions: Record<string, string> = {}, toldDecisions: Record<string, string> | undefined = undefined,
+): NeedsChange[] {
   const out: NeedsChange[] = [];
   for (const [id, ask] of Object.entries(now)) {
-    if (!told || !(id in told)) out.push({ id, kind: 'new', ask });
-    else if (told[id] !== ask && !sameAskReworded(told[id], ask)) out.push({ id, kind: 'changed', ask });
+    if (!told || !(id in told)) { out.push({ id, kind: 'new', ask }); continue; }
+    const was = toldDecisions?.[id];
+    const is = nowDecisions[id];
+    const changed = was && is ? was !== is : told[id] !== ask && !sameAskReworded(told[id], ask);
+    if (changed) out.push({ id, kind: 'changed', ask });
   }
   for (const [id, ask] of Object.entries(told ?? {})) if (!(id in now)) out.push({ id, kind: 'gone', ask });
   return out;
@@ -146,10 +154,11 @@ export async function requestBriefRefresh(taskId: string, by: BriefRefreshRecord
     if (!target) return { sent: false, why: 'no_session' };
     const moved = decision.fresh.moved.length + decision.fresh.finished.length + decision.fresh.newAsks.length;
     const needs = briefNeedsAsks(owner, tasks);
-    const changes = needsChanges(needs, owner.brief_refresh?.told);
+    const decisions = briefNeedsDecisions(owner, tasks);
+    const changes = needsChanges(needs, owner.brief_refresh?.told, decisions, owner.brief_refresh?.toldDecisions);
     // What this note hands the node is what it has told him once the turn ends; a failed send keeps
     // the earlier list, so the next note still names these changes.
-    const record: BriefRefreshRecord = { at: new Date(now).toISOString(), by, moved, told: needs };
+    const record: BriefRefreshRecord = { at: new Date(now).toISOString(), by, moved, told: needs, toldDecisions: decisions };
     // Recorded first, under the row lock: two windows asking at once send one note, and a failed
     // send never repeats sooner than the gap.
     let claimed = false;
@@ -174,7 +183,7 @@ export async function requestBriefRefresh(taskId: string, by: BriefRefreshRecord
       log.task.warn('brief refresh not delivered', { taskId, sessionId: target.claudeSessionId, error: err instanceof Error ? err.message : String(err) });
       // Kept, so the gap still holds; marked, so the page does not say it is updating.
       await updateTaskRaw(taskId, (current) => (current.brief_refresh?.at === record.at
-        ? { brief_refresh: { ...record, failed: true, ...(owner.brief_refresh?.told ? { told: owner.brief_refresh.told } : { told: undefined }) } } : null), { source: 'brief-refresh' }).catch(() => null);
+        ? { brief_refresh: { ...record, failed: true, told: owner.brief_refresh?.told, toldDecisions: owner.brief_refresh?.toldDecisions } } : null), { source: 'brief-refresh' }).catch(() => null);
       return { sent: false, why: 'not_delivered', sessionId: target.claudeSessionId, moved };
     }
     log.task.info('brief refresh sent', { taskId, sessionId: target.claudeSessionId, by, moved });

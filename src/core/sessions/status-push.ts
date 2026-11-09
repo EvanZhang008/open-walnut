@@ -28,6 +28,7 @@ import { bus, EventNames, type BusEvent } from '../event-bus.js';
 import type { SessionRecord, Task } from '../types.js';
 import { fallbackUserState, stateWord, type UserState, type UserStatus } from '../user-status.js';
 import { statusMark } from './brief-fresh.js';
+import { decisionMoved, statusDecision, type StatusDecision } from '../ask-decision.js';
 import { loadRiding, pendingRiding, pruneRiding, pushBody, rideLine, statusText, stopRiding } from './status-riding.js';
 
 export { pushBody, statusText };
@@ -36,7 +37,11 @@ const SUBSCRIBER = 'status-push';
 export const SETTLE_MS = 90_000;
 const WORDS_MAX = 160;
 
-interface Seen { key: string; label: string; words: string; state: UserState; snoozed?: boolean; thread?: boolean }
+interface Seen {
+  key: string; label: string; words: string; state: UserState; snoozed?: boolean; thread?: boolean;
+  /** needs: the decision it asks (ask-decision.ts), told apart by its key, never by its words. */
+  decision?: StatusDecision;
+}
 interface Change {
   taskId: string; title: string; from: Seen; to: Seen; at: number;
   /** A re-check turn of a "needs you" runs (sessions/needs-recheck.ts): its Working is not news
@@ -72,7 +77,17 @@ export function seenOf(task: Pick<Task, 'phase' | 'status' | 'user_status'>): Se
   const state: UserState = done ? 'done' : s?.state ?? fallbackUserState(task.phase, task.status);
   const words = state === 'needs' ? clip(s?.ask) : state === 'waiting' || state === 'read' ? clip(s?.waitingOn) : '';
   const label = stateWord(state, !!s?.snoozed) + (state === 'waiting' && s?.kind && s.kind !== 'other' ? ` (${s.kind === 'you' ? 'on you' : s.kind === 'task' ? 'on another task' : s.kind === 'lead' ? 'on its lead' : s.kind})` : '');
-  return { key: statusMark(task), label, words, state, ...(s?.snoozed ? { snoozed: true } : {}), ...(s?.source === 'thread' ? { thread: true } : {}) };
+  const decision = state === 'needs' ? statusDecision(s) : null;
+  return {
+    key: statusMark(task), label, words, state, ...(s?.snoozed ? { snoozed: true } : {}), ...(s?.source === 'thread' ? { thread: true } : {}),
+    ...(decision ? { decision } : {}),
+  };
+}
+
+/** Still asking the user, but another decision or the same one with something new: news, whatever
+ *  the words. The same decision in other words never is (ask-decision.ts). */
+export function askNews(from: Pick<Seen, 'state' | 'decision'>, to: Pick<Seen, 'state' | 'decision'>): boolean {
+  return from.state === 'needs' && to.state === 'needs' && decisionMoved(from.decision, to.decision) === true;
 }
 
 function hhmm(ms: number): string {
@@ -83,7 +98,11 @@ function hhmm(ms: number): string {
 export function changeLine(c: Change): string {
   const title = clip(c.title).replace(/"/g, "'");
   let line = `- "${title}" (${c.taskId}): ${c.from.label} → ${c.to.label} at ${hhmm(c.at)}.`;
-  if (c.to.state === 'needs' && c.to.words) line += ` It asks the user: "${c.to.words}".`;
+  if (askNews(c.from, c.to)) {
+    const same = c.from.decision!.id === c.to.decision!.id;
+    const what = c.to.decision!.new ? `: ${clip(c.to.decision!.new)}` : '';
+    line += same ? ` Its ask to the user has something new${what}: "${c.to.words}".` : ` It now asks the user another decision: "${c.to.words}".`;
+  } else if (c.to.state === 'needs' && c.to.words) line += ` It asks the user: "${c.to.words}".`;
   else if (c.from.state === 'needs' && c.from.words) line += ` It no longer asks the user: "${c.from.words}".`;
   else if (c.to.state === 'waiting' && c.to.words) line += ` Waiting on: ${c.to.words}.`;
   else if (c.to.state === 'read' && c.to.words) line += ` For the user to read: ${c.to.words}.`;
@@ -216,8 +235,8 @@ export async function flushStatusPush(now = Date.now()): Promise<number> {
   // turn), only reworded (a session words its ask or its wait anew every turn: 2026-10-29 on
   // prod, "Waiting → Waiting" lines every few minutes), or a turn that only started (its end
   // says where it went): no news. Working after Needs you is: the user did it.
-  const news = due.filter((c) => c.from.label !== c.to.label
-    && !(c.to.state === 'working' && c.from.state !== 'needs'));
+  const news = due.filter((c) => (c.from.label !== c.to.label
+    && !(c.to.state === 'working' && c.from.state !== 'needs')) || askNews(c.from, c.to));
   if (pending.size && live && !timer) {
     timer = setTimeout(() => { timer = null; void flushStatusPush(); }, SETTLE_MS);
     timer.unref?.();
@@ -230,10 +249,10 @@ export async function flushStatusPush(now = Date.now()): Promise<number> {
     // With the org off byId holds no org node, so no line reaches Main or a VP, an asker among them included.
     const { pendingRequestsForTarget } = await import('../session-requests.js');
     // recipient session id → { record or null (an asker found by its request), lines by task }
-    const out = new Map<string, { rec: SessionRecord | null; lines: Map<string, { line: string; at: number }>; asker: boolean }>();
-    const add = (sid: string, rec: SessionRecord | null, taskId: string, line: string, asker: boolean, at: number) => {
-      const slot = out.get(sid) ?? { rec, lines: new Map<string, { line: string; at: number }>(), asker };
-      slot.lines.set(taskId, { line, at });
+    const out = new Map<string, { rec: SessionRecord | null; lines: Map<string, { line: string; at: number; decision?: string }>; asker: boolean }>();
+    const add = (sid: string, rec: SessionRecord | null, taskId: string, line: string, asker: boolean, at: number, decision?: string) => {
+      const slot = out.get(sid) ?? { rec, lines: new Map<string, { line: string; at: number; decision?: string }>(), asker };
+      slot.lines.set(taskId, { line, at, ...(decision ? { decision } : {}) });
       slot.asker ||= asker;
       slot.rec ??= rec;
       out.set(sid, slot);
@@ -244,7 +263,7 @@ export async function flushStatusPush(now = Date.now()): Promise<number> {
       const line = changeLine(c);
       const own = new Set((await (await import('../session-tracker.js')).getSessionsForTask(task.id).catch(() => [])).map((s) => s.claudeSessionId));
       for (const r of await pendingRequestsForTarget({ taskId: task.id }).catch(() => [])) {
-        if (!own.has(r.fromSessionId)) add(r.fromSessionId, null, task.id, line, true, c.at);
+        if (!own.has(r.fromSessionId)) add(r.fromSessionId, null, task.id, line, true, c.at, c.to.decision?.key);
       }
       // One level up only (statusFollowersOf: the nearest open node with a session), riding its
       // next message whether it runs now or not. Snoozed (snooze.ts): a VP or Main, who bring news
@@ -256,7 +275,7 @@ export async function flushStatusPush(now = Date.now()): Promise<number> {
         if (c.to.snoozed && f.org_role) break;
         const rec = await liveSession(f.id);
         if (!rec) continue;
-        if (!own.has(rec.claudeSessionId)) add(rec.claudeSessionId, rec, task.id, line, false, c.at);
+        if (!own.has(rec.claudeSessionId)) add(rec.claudeSessionId, rec, task.id, line, false, c.at, c.to.decision?.key);
         break;
       }
     }
@@ -269,8 +288,8 @@ export async function flushStatusPush(now = Date.now()): Promise<number> {
       try {
         // The lines ride its next message (pendingStatusNote), never a turn of their own; one whose
         // move a notice already told this session (org-follow.ts) is not said again.
-        for (const [id, { line, at }] of slot.lines) {
-          if (await mayShareTaskContext(id, rec.taskId)) rideLine(sid, id, line, now, at);
+        for (const [id, { line, at, decision }] of slot.lines) {
+          if (await mayShareTaskContext(id, rec.taskId)) rideLine(sid, id, line, now, at, decision);
         }
         sent++;
       } catch (err) {

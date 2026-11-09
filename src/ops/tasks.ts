@@ -757,6 +757,10 @@ const REPORT_CHANGE = z.object({
   ask_options: z.array(z.union([z.string().max(80), z.object({ id: z.string().max(40).optional(), label: z.string().max(80), recommended: z.boolean().optional() })]))
     .max(5).optional().describe('With single or multi: 2 to 5 options worth choosing, a few words each; mark the one you recommend. No filler such as "Other"'),
   ask_more: z.string().max(2000).optional().describe('With needs: the detail behind the ask, shown under More'),
+  ask_id: z.string().max(40).optional()
+    .describe('With needs: the decision the ask is (its id, ask-..., in task_get user_status.decision): left out, a reworded ask keeps the id it has, so nobody is told it changed; "new" when it is a different decision'),
+  ask_new: z.string().max(300).optional()
+    .describe('With needs, the same decision: what is really new about it (a new fact, option or deadline), one line. Other words are not new'),
   user_kind: z.enum(USER_KINDS).optional().describe(`With needs, set by a task: required. ${USER_KIND_PARAM}`),
   user_kind_why: z.string().max(300).optional().describe(USER_KIND_WHY_PARAM),
   same_ask_reason: z.string().max(300).optional()

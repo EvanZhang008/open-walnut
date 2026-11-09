@@ -16,6 +16,7 @@ import {
   BRIEF_SECTIONS, storedUserState, COMPLETE_IS_VERIFIED, agoWords, briefTeam, resultIsPartial,
 } from '../user-status.js';
 import type { Task } from '../types.js';
+import { statusDecision } from '../ask-decision.js';
 import { briefVpOf } from './brief-rules.js';
 import { BRIEF_STRUCTURE_RULE, briefSectionOf, briefSectionsBlock, type BriefSectionKey } from './brief-structure.js';
 import { sameAreaTasks } from '../router/same-area.js';
@@ -43,6 +44,18 @@ export function briefNeedsAsks(owner: Task, tasks: readonly Task[]): Record<stri
     const us = t.user_status;
     const words = us && storedUserState(us) === 'read' ? us.waitingOn : us?.ask;
     if (briefSectionOf(t) === 'needs') out[t.id] = (words ?? 'needs the user').replace(/\s+/g, ' ').trim().slice(0, 200);
+  }
+  return out;
+}
+
+/** The decision of each ask briefNeedsAsks lists, when it has one (ask-decision.ts): task id -> key. */
+export function briefNeedsDecisions(owner: Task, tasks: readonly Task[]): Record<string, string> {
+  const main = owner.org_role === 'main';
+  const org = main ? tasks.filter((t) => !t.plugin_only && t.id !== owner.id) : briefTeam(owner, tasks);
+  const out: Record<string, string> = {};
+  for (const t of org) {
+    const decision = briefSectionOf(t) === 'needs' ? statusDecision(t.user_status) : null;
+    if (decision) out[t.id] = decision.key;
   }
   return out;
 }

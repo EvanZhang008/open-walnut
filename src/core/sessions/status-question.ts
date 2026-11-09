@@ -78,6 +78,9 @@ export async function applyStatusAnswer(
   const { needsSinceOf } = await import('./user-spoke.js');
   const needsSince = needsSinceOf(report, prev);
   if (needsSince) report = { ...report, needs_since: needsSince };
+  // The decision it asks keeps its id across rewordings (ask-decision.ts).
+  const { stampSaidDecision } = await import('../ask-decision.js');
+  report = stampSaidDecision(report, prev);
   await updateTaskRaw(taskId, { status_report: report }, {
     emitEvent: true, source: 'status-report', shouldUpdate: (cur) => cur.phase !== 'COMPLETE' && cur.status !== 'done',
   });

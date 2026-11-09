@@ -41,6 +41,7 @@ import { cutEnd } from './text-cut.js';
 import type { ThreadCounts } from './org/thread-view.js';
 import { outlivingLine, type OutlivingSource } from './sessions/outliving-work.js';
 import type { SameAskFold } from './same-ask.js';
+import { reportDecision, type AskMemory, type StatusDecision } from './ask-decision.js';
 
 export type UserState = 'needs' | 'read' | 'working' | 'waiting' | 'done';
 
@@ -188,6 +189,15 @@ export interface StatusReport {
   /** needs: the session said its ask is a different decision from the ones its tree asks
    *  (FOR_USER_ASK_SAME: different): Walnut's word test never folds it. */
   ask_distinct?: true;
+  /** needs: the decision this ask is (ask-decision.ts): kept by the task across rewordings, a new one
+   *  only when the session says so (FOR_USER_ASK_ID: new). Absent on a report an older Walnut stored. */
+  ask_id?: string;
+  /** needs: how many times the session named something really new about the decision (FOR_USER_ASK_NEW). */
+  ask_rev?: number;
+  /** needs: the last thing it named as new. */
+  ask_new?: string;
+  /** Any other report: the decision the task last asked, so asking it again soon keeps its id. */
+  last_ask?: AskMemory;
 }
 
 /** The status rules a report is asked under: 2 = the task's own build, test run, deploy or land is
@@ -459,6 +469,9 @@ export interface UserStatus {
   /** A task whose own question a lead, VP or Main answered for the user (same-ask.ts answeredAbove):
    *  it reads Waiting on itself to act on that answer, never Needs you, while it asks the same. */
   answeredFor?: { by: string; byTitle: string; at: string; ask: string; sessionId?: string };
+  /** needs from its own report: the decision it asks (ask-decision.ts). Every surface tells a change
+   *  of the ask by its `key`, never by its words. */
+  decision?: StatusDecision;
 }
 
 /** The report source fields of a status, for a rebuilt status that keeps its `now`/`next`. Pure. */
@@ -479,6 +492,8 @@ export interface RolledAsk {
   checkedAt?: string;
   /** The direct subtask it came up through, when that is not the asking task itself. */
   via?: string;
+  /** The decision it is (ask-decision.ts). */
+  decision?: StatusDecision;
 }
 
 /** At most this many questions ride one task's status. */
@@ -502,7 +517,7 @@ export function rollUpAsks(
     if (s.state === 'needs' && s.ask) {
       push({
         id: c.id, title: c.title, ask: s.ask, ...(s.askForm ? { form: s.askForm } : {}),
-        ...(s.checkedAt ? { checkedAt: s.checkedAt } : {}),
+        ...(s.checkedAt ? { checkedAt: s.checkedAt } : {}), ...(s.decision ? { decision: s.decision } : {}),
       });
     }
     for (const a of s.asks ?? []) push({ ...a, via: c.id });
@@ -777,7 +792,12 @@ export function deriveUserStatus(input: UserStatusInput, nowMs: number = Date.no
   const line = derived.source === 'thread' ? null : lineOf(input, derived);
   if (line) derived.line = line;
   const form = askFormOf(input, derived);
-  if (form) derived.askForm = form;
+  if (form) {
+    derived.askForm = form;
+    // The same report gives the ask its decision (ask-decision.ts).
+    const decision = reportDecision(input.report, input.dueDate);
+    if (decision) derived.decision = decision;
+  }
   const out = snoozeOf(input, derived, nowMs) ?? derived;
   if (out.state !== 'done' && !out.snoozed) {
     const due = dueStatus(input.dueDate, nowMs);

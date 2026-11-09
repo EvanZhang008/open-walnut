@@ -12,6 +12,7 @@ import type { Task } from '../types.js';
 import { userKindVerdict } from '../org/user-kind.js';
 import { ASK_KINDS, ASK_MORE_MAX, ASK_OPTIONS_MAX, type AskKind, type AskOption, type StatusLineBy, type StatusReport, type WaitKind } from '../user-status.js';
 import { needsSinceOf, settleCheck, type UserSaid } from './user-spoke.js';
+import { stampSaidDecision } from '../ask-decision.js';
 
 export interface ReportChange {
   state: 'needs' | 'working' | 'waiting';
@@ -29,6 +30,10 @@ export interface ReportChange {
   /** needs, set by a task (not a person): which of the user's own kinds the ask is, and why (org/user-kind.ts). */
   user_kind?: string;
   user_kind_why?: string;
+  /** needs: the decision it is (ask-decision.ts): its id, kept in other words, or "new" for another decision. */
+  ask_id?: string;
+  /** needs, the same decision: what is really new about it (a fact, an option, a deadline). */
+  ask_new?: string;
   /** needs: why it asks what a task in its tree already asks the user (same-ask.ts). Never stored. */
   same_ask_reason?: string;
   /** Set by a task over the task's ask after the user wrote there: his words, passed back (user-spoke.ts). Never stored. */
@@ -87,12 +92,21 @@ export function reportOfChange(raw: unknown, by: StatusLineBy, byName: string | 
     ...(kind && c.state === 'waiting' ? { waiting_kind: kind as WaitKind } : {}),
     ...(next ? { next } : {}),
     ...shape,
+    ...(c.state === 'needs' ? saidDecisionOf(c) : {}),
     at, turn_ended_at: at,
     ...(by !== 'self' ? { by, ...(byName ? { by_name: byName.slice(0, 120) } : {}) } : {}),
     // `by` comes from the route's own caller resolution (setTaskReport: human only with no caller
     // header), never from the body, so a person's line records the primary; a body's source_host is never read.
     ...(by === 'human' ? { source_host: 'local' as const } : {}),
   };
+}
+
+/** What the caller said of the decision (ask-decision.ts): the id it keeps, or "new", and a new fact. */
+function saidDecisionOf(c: Record<string, unknown>): Pick<StatusReport, 'ask_id' | 'ask_new'> {
+  const id = c.ask_id;
+  if (id !== undefined && id !== null && typeof id !== 'string') throw new ReportChangeError('report.ask_id is a string: the decision id the task asks, or "new"');
+  const fact = text(c.ask_new);
+  return { ...(typeof id === 'string' && id.trim() ? { ask_id: id.trim() } : {}), ...(fact ? { ask_new: fact } : {}) };
 }
 
 /** The ask's answer shape from a change, checked: a choice takes 2 to ASK_OPTIONS_MAX options, yes_no and text none. */
@@ -151,7 +165,8 @@ export async function setTaskReport(
   const sid = known?.sessionId?.trim();
   const changed: StatusReport = sid ? { ...rest, session_id: sid } : rest;
   const needsSince = needsSinceOf(changed, task.status_report);
-  const report: StatusReport = needsSince ? { ...changed, needs_since: needsSince } : changed;
+  // The decision it asks keeps its id across rewordings, unless the caller says it is new (ask-decision.ts).
+  const report: StatusReport = stampSaidDecision(needsSince ? { ...changed, needs_since: needsSince } : changed, task.status_report);
   // Another task taking the ask off the user's Needs you (any line but the same ask) reads his words
   // in the task first, and passes back any he wrote since it asked (user-spoke.ts).
   let userSaid: UserSaid | undefined;
@@ -159,7 +174,9 @@ export async function setTaskReport(
     const { openAskOf } = await import('./ask-answer.js');
     const { askKey } = await import('../same-ask.js');
     const open = openAskOf(task);
-    if ('ask' in open && !(report.state === 'needs' && askKey(report.ask) === askKey(open.ask))) {
+    // The same ask stays on him, reworded or not: the same decision (ask-decision.ts), else the same words.
+    const sameDecision = report.state === 'needs' && !!report.ask_id && report.ask_id === task.status_report?.ask_id;
+    if ('ask' in open && !sameDecision && !(report.state === 'needs' && askKey(report.ask) === askKey(open.ask))) {
       const { listTasks } = await import('../task-manager.js');
       const userWords = typeof (raw as ReportChange | null)?.user_words === 'string' ? (raw as ReportChange).user_words : undefined;
       const check = await settleCheck(task, known.taskId, userWords, 'changed', await listTasks().catch(() => []));

@@ -28,7 +28,12 @@ const MAX_ITEMS = 20;
 const TOLD_KEEP_MS = 24 * 60 * 60_000;
 
 export type RideNoticeKind = 'stopped' | 'blocked' | 'waiting' | 'completed' | 'error';
-interface Part { text: string; at: number }
+interface Part {
+  text: string; at: number;
+  /** The decision the task asked the user when it was written (ask-decision.ts key): once told, a
+   *  later stop of the task still asking it is no news to this session (decisionToldTo). */
+  decision?: string;
+}
 interface Item {
   at: number;
   line?: Part;
@@ -41,6 +46,8 @@ interface Item {
 const riding = new Map<string, Map<string, Item>>();
 /** Session id → task id → when a notice about it (its edge) was last told to that session. */
 const toldNotices = new Map<string, Map<string, number>>();
+/** Session id → task id → the decision (key) a told notice or line said it asks the user, and when. */
+const toldDecisions = new Map<string, Map<string, { key: string; at: number }>>();
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let filePath: string | null = null;
 
@@ -128,6 +135,18 @@ export function noticeKeysSince(sid: string, sinceMs: number): Set<string> {
   return out;
 }
 
+/** The decision (ask-decision.ts key) the session was last told `taskId` asks the user, if any. */
+export function decisionToldTo(sid: string, taskId: string): string | undefined {
+  return toldDecisions.get(sid)?.get(taskId)?.key;
+}
+
+function noteToldDecision(sid: string, taskId: string, key: string | undefined, at: number): void {
+  if (!key) return;
+  const told = toldDecisions.get(sid) ?? new Map<string, { key: string; at: number }>();
+  told.set(taskId, { key, at });
+  toldDecisions.set(sid, told);
+}
+
 function noteTold(sid: string, taskId: string, at: number): void {
   const told = toldNotices.get(sid) ?? new Map<string, number>();
   told.set(taskId, Math.max(at, told.get(taskId) ?? 0));
@@ -138,10 +157,10 @@ function noteTold(sid: string, taskId: string, at: number): void {
  * A status line about `key` (a task, or a subject such as a handed-on request). `movedAt`: when the
  * move it tells happened; a notice about the task told since (about then) said it already.
  */
-export function rideLine(sid: string, key: string, line: string, now = Date.now(), movedAt?: number): boolean {
+export function rideLine(sid: string, key: string, line: string, now = Date.now(), movedAt?: number, decision?: string): boolean {
   if (movedAt !== undefined && !riding.get(sid)?.get(key)?.turn && !riding.get(sid)?.get(key)?.end
     && noticeToldSince(sid, key, movedAt - NOTICE_COVERS_MS)) return false;
-  slot(sid, key, now).line = { text: line, at: now };
+  slot(sid, key, now).line = { text: line, at: now, ...(decision ? { decision } : {}) };
   scheduleSave();
   return true;
 }
@@ -150,14 +169,14 @@ export function rideLine(sid: string, key: string, line: string, now = Date.now(
 const NOTICE_COVERS_MS = 2 * 60_000;
 
 /** A notice envelope about a task (org-follow.ts). */
-export function rideNotice(sid: string, taskId: string, kind: RideNoticeKind, text: string, now = Date.now()): void {
+export function rideNotice(sid: string, taskId: string, kind: RideNoticeKind, text: string, now = Date.now(), decision?: string): void {
   const item = slot(sid, taskId, now);
   if (kind === 'completed' || kind === 'error') {
     item.end = { kind, text, at: now };
     // A stop before the completion is no longer news.
     if (item.turn && item.turn.at <= now) delete item.turn;
   } else {
-    item.turn = { kind, text, at: now };
+    item.turn = { kind, text, at: now, ...(decision ? { decision } : {}) };
   }
   scheduleSave();
 }
@@ -214,9 +233,9 @@ export function pendingRiding(sessionId: string, now = Date.now()): { text: stri
       for (const [id, s] of snapshot) {
         const item = cur.get(id);
         if (!item) continue;
-        if (item.line && item.line.at <= s.at) delete item.line;
         const toldAt = now;
-        if (item.turn && item.turn.at <= s.at) { delete item.turn; noteTold(sessionId, id, toldAt); }
+        if (item.line && item.line.at <= s.at) { noteToldDecision(sessionId, id, item.line.decision, toldAt); delete item.line; }
+        if (item.turn && item.turn.at <= s.at) { noteToldDecision(sessionId, id, item.turn.decision, toldAt); delete item.turn; noteTold(sessionId, id, toldAt); }
         if (item.end && item.end.at <= s.at) { delete item.end; noteTold(sessionId, id, toldAt); }
         if (!item.line && !item.turn && !item.end) cur.delete(id);
       }
@@ -236,6 +255,10 @@ export function pruneRiding(now = Date.now()): void {
     for (const [id, at] of told) if (now - at > TOLD_KEEP_MS) told.delete(id);
     if (told.size === 0) toldNotices.delete(sid);
   }
+  for (const [sid, told] of toldDecisions) {
+    for (const [id, d] of told) if (now - d.at > RIDE_MAX_MS) told.delete(id);
+    if (told.size === 0) toldDecisions.delete(sid);
+  }
 }
 
 /**
@@ -253,6 +276,7 @@ export function stopRiding(): Promise<void> {
 export function clearRiding(): void {
   riding.clear();
   toldNotices.clear();
+  toldDecisions.clear();
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = null;
   filePath = null;

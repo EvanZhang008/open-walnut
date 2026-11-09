@@ -763,7 +763,20 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
   // Reopened by him: in his sight again until he writes in it.
   if (patch.reopen) { delete next.closed; if (HIDDEN_STATES.has(next.state) && patch.state === undefined) next.state = 'answered'; }
   if (patch.pin !== undefined) applyPin(next, cur, patch.pin, by, at);
+  // Only its ask in other words: the thread is the decision, so nothing moved (no news, no new
+  // change time, no overdue clock reset; 2026-11-09, ask-decision.ts).
+  if (onlyAskReworded(cur, next)) { next.updatedAt = cur.updatedAt; next.by = cur.by; }
   return { file: replace(file, next, at), thread: next };
+}
+
+/** Whether `next` differs from `cur` in its ask's words alone (and who wrote last). Pure. */
+export function onlyAskReworded(cur: OrgThread, next: OrgThread): boolean {
+  if (cur.ask === next.ask || !cur.ask || !next.ask) return false;
+  const skip = new Set(['ask', 'updatedAt', 'by']);
+  const keys = new Set([...Object.keys(cur), ...Object.keys(next)].filter((k) => !skip.has(k)));
+  const a = cur as unknown as Record<string, unknown>;
+  const b = next as unknown as Record<string, unknown>;
+  return [...keys].every((k) => a[k] === b[k] || JSON.stringify(a[k]) === JSON.stringify(b[k]));
 }
 
 /** Pin (a closed thread first needs reopen) or unpin `next`; a pin of his stays his when a node pins it again. */

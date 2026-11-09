@@ -17,6 +17,7 @@ import { log } from '../logging/index.js';
 import type { Task } from './types.js';
 import { briefTeam } from './user-status.js';
 import { sameTaskArea } from './router/same-area.js';
+import { askDecisionQuestion } from './ask-decision.js';
 import {
   FOLDABLE_SOURCES, answeredAskMessage, answerFor, answersOf, findSameAsk, SameAskError, sameAskMessage, sameAskReasonOf, type RelativeAsk, type TreeAsk,
 } from './same-ask.js';
@@ -287,13 +288,15 @@ export async function sameAskQuestionFor(taskId: string): Promise<string> {
   } catch {
     return '';
   }
+  // Its own decision first: the id it keeps across rewordings (ask-decision.ts).
+  const own = askDecisionQuestion(self?.status_report);
   // A stored fold names its task only when that task is known and in the same area (one stored
   // before the area mark, or naming a task gone from the store, is left out).
   const stored = self?.user_status?.sameAsk;
   const foldTask = stored ? everything.find((t) => t.id === stored.id) : undefined;
   const fold = stored && self && foldTask && sameTaskArea(self, foldTask) ? stored : undefined;
   const above = self?.user_status?.answeredFor;
-  if (!asks.length && !fold && !above) return '';
+  if (!asks.length && !fold && !above) return own;
   const lines = asks.slice(0, QUESTION_ASKS_MAX).map((a) => `- [${a.taskId}] ${a.title.replace(/\s+/g, ' ').slice(0, 80)} (${WHO[a.relation]}${a.where === 'letter' ? ', a decision letter' : ''}): "${a.ask.replace(/\s+/g, ' ').slice(0, 200)}"`);
   const who = fold ? `[${fold.id}] ${fold.title.replace(/\s+/g, ' ').slice(0, 80)}` : '';
   const folded = !fold ? ''
@@ -303,7 +306,7 @@ export async function sameAskQuestionFor(taskId: string): Promise<string> {
   const answered = above
     ? `\n${above.byTitle.replace(/\s+/g, ' ').slice(0, 80)} answered your ask for the user ("${above.ask.replace(/\s+/g, ' ').slice(0, 160)}"), and Walnut took it off the user's Needs you: act on that answer and do not ask it again.`
     : '';
-  return `\n\nThe user already has these asks open from this task's tree, and sees each decision once, from the task closest to the work:\n${lines.join('\n') || '- (none open now)'}${folded}${answered}\n`
+  return `${own}\n\nThe user already has these asks open from this task's tree, and sees each decision once, from the task closest to the work:\n${lines.join('\n') || '- (none open now)'}${folded}${answered}\n`
     + 'Do not ask the user again what one of these asks: if it is the decision your FOR_USER_ASK is about, the task that asks it carries the answer (task_send it if you need the answer too).\n'
     + 'FOR_USER_ASK_SAME: needs-you only: the id of the listed task whose ask is the same decision as yours, or "different" when yours is another decision. Otherwise none.';
 }

@@ -85,6 +85,16 @@ export async function noteOrgEdge(task: Task, edge: OrgEdge): Promise<boolean> {
     const answered = await repliedRecently(followerSids, task.id, RECENT_REPLY_MS).catch(() => false);
     // A stop right after its answer reached the node is no news: the answer was the update.
     if (edge.kind === 'stopped' && answered) return false;
+    // A stop of a task still asking the user the decision this node was told it asks is no news,
+    // however it words it now (2026-11-09, the CEO: one ask reworded four times a day reached every
+    // node above it as new; ask-decision.ts). Another decision, or new facts, is a new key.
+    const { taskDecision } = await import('../ask-decision.js');
+    const { decisionToldTo, rideNotice } = await import('./status-riding.js');
+    const decision = taskDecision(task)?.key;
+    if (edge.kind === 'stopped' && decision && decisionToldTo(rec.claudeSessionId, task.id) === decision) {
+      log.session.info('org follow: a stop still asking a decision the node was told is no news', { taskId: task.id, followerTaskId: follower.id });
+      return false;
+    }
     const { turnStarterOf } = await import('./session-request-notify.js');
     // A follower reads many tasks: a stop's quote is kept short, a completion's or an error's whole.
     const lastWords = edge.lastWords && edge.kind !== 'completed' && edge.kind !== 'error' && edge.lastWords.text.length > STOP_QUOTE_MAX
@@ -101,8 +111,7 @@ export async function noteOrgEdge(task: Task, edge: OrgEdge): Promise<boolean> {
       waitUntil: edge.waitUntil,
       repliedRecently: answered,
     }));
-    const { rideNotice } = await import('./status-riding.js');
-    rideNotice(rec.claudeSessionId, task.id, edge.kind, text);
+    rideNotice(rec.claudeSessionId, task.id, edge.kind, text, Date.now(), decision);
     log.session.info('org follow: the edge rides the next message of the node that follows the task', {
       taskId: task.id, kind: edge.kind, followerTaskId: follower.id, followerSid: rec.claudeSessionId,
     });
