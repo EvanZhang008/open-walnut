@@ -58,6 +58,22 @@ func recordedSpawnedServerPid() -> Int32? {
     return Int32(raw.trimmingCharacters(in: .whitespacesAndNewlines))
 }
 
+// MARK: - Quiet Key Window
+
+/// Every window Walnut makes for a web view (and every one its native tests make). A key the
+/// page leaves unhandled travels up the responder chain to the window, whose default answer is
+/// NSBeep: an Escape, Enter or arrow press on a part of the page that takes no text played the
+/// alert sound, and a native test driver sending such keys played it on every run (2026-11-08,
+/// heard through the night). A browser plays nothing there, so neither does this window; every
+/// other unhandled action keeps AppKit's own answer. tests/desktop/quiet-window.test.ts fails on
+/// a window made any other way.
+final class QuietKeyWindow: NSWindow {
+    override func noResponder(for eventSelector: Selector) {
+        if eventSelector == #selector(NSResponder.keyDown(with:)) { return }
+        super.noResponder(for: eventSelector)
+    }
+}
+
 // MARK: - App Delegate
 
 class AppDelegate: NSObject, NSApplicationDelegate {
@@ -157,7 +173,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         WalnutIntentsPort.provider = { [weak self] in self?.serverPort }
 
         let windowRect = NSRect(x: 0, y: 0, width: 1200, height: 800)
-        window = NSWindow(
+        window = QuietKeyWindow(
             contentRect: windowRect,
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
@@ -2367,7 +2383,7 @@ extension AppDelegate: WKNavigationDelegate {
             child.uiDelegate = self
             child.autoresizingMask = [.width, .height]
             child.pageZoom = webView.pageZoom
-            let target = NSWindow(contentRect: child.frame,
+            let target = QuietKeyWindow(contentRect: child.frame,
                 styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
             target.isReleasedWhenClosed = false
             target.delegate = self

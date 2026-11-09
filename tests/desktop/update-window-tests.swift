@@ -38,14 +38,14 @@ private final class UpdateTestDelegate: AppDelegate {
         let configuration = WKWebViewConfiguration()
         configuration.userContentController.addScriptMessageHandler(owner, contentWorld: .page, name: "walnutUpdate")
         let main = WKWebView(frame: NSRect(x: 0, y: 0, width: 1000, height: 700), configuration: configuration)
-        owner.window = NSWindow(contentRect: main.frame, styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        owner.window = QuietKeyWindow(contentRect: main.frame, styleMask: [.titled, .closable], backing: .buffered, defer: false)
         owner.window.isReleasedWhenClosed = false
         owner.window.contentView = main
         owner.webView = main
         owner.webContentWatchdog = watchdog(main, owner.window)
         main.loadHTMLString("<textarea id='draft'></textarea>", baseURL: nil)
         let child = WKWebView(frame: main.frame)
-        let childWindow = NSWindow(contentRect: child.frame, styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        let childWindow = QuietKeyWindow(contentRect: child.frame, styleMask: [.titled, .closable], backing: .buffered, defer: false)
         childWindow.isReleasedWhenClosed = false
         childWindow.contentView = child
         let childKey = ObjectIdentifier(child)
@@ -127,7 +127,7 @@ private final class UpdateTestDelegate: AppDelegate {
         owner.confirmInstall(from: main) { result = $0 }
         try await wait("new window sheet") { owner.window.attachedSheet != nil }
         let newcomer = WKWebView(frame: main.frame)
-        let newWindow = NSWindow(contentRect: newcomer.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        let newWindow = QuietKeyWindow(contentRect: newcomer.frame, styleMask: [.titled], backing: .buffered, defer: false)
         newWindow.isReleasedWhenClosed = false
         newWindow.contentView = newcomer
         newcomer.loadHTMLString("<textarea>New unsaved work</textarea>", baseURL: nil)
@@ -153,7 +153,7 @@ private final class UpdateTestDelegate: AppDelegate {
         // The page lists every window's unsent work before a restart: a page with the bridge
         // answers item by item, an older page answers through the shell's own check.
         let listed = WKWebView(frame: main.frame)
-        let listedWindow = NSWindow(contentRect: listed.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        let listedWindow = QuietKeyWindow(contentRect: listed.frame, styleMask: [.titled], backing: .buffered, defer: false)
         listedWindow.isReleasedWhenClosed = false
         listedWindow.title = "Fix the login"
         listedWindow.contentView = listed

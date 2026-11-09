@@ -52,7 +52,7 @@ struct PopoutWindowTests {
         precondition(port > 0 && port != 3456)
         delegate.serverPort = port
         delegate.commandLineToolChecked = true
-        delegate.window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1200, height: 800),
+        delegate.window = QuietKeyWindow(contentRect: NSRect(x: 0, y: 0, width: 1200, height: 800),
             styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         delegate.window.isReleasedWhenClosed = false
         delegate.loadWebUI()
