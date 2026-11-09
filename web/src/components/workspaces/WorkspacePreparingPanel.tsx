@@ -207,6 +207,8 @@ export function WorkspacePreparingPanel({ taskId, initialTask, message, launchEr
         : setupHeld ? 'Its setup script failed, so the session has not started'
         : ws.state === 'ready' && ws.setup?.state === 'running' && ws.setup.wait !== false ? 'Workspace ready. Running its setup script…'
           : idle ? 'The workspace is ready, and no session waits for it'
+          // Ready with no setup on record yet: the server is still reading the project's and the repository's scripts.
+          : ws.state === 'ready' && !ws.setup ? 'Workspace ready. Looking for its setup script…'
           : ws.state === 'ready' ? 'Workspace ready. Starting the session…'
           : workspaceStateLabel(ws);
   const errorText = ws?.launch_error ?? (ws?.state === 'failed' ? ws.error : undefined) ?? refused ?? ws?.error;

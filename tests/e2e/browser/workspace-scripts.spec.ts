@@ -166,6 +166,16 @@ test('setup runs in a new workspace before its first session; a script runs in t
 
   // ── Start: the column waits while setup runs, then becomes the session ──
   const response = page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/sessions/quick-start')
+  // Every label the waiting column shows, in order (a label that claims the session starts before setup ran was a bug).
+  await page.evaluate(() => {
+    const seen: string[] = []
+    ;(window as unknown as { __preparingLabels: string[] }).__preparingLabels = seen
+    const note = () => document.querySelectorAll('[data-testid="workspace-preparing-label"]').forEach((el) => {
+      const t = el.textContent ?? ''
+      if (seen[seen.length - 1] !== t) seen.push(t)
+    })
+    new MutationObserver(note).observe(document.body, { subtree: true, childList: true, characterData: true })
+  })
   const input = draftComposer(page)
   await input.fill('Check the web app builds')
   await input.press('Enter')
@@ -176,6 +186,8 @@ test('setup runs in a new workspace before its first session; a script runs in t
   await expect(preparing.getByTestId('workspace-preparing-label')).toHaveText('Workspace ready. Running its setup script…', { timeout: 60_000 })
   await expect(preparing.getByTestId('script-run-setup')).toContainText('Install')
   await expect(preparing.getByTestId('script-run-setup-status')).toContainText('Running…')
+  const labels = await page.evaluate(() => (window as unknown as { __preparingLabels: string[] }).__preparingLabels)
+  expect(labels.slice(0, labels.indexOf('Workspace ready. Running its setup script…')).filter((t) => /Starting the session/.test(t)), labels.join(' | ')).toEqual([])
   await shot(page, 'preparing-setup', preparing.getByTestId('script-run-setup').locator('..'), 16)
   // No session yet: the first one waits for setup.
   expect(((await (await page.request.get(`/api/sessions/task/${taskId}`)).json()) as { sessions: unknown[] }).sessions).toHaveLength(0)
