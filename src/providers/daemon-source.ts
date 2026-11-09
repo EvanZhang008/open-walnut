@@ -4594,9 +4594,9 @@ async function resumeForTrigger(home, sid, text, messageId, taskId) {
   // The journal's first line decides when it names a Walnut. A line backfilled
   // from the older ledger names none (every session started before 2026-09-26),
   // and then the Walnut that asked for its latest spawn decides (below).
+  if (!livedHere(sid)) return { ok: false, reason: 'no transcript of that session on this host' };
   var journaled = journaledHome(sid);
   if (journaled !== undefined && journaled !== home) return { ok: false, reason: 'that session was started on this host for another Walnut' };
-  if (!livedHere(sid)) return { ok: false, reason: 'no transcript of that session on this host' };
   var now = Date.now();
   for (const [k, at] of hostResumedAt) if (now - at >= HOST_RESUME_COOLDOWN_MS) hostResumedAt.delete(k);
   if (hostResumedAt.has(sid)) return { ok: false, reason: 'this host resumed that session moments ago' };
@@ -4655,6 +4655,9 @@ function cmdBridgeResume(ws, id, cmd) {
 
   if (!livedHere(sid)) {
     return sendError(ws, id, 'bridgeResume: session not found: ' + sid);
+  }
+  if (ws.origin === 'bridge' && !bridgeHearsSession(ws, sid)) {
+    return sendError(ws, id, 'bridgeResume: a session of another Walnut', { errorKind: 'not_owner' });
   }
 
   var spawn = spawnRecordOf(sid);
@@ -14409,6 +14412,7 @@ function servesBridgeHome(client, home) {
 function bridgeHearsSession(client, sid) {
   var own = bridgeHomeOf(client);
   if (!own) return true;
+  if (isJournalSid(sid) && !journaledIds().has(sid)) journaledSids = null;
   var owner = sessionHomeOf(sid);
   return !owner || owner === own;
 }

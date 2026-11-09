@@ -3352,9 +3352,10 @@ async function resumeForTrigger(home: string, sid: string, text: string, message
   // The journal's first line decides when it names a Walnut. A line backfilled
   // from the older ledger names none (every session started before 2026-09-26),
   // and then the Walnut that asked for its latest spawn decides (below).
+  // livedHere first: it reads the journal again on a miss, so the owner below is the file's as it is now.
+  if (!livedHere(sid)) return { ok: false, reason: 'no transcript of that session on this host' }
   const journaled = journaledHome(sid)
   if (journaled !== undefined && journaled !== home) return { ok: false, reason: 'that session was started on this host for another Walnut' }
-  if (!livedHere(sid)) return { ok: false, reason: 'no transcript of that session on this host' }
   const now = Date.now()
   for (const [k, at] of hostResumedAt) if (now - at >= HOST_RESUME_COOLDOWN_MS) hostResumedAt.delete(k)
   if (hostResumedAt.has(sid)) return { ok: false, reason: 'this host resumed that session moments ago' }
@@ -3423,6 +3424,10 @@ function cmdBridgeResume(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
   // Proof of residence: its stream file, or the spawn journal once retention dropped the file.
   if (!livedHere(sid)) {
     return sendError(ws, id, 'bridgeResume: session not found: ' + sid)
+  }
+  // livedHere may have read the journal again: the session's Walnut is judged on what it read.
+  if (ws.data?.origin === 'bridge' && !bridgeHearsSession(ws, sid)) {
+    return sendError(ws, id, 'bridgeResume: a session of another Walnut', { errorKind: 'not_owner' })
   }
 
   const spawn = spawnRecordOf(sid)
@@ -12814,6 +12819,8 @@ function servesBridgeHome(client: ServerWebSocket<WsData>, home: string): boolea
 function bridgeHearsSession(client: ServerWebSocket<WsData>, sid: string): boolean {
   const own = bridgeHomeOf(client)
   if (!own) return true
+  // Another daemon may have journaled it since this one read the journal: judge on the file as it is now.
+  if (isJournalSid(sid) && !journaledIds().has(sid)) journaledSids = null
   const owner = sessionHomeOf(sid)
   return !owner || owner === own
 }

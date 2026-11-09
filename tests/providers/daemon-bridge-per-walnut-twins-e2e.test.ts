@@ -507,6 +507,28 @@ describe.each(TWINS)('one bridge link per Walnut (%s twin)', (twin) => {
     expect(fs.existsSync(inbox) ? fs.readFileSync(inbox, 'utf8') : '').not.toContain('from the wrong companion')
   }, 90_000)
 
+  // Review round 6 of 2026-11-09: a resume proves residence by the spawn journal once stream retention took
+  // the file, and the journal is re-read on a miss. The owner gate must read it again too, or a sid another
+  // Walnut journaled after this daemon read the journal passes as unrecorded.
+  it('companion A cannot resume B\'s finished session that was journaled after the daemon read the journal', async () => {
+    const cloudA = await companion(), cloudB = await companion()
+    const dir = tempDir()
+    const d = await spawnDaemon(twin, dir)
+    const a = await server(d.port, HOME_A, true), b = await server(d.port, HOME_B, true)
+    await configure(a, cloudA.url, HOME_A)
+    await configure(b, cloudB.url, HOME_B, { hostAlias: 'fixture-host-b' })
+    const linkA = await cloudA.link()
+    // The daemon reads (and caches) the journal on the first owner check.
+    expect(await linkA.rpc({ cmd: 'status', sid: crypto.randomUUID() })).toMatchObject({ ok: true, exists: false })
+    const sid = crypto.randomUUID()
+    fs.appendFileSync(path.join(dir, 'spawn-journal.jsonl'), JSON.stringify({ v: 1, sid, at: new Date().toISOString(), kind: 'new', home: HOME_B }) + '\n')
+    expect(fs.existsSync(path.join(dir, 'streams', sid + '.jsonl'))).toBe(false)
+    const res = await linkA.rpc({ cmd: 'bridgeResume', sid, message: 'from the wrong companion', cwd: dir })
+    expect(res, JSON.stringify(res)).toMatchObject({ ok: false, errorKind: 'not_owner' })
+    expect(a, 'server A stays connected').toBeTruthy()
+    void b
+  }, 90_000)
+
   it('a relay reaches the server that pushed the link before that socket binds its home', async () => {
     const cloud = await companion()
     const d = await spawnDaemon(twin, tempDir())
