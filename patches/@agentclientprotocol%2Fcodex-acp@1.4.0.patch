@@ -1,8 +1,8 @@
 diff --git a/dist/index.js b/dist/index.js
-index af0a0d95af266a0ab1d83a61ba4d5ee3f1567d90..0b3dca4cd9338e05050ad1a4bc47d43c2da30cee 100755
+index af0a0d9..5fed196 100755
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -22065,14 +22065,146 @@ var Logger = class {
+@@ -22065,14 +22065,163 @@ var Logger = class {
  var logger = new Logger();
  
  // src/CodexJsonRpcConnection.ts
@@ -48,6 +48,21 @@ index af0a0d95af266a0ab1d83a61ba4d5ee3f1567d90..0b3dca4cd9338e05050ad1a4bc47d43c
 +}
 +// Walnut: where the model catalog lives, a state dir that outlives the session (the
 +// app-server rereads it each turn). WALNUT_CODEX_CATALOG_DIR names another.
++// Walnut: the catalog Codex rereads every turn; a sweep of its dir (a user's cleaner, a
++// disk-pressure purge) would fail every later turn, so each entry point writes it back first.
++var walnutCatalog = null;
++function walnutEnsureCatalog() {
++  if (!walnutCatalog || fs.existsSync(walnutCatalog.file)) return;
++  try {
++    const tmp = `${walnutCatalog.file}.${process.pid}.tmp`;
++    fs.mkdirSync(path.dirname(walnutCatalog.file), { recursive: true, mode: 448 });
++    fs.writeFileSync(tmp, walnutCatalog.body, { mode: 384 });
++    fs.renameSync(tmp, walnutCatalog.file);
++    logger.log("Walnut model catalog was gone; written again", { file: walnutCatalog.file });
++  } catch (error51) {
++    logger.log("Walnut model catalog could not be written again", { error: error51 instanceof Error ? error51.message : String(error51) });
++  }
++}
 +function walnutCodexCatalogDir(os2) {
 +  const named = process.env["WALNUT_CODEX_CATALOG_DIR"];
 +  if (named) return named;
@@ -97,6 +112,8 @@ index af0a0d95af266a0ab1d83a61ba4d5ee3f1567d90..0b3dca4cd9338e05050ad1a4bc47d43c
 +      }
 +      fs.renameSync(tmp, file);
 +    }
++    // Only a catalog this Codex loaded is put back when it goes missing (walnutEnsureCatalog).
++    walnutCatalog = { file, body };
 +    return ["-c", `model_catalog_json=${walnutTomlInline(file)}`];
 +  } catch (error51) {
 +    logger.log("Walnut model catalog not built", { error: error51 instanceof Error ? error51.message : String(error51) });
@@ -152,7 +169,81 @@ index af0a0d95af266a0ab1d83a61ba4d5ee3f1567d90..0b3dca4cd9338e05050ad1a4bc47d43c
    }
    attachLogs(codex);
    const reader = createJSONRPCReader(codex.stdout);
-@@ -32728,7 +32860,10 @@ function startAcpServer() {
+@@ -29710,7 +29859,8 @@ var CodexAcpServer = class _CodexAcpServer {
+       authMethods: getCodexAuthMethods(_params.clientCapabilities),
+       _meta: {
+         steering: {
+-          supported: true
++          supported: true,
++          injectOnly: true
+         },
+         goal: {
+           version: GOAL_EXTENSION_VERSION,
+@@ -30022,6 +30172,7 @@ Check ${configPath} and project .codex directories, especially their config.toml
+     return null;
+   }
+   async loadSession(params) {
++    walnutEnsureCatalog();
+     logger.log("Loading session...", { sessionId: params.sessionId });
+     const {
+       sessionId,
+@@ -30042,6 +30193,7 @@ Check ${configPath} and project .codex directories, especially their config.toml
+     };
+   }
+   async resumeSession(params) {
++    walnutEnsureCatalog();
+     logger.log("Resuming session...", { sessionId: params.sessionId });
+     const [sessionId, modelState, modeState] = await this.getOrCreateSession(params);
+     logger.log("Session resumed", {
+@@ -30129,6 +30281,7 @@ Check ${configPath} and project .codex directories, especially their config.toml
+     return this.sessionOpenGenerations.get(sessionId) === this.getSessionGeneration(sessionId);
+   }
+   async newSession(params) {
++    walnutEnsureCatalog();
+     logger.log("Starting new session...");
+     const [sessionId, modelState, modeState] = await this.getOrCreateSession(params);
+     logger.log("New session created", {
+@@ -30389,6 +30542,7 @@ Check ${configPath} and project .codex directories, especially their config.toml
+    *     outcome of starting a new turn.
+    */
+   async performSteeringRequest(params) {
++    walnutEnsureCatalog();
+     logger.log("Steering session requested", {
+       sessionId: params.sessionId,
+       prompt: params.prompt
+@@ -30403,6 +30557,13 @@ Check ${configPath} and project .codex directories, especially their config.toml
+         return { outcome: "injected" };
+       }
+     }
++    // Walnut: a client that queues the text for its next turn asks for injection only. Starting a
++    // turn here, when the live one has just ended, ran the text once as this turn and once more as
++    // the client's own next prompt.
++    if (params.injectOnly) {
++      logger.log("Steering session found no live turn; injection only", { sessionId: params.sessionId });
++      return { outcome: "noActiveTurn" };
++    }
+     return await this.startNewTurnFromSteering(params);
+   }
+   /**
+@@ -30541,7 +30702,8 @@ Check ${configPath} and project .codex directories, especially their config.toml
+     }
+     return {
+       sessionId,
+-      prompt
++      prompt,
++      injectOnly: params["injectOnly"] === true
+     };
+   }
+   createSessionConfigOptions(sessionState) {
+@@ -31193,6 +31355,7 @@ Check ${configPath} and project .codex directories, especially their config.toml
+     return turnId;
+   }
+   async prompt(params, signal, onTurnStarted) {
++    walnutEnsureCatalog();
+     logger.log("Prompt received", {
+       sessionId: params.sessionId,
+       prompt: params.prompt
+@@ -32728,7 +32891,10 @@ function startAcpServer() {
      authRequest: authRequestString ?? null,
      defaultAuthRequest: defaultAuthRequest ?? null
    });

@@ -69,6 +69,15 @@ interface PendingPermission {
   resolve: (resp: RequestPermissionResponse) => void
 }
 
+
+/**
+ * Ops whose failure the caller handles itself, never a turn that failed: a steer that missed the
+ * live turn goes back to Walnut's queue and into the next turn (acp-session.ts steer returns false
+ * on any failure). Every other op's failure is journaled as an error row, which reads as a failed
+ * session. tests/providers/acp-worker-op-failures.test.ts lists every op with its choice.
+ */
+export const CALLER_OWNS_FAILURE: ReadonlySet<string> = new Set(['steer'])
+
 export class AcpWorker {
   private journal: AcpJournal
   private adapter: ChildProcess | null = null
@@ -159,9 +168,12 @@ export class AcpWorker {
       // runs change nothing about the turn: the caller keeps the message queued.
       // Journaled as an `error`, it read as the LIVE turn's failure, and the server's
       // turn-error path drove the queue again at once, which steered again (2026-11-09).
-      const refusal = !control && (req.op === 'steer' || OP_REFUSAL_KINDS.has(werr.kind))
+      const refusal = !control && (CALLER_OWNS_FAILURE.has(req.op) || OP_REFUSAL_KINDS.has(werr.kind))
       const journaled = !recoverableLoadFailure && !refusal
       if (recoverableLoadFailure || refusal) {
+        // The caller acts on this answer itself (a steer that missed goes back to its queue and
+        // into the next turn): no turn failed, so nothing reaches the journal (2026-11-09: a steer
+        // that met the live turn's end read as an error row and Needs you).
         // session/load is lifecycle setup, not a user turn. The caller may
         // immediately create a replacement provider thread; journaling this as
         // a turn error would leak into chat and transiently poison status/phase
@@ -474,6 +486,9 @@ export class AcpWorker {
       const resp = await conn.extMethod('_session/steering', {
         sessionId: this.providerSessionId,
         prompt: [{ type: 'text', text: params.text }],
+        // Never a turn of its own: the caller sends a text that missed the live turn as its next
+        // prompt, so an adapter that started one ran it twice (Walnut's codex-acp patch honours it).
+        injectOnly: true,
       })
       outcome = (resp as { outcome?: string } | undefined)?.outcome
     } catch (e) {
@@ -481,8 +496,9 @@ export class AcpWorker {
     }
 
     if (outcome !== 'injected') {
-      // 'startedNewTurn' | 'failed': the live turn is gone (or codex refused —
-      // review/compact turns are non-steerable). Typed error → caller re-queues.
+      // 'noActiveTurn' | 'failed' (| 'startedNewTurn' from an adapter that ignores injectOnly): the
+      // live turn is gone (or codex refused: review/compact turns are non-steerable). Typed error,
+      // and the caller re-queues it for the next turn.
       throw <WorkerError>{ kind: 'steer_race', message: 'live turn ended before steering applied' }
     }
 

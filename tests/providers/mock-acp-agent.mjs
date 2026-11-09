@@ -50,6 +50,9 @@ let sessionCounter = 0;
 let cancelled = false;
 let ignoreCancel = false;
 let turnRunning = false;          // a session/prompt turn is streaming
+// codex-acp's own turn ended (turn/completed) while its prompt answer is still on its way to the
+// client: the steer/turn-end race of 2026-11-09 ('steer-race' prompts open it).
+let adapterTurnOver = false;
 const steeredTexts = [];          // texts injected mid-turn via _session/steering
 const sessionModels = new Map();
 const sessionModes = new Map();
@@ -416,6 +419,17 @@ async function handlePrompt(id, params) {
     return;
   }
 
+  if (text.includes('steer-race')) {
+    // The adapter's turn completes at once, but its answer reaches the client 1.5 s later: a steer
+    // sent meanwhile finds no live turn, as on 2026-11-09.
+    chunk(sessionId, 'race turn open ');
+    adapterTurnOver = true;
+    await sleep(1500);
+    adapterTurnOver = false;
+    reply(id, { stopReason: 'end_turn' });
+    return;
+  }
+
   if (text.includes('steer-window')) {
     // A long streaming turn (~5s) that leaves a window for _session/steering.
     // Steered texts are echoed into the SAME turn as "steered:<text>" chunks.
@@ -503,9 +517,16 @@ rl.on('line', async (line) => {
       // review or compact turn (the worker reports steer_race).
       if (process.env.MOCK_ACP_STEER_REFUSE === '1') {
         reply(msg.id, { outcome: 'failed' });
-      } else if (turnRunning && !cancelled) {
+      } else if (turnRunning && !cancelled && !adapterTurnOver) {
         steeredTexts.push(text);
         reply(msg.id, { outcome: 'injected' });
+      } else if (msg.params?.injectOnly === true) {
+        // Walnut's codex-acp patch: injection only, never a turn of its own.
+        reply(msg.id, { outcome: 'noActiveTurn' });
+      } else if (adapterTurnOver) {
+        // Upstream codex-acp: no live turn, so the text starts a new one.
+        chunk(msg.params?.sessionId, `steer-started-turn:${text} `);
+        reply(msg.id, { outcome: 'startedNewTurn' });
       } else {
         reply(msg.id, { outcome: 'failed' });
       }
