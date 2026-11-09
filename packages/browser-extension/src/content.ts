@@ -511,6 +511,9 @@ if (SELF === 'top') {
   // A selection already on the page when this script came in counts: its clearing is told too (L3).
   let hadSelection = (getSelection()?.toString() ?? '').trim() !== ''
   document.addEventListener('selectionchange', () => {
+    // A selection the debounce never saw settle may still have been read by the panel (its focus,
+    // a tab update): its clearing is told too, or its quote stays in the panel.
+    if (getSelection()?.isCollapsed === false) hadSelection = true
     clearTimeout(selTimer)
     selTimer = window.setTimeout(() => {
       if (isWalnutApp()) return

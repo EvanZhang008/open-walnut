@@ -1116,6 +1116,19 @@ test('the selection quote follows the page and stays with its agent; the compose
   const box = v.locator('[data-testid="ask-object-compose"] textarea')
   try {
     await v.getByTestId('ext-panel-new').click()
+    // A selection the panel read before the page's debounce saw it settle (still being dragged,
+    // read on the panel's focus): its clearing is told too, so its quote goes (CI 2026-11-09).
+    let dragging = true
+    const drag = (async () => { while (dragging) { await selectText(lab.doc, 'p1'); await new Promise((r) => setTimeout(r, 100)) } })()
+    try {
+      await p.evaluate(() => window.dispatchEvent(new Event('focus')))
+      await expect(quote).toContainText('retries a failed upload three times', { timeout: 15_000 })
+    } finally {
+      dragging = false
+      await drag
+    }
+    await lab.doc.evaluate(() => getSelection()?.removeAllRanges())
+    await expect(quote).toHaveCount(0, { timeout: 10_000 })
     await selectText(lab.doc, 'p1')
     await expect(quote).toContainText('retries a failed upload three times', { timeout: 15_000 })
     // Cleared on the page: gone here.
