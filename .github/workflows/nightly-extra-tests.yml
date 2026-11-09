@@ -75,6 +75,10 @@ jobs:
         if: ${{ !cancelled() }}
         env: { PW_WORKERS: '1' }
         run: bun x playwright test -c tests/e2e/browser/cloud-host-silent-link.config.ts --project=chromium
+      - name: Cloud host, the link cut and flapping
+        if: ${{ !cancelled() }}
+        env: { PW_WORKERS: '1' }
+        run: bun x playwright test -c tests/e2e/browser/cloud-host-link-down.config.ts --project=chromium
       - name: Host server alone
         if: ${{ !cancelled() }}
         env: { PW_WORKERS: '1' }
