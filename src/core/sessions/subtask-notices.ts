@@ -49,7 +49,7 @@ import { log } from '../../logging/index.js';
 import { refNamesId } from '../../lib/id-ref.js';
 import type { SessionRecord, Task } from '../types.js';
 import type { NoticeLastMessage } from '../session-requests.js';
-import type { SubtaskNoticeKind, TurnStarter } from '../peers/envelope-kit.js';
+import type { EnvelopeWordsUnread, SubtaskNoticeKind, TurnStarter } from '../peers/envelope-kit.js';
 import { createEnvelopeKit } from '../peers/envelope-kit.js';
 import { parseWalnutMessage } from '../peers/walnut-message-tag.js';
 
@@ -77,6 +77,8 @@ export interface SubtaskNotice {
   blockedOn?: string;
   waitUntil?: string;
   repliedRecently?: boolean;
+  /** No lastWords because the transcript read timed out or failed (readLastTurn's `unread`). */
+  wordsUnread?: EnvelopeWordsUnread;
   /** G19: where the child's card sits on its parent's Board (stopped / completed, only when the parent has one). */
   cardLine?: string;
   /** A completion: how many of the parent's subtasks are still open, and which (subtask-batch.ts). */
@@ -85,6 +87,16 @@ export interface SubtaskNotice {
   partial?: string;
   /** When it was queued (ms): a stop is undone only by a turn that started after it. */
   queuedAt?: number;
+}
+
+/**
+ * A `stopped` edge whose turn was only an agent-ack sends no notice, to a leader or to the VP or
+ * Main that follows the task (2026-11-09, the org reflection: 8 of 10 VP status notices Main read
+ * overnight were such turns, each saying its last message "could not be read in time (or it wrote
+ * none)"). The ack line is the session saying nothing needs telling. Pure.
+ */
+export function ackOnlyStop(kind: SubtaskNoticeKind, words: NoticeLastMessage | undefined): boolean {
+  return kind === 'stopped' && !!words?.ack && !words.text.trim() && !words.actions?.length;
 }
 
 /** A stopped / completed notice names the child's card when the parent has a Board (plain text, no wakeup). */
@@ -150,6 +162,7 @@ export function buildSubtaskNoticeText(n: SubtaskNotice): string {
     blockedOn: n.blockedOn,
     waitUntil: n.waitUntil,
     repliedRecently: n.repliedRecently,
+    wordsUnread: n.lastWords ? undefined : n.wordsUnread,
   });
   const extra = [n.partial, n.remaining, n.cardLine].filter(Boolean).join('\n\n');
   if (!extra) return text;
@@ -321,6 +334,10 @@ const pending = new Map<string, Pending>();
  */
 export async function queueSubtaskNotice(n: SubtaskNotice): Promise<void> {
   try {
+    if (ackOnlyStop(n.kind, n.lastWords)) {
+      log.session.info('subtask notice skipped: its turn was only an agent-ack', { parentTaskId: n.parentTaskId, childTaskId: n.child.id });
+      return;
+    }
     const { getTask } = await import('../task-manager.js');
     const parent = await getTask(n.parentTaskId).catch(() => null);
     if (!parent) return;

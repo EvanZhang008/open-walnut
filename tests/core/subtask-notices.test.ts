@@ -177,11 +177,14 @@ describe('the wording of each kind', () => {
     expect(env.body).toContain('If this is its second failure with the same error, stop retrying and tell the user.');
   });
 
-  it('no quote and no recent reply: says the read failed and still points at the record', () => {
+  it('no quote and no recent reply: says why and still points at the record', () => {
     // 2026-10-01 live run: the transcript read timed out on a loaded host and the
     // notice went out bare, with task_history missing from its Next block.
+    const timedOut = parseWalnutMessage(buildSubtaskNoticeText(notice({ lastWords: undefined, wordsUnread: 'timed_out' })))!;
+    expect(timedOut.body).toContain('It is waiting for input. Its last message could not be read: the transcript read timed out twice. Read it with task_history. A status notice');
+    // 2026-11-09: a read that answered with no words is a turn that wrote none, said as such.
     const env = parseWalnutMessage(buildSubtaskNoticeText(notice({ lastWords: undefined })))!;
-    expect(env.body).toContain('It is waiting for input. Its last message could not be read in time (or it wrote none). A status notice');
+    expect(env.body).toContain('It is waiting for input. Its last turn wrote no message. A status notice');
     expect(env.body).not.toContain('--- its last message');
     expect(env.body).toContain(`task_history '{"id":"child-a"}'`);
     // A recent reply carried the content: no apology, no record pointer.
@@ -257,6 +260,14 @@ describe('who started the last turn', () => {
 });
 
 describe('delivery to the parent', () => {
+  it('a stop whose turn was only an agent-ack sends nothing (2026-11-09 org reflection)', async () => {
+    await queueSubtaskNotice(notice({ lastWords: { text: '', ack: true } }));
+    await vi.advanceTimersByTimeAsync(COALESCE_MS + 10);
+    expect(getTask).not.toHaveBeenCalled();
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+    expect(enqueueMessage).not.toHaveBeenCalled();
+  });
+
   it('one message per parent per burst, several envelopes, newest per child and kind', async () => {
     await queueSubtaskNotice(notice({ child: { id: 'child-a', title: 'A' }, lastWords: { text: 'older' } }));
     await queueSubtaskNotice(notice({ child: { id: 'child-b', title: 'B' }, kind: 'completed' }));

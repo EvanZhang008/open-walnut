@@ -426,7 +426,8 @@ describe('lastWordsOf — what a notice quotes from the target transcript', () =
   it('never quotes the no-action line: a turn that said only that says nothing', () => {
     const tag = '<walnut-turn status="no-action"/>'
     expect(lastWordsOf([user('go'), say(`All set, nothing for you.\n\n${tag}`)])).toEqual({ text: 'All set, nothing for you.' });
-    expect(lastWordsOf([user('go'), tool('Bash', 'ls'), say(tag)])).toEqual({ text: '' });
+    // 2026-11-09: marked as an ack, so a stop notice can tell it from a turn that wrote nothing.
+    expect(lastWordsOf([user('go'), tool('Bash', 'ls'), say(tag)])).toEqual({ text: '', ack: true });
   });
 
   it('a turn with neither text nor tools falls back to an earlier turn\'s text; nothing at all is undefined', () => {
@@ -998,7 +999,7 @@ describe('notifyRequesterFallback — the notice quotes the target\'s last messa
     expect(deliveredText()).toContain('From the cache.');
   });
 
-  it('goes without the quote when the live read hangs, instead of holding the notice', async () => {
+  it('goes without the quote when the live read hangs twice, instead of holding the notice', async () => {
     const rq = await arm();
     buildSessionTranscript.mockReturnValue(new Promise(() => { /* never settles */ }));
     // Only the budget's timer is faked; the ledger's file I/O runs for real.
@@ -1012,7 +1013,10 @@ describe('notifyRequesterFallback — the notice quotes the target\'s last messa
         await new Promise((resolve) => setImmediate(resolve));
       }
       expect(buildSessionTranscript).toHaveBeenCalled();
-      // Just short of the budget the notice is still waiting; at the budget it goes.
+      // A read that runs out of time is tried once more (2026-11-09): the notice waits for both
+      // budgets, then goes.
+      await vi.advanceTimersByTimeAsync(LAST_MESSAGE_READ_MS);
+      expect(buildSessionTranscript).toHaveBeenCalledTimes(2);
       await vi.advanceTimersByTimeAsync(LAST_MESSAGE_READ_MS - 1);
       expect(sendMessageToSession).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);

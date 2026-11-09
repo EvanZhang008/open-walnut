@@ -64,7 +64,11 @@ import { TASK_ROUTING_CONTRACT } from './task-routing-contract.js';
 // Raised to 10,250 on 2026-11-08 for the charter's done check: before done, re-read the
 // task's description and every request held and check each item (a task did one of five
 // items and reported done twice). It renders 10,207.
-export const SELF_KNOWLEDGE_PROMPT_MAX_CHARS = 10_250;
+//
+// Raised to 10,650 on 2026-11-09 for two charter lines: review stops after 3 rounds and no
+// brief raises the cap (two tasks reached rounds 9 and 12 under a lead's old "6"), and a
+// message the user says reached the wrong chat is forwarded, never sent back to him. It renders 10,588.
+export const SELF_KNOWLEDGE_PROMPT_MAX_CHARS = 10_650;
 
 // The phase LIST comes from PHASE_ORDER, so adding or removing a phase updates
 // this prompt with no second edit. The phases the prompt names are typed

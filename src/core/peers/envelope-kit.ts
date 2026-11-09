@@ -51,7 +51,12 @@ export interface EnvelopeLastMessage {
   text: string;
   clipped?: boolean;
   actions?: string[];
+  /** Its last message was only the agent-ack (or no-action) line: an acknowledgement, no news. */
+  ack?: boolean;
 }
+
+/** Why a notice carries no quote although the turn was read for one: the transcript read timed out, or failed. */
+export type EnvelopeWordsUnread = 'timed_out' | 'failed';
 
 export interface EnvelopeTarget {
   title?: string;
@@ -99,6 +104,8 @@ export interface SubtaskNoticeInput {
   waitUntil?: string;
   /** The child answered a request of the parent's a moment ago: no quote, say so. */
   repliedRecently?: boolean;
+  /** No lastMessage because the transcript could not be read (never because the turn wrote none). */
+  wordsUnread?: EnvelopeWordsUnread;
 }
 
 export type EnvelopeAttrs = Partial<Record<string, string | undefined>>;
@@ -500,9 +507,16 @@ export function createEnvelopeKit(): EnvelopeKit {
     const said = Boolean(input.lastMessage?.text.trim());
     const did = Boolean(input.lastMessage?.actions?.length);
     const last = !input.repliedRecently && (said || did) ? input.lastMessage : undefined;
-    // No quote and no recent reply: the transcript read timed out (a loaded
-    // host, 2026-10-01) or found no words. Say so, and point at the record.
-    const pointer = !last ? (input.repliedRecently ? '' : ' Its last message could not be read in time (or it wrote none).')
+    // No quote and no recent reply: say which. A read that timed out (a loaded host, 2026-10-01)
+    // or failed is not a turn that wrote nothing (2026-11-09: 8 of 10 VP notices to Main read
+    // "could not be read in time (or it wrote none)", most over a turn that was only an agent-ack).
+    const unread = input.wordsUnread === 'timed_out'
+      ? ' Its last message could not be read: the transcript read timed out twice. Read it with task_history.'
+      : input.wordsUnread === 'failed'
+        ? ' Its last message could not be read: the transcript read failed. Read it with task_history.'
+        : input.lastMessage?.ack ? ' Its last turn ended with only the agent-ack line (no news).'
+          : ' Its last turn wrote no message.';
+    const pointer = !last ? (input.repliedRecently ? '' : unread)
       : said && did ? ' Its last message and the actions after it are quoted below.'
       : said ? ' Its last message is quoted below.'
       : ' It wrote no message; its last actions are listed below.';

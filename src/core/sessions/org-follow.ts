@@ -32,6 +32,8 @@ export interface OrgEdge {
   kind: SubtaskNoticeKind;
   sessionId?: string;
   lastWords?: NoticeLastMessage;
+  /** No lastWords because the transcript read timed out or failed. */
+  wordsUnread?: import('../peers/envelope-kit.js').EnvelopeWordsUnread;
   /** The message that started its last turn (who started it: the node's own message, a trigger, …). */
   openedBy?: Parameters<typeof import('./session-request-notify.js').turnStarterOf>[0];
   error?: string;
@@ -59,6 +61,9 @@ export function orgNoticeText(text: string): string {
 export async function noteOrgEdge(task: Task, edge: OrgEdge): Promise<boolean> {
   try {
     if (!reportsToOrgNode(task)) return false;
+    const { RECENT_REPLY_MS, ackOnlyStop, buildSubtaskNoticeText } = await import('./subtask-notices.js');
+    // A turn that was only an agent-ack is no news for the node above.
+    if (ackOnlyStop(edge.kind, edge.lastWords)) return false;
     const { listTasks } = await import('../task-manager.js');
     const { followContext, followerSession, statusFollowersOf } = await import('./status-push.js');
     const all = await listTasks();
@@ -81,7 +86,6 @@ export async function noteOrgEdge(task: Task, edge: OrgEdge): Promise<boolean> {
     // It asked the task something: the request's own notice tells it this edge, once.
     if (edge.askerSids?.some((sid) => followerSids.has(sid))) return false;
     const { repliedRecently } = await import('../session-requests.js');
-    const { RECENT_REPLY_MS, buildSubtaskNoticeText } = await import('./subtask-notices.js');
     const answered = await repliedRecently(followerSids, task.id, RECENT_REPLY_MS).catch(() => false);
     // A stop right after its answer reached the node is no news: the answer was the update.
     if (edge.kind === 'stopped' && answered) return false;
@@ -110,6 +114,7 @@ export async function noteOrgEdge(task: Task, edge: OrgEdge): Promise<boolean> {
       blockedOn: edge.blockedOn,
       waitUntil: edge.waitUntil,
       repliedRecently: answered,
+      wordsUnread: edge.wordsUnread,
     }));
     rideNotice(rec.claudeSessionId, task.id, edge.kind, text, Date.now(), decision);
     log.session.info('org follow: the edge rides the next message of the node that follows the task', {

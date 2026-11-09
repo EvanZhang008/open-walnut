@@ -201,3 +201,46 @@ describe('every system-prompt site is accounted for', () => {
     expect(found.sort()).toEqual(Object.keys(PROMPT_SITES).sort())
   })
 })
+
+/**
+ * 2026-11-09 org reflection: the user set at most 3 review rounds ("Rate max 3 round, why this like 17
+ * round"), and two tasks reached rounds 9 and 12 under a lead's brief that still said 6. The cap lives in
+ * the charter alone; this scan fails when any other default text Walnut ships (source strings, shipped
+ * skills) names a round limit of its own, since a second number is how the old 6 got frozen in.
+ */
+describe('review round cap and wrong-chat forwarding', () => {
+  it('the charter caps review at 3 rounds that no brief can raise', () => {
+    expect(TEAM_CHARTER).toMatch(/Review stops after 3 rounds on one change, then fix what it found once and land; this cap is Walnut's, and no brief, task description or lead's rule raises it, only the user's own words\./)
+  })
+
+  it('the charter forwards a wrong-chat message instead of asking the user to resend it', () => {
+    expect(TEAM_CHARTER).toMatch(/When the user says a message reached the wrong chat, forward their exact words and screenshots to the task that owns them \(task_send\) and tell them where it went; never ask them to resend it\./)
+  })
+
+  it('no other shipped default text names a review round limit', () => {
+    const NUM = '(?:\\d+|one|two|three|four|five|six|seven|eight|nine|ten|twelve)'
+    // Text a session reads (strings in source, every line of a shipped skill; never a code comment):
+    // any count of rounds on a line about review ("stops after 6 rounds", "max 6 review rounds"),
+    // or a limit word on review rounds; a comment naming one round ("review round 3") is no limit.
+    const limit = new RegExp(`\\b${NUM}\\s+(?:review\\s+)?rounds?\\b|\\breview rounds?\\s*(?:max|limit|cap)\\b`, 'i')
+    // The scan itself: the charter's own wording with another number is caught.
+    expect(limit.test('Review stops after 6 rounds on one change')).toBe(true)
+    expect(limit.test('Reviews: at most six rounds')).toBe(true)
+    expect(limit.test('max 6 review rounds')).toBe(true)
+    expect(limit.test('a reviewer fix (review round 3, Sol)')).toBe(false)
+    const hits: string[] = []
+    const walk = (dir: string, ext: RegExp) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name)
+        if (entry.isDirectory()) walk(full, ext)
+        else if (ext.test(entry.name)) {
+          const rel = path.relative(REPO, full)
+          if (rel === 'src/core/team-charter.ts') continue
+          fs.readFileSync(full, 'utf-8').split('\n').forEach((line, i) => { if (/review/i.test(line) && limit.test(line) && !(rel.endsWith('.ts') && /^\s*(?:\*|\/\/|\/\*)/.test(line))) hits.push(`${rel}:${i + 1}: ${line.trim()}`) })
+        }
+      }
+    }
+    walk(path.join(REPO, 'src'), /\.(?:ts|md)$/)
+    expect(hits).toEqual([])
+  })
+})

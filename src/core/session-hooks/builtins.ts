@@ -2554,14 +2554,17 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
     await judgeAfterReport(lastTurn?.words);
     // One message per asker, however many requests it has open to this task.
     await notify.notifyRequesterGroup(speakNow, outcome, { phase, lastMessage, lastWords: lastTurn?.words });
-    const { clipNoticeMessage: clipWords } = await import('../session-requests.js');
+    // The turn's final text when the edge carried it (an agent-ack keeps its mark), else the read's words.
+    const edgeWords = undelivered ? undefined : lastMessage ? notify.noticeWordsOf(lastMessage) : lastTurn?.words;
+    const wordsUnread = undelivered || lastMessage ? undefined : lastTurn?.unread;
     if (orgHears && orgTask) {
       const { noteOrgEdge } = await import('../sessions/org-follow.js');
       await noteOrgEdge(orgTask, {
         kind: edgeKind,
         sessionId: sessionId ?? record?.claudeSessionId,
         // A message that never reached it: the cause, never an older turn's words.
-        lastWords: undelivered ? undefined : lastMessage ? clipWords(lastMessage) : lastTurn?.words,
+        lastWords: edgeWords,
+        wordsUnread,
         openedBy: undelivered ? undefined : lastTurn?.openedBy,
         error: edgeKind === 'error' ? (undelivered ? undelivered.reason : 'error' in payload && !isPhaseEdge ? String((payload as { error?: unknown }).error ?? '') : record?.errorMessage) : undefined,
         blockedOn: edgeKind === 'blocked' ? record?.pendingPermission?.toolName : undefined,
@@ -2573,7 +2576,6 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
     }
     if (!subtask || !parentTaskId || !task) return;
 
-    const { clipNoticeMessage } = await import('../session-requests.js');
     const { queueSubtaskNotice } = await import('../sessions/subtask-notices.js');
     const errorText = undelivered ? undelivered.reason
       : 'error' in payload && !isPhaseEdge
@@ -2583,7 +2585,8 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
       parentTaskId,
       child: { id: task.id, title: task.title, sessionId: sessionId ?? record?.claudeSessionId },
       kind: subtask.kind,
-      lastWords: undelivered ? undefined : lastMessage ? clipNoticeMessage(lastMessage) : lastTurn?.words,
+      lastWords: edgeWords,
+      wordsUnread,
       startedBy: undelivered ? undefined : notify.turnStarterOf(lastTurn?.openedBy, parentTaskId),
       error: subtask.kind === 'error' ? errorText : undefined,
       blockedOn: subtask.kind === 'blocked' ? record?.pendingPermission?.toolName : undefined,

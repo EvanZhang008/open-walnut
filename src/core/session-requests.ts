@@ -993,6 +993,8 @@ export interface NoticeLastMessage {
   clipped?: boolean;
   /** The tool calls it made AFTER that message (or in a turn that said nothing), one line each. */
   actions?: string[];
+  /** Its last message was only the agent-ack (or no-action) line (text ''). */
+  ack?: boolean;
 }
 
 /** Cut a last message to the notice budget, on a line break when one is near. */

@@ -129,7 +129,7 @@ function lastWordsOfTurn(
     });
   if (lastSaid >= 0) {
     // '' when its last message was only the no-action line.
-    const words = clipNoticeMessage(noticeText(turn[lastSaid].text)) ?? { text: '' };
+    const words = noticeWordsOf(turn[lastSaid].text) ?? { text: '' };
     return actions.length ? { ...words, actions } : words;
   }
   if (actions.length) return { text: '', actions };
@@ -144,6 +144,19 @@ function lastWordsOfTurn(
  */
 export const CONTEXT_FULL_NOTICE_WORDS = '[It answered nothing: its turn ended on "Prompt is too long" (its conversation no longer fits '
   + 'the model\'s context window). Walnut compacts it and hands it the message again; if that fails, the session waits for a person.]';
+
+/** The turn-end line a session writes when nothing needs saying (web/src/utils/turn-end-marker.ts). */
+const ACK_LINE = /<walnut-turn status="(?:agent-ack|no-action)"\/>/;
+
+/**
+ * A final message as a notice holds it: its clipped words, or `{ text: '', ack: true }` when it
+ * was only the agent-ack line, so a notice can tell an acknowledgement from a turn that wrote nothing.
+ */
+export function noticeWordsOf(text: string): NoticeLastMessage | undefined {
+  const words = clipNoticeMessage(noticeText(text));
+  if (words) return words;
+  return ACK_LINE.test(text) ? { text: '', ack: true } : undefined;
+}
 
 /** A last message as a notice quotes it. */
 export function noticeText(text: string): string {
@@ -272,23 +285,59 @@ export async function readLastWords(sessionId: string | undefined): Promise<Noti
 /** {@link readLastWords} plus who opened that last turn ({@link turnStarterOf} reads the row). */
 export async function readLastTurn(
   sessionId: string | undefined,
-): Promise<{ words: NoticeLastMessage | undefined; openedBy: TranscriptRow | undefined } | undefined> {
+): Promise<LastTurnRead | undefined> {
   if (!sessionId) return undefined;
   const projection = await import('../session-projection.js');
+  // A live read that runs out of time is tried once more: the first read keeps running and
+  // whichever answers first wins (2026-11-09: a loaded host left notices with no quote).
+  let unread: NoticeWordsUnread | undefined;
   try {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const live = await Promise.race([
-      projection.buildSessionTranscript(sessionId),
-      new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), LAST_MESSAGE_READ_MS); timer.unref?.(); }),
-    ]).finally(() => clearTimeout(timer));
-    const found = lastTurnOf(live?.messages);
-    if (found?.words) return found;
-  } catch { /* fall through to the cache */ }
+    const first = projection.buildSessionTranscript(sessionId);
+    first.catch(() => undefined);
+    let live = await withinReadBudget(first);
+    if (live === TIMED_OUT) {
+      const second = projection.buildSessionTranscript(sessionId);
+      second.catch(() => undefined);
+      // The first one failing late does not end the second.
+      live = await withinReadBudget(Promise.race([first.catch(() => second), second]));
+    }
+    if (live === TIMED_OUT) unread = 'timed_out';
+    else {
+      const found = lastTurnOf(live?.messages);
+      if (found?.words) return found;
+    }
+  } catch { unread = 'failed'; }
   try {
-    return lastTurnOf((await projection.readSessionTranscript(sessionId))?.messages);
+    const cached = lastTurnOf((await projection.readSessionTranscript(sessionId))?.messages);
+    // The cache may predate the turn that just ended: words from it beat none, but a cache with
+    // none, or with only an earlier turn's agent-ack, says nothing about that turn when the live
+    // read never answered (an old ack must not silence a new stop: ackOnlyStop).
+    if (!unread) return cached;
+    const w = cached?.words;
+    return w && (w.text.trim() || w.actions?.length) ? cached : { words: undefined, openedBy: cached?.openedBy, unread };
   } catch {
-    return undefined;
+    return unread ? { words: undefined, openedBy: undefined, unread } : undefined;
   }
+}
+
+/** Why a read found no words although the turn was read for them ({@link readLastTurn}). */
+export type NoticeWordsUnread = 'timed_out' | 'failed';
+
+/** What {@link readLastTurn} found; `unread` says the read itself failed, never that the turn wrote nothing. */
+export interface LastTurnRead {
+  words: NoticeLastMessage | undefined;
+  openedBy: TranscriptRow | undefined;
+  unread?: NoticeWordsUnread;
+}
+
+const TIMED_OUT = Symbol('timed-out');
+
+async function withinReadBudget<T>(read: Promise<T>): Promise<T | typeof TIMED_OUT> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    read,
+    new Promise<typeof TIMED_OUT>((resolve) => { timer = setTimeout(() => resolve(TIMED_OUT), LAST_MESSAGE_READ_MS); timer.unref?.(); }),
+  ]).finally(() => clearTimeout(timer));
 }
 
 /** Whether the asking session's task is COMPLETE. Unknown counts as not. */
