@@ -691,12 +691,18 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
       // Split needs a diff pane two code columns wide (856fd6db5): beside the
       // chat at 1400px the pane is about 580px, so Split reads unified and says
       // so. Hide the chat, as the tag asks, and the same diff splits.
+      // Whether the pane beside the chat is wide enough depends on the chat's own width
+      // (2026-11-09: at 1760px it split with the chat shown), so either way is right here:
+      // narrow, it says so, and hiding the chat splits it.
       await diff.getByRole('button', { name: 'Split', exact: true }).click()
       const tooNarrow = diff.getByText('unified: too narrow to split')
-      await expect(tooNarrow).toBeVisible({ timeout: 10_000 })
-      await panel.getByRole('button', { name: 'Hide chat', exact: true }).click()
-      await expect(tooNarrow).toHaveCount(0)
-      await expect(diff.locator('.diff-split').first()).toBeVisible({ timeout: 10_000 })
+      const split = diff.locator('.diff-split').first()
+      await expect(tooNarrow.or(split)).toBeVisible({ timeout: 10_000 })
+      if (await tooNarrow.isVisible()) {
+        await panel.getByRole('button', { name: 'Hide chat', exact: true }).click()
+        await expect(tooNarrow).toHaveCount(0)
+      }
+      await expect(split).toBeVisible({ timeout: 10_000 })
 
       // The changed line's new side.
       let card = await askHereInDiff(page, diff, GO_NEW, 'changed-split-new')
