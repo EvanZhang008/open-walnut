@@ -245,6 +245,10 @@ export async function invalidateSessionHistoryCaches(sessionId: string, host?: s
     const { deleteHistoryCache } = await import('./history-disk-cache.js');
     await deleteHistoryCache(sessionId);
   } catch { /* best-effort — a stale disk entry only survives until the next write */ }
+  try {
+    const { deleteHistoryView } = await import('./history-view-snapshot.js');
+    await deleteHistoryView(sessionId);
+  } catch { /* best-effort, as above */ }
 }
 
 const MAX_HISTORY_CACHE = 30;

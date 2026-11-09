@@ -10,7 +10,7 @@ import {
 } from '@/cache/session-cache';
 import { idbGetHistory } from '@/cache/history-idb';
 import { computeHistoryAnchor, collectUnsettledIds } from './history-anchor';
-import { planDeltaMerge, foldFullPayload, prependOlderPage, mergeHistoryBackfill, sourceCountOf } from './history-merge';
+import { planDeltaMerge, foldFullPayload, shiftedForkBoundary, prependOlderPage, mergeHistoryBackfill, sourceCountOf } from './history-merge';
 import { fillGap, gapIndex, liveGaps, type HistoryGap } from './history-gap';
 import { isPageHidden, visibleInterval } from '@/utils/page-visibility';
 import type { SessionHistoryResult } from '@/api/sessions';
@@ -332,14 +332,14 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
             const heldLen = messagesRef.current.length;
             const folded = foldFullPayload(messagesRef.current, full, foldOpts());
             setMessages(folded.messages);
-            setForkBoundaryIndex(full.forkBoundaryIndex);
+            setForkBoundaryIndex(shiftedForkBoundary(full.forkBoundaryIndex, folded.kept));
             adoptInitialUserText(full.initialUserText);
             cursorRef.current = folded.cursor;
             noteGapFold(folded, heldLen);
             adoptOffset(folded.messages.length, folded.cursor, full.windowed, folded.kept);
             setHistoryCache(sessionId, {
               messages: folded.messages,
-              forkBoundaryIndex: full.forkBoundaryIndex,
+              forkBoundaryIndex: shiftedForkBoundary(full.forkBoundaryIndex, folded.kept),
               msgCount: folded.cursor,
               baseOffset: Math.max(0, folded.cursor - folded.messages.length),
               initialUserText: full.initialUserText ?? initialUserTextRef.current,
@@ -400,14 +400,14 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
             const heldLen = messagesRef.current.length;
             const folded = foldFullPayload(messagesRef.current, result, foldOpts());
             setMessages(folded.messages);
-            setForkBoundaryIndex(result.forkBoundaryIndex);
+            setForkBoundaryIndex(shiftedForkBoundary(result.forkBoundaryIndex, folded.kept));
             adoptInitialUserText(result.initialUserText);
             cursorRef.current = folded.cursor;
             noteGapFold(folded, heldLen);
             adoptOffset(folded.messages.length, folded.cursor, result.windowed, folded.kept);
             setHistoryCache(sessionId, {
               messages: folded.messages,
-              forkBoundaryIndex: result.forkBoundaryIndex,
+              forkBoundaryIndex: shiftedForkBoundary(result.forkBoundaryIndex, folded.kept),
               msgCount: folded.cursor,
               baseOffset: Math.max(0, folded.cursor - folded.messages.length),
               initialUserText: result.initialUserText ?? initialUserTextRef.current,
@@ -485,7 +485,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           const folded = foldFullPayload(messagesRef.current, result, foldOpts());
           setHistoryCache(sessionId, {
             messages: folded.messages,
-            forkBoundaryIndex: result.forkBoundaryIndex,
+            forkBoundaryIndex: shiftedForkBoundary(result.forkBoundaryIndex, folded.kept),
             msgCount: folded.cursor,
             baseOffset: Math.max(0, folded.cursor - folded.messages.length),
             initialUserText: result.initialUserText ?? initialUserTextRef.current,
@@ -495,7 +495,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           noteGapFold(folded, heldLen);
           adoptOffset(folded.messages.length, folded.cursor, result.windowed, folded.kept);
           setMessages(folded.messages);
-          setForkBoundaryIndex(result.forkBoundaryIndex);
+          setForkBoundaryIndex(shiftedForkBoundary(result.forkBoundaryIndex, folded.kept));
           // NOTE: turn-boundary block cleanup is driven by the version-bump delta
           // path (evidence-based), not here. A plain cache re-verify only refreshes
           // persisted content; streaming blocks are governed by session:result +
@@ -592,7 +592,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
                 // never lay a window after it across a gap.
                 const folded = foldFullPayload(messagesRef.current, result);
                 setMessages(folded.messages);
-                setForkBoundaryIndex(result.forkBoundaryIndex);
+                setForkBoundaryIndex(shiftedForkBoundary(result.forkBoundaryIndex, folded.kept));
                 adoptInitialUserText(result.initialUserText);
                 cursorRef.current = folded.cursor;
                 setGaps(folded.gaps);
@@ -600,7 +600,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
                 // Write to cache for next visit
                 setHistoryCache(sessionId, {
                   messages: folded.messages,
-                  forkBoundaryIndex: result.forkBoundaryIndex,
+                  forkBoundaryIndex: shiftedForkBoundary(result.forkBoundaryIndex, folded.kept),
                   msgCount: folded.cursor,
                   baseOffset: Math.max(0, folded.cursor - folded.messages.length),
                   initialUserText: result.initialUserText ?? initialUserTextRef.current,
@@ -701,14 +701,14 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           const heldLen = messagesRef.current.length;
           const folded = foldFullPayload(messagesRef.current, result, foldOpts());
           setMessages(folded.messages);
-          setForkBoundaryIndex(result.forkBoundaryIndex);
+          setForkBoundaryIndex(shiftedForkBoundary(result.forkBoundaryIndex, folded.kept));
           adoptInitialUserText(result.initialUserText);
           cursorRef.current = folded.cursor;
           noteGapFold(folded, heldLen);
           adoptOffset(folded.messages.length, folded.cursor, result.windowed, folded.kept);
           setHistoryCache(sessionId, {
             messages: folded.messages,
-            forkBoundaryIndex: result.forkBoundaryIndex,
+            forkBoundaryIndex: shiftedForkBoundary(result.forkBoundaryIndex, folded.kept),
             msgCount: folded.cursor,
             baseOffset: Math.max(0, folded.cursor - folded.messages.length),
             initialUserText: result.initialUserText ?? initialUserTextRef.current,
@@ -801,14 +801,14 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
         setOlderPageSeq((n) => n + 1);
         const mergedGaps = merged === result.messages ? [] : liveGaps(merged, gapsRef.current);
         setGaps(mergedGaps);
-        setForkBoundaryIndex(result.forkBoundaryIndex);
+        setForkBoundaryIndex(shiftedForkBoundary(result.forkBoundaryIndex, merged.length - result.messages.length));
         adoptInitialUserText(result.initialUserText);
         const fullCursor = (result.cursor ?? result.messages.length) + merged.length - result.messages.length;
         cursorRef.current = fullCursor;
         adoptOffset(merged.length, fullCursor, result.windowed);
         setHistoryCache(sessionId, {
           messages: merged,
-          forkBoundaryIndex: result.forkBoundaryIndex,
+          forkBoundaryIndex: shiftedForkBoundary(result.forkBoundaryIndex, merged.length - result.messages.length),
           msgCount: fullCursor,
           baseOffset: Math.max(0, fullCursor - merged.length),
           gaps: mergedGaps,

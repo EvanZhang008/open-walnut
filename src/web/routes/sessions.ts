@@ -834,6 +834,9 @@ function sendControlError(res: Response, err: SessionControlError): void {
  * predicate server-side means the client never re-implements it — it just reads a flag —
  * and the server stays the single definition of "settled" (inc-1785965937858).
  */
+/** The shortest tail a request may ask for and still replace the kept view (the web asks 400). */
+const HISTORY_VIEW_MIN_TAIL = 400
+
 function markUnsettled(messages: readonly SessionHistoryMessage[]): SessionHistoryMessage[] {
   return messages.map(m => (isUnsettledRow(m) ? { ...m, unsettled: true } : m))
 }
@@ -1352,6 +1355,9 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
 
     // Look up session record to get cwd
     const record = await getSessionByClaudeId(sessionId)
+    // Taken before any read: a rewind meanwhile makes that read's view one not to keep.
+    const viewGeneration = record?.host && source !== 'streams'
+      ? (await import('../../core/history-view-snapshot.js')).historyViewGeneration(sessionId) : undefined
 
     if (source === 'streams') {
       if (record && engineCaps(record.engine).historySource === 'acp-journal') {
@@ -1373,6 +1379,26 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
       // it so the hook's Phase 1 doesn't waste an event loop tick (and doesn't race
       // with the Phase 2 SSH round-trip).
       if (record?.host) {
+        // The view this route last served (history-view-snapshot.ts): what the user saw, fork
+        // prefix and all, with no host round trip. A long session's windowed read never reaches
+        // the disk cache below, so without it every open of one waited on the host.
+        const { readHistoryView } = await import('../../core/history-view-snapshot.js')
+        const view = await readHistoryView(sessionId)
+        if (view) {
+          const viewSlice = sliceHistory(view.messages)
+          const viewDropped = view.messages.length - viewSlice.length
+          const boundary = view.forkBoundaryIndex != null && view.forkBoundaryIndex >= viewDropped
+            ? view.forkBoundaryIndex - viewDropped : undefined
+          res.json({
+            messages: viewSlice, total: view.total, snapshot: view.savedAt,
+            ...(view.windowed ? { windowed: true } : {}),
+            ...(view.forkedFromSessionId ? { forkedFromSessionId: view.forkedFromSessionId } : {}),
+            ...(boundary != null ? { forkBoundaryIndex: boundary } : {}),
+            ...(view.initialUserText ? { initialUserText: view.initialUserText } : {}),
+            ...(view.finishedAgentIds?.length ? { finishedAgentIds: view.finishedAgentIds } : {}),
+          })
+          return
+        }
         // Serve disk cache for instant display (Phase 1) while Phase 2 does SSH
         const { readHistoryCache } = await import('../../core/history-disk-cache.js')
         const diskCached = await readHistoryCache(sessionId)
@@ -1913,6 +1939,15 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
     // BEFORE the tail slice, because the slice is exactly what drops it. Windowed
     // read / failed fork prefix: the head we hold isn't the real head — omit.
     const initialUserText = historyWindowed || forkLoadFailed ? undefined : initialUserTextOf(messages)
+    // A remote session's next open paints this at once (the source=streams branch above). Only
+    // a view at least as long as an open asks for: a small-tail caller must not shrink it.
+    if (record?.host && !forkLoadFailed && viewGeneration !== undefined && (!tail || tail >= HISTORY_VIEW_MIN_TAIL)) {
+      const { saveHistoryView } = await import('../../core/history-view-snapshot.js')
+      saveHistoryView(sessionId, {
+        messages: markUnsettled(sliced), total, windowed: historyWindowed, forkedFromSessionId,
+        forkBoundaryIndex: adjustedForkBoundary, initialUserText, finishedAgentIds,
+      }, viewGeneration)
+    }
     res.json({
       // Full payloads carry the flag too — a client that first loads mid-flight must
       // know which rows to re-ask for on its next delta.

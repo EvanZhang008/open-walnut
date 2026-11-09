@@ -171,6 +171,16 @@ export function sourceCountOf(result: { cursor?: number; total?: number }): numb
  * of Phase 1). `gaps` are the gaps already in `held`; the result says which
  * survive: none in a complete payload, and none inside the contiguous window.
  */
+/**
+ * A payload's fork boundary in the array the client holds after a fold. The server counts it
+ * from the payload's first row; a fold that kept `kept` older rows above the payload (a windowed
+ * payload over held rows: Phase 1's view, cached rows, earlier pages) moves it down by them.
+ * Every boundary the hook stores goes through here (tests/web/history-fork-boundary-shift.test.ts).
+ */
+export function shiftedForkBoundary(boundary: number | undefined, kept: number): number | undefined {
+  return boundary == null ? undefined : boundary + Math.max(0, kept);
+}
+
 export function foldFullPayload<T extends RowIdentity>(
   held: readonly T[],
   result: { messages: T[]; cursor?: number; windowed?: boolean },
