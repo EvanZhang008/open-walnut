@@ -471,7 +471,7 @@ export class AcpWorker {
     if (dup) return dup
     const conn = this.requireConn()
     if (!this.providerSessionId) throw <WorkerError>{ kind: 'no_session', message: 'no provider session — call newSession/loadSession first' }
-    if (!this.capabilities.steering) {
+    if (!this.capabilities.steering || !this.capabilities.steeringInjectOnly) {
       throw <WorkerError>{ kind: 'steer_unsupported', message: 'adapter does not support mid-turn steering' }
     }
     if (!this.turnActive || this.controlPrompt) {

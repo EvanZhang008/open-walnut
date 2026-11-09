@@ -70,6 +70,10 @@ describe('which op failures are turn errors', () => {
     expect(added.filter((l) => /tmpdir\(|\/tmp\//.test(l) && /model_catalog|walnut-codex-models|const file/.test(l))).toEqual([])
     const dist = fs.readFileSync(createRequire(import.meta.url).resolve('@agentclientprotocol/codex-acp/dist/index.js'), 'utf8')
     expect(dist).toContain('path.join(walnutCatalogDir(os2), `walnut-codex-models-')
+    // Only a catalog that loaded (checked, then renamed into place) is the one put back later.
+    const kept = dist.indexOf('walnutCatalog = { file, body }')
+    expect(kept).toBeGreaterThan(dist.indexOf('fs.renameSync(tmp, file);'))
+    expect(dist.split('walnutCatalog = { file, body }')).toHaveLength(2)
     // Every entry point that can make Codex read its config again heals the file first.
     for (const head of ['async prompt(params, signal, onTurnStarted) {', 'async performSteeringRequest(params) {', '  async loadSession(params) {', '  async resumeSession(params) {', '  async newSession(params) {']) {
       const at = dist.indexOf(head)
@@ -130,7 +134,7 @@ describe('a steer that meets the end of the live turn', () => {
   it('an adapter that may start a turn of its own is never steered: the text waits for the next turn, once', async () => {
     worker = await initWorker({ MOCK_ACP_STEER_NO_INJECT_ONLY: '1' })
     const state = await op(worker, 'getState')
-    expect((state.result as { capabilities: { steering: boolean } }).capabilities.steering).toBe(false)
+    expect((state.result as { capabilities: { steering: boolean; steeringInjectOnly?: boolean } }).capabilities).toMatchObject({ steering: true, steeringInjectOnly: false })
     await op(worker, 'prompt', { commandId: 'acp-prompt:qm-race2', walnutMessageId: 'qm-race2', text: 'steer-race' })
     await waitFor((recs) => JSON.stringify(recs).includes('race turn open'))
     expect((await op(worker, 'steer', { commandId: 'acp-steer:qm-late2', walnutMessageId: 'qm-late2', text: 'late words' })).error?.kind).toBe('steer_unsupported')

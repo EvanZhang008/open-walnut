@@ -1057,6 +1057,7 @@ describe('mid-turn steering', () => {
     worker = await initWorker()
     const state = (await op(worker, 'getState')).result as WorkerStateSnapshot
     expect(state.capabilities.steering).toBe(true)
+    expect(state.capabilities.steeringInjectOnly).toBe(true)
   })
 
   it('steer injects into the LIVE turn: journal steer-accepted + echoed reply in the SAME turn', async () => {

@@ -39,7 +39,7 @@ type Drain = { drainAcpQueue(session: unknown, sid: string): Promise<void>; clea
 
 function liveTurn(sessionId: string): AcpSession {
   const session = new AcpSession({ taskId: '', project: '', cwd: '/tmp', mode: 'default', engine: 'codex', providerSessionId: sessionId })
-  Object.assign(session as object, { _active: true, _turnActive: true, _capabilities: { steering: true } })
+  Object.assign(session as object, { _active: true, _turnActive: true, _capabilities: { steering: true, steeringInjectOnly: true } })
   return session
 }
 
@@ -87,5 +87,26 @@ describe('a steer that meets the end of the live ACP turn', () => {
     // A new turn may be steered again.
     journal(session, { type: 'prompt-accepted', commandId: 'acp-prompt:qm-next', walnutMessageId: 'qm-next', text: 'x' }, 2)
     expect(session.canSteer).toBe(true)
+  })
+
+  it('a session whose worker never said injection only (an older worker) is never steered', async () => {
+    const runner = new SessionRunner() as unknown as Drain
+    const sessionId = 'acp-steer-old-worker'
+    const session = liveTurn(sessionId)
+    // An older worker's snapshot: `steering` alone meant "supported", and its adapter may start a turn.
+    Object.assign(session as object, { _capabilities: { steering: true } })
+    const send = vi.fn(async () => ({ ok: true }))
+    Object.assign(session as object, { conn: { connected: true, send } })
+    const prompt = vi.spyOn(session, 'send').mockResolvedValue(undefined as never)
+    const queued = await enqueueMessage(sessionId, 'words')
+    expect(session.canSteer).toBe(false)
+    expect(await session.steer('words', queued.id)).toBe(false)
+    await runner.drainAcpQueue(session, sessionId)
+    expect(send).not.toHaveBeenCalled()
+    expect(prompt).not.toHaveBeenCalled()
+    journal(session, { type: 'turn-ended', commandId: 'acp-prompt:qm-old', stopReason: 'end_turn' }, 1)
+    await runner.drainAcpQueue(session, sessionId)
+    expect(prompt).toHaveBeenCalledTimes(1)
+    runner.clearActiveProcessing(sessionId)
   })
 })

@@ -3133,6 +3133,9 @@ export interface AcpSessionCapabilities {
   /** Adapter advertises mid-turn steering (`_meta.steering.supported`). Absent
    *  on records persisted before the steering feature — treat as false. */
   steering?: boolean;
+  /** It also promises a steer never starts a turn of its own (`_meta.steering.injectOnly`); only
+   *  then is it steered. Absent from older workers' snapshots — treat as false. */
+  steeringInjectOnly?: boolean;
 }
 
 /** One MCP server mount, in `--mcp-config`'s stdio shape. */

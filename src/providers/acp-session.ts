@@ -2047,7 +2047,8 @@ export class AcpSession {
   }
 
   /** True when this worker's adapter advertised mid-turn steering support. */
-  get canSteer(): boolean { return this._capabilities?.steering === true && !this._steerMissed }
+  // Only an adapter a worker of this version saw promise injection only (protocol.ts steeringInjectOnly).
+  get canSteer(): boolean { return this._capabilities?.steering === true && this._capabilities.steeringInjectOnly === true && !this._steerMissed }
 
   /** The live turn already refused a steer: the queue waits for its end instead of taking a row to steer. */
   get steerRefusedThisTurn(): boolean { return this._steerRefusedEpoch === this._turnEpoch }
@@ -2075,7 +2076,7 @@ export class AcpSession {
    */
   async steer(message: string, walnutMessageId: string): Promise<boolean> {
     if (!this._active || !this._turnActive || this._steerMissed) return false
-    if (this._capabilities && !this._capabilities.steering) return false
+    if (!this.canSteer) return false
     // This turn already refused a steer (Codex refuses for a whole review or compact
     // turn): the message waits for the turn end and goes as the next prompt, once.
     if (this.steerRefusedThisTurn) return false
