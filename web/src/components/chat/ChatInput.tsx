@@ -71,6 +71,19 @@ function fitTextarea(el: HTMLTextAreaElement): void {
 }
 
 /**
+ * Only ever taller, for a box that got narrower (its lines can only wrap more). It never sets the
+ * height to auto first: that collapse clamps the transcript beside the composer when it sits at
+ * its end, and when the height then comes back the same, nothing resized for its pin to answer,
+ * so the newest row stayed 73px under the composer (the scrollbar a full box shows narrows it).
+ */
+function growTextarea(el: HTMLTextAreaElement): void {
+  if (el.scrollHeight <= el.clientHeight) return;
+  const max = getMaxHeight(el);
+  el.style.height = Math.min(el.scrollHeight, max) + 'px';
+  el.style.overflowY = el.scrollHeight > max ? 'auto' : 'hidden';
+}
+
+/**
  * Read the persisted draft and turn its tags into inline tokens. The draft is
  * stored in its composed form (one key, tags in place), so a draft written by
  * another surface (composer-insert.ts parks a quoted reference there when no
@@ -781,11 +794,19 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     // Fitted on the next frame, never inside the observer's callback: the new height
     // there would leave the observer's notifications undelivered (a page error in WebKit).
     let frame = 0;
+    // Narrower is judged against the width of the last fit, not the last observed one: a
+    // wider-then-narrower run inside one frame that ends wider must still shrink.
+    let fittedWidth = lastWidth;
     const ro = new ResizeObserver(() => {
-      if (el.clientWidth === lastWidth) return;
-      lastWidth = el.clientWidth;
+      const width = el.clientWidth;
+      if (width === lastWidth) return;
+      lastWidth = width;
       cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => fitTextarea(el));
+      frame = requestAnimationFrame(() => {
+        const now = el.clientWidth;
+        if (now < fittedWidth) growTextarea(el); else fitTextarea(el);
+        fittedWidth = now;
+      });
     });
     ro.observe(el);
     return () => { ro.disconnect(); cancelAnimationFrame(frame); };
