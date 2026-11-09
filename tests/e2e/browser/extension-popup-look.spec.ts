@@ -136,7 +136,7 @@ test('every view, connected and unlocked, as screenshots', async () => {
   const fresh = await popup()
   await expect(fresh.getByRole('heading', { name: 'Connect to Walnut' })).toBeVisible()
   // Walnut first, passwords as the side feature (R1-6).
-  await expect(fresh.locator('.center > p').first()).toHaveText(/^Ask Walnut about the page you are on, and let your Walnut agents work in this browser\. Passwords/)
+  await expect(fresh.locator('.center > p').first()).toHaveText(/^Ask a quick question about the page you are on, and let your Walnut agents work in this browser\. Passwords/)
   await shot(fresh, '01-connect')
   await fresh.locator('#server').fill(base)
   const opened = ctx.waitForEvent('page')
@@ -144,7 +144,7 @@ test('every view, connected and unlocked, as screenshots', async () => {
   const connect = await opened
   await connect.setViewportSize({ width: 1100, height: 700 })
   await expect(connect.getByRole('heading', { name: 'Connect this browser to Walnut?' })).toBeVisible({ timeout: 60_000 })
-  await expect(connect.getByTestId('connect-extension').locator('h1 + p')).toContainText('Ask Walnut about the page you are on')
+  await expect(connect.getByTestId('connect-extension').locator('h1 + p')).toContainText('Ask a quick question about the page you are on')
   await expect(connect.getByTestId('connect-extension-agents')).toBeChecked()
   await shot(connect, '02-connect-page')
   // This spec's browser stays out of the fixture Walnut's agents until the last test.
@@ -152,7 +152,7 @@ test('every view, connected and unlocked, as screenshots', async () => {
   await connect.getByTestId('connect-extension-go').click()
   await expect(connect.getByTestId('connect-extension-done')).toBeVisible({ timeout: 20_000 })
   await expect(connect.getByTestId('connect-extension')).not.toContainText('to unlock it, then sign in')
-  await expect(connect.getByTestId('connect-extension')).toContainText('ask Walnut about any page')
+  await expect(connect.getByTestId('connect-extension')).toContainText('ask a quick question about any page')
   await shot(connect, '03-connect-page-done')
   await connect.close()
   // Said no on the connect page: agents stay off.

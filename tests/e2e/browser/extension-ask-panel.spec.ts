@@ -155,8 +155,8 @@ test('the panel opens on Ask, with no tab strip; the key wears its padlock', asy
   await expect(panel.getByTestId('panel-tab-ask')).toHaveCount(0)
   await expect(panel.locator('.panel-shell.is-ask')).toBeVisible()
   await expect(v.getByTestId('ask-walnut-menu')).toBeVisible()
-  await expect(v.getByTestId('ext-ask-title')).toHaveText('New chat')
-  await expect(v.locator('.ext-ask-agent')).toContainText('Ask Walnut')
+  await expect(v.getByTestId('ext-ask-title')).toHaveText('New quick question')
+  await expect(v.locator('.ext-ask-agent')).toContainText('Quick question')
   await expect(v.getByTestId('ext-ask-key')).toBeVisible()
   await expect(v.getByTestId('ext-key-locked')).toBeVisible({ timeout: 15_000 })
   await expect(v.getByTestId('ext-panel-new')).toBeVisible()
@@ -165,7 +165,7 @@ test('the panel opens on Ask, with no tab strip; the key wears its padlock', asy
   await expect(pageChip(panel)).toContainText(`docs.example.test:${lab.port}`)
   await expect(pageChip(panel)).toBeChecked()
   await expect(v.getByTestId('ext-panel-act')).not.toBeChecked()
-  await expect(v.locator('[data-testid="ask-object-compose"] textarea')).toHaveAttribute('placeholder', 'Ask Walnut, or ask it to do something here…')
+  await expect(v.locator('[data-testid="ask-object-compose"] textarea')).toHaveAttribute('placeholder', 'Ask a quick question, or have it do something here…')
   // A new chat opens as the popup does: the asks to continue, each with what tells it apart.
   const cont = v.getByTestId('ext-continue')
   await expect(cont).toBeVisible({ timeout: 30_000 })
@@ -184,9 +184,9 @@ test('the panel opens on Ask, with no tab strip; the key wears its padlock', asy
   // What the extension keeps to draw while the frame loads next time: this view itself.
   await expect.poll(async () => {
     const snaps = await sw(lab).evaluate(async () => (await chrome.storage.local.get('panelSnaps')).panelSnaps as Record<string, any> | undefined)
-    const a = Object.values((snaps?.ask ?? {}) as Record<string, Record<string, any>>).find((x) => x.askTitle === 'New chat')
+    const a = Object.values((snaps?.ask ?? {}) as Record<string, Record<string, any>>).find((x) => x.askTitle === 'New quick question')
     return a ? [a.agent, a.placeholder, (a.cont ?? []).some((r: { title: string }) => r.title === SEEDED_ASKS[0].title), (a.suggestions ?? []).length, a.pageOn] : null
-  }, { timeout: 15_000 }).toEqual(['Ask Walnut', 'Ask Walnut, or ask it to do something here…', true, 3, true])
+  }, { timeout: 15_000 }).toEqual(['Quick question', 'Ask a quick question, or have it do something here…', true, 3, true])
   await shots(panel, 'panel-new-chat')
 })
 
@@ -200,7 +200,7 @@ test('a question starts the conversation; its title takes the header', async () 
   askSession = (await session.getAttribute('data-session-id')) ?? ''
   expect(askSession).not.toBe('')
   await expect(v.getByText('Hello! I processed your message', { exact: false }).first()).toBeVisible({ timeout: 60_000 })
-  await expect(v.getByTestId('ext-ask-title')).not.toHaveText('New chat', { timeout: 30_000 })
+  await expect(v.getByTestId('ext-ask-title')).not.toHaveText('New quick question', { timeout: 30_000 })
   await expect(v.locator('.session-panel.is-plain-chat textarea')).toHaveAttribute('placeholder', 'Ask a follow-up…')
   // The conversation's Continue list is gone: the chat has the panel.
   await expect(v.getByTestId('ext-continue')).toHaveCount(0)
@@ -268,7 +268,7 @@ test('≡ opens the drawer over the chat: Main pinned, the asks, New chat, Tasks
   await v.getByTestId('ask-walnut-new').click()
   await expect(drawer).toBeHidden()
   await expect(v.getByTestId('ask-object-compose')).toBeVisible({ timeout: 30_000 })
-  await expect(v.getByTestId('ext-ask-title')).toHaveText('New chat')
+  await expect(v.getByTestId('ext-ask-title')).toHaveText('New quick question')
   // The new chat shows the asks to continue, the conversation just left among them.
   await expect(v.locator(`[data-testid="ext-continue-row"][data-task-id="${askTask}"]`)).toBeVisible()
   await v.getByTestId('ask-walnut-menu').click()
@@ -870,7 +870,7 @@ test('a new ask reads its question until Walnut titles it, then Walnut\'s title,
   const p = await openAskPanel()
   const v = askView(p)
   await v.getByTestId('ext-panel-new').click()
-  await expect(v.getByTestId('ext-ask-title')).toHaveText('New chat', { timeout: 15_000 })
+  await expect(v.getByTestId('ext-ask-title')).toHaveText('New quick question', { timeout: 15_000 })
   // `title-test:` keeps the fixture's mock CLI alive to answer the titler's side question, as the
   // real CLI does: the title comes from quick-start's launch auto-title, the path every ask takes.
   const question = `title-test:Which laptop lasts longest ${Date.now().toString(36)}`
@@ -885,7 +885,7 @@ test('a new ask reads its question until Walnut titles it, then Walnut\'s title,
   // Never the agent's placeholder twice ("Ask Walnut" over "Ask Walnut ⌄"): its question, then its title.
   const title = v.getByTestId('ext-ask-title')
   await expect(title).toBeVisible({ timeout: 15_000 })
-  await expect(title).not.toHaveText('Ask Walnut')
+  await expect(title).not.toHaveText('Quick question')
   const aiTitle = `Side title: ${question.split(/\s+/).slice(0, 5).join(' ')}`
   await expect(title).toHaveText(aiTitle, { timeout: 60_000 })
   const j = await (await lab.doc.request.get(`${lab.base}/api/v1/tasks/${task}`)).json() as Record<string, any>
@@ -1144,7 +1144,7 @@ test('the selection quote follows the page and stays with its agent; the compose
       await p.keyboard.press('Escape')
     }
     if (await v.getByTestId('ask-object-session').isVisible()) await v.getByTestId('ext-panel-new').click()
-    await expect(box).toHaveAttribute('placeholder', 'Ask Mentor, or ask it to do something here…', { timeout: 15_000 })
+    await expect(box).toHaveAttribute('placeholder', 'Ask Mentor a quick question, or have it do something here…', { timeout: 15_000 })
     await expect(quote).toHaveCount(0)
     await p.setViewportSize({ width: 400, height: 760 })
     await shots(p, 'r4-mentor-no-quote')
