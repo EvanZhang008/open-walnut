@@ -18,7 +18,7 @@ import { ApiError, call, connection } from './walnut-api'
 import { siteKey } from '../../../src/core/vault/url-match'
 import { pageCheck, reachPage } from './page-reach'
 import {
-  AgentError, WALNUT_PAGE, agentTabs, agentsOffCount, allowFor, checkPage, forgetTampered, loaded, mark, newGrant, noteAgentsOff, noteFilled, ownTab, personsTab, reached, sleep, tabLoading, tamperedNow, walnutCheck, where,
+  AgentError, WALNUT_PAGE, agentTabs, agentWindowId, agentsOffCount, allowFor, checkPage, forgetTampered, loaded, mark, newGrant, noteAgentsOff, noteFilled, ownTab, personsTab, reached, sleep, tabLoading, tamperedNow, walnutCheck, where,
   type AgentTab, type WireCommand,
 } from './agent-shared'
 import { PAGE_OPS, pageOp, watchOpened } from './agent-page'
@@ -28,10 +28,12 @@ import { DEBUGGER_OPS, TRUSTED_OPS, trustedAct, trustedReady } from './agent-tru
 import { fillFrames } from './bg-fill'
 import { inHandedReach } from './agent-tab-kind'
 import { openInAgentWindow, resizeAgentWindow, windowOf } from './agent-window'
-import { viewFrame, viewWatch, type PushAnswer } from './agent-view'
+import { bringUpForCommand, noteWorked, viewFrame, viewWatch, watchedOwner, type PushAnswer } from './agent-view'
 import { drivingRefusal, handBack, takeOver } from './agent-takeover'
 import { NET_OPS, netAct, startRecording, stopRecording } from './agent-net'
 import { watchMedia } from './agent-media'
+import { noteGroupUse, setGroupBusy, ungroupBeforeClose, type GroupApi } from './agent-groups'
+import { forgetAgentMade, noteAgentMade, tidyLeftovers } from './agent-tidy'
 
 export { setTrustedInput, trustedInputState } from './trusted-switch'
 
@@ -172,6 +174,7 @@ async function act(cmd: WireCommand): Promise<unknown> {
         })
       } : undefined)
       if (t.id === undefined) throw new AgentError('The browser did not open the tab.', 'open_failed')
+      await noteAgentMade(t.id)
       const ours = await agentTabs.setIf(t.id, (cur) => agentsOffCount() === offAt && (held ? cur?.grant === grant : cur === undefined),
         { owner, ...(who ? { who } : {}), history: [url], grant })
       if (!ours) { await stopRecording(t.id); throw taken() }
@@ -226,11 +229,26 @@ async function act(cmd: WireCommand): Promise<unknown> {
       return where(tabId)
     }
     case 'close': {
-      const { tabId, rec } = await ownTab(a)
+      const { tabId, tab, rec } = await ownTab(a)
+      if (a.tidy === true) {
+        // Walnut's tidy-up of a finished task (browser-tab-tidy.ts): only that task's holding, and
+        // never under the person's eyes or in their own window (there it is only let go).
+        if (typeof a.owner === 'string' && rec.owner !== a.owner) throw new AgentError('That tab is another task\'s now.', 'not_your_tab')
+        const w = await ext.windows.get(tab.windowId!).catch(() => null) as { focused?: boolean } | null
+        if (tab.active && w?.focused) return { tab: tabId, closed: false, kept: 'person_looking' }
+        if (tab.windowId !== await agentWindowId() && !personsTab(rec)) {
+          await agentTabs.delete(tabId)
+          await stopRecording(tabId)
+          await mark(tabId, false)
+          await forgetAgentMade(tabId)
+          return { tab: tabId, closed: false, released: true }
+        }
+      }
       await agentTabs.delete(tabId)
       await stopRecording(tabId)
       // The person's own tab is given back, never closed.
       if (personsTab(rec)) { await mark(tabId, false); return { tab: tabId, closed: false, released: true } }
+      await ungroupBeforeClose(ext as unknown as GroupApi, tabId)
       await ext.tabs.remove(tabId).catch(() => undefined)
       return { tab: tabId, closed: true }
     }
@@ -280,6 +298,21 @@ async function act(cmd: WireCommand): Promise<unknown> {
 
 /** One command at a time per tab: two at once (a full screenshot and a click, two debugger attaches) would trip each other. */
 const perTab = new Map<number, Promise<unknown>>()
+
+/**
+ * Commands that never need their tab on screen: the page is read or driven through its own
+ * document, so the live view may bring another tab of the agent window up meanwhile (and puts
+ * this one back in front after). Any other command (a click or a key sent as the person's, a
+ * screenshot, an upload) holds its tab in front while it is queued or runs (2026-11-08: an agent
+ * reading three tabs in turn kept the one in front "busy" for good, and the view of another of its
+ * tabs froze on "Waiting for the next picture").
+ */
+export const OFF_SCREEN_ACTS = new Set(['navigate', 'back', 'text', 'snapshot', 'find', 'form_values', 'wait', 'evaluate', 'network', 'network_body', 'network_request_body', 'console', 'downloads', 'tabs', 'fill_login', 'fill_code', 'fill_form', 'select'])
+const onScreen = new Map<number, number>()
+/** Commands queued or running per owner (a group never folds under one). */
+const ownerRuns = new Map<string, number>()
+setGroupBusy((owner) => (ownerRuns.get(owner) ?? 0) > 0 || watchedOwner(owner))
+const holdsScreen = (id: number) => (onScreen.get(id) ?? 0) > 0
 function inTurn<T>(tab: unknown, work: () => Promise<T>): Promise<T> {
   if (typeof tab !== 'number') return work()
   const before = perTab.get(tab) ?? Promise.resolve()
@@ -299,8 +332,8 @@ const VIEW_ACTS = new Set(['view_frame', 'view_watch', 'view_stop', 'view_takeov
 const push = (body: Record<string, unknown>) => call<PushAnswer>('POST', '/browser/view/push', body, { noSession: true, timeoutMs: 10_000 })
 
 async function viewAct(c: WireCommand): Promise<unknown> {
-  if (c.action === 'view_frame') return viewFrame(c, (id) => perTab.has(id))
-  if (c.action === 'view_watch') return viewWatch(c, (id) => perTab.has(id), push)
+  if (c.action === 'view_frame') return viewFrame(c, holdsScreen)
+  if (c.action === 'view_watch') return viewWatch(c, holdsScreen, push)
   if (c.action === 'view_takeover') return takeOver(c)
   if (c.action === 'view_handback') {
     const tabId = typeof c.args.tab === 'number' ? c.args.tab : NaN
@@ -313,6 +346,8 @@ async function viewAct(c: WireCommand): Promise<unknown> {
   // Only the holding the person saw: a tab another task took since stays its (Walnut names the owner).
   const want = typeof c.args.owner === 'string' ? c.args.owner : undefined
   if (!(await agentTabs.deleteIf(tabId, (cur) => !want || cur.owner === want))) return { tab: tabId, stopped: false }
+  // The person took the tab: theirs now, never tidied away.
+  await forgetAgentMade(tabId)
   await stopRecording(tabId)
   await mark(tabId, false)
   await stopIfNoReach()
@@ -332,12 +367,35 @@ async function run(c: WireCommand): Promise<void> {
     // The person took the tab over (agent-takeover.ts): the agent waits until they hand it back.
     const stopped = typeof c.args.tab === 'number' ? drivingRefusal(await agentTabs.get(c.args.tab)) : null
     if (stopped) throw stopped
-    body = { id: c.id, ok: true, result: await inTurn(c.args.tab, async () => {
-      // Taken over while this command waited for its turn.
-      const late = typeof c.args.tab === 'number' ? drivingRefusal(await agentTabs.get(c.args.tab)) : null
-      if (late) throw late
-      return act(c)
-    }) }
+    const screenTab = typeof c.args.tab === 'number' && !OFF_SCREEN_ACTS.has(c.action) ? c.args.tab : undefined
+    if (screenTab !== undefined) onScreen.set(screenTab, (onScreen.get(screenTab) ?? 0) + 1)
+    if (typeof c.args.tab === 'number') noteWorked(c.args.tab)
+    // Whose tab: its group stays open while the command runs, and folds after (agent-groups.ts);
+    // an open names its owner (its new tab joins that group, folded once the agent is quiet).
+    const groupOwner = typeof c.args.tab === 'number' ? (await agentTabs.get(c.args.tab).catch(() => undefined))?.owner
+      : c.action === 'open' && typeof c.args.owner === 'string' ? c.args.owner : undefined
+    if (groupOwner) ownerRuns.set(groupOwner, (ownerRuns.get(groupOwner) ?? 0) + 1)
+    try {
+      body = { id: c.id, ok: true, result: await inTurn(c.args.tab, async () => {
+        // Taken over while this command waited for its turn.
+        const late = typeof c.args.tab === 'number' ? drivingRefusal(await agentTabs.get(c.args.tab)) : null
+        if (late) throw late
+        // A click or a key acts on the tab in front: a folded group left the agent window's page there.
+        if (screenTab !== undefined && c.action !== 'screenshot') await bringUpForCommand(screenTab)
+        return act(c)
+      }) }
+    } finally {
+      if (typeof c.args.tab === 'number') noteWorked(c.args.tab)
+      if (screenTab !== undefined) {
+        const n = (onScreen.get(screenTab) ?? 1) - 1
+        if (n > 0) onScreen.set(screenTab, n); else onScreen.delete(screenTab)
+      }
+      if (groupOwner) {
+        const n = (ownerRuns.get(groupOwner) ?? 1) - 1
+        if (n > 0) ownerRuns.set(groupOwner, n); else ownerRuns.delete(groupOwner)
+        noteGroupUse(ext as unknown as GroupApi, groupOwner)
+      }
+    }
   } catch (err) {
     body = { id: c.id, ok: false, error: { message: err instanceof Error ? err.message : String(err), code: err instanceof AgentError ? err.code : 'browser_error', ...(err instanceof AgentError ? { extra: err.extra } : {}) } }
   }
@@ -398,7 +456,7 @@ export async function agentLoop(): Promise<void> {
 export async function agentOff(): Promise<void> {
   noteAgentsOff()
   await call('POST', '/browser/off', {}, { noSession: true, timeoutMs: 8000 }).catch(() => undefined)
-  for (const id of await agentTabs.keys()) { await mark(id, false); await agentTabs.delete(id); await stopRecording(id) }
+  for (const id of await agentTabs.keys()) { await mark(id, false); await agentTabs.delete(id); await forgetAgentMade(id); await stopRecording(id) }
 }
 
 /** Hand-overs still waiting on Walnut; a take-back meanwhile cancels one. */
@@ -445,6 +503,7 @@ export async function releaseTab(tabId: number): Promise<void> {
   if (flight) flight.cancelled = true
   if (!(await agentTabs.get(tabId))) return
   await agentTabs.delete(tabId)
+  await forgetAgentMade(tabId)
   await stopRecording(tabId)
   await mark(tabId, false)
   await stopIfNoReach()
@@ -519,7 +578,7 @@ export async function agentMessage(type: string, sender: Sender): Promise<Record
     }
     case 'agent-stop': {
       const id = sender.tab?.id
-      if (id !== undefined) { await agentTabs.delete(id); await stopRecording(id); await stopIfNoReach() }
+      if (id !== undefined) { await agentTabs.delete(id); await forgetAgentMade(id); await stopRecording(id); await stopIfNoReach() }
       return { ok: true }
     }
   }
@@ -547,7 +606,12 @@ export function initAgent(deps: { isWalnutPage: (url: string) => Promise<boolean
   })
   // The background may have been stopped: an alarm, a browser start or the switch brings the loop back.
   void Promise.resolve(ext.alarms.create('walnut-agent', { periodInMinutes: 1 })).catch(() => undefined)
-  ext.alarms.onAlarm.addListener((a) => { if (a.name === 'walnut-agent') void agentLoop() })
+  ext.alarms.onAlarm.addListener((a) => {
+    if (a.name !== 'walnut-agent') return
+    void agentLoop()
+    // Tabs it opened that no agent holds any more are closed after a while (agent-tidy.ts).
+    void tidyLeftovers().catch(() => undefined)
+  })
   ext.runtime.onStartup?.addListener(() => { void agentLoop() })
   void agentLoop()
 }

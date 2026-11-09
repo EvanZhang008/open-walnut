@@ -3,7 +3,7 @@
  * agent-downloads.ts and agent-trusted.ts do their parts): the agent tabs and who holds each,
  * the checks every page goes through, and reaching a frame's script.
  */
-import { groupAgentTab, type GroupApi } from './agent-groups'
+import { groupAgentTab, noteGroupUse, type GroupApi } from './agent-groups'
 import { ext, type Tab } from './ext'
 import { siteKey } from '../../../src/core/vault/url-match'
 import { tabStore } from './tab-store'
@@ -173,7 +173,8 @@ export async function mark(tabId: number, on: boolean, who?: string, mode?: 'dri
   const rec = on ? await agentTabs.get(tabId) : undefined
   const driving = mode === 'driving' || typeof rec?.driving === 'number'
   await toPage(tabId, { type: 'agent-mark', on, ...(who ? { who } : {}), ...(driving ? { mode: 'driving' } : {}) }, 4000)
-  if (rec && !personsTab(rec)) void groupAgentTab(ext as unknown as GroupApi, tabId, rec.owner, rec.who, await agentWindowId())
+  // Grouped, then folded once the agent is quiet (a new group opens unfolded: review 2026-11-08).
+  if (rec && !personsTab(rec)) void groupAgentTab(ext as unknown as GroupApi, tabId, rec.owner, rec.who, await agentWindowId()).then(() => noteGroupUse(ext as unknown as GroupApi, rec.owner))
 }
 
 const UNREACHED: Record<ReachError, string> = {

@@ -52,6 +52,8 @@ interface Live {
   sig: string
   watchedAt: number
   pushAt: number
+  /** Since when the posts carry no picture (the tab behind, the screen held...): the card says how long. */
+  noPictureSince?: number
   watchSentAt: number
   waiters: Set<() => void>
 }
@@ -118,9 +120,10 @@ export async function streamFrame(req: Request, res: Response, o: {
   live.watchedAt = Date.now()
   if (!o.stillHeld() || lives.get(k) !== live) throw o.notHeld()
   const base = { tab: o.tab, device: o.device, browser: o.browser, seq: live.seq, epoch: live.epoch, stream: true }
+  const since = live.noPictureSince ? { noPictureSince: new Date(live.noPictureSince).toISOString() } : {}
   if (!live.frame) return { ...base, shown: false, why: 'starting' }
-  if (Number.isFinite(after) && live.seq <= after) return { ...base, unchanged: true, at: live.frame.at }
-  return { ...live.frame, ...base }
+  if (Number.isFinite(after) && live.seq <= after) return { ...base, ...since, unchanged: true, at: live.frame.at }
+  return { ...live.frame, ...base, ...since }
 }
 
 /** The browser's post of a picture (POST /browser/view/push): kept for the viewers; the answer says whether to go on. */
@@ -144,6 +147,8 @@ export function streamPush(h: Hub, device: string, b: Record<string, unknown>): 
   const fresh = typeof b.image === 'string' && b.image.startsWith('data:image/') && b.image.length <= IMAGE_MAX_CHARS ? b.image : undefined
   const before = live.frame?.image
   const image = fresh ?? (b.same === true && m.shown ? before : undefined)
+  if (fresh || (b.same === true && m.shown)) live.noPictureSince = undefined
+  else live.noPictureSince ??= now
   const sig = JSON.stringify(m)
   const changed = sig !== live.sig || (image !== undefined && image !== before)
   live.sig = sig

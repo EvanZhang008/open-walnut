@@ -25,7 +25,7 @@ import { usePageViewOf } from '@/utils/view-memory';
 import { log } from '@/utils/log';
 import { useBrowserView } from './useBrowserView';
 import {
-  FRAME_EVERY_MS, FRAME_RETRY_MS, UNCHANGED_AGAIN_MS, agoLine, endedLine, followedTab, handLine, noPictureLine, tabKey, windowLine,
+  FRAME_EVERY_MS, FRAME_RETRY_MS, UNCHANGED_AGAIN_MS, agoLine, lateLine, endedLine, followedTab, handLine, noPictureLine, tabKey, windowLine,
   type BrowserFrame,
 } from './browser-view-model';
 import '@/styles/session-browser-card.css';
@@ -76,7 +76,11 @@ export function SessionBrowserCard({ taskId }: { taskId: string }) {
   const [trouble, setTrouble] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
   const [handing, setHanding] = useState<'take' | 'back' | null>(null);
+  // Since when the browser has had no picture to give (every answer says, an unchanged one too).
+  const [noPicSince, setNoPicSince] = useState<string | undefined>(undefined);
   const [now, setNow] = useState(() => Date.now());
+  // When this card began asking for the tab's pictures (none yet: the wait for the first is late too).
+  const [waitFrom, setWaitFrom] = useState<string | undefined>(undefined);
   const [shotEl, setShotEl] = useState<HTMLDivElement | null>(null);
   const onScreen = useOnScreen(shotEl);
 
@@ -91,7 +95,7 @@ export function SessionBrowserCard({ taskId }: { taskId: string }) {
   // A new tab followed (another browser's, another task's): no picture of the old one under its title.
   const shownTab = useRef<string | undefined>(undefined);
   useEffect(() => {
-    if (shownTab.current !== shownKey) { shownTab.current = shownKey; setFrame(null); setPicture(null); setTrouble(null); }
+    if (shownTab.current !== shownKey) { shownTab.current = shownKey; setFrame(null); setPicture(null); setTrouble(null); setNoPicSince(undefined); setWaitFrom(undefined); }
   }, [shownKey]);
 
   // The picture loop: one request at a time. A streaming browser's next is asked at once (the
@@ -103,6 +107,7 @@ export function SessionBrowserCard({ taskId }: { taskId: string }) {
     let after: number | undefined;
     let epoch: string | undefined;
     const ctl = new AbortController();
+    setWaitFrom((w) => w ?? new Date().toISOString());
     const tick = async () => {
       let wait = FRAME_EVERY_MS;
       try {
@@ -115,6 +120,8 @@ export function SessionBrowserCard({ taskId }: { taskId: string }) {
         if (typeof f.seq === 'number') after = f.seq;
         epoch = f.epoch;
         setTrouble(null);
+        // An older extension says nothing of it: counted here from its answers.
+        setNoPicSince((prev) => (f.stream ? f.noPictureSince : f.shown && f.image ? undefined : prev ?? new Date().toISOString()));
         if (f.unchanged) {
           // The same picture: only its time moves on.
           if (f.at) setPicture((p) => (p ? { ...p, at: f.at! } : p));
@@ -206,7 +213,8 @@ export function SessionBrowserCard({ taskId }: { taskId: string }) {
   const url = mineFrame && frame?.url ? frame.url : followed.url;
   const where = windowLine({ window: frame?.window ?? followed.window, windowState: frame?.windowState ?? followed.windowState, handed: frame?.handed, taken: frame?.taken });
   const noPicture = trouble ?? (followed.connected ? (followed.pictures ? noPictureLine(frame, !!picture) : noPictureLine({ why: 'no_permission' }, false)) : 'The browser does not answer right now.');
-  const live = !!frame?.shown && !trouble;
+  const late = lateLine(noPicSince ?? (picture ? undefined : waitFrom), now);
+  const live = !!frame?.shown && !trouble && !late;
   // The tab list's word (re-read on every change of the tab), never a picture's, which an unchanged answer does not renew.
   const driving = !!followed.driving;
   const asks = handLine({ driving, signIn: followed.signIn });
@@ -264,11 +272,11 @@ export function SessionBrowserCard({ taskId }: { taskId: string }) {
       <div className="session-browser-shot" ref={setShotEl} data-testid="session-browser-shot">
         {picture
           ? <img src={picture.image} alt={`The agent's tab: ${title ?? ''}`} className={live ? '' : 'is-stale'} data-testid="session-browser-picture" draggable={false} />
-          : <div className="session-browser-empty">{noPicture ?? 'Taking the first picture…'}</div>}
+          : <div className="session-browser-empty" data-testid="session-browser-why">{late ? `${late} ` : ''}{noPicture ?? 'Taking the first picture…'}</div>}
       </div>
       <div className="session-browser-foot" data-testid="session-browser-foot">
         {picture && (live ? <span>Live · {agoLine(picture.at, now)}</span> : <span>Last picture {agoLine(picture.at, now)}</span>)}
-        {picture && noPicture && <span className="session-browser-note">{noPicture}</span>}
+        {picture && (noPicture || late) && <span className="session-browser-note" data-testid="session-browser-why">{[late, noPicture].filter(Boolean).join(' ')}</span>}
       </div>
     </section>
   );

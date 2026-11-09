@@ -21,10 +21,12 @@ const fake = {
   windowUpdates: [] as Array<{ id: number; o: Record<string, unknown> }>,
   tabUpdates: [] as Array<{ id: number; o: Record<string, unknown> }>,
   messages: [] as Array<{ tab: number; msg: Record<string, unknown> }>,
-  /** Tabs behind the front one (7) in the agent window. */
-  behind: new Set<number>(),
+  /** The tab in front of the agent window. */
+  front: 7,
+  /** Whether the person is in the agent window. */
+  focused: false,
 }
-const tab = (id = 7) => ({ id, windowId: 3, active: !fake.behind.has(id), url: 'https://shop.example.test/', title: 'Shop' })
+const tab = (id = 7) => ({ id, windowId: 3, active: id === fake.front, url: 'https://shop.example.test/', title: 'Shop' })
 ;(globalThis as any).chrome = {
   runtime: { id: 'test', getURL: (p: string) => p, onMessage: ev() },
   storage: {
@@ -34,19 +36,19 @@ const tab = (id = 7) => ({ id, windowId: 3, active: !fake.behind.has(id), url: '
   tabs: {
     onRemoved: ev(), onUpdated: ev(),
     get: async (id: number) => tab(id),
-    query: async () => [tab()],
-    update: async (id: number, o: Record<string, unknown>) => { fake.tabUpdates.push({ id, o }); return tab(id) },
+    query: async () => [tab(fake.front)],
+    update: async (id: number, o: Record<string, unknown>) => { fake.tabUpdates.push({ id, o }); if (o.active === true) fake.front = id; return tab(id) },
     sendMessage: async (id: number, msg: Record<string, unknown>) => { fake.messages.push({ tab: id, msg }); return { ok: true } },
     captureVisibleTab: async (windowId: number, o: Record<string, unknown>) => { fake.captures.push({ windowId, o }); return fake.image },
   },
   windows: {
-    get: async () => ({ state: 'normal' }), onRemoved: ev(),
+    get: async () => ({ state: 'normal', focused: fake.focused }), onRemoved: ev(),
     update: async (id: number, o: Record<string, unknown>) => { fake.windowUpdates.push({ id, o }); return {} },
   },
   permissions: { contains: async () => true },
 }
 
-const { viewWatch, streaming, STREAM_QUALITY } = await import('../../../packages/browser-extension/src/agent-view')
+const { viewWatch, viewFrame, streaming, noteWorked, bringUpForCommand, STREAM_QUALITY, BEHIND_EVERY_MS, _resetViewForTesting } = await import('../../../packages/browser-extension/src/agent-view')
 const { takeOver, handBack, drivingRefusal } = await import('../../../packages/browser-extension/src/agent-takeover')
 const { agentTabs } = await import('../../../packages/browser-extension/src/agent-shared')
 const { groupAgentTab, groupTitle } = await import('../../../packages/browser-extension/src/agent-groups')
@@ -63,7 +65,9 @@ beforeEach(() => {
   fake.tabUpdates = []
   fake.messages = []
   fake.image = 'data:image/jpeg;base64,AAAA'
-  fake.behind = new Set()
+  fake.front = 7
+  fake.focused = false
+  _resetViewForTesting()
 })
 
 describe('the stream', () => {
@@ -107,6 +111,86 @@ describe('the stream', () => {
   })
 })
 
+describe('a tab behind the one the agent uses (2026-11-08: the view froze on "Waiting for the next picture")', () => {
+  const watchBehind = async (busy: (id: number) => boolean, ms: number) => {
+    fake.session.agentTabs = { 7: { owner: OWNER, grant: 'g1' }, 8: { owner: OWNER, grant: 'g1' } }
+    // The agent works in tab 7.
+    noteWorked(7)
+    const posts: Array<Record<string, unknown>> = []
+    const t0 = Date.now()
+    await viewWatch({ ...cmd('view_watch'), args: { tab: 8 } }, busy, async (b) => { posts.push({ ...b, ms: Date.now() - t0 }); return { more: !posts.some((p) => p.shown === true) && Date.now() - t0 < ms } })
+    await until(() => !streaming(8), ms + 3000)
+    return posts
+  }
+
+  it('gets its picture while the agent reads or drives the front tab through its page, and the front tab is put back', async () => {
+    // The agent's command on tab 7 needs no screen (a navigate, a text read): it never blocks the view.
+    const posts = await watchBehind(() => false, 4000)
+    const first = posts.find((p) => p.shown === true)
+    expect(first, JSON.stringify(posts.map((p) => p.why ?? 'picture'))).toBeTruthy()
+    expect(first!.ms).toBeLessThan(1500)
+    // The agent's tab is in front again after the picture.
+    expect(fake.front).toBe(7)
+    expect(fake.tabUpdates.map((u) => u.id)).toEqual(expect.arrayContaining([8, 7]))
+  })
+
+  it('waits while a click holds the front tab, and gets its picture within a moment once the click ends', async () => {
+    let held = true
+    setTimeout(() => { held = false }, 1500)
+    const posts = await watchBehind((id) => held && id === 7, 6000)
+    const first = posts.find((p) => p.shown === true)
+    expect(posts[0]).toMatchObject({ shown: false, why: 'busy' })
+    // Never a freeze: the picture comes no later than a few seconds after the screen is free.
+    expect(first, JSON.stringify(posts.map((p) => p.why ?? 'picture'))).toBeTruthy()
+    expect(first!.ms).toBeLessThan(1500 + 2500)
+    expect(fake.front).toBe(7)
+  })
+  const frameOf8 = () => viewFrame({ ...cmd('view_frame'), args: { tab: 8 } }, () => false)
+  const twoTabs = () => { fake.session.agentTabs = { 7: { owner: OWNER, grant: 'g1' }, 8: { owner: OWNER, grant: 'g1' } } }
+
+  it('switches to it at most every BEHIND_EVERY_MS while the agent works in the front tab (its page is not hidden and shown over and over)', async () => {
+    twoTabs()
+    noteWorked(7)
+    expect(await frameOf8()).toMatchObject({ shown: true })
+    expect(fake.front).toBe(7)
+    const switches = fake.tabUpdates.filter((u) => u.id === 8).length
+    expect(await frameOf8()).toMatchObject({ shown: false, why: 'busy' })
+    expect(fake.tabUpdates.filter((u) => u.id === 8).length).toBe(switches)
+    await new Promise((r) => setTimeout(r, BEHIND_EVERY_MS + 50))
+    expect(await frameOf8()).toMatchObject({ shown: true })
+  })
+
+  it('a front tab no agent works in is not put back: one switch, none back', async () => {
+    twoTabs()
+    expect(await frameOf8()).toMatchObject({ shown: true })
+    expect(fake.front).toBe(8)
+    expect(fake.tabUpdates).toEqual([{ id: 8, o: { active: true } }])
+  })
+
+  it('never switches a tab in a window the person is in', async () => {
+    twoTabs()
+    fake.focused = true
+    expect(await frameOf8()).toMatchObject({ shown: false, why: 'behind' })
+    expect(fake.tabUpdates).toEqual([])
+    // Nor for a click.
+    await bringUpForCommand(8)
+    expect(fake.tabUpdates).toEqual([])
+  })
+
+  it('a click brings its tab to the front of the agent window first, never the window itself', async () => {
+    twoTabs()
+    await bringUpForCommand(8)
+    expect(fake.tabUpdates).toEqual([{ id: 8, o: { active: true } }])
+    expect(fake.windowUpdates).toEqual([])
+    // A tab the person handed over is never switched.
+    fake.tabUpdates = []
+    fake.front = 7
+    fake.session.agentTabs = { 7: { owner: OWNER, grant: 'g1' }, 8: { owner: OWNER, grant: 'g1', handed: true } }
+    await bringUpForCommand(8)
+    expect(fake.tabUpdates).toEqual([])
+  })
+})
+
 describe('Take over', () => {
   it('marks the tab the person\'s, brings its window and tab up, and the agent is refused there until Hand back', async () => {
     const out = await takeOver(cmd('view_takeover', { owner: OWNER }))
@@ -134,7 +218,6 @@ describe('Take over', () => {
   it('while the person has the front tab, no picture of another tab there pulls it away', async () => {
     // Tab 7 in front, taken over; tab 8 behind it, another task's, watched.
     fake.session.agentTabs = { 7: { owner: OWNER, grant: 'g1', driving: Date.now() }, 8: { owner: 'task:other', grant: 'g2' } }
-    fake.behind.add(8)
     const posts: Array<Record<string, unknown>> = []
     await viewWatch({ ...cmd('view_watch'), args: { tab: 8 } }, () => false, async (b) => { posts.push(b); return { more: posts.length < 2 } })
     await until(() => !streaming(8), 5000)

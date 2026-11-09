@@ -11,6 +11,7 @@ import { walnutAddress } from './walnut-address'
 import { pageCheck } from './page-reach'
 import { popupRecord } from './agent-tab-kind'
 import { muteAgentTab } from './agent-media'
+import { noteAgentMade } from './agent-tidy'
 import {
   ACTING_MS, AgentError, WALNUT_PAGE, acting, agentTabs, allowed, checkPage, frameOp, loaded, mark, originOf, personsTab, settled, sleep, where,
   walnutCheck, type AgentTab, type WireCommand,
@@ -200,6 +201,8 @@ const linking = new Map<number, string>()
 
 async function adoptOpened(tabId: number, rec: AgentTab, url?: string): Promise<void> {
   await agentTabs.set(tabId, popupRecord(rec, url))
+  // Opened from an agent's own tab: tidied with the agent's tabs; one from the person's tab is theirs.
+  if (!personsTab(rec)) await noteAgentMade(tabId)
   await muteAgentTab(tabId)
   await loaded(tabId)
   // What loaded may be Walnut itself: never an agent's.

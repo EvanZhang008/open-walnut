@@ -3,7 +3,7 @@
  * window, why there is no picture now, why the last tab went, and which tab the view follows.
  */
 import { describe, expect, it } from 'vitest'
-import { agoLine, endedLine, followedTab, handLine, noPictureLine, tabKey, windowLine, type BrowserViewTab } from '../../web/src/components/sessions/browser-view-model'
+import { LATE_MS, agoLine, endedLine, lateLine, followedTab, handLine, noPictureLine, tabKey, windowLine, type BrowserViewTab } from '../../web/src/components/sessions/browser-view-model'
 
 const tab = (n: number): BrowserViewTab => ({ device: 'extension-aaaaaa', browser: 'Chrome', tab: n, connected: true, pictures: true })
 
@@ -22,12 +22,13 @@ describe('the Browser view\'s words', () => {
     expect(noPictureLine({ why: 'minimized' }, true)).toMatch(/minimized/)
     expect(noPictureLine({ why: 'old_extension' }, false)).toMatch(/update it/)
     expect(noPictureLine({ why: 'busy' }, true)).toBeNull()
-    expect(noPictureLine({ why: 'busy' }, false)).toBe('Waiting for the next picture…')
+    expect(noPictureLine({ why: 'busy' }, false)).toMatch(/clicking or typing in another of its tabs/)
     expect(noPictureLine(null, false)).toBeNull()
   })
 
   it('says why the last tab went', () => {
     expect(endedLine('stopped')).toBe("You stopped the agent's use of the tab. It stays open.")
+    expect(endedLine('tidied')).toMatch(/task finished, or no agent used the tab for 30 minutes/)
     expect(endedLine('closed')).toBe('The agent closed its browser tab.')
     expect(endedLine('given_back')).toMatch(/gave your tab back/)
     expect(endedLine('browser_left')).toMatch(/left Walnut/)
@@ -64,5 +65,12 @@ describe('the Browser view\'s words', () => {
     expect(handLine({ driving: true, signIn: { site: 'example.test' } })).toBe('You have this tab in your browser. Sign in to example.test there, then press Done: the agent carries on.')
     expect(noPictureLine({ why: 'starting' }, false)).toBe('Taking the first picture…')
     expect(noPictureLine({ why: 'starting' }, true)).toBeNull()
+  })
+
+  // 2026-11-08, the user: "like this one just freeze". A view with no new picture for LATE_MS says so.
+  it('says how long no new picture came, once that is longer than a moment', () => {
+    expect(lateLine(undefined, 1_000_000)).toBeNull()
+    expect(lateLine(new Date(1_000_000 - LATE_MS + 1).toISOString(), 1_000_000)).toBeNull()
+    expect(lateLine(new Date(1_000_000 - 12_000).toISOString(), 1_000_000)).toMatch(/^No new picture for 12 ?s\.$/)
   })
 })

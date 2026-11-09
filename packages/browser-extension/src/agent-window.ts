@@ -9,11 +9,12 @@
  * tell the person in its first line where to look.
  */
 import type { ExtApi, Tab } from './ext'
+import { AGENT_PAGE } from './agent-groups'
 
 /** How the window is made: pinned by tests/core/browser-control/extension-agent-window.test.ts. */
 export const AGENT_WINDOW = { focused: false, width: 1280, height: 900, type: 'normal' } as const
 
-type Api = Pick<ExtApi, 'windows' | 'tabs' | 'storage'>
+type Api = Pick<ExtApi, 'windows' | 'tabs' | 'storage'> & { runtime?: { getURL(path: string): string } }
 
 /**
  * A tab at `url` in the agent window, made first when there is none. It opens blank and is muted
@@ -29,9 +30,14 @@ export async function openInAgentWindow(api: Api, url: string, before?: (tabId: 
     if (w) tab = await api.tabs.create({ url: 'about:blank', windowId: id, active: true })
   }
   if (!tab) {
-    const w = await api.windows.create({ url: 'about:blank', ...AGENT_WINDOW })
-    await api.storage.session.set({ agentWindow: w.id })
-    tab = w.tabs?.[0] ?? (await api.tabs.query({ active: true, windowId: w.id }))[0] ?? {}
+    // The window's first tab is its own page (agent-groups.ts AGENT_PAGE: what this window is, in
+    // front while every task's group is folded); the agent's page opens beside it.
+    const own = api.runtime?.getURL(AGENT_PAGE)
+    const w = await api.windows.create({ url: own ?? 'about:blank', ...AGENT_WINDOW })
+    await api.storage.session.set({ agentWindow: w.id, ...(own && w.tabs?.[0]?.id !== undefined ? { agentPage: w.tabs[0].id } : {}) })
+    tab = own && w.id !== undefined
+      ? await api.tabs.create({ url: 'about:blank', windowId: w.id, active: true })
+      : w.tabs?.[0] ?? (await api.tabs.query({ active: true, windowId: w.id }))[0] ?? {}
   }
   if (tab.id === undefined) return tab
   await api.tabs.update(tab.id, { muted: true })

@@ -115,6 +115,8 @@ export function mountBrowserView(r: Router, d: ViewDeps): void {
       // Per holding: a tab another task took, or this task holds again after a Stop, never gets
       // the picture of an earlier holding (review 2026-11-07).
       const gen = h.tabGen(known.device, tab)
+      // The person watching counts as use: the tidy-up never closes a tab under their eyes.
+      h.noteActed(known.device, tab)
       const stillHeld = () => h.tabOwner(known.device, tab) === owner && h.tabGen(known.device, tab) === gen
       const notHeld = () => new h.BrowserError('That tab is not this task\'s now.', 404, 'not_your_tab')
       const allowNow = async () => {
@@ -231,6 +233,7 @@ export function mountBrowserView(r: Router, d: ViewDeps): void {
       const { owner, tab, known, allow } = await personTab(req, h, 'Take over')
       const out = (await h.send(known.device, 'view_takeover', { tab, owner }, allow, 15_000) ?? {}) as Record<string, unknown>
       h.noteTab(known.device, tab, { driving: true })
+      h.noteActed(known.device, tab)
       log.web.info('browser view take over', { device: known.device, owner, tab, by: 'person' })
       return { ok: true, ...out, tab, device: known.device, driving: true }
     })
@@ -242,6 +245,7 @@ export function mountBrowserView(r: Router, d: ViewDeps): void {
       const { owner, tab, known, allow } = await personTab(req, h, 'Hand back')
       const out = (await h.send(known.device, 'view_handback', { tab, owner }, allow, 10_000) ?? {}) as Record<string, unknown>
       h.noteTab(known.device, tab, { driving: false })
+      h.noteActed(known.device, tab)
       // The sign-in the agent waited for is done: its waiting call answers now.
       const ask = endSignIn(known.device, tab, 'done', owner)
       h.ownerChanged(owner)

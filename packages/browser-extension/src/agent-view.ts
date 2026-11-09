@@ -30,6 +30,7 @@ import { AgentError, agentTabs, agentWindowId, personsTab, walnutCheck, where, t
 import { walnutAddress } from './walnut-address'
 import { capture, tryCapture } from './capture-gate'
 import { frontDriven } from './agent-takeover'
+import { noteGroupUse, type GroupApi } from './agent-groups'
 
 /** The picture's width at most, in pixels: a frame stays small (tens of KB). */
 export const FRAME_MAX_W = 960
@@ -41,6 +42,46 @@ export const FRAME_MAX_W = 960
  */
 const framedAt = new Map<number, number>()
 const WATCHED_MS = 4000
+/** Owners whose tabs a view pictured lately: their group stays open meanwhile (agent-groups.ts). */
+const ownerFramedAt = new Map<string, number>()
+export const watchedOwner = (owner: string, now = Date.now()) => now - (ownerFramedAt.get(owner) ?? 0) < WATCHED_MS
+
+/**
+ * When an agent's command last ran in each tab (agent.ts notes it). The tab the agent works in is
+ * put back in front after a picture of another tab, and that switch is made at most every
+ * BEHIND_EVERY_MS, so the agent's page is not hidden and shown over and over (review 2026-11-08:
+ * once per frame, the page's own visibility events fired four times a second). A tab no agent
+ * works in stays behind the one pictured: one switch, none back.
+ */
+const workedAt = new Map<number, number>()
+export const WORKED_MS = 10_000
+export const BEHIND_EVERY_MS = 2000
+const switchedAt = new Map<number, number>()
+export function noteWorked(tabId: number, now = Date.now()): void {
+  workedAt.set(tabId, now)
+  if (workedAt.size > 100) for (const [id, at] of workedAt) if (now - at > WORKED_MS) workedAt.delete(id)
+}
+const worked = (id: number | undefined, now = Date.now()) => id !== undefined && now - (workedAt.get(id) ?? 0) < WORKED_MS
+
+/** A window the person is in: no tab of it is switched for a picture or a command. */
+async function windowFocused(windowId: number | undefined): Promise<boolean> {
+  if (windowId === undefined) return false
+  const w = await ext.windows.get(windowId).catch(() => null) as { focused?: boolean } | null
+  return w?.focused === true
+}
+
+/**
+ * Bring the tab a command that needs the screen (a click, a key, an upload) acts in to the front
+ * of the agent window first: a folded group leaves the agent window's own page in front. Never in
+ * the person's window, a window they are in, or over a tab they took over.
+ */
+export async function bringUpForCommand(tabId: number): Promise<void> {
+  const tab = await ext.tabs.get(tabId).catch(() => null)
+  if (!tab || tab.active || tab.windowId === undefined) return
+  if (tab.windowId !== await agentWindowId() || personsTab(await agentTabs.get(tabId))) return
+  if (await windowFocused(tab.windowId) || await frontDriven(tab.windowId)) return
+  await ext.tabs.update(tabId, { active: true }).catch(() => undefined)
+}
 
 /** Why a frame has no picture this time. */
 export type NoFrame = 'behind' | 'busy' | 'minimized' | 'no_permission' | 'not_web' | 'walnut_page' | 'changed' | 'failed'
@@ -80,6 +121,7 @@ async function frameOf(c: WireCommand, busy: (tabId: number) => boolean, full: b
   if (!rec) throw new AgentError('That tab is no agent\'s now (closed, or given back with Stop).', 'not_your_tab')
   const tab = await ext.tabs.get(tabId).catch(() => null)
   if (!tab || tab.windowId === undefined) { await agentTabs.delete(tabId); throw new AgentError('That tab was closed.', 'not_your_tab') }
+  const win: number = tab.windowId
   const at = await where(tabId)
   const whose = (r: AgentTab = rec) => ({ ...(r.handed ? { handed: true } : r.taken ? { taken: true } : {}), ...(typeof r.driving === 'number' ? { driving: true } : {}) })
   const none = (why: NoFrame) => ({ ...at, shown: false, why, ...whose() })
@@ -93,25 +135,61 @@ async function frameOf(c: WireCommand, busy: (tabId: number) => boolean, full: b
   const inAgentWindow = tab.windowId === await agentWindowId()
   if (!tab.active) {
     if (personsTab(rec) || !inAgentWindow) return none('behind')
+    // The person is in the agent window: their view of it is never switched for a picture.
+    if (await windowFocused(tab.windowId)) return none('behind')
     const [front] = await ext.tabs.query({ active: true, windowId: tab.windowId })
     if (front?.id !== undefined && busy(front.id)) return none('busy')
     // The person took the front tab over: never pull it away for a picture.
     if (await frontDriven(tab.windowId)) return none('behind')
     if (front?.id !== undefined && Date.now() - (framedAt.get(front.id) ?? 0) < WATCHED_MS) return none('behind')
+    // The agent works in the front tab: a picture of this one now and then, the last one kept meanwhile.
+    if (worked(front?.id) && Date.now() - (switchedAt.get(tabId) ?? 0) < BEHIND_EVERY_MS) return none('busy')
   }
+  ownerFramedAt.set(rec.owner, Date.now())
+  // Whether this frame brought ours up (its group opened: folded again once nobody looks).
+  let switched = false
   const shot = await tryCapture(async () => {
     const now = await ext.tabs.get(tabId).catch(() => null)
     if (!now) return null
     // The page or window moved while this frame waited for the gate.
     if ((now.url ?? '') !== url || now.windowId !== tab.windowId) return 'changed' as const
+    // The tab the agent works in, put back in front after the picture, inside this turn of the gate.
+    let back: number | undefined
     if (!now.active) {
-      if (personsTab(rec) || !inAgentWindow || await frontDriven(tab.windowId)) return 'behind' as const
+      if (personsTab(rec) || !inAgentWindow || await frontDriven(tab.windowId) || await windowFocused(tab.windowId)) return 'behind' as const
+      const [front] = await ext.tabs.query({ active: true, windowId: tab.windowId })
+      // Its command took the screen while this frame waited for the gate.
+      if (front?.id !== undefined && busy(front.id)) return 'busy' as const
+      if (worked(front?.id)) back = front?.id
       await ext.tabs.update(tabId, { active: true })
+      switched = true
+      switchedAt.set(tabId, Date.now())
+      if (switchedAt.size > 50) for (const [id, at] of switchedAt) if (Date.now() - at > WORKED_MS) switchedAt.delete(id)
     }
+    try {
+      return await pictureNow()
+    } finally {
+      // Only while ours is still in front and nobody came in meanwhile (a Take over, the person's
+      // own click into the window): their tab is never switched away.
+      if (back !== undefined && back !== tabId) {
+        const [shownNow] = await ext.tabs.query({ active: true, windowId: tab.windowId }).catch(() => [])
+        if (shownNow?.id === tabId && !(await frontDriven(tab.windowId)) && !(await windowFocused(tab.windowId))) {
+          await ext.tabs.update(back, { active: true }).catch(() => undefined)
+        }
+      }
+    }
+  })
+  if (switched) noteGroupUse(ext as unknown as GroupApi, rec.owner)
+  if (shot === undefined || shot === 'busy') return none('busy')
+  if (shot === null) throw new AgentError('That tab was closed or given back.', 'not_your_tab')
+  if (shot === 'behind' || shot === 'failed' || shot === 'changed') return none(shot)
+  return finish(shot)
+
+  async function pictureNow(): Promise<string | 'failed' | 'changed' | null> {
     let image: string
-    try { image = await capture(tab.windowId!, { format: 'jpeg', quality: full ? STREAM_QUALITY : 60 }) } catch { return 'failed' as const }
+    try { image = await capture(win, { format: 'jpeg', quality: full ? STREAM_QUALITY : 60 }) } catch { return 'failed' as const }
     // What was on screen must be this tab still (a page's popup, another agent's tab brought up meanwhile).
-    const [shown] = await ext.tabs.query({ active: true, windowId: tab.windowId })
+    const [shown] = await ext.tabs.query({ active: true, windowId: win })
     if (shown?.id !== tabId) return 'changed' as const
     // Still this owner's tab, on the same page in the same window, after the capture: else the
     // picture may show a page the task does not hold (Stop, a give-back, a move to a Walnut page;
@@ -120,22 +198,22 @@ async function frameOf(c: WireCommand, busy: (tabId: number) => boolean, full: b
     if (!sameHolding(owner)) return null
     const after = await ext.tabs.get(tabId).catch(() => null)
     if (!after) return null
-    if ((after.url ?? '') !== url || after.windowId !== tab.windowId) return 'changed' as const
+    if ((after.url ?? '') !== url || after.windowId !== win) return 'changed' as const
     framedAt.set(tabId, Date.now())
     if (framedAt.size > 50) for (const [id, at] of framedAt) if (Date.now() - at > WATCHED_MS) framedAt.delete(id)
     return image
-  })
-  if (shot === undefined) return none('busy')
-  if (shot === null) throw new AgentError('That tab was closed or given back.', 'not_your_tab')
-  if (shot === 'behind' || shot === 'failed' || shot === 'changed') return none(shot)
+  }
+
+  async function finish(shot: string): Promise<Record<string, unknown>> {
   const image = full ? shot : await shrink(shot)
   // The last look, after the picture was made small: still this holding, on the same page.
   const last = await ext.tabs.get(tabId).catch(() => null)
   if (!sameHolding(await agentTabs.get(tabId)) || !last) throw new AgentError('That tab was closed or given back.', 'not_your_tab')
-  if ((last.url ?? '') !== url || last.windowId !== tab.windowId) return none('changed')
+  if ((last.url ?? '') !== url || last.windowId !== win) return none('changed')
   // Whether the person has the tab now (Take over), as of the picture.
   const nowRec = await agentTabs.get(tabId)
   return { ...(await where(tabId)), shown: true, image, at: new Date().toISOString(), ...whose(nowRec ?? rec) }
+  }
 }
 
 // ── the stream ──
@@ -204,4 +282,11 @@ async function stream(tabId: number, c: WireCommand, busy: (tabId: number) => bo
   } finally {
     if (streams.get(tabId) === s) streams.delete(tabId)
   }
+}
+
+export function _resetViewForTesting(): void {
+  framedAt.clear()
+  ownerFramedAt.clear()
+  workedAt.clear()
+  switchedAt.clear()
 }

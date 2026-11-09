@@ -42,7 +42,7 @@ export interface TabFacts {
 }
 
 /** Why an owner has no browser tab any more (the task's Browser view says so). */
-export type TabEndWhy = 'closed' | 'given_back' | 'stopped' | 'gone' | 'browser_left'
+export type TabEndWhy = 'closed' | 'given_back' | 'stopped' | 'gone' | 'browser_left' | 'tidied'
 
 interface Controller extends ControllerInfo {
   lastSeen: number
@@ -85,6 +85,8 @@ const pending = new Map<string, Pending>()
 /** `${device}:${tabId}` → the owner key (task or session) that opened it. */
 const tabOwners = new Map<string, string>()
 const tabSetAt = new Map<string, number>()
+/** When an agent last acted in each tab (the tidy-up closes a task's tabs it left unused). */
+const tabActedAt = new Map<string, number>()
 /**
  * Each holding of a tab, numbered: a new owner, or the same owner holding it again after a
  * release (the extension's `grant` in its reports tells a re-handover the hub never saw end), gets
@@ -173,6 +175,28 @@ export function noteTab(device: string, tabId: number, facts: TabFacts): void {
   const k = `${device}:${tabId}`
   if (!tabOwners.has(k)) return
   setFacts(k, facts)
+}
+
+/** An agent acted in the tab just now. */
+export function noteActed(device: string, tabId: number, now = Date.now()): void {
+  const k = `${device}:${tabId}`
+  if (tabOwners.has(k)) tabActedAt.set(k, now)
+}
+
+/** Whether a command to the tab is on its way or running. */
+export function tabBusy(device: string, tabId: number): boolean {
+  for (const p of pending.values()) if (p.device === device && p.tab === tabId) return true
+  return false
+}
+
+/** Every tab some owner holds, with when it was taken and last used, for the tidy-up. */
+export function heldTabs(): Array<{ device: string; tab: number; owner: string; usedAt: number; driving: boolean }> {
+  const out: Array<{ device: string; tab: number; owner: string; usedAt: number; driving: boolean }> = []
+  for (const [k, owner] of tabOwners) {
+    const i = k.lastIndexOf(':')
+    out.push({ device: k.slice(0, i), tab: Number(k.slice(i + 1)), owner, usedAt: Math.max(tabSetAt.get(k) ?? 0, tabActedAt.get(k) ?? 0), driving: tabFacts.get(k)?.driving === true })
+  }
+  return out
 }
 
 /** Whether the browser said it can do this (`view-stream`, `takeover`, ...). */
@@ -396,6 +420,7 @@ function forgetTab(k: string, fallback: TabEndWhy = 'gone'): void {
   const held = tabGens.has(k)
   tabOwners.delete(k)
   tabSetAt.delete(k)
+  tabActedAt.delete(k)
   tabGens.delete(k)
   tabGrants.delete(k)
   tabReported.delete(k)
@@ -488,6 +513,7 @@ export function _resetBrowserHubForTesting(): void {
   pending.clear()
   tabOwners.clear()
   tabSetAt.clear()
+  tabActedAt.clear()
   tabGens.clear()
   tabGrants.clear()
   tabReported.clear()

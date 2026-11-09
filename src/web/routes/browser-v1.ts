@@ -21,6 +21,8 @@ import { LOCAL_ORIGIN, REMOTE_HTTP_ORIGIN } from '../../lib/caller-origin.js'
 import { CALLER_KIND_HEADER } from '../../lib/cli-sender.js'
 import { ambientTestRun } from '../../core/test-run.js'
 import { log } from '../../logging/index.js'
+import { startTabTidy, _stopTabTidyForTesting, type TidyDeps } from './browser-tab-tidy.js'
+import { openAsk } from '../../core/browser-control/sign-in-ask.js'
 import { onCredentialsRevoked } from '../../core/device-auth.js'
 import { mountBrowserView, _resetBrowserViewForTesting } from './browser-view-v1.js'
 import { missingIsNull } from '../../lib/id-ref.js'
@@ -113,6 +115,8 @@ async function deviceLabel(device: string): Promise<string> {
 browserV1Router.post('/browser/poll', (req, res, next) => {
   const device = extensionOf(req, res)
   if (!device) return
+  // A browser is here: Walnut tidies the tabs tasks no longer use (browser-tab-tidy.ts).
+  startTabTidy(tidyDeps)
   void run(res, next, async () => {
     const b = (req.body ?? {}) as { browser?: unknown; version?: unknown; caps?: unknown; tabs?: unknown; waitMs?: unknown }
     const h = await hub()
@@ -534,6 +538,8 @@ browserV1Router.post('/browser/act', (req, res, next) => {
       ? h.endingTab(c.device, tab, handed.has(tabKey(c.device, tab)) || h.viewOf(owner).tabs.find((t) => t.tab === tab && t.device === c.device)?.window === 'person' ? 'given_back' : 'closed')
       : undefined
     let result: unknown
+    // In use from the moment it is sent, so the tidy-up never takes a tab a command is on its way to.
+    if (typeof tab === 'number') h.noteActed(c.device, tab)
     try {
       result = await go()
     } catch (err) {
@@ -560,6 +566,7 @@ browserV1Router.post('/browser/act', (req, res, next) => {
     const used = action === 'open' || action === 'take' ? r.tab : tab
     if (typeof used === 'number' && action !== 'close') {
       lastTab.set(owner, { device: c.device, tab: used })
+      h.noteActed(c.device, used)
       if (action !== 'open' && action !== 'take' && typeof r.url === 'string') h.noteTab(c.device, used, facts)
     }
     log.web.info('browser act', { action, device: c.device, owner, tab: used })
@@ -676,6 +683,20 @@ async function fillLoginAct(req: Request, res: Response, b: Record<string, unkno
   }
 }
 
+export const tidyDeps: TidyDeps = {
+  hub,
+  phaseOf: async (taskId) => {
+    const { getTask } = await import('../../core/task-manager.js')
+    // Only "no such task" counts as gone; any other trouble reading it throws, and the pass skips it.
+    try { return (await getTask(taskId)).phase } catch (err) {
+      if (err instanceof Error && /^No task found matching/.test(err.message)) return undefined
+      throw err
+    }
+  },
+  allow: async () => { const s = await sites(); return s.allowOf(await s.readSites()) },
+  asksOn: (device, tab, owner) => !!openAsk(device, tab, owner),
+}
+
 // The task's Browser view: its tabs, a live frame, Stop (browser-view-v1.ts).
 mountBrowserView(browserV1Router, { personCaller, run, walnutAddresses, extensionOf })
 
@@ -685,5 +706,6 @@ export function _resetBrowserRoutesForTesting(): void {
   siteAsks.clear()
   siteDenied.clear()
   handed.clear()
+  _stopTabTidyForTesting()
   _resetBrowserViewForTesting()
 }

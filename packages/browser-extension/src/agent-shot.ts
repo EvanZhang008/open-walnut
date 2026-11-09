@@ -84,6 +84,10 @@ export async function screenshot(c: WireCommand, tabId: number, tab: Tab, rec: A
     if (!(await ext.tabs.get(tabId).catch(() => tab)).active && await frontDriven(tab.windowId)) {
       throw new AgentError('The person took over another tab in the agent window and is using it: use snapshot for this tab, or wait until they hand it back.', 'person_driving')
     }
+    // The person is in the agent window looking at another tab: never switched under their eyes.
+    if (!(await ext.tabs.get(tabId).catch(() => tab)).active && (await ext.windows.get(tab.windowId!).catch(() => null) as { focused?: boolean } | null)?.focused) {
+      throw new AgentError('The person is looking at another tab in the agent window: use snapshot for this tab, or try again in a moment.', 'person_looking')
+    }
     await ext.tabs.update(tabId, { active: true })
     // A password the page shows as text (its "show" button) is drawn as dots for the capture.
     let out: Record<string, unknown>

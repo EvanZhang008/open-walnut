@@ -47,6 +47,24 @@ const PAGES = {
   'popup-ask': { body: 'sidepanel askpop', html: 'panel askpop', script: 'sidepanel' },
 }
 const SITES = ['http://*/*', 'https://*/*']
+/**
+ * The agent window's own tab (agent-groups.ts): in front while every task's group is folded, so
+ * the window says what it is. No script.
+ */
+const AGENT_WINDOW_PAGE = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Walnut agent window</title>
+<style>body{font:15px/1.5 -apple-system,system-ui,sans-serif;margin:48px;max-width:560px;color:#3b2f25;background:#faf7f2}h1{font-size:20px;margin:0 0 12px}@media (prefers-color-scheme:dark){body{color:#eadfd2;background:#1d1a17}}</style>
+</head>
+<body>
+<h1>Walnut agent window</h1>
+<p>Walnut's agents open their pages in this window. Each task's tabs sit in one tab group named walnut-&lt;task name&gt;, folded while no agent uses them.</p>
+<p>It stays behind your own windows: Walnut never brings it forward. Watch a task's tabs in the task's Browser view in Walnut, or take one over from there.</p>
+</body>
+</html>
+`
 
 /**
  * `build`: the hash of what the extension runs (its scripts, pages and styles). The manifest
@@ -209,6 +227,7 @@ async function main() {
   for (const entry of ENTRIES) h.update(readFileSync(join(tmp, `${entry}.js`)))
   h.update(readFileSync(join(SRC, 'ui.css')))
   for (const name of Object.keys(PAGES)) h.update(page(name))
+  h.update(AGENT_WINDOW_PAGE)
   const build = h.digest('hex').slice(0, 12)
   for (const browser of ['chrome', 'firefox']) {
     const dir = join(OUT, browser)
@@ -216,6 +235,7 @@ async function main() {
     for (const entry of ENTRIES) copyFileSync(join(tmp, `${entry}.js`), join(dir, `${entry}.js`))
     copyFileSync(join(SRC, 'ui.css'), join(dir, 'ui.css'))
     for (const name of Object.keys(PAGES)) writeFileSync(join(dir, `${name}.html`), page(name))
+    writeFileSync(join(dir, 'agent-window.html'), AGENT_WINDOW_PAGE)
     writeFileSync(join(dir, 'manifest.json'), `${JSON.stringify(manifestFor(browser, build), null, 2)}\n`)
     await icons(dir)
     if (zip) writeZip(dir, join(ZIP_DIR, `walnut-extension-${browser}.zip`))

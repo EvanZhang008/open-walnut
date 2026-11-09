@@ -19,7 +19,7 @@ export interface BrowserViewTab {
   signIn?: { id: string; at: string; site?: string; note?: string };
 }
 
-export type BrowserEndWhy = 'closed' | 'given_back' | 'stopped' | 'gone' | 'browser_left';
+export type BrowserEndWhy = 'closed' | 'given_back' | 'stopped' | 'gone' | 'browser_left' | 'tidied';
 
 export interface BrowserViewState {
   tabs: BrowserViewTab[];
@@ -44,6 +44,8 @@ export interface BrowserFrame {
   seq?: number;
   /** Which stream `seq` counts in (a restart or a new holding starts another). */
   epoch?: string;
+  /** Since when the browser has had no picture to give (the card says how long). */
+  noPictureSince?: string;
   /** Nothing new since `after` (the last picture stays). */
   unchanged?: boolean;
   /** The browser streams its pictures (asked again at once, never on a timer). */
@@ -75,11 +77,23 @@ export function noPictureLine(f: Pick<BrowserFrame, 'why' | 'window'> | null, ha
     case 'not_web': return 'The tab is not on a web page now.';
     case 'walnut_page': return "The tab shows Walnut's own page: no picture of it.";
     case 'old_extension': return "This browser's Walnut extension is older than the Browser view: update it (Settings, Browser extension).";
-    case 'busy': case 'changed': case 'slow': case 'failed':
-      return hasPicture ? null : 'Waiting for the next picture…';
+    case 'busy': return hasPicture ? null : 'The agent is clicking or typing in another of its tabs, which needs the screen: the picture comes right after.';
+    case 'changed': return hasPicture ? null : 'The page changed while its picture was taken: the next one comes in a moment.';
+    case 'slow': return hasPicture ? null : 'The browser is slow to answer (the Mac is busy): the picture comes when it does.';
+    case 'failed': return hasPicture ? null : 'Chrome gave no picture this time: trying again.';
     case 'starting': return hasPicture ? null : 'Taking the first picture…';
     default: return null;
   }
+}
+
+/** A picture this old or more, or none for this long, is said to be late. */
+export const LATE_MS = 6000;
+
+/** "No new picture for 14 s." once the last picture (or the wait for one) is LATE_MS old. */
+export function lateLine(since: string | undefined, now: number): string | null {
+  const t = since ? Date.parse(since) : NaN;
+  if (!Number.isFinite(t) || now - t < LATE_MS) return null;
+  return `No new picture for ${agoLine(since, now).replace(' ago', '')}.`;
 }
 
 /** The line once the session's last tab went. */
@@ -89,6 +103,7 @@ export function endedLine(why: BrowserEndWhy): string {
     case 'given_back': return 'The agent gave your tab back. It stays open.';
     case 'stopped': return "You stopped the agent's use of the tab. It stays open.";
     case 'browser_left': return 'The browser left Walnut (agents turned off, or the extension disconnected).';
+    case 'tidied': return 'Walnut closed the task\'s tab: the task finished, or no agent used the tab for 30 minutes.';
     default: return 'The agent stopped using the browser (the tab was closed, or given back with Stop).';
   }
 }

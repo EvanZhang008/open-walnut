@@ -132,8 +132,34 @@ extension's Settings, reached from the key's popover in the side panel or the to
   ask lives on the tab's holding: it ends (`gone`) when the tab is closed, released or given to
   another task, and only its own task's view shows or answers it. An extension older than Take
   over answers `request_sign_in` with `old_extension`, and the agent asks you in its chat instead.
-- **One tab group per task.** The tabs a task opens in Walnut's agent window sit in one Chrome tab
-  group named `walnut-<task name>` (`agent-groups.ts`); your own tabs are never moved or grouped.
+- **One tab group per task, folded.** The tabs a task opens in Walnut's agent window sit in one
+  Chrome tab group named `walnut-<task name>` (`agent-groups.ts`); your own tabs are never moved or
+  grouped. The group folds to its chip once no command of the task ran for 8 seconds (Chrome opens
+  it by itself while one of its tabs is in front). A folded group cannot hold the window's front
+  tab, so the agent window keeps a page of its own as its first tab (`agent-window.html`, "Walnut
+  agent window"), which comes in front before the fold. A tab leaves its group before it closes,
+  since Chrome would keep a closed group as a saved one.
+- **Tabs are closed once the task is done with them.** Every minute Walnut closes the tabs of a
+  task that completed or was deleted, and those no agent used for 30 minutes, unless the task waits
+  for you (Needs you), you took the tab over, you watch it in the Browser view or look at it in
+  the agent window, the agent waits for your sign-in there, or a command is on its way to it
+  (`src/web/routes/browser-tab-tidy.ts`). A tab of yours is given back, never closed, and an agent's
+  tab you dragged into a window of yours is only let go. The extension closes a tab it opened for an
+  agent that no agent holds any more and that you did not take (Stop, the side panel and agents off
+  make it yours) 10 minutes after it was let go, never one you opened or the one you are looking at
+  (`agent-tidy.ts`). Tabs an older extension opened are not known to be its own, so they stay.
+- **The view never sits frozen.** A picture of a tab behind the agent's front tab waits only while
+  a command there needs the screen (a click, typing, a screenshot); reading a page, navigating or
+  filling never blocks it. When the agent works in the front tab, it is put back after the
+  picture and the switch happens at most every 2 seconds; a tab no agent works in stays behind the
+  pictured one. No tab is switched in a window you are in. A click or a key brings its own tab to
+  the front of the agent window first (a folded group leaves the window's page there). While no new picture
+  comes the view says why (the agent is clicking in another tab, the page changed, the browser
+  answers slowly) and, after 6 seconds, for how long (`noPictureSince` on the frame answer).
+- **Never your focus.** No call in the extension brings a window forward or focuses one except your
+  own Take over, the toolbar popup, the side panel, Open vault and Connect; the agent window is
+  made unfocused. `tests/core/browser-control/extension-agent-window.test.ts` lists every such call
+  with its reason and fails on a new one.
   The phone has no Browser view yet: it would need the same frame route polled from the iOS
   session screen.
 - **Never a second sign-in behind your back.** An `open` or `navigate` to a site you already have
