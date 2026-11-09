@@ -367,23 +367,26 @@ test.describe('Questions about a file passage (Files tab)', () => {
     const pill = page.locator('[data-testid="file-ask-pill"]')
     await expect(pill).toBeVisible()
     await expect(pill.locator('[data-testid="file-ask-quote"]')).toHaveText('Quote in chat')
+    // Every painted frame from the press on: the page reports where the passage
+    // is a moment after the card asks (its own origin), and the card waits for
+    // it unseen. It showed at the top first and then moved, 300px (2026-11-09).
+    await page.evaluate(() => {
+      const out: Array<{ top: number; seen: boolean }> = []
+      ;(window as unknown as { __cardFrames: typeof out }).__cardFrames = out
+      const t0 = performance.now()
+      const tick = () => {
+        const el = document.querySelector<HTMLElement>('.fv-thread-layer > .thread-card')
+        if (el) out.push({ top: el.getBoundingClientRect().top, seen: getComputedStyle(el).opacity !== '0' })
+        if (performance.now() - t0 < 4_000) requestAnimationFrame(tick)
+      }
+      requestAnimationFrame(tick)
+    })
     await pill.locator('[data-testid="file-ask-here"]').click()
     const card = fileCard(view)
     await expect(card).toHaveAttribute('data-draft', 'true')
     const last = shifted.at(-1)!
-    // Every painted frame for 2s: the page reports where the passage is a
-    // moment after the card asks (its own origin), and the card waits for it
-    // unseen. It showed at the top first and then moved, 300px (2026-11-09).
-    const frames = await page.evaluate(async () => {
-      const out: Array<{ top: number; seen: boolean }> = []
-      const t0 = performance.now()
-      while (performance.now() - t0 < 2_000) {
-        await new Promise((r) => requestAnimationFrame(r))
-        const el = document.querySelector<HTMLElement>('.fv-thread-layer > .thread-card')
-        if (el) out.push({ top: el.getBoundingClientRect().top, seen: getComputedStyle(el).opacity !== '0' })
-      }
-      return out
-    })
+    await page.waitForTimeout(2_000)
+    const frames = await page.evaluate(() => (window as unknown as { __cardFrames: Array<{ top: number; seen: boolean }> }).__cardFrames)
     const seen = frames.filter((f) => f.seen)
     expect(seen.length, 'the card shows within 2s').toBeGreaterThan(0)
     for (const f of seen) {
@@ -425,6 +428,8 @@ test.describe('Questions about a file passage (Files tab)', () => {
     // load renders a frame every ~300ms, and a fade left it at 0 here). The wait
     // is for the shot of the settled card over the frame.
     await page.waitForTimeout(300)
+    // Shown once its page has said where the passage is (unseen until then).
+    await expect.poll(() => card.evaluate((el) => el.parentElement!.hasAttribute('data-card-measure'))).toBe(false)
     const opaque = await card.evaluate((el) => {
       const cs = getComputedStyle(el)
       return { opacity: cs.opacity, bg: cs.backgroundColor, z: getComputedStyle(el.parentElement!).zIndex }

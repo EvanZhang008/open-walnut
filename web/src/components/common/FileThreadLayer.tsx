@@ -517,8 +517,9 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
     ro?.observe(root);
     root.addEventListener('scroll', later, true);
     window.addEventListener('resize', later);
-    // The page reports its passage's rects (on paint, its scroll and its resize).
-    const off = inFrame ? channel?.on((m) => { if (m.type === 'rects') later(); }) : undefined;
+    // The page reports its passage's rects (on paint, its scroll and its resize),
+    // and its text (a passage it does not hold ends the card's wait at once).
+    const off = inFrame ? channel?.on((m) => { if (m.type === 'rects' || m.type === 'text') later(); }) : undefined;
     return () => {
       mo.disconnect();
       ro?.disconnect();
