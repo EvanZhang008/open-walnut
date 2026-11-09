@@ -106,8 +106,13 @@ function install(): void {
   // cancels its mousedown so the selection survives. That shows only after the
   // press's handlers ran, so decide a tick later. Touch and pen are left out: a
   // finger that starts a scroll keeps the selection on purpose, and a tap clears it.
+  // The press is held only from its pointerdown to that tick: an event keeps its
+  // target, and with it the whole subtree the target sat in, alive. Kept until the
+  // next press, the last click on a column's Close button held the closed column's
+  // DOM for the life of the page (session-column-close-releases-dom.spec.ts).
   let press: MouseEvent | null = null;
-  document.addEventListener('mousedown', (e) => { press = e; }, true);
+  let awaitingPress = false;
+  document.addEventListener('mousedown', (e) => { if (awaitingPress) press = e; }, true);
   document.addEventListener('pointerdown', (e) => {
     const sel = document.getSelection();
     if (e.pointerType !== 'mouse' || onScrollbar(e)) return;
@@ -120,8 +125,12 @@ function install(): void {
     }
     const mark = markOf(sel);
     press = null;
+    awaitingPress = true;
     window.setTimeout(() => {
-      if (e.defaultPrevented || press?.defaultPrevented) return;
+      const kept = e.defaultPrevented || !!press?.defaultPrevented;
+      press = null;
+      awaitingPress = false;
+      if (kept) return;
       const now = document.getSelection();
       if (now && same(mark, markOf(now))) ended = mark;
       recheck();

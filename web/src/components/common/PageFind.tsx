@@ -505,10 +505,13 @@ function usePageSelectionEcho(): void {
     let needle = '';
     let undo: (() => void) | null = null;
     let timer = 0;
-    /** The selection's boundaries when `needle` was read from it. */
+    /** The selection's boundaries when `needle` was read from it. Held only while there
+     *  is a needle: a boundary node kept after its selection ended kept whatever it sat in
+     *  alive once that left the page (a closed finder, a closed column). */
     let held: { an: Node | null; ao: number; fn: Node | null; fo: number } = { an: null, ao: 0, fn: null, fo: 0 };
     const remember = (sel: Selection | null) => {
-      held = { an: sel?.anchorNode ?? null, ao: sel?.anchorOffset ?? 0, fn: sel?.focusNode ?? null, fo: sel?.focusOffset ?? 0 };
+      const keep = needle ? sel : null;
+      held = { an: keep?.anchorNode ?? null, ao: keep?.anchorOffset ?? 0, fn: keep?.focusNode ?? null, fo: keep?.focusOffset ?? 0 };
     };
     const clear = () => { undo?.(); undo = null; };
     const repaint = makeRepaintScheduler(() => paint());
@@ -541,7 +544,7 @@ function usePageSelectionEcho(): void {
       const live = echoVisible(sel, document.activeElement) ? selectionNeedle(sel) : '';
       if (live === needle) { remember(sel); return false; }
       clear();
-      if (!live) { needle = ''; setRoot(null); }
+      if (!live) { needle = ''; remember(null); setRoot(null); }
       else if (!timer) onSelectionChange();
       return true;
     };

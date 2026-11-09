@@ -8,19 +8,23 @@
  * So the last pointerdown is the second signal, recorded here once for all.
  */
 
-let lastPointer: Element | null = null;
+// Held weakly: a strong reference kept whatever was pressed last alive after it left
+// the page, and with it the whole removed subtree (the last Close click on a session
+// column held that column's DOM; session-column-close-releases-dom.spec.ts).
+let lastPointer: WeakRef<Element> | null = null;
 let installed = false;
 
 export function installFindPointerTracking(): void {
   if (installed || typeof document === 'undefined') return;
   installed = true;
   document.addEventListener('pointerdown', (e) => {
-    lastPointer = e.target instanceof Element ? e.target : null;
+    lastPointer = e.target instanceof Element ? new WeakRef(e.target) : null;
   }, { capture: true, passive: true });
 }
 
 export function lastPointerTarget(): Element | null {
-  return lastPointer?.isConnected ? lastPointer : null;
+  const el = lastPointer?.deref();
+  return el?.isConnected ? el : null;
 }
 
 /** True on the Find chord: Cmd+F on Apple platforms, Ctrl+F elsewhere. */
