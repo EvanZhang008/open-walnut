@@ -95,7 +95,7 @@ export const OWN_LOAD_RE =
 
 /**
  * The mean runnable threads of our processes and of the rest, from a process tree
- * (`ps -axww -o pid=,ppid=,comm=`) and `ps -axM` samples; null with no sample.
+ * (`ps -axww -o pid= -o ppid= -o comm=`) and `ps -axM` samples; null with no sample.
  */
 export function parseRunnableShare(tree: string, samples: string[]): { ours: number; others: number } | null {
   if (samples.length === 0) return null
@@ -141,7 +141,7 @@ export function parseRunnableShare(tree: string, samples: string[]): { ours: num
 export function readRunnableShareSync(samples = 5): { ours: number; others: number } | null {
   if (process.platform !== 'darwin') return null
   // The tree before and after the samples, so a child our work starts or ends meanwhile counts as ours.
-  const before = run('/bin/ps', ['-axww', '-o', 'pid=,ppid=,comm='])
+  const before = run('/bin/ps', ['-axww', '-o', 'pid=', '-o', 'ppid=', '-o', 'comm='])
   if (!before) return null
   const out: string[] = []
   for (let i = 0; i < samples; i++) {
@@ -150,7 +150,7 @@ export function readRunnableShareSync(samples = 5): { ours: number; others: numb
     if (!s) return null
     out.push(s)
   }
-  const after = run('/bin/ps', ['-axww', '-o', 'pid=,ppid=,comm='])
+  const after = run('/bin/ps', ['-axww', '-o', 'pid=', '-o', 'ppid=', '-o', 'comm='])
   if (!after) return null
   return parseRunnableShare(`${before}\n${after}`, out)
 }

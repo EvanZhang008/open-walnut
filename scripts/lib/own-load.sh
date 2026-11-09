@@ -12,7 +12,7 @@
 # line (a lease booted at load 48 went to 377 on the simulator's own threads).
 # Off macOS (no `ps -M`), or when the samples cannot be read or show no thread of another
 # process, the whole load counts. Tests name the samples with OWN_LOAD_PS_FULL
-# (`ps -axww -o pid=,ppid=,comm=` output) and OWN_LOAD_PS_AXM (`ps -axM` output).
+# (`ps -axww -o pid= -o ppid= -o comm=` output) and OWN_LOAD_PS_AXM (`ps -axM` output).
 # Twin: ownLoadShare in tests/setup/cpu-idle.ts (same rule, same pattern).
 
 OWN_LOAD_RE='(^|/)([Ww]alnut[^/]*|claude|codex|bun|bunx|node|launchd_sim|Simulator|xcodebuild|XCBBuildService|swift-frontend|Playwright|chrome-headless-shell|Google Chrome for Testing|maestro|daemon-(darwin|linux)-[^/]*)$|/CoreSimulator/|/Xcode[^/]*\.app/|/ms-playwright/'
@@ -29,7 +29,7 @@ _ol_ps() {
 
 # _ol_tree: pid, ppid and path of every process, from the test file or ps.
 _ol_tree() {
-  if [ -n "${OWN_LOAD_PS_AXM:-}" ]; then cat "$OWN_LOAD_PS_FULL"; else _ol_ps -axww -o pid=,ppid=,comm=; fi
+  if [ -n "${OWN_LOAD_PS_AXM:-}" ]; then cat "$OWN_LOAD_PS_FULL"; else _ol_ps -axww -o pid= -o ppid= -o comm=; fi
 }
 
 # own_load_share: "<ours> <others>", the mean runnable threads of each, one decimal; nothing

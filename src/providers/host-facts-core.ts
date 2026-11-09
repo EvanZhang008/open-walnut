@@ -306,11 +306,11 @@ export function createHostFacts(deps: HostFactsDeps) {
       var left = end - now()
       return left > 50 ? exec('/bin/ps', args, left, BIG) : Promise.resolve(null)
     }
-    var tree1 = await ps(['-axww', '-o', 'pid=,ppid=,comm='])
+    var tree1 = await ps(['-axww', '-o', 'pid=', '-o', 'ppid=', '-o', 'comm='])
     var s1 = tree1 ? await ps(['-axM']) : null
     if (s1) await new Promise(function (r) { setTimeout(r, 300) })
     var s2 = s1 ? await ps(['-axM']) : null
-    var tree2 = s2 ? await ps(['-axww', '-o', 'pid=,ppid=,comm=']) : null
+    var tree2 = s2 ? await ps(['-axww', '-o', 'pid=', '-o', 'ppid=', '-o', 'comm=']) : null
     if (!tree1 || tree1.code !== 0 || !tree2 || tree2.code !== 0 || !s1 || s1.code !== 0 || !s2 || s2.code !== 0) return null
     var pp: Record<string, string> = {}
     var mark: Record<string, boolean> = {}
