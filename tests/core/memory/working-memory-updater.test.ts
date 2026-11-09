@@ -205,9 +205,20 @@ describe('buildWorkingMemoryUpdatePrompt', () => {
 
     const prompt = buildWorkingMemoryUpdatePrompt();
     expect(prompt).toContain('<current_working_memory>');
+    expect(prompt).toContain('</current_working_memory>');
     expect(prompt).toContain('WARNING:');
     expect(prompt).toContain('Active Focus');
+    expect(prompt).toContain(WORKING_MEMORY_FILE);
     // It asks for the whole file back — no tools are available to this call.
     expect(prompt).toContain('COMPLETE updated file');
+  });
+
+  it('3.9b: has no size warning when no section is oversized', () => {
+    fs.mkdirSync(path.dirname(WORKING_MEMORY_FILE), { recursive: true });
+    fs.writeFileSync(WORKING_MEMORY_FILE, '# Active Focus\nSmall note.\n# User Requests\nSmall.\n', 'utf-8');
+
+    const prompt = buildWorkingMemoryUpdatePrompt();
+    expect(prompt).toContain('<current_working_memory>');
+    expect(prompt).not.toContain('WARNING');
   });
 });

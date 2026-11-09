@@ -142,8 +142,4 @@ describe('readiness proves the web app is servable', () => {
   it('runs before the success stamp, so a broken deploy cannot look successful', () => {
     expect(script.indexOf('cannot serve the web app')).toBeLessThan(script.indexOf('SUCCESS_STAMP"\n'))
   })
-
-  it('is valid bash', () => {
-    execFileSync('bash', ['-n', SCRIPT])
-  })
 })

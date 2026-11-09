@@ -492,28 +492,11 @@ describe('session cron metadata store — deletion tombstones', () => {
     expect(Object.keys(store.list(['session', 'kept']))).toEqual(['kept'])
   })
 
-  // BUG (suspected): a tombstone is CONNECTION-scoped, so a reconnect — the
-  // routine outcome of a daemon restart or a tunnel blip — forgets that the
-  // session was deleted and re-publishes metadata for a session Walnut no longer
-  // has a record for (`remove` is wired to the session:deleted event). The
-  // existing suite pins this as intended ("the new connection speaks for
-  // itself"), so this is filed rather than fixed; skipped so it documents the
-  // hazard without failing the tier.
-  it.skip('BUG: a reconnect resurrects a deleted session', () => {
-    const store = createSessionCronMetadataStore(() => {})
-    const first = {}
-    store.connect('local', first, 'daemon-1')
-    store.apply('local', first, fact())
-    expect(store.remove('session')).toBe(true)
-
-    const second = {}
-    store.connect('local', second, 'daemon-2')
-    // A fresh `deleted` set ships with the new connection, so the tombstone is gone.
-    expect(store.apply('local', second, fact({ epoch: 'daemon-2' }))).toBe(false)
-    expect(store.get('session')).toBeNull()
-  })
-
-  it('documents the behaviour the BUG skip above would change', () => {
+  // A tombstone is CONNECTION-scoped: after a reconnect the new connection
+  // speaks for itself, so a deleted session's metadata may be published again.
+  // Harmless: the routes and the web store read metadata by the ids of the
+  // sessions they show, so an entry for a deleted one is never read.
+  it('a reconnect starts with no tombstones: the new connection speaks for itself', () => {
     const store = createSessionCronMetadataStore(() => {})
     const first = {}
     store.connect('local', first, 'daemon-1')

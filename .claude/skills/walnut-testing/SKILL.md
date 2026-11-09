@@ -227,7 +227,7 @@ describe.skipIf(!isLiveTest() || !hasAwsCredentials())('Bedrock live', () => {
 | Dashboard | — | — | `tests/e2e/web-app.test.ts` | — | — |
 | Config | — | — | `tests/e2e/web-app.test.ts` | — | — |
 | WS event delivery | — | — | `tests/e2e/web-app.test.ts` | `tests/e2e/browser/app.spec.ts` | — |
-| Context Inspector | — | `tests/web/routes/context-inspector.test.ts` | `tests/e2e/context-inspector.test.ts` | `tests/e2e/browser/context-inspector.spec.ts` | — |
+| Context Inspector | — | `tests/web/routes/context-inspector.test.ts` | `tests/e2e/context-inspector-conversation.test.ts` | `tests/e2e/browser/context-inspector.spec.ts` | — |
 | Task reorder (DnD) | `tests/core/task-manager.test.ts` | `tests/web/routes/tasks.test.ts` | — | — | — |
 
 ## Playwright

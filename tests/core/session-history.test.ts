@@ -58,46 +58,16 @@ function msg(id: string, role: 'user' | 'assistant', text: string, extras?: {
   };
 }
 
+// The flat-path and root cases of encodeProjectPath and the cwd / fallback / missing
+// cases of findLocalJsonlPath (re-exported here as findSessionJsonlPath) are pinned in
+// tests/core/session-file-reader.test.ts; these are the cases only this file has.
 describe('encodeProjectPath', () => {
-  it('replaces slashes with dashes', () => {
-    expect(encodeProjectPath('/Users/foo/bar')).toBe('-Users-foo-bar');
-  });
-
-  it('handles root path', () => {
-    expect(encodeProjectPath('/')).toBe('-');
-  });
-
   it('handles deeply nested path', () => {
     expect(encodeProjectPath('/a/b/c/d/e')).toBe('-a-b-c-d-e');
   });
 });
 
 describe('findSessionJsonlPath', () => {
-  it('finds file when cwd is provided', async () => {
-    const cwd = '/Users/test/project';
-    const encoded = encodeProjectPath(cwd);
-    const dir = path.join(tmpBase, 'projects', encoded);
-    await fsp.mkdir(dir, { recursive: true });
-    await fsp.writeFile(path.join(dir, 'sess-123.jsonl'), '{}');
-
-    const result = await findSessionJsonlPath('sess-123', cwd);
-    expect(result).toBe(path.join(dir, 'sess-123.jsonl'));
-  });
-
-  it('finds file via fallback search when no cwd', async () => {
-    const dir = path.join(tmpBase, 'projects', '-some-project');
-    await fsp.mkdir(dir, { recursive: true });
-    await fsp.writeFile(path.join(dir, 'sess-456.jsonl'), '{}');
-
-    const result = await findSessionJsonlPath('sess-456');
-    expect(result).toBe(path.join(dir, 'sess-456.jsonl'));
-  });
-
-  it('returns null when file does not exist', async () => {
-    const result = await findSessionJsonlPath('nonexistent');
-    expect(result).toBeNull();
-  });
-
   it('returns null when projects dir does not exist', async () => {
     const result = await findSessionJsonlPath('anything', '/no/such/path');
     expect(result).toBeNull();

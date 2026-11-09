@@ -208,19 +208,7 @@ describe('a general notification while no client is watching', () => {
     expect(expo[0].messages[0]).toMatchObject({ title: 'Walnut', body: REPLY })
   })
 
-  it('with only the APNs device left, no request goes to exp.host at all', async () => {
-    await useDevices([{ token: APNS_TOKEN, environment: 'production' }])
-    emitAgentReply()
-    await vi.waitFor(() => expect(sendApns).toHaveBeenCalledTimes(1), { timeout: 15_000, interval: 50 })
-    await settle()
-
-    expect(expoRequests()).toEqual([])
-    for (const o of outbound) {
-      expect(o.body).not.toContain(APNS_TOKEN)
-      expect(o.body).not.toContain(REPLY)
-    }
-    expect((sendApns.mock.calls[0] as unknown as [Array<{ token: string }>])[0].map((t) => t.token)).toEqual([APNS_TOKEN])
-  })
+  // An APNs-only device list sending nothing to exp.host: tests/core/push-routing.test.ts.
 })
 
 describe('letters take the same delivery, and only their own path', () => {

@@ -4,7 +4,7 @@
  * Verifies:
  * 1. Turn queue serializes concurrent main-agent turns
  * 2. Queue status is queryable
- * 3. Cron timer error propagation
+ * (applyJobResult's error bookkeeping is pinned in tests/core/cron-manager.test.ts.)
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMockConstants } from '../helpers/mock-constants.js';
@@ -100,63 +100,5 @@ describe('Agent Turn Queue', () => {
 
     await Promise.all([p1, p2, p3]);
     expect(order).toEqual([1, 2, 3]);
-  });
-});
-
-describe('Cron Timer Error Propagation', () => {
-  it('applyJobResult tracks consecutive errors on failure', async () => {
-    const { applyJobResult } = await import('../../src/core/cron/timer.js');
-
-    const now = Date.now();
-    // Use a one-shot 'at' schedule — simpler than 'every' for testing
-    const job = {
-      id: 'test-job',
-      name: 'test',
-      enabled: true,
-      schedule: { kind: 'at' as const, at: new Date(now).toISOString() },
-      sessionTarget: 'main' as const,
-      wakeMode: 'now' as const,
-      payload: { kind: 'systemEvent' as const, text: 'test' },
-      state: {
-        consecutiveErrors: 0,
-        lastRunAtMs: undefined as number | undefined,
-        nextRunAtMs: now,
-      },
-      createdAtMs: now - 120000,
-      updatedAtMs: now - 60000,
-    };
-
-    const state = {
-      store: { jobs: [job], lastPersistedAtMs: now },
-      deps: {
-        log: { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} },
-        nowMs: () => now,
-      },
-      op: Promise.resolve(),
-    } as any;
-
-    // First error — should track the error
-    applyJobResult(state, job, {
-      status: 'error',
-      error: 'Token budget exceeded',
-      startedAt: now,
-      endedAt: now + 1000,
-    });
-
-    expect(job.state.consecutiveErrors).toBe(1);
-    expect(job.state.lastStatus).toBe('error');
-    expect(job.state.lastError).toBe('Token budget exceeded');
-    // One-shot jobs are disabled after error
-    expect(job.enabled).toBe(false);
-
-    // Success resets consecutive errors
-    job.enabled = true; // Re-enable for test
-    applyJobResult(state, job, {
-      status: 'ok',
-      startedAt: now + 60000,
-      endedAt: now + 61000,
-    });
-    expect(job.state.consecutiveErrors).toBe(0);
-    expect(job.state.lastStatus).toBe('ok');
   });
 });

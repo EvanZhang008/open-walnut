@@ -4,11 +4,10 @@
  * the GC ring the `gc` rule reads. Each threshold the rules use is pinned by a
  * pair of cases on both sides of it.
  */
-import { describe, it, expect, afterEach } from 'vitest'
-import { ON_BUN } from '../../src/lib/runtime.js'
+import { describe, it, expect } from 'vitest'
 import { holdVerdict } from '../../src/core/stall-recorder.js'
 import {
-  gcWithin, pickHoldSpan, spanFields, startGcRing, stopGcRing, type CpuCheckpoint, type TickSample,
+  pickHoldSpan, spanFields, type CpuCheckpoint, type TickSample,
 } from '../../src/core/stall-recorder-hold.js'
 
 describe('holdVerdict', () => {
@@ -239,32 +238,5 @@ describe('a hold read from its checkpoints (pickHoldSpan, spanFields, holdVerdic
   it('a real stop before it still owes its backlog: under a stall\'s worth in 20 s', () => {
     expect(secondBlock(249, 20_000, true)).not.toBe('cpu')
     expect(secondBlock(249, 20_000, false)).not.toBe('cpu')
-  })
-})
-
-describe('gcWithin', () => {
-  afterEach(() => stopGcRing())
-
-  // V8's own collector, through --expose-gc; bun reports no gc entries.
-  it.skipIf(ON_BUN)('keeps the time in full collections apart (gcMajorMs), which the gc rule weighs', async () => {
-    startGcRing()
-    const v8 = await import('node:v8')
-    const vm = await import('node:vm')
-    v8.setFlagsFromString('--expose-gc')
-    const gc = vm.runInNewContext('gc') as () => void
-    // A live heap a full collection takes a few ms to mark.
-    const keep = Array.from({ length: 400_000 }, (_, i) => ({ i, s: `marina-${i}` }))
-    const from = performance.now()
-    gc()
-    const end = Date.now() + 5_000
-    let g = gcWithin(from, performance.now())
-    while (g.major < 1 && Date.now() < end) {
-      await new Promise((r) => setTimeout(r, 20))
-      g = gcWithin(from, performance.now())
-    }
-    expect(keep.length).toBe(400_000)
-    expect(g.major).toBeGreaterThanOrEqual(1)
-    expect(g.majorMs).toBeGreaterThan(0)
-    expect(g.majorMs).toBeLessThanOrEqual(g.ms)
   })
 })

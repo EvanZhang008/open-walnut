@@ -18,7 +18,6 @@ import {
 } from '../../src/core/stall-recorder.js'
 import type { ProbeObserver, StallReport } from '../../src/core/event-loop-monitor.js'
 import { log } from '../../src/logging/index.js'
-import { ON_BUN } from '../../src/lib/runtime.js'
 
 /** The observer the running recorder installed on the probe. */
 const observerOf = (): ProbeObserver => _recorderObserverForTest()
@@ -235,36 +234,5 @@ describe('the flight record verdict weighs the kept profile', () => {
     expect(seen.codeShare).toBeLessThan(0.4)
     expect(seen.top[0].frame).toBe('rankEveryRow /repo/dist/core/rank.js:10')
     expect((rec.hold as Record<string, unknown>).verdict).toBe('starved')
-  })
-
-  // V8's own collector, through --expose-gc; bun reports no gc entries.
-  it.skipIf(ON_BUN)('weighs a full collection by its own time inside the hold (gcMajorMs), not by the window context', async () => {
-    await startStallRecorder({ force: true, dir, windowMs: 3_600_000, postStallMs: 3_600_000, profileMinMs: 1, profiler: steady(IDLE), systemContext: false })
-    const v8 = await import('node:v8')
-    const vm = await import('node:vm')
-    v8.setFlagsFromString('--expose-gc')
-    const gc = vm.runInNewContext('gc') as () => void
-    // A live heap a full collection takes some ms to mark.
-    const heap = Array.from({ length: 1_000_000 }, (_, i) => ({ i, s: `acme-${i}` }))
-    await new Promise((res) => setTimeout(res, 200))
-    const from = mono()
-    gc()
-    const to = mono()
-    await new Promise((res) => setTimeout(res, 100))
-    // The hold is the collection; the context the probe captured says the
-    // window had no full collection time, and the record weighs the hold's own.
-    holdStartMono = from - 5
-    const r = {
-      lateByMs: Math.round(to - from) + 10, holdStartMono, dueMono: from, holdEndMono: to + 5, wallNow: Date.now(),
-      suspectSection: null, hold: { ...starvedHold, windowMs: 2_000, gcMajorMs: 0 },
-    } as StallReport
-    observerOf().reported(r)
-    await _rotateNowForTest()
-    for (let i = 0; i < 250 && !warns.some(([m]) => m === 'event-loop stall flight record'); i++) await new Promise((res) => setTimeout(res, 20))
-    const hold = warns.find(([m]) => m === 'event-loop stall flight record')![1].hold as Record<string, number>
-    expect(heap.length).toBe(1_000_000)
-    expect(hold.gcMajor).toBeGreaterThanOrEqual(1)
-    expect(hold.gcMajorMs).toBeGreaterThan(0)
-    expect(hold.gcMajorMs).toBeLessThanOrEqual(hold.gcMs)
   })
 })

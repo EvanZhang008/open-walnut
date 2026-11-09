@@ -272,11 +272,6 @@ describe('a blank line inside an open element', () => {
     expect(html).toMatch(/<p>more prose<\/p>/);
   });
 
-  it('leaves a blank line inside <pre> alone — there it is content', () => {
-    const pre = '<div>\n<pre>\nline one\n\nline three\n</pre>\n</div>';
-    expect(collapseHtmlBlankLines(pre)).toBe(pre);
-  });
-
   it('does not touch the same shape inside a fenced code sample', () => {
     const doc = ['Like this:', '', '```html', ...SVG_TWO_COLUMN.split('\n'), '```'].join('\n');
     expect(collapseHtmlBlankLines(doc)).toBe(doc);

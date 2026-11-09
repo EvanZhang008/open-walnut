@@ -71,12 +71,8 @@ describe('POST /api/v1/messages', () => {
   })
 })
 
+// A malformed id is refused in the route before any core code runs: tests/web/routes/messages-v1.test.ts.
 describe('GET /api/v1/requests/:id', () => {
-  it('400 on a malformed id (never reads the ledger)', async () => {
-    const res = await fetch(api('/api/v1/requests/notarq'))
-    expect(res.status).toBe(400)
-  })
-
   it('404 on a well-formed but unknown id', async () => {
     const res = await fetch(api('/api/v1/requests/rq-deadbeef0000'))
     expect(res.status).toBe(404)

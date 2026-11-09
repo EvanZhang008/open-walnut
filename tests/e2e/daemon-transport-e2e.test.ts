@@ -67,6 +67,8 @@ describe('RemoteSessionManager session lifecycle', () => {
 
     // Verify we received JSONL events
     expect(lines.length).toBeGreaterThanOrEqual(3) // init + assistant + result
+    // The whole turn ran over the direct daemon WebSocket, no SSH, and exited clean.
+    expect(exitCode).toBe(0)
 
     // Parse events
     const events = lines.map(l => { try { return JSON.parse(l) } catch { return null } }).filter(Boolean)
@@ -254,16 +256,6 @@ describe('RemoteSessionManager event tracking', () => {
 
     // tailOffset tracks accumulated bytes from events
     expect(transport.tailOffset).toBeGreaterThan(0)
-
-    await transport.cleanup()
-  })
-
-  it('outputFile is null before start() binds a sid', async () => {
-    const tmpId = `test-nofile-${Date.now()}`
-    const transport = new RemoteSessionManager(tmpId, 'test-host', fakeSshTarget, `ws://127.0.0.1:${daemon.port}`)
-
-    // Remote sessions have no local output file: nothing before start() binds a sid
-    expect(transport.outputFile).toBeNull()
 
     await transport.cleanup()
   })
@@ -577,42 +569,9 @@ describe('RemoteSessionManager connection reuse', () => {
   })
 })
 
-// ═══════════════════════════════════════════════════════════════════
-//  9. directWsUrl bypasses SSH
-// ═══════════════════════════════════════════════════════════════════
-
-describe('RemoteSessionManager source fallback', () => {
-  it('directWsUrl set → manager connects without SSH', async () => {
-    const tmpId = `test-direct-${Date.now()}`
-    const transport = new RemoteSessionManager(tmpId, 'test-host', fakeSshTarget, `ws://127.0.0.1:${daemon.port}`)
-
-    const lines: string[] = []
-    let exitCode: number | null = null
-
-    const result = await transport.start({
-      args: ['-p', '--output-format', 'stream-json', '--verbose'],
-      cwd: '/tmp',
-      message: 'direct connect test',
-      onOutput: (event) => { lines.push(event.line) },
-      onExit: (code) => { exitCode = code },
-    })
-
-    await vi.waitFor(() => {
-      expect(exitCode).not.toBeNull()
-    }, { timeout: 10_000, interval: 100 })
-
-    // Verify the session worked end-to-end via direct WebSocket
-    expect(result.pid).toBeGreaterThan(0)
-    expect(exitCode).toBe(0)
-
-    const events = lines.map(l => { try { return JSON.parse(l) } catch { return null } }).filter(Boolean)
-    const resultEvent = events.find(e => e.type === 'result')
-    expect(resultEvent).toBeDefined()
-    expect(resultEvent!.result).toContain('direct connect test')
-
-    await transport.cleanup()
-  })
-})
+// 9. directWsUrl bypasses SSH: every test here connects through the direct daemon URL; the
+// first lifecycle test pins a clean turn over it. outputFile before a sid is bound:
+// tests/providers/daemon-transport-unit.test.ts.
 
 // ═══════════════════════════════════════════════════════════════════
 //  10. Interrupt and kill

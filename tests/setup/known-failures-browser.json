@@ -1,6 +1,6 @@
 {
   "suite": "playwright: chromium, chromium-host-fixture",
-  "count": 228,
+  "count": 226,
   "failures": [
     "action-cards-and-time.spec.ts :: suggest action cards › card renders, its button runs the real op, and the receipt survives a reload",
     "action-cards-and-time.spec.ts :: time tracking › real interaction earns human time banked against the right task and kind",
@@ -90,8 +90,6 @@
     "leader-complete-open-workers.spec.ts :: the header ring completes a leader whose workers are still open, round after round",
     "link-capture.spec.ts :: the Board frame forwards its link clicks and right-clicks to the same handlers",
     "memory-frontmatter.spec.ts :: memory editor: frontmatter is not destroyed by an edit › MEMORY.md — the frontmatter never reaches the editor surface",
-    "memory-v2.spec.ts :: search for task content shows TASKS results",
-    "memory-v2.spec.ts :: search returns both task and memory sections if QMD available",
     "mid-stream-message.spec.ts :: Mid-stream user message persistence › multiple mid-stream messages all survive turn boundary",
     "mid-stream-message.spec.ts :: Mid-stream user message persistence › user message sent during streaming survives turn boundary (batch-completed)",
     "model-picker-1m.spec.ts :: ModelPicker CLI catalog › sorts mixed provider models and effort from low to high",
@@ -320,8 +318,6 @@
     "leader-complete-open-workers.spec.ts :: the header ring completes a leader whose workers are still open, round after round": "Error: PATCH /api/tasks/pw-task-rollup-b → 500 {\"error\":\"No task found matching ID prefix \\\"pw-task-rollup-b\\\"\",\"details\":\"Error: No task found matching ID prefix \\\"pw-task-rollup-b\\\"\\n    at <anonymous> (/home/runner/work/open-walnut/open-walnut/src/core/task-manager.ts:4298:15)\\n    at <anonymous>",
     "link-capture.spec.ts :: the Board frame forwards its link clicks and right-clicks to the same handlers": "Test timeout of 240000ms exceeded.",
     "memory-frontmatter.spec.ts :: memory editor: frontmatter is not destroyed by an edit › MEMORY.md — the frontmatter never reaches the editor surface": "Test timeout of 30000ms exceeded.",
-    "memory-v2.spec.ts :: search for task content shows TASKS results": "Error: expect(locator).toBeVisible() failed",
-    "memory-v2.spec.ts :: search returns both task and memory sections if QMD available": "Test timeout of 30000ms exceeded.",
     "mid-stream-message.spec.ts :: Mid-stream user message persistence › multiple mid-stream messages all survive turn boundary": "Error: expect(locator).toBeVisible() failed",
     "mid-stream-message.spec.ts :: Mid-stream user message persistence › user message sent during streaming survives turn boundary (batch-completed)": "Error: expect(locator).toBeVisible() failed",
     "model-picker-1m.spec.ts :: ModelPicker CLI catalog › sorts mixed provider models and effort from low to high": "Error: expect(received).toEqual(expected) // deep equality",

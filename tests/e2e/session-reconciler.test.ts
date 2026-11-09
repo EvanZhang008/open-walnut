@@ -233,12 +233,15 @@ afterAll(async () => {
 
 describe('Zombie session reconciliation on startup', () => {
   it('zombie sessions are marked stopped after server starts', async () => {
+    // /api/sessions reads the SQLite store the reconciler writes (sessions.json is only
+    // read once by the startup migration, so the file would show the stale seed).
     const res = await fetch(apiUrl('/api/sessions'))
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
       sessions: Array<{
         claudeSessionId: string
         process_status: string
+        last_status_change?: string
       }>
     }
 
@@ -263,6 +266,10 @@ describe('Zombie session reconciliation on startup', () => {
     const z4 = byId(ZOMBIE_TASKLESS)
     expect(z4).toBeDefined()
     expect(z4!.process_status).toBe('stopped')
+
+    // The reconciled ones carry the reconciler's last_status_change (updateSessionRecordConditionally
+    // ran); the already-stopped seed was skipped by its predicate.
+    for (const z of [z1, z3, z4]) expect(z!.last_status_change).toBeTruthy()
   })
 
   it('already-stopped session is untouched', async () => {
@@ -368,45 +375,5 @@ describe('Zombie session reconciliation on startup', () => {
 
     ws.close()
     await delay(50)
-  })
-
-  it('WS clients receive status-changed events for reconciled sessions', async () => {
-    // This test verifies that the reconciler emits bus events.
-    // Since reconciliation already happened at startup before our WS connected,
-    // we verify indirectly: the sessions are marked completed and the event
-    // infrastructure is working (proven by the session:result test above).
-    // The bus.emit call in reconcileSessions ensures any WS client connected
-    // at startup time would receive the events.
-
-    // Read persisted reconciled state via the SQLite-backed API. Session persistence
-    // moved from sessions.json to SQLite; sessions.json is only consumed once by the
-    // startup migration and is never written back, so reading the file would observe
-    // the stale seed values rather than the reconciler's output. /api/sessions is the
-    // real persistence layer (session-tracker reads/writes SQLite exclusively).
-    const res = await fetch(apiUrl('/api/sessions'))
-    expect(res.status).toBe(200)
-    const raw = (await res.json()) as {
-      sessions: Array<{
-        claudeSessionId: string
-        process_status: string
-        last_status_change?: string
-      }>
-    }
-
-    // Sessions that were reconciled (dead processes): reconciler set process_status=stopped
-    // and last_status_change, proving updateSessionRecordConditionally ran.
-    for (const id of [ZOMBIE_SESSION_IN_PROGRESS, ZOMBIE_SESSION_DEAD_PID, ZOMBIE_TASKLESS]) {
-      const s = raw.sessions.find((s) => s.claudeSessionId === id)
-      expect(s).toBeDefined()
-      expect(s!.process_status).toBe('stopped')
-      expect(s!.last_status_change).toBeTruthy()
-    }
-
-    // ZOMBIE_SESSION_TURN_COMPLETED was seeded as process_status='stopped' so the reconciler
-    // correctly skipped it (predicate: current.process_status === 'stopped' → return false).
-    // We verify the seed state is preserved unchanged — this is NOT a reconciler output.
-    const skipped = raw.sessions.find((s) => s.claudeSessionId === ZOMBIE_SESSION_TURN_COMPLETED)
-    expect(skipped).toBeDefined()
-    expect(skipped!.process_status).toBe('stopped')
   })
 })

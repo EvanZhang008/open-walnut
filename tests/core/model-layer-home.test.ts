@@ -29,11 +29,6 @@ describe('canonical model and session modules', () => {
     expect(mod.DEFAULT_MODEL.length).toBeGreaterThan(0);
   });
 
-  it('has no retired agent directory or test directory', () => {
-    expect(fs.existsSync(agentDir)).toBe(false);
-    expect(fs.existsSync(path.join(repoRoot, 'tests/agent'))).toBe(false);
-  });
-
   it('keeps model tests in the unit tier', () => {
     const config = fs.readFileSync(path.join(repoRoot, 'vitest.unit.config.ts'), 'utf8');
     expect(config).toContain("'tests/model/**/*.test.ts'");

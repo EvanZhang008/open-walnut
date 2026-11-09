@@ -3368,7 +3368,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // injected (a loaded skill) starts one the same way. Index into historyParts
   // of the fold's first part, or -1.
   // Context the CLI injected (a loaded skill, a re-invocation note): a folded
-  // row of its own, so it folds with the steps beside it (process-fold.ts).
+  // row of its own, so it folds with the steps beside it.
   const contextKindOf = (part: HistoryPart): 'skill' | 'context' | null => {
     if (part.kind !== 'msg' || part.globalIndex === forkBoundaryIndex || gapAt.has(part.globalIndex)) return null;
     return injectedContextKind(part.m);

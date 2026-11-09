@@ -1,120 +1,15 @@
 /**
- * Playwright browser tests for Memory v2 search and memory page.
+ * Playwright browser tests for the memory page and the notification panel.
  *
  * Tests cover:
- * 1. Search for known task content via keyword
- * 2. Search for known memory content (QMD-dependent — soft assertion)
- * 3. Search returns both tasks and memory (QMD-dependent — soft assertion)
- * 4. Notification panel has no Embedding/Search Index card
- * 5. Memory page shows seeded files in tree
+ * 1. Notification panel has no Embedding/Search Index card
+ * 2. Memory page shows seeded files in tree
  *
- * Test data is seeded in test-server.ts — tasks.json and memory/ directory.
- * QMD semantic search may not be available in ephemeral mode (no embedding model),
- * so memory search assertions are made conditional where needed.
+ * Test data is seeded in test-server.ts: the memory/ directory.
  */
 import { test, expect } from '@playwright/test'
 
-const API = 'http://localhost:3457'
-
-// ── 1. Search for known task content ──
-
-test('search for task content shows TASKS results', async ({ page }) => {
-  await page.goto('/search')
-  await page.waitForLoadState('networkidle')
-
-  // Type a query that matches the seeded task title "Playwright test task"
-  const searchInput = page.locator('.search-bar-input')
-  await expect(searchInput).toBeVisible({ timeout: 5000 })
-  await searchInput.fill('Playwright test task')
-
-  // Wait for search results to appear (debounce is 300ms)
-  const taskGroup = page.locator('.search-group', { hasText: 'Tasks' })
-  await expect(taskGroup).toBeVisible({ timeout: 10000 })
-
-  // Verify the group title includes count
-  const groupTitle = taskGroup.locator('.search-group-title')
-  await expect(groupTitle).toContainText('Tasks')
-
-  // Verify at least one task result item exists
-  const taskItem = taskGroup.locator('.search-result-item')
-  await expect(taskItem.first()).toBeVisible()
-
-  // Verify the matched task title is shown
-  await expect(taskGroup).toContainText('Playwright test task')
-})
-
-// ── 2. Search for known memory content ──
-
-test('search for memory content shows MEMORY results if QMD available', async ({ page }) => {
-  // First check if memory search returns results via API
-  const apiRes = await fetch(`${API}/api/search?q=search+architecture&types=memory`)
-  const apiBody = await apiRes.json() as { results: unknown[] }
-  const hasMemoryResults = apiBody.results.length > 0
-
-  if (!hasMemoryResults) {
-    // QMD not available in ephemeral mode — skip gracefully
-    test.skip(true, 'QMD memory search not available in ephemeral test server (no embedding model)')
-    return
-  }
-
-  await page.goto('/search')
-  await page.waitForLoadState('networkidle')
-
-  const searchInput = page.locator('.search-bar-input')
-  await searchInput.fill('search architecture')
-
-  // Wait for memory results
-  const memoryGroup = page.locator('.search-group', { hasText: 'Memory' })
-  await expect(memoryGroup).toBeVisible({ timeout: 10000 })
-
-  // Verify the group title
-  const groupTitle = memoryGroup.locator('.search-group-title')
-  await expect(groupTitle).toContainText('Memory')
-
-  // Verify at least one memory result item with the "Memory" badge
-  const memoryBadge = memoryGroup.locator('.badge', { hasText: 'Memory' })
-  await expect(memoryBadge.first()).toBeVisible()
-})
-
-// ── 3. Search returns both tasks and memory ──
-
-test('search returns both task and memory sections if QMD available', async ({ page }) => {
-  // Check if memory search works at all
-  const apiRes = await fetch(`${API}/api/search?q=walnut`)
-  const apiBody = await apiRes.json() as { results: Array<{ type: string }> }
-  const hasTaskResults = apiBody.results.some(r => r.type === 'task')
-  const hasMemoryResults = apiBody.results.some(r => r.type === 'memory')
-
-  if (!hasTaskResults) {
-    test.skip(true, 'No task results for "walnut" — unexpected seeding issue')
-    return
-  }
-
-  await page.goto('/search')
-  await page.waitForLoadState('networkidle')
-
-  // "walnut" should match tasks (seeded project: "Walnut") and potentially memory
-  const searchInput = page.locator('.search-bar-input')
-  await searchInput.fill('walnut')
-
-  // Tasks section should always appear (BM25 keyword match)
-  const taskGroup = page.locator('.search-group', { hasText: 'Tasks' })
-  await expect(taskGroup).toBeVisible({ timeout: 10000 })
-
-  if (hasMemoryResults) {
-    // Memory section should also appear
-    const memoryGroup = page.locator('.search-group', { hasText: 'Memory' })
-    await expect(memoryGroup).toBeVisible({ timeout: 10000 })
-  }
-
-  // Verify search results container exists with at least one result
-  const searchResults = page.locator('.search-results')
-  await expect(searchResults).toBeVisible()
-  const resultItems = searchResults.locator('.search-result-item')
-  expect(await resultItems.count()).toBeGreaterThan(0)
-})
-
-// ── 4. Notification panel has no Embedding/Search Index card ──
+// ── 1. Notification panel has no Embedding/Search Index card ──
 
 test('notification panel does not contain Embedding or Search Index card', async ({ page }) => {
   await page.goto('/')
@@ -150,7 +45,7 @@ test('notification panel does not contain Embedding or Search Index card', async
   await expect(panel).toBeHidden({ timeout: 3000 })
 })
 
-// ── 5. Memory page shows seeded files in tree ──
+// ── 2. Memory page shows seeded files in tree ──
 
 test('memory page shows seeded files in tree', async ({ page }) => {
   await page.goto('/memory')

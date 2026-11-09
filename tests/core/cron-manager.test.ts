@@ -845,6 +845,29 @@ describe('applyJobResult', () => {
     expect(job.state.nextRunAtMs).toBeUndefined();
   });
 
+  it('disables a one-shot at job after an error too', () => {
+    const state = createMockState();
+    const now = Date.now();
+    const job: CronJob = {
+      id: 'at-error-test',
+      name: 'At Error Test',
+      enabled: true,
+      createdAtMs: now - 120_000,
+      updatedAtMs: now - 60_000,
+      schedule: { kind: 'at', at: new Date(now).toISOString() },
+      sessionTarget: 'main',
+      wakeMode: 'now',
+      payload: { kind: 'systemEvent', text: 'once' },
+      state: { consecutiveErrors: 0 },
+    };
+
+    applyJobResult(state, job, { status: 'error', error: 'Token budget exceeded', startedAt: now, endedAt: now + 1000 });
+
+    expect(job.state.consecutiveErrors).toBe(1);
+    expect(job.state.lastError).toBe('Token budget exceeded');
+    expect(job.enabled).toBe(false);
+  });
+
   it('returns true (shouldDelete) for at job with deleteAfterRun=true and ok status', () => {
     const state = createMockState();
     const job: CronJob = {

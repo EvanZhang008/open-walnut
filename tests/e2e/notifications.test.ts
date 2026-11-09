@@ -139,13 +139,8 @@ afterAll(async () => {
   }
 });
 
+// The empty feed of a fresh store is pinned in tests/web/routes/notifications.test.ts.
 describe('Notification feed API', () => {
-  it('serves an empty feed on a fresh server', async () => {
-    const body = await getFeed();
-    expect(body.feed).toEqual([]);
-    expect(body.unreadCount).toBe(0);
-  });
-
   it('persists a permission request into the feed with the detail the UI renders', async () => {
     bus.emit(EventNames.SESSION_PERMISSION_REQUEST, {
       sessionId: 'sess-e2e-1',

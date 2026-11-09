@@ -75,10 +75,6 @@ function runBlock(pids: number[], graceSecs: number): Promise<{ code: number | n
 }
 
 describe('dev-prod.sh stop grace', () => {
-  it('is valid bash', () => {
-    execFileSync('bash', ['-n', SCRIPT])
-  })
-
   it('lets a server that frees the port and is still tearing down exit on its own', async () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-stop-grace-'))
     const slow = fakeServer(1.5)

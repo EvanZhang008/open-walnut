@@ -145,13 +145,9 @@ describe('held sends name the host', () => {
     expectHonest(res.body.error.message)
   })
 
-  it('a relay that failed past the companion says so in the host\'s name', async () => {
-    bridgeRequestMock.mockResolvedValue({ ok: false, error: 'session.message: primary server timed out' })
-    const res = await post(SID, { text: 'x', messageId: 'qm-mobile-hop000000002' })
-    expect(res.status).toBe(503)
-    expect(res.body.error.message).toContain(LABEL)
-    expect(directSends(SID)).toEqual([])
-  })
+  // A relay that failed past the companion, worded in the host's name: the 503 sentences
+  // of tests/web/routes/session-stream-v1-cloud-hop-r3.test.ts ("relay error %j"); that it
+  // sends nothing direct: session-stream-v1-cloud-hop-r2.test.ts section 3b.
 })
 
 describe('order: a send behind a held one is held too', () => {

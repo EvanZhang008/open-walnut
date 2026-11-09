@@ -17,13 +17,10 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../.
 const SWIFT = path.join(REPO, 'ios-native/Walnut/Core/TimeSampleQueue.swift');
 
 describe('iOS ↔ server batch cap', () => {
-  it('TimeSampleQueue.maxBatch equals MAX_SAMPLES_PER_REQUEST', (ctx) => {
-    if (!fs.existsSync(SWIFT)) {
-      // The client half may not have landed yet; this becomes a real assertion the
-      // moment it does. Never silently pass on a file that exists but changed shape.
-      ctx.skip();
-      return;
-    }
+  it('TimeSampleQueue.maxBatch equals MAX_SAMPLES_PER_REQUEST', () => {
+    // The client half landed with this test (2026-08-30): a move or rename must
+    // fail here, never turn the ratchet off.
+    expect(fs.existsSync(SWIFT), `${SWIFT} is gone: point this ratchet at the queue's new file`).toBe(true);
     const source = fs.readFileSync(SWIFT, 'utf-8');
     const match = /static\s+let\s+maxBatch\s*=\s*(\d+)/.exec(source);
     expect(match, `no \`static let maxBatch = <n>\` in ${SWIFT}`).not.toBeNull();

@@ -257,13 +257,7 @@ describe('renewing', () => {
     expect(cookies(again).get('walnut_renews_s')!.value).toBe('1')
   })
 
-  it('within its first minute, a second tab gets the same pair', async () => {
-    const s = await pair()
-    const a = await renew({ Cookie: `${RC}=${encodeURIComponent(s.refresh)}` })
-    const b = await renew({ Cookie: `${RC}=${encodeURIComponent(s.refresh)}` })
-    expect(b.status).toBe(200)
-    expect(await b.json()).toEqual(await a.json())
-  })
+  // A second tab within the first minute getting the same pair: tests/core/browser-sign-in.test.ts.
 
   it('a refresh token nothing here knows is refused and its cookie cleared; nothing at all is 204', async () => {
     const bad = await renew({ Cookie: `${RC}=made-up` })

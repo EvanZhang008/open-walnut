@@ -327,11 +327,8 @@ describe('4. a held answer names the hop it waits on', () => {
     expect((await status('qm-mobile-hop000000001')).body).toMatchObject({ state: 'held', ...mac })
   })
 
-  it('a send held because the host is off the companion names the host', async () => {
-    bridgeRequestMock.mockRejectedValue(new BridgeOfflineError('devbox'))
-    const res = await post({ text: 'off', messageId: 'qm-mobile-hop000000002' })
-    expect(res.body).toMatchObject({ queued: true, waitingFor: 'devbox', waitingForName: LABEL, heldNote: `Can't reach ${LABEL} right now.` })
-  })
+  // A send held because the host is off the companion names the host:
+  // tests/web/routes/session-stream-v1-cloud-hop.test.ts "the host off the companion".
 })
 
 describe('5. sentences', () => {

@@ -22,7 +22,6 @@ vi.mock('../../src/constants.js', () => createMockConstants('repo-e2e'))
 
 import { WALNUT_HOME, REPOSITORIES_DIR } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
-import { findRepoByPath } from '../../src/core/repository-matcher.js'
 
 // ── Helpers ──
 
@@ -260,94 +259,6 @@ describe('YAML parsing edge cases', () => {
   })
 })
 
-// ── CWD→Repo Matching ──
-
-describe('CWD→repo matching via findRepoByPath', () => {
-  const basePath = `/tmp/repo-e2e-match-${process.pid}`
-
-  beforeAll(async () => {
-    await fs.mkdir(path.join(basePath, 'src', 'core'), { recursive: true })
-    await fs.mkdir(path.join(basePath, 'packages', 'child'), { recursive: true })
-    await fs.mkdir(REPOSITORIES_DIR, { recursive: true })
-
-    // Create parent repo
-    await fs.writeFile(
-      path.join(REPOSITORIES_DIR, 'parent.yaml'),
-      [
-        'name: Parent Monorepo',
-        'description: Root-level repo',
-        'tech_stack: [TypeScript]',
-        'hosts:',
-        '  local:',
-        `    path: ${basePath}`,
-      ].join('\n'),
-      'utf-8',
-    )
-
-    // Create child repo (nested path)
-    await fs.writeFile(
-      path.join(REPOSITORIES_DIR, 'child.yaml'),
-      [
-        'name: Child Package',
-        'description: Nested package',
-        'architecture_notes: |',
-        '  This is a child package inside the monorepo.',
-        'hosts:',
-        '  local:',
-        `    path: ${path.join(basePath, 'packages', 'child')}`,
-      ].join('\n'),
-      'utf-8',
-    )
-  })
-
-  afterAll(async () => {
-    await fs.rm(basePath, { recursive: true, force: true })
-  })
-
-  it('matches exact path', () => {
-    const result = findRepoByPath(basePath)
-    expect(result).toBeDefined()
-    expect(result!.name).toBe('Parent Monorepo')
-  })
-
-  it('matches subdirectory of host path', () => {
-    const result = findRepoByPath(path.join(basePath, 'src', 'core'))
-    expect(result).toBeDefined()
-    expect(result!.name).toBe('Parent Monorepo')
-  })
-
-  it('picks longest prefix for nested repos', () => {
-    const childCwd = path.join(basePath, 'packages', 'child', 'src')
-    const result = findRepoByPath(childCwd)
-    expect(result).toBeDefined()
-    expect(result!.name).toBe('Child Package')
-    expect(result!.slug).toBe('child')
-  })
-
-  it('returns parent for non-child subdirectory', () => {
-    const result = findRepoByPath(path.join(basePath, 'docs'))
-    expect(result).toBeDefined()
-    expect(result!.name).toBe('Parent Monorepo')
-  })
-
-  it('returns undefined for unrelated path', () => {
-    const result = findRepoByPath('/tmp/completely-unrelated')
-    expect(result).toBeUndefined()
-  })
-
-  it('does not match prefix of similar directory name', () => {
-    // /tmp/repo-e2e-match-XYZ should NOT match /tmp/repo-e2e-match-XYZ-extra
-    const result = findRepoByPath(basePath + '-extra')
-    expect(result).toBeUndefined()
-  })
-
-  it('extracts architecture_notes from matched repo', () => {
-    const result = findRepoByPath(path.join(basePath, 'packages', 'child'))
-    expect(result).toBeDefined()
-    expect(result!.architecture_notes).toContain('child package')
-  })
-})
-
 // ── Session Context Injection ──
 
 describe('Session context injection', () => {
@@ -386,8 +297,7 @@ describe('Session context injection', () => {
   // Walnut stopped injecting repository (or any task/memory) context into a
   // session's system prompt on 2026-06-18; since 0a49aad2 the prompt is a short
   // identity note about Walnut and the task, and the cwd plays no part in it.
-  // Repo matching itself (findRepoByPath, tested above) still works; it's just
-  // not fed into the system prompt. These tests pin that contract.
+  // These tests pin that contract.
   it('does not inject repo context even when CWD matches a configured repo', async () => {
     const { buildSessionContext } = await import('../../src/core/sessions/session-context.js')
 

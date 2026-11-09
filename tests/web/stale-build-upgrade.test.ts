@@ -187,6 +187,23 @@ describe('stale-build upgrade', () => {
     h.teardown();
   });
 
+  it('stays armed after holding back for unsaved text: once saved, the next hide reloads', async () => {
+    h.state.hidden = true;
+    h.state.unsaved = true;
+    await h.reconnectAndSettle();
+    h.timers.fire(HIDDEN_GRACE_MS);
+    expect(h.reload).not.toHaveBeenCalled();
+    // The user comes back, saves, and leaves again.
+    h.state.hidden = false;
+    h.visibilityChanged();
+    h.state.unsaved = false;
+    h.state.hidden = true;
+    h.visibilityChanged();
+    h.timers.fire(HIDDEN_GRACE_MS);
+    expect(h.reload).toHaveBeenCalledTimes(1);
+    h.teardown();
+  });
+
   it('does nothing when the bundles match', async () => {
     h.state.served = 'OLD';
     h.state.hidden = true;

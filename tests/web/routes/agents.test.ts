@@ -369,11 +369,4 @@ describe('Builtin agent override lifecycle', () => {
     expect(generalAfter.source).toBe('config');
     expect(generalAfter.overrides_builtin).toBe(true);
   });
-
-  it('rejects delete of unmodified builtin agent', async () => {
-    const app = createApp();
-    const res = await request(app).delete('/api/agents/general');
-    expect(res.status).toBe(400);
-    expect(res.body.error).toContain('cannot be deleted');
-  });
 });

@@ -104,10 +104,18 @@ describe('GET /api/context', () => {
     const res = await request(createApp()).get('/api/context');
 
     const { sections, totalTokens } = res.body;
+    expect(totalTokens).toBeGreaterThan(0);
     expect(totalTokens).toBe(sections.roleAndRules.tokens);
-    // Substrings of the same prompt, so each is smaller than the whole.
+    // Substrings of the same prompt, so each is part of the whole, not an addition.
+    expect(sections.skills.tokens).toBeGreaterThan(0);
+    expect(sections.globalMemory.tokens).toBeGreaterThan(0);
     expect(sections.skills.tokens).toBeLessThan(totalTokens);
     expect(sections.globalMemory.tokens).toBeLessThan(totalTokens);
+
+    // With no session yet, a second ask describes the same next spawn.
+    const again = await request(createApp()).get('/api/context');
+    expect(again.body.engine).toBe(res.body.engine);
+    expect(again.body.totalTokens).toBe(totalTokens);
   });
 
   it('modelConfig describes the session, and costs no tokens', async () => {

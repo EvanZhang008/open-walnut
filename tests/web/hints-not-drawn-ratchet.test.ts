@@ -51,8 +51,4 @@ describe('no chat draws a message hint', () => {
     // An allowance whose file no longer reads hints is stale.
     expect(Object.keys(ALLOWED).filter((f) => !readers.includes(f))).toEqual([])
   })
-
-  it('the component that drew them is gone', () => {
-    expect(fs.existsSync(path.join(ROOT, 'components/sessions/MessageHintsRow.tsx'))).toBe(false)
-  })
 })

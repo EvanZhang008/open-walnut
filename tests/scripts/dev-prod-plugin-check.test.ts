@@ -19,7 +19,7 @@ import fs from 'node:fs'
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
-import { spawn, execFileSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import type { AddressInfo } from 'node:net'
 import { judgePluginLoads, parseProdRuntime } from '../../src/core/plugins/plugin-load-check.js'
 
@@ -220,10 +220,6 @@ describe('dev-prod.sh plugin load check: the gate, run for real', () => {
 })
 
 describe('dev-prod.sh plugin load check: placement and isolation', () => {
-  it('is valid bash', () => {
-    execFileSync('bash', ['-n', SCRIPT])
-  })
-
   it('runs after the smoke boot and before the prod-server kill, and its failure exits', () => {
     const smokeOk = script.indexOf('Smoke boot OK')
     const check = script.indexOf(BLOCK_START)

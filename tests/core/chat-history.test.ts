@@ -1127,7 +1127,7 @@ describe('compact (v2 behavior)', () => {
     }
   });
 
-  it('preserves kept (non-compacted) entries intact — no tool payload truncation', async () => {
+  it('slims the tool payloads of kept (non-compacted) entries to 500 chars and a [truncated] marker', async () => {
     const longResult = 'z'.repeat(1000);
 
     const apiMsgs: MessageParam[] = [];
@@ -1170,8 +1170,8 @@ describe('compact (v2 behavior)', () => {
       for (const block of blocks) {
         if (block.type === 'tool_result' && typeof block.content === 'string') {
           // Kept entries are slimmed (SLIM_TOOL_RESULT_MAX=500) to prevent token bloat,
-          // so content over 500 chars gets truncated with "… [truncated]" suffix.
-          expect(block.content.length).toBeLessThanOrEqual(1000);
+          // so content over 500 chars gets truncated with "… [truncated]" suffix: at most 514.
+          expect(block.content.length).toBeLessThanOrEqual(514);
           expect(block.content).toContain('[truncated]');
         }
       }
@@ -1238,5 +1238,65 @@ describe('compact (v2 behavior)', () => {
         }
       }
     }
+  });
+
+  it('a stored history whose live part starts with an orphan tool_result is repaired on read', async () => {
+    // An old compaction bug left a tool_result whose tool_use was compacted away.
+    const corruptedStore = {
+      version: 2,
+      lastUpdated: new Date().toISOString(),
+      compactionCount: 1,
+      compactionSummary: 'Old summary',
+      entries: [
+        { tag: 'ai', role: 'user', content: 'old message', timestamp: '2025-01-01T00:00:00Z', compacted: true },
+        {
+          tag: 'ai', role: 'assistant', timestamp: '2025-01-01T00:00:01Z', compacted: true,
+          content: [{ type: 'text', text: 'old reply' }, { type: 'tool_use', id: 'tu_old', name: 'task_search', input: {} }],
+        },
+        { tag: 'ai', role: 'user', timestamp: '2025-01-01T00:00:02Z', content: [{ type: 'tool_result', tool_use_id: 'tu_old', content: 'stale result' }] },
+        { tag: 'ai', role: 'user', content: 'clean message', timestamp: '2025-01-01T00:01:00Z' },
+        { tag: 'ai', role: 'assistant', content: 'clean reply', timestamp: '2025-01-01T00:01:01Z' },
+      ],
+    };
+    fss.writeFileSync(CHAT_HISTORY_FILE(), JSON.stringify(corruptedStore));
+
+    const ctx = await getModelContext();
+    expect(ctx).toHaveLength(2);
+    expect((ctx[0] as { content: string }).content).toBe('clean message');
+    expect((ctx[1] as { content: string }).content).toBe('clean reply');
+
+    // The orphan is kept in the store, marked compacted.
+    const entries = (await getDisplayEntries()).messages;
+    const compactedToolResults = entries.filter(
+      e => e.compacted && Array.isArray(e.content)
+        && (e.content as Array<{ type: string }>).some(b => b.type === 'tool_result'),
+    );
+    expect(compactedToolResults.length).toBeGreaterThan(0);
+  });
+
+  it('the model context after compaction alternates user and assistant, user first and assistant last', async () => {
+    const msgs: MessageParam[] = [];
+    for (let i = 0; i < 14; i++) {
+      if (i % 3 === 0) {
+        msgs.push(
+          { role: 'user', content: `tool turn ${i}` },
+          { role: 'assistant', content: [{ type: 'text', text: 'Let me shell_exec' }, { type: 'tool_use', id: `tu_alt_${i}`, name: 'shell_exec', input: { command: `ls ${i}` } }] } as MessageParam,
+          { role: 'user', content: [{ type: 'tool_result', tool_use_id: `tu_alt_${i}`, content: `file_${i}.txt` }] } as MessageParam,
+          { role: 'assistant', content: [{ type: 'text', text: `Found file ${i}` }] } as MessageParam,
+        );
+      } else {
+        msgs.push({ role: 'user', content: `msg ${i}` }, { role: 'assistant', content: `reply ${i}` });
+      }
+    }
+    await addAIMessages(msgs);
+    await compact(async () => 'Alternation test');
+
+    const ctx = await getModelContext();
+    expect(ctx.length).toBeGreaterThan(0);
+    for (let i = 1; i < ctx.length; i++) {
+      expect((ctx[i] as { role: string }).role).not.toBe((ctx[i - 1] as { role: string }).role);
+    }
+    expect((ctx[0] as { role: string }).role).toBe('user');
+    expect((ctx[ctx.length - 1] as { role: string }).role).toBe('assistant');
   });
 });

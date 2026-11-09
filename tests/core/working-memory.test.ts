@@ -21,6 +21,7 @@ import {
   truncateWorkingMemoryForCompact,
   snapshotWorkingMemory,
   WORKING_MEMORY_TEMPLATE,
+  MAX_SECTION_TOKENS,
 } from '../../src/core/working-memory.js';
 
 /**
@@ -107,6 +108,15 @@ describe('getWorkingMemorySectionSizes', () => {
     expect(sizes.get('Active Focus')!).toBeGreaterThan(0);
     expect(sizes.get('User Requests')!).toBeGreaterThan(0);
   });
+
+  it('2.8b: counts every one of the seven sections and measures an oversized one past the cap', () => {
+    const big = 'The quick brown fox jumps over the lazy dog. '.repeat(500);
+    const content = `# Active Focus\n${big}\n# User Requests\nSmall note.\n# Decisions & Rationale\nAnother small note.\n# Struggles & Breakthroughs\nSmall.\n# Session Status\nSmall.\n# Open Threads\nSmall.\n# Learnings\nSmall.`;
+    const sizes = getWorkingMemorySectionSizes(content);
+    expect(sizes.size).toBe(7);
+    expect(sizes.get('Active Focus')!).toBeGreaterThan(MAX_SECTION_TOKENS);
+    expect(sizes.get('User Requests')!).toBeLessThan(MAX_SECTION_TOKENS);
+  });
 });
 
 describe('truncateWorkingMemoryForCompact', () => {
@@ -130,6 +140,15 @@ describe('truncateWorkingMemoryForCompact', () => {
     expect(result).toContain('[...truncated]');
     expect(result).toContain('# Active Focus');
     expect(result).toContain('# User Requests');
+  });
+
+  it('2.10b: keeps all seven headers when one section is cut under a total budget', () => {
+    const big = 'The quick brown fox jumps over the lazy dog and runs around the park. '.repeat(500);
+    const headers = ['# User Requests', '# Decisions & Rationale', '# Struggles & Breakthroughs', '# Session Status', '# Open Threads', '# Learnings'];
+    const content = [`# Active Focus\n${big}`, ...headers.map((h) => `${h}\nSmall.`)].join('\n');
+    const result = truncateWorkingMemoryForCompact(content, 8000);
+    expect(result).toContain('[...truncated]');
+    for (const h of ['# Active Focus', ...headers]) expect(result).toContain(h);
   });
 
   it('2.11: enforces total budget', () => {
@@ -158,6 +177,7 @@ describe('snapshotWorkingMemory', () => {
 
     const filepath = snapshotWorkingMemory();
     expect(filepath).not.toBeNull();
+    expect(filepath!.startsWith(COMPACTION_DIR)).toBe(true);
     expect(fs.existsSync(filepath!)).toBe(true);
 
     const content = fs.readFileSync(filepath!, 'utf-8');

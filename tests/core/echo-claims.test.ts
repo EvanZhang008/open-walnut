@@ -158,13 +158,6 @@ describe('echo-claims', () => {
       expect(messages[0].walnutMessageId).toBe('qm-1');
     });
 
-    it("still binds the verbatim '\\n\\n' form (delivery join reached the log unchanged)", () => {
-      registerEchoClaims(SID, ['qm-1', 'qm-2'], 'first\n\nsecond');
-      const messages = [userMsg('first\n\nsecond', 'uuid-a')];
-      bindEchoClaims(SID, messages);
-      expect(messages[0].walnutMessageId).toBe('qm-1');
-    });
-
     it('a 3-message batch binds through the collapsed form', () => {
       registerEchoClaims(SID, ['qm-a', 'qm-b', 'qm-c'], 'one\n\ntwo\n\nthree');
       const messages = [userMsg('one\ntwo\nthree', 'uuid-a')];

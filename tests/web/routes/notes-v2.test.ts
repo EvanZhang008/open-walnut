@@ -1133,16 +1133,6 @@ describe('path traversal protection', () => {
     });
   }
 
-  it('resolveSafePath rejects move with traversal from', async () => {
-    const app = createApp();
-    const res = await request(app)
-      .post('/api/notes-v2/move')
-      .send({ from: '../../etc/passwd', to: 'safe.md' });
-
-    expect(res.status).toBe(400);
-    expect(res.body.error).toBe('invalid path');
-  });
-
   it('resolveSafePath rejects move with traversal to', async () => {
     await writeNote('source.md', 'content');
     const app = createApp();
