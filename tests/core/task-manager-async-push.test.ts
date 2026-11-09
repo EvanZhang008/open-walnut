@@ -123,11 +123,15 @@ describe('updateTask asyncPush', () => {
 
   it('does not reject the caller when the background push fails', async () => {
     const id = await seedPluginTask();
+    const before = pushCalls;
     const { task } = await updateTask(id, { title: 'still ok' }, { source: 'api', asyncPush: true });
     expect(task.title).toBe('still ok');
-    // Fail the push after the caller already returned — must not surface as unhandled.
+    // Fail the push after the caller already returned — must not surface as unhandled. Only once
+    // the push waits on the gate: a gate rejected before anyone awaits it is an unhandled
+    // rejection of the test's own (2026-11-09, a loaded land run).
+    await vi.waitFor(() => expect(pushCalls).toBeGreaterThan(before));
     pushGate.reject(new Error('remote exploded'));
-    await new Promise((r) => setTimeout(r, 10));
+    await settleBackgroundPushes();
   });
 
   it('default (no asyncPush) still awaits the push and propagates failure', async () => {
