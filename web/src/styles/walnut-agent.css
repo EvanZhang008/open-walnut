@@ -594,9 +594,12 @@
    rows with a red dot only for what needs the person, Main with its own line, the host's rows
    in the foot. ── */
 .ask-walnut-drawer.is-panel { width: min(318px, 82%); }
-.ask-walnut-drawer.is-panel .ask-walnut-drawer-head { padding: 12px 10px 10px 12px; gap: 8px; }
-.ask-walnut-drawer.is-panel .ask-walnut-drawer-title { color: var(--fg); font-size: 16px; }
-.ask-walnut-drawer-new.is-head { width: auto; padding: 5px 12px; border-radius: 8px; font-size: 12.5px; flex: none; }
+/* "Quick question · Mentor" and "+ New quick question" do not both fit a 352 px panel: the title
+   never wraps inside itself (it went to four centred lines, its words no longer where the list's
+   start), and New moves under it, still on the right. */
+.ask-walnut-drawer.is-panel .ask-walnut-drawer-head { padding: 12px 10px 10px 12px; gap: 8px; flex-wrap: wrap; row-gap: 6px; }
+.ask-walnut-drawer.is-panel .ask-walnut-drawer-title { color: var(--fg); font-size: 16px; white-space: nowrap; text-align: left; }
+.ask-walnut-drawer-new.is-head { width: auto; padding: 5px 12px; border-radius: 8px; font-size: 12.5px; flex: none; margin-left: auto; white-space: nowrap; }
 .ask-walnut-drawer.is-panel .ask-walnut-drawer-search { height: 34px; margin: 0 10px 10px; }
 .ask-walnut-drawer.is-panel .ask-walnut-drawer-list { padding: 0; }
 /* The list's words start where its head and labels do (review round 4, #7: 8 px, left of them). */
