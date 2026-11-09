@@ -5,7 +5,7 @@
  *
  *   - a task that is done (COMPLETE, or gone) has its tabs closed at once;
  *   - a task whose tabs no agent used for IDLE_MS has them closed, unless it waits for the person
- *     (NEED_ACTION: it may have left a page for them to look at);
+ *     (its status reads Needs you: it may have left a page for them to look at);
  *   - a tab the person has (Take over), watches, or looks at in the agent window, the agent waits
  *     on (a sign-in ask), or a command is on its way to, is never closed;
  *   - a tab of the person's own (handed over, or taken from their window) is given back, never
@@ -24,8 +24,8 @@ type Hub = typeof import('../../core/browser-control/hub.js')
 
 export interface TidyDeps {
   hub: () => Promise<Hub>
-  /** The task's phase, or undefined when there is no such task. */
-  phaseOf: (taskId: string) => Promise<string | undefined>
+  /** Whether the task is finished, and whether its status asks the person (Needs you, To read); undefined when there is no such task. */
+  taskOf: (taskId: string) => Promise<{ done: boolean; needsYou: boolean } | undefined>
   /** What the browser may be told (the site rules); `close` itself checks no page. */
   allow: () => Promise<import('../../core/browser-control/hub.js').WireCommand['allow']>
   /** An open sign-in ask on the tab (the agent waits for the person there). */
@@ -36,17 +36,17 @@ export interface TidyDeps {
 export async function tidyTabs(d: TidyDeps, now = Date.now()): Promise<Array<{ device: string; tab: number; owner: string; why: 'done' | 'idle' }>> {
   const h = await d.hub()
   const live = new Set(h.connected(now).map((c) => c.device))
-  const phases = new Map<string, string | undefined>()
+  const tasks = new Map<string, { done: boolean; needsYou: boolean } | undefined | 'unknown'>()
   const out: Array<{ device: string; tab: number; owner: string; why: 'done' | 'idle' }> = []
   for (const t of h.heldTabs()) {
     if (!t.owner.startsWith('task:') || !live.has(t.device)) continue
     if (t.driving || d.asksOn(t.device, t.tab, t.owner) || h.tabBusy(t.device, t.tab)) continue
     const taskId = t.owner.slice(5)
-    if (!phases.has(taskId)) phases.set(taskId, await d.phaseOf(taskId).catch(() => 'unknown'))
-    const phase = phases.get(taskId)
-    if (phase === 'unknown') continue
-    const why = phase === undefined || phase === 'COMPLETE' ? 'done' as const
-      : phase !== 'NEED_ACTION' && now - t.usedAt > IDLE_MS ? 'idle' as const : undefined
+    if (!tasks.has(taskId)) tasks.set(taskId, await d.taskOf(taskId).catch(() => 'unknown' as const))
+    const task = tasks.get(taskId)
+    if (task === 'unknown') continue
+    const why = task === undefined || task.done ? 'done' as const
+      : !task.needsYou && now - t.usedAt > IDLE_MS ? 'idle' as const : undefined
     if (!why) continue
     const gen = h.tabGen(t.device, t.tab)
     // Its end reads "tidied" even when the browser's next report of its tabs comes before the answer.

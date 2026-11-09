@@ -5,7 +5,7 @@
  * for human".
  *
  * Guard: after a pass, every tab still held is a live task's, or one that waits for the person
- * (Take over, an open sign-in ask, a task in NEED_ACTION). A tab of a finished task never stays.
+ * (Take over, an open sign-in ask, a task whose status reads Needs you). A tab of a finished task never stays.
  */
 import { describe, expect, it } from 'vitest'
 import { IDLE_MS, tidyTabs, type TidyDeps } from '../../../src/web/routes/browser-tab-tidy'
@@ -35,7 +35,7 @@ function world(held: Held[], phases: Record<string, string | undefined | Error>,
   }
   const deps: TidyDeps = {
     hub: async () => hub as never,
-    phaseOf: async (id) => { const p = phases[id]; if (p instanceof Error) throw p; return p },
+    taskOf: async (id) => { const p = phases[id]; if (p instanceof Error) throw p; return p === undefined ? undefined : { done: p === 'COMPLETE', needsYou: p === 'NEEDS_YOU' } },
     allow: async () => ({ any: true, sites: [], walnut: [] }),
     asksOn: (_d, tab) => opts.asks?.includes(tab) === true,
   }
@@ -55,7 +55,7 @@ describe('the tidy-up of tasks\' tabs', () => {
       held(7, 'task:done'),                                   // an open sign-in ask: kept
       held(8, 'session:abc'),                                 // not a task's: kept
       held(9, 'task:done', NOW, { device: 'other' }),
-    ], { 'done': 'COMPLETE', 'gone': undefined, 'idle': 'IN_PROGRESS', 'busy': 'IN_PROGRESS', 'needs': 'NEED_ACTION' }, { asks: [7], offline: ['other'] })
+    ], { 'done': 'COMPLETE', 'gone': undefined, 'idle': 'IN_PROGRESS', 'busy': 'IN_PROGRESS', 'needs': 'NEEDS_YOU' }, { asks: [7], offline: ['other'] })
     const out = await tidyTabs(w.deps, NOW)
     expect(out.map((o) => [o.tab, o.why])).toEqual([[1, 'done'], [2, 'done'], [3, 'idle']])
     expect(w.sent).toEqual([1, 2, 3].map((tab) => ({ action: 'close', args: { tab, owner: expect.stringMatching(/^task:/), tidy: true } })))

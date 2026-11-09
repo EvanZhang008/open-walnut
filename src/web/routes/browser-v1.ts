@@ -685,10 +685,15 @@ async function fillLoginAct(req: Request, res: Response, b: Record<string, unkno
 
 export const tidyDeps: TidyDeps = {
   hub,
-  phaseOf: async (taskId) => {
+  taskOf: async (taskId) => {
     const { getTask } = await import('../../core/task-manager.js')
+    const { fallbackUserState, shownState, storedUserState } = await import('../../core/user-status.js')
     // Only "no such task" counts as gone; any other trouble reading it throws, and the pass skips it.
-    try { return (await getTask(taskId)).phase } catch (err) {
+    try {
+      const t = await getTask(taskId)
+      const state = t.user_status ? storedUserState(t.user_status) : fallbackUserState(t.phase)
+      return { done: t.phase === 'COMPLETE', needsYou: shownState(state) === 'needs' }
+    } catch (err) {
       if (err instanceof Error && /^No task found matching/.test(err.message)) return undefined
       throw err
     }

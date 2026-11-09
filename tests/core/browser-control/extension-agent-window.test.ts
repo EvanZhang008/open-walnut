@@ -221,4 +221,21 @@ describe('the agent window', () => {
     expect(found.filter((k) => !allowed.has(k))).toEqual([])
     expect([...allowed.keys()].filter((k) => !found.includes(k))).toEqual([])
   })
+
+  // 2026-11-08: CDP Page.bringToFront restored a minimized window and brought Chrome to the front of
+  // the person's screen (measured on macOS; window.focus(), Input and Runtime calls did not). The
+  // extension sends a fixed set of CDP methods; a new one is placed here once it is known not to raise.
+  it('sends only CDP methods that never raise a window', () => {
+    const dir = path.resolve(__dirname, '../../../packages/browser-extension/src')
+    const QUIET = new Set(['DOM.getDocument', 'DOM.querySelector', 'DOM.setFileInputFiles', 'Input.dispatchKeyEvent', 'Input.dispatchMouseEvent',
+      'Page.enable', 'Page.handleJavaScriptDialog', 'Runtime.enable', 'Runtime.evaluate', 'Network.enable', 'Network.disable', 'Network.getResponseBody', 'Network.getRequestPostData', 'Log.enable'])
+    const walk = (d: string): string[] => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => e.isDirectory() ? walk(path.join(d, e.name)) : e.name.endsWith('.ts') ? [path.join(d, e.name)] : [])
+    const sent: string[] = []
+    for (const file of walk(dir)) {
+      for (const m of fs.readFileSync(file, 'utf8').matchAll(/(?:send|sendCommand|cdp)\w*\(\s*(?:[\w.]+,\s*)?'((?:Page|Target|Browser|Emulation|Input|Runtime|DOM|Network|Fetch|Log)\.[A-Za-z]+)'/g)) sent.push(`${path.relative(dir, file)}: ${m[1]}`)
+    }
+    expect(sent.length).toBeGreaterThan(0)
+    expect(sent.filter((x) => !QUIET.has(x.split(': ')[1]!))).toEqual([])
+    expect(sent.some((x) => /bringToFront|activateTarget|setWindowBounds/.test(x))).toBe(false)
+  })
 })

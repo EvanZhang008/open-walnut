@@ -22,6 +22,7 @@ export const FIXED_SLEEP_ALLOWLIST: readonly FixedSleepAllowed[] = [
   { file: "tests/core/boards/board-items.test.ts", sleep: "await new Promise((r) => setTimeout(r, 5))", reason: "time under test: the clock moves so a wrong restamp would show; negative: latest_at must stay" },
   { file: "tests/core/boards/board-items.test.ts", sleep: "await new Promise((r) => setTimeout(r, 5))", reason: "time under test: a later write must get a later latest_at" },
   { file: "tests/core/boards/board-store.test.ts", sleep: "await new Promise((r) => setTimeout(r, 3))", reason: "time under test: each deleted copy needs a later timestamp in its name for the keep-newest order" },
+  { file: "tests/core/browser-control/extension-view-stream.test.ts", sleep: "await new Promise((r) => setTimeout(r, BEHIND_EVERY_MS + 50))", reason: "time under test: a picture of a tab behind the agent's may switch to it again only once BEHIND_EVERY_MS has passed" },
   { file: "tests/core/browser-control/hub.test.ts", sleep: "await new Promise((r) => setTimeout(r, 5))", reason: "time under test: the second browser's poll must be more recent than the first" },
   { file: "tests/core/cloud-chat-outbox.test.ts", sleep: "await new Promise((r) => setTimeout(r, 5))", reason: "time under test: the second turn file must be stamped later than the first" },
   { file: "tests/core/cloud-ingest.test.ts", sleep: "await new Promise((r) => setTimeout(r, 200))", reason: "negative: no more than 2 requests may be in flight while held" },

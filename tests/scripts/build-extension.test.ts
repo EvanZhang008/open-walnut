@@ -29,7 +29,7 @@ describe('extension manifests', () => {
   it('asks for storage, alarms, the context menu, downloads, the clipboard, idle and web pages, the debugger only as optional, and exposes only the two framed pages', () => {
     for (const b of ['chrome', 'firefox']) {
       const m = manifestFor(b)
-      expect(m.permissions).toEqual(['storage', 'alarms', 'contextMenus', 'scripting', 'downloads', 'clipboardRead', 'clipboardWrite', 'idle', ...(b === 'chrome' ? ['sidePanel', 'offscreen'] : [])])
+      expect(m.permissions).toEqual(['storage', 'alarms', 'contextMenus', 'scripting', 'downloads', 'clipboardRead', 'clipboardWrite', 'idle', ...(b === 'chrome' ? ['sidePanel', 'offscreen', 'tabGroups'] : [])])
       // The debugger is never asked at install: only when the person turns real input on (Chrome only).
       expect(m.permissions).not.toContain('debugger')
       expect(m.optional_permissions).toEqual(b === 'chrome' ? ['debugger'] : undefined)
