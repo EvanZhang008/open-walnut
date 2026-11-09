@@ -24,7 +24,48 @@ interface PcmBlock extends PcmBlockInfo {
   samples: Float32Array;
 }
 
-export class PcmCapture {
+/**
+ * Audio the live draft reads: samples on one timeline, with a level per block.
+ * Two sources implement it: the recorder's own WebM decoded as it grows
+ * (recorder-pcm.ts, preferred) and this Web Audio side capture (the fallback).
+ */
+export interface PcmSource {
+  readonly sampleRate: number;
+  readonly totalSamples: number;
+  lastVoiceSample(voiceRms: number): number;
+  hasVoiceBetween(fromSample: number, toSample: number, voiceRms: number): boolean;
+  findCommitPoint(windowStartSample: number, opts: Omit<CommitPointOptions, 'sampleRate'>): number | null;
+  sliceWavBase64(fromSample: number, toSample?: number): { base64: string; endSample: number } | null;
+}
+
+/** Absolute sample position where speech (not noise floor) was last heard. */
+export function lastVoiceIn(blocks: readonly PcmBlockInfo[], voiceRms: number): number {
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const b = blocks[i];
+    if (b.rms >= voiceRms) return b.startSample + b.length;
+  }
+  return 0;
+}
+
+/** True when any block overlapping [fromSample, toSample) reached speech level. */
+export function voiceBetween(blocks: readonly PcmBlockInfo[], fromSample: number, toSample: number, voiceRms: number): boolean {
+  for (const b of blocks) {
+    if (b.startSample + b.length <= fromSample || b.startSample >= toSample) continue;
+    if (b.rms >= voiceRms) return true;
+  }
+  return false;
+}
+
+/**
+ * Web Audio side capture. Kept only as the fallback: in WebKit a
+ * MediaStreamAudioSourceNode PULLS the mic's samples from a ring buffer on the
+ * audio thread and writes a quantum of zeros whenever the read gets ahead of the
+ * mic's writes (MediaStreamTrackAudioSourceProviderCocoa::provideInput), so this
+ * capture keeps time with the clock while holes open in its content. In the Mac
+ * app that turned a clear sentence into a few wrong words (2026-11-08), while
+ * MediaRecorder, which the mic pushes to, kept every word.
+ */
+export class PcmCapture implements PcmSource {
   private blocks: PcmBlock[] = [];
   private node: ScriptProcessorNode | null = null;
   private source: MediaStreamAudioSourceNode | null = null;
@@ -81,11 +122,7 @@ export class PcmCapture {
 
   /** Absolute sample position where speech (not noise floor) was last heard. */
   lastVoiceSample(voiceRms: number): number {
-    for (let i = this.blocks.length - 1; i >= 0; i--) {
-      const b = this.blocks[i];
-      if (b.rms >= voiceRms) return b.startSample + b.length;
-    }
-    return 0;
+    return lastVoiceIn(this.blocks, voiceRms);
   }
 
   /**
@@ -95,11 +132,7 @@ export class PcmCapture {
    * can no longer be assembled from committed segments alone).
    */
   hasVoiceBetween(fromSample: number, toSample: number, voiceRms: number): boolean {
-    for (const b of this.blocks) {
-      if (b.startSample + b.length <= fromSample || b.startSample >= toSample) continue;
-      if (b.rms >= voiceRms) return true;
-    }
-    return false;
+    return voiceBetween(this.blocks, fromSample, toSample, voiceRms);
   }
 
   findCommitPoint(windowStartSample: number, opts: Omit<CommitPointOptions, 'sampleRate'>): number | null {
@@ -142,7 +175,7 @@ export class PcmCapture {
 }
 
 /** Minimal RIFF/WAVE writer: 16-bit mono PCM, returned as base64. */
-function encodeWav(pcm: Int16Array, sampleRate: number): string {
+export function encodeWav(pcm: Int16Array, sampleRate: number): string {
   const dataBytes = pcm.length * 2;
   const buf = new ArrayBuffer(44 + dataBytes);
   const v = new DataView(buf);

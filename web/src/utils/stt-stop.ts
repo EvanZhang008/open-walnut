@@ -28,9 +28,11 @@ export interface StopContext {
   /** Chunk during which speech was last heard. */
   lastVoiceChunk: number;
   /**
-   * The draft was not made from the recording itself: the raw-PCM side capture
-   * built it, or the draft loop abandoned a span of speech. Such a draft is a
-   * preview and never the result, however cleanly the user stopped.
+   * The draft was not made from the recording itself: the Web Audio side
+   * capture built it (where the recorder's audio does not decode), or the draft
+   * loop abandoned a span of speech. Such a draft is a preview and never the
+   * result, however cleanly the user stopped. A draft decoded from the recorder's
+   * own audio (recorder-pcm.ts) is not.
    */
   draftIsPreview: boolean;
 }
@@ -44,11 +46,11 @@ export interface StopContext {
  * missing, so the draft is a head start rather than an answer.
  *
  * Only a draft made from the recording itself can be the answer. The side
- * capture's drafts (raw PCM, cut into pieces of a few seconds) dropped words the
- * recording kept: in the Mac app on 2026-11-07, text assembled from them held
- * 87% of the words a pass over the whole recording found, a 240 s take about
- * half, and pieces of 3 to 12 s mis-hear words the whole take gets right. So
- * those are always refined from the whole clip.
+ * capture's drafts dropped words the recording kept (in WebKit it reads the mic
+ * through a ring buffer that gives zeros when read ahead): in the Mac app on
+ * 2026-11-07, text assembled from them held 87% of the words a pass over the
+ * whole recording found, a 240 s take about half. So those are always refined
+ * from the whole clip.
  */
 export function decideStopAction(ctx: StopContext): StopAction {
   if (!ctx.hasDraft || !ctx.knowsWhenSpeechEnded) return 'wait-for-server';
