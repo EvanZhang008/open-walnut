@@ -8,15 +8,25 @@
  * records (agent-net.ts) has Page on all along, so a page action there sees its dialogs too.
  */
 import { more } from './agent-api'
+import { ext } from './ext'
 import { CdpError, dropDebugger, heldSend, holdDebugger, type Send } from './cdp'
 import { AgentError } from './agent-shared'
+import { pageCheck } from './page-reach'
 
 export interface DialogInfo { type: string; message: string; default_prompt?: string; url?: string; at: number }
 
-/** How long a dialog keeps the debugger on its tab, waiting for the agent's answer. */
+/** How long a dialog keeps the debugger on its tab, waiting for the agent's answer (each look at it starts it again). */
 export const HOLD_MS = 120_000
+/** The longest a dialog keeps it, looks included: the person's yes for an accept may take a while (outward-asks.ts, 10 minutes). */
+export const HOLD_MAX_MS = 11 * 60_000
 
 const open = new Map<number, DialogInfo>()
+/**
+ * Dialogs still open whose debugger let go before anyone answered (its hold ran out, or it was
+ * detached): Chrome never hands them to a debugger again, so only the person can answer them. Kept
+ * until the dialog closes, the tab loads another page or closes.
+ */
+const orphaned = new Map<number, DialogInfo>()
 const waiters = new Map<number, Set<(d: DialogInfo) => void>>()
 /** Tabs whose debugger is held only for a dialog's answer (not a recording): let go once it is answered. */
 const forDialog = new Map<number, ReturnType<typeof setTimeout>>()
@@ -35,6 +45,7 @@ export function foldDialogEvent(tabId: number, method: string, params: Record<st
     for (const w of waiters.get(tabId) ?? []) w(d)
   } else if (method === 'Page.javascriptDialogClosed') {
     open.delete(tabId)
+    orphaned.delete(tabId)
     // Answered some other way (the person's own click): a debugger held only for it lets go.
     if (forDialog.has(tabId)) void releaseDialogHold(tabId)
   }
@@ -50,10 +61,26 @@ function listen(): void {
     const tabId = source?.tabId
     if (typeof tabId !== 'number') return
     // The debugger let go (the person cancelled its bar, the tab closed): the dialog cannot be answered from it.
-    open.delete(tabId)
+    orphan(tabId)
     if (forDialog.has(tabId)) { clearTimeout(forDialog.get(tabId)); forDialog.delete(tabId); dropDebugger(tabId) }
   })
+  // A dialog ends with its page: a load or a closed tab.
+  ext.tabs.onRemoved?.addListener((tabId) => { open.delete(tabId); orphaned.delete(tabId) })
+  ext.tabs.onUpdated?.addListener((tabId, change) => { if (change.status === 'loading') orphaned.delete(tabId) })
 }
+
+/** The dialog is still open but no debugger holds it any more: the person's to answer. */
+function orphan(tabId: number): void {
+  const d = open.get(tabId)
+  open.delete(tabId)
+  if (d) orphaned.set(tabId, d)
+}
+
+/** A dialog open on the tab that only the person can answer now (no debugger saw it to the end). */
+export const orphanOf = (tabId: number): DialogInfo | undefined => orphaned.get(tabId)
+
+export const PERSON_ONLY = 'A dialog is open on the page that only the person can answer now (Walnut\'s hold on it ran out, and Chrome does not hand it over again): '
+  + 'ask them in your chat to answer it in that tab (say what it asks), then go on. Nothing that needs the page works until then.'
 
 /** The dialog open on the tab now, as the debugger saw it open, if any. */
 export const dialogOf = (tabId: number): DialogInfo | undefined => open.get(tabId)
@@ -74,12 +101,45 @@ export function whenDialog(tabId: number): { promise: Promise<DialogInfo>; cance
  */
 export async function releaseDialogHold(tabId: number): Promise<void> {
   open.delete(tabId)
+  orphaned.delete(tabId)
   const t = forDialog.get(tabId)
   if (t === undefined) return
   clearTimeout(t)
   forDialog.delete(tabId)
   dropDebugger(tabId)
   await more.debugger?.detach({ tabId }).catch(() => undefined)
+}
+
+/**
+ * Nobody answered in time, or the debugger lets go of the tab for another reason (a recording
+ * stops): a dialog still open is left to the person.
+ */
+export async function leaveDialog(tabId: number): Promise<void> {
+  orphan(tabId)
+  const t = forDialog.get(tabId)
+  if (t === undefined) return
+  clearTimeout(t)
+  forDialog.delete(tabId)
+  dropDebugger(tabId)
+  await more.debugger?.detach({ tabId }).catch(() => undefined)
+}
+
+let holdMs = HOLD_MS
+
+function armHold(tabId: number, ms = holdMs): void {
+  clearTimeout(forDialog.get(tabId))
+  const d = open.get(tabId)
+  const left = d ? Math.min(ms, d.at + HOLD_MAX_MS - Date.now()) : ms
+  forDialog.set(tabId, setTimeout(() => { void leaveDialog(tabId) }, Math.max(0, left)))
+}
+
+/**
+ * The agent is still on it: it read the dialog (the hold starts again), or its accept waits for the
+ * person's yes (`untilMax`: held as long as the ask can stay open, the agent's calls meanwhile
+ * reach only the server). Never past HOLD_MAX_MS from the dialog's opening.
+ */
+export function touchDialogHold(tabId: number, untilMax = false): void {
+  if (forDialog.has(tabId)) armHold(tabId, untilMax ? HOLD_MAX_MS : holdMs)
 }
 
 /** Whether the tab's debugger is held only for a dialog's answer. */
@@ -93,19 +153,30 @@ export const DIALOG_OPEN = 'A dialog is open on the page (dialog reads it): answ
 /** Actions that do not reach the page's script, so a dialog that holds it does not stop them. */
 const PAST_A_DIALOG = new Set(['dialog', 'close', 'tabs', 'take', 'downloads', 'network', 'network_body', 'network_request_body', 'console', 'resize', 'open'])
 
-/** An action that needs the page while a dialog holds it is refused at once (it would wait for the page and time out). */
-export function refuseWhileDialog(action: string, tabId: unknown): void {
+/**
+ * An action that needs the page while a dialog holds it is refused at once (it would wait for the
+ * page and time out). A dialog only the person can answer is looked at first: a page that answers
+ * has none open any more (the person answered it).
+ */
+export async function refuseWhileDialog(action: string, tabId: unknown): Promise<void> {
   if (typeof tabId !== 'number' || PAST_A_DIALOG.has(action)) return
   const d = open.get(tabId)
   if (d) throw new AgentError(DIALOG_OPEN, 'dialog_open', { dialog: d })
+  const o = orphaned.get(tabId)
+  if (!o) return
+  if (await pageCheck(tabId, 800)) { orphaned.delete(tabId); return }
+  throw new AgentError(PERSON_ONLY, 'dialog_open', { dialog: o, only_person: true })
 }
+
+/** What a step a dialog cut short does with the debugger before it is left (a drag lets the mouse button go). */
+export type OnInterrupt = (send: Send) => void
 
 /**
  * Real input with Page on: the work, or the dialog it opened (whichever comes first). The debugger
  * is the tab's held one when there is one (a recording), else attached for this step and let go
  * after, unless a dialog opened: then it stays until the dialog is answered (releaseDialogHold).
  */
-export async function runWatching<T>(tabId: number, work: (send: Send) => Promise<T>): Promise<{ done: T } | { dialog: DialogInfo }> {
+export async function runWatching<T>(tabId: number, work: (send: Send) => Promise<T>, onInterrupt?: OnInterrupt): Promise<{ done: T } | { dialog: DialogInfo }> {
   listen()
   const dbg = more.debugger!
   const target = { tabId }
@@ -122,16 +193,27 @@ export async function runWatching<T>(tabId: number, work: (send: Send) => Promis
     mine = true
   }
   const opened = whenDialog(tabId)
+  const raw = send
+  // A step a dialog cut short stops there: whatever it would send after (the next key, the rest of
+  // a drag) is refused, so nothing more happens once the dialog is answered.
+  let interrupted = false
+  const guarded: Send = (method, params) => (interrupted
+    ? Promise.reject(new CdpError('A dialog opened: the step stopped there.', 'dialog_interrupted'))
+    : raw(method, params))
   try {
-    await send('Page.enable')
-    const step = work(send).then((done) => ({ done }))
+    await raw('Page.enable')
+    const step = work(guarded).then((done) => ({ done }))
     // A step a dialog interrupted ends when the dialog is answered: its result is not waited for.
     step.catch(() => undefined)
     const r = await Promise.race([step, opened.promise.then((dialog) => ({ dialog }))])
-    if ('dialog' in r && mine) {
-      holdDebugger(tabId, send)
-      forDialog.set(tabId, setTimeout(() => { void releaseDialogHold(tabId) }, HOLD_MS))
-      mine = false
+    if ('dialog' in r) {
+      interrupted = true
+      try { onInterrupt?.(raw) } catch { /* best effort */ }
+      if (mine) {
+        holdDebugger(tabId, raw)
+        armHold(tabId)
+        mine = false
+      }
     }
     return r
   } finally {
@@ -140,9 +222,14 @@ export async function runWatching<T>(tabId: number, work: (send: Send) => Promis
   }
 }
 
+/** For tests: a shorter hold (HOLD_MS otherwise). */
+export function _setHoldMsForTesting(ms: number = HOLD_MS): void { holdMs = ms }
+
 /** For tests: forget every dialog and hold. */
 export function _resetDialogsForTesting(): void {
+  holdMs = HOLD_MS
   open.clear()
+  orphaned.clear()
   waiters.clear()
   for (const t of forDialog.values()) clearTimeout(t)
   forDialog.clear()

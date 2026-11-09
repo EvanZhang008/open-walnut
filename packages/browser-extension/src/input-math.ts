@@ -7,6 +7,8 @@
 /** `slowly`: at most this many characters, a key every SLOW_KEY_MS (well inside one command's time). */
 export const SLOW_MAX = 200
 export const SLOW_KEY_MS = 50
+/** A drag shorter than this is a click (page-input.ts refuses it as drag_too_short). */
+export const DRAG_MIN_PX = 8
 
 /** A wheel's travel for a scroll: `by` px, else `amount` screens of WHEEL_SCREEN_PX, or to the top or bottom. */
 export const WHEEL_SCREEN_PX = 500

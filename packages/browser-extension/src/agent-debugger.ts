@@ -6,7 +6,7 @@
 import { more } from './agent-api'
 import { CdpError, withDebugger, type Send } from './cdp'
 import { AgentError, noteTampered } from './agent-shared'
-import { runWatching, type DialogInfo } from './agent-dialog'
+import { runWatching, type DialogInfo, type OnInterrupt } from './agent-dialog'
 
 /**
  * The debugger acts in the tab. Marked first (agent-shared.ts noteTampered): whatever it does to
@@ -23,11 +23,14 @@ export async function run<T>(tabId: number, owner: string, work: (send: Send) =>
   }
 }
 
-/** A step that may open a dialog (agent-dialog.ts): its dialog, if one opened, else nothing. */
-export async function watched(tabId: number, owner: string, work: (send: Send) => Promise<unknown>): Promise<DialogInfo | undefined> {
+/**
+ * A step that may open a dialog (agent-dialog.ts): its dialog, if one opened, else nothing. A
+ * dialog stops the step where it is; `onInterrupt` puts right what it left half done.
+ */
+export async function watched(tabId: number, owner: string, work: (send: Send) => Promise<unknown>, onInterrupt?: OnInterrupt): Promise<DialogInfo | undefined> {
   await noteTampered(tabId, owner)
   try {
-    const r = await runWatching(tabId, work)
+    const r = await runWatching(tabId, work, onInterrupt)
     return 'dialog' in r ? r.dialog : undefined
   } catch (err) {
     if (err instanceof CdpError) throw new AgentError(err.message, err.code)

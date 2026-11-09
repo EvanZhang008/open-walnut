@@ -397,7 +397,14 @@ function render(action: string | undefined, b: Record<string, unknown>): string 
     return `ok, and it opened a ${d.type ?? 'dialog'}: ${d.message ?? ''}\n(dialog accept [--text T] or dialog dismiss answers it)`
   }
   if (action === 'snapshot') return typeof b.snapshot === 'string' ? b.snapshot : JSON.stringify(b)
-  if (action === 'text') return typeof b.text === 'string' ? b.text : ''
+  if (action === 'text') {
+    // --all-frames: each frame's text under its own heading (the text is in `frames` only).
+    if (Array.isArray(b.frames) && typeof b.text !== 'string') {
+      return (b.frames as Array<{ frame?: string; url?: string; text?: string; left_out?: string }>)
+        .map((f) => `== ${f.frame === 'top' ? 'the page' : `frame ${f.frame}`}${f.url ? ` (${f.url})` : ''} ==\n${f.left_out ? `left out: ${f.left_out}` : f.text ?? ''}`).join('\n\n')
+    }
+    return typeof b.text === 'string' ? b.text : ''
+  }
   const where = [typeof b.tab === 'number' ? `tab ${b.tab}` : '', typeof b.url === 'string' ? b.url : '', typeof b.title === 'string' ? `"${b.title}"` : ''].filter(Boolean).join('  ')
   // Which window and tab, and the person's own tabs on the site (where-words.ts), each on a line of its own.
   if (typeof b.where === 'string') {

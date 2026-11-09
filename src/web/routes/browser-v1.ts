@@ -305,8 +305,8 @@ const ON_TAB = new Set<Action>([
   'screenshot', 'upload', 'fill_login', 'dialog', 'evaluate', 'network', 'network_body', 'network_request_body', 'console', 'resize', 'request_sign_in',
   'drag', 'zoom', 'click_label',
 ])
-/** Actions whose step may buy, send or delete (the page judges; outward-asks.ts asks the person). */
-const OUTWARD_ACTS = new Set<Action>(['click', 'press', 'type'])
+/** Actions whose step may buy, send or delete (the page judges; outward-asks.ts asks the person): a drag's press and release, a dialog's OK too. */
+const OUTWARD_ACTS = new Set<Action>(['click', 'press', 'type', 'drag', 'dialog'])
 /** Actions the extension answers for the owner as a whole (its tabs, its downloads, a tab to take). */
 const FOR_OWNER = new Set<Action>(['tabs', 'downloads', 'take'])
 const TIMEOUT: Partial<Record<Action, number>> = { open: 45_000, navigate: 45_000, back: 30_000, wait: 40_000, screenshot: 30_000, zoom: 30_000, downloads: 40_000, take: 30_000, network_body: 30_000, network_request_body: 30_000 }
@@ -433,6 +433,10 @@ browserV1Router.post('/browser/act', (req, res, next) => {
       if (o !== owner) throw new h.BrowserError(o ? 'That tab belongs to another task.' : 'That tab is not one an agent opened (or the person took it back with Stop).', 403, 'not_your_tab')
       args.tab = tab
     }
+    // What an older extension would get wrong is refused before it reaches it (input-v2.ts).
+    const v2 = await import('../../core/browser-control/input-v2.js')
+    const needs = v2.needsInputV2(action, args)
+    if (needs && !h.hasCap(c.device, v2.INPUT_V2)) throw new h.BrowserError(v2.outdatedWords(needs, c.label), 409, 'extension_outdated', { needs })
     // The person signs in themselves (Take over in the task's Browser view), the agent waits: never a request to the page.
     if (action === 'request_sign_in') return signInAct(res, b, { device: c.device, label: c.label, owner, tab: tab!, left: left() })
     const own = await walnutAddresses(req)

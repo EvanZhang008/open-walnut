@@ -26,7 +26,7 @@ export function _resetOutwardAsksForTesting(): void { asks.clear() }
 
 /** The parts of an act that make it the same step. */
 export function stepKey(action: string, args: Record<string, unknown>): string {
-  const pick = ['ref', 'x', 'y', 'key', 'text', 'submit', 'clear', 'trusted'].map((k) => [k, args[k] ?? null])
+  const pick = ['ref', 'x', 'y', 'key', 'text', 'submit', 'clear', 'trusted', 'to_ref', 'to_x', 'to_y', 'slowly', 'accept', 'label'].map((k) => [k, args[k] ?? null])
   return JSON.stringify([action, pick])
 }
 

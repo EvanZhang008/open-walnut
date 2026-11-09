@@ -22,7 +22,7 @@ import { walnutAddress } from './walnut-address'
 import { siteKey } from '../../../src/core/vault/url-match'
 import { NET_MAX, bodyOut, fold, listConsole, listRequests, maskEntry, maskUrlsIn, newRecord, urlsOf, type ConsoleEntry, type Judge, type NetEntry, type NetRecord } from './net-record'
 import { REAL_INPUT_SWITCH, trustedReady } from './agent-trusted'
-import { DIALOG_OPEN, heldForDialog, releaseDialogHold, watchDialogs } from './agent-dialog'
+import { DIALOG_OPEN, heldForDialog, leaveDialog, watchDialogs } from './agent-dialog'
 
 const siteOf = (u: string): string => siteKey(u)?.domain ?? ''
 
@@ -136,8 +136,8 @@ export async function startRecording(tabId: number, rec: AgentTab): Promise<bool
 
 /** The tab records no more: its debugger let go (a tab given back, Stop, the agents switched off). */
 export async function stopRecording(tabId: number): Promise<boolean> {
-  // A debugger held for a dialog's answer lets go with the tab too (agent-dialog.ts).
-  await releaseDialogHold(tabId)
+  // A debugger held for a dialog's answer lets go with the tab too; a dialog still open is the person's (agent-dialog.ts).
+  await leaveDialog(tabId)
   // Any start still attaching is over too.
   generation.set(tabId, genOf(tabId) + 1)
   const r = records.get(tabId)

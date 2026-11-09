@@ -95,6 +95,13 @@ describe('what the shell prints', () => {
     expect((await run(['dialog'], { open: false, note: 'No dialog Walnut saw open on this tab.' })).out).toBe('No dialog Walnut saw open on this tab.\n')
   })
 
+  it('text --all-frames prints each frame under its own heading, the page first', async () => {
+    const { out } = await run(['text', '--all-frames'], {
+      frames: [{ frame: 'top', url: 'https://shop.example.test/', text: 'Checkout' }, { frame: 'f3', url: 'https://pay.example.test/', text: 'Card number' }, { frame: 'f5', url: 'https://ads.example.test/', left_out: 'that site is not allowed for agents' }],
+    })
+    expect(out).toBe('== the page (https://shop.example.test/) ==\nCheckout\n\n== frame f3 (https://pay.example.test/) ==\nCard number\n\n== frame f5 (https://ads.example.test/) ==\nleft out: that site is not allowed for agents\n')
+  })
+
   it('a step that opened a dialog says so, and how to answer it', async () => {
     const { out } = await run(['click', 'e8', '--trusted'], { clicked: 'button "Rename"', dialog: { type: 'confirm', message: 'Delete it?' }, tab: 7 })
     expect(out).toContain('it opened a confirm: Delete it?')

@@ -8,7 +8,9 @@
  *     slowly types a key at a time;
  *   - a click by its words finds the best match across frames; text all_frames gives each frame;
  *   - a page dialog a trusted step opened is read and answered, the debugger held until then, and
- *     nothing else reaches the page meanwhile.
+ *     nothing else reaches the page meanwhile; the step stops where the dialog cut it (no more
+ *     keys, a drag's button let go); a dialog whose hold ran out is the person's to answer;
+ *   - a drag, and OK on a confirm that deletes, wait for the person's yes.
  */
 import { beforeEach, describe, expect, it } from 'vitest'
 
@@ -23,6 +25,8 @@ const fake = {
   onSend: (() => undefined) as (method: string, params?: Record<string, unknown>) => unknown,
   frames: [] as Array<{ frameId: number; href: string }>,
   trusted: true,
+  /** Whether the page's script answers (a dialog holds it when not). */
+  checkAnswers: true,
 }
 const ev = () => ({ addListener() {}, removeListener() {} })
 const PAGE_URL = 'https://shop.example.test/checkout'
@@ -38,7 +42,7 @@ const tab = () => ({ id: 7, windowId: 3, active: true, url: PAGE_URL, title: 'Ch
     onCreated: ev(), onRemoved: ev(), onUpdated: ev(),
     get: async () => tab(), query: async () => [tab()], update: async () => tab(), create: async () => tab(),
     sendMessage: async (_tabId: number, msg: { type: string; op?: string; args?: Record<string, unknown> }, opts?: { frameId?: number }) => {
-      if (msg.type === 'agent-check') return { ok: true, walnut: false, href: PAGE_URL, doc: 'doc-1' }
+      if (msg.type === 'agent-check') return fake.checkAnswers ? { ok: true, walnut: false, href: PAGE_URL, doc: 'doc-1' } : undefined
       if (msg.type !== 'agent') return { ok: true }
       const frameId = opts?.frameId ?? 0
       fake.pageLog.push({ op: msg.op!, args: msg.args ?? {}, frameId })
@@ -92,6 +96,7 @@ beforeEach(() => {
   fake.onSend = () => undefined
   fake.frames = []
   fake.trusted = true
+  fake.checkAnswers = true
   dialogs._resetDialogsForTesting()
   dropDebugger(7)
 })
@@ -178,13 +183,18 @@ describe('scroll inside a box, and typing', () => {
     expect(methods()).toEqual([])
   })
 
-  it('a trusted type at a point: the click there is judged, then a click and the keys, one at a time with slowly', async () => {
+  it('a trusted type at a point: the click there is judged with any Enter as one step, then a click and the keys, one at a time with slowly', async () => {
     fake.page = (op) => (op === 'locate' ? { x: 30, y: 40, what: 'textbox "Name"' } : {})
     const r = await act('type', { trusted: true, x: 30, y: 40, text: 'ab', slowly: true })
     expect(r.typed).toBe('2 characters into textbox "Name", one key at a time')
     const located = pageOps('locate').map((p) => p.args)
-    expect(located[0]).toMatchObject({ x: 30, y: 40, outward: 'click' })
-    expect(located[1]).toMatchObject({ x: 30, y: 40, focus: true })
+    expect(located).toHaveLength(1)
+    expect(located[0]).toMatchObject({ x: 30, y: 40, outward: 'click', focus: true })
+    expect(located[0].then_enter).toBeUndefined()
+    // With a submit, the same one ask names the Enter too.
+    fake.pageLog = []
+    await act('type', { trusted: true, x: 30, y: 40, text: 'ab', submit: true })
+    expect(pageOps('locate').map((p) => p.args)).toEqual([expect.objectContaining({ outward: 'click', then_enter: true, typing: 'ab' })])
     expect(mouse().map((m) => m.type)).toEqual(['mouseMoved', 'mousePressed', 'mouseReleased'])
     const keys = fake.log.filter((l) => l[0] === 'Input.dispatchKeyEvent').map((l) => `${l[1]!.type} ${l[1]!.key}`)
     expect(keys).toEqual(['keyDown a', 'keyUp a', 'keyDown b', 'keyUp b'])
@@ -241,7 +251,8 @@ describe('across frames', () => {
     fake.page = (op, _a, frameId) => (op === 'text' ? (frameId === 0 ? { text: 'Checkout', url: PAGE_URL, title: 'Checkout' } : { text: 'Card number', url: PAY, title: 'Pay' }) : {})
     const r = await act('text', { all_frames: true })
     expect(r.frames).toEqual([{ frame: 'top', url: PAGE_URL, text: 'Checkout' }, { frame: 'f3', url: PAY, title: 'Pay', text: 'Card number' }])
-    expect(r.text).toContain('Card number')
+    // The text is in frames only, not twice.
+    expect(r.text).toBeUndefined()
     expect(pageOps('text').find((p) => p.frameId === 3)!.args.max).toBe(20_000)
     // Without it: the text as before, frames under their heading, 5000 characters each.
     fake.pageLog = []
@@ -321,7 +332,135 @@ describe('page dialogs', () => {
     }
     const r = await act('click', { ref: 'e2' })
     expect(r.dialog).toMatchObject({ type: 'alert', message: 'Saved' })
+    // The page side stops what it was doing (slow typing types no more keys) once the dialog is answered.
+    expect(pageOps('cancel_input')).toHaveLength(1)
     expect(await code(act('text'))).toBe('dialog_open')
+  })
+})
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+describe('a step a dialog cut short stops there', () => {
+  it('trusted slow typing: no key after the dialog opened, even once the page goes on', async () => {
+    fake.page = (op) => (op === 'locate' ? { x: 1, y: 1, what: 'textbox "Code"' } : {})
+    let release = () => {}
+    let opened = false
+    fake.onSend = (method, p) => {
+      if (method === 'Input.dispatchKeyEvent' && p?.type === 'keyDown' && !opened) {
+        opened = true
+        emit('Page.javascriptDialogOpening', { type: 'alert', message: 'Code sent' })
+        return new Promise((r) => { release = () => r(undefined) })
+      }
+      return undefined
+    }
+    const r = await act('type', { trusted: true, ref: 'e2', text: 'abc', slowly: true })
+    expect(r.dialog).toMatchObject({ type: 'alert', message: 'Code sent' })
+    release()
+    await sleep(200)
+    expect(fake.log.filter((l) => l[0] === 'Input.dispatchKeyEvent')).toHaveLength(1)
+  })
+
+  it('a drag: the button goes up where the pointer is, the browser\'s drags are its own again, and it moves no more', async () => {
+    fake.page = (op) => (op === 'drag_points' ? { from: { x: 10, y: 20, what: 'a' }, to: { x: 110, y: 70, what: 'b' } } : {})
+    let release = () => {}
+    let opened = false
+    fake.onSend = (method, p) => {
+      if (method === 'Input.dispatchMouseEvent' && p?.type === 'mouseMoved' && p.buttons === 1 && !opened) {
+        opened = true
+        emit('Page.javascriptDialogOpening', { type: 'confirm', message: 'Move it?' })
+        return new Promise((r) => { release = () => r(undefined) })
+      }
+      return undefined
+    }
+    const r = await act('drag', { ref: 'e3', to_ref: 'e9', steps: 3 })
+    expect(r.dialog).toMatchObject({ type: 'confirm' })
+    const up = mouse().filter((m) => m.type === 'mouseReleased')
+    expect(up).toHaveLength(1)
+    expect(up[0].x).toBeCloseTo(10 + 100 / 3)
+    expect(up[0].y).toBeCloseTo(20 + 50 / 3)
+    expect(fake.log.filter((l) => l[0] === 'Input.setInterceptDrags').map((l) => l[1]!.enabled)).toEqual([true, false])
+    release()
+    await sleep(200)
+    expect(mouse().filter((m) => m.type === 'mouseMoved' && m.buttons === 1)).toHaveLength(1)
+    expect(mouse().filter((m) => m.type === 'mouseReleased')).toHaveLength(1)
+  })
+})
+
+describe('a dialog left unanswered is the person\'s', () => {
+  const opensPrompt = () => {
+    fake.page = (op) => (op === 'locate' ? { x: 20, y: 30, what: 'button "Rename"' } : {})
+    fake.onSend = (method, p) => {
+      if (method === 'Input.dispatchMouseEvent' && p?.type === 'mouseReleased') {
+        emit('Page.javascriptDialogOpening', { type: 'prompt', message: 'New name?', url: PAGE_URL })
+        return new Promise(() => {})
+      }
+      return undefined
+    }
+  }
+
+  it('each look at it starts the hold again; once it runs out the debugger lets go, and only the person can answer', async () => {
+    dialogs._setHoldMsForTesting(300)
+    opensPrompt()
+    expect((await act('click', { trusted: true, ref: 'e8' })).dialog).toBeDefined()
+    await sleep(200)
+    expect((await act('dialog', { read: true })).open).toBe(true)
+    await sleep(200)
+    // 400 ms after it opened, 200 after the look: still held.
+    expect(debuggerHeld(7)).toBe(true)
+    await sleep(300)
+    expect(debuggerHeld(7)).toBe(false)
+    expect(methods().at(-1)).toBe('detach')
+    expect(dialogs.orphanOf(7)).toMatchObject({ type: 'prompt', message: 'New name?' })
+
+    // The page still does not answer: everything that needs it is refused at once, saying who can answer.
+    fake.checkAnswers = false
+    const err = await act('snapshot').catch((e) => e)
+    expect(err.code).toBe('dialog_open')
+    expect(err.extra).toMatchObject({ only_person: true })
+    expect(err.message).toMatch(/only the person can answer/)
+    expect(await act('dialog', { read: true })).toMatchObject({ open: true, only_person: true })
+    expect(await code(act('dialog', { accept: true, text: 'x' }))).toBe('dialog_person')
+    expect(fake.log.find((l) => l[0] === 'Page.handleJavaScriptDialog')).toBeUndefined()
+
+    // The person answered it: the page answers again, and the mark is gone.
+    fake.checkAnswers = true
+    fake.page = (op) => (op === 'text' ? { text: 'Renamed', url: PAGE_URL } : {})
+    expect(await code(act('text'))).toBe('ok')
+    expect(dialogs.orphanOf(7)).toBeUndefined()
+  })
+})
+
+describe('steps that delete wait for the person', () => {
+  it('a drag the page holds presses nothing; the yes for it is passed on to the page', async () => {
+    const hold = { kind: 'delete', why: '"Delete" deletes something', what: 'click button "Delete"', url: PAGE_URL, sig: 'delete|click button "Delete"|x||' }
+    fake.page = (op, args) => (op === 'drag_points' ? (args.outward_ok === hold.sig ? { from: { x: 10, y: 20, what: 'a' }, to: { x: 110, y: 70, what: 'b' } } : { hold }) : {})
+    const err = await act('drag', { ref: 'e3', to_ref: 'e9' }).catch((e) => e)
+    expect(err.code).toBe('outward_needs_ok')
+    expect(err.extra.hold).toMatchObject({ kind: 'delete' })
+    expect(mouse()).toEqual([])
+    expect(methods().filter((m) => m === 'attach')).toEqual([])
+    const r = await act('drag', { ref: 'e3', to_ref: 'e9', outward_ok: hold.sig })
+    expect(r.dragged).toBe('a to b')
+    expect(pageOps('drag_points').at(-1)!.args.outward_ok).toBe(hold.sig)
+  })
+
+  it('OK on a confirm that deletes waits; Cancel, an alert, or a confirm that does nothing do not', async () => {
+    dialogs.foldDialogEvent(7, 'Page.javascriptDialogOpening', { type: 'confirm', message: 'Delete this project? This cannot be undone.' })
+    const err = await act('dialog', { accept: true }).catch((e) => e)
+    expect(err.code).toBe('outward_needs_ok')
+    expect(err.extra.hold).toMatchObject({ kind: 'delete', what: 'accept the confirm "Delete this project? This cannot be undone."', url: PAGE_URL })
+    expect(fake.log.find((l) => l[0] === 'Page.handleJavaScriptDialog')).toBeUndefined()
+    // The yes for exactly that answer lets it go.
+    const ok = await act('dialog', { accept: true, outward_ok: err.extra.hold.sig })
+    expect(ok.dialog).toBe('accepted')
+    expect(fake.log.find((l) => l[0] === 'Page.handleJavaScriptDialog')?.[1]).toEqual({ accept: true })
+
+    dialogs.foldDialogEvent(7, 'Page.javascriptDialogOpening', { type: 'confirm', message: 'Delete this project?' })
+    expect((await act('dialog', { accept: false })).dialog).toBe('dismissed')
+    dialogs.foldDialogEvent(7, 'Page.javascriptDialogOpening', { type: 'alert', message: 'Deleted.' })
+    expect((await act('dialog', { accept: true })).dialog).toBe('accepted')
+    dialogs.foldDialogEvent(7, 'Page.javascriptDialogOpening', { type: 'confirm', message: 'Leave this page?' })
+    expect((await act('dialog', { accept: true })).dialog).toBe('accepted')
   })
 })
 

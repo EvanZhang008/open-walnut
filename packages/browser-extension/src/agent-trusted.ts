@@ -22,6 +22,8 @@ import { dragAct } from './agent-drag'
 import { SLOW_KEY_MS, SLOW_MAX, wheelDelta } from './input-math'
 
 export const TRUSTED_OPS = new Set(['click', 'type', 'press', 'hover', 'upload', 'scroll'])
+/** A click by its words: the search may take this much of the command's time, the click the rest. */
+const SEARCH_MS = 8000
 /** These use the debugger whatever the command says. */
 export const DEBUGGER_OPS = new Set(['dialog', 'evaluate', 'drag'])
 
@@ -58,7 +60,7 @@ export async function trustedAct(c: WireCommand, tabId: number, tab: Tab, rec: A
   // A click by its words: the match, top frame only (real input).
   let matched: Record<string, unknown> | undefined
   if ((c.action === 'click' || c.action === 'hover') && typeof a.text === 'string' && a.text && a.ref === undefined && typeof a.x !== 'number' && typeof a.label !== 'number') {
-    const m = await refByText(c, tabId)
+    const m = await refByText(c, tabId, Date.now() + SEARCH_MS)
     if (inFrame(m.ref)) throw new AgentError(`"${String(a.text).slice(0, 60)}" is inside a frame (${m.ref}): real input works in the top frame only, so click it without trusted.`, 'trusted_frame')
     a = { ...a, ref: m.ref, text: undefined }
     matched = m
@@ -93,9 +95,10 @@ export async function trustedAct(c: WireCommand, tabId: number, tab: Tab, rec: A
       const enter = trustedOutward('type', a)
       // At a point: a click there first, as a person puts the caret in a field.
       const at = a.ref === undefined && typeof a.x === 'number' && typeof a.y === 'number'
-      // The click at the point is judged as any click is (a Pay button there waits for the person).
-      if (at) await locate(trustedOutward('click', a))
-      const l = a.ref !== undefined || at ? await locate({ focus: true, clear: a.clear === true, ...enter }) : (await locate({ active: true, ...enter }), undefined)
+      // The click at the point is judged as any click is (a Pay button there waits for the person),
+      // and with the Enter the text presses, as one step: one ask, one yes for both.
+      const l = at ? await locate({ focus: true, clear: a.clear === true, outward: 'click', ...(enter.outward ? { then_enter: true, typing: enter.typing } : {}) })
+        : a.ref !== undefined ? await locate({ focus: true, clear: a.clear === true, ...enter }) : (await locate({ active: true, ...enter }), undefined)
       dialog = await watched(tabId, rec.owner, async (send) => {
         if (at && l) await cdpClick(send, l.x, l.y)
         await cdpType(send, text, slowly ? SLOW_KEY_MS : 0)

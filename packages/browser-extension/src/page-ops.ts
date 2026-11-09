@@ -6,7 +6,7 @@
 import * as pa from './page-agent'
 import * as forms from './page-agent-forms'
 import { clickFacts, clickTarget, enterFacts, judgeOutward, messageOf, orderTotal, outwardHold, pressFacts } from './page-agent-outward'
-import { dragPoints, scrollIn, typeField, typeSlowly } from './page-input'
+import { cancelTyping, dragPoints, scrollIn, typeField, typeSlowly } from './page-input'
 import { annotate, refOfLabel } from './page-annotate'
 
 /** position:fixed and sticky elements hidden after the first slice of a full screenshot, so they are drawn once. */
@@ -62,9 +62,7 @@ function locate(args: Record<string, unknown>): Record<string, unknown> {
   // Keys with no element go where the focus is: never into a frame (its site is not checked here).
   if (args.active === true) {
     if (intoFrame(document.activeElement)) throw new pa.PageError('The focus is inside a frame: real input works in the top frame only.', 'trusted_frame')
-    const how = trustedHow(args)
-    const h = how ? held(args, how, document.activeElement) : null
-    return h ?? {}
+    return held(args, trustedHow(args).map((how): Part => [how, document.activeElement])) ?? {}
   }
   // A file field a page hides (upload {selector}): the debugger needs only its mark, no point.
   if (typeof args.selector === 'string' && args.ref === undefined && typeof args.mark === 'string' && /^[a-z0-9]{6,40}$/.test(args.mark)) {
@@ -75,8 +73,7 @@ function locate(args: Record<string, unknown>): Record<string, unknown> {
   }
   const { el, x, y } = pa.target(args)
   // Checked before the focus moves: a held step leaves the page as it was.
-  const how = trustedHow(args)
-  const h = how ? held(args, how, el) : null
+  const h = held(args, trustedHow(args).map((how): Part => [how, el]))
   if (h) return h
   if (intoFrame(el)) throw new pa.PageError('That point is inside a frame: real input works in the top frame only (use the frame\'s ref without trusted).', 'trusted_frame')
   if (args.focus === true && el instanceof HTMLElement) {
@@ -102,7 +99,11 @@ function locate(args: Record<string, unknown>): Record<string, unknown> {
  * text about to be typed); or a key combo pressed with the focus on `el`.
  */
 type How = { click: true } | { enter: true; typing?: string } | { key: string }
-function held(args: Record<string, unknown>, how: How, el: Element | null): Record<string, unknown> | null {
+type Part = [How, Element | null]
+type Hold = ReturnType<typeof outwardHold>
+
+/** What one part of a step would be held for (null: it neither buys, sends nor deletes). */
+function holdOf(how: How, el: Element | null): Hold | null {
   if (!el) return null
   const facts = 'click' in how ? clickFacts(el) : 'enter' in how ? enterFacts(el, how.typing) : pressFacts(el, how.key)
   const o = facts ? judgeOutward(facts) : null
@@ -112,22 +113,56 @@ function held(args: Record<string, unknown>, how: How, el: Element | null): Reco
   // For the person: the message a send carries, the total an order comes to (when the page shows it).
   const message = o.kind === 'send' ? messageOf('click' in how ? clickTarget(el) : el, 'enter' in how ? how.typing : undefined) : undefined
   const total = o.kind === 'buy' ? orderTotal(document.body?.innerText ?? '') : undefined
-  const hold = outwardHold(o, `${verb} ${pa.roleOf(shown)} "${pa.clip(pa.nameOf(shown), 60)}"`, { message, total })
+  return outwardHold(o, `${verb} ${pa.roleOf(shown)} "${pa.clip(pa.nameOf(shown), 60)}"`, { message, total })
+}
+
+/** Several parts of one step, asked about once: the gravest kind leads, the yes names every part. */
+function joinHolds(hs: Hold[]): Hold {
+  const lead = hs.find((h) => h.kind === 'buy') ?? hs.find((h) => h.kind === 'delete') ?? hs[0]
+  const message = hs.find((h) => h.message)?.message
+  const total = hs.find((h) => h.total)?.total
+  return {
+    ...lead, what: hs.map((h) => h.what).join(', then ').slice(0, 200), why: hs.map((h) => h.why).join('; ').slice(0, 200),
+    ...(message ? { message } : {}), ...(total ? { total } : {}), sig: hs.map((h) => h.sig).join('&').slice(0, 400),
+  }
+}
+
+/**
+ * The step's hold, or null when it may go ahead. A step of several parts (a click at a point and
+ * then Enter in the field it focused; a drag's press, release and the click the release makes) is
+ * one ask: one hold names them all, and the one yes covers them all.
+ */
+function held(args: Record<string, unknown>, parts: Part[]): Record<string, unknown> | null {
+  const holds: Hold[] = []
+  for (const [how, el] of parts) {
+    const h = holdOf(how, el)
+    if (h && !holds.some((x) => x.sig === h.sig)) holds.push(h)
+  }
+  if (!holds.length) return null
+  const hold = holds.length === 1 ? holds[0] : joinHolds(holds)
   return args.outward_ok === hold.sig ? null : { hold }
 }
 
 /**
- * Typed text that sends: `submit`. (A newline typed here is only text in the field: page events
- * press no key for it. Real typing presses Enter for each, so agent-trusted.ts counts it as submit.)
+ * Typed text that sends: `submit`, and with `slowly` a newline too (it is the Enter key there, as in
+ * real typing, which agent-trusted.ts counts the same way). A newline typed at once is only text in
+ * the field: page events press no key for it.
  */
-const typedEnter = (args: Record<string, unknown>): How | null => (args.submit === true ? { enter: true, typing: String(args.text ?? '') } : null)
+const typedEnter = (args: Record<string, unknown>): How | null => {
+  const text = String(args.text ?? '')
+  return args.submit === true || (args.slowly === true && text.includes('\n')) ? { enter: true, typing: text } : null
+}
 
-/** What a trusted step (locate) asks to be judged: `outward` click, enter (with `typing`), or key (with `key`). */
-function trustedHow(args: Record<string, unknown>): How | null {
-  if (args.outward === 'click') return { click: true }
-  if (args.outward === 'enter') return { enter: true, ...(typeof args.typing === 'string' ? { typing: args.typing } : {}) }
-  if (args.outward === 'key' && typeof args.key === 'string') return { key: args.key }
-  return null
+/**
+ * What a trusted step (locate) asks to be judged: `outward` click, enter (with `typing`), or key
+ * (with `key`); `then_enter` adds Enter (with `typing`) after a click, for typing at a point.
+ */
+function trustedHow(args: Record<string, unknown>): How[] {
+  const typing = typeof args.typing === 'string' ? { typing: args.typing } : {}
+  if (args.outward === 'click') return [{ click: true }, ...(args.then_enter === true ? [{ enter: true as const, ...typing }] : [])]
+  if (args.outward === 'enter') return [{ enter: true, ...typing }]
+  if (args.outward === 'key' && typeof args.key === 'string') return [{ key: args.key }]
+  return []
 }
 
 const atPoint = (args: Record<string, unknown>) => args.ref === undefined && typeof args.x === 'number' && typeof args.y === 'number'
@@ -139,11 +174,12 @@ const typeTarget = (args: Record<string, unknown>): Element | null => (args.ref 
 const scrollsInside = (args: Record<string, unknown>) => (args.ref !== undefined || atPoint(args))
   && (args.direction !== undefined || args.to !== undefined || args.by !== undefined || args.amount !== undefined)
 
-/** `type {x, y}`: a click at the point (judged as a click), then the text into the field it focused. */
+/** `type {x, y}`: a click at the point (judged as a click), then the text into the field it focused; one ask for both. */
 async function typeOp(args: Record<string, unknown>): Promise<unknown> {
-  if (atPoint(args)) { const h = held(args, { click: true }, pa.target(args).el); if (h) return h }
+  const field = typeTarget(args)
   const how = typedEnter(args)
-  const h = how ? held(args, how, typeTarget(args)) : null
+  const parts: Part[] = [...(atPoint(args) ? [[{ click: true }, field] as Part] : []), ...(how ? [[how, field] as Part] : [])]
+  const h = held(args, parts)
   if (h) return h
   if (atPoint(args)) {
     const el = typeField(args)
@@ -165,14 +201,20 @@ export async function runPageOp(op: string, args: Record<string, unknown>): Prom
   switch (op) {
     case 'snapshot': return pa.snapshot(typeof args.max === 'number' ? args.max : undefined)
     case 'text': return pa.text(typeof args.max === 'number' ? args.max : undefined)
-    case 'click': return held(args, { click: true }, pa.target(args).el) ?? pa.click(args)
+    case 'click': return held(args, [[{ click: true }, pa.target(args).el]]) ?? pa.click(args)
     case 'hover': return pa.hover(args)
     case 'type': return typeOp(args)
     case 'select': return pa.select(args)
-    case 'press': return held(args, { key: String(args.key ?? '') }, document.activeElement) ?? pa.press(args)
+    case 'press': return held(args, [[{ key: String(args.key ?? '') }, document.activeElement]]) ?? pa.press(args)
     case 'scroll': return scrollsInside(args) ? scrollIn(args) : pa.scroll(args)
     case 'annotate': return annotate()
-    case 'drag_points': return dragPoints(args)
+    case 'drag_points': {
+      // A drag presses and releases: judged as the clicks it may make (where it starts, where it
+      // ends, and the control both are in, which the release clicks), one ask for all.
+      const d = dragPoints(args)
+      return held(args, [d.common, d.fromEl, d.toEl].map((el): Part => [{ click: true }, el])) ?? { from: d.from, to: d.to }
+    }
+    case 'cancel_input': return { cancelled: cancelTyping() }
     case 'wait': return pa.wait(args)
     case 'has_text': return pa.hasText(args)
     case 'find': return forms.find(args)

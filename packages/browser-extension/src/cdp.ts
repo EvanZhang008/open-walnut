@@ -136,14 +136,21 @@ export function dragPath(from: Point, to: Point, steps: number): Point[] {
  * DevTools does; a page that follows the pointer (sortable lists, sliders) sees the moves.
  * `intercepted` answers the drag data once the browser reported one (Input.dragIntercepted).
  */
-export async function cdpDrag(send: Send, from: Point, to: Point, opts: { steps?: number; stepMs?: number; intercepted?: () => Record<string, unknown> | undefined } = {}): Promise<{ native: boolean }> {
+export interface DragState { pressed: boolean; at: Point; intercepting: boolean }
+
+export async function cdpDrag(send: Send, from: Point, to: Point, opts: { steps?: number; stepMs?: number; intercepted?: () => Record<string, unknown> | undefined; state?: DragState } = {}): Promise<{ native: boolean }> {
   const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
+  // Where the drag is, for a step a dialog cuts short (agent-drag.ts lets the button go there).
+  const st = opts.state ?? { pressed: false, at: from, intercepting: false }
   const intercept = !!opts.intercepted && await send('Input.setInterceptDrags', { enabled: true }).then(() => true, () => false)
+  st.intercepting = intercept
   let native = false
   try {
     await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: from.x, y: from.y })
+    st.pressed = true
     await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: from.x, y: from.y, button: 'left', clickCount: 1, buttons: 1 })
     for (const p of dragPath(from, to, opts.steps ?? 12)) {
+      st.at = p
       await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x, y: p.y, button: 'left', buttons: 1 })
       await wait(opts.stepMs ?? 16)
       const data = intercept ? opts.intercepted?.() : undefined
@@ -154,8 +161,9 @@ export async function cdpDrag(send: Send, from: Point, to: Point, opts: { steps?
       }
     }
     await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: to.x, y: to.y, button: 'left', clickCount: 1, buttons: 0 })
+    st.pressed = false
   } finally {
-    if (intercept) await send('Input.setInterceptDrags', { enabled: false }).catch(() => undefined)
+    if (intercept) await send('Input.setInterceptDrags', { enabled: false }).then(() => { st.intercepting = false }, () => undefined)
   }
   return { native }
 }

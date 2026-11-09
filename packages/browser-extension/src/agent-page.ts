@@ -104,26 +104,42 @@ function frameOfCommand(a: Record<string, unknown>): number {
   return [...ids][0] ?? 0
 }
 
-/** The whole tab read: the top frame's answer, then each frame's under its own heading. */
-async function wholeTab(c: WireCommand, tabId: number, top: Record<string, unknown>): Promise<Record<string, unknown>> {
+/** A frame is given at most this long to answer a whole-tab read; all frames are asked at once. */
+const FRAME_READ_MS = 6000
+
+/**
+ * The whole tab read: the top frame's answer, then each frame's under its own heading. The frames
+ * are asked together, each within FRAME_READ_MS and all before `deadline` (a click by its words
+ * leaves the rest of its time to the click).
+ */
+async function wholeTab(c: WireCommand, tabId: number, top: Record<string, unknown>, deadline = Date.now() + FRAME_READ_MS + 2000): Promise<Record<string, unknown>> {
   const frames = await framesOf(tabId)
-  // `text {all_frames}`: each frame's text on its own as well, and more of each.
+  // `text {all_frames}`: each frame's text on its own (and more of each), in `frames` only.
   const each = c.action === 'text' && c.args.all_frames === true
-  if (!frames.length) return each ? { ...top, frames: [{ frame: 'top', url: top.url, text: top.text }] } : top
-  const out = { ...top }
+  const topFrame = { frame: 'top', url: top.url, text: top.text }
+  if (!frames.length) return each ? { ...withoutText(top), frames: [topFrame] } : top
+  const out = each ? withoutText(top) : { ...top }
   const notes: string[] = []
-  const perFrame: Array<Record<string, unknown>> = each ? [{ frame: 'top', url: top.url, text: top.text }] : []
-  for (const f of frames) {
+  const perFrame: Array<Record<string, unknown>> = each ? [topFrame] : []
+  const args = { ...c.args, ...(c.action === 'snapshot' ? { max: 100 } : c.action === 'text' ? { max: each ? 20_000 : 5000 } : {}) }
+  type Answer = { f: Frame; bar: string } | { f: Frame; err: string } | { f: Frame; r: Record<string, unknown> }
+  const answers = await Promise.all(frames.map(async (f): Promise<Answer> => {
     const bar = await frameBar(c.allow, f)
+    if (bar) return { f, bar }
+    const ms = Math.min(FRAME_READ_MS, deadline - Date.now())
+    if (ms < 300) return { f, err: 'no time was left to read it' }
+    return frameOp(tabId, f.frameId, c.action, args, c.allow, ms).then((r): Answer => ({ f, r }), (err: unknown): Answer => ({ f, err: err instanceof Error ? err.message : String(err) }))
+  }))
+  for (const ans of answers) {
+    const f = ans.f
     const head = `Frame f${f.frameId} (${f.href.slice(0, 160)})`
-    if (bar) { notes.push(`${head}: left out, ${bar}.`); if (each) perFrame.push({ frame: `f${f.frameId}`, url: f.href, left_out: bar }); continue }
-    const args = { ...c.args, ...(c.action === 'snapshot' ? { max: 100 } : c.action === 'text' ? { max: each ? 20_000 : 5000 } : {}) }
-    const r = await frameOp(tabId, f.frameId, c.action, args, c.allow, 6000).catch((err: unknown) => {
-      notes.push(`${head}: could not be read (${err instanceof Error ? err.message : String(err)}).`)
-      if (each) perFrame.push({ frame: `f${f.frameId}`, url: f.href, left_out: `could not be read (${err instanceof Error ? err.message : String(err)})` })
-      return null
-    })
-    if (!r) continue
+    if ('bar' in ans) { notes.push(`${head}: left out, ${ans.bar}.`); if (each) perFrame.push({ frame: `f${f.frameId}`, url: f.href, left_out: ans.bar }); continue }
+    if ('err' in ans) {
+      notes.push(`${head}: could not be read (${ans.err}).`)
+      if (each) perFrame.push({ frame: `f${f.frameId}`, url: f.href, left_out: `could not be read (${ans.err})` })
+      continue
+    }
+    const r = ans.r
     if (each) perFrame.push({ frame: `f${f.frameId}`, url: r.url ?? f.href, ...(r.title ? { title: r.title } : {}), text: String(r.text ?? '') })
     if (c.action === 'snapshot') notes.push(`${head}:\n${String(r.snapshot ?? '').split('\n').filter((l) => !/^(Page|URL): /.test(l)).join('\n').trim()}`)
     else if (c.action === 'text') notes.push(`${head}:\n${String(r.text ?? '')}`)
@@ -135,11 +151,17 @@ async function wholeTab(c: WireCommand, tabId: number, top: Record<string, unkno
       out.count = Number(out.count ?? 0) + Number(r.count ?? 0)
     }
   }
+  if (each) { out.frames = perFrame; return out }
   if (c.action === 'snapshot' && notes.length) out.snapshot = `${String(out.snapshot ?? '')}\n\n${notes.join('\n\n')}`
   else if (c.action === 'text' && notes.length) out.text = `${String(out.text ?? '')}\n\n${notes.join('\n\n')}`
   else if (notes.length) out.frames = notes
-  if (each) out.frames = perFrame
   return out
+}
+
+/** A top frame's answer without its text, which `frames` holds then (no text twice). */
+function withoutText(top: Record<string, unknown>): Record<string, unknown> {
+  const { text: _text, ...rest } = top
+  return rest
 }
 
 /** A match `click {text}` may act on first: the words as a control's whole name, then a control, then any. */
@@ -155,13 +177,16 @@ function bestMatch(matches: Array<Record<string, unknown>>, want: string): Recor
 /**
  * `click {text}` (and hover): the element with those words, in the page or any frame it shows that
  * agents may use (as find reads them), by the best match. The answer names it and how many matched.
+ * The whole search ends by `deadline` (the click that follows has the rest of the command's time).
  */
-export async function refByText(c: WireCommand, tabId: number): Promise<{ ref: string; name?: unknown; role?: unknown; frame?: unknown; of: number }> {
+export async function refByText(c: WireCommand, tabId: number, deadline: number): Promise<{ ref: string; name?: unknown; role?: unknown; frame?: unknown; of: number }> {
   const want = String(c.args.text ?? '')
   const args = { text: want, ...(c.args.exact === true ? { exact: true } : {}), ...(typeof c.args.role === 'string' ? { role: c.args.role } : {}), limit: 20 }
   const find: WireCommand = { ...c, action: 'find', args }
-  const top = await frameOp(tabId, 0, 'find', args, c.allow, 10_000)
-  const all = await wholeTab(find, tabId, top)
+  const left = deadline - Date.now()
+  if (left < 1000) throw new AgentError('No time was left to look for those words: call it again.', 'page_not_ready')
+  const top = await frameOp(tabId, 0, 'find', args, c.allow, Math.min(10_000, left))
+  const all = await wholeTab(find, tabId, top, deadline)
   const matches = (all.matches as Array<Record<string, unknown>> | undefined) ?? []
   const m = bestMatch(matches, want)
   if (!m || typeof m.ref !== 'string') throw new AgentError(`Nothing with the words "${want.slice(0, 80)}" on the page or in its frames: snapshot or find to see what is there.`, 'not_found')
@@ -314,10 +339,15 @@ async function openLink(c: WireCommand, tabId: number, tab: Tab, rec: AgentTab, 
 
 export async function pageOp(c: WireCommand, tabId: number, tab: Tab, rec: AgentTab): Promise<Record<string, unknown>> {
   let a = c.args
-  // A click by its words, in the page or a frame.
+  // Within the server's own limit for the command (hub.ts, 30 s; `wait` 40 s), reaching the page
+  // and a search for the words included: an answer after it would be an action the agent was
+  // already told failed.
+  const budget = c.action === 'wait' ? 31_000 : 20_000
+  const began = Date.now()
+  // A click by its words, in the page or a frame: the search has part of the time, the click the rest.
   let matched: Record<string, unknown> | undefined
   if ((c.action === 'click' || c.action === 'hover') && typeof a.text === 'string' && a.text && a.ref === undefined && typeof a.x !== 'number' && typeof a.label !== 'number') {
-    matched = await refByText(c, tabId)
+    matched = await refByText(c, tabId, began + budget / 2)
     a = { ...a, ref: matched.ref, text: undefined }
     c = { ...c, args: a }
   }
@@ -332,9 +362,8 @@ export async function pageOp(c: WireCommand, tabId: number, tab: Tab, rec: Agent
     if (bar === 'Walnut\'s own page') throw new AgentError(WALNUT_PAGE, 'walnut_page')
     if (bar) await checkPage(c.allow, f.href)
   }
-  // Within the server's own limit for the command (hub.ts, 30 s; `wait` 40 s), reaching the page
-  // included: an answer after it would be an action the agent was already told failed.
-  const ms = c.action === 'wait' ? 31_000 : 20_000
+  const ms = budget - (Date.now() - began)
+  if (ms < 2000) throw new AgentError('No time was left for the step: call it again.', 'page_not_ready')
   const started = Date.now()
   acting.set(tabId, Date.now() + ms + ACTING_MS)
   try {
@@ -345,7 +374,11 @@ export async function pageOp(c: WireCommand, tabId: number, tab: Tab, rec: Agent
       const step = frameOp(tabId, frameId, c.action, a, c.allow, ms)
       step.catch(() => undefined)
       const first = dialogWatch ? await Promise.race([step, dialogWatch.promise.then((dialog) => ({ __dialog: dialog }))]) : await step
-      if ('__dialog' in first) return { ...(matched ? { matched } : {}), dialog: first.__dialog, note: 'The step opened a dialog: dialog accept (with text for a prompt) or dialog dismiss answers it (real input).', ...(await where(tabId)) }
+      if ('__dialog' in first) {
+        // The step stops there: the page side types no more keys once the dialog is answered.
+        void frameOp(tabId, frameId, 'cancel_input', {}, c.allow, 20_000).catch(() => undefined)
+        return { ...(matched ? { matched } : {}), dialog: first.__dialog, note: 'The step opened a dialog: dialog accept (with text for a prompt) or dialog dismiss answers it (real input).', ...(await where(tabId)) }
+      }
       r = first
     } finally { dialogWatch?.cancel() }
     // A step that buys, sends or deletes: nothing was done, the person is asked (routes/browser-v1.ts).

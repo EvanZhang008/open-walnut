@@ -95,7 +95,8 @@ function outcomeOf(args: Record<string, unknown>, body: Record<string, unknown>)
       if (args.read) {
         const d = body.dialog as { type?: string; message?: string; default_prompt?: string } | undefined
         return body.open && d
-          ? { outcome: `A ${d.type ?? 'dialog'} is open${tab}: "${d.message ?? ''}"${d.default_prompt !== undefined ? ` (its box holds "${d.default_prompt}")` : ''}.`, next: d.type === 'prompt' ? 'dialog {accept: true, text} answers it with your text; accept: false cancels.' : 'dialog {accept: true} is OK; accept: false is Cancel.' }
+          ? { outcome: `A ${d.type ?? 'dialog'} is open${tab}: "${d.message ?? ''}"${d.default_prompt !== undefined ? ` (its box holds "${d.default_prompt}")` : ''}.${body.only_person ? ' Only the person can answer it now.' : ''}`,
+            next: body.only_person ? String(body.note ?? 'Ask the person in your chat to answer it in that tab.') : d.type === 'prompt' ? 'dialog {accept: true, text} answers it with your text; accept: false cancels.' : 'dialog {accept: true} is OK; accept: false is Cancel.' }
           : { outcome: `No dialog Walnut saw open${tab}.`, next: String(body.note ?? 'Do the step that opens it with trusted, then read it.') }
       }
       return { outcome: `The dialog was ${String(body.dialog ?? 'answered')}${tab}.`, next: 'snapshot to see the page now.' }
@@ -188,7 +189,7 @@ defineOp({
     steps: z.number().int().min(2).max(50).optional().describe('drag: how many moves between the ends (default 12)'),
     label: z.number().int().min(1).max(1000).optional().describe('click_label (or click / hover): a number from screenshot with annotate'),
     annotate: z.boolean().optional().describe('screenshot: number the elements on screen; the answer\'s labels map each number to its ref'),
-    all_frames: z.boolean().optional().describe('text: each frame\'s text on its own too (frames: [{frame, url, text}])'),
+    all_frames: z.boolean().optional().describe('text: each frame\'s text on its own (frames: [{frame, url, text}], the page first), in place of one text'),
     slowly: z.boolean().optional().describe('type: one key at a time (at most 200 characters), for fields that check each key'),
     read: z.boolean().optional().describe('dialog: read the open alert, confirm or prompt instead of answering it'),
     text: z.string().max(20_000).optional().describe('type: the text; find: the words to find; click / hover: the words of what to click, instead of ref; wait: text to wait for; request_sign_in: one line telling the person what to sign in to'),

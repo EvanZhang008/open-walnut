@@ -97,13 +97,20 @@ More actions, when the loop above is not enough:
   events did not work (a keystroke-checking bank form, an alert blocking the page), and tell the
   user in one line how to turn it on if you need it: the `trusted_off` message says exactly
   where (the extension's icon, the gear, the switch, Allow); pass it on as it is.
-- **Page dialogs** (an alert, confirm or prompt): do the step that opens one with `--trusted`.
+- **Page dialogs** (an alert, confirm or prompt): do a step that may open one with `--trusted`.
   Its answer then says a dialog opened and what it says, and the page waits for you: `dialog`
   reads it again, `dialog accept --text "Ana"` answers a prompt, `dialog accept` is OK, `dialog
-  dismiss` is Cancel. Anything else on the page answers `dialog_open` until then. A dialog a
-  page action without trusted opened cannot be read (Chrome tells the debugger only about one
-  that opens while it watches): that action times out; do it again with `--trusted`. A tab that
-  records (below) sees its dialogs with any action.
+  dismiss` is Cancel. Answer within 2 minutes (each `dialog` read starts that again). OK on a
+  confirm that deletes, buys or sends waits for the user's yes, like the click that would do it.
+  Anything else on the page answers `dialog_open` until then. A dialog Walnut did not see open
+  (a page action without trusted opened it, so it timed out with `page_not_ready`), or one left
+  unanswered past the 2 minutes (`dialog_open` with `only_person`), only the user can answer:
+  ask them in your chat to answer it in that tab and say what it asks, and do not retry the step
+  meanwhile, with `--trusted` or not (every step waits for the page). A tab that records (below)
+  sees its dialogs with any action.
+- `extension_outdated`: the user's extension is older than what you asked (drag, zoom, labels,
+  typing at a point or slowly, reading a dialog, scrolling inside a box): ask them to update it,
+  and do the step without it meanwhile.
 - **Recording a tab** (with the same switch, in a tab you opened): `open <url> --record` records
   the tab's requests and console from before the page loads; otherwise the first `network` or
   `console` starts recording (what came before is not in it: navigate again). `network` lists

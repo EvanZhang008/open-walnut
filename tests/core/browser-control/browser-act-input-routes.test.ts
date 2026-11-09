@@ -5,7 +5,10 @@
  * all_frames, type slowly and dialog read, each argument checked and cut to size. And the op's
  * own answers (src/ops/browser.ts): its schema names the new actions and fields, a zoom's image
  * stays out of a result that did not ask for it, and a step that opened a dialog says so.
- * Fake data only.
+ * An extension older than this input (no `input-v2` cap) is never sent it: 409
+ * `extension_outdated` (src/core/browser-control/input-v2.ts). A drag or a dialog's OK the page
+ * held for the person's yes is asked about, and the same step's call with that ask's request is
+ * the one that waits for the answer. Fake data only.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AddressInfo } from 'node:net'
@@ -20,15 +23,19 @@ import * as h from '../../../src/core/browser-control/hub.js'
 import { cleanArgs } from '../../../src/core/browser-control/act-args.js'
 import { getOp, opInputJsonSchema } from '../../../src/ops/index.js'
 
-const A = { device: 'extension-input', label: 'Browser A', browser: 'chrome', version: '9.9', caps: ['screenshot', 'trusted-input'] }
+const A = { device: 'extension-input', label: 'Browser A', browser: 'chrome', version: '9.9', caps: ['screenshot', 'trusted-input', 'input-v2'] }
+/** The extension of before this input: the same caps but `input-v2`. */
+const OLD = { device: 'extension-old', label: 'Browser Old', browser: 'chrome', version: '0.6.1', caps: ['screenshot', 'trusted-input'] }
+/** What the extension answers an action with, when a test says (else ok). */
+let answerOf: (action: string, args: Record<string, unknown>) => { ok: boolean; error?: { message: string; code: string; extra?: Record<string, unknown> } } = () => ({ ok: true })
 const AGENT = { 'x-walnut-caller-kind': 'agent' }
 let server: Server
 let base = ''
 let timer: ReturnType<typeof setInterval> | undefined
 let seen: Array<{ action: string; args: Record<string, unknown> }> = []
 
-async function act(body: Record<string, unknown>) {
-  const r = await fetch(`${base}/browser/act`, { method: 'POST', headers: { 'content-type': 'application/json', ...AGENT }, body: JSON.stringify({ device: A.device, tab: 43, ...body }) })
+async function act(body: Record<string, unknown>, on: { device: string; tab: number } = { device: A.device, tab: 43 }) {
+  const r = await fetch(`${base}/browser/act`, { method: 'POST', headers: { 'content-type': 'application/json', ...AGENT }, body: JSON.stringify({ ...on, ...body }) })
   return { status: r.status, body: await r.json() as Record<string, any> }
 }
 const last = () => seen[seen.length - 1]
@@ -53,12 +60,18 @@ beforeEach(async () => {
   h._resetBrowserHubForTesting()
   _resetBrowserRoutesForTesting()
   seen = []
+  answerOf = () => ({ ok: true })
   await h.poll(A, 0)
+  await h.poll(OLD, 0)
   h.ownTab(A.device, 43, 'agent', { url: 'https://shop.example.test/board' })
+  h.ownTab(OLD.device, 44, 'agent', { url: 'https://shop.example.test/board' })
   timer = setInterval(async () => {
-    for (const cmd of await h.poll(A, 0)) {
-      seen.push({ action: cmd.action, args: cmd.args })
-      h.answer(A.device, cmd.id, true, { tab: 43, url: 'https://shop.example.test/board', echo: cmd.action })
+    for (const [dev, tab] of [[A, 43], [OLD, 44]] as const) {
+      for (const cmd of await h.poll(dev, 0)) {
+        seen.push({ action: cmd.action, args: cmd.args })
+        const a = answerOf(cmd.action, cmd.args)
+        h.answer(dev.device, cmd.id, a.ok, { tab, url: 'https://shop.example.test/board', echo: cmd.action }, a.error)
+      }
     }
   }, 10)
 })
@@ -98,6 +111,76 @@ describe('what reaches the extension', () => {
     await act({ action: 'screenshot', annotate: true })
     expect(last()).toMatchObject({ action: 'screenshot', args: { annotate: true } })
   })
+})
+
+describe('an older extension is never sent what it would get wrong', () => {
+  const old = (body: Record<string, unknown>) => act(body, { device: OLD.device, tab: 44 })
+  const NEW_INPUT: Array<Record<string, unknown>> = [
+    { action: 'drag', ref: 'e3', to_ref: 'e9' },
+    { action: 'zoom', x: 1, y: 2, width: 30, height: 20 },
+    { action: 'click_label', label: 3 },
+    { action: 'click', text: 'Pay later' },
+    { action: 'hover', text: 'Menu' },
+    { action: 'type', x: 5, y: 6, text: 'abc' },
+    { action: 'type', ref: 'e2', text: 'abc', slowly: true },
+    // Its own dialog action accepted the dialog when asked to read it.
+    { action: 'dialog', read: true },
+    { action: 'text', all_frames: true },
+    { action: 'screenshot', annotate: true },
+    // It only brought the element into view, and said it scrolled.
+    { action: 'scroll', ref: 'e4', direction: 'down' },
+    { action: 'scroll', x: 10, y: 20, direction: 'down' },
+    { action: 'scroll', trusted: true, direction: 'down' },
+  ]
+
+  it('each new action or argument: 409 extension_outdated naming it, and nothing reaches the browser', async () => {
+    for (const body of NEW_INPUT) {
+      const r = await old(body)
+      expect(r.status, JSON.stringify(body)).toBe(409)
+      expect(r.body.code, JSON.stringify(body)).toBe('extension_outdated')
+      expect(r.body.error).toContain('Browser Old')
+      expect(r.body.error).toMatch(/update it/)
+    }
+    expect(seen).toEqual([])
+  })
+
+  it('what it always knew still goes to it', async () => {
+    for (const body of [{ action: 'click', ref: 'e1' }, { action: 'type', ref: 'e2', text: 'hi' }, { action: 'scroll', direction: 'down' }, { action: 'scroll', ref: 'e4' }, { action: 'dialog', accept: true }, { action: 'text' }]) {
+      const r = await old(body)
+      expect(r.status, JSON.stringify(body)).toBe(200)
+    }
+    expect(seen.map((c) => c.action)).toEqual(['click', 'type', 'scroll', 'scroll', 'dialog', 'text'])
+  })
+
+  it('the same calls go to an extension with the cap', async () => {
+    for (const body of NEW_INPUT) expect((await act(body)).status, JSON.stringify(body)).toBe(200)
+    expect(seen).toHaveLength(NEW_INPUT.length)
+  })
+})
+
+describe('a drag, and a dialog\'s OK, wait for the person when the page holds them', () => {
+  const hold = (what: string) => ({ kind: 'delete', why: '"Delete" deletes something', what, url: 'https://shop.example.test/board', sig: `delete|${what}|https://shop.example.test/board||` })
+
+  for (const [action, body, what, other] of [
+    ['drag', { ref: 'e3', to_ref: 'e9' }, 'click button "Delete"', { ref: 'e3', to_ref: 'e10' }],
+    ['dialog', { accept: true }, 'accept the confirm "Delete this project?"', { accept: false }],
+  ] as const) {
+    it(`${action}: the person is asked; the call with that request waits for the yes; another step is not that ask`, async () => {
+      answerOf = (a, args) => (a === action && args.outward_ok !== hold(what).sig ? { ok: false, error: { message: 'held', code: 'outward_needs_ok', extra: { hold: hold(what) } } } : { ok: true })
+      const ask = await act({ action, ...body })
+      expect(ask.status, JSON.stringify(ask.body)).toBe(202)
+      expect(ask.body).toMatchObject({ status: 'needs_ok', code: 'outward_needs_ok', kind: 'delete', what })
+      // The same step with its request is the one that waits (nobody answered yet).
+      const again = await act({ action, ...body, request: ask.body.request })
+      expect(again.status, JSON.stringify(again.body)).toBe(202)
+      expect(again.body.request).toBe(ask.body.request)
+      // Another step with this request is not what the person is asked about.
+      const wrong = await act({ action, ...other, request: ask.body.request })
+      expect(wrong.body.code).toBe('no_such_request')
+      // Nothing carried a yes to the browser.
+      expect(seen.filter((c) => c.args.outward_ok)).toEqual([])
+    })
+  }
 })
 
 describe('act-args', () => {

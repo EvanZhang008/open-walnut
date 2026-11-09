@@ -290,10 +290,10 @@ walnut browser close                          # closes a tab it opened, gives ba
 | `hover` | `ref` or `x, y` | pointer over, enter and move events (menus that open on hover) |
 | `scroll` | `direction` (up, down, left, right), `amount` (screens) or `by` (px), or `to` (top, bottom), or `ref` | answers `scrollTop`, `scrollLeft`, `atTop`, `atBottom`; a `ref` (or `x, y`) alone brings it into view, with a direction (or `to`, `by`, `amount`) the box that scrolls at it scrolls (its nearest scrolling ancestor), and the answer names that `box` |
 | `click`, `hover` | `text`, `exact?`, `role?` (instead of `ref`) | the element with those words, in the page or any frame agents may use (as `find` reads them), the best match: the words as its whole name, then a control, then on screen; the answer's `matched` names its `ref`, `frame` and how many matched (`of`) |
-| `type` | `x, y` (instead of `ref`), `slowly?` | at a point: a click there (judged as a click), then the text into the field it focused; `slowly`: a keydown, keypress, input and keyup per character, 50 ms apart, at most 200 characters (`too_long`) |
+| `type` | `x, y` (instead of `ref`), `slowly?` | at a point: a click there (judged as a click), then the text into the field it focused (the click and an Enter the text presses are one ask, one yes); `slowly`: a keydown, keypress, input and keyup per character, 50 ms apart, at most 200 characters (`too_long`), a newline is the Enter key and is judged as a submit |
 | `click_label` | `label` | clicks the element numbered `label` by the last annotated screenshot of this page (`no_labels`, `stale_ref` once it is gone); the server sends it as `click {label}`, so it waits for the person's yes as any click does |
 | `zoom` | `x, y, width, height` (CSS px), `format?` | that region of the screen at the picture's own resolution (device pixels): `{ image, zoom, pixels: { width, height }, scale }`; nothing of it on screen is `bad_request` |
-| `drag` | `ref` or `x, y`; `to_ref` or `to_x, to_y`; `steps?` (12) | real input, top frame: press, move in steps, release; a page that uses the browser's own drag and drop gets its drag data dropped on the end (`native: true`, through `Input.setInterceptDrags`). Both ends must be on screen together (`drag_offscreen`) |
+| `drag` | `ref` or `x, y`; `to_ref` or `to_x, to_y`; `steps?` (12) | real input, top frame: press, move in steps, release; a page that uses the browser's own drag and drop gets its drag data dropped on the end (`native: true`, through `Input.setInterceptDrags`). Both ends must be on screen together (`drag_offscreen`; a start given as a point is refused also when bringing the end into view scrolled the page); a drag under 8 px, or one that starts and ends on the same button or link, is a click (`drag_too_short`). Judged as the clicks it may make (the start, the end, and the control both are in): one that buys, sends or deletes waits for the person's yes |
 | `wait` | `text`, `textGone`, `url` (a part of the address or `/regex/`), or `ms` | at most 30 s (`wait_timeout`) |
 | `screenshot` | `full?`, `format?` (`png`, default `jpeg`), `annotate?` | `full` scrolls through the page and draws one image, cut at 12000 CSS px (`cut: true`), without the agent frame in its own tabs; the scroll is put back. `annotate` (not with `full`): every element a person could act on that is on screen is outlined and numbered top to bottom on the picture (drawn by the extension; the page draws nothing), and `labels: [{ label, ref, role, name }]` maps each number to its ref, at most 150 (`note` says how many more) |
 | `upload` | `ref`, `files: [{ name, type?, base64 }]` | sets the file input's files as a pick would (input and change); 10 MB in all (`too_big`) |
@@ -357,13 +357,34 @@ dialog opened (Chromium's `PageHandler` keeps the dialog's answer only then; one
 before an attach is "No dialog is showing"). So every real-input step that may open one (`click`,
 `press`, `type`, `drag` with `trusted`) runs with Page on, and when a dialog opens meanwhile the
 step answers at once with `dialog: { type, message, default_prompt?, url }` and a `note`; the
-debugger stays on the tab until the agent answers (`dialog accept|dismiss`), at most 2 minutes.
+debugger stays on the tab until the agent answers (`dialog accept|dismiss`), 2 minutes from its
+last look at the dialog (`dialog` read), or as long as an accept waits for the person's yes, 11
+minutes at most. The step stops where the dialog cut
+it: the debugger refuses whatever it would send next (the next key), a drag lets the mouse button
+go where the pointer is, and slow typing on the page stops before its next key.
 A tab that records (`network`, `console`) has Page on all along, so a page action there answers
 with the dialog it opened too. While a dialog is open every action that needs the page answers
-`dialog_open` with the dialog (it would only wait for the page and time out). A page action
-without trusted in a tab that does not record cannot see its dialog: the page stops answering,
-and the action times out (`page_not_ready`); do it again with `trusted`
-(packages/browser-extension/src/agent-dialog.ts).
+`dialog_open` with the dialog (it would only wait for the page and time out). OK on a confirm or
+prompt whose words buy, send or delete ("Delete this project?") is judged as the click that would
+do it (packages/browser-extension/src/dialog-outward.ts) and waits for the person's yes.
+
+A dialog no debugger holds any more (the 2 minutes ran out, a recording stopped) is the person's
+to answer: Chrome never hands it to a debugger again. Walnut keeps it marked, and every action
+that needs the page answers `dialog_open` with `only_person` (after a quick look whether the page
+answers again, which means the person answered it) until the dialog closes or the tab loads
+another page or closes. A page action without trusted in a tab that does not record cannot see
+its dialog at all: the page stops answering and the action times out (`page_not_ready`); only the
+person can answer that one too, and a retry, with trusted or not, would wait for the page the same
+way (packages/browser-extension/src/agent-dialog.ts).
+
+### Older extensions
+
+The act route sends drag, zoom, labels (`click_label`, `label`), a click or hover by its words,
+`type` at a point, `slowly`, `dialog {read}`, `all_frames`, `annotate` and a scroll inside a box
+(or with the wheel) only to an extension that announces the cap `input-v2`; an older one would do
+something else and say it went fine (its `dialog {read}` accepted the dialog). Without the cap the
+call answers 409 `extension_outdated`, naming what needs the update
+(src/core/browser-control/input-v2.ts).
 
 ## How it works
 

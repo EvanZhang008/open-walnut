@@ -93,6 +93,9 @@ function words(el: Element): string {
 /** The control a click on `el` works (a button's icon or text is part of the button). */
 export const clickTarget = (el: Element): Element => el.closest(CLICKABLE) ?? el
 
+/** The button, link or menu item `el` is part of, if any (a drag that starts and ends on one is a click). */
+export const controlOf = (el: Element): Element | null => el.closest(CLICKABLE)
+
 /** What a click on `el` would do. */
 export function clickFacts(el: Element): OutwardFacts {
   const target = clickTarget(el)

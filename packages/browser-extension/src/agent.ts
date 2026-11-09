@@ -138,7 +138,7 @@ async function act(cmd: WireCommand): Promise<unknown> {
   // A tab the person handed over may use its own site as well.
   const c = typeof a.tab === 'number' ? { ...cmd, allow: allowFor(cmd.allow, await agentTabs.get(a.tab)) } : cmd
   // A page dialog holds the page's script: what needs the page waits until it is answered (agent-dialog.ts).
-  refuseWhileDialog(c.action, a.tab)
+  await refuseWhileDialog(c.action, a.tab)
   switch (c.action) {
     case 'tabs': {
       if (a.all === true) return { tabs: await allTabs(), all: true }
@@ -436,8 +436,9 @@ export async function agentLoop(): Promise<void> {
           ...((await ext.permissions.contains({ origins: ['<all_urls>'] }).catch(() => false)) ? ['screenshot'] : []),
           ...(await trustedReady() ? ['trusted-input'] : []),
           ...(more.downloads ? ['downloads'] : []),
-          // The Browser view's picture stream and Take over (agent-view.ts, agent-takeover.ts).
-          'view-stream', 'takeover',
+          // The Browser view's picture stream and Take over (agent-view.ts, agent-takeover.ts); drag,
+          // zoom, labels, typing at a point or slowly, dialog read, scroll in a box (input-v2.ts on the server).
+          'view-stream', 'takeover', 'input-v2',
         ]
         const r = await call<{ commands: WireCommand[] }>('POST', '/browser/poll', {
           browser: isFirefox ? 'firefox' : 'chrome', version: ext.runtime.getManifest().version, caps, tabs: await report(), waitMs: 25_000,
