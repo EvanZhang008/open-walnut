@@ -11600,11 +11600,16 @@ body.walnut-dragging {
 /* Recent: a task open in this window right now (a session column, the chat slot, a
    full-screen detail) is greyed (2026-11-06, the user: "grey out the one currently open in
    the window"). It stays clickable: a click brings it forward. */
+/* The words take a grey text colour rather than a fade: a faded title on the selected row's
+   blue fill (the open task is usually the selected one) read as barely there (2026-11-09).
+   --fg-notice, not --fg-muted: it still reads 4.5:1 on that fill, muted does not. */
 .todo-recent-card-open .todo-pinned-title,
+.todo-recent-card-open .todo-recent-ago {
+  color: var(--fg-notice);
+}
 .todo-recent-card-open .task-phase-icon-btn,
-.todo-recent-card-open .todo-recent-ago,
 .todo-recent-card-open .todo-recent-tier-dot {
-  opacity: 0.45;
+  opacity: 0.5;
 }
 /* The open-session chevron sits at the row's right edge: the time steps clear of it, as a
    status-section card's does. */

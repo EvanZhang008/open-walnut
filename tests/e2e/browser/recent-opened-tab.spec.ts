@@ -13,6 +13,7 @@
  */
 import { test, expect, type Page } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
+import { withCssColor } from './css-color'
 import { chooseViewOption, openHome } from './home-navigation-helpers'
 import { closeDisplayMenu, displayMenu, openDisplayMenu } from './filter-bar-helpers'
 
@@ -67,6 +68,47 @@ const recentCard = (page: Page, id: string) => page.locator(`.todo-pinned-list-r
 /** A task's pinned card in the All view's tiers (not a Recent row). */
 const tierCard = (page: Page, id: string) =>
   page.locator(`.todo-pinned-section:not(.todo-pinned-section-recent) .todo-pinned-card[data-task-id="${id}"]`).first()
+
+/**
+ * Contrast ratio of a Recent row's title against the fill behind it, as drawn: the title's
+ * colour faded by every opacity on its way up, over the row's fills composited down to the
+ * first opaque one (the selected row's blue is a translucent tint over the panel).
+ */
+async function titleContrast(page: Page, id: string): Promise<number> {
+  return recentCard(page, id).locator('.todo-pinned-title').evaluate(withCssColor((toRgba) => (el: Element) => {
+    const over = (top: number[], under: number[]) => [0, 1, 2].map((i) => top[i] * top[3] + under[i] * (1 - top[3]))
+    const lum = (c: number[]) => {
+      const f = (v: number) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4 }
+      return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2])
+    }
+    let alpha = 1
+    const fills: number[][] = []
+    let base: number[] | null = null
+    for (let n: Element | null = el; n; n = n.parentElement) {
+      const cs = getComputedStyle(n)
+      alpha *= Number(cs.opacity)
+      if (base) continue
+      const bg = toRgba(cs.backgroundColor)
+      if (bg[3] >= 1) base = bg
+      else if (bg[3] > 0) fills.push(bg)
+    }
+    let behind = base ?? [255, 255, 255]
+    for (const f of fills.reverse()) behind = over(f, behind)
+    const fg = toRgba(getComputedStyle(el).color)
+    const drawn = over([fg[0], fg[1], fg[2], alpha * fg[3]], behind)
+    const [hi, lo] = [lum(drawn), lum(behind)].sort((x, y) => y - x)
+    return (hi + 0.05) / (lo + 0.05)
+  }))
+}
+
+/** The open row's words stay legible in both themes (WCAG AA for text, 4.5:1). */
+async function expectReadable(page: Page, id: string): Promise<void> {
+  for (const theme of ['light', 'dark']) {
+    await page.evaluate((t) => { document.documentElement.dataset.theme = t }, theme)
+    expect(await titleContrast(page, id), `${theme} theme`).toBeGreaterThanOrEqual(4.5)
+  }
+  await page.evaluate(() => { delete document.documentElement.dataset.theme })
+}
 
 test('Recent lists what was opened, newest first, flat, and greys what is open now', async ({ page, baseURL }) => {
   const a = await createTask(`Recent open alpha ${STAMP}`)
@@ -131,6 +173,11 @@ test('Recent lists what was opened, newest first, flat, and greys what is open n
   await recentCard(page, c).click()
   await expect(page.locator('.task-detail-modal-overlay')).toBeVisible()
   await expect(recentCard(page, c)).toHaveClass(/todo-recent-card-open/)
+  // Open and selected (the blue fill): greyed, yet readable (2026-11-09: a faded title on the
+  // selected row's blue read as barely there).
+  await expect(recentCard(page, c)).toHaveClass(/todo-pinned-card-active/)
+  await expectReadable(page, c)
+  await recentCard(page, c).screenshot({ path: `${SHOTS}/recent-open-selected-row.png` })
   await page.keyboard.press('Escape')
   await expect(page.locator('.task-detail-modal-overlay')).toHaveCount(0)
   await expect.poll(() => recentRows(page, mine)).toEqual([b, c, a])
@@ -141,6 +188,9 @@ test('Recent lists what was opened, newest first, flat, and greys what is open n
   await expect(recentCard(page, b)).toHaveClass(/todo-recent-card-open/, { timeout: 15_000 })
   await expect(recentCard(page, a)).not.toHaveClass(/todo-recent-card-open/)
   await page.screenshot({ path: `${SHOTS}/recent-greyed-column.png` })
+  // Greyed is still readable on the selected row's fill (2026-11-09: a faded title on the
+  // selected blue read as barely there). Every open row, selected or not, keeps its words legible.
+  await expectReadable(page, b)
   await expect.poll(() => recentRows(page, mine)).toEqual([b, c, a])
   // An open made elsewhere while the list is on screen comes in on top.
   await page.evaluate((id) => window.dispatchEvent(new CustomEvent('main:locate-task', { detail: { taskId: id } })), d)
