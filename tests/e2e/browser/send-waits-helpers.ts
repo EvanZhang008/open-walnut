@@ -32,26 +32,37 @@ async function shot(page: Page, name: string): Promise<void> {
 }
 
 interface Lane {
-  /** Requests after this point wait for `release()`. */
+  /** Requests after this point wait for `release()`. Setting it also makes `final` true. */
   held: boolean
-  /** The held passes answer 500 instead of FULL. */
+  /**
+   * Every pass from the hold on answers as the final pass does (FULL, or 500 with `fail`),
+   * the ones that reach the engine after `release()` too: the stop decodes the recording
+   * before it asks for the tail, so its request can come after the test let the hold go
+   * (2026-11-09: Enter then an immediate release sent the live preview's words).
+   * typeThenDictate clears it for the next recording.
+   */
+  final: boolean
+  /** The final passes answer 500 instead of FULL. */
   fail: boolean
   parked: Array<() => void>
   release: () => void
 }
 
 async function stubEngine(page: Page): Promise<Lane> {
+  let held = false
   const lane: Lane = {
-    held: false,
+    get held() { return held },
+    set held(on: boolean) { held = on; if (on) lane.final = true },
+    final: false,
     fail: false,
     parked: [],
-    release: () => { lane.held = false; for (const go of lane.parked.splice(0)) go() },
+    release: () => { held = false; for (const go of lane.parked.splice(0)) go() },
   }
   await stubSttStatus(page)
   await page.route('**/api/stt/warmup', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' }))
   const answer = async (route: Parameters<Parameters<Page['route']>[1]>[0], drafting: boolean) => {
     if (lane.held) await new Promise<void>((go) => lane.parked.push(go))
-    else if (drafting) {
+    else if (drafting && !lane.final) {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text: DRAFTED, durationMs: 40 }) })
       return
     }
@@ -93,7 +104,8 @@ async function openComposer(page: Page, sid: string, taskId: string): Promise<Co
 }
 
 /** Type a few words, start the mic and wait for the live preview after them. */
-async function typeThenDictate(c: Composer): Promise<void> {
+async function typeThenDictate(c: Composer, lane: Lane): Promise<void> {
+  lane.final = false
   await c.textarea.click()
   await c.textarea.fill(TYPED)
   await c.mic.click()
@@ -119,7 +131,7 @@ export function registerSendWaitsScenarios(sid: string, taskId: string): void {
     const c = await openComposer(page, sid, taskId)
 
     for (const round of [1, 2]) {
-      await typeThenDictate(c)
+      await typeThenDictate(c, lane)
       lane.held = true
       await c.send.click()
       await expectWaiting(c)
@@ -146,7 +158,7 @@ export function registerSendWaitsScenarios(sid: string, taskId: string): void {
     const lane = await stubEngine(page)
     const c = await openComposer(page, sid, taskId)
 
-    await typeThenDictate(c)
+    await typeThenDictate(c, lane)
     lane.held = true
     await c.textarea.press('Enter')
     await expectWaiting(c)
@@ -163,7 +175,7 @@ export function registerSendWaitsScenarios(sid: string, taskId: string): void {
     const lane = await stubEngine(page)
     const c = await openComposer(page, sid, taskId)
 
-    await typeThenDictate(c)
+    await typeThenDictate(c, lane)
     lane.held = true
     await c.send.click()
     await expectWaiting(c)
@@ -186,7 +198,7 @@ export function registerSendWaitsScenarios(sid: string, taskId: string): void {
     const lane = await stubEngine(page)
     const c = await openComposer(page, sid, taskId)
 
-    await typeThenDictate(c)
+    await typeThenDictate(c, lane)
     lane.held = true
     await c.textarea.press('Enter')
     await expectWaiting(c)
@@ -206,7 +218,7 @@ export function registerSendWaitsScenarios(sid: string, taskId: string): void {
     const lane = await stubEngine(page)
     const c = await openComposer(page, sid, taskId)
 
-    await typeThenDictate(c)
+    await typeThenDictate(c, lane)
     lane.held = true
     lane.fail = true
     await c.send.click()
@@ -226,7 +238,7 @@ export function registerSendWaitsScenarios(sid: string, taskId: string): void {
     const lane = await stubEngine(page)
     const c = await openComposer(page, sid, taskId)
 
-    await typeThenDictate(c)
+    await typeThenDictate(c, lane)
     lane.held = true
     await c.mic.click()
     await expect(c.mic).toHaveClass(/mic-transcribing/, { timeout: 10_000 })
