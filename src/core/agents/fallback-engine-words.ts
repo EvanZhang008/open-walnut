@@ -4,7 +4,7 @@
  * Pure and browser-safe (the web imports it through @open-walnut/user-status).
  */
 import { SESSION_MODEL_FAMILIES, SESSION_MODELS, type EngineFallbackNote } from '../types.js';
-import { limitName, limitTimeWords } from './engine-limit-source.js';
+import { limitName, limitTimeWords } from '../sessions/usage-limit-model.js';
 
 const ENGINE_NAMES: Record<string, string> = {
   claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini', opencode: 'OpenCode', goose: 'Goose', pi: 'Pi',

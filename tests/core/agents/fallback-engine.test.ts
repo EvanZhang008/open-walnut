@@ -11,7 +11,7 @@ import {
 import { fallbackBannerWords, fallbackStartWords } from '../../../src/core/agents/fallback-engine-words.js';
 import { SESSION_MODEL_CLI_MAP, type SessionRecord } from '../../../src/core/types.js';
 import {
-  __setSessionLimitForTesting, blockedLimitOf, limitName, sessionLimitOf, type SessionLimitReading,
+  __setSessionLimitForTesting, blockedLimitOf, sessionLimitOf, type SessionLimitReading,
 } from '../../../src/core/agents/engine-limit-source.js';
 import type { HostLimitFrame } from '../../../src/core/sessions/subscription-limits.js';
 
@@ -309,17 +309,22 @@ describe('fallback words', () => {
 });
 
 describe('the limit seam (engine-limit-source.ts)', () => {
-  it('a session row records no limit of its own yet, and a test can hand the server one', () => {
-    const r = rec();
-    expect(sessionLimitOf(r, NOW)).toBeUndefined();
-    __setSessionLimitForTesting((x) => (x === r ? waiting() : undefined));
+  it("reads the usage-limit wait's own record of a session, and a test can hand the server one", () => {
+    // A session the limit stopped: the wait's record holds its engine; a resumed one whose turn ran
+    // cleanly does not; a session with no limit of its own reads nothing.
+    const stopped = rec({ usageLimit: { ...waiting(), state: 'waiting', engine: 'claude', resumes: 0, tries: 0 } as never });
+    expect(sessionLimitOf(stopped, NOW)).toMatchObject({ window: 'five_hour', resetsFrom: 'event' });
+    expect(sessionLimitOf(rec({ process_status: 'idle', usageLimit: { ...waiting(), state: 'resumed', engine: 'claude', resumes: 1, tries: 0 } as never }), NOW)).toBeUndefined();
+    const plain = rec();
+    expect(sessionLimitOf(plain, NOW)).toBeUndefined();
+    __setSessionLimitForTesting((x) => (x === plain ? waiting() : undefined));
     try {
-      expect(sessionLimitOf(r, NOW)).toMatchObject({ window: 'five_hour' });
-      expect(sessionLimitOf(rec(), NOW)).toBeUndefined();
+      expect(sessionLimitOf(plain, NOW)).toMatchObject({ window: 'five_hour' });
+      expect(sessionLimitOf(stopped, NOW)).toBeUndefined();
     } finally {
       __setSessionLimitForTesting(null);
     }
-    expect(sessionLimitOf(r, NOW)).toBeUndefined();
+    expect(sessionLimitOf(plain, NOW)).toBeUndefined();
   });
 
   it("the host's reading blocks only when rejected with no extra usage to go on", () => {
@@ -328,12 +333,5 @@ describe('the limit seam (engine-limit-source.ts)', () => {
     expect(blockedLimitOf({ status: 'rejected', rateLimitType: 'five_hour', overageStatus: 'allowed' })).toBe('allowed');
     expect(blockedLimitOf({ status: 'rejected', rateLimitType: 'five_hour', isUsingOverage: true })).toBe('allowed');
     expect(blockedLimitOf({ status: 'rejected', rateLimitType: 'seven_day', resetsAt: NOW + HOUR })).toEqual({ window: 'seven_day', resetsAt: NOW + HOUR });
-  });
-
-  it('names the limit by engine and window', () => {
-    expect(limitName({ engine: 'claude', window: 'five_hour' })).toBe('Claude 5-hour limit');
-    expect(limitName({ engine: 'claude', window: 'seven_day_opus' })).toBe('Claude weekly Opus limit');
-    expect(limitName({ engine: 'codex' })).toBe('Codex usage limit');
-    expect(limitName({ engine: 'claude', window: 'overage' })).toBe('Claude extra usage');
   });
 });

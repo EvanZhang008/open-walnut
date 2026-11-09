@@ -2,9 +2,10 @@
  * E2E: a new task starts on the fallback engine while the default engine is out of usage
  * (src/core/agents/fallback-engine.ts).
  *
- * Full server pipeline with only the Claude CLI faked (mock-claude "rate-limit-event:<json>": the
- * subscription limit line a signed-in CLI writes, so the host's Claude reading says the 5-hour
- * window is rejected exactly as in use).
+ * Full server pipeline with only the Claude CLI faked, both readings of "limited" as in use:
+ * mock-claude "limit-error:<reset>" is a real usage-limit stop, so the usage-limit wait records it
+ * on the session; "rate-limit-event:<json>" is the subscription limit line a signed-in CLI writes,
+ * so the host's Claude reading says the 5-hour window is rejected (or allowed).
  * The fallback here is Claude Code on a model of another provider ('gpt-6.1-sol', behind the CLI):
  * the e2e has no Codex adapter, and the engine choice for another engine is the unit test's
  * (tests/core/agents/fallback-engine.test.ts). Another Claude model ('sonnet') shares the 5-hour
@@ -12,6 +13,8 @@
  *
  *   1. no setting: a new task starts on the default as before, even while it is limited
  *   2. setting on, nothing limited: the default
+ *   2b. a session the limit stopped, the host's reading allowed: the session's record alone moves
+ *      new tasks to the fallback, with its reset
  *   3. limited: quick-start (the web's new task) and a task start (task_create, task_start) both
  *      start on the fallback model and note it on the task; a start that names a model does not;
  *      GET /api/engines/fallback says so; the note's dismiss takes it off
@@ -30,6 +33,7 @@ import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 import { readSubscriptionLimits } from '../../src/core/sessions/subscription-limits.js'
+import { __setUsageLimitWaitForTesting } from '../../src/core/sessions/usage-limit-wait.js'
 import { getSessionByClaudeId, getSessionsForTask } from '../../src/core/session-tracker.js'
 import { getTask } from '../../src/core/task-manager.js'
 import { getConfig, updateConfig } from '../../src/core/config-manager.js'
@@ -122,6 +126,8 @@ const OTHER = 'gpt-6.1-sol'
 
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
+  // The session the limit stopped must not be continued during the test.
+  __setUsageLimitWaitForTesting({ timing: { graceMs: 0, jitterMaxMs: 0, backoffMs: [3_600_000], resumeCheckMs: 3_600_000 } })
   daemon = await createMockDaemon()
   sessionRunner.setCliCommand(MOCK_CLI)
   sessionRunner.setTestDaemonUrl(`ws://127.0.0.1:${daemon.port}`)
@@ -129,7 +135,7 @@ beforeAll(async () => {
   await fs.mkdir(tasksDir, { recursive: true })
   await fs.writeFile(path.join(tasksDir, 'tasks.json'), JSON.stringify({
     version: 1,
-    tasks: [seedTask('fb-limited', 'Hits the limit'), seedTask('fb-start', 'Started by an agent'), seedTask('fb-named', 'Names its model')],
+    tasks: [seedTask('fb-session', 'Stopped by the limit'), seedTask('fb-allowed', 'Reads allowed'), seedTask('fb-limited', 'Hits the limit'), seedTask('fb-start', 'Started by an agent'), seedTask('fb-named', 'Names its model')],
   }))
   server = await startServer({ port: 0, dev: true })
   port = (server.address() as { port: number }).port
@@ -140,6 +146,7 @@ afterAll(async () => {
   sessionRunner.setTestDaemonUrl(undefined)
   await stopServer()
   await daemon.stop()
+  __setUsageLimitWaitForTesting({ timing: null })
   await delay(500)
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 }, 15_000)
@@ -166,6 +173,33 @@ describe('fallback engine E2E', () => {
     expect(await cliModelOf(started.json.sessionId, false)).not.toBe(OTHER)
     expect((await req('GET', '/api/engines/fallback')).json.fallback).toBeNull()
   })
+
+  it("a session the usage limit stopped: its own record holds the engine, with the host's reading allowed", async () => {
+    const ws = await connectWs()
+    try {
+      // A real usage-limit stop (resets in 30 minutes): the wait records it on the session.
+      const stopped = waitForResultFor(ws, 'fb-session')
+      await sendWsRpc(ws, 'session:start', { taskId: 'fb-session', message: `limit-error:${Math.ceil((Date.now() + 30 * 60_000) / 1000)}` })
+      const sid = (await stopped).data!.sessionId as string
+      const rec = await until(() => getSessionByClaudeId(sid), (r) => r?.usageLimit?.state === 'waiting')
+      // The host's own reading says allowed again: only the session's record says limited now.
+      const allowed = waitForResultFor(ws, 'fb-allowed')
+      await sendWsRpc(ws, 'session:start', { taskId: 'fb-allowed', message: 'rate-limit-event:{"status":"allowed","rateLimitType":"five_hour","resetsIn":1800}' })
+      await allowed
+      await until(async () => (await readSubscriptionLimits('__local__'))[0], (f) => f?.current?.status === 'allowed')
+
+      await setFallback({ engine: 'claude', model: OTHER })
+      const now = (await req('GET', '/api/engines/fallback')).json
+      expect(now.fallback).toMatchObject({ engine: 'claude', model: OTHER, note: { from: 'claude', window: 'five_hour', resets_from: 'event' } })
+      expect(Date.parse(now.fallback.note.resets_at)).toBe(Date.parse(rec!.usageLimit!.resetsAt!))
+      const quick = await req('POST', '/api/sessions/quick-start', { cwd: '/tmp', message: 'hello' })
+      expect((await getTask(quick.json.taskId)).engine_fallback).toMatchObject({ model: OTHER, resets_from: 'event' })
+      expect(await cliModelOf(quick.json.sessionId)).toBe(OTHER)
+      await setFallback(null)
+    } finally {
+      ws.close()
+    }
+  }, 60_000)
 
   it('limited: new tasks start on the fallback model and say so; a named model stays; dismiss clears', async () => {
     const ws = await connectWs()

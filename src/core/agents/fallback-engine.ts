@@ -13,10 +13,11 @@
  *        └─ otherwise ───────────────────────────────────► fallback engine (and its model);
  *                                                           the task carries Task.engine_fallback
  *
- * "Limited" is read through one seam (engine-limit-source.ts), not tracked here: a session of
- * that engine on that host whose turn the limit stopped and whose reset has not come
- * (sessionLimitOf), or the host's own Claude reading that the limit blocks (blockedLimitOf over the
- * host's subscription-limit frame). A session that is already running is not this module's.
+ * "Limited" is the usage-limit wait's own reading, through one seam (engine-limit-source.ts), not
+ * a second one: a session of that engine on that host whose turn the limit stopped and whose reset
+ * has not come (sessionLimitOf), or the host's own Claude reading that the limit blocks
+ * (blockedLimitOf over the host's subscription-limit frame). A session that is already running is
+ * not this module's: the wait continues it at the reset.
  *
  * A launch that names an engine or a model chose for itself and never falls back.
  */
