@@ -7,7 +7,7 @@
  * keeps the message and asks again with the same id, which the Mac answers
  * once (also when the failed write did land on disk).
  *
- * The disk failure is the queue store's own write (updateJsonFile) failing on
+ * The disk failure is the queue store's own write (writeJsonFile) failing on
  * demand, before or after its rename.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -21,12 +21,12 @@ vi.mock('../../src/utils/fs.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../../src/utils/fs.js')>()
   return {
     ...real,
-    updateJsonFile: (async (...args: Parameters<typeof real.updateJsonFile>) => {
+    writeJsonFile: (async (...args: Parameters<typeof real.writeJsonFile>) => {
+      if (!String(args[0]).endsWith('session-message-queue.json')) return real.writeJsonFile(...args)
       if (disk.fail === 'before') throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' })
-      const out = await real.updateJsonFile(...args)
+      await real.writeJsonFile(...args)
       if (disk.fail === 'after') throw Object.assign(new Error('EIO: directory sync failed'), { code: 'EIO' })
-      return out
-    }) as typeof real.updateJsonFile,
+    }) as typeof real.writeJsonFile,
   }
 })
 

@@ -23,11 +23,11 @@ const ROOT = path.resolve(import.meta.dirname, '../..');
 const RUNNER = path.join(ROOT, 'src/providers/claude-code-session.ts');
 
 /** Ends a delivery attempt and tells the user: must ask whether the host's link is down. */
-const ENDS_DELIVERY = new Set(['settleUnansweredLine', 'settleResumeFailure', 'processNextNow', 'drainAcpQueue']);
+const ENDS_DELIVERY = new Set(['settleUnansweredLine', 'settleResumeFailure', 'processNextNow', 'drainAcpPrompt']);
 /** Puts the rows back and hands them to the next delivery, which ends in one of the above. */
 const HANDS_ON: Record<string, string> = {
   injectMidTurn: 'a refused mid-turn write delegates to processNext',
-  steerAcpQueued: 'a refused steer leaves the rows to the turn-end drain (drainAcpQueue)',
+  steerAcpQueued: 'a refused steer leaves the rows to the turn-end drain (drainAcpQueue → drainAcpPrompt)',
   handBackLines: 'lines a dead process never took go back for the next delivery',
   handBackAnsweringLines: 'lines a process answered without taking go back for the next delivery',
   reclaimLostLine: 'a line the CLI read past is written again by the next delivery',
@@ -35,6 +35,7 @@ const HANDS_ON: Record<string, string> = {
 /** Never a link failure. */
 const NOT_LINK: Record<string, string> = {
   parkLineRows: 'the CLI read the line and dropped it: the host answered, nothing to wait for',
+  parkIfRedeliveryLoop: 'a row taken too often in a short time: each take was answered, a loop bound, not a link failure',
 };
 
 const FAILURE_CALL = /\b(reportBatchFailed|revertToPending|revertIfQueued|parkMessages|parkIfQueued)\(/g;
@@ -81,7 +82,7 @@ describe('delivery failure paths and a host link that is down', () => {
       const ask = body.indexOf('this.linkDownHost(');
       // Its generic "failed" report comes after the question (a budget or a Stop may go before).
       const generic = body.lastIndexOf('reportBatchFailed(');
-      if (generic >= 0 && name !== 'drainAcpQueue') expect(ask, `${name}: linkDownHost before its last reportBatchFailed`).toBeLessThan(generic);
+      if (generic >= 0 && name !== 'drainAcpPrompt') expect(ask, `${name}: linkDownHost before its last reportBatchFailed`).toBeLessThan(generic);
     }
   });
 

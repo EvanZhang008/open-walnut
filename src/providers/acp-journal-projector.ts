@@ -1,4 +1,4 @@
-import { CONTROL_PROMPT_GUARD, type JournalRecord } from './acp-worker/protocol.js'
+import { CONTROL_PROMPT_GUARD, isOpRefusalRecord, type JournalRecord } from './acp-worker/protocol.js'
 import { projectUserText } from '../core/sessions/reference-cards.js'
 import { redactAiOnly } from '../lib/ai-only-envelope.js'
 import type {
@@ -276,6 +276,9 @@ export class AcpJournalProjector {
       case 'session-loaded':
         return this.projectThread(record.ts, event.type, event.providerSessionId)
       case 'error': {
+        // An older worker journaled a refused steer or prompt as an error: the op
+        // changed nothing, so it is no error of the turn (OP_REFUSAL_KINDS).
+        if (isOpRefusalRecord(event)) return []
         this.turnHasError = true
         const commandId = event.commandId ?? this.currentCommandId
         // The usage limit is no failure of the turn's work: the provider's words above say it, and

@@ -35,7 +35,7 @@ import type {
 } from '@agentclientprotocol/sdk'
 import { AcpJournal, readJournal } from './journal.js'
 import { redactSensitiveText } from '../../logging/redact.js'
-import { mergeAcpSpawnEnv, snapshotAcpTurnUsage } from './protocol.js'
+import { mergeAcpSpawnEnv, OP_REFUSAL_KINDS, snapshotAcpTurnUsage } from './protocol.js'
 import { matchesUsageLimitText, parseUsageLimitReset } from '../usage-limit-text.js'
 import type {
   AcpMcpServer,
@@ -155,7 +155,13 @@ export class AcpWorker {
       const control = req.op === 'prompt'
         && (req.params as Partial<PromptParams> | undefined)?.control === 'self-report'
       const recoverableLoadFailure = req.op === 'loadSession' && werr.kind === 'load_failed'
-      if (recoverableLoadFailure) {
+      // A steer that did not apply (any reason) and a prompt refused because a turn
+      // runs change nothing about the turn: the caller keeps the message queued.
+      // Journaled as an `error`, it read as the LIVE turn's failure, and the server's
+      // turn-error path drove the queue again at once, which steered again (2026-11-09).
+      const refusal = !control && (req.op === 'steer' || OP_REFUSAL_KINDS.has(werr.kind))
+      const journaled = !recoverableLoadFailure && !refusal
+      if (recoverableLoadFailure || refusal) {
         // session/load is lifecycle setup, not a user turn. The caller may
         // immediately create a replacement provider thread; journaling this as
         // a turn error would leak into chat and transiently poison status/phase
@@ -174,7 +180,7 @@ export class AcpWorker {
           message: safeError.message,
         })
       }
-      if (!recoverableLoadFailure) this.notifyJournal()
+      if (journaled) this.notifyJournal()
       return this.err(req, safeError)
     }
   }

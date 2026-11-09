@@ -6,7 +6,8 @@
  * write chain; nothing outside them imports it.
  */
 
-import { readJsonFile, updateJsonFile } from '../utils/fs.js';
+import { readJsonFile, writeJsonFile } from '../utils/fs.js';
+import { FileLockTimeoutError, withFileLock } from '../utils/file-lock.js';
 import { SESSION_QUEUE_FILE } from '../constants.js';
 import { log } from '../logging/index.js';
 import type { RelayFates } from './relay-fates.js';
@@ -157,6 +158,11 @@ export function normalizeShape(s: QueueStore): QueueStore {
   return s;
 }
 
+/** The cache as it is now, without a read (null before the first). */
+export function peekStore(): QueueStore | null {
+  return store;
+}
+
 export async function getStore(): Promise<QueueStore> {
   if (store) return store;
   store = normalizeShape(await readJsonFile<QueueStore>(SESSION_QUEUE_FILE, { version: 1, queues: {} }));
@@ -169,12 +175,21 @@ export async function getStore(): Promise<QueueStore> {
  * The queue has TWO writer processes (the server + the `walnut start` CLI,
  * which enqueues via sendMessageToSession), so persisting the in-memory cache
  * blindly could revert the other process's enqueue. Every mutation therefore
- * runs against a FRESH read under the cross-process file lock (updateJsonFile)
- * and the cache is refreshed to the persisted result. The in-process chain on
- * `writeLock` keeps same-process mutations FIFO (mkdir-lock polling is not).
+ * runs against a FRESH read under the cross-process file lock and the cache is
+ * refreshed to the persisted result. The in-process chain on `writeLock` keeps
+ * same-process mutations FIFO (mkdir-lock polling is not).
  *
- * strict=false preserves the old best-effort contract: on a disk failure the
- * mutation is still applied to the in-memory cache (logged, not thrown).
+ * Three rules, from 2026-11-09 (a runaway delivery loop wrote this file 20 to 50
+ * times a second for 40 minutes; every other write timed out on the lock, and the
+ * user's messages stayed "QUEUED" or vanished):
+ * - A mutation that changes nothing writes nothing (the loop's writes were no-ops).
+ * - A lock that is busy is waited for (LOCK_ATTEMPTS rounds of the lock's own
+ *   wait), never given up on after one round.
+ * - strict=false keeps the best-effort contract (the cache takes the change and
+ *   nothing throws), but a change that could not reach the disk is replayed onto
+ *   the fresh read of the next write (`replays`, flushed soon by itself). Before,
+ *   the next write read the file without it and replaced the cache: the change
+ *   was lost, a queued message included.
  */
 export async function mutateStore<R>(fn: (s: QueueStore) => R, strict = false, durable = false): Promise<R> {
   let result!: R;
@@ -183,29 +198,154 @@ export async function mutateStore<R>(fn: (s: QueueStore) => R, strict = false, d
   writeLock = new Promise<void>((r) => { release = r; });
   await prev.catch(() => {});
   try {
-    store = await updateJsonFile<QueueStore>(
-      SESSION_QUEUE_FILE,
-      { version: 1, queues: {} },
-      (current) => {
-        const s = normalizeShape(current);
-        result = fn(s);
-        return s;
-      },
-      { durable },
-    );
+    store = await persist(fn, (r) => { result = r; }, durable);
   } catch (err) {
     log.session.error('failed to persist session message queue', {
       error: err instanceof Error ? err.message : String(err),
+      replaysWaiting: replays.length + (strict ? 0 : 1),
     });
     if (strict) throw err;
-    // Disk write (or lock) failed: apply to the cache anyway so the message
-    // isn't lost in-process (matches the previous mutate-cache-then-persist
-    // behavior). It re-persists with the next successful mutation.
-    result = fn(await getStore());
+    // Disk write (or lock) failed: the cache takes it now, the next write puts it on disk.
+    const cache = await getStore();
+    const before = structuredClone(cache);
+    result = fn(cache);
+    replays.push(diffStore(before, cache));
+    scheduleReplayFlush();
   } finally {
     release();
   }
   return result;
+}
+
+/** Rounds of the file lock's own wait (10 s each) before a write gives up. */
+const LOCK_ATTEMPTS = 6;
+
+/**
+ * Changes the cache holds that did not reach the disk yet, in order (mutateStore). Each is the
+ * change the mutation MADE (rows added, changed, removed), never the mutation run again: run
+ * again on another read, a pick of "the next pending row" would pick another row than the one
+ * its caller already sent (review of 2026-11-09).
+ */
+let replays: QueuePatch[] = [];
+
+interface QueuePatch {
+  /** An added row whole; a changed row only the fields it changed (undefined = removed); a removed row null. */
+  rows: Array<{ sid: string; id: string; row: QueuedMessage | null; added: boolean; fields?: Record<string, unknown> }>;
+  top: Array<{ path: [string] | [string, string]; value: unknown }>;
+}
+
+const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
+const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+
+/** What a mutation changed, row by row (and key by key for the store's other fields). */
+export function diffStore(before: QueueStore, after: QueueStore): QueuePatch {
+  const patch: QueuePatch = { rows: [], top: [] };
+  for (const sid of new Set([...Object.keys(before.queues), ...Object.keys(after.queues)])) {
+    const was = new Map((before.queues[sid] ?? []).map((m) => [m.id, m] as const));
+    const now = new Map((after.queues[sid] ?? []).map((m) => [m.id, m] as const));
+    for (const [id, row] of now) {
+      const old = was.get(id);
+      if (!old) patch.rows.push({ sid, id, row: structuredClone(row), added: true });
+      else if (!same(old, row)) {
+        // Only what changed: another writer's status, park or fence on fields this one left alone stays.
+        const o = old as unknown as Record<string, unknown>;
+        const r = row as unknown as Record<string, unknown>;
+        const fields: Record<string, unknown> = {};
+        for (const k of new Set([...Object.keys(o), ...Object.keys(r)])) {
+          if (!same(o[k], r[k])) fields[k] = structuredClone(r[k]);
+        }
+        patch.rows.push({ sid, id, row: structuredClone(row), added: false, fields });
+      }
+    }
+    for (const id of was.keys()) if (!now.has(id)) patch.rows.push({ sid, id, row: null, added: false });
+  }
+  const b = before as unknown as Record<string, unknown>;
+  const a = after as unknown as Record<string, unknown>;
+  for (const key of new Set([...Object.keys(b), ...Object.keys(a)])) {
+    if (key === 'queues' || same(b[key], a[key])) continue;
+    if (isRecord(b[key]) && isRecord(a[key])) {
+      const bo = b[key] as Record<string, unknown>;
+      const ao = a[key] as Record<string, unknown>;
+      for (const sub of new Set([...Object.keys(bo), ...Object.keys(ao)])) {
+        if (!same(bo[sub], ao[sub])) patch.top.push({ path: [key, sub], value: structuredClone(ao[sub]) });
+      }
+    } else {
+      patch.top.push({ path: [key], value: structuredClone(a[key]) });
+    }
+  }
+  return patch;
+}
+
+/**
+ * Put a held change onto a fresh read: an added row goes in at its enqueue place, a changed
+ * row gets only the fields this writer changed, and only while the read still has it (a row
+ * another writer removed is not brought back), an added row the read already has is left as
+ * it is (its write landed), a removed row goes.
+ */
+export function applyPatch(s: QueueStore, patch: QueuePatch): void {
+  for (const { sid, id, row, added, fields } of patch.rows) {
+    const queue = s.queues[sid] ?? [];
+    const at = queue.findIndex((m) => m.id === id);
+    if (row === null) { if (at >= 0) queue.splice(at, 1); }
+    else if (at >= 0) {
+      // An added row the read already has: its write landed (and then threw), and what any
+      // writer did to it since stands.
+      if (added) continue;
+      const target = queue[at] as unknown as Record<string, unknown>;
+      for (const [k, v] of Object.entries(fields ?? (row as unknown as Record<string, unknown>))) {
+        if (v === undefined) delete target[k]; else target[k] = structuredClone(v);
+      }
+    }
+    else if (added) { queue.push(structuredClone(row)); queue.sort(compareEnqueueOrder); }
+    if (queue.length > 0) s.queues[sid] = queue;
+    else delete s.queues[sid];
+  }
+  const target = s as unknown as Record<string, unknown>;
+  for (const { path: [key, sub], value } of patch.top) {
+    if (sub === undefined) {
+      if (value === undefined) delete target[key]; else target[key] = structuredClone(value);
+      continue;
+    }
+    const obj = isRecord(target[key]) ? target[key] as Record<string, unknown> : (target[key] = {}) as Record<string, unknown>;
+    if (value === undefined) delete obj[sub]; else obj[sub] = structuredClone(value);
+  }
+}
+let replayFlush: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleReplayFlush(): void {
+  if (replayFlush) return;
+  replayFlush = setTimeout(() => {
+    replayFlush = null;
+    if (replays.length > 0) void mutateStore(() => undefined).catch(() => {});
+  }, 2_000);
+  replayFlush.unref?.();
+}
+
+/** Tests only: the changes waiting to reach the disk. */
+export function pendingReplayCount(): number {
+  return replays.length;
+}
+
+async function persist<R>(fn: (s: QueueStore) => R, take: (r: R) => void, durable: boolean): Promise<QueueStore> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await withFileLock(SESSION_QUEUE_FILE, async () => {
+        const s = normalizeShape(await readJsonFile<QueueStore>(SESSION_QUEUE_FILE, { version: 1, queues: {} }));
+        const before = JSON.stringify(s);
+        const waiting = replays;
+        for (const patch of waiting) applyPatch(s, patch);
+        take(fn(s));
+        if (JSON.stringify(s) !== before) await writeJsonFile(SESSION_QUEUE_FILE, s, { durable });
+        // On disk now (or nothing to write): those replays are done.
+        if (replays === waiting) replays = [];
+        else replays = replays.slice(waiting.length);
+        return s;
+      });
+    } catch (err) {
+      if (!(err instanceof FileLockTimeoutError) || attempt >= LOCK_ATTEMPTS) throw err;
+      log.session.warn('session message queue lock busy: waiting on', { attempt, of: LOCK_ATTEMPTS });
+    }
+  }
 }
 
 /**

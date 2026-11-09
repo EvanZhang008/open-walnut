@@ -20,6 +20,7 @@ import { prepareHintedSend } from '../../core/hints/hint-send.js'
 import { requestedHintsOf } from '../../core/hints/hint-request.js'
 import { parseSideLaneKey } from '../../core/sessions/side-thread-fork.js'
 import { launchPromptFor, startLaunchPromptRegistry } from '../../core/sessions/launch-prompts.js'
+import { queueOf, queuedChange } from '../../core/sessions/queued-change.js'
 import { getSideQuestion } from '../../core/side-questions.js'
 import { buildReferenceCards, appendReferenceCards, stripReferenceCards } from '../../core/sessions/reference-cards.js'
 import { saveImageToDisk, resolveImageRefs } from './images.js'
@@ -438,9 +439,12 @@ export function registerSessionChatRpc(): void {
       throw new Error('session:edit-queued requires sessionId, messageId, and text (all strings)')
     }
 
-    const ok = await editMessage(data.sessionId, data.messageId, data.text)
-    if (!ok) throw new Error('Message not editable (already processing or not found)')
-    return { ok: true }
+    // A row already taken or gone is a state the bubble shows in place, never a thrown
+    // error (which the console turns into a red toast): sessions/queued-change.ts.
+    const sid = data.sessionId, mid = data.messageId, text = data.text
+    const res = await queuedChange(mid, { change: () => editMessage(sid, mid, text), readQueue: queueOf(sid), isHeld: (id) => heldRows(sid)?.has(id) ?? false })
+    if (!res.ok) log.web[res.outcome === 'unavailable' ? 'warn' : 'info']('queued message not edited', { sessionId: sid, messageId: mid, outcome: res.outcome, ...(res.error ? { error: res.error } : {}) })
+    return res
   })
 
   registerMethod('session:delete-queued', async (payload: unknown) => {
@@ -453,9 +457,10 @@ export function registerSessionChatRpc(): void {
       throw new Error('session:delete-queued requires sessionId and messageId (both strings)')
     }
 
-    const ok = await deleteMessage(data.sessionId, data.messageId)
-    if (!ok) throw new Error('Message not deletable (already processing or not found)')
-    return { ok: true }
+    const sid = data.sessionId, mid = data.messageId
+    const res = await queuedChange(mid, { change: () => deleteMessage(sid, mid), readQueue: queueOf(sid), isHeld: (id) => heldRows(sid)?.has(id) ?? false })
+    if (!res.ok) log.web[res.outcome === 'unavailable' ? 'warn' : 'info']('queued message not deleted', { sessionId: sid, messageId: mid, outcome: res.outcome, ...(res.error ? { error: res.error } : {}) })
+    return res
   })
 
   registerMethod('session:get-queue', async (payload: unknown) => {

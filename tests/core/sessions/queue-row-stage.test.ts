@@ -210,7 +210,9 @@ const INTERNAL_QUEUE_READS: Record<string, number> = {
   'core/sessions/folder-gone.ts': 3,
   'core/sessions/idle-compaction.ts': 1,
   'core/sessions/request-reached.ts': 1, // takenBackIds: rows the queue took back void their reached stamp
-  'providers/claude-code-session.ts': 7,
+  'providers/claude-code-session.ts': 8, // +1: the retry clock of a delivery that threw (retryAfterDeliveryThrow)
+  'providers/acp-stranded-rows.ts': 1, // settles an ACP row left 'processing' with no delivery in flight
+  'core/sessions/queued-change.ts': 1, // queueOf: was a refused Edit or Delete's row taken or gone
 }
 const DISPLAY_QUEUE_READS: Record<string, number> = {
   'core/sessions/session-extras.ts': 1, // GET /api/v1/sessions/:id/queue and the Mac relay

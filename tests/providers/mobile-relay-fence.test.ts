@@ -30,10 +30,10 @@ vi.mock('../../src/utils/fs.js', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../../src/utils/fs.js')>()
   return {
     ...mod,
-    updateJsonFile: (async (file: string, fallback: unknown, mutate: (c: unknown) => unknown, opts?: Record<string, unknown>) => {
-      if (failNextWrite) { failNextWrite = false; throw new Error('disk write failed') }
-      return mod.updateJsonFile(file, fallback, mutate as never, opts)
-    }) as typeof mod.updateJsonFile,
+    writeJsonFile: (async (...args: Parameters<typeof mod.writeJsonFile>) => {
+      if (failNextWrite && String(args[0]).endsWith('session-message-queue.json')) { failNextWrite = false; throw new Error('disk write failed') }
+      return mod.writeJsonFile(...args)
+    }) as typeof mod.writeJsonFile,
   }
 })
 

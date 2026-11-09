@@ -56,6 +56,24 @@ export interface WorkerError {
   message: string
 }
 
+/**
+ * Kinds a worker answers when it REFUSES an op for the turn state it is in (a
+ * prompt while a turn runs, a steer the live turn did not take). The caller keeps
+ * the message queued and nothing about the turn changed, so a refusal is never a
+ * turn outcome: the worker does not journal it, and the server drops one an older
+ * worker journaled. 2026-11-09: every refused steer was journaled as a turn error,
+ * that error drove the runner's queue at once, which steered again: about 30,000
+ * refusals in 37 minutes for one queued message.
+ */
+export const OP_REFUSAL_KINDS: ReadonlySet<string> = new Set<WorkerError['kind']>([
+  'turn_active', 'no_turn', 'steer_unsupported', 'steer_race',
+])
+
+/** A journaled `error` record that only says an op was refused (see OP_REFUSAL_KINDS). */
+export function isOpRefusalRecord(event: { type: string; errorKind?: unknown }): boolean {
+  return event.type === 'error' && typeof event.errorKind === 'string' && OP_REFUSAL_KINDS.has(event.errorKind)
+}
+
 /** Push notification from worker → daemon (no id, fire-and-forget). */
 export type WorkerNotification =
   | {

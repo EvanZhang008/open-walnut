@@ -71,6 +71,7 @@ import {
   resolveWalnutMcpServers,
   snapshotAcpConfigOptions,
   CONTROL_PROMPT_GUARD,
+  isOpRefusalRecord,
   walnutMcpToolSet,
   withCoreWalnutTools,
   snapshotAcpModels,
@@ -739,6 +740,11 @@ export class AcpSession {
   private _turnHadError = false
   /** The provider's usage-limit words when the usage limit ended this turn (the record's errorMessage). */
   private _turnLimitText: string | null = null
+  /** Turn boundaries seen in the journal: a steer the live turn refused is not asked again in it. */
+  private _turnEpoch = 0
+  private _steerRefusedEpoch = -1
+  /** Queue rows (walnutMessageId) this instance saw the worker take, as a prompt or a steer. */
+  private _takenMessageIds = new Set<string>()
   /** Commands with an observed terminal fact. Recovery may append a missing
    * prompt-accepted fact after daemon repair already closed the turn. */
   private _terminalCommands = new Set<string>()
@@ -961,6 +967,7 @@ export class AcpSession {
     // Track turn/pending state from meta facts (worker-observed, authoritative).
     if (record.kind === 'meta') {
       const t = record.event.type
+      if (t === 'prompt-accepted' || t === 'steer-accepted') this.noteTaken(record.event.walnutMessageId)
       if (t === 'prompt-accepted') {
         const terminalAlreadyObserved = this._terminalCommands.has(record.event.commandId)
         if (!terminalAlreadyObserved) this._turnActive = true
@@ -972,14 +979,16 @@ export class AcpSession {
       if (t === 'turn-started'
         && !this._terminalCommands.has(record.event.commandId)) {
         this._turnActive = true
+        this._turnEpoch++
       }
       if (t === 'turn-ended' || t === 'turn-interrupted') {
+        this._turnEpoch++
         if (record.event.commandId) {
           this._terminalCommands.add(record.event.commandId)
         }
         this._turnActive = false
       }
-      if (t === 'error') this._turnHadError = true
+      if (t === 'error' && !isOpRefusalRecord(record.event)) this._turnHadError = true
       if (t === 'permission-answered' || t === 'permission-auto-cancelled') {
         if (this._pendingPermissions.delete(record.event.providerRequestId)) {
           this.persistPendingPermission()
@@ -2032,6 +2041,21 @@ export class AcpSession {
   /** True when this worker's adapter advertised mid-turn steering support. */
   get canSteer(): boolean { return this._capabilities?.steering === true }
 
+  /** The live turn already refused a steer: the queue waits for its end instead of taking a row to steer. */
+  get steerRefusedThisTurn(): boolean { return this._steerRefusedEpoch === this._turnEpoch }
+
+  /** The worker took this queue row (its prompt-accepted or steer-accepted fact was read here). */
+  hasTaken(walnutMessageId: string): boolean { return this._takenMessageIds.has(walnutMessageId) }
+
+  private noteTaken(walnutMessageId: string | undefined): void {
+    if (!walnutMessageId) return
+    this._takenMessageIds.add(walnutMessageId)
+    // Only a row still in the queue is ever asked about: keep the newest few hundred.
+    if (this._takenMessageIds.size > 512) {
+      for (const id of this._takenMessageIds) { this._takenMessageIds.delete(id); if (this._takenMessageIds.size <= 256) break }
+    }
+  }
+
   /**
    * Inject a message into the RUNNING turn (codex `turn/steer` via the
    * adapter's `_session/steering`). Returns true when the text joined the
@@ -2044,6 +2068,9 @@ export class AcpSession {
   async steer(message: string, walnutMessageId: string): Promise<boolean> {
     if (!this._active || !this._turnActive) return false
     if (this._capabilities && !this._capabilities.steering) return false
+    // This turn already refused a steer (Codex refuses for a whole review or compact
+    // turn): the message waits for the turn end and goes as the next prompt, once.
+    if (this.steerRefusedThisTurn) return false
     const conn = await this.ensureConn()
     const commandId = `acp-steer:${walnutMessageId}`
     const resp = await conn.send('acpSteer', {
@@ -2054,6 +2081,7 @@ export class AcpSession {
       ...this.budgetTarget(),
     })
     if (resp.ok) return true
+    this._steerRefusedEpoch = this._turnEpoch
     const kind = (resp as { errorKind?: string }).errorKind
     // Anything steer-shaped (no live turn, unsupported, race, old daemon
     // without the acpSteer command) degrades to the queue path silently.

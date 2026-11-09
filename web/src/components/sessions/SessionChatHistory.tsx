@@ -20,6 +20,7 @@ import { EMPTY_TOOL_SOURCE } from '@/stream/command-view';
 import { ChatEarlierBlock, useChatEarlier } from './ChatEarlierBlock';
 import { TaskEarlierSessions } from './TaskEarlierSessions';
 import { DeliveryMetaLine } from './DeliveryMetaLine';
+import { HeldSince, LeftQueueNote, QueuedWaitNote } from './QueuedRowNotes';
 import { latestTurnStartTop, READER_SCROLL_EVENT } from './phone-session-layer';
 import { downInputResumesAtEnd, followResumes, READER_DOWN_MS, type FollowLeave } from './follow-resume';
 import { liveOutputSize, phoneTurnStartStep, PHONE_TURN_START_WINDOW_MS, type TimelineContent } from './phone-turn-start';
@@ -255,6 +256,15 @@ export interface OptimisticMessage extends SessionHistoryMessage {
   sentBy?: 'person' | 'agent';
   /** A reloaded row's pictures, as URLs the server serves (the queue's `images`). */
   imageUrls?: string[];
+  /** The row waits for the running turn to end (the queue's `afterTurn`). */
+  afterTurn?: boolean;
+  /** When a queue read found the row gone while this bubble still read Queued
+   *  (hooks/queue-reconcile.ts): it left the queued list and history should hold it. */
+  leftQueueAt?: number;
+  /** A plain line the bubble shows about what just happened to it (a Delete that came too late). */
+  queueNotice?: string;
+  /** A Delete or Edit of this row is on its way to the server. */
+  changing?: boolean;
 }
 
 /** Parsed envelopes by row text: a quiet fold's line reads them on every frame. */
@@ -295,6 +305,8 @@ interface SessionChatHistoryProps {
   /** SSH host alias — used for remote file access */
   sessionHost?: string;
   optimisticMessages?: OptimisticMessage[];
+  /** The panel's last read of the server's queue (useSessionSend queueSync): a failed one is part of a waiting bubble's why. */
+  queueSync?: { error?: string };
   onMessagesDelivered?: (count: number, messageIds?: string[]) => void;
   onBatchCompleted?: (count: number, messageIds?: string[]) => void;
   onBatchFailed?: (messageIds: string[], error: string) => void;
@@ -591,7 +603,7 @@ function ownRowsOf(queuedSig: string, tree: ThreadTree): { sentKeys: Set<string>
   return { sentKeys, queuedKeys, unsentKeys };
 }
 
-export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onDeliveryWaiting, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onFolderMoved, folderGoneHistory, onTaskClick, onSessionClick, onFileOpen, onStreamingChange, scrollToBottomNonce, onRequestComposerFocus, onQuoteInChat, chatLane, earlierSessionsTaskId, onOpenEarlierSession, publishTimeline, readTimeline, workingText }: SessionChatHistoryProps) {
+export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, queueSync, onMessagesDelivered, onBatchCompleted, onBatchFailed, onDeliveryWaiting, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onFolderMoved, folderGoneHistory, onTaskClick, onSessionClick, onFileOpen, onStreamingChange, scrollToBottomNonce, onRequestComposerFocus, onQuoteInChat, chatLane, earlierSessionsTaskId, onOpenEarlierSession, publishTimeline, readTimeline, workingText }: SessionChatHistoryProps) {
   // Dev-only render counter per session: lets a browser test prove a hot
   // interaction (the pointer over a question mark) never re-renders this tree.
   if (import.meta.env.DEV && typeof window !== 'undefined') {
@@ -1266,6 +1278,18 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     log.info('stream', 'session host reconnected: reading history again', { sessionId, host: sessionHost });
     runWhenVisible(`sch:host-back:${sessionId}#${instanceUid.current}`, () => bumpHistory());
   }, [hostConnected, sessionId, sessionHost, bumpHistory]);
+
+  // A bubble the queue read found gone (hooks/queue-reconcile.ts leftQueueAt): history
+  // should hold its row now, so read it; the render dedup then absorbs the bubble.
+  const leftQueueKey = (optimisticMessages ?? []).filter((m) => m.leftQueueAt !== undefined).map((m) => m.queueId).join(',');
+  useEffect(() => { if (leftQueueKey) bumpHistory(); }, [leftQueueKey, bumpHistory]);
+
+  // When the session last went quiet: a bubble that left the queue is only said to be
+  // missing from history well after that (QueuedRowNotes LeftQueueNote).
+  const quietSinceRef = useRef(0);
+  const wasStreamingRef = useRef(isStreaming);
+  if (wasStreamingRef.current && !isStreaming) quietSinceRef.current = Date.now();
+  wasStreamingRef.current = isStreaming;
 
   // Agent-sent messages: create synthetic optimistic message so it appears in the queue.
   // `side-thread-*` sources are TOOL PLUMBING (the cache warm-up, the self-summary
@@ -5287,6 +5311,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           return (
             <div className="thread-queue-note session-msg-held-note" role="status">
               {reason}{retryAt ? ` ${nextTryLabel(retryAt)}` : ''}
+              {/* Past the bound, the server's reason also says how long (queued-wait.ts). */}
+              <HeldSince m={{ status: m.status, timestamp: m.timestamp, heldReason: reason }} />
               {clocked && !sentNow.has(m.queueId) && (
                 <button type="button" className="session-msg-send-now-btn" onClick={() => {
                   setSentNow((prev) => new Set(prev).add(m.queueId));
@@ -5297,16 +5323,44 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
             </div>
           );
         })()}
+        {/* A bubble that has waited past the bound with no reason from the server says why
+            in plain words, never a bare QUEUED for minutes (queued-wait.ts). */}
+        {!heldIds.has(m.queueId) && !m.heldReason && !m.changing && (m.status === 'pending' || m.status === 'received') && (
+          <QueuedWaitNote
+            m={m}
+            turnRunning={isStreaming}
+            syncError={queueSync?.error}
+            sending={sentNow.has(m.queueId)}
+            onSendNow={() => {
+              setSentNow((prev) => new Set(prev).add(m.queueId));
+              onRetryFailed?.(m.queueId);
+            }}
+          />
+        )}
+        {m.leftQueueAt !== undefined && m.status === 'delivered' && (
+          <LeftQueueNote
+            m={m}
+            turnRunning={isStreaming}
+            quietSince={quietSinceRef.current}
+            onSendAgain={() => onRetryFailed?.(m.queueId)}
+            onDismiss={() => onDismissFailed?.(m.queueId)}
+          />
+        )}
+        {m.queueNotice && (
+          <div className="thread-queue-note session-msg-queue-notice" role="status">{m.queueNotice}</div>
+        )}
         <OptimisticImagePreviews images={m.images} />
         <QueuedImageThumbs urls={m.images?.length ? undefined : m.imageUrls} />
         <DeliveryMetaLine status={m.status} timestamp={m.timestamp} turnRunning={isStreaming} onRetry={() => onRetryFailed?.(m.queueId)} />
         {m.status === 'received' && (
           <>
-            <div className="session-msg-received-badge">Queued</div>
-            <div className="session-msg-queued-actions">
-              <button onClick={() => setEditingId(m.queueId)}>Edit</button>
-              <button onClick={() => onDeleteQueued?.(m.queueId)}>Delete</button>
-            </div>
+            <div className="session-msg-received-badge">{m.changing ? 'Deleting…' : 'Queued'}</div>
+            {!m.changing && (
+              <div className="session-msg-queued-actions">
+                <button onClick={() => setEditingId(m.queueId)}>Edit</button>
+                <button onClick={() => onDeleteQueued?.(m.queueId)}>Delete</button>
+              </div>
+            )}
           </>
         )}
         {m.status === 'delivered' && (

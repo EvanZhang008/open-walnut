@@ -496,7 +496,10 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   useEffect(() => { if (sessionRecord) keepSessionRecord(sessionId, sessionRecord); }, [sessionId, sessionRecord]);
   // Set once the ~15s retry window closes on a 404 — the id resolves to nothing.
   const [missing, setMissing] = useState(false);
-  const { optimisticMsgs, sendError, redirectedTo, send, interruptSend, stopTurn, retryFailed, dismissFailed, handleMessagesDelivered, handleBatchCompleted, handleBatchFailed, handleDeliveryWaiting, handleEditQueued, handleDeleteQueued, addExternalQueued } = useSessionSend(sessionId);
+  const { optimisticMsgs, sendError, redirectedTo, send, interruptSend, stopTurn, retryFailed, dismissFailed, handleMessagesDelivered, handleBatchCompleted, handleBatchFailed, handleDeliveryWaiting, handleEditQueued, handleDeleteQueued, addExternalQueued, queueSync } = useSessionSend(sessionId);
+  // Only the read's failure reaches the timeline, as a stable object: a read that changes nothing re-renders nothing.
+  const queueSyncError = queueSync.error;
+  const queueSyncProp = useMemo(() => (queueSyncError ? { error: queueSyncError } : undefined), [queueSyncError]);
   // A message sent here went to the session an engine switch put in this one's place: show that one.
   useEffect(() => {
     if (redirectedTo && redirectedTo !== sessionId) onSessionReplaced?.(sessionId, redirectedTo);
@@ -2389,6 +2392,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     sessionHost: session?.host,
     chatLane: !!session?.lane?.startsWith('chat:'),
     optimisticMessages: optimisticMsgs,
+    queueSync: queueSyncProp,
     onEditQueued: handleEdit,
     onDeleteQueued: handleDelete,
     onRetryFailed: handleRetry,
@@ -2399,7 +2403,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     onFileOpen: handleFileOpen,
     onQuoteInChat: quoteInChat,
     readTimeline: timelineShare,
-  }), [sessionId, session?.engine, taskPhase, initialPromptText, session?.cwd, session?.host, session?.lane, optimisticMsgs,
+  }), [sessionId, session?.engine, taskPhase, initialPromptText, session?.cwd, session?.host, session?.lane, optimisticMsgs, queueSyncProp,
     handleEdit, handleDelete, handleRetry, session?.cwdGone?.history, dismissFailed, chatTaskClick, onSessionClick,
     handleFileOpen, quoteInChat, timelineShare]);
 
@@ -3839,6 +3843,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             earlierSessionsTaskId={(session?.engineSwitch || session?.resumedBySwitch) && session.taskId ? session.taskId : undefined}
             onOpenEarlierSession={onSessionClick}
             optimisticMessages={optimisticMsgs}
+            queueSync={queueSyncProp}
             onMessagesDelivered={handleMessagesDelivered}
             onBatchCompleted={handleBatchCompleted}
             onBatchFailed={handleBatchFailed}

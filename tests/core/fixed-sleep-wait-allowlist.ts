@@ -241,6 +241,7 @@ export const FIXED_SLEEP_ALLOWLIST: readonly FixedSleepAllowed[] = [
   { file: "tests/plugins/walnut-rhythm/never-starts-alone.test.ts", sleep: "await new Promise((resolve) => setTimeout(resolve, 20))", reason: "negative: the attention and agent-turn events must not start a focus block or send a notice" },
   { file: "tests/providers/acp-daemon-stdin-epipe.test.ts", sleep: "await new Promise((r) => setTimeout(r, 25))", reason: "inside a polling loop with a deadline (waits for the worker exit log)" },
   { file: "tests/providers/acp-daemon-stdin-epipe.test.ts", sleep: "await new Promise((r) => setTimeout(r, 300))", reason: "negative: no stray uncaught EPIPE after the abort (positive state awaited by vi.waitFor just before)" },
+  { file: "tests/providers/acp-redelivery-loop.test.ts", sleep: "await new Promise((r) => setTimeout(r, 300))", reason: "negative: once parked, no redelivery already scheduled takes the row again" },
   { file: "tests/providers/acp-session-history.test.ts", sleep: "await new Promise((r) => setTimeout(r, 100))", reason: "negative: the user prompt must not be sent while the cancel is still running" },
   { file: "tests/providers/acp-session-history.test.ts", sleep: "await new Promise((r) => setTimeout(r, 150))", reason: "negative: no cancel and no prompt while the status question still answers" },
   { file: "tests/providers/claude-walnut-own-permission.test.ts", sleep: "await new Promise((r) => setTimeout(r, 20))", reason: "negative: an allowed Walnut report must never show a permission card" },

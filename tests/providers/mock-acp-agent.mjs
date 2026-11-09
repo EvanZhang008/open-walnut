@@ -499,7 +499,11 @@ rl.on('line', async (line) => {
         .filter((b) => b.type === 'text')
         .map((b) => b.text)
         .join(' '));
-      if (turnRunning && !cancelled) {
+      // MOCK_ACP_STEER_REFUSE=1: refuse every steer, as Codex does for a whole
+      // review or compact turn (the worker reports steer_race).
+      if (process.env.MOCK_ACP_STEER_REFUSE === '1') {
+        reply(msg.id, { outcome: 'failed' });
+      } else if (turnRunning && !cancelled) {
         steeredTexts.push(text);
         reply(msg.id, { outcome: 'injected' });
       } else {

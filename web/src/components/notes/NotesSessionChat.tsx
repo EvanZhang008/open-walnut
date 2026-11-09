@@ -63,7 +63,7 @@ export function NotesSessionChat({ taskId, sessionId: knownSessionId, onResolved
   const [localQueue, setLocalQueue] = useState<QueuedLocal[]>([]);
   const localIdRef = useRef(0);
 
-  const { optimisticMsgs, send, handleMessagesDelivered, handleBatchCompleted, handleBatchFailed, retryFailed, dismissFailed, handleEditQueued, handleDeleteQueued } = useSessionSend(sessionId);
+  const { optimisticMsgs, send, handleMessagesDelivered, handleBatchCompleted, handleBatchFailed, retryFailed, dismissFailed, handleEditQueued, handleDeleteQueued, queueSync } = useSessionSend(sessionId);
   const {
     items: slashCommands, search: searchSlashCommands, onPaletteOpen: onSlashPaletteOpen, status: slashCommandsStatus,
   } = useSlashCommands(session?.cwd, session?.host, sessionId ?? undefined);
@@ -227,6 +227,7 @@ export function NotesSessionChat({ taskId, sessionId: knownSessionId, onResolved
             sessionCwd={session?.cwd}
             sessionHost={session?.host}
             optimisticMessages={optimisticMsgs}
+            queueSync={queueSync}
             onMessagesDelivered={handleMessagesDelivered}
             onBatchCompleted={handleBatchCompleted}
             onBatchFailed={handleBatchFailed}

@@ -26,9 +26,6 @@
  * (unparkMessage, from Retry) puts it back in line, or deleteMessage discards it.
  */
 
-import fs from 'node:fs/promises';
-import { withFileLock } from '../utils/file-lock.js';
-import { SESSION_QUEUE_FILE } from '../constants.js';
 import { log } from '../logging/index.js';
 import { lineUuidFor, noteLineCarries, splitBatchAtUuid } from '../providers/batch-uuid.js';
 import {
@@ -763,16 +760,16 @@ export async function getQueue(sessionId: string): Promise<QueuedMessage[]> {
 export async function withUndeliveredMessageGuard<T>(
   check: (hasUndelivered: (sessionId: string) => boolean) => Promise<T>,
 ): Promise<T> {
-  return withFileLock(SESSION_QUEUE_FILE, async () => {
-    let current: QueueStore;
-    try {
-      current = JSON.parse(await fs.readFile(SESSION_QUEUE_FILE, 'utf8')) as QueueStore;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      current = { version: 1, queues: {} };
-    }
-    return check(sessionId => (current.queues[sessionId] ?? []).some(message => message.status !== 'parked'));
-  });
+  // Never under the queue's file lock: `check` runs a task hand-back, whose hooks may queue a
+  // message, and a queue write waiting on a lock its own caller holds timed out every time
+  // (2026-11-09; tests/core/queue-lock-holders-guard.test.ts). The answer is read live at each
+  // call instead: this process's queue (every write of it updates the cache before it resolves)
+  // and the file as it was when the guard began (the other writer, the `walnut start` CLI).
+  const { readQueueFileFresh, peekStore } = await import('./session-queue-store.js');
+  const onDisk = await readQueueFileFresh().catch(() => ({ version: 1, queues: {} } as QueueStore));
+  const loaded = await getStore();
+  const waits = (q: QueueStore, sessionId: string) => (q.queues[sessionId] ?? []).some((message) => message.status !== 'parked');
+  return check((sessionId) => waits(onDisk, sessionId) || waits(peekStore() ?? loaded, sessionId));
 }
 
 /**

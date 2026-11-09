@@ -509,6 +509,24 @@ describe('ACP journal projector', () => {
     expect(system).toEqual([])
   })
 
+  // 2026-11-09: an older worker journals a refused steer or prompt as an `error`;
+  // read as the live turn's failure, each drove the queue to steer again.
+  it.each(['steer_race', 'no_turn', 'steer_unsupported', 'turn_active'])('a journaled %s refusal is no turn error, live or in history', (kind) => {
+    const records: JournalRecord[] = [
+      meta(1, { type: 'prompt-accepted', commandId: 'live', walnutMessageId: 'm1', text: 'work' } as never),
+      meta(2, { type: 'turn-started', commandId: 'live' } as never),
+      meta(3, { type: 'error', errorKind: kind, message: 'refused' } as never),
+      meta(4, { type: 'turn-ended', commandId: 'live', stopReason: 'end_turn' } as never),
+    ]
+    const normalizer = new AcpStreamNormalizer(new AcpJournalProjector('runtime-refusal'))
+    const live = records.flatMap((r) => normalizer.normalize(r))
+    expect(live.filter((e) => e.name === 'session:error')).toEqual([])
+    expect(live.filter((e) => e.name === 'session:result')).toEqual([
+      expect.objectContaining({ payload: expect.objectContaining({ stopReason: 'end_turn' }) }),
+    ])
+    expect(projectAcpJournalHistory('runtime-refusal', records).filter((m) => m.role === 'system')).toEqual([])
+  })
+
   it('surfaces indeterminate prompt delivery as an explicit retry warning', () => {
     const projector = new AcpJournalProjector('runtime-uncertain')
     const events = [

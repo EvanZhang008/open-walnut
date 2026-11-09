@@ -22,6 +22,11 @@ async function injectEvent(page: Page, name: string, data: unknown) {
   await page.evaluate(({ name, data }) => {
     const ws = (window as any).__capturedWs as WebSocket | undefined
     if (!ws) throw new Error('No captured WebSocket')
+    // The mocked queue follows what the injected server events say happened to a row.
+    const d = data as { messageIds?: string[] }
+    const taken = ((window as any).__takenIds ??= new Set<string>()) as Set<string>
+    if (name === 'session:messages-delivered') for (const id of d.messageIds ?? []) taken.add(id)
+    if (name === 'session:batch-failed') for (const id of d.messageIds ?? []) taken.delete(id)
     ws.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type: 'event', name, data, seq: Date.now() }) }))
   }, { name, data })
 }
@@ -69,7 +74,14 @@ async function open(page: Page, opts: { queue?: QueueRow[]; replyMs?: number } =
               }
               if (p.type === 'req' && p.method === 'session:get-queue' && p.payload?.sessionId === 'pw-slow-host-session') {
                 intercepted = true
-                answer(p.id, { messages: queue }, 10)
+                // The server's queue holds every message sent here as a waiting row, as the real
+                // one does: the panel re-reads it (useQueueSync) and must find them still there.
+                const sentRows = ((window as any).__sentMessageIds as string[])
+                  .filter((id) => !queue.some((r: { id: string }) => r.id === id))
+                  .map((id) => ({ id, message: '', status: (window as any).__takenIds?.has(id) ? 'processing' : 'pending', enqueuedAt: new Date().toISOString() }))
+                const taken = ((window as any).__takenIds ?? new Set()) as Set<string>
+                const given = queue.map((r: { id: string; heldReason?: string }) => (taken.has(r.id) ? { ...r, status: 'processing', heldReason: undefined } : r))
+                answer(p.id, { messages: [...given, ...sentRows] }, 10)
               }
             } catch { /* not JSON */ }
             if (!intercepted) origSend(data)

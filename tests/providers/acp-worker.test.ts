@@ -1096,6 +1096,34 @@ describe('mid-turn steering', () => {
     expect(metas(recs).filter((e) => e.type === 'turn-ended')).toHaveLength(1)
   })
 
+  // 2026-11-09: each refused steer was journaled as an `error`, which the server read
+  // as the live turn's failure and answered by steering again: a loop of ~30,000.
+  it('a steer the live turn refuses is steer_race and journals no error; the turn ends clean', async () => {
+    worker = await initWorker({ MOCK_ACP_STEER_REFUSE: '1' })
+    await op(worker, 'newSession', { cwd: tmpDir })
+    await op(worker, 'prompt', { commandId: 'acp-prompt:qm-run', walnutMessageId: 'qm-run', text: 'steer-window' })
+    await waitForJournal((r) => r.some((rec) => rec.kind === 'acp'
+      && JSON.stringify(rec.frame).includes('steer window open')))
+    for (const n of [1, 2]) {
+      const resp = await op(worker, 'steer', { commandId: 'acp-steer:qm-peer', walnutMessageId: 'qm-peer', text: `refused ${n}` })
+      expect(resp.ok).toBe(false)
+      expect(resp.error?.kind).toBe('steer_race')
+    }
+    const recs = await waitForJournal((r) => turnEnded(r), 10000)
+    expect(metas(recs).filter((e) => e.type === 'error')).toEqual([])
+    expect(metas(recs).filter((e) => e.type === 'steer-accepted')).toEqual([])
+  })
+
+  it('a steer with no live turn and a prompt while a turn runs journal no error', async () => {
+    worker = await initWorker()
+    await op(worker, 'newSession', { cwd: tmpDir })
+    expect((await op(worker, 'steer', { commandId: 'acp-steer:qm-idle2', walnutMessageId: 'qm-idle2', text: 'x' })).error?.kind).toBe('no_turn')
+    await op(worker, 'prompt', { commandId: 'acp-prompt:qm-a', walnutMessageId: 'qm-a', text: 'steer-window' })
+    expect((await op(worker, 'prompt', { commandId: 'acp-prompt:qm-b', walnutMessageId: 'qm-b', text: 'second' })).error?.kind).toBe('turn_active')
+    const recs = await waitForJournal((r) => turnEnded(r), 10000)
+    expect(metas(recs).filter((e) => e.type === 'error')).toEqual([])
+  })
+
   it('steer with no live turn → typed no_turn error (caller falls back to prompt)', async () => {
     worker = await initWorker()
     await op(worker, 'newSession', { cwd: tmpDir })

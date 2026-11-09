@@ -11,6 +11,9 @@ import { launchSeedFor } from '@/components/sessions/launch-prompt-seed';
 import { withoutLeadingRiders } from '@open-walnut/history-walnut-riders';
 import { parseHinted } from '@open-walnut/hint-format';
 import { splitAttachmentHeaders } from '@open-walnut/attachment-headers';
+import { adoptSendAnswer, reconcileWithQueue, rowVerdict } from './queue-reconcile';
+import { useQueueSync, type QueueSyncState } from './useQueueSync';
+import { queuedChangeResult, type QueuedChangeAnswer, type QueuedChangeKind } from '@/components/sessions/queued-change-words';
 
 /** Per-send extras that ride the `session:send` RPC. */
 export interface SessionSendOptions {
@@ -58,6 +61,8 @@ interface UseSessionSendReturn {
   handleDeleteQueued: (sessionId: string, queueId: string) => void;
   addExternalQueued: (msg: { queueId: string; text: string; enqueuedAt?: string; sentBy?: 'person' | 'agent'; queuedText?: string }) => void;
   clearOptimistic: () => void;
+  /** The panel's last read of the server's queue (useQueueSync): its time, or why it failed. */
+  queueSync: QueueSyncState;
 }
 
 /**
@@ -129,6 +134,8 @@ export interface QueueRowWire {
   delivered?: boolean;
   images?: Array<{ path: string; url: string }>;
   files?: Array<{ path: string; name: string }>;
+  /** The row waits for the running turn to end (sessions/queue-after-turn.ts presentAfterTurn). */
+  afterTurn?: boolean;
 }
 
 /**
@@ -151,19 +158,22 @@ export function queueRowBubble(m: QueueRowWire): OptimisticMessage | null {
   // 'parked' = the server stopped auto-retrying this row (permanent failure, e.g. the
   // session's working folder was deleted). Reuse the 'failed' presentation so it keeps
   // Retry + Discard instead of looking like an ordinary "Queued" message on its way.
-  const parked = m.status === 'parked';
-  // A row held back (behind a line still being confirmed, or behind an unanswered
-  // permission prompt) was never written: it shows as waiting, with the reason.
-  const held = (m.status === 'processing' || m.status === 'pending') && !!m.heldReason;
+  // One reading of a row for a reload and for every later queue read (queue-reconcile.ts rowVerdict):
+  // a row held back or whose stage is `waiting` (a cold resume, a line mid-delivery) was never
+  // written and shows Queued, with its reason; a written one shows Delivered.
+  const verdict = rowVerdict(m);
+  const parked = verdict.kind === 'parked';
+  const held = verdict.kind === 'waiting' && !!verdict.heldReason;
   const imageUrls = (m.images ?? []).map((img) => img.url).filter((u) => typeof u === 'string' && u.length > 0);
   return {
     role: 'user' as const,
     text: display,
     timestamp: m.enqueuedAt ?? new Date().toISOString(),
     queueId: m.id,
-    status: (held ? 'received' : m.status === 'processing' ? 'delivered' : parked ? 'failed' : 'received') as 'received' | 'delivered' | 'failed',
+    status: (verdict.kind === 'sent' ? 'delivered' : parked ? 'failed' : 'received') as 'received' | 'delivered' | 'failed',
     ...(parked ? { parked: true, failedError: m.parkedReason } : {}),
     ...(held ? { heldReason: m.heldReason, ...(m.heldRetryAt ? { heldRetryAt: m.heldRetryAt } : {}) } : {}),
+    ...(m.afterTurn && !parked ? { afterTurn: true } : {}),
     ...(dedupText !== undefined ? { dedupText } : {}),
     // No per-stage badge here: a reloaded tab is never told when the CLI reads a row it
     // already counted delivered at its write, so a "written" note would go stale. A
@@ -294,6 +304,9 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
   // Ids a delivery named before their send RPC answered: the bubble that learns
   // one starts 'delivered' (a delivery never marks some other bubble by count).
   const deliveredEarlyRef = useRef<Set<string>>(new Set());
+  // The bubbles follow the server's queue, not only its events (useQueueSync, queue-reconcile.ts).
+  const sync = useQueueSync(activeSessionId, optimisticMsgs, msgsRef, setOptimisticMsgs, queueRowBubble);
+  const { touch, retire, hold, release, request: requestQueueRead } = sync;
 
   // Clear optimistic messages on session switch + rehydrate from server disk queue.
   // The queue only contains messages NOT yet delivered to Claude (pending/processing).
@@ -317,15 +330,15 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
         const launch = res?.launchPrompt ? launchBubbleOf(res.launchPrompt) : null;
         if (res?.messages?.length || launch) {
           setOptimisticMsgs(prev => {
-            const existing = new Set(prev.map(m => m.queueId));
-            const newMsgs = (res.messages ?? [])
-              .filter(m => !existing.has(m.id))
-              .map(queueRowBubble)
-              .filter((m): m is OptimisticMessage => m !== null);
+            // The rows join in enqueue order (a send made while this read was in flight
+            // keeps its place after them); nothing is judged gone on this first read.
+            const merged = reconcileWithQueue(prev, res.messages ?? [], {
+              known: new Set(), touched: new Set(), retired: sync.retiredIds(), now: Date.now(), toBubble: queueRowBubble,
+            });
             // The launch prompt opens the first turn, so it goes before anything
             // the user managed to send while this RPC was in flight.
-            const head = launch && !existing.has(launch.queueId) ? [launch] : [];
-            return [...head, ...prev, ...newMsgs];
+            const head = launch && !merged.some(m => m.queueId === launch.queueId) ? [launch] : [];
+            return head.length ? [...head, ...merged] : merged;
           });
           log.info('send', 'rehydrated from queue', {
             sessionId: activeSessionId,
@@ -403,11 +416,8 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
         // bubble keeps rendering the user's original, but dedups against what was
         // actually enqueued. See OptimisticMessage.dedupText.
         const adopted = statusOnAdopt(res.messageId, deliveredEarlyRef.current);
-        setOptimisticMsgs((prev) => prev.map((m) =>
-          m.queueId === tempId
-            ? { ...m, queueId: res.messageId, status: m.status === 'delivered' ? m.status : adopted, ...(res.dedupText ? { dedupText: res.dedupText } : {}), ...(res.enqueuedAt ? { timestamp: res.enqueuedAt } : {}) }
-            : m
-        ));
+        touch([res.messageId]);
+        setOptimisticMsgs((prev) => adoptSendAnswer(prev, tempId, res, adopted));
       }
       return true;
     } catch (e) {
@@ -419,7 +429,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
       ));
       return false;
     }
-  }, []);
+  }, [touch]);
 
   const interruptSend = useCallback(async (sessionId: string, message: string, images?: ImageAttachment[], opts?: SessionSendOptions): Promise<boolean> => {
     setSendError(null);
@@ -465,11 +475,8 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
       if (followRedirect(res, tempId, sessionId)) return true;
       if (res?.messageId) {
         const adopted = statusOnAdopt(res.messageId, deliveredEarlyRef.current);
-        setOptimisticMsgs((prev) => prev.map((m) =>
-          m.queueId === tempId
-            ? { ...m, queueId: res.messageId, status: m.status === 'delivered' ? m.status : adopted, ...(res.dedupText ? { dedupText: res.dedupText } : {}), ...(res.enqueuedAt ? { timestamp: res.enqueuedAt } : {}) }
-            : m
-        ));
+        touch([res.messageId]);
+        setOptimisticMsgs((prev) => adoptSendAnswer(prev, tempId, res, adopted));
       }
       return true;
     } catch (e) {
@@ -481,7 +488,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
       ));
       return false;
     }
-  }, []);
+  }, [touch]);
 
   /** Retry a failed message — resets to pending and re-sends via RPC.
    *
@@ -499,16 +506,19 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
     // A waiting row (the host did not take it in time) is sent now the same way:
     // the server re-drains that row; the bubble keeps its Queued state meanwhile.
     const waiting = msgsRef.current.find(m => m.queueId === queueId && (m.status === 'pending' || m.status === 'received'));
-    const failedMsg = waiting ?? msgsRef.current.find(m => m.queueId === queueId && m.status === 'failed');
+    // A bubble the queue lost track of (it left the queue and history never showed it) is sent again like a failed one.
+    const failedMsg = waiting ?? msgsRef.current.find(m => m.queueId === queueId && (m.status === 'failed' || (m.status === 'delivered' && m.leftQueueAt !== undefined)));
     if (!failedMsg) return;
 
     setSendError(null);
     log.info('send', waiting ? 'sending a waiting message now' : 'retrying', { sessionId, queueId });
+    // No queue read judges this row while its send is on its way (it may be gone and enqueued anew).
+    hold([queueId]);
 
     // Clear `parked` too: the server un-parks the row on this explicit retry, so
     // a second failure must render as an ordinary "Send failed", not a stale park.
     if (!waiting) setOptimisticMsgs((prev) => prev.map((m) =>
-      m.queueId === queueId ? { ...m, status: 'pending' as const, failedError: undefined, parked: undefined } : m
+      m.queueId === queueId ? { ...m, status: 'pending' as const, failedError: undefined, parked: undefined, leftQueueAt: undefined, queueNotice: undefined } : m
     ));
 
     // The pre-assigned user-line uuid rides the retry too: the thread anchor recorded
@@ -525,35 +535,36 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
         },
       ))
       .then((res) => {
+        release([queueId]);
         if (followRedirect(res, queueId, sessionId)) return;
         if (res?.messageId) {
           const adopted = statusOnAdopt(res.messageId, deliveredEarlyRef.current);
-          setOptimisticMsgs((prev) => prev.map((m) =>
-            m.queueId === queueId
-              ? { ...m, queueId: res.messageId, status: m.status === 'delivered' ? m.status : adopted, ...(res.dedupText ? { dedupText: res.dedupText } : {}), ...(res.enqueuedAt ? { timestamp: res.enqueuedAt } : {}) }
-              : m
-          ));
+          touch([res.messageId]);
+          setOptimisticMsgs((prev) => adoptSendAnswer(prev, queueId, res, adopted));
         }
       })
       .catch((e: Error) => {
+        release([queueId]);
         log.error('send', 'Retry failed', { sessionId, error: e.message });
         setSendError(e.message);
         setOptimisticMsgs((prev) => prev.map((m) =>
           m.queueId === queueId ? { ...m, status: 'failed' as const, failedError: e.message } : m
         ));
       });
-  }, []);
+  }, [touch, hold, release]);
 
   /** Remove a failed message from the optimistic list. */
   const dismissFailed = useCallback((queueId: string) => {
+    retire([queueId]);
     setOptimisticMsgs((prev) => prev.filter((m) => m.queueId !== queueId));
-  }, []);
+  }, [retire]);
 
   const handleMessagesDelivered = useCallback((count: number, messageIds?: string[]) => {
     log.info('send', 'delivered', { count, messageIds });
     // Exactly the bubbles the ids name (a failed one too: it ran after all); the
     // count only for an id-less event. Rules live in optimistic-dedup.ts (unit-tested).
     const early = deliveredEarlyRef.current;
+    if (messageIds?.length) touch(messageIds);
     for (const id of unmatchedDeliveredIds(msgsRef.current, messageIds)) early.add(id);
     while (early.size > 64) early.delete(early.values().next().value!);
     const ids = new Set(messageIds ?? []);
@@ -562,15 +573,16 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
     setOptimisticMsgs((prev) => markDeliveredMessages(prev, count, messageIds) as OptimisticMessage[]);
     // The red error was about a message that did reach the CLI: nothing failed now.
     if (revived && !stillFailed) setSendError(null);
-  }, []);
+  }, [touch]);
 
   const handleBatchCompleted = useCallback((count: number, messageIds?: string[]) => {
     log.info('send', 'batch completed', { count, messageIds });
+    if (messageIds?.length) retire(messageIds);
     // Id-first removal (exactly the batch's bubbles — a stale/raced event can
     // never take out an unrelated newer message), count fallback with the
     // delivered-only NO-LOSS guard — rules live in optimistic-dedup.ts.
     setOptimisticMsgs((prev) => removeBatchMessages(prev, count, messageIds));
-  }, []);
+  }, [retire]);
 
   // Backend processNext failed to deliver the batch (e.g. SSH/daemon down). Mark the
   // matching optimistic messages 'failed' (keep text + show Retry) instead of removing
@@ -578,35 +590,78 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
   /** The server holds these rows on a clock: a bubble already shown delivered reads waiting again. */
   const handleDeliveryWaiting = useCallback((messageIds: string[]) => {
     const ids = new Set(messageIds);
+    touch(messageIds);
     setOptimisticMsgs((prev) => prev.some((m) => ids.has(m.queueId) && m.status === 'delivered')
       ? prev.map((m) => (ids.has(m.queueId) && m.status === 'delivered' ? { ...m, status: 'received' as const } : m))
       : prev);
-  }, []);
+  }, [touch]);
 
   const handleBatchFailed = useCallback((messageIds: string[], error: string) => {
     log.warn('send', 'batch failed', { count: messageIds.length, error });
     setSendError(error);
     const idSet = new Set(messageIds);
+    touch(messageIds);
     setOptimisticMsgs((prev) => prev.map((m) =>
       idSet.has(m.queueId) ? { ...m, status: 'failed' as const, failedError: error } : m
     ));
-  }, []);
+  }, [touch]);
+
+  /**
+   * The server's answer to an Edit or Delete, shown on the bubble in place
+   * (queued-change-words.ts): a row already taken or gone is no error toast.
+   * `before` is the bubble as it was, for an edit that did not apply.
+   */
+  const settleQueuedChange = useCallback((kind: QueuedChangeKind, sessionId: string, queueId: string, before: OptimisticMessage | undefined, answer: QueuedChangeAnswer | undefined, thrown?: string) => {
+    release([queueId]);
+    const result = queuedChangeResult(kind, answer, thrown);
+    if (!result.remove && result.notice) {
+      log.info('send', `${kind}-queued not applied`, { sessionId, queueId, outcome: answer?.outcome ?? 'thrown', ...(thrown ? { error: thrown } : {}) });
+    }
+    if (result.remove) retire([queueId]);
+    if (result.delivered) touch([queueId]);
+    setOptimisticMsgs((prev) => {
+      if (result.remove) return prev.filter((m) => m.queueId !== queueId);
+      return prev.map((m) => {
+        if (m.queueId !== queueId) return m;
+        const { changing: _c, ...rest } = m;
+        const text = result.revertText && before ? { text: before.text, ...(before.dedupText !== undefined ? { dedupText: before.dedupText } : {}) } : {};
+        return {
+          ...rest, ...text,
+          ...(result.delivered && (m.status === 'pending' || m.status === 'received') ? { status: 'delivered' as const, heldReason: undefined, afterTurn: undefined } : {}),
+          ...(result.notice ? { queueNotice: result.notice } : {}),
+        };
+      });
+    });
+    // Whatever the answer, the bubble then shows where the row really is.
+    if (result.notice) requestQueueRead(`${kind} answer`);
+  }, [retire, touch, release, requestQueueRead]);
 
   const handleEditQueued = useCallback((sessionId: string, queueId: string, newText: string) => {
+    const before = msgsRef.current.find((m) => m.queueId === queueId);
+    hold([queueId]);
     setOptimisticMsgs((prev) => prev.map((m) =>
-      m.queueId === queueId ? editedBubble(m, newText) : m
+      m.queueId === queueId ? { ...editedBubble(m, newText), queueNotice: undefined } : m
     ));
-    wsClient.sendRpc('session:edit-queued', {
+    wsClient.sendRpc<QueuedChangeAnswer>('session:edit-queued', {
       sessionId, messageId: queueId, text: newText,
-    }).catch((e: Error) => { log.warn('send', 'edit-queued failed', { sessionId, queueId, error: e.message }); });
-  }, []);
+    }).then(
+      (res) => settleQueuedChange('edit', sessionId, queueId, before, res),
+      (e: Error) => settleQueuedChange('edit', sessionId, queueId, before, undefined, e.message),
+    );
+  }, [settleQueuedChange, hold]);
 
   const handleDeleteQueued = useCallback((sessionId: string, queueId: string) => {
-    setOptimisticMsgs((prev) => prev.filter((m) => m.queueId !== queueId));
-    wsClient.sendRpc('session:delete-queued', {
+    const before = msgsRef.current.find((m) => m.queueId === queueId);
+    hold([queueId]);
+    // Stays on screen until the server answers: a row it already sent says so here.
+    setOptimisticMsgs((prev) => prev.map((m) => (m.queueId === queueId ? { ...m, changing: true, queueNotice: undefined } : m)));
+    wsClient.sendRpc<QueuedChangeAnswer>('session:delete-queued', {
       sessionId, messageId: queueId,
-    }).catch((e: Error) => { log.warn('send', 'delete-queued failed', { sessionId, queueId, error: e.message }); });
-  }, []);
+    }).then(
+      (res) => settleQueuedChange('delete', sessionId, queueId, before, res),
+      (e: Error) => settleQueuedChange('delete', sessionId, queueId, before, undefined, e.message),
+    );
+  }, [settleQueuedChange, hold]);
 
   // Handle messages queued externally (e.g. by the agent via send_to_session)
   // These arrive via bus event after the server has already enqueued the message,
@@ -665,5 +720,6 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
     handleDeleteQueued,
     addExternalQueued,
     clearOptimistic,
+    queueSync: sync.state,
   };
 }

@@ -55,9 +55,16 @@ async function processStatus(page: Page, sessionId: string): Promise<string> {
   }).session.process_status
 }
 
+/**
+ * A message sent while the Codex turn runs shows as the user's bubble on its way.
+ * The server steers it into the live turn and takes the row off its queue at once,
+ * so the panel's next queue read (useQueueSync) shows it Delivered; before that read
+ * it reads Queued. Either is the server's word; a bubble stuck Queued after its row
+ * left the queue was the 2026-11-09 bug, so this does not insist on Queued.
+ */
 async function expectQueued(surface: Locator, message: string): Promise<void> {
-  const bubble = surface.locator('.session-msg-received', { hasText: message })
-  await expect(bubble.getByText('Queued', { exact: true })).toBeVisible()
+  const bubble = surface.locator('.session-msg-received, .session-msg-delivered', { hasText: message })
+  await expect(bubble.getByText(/^(Queued|Delivered ✓)$/)).toBeVisible()
 }
 
 test('broadcasts active Codex status across Home, task pill, and reload', async ({ page }) => {

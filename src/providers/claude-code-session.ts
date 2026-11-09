@@ -62,6 +62,8 @@ import {
   unmarkUnwritten,
 } from '../core/session-message-queue.js'
 import type { QueuedMessage } from '../core/session-message-queue.js'
+import { RedeliveryGuard, REDELIVERY_LOOP_REASON } from '../core/sessions/redelivery-guard.js'
+import { settleStrandedAcpRows } from './acp-stranded-rows.js'
 import { offerStartDeath, setUnreadFirstLineProbe, startRecoveryOwns, withdrawStartDeath } from '../core/sessions/start-recovery.js'
 import { classifySessionError } from '../core/session-error-kind.js'
 import { lineUuidFor, noteTurnUserUuid, pickBatchUuid, rowsCarriedBy, turnUserUuid } from './batch-uuid.js'
@@ -559,6 +561,9 @@ function isBenignSshStderr(stderr: string): boolean {
  * advisory it printed at startup as its death reason (2026-08-10). The CLI itself
  * says the remaining valid policies are still enforced; it continues normally.
  */
+/** How many times a delivery that threw is tried again on its clock (retryAfterDeliveryThrow). */
+const DELIVERY_THROW_RETRIES = 8
+
 const CLI_STARTUP_NOISE: RegExp[] = [
   /^Managed settings contain invalid entries/i,
   // Newer CLIs end the line at "ignored" (2026-10-26, on every start of every session).
@@ -10820,6 +10825,11 @@ export class SessionRunner {
    *  drain waits on this barrier so the next oldest item cannot be stranded
    *  behind the accepted item's still-processing queue row. */
   private acpDeliverySettlements = new Map<string, Promise<void>>()
+  /** ACP takes in flight per queue session (a drain or a steer between markNextProcessing
+   *  and the row's settle): a 'processing' row with none is stranded (acp-stranded-rows.ts). */
+  private acpRowTakes = new Map<string, number>()
+  /** The bound on taking one row again and again (core/sessions/redelivery-guard.ts). */
+  private redelivery = new RedeliveryGuard()
 
   /** SDK session server client (set via setSdkClient when session_server.enabled) */
   private sdkClient: SessionServerClient | null = null
@@ -12652,6 +12662,13 @@ export class SessionRunner {
       const { switchingFrom } = await import('../core/sessions/engine-switch.js')
       if (switchingFrom(sessionId)) return
     }
+    const queueSid = sessionId
+    await settleStrandedAcpRows(queueSid, {
+      busy: () => (this.acpRowTakes.get(queueSid) ?? 0) > 0 || this.acpDeliverySettlements.has(queueSid),
+      taken: (id) => session.hasTaken(id),
+    }).catch((err) => log.session.warn('acp: settling a stranded queue row failed', {
+      sessionId, error: err instanceof Error ? err.message : String(err),
+    }))
     if (session.activity === 'processing') {
       const steered = await this.steerAcpQueued(session, sessionId)
       if (!steered) {
@@ -12659,8 +12676,52 @@ export class SessionRunner {
       }
       return
     }
+    const endTake = this.beginAcpTake(queueSid)
+    try {
+      await this.drainAcpPrompt(session, sessionId)
+    } finally {
+      endTake()
+    }
+  }
+
+  /** One ACP row in flight: the stranded-row check leaves the session's 'processing' row alone meanwhile. */
+  private beginAcpTake(sessionId: string): () => void {
+    this.acpRowTakes.set(sessionId, (this.acpRowTakes.get(sessionId) ?? 0) + 1)
+    let ended = false
+    return () => {
+      if (ended) return
+      ended = true
+      const left = (this.acpRowTakes.get(sessionId) ?? 1) - 1
+      if (left > 0) this.acpRowTakes.set(sessionId, left)
+      else this.acpRowTakes.delete(sessionId)
+    }
+  }
+
+  /**
+   * The redelivery bound: true when the rows just taken include one taken too often in
+   * a short time (core/sessions/redelivery-guard.ts). Those are parked with words the
+   * user reads and a Retry; the rest go back to pending. Every delivery path that takes
+   * rows asks it, ACP and native alike.
+   */
+  private async parkIfRedeliveryLoop(sessionId: string, msgs: QueuedMessage[]): Promise<boolean> {
+    const over = new Set(this.redelivery.take(sessionId, msgs.map((m) => m.id)))
+    if (over.size === 0) return false
+    const loop = msgs.filter((m) => over.has(m.id)).map((m) => ({ ...m, sessionId }))
+    const rest = msgs.filter((m) => !over.has(m.id)).map((m) => ({ ...m, sessionId }))
+    log.session.warn('a queued message was taken for delivery too often in a short time; parked for Retry', {
+      sessionId, messageIds: loop.map((m) => m.id),
+    })
+    revokeEchoClaims(sessionId, msgs.map((m) => m.id))
+    await parkMessages(loop, REDELIVERY_LOOP_REASON).catch(() => {})
+    if (rest.length > 0) await revertToPending(rest).catch(() => {})
+    reportBatchFailed(sessionId, loop.map((m) => m.id), REDELIVERY_LOOP_REASON)
+    return true
+  }
+
+  private async drainAcpPrompt(session: AcpSession, sessionId: string): Promise<void> {
     const msgs = await markNextProcessing(sessionId)
     if (msgs.length === 0) return
+    if (await this.parkIfRedeliveryLoop(sessionId, msgs)) return
     const [message] = msgs
     // ACP turns are worker-authoritative (journal turn-ended/interrupted facts)
     // and their identity never renames mid-turn — the 60s Claude-shaped safety
@@ -12735,24 +12796,35 @@ export class SessionRunner {
    * the turn-end drain picks them up exactly as before steering existed.
    */
   private async steerAcpQueued(session: AcpSession, sessionId: string): Promise<boolean> {
-    if (!session.canSteer) return false
+    // A turn that refused a steer is not asked again: each ask would take the row once more.
+    if (!session.canSteer || session.steerRefusedThisTurn === true) return false
     let injected = false
     for (;;) {
-      const msgs = await markNextProcessing(sessionId)
-      if (msgs.length === 0) return injected
-      const [message] = msgs
-      const deliverySessionId = session.sessionId ?? sessionId
+      const endTake = this.beginAcpTake(sessionId)
+      let msgs: QueuedMessage[]
+      let message: QueuedMessage
+      let deliverySessionId: string
       let ok = false
       try {
-        ok = await session.steer(message.message, message.id)
-      } catch (err) {
-        log.session.warn('acp: steer attempt failed — message stays queued', {
-          sessionId, messageId: message.id,
-          error: err instanceof Error ? err.message : String(err),
-        })
+        msgs = await markNextProcessing(sessionId)
+        if (msgs.length === 0) return injected
+        if (await this.parkIfRedeliveryLoop(sessionId, msgs)) return injected
+        message = msgs[0]
+        deliverySessionId = session.sessionId ?? sessionId
+        try {
+          ok = await session.steer(message.message, message.id)
+        } catch (err) {
+          log.session.warn('acp: steer attempt failed — message stays queued', {
+            sessionId, messageId: message.id,
+            error: err instanceof Error ? err.message : String(err),
+          })
+        }
+        if (ok) await removeProcessed(deliverySessionId, [message.id])
+        else await revertToPending(msgs.map((queued) => ({ ...queued, sessionId: deliverySessionId })))
+      } finally {
+        endTake()
       }
       if (!ok) {
-        await revertToPending(msgs.map((queued) => ({ ...queued, sessionId: deliverySessionId })))
         // Close the steer/turn-end race: if the turn ended while our message
         // was marked 'processing', the turn-end drain saw a busy queue and
         // returned empty — nobody would redeliver until the next event. Now
@@ -12762,7 +12834,6 @@ export class SessionRunner {
         }
         return injected
       }
-      await removeProcessed(deliverySessionId, [message.id])
       // Fold the steered id into the running turn's batch so the turn-end
       // SESSION_BATCH_COMPLETED clears its optimistic bubble too.
       const batchKey = this.batchMessageIds.has(deliverySessionId) ? deliverySessionId : sessionId
@@ -13652,6 +13723,7 @@ export class SessionRunner {
       log.session.info('handleSend: triggering processNext', { sessionId, interrupt: !!interrupt })
       this.processNext(sessionId, mode).catch((err) => {
         log.session.error('processNext failed after send', { sessionId, error: err instanceof Error ? err.message : String(err) })
+        this.retryAfterDeliveryThrow(sessionId)
       })
     } else {
       // Session is mid-turn. Try to inject via stdin pipe (like typing in Claude CLI while it's working).
@@ -13659,6 +13731,7 @@ export class SessionRunner {
       // so the message is injected immediately rather than waiting for the turn to finish.
       this.injectMidTurn(sessionId).catch((err) => {
         log.session.error('injectMidTurn failed', { sessionId, error: err instanceof Error ? err.message : String(err) })
+        this.retryAfterDeliveryThrow(sessionId)
       })
     }
 
@@ -13815,6 +13888,8 @@ export class SessionRunner {
       await ready
       const newMsgs = await markProcessing(sessionId, stopFence, { tracked: targetSession.reportsLineLifecycle, midTurn: true })
       if (newMsgs.length === 0) return
+      // The rest go back to pending and ride the turn's end (its processNext).
+      if (await this.parkIfRedeliveryLoop(sessionId, newMsgs)) return
       releaseHeld(sessionId, newMsgs.map((m) => m.id))
 
       // An App's AI-only brief must lead the line to stay out of every view (lib/ai-only-envelope.ts).
@@ -14684,6 +14759,43 @@ export class SessionRunner {
     }))
   }
 
+  /**
+   * A delivery that threw (a queue write that could not be had, a host that did not answer)
+   * left its rows pending with nothing to send them again: the user saw QUEUED with no reason
+   * until an unrelated event (2026-11-09: rows of four sessions waited minutes behind a jammed
+   * queue lock). It is tried again on a clock, 5 s doubling to a minute, 8 times; a delivery
+   * that goes through or a queue with nothing pending ends it (deliverRest).
+   */
+  private retryAfterDeliveryThrow(sessionId: string): void {
+    const now = Date.now()
+    const prev = this.deliveryThrowRetries.get(sessionId)
+    const tries = prev && now - prev.at < 10 * 60_000 ? prev.tries + 1 : 1
+    if (prev?.timer) clearTimeout(prev.timer)
+    if (this.acpDestroyed || tries > DELIVERY_THROW_RETRIES) {
+      this.deliveryThrowRetries.delete(sessionId)
+      return
+    }
+    const delay = Math.min(60_000, 5_000 * 2 ** (tries - 1))
+    const timer = setTimeout(() => {
+      const cur = this.deliveryThrowRetries.get(sessionId)
+      if (cur) cur.timer = undefined
+      log.session.info('delivery that threw: trying the queue again', { sessionId, tries })
+      // The same as deliverRest, except that a throw arms the next round of this clock.
+      void getQueue(sessionId).then((rows) => {
+        if (!rows.some((m) => m.status === 'pending')) { this.deliveryThrowRetries.delete(sessionId); return }
+        return this.activeProcessing.has(sessionId) ? this.injectMidTurn(sessionId) : this.processNext(sessionId)
+      }).catch((err) => {
+        log.session.warn('delivery that threw: the retry threw too', { sessionId, tries, error: err instanceof Error ? err.message : String(err) })
+        this.retryAfterDeliveryThrow(sessionId)
+      })
+    }, delay)
+    timer.unref?.()
+    this.deliveryThrowRetries.set(sessionId, { tries, at: now, timer })
+  }
+
+  /** Sessions whose last delivery threw, with their retry clock (retryAfterDeliveryThrow). */
+  private deliveryThrowRetries = new Map<string, { tries: number; at: number; timer?: ReturnType<typeof setTimeout> }>()
+
   private cancelHeldSendRetry(sessionId: string): void {
     const held = this.heldSendRetries.get(sessionId)
     if (held?.timer) clearTimeout(held.timer)
@@ -15050,6 +15162,11 @@ export class SessionRunner {
     await this.midTurnWrites.get(sessionId)
     const msgs = await markProcessing(sessionId, stopFence, { tracked, midTurn: inTurn })
     if (msgs.length === 0) return
+    if (await this.parkIfRedeliveryLoop(sessionId, msgs)) {
+      // What went back to pending goes out as the next line, without the parked row.
+      this.deliverRest(sessionId)
+      return
+    }
     releaseHeld(sessionId, msgs.map((m) => m.id))
     const dedupe = (msgs[0].lineTries ?? 1) > 1
 
