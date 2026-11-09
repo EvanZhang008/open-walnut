@@ -23,6 +23,15 @@ const PREVIEW = 'administering this quickly'
 const TAIL = 'as an administrator I think this question is not complete'
 const WHOLE = 'the whole clip heard once more'
 
+/** Level of a base64 16-bit mono WAV: a slice of silence hears no words, as a real engine. */
+function wavLevel(base64: string): number {
+  const bytes = Buffer.from(base64, 'base64')
+  const samples = new Int16Array(bytes.buffer.slice(bytes.byteOffset + 44, bytes.byteOffset + bytes.length))
+  let sum = 0
+  for (const v of samples) sum += (v / 32768) ** 2
+  return Math.sqrt(sum / Math.max(1, samples.length))
+}
+
 interface Lanes { transcribe: number; drafts: number; draftsAfterStop: string[]; stopped: boolean }
 
 async function stubLanes(page: Page): Promise<Lanes> {
@@ -30,11 +39,12 @@ async function stubLanes(page: Page): Promise<Lanes> {
   await stubSttStatus(page)
   await page.route('**/api/stt/warmup', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' }))
   await page.route('**/api/stt/draft', async (route) => {
-    const { format } = route.request().postDataJSON() as { format: string }
+    const { format, audio } = route.request().postDataJSON() as { format: string; audio: string }
     if (seen.stopped) seen.draftsAfterStop.push(format)
     else seen.drafts++
     // After the stop: the tail is a WAV slice, the check sends the whole webm.
-    const text = !seen.stopped ? PREVIEW : format === 'wav' ? TAIL : WHOLE
+    const silent = format === 'wav' && wavLevel(audio) < 0.01
+    const text = silent ? '' : !seen.stopped ? PREVIEW : format === 'wav' ? TAIL : WHOLE
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text, durationMs: 30 }) })
   })
   await page.route('**/api/stt/transcribe', async (route) => {
