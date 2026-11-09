@@ -331,6 +331,26 @@ test.describe('Tree Mode keeps its pages', () => {
     await expect(siblingPage(panel)).toBeVisible()
   })
 
+  test('a notice beside the sheet never takes a page away', async ({ page }) => {
+    // The sheet moves its left edge past the notice corner while a notice shows
+    // (--corner-sheet-inset). 2026-11-09, main CI: another spec's notice held the
+    // corner, the 1440px sheet's chat fell under the three-page width, and every
+    // three-page test here read two. The inset is set as the corner sets it.
+    const panel = await openSheet(page)
+    await openQuestion(panel, T.Q11)
+    await expectPages(panel, THREE_TOP)
+    const width = () => panel.evaluate((el) => Math.round(el.getBoundingClientRect().width))
+    const wide = await width()
+    await panel.evaluate((el) => el.style.setProperty('--corner-sheet-inset', '140px'))
+    await expect.poll(width).toBeLessThan(wide - 100)
+    // Two frames: the resize observer's read has rendered.
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))))
+    expect(await pagesOnScreen(panel)).toEqual(THREE_TOP)
+    await panel.evaluate((el) => el.style.removeProperty('--corner-sheet-inset'))
+    await expect.poll(width).toBe(wide)
+    await expectPages(panel, THREE_TOP)
+  })
+
   test('only the main conversation\'s composer has the "+" menu, the mode and the model', async ({ page }) => {
     const panel = await openSheet(page)
     await openQuestion(panel, T.Q11)

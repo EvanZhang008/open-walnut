@@ -32,6 +32,7 @@ import { subscribeDraft } from '@/utils/drafts';
 import { nextSamePassageKeys } from '@/utils/thread-same-passage';
 import { VIEWED_PREFIX, readViewed, writeViewed } from '@/utils/thread-viewed-store';
 import { log } from '@/utils/log';
+import { modeBesideCorner } from '@/components/common/corner-sheet-inset';
 
 /** The widths `panelWidth` is compared against (the drawer toggle's narrow form, 560). */
 const PANEL_WIDTH_TIERS = [560, 600, 720] as const;
@@ -675,7 +676,8 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
   useEffect(() => {
     const el = args.panelRef.current;
     if (!hasQuestions || !el || typeof ResizeObserver === 'undefined') return;
-    const read = () => setPanelWidth(widthTier(el.getBoundingClientRect().width, PANEL_WIDTH_TIERS));
+    // A full-screen sheet's room for the notice corner never picks the tier (modeBesideCorner).
+    const read = () => setPanelWidth((prev) => modeBesideCorner(el, el.getBoundingClientRect().width, prev || null, (w) => widthTier(w, PANEL_WIDTH_TIERS)));
     read();
     const ro = new ResizeObserver(read);
     ro.observe(el);

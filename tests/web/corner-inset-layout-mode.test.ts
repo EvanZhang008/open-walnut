@@ -64,11 +64,18 @@ function walk(dir: string): string[] {
 const files = walk(ROOT).map((p) => ({ rel: path.relative(ROOT, p), code: fs.readFileSync(p, 'utf8') }));
 
 describe('every width-picked layout mode leaves the corner inset out', () => {
-  // A file that watches a size and switches between named wide/narrow layouts.
-  const pickers = files.filter((f) => /new ResizeObserver\b/.test(f.code) && /['"](wide|narrow)['"]/.test(f.code));
+  // A file that watches a size and switches between named wide/narrow layouts, or picks a
+  // width tier (widthTier): 2026-11-09, main CI, Tree Mode in the 1440px sheet fell from three
+  // pages to two while another spec's notice held the corner, which narrowed the chat under
+  // its 1040px tier.
+  const pickers = files.filter((f) => /new ResizeObserver\b/.test(f.code)
+    && (/['"](wide|narrow)['"]/.test(f.code) || /\bwidthTier\(/.test(f.code)));
 
-  it('finds the one it knows of (the matcher still matches)', () => {
-    expect(pickers.map((f) => f.rel)).toContain('components/board/kanban/useKanbanLayout.ts');
+  it('finds the ones it knows of (the matcher still matches)', () => {
+    const found = pickers.map((f) => f.rel);
+    for (const known of ['components/board/kanban/useKanbanLayout.ts', 'hooks/useTreeSplit.ts', 'hooks/useThreadStack.ts', 'components/sessions/ThreadTreeDrawer.tsx']) {
+      expect(found).toContain(known);
+    }
   });
 
   it('each one picks through modeBesideCorner', () => {

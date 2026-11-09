@@ -27,6 +27,7 @@ import {
 import { ROOT_THREAD_KEY, type ThreadTree } from '@/utils/thread-tree';
 import { ancestorKeysOf, defaultDrawerFilter } from '@/utils/thread-tree-rows';
 import { widthTier } from '@/utils/thread-stack-state';
+import { modeBesideCorner } from '@/components/common/corner-sheet-inset';
 import type { SessionThreadMetaPatch } from '@/types/session';
 import { log } from '@/utils/log';
 import { isModifierOnly, markKeyboardFocus } from '@/utils/keyboard-focus';
@@ -117,7 +118,8 @@ export function ThreadTreeDrawer(p: ThreadTreeDrawerProps) {
     const el = panelRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
     const measure = () => {
-      setPanelWidth(widthTier(el.clientWidth, DRAWER_WIDTH_TIERS));
+      // A full-screen sheet's room for the notice corner never picks the tier (modeBesideCorner).
+      setPanelWidth((prev) => modeBesideCorner(el, el.clientWidth, prev || null, (w) => widthTier(w, DRAWER_WIDTH_TIERS)));
       const header = el.querySelector<HTMLElement>('.session-panel-header');
       if (!header) { setDrawerTop(null); return; }
       const bottom = header.getBoundingClientRect().bottom - el.getBoundingClientRect().top;
