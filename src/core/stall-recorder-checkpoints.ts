@@ -5,45 +5,21 @@
  * last one before its deadline to the first one after it (pickHoldSpan in
  * stall-recorder-hold.ts).
  *
- * Two sources. A 100 ms timer, so a quiet loop has a recent checkpoint too.
- * And one at the end of every loop iteration, at most every 5 ms (an unref'd
- * setImmediate, which runs in the check phase, right after poll): after a
- * stop, or a stretch the machine did not run the process, the loop comes back
- * through poll, so this checkpoint runs before any timer that came due
- * meanwhile catches up. A timer cannot promise that: Node runs due timer
- * lists in the order they expire, so any list due between two runs of the
- * recorder's timer goes first, every timer of it that came due back to back.
- * Measured 2026-10-05 (SIGSTOP 1.5 to 3 s): with a timer every 5 ms while the
- * loop was busy, up to 3 stops in 13 of a loop of 25 timers every 900 ms
- * counted their catch-up in the hold; with only the 100 ms one, 1 to 3 stops
- * in 11 of a loop of 20 timers every 5 s. In a bare loop, a batch of timers
- * that came due in a stop ran before the 100 ms timer in 3 of 4 stops, and
- * after the end-of-iteration checkpoint in 4 of 4.
- *
- * On bun only the timer runs. bun's loop does not wait in poll while an
- * immediate is queued, unref'd or not, so an immediate that queues the next
- * one spins the loop: measured on bun 1.4.4, 2.4 million iterations and 46% of
- * a core in 2 s of an idle loop (Node: 19 iterations, 4 ms). Without it a stop's
- * catch-up may fall in the hold, as the measurement above describes.
+ * One source: a 100 ms timer, so a quiet loop has a recent checkpoint too.
+ * Node also took one at the end of every loop iteration (an unref'd
+ * setImmediate, at most every 5 ms), which kept a stop's catch-up out of the
+ * hold; bun's loop does not wait in poll while an immediate is queued, so that
+ * one spins the loop (bun 1.4.4: 2.4 million iterations and 46% of a core in
+ * 2 s of an idle loop), and Walnut runs only on bun since 2026-10-23: a hold may
+ * count a stop's catch-up, as it always could on bun.
  */
 
-import { ON_BUN } from '../lib/runtime.js';
 import { readLoopCpuUs, readLoopIdleMs, type CpuCheckpoint } from './stall-recorder-hold.js';
 
 /** How often the timer reads the loop thread's CPU clock (and the loop's idle
  *  time). One threadCpuUsage and one eventLoopUtilization call per checkpoint. */
 const CPU_CHECKPOINT_MS = 100;
-/** The check-phase checkpoint is skipped when the last one is this recent, so
- *  a loop running thousands of iterations a second pays one clock read per
- *  iteration and at most 200 CPU reads a second (round 7's busy cadence, at
- *  its most). The cost: a hold may start up to this much before its deadline.
- *  A stop or a block is always longer, so the checkpoint right after one is
- *  never skipped. Measured 2026-10-05 at load 40 to 60: a loop of 1 ms timers
- *  (300 to 500 iterations a second) spent about 27 us more loop thread CPU per
- *  iteration with a checkpoint at the end of each. */
-const CHECK_MIN_GAP_MS = 5;
-/** Checkpoints kept: over 5 s at the busiest (one per CHECK_MIN_GAP_MS), well
- *  past one probe interval when the loop is quieter. */
+/** Checkpoints kept: well past one probe interval. */
 const CPU_CHECKPOINTS = 1024;
 
 const monoMs = (): number => Number(process.hrtime.bigint()) / 1e6;
@@ -54,41 +30,25 @@ const cpCpuUs = new Float64Array(CPU_CHECKPOINTS);
 const cpIdleMs = new Float64Array(CPU_CHECKPOINTS);
 let cpHead = 0;
 let cpCount = 0;
-let lastMono = -Infinity;
 let checkpointTimer: ReturnType<typeof setInterval> | null = null;
-let checkImmediate: ReturnType<typeof setImmediate> | null = null;
 export function cpuCheckpoint(mono: number = monoMs(), cpuUs: number = readLoopCpuUs(), idleMs: number = readLoopIdleMs()): void {
   cpMono[cpHead] = mono;
   cpCpuUs[cpHead] = cpuUs;
   cpIdleMs[cpHead] = idleMs;
   cpHead = (cpHead + 1) % CPU_CHECKPOINTS;
   if (cpCount < CPU_CHECKPOINTS) cpCount += 1;
-  lastMono = mono;
 }
 export function* cpuCheckpoints(): Generator<CpuCheckpoint> {
   for (let i = 0; i < cpCount; i++) yield { mono: cpMono[i], cpuUs: cpCpuUs[i], idleMs: cpIdleMs[i] };
 }
-/** Queue the next check-phase checkpoint. Unref'd, so it never keeps poll
- *  from blocking: it runs once per iteration, whatever woke the loop. */
-function armCheck(): void {
-  checkImmediate = setImmediate(checkCheckpoint);
-  checkImmediate.unref?.();
-}
-function checkCheckpoint(): void {
-  const mono = monoMs();
-  if (mono - lastMono >= CHECK_MIN_GAP_MS) cpuCheckpoint(mono);
-  armCheck();
-}
-/** Stop both sources and forget every checkpoint. */
+/** Stop the timer and forget every checkpoint. */
 export function stopCpuCheckpoints(): void {
   if (checkpointTimer) { clearInterval(checkpointTimer); checkpointTimer = null; }
-  if (checkImmediate) { clearImmediate(checkImmediate); checkImmediate = null; }
-  cpHead = 0; cpCount = 0; lastMono = -Infinity;
+  cpHead = 0; cpCount = 0;
 }
-/** Start the checkpoints: the 100 ms timer and the one at the end of every iteration (not on bun). */
+/** Start the checkpoints: the 100 ms timer. */
 export function startCpuCheckpoints(): void {
   stopCpuCheckpoints();
   checkpointTimer = setInterval(() => cpuCheckpoint(), CPU_CHECKPOINT_MS);
   checkpointTimer.unref?.();
-  if (!ON_BUN) armCheck();
 }
