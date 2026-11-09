@@ -241,6 +241,35 @@ describe('sweepTaskDirsOnce', () => {
     expect(told).toHaveLength(3)
   })
 
+  // 2026-11-09: finished tasks held 10 GB on a Mac under its floor, most completed hours earlier, and pruning
+  // waited a day. A low disk shortens that to an hour on this machine; another host keeps the day.
+  it('a low disk prunes a finished task an hour after it completed, on this machine only', async () => {
+    const hours = (h: number) => h / 24
+    const caps = ['task-dir-v1', 'task-dir-prune-v1']
+    const local = fakeConn('__local__', caps, [dir('done2h', hours(2)), dir('done20m', hours(1 / 3))])
+    const remote = fakeConn('cloud', caps, [dir('done2h', hours(2))])
+    const loadTasks = async () => [task('done2h', 'COMPLETE', hours(2)), task('done20m', 'COMPLETE', hours(1 / 3))]
+    await sweepTaskDirsOnce({ conns: [local.conn, remote.conn], loadTasks, now: NOW, lowDisk: true })
+    expect(local.calls.find((c) => c[0] === 'taskdir.prune')?.[1]).toEqual({ taskIds: [{ taskId: 'done2h', usedBefore: Date.parse(iso(hours(2))) }] })
+    expect(remote.calls.some((c) => c[0] === 'taskdir.prune')).toBe(false)
+    const calm = fakeConn('__local__', caps, [dir('done2h', hours(2))])
+    await sweepTaskDirsOnce({ conns: [calm.conn], loadTasks, now: NOW, lowDisk: false })
+    expect(calm.calls.some((c) => c[0] === 'taskdir.prune')).toBe(false)
+  })
+
+  // 2026-11-08 20:08: taskdir.prune timed out on the Mac, and the whole round for that host stopped there.
+  it('a step that fails or times out never skips the next one', async () => {
+    const f = fakeConn('__local__', ['task-dir-v1', 'task-dir-prune-v1', 'task-dir-prune-builds-v1'], [dir('done', 3), dir('open', 3)])
+    const send = f.conn.send
+    f.conn.send = async (cmd: string, p?: Record<string, unknown>) => {
+      if (cmd === 'taskdir.prune') { f.calls.push([cmd, p]); throw new Error('daemon command timeout: taskdir.prune (300000ms)') }
+      return send(cmd, p)
+    }
+    const res = await sweepTaskDirsOnce({ conns: [f.conn], loadTasks: async () => [task('done', 'COMPLETE', 2), task('open', 'IN_PROGRESS')], now: NOW, lowDisk: false })
+    expect(f.calls.map((c) => c[0])).toEqual(['taskdir.list', 'taskdir.prune', 'taskdir.pruneBuilds'])
+    expect(res[0].buildsPruned?.map((b) => b.taskId)).toEqual(['open'])
+  })
+
   // Review round 5: no Walnut message reaches Main or a VP while the org is off; and a directory the host
   // did not reach (its deadline) is asked for first next round, so one huge tree cannot starve the rest.
   it('skips an org node while the org is off, and asks first for the directories measured longest ago', async () => {

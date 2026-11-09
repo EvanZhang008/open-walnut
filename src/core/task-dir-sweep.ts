@@ -188,36 +188,42 @@ export async function sweepTaskDirsOnce(deps?: {
       })
       const row: SweepRow = { host: conn.host }
       const removed = new Set<string>()
-      if (removable.length > 0) {
+      // Each step stands alone: one that fails or times out (a slow host, 2026-11-08) never skips the next.
+      const step = async (name: string, fn: () => Promise<void>): Promise<void> => {
+        try { await fn() } catch (err) { log.session.warn('task dir sweep failed', { host: conn.host, step: name, error: (err as Error).message }) }
+      }
+      const local = conn.host === '__local__'
+      if (removable.length > 0) await step('remove', async () => {
         const res = await conn.send('taskdir.remove', { taskIds: itemsFor(removable) }, 120_000) as RemoveResult & { ok?: boolean; error?: string }
         if (res?.ok === false) throw new Error(res.error || 'taskdir.remove refused')
         Object.assign(row, { removed: res?.removed ?? [], kept: res?.kept ?? [], missing: res?.missing ?? [] })
         for (const id of [...(res?.removed ?? []), ...(res?.missing ?? [])]) removed.add(id)
         log.session.info('task dirs swept', { host: conn.host, removed: res?.removed?.length ?? 0, kept: res?.kept ?? [] })
-      }
+      })
+      // A finished task's clean clones go an hour after it completed while this machine's disk is low, else a day.
       const prunable = conn.hasCapability?.('task-dir-prune-v1')
-        ? pickPrunable(dirs, tasks, { now, pruneDays: taskDirPruneDays(process.env), removed })
+        ? pickPrunable(dirs, tasks, { now, pruneDays: taskDirPruneDays(process.env, lowDisk && local), removed })
         : []
-      if (prunable.length > 0) {
+      if (prunable.length > 0) await step('prune', async () => {
         const res = await conn.send('taskdir.prune', { taskIds: itemsFor(prunable) }, 300_000) as PruneResult & { ok?: boolean; error?: string }
         if (res?.ok === false) throw new Error(res.error || 'taskdir.prune refused')
         row.pruned = res?.pruned ?? []
         log.session.info('task dirs pruned', { host: conn.host, pruned: row.pruned, kept: res?.kept ?? [] })
-      }
+      })
       // The disk the watermark measures is this machine's, so only the local host hurries.
       const idleDays = taskDirBuildIdleDays(process.env, lowDisk && conn.host === '__local__')
       const buildPrunable = conn.hasCapability?.('task-dir-prune-builds-v1')
         ? pickBuildPrunable(dirs, tasks, { now, idleDays, home: WALNUT_HOME, skip: new Set([...removed, ...prunable]) })
         : []
-      if (buildPrunable.length > 0) {
+      if (buildPrunable.length > 0) await step('pruneBuilds', async () => {
         // A low disk here also prunes this machine's directories in use (`live`): build output idle 6 hours
         // that no process has open, the refill that a sweep of idle directories alone never stops.
-        const live = lowDisk && conn.host === '__local__'
+        const live = lowDisk && local
         const res = await conn.send('taskdir.pruneBuilds', { taskIds: itemsFor(buildPrunable), idleBefore: now - idleDays * DAY_MS, ...(live ? { live: true } : {}) }, 300_000) as PruneResult & { ok?: boolean; error?: string }
         if (res?.ok === false) throw new Error(res.error || 'taskdir.pruneBuilds refused')
         row.buildsPruned = (res?.pruned ?? []).filter((p) => p.builds.length > 0)
         log.session.info('task dir builds pruned', { host: conn.host, pruned: row.buildsPruned, kept: res?.kept ?? [] })
-      }
+      })
       if (lowDisk && conn.host === '__local__' && conn.hasCapability?.('task-dir-sizes-v1')) {
         const { tellOversizeTasks } = await import('./task-dir-size-notice.js')
         const free = await fsp.statfs(WALNUT_HOME).then((f) => Number(f.bavail) * Number(f.bsize)).catch(() => null)

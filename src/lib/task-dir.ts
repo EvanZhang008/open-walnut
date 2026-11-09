@@ -59,11 +59,14 @@ export function taskDirKeepDays(env: Env): number {
 
 /** Days after its task completed before a directory's clean clones and build output go (task-dir-core.ts pruneTaskDirs); 0 turns pruning off. */
 export const TASK_DIR_PRUNE_DAYS = 1
+/** The same while this machine's disk is low: an hour. Pruning keeps anything unique, so waiting buys nothing then. */
+export const TASK_DIR_PRUNE_DAYS_LOW_DISK = 1 / 24
 
-export function taskDirPruneDays(env: Env): number {
-  if (env.WALNUT_TASK_DIR_PRUNE_DAYS === undefined || env.WALNUT_TASK_DIR_PRUNE_DAYS === '') return TASK_DIR_PRUNE_DAYS
-  const n = Number(env.WALNUT_TASK_DIR_PRUNE_DAYS)
-  return Number.isFinite(n) && n >= 0 ? n : TASK_DIR_PRUNE_DAYS
+export function taskDirPruneDays(env: Env, lowDisk = false): number {
+  const raw = env.WALNUT_TASK_DIR_PRUNE_DAYS
+  const n = raw === undefined || raw === '' ? TASK_DIR_PRUNE_DAYS : Number(raw)
+  const days = Number.isFinite(n) && n >= 0 ? n : TASK_DIR_PRUNE_DAYS
+  return days > 0 && lowDisk ? Math.min(days, TASK_DIR_PRUNE_DAYS_LOW_DISK) : days
 }
 
 /**
