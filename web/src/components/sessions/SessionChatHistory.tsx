@@ -85,7 +85,7 @@ import { RowDisclosureScope, disclosureIds } from './row-disclosure';
 import { foldPlace, joinedRows, readReaderView, restoreReaderRow, rowKeysAttr, rowsAsDrawn, type HeldBefore, type ReaderView } from './fold-reader-hold';
 import { shapeTurns, type PagedTurnShape as TurnShape } from '@/utils/turn-shape';
 import { noActionRows, readTurnMarker, stripTurnMarker } from '@/utils/turn-end-marker';
-import { detectOutboundSend } from './session-outbound';
+import { detectOutboundCalls, type OutboundSend } from './session-outbound';
 import { isRoutedQuestion, isUserDenied } from './tool-run-phrase';
 import { DeniedNowContext, ToolDecisionsContext, useSessionToolDecisions, WaitingToolsContext } from './waiting-tools';
 import { permissionRequestStore } from '@/stores/permission-request-store';
@@ -142,15 +142,15 @@ import { PartIdentity } from './part-identity';
 import { SELECTION_BAR_LAYERS } from './selection-bar-layers';
 import { QueuedImageThumbs } from './QueuedImageThumbs';
 
-/** A send call's targets (send-targets.ts), parsed once per call and result: a
+/** A row's carded calls (session-outbound.ts), parsed once per call and result: a
  *  fold line reads them on every render of a long session. */
-const sendRefsCache = new WeakMap<SessionHistoryTool, { result: unknown; refs: string[] }>();
-function sendRefsOf(t: SessionHistoryTool): string[] {
-  const hit = sendRefsCache.get(t);
-  if (hit && hit.result === t.result) return hit.refs;
-  const refs = detectOutboundSend(t, t.result)?.refs ?? [];
-  sendRefsCache.set(t, { result: t.result, refs });
-  return refs;
+const outboundCache = new WeakMap<SessionHistoryTool, { result: unknown; calls: OutboundSend[] }>();
+function outboundCallsOf(t: SessionHistoryTool): OutboundSend[] {
+  const hit = outboundCache.get(t);
+  if (hit && hit.result === t.result) return hit.calls;
+  const calls = detectOutboundCalls(t, t.result);
+  outboundCache.set(t, { result: t.result, calls });
+  return calls;
 }
 
 /**
@@ -4744,7 +4744,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
     return tools.length > 0 ? tools : null;
   };
-  const isFoldableCall = (t: SessionHistoryTool) => isMergeableHistoryTool(t) || !!detectOutboundSend(t);
+  const isFoldableCall = (t: SessionHistoryTool) => isMergeableHistoryTool(t) || outboundCallsOf(t).length > 0;
   /** What a row is for the fold rule (fold-rows.ts); its role is MSG_KIND_ROLE's. */
   const msgKindOf = (part: HistoryPart): MsgKind => {
     const first = part.kind === 'msg' ? part.globalIndex : part.members[0].globalIndex;
@@ -4782,7 +4782,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   };
   // A message to someone: a send card, or Walnut's other messaging ops (to a
   // lead, to the inbox, an answer in it), which render as plain tool rows.
-  const isOutboundTool = (t: SessionHistoryTool) => !!detectOutboundSend(t) || MESSAGE_OPS.test(t.name);
+  const isOutboundTool = (t: SessionHistoryTool) => outboundCallsOf(t).length > 0 || MESSAGE_OPS.test(t.name);
   /** A message or notice the session received: a sent-in row with no person's words in it. */
   const isInboundPart = (part: HistoryPart): boolean => {
     if (part.kind !== 'msg' || part.m.role !== 'user') return false;
@@ -4802,14 +4802,20 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   };
   const toolSteps = (tools: readonly SessionHistoryTool[]): FoldStep[] => tools.flatMap((t): FoldStep[] => {
     if (!isOutboundTool(t)) return [{ kind: 'calls', tools: [{ name: t.name, input: t.input as Record<string, unknown> | undefined, ...(t.toolUseId ? { toolUseId: t.toolUseId } : {}), ...(t.result !== undefined ? { result: t.result } : {}), ...(t.isError ? { isError: true } : {}) }] }];
-    if (/__human_inbox_(?:send|reply)$/.test(t.name)) return [{ kind: 'inbox' }];
-    // One step per target, named by its task (send-targets.ts): a loop over two
-    // tasks is two sends, and the line says to whom.
-    const refs = sendRefsOf(t);
-    if (refs.length === 0) return [{ kind: 'sent' }];
-    return refs.map((r) => {
-      const to = lookupTaskByRef(r)?.label.title;
-      return to ? { kind: 'sent', to } : { kind: 'sent' };
+    const calls = outboundCallsOf(t);
+    if (calls.length === 0) return [/__human_inbox_(?:send|reply)$/.test(t.name) ? { kind: 'inbox' } : { kind: 'sent' }];
+    // One step per call, and per target of a send, named by its task
+    // (send-targets.ts): a loop over two tasks is two sends, a command that sends
+    // and then updates two threads is three, and the line says to whom.
+    return calls.flatMap((c): FoldStep[] => {
+      if (c.op.startsWith('human_inbox_')) return [{ kind: 'inbox' }];
+      // A thread, a Brief or a Board names the node's own task: only a send names whom.
+      const refs = c.fields.kind === 'send' || c.fields.kind === 'reply' ? c.refs ?? [] : [];
+      if (refs.length === 0) return [{ kind: 'sent' }];
+      return refs.map((r) => {
+        const to = lookupTaskByRef(r)?.label.title;
+        return to ? { kind: 'sent', to } : { kind: 'sent' };
+      });
     });
   });
   const foldStepsOf = (part: HistoryPart): FoldStep[] => {

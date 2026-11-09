@@ -166,6 +166,7 @@ import { browserV1Router } from './routes/browser-v1.js'
 import { engineSwitchV1Router } from './routes/engine-switch-v1.js'
 import { taskMoveV1Router } from './routes/task-move-v1.js'
 import { sessionExtrasV1Router } from './routes/session-extras-v1.js'
+import { sessionOpCallsV1Router } from './routes/session-op-calls-v1.js'
 import { filesV1Router } from './routes/files-v1.js'
 import { consoleV1Router } from './routes/console-v1.js'
 import { notesExtrasV1Router } from './routes/notes-extras-v1.js'
@@ -2698,6 +2699,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // workflow/plan/subagent-history/execute-compact/queue + list-dirs — all
   // B-class relay on a REPLICA.
   app.use('/api/v1', sessionExtrasV1Router)
+  // A session's own Walnut calls, for its chat cards (core/sessions/op-call-log.ts).
+  app.use('/api/v1', sessionOpCallsV1Router)
   // File browsing (additive, Wave 2): list/resolve relay on a REPLICA;
   // file-content reads relay via the bounded fs.readBounded bridge command
   // (2MB cap + host-side sandbox — see files-v1.ts / file-content-bridge.ts).

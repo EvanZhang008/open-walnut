@@ -189,6 +189,9 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
 
     // Typed on the command line (flags or inline JSON), where the shell may have cut a "$" amount.
     let typedArgs = true
+    // How the arguments arrived, for the session's chat card (recordSessionOpCall).
+    let argForm: 'inline' | 'file' | 'stdin' | 'flags' | 'none' = 'flags'
+    let argPath: string | undefined
     if (rest[0]?.startsWith('--')) {
       // Human-friendly flag form: --status todo --q "login bug". Types are
       // coerced from the op's own zod shape, so numbers and booleans arrive
@@ -218,6 +221,8 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
       }
       let rawJson = ''
       typedArgs = source.kind === 'inline'
+      argForm = source.kind
+      if (source.kind === 'file') argPath = source.path
       if (source.kind === 'inline') rawJson = source.json
       else if (source.kind === 'stdin') {
         rawJson = await new Promise<string>((resolve) => {
@@ -273,12 +278,17 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
     // deliver, and the daemon hands everything else to the server itself. Only
     // a daemon that could not route it at all (no daemon, no server it could
     // reach) leaves the call to the HTTP path below; nothing was delivered then.
+    // What this call said, recorded for the session's own chat card (core/sessions/op-call-log.ts).
+    const { recordSessionOpCall } = await import('../ops/executor.js')
+    const record = (ok: boolean, result?: unknown, error?: string): Promise<void> =>
+      recordSessionOpCall({ op: name, args: parsed, result, ok, ...(error ? { error } : {}), form: argForm, ...(argPath ? { path: argPath } : {}) })
     if (name === 'task_send' || name === 'session_send') {
       const { callHostDaemonTool, formatErrorLines, errorToExitCode } = await import('../providers/wn-cli.js')
       const resp = await callHostDaemonTool(name, parsed, process.env, callId)
       if (resp && !(resp.ok === false && (resp.error.code === 'hub_unreachable' || resp.error.code === 'unknown_caller'))) {
         if (resp.ok) {
           console.log(JSON.stringify(resp.result, null, 2))
+          await record(true, resp.result)
           return
         }
         console.error(formatErrorLines(resp.error).join('\n'))
@@ -287,6 +297,8 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
           if (resp.error.detail === undefined) console.log(JSON.stringify(lostCallDetail(name, callId), null, 2))
         }
         process.exitCode = errorToExitCode(resp.error.code)
+        // A timed-out call may have run: no record says it failed.
+        if (resp.error.code !== 'hub_timeout') await record(false, undefined, formatErrorLines(resp.error).join(' '))
         return
       }
     }
@@ -313,6 +325,7 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
     if (!r.ok) {
       if (r.result !== undefined) console.log(JSON.stringify(r.result, null, 2))
       console.error(r.message)
+      if (!r.unreachable) await record(false, r.result, r.message)
       // No answer at all (a timeout, a dropped connection): the call may have run all the same.
       // A server that refused the connection never saw the call: nothing ran.
       if (r.result === undefined && (r.lost || /^Walnut request (timed out|failed)/.test(r.message))) {
@@ -334,6 +347,7 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
       return
     }
     console.log(JSON.stringify(r.result, null, 2))
+    await record(true, r.result)
     return
   }
 

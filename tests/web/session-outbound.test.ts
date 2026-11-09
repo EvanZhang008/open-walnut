@@ -73,8 +73,10 @@ describe('detectOutboundSend — MCP transport', () => {
     expect(detectOutboundSend(mcp({ text: 'x' }, 'mcp__personal__session_send'))).not.toBeNull();
     // task_send is the op's current name; session_send is its deprecated alias.
     expect(detectOutboundSend(mcp({ text: 'x' }, 'mcp__walnut__task_send'))).not.toBeNull();
-    expect(detectOutboundSend(mcp({ text: 'x' }, 'mcp__walnut__task_start'))).toBeNull();
-    expect(detectOutboundSend(mcp({ text: 'x' }, 'mcp__walnut__session_start'))).toBeNull();
+    // task_start carries the instruction its task starts on: words to someone (core/op-cards.ts).
+    expect(detectOutboundSend(mcp({ message: 'x' }, 'mcp__walnut__task_start'))!.op).toBe('task_start');
+    expect(detectOutboundSend(mcp({ message: 'x' }, 'mcp__walnut__session_start'))!.op).toBe('session_start');
+    expect(detectOutboundSend(mcp({ id: 'x' }, 'mcp__walnut__task_get'))).toBeNull();
     expect(detectOutboundSend(mcp({ text: 'x' }, 'mcp____session_send'))).toBeNull();
     expect(detectOutboundSend({ name: 'Read', input: { file_path: '/tmp/session_send.md' } })).toBeNull();
   });

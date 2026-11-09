@@ -828,6 +828,9 @@ export class ClaudeCodeSession {
   private _projectBashRules: { at: number; rules: string[] } | null = null
   /** Bash calls seen and not yet returned: one sent beside a prompt runs on the rule its answer grants. */
   private _openBashCalls = new Map<string, string>()
+  /** Bash calls that returned in the last half hour, newest last: a background
+   *  command's op runs after its call already returned (bashCallMatching). */
+  private _closedBashCalls: Array<{ id: string; command: string; closedAt: number }> = []
   private _active = false
   private _exitCode: number | null = null
   /** Stderr from the remote daemon (populated on exit for remote sessions) */
@@ -7928,7 +7931,14 @@ export class ClaudeCodeSession {
         for (const block of msg.message.content) {
           if (block.type === 'tool_result') {
             if (!userParentToolUseId && this._live.toolResult(block.tool_use_id, Date.now())) this._publishLive()
-            if (block.tool_use_id) this._openBashCalls.delete(block.tool_use_id)
+            if (block.tool_use_id) {
+              const command = this._openBashCalls.get(block.tool_use_id)
+              if (command !== undefined) {
+                this._closedBashCalls.push({ id: block.tool_use_id, command, closedAt: Date.now() })
+                if (this._closedBashCalls.length > 30) this._closedBashCalls.shift()
+              }
+              this._openBashCalls.delete(block.tool_use_id)
+            }
             // Resolve a pending CronCreate: adopt the CLI's job id (what
             // CronDelete takes) on success; on an error result drop the
             // optimistic arm so a rejected create doesn't extend thresholds.
@@ -9221,6 +9231,24 @@ export class ClaudeCodeSession {
    * already there (a replayed call that was asked); a prompt the CLI still raises for it
    * replaces this line with the person's answer.
    */
+  /**
+   * The Bash call of this session that ran a command `matches` accepts: a call
+   * still running first (newest first), then one that returned in the last half
+   * hour (a background command). Lets the server tie a `walnut tools call` the
+   * session's CLI made back to the transcript row that made it (op-call-log.ts).
+   */
+  bashCallMatching(matches: (command: string) => boolean, taken: ReadonlySet<string> = new Set()): string | undefined {
+    const open = [...this._openBashCalls].reverse()
+    for (const [id, command] of open) if (!taken.has(id) && matches(command)) return id
+    for (const [id, command] of open) if (matches(command)) return id
+    const since = Date.now() - 30 * 60_000
+    for (let i = this._closedBashCalls.length - 1; i >= 0; i--) {
+      const c = this._closedBashCalls[i]
+      if (c.closedAt >= since && !taken.has(c.id) && matches(c.command)) return c.id
+    }
+    return undefined
+  }
+
   private async noteAllowedByRule(toolUseId: string, command: string): Promise<void> {
     const sid = this.claudeSessionId
     if (!sid || this._mode === 'bypass') return
@@ -14346,6 +14374,48 @@ export class SessionRunner {
   }
 
   /**
+   * The profile a resume spawn of this session runs with: the stored one it replays, or
+   * that one plus the Walnut MCP tools when the session started without them and its
+   * cache expired (sessions/resume-mcp-mount.ts). Stored BEFORE the spawn, like the
+   * prompt, so later resumes, an attach and a fork read what the new CLI holds. Never throws.
+   */
+  private async resumeSpawnProfile(
+    sessionId: string,
+    stored: import('../core/types.js').SessionProfile | undefined,
+    opts: { respawn?: boolean } = {},
+  ): Promise<import('../core/types.js').SessionProfile | undefined> {
+    try {
+      const { getSessionByClaudeId, updateSessionRecord } = await import('../core/session-tracker.js')
+      const record = await getSessionByClaudeId(sessionId)
+      if (!record) return stored
+      const [{ mountOnResume }, { WALNUT_MCP_CAPABILITY }, { walnutMcpProfile }, { getConnectedDaemonConnection }, { isCompanion }, { getConfig }] = await Promise.all([
+        import('../core/sessions/resume-mcp-mount.js'), import('../core/sessions/walnut-mcp-mount.js'),
+        import('../core/sessions/profiles.js'), import('./daemon-connection.js'),
+        import('../core/server-role.js'), import('../core/config-manager.js'),
+      ])
+      const config = await getConfig()
+      // The same inputs a fresh start reads (handleStart).
+      const mountHost = record.host && record.host !== '__local__' ? record.host : '__local__'
+      const next = mountOnResume(record, {
+        setting: config.session?.premount_walnut_mcp,
+        cloud: isCompanion(),
+        hostServesMcp: getConnectedDaemonConnection(mountHost)?.hasCapability(WALNUT_MCP_CAPABILITY) ?? false,
+        local: mountHost === '__local__',
+        hubMount: walnutMcpProfile,
+      }, Date.now(), { ignoreCache: opts.respawn === true })
+      if (!next) return stored
+      await updateSessionRecord(sessionId, { profile: next })
+      log.session.info('resume: adds the Walnut MCP tools (it started without them and its cache expired)', {
+        sessionId, taskId: record.taskId, host: record.host,
+      })
+      return next
+    } catch (err) {
+      log.session.warn('resume: MCP mount check failed, replaying the stored profile', { sessionId, error: err instanceof Error ? err.message : String(err) })
+      return stored
+    }
+  }
+
+  /**
    * End the in-place rewind pending window: the first completed turn after a
    * rewind proves the new branch exists in the transcript, so a plain --resume
    * now lands correctly — and re-sending --resume-session-at would CUT the new
@@ -14612,8 +14682,10 @@ export class SessionRunner {
     // Model/effort routes persist BEFORE applying their process-local control
     // requests. Re-read after the old process is stopped so changes made during
     // the restart window are applied to the replacement CLI.
-    const { model, effort, profile, lane, resumeSessionAt, appendSystemPrompt: storedPrompt } = await this.resolveResumeArgs(sessionId)
+    const { model, effort, profile: storedProfile, lane, resumeSessionAt, appendSystemPrompt: storedPrompt } = await this.resolveResumeArgs(sessionId)
     const resumePrompt = await this.resumeSpawnPrompt(sessionId, storedPrompt)
+    // A respawn someone asked for takes the Walnut tools whatever the cache (resume-mcp-mount.ts).
+    const profile = await this.resumeSpawnProfile(sessionId, storedProfile, { respawn: true })
     const refreshedRecord = await getSessionByClaudeId(sessionId)
     const resumeMode = modeOverride ?? refreshedRecord?.mode ?? record.mode
     log.session.info('reinitialize: respawning fresh CLI (no turn)', { sessionId, taskId: record.taskId, host: record.host, model, mode: resumeMode })
@@ -15495,6 +15567,7 @@ export class SessionRunner {
           // that confirmation is what silently lost messages. See onSpawnSettled doc.
           const endsBefore = session.processEndCount
           const spawnPrompt = await this.resumeSpawnPrompt(sessionId, resolvedResumePrompt)
+          const spawnProfile = await this.resumeSpawnProfile(sessionId, resolvedProfile)
           session.send(combined, record.cwd ?? undefined, sessionId, resumeMode, resolvedModel, spawnPrompt, record.host ?? undefined, sshTarget, undefined, resumeConfig.session?.permission_prompt, undefined, resumeConfig.session?.stream_partial_messages, resolvedEffort,
             (ok, err, line) => {
               if (ok) { this.settleResumeSuccess(sessionId, session, msgs, { lineUuid, line, endsBefore }); this.deliverRest(sessionId) }
@@ -15503,7 +15576,7 @@ export class SessionRunner {
             // Cold resume: re-emit the record's profile flags (spawn-time only),
             // plus the batch's line uuid.
             {
-              ...resumeProfileOpts(resolvedProfile, resolvedLane, resolvedResumeAt, lineUuid),
+              ...resumeProfileOpts(spawnProfile, resolvedLane, resolvedResumeAt, lineUuid),
               stopFence,
               markers: msgs.map((msg) => ({ message: msg.message, messageId: msg.id })),
             })
@@ -15549,6 +15622,7 @@ export class SessionRunner {
       const settleTarget = targetSession
       const endsBefore = targetSession.processEndCount
       const spawnPrompt = await this.resumeSpawnPrompt(sessionId, resolvedResumePrompt)
+      const spawnProfile = await this.resumeSpawnProfile(sessionId, resolvedProfile)
       targetSession.send(combined, targetSession.cwd ?? undefined, sessionId, existingResumeMode, resolvedModel, spawnPrompt, resumeHost ?? undefined, resumeSshTarget, undefined, resumeConfig2.session?.permission_prompt, undefined, resumeConfig2.session?.stream_partial_messages, resolvedEffort,
         (ok, err, line) => {
           if (ok) { this.settleResumeSuccess(sessionId, settleTarget, msgs, { lineUuid, line, endsBefore }); this.deliverRest(sessionId) }
@@ -15558,7 +15632,7 @@ export class SessionRunner {
         // the batch's line uuid (the old process may have taken the line before it
         // died; the CLI then skips it instead of running it twice).
         {
-          ...resumeProfileOpts(resolvedProfile, resolvedLane, resolvedResumeAt, lineUuid),
+          ...resumeProfileOpts(spawnProfile, resolvedLane, resolvedResumeAt, lineUuid),
           stopFence,
           markers: msgs.map((msg) => ({ message: msg.message, messageId: msg.id })),
         })

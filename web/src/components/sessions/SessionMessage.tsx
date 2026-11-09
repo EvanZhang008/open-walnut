@@ -28,9 +28,9 @@ import { useSelectionFrozenWith } from '@/utils/selection-guard';
 import { BashToolCall } from './BashToolCall';
 import { parseSessionEnvelopes, type EnvelopeSegment } from '@open-walnut/history-session-envelope';
 import { injectedContextKind } from './injected-context';
-import { detectOutboundSend } from './session-outbound';
+import { detectOutboundCalls } from './session-outbound';
 import { SessionEnvelopeSegments } from './SessionProvenanceCard';
-import { SessionOutboundCard } from './SessionOutboundCard';
+import { SessionOutboundCards } from './SessionOutboundCard';
 import { splitLeadingBanners } from '@open-walnut/history-injected-banner';
 import { attachmentParts } from '@/api/file-upload';
 import { MessageAttachments } from './MessageAttachments';
@@ -837,9 +837,9 @@ export const GenericToolCall = memo(function GenericToolCall(props: GenericToolC
   // the RECEIVING side is carded, so both halves of one conversation read alike.
   // Before the Bash dispatch, because most sends are a `walnut tools call` line.
   const sendResult = props.result ?? (props.tool as { result?: string }).result;
-  const outbound = detectOutboundSend(props.tool as SessionHistoryTool, sendResult);
-  if (outbound) {
-    return <SessionOutboundCard send={outbound} result={sendResult} sessionCwd={props.sessionCwd} sessionHost={props.sessionHost} sessionId={props.sessionId} onTaskClick={props.onTaskClick} onSessionClick={props.onSessionClick} />;
+  const outbound = useMemo(() => detectOutboundCalls(props.tool as SessionHistoryTool, sendResult), [props.tool, sendResult]);
+  if (outbound.length > 0) {
+    return <SessionOutboundCards calls={outbound} toolUseId={props.tool.toolUseId} running={sendResult === undefined && props.status === 'calling'} result={sendResult} sessionCwd={props.sessionCwd} sessionHost={props.sessionHost} sessionId={props.sessionId} onTaskClick={props.onTaskClick} onSessionClick={props.onSessionClick} />;
   }
   // Bash gets terminal-style rendering (real newlines, plain-pre output, popup)
   // instead of the JSON input dump. Dispatch BEFORE any hooks; single choke

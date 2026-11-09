@@ -1112,6 +1112,26 @@ await fs.writeFile(
         subtasks: [],
       },
       {
+        // Walnut op cards fixture (session-op-cards.spec.ts).
+        id: 'pw-task-opcards',
+        title: 'Op cards fixture task',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-opcards-session'],
+        active_session_ids: [],
+        session_id: 'pw-opcards-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
         // Injected-banner fixture. Its OWN task, so the spec opens exactly one
         // session from the kebab (pw-task-001 owns hundreds).
         id: 'pw-task-banner',
@@ -3246,6 +3266,61 @@ const codepathValidationGo = path.join(codepathFixtureRoot, 'k8s-src', 'objectme
     )
   }
 
+  // Walnut op cards fixture (session-op-cards.spec.ts): the shapes a lead's chat
+  // really holds (2026-11-09): a send whose payload a heredoc wrote to /tmp and
+  // `@file` read, two thread updates in the same command, a letter sent from a
+  // file the transcript never saw (its words only in Walnut's record of the call),
+  // and an MCP brief_write.
+  {
+    const encodedCwd = vscodeFixtureRoot.replace(/[^a-zA-Z0-9]/g, '-')
+    const jsonlDir = path.join(tmpBase, '.claude', 'projects', encodedCwd)
+    await fs.mkdir(jsonlDir, { recursive: true })
+    const sid = 'pw-opcards-session'
+    const at = (ms: number) => new Date(sessionFixtureNow - ms).toISOString()
+    const sendJson = JSON.stringify({
+      to: 'pw-task-001',
+      title: 'Tab list out of step with Chrome',
+      text: 'The card lists two tabs while the agent window holds nine. Make the card list exactly the tabs the window holds, and close the ones a finished run opened.\n\nEvidence: a screenshot of both side by side.',
+    })
+    const threadReply = JSON.stringify({ task: 'pw-task-opcards', id: 'th-cards-2', reply: 'Handed to the browser task with the screenshot; it owns the window and the clean-up.' })
+    const multiCommand = [
+      "cat > /tmp/pw-send.json <<'EOF'", sendJson, 'EOF',
+      `walnut tools call task_send @/tmp/pw-send.json 2>&1 | grep -o -E '"(requestId|delivery)": "[^"]*"' | head -2`,
+      `walnut tools call thread_update '{"task":"pw-task-opcards","id":"th-cards-1","merge_into":"th-cards-2"}' 2>&1 | head -1`,
+      "cat > /tmp/pw-th.json <<'EOF'", threadReply, 'EOF',
+      'walnut tools call thread_update @/tmp/pw-th.json 2>&1 | head -1',
+    ].join('\n')
+    const letterCommand = 'walnut tools call human_inbox_send @/tmp/pw-gone-letter.json 2>&1 | head -1'
+    const rows = [
+      { type: 'user', uuid: '0199cc01-0000-4aaa-8bbb-000000000000', parentUuid: null, sessionId: sid, timestamp: at(60_000), message: { role: 'user', content: 'Hand the tab problem to the browser task and tell me.' } },
+      { type: 'assistant', uuid: '0199cc02-0000-4aaa-8bbb-000000000000', parentUuid: '0199cc01-0000-4aaa-8bbb-000000000000', sessionId: sid, timestamp: at(58_000),
+        message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_pw_opcards_multi', name: 'Bash', input: { command: multiCommand, description: 'Hand tab consistency to the browser task, merge thread' } }] } },
+      { type: 'user', uuid: '0199cc03-0000-4aaa-8bbb-000000000000', parentUuid: '0199cc02-0000-4aaa-8bbb-000000000000', sessionId: sid, timestamp: at(57_000),
+        message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_pw_opcards_multi', content: '"requestId": "rq-0a1b2c3d4e5f"\n"delivery": "queued"\n{\n{' }] } },
+      { type: 'assistant', uuid: '0199cc04-0000-4aaa-8bbb-000000000000', parentUuid: '0199cc03-0000-4aaa-8bbb-000000000000', sessionId: sid, timestamp: at(50_000),
+        message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_pw_opcards_letter', name: 'Bash', input: { command: letterCommand, description: 'Ask which plan' } }] } },
+      { type: 'user', uuid: '0199cc05-0000-4aaa-8bbb-000000000000', parentUuid: '0199cc04-0000-4aaa-8bbb-000000000000', sessionId: sid, timestamp: at(49_000),
+        message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_pw_opcards_letter', content: '{' }] } },
+      { type: 'assistant', uuid: '0199cc06-0000-4aaa-8bbb-000000000000', parentUuid: '0199cc05-0000-4aaa-8bbb-000000000000', sessionId: sid, timestamp: at(40_000),
+        message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_pw_opcards_brief', name: 'mcp__walnut__brief_write', input: { task: 'pw-task-opcards', content: '### Needs you\nNothing.\n\n### Working\nThe browser task fixes the tab list.\n\n### Waiting / snoozed\nNothing.' } }] } },
+      { type: 'user', uuid: '0199cc07-0000-4aaa-8bbb-000000000000', parentUuid: '0199cc06-0000-4aaa-8bbb-000000000000', sessionId: sid, timestamp: at(39_000),
+        message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_pw_opcards_brief', content: '{"ok":true}' }] } },
+      { type: 'assistant', uuid: '0199cc08-0000-4aaa-8bbb-000000000000', parentUuid: '0199cc07-0000-4aaa-8bbb-000000000000', sessionId: sid, timestamp: at(38_000),
+        message: { role: 'assistant', content: [{ type: 'text', text: 'Handed on; the browser task owns it now.' }] } },
+    ]
+    await fs.writeFile(path.join(jsonlDir, `${sid}.jsonl`), rows.map((r) => JSON.stringify(r)).join('\n') + '\n')
+    // Walnut's own record of the letter: what the CLI read from the file before it was gone.
+    const { opCardFields } = await import('../../../src/core/op-cards.js')
+    await fs.mkdir(path.join(tmpBase, 'op-calls'), { recursive: true })
+    await fs.writeFile(path.join(tmpBase, 'op-calls', `${sid}.json`), JSON.stringify({
+      sessionId: sid,
+      calls: [{
+        id: 'oc-pw-letter', at: at(49_500), toolUseId: 'toolu_pw_opcards_letter', op: 'human_inbox_send', form: 'file', path: '/tmp/pw-gone-letter.json', ok: true,
+        fields: opCardFields('human_inbox_send', { subject: 'Pick the rollout plan', markdown: 'Two plans are ready. Plan A ships Monday with the old importer; plan B waits a week for the new one.\n\nMy pick is B: the old importer drops attachments.' }),
+      }],
+    }))
+  }
+
   // Injected-banner fixture (session-injected-banner.spec.ts): a transcript whose
   // user turns carry the machine block Walnut prepends to a lane message. The
   // banner markers come from the PRODUCTION constants, so renaming them server
@@ -4381,6 +4456,19 @@ await fs.writeFile(
         messageCount: 5,
         cwd: vscodeFixtureRoot,
         title: 'Envelope inbox: cross-session coordination',
+      },
+      {
+        claudeSessionId: 'pw-opcards-session',
+        taskId: 'pw-task-opcards',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date(sessionFixtureNow - 38_000).toISOString(),
+        startedAt: new Date(sessionFixtureNow - 61_000).toISOString(),
+        lastActiveAt: new Date(sessionFixtureNow - 38_000).toISOString(),
+        messageCount: 4,
+        cwd: vscodeFixtureRoot,
+        title: 'Op cards: what a lead sent',
       },
       {
         // Injected-banner fixture. Its transcript (written above) carries the

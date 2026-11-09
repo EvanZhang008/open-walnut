@@ -103,3 +103,114 @@
   font-family: var(--font-mono);
   font-size: 10px;
 }
+
+/* ── Walnut op card (SessionOutboundCard): To · Title · Summary · Details ──
+   The user's design, 2026-11-09: who it went to as a task pill, the title, a
+   line or two of summary, and everything else folded below. Quiet: one frame,
+   muted chrome, the words in the foreground. */
+.op-card-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.op-card-to {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.op-card-to .op-card-to-pill {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.op-card-to-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--fg-secondary);
+}
+
+.op-card-to-label {
+  color: var(--fg-muted);
+}
+
+.op-card-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  min-width: 0;
+  margin-top: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.op-card-main:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: var(--radius-sm, 4px);
+}
+
+.op-card-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+
+.op-card-summary {
+  font-size: 13px;
+  color: var(--fg-secondary);
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.op-card-main[aria-expanded="true"] .op-card-summary {
+  display: block;
+}
+
+.op-card-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.op-card-more-chevron {
+  display: inline-block;
+  transition: transform 120ms ease;
+}
+
+.op-card-main[aria-expanded="true"] .op-card-more-chevron {
+  transform: rotate(90deg);
+}
+
+.op-card-main:hover .op-card-more {
+  color: var(--fg-secondary);
+}
+
+.op-card-detail {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}

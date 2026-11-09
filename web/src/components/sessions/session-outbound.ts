@@ -36,6 +36,10 @@
  */
 import type { SessionHistoryTool } from '@/types/session';
 import { sendTargetRefs } from '@open-walnut/send-targets';
+import { isCardedOp, opCardFields, type OpCardFields } from '../../../../src/core/op-cards';
+import { findOpCalls, tokenizeCommand, type OpArgForm } from '../../../../src/lib/walnut-op-command';
+
+export { tokenizeCommand };
 
 /** The resolved target, as the server reports it back. */
 export interface OutboundTarget {
@@ -48,6 +52,16 @@ export interface OutboundTarget {
 }
 
 export interface OutboundSend {
+  /** The Walnut op (task_send, thread_update, brief_write, …: core/op-cards.ts). */
+  op: string;
+  /** To / Title / Summary / Detail, from the arguments the transcript holds. A
+   *  call whose arguments it does not hold has none of the words; the card asks
+   *  Walnut's own record of the call (op-call-store.ts). */
+  fields: OpCardFields;
+  /** How the CLI got its arguments. */
+  form?: OpArgForm;
+  /** `@path` as typed. */
+  path?: string;
   /** Which transport carried the call. */
   via: 'mcp' | 'cli';
   /** 'reply' when the send answers a pending request (`in_reply_to`/`repliedTo`). */
@@ -75,141 +89,13 @@ export interface OutboundSend {
   raw: string;
 }
 
-/** `mcp__<server>__task_send` (or `session_send`, its older name). The server
- *  key is per-install, so it is a pattern; `[^_]` after the prefix keeps
- *  `mcp____…` out. */
-const MCP_SEND = /^mcp__[^_].*__(?:task|session)_send$/;
+/** `mcp__<server>__<op>`. The server key is per-install, so it is a pattern;
+ *  `[^_]` after the prefix keeps `mcp____…` out. */
+const MCP_OP = /^mcp__[^_].*?__([a-z][a-z0-9_]*)$/;
 
-/** The op names that send: `task_send`, and `session_send`, the deprecated alias
- *  that takes the same arguments. */
+/** The send ops: their answer names a target session (task_send, and
+ *  session_send, the deprecated alias that takes the same arguments). */
 const SEND_OPS = new Set(['task_send', 'session_send']);
-
-/** Shell metacharacters that end a word and start a new command position. */
-const OPERATOR_CHARS = new Set([';', '|', '&', '(', ')', '{', '}', '\n']);
-
-/** Tokens that may precede a command without moving it out of head position. */
-const COMMAND_WRAPPERS = new Set(['env', 'exec', 'sudo', 'time', 'nice', 'command', 'builtin',
-  // Shell keywords a command follows: `for id in A B; do walnut tools call task_send …; done`
-  // sends once per id (a lead's loop over its workers).
-  'do', 'then', 'else']);
-
-/** `NAME=value` prefix assignments, which also keep the head position. */
-const ENV_ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=/;
-
-/** A printed handle's id part: `Title [8hex]`. Not restricted to hex — the
- *  bracket holds a session-id PREFIX, and only unique-prefix resolution (never
- *  this regex) decides whether it earns a link. */
-const HANDLE_ID = /\[([^[\]\s]{4,})\]\s*$/;
-
-/** Guard against doing tokenizer work inside a render for a pathological input. */
-const MAX_COMMAND_CHARS = 400_000;
-
-interface ShellToken {
-  /** The word with one level of quoting removed. */
-  value: string;
-  /** True when any part of the word was quoted — a quoted `walnut` is prose. */
-  quoted: boolean;
-  /** True for a run of shell operators (`|`, `&&`, `;`, newline, …). */
-  op: boolean;
-}
-
-/**
- * Split a shell command into words, undoing ONE level of quoting.
- *
- * This is not a shell; it is the smallest thing that reads a `walnut tools call`
- * line correctly. Concatenation is what makes it work: `'it'\''s'` and
- * `'it'"'"'s'` are both three adjacent pieces of one word, so appending each
- * piece in turn reproduces the literal the shell would have passed — which is
- * exactly how a `session_send` payload carries an apostrophe.
- */
-export function tokenizeCommand(command: string): ShellToken[] {
-  const tokens: ShellToken[] = [];
-  const n = command.length;
-  let i = 0;
-  while (i < n) {
-    const c = command[i];
-    if (c === ' ' || c === '\t' || c === '\r') { i++; continue; }
-    if (OPERATOR_CHARS.has(c)) {
-      let j = i;
-      while (j < n && OPERATOR_CHARS.has(command[j])) j++;
-      tokens.push({ value: command.slice(i, j), quoted: false, op: true });
-      i = j;
-      continue;
-    }
-    let value = '';
-    let quoted = false;
-    while (i < n) {
-      const ch = command[i];
-      if (ch === ' ' || ch === '\t' || ch === '\r' || OPERATOR_CHARS.has(ch)) break;
-      if (ch === "'") {
-        quoted = true;
-        const close = command.indexOf("'", i + 1);
-        if (close < 0) { value += command.slice(i + 1); i = n; break; }
-        value += command.slice(i + 1, close);
-        i = close + 1;
-        continue;
-      }
-      if (ch === '"') {
-        quoted = true;
-        i++;
-        while (i < n && command[i] !== '"') {
-          // Inside double quotes only a few escapes are real; passing the escaped
-          // character through is right for every one of them.
-          if (command[i] === '\\' && i + 1 < n) { value += command[i + 1]; i += 2; continue; }
-          value += command[i++];
-        }
-        i++;
-        continue;
-      }
-      if (ch === '\\' && i + 1 < n) { value += command[i + 1]; i += 2; continue; }
-      value += ch;
-      i++;
-    }
-    tokens.push({ value, quoted, op: false });
-  }
-  return tokens;
-}
-
-/** True when `tokens[i]` sits where a shell would look for a command name. */
-function atCommandPosition(tokens: ShellToken[], i: number): boolean {
-  if (i === 0) return true;
-  const prev = tokens[i - 1];
-  if (prev.op) return true;
-  if (prev.quoted) return false;
-  return ENV_ASSIGN.test(prev.value) || COMMAND_WRAPPERS.has(prev.value);
-}
-
-/** `walnut`, `open-walnut`, or either behind a path. */
-function isWalnutBinary(word: string): boolean {
-  const base = word.slice(word.lastIndexOf('/') + 1);
-  return base === 'walnut' || base === 'open-walnut';
-}
-
-/**
- * The argument word of a real `… walnut tools call session_send …` in `command`.
- *
- * Returns `null` when the command does not send (help, a different op, prose), and
- * `{ arg: undefined }` when it sends with no argument word at all.
- */
-function findCliSend(command: string): { arg?: ShellToken } | null {
-  // Cheap gate first: this runs for every Bash row in a whale transcript.
-  if (!command.includes('_send')) return null;
-  if (command.length > MAX_COMMAND_CHARS) return null;
-  const tokens = tokenizeCommand(command);
-  for (let i = 0; i + 3 < tokens.length; i++) {
-    const head = tokens[i];
-    if (head.op || head.quoted || !isWalnutBinary(head.value)) continue;
-    const [tools, call, op] = [tokens[i + 1], tokens[i + 2], tokens[i + 3]];
-    if ([tools, call, op].some((t) => t.op || t.quoted)) continue;
-    if (tools.value !== 'tools' || call.value !== 'call' || !SEND_OPS.has(op.value)) continue;
-    if (!atCommandPosition(tokens, i)) continue;
-    const arg = tokens[i + 4];
-    // `--help` after the op asks for the schema; nothing is sent.
-    if (arg && !arg.op && (arg.value === '--help' || arg.value === '-h')) return null;
-    return { arg: arg && !arg.op ? arg : undefined };
-  }
-  return null;
-}
 
 /** Keys that identify a session_send answer among other JSON in the output. */
 const RESULT_KEYS = [
@@ -223,8 +109,12 @@ function isObject(v: unknown): v is Json {
   return !!v && typeof v === 'object' && !Array.isArray(v);
 }
 
-function looksLikeSendResult(v: Json): boolean {
-  return RESULT_KEYS.some((k) => k in v);
+/** What only a send answers with: on a row with other calls, another op's
+ *  answer may carry `outcome` or `error` too. */
+const SEND_ONLY_KEYS = RESULT_KEYS.filter((k) => k !== 'outcome' && k !== 'error');
+
+function looksLikeSendResult(v: Json, strict = false): boolean {
+  return (strict ? SEND_ONLY_KEYS : RESULT_KEYS).some((k) => k in v);
 }
 
 /** Index just past the `}` matching the `{` at `start`, or -1. String-aware. */
@@ -245,7 +135,7 @@ function balancedEnd(text: string, start: number): number {
   return -1;
 }
 
-/** Every `{…}` in `text` that parses as a JSON object, outermost first. */
+/** Every top-level `{…}` in `text` that parses as a JSON object, in order. */
 function parseObjectsIn(text: string, budget: number): Json[] {
   const out: Json[] = [];
   let from = 0;
@@ -256,7 +146,7 @@ function parseObjectsIn(text: string, budget: number): Json[] {
     if (end < 0) break;
     try {
       const parsed: unknown = JSON.parse(text.slice(open, end));
-      if (isObject(parsed)) out.push(parsed);
+      if (isObject(parsed)) { out.push(parsed); from = end; continue; }
     } catch { /* not JSON at this offset — keep scanning */ }
     from = open + 1;
   }
@@ -264,17 +154,15 @@ function parseObjectsIn(text: string, budget: number): Json[] {
 }
 
 /**
- * The send result inside a tool output, however it is wrapped.
- *
- * The CLI prints it as stdout (sometimes with other lines around it) and MCP
- * wraps it in content blocks, so this scans for the first JSON object that looks
- * like a send answer and then descends one level into `text` / `content[].text`
- * for the MCP shape. Never throws: no hit simply means no result detail.
+ * Every send answer inside a tool output, in the order printed, however it is
+ * wrapped: the CLI prints it as stdout (sometimes with other lines around it),
+ * MCP wraps it in content blocks (`text` / `content[].text`).
  */
-function findSendResult(text: string | undefined, depth = 0): Json | undefined {
-  if (!text || depth > 2) return undefined;
-  const objs = parseObjectsIn(text, 24);
-  for (const o of objs) if (looksLikeSendResult(o)) return o;
+function findSendResults(text: string | undefined, strict: boolean, depth = 0): Json[] {
+  if (!text || depth > 2) return [];
+  const objs = parseObjectsIn(text, 48);
+  const direct = objs.filter((o) => looksLikeSendResult(o, strict));
+  if (direct.length > 0) return direct;
   for (const o of objs) {
     const nested: string[] = [];
     if (typeof o.text === 'string') nested.push(o.text);
@@ -284,11 +172,11 @@ function findSendResult(text: string | undefined, depth = 0): Json | undefined {
       }
     }
     for (const s of nested) {
-      const hit = findSendResult(s, depth + 1);
-      if (hit) return hit;
+      const hit = findSendResults(s, strict, depth + 1);
+      if (hit.length) return hit;
     }
   }
-  return undefined;
+  return [];
 }
 
 function str(v: unknown): string | undefined {
@@ -327,81 +215,90 @@ function targetFrom(result: Json | undefined): OutboundTarget | undefined {
   return Object.keys(target).length > 0 ? target : undefined;
 }
 
-/**
- * A session→session send in this session's transcript, or `null` for every other
- * tool call. `result` is the tool output (the streaming path passes it separately
- * from the persisted `tool.result`).
- */
-export function detectOutboundSend(
-  tool: SessionHistoryTool,
-  result?: string,
-): OutboundSend | null {
+/** A printed handle's id part: `Title [8hex]`. */
+const HANDLE_ID = /\[([^[\]\s]{4,})\]\s*$/;
+
+interface RawCall { op: string; via: 'mcp' | 'cli'; args?: Json; form?: OpArgForm; path?: string; raw: string }
+
+/** The Walnut op calls one tool row made, in order. */
+function rawCallsOf(tool: SessionHistoryTool): RawCall[] {
   const name = typeof tool?.name === 'string' ? tool.name : '';
   const input = isObject(tool?.input) ? tool.input : {};
-
-  let via: 'mcp' | 'cli';
-  let raw: string;
-  let args: Json | undefined;
-  let payloadFrom: 'file' | 'stdin' | undefined;
-
-  if (MCP_SEND.test(name)) {
-    via = 'mcp';
-    args = input;
-    try {
-      raw = JSON.stringify(input, null, 2);
-    } catch {
-      raw = String(input);
-    }
-  } else if (name === 'Bash' && typeof input.command === 'string') {
-    const found = findCliSend(input.command);
-    if (!found) return null;
-    via = 'cli';
-    raw = input.command;
-    const word = found.arg;
-    if (word) {
-      if (word.value === '-' && !word.quoted) payloadFrom = 'stdin';
-      else if (word.value.startsWith('@')) payloadFrom = 'file';
-      else {
-        try {
-          const parsed: unknown = JSON.parse(word.value);
-          if (isObject(parsed)) args = parsed;
-        } catch { /* malformed payload — the card still shows the command */ }
-      }
-    }
-  } else {
-    return null;
+  const mcp = MCP_OP.exec(name);
+  if (mcp && isCardedOp(mcp[1])) {
+    let raw: string;
+    try { raw = JSON.stringify(input, null, 2); } catch { raw = String(input); }
+    return [{ op: mcp[1], via: 'mcp', args: input, raw }];
   }
+  if (name !== 'Bash' || typeof input.command !== 'string') return [];
+  const command = input.command;
+  return findOpCalls(command, isCardedOp).map((c) => ({
+    op: c.op,
+    via: 'cli' as const,
+    ...(c.args ? { args: c.args } : {}),
+    form: c.form,
+    ...(c.path ? { path: c.path } : {}),
+    raw: command,
+  }));
+}
 
-  const res = findSendResult(result);
-  const inReplyTo = str(args?.in_reply_to) ?? str(args?.inReplyTo);
-  const repliedTo = str(res?.repliedTo) ?? inReplyTo;
-  const requestId = str(res?.requestId) ?? str(args?.request_id);
-  const target = targetFrom(res);
-  const delivery = str(res?.delivery) ?? str(res?.outcome);
-  // A non-JSON failure line is still the honest answer to "what happened": show
-  // its first line rather than a card that looks like it succeeded.
-  const fallbackError = tool.isError && result && !res
-    ? result.split('\n').map((l) => l.trim()).find((l) => l.length > 0)?.slice(0, 200)
-    : undefined;
-  const error = errorText(res?.error) ?? fallbackError;
-  const to = str(args?.to);
-  const refs = sendTargetRefs(args, via === 'cli' ? raw : undefined, result);
+/**
+ * Every Walnut call in this session's transcript row that carries words to
+ * someone (core/op-cards.ts), in order; empty for every other tool call.
+ * `result` is the tool output (the streaming path passes it separately from the
+ * persisted `tool.result`).
+ */
+export function detectOutboundCalls(tool: SessionHistoryTool, result?: string): OutboundSend[] {
+  const calls = rawCallsOf(tool);
+  if (calls.length === 0) return [];
+  const sendResults = calls.some((c) => SEND_OPS.has(c.op)) ? findSendResults(result, calls.length > 1) : [];
+  let sendIndex = 0;
+  return calls.map((c) => {
+    const args = c.args;
+    const isSend = SEND_OPS.has(c.op);
+    // A loop's answers come one per send; a row with one send call reads its first.
+    const res = isSend ? sendResults[sendIndex++] : undefined;
+    const inReplyTo = str(args?.in_reply_to) ?? str(args?.inReplyTo);
+    const repliedTo = str(res?.repliedTo) ?? inReplyTo;
+    const requestId = str(res?.requestId) ?? str(args?.request_id);
+    const target = targetFrom(res);
+    const delivery = str(res?.delivery) ?? str(res?.outcome);
+    // A non-JSON failure line is still the honest answer to "what happened": show
+    // its first line rather than a card that looks like it succeeded.
+    const fallbackError = tool.isError && result && !res && calls.length === 1
+      ? result.split('\n').map((l) => l.trim()).find((l) => l.length > 0)?.slice(0, 200)
+      : undefined;
+    const error = errorText(res?.error) ?? fallbackError;
+    const fields = opCardFields(c.op, args) ?? { op: c.op, kind: 'send' as const, to: [] };
+    const to = isSend ? str(args?.to) : fields.to[0];
+    const refs = isSend ? sendTargetRefs(args, c.via === 'cli' ? c.raw : undefined, calls.length === 1 ? result : undefined) : fields.to;
+    const payloadFrom = !args && (c.form === 'file' || c.form === 'stdin') ? c.form : undefined;
+    const body = fields.detail;
+    return {
+      op: c.op,
+      fields,
+      ...(c.form ? { form: c.form } : {}),
+      ...(c.path ? { path: c.path } : {}),
+      via: c.via,
+      kind: inReplyTo || str(res?.repliedTo) ? 'reply' : 'peer-note',
+      ...(to ? { to } : {}),
+      ...(refs.length > 0 ? { refs } : {}),
+      ...(body ? { body } : {}),
+      ...(str(args?.title) ? { title: str(args?.title)!.replace(/\s+/g, ' ').trim() } : {}),
+      ...(requestId ? { requestId } : {}),
+      ...(repliedTo ? { repliedTo } : {}),
+      ...(target ? { target } : {}),
+      ...(delivery ? { delivery } : {}),
+      ...(error ? { error } : {}),
+      ...(payloadFrom ? { payloadFrom } : {}),
+      raw: c.raw,
+    } satisfies OutboundSend;
+  });
+}
 
-  return {
-    via,
-    kind: inReplyTo || str(res?.repliedTo) ? 'reply' : 'peer-note',
-    ...(to ? { to } : {}),
-    ...(refs.length > 0 ? { refs } : {}),
-    ...(typeof args?.text === 'string' && args.text ? { body: args.text } : {}),
-    ...(str(args?.title) ? { title: str(args?.title)!.replace(/\s+/g, ' ').trim() } : {}),
-    ...(requestId ? { requestId } : {}),
-    ...(repliedTo ? { repliedTo } : {}),
-    ...(target ? { target } : {}),
-    ...(delivery ? { delivery } : {}),
-    ...(error ? { error } : {}),
-    ...(payloadFrom ? { payloadFrom } : {}),
-    raw,
-  };
+/** The first carded call of a row, or null (the single-card readers). */
+export function detectOutboundSend(tool: SessionHistoryTool, result?: string): OutboundSend | null {
+  return detectOutboundCalls(tool, result)[0] ?? null;
 }
 
 const REQUEST_ID = /^rq-[a-f0-9]{6,}$/;

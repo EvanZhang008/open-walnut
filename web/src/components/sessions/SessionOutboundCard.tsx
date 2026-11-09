@@ -1,41 +1,29 @@
 /**
- * Provenance card for a session→session SEND — the mirror of
- * SessionProvenanceCard.
+ * The card for a Walnut call that carried words to someone: a session's send to
+ * another task (the mirror of SessionProvenanceCard, which shows the receiving
+ * side), and every other op core/op-cards.ts lists (thread_update, brief_write,
+ * human_inbox_send, board_post, org_send, task_create, …).
  *
- * The receiving session has always shown "Message from another session" with the
- * peer named and its words quoted. The SENDING session showed a generic tool row:
- * `mcp__walnut__session_send` with a JSON dump, or a Bash block whose command is a
- * single-quoted payload. Two halves of one conversation, rendered in two
- * languages, and the outgoing half was the unreadable one.
+ * The user's design (2026-11-09: "To Who, Title, Summary, detail collapse"): To
+ * (the task as a pill), the Title, a Summary of a line or two, and below them,
+ * folded, the full words with the raw call and the server's answer.
  *
- * So this card is deliberately the SAME visual language (same `provenance-*`
- * classes, same chip/disclosure idioms) with the direction flipped: who I told,
- * which task that session owns, what I said, and every machine line (the command
- * itself, the server's answer) folded into one disclosure.
- *
- * Two things it does NOT do, both inherited from the inbound card on purpose:
- *  · It never invents a link. A chip appears only when the server named the target
- *    session outright, or when a printed short id resolves to exactly ONE live
- *    session (the same unique-prefix rule `session_send` itself applies).
- *  · It never re-parses the body. The body is the text this session sent, rendered
- *    as markdown and nothing more.
- *
- * Folded by default, like the inbound card: who it went to and the title the
- * sender gave (else the first sentence of the words); a click opens the rest.
- * A failed send keeps its error visible while folded.
+ * The words come from Walnut's own record of the call first (op-call-store.ts:
+ * what the CLI actually sent, read from `@file` or stdin before the file was
+ * gone), else from the transcript (an MCP call's arguments, inline JSON, a
+ * heredoc the same command wrote). It never invents a link: a pill appears only
+ * for a task the call or the server named.
  *
  * Clicks: the card is rendered from GenericToolCall, which sits inside
  * `.session-msg-content` for an in-message tool and OUTSIDE it for a merged
- * cross-message tool run — so the card carries its own `useEntityClickHandler`
- * rather than relying on a delegating ancestor that is only sometimes there, and
- * stops propagation on a chip hit so the two paths can never both fire.
+ * cross-message tool run, so the card carries its own `useEntityClickHandler`
+ * and stops propagation on a chip hit so the two paths can never both fire.
  */
 import { matchIdRef } from '../../../../src/lib/id-ref';
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { stableHtml } from '@/hooks/useStableHtml';
 import {
   outboundDirectionGlyph,
-  outboundDirectionLabel,
   replyRequestToLookUp,
   splitOutboundHandle,
   type OutboundSend,
@@ -52,9 +40,9 @@ import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { useEntityLabelsVersion, useRenderedMarkdown, useTaskLabel } from '@/hooks/useEntityLabels';
 import { lookupTaskByRef } from '@/stores/entity-label-store';
 import { copyTextRobust } from '@/utils/clipboard';
-import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel';
 import { fallbackTitle, foldKey, useMessageFold } from './message-fold';
-import { MessageFoldSummary } from './MessageFoldSummary';
+import { useOpCallRecords, type OpCallRecord } from '@/stores/op-call-store';
+import type { OpCardFields } from '../../../../src/core/op-cards';
 import { disclosureIds, useDetailsDisclosure } from './row-disclosure';
 import '@/styles/provenance-fold.css';
 import { taskPath } from '@/utils/task-path';
@@ -194,42 +182,6 @@ function CopyChip({ value, label, title }: { value: string; label: string; title
   );
 }
 
-/**
- * Where the message went, by name: the target's task (a click opens that task's
- * session), else its session by title. Ids mean nothing to a reader; they live
- * in the details.
- */
-function TargetChips({ resolved }: { resolved: ResolvedTarget }) {
-  const taskLabel = useTaskLabel(resolved.taskId);
-  const hostName = useHostDisplayLabels();
-  const others = (resolved.others ?? []).map((t) => (
-    <a key={t.id} className="provenance-chip provenance-chip-task task-link" data-task-id={t.id} href={taskPath(t.id)} title={t.title}>{t.title}</a>
-  ));
-  const chip = resolved.taskId ? (
-    <a
-      className="provenance-chip provenance-chip-task task-link"
-      data-task-id={resolved.taskId}
-      href={taskPath(resolved.taskId)}
-      title={taskLabel?.project ? `${taskLabel.project} / ${taskLabel.title}` : taskLabel?.title}
-    >{taskLabel?.title ?? 'Open task'}</a>
-  ) : resolved.fullId ? (
-    <a
-      className="provenance-chip provenance-chip-session session-link"
-      data-session-id={resolved.fullId}
-      href={`/sessions?id=${resolved.fullId}`}
-      title={resolved.title ? `Open ${resolved.title}` : 'Open the session'}
-    >{resolved.title || 'Open session'}</a>
-  ) : null;
-  if (!chip && !resolved.host) return null;
-  return (
-    <div className="provenance-chips">
-      {chip}
-      {others}
-      {resolved.host && <span className="provenance-host">{hostName(resolved.host)}</span>}
-    </div>
-  );
-}
-
 /** What this session said. Same quoted block the inbound card gives the peer. */
 function OutboundBody({ body, sessionCwd }: { body: string; sessionCwd?: string }) {
   const html = useRenderedMarkdown(body, sessionCwd);
@@ -268,18 +220,81 @@ function OutboundDetails({ send, result, sessionId }: { send: OutboundSend; resu
   );
 }
 
-/** Where the payload lived when the transcript does not hold it. */
+/** Where the payload lived when neither the transcript nor Walnut's record holds it. */
 function payloadNote(send: OutboundSend): string | null {
   if (send.body !== undefined) return null;
-  if (send.payloadFrom === 'file') return 'Payload from file — the text is not in this transcript.';
-  if (send.payloadFrom === 'stdin') return 'Payload from stdin — the text is not in this transcript.';
+  if (send.payloadFrom === 'file') return `Sent from ${send.path ?? 'a file'}; Walnut kept no copy of this call\u2019s words.`;
+  if (send.payloadFrom === 'stdin') return 'Sent from stdin; Walnut kept no copy of this call\u2019s words.';
   return null;
 }
 
+/** "To", "Reply to": the line the card opens with. */
+function directionOf(send: OutboundSend, kind: OpCardFields['kind']): string {
+  if (send.kind === 'reply' || kind === 'reply') return 'Reply to';
+  return 'To';
+}
+
+/** The send as Walnut recorded it, over what the transcript holds: Walnut's own
+ *  record is what the CLI actually sent, whatever way it got its arguments. */
+function withRecord(send: OutboundSend, record: OpCallRecord | undefined): OutboundSend {
+  if (!record) return send;
+  const f = record.fields;
+  return {
+    ...send,
+    fields: f,
+    ...(f.detail !== undefined ? { body: f.detail } : {}),
+    ...(f.title && !send.title ? { title: f.title } : {}),
+    ...(!send.to && f.to[0] ? { to: f.to[0] } : {}),
+    ...(!send.refs?.length && f.to.length ? { refs: f.to } : {}),
+    ...(f.kind === 'reply' ? { kind: 'reply' as const } : {}),
+    ...(!record.ok ? { error: record.error ?? 'The call was refused' } : {}),
+    payloadFrom: undefined,
+  };
+}
+
+/** A task the call names, as a pill (a click opens it), else nothing. */
+function TaskPill({ taskId }: { taskId: string }) {
+  const label = useTaskLabel(taskId);
+  return (
+    <a
+      className="provenance-chip provenance-chip-task task-link op-card-to-pill"
+      data-task-id={taskId}
+      href={taskPath(taskId)}
+      title={label?.project ? `${label.project} / ${label.title}` : label?.title}
+    >{label?.title ?? taskId}</a>
+  );
+}
+
+/** Who the call went to: the target's task as a pill, else its session, else words. */
+function ToLine({ send, resolved, direction }: { send: OutboundSend; resolved: ResolvedTarget; direction: string }) {
+  const version = useEntityLabelsVersion();
+  const isSend = send.op === 'task_send' || send.op === 'session_send';
+  const taskIds = useMemo(() => {
+    if (isSend) return resolved.taskId ? [resolved.taskId, ...(resolved.others ?? []).map((o) => o.id)] : [];
+    return send.fields.to.map((r) => lookupTaskByRef(r)?.id).filter((t): t is string => !!t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- version invalidates the label lookups
+  }, [isSend, resolved, send.fields.to, version]);
+  const fallback = isSend
+    ? (resolved.fullId
+      ? <a className="provenance-chip provenance-chip-session session-link op-card-to-pill" data-session-id={resolved.fullId} href={`/sessions?id=${resolved.fullId}`}>{resolved.title || 'Open session'}</a>
+      : <span className="op-card-to-text">{resolved.title || send.to || (send.kind === 'reply' ? 'The session that asked' : 'another session')}</span>)
+    : (send.fields.to[0] && !send.fields.toLabel ? <span className="op-card-to-text">{send.fields.to[0]}</span> : null);
+  return (
+    <div className="op-card-to">
+      <span className="provenance-glyph" aria-hidden="true">{outboundDirectionGlyph(send.kind)}</span>
+      <span className="op-card-dir">{direction}</span>
+      {taskIds.length > 0 ? taskIds.map((id) => <TaskPill key={id} taskId={id} />) : fallback}
+      {send.fields.toLabel && <span className="op-card-to-label">{send.fields.toLabel}</span>}
+    </div>
+  );
+}
+
 export function SessionOutboundCard({
-  send, result, sessionCwd, sessionHost, sessionId, onTaskClick, onSessionClick,
+  send: transcriptSend, record, result, sessionCwd, sessionHost, sessionId, onTaskClick, onSessionClick,
 }: {
   send: OutboundSend;
+  /** Walnut's own record of this call (op-call-store.ts), when it has one. */
+  record?: OpCallRecord;
   /** Raw tool output — the disclosure's second half. */
   result?: string;
   sessionCwd?: string;
@@ -288,55 +303,107 @@ export function SessionOutboundCard({
   onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
 }) {
+  const send = withRecord(transcriptSend, record);
   const resolved = useRefTargets(send, useResolvedTarget(send));
   const handleClick = useEntityClickHandler(onTaskClick, onSessionClick, undefined, sessionHost, sessionId);
   const taskLabel = useTaskLabel(resolved.taskId);
-  const [open, toggle] = useMessageFold(foldKey(send.raw));
+  const [open, toggle] = useMessageFold(foldKey(`${send.raw}\u0000${send.op}\u0000${record?.id ?? send.fields.title ?? ''}`));
 
-  // A reply always went to the session that asked, even when nothing names it.
-  // A session is named by its title, never by its id.
-  const headline = resolved.title
-    || send.to
-    || (send.kind === 'reply' ? 'The session that asked' : 'another session');
   const note = payloadNote(send);
+  const title = send.title || send.fields.title || fallbackTitle(send.body) || note || undefined;
+  const summary = send.fields.summary;
   const status = send.error
     ? send.error
     : send.delivery === 'queued' ? 'Delivered to the session’s queue'
       : send.delivery === 'deferred' ? 'Held: the target is waiting on a permission prompt'
         : send.delivery;
+  const direction = directionOf(send, send.fields.kind);
+  const hasDetail = send.body !== undefined;
 
   return (
     <div
-      className="provenance-card"
+      className="provenance-card op-card"
       data-envelope-kind="outbound"
+      data-op={send.op}
       data-outbound-via={send.via}
       data-folded={open ? 'false' : 'true'}
-      aria-label={`${outboundDirectionLabel(send.kind)}: ${taskLabel?.title || headline}`}
+      aria-label={`${direction} ${taskLabel?.title || resolved.title || send.fields.toLabel || send.to || 'another session'}: ${title ?? ''}`}
       {...(send.error ? { 'data-outbound-error': 'true' } : {})}
       onClick={(e) => {
         if ((e.target as HTMLElement).closest('a.session-link, a.task-link')) e.stopPropagation();
         handleClick(e);
       }}
     >
-      <MessageFoldSummary
-        glyph={outboundDirectionGlyph(send.kind)}
-        direction={send.kind === 'reply' ? 'Reply to' : 'To'}
-        sender={resolved.others ? headline : taskLabel?.title || headline}
-        senderTitle={headline}
-        title={send.title || fallbackTitle(send.body) || note || undefined}
-        open={open}
-        onToggle={toggle}
-        after={!open && send.error ? <div className="provenance-status">{send.error}</div> : undefined}
-      />
+      <ToLine send={send} resolved={resolved} direction={direction} />
+      <button
+        type="button"
+        className="op-card-main"
+        aria-expanded={open}
+        onClick={(e) => { e.stopPropagation(); toggle(); }}
+      >
+        {title && <span className="op-card-title">{title}</span>}
+        {summary && <span className="op-card-summary">{summary}</span>}
+        <span className="op-card-more">
+          <span className="op-card-more-chevron" aria-hidden="true">›</span>
+          {open ? 'Hide details' : 'Details'}
+        </span>
+      </button>
+      {send.error && <div className="provenance-status">{send.error}</div>}
       {open && (
-        <>
-          <TargetChips resolved={resolved} />
-          {status && <div className="provenance-status">{status}</div>}
-          {send.body !== undefined && <OutboundBody body={send.body} sessionCwd={sessionCwd} />}
+        <div className="op-card-detail">
+          {!send.error && status && <div className="provenance-status">{status}</div>}
+          {hasDetail && <OutboundBody body={send.body!} sessionCwd={sessionCwd} />}
           {note && <div className="provenance-outbound-payload">{note}</div>}
           <OutboundDetails send={send} result={result} sessionId={resolved.fullId} />
-        </>
+        </div>
       )}
     </div>
   );
+}
+
+/**
+ * Every Walnut call one tool row made (a command may send, then update two
+ * threads), one card each. Walnut's record of the row wins: it holds what each
+ * call really sent, a loop's every send included, whatever way the CLI got the
+ * arguments; the transcript's reading covers history recorded before it.
+ */
+export function SessionOutboundCards({
+  calls, toolUseId, running, result, sessionCwd, sessionHost, sessionId, onTaskClick, onSessionClick,
+}: {
+  calls: OutboundSend[];
+  toolUseId?: string;
+  /** The call has not returned yet: the record lands just before it does. */
+  running: boolean;
+  result?: string;
+  sessionCwd?: string;
+  sessionHost?: string;
+  sessionId?: string;
+  onTaskClick?: (taskId: string) => void;
+  onSessionClick?: (sessionId: string) => void;
+}) {
+  const viaCli = calls.some((c) => c.via === 'cli');
+  const records = useOpCallRecords(sessionId, toolUseId, viaCli, running ? 'running' : 'done');
+  const pairs = useMemo(() => pairWithRecords(calls, records), [calls, records]);
+  const shared = { result, sessionCwd, sessionHost, sessionId, onTaskClick, onSessionClick };
+  if (pairs.length === 1) return <SessionOutboundCard send={pairs[0].send} record={pairs[0].record} {...shared} />;
+  return (
+    <div className="op-card-stack">
+      {pairs.map((p, i) => <SessionOutboundCard key={p.record?.id ?? i} send={p.send} record={p.record} {...shared} />)}
+    </div>
+  );
+}
+
+/** Each record with the transcript's reading of the same call (same op, same
+ *  order); a record with no such call (a loop's later sends) borrows the row's. */
+export function pairWithRecords(calls: OutboundSend[], records: OpCallRecord[] | undefined): Array<{ send: OutboundSend; record?: OpCallRecord }> {
+  if (!records?.length) return calls.map((send) => ({ send }));
+  const used = new Map<string, number>();
+  return records.map((record) => {
+    const n = used.get(record.op) ?? 0;
+    used.set(record.op, n + 1);
+    const sameOp = calls.filter((c) => c.op === record.op);
+    const base = sameOp[Math.min(n, sameOp.length - 1)] ?? calls[0];
+    const send: OutboundSend = base.op === record.op ? base : { ...base, op: record.op, fields: record.fields, kind: 'peer-note' };
+    return { send, record };
+  });
 }

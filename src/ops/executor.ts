@@ -27,7 +27,7 @@ import { getOp, type HttpBinding, type WalnutOp } from './registry.js'
 import { getSelfApiRoot, getSelfCallToken } from '../lib/self-api-root.js'
 import { fetchErrorCode } from '../lib/fetch-error.js'
 import {
-  ORIGIN_HEADER, UNKNOWN_ORIGIN, ambientCallerOrigin, isLocalOrigin, isRemoteHostOrigin, lowerOrigin, withCallerOrigin,
+  LOCAL_ORIGIN, ORIGIN_HEADER, UNKNOWN_ORIGIN, ambientCallerOrigin, isLocalOrigin, isRemoteHostOrigin, lowerOrigin, withCallerOrigin,
 } from '../lib/caller-origin.js'
 import { selfCallRefusal } from './origin-policy.js'
 import { declaredKeysNote, unknownKeyHint } from './arg-hints.js'
@@ -516,4 +516,40 @@ async function runOp(
   } catch (err) {
     return { ok: false, message: err instanceof Error ? err.message : String(err) }
   }
+}
+
+/** How long the CLI waits for its call's record before it exits anyway. */
+const OP_CALL_RECORD_TIMEOUT_MS = 2_000
+
+/**
+ * Tell the server what a session's call of a carded op said (core/sessions/op-call-log.ts),
+ * so the session's chat card shows its words however the arguments reached the CLI
+ * (`@file`, stdin, a subshell). Only from a session, only for an op core/op-cards.ts
+ * covers; never throws, and a server that is away or too old costs nothing but the card's
+ * words.
+ */
+export async function recordSessionOpCall(input: {
+  op: string
+  args: Record<string, unknown>
+  result?: unknown
+  ok: boolean
+  error?: string
+  form: string
+  path?: string
+}): Promise<void> {
+  const sid = resolveCallerSid()
+  if (!sid || humanCallerScope.getStore() === true) return
+  try {
+    const { opCardFields } = await import('../core/op-cards.js')
+    const fields = opCardFields(input.op, input.args, input.result)
+    if (!fields) return
+    await rawRequest(resolveApiBase(), 'POST', '/sessions/op-calls', {
+      op: input.op,
+      form: input.form,
+      ...(input.path ? { path: input.path } : {}),
+      ok: input.ok,
+      ...(input.error ? { error: input.error.slice(0, 600) } : {}),
+      fields,
+    }, OP_CALL_RECORD_TIMEOUT_MS, { sid, origin: LOCAL_ORIGIN })
+  } catch { /* display data only */ }
 }
