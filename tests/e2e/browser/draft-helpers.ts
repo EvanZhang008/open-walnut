@@ -865,17 +865,18 @@ export function dayWords(days: number): string {
 }
 
 /**
- * Page-local config overrides: GET /api/config answers with `agent.quick_parse` and
- * `ui.show_priority` forced, everything else real. Page-local on purpose: the
- * fixture server is shared by every spec file in a run, and a real write from one
- * file would flip the flag under another file's worker. Writes still go through.
- * Register BEFORE loadHome. The returned object can be mutated; the next read
- * (a `config:changed` echo) sees the new value.
+ * Page-local config overrides: GET /api/config answers with `agent.quick_parse`,
+ * `ui.show_priority` and `ui.session_panels` forced, everything else real. Page-local
+ * on purpose: the fixture server is shared by every spec file in a run, and a real
+ * write from one file would flip the flag under another file's worker (a spec that
+ * only needs a panel count reads its own here, and another spec's count never takes
+ * its columns away). Writes still go through. Register BEFORE loadHome. The returned
+ * object can be mutated; the next read (a `config:changed` echo) sees the new value.
  */
 export async function patchClientConfig(
   page: Page,
-  patch: { quickParse?: boolean; showPriority?: boolean },
-): Promise<{ quickParse?: boolean; showPriority?: boolean }> {
+  patch: { quickParse?: boolean; showPriority?: boolean; sessionPanels?: string },
+): Promise<{ quickParse?: boolean; showPriority?: boolean; sessionPanels?: string }> {
   const state = { ...patch }
   await page.route((url) => url.pathname === '/api/config', async (route) => {
     if (route.request().method() !== 'GET') return route.continue().catch(() => {})
@@ -886,6 +887,7 @@ export async function patchClientConfig(
     const config = body.config ?? {}
     if (state.quickParse !== undefined) config.agent = { ...config.agent, quick_parse: state.quickParse }
     if (state.showPriority !== undefined) config.ui = { ...config.ui, show_priority: state.showPriority }
+    if (state.sessionPanels !== undefined) config.ui = { ...config.ui, session_panels: state.sessionPanels }
     await route.fulfill({ response: res, json: { ...body, config } }).catch(() => {})
   })
   return state

@@ -12,10 +12,25 @@
  * twice had its first interval replaced in the map, so nothing could stop it.
  * web/patches/ fixes the library: a child that left the document drops all of it.
  *
+ * 2026-11-09: the last column closed stayed alive whole, held by the last press
+ * on its Close button: utils/selection-echo.ts kept the last mousedown event and
+ * utils/find-scope.ts the last pointerdown target, each until the next press. Any
+ * holder of that kind keeps one removed subtree at a time, so this counts the
+ * nodes of each closed column that are still alive, by weak references taken just
+ * before its close, rather than the page's detached node total: that total also
+ * moves with whatever else the page renders (another spec's tasks and sessions on
+ * the shared fixture server read as thousands of nodes in CI), and the old bound,
+ * three times the smallest column, sat right at what one held column costs.
+ *
+ * The page keeps its own panel count and layout prefs: both live on the shared
+ * fixture server, and another spec changing them took columns off this strip.
+ *
  * Measured in WebKit (the Mac app) the same switching showed no detached DOM,
- * so the check runs in Chromium, where the CDP node count makes it measurable.
+ * so the check runs in Chromium, where a forced GC makes it measurable.
  */
-import { test, expect, type Page, type CDPSession } from '@playwright/test'
+import { test, expect, type Page, type CDPSession, type Locator } from '@playwright/test'
+import { isolateUiPrefs } from './todo-panel-helpers'
+import { patchClientConfig } from './draft-helpers'
 
 /** Seeded, stopped sessions from test-server.ts, restored as columns at load. */
 const SIDS = ['pw-normal-session', 'pw-vscode-session', 'pw-plan-session-completed']
@@ -26,7 +41,11 @@ const LATER = [
 ]
 
 async function openColumnsOnHome(page: Page) {
+  await isolateUiPrefs(page)
+  // Every restored session gets a column (fewer panels would minimize one to the taskbar).
+  await patchClientConfig(page, { sessionPanels: String(SIDS.length) })
   await page.addInitScript((ids) => {
+    (window as unknown as { __closedColumns: unknown[] }).__closedColumns = []
     try {
       sessionStorage.setItem(
         'open-walnut-home-session-columns',
@@ -38,12 +57,16 @@ async function openColumnsOnHome(page: Page) {
   await page.waitForLoadState('networkidle')
 }
 
-/** Nodes alive in the renderer minus nodes in the document, after a full GC. */
-async function detachedNodes(page: Page, cdp: CDPSession): Promise<number> {
+async function collectGarbage(page: Page, cdp: CDPSession) {
   for (let i = 0; i < 3; i++) {
     await cdp.send('HeapProfiler.collectGarbage')
     await page.waitForTimeout(200)
   }
+}
+
+/** Nodes alive in the renderer minus nodes in the document, after a full GC (logged for context). */
+async function detachedNodes(page: Page, cdp: CDPSession): Promise<number> {
+  await collectGarbage(page, cdp)
   const { metrics } = await cdp.send('Performance.getMetrics')
   const alive = metrics.find((m) => m.name === 'Nodes')!.value
   const attached = await page.evaluate(() => {
@@ -53,6 +76,34 @@ async function detachedNodes(page: Page, cdp: CDPSession): Promise<number> {
     return n
   })
   return alive - attached
+}
+
+/** Weak references to the column and every node in it, taken before it closes, once its
+ *  chat stopped growing (a column still loading would be counted short). Returns its size. */
+async function trackColumn(column: Locator): Promise<number> {
+  let last = -1
+  await expect.poll(async () => {
+    const n = await column.evaluate((el) => el.querySelectorAll('*').length)
+    const settled = n === last
+    last = n
+    return settled
+  }, { intervals: [250], timeout: 15_000 }).toBe(true)
+  return column.evaluate((el) => {
+    const refs = [el, ...Array.from(el.querySelectorAll('*'))].map((n) => new WeakRef(n))
+    ;(window as unknown as { __closedColumns: unknown[] }).__closedColumns.push({ id: el.getAttribute('data-column-id'), refs })
+    return refs.length
+  })
+}
+
+/** Per closed column: its size and how many of its nodes are still alive outside the document, after a full GC. */
+async function keptNodes(page: Page, cdp: CDPSession): Promise<Array<{ id: string; size: number; kept: number }>> {
+  await collectGarbage(page, cdp)
+  return page.evaluate(() => (window as unknown as { __closedColumns: Array<{ id: string; refs: WeakRef<Node>[] }> })
+    .__closedColumns.map((c) => ({
+      id: c.id,
+      size: c.refs.length,
+      kept: c.refs.filter((r) => { const n = r.deref(); return !!n && !n.isConnected }).length,
+    })))
 }
 
 /** Open a session as a home column through the finder (Cmd+Shift+O, type, click). */
@@ -71,6 +122,7 @@ async function openViaFinder(page: Page, query: string, sid: string): Promise<vo
 const closeFirstColumn = async (page: Page) => {
   const columns = page.locator('.main-page-sessions-area > .main-page-session-column')
   const n = await columns.count()
+  await trackColumn(columns.first())
   await columns.first().getByRole('button', { name: 'Close session panel' }).click()
   await expect(columns).toHaveCount(n - 1)
   // Past the 320 ms exit animation, auto-animate's position debounce and one
@@ -79,23 +131,20 @@ const closeFirstColumn = async (page: Page) => {
 }
 
 test('closing session columns releases their DOM', async ({ page, browserName }) => {
-  test.skip(browserName !== 'chromium', 'needs the CDP node count')
+  test.skip(browserName !== 'chromium', 'needs a forced GC (CDP)')
   test.setTimeout(180_000)
   await page.setViewportSize({ width: 1800, height: 1000 })
   await openColumnsOnHome(page)
   const columns = page.locator('.main-page-sessions-area > .main-page-session-column')
-  await expect(columns.first().locator('.session-history')).toBeVisible({ timeout: 30_000 })
-  const restored = await columns.count()
-  expect(restored).toBeGreaterThanOrEqual(2)
-  const perColumn = Math.min(...await columns.evaluateAll((els) => els.map((el) => el.querySelectorAll('*').length)))
-  expect(perColumn).toBeGreaterThan(50)
+  await expect(columns).toHaveCount(SIDS.length, { timeout: 30_000 })
+  for (let i = 0; i < SIDS.length; i++) await expect(columns.nth(i).locator('.session-history')).toBeVisible({ timeout: 30_000 })
 
   const cdp = await page.context().newCDPSession(page)
   await cdp.send('Performance.enable')
   const before = await detachedNodes(page, cdp)
 
   // Columns restored at load (auto-animate polls those) ...
-  for (let i = 0; i < restored; i++) await closeFirstColumn(page)
+  for (let i = 0; i < SIDS.length; i++) await closeFirstColumn(page)
   // ... and columns opened later (its position observer watches those).
   const CYCLES = 4
   for (let i = 0; i < CYCLES; i++) {
@@ -105,10 +154,16 @@ test('closing session columns releases their DOM', async ({ page, browserName })
     }
   }
 
+  const report = await keptNodes(page, cdp)
   const after = await detachedNodes(page, cdp)
-  const closed = restored + CYCLES * LATER.length
-  console.log(`[column-dom] detached nodes ${before} -> ${after} after ${closed} closes (smallest column ${perColumn})`)
-  // Before the fix every closed column stayed whole: at least closed * perColumn.
-  expect(after - before, `detached nodes ${before} -> ${after}; ${closed} columns closed, the smallest had ${perColumn}`)
-    .toBeLessThan(3 * perColumn)
+  expect(report).toHaveLength(SIDS.length + CYCLES * LATER.length)
+  const smallest = Math.min(...report.map((c) => c.size))
+  expect(smallest).toBeGreaterThan(50)
+  const kept = report.reduce((sum, c) => sum + c.kept, 0)
+  const lines = report.map((c) => `${c.id} ${c.kept}/${c.size}`).join(', ')
+  console.log(`[column-dom] ${report.length} closes, closed-column nodes still alive: ${kept} (${lines}); page detached nodes ${before} -> ${after}`)
+  // Before the auto-animate fix every closed column stayed whole; with the last
+  // press held, the last one did. Together they now keep less than the smallest
+  // of them had: not one column's worth survives.
+  expect(kept, `closed-column nodes still alive: ${lines}`).toBeLessThan(smallest)
 })
