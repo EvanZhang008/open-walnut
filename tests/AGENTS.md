@@ -79,6 +79,10 @@ per-tier configs, known pre-existing failures, live test pattern, Playwright mod
 - **The browser suite has a known-failures list** (`tests/setup/known-failures-browser.json`), judged
   on CI by the `Browser baseline` job: it fails only on a failure the list does not name.
   `bun scripts/browser-baseline.mjs check|record <reports>` (docs/reference/testing-pipeline.md).
+- **Linux WebKit paints on the CPU** (`tests/e2e/browser/pw-webkit-paint.ts`, imported by every
+  Playwright config, ratchet `tests/setup/webkit-paint.test.ts`): on Mesa's software GL its GL
+  painting threads (`SkiaGPUWorker`) segfault and fail a random spec with "Target crashed" or
+  "Target page, context or browser has been closed" (27 faults on the Linux test host on 2026-11-08).
 - **Timeout-shaped browser failures are usually machine load, not product bugs.** Check
   `scripts/pw-cleanup.sh status` first — at load 486 (14 cores) every spec failed on
   `page.waitForLoadState`. Fixture cold boot: ~20 s idle, ~70 s at load 133.

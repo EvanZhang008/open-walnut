@@ -5,6 +5,8 @@ import { perRunWorkers } from './tests/e2e/browser/pw-concurrency.js'
 import { engageGate } from './tests/e2e/browser/pw-gate.js'
 // Every test browser is silent: an init script in every frame, and Chromium's own mute.
 import { CHROMIUM_SILENT } from './tests/e2e/browser/pw-silence.js'
+// Linux WebKit paints on the CPU: its GL painting threads crash the page on software GL.
+import './tests/e2e/browser/pw-webkit-paint.js'
 import { sideConfigSpecs } from './tests/e2e/browser/side-config-specs.js'
 import { bunCommand } from './tests/helpers/bun-runtime.js'
 

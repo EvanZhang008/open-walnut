@@ -16,6 +16,8 @@ import { defineConfig, devices } from '@playwright/test'
 import { engageGate } from './pw-gate.js'
 // Every test browser is silent: an init script in every frame, and Chromium's own mute.
 import { CHROMIUM_SILENT } from './pw-silence.js'
+// Linux WebKit paints on the CPU: its GL painting threads crash the page on software GL.
+import './pw-webkit-paint.js'
 // The fixture server runs on bun; only the Playwright runner stays on Node.
 import { bunCommand } from '../../helpers/bun-runtime.js'
 
