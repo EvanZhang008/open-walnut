@@ -531,9 +531,16 @@ struct PermissionRequestCard: View {
             // firing onSubmit: that newline is the send.
             .onChange(of: note) { old, new in
                 onTypeInField?()
-                guard PermissionNote.isReturnKey(old: old, new: new) else { return }
+                guard PermissionNote.isReturnKey(old: old, new: new) else {
+                    PermissionAnswerDrafts.shared.update(request.requestId) { $0.note = new }
+                    return
+                }
                 note = old
                 if let noteChoice, PermissionNote.message(old) != nil { send(noteChoice) }
+            }
+            // His note, from a card a push or a swap took down, comes back with the request.
+            .onAppear {
+                if note.isEmpty, let kept = PermissionAnswerDrafts.shared.draft(request.requestId)?.note { note = kept }
             }
             .onChange(of: noteFocused) { _, focused in onFocusField?(focused ? noteFieldID : nil) }
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(PendingPermissionStack.contentSpace)) } action: { frame in
@@ -637,9 +644,21 @@ struct AskUserQuestionCard: View {
         }
         .onChange(of: otherText) { old, new in
             if let focusedQuestion, old[focusedQuestion] != new[focusedQuestion] { onTypeInField?() }
+            PermissionAnswerDrafts.shared.update(fieldScope) { $0.otherText = new }
         }
         .onChange(of: pictures.count) { old, new in
             if new > old { onPicturesAdded?() }
+        }
+        // His answers are kept with the request (`PermissionAnswerDrafts`): a card a push closed
+        // (the sheet of a task's session) or a swap took down opens on them again.
+        .onChange(of: selections) { _, new in PermissionAnswerDrafts.shared.update(fieldScope) { $0.selections = new } }
+        .onChange(of: pictures.map(\.id)) { _, _ in PermissionAnswerDrafts.shared.update(fieldScope) { $0.pictures = pictures } }
+        .onAppear {
+            guard selections.isEmpty, otherText.isEmpty, pictures.isEmpty,
+                  let kept = PermissionAnswerDrafts.shared.draft(fieldScope) else { return }
+            selections = kept.selections
+            otherText = kept.otherText
+            pictures = kept.pictures
         }
     }
 
@@ -811,5 +830,38 @@ struct AskUserQuestionCard: View {
             .disabled(answering)
             .accessibilityIdentifier("session.askQuestion.dismiss")
         }
+    }
+}
+
+/// What he chose and wrote on a permission or question card, per request, until it is answered:
+/// the card's own state went with it when a push closed the sheet of a task's session, or a chat
+/// swap took the session down (2026-11-08 review, round 3). In memory, as the request itself is:
+/// a request lives only while its session waits on it.
+@MainActor
+final class PermissionAnswerDrafts {
+    static let shared = PermissionAnswerDrafts()
+    struct Draft {
+        var note = ""
+        var selections: [String: [String]] = [:]
+        var otherText: [String: String] = [:]
+        var pictures: [SelectedImage] = []
+    }
+
+    /// Requests kept, newest last; older ones go (they were answered or abandoned long ago).
+    static let kept = 20
+    private var drafts: [String: Draft] = [:]
+    private var order: [String] = []
+    private init() {}
+
+    func draft(_ requestId: String) -> Draft? { requestId.isEmpty ? nil : drafts[requestId] }
+
+    func update(_ requestId: String, _ change: (inout Draft) -> Void) {
+        guard !requestId.isEmpty else { return }
+        var draft = drafts[requestId] ?? Draft()
+        change(&draft)
+        drafts[requestId] = draft
+        order.removeAll { $0 == requestId }
+        order.append(requestId)
+        while order.count > Self.kept { drafts[order.removeFirst()] = nil }
     }
 }

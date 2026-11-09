@@ -32,11 +32,25 @@ final class ComposerDrafts {
     /// Cap the persisted set so a long-lived install can't grow it without
     /// bound (one entry per conversation the user ever typed in).
     private static let maxPersistedDrafts = 40
+    /// DEBUG launch argument (`-walnut.resetThreadFollowUps YES`) that drops every unsent thread
+    /// Follow up at launch. `UITestLaunch` passes it on every UI test launch.
+    nonisolated static let resetThreadFollowUpsArgument = "walnut.resetThreadFollowUps"
 
     private init() {
         if let saved = AppPrefs.defaults.dictionary(forKey: Self.storageKey) as? [String: String] {
             text = saved
         }
+        #if DEBUG
+        // UI tests reuse one simulator and the same thread ids: each launch starts with no
+        // unsent Follow up, so one run's words never land in the next run's composer.
+        if UserDefaults.standard.bool(forKey: Self.resetThreadFollowUpsArgument) {
+            let kept = text.filter { !$0.key.hasPrefix(OrgThreadFollowUpDraft.prefix) }
+            if kept.count != text.count {
+                text = kept
+                AppPrefs.defaults.set(text, forKey: Self.storageKey)
+            }
+        }
+        #endif
         // Durability edge for the debounced persist: iOS only kills the app
         // AFTER backgrounding, so flushing here keeps the "survives a
         // background kill" guarantee intact (a hard crash can lose at most

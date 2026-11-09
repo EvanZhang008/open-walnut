@@ -64,6 +64,8 @@ struct SessionPathPicker: View {
             }
             .navigationTitle("Working Folder")
             .navigationBarTitleDisplayMode(.inline)
+            // A path he typed and has not picked is kept nowhere else: a push waits for it.
+            .holdsNavigation(!text.isEmpty && text != initialPath)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Cancel") { dismiss() }

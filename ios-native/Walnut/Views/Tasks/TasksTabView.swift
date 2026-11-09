@@ -23,7 +23,7 @@ struct TasksTabView: View {
     /// The session the page shows; nil until something has been opened.
     @State private var current: WalnutSession?
     /// The page over the restored Org node's chat (`ViewMemory`), put back with it at launch only.
-    @State private var restoredPage: (sessionId: String, open: OrgNodePageOpen)?
+    @State private var restoredPage: (sessionId: String, tab: OrgNodeTab)?
     /// Pages over the session: the calendar, and a session opened from the calendar.
     @State private var path: [TasksTabRoute] = []
     /// The launch restore has run (it decides once; after that the page is the user's).
@@ -153,7 +153,7 @@ struct TasksTabView: View {
         if let current {
             SessionConversationView(
                 session: current,
-                orgPageOnOpen: restoredPage?.sessionId == current.id ? restoredPage?.open : nil)
+                restoredOrgPage: restoredPage?.sessionId == current.id ? restoredPage?.tab : nil)
                 // A different session is a different page: no state carries across.
                 .id(current.id)
                 // The calendar or a session pushed over it, or another tab in
@@ -253,7 +253,7 @@ struct TasksTabView: View {
             kept: ViewMemory.readId("tasks", "session"), inDemo: DemoMode.isActive
         ) {
             if let page = session.taskId.flatMap({ ViewMemory.readOptional("org", "page", id: OrgPagePlace.tasks.keyId($0) ?? $0, as: OrgNodeTab.self) }) {
-                restoredPage = (session.id, OrgNodePageOpen(tab: page, threadId: nil))
+                restoredPage = (session.id, page)
             }
             current = session
         } else {

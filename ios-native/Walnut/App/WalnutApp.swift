@@ -154,7 +154,12 @@ struct RootView: View {
         // syncDiskLoads=0, i.e. nothing on this path waited on disk.
         .onAppear { LaunchTrace.markFirstFrame() }
         // The lock-screen work card's links (`walnut://work?list=…`): MainTabView shows the list.
-        .onOpenURL { url in WorkCardLinkBox.shared.open(url) }
+        .onOpenURL { url in
+            #if DEBUG
+            if DebugThreadPushLink.open(url) { return }
+            #endif
+            WorkCardLinkBox.shared.open(url)
+        }
         .demoModeChrome()
         // Report model/OS once per launch. Also the BACKFILL path: devices
         // paired before /devices/self existed get labelled on their next open.
@@ -286,6 +291,9 @@ struct MainTabView: View {
     @State private var selection: Tab = ViewMemory.read("app", "tab", initial: Tab.chat)
     @State private var quickAction = VoiceQuickAction.shared
     @State private var letterLink = LetterDeepLink.shared
+    /// A tapped thread push (`ThreadDeepLink`): handed to `ThreadDeepLink.openThread` from here,
+    /// which asks `OrgNodeLink` for the node's Threads page (`orgLink` below brings Chat forward).
+    @State private var threadLink = ThreadDeepLink.shared
     /// Approvals a script waits on (`walnut approve`): their sheet opens over any tab.
     @State private var approvals = ApprovalCenter.shared
     @Environment(\.scenePhase) private var scenePhase
@@ -357,12 +365,15 @@ struct MainTabView: View {
         // rather than by SwiftUI's modifier order. Voice goes first: it is a
         // live microphone with a 2-minute TTL, a letter can wait a tap.
         .onAppear {
+            // A thread tap from a cold launch: it becomes the open request it stands for, once
+            // the app is active (a prewarm launch does no network: LaunchGate).
+            LaunchGate.shared.whenActive { threadLink.deliverPending() }
             if quickAction.pending != nil {
                 selection = .chat
             } else if letterLink.pending != nil {
                 selection = .inbox
-            } else if orgLink.pending != nil || contentLink.chat != nil {
-                // A cold launch from a link: its tab, never the one kept from before.
+            } else if orgLink.pending != nil || contentLink.chat != nil || threadLink.waitsToOpen() {
+                // A cold launch from a link or a thread push: its tab, never the one kept from before.
                 selection = .chat
             } else if contentLink.draft != nil {
                 selection = .tasks
@@ -395,7 +406,7 @@ struct MainTabView: View {
         }
         .sheet(item: Binding(get: { approvals.presented }, set: { approvals.presented = $0 })) { approval in
             ApprovalSheet(approval: approval)
-                .interactiveDismissDisabled(approval.isPending)
+                .holdsNavigation(approval.isPending, until: .answered)
         }
         // Coming forward: re-read what waits, and show the oldest one not closed yet.
         .onChange(of: scenePhase) { _, phase in
@@ -413,6 +424,10 @@ struct MainTabView: View {
         .onChange(of: letterLink.pending) { _, request in
             if request != nil { selection = .inbox }
         }
+        // A TAPPED thread push while the app runs (warm, or from the background).
+        .onChange(of: threadLink.pending) { _, request in
+            if request != nil { threadLink.deliverPending() }
+        }
         // Talk to CEO's "Open chat" brings Chat forward, New task brings Tasks forward; each
         // tab takes its own request (ChatView opens the CEO's session, TasksTabView the draft).
         .onChange(of: contentLink.chat) { _, request in
@@ -421,9 +436,13 @@ struct MainTabView: View {
         .onChange(of: contentLink.draft) { _, request in
             if request != nil { selection = .tasks }
         }
-        // An Org node's page (a thread push): ChatView opens the node's chat and its page.
+        // An Org node's page (a thread push): ChatView opens the node's chat and its page. What was
+        // presented over any tab (a chat's sheet, a task's details, the Tasks draft, the work card's
+        // list) went down first, in `OrgNodeLink`'s gate, which holds the request while a sheet
+        // keeps his unsaved work; a request here has passed it.
         .onChange(of: orgLink.pending) { _, request in
-            if request != nil { selection = .chat }
+            guard request != nil else { return }
+            selection = .chat
         }
         // Any letter push (a silent one included) refreshes the list, so the tab
         // badge is right even when the user is reading something else. This does

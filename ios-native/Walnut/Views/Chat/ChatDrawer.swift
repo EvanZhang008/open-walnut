@@ -68,6 +68,8 @@ struct ChatDrawer: View {
 
     @State private var renameTarget: ConversationSummary?
     @State private var renameDraft = ""
+    /// The chat `renameDraft` was written for: a rename a push closed opens on his words again.
+    @State private var renameDraftFor: String?
     @State private var deleteTarget: ConversationSummary?
     @State private var renameAskTarget: AskSummary?
     @State private var deleteAskTarget: AskSummary?
@@ -120,8 +122,12 @@ struct ChatDrawer: View {
             set: { if !$0 { renameTarget = nil } }
         )) {
             TextField("Title", text: $renameDraft)
-            Button("Cancel", role: .cancel) { renameTarget = nil }
+            Button("Cancel", role: .cancel) {
+                renameTarget = nil
+                renameDraftFor = nil
+            }
             Button("Rename") {
+                renameDraftFor = nil
                 let target = renameTarget
                 let title = renameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
                 renameTarget = nil
@@ -148,8 +154,12 @@ struct ChatDrawer: View {
             set: { if !$0 { renameAskTarget = nil } }
         )) {
             TextField("Title", text: $renameDraft)
-            Button("Cancel", role: .cancel) { renameAskTarget = nil }
+            Button("Cancel", role: .cancel) {
+                renameAskTarget = nil
+                renameDraftFor = nil
+            }
             Button("Rename") {
+                renameDraftFor = nil
                 let target = renameAskTarget
                 let title = renameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
                 renameAskTarget = nil
@@ -528,7 +538,8 @@ struct ChatDrawer: View {
     private func askMenu(_ ask: AskSummary) -> some View {
         if tasks != nil {
             Button {
-                renameDraft = ask.title
+                if renameDraftFor != ask.id { renameDraft = ask.title }
+                renameDraftFor = ask.id
                 renameAskTarget = ask
             } label: {
                 Label("Rename", systemImage: "pencil")
@@ -632,7 +643,8 @@ struct ChatDrawer: View {
     @ViewBuilder
     private func rowMenu(_ conversation: ConversationSummary) -> some View {
         Button {
-            renameDraft = conversation.title ?? ""
+            if renameDraftFor != conversation.id { renameDraft = conversation.title ?? "" }
+            renameDraftFor = conversation.id
             renameTarget = conversation
         } label: {
             Label("Rename", systemImage: "pencil")

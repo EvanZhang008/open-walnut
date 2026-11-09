@@ -73,6 +73,8 @@ struct TaskFieldEditorSheet: View {
             }
         }
         .presentationDetents([.large])
-        .interactiveDismissDisabled()
+        // His unsaved words, or words still being dictated into them, hold a push; an editor he
+        // opened and did not change lets it through (2026-11-08 review, round 3: it held always).
+        .holdsNavigation(text != edit.text || sendGate.isWaiting)
     }
 }

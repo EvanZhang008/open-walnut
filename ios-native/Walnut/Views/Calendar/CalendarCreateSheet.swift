@@ -31,6 +31,9 @@ struct CalendarCreateSheet: View {
     /// calendar quick add's default.
     @State private var syncLocal = false
     @FocusState private var titleFocused: Bool
+    /// The slot as the sheet opened on it, for `edited`.
+    private let seedStart: Date
+    private let seedEnd: Date
 
     init(
         draft: CalendarCreate.Draft, calendar: Calendar,
@@ -45,9 +48,11 @@ struct CalendarCreateSheet: View {
         let seedStart = draft.start ?? calendar.date(
             bySettingHour: 9, minute: 0, second: 0, of: draft.day
         ) ?? draft.day
+        let seedEnd = draft.end ?? seedStart.addingTimeInterval(CalendarCreate.defaultDurationMinutes * 60)
+        self.seedStart = seedStart
+        self.seedEnd = seedEnd
         _start = State(initialValue: seedStart)
-        _end = State(initialValue: draft.end
-            ?? seedStart.addingTimeInterval(CalendarCreate.defaultDurationMinutes * 60))
+        _end = State(initialValue: seedEnd)
         _isAllDay = State(initialValue: draft.isAllDay)
         // Deliberately NOT seeded into `project`: a pre-filled TextField with
         // the caret at the end silently CONCATENATES what the user types
@@ -163,9 +168,17 @@ struct CalendarCreateSheet: View {
                 }
             }
             .onAppear { titleFocused = true }
-            .interactiveDismissDisabled(creating)
+            // His typed title, a moved time or a pick are not saved until Add: a push waits
+            // for them (2026-11-08 review, round 3: it closed the sheet and they were gone).
+            .holdsNavigation(creating || edited)
         }
         .accessibilityIdentifier("calendar.createSheet")
+    }
+
+    /// Anything he changed from the slot the sheet opened on.
+    private var edited: Bool {
+        CalendarCreate.edited(title: title, project: project, start: start, end: end, isAllDay: isAllDay,
+                              syncLocal: syncLocal, seedStart: seedStart, seedEnd: seedEnd, seedAllDay: draft.isAllDay)
     }
 
     /// One tappable project suggestion — tapping REPLACES the field (never

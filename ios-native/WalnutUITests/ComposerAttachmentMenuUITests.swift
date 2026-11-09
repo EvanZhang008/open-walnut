@@ -40,6 +40,15 @@ final class ComposerAttachmentMenuUITests: XCTestCase {
                 "no composer on screen — this simulator is not paired, so the app booted into SetupView"
             )
         }
+        // The launch puts back the chat a run before left open (`ChatPlace`): a session's page,
+        // whose `+` menu carries its own actions too and reaches up to where these tests tap to
+        // dismiss it. Back to the Chat tab's own composer, the one these tests are about.
+        let pushedChat = app.buttons["session.title"]
+        if pushedChat.waitForExistence(timeout: 3) {
+            app.navigationBars.buttons.element(boundBy: 0).tap()
+            XCTAssertTrue(pushedChat.waitForNonExistence(timeout: 10), "Back did not leave the restored chat")
+            XCTAssertTrue(plus.waitForExistence(timeout: 10), "the Chat tab's composer did not come back")
+        }
         return app
     }
 

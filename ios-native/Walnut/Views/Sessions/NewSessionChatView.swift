@@ -89,6 +89,17 @@ struct NewSessionChatView: View {
     /// The Sync pill in a project that syncs to an outside service: Local by default, the web
     /// draft's Sync chip (a launch's task is local unless its creator picks the service).
     @State private var syncLocal = true
+    /// The folder the draft itself put in (its preselect), for `picksEdited`.
+    @State private var offeredCwd = ""
+    @State private var offeredHost = ""
+    private let initialMode = NewSessionChatView.draftStart(inDemo: DemoMode.isActive).mode
+
+    /// A pick of his that the launch has not taken: the folder, mode, model, project or sync.
+    /// His words are kept in the draft store; these are not, so a push waits for them.
+    private var picksEdited: Bool {
+        cwd != offeredCwd || host != offeredHost || mode != initialMode || model != nil
+            || !project.isEmpty || !syncLocal
+    }
 
     /// Same key the sheet uses, so a cached launch-options payload is shared
     /// rather than fetched twice.
@@ -195,9 +206,10 @@ struct NewSessionChatView: View {
         }
         .navigationTitle(launchingMessage == nil ? "New Session" : taskTitle ?? (launchFailed ? "Not started" : "Starting session…"))
         .navigationBarTitleDisplayMode(.inline)
-        // While files go up the page can be left (the launch stops, `pageLeft`);
-        // during the create call itself it cannot.
-        .interactiveDismissDisabled(creating && !uploading)
+        // While files go up the page can be left (the launch stops, `pageLeft`, and his words go
+        // back to the draft); during the create call itself it cannot. Before a launch, a pick
+        // the draft store does not keep holds it too.
+        .holdsNavigation(creating ? !uploading : picksEdited)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Button("Cancel") { dismiss() }.disabled(creating && !uploading)
@@ -718,6 +730,8 @@ struct NewSessionChatView: View {
         if !host.isEmpty, !opts.hosts.contains(where: { $0.alias == host }) {
             host = ""
             cwd = ""
+            offeredHost = ""
+            offeredCwd = ""
             didPreselect = false
         }
         // Preselect the FIRST QUICK CHIP exactly once, and never over a choice
@@ -729,6 +743,8 @@ struct NewSessionChatView: View {
               !didPreselect, cwd.isEmpty, let top = Self.preselectedDir(opts.dirs) else { return }
         cwd = top.cwd
         host = top.host
+        offeredCwd = cwd
+        offeredHost = host
         didPreselect = true
     }
 

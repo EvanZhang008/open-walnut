@@ -22,6 +22,8 @@ struct TaskDetailSheet: View {
     @State private var fieldEdit: TaskFieldEdit?
     @State private var openedTask: TaskOpenTarget?
     @State private var dueDraft = AppClock.now()
+    /// The day the due picker opened on, for its hold: a day he picked and has not Set is kept.
+    @State private var dueSeed = AppClock.now()
     @State private var editingTitle = false
     @State private var titleDraft = ""
     @FocusState private var titleFocused: Bool
@@ -154,6 +156,9 @@ struct TaskDetailSheet: View {
                     .presentationDragIndicator(.visible)
             }
         }
+        // A title being renamed is saved only on its commit: a push waits for it rather than
+        // close the sheet over it (2026-11-08 review, round 3).
+        .holdsNavigation(editingTitle && titleDraft != current.title)
         // The Tasks drawer's "Recently opened", from every surface that shows this sheet.
         .onAppear { tasks.recents.recordTask(current) }
     }
@@ -166,6 +171,7 @@ struct TaskDetailSheet: View {
             reportError: { editError = $0 },
             openDuePicker: {
                 dueDraft = current.dueDateValue ?? AppClock.startOfToday()
+                dueSeed = dueDraft
                 showDuePicker = true
             },
             openProjectPicker: { showProjectPicker = true },
@@ -415,6 +421,8 @@ struct TaskDetailSheet: View {
         // edge of a medium detent (measured before the quick row existed), so
         // there is no room there for another 54pt of controls.
         .presentationDetents([.large])
+        // A day picked and not Set yet: a push waits for it.
+        .holdsNavigation(Self.isoDay(dueDraft) != Self.isoDay(dueSeed))
     }
 
     /// The three dates people actually pick, plus a clear — one tap each, so the

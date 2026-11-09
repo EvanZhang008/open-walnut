@@ -9,15 +9,45 @@ struct OrgThreadsView: View {
     let name: String
     /// The node's chat, for Follow up; nil when it has none yet.
     let sessionId: String?
-    /// The thread a push or a link asked for: shown open and scrolled to.
-    var focusThreadId: String? = nil
+    /// The thread a push or a link asked for, by request: shown open, scrolled to and marked
+    /// for a moment, once per request (`OrgThreadRevealModel`).
+    var focus: OrgThreadFocus? = nil
+    /// The request already revealed; the node's page keeps it, so a tab switch does not scroll again.
+    var revealedAt: Binding<Date?> = .constant(nil)
+    /// What the node's page shows over itself. A card asks for a task's session or its Follow up
+    /// here and the page presents it, so a request the page takes can take it down.
+    let cover: Binding<OrgNodePageCover?>
+
     /// How many threads the node's own status counts for him (`user_status.threads.shown`).
     var nodeShown: Int? = nil
+
+    private var focusThreadId: String? { focus?.threadId }
 
     // Snoozed and In progress stay as he left them, per node (the web keeps a view per node);
     // Closed is history, so every visit starts with it folded.
     @AppStorage("org.threads.openFolds", store: AppPrefs.defaults) private var openFolds = ""
     @State private var showClosed = false
+    /// The card just revealed, marked until a moment after (`highlightSeconds`).
+    @State private var highlight: OrgThreadFocus?
+    /// DEBUG: the card the UI tests read as just revealed (`testMarkSeconds`).
+    @State private var testMark: OrgThreadFocus?
+    /// The thread asked for is not on the page any more.
+    @State private var missingShown = false
+    /// The thread asked for is not on the list, and its read by id failed.
+    @State private var uncheckedShown = false
+    /// Cards have been in sight on this view, so a later reveal scrolls in view instead of hiding them.
+    @State private var cardsShown = false
+    /// The jump to the thread of a view that has not shown its cards yet is under way.
+    @State private var scrolling = false
+    /// The hold for a reveal ran its limit (`holdSeconds`); the cards show whatever the read does.
+    @State private var holdExpired = false
+    /// Where the requested thread's card sits in the list's viewport, and that viewport's height:
+    /// a reveal checks the jump landed (`land`).
+    @State private var focusTop: OrgThreadRevealModel.CardTop?
+    @State private var listHeight: CGFloat = 0
+    /// A reveal checking its jump landed; his own scroll or jump ends it.
+    @State private var landing: Task<Void, Never>?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private func isOpen(_ fold: String) -> Bool {
         openFolds.split(separator: " ").contains(Substring("\(store.taskId)/\(fold)"))
@@ -51,16 +81,40 @@ struct OrgThreadsView: View {
         let all = store.threads ?? []
         let sections = OrgThreadModel.sections(all, now: now)
         let shared = OrgThreadModel.sharedAnswers(all)
+        let broughtNone = OrgThreadRevealModel.broughtNone(
+            threads: store.threads, sections: sections, serverCount: store.shownCount, nodeCount: nodeShown)
+        let key = revealKey(sections, broughtNone: broughtNone)
+        // A view opened for a thread keeps its cards out of sight until it can show that thread,
+        // so it does not show other cards first and then jump (2026-11-06 gate). A read that
+        // brought none of his threads shows its retry at once, as a failed one shows its error.
+        let hides = OrgThreadRevealModel.hidesCards(
+            owes: OrgThreadRevealModel.owes(focus, revealedAt: revealedAt.wrappedValue), outcome: key.outcome,
+            lastReadFailed: (store.lastRead?.failed ?? false) || broughtNone, scrolling: scrolling, cardsShown: cardsShown,
+            waitedTooLong: holdExpired)
         ScrollViewReader { proxy in
             ScrollView {
                 // A plain stack: only the open cards render (the rest sit behind folds), and a
                 // lazy stack re-measuring folded Markdown as cards came into view never settled.
                 VStack(alignment: .leading, spacing: 12) {
+                    if missingShown {
+                        revealNotice(OrgThreadRevealModel.missingText, detail: OrgThreadRevealModel.missingDetail,
+                                     symbol: "tray", id: "org.threads.missing") { missingShown = false }
+                    }
+                    if uncheckedShown {
+                        revealNotice(OrgThreadRevealModel.uncheckedText, detail: nil,
+                                     symbol: "wifi.exclamationmark", id: "org.threads.unchecked") { uncheckedShown = false }
+                    }
                     if let error = store.error {
                         Text(error)
                             .font(.footnote)
                             .foregroundStyle(Theme.needsText)
                             .accessibilityIdentifier("org.threads.error")
+                    }
+                    // Nothing read and no copy on the phone (offline on a first visit): the thread
+                    // the notification named, in its own words.
+                    if store.threads == nil, store.error != nil, let focus,
+                       let preview = OrgNodeLink.shared.preview(focus.threadId) {
+                        pushPreview(title: preview.title, ask: preview.ask)
                     }
                     if store.threads == nil {
                         if store.error == nil {
@@ -86,7 +140,8 @@ struct OrgThreadsView: View {
                     }
                     // The count of them all; the fold lists the newest the read brought.
                     let closedCount = max(store.closedCount ?? 0, sections.closed.count)
-                    fold("\(closedCount) closed this week", count: sections.closed.count, open: foldBinding("closed"), id: "closed")
+                    fold(OrgThreadModel.closedFoldLabel(count: closedCount, closed: sections.closed, now: now),
+                         count: sections.closed.count, open: foldBinding("closed"), id: "closed")
                     if showClosed {
                         ForEach(sections.closed) { t in card(t, shared: shared, now: now, snoozed: false, compact: true).id(t.id) }
                         if closedCount > sections.closed.count {
@@ -103,25 +158,63 @@ struct OrgThreadsView: View {
                 // Room under the last section, so a jump can bring even the last fold to the top
                 // and nothing ends under the floating tab bar.
                 .padding(.bottom, 240)
+                .opacity(hides ? 0 : 1)
+            }
+            .coordinateSpace(.named(Self.scrollSpace))
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listHeight = $0 }
+            .overlay(alignment: .top) {
+                if hides {
+                    ProgressView()
+                        .padding(.top, 40)
+                        .accessibilityIdentifier("org.threads.opening")
+                }
             }
             // Pinned under the page's switch while it lists threads, so a jump is one tap from
             // anywhere in the list (r10 review: it scrolled away with the cards), and the page keeps
             // one header as a snooze or an acknowledge takes a card away (r8 review).
             .safeAreaInset(edge: .top, spacing: 0) {
-                if showsJumps(sections) {
+                let bar = OrgThreadRevealModel.jumpBar(
+                    threadsRead: store.threads != nil, sections: sections, broughtNone: broughtNone, hides: hides)
+                if bar != .none {
+                    // Out of sight with the cards while a reveal holds them, but in its place, so
+                    // the page does not move under the thread it just jumped to.
                     jumps(sections, proxy: proxy)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 4)
                         .background(.bar)
                         .overlay(alignment: .bottom) { Divider() }
+                        // The bar's whole band, for the UI tests to measure what it covers.
+                        .accessibilityElement(children: .contain)
+                        .accessibilityIdentifier("org.threads.jumps")
+                        .opacity(bar == .held ? 0 : 1)
+                        .allowsHitTesting(bar == .shown)
                 }
             }
             // At the bottom, above the tab bar: where the eye is after the card's buttons, and off the cards' text.
             .overlay(alignment: .bottom) { noticeView }
             .refreshable { await store.load() }
-            .onChange(of: store.threads?.count ?? -1) { reveal(focusThreadId, sections: sections, proxy: proxy) }
-            .onAppear { reveal(focusThreadId, sections: sections, proxy: proxy) }
+            .onScrollPhaseChange { _, phase in
+                guard phase == .interacting else { return }
+                // He scrolls: a reveal still checking its jump stops putting the thread back.
+                endLanding()
+                #if DEBUG
+                testMark = nil
+                #endif
+            }
+            // Each request once: when it comes, and again as reads land until one has it.
+            .onChange(of: key, initial: true) { _, key in
+                reveal(key, sections: sections, proxy: proxy)
+            }
+            .onChange(of: hides, initial: true) { _, hidden in
+                if !hidden { cardsShown = true }
+            }
+            .task {
+                try? await Task.sleep(for: .seconds(OrgThreadRevealModel.holdSeconds))
+                holdExpired = true
+            }
         }
+        // A container, so the list's identifier does not replace those inside it (the jump bar's).
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("org.threads")
     }
 
@@ -148,36 +241,219 @@ struct OrgThreadsView: View {
     }
 
     private func card(_ t: OrgThread, shared: Set<String>, now: Date, snoozed: Bool, compact: Bool = false) -> some View {
-        OrgThreadCard(
+        let focused = t.id == focusThreadId
+        return OrgThreadCard(
             thread: t, all: store.threads ?? [], shared: shared, name: name, now: now, snoozed: snoozed,
             busy: store.busyThreadId == t.id, canFollowUp: sessionId != nil,
             startsOpen: t.id == focusThreadId, compact: compact, followUpSentAt: store.followUpSentAt[t.id],
+            followUpKept: OrgThreadFollowUpDraft.exists(OrgThreadFollowUpDraft.key(nodeId: store.taskId, threadId: t.id)),
+            highlighted: highlight?.threadId == t.id,
+            testMarked: testMark?.threadId == t.id,
             onEdit: { edit in Task { await store.edit(t.id, edit) } },
-            onFollowUp: { text, images in
-                guard let sessionId else { return false }
-                return await store.followUp(t.id, sessionId: sessionId, text: text, images: images)
-            },
+            onOpenTask: { cover.wrappedValue = .task($0) },
+            onFollowUpOpen: { cover.wrappedValue = .followUp(threadId: t.id, title: t.title) },
             onWhole: { await store.loadWhole(t.id) }
         )
+        // The requested card's place in the viewport, for the reveal to check its jump.
+        // Nil on every other card, so only the requested one reports, and it reports again as it
+        // becomes the requested one.
+        .onGeometryChange(for: CGFloat?.self) { focused ? $0.frame(in: .named(Self.scrollSpace)).minY : nil } action: { top in
+            if let top { focusTop = .init(id: t.id, top: top) }
+        }
     }
 
-    /// A thread asked for by id that sits in a folded section opens that section first.
-    private func reveal(_ id: String?, sections: OrgThreadModel.Sections, proxy: ScrollViewProxy) {
-        guard let id, store.threads != nil else { return }
-        if sections.snoozed.contains(where: { $0.id == id }) { foldBinding("snoozed").wrappedValue = true }
-        if sections.inProgress.contains(where: { $0.id == id }) { foldBinding("inProgress").wrappedValue = true }
-        if sections.closed.contains(where: { $0.id == id }) { showClosed = true }
-        DispatchQueue.main.async { withAnimation { proxy.scrollTo(id, anchor: .top) } }
+    /// The list's viewport, for the cards' places in it.
+    private static let scrollSpace = "org.threads.scroll"
+
+    private struct RevealKey: Equatable {
+        let focus: OrgThreadFocus?
+        let outcome: OrgThreadRevealModel.Outcome?
+    }
+
+    private func revealKey(_ sections: OrgThreadModel.Sections, broughtNone: Bool) -> RevealKey {
+        RevealKey(focus: focus, outcome: focus.map {
+            OrgThreadRevealModel.outcome($0, threads: store.threads, sections: sections, lastRead: store.lastRead,
+                                         broughtNone: broughtNone, probe: store.probes[$0.threadId],
+                                         byIdOnly: store.byIdOnly)
+        })
+    }
+
+    /// The notification's words for a thread the page cannot read yet.
+    private func pushPreview(title: String?, ask: String?) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("From the notification")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            if let title { Text(title).font(.headline) }
+            if let ask { Text(ask).font(.subheadline) }
+            Text("The whole thread shows when Walnut can be reached.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Theme.tint, lineWidth: 1.5))
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("org.threads.pushPreview")
+    }
+
+    /// What became of the thread a push asked for, when it is not on the page: a card at the top
+    /// of the list, in words, with a close button (2026-11-08 review: one grey footnote was easy
+    /// to miss, and said nothing of why).
+    private func revealNotice(_ text: String, detail: String?, symbol: String, id: String,
+                              close: @escaping () -> Void) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: symbol)
+                .font(.body)
+                .foregroundStyle(Theme.tint)
+                .padding(.top, 2)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(text)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let detail {
+                    Text(detail)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Button { withAnimation(reduceMotion ? nil : .snappy) { close() } } label: {
+                Image(systemName: "xmark")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: OrgOpenNotice.closeSide, height: OrgOpenNotice.closeSide)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.top, -12)
+            .padding(.trailing, -10)
+            .accessibilityLabel("Dismiss")
+            .accessibilityIdentifier("\(id).close")
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.tintSoft.opacity(0.7), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Theme.tint.opacity(0.35), lineWidth: 1))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(id)
+        .id(Self.noticeAnchor)
+    }
+
+    /// Where a reveal notice sits, so a page scrolled down brings it into view.
+    private static let noticeAnchor = "reveal.notice"
+
+    private func scrollToNotice(_ proxy: ScrollViewProxy) {
+        DispatchQueue.main.async {
+            withAnimation(reduceMotion ? nil : .default) { proxy.scrollTo(Self.noticeAnchor, anchor: .top) }
+        }
+    }
+
+    /// The requested thread: the fold it sits in opens first, then it scrolls to the top and is
+    /// marked for a moment. A thread a fresh read no longer has gets one line saying so.
+    private func reveal(_ key: RevealKey, sections: OrgThreadModel.Sections, proxy: ScrollViewProxy) {
+        guard let focus = key.focus, let outcome = key.outcome,
+              OrgThreadRevealModel.owes(focus, revealedAt: revealedAt.wrappedValue) else { return }
+        switch outcome {
+        case .wait:
+            // An earlier request's "no longer open" is not this one's.
+            missingShown = false
+            uncheckedShown = false
+            return
+        case .probe:
+            missingShown = false
+            uncheckedShown = false
+            // Not on the list: asked by its id; the answer comes back through the store.
+            Task { await store.probe(focus.threadId) }
+            return
+        case .unchecked:
+            // Not marked revealed: a pull that reads the list again asks for it again.
+            missingShown = false
+            uncheckedShown = true
+            scrollToNotice(proxy)
+            AccessibilityNotification.Announcement(OrgThreadRevealModel.uncheckedText).post()
+        case .missing:
+            revealedAt.wrappedValue = focus.at
+            testMark = nil
+            missingShown = true
+            uncheckedShown = false
+            scrollToNotice(proxy)
+            AccessibilityNotification.Announcement(OrgThreadRevealModel.missingText).post()
+        case .show(let fold):
+            revealedAt.wrappedValue = focus.at
+            missingShown = false
+            uncheckedShown = false
+            switch fold {
+            case .snoozed: foldBinding("snoozed").wrappedValue = true
+            case .inProgress: foldBinding("inProgress").wrappedValue = true
+            case .closed: showClosed = true
+            case nil: break
+            }
+            // Cards not in sight yet: the jump is instant and they show once it has landed.
+            let instant = !cardsShown
+            if instant { scrolling = true }
+            DispatchQueue.main.async {
+                withAnimation(reduceMotion || instant ? nil : .default) { proxy.scrollTo(focus.threadId, anchor: .top) }
+                land(focus, instant: instant, proxy: proxy)
+            }
+            withAnimation(reduceMotion ? nil : .easeIn(duration: 0.2)) { highlight = focus }
+            testMark = focus
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(OrgThreadRevealModel.testMarkSeconds))
+                if testMark == focus { testMark = nil }
+            }
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(OrgThreadRevealModel.highlightSeconds))
+                guard highlight == focus else { return }
+                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.6)) { highlight = nil }
+            }
+        }
+    }
+
+    /// Checks the jump to `focus` landed, and jumps again until it has: a jump made while the
+    /// list was not laid out yet in its place (a page going up as a sheet left) was undone by the
+    /// layout that followed, and the list showed its top with the thread far below (2026-11-08
+    /// fleet run: "frame y 3835, viewport 187 to 791"). Done once the card has been in view on
+    /// two checks in a row, or after `landSeconds`; his own scroll or jump ends it at once.
+    private func land(_ focus: OrgThreadFocus, instant: Bool, proxy: ScrollViewProxy) {
+        landing?.cancel()
+        landing = Task { @MainActor in
+            let deadline = Date().addingTimeInterval(OrgThreadRevealModel.landSeconds)
+            // An animated jump is left to finish before it is judged.
+            if !instant { try? await Task.sleep(for: .milliseconds(500)) }
+            var inView = 0
+            var previous: OrgThreadRevealModel.CardTop?
+            while !Task.isCancelled, Date() < deadline {
+                let now = focusTop
+                if OrgThreadRevealModel.landed(now, threadId: focus.threadId, viewport: listHeight, previous: previous) {
+                    inView += 1
+                    if scrolling { scrolling = false }
+                    if inView >= 2 { break }
+                } else {
+                    inView = 0
+                    proxy.scrollTo(focus.threadId, anchor: .top)
+                }
+                previous = now
+                try? await Task.sleep(for: .milliseconds(60))
+            }
+            guard !Task.isCancelled else { return }
+            if scrolling { scrolling = false }
+            landing = nil
+        }
+    }
+
+    private func endLanding() {
+        landing?.cancel()
+        landing = nil
+        if scrolling { scrolling = false }
     }
 
     /// The count of cards for him, and one tap to each fold below them (2026-11-04 review: a
     /// dozen screens of cards before them).
-    private func showsJumps(_ s: OrgThreadModel.Sections) -> Bool {
-        guard store.threads != nil else { return false }
-        let unreadable = OrgThreadModel.unreadCount(serverCount: store.shownCount, nodeCount: nodeShown, read: s.open.count) != nil
-        return s.showsJumps(unreadable: unreadable)
-    }
-
     private func jumps(_ s: OrgThreadModel.Sections, proxy: ScrollViewProxy) -> some View {
         let items: [(id: String, label: String, count: Int, open: Binding<Bool>)] = [
             ("snoozed", "Snoozed", s.snoozed.count, foldBinding("snoozed")),
@@ -191,6 +467,7 @@ struct OrgThreadsView: View {
             Spacer(minLength: 0)
             ForEach(items, id: \.id) { item in
                 Button {
+                    endLanding()
                     item.open.wrappedValue = true
                     // After the section has laid out its rows: scrolled at once, a short section
                     // (one snoozed thread) stayed where it was, under the tab bar (r9 review).
@@ -293,16 +570,24 @@ struct OrgThreadCard: View {
     var compact = false
     /// His last Follow up on it from this phone, shown on the card for a few minutes.
     var followUpSentAt: Date? = nil
+    /// A Follow up he started here and did not send is kept (`OrgThreadFollowUpDraft`).
+    var followUpKept = false
+    /// Just revealed for a push or a link: marked for a moment so the eye finds it.
+    var highlighted = false
+    /// DEBUG: wears the UI tests' reveal mark.
+    var testMarked = false
     let onEdit: (OrgThreadEdit) -> Void
-    let onFollowUp: (String, [SelectedImage]) async -> Bool
+    /// A task chip was tapped: the node's page opens its session over itself.
+    let onOpenTask: (TaskOpenTarget) -> Void
+    /// Follow up was tapped: the node's page opens the composer over itself.
+    let onFollowUpOpen: () -> Void
     /// Read this thread whole: its list read cut answers he already reacted to (`clipped`).
     var onWhole: () async -> Void = {}
 
     @Environment(TasksStore.self) private var tasks
+    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var conversation = false
     @State private var expanded = false
-    @State private var following = false
-    @State private var target: TaskOpenTarget?
 
     private var t: OrgThread { thread }
     private var closed: Bool { t.closed != nil }
@@ -386,22 +671,50 @@ struct OrgThreadCard: View {
                     .foregroundStyle(Theme.doneText)
                     .accessibilityIdentifier("org.thread.followUp.sent")
             }
-            conversationToggle
+            if followUpKept, canFollowUp, !closed {
+                // A composer closed before Send (Cancel, a swipe, a push that opened another
+                // thread) left his words here: Follow up brings them back.
+                Label("Your unsent follow up is kept. Tap Follow up to finish it.", systemImage: "square.and.pencil")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("org.thread.followUp.kept")
+            }
+            conversationToggle()
             if conversation {
                 OrgThreadConversation(thread: t, shared: shared, name: name, now: now)
-                // The conversation runs screens long: it closes from its end too.
-                conversationToggle
+                // A conversation that runs screens long closes from its end too.
+                if OrgThreadCardLayout.closesFromEnd(t) { conversationToggle(atEnd: true) }
             }
             actions
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        // The reveal's tint sits behind the text and buttons, never over them: a tint on top
+        // made the card read as disabled for its 2.5 s (2026-11-06 gate). Only the outline is
+        // drawn over the card.
+        .background {
+            ZStack {
+                RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color(uiColor: .secondarySystemGroupedBackground))
+                if highlighted {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Theme.tintSoft.opacity(OrgThreadRevealModel.highlightTint))
+                }
+            }
+        }
         .overlay {
-            if t.state == "needs" && !closed {
+            if highlighted {
+                RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Theme.tint, lineWidth: 2.5)
+                    .allowsHitTesting(false)
+            } else if t.state == "needs" && !closed {
                 RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Theme.danger.opacity(0.45), lineWidth: 1)
             }
         }
+        #if DEBUG
+        // The reveal mark, for the UI tests to read (draws nothing).
+        .overlay(alignment: .topTrailing) { if testMarked { DebugRevealMarker(threadId: t.id) } }
+        // The outline itself, while it is drawn (the tests check the eye's mark, not only theirs).
+        .overlay(alignment: .topLeading) { if highlighted { DebugRevealMarker(threadId: t.id, visible: true) } }
+        #endif
         .opacity(closed ? 0.75 : 1)
         .onAppear { if startsOpen, OrgThreadModel.unread(t, shared: shared).isEmpty { conversation = true } }
         // Opened (its Conversation, or a folded row) with a cut answer in it: the whole thread.
@@ -409,15 +722,9 @@ struct OrgThreadCard: View {
         .task(id: "\(conversation || expanded)-\(OrgThreadModel.hasCutAnswer(t))") {
             if conversation || expanded, OrgThreadModel.hasCutAnswer(t) { await onWhole() }
         }
-        .sheet(isPresented: $following) {
-            OrgThreadFollowUpSheet(title: t.title, send: onFollowUp)
-                .presentationDetents([.large])
-                .presentationDragIndicator(.visible)
-        }
-        .sheet(item: $target) { target in
-            TaskSessionSheet(target: target)
-                .presentationDetents([.large])
-                .presentationDragIndicator(.visible)
+        // Asked for while its card is already on the page (a push for the page that is up).
+        .onChange(of: startsOpen) { _, open in
+            if open, OrgThreadModel.unread(t, shared: shared).isEmpty { conversation = true }
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("org.thread.\(t.id)")
@@ -425,56 +732,100 @@ struct OrgThreadCard: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                // The same mark folded or open: a check once closed, else its state's colour.
-                Image(systemName: closed ? "checkmark.circle.fill" : "circle.fill")
-                    .font(closed ? .caption : .system(size: 8))
-                    .foregroundStyle(closed ? Theme.doneText : stateColor)
-                    .accessibilityHidden(true)
-                Text(OrgThreadModel.stateLabel(t))
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(t.state == "needs" && !closed ? Theme.needsText : .secondary)
-                Text("·").foregroundStyle(.tertiary).font(.caption)
-                Text(timeAgo)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if t.opener != nil {
-                    Text("· Opened by \(name)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-                Spacer(minLength: 0)
-                if compact && expanded {
-                    Button { withAnimation(.snappy) { expanded = false } } label: {
-                        Image(systemName: "chevron.down")
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 36, height: 28)
-                            .contentShape(Rectangle())
+            if OrgThreadCardLayout.headerStacks(typeSize) {
+                stackedHeaderTop
+            } else {
+                // One row while it fits at its natural width, else the stacked form: a row
+                // squeezed to fit broke the state inside its word and cut "Opened by" short.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 6) {
+                        stateMark
+                        stateText.lineLimit(1)
+                        if !meta.isEmpty {
+                            Text("\u{00B7}").foregroundStyle(.tertiary).font(.caption)
+                            Text(meta)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
+                        headerButtons
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Fold this thread")
-                    .accessibilityIdentifier("org.thread.fold")
-                }
-                if !closed {
-                    Button { onEdit(.pin(!pinned)) } label: {
-                        Image(systemName: pinned ? "pin.fill" : "pin")
-                            .font(.footnote)
-                            .foregroundStyle(pinned ? Theme.tint : .secondary)
-                            .frame(width: 36, height: 28)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(busy)
-                    .accessibilityLabel(pinned ? "Unpin" : "Pin to the top")
-                    .accessibilityIdentifier("org.thread.pin")
+                    stackedHeaderTop
                 }
             }
             Text(t.title)
                 .font(.headline)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("org.thread.title")
+        }
+    }
+
+    /// The state on its own line beside the buttons, and when and who under it, wrapping at words.
+    private var stackedHeaderTop: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                stateMark
+                stateText
+                    .fixedSize(horizontal: false, vertical: true)
+                    .layoutPriority(1)
+                Spacer(minLength: 0)
+                headerButtons
+            }
+            if !meta.isEmpty {
+                Text(meta)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// When, and who opened it: "18m ago · Opened by Growth VP".
+    private var meta: String {
+        OrgThreadCardLayout.metaLine(timeAgo: timeAgo, openedBy: t.opener != nil ? name : nil)
+    }
+
+    /// The same mark folded or open: a check once closed, else its state's colour.
+    private var stateMark: some View {
+        Image(systemName: closed ? "checkmark.circle.fill" : "circle.fill")
+            .font(closed ? .caption : .system(size: 8))
+            .foregroundStyle(closed ? Theme.doneText : stateColor)
+            .accessibilityHidden(true)
+    }
+
+    private var stateText: some View {
+        Text(OrgThreadModel.stateLabel(t))
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(t.state == "needs" && !closed ? Theme.needsText : .secondary)
+    }
+
+    @ViewBuilder
+    private var headerButtons: some View {
+        if compact && expanded {
+            Button { withAnimation(.snappy) { expanded = false } } label: {
+                Image(systemName: "chevron.down")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 36, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Fold this thread")
+            .accessibilityIdentifier("org.thread.fold")
+        }
+        if !closed {
+            Button { onEdit(.pin(!pinned)) } label: {
+                Image(systemName: pinned ? "pin.fill" : "pin")
+                    .font(.footnote)
+                    .foregroundStyle(pinned ? Theme.tint : .secondary)
+                    .frame(width: 36, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(busy)
+            .accessibilityLabel(pinned ? "Unpin" : "Pin to the top")
+            .accessibilityIdentifier("org.thread.pin")
         }
     }
 
@@ -511,7 +862,7 @@ struct OrgThreadCard: View {
                     let title = task.map { AskProjectName.displayTitle($0.title, project: $0.project, orgRole: $0.orgRole) } ?? id
                     // Two chips with one title say their state, so they can be told apart.
                     let twin = titles.filter { $0 == title }.count > 1
-                    Button { target = TaskOpenTarget(id: id, title: title) } label: {
+                    Button { onOpenTask(TaskOpenTarget(id: id, title: title)) } label: {
                         HStack(spacing: 5) {
                             if let task { Circle().fill(UserStatePill.color(TeamStatusModel.state(of: task))).frame(width: 7, height: 7) }
                             Text(title).lineLimit(1)
@@ -531,8 +882,9 @@ struct OrgThreadCard: View {
         }
     }
 
+    /// `atEnd`: the second toggle under a long open conversation (its own id, so the two are told apart).
     @ViewBuilder
-    private var conversationToggle: some View {
+    private func conversationToggle(atEnd: Bool = false) -> some View {
         let count = t.messages.count + (t.opener == nil ? 0 : 1)
         if count > 0 {
             Button {
@@ -549,7 +901,7 @@ struct OrgThreadCard: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityIdentifier("org.thread.conversation")
+            .accessibilityIdentifier(atEnd ? "org.thread.conversation.end" : "org.thread.conversation")
         }
     }
 
@@ -567,27 +919,57 @@ struct OrgThreadCard: View {
                     .disabled(busy)
                     .accessibilityIdentifier("org.thread.reopen")
             }
-        } else {
-            HStack(spacing: 8) {
-                Button("Acknowledge") { onEdit(.acknowledge) }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Theme.tint)
-                    .accessibilityIdentifier("org.thread.ack")
-                if canFollowUp {
-                    Button("Follow up") { following = true }
-                        .buttonStyle(.bordered)
-                        .accessibilityIdentifier("org.thread.followUp")
-                }
-                snoozeMenu
-                Spacer(minLength: 0)
+        } else if OrgThreadCardLayout.actionsStack(typeSize) {
+            // Large text: one full-width button a row, so no label is squeezed into its letters.
+            VStack(alignment: .leading, spacing: 8) {
+                actionButtons(fullWidth: true)
                 if busy { ProgressView().controlSize(.small) }
+            }
+            .controlSize(.small)
+            .disabled(busy)
+        } else {
+            // In a row while the labels fit whole, else the stacked form (a long name in another
+            // language, a narrow screen), never a label broken inside its word.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    actionButtons(fullWidth: false)
+                    Spacer(minLength: 0)
+                    if busy { ProgressView().controlSize(.small) }
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    actionButtons(fullWidth: true)
+                    if busy { ProgressView().controlSize(.small) }
+                }
             }
             .controlSize(.small)
             .disabled(busy)
         }
     }
 
-    private var snoozeMenu: some View {
+    /// An action's label: on one line, its word whole (`OrgThreadCardLayout.actionLabel`).
+    private func actionLabel(_ text: String, fullWidth: Bool) -> some View {
+        Text(text)
+            .lineLimit(OrgThreadCardLayout.actionLabelLines)
+            .minimumScaleFactor(OrgThreadCardLayout.actionLabelMinScale)
+            .fixedSize(horizontal: !fullWidth, vertical: false)
+            .frame(maxWidth: fullWidth ? .infinity : nil)
+    }
+
+    @ViewBuilder
+    private func actionButtons(fullWidth: Bool) -> some View {
+        Button { onEdit(.acknowledge) } label: { actionLabel("Acknowledge", fullWidth: fullWidth) }
+            .buttonStyle(.borderedProminent)
+            .tint(Theme.tint)
+            .accessibilityIdentifier("org.thread.ack")
+        if canFollowUp {
+            Button { onFollowUpOpen() } label: { actionLabel("Follow up", fullWidth: fullWidth) }
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("org.thread.followUp")
+        }
+        snoozeMenu(fullWidth: fullWidth)
+    }
+
+    private func snoozeMenu(fullWidth: Bool) -> some View {
         Menu {
             // The server takes the pin off a thread it snoozes, so a pinned card says so first.
             if pinned {
@@ -600,7 +982,7 @@ struct OrgThreadCard: View {
                 Button("Unsnooze") { onEdit(.snooze("")) }
             }
         } label: {
-            Text(snoozed ? "Snoozed" : "Snooze")
+            actionLabel(snoozed ? "Snoozed" : "Snooze", fullWidth: fullWidth)
         }
         .buttonStyle(.bordered)
         .accessibilityIdentifier("org.thread.snooze")
@@ -717,18 +1099,90 @@ struct OrgThreadConversation: View {
     }
 }
 
+/// Where an unsent Follow up is kept: the app's composer draft store, one draft per thread, so a
+/// sheet closed by Cancel, a swipe or a push navigation (`PresentationLowering`) gives his words
+/// and pictures back when he opens Follow up on that thread again (2026-11-08 review: a push
+/// dropped a half-written Follow up). Gone once the server took it.
+enum OrgThreadFollowUpDraft {
+    nonisolated static let prefix = "thread-follow-up:"
+    /// Drafts kept for threads he left unsent, besides the one in hand.
+    nonisolated static let kept = 10
+
+    nonisolated static func key(nodeId: String, threadId: String) -> String { "\(prefix)\(nodeId)/\(threadId)" }
+
+    /// Something unsent is kept for this thread (words that are not blank, or a picture).
+    @MainActor static func exists(_ key: String, in drafts: ComposerDrafts = .shared) -> Bool {
+        !drafts.draft(key).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !drafts.images(key).isEmpty
+    }
+
+    /// A send's receipt clears the draft only while the draft is still what was sent: a receipt
+    /// that arrives after he wrote more keeps the newer words (2026-11-08 review, round 2).
+    nonisolated static func sentIsStillTheDraft(sent: String, sentPictures: [UUID], draft: String, draftPictures: [UUID]) -> Bool {
+        draft == sent && draftPictures == sentPictures
+    }
+
+    /// What the draft keeps once the server took `sent`: what he wrote after it, never the part
+    /// that went out (2026-11-08 review, round 3: "Approve" sent, " and ship it" added on the way,
+    /// and the next Send sent "Approve" a second time). Words that do not start with the sent
+    /// ones are newer words of his and stay whole; the pictures that went out leave the draft.
+    /// `remainder`: the draft kept only what came after the sent words.
+    nonisolated static func afterReceipt(sent: String, sentPictures: [UUID], draft: String, draftPictures: [UUID])
+        -> (words: String, pictures: [UUID], remainder: Bool) {
+        let pictures = draftPictures.filter { !sentPictures.contains($0) }
+        guard !sent.isEmpty, draft.hasPrefix(sent) else { return (draft, pictures, false) }
+        let rest = String(draft.dropFirst(sent.count))
+        let trimmed = String(rest.drop { $0 == " " || $0 == "\n" || $0 == "\t" })
+        return (trimmed, pictures, !trimmed.isEmpty)
+    }
+}
+
+/// The Follow ups on their way, by draft key: one at a time per thread, across composers (a
+/// composer closed while its send was on its way, then opened again, offered Send for the same
+/// words a second time).
+@Observable
+@MainActor
+final class OrgThreadFollowUpSends {
+    static let shared = OrgThreadFollowUpSends()
+    private(set) var inFlight: Set<String> = []
+    private init() {}
+
+    /// False when one is already on its way for `key`.
+    func begin(_ key: String) -> Bool { inFlight.insert(key).inserted }
+    func end(_ key: String) { inFlight.remove(key) }
+}
+
 /// Follow up on a thread: his words (and pictures, as the chat takes) go into the node's
-/// chat, filed under this thread.
+/// chat, filed under this thread. Kept in the draft store until sent (`OrgThreadFollowUpDraft`).
 struct OrgThreadFollowUpSheet: View {
     let title: String
+    /// `OrgThreadFollowUpDraft.key` for this thread.
+    let draftKey: String
     let send: (String, [SelectedImage]) async -> Bool
     @Environment(\.dismiss) private var dismiss
-    @State private var text = ""
-    @State private var images: [SelectedImage] = []
+    @State private var drafts = ComposerDrafts.shared
     @State private var pictureNotice: String?
-    @State private var sending = false
+    @State private var sends = OrgThreadFollowUpSends.shared
     @State private var failed = false
+    /// The words that went out while he kept writing: the draft kept only what came after them.
+    @State private var sentNote: String?
     @FocusState private var focused: Bool
+
+    /// A Follow up of this thread is on its way, from this composer or one closed meanwhile.
+    private var sending: Bool { sends.inFlight.contains(draftKey) }
+
+    private var text: Binding<String> {
+        Binding(get: { drafts.draft(draftKey) }, set: {
+            drafts.setDraft($0, key: draftKey)
+            drafts.trimDrafts(prefix: OrgThreadFollowUpDraft.prefix, keeping: draftKey, max: OrgThreadFollowUpDraft.kept)
+        })
+    }
+
+    private var images: Binding<[SelectedImage]> {
+        Binding(get: { drafts.images(draftKey) }, set: {
+            drafts.setImages($0, key: draftKey)
+            drafts.trimDrafts(prefix: OrgThreadFollowUpDraft.prefix, keeping: draftKey, max: OrgThreadFollowUpDraft.kept)
+        })
+    }
 
     var body: some View {
         NavigationStack {
@@ -737,14 +1191,14 @@ struct OrgThreadFollowUpSheet: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
-                TextEditor(text: $text)
+                TextEditor(text: text)
                     .focused($focused)
                     .scrollContentBackground(.hidden)
                     .frame(minHeight: 80, maxHeight: .infinity)
                     .padding(8)
                     .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
                     .overlay(alignment: .topLeading) {
-                        if text.isEmpty {
+                        if text.wrappedValue.isEmpty {
                             Text("Write your follow up")
                                 .font(.body)
                                 .foregroundStyle(.tertiary)
@@ -754,15 +1208,26 @@ struct OrgThreadFollowUpSheet: View {
                         }
                     }
                     .accessibilityIdentifier("org.thread.followUp.input")
-                ReplyPictureStrip(images: $images, notice: $pictureNotice, idPrefix: "org.thread.followUp")
+                ReplyPictureStrip(images: images, notice: $pictureNotice, idPrefix: "org.thread.followUp")
                 ReplyPictureButton(
-                    images: $images, notice: $pictureNotice, idPrefix: "org.thread.followUp",
+                    images: images, notice: $pictureNotice, idPrefix: "org.thread.followUp",
                     disabled: sending, onWillPresent: { focused = false }
                 )
                 if failed {
                     Text("Not sent. Your words are still here.")
                         .font(.footnote)
                         .foregroundStyle(Theme.needsText)
+                } else if sending {
+                    Text("Your follow up is on its way.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("org.thread.followUp.onItsWay")
+                } else if let sentNote {
+                    Text(sentNote)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("org.thread.followUp.sentPart")
                 }
             }
             // Top-aligned and shrinking with the keyboard: never pushed up under the bar.
@@ -774,20 +1239,47 @@ struct OrgThreadFollowUpSheet: View {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(sending ? "Sending…" : "Send") {
-                        sending = true
+                        let key = draftKey
+                        guard sends.begin(key) else { return }
                         failed = false
+                        sentNote = nil
+                        let words = text.wrappedValue, pictures = images.wrappedValue
                         Task {
-                            let ok = await send(text, images)
-                            sending = false
-                            if ok { dismiss() } else { failed = true }
+                            let ok = await send(words, pictures)
+                            sends.end(key)
+                            guard ok else {
+                                failed = true
+                                return
+                            }
+                            // A receipt that comes late (he closed the composer while it was on its
+                            // way, came back and wrote more) never takes the newer words with it,
+                            // and never leaves the words that went out to be sent again.
+                            let after = OrgThreadFollowUpDraft.afterReceipt(
+                                sent: words, sentPictures: pictures.map(\.id),
+                                draft: drafts.draft(key), draftPictures: drafts.images(key).map(\.id))
+                            if after.words.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, after.pictures.isEmpty {
+                                drafts.clear(key)
+                                dismiss()
+                                return
+                            }
+                            drafts.setDraft(after.words, key: key)
+                            drafts.setImages(drafts.images(key).filter { after.pictures.contains($0.id) }, key: key)
+                            if after.remainder {
+                                sentNote = "Sent: \u{201C}\(Self.clip(words))\u{201D}. What you wrote after it is still here."
+                            }
                         }
                     }
-                    .disabled(sending || (text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && images.isEmpty))
+                    .disabled(sending || (text.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && images.wrappedValue.isEmpty))
                     .accessibilityIdentifier("org.thread.followUp.send")
                 }
             }
             .onAppear { focused = true }
         }
+    }
+
+    private static func clip(_ words: String) -> String {
+        let one = words.trimmingCharacters(in: .whitespacesAndNewlines)
+        return one.count > 60 ? String(one.prefix(60)) + "\u{2026}" : one
     }
 }
 

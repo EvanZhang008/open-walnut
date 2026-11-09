@@ -735,6 +735,9 @@ struct ComposerBar: View {
                 onCancel: { showCamera = false }
             )
             .ignoresSafeArea()
+            // A photo being taken (or taken and not yet used) is nowhere else: a push waits
+            // until he uses or cancels it (2026-11-08 review, round 3).
+            .holdsNavigation()
         }
         // The Send gate stops a take itself when Send is tapped mid-recording; its
         // words go to the draft (never `deliver`), and are then sent with it.
@@ -1992,6 +1995,9 @@ struct ComposerBar: View {
             longDraftFocused = false
             showPhotoPicker = false
             showCamera = true
+            // Any field still holding the keyboard lets go: on a session's page it stayed up over
+            // the camera, over its Dismiss and shutter (2026-11-09).
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         case .notice(let text):
             cameraNotice = text
         }

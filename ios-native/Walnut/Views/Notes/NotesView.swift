@@ -91,7 +91,7 @@ struct FolderContentView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
-                    newNoteName = ""
+                    // A name a push closed the dialog over is offered again; Create and Cancel end it.
                     showCreate = true
                 } label: {
                     Image(systemName: "square.and.pencil")
@@ -103,7 +103,7 @@ struct FolderContentView: View {
             TextField("Title", text: $newNoteName)
                 .autocorrectionDisabled()
             Button("Create") { createNote() }
-            Button("Cancel", role: .cancel) {}
+            Button("Cancel", role: .cancel) { newNoteName = "" }
         } message: {
             Text(isRoot ? "Created at the top level." : "Created in \(folderPath.components(separatedBy: "/").last ?? folderPath).")
         }
@@ -206,6 +206,7 @@ struct FolderContentView: View {
 
     private func createNote() {
         var name = newNoteName.trimmingCharacters(in: .whitespacesAndNewlines)
+        newNoteName = ""
         if name.lowercased().hasSuffix(".md") { name = String(name.dropLast(3)) }
         guard !name.isEmpty, !name.contains("/") else { return }
         let newPath = isRoot ? name : "\(folderPath)/\(name)"

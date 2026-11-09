@@ -46,9 +46,12 @@ struct SessionConversationView: View {
     @State private var showTask = false
     /// An Org node's Threads, Tasks or Brief page, pushed over its chat.
     @State private var orgRoute: OrgNodeRoute?
-    /// An Org node page to open once this chat appears (a thread push), and whether it did.
-    private let orgPageOnOpen: OrgNodePageOpen?
-    @State private var orgPageOnOpenDone = false
+    /// The Chat tab's copy: it opens the node's page for a thread push (`OrgNodePageLink`), and
+    /// that page takes later requests itself. Off for a chat opened anywhere else.
+    private let followsOrgLinks: Bool
+    /// The page he had open over this Org node's chat, put back once with a launch's restore
+    /// (`ViewMemory`, `OrgNodePageHost.restore`); nil for a chat opened any other way.
+    private let restoredOrgPage: OrgNodeTab?
     /// A page this chat opens with covers the chat until the page is on top: a launch put the
     /// chat on screen for about a second before its kept Threads or Brief page slid over it.
     @State private var coveredUntilPage: Bool
@@ -88,11 +91,13 @@ struct SessionConversationView: View {
     /// The page's own height, which caps the permission cards' scroll box.
     @State private var pageHeight: CGFloat = 0
 
-    init(session: WalnutSession, voiceModeOnOpen: VoiceModeOnOpen = .off, orgPageOnOpen: OrgNodePageOpen? = nil) {
+    init(session: WalnutSession, voiceModeOnOpen: VoiceModeOnOpen = .off, followsOrgLinks: Bool = false,
+         restoredOrgPage: OrgNodeTab? = nil) {
         self.session = session
         self.voiceModeOnOpen = voiceModeOnOpen
-        self.orgPageOnOpen = orgPageOnOpen
-        _coveredUntilPage = State(initialValue: orgPageOnOpen != nil)
+        self.followsOrgLinks = followsOrgLinks
+        self.restoredOrgPage = restoredOrgPage
+        _coveredUntilPage = State(initialValue: restoredOrgPage != nil)
         let store = SessionConversationStore(session: session)
         _store = State(initialValue: store)
         _pageOperations = State(initialValue: SessionPageOperations(store: store))
@@ -117,7 +122,8 @@ struct SessionConversationView: View {
     init(session: WalnutSession, store: SessionConversationStore) {
         self.session = session
         self.voiceModeOnOpen = .off
-        self.orgPageOnOpen = nil
+        self.followsOrgLinks = false
+        self.restoredOrgPage = nil
         _coveredUntilPage = State(initialValue: false)
         _store = State(initialValue: store)
         _pageOperations = State(initialValue: SessionPageOperations(store: store))
@@ -192,24 +198,20 @@ struct SessionConversationView: View {
         }
     }
 
-    /// An Org node's chat opens its page on top when asked (a push, a link), and reads the linked
-    /// task by id when the list does not carry it.
+    /// An Org node's chat opens its page on top when asked (a push, a link: `OrgNodePageHost`),
+    /// and reads the linked task by id when the list does not carry it.
     private func orgNodeHooks<V: View>(_ content: V) -> some View {
         content
-            .navigationDestination(item: $orgRoute) { route in
-                // Said again here: a pushed page is not promised the environment of its host.
-                OrgNodePage(route: route)
-                    .environment(\.orgPagePlace, orgPagePlace)
-            }
+            .modifier(OrgNodePageHost(
+                route: $orgRoute, node: orgNodeIdentity, sessionId: session.id,
+                follows: followsOrgLinks, link: .shared, restore: restoredOrgPage,
+                uncover: { coveredUntilPage = false }))
             // The page over the chat is kept per node, so a relaunch or a return puts it back;
             // Back forgets it (`ViewMemory`).
             .onChange(of: orgRoute) { old, route in
                 guard let nodeId = route?.nodeId ?? old?.nodeId, let key = orgPagePlace.keyId(nodeId) else { return }
                 ViewMemory.write(route?.tab, "org", "page", id: key)
             }
-            .onAppear { openOrgPageOnOpen() }
-            .onChange(of: orgNode?.id) { openOrgPageOnOpen() }
-            .onChange(of: orgPageOnOpen) { orgPageOnOpenDone = false; openOrgPageOnOpen() }
             .task(id: session.taskId) { await fetchLinkedTaskIfMissing() }
             // A chat that turns out not to be an Org node's (or whose task never loads) is shown.
             .task {
@@ -669,7 +671,7 @@ struct SessionConversationView: View {
                     .accessibilityIdentifier("session.retry")
                 }
                 Button {
-                    renameDraft = session.title ?? session.rowTitle
+                    if renameDraft.isEmpty { renameDraft = session.title ?? session.rowTitle }
                     showRename = true
                 } label: {
                     Label("Rename", systemImage: "pencil")
@@ -741,34 +743,19 @@ struct SessionConversationView: View {
         if let detail = try? await WalnutAPI().taskDetail(id: taskId) { fetchedTask = WalnutTask(detail: detail) }
     }
 
-    /// The page a push asked for, once, as soon as the chat knows it is an Org node's.
-    private func openOrgPageOnOpen() {
-        guard let open = orgPageOnOpen, !orgPageOnOpenDone, orgNode != nil else { return }
-        orgPageOnOpenDone = true
-        // Pushed once the chat's own push has settled: pushed in the same moment (a launch that
-        // puts back the chat and its page), Back took both off at once and left no chat under them.
-        Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(600))
-            guard coveredUntilPage else { openOrgPage(open.tab, threadId: open.threadId); return }
-            // Under the cover nobody sees the chat, so the page lands without sliding in, and the
-            // cover leaves in the same moment.
-            var still = Transaction()
-            still.disablesAnimations = true
-            withTransaction(still) {
-                openOrgPage(open.tab, threadId: open.threadId)
-                coveredUntilPage = false
-            }
-        }
-    }
-
     /// The longest the chat stays covered waiting for its page (a slow task read included).
     static let coverLimitSeconds = 4.0
 
-    private func openOrgPage(_ tab: OrgNodeTab, threadId: String? = nil) {
-        guard let node = orgNode else { return }
-        orgRoute = OrgNodeRoute(
-            nodeId: node.id, name: TaskMentions.shownTitle(node.title, orgRole: node.orgRole),
-            isMain: node.orgRole == "main", sessionId: session.id, tab: tab, threadId: threadId)
+    private var orgNodeIdentity: OrgNodeIdentity? {
+        orgNode.map {
+            OrgNodeIdentity(id: $0.id, name: TaskMentions.shownTitle($0.title, orgRole: $0.orgRole), isMain: $0.orgRole == "main")
+        }
+    }
+
+    /// The bar's buttons: the node's page on that view.
+    private func openOrgPage(_ tab: OrgNodeTab) {
+        guard let node = orgNodeIdentity else { return }
+        orgRoute = OrgNodeRoute(nodeId: node.id, name: node.name, isMain: node.isMain, sessionId: session.id, tab: tab)
     }
 
     /// The two-line principal title. A chevron says it opens something when it does.

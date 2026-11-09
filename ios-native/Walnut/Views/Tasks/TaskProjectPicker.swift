@@ -60,6 +60,8 @@ struct TaskProjectPicker: View {
                     }
                 }
             }
+            // A new project's name being typed is kept nowhere else: a push waits for it.
+            .holdsNavigation(!query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             .navigationTitle("Project")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

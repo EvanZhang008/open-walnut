@@ -56,6 +56,16 @@ struct NewSessionSheet: View {
     @State private var path: String = ""
     @State private var message: String = ""
     @State private var mode: PermissionMode = NewSessionChatView.draftStart(inDemo: DemoMode.isActive).mode
+    /// The host and folder the sheet itself put in (its preselect), for `edited`.
+    @State private var offeredHost = ""
+    @State private var offeredPath = ""
+    private let initialMode = NewSessionChatView.draftStart(inDemo: DemoMode.isActive).mode
+
+    /// Something he wrote or picked that Start has not taken yet: a push waits for it.
+    private var edited: Bool {
+        !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || mode != initialMode || selectedHost != offeredHost || path != offeredPath
+    }
     @State private var creating = false
     @State private var createError: String?
     /// Start waits for words still being spoken or transcribed into the first
@@ -131,7 +141,9 @@ struct NewSessionSheet: View {
             // Mid-create dismissal would orphan the launch stash and skip the
             // conversation push (the created session would look "lost" until
             // the list refreshes) — hold the sheet for the ~1s the POST takes.
-            .interactiveDismissDisabled(creating || sendGate.isWaiting)
+            // And while he has written or picked something Start has not taken: a push would close
+            // the sheet and lose it (2026-11-08 review, round 3).
+            .holdsNavigation(creating || sendGate.isWaiting || edited)
         }
     }
 
@@ -391,8 +403,12 @@ struct NewSessionSheet: View {
             let wasSuggested = (previous?.dirs ?? []).contains {
                 $0.host == selectedHost && $0.cwd == path
             }
-            if wasSuggested { path = "" }
+            if wasSuggested {
+                path = ""
+                offeredPath = ""
+            }
             selectedHost = ""
+            offeredHost = ""
         }
         // Never preselect over something the user already typed: the empty
         // cache apply doesn't latch didPreselect (see below), so the live
@@ -411,12 +427,16 @@ struct NewSessionSheet: View {
         if let taskSession, opts.hosts.contains(where: { $0.alias == taskSession.host }) {
             selectedHost = taskSession.host
             if let cwd = taskSession.cwd, !cwd.isEmpty { path = cwd }
+            offeredHost = selectedHost
+            offeredPath = path
             didPreselect = true
         } else if NewSessionChatView.draftStart(inDemo: DemoMode.isActive).preselectFolder,
                   let top = opts.dirs.first {
             // The global default; never in the demo (see `draftStart`).
             selectedHost = top.host
             path = top.cwd
+            offeredHost = selectedHost
+            offeredPath = path
             didPreselect = true
         }
         // No else-latch: an empty cache apply (zero dirs, no task session)

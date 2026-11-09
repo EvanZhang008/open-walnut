@@ -16,9 +16,12 @@ struct SessionLifecycleDialogs: ViewModifier {
             // A plain alert keeps the rename lightweight.
             .alert("Rename Session", isPresented: $showRename) {
                 TextField("Title", text: $renameDraft)
-                Button("Cancel", role: .cancel) {}
+                // Both answers end the draft; a push that closed the alert leaves it, so the next
+                // Rename opens on his words (SessionConversationView fills it only when empty).
+                Button("Cancel", role: .cancel) { renameDraft = "" }
                 Button("Rename") {
                     let title = renameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                    renameDraft = ""
                     guard !title.isEmpty else { return }
                     Task { await lifecycle.rename(title) }
                 }

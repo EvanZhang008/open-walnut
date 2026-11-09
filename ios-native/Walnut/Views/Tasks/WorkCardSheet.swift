@@ -42,10 +42,8 @@ final class WorkCardLinkBox {
 
     private func present() {
         guard let target = next, !closing else { return }
-        let root = UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .flatMap(\.windows)
-            .first { $0.isKeyWindow }?.rootViewController
+        // The app's own window (`PresentationLowering`), the one its sheets are presented on.
+        let root = PresentationLowering.root()
         switch Self.plan(over: Self.chain(from: root), closing: root?.presentedViewController?.isBeingDismissed == true) {
         case .show:
             next = nil
@@ -72,8 +70,7 @@ final class WorkCardLinkBox {
                 for _ in 0..<3600 {
                     try? await Task.sleep(nanoseconds: 500_000_000)
                     guard let self, !Task.isCancelled else { return }
-                    let root = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-                        .flatMap(\.windows).first { $0.isKeyWindow }?.rootViewController
+                    let root = PresentationLowering.root()
                     if Self.plan(over: Self.chain(from: root), closing: false) != .keep {
                         self.holdWatch = nil
                         self.present()
@@ -86,25 +83,15 @@ final class WorkCardLinkBox {
         }
     }
 
-    enum Presenting: Equatable { case show, closeFirst, wait, keep }
+    /// The app's one rule for what is over it (`PresentationLowering`, which a thread push uses too).
+    typealias Presenting = PresentationLowering.Presenting
 
-    /// `modal`: for each screen presented over the app, bottom first, whether it refuses to be
-    /// swiped away (`isModalInPresentation`, SwiftUI's `interactiveDismissDisabled`).
-    /// `closing`: a presented screen is on its way out.
     static func plan(over modal: [Bool], closing: Bool = false) -> Presenting {
-        if modal.contains(true) { return .keep }
-        if closing { return .wait }
-        return modal.isEmpty ? .show : .closeFirst
+        PresentationLowering.plan(over: modal, closing: closing)
     }
 
     private static func chain(from root: UIViewController?) -> [Bool] {
-        var out: [Bool] = []
-        var top = root
-        while let presented = top?.presentedViewController, !presented.isBeingDismissed {
-            out.append(presented.isModalInPresentation)
-            top = presented
-        }
-        return out
+        PresentationLowering.chain(from: root)
     }
 }
 

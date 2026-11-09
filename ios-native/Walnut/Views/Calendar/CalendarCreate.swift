@@ -127,4 +127,19 @@ enum CalendarCreate {
         t.timeZone = calendar.timeZone
         return "\(dayText) at \(start.formatted(t))"
     }
+
+    /// The create sheet holds something he has not added yet: a title, a project, a time moved
+    /// off the slot it opened on, the all-day switch or the sync choice flipped. A push waits
+    /// while it does (`holdsNavigation`), so a tap on a notification never throws it away.
+    static func edited(
+        title: String, project: String, start: Date, end: Date, isAllDay: Bool, syncLocal: Bool,
+        seedStart: Date, seedEnd: Date, seedAllDay: Bool
+    ) -> Bool {
+        !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !project.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || abs(start.timeIntervalSince(seedStart)) >= 1
+            || abs(end.timeIntervalSince(seedEnd)) >= 1
+            || isAllDay != seedAllDay
+            || syncLocal
+    }
 }

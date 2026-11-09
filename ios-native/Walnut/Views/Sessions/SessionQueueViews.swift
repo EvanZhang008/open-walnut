@@ -514,7 +514,7 @@ struct SessionQueuedMessageSheet: View {
             }
         }
         .presentationBackground(Color(.systemBackground))
-        .interactiveDismissDisabled(changed || strandedWords != nil)
+        .holdsNavigation(changed || strandedWords != nil)
         .alert("Interrupt the agent?", isPresented: $askInterrupt) {
             Button("Keep waiting", role: .cancel) {}
             Button("Interrupt & send", role: .destructive) {

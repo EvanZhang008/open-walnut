@@ -61,7 +61,9 @@ struct SessionForkSheet: View {
                     }
                 }
             }
-            .interactiveDismissDisabled(forking || sendGate.isWaiting)
+            // His words for the fork are not kept anywhere else: a push waits for them.
+            .holdsNavigation(forking || sendGate.isWaiting
+                             || !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
     }
 
@@ -181,7 +183,7 @@ struct SessionNoteSheet: View {
                     }
                 }
             }
-            .interactiveDismissDisabled(saving || note != saved || sendGate.isWaiting)
+            .holdsNavigation(saving || note != saved || sendGate.isWaiting)
             .task { await load() }
         }
     }

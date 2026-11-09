@@ -9,8 +9,8 @@ import Foundation
 // names the thread (`threadId`, additive).
 
 /// One message he sent the node, with the node's chat answer under it once its turn ended.
-struct OrgThreadMessage: Decodable, Equatable, Identifiable {
-    struct Answer: Decodable, Equatable {
+struct OrgThreadMessage: Codable, Equatable, Identifiable {
+    struct Answer: Codable, Equatable {
         let text: String
         let at: String
         var about: [String]? = nil
@@ -32,17 +32,17 @@ struct OrgThreadMessage: Decodable, Equatable, Identifiable {
     var shared: Bool? = nil
 }
 
-struct OrgThread: Decodable, Equatable, Identifiable {
-    struct Closed: Decodable, Equatable { let how: String; let at: String; let by: String }
-    struct Known: Decodable, Equatable { let through: String }
-    struct Opener: Decodable, Equatable {
+struct OrgThread: Codable, Equatable, Identifiable {
+    struct Closed: Codable, Equatable { let how: String; let at: String; let by: String }
+    struct Known: Codable, Equatable { let through: String }
+    struct Opener: Codable, Equatable {
         let text: String
         let at: String
         let from: String
         var ref: String? = nil
     }
-    struct Snoozed: Decodable, Equatable { let until: String; let at: String }
-    struct Pinned: Decodable, Equatable { let at: String; var by: String? = nil }
+    struct Snoozed: Codable, Equatable { let until: String; let at: String }
+    struct Pinned: Codable, Equatable { let at: String; var by: String? = nil }
 
     let id: String
     let title: String

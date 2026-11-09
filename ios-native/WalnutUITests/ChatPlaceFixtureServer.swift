@@ -34,6 +34,12 @@ final class ChatPlaceFixtureServer {
     /// Extra projects, each named by one task, so a picker's list is longer than a screen
     /// with the "Ask Walnut" project in the middle (a list that has to scroll to its row).
     var extraProjectCount = 0
+    /// Answers a test adds on top (`OrgThreadsFixture`), asked first; nil passes to the routes
+    /// below. Set before `start`.
+    var extraRoute: ((_ method: String, _ path: String) -> (Int, Any)?)?
+    /// How long an answer waits before it goes out, per path (a slow server for one read). Set
+    /// before `start`.
+    var answerDelay: ((_ method: String, _ path: String) -> TimeInterval)?
 
     init() throws {
         let parameters = NWParameters.tcp
@@ -74,6 +80,19 @@ final class ChatPlaceFixtureServer {
         ping = timer
     }
 
+    /// While set, every connection is dropped as it comes and the open streams go: the server is
+    /// out of reach, and back when cleared (a test that goes offline and comes back).
+    private var refusingConnections = false
+
+    func setReachable(_ reachable: Bool) {
+        queue.sync {
+            refusingConnections = !reachable
+            guard !reachable else { return }
+            for connection in held.values { connection.cancel() }
+            held.removeAll()
+        }
+    }
+
     func stop() {
         queue.sync {
             ping?.cancel()
@@ -87,6 +106,10 @@ final class ChatPlaceFixtureServer {
     // MARK: - HTTP
 
     private func accept(_ connection: NWConnection) {
+        if refusingConnections {
+            connection.cancel()
+            return
+        }
         connection.start(queue: queue)
         read(connection, buffer: Data())
     }
@@ -142,7 +165,14 @@ final class ChatPlaceFixtureServer {
         let data = (try? JSONSerialization.data(withJSONObject: body)) ?? Data("{}".utf8)
         let head = "HTTP/1.1 \(status) \(status == 200 ? "OK" : "Not Found")\r\nContent-Type: application/json\r\n"
             + "Content-Length: \(data.count)\r\nConnection: close\r\n\r\n"
-        connection.send(content: Data(head.utf8) + data, completion: .contentProcessed { _ in connection.cancel() })
+        let wait = answerDelay?(method, path) ?? 0
+        guard wait > 0 else {
+            connection.send(content: Data(head.utf8) + data, completion: .contentProcessed { _ in connection.cancel() })
+            return
+        }
+        queue.asyncAfter(deadline: .now() + wait) {
+            connection.send(content: Data(head.utf8) + data, completion: .contentProcessed { _ in connection.cancel() })
+        }
     }
 
     private static func isStream(_ path: String) -> Bool {
@@ -185,6 +215,7 @@ final class ChatPlaceFixtureServer {
     }
 
     private func route(method: String, path: String) -> (Int, Any) {
+        if let extra = extraRoute?(method, path) { return extra }
         let v1 = "/api/v1"
         guard path.hasPrefix(v1) else { return (404, Self.notFound(path)) }
         let p = String(path.dropFirst(v1.count))

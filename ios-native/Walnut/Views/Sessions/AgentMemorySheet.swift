@@ -151,7 +151,7 @@ struct AgentMemorySheet: View {
                 }
             }
             // Only typed words hold the sheet: never while it loads or after a failed read.
-            .interactiveDismissDisabled(saving || (!loading && !loadFailed && dirty))
+            .holdsNavigation(saving || (!loading && !loadFailed && dirty))
             .confirmationDialog("Discard your changes?", isPresented: $confirmDiscard, titleVisibility: .visible) {
                 Button("Discard Changes", role: .destructive) { dismiss() }
                 Button("Keep Editing", role: .cancel) {}

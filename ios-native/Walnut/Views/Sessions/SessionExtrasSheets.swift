@@ -267,7 +267,8 @@ struct SideQuestionsSheet: View {
             }
             .accessibilityIdentifier("session.sideQuestions")
             .task { await load() }
-            .interactiveDismissDisabled(holdsOpen)
+            // A question he is writing is not kept anywhere else: a push waits for it too.
+            .holdsNavigation(holdsOpen || !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
     }
 

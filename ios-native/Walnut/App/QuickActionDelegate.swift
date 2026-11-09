@@ -49,6 +49,23 @@ final class QuickActionDelegate: NSObject, UIApplicationDelegate {
     /// ("-voice-quick-action").
     static let debugLaunchArgument = "voice-quick-action"
 
+    /// DEBUG-only: the launch argument that arms a thread push tap (`ThreadDeepLink`).
+    static let debugThreadPushKey = "walnut.debugThreadPush"
+    /// DEBUG-only: the same tap in the order a real cold launch from a banner gives it: the scene
+    /// connects with the push's response, and the notification delegate's tap comes after the
+    /// first frame, after the launch restore has run (`DebugThreadPushLink.armAfterFirstFrame`).
+    static let debugThreadPushLateKey = "walnut.debugThreadPushLate"
+
+    /// The payload the server sends (src/core/push/thread-push.ts), for "<taskId> <threadId>".
+    static func debugThreadPush(_ raw: String) -> [AnyHashable: Any] {
+        let parts = raw.split(separator: " ", maxSplits: 1).map(String.init)
+        let data: [String: Any] = [
+            "type": ThreadDeepLink.payloadType,
+            "taskId": parts.first ?? "", "threadId": parts.count > 1 ? parts[1] : "",
+        ]
+        return data.merging(["aps": ["alert": ["title": "Thread", "body": ""]], "data": data]) { a, _ in a }
+    }
+
     /// One grep for the whole delivery chain: `voice: quick action delivery`.
     ///
     /// This is the D1 instrumentation, and it exists because the layer with the
@@ -115,6 +132,14 @@ final class QuickActionDelegate: NSObject, UIApplicationDelegate {
             VoiceHistorySync.shared.start()
         }
         #if DEBUG
+        // `-walnut.debugThreadPush "<taskId> <threadId>"`: a tap on a thread push, the same
+        // `handle` call a real tap makes, for the UI tests (they cannot tap a banner on cue).
+        if let raw = UserDefaults.standard.string(forKey: Self.debugThreadPushKey) {
+            ThreadDeepLink.shared.handle(push: Self.debugThreadPush(raw), source: ThreadDeepLink.tapSource)
+        }
+        if let raw = UserDefaults.standard.string(forKey: Self.debugThreadPushLateKey) {
+            DebugThreadPushLink.armAfterFirstFrame(raw)
+        }
         if ProcessInfo.processInfo.arguments.contains(where: { $0.contains(Self.debugLaunchArgument) }) {
             Self.logDelivery(hook: "debug-arg", shortcutType: VoiceQuickAction.shortcutType)
             VoiceQuickAction.shared.handle(shortcutType: VoiceQuickAction.shortcutType, source: "debug-arg")
@@ -206,13 +231,25 @@ final class QuickActionSceneDelegate: NSObject, UIWindowSceneDelegate {
         )
         // A tap on the lock-screen work card that launched the app cold.
         for context in connectionOptions.urlContexts { WorkCardLinkBox.shared.open(context.url) }
+        // A tapped thread push that launched the app: its tap reaches the notification delegate
+        // later (after the first frame, it can be), so the launch is told now not to put back
+        // another chat meanwhile.
+        if let response = connectionOptions.notificationResponse,
+           let thread = ThreadDeepLink.target(fromPush: response.notification.request.content.userInfo) {
+            ThreadDeepLink.shared.expectLaunchTap(thread)
+        }
     }
 
     /// A tap on the lock-screen work card while the app runs (`walnut://work?list=…`). Taken
     /// here because this class, not SwiftUI's, is the scene delegate UIKit messages; RootView's
     /// `onOpenURL` stays as the second path, and opening the same list twice is one sheet.
     func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
-        for context in URLContexts { WorkCardLinkBox.shared.open(context.url) }
+        for context in URLContexts {
+            #if DEBUG
+            if DebugThreadPushLink.open(context.url) { continue }
+            #endif
+            WorkCardLinkBox.shared.open(context.url)
+        }
     }
 
     /// The warm tap: app already running, scene already connected.

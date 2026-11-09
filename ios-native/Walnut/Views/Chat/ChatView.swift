@@ -49,8 +49,6 @@ struct ChatView: View {
     /// is not recorded in the synced Recent list until the user opens it themself.
     @State private var restoredAtLaunch: String?
     @State private var chatPath: [WalnutSession] = []
-    /// The node page a thread push asked for, opened over the node's chat as it appears.
-    @State private var orgPageOnOpen: (sessionId: String, open: OrgNodePageOpen)?
     @State private var orgLink = OrgNodeLink.shared
     /// The launch restore of the pushed session has run (it decides once; after
     /// that the page is the user's).
@@ -62,8 +60,36 @@ struct ChatView: View {
     /// An org node (the CEO or a VP) with no session yet: its first message here starts one.
     @State private var sessionlessOrgNode: OrgNodeStart?
     @State private var orgFirstMessageDraft = ""
-    /// The org node a tap is opening (shown while its lookups run); a newer tap replaces it.
-    @State private var orgOpening: (token: UUID, name: String)?
+    /// The page kept over the restored Org node's chat (`ViewMemory`), put back with it at launch only.
+    @State private var restoredOrgPage: (sessionId: String, tab: OrgNodeTab)?
+    /// The node `orgFirstMessageDraft` was written for: the dialog for that node opens on it again.
+    @State private var orgFirstMessageFor: String?
+    /// The org node a tap is opening; a newer tap, or any navigation of his own, replaces it.
+    @State private var orgOpening: OrgOpening?
+    /// The next change of `openedAskSession` is an open's (a tap, a link, a launch restore), not
+    /// his own: his own (Back, the drawer, a chat he picked) makes an open on its way give way.
+    @State private var presentingOnRequest = false
+    /// The launch restore gave way to an open still on its way: a failed open puts the last place
+    /// back, a successful one is the place.
+    @State private var restoreWaitsForOpen = false
+    /// The tab is out of sight, as the notice's clock reads it (a task cannot read the environment).
+    @State private var noticeOutOfSight = false
+    /// His own moves outside this view's stack (Back from a node's page, its bar), which end an open.
+    @State private var userMoves = OrgUserNavigation.shared
+    /// The Chat tab's node pages on screen, by chat (`presentOnRequest` waits for one to leave).
+    @State private var pages = OrgPagesOnScreen.shared
+    /// The chat an open replaces the one on screen with, once that chat's page has left
+    /// (`OrgChatSwap`): the swap's own state, which only a move of his ends.
+    @State private var swap: OrgChatSwap?
+    /// Where the last swap got to (shown to the UI tests in DEBUG builds).
+    @State private var swapPhaseShown: OrgChatSwap.Phase?
+    /// The chat whose page lifts the screen's curtain once it is up (`ScreenCurtain`).
+    @State private var curtainFor: String?
+    /// A read of a node's threads answered (`OrgReadNews`): the offline notice goes.
+    @State private var readNews = OrgReadNews.shared
+    /// An Org node open that did not happen, shown over whichever page of this tab is in front
+    /// (`OrgOpenNotice`); the chat's own error bar sits under a pushed session.
+    @State private var orgOpenNotice: OrgOpenNotice?
     @State private var firstMessageDraft = ""
     /// Talk to CEO's "Open chat" on an email (`ContentActionButtons`).
     @State private var contentLink = ContentActionLink.shared
@@ -112,7 +138,14 @@ struct ChatView: View {
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            chatStack
+            // A strip above the NavigationStack, so above a pushed chat or Org page too, and the
+            // whole stack moves down for it: it covers no title, no bar and no card on any page of
+            // this tab (2026-11-08 review, round 3: as a safe-area inset outside the stack it sat
+            // over the VP page's title and its Threads, Tasks and Brief switch).
+            VStack(spacing: 0) {
+                orgOverlay
+                chatStack
+            }
                 // Hand the tab bar's room back to the chat as PADDING. An outer
                 // `safeAreaInset` was the first try and measured as a no-op: the
                 // composer is placed by an inset INSIDE this NavigationStack, and
@@ -153,6 +186,37 @@ struct ChatView: View {
             dragOrigin = nil
             setDrawer(open: ChatDrawerGeometry.settlesOpen(progress: drawer, velocityX: 0))
         }
+        .onChange(of: tabHidden, initial: true) { _, hidden in
+            noticeOutOfSight = hidden
+            // He went to another tab: an open still on its way gives way to that.
+            if hidden { userNavigated() }
+        }
+        .onChange(of: userMoves.serial) { _, _ in userNavigated() }
+        // The server answers again: a notice saying it does not goes at once.
+        .onChange(of: connection.online) { _, online in
+            if online { clearOfflineNotice() }
+        }
+        .onChange(of: readNews.answeredAt) { _, _ in clearOfflineNotice() }
+        // The page of the chat being replaced has left: the next chat goes up. Its page is up:
+        // the swap is done.
+        .onChange(of: pages.sessions) { _, _ in
+            if let waiting = curtainFor, pages.has(waiting) { liftCurtain() }
+            guard let swap else { return }
+            switch swap.phase {
+            case .lowering:
+                if let shown = openedAskSession, shown.id != swap.target.id, !pages.has(shown.id) { swapNow() }
+            case .pushing:
+                if pages.has(swap.target.id) { swapEnded(.done) }
+            default:
+                break
+            }
+        }
+        #if DEBUG
+        // Where the last swap stopped, for the UI tests' failure hierarchy.
+        .overlay(alignment: .topLeading) {
+            if let phase = swapPhaseShown { DebugSwapPhaseMarker(phase: phase.rawValue) }
+        }
+        #endif
     }
 
     /// The two page measurements the drawer needs, in one geometry read.
@@ -170,32 +234,20 @@ struct ChatView: View {
                 if let error = chat.errorMessage {
                     ErrorBanner(text: error) { chat.errorMessage = nil }
                 }
-                if let opening = orgOpening {
-                    // The drawer shut on the tap; this says the chat is on its way.
-                    HStack(spacing: 8) {
-                        ProgressView()
-                        Text(verbatim: "Opening \(opening.name)\u{2026}")
-                            .font(.footnote)
-                            .lineLimit(1)
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 6)
-                    .background(Theme.tintSoft)
-                    .accessibilityElement(children: .combine)
-                    .accessibilityIdentifier("chat.orgOpening")
-                }
                 if chat.pendingQuestion {
                     questionBanner
                 }
                 MessageListView()
             }
             .navigationDestination(for: WalnutSession.self) { session in
+                // The node page a thread push asks for reaches this chat through
+                // `OrgNodePageLink`, which the chat and its page observe; a value passed
+                // here does not reach a chat that is already shown.
                 SessionConversationView(
-                    session: session,
-                    orgPageOnOpen: orgPageOnOpen?.sessionId == session.id ? orgPageOnOpen?.open : nil)
-                    // Another session is another page: a launch restore that finds
-                    // the task moved on swaps it in place (`restorePlace`).
+                    session: session, followsOrgLinks: true,
+                    restoredOrgPage: restoredOrgPage?.sessionId == session.id ? restoredOrgPage?.tab : nil)
+                    // Another session is another page (`presentOnRequest` swaps one for another
+                    // by taking the first down before the next goes up).
                     .id(session.id)
                     // A peer of the chat, not a page above it (2026-11-09, the owner: "当然是回去
                     // side bar啊 这俩是平级"): no Back, the sidebar button instead, and the left
@@ -230,11 +282,19 @@ struct ChatView: View {
             .onChange(of: openedAskSession) { _, session in
                 if session?.id != restoredAtLaunch { restoredAtLaunch = nil }
                 ChatPlace.saveOpenSession(session)
+                // A page a push asked for belongs to that open: the same chat opened later
+                // from the drawer opens on the chat itself, not on that thread again.
+                OrgNodePageLink.shared.drop(unlessSession: session?.id)
+                if presentingOnRequest {
+                    presentingOnRequest = false
+                } else {
+                    userNavigated()
+                }
             }
             // The voice Quick Action speaks to the main agent through the chat's own
             // composer, which a pushed session covers: the session steps aside.
             .onChange(of: quickAction.pending != nil) { _, pending in
-                if pending { openedAskSession = nil }
+                if pending, openedAskSession != nil { openedAskSession = nil }
             }
             // After the first activation, like every other launch job: a
             // background prewarm must not open a session (LaunchGate).
@@ -349,6 +409,25 @@ struct ChatView: View {
     /// The chat under it (agent, conversation) is the store's (`ChatStore.initialize`).
     private func restorePlace() {
         guard !placeRestored else { return }
+        // A chat being opened on request (a tapped thread push, Open chat) wins over the one
+        // left open last time, and the saved place stays as it was should that open fail: then
+        // it is put back (`openEnded`). On a cold launch the thread tap may still sit in its own
+        // mailbox (`MainTabView` hands it to `OrgNodeLink` from the same activation queue this
+        // runs in), or not be here at all yet (the scene said a tap launched the app, and the
+        // notification delegate hands it over after the first frame), so both count too.
+        if orgOpening != nil || contentLink.chat != nil || orgLink.pending != nil
+            || ThreadDeepLink.shared.waitsToOpen() {
+            restoreWaitsForOpen = true
+            // A tap the scene announced that never came: the last place comes back after all.
+            Task {
+                try? await Task.sleep(for: .seconds(ThreadDeepLink.launchTapWait + 0.5))
+                guard restoreWaitsForOpen, orgOpening == nil, orgLink.pending == nil,
+                      contentLink.chat == nil, !ThreadDeepLink.shared.waitsToOpen() else { return }
+                restoreWaitsForOpen = false
+                restorePlace()
+            }
+            return
+        }
         placeRestored = true
         guard openedAskSession == nil, let session = ChatPlace.sessionToRestore(
             saved: ChatPlace.savedOpenSession(),
@@ -363,12 +442,12 @@ struct ChatView: View {
             return
         }
         restoredAtLaunch = session.id
-        openedAskSession = session
         // The page he had open over an Org node's chat comes back over it (`ViewMemory`, kept per
         // node while it is open); only here, at the launch restore: a chat opened on purpose
-        // later opens as the chat.
+        // later opens as the chat, and a push or a link of this run wins (`OrgNodePageHost.restore`).
         let keptPage = session.taskId.flatMap { ViewMemory.readOptional("org", "page", id: $0, as: OrgNodeTab.self) }
-        if let keptPage { orgPageOnOpen = (session.id, OrgNodePageOpen(tab: keptPage, threadId: nil)) }
+        restoredOrgPage = keptPage.map { (session.id, $0) }
+        presentOnRequest(session)
         // The task may have moved on to another session since (Main restarts, an
         // ask resumed elsewhere): its current one is where the user's chat is now.
         guard let taskId = session.taskId, !taskId.isEmpty else { return }
@@ -378,7 +457,10 @@ struct ChatView: View {
                 detail = try await WalnutAPI().taskDetail(id: taskId)
             } catch APIError.server(let status, _, _, _, _) where status == 404 {
                 // The task was deleted: nothing to return to, the chat is the place.
-                if openedAskSession?.id == session.id { openedAskSession = nil }
+                if openedAskSession?.id == session.id {
+                    presentingOnRequest = true
+                    openedAskSession = nil
+                }
                 return
             } catch {
                 return
@@ -388,9 +470,195 @@ struct ChatView: View {
             tasks?.noteSessionIds(taskId: taskId, ids: detail.sessionIds ?? [])
             let resolved = await tasks?.resolveSession(id: current, task: tasks?.tasks.first { $0.id == taskId })
             guard let resolved, openedAskSession?.id == session.id else { return }
-            if let keptPage { orgPageOnOpen = (resolved.id, OrgNodePageOpen(tab: keptPage, threadId: nil)) }
+            if let keptPage { restoredOrgPage = (resolved.id, keptPage) }
             restoredAtLaunch = resolved.id
-            openedAskSession = resolved
+            presentOnRequest(resolved.claimed(byTask: taskId, title: detail.title))
+        }
+    }
+
+    /// Push `session` over the chat for an open (a tap, a link, the launch restore), with `page`,
+    /// the node page it asks for, posted for that chat. The chat already on screen is not pushed
+    /// again (a new copy of one session churned the page). Another chat on screen is replaced in
+    /// place, never popped to the chat list first (2026-11-08 review, round 2: a 60 ms pause
+    /// flashed three screens), and without animation. When that chat has its node's page up, the
+    /// page goes down first, at once, and the swap waits until it has left the stack: the stack
+    /// left a page that was still up on screen when the chat under it changed (2026-11-08 fleet
+    /// run). This chat's page then goes up without animation too.
+    private func presentOnRequest(_ session: WalnutSession, page: OrgNodePageLink.Request? = nil) {
+        if (swap?.target ?? openedAskSession)?.id == session.id {
+            if swap != nil {
+                swap?.target = session
+                if let page { swap?.page = page }
+            }
+            // Its page, when up, takes the request itself; the chat pushes one when not.
+            if let page { OrgNodePageLink.shared.post(page) }
+            return
+        }
+        let shown = openedAskSession
+        let replacing = shown != nil
+        if var page {
+            page.instant = replacing
+            OrgNodePageLink.shared.post(page)
+        }
+        if let shown, pages.has(shown.id) {
+            let started = OrgChatSwap(target: session, page: page, from: shown.id)
+            swap = started
+            swapPhaseShown = .lowering
+            // He sees the old page until the next one is up, never the old chat between them.
+            ScreenCurtain.cover()
+            curtainFor = session.id
+            pages.lower(shown.id)
+            watchSwap(started.token)
+            return
+        }
+        swap = nil
+        presentingOnRequest = true
+        if replacing {
+            var instant = Transaction()
+            instant.disablesAnimations = true
+            withTransaction(instant) { openedAskSession = session }
+        } else {
+            openedAskSession = session
+        }
+    }
+
+    /// The swap `token` is checked against what is on screen, not against how it got there: past
+    /// `OrgChatSwap.lowerSeconds` with the old chat still up, it goes ahead (the long way when the
+    /// old page is still up too); past `OrgChatSwap.pushSeconds` with the next chat up but not its
+    /// page, the page is asked for again; with the next chat not up at all, the long way. A move
+    /// of his ends it (`userNavigated`).
+    private func watchSwap(_ token: UUID) {
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(OrgChatSwap.lowerSeconds))
+            guard let swap, swap.token == token, swap.phase == .lowering else { return }
+            if let shown = openedAskSession, shown.id != swap.target.id, pages.has(shown.id) {
+                swapThroughTheChatList()
+            } else {
+                swapNow()
+            }
+        }
+    }
+
+    /// The chat waiting in `swap` replaces the one on screen, without animation.
+    private func swapNow() {
+        guard var current = swap else { return }
+        pages.endLowering()
+        let next = current.target
+        current.phase = .pushing
+        swap = current
+        swapPhaseShown = .pushing
+        if openedAskSession?.id != next.id {
+            presentingOnRequest = true
+            var instant = Transaction()
+            instant.disablesAnimations = true
+            withTransaction(instant) { openedAskSession = next }
+        }
+        if pages.has(next.id) {
+            swapEnded(.done)
+            return
+        }
+        let token = current.token
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(OrgChatSwap.pushSeconds))
+            guard let swap, swap.token == token, swap.phase == .pushing else { return }
+            if pages.has(swap.target.id) {
+                swapEnded(.done)
+            } else if openedAskSession?.id == swap.target.id {
+                // Its chat is up and its page is not: the page is asked for again, once, as a new
+                // request (the same value again would change nothing its chat observes).
+                if let page = swap.page {
+                    var again = OrgNodePageLink.Request(nodeId: page.nodeId, sessionId: page.sessionId, tab: page.tab,
+                                                        threadId: page.threadId, at: Date())
+                    again.instant = true
+                    OrgNodePageLink.shared.post(again)
+                }
+                swapEnded(.done)
+            } else {
+                swapThroughTheChatList()
+            }
+        }
+    }
+
+    private func clearOfflineNotice() {
+        guard orgOpenNotice?.kind == .offline else { return }
+        withAnimation(reduceMotion ? nil : .snappy) { orgOpenNotice = nil }
+    }
+
+    private func liftCurtain() {
+        curtainFor = nil
+        ScreenCurtain.lift()
+    }
+
+    private func swapEnded(_ phase: OrgChatSwap.Phase) {
+        // Done: the next page is up. Dropped: he moved. The long way keeps it until the page is up.
+        if phase != .longWay { liftCurtain() }
+        swap = nil
+        swapPhaseShown = phase
+        pages.endLowering()
+    }
+
+    /// The last resort, for a swap that did not take: the stack goes back to the chat list and
+    /// up again on the next chat, as it did before the swap in place (a frame of the list on the
+    /// way, but the right page at the end, never the old one left up).
+    private func swapThroughTheChatList() {
+        guard let current = swap else { return }
+        let next = current.target
+        let page = current.page
+        swapEnded(.longWay)
+        AppLog.warn("org", "a chat swap did not take; going through the chat list", ["sessionId": next.id])
+        let instant: Transaction = {
+            var t = Transaction()
+            t.disablesAnimations = true
+            return t
+        }()
+        presentingOnRequest = true
+        withTransaction(instant) { openedAskSession = nil }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(120))
+            // He went somewhere meanwhile: nothing goes up over it.
+            guard openedAskSession == nil else { return }
+            // Leaving for the chat list dropped the request for the next chat's page.
+            if var page {
+                page.instant = true
+                OrgNodePageLink.shared.post(page)
+            }
+            presentingOnRequest = true
+            var again = Transaction()
+            again.disablesAnimations = true
+            withTransaction(again) { openedAskSession = next }
+        }
+    }
+
+    /// He went somewhere himself (Back, the drawer, a chat he picked): an open still on its way
+    /// gives way, and where he is now is the place (2026-11-08 review: a slow push read put the
+    /// node's chat over the one he had picked meanwhile).
+    private func userNavigated() {
+        if orgOpening != nil { orgOpening = nil }
+        // The kept page belongs to the launch's restore: a chat he opens or leaves himself later
+        // opens as the chat.
+        if restoredOrgPage != nil { restoredOrgPage = nil }
+        if swap != nil {
+            AppLog.info("org", "chat swap dropped: he moved", ["sessionId": swap?.target.id ?? ""])
+            swapEnded(.dropped)
+        }
+        if restoreWaitsForOpen {
+            restoreWaitsForOpen = false
+            placeRestored = true
+        }
+    }
+
+    /// The open `token` is over: its chat is on screen (`opened`), or it did not happen. A launch
+    /// restore that waited for it puts the last place back when it did not.
+    private func openEnded(_ token: UUID, opened: Bool) {
+        guard orgOpening?.token == token else { return }
+        orgOpening = nil
+        guard restoreWaitsForOpen else { return }
+        if opened {
+            restoreWaitsForOpen = false
+            placeRestored = true
+        } else if orgLink.pending == nil, contentLink.chat == nil, !ThreadDeepLink.shared.waitsToOpen() {
+            restoreWaitsForOpen = false
+            restorePlace()
         }
     }
 
@@ -426,7 +694,8 @@ struct ChatView: View {
         instant.disablesAnimations = true
         withTransaction(instant) { drawer = 0 }
         let token = UUID()
-        orgOpening = (token, row.name)
+        orgOpening = OrgOpening(token: token, name: row.name, shows: true)
+        orgOpenNotice = nil
         // The sidebar opens over a session too: the page under the tap is what a later open
         // replaces, and a change meanwhile is the user moving on.
         let shownAtTap = openedAskSession?.id
@@ -447,60 +716,156 @@ struct ChatView: View {
                 // The user moved on (another tap, another chat) while this was asked: drop it.
                 guard orgOpening?.token == token, openedAskSession?.id == shownAtTap else { return }
                 guard let sessionId = detail.currentSessionId else {
-                    orgFirstMessageDraft = ""
+                    // His first words for this node, from a dialog a push closed, come back.
+                    if orgFirstMessageFor != taskId {
+                        orgFirstMessageDraft = ""
+                        orgFirstMessageFor = taskId
+                    }
                     sessionlessOrgNode = OrgNodeStart(id: taskId, name: row.name, isCEO: row.kind == .ceo)
                     return
                 }
-                await openOrgSession(sessionId, taskId: taskId, name: row.name, token: token)
+                await openOrgSession(sessionId, taskId: taskId, name: row.name, token: token, detail: detail)
             } catch {
                 guard orgOpening?.token == token else { return }
-                chat.errorMessage = Self.orgFailure(row.name, error)
+                orgOpenFailed(Self.orgFailure(row.name, error))
             }
         }
     }
 
-    private func openOrgSession(_ sessionId: String, taskId: String, name: String, token: UUID?) async {
-        if let known = tasks?.sessions.first(where: { $0.id == sessionId }) {
-            openedAskSession = known
-            return
-        }
+    /// Open the node's session `sessionId` over the chat, with `page` (its node page) posted for
+    /// it. `detail`: the node's task as the open just read it, so a session read by id that came
+    /// back without its task still knows whose it is. False when it did not open.
+    @discardableResult
+    private func openOrgSession(
+        _ sessionId: String, taskId: String, name: String, token: UUID?,
+        detail: TaskDetail? = nil, page: OrgNodePageLink.Request? = nil
+    ) async -> Bool {
         let task = tasks?.tasks.first { $0.id == taskId }
-        let session = await tasks?.resolveSession(id: sessionId, task: task)
-        if let token, orgOpening?.token != token { return }
-        if let session {
-            openedAskSession = session
-        } else {
-            chat.errorMessage = "Couldn't open \(name). Try again in a moment."
+        let ownerTitle = task?.title ?? detail?.title
+        if let known = tasks?.sessions.first(where: { $0.id == sessionId }) {
+            if let token, orgOpening?.token != token { return false }
+            presentOnRequest(known.claimed(byTask: taskId, title: ownerTitle), page: page)
+            if orgOpenNotice?.kind == .failure { orgOpenNotice = nil }
+            return true
         }
+        let session = await tasks?.resolveSession(id: sessionId, task: task)
+        if let token, orgOpening?.token != token { return false }
+        if let session {
+            presentOnRequest(session.claimed(byTask: taskId, title: ownerTitle), page: page)
+            if orgOpenNotice?.kind == .failure { orgOpenNotice = nil }
+            return true
+        }
+        orgOpenFailed("Couldn't open \(name). Try again in a moment.")
+        return false
     }
 
     /// An Org node a push or a link named by its task: its current session, with the page it asked
     /// for opened over it. A node with no session yet says so instead.
+    ///
+    /// The chat the phone already holds for the node (the one on screen, else the newest row it
+    /// has, `OrgOpenPlan`) opens at once, offline too, and the node's record is read behind it: a
+    /// newer chat it names replaces it. Only with nothing held does the open wait on the read, and
+    /// then it says so over whatever page is in front.
     private func openLinkedOrgNode() {
         guard let request = orgLink.consume() else { return }
+        // A push is opening a page: a first-message dialog left from an earlier tap, and its
+        // keyboard, close now, before the node is read. An open that fails (no chat, no network)
+        // then shows its notice with nothing left over it.
+        dismissChatPrompts()
         var instant = Transaction()
         instant.disablesAnimations = true
         withTransaction(instant) { drawer = 0 }
-        let name = tasks?.tasks.first { $0.id == request.taskId }.map { TaskMentions.shownTitle($0.title, orgRole: $0.orgRole) } ?? "the chat"
+        let name = nodeName(request)
         let token = UUID()
-        orgOpening = (token, name)
+        let openedAt = Date()
+        orgOpenNotice = nil
+        func page(_ sessionId: String) -> OrgNodePageLink.Request {
+            OrgNodePageLink.Request(nodeId: request.taskId, sessionId: sessionId, tab: request.tab,
+                                    threadId: request.threadId, at: request.requestedAt)
+        }
+        let local = OrgOpenPlan.localSession(
+            taskId: request.taskId, shown: openedAskSession,
+            knownIds: tasks?.knownSessionIds(for: request.taskId), sessions: tasks?.sessions ?? [])
+        orgOpening = OrgOpening(token: token, name: name, shows: local == nil)
+        if let local {
+            // The chat (or its page, when it is up) takes the request from the mailbox it
+            // observes: a chat already on screen is not handed a new value by SwiftUI.
+            presentOnRequest(local.claimed(byTask: request.taskId, title: nil), page: page(local.id))
+            if !connection.online { noteOfflineOpen(name: name, taskId: request.taskId, token: token, openedAt: openedAt) }
+        }
         Task {
-            defer { if orgOpening?.token == token { orgOpening = nil } }
+            var held = local
+            var opened = held != nil
+            defer { openEnded(token, opened: opened) }
+            // A cold launch: the phone's own copy of its sessions may not be read from disk yet
+            // (the app reads it after its connection and chat), so the chat it holds for the node
+            // was not found. It waits for that copy before it gives up on what the phone holds
+            // (2026-11-08 review, round 3: offline at a cold launch the open failed and the last
+            // place came back, though the phone held the VP's chat and threads).
+            if held == nil, let tasks, !tasks.cacheAdopted {
+                _ = await tasks.waitForCacheAdoption(timeout: Self.coldCacheWait)
+                if orgOpening?.token == token, let late = OrgOpenPlan.localSession(
+                    taskId: request.taskId, shown: openedAskSession,
+                    knownIds: tasks.knownSessionIds(for: request.taskId), sessions: tasks.sessions) {
+                    held = late
+                    opened = true
+                    orgOpening = OrgOpening(token: token, name: name, shows: false)
+                    presentOnRequest(late.claimed(byTask: request.taskId, title: nil), page: page(late.id))
+                    if !connection.online { noteOfflineOpen(name: name, taskId: request.taskId, token: token, openedAt: openedAt) }
+                }
+            }
             do {
                 let detail = try await WalnutAPI().taskDetail(id: request.taskId)
                 tasks?.noteSessionIds(taskId: request.taskId, ids: detail.sessionIds ?? [])
                 guard orgOpening?.token == token else { return }
                 guard let sessionId = detail.currentSessionId else {
-                    chat.errorMessage = "\(TaskMentions.shownTitle(detail.title, orgRole: detail.orgRole)) has no chat yet."
+                    if held == nil {
+                        orgOpenFailed("\(TaskMentions.shownTitle(detail.title, orgRole: detail.orgRole)) has no chat yet.")
+                    }
                     return
                 }
-                // Already on this chat, the page sees the new request and opens it itself.
-                orgPageOnOpen = (sessionId, OrgNodePageOpen(tab: request.tab, threadId: request.threadId, at: request.requestedAt))
-                await openOrgSession(sessionId, taskId: request.taskId, name: name, token: token)
+                if held != nil, !OrgOpenPlan.follows(current: sessionId, local: held?.id, shown: openedAskSession?.id) {
+                    return
+                }
+                if await openOrgSession(sessionId, taskId: request.taskId, name: name, token: token,
+                                        detail: detail, page: page(sessionId)) {
+                    opened = true
+                }
             } catch {
                 guard orgOpening?.token == token else { return }
-                chat.errorMessage = Self.orgFailure(name, error)
+                if held == nil {
+                    orgOpenFailed(Self.orgFailure(name, error))
+                } else if case APIError.network = error {
+                    // Opened from what the phone holds, the page stays: it says the server could
+                    // not be reached (the app's own offline line may not have caught up yet).
+                    connection.reportReachability(false, source: "org-open-rest", endpoint: "/api/v1/tasks/:id", error: error)
+                    if orgOpenNotice == nil {
+                        // What the page shows: its threads as last read, or only the notification.
+                        let cached = await OrgThreadsCache.shared.has(request.taskId)
+                        // A read has answered meanwhile: Walnut is reachable, whatever this one met.
+                        guard orgOpenNotice == nil, !readNews.answered(since: openedAt) else { return }
+                        let text = OrgOpenNotice.unreachable(name, cached: cached)
+                        orgOpenNotice = OrgOpenNotice(text: text, kind: .offline)
+                        AccessibilityNotification.Announcement(text).post()
+                    }
+                }
             }
+        }
+    }
+
+    /// How long a cold launch's open waits for the phone's copy of its sessions.
+    static let coldCacheWait: TimeInterval = 20
+
+    /// The page opened from what the phone holds while it is offline: it says so.
+    private func noteOfflineOpen(name: String, taskId: String, token: UUID, openedAt: Date) {
+        Task {
+            let cached = await OrgThreadsCache.shared.has(taskId)
+            guard orgOpening?.token == token || orgOpening == nil, orgOpenNotice == nil,
+                  // A read has answered meanwhile: it is not offline.
+                  !readNews.answered(since: openedAt), !connection.online else { return }
+            let text = OrgOpenNotice.offline(name, cached: cached)
+            orgOpenNotice = OrgOpenNotice(text: text, kind: .offline)
+            AccessibilityNotification.Announcement(text).post()
         }
     }
 
@@ -512,9 +877,11 @@ struct ChatView: View {
         instant.disablesAnimations = true
         withTransaction(instant) { drawer = 0 }
         let token = UUID()
-        orgOpening = (token, "CEO")
+        orgOpening = OrgOpening(token: token, name: "CEO", shows: true)
+        orgOpenNotice = nil
         Task {
-            defer { if orgOpening?.token == token { orgOpening = nil } }
+            var opened = false
+            defer { openEnded(token, opened: opened) }
             var sessionId = request.sessionId
             var taskId = request.taskId ?? ""
             var failure: Error?
@@ -528,11 +895,11 @@ struct ChatView: View {
             }
             guard orgOpening?.token == token else { return }
             guard let sessionId, !sessionId.isEmpty, !taskId.isEmpty else {
-                chat.errorMessage = failure.map { Self.orgFailure("the CEO", $0) }
-                    ?? "The CEO chat is starting. Open it again in a moment."
+                orgOpenFailed(failure.map { Self.orgFailure("the CEO", $0) }
+                    ?? "The CEO chat is starting. Open it again in a moment.")
                 return
             }
-            await openOrgSession(sessionId, taskId: taskId, name: "CEO", token: token)
+            opened = await openOrgSession(sessionId, taskId: taskId, name: "CEO", token: token)
         }
     }
 
@@ -551,11 +918,12 @@ struct ChatView: View {
             let title = started.title, taskId = started.taskId
             guard let sessionId = started.sessionId, !sessionId.isEmpty else {
                 // An engine that names its own session: the next open finds it.
-                chat.errorMessage = "\(node.name) is starting. Open it again in a moment."
+                orgOpenFailed("\(node.name) is starting. Open it again in a moment.")
                 return
             }
             SessionLaunchContext.stash(sessionId: sessionId, message: message)
             let now = ISO8601DateFormatter().string(from: Date())
+            orgOpenNotice = nil
             openedAskSession = WalnutSession(
                 id: sessionId, title: title, taskId: taskId,
                 taskTitle: title, project: nil, host: "",
@@ -569,19 +937,139 @@ struct ChatView: View {
             if let detail = try? await WalnutAPI().taskDetail(id: node.id), let sessionId = detail.currentSessionId {
                 await openOrgSession(sessionId, taskId: node.id, name: node.name, token: nil)
             } else {
-                chat.errorMessage = "\(node.name) already has a chat. Open it again in a moment."
+                orgOpenFailed("\(node.name) already has a chat. Open it again in a moment.")
             }
         } catch {
-            chat.errorMessage = Self.orgFailure(node.name, error)
+            orgOpenFailed(Self.orgFailure(node.name, error))
         }
     }
 
-    /// A companion cannot make an org node or start one (`501`): those run on the Mac.
+    /// A companion cannot make an org node or start one (`501`): those run on the Mac. A task
+    /// that is gone (`404`) says the chat is no longer there, not that the network failed.
     static func orgFailure(_ name: String, _ error: Error) -> String {
-        if case APIError.server(let status, _, _, _, _) = error, status == 501 {
-            return "\(name) can be started only while your Mac is online."
+        OrgOpenNotice.failure(name, error)
+    }
+
+    /// A push is opening a page: the "First message" dialogs of this tab close, and the keyboard
+    /// goes with them. What he typed in them stays: the same dialog opens on it again
+    /// (2026-11-08 review, round 3: a push wiped a VP's first message).
+    private func dismissChatPrompts() {
+        if sessionlessOrgNode != nil { sessionlessOrgNode = nil }
+        if sessionlessAsk != nil { sessionlessAsk = nil }
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
+
+    /// Say an Org node open did not happen, over whatever page of this tab is in front.
+    private func orgOpenFailed(_ text: String) {
+        withAnimation(reduceMotion ? nil : .snappy) { orgOpenNotice = OrgOpenNotice(text: text) }
+        AccessibilityNotification.Announcement(text).post()
+    }
+
+    /// What an Org node open says over whatever page of this tab is in front, under its
+    /// navigation bar: that it did not happen (or happened offline), else that it is on its way
+    /// while it waits on the server.
+    @ViewBuilder
+    private var orgOverlay: some View {
+        Group {
+            if let notice = orgOpenNotice {
+                orgOpenNoticeView(notice)
+            } else if let opening = orgOpening, opening.shows {
+                openingPill(opening)
+            }
         }
-        return "Couldn't reach \(name): \(error.localizedDescription)"
+        .padding(.horizontal, 12)
+        .padding(.vertical, orgOverlayShown ? 6 : 0)
+        .frame(maxWidth: .infinity)
+        // The strip's own ground, up under the status bar, while it shows something.
+        .background {
+            if orgOverlayShown { Color(uiColor: .systemGroupedBackground).ignoresSafeArea(edges: .top) }
+        }
+    }
+
+    private var orgOverlayShown: Bool { orgOpenNotice != nil || orgOpening?.shows == true }
+
+    /// The node a request names, as he knows it: its task's title, else the title a chat of it
+    /// carries, else the thread the notification named.
+    private func nodeName(_ request: OrgNodeLink.Request) -> String {
+        if let task = tasks?.tasks.first(where: { $0.id == request.taskId }) {
+            return TaskMentions.shownTitle(task.title, orgRole: task.orgRole)
+        }
+        if let title = tasks?.sessions.first(where: { $0.taskId == request.taskId })?.taskTitle, !title.isEmpty {
+            return title
+        }
+        if let title = request.title, !title.isEmpty { return "\u{201C}\(title)\u{201D}" }
+        return "the chat"
+    }
+
+    /// The node is being read before its chat can open: says so over the page in front.
+    private func openingPill(_ opening: OrgOpening) -> some View {
+        HStack(spacing: 8) {
+            ProgressView()
+            Text(verbatim: "Opening \(opening.name)\u{2026}")
+                .font(.footnote.weight(.medium))
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(Color(uiColor: .secondarySystemGroupedBackground), in: Capsule())
+        .overlay(Capsule().strokeBorder(Color(uiColor: .separator), lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.15), radius: 8, y: 2)
+        .transition(.move(edge: .top).combined(with: .opacity))
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("chat.orgOpening")
+    }
+
+    /// The failed (or offline) open's notice: closed by its X, by a later open, or after it was in
+    /// view a few seconds (`OrgOpenNoticeClock`, which counts no time under a sheet or with the
+    /// tab out of sight).
+    private func orgOpenNoticeView(_ notice: OrgOpenNotice) -> some View {
+        let offline = notice.kind == .offline
+        return HStack(alignment: .top, spacing: 10) {
+            Image(systemName: offline ? "wifi.slash" : "exclamationmark.triangle.fill")
+                .font(.footnote)
+                .foregroundStyle(offline ? Color.secondary : Theme.danger)
+                .padding(.top, 13)
+                .accessibilityHidden(true)
+            Text(notice.text)
+                .font(.footnote)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            // The full 44 pt square takes the tap (the gate measured 32 pt).
+            Button { withAnimation(reduceMotion ? nil : .snappy) { orgOpenNotice = nil } } label: {
+                Image(systemName: "xmark")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: OrgOpenNotice.closeSide, height: OrgOpenNotice.closeSide)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss")
+            .accessibilityIdentifier("chat.orgOpenNotice.close")
+        }
+        .padding(.leading, 14)
+        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+            .strokeBorder((offline ? Color(uiColor: .separator) : Theme.danger.opacity(0.35)), lineWidth: 1))
+        .shadow(color: .black.opacity(0.15), radius: 8, y: 2)
+        .transition(.move(edge: .top).combined(with: .opacity))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("chat.orgOpenNotice")
+        .task(id: notice.id) {
+            var clock = OrgOpenNoticeClock()
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(500))
+                let visible = UIApplication.shared.applicationState == .active
+                    && !noticeOutOfSight
+                    && ApprovalCenter.shared.presented == nil
+                    && !PresentationLowering.somethingPresented
+                if clock.tick(0.5, visible: visible) { break }
+            }
+            if !Task.isCancelled, orgOpenNotice?.id == notice.id {
+                withAnimation(reduceMotion ? nil : .snappy) { orgOpenNotice = nil }
+            }
+        }
     }
 
     /// Open an ask that has no chat here as its session: the one the tasks store
@@ -700,6 +1188,8 @@ struct ChatView: View {
 
     private func setDrawer(open: Bool) {
         if open {
+            // Going to another chat himself: an open on its way gives way.
+            userNavigated()
             dismissKeyboard()
             // An ask started on the Mac since the last read joins the list as
             // the drawer comes out.
@@ -953,6 +1443,15 @@ struct ThinkingRow: View {
         .accessibilityLabel(label)
         .accessibilityAddTraits(.updatesFrequently)
     }
+}
+
+/// An Org node open on its way. A newer open, or a navigation of his own, replaces it (`token`).
+struct OrgOpening: Equatable {
+    let token: UUID
+    let name: String
+    /// Says "Opening <name>…" over the page in front: only while the open waits on the server
+    /// (a chat the phone already holds opens at once and says nothing).
+    let shows: Bool
 }
 
 /// An org node that has no session yet, waiting for its first message.

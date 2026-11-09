@@ -6,6 +6,9 @@ import SwiftUI
 struct OrgNodeTasksView: View {
     let nodeId: String
     let isMain: Bool
+    /// A row was tapped: the node's page opens the task's session over itself (it owns what is
+    /// over it, so a request it takes can take it down).
+    let onOpenTask: (TaskOpenTarget) -> Void
 
     @Environment(TasksStore.self) private var tasks
     @AppStorage("org.node.tasksMode", store: AppPrefs.defaults) private var modeRaw = OrgNodeTasksModel.Mode.status.rawValue
@@ -27,8 +30,6 @@ struct OrgNodeTasksView: View {
         if let i = keys.firstIndex(of: key) { keys.remove(at: i) } else { keys.append(key) }
         flippedRaw = keys.suffix(60).joined(separator: " ")
     }
-    @State private var target: TaskOpenTarget?
-
     private var mode: OrgNodeTasksModel.Mode { OrgNodeTasksModel.Mode(rawValue: modeRaw) ?? .status }
 
     var body: some View {
@@ -80,11 +81,6 @@ struct OrgNodeTasksView: View {
         }
         .refreshable { await load() }
         .task(id: nodeId) { await load() }
-        .sheet(item: $target) { target in
-            TaskSessionSheet(target: target)
-                .presentationDetents([.large])
-                .presentationDragIndicator(.visible)
-        }
         .accessibilityIdentifier("org.tasks")
     }
 
@@ -119,7 +115,7 @@ struct OrgNodeTasksView: View {
             if isOpen(s) {
                 VStack(spacing: 0) {
                     ForEach(s.rows) { t in
-                        Button { target = TaskOpenTarget(id: t.id, title: t.title) } label: { OrgTaskRow(task: t) }
+                        Button { onOpenTask(TaskOpenTarget(id: t.id, title: t.title)) } label: { OrgTaskRow(task: t) }
                             .buttonStyle(.plain)
                             .accessibilityIdentifier("org.tasks.row")
                         if t.id != s.rows.last?.id { Divider().padding(.leading, 30) }

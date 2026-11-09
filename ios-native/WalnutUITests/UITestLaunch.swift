@@ -49,6 +49,10 @@ enum UITestLaunch {
     static let freshViewsArguments = ["-walnut.uiTestFreshViews", "YES"]
     static let keepViewsArgument = "-walnut.uiTestKeepViews"
 
+    /// Every launch starts with no unsent thread Follow up (`ComposerDrafts`): the drafts
+    /// outlive a launch on purpose, and tests reuse one simulator and the same thread ids.
+    static let freshDraftArguments = ["-walnut.resetThreadFollowUps", "YES"]
+
     /// An app configured to reach nothing, plus whatever this test asked for.
     ///
     /// Not launched yet: a caller may still want to set `launchEnvironment` or take a
@@ -62,7 +66,7 @@ enum UITestLaunch {
         let keepsViews = arguments.contains(keepViewsArgument)
         app.launchArguments =
             (pinsItsOwnServer ? [] : [serverURLArgument, blackholeURL]) + (keepsViews ? [] : freshViewsArguments)
-            + keychainArguments + silentAudioArguments + arguments
+            + freshDraftArguments + keychainArguments + silentAudioArguments + arguments
         return app
     }
 

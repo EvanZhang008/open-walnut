@@ -79,8 +79,9 @@ final class LetterDeepLink {
         return nil
     }
 
-    /// The payload plus every nested envelope it might hide the data in.
-    nonisolated private static func payloadDictionaries(_ userInfo: [AnyHashable: Any]) -> [[String: Any]] {
+    /// The payload plus every nested envelope it might hide the data in. Shared with
+    /// `ThreadDeepLink`, which reads its push the same way.
+    nonisolated static func payloadDictionaries(_ userInfo: [AnyHashable: Any]) -> [[String: Any]] {
         var found: [[String: Any]] = [stringKeyed(userInfo)]
         for key in ["data", "body"] {
             guard let raw = userInfo[key] else { continue }
@@ -175,8 +176,8 @@ final class LetterDeepLink {
         UNUserNotificationCenter.current().setNotificationCategories(ApprovalCenter.categories())
     }
 
-    /// Tiny `UNUserNotificationCenterDelegate` that only routes letters.
-    /// Everything else falls through to the system default.
+    /// Tiny `UNUserNotificationCenterDelegate` that routes approvals, letters and
+    /// threads. Everything else falls through to the system default.
     final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
         static let shared = NotificationRouter()
 
@@ -189,13 +190,15 @@ final class LetterDeepLink {
             await ApprovalCenter.shared.open(id: approvalId)
         }
 
+        // @MainActor on both callbacks: the system calls the completion the async form hides
+        // when the body returns, and UIKit asserts it is on the main thread (a tapped banner
+        // aborted the app in `_updateSnapshotAndStateRestoration…` while it was nonisolated).
+        // `NotificationRoutingGuardTests` fails on a callback here without it.
+        @MainActor
         func userNotificationCenter(
             _ center: UNUserNotificationCenter,
             didReceive response: UNNotificationResponse
         ) async {
-            // Parse HERE (the routing rule is nonisolated and pure), then hop to
-            // the main actor carrying only the id — the payload dictionary is
-            // not Sendable and has no business crossing.
             let userInfo = response.notification.request.content.userInfo
             // An approval a script waits on: a banner button answers it, a tap opens its sheet.
             if let approvalId = ApprovalCenter.approvalId(fromPush: userInfo) {
@@ -203,15 +206,19 @@ final class LetterDeepLink {
                 await Self.routeApproval(action: action, approvalId: approvalId)
                 return
             }
-            guard let letterId = LetterDeepLink.letterId(fromPush: userInfo) else { return }
-            await MainActor.run {
+            if let letterId = LetterDeepLink.letterId(fromPush: userInfo) {
                 LetterDeepLink.shared.arm(letterId: letterId, source: LetterDeepLink.tapSource)
+                return
             }
+            // A thread waiting on him (Main or a VP): its node's chat opens with it on top.
+            guard let thread = ThreadDeepLink.target(fromPush: userInfo) else { return }
+            ThreadDeepLink.shared.arm(thread, source: ThreadDeepLink.tapSource)
         }
 
         /// Show letter banners even while the app is in the foreground: a letter
         /// arriving while the user reads another screen is exactly the case the
         /// inbox badge alone is too quiet for.
+        @MainActor
         func userNotificationCenter(
             _ center: UNUserNotificationCenter,
             willPresent notification: UNNotification

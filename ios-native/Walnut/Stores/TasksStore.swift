@@ -175,6 +175,19 @@ final class TasksStore {
     /// What the phone knows about this task's sessions: nil = never asked.
     func knownSessionIds(for taskId: String) -> [String]? { sessionIdsByTask[taskId] }
 
+    /// The phone's own copy of its tasks and sessions has been read from disk (`initialize`), or
+    /// a read from the server has landed: what the phone holds is what these lists say.
+    private(set) var cacheAdopted = false
+
+    /// Waits until `cacheAdopted`, `timeout` at most. True when it is.
+    func waitForCacheAdoption(timeout: TimeInterval) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !cacheAdopted, sessions.isEmpty, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return cacheAdopted || !sessions.isEmpty
+    }
+
     // MARK: - Focus tier state (GET /focus/tasks + /focus/tiers)
     //
     // The slim task projection carries `pinned` but NOT `focus_tier`, so the
@@ -503,6 +516,7 @@ final class TasksStore {
            isActive, sessions.isEmpty {
             sessions = cachedSessions
         }
+        cacheAdopted = true
         // The folder hierarchy is cached for the same reason the lists are: the board
         // renders from cache before any request finishes, and adopting the tasks
         // without their folders would draw a FLAT board that re-nests a second later.

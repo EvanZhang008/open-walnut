@@ -178,6 +178,18 @@ enum OrgThreadModel {
         return s
     }
 
+    /// The Closed fold's label. The server keeps a closed thread a week, so the fold is "this
+    /// week"; a thread read by its id that closed earlier (a push for an old one) makes it just
+    /// "closed", so the fold never says this week of a thread closed a month ago.
+    static func closedFoldLabel(count: Int, closed: [OrgThread], now: Date) -> String {
+        let weekAgo = now.addingTimeInterval(-7 * 24 * 3600)
+        let older = closed.contains { t in
+            guard let at = t.closed.flatMap({ WalnutTask.parseISO($0.at) }) else { return false }
+            return at < weekAgo
+        }
+        return older ? "\(count) closed" : "\(count) closed this week"
+    }
+
     /// Where a thread went after an action took it off the cards, said once at the top of the
     /// page; nil while it is still on a card.
     static func movedNotice(_ id: String, threads: [OrgThread], now: Date) -> String? {
