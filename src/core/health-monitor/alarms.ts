@@ -27,7 +27,7 @@ export const BUILTIN_ALARMS: readonly AlarmDef[] = [
     description: 'How often the link to a host is lost in an hour. A few a day is a network; this many is a bug or a broken route.',
     metric: 'host.link.lost{host=*}', kind: 'counter', stat: 'sum', periodMin: 60, comparison: '>', threshold: 6,
     evaluationPeriods: 2, datapointsToAlarm: 2, missing: 'notBreaching',
-    unit: 'per hour', action: { then: 'fix-task' },
+    unit: 'per hour', action: { autoFix: 'host-reconnect', then: 'fix-task', graceMin: 60 },
   },
   {
     id: 'eventloop.stall',
@@ -122,6 +122,19 @@ export const BUILTIN_ALARMS: readonly AlarmDef[] = [
   },
 ]
 
+/** The person's own alarms on their own command metrics (custom-metrics.ts, from config). */
+let custom: readonly AlarmDef[] = []
+
+export function setCustomAlarms(defs: readonly AlarmDef[]): void {
+  custom = defs
+}
+
+/** Every alarm with a def of its own: the built-ins, then the person's own. */
+export function allAlarms(): readonly AlarmDef[] {
+  return custom.length ? [...BUILTIN_ALARMS, ...custom] : BUILTIN_ALARMS
+}
+
+/** A built-in's or a custom alarm's def by its id. */
 export function builtinAlarm(id: string): AlarmDef | undefined {
-  return BUILTIN_ALARMS.find((d) => d.id === id)
+  return BUILTIN_ALARMS.find((d) => d.id === id) ?? custom.find((d) => d.id === id)
 }

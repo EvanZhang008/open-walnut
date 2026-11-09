@@ -6,16 +6,23 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { changeAlarm, fetchAlarm, fetchHealth, type AlarmDetail, type AlarmRow, type AlarmState, type HealthView } from '@/api/health-monitor';
+import { changeAlarm, fetchAlarm, fetchHealth, setFixTasks, type AlarmDetail, type AlarmRow, type AlarmState, type FixTasksMode, type HealthView } from '@/api/health-monitor';
 import { useEvent } from '@/hooks/useWebSocket';
 import { taskPath } from '@/utils/task-path';
 import { SettingsNotice, SettingsLoadingRow } from '../SettingsSection';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { SectionCard } from '../inputs/SectionCard';
+import { SegmentedControl } from '../inputs/SegmentedControl';
 import '@/styles/settings-sections-addons.css';
 import '@/styles/health-monitor.css';
 
 export const HEALTH_BLURB = 'Walnut watches its own health every minute: disk, host links, stalls, slow sends, hung sessions, restarts and every kind of warning or error in its logs. An alarm first tries a safe fix, then files one fix task; only what needs you reaches you.';
+
+const FIX_OPTIONS: ReadonlyArray<{ value: FixTasksMode; label: string; testId: string; title: string }> = [
+  { value: 'start', label: 'Start fixing it', testId: 'health-fix-start', title: 'File a fix task and start a session on it (at most 5 a day; sessions cost model usage)' },
+  { value: 'record', label: 'Only file a task', testId: 'health-fix-record', title: 'File a fix task in the Walnut project; nothing runs until someone starts it' },
+  { value: 'off', label: 'Do nothing', testId: 'health-fix-off', title: 'Show the alarm here only' },
+];
 
 const STATE_LABEL: Record<AlarmState, string> = { ALARM: 'Alarm', OK: 'OK', INSUFFICIENT_DATA: 'No data' };
 
@@ -90,6 +97,7 @@ function AlarmDetailView({ id, now, onChanged }: { id: string; now: number; onCh
         <p className="health-detail-by">
           Changed {ago(detail.override.at, now)} by {detail.override.by === 'human' ? 'you' : detail.override.by.startsWith('task:') ? 'an agent' : detail.override.by}
           {detail.override.threshold !== undefined ? ` (threshold ${detail.override.threshold})` : ''}
+          {detail.override.ownerTask ? ': a task owns it, so it hears this alarm instead of a new fix task' : ''}
         </p>
       )}
       <div className="health-detail-actions">
@@ -97,7 +105,7 @@ function AlarmDetailView({ id, now, onChanged }: { id: string; now: number; onCh
           ? <SettingsButton busy={busy} onClick={() => void change({ muted_until: null })}>Unmute</SettingsButton>
           : <SettingsButton busy={busy} onClick={() => void change({ muted_for: '24h' })}>Mute 24 hours</SettingsButton>}
         <SettingsButton busy={busy} onClick={() => void change({ enabled: off })}>{off ? 'Turn on' : 'Turn off'}</SettingsButton>
-        {detail.fixTaskId && <Link className="health-task-link" to={taskPath(detail.fixTaskId)}>Open its fix task</Link>}
+        {detail.fixTaskId && <Link className="health-task-link" to={taskPath(detail.fixTaskId)}>{detail.override?.ownerTask === detail.fixTaskId ? 'Open the task that owns it' : 'Open its fix task'}</Link>}
       </div>
       {detail.actions.length > 0 && (
         <>
@@ -165,6 +173,7 @@ export function HealthMonitorSection() {
               <span className="health-count health-dim">Fix tasks today: {view.fixesToday} of {view.fixesPerDay}</span>
               {!view.actions && <span className="health-count health-dim">Actions are off on this server</span>}
             </div>
+            <FixTasksRow mode={view.fixTasks ?? 'record'} onChanged={() => void load()} />
             <table className="health-table">
               <thead>
                 <tr><th>State</th><th>Alarm</th><th>Now</th><th>Last 24 h</th><th>What Walnut did</th></tr>
@@ -180,6 +189,25 @@ export function HealthMonitorSection() {
         )}
       </div>
     </SectionCard>
+  );
+}
+
+function FixTasksRow({ mode, onChanged }: { mode: FixTasksMode; onChanged: () => void }) {
+  const [shown, setShown] = useState<FixTasksMode>(mode);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => { setShown(mode); }, [mode]);
+  const pick = async (next: FixTasksMode) => {
+    const before = shown;
+    setShown(next);
+    try { await setFixTasks(next); setError(null); onChanged(); } catch (err) { setShown(before); setError(err instanceof Error ? err.message : String(err)); }
+  };
+  return (
+    <div className="health-fix-row" data-testid="health-fix-tasks">
+      <span className="health-fix-label">When an alarm needs a fix</span>
+      <SegmentedControl<FixTasksMode> value={shown} options={FIX_OPTIONS} onChange={(v) => void pick(v)}
+        aria-label="When an alarm needs a fix" />
+      {error && <SettingsNotice kind="error" role="alert">{`Couldn't change it: ${error}`}</SettingsNotice>}
+    </div>
   );
 }
 

@@ -11,7 +11,9 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { MinuteCollector } from '../../../src/core/health-monitor/collect.js'
-import { bootOnSameBuild, FIX_TASKS_PER_DAY, HealthMonitor, type FixTaskInput } from '../../../src/core/health-monitor/engine.js'
+import { bootOnSameBuild, FIX_TASKS_PER_DAY, HealthMonitor, type FixTaskInput, type TellTaskInput } from '../../../src/core/health-monitor/engine.js'
+import { setCustomAlarms } from '../../../src/core/health-monitor/alarms.js'
+import { customAlarmDefs } from '../../../src/core/health-monitor/custom-metrics.js'
 import { DAY_MS, hourStart, signatureId } from '../../../src/core/health-monitor/log-alarms.js'
 import { HealthStore, type ServerEvent } from '../../../src/core/health-monitor/store.js'
 import { BUILTIN_ALARMS } from '../../../src/core/health-monitor/alarms.js'
@@ -28,10 +30,16 @@ interface Harness {
   fixes: FixTaskInput[]
   open: Set<string>
   autoFixes: string[]
+  autoFixLabels: Array<Record<string, string> | undefined>
+  /** Tasks with a live session (a tell reaches them). */
+  live: Set<string>
+  told: TellTaskInput[]
   notified: string[]
   recovered: string[]
   disk: { free: number; usedPct: number }
   mode: { v: 'record' | 'start' | 'off' }
+  /** tellTask throws (a full host, a send that failed). */
+  failTell?: boolean
 }
 
 let dir: string
@@ -66,7 +74,7 @@ async function harness(opts: { pid?: number; exitTrace?: string; now?: number; b
     rssBytes: () => 500 * 1024 * 1024,
   })
   const h: Harness = {
-    clock, collector, disk, fixes: [], open: new Set(), autoFixes: [], notified: [], recovered: [], mode: { v: 'record' },
+    clock, collector, disk, fixes: [], open: new Set(), autoFixes: [], autoFixLabels: [], live: new Set(), told: [], notified: [], recovered: [], mode: { v: 'record' },
     m: undefined as unknown as HealthMonitor,
   }
   let n = 0
@@ -78,15 +86,31 @@ async function harness(opts: { pid?: number; exitTrace?: string; now?: number; b
     now: () => clock.now,
     exitTraceFile: opts.exitTrace ?? null,
     fixMode: async () => h.mode.v,
-    autoFix: async (id) => { h.autoFixes.push(id); return { ok: true, detail: `${id} ran` } },
-    openFixTask: async (input) => { h.fixes.push(input); const id = `task-${++n}`; h.open.add(id); return { taskId: id, started: input.mode === 'start' } },
+    autoFix: async (id, labels) => { h.autoFixes.push(id); h.autoFixLabels.push(labels); return { ok: true, detail: `${id} ran` } },
+    openFixTask: async (input) => {
+      h.fixes.push(input); const id = `task-${++n}`; h.open.add(id)
+      if (input.mode === 'start') h.live.add(id)
+      return { taskId: id, started: input.mode === 'start' }
+    },
     isTaskOpen: async (id) => h.open.has(id),
+    tellTask: async (input) => {
+      h.told.push(input)
+      if (h.failTell) throw new Error('409 hosts_full')
+      if (!h.open.has(input.taskId)) return { delivered: false, started: false, detail: 'the task is closed' }
+      if (h.live.has(input.taskId)) return { delivered: true, started: false, detail: `told its task ${input.taskId}` }
+      if (input.start) { h.live.add(input.taskId); return { delivered: false, started: true, detail: `started a session on its task ${input.taskId}` } }
+      return { delivered: false, started: false, detail: 'no running session' }
+    },
     notify: (id) => { h.notified.push(id) },
     recover: (id) => { h.recovered.push(id) },
   })
   await h.m.start({ clock: false })
   harnesses.push(h)
   return h
+}
+
+function collectorHung(h: Harness, n: number): void {
+  h.collector.setGauge('session.hung', n)
 }
 
 async function minutes(h: Harness, n: number, each?: (i: number) => void): Promise<void> {
@@ -100,10 +124,15 @@ async function minutes(h: Harness, n: number, each?: (i: number) => void): Promi
 describe('health monitor engine', () => {
   it('a host link that keeps dropping opens ONE fix task, reused while it is open', async () => {
     const h = await harness()
-    // 10 drops an hour for two hours
+    // 10 drops an hour for two hours: the reconnect runs first, for that host
     await minutes(h, 121, (i) => { if (i % 6 === 0) count('host.link.lost', 1, { host: 'devbox' }) })
     const a = h.m.alarms['host.link{host=devbox}']
     expect(a?.state).toBe('ALARM')
+    expect(h.autoFixes).toEqual(['host-reconnect'])
+    expect(h.autoFixLabels).toEqual([{ host: 'devbox' }])
+    expect(h.fixes).toHaveLength(0)
+    // still dropping after its hour of grace: one fix task
+    await minutes(h, 61, (i) => { if (i % 6 === 0) count('host.link.lost', 1, { host: 'devbox' }) })
     expect(h.fixes).toHaveLength(1)
     expect(h.fixes[0].title).toContain('devbox')
     expect(h.fixes[0].brief).toContain('host.link.lost{host=devbox}')
@@ -111,7 +140,7 @@ describe('health monitor engine', () => {
     // calm for two hours: OK; then drops again: the open task is reused, no second one
     await minutes(h, 125)
     expect(h.m.alarms['host.link{host=devbox}'].state).toBe('OK')
-    await minutes(h, 125, (i) => { if (i % 6 === 0) count('host.link.lost', 1, { host: 'devbox' }) })
+    await minutes(h, 125 + 61, (i) => { if (i % 6 === 0) count('host.link.lost', 1, { host: 'devbox' }) })
     expect(h.m.alarms['host.link{host=devbox}'].state).toBe('ALARM')
     expect(h.fixes).toHaveLength(1)
     expect(h.m.alarms['host.link{host=devbox}'].actions.find((x) => x.kind === 'fix-task')?.detail).toContain('still open')
@@ -181,7 +210,8 @@ describe('health monitor engine', () => {
   it('at most FIX_TASKS_PER_DAY new fix tasks a day; the rest wait and say so', async () => {
     const h = await harness()
     const hosts = Array.from({ length: FIX_TASKS_PER_DAY + 2 }, (_, i) => `h${i}`)
-    await minutes(h, 121, (i) => { if (i % 5 === 0) for (const host of hosts) count('host.link.lost', 1, { host }) })
+    // past each host's reconnect and its hour of grace
+    await minutes(h, 182, (i) => { if (i % 5 === 0) for (const host of hosts) count('host.link.lost', 1, { host }) })
     expect(h.fixes).toHaveLength(FIX_TASKS_PER_DAY)
     const waiting = hosts.map((x) => h.m.alarms[`host.link{host=${x}}`]).filter((a) => a.actions.some((x) => x.kind === 'fix-task' && !x.ok))
     expect(waiting).toHaveLength(2)
@@ -191,7 +221,7 @@ describe('health monitor engine', () => {
   it('fix tasks off: the alarm shows, nothing is filed; turned back on, the alarm still ringing gets its task', async () => {
     const h = await harness()
     h.mode.v = 'off'
-    await minutes(h, 121, (i) => { if (i % 5 === 0) count('host.link.lost', 1, { host: 'x' }) })
+    await minutes(h, 182, (i) => { if (i % 5 === 0) count('host.link.lost', 1, { host: 'x' }) })
     expect(h.m.alarms['host.link{host=x}'].state).toBe('ALARM')
     expect(h.fixes).toHaveLength(0)
     h.mode.v = 'record'
@@ -252,6 +282,114 @@ describe('health monitor engine', () => {
     await minutes(h2, 1, () => { for (let k = 0; k < 3; k++) logger.warn('gateway relay refused') })
     expect(h2.m.alarms[id].state).toBe('ALARM')
     expect(h2.m.alarms[id].value).toBeGreaterThanOrEqual(60)
+  })
+
+  it('a task that owns the problem hears the alarm once, instead of a new fix task; the user still gets the disk card', async () => {
+    const h = await harness()
+    h.open.add('owner-1'); h.live.add('owner-1')
+    h.m.setOverride('disk.free', { ownerTask: 'owner-1' }, 'task:lead')
+    h.m.setOverride('session.hung', { ownerTask: 'owner-1' }, 'task:lead')
+    h.disk.free = 20
+    h.disk.usedPct = 96
+    collectorHung(h, 4)
+    await minutes(h, 50)
+    expect(h.m.alarms['disk.free'].state).toBe('ALARM')
+    expect(h.m.alarms['session.hung'].state).toBe('ALARM')
+    expect(h.fixes).toHaveLength(0)
+    const toOwner = h.told.filter((t) => t.taskId === 'owner-1')
+    expect(toOwner.map((t) => t.text.match(/"([^"]+)" \(([^)]+)\)/)?.[2])).toEqual(['session.hung', 'disk.free'])
+    expect(toOwner[0].text).toContain('You own this problem')
+    expect(h.notified).toEqual(['disk.free'])
+    expect(h.m.alarms['session.hung'].fixTaskId).toBe('owner-1')
+    // its owner closed: the next episode files a fix task the usual way
+    h.open.delete('owner-1')
+    collectorHung(h, 0)
+    await minutes(h, 3)
+    collectorHung(h, 4)
+    await minutes(h, 20)
+    expect(h.fixes.map((f) => f.alarmId)).toEqual(['session.hung'])
+  })
+
+  it('a fix task filed while fix tasks only recorded is started once they start; told again on the next episode; told when OK', async () => {
+    const h = await harness()
+    collectorHung(h, 4)
+    await minutes(h, 16)
+    expect(h.fixes).toHaveLength(1)
+    expect(h.told).toHaveLength(0)
+    h.mode.v = 'start'
+    await minutes(h, 2)
+    expect(h.told.map((t) => [t.taskId, t.start])).toEqual([['task-1', true]])
+    expect(h.m.alarms['session.hung'].actions.find((a) => a.kind === 'fix-task')).toMatchObject({ started: true, taskId: 'task-1' })
+    await minutes(h, 5)
+    expect(h.told).toHaveLength(1)
+    // back to OK: the task working on it hears so, and no session is started for that
+    collectorHung(h, 0)
+    await minutes(h, 2)
+    expect(h.m.alarms['session.hung'].state).toBe('OK')
+    expect(h.told.at(-1)).toMatchObject({ taskId: 'task-1', start: false })
+    expect(h.told.at(-1)!.text).toContain('back to OK')
+    // a new episode an hour later: the same task, told in its session, no new one
+    await minutes(h, 60)
+    collectorHung(h, 4)
+    await minutes(h, 16)
+    expect(h.fixes).toHaveLength(1)
+    expect(h.told.at(-1)).toMatchObject({ taskId: 'task-1' })
+    expect(h.told.at(-1)!.text).toContain('in ALARM again')
+  })
+
+  it('a start that fails is tried again after half an hour, never every minute', async () => {
+    const h = await harness()
+    collectorHung(h, 4)
+    await minutes(h, 16)
+    h.mode.v = 'start'
+    h.failTell = true
+    await minutes(h, 20)
+    expect(h.told).toHaveLength(1)
+    expect(h.m.alarms['session.hung'].actions.find((a) => a.kind === 'fix-task')).toMatchObject({ ok: false, taskId: 'task-1' })
+    h.failTell = false
+    await minutes(h, 12)
+    expect(h.told).toHaveLength(2)
+    expect(h.m.alarms['session.hung'].actions.find((a) => a.kind === 'fix-task')).toMatchObject({ ok: true, started: true })
+    expect(h.fixes).toHaveLength(1)
+  })
+
+  it('an alarm that cleared less than an hour ago must cross for one more period before it rings again', async () => {
+    const h = await harness()
+    const ringAfter = async (): Promise<number> => {
+      for (let i = 1; i <= 30; i++) { await minutes(h, 1); if (h.m.alarms['status.mismatch']?.state === 'ALARM') return i }
+      return -1
+    }
+    h.m.setGauge('status.mismatches', 3)
+    const first = await ringAfter()
+    expect(first).toBeGreaterThan(0)
+    h.m.setGauge('status.mismatches', 0)
+    for (let i = 0; i < 10 && h.m.alarms['status.mismatch'].state === 'ALARM'; i++) await minutes(h, 1)
+    expect(h.m.alarms['status.mismatch'].state).toBe('OK')
+    h.m.setGauge('status.mismatches', 3)
+    const again = await ringAfter()
+    expect(again).toBeGreaterThanOrEqual(first + 5)
+    // long after the last clear, it rings as fast as the first time
+    h.m.setGauge('status.mismatches', 0)
+    for (let i = 0; i < 10 && h.m.alarms['status.mismatch'].state === 'ALARM'; i++) await minutes(h, 1)
+    await minutes(h, 61)
+    h.m.setGauge('status.mismatches', 3)
+    expect(await ringAfter()).toBe(first)
+  })
+
+  it("the person's own metric with an alarm rings and files its fix task; taken out of the config, it goes", async () => {
+    const h = await harness()
+    setCustomAlarms(customAlarmDefs([{ id: 'deploy-wait', title: 'Deploy queue wait', command: 'true', unit: 'min', alarm: { comparison: '>', threshold: 60, minutes: 5 } }]))
+    try {
+      h.m.setGauge('custom.deploy-wait', 90)
+      await minutes(h, 7)
+      expect(h.m.alarms['custom.deploy-wait'].state).toBe('ALARM')
+      expect(h.fixes.map((f) => f.title)).toEqual(['Fix: Deploy queue wait'])
+      setCustomAlarms([])
+      await minutes(h, 1)
+      expect(h.m.alarms['custom.deploy-wait']).toBeUndefined()
+    } finally {
+      setCustomAlarms([])
+    }
   })
 
   it('restarts and cut-off shutdowns of THIS server are counted from the exit trace; other pids are not', async () => {

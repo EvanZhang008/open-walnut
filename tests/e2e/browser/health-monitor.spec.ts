@@ -70,4 +70,22 @@ test.describe('Walnut Health', () => {
     await expect(section.getByTestId('health-detail')).toContainText('filed a fix task')
     expect(errors).toEqual([])
   })
+
+  test('the fix-task switch shows the saved choice and changes it on the server, both ways', async ({ page }) => {
+    await openHealth(page)
+    const row = page.getByTestId('health-fix-tasks')
+    await expect(row).toContainText('When an alarm needs a fix')
+    const read = async () => (await (await page.request.get('/api/v1/health-monitor')).json()).fixTasks
+    const start = row.getByTestId('health-fix-start')
+    const record = row.getByTestId('health-fix-record')
+    await start.click()
+    await expect.poll(read).toBe('start')
+    await expect(start.locator('input')).toBeChecked()
+    // the choice survives a fresh read of the page
+    await page.getByRole('button', { name: 'Refresh' }).click()
+    await expect(start.locator('input')).toBeChecked()
+    await record.click()
+    await expect.poll(read).toBe('record')
+    await expect(record.locator('input')).toBeChecked()
+  })
 })

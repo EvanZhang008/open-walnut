@@ -16,6 +16,8 @@
  * Pure: hour buckets in, verdicts out.
  */
 
+import type { AlarmDef } from './types.js'
+
 export const HOUR_MS = 3_600_000
 export const DAY_MS = 24 * HOUR_MS
 
@@ -114,4 +116,18 @@ export function signatureId(sig: string): string {
   let h = 5381
   for (let i = 0; i < sig.length; i++) h = ((h << 5) + h + sig.charCodeAt(i)) | 0
   return (h >>> 0).toString(36)
+}
+
+/** A log alarm's def, made per kind of line. */
+export function logDef(kind: 'spike' | 'chronic', sig: string, level: 'warn' | 'error'): AlarmDef {
+  return {
+    id: `log.${kind}`,
+    title: kind === 'spike' ? 'Log line far above its normal' : 'Log line high every day',
+    description: kind === 'spike'
+      ? 'This kind of warn/error line came at least 5 times as often as on the same hour of the last week.'
+      : `This kind of ${level} line came at least ${level === 'error' ? 200 : 1000} times on each of the last 3 days.`,
+    metric: sig, kind: 'counter', stat: 'sum', periodMin: kind === 'spike' ? 60 : 1440,
+    comparison: '>=', threshold: 0, evaluationPeriods: 1, datapointsToAlarm: 1, missing: 'missing',
+    unit: kind === 'spike' ? 'per hour' : 'per day', action: { then: 'fix-task' },
+  }
 }

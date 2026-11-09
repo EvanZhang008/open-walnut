@@ -1685,7 +1685,8 @@ export interface Config {
    *  `record` (default): it files one "fix Walnut" task with the evidence, no session runs;
    *  `start`: it also starts that task's session (one AI run per alarm episode, at most
    *  5 new ones a day); `off`: it only shows on the Health page. */
-  health_monitor?: { fix_tasks?: 'record' | 'start' | 'off' };
+  /** Walnut's health monitor (core/health-monitor/): what an alarm does, and the person's own command metrics. */
+  health_monitor?: { fix_tasks?: 'record' | 'start' | 'off'; metrics?: unknown[] };
   /** Per-host maximum concurrent CLI session limits.
    *  'local' key = sessions without a host.
    *  Other keys = host aliases from config.hosts (e.g. 'devbox', 'nas-server').

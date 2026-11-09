@@ -116,7 +116,7 @@ describe('evaluateAlarm', () => {
       expect(d.datapointsToAlarm).toBeLessThanOrEqual(d.evaluationPeriods)
       expect(d.periodMin).toBeGreaterThanOrEqual(1)
       expect(d.description.length).toBeGreaterThan(20)
-      if (d.action.autoFix) expect(['disk-sweep', 'status-recheck']).toContain(d.action.autoFix)
+      if (d.action.autoFix) expect(['disk-sweep', 'status-recheck', 'host-reconnect']).toContain(d.action.autoFix)
     }
   })
 })

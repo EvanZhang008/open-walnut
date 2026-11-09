@@ -59,7 +59,10 @@ export function writeHealthMonitorSeed(home: string, now: number): void {
     alarms: {
       [linkId]: alarm(linkId, 'host.link', {
         labels: { host: HEALTH_HOST }, value: 12,
-        actions: [{ at: since + MIN, kind: 'fix-task', ok: true, detail: 'filed a fix task' }],
+        actions: [
+          { at: since, kind: 'auto-fix', ok: true, detail: `asked ${HEALTH_HOST} to reconnect now; still dialling` },
+          { at: since + 61 * MIN, kind: 'fix-task', ok: true, detail: 'filed a fix task' },
+        ],
       }),
       'disk.free': alarm('disk.free', 'disk.free', {
         value: 24,

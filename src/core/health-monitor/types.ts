@@ -70,6 +70,8 @@ export interface AlarmDef {
   also?: { metric: string; stat: Statistic; comparison: Comparison; threshold: number }
   unit: string
   action: AlarmAction
+  /** A task that owns this problem from the start (a custom alarm's config); an override wins. */
+  ownerTask?: string
 }
 
 export interface AlarmHistoryEntry {
@@ -88,6 +90,8 @@ export interface AlarmActionRecord {
   ok: boolean
   detail: string
   taskId?: string
+  /** A fix task a session works on (started, or told in its running session). */
+  started?: boolean
 }
 
 export interface AlarmInstanceState {
@@ -107,6 +111,10 @@ export interface AlarmInstanceState {
   fixTaskId?: string
   /** The signature a log alarm watches, for display. */
   signature?: string
+  /** When it last went from ALARM back to OK (a quick return must cross one more period). */
+  clearedAt?: number
+  /** A crossing held back because it cleared less than an hour ago: when it began. */
+  heldSince?: number
 }
 
 /** A person's or an agent's change to a built-in alarm. */
@@ -115,6 +123,8 @@ export interface AlarmOverride {
   enabled?: boolean
   /** Epoch ms until which actions are held (the alarm still evaluates). */
   mutedUntil?: number
+  /** A task that owns this problem: it is told instead of a new fix task being filed. */
+  ownerTask?: string
   /** `human` or `task:<id>`. */
   by: string
   at: number

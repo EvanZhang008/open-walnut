@@ -2,12 +2,14 @@
  * Walnut's own health alarms (server: src/core/health-monitor/, routes
  * src/web/routes/health-monitor-v1.ts), read by Settings > Walnut Health.
  */
-import { apiGet, apiPatch } from './client';
+import { apiGet, apiPatch, apiPut } from './client';
 
 export type AlarmState = 'OK' | 'ALARM' | 'INSUFFICIENT_DATA';
 
-export interface AlarmAction { at: number; kind: 'auto-fix' | 'fix-task' | 'notify'; ok: boolean; detail: string; taskId?: string }
-export interface AlarmOverride { threshold?: number; enabled?: boolean; mutedUntil?: number; by: string; at: number }
+export interface AlarmAction { at: number; kind: 'auto-fix' | 'fix-task' | 'notify'; ok: boolean; detail: string; taskId?: string; started?: boolean }
+export interface AlarmOverride { threshold?: number; enabled?: boolean; mutedUntil?: number; ownerTask?: string; by: string; at: number }
+
+export type FixTasksMode = 'record' | 'start' | 'off';
 
 export interface AlarmRow {
   id: string;
@@ -34,6 +36,8 @@ export interface HealthView {
   counts: Record<AlarmState, number>;
   fixesToday: number;
   fixesPerDay: number;
+  /** What an alarm that needs a fix does (config health_monitor.fix_tasks). */
+  fixTasks?: FixTasksMode;
   alarms: AlarmRow[];
 }
 
@@ -53,4 +57,8 @@ export function fetchAlarm(id: string): Promise<AlarmDetail> {
 
 export function changeAlarm(id: string, body: { enabled?: boolean; muted_for?: string; muted_until?: string | null; threshold?: number | null }): Promise<unknown> {
   return apiPatch(`/api/v1/health-monitor/alarms/${encodeURIComponent(id)}`, body);
+}
+
+export function setFixTasks(mode: FixTasksMode): Promise<{ fixTasks: FixTasksMode }> {
+  return apiPut('/api/v1/health-monitor/settings', { fix_tasks: mode });
 }

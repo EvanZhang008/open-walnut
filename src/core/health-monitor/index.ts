@@ -11,7 +11,8 @@
 import path from 'node:path'
 import { IS_EPHEMERAL, WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
-import { BUILTIN_ALARMS, builtinAlarm } from './alarms.js'
+import { allAlarms, BUILTIN_ALARMS, builtinAlarm, setCustomAlarms } from './alarms.js'
+import { CustomMetricRunner, customAlarmDefs, readCustomMetrics } from './custom-metrics.js'
 import { MinuteCollector } from './collect.js'
 import { fillPattern, MINUTE_MS } from './evaluate.js'
 import { effectiveOverride, FIX_TASKS_PER_DAY, HealthMonitor, overrideHolds, type FixMode } from './engine.js'
@@ -71,7 +72,7 @@ export async function startHealthMonitor(opts: StartOptions): Promise<HealthMoni
     const v = (await getConfig()).health_monitor?.fix_tasks
     return v === 'start' || v === 'off' ? v : 'record'
   }
-  const { openFixTask, isTaskOpen } = await import('./fix-task.js')
+  const { openFixTask, isTaskOpen, tellTask } = await import('./fix-task.js')
   const { runAutoFix } = await import('./auto-fix.js')
   const monitor = new HealthMonitor({
     store: new HealthStore(path.join(dataDir, 'local', 'health-monitor')),
@@ -80,9 +81,10 @@ export async function startHealthMonitor(opts: StartOptions): Promise<HealthMoni
     build: await runningBuildKey(),
     exitTraceFile: opts.exitTraceFile,
     fixMode,
-    autoFix: async (id) => (actionsOn ? runAutoFix(id, dataDir) : { ok: false, detail: 'actions are off on an isolated server' }),
+    autoFix: async (id, labels) => (actionsOn ? runAutoFix(id, dataDir, labels) : { ok: false, detail: 'actions are off on an isolated server' }),
     openFixTask,
     isTaskOpen,
+    tellTask: async (input) => (actionsOn ? tellTask(input) : { delivered: false, started: false, detail: 'actions are off on an isolated server' }),
     notify: (id, title, body) => { if (actionsOn) opts.notify(id, title, body) },
     recover: (id) => { if (actionsOn) opts.recover(id) },
     onChange: debounce(opts.onChange, 1_000),
@@ -90,11 +92,39 @@ export async function startHealthMonitor(opts: StartOptions): Promise<HealthMoni
   await monitor.start()
   setGaugeSink((k, v) => monitor.setGauge(k, v))
   running = monitor
+  startCustomMetrics(monitor)
   log.obs.info('health monitor started', { actions: actionsOn, alarms: BUILTIN_ALARMS.length })
   return monitor
 }
 
+let customTimer: ReturnType<typeof setInterval> | null = null
+
+/** The person's own command metrics (custom-metrics.ts): their alarms show everywhere, their commands run only where actions are on. */
+function startCustomMetrics(monitor: HealthMonitor): void {
+  const runner = new CustomMetricRunner((k, v) => monitor.setGauge(k, v))
+  let seen = ''
+  const tick = async (): Promise<void> => {
+    try {
+      const { getConfig } = await import('../config-manager.js')
+      const raw = (await getConfig()).health_monitor?.metrics
+      const key = JSON.stringify(raw ?? null)
+      const list = readCustomMetrics(raw, key !== seen)
+      seen = key
+      setCustomAlarms(customAlarmDefs(list))
+      if (actionsOn && list.length) void runner.tick(list, Date.now())
+    } catch (err) {
+      log.obs.warn('health monitor: custom metrics not read', { error: err instanceof Error ? err.message : String(err) })
+    }
+  }
+  void tick()
+  customTimer = setInterval(() => { void tick() }, MINUTE_MS)
+  customTimer.unref?.()
+}
+
 export function stopHealthMonitor(): void {
+  if (customTimer) clearInterval(customTimer)
+  customTimer = null
+  setCustomAlarms([])
   setGaugeSink(null)
   running?.stop()
   running = null
@@ -147,7 +177,7 @@ function defOf(inst: AlarmInstanceState): AlarmDef | null {
 function instancesWithPending(m: HealthMonitor): AlarmInstanceState[] {
   const out = Object.values(m.alarms)
   const now = m.now()
-  for (const def of BUILTIN_ALARMS) {
+  for (const def of allAlarms()) {
     if (def.metric.includes('=*') || m.alarms[def.id]) continue
     out.push({ id: def.id, defId: def.id, state: 'INSUFFICIENT_DATA', since: now, value: null, evaluatedAt: now, history: [], actions: [] })
   }
@@ -254,4 +284,25 @@ function debounce(fn: () => void, ms: number): () => void {
     t = setTimeout(() => { t = null; fn() }, ms)
     t.unref?.()
   }
+}
+
+/**
+ * Walnut's own health in one line, for Main's Brief (brief_read's `health`): the
+ * alarms in ALARM, each with its fix task (a line under Working) or the card it
+ * gave the user (under Needs you). Null when the monitor does not run here.
+ */
+export function healthBriefLine(): { line: string; alarms: Array<{ id: string; title: string; now: string; fixTaskId?: string; toldUser: boolean }> } | null {
+  const m = running
+  if (!m) return null
+  const alarms = healthView(m).alarms.filter((a) => a.state === 'ALARM').map((a) => ({
+    id: a.id,
+    title: a.signature ? `${a.title}: ${a.signature}` : a.labels?.host ? `${a.title} (${a.labels.host})` : a.title,
+    now: a.value === null ? 'no value' : `${a.value} ${a.unit}`.trim(),
+    ...(a.fixTaskId ? { fixTaskId: a.fixTaskId } : {}),
+    toldUser: a.actions.some((x) => x.kind === 'notify'),
+  }))
+  const line = alarms.length
+    ? `Walnut health: ${alarms.length} in alarm: ${alarms.map((a) => `${a.title} (${a.now})`).join('; ')}. Details on Settings > Walnut Health.`
+    : 'Walnut health: no alarm is ringing.'
+  return { line, alarms }
 }

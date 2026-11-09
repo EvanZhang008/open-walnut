@@ -1115,19 +1115,21 @@ defineOp({
       : ((await call('GET', '/me')) as { task?: { id?: string } } | undefined)?.task?.id
     if (!id) throw new Error('No task of your own: pass task.')
     const body = await call('GET', `/tasks/${encodeURIComponent(id)}/brief${args.compact === true ? '?compact=1' : ''}`) as
-      { title?: string; compact?: boolean; brief?: { text?: string; at: string } | null; fresh?: { stale?: boolean; words?: string } | null; issues?: string[] }
+      { title?: string; compact?: boolean; brief?: { text?: string; at: string } | null; fresh?: { stale?: boolean; words?: string } | null; issues?: string[]; health?: { line?: string; alarms?: unknown[] } }
+    // Main's: Walnut's own alarms ringing now (core/health-monitor), one line each in the letter.
+    const health = body.health?.alarms?.length ? ` ${body.health.line}` : ''
     if (body.compact) {
       const fix = body.issues?.length ? ` and fix the ${body.issues.length} line(s) in issues` : ''
       return withOutcome(
         body,
-        `Brief of "${body.title}", written ${body.brief?.at}: ${body.fresh?.stale ? body.fresh.words : 'nothing moved since'}.`,
+        `Brief of "${body.title}", written ${body.brief?.at}: ${body.fresh?.stale ? body.fresh.words : 'nothing moved since'}.${health}`,
         body.fresh?.stale ? `Update the lines that moved with brief_write edits (old: the line given with each move)${fix}.`
           : fix ? `Fix the ${body.issues!.length} line(s) in issues with brief_write.` : 'No further action is required.',
       )
     }
     return withOutcome(
       body,
-      body.brief ? `Brief of "${body.title}", written ${body.brief.at}${body.fresh?.words ? `: ${body.fresh.words}` : ''}.` : `"${body.title}" has no Brief yet.`,
+      (body.brief ? `Brief of "${body.title}", written ${body.brief.at}${body.fresh?.words ? `: ${body.fresh.words}` : ''}.` : `"${body.title}" has no Brief yet.`) + health,
       body.fresh?.stale || !body.brief ? 'Update it with brief_write (edits for a few lines, content for the whole letter), from sections.' : 'No further action is required.',
     )
   },

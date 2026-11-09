@@ -75,6 +75,11 @@ briefV1Router.get('/tasks/:id/brief', route(async (req, res) => {
   // The rules' own wording (no live lists, no rule breaks, which compact sends on their own):
   // what a session that read them once already holds.
   const wording = sections ? briefRules({ ...ruleOpts, issues: undefined }) : ''
+  // Main's Brief carries Walnut's own health beside its lists (core/health-monitor), never in the
+  // rules' wording, which would then change every minute and be sent again.
+  const health = task.org_role === 'main'
+    ? (await import('../../core/health-monitor/index.js')).healthBriefLine()
+    : null
   // compact: what moved and the sections it touched; a node with no letter yet reads it all.
   if (wantsCompact(req.query.compact) && task.brief && sections) {
     const due = rulesDue(sid, task.id, wording)
@@ -87,6 +92,7 @@ briefV1Router.get('/tasks/:id/brief', route(async (req, res) => {
         return t ? `- <task-ref id="${t.id}" label="${t.title.replace(/\s+/g, ' ').trim().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')}"/>: ${liveWords(t)}` : undefined
       }),
       ...(issues ? { issues } : {}),
+      ...(health ? { health } : {}),
       ...(due ? { rules: briefRules({ ...ruleOpts, sections }) } : {}),
     })
     return
@@ -97,6 +103,7 @@ briefV1Router.get('/tasks/:id/brief', route(async (req, res) => {
     chars: task.brief?.text.length ?? 0, own_chars: briefOwnChars(task.brief?.text ?? '', briefWalnutLines(task.brief, task, tasks)), limit: BRIEF_MAX_CHARS,
     fresh,
     sections,
+    ...(health ? { health } : {}),
     rules: sections ? briefRules({ ...ruleOpts, sections }) : null,
   })
 }))
