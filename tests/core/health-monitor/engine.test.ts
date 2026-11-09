@@ -43,7 +43,6 @@ beforeEach(async () => {
 afterEach(async () => {
   for (const h of harnesses) { h.m.stop(); await h.m.flushed() }
   harnesses = []
-  await new Promise((r) => setTimeout(r, 20))
   await fs.rm(dir, { recursive: true, force: true })
 })
 
@@ -289,7 +288,6 @@ describe('health monitor engine', () => {
     h.m.stop()
     await h.m.flushed()
     harnesses = harnesses.filter((x) => x !== h)
-    await new Promise((r) => setTimeout(r, 50))
     const h2 = await harness({ now: h.clock.now, pid: 5 })
     expect(h2.m.minuteRows.length).toBeGreaterThanOrEqual(16)
     expect(h2.m.alarms['disk.free'].state).toBe('ALARM')

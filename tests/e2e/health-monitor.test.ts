@@ -46,7 +46,10 @@ afterAll(async () => {
 })
 
 describe('health monitor API', () => {
-  it('lists every built-in alarm, and says actions are off on a test server', async () => {
+  it('lists every built-in alarm before its first minute (No data), and says actions are off on a test server', async () => {
+    const before = await (await fetch(`${base}/api/v1/health-monitor`)).json()
+    for (const d of BUILTIN_ALARMS) if (!d.metric.includes('=*')) expect(before.alarms.map((a: { id: string }) => a.id)).toContain(d.id)
+    expect((await fetch(`${base}/api/v1/health-monitor/alarms/disk.free`)).status).toBe(200)
     await runningHealthMonitor()!.tick()
     const res = await fetch(`${base}/api/v1/health-monitor`)
     expect(res.status).toBe(200)

@@ -132,6 +132,20 @@ function defOf(inst: AlarmInstanceState): AlarmDef | null {
   return builtinAlarm(inst.defId) ?? null
 }
 
+/**
+ * Every alarm the monitor knows, the built-ins it has not evaluated yet included
+ * (a fresh server's first minute): those read No data until their first tick.
+ */
+function instancesWithPending(m: HealthMonitor): AlarmInstanceState[] {
+  const out = Object.values(m.alarms)
+  const now = m.now()
+  for (const def of BUILTIN_ALARMS) {
+    if (def.metric.includes('=*') || m.alarms[def.id]) continue
+    out.push({ id: def.id, defId: def.id, state: 'INSUFFICIENT_DATA', since: now, value: null, evaluatedAt: now, history: [], actions: [] })
+  }
+  return out
+}
+
 function conditionText(def: AlarmDef, threshold: number): string {
   const per = def.periodMin >= 60 ? `${def.periodMin / 60} h` : `${def.periodMin} min`
   const also = def.also ? ` and ${def.also.metric} ${def.also.comparison} ${def.also.threshold}` : ''
@@ -190,7 +204,7 @@ export function alarmRow(m: HealthMonitor, inst: AlarmInstanceState): AlarmRow {
 }
 
 export function healthView(m: HealthMonitor): HealthView {
-  const rows = Object.values(m.alarms).map((a) => alarmRow(m, a))
+  const rows = instancesWithPending(m).map((a) => alarmRow(m, a))
   rows.sort((a, b) => ORDER[a.state] - ORDER[b.state] || b.since - a.since)
   const counts: Record<AlarmState, number> = { OK: 0, ALARM: 0, INSUFFICIENT_DATA: 0 }
   for (const r of rows) counts[r.state]++
@@ -205,7 +219,7 @@ export interface AlarmDetail extends AlarmRow {
 }
 
 export function alarmDetail(m: HealthMonitor, id: string): AlarmDetail | null {
-  const inst = m.alarms[id]
+  const inst = instancesWithPending(m).find((a) => a.id === id)
   if (!inst) return null
   const def = defOf(inst)
   let series: AlarmDetail['series'] = []
