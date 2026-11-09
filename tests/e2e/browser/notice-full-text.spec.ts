@@ -151,6 +151,11 @@ test('the daemon card reads plainly, its command one click away, and a log alone
   sock()!.send(noticeEvent('short', { title: 'Sync paused', body: 'It resumes on its own.', detail: META }))
   const short = page.locator('.corner-stack .notification-toast', { hasText: 'Sync paused' })
   await expect(short).toBeVisible()
+  // It came up under the pointer that closed the card above, so it ignores a click until it has
+  // settled (useShiftClickGuard, d8a7fd515): a person's next click there was meant for the old card.
+  // The page clock stands still here, so move it past that moment (SHIFT_GUARD_MS, 450 ms).
+  await page.clock.runFor(500)
+  await expect(short).not.toHaveAttribute('data-settling', '')
   const toggle = short.getByTestId('notice-details')
   await expect(toggle).toHaveText('Show log')
   await toggle.click()

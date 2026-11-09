@@ -49,7 +49,11 @@ export function useShiftClickGuard(rowSelector: string): {
       movedAt.current.set(row, now);
       row.setAttribute('data-settling', '');
       window.clearTimeout(timers.get(row));
-      timers.set(row, window.setTimeout(() => { row.removeAttribute('data-settling'); timers.delete(row); }, SHIFT_GUARD_MS));
+      // Only the newest mark's timer takes it off (a root attached again marks rows of its own).
+      timers.set(row, window.setTimeout(() => {
+        if (movedAt.current.get(row) === now) row.removeAttribute('data-settling');
+        timers.delete(row);
+      }, SHIFT_GUARD_MS));
     }
     function read(): void {
       const base = -scrolled();
@@ -78,7 +82,9 @@ export function useShiftClickGuard(rowSelector: string): {
     root.addEventListener('pointerleave', out);
     stop.current = () => {
       mutations?.disconnect(); resize?.disconnect();
-      for (const [row, t] of timers) { window.clearTimeout(t); row.removeAttribute('data-settling'); }
+      // A row still settling keeps its mark until its own timer ends it: the click check reads
+      // movedAt, which outlives this root, so a mark taken off here left a row that looked ready
+      // and ignored the click (the toaster's root is attached again when its corner moves).
       root.removeEventListener('pointerdown', down, true);
       root.removeEventListener('pointermove', over, true);
       root.removeEventListener('pointerleave', out);

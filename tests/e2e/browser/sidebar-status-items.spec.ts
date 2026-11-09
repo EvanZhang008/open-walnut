@@ -3,7 +3,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs/promises'
 import net from 'node:net'
 import { expect, test } from './shortcut-test-fixture'
-import { type Page } from '@playwright/test'
+import { type Locator, type Page } from '@playwright/test'
 
 /**
  * The rail's plugin status items (walnut.ui.statusItem), end to end in a real browser.
@@ -94,6 +94,20 @@ const minutesLeft = (endsAt: number) => Math.ceil((endsAt - Date.now()) / MIN)
 
 const item = (page: Page, key = 'probe:probe') => page.locator(`.sidebar-status-item[data-status-key="${key}"]`)
 const popover = (page: Page) => page.locator('.status-item-popover')
+
+/**
+ * A toast that came up or moved under the pointer ignores a click until it has settled
+ * (useShiftClickGuard, d8a7fd515: a click there was meant for what was under it before), and the
+ * corner moves a new toast once more as it makes room for it (above System attention). Settled:
+ * no mark and no move for a whole guard window (SHIFT_GUARD_MS, 450 ms).
+ */
+async function settledToast(toast: Locator): Promise<void> {
+  await expect.poll(() => toast.evaluate((el) => new Promise<boolean>((resolve) => {
+    const top = el.getBoundingClientRect().top
+    if (el.hasAttribute('data-settling')) { resolve(false); return }
+    setTimeout(() => resolve(!el.hasAttribute('data-settling') && el.getBoundingClientRect().top === top), 500)
+  })), { timeout: 15_000 }).toBe(true)
+}
 
 async function setCollapsed(page: Page, collapsed: boolean): Promise<void> {
   const isCollapsed = (await page.locator('.sidebar.collapsed').count()) > 0
@@ -440,6 +454,7 @@ test('a notice button closes its toast at once and runs the op after; a failure 
   await probe(page, 'notice')
   await expect(toast).toBeVisible({ timeout: 30_000 })
 
+  await settledToast(toast)
   // The op takes 3s: the toast must be gone before it answers (it sets the rail item when done).
   const clicked = Date.now()
   await toast.getByRole('button', { name: 'Slow notice' }).click()
@@ -452,6 +467,8 @@ test('a notice button closes its toast at once and runs the op after; a failure 
   // A failing button: its toast closes too, and an error toast says what did not happen and why.
   await probe(page, 'notice')
   await expect(toast).toBeVisible({ timeout: 30_000 })
+  // It comes up under the pointer that pressed the first toast's button.
+  await settledToast(toast)
   await toast.getByRole('button', { name: 'Refuse' }).click()
   await expect(toast).toHaveCount(0)
   const failed = toastTitled('"Refuse" did not run')
