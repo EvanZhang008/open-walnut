@@ -143,8 +143,6 @@ struct LetterThreadEntry: Codable, Equatable, Identifiable {
     /// that predate the field.
     let delivery: LetterTurnDelivery?
     @LossyInboxItems var items: [InboxEmailItem]? = nil
-    /// Who it is from (server-derived); `resolvedOrigin` covers an older server.
-    var origin: LetterOrigin? = nil
     /// Human turns only: a task wrote this turn in the user's place.
     var by: LetterAnsweredBy? = nil
     /// Human turns only: the file names of the pictures that went with it.
@@ -198,6 +196,8 @@ struct Letter: Codable, Identifiable, Equatable {
     /// Relative path of the streaming route (`/api/v1/human-inbox/:id/body`).
     let bodyUrl: String?
     @LossyInboxItems var items: [InboxEmailItem]? = nil
+    /// Who it is from (server-derived); `resolvedOrigin` covers an older server.
+    var origin: LetterOrigin? = nil
 
     var kind: LetterKind { LetterKind(type) }
     var isRead: Bool { read ?? false }
