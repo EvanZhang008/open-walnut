@@ -260,3 +260,116 @@ describe('board kit: the same limits as the server', () => {
     expect(rebuilt.prepare(board, 'board_post', { thread: 'a', text: 'x'.repeat(BOARD_MESSAGE_MAX_BYTES + 1) }, 'task:t')).toMatchObject({ ok: false, code: 'message_too_long' })
   })
 })
+
+describe('board kit: who wrote each part of the page', () => {
+  const kit = createBoardOffline()
+  const NOW = '2026-11-07T00:00:00.000Z'
+  const applyOp = (board: OfflineSliceBoard | undefined, op: string, args: Record<string, unknown>, by: string) =>
+    kit.apply(board, op, args, by, NOW, 'task-1', () => 'bm-1') as OfflineSliceBoard
+  const OLD = { by: 'task:old', sessionId: 'sid-old' }
+  const HI = '😀' // one character, two UTF-16 units
+
+  it('a post and a project write keep the page provenance exactly as the server sent it', () => {
+    const sources = [{ start: 0, end: 4, by: 'human' }, { start: 4, end: 8, ...OLD }]
+    const board: OfflineSliceBoard = { taskId: 't', html: '<p>a</p>', version: 3, updated_by: 'task:old', updated_session_id: 'sid-old', html_sources: sources, projects: {} }
+    const posted = applyOp(board, 'board_post', { thread: 'th', text: 'hi' }, 'device:phone')
+    const project = applyOp(posted, 'board_project_set', { id: 'p', status: 'wip' }, 'device:phone')
+    for (const next of [posted, project]) {
+      expect(next.html).toBe(board.html)
+      expect(next.version).toBe(3)
+      expect(next.updated_by).toBe('task:old')
+      expect(next.updated_session_id).toBe('sid-old')
+      expect(next.html_sources).toEqual(sources)
+    }
+  })
+
+  it('a person\'s full set makes the whole page theirs and drops the old session', () => {
+    const board: OfflineSliceBoard = { taskId: 't', html: '<p>old</p>', version: 1, updated_by: 'task:old', updated_session_id: 'sid-old', html_sources: [{ start: 0, end: 10, ...OLD }] }
+    const next = applyOp(board, 'board_set', { html: '<h1>New page</h1>' }, 'device:phone')
+    expect(next.html_sources).toEqual([{ start: 0, end: 17, by: 'human' }])
+    expect('updated_session_id' in next).toBe(false)
+    expect(next.version).toBe(2)
+    // An agent's full set is its own, with no session named (none is known here).
+    const agent = applyOp(board, 'board_set', { html: '<h1>New page</h1>' }, 'task:w1')
+    expect(agent.html_sources).toEqual([{ start: 0, end: 17, by: 'task:w1' }])
+    expect('updated_session_id' in agent).toBe(false)
+  })
+
+  it('a partial edit marks only the changed middle, and the head and tail keep their writer', () => {
+    const html = '<p>API: red now</p>'
+    const board: OfflineSliceBoard = { taskId: 't', html, version: 1, updated_by: 'task:old', updated_session_id: 'sid-old', html_sources: [{ start: 0, end: html.length, ...OLD }] }
+    const next = applyOp(board, 'board_edit', { edits: [{ old: 'API: red now', new: 'API: green now' }] }, 'task:w')
+    expect(next.html).toBe('<p>API: green now</p>')
+    expect(next.html_sources).toEqual([
+      { start: 0, end: 8, ...OLD },
+      { start: 8, end: 13, by: 'task:w' },
+      { start: 13, end: 21, ...OLD },
+    ])
+    expect('updated_session_id' in next).toBe(false)
+    // Text replaced by itself changes no one's words.
+    expect(applyOp(board, 'board_edit', { edits: [{ old: 'red', new: 'red' }] }, 'task:w').html_sources).toEqual(board.html_sources)
+  })
+
+  it('a change inside a surrogate pair marks the whole character, never half of it', () => {
+    const lowOnlyShared = ['😀', '🈀'] // same low unit: the shared tail starts on a low surrogate
+    const highOnlyShared = ['😀', '😁'] // same high unit: the shared head ends on a high surrogate
+    for (const [from, to] of [lowOnlyShared, highOnlyShared]) {
+      const html = `X${from}Y`
+      const board: OfflineSliceBoard = { taskId: 't', html, version: 1, updated_by: 'task:old', html_sources: [{ start: 0, end: 4, by: 'task:old' }] }
+      const next = applyOp(board, 'board_edit', { edits: [{ old: from, new: to }] }, 'task:w')
+      expect(next.html).toBe(`X${to}Y`)
+      expect(next.html_sources).toEqual([
+        { start: 0, end: 1, by: 'task:old' },
+        { start: 1, end: 3, by: 'task:w' },
+        { start: 3, end: 4, by: 'task:old' },
+      ])
+    }
+    expect(HI.length).toBe(2)
+  })
+
+  it('a record with no usable provenance reads as its last writer\'s whole page', () => {
+    const base = { taskId: 't', html: 'aaXbb', version: 1, updated_by: 'task:lead', updated_session_id: 'sid-l' }
+    const expected = [
+      { start: 0, end: 2, by: 'task:lead', sessionId: 'sid-l' },
+      { start: 2, end: 3, by: 'task:w' },
+      { start: 3, end: 5, by: 'task:lead', sessionId: 'sid-l' },
+    ]
+    const edit = { edits: [{ old: 'X', new: 'Y' }] }
+    expect(applyOp(base, 'board_edit', edit, 'task:w').html_sources).toEqual(expected)
+    // Spans that leave a gap, or do not reach the end, are not trusted in any part.
+    const gap = [{ start: 0, end: 2, by: 'human' }]
+    expect(applyOp({ ...base, html_sources: gap }, 'board_edit', edit, 'task:w').html_sources).toEqual(expected)
+    const unknownWriter = [{ start: 0, end: 5, by: 'someone' }]
+    expect(applyOp({ ...base, html_sources: unknownWriter }, 'board_edit', edit, 'task:w').html_sources).toEqual(expected)
+  })
+
+  it('a source named in the arguments is never trusted', () => {
+    const board: OfflineSliceBoard = { taskId: 't', html: 'aaXbb', version: 1, updated_by: 'task:lead' }
+    const forged = { html_sources: [{ start: 0, end: 5, by: 'human' }], updated_session_id: 'forged', by: 'human', sessionId: 'forged' }
+    const set = kit.prepare(board, 'board_set', { html: 'new', ...forged }, 'task:w')
+    expect(set).toEqual({ ok: true, args: { html: 'new' } })
+    const edit = kit.prepare(board, 'board_edit', { edits: [{ old: 'X', new: 'Y' }], ...forged }, 'task:w')
+    expect(edit).toEqual({ ok: true, args: { edits: [{ old: 'X', new: 'Y' }] } })
+    // Even an argument that reaches apply directly changes nothing.
+    expect(applyOp(board, 'board_set', { html: 'new', ...forged }, 'task:w').html_sources).toEqual([{ start: 0, end: 3, by: 'task:w' }])
+    const edited = applyOp(board, 'board_edit', { edits: [{ old: 'X', new: 'Y' }], ...forged }, 'task:w')
+    expect(edited.html_sources!.every((s) => s.by !== 'human' && s.sessionId === undefined)).toBe(true)
+    expect('updated_session_id' in edited).toBe(false)
+  })
+
+  it('the source twin rebuilt from its text needs no module and gives the same answers', () => {
+    const text = createBoardOffline.toString()
+    expect(text).not.toMatch(/\b(import|require)\b/)
+    const rebuilt = (new Function('"use strict"; return ' + text)() as typeof createBoardOffline)()
+    const board: OfflineSliceBoard = { taskId: 't', html: `X${HI}Y`, version: 1, updated_by: 'task:old', updated_session_id: 'sid-old' }
+    const args = { edits: [{ old: HI, new: '😁' }] }
+    const a = rebuilt.apply(board, 'board_edit', args, 'task:w', NOW, 't', () => 'bm')
+    expect(a).toEqual(kit.apply(board, 'board_edit', args, 'task:w', NOW, 't', () => 'bm'))
+    expect(a!.html_sources).toEqual([
+      { start: 0, end: 1, by: 'task:old', sessionId: 'sid-old' },
+      { start: 1, end: 3, by: 'task:w' },
+      { start: 3, end: 4, by: 'task:old', sessionId: 'sid-old' },
+    ])
+    expect(rebuilt.apply(board, 'board_set', { html: 'z' }, 'device:p', NOW, 't', () => 'bm')!.html_sources).toEqual([{ start: 0, end: 1, by: 'human' }])
+  })
+})

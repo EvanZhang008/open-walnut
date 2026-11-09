@@ -80,6 +80,15 @@ async function worker(project: string): Promise<{ task: Task; sid: string }> {
   return { task: (await getTask(task.id)), sid }
 }
 
+/** A later session of the same task: the first one is archived first (one active session per task). */
+async function laterSession(task: Task, sid: string): Promise<string> {
+  await updateSessionRecord(sid, { process_status: 'stopped', archived: true, archive_reason: 'engine_switched:claude' } as never)
+  const later = `${sid}-later`
+  await createSessionRecord(later, task.id, 'Owed')
+  await updateSessionRecord(later, { process_status: 'idle' })
+  return later
+}
+
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
   server = await startServer({ port: 0, dev: true })
@@ -195,6 +204,89 @@ describe('what ends a hold, and what still closes', () => {
     const done = await getTask(task.id)
     expect(done.result_report).toMatchObject({ result: 'Submitted it myself.', owed: { settled: { how: 'taken' } } })
     expect(isPartial(done.result_report)).toBe(false)
+    // No caller header: the person on the primary wrote that result.
+    expect(done.result_report).toMatchObject({ by: 'human', host: 'local', owed: { settled: { by: 'human' } } })
+  })
+
+  it('a close with a caller header Walnut cannot resolve still closes, but its result names an unknown writer and no host', async () => {
+    const { task, sid } = await worker('Owed')
+    await SOURCES.progress(task, sid)
+    expect((await json('POST', `/api/v1/tasks/${task.id}/complete`, {}, sid)).status).toBe(409)
+    const res = await json('POST', `/api/v1/tasks/${task.id}/complete`, { result: 'Submitted it.' }, 'sess-owed-no-such-record')
+    expect(res.status, await res.clone().text()).toBe(200)
+    const done = await getTask(task.id)
+    expect(done.phase).toBe('COMPLETE')
+    expect(done.result_report).toMatchObject({ result: 'Submitted it.', by: 'unknown', owed: { settled: { how: 'taken', by: 'unknown' } } })
+    expect(done.result_report?.host).toBeUndefined()
+    expect(done.result_report?.owed?.settled?.note ?? '').not.toMatch(/user/i)
+  })
+
+  // A person's (or an unresolved caller's) close that brings only part of the result keeps the rest
+  // of the held result, and a report of mixed writers names none of them.
+  const PERSON_CLOSERS = [
+    { name: 'a person (no header)', sid: undefined as string | undefined, writer: { by: 'human', host: 'local' } },
+    { name: 'an unresolved caller', sid: 'sess-owed-no-such-record', writer: { by: 'unknown' } },
+  ]
+  const PARTS = [
+    { name: 'evidence only', body: { evidence: ['notes/receipt.md'] }, want: { result: 'Compared both plans.', evidence: ['notes/receipt.md'] }, mixed: true },
+    { name: 'result only', body: { result: 'Submitted it myself.' }, want: { result: 'Submitted it myself.', evidence: ['notes/plans.md'] }, mixed: true },
+    { name: 'result and evidence', body: { result: 'Submitted it myself.', evidence: ['notes/receipt.md'] }, want: { result: 'Submitted it myself.', evidence: ['notes/receipt.md'] }, mixed: false },
+  ]
+  for (const closer of PERSON_CLOSERS) {
+    for (const part of PARTS) {
+      it(`${closer.name}'s close with ${part.name} keeps the held fields it does not bring, with the right writer`, async () => {
+        const { task, sid } = await worker('Owed')
+        await SOURCES.progress(task, sid)
+        expect((await json('POST', `/api/v1/tasks/${task.id}/complete`, { result: 'Compared both plans.', evidence: ['notes/plans.md'] }, sid)).status).toBe(409)
+        expect((await getTask(task.id)).result_report).toMatchObject({ result: 'Compared both plans.', evidence: ['notes/plans.md'], by: `task:${task.id}`, sessionId: sid })
+        const res = await json('POST', `/api/v1/tasks/${task.id}/complete`, part.body, closer.sid)
+        expect(res.status, await res.clone().text()).toBe(200)
+        const done = await getTask(task.id)
+        expect(done.phase).toBe('COMPLETE')
+        expect(done.result_report).toMatchObject({ ...part.want, owed: { settled: { how: 'taken', by: closer.writer.by } } })
+        expect(isPartial(done.result_report)).toBe(false)
+        expect(done.result_report?.sessionId).toBeUndefined()
+        if (part.mixed) {
+          expect(done.result_report?.by).toBe('unknown')
+          expect(done.result_report?.host).toBeUndefined()
+        } else {
+          expect(done.result_report?.by).toBe(closer.writer.by)
+          expect(done.result_report?.host).toBe(closer.writer.host)
+        }
+      })
+    }
+  }
+
+  for (const closer of PERSON_CLOSERS) {
+    it(`${closer.name}'s close with not_done only keeps the held result with its writer, and marks its not-done unknown`, async () => {
+      const { task, sid } = await worker('Owed')
+      await SOURCES.progress(task, sid)
+      expect((await json('POST', `/api/v1/tasks/${task.id}/complete`, { result: 'Compared both plans.', evidence: ['notes/plans.md'] }, sid)).status).toBe(409)
+      expect((await getTask(task.id)).result_report).toMatchObject({ result: 'Compared both plans.', evidence: ['notes/plans.md'], by: `task:${task.id}`, sessionId: sid })
+      const res = await json('POST', `/api/v1/tasks/${task.id}/complete`, { not_done: ['iOS not tested'] }, closer.sid)
+      expect(res.status, await res.clone().text()).toBe(200)
+      const done = await getTask(task.id)
+      expect(done.phase).toBe('COMPLETE')
+      expect(done.result_report).toMatchObject({
+        result: 'Compared both plans.', evidence: ['notes/plans.md'], by: `task:${task.id}`, sessionId: sid,
+        not_done: ['iOS not tested'], not_done_by: 'unknown', owed: { settled: { how: 'taken', by: closer.writer.by } },
+      })
+      expect(done.result_report?.host).toBeUndefined()
+      expect(done.result_report?.settled).toBeUndefined()
+      expect(isPartial(done.result_report)).toBe(true)
+    })
+  }
+
+  it('a close with no result keeps the earlier result\'s own writer, whoever closes', async () => {
+    const { task, sid } = await worker('Owed')
+    await SOURCES.progress(task, sid)
+    expect((await json('POST', `/api/v1/tasks/${task.id}/complete`, {}, sid)).status).toBe(409)
+    const held = (await getTask(task.id)).result_report!
+    expect((await json('POST', `/api/v1/tasks/${task.id}/complete`, {})).status).toBe(200)
+    const done = (await getTask(task.id)).result_report!
+    expect(done.by).toBe(held.by)
+    expect(done.host).toBe(held.host)
+    expect(done.owed?.settled).toMatchObject({ how: 'taken', by: 'human' })
   })
 
   it('a forced close by an id prefix settles the items on the task itself', async () => {
@@ -206,6 +298,45 @@ describe('what ends a hold, and what still closes', () => {
     const done = await getTask(task.id)
     expect(done.phase).toBe('COMPLETE')
     expect(done.result_report?.owed?.settled?.how).toBe('dropped')
+  })
+
+  it('a forced close with a new result records the closing session itself as its writer', async () => {
+    const { task, sid } = await worker('Owed')
+    await SOURCES.progress(task, sid)
+    expect((await json('POST', `/api/v1/tasks/${task.id}/complete`, { result: 'Compared both plans.' }, sid)).status).toBe(409)
+    expect((await getTask(task.id)).result_report).toMatchObject({ result: 'Compared both plans.', by: `task:${task.id}`, sessionId: sid })
+    const res = await json('POST', `/api/v1/tasks/${task.id}/complete`, { force: true, reason: 'The user resubmitted it on the site this morning', result: 'Resubmitted, confirmation 42.' }, sid)
+    expect(res.status, await res.clone().text()).toBe(200)
+    const done = (await getTask(task.id)).result_report!
+    expect(done).toMatchObject({ result: 'Resubmitted, confirmation 42.', by: `task:${task.id}`, sessionId: sid, owed: { settled: { how: 'dropped', by: `task:${task.id}` } } })
+    expect(done.host).toBeUndefined()
+  })
+
+  it('a forced close with no new result keeps the earlier result with the session that wrote it', async () => {
+    const { task, sid } = await worker('Owed')
+    await SOURCES.progress(task, sid)
+    expect((await json('POST', `/api/v1/tasks/${task.id}/complete`, { result: 'Compared both plans.', evidence: ['notes/plans.md'] }, sid)).status).toBe(409)
+    // A later session of the same task closes it: the result is still the first session's.
+    const later = await laterSession(task, sid)
+    const res = await json('POST', `/api/v1/tasks/${task.id}/complete`, { force: true, reason: 'The user resubmitted it on the site this morning' }, later)
+    expect(res.status, await res.clone().text()).toBe(200)
+    const done = (await getTask(task.id)).result_report!
+    expect(done).toMatchObject({ result: 'Compared both plans.', evidence: ['notes/plans.md'], by: `task:${task.id}`, sessionId: sid })
+    expect(done.sessionId).not.toBe(later)
+    expect(done.owed?.settled).toMatchObject({ how: 'dropped', by: `task:${task.id}` })
+  })
+
+  it('a forced close adding evidence by another session keeps the earlier result too, and names no single writer', async () => {
+    const { task, sid } = await worker('Owed')
+    await SOURCES.progress(task, sid)
+    expect((await json('POST', `/api/v1/tasks/${task.id}/complete`, { result: 'Compared both plans.' }, sid)).status).toBe(409)
+    const later = await laterSession(task, sid)
+    const res = await json('POST', `/api/v1/tasks/${task.id}/complete`, { force: true, reason: 'The user resubmitted it on the site this morning', evidence: ['notes/receipt.md'] }, later)
+    expect(res.status, await res.clone().text()).toBe(200)
+    const done = (await getTask(task.id)).result_report!
+    expect(done).toMatchObject({ result: 'Compared both plans.', evidence: ['notes/receipt.md'], by: 'unknown', owed: { settled: { how: 'dropped', by: `task:${task.id}` } } })
+    expect(done.sessionId).toBeUndefined()
+    expect(done.host).toBeUndefined()
   })
 
   it('a session settles the user\'s items only with a note saying how', async () => {

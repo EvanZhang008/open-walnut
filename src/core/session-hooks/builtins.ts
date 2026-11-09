@@ -1133,7 +1133,7 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
         const shortSummary = exec.replace(/\s+/g, ' ').trim();
         try {
           const { updateSummary } = await import('../task-manager.js');
-          await updateSummary(taskId, shortSummary);
+          await updateSummary(taskId, shortSummary, { sessionId: p.sessionId });
         } catch (err) {
           log.session.debug('turn-complete-summary: summary derive skipped', {
             taskId: p.taskId, error: err instanceof Error ? err.message : String(err),

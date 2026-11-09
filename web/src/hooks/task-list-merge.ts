@@ -32,7 +32,6 @@ export const UNCOMPARED_TASK_FIELDS: Readonly<Record<string, string>> = {
   agent_id: 'set at create', status_report: 'drawn through user_status', promise_alarm: 'not drawn',
   needs_recheck: 'not drawn', letter_recheck: 'not drawn', recheck_watch: 'not drawn', agent_memory: 'read on its own panel',
   cwd_missing: 'not drawn', watch: 'not drawn (the server keeps who hears a task)',
-  last_words: 'drawn through user_status (its ask words)',
   needs_marked_at: 'drawn through user_status (a person\'s own Needs you)',
   ask_answered: 'drawn through user_status (an ask answered above leaves Needs you)',
   asks_answered: 'drawn through user_status, as ask_answered',
@@ -43,7 +42,7 @@ export function tasksShallowEqual(a: Task, b: Task): boolean {
     'title', 'status', 'phase', 'priority', 'project',
     'parent_task_id', 'group_id', 'due_date', 'start_date', 'completed_at', 'updated_at',
     'sync_error', 'external_url', 'unread', 'source', 'sprint',
-    'cwd', 'session_id', 'plan_session_id', 'exec_session_id',
+    'cwd', 'session_id', 'plan_session_id', 'exec_session_id', 'summary_session_id',
     // Session-resume touch updates ONLY this field now (the pin-bump side
     // effect was removed), so it must count as a UI-visible diff — without it
     // the Recent sort never refreshes live after chatting with a task.
@@ -75,7 +74,9 @@ export function tasksShallowEqual(a: Task, b: Task): boolean {
   if ((a.sync_hold?.state ?? null) !== (b.sync_hold?.state ?? null) || a.sync_hold?.at !== b.sync_hold?.at
     || a.sync_hold?.outside?.state !== b.sync_hold?.outside?.state) return false;
   // Main's or a lead's Brief (Org page): its rewrite leaves updated_at alone.
-  if (a.brief?.at !== b.brief?.at || a.brief?.text !== b.brief?.text) return false;
+  if (a.brief?.at !== b.brief?.at || a.brief?.text !== b.brief?.text
+    || JSON.stringify(a.brief?.text_sources ?? null) !== JSON.stringify(b.brief?.text_sources ?? null)) return false;
+  if (JSON.stringify(a.last_words ?? null) !== JSON.stringify(b.last_words ?? null)) return false;
   // Its refresh turn asked (sessions/brief-refresh.ts): the Brief reads "Updating" until it lands.
   if ((a.brief_refresh?.at ?? null) !== (b.brief_refresh?.at ?? null)) return false;
   // The org's own fields (the Org page and its chart): a VP's name and instructions, a VP made

@@ -357,7 +357,8 @@ export async function startCertExpiryAlert(opts: { enabled?: boolean }): Promise
     send: async ({ subject, markdown, opKey }) => (await sendLetterOnce({
       subject, type: 'review', markdown, sender: { sessionId: 'external', host: 'local' },
     }, { opKey })).letter.id,
-    addTurn: async (letterId, text) => { await agentReply(letterId, { text }) },
+    // Walnut's own turn, written by this primary process: the same sender as the letter it adds to.
+    addTurn: async (letterId, text) => { await agentReply(letterId, { text }, { sender: { sessionId: 'external', host: 'local' } }) },
     archive: async ({ letterId, opKey }) => {
       const id = letterId ?? (await findLetterByOp(opKey))?.id
       if (id) await setArchived(id, true)

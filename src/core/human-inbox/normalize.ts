@@ -91,9 +91,17 @@ function normalizeThread(raw: unknown): ThreadEntry[] {
       // The pictures sent with it survive a rewrite too (core/answer-pictures.ts).
       ...(from === 'human' && Array.isArray(e.images) && cleanPictureNames(e.images).length ? { images: cleanPictureNames(e.images) } : {}),
       ...(from === 'agent' && e.items !== undefined ? { items: normalizeItems(e.items) } : {}),
+      // Only a writer that was recorded: an old turn stays unknown, never a guessed external/local.
+      ...(from === 'agent' && hasRecordedSender(e.sender) ? { sender: normalizeSender(e.sender) } : {}),
     });
   }
   return out;
+}
+
+function hasRecordedSender(raw: unknown): boolean {
+  if (!raw || typeof raw !== 'object') return false;
+  const sid = (raw as Record<string, unknown>).sessionId;
+  return typeof sid === 'string' && sid.length > 0;
 }
 
 /** Which task answered in the user's place (LetterAnsweredBy); absent = the user. */
@@ -142,9 +150,12 @@ function normalizeDelivery(raw: unknown): { delivery?: ThreadEntryDelivery } {
 /** Also used at send time, so a route can never stamp a sender-less letter. */
 export function normalizeSender(raw: unknown): LetterSender {
   const s = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const sessionId = str(s.sessionId, 'external');
+  // Sending records a known local host explicitly; reading an older missing host never invents one.
+  const host = typeof s.host === 'string' ? s.host : undefined;
   return {
-    sessionId: str(s.sessionId, 'external'),
-    host: str(s.host, 'local'),
+    sessionId,
+    ...(host !== undefined ? { host } : {}),
     ...(typeof s.sessionTitle === 'string' ? { sessionTitle: s.sessionTitle } : {}),
     ...(typeof s.taskId === 'string' ? { taskId: s.taskId } : {}),
     ...(typeof s.taskTitle === 'string' ? { taskTitle: s.taskTitle } : {}),

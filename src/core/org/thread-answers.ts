@@ -9,12 +9,16 @@
  * kept on the message (threads-store setThreadAnswers), so a transcript compacted or a session
  * switched later loses nothing. A reply still being written is never kept.
  *
+ * Each answer keeps the session it was read from (`sid`, `host`): the transcript actually read
+ * (the message's own session, or the node's when it was looked for there), or a letter turn's
+ * recorded writer. A letter turn with no writer recorded keeps none, never the message's session.
+ *
  * The primary also sweeps the closed threads past their week (threads-model sweepClosed).
  */
 import { log } from '../../logging/index.js';
 import { readAboutTag, stripAboutTag } from './message-about.js';
 import { userWordsOf } from './thread-capture.js';
-import { letterAnswerMissing, type OrgThread, type ThreadAnswer, type ThreadMessage } from './threads-model.js';
+import { letterAnswerMissing, verifiedSource, type OrgThread, type ThreadAnswer, type ThreadMessage, type ThreadTextSource } from './threads-model.js';
 import { isQuietTurn } from '../sessions/quiet-turn.js';
 
 /** A transcript row as the projection gives it (session-projection.ts). */
@@ -80,8 +84,13 @@ function rowMatches(row: AnswerRow, m: ThreadMessage): boolean {
 export function answersFromRows(
   messages: readonly ThreadMessage[],
   rows: readonly AnswerRow[],
-  opts: { wholeUntil: string | null },
+  opts: {
+    wholeUntil: string | null;
+    /** The session these rows are the transcript of: every answer read here is its words. */
+    source?: ThreadTextSource;
+  },
 ): Map<string, ThreadAnswer> {
+  const source = verifiedSource(opts.source);
   const out = new Map<string, ThreadAnswer>();
   const used = new Set<number>();
   const sorted = [...messages].sort((a, b) => a.at.localeCompare(b.at));
@@ -102,7 +111,7 @@ export function answersFromRows(
     // in one thread wore a reply about a task menu).
     if (m.answer || m.via === 'letter') continue;
     const answer = answerAfter(rows, i, opts.wholeUntil);
-    if (answer) out.set(m.id, answer);
+    if (answer) out.set(m.id, source ? { ...answer, sid: source.sid, ...(source.host ? { host: source.host } : {}) } : answer);
   }
   return out;
 }
@@ -141,8 +150,27 @@ function answerAfter(rows: readonly AnswerRow[], i: number, wholeUntil: string |
   return { text: row.text, at: row.timestamp, ...(about.length ? { about: [...about] } : {}) };
 }
 
-/** A letter's thread as the inbox keeps it (human-inbox/types.ts ThreadEntry, `at` in ms). */
-export interface LetterTurn { from: 'agent' | 'human'; text: string; at: number }
+/**
+ * A letter's thread as the inbox keeps it (human-inbox/types.ts ThreadEntry, `at` in ms). `sender`:
+ * the session that wrote an agent turn, when the inbox recorded it (older turns have none).
+ */
+export interface LetterTurn { from: 'agent' | 'human'; text: string; at: number; sender?: { sessionId?: string; host?: string } }
+
+/**
+ * An agent turn's recorded writer. A plugin's `external` stamp names no session, but its recorded
+ * host still names the machine (as the letter renderer reads it): kept with that host, unknown
+ * without one, never a guess.
+ */
+function turnSource(t: LetterTurn): ThreadTextSource | undefined {
+  const sid = t.sender?.sessionId;
+  if (!sid) return undefined;
+  const host = t.sender?.host?.trim();
+  if (sid === 'external') {
+    if (!host) return undefined;
+    return verifiedSource({ sid, host: host === 'local' ? '__local__' : host });
+  }
+  return verifiedSource({ sid, ...(host ? { host } : {}) });
+}
 
 /** How far a letter turn of his may sit from the message's filing time. */
 const LETTER_TURN_SLACK_MS = 2 * 60_000;
@@ -162,7 +190,10 @@ export function letterAnswerOf(m: Pick<ThreadMessage, 'at' | 'text'>, turns: rea
   }
   if (his < 0) return null;
   const reply = turns.slice(his + 1).find((t) => t.from === 'agent' && t.text.trim());
-  return reply ? { text: reply.text, at: new Date(reply.at).toISOString(), from: 'letter' } : null;
+  if (!reply) return null;
+  // The turn's own writer, or none: the session the note was sent to wrote nothing here.
+  const source = turnSource(reply);
+  return { text: reply.text, at: new Date(reply.at).toISOString(), from: 'letter', ...(source ? { sid: source.sid, ...(source.host ? { host: source.host } : {}) } : {}) };
 }
 
 /**
@@ -316,16 +347,21 @@ export async function nodeSessionId(taskId: string): Promise<string | undefined>
 /** The answers one session's chat holds for these messages. */
 async function answersIn(sid: string, messages: readonly ThreadMessage[], endedAt: string | null): Promise<Map<string, ThreadAnswer>> {
   const { getSessionByClaudeId } = await import('../session-tracker.js');
+  const { normalizeHost } = await import('../sessions/caller-placement.js');
   const runs = async () => (await getSessionByClaudeId(sid).catch(() => null))?.process_status === 'running';
   // Finished up to its turn's end, or up to now when it runs no turn before and after the read.
   const startedAt = new Date().toISOString();
-  const idleBefore = !(await runs());
+  const before = await getSessionByClaudeId(sid).catch(() => null);
+  const idleBefore = before?.process_status !== 'running';
+  // The answers are this transcript's words: its session, and its host as its record says at this
+  // read (no record: host not stored, a click reads the record then, or says it is gone).
+  const source: ThreadTextSource = { sid, ...(before ? { host: normalizeHost(before.host) || '__local__' } : {}) };
   const earliest = messages.reduce((a, m) => (m.at < a ? m.at : a), messages[0].at);
   const rows = await rowsSince(sid, new Date(Date.parse(earliest) - ROW_BEFORE_MS).toISOString());
   if (!rows.length) return new Map();
   const idle = idleBefore && !(await runs());
   const wholeUntil = idle ? startedAt : endedAt;
-  return answersFromRows(messages, rows, { wholeUntil });
+  return answersFromRows(messages, rows, { wholeUntil, source });
 }
 
 /** How long after a turn's result its transcript is read. */

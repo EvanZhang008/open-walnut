@@ -16,6 +16,9 @@
 
 export interface OfflineBoardMessage { id: string; author: string; text: string; ts: string }
 
+/** Who wrote a span of a board's html (the server's BoardHtmlSource, board-html-source.ts). */
+export interface OfflineHtmlSource { start: number; end: number; by: string; sessionId?: string }
+
 export interface OfflineSliceBoard {
   /** The board's task (a team shares its leader's). */
   taskId: string
@@ -23,6 +26,9 @@ export interface OfflineSliceBoard {
   version: number
   updated_at?: string
   updated_by?: string
+  /** Optional provenance of the page: kept as the server sent it, never invented here. */
+  updated_session_id?: string
+  html_sources?: OfflineHtmlSource[]
   threads?: Record<string, OfflineBoardMessage[]>
   marks?: Record<string, { state?: string; note?: string }>
   projects?: Record<string, Record<string, unknown>>
@@ -46,7 +52,7 @@ export function createBoardOffline() {
   const err = (code: string, message: string, detail?: unknown): BoardOpError => ({ ok: false, code, message, ...(detail !== undefined ? { detail } : {}) })
 
   /** The server's applyBoardEdits: each `old` exactly once at its turn, in order, all or none. */
-  function applyEdits(html: string, edits: unknown): { ok: true; html: string } | BoardOpError {
+  function applyEdits(html: string, edits: unknown, onSplice?: (at: number, removed: number, inserted: number) => void): { ok: true; html: string } | BoardOpError {
     if (!Array.isArray(edits) || edits.length === 0) return err('bad_request', '`edits` must be a non-empty array of { old, new }')
     let out = html
     for (let index = 0; index < edits.length; index++) {
@@ -59,8 +65,77 @@ export function createBoardOffline() {
       if (count === 0) return err('board_edit_not_found', `An edit's \`old\` text does not occur in the board (edits[${index}])`, { index })
       if (count > 1) return err('board_edit_not_unique', `An edit's \`old\` text occurs more than once in the board (edits[${index}])`, { index, count })
       out = out.slice(0, first) + e.new + out.slice(first + e.old.length)
+      if (onSplice && e.old !== e.new) {
+        // Only the changed middle is the writer's: the shared head and tail keep their writers.
+        // Never cut inside a surrogate pair (a pair is one character).
+        const o = e.old
+        const n = e.new
+        const limit = Math.min(o.length, n.length)
+        let p = 0
+        while (p < limit && o.charCodeAt(p) === n.charCodeAt(p)) p++
+        if (p > 0 && /[\ud800-\udbff]/.test(o[p - 1] ?? '')) p--
+        let q = 0
+        while (q < limit - p && o.charCodeAt(o.length - 1 - q) === n.charCodeAt(n.length - 1 - q)) q++
+        if (q > 0 && /[\udc00-\udfff]/.test(o[o.length - q] ?? '')) q--
+        onSplice(first + p, o.length - p - q, n.length - p - q)
+      }
     }
     return { ok: true, html: out }
+  }
+
+  const TASK_WRITER_RE = /^task:[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
+  const SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/
+  /** A page writer as the server names it: a paired device is the person; anything unknown is an agent. */
+  const sourceWriter = (by: unknown): string => {
+    if (by === 'human' || by === 'agent') return by
+    if (typeof by === 'string' && TASK_WRITER_RE.test(by)) return by
+    return typeof by === 'string' && by.startsWith('device:') ? 'human' : 'agent'
+  }
+  const sameSource = (a: OfflineHtmlSource, b: OfflineHtmlSource): boolean => a.by === b.by && a.sessionId === b.sessionId
+  const mergeSources = (spans: OfflineHtmlSource[]): OfflineHtmlSource[] => {
+    const out: OfflineHtmlSource[] = []
+    for (const sp of spans) {
+      const last = out[out.length - 1]
+      if (last && last.end === sp.start && sameSource(last, sp)) out[out.length - 1] = { ...last, end: sp.end }
+      else out.push({ ...sp })
+    }
+    return out
+  }
+  const wholeSource = (length: number, by: unknown, sessionId?: unknown): OfflineHtmlSource[] =>
+    length > 0
+      ? [{ start: 0, end: length, by: sourceWriter(by), ...(typeof sessionId === 'string' && SESSION_ID_RE.test(sessionId) && sourceWriter(by) !== 'human' ? { sessionId } : {}) }]
+      : []
+  /** The stored spans when they exactly cover `length`, else null (the server's validHtmlSources). */
+  const validSources = (raw: unknown, length: number): OfflineHtmlSource[] | null => {
+    if (!Array.isArray(raw)) return null
+    const out: OfflineHtmlSource[] = []
+    let at = 0
+    for (const sp of raw) {
+      if (!sp || typeof sp !== 'object' || Array.isArray(sp)) return null
+      const { start, end, by, sessionId } = sp as Record<string, unknown>
+      if (!Number.isInteger(start) || !Number.isInteger(end)) return null
+      if (start !== at || (end as number) <= at || (end as number) > length) return null
+      if (by !== 'human' && by !== 'agent' && !(typeof by === 'string' && TASK_WRITER_RE.test(by))) return null
+      if (sessionId !== undefined && !(typeof sessionId === 'string' && SESSION_ID_RE.test(sessionId))) return null
+      out.push({ start: start as number, end: end as number, by, ...(sessionId !== undefined ? { sessionId: sessionId as string } : {}) })
+      at = end as number
+    }
+    return at === length ? mergeSources(out) : null
+  }
+  /** The board's page spans, or its last writer for the whole page when it has none it can trust. */
+  const sourcesOf = (board: OfflineSliceBoard): OfflineHtmlSource[] =>
+    validSources(board.html_sources, board.html.length) ?? wholeSource(board.html.length, board.updated_by, board.updated_session_id)
+  const spliceSources = (spans: OfflineHtmlSource[], at: number, removed: number, inserted: number, by: unknown): OfflineHtmlSource[] => {
+    const cut = at + removed
+    const delta = inserted - removed
+    const before: OfflineHtmlSource[] = []
+    const after: OfflineHtmlSource[] = []
+    for (const sp of spans) {
+      if (sp.start < at) before.push({ ...sp, end: Math.min(sp.end, at) })
+      if (sp.end > cut) after.push({ ...sp, start: Math.max(sp.start, cut) + delta, end: sp.end + delta })
+    }
+    const added: OfflineHtmlSource[] = inserted > 0 ? [{ start: at, end: at + inserted, by: sourceWriter(by) }] : []
+    return mergeSources([...before, ...added, ...after])
   }
 
   /**
@@ -135,12 +210,18 @@ export function createBoardOffline() {
   function apply(board: OfflineSliceBoard | undefined, op: string, args: Record<string, unknown>, by: string, nowIso: string, boardTaskId: string, newId: () => string): OfflineSliceBoard | undefined {
     if (op === 'board_set') {
       const base: OfflineSliceBoard = board ?? { taskId: boardTaskId, html: '', version: 0, threads: {}, marks: {}, projects: {}, choices: {} }
-      return { ...base, html: String(args.html), version: base.version + 1, updated_at: nowIso, updated_by: by }
+      // The whole page is this writer's (a device is the person); no session is guessed.
+      const { updated_session_id: _sid, ...rest } = base
+      const html = String(args.html)
+      return { ...rest, html, version: base.version + 1, updated_at: nowIso, updated_by: by, html_sources: wholeSource(html.length, by) }
     }
     if (!board) return board
     if (op === 'board_edit') {
-      const r = applyEdits(board.html, args.edits)
-      return r.ok ? { ...board, html: r.html, version: board.version + 1, updated_at: nowIso, updated_by: by } : board
+      let sources = sourcesOf(board)
+      const r = applyEdits(board.html, args.edits, (at, removed, inserted) => { sources = spliceSources(sources, at, removed, inserted, by) })
+      if (!r.ok) return board
+      const { updated_session_id: _sid, ...rest } = board
+      return { ...rest, html: r.html, version: board.version + 1, updated_at: nowIso, updated_by: by, html_sources: sources }
     }
     if (op === 'board_post') {
       const thread = String(args.thread)

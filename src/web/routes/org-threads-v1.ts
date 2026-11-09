@@ -15,11 +15,13 @@
  *   POST  /api/v1/tasks/:id/threads/:thread/split          { message } -> that message becomes its own thread
  *
  * The caller comes from `x-walnut-caller-sid`: none = the user. Writes answer 501 on the companion.
+ * The session that wrote a summary or a first post is the caller's own, read from its session
+ * record (core/org/thread-caller.ts); a `sid`, `host` or `by` in the body is never read.
  */
 import { Router, type Request, type Response } from 'express'
 import type { Task } from '../../core/types.js'
 import { log } from '../../logging/index.js'
-import { resolveBoardCaller, boardWriter } from '../../core/boards/board-team.js'
+import { resolveThreadCaller, type ThreadCaller } from '../../core/org/thread-caller.js'
 import { ThreadError, THREAD_ID_RE, THREAD_MESSAGE_ID_RE, sortedThreads, type OrgThread, type ThreadPatch, type ThreadSource, type ThreadState, type ThreadWriter } from '../../core/org/threads-model.js'
 import { fileThreadMessage, mergeThread, openNodeThread, patchThread, readThreads, splitThread } from '../../core/org/threads-store.js'
 import { resolveThreadAnswers } from '../../core/org/thread-answers.js'
@@ -50,8 +52,13 @@ async function nodeTask(req: Request): Promise<Task> {
   return task
 }
 
+/** The writer and its verified session, from the header alone. */
+async function callerOf(req: Request): Promise<ThreadCaller> {
+  return resolveThreadCaller(header(req, 'x-walnut-caller-sid'))
+}
+
 async function writerOf(req: Request): Promise<ThreadWriter> {
-  return boardWriter(await resolveBoardCaller(header(req, 'x-walnut-caller-sid'))) as ThreadWriter
+  return (await callerOf(req)).by
 }
 
 function threadIdOf(req: Request): string {
@@ -180,7 +187,7 @@ orgThreadsV1Router.post('/tasks/:id/threads', route(async (req, res) => {
 orgThreadsV1Router.post('/tasks/:id/threads/open', route(async (req, res) => {
   const task = await nodeTask(req)
   const b = body(req)
-  const by = await writerOf(req)
+  const { by, source } = await callerOf(req)
   const thread = await openNodeThread(task.id, {
     title: str(b, 'title') ?? '', text: str(b, 'text') ?? '', from: (str(b, 'from') ?? 'node') as ThreadSource,
     ...(str(b, 'ref') ? { ref: str(b, 'ref') } : {}),
@@ -189,7 +196,7 @@ orgThreadsV1Router.post('/tasks/:id/threads/open', route(async (req, res) => {
     ...(str(b, 'user_kind') ? { user_kind: str(b, 'user_kind') } : {}),
     ...(str(b, 'user_kind_why') ? { user_kind_why: str(b, 'user_kind_why') } : {}),
     ...(str(b, 'same_ask_reason') ? { same_ask_reason: str(b, 'same_ask_reason') } : {}),
-  }, by)
+  }, by, source)
   log.task.info('org thread opened by the node', { taskId: task.id, threadId: thread.id, by, from: thread.opener?.from })
   res.status(201).json({ task_id: task.id, thread })
 }))
@@ -198,7 +205,7 @@ orgThreadsV1Router.patch('/tasks/:id/threads/:thread', route(async (req, res) =>
   const task = await nodeTask(req)
   const id = threadIdOf(req)
   const b = body(req)
-  const by = await writerOf(req)
+  const { by, source } = await callerOf(req)
   const mergeInto = str(b, 'merge_into')
   const patch: ThreadPatch = {}
   for (const k of ['title', 'ask', 'reply', 'state', 'close', 'known', 'snooze', 'user_kind', 'user_kind_why', 'same_ask_reason', 'user_words'] as const) {
@@ -217,7 +224,7 @@ orgThreadsV1Router.patch('/tasks/:id/threads/:thread', route(async (req, res) =>
     throw new RouteError(400, 'bad_request', 'merge_into goes alone: change the target thread with its own update.')
   }
   let thread
-  if (Object.keys(patch).length) thread = await patchThread(task.id, id, patch, by)
+  if (Object.keys(patch).length) thread = await patchThread(task.id, id, patch, by, source)
   if (mergeInto) {
     if (!THREAD_ID_RE.test(mergeInto)) throw new RouteError(400, 'bad_request', `Not a thread id: ${mergeInto}`)
     thread = await mergeThread(task.id, id, mergeInto, by)

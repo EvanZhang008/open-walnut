@@ -89,6 +89,9 @@ export function reportOfChange(raw: unknown, by: StatusLineBy, byName: string | 
     ...shape,
     at, turn_ended_at: at,
     ...(by !== 'self' ? { by, ...(byName ? { by_name: byName.slice(0, 120) } : {}) } : {}),
+    // `by` comes from the route's own caller resolution (setTaskReport: human only with no caller
+    // header), never from the body, so a person's line records the primary; a body's source_host is never read.
+    ...(by === 'human' ? { source_host: 'local' as const } : {}),
   };
 }
 
@@ -124,32 +127,42 @@ function askShapeOf(c: Record<string, unknown>): Pick<StatusReport, 'ask_kind' |
   };
 }
 
+/** Who sets a report: a resolved caller task (with the session it called from), or a session
+ *  caller Walnut could not resolve (`unknown`: never stored as a person). */
+export type ReportSetter = { taskId: string; title?: string; sessionId?: string } | { unknown: true };
+
 /**
  * Store the change as the task's report and move its phase as its own report would. `setter`: the
- * caller's task (its id and title), or null for a person; the task's own session is `self`.
+ * caller's task (its id, title and session), an unresolved session caller, or null for a person;
+ * the task's own session is `self`.
  */
 export async function setTaskReport(
-  taskId: string, raw: unknown, setter: { taskId: string; title?: string } | null, nowMs = Date.now(),
+  taskId: string, raw: unknown, setter: ReportSetter | null, nowMs = Date.now(),
 ): Promise<{ task: Task; phase: string | null; userSaid?: UserSaid }> {
   const { getTask, updateTask, updateTaskRaw } = await import('../task-manager.js');
   const task = await getTask(taskId).catch(() => null);
   if (!task) throw new ReportChangeError(`task ${taskId} not found`, 'not_found', 404);
   if (task.phase === 'COMPLETE' || task.status === 'done') throw new ReportChangeError('the task is complete: reopen it first', 'conflict', 409);
-  const by: StatusLineBy = !setter ? 'human' : setter.taskId === task.id ? 'self' : `task:${setter.taskId}`;
-  const changed = reportOfChange(raw, by, setter && by !== 'self' ? setter.title : undefined, nowMs);
+  const known = setter && 'taskId' in setter ? setter : null;
+  const by: StatusLineBy = !setter ? 'human' : !known ? 'unknown' : known.taskId === task.id ? 'self' : `task:${known.taskId}`;
+  const parsed = reportOfChange(raw, by, known && by !== 'self' ? known.title : undefined, nowMs);
+  // The writer's session comes from the resolved caller only, never from the request body.
+  const { session_id: _fromBody, ...rest } = parsed;
+  const sid = known?.sessionId?.trim();
+  const changed: StatusReport = sid ? { ...rest, session_id: sid } : rest;
   const needsSince = needsSinceOf(changed, task.status_report);
   const report: StatusReport = needsSince ? { ...changed, needs_since: needsSince } : changed;
   // Another task taking the ask off the user's Needs you (any line but the same ask) reads his words
   // in the task first, and passes back any he wrote since it asked (user-spoke.ts).
   let userSaid: UserSaid | undefined;
-  if (setter && by.startsWith('task:')) {
+  if (known && by.startsWith('task:')) {
     const { openAskOf } = await import('./ask-answer.js');
     const { askKey } = await import('../same-ask.js');
     const open = openAskOf(task);
     if ('ask' in open && !(report.state === 'needs' && askKey(report.ask) === askKey(open.ask))) {
       const { listTasks } = await import('../task-manager.js');
       const userWords = typeof (raw as ReportChange | null)?.user_words === 'string' ? (raw as ReportChange).user_words : undefined;
-      const check = await settleCheck(task, setter.taskId, userWords, 'changed', await listTasks().catch(() => []));
+      const check = await settleCheck(task, known.taskId, userWords, 'changed', await listTasks().catch(() => []));
       if (check?.refusal) throw new ReportChangeError(check.refusal, 'user_spoke_since', 409);
       userSaid = check?.said;
     }

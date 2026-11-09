@@ -31,7 +31,7 @@ export const LETTER_IFRAME_SANDBOX = 'allow-popups allow-popups-to-escape-sandbo
  * opening a letter reveals nothing about when it was read.
  */
 export const LETTER_FRAME_CSP_VALUE = "default-src 'none'; img-src data: blob:; "
-  + "media-src data: blob:; style-src 'unsafe-inline'; font-src data:; form-action 'none'";
+  + "media-src data: blob:; style-src 'unsafe-inline'; font-src data:; form-action 'none'; base-uri 'none'";
 
 /**
  * The same policy as a `<meta>` inside the document rather than the iframe's
@@ -88,15 +88,16 @@ export function wrapLetterHtml(html: string): string {
  * and a valid document, just nested one level deeper than ideal.
  */
 export function planLetterFrame(peek: string): { head: string; consumed: number; tail: string } {
-  if (/<head[\s>]/i.test(peek)) {
-    return { head: peek.replace(/<head([^>]*)>/i, (m) => `${m}${FRAME_HEAD}`), consumed: peek.length, tail: '' };
+  const prolog = /^\s*(?:<!doctype\s+html>\s*)?/i.exec(peek)![0];
+  const root = /^<html(?=[\s>])(?:[^<>"']|"[^"]*"|'[^']*')*>/i.exec(peek.slice(prolog.length));
+  const rootEnd = prolog.length + (root?.[0].length ?? 0);
+  const head = /^\s*<head(?=[\s>])(?:[^<>"']|"[^"]*"|'[^']*')*>/i.exec(peek.slice(rootEnd));
+  if (head) {
+    const at = rootEnd + head[0].length;
+    return { head: peek.slice(0, at) + FRAME_HEAD, consumed: at, tail: '' };
   }
-  if (/<html[\s>]/i.test(peek)) {
-    return {
-      head: peek.replace(/<html([^>]*)>/i, (m) => `${m}<head>${FRAME_HEAD}</head>`),
-      consumed: peek.length,
-      tail: '',
-    };
+  if (root) {
+    return { head: peek.slice(0, rootEnd) + `<head>${FRAME_HEAD}</head>`, consumed: rootEnd, tail: '' };
   }
   return {
     head: `<!doctype html><html><head><meta charset="utf-8">${FRAME_HEAD}</head><body>`,

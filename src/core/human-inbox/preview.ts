@@ -8,6 +8,7 @@
  */
 
 import { LETTER_PREVIEW_MAX_CHARS } from './types.js';
+import { findAgentTextRefs } from '../../lib/agent-text-refs.js';
 
 /** Enough source to fill 300 chars even after markup is stripped. */
 const PREVIEW_SOURCE_CHARS = 8_000;
@@ -77,7 +78,12 @@ export function derivePreview(
 export function truncatePreview(text: string, max = LETTER_PREVIEW_MAX_CHARS): string {
   const clean = collapse(text);
   if (clean.length <= max) return clean;
+  const crossing = findAgentTextRefs(clean.slice(0, PREVIEW_SOURCE_CHARS)).find((ref) => ref.start < max && ref.end > max);
+  if (crossing) return clean.slice(0, crossing.start).replace(/[\s"'(\[]+$/, '').trimEnd();
   const cut = clean.slice(0, max);
   const lastSpace = cut.lastIndexOf(' ');
-  return (lastSpace > max - 40 ? cut.slice(0, lastSpace) : cut).trimEnd();
+  if (lastSpace > max - 40) return cut.slice(0, lastSpace).trimEnd();
+  const tail = cut.slice(lastSpace + 1);
+  if (/^["'(\[]*(?:~?\/|https?:\/\/)/.test(tail)) return cut.slice(0, lastSpace + 1).trimEnd();
+  return cut.trimEnd();
 }

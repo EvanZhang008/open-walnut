@@ -417,6 +417,7 @@ filesRouter.get('/locate', async (req: Request, res: Response, next: NextFunctio
     const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined)
     res.json(await locateClickedPath({
       ref: req.query.ref, cwd: str(req.query.cwd), host: str(req.query.host), sessionId: str(req.query.sessionId),
+      sourceOnly: req.query.sourceOnly === '1',
     }))
   } catch (err) {
     if (err instanceof FilesOpError) {

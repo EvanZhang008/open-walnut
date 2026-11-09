@@ -27,11 +27,16 @@
 
 import type { Request, Response } from 'express'
 import { createReadStream } from 'node:fs'
+import { StringDecoder } from 'node:string_decoder'
 import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { isHostReplicaProgram } from '../../core/server-role.js'
 import { HUMAN_INBOX_CHUNK_BYTES } from '../../core/human-inbox/types.js'
 import type { LetterBodyStat } from '../../core/human-inbox/store.js'
+import { LETTER_FRAME_CSP_VALUE, LETTER_IFRAME_SANDBOX } from '../../core/human-inbox/letter-frame.js'
+import { createAgentHtmlLinker } from '../../lib/agent-html-refs.js'
+import { createAgentHtmlSecurity } from '../../lib/agent-html-security.js'
+import { isRefToken, type RefLinkOptions } from '../../lib/agent-text-refs.js'
 import { callPrimaryControl, sendV1Error as sendError } from './v1-control-relay.js'
 
 const SERVER_RELAY_SID = '__server__'
@@ -40,10 +45,10 @@ const SERVER_RELAY_SID = '__server__'
  * Same floor as the readers' inline frame (letter-html-frame.ts / the iOS
  * reader): no network origins at all, media only from `data:`/`blob:`. A body
  * served as its own document needs this as a header — there is no wrapper
- * document to put a `<meta>` in.
+ * document to put a `<meta>` in. The sandbox is the inline frame's, so a link
+ * the reader opens gets a working window there as it does from the inline frame.
  */
-const BODY_CSP = "default-src 'none'; img-src data: blob:; media-src data: blob:; "
-  + "style-src 'unsafe-inline'; font-src data:; form-action 'none'; sandbox allow-popups"
+export const BODY_CSP = `${LETTER_FRAME_CSP_VALUE}; sandbox ${LETTER_IFRAME_SANDBOX}`
 
 /** A whole-document relay must not outlive the browser's patience per chunk. */
 const CHUNK_RELAY_TIMEOUT_MS = 20_000
@@ -326,7 +331,72 @@ async function serveReplica(req: Request, res: Response, id: string, turn: numbe
  * head, so byte offsets no longer line up with the file. Range stays available on
  * the raw form (no `frame` param), which is what a resumable download wants.
  */
-async function serveFramed(res: Response, id: string, turn: number | undefined): Promise<void> {
+/** A downloaded phone document has no network base; its paired address survives a tunnel or path prefix. */
+export function refLinkOptionsFor(req: Request): RefLinkOptions {
+  const opts: RefLinkOptions = {}
+  if (isRefToken(req.query.ref_token)) opts.token = req.query.ref_token
+  if (req.query.refs !== '1') return opts.token ? opts : { kinds: [] }
+  const base = req.query.ref_base
+  if (!opts.token && typeof base === 'string' && base.length <= 8192 && !/[\u0000- \u007f]/.test(base)) {
+    try {
+      const parsed = new URL(base)
+      if (['http:', 'https:'].includes(parsed.protocol) && !parsed.username && !parsed.password
+        && !parsed.search && !parsed.hash && parsed.pathname.endsWith('/open-ref')) {
+        opts.refBase = parsed.href
+        return opts
+      }
+    } catch {}
+  }
+  const host = req.get('host')
+  if (host && /^[A-Za-z0-9.:[\]-]+$/.test(host)) {
+    opts.refBase = `${req.protocol === 'https' ? 'https' : 'http'}://${host}/open-ref`
+  }
+  return opts
+}
+
+function framedLinkStream(opts: RefLinkOptions, trustedPrefix: string): {
+  text(s: string): string
+  bytes(b: Buffer): string
+  finish(tail: string): string
+} {
+  const parts: string[] = []
+  const security = createAgentHtmlSecurity({ scriptingEnabled: false, trustedPrefix, onOutput: (s) => parts.push(s) })
+  const linker = createAgentHtmlLinker({ ...opts, scriptingEnabled: false, onOutput: (s) => security.write(s) })
+  const decoder = new StringDecoder('utf8')
+  const take = (): string => {
+    const s = parts.join('')
+    parts.length = 0
+    return s
+  }
+  return {
+    text(s) { linker.write(s); return take() },
+    bytes(b) { linker.write(decoder.write(b)); return take() },
+    finish(tail) {
+      const rest = decoder.end()
+      if (rest) linker.write(rest)
+      if (tail) linker.write(tail)
+      linker.end()
+      security.end()
+      return take()
+    },
+  }
+}
+
+/** Backpressure; a client that went away ends the wait too (else it never drains). */
+async function writeOut(res: Response, data: string | Buffer): Promise<void> {
+  if (data.length === 0 || res.destroyed) return
+  if (res.write(data)) return
+  await new Promise<void>((resolve) => {
+    const done = (): void => { res.off('drain', done); res.off('close', done); resolve() }
+    res.once('drain', done)
+    res.once('close', done)
+  })
+}
+
+/** Linking runs on the event loop, so a 2MB slice is linked in parts with a loop turn between. */
+const LINK_SLICE_BYTES = 256 * 1024
+
+async function serveFramed(req: Request, res: Response, id: string, turn: number | undefined): Promise<void> {
   const { planLetterFrame } = await import('../../core/human-inbox/letter-frame.js')
   // Same local-first rule as the raw form: a replica reads its own copy of the
   // blob when it has all of it, and only falls back to the chunked relay.
@@ -370,15 +440,14 @@ async function serveFramed(res: Response, id: string, turn: number | undefined):
   // an unknown number of chunks — so this response is chunked, not measured.
   res.removeHeader('Accept-Ranges')
   res.status(200)
-  res.write(plan.head)
-  // `consumed` counts CHARACTERS of the peek the head already contains; when the
-  // head spliced into the document's own <head> that is the whole peek, so the
-  // stream resumes at peekBytes. Otherwise nothing was consumed and the peek's
-  // own bytes still have to go out.
-  const resumeAt = plan.consumed > 0 ? peekBytes : 0
-  const carry = plan.consumed > 0 ? Buffer.alloc(0) : first.data.subarray(0, peekBytes)
-  await streamRest(res, readSlice, resumeAt, first.fileSize, carry)
-  if (plan.tail) res.write(plan.tail)
+  // The head goes through the linker too: one document, one tokenizer state.
+  const linked = framedLinkStream(refLinkOptionsFor(req), plan.head)
+  await writeOut(res, linked.text(plan.head))
+  // The frame plan consumes UTF-16 characters; the disk stream resumes at their UTF-8 byte offset.
+  const resumeAt = Buffer.byteLength(peek.slice(0, plan.consumed), 'utf8')
+  const carry = first.data.subarray(resumeAt, peekBytes)
+  await streamRest(res, readSlice, resumeAt, first.fileSize, carry, linked.bytes)
+  await writeOut(res, linked.finish(plan.tail))
   res.end()
 }
 
@@ -409,24 +478,29 @@ async function bodyNotCopied(res: Response, id: string): Promise<boolean> {
   return true
 }
 
-/** Write `carry`, then pull+write the rest of the file in bounded slices. */
+/** Write `carry`, then pull+write the rest of the file in bounded slices, through `transform` when given. */
 async function streamRest(
   res: Response,
   readSlice: (start: number, length: number) => Promise<{ data: Buffer; fileSize: number } | null>,
   start: number,
   fileSize: number,
   carry: Buffer,
+  transform?: (data: Buffer) => string,
 ): Promise<void> {
-  if (carry.length > 0 && !res.write(carry)) {
-    await new Promise<void>(resolve => res.once('drain', resolve))
+  const emit = async (data: Buffer): Promise<void> => {
+    if (!transform) { await writeOut(res, data); return }
+    for (let at = 0; at < data.length; at += LINK_SLICE_BYTES) {
+      if (at > 0) await new Promise<void>((resolve) => setImmediate(resolve))
+      await writeOut(res, transform(data.subarray(at, at + LINK_SLICE_BYTES)))
+    }
   }
+  if (carry.length > 0) await emit(carry)
   let cursor = start + carry.length
   while (cursor < fileSize) {
+    if (res.destroyed) return
     const slice = await readSlice(cursor, Math.min(HUMAN_INBOX_CHUNK_BYTES, fileSize - cursor))
     if (!slice || slice.data.length === 0) break
-    if (!res.write(slice.data)) {
-      await new Promise<void>(resolve => res.once('drain', resolve))
-    }
+    await emit(slice.data)
     cursor += slice.data.length
   }
 }
@@ -445,7 +519,7 @@ export async function serveLetterBody(req: Request, res: Response, id: string): 
   // A host replica answers here only while the Mac is away (it forwards otherwise).
   if (isHostReplicaProgram() && (await localBodyIfComplete(id, turn)) === null && (await bodyNotCopied(res, id))) return
   if (req.query.frame === '1') {
-    await serveFramed(res, id, turn)
+    await serveFramed(req, res, id, turn)
     return
   }
   if (CLOUD_MODE) {

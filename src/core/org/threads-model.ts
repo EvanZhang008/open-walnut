@@ -113,6 +113,25 @@ export interface ThreadAnswer {
   clipped?: boolean;
   /** Read from the letter's own thread (a letter note's answer, thread-answers.ts letterAnswerOf). */
   from?: 'letter';
+  /**
+   * The session whose words these are: the transcript they were read from, or the letter turn's
+   * recorded writer. Absent = not recorded (an answer kept before 2026-11-07, or a letter turn with
+   * no writer on it): a path in it opens nowhere until the user picks a machine.
+   */
+  sid?: string;
+  /** That session's host as Walnut read it then ('__local__' = the primary). */
+  host?: string;
+}
+
+/**
+ * Who wrote a piece of a thread (its summary, its first post), as Walnut verified it: the caller's
+ * own session record behind `x-walnut-caller-sid`, never a sid or host from a request body
+ * (2026-11-07: a summary's path opened on the node's current machine, not the writer's).
+ */
+export interface ThreadTextSource {
+  sid: string;
+  /** '__local__' = the primary. */
+  host?: string;
 }
 
 /** A letter note whose answer was not read from its letter (filed before 2026-11-03, taken from the chat). */
@@ -132,6 +151,9 @@ export interface ThreadOpener {
   /** What it points at: a task id, a letter id (lt-...), a mail's subject. */
   ref?: string;
   by: ThreadWriter;
+  /** The writing session, when Walnut verified it (ThreadTextSource); absent for the user and for an unknown writer. */
+  sid?: string;
+  host?: string;
 }
 
 /** The node decided the user already knows every exchange through this message (thread-view.ts). */
@@ -175,6 +197,14 @@ export interface OrgThread {
   reply?: string;
   /** When the node last wrote `reply` (thread-view.ts supersededBySummary: an older answer leaves the card). */
   replyAt?: string;
+  /**
+   * Who wrote `reply`, set only by a write that changed it (a pin, a close or a state move keeps
+   * it): `reply_by` the writer, `reply_sid`/`reply_host` its verified session (ThreadTextSource).
+   * None of them on a summary written before 2026-11-07: its writer is unknown, never guessed.
+   */
+  reply_by?: ThreadWriter;
+  reply_sid?: string;
+  reply_host?: string;
   /** Tasks the thread went to: shown with their live status. */
   tasks?: string[];
   messages: ThreadMessage[];
@@ -242,12 +272,60 @@ export function fallbackTitle(text: string, lang: LetterLang = 'en'): string {
 
 const isStr = (v: unknown): v is string => typeof v === 'string';
 
+const SOURCE_MAX = 128;
+/** A recorded session id or host as kept: a short non-empty string, else nothing. */
+const sourceStr = (v: unknown): string | undefined => (isStr(v) && v.trim() && v.length <= SOURCE_MAX ? v.trim() : undefined);
+
+/** A source handed in by Walnut's own code (the route's verified caller, a transcript read), checked the same way. */
+export function verifiedSource(s: ThreadTextSource | undefined | null): ThreadTextSource | undefined {
+  const sid = sourceStr(s?.sid);
+  if (!sid) return undefined;
+  const host = sourceStr(s?.host);
+  return { sid, ...(host ? { host } : {}) };
+}
+
+/** `x` with `sid`/`host` kept only as short strings (a host only with its session), none at all for the user's own words. */
+function withSource<T extends { sid?: string; host?: string }>(x: T, human: boolean): T {
+  const { sid, host, ...rest } = x;
+  const s = human ? undefined : verifiedSource({ sid: sid ?? '', host });
+  return { ...rest, ...(s ? { sid: s.sid, ...(s.host ? { host: s.host } : {}) } : {}) } as unknown as T;
+}
+
+/**
+ * The summary's writer as read from disk: kept only with a summary and a writer named. A summary
+ * from before the writer was recorded keeps none, so it reads as unknown, never as the node's
+ * current session.
+ */
+function normalizeReplySource(t: OrgThread): void {
+  const { reply_by: by, reply_sid: sid, reply_host: host } = t;
+  delete t.reply_by;
+  delete t.reply_sid;
+  delete t.reply_host;
+  if (!t.reply || !isStr(by) || !by) return;
+  t.reply_by = by;
+  const s = by === 'human' ? undefined : verifiedSource({ sid: sid ?? '', host });
+  if (s) { t.reply_sid = s.sid; if (s.host) t.reply_host = s.host; }
+}
+
+/** The summary written: its writer goes with it. Called only when the words change. */
+function setReply(next: OrgThread, text: string | undefined, by: ThreadWriter, source: ThreadTextSource | undefined): void {
+  delete next.reply_by;
+  delete next.reply_sid;
+  delete next.reply_host;
+  if (!text) { delete next.reply; return; }
+  next.reply = text;
+  next.reply_by = by;
+  const s = by === 'human' ? undefined : verifiedSource(source);
+  if (s) { next.reply_sid = s.sid; if (s.host) next.reply_host = s.host; }
+}
+
 function normalizeMessage(m: unknown): ThreadMessage | null {
   if (!m || typeof m !== 'object') return null;
   const x = m as Partial<ThreadMessage>;
   if (!isStr(x.id) || !isStr(x.at) || !isStr(x.text)) return null;
   const next = { ...x, via: isStr(x.via) ? x.via : 'chat', ...(Array.isArray(x.images) ? { images: x.images.filter(isStr) } : {}) } as ThreadMessage;
   if (next.answer && !(typeof next.answer === 'object' && isStr(next.answer.text) && isStr(next.answer.at))) delete next.answer;
+  else if (next.answer) next.answer = withSource(next.answer, false);
   return next;
 }
 
@@ -258,7 +336,9 @@ function normalizeThread(t: unknown): OrgThread | null {
   if (!isStr(x.id) || !Array.isArray(x.messages)) return null;
   const messages = x.messages.map(normalizeMessage).filter((m): m is ThreadMessage => !!m);
   const o = x.opener;
-  const opener = o && typeof o === 'object' && isStr(o.text) && isStr(o.at) ? { ...o, from: THREAD_SOURCES.includes(o.from) ? o.from : 'node' } as ThreadOpener : undefined;
+  const opener = o && typeof o === 'object' && isStr(o.text) && isStr(o.at)
+    ? withSource({ ...o, from: THREAD_SOURCES.includes(o.from) ? o.from : 'node' } as ThreadOpener, o.by === 'human')
+    : undefined;
   if (!messages.length && !opener) return null;
   const firstAt = opener?.at ?? messages[0].at;
   const updatedAt = isStr(x.updatedAt) ? x.updatedAt : messages[messages.length - 1]?.at ?? firstAt;
@@ -273,6 +353,7 @@ function normalizeThread(t: unknown): OrgThread | null {
     } else delete next.closed;
   }
   if (opener) next.opener = opener; else delete next.opener;
+  normalizeReplySource(next);
   if (next.snoozed && !(typeof next.snoozed === 'object' && isStr(next.snoozed.until) && isStr(next.snoozed.at) && Number.isFinite(Date.parse(next.snoozed.until)))) delete next.snoozed;
   if (next.replyAt !== undefined && !(isStr(next.replyAt) && next.reply)) delete next.replyAt;
   if (next.recheck && !(typeof next.recheck === 'object' && isStr(next.recheck.since) && isStr(next.recheck.at))) delete next.recheck;
@@ -624,7 +705,11 @@ export function patchHandsToUser(cur: Pick<OrgThread, 'state' | 'closed'>, patch
   return waitsOnUser(target) && (cur.state !== target || (patch.reopen === true && !!cur.closed && target === 'needs'));
 }
 
-export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, by: ThreadWriter, at: string): { file: ThreadsFile; thread: OrgThread } {
+/**
+ * `source`: the writer's own session as Walnut verified it (ThreadTextSource); absent for the user
+ * and for a caller Walnut could not place, whose summary then reads as written by an unknown session.
+ */
+export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, by: ThreadWriter, at: string, source?: ThreadTextSource): { file: ThreadsFile; thread: OrgThread } {
   checkPatch(patch);
   const cur = find(file, id);
   // Handed to the user: needs, from a state it was not in, or a closed thread reopened into it.
@@ -636,8 +721,13 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
   const next: OrgThread = { ...cur, updatedAt: at, by };
   if (patch.title !== undefined) { next.title = clip(patch.title, THREAD_TITLE_MAX); next.titled = true; }
   if (patch.ask !== undefined) { if (patch.ask.trim()) next.ask = clip(patch.ask, THREAD_ASK_MAX); else delete next.ask; }
+  // The summary's writer moves only with its words: the same words sent again (a state move that
+  // repeats the reply) keep the writer they had, so a path in them still opens where it was written.
+  // `replyAt` is when the node last wrote it, so it moves with every non-empty write.
   if (patch.reply !== undefined) {
-    if (patch.reply.trim()) { next.reply = clip(patch.reply, THREAD_REPLY_MAX); next.replyAt = at; } else { delete next.reply; delete next.replyAt; }
+    const text = patch.reply.trim() ? clip(patch.reply, THREAD_REPLY_MAX) : undefined;
+    if (text !== cur.reply) setReply(next, text, by, source);
+    if (text) next.replyAt = at; else delete next.replyAt;
   }
   if (patch.state !== undefined) next.state = patch.state;
   // A new summary on a thread out of his sight is news: it shows (answered), unless the same write names a state.
@@ -762,7 +852,7 @@ export interface OpenThreadInput {
 }
 
 /** The node opens a thread itself: its first post is what reached it (thread_create). */
-export function openThread(file: ThreadsFile, input: OpenThreadInput, by: ThreadWriter, at: string): { file: ThreadsFile; thread: OrgThread } {
+export function openThread(file: ThreadsFile, input: OpenThreadInput, by: ThreadWriter, at: string, source?: ThreadTextSource): { file: ThreadsFile; thread: OrgThread } {
   if (typeof input.title !== 'string' || !input.title.trim()) throw new ThreadError('bad_input', 400, 'title must be a few words.');
   if (typeof input.text !== 'string' || !input.text.trim()) throw new ThreadError('bad_input', 400, 'text (what reached you, for him) is required.');
   if (!THREAD_SOURCES.includes(input.from)) throw new ThreadError('bad_input', 400, `from must be one of ${THREAD_SOURCES.join(', ')}.`);
@@ -771,10 +861,16 @@ export function openThread(file: ThreadsFile, input: OpenThreadInput, by: Thread
   if (input.state !== undefined && HIDDEN_STATES.has(input.state)) throw new ThreadError('bad_input', 400, 'A thread you open is for him to see: open it as needs or answered.');
   if (waitsOnUser(input.state ?? 'needs')) checkHandedToUser(by, input);
   const tasks = taskList(input.tasks ?? []);
+  // The first post's writer: its verified session (never one the input names), none for the user.
+  const s = by === 'human' ? undefined : verifiedSource(source);
   const thread: OrgThread = {
     id: input.id && THREAD_ID_RE.test(input.id) ? input.id : newThreadId(),
     title: clip(input.title, THREAD_TITLE_MAX), titled: true, state: input.state ?? 'needs', messages: [],
-    opener: { text: clip(input.text, THREAD_ANSWER_MAX), at, from: input.from, by, ...(input.ref?.trim() ? { ref: clip(input.ref, THREAD_TITLE_MAX) } : {}) },
+    opener: {
+      text: clip(input.text, THREAD_ANSWER_MAX), at, from: input.from, by,
+      ...(input.ref?.trim() ? { ref: clip(input.ref, THREAD_TITLE_MAX) } : {}),
+      ...(s ? { sid: s.sid, ...(s.host ? { host: s.host } : {}) } : {}),
+    },
     createdAt: at, updatedAt: at, by, ...(tasks.length ? { tasks } : {}),
   };
   return { file: { ...file, threads: prune([...file.threads, thread], at) }, thread };
@@ -795,7 +891,8 @@ export function setAnswers(file: ThreadsFile, answers: ReadonlyMap<string, Threa
       if (!a || (m.answer && !(a.from === 'letter' && letterAnswerMissing(m)))) return m;
       hit = true;
       const clipped = a.text.length > THREAD_ANSWER_MAX;
-      return { ...m, answer: { ...a, text: clipped ? `${a.text.slice(0, THREAD_ANSWER_MAX - 1)}…` : a.text, ...(clipped ? { clipped: true } : {}) } };
+      // Its session is the one Walnut read it from (ThreadAnswer.sid), or none: never the message's own `sid`.
+      return { ...m, answer: { ...withSource(a, false), text: clipped ? `${a.text.slice(0, THREAD_ANSWER_MAX - 1)}…` : a.text, ...(clipped ? { clipped: true } : {}) } };
     });
     if (!hit) return t;
     changed.push(t.id);

@@ -139,6 +139,40 @@ function makeManager(): RemoteSessionManager {
   return mgr
 }
 
+describe('an explicit image source host', () => {
+  it('reads the remote copy even when the same path exists locally; local aliases keep the local copy', async () => {
+    const file = `${WALNUT_HOME}/same-path.png`
+    await fsp.mkdir(WALNUT_HOME, { recursive: true })
+    const local = Buffer.from('local image bytes')
+    await fsp.writeFile(file, local)
+    sendMock.mockImplementation(async (cmd: string, params: { path: string }) => {
+      if (params.path !== file) return { ok: true, exists: false }
+      if (cmd === 'fs.stat') return { ok: true, exists: true, size: PNG.length, mtimeMs: 1000 }
+      return { ok: true, data: PNG.toString('base64') }
+    })
+    const remote = await fetch(`${baseUrl}/api/local-image?path=${encodeURIComponent(file)}&host=remotehost`)
+    expect(remote.status).toBe(200)
+    expect(Buffer.from(await remote.arrayBuffer()).equals(PNG)).toBe(true)
+    expect(readsOf(file)).toBe(1)
+    for (const host of ['', 'local', '__local__']) {
+      const response = await fetch(`${baseUrl}/api/local-image?path=${encodeURIComponent(file)}&host=${host}`)
+      expect(response.status).toBe(200)
+      expect(Buffer.from(await response.arrayBuffer()).equals(local)).toBe(true)
+    }
+    expect(readsOf(file)).toBe(1)
+  })
+
+  it('never substitutes a local copy when the selected remote host has no file', async () => {
+    const file = `${WALNUT_HOME}/missing-remotely.png`
+    await fsp.mkdir(WALNUT_HOME, { recursive: true })
+    await fsp.writeFile(file, 'local image bytes')
+    sendMock.mockResolvedValue({ ok: false, exists: false, error: 'File not found' })
+    const response = await fetch(`${baseUrl}/api/local-image?path=${encodeURIComponent(file)}&host=remotehost`)
+    expect(response.status).toBe(404)
+    expect(await response.json()).toEqual({ error: 'File not found' })
+  })
+})
+
 describe('GET /api/local-image for a mirror slot that is still downloading', () => {
   it('waits for the history replay download instead of answering 404', async () => {
     sendMock.mockImplementation(slowDaemon(150))

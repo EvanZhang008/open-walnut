@@ -348,6 +348,12 @@ export type CallerIdentity =
   | { kind: 'external'; app?: string } // gateway 'external' or an unknown sid; `app`: an installed plugin's own call
   | { kind: 'human' };              // no caller sid at all: the user's own CLI
 
+/** The caller's own session id when the header resolves to a live record, else undefined (a person or unknown). */
+export async function trustedCallerSessionId(callerSid: string | undefined): Promise<string | undefined> {
+  const caller = await resolveCaller(callerSid).catch(() => null);
+  return caller?.kind === 'session' ? caller.record.claudeSessionId || undefined : undefined;
+}
+
 export async function resolveCaller(callerSid: string | undefined): Promise<CallerIdentity> {
   const sid = (callerSid ?? '').trim();
   if (!sid) return { kind: 'human' };
@@ -457,7 +463,8 @@ export async function noteResultReport(
       if (!fields && head.via === 'reply' && !(isPartial(was) && was?.request_id === head.request_id)) return null;
       // A reply never ends what a close left for the user (sessions/owed-to-user.ts): the hold rides on.
       const held = head.via === 'reply' ? openOwed(was) : undefined;
-      if (held) report = { ...report, owed: held, not_done: [...new Set([...(report.not_done ?? []), ...held.items])] };
+      // The merged list mixes an earlier writer's items: its writer is unknown, result/evidence stay this one's.
+      if (held) report = { ...report, owed: held, not_done: [...new Set([...(report.not_done ?? []), ...held.items])], not_done_by: 'unknown' };
       return { result_report: report };
     }, { source: 'result-report', push: false });
     if (!changed) return undefined;
@@ -657,7 +664,10 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
   const words = input.text?.trim() || (typeof input.reply?.result === 'string' ? input.reply.result : '');
   let prepared: Awaited<ReturnType<typeof prepareAskAnswer>>;
   try {
-    prepared = await prepareAskAnswer(caller.kind === 'session' ? caller.record.taskId! : null, targetTaskId, words, input.userWords);
+    prepared = await prepareAskAnswer(
+      caller.kind === 'session' ? caller.record.taskId! : null, targetTaskId, words, input.userWords,
+      caller.kind === 'session' ? caller.record.claudeSessionId : undefined,
+    );
   } catch (err) {
     if (err instanceof AskAnswerError) throw new SendError(err.code, err.message, err.status, targetTaskId ? { taskId: targetTaskId } : undefined);
     throw err;
@@ -1044,6 +1054,7 @@ async function performReply(
     if (caller.record.taskId) {
       await noteResultReport(caller.record.taskId, {
         via: 'reply', request_id: answeredFor.id, ...(origin.taskId ? { to_task_id: origin.taskId } : {}), by: `task:${caller.record.taskId}`,
+        ...(caller.record.claudeSessionId ? { sessionId: caller.record.claudeSessionId } : {}),
       }, fields);
     }
 

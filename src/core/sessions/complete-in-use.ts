@@ -17,7 +17,7 @@ import type { StructuredReply } from '../peers/structured-reply.js';
 export interface CompleteBlock { code: InUseReason['code'] | 'unfinished_result' | 'unanswered_requests' | 'turn_running'; text: string }
 
 export type CompleteAdmission =
-  | { ok: true; callerTaskId?: string }
+  | { ok: true; callerTaskId?: string; callerSessionId?: string }
   | { ok: false; message: string; reasons: CompleteBlock[] };
 
 /**
@@ -62,20 +62,21 @@ export async function admitCompleteOfOther(
     const caller = await resolveCaller(callerSid).catch(() => null);
     if (caller?.kind !== 'session' || !caller.record.taskId) return { ok: true };
     const callerTaskId = caller.record.taskId;
+    const callerSessionId = caller.record.claudeSessionId;
     const { getTask } = await import('../task-manager.js');
     const task = await getTask(taskRef).catch(() => null);
     // Its own task, or one already closed: nothing to protect (completeTask answers the rest).
-    if (!task || task.id === callerTaskId || task.phase === 'COMPLETE') return { ok: true, callerTaskId };
+    if (!task || task.id === callerTaskId || task.phase === 'COMPLETE') return { ok: true, callerTaskId, callerSessionId };
     const { sourceInUse } = await import('../transfer/source-in-use.js');
     // Open subtasks never block a completion (2026-10-04, the user: a leader with a recurring
     // worker could not be closed at all); they keep running and the response lists them.
     const inUse = (await sourceInUse(task, callerSid)).filter((r) => r.code !== 'open_subtasks');
     const reasons: CompleteBlock[] = [...inUse, ...await unfinishedWork(task, opts.fields, callerSid)];
-    if (reasons.length === 0) return { ok: true, callerTaskId };
+    if (reasons.length === 0) return { ok: true, callerTaskId, callerSessionId };
     const reason = (opts.reason ?? '').trim();
     if (opts.force === true && reason.length >= REASON_MIN) {
       log.session.info('task completed while in use: forced by a session', { taskId: task.id, callerTaskId, reasons: reasons.map((r) => r.code), reason });
-      return { ok: true, callerTaskId };
+      return { ok: true, callerTaskId, callerSessionId };
     }
     const why = reasons.map((r) => r.text).join('; ');
     return {

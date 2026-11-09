@@ -75,7 +75,7 @@ describe('a change from outside its turn', () => {
 
   it('keeps only the fields of its state', () => {
     expect(reportOfChange({ state: 'working', ask: 'stray', waiting_on: 'stray', next: 'Run it' }, 'human', undefined, NOW)).toEqual({
-      state: 'working', next: 'Run it', at: new Date(NOW).toISOString(), turn_ended_at: new Date(NOW).toISOString(), by: 'human',
+      state: 'working', next: 'Run it', at: new Date(NOW).toISOString(), turn_ended_at: new Date(NOW).toISOString(), by: 'human', source_host: 'local',
     })
   })
 })

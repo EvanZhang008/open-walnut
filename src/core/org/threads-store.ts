@@ -16,7 +16,7 @@ import { isCompanion } from '../server-role.js';
 import { walnutLetterLanguage as letterLang } from '../human-inbox/walnut-letters/languages.js';
 import {
   emptyThreads, enteredNeeds, fileMessage, markClosesTold, markRechecked, mergeThreads, normalizeThreads, openThread, patchHandsToUser, setAnswers, splitThreadMessage, stampLegacyReplyAt, sweepClosed, ThreadError, updateThread,
-  type FileMessageInput, type FileMessageResult, type OpenThreadInput, type OrgThread, type ThreadAnswer, type ThreadPatch, type ThreadRecheck, type ThreadsFile, type ThreadWriter,
+  type FileMessageInput, type FileMessageResult, type OpenThreadInput, type OrgThread, type ThreadAnswer, type ThreadPatch, type ThreadRecheck, type ThreadsFile, type ThreadTextSource, type ThreadWriter,
 } from './threads-model.js';
 
 const TASK_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -100,25 +100,30 @@ async function refuseSameAskThread(taskId: string, text: string | undefined, by:
   });
 }
 
-export async function openNodeThread(taskId: string, input: OpenThreadInput, by: ThreadWriter): Promise<OrgThread> {
+/**
+ * `source`: the writer's own session, verified by the caller (the route reads it from the caller's
+ * session record, never from the body); absent = an unknown writer (or the user, by 'human').
+ */
+export async function openNodeThread(taskId: string, input: OpenThreadInput, by: ThreadWriter, source?: ThreadTextSource): Promise<OrgThread> {
   if ((input.state ?? 'needs') === 'needs') await refuseSameAskThread(taskId, input.title, by, input);
   const at = new Date().toISOString();
   const thread = await mutateThreads(taskId, (cur) => {
-    const r = openThread(cur, input, by, at);
+    const r = openThread(cur, input, by, at, source);
     return { file: r.file, out: r.thread };
   });
   emit({ taskId, kind: 'opened', threadId: thread.id });
   return thread;
 }
 
-export async function patchThread(taskId: string, id: string, patch: ThreadPatch, by: ThreadWriter): Promise<OrgThread> {
+/** `source`: as for openNodeThread; it is recorded only when the patch changes the summary (`reply`). */
+export async function patchThread(taskId: string, id: string, patch: ThreadPatch, by: ThreadWriter, source?: ThreadTextSource): Promise<OrgThread> {
   if (by !== 'human') {
     const cur = (await readThreads(taskId)).threads.find((t) => t.id === id);
     if (cur && patchHandsToUser(cur, patch)) await refuseSameAskThread(taskId, patch.ask?.trim() || cur.ask || patch.title?.trim() || cur.title, by, patch);
   }
   const at = new Date().toISOString();
   const thread = await mutateThreads(taskId, (cur) => {
-    const r = updateThread(cur, id, patch, by, at);
+    const r = updateThread(cur, id, patch, by, at, source);
     return { file: r.file, out: r.thread };
   });
   emit({ taskId, kind: 'updated', threadId: id });

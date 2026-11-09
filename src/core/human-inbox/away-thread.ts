@@ -125,7 +125,7 @@ export async function sendAway(
           text: foldedTurnText(input),
           ...(typeof input.markdown === 'string' && input.markdown ? { markdown: input.markdown }
             : typeof input.html === 'string' && input.html ? { html: input.html } : ref ? { htmlRef: ref } : {}),
-        }, { quiet: !plan.into.read, taskRefs: input.taskRefs ?? input.task_refs, refuseDuplicate: !!guard.refuseDuplicate });
+        }, { quiet: !plan.into.read, taskRefs: input.taskRefs ?? input.task_refs, refuseDuplicate: !!guard.refuseDuplicate, sender });
         log.notif.info('human-inbox: an away update joined its thread', { letterId: letter.id, taskId, quiet: !plan.into.read });
         return { letter, addedToThread: true };
       } catch (err) {

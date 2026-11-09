@@ -1552,7 +1552,7 @@ export async function handleSessionControlRelay(
         const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
         try {
           result = await locateClickedPath({
-            ref: p.ref, cwd: str(p.cwd), host: str(p.host), sessionId: str(p.sessionId),
+            ref: p.ref, cwd: str(p.cwd), host: str(p.host), sessionId: str(p.sessionId), sourceOnly: p.sourceOnly === true,
           }) as unknown as Record<string, unknown>;
         } catch (err) {
           if (err instanceof FilesOpError) throw new SessionControlError(err.message, err.statusCode);

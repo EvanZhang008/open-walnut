@@ -3,8 +3,8 @@
  *
  * GET /api/local-image?path=/absolute/path/to/file.png[&host=clouddev]
  *
- * When `host` is provided and the file doesn't exist locally, the bytes come
- * from the remote host via the daemon and are cached in the REMOTE_IMAGES_DIR
+ * An explicit remote `host` selects that machine, even when the path exists locally.
+ * The bytes come from its daemon and are cached in the REMOTE_IMAGES_DIR
  * mirror (with a .src.json sidecar recording their origin). Mirror hits are
  * revalidated against the remote mtime/size before serving, so an image the
  * session regenerated on the remote host shows its NEW bytes — the old
@@ -111,9 +111,9 @@ localImageRouter.get('/', async (req: Request, res: Response, next: NextFunction
       return
     }
 
-    // Try local file first
+    const remote = typeof host === 'string' && !!host && host !== 'local' && host !== '__local__'
     let buffer: Buffer | null = null
-    try {
+    if (!remote || isMirrorPath(filePath)) try {
       const stat = await fsp.stat(filePath)
       if (stat.isFile() && stat.size <= MAX_FILE_SIZE) {
         // Mirror files carry a .src.json sidecar — check the remote source
@@ -138,7 +138,7 @@ localImageRouter.get('/', async (req: Request, res: Response, next: NextFunction
     if (waitedOnPending) buffer = await awaitPendingMirror(filePath)
 
     // Remote fallback: serve from the host mirror (revalidated), else download.
-    if (!buffer && !waitedOnPending && host && typeof host === 'string') {
+    if (!buffer && !waitedOnPending && remote) {
       const cachePath = hostCachePath(host, filePath)
       const hasCache = await fsp.stat(cachePath).then((s) => s.isFile()).catch(() => false)
       if (hasCache && (await readMirrorSidecar(cachePath))) {
@@ -150,7 +150,7 @@ localImageRouter.get('/', async (req: Request, res: Response, next: NextFunction
 
     // Auto-detect remote session images: /tmp/open-walnut/images/remote/<sessionId>/file.png
     // The path is identical on the remote host (EKS MCP writes there directly).
-    if (!buffer && !waitedOnPending && filePath.startsWith(REMOTE_IMAGES_DIR + '/')) {
+    if (!buffer && !waitedOnPending && !remote && filePath.startsWith(REMOTE_IMAGES_DIR + '/')) {
       const relToRemote = filePath.slice(REMOTE_IMAGES_DIR.length + 1)
       const slashIdx = relToRemote.indexOf('/')
       if (slashIdx > 0) {

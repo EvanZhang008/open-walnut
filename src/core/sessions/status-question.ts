@@ -72,7 +72,8 @@ export async function applyStatusAnswer(
   const prev = current.status_report;
   const answered = opts.midTurn ? !!prev?.answered_person : turnAnsweredPerson(rec?.humanInputAt, turnEndedMs, prev);
   const endedAt = opts.midTurn ? prev?.turn_ended_at : new Date(turnEndedMs).toISOString();
-  report = { ...report, rule: STATUS_RULE_VERSION, ...(endedAt ? { turn_ended_at: endedAt } : {}), ...(answered ? { answered_person: true } : {}) };
+  // The writer is the session asked, recorded here; a session_id the parsed answer carried is dropped.
+  report = { ...report, rule: STATUS_RULE_VERSION, ...(endedAt ? { turn_ended_at: endedAt } : {}), ...(answered ? { answered_person: true } : {}), session_id: sessionId };
   // When it began asking, kept across asks in a row: a caller settling the ask reads the user's words since (user-spoke.ts).
   const { needsSinceOf } = await import('./user-spoke.js');
   const needsSince = needsSinceOf(report, prev);

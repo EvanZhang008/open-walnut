@@ -162,14 +162,16 @@ describe('shaping never grows the writer\'s share', () => {
 const KNOWN_LINE_SOURCES = [
   'last.push(line)', // the writer's line under the item before it
   'last.push(line)', // the writer's line, moved to its section
-  'body.needs.push(line)', // inside walnut(): recorded as Walnut's
-  'walnutLines.push(line)', // the record itself
+  'body.needs.push(ln)', // inside walnut(): recorded as Walnut's
+  'walnutLines.push(ln.text)', // the record itself
   'added.push(t.id)', // ids, not lines
-  "out.push(...head, '')", // the writer's lines before the first heading
-  'out.push(`### ${s.heading}`, ...lines, \'\')', // a canonical heading: headingSection
-  'lines = [emptySectionLine(opts.language, text)]', // a section's "nothing" line: saysNothing
-  'walnut(addedAskLine(t, main, tasks))', // an ask the letter did not name
-  'walnut(`- And ${more} more ${more === 1 ? \'ask\' : \'asks\'} the user: the Task view lists ${more === 1 ? \'it\' : \'them\'}.`)', // the count past the cap: ADDED_MORE_RE
+  "out.push(...head, layout(''))", // the writer's lines before the first heading
+  'out.push(layout(`### ${s.heading}`), ...lines, layout(\'\'))', // a canonical heading: headingSection
+  'lines = [layout(emptySectionLine(opts.language, text))]', // a section's "nothing" line: saysNothing
+  'pieces.push(...l.pieces)', // who wrote each part of a line (brief-source.ts), not a line
+  "pieces.push({ text: '\\n', layout: true })", // the line break between two lines, Walnut's layout
+  'walnut({ text: words, pieces: [{ text: words, writer: askLineWriter(t) }] })', // an ask the letter did not name
+  'walnut(layout(`- And ${more} more ${more === 1 ? \'ask\' : \'asks\'} the user: the Task view lists ${more === 1 ? \'it\' : \'them\'}.`))', // the count past the cap: ADDED_MORE_RE
 ]
 
 describe('source ratchet: every line structureBrief writes is accounted for', () => {

@@ -321,7 +321,7 @@ export async function setBoardChoice(
   taskId: string,
   id: string,
   input: { option?: string; text?: string; images?: string[] },
-  opts: { writer?: BoardWriterStamp; overrideUser?: boolean } = {},
+  opts: { writer?: BoardWriterStamp; overrideUser?: boolean; sessionId?: string } = {},
 ): Promise<ChoiceResult> {
   checkItemId(id, 'choice');
   // New pictures replace the answer's; none given keeps the ones it has (as the words are kept).
@@ -382,6 +382,8 @@ export async function setBoardChoice(
       const words = agentStamp(wordsSame && !(human && text !== undefined) ? writerOf(prev!.text_by, prev!.text_by_name) : opts.writer);
       if (words.by) choice.text_by = words.by;
       if (words.by_name) choice.text_by_name = words.by_name;
+      const wordsSession = wordsSame && !(human && text !== undefined) ? prev?.text_session_id : opts.sessionId;
+      if (words.by && wordsSession) choice.text_session_id = wordsSession;
     }
     const nextImages = images.length ? images : prev?.images ?? [];
     if (nextImages.length) choice.images = nextImages;

@@ -881,6 +881,8 @@ export interface Task {
    *  search, sync and the frozen iOS /api/v1 contract consume a short field.
    *  Never author it directly; edit the note instead. */
   summary: string;
+  /** Writer session of `summary` (turn-end hook only; other writes clear it); absent = unknown. */
+  summary_session_id?: string;
   /** The task's single AI-maintained living document (sections: Executive
    *  Summary / User Request / Context / Progress / References / Work Log —
    *  References is the optional external-artifact index: ids + titles as

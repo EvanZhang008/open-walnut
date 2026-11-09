@@ -1042,12 +1042,13 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         // A thread turn always carries plain text (that is what the thread renders), so a rich
         // reply that omitted it would be refused by the store. Derived rather than rejected.
         const text = input.text?.trim() || (input.markdown ?? input.html ?? '').trim()
+        // The turn's writer is the plugin's own stamp, as its letters carry: it ran in this server process.
         await agentReply(letterId, {
           text,
           ...(input.items !== undefined ? { items: input.items } : {}),
           ...(input.markdown !== undefined ? { markdown: input.markdown } : {}),
           ...(input.html !== undefined ? { html: input.html } : {}),
-        })
+        }, { sender: { sessionId: 'external', host: 'local', pluginId } })
       },
       async withdraw(letterId: string, input: { note: string }): Promise<void> {
         const { withdrawLetterAndAnnounce } = await import('../human-inbox/letter-ops.js')

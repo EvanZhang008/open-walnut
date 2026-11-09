@@ -151,7 +151,8 @@ describe('writing the html', () => {
     })
     expect(set.status).toBe(200)
     expect(set.json.board).toMatchObject({ version: 1, updated_by: `task:${team.leader}` })
-    expect(Object.keys(set.json.board).sort()).toEqual(['html', 'updated_at', 'updated_by', 'version'])
+    expect(Object.keys(set.json.board).sort()).toEqual(['html', 'html_sources', 'updated_at', 'updated_by', 'updated_session_id', 'version'])
+    expect(set.json.board.updated_session_id).toBe(team.sid.leader)
 
     const byWorker = await call('POST', `${boardPath(team.leader)}/edits`, {
       sid: team.sid.worker, body: { edits: [{ old: 'Status: open', new: 'Status: fixing' }], version: 1 },
@@ -196,15 +197,57 @@ describe('writing the html', () => {
       const edit = await call('POST', `${boardPath(other)}/edits`, { sid, body: { edits: [{ old: '</p>', new: '.</p>' }] } })
       expect(edit.status).toBe(200)
       expect(edit.json.board.updated_by).toBe('agent')
+      expect(edit.json.board.updated_session_id).toBe(sid === team.sid.untracked ? sid : undefined)
       const post = await call('POST', `${boardPath(other)}/threads/t1`, { sid, body: { text: 'Noted.' } })
       expect(post.status).toBe(201)
       expect(post.json).toMatchObject({ message: { author: 'agent' }, delivery: { state: 'stored' } })
+      expect(post.json.message.sessionId).toBe(sid === team.sid.untracked ? sid : undefined)
       expect((await call('PUT', `${boardPath(other)}/marks/m1`, { sid, body: { state: 'x' } })).status).toBe(200)
     }
     // A leader writes a board outside its tree too (its team's board is only the default target).
     const byLeader = await call('PUT', boardPath(other), { sid: team.sid.leader, body: { html: '<p>by the leader</p>' } })
     expect(byLeader.json.board.updated_by).toBe(`task:${team.leader}`)
     expect(performSessionSendMock).not.toHaveBeenCalled()
+  })
+
+  it('HTML source sessions come from the caller, not body fields, and a human edit clears them', async () => {
+    const own = await task('Source board')
+    const set = await call('PUT', boardPath(own), { sid: team.sid.worker, body: { html: '<p>one</p>', sessionId: team.sid.outsider } })
+    expect(set.json.board.updated_session_id).toBe(team.sid.worker)
+    expect((await call('GET', boardPath(own))).json.board.updated_session_id).toBe(team.sid.worker)
+    const edit = await call('POST', `${boardPath(own)}/edits`, { sid: team.sid.leader, body: { edits: [{ old: 'one', new: 'two' }], sessionId: team.sid.outsider } })
+    expect(edit.json.board.updated_session_id).toBe(team.sid.leader)
+    const human = await call('POST', `${boardPath(own)}/edits`, { body: { edits: [{ old: 'two', new: 'three' }], sessionId: team.sid.outsider } })
+    expect(human.json.board).not.toHaveProperty('updated_session_id')
+    expect((await call('GET', boardPath(own))).json.board).not.toHaveProperty('updated_session_id')
+  })
+
+  it('a worker deleting part of the leader\'s path is among its writers; a deleted paragraph leaves the next path the leader\'s', async () => {
+    const own = await task('Deleted path board')
+    const html = '<p>See /srv/a/old/x.ts</p><p>drop /srv/b/x.ts</p><p>Keep /srv/c/x.ts</p>'
+    const set = await call('PUT', boardPath(own), { sid: team.sid.leader, body: { html } })
+    expect(set.status).toBe(200)
+    const leader = `task:${team.leader}|${team.sid.leader}`
+    const worker = `task:${team.worker}|${team.sid.worker}`
+    const writersOf = (board: Json, needle: string): string[] => {
+      const at = board.html.indexOf(needle)
+      expect(at).toBeGreaterThanOrEqual(0)
+      return [...new Set((board.html_sources as Array<{ start: number; end: number; by: string; sessionId?: string }>)
+        .filter((s) => s.start < at + needle.length && s.end > at).map((s) => `${s.by}|${s.sessionId ?? ''}`))]
+    }
+    // The shared ends of this edit leave "drop /srv/b/x.ts</p><p>" as the cut, before the kept "Keep".
+    const edit = await call('POST', `${boardPath(own)}/edits`, {
+      sid: team.sid.worker,
+      body: { edits: [{ old: '/srv/a/old/x.ts', new: '/srv/a/x.ts' }, { old: '</p><p>drop /srv/b/x.ts</p><p>Keep', new: '</p><p>Keep' }] },
+    })
+    expect(edit.status).toBe(200)
+    expect(edit.json.board.html).toBe('<p>See /srv/a/x.ts</p><p>Keep /srv/c/x.ts</p>')
+    expect(writersOf(edit.json.board, '/srv/a/x.ts')).toEqual([leader, worker])
+    expect(writersOf(edit.json.board, '/srv/c/x.ts')).toEqual([leader])
+    // The stored spans are what a reader gets, and still one exact cover.
+    const got = (await call('GET', boardPath(own))).json.board
+    expect(got.html_sources).toEqual(edit.json.board.html_sources)
+    expect(got.html_sources.at(-1).end).toBe(got.html.length)
   })
 
   it('409s: a stale version, an edit anchor missing or repeated; 404 editing a task with no board', async () => {
@@ -254,6 +297,7 @@ describe('threads', () => {
     const res = await call('POST', `${boardPath(team.leader)}/threads/rc-1`, { body: { text: 'Is the TTL fix enough?\nOr do we need a purge?' } })
     expect(res.status).toBe(201)
     expect(res.json.message).toMatchObject({ author: 'user', text: 'Is the TTL fix enough?\nOr do we need a purge?' })
+    expect(res.json.message).not.toHaveProperty('sessionId')
     expect(res.json.message.id).toMatch(/^bm-[0-9a-f]{12}$/)
     expect(res.json.delivery).toEqual({ state: 'queued', sessionId: 'leader-session' })
 
@@ -290,13 +334,15 @@ describe('threads', () => {
   it('a session\'s post (the leader answering, a worker reporting) is stored only', async () => {
     const answer = await call('POST', `${boardPath(team.leader)}/threads/rc-1`, { sid: team.sid.leader, body: { text: 'A purge is needed too.' } })
     expect(answer.status).toBe(201)
-    expect(answer.json).toMatchObject({ message: { author: `task:${team.leader}` }, delivery: { state: 'stored' } })
-    const report = await call('POST', `${boardPath(team.leader)}/threads/rc-1`, { sid: team.sid.worker, body: { text: 'Purge script ready.' } })
+    expect(answer.json).toMatchObject({ message: { author: `task:${team.leader}`, sessionId: team.sid.leader }, delivery: { state: 'stored' } })
+    const report = await call('POST', `${boardPath(team.leader)}/threads/rc-1`, { sid: team.sid.worker, body: { text: 'Purge script ready.', sessionId: team.sid.outsider } })
     expect(report.json.message.author).toBe(`task:${team.worker}`)
+    expect(report.json.message.sessionId).toBe(team.sid.worker)
     expect(performSessionSendMock).not.toHaveBeenCalled()
 
     const got = await call('GET', boardPath(team.leader))
     expect(got.json.threads['rc-1'].map((m: Json) => m.author)).toEqual(['user', `task:${team.leader}`, `task:${team.worker}`])
+    expect(got.json.threads['rc-1'].map((m: Json) => m.sessionId)).toEqual([undefined, team.sid.leader, team.sid.worker])
   })
 
   it('a send failure keeps the message and reports why it was not delivered', async () => {
@@ -889,7 +935,7 @@ describe('round two', () => {
       // An outsider's words beside the worker's pick: each part names its own writer, in the data and in the message.
       const words = await call('PUT', `${boardPath(crew.boss)}/choices/when`, { sid: crew.sid.solo, body: { text: 'Tell the on-call first.' } })
       expect(words.json.choice).toMatchObject({
-        option: 'now', by: `task:${crew.w1}`, text: 'Tell the on-call first.', text_by: `task:${crew.solo}`, text_by_name: 'the task "Lonely task"',
+        option: 'now', by: `task:${crew.w1}`, text: 'Tell the on-call first.', text_by: `task:${crew.solo}`, text_by_name: 'the task "Lonely task"', text_session_id: crew.sid.solo,
       })
       const second = performSessionSendMock.mock.calls[1][0] as { text: string; callerSid?: string }
       expect(second.callerSid).toBe(crew.sid.solo)

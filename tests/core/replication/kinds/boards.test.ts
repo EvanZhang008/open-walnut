@@ -92,6 +92,23 @@ describe('the boards copy', () => {
     expect(fs.statSync(path.dirname(copyFile('task-lead'))).mode & 0o777).toBe(0o700)
   })
 
+  it('keeps page and answer sources through copying and sends a source-only change', async () => {
+    const html = '<p>/repo/a.ts</p>';
+    const row: BoardFile = { ...board('task-lead', html), updated_session_id: 'sid-lead', html_sources: [
+      { start: 0, end: html.length, by: 'task:lead', sessionId: 'sid-lead' },
+    ], choices: { when: { option: '', at: T0, text: '/repo/answer.ts', text_by: 'task:writer', text_session_id: 'sid-writer' } } };
+    await writeLeader(row);
+    await round();
+    expect(JSON.parse(await fsp.readFile(copyFile('task-lead'), 'utf8'))).toEqual(row);
+    await new Promise((r) => setTimeout(r, 20));
+    const next: BoardFile = { ...row, updated_session_id: 'sid-other', html_sources: [
+      { start: 0, end: html.length, by: 'task:lead', sessionId: 'sid-other' },
+    ] };
+    await writeLeader(next);
+    expect(await round()).toMatchObject({ action: 'synced', sent: 1 });
+    expect(JSON.parse(await fsp.readFile(copyFile('task-lead'), 'utf8'))).toEqual(next);
+  });
+
   it('reads a board again only when its file changed, and sends only that board', async () => {
     await round()
     const before = await leaderBoards(leaderDir)

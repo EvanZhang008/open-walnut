@@ -33,6 +33,9 @@ import type { BoardChangedEvent } from '../event-types.js';
 import { BOARD_ITEM_ID_RE, choiceSigs, own } from './board-html.js';
 import { cleanPictureNames } from '../answer-pictures.js';
 import {
+  spliceHtmlChange, validHtmlSources, wholeHtmlSource, type BoardHtmlSource,
+} from './board-html-source.js';
+import {
   isLaneTemplateId, normalizeCards, normalizeKanbanSeen, normalizeLanes,
   type BoardCard, type BoardKanbanSeen, type BoardLane, type LaneTemplateId,
 } from './board-lanes.js';
@@ -103,6 +106,7 @@ export function agentStamp(writer: BoardWriterStamp | undefined): Partial<BoardW
 export interface BoardMessage {
   id: string;
   author: BoardAuthor;
+  sessionId?: string;
   text: string;
   ts: string;
   /** Pictures sent with it, as file names in the images folder (core/answer-pictures.ts). */
@@ -174,6 +178,7 @@ export interface BoardChoice {
   /** Who wrote the words (absent = the user). */
   text_by?: BoardWriter;
   text_by_name?: string;
+  text_session_id?: string;
   /**
    * The last delivery of this answer to the board task's session did not go out
    * (a failed send, a COMPLETE task): the same answer given again is delivered
@@ -212,6 +217,13 @@ export interface BoardFile {
   version: number;
   updated_at: string;
   updated_by: BoardWriter;
+  updated_session_id?: string;
+  /**
+   * Who wrote each part of `html` (board-html-source.ts): UTF-16 spans covering it
+   * exactly. Absent on a record from before, or one an older Walnut rewrote: then
+   * the whole page is `updated_by`'s (htmlSourcesOf).
+   */
+  html_sources?: BoardHtmlSource[];
   threads: Record<string, BoardMessage[]>;
   marks: Record<string, BoardMark>;
   projects: Record<string, BoardProject>;
@@ -410,15 +422,26 @@ function map<T>(v: unknown): Record<string, T> {
   return v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, T> : {};
 }
 
+/** The page's writer spans: the stored ones, else the whole page as its last writer's. */
+export function htmlSourcesOf(board: Pick<BoardFile, 'html' | 'updated_by' | 'updated_session_id' | 'html_sources'>): BoardHtmlSource[] {
+  return validHtmlSources(board.html_sources, board.html.length)
+    ?? wholeHtmlSource(board.html.length, board.updated_by, board.updated_session_id);
+}
+
 /** A file written by hand or by an older build: missing maps become empty. */
 function normalize(raw: BoardFile | null, taskId: string): BoardFile | null {
   if (!raw || typeof raw !== 'object') return null;
+  const html = typeof raw.html === 'string' ? raw.html : '';
+  // Spans that are not an exact cover of this html are dropped: the page reads as its last writer's.
+  const sources = validHtmlSources(raw.html_sources, html.length);
   return {
     task_id: raw.task_id || taskId,
-    html: typeof raw.html === 'string' ? raw.html : '',
+    html,
     version: Number.isInteger(raw.version) ? raw.version : 1,
     updated_at: raw.updated_at || new Date(0).toISOString(),
     updated_by: raw.updated_by || 'human',
+    ...(typeof raw.updated_session_id === 'string' && raw.updated_session_id ? { updated_session_id: raw.updated_session_id } : {}),
+    ...(sources ? { html_sources: sources } : {}),
     threads: map(raw.threads),
     marks: map(raw.marks),
     projects: map(raw.projects),
@@ -491,11 +514,13 @@ export async function getBoard(taskId: string): Promise<BoardFile | null> {
 export async function setBoardHtml(
   taskId: string,
   html: string,
-  opts: { by: BoardWriter; expectVersion?: number },
+  opts: { by: BoardWriter; sessionId?: string; expectVersion?: number },
 ): Promise<BoardFile> {
   checkHtml(html);
   const next = await updateBoard(taskId, (current) => {
     checkVersion(current, opts.expectVersion);
+    const previous = withChoiceTimes(current, html);
+    delete previous.updated_session_id;
     return {
       threads: {},
       marks: {},
@@ -507,12 +532,14 @@ export async function setBoardHtml(
       lanes: null,
       cards: {},
       kanban_seen: null,
-      ...withChoiceTimes(current, html),
+      ...previous,
       task_id: taskId,
       html,
       version: (current?.version ?? 0) + 1,
       updated_at: new Date().toISOString(),
       updated_by: opts.by,
+      ...(opts.sessionId ? { updated_session_id: opts.sessionId } : {}),
+      html_sources: current?.html === html ? htmlSourcesOf(current) : wholeHtmlSource(html.length, opts.by, opts.sessionId),
     };
   });
   emitChanged({ taskId, kind: 'html', version: next.version });
@@ -534,8 +561,13 @@ function countOccurrences(hay: string, needle: string): { count: number; first: 
  * Apply exact-string edits in order, each against the result of the previous
  * one. Every `old` must occur exactly once at its turn; the first that does not
  * throws, so a caller that discards the throw keeps the original html.
+ * `onSplice` hears each replacement as it is made (offset, old length, new length, the html before it).
  */
-export function applyBoardEdits(html: string, edits: BoardEdit[]): string {
+export function applyBoardEdits(
+  html: string,
+  edits: BoardEdit[],
+  onSplice?: (at: number, removed: number, inserted: number, edit: BoardEdit, before: string) => void,
+): string {
   if (!Array.isArray(edits) || edits.length === 0) {
     throw new BoardError('bad_request', 400, undefined, '`edits` must be a non-empty array of { old, new }');
   }
@@ -551,27 +583,75 @@ export function applyBoardEdits(html: string, edits: BoardEdit[]): string {
     if (count === 0) throw new BoardError('board_edit_not_found', 409, { index });
     if (count > 1) throw new BoardError('board_edit_not_unique', 409, { index, count });
     // Slice, never String.replace: `$&` / `$1` in the new text must stay literal.
+    const before = out;
     out = out.slice(0, first) + edit.new + out.slice(first + edit.old.length);
+    onSplice?.(first, edit.old.length, edit.new.length, edit, before);
   });
   return out;
+}
+
+const isHighSurrogate = (c: number): boolean => c >= 0xd800 && c <= 0xdbff;
+const isLowSurrogate = (c: number): boolean => c >= 0xdc00 && c <= 0xdfff;
+
+/**
+ * How many UTF-16 units `prev` and `next` share at their start and at their end
+ * (never overlapping, never between the two halves of a surrogate pair). Only the
+ * part between them is new text: an edit that re-sends a block around a small
+ * change leaves the words it repeats with their writer.
+ */
+export function sharedEnds(prev: string, next: string): { prefix: number; suffix: number } {
+  const min = Math.min(prev.length, next.length);
+  let prefix = 0;
+  while (prefix < min && prev.charCodeAt(prefix) === next.charCodeAt(prefix)) prefix += 1;
+  // A shared high surrogate whose low half differs belongs to the changed character.
+  if (prefix > 0 && isHighSurrogate(prev.charCodeAt(prefix - 1))) prefix -= 1;
+  let suffix = 0;
+  const limit = min - prefix;
+  while (suffix < limit && prev.charCodeAt(prev.length - 1 - suffix) === next.charCodeAt(next.length - 1 - suffix)) suffix += 1;
+  // A shared low surrogate whose high half differs belongs to the changed character.
+  if (suffix > 0 && isLowSurrogate(prev.charCodeAt(prev.length - suffix))) suffix -= 1;
+  return { prefix, suffix };
 }
 
 export async function editBoardHtml(
   taskId: string,
   edits: BoardEdit[],
-  opts: { by: BoardWriter; expectVersion?: number },
+  opts: { by: BoardWriter; sessionId?: string; expectVersion?: number },
 ): Promise<BoardFile> {
   const next = await updateBoard(taskId, (raw) => {
     const current = requireBoard(raw);
     checkVersion(current, opts.expectVersion);
-    const html = applyBoardEdits(current.html, edits);
+    // Each part keeps its writer; only the text that changed becomes this writer's.
+    let sources = htmlSourcesOf(current);
+    let sourceMs = 0;
+    const html = applyBoardEdits(current.html, edits, (at, removed, inserted, edit, before) => {
+      if (edit.old === edit.new || sourceMs >= 25) return;
+      const sourceStart = performance.now();
+      // What `new` repeats of `old` at either end keeps its writer (text replaced by itself: all of it).
+      const { prefix, suffix } = sharedEnds(edit.old, edit.new);
+      const cut = removed - prefix - suffix;
+      const added = inserted - prefix - suffix;
+      if (cut === 0 && added === 0) {
+        sourceMs += performance.now() - sourceStart;
+        return;
+      }
+      // A deletion that joins or cuts a path names this writer at its seam; a deleted block
+      // leaves the paths beside it with their own writers.
+      sources = spliceHtmlChange(before, sources, at + prefix, cut, edit.new.slice(prefix, inserted - suffix), { by: opts.by, sessionId: opts.sessionId });
+      sourceMs += performance.now() - sourceStart;
+    });
+    if (sourceMs >= 25) sources = wholeHtmlSource(html.length, 'agent');
     checkHtml(html);
+    const previous = withChoiceTimes(current, html);
+    delete previous.updated_session_id;
     return {
-      ...withChoiceTimes(current, html),
+      ...previous,
       html,
       version: current.version + 1,
       updated_at: new Date().toISOString(),
       updated_by: opts.by,
+      ...(opts.sessionId ? { updated_session_id: opts.sessionId } : {}),
+      html_sources: sources,
     };
   });
   emitChanged({ taskId, kind: 'html', version: next.version });
@@ -581,7 +661,7 @@ export async function editBoardHtml(
 export async function postBoardMessage(
   taskId: string,
   thread: string,
-  input: { author: BoardAuthor; text: string; images?: string[] },
+  input: { author: BoardAuthor; sessionId?: string; text: string; images?: string[] },
 ): Promise<BoardMessage> {
   checkItemId(thread, 'thread');
   const text = typeof input.text === 'string' ? input.text.trim() : '';
@@ -601,6 +681,7 @@ export async function postBoardMessage(
     message = {
       id: `bm-${crypto.randomBytes(6).toString('hex')}`,
       author: input.author,
+      ...(input.sessionId ? { sessionId: input.sessionId } : {}),
       text,
       ts: last && last > now ? last : now,
       ...(images.length ? { images } : {}),

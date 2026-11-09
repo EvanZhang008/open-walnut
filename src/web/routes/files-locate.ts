@@ -35,6 +35,7 @@ export interface LocateRequest {
   /** The session's host (absent = this machine). */
   host?: string
   sessionId?: string
+  sourceOnly?: boolean
 }
 
 export interface LocateResult {
@@ -154,7 +155,7 @@ export async function locateClickedPath(req: LocateRequest): Promise<LocateResul
 
   // 1. The exact path, on every host at once.
   if (absolute) {
-    const others = await otherHosts(host, p)
+    const others = req.sourceOnly ? [] : await otherHosts(host, p)
     const { hit, answers } = await firstFound([existsOn(p, host), ...others.map((o) => existsOn(p, o.key))])
     if (hit === 0) return { path: p, ...(host ? { host } : {}), found: true, via: 'exact', ...pos }
     if (hit > 0) {

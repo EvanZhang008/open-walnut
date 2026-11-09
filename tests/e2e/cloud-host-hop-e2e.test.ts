@@ -291,6 +291,8 @@ async function connectLink(): Promise<void> {
     internals.setConnected(true)
     internals.startPing()
   }
+  // A pooled read may call connect after disconnect; that redial uses the same isolated proxy.
+  conn.connect = internals.reconnect
   setPooledConnectionForTest(HOST, conn)
   await conn.connectDirect(url)
   link = state

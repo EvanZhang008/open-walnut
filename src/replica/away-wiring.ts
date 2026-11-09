@@ -130,13 +130,14 @@ export async function wireAwayWrites(opts: AwayWiringOptions): Promise<AwayWirin
     await overlay.refresh(500)
     const b = await copyBoard(taskId)
     const body = overlayBoard(taskId, {
-      board: b ? { html: b.html, version: b.version } : null,
+      board: b ? { html: b.html, version: b.version, updated_by: b.updated_by, updated_session_id: b.updated_session_id, html_sources: b.html_sources } : null,
       threads: b?.threads ?? {}, marks: b?.marks ?? {}, projects: b?.projects ?? {}, choices: b?.choices ?? {},
     }, overlay)
-    const pub = body.board as { html?: unknown; version?: unknown } | null
+    const pub = body.board as (BoardBase | null)
     if (!pub || typeof pub.html !== 'string') return null
     return {
       html: pub.html, version: Number(pub.version) || 0,
+      updated_by: pub.updated_by, updated_session_id: pub.updated_session_id, html_sources: pub.html_sources,
       threads: body.threads as Record<string, unknown>, marks: body.marks as Record<string, unknown>,
       projects: body.projects as Record<string, unknown>, choices: body.choices as Record<string, unknown>,
     }

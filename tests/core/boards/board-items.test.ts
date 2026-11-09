@@ -466,6 +466,20 @@ describe('choices', () => {
     expect((await getBoard(T))!.choices.when).toEqual(mine.choice)
   })
 
+  it('answer text keeps its writing session through option changes and clears it when the person takes over', async () => {
+    const writer = { by: 'task:lead-1' as const };
+    const first = await setBoardChoice(T, 'when', { text: '/repo/a.ts' }, { writer, sessionId: 'sid-first' });
+    expect(first.choice).toMatchObject({ text_session_id: 'sid-first' });
+    const pick = await setBoardChoice(T, 'when', { option: 'now' }, { writer, sessionId: 'sid-other' });
+    expect(pick.choice).toMatchObject({ text_session_id: 'sid-first' });
+    const next = await setBoardChoice(T, 'when', { text: '/repo/b.ts' }, { writer, sessionId: 'sid-other' });
+    expect(next.choice).toMatchObject({ text_session_id: 'sid-other' });
+    const human = await setBoardChoice(T, 'when', { text: '/repo/b.ts' });
+    expect(human.choice).not.toHaveProperty('text_session_id');
+    expect(human.choice).not.toHaveProperty('text_by');
+    expect((await getBoard(T))!.choices.when).toEqual(human.choice);
+  });
+
   it('the user\'s answer stays theirs: an agent changing or clearing a part the user gave is 409 user_wrote unless it says the user asked', async () => {
     const ceo = { by: 'task:main-1' as const, by_name: 'the CEO' }
     const mine = await setBoardChoice(T, 'when', { option: 'wait', text: 'After the deploy.' })

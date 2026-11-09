@@ -91,10 +91,11 @@ filesV1Router.get('/files/list', async (req: Request, res: Response, next: NextF
 filesV1Router.get('/files/locate', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined)
-    const params = { ref: req.query.ref, cwd: str(req.query.cwd), host: str(req.query.host), sessionId: str(req.query.sessionId) }
+    const params = { ref: req.query.ref, cwd: str(req.query.cwd), host: str(req.query.host), sessionId: str(req.query.sessionId), sourceOnly: req.query.sourceOnly === '1' }
     if (isCompanion()) {
       const body: Record<string, unknown> = { ref: params.ref }
       for (const k of ['cwd', 'host', 'sessionId'] as const) if (params[k]) body[k] = params[k]
+      if (params.sourceOnly) body.sourceOnly = true
       await relayControlAction(res, 'server.files.locate', SERVER_RELAY_SID, body, 200)
       return
     }

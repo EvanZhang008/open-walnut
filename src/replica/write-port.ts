@@ -76,6 +76,9 @@ export type TaskRow = Record<string, unknown> & { id: string }
 export interface BoardBase {
   html: string
   version: number
+  updated_by?: string
+  updated_session_id?: string
+  html_sources?: import('../providers/offline-board-core.js').OfflineHtmlSource[]
   threads?: Record<string, unknown>
   marks?: Record<string, unknown>
   projects?: Record<string, unknown>

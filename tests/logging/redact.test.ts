@@ -43,6 +43,17 @@ describe('redactSensitiveText', () => {
     expect(redactSensitiveText('offered walnut.v1')).toBe('offered walnut.v1');
   });
 
+  it('masks document reference tokens in request lines and serialized log entries', () => {
+    const token = '0123456789abcdef0123456789abcdef';
+    for (const query of [`ref_token=${token}`, `ref_token=${token}&frame=1`]) {
+      const message = `GET /api/v1/human-inbox/lt-ab12-3def/body?${query}`;
+      for (const input of [message, JSON.stringify({ message, query: { ref_token: '[REDACTED]' } })]) {
+        expect(redactSensitiveText(input)).not.toContain(token);
+        expect(redactSensitiveText(input)).toContain('ref_token=[REDACTED]');
+      }
+    }
+  });
+
   it('masks PEM private key blocks', () => {
     const input =
       '-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...\n-----END RSA PRIVATE KEY-----';

@@ -9,6 +9,8 @@
  * and the answer, not the daemon RPC (files-list-self-heal.test.ts covers that).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import express from 'express'
+import request from 'supertest'
 
 const state = vi.hoisted(() => ({
   hosts: {} as Record<string, { hostname: string; label?: string; enabled?: boolean }>,
@@ -71,6 +73,47 @@ describe('locateClickedPath', () => {
     const r = await locateClickedPath({ ref: LINUX_FILE, host: 'devbox', cwd: '/home/someone/work' })
     expect(r).toMatchObject({ path: LINUX_FILE, host: 'devbox', found: true, via: 'exact' })
     expect(r.elsewhere).toBeUndefined()
+  })
+
+  it('a source-bound reference never probes another host for a missing file', async () => {
+    for (const host of ['devbox', undefined]) {
+      state.asked = []
+      state.disk.devbox[LINUX_FILE] = host !== 'devbox'
+      state.disk[''][LINUX_FILE] = host === 'devbox'
+      state.disk.spare[LINUX_FILE] = true
+      const r = await locateClickedPath({ ref: `${LINUX_FILE}:3`, host, sourceOnly: true })
+      expect(r).toMatchObject({ path: LINUX_FILE, found: false, missing: true, line: 3 })
+      expect(r.host).toBe(host)
+      expect(r.elsewhere).toBeUndefined()
+      expect(state.asked).toEqual([host ?? ''])
+      expect(r.checked).toEqual([host ? 'Dev box' : 'Local'])
+    }
+  })
+
+  it('the HTTP edge carries the source boundary to the actual lookup', async () => {
+    state.disk.devbox[LINUX_FILE] = false
+    state.disk[''][LINUX_FILE] = true
+    const { filesRouter } = await import('../../../src/web/routes/files.js')
+    const app = express().use('/api/files', filesRouter)
+    const r = await request(app).get('/api/files/locate').query({ ref: LINUX_FILE, host: 'devbox', sourceOnly: '1' })
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ path: LINUX_FILE, host: 'devbox', found: false, missing: true })
+    expect(state.asked).toEqual(['devbox'])
+    const { filesV1Router } = await import('../../../src/web/routes/files-v1.js')
+    const phone = express().use('/api/v1', filesV1Router)
+    state.asked = []
+    const mobile = await request(phone).get('/api/v1/files/locate').query({ ref: LINUX_FILE, host: 'devbox', sourceOnly: '1' })
+    expect(mobile.status).toBe(200)
+    expect(mobile.body).toMatchObject({ path: LINUX_FILE, host: 'devbox', found: false, missing: true })
+    expect(state.asked).toEqual(['devbox'])
+  })
+
+  it('a source-bound reference keeps an unavailable host without probing other disks', async () => {
+    state.disk[''][LINUX_FILE] = true
+    const r = await locateClickedPath({ ref: LINUX_FILE, host: 'devbox', sourceOnly: true })
+    expect(r).toMatchObject({ path: LINUX_FILE, host: 'devbox', found: false })
+    expect(r.missing).toBeUndefined()
+    expect(state.asked).toEqual(['devbox'])
   })
 
   it('opens a Mac path a Linux session wrote from this machine (the report)', async () => {

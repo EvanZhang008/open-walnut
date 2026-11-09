@@ -134,18 +134,62 @@ export async function owedToUser(task: Task): Promise<OwedItem[]> {
 }
 
 /** How a close that goes through settles an open hold: a person's close, or a forced one. */
-export interface CloseSettle { taskId: string; items: OwedItem[]; reason: string; by: string; person?: boolean }
+export interface CloseSettle {
+  taskId: string; items: OwedItem[]; reason: string; by: string; person?: boolean;
+  /** A person on the primary (no caller header): the result's source host. */ host?: 'local';
+  /** A forced close: the closing session itself, the writer of the result it brings. */ sessionId?: string;
+}
 
 export type CloseAdmission =
   | { ok: true; settle?: CloseSettle }
   | { ok: false; code: 'owed_to_user'; message: string; items: OwedItem[] };
 
-/** Who is closing: null for a person (never checked), else the closing session's task. */
-async function closerOf(callerSid: string | undefined): Promise<{ taskId: string } | null> {
+interface Closer { taskId: string; /** The resolved session's own id, never the header's text. */ sessionId?: string }
+
+/** Who is closing: null for a person (never checked), else the closing session's task and session. */
+async function closerOf(callerSid: string | undefined): Promise<Closer | null> {
   if (!callerSid) return null;
   const { resolveCaller } = await import('./session-send-core.js');
   const caller = await resolveCaller(callerSid).catch(() => null);
-  return caller?.kind === 'session' && caller.record.taskId ? { taskId: caller.record.taskId } : null;
+  if (caller?.kind !== 'session' || !caller.record.taskId) return null;
+  return { taskId: caller.record.taskId, ...(caller.record.claudeSessionId ? { sessionId: caller.record.claudeSessionId } : {}) };
+}
+
+type Writer = Pick<TaskResultReport, 'by' | 'sessionId' | 'host'>;
+
+/** The writer a report records for its result and evidence, only the keys it has. */
+function writerOf(r: Writer | undefined): Writer {
+  return { ...(r?.by ? { by: r.by } : {}), ...(r?.sessionId ? { sessionId: r.sessionId } : {}), ...(r?.host ? { host: r.host } : {}) };
+}
+
+function sameWriter(a: Writer | null, b: Writer): boolean {
+  return !!a && a.by === b.by && a.sessionId === b.sessionId && a.host === b.host;
+}
+
+/**
+ * The result, evidence and their writer a close records. Nothing earlier is dropped: a field the
+ * close does not bring keeps its earlier text. New fields are the closer's own session's; earlier
+ * ones are their own writer's. When every field kept has one writer, that is the report's; when
+ * they have different writers, the report's writer is unknown (no session, no host), never one
+ * of them chosen. With no field at all it is the closer.
+ */
+function authored(was: TaskResultReport | undefined, fields: StructuredReply | null | undefined, closer: Writer): Writer & Pick<StructuredReply, 'result' | 'evidence'> {
+  const old = writerOf(was);
+  const result = fields?.result ?? was?.result;
+  const evidence = fields?.evidence ?? was?.evidence;
+  const writers: Writer[] = [];
+  if (result) writers.push(fields?.result ? closer : old);
+  if (evidence) writers.push(fields?.evidence ? closer : old);
+  const writer: Writer = !writers.length ? closer
+    : writers.every((w) => sameWriter(w, writers[0])) ? writers[0]
+      : { by: 'unknown' };
+  return { ...writer, ...(result ? { result } : {}), ...(evidence ? { evidence } : {}) };
+}
+
+/** Who wrote the closer's own not-done items: the closer for new ones, else the earlier report's (null = unknown). */
+function ownNotDoneWriter(was: TaskResultReport | undefined, fields: StructuredReply | null | undefined, closer: Writer): Writer | null {
+  if (fields?.not_done) return closer;
+  return was?.not_done_by ? null : writerOf(was);
 }
 
 function itemsText(items: readonly OwedItem[]): string {
@@ -171,8 +215,9 @@ function cut(t: string, max = ASK_MAX): string {
  * next close may force it. A second close by a told closer naming the same items writes nothing.
  * A task completed meanwhile is left alone. Throws when the hold could not be recorded.
  */
-async function holdOpen(task: Task, items: OwedItem[], closer: { taskId: string }, callerSid: string, fields?: StructuredReply | null, renew = false): Promise<void> {
+async function holdOpen(task: Task, items: OwedItem[], closer: Closer, callerSid: string, fields?: StructuredReply | null, renew = false): Promise<void> {
   const by = `task:${closer.taskId}`;
+  const closerWriter: Writer = { by, ...(closer.sessionId ? { sessionId: closer.sessionId } : {}) };
   const texts = items.map((i) => i.text);
   const ask = cut(items.length === 1 && items[0].source !== 'progress' && items[0].source !== 'held'
     ? items[0].text
@@ -190,12 +235,17 @@ async function holdOpen(task: Task, items: OwedItem[], closer: { taskId: string 
     // `renew`: the user wrote since this closer was told, so it is told again, from now.
     if (same && !fields && !renew && (open!.told ?? []).includes(closer.taskId)) return null;
     const own = fields?.not_done ?? ownNotDone(was);
+    const head = authored(was, fields, closerWriter);
+    const writer = writerOf(head);
+    // The held items are this closer's for a new hold, an earlier hold's (no session known) when the same.
+    const holdWriter: Writer = same ? { by: open!.by } : closerWriter;
+    const mixed = (own.length > 0 && !sameWriter(ownNotDoneWriter(was, fields, closerWriter), writer))
+      || (texts.length > 0 && !sameWriter(holdWriter, writer));
     return {
       result_report: {
-        via: 'complete', at, by,
-        ...((fields?.result ?? was?.result) ? { result: fields?.result ?? was?.result } : {}),
-        ...((fields?.evidence ?? was?.evidence) ? { evidence: fields?.evidence ?? was?.evidence } : {}),
+        via: 'complete', at, ...head,
         not_done: [...new Set([...own, ...texts])],
+        ...(mixed ? { not_done_by: 'unknown' as const } : {}),
         owed: same ? { ...open!, told, ...(renew ? { at } : {}) } : { items: texts, ask, at, by, told },
       },
     };
@@ -225,11 +275,16 @@ export async function admitSessionClose(
   const closer = await closerOf(callerSid);
   const { getTask } = await import('../task-manager.js');
   if (!closer || !callerSid) {
-    // A person's close: nothing is checked, but a hold ends with it, as settled by them.
+    // A person's close: nothing is checked, but a hold ends with it, as settled by them. A caller
+    // header Walnut could not resolve keeps that close behavior, but its writer is unknown, never the
+    // person: only a request with no header is the person on the primary.
     const t = await getTask(taskId).catch(() => null);
     const held = t && t.phase !== 'COMPLETE' ? openOwed(t.result_report) : undefined;
+    const writer = callerSid
+      ? { reason: 'The task was closed by a caller Walnut could not identify', by: 'unknown' }
+      : { reason: 'The user closed the task', by: 'human', host: 'local' as const };
     return held
-      ? { ok: true, settle: { taskId: t!.id, items: held.items.map((text) => ({ source: 'held', text })), reason: 'The user closed the task', by: 'human', person: true } }
+      ? { ok: true, settle: { taskId: t!.id, items: held.items.map((text) => ({ source: 'held', text })), ...writer, person: true } }
       : { ok: true };
   }
   const task = await getTask(taskId).catch(() => null);
@@ -248,7 +303,7 @@ export async function admitSessionClose(
   const told = !!held && (held.told ?? []).includes(closer.taskId) && items.every((i) => held.items.includes(i.text)) && !wroteSinceHold;
   if (opts.force === true && reason.length >= REASON_MIN && told) {
     log.task.info('task closed with items of the user settled by its closer', { taskId, by: closer.taskId, reason, items: items.map((i) => i.source) });
-    return { ok: true, settle: { taskId: task.id, items, reason, by: `task:${closer.taskId}` } };
+    return { ok: true, settle: { taskId: task.id, items, reason, by: `task:${closer.taskId}`, ...(closer.sessionId ? { sessionId: closer.sessionId } : {}) } };
   }
   let failed: string | undefined;
   try {
@@ -287,18 +342,37 @@ async function recordSettle(settle: CloseSettle, fields?: StructuredReply | null
       items, ask: was?.owed?.ask ?? cut(itemsText(settle.items)), at: was?.owed?.at ?? at, by: was?.owed?.by ?? settle.by,
       ...(was?.owed?.told ? { told: was.owed.told } : {}), settled,
     };
-    // A person's close: what they wrote with it is the result; else the old one, all settled.
+    // A person's close: what they wrote with it is the result, from its writer (`human` on the
+    // primary, or `unknown` with no host); else the old one keeps its own writer, all settled. A
+    // result or evidence it does not bring keeps the earlier text and writer (`authored`).
     if (settle.person) {
-      if (fields) return { result_report: { via: 'complete', by: 'human', ...fields, at, ...(fields.not_done?.length ? {} : { settled }), owed } };
-      return { result_report: { ...(was ?? { via: 'complete' as const, by: 'human' }), at, settled, owed } };
+      const writer: Writer = { by: settle.by, ...(settle.by === 'human' && settle.host ? { host: settle.host } : {}) };
+      if (fields) {
+        const head = authored(was, fields, writer);
+        // Its not-done items are this closer's; a head kept from another writer does not cover them.
+        const mixed = !!fields.not_done?.length && !sameWriter(writer, writerOf(head));
+        return {
+          result_report: {
+            via: 'complete', at, ...head,
+            ...(fields.not_done !== undefined ? { not_done: fields.not_done } : {}),
+            ...(mixed ? { not_done_by: 'unknown' as const } : {}),
+            ...(fields.not_done?.length ? {} : { settled }), owed,
+          },
+        };
+      }
+      return { result_report: { ...(was ?? { via: 'complete' as const, ...writer }), at, settled, owed } };
     }
+    // A forced close: its new result is the closer's own session's; without one the earlier result
+    // keeps its writer. `owed.settled.by` stays the closer, who settled the items.
+    const closerWriter: Writer = { by: settle.by, ...(settle.sessionId ? { sessionId: settle.sessionId } : {}) };
     const own = fields?.not_done ?? ownNotDone(was);
+    const head = authored(was, fields, closerWriter);
+    const mixed = own.length > 0 && !sameWriter(ownNotDoneWriter(was, fields, closerWriter), writerOf(head));
     return {
       result_report: {
-        via: 'complete', at, by: settle.by,
-        ...((fields?.result ?? was?.result) ? { result: fields?.result ?? was?.result } : {}),
-        ...((fields?.evidence ?? was?.evidence) ? { evidence: fields?.evidence ?? was?.evidence } : {}),
+        via: 'complete', at, ...head,
         ...(own.length ? { not_done: own } : {}),
+        ...(own.length && mixed ? { not_done_by: 'unknown' as const } : {}),
         owed,
       },
     };

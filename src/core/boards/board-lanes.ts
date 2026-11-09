@@ -36,9 +36,14 @@ export interface BoardCard {
   summary?: string;
   summary_at?: string;
   summary_by?: BoardCardWriter;
+  /** The session that wrote `summary` (absent: the user, or a writer Walnut could not verify), so a
+   *  path in the words opens on that session's machine, never the task's current session's. */
+  summary_session_id?: string;
   waiting_on?: string;
   waiting_on_at?: string;
   waiting_on_by?: BoardCardWriter;
+  /** The session that wrote `waiting_on`, as `summary_session_id`. */
+  waiting_on_session_id?: string;
   /** Written by the server's bus watch only, never by a human or a session. Sticky, forward only. */
   lane_auto?: { lane: string; at: string };
   /** The worker itself moved its task to NEED_ACTION (not a turn end). */
@@ -406,8 +411,8 @@ export function normalizeLanes(raw: unknown): BoardLane[] | null {
 export function normalizeBoardCard(raw: unknown): BoardCard | null {
   if (!isObj(raw)) return null;
   const c: BoardCard = {};
-  for (const k of ['lane', 'lane_at', 'rank_lane', 'summary', 'summary_at', 'waiting_on', 'waiting_on_at',
-    'handed_back_at', 'worker_summary_at', 'output_at'] as const) {
+  for (const k of ['lane', 'lane_at', 'rank_lane', 'summary', 'summary_at', 'summary_session_id', 'waiting_on', 'waiting_on_at',
+    'waiting_on_session_id', 'handed_back_at', 'worker_summary_at', 'output_at'] as const) {
     const v = str(raw[k]);
     if (v) c[k] = v;
   }

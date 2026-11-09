@@ -30,6 +30,7 @@ import {
   answeredByCaller,
   withUserWords,
   humanReplyAndDeliver,
+  resolveLetterSender,
   savePicturesOnce,
   sendLetterAsCallerOnce,
 } from './letter-ops.js';
@@ -141,10 +142,12 @@ export async function handleHumanInboxRelayAction(
       return { id: letter.id, ...(addedToThread ? { addedToThread: true } : {}), ...(openAsk ? { openAsk } : {}) };
     }
     case 'reply': {
-      // A replica of 2026-11-04 also sent its caller's session (callerSid): not part of the reply.
-      const { id, callerSid: _callerSid, ...input } = p;
+      // The replica stamps callerSid from its request header (human-inbox-v1.ts), never from the body,
+      // so the turn's writer is resolved here exactly as the primary's own route resolves it.
+      const { id, callerSid, ...input } = p;
+      const sender = await resolveLetterSender(typeof callerSid === 'string' ? callerSid : undefined);
       // A session's reply through a replica meets the same repeat check as on the primary (duplicate-letter.ts).
-      return { letter: await agentReply(requireId({ id }), input as unknown as AgentReplyInput, { refuseDuplicate: true }) };
+      return { letter: await agentReply(requireId({ id }), input as unknown as AgentReplyInput, { refuseDuplicate: true, sender }) };
     }
     // The reader's flags answer with the index clock the write stamped: that is
     // how the replica knows when its git-synced copy has caught up with it (see

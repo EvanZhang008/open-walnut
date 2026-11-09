@@ -287,7 +287,8 @@ taskV1Router.post('/tasks/:id/complete', async (req: Request, res: Response, nex
       // with the close and put back if the close fails (owed-to-user.ts closeWithSettle).
       if (!owed.settle && before && before.phase !== 'COMPLETE' && (fields || isPartial(before.result_report))) {
         const { noteResultReport } = await import('../../core/sessions/session-send-core.js')
-        wroteReport = !!(await noteResultReport(before.id, { via: 'complete', by: admit.callerTaskId ? `task:${admit.callerTaskId}` : 'human' }, fields, { emit: false }))
+        const { resultWriterOf } = await import('../../core/peers/structured-reply.js')
+        wroteReport = !!(await noteResultReport(before.id, { via: 'complete', ...resultWriterOf(actorSid, admit.callerTaskId, admit.callerSessionId) }, fields, { emit: false }))
       }
       const result = await closeWithSettle(owed.settle, fields, () => tm.completeTask(id, actorSid ? { actorSid } : undefined))
       log.web.info('task completed via api-v1', { taskId: result.task.id, ...(actorSid ? { actorSid } : {}) })
@@ -448,12 +449,16 @@ taskV1Router.put('/tasks/:id/report', async (req: Request, res: Response, next: 
   try {
     if (role() === 'replica') { sendError(res, 501, 'not_supported_cloud', 'A task report is set on the primary box'); return }
     const { setTaskReport, ReportChangeError } = await import('../../core/sessions/report-set.js')
-    const { by } = await callerBy(req)
-    let setter: { taskId: string; title?: string } | null = null
+    const { by, callerSid } = await callerBy(req)
+    let setter: import('../../core/sessions/report-set.js').ReportSetter | null = null
     if (by.startsWith('task:')) {
       const callerTaskId = by.slice('task:'.length)
       const { getTask } = await import('../../core/task-manager.js')
-      setter = { taskId: callerTaskId, title: (await getTask(callerTaskId).catch(() => null))?.title }
+      // callerBy resolved callerSid to this task's session, so it is the writer's own session id.
+      setter = { taskId: callerTaskId, title: (await getTask(callerTaskId).catch(() => null))?.title, ...(callerSid ? { sessionId: callerSid } : {}) }
+    } else if (callerSid) {
+      // A caller header Walnut could not resolve is no person: stored as an unknown writer.
+      setter = { unknown: true }
     }
     try {
       res.json(await setTaskReport(paramStr(req.params.id), req.body, setter))
@@ -722,8 +727,12 @@ taskV1Router.put('/tasks/:id/summary', async (req: Request, res: Response, next:
     const content = requireContent(req, res)
     if (content === null) return
     const { updateSummary } = await import('../../core/task-manager.js')
+    const { trustedCallerSessionId } = await import('../../core/sessions/session-send-core.js')
+    const raw = req.headers['x-walnut-caller-sid']
+    // A resolved session caller is the writer; a person or an unresolved header leaves it unknown.
+    const sessionId = await trustedCallerSessionId((Array.isArray(raw) ? raw[0] : raw)?.trim() || undefined)
     try {
-      res.json(await updateSummary(id, content))
+      res.json(await updateSummary(id, content, { sessionId }))
     } catch (err) {
       if (sendTaskManagerError(res, err)) return
       throw err

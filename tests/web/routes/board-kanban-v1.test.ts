@@ -226,6 +226,35 @@ describe('PUT /tasks/:id/board/cards/:task', () => {
     expect(worker.json.card).toMatchObject({ waiting_on: 'Partner team', waiting_on_by: `task:${t.a}` })
   })
 
+  it('the writing session is stamped beside the words it changed, from the header only (2026-11-07 link source)', async () => {
+    const t = await makeTeam('Writer session')
+    const first = await call('PUT', b(t.leader, `/cards/${t.c}`), { body: { summary: 'Log at /home/me/run.log', waiting_on: 'CR in /home/me/cr.txt' }, sid: t.sid.leader })
+    expect(first.json.card).toMatchObject({ summary_by: `task:${t.leader}`, summary_session_id: t.sid.leader, waiting_on_session_id: t.sid.leader })
+    // The same words again from another writer: who wrote them stays (a no-op is no new writer, no backfill).
+    const same = await call('PUT', b(t.leader, `/cards/${t.c}`), { body: { summary: 'Log at /home/me/run.log' }, sid: t.sid.worker })
+    expect(same.json.card).toMatchObject({ summary_by: `task:${t.leader}`, summary_session_id: t.sid.leader })
+    // New words from the user: the user's, with no session.
+    const human = await call('PUT', b(t.leader, `/cards/${t.c}`), { body: { summary: 'My own words' } })
+    expect(human.json.card.summary_by).toBe('human')
+    expect(human.json.card.summary_session_id).toBeUndefined()
+    expect(human.json.card.waiting_on_session_id).toBe(t.sid.leader)
+    // A session id in the body is never read; an unknown header names no session (the words read unknown).
+    const forged = await call('PUT', b(t.leader, `/cards/${t.c}`), {
+      body: { summary: 'Forged', summary_session_id: t.sid.worker, session_id: t.sid.worker, sessionId: t.sid.worker },
+      sid: 'ffffffff-0000-0000-0000-000000000000',
+    })
+    expect(forged.status).toBe(200)
+    expect(forged.json.card.summary_by).toBe('agent')
+    expect(forged.json.card.summary_session_id).toBeUndefined()
+    const forgedHuman = await call('PUT', b(t.leader, `/cards/${t.c}`), { body: { waiting_on: 'Partner', waiting_on_session_id: t.sid.worker } })
+    expect(forgedHuman.json.card.waiting_on_by).toBe('human')
+    expect(forgedHuman.json.card.waiting_on_session_id).toBeUndefined()
+    // Stored and read back: the GET payload carries the fields (an older client ignores them).
+    const stored = (await getBoard(t.leader))?.cards?.[t.c]
+    expect(stored).toMatchObject({ summary: 'Forged', summary_by: 'agent', waiting_on: 'Partner', waiting_on_by: 'human' })
+    expect(stored?.summary_session_id).toBeUndefined()
+  })
+
   it('error bodies: lane_not_found with the lanes, not_in_team 404, owner_is_not_a_card 400, limits with max, wrong types', async () => {
     const t = await makeTeam('Card errors')
     const lane = await call('PUT', b(t.leader, `/cards/${t.a}`), { body: { lane: 'ln-0badbeef' } })

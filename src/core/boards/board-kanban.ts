@@ -27,6 +27,10 @@ import {
 
 export interface KanbanWriteOpts {
   by: BoardWriter;
+  /** The writer's own session, only as the route verified it from x-walnut-caller-sid (never a
+   *  body field): stamped beside a summary or waiting_on it changes, so a path in those words opens
+   *  on the writer's machine. Absent: the user, or a caller Walnut could not verify. */
+  sessionId?: string;
   /** A session replacing the user's pick (lane, lanes). */
   overrideUser?: boolean;
   /** The `*_at` the writer saw when it opened its editor ('' = there was none): a later one is 409 changed_since. */
@@ -273,12 +277,22 @@ export async function setBoardCard(
     let c: BoardCard = { ...current };
     if (lane !== undefined) c = placed(c, lane, opts.by, now);
     if (summary !== undefined) {
-      if (summary) c.summary = summary; else delete c.summary;
-      c.summary_at = now; c.summary_by = opts.by;
+      // The writer (by and session) changes only with the words: rewriting the same text keeps
+      // who wrote it, so its paths still open where they were written (2026-11-07).
+      if ((current?.summary ?? '') !== summary) {
+        if (summary) c.summary = summary; else delete c.summary;
+        c.summary_by = opts.by;
+        if (opts.sessionId) c.summary_session_id = opts.sessionId; else delete c.summary_session_id;
+      }
+      c.summary_at = now;
     }
     if (waitingOn !== undefined) {
-      if (waitingOn) c.waiting_on = waitingOn; else delete c.waiting_on;
-      c.waiting_on_at = now; c.waiting_on_by = opts.by;
+      if ((current?.waiting_on ?? '') !== waitingOn) {
+        if (waitingOn) c.waiting_on = waitingOn; else delete c.waiting_on;
+        c.waiting_on_by = opts.by;
+        if (opts.sessionId) c.waiting_on_session_id = opts.sessionId; else delete c.waiting_on_session_id;
+      }
+      c.waiting_on_at = now;
     }
     out.card = c;
     return { ...board, cards: { ...board.cards, [cardId]: c } };

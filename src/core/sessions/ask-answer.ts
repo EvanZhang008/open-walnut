@@ -143,9 +143,11 @@ export interface PreparedAnswer {
 /**
  * Check an `answers_ask` send and shape its text. `callerTaskId` null = a person (their own answer).
  * `targetTaskId` is the task the message goes to (with in_reply_to, the request's asker).
+ * `callerSessionId`: the resolved caller session's id (never a request field), kept on the answer.
  */
 export async function prepareAskAnswer(
   callerTaskId: string | null, targetTaskId: string | undefined, text: string, userWords?: string,
+  callerSessionId?: string,
 ): Promise<PreparedAnswer> {
   if (!targetTaskId) throw new AskAnswerError('bad_request', 'answers_ask needs a task to answer: name it in `to` (or answer its request)', 400);
   const { listTasks, updateTaskRaw } = await import('../task-manager.js');
@@ -185,6 +187,8 @@ export async function prepareAskAnswer(
     key: askKey(ask), ask, text: text.replace(/\s+/g, ' ').trim().slice(0, 500),
     by: caller ? caller.id : 'human', byTitle, at: new Date().toISOString(),
     ...(caller && words ? { userWords: words.slice(0, 500) } : {}),
+    // Only the resolved caller task's own session is recorded; a person's answer has none.
+    ...(caller && callerSessionId?.trim() ? { sessionId: callerSessionId.trim() } : {}),
   };
   return {
     line: askAnswerLine(ask, byTitle),

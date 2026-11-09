@@ -1078,7 +1078,8 @@ export interface HumanInboxLetterEvent {
   /** Who the letter is from (human-inbox/letter-origin.ts): leads the notification and the push. */
   originKind?: string;
   originName?: string;
-  host: string;
+  /** Absent when the sender named a session whose record could not be read. */
+  host?: string;
   kind: 'new' | 'reply';
   /** No phone push: the user's away thread already buzzed and is still unread (human-inbox/away-thread.ts). */
   quiet?: boolean;

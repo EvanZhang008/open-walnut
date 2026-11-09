@@ -774,6 +774,8 @@ export async function importProjectionOnCloud(): Promise<number> {
         session_ids: [],
         description: '',
         summary: p.summary ?? '',
+        ...(p.summary && p.summary_session_id ? { summary_session_id: p.summary_session_id } : {}),
+        ...(p.last_words ? { last_words: { ...p.last_words } } : {}),
         note: '',
         created_at: p.created_at,
         updated_at: p.updated_at,
@@ -816,6 +818,10 @@ export async function importProjectionOnCloud(): Promise<number> {
           watched_at: (p.watched_at ?? null) as Task['watched_at'],
           tags: p.tags,
           summary: p.summary,
+          // Explicit clear: the replica never keeps a writer the primary no longer names.
+          summary_session_id: (p.summary_session_id ?? null) as Task['summary_session_id'],
+          // Same rule: the primary's words or none, never words it no longer ships.
+          last_words: p.last_words ? { ...p.last_words } : null,
           updated_at: p.updated_at,
         },
       });

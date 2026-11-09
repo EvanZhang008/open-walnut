@@ -99,6 +99,40 @@ describe('the first kanban write (C27)', () => {
   })
 })
 
+describe('the writer of a card\'s words (2026-11-07 link source)', () => {
+  it('a change stamps the writer and its session; the same words keep theirs; a write with no session clears it', async () => {
+    const owner = await task('Writer stamps group')
+    const worker = await task('ISSUE-109 path in summary', owner, ['ticket:ISSUE-109'])
+    const leader = `task:${owner}` as const
+    await setBoardCard(owner, worker, { summary: 'See /home/me/a.log', waiting_on: 'CR' }, { by: leader, sessionId: 'sess-writer-a' })
+    let card = (await getBoard(owner))!.cards[worker]
+    expect(card).toMatchObject({ summary_by: leader, summary_session_id: 'sess-writer-a', waiting_on_session_id: 'sess-writer-a' })
+    const firstAt = card.summary_at
+    // No-op: the same words from another session keep the writer (its time still moves).
+    await setBoardCard(owner, worker, { summary: 'See /home/me/a.log' }, { by: 'agent', sessionId: 'sess-other-b' })
+    card = (await getBoard(owner))!.cards[worker]
+    expect(card).toMatchObject({ summary_by: leader, summary_session_id: 'sess-writer-a' })
+    expect(card.summary_at! >= firstAt!).toBe(true)
+    // Changed words from a writer with no verified session: no session, never the old one.
+    await setBoardCard(owner, worker, { summary: 'New words' }, { by: 'agent' })
+    card = (await getBoard(owner))!.cards[worker]
+    expect(card.summary_by).toBe('agent')
+    expect(card.summary_session_id).toBeUndefined()
+    expect(card.waiting_on_session_id).toBe('sess-writer-a')
+    // A clear is a change too.
+    await setBoardCard(owner, worker, { waiting_on: '' }, { by: HUMAN })
+    card = (await getBoard(owner))!.cards[worker]
+    expect([card.waiting_on, card.waiting_on_by, card.waiting_on_session_id]).toEqual([undefined, 'human', undefined])
+  })
+
+  it('an older file without the session fields reads as before (normalize keeps unknown writers unknown)', async () => {
+    const { normalizeBoardCard } = await import('../../src/core/boards/board-lanes.js')
+    expect(normalizeBoardCard({ summary: 'x', summary_by: 'task:abc' })).toEqual({ summary: 'x', summary_by: 'task:abc' })
+    expect(normalizeBoardCard({ summary: 'x', summary_session_id: 'sess-1', waiting_on_session_id: 5 }))
+      .toEqual({ summary: 'x', summary_session_id: 'sess-1' })
+  })
+})
+
 describe('the user vs a session (C11, G10)', () => {
   it('a session moving a card the user placed is refused, the whole write with it, and its lane is kept as a suggestion', async () => {
     const owner = await task('Triage board for refunds')

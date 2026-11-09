@@ -15,6 +15,8 @@ import { BRIEF_MAX_CHARS, type TaskBrief } from '../user-status.js';
 import { briefSnapshot } from './brief-fresh.js';
 import { briefOwnChars, briefWalnutLines, structureBrief } from './brief-structure.js';
 import { briefIssues, completeBriefRefs, type BriefIssue } from './brief-rules.js';
+import { briefSourcesOf, sourcesAfterInsertions, sourcesAfterRewrite, spliceBriefEdit, UNKNOWN_WRITER, type BriefTextSource, type BriefWriter } from './brief-source.js';
+import { wholeHtmlSource } from '../boards/board-html-source.js';
 
 export class BriefWriteError extends Error {
   constructor(readonly status: number, readonly code: string, message: string, readonly extra?: Record<string, unknown>) {
@@ -24,8 +26,8 @@ export class BriefWriteError extends Error {
 
 export interface BriefEdit { old: string; new: string }
 
-/** Apply exact-string edits in order, each `old` once (as the Board's edits). */
-export function applyBriefEdits(text: string, edits: readonly BriefEdit[]): string {
+/** Apply exact-string edits in order, each `old` once (as the Board's edits); `onApply` hears where each one landed, with the whole text before it. */
+export function applyBriefEdits(text: string, edits: readonly BriefEdit[], onApply?: (at: number, edit: BriefEdit, before: string) => void): string {
   if (!edits.length) throw new BriefWriteError(400, 'bad_request', '`edits` must be a non-empty array of { old, new }');
   let out = text;
   edits.forEach((e, index) => {
@@ -35,6 +37,7 @@ export function applyBriefEdits(text: string, edits: readonly BriefEdit[]): stri
     const first = out.indexOf(e.old);
     if (first === -1) throw new BriefWriteError(409, 'brief_edit_not_found', `edits[${index}].old does not occur in the Brief: read it again (brief_read)`, { index });
     if (out.indexOf(e.old, first + 1) !== -1) throw new BriefWriteError(409, 'brief_edit_not_unique', `edits[${index}].old occurs more than once in the Brief`, { index });
+    onApply?.(first, e, out);
     out = out.slice(0, first) + e.new + out.slice(first + e.old.length);
   });
   return out;
@@ -43,15 +46,23 @@ export function applyBriefEdits(text: string, edits: readonly BriefEdit[]): stri
 /** A letter in its stored shape, against the live tasks. Pure. `prior`: the lines Walnut wrote into
  *  the letter it replaces (briefWalnutLines); those still in it word for word stay Walnut's. */
 export function shapeBriefText(
-  text: string, owner: Task, tasks: readonly Task[], opts: { language?: string; nowIso?: string; prior?: readonly string[] } = {},
+  text: string, owner: Task, tasks: readonly Task[],
+  opts: { language?: string; nowIso?: string; prior?: readonly string[]; sources?: readonly BriefTextSource[] } = {},
 ): { brief: TaskBrief; issues: BriefIssue[] } {
   const full = completeBriefRefs({ text }, tasks).text;
-  const shaped = structureBrief(full, owner.id, tasks, { ...(opts.language ? { language: opts.language } : {}), live: owner });
+  // Completing a ref only lengthens its id: the words keep their writers.
+  const sources = opts.sources
+    ? (full === text ? opts.sources : sourcesAfterInsertions(text, full, opts.sources) ?? wholeHtmlSource(full.length, UNKNOWN_WRITER.by))
+    : undefined;
+  const shaped = structureBrief(full, owner.id, tasks, { ...(opts.language ? { language: opts.language } : {}), live: owner, ...(sources ? { sources } : {}) });
   const issues = briefIssues(shaped.text, owner, tasks);
   const at = opts.nowIso ?? new Date().toISOString();
   const added = walnutLinesKept(shaped.text, shaped.walnutLines ?? [], opts.prior ?? []);
   return {
-    brief: { text: shaped.text, at, ...briefSnapshot(shaped.text, owner, tasks), ...(issues.length ? { issues } : {}), added },
+    brief: {
+      text: shaped.text, at, ...briefSnapshot(shaped.text, owner, tasks), ...(issues.length ? { issues } : {}), added,
+      ...(shaped.text_sources ? { text_sources: shaped.text_sources } : {}),
+    },
     issues,
   };
 }
@@ -71,8 +82,14 @@ function walnutLinesKept(text: string, written: readonly string[], prior: readon
   return out;
 }
 
-/** Write a node's Brief (whole `content`, or `edits` on the stored one). Main or a lead only. */
-export async function writeNodeBrief(taskId: string, input: { content?: string; edits?: readonly BriefEdit[]; language?: string }): Promise<{ task: Task; brief: TaskBrief; issues: BriefIssue[] }> {
+/**
+ * Write a node's Brief (whole `content`, or `edits` on the stored one). Main or a lead only.
+ * `writer` is who the caller is, as the route knows it from the request (never from its body);
+ * without one the words are an unknown writer's, never guessed as a person's.
+ */
+export async function writeNodeBrief(
+  taskId: string, input: { content?: string; edits?: readonly BriefEdit[]; language?: string }, writer: BriefWriter = UNKNOWN_WRITER,
+): Promise<{ task: Task; brief: TaskBrief; issues: BriefIssue[] }> {
   const { getTask, listTasks, updateTaskRaw } = await import('../task-manager.js');
   const task = await getTask(taskId);
   if (task.org_role !== 'main' && task.org_role !== 'lead') {
@@ -82,8 +99,8 @@ export async function writeNodeBrief(taskId: string, input: { content?: string; 
   if (input.content === undefined && !input.edits) throw new BriefWriteError(400, 'bad_request', 'content (string) or edits ([{ old, new }]) is required');
   // Checked first against the stored letter, and again under the row lock against the letter as it
   // is then: two writers' edits compose, and a stale edit is refused, never written over the other.
-  const textOf = (base: string): string => {
-    const text = input.content !== undefined ? input.content : applyBriefEdits(base, input.edits!);
+  const textOf = (base: string, onApply?: (at: number, edit: BriefEdit, before: string) => void): string => {
+    const text = input.content !== undefined ? input.content : applyBriefEdits(base, input.edits!, onApply);
     if (!text.trim()) throw new BriefWriteError(400, 'bad_request', 'The Brief cannot be empty: write its three sections');
     return text;
   };
@@ -113,7 +130,19 @@ export async function writeNodeBrief(taskId: string, input: { content?: string; 
     try {
       const base = current.brief?.text ?? '';
       const prior = briefWalnutLines(current.brief, current, tasks);
-      out = shapeBriefText(textOf(base), current, tasks, { ...(input.language ? { language: input.language } : {}), prior });
+      // A write, whole or by edits, makes only what it changed the writer's.
+      let sources: BriefTextSource[] = briefSourcesOf(current.brief);
+      let sourceMs = 0;
+      const text = textOf(base, (at, e, before) => {
+        if (e.old === e.new || sourceMs >= 25) return;
+        const started = performance.now();
+        sources = spliceBriefEdit(sources, at, e.old, e.new, writer, before);
+        sourceMs += performance.now() - started;
+      });
+      if (sourceMs >= 25) sources = wholeHtmlSource(text.length, UNKNOWN_WRITER.by);
+      // A whole letter keeps every unchanged character's stored writer (the same words sent again too).
+      if (input.content !== undefined) sources = sourcesAfterRewrite(base, text, sources, writer);
+      out = shapeBriefText(text, current, tasks, { ...(input.language ? { language: input.language } : {}), prior, sources });
       checkOwn(out.brief, base, prior);
       return { brief: out.brief };
     } catch (err) {

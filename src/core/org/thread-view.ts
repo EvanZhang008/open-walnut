@@ -113,7 +113,7 @@ export function unreactedAnswers(t: ViewThread): number {
  * history, not news).
  */
 export interface CardView<M extends ViewMessage = ViewMessage> {
-  summary: SummaryLine;
+  summary: SummaryLine<M>;
   unread: ThreadExchange<M>[];
   waiting: ThreadExchange<M>[];
 }
@@ -125,13 +125,15 @@ export interface CardView<M extends ViewMessage = ViewMessage> {
  * answer (or its first post), else what he asks (`ask`) in the node's words, else that there is no
  * answer yet. Never empty.
  */
-export interface SummaryLine {
+export interface SummaryLine<M extends ViewMessage = ViewMessage> {
   text: string;
   by: 'node' | 'walnut';
   /** Where Walnut's stand-in came from. */
   from?: 'answer' | 'opener' | 'ask' | 'none';
   /** The node's summary predates his latest message (summaryBehindHim): the card says so until it is rewritten. */
   stale?: boolean;
+  /** The exchange a stand-in from an answer or the opener was cut from: the writer of its words is the line's writer. */
+  exchange?: ThreadExchange<M>;
 }
 
 /** How much of an answer Walnut's stand-in line keeps: its first sentence of at least STAND_IN_MIN characters, at most STAND_IN_MAX. */
@@ -144,7 +146,7 @@ export function cardView<M extends ViewMessage>(t: ViewThread<M>, shared: Readon
   exchanges.forEach((x, i) => { if (x.answer || x.opener) lastSaid = i; });
   const unread = unreadOf(t, exchanges, shared);
   const waiting = exchanges.slice(lastSaid + 1).filter((x) => !x.answer && !x.opener);
-  let summary: SummaryLine;
+  let summary: SummaryLine<M>;
   if (t.reply?.trim()) summary = { text: t.reply.trim(), by: 'node', ...(summaryBehindHim(t) ? { stale: true } : {}) };
   else {
     // The newest of the node's own words on the thread, never one reply shared with another thread.
@@ -152,7 +154,7 @@ export function cardView<M extends ViewMessage>(t: ViewThread<M>, shared: Readon
     const src = said[said.length - 1];
     const text = src ? plainLine(src.answer?.text ?? src.opener!.text) : '';
     // The answer itself stays on the card whole: the line is its headline, not a replacement.
-    if (src && text) summary = { text, by: 'walnut', from: src.opener ? 'opener' : 'answer' };
+    if (src && text) summary = { text, by: 'walnut', from: src.opener ? 'opener' : 'answer', exchange: src };
     else if (t.ask?.trim()) summary = { text: t.ask.trim(), by: 'walnut', from: 'ask' };
     // Nothing from the node yet: say so, never echo his own words back (2026-11-01, the user: "you
     // definitely haven't answered ... you don't need to put it in this thread").

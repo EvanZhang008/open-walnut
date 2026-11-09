@@ -389,6 +389,7 @@ export function foldSameAsk(selfId: string, derived: UserStatus, asks: readonly 
     state: 'waiting', kind: 'task', waitingOn: foldWords(fold), sameAsk: fold,
     ...(derived.now ? { now: derived.now } : {}),
     ...(derived.next ? { next: derived.next } : {}),
+    ...(derived.now || derived.next ? reportSource(derived) : {}),
     ...(derived.at ? { at: derived.at } : {}),
     ...(derived.stale ? { stale: derived.stale } : {}),
     ...(derived.due ? { due: derived.due } : {}),
@@ -415,6 +416,13 @@ export interface AskAnswer {
   at: string;
   /** The user's own words it acts on, for an ask of a kind only they approve (APPROVAL_KINDS). */
   userWords?: string;
+  /** Answering task's session, from the resolved caller; absent = a person or unknown. */
+  sessionId?: string;
+}
+
+/** The writer of a status's now/next, kept when a fold or an answer rebuilds it (user-status.ts reportSourceOf). */
+function reportSource(s: Pick<UserStatus, 'reportBy' | 'reportSessionId'>): Pick<UserStatus, 'reportBy' | 'reportSessionId'> {
+  return { ...(s.reportBy ? { reportBy: s.reportBy } : {}), ...(s.reportSessionId ? { reportSessionId: s.reportSessionId } : {}) };
 }
 
 /** An answer above holds this long: a much later ask in the same words is a new decision. */
@@ -499,9 +507,10 @@ export function answeredAbove(derived: UserStatus, answers: AskAnswer | readonly
   if (!answer) return derived;
   return {
     state: 'waiting', kind: 'task', waitingOn: answeredWords(answer),
-    answeredFor: { by: answer.by, byTitle: answer.byTitle, at: answer.at, ask: answer.ask },
+    answeredFor: { by: answer.by, byTitle: answer.byTitle, at: answer.at, ask: answer.ask, ...(answer.sessionId ? { sessionId: answer.sessionId } : {}) },
     ...(derived.now ? { now: derived.now } : {}),
     ...(derived.next ? { next: derived.next } : {}),
+    ...(derived.now || derived.next ? reportSource(derived) : {}),
     ...(derived.at ? { at: derived.at } : {}),
     ...(derived.stale ? { stale: derived.stale } : {}),
     ...(derived.due ? { due: derived.due } : {}),

@@ -230,7 +230,9 @@ describe('4. every card leads with a summary line', () => {
 
   it('the stand-in is the first sentence of the latest answer, plain; the answer stays whole below it', () => {
     const c = cardView(shapes['answer, no summary'])
-    expect(c.summary).toEqual({ text: 'Good: the version that never opens the app.', by: 'walnut', from: 'answer' })
+    expect(c.summary).toMatchObject({ text: 'Good: the version that never opens the app.', by: 'walnut', from: 'answer' })
+    // The line names the exchange it was cut from: its writer is the line's writer (a path in it opens there).
+    expect(c.summary.exchange?.answer?.text).toContain('Good: the version that never opens the app.')
     expect(c.unread).toHaveLength(1)
     expect(plainLine('- a big **Send** button;\n- press again')).toBe('a big Send button; press again')
     // A test of CJK text data: "\u597d\u3002" is a two-character sentence ending in an ideographic full stop.

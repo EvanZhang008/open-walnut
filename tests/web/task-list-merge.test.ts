@@ -123,6 +123,18 @@ describe('mergeFetchedTasks', () => {
     expect(listRowEqual(b, { ...b, brief } as Task)).toBe(false);
   });
 
+  it('adopts a stored writer change even when the words and timestamps stay the same', () => {
+    const a = task({ summary: '/tmp/report.txt', summary_session_id: 'old-writer' });
+    expect(listRowEqual(a, { ...a, summary_session_id: 'new-writer' })).toBe(false);
+    const old = { text: '/tmp/report.txt', at: '2026-11-07T10:00:00Z', session_id: 'old-writer' };
+    const b = task({ last_words: old as Task['last_words'] });
+    expect(listRowEqual(b, { ...b, last_words: { ...old, session_id: 'new-writer' } as Task['last_words'] })).toBe(false);
+    const spans = [{ start: 0, end: 15, by: 'agent' as const, sessionId: 'old-writer' }];
+    const brief = { text: '/tmp/report.txt', at: old.at, text_sources: spans };
+    const c = task({ brief });
+    expect(listRowEqual(c, { ...c, brief: { ...brief, text_sources: [{ ...spans[0]!, sessionId: 'new-writer' }] } })).toBe(false);
+  });
+
   it('detects an engine switch moving on (pending, done), whose writes leave updated_at alone', () => {
     const sw = { id: 'es-1', state: 'pending', at: '2026-10-29T10:00:00Z', from_session_id: 's1', to: { engine: 'codex' }, message: 'go' };
     const a = task({ id: 'a', engine_switch: sw } as never);

@@ -175,6 +175,12 @@ export interface StatusReport {
   by?: StatusLineBy;
   /** The setter task's title, for display. */
   by_name?: string;
+  /** Writer session, set only by trusted writer paths, never from a body; absent = unknown (older report). */
+  session_id?: string;
+  /** `local`: a person on the primary wrote it (sessions/report-set.ts, a request with no caller
+   *  header only), never from a body. A `by: human` without it is an older record, which may be an
+   *  unresolved session caller: its source reads unknown. */
+  source_host?: 'local';
   /** needs: the session said its ask is the same decision as the open ask of this task in its tree
    *  (FOR_USER_ASK_SAME, same-ask.ts): the user sees it once, from the deeper of the two. */
   same_as?: string;
@@ -209,8 +215,8 @@ export interface AskForm {
   options?: AskOption[];
 }
 
-/** Who wrote a task's own line: the task itself, another task, or a person. */
-export type StatusLineBy = 'self' | 'human' | `task:${string}`;
+/** Who wrote a task's own line; `unknown` = an unresolved session caller, never read as a person. */
+export type StatusLineBy = 'self' | 'human' | 'unknown' | `task:${string}`;
 
 /**
  * The task's own words for where it stands (2026-10-31, the user: "each task shoud be giving the what
@@ -224,6 +230,8 @@ export interface StatusLine {
   by: StatusLineBy;
   byName?: string;
   at: string;
+  /** Writer session of its report (StatusReport.session_id); absent = unknown. */
+  sessionId?: string;
 }
 
 /** The facts a status is derived from. Everything optional: a missing fact never invents a state. */
@@ -386,6 +394,15 @@ export interface UserStatus {
   until?: string;
   /** When `now`/`next` were written (ISO). */
   at?: string;
+  /** Writer of the report's now/next only: paths in them open in that session. */
+  reportBy?: StatusLineBy;
+  reportSessionId?: string;
+  /** Writer of `ask`, only when it is the current report's own ask or waiting_on; absent = unknown. */
+  askBy?: StatusLineBy;
+  askSessionId?: string;
+  /** Writer of waitingOn, only when it is the report's own waiting_on (copied or quoted); absent on Walnut's words. */
+  waitingBy?: StatusLineBy;
+  waitingSessionId?: string;
   /** The words are a day or more old while the task is not running. */
   stale?: boolean;
   /** The machine stopped it (a lost host, a restart, a dead process), not its work: Walnut
@@ -440,7 +457,12 @@ export interface UserStatus {
   sameAsk?: SameAskFold;
   /** A task whose own question a lead, VP or Main answered for the user (same-ask.ts answeredAbove):
    *  it reads Waiting on itself to act on that answer, never Needs you, while it asks the same. */
-  answeredFor?: { by: string; byTitle: string; at: string; ask: string };
+  answeredFor?: { by: string; byTitle: string; at: string; ask: string; sessionId?: string };
+}
+
+/** The report source fields of a status, for a rebuilt status that keeps its `now`/`next`. Pure. */
+export function reportSourceOf(s: Pick<UserStatus, 'reportBy' | 'reportSessionId'>): Pick<UserStatus, 'reportBy' | 'reportSessionId'> {
+  return { ...(s.reportBy ? { reportBy: s.reportBy } : {}), ...(s.reportSessionId ? { reportSessionId: s.reportSessionId } : {}) };
 }
 
 /** One question a subtask asks the user, as its leader carries it up (2026-10-31, the user: asks
@@ -639,16 +661,43 @@ const none = (s: string | null | undefined): boolean => {
   return !v || v === 'none' || v === 'n/a' || v === '-' || v === 'unchanged';
 };
 
-function words(report: StatusReport | null | undefined, nowMs: number, running: boolean) {
+function words(report: StatusReport | null | undefined, nowMs: number, running: boolean): Pick<UserStatus, 'now' | 'next' | 'at' | 'stale' | 'reportBy' | 'reportSessionId'> {
   if (!report) return {};
   const at = report.at;
   const age = nowMs - Date.parse(at);
+  const now = none(report.now) ? undefined : clean(report.now);
+  const next = none(report.next) ? undefined : clean(report.next);
   return {
-    now: none(report.now) ? undefined : clean(report.now),
-    next: none(report.next) ? undefined : clean(report.next),
-    at,
+    now, next, at,
     stale: !running && Number.isFinite(age) && age >= STALE_REPORT_MS ? true : undefined,
+    ...(now || next ? reportSourceFields(report) : {}),
   };
+}
+
+/** Who wrote a report and in which session, as a status carries them beside the report's words. */
+function reportSourceFields(report: StatusReport): Pick<UserStatus, 'reportBy' | 'reportSessionId'> {
+  const sid = typeof report.session_id === 'string' ? report.session_id.trim() : '';
+  return { reportBy: sourceByOf(report), ...(sid ? { reportSessionId: sid } : {}) };
+}
+
+/** The writer a source field carries: `human` only when the person's write was recorded as made on
+ *  the primary (`source_host`); an older `by: human` may be an unresolved session caller, so unknown.
+ *  The report's own `by` (who set it, for display and status) is left as it is. */
+function sourceByOf(report: Pick<StatusReport, 'by' | 'source_host'>): StatusLineBy {
+  const by = report.by ?? 'self';
+  return by === 'human' && report.source_host !== 'local' ? 'unknown' : by;
+}
+
+/** The same writer, for an ask that is the report's own ask or waiting_on. */
+function askSourceFields(report: StatusReport): Pick<UserStatus, 'askBy' | 'askSessionId'> {
+  const { reportBy, reportSessionId } = reportSourceFields(report);
+  return { askBy: reportBy, ...(reportSessionId ? { askSessionId: reportSessionId } : {}) };
+}
+
+/** The same writer, for a waitingOn that carries the report's own waiting_on. */
+function waitingSourceFields(report: StatusReport): Pick<UserStatus, 'waitingBy' | 'waitingSessionId'> {
+  const { reportBy, reportSessionId } = reportSourceFields(report);
+  return { waitingBy: reportBy, ...(reportSessionId ? { waitingSessionId: reportSessionId } : {}) };
 }
 
 /** A status with nothing asked of the user, only something to read (ToRead). */
@@ -866,7 +915,8 @@ function lineOf(input: UserStatusInput, s: UserStatus): StatusLine | undefined {
     : s.state === 'waiting' ? (r.state === 'waiting' && !waitIsUsers(r, hasAbove(input)) ? r.waiting_on : undefined)
       : r.state === 'working' ? (r.next ?? r.now) : undefined;
   if (none(text)) return undefined;
-  return strip<StatusLine>({ text: clean(text).slice(0, 300), by: r.by ?? 'self', byName: r.by_name, at: r.at });
+  const sid = typeof r.session_id === 'string' ? r.session_id.trim() : '';
+  return strip<StatusLine>({ text: clean(text).slice(0, 300), by: sourceByOf(r), byName: r.by_name, at: r.at, sessionId: sid || undefined });
 }
 
 /** Whether a snooze takes this status off the user until its date (snoozeOf): a Needs you or a wait
@@ -894,7 +944,8 @@ function snoozeOf(input: UserStatusInput, s: UserStatus, nowMs: number): UserSta
   const ask = s.state === 'needs' ? s.ask : s.state === 'read' ? undefined : s.waitingOn;
   return strip<UserStatus>({
     state: 'waiting', kind: 'time', waitingOn: `Snoozed until ${until}`, until: new Date(startMs).toISOString(),
-    now: s.now, next: s.next, at: s.at, stale: s.stale,
+    now: s.now, next: s.next, at: s.at, stale: s.stale, ...(s.now || s.next ? reportSourceOf(s) : {}),
+    ...(s.state === 'needs' && ask && s.askBy ? { askBy: s.askBy, ...(s.askSessionId ? { askSessionId: s.askSessionId } : {}) } : {}),
     snoozed: { until, ...(ask && ask !== HANDED_BACK_ASK ? { ask } : {}) },
     // Its Threads still count on the Org page while it sleeps.
     ...(s.threads ? { threads: s.threads } : {}),
@@ -984,7 +1035,7 @@ function orgNodeNeverNeeds(s: UserStatus, input: UserStatusInput): UserStatus {
 
 function asOrgNode(s: UserStatus): UserStatus {
   if (s.state !== 'needs') return s;
-  const { ask, source, askForm: _form, checkedAt: _c, checkedBy: _b, unverified: _u, watchedAt: _wa, choice: _ch, ...rest } = s;
+  const { ask, source, askForm: _form, checkedAt: _c, checkedBy: _b, unverified: _u, watchedAt: _wa, choice: _ch, askBy: _ab, askSessionId: _as, ...rest } = s;
   const said = clean(ask);
   const waitingOn = source === 'prompt' ? `You, in its chat: ${said}`
     : source === 'error' ? `You or Walnut, in its chat: ${said}`
@@ -1002,6 +1053,9 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
   const w = words(anyReport, nowMs, running);
   // Only a report of the latest turn says what it is waiting on or asking.
   const report = reportIsCurrent(input) ? anyReport : null;
+  // Spread only where a return puts the report's own ask (src) or waiting_on (waitSrc) in its words.
+  const src = report ? askSourceFields(report) : {};
+  const waitSrc = report ? waitingSourceFields(report) : {};
   // The machine stopped it: unless its own latest report asks the user something, it is Walnut's
   // and its lead's to bring back, not the user's.
   const asksUser = report?.state === 'needs' || (report?.state === 'waiting' && report.waiting_kind === 'you');
@@ -1020,8 +1074,10 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
   // A close its session tried left something for the user (2026-11-02: a task closed with the user's
   // own resubmit step still in its Progress read Done). Its own later ask, when it has one, speaks.
   if (input.owedHold && !input.isMain && !input.isLead && !none(input.owedHold.ask)) {
-    const heldAsk = report?.state === 'needs' && !none(report.ask) ? clean(report.ask) : clean(input.owedHold.ask);
-    return strip({ state: 'needs', source: 'session', ask: heldAsk, ...w });
+    const fromReport = report?.state === 'needs' && !none(report.ask);
+    const heldAsk = fromReport ? clean(report!.ask) : clean(input.owedHold.ask);
+    // A held ask from an earlier close has no recorded writer: unknown, never the current report's.
+    return strip({ state: 'needs', source: 'session', ask: heldAsk, ...w, ...(fromReport ? src : {}) });
   }
   const own = ownWork(input, report, w, nowMs);
   // Its start waits for room on a host (sessions/start-queue.ts; a start clears it), whatever its
@@ -1044,7 +1100,7 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
   if (input.phase === 'NEED_ACTION') {
     // The task's own words come first (2026-10-31, the user: what it needs is the task's to say; a
     // letter or a Board choice is a place he can answer, never what overrides it).
-    if (report?.state === 'needs' && !none(report.ask)) return strip({ state: 'needs', source: 'session', ask: clean(report.ask), ...w });
+    if (report?.state === 'needs' && !none(report.ask)) return strip({ state: 'needs', source: 'session', ask: clean(report.ask), ...w, ...src });
     if (!none(input.openLetter)) return strip({ state: 'needs', source: 'letter', ask: clean(input.openLetter), ...w });
     if (!none(input.openChoice) && !choiceOverruled(input, anyReport)) {
       return strip({ state: 'needs', source: 'choice', ask: clean(input.openChoice), ...(input.openChoiceRef ? { choice: { ...input.openChoiceRef } } : {}), ...w });
@@ -1074,10 +1130,10 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
     if (Number.isFinite(stoppedAt) && !running && !asksUser && !(anyReport && Date.parse(anyReport.at) > stoppedAt)) {
       return strip({ state: 'waiting', kind: input.hasLeader ? 'lead' : 'you', waitingOn: 'Its team was stopped: Resume the team, or a message to it, starts it again', ...w });
     }
-    if (report?.state === 'needs' && !none(report.ask)) return strip({ state: 'needs', source: 'session', ask: clean(report.ask), ...w });
+    if (report?.state === 'needs' && !none(report.ask)) return strip({ state: 'needs', source: 'session', ask: clean(report.ask), ...w, ...src });
     // A wait that is the user's (2026-10-30: "other: the meeting notes") is their ask, in its words.
     if (waitIsUsers(report, hasAbove(input)) && !none(report!.waiting_on)) {
-      return strip({ state: 'needs', source: 'session', ask: clean(report!.waiting_on), ...w });
+      return strip({ state: 'needs', source: 'session', ask: clean(report!.waiting_on), ...w, ...src });
     }
     // A person set it to need them: their own ask, whatever its turn said.
     if (input.markedByPerson) return strip({ state: 'needs', ask: MARKED_ASK, ...w });
@@ -1087,7 +1143,7 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
     // no Needs you (2026-11-02) and no 4-hour re-check (needs-recheck.ts reads only Needs you).
     if (report && report.answered_person && report.state !== 'done' && !input.isMain && !input.isLead) {
       const on = report.state === 'waiting' && !report.kindless_ask ? clean(report.waiting_on) : '';
-      return toRead('answer', on ? `${ANSWER_TO_READ}; then it waits on: ${on.slice(0, 160)}` : ANSWER_TO_READ, w);
+      return toRead('answer', on ? `${ANSWER_TO_READ}; then it waits on: ${on.slice(0, 160)}` : ANSWER_TO_READ, on ? { ...w, ...waitSrc } : w);
     }
     // An ask with no kind of the user's own and no lead above it: its result is there to read.
     if (report?.kindless_ask && !hasAbove(input)) return toRead('result', RESULT_TO_READ, w);
@@ -1166,12 +1222,12 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
   // Parked on its own work (its build, its test run, a deploy of its change): that is Working, not a
   // wait (2026-11-02, the user: "wait is not waintg wait is just acutally waitng").
   if (own && !tasks.length) return own;
-  if (tasks.length) return strip({ state: 'waiting', kind: 'task', waitingOn: reported || `A reply from ${tasks.join(', ')}`, ...w });
+  if (tasks.length) return strip({ state: 'waiting', kind: 'task', waitingOn: reported || `A reply from ${tasks.join(', ')}`, ...w, ...(reported ? waitSrc : {}) });
   // Parked on the user (an older writer, a person's park): the user's ask, never a Waiting on them.
   // An ask with no kind of the user's own is no ask of theirs: with no lead above it, the task is a result to read and close.
   if (report?.kindless_ask && !hasAbove(input)) return toRead('result', RESULT_TO_READ, w);
-  if (reported && (reportedKind === 'you' || (reportedKind === 'lead' && !hasAbove(input)))) return strip({ state: 'needs', source: 'session', ask: reported, ...w });
-  if (reported && reportedKind && reportedKind !== 'stuck') return strip({ state: 'waiting', kind: reportedKind, waitingOn: reported, ...(until ? { until } : {}), ...w });
+  if (reported && (reportedKind === 'you' || (reportedKind === 'lead' && !hasAbove(input)))) return strip({ state: 'needs', source: 'session', ask: reported, ...w, ...src });
+  if (reported && reportedKind && reportedKind !== 'stuck') return strip({ state: 'waiting', kind: reportedKind, waitingOn: reported, ...(until ? { until } : {}), ...w, ...waitSrc });
   // A standing routine: between fires it waits on the next one.
   const wake = wakeSource(input, w, nowMs, true);
   if (wake) return wake;
@@ -1278,6 +1334,9 @@ export interface TaskBrief {
   /** The lines of `text` Walnut wrote (sessions/brief-structure.ts briefWalnutLines), word for
    *  word: not its writer's, so BRIEF_MAX_CHARS leaves them out. Absent on a letter stored before. */
   added?: string[];
+  /** Who wrote each part of `text` (sessions/brief-source.ts): a path opens on its writer's
+   *  machine. Absent on a letter stored before: every part reads as an unknown writer. */
+  text_sources?: import('./boards/board-html-source.js').BoardHtmlSource[];
 }
 
 /** The longest Brief kept: a dozen lines, not a document (Main's lines carry two task refs). */

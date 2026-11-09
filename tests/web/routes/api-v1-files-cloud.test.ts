@@ -105,6 +105,17 @@ describe('files list/resolve relay on a REPLICA', () => {
     )
   })
 
+  it('a source-bound locate keeps its boundary through the companion relay', async () => {
+    bridgeRequestMock.mockResolvedValue({ ok: true, result: { path: '/repo/a.ts', host: 'devbox', found: false, missing: true } })
+    const res = await request(createApp()).get('/api/v1/files/locate?ref=/repo/a.ts&host=devbox&sourceOnly=1')
+    expect(res.status).toBe(200)
+    expect(bridgeRequestMock).toHaveBeenCalledWith(
+      '__local__', 'session.control',
+      { action: 'server.files.locate', sessionId: '__server__', params: { ref: '/repo/a.ts', host: 'devbox', sourceOnly: true } },
+      30_000,
+    )
+  })
+
   it('bridge offline → 503 bridge_offline', async () => {
     bridgeRequestMock.mockRejectedValue(new BridgeOfflineError('__local__'))
     const res = await request(createApp()).get('/api/v1/files/list?path=/w')

@@ -101,9 +101,9 @@ export function overlayBoard(taskId: string, body: Record<string, unknown>, over
     const m = overlay.markOf('boards', taskId)
     return m ? { ...body, [SYNC_FIELD]: m } : body
   }
-  const pub = (body.board ?? null) as { html?: string; version?: number; updated_at?: string; updated_by?: string } | null
+  const pub = (body.board ?? null) as { html?: string; version?: number; updated_at?: string; updated_by?: string; updated_session_id?: string; html_sources?: OfflineSliceBoard['html_sources'] } | null
   let board: OfflineSliceBoard | undefined = pub && typeof pub.html === 'string'
-    ? { taskId, html: pub.html, version: Number(pub.version) || 0, ...(typeof pub.updated_at === 'string' ? { updated_at: pub.updated_at } : {}), ...(typeof pub.updated_by === 'string' ? { updated_by: pub.updated_by } : {}), threads: { ...(body.threads as Record<string, never> ?? {}) }, marks: { ...(body.marks as Record<string, never> ?? {}) }, projects: { ...(body.projects as Record<string, never> ?? {}) }, choices: { ...(body.choices as Record<string, never> ?? {}) } }
+    ? { taskId, html: pub.html, version: Number(pub.version) || 0, ...(typeof pub.updated_at === 'string' ? { updated_at: pub.updated_at } : {}), ...(typeof pub.updated_by === 'string' ? { updated_by: pub.updated_by } : {}), ...(typeof pub.updated_session_id === 'string' ? { updated_session_id: pub.updated_session_id } : {}), ...(Array.isArray(pub.html_sources) ? { html_sources: pub.html_sources } : {}), threads: { ...(body.threads as Record<string, never> ?? {}) }, marks: { ...(body.marks as Record<string, never> ?? {}) }, projects: { ...(body.projects as Record<string, never> ?? {}) }, choices: { ...(body.choices as Record<string, never> ?? {}) } }
     : undefined
   for (const r of records) {
     const op = String(r.op ?? '')
@@ -122,7 +122,7 @@ export function overlayBoard(taskId: string, body: Record<string, unknown>, over
   const mark = overlay.markOf('boards', taskId)
   return {
     ...body,
-    board: { html: board.html, version: board.version, ...(board.updated_at ? { updated_at: board.updated_at } : {}), ...(board.updated_by ? { updated_by: board.updated_by } : {}) },
+    board: { html: board.html, version: board.version, ...(board.updated_at ? { updated_at: board.updated_at } : {}), ...(board.updated_by ? { updated_by: board.updated_by } : {}), ...(board.updated_session_id ? { updated_session_id: board.updated_session_id } : {}), ...(board.html_sources ? { html_sources: board.html_sources } : {}) },
     threads, marks: board.marks ?? {}, projects: board.projects ?? {}, choices: board.choices ?? {},
     board_version: board.version,
     ...(mark ? { [SYNC_FIELD]: mark } : {}),

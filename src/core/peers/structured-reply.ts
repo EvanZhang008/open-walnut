@@ -34,6 +34,13 @@ export interface TaskResultReport extends StructuredReply {
   to_task_id?: string;
   /** Who gave it: 'human', or 'task:<id>' for a session. */
   by?: string;
+  /** Giving session, from the resolved caller only; absent = a person or unknown. */
+  sessionId?: string;
+  /** `local`: a person on the primary gave it (resultWriterOf with no caller header). A `by: human`
+   *  without it is an older record, which may be an unresolved session caller: its source is unknown. */
+  host?: 'local';
+  /** `unknown`: not_done merges an earlier close's held items, so by/sessionId do not cover it. */
+  not_done_by?: 'unknown';
   /** The not-done items were taken up or dropped (task_update not_done_settled): no longer Partial. */
   settled?: { at: string; by?: string; how: 'taken' | 'dropped'; note?: string };
   /**
@@ -52,6 +59,12 @@ export interface TaskOwed {
   /** The tasks whose close was refused with these items named: only they may force it closed. */
   told?: string[];
   settled?: { at: string; by?: string; how: 'taken' | 'dropped'; note?: string };
+}
+
+/** A result's writer from what a route resolved: a task only when its caller resolved, never the person when a header came. Pure. */
+export function resultWriterOf(actorSid: string | undefined, callerTaskId: string | undefined, callerSessionId?: string): Pick<TaskResultReport, 'by' | 'sessionId' | 'host'> {
+  if (callerTaskId) return { by: `task:${callerTaskId}`, ...(callerSessionId ? { sessionId: callerSessionId } : {}) };
+  return actorSid ? { by: 'unknown' } : { by: 'human', host: 'local' };
 }
 
 /** The open hold a session's close left for the user, if any. */

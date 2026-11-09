@@ -26,7 +26,7 @@ import {
 } from '../../core/boards/board-kanban.js'
 import { setKanbanSeen } from '../../core/boards/board-kanban-seen.js'
 import { boardCallerBraked } from '../../core/boards/board-team.js'
-import { body, param, prepareWrite, route, RouteError, writer } from './board-v1.js'
+import { body, header, param, prepareWrite, route, RouteError, writer } from './board-v1.js'
 
 export const boardKanbanV1Router = Router()
 
@@ -65,7 +65,13 @@ boardKanbanV1Router.put('/tasks/:id/board/cards/:task', route(async (req, res) =
   const { task, caller } = await prepareWrite(req)
   const b = body(req)
   const cardId = await fullTaskId(param(req.params.task))
-  const opts: KanbanWriteOpts = { by: writer(caller), overrideUser: flag(b, 'override_user'), ifUnchangedSince: since(b) }
+  // The writing session, only as Walnut resolves it from the header: a body field could name any
+  // session's machine for these words, so none is read.
+  const { trustedCallerSessionId } = await import('../../core/sessions/session-send-core.js')
+  const sessionId = await trustedCallerSessionId(header(req, 'x-walnut-caller-sid'))
+  const opts: KanbanWriteOpts = {
+    by: writer(caller), ...(sessionId ? { sessionId } : {}), overrideUser: flag(b, 'override_user'), ifUnchangedSince: since(b),
+  }
   const out = await setBoardCard(task.id, cardId, {
     lane: stringField(b, 'lane'), summary: stringField(b, 'summary'), waiting_on: stringField(b, 'waiting_on'),
   }, opts)

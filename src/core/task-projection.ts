@@ -99,13 +99,17 @@ export interface ProjectedTask {
   tags?: string[]
   /** First 500 chars — enough for a detail preview without the full blob. */
   summary?: string
+  /** Writer session of `summary` (additive); absent = unknown. */
+  summary_session_id?: string
+  /** Its last words with their session (Task.last_words; additive, open rows only): absent = none read. */
+  last_words?: { text: string; at: string; session_id: string }
   /** The one status the user sees (src/core/user-status.ts), open rows only (additive,
    *  2026-10): state needs | working | waiting | done, plus ask / kind / waitingOn / now /
    *  next / at / stale. Older clients ignore it. */
   user_status?: UserStatus
   /** Its latest result left things not done and nobody took them up (peers/structured-reply.ts;
    *  additive, 2026-10): the phone shows Partial and the list. Omitted otherwise. */
-  result_report?: { at: string; not_done: string[]; result?: string }
+  result_report?: { at: string; not_done: string[]; result?: string; by?: string; sessionId?: string; host?: 'local'; not_done_by?: 'unknown' }
   /** A team stop is in force under it (core/sessions/team-stop.ts; additive, 2026-10): the phone
    *  offers Resume the team. Omitted otherwise. */
   team_stop?: { at: string; by: string }
@@ -212,6 +216,9 @@ export function projectTask(t: Task): ProjectedTask {
     ...(t.watched_at ? { watched_at: t.watched_at } : {}),
     ...(t.tags && t.tags.length > 0 ? { tags: t.tags } : {}),
     ...(summary ? { summary: summary.length > SUMMARY_MAX ? summary.slice(0, SUMMARY_MAX) + '…' : summary } : {}),
+    ...(summary && t.summary_session_id ? { summary_session_id: t.summary_session_id } : {}),
+    ...(t.status !== 'done' && t.phase !== 'COMPLETE' && t.last_words?.text && t.last_words.session_id
+      ? { last_words: { text: t.last_words.text, at: t.last_words.at, session_id: t.last_words.session_id } } : {}),
     ...(t.user_status && t.status !== 'done' && t.phase !== 'COMPLETE' ? { user_status: t.user_status } : {}),
     ...(t.plugin_only ? { plugin_only: t.plugin_only } : {}),
     ...(t.org_role ? { org_role: t.org_role } : {}),
@@ -222,6 +229,10 @@ export function projectTask(t: Task): ProjectedTask {
     ...(isPartial(t.result_report) ? { result_report: {
       at: t.result_report!.at, not_done: t.result_report!.not_done!,
       ...(t.result_report!.result ? { result: t.result_report!.result } : {}),
+      ...(t.result_report!.by ? { by: t.result_report!.by } : {}),
+      ...(t.result_report!.sessionId ? { sessionId: t.result_report!.sessionId } : {}),
+      ...(t.result_report!.host === 'local' ? { host: 'local' as const } : {}),
+      ...(t.result_report!.not_done_by ? { not_done_by: t.result_report!.not_done_by } : {}),
     } } : {}),
     ...(t.team_stop ? { team_stop: { at: t.team_stop.at, by: t.team_stop.by } } : {}),
     // Additive (2026-11-01): the outside service a task syncs to, and why one in a project that

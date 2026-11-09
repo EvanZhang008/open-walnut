@@ -205,7 +205,11 @@ describe('a trigger paused on its host while the Mac is away', () => {
     expect(job.state.pausedAtMs).toEqual(expect.any(Number))
     await waitFor(() => !armedOnDisk().includes(jobId), 20_000, 'the pushed set without the trigger')
     expect((await daemonCmd({ cmd: 'triggers.run', triggerId: jobId, home: WALNUT_HOME })).ok).toBe(false)
-    const drained = await daemonCmd({ cmd: 'offline.drain', home: WALNUT_HOME })
+    // The pushed set lands before the replay's ack; wait for both before resuming.
+    const drained = await waitFor(async () => {
+      const reply = await daemonCmd({ cmd: 'offline.drain', home: WALNUT_HOME })
+      return Array.isArray(reply.records) && reply.records.length === 0 ? reply : null
+    }, 20_000, 'the replay acknowledged on the host')
     expect(drained.records).toEqual([])
   }, 120_000)
 

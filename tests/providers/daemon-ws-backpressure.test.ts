@@ -28,7 +28,7 @@ import { spawn } from 'node:child_process'
 import { WebSocket } from 'ws'
 
 const ROOT = path.resolve(__dirname, '../..')
-const BINARY = path.join(ROOT, 'dist', 'daemon-binaries', 'daemon-darwin-arm64')
+const BINARY = path.join(ROOT, 'dist', 'daemon-binaries', `daemon-${process.platform}-${process.arch}`)
 
 const DAEMON_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-daemon-bp-'))
 const PORT_FILE = path.join(DAEMON_DIR, 'daemon.port')

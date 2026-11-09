@@ -8,8 +8,7 @@
  *
  * Two rules this file encodes:
  *  - The sender is stamped from the CALLER'S session id, never from the body.
- *    An agent cannot claim to be another session, and an unknown/absent id
- *    becomes the honest `external` sender rather than a guess.
+ *    An unresolved id keeps no host; only an absent id is the external/local sender.
  *  - The thread entry is written BEFORE delivery is attempted. A dead origin
  *    session or an unreachable host must never lose the human's answer; the
  *    caller gets the delivery status back and the record stays intact.
@@ -45,8 +44,13 @@ import type {
 /** Which edge recorded the answer. `'plugin'` is a sender taking its own question back. */
 export type LetterAnswerSource = 'web' | 'phone' | 'relay' | 'plugin';
 
-/** Sender for a caller we can't identify (hand-started agent, curl, tests). */
+/** Sender for a request with no caller session id at all (hand-started agent, curl, tests). */
 const EXTERNAL_SENDER: LetterSender = { sessionId: 'external', host: 'local', via: 'api' };
+
+// Keep the caller id: an external/local fallback would read the wrong machine's files.
+function unresolvedSender(sid: string): LetterSender {
+  return { sessionId: sid };
+}
 
 /** Sender resolution touches the session tracker + task store — bound it. */
 const SENDER_RESOLVE_TIMEOUT_MS = 3_000;
@@ -95,8 +99,8 @@ async function resolveSenderUnbounded(sid: string): Promise<LetterSender> {
   const { getSessionByClaudeId } = await import('../session-tracker.js');
   const record = await getSessionByClaudeId(sid);
   if (!record) {
-    log.notif.info('human-inbox: unknown caller sid — stamping external sender', { callerSid: sid });
-    return EXTERNAL_SENDER;
+    log.notif.info('human-inbox: unknown caller sid, keeping its id with no host', { callerSid: sid });
+    return unresolvedSender(sid);
   }
   let taskTitle: string | undefined;
   let agentId: string | undefined;
@@ -124,9 +128,10 @@ async function resolveSenderUnbounded(sid: string): Promise<LetterSender> {
 }
 
 /**
- * Stamp the envelope from the caller's session id. Unknown or absent id →
- * `external` (contract), so a letter is never attributed to a session that
- * didn't send it.
+ * Stamp the envelope from the caller's session id. An absent id is `external`
+ * on `local` (contract). A named id whose record cannot be read (unknown, timed
+ * out, failed) keeps that id and has no host, so the letter is never placed on
+ * the primary for a session that may live elsewhere.
  */
 export async function resolveLetterSender(callerSid: string | undefined): Promise<LetterSender> {
   const sid = (callerSid ?? '').trim();
@@ -136,11 +141,11 @@ export async function resolveLetterSender(callerSid: string | undefined): Promis
     // letter reads as a Walnut session's (letter-origin.ts), never as an API caller's.
     return await withTimeout(resolveSenderUnbounded(sid), SENDER_RESOLVE_TIMEOUT_MS, () => {
       log.notif.warn('human-inbox: sender resolution timed out', { callerSid: sid });
-      return { sessionId: sid, host: 'local' };
+      return unresolvedSender(sid);
     });
   } catch (err) {
     log.notif.warn('human-inbox: sender resolution failed', { callerSid: sid, error: errMsg(err) });
-    return { sessionId: sid, host: 'local' };
+    return unresolvedSender(sid);
   }
 }
 

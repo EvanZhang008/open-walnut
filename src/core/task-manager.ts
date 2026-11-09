@@ -5227,7 +5227,7 @@ export async function updateDescription(idPrefix: string, content: string): Prom
 /**
  * Set/update the summary field on a task by partial ID match.
  */
-export async function updateSummary(idPrefix: string, content: string): Promise<{ task: Task }> {
+export async function updateSummary(idPrefix: string, content: string, source: { sessionId?: string } = {}): Promise<{ task: Task }> {
   // Lock-internal: validate + persist. Push moved outside lock to avoid self-deadlock.
   const task = await withWriteLock(async () => {
     const store = await readStore();
@@ -5244,6 +5244,12 @@ export async function updateSummary(idPrefix: string, content: string): Promise<
 
     const t = matches[0];
     runPluginContentValidation(t, 'summary', content);
+    // Only a real text change names a writer (or clears one): the same words keep their author.
+    if (t.summary !== content) {
+      const sid = source.sessionId?.trim();
+      if (sid) t.summary_session_id = sid;
+      else delete t.summary_session_id;
+    }
     t.summary = content;
     t.updated_at = new Date().toISOString();
 
@@ -8662,6 +8668,12 @@ function prepareRawUpdate(
     task.group_id && safeUpdates.group_id === undefined
   ) {
     (safeUpdates as Record<string, unknown>).group_id = null;
+  }
+
+  // A summary another raw writer replaces (a sync pull, a replica op) no longer has the old writer.
+  if (typeof safeUpdates.summary === 'string' && safeUpdates.summary !== task.summary
+    && safeUpdates.summary_session_id === undefined && task.summary_session_id) {
+    (safeUpdates as Record<string, unknown>).summary_session_id = null;
   }
 
   // Dirty check: skip disk write + event if nothing actually changed

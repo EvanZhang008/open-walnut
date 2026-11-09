@@ -54,7 +54,8 @@ export interface LetterSender {
   taskId?: string;
   taskTitle?: string;
   project?: string;
-  host: string;
+  /** Absent when the writing session's host could not be read. */
+  host?: string;
   /**
    * The plugin that sent this letter, when a plugin did (`walnut.letters.send`).
    * Stamped host-side alongside `sessionId: 'external'`, never written by the
@@ -125,6 +126,13 @@ export interface ThreadEntry {
   clientId?: string;
   /** HUMAN turns only: a task's session wrote this turn in the user's place (see LetterAnsweredBy). */
   by?: LetterAnsweredBy;
+  /**
+   * AGENT turns only: who wrote this turn, stamped by the server from the caller's session
+   * (never from the body). The writer may not be the letter's sender, so its source links
+   * resolve against this, not the letter's envelope. Absent on turns written before the
+   * field existed: their writer is unknown, and a reader must not borrow the letter's sender.
+   */
+  sender?: LetterSender;
   /**
    * HUMAN turns only: the pictures sent with the words, as file names in the images folder
    * (GET /api/images/<name>; core/answer-pictures.ts). The delivery names them for the session to see.

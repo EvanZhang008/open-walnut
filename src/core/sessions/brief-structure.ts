@@ -19,6 +19,10 @@ import { ABOUT_TAG_NAME } from '../org/message-about.js';
 import { BRIEF_SECTIONS, NEEDS_CATEGORY_LABELS, briefTeam, fallbackUserState, needsLineOf, shownState, storedUserState, type BriefSectionTask, type BriefTask, type UserState } from '../user-status.js';
 import { pickLead } from '../org/org-tree.js';
 import { sameAreaTasks } from '../router/same-area.js';
+import { askLineWriter, sourcesOfPieces, type BriefPiece, type BriefTextSource } from './brief-source.js';
+
+// The web reads a Brief's writers through the alias it already has for this file.
+export { briefPathWriters, briefSourcesOf, type BriefTextSource, type BriefWriter } from './brief-source.js';
 
 export type BriefSectionKey = (typeof BRIEF_SECTIONS)[number]['state'];
 
@@ -186,6 +190,30 @@ export interface StructuredBrief {
   dropped?: number;
   /** With `live`: the lines Walnut wrote into the letter (its asks, the count past the cap). */
   walnutLines?: string[];
+  /** With `sources`: who wrote each part of `text`, each slice of the input keeping its writer
+   *  (brief-source.ts). */
+  text_sources?: BriefTextSource[];
+}
+
+/** A line being shaped: its text and the pieces it is made of (a slice of the input, or Walnut's). */
+interface Ln { text: string; pieces: BriefPiece[] }
+
+const layout = (text: string): Ln => ({ text, pieces: text ? [{ text, layout: true }] : [] });
+const prefixed = (prefix: string, ln: Ln): Ln => ({ text: prefix + ln.text, pieces: [{ text: prefix, layout: true }, ...ln.pieces] });
+
+/** The part of a line from `from` to `to` (offsets into its text), its pieces cut to match. */
+function sliceLn(ln: Ln, from: number, to: number): Ln {
+  const pieces: BriefPiece[] = [];
+  let at = 0;
+  for (const p of ln.pieces) {
+    const a = Math.max(from, at); const b = Math.min(to, at + p.text.length);
+    if (b > a) {
+      const text = p.text.slice(a - at, b - at);
+      pieces.push('src' in p ? { text, src: p.src + (a - at) } : 'writer' in p ? { text, writer: p.writer } : { text, layout: true });
+    }
+    at += p.text.length;
+  }
+  return { text: ln.text.slice(from, to), pieces };
 }
 
 /**
@@ -201,101 +229,123 @@ export function structureBrief(
      *  asks the user and that the letter does not name gets its own line in Needs you, and a line
      *  whose task finished leaves. */
     live?: BriefSectionTask;
+    /** Who wrote each part of `text`: with it the result carries `text_sources` for its own text. */
+    sources?: readonly BriefTextSource[];
   } = {},
 ): StructuredBrief {
   const byId = new Map(tasks.map((t) => [t.id, t] as const));
-  const lead: string[] = [];
-  const body: Record<BriefSectionKey, string[]> = { needs: [], working: [], waiting: [] };
+  const lead: Ln[] = [];
+  const body: Record<BriefSectionKey, Ln[]> = { needs: [], working: [], waiting: [] };
   const seen = new Set<BriefSectionKey>();
   let current: BriefSectionKey | null = null;
   let moved = 0;
   // Where the last line went: an indented line under it (a wrapped item) follows it.
-  let last: string[] | null = null;
+  let last: Ln[] | null = null;
   // A finished task's line is leaving, with the indented lines under it.
   let dropping = false;
   let dropped = 0;
   const named = new Set<string>();
   // A chat reply's tasks line (org/message-about.ts) is never the letter's.
   const aboutLine = new RegExp(`^\\s{0,3}<${ABOUT_TAG_NAME}\\b[^>]*/>\\s*$`);
-  for (const raw of text.split('\n').filter((l) => !aboutLine.test(l))) {
-    let line = raw.trimEnd();
+  let offset = 0;
+  const rawLines = text.split('\n').map((l) => { const at = offset; offset += l.length + 1; return { l, at }; });
+  for (const { l: raw, at: rawAt } of rawLines.filter(({ l }) => !aboutLine.test(l))) {
+    const kept = raw.trimEnd();
+    let line: Ln = { text: kept, pieces: kept ? [{ text: kept, src: rawAt }] : [] };
     // Walnut's own count of the asks past the cap is made again below, from the live state.
-    if (opts.live && ADDED_MORE_RE.test(line.trim())) { last = null; continue; }
-    const indented = /^\s+\S/.test(line);
-    if (dropping && indented && !REF_RE.test(line)) continue;
+    if (opts.live && ADDED_MORE_RE.test(line.text.trim())) { last = null; continue; }
+    const indented = /^\s+\S/.test(line.text);
+    if (dropping && indented && !REF_RE.test(line.text)) continue;
     dropping = false;
     // An indented line under an item is the item's, even when it reads like a label ("  Working:").
-    const heading: BriefSectionKey | null = last && indented ? null : headingSection(line);
+    const heading: BriefSectionKey | null = last && indented ? null : headingSection(line.text);
     if (heading) { current = heading; seen.add(heading); last = null; continue; }
     // "**Needs you:** pick a supplier.": the label opens its section, the rest is its first line.
-    const inline = line.match(INLINE_LABEL_RE);
+    const inline = line.text.match(INLINE_LABEL_RE);
     const inlineSection = inline ? headingSection(`**${inline[1]!.trim()}:**`) : null;
     if (inline && inlineSection) {
       current = inlineSection; seen.add(inlineSection); last = null;
-      if (!inline[2]!.trim()) continue;
-      line = `- ${inline[2]!.trim()}`;
+      const rest = inline[2]!;
+      if (!rest.trim()) continue;
+      const from = line.text.length - rest.length + (rest.length - rest.trimStart().length);
+      line = prefixed('- ', sliceLn(line, from, from + rest.trim().length));
     }
     // An indented line under an item (a wrapped line or a sub-item with no task of its own) goes
     // with that item wherever it goes.
-    if (last && indented && !REF_RE.test(line)) { last.push(line); continue; }
+    if (last && indented && !REF_RE.test(line.text)) { last.push(line); continue; }
     // A task's line written bare is a list item, so lines never run together into one paragraph.
-    if (/^<task-ref\b/.test(line)) line = `- ${line}`;
-    const ref = line.match(REF_RE)?.[1];
+    if (/^<task-ref\b/.test(line.text)) line = prefixed('- ', line);
+    const ref = line.text.match(REF_RE)?.[1];
     // A line is about its first task (Main's names the VP second).
     if (ref) named.add(ref);
     const task = ref && ref !== ownerId ? byId.get(ref) : undefined;
     const target = task ? briefSectionOf(task) : null;
     if (opts.live && task && !target) { dropping = true; dropped++; last = null; continue; }
     if (target && target !== current) moved++;
-    const dest: string[] = target ? body[target] : current ? body[current] : ref && ref === ownerId ? body.working : lead;
+    const dest: Ln[] = target ? body[target] : current ? body[current] : ref && ref === ownerId ? body.working : lead;
     // A sub-item that leaves its item becomes an item of its own: kept indented, it would nest under
     // a stranger, or open its new section as a code block.
-    if (indented && dest !== last) line = line.trimStart().replace(/^(?![-*+]\s|\d+[.)]\s)/, '- ');
+    if (indented && dest !== last) {
+      const bare = sliceLn(line, line.text.length - line.text.trimStart().length, line.text.length);
+      line = /^(?:[-*+]\s|\d+[.)]\s)/.test(bare.text) ? bare : prefixed('- ', bare);
+    }
     last = dest;
     last.push(line);
-    if (!line.trim()) last = null;
+    if (!line.text.trim()) last = null;
   }
   // Every task that asks the user now is in Needs you, in its own words when the letter has none.
   const added: string[] = [];
   // Every line Walnut writes into the letter goes through here, so the write records it as
   // Walnut's (TaskBrief.added) and the length limit leaves it out (briefOwnChars).
   const walnutLines: string[] = [];
-  const walnut = (line: string) => { body.needs.push(line); walnutLines.push(line); };
+  const walnut = (ln: Ln) => { body.needs.push(ln); walnutLines.push(ln.text); };
   if (opts.live) {
     const main = opts.live.org_role === 'main';
     const missing = briefAskScope(opts.live, tasks)
       .filter((t) => !named.has(t.id) && briefSectionOf(t) === 'needs' && !t.user_status?.transient)
       .sort((a, b) => askedAt(b) - askedAt(a));
     for (const t of missing.slice(0, ADDED_ASKS_MAX)) {
-      walnut(addedAskLine(t, main, tasks));
+      const words = addedAskLine(t, main, tasks);
+      // The ask's words are its task's writer's (a session's report, a turn's last words), never the Brief's owner.
+      walnut({ text: words, pieces: [{ text: words, writer: askLineWriter(t) }] });
       added.push(t.id);
     }
     const more = missing.length - ADDED_ASKS_MAX;
-    if (more > 0) walnut(`- And ${more} more ${more === 1 ? 'ask' : 'asks'} the user: the Task view lists ${more === 1 ? 'it' : 'them'}.`);
+    if (more > 0) walnut(layout(`- And ${more} more ${more === 1 ? 'ask' : 'asks'} the user: the Task view lists ${more === 1 ? 'it' : 'them'}.`));
   }
-  const trim = (ls: string[]) => {
+  const trim = (ls: Ln[]) => {
     let a = 0; let b = ls.length;
-    while (a < b && !ls[a]!.trim()) a++;
-    while (b > a && !ls[b - 1]!.trim()) b--;
+    while (a < b && !ls[a]!.text.trim()) a++;
+    while (b > a && !ls[b - 1]!.text.trim()) b--;
     return ls.slice(a, b);
   };
-  const out: string[] = [];
+  const out: Ln[] = [];
   const head = trim(lead);
-  if (head.length) out.push(...head, '');
+  if (head.length) out.push(...head, layout(''));
   for (const s of BRIEF_SECTIONS) {
     let lines = trim(body[s.state]);
-    const items = lines.filter((l) => l.trim() && !saysNothing(l) && !headingSection(l));
+    const items = lines.filter((l) => l.text.trim() && !saysNothing(l.text) && !headingSection(l.text));
     // A "nothing" line next to real items is stale (a task moved in); an empty section says so.
-    if (items.length) lines = lines.filter((l) => !saysNothing(l));
+    if (items.length) lines = lines.filter((l) => !saysNothing(l.text));
     else if (s.optional) continue;
-    else if (!lines.some(saysNothing)) lines = [emptySectionLine(opts.language, text)];
-    out.push(`### ${s.heading}`, ...lines, '');
+    else if (!lines.some((l) => saysNothing(l.text))) lines = [layout(emptySectionLine(opts.language, text))];
+    out.push(layout(`### ${s.heading}`), ...lines, layout(''));
+  }
+  const joined = out.map((l) => l.text).join('\n');
+  const shaped = joined.trim();
+  let sources: BriefTextSource[] | undefined;
+  if (opts.sources) {
+    const pieces: BriefPiece[] = [];
+    out.forEach((l, i) => { if (i) pieces.push({ text: '\n', layout: true }); pieces.push(...l.pieces); });
+    const cutStart = joined.length - joined.trimStart().length;
+    sources = sourcesOfPieces(text, opts.sources, pieces, cutStart, cutStart + shaped.length);
   }
   return {
-    text: out.join('\n').trim(),
+    text: shaped,
     moved,
     added: BRIEF_SECTIONS.filter((s) => !s.optional).map((s) => s.state).filter((k) => !seen.has(k)),
     ...(opts.live ? { asksAdded: added, dropped, walnutLines } : {}),
+    ...(sources ? { text_sources: sources } : {}),
   };
 }
 

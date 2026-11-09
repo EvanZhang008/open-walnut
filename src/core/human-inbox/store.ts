@@ -51,6 +51,7 @@ import {
   type LetterDetail,
   type LetterList,
   type LetterRecord,
+  type LetterSender,
   type LetterThreadEntry,
   type NewLetter,
   type ThreadEntry,
@@ -457,7 +458,8 @@ function emitLetterEvent(
       senderSessionId: record.sender.sessionId,
       senderTitle: record.sender.sessionTitle,
       ...(record.origin ? { originKind: record.origin.kind, originName: record.origin.name } : {}),
-      host: record.sender.host,
+      // No host when the sender's record could not be read: never filled in as `local`.
+      ...(record.sender.host !== undefined ? { host: record.sender.host } : {}),
       kind,
       ...(quiet ? { quiet: true } : {}),
     },
@@ -821,7 +823,11 @@ function setArchivedFlag(letter: LetterRecord, archived: boolean, reason?: Lette
  * `refuseDuplicate`: a session's reply through the route or the relay; the same words as its
  * latest turn there, inside the window, are refused under the lock (duplicate-letter.ts).
  */
-export async function agentReply(id: string, input: AgentReplyInput, opts: { quiet?: boolean; taskRefs?: unknown; refuseDuplicate?: boolean } = {}): Promise<LetterRecord> {
+/**
+ * `sender`: who wrote the turn, as the CALLER stamped it from a trusted source (the request's
+ * session, a plugin's own id, Walnut itself). Never read from `input`: a body cannot name its writer.
+ */
+export async function agentReply(id: string, input: AgentReplyInput, opts: { quiet?: boolean; taskRefs?: unknown; refuseDuplicate?: boolean; sender?: LetterSender } = {}): Promise<LetterRecord> {
   requireValidId(id);
   const text = str(input?.text).trim();
   if (!text) throw invalid('text is required');
@@ -867,7 +873,11 @@ export async function agentReply(id: string, input: AgentReplyInput, opts: { qui
       const dup = findDuplicateReply(letter, boundThreadText(text), now);
       if (dup) throw new LetterError(duplicateReplyMessage(letter.id, dup.at, now), 'duplicate_reply', 409);
     }
-    const entry: ThreadEntry = { from: 'agent', text: boundThreadText(text), at: Date.now(), ...(newItems ? { items: newItems } : {}) };
+    const entry: ThreadEntry = {
+      from: 'agent', text: boundThreadText(text), at: Date.now(), ...(newItems ? { items: newItems } : {}),
+      // The turn's own writer, so its links open on that session's host, not the letter sender's.
+      ...(opts.sender ? { sender: normalizeSender(opts.sender) } : {}),
+    };
     if (richSource !== null) {
       bodyFileToWrite = `${letter.id}.r${letter.thread.length}.${bodyExt(richFormat)}`;
       entry.bodyFormat = richFormat;

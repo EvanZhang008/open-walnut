@@ -1863,7 +1863,11 @@ tasksRouter.put('/:id/summary', async (req: Request, res: Response, next: NextFu
   try {
     const id = param(req.params.id)
     const { content } = req.body as { content: string }
-    const result = await updateSummary(id, content)
+    const { trustedCallerSessionId } = await import('../../core/sessions/session-send-core.js')
+    const raw = req.headers['x-walnut-caller-sid']
+    // A resolved session caller is the writer; a person or an unresolved header leaves it unknown.
+    const sessionId = await trustedCallerSessionId((Array.isArray(raw) ? raw[0] : raw)?.trim() || undefined)
+    const result = await updateSummary(id, content, { sessionId })
     res.json(result)
   } catch (err) {
     next(err)

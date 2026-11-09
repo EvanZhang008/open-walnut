@@ -67,6 +67,7 @@ import {
   editBoardHtml,
   extractTaskRefs,
   getBoard,
+  htmlSourcesOf,
   postBoardMessage,
   setBoardHtml,
   setBoardMark,
@@ -203,8 +204,13 @@ function optionalString(b: Record<string, unknown>, field: string): string | nul
   throw new RouteError(400, 'bad_request', `\`${field}\` must be a string`)
 }
 
-function publicBoard(b: BoardFile): Pick<BoardFile, 'html' | 'version' | 'updated_at' | 'updated_by'> {
-  return { html: b.html, version: b.version, updated_at: b.updated_at, updated_by: b.updated_by }
+// `html_sources`: who wrote each part of the page (an older record reads as its last writer's).
+function publicBoard(b: BoardFile): Pick<BoardFile, 'html' | 'version' | 'updated_at' | 'updated_by' | 'updated_session_id' | 'html_sources'> {
+  return {
+    html: b.html, version: b.version, updated_at: b.updated_at, updated_by: b.updated_by,
+    ...(b.updated_session_id ? { updated_session_id: b.updated_session_id } : {}),
+    html_sources: htmlSourcesOf(b),
+  }
 }
 
 type Handler = (req: Request, res: Response) => Promise<void>
@@ -335,7 +341,7 @@ boardV1Router.put('/tasks/:id/board', route(async (req, res) => {
   const { task, caller } = await prepareWrite(req)
   const b = body(req)
   if (typeof b.html !== 'string') throw new RouteError(400, 'bad_request', '`html` must be a string')
-  const board = await setBoardHtml(task.id, b.html, { by: writer(caller), expectVersion: optionalVersion(b.version) })
+  const board = await setBoardHtml(task.id, b.html, { by: writer(caller), ...(caller.kind === 'task' || (caller.kind === 'agent' && caller.untracked) ? { sessionId: caller.sessionId } : {}), expectVersion: optionalVersion(b.version) })
   res.json({ board: publicBoard(board) })
 }))
 
@@ -352,7 +358,7 @@ boardV1Router.post('/tasks/:id/board/edits', route(async (req, res) => {
     }
     return { old: o.old, new: o.new }
   })
-  const board = await editBoardHtml(task.id, edits, { by: writer(caller), expectVersion: optionalVersion(b.version) })
+  const board = await editBoardHtml(task.id, edits, { by: writer(caller), ...(caller.kind === 'task' || (caller.kind === 'agent' && caller.untracked) ? { sessionId: caller.sessionId } : {}), expectVersion: optionalVersion(b.version) })
   res.json({ board: publicBoard(board) })
 }))
 
@@ -364,7 +370,7 @@ boardV1Router.post('/tasks/:id/board/threads/:thread', route(async (req, res) =>
   const author = caller.kind === 'human' ? 'user' as const : caller.kind === 'task' ? `task:${caller.taskId}` as const : 'agent' as const
   // Pictures with the words (`imageRefs` from the web's upload, or inline `images`), as in the chat.
   const images = await saveAnswerPictures(b)
-  const message = await postBoardMessage(task.id, thread, { author, text: b.text, ...(images.length ? { images } : {}) })
+  const message = await postBoardMessage(task.id, thread, { author, ...(caller.kind === 'task' || (caller.kind === 'agent' && caller.untracked) ? { sessionId: caller.sessionId } : {}), text: b.text, ...(images.length ? { images } : {}) })
   if (caller.kind !== 'human') {
     res.status(201).json({ message, delivery: { state: 'stored' } })
     return
@@ -483,7 +489,7 @@ boardV1Router.put('/tasks/:id/board/choices/:choice', route(async (req, res) => 
   // Pictures with the answer (`imageRefs` or inline `images`): kept on the choice, named in every delivery of it.
   const images = await saveAnswerPictures(b)
   const result = await setBoardChoice(task.id, choiceId, { option: option as string | undefined, text: text as string | undefined, ...(images.length ? { images } : {}) },
-    { writer: await boardWriterStamp(caller), overrideUser })
+    { writer: await boardWriterStamp(caller), overrideUser, ...(caller.kind === 'task' || (caller.kind === 'agent' && caller.untracked) ? { sessionId: caller.sessionId } : {}) })
   let delivery: BoardDelivery | { state: 'skipped'; reason: 'unchanged' | 'cleared' | 'self' }
   if (!result.choice) delivery = { state: 'skipped', reason: 'cleared' }
   // The same answer again: nothing to say, unless its last delivery did not go out.

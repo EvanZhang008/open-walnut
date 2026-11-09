@@ -124,6 +124,18 @@ describe('human inbox store — send, list, get', () => {
     expect(record.textPreview).toBe('Disk is at 70%. No action needed.');
   });
 
+  it('never publishes a cropped path or URL as a complete preview reference', async () => {
+    for (const reference of [
+      '/tmp/' + 'segment/'.repeat(45) + 'report.png',
+      'https://example.com/' + 'segment/'.repeat(45) + 'report.html',
+      '"/tmp/' + 'segment/'.repeat(45) + 'report.png"',
+      '/tmp/' + 'segment/'.repeat(32) + 'Quarterly Output Review Notes.md',
+    ]) {
+      const record = await sendLetter(letterInput({ text: `Output: ${reference}`, markdown: reference }));
+      expect(record.textPreview).toBe('Output:');
+    }
+  });
+
   it('returns null for an unknown id and for a traversal attempt', async () => {
     expect(await getLetter('lt-abc-000000')).toBeNull();
     expect(await getLetter('../../../etc/passwd')).toBeNull();
@@ -450,8 +462,9 @@ describe('human inbox store — corrupt index resilience', () => {
       read: false,
       pinned: false,
       archived: false,
-      sender: { sessionId: 'external', host: 'local' },
+      sender: { sessionId: 'external' },
     });
+    expect(letters[0].sender.host).toBeUndefined();
     expect(letters[0].thread).toEqual([{ from: 'human', text: 'hi', at: 0 }]);
   });
 

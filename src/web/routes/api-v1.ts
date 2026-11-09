@@ -3413,8 +3413,9 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
         const actorSid = (Array.isArray(raw) ? raw[0] : raw)?.trim() || undefined
         const { resolveCaller } = await import('../../core/sessions/session-send-core.js')
         const caller = actorSid ? await resolveCaller(actorSid).catch(() => null) : null
-        const by = caller?.kind === 'session' && caller.record.taskId ? `task:${caller.record.taskId}` : 'human'
-        await noteResultReport(before.id, { via: 'complete', by }, null, { emit: false })
+        const known = caller?.kind === 'session' && caller.record.taskId ? caller.record : null
+        const { resultWriterOf } = await import('../../core/peers/structured-reply.js')
+        await noteResultReport(before.id, { via: 'complete', ...resultWriterOf(actorSid, known?.taskId ?? undefined, known?.claudeSessionId) }, null, { emit: false })
       }
     }
     // Another task moving a task that asks the user off NEED_ACTION reads his words there first

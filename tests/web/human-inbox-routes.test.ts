@@ -5,7 +5,7 @@
  *
  * What this file pins, beyond the happy path:
  *  - the SENDER is stamped from the caller-sid header, never from the body, and
- *    an unknown/absent caller becomes the honest `external` sender;
+ *    an absent caller becomes the honest `external` sender, an unknown one keeps its id with no host;
  *  - the ops registry reaches these routes end to end (executeOp → HTTP →
  *    letter), including the header the executor adds and its env fallback;
  *  - a human answer is RECORDED before it is delivered, and the delivery text
@@ -203,15 +203,16 @@ describe('POST /api/v1/human-inbox — send + sender stamping', () => {
     expect(letter.thread).toEqual([])
   })
 
-  it('an absent or unknown caller sid becomes the external sender', async () => {
+  it('an absent caller sid is the external sender; an unknown one keeps its id with no host', async () => {
     const anonymous = await sendLetter({ subject: 'From a script', type: 'info', markdown: 'hi' })
-    const bogus = await sendLetter({ subject: 'Forged', type: 'info', markdown: 'hi' }, 'no-such-session-id')
+    const unknown = await sendLetter({ subject: 'Unknown', type: 'info', markdown: 'hi' }, 'no-such-session-id')
     const byId = new Map((await listLetters()).letters.map((l) => [l.id, l]))
-    for (const id of [anonymous, bogus]) {
-      expect(byId.get(id)!.sender).toEqual({ sessionId: 'external', host: 'local', via: 'api' })
-      // Who it is from reads as a caller of Walnut's API, never as a task or outside mail.
-      expect((byId.get(id) as unknown as { origin: unknown }).origin).toEqual({ kind: 'script', name: 'A script' })
-    }
+    expect(byId.get(anonymous)!.sender).toEqual({ sessionId: 'external', host: 'local', via: 'api' })
+    // Who it is from reads as a caller of Walnut's API, never as a task or outside mail.
+    expect((byId.get(anonymous) as unknown as { origin: unknown }).origin).toEqual({ kind: 'script', name: 'A script' })
+    // Never `local`: the session may live on another host, and its links must not open this one's files.
+    expect(byId.get(unknown)!.sender).toEqual({ sessionId: 'no-such-session-id' })
+    expect((byId.get(unknown) as unknown as { origin: unknown }).origin).toEqual({ kind: 'session', name: 'Walnut session' })
   })
 
   it('the body can never claim a different sender', async () => {
@@ -610,6 +611,52 @@ describe('replies in both directions', () => {
   })
 })
 
+describe('an agent turn records its own writer', () => {
+  /** A second real session on another host: it writes into a letter it did not send. */
+  const OTHER_SID = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb'
+  beforeAll(async () => {
+    const taskRes = await post('/api/v1/tasks', { title: 'Review the cache layer', project: 'marina' })
+    expect(taskRes.status).toBe(201)
+    const otherTaskId = ((await taskRes.json()) as { task: { id: string } }).task.id
+    const { createSessionRecord } = await import('../../src/core/session-tracker.js')
+    await createSessionRecord(OTHER_SID, otherTaskId, 'marina', '/home/me/marina', { title: 'review pass', host: 'devbox' })
+  })
+  type Turn = { from: string; text: string; sender?: Record<string, unknown> }
+  const turns = async (id: string): Promise<Turn[]> => (await getLetter(id)).letter.thread as Turn[]
+
+  it('the route stamps the writer from the caller header, a different session than the letter sender', async () => {
+    const id = await sendLetter({ subject: 'Plan', type: 'review', markdown: 'x' }, SENDER_SID)
+    // A body naming another writer is ignored: only the header counts.
+    const res = await post(`/api/v1/human-inbox/${id}/reply`, { text: 'see /home/me/marina/a.ts', sender: { sessionId: SENDER_SID, host: 'local' } }, OTHER_SID)
+    expect(res.status, await res.clone().text()).toBe(200)
+    const [turn] = await turns(id)
+    expect(turn.sender).toMatchObject({ sessionId: OTHER_SID, host: 'devbox' })
+    expect((await getLetter(id)).letter.sender).toMatchObject({ sessionId: SENDER_SID, host: 'workbench' })
+  })
+
+  it('an unknown caller keeps its id with no host; no caller is external on local', async () => {
+    const id = await sendLetter({ subject: 'Plan', type: 'review', markdown: 'x' }, SENDER_SID)
+    expect((await post(`/api/v1/human-inbox/${id}/reply`, { text: 'first' }, 'no-such-writer-sid')).status).toBe(200)
+    expect((await post(`/api/v1/human-inbox/${id}/reply`, { text: 'second' })).status).toBe(200)
+    const [unknown, external] = await turns(id)
+    expect(unknown.sender).toEqual({ sessionId: 'no-such-writer-sid' })
+    expect(external.sender).toEqual({ sessionId: 'external', host: 'local', via: 'api' })
+  })
+
+  it('the relay resolves callerSid the same way and never reads a sender from the payload', async () => {
+    const { handleHumanInboxRelayAction } = await import('../../src/core/human-inbox/relay.js')
+    const id = await sendLetter({ subject: 'Plan', type: 'review', markdown: 'x' }, SENDER_SID)
+    const forged = { sessionId: SENDER_SID, host: 'local' }
+    await handleHumanInboxRelayAction('reply', { id, text: 'one', callerSid: OTHER_SID, sender: forged })
+    await handleHumanInboxRelayAction('reply', { id, text: 'two', callerSid: 'no-such-writer-sid', sender: forged })
+    await handleHumanInboxRelayAction('reply', { id, text: 'three', sender: forged })
+    const [one, two, three] = await turns(id)
+    expect(one.sender).toMatchObject({ sessionId: OTHER_SID, host: 'devbox' })
+    expect(two.sender).toEqual({ sessionId: 'no-such-writer-sid' })
+    expect(three.sender).toEqual({ sessionId: 'external', host: 'local', via: 'api' })
+  })
+})
+
 describe('ops registry parity — executeOp reaches the real routes', () => {
   const apiBase = () => `http://127.0.0.1:${port}`
 
@@ -782,6 +829,84 @@ describe('big letter bodies: staged in, streamed out', () => {
     expect(text).toContain('TAIL-9f3c')
     expect(text.endsWith('</body></html>')).toBe(true)
   }, 60_000)
+
+  it('?frame=1 links references in the streamed body under the inline frame\'s policy', async () => {
+    const { wrapLetterHtml, LETTER_FRAME_CSP_VALUE, LETTER_IFRAME_SANDBOX } = await import('../../src/core/human-inbox/letter-frame.js')
+    const { NO_REFERRER_ATTRS } = await import('../../src/lib/agent-html-refs.js')
+    const html = `<html><head><title>/t/x.md</title></head><body data-p="/a/b.ts"><p>See /repo/src/app.ts:10-20 *x*</p>`
+      + `<a href="/tmp/report.html">R</a>${'<p>filler</p>'.repeat(10_000)}<p>tail /repo/tail.ts</p></body></html>`
+    const id = await sendLetter({ subject: 'Linked', type: 'info', html }, SENDER_SID)
+    const token = 'ab'.repeat(16)
+    const res = await fetch(url(`/api/v1/human-inbox/${id}/body?frame=1&ref_token=${token}`))
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-security-policy')).toBe(`${LETTER_FRAME_CSP_VALUE}; sandbox ${LETTER_IFRAME_SANDBOX}`)
+    expect(res.headers.get('content-security-policy')).not.toMatch(/allow-scripts|allow-same-origin/)
+    const text = await res.text()
+    const file = `<a href="/open-ref#token=${token}&amp;kind=file&amp;path=%2Frepo%2Fsrc%2Fapp.ts&amp;line=10&amp;endLine=20" target="_blank" rel="noopener noreferrer" data-walnut-ref="file">/repo/src/app.ts:10-20</a>`
+    expect(text).toContain('<a' + NO_REFERRER_ATTRS)
+    const linked = text.replaceAll(NO_REFERRER_ATTRS, '')
+    expect(linked).toContain(`<p>See ${file} *x*</p>`)
+    expect(linked).toContain('data-walnut-ref="file">/repo/tail.ts</a>')
+    // Without the added links the document is exactly the inline frame's.
+    const unlinked = linked
+      .replace(/<a href="[^"]*" target="_blank" rel="noopener noreferrer" data-walnut-ref="[a-z]+">([^<]*)<\/a>/g, '$1')
+      .replace(` target="_blank" data-walnut-ref="file" href="/open-ref#token=${token}&amp;kind=file&amp;path=%2Ftmp%2Freport.html"`, ' href="/tmp/report.html"')
+    expect(unlinked).toBe(wrapLetterHtml(html))
+    // Without a valid reader token or refs opt-in, older clients keep the original references.
+    for (const query of ['frame=1', 'frame=1&ref_token=nope']) {
+      const plain = await (await fetch(url(`/api/v1/human-inbox/${id}/body?${query}`))).text()
+      expect(plain).not.toContain('/open-ref')
+      expect(plain).toContain('<p>See /repo/src/app.ts:10-20 *x*</p>')
+      expect(plain).toContain('href="/tmp/report.html"')
+    }
+    // The raw lane is untouched.
+    expect(await (await fetch(url(`/api/v1/human-inbox/${id}/body`))).text()).toBe(html)
+  }, 60_000)
+
+  it('framing a headed Unicode document keeps its first bytes, peek boundary and tail', async () => {
+    const prefix = '<html lang="en"><head data-note="x > y"><meta charset="utf-8"><title>Report</title></head><body>';
+    const firstLabel = 'FIRST-' + String.fromCodePoint(0x03b1, 0x2d, 0x4e2d);
+    const lastLabel = 'LAST-' + String.fromCodePoint(0x03b2);
+    const accent = String.fromCodePoint(0x00e9);
+    const first = `<h1>${firstLabel}</h1><p>/repo/first.ts:2</p>`;
+    const tail = `<p>${lastLabel} /repo/last.ts:4</p></body></html>`;
+    const html = prefix + first + accent.repeat(160_000) + tail;
+    const id = await sendLetter({ subject: 'Headed Unicode', type: 'info', html }, SENDER_SID);
+    const token = 'ab'.repeat(16);
+    const text = await (await fetch(url(`/api/v1/human-inbox/${id}/body?frame=1&ref_token=${token}`))).text();
+    expect(text).toContain(firstLabel);
+    expect(text).toContain(lastLabel);
+    expect(text).toContain('data-walnut-ref="file">/repo/first.ts:2</a>');
+    expect(text).toContain('data-walnut-ref="file">/repo/last.ts:4</a>');
+    expect(text.split(accent)).toHaveLength(160_001);
+    expect(text).not.toContain(String.fromCodePoint(0xfffd));
+    expect(text.indexOf('default-src')).toBeLessThan(text.indexOf('FIRST-'));
+    expect(await (await fetch(url(`/api/v1/human-inbox/${id}/body`))).text()).toBe(html);
+  }, 60_000);
+
+  it('downloaded phone links keep the paired HTTPS origin and path prefix behind an HTTP tunnel', async () => {
+    const id = await sendLetter({ subject: 'Paired address', type: 'info', html: '<p>/repo/src/app.ts:10-20</p>' }, SENDER_SID)
+    const base = 'https://phone.example.test/walnut/open-ref'
+    const query = `frame=1&refs=1&ref_base=${encodeURIComponent(base)}`
+    const res = await fetch(url(`/api/v1/human-inbox/${id}/body?${query}`))
+    expect(res.status).toBe(200)
+    expect(await res.text()).toContain(`href="${base}?kind=file&amp;path=%2Frepo%2Fsrc%2Fapp.ts&amp;line=10&amp;endLine=20"`)
+    const token = 'ab'.repeat(16)
+    const mounted = await (await fetch(url(`/api/v1/human-inbox/${id}/body?${query}&ref_token=${token}`))).text()
+    expect(mounted).not.toContain(base)
+    expect(mounted).toContain(`#token=${token}&amp;kind=file`)
+  })
+
+  it('a phone reference base must be a clean HTTP route, never credentials or another scheme', async () => {
+    const { refLinkOptionsFor } = await import('../../src/web/routes/human-inbox-body.js')
+    const options = (ref_base: unknown) => refLinkOptionsFor({ query: { refs: '1', ref_base }, protocol: 'http', get: () => 'localhost:3457' } as never)
+    for (const bad of ['javascript:alert(1)', '//other.test/open-ref', 'https://user:password@other.test/open-ref',
+      'https://other.test/open-ref?x=1', 'https://other.test/open-ref#x', 'https://other.test/else',
+      'https://other.test/\nopen-ref', ['https://other.test/open-ref']]) {
+      expect(options(bad).refBase, String(bad)).toBe('http://localhost:3457/open-ref')
+    }
+    expect(options('https://other.test/prefix/open-ref').refBase).toBe('https://other.test/prefix/open-ref')
+  })
 
   it('a small letter still inlines its body, unchanged', async () => {
     const id = await sendLetter({ subject: 'Small', type: 'info', html: '<p>hi</p>' }, SENDER_SID)
