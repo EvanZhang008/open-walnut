@@ -183,8 +183,10 @@ describe.skipIf(!binaryExists())('Local daemon session E2E', () => {
     expect(startRes.ok).toBe(true)
     expect(startRes.pid).toBeGreaterThan(0)
 
-    // Poll for the fan-out instead of sleeping out a 1500ms worst case.
-    await waitUntil(() => lines.length >= 3, 5000, '3 fanned-out JSONL lines')
+    // Poll for the fan-out instead of sleeping out a 1500ms worst case. Wait for the turn's
+    // own result line, not a count: the daemon's lines (the sent message's echo) share the
+    // stream, so three lines can arrive before the result does (CI run 42611945788).
+    await waitUntil(() => lines.some((l) => l.includes('"result"')), 5000, 'the fanned-out result line')
 
     // Should have received all 3 mock lines
     expect(lines.length).toBeGreaterThanOrEqual(3)
