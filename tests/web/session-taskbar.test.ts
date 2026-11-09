@@ -223,3 +223,38 @@ describe('sessionTaskbar: the chip list', () => {
     expect(parseRecent(['a', 'b', 'c', 'd', 'e', 'f'], ['b'])).toEqual(['a', 'c', 'd', 'e'].slice(0, RECENT_MAX));
   });
 });
+
+describe('the taskbar store writes only what changed (two windows share one storage)', () => {
+  it('a Recent change in one window never writes back its stale chips over the other window\'s Minimize', async () => {
+    const mem = new Map<string, string>();
+    const storage = {
+      getItem: (k: string) => mem.get(k) ?? null,
+      setItem: (k: string, v: string) => { mem.set(k, v); },
+      removeItem: (k: string) => { mem.delete(k); },
+    };
+    const g = globalThis as { localStorage?: unknown };
+    const had = g.localStorage;
+    g.localStorage = storage;
+    try {
+      const { LAYOUT_FIELDS, encodeField, decodeField } = await import('../../web/src/utils/layout-record');
+      const store = await import('../../web/src/pages/sessionTaskbarStore');
+      const a = 'aaaaaaaa-0000-4000-8000-000000000001';
+      const b = 'aaaaaaaa-0000-4000-8000-000000000002';
+      const r = 'aaaaaaaa-0000-4000-8000-000000000003';
+      mem.set(LAYOUT_FIELDS.homeMinimized, encodeField([a]));
+      mem.set(LAYOUT_FIELDS.homeRecent, encodeField([r]));
+      store.resetTaskbarStoreForTests();
+      // This window reads chips [a], Recent [r].
+      store.closeChip('not-there');
+      // The other window minimizes b meanwhile.
+      mem.set(LAYOUT_FIELDS.homeMinimized, encodeField([a, b]));
+      // This window takes r off Recent: the chips it holds ([a]) are not written.
+      store.closeRecent(r);
+      expect(decodeField(mem.get(LAYOUT_FIELDS.homeMinimized) ?? null)).toEqual([a, b]);
+      expect(decodeField(mem.get(LAYOUT_FIELDS.homeRecent) ?? null)).toBeNull();
+      store.resetTaskbarStoreForTests();
+    } finally {
+      g.localStorage = had;
+    }
+  });
+});

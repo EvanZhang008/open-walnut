@@ -25,12 +25,14 @@ function current(): TaskbarLists {
   return lists;
 }
 
-function persist(next: TaskbarLists): void {
+/** Writes the fields that changed from `prev` (all of them with none), so a window changing its
+ *  Recent never writes back its stale chips over another window's Minimize. */
+function persist(next: TaskbarLists, prev?: TaskbarLists): void {
   // The chips' field is always written, an empty list included: its presence says the old
-  // mixed field was already read into Recent (restoreTaskbar), which is then cleared.
-  writeLayoutField('homeMinimized', next.chips);
-  writeLayoutField('homeTaskbar', null);
-  writeLayoutField('homeRecent', next.recent.length > 0 ? next.recent : null);
+  // mixed field was already read into Recent (restoreTaskbar). The old field itself is left as
+  // it was, so an older release on the same data still opens with its own bar.
+  if (!prev || next.chips !== prev.chips) writeLayoutField('homeMinimized', next.chips);
+  if (!prev || next.recent !== prev.recent) writeLayoutField('homeRecent', next.recent.length > 0 ? next.recent : null);
 }
 
 function set(update: (prev: TaskbarLists) => TaskbarLists): void {
@@ -38,7 +40,7 @@ function set(update: (prev: TaskbarLists) => TaskbarLists): void {
   const next = update(prev);
   if (next === prev) return;
   lists = next;
-  persist(next);
+  persist(next, prev);
   for (const l of listeners) l();
 }
 

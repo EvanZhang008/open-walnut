@@ -16,7 +16,8 @@
  *  5. close and back from the header's switch, which is dotted while closed with news;
  *  6. a narrow window stacks the side bar above the chat, with no widen;
  *  7. an old link naming a tab (?tab=team) opens the side bar on Team, then lets go of it;
- *  8. Quote on an ask in the side bar puts it into the chat beside it, focused.
+ *  8. Quote on an ask in the side bar puts it into the chat beside it, focused;
+ *  9. Minimize in the header puts the node's chat on the app's taskbar; its chip selects the node again.
  * The fixture is shared, so this file makes its own projects and removes what it made.
  */
 import fs from 'node:fs'
@@ -135,11 +136,14 @@ test('one header: the name once, the chat\'s labels and kebab on its right, no C
       : c.querySelector('.task-kebab-btn') ? 'kebab'
       : c.matches('.thread-mode-pill') ? 'thread-mode'
       : c.matches('.session-panel-minimize') ? 'minimize'
+      : c.matches('.session-panel-watch') ? 'watch'
       : c.matches('.task-row-pill, .task-waiting-chip, [data-header-pill]') ? 'pill'
       : `UNKNOWN:${c.className}`))
   expect(kinds.filter((k) => k.startsWith('UNKNOWN')), `header tools: ${kinds}`).toEqual([])
   // The app's taskbar is global (2026-11-08): the node's chat minimizes too, from its header.
   expect(kinds, `header tools: ${kinds}`).toContain('minimize')
+  // And its Watch (2026-11-07, the user: "add thsi and the watch to ... this org apnnel").
+  expect(kinds, `header tools: ${kinds}`).toContain('watch')
   // The pills come before the tags control, and the kebab is last.
   const order = kinds.filter((k) => k !== 'thread-mode')
   expect(order.lastIndexOf('pill') < Math.max(order.indexOf('labels'), order.indexOf('kebab')), `header tools: ${kinds}`).toBe(true)
@@ -149,6 +153,53 @@ test('one header: the name once, the chat\'s labels and kebab on its right, no C
   await expect(detail.getByTestId('org-rail-toggle')).toHaveAttribute('aria-pressed', 'true')
   await expect(chat.getByText('I processed your message: snapshot-clean-turn:Started.').or(chat.getByText('Started.')).first()).toBeVisible({ timeout: 60_000 })
   await shot(page, 'header')
+})
+
+/** A beat a person can follow, only while recording (PW_VIDEO, walnut-dev webkit --video). */
+const beat = (page: Page) => (process.env.PW_VIDEO ? page.waitForTimeout(1200) : Promise.resolve())
+
+test('Minimize in the node\'s header puts its chat on the taskbar; the chip brings the node back from another one', async ({ page }) => {
+  await isolateUiPrefs(page)
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await loadHome(page)
+  await openNode(page, LED)
+  const detail = page.getByTestId('org-detail')
+  const chat = detail.locator(`[data-testid="org-chat"] .session-panel[data-session-id="${ids.leadSid}"]`)
+  await expect(chat).toBeVisible({ timeout: 30_000 })
+  const chip = page.locator(`.session-taskbar-chip[data-session-id="${ids.leadSid}"]`)
+  await expect(chip).toHaveCount(0)
+  await beat(page)
+  await detail.getByTestId('org-detail-chat-tools').getByRole('button', { name: 'Minimize session to the taskbar' }).click()
+  await expect(chip).toBeVisible()
+  await beat(page)
+  // Off to another node: the chip stays on the bar.
+  await page.locator(`[data-testid="org-channel"][data-key="${rowKey(PLAIN)}"]`).click()
+  await expect(detail).toHaveAttribute('data-key', rowKey(PLAIN))
+  await expect(chip).toBeVisible()
+  await beat(page)
+  // The chip selects its node (never a second copy of its chat beside the page) and leaves the bar.
+  await chip.locator('.session-taskbar-open').click()
+  await expect(detail).toHaveAttribute('data-key', rowKey(LED))
+  await expect(chat).toBeVisible({ timeout: 30_000 })
+  await expect(page.locator(`[data-testid="org-side"][data-session-id="${ids.leadSid}"]`)).toHaveCount(0)
+  await expect(chip).toHaveCount(0)
+  await beat(page)
+})
+
+test('Watch in the node\'s header lights while the node\'s task is watched, and a second click ends it', async ({ page }) => {
+  await isolateUiPrefs(page)
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await loadHome(page)
+  await openNode(page, LED)
+  const watch = page.getByTestId('org-detail-chat-tools').getByTestId('session-panel-watch')
+  await expect(watch).toBeEnabled({ timeout: 30_000 })
+  await expect(watch).toHaveAttribute('aria-pressed', 'false')
+  await beat(page)
+  await watch.click()
+  await expect(watch).toHaveAttribute('aria-pressed', 'true')
+  await beat(page)
+  await watch.click()
+  await expect(watch).toHaveAttribute('aria-pressed', 'false')
 })
 
 test('the kebab\'s Open group holds Changed, Files, Terminal and Board: Files opens beside the chat, Board opens the side bar on it', async ({ page }) => {

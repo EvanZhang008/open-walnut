@@ -58,6 +58,7 @@ import { OrgPaneHandle } from '@/components/org/OrgPaneHandle';
 import { OrgRouterSetup } from '@/components/org/OrgRouterSetup';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { useRouterAreaNames } from '@/components/org/router-area-names';
+import { onOpenOnPage } from '@/utils/taskbar-minimize';
 import '@/styles/org-page.css';
 
 /** The page's own panes (the dividers below): the list, the node between, an opened task. */
@@ -385,6 +386,9 @@ export function OrgPage() {
     recordTaskOpened(tasks.find((t) => resolveTaskSessionId(t) === sessionId)?.id);
     openSide({ kind: 'session', id: sessionId });
   }, [nodeOf, select, openSide, tasks]);
+  // A chip on the app's taskbar opens here the way the page opens any session (AppTaskbar.tsx):
+  // a node's own chat selects its node, never a second copy beside the page.
+  useEffect(() => onOpenOnPage(openSession), [openSession]);
   const closeSide = useCallback(() => {
     if (closing.current) return;
     closing.current = true;

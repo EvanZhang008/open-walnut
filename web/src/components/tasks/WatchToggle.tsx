@@ -5,7 +5,7 @@
  * "pin": Focus and the pinned board already are pins. One field, `watched_at`, the
  * time the watch began; clearing it ends the watch. Nothing else about the task moves.
  */
-import { useCallback } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { Task } from '@open-walnut/core';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { updateTask } from '@/api/tasks';
@@ -16,7 +16,10 @@ import '@/styles/task-watch.css';
 
 export function useWatchToggle(task: Pick<Task, 'id'> & { watched_at?: string | null }) {
   const store = useTasksContextSafe();
-  const watched = isWatched(task);
+  // A plain PATCH's value until its echo (or a failure) arrives, so the eye answers the click.
+  const [pending, setPending] = useState<string | null>(null);
+  useEffect(() => { setPending(null); }, [task.watched_at]);
+  const watched = pending !== null ? pending !== '' : isWatched(task);
   // Off the board's store (a session menu on the Org page), a plain PATCH; the
   // task:updated it broadcasts refreshes whoever shows the task.
   // A task the board's store does not hold (an archived one a session panel opened) is a plain
@@ -25,8 +28,11 @@ export function useWatchToggle(task: Pick<Task, 'id'> & { watched_at?: string | 
   const toggle = () => {
     const watched_at = watched ? '' : new Date().toISOString();
     if (store && store.tasks.some((t) => t.id === task.id)) { store.update(task.id, { watched_at }); return; }
+    setPending(watched_at);
     void updateTask(task.id, { watched_at }).catch((err) => {
       log.warn('task-watch', 'watch write failed', { taskId: task.id, error: String(err) });
+      setPending(null);
+      store?.showOperationError(`Could not ${watched_at ? 'watch' : 'stop watching'} the task: ${err instanceof Error ? err.message : String(err)}`);
     });
   };
   return { watched, toggle };

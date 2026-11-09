@@ -3336,13 +3336,16 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                   )}
                   {headerPills}
                   <SessionHeaderLabels>{headerTags}</SessionHeaderLabels>
-                  {/* This panel's own header, and its Minimize, are hidden under the host's. */}
+                  {/* This panel's own header, its Watch and Minimize, are hidden under the host's. */}
+                  {(taskSlot === 'live' || taskSlot === 'spacer') && (
+                    <HeaderWatchButton task={taskSlot === 'live' ? sessionTask : null} taskId={linkedTaskId} hidden="false" waitReason={watchWaitReason} />
+                  )}
                   {minimize && (
                     <button
                       type="button"
                       className="task-action-btn session-panel-minimize"
                       onClick={() => minimize(sessionId)}
-                      title="Minimize to the taskbar (it keeps running)"
+                      title="Minimize to the taskbar: its chip opens this chat again (the chat stays here, it keeps running)"
                       aria-label="Minimize session to the taskbar"
                     >
                       {ICON_MINIMIZE}
