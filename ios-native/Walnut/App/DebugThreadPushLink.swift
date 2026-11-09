@@ -45,21 +45,22 @@ enum DebugThreadPushLink {
         let userInfo = QuickActionDelegate.debugThreadPush(raw)
         guard let announced = ThreadDeepLink.target(fromPush: userInfo) else { return }
         ThreadDeepLink.shared.expectLaunchTap(announced)
-        LaunchGate.shared.whenActive {
-            Task { @MainActor in
-                try? await Task.sleep(for: .seconds(1))
-                // The notification delegate's two lines for a tapped thread push, as they are there.
-                guard let thread = ThreadDeepLink.target(fromPush: userInfo) else { return }
-                ThreadDeepLink.shared.arm(thread, source: ThreadDeepLink.tapSource)
-            }
+        LaunchGate.shared.whenActive { armLate(userInfo) }
+    }
+
+    /// The late tap itself, a second after the app first became active.
+    private static func armLate(_ userInfo: [AnyHashable: Any]) {
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1))
+            // The notification delegate's two lines for a tapped thread push, as they are there.
+            guard let thread = ThreadDeepLink.target(fromPush: userInfo) else { return }
+            ThreadDeepLink.shared.arm(thread, source: ThreadDeepLink.tapSource)
         }
     }
 }
 
-/// DEBUG only: says in the accessibility tree that a thread card wears its reveal mark, which
-/// the UI tests read (`org.thread.revealed.<threadId>`). Draws nothing.
-/// Where the Chat tab's last chat swap got to (`OrgChatSwap.Phase`), for a failure hierarchy:
-/// `org.swap.phase.<phase>`.
+/// DEBUG only: where the Chat tab's last chat swap got to (`OrgChatSwap.Phase`), for a failure
+/// hierarchy: `org.swap.phase.<phase>`.
 struct DebugSwapPhaseMarker: View {
     let phase: String
 
@@ -73,6 +74,8 @@ struct DebugSwapPhaseMarker: View {
     }
 }
 
+/// DEBUG only: says in the accessibility tree that a thread card wears its reveal mark, which
+/// the UI tests read (`org.thread.revealed.<threadId>`). Draws nothing.
 struct DebugRevealMarker: View {
     let threadId: String
     /// The outline he sees (`org.thread.highlight.<id>`), not the tests' longer mark.

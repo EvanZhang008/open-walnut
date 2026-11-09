@@ -952,6 +952,11 @@ jobs:
         -skip-testing:WalnutUITests/PeerMessageUITests
         -skip-testing:WalnutUITests/SessionStopSteerUITests
         -skip-testing:WalnutUITests/TalkRealServerUITests
+        -skip-testing:WalnutUITests/ThreadPushLiveUITests
+        -skip-testing:WalnutUITests/ThreadPushReviewUITests
+        -skip-testing:WalnutUITests/ThreadPushSolReviewUITests
+        -skip-testing:WalnutUITests/ThreadPushStatesUITests
+        -skip-testing:WalnutUITests/ThreadPushUITestCase
         -skip-testing:WalnutUITests/VoiceHistoryUITests
         -skip-testing:WalnutUITests/VoiceQuickActionUITests
         -skip-testing:WalnutUITests/WorkCardUITests

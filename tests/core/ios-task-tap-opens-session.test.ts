@@ -25,6 +25,16 @@ const OPENS_THE_PAGE: Record<string, string> = {
   'Views/Sessions/SessionTaskRow.swift': 'the task row inside a session\'s info sheet: the page of the task the user is already in',
 }
 
+/**
+ * Files that build a `TaskOpenTarget` and hand it to the page that hosts them, which presents
+ * it: file -> that host. The host must present it through `TaskSessionSheet`.
+ */
+const HANDS_TO_HOST: Record<string, string> = {
+  // The Org node page owns what shows over it (its `cover`), so a push lowers it in one place.
+  'Views/Org/OrgThreadsView.swift': 'Views/Org/OrgNodePage.swift',
+  'Views/Org/OrgNodeTasksView.swift': 'Views/Org/OrgNodePage.swift',
+}
+
 function swiftFiles(dir: string, out: string[] = []): string[] {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
     const p = path.join(dir, e.name)
@@ -51,11 +61,18 @@ describe('iOS task taps open the session', () => {
   })
 
   it('presents every task opened by id through TaskSessionSheet', () => {
-    const bad = files
+    const presents = (rel: string) => /\bTaskSessionSheet\(target:/.test(files.find((f) => f.rel === rel)?.src ?? '')
+    const builders = files
       .filter((f) => f.rel !== 'Views/Tasks/TaskSessionSheet.swift')
-      .filter((f) => /\bTaskOpenTarget\(/.test(f.src) && !/\bTaskSessionSheet\(target:/.test(f.src))
+      .filter((f) => /\bTaskOpenTarget\(/.test(f.src))
+    const bad = builders
+      .filter((f) => !presents(f.rel) && !(HANDS_TO_HOST[f.rel] && presents(HANDS_TO_HOST[f.rel]!)))
       .map((f) => f.rel)
     expect(bad).toEqual([])
+    // A listed file that no longer builds a target, or presents it itself, is dropped from the list.
+    for (const rel of Object.keys(HANDS_TO_HOST)) {
+      expect(builders.some((f) => f.rel === rel && !presents(rel)), `${rel}: drop it from HANDS_TO_HOST`).toBe(true)
+    }
   })
 
   it('routes every timeline task pill and task link to TaskSessionSheet', () => {

@@ -33,6 +33,7 @@ const NOT_A_LETTER: Record<string, string> = {
 /** Swift files the phone matcher reads that show no letter. */
 const PHONE_NOT_A_LETTER: Record<string, string> = {
   'ios-native/Walnut/Views/Org/OrgNodePage.swift': 'names the Brief page and its icon ("doc.text"); OrgBriefView draws the letter',
+  'ios-native/WalnutUITests/OrgThreadsFixture.swift': 'the UI tests\' fixture server answers a Brief read; OrgBriefView draws the letter',
 }
 
 describe('every surface that shows a Brief reads its freshness', () => {
