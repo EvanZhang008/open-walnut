@@ -89,6 +89,16 @@ function compileHandle(source: string, environment: Record<string, unknown>): (w
 }
 
 const standalone = fs.readFileSync(path.resolve('src/providers/daemon-standalone.ts'), 'utf8')
+/**
+ * stopDaemon as its source runs it: the template ends through exitDaemon (a host_exec file look
+ * still in flight gets its grace first), the standalone through process.exit.
+ */
+const stopDaemonSource = (source: string) => {
+  const exit = /function exitDaemon\(/.test(source)
+    ? `const EXIT_LOOK_GRACE_MS = 1000; let exitingDaemon = false; ${extract(source, 'exitDaemon')}\n`
+    : ''
+  return `let shutdown = null; ${exit}const stopDaemon = ${extract(source, 'stopDaemon')}; return stopDaemon;`
+}
 const template = getDaemonSource()
 const templateDrain = compile<typeof createDaemonCommandDrain>(
   `return ${extract(template, 'daemonCommands').replace(/\(\)$/, '')};`, {},
@@ -570,8 +580,8 @@ describe.each([
     const order: string[] = []
     const exit = vi.fn((code: number) => { order.push(`exit:${code}`); exited.resolve(code) })
     const hostFix = { cancel: vi.fn(() => false) }
-    const stop = compile<() => void>(`let shutdown = null; const stopDaemon = ${extract(source, 'stopDaemon')}; return stopDaemon;`, {
-      daemonCommands, hostFix, releaseGatewayWaiters: vi.fn(),
+    const stop = compile<() => void>(stopDaemonSource(source), {
+      daemonCommands, hostFix, hostExec: { stuck: () => false }, releaseGatewayWaiters: vi.fn(),
       releaseGatewayRelays: () => { order.push('relays') },
       noteRestarting: () => { order.push('mark') },
       cronRuntime: { close: vi.fn(() => cron.promise) },
@@ -634,8 +644,8 @@ describe.each([
     const exited = deferred<number>()
     const logMsg = vi.fn()
     const hostFix = throws ? { cancel: () => { throw new Error('cancel exploded') } } : claude.fix
-    const stop = compile<() => void>(`let shutdown = null; const stopDaemon = ${extract(source, 'stopDaemon')}; return stopDaemon;`, {
-      daemonCommands, hostFix, releaseGatewayWaiters: vi.fn(), noteRestarting: vi.fn(), releaseGatewayRelays: vi.fn(),
+    const stop = compile<() => void>(stopDaemonSource(source), {
+      daemonCommands, hostFix, hostExec: { stuck: () => false }, releaseGatewayWaiters: vi.fn(), noteRestarting: vi.fn(), releaseGatewayRelays: vi.fn(),
       cronRuntime: { close: async () => {} }, netSupervisor: { stop: async () => {} },
       persistRegistry: () => {}, cleanup: () => {}, server: { stop: () => {} }, httpServer: { close: () => {} },
       daemonInstanceLock: { release: async () => {} },
