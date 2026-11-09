@@ -48,6 +48,14 @@
 #                                          <base> (the workflow's browser job uses it)
 #   push-gate.sh --run <remote URL> <commit>   run the GitHub gate for a commit's files outside a
 #                                              push (as one commit on GitHub's main)
+#     WALNUT_PUSH_GATE_MODE=land with WALNUT_PUSH_GATE_LAND_BASE=<the main it lands on>: a land's
+#       gate, only the tests the land needs (scripts/push-gate-plan.mjs, which runs the whole
+#       tier instead for a change to a foundation). Its pass is kept apart from a full one
+#       (<verdicts>/land/<tree>.<base tree>), so the push of main still runs the whole tier.
+#     WALNUT_PUSH_GATE_MODE=files with WALNUT_PUSH_GATE_FILES='<test paths and spec names>': only
+#       those tests (walnut-cloud's trace of a red push); nothing is kept
+#     WALNUT_PUSH_GATE_SAME_TREE=1: judge the commit even when GitHub's main has the same files
+#       (a main's own failures: walnut-cloud asks for them)
 # A pass is kept by the files it judged (WALNUT_PUSH_GATE_VERDICTS, default
 # ~/.cache/walnut-push-gate/<tree>, 14 days), so the same files pushed as another commit pass.
 set -uo pipefail
@@ -85,6 +93,14 @@ $users"
 }
 
 if [ "${1:-}" = --specs ]; then
+  # A files gate names its browser specs (`Walnut-Gate-Test: <name>.spec.ts`).
+  if git log -1 --format=%s "$3" 2>/dev/null | grep -q '^push gate: the files of ' && git log -1 --format=%B "$3" | grep -qx 'Walnut-Gate: files'; then
+    git log -1 --format=%B "$3" | sed -n 's#^Walnut-Gate-Test: \([A-Za-z0-9_./-]*\.spec\.ts\)$#\1#p' | while read -r s; do
+      case $s in *..*) continue ;; esac
+      for p in "$s" "$B/$s"; do [ -n "$(git ls-tree --name-only "$3" -- "$p")" ] && { echo "$p"; break; }; done
+    done | sort -u | tr '\n' ' ' | sed 's/ *$//'; echo
+    exit 0
+  fi
   pick_specs "$2" "$3"
   [ -z "$left" ] || echo "left to CI's browser shards:$left" >&2
   printf '%s\n' "$specs"
@@ -104,10 +120,30 @@ if [ "${1:-}" = --run ]; then
   b=$(git ls-remote "$remote_url" refs/heads/main 2>/dev/null | cut -f1)
   [ -n "$b" ] || { echo "push-gate --run: could not read main from $remote_url" >&2; exit 1; }
   git cat-file -e "$b^{commit}" 2>/dev/null || git fetch -q "$remote_url" main 2>/dev/null || { echo "push-gate --run: could not fetch main from $remote_url" >&2; exit 1; }
-  if [ "$(git rev-parse "$b^{tree}")" = "$(git rev-parse "$t^{tree}")" ]; then echo "Test gate: GitHub's main already has these files; nothing to judge."; exit 0; fi
+  gk=full
+  if [ "${WALNUT_PUSH_GATE_MODE:-}" = files ]; then
+    gk=files
+    named=$(printf '%s\n' ${WALNUT_PUSH_GATE_FILES:-} | grep -E '^[A-Za-z0-9_./-]+$' | grep -v '\.\.' | sort -u)
+    [ -n "$named" ] || { echo "push-gate --run: a files gate needs WALNUT_PUSH_GATE_FILES, the tests to run" >&2; exit 2; }
+    land_key=files
+  elif [ "${WALNUT_PUSH_GATE_MODE:-}" = land ]; then
+    gk=land
+    lb=$(git rev-parse -q --verify "${WALNUT_PUSH_GATE_LAND_BASE:-}^{commit}") || { echo "push-gate --run: a land gate needs WALNUT_PUSH_GATE_LAND_BASE, the main it lands on (${WALNUT_PUSH_GATE_LAND_BASE:-unset})" >&2; exit 2; }
+    land_key="$(git rev-parse "$t^{tree}").$(git rev-parse "$lb^{tree}")"
+  fi
+  if [ "$(git rev-parse "$b^{tree}")" = "$(git rev-parse "$t^{tree}")" ] && [ -z "${WALNUT_PUSH_GATE_SAME_TREE:-}" ]; then echo "Test gate: GitHub's main already has these files; nothing to judge."; exit 0; fi
   # What the push will carry, as the Mac's own commits: the ones GitHub has no copy of (by patch).
   carried=$(git log --cherry-pick --right-only --no-merges --format='  %h %s' "$b...$t" 2>/dev/null | head -40)
-  t=$(git commit-tree "$t^{tree}" -p "$b" -m "push gate: the files of $(git rev-parse --short "$t")") \
+  parent=$b
+  if [ $gk = land ] && [ "$(git rev-parse "$lb^{tree}")" != "$(git rev-parse "$b^{tree}")" ]; then
+    # The main the land goes onto, as one commit on GitHub's main, so the land is HEAD^..HEAD.
+    parent=$(git commit-tree "$lb^{tree}" -p "$b" -m "push gate: the files of $(git rev-parse --short "$lb"), the main a land goes onto") \
+      || { echo "push-gate --run: could not write the gate's base commit" >&2; exit 1; }
+  fi
+  msg="push gate: the files of $(git rev-parse --short "$t")"
+  [ $gk != land ] || msg=$(printf '%s\n\nWalnut-Gate: land' "$msg")
+  [ $gk != files ] || msg=$(printf '%s\n\nWalnut-Gate: files\n%s' "$msg" "$(printf '%s\n' "$named" | sed 's/^/Walnut-Gate-Test: /')")
+  t=$(git commit-tree "$t^{tree}" -p "$parent" -m "$msg") \
     || { echo "push-gate --run: could not write the gate commit" >&2; exit 1; }
   refs="refs/heads/main $t refs/heads/main $b"
   # The gate branch is public: what it carries is scanned first, as the pre-push hook scans before
@@ -140,8 +176,16 @@ refuse() { echo ""; echo "Push blocked: $*"; echo "Skip once, with a reason in t
 verdicts=${WALNUT_PUSH_GATE_VERDICTS:-${XDG_CACHE_HOME:-$HOME/.cache}/walnut-push-gate}
 tree=$(git rev-parse "$target^{tree}")
 if [ -f "$verdicts/$tree" ]; then echo "✓ Test gate passed on these files ($(head -1 "$verdicts/$tree"))."; exit 0; fi
+# A land's pass holds for the same land onto the same main, and never for a push.
+keep=$verdicts/$tree
+if [ "${land_key:-}" = files ]; then keep=/dev/null
+elif [ -n "${land_key:-}" ]; then
+  keep=$verdicts/land/$land_key
+  if [ -f "$keep" ]; then echo "✓ Test gate (land) passed on these files onto this main ($(head -1 "$keep"))."; exit 0; fi
+fi
 passed_files() { # the run URL
-  mkdir -p "$verdicts" && printf '%s\n' "$1" > "$verdicts/$tree"
+  [ "$keep" != /dev/null ] || return 0
+  mkdir -p "$(dirname "$keep")" && printf '%s\n' "$1" > "$keep"
   find "$verdicts" -type f -mtime +14 -delete 2>/dev/null || true
 }
 
@@ -234,11 +278,17 @@ if [ -z "$runner" ]; then
     git push -q --no-verify "$remote_url" "+$target:$ref" \
       || refuse "could not push $name to $plain for the test gate."
   fi
-  echo "Test gate on $short: quick tier, frontend tier and the browser specs it touches, on GitHub's runners ($ref)…"
+  if [ "${gk:-full}" = files ]; then echo "Test gate (files) on $short: only $(printf '%s\n' "$named" | tr '\n' ' '), on GitHub's runners ($ref)…"
+  elif [ "${gk:-full}" = land ]; then echo "Test gate (land) on $short: the tests this land needs (whole tier for a foundation), the frontend tier and the browser specs it touches, on GitHub's runners ($ref)…"
+  else echo "Test gate on $short: quick tier, frontend tier and the browser specs it touches, on GitHub's runners ($ref)…"; fi
   mins=${WALNUT_PUSH_GATE_TIMEOUT:-75}
-  # How many tiers the run writes (push-gate-status.sh, as the pushed commit has it).
+  # How many tiers the run writes: its plan job's `walnut/gate-plan` says ("<n> tiers, ..."); a
+  # workflow with no plan job writes push-gate-status.sh's count, as the pushed commit has it.
   tiers=$(git show "$target:scripts/push-gate-status.sh" 2>/dev/null | sed -n 's/^TIERS=\([0-9][0-9]*\).*/\1/p')
   tiers=${tiers:-5}
+  # The workflow that runs: GitHub main's for a dispatched run, the commit's own for a branch run.
+  wf=$target; [ $mode = dispatch ] && [ $have_base = 1 ] && wf=$base
+  planned=0; git show "$wf:.github/workflows/push-gate.yml" 2>/dev/null | grep -q 'push-gate-plan.mjs' && planned=1
   deadline=$(( $(date +%s) + mins * 60 )) run= state=pending statuses='[]' fails=0
   ghq() { ghcall api "$@" 2>"$errf" && { fails=0; return 0; }; fails=$((fails + 1)); return 1; }
   while :; do
@@ -252,6 +302,11 @@ if [ -z "$runner" ]; then
     fi
     if [ -n "$run" ] && r=$(ghq "repos/$repo/commits/$target/statuses?per_page=100"); then
       statuses=$(printf '%s' "$r" | jq -c --arg u "https://github.com/$repo/actions/runs/$run" '[.[] | select(.context | startswith("walnut/push-gate")) | select(.target_url == $u)] | group_by(.context) | map(max_by(.created_at))')
+      if [ $planned = 1 ]; then
+        pd=$(printf '%s' "$r" | jq -r --arg u "https://github.com/$repo/actions/runs/$run" '[.[] | select(.context == "walnut/gate-plan" and .target_url == $u)] | max_by(.created_at) | .description // empty' 2>/dev/null)
+        n=${pd%% tiers*}
+        case $n in ''|*[!0-9]*) ;; *) tiers=$n; planned=2; echo "  plan: $pd" ;; esac
+      fi
       state=$(printf '%s' "$statuses" | jq -r '[.[] | select(.context == "walnut/push-gate")][0].state // "pending"')
       [ "$state" = pending ] || break
       # The tiers decide without the verdict job, which may queue behind a busy CI for minutes:
@@ -262,7 +317,8 @@ if [ -z "$runner" ]; then
       seen="$good passed, $bad failed"
       [ "$seen" = "${shown:-}" ] || { shown=$seen; echo "  $(date -u +%H:%M:%SZ)  $seen of $tiers tiers"; }
       if [ "$bad" -gt 0 ]; then state=failure; break; fi
-      if [ "$good" -ge "$tiers" ]; then state=success; break; fi
+      # A planned run passes on its tiers only once its plan said how many there are.
+      if [ "$good" -ge "$tiers" ] && [ $planned != 1 ]; then state=success; break; fi
     fi
     [ $fails -lt 10 ] || blocked "GitHub did not answer the test gate 10 times in a row ($(tail -1 "$errf")), so nothing was judged."
     [ "$(date +%s)" -lt "$deadline" ] || break
@@ -276,11 +332,21 @@ if [ -z "$runner" ]; then
   # The failing tests, from each failed tier's job log.
   for tier in $(printf '%s' "$statuses" | jq -r '.[] | select(.state != "success" and .context != "walnut/push-gate") | .context | sub("^walnut/push-gate \\("; "") | sub("\\)$"; "") | gsub(" "; "_")'); do
     tier=${tier//_/ }
-    job=$(ghcall api "repos/$repo/actions/runs/$run/jobs?per_page=50" 2>/dev/null | jq -r --arg n "Gate ($tier)" '.jobs[] | select(.name == $n) | .id' | head -1)
+    jobs=$(ghcall api "repos/$repo/actions/runs/$run/jobs?per_page=50" 2>/dev/null)
+    job=$(printf '%s' "$jobs" | jq -r --arg n "Gate ($tier)" '.jobs[] | select(.name == $n) | .id' | head -1)
+    # A land's frontend tier runs in its first land job.
+    [ -n "$job" ] || [ "$tier" != frontend ] || job=$(printf '%s' "$jobs" | jq -r '.jobs[] | select(.name | startswith("Gate (land 1/")) | .id' | head -1)
     [ -n "$job" ] || continue
     echo ""; echo "── $tier (https://github.com/$repo/actions/runs/$run/job/$job)"
-    ghcall api "repos/$repo/actions/jobs/$job/logs" 2>/dev/null | sed -E 's/^[0-9T:.-]+Z //; s/\x1b\[[0-9;]*[A-Za-z]//g' \
-      | awk '/^Fix them|^##\[error\]|^##\[group\]Run /{if (p) exit} /NEW failure|New failures|FAIL |✗/{p=1} p{print; if (++n > 60) exit}' | grep -avE '^[0-9]{2}:[0-9]{2}:[0-9]{2} '
+    jlog=$(ghcall api "repos/$repo/actions/jobs/$job/logs" 2>/dev/null | sed -E 's/^[0-9T:.-]+Z //; s/\x1b\[[0-9;]*[A-Za-z]//g')
+    if [ "$tier" != frontend ] && printf '%s\n' "$jlog" | grep -aq '^\[test-layers\] FAILED:'; then
+      # test-layers.mjs (a land tier): its list of the tests that failed twice, and its verdict.
+      printf '%s\n' "$jlog" | awk '/^\[test-layers\] FAILED:/{p=1} p{print; if (/^\[test-layers\] (passed|failed):/ || ++n > 60) exit}'
+    else
+      # A frontend step in a land job: from that step on.
+      [ "$tier" != frontend ] || ! printf '%s\n' "$jlog" | grep -aq 'test:frontend:ci' || jlog=$(printf '%s\n' "$jlog" | awk '/test:frontend:ci/{p=1} p')
+      printf '%s\n' "$jlog" | awk '/^Fix them|^##\[error\]|^##\[group\]Run /{if (p) exit} /NEW failure|New failures|FAIL |✗/{p=1} p{print; if (++n > 60) exit}' | grep -avE '^[0-9]{2}:[0-9]{2}:[0-9]{2} '
+    fi
   done
   blocked "the test gate failed on $short. The failing tests are listed above."
 fi

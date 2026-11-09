@@ -348,6 +348,24 @@ esac
     expect(gateBranches(g.bare)).toBe('')
   })
 
+  it('reads a land tier\'s failures from test-layers\' list in its job log, and a land\'s frontend tier from its first job', () => {
+    const g = ghRepo({
+      statuses: [st('walnut/push-gate (land 1/1)', 'failure', '[test-layers] failed: 9 file(s) in 30 s'), st('walnut/push-gate (frontend)', 'failure', 'failed')],
+      jobs: { jobs: [{ id: 9, name: 'Gate (land 1/1)' }] },
+      log: [' FAIL  tests/x.test.ts > it breaks', 'noise', '[test-layers] FAILED: 1 test(s) failed twice:', '  tests/x.test.ts :: it breaks', '[test-layers] failed: 9 file(s) in 30 s',
+        '##[group]Run set -o pipefail', 'bun run test:frontend:ci 2>&1 | tee x', ' FAIL  web markdown > renders', '##[group]Run bash scripts/push-gate-status.sh'].map((l) => `2026-11-09T00:00:00.0Z ${l}`).join('\n') + '\n',
+    })
+    const out = gateRun(g, commit(g.r, { 'a.txt': '1\n' }, 'one'))
+    expect(out.status).toBe(1)
+    // Each tier's section runs to the next one (the tiers come in name order).
+    const section = (name: string) => out.stdout.slice(out.stdout.indexOf(`── ${name}`)).split(/\n(?=── )/)[0]!
+    const land = section('land 1/1')
+    expect(land).toMatch(/^\[test-layers\] FAILED: 1 test\(s\) failed twice:\n {2}tests\/x\.test\.ts :: it breaks\n\[test-layers\] failed: 9 file\(s\)/m)
+    expect(land).not.toMatch(/noise|web markdown/)
+    expect(section('frontend')).toMatch(/FAIL {2}web markdown > renders/)
+    expect(section('frontend')).not.toMatch(/tests\/x\.test\.ts/)
+  })
+
   it('decides from the tiers when the verdict job has not run: one failed tier refuses, every tier passed lets it through', () => {
     const tiers = [...Array.from({ length: 8 }, (_, i) => `quick ${i + 1}/8`), 'frontend', 'browser specs']
     const ok = ghRepo({ statuses: tiers.map((t) => st(`walnut/push-gate (${t})`, 'success', 'passed')) })
@@ -430,6 +448,90 @@ esac
     expect(fs.readFileSync(g.seen, 'utf8')).toContain('refs/gate/')
   })
 
+  it('runs a land\'s gate with --run in land mode: the land alone on top of its main, kept apart from a full pass', () => {
+    const tiers = ['land 1/1', 'frontend', 'browser specs']
+    const g = ghRepo({ statuses: [st('walnut/gate-plan', 'success', '3 tiers, land: 12 test files'), ...tiers.map((t) => st(`walnut/push-gate (${t})`, 'success', 'passed'))] })
+    git(g.r, 'push', '-q', URL, 'main:main')
+    const ghMain = git(g.r, 'rev-parse', 'HEAD')
+    const macMain = commit(g.r, { 'tests/e2e/browser/x.txt': 'already landed\n', '.github/workflows/push-gate.yml': '# runs scripts/push-gate-plan.mjs\n' }, 'a land GitHub has not seen yet')
+    const tip = commit(g.r, { 'b.txt': '2\n' }, 'the land')
+    const verdicts = path.join(path.dirname(g.r), 'verdicts')
+    const env = { ...g.env, WALNUT_PUSH_GATE_VERDICTS: verdicts, WALNUT_PUSH_GATE_MODE: 'land', WALNUT_PUSH_GATE_LAND_BASE: macMain }
+    const out = spawnSync('bash', [GATE, '--run', URL, tip], { cwd: g.r, encoding: 'utf8', env: cleanEnv(env) })
+    expect(out.status, out.stdout + out.stderr).toBe(0)
+    expect(out.stdout).toMatch(/Test gate \(land\) on/)
+    expect(out.stdout).toMatch(/plan: 3 tiers, land/)
+    const gated = fs.readFileSync(g.seen, 'utf8').match(/commits\/([0-9a-f]{40})\/statuses/)![1]
+    expect(git(g.r, 'log', '-1', '--format=%B', gated)).toMatch(/^Walnut-Gate: land$/m)
+    expect(git(g.r, 'rev-parse', `${gated}^{tree}`)).toBe(git(g.r, 'rev-parse', `${tip}^{tree}`))
+    expect(git(g.r, 'rev-parse', `${gated}^^{tree}`)).toBe(git(g.r, 'rev-parse', `${macMain}^{tree}`))
+    expect(git(g.r, 'rev-parse', `${gated}^^`)).toBe(ghMain)
+    const tree = git(g.r, 'rev-parse', `${tip}^{tree}`)
+    expect(fs.existsSync(path.join(verdicts, 'land', `${tree}.${git(g.r, 'rev-parse', `${macMain}^{tree}`)}`))).toBe(true)
+    expect(fs.existsSync(path.join(verdicts, tree))).toBe(false)
+    // The same land again passes at once; a push of those files still runs the whole gate.
+    fs.rmSync(g.seen)
+    const again = spawnSync('bash', [GATE, '--run', URL, tip], { cwd: g.r, encoding: 'utf8', env: cleanEnv(env) })
+    expect(again.stdout).toMatch(/Test gate \(land\) passed on these files onto this main/)
+    expect(fs.existsSync(g.seen)).toBe(false)
+    const push = spawnSync('bash', [GATE, 'origin', URL], { cwd: g.r, input: line(tip, ghMain), encoding: 'utf8', env: cleanEnv({ ...g.env, WALNUT_PUSH_GATE_VERDICTS: verdicts }) })
+    expect(push.stdout).not.toMatch(/passed on these files/)
+    expect(fs.readFileSync(g.seen, 'utf8')).toContain('refs/heads/gate/')
+  })
+
+  it('runs only the named tests with --run in files mode, keeps nothing, and the browser job reads its specs', () => {
+    const g = ghRepo({ statuses: [st('walnut/gate-plan', 'success', '2 tiers, files: 1'), st('walnut/push-gate (files)', 'success'), st('walnut/push-gate (browser specs)', 'success')] })
+    git(g.r, 'push', '-q', URL, 'main:main')
+    const tip = commit(g.r, { 'b.txt': '2\n', '.github/workflows/push-gate.yml': '# runs scripts/push-gate-plan.mjs\n' }, 'a commit to trace')
+    const verdicts = path.join(path.dirname(g.r), 'verdicts')
+    const out = spawnSync('bash', [GATE, '--run', URL, tip], { cwd: g.r, encoding: 'utf8', env: cleanEnv({ ...g.env, WALNUT_PUSH_GATE_VERDICTS: verdicts, WALNUT_PUSH_GATE_MODE: 'files', WALNUT_PUSH_GATE_FILES: 'tests/core/a.test.ts uses-x.spec.ts no;such' }) })
+    expect(out.status, out.stdout + out.stderr).toBe(0)
+    expect(out.stdout).toMatch(/Test gate \(files\) on [0-9a-f]+: only tests\/core\/a\.test\.ts uses-x\.spec\.ts/)
+    const gated = fs.readFileSync(g.seen, 'utf8').match(/commits\/([0-9a-f]{40})\/statuses/)![1]
+    const msg = git(g.r, 'log', '-1', '--format=%B', gated)
+    expect(msg).toMatch(/^Walnut-Gate: files\nWalnut-Gate-Test: tests\/core\/a\.test\.ts\nWalnut-Gate-Test: uses-x\.spec\.ts$/m)
+    expect(msg).not.toContain('no;such')
+    expect(fs.existsSync(verdicts) ? fs.readdirSync(verdicts, { recursive: true }).filter((f) => !String(f).endsWith('.jsonl')) : []).toEqual([])
+    const specs = spawnSync('bash', [GATE, '--specs', `${gated}^`, gated], { cwd: g.r, encoding: 'utf8', env: cleanEnv() })
+    expect(specs.stdout.trim()).toBe('tests/e2e/browser/uses-x.spec.ts')
+  })
+
+  it('refuses a land gate with no main to land on', () => {
+    const g = ghRepo({})
+    git(g.r, 'push', '-q', URL, 'main:main')
+    const tip = commit(g.r, { 'b.txt': '2\n' }, 'the land')
+    const out = spawnSync('bash', [GATE, '--run', URL, tip], { cwd: g.r, encoding: 'utf8', env: cleanEnv({ ...g.env, WALNUT_PUSH_GATE_MODE: 'land' }) })
+    expect(out.status).toBe(2)
+    expect(out.stderr).toMatch(/needs WALNUT_PUSH_GATE_LAND_BASE/)
+  })
+
+  it('waits for the plan\'s tier count before it passes a planned run on its tiers', () => {
+    const three = ['land 1/1', 'frontend', 'browser specs'].map((t) => st(`walnut/push-gate (${t})`, 'success', 'passed'))
+    const unplanned = ghRepo({ statuses: three })
+    const tip = commit(unplanned.r, { '.github/workflows/push-gate.yml': '# runs scripts/push-gate-plan.mjs\n' }, 'one')
+    const waiting = gateRun(unplanned, tip)
+    expect(waiting.status).toBe(1)
+    expect(waiting.stdout).toMatch(/did not answer within 0 minutes/)
+    const planned = ghRepo({ statuses: [st('walnut/gate-plan', 'success', '3 tiers, land: x'), ...three] })
+    const ok = gateRun(planned, commit(planned.r, { '.github/workflows/push-gate.yml': '# runs scripts/push-gate-plan.mjs\n' }, 'one'))
+    expect(ok.status, ok.stdout + ok.stderr).toBe(0)
+    expect(ok.stdout).toMatch(/Test gate passed\./)
+    // A full plan names ten: three passes are not enough.
+    const full = ghRepo({ statuses: [st('walnut/gate-plan', 'success', '10 tiers, full: a push'), ...three] })
+    const short = gateRun(full, commit(full.r, { '.github/workflows/push-gate.yml': '# runs scripts/push-gate-plan.mjs\n' }, 'one'))
+    expect(short.status).toBe(1)
+  })
+
+  it('judges the files with WALNUT_PUSH_GATE_SAME_TREE even when GitHub\'s main has them', () => {
+    const g = ghRepo({ statuses: [st('walnut/push-gate', 'success', 'all 10 tiers passed')] })
+    const tip = git(g.r, 'rev-parse', 'HEAD')
+    git(g.r, 'push', '-q', URL, 'main:main')
+    const out = spawnSync('bash', [GATE, '--run', URL, tip], { cwd: g.r, encoding: 'utf8', env: cleanEnv({ ...g.env, WALNUT_PUSH_GATE_SAME_TREE: '1' }) })
+    expect(out.status, out.stdout + out.stderr).toBe(0)
+    expect(out.stdout).toMatch(/Test gate passed\./)
+    expect(fs.readFileSync(g.seen, 'utf8')).toContain('dispatches -X POST -f ref=main -f inputs[sha]=')
+  })
+
   it('judges nothing with --run when GitHub\'s main already has the files', () => {
     const g = ghRepo({})
     const tip = git(g.r, 'rev-parse', 'HEAD')
@@ -507,9 +609,30 @@ cat ${JSON.stringify(path.join(dir, 'statuses.json'))}
     run(job.env, ['--verdict'], { NEEDS: 'success failure' })
     expect(fs.readFileSync(job.posts, 'utf8')).toMatch(/state=failure .*jobs: success failure/)
 
+    // A land run counts the plan's tiers, not a full gate's.
+    const land = stub(['land 1/1', 'frontend', 'browser specs'].map((t) => mine(t, 'success')))
+    run(land.env, ['--verdict'], { NEEDS: 'success success success', GATE_TIERS: '3' })
+    expect(fs.readFileSync(land.posts, 'utf8')).toMatch(/state=success -f context=walnut\/push-gate -f description=all 3 tiers passed/)
+    const notEnough = stub(['land 1/1', 'frontend', 'browser specs'].map((t) => mine(t, 'success')))
+    run(notEnough.env, ['--verdict'], { NEEDS: 'success success success' })
+    expect(fs.readFileSync(notEnough.posts, 'utf8')).toMatch(/state=failure .*3 of 10 tiers reported/)
+
     const bad = stub(five.map((t) => mine(t, t === 'frontend' ? 'failure' : 'success')))
     run(bad.env, ['--verdict'], { NEEDS: 'success success' })
     expect(fs.readFileSync(bad.posts, 'utf8')).toMatch(/state=failure .*description=failed: frontend/)
+  })
+})
+
+describe('push-gate-status.sh --plan', () => {
+  it('writes the plan as walnut/gate-plan, its description led by the tier count push-gate.sh reads', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'push-gate-plan-status-'))
+    dirs.push(dir)
+    const posts = path.join(dir, 'posts.log')
+    fs.writeFileSync(path.join(dir, 'gh'), `#!/bin/sh\nshift 4; echo "$*" >> ${JSON.stringify(posts)}\n`, { mode: 0o755 })
+    const env = cleanEnv({ PATH: `${dir}:${process.env.PATH}`, GITHUB_REPOSITORY: 'acme/demo', GITHUB_SHA: 'a'.repeat(40), GITHUB_SERVER_URL: 'https://github.com', GITHUB_RUN_ID: '77' })
+    const r = spawnSync('bash', [path.join(ROOT, 'scripts/push-gate-status.sh'), '--plan', 'land', '3', '731 test files in 1 job(s)'], { encoding: 'utf8', env })
+    expect(r.status).toBe(0)
+    expect(fs.readFileSync(posts, 'utf8')).toMatch(/state=success -f context=walnut\/gate-plan -f description=3 tiers, land: 731 test files/)
   })
 })
 

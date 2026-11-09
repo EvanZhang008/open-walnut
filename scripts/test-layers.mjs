@@ -15,7 +15,9 @@
  *
  *   bun scripts/test-layers.mjs list local|land [--base <ref> | --changed-from <file>]   print the chosen files
  *   bun scripts/test-layers.mjs plan local|land [--base <ref>]   counts, predicted time, why
- *   bun scripts/test-layers.mjs run  local|land [--base <ref>] [--json <file>]
+ *   bun scripts/test-layers.mjs run  local|land [--base <ref>] [--json <file>] [--part <i>/<n>]
+ *     --part i/n: only part i of n, the files dealt by measured time so each part costs about the
+ *     same (the push gate's land jobs); the change's own slow-tier files go to part 1
  *   bun scripts/test-layers.mjs report                           quarantine and timing upkeep
  *   bun scripts/test-layers.mjs measure [vitest options]        rewrite tests/setup/test-durations.json
  *
@@ -210,6 +212,7 @@ function parseArgs(argv) {
     else if (argv[i] === '--json') o.json = argv[++i]
     else if (argv[i] === '--changed-from') o.changedFrom = argv[++i]
     else if (argv[i] === '--all') o.all = true
+    else if (argv[i] === '--part') o.part = argv[++i]
     else o.extra.push(argv[i])
   }
   o.base ??= defaultBase()
@@ -244,6 +247,24 @@ export function runVitest(files, extra, { config = 'vitest.quick.config.ts', roo
   for (const f of files) if (!seen.has(f)) crashed.push(f)
   const runError = exit && !failed.length && !crashed.length ? `vitest ${exit} with every file passing: an unhandled error or rejection (see its "Errors" block above)` : null
   return { failed, crashed, ms, runError }
+}
+
+/**
+ * Part `i` of `n` (1-based) of a layer's files: the costliest first, each to the part with the
+ * least measured time so far (ties to the lower part), so the parts cost about the same and every
+ * file is in exactly one. The slow-tier files (real processes, run one at a time) go to part 1.
+ */
+export function partOf(files, slowFiles, part, durations = readDurations()) {
+  const m = /^(\d+)\/(\d+)$/.exec(part ?? '')
+  const i = m ? Number(m[1]) : 0, n = m ? Number(m[2]) : 0
+  if (!(n >= 1 && i >= 1 && i <= n)) throw new Error(`--part wants <i>/<n> with 1 <= i <= n, not ${part}`)
+  const load = Array(n).fill(0), bins = Array.from({ length: n }, () => [])
+  for (const f of [...files].sort((a, b) => cost(durations, b) - cost(durations, a) || a.localeCompare(b))) {
+    let k = 0
+    for (let j = 1; j < n; j++) if (load[j] < load[k]) k = j
+    bins[k].push(f); load[k] += cost(durations, f)
+  }
+  return { files: bins[i - 1].sort(), slowFiles: i === 1 ? slowFiles : [] }
 }
 
 /** The verdict of a first run and the rerun of its failing files alone. */
@@ -324,7 +345,7 @@ if (import.meta.main) {
     measure(o.layer && !opt(o.layer) ? o.layer : null, opt(o.layer) ? [o.layer, ...o.extra] : o.extra); process.exit(0)
   }
   if (!['list', 'plan', 'run'].includes(o.cmd) || !['local', 'land'].includes(o.layer)) {
-    console.error('usage: bun scripts/test-layers.mjs list|plan|run local|land [--base <ref>] [--changed-from <file>] [--json <file>] [vitest options]\n       bun scripts/test-layers.mjs report\n       bun scripts/test-layers.mjs measure [<costs json>] [vitest options]')
+    console.error('usage: bun scripts/test-layers.mjs list|plan|run local|land [--base <ref>] [--changed-from <file>] [--json <file>] [--part <i>/<n>] [vitest options]\n       bun scripts/test-layers.mjs report\n       bun scripts/test-layers.mjs measure [<costs json>] [vitest options]')
     process.exit(2)
   }
   const universe = quickUniverse(), durations = readDurations()
@@ -335,6 +356,7 @@ if (import.meta.main) {
     const changed = o.changedFrom ? fs.readFileSync(o.changedFrom, 'utf8').split('\n').filter(Boolean) : changedFiles(o.base)
     plan = scopedLayer(o.layer, changed, { universe, durations }); files = plan.files; slowFiles = plan.slowFiles
   }
+  if (o.part) ({ files, slowFiles } = partOf(files, slowFiles, o.part, durations))
   if (o.cmd === 'list') { for (const f of [...files, ...slowFiles]) console.log(f); process.exit(0) }
   if (o.cmd === 'plan') {
     const ms = files.reduce((s, f) => s + cost(durations, f), 0)

@@ -11,7 +11,9 @@
 #
 # Runs on a runner, with GH_TOKEN and GitHub's GITHUB_* variables.
 set -uo pipefail
-TIERS=10  # quick 1/8 .. 8/8, frontend, browser specs
+TIERS=10  # a full gate: quick 1/8 .. 8/8, frontend, browser specs
+# The plan job's count for this run (a land gate runs fewer: scripts/push-gate-plan.mjs).
+case ${GATE_TIERS:-} in ''|*[!0-9]*) ;; *) TIERS=$GATE_TIERS ;; esac
 # The commit judged (push-gate.yml's GATE_SHA: a dispatched run's input, else the gate branch's head).
 repo=$GITHUB_REPOSITORY sha=${GATE_SHA:-$GITHUB_SHA}
 [[ $sha =~ ^[0-9a-f]{40}$ ]] || { echo "push-gate-status: $sha is not a commit sha" >&2; exit 1; }
@@ -27,6 +29,14 @@ post() { # state context description
   echo "could not write the status $2" >&2
   return 1
 }
+
+#   push-gate-status.sh --plan <mode> <tiers> <why>   the plan job's `walnut/gate-plan`: how many
+#                                       tier statuses this run writes, which scripts/push-gate.sh
+#                                       waits for (its description starts "<tiers> tiers")
+if [ "${1:-}" = --plan ]; then
+  post success walnut/gate-plan "$3 tiers, $2: $4"
+  exit 0
+fi
 
 if [ "${1:-}" = --verdict ]; then
   latest=$(gh api "repos/$repo/commits/$sha/statuses?per_page=100" \
