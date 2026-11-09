@@ -19,6 +19,7 @@ import {
 } from '../../src/core/session-tracker.js';
 import { _resetForTesting } from '../../src/core/task-manager.js';
 import { updateConfig } from '../../src/core/config-manager.js';
+import { acpEngineIds } from '../../src/core/agents/engine-registry.js';
 import { AcpSession, acpStartEnv, splitAcpModelId, engineEnvOverlayFromConfig } from '../../src/providers/acp-session.js';
 import { mergeAcpSpawnEnv } from '../../src/providers/acp-worker/protocol.js';
 import type { AcpCapabilitySnapshot } from '../../src/providers/acp-worker/protocol.js';
@@ -208,6 +209,28 @@ describe('AcpSession engine identity', () => {
     expect(JSON.parse(env.CODEX_CONFIG)).toMatchObject(providerConfig);
     expect(env.MODEL_PROVIDER).toBe('local-gateway');
     expect(env.CODEX_PATH).toBe('/usr/local/bin/codex');
+  });
+
+  it('a Codex session names the transport; every other engine runs its adapter with no such switch', async () => {
+    const adapterOf = (engine: string, artifacts?: typeof ARTIFACTS) => new AcpSession({ taskId: '', project: '', cwd: '/tmp', mode: 'default', engine, ...(artifacts ? { artifacts } : {}) }) as unknown as {
+      resolveConfiguredEngineEnv(): Promise<Record<string, string> | undefined>;
+      buildAdapterEnv(executable: string | undefined): Promise<Record<string, string> | undefined>;
+    };
+    const codex = adapterOf('codex');
+    vi.spyOn(codex, 'resolveConfiguredEngineEnv').mockResolvedValue(undefined);
+    expect((await codex.buildAdapterEnv('/usr/local/bin/codex'))?.WALNUT_CODEX_TRANSPORT).toBe('app-server');
+    // A session given its own adapter (a test's scripted one) runs it.
+    const scripted = adapterOf('codex', ARTIFACTS);
+    vi.spyOn(scripted, 'resolveConfiguredEngineEnv').mockResolvedValue(undefined);
+    expect((await scripted.buildAdapterEnv('/usr/local/bin/codex'))?.WALNUT_CODEX_TRANSPORT).toBe('acp');
+    const others = acpEngineIds().filter((e) => e !== 'codex');
+    expect(others.length).toBeGreaterThanOrEqual(6);
+    for (const engine of others) {
+      const other = adapterOf(engine);
+      vi.spyOn(other, 'resolveConfiguredEngineEnv').mockResolvedValue(undefined);
+      const env = await other.buildAdapterEnv('/usr/local/bin/x');
+      expect(env?.WALNUT_CODEX_TRANSPORT, engine).toBeUndefined();
+    }
   });
 
   it('stamps the record with its own engine and sends only walnut env for non-codex adapters', async () => {

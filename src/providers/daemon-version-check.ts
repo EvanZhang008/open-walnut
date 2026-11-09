@@ -94,6 +94,22 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/acp-worker/worker-main.ts',
   'src/providers/acp-worker/journal.ts',
   'src/providers/acp-worker/protocol.ts',
+  // The client the worker runs for `codex app-server` (a direct Codex session).
+  'src/providers/codex-app-server/rpc.ts',
+  'src/providers/codex-app-server/launch.ts',
+  'src/providers/codex-app-server/controls.ts',
+  'src/providers/codex-app-server/connection.ts',
+  'src/providers/codex-app-server/events.ts',
+  'src/providers/codex-app-server/approvals.ts',
+  'src/providers/codex-app-server/errors.ts',
+  'src/providers/codex-app-server/transport.ts',
+  'src/providers/codex-app-server/turn.ts',
+  'src/providers/codex-app-server/commands.ts',
+  'src/core/agents/codex-slash-commands.ts',
+  'src/providers/codex-app-server/thread-config.ts',
+  // Its launch reads the same -c args the server builds, and their request tag.
+  'src/providers/codex-engine-config.ts',
+  'src/core/sessions/request-tag.ts',
   // The worker names a usage-limit refusal and reads its reset on the host.
   'src/providers/usage-limit-text.ts',
   // The worker redacts provider error words with it before the daemon logs them.

@@ -101,6 +101,21 @@ describe('buildSessionSlashCommandItems', () => {
     await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
   })
 
+  it('a Codex session offers the commands Codex takes, never the folder\'s Claude skills', async () => {
+    getSessionByClaudeId.mockResolvedValue({ claudeSessionId: 'cx', cwd: '/tmp', engine: 'codex' })
+    const out = await buildSessionSlashCommandItems({ sessionId: 'cx' })
+    const names = out.items.map((i) => i.name)
+    expect(names).toEqual(expect.arrayContaining(['plan', 'compact', 'review', 'review-branch', 'review-commit', 'status', 'mcp', 'skills']))
+    expect(names).not.toContain('deploy')
+    expect(out.items.every((i) => i.description.length > 0)).toBe(true)
+    expect(findByClaudeId).not.toHaveBeenCalled()
+  })
+
+  it('every command the palette offers a Codex session is one the client takes', async () => {
+    const { CODEX_COMMANDS, parseSlashCommand } = await import('../../../src/providers/codex-app-server/commands.js')
+    for (const { name } of CODEX_COMMANDS) expect(parseSlashCommand(`/${name}`)?.name).toBe(name)
+  })
+
   it('404 for an unknown session', async () => {
     getSessionByClaudeId.mockResolvedValue(null)
     await expect(buildSessionSlashCommandItems({ sessionId: 'nope' })).rejects.toBeInstanceOf(SessionControlError)

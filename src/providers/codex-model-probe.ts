@@ -53,7 +53,7 @@ export function codexConfigModelOverlay(env: NodeJS.ProcessEnv): { model?: strin
 }
 
 /** A TOML inline value for a `-c` override (JSON string escapes are TOML basic-string escapes, except DEL). */
-function tomlInline(value: unknown): string {
+export function tomlInline(value: unknown): string {
   if (typeof value === 'string') return JSON.stringify(value).replace(/\u007f/g, '\\u007F')
   if (typeof value === 'number' || typeof value === 'boolean') return String(value)
   if (Array.isArray(value)) return `[${value.filter((v) => v !== null && v !== undefined).map(tomlInline).join(', ')}]`

@@ -16,7 +16,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value)
 
 /** The keys of `engines.<id>` the Mac's copy carries. */
-const COPIED_ENGINE_KEYS = ['provider', 'model', 'effort'] as const
+const COPIED_ENGINE_KEYS = ['provider', 'model', 'effort', 'transport'] as const
 
 /** `own` with the copy's engine settings over it. Throws when the copy cannot say. */
 export function withCopiedEngines(own: Record<string, unknown>, copy: Record<string, unknown> | null): Record<string, unknown> {

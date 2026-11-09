@@ -1,6 +1,7 @@
 # The Codex engine: your own endpoint, default model
 
-Walnut runs Codex through the codex-acp adapter (shipped with Walnut). Two settings in
+Walnut runs Codex by starting `codex app-server` itself and talking to it directly (see
+"How it reaches Codex"; the codex-acp adapter shipped with Walnut is the way back). Two settings in
 `config.yaml` under `engines.codex` shape every Codex session Walnut starts. Both are off
 until you write them; with neither set, Codex reads its own `~/.codex/config.toml` exactly
 as in a terminal.
@@ -16,6 +17,7 @@ engines:
       model_prefix: vendor.        # optional; see "Model ids on your endpoint"
     model: gpt-example             # optional; default model for a new Codex session
     effort: high                   # optional; default reasoning effort
+    transport: app-server          # optional; app-server (default) or acp, see "How it reaches Codex"
 ```
 
 ## Your own endpoint (`provider`)
@@ -137,12 +139,96 @@ config.yaml engines.codex ──► resolveCodexEngine (src/providers/codex-engi
    this machine: local daemon                another host: sent with the start (acpStart);
                │                             that host's daemon passes it to the worker as is
                ▼                                           ▼
-   codex-acp: `codex -c model_providers.<id>=… -c model_provider=… app-server`
+   the session's worker: `codex -c model_providers.<id>=… -c model_provider=… app-server`
               and the same keys in each thread/start and thread/resume config
 ```
 
 The model probe builds its configuration through the same function and starts Codex with the
 same provider overrides.
+
+### The direct client and the way back
+
+By default the session's worker (src/providers/acp-worker/worker.ts) runs Walnut's own client
+for `codex app-server` (src/providers/codex-app-server/). It writes the same journal the
+codex-acp adapter's sessions write, so the web and phone apps read both alike. What it does:
+
+- **Steering.** A message sent while Codex works goes to `turn/steer` with the running turn's id.
+  If the turn has just ended, the message goes back to the session's queue and is sent once as
+  the next turn, with the same message id and no error row. The client never starts a turn of
+  its own for a steer. Codex reports each steer it takes as a user message of the turn, and that
+  report, not the answer to the steer request, decides that it was taken (and records the
+  person's line then, ahead of what answers it), so a late or lost answer never sends the words
+  twice. Each input carries its own client id (`clientUserMessageId`, which Codex reports back
+  as the item's `clientId`), so another input with the same words is never taken for it; a Codex
+  that reports no id is read by the words. A steer Codex takes after the model's last word, and then ends the turn without
+  answering, is answered in the same Walnut turn: the client starts one more Codex turn with
+  those words (at most two such follow-ups per turn; past that the chat names the words Codex
+  left unanswered).
+- **Stop.** `turn/interrupt`, and the turn's own end answers it, within 10 seconds. A turn that
+  ends as the stop arrives ends there, with no follow-up turn and no plan question, and the chat
+  names a steer Codex took but did not answer. A message sent while the stop is on its way goes
+  into the next turn. The worker
+  and its app-server stay, so the next message starts at once. A turn Codex does not end in
+  time, and every restart, tear the worker down as before.
+- **Resume.** After a restart of Walnut or of the session daemon, the worker rejoins the thread
+  with `thread/resume` by its id, without reading its history back. When Codex says it has no
+  copy of the thread ("no rollout found", "thread not found"), the transcript says so and why,
+  and a new thread starts. Any other failure (a copy it cannot read, a provider no longer
+  configured, a timeout) fails the start with Codex's reason and keeps the thread id, so the next
+  message tries again; the error says how many tries are left. Only the third such failure in a row for the same reason starts a new
+  thread, and the transcript names the reason and the old thread's id.
+- **Failures.** An app-server that exits is seen at once: its turn ends with a runtime error, and
+  the next message starts a new one. A failed turn's row is named from Codex's error code:
+  usage limit, rate limit (429), overloaded (503), server error, lost connection, context window
+  full, or sign-in needed. The rate limit, overload, server error and lost connection rows are
+  retried; the usage limit row waits for its reset. Every request has a deadline, and a turn
+  that sends nothing for 15 minutes (90 while a command runs; `WALNUT_CODEX_STALL_MS` and
+  `WALNUT_CODEX_STALL_ITEM_MS` change them) is stopped. Codex is then asked to end it too, and
+  the next message waits for that; a turn Codex does not end in 10 seconds is ended with its
+  process. A stop that had to end the process says so in the transcript.
+- **Plan mode and commands.** The session's Collaboration mode menu (Plan / Default) rides each
+  turn as Codex's `collaborationMode`. When a turn in plan mode ends with a plan, the chat asks
+  "Implement this plan?"; yes leaves plan mode and Codex implements it in the same turn. A
+  mode Codex changes itself (that yes, `/plan`) reaches the menu in every open window and the
+  session's stored pick (`config_option_update`, read by `AcpSession`). These
+  messages are commands, as they were under the adapter: `/plan` (plan mode on or off),
+  `/compact` (Codex's own compaction), `/review [instructions]`, `/review-branch <branch>`,
+  `/review-commit <sha>`, `/status`, `/mcp` and `/skills`. `/goal` and `/logout` answer how to
+  reach them; any other message, `$skill` names included, goes to Codex as written. The
+  composer's `/` menu in a Codex session lists these commands (`CODEX_COMMANDS`), never the
+  Claude Code skills of its folder. A warning Codex repeats on every turn (a model it has no
+  metadata for) is shown once while the session's app-server runs; after a restart it can show
+  once more.
+- **Versions.** The worker reads `codex --version` at start and refuses a Codex older than the
+  oldest supported one (`MIN_CODEX_VERSION` in launch.ts), naming the way back below.
+  tests/providers/codex-app-server-schema.test.ts checks the client against the protocol of each
+  supported version, kept in tests/fixtures/codex-app-server/; to add one, run
+  `codex app-server -c model_provider=<id> generate-ts --experimental --out <dir>`, then
+  `bun scripts/codex-protocol-snapshot.mjs <dir> <version>`, then the test.
+
+**Your own Codex config.** The app-server reads the host's own `~/.codex/config.toml` (or
+`$CODEX_HOME/config.toml`) as the codex CLI does: the provider and its settings, model, effort,
+reasoning summary, approvals reviewer, MCP servers and sign-in. Walnut adds only what you set for
+Walnut or picked for the session:
+
+- `engines.codex` (provider, model, effort) and `CODEX_CONFIG`;
+- a model or effort picked in the session's menu, from the next turn on;
+- the session's MCP mounts, beside yours (a mount with the name of one of yours is left out);
+- the session folder marked trusted, so its `AGENTS.md` loads;
+- the approval and sandbox policy of the session's permission mode. A start that names no mode
+  takes it from `approval_policy` and `sandbox_mode` in `~/.codex/config.toml` on this machine.
+  In the Agent mode (workspace write), your `[sandbox_workspace_write]` table (writable roots,
+  network access, the temp directory switches) is kept in the sandbox each turn sends.
+
+Codex profiles are a flag of Codex's own commands (`codex --profile <name>`), which
+`codex app-server` does not take, so a direct session runs on the base config, as the codex-acp
+adapter's did.
+
+To run Codex through the codex-acp adapter instead, set `engines.codex.transport: acp` (copied
+to a companion like `model`), or `WALNUT_CODEX_TRANSPORT=acp` in the server's environment, which
+wins. Sessions started after the change use it; a running session keeps its worker until it
+restarts. A host whose session daemon predates the direct client runs the adapter whatever the
+setting says. Only Codex has this setting: every other engine runs its own ACP adapter.
 
 ## Sessions started by the companion or a host's server
 

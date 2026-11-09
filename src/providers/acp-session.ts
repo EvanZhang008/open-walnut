@@ -27,6 +27,7 @@ import os from 'node:os'
 import path from 'node:path'
 import fsModule from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { CODEX_TRANSPORT_ENV, resolveCodexTransport } from './codex-app-server/transport.js'
 import { log } from '../logging/index.js'
 import { WALNUT_HOME } from '../constants.js'
 import { bus, EventNames } from '../core/event-bus.js'
@@ -1127,7 +1128,51 @@ export class AcpSession {
           this._lastContext = { used: update.used, size: update.size }
         }
         return
+      case 'config_option_update':
+        this.adoptProviderConfig(update)
+        return
     }
+  }
+
+  /**
+   * A control the provider changed itself (Codex leaving plan mode once its plan is
+   * approved, `/plan`): the session's controls, its stored picks (acpConfig, which a
+   * restart replays) and every open window follow, as they do after a person's pick.
+   */
+  private adoptProviderConfig(update: Record<string, unknown>): void {
+    const next = snapshotAcpConfigOptions(update)
+    if (next.length === 0) return
+    const before = new Map(this._configOptions.map((c) => [c.id, c.currentValue]))
+    this._configOptions = next
+    const changed = Object.fromEntries(next
+      .filter((c) => typeof c.currentValue === 'string' && before.has(c.id) && before.get(c.id) !== c.currentValue)
+      .map((c) => [c.id, c.currentValue as string]))
+    // One write at a time, in the order Codex changed them: each reads the record the one
+    // before it wrote, so a quick plan-then-default never leaves the record on plan.
+    this._providerConfigWrites = this._providerConfigWrites
+      .then(() => this.persistProviderConfig(changed))
+      .catch(() => {})
+  }
+
+  private _providerConfigWrites: Promise<void> = Promise.resolve()
+
+  private async persistProviderConfig(changed: Record<string, string>): Promise<void> {
+    const sid = this.trackingId()
+    if (Object.keys(changed).length > 0) {
+      const record = await getSessionByClaudeId(sid).catch(() => undefined)
+      await updateSessionRecord(sid, { acpConfig: { ...(record?.acpConfig ?? this.cfg.acpConfig ?? {}), ...changed } }).catch(() => {})
+      // Plan vs exec is mirrored onto the record's mode as a person's pick is (session-extras.ts).
+      const collaboration = changed.collaboration_mode
+      if (record && collaboration !== undefined) {
+        const mirrored: SessionMode = collaboration === 'plan' ? 'plan' : record.mode === 'plan' ? 'default' : record.mode ?? 'default'
+        if (mirrored !== record.mode) {
+          this._mode = mirrored
+          const { persistSessionModeChange } = await import('../core/sessions/session-lifecycle.js')
+          await persistSessionModeChange(record, sid, mirrored, { modeChosen: record.modeChosen === true || mirrored !== 'default' }).catch(() => {})
+        }
+      }
+    }
+    bus.emit(EventNames.SESSION_CONTROLS_CHANGED, { sessionId: sid, taskId: this.taskId }, ['web-ui'], { source: 'session-runner' })
   }
 
   /** The model the meter prices and names: the family id, without its effort. */
@@ -1531,8 +1576,11 @@ export class AcpSession {
       walnutApiEnv: walnutApiEnvForSession(this.host),
       codexModelPrefix: codex.prefix,
     })
-    if (!overlay) return managed
-    return { ...overlay, ...(managed ?? {}) }
+    // Walnut's own app-server client, or the codex-acp adapter (codex-app-server/transport.ts),
+    // read from the same engines.codex as the provider (the Mac's copy off the Mac).
+    const transport = { [CODEX_TRANSPORT_ENV]: resolveCodexTransport(walnutConfig, process.env, { adapterGiven: !!this.cfg.artifacts }) }
+    if (!overlay) return { ...(managed ?? {}), ...transport }
+    return { ...overlay, ...(managed ?? {}), ...transport }
   }
 
   /**
@@ -2488,10 +2536,12 @@ export class AcpSession {
   }
 
   /**
-   * Hard-abort the active worker process group. The next prompt lazily loads
-   * the durable provider thread in a replacement worker.
+   * Stop the running turn. A worker that ends the turn itself (a direct Codex
+   * session) is kept; any other, or any with `hard` (a restart), has its process
+   * group killed, and the next prompt lazily loads the durable provider thread in
+   * a replacement worker.
    */
-  async abortTurn(): Promise<void> {
+  async abortTurn(options: { hard?: boolean } = {}): Promise<void> {
     this._controlEpoch++
     if (this._selfReport) {
       await this.cancelSelfReport('self-report aborted')
@@ -2507,9 +2557,17 @@ export class AcpSession {
     const resp = await conn.send('acpCancel', {
       sid: this.runtimeId,
       commandId: `qx-${crypto.randomBytes(6).toString('hex')}`,
+      ...(options.hard ? { hard: true } : {}),
     })
     if (!resp.ok && (resp as { errorKind?: string }).errorKind !== 'no_worker') {
       throw new Error('acpCancel failed: ' + resp.error)
+    }
+    // A worker that ended the turn itself lives on (a direct Codex session): the next message reuses it.
+    if (resp.ok && (resp as { result?: { workerKept?: boolean } }).result?.workerKept === true) {
+      this._turnActive = false
+      this._pendingPermissions.clear()
+      this.persistPendingPermission(true)
+      return
     }
     this._active = false
     this._turnActive = false
@@ -2611,7 +2669,7 @@ export class AcpSession {
   async restart(): Promise<string> {
     if (this._establishing) await this._establishing
     // acpCancel confirms process-group exit; acpStop only acknowledges shutdown intent.
-    await this.abortTurn()
+    await this.abortTurn({ hard: true })
     await this._cursorCommit
     return this.establish()
   }
@@ -2816,6 +2874,10 @@ export class AcpSession {
       sid: this.runtimeId,
       commandId: `qx-control-${crypto.randomBytes(6).toString('hex')}`,
     })
+    if (resp.ok && (resp as { result?: { workerKept?: boolean } }).result?.workerKept === true) {
+      this._turnActive = false
+      return
+    }
     this._active = false
     this._turnActive = false
     this._pendingPermissions.clear()

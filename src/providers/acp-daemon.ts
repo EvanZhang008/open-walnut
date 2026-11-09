@@ -41,6 +41,8 @@ const ACP_TURN_OPEN_KILL_MS = 24 * 60 * 60 * 1000
 const ACP_SWEEP_INTERVAL_MS = 60 * 1000
 const OP_TIMEOUT_MS = 120_000                  // session/load against a real provider can be slow
 const CANCEL_RPC_TIMEOUT_MS = 1_000
+/** A worker that stops its turn itself (a direct Codex session: turn/interrupt) gets this long before the hard abort. */
+const GRACEFUL_CANCEL_RPC_TIMEOUT_MS = 15_000
 const ABORT_WAIT_MS = 750
 const KILL_GRACE_MS = 750
 
@@ -64,6 +66,11 @@ interface AcpWorkerEntry<W> {
   terminalVersion: number
   activeCommandId: string | null
   activeControlCommandId: string | null
+  /**
+   * The worker ends a turn itself and lives on (its initialize said `_meta.walnut.gracefulCancel`):
+   * a stop waits for that before tearing the process group down.
+   */
+  gracefulCancel?: boolean
   /** The worker's own name (its script's basename), its adapter's command and its start time, kept in the pid file. */
   cmd: string
   adapter: string
@@ -512,6 +519,8 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
       reapWorker(sid, 'initialize-failed')
       return { ok: false, error: 'acp initialize failed: ' + (init.error?.message ?? '?'), errorKind: init.error?.kind }
     }
+    const initMeta = (init.result as { _meta?: { walnut?: { gracefulCancel?: unknown } } } | undefined)?._meta
+    entry.gracefulCancel = initMeta?.walnut?.gracefulCancel === true
     // Same mount list on both paths: ACP's mcpServers is the complete set for
     // the session, so omitting it on load would drop the mounts on cold resume.
     // A thread a failed load replaced, and that never got a turn of its own,
@@ -574,6 +583,11 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
    * tears down the worker process group to guarantee no tool descendant lives
    * past the interruption boundary. The provider session ID remains durable
    * in the Walnut record and is lazily loaded by the replacement worker.
+   *
+   * A worker that stops the turn itself (gracefulCancel: Codex's turn/interrupt,
+   * which also ends Codex's commands) is asked first and kept when its turn ended
+   * in time, so the next message needs no cold start; only `hard` (a restart) or a
+   * turn it could not end goes on to the teardown.
    */
   async function acpAbortTurn(
     sid: string,
@@ -586,9 +600,24 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     const beforeTerminal = entry.terminalVersion
     const interruptedCommandId = entry.activeCommandId ?? undefined
     const interruptedControlCommandId = entry.activeControlCommandId ?? undefined
+    const hard = params?.hard === true
+    const workerParams = params ? Object.fromEntries(Object.entries(params).filter(([k]) => k !== 'hard')) : params
+    const forced = entry.gracefulCancel && !hard
+    if (forced) {
+      const graceful = await rpc(entry, 'cancel', workerParams, GRACEFUL_CANCEL_RPC_TIMEOUT_MS)
+      const closed = graceful.ok && (graceful.result as { turnClosed?: unknown } | undefined)?.turnClosed === true
+      if (closed && entry.state === 'running') {
+        try { pushJournal(entry, fs.statSync(entry.journalPath).size) } catch {}
+        log('info', 'acp: turn stopped by the worker; worker kept', { sid })
+        return { id: graceful.id, ok: true, result: { aborted: true, providerClosedTurn: true, cancelAccepted: true, workerKept: true } }
+      }
+      log('warn', 'acp: worker did not stop the turn in time; tearing it down', { sid, error: graceful.error?.message })
+    }
     // Cancel is advisory and must not inherit the generic 120s provider-op
     // timeout. A wedged worker gets a short chance before hard termination.
-    const cancel = await rpc(entry, 'cancel', params, cancelRpcTimeoutMs)
+    const cancel = entry.gracefulCancel && !hard
+      ? { id: -1, ok: true } as WorkerRpcResponse
+      : await rpc(entry, 'cancel', workerParams, cancelRpcTimeoutMs)
     await waitFor(() => entry.terminalVersion > beforeTerminal, abortWaitMs)
 
     entry.aborting = true
@@ -613,6 +642,7 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
           type: 'turn-interrupted',
           reason: 'user-cancelled',
           commandId: interruptedCommandId,
+          ...(forced ? { forced: true } : {}),
         })
       }
       if (interruptedControlCommandId || interruptedCommandId) {

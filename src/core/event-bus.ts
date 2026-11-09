@@ -92,6 +92,8 @@ export const EventNames = {
   SESSION_TURN_SPEED: 'session:turn-speed',
   SESSION_LIVE_ACTIVITY: 'session:live-activity',
   SESSION_SETTINGS_APPLIED: 'session:settings-applied',
+  /** A session's provider controls changed on the provider's side (Codex leaving plan mode): read them again. */
+  SESSION_CONTROLS_CHANGED: 'session:controls-changed',
   SESSION_RECAP_UPDATED: 'session:recap-updated',
   SESSION_TURN_SETTLED: 'session:turn-settled',
   SESSION_MODEL_CATALOG: 'session:model-catalog',

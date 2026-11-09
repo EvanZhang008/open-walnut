@@ -21,6 +21,9 @@ const KNOWN: Record<string, { applies: string } | { namesOnly: string }> = {
   'src/providers/engine-model-probe.ts': { applies: 'the model menu probe: the same env a session start gets' },
   'src/providers/codex-model-probe.ts': { applies: 'the daemon side of the probe: codexProviderStartupArgs puts the CODEX_CONFIG provider on its app-server' },
   'src/providers/codex-engine-config.ts': { applies: 'the function itself' },
+  'src/providers/codex-app-server/launch.ts': { applies: 'the direct Codex session\'s app-server: codexProviderStartupArgs puts the CODEX_CONFIG provider on it, the env comes from acp-session.ts' },
+  'src/providers/acp-worker/worker.ts': { namesOnly: 'picks the direct client when the start says app-server; the launch is codex-app-server/launch.ts' },
+  'src/providers/codex-app-server/transport.ts': { namesOnly: 'names the transport setting\'s values; starts nothing' },
   'src/core/agents/engine-probe.ts': { namesOnly: 'checks the bundled adapter file exists; starts nothing' },
   'src/core/agents/host-adapter-spec.ts': { namesOnly: 'names the adapter bundle another host runs; its env comes from acp-session.ts' },
   'src/providers/acp-host-artifacts.ts': { namesOnly: 'finds the bundle and codex on a host; the env it runs with comes from the start' },
@@ -86,7 +89,7 @@ describe('every Codex spawn applies engines.codex through one function', () => {
     for (const [file, role] of Object.entries(KNOWN)) {
       if (!('applies' in role)) continue
       const code = files.find((f) => f.file === file)!.code
-      const uses = file.endsWith('codex-model-probe.ts') ? /codexProviderStartupArgs\(/ : file.endsWith('codex-engine-config.ts') ? /function resolveCodexEngine\(/ : /resolveCodexEngine\(/
+      const uses = file.endsWith('codex-model-probe.ts') || file.endsWith('codex-app-server/launch.ts') ? /codexProviderStartupArgs\(/ : file.endsWith('codex-engine-config.ts') ? /function resolveCodexEngine\(/ : /resolveCodexEngine\(/
       expect([file, uses.test(code)]).toEqual([file, true])
     }
   })

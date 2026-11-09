@@ -37,6 +37,11 @@ import { AcpJournal, readJournal } from './journal.js'
 import { redactSensitiveText } from '../../logging/redact.js'
 import { mergeAcpSpawnEnv, OP_REFUSAL_KINDS, snapshotAcpTurnUsage } from './protocol.js'
 import { matchesUsageLimitText, parseUsageLimitReset } from '../usage-limit-text.js'
+import { CodexDirectConnection, type AcpClientHandler } from '../codex-app-server/connection.js'
+import { CodexLaunchError, prepareCodexLaunch } from '../codex-app-server/launch.js'
+import { AppServerRpcError } from '../codex-app-server/rpc.js'
+import { classifyCodexFailure } from '../codex-app-server/errors.js'
+import { CODEX_TRANSPORT_ENV, describeResumeFailure } from '../codex-app-server/transport.js'
 import type {
   AcpMcpServer,
   WorkerRequest,
@@ -82,6 +87,8 @@ export class AcpWorker {
   private journal: AcpJournal
   private adapter: ChildProcess | null = null
   private conn: ClientSideConnection | null = null
+  /** Set when this session talks to `codex app-server` itself (codex-app-server/connection.ts), in the adapter's place. */
+  private direct: CodexDirectConnection | null = null
   private providerSessionId: string | null = null
   private cwd = ''
   private turnActive = false
@@ -115,6 +122,7 @@ export class AcpWorker {
   /** Set by shutdown: the adapter's exit is then the one asked for. */
   private shuttingDown = false
 
+  private readonly journalPath: string
   constructor(
     journalPath: string,
     onJournalAppend: (offset: number) => void = () => {},
@@ -122,6 +130,7 @@ export class AcpWorker {
     onAdapterGone: () => void = () => {},
     onProviderError: (report: ProviderErrorReport) => void = () => {},
   ) {
+    this.journalPath = journalPath
     this.journal = new AcpJournal(journalPath)
     this.onJournalAppend = onJournalAppend
     this.onAdapterStderr = onAdapterStderr
@@ -206,6 +215,7 @@ export class AcpWorker {
   private async opInitialize(params: InitializeParams): Promise<unknown> {
     if (this.conn) return { alreadyInitialized: true }
     this.cwd = params.cwd
+    if (params.env?.[CODEX_TRANSPORT_ENV] === 'app-server') return this.initializeDirect(params)
 
     const [cmd, ...cmdArgs] = params.adapterCommand ?? []
     if (!cmd) throw <WorkerError>{ kind: 'adapter_spawn_failed', message: 'empty adapterCommand' }
@@ -221,27 +231,15 @@ export class AcpWorker {
       adapter.once('error', (e) => reject(<WorkerError>{ kind: 'adapter_spawn_failed', message: e.message }))
     })
     this.adapter = adapter
-    adapter.on('exit', (code) => {
+    adapter.on('exit', () => {
       // Adapter death mid-turn = the turn is gone (no hot reattach exists).
-      if (this.turnActive) {
-        const commandId = this.turnCommandId ?? undefined
-        this.turnActive = false
-        this.turnCommandId = null
-        this.journal.appendMeta({ type: 'turn-interrupted', reason: 'worker-crash', commandId })
-        this.notifyJournal()
-      }
-      if (this.controlPrompt) {
-        this.finishControlPrompt(this.controlPrompt.commandId, 'worker-crash', 'ACP adapter exited')
-      }
-      this.failAllPendingPermissions()
-      void code
       // A worker is one adapter: without it every later op fails as "protocol"
       // while the worker still reads as alive, so the daemon never cold-resumes
       // it (2026-10-30: an OpenCode lane whose provider died answered every
       // later message with an instant failure). Going away hands it to the
       // daemon's reap, and the next send starts a fresh worker that loads the
       // session again.
-      if (!this.shuttingDown) this.onAdapterGone()
+      this.adapterExited('ACP adapter exited')
     })
     // Adapter stderr may contain credentials or auth diagnostics. Drain it so
     // the child cannot block, but expose only a byte count to the daemon.
@@ -267,6 +265,47 @@ export class AcpWorker {
     this.initializeResponse = initResp
     this.capabilities = snapshotAcpCapabilities(initResp)
     return initResp
+  }
+
+  /** The adapter (or the app-server it stood for) is gone: the turn with it, and this worker. */
+  private adapterExited(what: string): void {
+    if (this.turnActive) {
+      const commandId = this.turnCommandId ?? undefined
+      this.turnActive = false
+      this.turnCommandId = null
+      this.journal.appendMeta({ type: 'turn-interrupted', reason: 'worker-crash', commandId })
+      this.notifyJournal()
+    }
+    if (this.controlPrompt) this.finishControlPrompt(this.controlPrompt.commandId, 'worker-crash', what)
+    this.failAllPendingPermissions()
+    if (!this.shuttingDown) this.onAdapterGone()
+  }
+
+  private async initializeDirect(params: InitializeParams): Promise<unknown> {
+    const env = mergeAcpSpawnEnv(process.env, params.env)
+    let launch
+    try {
+      launch = await prepareCodexLaunch(env)
+    } catch (e) {
+      if (e instanceof CodexLaunchError) throw <WorkerError>{ kind: e.kind, message: e.message, walnutWords: true }
+      throw e
+    }
+    const direct = new CodexDirectConnection(launch, params.cwd, env, this.buildClientHandler() as unknown as AcpClientHandler, {
+      // The failed turn was journaled first (its prompt rejected); then this worker goes, and the next send starts a fresh one.
+      onExit: () => this.adapterExited('Codex app-server exited'),
+      onStderr: (bytes) => this.onAdapterStderr(bytes),
+    })
+    try {
+      const initResp = await direct.initialize()
+      this.direct = direct
+      this.conn = direct as unknown as ClientSideConnection
+      this.initializeResponse = initResp
+      this.capabilities = snapshotAcpCapabilities(initResp)
+      return initResp
+    } catch (e) {
+      direct.kill()
+      throw <WorkerError>{ kind: 'adapter_spawn_failed', message: `Codex app-server did not start: ${e instanceof Error ? e.message : String(e)}`, walnutWords: true }
+    }
   }
 
   private initializeResponse: unknown = null
@@ -326,9 +365,12 @@ export class AcpWorker {
         cwd: params.cwd || this.cwd,
         mcpServers: this.mcpServersFor(params),
       }
-      const resp = useLoad
-        ? await conn.loadSession(request)
-        : await conn.resumeSession(request)
+      const resp = this.direct
+        // The app-server resumes without a replay; it sends the past turns only when the journal lost them.
+        ? await this.direct.loadSession({ sessionId: request.sessionId, cwd: request.cwd, mcpServers: params.mcpServers, replay: !this.skipReplayFrames })
+        : useLoad
+          ? await conn.loadSession(request)
+          : await conn.resumeSession(request)
       this.providerSessionId = params.providerSessionId
       this.sessionResponse = resp
       this.models = snapshotAcpModels(resp)
@@ -337,6 +379,7 @@ export class AcpWorker {
       this.notifyJournal()
       return resp
     } catch (e) {
+      if (this.direct) throw this.directLoadFailure(params.providerSessionId, e)
       if (classifyPromptRejection(e) === 'auth_required' || ['provider_incompatible', 'provider_missing'].includes(String(asObject(asObject(e).data).walnutError))) throw e
       // The words ride the adapter's error data, which the wrap below drops.
       this.reportProviderError('loadSession', 'load_failed', e)
@@ -345,6 +388,45 @@ export class AcpWorker {
       this.loadingSession = false
       this.skipReplayFrames = false
     }
+  }
+
+  /**
+   * Why a direct resume failed, said plainly. Only a thread Codex does not have is
+   * `load_failed` (the caller then starts a fresh thread, and the journal's
+   * resume-failed record says why in the chat); a timeout or a dead app-server is
+   * a failure of this start, so nothing replaces the conversation behind its back.
+   * A thread Codex has but cannot resume (an unreadable copy, a provider no longer
+   * configured) fails the start too, and only the RESUME_GIVE_UP-th failure in a row
+   * for the same reason moves on to a new thread, saying so and where the old one is.
+   */
+  private directLoadFailure(threadId: string, e: unknown): WorkerError {
+    this.reportProviderError('loadSession', 'load_failed', e)
+    const reason = describeResumeFailure(e)
+    if (reason.kind === 'not_found') {
+      this.journal.appendMeta({ type: 'resume-failed', providerSessionId: threadId, reason: reason.words })
+      this.notifyJournal()
+      return { kind: 'load_failed', message: reason.words, walnutWords: true }
+    }
+    if (reason.kind === 'other') {
+      const inARow = resumeErrorsInARow(this.journalPath, threadId, reason.words) + 1
+      this.journal.appendMeta({ type: 'resume-error', providerSessionId: threadId, reason: reason.words })
+      this.notifyJournal()
+      if (inARow >= RESUME_GIVE_UP) {
+        const words = `${reason.words}. It failed ${inARow} times in a row; Codex still keeps the earlier conversation on this host as thread ${threadId}`
+        this.journal.appendMeta({ type: 'resume-failed', providerSessionId: threadId, reason: words })
+        this.notifyJournal()
+        return { kind: 'load_failed', message: words, walnutWords: true }
+      }
+      if (classifyPromptRejection(e) === 'auth_required') return { kind: 'auth_required', message: 'ACP provider authentication is required' }
+      // Say what happens next: the next message tries again, and the last try moves on.
+      const left = RESUME_GIVE_UP - inARow
+      const next = left === 1
+        ? 'The next message tries once more; if that fails too, Walnut starts a new conversation and names this thread.'
+        : `The next message tries again; after ${left} more failures in a row Walnut starts a new conversation and names this thread.`
+      return { kind: 'protocol', message: `${reason.words}. ${next}`, walnutWords: true }
+    }
+    if (classifyPromptRejection(e) === 'auth_required') return { kind: 'auth_required', message: 'ACP provider authentication is required' }
+    return { kind: reason.kind === 'exited' ? 'app_server_exited' : 'protocol', message: reason.words, walnutWords: true }
   }
 
   private async opPrompt(params: PromptParams): Promise<unknown> {
@@ -430,7 +512,7 @@ export class AcpWorker {
       this.turnCommandId = null
       this.lastEnded = 'turn'
       // Only the error category is safe to persist; provider diagnostics may contain credentials.
-      const kind = classifyPromptRejection(e)
+      const kind = this.direct ? classifyDirectRejection(e) : classifyPromptRejection(e)
       this.reportProviderError('prompt', kind, e)
       // A usage limit's reset is read here, on the host: Codex writes it in the host's local time.
       const resetsAt = kind === 'usage_limit' ? parseUsageLimitReset(rejectionText(e), Date.now()) : undefined
@@ -481,6 +563,28 @@ export class AcpWorker {
       throw <WorkerError>{ kind: 'protocol', message: 'steer requires walnutMessageId' }
     }
 
+    const accepted = {
+      accepted: true,
+      steered: true,
+      commandId: params.commandId,
+      walnutMessageId: params.walnutMessageId,
+    }
+    let recorded = false
+    // Recorded once: when the direct client sees Codex report the steer (before anything Codex
+    // sends after it, so the person's line comes ahead of its answer), else on the answer.
+    const record = () => {
+      if (recorded) return
+      recorded = true
+      this.rememberAcceptedCommand('steer', params.commandId, accepted)
+      this.journal.appendMeta({
+        type: 'steer-accepted',
+        commandId: params.commandId,
+        walnutMessageId: params.walnutMessageId,
+        text: params.text,
+      })
+      this.notifyJournal()
+    }
+
     let outcome: string | undefined
     try {
       const resp = await conn.extMethod('_session/steering', {
@@ -489,6 +593,7 @@ export class AcpWorker {
         // Never a turn of its own: the caller sends a text that missed the live turn as its next
         // prompt, so an adapter that started one ran it twice (Walnut's codex-acp patch honours it).
         injectOnly: true,
+        ...(this.direct ? { onTaken: record } : {}),
       })
       outcome = (resp as { outcome?: string } | undefined)?.outcome
     } catch (e) {
@@ -502,20 +607,7 @@ export class AcpWorker {
       throw <WorkerError>{ kind: 'steer_race', message: 'live turn ended before steering applied' }
     }
 
-    const accepted = {
-      accepted: true,
-      steered: true,
-      commandId: params.commandId,
-      walnutMessageId: params.walnutMessageId,
-    }
-    this.rememberAcceptedCommand('steer', params.commandId, accepted)
-    this.journal.appendMeta({
-      type: 'steer-accepted',
-      commandId: params.commandId,
-      walnutMessageId: params.walnutMessageId,
-      text: params.text,
-    })
-    this.notifyJournal()
+    record()
     return accepted
   }
 
@@ -609,6 +701,14 @@ export class AcpWorker {
     if (dup) return dup
     const conn = this.requireConn()
     this.acceptCommand('cancel', params.commandId)
+    if (this.direct) {
+      // turn/interrupt, answered by the turn's own end: the worker lives on (acp-daemon.ts acpAbortTurn).
+      this.failAllPendingPermissions()
+      const { turnClosed } = this.providerSessionId && (this.turnActive || this.controlPrompt)
+        ? await this.direct.cancel({ sessionId: this.providerSessionId })
+        : { turnClosed: true }
+      return { cancelled: true, turnClosed }
+    }
     if (this.providerSessionId && (this.turnActive || this.controlPrompt)) {
       await conn.cancel({ sessionId: this.providerSessionId })
       // Spec: client MUST answer outstanding permission requests with cancelled.
@@ -692,7 +792,7 @@ export class AcpWorker {
   private opGetState(): WorkerStateSnapshot {
     return {
       providerSessionId: this.providerSessionId,
-      adapterPid: this.adapter?.pid ?? null,
+      adapterPid: this.adapter?.pid ?? this.direct?.pid ?? null,
       turnActive: this.turnActive,
       controlActive: this.controlPrompt !== null,
       pendingPermissions: [...this.pendingPermissions.values()].map((p) => p.snapshot),
@@ -722,6 +822,7 @@ export class AcpWorker {
       this.finishControlPrompt(this.controlPrompt.commandId, 'shutdown')
     }
     this.failAllPendingPermissions()
+    if (this.direct) await this.direct.close()
     // Close adapter stdin → adapter exits → provider runtime torn down (~2s in codex-acp).
     this.adapter?.stdin?.end()
     const adapter = this.adapter
@@ -759,6 +860,13 @@ export class AcpWorker {
             ...(update.kind !== undefined ? { kind: update.kind } : {}),
             ...(update.rawInput !== undefined ? { rawInput: update.rawInput } : {}),
           })
+        } else if (update.sessionUpdate === 'config_option_update') {
+          // A control the provider changed itself: the state snapshot follows (a reattach reads it).
+          const next = snapshotAcpConfigOptions(update)
+          if (next.length > 0) {
+            this.configOptions = next
+            this.sessionResponse = { ...asObject(this.sessionResponse), configOptions: next }
+          }
         }
         // Raw to journal; zero interpretation here.
         this.journal.appendAcpFrame(
@@ -997,6 +1105,32 @@ export class AcpWorker {
   private err(req: WorkerRequest, error: WorkerError): WorkerResponse { return { id: req.id, ok: false, error } }
 }
 
+/** Resumes of a direct Codex thread that failed in a row with the same reason before it gives up on it. */
+const RESUME_GIVE_UP = 3
+
+/**
+ * How many of the latest resumes of `threadId` failed in a row with these words: the run
+ * at the end only (another reason, a load or a start in between ends a run).
+ */
+function resumeErrorsInARow(journalPath: string, threadId: string, words: string): number {
+  let run = 0
+  let reason: string | undefined
+  try {
+    for (const { record } of readJournal(journalPath).records) {
+      if (record.kind !== 'meta') continue
+      const event = record.event
+      if (event.type === 'resume-error' && event.providerSessionId === threadId) {
+        run = event.reason === reason ? run + 1 : 1
+        reason = event.reason
+      } else if (event.type === 'session-loaded' || event.type === 'session-created' || event.type === 'resume-failed') {
+        run = 0
+        reason = undefined
+      }
+    }
+  } catch { /* unreadable: count from here */ }
+  return reason === words ? run : 0
+}
+
 /** True when the ON-DISK journal holds conversation evidence (a session
  *  created/loaded or an accepted prompt) — the precondition for dropping a
  *  resume's replay burst. Re-reads the file rather than trusting in-memory
@@ -1045,7 +1179,9 @@ export function providerErrorDetail(error: unknown): string | undefined {
 }
 
 function sanitizeWorkerError(error: WorkerError, provider?: unknown): WorkerError {
-  const message = error.kind === 'provider_incompatible' && provider === 'pi'
+  // Walnut's own words (a direct Codex start: a version, a missing binary, a thread it cannot resume) name no secret.
+  const message = error.walnutWords ? error.message
+    : error.kind === 'provider_incompatible' && provider === 'pi'
     ? 'Pi 0.80.4 or newer is required; update the Pi CLI.'
     : safeWorkerErrorMessage(error.kind)
   return { kind: error.kind, message }
@@ -1073,6 +1209,16 @@ function rejectionText(error: unknown): string {
   return parts.filter((p): p is string => typeof p === 'string').join(' \n')
 }
 
+/** A direct Codex turn's failure kind, from Codex's own error code first (codex-app-server/errors.ts). */
+export function classifyDirectRejection(error: unknown): WorkerError['kind'] {
+  if (error instanceof AppServerRpcError) {
+    if (error.exited) return 'app_server_exited'
+    if (error.timedOut) return 'turn_stalled'
+  }
+  if (matchesUsageLimitText(rejectionText(error))) return 'usage_limit'
+  return classifyCodexFailure(asObject(error).data) ?? classifyPromptRejection(error)
+}
+
 function safeWorkerErrorMessage(kind: WorkerError['kind']): string {
   switch (kind) {
     case 'adapter_spawn_failed': return 'ACP adapter could not be started'
@@ -1087,6 +1233,13 @@ function safeWorkerErrorMessage(kind: WorkerError['kind']): string {
     case 'steer_race': return 'ACP live turn ended before steering applied'
     case 'protocol': return 'ACP provider protocol operation failed'
     case 'usage_limit': return 'Usage limit reached'
+    case 'rate_limited': return 'Codex rate limit reached (429); the turn can be tried again shortly'
+    case 'overloaded': return 'Codex model service is overloaded (503); the turn can be tried again'
+    case 'server_error': return 'Codex model service failed (internal server error); the turn can be tried again'
+    case 'connection': return 'Codex lost the connection to the model service (connection error)'
+    case 'context_window': return 'Codex context window exceeded: the conversation is too long for the model'
+    case 'app_server_exited': return 'Codex app-server stopped unexpectedly (connection closed); the next message starts it again'
+    case 'turn_stalled': return 'Codex sent nothing for too long, so Walnut stopped the turn (operation timed out)'
     case 'internal': return 'ACP worker operation failed'
   }
 }

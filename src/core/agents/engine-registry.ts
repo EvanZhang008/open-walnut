@@ -22,6 +22,7 @@ import { SESSION_ENGINE_IDS, type SessionEngine } from '../types.js';
 import type { EngineSettingsSchema } from './engine-settings-schema.js';
 import { CLAUDE_SETTINGS } from './engine-settings/claude.js';
 import { CODEX_SETTINGS } from './engine-settings/codex.js';
+import { CODEX_COMMANDS, type EngineSlashCommand } from './codex-slash-commands.js';
 import { PI_SETTINGS } from './engine-settings/pi.js';
 
 /** How the engine's runtime is reached (which provider class / daemon command family). */
@@ -125,6 +126,11 @@ export interface EngineCapabilities {
   /** How the ACP adapter process is obtained. Absent for native engines. */
   readonly acpAdapter?: EngineAcpAdapter;
   /**
+   * The slash commands the engine answers itself, which the composer's palette lists for its
+   * sessions instead of the folder's Claude Code skills. Absent = the palette's usual scan.
+   */
+  readonly slashCommands?: ReadonlyArray<EngineSlashCommand>;
+  /**
    * The engine's OWN settings (what its CLI's config screen edits), declared as
    * data so Walnut can read and write them in the engine's files on the host
    * where its sessions run (engine-settings-service.ts). Absent = the engine
@@ -202,6 +208,7 @@ const CODEX: EngineCapabilities = {
   id: 'codex',
   displayName: 'Codex',
   rolloutUsage: true,
+  slashCommands: CODEX_COMMANDS,
   settings: CODEX_SETTINGS,
 };
 

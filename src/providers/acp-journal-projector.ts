@@ -157,6 +157,8 @@ export class AcpJournalProjector {
   private permissionOptionKinds = new Map<string, Map<string, string>>()
   /** The provider thread the journal last named (session-created / -loaded). */
   private threadId: string | undefined
+  /** Why the last resume failed (a direct Codex session says it), for the new thread's notice. */
+  private resumeFailure: string | undefined
 
   constructor(readonly runtimeId: string) {}
 
@@ -232,7 +234,9 @@ export class AcpJournalProjector {
         const out: AcpProjectedEvent[] = this.turnHasError
           ? []
           : [
-              this.system(record.ts, commandId, interruptionMessage(event.reason)),
+              this.system(record.ts, commandId, event.forced
+                ? 'Turn stopped: the agent did not stop in time, so Walnut ended its process. The next message starts it again.'
+                : interruptionMessage(event.reason)),
               {
                 type: 'result',
                 ts: record.ts,
@@ -272,6 +276,9 @@ export class AcpJournalProjector {
           allowed: false,
           cancelled: true,
         }]
+      case 'resume-failed':
+        this.resumeFailure = event.reason
+        return []
       case 'session-created':
       case 'session-loaded':
         return this.projectThread(record.ts, event.type, event.providerSessionId)
@@ -473,6 +480,8 @@ export class AcpJournalProjector {
   private projectThread(ts: number, type: 'session-created' | 'session-loaded', id: string): AcpProjectedEvent[] {
     const previous = this.threadId
     this.threadId = id
+    const why = this.resumeFailure
+    this.resumeFailure = undefined
     if (!previous || previous === id) return []
     const fresh = type === 'session-created'
     return [{
@@ -483,7 +492,9 @@ export class AcpJournalProjector {
       msgId: this.id('thread', id, String(ts)),
       variant: fresh ? 'error' : 'info',
       message: fresh
-        ? 'Could not resume the earlier conversation, so a new provider thread was started. The model does not see the messages above.'
+        ? why
+          ? `Could not resume the earlier conversation: ${why.replace(/\.$/, '')}. A new provider thread was started, and the model does not see the messages above.`
+          : 'Could not resume the earlier conversation, so a new provider thread was started. The model does not see the messages above.'
         : 'Resumed the earlier conversation in its own provider thread.',
     }]
   }

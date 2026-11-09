@@ -5,6 +5,7 @@ import {
   type SessionControl,
 } from '@/api/sessions';
 import { useEngineCatalog } from '@/hooks/useEngineCatalog';
+import { wsClient } from '@/api/ws';
 import { useNotifications } from '@/contexts/notifications';
 import { engineCaps } from '@/utils/engine-capabilities';
 import { log } from '@/utils/log';
@@ -41,7 +42,21 @@ export async function refreshSessionControls(sessionId: string): Promise<void> {
   if (requestVersions.get(sessionId) === version) publishControls(sessionId, response.controls);
 }
 
+let followingProvider = false;
+/** The provider changed a control itself (Codex leaving plan mode): every shown copy reads it again. */
+function followProviderChanges(): void {
+  if (followingProvider) return;
+  followingProvider = true;
+  wsClient.onEvent('session:controls-changed', (data) => {
+    const sessionId = (data as { sessionId?: unknown } | null)?.sessionId;
+    if (typeof sessionId === 'string' && controlsBySession.has(sessionId)) {
+      void refreshSessionControls(sessionId).catch(() => {});
+    }
+  });
+}
+
 function subscribeControls(listener: () => void): () => void {
+  followProviderChanges();
   listeners.add(listener);
   return () => { listeners.delete(listener); };
 }

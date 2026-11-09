@@ -47,6 +47,19 @@ describe('ACP journal projector', () => {
     ]).filter((m) => m.role === 'system')).toEqual([])
   })
 
+  it('names why the resume failed when the worker said so, once', () => {
+    const notices = projectAcpJournalHistory('runtime-thread', [
+      meta(1, { type: 'session-created', providerSessionId: 'thread-a' } as never),
+      meta(2, { type: 'resume-failed', providerSessionId: 'thread-a', reason: 'Codex has no saved copy of it on this host (no rollout found for thread id thread-a).' } as never),
+      meta(3, { type: 'session-created', providerSessionId: 'thread-b' } as never),
+      meta(4, { type: 'session-created', providerSessionId: 'thread-c' } as never),
+    ]).filter((m) => m.role === 'system').map((m) => m.text)
+    expect(notices).toEqual([
+      'Could not resume the earlier conversation: Codex has no saved copy of it on this host (no rollout found for thread id thread-a). A new provider thread was started, and the model does not see the messages above.',
+      'Could not resume the earlier conversation, so a new provider thread was started. The model does not see the messages above.',
+    ])
+  })
+
   it('gives every thread change its own id, a thread that comes back twice included', () => {
     const notices = projectAcpJournalHistory('runtime-thread', [
       meta(1, { type: 'session-created', providerSessionId: 'thread-a' } as never),
@@ -554,6 +567,17 @@ describe('ACP journal projector', () => {
         commandId: 'cmd-uncertain',
         stopReason: 'interrupted',
       }),
+    ]))
+  })
+
+  it('a stop that had to end the agent\'s process says so, not only "interrupted by user"', () => {
+    const projector = new AcpJournalProjector('runtime-forced')
+    const events = [
+      ...projector.project(meta(1, { type: 'prompt-accepted', commandId: 'cmd-forced', walnutMessageId: 'qm-forced', text: 'long work' })),
+      ...projector.project(meta(2, { type: 'turn-interrupted', commandId: 'cmd-forced', reason: 'user-cancelled', forced: true })),
+    ]
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'system', commandId: 'cmd-forced', message: expect.stringMatching(/did not stop in time.*ended its process.*next message starts it again/) }),
     ]))
   })
 })

@@ -445,6 +445,11 @@ export async function buildSessionSlashCommandItems(opts: {
     const { SessionControlError } = await import('../../core/sessions/session-controls.js')
     throw new SessionControlError('session not found', 404)
   }
+  // An engine that answers its own commands (Codex) lists those, never the Claude Code skills
+  // a scan of its folder finds.
+  const { engineCaps } = await import('../../core/agents/engine-registry.js')
+  const own = engineCaps(record.engine).slashCommands
+  if (own) return { items: own.map((c) => ({ ...c, source: 'built-in' as const })), source: 'cli' }
   const { sessionRunner } = await import('../../providers/claude-code-session.js')
   const live = sessionRunner.findByClaudeId(sessionId)
   let cliNames = live?.cliSlashCommands?.names ?? null

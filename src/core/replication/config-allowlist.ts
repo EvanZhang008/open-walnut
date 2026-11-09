@@ -44,7 +44,7 @@ const ALLOW: Record<string, AllowSpec> = {
   // Where each engine sends its requests, and its default model: a Codex session the
   // companion starts must use the Mac's provider (providers/codex-engine-source.ts).
   // `withheld` is the copy's own mark for a provider that held a credential (engineRows).
-  engines: { '*': { provider: { base_url: true, name: true, wire_api: true, env_key: true, model_prefix: true, withheld: true }, model: true, effort: true } },
+  engines: { '*': { provider: { base_url: true, name: true, wire_api: true, env_key: true, model_prefix: true, withheld: true }, model: true, effort: true, transport: true } },
   agent: {
     // region, maxTokens and available_models are retired (CONFIG_COPY_RETIRED_FIELDS), but an
     // older leader still sends them in this row, and a row with a field outside the spec is

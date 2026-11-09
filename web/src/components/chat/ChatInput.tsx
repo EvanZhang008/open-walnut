@@ -869,7 +869,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     if (onlySkills) return results.filter((item) => item.kind === 'skill');
     if (onControlCommand && 'model'.startsWith(query.toLowerCase())) {
       return [
-        { name: 'model', description: 'Switch model (opus / sonnet / haiku / fable)', source: 'control' },
+        { name: 'model', description: 'Switch model', source: 'control' },
         ...results.filter((r) => r.name !== 'model'),
       ];
     }

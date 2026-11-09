@@ -2526,6 +2526,9 @@ export interface EngineConfigEntry {
   model?: string;
   /** Codex only: default reasoning effort for a session that names none. */
   effort?: string;
+  /** Codex only: `acp` runs Codex through the codex-acp adapter; anything else (the default) runs
+   *  Walnut's own client for Codex's app-server (src/providers/codex-app-server/transport.ts). */
+  transport?: string;
 }
 
 /** `engines.codex.provider`: an OpenAI-compatible endpoint Codex sends its requests to. */

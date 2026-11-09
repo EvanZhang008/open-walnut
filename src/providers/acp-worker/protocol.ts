@@ -52,8 +52,18 @@ export interface WorkerError {
     | 'steer_race'             // turn ended mid-steer; message must re-queue as a prompt
     | 'protocol'               // ACP-level error from the adapter
     | 'usage_limit'            // the subscription's usage limit refused the turn (Codex usageLimitExceeded)
+    // A direct Codex session's failures, by Codex's own error code (codex-app-server/errors.ts):
+    | 'rate_limited'           // rateLimitExceeded or HTTP 429
+    | 'overloaded'             // serverOverloaded or HTTP 503/529
+    | 'server_error'           // internalServerError or another 5xx
+    | 'connection'             // the stream to the model service dropped or never connected
+    | 'context_window'         // contextWindowExceeded
+    | 'app_server_exited'      // the codex app-server process ended
+    | 'turn_stalled'           // no event for too long (the worker's watchdog), or a request ran out of time
     | 'internal'
   message: string
+  /** The message is Walnut's own words (no provider text, no secret): kept as is past the worker's sanitizer. */
+  walnutWords?: boolean
 }
 
 /**
@@ -522,6 +532,8 @@ export type JournalMetaEvent =
         | 'user-cancelled'
         | 'dispatch-indeterminate'
       commandId?: string
+      /** A stop the worker could not do itself in time (gracefulCancel): its process was ended. */
+      forced?: boolean
     }
   | { type: 'permission-requested'; providerRequestId: string }
   | { type: 'permission-answered'; providerRequestId: string; optionId: string | null }
@@ -530,6 +542,10 @@ export type JournalMetaEvent =
   | { type: 'command-accepted'; op: string; commandId: string }
   /** `resetsAt` (epoch ms, read on the host in its own time zone): a usage_limit's reset, when the provider named one. */
   | { type: 'error'; errorKind: string; message: string; commandId?: string; resetsAt?: number }
+  /** A direct Codex resume found no such thread; the session then starts a new one (acp-session.ts) and the chat says why. */
+  | { type: 'resume-failed'; providerSessionId: string; reason: string }
+  /** A direct Codex resume of a thread Codex has failed (not a lost thread): the start fails, the id is kept (worker.ts RESUME_GIVE_UP). */
+  | { type: 'resume-error'; providerSessionId: string; reason: string }
 
 /**
  * Spawn env for the worker (daemon side) and the adapter (worker side): base
