@@ -877,9 +877,8 @@ verdict; `bun scripts/stall-profile-summary.mjs` (newest profile, or a path) pri
 the loop was in during the hold, with file:line. `cpu` means Walnut code held the loop, also on a
 busy machine (`loadStretched: true` then says the load made it longer). Fix that code first. The
 hold itself (`holdCpuMs`, `holdFromMs` to `holdToMs` around the deadline) runs from the last CPU
-checkpoint before the deadline to the first one after it; checkpoints are the previous probe tick, a
-100 ms timer, and the end of every loop iteration (at most every 5 ms), so a stop is a gap between
-two of them. The rules (`holdVerdict` in `src/core/stall-recorder-hold.ts`): the thread ran a
+checkpoint before the deadline to the first one after it; checkpoints are the previous probe tick and a
+100 ms timer, so a stop is a gap between two of them. The rules (`holdVerdict` in `src/core/stall-recorder-hold.ts`): the thread ran a
 stall's worth of CPU (250 ms) in the hold and the kept profile, when it sampled the hold, mostly
 shows code there (`profileHold`, with its top frames; time the sampler missed counts as nothing and
 `coverage` says how much it saw); or it ran 250 ms up to the probe (`afterHoldCpuMs` is the part

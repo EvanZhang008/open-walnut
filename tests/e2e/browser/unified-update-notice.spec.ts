@@ -100,7 +100,9 @@ test('both installed app and web drift have one Restart, never a competing Reloa
   await expect(action(page)).toHaveText('Restarting…')
 })
 
-test('web reload: a saved session draft never holds it and comes back; a new-session draft is listed first', async ({ page }) => {
+// Every composer keeps its words in the draft store (548934c84, 2026-10-27), the new-session
+// draft's included, so neither holds a reload any more.
+test('web reload: a saved session draft and a new-session draft never hold it; the session draft comes back', async ({ page }) => {
   await drift(page)
   await loadApp(page)
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('main:open-session', { detail: { sessionId: 'pw-vscode-session' } })))
@@ -108,21 +110,12 @@ test('web reload: a saved session draft never holds it and comes back; a new-ses
   await expect(sessionBox).toBeVisible()
   await sessionBox.fill('Comes back after the reload')
   const draft = await openDraft(page)
-  const input = draft.locator('textarea')
-  await input.fill('A new session nobody started yet')
+  await draft.locator('textarea').fill('A new session nobody started yet')
   await showDrift(page)
-  await action(page).click()
-  const held = page.getByRole('dialog', { name: 'Reload anyway?' })
-  await expect(held).toContainText('Unsent text in the new session draft')
-  await expect(held).not.toContainText('pw-vscode')
-  await expect(held.locator('.unsaved-work-item')).toHaveCount(1)
-  await page.screenshot({ path: `${SHOTS}/reload-held-${test.info().project.name}.png` })
-  await held.getByRole('button', { name: 'Cancel' }).click()
-  await expect(input).toHaveValue('A new session nobody started yet')
-  await input.fill('')
   const loaded = page.waitForEvent('load')
   await action(page).click()
   await loaded
+  await expect(page.getByRole('dialog', { name: 'Reload anyway?' })).toHaveCount(0)
   await expect(page.locator('.main-page-session-column [data-session-id="pw-vscode-session"] .session-panel-input textarea')).toHaveValue('Comes back after the reload', { timeout: 30_000 })
   // The reloaded page still asks for /api/config while the test ends.
   await page.unrouteAll({ behavior: 'ignoreErrors' })
@@ -188,17 +181,6 @@ test('web reload: an image still in a session box is listed, and Go there from a
   await expect(box.locator('.chat-image-preview')).toBeInViewport()
   await expect(box.locator('textarea')).toBeFocused()
   await page.screenshot({ path: `${SHOTS}/go-there-from-settings-${test.info().project.name}.png` })
-  // A new-session draft (no session id, still on Home) is reached from another page too.
-  await box.locator('.chat-image-remove').click()
-  const draft = await openDraft(page)
-  await draft.locator('textarea').fill('A new session nobody started yet')
-  await page.locator('.sidebar-nav a[href^="/settings"]').click()
-  await expect(page).toHaveURL(/\/settings/, { timeout: 15_000 })
-  await action(page).click()
-  await expect(held).toContainText('Unsent text in the new session draft')
-  await held.getByRole('button', { name: 'Go there' }).click()
-  await expect(page).toHaveURL(/\/(\?.*)?$/, { timeout: 15_000 })
-  await expect(draft.locator('textarea')).toBeFocused()
 })
 
 test('home and popout share the update notice; a popout draft, which a restart does not reopen, is listed; drafts survive a refusal', async ({ page }) => {

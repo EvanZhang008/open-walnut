@@ -65,6 +65,9 @@ jobs:
           BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-store
       - run: bun run lint
       - run: bun run build
+      # The cloud companion's CDK stack (infra/), synthesized offline: its own
+      # dependencies (aws-cdk-lib), so its own install, about 20 s in all.
+      - run: bun run test:infra
 
   # The parts of the pipeline that need Node, all blocking (CI OK needs this
   # job). The Playwright runner: it loads every spec before it runs one, so a

@@ -1,3 +1,11 @@
+/**
+ * Its own fixture (tests/e2e/browser/warm-session-server.ts): the BUILT server and SPA
+ * (dist/web), a mock CLI that keeps its turn open, its own data home.
+ *
+ * Run: bun run build && (cd web && bun x vite build), then
+ *      bun x playwright test -c tests/e2e/browser/warm-session.config.ts --project=chromium
+ */
+import os from 'node:os'
 import path from 'node:path'
 import { defineConfig, devices } from '@playwright/test'
 import { engageGate } from './pw-gate.js'
@@ -6,9 +14,12 @@ import { CHROMIUM_SILENT } from './pw-silence.js'
 // The fixture server runs on bun; only the Playwright runner stays on Node.
 import { bunCommand } from '../../helpers/bun-runtime.js'
 
-const port = Number(process.env.PW_TEST_PORT ?? 3457)
+// Its own port, off the shared fixture's :3457; the spec reads it back from the env.
+process.env.PW_TEST_PORT ??= '3517'
+const port = Number(process.env.PW_TEST_PORT)
 if (port === 3456) throw new Error('Production port is forbidden')
 engageGate(port)
+process.env.WARM_FIXTURE_MANIFEST ??= path.join(os.tmpdir(), `walnut-warm-fixture-${port}.json`)
 export default defineConfig({
   testDir: '.',
   testMatch: 'warm-session.spec.ts',
@@ -19,7 +30,7 @@ export default defineConfig({
   use: {
     baseURL: `http://localhost:${port}`,
     viewport: { width: 1200, height: 800 },
-    video: 'on',
+    video: process.env.PW_VIDEO ? 'on' : 'off',
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
   },

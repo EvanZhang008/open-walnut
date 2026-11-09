@@ -221,8 +221,9 @@ describe('sslip mode', () => {
       t.resourceCountIs('AWS::EC2::SecurityGroup', 1)
       t.resourceCountIs('AWS::EC2::Instance', 1)
       t.resourceCountIs('AWS::DLM::LifecyclePolicy', 1)
-      // Exactly four rules: 443 + 80, over IPv4 and IPv6, and nothing else
-      // (no port 22 — SSM is the only ops path). Compared as a set so the
+      // Exactly six rules: 443 + 80 over TCP and the host network's address
+      // discovery on UDP 7842, each over IPv4 and IPv6, and nothing else
+      // (no port 22: SSM is the only ops path). Compared as a set so the
       // assertion tracks intent rather than CDK's emission order.
       const sg = Object.values(t.findResources('AWS::EC2::SecurityGroup'))[0]
       const ingress = (sg.Properties.SecurityGroupIngress as Array<Record<string, unknown>>)
@@ -233,6 +234,8 @@ describe('sslip mode', () => {
         'tcp:443:::/0',
         'tcp:80:0.0.0.0/0',
         'tcp:80:::/0',
+        'udp:7842:0.0.0.0/0',
+        'udp:7842:::/0',
       ])
     }
     // IMDSv2 is required, which is why the boot script must use a token request.

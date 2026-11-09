@@ -88,7 +88,7 @@ async function openCommitView(page: Page, { sid, taskId }: { sid: string; taskId
   // A newer column may have taken this session's place: reopen it from its task row.
   if (!(await panel.isVisible())) await page.locator(`.todo-panel-item[data-task-id="${taskId}"] .todo-item-title`).click()
   await expect(panel).toBeVisible({ timeout: 20_000 })
-  await panel.getByRole('button', { name: 'Changed' }).click()
+  await panel.getByTestId('session-changed-chip').click()
   const commit = panel.locator('[data-testid="session-commit-btn"]')
   await expect(commit).toBeEnabled({ timeout: 30_000 })
   await commit.click()
@@ -169,8 +169,9 @@ test('commit only this session\'s hunk, push it, and commit the other session\'s
   expect(git(fx.remote, ['rev-parse', 'main']).trim()).toBe(sha)
   await dialog.locator('.scd-close').click()
   await expect(dialog).toBeHidden()
-  // The Changed view is full-screen over the other columns: toggle A's off to reach B.
-  await page.locator(`${REAL_PANEL}[data-session-id="${a.sid}"]`).getByRole('button', { name: 'Changed' }).click()
+  // The Changed view opens A full screen, a sheet over the other columns (2026-11-02): leave it to reach B.
+  await page.getByRole('button', { name: 'Exit full screen', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Exit full screen', exact: true })).toHaveCount(0)
 
   // ── B's view: B's hunk is preselected; a failing pre-commit hook commits nothing ──
   const hook = path.join(fx.project, '.git/hooks/pre-commit')

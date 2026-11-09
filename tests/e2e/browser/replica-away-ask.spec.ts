@@ -21,6 +21,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { test, expect, type Locator, type Page } from '@playwright/test'
+import { expectPanelRunning } from './session-header-labels-helpers'
 
 test.setTimeout(300_000)
 
@@ -147,9 +148,11 @@ test('a new Ask Walnut while the Mac sleeps runs on the host, its answer streams
     await expect(slotSession(page)).toHaveAttribute('data-session-id', sessionId, { timeout: 60_000 })
     await expect(slotSession(page).getByText(answer).first()).toBeVisible({ timeout: 90_000 })
     await expect(slotSession(page).getByText(question).first()).toBeVisible()
-    // The turn's end reaches the console as well (the replica watches the host's sessions): Idle, no reload.
-    const status = isPhone() ? page.locator('.phone-topbar') : slotSession(page)
-    await expect(status.getByText('Idle', { exact: true }).first()).toBeVisible({ timeout: 30_000 })
+    // The turn's end reaches the console as well (the replica watches the host's sessions), no reload:
+    // the phone's top bar says Idle; a desktop panel has no run status in its header any more
+    // (2026-11-02), and its Stop button goes once the turn ended.
+    if (isPhone()) await expect(page.locator('.phone-topbar').getByText('Idle', { exact: true }).first()).toBeVisible({ timeout: 30_000 })
+    else await expectPanelRunning(slotSession(page), false, 30_000)
     await shot(page, '2-answer')
     // Kept on the host for the Mac: the ask's task and its session.
     const { records } = await control<{ records: Array<{ kind: string; taskId?: string; acked: boolean }> }>('GET', '/control/journal')

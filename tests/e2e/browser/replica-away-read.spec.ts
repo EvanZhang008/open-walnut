@@ -259,6 +259,11 @@ function expected503(ids: Ready['ids']): Array<{ test: RegExp; whys: string[] }>
     { test: /^503 GET \/api\/chat\/(history|stats|triage)$/, whys: ['conversation_bodies_need_mac'] },
     { test: new RegExp(`^503 GET /api/(v1/)?sessions/${ids.macSid}/`), whys: ['session_on_mac'] },
     { test: /^503 GET \/api\/usage\/sessions\/[^/]+$/, whys: ['usage_needs_mac'] },
+    // Passwords and approvals are kept on the Mac (routes/vault-agent-v1.ts, approvals-v1.ts).
+    { test: /^503 GET \/api\/v1\/vault\/status$/, whys: ['vault_not_here'] },
+    { test: /^503 GET \/api\/v1\/approvals$/, whys: ['leader_only'] },
+    // A page visit (the recent pages) is a write the page never reads the answer of.
+    { test: /^503 POST \/api\/page-visits$/, whys: presence },
   ]
 }
 

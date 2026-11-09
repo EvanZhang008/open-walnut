@@ -1,5 +1,7 @@
 /**
- * DEMO RECORDING (not a regression test — skipped unless PW_DEMO=1).
+ * Run: bun x playwright test -c scripts/demos/playwright.config.ts changed-code-intel
+ *
+ * A demo recording, not a test: no test config picks it up (scripts/demos/playwright.config.ts).
  *
  * Records a video walkthrough of the Changed-tab code intelligence:
  *   1. Open the Changed tab of a session.
@@ -12,8 +14,7 @@
  *   5. Right-click a selection — OUR context menu (Copy / Ask / Find
  *      references / Find in file), on the diff AND on the Files viewer.
  *
- * Run: PW_DEMO=1 npx playwright test tests/e2e/browser/changed-code-intel-demo.spec.ts
- * Video lands in test-results/<test-dir>/video.webm.
+ * The video lands in test-results/demos/<test-dir>/video.webm.
  */
 import { test, expect, type Page } from '@playwright/test'
 
@@ -22,8 +23,7 @@ const TASK_ID = 'pw-task-changed'
 const MOD = process.platform === 'darwin' ? 'Meta' : 'Control'
 
 // Shares pw-changed-session with changed-code-intel.spec.ts (whose serial mode
-// only covers ITS file) — run this spec alone, never PW_DEMO=1 on the full suite.
-test.skip(process.env.PW_DEMO !== '1', 'demo recording only — run with PW_DEMO=1')
+// only covers ITS file): the demo config runs one worker.
 
 test.use({ video: { mode: 'on', size: { width: 1440, height: 900 } }, viewport: { width: 1440, height: 900 } })
 

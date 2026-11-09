@@ -113,6 +113,7 @@
     "test:pre-commit": "bun run docs:check && bun scripts/test-changed.mjs --tiers",
     "test:unit": "bun --bun vitest run --config vitest.unit.config.ts",
     "test:integration": "bun --bun vitest run --config vitest.integration.config.ts",
+    "test:infra": "bun install --frozen-lockfile --cwd infra && bun --bun vitest run --root infra",
     "test:e2e": "bun --bun vitest run --config vitest.e2e.config.ts",
     "test:live": "WALNUT_LIVE_TEST=1 bun --bun vitest run --config vitest.live.config.ts",
     "test:live:daemon": "bash scripts/run-live-daemon-tests.sh",

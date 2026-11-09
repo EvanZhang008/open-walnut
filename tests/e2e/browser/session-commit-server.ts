@@ -109,11 +109,14 @@ git(project, ['push', '-q', '-u', 'origin', 'main'])
 
 // The daemon: compiled from THIS checkout into the fixture dir (dist/ is what
 // production upgrades remote hosts from, so it is never touched here).
-const daemonBin = path.join(root, 'daemon-bin/daemon-darwin-arm64')
+// For this machine (it was darwin-arm64 only, so the fixture failed on Linux with ENOEXEC).
+const target = `${process.platform}-${process.arch}`
+const daemonBin = path.join(root, `daemon-bin/daemon-${target}`)
 const version = `walnut-daemon-session-commit-${Date.now().toString(36)}`
 fs.mkdirSync(path.dirname(daemonBin), { recursive: true })
-const bun = process.env.BUN_BIN ?? path.join(realHome, '.bun/bin/bun')
-execFileSync(bun, ['build', '--compile', '--target=bun-darwin-arm64', '--define', `process.env.DAEMON_VERSION='${version}'`,
+// The bun running this fixture (tests/helpers/bun-runtime.ts starts it).
+const bun = process.env.BUN_BIN ?? process.execPath
+execFileSync(bun, ['build', '--compile', `--target=bun-${target}`, '--define', `process.env.DAEMON_VERSION='${version}'`,
   path.join(repoRoot, 'src/providers/daemon-standalone.ts'), '--outfile', daemonBin], { cwd: repoRoot, stdio: 'pipe', env: { ...process.env, HOME: realHome } })
 fs.writeFileSync(`${daemonBin}.version`, version)
 

@@ -78,6 +78,8 @@ Quarantine is a holding place, not an end: every quarantined file, and every tes
 
 A skipped test is the same kind of holding place. A skip with a condition (`skipIf`/`runIf`, Playwright's `test.skip(condition, 'reason')`, a platform or binary check) says where the test runs, so check that the condition can still be false somewhere: one that is always true is a test that runs nowhere. A skip, `todo` or `fixme` with no condition carries `// skip: YYYY-MM-DD <why>` on its line or the line just above, and an `.only` is never committed. `tests/setup/skip-reason-guard.test.ts` fails on one that does not, naming file and line; the fix is to make the test run, delete it when what it tests is gone or another test covers it, or add the dated reason.
 
+A test file that nothing automated runs is the same: `tests/setup/test-file-coverage-guard.test.ts` fails on any test file (vitest, Playwright, the Mac app's Swift tests, `infra/`) that no vitest config CI runs, no Playwright config a workflow runs and no workflow step names, and on a spec whose environment gate nothing CI runs opens; wire it into a tier (`.github/workflows/nightly-extra-tests.yml` runs the ones with their own fixture, environment, Mac or real install) or delete it.
+
 ## L1 — the fast tier
 
 `vitest.quick.config.ts` runs everything EXCEPT the files measured over 2 s (`tests/setup/slow-tests.ts`), the three heavy directories (`tests/e2e`, `tests/commands`, `tests/mcp`), and the four frontend-rooted ones under `tests/web/` whose deps live in `web/node_modules`. The slow files are slow because they start something real (a `claude` CLI, a local daemon, a git subprocess, an HTTP server), so they are exactly the wrong thing to run on every save.

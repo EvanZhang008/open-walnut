@@ -1,5 +1,7 @@
 /**
- * DEMO RECORDING (not a regression test — skipped unless PW_DEMO=1).
+ * Run: bun x playwright test -c scripts/demos/playwright.config.ts selection-copy
+ *
+ * A demo recording, not a test: no test config picks it up (scripts/demos/playwright.config.ts).
  *
  * Records a video walkthrough of the selection/copy fix:
  *   1. Open a session with multi-line history.
@@ -9,14 +11,12 @@
  *   5. Right-click the selection — still alive (context-menu Copy works).
  *   6. Click elsewhere — selection clears, stream catches up.
  *
- * Run: PW_DEMO=1 npx playwright test tests/e2e/browser/selection-copy-demo.spec.ts
- * Video lands in test-results/<test-dir>/video.webm.
+ * The video lands in test-results/demos/<test-dir>/video.webm.
  */
 import { test, expect, type Page } from '@playwright/test';
 
 const SESSION_ID = 'pw-selection-demo';
 
-test.skip(process.env.PW_DEMO !== '1', 'demo recording only — run with PW_DEMO=1');
 
 test.use({ video: { mode: 'on', size: { width: 1280, height: 800 } }, viewport: { width: 1280, height: 800 } });
 

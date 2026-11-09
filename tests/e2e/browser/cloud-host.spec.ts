@@ -132,9 +132,10 @@ test('the picker offers Cloud, lists the box folders, and a session starts there
   const finder = page.locator('.session-search-panel')
   await expect(finder).toBeVisible({ timeout: 15_000 })
   await finder.locator('.session-search-input').fill('alpha')
-  const hit = finder.locator('.session-search-result').filter({ hasText: 'projects/alpha' }).first()
+  // The row names the folder's own name; the full path is its tooltip (647b662c6).
+  const hit = finder.locator('.session-search-result').filter({ has: page.locator('.session-search-meta[title$="projects/alpha"]') }).first()
   await expect(hit).toBeVisible({ timeout: 30_000 })
-  await expect(hit.locator('.session-search-meta')).toContainText('Cloud · ')
+  await expect(hit.locator('.session-search-meta')).toContainText('Cloud · alpha')
   await expect(finder).not.toContainText(CLOUD)
   await finder.screenshot({ path: path.join(SHOTS, `session-finder-cloud-${browserName}.png`) })
   await page.keyboard.press('Escape')
@@ -198,11 +199,12 @@ test('Phones & Cloud lists the other Mac as a Mac, and this Mac told the compani
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(e.message))
   const { boxAuth } = await fixture()
-  // This Mac reported itself at its first status probe (cloud-box-probe.ts reportSelfAsMac).
+  // This Mac reported itself at its first status probe (cloud-box-probe.ts reportSelfAsMac),
+  // with the model its platform gives (device-self-report.ts: a Linux runner says Computer).
   await expect.poll(() => {
     const devices = (JSON.parse(fs.readFileSync(boxAuth, 'utf-8')) as { devices: Array<{ name: string; info?: { model?: string } }> }).devices
     return devices.find((d) => d.name === 'mac-primary')?.info?.model
-  }, { timeout: 60_000 }).toBe('Mac')
+  }, { timeout: 60_000 }).toBe(process.platform === 'darwin' ? 'Mac' : 'Computer')
 
   await loadHome(page)
   await page.getByRole('link', { name: /settings/i }).first().click()
