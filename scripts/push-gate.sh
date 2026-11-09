@@ -344,7 +344,11 @@ if [ -z "$runner" ]; then
       jlog=$(ghcall api "repos/$repo/actions/jobs/$job/logs" 2>/dev/null | sed -E 's/^[0-9T:.-]+Z //; s/\x1b\[[0-9;]*[A-Za-z]//g')
       [ -z "$jlog" ] || break; sleep "${WALNUT_PUSH_GATE_LOG_RETRY_SECS:-10}"
     done
-    if [ "$tier" != frontend ] && printf '%s\n' "$jlog" | grep -aq '^\[test-layers\] FAILED:'; then
+    if [ "$tier" = "iOS build" ]; then
+      # The iOS app's build names no test: its compiler errors (a path, a line, a column), and its
+      # verdict line; never the step's own script, which the job log echoes.
+      printf '%s\n' "$jlog" | grep -aE '^/[^ ]*:[0-9]+:[0-9]+: error: |^the iOS app failed to build: ' | awk '!seen[$0]++' | sed -n '1,40p'
+    elif [ "$tier" != frontend ] && printf '%s\n' "$jlog" | grep -aq '^\[test-layers\] FAILED:'; then
       # test-layers.mjs (a land tier): its list of the tests that failed twice, and its verdict.
       printf '%s\n' "$jlog" | awk '/^\[test-layers\] FAILED:/{p=1} p{print; if (/^\[test-layers\] (passed|failed):/ || ++n > 60) exit}'
     else

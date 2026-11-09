@@ -91,6 +91,25 @@ describe('push-gate-plan', () => {
   })
 })
 
+describe('push-gate-plan: the iOS build', () => {
+  // 2026-11-09: a Swift compile error passed every land check and the gate onto main.
+  it('adds the iOS build tier when the change touches ios-native/, and only then', () => {
+    const land = plan.planGate('land', ['src/m.ts'], opts())
+    const withIos = plan.addIosBuild(land, ['ios-native/Walnut/App.swift'])
+    expect(withIos.ios).toBe(true)
+    expect(withIos.tiers).toBe(land.tiers + 1)
+    expect(withIos.why).toMatch(/the iOS app is built \(1 file in ios-native\/\)/)
+    expect(plan.addIosBuild(land, [])).toEqual({ ...land, ios: false })
+    const full = plan.planGate('full', [], opts())
+    expect(plan.addIosBuild(full, ['ios-native/a.swift', 'ios-native/b.swift']).tiers).toBe(full.tiers + 1)
+  })
+
+  it('builds nothing for a files gate, which re-runs named tests only', () => {
+    const files = plan.planGate('files', [], { ...opts(), tests: ['tests/a.test.ts'] })
+    expect(plan.addIosBuild(files, ['ios-native/a.swift'])).toEqual({ ...files, ios: false })
+  })
+})
+
 describe('test-layers --part', () => {
   const durations = { a: 50, b: 40, c: 30, d: 20, e: 10 }
   const files = ['a', 'b', 'c', 'd', 'e']

@@ -366,6 +366,23 @@ esac
     expect(section('frontend')).not.toMatch(/tests\/x\.test\.ts/)
   })
 
+  it('refuses a commit whose iOS app does not build, naming the compiler errors from the iOS build job', () => {
+    // 2026-11-09: a Swift compile error reached main; the gate's iOS build names no test, only errors.
+    const err = '/Users/runner/work/demo/demo/ios-native/Walnut/Board.swift:12:5: error: value of type \'Row\' has no member \'pinned\''
+    const g = ghRepo({
+      statuses: [st('walnut/push-gate (iOS build)', 'failure', 'the iOS app failed to build: Walnut/Board.swift:12:5: error: x'), st('walnut/push-gate', 'failure', 'failed: iOS build')],
+      jobs: { jobs: [{ id: 9, name: 'Gate (iOS build)' }] },
+      // The job log echoes the step's script under its group header; none of it is an error.
+      log: ['##[group]Run set -o pipefail', '{ grep -aE \': error: \' "$RUNNER_TEMP/build.txt" || true; } | sort -u', '  echo "the iOS app failed to build: ${e:-xcodebuild exited $rc}"', err, '** TEST BUILD FAILED **', err, 'the iOS app failed to build: Walnut/Board.swift:12:5: error: x'].map((l) => `2026-11-09T00:00:00.0Z ${l}`).join('\n') + '\n',
+    })
+    const out = gateRun(g, commit(g.r, { 'ios-native/a.swift': '1\n' }, 'one'))
+    expect(out.status).toBe(1)
+    const section = out.stdout.slice(out.stdout.indexOf('── iOS build'))
+    expect(section.split(err).length - 1).toBe(1)
+    expect(section).toMatch(/the iOS app failed to build/)
+    expect(section).not.toMatch(/TEST BUILD FAILED|##\[group\]|grep|echo/)
+  })
+
   it('decides from the tiers when the verdict job has not run: one failed tier refuses, every tier passed lets it through', () => {
     const tiers = [...Array.from({ length: 8 }, (_, i) => `quick ${i + 1}/8`), 'frontend', 'browser specs']
     const ok = ghRepo({ statuses: tiers.map((t) => st(`walnut/push-gate (${t})`, 'success', 'passed')) })

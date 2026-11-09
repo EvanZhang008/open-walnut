@@ -32,7 +32,7 @@ describe('push-gate.yml', () => {
     expect(FULL_TIERS.map((t: { tier: string; cmd: string }) => [t.tier, t.cmd])).toEqual([...want])
     // The test job's matrix is the plan's.
     expect(gate).toMatch(/include: \$\{\{ fromJSON\(needs\.plan\.outputs\.matrix\) \}\}/)
-    expect(gate).toMatch(/run: bun scripts\/push-gate-plan\.mjs\n/)
+    expect(gate).toMatch(/\n\s+bun scripts\/push-gate-plan\.mjs --ios-base "\$base"\n/)
   })
 
   it('runs only for a gate: a dispatch naming its commit, or an older hook\'s gate branch; never for main or a pull request', () => {
@@ -53,8 +53,8 @@ describe('push-gate.yml', () => {
 
   it('never fails its run for a failing test: the verdict is a status', () => {
     const testSteps = [...gate.matchAll(/id: tests\n((?: {8}.*\n)+)/g)].map((m) => m[1]!)
-    // the tier's tests and the browser specs; a land's frontend step is `id: frontend`
-    expect(testSteps).toHaveLength(2)
+    // the tier's tests, the browser specs and the iOS build; a land's frontend step is `id: frontend`
+    expect(testSteps).toHaveLength(3)
     expect(gate).toMatch(/id: frontend\n\s+if: \$\{\{ matrix\.frontend \}\}\n\s+continue-on-error: true/)
     for (const s of testSteps) expect(s).toMatch(/continue-on-error: true/)
     expect(gate).toMatch(/statuses: write/)
@@ -69,7 +69,18 @@ describe('push-gate.yml', () => {
     expect(gate).toMatch(/GATE_TIERS: \$\{\{ needs\.plan\.outputs\.tiers \}\}/)
     expect(gate).toMatch(/CONTEXT: walnut\/push-gate \(frontend\)/)
     // The verdict runs whatever the tiers did, except in a run a newer gate of the commit cancelled.
-    expect(gate).toMatch(/needs: \[plan, test, browser\]\n\s+if: \$\{\{ !cancelled\(\) \}\}/)
+    expect(gate).toMatch(/needs: \[plan, test, browser, ios\]\n\s+if: \$\{\{ !cancelled\(\) \}\}/)
     expect(gate).not.toMatch(/if: always\(\)/)
+  })
+
+  it('builds the iOS app when the commit touches ios-native/, and counts that tier only then', () => {
+    // 2026-11-09: a Swift compile error passed every land check and the gate, and main's iOS app
+    // stopped compiling. The plan says when (its `ios` output adds one tier), the ios job builds.
+    expect(gate).toMatch(/ios: \$\{\{ steps\.plan\.outputs\.ios \}\}/)
+    expect(gate).toMatch(/ios:\n\s+name: Gate \(iOS build\)\n\s+needs: plan\n\s+if: \$\{\{ needs\.plan\.outputs\.ios == 'true' \}\}\n\s+runs-on: macos-/)
+    expect(gate).toMatch(/xcodebuild build-for-testing -project Walnut\.xcodeproj -scheme Walnut/)
+    expect(gate).toMatch(/CONTEXT: walnut\/push-gate \(iOS build\)/)
+    // A skipped build is no failure of the verdict's jobs.
+    expect(gate).toMatch(/needs\.ios\.result == 'skipped' && 'success' \|\| needs\.ios\.result/)
   })
 })

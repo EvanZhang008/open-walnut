@@ -109,6 +109,18 @@ export function planGate(mode, changed, { universe = quickUniverse(), durations 
   return { mode: 'land', why: `${files} test files (${Math.round(plan.predictedMs / 1000)} s measured) in ${n} job(s)`, tiers: n + 2, include }
 }
 
+/**
+ * The iOS app's build joins the plan when the change touches ios-native/ (2026-11-09: a Swift
+ * field in the wrong struct passed every land check and the gate, and main's iOS app did not
+ * compile from then on). One more tier, `iOS build`, run by the workflow's ios job on macOS. A
+ * files gate (a trace step) re-runs named tests only and builds nothing.
+ */
+export function addIosBuild(plan, iosChanged) {
+  if (plan.mode === 'files' || !iosChanged.length) return { ...plan, ios: false }
+  const n = iosChanged.length
+  return { ...plan, ios: true, tiers: plan.tiers + 1, why: `${plan.why}; the iOS app is built (${n} file${n === 1 ? '' : 's'} in ios-native/)` }
+}
+
 function git(args) {
   return execFileSync('git', args, { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
 }
@@ -130,8 +142,16 @@ if (import.meta.main) {
     plan = planGate('full', [])
     plan.why = `could not plan a land run (${String(e?.message ?? e).split('\n')[0]}): the whole tier`
   }
+  // --ios-base: the tree to diff ios-native/ against (the workflow passes GitHub's main, or a
+  // land's base). A diff that cannot be read builds the app rather than skip it.
+  const iosBase = opt('--ios-base')
+  if (iosBase) {
+    let ios
+    try { ios = git(['diff', '--name-only', iosBase, 'HEAD', '--', 'ios-native']).split('\n').filter(Boolean) } catch { ios = ['(the diff could not be read)'] }
+    plan = addIosBuild(plan, ios)
+  }
   console.log(JSON.stringify(plan, null, 2))
   if (process.env.GITHUB_OUTPUT) {
-    fs.appendFileSync(process.env.GITHUB_OUTPUT, `matrix=${JSON.stringify(plan.include)}\ntiers=${plan.tiers}\nmode=${plan.mode}\nwhy=${plan.why.replace(/\n/g, ' ')}\n`)
+    fs.appendFileSync(process.env.GITHUB_OUTPUT, `matrix=${JSON.stringify(plan.include)}\ntiers=${plan.tiers}\nmode=${plan.mode}\nios=${plan.ios ? 'true' : 'false'}\nwhy=${plan.why.replace(/\n/g, ' ')}\n`)
   }
 }
