@@ -103,6 +103,41 @@ final class SessionMidTurnOrderTests: XCTestCase {
         XCTAssertTrue(store.messages.allSatisfy { !$0.id.hasPrefix("sent-run") && !$0.id.hasPrefix("pending") })
     }
 
+    /// Several messages sent quickly while the session works are drawn in the order they were
+    /// sent, which is the order the session takes them (one FIFO), and the saved transcript's
+    /// rows, matched to them by id, keep that order, also on a later reload (2026-11-09, the
+    /// owner: "而且order一定要对").
+    func testQuickSendsWhileBusyKeepTheServerOrderThroughTheTranscript() async {
+        let (store, transport) = store("quick")
+        streamCommentary(store)
+        await store.send("one")
+        await store.send("two")
+        await store.send("three")
+        XCTAssertEqual(shape(store.messages).filter { $0.hasPrefix("user:") }, ["user:one", "user:two", "user:three"])
+        let ids = transport.messageIds.compactMap { $0 }
+        XCTAssertEqual(ids.count, 3)
+        store.handle(event("text-delta", #"{"delta":"Answer."}"#))
+        store.handle(event("turn-end"))
+        func saved() -> SessionTranscript {
+            var rows: [Message] = [
+                Message(role: "assistant", text: "Commentary one.", timestamp: "2026-11-09T07:00:00Z", kind: nil),
+            ]
+            for (i, (text, id)) in zip(["one", "two", "three"], ids).enumerated() {
+                var row = Message(role: "user", text: text, timestamp: "2026-11-09T07:00:0\(i + 1)Z", kind: nil)
+                row.walnutMessageId = id
+                rows.append(row)
+            }
+            rows.append(Message(role: "assistant", text: "Answer.", timestamp: "2026-11-09T07:00:09Z", kind: nil))
+            return SessionTranscript(sessionId: "midturn-quick", exportedAt: "x", truncated: false, messages: rows)
+        }
+        store.reconcile(saved())
+        let order = ["assistant:Commentary one.", "user:one", "user:two", "user:three", "assistant:Answer."]
+        XCTAssertEqual(shape(store.messages), order, "the transcript's rows took the bubbles' places, in order")
+        XCTAssertTrue(store.messages.allSatisfy { !$0.id.hasPrefix("pending") }, "each bubble absorbed by its own row")
+        store.reconcile(saved())
+        XCTAssertEqual(shape(store.messages), order, "a reload keeps the order")
+    }
+
     func testAMessageTheTurnHasNotReadYetFollowsTheSavedTurn() async {
         let (store, _) = store("unread")
         streamCommentary(store)

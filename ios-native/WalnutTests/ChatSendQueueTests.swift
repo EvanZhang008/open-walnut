@@ -1485,7 +1485,7 @@ final class ChatSendQueueTests: XCTestCase {
                                 queued: .processing)
         let notice = rows.first { $0.content.reuseKind == "queuedNotice" }
         XCTAssertNotNil(notice, "the badge stays: the message is still not delivered")
-        if case .queuedNotice(let delivering, _) = notice?.content {
+        if case .queuedNotice(let delivering, _, _) = notice?.content {
             XCTAssertTrue(delivering, "and it reads as delivering, not as withdrawable")
         } else {
             XCTFail("expected a queuedNotice row")
@@ -1507,7 +1507,7 @@ final class ChatSendQueueTests: XCTestCase {
         message.pending = true
         let rows = builder.rows(for: message, width: 390, expandedRowIDs: [],
                                 queued: .pending)
-        guard case .queuedNotice(let delivering, _)? = rows.first(where: {
+        guard case .queuedNotice(let delivering, _, _)? = rows.first(where: {
             $0.content.reuseKind == "queuedNotice"
         })?.content else {
             return XCTFail("expected a queuedNotice row")

@@ -39,6 +39,7 @@ struct OrgNodePage: View {
     @State private var tab: OrgNodeTab
     @State private var threads: OrgThreadsStore
     @Environment(TasksStore.self) private var tasks
+    @Environment(\.orgPagePlace) private var orgPagePlace
     @Environment(\.dynamicTypeSize) private var typeSize
 
     init(route: OrgNodeRoute) {
@@ -73,7 +74,10 @@ struct OrgNodePage: View {
         .navigationBarTitleDisplayMode(.inline)
         .task { await threads.load() }
         // The view picked here is the page a relaunch puts back over the chat (`ViewMemory`).
-        .onChange(of: tab) { _, picked in ViewMemory.write(picked, "org", "page", id: route.nodeId) }
+        .onChange(of: tab) { _, picked in
+            guard let key = orgPagePlace.keyId(route.nodeId) else { return }
+            ViewMemory.write(picked, "org", "page", id: key)
+        }
         // The node's own row moves when its threads change (its status carries their counts).
         .onChange(of: node?.userStatus?.threads) { Task { await threads.load() } }
         // A container: without it the page's id lands on every child and hides the picker's own.

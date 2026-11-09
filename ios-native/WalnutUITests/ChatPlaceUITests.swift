@@ -214,6 +214,56 @@ final class ChatPlaceUITests: XCTestCase {
         attach(app, "new-chat-after-relaunch")
     }
 
+    /// Asks, the CEO and the VPs are peers of the chat (2026-11-09, the owner: "进入ceo往左滑怎么就
+    /// 回去了ask walnut ... 当然是回去side bar啊 这俩是平级"): from any of them, the left edge and the
+    /// top-left button open the sidebar, never the chat opened before it.
+    func testEveryChatGoesBackToTheSidebarNeverToTheOneBefore() throws {
+        let app = try launchPaired()
+        backToTheChat(app)
+        openDrawer(app, view: "Chats")
+        let asks = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'chat.drawer.ask.'"))
+        XCTAssertTrue(asks.firstMatch.waitForExistence(timeout: 30), "no ask in the drawer")
+        asks.firstMatch.tap()
+        let title = sessionTitle(app)
+        XCTAssertTrue(title.waitForExistence(timeout: 30), "the ask's chat did not open")
+        pause(1.5)
+        let askTitle = title.label
+
+        // The CEO from the sidebar, opened over the ask.
+        let menu = app.buttons["chat.session.menu"]
+        XCTAssertTrue(menu.waitForExistence(timeout: 10), "no sidebar button on the ask's chat")
+        menu.tap()
+        let picker = app.segmentedControls["chat.drawer.viewSwitch"]
+        XCTAssertTrue(picker.waitForExistence(timeout: 10), "the sidebar did not open over the ask")
+        if !picker.buttons["Org"].isSelected { picker.buttons["Org"].tap() }
+        let ceo = app.buttons["chat.drawer.org.ceo"]
+        XCTAssertTrue(ceo.waitForExistence(timeout: 30), "no Main row in the drawer's Org view")
+        ceo.tap()
+        let deadline = Date().addingTimeInterval(30)
+        while Date() < deadline, !(sessionTitle(app).exists && sessionTitle(app).label != askTitle) { pause(0.3) }
+        XCTAssertNotEqual(sessionTitle(app).label, askTitle, "the CEO's chat did not open")
+        pause(1.5)
+        attach(app, "ceo-over-ask")
+
+        // A swipe in from the left edge: the sidebar, not the ask.
+        let window = app.windows.firstMatch
+        window.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5))
+            .press(forDuration: 0.05, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5)))
+        XCTAssertTrue(picker.waitForExistence(timeout: 10), "the left edge did not open the sidebar")
+        pause(1)
+        attach(app, "swipe-opens-sidebar")
+        XCTAssertFalse(app.navigationBars.buttons[askTitle].exists, "a Back to the ask is still there")
+
+        // Its Chats list is the way to the chat itself.
+        if !picker.buttons["Chats"].isSelected { picker.buttons["Chats"].tap() }
+        let newChat = app.buttons["chat.drawer.newChat"]
+        XCTAssertTrue(newChat.waitForExistence(timeout: 10))
+        newChat.tap()
+        XCTAssertTrue(sessionTitle(app).waitForNonExistence(timeout: 10), "New chat left a session on the page")
+        XCTAssertTrue(app.buttons["chat.menu"].waitForExistence(timeout: 10))
+        attach(app, "chat-from-sidebar")
+    }
+
     private func attach(_ app: XCUIApplication, _ name: String) {
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = name

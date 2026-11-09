@@ -186,7 +186,8 @@ actor TimelineLayoutActor {
             // An `undecided` entry renders as an ordinary FAILED bubble in place: it
             // is not waiting for anything, so holding it back would move a row the
             // user has to act on away from where they left it.
-            if let queued, queued != .undecided {
+            // A delivered one is in the conversation already: it stays where it is.
+            if let queued, queued != .undecided, queued != .delivered {
                 queuedRows.append(contentsOf: memoizedRows(for: message, queued: queued))
             } else if input.afterLiveMessageIDs.contains(message.id) {
                 afterLiveRows.append(contentsOf: memoizedRows(for: message, queued: nil))

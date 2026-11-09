@@ -38,14 +38,14 @@ final class SessionQueueTrayTests: XCTestCase {
     func testEveryStageMapsToItsWordsAndItsPlaceInTheTray() {
         struct Case { let stage: String?; let processing: String?; let pending: String?; let listed: Bool }
         let cases: [Case] = [
-            Case(stage: nil, processing: "Delivering\u{2026}", pending: nil, listed: true),
-            // The server says waiting when it cannot tell how far a delivering line got.
-            Case(stage: "waiting", processing: "Going out now", pending: nil, listed: true),
+            // A processing row was handed to the session whatever its stage says (the web's
+            // rule): never listed, never "Delivering" while the session already has it.
+            Case(stage: nil, processing: "Delivering\u{2026}", pending: nil, listed: false),
+            Case(stage: "waiting", processing: "Going out now", pending: nil, listed: false),
             Case(stage: "written", processing: "Reaches it after its current step",
-                 pending: "Reaches it after its current step", listed: true),
+                 pending: "Reaches it after its current step", listed: false),
             Case(stage: "taken", processing: nil, pending: nil, listed: false),
-            // A stage a newer server invented reads as no stage: the old words, still listed.
-            Case(stage: "teleported", processing: "Delivering\u{2026}", pending: nil, listed: true),
+            Case(stage: "teleported", processing: "Delivering\u{2026}", pending: nil, listed: false),
         ]
         XCTAssertEqual(Set(cases.compactMap(\.stage)).intersection(QueueStage.allCases.map(\.rawValue)).count,
                        QueueStage.allCases.count, "a known stage has no case in this table")
@@ -58,8 +58,9 @@ final class SessionQueueTrayTests: XCTestCase {
             XCTAssertEqual(row("held", status: "held", stage: c.stage).statusNote, "Waiting for your Mac")
             XCTAssertEqual(SessionQueueModel.shownRows([processing]).count, c.listed ? 1 : 0,
                            "stage \(c.stage ?? "nil") listed")
-            XCTAssertEqual(SessionTimelineBody.queueHolds(processing), c.listed,
-                           "stage \(c.stage ?? "nil"): the bubble is held off the page only while the row waits")
+            XCTAssertFalse(SessionTimelineBody.queueHolds(processing),
+                           "stage \(c.stage ?? "nil"): a message is its own bubble, never held off the page")
+            XCTAssertFalse(SessionTimelineBody.queueHolds(pending), "a waiting message is its own bubble, marked Queued")
         }
     }
 
@@ -101,7 +102,7 @@ final class SessionQueueTrayTests: XCTestCase {
         XCTAssertEqual(first.files?.first?.shownName, "report.pdf")
         XCTAssertEqual(first.stage, "teleported")
         XCTAssertNil(first.queueStage)
-        XCTAssertFalse(first.isDelivered)
+        XCTAssertTrue(first.isDelivered, "processing: the session has it")
         XCTAssertEqual(first.shownImagePaths, ["/tmp/a.jpg"])
         XCTAssertEqual(first.shownFileNames, ["report.pdf"])
         XCTAssertEqual(first.shownText, "Look at this")
@@ -133,8 +134,9 @@ final class SessionQueueTrayTests: XCTestCase {
         ]
         let queue = SessionQueueModel(sessionId: "tray-1", api: transport)
         await queue.refresh()
-        XCTAssertEqual(queue.rows.map(\.id), ["mine", "written"])
-        XCTAssertEqual(queue.rows.last?.statusNote, "Reaches it after its current step")
+        // A row the session holds (processing, at any stage) is delivered, the web's rule: only
+        // the person's own waiting row is the page's (2026-11-09: "Delivering" stuck on a written row).
+        XCTAssertEqual(queue.rows.map(\.id), ["mine"])
     }
 
     // MARK: - Attachment headers from an older server

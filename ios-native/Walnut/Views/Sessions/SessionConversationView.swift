@@ -22,6 +22,7 @@ struct SessionConversationView: View {
     /// Showing this page counts as opening the session (`RecentOpens`). Off where the
     /// host records the opens itself (`TasksTabView`).
     @Environment(\.recordsSessionOpen) private var recordsOpen
+    @Environment(\.orgPagePlace) private var orgPagePlace
     /// The host pushed a page over this one (`composerCovered`).
     @Environment(\.composerCovered) private var coveredByHost
     @Environment(\.scenePhase) private var scenePhase
@@ -48,6 +49,9 @@ struct SessionConversationView: View {
     /// An Org node page to open once this chat appears (a thread push), and whether it did.
     private let orgPageOnOpen: OrgNodePageOpen?
     @State private var orgPageOnOpenDone = false
+    /// A page this chat opens with covers the chat until the page is on top: a launch put the
+    /// chat on screen for about a second before its kept Threads or Brief page slid over it.
+    @State private var coveredUntilPage: Bool
     @State private var fetchedTask: WalnutTask?
     /// The CEO's or a VP's memory and instructions (the row after Task Details).
     @State private var showMemory = false
@@ -88,6 +92,7 @@ struct SessionConversationView: View {
         self.session = session
         self.voiceModeOnOpen = voiceModeOnOpen
         self.orgPageOnOpen = orgPageOnOpen
+        _coveredUntilPage = State(initialValue: orgPageOnOpen != nil)
         let store = SessionConversationStore(session: session)
         _store = State(initialValue: store)
         _pageOperations = State(initialValue: SessionPageOperations(store: store))
@@ -102,6 +107,7 @@ struct SessionConversationView: View {
         queue.onEdited = { [weak store] id, text in store?.queuedMessageEdited(id, text: text) }
         queue.onRowsLeft = { [weak store] in store?.requestTranscriptRefresh() }
         store.onInterruptAccepted = { [weak queue] id in queue?.hideWhileGoingOut(id) }
+        store.onAccepted = { [weak queue] id in queue?.watch(id) }
         return queue
     }
 
@@ -112,6 +118,7 @@ struct SessionConversationView: View {
         self.session = session
         self.voiceModeOnOpen = .off
         self.orgPageOnOpen = nil
+        _coveredUntilPage = State(initialValue: false)
         _store = State(initialValue: store)
         _pageOperations = State(initialValue: SessionPageOperations(store: store))
         _lifecycle = State(initialValue: SessionLifecycleController(sessionId: session.id))
@@ -190,18 +197,26 @@ struct SessionConversationView: View {
     private func orgNodeHooks<V: View>(_ content: V) -> some View {
         content
             .navigationDestination(item: $orgRoute) { route in
+                // Said again here: a pushed page is not promised the environment of its host.
                 OrgNodePage(route: route)
+                    .environment(\.orgPagePlace, orgPagePlace)
             }
             // The page over the chat is kept per node, so a relaunch or a return puts it back;
             // Back forgets it (`ViewMemory`).
             .onChange(of: orgRoute) { old, route in
-                guard let nodeId = route?.nodeId ?? old?.nodeId else { return }
-                ViewMemory.write(route?.tab, "org", "page", id: nodeId)
+                guard let nodeId = route?.nodeId ?? old?.nodeId, let key = orgPagePlace.keyId(nodeId) else { return }
+                ViewMemory.write(route?.tab, "org", "page", id: key)
             }
             .onAppear { openOrgPageOnOpen() }
             .onChange(of: orgNode?.id) { openOrgPageOnOpen() }
             .onChange(of: orgPageOnOpen) { orgPageOnOpenDone = false; openOrgPageOnOpen() }
             .task(id: session.taskId) { await fetchLinkedTaskIfMissing() }
+            // A chat that turns out not to be an Org node's (or whose task never loads) is shown.
+            .task {
+                guard coveredUntilPage else { return }
+                try? await Task.sleep(for: .seconds(Self.coverLimitSeconds))
+                coveredUntilPage = false
+            }
     }
 
     var body: some View {
@@ -242,6 +257,18 @@ struct SessionConversationView: View {
             guard let voiceMode, !ids.isEmpty else { return }
             Task { await voiceMode.announceWaitingOnYou(requestIDs: ids) }
         }
+        // Over the chat and its composer, until the page it opens with is on top.
+        .overlay {
+            if coveredUntilPage {
+                Color(.systemBackground)
+                    .ignoresSafeArea()
+                    .accessibilityElement()
+                    .accessibilityLabel("Opening")
+                    .accessibilityIdentifier("session.coveredUntilPage")
+            }
+        }
+        // A page pushed over this chat (an Org page, a fork) owns the left edge: its Back.
+        .preference(key: SessionPageOverKey.self, value: orgRoute != nil || forkedSession != nil)
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbar {
@@ -388,6 +415,9 @@ struct SessionConversationView: View {
         .onChange(of: scenePhase) { _, phase in
             // Like WalnutApp, transient system interruptions never suspend work.
             pageOperations.setActive(phase != .background)
+            // Back in front: where each message stands is read at once, never left as it was
+            // when the app went away (a bubble kept "Queued" after the session took it).
+            if phase == .active { Task { await queue.refresh() } }
         }
         .task {
             guard !Task.isCancelled else { return }
@@ -719,9 +749,20 @@ struct SessionConversationView: View {
         // puts back the chat and its page), Back took both off at once and left no chat under them.
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(600))
-            openOrgPage(open.tab, threadId: open.threadId)
+            guard coveredUntilPage else { openOrgPage(open.tab, threadId: open.threadId); return }
+            // Under the cover nobody sees the chat, so the page lands without sliding in, and the
+            // cover leaves in the same moment.
+            var still = Transaction()
+            still.disablesAnimations = true
+            withTransaction(still) {
+                openOrgPage(open.tab, threadId: open.threadId)
+                coveredUntilPage = false
+            }
         }
     }
+
+    /// The longest the chat stays covered waiting for its page (a slow task read included).
+    static let coverLimitSeconds = 4.0
 
     private func openOrgPage(_ tab: OrgNodeTab, threadId: String? = nil) {
         guard let node = orgNode else { return }
@@ -955,4 +996,10 @@ private struct SessionReconnectingChip: View {
         .accessibilityLabel("Reconnecting")
         .accessibilityIdentifier("session.reconnectingChip")
     }
+}
+
+/// A session page has a page of its own pushed over it (`ChatView` leaves the left edge to it).
+struct SessionPageOverKey: PreferenceKey {
+    static let defaultValue = false
+    static func reduce(value: inout Bool, nextValue: () -> Bool) { value = value || nextValue() }
 }

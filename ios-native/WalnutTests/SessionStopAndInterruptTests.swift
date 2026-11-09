@@ -212,12 +212,14 @@ final class SessionStopAndInterruptTests: XCTestCase {
         XCTAssertEqual(Set(transport.messageIds.compactMap { $0 }).count, 1, "one id: the server stops the turn once")
     }
 
-    func testAPlainSendIsLinedUpBehindTheRunningTurn() async {
+    /// A plain send goes to the session at once, the web's way, never held until the turn
+    /// ends (2026-11-09, the owner: "不要queue了 就像网页版也一样直接发出去").
+    func testAPlainSendGoesOutAtOnceWhileATurnRuns() async {
         let (store, transport) = store("lined")
         await store.open()
         store.handle(event("turn-start"))
         _ = await store.sendFromComposer("then this")
-        XCTAssertEqual(transport.afterTurnFlags, [true], "the server holds it in its queue until the turn ends")
+        XCTAssertEqual(transport.afterTurnFlags, [false], "no hold: the server delivers it into the running turn")
         XCTAssertEqual(transport.interruptFlags, [false])
     }
 
@@ -230,7 +232,7 @@ final class SessionStopAndInterruptTests: XCTestCase {
         XCTAssertEqual(transport.interruptFlags, [true])
     }
 
-    func testEveryRetryOfALinedUpSendCarriesTheFlagUnderOneId() async {
+    func testEveryRetryOfAPlainSendGoesUnderOneIdWithNoHold() async {
         let (store, transport) = store("lined-retry")
         await store.open()
         transport.failuresRemaining = 1
@@ -242,7 +244,7 @@ final class SessionStopAndInterruptTests: XCTestCase {
             return XCTFail("the failed send keeps a retryable bubble")
         }
         await store.retry(failed)
-        XCTAssertEqual(transport.afterTurnFlags, [true, true])
+        XCTAssertEqual(transport.afterTurnFlags, [false, false])
         XCTAssertEqual(Set(transport.messageIds.compactMap { $0 }).count, 1)
     }
 

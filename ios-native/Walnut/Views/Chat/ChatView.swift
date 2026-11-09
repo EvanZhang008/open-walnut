@@ -28,7 +28,27 @@ struct ChatView: View {
     /// remembered (`ChatPlace`), so a launch after the system ended the app puts
     /// the user back in it. `ChatPlaceGuardTests` fails on a session pushed here
     /// any other way.
-    @State private var openedAskSession: WalnutSession?
+    ///
+    /// One page at most over the sidebar, never a history: the chats in the drawer are peers, so
+    /// opening the CEO from an ask puts the CEO in the ask's place and Back goes to the sidebar
+    /// (2026-11-09, the owner: "这俩是平级 没有什么回去上一个的"). An item destination given a new
+    /// value while one was shown pushed the second over the first.
+    private var openedAskSession: WalnutSession? {
+        get { chatPath.last }
+        nonmutating set {
+            // The chat already on the page, opened again: left as it is (a new value of the
+            // same session would push its page again and start its store over).
+            if let newValue, chatPath.count == 1, chatPath[0].id == newValue.id { return }
+            chatPath = newValue.map { [$0] } ?? []
+        }
+    }
+    /// The session on the page has a page of its own over it (`SessionPageOverKey`): the left
+    /// edge is that page's Back, not the sidebar.
+    @State private var sessionPageOver = false
+    /// The session the launch put back (`restorePlace`): showing it again is no open, so it
+    /// is not recorded in the synced Recent list until the user opens it themself.
+    @State private var restoredAtLaunch: String?
+    @State private var chatPath: [WalnutSession] = []
     /// The node page a thread push asked for, opened over the node's chat as it appears.
     @State private var orgPageOnOpen: (sessionId: String, open: OrgNodePageOpen)?
     @State private var orgLink = OrgNodeLink.shared
@@ -59,6 +79,10 @@ struct ChatView: View {
     /// Set once a drag has been judged NOT the drawer's, so a scroll that turns
     /// sideways halfway down the transcript cannot suddenly grab the drawer.
     @State private var dragRejected = false
+    /// True while a touch of `edgeDrag` is down. A drag the system takes away (a scroll view, the
+    /// navigation stack) never reaches `onEnded`; this going false is when such a drag is over, so
+    /// a rejected one cannot keep the next swipe from opening the sidebar.
+    @GestureState private var edgeTouch = false
     /// True for the life of a claimed drag: while it is up, nothing inside the
     /// drawer acts on a tap. A close drag starts ON a row, and a full-width
     /// `Button` fires on release even after the finger has travelled 200pt, so
@@ -120,6 +144,15 @@ struct ChatView: View {
         // scroll. Running alongside it, `ChatDrawerGeometry.tracksDrag` is what
         // keeps the two apart.
         .simultaneousGesture(edgeDrag)
+        .onChange(of: edgeTouch) { _, touching in
+            guard !touching else { return }
+            dragRejected = false
+            DispatchQueue.main.async { suppressDrawerTaps = false }
+            // Taken away mid-drag: settle where the drawer is.
+            guard dragOrigin != nil else { return }
+            dragOrigin = nil
+            setDrawer(open: ChatDrawerGeometry.settlesOpen(progress: drawer, velocityX: 0))
+        }
     }
 
     /// The two page measurements the drawer needs, in one geometry read.
@@ -129,7 +162,7 @@ struct ChatView: View {
     }
 
     private var chatStack: some View {
-        NavigationStack {
+        NavigationStack(path: $chatPath) {
             VStack(spacing: 0) {
                 if !connection.online {
                     OfflineBanner(text: "Offline: showing cached data")
@@ -157,17 +190,45 @@ struct ChatView: View {
                 }
                 MessageListView()
             }
-            .navigationDestination(item: $openedAskSession) { session in
+            .navigationDestination(for: WalnutSession.self) { session in
                 SessionConversationView(
                     session: session,
                     orgPageOnOpen: orgPageOnOpen?.sessionId == session.id ? orgPageOnOpen?.open : nil)
                     // Another session is another page: a launch restore that finds
                     // the task moved on swaps it in place (`restorePlace`).
                     .id(session.id)
+                    // A peer of the chat, not a page above it (2026-11-09, the owner: "当然是回去
+                    // side bar啊 这俩是平级"): no Back, the sidebar button instead, and the left
+                    // edge opens the sidebar (`edgeDrag`).
+                    .navigationBarBackButtonHidden(true)
+                    .environment(\.orgPagePlace, .chat)
+                    .environment(\.recordsSessionOpen, session.id != restoredAtLaunch)
+                    .onPreferenceChange(SessionPageOverKey.self) { sessionPageOver = $0 }
+                    // The sidebar opens over this page too, and the tab bar steps aside for it:
+                    // the same band as the chat's keeps the composer where it was.
+                    .safeAreaInset(edge: .bottom, spacing: 0) {
+                        if tabBarCompensation > 0 {
+                            Rectangle()
+                                .fill(ComposerCard.backdrop)
+                                .frame(height: tabBarCompensation)
+                        }
+                    }
+                    .toolbar {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button {
+                                setDrawer(open: !isOpen)
+                            } label: {
+                                Image(systemName: "line.3.horizontal")
+                            }
+                            .accessibilityIdentifier("chat.session.menu")
+                            .accessibilityLabel("Conversations and agents")
+                        }
+                    }
             }
             // Every push and every pop, from any entry: Back is the user leaving
             // it, so a launch then opens the chat underneath.
             .onChange(of: openedAskSession) { _, session in
+                if session?.id != restoredAtLaunch { restoredAtLaunch = nil }
                 ChatPlace.saveOpenSession(session)
             }
             // The voice Quick Action speaks to the main agent through the chat's own
@@ -301,6 +362,7 @@ struct ChatView: View {
             if openedAskSession == nil { ChatPlace.saveOpenSession(nil) }
             return
         }
+        restoredAtLaunch = session.id
         openedAskSession = session
         // The page he had open over an Org node's chat comes back over it (`ViewMemory`, kept per
         // node while it is open); only here, at the launch restore: a chat opened on purpose
@@ -327,6 +389,7 @@ struct ChatView: View {
             let resolved = await tasks?.resolveSession(id: current, task: tasks?.tasks.first { $0.id == taskId })
             guard let resolved, openedAskSession?.id == session.id else { return }
             if let keptPage { orgPageOnOpen = (resolved.id, OrgNodePageOpen(tab: keptPage, threadId: nil)) }
+            restoredAtLaunch = resolved.id
             openedAskSession = resolved
         }
     }
@@ -364,6 +427,9 @@ struct ChatView: View {
         withTransaction(instant) { drawer = 0 }
         let token = UUID()
         orgOpening = (token, row.name)
+        // The sidebar opens over a session too: the page under the tap is what a later open
+        // replaces, and a change meanwhile is the user moving on.
+        let shownAtTap = openedAskSession?.id
         Task {
             defer { if orgOpening?.token == token { orgOpening = nil } }
             let api = WalnutAPI()
@@ -379,7 +445,7 @@ struct ChatView: View {
                 let detail = try await api.taskDetail(id: taskId)
                 tasks?.noteSessionIds(taskId: taskId, ids: detail.sessionIds ?? [])
                 // The user moved on (another tap, another chat) while this was asked: drop it.
-                guard orgOpening?.token == token, openedAskSession == nil else { return }
+                guard orgOpening?.token == token, openedAskSession?.id == shownAtTap else { return }
                 guard let sessionId = detail.currentSessionId else {
                     orgFirstMessageDraft = ""
                     sessionlessOrgNode = OrgNodeStart(id: taskId, name: row.name, isCEO: row.kind == .ceo)
@@ -546,11 +612,19 @@ struct ChatView: View {
         }
     }
 
+    /// The chat itself on the page, with no slide: the sidebar was the way there.
+    private func showChat() {
+        guard openedAskSession != nil else { return }
+        var instant = Transaction()
+        instant.disablesAnimations = true
+        withTransaction(instant) { openedAskSession = nil }
+    }
+
     // MARK: - Drawer
 
     private var drawerLayer: some View {
         ChatDrawer(suppressTaps: $suppressDrawerTaps, close: { setDrawer(open: false) }, openAsk: openAsk,
-                   isOpen: drawer > 0, openOrgNode: openOrgNode)
+                   isOpen: drawer > 0, openOrgNode: openOrgNode, showChat: showChat)
             .frame(width: drawerWidth)
             .frame(maxHeight: .infinity, alignment: .top)
             .background {
@@ -638,6 +712,7 @@ struct ChatView: View {
 
     private var edgeDrag: some Gesture {
         DragGesture(minimumDistance: 12)
+            .updating($edgeTouch) { _, touching, _ in touching = true }
             .onChanged { value in
                 // A travelled touch is not a tap, EVEN ONE THE DRAWER DOES NOT
                 // CLAIM. The rejected drags matter as much as the claimed ones:
@@ -649,8 +724,8 @@ struct ChatView: View {
                 if isOpen { suppressDrawerTaps = true }
                 if dragOrigin == nil {
                     guard !dragRejected else { return }
-                    // Over a pushed ask, the left edge is the page's back swipe.
-                    guard openedAskSession == nil else {
+                    // A page over the session (an Org page, a fork) has a Back of its own.
+                    guard openedAskSession == nil || !sessionPageOver else {
                         dragRejected = true
                         return
                     }

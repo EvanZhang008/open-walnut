@@ -49,6 +49,20 @@ enum ViewMemory {
         }
     }
 
+    /// A kept id (the session a page shows), or nil.
+    static func readId(
+        _ page: String, _ name: String, defaults: UserDefaults = AppPrefs.defaults
+    ) -> String? {
+        defaults.string(forKey: key(page, name)).flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    static func writeId(
+        _ id: String?, _ page: String, _ name: String, defaults: UserDefaults = AppPrefs.defaults
+    ) {
+        let key = key(page, name)
+        if let id, !id.isEmpty { defaults.set(id, forKey: key) } else { defaults.removeObject(forKey: key) }
+    }
+
     /// Keeps `value`; nil forgets the choice (the sub-page was closed).
     static func write<T: RawRepresentable>(
         _ value: T?, _ page: String, _ name: String, id: String? = nil,
@@ -57,4 +71,30 @@ enum ViewMemory {
         let key = key(page, name, id: id)
         if let value { defaults.set(value.rawValue, forKey: key) } else { defaults.removeObject(forKey: key) }
     }
+}
+
+/// Which page an Org node's chat is open on. The page kept over that chat is kept per page as
+/// well as per node: the Chat tab and the Tasks tab each come back to their own (2026-11-09).
+enum OrgPagePlace: String {
+    /// The Chat tab and the Tasks tab, each with its own kept page. `other` is every other host
+    /// of a session page (a sheet, the calendar, an Inbox letter): it keeps nothing, so it never
+    /// changes what a tab comes back to.
+    case chat, tasks, other
+
+    /// The id the kept page is stored under, nil = not kept. The Chat tab keeps the key it always had.
+    func keyId(_ nodeId: String) -> String? {
+        switch self {
+        case .chat: nodeId
+        case .tasks: "\(rawValue).\(nodeId)"
+        case .other: nil
+        }
+    }
+}
+
+import SwiftUI
+
+extension EnvironmentValues {
+    /// The page an Org node's chat sits on (`OrgPagePlace`): the Chat tab sets `.chat`, the Tasks
+    /// tab `.tasks`; anywhere else keeps nothing.
+    @Entry var orgPagePlace: OrgPagePlace = .other
 }

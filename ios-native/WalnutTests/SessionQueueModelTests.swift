@@ -64,15 +64,17 @@ final class SessionQueueModelTests: XCTestCase {
     // MARK: - Pace of the read clock
 
     func testThePaceFollowsHowLikelyTheListIsToChange() {
-        let p = SessionQueueModel.pollInterval
+        let p = { SessionQueueModel.pollInterval(turnRunning: $0, hasRows: $1, failures: $2) }
         XCTAssertEqual(p(true, true, 0), 3)
         XCTAssertEqual(p(false, true, 0), 5)
         XCTAssertEqual(p(true, false, 0), 6)
         XCTAssertEqual(p(false, false, 0), 15)
+        XCTAssertEqual(SessionQueueModel.pollInterval(turnRunning: false, hasRows: false, failures: 0, watching: true), 1.5,
+                       "a send on its way is read often, so its Queued turns Delivered at once")
     }
 
     func testAnUnansweredServerIsAskedLessAndLessButNeverLessThanEveryMinute() {
-        let p = SessionQueueModel.pollInterval
+        let p = { SessionQueueModel.pollInterval(turnRunning: $0, hasRows: $1, failures: $2) }
         XCTAssertEqual(p(true, true, 1), 6)
         XCTAssertEqual(p(true, true, 2), 12)
         XCTAssertLessThanOrEqual(p(true, true, 50), 60)
@@ -379,7 +381,8 @@ final class SessionQueueModelTests: XCTestCase {
         t.rows = [row("qm-a", status: "processing")]
         await m.withdraw(m.rows[0])
         XCTAssertEqual(m.notice, "That message already started delivering.")
-        XCTAssertEqual(m.rows.first?.status, "processing", "the server's list is the truth")
+        // Handed to the session (processing, the web's rule): it is no longer in the line.
+        XCTAssertTrue(m.rows.isEmpty, "the server's list is the truth: the message went in")
     }
 
     // MARK: - Edit
@@ -419,7 +422,7 @@ final class SessionQueueModelTests: XCTestCase {
         let ok = await m.edit(m.rows[0], to: "new")
         XCTAssertFalse(ok)
         XCTAssertEqual(m.notice, "That message already started delivering.")
-        XCTAssertEqual(m.rows.first?.message, "old")
+        XCTAssertTrue(m.rows.isEmpty, "it went in with its old words: nothing left to edit")
     }
 
     // MARK: - Send now
@@ -508,6 +511,101 @@ final class SessionQueueModelTests: XCTestCase {
             XCTAssertFalse(text.isEmpty, code)
             XCTAssertFalse(text.contains(code), code)
         }
+    }
+
+    // MARK: - Each message's own state (no card), the web's way
+
+    /// A send of this page reads Queued while its row waits, Delivered for a moment once the
+    /// session has it, then nothing; and never Queued or Delivering after the server says it
+    /// was handed over, whatever stage it reports (2026-11-09: the owner's phone said
+    /// "Delivering" while the session was already thinking).
+    func testASendReadsQueuedThenDeliveredThenNothing() async {
+        let transport = Transport()
+        let queue = model(transport)
+        let saved = SessionQueueModel.deliveredSpan
+        SessionQueueModel.deliveredSpan = 0.3
+        defer { SessionQueueModel.deliveredSpan = saved }
+        transport.rows = [row("qm-a")]
+        queue.watch("qm-a")
+        await queue.refresh()
+        XCTAssertEqual(queue.sendStates["qm-a"], .pending, "waiting to go in: Queued on its bubble")
+        XCTAssertTrue(queue.trayRows.isEmpty, "a waiting message is no card")
+        for stage in [nil, "waiting", "written", "taken"] as [String?] {
+            var handed = row("x", status: "processing")
+            handed.stage = stage
+            XCTAssertTrue(handed.isDelivered, "processing, stage \(stage ?? "nil"): delivered")
+        }
+        transport.rows = [row("qm-a", status: "processing")]
+        await queue.refresh()
+        XCTAssertEqual(queue.sendStates["qm-a"], .delivered, "handed to the session: Delivered")
+        try? await Task.sleep(for: .seconds(0.6))
+        XCTAssertNil(queue.sendStates["qm-a"], "Delivered fades, the bubble is a plain message")
+    }
+
+    /// A row gone from the line before the page ever read it (delivered mid-turn at once) is
+    /// delivered, never left Queued.
+    func testASendGoneFromTheLineIsDelivered() async {
+        let transport = Transport()
+        let queue = model(transport)
+        queue.watch("qm-b")
+        XCTAssertEqual(queue.sendStates["qm-b"], .pending, "accepted, not read yet")
+        await queue.refresh()
+        XCTAssertEqual(queue.sendStates["qm-b"], .delivered)
+    }
+
+    /// A read that left before the send was accepted cannot see it: its absence there is no
+    /// delivery (the send would read Delivered, then Queued again).
+    func testAReadFromBeforeTheSendIsNoDelivery() async {
+        let queue = model(Transport())
+        queue.watch("qm-c")
+        queue.updateSendStates(fetched: [], read: 0)
+        XCTAssertEqual(queue.sendStates["qm-c"], .pending, "an older read's empty line proves nothing")
+        queue.updateSendStates(fetched: [], read: 5)
+        XCTAssertEqual(queue.sendStates["qm-c"], .delivered, "a later read without it: delivered")
+    }
+
+    /// The fast read follows a send only for a while: a send that waits long (an engine that
+    /// takes it at the turn's end, a host away) goes back to the normal pace.
+    func testTheFastReadEndsWhileASendStillWaits() {
+        let queue = model(Transport())
+        queue.watch("qm-d")
+        XCTAssertTrue(queue.watchingFast())
+        XCTAssertFalse(queue.watchingFast(now: Date().addingTimeInterval(SessionQueueModel.watchFastSpan + 1)))
+    }
+
+    /// Waiting bubbles read in the server's order, another device's included; the rest of the
+    /// conversation stays where it is.
+    func testWaitingBubblesFollowTheServersOrder() {
+        func bubble(_ id: String, _ client: String?) -> ChatMessage {
+            var m = ChatMessage(id: id, role: "user", text: id, createdAt: "", kind: nil)
+            m.clientMessageId = client
+            return m
+        }
+        func waiting(_ id: String, _ at: String) -> SessionQueuedMessage {
+            SessionQueuedMessage(id: id, message: id, status: "pending", enqueuedAt: at)
+        }
+        let rows = ["qm-mine": waiting("qm-mine", "2026-11-09T10:00:02Z"),
+                    "qm-other": waiting("qm-other", "2026-11-09T10:00:01Z")]
+        let page = [bubble("old", nil), bubble("mine", "qm-mine"), SessionTimelineBody.bubble(for: rows["qm-other"]!)]
+        XCTAssertEqual(SessionTimelineBody.inServerOrder(page, rows: rows).map(\.id), ["old", "queued-qm-other", "mine"])
+    }
+
+    /// Only the two tabs keep an Org node's page: anywhere else a session page opens keeps none.
+    func testOnlyTheTabsKeepAnOrgPage() {
+        XCTAssertEqual(OrgPagePlace.chat.keyId("n1"), "n1")
+        XCTAssertEqual(OrgPagePlace.tasks.keyId("n1"), "tasks.n1")
+        XCTAssertNil(OrgPagePlace.other.keyId("n1"))
+    }
+
+    /// Only a row that needs a hand is a card: set aside by a Stop, or held on the companion.
+    func testTheCardListsOnlyRowsThatNeedAHand() async {
+        let transport = Transport()
+        let queue = model(transport)
+        transport.rows = [row("p1"), row("s1", status: "parked"), row("h1", status: "held")]
+        await queue.refresh()
+        XCTAssertEqual(queue.trayRows.map(\.id), ["s1", "h1"])
+        XCTAssertEqual(queue.waitingRowsWithoutBubble(["p1"]).count, 0, "its own bubble stands for it")
+        XCTAssertEqual(queue.waitingRowsWithoutBubble([]).map(\.id), ["p1"], "another device's: drawn as a bubble")
     }
 }
 

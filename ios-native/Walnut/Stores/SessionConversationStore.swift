@@ -86,11 +86,13 @@ final class SessionConversationStore {
     /// The server took an interrupting send under this id: it goes out this very moment, so the queue list
     /// need not show it beside its bubble (the page wires this to `SessionQueueModel.hideWhileGoingOut`).
     @ObservationIgnored var onInterruptAccepted: ((String) -> Void)?
-    /// Bubbles sent while the page may be mid-turn without "Interrupt & send": every attempt
-    /// carries `afterTurn: true`, so the server holds the message in its queue (editable and
-    /// withdrawable) until the running turn ends instead of writing it into that turn. With
-    /// no turn running the server sends it at once.
+    /// Bubbles to be held by the server until the running turn ends (`afterTurn: true`). None
+    /// any more: a send goes to the session at once, the web's way, and its bubble says where it
+    /// is (2026-11-09, the owner: "不要queue了 就像网页版也一样直接发出去"). Kept for a caller that asks.
     @ObservationIgnored private var afterTurnBubbleIDs: Set<String> = []
+    /// The server took this message id: the page follows it until the session has it, so its
+    /// bubble reads Queued, then Delivered (`SessionQueueModel.watch`).
+    @ObservationIgnored var onAccepted: ((String) -> Void)?
     /// A tool call came after the live words: the next words start a new paragraph.
     @ObservationIgnored private var liveTextBreaksBeforeNext = false
     /// When each file send's progress was last written to its kept copy.
@@ -1334,7 +1336,7 @@ final class SessionConversationStore {
         // Spoken (voice mode): every attempt of this bubble, retries included,
         // goes out with `voice: true`.
         if voice { voiceBubbleIDs.insert(optimistic.id) }
-        if interrupt { interruptBubbleIDs.insert(optimistic.id) } else { afterTurnBubbleIDs.insert(optimistic.id) }
+        if interrupt { interruptBubbleIDs.insert(optimistic.id) }
         // Carry thumbnails so the bubble shows them at once and a failed send
         // retains them for retry (the user's attachments never vanish).
         if !jpegDatas.isEmpty { optimistic.localImages = jpegDatas }
@@ -1514,7 +1516,7 @@ final class SessionConversationStore {
             // 1. The bubble stops "sending". 2. Its row may already be on the page:
             // the turn can write it before the answer to the POST arrives.
             // Otherwise the next transcript read (resume, open) absorbs it.
-            markAccepted(bubbleID)
+            markAccepted(bubbleID, follow: !interrupting)
             // 3. A relayed 202 proves the bridge is up: clear an outage a previous
             // attempt raised, same reasoning as a delivered snapshot, so a page that
             // comes back shows no stale outage. A BANKED 202 proves the opposite
@@ -1605,9 +1607,11 @@ final class SessionConversationStore {
     /// The server has this bubble's message: it stops "sending", the app's copies
     /// of its files and its kept copy go (the host and the server hold them now),
     /// and its row takes its place once the transcript has it.
-    private func markAccepted(_ bubbleID: String) {
+    private func markAccepted(_ bubbleID: String, follow: Bool = true) {
         acceptedSends &+= 1
         if let idx = pendingUser.firstIndex(where: { $0.id == bubbleID }) {
+            // An interrupt goes in at once (`hideWhileGoingOut`): no Queued on its bubble.
+            if follow, let messageId = pendingUser[idx].clientMessageId { onAccepted?(messageId) }
             pendingUser[idx].pending = false
             pendingUser[idx].failed = false
             pendingUser[idx].retryNotice = nil

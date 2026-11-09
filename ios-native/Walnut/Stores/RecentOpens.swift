@@ -32,7 +32,20 @@ struct RecentOpen: Codable, Equatable, Identifiable {
     }
 }
 
-/// The history behind the Tasks drawer, newest first, kept on this phone only.
+/// Where the synced list is read and written (`WalnutAPI`; a stub in tests).
+protocol RecentOpenedTransport: Sendable {
+    func recentOpened() async throws -> [RecentOpenedEntry]
+    func recordRecentOpened(_ entries: [RecentOpenedEntry]) async throws
+}
+
+/// The history behind the Tasks drawer, newest first.
+///
+/// What the drawer LISTS is the person's one synced list (`walnut-todo-recent-opened`, the
+/// web's and the Mac app's Recent too: 2026-11-09, "Recent is one list on every surface"):
+/// task ids with when they were opened, on any device. This phone's own entries are the
+/// snapshots that make a row openable (the session last opened for the task, the task as
+/// seen), and the list itself while the synced one cannot be read (offline, an older server,
+/// the demo).
 ///
 /// Recorded where a thing is actually SEEN, not where it is tapped:
 /// `SessionConversationView` and `TaskDetailSheet` record themselves on appear, so
@@ -53,6 +66,23 @@ final class RecentOpens {
     static let cacheKey = "tasks-recent-opens"
 
     private(set) var entries: [RecentOpen] = []
+    /// The synced list as last read, with this phone's own opens on top; nil until read once.
+    private(set) var synced: [RecentOpenedEntry]?
+    /// Where the synced list lives; nil = this phone's list only (the demo, a test).
+    @ObservationIgnored var transport: (any RecentOpenedTransport)?
+    /// Opens the server has not taken yet (it was away): sent again at the next read.
+    @ObservationIgnored private var unsent: [RecentOpenedEntry] = []
+    /// The phone's own list from before the synced one was handed over once (`handOver`).
+    static let handedOverKey = "tasks.recents.syncedHandedOver"
+    /// The synced list's size on the server.
+    static let syncedCap = 50
+
+    /// What the drawer shows: the synced list (each row with this phone's snapshot of it,
+    /// when it has one), else this phone's own list.
+    var shownEntries: [RecentOpen] {
+        guard let synced else { return entries }
+        return Self.shown(synced: synced, local: entries)
+    }
 
     @ObservationIgnored private var persists = false
     /// Bumped by `eraseAll`, so a hydrate that was reading the old file when a
@@ -72,6 +102,7 @@ final class RecentOpens {
         let saved = file ?? DemoEntry.sampleRecentOpens()
         let merged = Self.merged(newer: entries, older: saved, cap: Self.cap)
         persists = true
+        if transport == nil, !DemoMode.isActive { transport = WalnutAPI() }
         if merged != entries { entries = merged }
         // Also when nothing was on disk: visits made before the read are only in memory.
         if merged != cached { persist() }
@@ -79,18 +110,47 @@ final class RecentOpens {
 
     func recordSession(_ session: WalnutSession, at now: Date = AppClock.now()) {
         apply(Self.recordingSession(session, at: now, into: entries, cap: Self.cap))
+        // Only a task's open is on the synced list: a session with no task is this phone's.
+        if let taskId = RecentOpen.key(taskId: session.taskId) { share(taskId, at: now) }
     }
 
     func recordTask(_ task: WalnutTask, at now: Date = AppClock.now()) {
         apply(Self.recordingTask(task, at: now, into: entries, cap: Self.cap))
+        share(task.id, at: now)
     }
 
-    func remove(id: String) {
-        apply(entries.filter { $0.id != id })
+    /// Read the synced list (the drawer opening, the app coming back): send what the server
+    /// missed first, hand this phone's old list over once, then show the server's list with
+    /// anything still unsent on top.
+    func refreshSynced() async {
+        guard persists, let transport else { return }
+        if !unsent.isEmpty {
+            let pending = unsent
+            if (try? await transport.recordRecentOpened(pending)) != nil {
+                unsent.removeAll { pending.contains($0) }
+            }
+        }
+        if !AppPrefs.defaults.bool(forKey: Self.handedOverKey) {
+            let old = entries.compactMap { entry in
+                entry.taskId.map { RecentOpenedEntry(id: $0, at: Self.iso(entry.openedAt)) }
+            }
+            var handed = old.isEmpty
+            if !handed { handed = (try? await transport.recordRecentOpened(old)) != nil }
+            if handed { AppPrefs.defaults.set(true, forKey: Self.handedOverKey) }
+        }
+        guard let read = try? await transport.recentOpened() else { return }
+        let next = Self.union(read, unsent, cap: Self.syncedCap)
+        if next != synced { synced = next }
     }
 
-    func clear() {
-        apply([])
+    /// One open onto the synced list: on top here at once, and sent (the server merges it).
+    private func share(_ taskId: String, at now: Date) {
+        guard persists, let transport else { return }
+        let entry = RecentOpenedEntry(id: taskId, at: Self.iso(now))
+        if let synced { self.synced = Self.union([entry], synced, cap: Self.syncedCap) }
+        Task { [weak self] in
+            do { try await transport.recordRecentOpened([entry]) } catch { self?.unsent.append(entry) }
+        }
     }
 
     /// Disconnect: forget it in memory. The file goes with `DiskCache.clearAll()`.
@@ -98,6 +158,10 @@ final class RecentOpens {
         generation += 1
         persists = false
         entries = []
+        synced = nil
+        unsent = []
+        // Another server's list is another person's list: its own phone list is handed over.
+        AppPrefs.defaults.removeObject(forKey: Self.handedOverKey)
     }
 
     private func apply(_ next: [RecentOpen]) {
@@ -112,6 +176,46 @@ final class RecentOpens {
     }
 
     // MARK: - The rules (pure, tested)
+
+    /// Each task once, with its newest time, newest first, at most `cap`.
+    static func union(_ a: [RecentOpenedEntry], _ b: [RecentOpenedEntry], cap: Int) -> [RecentOpenedEntry] {
+        var newest: [String: (entry: RecentOpenedEntry, at: Date)] = [:]
+        let both: [RecentOpenedEntry] = a + b
+        for entry in both {
+            let at = date(entry.at) ?? .distantPast
+            if let kept = newest[entry.id], kept.at >= at { continue }
+            newest[entry.id] = (entry, at)
+        }
+        return newest.values.sorted { $0.at == $1.at ? $0.entry.id < $1.entry.id : $0.at > $1.at }
+            .prefix(cap).map(\.entry)
+    }
+
+    /// The synced list as rows: each with this phone's snapshot of the task when it has one,
+    /// at the time the synced list gives.
+    static func shown(synced: [RecentOpenedEntry], local: [RecentOpen]) -> [RecentOpen] {
+        var byId: [String: RecentOpen] = [:]
+        for entry in local where byId[entry.id] == nil { byId[entry.id] = entry }
+        return synced.map { item in
+            let at = date(item.at) ?? .distantPast
+            guard var entry = byId[item.id] else {
+                return RecentOpen(id: item.id, taskId: item.id, task: nil, session: nil, openedAt: at)
+            }
+            entry.openedAt = at
+            return entry
+        }
+    }
+
+    static func iso(_ date: Date) -> String {
+        let format = ISO8601DateFormatter()
+        format.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return format.string(from: date)
+    }
+
+    static func date(_ text: String) -> Date? {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fractional.date(from: text) ?? ISO8601DateFormatter().date(from: text)
+    }
 
     static func recordingSession(
         _ session: WalnutSession, at now: Date, into entries: [RecentOpen], cap: Int

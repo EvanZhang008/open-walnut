@@ -160,7 +160,7 @@ enum TimelineRowContent {
     /// the Withdraw control is GONE — not disabled, gone — because there is nothing
     /// left that could take it back, and a control that silently does nothing is
     /// worse than no control.
-    case queuedNotice(delivering: Bool, stacked: Bool)
+    case queuedNotice(delivering: Bool, stacked: Bool, delivered: Bool = false)
     /// Code fence: header (language, Wrap, Copy), colored monospace text that
     /// scrolls sideways, or wraps when its Wrap is on (per block).
     case code(TimelineCodeBlock)
@@ -358,8 +358,9 @@ extension TimelineRowContent {
             hasher.combine(description.title)
         case .failedNotice(let notice):
             hasher.combine(notice)
-        case .queuedNotice(let delivering, let stacked):
+        case .queuedNotice(let delivering, let stacked, let delivered):
             hasher.combine(delivering)
+            hasher.combine(delivered)
             // Drawn AND measured: a text-size change that only flips this must still
             // reload the cell.
             hasher.combine(stacked)

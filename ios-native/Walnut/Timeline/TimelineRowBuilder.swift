@@ -406,6 +406,7 @@ final class TimelineRowBuilder {
             // have failed to post — and an `undecided` entry is the failed bubble
             // above, which is why it is excluded here rather than badged.
             let delivering = queued == .processing
+            let delivered = queued == .delivered
             // Side by side at ordinary text sizes, stacked once the user asks for
             // accessibility text: MEASURED on the pinned simulator, one row could not
             // hold both controls at accessibility-XXXL (the two of them want ~410pt of
@@ -414,9 +415,9 @@ final class TimelineRowBuilder {
             // next message.
             let stacked = TimelineTextStyler.adoptedCategory.isAccessibilityCategory
             rows.append(TimelineRow(
-                id: nextID(), revision: (delivering ? 1 : 0) + (stacked ? 2 : 0),
-                content: .queuedNotice(delivering: delivering, stacked: stacked),
-                height: Self.queuedNoticeHeight(delivering: delivering, stacked: stacked)
+                id: nextID(), revision: (delivering ? 1 : 0) + (stacked ? 2 : 0) + (delivered ? 4 : 0),
+                content: .queuedNotice(delivering: delivering, stacked: stacked, delivered: delivered),
+                height: Self.queuedNoticeHeight(delivering: delivering || delivered, stacked: stacked)
             ))
         }
         return rows

@@ -191,8 +191,14 @@ final class ChatPlaceGuardTests: XCTestCase {
             let pushes = code.components(separatedBy: "SessionConversationView(").count - 1
             if path.hasSuffix("/ChatView.swift") {
                 XCTAssertEqual(pushes, 1, "ChatView pushes a session in exactly one place")
-                XCTAssertTrue(code.contains(".navigationDestination(item: $openedAskSession)"),
+                XCTAssertTrue(code.contains(".navigationDestination(for: WalnutSession.self)"),
                               "that place is the openedAskSession destination")
+                XCTAssertTrue(code.contains("chatPath = newValue.map { [$0] } ?? []"),
+                              "a chat opened over another takes its place: the stack holds one chat at most")
+                XCTAssertTrue(code.contains(".navigationBarBackButtonHidden(true)"),
+                              "a chat over the chat is its peer: no Back to the one under it")
+                XCTAssertTrue(code.contains("showChat: showChat"),
+                              "picking a conversation in the sidebar takes the chat over it away")
                 XCTAssertTrue(code.contains("ChatPlace.saveOpenSession(session)"),
                               "every change of openedAskSession is remembered")
                 XCTAssertTrue(code.contains("whenActive { restorePlace() }"),

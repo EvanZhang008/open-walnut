@@ -40,7 +40,7 @@ struct SessionQueueStrip: View {
     /// At the accessibility sizes the keyboard leaves the conversation no room at all: the tray steps aside
     /// while the person types, and is back when the keyboard goes.
     private var trayShown: Bool {
-        queue.hasRows && !(dynamicTypeSize.isAccessibilitySize && keyboardUp)
+        !queue.trayRows.isEmpty && !(dynamicTypeSize.isAccessibilitySize && keyboardUp)
     }
 
     var body: some View {
@@ -72,11 +72,11 @@ struct SessionQueueStrip: View {
     private var trayCard: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            ForEach(queue.rows.prefix(shownRows)) { row in
+            ForEach(queue.trayRows.prefix(shownRows)) { row in
                 rowView(row)
             }
-            if queue.rows.count > shownRows {
-                if shownRows == 0, let first = queue.rows.first {
+            if queue.trayRows.count > shownRows {
+                if shownRows == 0, let first = queue.trayRows.first {
                     // Squeezed to one line: the first message in words, and the way to the rest.
                     HStack(spacing: 8) {
                         Button { onOpen(QueueRowRef(id: first.id)) } label: {
@@ -121,11 +121,11 @@ struct SessionQueueStrip: View {
 
     private var showAllButton: some View {
         Button {
-            if queue.rows.count == 1, let only = queue.rows.first { onOpen(QueueRowRef(id: only.id)) } else { onShowAll() }
+            if queue.trayRows.count == 1, let only = queue.trayRows.first { onOpen(QueueRowRef(id: only.id)) } else { onShowAll() }
         } label: {
             // One message left behind the squeezed tray: "Show all 1" reads oddly, and what the button
             // opens for it is the edit sheet.
-            Text(queue.rows.count == 1 ? "Edit" : "Show all \(queue.rows.count)")
+            Text(queue.trayRows.count == 1 ? "Edit" : "Show all \(queue.trayRows.count)")
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(Theme.tint)
                 .frame(minHeight: 36)
@@ -173,7 +173,7 @@ struct SessionQueueStrip: View {
             .font(.caption.weight(.semibold))
         Text("Queued")
             .font(.subheadline.weight(.semibold))
-        Text("\(queue.rows.count)")
+        Text("\(queue.trayRows.count)")
             .font(.caption2.weight(.bold))
             .padding(.horizontal, 6)
             .padding(.vertical, 1)
@@ -205,7 +205,7 @@ struct SessionQueueStrip: View {
     }
 
     private var headline: some View {
-        Text(queue.rows.headline(turnRunning: turnRunning))
+        Text(queue.trayRows.headline(turnRunning: turnRunning))
             .font(.footnote)
             .accessibilityIdentifier("session.queue.headline")
     }

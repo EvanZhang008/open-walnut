@@ -50,25 +50,75 @@ struct SessionTimelineBody: View {
         return Dictionary(queue.rows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
-    /// A message in the queue lives in the tray above the composer, once: its bubble joins
-    /// the conversation when the queue lets go of it, and the transcript's own row
-    /// replaces that. Two copies of one message, each with its own controls, read as
-    /// two messages.
+    /// Every message is its own bubble in the conversation, the web's way (2026-11-09, the
+    /// owner: no queue card, Queued or Delivered on each message): only a row that needs a
+    /// hand (set aside by a Stop, held on the companion) lives in the card above the composer
+    /// instead, once. A waiting row another device sent, with no bubble here, is drawn as one,
+    /// after this page's own, in the order the server took them in.
     private var visibleMessages: [ChatMessage] {
         let rows = queueRowsByMessage
-        guard !rows.isEmpty else { return store.messages }
-        return store.messages.filter { (message: ChatMessage) -> Bool in
+        guard let queue, !rows.isEmpty else { return store.messages }
+        let own = store.messages.filter { (message: ChatMessage) -> Bool in
             guard let id = message.clientMessageId else { return true }
             return !Self.queueHolds(rows[id])
         }
+        // A transcript row names its message by `walnutMessageId`: a row already in the
+        // conversation is never drawn a second time from the line.
+        let shown = Set(store.messages.compactMap(\.clientMessageId) + store.messages.compactMap(\.walnutMessageId))
+        let others = queue.waitingRowsWithoutBubble(shown).map(Self.bubble(for:))
+        return others.isEmpty ? own : Self.inServerOrder(own + others, rows: rows)
     }
 
-    /// A queue row keeps its message's bubble off the page only while it still waits: once
-    /// the CLI took it (`isDelivered`), the bubble is in the conversation, where the
-    /// transcript's own row replaces it.
+    /// The waiting bubbles in the order the server took them in (each row's `enqueuedAt`), the
+    /// rest where they are: another device's message sent before this page's comes first.
+    static func inServerOrder(_ messages: [ChatMessage], rows: [String: SessionQueuedMessage]) -> [ChatMessage] {
+        func waitingAt(_ message: ChatMessage) -> String? {
+            guard let id = message.clientMessageId, let row = rows[id], row.status == "pending" else { return nil }
+            return row.enqueuedAt ?? ""
+        }
+        var slots: [Int] = []
+        var stamps: [String] = []
+        for index in messages.indices {
+            if let at = waitingAt(messages[index]) { slots.append(index); stamps.append(at) }
+        }
+        let order: [Int] = slots.indices.sorted { (a: Int, b: Int) -> Bool in
+            stamps[a] == stamps[b] ? a < b : stamps[a] < stamps[b]
+        }
+        var out = messages
+        for (position, pick) in order.enumerated() { out[slots[position]] = messages[slots[pick]] }
+        return out
+    }
+
+    /// Each bubble's state, by its id: Queued while its row waits to go in, Delivered for a
+    /// moment once the session has it (`SessionQueueModel.sendStates`).
+    private var bubbleStates: [String: QueuedSend.Status] {
+        guard let queue else { return [:] }
+        let states = queue.sendStates
+        let rows = queueRowsByMessage
+        var out: [String: QueuedSend.Status] = [:]
+        for message in visibleMessages {
+            // A bubble the transcript absorbed carries its id as `walnutMessageId`.
+            guard let id = message.clientMessageId ?? message.walnutMessageId else { continue }
+            if let state = states[id] { out[message.id] = state }
+            else if let row = rows[id], row.status == "pending", !row.isDelivered { out[message.id] = .pending }
+        }
+        return out
+    }
+
+    /// A row from another device as a bubble: its typed words, matched to the transcript's
+    /// row by its id once the session has it.
+    static func bubble(for row: SessionQueuedMessage) -> ChatMessage {
+        var message = ChatMessage(id: "queued-\(row.id)", role: "user", text: row.shownText,
+                                  createdAt: row.enqueuedAt ?? "", kind: nil)
+        message.clientMessageId = row.id
+        return message
+    }
+
+    /// A queue row keeps its message's bubble off the page only while it needs a hand (the
+    /// card lists it): a waiting row is its own bubble, marked Queued.
     static func queueHolds(_ row: SessionQueuedMessage?) -> Bool {
         guard let row else { return false }
-        return !row.isDelivered
+        return row.status == "parked" || row.status == "held"
     }
 
     var body: some View {
@@ -93,6 +143,7 @@ struct SessionTimelineBody: View {
                 // folds into one line, and the conversation above it is one tap away.
                 showLoadEarlier: store.showsLoadEarlier,
                 loadEarlierState: store.loadEarlierState,
+                queuedMessageStates: bubbleStates,
                 afterLiveMessageIDs: store.afterLiveMessageIDs,
                 // The server's "always show what Walnut added"; off, each bubble's
                 // long-press item shows it for that message (TimelineTurnFold).
@@ -115,6 +166,16 @@ struct SessionTimelineBody: View {
                     case .removeFile(let messageID, let fileID):
                         if let message = store.messages.first(where: { $0.id == messageID }) {
                             Task { await store.removeFile(fileID, from: message) }
+                        }
+                    case .withdrawQueued(let messageID):
+                        // Queued on its bubble: take it back from the session's line.
+                        // A send accepted a moment ago may not be in the last read yet: read
+                        // the line first, then take it back.
+                        if let id = visibleMessages.first(where: { $0.id == messageID })?.clientMessageId, let queue {
+                            Task {
+                                if !queue.rows.contains(where: { $0.id == id }) { await queue.refresh() }
+                                if let row = queue.rows.first(where: { $0.id == id }) { await queue.withdraw(row) }
+                            }
                         }
                     case .loadEarlier:
                         Task { await store.loadEarlier() }

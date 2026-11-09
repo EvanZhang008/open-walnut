@@ -58,6 +58,23 @@ final class SessionQueueModel {
     @ObservationIgnored private var hiddenUntil: [String: Date] = [:]
     nonisolated(unsafe) static var goingOutSpan: TimeInterval = 4
 
+    /// Where each of this page's own sends stands, by message id, as its bubble shows it
+    /// (the web's per-message state, no card): `.pending` while its row waits to go in,
+    /// `.delivered` for a moment once the session has it, then nothing.
+    private(set) var sendStates: [String: QueuedSend.Status] = [:]
+    /// A send being followed: the read it was accepted at, when, and its delivery time once known.
+    struct Watch: Equatable { var afterRead: Int; var since: Date; var deliveredAt: Date? }
+    /// The sends being followed, by message id.
+    @ObservationIgnored private var watched: [String: Watch] = [:]
+    /// Counts the queue reads started, so a read that left before a send was accepted never
+    /// takes the send's absence for its delivery (it was not on the server yet).
+    @ObservationIgnored private var readsStarted = 0
+    /// How long after a send the page reads its line fast.
+    static let watchFastSpan: TimeInterval = 20
+    @ObservationIgnored private var fadeTask: Task<Void, Never>?
+    /// How long "Delivered" stays on a bubble (the web's 2 s).
+    nonisolated(unsafe) static var deliveredSpan: TimeInterval = 2
+
     @ObservationIgnored private var pollTask: Task<Void, Never>?
     @ObservationIgnored private var failures = 0
     /// Bumps per accepted write so a slower GET that started before it cannot put the
@@ -70,6 +87,68 @@ final class SessionQueueModel {
     }
 
     var hasRows: Bool { !rows.isEmpty }
+
+    /// The rows the card above the composer still lists: only the ones that need a hand,
+    /// set aside by a Stop or held on the companion. A waiting message is its own bubble in
+    /// the conversation, marked Queued (2026-11-09, the owner: "不要queue了 ... 显示queue或者deliver
+    /// for each message").
+    var trayRows: [SessionQueuedMessage] { rows.filter { $0.status == "parked" || $0.status == "held" } }
+
+    /// Follow a send this page made, from its acceptance until the session has it.
+    func watch(_ messageId: String) {
+        guard !messageId.isEmpty, watched[messageId] == nil else { return }
+        watched[messageId] = Watch(afterRead: readsStarted, since: Date(), deliveredAt: nil)
+        updateSendStates(fetched: nil, read: nil)
+        Task { await refresh() }
+    }
+
+    /// Each watched send's state from the server's rows (nil = not read this time).
+    /// `read` is the number of the read that `fetched` came from.
+    func updateSendStates(fetched: [SessionQueuedMessage]?, read: Int?, now: Date = Date()) {
+        var next: [String: QueuedSend.Status] = [:]
+        for (id, watch) in watched {
+            var at = watch.deliveredAt
+            if at == nil, let fetched {
+                let row = fetched.first { $0.id == id }
+                // Waiting in line: Queued. Taken in, being answered, or gone from the line
+                // in a read that started after the send was accepted: the session has it.
+                if let row, !row.isDelivered {
+                    if row.status == "parked" || row.status == "held" { watched[id] = nil; continue }
+                } else if row != nil || (read ?? 0) > watch.afterRead {
+                    at = now
+                    watched[id]?.deliveredAt = now
+                }
+            }
+            if let at {
+                if now.timeIntervalSince(at) < Self.deliveredSpan { next[id] = .delivered } else { watched[id] = nil }
+            } else {
+                next[id] = .pending
+            }
+        }
+        if next != sendStates { sendStates = next }
+        if next.values.contains(.delivered) { scheduleFade() }
+    }
+
+    private func scheduleFade() {
+        guard fadeTask == nil else { return }
+        fadeTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(Self.deliveredSpan + 0.1))
+            guard let self else { return }
+            self.fadeTask = nil
+            self.updateSendStates(fetched: nil, read: nil)
+        }
+    }
+
+    /// A send accepted in the last moments is still on its way: its line is read fast.
+    func watchingFast(now: Date = Date()) -> Bool {
+        watched.values.contains { $0.deliveredAt == nil && now.timeIntervalSince($0.since) < Self.watchFastSpan }
+    }
+
+    /// The person's rows waiting to go in that no bubble on this page stands for (sent from
+    /// another device): the page draws them as bubbles too, as the web does.
+    func waitingRowsWithoutBubble(_ bubbleMessageIds: Set<String>) -> [SessionQueuedMessage] {
+        rows.filter { $0.status == "pending" && !bubbleMessageIds.contains($0.id) }
+    }
 
     /// True = this tap on a row action (cross, Send, Undo) is a decision; false = it came right
     /// behind another one and is ignored.
@@ -90,9 +169,12 @@ final class SessionQueueModel {
     /// The pace of the read clock, nil = do not poll. Fast while there is something to
     /// watch (a turn runs, or rows wait), slow when idle (a message from another surface
     /// still shows up), and backed off while the server does not answer.
-    static func pollInterval(turnRunning: Bool, hasRows: Bool, failures: Int) -> TimeInterval {
+    static func pollInterval(turnRunning: Bool, hasRows: Bool, failures: Int, watching: Bool = false) -> TimeInterval {
         let base: TimeInterval
         switch (turnRunning, hasRows) {
+        // A send of this page is on its way: its bubble's state is read often, so Queued turns
+        // into Delivered within moments of the session taking it.
+        case _ where watching: base = 1.5
         case (true, true): base = 3
         case (false, true): base = 5
         case (true, false): base = 6
@@ -135,6 +217,8 @@ final class SessionQueueModel {
     func refresh() async {
         guard !restoring else { return }
         let started = generation
+        readsStarted &+= 1
+        let read = readsStarted
         do {
             let fetched = try await api.sessionQueue(id: sessionId)
             guard started == generation, !restoring else { return }
@@ -146,6 +230,7 @@ final class SessionQueueModel {
             failures = 0
             let left = loaded && rows.contains { row in !next.contains { $0.id == row.id } }
             if next != rows { rows = next }
+            updateSendStates(fetched: fetched, read: read)
             loaded = true
             if left { onRowsLeft?() }
         } catch {
@@ -163,7 +248,8 @@ final class SessionQueueModel {
             while !Task.isCancelled {
                 guard let self else { return }
                 await self.refresh()
-                let wait = Self.pollInterval(turnRunning: turnRunning(), hasRows: self.hasRows, failures: self.failures)
+                let wait = Self.pollInterval(turnRunning: turnRunning(), hasRows: self.hasRows, failures: self.failures,
+                                             watching: self.watchingFast())
                 try? await Task.sleep(for: .seconds(wait))
             }
         }
@@ -493,8 +579,11 @@ extension SessionQueuedMessage {
     /// How far the line got, nil on an older server or for a stage this build does not know.
     var queueStage: QueueStage? { stage.flatMap(QueueStage.init(rawValue:)) }
 
-    /// The CLI took it: it belongs in the conversation, not the tray.
-    var isDelivered: Bool { delivered == true || queueStage == .taken }
+    /// The session has it: it belongs in the conversation, not the tray. The web's rule: a
+    /// row the server is processing was handed to the session (2026-11-09, the owner's phone
+    /// said "Delivering" while Walnut showed the session thinking: the stage can say `taken`
+    /// only for a line the runner tracks, never for a resumed or remote session's).
+    var isDelivered: Bool { delivered == true || queueStage == .taken || status == "processing" }
 
     /// A person sent it (a row with no sender, from an older server, counts as theirs).
     /// The web's rule: only a row the server marks `agent` is not the person's own.

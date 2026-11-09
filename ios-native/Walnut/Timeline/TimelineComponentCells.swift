@@ -228,7 +228,7 @@ enum TimelineHostedCell {
                 .accessibilityIdentifier("chat.retryFailed")
             }
             .padding(.horizontal, TimelineMetrics.hMargin)
-        case .queuedNotice(let delivering, let stacked):
+        case .queuedNotice(let delivering, let stacked, let delivered):
             // An HStack (or, at accessibility sizes, a VStack), NOT a `Label`: a Label
             // merges its content into ONE accessibility element, which swallows the
             // button next to it and leaves UI automation with nothing to tap.
@@ -239,8 +239,9 @@ enum TimelineHostedCell {
             // scroll view, it paints over its neighbour). Truncation at the largest
             // accessibility size costs a few characters of a one-word label whose
             // accessibility text stays complete.
-            let badge = Text(delivering ? ChatSendQueueRules.deliveringBadge
-                                        : ChatSendQueueRules.badge)
+            let badge = Text(delivered ? ChatSendQueueRules.deliveredBadge
+                             : delivering ? ChatSendQueueRules.deliveringBadge
+                             : ChatSendQueueRules.badge)
                 .font(.caption2.weight(.semibold))
                 .lineLimit(1)
                 .foregroundStyle(.secondary)
@@ -248,8 +249,8 @@ enum TimelineHostedCell {
                 .padding(.vertical, TimelineMetrics.chipVPad)
                 .background(Color(.tertiarySystemFill), in: Capsule())
                 .accessibilityIdentifier("chat.queuedBadge")
-                .accessibilityLabel(delivering
-                    ? ChatSendQueueRules.deliveringAccessibilityLabel
+                .accessibilityLabel(delivered ? ChatSendQueueRules.deliveredAccessibilityLabel
+                    : delivering ? ChatSendQueueRules.deliveringAccessibilityLabel
                     : ChatSendQueueRules.badgeAccessibilityLabel)
             // GONE once a POST is out, not disabled: the server may already have the
             // message, so there is nothing left to take back, and a control that
@@ -278,13 +279,13 @@ enum TimelineHostedCell {
                 if stacked {
                     VStack(alignment: .trailing, spacing: TimelineMetrics.chipStackSpacing) {
                         badge
-                        if !delivering { withdrawButton }
+                        if !delivering && !delivered { withdrawButton }
                     }
                 } else {
                     HStack(spacing: 8) {
                         Spacer(minLength: TimelineMetrics.bubbleLeadingGap)
                         badge
-                        if !delivering { withdrawButton }
+                        if !delivering && !delivered { withdrawButton }
                     }
                 }
             }

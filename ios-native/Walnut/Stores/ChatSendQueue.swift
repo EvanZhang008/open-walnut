@@ -30,6 +30,10 @@ struct QueuedSend: Equatable, Identifiable {
         /// `parked` state exists for the same reason (a row no automatic trigger may
         /// ever pick up again) and this is its client twin.
         case undecided
+        /// Session page only, never on disk: the server took the message into the
+        /// session (its queue row is processing, or gone). The bubble says so for a moment,
+        /// as the web's "Delivered" does.
+        case delivered
     }
 
     /// The optimistic bubble's row id. The bubble is created at enqueue time and
@@ -186,6 +190,9 @@ enum ChatSendQueueRules {
     static let badge = "Queued"
     /// …and once a POST is out for it, the session queue sheet's word.
     static let deliveringBadge = "Delivering…"
+    /// …and once the session has it (the session page; the web's word).
+    static let deliveredBadge = "Delivered \u{2713}"
+    static let deliveredAccessibilityLabel = "Delivered"
 
     /// What VoiceOver hears. The visible capsule has room for one word; the
     /// promise the word stands for still has to be sayable.

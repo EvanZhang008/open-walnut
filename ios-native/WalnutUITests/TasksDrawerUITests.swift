@@ -110,23 +110,6 @@ final class TasksDrawerUITests: XCTestCase {
         from.press(forDuration: 0.05, thenDragTo: to)
     }
 
-    private func clearHistory(_ app: XCUIApplication) {
-        openRecents(app)
-        let clear = app.buttons["tasks.recents.clear"]
-        if clear.exists {
-            clear.tap()
-            let confirm = app.sheets.buttons["Clear"].exists
-                ? app.sheets.buttons["Clear"] : app.buttons["Clear"].firstMatch
-            XCTAssertTrue(confirm.waitForExistence(timeout: 5), "no Clear confirmation")
-            confirm.tap()
-        }
-        XCTAssertTrue(
-            app.descendants(matching: .any)["tasks.recents.empty"].waitForExistence(timeout: 5),
-            "a cleared list shows the empty state"
-        )
-        backToBoard(app)
-    }
-
     private func taskId(of row: XCUIElement) -> String {
         row.identifier.replacingOccurrences(of: "board.row.", with: "")
     }
@@ -213,7 +196,8 @@ final class TasksDrawerUITests: XCTestCase {
         XCTAssertTrue(recentRows(app).firstMatch.waitForExistence(timeout: 5), "the demo has no sample history")
         let sample = recentRows(app).allElementsBoundByIndex.map(\.identifier)
         backToBoard(app)
-        clearHistory(app)
+        // The list has no Clear (it is one synced list on every surface, and a union merge
+        // brings a removed row back): what this test opens goes on top of the sample.
 
         // 1. A task's details.
         let detailsRow = rows.element(boundBy: 0)
@@ -230,7 +214,8 @@ final class TasksDrawerUITests: XCTestCase {
         XCTAssertTrue(board(app).waitForExistence(timeout: 5), "the edge swipe did not open the board")
         openRecents(app)
         let listed = recentRows(app)
-        XCTAssertEqual(listed.count, 2)
+        let listedCount = listed.count
+        XCTAssertGreaterThanOrEqual(listedCount, 2)
         XCTAssertEqual(listed.element(boundBy: 0).identifier, "tasks.recents.row.\(sessionId)")
         XCTAssertEqual(listed.element(boundBy: 1).identifier, "tasks.recents.row.\(detailsId)")
         attach(app, "recents-two-rows")
@@ -262,7 +247,7 @@ final class TasksDrawerUITests: XCTestCase {
         waitGone(sheet, "the task sheet did not close")
 
         // 5. Reopening moved it to the top, still one row per task.
-        XCTAssertEqual(recentRows(app).count, 2)
+        XCTAssertEqual(recentRows(app).count, listedCount, "still one row per task")
         XCTAssertEqual(recentRows(app).element(boundBy: 0).identifier, "tasks.recents.row.\(detailsId)")
         closeWithScrim(app)
 

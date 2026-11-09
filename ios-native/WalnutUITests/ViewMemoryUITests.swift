@@ -56,6 +56,23 @@ final class ViewMemoryUITests: XCTestCase {
         add(shot)
     }
 
+    /// Until the kept page is on top, the chat under it stays covered (2026-11-09: a launch showed
+    /// the chat for about a second, then slid the page over it). Polls from the launch on.
+    private func assertNoChatBeforeKeptPage(_ app: XCUIApplication) {
+        let page = app.segmentedControls["org.node.tabs"]
+        let chatBar = element(app, "org.bar.tasks")
+        let cover = element(app, "session.coveredUntilPage")
+        let deadline = Date().addingTimeInterval(30)
+        while Date() < deadline, !page.exists {
+            if chatBar.exists, !cover.exists, !page.exists {
+                attach(app, "chat-shown-before-kept-page")
+                XCTFail("the chat showed before the kept page came back over it")
+                return
+            }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+    }
+
     func testTheTabLeftIsTheTabALaunchOpens() throws {
         var app = launch()
         for tab in ["Inbox", "Notes", "Chat"] {
@@ -99,7 +116,10 @@ final class ViewMemoryUITests: XCTestCase {
         tabs.buttons["Brief"].tap()
         Thread.sleep(forTimeInterval: 1)
 
-        app = relaunch(app)
+        // Watched from the first frame: the token is kept, so no setup screen to wait out.
+        app.terminate()
+        app = UITestLaunch.launch(arguments(fresh: false))
+        assertNoChatBeforeKeptPage(app)
         let back = app.segmentedControls["org.node.tabs"]
         XCTAssertTrue(back.waitForExistence(timeout: 30), "a launch did not put the Org page back over Main's chat")
         XCTAssertTrue(back.buttons["Brief"].isSelected, "the page came back on another view")

@@ -46,7 +46,7 @@ struct SessionQueueSheet: View {
                             Text("Messages marked Not sent were held back when you stopped the agent. Tap one to send it; withdraw with the cross or a swipe.")
                         } else {
                             Text(turnRunning
-                                 ? "Waiting messages go out by themselves when the agent finishes this turn. Tap one to edit it or send it now; withdraw with the cross or a swipe."
+                                 ? "Waiting messages go in as soon as the session can take them. Tap one to edit it or send it now; withdraw with the cross or a swipe."
                                  : "Pending messages are about to go out. Tap one to edit it or send it now; withdraw with the cross or a swipe.")
                         }
                     }

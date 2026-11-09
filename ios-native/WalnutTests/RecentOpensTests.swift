@@ -110,15 +110,11 @@ final class RecentOpensTests: XCTestCase {
 
     /// A store nobody hydrated keeps its history in memory only, and a disconnect
     /// forgets it.
-    func testTheStoreRecordsRemovesAndErases() {
+    func testTheStoreRecordsAndErases() {
         let store = RecentOpens()
         store.recordTask(task("a"), at: t0)
         store.recordSession(session("s1", taskId: "b"), at: t0 + 1)
         XCTAssertEqual(store.entries.map(\.id), ["b", "a"])
-        store.remove(id: "b")
-        XCTAssertEqual(store.entries.map(\.id), ["a"])
-        store.clear()
-        XCTAssertTrue(store.entries.isEmpty)
         store.recordTask(task("c"), at: t0 + 2)
         store.eraseAll()
         XCTAssertTrue(store.entries.isEmpty)
@@ -210,15 +206,17 @@ final class RecentOpensTests: XCTestCase {
         XCTAssertEqual(rows.first?.meta, "now")
     }
 
-    // MARK: - The Tasks tab reopens the last session
+    // MARK: - The Tasks tab reopens its own last session
 
-    /// The tab's page IS a session, so a launch reopens the newest one in the history; a
-    /// task opened only through its details sheet has no session to show and is skipped.
-    func testTheTabReopensTheNewestEntryThatHasASession() {
+    /// The tab reopens the session IT showed last, never the newest history entry: the history
+    /// holds every page's opens, the Chat tab's included (2026-11-09, the owner: "task也变成ceo了").
+    func testTheTabReopensItsOwnSessionNotTheNewestOpen() {
         var list = RecentOpens.recordingSession(session("s1", taskId: "t1"), at: t0, into: [], cap: 40)
-        list = RecentOpens.recordingTask(task("t2"), at: t0 + 10, into: list, cap: 40)
-        XCTAssertEqual(list.first?.id, "t2", "the details-only open is the newest entry")
-        XCTAssertEqual(TasksTabView.restorableSession(list, liveSessions: [])?.id, "s1")
+        list = RecentOpens.recordingSession(session("ceo", taskId: "main"), at: t0 + 10, into: list, cap: 40)
+        XCTAssertEqual(list.first?.session?.id, "ceo", "the Chat tab's open is the newest entry")
+        XCTAssertEqual(TasksTabView.restorableSession(list, liveSessions: [], kept: "s1")?.id, "s1")
+        XCTAssertNil(TasksTabView.restorableSession(list, liveSessions: [], kept: nil),
+                     "nothing kept by this tab: the board, never another page's open")
     }
 
     /// The history holds a SNAPSHOT; the session list's copy is fresher (status, title).
@@ -227,18 +225,18 @@ final class RecentOpensTests: XCTestCase {
             session("s1", taskId: "t1", status: "idle"), at: t0, into: [], cap: 40)
         let live = session("s1", taskId: "t1", status: "running")
         XCTAssertEqual(
-            TasksTabView.restorableSession(list, liveSessions: [live])?.processStatus, "running")
+            TasksTabView.restorableSession(list, liveSessions: [live], kept: "s1")?.processStatus, "running")
         XCTAssertEqual(
-            TasksTabView.restorableSession(list, liveSessions: [])?.processStatus, "idle",
+            TasksTabView.restorableSession(list, liveSessions: [], kept: "s1")?.processStatus, "idle",
             "a session the list no longer carries still reopens from its snapshot"
         )
     }
 
-    /// Nothing opened yet: no page to restore, so the tab opens the board instead.
+    /// Nothing opened yet, or the kept session is known nowhere: the tab opens the board.
     func testAnEmptyHistoryRestoresNothing() {
-        XCTAssertNil(TasksTabView.restorableSession([], liveSessions: [session("s1", taskId: "t1")]))
+        XCTAssertNil(TasksTabView.restorableSession([], liveSessions: [], kept: "s1"))
         let detailsOnly = RecentOpens.recordingTask(task("t1"), at: t0, into: [], cap: 40)
-        XCTAssertNil(TasksTabView.restorableSession(detailsOnly, liveSessions: []))
+        XCTAssertNil(TasksTabView.restorableSession(detailsOnly, liveSessions: [], kept: nil))
     }
 
     /// A tap on a task with no session opens the task's page (the tab's sheet, seeded with
@@ -257,7 +255,50 @@ final class RecentOpensTests: XCTestCase {
     /// The demo's history is its sample one, so the demo opens the tab on the board.
     func testTheDemoReopensNothing() {
         let list = RecentOpens.recordingSession(session("s1", taskId: "t1"), at: t0, into: [], cap: 40)
-        XCTAssertNil(TasksTabView.restorableSession(list, liveSessions: [], inDemo: true))
-        XCTAssertEqual(TasksTabView.restorableSession(list, liveSessions: [], inDemo: false)?.id, "s1")
+        XCTAssertNil(TasksTabView.restorableSession(list, liveSessions: [], kept: "s1", inDemo: true))
+        XCTAssertEqual(TasksTabView.restorableSession(list, liveSessions: [], kept: "s1", inDemo: false)?.id, "s1")
+    }
+
+    // MARK: - The synced list (one Recent on every surface)
+
+    /// Each task once, with its newest time, newest first, and never over the cap.
+    func testTheSyncedUnionKeepsEachTaskOnceAtItsNewestTime() {
+        let a = [RecentOpenedEntry(id: "t1", at: "2026-11-09T10:00:00.000Z"),
+                 RecentOpenedEntry(id: "t2", at: "2026-11-09T09:00:00Z")]
+        let b = [RecentOpenedEntry(id: "t2", at: "2026-11-09T11:00:00.000Z"),
+                 RecentOpenedEntry(id: "t3", at: "2026-11-09T08:00:00.000Z")]
+        XCTAssertEqual(RecentOpens.union(a, b, cap: 50).map(\.id), ["t2", "t1", "t3"])
+        XCTAssertEqual(RecentOpens.union(a, b, cap: 50).first?.at, "2026-11-09T11:00:00.000Z")
+        XCTAssertEqual(RecentOpens.union(a, b, cap: 2).map(\.id), ["t2", "t1"])
+    }
+
+    /// The drawer lists the synced order with this phone's snapshot of each row (so a tap
+    /// still goes back to the conversation opened here), at the synced time.
+    func testTheDrawerListsTheSyncedOrderWithThisPhonesSnapshots() {
+        var local = RecentOpens.recordingSession(session("s1", taskId: "t1"), at: t0, into: [], cap: 40)
+        local = RecentOpens.recordingSession(session("s9", taskId: nil), at: t0 + 1, into: local, cap: 40)
+        let synced = [RecentOpenedEntry(id: "t2", at: "2026-11-09T11:00:00.000Z"),
+                      RecentOpenedEntry(id: "t1", at: "2026-11-09T10:00:00.000Z")]
+        let shown = RecentOpens.shown(synced: synced, local: local)
+        XCTAssertEqual(shown.map(\.id), ["t2", "t1"], "the synced list's order; a session with no task is not on it")
+        XCTAssertEqual(shown[1].session?.id, "s1", "the conversation opened here is kept on its row")
+        XCTAssertEqual(shown[1].openedAt, RecentOpens.date("2026-11-09T10:00:00.000Z"))
+        XCTAssertNil(shown[0].session, "opened elsewhere: the row opens the task")
+    }
+
+    /// A synced id this phone has never seen and no list carries (deleted since) is no row.
+    func testASyncedTaskNobodyKnowsIsLeftOut() {
+        let entries = RecentOpens.shown(
+            synced: [RecentOpenedEntry(id: "gone", at: "2026-11-09T11:00:00Z"),
+                     RecentOpenedEntry(id: "live", at: "2026-11-09T10:00:00Z")], local: [])
+        XCTAssertEqual(RecentRow.openable(entries, tasks: [task("live")]).map(\.id), ["live"])
+    }
+
+    /// The wire value is the web's own: a JSON array of {id, at}, read leniently.
+    func testTheSyncedValueReadsTheWebsShape() {
+        let raw = #"[{"id":"t1","at":"2026-11-09T10:00:00.000Z"},{"id":""},{"at":"x"},{"id":"t2","at":"2026-11-09T09:00:00Z"}]"#
+        XCTAssertEqual(WalnutAPI.decodeRecentOpened(Data(raw.utf8)).map(\.id), ["t1", "t2"])
+        XCTAssertEqual(WalnutAPI.decodeRecentOpened(Data("not json".utf8)), [])
+        XCTAssertNotNil(RecentOpens.date(RecentOpens.iso(t0)))
     }
 }

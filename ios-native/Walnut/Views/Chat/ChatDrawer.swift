@@ -43,6 +43,9 @@ struct ChatDrawer: View {
     var isOpen = false
     /// Open an org node's chat (the CEO or a VP). The drawer closes first.
     var openOrgNode: (ChatOrgModel.Row) -> Void = { _ in }
+    /// Put the chat itself on the page: a session opened over it (an ask, the CEO, a VP) is a
+    /// peer of the chat, not a page above it, so picking a conversation takes it away.
+    var showChat: () -> Void = {}
 
     /// Org (the default) or Chats; the user's pick is kept.
     @AppStorage(ChatDrawerView.storageKey, store: AppPrefs.defaults) private var viewPick = ChatDrawerView.org.rawValue
@@ -400,6 +403,7 @@ struct ChatDrawer: View {
                         Button {
                             guard !suppressTaps else { return }
                             chat.select(conversation.id)
+                            showChat()
                             close()
                         } label: {
                             conversationRow(conversation)
@@ -448,6 +452,7 @@ struct ChatDrawer: View {
                         guard !suppressTaps else { return }
                         if let conversationId = ask.conversationId {
                             chat.select(conversationId)
+                            showChat()
                         } else {
                             openAsk(ask)
                         }
@@ -477,6 +482,7 @@ struct ChatDrawer: View {
                     Button {
                         guard !suppressTaps else { return }
                         chat.select(conversation.id)
+                        showChat()
                         close()
                     } label: {
                         conversationRow(conversation)
@@ -662,6 +668,7 @@ struct ChatDrawer: View {
         Button {
             guard !suppressTaps else { return }
             chat.startNewConversation()
+            showChat()
             close()
         } label: {
             Label("New quick question", systemImage: "plus")

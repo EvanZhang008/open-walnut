@@ -28,6 +28,17 @@ struct RecentRow: Identifiable, Equatable {
         return nil
     }
 
+    /// The entries a row can be made of: a synced id with no snapshot here and no task in the
+    /// list is a task deleted since (or never seen here), and is left out.
+    static func openable(_ entries: [RecentOpen], tasks: [WalnutTask]) -> [RecentOpen] {
+        let bare = entries.filter { $0.task == nil && $0.session == nil }
+        guard !bare.isEmpty else { return entries }
+        let wanted = Set(bare.map(\.id))
+        var known = Set<String>()
+        for task in tasks where wanted.contains(task.id) { known.insert(task.id) }
+        return entries.filter { $0.task != nil || $0.session != nil || known.contains($0.id) }
+    }
+
     /// Build the rows. ONE walk over each list, whatever the history length: the task
     /// projection can hold thousands of rows and this runs on every store update while
     /// the drawer is mounted.
@@ -93,12 +104,13 @@ struct TasksRecentsPage: View {
     /// The task's page, from a row's long-press menu.
     let details: (WalnutTask) -> Void
 
-    @State private var confirmClear = false
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         let rows = RecentRow.rows(
-            tasks.recents.entries, tasks: tasks.tasks, sessions: tasks.sessions
+            RecentRow.openable(tasks.recents.shownEntries, tasks: tasks.tasks),
+            tasks: tasks.tasks, sessions: tasks.sessions
         )
         List {
             if rows.isEmpty {
@@ -123,24 +135,13 @@ struct TasksRecentsPage: View {
         .navigationTitle("Recently opened")
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(.visible, for: .navigationBar)
-        .toolbar {
-            if !rows.isEmpty {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Clear") {
-                        guard drawer?.suppressTaps != true else { return }
-                        confirmClear = true
-                    }
-                    .accessibilityIdentifier("tasks.recents.clear")
-                }
-            }
-        }
+        // No Clear and no Remove: the list is the one every surface shares, merged as a union,
+        // so a row taken off here would come back from another device (the web has none either).
         .accessibilityIdentifier("tasks.recents.page")
-        .confirmationDialog(
-            "Clear recently opened?", isPresented: $confirmClear, titleVisibility: .visible
-        ) {
-            Button("Clear", role: .destructive) { tasks.recents.clear() }
-        } message: {
-            Text("This only clears the list on this iPhone.")
+        // The list as the other surfaces left it: read when it opens and when the app returns.
+        .task { await tasks.recents.refreshSynced() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await tasks.recents.refreshSynced() } }
         }
     }
 
@@ -156,7 +157,7 @@ struct TasksRecentsPage: View {
         VStack(alignment: .leading, spacing: 3) {
             Text("Nothing opened yet")
                 .font(.subheadline)
-            Text("Tasks and sessions you open will appear here.")
+            Text("Tasks you open, here or on your Mac, will appear here.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }
@@ -189,19 +190,13 @@ struct TasksRecentsPage: View {
         .contentShape(Rectangle())
     }
 
-    /// Long-press: the task's page, and taking a row off the list.
+    /// Long-press: the task's page.
     @ViewBuilder
     private func menu(_ row: RecentRow) -> some View {
         if let task = row.task {
             Button { details(task) } label: {
                 Label("Task Details", systemImage: "info.circle")
             }
-            Divider()
-        }
-        Button(role: .destructive) {
-            tasks.recents.remove(id: row.id)
-        } label: {
-            Label("Remove from List", systemImage: "minus.circle")
         }
     }
 }

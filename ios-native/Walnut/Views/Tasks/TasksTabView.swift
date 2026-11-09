@@ -163,6 +163,8 @@ struct TasksTabView: View {
                 // restore and every return to this tab put it on screen, and recorded it
                 // moved the restored session above what was opened after it.
                 .environment(\.recordsSessionOpen, false)
+                // Its Org pages are kept apart from the Chat tab's (`OrgPagePlace`).
+                .environment(\.orgPagePlace, .tasks)
                 // The tab bar steps aside while the drawer is out; this keeps the
                 // composer where it was through the slide (`ChatView` does the same).
                 .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -207,6 +209,9 @@ struct TasksTabView: View {
         tasks.recents.recordSession(session)
         router.didShow()
         current = session
+        // This tab's own place, never the shared history: a chat opened on the Chat tab is
+        // in Recently opened too, and a launch put it on this tab (2026-11-09).
+        ViewMemory.writeId(session.id, "tasks", "session")
         path = []
         drawer.setOpen(false)
     }
@@ -244,9 +249,10 @@ struct TasksTabView: View {
         guard !restored else { return }
         restored = true
         if let session = Self.restorableSession(
-            tasks.recents.entries, liveSessions: tasks.sessions, inDemo: DemoMode.isActive
+            tasks.recents.entries, liveSessions: tasks.sessions,
+            kept: ViewMemory.readId("tasks", "session"), inDemo: DemoMode.isActive
         ) {
-            if let page = session.taskId.flatMap({ ViewMemory.readOptional("org", "page", id: $0, as: OrgNodeTab.self) }) {
+            if let page = session.taskId.flatMap({ ViewMemory.readOptional("org", "page", id: OrgPagePlace.tasks.keyId($0) ?? $0, as: OrgNodeTab.self) }) {
                 restoredPage = (session.id, OrgNodePageOpen(tab: page, threadId: nil))
             }
             current = session
@@ -255,17 +261,21 @@ struct TasksTabView: View {
         }
     }
 
-    /// The session to reopen: the newest history entry that has one, as the session
-    /// list carries it now when it does (fresher status and title than the snapshot).
+    /// The session to reopen: the one this tab showed last (`kept`), as the session list
+    /// carries it now when it does (fresher status and title than the history's snapshot).
+    /// Never the newest history entry: the history holds every page's opens, the Chat tab's
+    /// included, and each page comes back to its own (2026-11-09, the owner: "Tasks reopened
+    /// on the CEO"). Nothing kept, or a session no list knows any more: the board.
     ///
     /// None in the demo: it starts again from its sample data at every launch, so its
     /// history is the sample one (`DemoFixtures.recentOpens`), which nobody opened. A
     /// first look at the tab there is the board.
     static func restorableSession(
-        _ entries: [RecentOpen], liveSessions: [WalnutSession], inDemo: Bool = false
+        _ entries: [RecentOpen], liveSessions: [WalnutSession], kept: String?, inDemo: Bool = false
     ) -> WalnutSession? {
-        guard !inDemo, let snapshot = entries.lazy.compactMap(\.session).first else { return nil }
-        return liveSessions.first { $0.id == snapshot.id } ?? snapshot
+        guard !inDemo, let kept else { return nil }
+        return liveSessions.first { $0.id == kept }
+            ?? entries.lazy.compactMap(\.session).first { $0.id == kept }
     }
 }
 
