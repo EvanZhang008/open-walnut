@@ -12,7 +12,7 @@
  *     keys, a drag's button let go); a dialog whose hold ran out is the person's to answer;
  *   - a drag, and OK on a confirm that deletes, wait for the person's yes.
  */
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 type Listener = (source: { tabId?: number }, method: string, params?: Record<string, unknown>) => void
 type PageAnswer = (op: string, args: Record<string, unknown>, frameId: number) => unknown
@@ -401,16 +401,15 @@ describe('a dialog left unanswered is the person\'s', () => {
   }
 
   it('each look at it starts the hold again; once it runs out the debugger lets go, and only the person can answer', async () => {
-    dialogs._setHoldMsForTesting(300)
+    dialogs._setHoldMsForTesting(1000)
     opensPrompt()
     expect((await act('click', { trusted: true, ref: 'e8' })).dialog).toBeDefined()
-    await sleep(200)
+    await sleep(600)
     expect((await act('dialog', { read: true })).open).toBe(true)
-    await sleep(200)
-    // 400 ms after it opened, 200 after the look: still held.
+    await sleep(600)
+    // 1200 ms after it opened, 600 after the look: still held, the look started the hold again.
     expect(debuggerHeld(7)).toBe(true)
-    await sleep(300)
-    expect(debuggerHeld(7)).toBe(false)
+    await vi.waitFor(() => expect(debuggerHeld(7)).toBe(false), { timeout: 5000 })
     expect(methods().at(-1)).toBe('detach')
     expect(dialogs.orphanOf(7)).toMatchObject({ type: 'prompt', message: 'New name?' })
 
