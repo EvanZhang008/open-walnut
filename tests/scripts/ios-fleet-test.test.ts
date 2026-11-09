@@ -260,6 +260,18 @@ describe('ios-fleet-test.sh', () => {
 
   // 2026-11-08: run from a Linux devbox, the shortcut "copied" the sources onto themselves
   // (SameFileError) because Walnut's own Mac is another machine there.
+  it('--here-because keeps the run on the named Mac when its simulator queue sends its lane elsewhere', () => {
+    // 2026-11-08: the Mac's queue sent lane b to another Mac while runs had to stay here.
+    const w = fakeWalnut([{ host: 'mac-mini', loadPerCpu: 0.1 }], outTgz())
+    const r = run(['--host', 'mac-mini', '--here-because', "the other Mac is on hold", 'unit'], w)
+    expect(r.status, r.stderr).toBe(0)
+    const started = r.calls.filter((c) => c.op === 'host_exec' && c.args.background).at(-1)
+    expect(started?.args.argv[2].startsWith(String.raw`export SIM_LANE_B_HERE=the\ other\ Mac\ is\ on\ hold ; D="$HOME/`)).toBe(true)
+    const plain = run(['--host', 'mac-mini', 'unit'], fakeWalnut([{ host: 'mac-mini', loadPerCpu: 0.1 }], outTgz()))
+    expect(plain.calls.filter((c) => c.op === 'host_exec' && c.args.background).at(-1)?.args.argv[2]).not.toContain('SIM_LANE_B_HERE')
+    expect(run(['--here-because', '', 'unit'], w).status).toBe(64)
+  })
+
   it('from another host, Walnut\'s own Mac is reached through host_copy like any Mac', () => {
     const bin = fakeWalnut([{ host: '__local__', loadPerCpu: 0.2 }], outTgz(), { localIsRemote: true })
     const r = run(['unit'], bin)

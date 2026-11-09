@@ -43,6 +43,8 @@
 #   --clean          remove this task's build products on that Mac afterwards
 #   --audio WHY      the run touches voice, the microphone or audio (found from the task's own
 #                    words when not given): a Mac where a person sits does not take it
+#   --here-because W keep the run on that Mac when its simulator queue says its lane runs on
+#                    another Mac now (SIM_LANE_B_HERE there; W says why)
 #   --verbose        print the whole run log (default: the lines that matter; all of it
 #                    is in run.log)
 #
@@ -67,7 +69,7 @@ set -uo pipefail
 die() { printf 'ios-fleet: %s\n' "$1" >&2; exit "${2:-1}"; }
 say() { printf 'ios-fleet: %s\n' "$*" >&2; }
 
-HOST=""; AUDIO_WHY=${SIM_TEST_AUDIO:-}; MIN_IDLE=25; MAX_LOAD=2; FLAGS=(); CLEAN=0; VERBOSE=0; WAIT_MIN=30
+HOST=""; AUDIO_WHY=${SIM_TEST_AUDIO:-}; MIN_IDLE=25; MAX_LOAD=2; FLAGS=(); CLEAN=0; VERBOSE=0; WAIT_MIN=30; HERE_BECAUSE=""
 KEY_LINES='^(remote-run:|FLEET_RESULT|\*\* (BUILD|TEST)|Test Case .* failed|.*: error: )'
 while [ $# -gt 0 ]; do
   case $1 in
@@ -79,6 +81,7 @@ while [ $# -gt 0 ]; do
     --wait) WAIT_MIN=$2; shift ;;
     --clean) CLEAN=1 ;;
     --audio) AUDIO_WHY=$2; shift ;;
+    --here-because) HERE_BECAUSE=$2; [ -n "$2" ] || die "--here-because takes a reason" 64; shift ;;
     --verbose) VERBOSE=1 ;;
     unit|ui|build|run) break ;;
     -h|--help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 0 ;;
@@ -384,7 +387,7 @@ while IFS=$'\t' read -r H NOTE; do
         || die "could not send the sources to $H"
       say "$(printf '%s' "$sent" | js 'print(d.get("outcome") or "sent")')" ;;
   esac
-  SCRIPT="D=\"\$HOME/$REMOTE_REL\"; mkdir -p \"\$D/src\" && tar -xzf \"\$D/src.tgz\" -C \"\$D/src\" && exec /bin/bash \"\$D/src/ios-native/tests/fleet/remote-run.sh\" \"\$D\" $(q "$MODE" ${FLAGS[@]+"${FLAGS[@]}"} --min-idle "$MIN_IDLE" --max-load "$MAX_LOAD" -- ${ARGS[@]+"${ARGS[@]}"})"
+  SCRIPT="${HERE_BECAUSE:+export SIM_LANE_B_HERE=$(q "$HERE_BECAUSE"); }D=\"\$HOME/$REMOTE_REL\"; mkdir -p \"\$D/src\" && tar -xzf \"\$D/src.tgz\" -C \"\$D/src\" && exec /bin/bash \"\$D/src/ios-native/tests/fleet/remote-run.sh\" \"\$D\" $(q "$MODE" ${FLAGS[@]+"${FLAGS[@]}"} --min-idle "$MIN_IDLE" --max-load "$MAX_LOAD" -- ${ARGS[@]+"${ARGS[@]}"})"
   started=$(op host_exec "$(python3 -c 'import json,sys; print(json.dumps({"host": sys.argv[1], "argv": ["/bin/bash", "-c", sys.argv[2]], "background": True, "timeout_ms": 7200000}))' "$H" "$SCRIPT")") \
     || die "could not start the run on $H"
   JOB=$(printf '%s' "$started" | js 'print(d.get("jobId") or "")')
