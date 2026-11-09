@@ -345,7 +345,7 @@ final class ThreadPushStatesUITests: XCTestCase {
         XCTAssertTrue(titled(OrgThreadsFixture.vpName).waitForExistence(timeout: 5), "O: the page is not Growth VP's")
     }
 
-    // MARK: - P. His own Back wins over a slow push
+    // MARK: - P. His own move wins over a slow push
 
     func testPHisBackWinsOverASlowPushRead() throws {
         try launchToVPChat("P")
@@ -353,8 +353,9 @@ final class ThreadPushStatesUITests: XCTestCase {
         let opening = el("chat.orgOpening")
         XCTAssertTrue(opening.waitForExistence(timeout: 4), "P: nothing says the chat is on its way")
         shot("P-opening-over-the-chat")
-        back()
-        XCTAssertTrue(el("chat.menu").waitForExistence(timeout: 10), "P: Back did not reach the chat list")
+        // The VP's chat is a peer of the sidebar with no Back: he leaves it through the sidebar.
+        app.leaveChatPeerForTheChat()
+        XCTAssertTrue(el("chat.menu").waitForExistence(timeout: 10), "P: the sidebar did not reach the chat")
         XCTAssertTrue(opening.waitForNonExistence(timeout: 3), "P: the open still says it is on its way")
         // Past the slow read: nothing opens over where he went.
         Thread.sleep(forTimeInterval: OrgThreadsFixture.slowSeconds + 2)

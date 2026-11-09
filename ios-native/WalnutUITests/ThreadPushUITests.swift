@@ -74,8 +74,9 @@ final class ThreadPushUITests: XCTestCase {
     func testAPushMissingItsThreadOnlyOpensTheApp() throws {
         // Leave the app on the chat itself.
         let first = try launchPaired([])
+        // A chat over the chat is its peer, with no Back: the sidebar is the way off it.
         if first.buttons["session.title"].waitForExistence(timeout: 20) {
-            first.navigationBars.buttons.element(boundBy: 0).tap()
+            first.leaveChatPeerForTheChat()
         }
         XCTAssertTrue(first.buttons["chat.menu"].waitForExistence(timeout: 30))
         first.terminate()

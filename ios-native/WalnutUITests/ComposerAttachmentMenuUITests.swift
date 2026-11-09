@@ -42,11 +42,12 @@ final class ComposerAttachmentMenuUITests: XCTestCase {
         }
         // The launch puts back the chat a run before left open (`ChatPlace`): a session's page,
         // whose `+` menu carries its own actions too and reaches up to where these tests tap to
-        // dismiss it. Back to the Chat tab's own composer, the one these tests are about.
+        // dismiss it. Back to the Chat tab's own composer, the one these tests are about: that
+        // chat is a peer of the sidebar with no Back, so through the sidebar (`ChatPeerNavigation`).
         let pushedChat = app.buttons["session.title"]
         if pushedChat.waitForExistence(timeout: 3) {
-            app.navigationBars.buttons.element(boundBy: 0).tap()
-            XCTAssertTrue(pushedChat.waitForNonExistence(timeout: 10), "Back did not leave the restored chat")
+            app.leaveChatPeerForTheChat()
+            XCTAssertTrue(pushedChat.waitForNonExistence(timeout: 10), "the sidebar did not leave the restored chat")
             XCTAssertTrue(plus.waitForExistence(timeout: 10), "the Chat tab's composer did not come back")
         }
         return app
