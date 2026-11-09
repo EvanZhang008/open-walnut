@@ -8,6 +8,7 @@
  *   POST /api/v1/browser/view/stop { task, tab, device }      the agent's use of the tab ends; the tab stays open (a person's request only)
  *   POST /api/v1/browser/view/takeover { task, tab, device }  Take over: the tab comes forward for the person, agents wait (a person's request only)
  *   POST /api/v1/browser/view/handback { task, tab, device }  Hand back: the agent may use the tab again (a person's request only)
+ *   POST /api/v1/browser/view/grant { task, tab, device }     "Show it live": the extension opens its page that turns live pictures on
  *   POST /api/v1/browser/view/push   the extension's pictures while someone watches (browser-view-stream.ts)
  *   POST /api/v1/browser/handback    the extension: the person pressed Hand back on the tab's own pill
  *
@@ -251,6 +252,31 @@ export function mountBrowserView(r: Router, d: ViewDeps): void {
       h.ownerChanged(owner)
       log.web.info('browser view hand back', { device: known.device, owner, tab, by: 'person', signIn: !!ask })
       return { ok: true, ...out, tab, device: known.device, driving: false, ...(ask ? { signIn: 'done' } : {}) }
+    })
+  })
+
+  // "Show it live" on a covered window (the extension's grant-open.ts): Chrome lets the extension
+  // ask for its debugger only inside a click on its own page, so this opens that page; the grant
+  // itself is the person's two clicks there. A person's request brings the page up in their window;
+  // anyone else's (an agent may ask too) opens it in the background, never focusing anything.
+  r.post('/browser/view/grant', (req, res, next) => {
+    void d.run(res, next, async () => {
+      const h = await hub()
+      if (ambientTestRun()) throw new h.BrowserError('A test run does not use the person\'s browser.', 409, 'test_run')
+      const b = (req.body ?? {}) as { task?: unknown; tab?: unknown; device?: unknown }
+      const taskId = taskOf(b.task)
+      const tab = tabOf(b.tab)
+      if (!taskId || tab === undefined) throw new h.BrowserError('A task and a tab are needed.', 400, 'bad_request')
+      const owner = `task:${taskId}`
+      const known = pickTab(h, owner, tab, deviceOf(b.device))
+      if (!known.connected) throw new h.BrowserError(`${known.browser} does not answer right now.`, 409, 'browser_not_connected')
+      if (!h.hasCap(known.device, 'live-pictures')) throw new h.BrowserError('This browser\'s Walnut extension is older than live pictures: update it (Settings, Browser extension).', 409, 'old_extension')
+      const person = d.personCaller(req)
+      const s = await sites()
+      const allow = { ...s.allowOf(await s.readSites()), walnut: await d.walnutAddresses(req) }
+      const out = (await h.send(known.device, 'view_grant', { tab, person }, allow, 10_000) ?? {}) as Record<string, unknown>
+      log.web.info('browser view grant page', { device: known.device, owner, tab, by: person ? 'person' : 'agent', opened: out.opened === true })
+      return { ok: true, ...out, tab, device: known.device }
     })
   })
 

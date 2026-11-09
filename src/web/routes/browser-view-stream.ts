@@ -77,6 +77,8 @@ function bump(l: Live): void {
 function meta(b: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const k of ['url', 'title', 'window', 'windowState', 'why'] as const) if (typeof b[k] === 'string') out[k] = (b[k] as string).slice(0, k === 'url' ? 4000 : 300)
+  // A covered window: whether live pictures could show it (the extension's agent-live.ts LiveState).
+  if (typeof b.live === 'string' && /^[a-z_]{1,20}$/.test(b.live)) out.live = b.live
   for (const k of ['shown', 'handed', 'taken', 'driving'] as const) if (b[k] === true) out[k] = true
   return out
 }

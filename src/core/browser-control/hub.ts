@@ -474,6 +474,8 @@ export interface ViewTab extends TabFacts {
   connected: boolean
   /** It can take pictures (the extension has the screenshot permission). */
   pictures: boolean
+  /** Its frames of a covered window say whether live pictures could show it, and it opens the page that turns them on (view_grant). */
+  liveGrant: boolean
 }
 
 /**
@@ -488,7 +490,7 @@ export function viewOf(owner: string, now = Date.now()): { tabs: ViewTab[]; ende
     const i = k.lastIndexOf(':')
     const device = k.slice(0, i)
     const c = controllers.get(device)
-    tabs.push({ device, browser: c?.label ?? device, tab: Number(k.slice(i + 1)), connected: live.has(device), pictures: !!c?.caps.includes('screenshot'), ...tabFacts.get(k) })
+    tabs.push({ device, browser: c?.label ?? device, tab: Number(k.slice(i + 1)), connected: live.has(device), pictures: !!c?.caps.includes('screenshot'), liveGrant: !!c?.caps.includes('live-pictures'), ...tabFacts.get(k) })
   }
   if (tabs.length) return { tabs }
   const e = ended.get(owner)

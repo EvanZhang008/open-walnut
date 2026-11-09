@@ -87,7 +87,10 @@ extension's Settings, reached from the key's popover in the side panel or the to
   read and answer a page's alert, confirm or prompt (`dialog`), and
   run JavaScript in a tab it opened (`evaluate`, never in your own tab). The debugger is
   attached for that one action and detached right after; Chrome shows its "started debugging"
-  bar while it is. Off, these answer `trusted_off` and say where to turn it on.
+  bar while it is. Off, these answer `trusted_off` and say where to turn it on. The switch is
+  its own (`realInput` in the extension's storage), apart from the permission, which live
+  pictures (below) may hold alone; an extension that had the permission before keeps real input
+  on (`packages/browser-extension/src/trusted-switch.ts`).
 - **No test runs.** A request from a test run (`x-walnut-test-run`) is refused before it
   reaches the browser.
 
@@ -101,7 +104,19 @@ extension's Settings, reached from the key's popover in the side panel or the to
   allows one (two a second), at your screen's own pixels, and posts it to Walnut itself
   (`POST /api/v1/browser/view/push`); the view holds one request open for the next picture, so a
   picture shows as soon as it is taken, and a picture the same as the last goes without its bytes.
-  Nobody looking, no pictures: a watch nobody renews ends within seconds. The picture is the
+  Nobody looking, no pictures: a watch nobody renews ends within seconds. On macOS, Chrome draws
+  nothing in a window other windows cover entirely, so `captureVisibleTab` has no picture then
+  (`covered`). With **live pictures** on (the extension's Settings, "Live pictures while Walnut's
+  agent window is covered", on by default once the debugger permission is held), the stream takes
+  those pictures with the debugger's `Page.captureScreenshot`, which draws the page off screen and
+  never shows, raises or focuses the window: attached only while you watch a covered window, let
+  go when you stop watching, the tab goes, or the window shows again (Chrome shows its debugging
+  bar meanwhile; `agent-live.ts`, sharing one attach per tab with real input, dialogs and
+  recording, `cdp.ts`). Without the permission, the view offers **Show it live**: the extension
+  opens its own small page in your window (`POST /api/v1/browser/view/grant`, `grant-open.ts`),
+  where Allow, then Allow in Chrome's box, turns live pictures on (an agent may ask for that page
+  too: it opens in the background, and the grant is still your clicks). An agent's screenshot of
+  a covered window uses the same live pictures. The picture is the
   screenshot path (`captureVisibleTab`), so it works on a window behind yours and takes no focus;
   a tab of yours is pictured only while it is on screen (Walnut never switches your tabs), and a
   picture waits for nothing an agent is doing (`agent-view.ts`, `capture-gate.ts`,

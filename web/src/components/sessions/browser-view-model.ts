@@ -13,6 +13,8 @@ export interface BrowserViewTab {
   windowState?: string;
   connected: boolean;
   pictures: boolean;
+  /** Its extension tells whether live pictures could show a covered window, and can open the page that turns them on. */
+  liveGrant?: boolean;
   /** The person took the tab over (Take over): the agent waits until they hand it back. */
   driving?: boolean;
   /** The agent asked the person to sign in here themselves (request_sign_in). */
@@ -50,6 +52,11 @@ export interface BrowserFrame {
   unchanged?: boolean;
   /** The browser streams its pictures (asked again at once, never on a timer). */
   stream?: boolean;
+  /**
+   * A covered window (`why: 'covered'`): whether the extension's live pictures could show it
+   * (packages/browser-extension/src/agent-live.ts LiveState); absent from an older extension.
+   */
+  live?: 'off' | 'no_permission' | 'cancelled' | 'unavailable' | 'failed' | string;
 }
 
 /** Which window the tab is in, as the person reads it. */
@@ -66,7 +73,29 @@ export function windowLine(t: { window?: string; windowState?: string; handed?: 
 }
 
 /** Why there is no picture now; `null` when the last picture simply stays (a frame skipped). */
-export function noPictureLine(f: Pick<BrowserFrame, 'why' | 'window'> | null, hasPicture: boolean): string | null {
+const COVERED_LINE = "Chrome stops drawing Walnut's agent window while other windows cover all of it, so no new picture can be taken. It comes as soon as any part of that window is on screen.";
+
+/** What "Show it live" does, said beside the button. */
+export const LIVE_GRANT_LINE = "Chrome opens a small Walnut page: click Allow there, then Allow in Chrome's box.";
+
+/**
+ * The card offers "Show it live": the window is covered, the extension may not use its debugger
+ * yet, and it can open the page that asks (an older one cannot: its covered line stays).
+ */
+export function liveGrantOffer(f: Pick<BrowserFrame, 'why' | 'live'> | null, t: Pick<BrowserViewTab, 'liveGrant'> | undefined): boolean {
+  return f?.why === 'covered' && f.live === 'no_permission' && t?.liveGrant === true;
+}
+
+/** A covered window's line, by what the extension says of live pictures (`grant`: the card offers Show it live). */
+function coveredLine(live: string | undefined, grant: boolean): string {
+  if (live === 'no_permission' && grant) return `Chrome stops drawing Walnut's agent window while other windows cover all of it. To see it live anyway, press Show it live. ${LIVE_GRANT_LINE}`;
+  if (live === 'off') return `${COVERED_LINE} To see it live anyway, turn on "Live pictures while Walnut's agent window is covered" in the Walnut extension's Settings.`;
+  if (live === 'cancelled') return "You cancelled Chrome's debugging bar, so Walnut takes no live pictures for a while. The picture comes as soon as any part of Walnut's agent window is on screen.";
+  if (live === 'failed') return "Chrome gave Walnut no live picture of the covered window just now (a dialog on the page, or DevTools open on it). It comes as soon as any part of that window is on screen; Walnut tries again in a moment.";
+  return COVERED_LINE;
+}
+
+export function noPictureLine(f: Pick<BrowserFrame, 'why' | 'window' | 'live'> | null, hasPicture: boolean, grant = false): string | null {
   switch (f?.why) {
     case 'behind':
       return f.window === 'person'
@@ -74,7 +103,7 @@ export function noPictureLine(f: Pick<BrowserFrame, 'why' | 'window'> | null, ha
         : 'This tab is behind another tab in the agent window: the picture shows when it is in front.';
     case 'minimized': return "Walnut's agent window is minimized: the picture shows again when you restore it.";
     // Chrome draws nothing in a window other windows cover entirely, so the last picture is old.
-    case 'covered': return "Chrome stops drawing Walnut's agent window while other windows cover all of it, so no new picture can be taken. It comes as soon as any part of that window is on screen.";
+    case 'covered': return coveredLine(f.live, grant);
     case 'no_permission': return 'The Walnut extension may not take pictures of pages in this browser (it asks for that permission in its Settings).';
     case 'not_web': return 'The tab is not on a web page now.';
     case 'walnut_page': return "The tab shows Walnut's own page: no picture of it.";

@@ -186,7 +186,7 @@ describe('a task\'s tabs for its Browser view', () => {
     hub.noteTab('extension-aaaaaa', 5, { title: 'Cart', url: 'https://shop.example.test/cart' })
     // A note on a tab no one holds is dropped.
     hub.noteTab('extension-aaaaaa', 6, { title: 'Nobody\'s' })
-    expect(hub.viewOf(owner)).toEqual({ tabs: [{ device: 'extension-aaaaaa', browser: 'Walnut extension (Chrome on Mac)', tab: 5, connected: true, pictures: true, url: 'https://shop.example.test/cart', title: 'Cart', window: 'agent', windowState: 'normal' }] })
+    expect(hub.viewOf(owner)).toEqual({ tabs: [{ device: 'extension-aaaaaa', browser: 'Walnut extension (Chrome on Mac)', tab: 5, connected: true, pictures: true, liveGrant: false, url: 'https://shop.example.test/cart', title: 'Cart', window: 'agent', windowState: 'normal' }] })
     expect(hub.viewOf('task:other')).toEqual({ tabs: [] })
     off()
   })

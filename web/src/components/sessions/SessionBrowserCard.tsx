@@ -25,7 +25,7 @@ import { usePageViewOf } from '@/utils/view-memory';
 import { log } from '@/utils/log';
 import { useBrowserView } from './useBrowserView';
 import {
-  FRAME_EVERY_MS, FRAME_RETRY_MS, UNCHANGED_AGAIN_MS, agoLine, lateLine, endedLine, followedTab, handLine, noPictureLine, tabKey, windowLine,
+  FRAME_EVERY_MS, FRAME_RETRY_MS, UNCHANGED_AGAIN_MS, agoLine, lateLine, endedLine, followedTab, handLine, liveGrantOffer, noPictureLine, tabKey, windowLine,
   type BrowserFrame,
 } from './browser-view-model';
 import '@/styles/session-browser-card.css';
@@ -76,6 +76,8 @@ export function SessionBrowserCard({ taskId }: { taskId: string }) {
   const [trouble, setTrouble] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
   const [handing, setHanding] = useState<'take' | 'back' | null>(null);
+  // "Show it live": the page asking for live pictures is opening (or opened) in Chrome.
+  const [granting, setGranting] = useState<'opening' | 'opened' | null>(null);
   // Since when the browser has had no picture to give (every answer says, an unchanged one too).
   const [noPicSince, setNoPicSince] = useState<string | undefined>(undefined);
   const [now, setNow] = useState(() => Date.now());
@@ -193,6 +195,24 @@ export function SessionBrowserCard({ taskId }: { taskId: string }) {
     }
   }, [taskId, followedId, followedDevice, reread]);
 
+  // "Show it live" (the person's click): the extension opens its page that turns live pictures on.
+  const showLive = useCallback(async () => {
+    if (followedId === undefined || followedDevice === undefined) return;
+    setGranting('opening');
+    try {
+      const out = await apiPost<{ opened?: boolean; already?: boolean; why?: string }>('/api/v1/browser/view/grant', { task: taskId, tab: followedId, device: followedDevice });
+      log.info('session-panel', 'browser view grant page', { taskId, tab: followedId, device: followedDevice, opened: out?.opened === true });
+      if (out?.why === 'no_window') { setTrouble('Open a Chrome window of your own first (not Walnut\'s agent window), then press Show it live again.'); setGranting(null); return; }
+      setGranting('opened');
+    } catch (err) {
+      setTrouble(err instanceof Error ? err.message : String(err));
+      setGranting(null);
+    }
+  }, [taskId, followedId, followedDevice]);
+  // Once live pictures flow (or the window shows), the offer and its words go.
+  const offerNow = liveGrantOffer(frame, followed);
+  useEffect(() => { if (!offerNow) setGranting(null); }, [offerNow]);
+
   if (!state) return null;
 
   if (!followed) {
@@ -212,7 +232,15 @@ export function SessionBrowserCard({ taskId }: { taskId: string }) {
   const title = mineFrame && frame?.title ? frame.title : followed.title;
   const url = mineFrame && frame?.url ? frame.url : followed.url;
   const where = windowLine({ window: frame?.window ?? followed.window, windowState: frame?.windowState ?? followed.windowState, handed: frame?.handed, taken: frame?.taken });
-  const noPicture = trouble ?? (followed.connected ? (followed.pictures ? noPictureLine(frame, !!picture) : noPictureLine({ why: 'no_permission' }, false)) : 'The browser does not answer right now.');
+  const offer = offerNow;
+  const noPicture = trouble ?? (followed.connected ? (followed.pictures ? noPictureLine(frame, !!picture, offer) : noPictureLine({ why: 'no_permission' }, false)) : 'The browser does not answer right now.');
+  // Beside the covered line: the one button, or what to do in Chrome once its page is open.
+  const liveOffer = offer && !trouble ? (
+    granting === 'opened'
+      ? <span className="session-browser-live-wait" data-testid="session-browser-live-wait"> Click Allow on the Walnut page in Chrome, then Allow in Chrome's box.</span>
+      : <button type="button" className="session-browser-btn session-browser-btn--primary session-browser-live-btn" onClick={() => { void showLive(); }}
+          disabled={granting !== null} data-testid="session-browser-show-live">{granting === 'opening' ? 'Opening…' : 'Show it live'}</button>
+  ) : null;
   const late = lateLine(noPicSince ?? (picture ? undefined : waitFrom), now);
   const live = !!frame?.shown && !trouble && !late;
   // The tab list's word (re-read on every change of the tab), never a picture's, which an unchanged answer does not renew.
@@ -272,11 +300,11 @@ export function SessionBrowserCard({ taskId }: { taskId: string }) {
       <div className="session-browser-shot" ref={setShotEl} data-testid="session-browser-shot">
         {picture
           ? <img src={picture.image} alt={`The agent's tab: ${title ?? ''}`} className={live ? '' : 'is-stale'} data-testid="session-browser-picture" draggable={false} />
-          : <div className="session-browser-empty" data-testid="session-browser-why">{late ? `${late} ` : ''}{noPicture ?? 'Taking the first picture…'}</div>}
+          : <div className="session-browser-empty" data-testid="session-browser-why">{late ? `${late} ` : ''}{noPicture ?? 'Taking the first picture…'}{liveOffer}</div>}
       </div>
       <div className="session-browser-foot" data-testid="session-browser-foot">
         {picture && (live ? <span>Live · {agoLine(picture.at, now)}</span> : <span>Last picture {agoLine(picture.at, now)}</span>)}
-        {picture && (noPicture || late) && <span className="session-browser-note" data-testid="session-browser-why">{[late, noPicture].filter(Boolean).join(' ')}</span>}
+        {picture && (noPicture || late) && <span className="session-browser-note" data-testid="session-browser-why">{[late, noPicture].filter(Boolean).join(' ')}{liveOffer}</span>}
       </div>
     </section>
   );

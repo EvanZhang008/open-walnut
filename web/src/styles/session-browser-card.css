@@ -147,3 +147,7 @@
   background: color-mix(in srgb, var(--accent) 10%, var(--bg));
 }
 .session-browser-hand-text { flex: 1 1 auto; min-width: 0; }
+
+/* "Show it live" beside a covered window's line (SessionBrowserCard.tsx). */
+.session-browser-live-btn { margin-left: 8px; vertical-align: baseline; }
+.session-browser-empty .session-browser-live-btn { display: inline-flex; margin: 8px auto 0; }
