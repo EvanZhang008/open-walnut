@@ -1718,6 +1718,14 @@ function journaledHome(sid) {
   return journaledHomes.get(sid);
 }
 
+// The session lived on this host: its stream file, or the spawn journal. See livedHere in daemon-standalone.ts.
+function livedHere(sid) {
+  if (fs.existsSync(path.join(STREAMS_DIR, sid + '.jsonl'))) return true;
+  if (!isJournalSid(sid)) return false;
+  if (!journaledIds().has(sid)) journaledSids = null;
+  return journaledIds().has(sid);
+}
+
 function appendSpawnJournal(sid, rec) {
   if (!isJournalSid(sid)) return;
   const ids = journaledIds();
@@ -4588,7 +4596,7 @@ async function resumeForTrigger(home, sid, text, messageId, taskId) {
   // and then the Walnut that asked for its latest spawn decides (below).
   var journaled = journaledHome(sid);
   if (journaled !== undefined && journaled !== home) return { ok: false, reason: 'that session was started on this host for another Walnut' };
-  if (!fs.existsSync(path.join(STREAMS_DIR, sid + '.jsonl'))) return { ok: false, reason: 'no transcript of that session on this host' };
+  if (!livedHere(sid)) return { ok: false, reason: 'no transcript of that session on this host' };
   var now = Date.now();
   for (const [k, at] of hostResumedAt) if (now - at >= HOST_RESUME_COOLDOWN_MS) hostResumedAt.delete(k);
   if (hostResumedAt.has(sid)) return { ok: false, reason: 'this host resumed that session moments ago' };
@@ -4645,8 +4653,7 @@ function cmdBridgeResume(ws, id, cmd) {
     return cmdSend(ws, id, { cmd: 'send', sid: sid, message: message, stopFence: cmd.stopFence });
   }
 
-  var jsonlPath = path.join(STREAMS_DIR, sid + '.jsonl');
-  if (!fs.existsSync(jsonlPath)) {
+  if (!livedHere(sid)) {
     return sendError(ws, id, 'bridgeResume: session not found: ' + sid);
   }
 
@@ -6131,7 +6138,7 @@ var clockHostStartDeps = {
   },
   primaryAnswers: function (home) { return primaryAnswersFollower(home); },
   ownsDir: function () { return ownsDaemonDir(); },
-  ran: function (sid) { return sessions.has(sid) || fs.existsSync(path.join(STREAMS_DIR, sid + '.jsonl')); },
+  ran: function (sid) { return sessions.has(sid) || livedHere(sid); },
   spawn: function (home, taskId, p) {
     return sessionStartGate.run(p.sid, function () {
       return startSessionProcess({ cmd: 'start', sid: p.sid, args: p.args, cwd: p.cwd, message: p.message, resume: false, mode: p.mode, origin: { home: home, task: taskId } });
@@ -6161,7 +6168,7 @@ function recoverPendingAsks() {
   for (var i = 0; i < list.length; i++) {
     var p = list[i];
     try {
-      var ran = sessions.has(p.sid) || fs.existsSync(path.join(STREAMS_DIR, p.sid + '.jsonl'));
+      var ran = sessions.has(p.sid) || livedHere(p.sid);
       if (ran && offlineHost.ownerOf(p.sid) !== p.home) {
         // A routine run's own task goes first (clock-host-start-v1): its session record names it.
         var task = p.task ? offlineHost.noteRoutineTask(p.home, p.task.record, p.task.opId, p.task.jobId) : null;

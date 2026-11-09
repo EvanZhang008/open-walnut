@@ -11,7 +11,7 @@
  * A file is deleted only when ALL hold:
  *   - a canonical transcript with the same <sessionId>.jsonl name exists under
  *     the Claude projects dir (so history remains readable),
- *   - it has not been written for `retentionMs` (default 7 days — no live or
+ *   - it has not been written for `retentionMs` (default 2 days — no live or
  *     recently-resumed session is streaming from it; byte offsets survive
  *     recreation, see claude-code-session.ts "stream file was recreated"),
  *   - its session id is not in `activeIds` (belt and braces for idle-but-alive
@@ -33,7 +33,14 @@ import path from 'node:path'
 import { log } from '../logging/index.js'
 import { parseSpawnJournal } from '../providers/external-session-scan-core.js'
 
-export const STREAM_RETENTION_MS = 7 * 24 * 3600_000
+/**
+ * How long a finished session's capture stays. 2026-11-09: the Mac's streams dir
+ * held 9 GB under a 7-day rule while its disk sat under Walnut's 20 GB floor. The
+ * transcript is the history, and a resume proves residence by the spawn journal
+ * (livedHere in both daemon twins), so two days is enough; reading an older
+ * session while the Mac is away falls back to the newer daemons' transcript reads.
+ */
+export const STREAM_RETENTION_MS = 2 * 24 * 3600_000
 
 export interface StreamRetentionOptions {
   /** SESSION_STREAMS_DIR (injectable for tests). */
@@ -129,6 +136,7 @@ export async function sweepRecoverableStreamFiles(opts: StreamRetentionOptions):
       await fs.unlink(file + '.fold').catch(() => { /* no fold checkpoint */ })
       await fs.unlink(file + '.fold.next').catch(() => { /* no prepared checkpoint */ })
       await fs.unlink(file + '.lines').catch(() => { /* no line write records */ })
+      await fs.unlink(file + '.compact').catch(() => { /* no compaction mark */ })
     } catch {
       // ledger write failed, raced with a concurrent delete, or the file is
       // pinned — keep the capture; next reap retries

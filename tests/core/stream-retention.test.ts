@@ -62,12 +62,25 @@ describe('sweepRecoverableStreamFiles', () => {
   })
 
   it('keeps a capture younger than the retention window even with a canonical copy', async () => {
-    const young = capture('bbb.jsonl', 6 * DAY)
+    const young = capture('bbb.jsonl', 1.5 * DAY)
     canonical('bbb.jsonl')
 
     expect(await sweep()).toEqual([])
     expect(fs.existsSync(young)).toBe(true)
-    expect(STREAM_RETENTION_MS).toBe(7 * DAY)
+  })
+
+  // 2026-11-09: 9 GB of captures on a Mac under its disk floor; the 7-day window was the cause.
+  it('drops a finished session\'s capture after two days, with every sidecar, its sid journaled first', async () => {
+    expect(STREAM_RETENTION_MS).toBe(2 * DAY)
+    const old = capture('two-days.jsonl', 2.5 * DAY, true)
+    for (const ext of ['.fold', '.fold.next', '.lines', '.compact']) fs.writeFileSync(old + ext, 'x')
+    canonical('two-days.jsonl')
+    const journal = path.join(path.dirname(streams), 'spawn-journal.jsonl')
+    const deleted = await sweepRecoverableStreamFiles({ streamsDir: streams, claudeProjectsDir: projects, activeIds: new Set(), now: NOW, spawnJournal: journal })
+    expect(deleted).toEqual([old])
+    for (const ext of ['', '.err', '.fold', '.fold.next', '.lines', '.compact']) expect(fs.existsSync(old + ext), ext).toBe(false)
+    // The journal is what a later resume of it proves residence by (livedHere in both daemon twins).
+    expect(fs.readFileSync(journal, 'utf8')).toContain('"sid":"two-days"')
   })
 
   it('keeps an old capture with NO canonical transcript — it is the only copy', async () => {

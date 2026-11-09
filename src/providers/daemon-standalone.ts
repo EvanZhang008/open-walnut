@@ -392,6 +392,20 @@ function journaledHome(sid: string): string | undefined {
   return journaledHomes.get(sid)
 }
 
+/**
+ * The session lived on this host: its stream file is here, or the spawn journal
+ * names it. Stream retention (src/core/stream-retention.ts) drops a finished
+ * session's stream after a few days and journals the sid first, so the journal
+ * stays the proof a resume needs. Keep in sync with daemon-source.ts.
+ */
+function livedHere(sid: string): boolean {
+  if (fs.existsSync(path.join(STREAMS_DIR, sid + '.jsonl'))) return true
+  if (!isJournalSid(sid)) return false
+  // The server's retention journals a sid itself, after this daemon read the journal.
+  if (!journaledIds().has(sid)) journaledSids = null
+  return journaledIds().has(sid)
+}
+
 function appendSpawnJournal(sid: unknown, rec: Record<string, unknown>): void {
   if (!isJournalSid(sid)) return
   const ids = journaledIds()
@@ -3340,7 +3354,7 @@ async function resumeForTrigger(home: string, sid: string, text: string, message
   // and then the Walnut that asked for its latest spawn decides (below).
   const journaled = journaledHome(sid)
   if (journaled !== undefined && journaled !== home) return { ok: false, reason: 'that session was started on this host for another Walnut' }
-  if (!fs.existsSync(path.join(STREAMS_DIR, sid + '.jsonl'))) return { ok: false, reason: 'no transcript of that session on this host' }
+  if (!livedHere(sid)) return { ok: false, reason: 'no transcript of that session on this host' }
   const now = Date.now()
   for (const [k, at] of hostResumedAt) if (now - at >= HOST_RESUME_COOLDOWN_MS) hostResumedAt.delete(k)
   if (hostResumedAt.has(sid)) return { ok: false, reason: 'this host resumed that session moments ago' }
@@ -3406,9 +3420,8 @@ function cmdBridgeResume(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     return cmdSend(ws, id, { cmd: 'send', sid, message, stopFence: cmd.stopFence })
   }
 
-  // The jsonl is the proof-of-residence: without it this sid never ran here.
-  const jsonlPath = path.join(STREAMS_DIR, sid + '.jsonl')
-  if (!fs.existsSync(jsonlPath)) {
+  // Proof of residence: its stream file, or the spawn journal once retention dropped the file.
+  if (!livedHere(sid)) {
     return sendError(ws, id, 'bridgeResume: session not found: ' + sid)
   }
 
@@ -4889,7 +4902,7 @@ const clockHostStart = createClockHostStart({
   },
   primaryAnswers: (home) => primaryAnswersFollower(home),
   ownsDir: () => ownsDaemonDir(),
-  ran: (sid) => sessions.has(sid) || fs.existsSync(path.join(STREAMS_DIR, sid + '.jsonl')),
+  ran: (sid) => sessions.has(sid) || livedHere(sid),
   spawn: (home, taskId, p) => sessionStartGate.run(p.sid, () => startSessionProcess({ cmd: 'start', sid: p.sid, args: p.args, cwd: p.cwd, message: p.message, resume: false, mode: p.mode, origin: { home, task: taskId } })),
   stop: (sid) => { const s = sessions.get(sid); if (s?.pid) killProcessGroup(s.pid, 'SIGTERM') },
   marker: (sid, text, messageId) => { core.handleAppendUserMarker(sid, text, messageId) },
@@ -4909,7 +4922,7 @@ const clockHostStart = createClockHostStart({
 function recoverPendingAsks() {
   for (const p of hostStart.pendingStarts()) {
     try {
-      const ran = sessions.has(p.sid) || fs.existsSync(path.join(STREAMS_DIR, p.sid + '.jsonl'))
+      const ran = sessions.has(p.sid) || livedHere(p.sid)
       if (ran && offlineHost.ownerOf(p.sid) !== p.home) {
         // A routine run's own task goes first (clock-host-start-v1): its session record names it.
         const task = p.task ? offlineHost.noteRoutineTask(p.home, p.task.record, p.task.opId, p.task.jobId) : null

@@ -293,6 +293,22 @@ describe.each(TWINS)('daemon twin: $name', (twin) => {
     expect(fs.existsSync(path.join(root, 'REAL_CLAUDE_RAN'))).toBe(false)
   }, 60_000)
 
+  // 2026-11-09: stream retention drops a finished session's stream file after two days and journals
+  // its sid first; the spawn journal is then the proof a resume needs, and an unknown sid stays refused.
+  it('bridgeResume: the spawn journal proves residence once the stream file is gone; an unknown sid is refused', async () => {
+    const { cwd } = await boot(twin)
+    const refused = await rpc({ id: 3, cmd: 'bridgeResume', sid: 'guard-unknown-0001', message: 'hello', cwd })
+    expect(JSON.stringify(refused)).toContain('session not found')
+    const sid = 'guard-journaled-0001'
+    const journal = process.env.WALNUT_SPAWN_JOURNAL!
+    fs.mkdirSync(path.dirname(journal), { recursive: true })
+    // Appended after the daemon read the journal, as the server's retention does.
+    fs.appendFileSync(journal, JSON.stringify({ v: 1, sid, at: new Date().toISOString(), kind: 'backfill', from: 'retention' }) + '\n')
+    await rpc({ id: 4, cmd: 'bridgeResume', sid, message: 'hello', cwd })
+    const hits = await waitForHits((h) => h.tool === 'claude' && h.args.includes(`--resume ${sid}`))
+    expect(hits.some((h) => h.tool === 'claude' && h.args.includes(`--resume ${sid}`)), JSON.stringify(hits)).toBe(true)
+  }, 60_000)
+
   it('a start whose argv names `claude` (a test daemon URL keeps it) lands on the guard', async () => {
     const { cwd } = await boot(twin)
     const sid = 'guard-start-0001'
