@@ -37,6 +37,7 @@
  * cwd: cache-design.md, cache-report.html, nested-fence.mdx, sync-*.go).
  */
 import { expect, type APIRequestContext, type Locator, type Page, type Route } from '@playwright/test'
+import { pressBarTool } from './doc-bar-helpers'
 import fs from 'node:fs/promises'
 import { humanPress, mainComposer, openThreadsSession, readRecord, resetThreadsFixture, test } from './threads-helpers'
 import { TAGGED_READY, TAGGED_SESSION, TAGGED_TASK } from './threads-fixture'
@@ -535,7 +536,7 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
   test('Files: the markdown Source tab (pill)', async ({ page }) => {
     const panel = await openSession(page)
     const view = await openFile(panel, MD_FILE)
-    await view.getByRole('button', { name: 'Source', exact: true }).click()
+    await pressBarTool(page, view.locator('.fv-doc-bar'), 'Source')
     const cm = view.locator('.cm-content')
     await expect(cm).toContainText(MD_SOURCE_LINE, { timeout: 10_000 })
     const askHere = page.locator('[data-testid="file-ask-here"]')
@@ -543,7 +544,7 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
     await humanPress(page, askHere)
     await expectCardLanded(page, view, 'files-md-source', () => textRects(cm, MD_SOURCE_LINE, 0, false))
     // Back to the preview for the next test (the tab is remembered per file).
-    await view.getByRole('button', { name: 'Preview', exact: true }).click()
+    await pressBarTool(page, view.locator('.fv-doc-bar'), 'Preview')
   })
 
   test('Files: a code file in the source editor (pill)', async ({ page }) => {

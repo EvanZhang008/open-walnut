@@ -24,9 +24,9 @@ const TASK_ID = 'pw-task-vscode'
 const SCREENSHOT_DIR = 'test-results/file-view-history'
 
 // The ‹ › buttons sit in the document bar only while it has room; a narrow
-// pane (data-fit="tight") moves them into ⋯. A wide window keeps them in the
-// bar, which is what these tests click.
-test.use({ viewport: { width: 1440, height: 900 } })
+// pane, or a name the bar would cut, folds them into ⋯ (data-fold 2 and on). A
+// wide window keeps them in the bar, which is what these tests click.
+test.use({ viewport: { width: 1920, height: 900 } })
 
 /**
  * Open the fixture session's panel from the homepage (real clicks, no page.goto).

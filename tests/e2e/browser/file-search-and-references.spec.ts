@@ -6,6 +6,7 @@
  * (test-server.ts) — one definition of HasSyncedForItems, two call sites.
  */
 import { test, expect, type Page } from '@playwright/test'
+import { pressBarTool } from './doc-bar-helpers'
 
 const SESSION_ID = 'pw-vscode-session'
 const TASK_ID = 'pw-task-vscode'
@@ -114,13 +115,8 @@ test('search works in the markdown preview too (DOM surface)', async ({ page }) 
   await expect(explorer.locator('.fv-wysiwyg-editor')).toContainText('timeline entry 1', { timeout: 10_000 })
 
   // The Find button is the mouse path to the same bar (⌘F targeting is covered
-  // above). A narrow pane (data-fit="tight") keeps it in ⋯ as "Find in file".
-  if ((await docBar.getAttribute('data-fit')) === 'tight') {
-    await docBar.getByRole('button', { name: 'More file actions' }).click()
-    await page.getByTestId('fv-more-menu').getByRole('menuitem', { name: 'Find in file' }).click()
-  } else {
-    await docBar.getByRole('button', { name: 'Find in file' }).click()
-  }
+  // above). A narrow pane, or a long name, folds it into ⋯ as "Find in file".
+  await pressBarTool(page, docBar, 'Find in file')
   const bar = explorer.locator('.fv-search-bar')
   await expect(bar).toBeVisible()
   await bar.locator('.fv-search-input').fill('timeline entry')

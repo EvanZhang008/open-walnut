@@ -118,6 +118,7 @@ const PASSING: Record<string, string> = {
   'components/common/DocCommentsLayer.tsx#listOpen': 'the comments list, a popover',
   'components/common/FileContentView.tsx#historyOpen': 'a file\'s history, a popover',
   'components/common/FileContentView.tsx#searchOpen': 'the find bar, a passing search',
+  'components/common/FileContentView.tsx#barStep': 'how many tools the document bar folds into its menu, measured from the bar width and the file name each render, not a choice',
   'components/common/NotificationPanel.tsx#detailOpen': 'one letter\'s raw detail unfolded',
   'components/common/NotificationPanel.tsx#expanded': 'one letter unfolded',
   'components/common/NotificationPanel.tsx#openLetterId': 'a letter read inside the notification panel, a popover',

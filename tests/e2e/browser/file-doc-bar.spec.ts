@@ -23,6 +23,7 @@
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { mkdir } from 'node:fs/promises'
 import { isolateUiPrefs } from './todo-panel-helpers'
+import { docBarSettled, pressBarTool as pressTool, type BarTool } from './doc-bar-helpers'
 import { withCssColor } from './css-color'
 
 test.use({ viewport: { width: 1280, height: 820 } })
@@ -91,6 +92,8 @@ function nodeByName(explorer: Locator, name: string) {
 
 const bar = (page: Page) => page.locator('.file-content-view .fv-doc-bar')
 const state = (page: Page) => page.getByTestId('fv-save-state')
+const pressBarTool = (page: Page, tool: BarTool, within: Locator = bar(page)) => pressTool(page, within, tool)
+
 const source = (page: Page) => page.locator('.fv-source-editor .cm-content')
 
 test.beforeAll(async () => { await mkdir(SHOTS, { recursive: true }) })
@@ -109,6 +112,9 @@ test.beforeEach(async ({ page, baseURL }) => {
 })
 
 test('one quiet line, no Save, and typing reaches disk on its own', async ({ page }) => {
+  // A window with room for every tool beside the name (a narrower one folds the
+  // rarest into ⋯ while the name would be cut: the name-first test below).
+  await page.setViewportSize({ width: 1920, height: 820 })
   const name = `doc-bar-${Date.now()}.md`
   const abs = await makeScratchFile(page, name, '# Q4 roadmap\n\nThree goals for the quarter.\n\n- One toolbar for every file type\n')
   const explorer = await openFilesPanel(page)
@@ -143,16 +149,23 @@ test('one quiet line, no Save, and typing reaches disk on its own', async ({ pag
   await expect(page.locator('.fv-save-btn, .fv-live-toggle, .fv-cancel-edit-btn')).toHaveCount(0)
   // The lead is where the file is: its path, ending in its name.
   await expect(bar(page).locator('.sfe-crumb.is-last')).toHaveText(name)
-  // At a 1280 window with the chat open the name is whole, not cut.
+  // With the chat open the name is whole, not cut.
   const nameCut = await bar(page).locator('.sfe-crumb.is-last .sfe-crumb-text').evaluate((el) => el.scrollWidth > el.clientWidth + 1)
   expect(nameCut, 'the file name is shown whole').toBe(false)
-  // That pane draws the bar compact: the Terminal dock toggle is its icon, as Preview and Source
-  // are (its word took the name's room on Linux fonts).
-  await expect(bar(page)).toHaveAttribute('data-fit', 'compact')
+  // A full bar gives the Terminal dock toggle its word; at a 1280 window with the chat open the
+  // bar is no longer full and the toggle is its icon, as Preview and Source are (its word took
+  // the name's room on Linux fonts), its name still Terminal.
+  // (Which fit 1920 gets depends on the fonts: Linux CI fonts may keep it compact.)
   const dock = bar(page).getByTestId('terminal-dock-toggle')
+  const wideFit = await bar(page).getAttribute('data-fit')
+  if (wideFit === 'full') await expect(dock.locator('.sfe-btn-label')).toBeVisible()
+  await page.setViewportSize({ width: 1280, height: 820 })
+  await expect(bar(page)).not.toHaveAttribute('data-fit', 'full')
   await expect(dock).toBeVisible()
   await expect(dock).toHaveAccessibleName('Terminal')
   await expect(dock.locator('.sfe-btn-label')).toBeHidden()
+  await page.setViewportSize({ width: 1920, height: 820 })
+  await expect(bar(page).getByRole('button', { name: 'History' })).toBeVisible()
   await expect(state(page)).toHaveText('Saved')
   await page.screenshot({ path: `${SHOTS}/2-file-open.png` })
 
@@ -260,11 +273,11 @@ test('⋯ holds every rare action as an overlay, and Fullscreen enters and leave
   // A 1280 window's full screen is a full bar from its first frame.
   await expect(page.locator('.fv-fullscreen .fv-doc-bar')).toHaveAttribute('data-fit', 'full', { timeout: 300 })
   // Source runs edge to edge, and so does the line above it.
-  await page.locator('.fv-fullscreen .fv-doc-bar').getByRole('button', { name: 'Source', exact: true }).click()
+  await pressBarTool(page, 'Source', page.locator('.fv-fullscreen .fv-doc-bar'))
   const fsSrc = (await page.locator('.fv-fullscreen .fv-source-editor').boundingBox())!
   const fsSrcName = (await page.locator('.fv-fullscreen .fv-doc-bar .sfe-crumbs').boundingBox())!
   expect(Math.abs(fsSrcName.x - fsSrc.x), 'in Source the bar starts at the edge').toBeLessThan(48)
-  await page.locator('.fv-fullscreen .fv-doc-bar').getByRole('button', { name: 'Preview', exact: true }).click()
+  await pressBarTool(page, 'Preview', page.locator('.fv-fullscreen .fv-doc-bar'))
   await page.locator('.fv-fullscreen .fv-doc-bar').getByRole('button', { name: 'Exit fullscreen' }).click()
   await expect(page.locator('.file-content-view.fv-fullscreen')).toHaveCount(0)
   // A click on the backdrop leaves too.
@@ -385,6 +398,72 @@ test('an overlapping change stops saving and offers keep mine or the disk versio
   expect(await onDisk(page, abs)).toBe('AGAIN one\nline two\nline three\n')
 })
 
+// Evan, 2026-11-09: fewer header buttons, the rest in the dropdown, and the tools
+// stay out while there is room. Wherever the file's name is cut, the bar folds its
+// tools into ⋯ one at a time, rarest first (History, then ‹ ›, then Find, then
+// Preview / Source), and they come back once the bar has room again.
+test('the file name comes first: tools fold into ⋯ one at a time while it is cut, and come back with room', async ({ page }) => {
+  const long = `Walnut stability ledger with a long name ${Date.now()}.md`
+  const short = `ab${Date.now() % 1000}.md`
+  await makeScratchFile(page, long, '# Long\n\nBody.\n')
+  await makeScratchFile(page, short, '# Short\n\nBody.\n')
+  const explorer = await openFilesPanel(page)
+  const nameCut = () => bar(page).locator('.sfe-crumb.is-last .sfe-crumb-text').evaluate((el) => el.scrollWidth > el.clientWidth + 1)
+  const fold = async () => Number(await bar(page).getAttribute('data-fold'))
+  // What is on the bar now, in the order the bar folds it.
+  const onBar = async () => ({
+    history: await bar(page).getByRole('button', { name: 'History', exact: true }).isVisible(),
+    nav: await bar(page).getByRole('button', { name: 'Back to the previously viewed file' }).isVisible(),
+    find: await bar(page).getByRole('button', { name: 'Find in file' }).isVisible(),
+    view: await bar(page).getByRole('button', { name: /^(Preview|Source|Show source|Show preview)$/ }).first().isVisible(),
+  })
+
+  // Room (the pane is the window less the tree and the chat): every tool is on the bar.
+  await page.setViewportSize({ width: 2200, height: 820 })
+  await nodeByName(explorer, short).click()
+  await expect(page.locator('.fv-wysiwyg-editor .ProseMirror')).toContainText('Body.')
+  await docBarSettled(bar(page))
+  expect(await fold()).toBe(0)
+  expect(await onBar()).toMatchObject({ history: true, find: true, view: true })
+
+  await nodeByName(explorer, long).click()
+  await expect(bar(page).locator('.sfe-crumb.is-last')).toHaveText(long)
+  const seen: string[] = []
+  for (const w of [2200, 1440, 1300, 1200, 1100, 960, 820]) {
+    await page.setViewportSize({ width: w, height: 820 })
+    await page.waitForTimeout(250)
+    // Settled: while anything is still on the bar to fold, the name is whole.
+    await docBarSettled(bar(page))
+    const f = await fold()
+    if (f < 4) expect(await nameCut(), `${w}px: the name is whole while a tool is still out`).toBe(false)
+    // Folded in order: the tools gone from the bar are the first `f` of the order.
+    const t = await onBar()
+    expect(t.history, `${w}px fold ${f}: History`).toBe(f < 1)
+    expect(t.find, `${w}px fold ${f}: Find`).toBe(f < 3)
+    expect(t.view, `${w}px fold ${f}: Preview / Source`).toBe(f < 4)
+    // Each folded tool is a row of ⋯.
+    if (f >= 1) {
+      await bar(page).getByRole('button', { name: 'More file actions' }).click()
+      const menu = page.getByTestId('fv-more-menu')
+      await expect(menu.getByRole('menuitem', { name: 'History' })).toBeVisible()
+      if (f >= 3) await expect(menu.getByRole('menuitem', { name: 'Find in file' })).toBeVisible()
+      if (f >= 4) await expect(menu.getByRole('menuitem', { name: 'Show source' })).toBeVisible()
+      // The whole name is the menu's first row.
+      await expect(menu).toContainText(long)
+      await page.keyboard.press('Escape')
+    }
+    seen.push(`${w}px: bar ${Math.round((await bar(page).boundingBox())!.width)}px, ${await bar(page).getAttribute('data-fit')}, fold ${f}`)
+    await page.screenshot({ path: `${SHOTS}/name-first-${w}.png` })
+  }
+  console.log(seen.join('\n'))
+  // Wide again: the tools come back to the bar.
+  await nodeByName(explorer, short).click()
+  await page.setViewportSize({ width: 2200, height: 820 })
+  await docBarSettled(bar(page))
+  expect(await fold()).toBe(0)
+  await expect(bar(page).getByRole('button', { name: 'History', exact: true })).toBeVisible()
+})
+
 test('a narrow pane keeps one line: the path gives way, the tools do not wrap', async ({ page }) => {
   await page.setViewportSize({ width: 1000, height: 820 })
   const name = `doc-bar-narrow-with-a-long-file-name-${Date.now()}.md`
@@ -403,17 +482,19 @@ test('a narrow pane keeps one line: the path gives way, the tools do not wrap', 
     const nameBox = (await bar(page).locator('.sfe-crumb.is-last').boundingBox())!
     expect(nameBox.width).toBeGreaterThan(36)
     expect(nameBox.x).toBeGreaterThanOrEqual(b.x)
-    // A full bar never cuts the name: one that would has stepped down to compact.
-    if ((await bar(page).getAttribute('data-fit')) === 'full') {
+    // The name comes first: a bar that cuts it has nothing left to fold into ⋯
+    // (data-fold 4). Any other bar would have folded one more tool instead.
+    await docBarSettled(bar(page))
+    if ((await bar(page).getAttribute('data-fold')) !== '4') {
       const cut = await bar(page).locator('.sfe-crumb.is-last .sfe-crumb-text').evaluate((el) => el.scrollWidth > el.clientWidth + 1)
-      expect(cut, `${shot}: a full bar shows the whole name`).toBe(false)
+      expect(cut, `${shot}: a bar with tools still out shows the whole name`).toBe(false)
     }
     await expect(bar(page).getByRole('button', { name: /file tree/ })).toBeVisible()
     await page.screenshot({ path: `${SHOTS}/${shot}` })
   }
   await fits('7-medium.png')
-  // Every desktop width in between, a step at a time: wherever the bar is full,
-  // the name is whole.
+  // Every desktop width in between, a step at a time: wherever the bar still
+  // shows a tool it could fold into ⋯, the name is whole.
   for (const w of [1280, 1120, 960, 900, 860, 1000]) {
     await page.setViewportSize({ width: w, height: 820 })
     await page.waitForTimeout(150)
@@ -427,13 +508,23 @@ test('a narrow pane keeps one line: the path gives way, the tools do not wrap', 
   }
 
   // A narrow window: the pane is tight, so Find and History move into ⋯ and
-  // Preview/Source become one switch; all of them still work from there.
+  // Preview/Source become one switch; this long a name moves that switch into ⋯
+  // too (data-fold 4). All of them still work from there.
   await page.setViewportSize({ width: 820, height: 820 })
   await expect(bar(page)).toHaveAttribute('data-fit', 'tight')
   await fits('8-tight.png')
-  await bar(page).getByRole('button', { name: 'Show source' }).click()
+  const view = async (label: string) => {
+    if ((await bar(page).getAttribute('data-fold')) === '4') {
+      await expect(bar(page).getByRole('button', { name: label })).toHaveCount(0)
+      await bar(page).getByRole('button', { name: 'More file actions' }).click()
+      await page.getByTestId('fv-more-menu').getByRole('menuitem', { name: label }).click()
+    } else {
+      await bar(page).getByRole('button', { name: label }).click()
+    }
+  }
+  await view('Show source')
   await expect(page.locator('.fv-source-editor')).toBeVisible()
-  await bar(page).getByRole('button', { name: 'Show preview' }).click()
+  await view('Show preview')
   await expect(page.locator('.fv-wysiwyg-editor')).toBeVisible()
   await bar(page).getByRole('button', { name: 'More file actions' }).click()
   await page.getByTestId('fv-more-menu').getByRole('menuitem', { name: 'Find in file' }).click()
@@ -452,7 +543,7 @@ test('a narrow pane keeps one line: the path gives way, the tools do not wrap', 
 // own. It used to sit there as "Saving…" with nothing on its way.
 
 async function restoreFirstVersion(page: Page) {
-  await page.getByRole('button', { name: 'History', exact: true }).click()
+  await pressBarTool(page, 'History')
   const flyout = page.getByTestId('file-history-flyout')
   const rows = flyout.locator('.fh-row')
   await expect(rows).toHaveCount(2, { timeout: 10_000 })
@@ -787,7 +878,7 @@ test('a confirm opened from a full screen is on top of it', async ({ page }) => 
   await bar(page).getByRole('button', { name: 'More file actions' }).click()
   await page.getByTestId('fv-more-menu').getByRole('menuitem', { name: 'Fullscreen' }).click()
   await expect(page.locator('.file-content-view.fv-fullscreen')).toBeVisible()
-  await page.locator('.fv-fullscreen .fv-doc-bar').getByRole('button', { name: 'Source', exact: true }).click()
+  await pressBarTool(page, 'Source', page.locator('.fv-fullscreen .fv-doc-bar'))
   await expect(source(page)).toContainText('line two')
   await externalWrite(page, abs, 'THEIRS one\n\nline two\n')
   await source(page).locator('.cm-line').first().click()
@@ -820,7 +911,7 @@ test('an open comparison in History stays open while the file saves', async ({ p
   await page.keyboard.type(' two')
   await page.keyboard.press('ControlOrMeta+s')
   await expect.poll(() => onDisk(page, abs), { timeout: 10_000 }).toBe('one two\n')
-  await page.getByRole('button', { name: 'History', exact: true }).click()
+  await pressBarTool(page, 'History')
   const flyout = page.getByTestId('file-history-flyout')
   await expect(flyout.locator('.fh-row')).toHaveCount(2, { timeout: 10_000 })
   await flyout.locator('.fh-row').nth(1).click()
@@ -893,15 +984,11 @@ test('a JSON file is saved only when it parses', async ({ page }) => {
 // Try again pressed there still writes. (Markdown's preview is an editor itself.)
 
 async function showSourceTab(page: Page) {
-  const toggle = bar(page).getByRole('button', { name: 'Show source', exact: true })
-  if (await toggle.count()) await toggle.click()
-  else await bar(page).getByRole('button', { name: 'Source', exact: true }).click()
+  await pressBarTool(page, 'Source')
   await expect(source(page)).toBeVisible()
 }
 async function showPreviewTab(page: Page) {
-  const toggle = bar(page).getByRole('button', { name: 'Show preview', exact: true })
-  if (await toggle.count()) await toggle.click()
-  else await bar(page).getByRole('button', { name: 'Preview', exact: true }).click()
+  await pressBarTool(page, 'Preview')
   await expect(source(page)).toHaveCount(0)
 }
 
@@ -1113,7 +1200,7 @@ test('History compares with the text in the editor, saved or not', async ({ page
   await page.keyboard.press('Delete')
   await page.keyboard.type('{"two": 2, ')
   await expect.poll(() => onDisk(page, abs), { timeout: 10_000 }).toContain('"two": 2')
-  await page.getByRole('button', { name: 'History', exact: true }).click()
+  await pressBarTool(page, 'History')
   const flyout = page.getByTestId('file-history-flyout')
   await expect(flyout.locator('.fh-row')).toHaveCount(2, { timeout: 10_000 })
   await flyout.locator('.fh-row').nth(1).click()
@@ -1312,7 +1399,7 @@ test('Escape on History closes History, not the Files panel or full screen', asy
   await nodeByName(explorer, name).click()
   await expect(page.locator('.fv-wysiwyg-editor .ProseMirror')).toContainText('One line.')
   const flyout = page.getByTestId('file-history-flyout')
-  await page.getByRole('button', { name: 'History', exact: true }).click()
+  await pressBarTool(page, 'History')
   await expect(flyout).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(flyout).toHaveCount(0)
@@ -1322,7 +1409,7 @@ test('Escape on History closes History, not the Files panel or full screen', asy
   await bar(page).getByRole('button', { name: 'More file actions' }).click()
   await page.getByTestId('fv-more-menu').getByRole('menuitem', { name: 'Fullscreen' }).click()
   await expect(page.locator('.file-content-view.fv-fullscreen')).toBeVisible()
-  await page.locator('.fv-fullscreen').getByRole('button', { name: 'History', exact: true }).click()
+  await pressBarTool(page, 'History', page.locator('.fv-fullscreen .fv-doc-bar'))
   await expect(flyout).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(flyout).toHaveCount(0)

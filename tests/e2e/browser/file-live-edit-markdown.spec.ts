@@ -13,6 +13,7 @@
  */
 import { test, expect, type Page, type Locator } from '@playwright/test'
 import { readFile, writeFile } from 'node:fs/promises'
+import { pressBarTool } from './doc-bar-helpers'
 
 test.use({ viewport: { width: 1200, height: 800 } })
 
@@ -340,10 +341,11 @@ test('Preview and Source switches preserve unsaved Markdown, and it then saves',
   // not come back from disk.
   await keepWritesOffDisk(page)
   await replace(page, preview(page).locator('p').filter({ hasText: 'Editable introduction:' }), 'original', 'cross-mode-edit')
-  // "Source" in a wide bar, one "Show source" icon in a tight one.
-  await page.locator('.fv-doc-bar').getByRole('button', { name: /^(Source|Show source)$/ }).click()
+  // "Source" in a wide bar, one "Show source" icon in a tight one, a row of ⋯
+  // when a long name folded it there.
+  await pressBarTool(page, page.locator('.fv-doc-bar'), 'Source')
   await expect(source(page)).toContainText('cross-mode-edit')
-  await page.locator('.fv-doc-bar').getByRole('button', { name: /^(Preview|Show preview)$/ }).click()
+  await pressBarTool(page, page.locator('.fv-doc-bar'), 'Preview')
   await expect(preview(page)).toContainText('cross-mode-edit')
   expect(await readFile(abs, 'utf8')).not.toContain('cross-mode-edit')
   await page.unroute('**/api/file-content')

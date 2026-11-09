@@ -26,6 +26,7 @@
  * it is a different affordance and not what the report was about.
  */
 import { test, expect, type Page, type Locator } from '@playwright/test'
+import { pressBarTool } from './doc-bar-helpers'
 
 const SESSION_ID = 'pw-vscode-session'
 const TASK_ID = 'pw-task-vscode'
@@ -53,7 +54,7 @@ async function openFiles(panel: Locator) {
 async function openReportSource(explorer: Locator) {
   await explorer.locator('.sfe-name', { hasText: 'incident-report.md' }).click()
   await expect(explorer.locator('.fv-html-toolbar')).toBeVisible({ timeout: 10_000 })
-  await explorer.getByRole('button', { name: 'Source', exact: true }).click()
+  await pressBarTool(explorer.page(), explorer.locator('.fv-doc-bar'), 'Source')
   const editor = explorer.locator('.cm-content')
   await expect(editor).toBeVisible({ timeout: 10_000 })
   await expect(explorer.locator('.cm-line').first()).toContainText('Controller restart loop')

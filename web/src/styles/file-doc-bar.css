@@ -356,12 +356,13 @@
 /* compact and tight: the path is the file's name alone (measured in WebKit: at
    a 480px pane a folder crumb left the name four letters); the full path is the
    first row of ⋯ and the crumbs' tooltip. tight also drops the save word, and
-   ‹ › wait in the keyboard (⌘[ ⌘]) so the name keeps its room. */
+   once a cut name folds them into ⋯ (data-fold 2 and on), ‹ › wait there and in
+   the keyboard (⌘[ ⌘]) so the name keeps its room. */
 .fv-doc-bar:not([data-fit='full']) .sfe-crumb:not(.is-last),
 .fv-doc-bar:not([data-fit='full']) .sfe-crumb.is-last .sfe-crumb-sep,
 .fv-doc-bar:not([data-fit='full']) .fv-doc-crumb-dir,
 .fv-doc-bar:not([data-fit='full']) .fv-doc-crumb-sep,
-.fv-doc-bar[data-fit='tight'] .sfe-nav-group { display: none; }
+.fv-doc-bar:is([data-fold='2'], [data-fold='3'], [data-fold='4']) .sfe-nav-group { display: none; }
 /* Below full width, saved and saving are a mark alone (✓, the spinner; the word
    is the tooltip); only a file that is NOT saving spells it out. */
 .fv-doc-bar:not([data-fit='full']) .fv-save-state:is([data-state='saved'], [data-state='saving']) .fv-save-state-word { display: none; }

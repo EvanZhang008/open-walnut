@@ -147,8 +147,8 @@ interface FileContentViewProps {
   barTrailing?: ReactNode;
   /** Extra rows at the end of the ⋯ menu (the explorer's Refresh). */
   extraMenuItems?: ContextMenuItem[];
-  /** Rows that lead the ⋯ menu only when the bar is tight, for the controls the
-   *  lead drops to make room (the explorer's Back and Forward). */
+  /** Rows that lead the ⋯ menu once the bar has folded the lead's ‹ › into it
+   *  to make room (the explorer's Back and Forward). */
   tightMenuItems?: ContextMenuItem[];
 }
 
@@ -237,6 +237,23 @@ type OfficePreviewComponent = typeof import('@/components/common/OfficePreview')
 
 /** Speed steps shared by the toolbar select and the </> keyboard shortcuts. */
 const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
+/**
+ * The document bar's steps, roomiest first (see barStep in FileContentView): its
+ * tier (full: words; compact: icons; tight: one Preview / Source switch, no save
+ * word) and how many tools are folded into ⋯, one at a time, rarest first:
+ * 1 History, 2 ‹ › (⌘[ ⌘] still work), 3 Find (⌘F still works), 4 Preview / Source.
+ */
+const BAR_STEPS = [
+  { fit: 'full', fold: 0 },
+  { fit: 'compact', fold: 0 },
+  { fit: 'compact', fold: 1 },
+  { fit: 'compact', fold: 2 },
+  { fit: 'compact', fold: 3 },
+  { fit: 'tight', fold: 3 },
+  { fit: 'tight', fold: 4 },
+] as const;
+/** The step the bar's width alone gives: full, compact or tight. */
+const barStepForWidth = (w: number) => (w >= 560 ? 0 : w >= 440 ? 1 : 5);
 
 /** Keystroke → draft write settle window. Short enough that a click away from
  *  the panel almost always finds nothing pending, long enough that a typing
@@ -2076,36 +2093,35 @@ export function FileContentView({
   const moreBtnRef = useRef<HTMLButtonElement | null>(null);
   const [moreAt, setMoreAt] = useState<{ x: number; y: number } | null>(null);
   // How much fits: the bar never wraps and never pushes a control off its end.
-  // 'full' shows everything; 'compact' (a pane under ~560px) keeps only the
-  // file's name in the path and draws Preview / Source as two icons; 'tight'
-  // (under ~440px) also drops the save word, makes Preview / Source one switch,
-  // and moves Find, History and the lead's ‹ › into ⋯. Measured, not guessed from the
-  // window, because the pane's width depends on the tree and the chat beside it.
+  // The width picks a tier (full over ~560px, compact over ~440px, else tight),
+  // and the file's name has the last word: while the name is cut, the bar takes
+  // the next step of BAR_STEPS, folding one more tool into ⋯, and it steps back
+  // only once it is clearly wider than where the name was cut. Measured, not
+  // guessed from the window, because the pane's width depends on the tree and
+  // the chat beside it. Evan, 2026-11-09: fewer header buttons, the rest in the
+  // dropdown, and the tools stay out while there is room.
   const barRef = useRef<HTMLDivElement | null>(null);
-  const [barFit, setBarFit] = useState<'full' | 'compact' | 'tight'>('full');
-  const fitRef = useRef(barFit);
+  const [barStep, setBarStep] = useState(0);
+  const stepRef = useRef(barStep);
   const measureFitRef = useRef<((fresh?: boolean) => void) | null>(null);
-  fitRef.current = barFit;
+  // Each step the name forced: the step it left, and the width it was cut at.
+  const fitCutsRef = useRef<{ step: number; w: number }[]>([]);
+  stepRef.current = barStep;
   useEffect(() => {
     const el = barRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
-    // Width picks the tier, and the name has the last word: a full bar that cuts
-    // the file's name steps down to compact (icons instead of words), and stays
-    // there until the bar is clearly wider than where the name was cut.
-    let cutAt = 0;
+    const last = BAR_STEPS.length - 1;
     const measure = (fresh?: boolean) => {
-      if (fresh) cutAt = 0;
+      if (fresh) fitCutsRef.current = [];
       const w = el.getBoundingClientRect().width;
-      let fit: 'full' | 'compact' | 'tight' = w >= 560 ? 'full' : w >= 440 ? 'compact' : 'tight';
-      if (fit === 'full') {
-        if (cutAt && w < cutAt + 48) fit = 'compact';
-        else if (fitRef.current === 'full') {
-          const name = el.querySelector<HTMLElement>('.sfe-crumb.is-last .sfe-crumb-text, .fv-doc-crumb-file');
-          if (name && name.scrollWidth > name.clientWidth + 1) { cutAt = w; fit = 'compact'; }
-          else cutAt = 0;
-        } else cutAt = 0;
+      const cuts = fitCutsRef.current = fitCutsRef.current.filter((c) => w < c.w + 48);
+      let step = Math.max(barStepForWidth(w), ...cuts.map((c) => c.step + 1));
+      if (step < last && stepRef.current === step) {
+        const name = el.querySelector<HTMLElement>('.sfe-crumb.is-last .sfe-crumb-text, .fv-doc-crumb-file');
+        if (name && name.scrollWidth > name.clientWidth + 1) { cuts.push({ step, w }); step += 1; }
       }
-      if (fit !== fitRef.current) { fitRef.current = fit; setBarFit(fit); }
+      step = Math.min(step, last);
+      if (step !== stepRef.current) { stepRef.current = step; setBarStep(step); }
     };
     measureFitRef.current = measure;
     measure();
@@ -2115,17 +2131,23 @@ export function FileContentView({
     if (lead) ro.observe(lead);
     return () => { ro.disconnect(); measureFitRef.current = null; };
   }, []);
+  // A step frees room only once it is drawn: look at the name again then, so a
+  // name still cut takes the next step without waiting for a resize.
+  useLayoutEffect(() => { measureFitRef.current?.(); }, [barStep]);
   // Entering or leaving full screen changes the bar's width in one frame:
   // measure then, not when a later resize happens to come.
   useLayoutEffect(() => { measureFitRef.current?.(true); }, [fullscreen]);
   // Another file is another name: measure it afresh, from the full bar.
   useLayoutEffect(() => {
     if (!measureFitRef.current) return;
-    fitRef.current = 'full';
-    setBarFit('full');
+    // Now, not in the frame below: the old name's steps would draw this one low.
+    fitCutsRef.current = [];
+    stepRef.current = 0;
+    setBarStep(0);
     const id = requestAnimationFrame(() => measureFitRef.current?.(true));
     return () => cancelAnimationFrame(id);
   }, [filePath]);
+  const { fit: barFit, fold: barFold } = BAR_STEPS[barStep];
   const tight = barFit === 'tight';
   const openMore = () => {
     const r = moreBtnRef.current?.getBoundingClientRect();
@@ -2147,7 +2169,11 @@ export function FileContentView({
       ),
     },
     // (No divider: the title block draws its own rule above the first action.)
-    ...(tight && tightMenuItems?.length ? [...tightMenuItems, { divider: true }] : []),
+    ...(barFold >= 2 && tightMenuItems?.length ? [...tightMenuItems, { divider: true }] : []),
+    ...(barFold >= 4 && isRenderable ? [{
+      key: 'view', label: showSource ? 'Show preview' : 'Show source', icon: showSource ? ICON_FILE : ICON_CODE,
+      onSelect: () => switchTab(!showSource),
+    }, { divider: true }] : []),
     ...(tight && media ? [
       { key: 'back3', label: 'Back 3 seconds', icon: ICON_SKIP_BACK, keepOpen: true, onSelect: () => skipBy(-3) },
       { key: 'fwd10', label: 'Forward 10 seconds', icon: ICON_SKIP_FORWARD, keepOpen: true, onSelect: () => skipBy(10) },
@@ -2157,13 +2183,13 @@ export function FileContentView({
       })),
       { divider: true },
     ] : []),
-    ...(tight && canFind ? [{
+    ...(barFold >= 3 && canFind ? [{
       key: 'find', label: 'Find in file', icon: ICON_SEARCH, onSelect: () => (searchOpen ? closeSearch() : openSearch()),
     }] : []),
-    ...(tight && canEdit && editing ? [{
+    ...(barFold >= 1 && canEdit && editing ? [{
       key: 'history', label: 'History', icon: ICON_HISTORY, onSelect: () => setHistoryOpen((o) => !o),
     }] : []),
-    ...(tight && (canFind || (canEdit && editing)) ? [{ divider: true }] : []),
+    ...((barFold >= 3 && canFind) || (barFold >= 1 && canEdit && editing) ? [{ divider: true }] : []),
     ...(notePath ? [{
       key: 'notes', label: 'Open in Notes', icon: ICON_NOTE,
       title: 'Open this note on the Notes page (tabs, backlinks, editing)',
@@ -2247,7 +2273,7 @@ export function FileContentView({
   );
 
   const docBar = (extra?: ReactNode) => (
-    <div className="fv-html-toolbar fv-doc-bar" data-testid="fv-doc-bar" data-fit={barFit} ref={barRef}>
+    <div className="fv-html-toolbar fv-doc-bar" data-testid="fv-doc-bar" data-fit={barFit} data-fold={barFold} ref={barRef}>
       <div className="fv-doc-bar-lead">{barLeading ?? defaultLead}</div>
       <div className="fv-doc-bar-tools">
         {draftRestored && (
@@ -2264,7 +2290,7 @@ export function FileContentView({
         {live.receipt && <span className="fv-draft-note fv-live-receipt" role="status" title={live.receipt}>{live.receipt}</span>}
         {pathCopied && <span className="fv-draft-note" role="status">Path copied</span>}
         {saveStateEl}
-        {isRenderable && tight && (
+        {isRenderable && tight && barFold < 4 && (
           /* No room for two words: one switch to the other view. */
           <button
             type="button"
@@ -2304,7 +2330,7 @@ export function FileContentView({
           </span>
         )}
         {extra}
-        {canFind && !tight && (
+        {canFind && barFold < 3 && (
           <button
             type="button"
             className={`fv-doc-icon fv-find-btn${searchOpen ? ' active' : ''}`}
@@ -2316,7 +2342,7 @@ export function FileContentView({
             {ICON_SEARCH}
           </button>
         )}
-        {canEdit && editing && !tight && (
+        {canEdit && editing && barFold < 1 && (
           /* Versions of THIS file. Sits with the edit state because restoring one
              is an edit (it lands in the buffer and is saved like typing). */
           <button

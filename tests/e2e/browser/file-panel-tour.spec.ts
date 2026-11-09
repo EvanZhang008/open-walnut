@@ -20,6 +20,7 @@
  *     below waits on the state it just caused.
  */
 import { test, expect, type Browser, type Locator, type Page, type Route } from '@playwright/test'
+import { pressBarTool } from './doc-bar-helpers'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 
@@ -210,14 +211,10 @@ test('recorded walkthrough: create, edit, keep unsaved work, live save + merge, 
     await page.screenshot({ path: `${OUT_DIR}/tour-5-live-merged.png` })
 
     // ── History: every open and save is a version; look back, restore ────────
-    // A narrow pane moves History from the bar into ⋯ (data-fit="tight").
+    // A narrow pane, or a file name the bar would cut, moves History from the
+    // bar into ⋯. Read where it is once the bar has settled.
     const bar = page.locator('.file-content-view .fv-doc-bar')
-    if ((await bar.getAttribute('data-fit')) === 'tight') {
-      await bar.getByRole('button', { name: 'More file actions' }).click()
-      await page.getByTestId('fv-more-menu').getByRole('menuitem', { name: 'History' }).click()
-    } else {
-      await bar.getByRole('button', { name: 'History', exact: true }).click()
-    }
+    await pressBarTool(page, bar, 'History')
     const flyout = page.getByTestId('file-history-flyout')
     await expect(flyout).toBeVisible()
     const rows = flyout.locator('.fh-row')

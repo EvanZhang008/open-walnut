@@ -32,6 +32,7 @@ import path from 'node:path'
 import { openThreadsSession, readRecord, resetThreadsFixture, test } from './threads-helpers'
 import { DOC_COMMENTS_SESSION } from './threads-fixture'
 import { loadHome } from './draft-helpers'
+import { docBarSettled, pressBarTool } from './doc-bar-helpers'
 
 const TASK = 'pw-task-threads-doc-comments'
 const READY = 'How should the reader treat stale copies?'
@@ -74,10 +75,12 @@ async function openDoc(page: Page, name = DOC): Promise<{ panel: Locator; view: 
   const view = explorer.locator('.file-content-view')
   await expect(view).toBeVisible({ timeout: 10_000 })
   // The view remembers Preview or Source per file: a test that ended in Source must
-  // not open the next one there.
-  const preview = view.getByRole('button', { name: 'Preview', exact: true })
-  await expect(preview).toBeVisible()
-  if (!/\bactive\b/.test((await preview.getAttribute('class')) ?? '')) await preview.click()
+  // not open the next one there. (A narrow bar may hold the switch in ⋯.)
+  const docBar = view.locator('.fv-doc-bar')
+  await expect(docBar).toBeVisible()
+  await docBarSettled(docBar)
+  if (await view.locator('.fv-source-editor').isVisible()) await pressBarTool(page, docBar, 'Preview')
+  await expect(view.locator('.fv-source-editor')).toHaveCount(0)
   return { panel, view }
 }
 
@@ -502,7 +505,7 @@ test.describe('Doc comments: at their words, in their sidecar, to the AI with th
     // The source view (CodeMirror): the pill's Comment.
     await fs.writeFile(docPath, original)
     await refresh()
-    await view.getByRole('button', { name: 'Source', exact: true }).click()
+    await pressBarTool(page, view.locator('.fv-doc-bar'), 'Source')
     const source = view.locator('.cm-content')
     await expect(source).toBeVisible()
     // CodeMirror draws only the lines near the screen: the comment far down is not "changed" here.
@@ -538,7 +541,7 @@ test.describe('Doc comments: at their words, in their sidecar, to the AI with th
     await expect.poll(async () => fs.readFile(sidecarPath, 'utf8').catch(() => '')).toContain('Who removes the lock?')
 
     // The source: the comment is there although its lines are not drawn yet (not "changed").
-    await view.getByRole('button', { name: 'Source', exact: true }).click()
+    await pressBarTool(page, view.locator('.fv-doc-bar'), 'Source')
     const source = view.locator('.cm-content')
     await expect(source).toBeVisible()
     await expect(chip(view)).toHaveText('1 comment')
@@ -588,7 +591,7 @@ test.describe('Doc comments: at their words, in their sidecar, to the AI with th
       .toEqual(['rb verify`, read **every** warning.'])
     await expect.poll(async () => fs.readFile(sidecarPath, 'utf8')).toContain('Does verify stop on a warning?')
 
-    await view.getByRole('button', { name: 'Preview', exact: true }).click()
+    await pressBarTool(page, view.locator('.fv-doc-bar'), 'Preview')
     await expect(editor).toBeVisible()
     await expect(chip(view)).toHaveText('2 comments')
     await expect.poll(async () => [...await paintedText(page, 'walnut-doc-comment'), ...await paintedText(page, 'walnut-doc-comment-current')].sort())
@@ -641,7 +644,7 @@ test.describe('Doc comments: at their words, in their sidecar, to the AI with th
     await expect(view.locator('[data-testid="doc-comment-card"].is-current')).toHaveCount(1)
 
     // Its source shows the same comment on the same words, tags and all.
-    await view.getByRole('button', { name: 'Source', exact: true }).click()
+    await pressBarTool(page, view.locator('.fv-doc-bar'), 'Source')
     await expect(view.locator('.cm-content')).toBeVisible()
     await expect(chip(view)).toHaveText('1 comment')
     await expect.poll(async () => [...await paintedText(page, 'walnut-doc-comment'), ...await paintedText(page, 'walnut-doc-comment-current')])
