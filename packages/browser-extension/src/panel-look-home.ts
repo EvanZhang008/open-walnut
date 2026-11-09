@@ -92,7 +92,10 @@ export function drawTaskLook(o: { title: string; locked: boolean }, box: HTMLEle
     keyBtn(o.locked))
   const composer = h('div', { class: 'look-composer' },
     h('div', { class: 'look-placeholder', 'data-testid': 'panel-snap-placeholder' }, FOLLOW_UP_PLACEHOLDER),
-    h('div', { class: 'look-bar' }, ico(LOOK_ICONS.plus, 'look-plus'), h('span', { class: 'look-end' }, ico(LOOK_ICONS.mic, 'look-mic'), h('span', { class: 'look-send' }, ico(LOOK_ICONS.send)))))
+    // Its mode and model pills, blank until the conversation says them.
+    h('div', { class: 'look-bar' }, ico(LOOK_ICONS.plus, 'look-plus'),
+      h('span', { class: 'look-pickers' }, h('span', { class: 'look-picker is-blank' }), h('span', { class: 'look-picker is-blank' })),
+      h('span', { class: 'look-end' }, ico(LOOK_ICONS.mic, 'look-mic'), h('span', { class: 'look-send' }, ico(LOOK_ICONS.send)))))
   box.replaceChildren(head, h('div', { class: 'look-body is-panel' }), h('div', { class: 'look-foot' }, composer))
   box.dataset.look = 'task'
   return box

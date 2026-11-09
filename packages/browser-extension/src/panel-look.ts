@@ -128,10 +128,14 @@ export function drawAskLook(o: AskLook, el?: HTMLElement): HTMLElement {
       pageOn ? h('span', { class: 'look-chip-x' }, '×') : null)) : null
   const chips = h('span', { class: 'look-chips' },
     o.page ? h('span', { class: 'look-chip look-chip-act' }, ico('pointer'), h('span', {}, 'Act in tab')) : null)
+  // The mode and model pills (2026-11-09), as they read last time; blank capsules before Walnut said them.
+  const picked = s?.pickers?.length ? s.pickers : ['', '']
+  const pickers = h('span', { class: 'look-pickers', 'data-testid': 'panel-snap-pickers' },
+    ...picked.map((t) => h('span', { class: `look-picker${t ? '' : ' is-blank'}` }, t)))
   const composer = h('div', { class: 'look-composer' },
     h('div', { class: 'look-placeholder', 'data-testid': 'panel-snap-placeholder' }, s?.placeholder || (talking ? FOLLOW_UP_PLACEHOLDER : newChatPlaceholder(agent))),
     pageLine,
-    h('div', { class: 'look-bar' }, ico('plus', 'look-plus'), chips, h('span', { class: 'look-end' }, ico('mic', 'look-mic'), h('span', { class: 'look-send' }, ico('send')))))
+    h('div', { class: 'look-bar' }, ico('plus', 'look-plus'), chips, pickers, h('span', { class: 'look-end' }, ico('mic', 'look-mic'), h('span', { class: 'look-send' }, ico('send')))))
   box.replaceChildren(head, body,
     ...(sugg.length ? [h('div', { class: 'look-sugg' }, ...sugg.map((t, i) => suggChip(t, suggIcons[i] ?? '')))] : []),
     h('div', { class: 'look-foot' }, composer))

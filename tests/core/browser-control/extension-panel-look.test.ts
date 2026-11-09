@@ -64,6 +64,16 @@ describe('kept: the view around the conversation', () => {
 
 describe('drawn: the view as it will look', () => {
   const page = { title: 'Release notes 4.2', host: 'docs.example.test' }
+  it('the mode and model pills as the view read them (2026-11-09); blank capsules before it said them', async () => {
+    await keepSnap('ask', { title: 't', host: 'h', messages: [], pickers: ['Bypass', 'Auto', 'extra'] }, { key: CURRENT_ASK_KEY, agentId: 'walnut' }, 1)
+    const s = await snapOf('ask', 't', 2) as any
+    expect(s.pickers).toEqual(['Bypass', 'Auto'])
+    const el = drawAskLook({ surface: 'panel', snap: s, page, locked: false })
+    expect(Array.from(el.querySelectorAll('[data-testid="panel-snap-pickers"] .look-picker')).map((e) => e.textContent)).toEqual(['Bypass', 'Auto'])
+    const bare = drawAskLook({ surface: 'panel', snap: null, page, locked: false })
+    expect(bare.querySelectorAll('[data-testid="panel-snap-pickers"] .look-picker.is-blank')).toHaveLength(2)
+  })
+
 
   it('a new quick question in the side panel: ≡, New quick question over the agent, the key with its padlock, Continue, suggestions, the composer with the page chip and Act in tab', () => {
     const el = drawAskLook({ surface: 'panel', snap: null, shell: { at: 1, agent: 'Quick question', cont: CONT, suggestions: ['Schedule my day'] }, page, locked: true })

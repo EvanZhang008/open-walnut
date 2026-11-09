@@ -34,6 +34,8 @@ export interface AskSnap {
    * none): the drawing draws the chips as the view does, icon and label (review R2-6).
    */
   askTitle?: string; agent?: string; placeholder?: string; continue?: ContinueSnap[]; suggestions?: string[]; suggestionIcons?: string[]; pageOn?: boolean;
+  /** The composer's mode and model pills as they read ("Bypass", "Auto"): drawn on their own line. */
+  pickers?: string[];
   /**
    * The page the words were taken on (`snapKeyOf`), absent with no page: `pageOn` is that page's
    * chip. The conversation stays as the person moves on, so the next open may be on another page,
@@ -92,6 +94,10 @@ export function askViewSnapOf(root: ParentNode): Omit<AskSnap, 'title' | 'host' 
   const suggestions = chips.map((c) => c.label);
   const suggestionIcons = chips.map((c) => c.icon);
   const chip = root.querySelector('[data-testid="ext-panel-include"]');
+  // The words a pill shows (its hidden shortcut and long name left out where the browser can tell).
+  const pillWords = (e: Element) => (e as HTMLElement).innerText ?? textOf(e.querySelector('.mode-toggle-pill-label') ?? e);
+  const pickers = Array.from(root.querySelectorAll('.is-plain-chat-pickers .mode-toggle-pill, .is-plain-chat-pickers .composer-model-pill')).slice(0, 2)
+    .map((e) => cut(pillWords(e).trim(), 40)).filter(Boolean);
   return {
     ...(askTitle ? { askTitle } : {}),
     ...(agent ? { agent } : {}),
@@ -99,6 +105,7 @@ export function askViewSnapOf(root: ParentNode): Omit<AskSnap, 'title' | 'host' 
     ...(cont.length ? { continue: cont } : {}),
     ...(suggestions.length ? { suggestions, ...(suggestionIcons.some(Boolean) ? { suggestionIcons } : {}) } : {}),
     ...(chip ? { pageOn: chip.getAttribute('aria-checked') === 'true' } : {}),
+    ...(pickers.length ? { pickers } : {}),
   };
 }
 

@@ -51,6 +51,13 @@ describe('the Ask view as the placeholder draws it', () => {
     expect(s.continue?.[0]).toEqual({ title: 'Ask 0', line: '', time: '', needs: false })
   })
 
+  it("the composer's mode and model pills, as they read (2026-11-09)", () => {
+    const pickers = '<div class="session-mode-bar is-plain-chat-pickers"><button class="mode-toggle-pill"><span class="mode-toggle-pill-label">Bypass</span></button><button class="composer-model-pill">Auto</button></div>'
+    const s = askViewSnapOf(root(head('New quick question', 'Quick question') + `<div class="chat-input-box"><textarea placeholder="Ask"></textarea>${pickers}</div>`))
+    expect(s.pickers).toEqual(['Bypass', 'Auto'])
+    expect(askViewSnapOf(root(head('x', 'Quick question') + composer('Ask', true))).pickers).toBeUndefined()
+  })
+
   it('long words are cut short, as the extension keeps them', () => {
     const long = 'x'.repeat(400)
     const s = askViewSnapOf(root(head(long, 'Ask Walnut') + composer(long, true)))

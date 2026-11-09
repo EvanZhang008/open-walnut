@@ -33,6 +33,8 @@ export interface AskSnap {
   suggestionIcons?: string[]
   /** The page it was shown on (snapKeyOf): on another page the view draws the page chip on. */
   pageKey?: string
+  /** The composer's mode and model pills as they read, drawn on their own line over its bar. */
+  pickers?: string[]
 }
 type Row = { title: string; line: string; state: string }
 export interface TasksSnap { at: number; sections: Array<{ title: string; count: number; rows: Row[] }> }
@@ -106,6 +108,7 @@ function cleanAsk(raw: unknown, now: number): AskSnap | null {
     label: str(x, 60),
     icon: Array.isArray(r.suggestionIcons) && (SUGGESTION_ICONS as readonly string[]).includes(String(r.suggestionIcons[i])) ? String(r.suggestionIcons[i]) : '',
   })).filter((p) => p.label) : undefined
+  const pickers = Array.isArray(r.pickers) ? r.pickers.slice(0, 2).map((x) => str(x, 40)).filter(Boolean) : undefined
   const suggestions = pairs?.map((p) => p.label)
   const suggestionIcons = pairs?.some((p) => p.icon) ? pairs.map((p) => p.icon) : undefined
   return {
@@ -118,6 +121,7 @@ function cleanAsk(raw: unknown, now: number): AskSnap | null {
     ...(suggestionIcons ? { suggestionIcons } : {}),
     ...(typeof r.pageOn === 'boolean' ? { pageOn: r.pageOn } : {}),
     ...(str(r.pageKey, 4100) ? { pageKey: str(r.pageKey, 4100) } : {}),
+    ...(pickers?.length ? { pickers } : {}),
   }
 }
 

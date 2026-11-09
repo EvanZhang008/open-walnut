@@ -380,8 +380,10 @@ html body .is-plain-chat-pickers .mode-toggle-pill:hover, html body .is-plain-ch
    Act in this tab and Save as todo; any bar under 420 px), they take a line of their own over it. */
 .ext-home-composer.is-grown .chat-input-controls { flex-wrap: wrap; row-gap: 2px; }
 .ext-home-composer.is-grown .session-mode-bar.is-plain-chat-pickers { order: -1; flex-basis: 100%; }
+/* The bar is its own query container (globals.css), so its wrap is set outside the query: a query
+   never matches the container it is asked about. */
+.ext-panel-chat .chat-input-controls { flex-wrap: wrap; row-gap: 2px; }
 @container (max-width: 420px) {
-  .ext-panel-chat .chat-input-controls { flex-wrap: wrap; row-gap: 2px; }
   .ext-panel-chat .session-mode-bar.is-plain-chat-pickers { order: -1; flex-basis: 100%; }
 }
 .ext-home-pills .ext-panel-selection { margin: 0; }

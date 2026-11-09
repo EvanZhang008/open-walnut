@@ -1160,6 +1160,8 @@ test('the selection quote follows the page and stays with its agent; the compose
         const ex = await textX(empty)
         const tx = await textX(v.locator('.ask-walnut-drawer-title').first())
         expect(Math.abs(ex - tx), `the empty line starts where the title does (${ex} vs ${tx})`).toBeLessThanOrEqual(2)
+        // The title is one line, never wrapped ("Quick question · Mentor", 2026-11-09).
+        expect(await v.locator('.ask-walnut-drawer-title').first().evaluate((e) => e.getBoundingClientRect().height), 'the title is one line').toBeLessThanOrEqual(32)
       }
       await p.setViewportSize({ width: 400, height: 760 })
       await shots(p, 'r4-mentor-drawer')
