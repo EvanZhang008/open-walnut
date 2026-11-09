@@ -83,7 +83,8 @@ extension's Settings, reached from the key's popover in the side panel or the to
 - **Real mouse and keys only when you turn them on.** Agents' input is page events by default.
   "Let agents use real mouse and keys" in the extension's Settings (Chrome only) grants the
   browser's optional `debugger` permission; then an agent may ask for `trusted` input on a
-  click, hover, type, press or upload, answer a page's alert, confirm or prompt (`dialog`), and
+  click, hover, type, press, scroll (the wheel) or upload, drag (`drag` is always real input),
+  read and answer a page's alert, confirm or prompt (`dialog`), and
   run JavaScript in a tab it opened (`evaluate`, never in your own tab). The debugger is
   attached for that one action and detached right after; Chrome shows its "started debugging"
   bar while it is. Off, these answer `trusted_off` and say where to turn it on.
@@ -260,6 +261,16 @@ walnut browser hover e3
 walnut browser select e9 "Rye"
 walnut browser press Escape
 walnut browser scroll down --amount 2         # also: up, left, right, top, bottom, --by PX
+walnut browser scroll e9 down --by 300        # the box at e9 (a list, a panel), not the page
+walnut browser click --text "Continue"        # the best match by its words, frames too
+walnut browser type --at 320,180 "hi" --slowly   # click the point, then one key at a time
+walnut browser screenshot --annotate a.png    # numbers on the elements; prints number, ref, role, name
+walnut browser click-label 7                  # the element numbered 7
+walnut browser zoom 40 120 300 200 part.png   # that region at full pixel resolution
+walnut browser text --all-frames              # each frame's text on its own (--json: frames)
+walnut browser drag e3 e9                     # always real input; also drag 100,200 300,240
+walnut browser dialog                         # the open alert, confirm or prompt (real input)
+walnut browser dialog accept --text "Ana"     # answer it (dismiss: Cancel)
 walnut browser wait "Order placed"            # also: --gone TEXT, --url PART or /regex/, --ms N
 walnut browser screenshot --full              # the whole page; prints the file it wrote
 walnut browser upload e5 ./invoice.pdf        # read here, sent as bytes (10 MB in all)
@@ -277,18 +288,23 @@ walnut browser close                          # closes a tab it opened, gives ba
 | `form_values` | | every field with its label, name, type, value (secrets as `(hidden)`), options of a list |
 | `fill_form` | `fields: [{ ref or label, value }]` | fills each like `type` does (a checkbox takes true or false, a list its label or value); a field it cannot find fills nothing (`no_field`) |
 | `hover` | `ref` or `x, y` | pointer over, enter and move events (menus that open on hover) |
-| `scroll` | `direction` (up, down, left, right), `amount` (screens) or `by` (px), or `to` (top, bottom), or `ref` | answers `scrollTop`, `scrollLeft`, `atTop`, `atBottom` |
+| `scroll` | `direction` (up, down, left, right), `amount` (screens) or `by` (px), or `to` (top, bottom), or `ref` | answers `scrollTop`, `scrollLeft`, `atTop`, `atBottom`; a `ref` (or `x, y`) alone brings it into view, with a direction (or `to`, `by`, `amount`) the box that scrolls at it scrolls (its nearest scrolling ancestor), and the answer names that `box` |
+| `click`, `hover` | `text`, `exact?`, `role?` (instead of `ref`) | the element with those words, in the page or any frame agents may use (as `find` reads them), the best match: the words as its whole name, then a control, then on screen; the answer's `matched` names its `ref`, `frame` and how many matched (`of`) |
+| `type` | `x, y` (instead of `ref`), `slowly?` | at a point: a click there (judged as a click), then the text into the field it focused; `slowly`: a keydown, keypress, input and keyup per character, 50 ms apart, at most 200 characters (`too_long`) |
+| `click_label` | `label` | clicks the element numbered `label` by the last annotated screenshot of this page (`no_labels`, `stale_ref` once it is gone); the server sends it as `click {label}`, so it waits for the person's yes as any click does |
+| `zoom` | `x, y, width, height` (CSS px), `format?` | that region of the screen at the picture's own resolution (device pixels): `{ image, zoom, pixels: { width, height }, scale }`; nothing of it on screen is `bad_request` |
+| `drag` | `ref` or `x, y`; `to_ref` or `to_x, to_y`; `steps?` (12) | real input, top frame: press, move in steps, release; a page that uses the browser's own drag and drop gets its drag data dropped on the end (`native: true`, through `Input.setInterceptDrags`). Both ends must be on screen together (`drag_offscreen`) |
 | `wait` | `text`, `textGone`, `url` (a part of the address or `/regex/`), or `ms` | at most 30 s (`wait_timeout`) |
-| `screenshot` | `full?`, `format?` (`png`, default `jpeg`) | `full` scrolls through the page and draws one image, cut at 12000 CSS px (`cut: true`), without the agent frame in its own tabs; the scroll is put back |
+| `screenshot` | `full?`, `format?` (`png`, default `jpeg`), `annotate?` | `full` scrolls through the page and draws one image, cut at 12000 CSS px (`cut: true`), without the agent frame in its own tabs; the scroll is put back. `annotate` (not with `full`): every element a person could act on that is on screen is outlined and numbered top to bottom on the picture (drawn by the extension; the page draws nothing), and `labels: [{ label, ref, role, name }]` maps each number to its ref, at most 150 (`note` says how many more) |
 | `upload` | `ref`, `files: [{ name, type?, base64 }]` | sets the file input's files as a pick would (input and change); 10 MB in all (`too_big`) |
 | `downloads` | `wait?`, `ms?` | downloads started from this task's tabs (filename, url, state, bytes); `wait` for the next to finish |
 | `request_sign_in` | `text?` (what to sign in to), `site?`, `request?`, `wait_ms?` | the person signs in themselves (Take over, Done); answers `needs_ok` with `request` until they hand the tab back, then `done: true` (or `signIn: "stopped"`) |
 | `fill_login` | `item?`, `purpose?`, `request?` | signs in with the saved login for the tab's site; several (`which_login`) list `{ id, title, username }`; an approval answers `needs_ok` with `request`: call again with it |
 | `tabs` | `all?` | this task's tabs, or with `all` every tab of the browser and whose it is |
 | `take` | `tab` | one of the person's tabs becomes this task's (`person_is_here` when they are on it) |
-| `dialog` | `accept`, `text?` | real input: OK or Cancel on an alert, confirm or prompt |
+| `dialog` | `read?`, `accept`, `text?` | real input: `read` gives the open dialog (`type`: alert, confirm, prompt or beforeunload, `message`, `default_prompt`); `accept` OK or Cancel, `text` a prompt's answer; the answer names the dialog it `answered`. Only a dialog the debugger saw open: see "Page dialogs" below |
 | `evaluate` | `expression` | real input, a tab the agent opened only: the value as JSON, cut at 50 KB |
-| any of click, hover, type, press | `trusted: true` | real input through the debugger (top frame only) |
+| any of click, hover, type, press, scroll | `trusted: true` | real input through the debugger (top frame only); `scroll` is the wheel at the element, point or the middle of the page; `type {x, y}` clicks the point first; `slowly` puts 50 ms between keys |
 | `upload` | `trusted: true, paths` | real input: files already on the browser's machine (a download, say) |
 
 `tab` may be left out once a task has used one. A snapshot lists headings, then each element a
@@ -334,6 +350,21 @@ download came from. One with no referrer at all counts only while one agent tab 
 and only when the file's own address is on the origin of one of that task's agent tabs, so your
 own download from elsewhere at that moment is never the agent's.
 
+### Page dialogs
+
+Chrome hands an alert, confirm or prompt to the debugger only when its Page domain was on as the
+dialog opened (Chromium's `PageHandler` keeps the dialog's answer only then; one that opened
+before an attach is "No dialog is showing"). So every real-input step that may open one (`click`,
+`press`, `type`, `drag` with `trusted`) runs with Page on, and when a dialog opens meanwhile the
+step answers at once with `dialog: { type, message, default_prompt?, url }` and a `note`; the
+debugger stays on the tab until the agent answers (`dialog accept|dismiss`), at most 2 minutes.
+A tab that records (`network`, `console`) has Page on all along, so a page action there answers
+with the dialog it opened too. While a dialog is open every action that needs the page answers
+`dialog_open` with the dialog (it would only wait for the page and time out). A page action
+without trusted in a tab that does not record cannot see its dialog: the page stops answering,
+and the action times out (`page_not_ready`); do it again with `trusted`
+(packages/browser-extension/src/agent-dialog.ts).
+
 ## How it works
 
 The Walnut server is the relay. The extension's background asks for work with a long poll
@@ -355,7 +386,7 @@ panel is `packages/browser-extension/src/sidepanel.ts` and `web/src/popout/Popou
 
 | Method | Path | Who | What |
 |---|---|---|---|
-| POST | `/api/v1/browser/act` | an agent | `{ action, tab?, device?, url?, ref?, x?, y?, text?, exact?, role?, limit?, fields?, clear?, submit?, value?, key?, direction?, amount?, by?, to?, textGone?, ms?, full?, files?, paths?, all?, wait?, item?, request?, purpose?, trusted?, accept?, expression?, wait_ms? }` |
+| POST | `/api/v1/browser/act` | an agent | `{ action, tab?, device?, url?, ref?, x?, y?, text?, exact?, role?, limit?, fields?, clear?, submit?, value?, key?, direction?, amount?, by?, to?, textGone?, ms?, full?, files?, paths?, all?, wait?, item?, request?, purpose?, trusted?, accept?, expression?, wait_ms?, to_ref?, to_x?, to_y?, steps?, label?, annotate?, all_frames?, slowly?, read?, width?, height? }` |
 | GET | `/api/v1/browser/status` | anyone | `{ browsers, mode, sites }` |
 | GET | `/api/v1/browser/panel` | anyone | `{ panel: 1, extension?: { version, build, folder? } }`: this Walnut has the side panel, the extension build it ships, and its folder's id |
 | PUT | `/api/v1/browser/settings` | the person only | `{ mode?: "ask" \| "any", removeSite? }` |

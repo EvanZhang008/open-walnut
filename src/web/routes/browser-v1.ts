@@ -296,19 +296,20 @@ browserV1Router.post('/browser/adopt', (req, res, next) => {
 const ACTIONS = [
   'tabs', 'open', 'navigate', 'back', 'close', 'snapshot', 'text', 'find', 'form_values', 'click', 'hover', 'type', 'fill_form', 'select', 'press',
   'scroll', 'wait', 'screenshot', 'upload', 'downloads', 'take', 'fill_login', 'dialog', 'evaluate',
-  'network', 'network_body', 'network_request_body', 'console', 'resize', 'request_sign_in',
+  'network', 'network_body', 'network_request_body', 'console', 'resize', 'request_sign_in', 'drag', 'zoom', 'click_label',
 ] as const
 type Action = typeof ACTIONS[number]
 /** Actions that go to a page, so the page's site must be allowed. */
 const ON_TAB = new Set<Action>([
   'navigate', 'back', 'close', 'snapshot', 'text', 'find', 'form_values', 'click', 'hover', 'type', 'fill_form', 'select', 'press', 'scroll', 'wait',
   'screenshot', 'upload', 'fill_login', 'dialog', 'evaluate', 'network', 'network_body', 'network_request_body', 'console', 'resize', 'request_sign_in',
+  'drag', 'zoom', 'click_label',
 ])
 /** Actions whose step may buy, send or delete (the page judges; outward-asks.ts asks the person). */
 const OUTWARD_ACTS = new Set<Action>(['click', 'press', 'type'])
 /** Actions the extension answers for the owner as a whole (its tabs, its downloads, a tab to take). */
 const FOR_OWNER = new Set<Action>(['tabs', 'downloads', 'take'])
-const TIMEOUT: Partial<Record<Action, number>> = { open: 45_000, navigate: 45_000, back: 30_000, wait: 40_000, screenshot: 30_000, downloads: 40_000, take: 30_000, network_body: 30_000, network_request_body: 30_000 }
+const TIMEOUT: Partial<Record<Action, number>> = { open: 45_000, navigate: 45_000, back: 30_000, wait: 40_000, screenshot: 30_000, zoom: 30_000, downloads: 40_000, take: 30_000, network_body: 30_000, network_request_body: 30_000 }
 /** A full-page screenshot scrolls through the page, two captures a second. */
 const FULL_SCREENSHOT_MS = 50_000
 /** The tab each owner used last, so `tab` may be left out. */
@@ -390,10 +391,15 @@ browserV1Router.post('/browser/act', (req, res, next) => {
   void run(res, next, async () => {
     const deadline = Date.now() + ACT_BUDGET_MS
     const left = () => deadline - Date.now()
-    const b = (req.body ?? {}) as Record<string, unknown>
-    const action = String(b.action ?? '') as Action
+    let b = (req.body ?? {}) as Record<string, unknown>
     const h = await hub()
-    if (!ACTIONS.includes(action)) throw new h.BrowserError(`Unknown action "${action}". One of: ${ACTIONS.join(', ')}.`, 400, 'bad_action')
+    if (!ACTIONS.includes(String(b.action ?? '') as Action)) throw new h.BrowserError(`Unknown action "${String(b.action ?? '')}". One of: ${ACTIONS.join(', ')}.`, 400, 'bad_action')
+    // A number from an annotated screenshot is a click on its element: the same click everywhere (an ask for the person's yes included).
+    if (b.action === 'click_label') {
+      if (typeof b.label !== 'number' || !Number.isInteger(b.label) || b.label < 1) throw new h.BrowserError('click_label takes label: a number from screenshot with annotate.', 400, 'bad_request')
+      b = { ...b, action: 'click' }
+    }
+    const action = String(b.action) as Action
     // What a test run does must stay inside Walnut: the person's browser is not.
     if (ambientTestRun()) throw new h.BrowserError('A test run does not use the person\'s browser.', 409, 'test_run')
     const { requesterOf } = await import('./approvals-v1.js')

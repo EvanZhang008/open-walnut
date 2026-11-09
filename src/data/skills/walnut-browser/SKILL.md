@@ -55,8 +55,19 @@ More actions, when the loop above is not enough:
   `form-values` lists every field with its label, name, type and value;
   `fill-form "Full name=Ana" "Size=Large" e14=true` fills several fields at once (a field it
   cannot find fills nothing).
-- `hover e3` for menus that open on hover; `scroll bottom`, `scroll right --by 400`.
+- `hover e3` for menus that open on hover; `scroll bottom`, `scroll right --by 400`;
+  `scroll e9 down --by 300` (or `scroll --at 600,400 down`) scrolls the box at that element or
+  point (a results list, a side panel) instead of the page.
+- `click --text "Continue"` clicks the element with those words, in the page or any frame it
+  shows (the best match; the answer names its ref and how many matched).
+- `type --at 320,180 "hello"` clicks that point and types there; `--slowly` types one key at a
+  time (at most 200 characters) for fields that check each key.
 - `screenshot --full` for the whole page in one image (cut at 12000 px, says so).
+- `screenshot --annotate shot.png` draws a number on every element on screen and prints each
+  number with its ref; `click-label 7` clicks number 7 (it holds until the next annotated
+  screenshot). `zoom 40 120 300 200 part.png` saves that region of the screen (CSS pixels) at
+  full pixel resolution, for small print the screenshot shrinks.
+- `text --all-frames` gives each frame's text on its own (`--json`: `frames: [{frame, url, text}]`).
 - `upload e5 ./invoice.pdf` puts a file from your machine into a file field (10 MB in all);
   `upload --selector '#image-upload' ./a.png` reaches a file field the page hides behind a
   button of its own (snapshot does not list it).
@@ -79,12 +90,20 @@ More actions, when the loop above is not enough:
   lets you act in one of theirs, never the one they are on (`person_is_here`); `close` gives it
   back. Take one only when the work is in that tab (a page they left open for you, a sign-in
   they did), and say which tab you took.
-- Real mouse and keys (`--trusted` on click, hover, type, press; `dialog accept|dismiss`;
-  `evaluate <js>` in a tab you opened) work only after the user turns on "Let agents use real
-  mouse and keys" in the extension's Settings; otherwise `trusted_off`. Use them only when page
+- Real mouse and keys (`--trusted` on click, hover, type, press, scroll (the wheel); `drag e3 e9`
+  or `drag 100,200 300,240`, always real input; `dialog`; `evaluate <js>` in a tab you opened)
+  work only after the user turns on "Let agents use real mouse and keys" in the extension's
+  Settings; otherwise `trusted_off`. Use them only when page
   events did not work (a keystroke-checking bank form, an alert blocking the page), and tell the
   user in one line how to turn it on if you need it: the `trusted_off` message says exactly
   where (the extension's icon, the gear, the switch, Allow); pass it on as it is.
+- **Page dialogs** (an alert, confirm or prompt): do the step that opens one with `--trusted`.
+  Its answer then says a dialog opened and what it says, and the page waits for you: `dialog`
+  reads it again, `dialog accept --text "Ana"` answers a prompt, `dialog accept` is OK, `dialog
+  dismiss` is Cancel. Anything else on the page answers `dialog_open` until then. A dialog a
+  page action without trusted opened cannot be read (Chrome tells the debugger only about one
+  that opens while it watches): that action times out; do it again with `--trusted`. A tab that
+  records (below) sees its dialogs with any action.
 - **Recording a tab** (with the same switch, in a tab you opened): `open <url> --record` records
   the tab's requests and console from before the page loads; otherwise the first `network` or
   `console` starts recording (what came before is not in it: navigate again). `network` lists

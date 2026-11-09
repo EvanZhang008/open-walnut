@@ -381,27 +381,32 @@ function scroller(): Element {
 }
 
 export function scroll(args: { ref?: unknown; direction?: unknown; amount?: unknown; to?: unknown; by?: unknown }): Record<string, unknown> {
-  if (args.ref !== undefined) { centerOf(byRef(args.ref)); return { scrolled: `to ${String(args.ref)}`, ...where(scroller()) } }
-  const box = scroller()
+  if (args.ref !== undefined) { centerOf(byRef(args.ref)); return { scrolled: `to ${String(args.ref)}`, ...scrollWhere(scroller()) } }
+  return scrollBox(scroller(), args)
+}
+
+/** One box scrolled as `scroll` asks (a direction and screens or px, or to its top or bottom); the page, or a box inside it (page-input.ts). */
+export function scrollBox(box: Element, args: { direction?: unknown; amount?: unknown; to?: unknown; by?: unknown }): Record<string, unknown> {
   const flat = { behavior: 'instant' as ScrollBehavior }
   const sideways = args.direction === 'left' || args.direction === 'right'
+  const page = box === document.scrollingElement
   let said: string
   if (args.to === 'top' || args.to === 'bottom') {
     box.scrollTo({ top: args.to === 'top' ? 0 : box.scrollHeight, ...flat })
     said = `to the ${args.to}`
   } else {
     const sign = args.direction === 'up' || args.direction === 'left' ? -1 : 1
-    const screen = sideways ? (box === document.scrollingElement ? innerWidth : box.clientWidth) : (box === document.scrollingElement ? innerHeight : box.clientHeight)
+    const screen = sideways ? (page ? innerWidth : box.clientWidth) : (page ? innerHeight : box.clientHeight)
     const n = typeof args.amount === 'number' && args.amount > 0 ? Math.min(args.amount, 20) : 1
     const px = typeof args.by === 'number' && args.by > 0 ? Math.min(args.by, 100_000) : n * screen * 0.85
     box.scrollBy({ [sideways ? 'left' : 'top']: sign * px, ...flat })
     said = `${sideways ? (sign < 0 ? 'left' : 'right') : (sign < 0 ? 'up' : 'down')} ${typeof args.by === 'number' && args.by > 0 ? `${Math.round(px)} px` : `${n} screen(s)`}`
   }
-  const w = where(box)
+  const w = scrollWhere(box)
   return { scrolled: `${said}; at ${w.scrollTop} of ${w.maxTop}`, ...w }
 }
 
-function where(box: Element): { scrollTop: number; scrollLeft: number; maxTop: number; atTop: boolean; atBottom: boolean } {
+export function scrollWhere(box: Element): { scrollTop: number; scrollLeft: number; maxTop: number; atTop: boolean; atBottom: boolean } {
   const maxTop = Math.max(0, Math.round(box.scrollHeight - box.clientHeight))
   const top = Math.round(box.scrollTop)
   return { scrollTop: top, scrollLeft: Math.round(box.scrollLeft), maxTop, atTop: top <= 1, atBottom: top >= maxTop - 1 }

@@ -13,6 +13,8 @@ import { popupRecord } from './agent-tab-kind'
 import { muteAgentTab } from './agent-media'
 import { noteAgentMade } from './agent-tidy'
 import { frontInWindow } from './agent-window'
+import { debuggerHeld } from './cdp'
+import { whenDialog } from './agent-dialog'
 import {
   ACTING_MS, AgentError, WALNUT_PAGE, acting, agentTabs, allowed, checkPage, frameOp, loaded, mark, originOf, personsTab, settled, sleep, where,
   walnutCheck, type AgentTab, type WireCommand,
@@ -105,19 +107,24 @@ function frameOfCommand(a: Record<string, unknown>): number {
 /** The whole tab read: the top frame's answer, then each frame's under its own heading. */
 async function wholeTab(c: WireCommand, tabId: number, top: Record<string, unknown>): Promise<Record<string, unknown>> {
   const frames = await framesOf(tabId)
-  if (!frames.length) return top
+  // `text {all_frames}`: each frame's text on its own as well, and more of each.
+  const each = c.action === 'text' && c.args.all_frames === true
+  if (!frames.length) return each ? { ...top, frames: [{ frame: 'top', url: top.url, text: top.text }] } : top
   const out = { ...top }
   const notes: string[] = []
+  const perFrame: Array<Record<string, unknown>> = each ? [{ frame: 'top', url: top.url, text: top.text }] : []
   for (const f of frames) {
     const bar = await frameBar(c.allow, f)
     const head = `Frame f${f.frameId} (${f.href.slice(0, 160)})`
-    if (bar) { notes.push(`${head}: left out, ${bar}.`); continue }
-    const args = { ...c.args, ...(c.action === 'snapshot' ? { max: 100 } : c.action === 'text' ? { max: 5000 } : {}) }
+    if (bar) { notes.push(`${head}: left out, ${bar}.`); if (each) perFrame.push({ frame: `f${f.frameId}`, url: f.href, left_out: bar }); continue }
+    const args = { ...c.args, ...(c.action === 'snapshot' ? { max: 100 } : c.action === 'text' ? { max: each ? 20_000 : 5000 } : {}) }
     const r = await frameOp(tabId, f.frameId, c.action, args, c.allow, 6000).catch((err: unknown) => {
       notes.push(`${head}: could not be read (${err instanceof Error ? err.message : String(err)}).`)
+      if (each) perFrame.push({ frame: `f${f.frameId}`, url: f.href, left_out: `could not be read (${err instanceof Error ? err.message : String(err)})` })
       return null
     })
     if (!r) continue
+    if (each) perFrame.push({ frame: `f${f.frameId}`, url: r.url ?? f.href, ...(r.title ? { title: r.title } : {}), text: String(r.text ?? '') })
     if (c.action === 'snapshot') notes.push(`${head}:\n${String(r.snapshot ?? '').split('\n').filter((l) => !/^(Page|URL): /.test(l)).join('\n').trim()}`)
     else if (c.action === 'text') notes.push(`${head}:\n${String(r.text ?? '')}`)
     else if (c.action === 'find') {
@@ -131,7 +138,34 @@ async function wholeTab(c: WireCommand, tabId: number, top: Record<string, unkno
   if (c.action === 'snapshot' && notes.length) out.snapshot = `${String(out.snapshot ?? '')}\n\n${notes.join('\n\n')}`
   else if (c.action === 'text' && notes.length) out.text = `${String(out.text ?? '')}\n\n${notes.join('\n\n')}`
   else if (notes.length) out.frames = notes
+  if (each) out.frames = perFrame
   return out
+}
+
+/** A match `click {text}` may act on first: the words as a control's whole name, then a control, then any. */
+function bestMatch(matches: Array<Record<string, unknown>>, want: string): Record<string, unknown> | undefined {
+  const norm = (s: unknown) => String(s ?? '').replace(/\s+/g, ' ').trim().toLowerCase()
+  const w = norm(want)
+  const score = (m: Record<string, unknown>) => (norm(m.name) === w ? 4 : 0) + (m.role !== 'generic' ? 2 : 0) + (m.offscreen ? 0 : 1)
+  let best: Record<string, unknown> | undefined
+  for (const m of matches) if (!best || score(m) > score(best)) best = m
+  return best
+}
+
+/**
+ * `click {text}` (and hover): the element with those words, in the page or any frame it shows that
+ * agents may use (as find reads them), by the best match. The answer names it and how many matched.
+ */
+export async function refByText(c: WireCommand, tabId: number): Promise<{ ref: string; name?: unknown; role?: unknown; frame?: unknown; of: number }> {
+  const want = String(c.args.text ?? '')
+  const args = { text: want, ...(c.args.exact === true ? { exact: true } : {}), ...(typeof c.args.role === 'string' ? { role: c.args.role } : {}), limit: 20 }
+  const find: WireCommand = { ...c, action: 'find', args }
+  const top = await frameOp(tabId, 0, 'find', args, c.allow, 10_000)
+  const all = await wholeTab(find, tabId, top)
+  const matches = (all.matches as Array<Record<string, unknown>> | undefined) ?? []
+  const m = bestMatch(matches, want)
+  if (!m || typeof m.ref !== 'string') throw new AgentError(`Nothing with the words "${want.slice(0, 80)}" on the page or in its frames: snapshot or find to see what is there.`, 'not_found')
+  return { ref: m.ref, name: m.name, role: m.role, ...(m.frame ? { frame: m.frame } : {}), of: Number(all.count ?? matches.length) }
 }
 
 /** `wait {url}`: a substring of the address, or /a regex/ with its flags. Waited for here: a load replaces the page's script. */
@@ -279,7 +313,14 @@ async function openLink(c: WireCommand, tabId: number, tab: Tab, rec: AgentTab, 
 }
 
 export async function pageOp(c: WireCommand, tabId: number, tab: Tab, rec: AgentTab): Promise<Record<string, unknown>> {
-  const a = c.args
+  let a = c.args
+  // A click by its words, in the page or a frame.
+  let matched: Record<string, unknown> | undefined
+  if ((c.action === 'click' || c.action === 'hover') && typeof a.text === 'string' && a.text && a.ref === undefined && typeof a.x !== 'number' && typeof a.label !== 'number') {
+    matched = await refByText(c, tabId)
+    a = { ...a, ref: matched.ref, text: undefined }
+    c = { ...c, args: a }
+  }
   if (c.action === 'wait' && typeof a.url === 'string' && a.url) return { ...(await waitUrl(tabId, a.url, a.ms)), ...(await where(tabId)) }
   // Text in the whole tab, frames too (a ref names no frame for a wait).
   if (c.action === 'wait' && ((typeof a.text === 'string' && a.text) || (typeof a.textGone === 'string' && a.textGone))) return { ...(await waitText(c, tabId)), ...(await where(tabId)) }
@@ -297,7 +338,16 @@ export async function pageOp(c: WireCommand, tabId: number, tab: Tab, rec: Agent
   const started = Date.now()
   acting.set(tabId, Date.now() + ms + ACTING_MS)
   try {
-    let r = await frameOp(tabId, frameId, c.action, a, c.allow, ms)
+    // A tab that records has the debugger's Page on: a dialog the step opens is seen, and answered with.
+    const dialogWatch = debuggerHeld(tabId) ? whenDialog(tabId) : undefined
+    let r: Record<string, unknown>
+    try {
+      const step = frameOp(tabId, frameId, c.action, a, c.allow, ms)
+      step.catch(() => undefined)
+      const first = dialogWatch ? await Promise.race([step, dialogWatch.promise.then((dialog) => ({ __dialog: dialog }))]) : await step
+      if ('__dialog' in first) return { ...(matched ? { matched } : {}), dialog: first.__dialog, note: 'The step opened a dialog: dialog accept (with text for a prompt) or dialog dismiss answers it (real input).', ...(await where(tabId)) }
+      r = first
+    } finally { dialogWatch?.cancel() }
     // A step that buys, sends or deletes: nothing was done, the person is asked (routes/browser-v1.ts).
     if (r.hold) throw outwardHeld(r.hold)
     if (frameId === 0 && WHOLE_TAB.has(c.action)) r = await wholeTab(c, tabId, r)
@@ -310,7 +360,7 @@ export async function pageOp(c: WireCommand, tabId: number, tab: Tab, rec: Agent
       if (checks.length) await Promise.race([Promise.all(checks), sleep(8000)])
     }
     const popup = link ?? opened.find((o) => o.opener === tabId && o.at >= started)
-    return { ...r, ...(await where(tabId)), ...(popup ? { opened: { tab: popup.tab, url: 'url' in popup ? popup.url : (await ext.tabs.get(popup.tab).catch(() => ({} as Tab))).url } } : {}) }
+    return { ...r, ...(matched ? { matched } : {}), ...(await where(tabId)), ...(popup ? { opened: { tab: popup.tab, url: 'url' in popup ? popup.url : (await ext.tabs.get(popup.tab).catch(() => ({} as Tab))).url } } : {}) }
   } finally {
     acting.set(tabId, Date.now() + ACTING_MS)
   }

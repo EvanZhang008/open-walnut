@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  CdpError, EVAL_MAX, cdpClick, cdpDialog, cdpEvaluate, cdpHover, cdpPress, cdpType, cdpUpload, parseCombo, withDebugger,
+  CdpError, EVAL_MAX, cdpClick, cdpDialog, cdpDrag, cdpEvaluate, cdpHover, cdpPress, cdpType, cdpUpload, cdpWheel, dragPath, parseCombo, withDebugger,
 } from '../../../packages/browser-extension/src/cdp'
 
 function fakeDebugger(answers: Record<string, unknown | ((p: Record<string, unknown>) => unknown)> = {}, opts: { attachFails?: string } = {}) {
@@ -131,4 +131,77 @@ describe('the command sequences', () => {
     const g = fakeDebugger({ 'DOM.getDocument': { root: { nodeId: 1 } }, 'DOM.querySelector': { nodeId: 0 } })
     expect((await withDebugger(g.dbg, 1, (send) => cdpUpload(send, 'abc123', ['/x'])).catch((e) => e)).code).toBe('stale_ref')
   })
+
+  it('type slowly: the same keys, with the delay between them and none before the first', async () => {
+    const f = fakeDebugger()
+    const at: number[] = []
+    const send = async (m: string, p?: Record<string, unknown>) => { if (p?.type === 'keyDown') at.push(Date.now()); return f.dbg.sendCommand({ tabId: 1 }, m, p) }
+    const t0 = Date.now()
+    await cdpType(send, 'abc', 40)
+    expect(f.methods()).toEqual(Array(6).fill('Input.dispatchKeyEvent'))
+    expect(at[0] - t0).toBeLessThan(30)
+    expect(at[1] - at[0]).toBeGreaterThanOrEqual(35)
+    expect(at[2] - at[1]).toBeGreaterThanOrEqual(35)
+  })
+
+  it('wheel: the pointer comes to the point, then the wheel turns there', async () => {
+    const f = fakeDebugger()
+    await withDebugger(f.dbg, 1, (send) => cdpWheel(send, 300, 220, 0, -500))
+    expect(f.log.slice(1, -1)).toEqual([
+      ['Input.dispatchMouseEvent', { type: 'mouseMoved', x: 300, y: 220 }],
+      ['Input.dispatchMouseEvent', { type: 'mouseWheel', x: 300, y: 220, deltaX: 0, deltaY: -500 }],
+    ])
+  })
 })
+
+describe('drag', () => {
+  it('the path: even steps that end on the end itself, 2 to 50 of them', () => {
+    expect(dragPath({ x: 0, y: 0 }, { x: 100, y: 50 }, 4)).toEqual([{ x: 25, y: 12.5 }, { x: 50, y: 25 }, { x: 75, y: 37.5 }, { x: 100, y: 50 }])
+    expect(dragPath({ x: 0, y: 0 }, { x: 10, y: 0 }, 1)).toHaveLength(2)
+    expect(dragPath({ x: 0, y: 0 }, { x: 10, y: 0 }, 500)).toHaveLength(50)
+  })
+
+  it('a pointer drag: press at the start, moves with the button held, release at the end; interception on and off around it', async () => {
+    const f = fakeDebugger()
+    const r = await withDebugger(f.dbg, 1, (send) => cdpDrag(send, { x: 10, y: 20 }, { x: 110, y: 70 }, { steps: 3, stepMs: 0, intercepted: () => undefined }))
+    expect(r).toEqual({ native: false })
+    expect(f.log.slice(1, -1)).toEqual([
+      ['Input.setInterceptDrags', { enabled: true }],
+      ['Input.dispatchMouseEvent', { type: 'mouseMoved', x: 10, y: 20 }],
+      ['Input.dispatchMouseEvent', { type: 'mousePressed', x: 10, y: 20, button: 'left', clickCount: 1, buttons: 1 }],
+      ['Input.dispatchMouseEvent', { type: 'mouseMoved', x: 10 + 100 / 3, y: 20 + 50 / 3, button: 'left', buttons: 1 }],
+      ['Input.dispatchMouseEvent', { type: 'mouseMoved', x: 10 + 200 / 3, y: 20 + 100 / 3, button: 'left', buttons: 1 }],
+      ['Input.dispatchMouseEvent', { type: 'mouseMoved', x: 110, y: 70, button: 'left', buttons: 1 }],
+      ['Input.dispatchMouseEvent', { type: 'mouseReleased', x: 110, y: 70, button: 'left', clickCount: 1, buttons: 0 }],
+      ['Input.setInterceptDrags', { enabled: false }],
+    ])
+  })
+
+  it('a native drag the browser intercepted: its data is dropped on the end with drag events, then the button is released', async () => {
+    const f = fakeDebugger()
+    const data = { items: [{ mimeType: 'text/plain', data: 'card-7' }], dragOperationsMask: 1 }
+    let moves = 0
+    const send = async (m: string, p?: Record<string, unknown>) => { if (m === 'Input.dispatchMouseEvent' && p?.type === 'mouseMoved' && p.buttons === 1) moves++; return f.dbg.sendCommand({ tabId: 1 }, m, p) }
+    const r = await cdpDrag(send, { x: 0, y: 0 }, { x: 40, y: 40 }, { steps: 8, stepMs: 0, intercepted: () => (moves >= 1 ? data : undefined) })
+    expect(r).toEqual({ native: true })
+    const tail = f.log.slice(-5)
+    expect(tail).toEqual([
+      ['Input.dispatchDragEvent', { type: 'dragEnter', x: 40, y: 40, data, modifiers: 0 }],
+      ['Input.dispatchDragEvent', { type: 'dragOver', x: 40, y: 40, data, modifiers: 0 }],
+      ['Input.dispatchDragEvent', { type: 'drop', x: 40, y: 40, data, modifiers: 0 }],
+      ['Input.dispatchMouseEvent', { type: 'mouseReleased', x: 40, y: 40, button: 'left', clickCount: 1, buttons: 0 }],
+      ['Input.setInterceptDrags', { enabled: false }],
+    ])
+    // The moves stop once the browser holds the drag.
+    expect(moves).toBe(1)
+  })
+
+  it('a browser without drag interception still drags with the pointer, and never sends the drag events', async () => {
+    const f = fakeDebugger({ 'Input.setInterceptDrags': new Error('not supported') })
+    const r = await withDebugger(f.dbg, 1, (send) => cdpDrag(send, { x: 0, y: 0 }, { x: 5, y: 5 }, { steps: 2, stepMs: 0, intercepted: () => ({ items: [] }) }))
+    expect(r.native).toBe(false)
+    expect(f.methods().filter((m) => m === 'Input.dispatchDragEvent')).toEqual([])
+    expect(f.methods().filter((m) => m === 'Input.setInterceptDrags')).toHaveLength(1)
+  })
+})
+

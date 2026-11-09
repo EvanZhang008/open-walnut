@@ -21,6 +21,8 @@ const held = new Map<number, Send>()
 export function holdDebugger(tabId: number, send: Send): void { held.set(tabId, send) }
 export function dropDebugger(tabId: number): void { held.delete(tabId) }
 export const debuggerHeld = (tabId: number): boolean => held.has(tabId)
+/** The session a tab's debugger is held with (a recording, or a dialog waiting for its answer), if any. */
+export const heldSend = (tabId: number): Send | undefined => held.get(tabId)
 
 /** Attach to the tab, do the work, always detach (or the recording's session, left attached). */
 export async function withDebugger<T>(dbg: DebuggerApi, tabId: number, work: (send: Send) => Promise<T>): Promise<T> {
@@ -97,15 +99,65 @@ export async function cdpPress(send: Send, combo: string): Promise<void> {
   await send('Input.dispatchKeyEvent', { type: 'keyUp', ...up })
 }
 
-/** Each character as its own key press, as a person types (pages that watch keystrokes see them). */
-export async function cdpType(send: Send, text: string): Promise<void> {
+/** Each character as its own key press, as a person types (pages that watch keystrokes see them); `delayMs` between keys. */
+export async function cdpType(send: Send, text: string, delayMs = 0): Promise<void> {
+  let first = true
   for (const ch of text) {
+    if (!first && delayMs > 0) await new Promise((r) => setTimeout(r, delayMs))
+    first = false
     if (ch === '\n') { await cdpPress(send, 'Enter'); continue }
     const p = /^[\x20-\x7e]$/.test(ch) ? keyParams(ch, 0) : { key: ch, text: ch, modifiers: 0 }
     const { text: _t, ...up } = p
     await send('Input.dispatchKeyEvent', { type: 'keyDown', ...p })
     await send('Input.dispatchKeyEvent', { type: 'keyUp', ...up })
   }
+}
+
+/** The wheel at a point: what is under it scrolls (a list, a map, a box inside the page). */
+export async function cdpWheel(send: Send, x: number, y: number, deltaX: number, deltaY: number): Promise<void> {
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y })
+  await send('Input.dispatchMouseEvent', { type: 'mouseWheel', x, y, deltaX, deltaY })
+}
+
+export interface Point { x: number; y: number }
+
+/** The points a drag passes through: `steps` moves from one end to the other, the last on the end itself. */
+export function dragPath(from: Point, to: Point, steps: number): Point[] {
+  const n = Math.max(2, Math.min(50, Math.round(steps)))
+  const out: Point[] = []
+  for (let i = 1; i <= n; i++) out.push({ x: from.x + ((to.x - from.x) * i) / n, y: from.y + ((to.y - from.y) * i) / n })
+  return out
+}
+
+/**
+ * A drag as a person makes it: press at `from`, move in steps, release at `to`. A page that uses the
+ * browser's own drag and drop (draggable elements) starts a drag the debugger intercepts
+ * (Input.setInterceptDrags): its data is then dropped on `to` with drag events, as Chrome's own
+ * DevTools does; a page that follows the pointer (sortable lists, sliders) sees the moves.
+ * `intercepted` answers the drag data once the browser reported one (Input.dragIntercepted).
+ */
+export async function cdpDrag(send: Send, from: Point, to: Point, opts: { steps?: number; stepMs?: number; intercepted?: () => Record<string, unknown> | undefined } = {}): Promise<{ native: boolean }> {
+  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
+  const intercept = !!opts.intercepted && await send('Input.setInterceptDrags', { enabled: true }).then(() => true, () => false)
+  let native = false
+  try {
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: from.x, y: from.y })
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: from.x, y: from.y, button: 'left', clickCount: 1, buttons: 1 })
+    for (const p of dragPath(from, to, opts.steps ?? 12)) {
+      await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x, y: p.y, button: 'left', buttons: 1 })
+      await wait(opts.stepMs ?? 16)
+      const data = intercept ? opts.intercepted?.() : undefined
+      if (data) {
+        native = true
+        for (const type of ['dragEnter', 'dragOver', 'drop']) await send('Input.dispatchDragEvent', { type, x: to.x, y: to.y, data, modifiers: 0 })
+        break
+      }
+    }
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: to.x, y: to.y, button: 'left', clickCount: 1, buttons: 0 })
+  } finally {
+    if (intercept) await send('Input.setInterceptDrags', { enabled: false }).catch(() => undefined)
+  }
+  return { native }
 }
 
 /** Answer the page's alert, confirm or prompt. */

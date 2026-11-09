@@ -22,6 +22,7 @@ import { walnutAddress } from './walnut-address'
 import { siteKey } from '../../../src/core/vault/url-match'
 import { NET_MAX, bodyOut, fold, listConsole, listRequests, maskEntry, maskUrlsIn, newRecord, urlsOf, type ConsoleEntry, type Judge, type NetEntry, type NetRecord } from './net-record'
 import { REAL_INPUT_SWITCH, trustedReady } from './agent-trusted'
+import { DIALOG_OPEN, heldForDialog, releaseDialogHold, watchDialogs } from './agent-dialog'
 
 const siteOf = (u: string): string => siteKey(u)?.domain ?? ''
 
@@ -81,7 +82,10 @@ async function gate(tabId: number, rec: AgentTab): Promise<void> {
 export async function startRecording(tabId: number, rec: AgentTab): Promise<boolean> {
   await gate(tabId, rec)
   if (records.has(tabId)) return false
+  // A dialog holds the debugger on this tab until it is answered (agent-dialog.ts).
+  if (heldForDialog(tabId)) throw new AgentError(DIALOG_OPEN, 'dialog_open')
   listen()
+  watchDialogs()
   const dbg = more.debugger!
   const target = { tabId }
   const gen = genOf(tabId)
@@ -116,6 +120,8 @@ export async function startRecording(tabId: number, rec: AgentTab): Promise<bool
     await send('Network.enable', { maxTotalBufferSize: 30_000_000, maxResourceBufferSize: 10_000_000 })
     await send('Runtime.enable')
     await send('Log.enable')
+    // Its dialogs too: a page action that opens one answers with it, and dialog answers it.
+    await send('Page.enable')
   } catch (err) {
     await stopRecording(tabId)
     throw new AgentError(`The browser would not record that tab: ${err instanceof Error ? err.message : String(err)}`, 'debugger_busy')
@@ -130,6 +136,8 @@ export async function startRecording(tabId: number, rec: AgentTab): Promise<bool
 
 /** The tab records no more: its debugger let go (a tab given back, Stop, the agents switched off). */
 export async function stopRecording(tabId: number): Promise<boolean> {
+  // A debugger held for a dialog's answer lets go with the tab too (agent-dialog.ts).
+  await releaseDialogHold(tabId)
   // Any start still attaching is over too.
   generation.set(tabId, genOf(tabId) + 1)
   const r = records.get(tabId)

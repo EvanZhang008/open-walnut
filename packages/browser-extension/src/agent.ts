@@ -10,7 +10,8 @@
  * own pages or the browser's. Each agent tab wears a frame and a Stop button; Stop gives the tab
  * back. `tabs {all}` lists the person's tabs by title and address only, never what is in them.
  * Page actions are in agent-page.ts, screenshots in agent-shot.ts, downloads in
- * agent-downloads.ts, and real input (off by default) in agent-trusted.ts.
+ * agent-downloads.ts, and real input (off by default) in agent-trusted.ts (drags in agent-drag.ts,
+ * dialogs in agent-dialog.ts).
  */
 import { ext, isFirefox, type Sender } from './ext'
 import { more } from './agent-api'
@@ -34,6 +35,7 @@ import { NET_OPS, netAct, startRecording, stopRecording } from './agent-net'
 import { watchMedia } from './agent-media'
 import { noteGroupUse, setGroupBusy, ungroupBeforeClose, type GroupApi } from './agent-groups'
 import { forgetAgentMade, noteAgentMade, tidyLeftovers } from './agent-tidy'
+import { refuseWhileDialog } from './agent-dialog'
 
 export { setTrustedInput, trustedInputState } from './trusted-switch'
 
@@ -135,6 +137,8 @@ async function act(cmd: WireCommand): Promise<unknown> {
   const a = cmd.args
   // A tab the person handed over may use its own site as well.
   const c = typeof a.tab === 'number' ? { ...cmd, allow: allowFor(cmd.allow, await agentTabs.get(a.tab)) } : cmd
+  // A page dialog holds the page's script: what needs the page waits until it is answered (agent-dialog.ts).
+  refuseWhileDialog(c.action, a.tab)
   switch (c.action) {
     case 'tabs': {
       if (a.all === true) return { tabs: await allTabs(), all: true }
@@ -252,7 +256,7 @@ async function act(cmd: WireCommand): Promise<unknown> {
       await ext.tabs.remove(tabId).catch(() => undefined)
       return { tab: tabId, closed: true }
     }
-    case 'screenshot': {
+    case 'screenshot': case 'zoom': {
       const { tabId, tab, rec } = await ownTab(a)
       return screenshot(c, tabId, tab, rec)
     }
@@ -381,7 +385,7 @@ async function run(c: WireCommand): Promise<void> {
         const late = typeof c.args.tab === 'number' ? drivingRefusal(await agentTabs.get(c.args.tab)) : null
         if (late) throw late
         // A click or a key acts on the tab in front: a folded group left the agent window's page there.
-        if (screenTab !== undefined && c.action !== 'screenshot') await bringUpForCommand(screenTab)
+        if (screenTab !== undefined && c.action !== 'screenshot' && c.action !== 'zoom') await bringUpForCommand(screenTab)
         return act(c)
       }) }
     } finally {

@@ -256,7 +256,9 @@ describe('the agent window', () => {
   // extension sends a fixed set of CDP methods; a new one is placed here once it is known not to raise.
   it('sends only CDP methods that never raise a window', () => {
     const dir = path.resolve(__dirname, '../../../packages/browser-extension/src')
+    // Input.setInterceptDrags and Input.dispatchDragEvent (a drag, agent-drag.ts) act inside the page's renderer like the mouse events.
     const QUIET = new Set(['DOM.getDocument', 'DOM.querySelector', 'DOM.setFileInputFiles', 'Input.dispatchKeyEvent', 'Input.dispatchMouseEvent',
+      'Input.setInterceptDrags', 'Input.dispatchDragEvent',
       'Page.enable', 'Page.handleJavaScriptDialog', 'Runtime.enable', 'Runtime.evaluate', 'Network.enable', 'Network.disable', 'Network.getResponseBody', 'Network.getRequestPostData', 'Log.enable'])
     const walk = (d: string): string[] => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => e.isDirectory() ? walk(path.join(d, e.name)) : e.name.endsWith('.ts') ? [path.join(d, e.name)] : [])
     const sent: string[] = []

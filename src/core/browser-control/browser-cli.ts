@@ -14,23 +14,26 @@ export const BROWSER_USAGE = [
   '       walnut browser open <url> [--record]       (--record: its requests and console from before the page loads)',
   '       walnut browser navigate <url> [--tab N]      (also: go)',
   '       walnut browser back | close [--tab N]',
-  '       walnut browser snapshot | text | form-values [--tab N]',
+  '       walnut browser snapshot | text [--all-frames] | form-values [--tab N]   (--all-frames: each frame\'s text on its own)',
   '       walnut browser find <text> [--exact] [--role R] [--limit N] [--tab N]',
-  '       walnut browser click <ref> | --at X,Y [--trusted] [--tab N]',
-  '       walnut browser hover <ref> | --at X,Y [--trusted] [--tab N]',
-  '       walnut browser type [<ref>] <text> [--clear] [--submit] [--trusted] [--tab N]',
+  '       walnut browser click <ref> | --at X,Y | --text <words> [--trusted] [--tab N]   (--text: the best match, frames too)',
+  '       walnut browser click-label <N> [--trusted] [--tab N]          (a number from screenshot --annotate)',
+  '       walnut browser hover <ref> | --at X,Y | --text <words> [--trusted] [--tab N]',
+  '       walnut browser type [<ref>] <text> [--at X,Y] [--clear] [--submit] [--slowly] [--trusted] [--tab N]   (--slowly: one key at a time)',
+  '       walnut browser drag <ref|X,Y> <ref|X,Y> [--steps N] [--tab N]   (real input)',
   '       walnut browser fill-form <ref-or-label>=<value> ... [--tab N]',
   '       walnut browser select <ref> <value> [--tab N]',
   '       walnut browser press <key> [--trusted] [--tab N]',
-  '       walnut browser scroll [up|down|left|right|top|bottom|<ref>] [--amount N | --by PX] [--tab N]',
+  '       walnut browser scroll [up|down|left|right|top|bottom] [<ref> | --at X,Y] [--amount N | --by PX] [--trusted] [--tab N]   (a ref or point with a direction: that box scrolls)',
   '       walnut browser wait <text> | --gone <text> | --url <part or /regex/> | --ms N [--tab N]',
-  '       walnut browser screenshot [<file>] [--full] [--tab N]   (default: a .jpg in $WALNUT_TASK_DIR/shots; a .png name saves a PNG)',
+  '       walnut browser screenshot [<file>] [--full] [--annotate] [--tab N]   (default: a .jpg in $WALNUT_TASK_DIR/shots; a .png name saves a PNG; --annotate numbers the elements)',
+  '       walnut browser zoom <X> <Y> <W> <H> [<file>] [--tab N]   (that region of the screen at full pixel resolution)',
   '       walnut browser upload <ref> <file>... [--tab N]          (10 MB in all; --trusted --path P: a file on the browser\'s machine)',
   '       walnut browser upload --selector <css> <file>... [--tab N] (a file field the page hides)',
   '       walnut browser downloads [--wait] [--ms N]',
   '       walnut browser fill-login [--item <id|name>] [--fresh-sign-in] [--tab N]   (signs in with the saved login; you never see the password)',
   '       walnut browser request-sign-in [<what to sign in to>] [--site S] [--tab N]   (the person signs in themselves, Take over; waits for them)',
-  '       walnut browser dialog accept|dismiss [--text T] [--tab N]   (real input)',
+  '       walnut browser dialog [read] | accept|dismiss [--text T] [--tab N]   (real input; read: the open dialog\'s type and message)',
   '       walnut browser evaluate <expression> [--tab N]             (real input; a tab you opened)',
   '       walnut browser network [--url part] [--method M] [--status 404|4xx] [--type XHR] [--limit N] [--include-static] [--stop] [--tab N]',
   '       walnut browser network-body <request id> [--max-chars N] | network-request-body <request id> [--tab N]',
@@ -106,6 +109,10 @@ export function parseBrowserArgv(argv: string[]): ParsedBrowser {
       else if (w === '--level') args.level = val()
       else if (w === '--max-chars') args.max_chars = Number(val())
       else if (w === '--viewport') args.viewport = true
+      else if (w === '--annotate') args.annotate = true
+      else if (w === '--all-frames') args.all_frames = true
+      else if (w === '--slowly') args.slowly = true
+      else if (w === '--steps') args.steps = Number(val())
       else if (w === '--site') args.site = val()
       else if (w === '--file' || w === '--path') {
         const key = w === '--file' ? 'files' : 'paths'
@@ -125,6 +132,28 @@ export function parseBrowserArgv(argv: string[]): ParsedBrowser {
   try {
     switch (verb) {
       case 'status': return { ok: true, op: 'browser_status', args: {}, json }
+      case 'drag': {
+        const end = (w: string | undefined, name: string): Record<string, unknown> => {
+          const m = /^(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)$/.exec(w ?? '')
+          if (m) return name === 'from' ? { x: Number(m[1]), y: Number(m[2]) } : { to_x: Number(m[1]), to_y: Number(m[2]) }
+          if (w && REFS.test(w)) return name === 'from' ? { ref: w } : { to_ref: w }
+          throw new Error(`drag takes where it starts and where it ends, each a ref (e12) or X,Y (drag e3 e9, drag 100,200 300,240)`)
+        }
+        return { ok: true, op: 'browser', args: { action: 'drag', ...end(rest[0], 'from'), ...end(rest[1], 'to'), ...args }, json }
+      }
+      case 'zoom': {
+        const nums = rest.length && /^[\d.,-]+$/.test(rest[0]) && rest[0].includes(',') ? rest[0].split(',') : rest.slice(0, 4)
+        const [x, y, w, h] = nums.map(Number)
+        if (nums.length !== 4 || ![x, y, w, h].every(Number.isFinite)) return { ok: false, error: 'zoom takes the region: X Y WIDTH HEIGHT in CSS pixels (zoom 0 0 400 300)' }
+        const file = rest[0]?.includes(',') ? rest[1] : rest[4]
+        const png = !!file && /\.png$/i.test(file)
+        return { ok: true, op: 'browser', args: { action: 'zoom', x, y, width: w, height: h, inline: true, ...(png ? { format: 'png' } : {}), ...args }, json, ...(file ? { file } : {}) }
+      }
+      case 'click-label': case 'click_label': {
+        const n = Number(rest[0])
+        if (!Number.isInteger(n) || n < 1) return { ok: false, error: 'click-label takes a number from screenshot --annotate' }
+        return { ok: true, op: 'browser', args: { action: 'click_label', label: n, ...args }, json }
+      }
       case 'tabs': case 'back': case 'close': case 'snapshot': case 'text':
         return { ok: true, op: 'browser', args: { action: verb, ...args }, json }
       case 'form-values': case 'form_values': return { ok: true, op: 'browser', args: { action: 'form_values', ...args }, json }
@@ -140,9 +169,12 @@ export function parseBrowserArgv(argv: string[]): ParsedBrowser {
       case 'find':
         if (!rest.length) return { ok: false, error: 'find needs the text' }
         return { ok: true, op: 'browser', args: { action: 'find', text: rest.join(' '), ...args }, json }
-      case 'hover':
-        if (args.x === undefined && !rest[0] && !args.ref) return { ok: false, error: 'hover needs a ref (e12) or --at X,Y' }
-        return { ok: true, op: 'browser', args: { action: 'hover', ...(rest[0] ? { ref: rest[0] } : {}), ...args }, json }
+      case 'hover': case 'click': {
+        // --text: the words of what to click (dialog's --text is a prompt's answer).
+        const { dialogText, ...a } = args
+        if (a.x === undefined && !rest[0] && !a.ref && typeof dialogText !== 'string') return { ok: false, error: `${verb} needs a ref (e12), --at X,Y or --text <words>` }
+        return { ok: true, op: 'browser', args: { action: verb, ...(rest[0] ? { ref: rest[0] } : {}), ...(typeof dialogText === 'string' && !rest[0] && a.x === undefined ? { text: dialogText } : {}), ...a }, json }
+      }
       case 'fill-form': case 'fill_form': {
         const fields = rest.map((pair) => {
           const i = pair.indexOf('=')
@@ -174,7 +206,8 @@ export function parseBrowserArgv(argv: string[]): ParsedBrowser {
         return { ok: true, op: 'browser', args: { action: 'resize', width: Number(w), height: Number(h), ...args }, json }
       }
       case 'dialog': {
-        if (rest[0] !== 'accept' && rest[0] !== 'dismiss') return { ok: false, error: 'dialog takes accept or dismiss' }
+        if (!rest[0] || rest[0] === 'read') { const { dialogText: _d, ...a } = args; return { ok: true, op: 'browser', args: { action: 'dialog', read: true, ...a }, json } }
+        if (rest[0] !== 'accept' && rest[0] !== 'dismiss') return { ok: false, error: 'dialog takes read, accept or dismiss' }
         const { dialogText, ...a } = args
         return { ok: true, op: 'browser', args: { action: 'dialog', accept: rest[0] === 'accept', ...(typeof dialogText === 'string' ? { text: dialogText } : {}), ...a }, json }
       }
@@ -183,9 +216,6 @@ export function parseBrowserArgv(argv: string[]): ParsedBrowser {
         return { ok: true, op: 'browser', args: { action: 'evaluate', expression: rest.join(' '), ...args }, json }
       case 'open': return { ok: true, op: 'browser', args: { action: 'open', url: one('a URL'), ...args }, json }
       case 'navigate': case 'go': return { ok: true, op: 'browser', args: { action: 'navigate', url: one('a URL'), ...args }, json }
-      case 'click':
-        if (args.x === undefined && !rest[0]) return { ok: false, error: 'click needs a ref (e12) or --at X,Y' }
-        return { ok: true, op: 'browser', args: { action: 'click', ...(rest[0] ? { ref: rest[0] } : {}), ...args }, json }
       case 'type': {
         if (!rest.length) return { ok: false, error: 'type needs the text' }
         const ref = rest.length > 1 && REFS.test(rest[0]) ? rest[0] : undefined
@@ -198,9 +228,12 @@ export function parseBrowserArgv(argv: string[]): ParsedBrowser {
       case 'press': return { ok: true, op: 'browser', args: { action: 'press', key: one('a key'), ...args }, json }
       case 'scroll': {
         const a: Record<string, unknown> = { action: 'scroll', ...args }
-        if (['up', 'down', 'left', 'right'].includes(rest[0])) a.direction = rest[0]
-        else if (rest[0] === 'top' || rest[0] === 'bottom') a.to = rest[0]
-        else if (rest[0]) a.ref = rest[0]
+        // In any order: a direction or top/bottom, and a ref (with a direction, that box scrolls).
+        for (const w of rest.slice(0, 2)) {
+          if (['up', 'down', 'left', 'right'].includes(w)) a.direction = w
+          else if (w === 'top' || w === 'bottom') a.to = w
+          else if (!a.ref) a.ref = w
+        }
         return { ok: true, op: 'browser', args: a, json }
       }
       case 'wait':
@@ -276,7 +309,7 @@ export async function runBrowser(p: Extract<ParsedBrowser, { ok: true }>, io: Br
       if ((io.now?.() ?? Date.now()) > deadline) { io.say('walnut browser: no answer in 10 minutes'); return BROWSER_EXIT.timeout }
       continue
     }
-    if (p.args.action === 'screenshot' && typeof body.image === 'string') {
+    if ((p.args.action === 'screenshot' || p.args.action === 'zoom') && typeof body.image === 'string') {
       const m = /^data:image\/(\w+);base64,(.+)$/.exec(body.image)
       if (!m) { io.say('walnut browser: the browser sent no image'); return BROWSER_EXIT.error }
       // The file's name says what is in it: an older extension sends a JPEG even when a PNG was asked.
@@ -291,13 +324,19 @@ export async function runBrowser(p: Extract<ParsedBrowser, { ok: true }>, io: Br
       fs.writeFileSync(file, Buffer.from(m[2], 'base64'))
       delete body.image
       if (p.json) io.out(JSON.stringify({ ...body, file }, null, 2) + '\n')
-      else io.out(`${file}\n`)
+      else io.out(`${file}\n${labelLines(body)}`)
       return BROWSER_EXIT.ok
     }
     if (p.json) { io.out(JSON.stringify(body, null, 2) + '\n'); return BROWSER_EXIT.ok }
     io.out(render(p.args.action as string | undefined, body) + '\n')
     return BROWSER_EXIT.ok
   }
+}
+
+/** The numbered elements of an annotated screenshot, one a line (click-label N clicks one). */
+function labelLines(b: Record<string, unknown>): string {
+  const l = (b.labels as Array<{ label: number; ref: string; role: string; name: string }> | undefined) ?? []
+  return l.map((x) => `${x.label}  [${x.ref}] ${x.role} "${x.name}"\n`).join('') + (typeof b.note === 'string' && l.length ? `${b.note}\n` : '')
 }
 
 /** What a person (or an agent in a shell) reads. */
@@ -348,6 +387,14 @@ function render(action: string | undefined, b: Record<string, unknown>): string 
   if (action === 'resize') {
     const v = (b.viewport ?? {}) as { width?: number; height?: number }
     return `ok  window ${String(b.width ?? '?')}x${String(b.height ?? '?')}, page ${String(v.width ?? '?')}x${String(v.height ?? '?')}`
+  }
+  if (action === 'dialog' && b.open !== undefined) {
+    const d = b.dialog as { type?: string; message?: string; default_prompt?: string } | undefined
+    return b.open && d ? `${d.type ?? 'dialog'}: ${d.message ?? ''}${d.default_prompt !== undefined ? `\n(prompt box holds: ${d.default_prompt})` : ''}` : String(b.note ?? 'No dialog open.')
+  }
+  if (b.dialog && typeof b.dialog === 'object') {
+    const d = b.dialog as { type?: string; message?: string }
+    return `ok, and it opened a ${d.type ?? 'dialog'}: ${d.message ?? ''}\n(dialog accept [--text T] or dialog dismiss answers it)`
   }
   if (action === 'snapshot') return typeof b.snapshot === 'string' ? b.snapshot : JSON.stringify(b)
   if (action === 'text') return typeof b.text === 'string' ? b.text : ''

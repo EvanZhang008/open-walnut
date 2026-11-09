@@ -6,6 +6,8 @@
 import * as pa from './page-agent'
 import * as forms from './page-agent-forms'
 import { clickFacts, clickTarget, enterFacts, judgeOutward, messageOf, orderTotal, outwardHold, pressFacts } from './page-agent-outward'
+import { dragPoints, scrollIn, typeField, typeSlowly } from './page-input'
+import { annotate, refOfLabel } from './page-annotate'
 
 /** position:fixed and sticky elements hidden after the first slice of a full screenshot, so they are drawn once. */
 let hiddenFixed: Array<{ el: HTMLElement; v: string }> = []
@@ -55,6 +57,8 @@ const intoFrame = (el: Element | null) => !!el && FRAMES.has(el.tagName)
  */
 
 function locate(args: Record<string, unknown>): Record<string, unknown> {
+  // The middle of the page (a wheel with no element named).
+  if (args.middle === true) args = { ...args, x: Math.round(innerWidth / 2), y: Math.round(innerHeight / 2) }
   // Keys with no element go where the focus is: never into a frame (its site is not checked here).
   if (args.active === true) {
     if (intoFrame(document.activeElement)) throw new pa.PageError('The focus is inside a frame: real input works in the top frame only.', 'trusted_frame')
@@ -126,20 +130,49 @@ function trustedHow(args: Record<string, unknown>): How | null {
   return null
 }
 
-/** The element a typed text goes to (as pa.type picks it). */
-const typeTarget = (args: Record<string, unknown>): Element | null => (args.ref !== undefined ? pa.byRef(args.ref) : document.activeElement)
+const atPoint = (args: Record<string, unknown>) => args.ref === undefined && typeof args.x === 'number' && typeof args.y === 'number'
+
+/** The element a typed text goes to (as pa.type picks it; at a point, the element there). */
+const typeTarget = (args: Record<string, unknown>): Element | null => (args.ref !== undefined ? pa.byRef(args.ref) : atPoint(args) ? pa.target(args).el : document.activeElement)
+
+/** `scroll` that names an element or a point and how far: that box scrolls (page-input.ts); a ref alone brings the element into view. */
+const scrollsInside = (args: Record<string, unknown>) => (args.ref !== undefined || atPoint(args))
+  && (args.direction !== undefined || args.to !== undefined || args.by !== undefined || args.amount !== undefined)
+
+/** `type {x, y}`: a click at the point (judged as a click), then the text into the field it focused. */
+async function typeOp(args: Record<string, unknown>): Promise<unknown> {
+  if (atPoint(args)) { const h = held(args, { click: true }, pa.target(args).el); if (h) return h }
+  const how = typedEnter(args)
+  const h = how ? held(args, how, typeTarget(args)) : null
+  if (h) return h
+  if (atPoint(args)) {
+    const el = typeField(args)
+    if (!el) throw new pa.PageError(`Nothing to type in at ${String(args.x)},${String(args.y)}.`, 'no_field')
+    return args.slowly === true ? typeSlowly(el, args) : pa.type({ ...args, ref: pa.refFor(el) })
+  }
+  if (args.slowly === true) {
+    const el = typeField(args)
+    if (!el || el === document.body) throw new pa.PageError('No field is focused: give the ref of the field to type in.', 'no_field')
+    return typeSlowly(el, args)
+  }
+  return pa.type(args)
+}
 
 export async function runPageOp(op: string, args: Record<string, unknown>): Promise<unknown> {
   pa.setFrame(args.frame)
+  // A number from an annotated screenshot names its element (page-annotate.ts).
+  if (typeof args.label === 'number' && args.ref === undefined && (op === 'click' || op === 'hover' || op === 'locate')) args = { ...args, ref: refOfLabel(args.label) }
   switch (op) {
     case 'snapshot': return pa.snapshot(typeof args.max === 'number' ? args.max : undefined)
     case 'text': return pa.text(typeof args.max === 'number' ? args.max : undefined)
     case 'click': return held(args, { click: true }, pa.target(args).el) ?? pa.click(args)
     case 'hover': return pa.hover(args)
-    case 'type': { const how = typedEnter(args); return (how ? held(args, how, typeTarget(args)) : null) ?? pa.type(args) }
+    case 'type': return typeOp(args)
     case 'select': return pa.select(args)
     case 'press': return held(args, { key: String(args.key ?? '') }, document.activeElement) ?? pa.press(args)
-    case 'scroll': return pa.scroll(args)
+    case 'scroll': return scrollsInside(args) ? scrollIn(args) : pa.scroll(args)
+    case 'annotate': return annotate()
+    case 'drag_points': return dragPoints(args)
     case 'wait': return pa.wait(args)
     case 'has_text': return pa.hasText(args)
     case 'find': return forms.find(args)

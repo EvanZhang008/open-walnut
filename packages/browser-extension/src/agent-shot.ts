@@ -1,7 +1,9 @@
 /**
  * A screenshot of an agent's tab: what is on screen, or (`full`) the whole page, scrolled through
  * and drawn into one image, at most FULL_MAX_PX tall. A password the page shows as text is drawn
- * as dots while it is taken, in every frame; the page's scroll is put back after.
+ * as dots while it is taken, in every frame; the page's scroll is put back after. `annotate`
+ * numbers the elements on screen (page-annotate.ts; `click {label}` clicks one), and `zoom`
+ * crops a region at the picture's full resolution (agent-picture.ts).
  */
 import { ext, type Tab } from './ext'
 import { siteKey } from '../../../src/core/vault/url-match'
@@ -9,6 +11,8 @@ import { toPage } from './page-reach'
 import { framesOf } from './agent-page'
 import { capture, withCapture } from './capture-gate'
 import { frontDriven } from './agent-takeover'
+import { base64, cropPicture, drawLabels } from './agent-picture'
+import type { LabelBox } from './input-math'
 import { AgentError, WALNUT_PAGE, agentWindowId, checkPage, frameOp, mark, personsTab, reached, sleep, where, type AgentTab, type WireCommand } from './agent-shared'
 
 export const FULL_MAX_PX = 12_000
@@ -21,13 +25,6 @@ async function maskAll(tabId: number, on: boolean): Promise<boolean> {
   const top = await toPage<{ ok?: boolean }>(tabId, { type: 'agent-mask', on }, 5000)
   for (const f of await framesOf(tabId)) await toPage(tabId, { type: 'agent-mask', on }, 3000, f.frameId)
   return top?.ok === true
-}
-
-function base64(buf: ArrayBuffer): string {
-  const bytes = new Uint8Array(buf)
-  let s = ''
-  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
-  return btoa(s)
 }
 
 /** `format: 'png'` (the CLI asks for it for a .png file), else JPEG. */
@@ -69,7 +66,39 @@ async function full(c: WireCommand, tabId: number, tab: Tab): Promise<{ image: s
   return { image: `data:${type};base64,${base64(await blob.arrayBuffer())}`, height: drawn, pageHeight: m.total, cut: cut || drawn < height }
 }
 
+/** `zoom {x, y, width, height}`: the region, CSS pixels of the viewport. */
+function zoomRegion(a: Record<string, unknown>): { x: number; y: number; width: number; height: number } {
+  const [x, y, width, height] = [a.x, a.y, a.width, a.height].map(Number)
+  if (![x, y, width, height].every(Number.isFinite) || width < 1 || height < 1) throw new AgentError('zoom takes the region: x, y, width and height in CSS pixels of the page on screen.', 'bad_request')
+  return { x, y, width: Math.min(width, 4000), height: Math.min(height, 4000) }
+}
+
+/** The picture of what is on screen, then numbered (annotate) or cropped (zoom). */
+async function onScreen(c: WireCommand, tabId: number, tab: Tab): Promise<Record<string, unknown>> {
+  const png = pngOf(c)
+  if (c.action === 'zoom') {
+    const region = zoomRegion(c.args)
+    const m = await frameOp(tabId, 0, 'capture', { step: 'start' }, c.allow, 5000) as { w: number; h: number }
+    // The whole picture as PNG: the crop keeps every pixel of it.
+    const shot = await capture(tab.windowId!, { format: 'png' })
+    const z = await cropPicture(shot, region, m.w, png)
+    if (!z) throw new AgentError(`Nothing of that region is on screen (the page shows ${m.w}x${m.h} CSS pixels).`, 'bad_request')
+    return { image: z.image, zoom: region, pixels: { width: z.width, height: z.height }, scale: z.scale }
+  }
+  if (c.args.annotate === true) {
+    const ann = await frameOp(tabId, 0, 'annotate', {}, c.allow, 8000) as { boxes: LabelBox[]; vw: number; more?: number }
+    const shot = await capture(tab.windowId!, png ? { format: 'png' } : { format: 'jpeg', quality: 85 })
+    const image = await drawLabels(shot, ann.boxes, ann.vw, png)
+    return {
+      image, annotated: true, labels: ann.boxes.map((b) => ({ label: b.label, ref: b.ref, role: b.role, name: b.name })),
+      ...(ann.more ? { note: `${ann.more} more element(s) on screen are not numbered: zoom in, or use snapshot.` } : {}),
+    }
+  }
+  return { image: await capture(tab.windowId!, png ? { format: 'png' } : { format: 'jpeg', quality: 70 }) }
+}
+
 export async function screenshot(c: WireCommand, tabId: number, tab: Tab, rec: AgentTab): Promise<Record<string, unknown>> {
+  if (c.args.full === true && (c.action === 'zoom' || c.args.annotate === true)) throw new AgentError('annotate and zoom work on what is on screen, not with full: scroll to the part first.', 'bad_request')
   // Only the agent window is brought forward for a capture: the person's window stays as they left it.
   // A tab outside the agent window (the person's, or one it opened there) is captured only while on screen.
   if (!tab.active && (personsTab(rec) || tab.windowId !== await agentWindowId())) throw new AgentError('That tab is not on screen in the person\'s window: use snapshot, or ask them to show it.', 'tab_hidden')
@@ -102,7 +131,7 @@ export async function screenshot(c: WireCommand, tabId: number, tab: Tab, rec: A
         const f = await full(c, tabId, tab).finally(() => unmark ? mark(tabId, true, rec.who) : undefined)
         out = { image: f.image, full: true, height: f.height, pageHeight: f.pageHeight, ...(f.cut ? { cut: true, note: `Cut at ${f.height} of ${f.pageHeight} px of the page.` } : {}) }
       } else {
-        out = { image: await capture(tab.windowId!, pngOf(c) ? { format: 'png' } : { format: 'jpeg', quality: 70 }) }
+        out = await onScreen(c, tabId, tab)
       }
     } finally {
       await maskAll(tabId, false)

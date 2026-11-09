@@ -100,7 +100,9 @@ describe('the newer actions', () => {
     expect(parseBrowserArgv(['fill-login', '--item', 'Shop'])).toMatchObject({ args: { action: 'fill_login', item: 'Shop' } })
     expect(parseBrowserArgv(['dialog', 'dismiss'])).toMatchObject({ args: { action: 'dialog', accept: false } })
     expect(parseBrowserArgv(['dialog', 'accept', '--text', 'yes'])).toMatchObject({ args: { action: 'dialog', accept: true, text: 'yes' } })
-    expect(parseBrowserArgv(['dialog'])).toMatchObject({ ok: false })
+    // Alone (or `read`), it reads the open dialog; any other word is not an answer.
+    expect(parseBrowserArgv(['dialog'])).toMatchObject({ ok: true, args: { action: 'dialog', read: true } })
+    expect(parseBrowserArgv(['dialog', 'maybe'])).toMatchObject({ ok: false })
     expect(parseBrowserArgv(['evaluate', 'document.title'])).toMatchObject({ args: { action: 'evaluate', expression: 'document.title' } })
     expect(parseBrowserArgv(['upload', 'e5', 'a.pdf', 'b.png'])).toMatchObject({ args: { action: 'upload', ref: 'e5' }, upload: ['a.pdf', 'b.png'] })
     expect(parseBrowserArgv(['upload', '--ref', 'e5', '--file', 'a.pdf'])).toMatchObject({ args: { action: 'upload', ref: 'e5' }, upload: ['a.pdf'] })
