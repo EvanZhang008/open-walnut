@@ -107,6 +107,43 @@ export function workspaceName(task: { id: string; title?: string }, message?: st
 }
 
 /** Is `p` the anchor, or inside the workspace? (A start naming one of these runs in the workspace.) */
+/** A setup script runs in it and holds the first session until it ends (workspaces/scripts.ts). */
+export function setupHoldsLaunch(ws: TaskWorkspace | undefined): boolean {
+  return ws?.setup?.state === 'running' && ws.setup.wait !== false
+}
+
+/**
+ * A waiting setup that failed, or one from a repository file nobody allowed yet,
+ * holds a person's first session until they choose: run (or allow) setup, or
+ * start anyway. An agent's start (it names its caller) goes on, its prompt
+ * saying setup did not run: nobody may be there to choose.
+ */
+export function setupBlocksLaunch(ws: TaskWorkspace | undefined): boolean {
+  const s = ws?.setup
+  const unfinished = s?.state === 'failed' || (s?.state === 'skipped' && !!s.untrusted)
+  return !!s && unfinished && s.wait !== false && !s.proceed && !!ws?.pending_start && !ws.pending_start.caller_sid
+}
+
+/**
+ * What a person must do for the start their task's workspace holds, in the words
+ * the task's status shows (user-status.ts): its setup failed or waits for their
+ * OK, the workspace could not be made, or the session could not start in it.
+ * Null when nothing of theirs waits on it (an agent's start goes on by itself).
+ */
+export function workspaceHoldAsk(ws: TaskWorkspace | undefined): string | null {
+  const p = ws?.pending_start
+  if (!ws || !p || p.caller_sid || ws.state === 'removed' || ws.state === 'removing') return null
+  if (setupBlocksLaunch(ws)) {
+    const s = ws.setup!
+    return s.state === 'skipped'
+      ? `Its setup ${s.name} comes from ${s.source}, which you have not allowed: allow it, or start the session without it.`
+      : `Its setup ${s.name} failed (${s.error ?? 'it did not finish'}): run it again, or start the session anyway.`
+  }
+  if (ws.state === 'failed') return `Its workspace could not be made (${(ws.error ?? 'unknown error').slice(0, 140)}): retry it.`
+  if (ws.launch_error) return `Its session could not start in its workspace (${ws.launch_error.slice(0, 140)}): retry it.`
+  return null
+}
+
 export function belongsToWorkspace(ws: TaskWorkspace, p: string | undefined): boolean {
   if (!p) return true
   const strip = (s: string) => s.replace(/\/+$/, '') || '/'

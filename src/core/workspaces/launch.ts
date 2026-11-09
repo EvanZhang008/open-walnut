@@ -19,7 +19,7 @@ import type { TaskWorkspace, WorkspacePendingStart } from './types.js'
 import { QuickStartError } from '../sessions/quick-start.js'
 import { WorkspaceError } from './daemon-client.js'
 import { findProvider, validateInputs } from './registry.js'
-import { belongsToWorkspace, isLaunchReady, needsCreation } from './decisions.js'
+import { belongsToWorkspace, isLaunchReady, needsCreation, setupBlocksLaunch, setupHoldsLaunch } from './decisions.js'
 import { deferStart, managerDeps, recordRequestFailure, requestWorkspace } from './manager.js'
 import { role } from '../server-role.js'
 
@@ -90,7 +90,7 @@ function taskStartPending(task: Task, params: TaskStartAsk): WorkspacePendingSta
 export function willDeferStart(task: Pick<Task, 'workspace'>, params: { cwd?: string }): boolean {
   const ws = task.workspace
   if (!ws || (params.cwd !== undefined && !belongsToWorkspace(ws, params.cwd))) return false
-  return ws.state === 'removing' || ws.state === 'creating' || needsCreation(ws)
+  return ws.state === 'removing' || ws.state === 'creating' || needsCreation(ws) || setupHoldsLaunch(ws) || setupBlocksLaunch(ws)
 }
 
 /** task_start of a task whose workspace is not ready: remember the start, make the workspace, start then. */
@@ -176,7 +176,8 @@ export async function workspaceLaunchPlan(body: Record<string, unknown>, ctx: {
       const full: WorkspacePendingStart = { ...pending, via: 'quick-start', at: new Date().toISOString() }
       try {
         const cur = task.workspace
-        const updated = cur && (cur.state === 'creating' || needsCreation(cur)) && (!request || request.provider === cur.provider)
+        // A ready one (its setup held the start at plan time) takes the start on the row too.
+        const updated = cur && (cur.state === 'creating' || needsCreation(cur) || isLaunchReady(cur)) && (!request || request.provider === cur.provider)
           ? await deferStart(task.id, full)
           : await requestWorkspace(task.id, { provider: request!.provider, host: normHost(ctx.host), anchor: ctx.cwd, inputs: request?.inputs, pending: full })
         // quickStartSession returned before its auto-organize pass (the real start is a
@@ -202,7 +203,10 @@ export async function workspaceLaunchPlan(body: Record<string, unknown>, ctx: {
     if (ctx.isWalnutAgent) return refuse(400, 'A quick question has no isolated workspace.', 'bad-request')
     const providerId = typeof asked.provider === 'string' ? asked.provider : ''
     if (ws && isLaunchReady(ws)) {
-      return normHost(ctx.host) === ws.host ? { cwd: ws.cwd } : refuse(409, `This task's workspace lives on ${ws.host === '__local__' ? 'this Mac' : ws.host}.`, 'host-mismatch')
+      if (normHost(ctx.host) !== ws.host) return refuse(409, `This task's workspace lives on ${ws.host === '__local__' ? 'this Mac' : ws.host}.`, 'host-mismatch')
+      // Its setup script still holds the first session, or waits for the person's choice:
+      // this start waits with it (a person's start then shows that choice; an agent's goes on).
+      return setupHoldsLaunch(ws) || setupBlocksLaunch(ws) ? begin(null) : { cwd: ws.cwd }
     }
     if (ws?.state === 'removing') return refuse(409, 'This task\'s workspace is being removed.', 'busy')
     if (!ws || ws.state === 'removed' || !(ws.state === 'creating' || needsCreation(ws)) || ws.provider !== providerId) {
@@ -219,6 +223,7 @@ export async function workspaceLaunchPlan(body: Record<string, unknown>, ctx: {
   if (!ws || !belongsToWorkspace(ws, ctx.cwd)) return null
   if (isLaunchReady(ws)) {
     if (normHost(ctx.host) !== ws.host) return refuse(409, `This task's workspace lives on ${ws.host === '__local__' ? 'this Mac' : ws.host}.`, 'host-mismatch')
+    if (setupHoldsLaunch(ws) || setupBlocksLaunch(ws)) return begin(null)
     return { cwd: insideRoot(ws, ctx.cwd) ? ctx.cwd : ws.cwd }
   }
   if (ws.state === 'removing') return refuse(409, 'This task\'s workspace is being removed.', 'busy')

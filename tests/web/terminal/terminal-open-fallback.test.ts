@@ -164,7 +164,7 @@ describe('terminal:open without dtach on the host', () => {
     const remoteCmd = spawned[0].args.at(-1)!;
     expect(spawned[0].file).toBe('ssh');
     expect(spawned[0].args).toContain('-tt');
-    expect(remoteCmd).toBe(`cd '/home/alice/proj' && exec "\${SHELL:-/bin/bash}" -l`);
+    expect(remoteCmd).toBe(`cd '/home/alice/proj' || cd; exec "\${SHELL:-/bin/bash}" -l`);
     expect(spawned[0].args.join(' ')).not.toMatch(/dtach|dsock/);
   });
 

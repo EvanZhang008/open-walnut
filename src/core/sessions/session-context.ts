@@ -426,6 +426,11 @@ export async function buildSessionContext(
             + 'with your result, and complete your task when the work is done.\n\n'
         }
       }
+      // Its isolated workspace's setup script (workspaces/scripts.ts): what is already installed, or why not.
+      if (task.workspace?.setup) {
+        const { setupPromptLine } = await import('../workspaces/scripts.js')
+        taskLine += setupPromptLine(task.workspace)
+      }
       // A task with no leader reports to the VP of its project, or Main (sessions/org-follow.ts).
       if (!task.parent_task_id && !task.org_role && !task.walnut_agent && !task.plugin_only) {
         const { listTasks } = await import('../task-manager.js')

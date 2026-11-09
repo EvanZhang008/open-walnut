@@ -4823,6 +4823,23 @@ if (process.env.PW_WORKSPACE_FIXTURE === '1') {
       },
     },
   }, null, 2))
+  // Project scripts (workspace-scripts.spec.ts): a repository whose walnut.json has a
+  // setup script that "installs" into an ignored folder, and two scripts to run by hand.
+  const web = path.join(wsFixture, 'web')
+  fsSync.mkdirSync(path.join(web, 'src'), { recursive: true })
+  fsSync.writeFileSync(path.join(web, 'README.md'), '# web\n')
+  fsSync.writeFileSync(path.join(web, 'src', 'index.ts'), 'export const web = 1\n')
+  fsSync.writeFileSync(path.join(web, '.gitignore'), 'deps/\n')
+  fsSync.writeFileSync(path.join(web, 'walnut.json'), JSON.stringify({
+    scripts: [
+      { name: 'Install', command: 'echo "Resolving 3 packages"; sleep 6; mkdir -p deps && echo ok > deps/installed.txt && echo "Installed 3 packages"', setup: true },
+      { name: 'Test', command: 'echo "Running tests in $(basename "$PWD")"; test -f deps/installed.txt && echo "3 passed"' },
+      { name: 'Lint', command: 'echo "No problems"' },
+    ],
+  }, null, 2) + '\n')
+  for (const args of [['init', '-q'], ['add', '.'], ['commit', '-qm', 'init']]) {
+    execFileSync('git', ['-c', 'user.name=Walnut Test', '-c', 'user.email=walnut-test@example.invalid', '-c', 'init.defaultBranch=main', ...args], { cwd: web, env: gitEnv })
+  }
 }
 
 // Now import server (it reads WALNUT_HOME from constants.ts which checks env var)

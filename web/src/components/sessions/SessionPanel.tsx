@@ -189,6 +189,9 @@ import { TreeSplitLeft } from './TreeSplitLeft';
 import { TreeHalfContext, type TreeHalf } from './tree-half-context';
 import { pathBarHeading, pathBarLevelItems, pathBarSegments } from './tree-path-model';
 import { createTimelineShare } from './timeline-share';
+import { SessionScriptsChip } from '@/components/workspaces/SessionScriptsChip';
+import { workspaceOf } from '@/components/workspaces/workspace-text';
+import { noteScriptDropped, noteScriptTyped } from '@/components/workspaces/script-results';
 
 /**
  * Below this viewport width a split view opens with the chat column collapsed:
@@ -696,6 +699,12 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     () => panelTaskCopy(storeTask, fetchedTask, linkedTaskId),
     [storeTask, fetchedTask, linkedTaskId],
   );
+  // The session ran in its task's workspace and that was removed: the terminal's folder is gone.
+  const terminalFolderGone = useMemo(() => {
+    const ws = workspaceOf(sessionTask as never);
+    const cwd = session?.cwd;
+    return !!ws && ws.state === 'removed' && !!ws.root && !!cwd && (cwd === ws.root || cwd.startsWith(`${ws.root}/`));
+  }, [sessionTask, session?.cwd]);
   // Main reads as the CEO and a project's lead as its VP (display only).
   const taskTitle = sessionTask ? orgDisplayTitle(sessionTask) : null;
   // Another engine picked in the model picker: the next message switches the task to it.
@@ -1517,6 +1526,47 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     // still leave full screen.
     if (next) { if (!isPhoneLayout()) enterFullscreen(); applyOpenCollapse(next); } else { collapseChat(false); }
   }, [enterFullscreen, fileViewTarget, activeView, applyOpenCollapse, collapseChat, inset, session?.taskId, sessionId, onLocateTask, onTaskClick, navigate]);
+
+  // A project script from the Scripts chip: open the terminal (once) and type it there.
+  // The run's id lets its result say whether it was typed (running) or never was (not run).
+  type TerminalInput = { id: number; text: string; raw?: boolean; runId?: string };
+  const [terminalInput, setTerminalInputState] = useState<TerminalInput | null>(null);
+  const terminalInputRef = useRef<TerminalInput | null>(null);
+  const setTerminalInput = useCallback((next: TerminalInput | null) => {
+    const cur = terminalInputRef.current;
+    if (cur?.runId && cur !== next) noteScriptDropped(sessionId, cur.runId);
+    terminalInputRef.current = next;
+    setTerminalInputState(next);
+  }, [sessionId]);
+  // The panel goes (another column took its place): a line it never typed did not run.
+  useEffect(() => () => {
+    const cur = terminalInputRef.current;
+    if (cur?.runId) noteScriptDropped(sessionId, cur.runId);
+    terminalInputRef.current = null;
+  }, [sessionId]);
+  const terminalInputSeq = useRef(0);
+  // The phone's top-bar kebab opens the Scripts menu through this (the header is not drawn there).
+  const scriptsOpenRef = useRef<((at?: { x: number; y: number }) => void) | null>(null);
+  const runInTerminal = useCallback((line: string, _script?: unknown, runId?: string) => {
+    setTerminalInput({ id: ++terminalInputSeq.current, text: line, ...(runId ? { runId } : {}) });
+    // A terminal docked under another view already shows: it takes the script there.
+    if (!terminalShownRef.current) toggleView('terminal');
+  }, [toggleView, setTerminalInput]);
+  // Ctrl-C into the terminal: the Scripts menu stops a script still running before it runs another.
+  const interruptTerminal = useCallback(() => {
+    const id = ++terminalInputSeq.current;
+    setTerminalInput({ id, text: '\x03', raw: true });
+    if (!terminalShownRef.current) toggleView('terminal');
+    return () => { if (terminalInputRef.current?.id === id) setTerminalInput(null); };
+  }, [toggleView, setTerminalInput]);
+  const terminalInputSent = useCallback((id: number) => {
+    const cur = terminalInputRef.current;
+    if (cur?.id !== id) return;
+    if (cur.runId) noteScriptTyped(sessionId, cur.runId);
+    terminalInputRef.current = null;
+    setTerminalInputState(null);
+  }, [sessionId]);
+  const terminalShownRef = useRef(false);
   // An open Board whose task stops leading (its last open subtask finished and it
   // keeps no Board of its own, or the Board was deleted) closes back to the chat
   // instead of leaving an empty pane behind a tab that is gone.
@@ -1636,6 +1686,21 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   const resizeTerminalDock = useCallback((px: number) => setTerminalDock((d) => ({ ...d, px })), [setTerminalDock]);
   const terminalDocked = terminalOffered && terminalDockAllowed && terminalDock.on && !!activeView && TERMINAL_DOCK_VIEWS.includes(activeView);
   const terminalShown = activeView === 'terminal' || terminalDocked;
+  terminalShownRef.current = terminalShown;
+  // A script that could not be typed (the terminal closed, or never connected
+  // within a minute) is dropped: it must not run by surprise when it opens later.
+  // Its result says it did not run; so does one whose page closed first (script-results.ts).
+  const terminalWasOpen = useRef(false);
+  useEffect(() => {
+    const open = terminalShown;
+    const closed = terminalWasOpen.current && !open;
+    terminalWasOpen.current = open;
+    if (!terminalInput) return;
+    if (closed) { setTerminalInput(null); return; }
+    const id = terminalInput.id;
+    const timer = setTimeout(() => { if (terminalInputRef.current?.id === id) setTerminalInput(null); }, 60_000);
+    return () => clearTimeout(timer);
+  }, [terminalInput, terminalShown, setTerminalInput]);
 
   // A host:port service the session started (a dev server, a report page) opens
   // in the Web split view instead of a browser tab: remote ports come through an
@@ -2867,6 +2932,17 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                     Terminal
                   </button>
                 )}
+                {terminalOffered && (
+                  <SessionScriptsChip
+                    sessionId={sessionId}
+                    taskId={session?.taskId}
+                    hidden={hid('scripts')}
+                    rowRef={toolRowRef}
+                    onRun={runInTerminal}
+                    onInterrupt={interruptTerminal}
+                    openRef={scriptsOpenRef}
+                  />
+                )}
                 {/* Board needs the task, like Fork, and only a lead's task has one
                     worth opening (useBoardTab): absent otherwise. It comes AFTER the
                     chips every session has, like Plan below: whether a task leads may
@@ -3178,7 +3254,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                     // Same amber as the task lists — one marker, every surface.
                     className={`session-panel-title${sessionTask?.walnut_agent ? ' walnut-task-title' : ''}`}
                   />
-                : <span className="session-panel-title text-muted">Untitled session</span>
+                : <span className="session-panel-title text-muted">{loading ? 'Opening the session…' : 'Untitled session'}</span>
               }
             </div>
             {/* The one question control up here: the mode pill (Tree Mode /
@@ -3245,6 +3321,10 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                   onToggleView={toggleView}
                   board={boardChipLive ? (boardWaitReason ? 'waiting' : 'live') : 'none'}
                   terminal={terminalOffered && !inset}
+                  onScripts={terminalOffered && !inset ? () => {
+                    const r = kebabSlot?.getBoundingClientRect();
+                    scriptsOpenRef.current?.(r ? { x: Math.max(8, r.right - 300), y: r.bottom + 4 } : { x: 8, y: 56 });
+                  } : undefined}
                   plan={!!(hasPlanContent || showExecuteButtons)}
                   onPlan={() => setPlanPopoverOpen(true)}
                   onCloseSession={onClose ? phoneClose : undefined}
@@ -3562,6 +3642,9 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                           pathNotice={terminalPathMissing}
                           onDismissPathNotice={() => setTerminalPathMissing(null)}
                           onDockWant={setTerminalWantPx}
+                          pendingInput={terminalInput}
+                          onPendingInputSent={terminalInputSent}
+                          folderGone={terminalFolderGone}
                         />
                       </TerminalDock>
                       </Suspense>

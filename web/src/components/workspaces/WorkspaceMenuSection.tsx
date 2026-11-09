@@ -14,29 +14,39 @@
  * confirm the host checks again and may still refuse; the row's state and error
  * (rendered here) say how it went.
  */
-import { useCallback, useRef, useState, type RefObject } from 'react';
+import { useCallback, useMemo, useRef, useState, type RefObject } from 'react';
+import { Breakable } from './Breakable';
+import { unwatchSetupRun, watchSetupRun } from './cleanup-notices';
+import { useStoreTask } from '@/contexts/TasksContext';
 import { createPortal } from 'react-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useAlert, useConfirm } from '@/hooks/useConfirm';
-import { fetchWorkspaceRemoval, removeTaskWorkspace, retryTaskWorkspace } from '@/api/workspaces';
+import { fetchWorkspaceRemoval, removeTaskWorkspace, rerunTaskSetup, retryTaskWorkspace, startTaskAnyway } from '@/api/workspaces';
+import { ScriptRunCard } from './ScriptRunCard';
 import { log } from '@/utils/log';
 import type { TaskWorkspace } from './workspace-text';
-import { hostName, isWorkspaceUsable, workspaceOf, workspaceStateLabel } from './workspace-text';
+import { hostName, isWorkspaceUsable, keptText, setupTone, setupWaitsForYou, workspaceOf, workspaceStateLabel } from './workspace-text';
 import '@/styles/workspaces.css';
+
+/** The widest the flyout gets (workspaces.css .workspace-flyout max-width) plus a margin. */
+const FLYOUT_ROOM = 372;
+const FLYOUT_MAX_HEIGHT = 520;
 
 function Fact({ label, value, mono }: { label: string; value?: string; mono?: boolean }) {
   if (!value) return null;
   return (
     <div className="workspace-fact">
       <span className="workspace-fact-label">{label}</span>
-      <span className={`workspace-fact-value${mono ? ' is-mono' : ''}`} title={value}>{value}</span>
+      <span className={`workspace-fact-value${mono ? ' is-mono' : ''}`} title={value}>{mono ? <Breakable text={value} /> : value}</span>
     </div>
   );
 }
 
-function WorkspaceFlyout({ open, anchorRef, taskId, taskTitle, ws, onClose, afterAction }: {
+function WorkspaceFlyout({ open, anchorRef, anchorPoint, taskId, taskTitle, ws, onClose, afterAction }: {
   open: boolean;
   anchorRef: RefObject<HTMLElement | null>;
+  /** Beside the menu it opened from, when there is room (it holds output to read, over the menu's rows it would hide them). */
+  anchorPoint: { x: number; y: number; align: 'left' | 'right' } | null;
   taskId: string;
   taskTitle: string;
   ws: TaskWorkspace;
@@ -44,7 +54,8 @@ function WorkspaceFlyout({ open, anchorRef, taskId, taskTitle, ws, onClose, afte
   afterAction: () => void;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
-  const placement = useMenuPlacement(open, anchorRef, listRef, { minHeight: 160, onAnchorLost: onClose });
+  const point = useMemo(() => (anchorPoint ? { x: anchorPoint.x, y: anchorPoint.y } : null), [anchorPoint]);
+  const placement = useMenuPlacement(open, anchorRef, listRef, { minHeight: 160, anchorPoint: point, align: anchorPoint?.align ?? 'right', onAnchorLost: onClose });
   const confirm = useConfirm();
   const alert = useAlert();
   const [busy, setBusy] = useState<string | null>(null);
@@ -100,6 +111,33 @@ function WorkspaceFlyout({ open, anchorRef, taskId, taskTitle, ws, onClose, afte
     }
   }, [taskId, alert, onClose, afterAction]);
 
+  const rerunSetup = useCallback(async (allow?: boolean) => {
+    setBusy('Starting setup…');
+    try {
+      watchSetupRun(taskId);
+      // A run that waited for the user's OK runs only the version of the file its card shows.
+      await rerunTaskSetup(taskId, { allow, ...(ws.setup?.untrusted && ws.setup.file_hash ? { expectHash: ws.setup.file_hash } : {}) })
+        .catch((err) => { unwatchSetupRun(taskId); throw err; });
+      setBusy(null);
+    } catch (err) {
+      setBusy(null);
+      await alert({ title: 'Could not run setup', message: err instanceof Error ? err.message : String(err) });
+    }
+  }, [taskId, alert, ws.setup?.untrusted, ws.setup?.file_hash]);
+
+  const startAnyway = useCallback(async () => {
+    setBusy('Starting the session…');
+    try {
+      await startTaskAnyway(taskId);
+      onClose();
+      afterAction();
+    } catch (err) {
+      setBusy(null);
+      await alert({ title: 'Could not start the session', message: err instanceof Error ? err.message : String(err) });
+    }
+  }, [taskId, alert, onClose, afterAction]);
+
+  const completed = useStoreTask(taskId)?.phase === 'COMPLETE';
   if (!open) return null;
   const repos = ws.repos ?? [];
   const showRepos = ws.provider !== 'git-worktree' && repos.length > 0;
@@ -107,19 +145,20 @@ function WorkspaceFlyout({ open, anchorRef, taskId, taskTitle, ws, onClose, afte
     <div
       ref={listRef}
       className="task-kebab-project-flyout workspace-flyout"
-      style={menuPlacementStyle(placement)}
+      // A short panel beside the menu, never one to the window's bottom: its outputs scroll on their own.
+      style={{ ...menuPlacementStyle(placement), ...(placement ? { maxHeight: Math.min(placement.maxHeight, FLYOUT_MAX_HEIGHT) } : {}) }}
       data-testid="workspace-flyout"
       onClick={(e) => e.stopPropagation()}
       onPointerDown={(e) => e.stopPropagation()}
     >
       <div className="workspace-flyout-head">
         <span className="workspace-flyout-title">{ws.provider_name ?? ws.provider}</span>
-        <span className={`workspace-flyout-state is-${ws.state}`} data-testid="workspace-flyout-state">{workspaceStateLabel(ws)}</span>
+        <span className={`workspace-flyout-state is-${ws.state}${setupTone(ws) ? ` tone-${setupTone(ws)}` : ''}`} data-testid="workspace-flyout-state">{workspaceStateLabel(ws)}</span>
       </div>
       {ws.state === 'creating' && ws.progress && <div className="workspace-flyout-note">{ws.progress}</div>}
       {ws.state === 'failed' && ws.error && <div className="workspace-flyout-note is-error">{ws.error}</div>}
       {ws.launch_error && <div className="workspace-flyout-note is-error">The session could not start: {ws.launch_error}</div>}
-      {ws.state === 'kept' && <div className="workspace-flyout-note is-warn" data-testid="workspace-kept-reason">Kept: {ws.kept_reason ?? 'it still holds work'}</div>}
+      {ws.state === 'kept' && <div className="workspace-flyout-note is-warn" data-testid="workspace-kept-reason">Kept: {keptText(ws)}</div>}
       {ws.error && ws.state !== 'failed' && <div className="workspace-flyout-note is-warn">{ws.error}</div>}
       <Fact label="Host" value={hostName(ws.host)} />
       <Fact label="Folder" value={ws.root} mono />
@@ -135,6 +174,46 @@ function WorkspaceFlyout({ open, anchorRef, taskId, taskTitle, ws, onClose, afte
           </span>
         </div>
       )}
+      {ws.setup && (
+        <ScriptRunCard
+          role="setup"
+          run={ws.setup}
+          openOutput={ws.setup.state === 'failed'}
+          action={isWorkspaceUsable(ws) && !completed && ws.setup.state !== 'running' && (ws.setup.untrusted ? (
+            <span className="script-run-actions">
+              <button className="script-run-action is-primary" disabled={!!busy} onClick={(e) => { e.stopPropagation(); void rerunSetup(true); }} data-testid="workspace-allow-setup"
+                title={`Run it now, and let this ${ws.setup.source} run by itself in new workspaces until it changes`}>
+                Allow and run
+              </button>
+              <button className="script-run-action" disabled={!!busy} onClick={(e) => { e.stopPropagation(); void rerunSetup(); }} data-testid="workspace-rerun-setup"
+                title="Run it this once">
+                Run once
+              </button>
+              {setupWaitsForYou(ws) && (
+                <button className="script-run-action" disabled={!!busy} onClick={(e) => { e.stopPropagation(); void startAnyway(); }} data-testid="workspace-start-anyway"
+                  title="Start the waiting session in the workspace without running its setup">
+                  Start without it
+                </button>
+              )}
+            </span>
+          ) : setupWaitsForYou(ws) ? (
+            <span className="script-run-actions">
+              <button className="script-run-action is-primary" disabled={!!busy} onClick={(e) => { e.stopPropagation(); void rerunSetup(); }} data-testid="workspace-rerun-setup">
+                ↻ Run setup again
+              </button>
+              <button className="script-run-action" disabled={!!busy} onClick={(e) => { e.stopPropagation(); void startAnyway(); }} data-testid="workspace-start-anyway"
+                title="Start the waiting session in the workspace as it is now">
+                Start anyway
+              </button>
+            </span>
+          ) : (
+            <button className="script-run-action" disabled={!!busy} onClick={(e) => { e.stopPropagation(); void rerunSetup(); }} data-testid="workspace-rerun-setup">
+              ↻ Run setup again
+            </button>
+          ))}
+        />
+      )}
+      {ws.teardown && <ScriptRunCard role="teardown" run={ws.teardown} openOutput={ws.teardown.state === 'failed'} />}
       {busy && <div className="workspace-flyout-note">{busy}</div>}
       {(ws.state === 'failed' || ws.launch_error) && (
         <button className="task-kebab-item" disabled={!!busy} onClick={(e) => { e.stopPropagation(); void retry(); }} data-testid="workspace-retry">
@@ -157,6 +236,7 @@ export function WorkspaceMenuSection({ task, afterAction }: {
   afterAction: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [beside, setBeside] = useState<{ x: number; y: number; align: 'left' | 'right' } | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
   const ws = workspaceOf(task);
   if (!ws) return null;
@@ -168,15 +248,28 @@ export function WorkspaceMenuSection({ task, afterAction }: {
           ref={btnRef}
           className={`task-kebab-project-current${open ? ' open' : ''}`}
           data-testid="workspace-menu-row"
-          onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (!open) {
+              // Beside the menu, on whichever side has room (left first); else under its row.
+              const menu = btnRef.current?.closest<HTMLElement>('.task-kebab-menu')?.getBoundingClientRect();
+              const row = btnRef.current?.getBoundingClientRect();
+              setBeside(!menu || !row ? null
+                : menu.left >= FLYOUT_ROOM ? { x: menu.left - 6, y: row.top - 8, align: 'right' }
+                  : window.innerWidth - menu.right >= FLYOUT_ROOM ? { x: menu.right + 6, y: row.top - 8, align: 'left' }
+                    : null);
+            }
+            setOpen(!open);
+          }}
         >
-          <span className="task-kebab-project-current-name">{workspaceStateLabel(ws)}</span>
+          <span className={`task-kebab-project-current-name${setupTone(ws) ? ` tone-${setupTone(ws)}` : ''}`}>{workspaceStateLabel(ws)}</span>
           <span className="task-kebab-project-caret">▾</span>
         </button>
       </div>
       <WorkspaceFlyout
         open={open}
         anchorRef={btnRef}
+        anchorPoint={beside}
         taskId={task.id}
         taskTitle={task.title}
         ws={ws}

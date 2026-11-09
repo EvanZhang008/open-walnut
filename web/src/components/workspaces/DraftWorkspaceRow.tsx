@@ -23,7 +23,7 @@
  */
 import { useEffect, useId, useState } from 'react';
 import { useStoreTask } from '@/contexts/TasksContext';
-import { fetchWorkspaceCandidates } from '@/api/workspaces';
+import { allowScriptsFile, fetchScripts, fetchWorkspaceCandidates, type ResolvedProjectScript } from '@/api/workspaces';
 import { log } from '@/utils/log';
 import { useDraftValue } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
@@ -33,10 +33,12 @@ import {
 } from './draft-workspace-store';
 import '@/styles/workspaces.css';
 
-export function DraftWorkspaceRow({ draftId, cwd, host, boundTaskId }: {
+export function DraftWorkspaceRow({ draftId, cwd, host, boundTaskId, project }: {
   draftId: string; cwd?: string; host?: string | null;
   /** The existing task a bound draft starts (it has no More menu). */
   boundTaskId?: string;
+  /** The project the task goes to: its setup script is the one that runs. */
+  project?: string;
 }) {
   const choice = useDraftWorkspace(draftId);
   const bound = !!boundTaskId;
@@ -88,6 +90,46 @@ export function DraftWorkspaceRow({ draftId, cwd, host, boundTaskId }: {
       setDraftWorkspace(draftId, { loading: false, candidates: [], error: err instanceof Error ? err.message : String(err) });
     });
   }, [choice.enabled, cwd, host, place, choice.candidatesFor, draftId]);
+
+  // The setup script the new workspace will run (scripts.ts), said before Start.
+  // A walnut.json the user has not allowed yet does not run by itself: the
+  // notice says so and allows it in one click.
+  type SetupView = { place: string; script: ResolvedProjectScript | null; needsOk: boolean; key?: string };
+  const [setup, setSetup] = useState<SetupView | null>(null);
+  const [allowing, setAllowing] = useState(false);
+  const [allowError, setAllowError] = useState<string | null>(null);
+  const [commandOpen, setCommandOpen] = useState(false);
+  const [reload, setReload] = useState(0);
+  // The worktree starts from the folder's commit (or the base branch typed): its walnut.json, as committed.
+  const typedBase = typeof choice.values.baseRef === 'string' ? choice.values.baseRef.trim() : '';
+  const baseRef = choice.provider === 'git-worktree' && typedBase ? typedBase : 'HEAD';
+  const setupPlace = `${place}::${project ?? boundTask?.project ?? ''}::${baseRef}`;
+  useEffect(() => {
+    if (!choice.enabled || !cwd) return;
+    let alive = true;
+    fetchScripts({ cwd, host: host ?? undefined, project: project ?? boundTask?.project, ref: baseRef }).then((v) => {
+      if (!alive) return;
+      const script = v.scripts.find((s) => s.id === v.setup) ?? null;
+      setSetup({ place: setupPlace, script, needsOk: !!script && script.source !== 'project' && !v.file_trusted, key: v.file?.key });
+    }, () => { if (alive) setSetup({ place: setupPlace, script: null, needsOk: false }); });
+    return () => { alive = false; };
+  }, [choice.enabled, cwd, host, project, boundTask?.project, baseRef, setupPlace, reload]);
+  const shownSetup = setup?.place === setupPlace ? setup : null;
+  const setupScript = shownSetup?.script ?? null;
+  const allow = async () => {
+    if (!shownSetup?.key) return;
+    setAllowing(true);
+    setAllowError(null);
+    try {
+      await allowScriptsFile(shownSetup.key);
+      log.info('workspace', 'draft allowed the repository scripts file', { draftId, cwd });
+      setReload((n) => n + 1);
+    } catch (err) {
+      setAllowError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setAllowing(false);
+    }
+  };
 
   if (!cwd || (bound ? !inline : !choice.enabled)) return null;
   const picked = selectedCandidate(choice);
@@ -211,7 +253,9 @@ export function DraftWorkspaceRow({ draftId, cwd, host, boundTaskId }: {
                   className="draft-workspace-input"
                   data-testid={`draft-workspace-input-${key}`}
                   value={typeof value === 'string' ? value : ''}
-                  placeholder={field.placeholder ?? (field.type === 'array' ? 'names, separated by commas' : '')}
+                  // "current commit" beside "from main" read as two bases: say they are the same one.
+                  placeholder={field.placeholder === 'current commit' && picked?.claimed && picked.branch ? `current commit of ${picked.branch}`
+                    : field.placeholder ?? (field.type === 'array' ? 'names, separated by commas' : '')}
                   onChange={(e) => setValues({ ...choice.values, [key]: e.target.value })}
                   // The composer owns Enter; a field must not start the launch half-filled.
                   onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault(); }}
@@ -219,6 +263,31 @@ export function DraftWorkspaceRow({ draftId, cwd, host, boundTaskId }: {
               </label>
             );
           })}
+          {setupScript && picked && isPickable(picked) && (
+            <span className={`draft-workspace-note draft-workspace-setup${shownSetup?.needsOk ? ' needs-ok' : ''}`} data-testid="draft-workspace-setup"
+              data-needs-ok={shownSetup?.needsOk ? '' : undefined}
+              title={`${setupScript.command}\nFrom the ${setupScript.source === 'project' ? "project's scripts" : setupScript.source}`}>
+              {shownSetup?.needsOk ? (
+                <span className="draft-workspace-setup-lead">
+                  Setup <strong>{setupScript.name}</strong> from {setupScript.source} is new here: it runs only once you allow it
+                  <button type="button" className="draft-workspace-allow" onClick={() => { void allow(); }} disabled={allowing} data-testid="draft-workspace-allow"
+                    title={`Let this ${setupScript.source} run its setup and cleanup by itself until it changes`}>
+                    {allowing ? 'Allowing…' : 'Allow setup'}
+                  </button>
+                </span>
+              ) : (
+                <span className="draft-workspace-setup-lead">
+                  Then runs setup <strong>{setupScript.name}</strong>{setupScript.wait === false ? ' (the session does not wait for it)' : '; the session starts once it ends'}
+                </span>
+              )}
+              <code
+                className={commandOpen ? 'is-open' : setupScript.command.length > 48 || setupScript.command.includes('\n') ? 'is-long' : undefined}
+                onClick={() => setCommandOpen((v) => !v)} data-testid="draft-workspace-setup-command">
+                {setupScript.command}
+              </code>
+            </span>
+          )}
+          {allowError && <span className="draft-workspace-note is-error">{allowError}</span>}
           {choice.startError && <span className="draft-workspace-note is-error" data-testid="draft-workspace-start-error">{choice.startError}</span>}
         </div>
       )}

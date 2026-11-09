@@ -119,6 +119,12 @@ describe('layout record: columns', () => {
     expect(readColumns('homeColumns', stores)).toEqual([]);
     expect(readString('homeFocusedTask', stores)).toBeNull();
   });
+
+  it('a launch waiting for its workspace is kept: it is keyed by its task, so a reload can show it again', () => {
+    const local = new MemStore();
+    writeColumns('homeColumns', [{ id: 'pending:ws-t1', locked: false }, { id: 'pending:qs-1', locked: false }, { id: 's1', locked: false }], local);
+    expect(readColumns('homeColumns', { local, session: null })).toEqual([{ id: 'pending:ws-t1', locked: false }, { id: 's1', locked: false }]);
+  });
 });
 
 describe('layout record: crash heal', () => {

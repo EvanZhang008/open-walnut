@@ -15,7 +15,7 @@
 // drops the slot at the right edge of the unlocked region, next to the boundary
 // the user just crossed.
 
-import { isDraftColumnId, isPlaceholderColumnId } from '@/utils/column-ids';
+import { isDraftColumnId, isPlaceholderColumnId, isWorkspaceWaitColumnId } from '@/utils/column-ids';
 import { MAX_PANELS } from '@/hooks/session-panel-limits';
 
 export interface SessionSlot {
@@ -248,9 +248,28 @@ export function mergeUrlColumns(urlIds: readonly string[], saved: readonly Sessi
   const named = new Set(urlIds);
   const fromUrl = urlIds.map(id => ({ id, locked: lockedById.get(id) ?? false }));
   const keptPins = saved.filter(s => s.locked && !named.has(s.id)).map(s => ({ id: s.id, locked: true }));
-  if (keptPins.length === 0) return fromUrl;
+  if (keptPins.length === 0) return withSavedWaits(fromUrl, saved);
   const { unlocked, locked } = splitByLock(fromUrl);
-  return [...unlocked, ...locked, ...keptPins];
+  return withSavedWaits([...unlocked, ...locked, ...keptPins], saved);
+}
+
+/**
+ * A launch waiting for its workspace (`pending:ws-<taskId>`) is kept across a reload, but a URL
+ * never names one (it carries real session ids only), so the URL's strip would close it while
+ * its setup still runs. Each saved one goes back beside the saved column it followed.
+ */
+function withSavedWaits(cols: SessionSlot[], saved: readonly SessionSlot[]): SessionSlot[] {
+  const out = [...cols];
+  saved.forEach((s, i) => {
+    if (!isWorkspaceWaitColumnId(s.id) || out.some(c => c.id === s.id)) return;
+    let at = 0;
+    for (let j = i - 1; j >= 0; j--) {
+      const k = out.findIndex(c => c.id === saved[j].id);
+      if (k >= 0) { at = k + 1; break; }
+    }
+    out.splice(at, 0, { id: s.id, locked: s.locked });
+  });
+  return out;
 }
 
 /**

@@ -4279,7 +4279,10 @@ function dispatchCommand(ws, id, cmd) {
     case 'workspace.job':
     case 'workspace.status':
     case 'workspace.repos':
-    case 'workspace.remove': return cmdWorkspace(ws, id, cmd);
+    case 'workspace.remove':
+    // 'workspace-scripts-v1': a repository's scripts file and a script run in a workspace.
+    case 'workspace.scriptsFile':
+    case 'workspace.runScript': return cmdWorkspace(ws, id, cmd);
     case 'list': return cmdList(ws, id);
     case 'sessions.discoverExternal': return cmdDiscoverExternalSessions(ws, id, cmd);
     case 'sessions.describeExternal': return cmdDescribeExternalSessions(ws, id, cmd);

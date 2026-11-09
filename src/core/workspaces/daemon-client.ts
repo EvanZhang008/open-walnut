@@ -17,6 +17,9 @@ import { log } from '../../logging/index.js'
 import { WALNUT_HOME } from '../../constants.js'
 
 export const WORKSPACE_CAPABILITY = 'workspace-v1'
+/** Project scripts: `workspace.scriptsFile` and `workspace.runScript` (scripts.ts). */
+export const WORKSPACE_SCRIPTS_CAPABILITY = 'workspace-scripts-v1'
+const SCRIPT_COMMANDS = new Set(['workspace.scriptsFile', 'workspace.runScript'])
 const DIAL_MS = 20_000
 const CONFIGURE_MS = 30_000
 
@@ -96,6 +99,9 @@ async function push(conn: WorkspaceConn, host: string): Promise<string> {
  */
 export async function workspaceRpc(host: string, cmd: string, params: Record<string, unknown>, timeoutMs: number): Promise<Record<string, unknown>> {
   const conn = await connect(host)
+  if (SCRIPT_COMMANDS.has(cmd) && !conn.hasCapability(WORKSPACE_SCRIPTS_CAPABILITY)) {
+    throw new WorkspaceError(`The Walnut daemon on ${hostLabel(host)} needs an update before it can run project scripts.`, 409, 'daemon-upgrade')
+  }
   const provider = typeof params.provider === 'string' ? params.provider : undefined
   // detect needs the allowlist whenever plugins exist; other commands only for a plugin provider.
   const needsPlugins = cmd === 'workspace.detect'

@@ -5,7 +5,7 @@
  * (a ~50KB detach/attach tool) on the target host so it survives ssh/server
  * death WITHOUT taking over the terminal the way tmux does:
  *   - local:  the pty (src/lib/pty.ts) runs `dtach -A <socket> -z -E ... <$SHELL> -l`
- *   - remote: the pty runs `ssh -tt <host> 'cd <cwd> && exec dtach -A ... "$SHELL" -l'`
+ *   - remote: the pty runs `ssh -tt <host> 'cd <cwd> || cd; exec dtach -A ... "$SHELL" -l'`
  *
  * The shell is the user's DEFAULT $SHELL launched as a LOGIN shell (`-l`), so
  * the embedded terminal feels exactly like opening tmux on that host: the full
@@ -315,7 +315,7 @@ export function buildRemoteDtachCommand(dtachBin: string, sessionId: string, she
   // becomes the script's $0, which it execs with `-l`.
   const [sh, c, record] = dtachShellCommand(dtachPidPath(sessionId, true), '')
   const dtach = `exec ${shellQuote(dtachBin)} -A ${shellQuote(sock)} -z -E -r winch ${sh} ${c} ${shellQuote(record!)} ${shell}`
-  const body = cwd ? `cd ${remoteCdTarget(cwd)} && ${dtach}` : dtach
+  const body = cwd ? `${remoteCd(cwd)}; ${dtach}` : dtach
   return `${mkdir}; ${body}`
 }
 
@@ -326,7 +326,28 @@ export function buildRemoteDtachCommand(dtachBin: string, sessionId: string, she
  */
 export function buildRemotePlainShellCommand(shell: string = REMOTE_DEFAULT_SHELL, cwd?: string): string {
   const exec = `exec ${shell} -l`
-  return cwd ? `cd ${remoteCdTarget(cwd)} && ${exec}` : exec
+  return cwd ? `${remoteCd(cwd)}; ${exec}` : exec
+}
+
+/**
+ * `cd` to the session's folder, or home when it is gone (a task's workspace removed at its
+ * completion): the shell still opens, and cd's own error line says why it is not there.
+ */
+function remoteCd(cwd: string): string {
+  // No braces: the login shell ssh runs this in may be fish or csh, which read `||` and `;` too.
+  return `cd ${remoteCdTarget(cwd)} || cd`
+}
+
+/** The session's folder, or home when it is gone: a pty spawned in a missing folder fails with ENOENT. */
+export async function localStartDir(cwd: string | undefined, sessionId: string): Promise<string> {
+  if (!cwd) return os.homedir()
+  try {
+    await fs.promises.access(cwd)
+    return cwd
+  } catch {
+    log.web.warn('terminal folder is gone, starting in home', { sessionId, cwd })
+    return os.homedir()
+  }
 }
 
 /** Full ssh argv for a remote PLAIN shell (same connection options as dtach). */
@@ -443,7 +464,7 @@ export async function resolveSpawnForSession(
       const p = pty.spawn('ssh', args, { name: 'xterm-256color', cols, rows, cwd: os.homedir(), env })
       return { pty: p, cwd: record.cwd, host: record.host }
     }
-    const cwd = record.cwd ?? os.homedir()
+    const cwd = await localStartDir(record.cwd, record.claudeSessionId)
     log.web.warn('terminal spawn (local/plain, not persistent)', { sessionId: record.claudeSessionId, cwd })
     const p = pty.spawn(localShell(), ['-l'], { name: 'xterm-256color', cols, rows, cwd, env })
     return { pty: p, cwd }
@@ -462,7 +483,7 @@ export async function resolveSpawnForSession(
     return { pty: p, cwd: record.cwd, host: record.host }
   }
 
-  const cwd = record.cwd ?? os.homedir()
+  const cwd = await localStartDir(record.cwd, record.claudeSessionId)
   const dtachBin = await localDtachPath()
   // Ensure the dtach socket dir exists locally (the remote path mkdir -p's it in
   // the ssh command; locally we create it here before spawning), and claim it

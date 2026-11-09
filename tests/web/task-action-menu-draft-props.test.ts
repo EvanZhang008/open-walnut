@@ -361,6 +361,24 @@ describe('draft decision menu controller', () => {
     expect(menuEl()).toBeNull();
   });
 
+  it('a mouse press opens it: a release that a reflow moved off the button loses nothing, and its click does not toggle it shut', async () => {
+    await render();
+    await act(async () => { fire(more(), 'mousedown', { button: 0, detail: 1 }); await new Promise((r) => setTimeout(r, 0)); });
+    expect(menuEl()).toBeTruthy();
+    expect(more().getAttribute('aria-expanded')).toBe('true');
+    // The click that ends the same press is not a second toggle.
+    await press(more(), 1);
+    expect(menuEl()).toBeTruthy();
+    // The next press on it closes it, as a toggle.
+    await act(async () => { fire(more(), 'mousedown', { button: 0, detail: 1 }); await new Promise((r) => setTimeout(r, 0)); });
+    expect(menuEl()).toBeNull();
+    await press(more(), 1);
+    expect(menuEl()).toBeNull();
+    // A keyboard click (no press) still opens it.
+    await press(more(), 0);
+    expect(menuEl()).toBeTruthy();
+  });
+
   it('a mouse open never takes focus; closing puts the caret back in the composer (C26, C55)', async () => {
     await render();
     await press(chipEl('pinTier'), 1);

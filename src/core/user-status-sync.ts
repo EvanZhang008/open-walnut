@@ -34,6 +34,7 @@ import type { ThreadCounts } from './org/thread-view.js';
 import type { OutlivingSource } from './sessions/outliving-work.js';
 import { snoozedUntil } from './snooze.js';
 import { isQuietTurn } from './sessions/quiet-turn.js';
+import { workspaceHoldAsk } from './workspaces/decisions.js';
 
 const SUBSCRIBER = 'user-status-sync';
 const OWN_SOURCE = 'user-status';
@@ -442,6 +443,14 @@ function openOwedHold(task: Task): { ask: string; at: string } | null {
   return o?.items?.length && !o.settled ? { ask: o.ask, at: o.at } : null;
 }
 
+/** What the task's workspace asks the person about its waiting start, unless a session of it started since. */
+function heldStart(task: Task, sessionStarts: ReadonlyArray<string | undefined>): string | null {
+  const ask = workspaceHoldAsk(task.workspace)
+  const at = Date.parse(task.workspace?.pending_start?.at ?? '')
+  if (!ask) return null
+  return Number.isFinite(at) && sessionStarts.some((s) => Date.parse(s ?? '') >= at) ? null : ask
+}
+
 export function statusInputOf(task: Task, facts: StatusFacts, nowMs = Date.now()): UserStatusInput {
   const own = (facts.sessionsOf.get(task.id) ?? [])
     .map((sid) => [sid, facts.sessions.get(sid)] as const)
@@ -499,6 +508,7 @@ export function statusInputOf(task: Task, facts: StatusFacts, nowMs = Date.now()
     isMain: task.org_role === 'main',
     phaseChangedAt: task.phase_changed_at ?? null,
     owedHold: openOwedHold(task),
+    workspaceHold: heldStart(task, own.map(([, s]) => s.startedAt)),
     report: task.status_report ?? null,
     lastWords: currentLastWords(task),
     markedByPerson: personMarkedNeeds(task),

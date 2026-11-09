@@ -30,6 +30,8 @@ import { terminalKeyFor } from '@open-walnut/terminal-key';
 import { ICON_CHAT, ICON_CLOSE } from '../common/Icons';
 import { TerminalEndUnconfirmedNotice, TerminalPlainBadge, TerminalPlainNotice, TerminalSshFailedCard, TerminalStatusPill } from './TerminalModeNotices';
 import { pathLinksAtRow, terminalPathCandidates, type TerminalPathLink } from './terminal-links';
+import { noteTerminalAttached, noteTerminalDetached, noteTerminalGone, noteTerminalOutput } from '@/components/workspaces/script-results';
+import { dropScriptEcho, filterScriptEcho } from '@/components/workspaces/script-echo';
 
 /**
  * What the workspace needs of a pane. Never the status code itself: the status
@@ -86,7 +88,21 @@ interface SessionTerminalPaneProps {
   onOpenPath?: (link: TerminalPathLink) => void;
   /** Stop Escape at the pane (the split's own Escape would close the view). */
   stopEscape: boolean;
+  /**
+   * This pane is the one project scripts run in: the Scripts menu reads its runs
+   * (script-results.ts) and its output hides the scripts' own wrapper (script-echo.ts).
+   */
+  scripts?: boolean;
+  /** A line to type into this shell once it is ready (a project script); each new `id` is typed once. */
+  pendingInput?: { id: number; text: string; raw?: boolean } | null;
+  onPendingInputSent?: (id: number) => void;
 }
+
+/** A typed script waits for the shell's output to be quiet this long (its prompt is drawn)... */
+const PROMPT_QUIET_MS = 300;
+/** ...or this long when an attached shell prints nothing, and never longer than the cap. */
+const NO_OUTPUT_WAIT_MS = 800;
+const PROMPT_WAIT_MAX_MS = 3000;
 
 /** Where the "Add to chat" button sits, relative to the pane body. */
 interface SelectionAnchor { x: number; y: number }
@@ -98,7 +114,7 @@ const ADD_BUTTON_W = 128;
 const ADD_BUTTON_H = 30;
 
 export const SessionTerminalPane = forwardRef<TerminalPaneHandle, SessionTerminalPaneProps>(function SessionTerminalPane(
-  { sessionId, slot, box, label, showStrip, pillTarget, focused, grabFocus, takeTyped, onFocus, onState, onClosePane, onDismissExited, onEndConfirmed, onAddToChat, onOpenPath, stopEscape },
+  { sessionId, slot, box, label, showStrip, pillTarget, focused, grabFocus, takeTyped, onFocus, onState, onClosePane, onDismissExited, onEndConfirmed, onAddToChat, onOpenPath, stopEscape, scripts = false, pendingInput, onPendingInputSent },
   ref,
 ) {
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -165,12 +181,34 @@ export const SessionTerminalPane = forwardRef<TerminalPaneHandle, SessionTermina
     return t ? { cols: t.cols, rows: t.rows } : { cols: 80, rows: 24 };
   }, []);
 
+  /** When the shell last printed (0: not yet): a typed script waits for its prompt. */
+  const lastOutputAt = useRef(0);
+  // Until the shell first prints, the body says the terminal is starting (an empty black box read as stuck).
+  const [printed, setPrinted] = useState(false);
+  // This pane's writer, one per mount: a cut echo held for its next chunk is this pane's alone.
+  const writeShown = useRef((shown: string) => { termRef.current?.write(shown); }).current;
+  const scriptsRef = useRef(scripts);
+  scriptsRef.current = scripts;
+  // While it is the scripts' pane, the Scripts menu knows which run goes on in it (script-results.ts busyRun).
+  useEffect(() => {
+    if (!scripts) return;
+    const gen = noteTerminalAttached(sessionId);
+    return () => { noteTerminalDetached(sessionId, gen); dropScriptEcho(sessionId, writeShown); };
+  }, [scripts, sessionId, writeShown]);
+
   const { status, plain, sshFailed, errorMessage, endUnconfirmed, sendInput, sendResize, kill, retry } = useSessionTerminal({
     sessionId,
     slot,
     enabled: true,
-    onData: (data) => termRef.current?.write(data),
+    onData: (data) => {
+      if (!lastOutputAt.current) setPrinted(true);
+      lastOutputAt.current = Date.now();
+      if (!scriptsRef.current) { termRef.current?.write(data); return; }
+      filterScriptEcho(sessionId, data, writeShown);
+      noteTerminalOutput(sessionId, data);
+    },
     onExit: (code, _signal, by) => {
+      if (scriptsRef.current) { dropScriptEcho(sessionId, writeShown); noteTerminalGone(sessionId); }
       setExitCode(code);
       setEndedBy(by);
       // Its own exit stays in the output (with its code); an end from outside is said by the note alone.
@@ -313,6 +351,46 @@ export const SessionTerminalPane = forwardRef<TerminalPaneHandle, SessionTermina
     if (focused && grabFocus) termRef.current?.focus();
   }, [focused, grabFocus]);
 
+  // Connected but quiet: the shell's prompt normally comes within a second; a shell that prints
+  // nothing at all (a quiet reattach) loses the note after a few seconds rather than keeping it.
+  const [quietReady, setQuietReady] = useState(false);
+  useEffect(() => {
+    if (status !== 'ready' || printed) { setQuietReady(false); return; }
+    const t = setTimeout(() => setQuietReady(true), 4_000);
+    return () => clearTimeout(t);
+  }, [status, printed]);
+
+  // A script from the Scripts menu: typed once the shell is attached and its
+  // prompt is drawn (its output quiet for a moment; typed earlier, the line shows
+  // twice), as if the user typed it (a PTY reads \r as Enter, so every line ends
+  // with one). Ctrl-U first clears whatever was half typed at the prompt.
+  const sentInput = useRef<number | null>(null);
+  useEffect(() => {
+    if (status !== 'ready' || !pendingInput || sentInput.current === pendingInput.id) return;
+    const input = pendingInput;
+    // A key for what runs now (Ctrl-C to stop a script): sent as it is, at once.
+    if (input.raw) {
+      sentInput.current = input.id;
+      sendInput(input.text);
+      onPendingInputSent?.(input.id);
+      return;
+    }
+    const since = Date.now();
+    const timer = setInterval(() => {
+      const t = Date.now();
+      const settled = lastOutputAt.current > 0 ? t - lastOutputAt.current >= PROMPT_QUIET_MS : t - since >= NO_OUTPUT_WAIT_MS;
+      if (!settled && t - since < PROMPT_WAIT_MAX_MS) return;
+      clearInterval(timer);
+      if (sentInput.current === input.id) return;
+      sentInput.current = input.id;
+      sendInput('\x15' + input.text.replace(/\r?\n/g, '\r') + '\r');
+      termRef.current?.scrollToBottom();
+      termRef.current?.focus();
+      onPendingInputSent?.(input.id);
+    }, 100);
+    return () => clearInterval(timer);
+  }, [status, pendingInput, sendInput, onPendingInputSent]);
+
   // ESC is a real terminal key (vim/less/etc.), but this terminal lives INSIDE the
   // fullscreen split whose useFullscreen() registers a document-level ESC listener
   // that closes the split. xterm sends ESC to the shell during its own keydown on
@@ -406,6 +484,11 @@ export const SessionTerminalPane = forwardRef<TerminalPaneHandle, SessionTermina
           }}
         >
           <div className="session-terminal-xterm" ref={containerRef} />
+          {!printed && (status === 'idle' || status === 'connecting' || (status === 'ready' && !quietReady)) && (
+            <div className="session-terminal-starting" data-testid="session-terminal-starting" aria-live="polite">
+              {pendingInput && !pendingInput.raw ? 'Starting the terminal… the script runs once its prompt shows.' : 'Starting the terminal…'}
+            </div>
+          )}
           {anchor && onAddToChat && (
             <div
               className="session-terminal-selection-pop"

@@ -365,7 +365,8 @@ export class MockDaemon {
       case 'turns.configure': return this.cmdTurns(ws, id, cmd)
       // 'workspace-v1': the REAL core (git worktrees and plugin providers run for real).
       case 'workspace.configure': case 'workspace.detect': case 'workspace.create': case 'workspace.job':
-      case 'workspace.status': case 'workspace.repos': case 'workspace.remove': return this.cmdWorkspace(ws, id, cmd)
+      case 'workspace.status': case 'workspace.repos': case 'workspace.remove':
+      case 'workspace.scriptsFile': case 'workspace.runScript': return this.cmdWorkspace(ws, id, cmd)
       // ── ACP command family: forwarded to the REAL createAcpDaemon module
       //    (same code the standalone daemon embeds) — real workers, mock agent.
       case 'acpStart': {

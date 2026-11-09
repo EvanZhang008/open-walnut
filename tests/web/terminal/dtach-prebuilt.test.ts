@@ -123,6 +123,14 @@ describe.skipIf(!HOST_PREBUILT)('resolveLocalDtach with a shipped prebuilt', () 
     expect(await resolveLocalDtach()).toEqual({ kind: 'ok', path: LOCAL_BIN, source: 'walnut' });
   });
 
+  it('a cached binary that was deleted since is installed again, never handed out missing', async () => {
+    shipPrebuilt('#!/bin/sh\necho "dtach - version 0.9, prebuilt"\n');
+    expect(await resolveLocalDtach()).toMatchObject({ kind: 'ok', path: LOCAL_BIN });
+    fs.rmSync(path.dirname(LOCAL_BIN), { recursive: true, force: true });
+    expect(await resolveLocalDtach()).toEqual({ kind: 'ok', path: LOCAL_BIN, source: 'prebuilt' });
+    expect(fs.existsSync(LOCAL_BIN)).toBe(true);
+  });
+
   it('needs no compiler (the case it exists for)', async () => {
     shipPrebuilt('#!/bin/sh\necho "dtach - version 0.9, prebuilt"\n');
     expect(await resolveLocalDtach()).toMatchObject({ kind: 'ok', source: 'prebuilt' });

@@ -775,6 +775,13 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // providers and removes folders on this host. Optional: without it a task
   // asking for an isolated workspace is told the host's daemon needs an update.
   'workspace-v1',
+  // 'workspace-scripts-v1': project scripts (core/workspaces/scripts.ts, in workspace-core.ts).
+  // `workspace.scriptsFile {dir}` reads a repository's walnut.json at the git top
+  // of dir; `workspace.runScript` runs a setup or teardown line in the user's login shell, as a
+  // `workspace.job`, only inside a workspace root (the worktrees folder, a plugin region). Both
+  // twins (the core is text-injected), NOT sidecar-gated, not bridge-reachable. Optional:
+  // without it a new workspace skips its setup script and says the daemon needs an update.
+  'workspace-scripts-v1',
   // 'journal-v2' (offline-journal-core.ts, docs/plan/walnut-replica-servers-impl.md section 5):
   // the journal of each Walnut is append-only NDJSON in the host's one journal root
   // (~/.open-walnut/tmp for the host's own daemon, kept across reboots), under a per-home lock, with op ids, revs and actors; v1 journals are moved in

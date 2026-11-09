@@ -270,7 +270,7 @@ test('git worktree: each task gets its own, the session runs in it, a clean one 
   await expect(page.locator('.task-kebab-menu').getByTestId('workspace-menu-row')).toContainText('Kept')
   await page.locator('.task-kebab-menu').getByTestId('workspace-menu-row').click()
   const flyout2 = page.getByTestId('workspace-flyout')
-  await expect(flyout2.getByTestId('workspace-kept-reason')).toContainText(kept.kept_reason!)
+  await expect(flyout2.getByTestId('workspace-kept-reason')).toContainText(/has \d+ uncommitted change/)
   await expect(flyout2.getByTestId('workspace-remove')).toBeVisible()
   await shot(page, 'flyout-kept', flyout2)
   await page.screenshot({ path: path.join(SHOTS, `${proj}-board-after-completion.png`) })

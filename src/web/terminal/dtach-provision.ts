@@ -166,15 +166,27 @@ function unwrap(r: DtachResolution, host?: string): string {
 
 // ---- LOCAL ------------------------------------------------------------------
 
-/** Resolve dtach locally. `fresh` skips a still-warm cached failure. */
-export function resolveLocalDtach(opts: { fresh?: boolean } = {}): Promise<DtachResolution> {
-  return cached('', Boolean(opts.fresh), async () => {
+function resolveLocalCached(fresh: boolean): Promise<DtachResolution> {
+  return cached('', fresh, async () => {
     try {
       return await provisionLocal()
     } catch (err) {
       return { kind: 'build_failed', stderr: err instanceof Error ? err.message : String(err), os: LOCAL_OS }
     }
   })
+}
+
+/**
+ * Resolve dtach locally. `fresh` skips a still-warm cached failure. A found
+ * binary that went away since (something emptied <home>/tmp) is found or built
+ * again, never handed to a spawn that fails with ENOENT.
+ */
+export async function resolveLocalDtach(opts: { fresh?: boolean } = {}): Promise<DtachResolution> {
+  const r = await resolveLocalCached(Boolean(opts.fresh))
+  if (r.kind !== 'ok' || (await fs.access(r.path, fsConstants.X_OK).then(() => true, () => false))) return r
+  log.web.warn('dtach went away after it was found (local): finding it again', { path: r.path })
+  invalidateDtachCache('')
+  return resolveLocalCached(Boolean(opts.fresh))
 }
 
 /** Local dtach path, or a DtachProvisionError when none can be had. */

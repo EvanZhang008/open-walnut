@@ -18,7 +18,7 @@
  * on a button blurs the textarea even though the button never takes focus.
  */
 
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type RefObject } from 'react';
 import { ICON_PIN, tierIcon } from '@/components/common/Icons';
 import type { DraftDecisionChip } from './draft-decisions';
 import type { DraftMenuCloseReason } from './DraftTaskMenu';
@@ -250,8 +250,7 @@ export function DraftDecisionChips({ chips, menu }: { chips: readonly DraftDecis
             aria-label={c.ariaLabel}
             aria-haspopup="dialog"
             aria-expanded={active}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={(e) => menu.openFrom(e.currentTarget, e)}
+            {...menuTriggerProps(menu)}
           >
             {c.key && <><span className="draft-decision-key">{c.key}</span>{' '}</>}
             <ChipGlyph chip={c} />
@@ -302,10 +301,43 @@ export function DraftMoreButton({ menu, moreRef, priorityVisible, withProject = 
       aria-haspopup="dialog"
       aria-expanded={active}
       title={title}
-      onMouseDown={(e) => e.preventDefault()}
-      onClick={(e) => menu.openFrom(e.currentTarget, e)}
+      {...menuTriggerProps(menu)}
     >
       More
     </button>
   );
+}
+
+/**
+ * A trigger of the draft menu opens it on the mouse PRESS, not the click: the press can
+ * commit something that reflows the row (a folder typed into the picker, closed by this
+ * very press, adds the Project chip), so the release lands beside the moved button and no
+ * click reaches it (2026-11-05: More did nothing on the first click in WebKit). The click
+ * that follows the press is ignored; a keyboard click (no press) still opens it. The press
+ * never takes focus, so the composer keeps its caret.
+ */
+const pressedAt = new WeakMap<HTMLElement, number>();
+const PRESS_CLICK_MS = 1_000;
+export function menuTriggerProps(menu: Pick<DraftDecisionMenu, 'openFrom'>): {
+  onMouseDown: (e: ReactMouseEvent<HTMLElement>) => void;
+  onClick: (e: ReactMouseEvent<HTMLElement>) => void;
+} {
+  return {
+    onMouseDown: (e) => {
+      e.preventDefault();
+      if (e.button !== 0) return;
+      const el = e.currentTarget;
+      pressedAt.set(el, Date.now());
+      // After the press has reached every listener: a picker's outside closer on the document
+      // must see it first (an open committed inside this event would re-render it and drop
+      // that listener before the press got there).
+      setTimeout(() => { if (el.isConnected) menu.openFrom(el, { detail: 1 }); }, 0);
+    },
+    onClick: (e) => {
+      const at = pressedAt.get(e.currentTarget);
+      pressedAt.delete(e.currentTarget);
+      if (at !== undefined && Date.now() - at < PRESS_CLICK_MS) return;
+      menu.openFrom(e.currentTarget, e);
+    },
+  };
 }

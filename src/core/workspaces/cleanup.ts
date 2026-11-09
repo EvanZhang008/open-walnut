@@ -21,7 +21,11 @@ import {
   beginRemoval, drive, errText, launchPending, madeHere, managerDeps, pollJob, probeParams, probeWorkspace, stamp,
   START_RPC_MS,
 } from './manager.js'
+import { resumeScriptRuns, scriptRunning, teardownBeforeCleanup } from './scripts.js'
 import { log } from '../../logging/index.js'
+
+/** The longest a deleted task's cleanup waits for a script running in its workspace (the scripts' own cap). */
+const SCRIPT_WAIT_MS = 61 * 60_000
 
 /** Grace after a completion: the turn that completed the task is still ending, its sessions are stopping. */
 const COMPLETE_GRACE_MS = 4_000
@@ -68,11 +72,23 @@ async function completionCheck(taskId: string, grace: boolean): Promise<void> {
     log.web.info('workspace cleanup waits: a session of the task is still alive in it', { taskId, root: first.workspace.root })
     return
   }
-  const task = await deps.getTask(taskId)
-  const ws = task?.workspace
+  let task = await deps.getTask(taskId)
+  let ws = task?.workspace
   if (!task || task.phase !== 'COMPLETE' || !ws || !isLaunchReady(ws) || ws.root !== first.workspace.root) return
+  // A setup still running finishes first (its end runs this check again); then the
+  // task's teardown script, once per completion (scripts.ts).
+  if (scriptRunning(ws) === 'setup') {
+    log.web.info('workspace cleanup waits: its setup script is still running', { taskId, root: ws.root })
+    return
+  }
+  if (!(await teardownBeforeCleanup(task, ws))) return
+  task = await deps.getTask(taskId)
+  ws = task?.workspace
+  if (!task || task.phase !== 'COMPLETE' || !ws || !isLaunchReady(ws) || ws.root !== first.workspace.root) return
+  if (await deps.hasLiveSession(taskId)) return
   // A kept (or reopened) task is never flipped to kept by a check it outlived.
-  const keep = (reason: string) => deps.write(task.id, (cur, row) => (cur && isLaunchReady(cur) && cur.root === ws.root && row.phase === 'COMPLETE'
+  const root = ws.root
+  const keep = (reason: string) => deps.write(taskId, (cur, row) => (cur && isLaunchReady(cur) && cur.root === root && row.phase === 'COMPLETE'
     ? stamp(cur, { state: 'kept', kept_reason: reason })
     : null))
   let probe: WorkspaceProbeSummary
@@ -85,7 +101,7 @@ async function completionCheck(taskId: string, grace: boolean): Promise<void> {
   if (decision.action !== 'remove') return void await keep(decision.reason ?? 'it could not be checked')
   if (await deps.hasLiveSession(taskId)) return
   const started = await beginRemoval(task, ws, 'complete', (row) => row.phase === 'COMPLETE')
-  if (!started) log.web.info('workspace cleanup skipped: the task changed meanwhile', { taskId, root: ws.root })
+  if (!started) log.web.info('workspace cleanup skipped: the task changed meanwhile', { taskId, root })
 }
 
 /** A task was deleted: the same rule; the task row is gone, so a kept workspace becomes a notification. */
@@ -108,6 +124,13 @@ export async function cleanupForDeletedTask(task: Pick<Task, 'id' | 'title'>, ws
     severity: 'warning', title: `Workspace kept: ${task.title}`, body,
     dedupKey: `workspace-kept:${task.id}:${ws.root ?? ''}`,
   }).catch((err) => log.web.warn('workspace notification failed', { taskId: task.id, error: errText(err) }))
+  // A setup or teardown still running in it ends first: its folder must not go from under it.
+  const running = scriptRunning(ws)
+  const runningJob = running ? ws[running]?.job_id : undefined
+  if (runningJob) {
+    log.web.info('workspace of a deleted task waits for its script to end', { taskId: task.id, root: ws.root, script: running })
+    await pollJob(ws.host, runningJob, SCRIPT_WAIT_MS, async () => {})
+  }
   let probe: WorkspaceProbeSummary
   try {
     probe = await probeWorkspace(ws)
@@ -144,6 +167,8 @@ export async function resumeWorkspaces(): Promise<void> {
     const ws = task.workspace
     if (!ws || !(await madeHere(ws))) continue
     if (ws.state === 'creating' || ws.state === 'removing') void drive(task.id)
+    // A setup or teardown the restart interrupted: its end launches or cleans up.
+    else if (scriptRunning(ws)) void resumeScriptRuns(task)
     else if (task.phase === 'COMPLETE' && ws.state === 'ready') void onTaskCompleted(task.id, { grace: false })
     else if (isLaunchReady(ws) && ws.pending_start && !ws.launch_error) void launchPending(task.id)
   }

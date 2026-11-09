@@ -606,3 +606,172 @@ describe('plugin providers', () => {
     expect(String(job.error)).toMatch(/command not found/)
   })
 })
+
+describe('project scripts (workspace-scripts-v1)', () => {
+  const core = makeCore({ env: { ...process.env, SHELL: '/bin/sh', HOME: path.join(ROOT, 'home'), WALNUT_WORKTREES_ROOT: path.join(ROOT, 'home', '.open-walnut-worktrees') } })
+  let root = ''
+  beforeAll(async () => {
+    const repo = makeRepo('scripted')
+    fs.writeFileSync(path.join(repo, 'walnut.json'), JSON.stringify({ scripts: [{ name: 'Install', command: 'echo hi', setup: true }] }))
+    sh(['add', '.'], repo)
+    sh(['commit', '-qm', 'scripts'], repo)
+    const job = await createGit(core, path.join(repo, 'pkg'), 'scripted')
+    expect(job.state).toBe('done')
+    root = String((job.result as Record<string, unknown>).root)
+  })
+
+  async function runIt(extra: Record<string, unknown>, ms?: number) {
+    const jobId = jid()
+    const started = await core.handle('workspace.runScript', { provider: 'git-worktree', jobId, root, ...extra })
+    expect(started.ok, JSON.stringify(started)).toBe(true)
+    return waitJob(core, jobId, ms)
+  }
+
+  it('reads walnut.json at the git top of a folder (a sub-folder, the worktree), else none', async () => {
+    const r = await core.handle('workspace.scriptsFile', { dir: path.join(root, 'pkg') }) as Record<string, any>
+    expect(r).toMatchObject({ ok: true, dir: root, file: { name: 'walnut.json', path: path.join(root, 'walnut.json') } })
+    expect(JSON.parse(r.file.content).scripts[0].command).toBe('echo hi')
+    const other = makeRepo('othername')
+    fs.writeFileSync(path.join(other, 'scripts.json'), '{"scripts":[]}')
+    expect(await core.handle('workspace.scriptsFile', { dir: other })).toMatchObject({ ok: true, dir: other, file: null })
+    expect(await core.handle('workspace.scriptsFile', { dir: makeRepo('none') })).toMatchObject({ ok: true, file: null })
+    const big = makeRepo('big')
+    fs.writeFileSync(path.join(big, 'walnut.json'), ' '.repeat(70 * 1024))
+    expect(await core.handle('workspace.scriptsFile', { dir: big })).toMatchObject({ ok: true, file: { name: 'walnut.json', error: 'larger than 64 KB' } })
+    expect((await core.handle('workspace.scriptsFile', { dir: 'relative' })).ok).toBe(false)
+    expect(await core.handle('workspace.scriptsFile', { dir: path.join(ROOT, 'missing') })).toMatchObject({ ok: false, code: 'bad_anchor' })
+  })
+
+  it('names the repository (the same for the checkout and its worktrees) and reads a committed version with ref', async () => {
+    const repo = path.join(ROOT, 'repos', 'scripted')
+    const inWs = await core.handle('workspace.scriptsFile', { dir: root }) as Record<string, any>
+    const inRepo = await core.handle('workspace.scriptsFile', { dir: repo }) as Record<string, any>
+    expect(inWs.repo).toBeTruthy()
+    expect(inWs.repo).toBe(inRepo.repo)
+    // An edit not committed: the working copy shows it, the committed version does not.
+    fs.writeFileSync(path.join(repo, 'walnut.json'), JSON.stringify({ scripts: [{ name: 'Install', command: 'echo edited', setup: true }] }))
+    try {
+      expect((await core.handle('workspace.scriptsFile', { dir: repo }) as Record<string, any>).file.content).toContain('echo edited')
+      const committed = await core.handle('workspace.scriptsFile', { dir: repo, ref: 'HEAD' }) as Record<string, any>
+      expect(committed.file).toMatchObject({ name: 'walnut.json', ref: 'HEAD' })
+      expect(committed.file.content).toContain('echo hi')
+      expect((await core.handle('workspace.scriptsFile', { dir: makeRepo('nofile'), ref: 'HEAD' }) as Record<string, any>).file).toBeNull()
+      expect((await core.handle('workspace.scriptsFile', { dir: repo, ref: '--output=/tmp/x' })).ok).toBe(false)
+    } finally {
+      sh(['checkout', '--', 'walnut.json'], repo)
+    }
+  })
+
+  it('runs a line in the workspace with the WALNUT_ variables, and reports its exit, output and last line', async () => {
+    const job = await runIt({
+      command: 'printf "one\\n"; echo "two in $(pwd) for $WALNUT_TASK_ID"; echo oops >&2; test -z "$GIT_DIR" && echo clean-env',
+      cwd: path.join(root, 'pkg'), env: { WALNUT_TASK_ID: 't1', NOT_WALNUT: 'x', WALNUT_BAD: 7 }, timeoutSec: 30,
+    })
+    expect(job).toMatchObject({ kind: 'script', state: 'done' })
+    const r = job.result as Record<string, unknown>
+    expect(r.exitCode).toBe(0)
+    expect(String(r.output)).toContain(`two in ${path.join(root, 'pkg')} for t1`)
+    expect(String(r.output)).toContain('oops')
+    // The inherited GIT_DIR is dropped, as for git.
+    expect(String(r.output)).toContain('clean-env')
+    // Progress is the last line one of the two pipes delivered.
+    expect(['clean-env', 'oops']).toContain(job.progress)
+    const env = await runIt({ command: 'echo "[$NOT_WALNUT][$WALNUT_BAD]"', env: { NOT_WALNUT: 'x', WALNUT_BAD: 7 } })
+    expect(String((env.result as Record<string, unknown>).output).trim()).toBe('[][]')
+  })
+
+  it('a failing line is a finished job with its exit code; the output tail is bounded and plain', async () => {
+    const fail = await runIt({ command: 'echo nope; exit 3' })
+    expect(fail.state).toBe('done')
+    expect((fail.result as Record<string, unknown>).exitCode).toBe(3)
+    const loud = await runIt({ command: 'i=0; while [ $i -lt 3000 ]; do printf "\\033[32mline %s\\033[0m\\n" $i; i=$((i+1)); done' })
+    const out = String((loud.result as Record<string, unknown>).output)
+    expect(out.length).toBeLessThanOrEqual(8192)
+    expect(out).not.toContain('\u001b')
+    expect(out.trim().endsWith('line 2999')).toBe(true)
+  })
+
+  it('a deadline kills the whole process group', async () => {
+    const pidFile = path.join(ROOT, 'child.pid')
+    const t0 = Date.now()
+    const job = await runIt({ command: `sleep 30 & echo $! > ${pidFile}; wait`, timeoutSec: 1 }, 15_000)
+    expect(Date.now() - t0).toBeLessThan(10_000)
+    expect(job.result).toMatchObject({ timedOut: true })
+    const child = Number(fs.readFileSync(pidFile, 'utf8').trim())
+    expect(child).toBeGreaterThan(1)
+    let alive = true
+    for (let i = 0; i < 40 && alive; i++) {
+      try { process.kill(child, 0); await new Promise((r) => setTimeout(r, 100)) } catch { alive = false }
+    }
+    expect(alive).toBe(false)
+  })
+
+  async function gone(pid: number): Promise<boolean> {
+    for (let i = 0; i < 60; i++) {
+      try { process.kill(pid, 0); await new Promise((r) => setTimeout(r, 100)) } catch { return true }
+    }
+    return false
+  }
+
+  it('a deadline kills a child that ignores TERM too, after its shell left', async () => {
+    const pidFile = path.join(ROOT, 'stubborn.pid')
+    // The shell exits on TERM; its child traps TERM and lives on until the SIGKILL.
+    const job = await runIt({ command: `sh -c 'trap "" TERM; echo $$ > ${pidFile}; while :; do sleep 1; done' & wait`, timeoutSec: 1 }, 20_000)
+    expect(job.result).toMatchObject({ timedOut: true })
+    const child = Number(fs.readFileSync(pidFile, 'utf8').trim())
+    expect(child).toBeGreaterThan(1)
+    expect(await gone(child)).toBe(true)
+  })
+
+  it('a run that asks for it (a teardown) ends what it left running', async () => {
+    const pidFile = path.join(ROOT, 'left.pid')
+    const job = await runIt({ command: `sleep 30 & echo $! > ${pidFile}; echo done`, endGroup: true }, 15_000)
+    expect(job.state).toBe('done')
+    expect(await gone(Number(fs.readFileSync(pidFile, 'utf8').trim()))).toBe(true)
+  })
+
+  it('a background process holding the pipes does not pin the run', async () => {
+    const t0 = Date.now()
+    const job = await runIt({ command: 'sleep 20 & echo started' }, 15_000)
+    expect(job.state).toBe('done')
+    expect(Date.now() - t0).toBeLessThan(8_000)
+  })
+
+  it('runs only inside a workspace root, never in the repository or elsewhere', async () => {
+    const repo = path.join(ROOT, 'repos', 'scripted')
+    // A folder that exists but is outside every place a workspace may live.
+    const outside = path.join(ROOT, 'outside-ws')
+    fs.mkdirSync(outside, { recursive: true })
+    for (const bad of [repo, outside, path.join(ROOT, 'home'), path.join(ROOT, 'home', '.open-walnut-worktrees'), '/usr', path.join(ROOT, 'home', '.open-walnut-worktrees', 'nope')]) {
+      const r = await core.handle('workspace.runScript', { provider: 'git-worktree', jobId: jid(), root: bad, command: 'touch /tmp/should-not-exist' })
+      expect(r.ok, bad).toBe(false)
+    }
+    expect((await core.handle('workspace.runScript', { provider: 'git-worktree', jobId: jid(), root, command: '  ' })).ok).toBe(false)
+    expect((await core.handle('workspace.runScript', { provider: 'git-worktree', root, command: 'x' })).ok).toBe(false)
+    // A cwd outside the root falls back to the root.
+    const job = await runIt({ command: 'pwd', cwd: repo })
+    expect(String((job.result as Record<string, unknown>).output).trim()).toBe(root)
+  })
+
+  it('one script at a time per workspace', async () => {
+    const a = jid()
+    expect((await core.handle('workspace.runScript', { provider: 'git-worktree', jobId: a, root, command: 'sleep 1' })).ok).toBe(true)
+    const b = await core.handle('workspace.runScript', { provider: 'git-worktree', jobId: jid(), root, command: 'true' })
+    expect(b).toMatchObject({ ok: false, code: 'busy' })
+    // Nor is the workspace removed while it runs.
+    const rm = await core.handle('workspace.remove', { provider: 'git-worktree', jobId: jid(), root, deleteBranch: 'never' })
+    expect(rm).toMatchObject({ ok: false, code: 'busy' })
+    await waitJob(core, a)
+  })
+
+  it('a removal running in a workspace holds a script there', async () => {
+    const repo = makeRepo('removing')
+    const made = await createGit(core, repo, 'removing')
+    const wsRoot = String((made.result as Record<string, unknown>).root)
+    const rmJob = jid()
+    expect((await core.handle('workspace.remove', { provider: 'git-worktree', jobId: rmJob, root: wsRoot, deleteBranch: 'never' })).ok).toBe(true)
+    const s = await core.handle('workspace.runScript', { provider: 'git-worktree', jobId: jid(), root: wsRoot, command: 'true' })
+    expect(s).toMatchObject({ ok: false, code: 'busy' })
+    await waitJob(core, rmJob)
+  })
+})

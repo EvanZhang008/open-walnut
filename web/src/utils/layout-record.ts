@@ -29,7 +29,7 @@
  * tests/web/layout-state-on-disk-guard.test.ts holds both lists to the source.
  */
 
-import { isPlaceholderColumnId } from './column-ids';
+import { isPlaceholderColumnId, isWorkspaceWaitColumnId } from './column-ids';
 
 /** A column of a strip (the same shape as pages/sessionColumns.ts's LayoutSlot; utils/ never imports pages/). */
 export interface LayoutSlot {
@@ -175,9 +175,12 @@ export function readColumns(field: LayoutField, stores: LayoutStores = {}): Layo
   return parseSlots(readLayoutField(field, stores));
 }
 
-/** Persist a strip. Placeholders (`draft:`/`pending:`) resolve to nothing after a reload and are left out. */
+/**
+ * Persist a strip. Placeholders (`draft:`/`pending:`) resolve to nothing after a reload and are
+ * left out, except a launch waiting for its workspace, which is keyed by its task.
+ */
 export function writeColumns(field: LayoutField, cols: readonly LayoutSlot[], store: Store | null = local()): void {
-  const persistable = cols.filter((s) => !isPlaceholderColumnId(s.id)).map((s) => ({ id: s.id, locked: s.locked }));
+  const persistable = cols.filter((s) => !isPlaceholderColumnId(s.id) || isWorkspaceWaitColumnId(s.id)).map((s) => ({ id: s.id, locked: s.locked }));
   writeLayoutField(field, persistable.length > 0 ? persistable : null, store);
 }
 

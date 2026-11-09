@@ -56,6 +56,7 @@ import { TriggerPill } from '@/components/routines/TriggerPill';
 import { TaskLimitPill } from './limit-row';
 import { ImportedPill } from '@/components/tasks/ImportedPill';
 import { WorkspacePill } from '@/components/workspaces/WorkspacePill';
+import { waitingStartColumnOf } from '@/components/workspaces/preparing-columns';
 import { TaskTagPills } from '@/components/tasks/TaskTagPills';
 import { SubtaskPill } from './SubtaskPill';
 import { LeaderPill } from './LeaderPill';
@@ -6554,7 +6555,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       return; // don't open/focus while building a selection
     }
     if (selectedIds.size > 0) setSelectedIds(new Set()); // plain click clears selection
-    const sid = resolveTaskSessionId(task);
+    // A start waiting for the task's workspace (its setup failed, say) shows that column first.
+    const sid = waitingStartColumnOf(task) ?? resolveTaskSessionId(task);
     if (sid) onOpenSession?.(sid);
     // Always scroll to position; suppress detail panel (ⓘ button is the only way to open detail)
     onFocusTask?.(task, phoneRowFocusOpts(sid));

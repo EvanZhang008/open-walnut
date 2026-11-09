@@ -304,7 +304,7 @@ export function DraftLaunchBar({
       {/* The "Isolated workspace" body, right above the folder it isolates: nothing
           while off (the switch is in More), so a folder pick never grows the bar.
           A bound draft has no More: its inline toggle shows from the first paint. */}
-      {!isWalnut && !isFork && <DraftWorkspaceRow draftId={draft.id} cwd={draft.cwd} host={draft.host ?? null} boundTaskId={draft.taskId} />}
+      {!isWalnut && !isFork && <DraftWorkspaceRow draftId={draft.id} cwd={draft.cwd} host={draft.host ?? null} boundTaskId={draft.taskId} project={draft.project} />}
 
       {!isWalnut && (
         <div className="draft-launch-pills draft-composer-bar">

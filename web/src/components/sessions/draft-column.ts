@@ -283,6 +283,8 @@ function dirKey(d: { cwd: string; host: string | null }): string {
  *  wedged against the tier/pill rows — so the row now carries a "Quick" key and a
  *  divider (DraftLaunchBar) and reads as its own zone at eight. */
 const QUICK_TOP_BY_COUNT = 4;
+/** The default worktrees folder (workspace-core worktreesRoot): its folders are tasks' isolated workspaces. */
+const WORKSPACES_DIR_PART = '/.open-walnut-worktrees/';
 const QUICK_TOP_BY_RECENT = 4;
 
 /**
@@ -318,6 +320,8 @@ export function quickDirsFor(current?: { cwd: string; host: string | null; hostL
   const now = Date.now();
   const groups = new Map<string, { dir: WorkingDirEntry; count: number; score: number }>();
   for (const d of cached.dirs) {
+    // A task's isolated workspace is that task's own, never a folder to start other work in.
+    if (d.cwd.includes(WORKSPACES_DIR_PART)) continue;
     const name = chipNameKey(d);
     const score = frecencyScore(d.count, d.lastUsed ?? '', now) || 0;
     const g = groups.get(name);

@@ -49,7 +49,7 @@ export interface WorkspaceCoreDeps {
   spawn: (cmd: string, args: string[], opts: Record<string, unknown>) => WorkspaceChild
   fs: {
     promises: {
-      stat(p: string): Promise<{ isDirectory(): boolean; isFile(): boolean }>
+      stat(p: string): Promise<{ isDirectory(): boolean; isFile(): boolean; size?: number }>
       lstat(p: string): Promise<{ isDirectory(): boolean; isSymbolicLink(): boolean }>
       realpath(p: string): Promise<string>
       mkdir(p: string, opts?: { recursive?: boolean; mode?: number }): Promise<unknown>
@@ -58,6 +58,7 @@ export interface WorkspaceCoreDeps {
       readdir(p: string): Promise<string[]>
       readdir(p: string, opts: { withFileTypes: true }): Promise<Array<{ name: string; isDirectory(): boolean; isSymbolicLink(): boolean }>>
       writeFile(p: string, data: string, opts?: { mode?: number }): Promise<void>
+      readFile(p: string, enc: 'utf8'): Promise<string>
       rename(a: string, b: string): Promise<void>
       chmod(p: string, mode: number): Promise<void>
     }
@@ -175,7 +176,7 @@ export interface WorkspaceProbe {
 
 export interface WorkspaceJob {
   id: string
-  kind: 'create' | 'remove'
+  kind: 'create' | 'remove' | 'script'
   provider: string
   state: 'running' | 'done' | 'failed'
   startedAt: number
@@ -210,6 +211,14 @@ export function createWorkspaceCore(deps: WorkspaceCoreDeps) {
   var JOB_TTL_MS = 60 * 60 * 1000
   var MAX_JOBS = 200
   var MAX_RUNNING = 4
+  /** Script runs count apart: a long setup never keeps a workspace from being made or removed. */
+  var MAX_SCRIPTS_RUNNING = 8
+  /** Project scripts: the files read, their cap, a run's output tail and deadlines (seconds). */
+  var SCRIPT_FILES = ['walnut.json']
+  var SCRIPT_FILE_MAX = 64 * 1024
+  var SCRIPT_TAIL = 8192
+  var SCRIPT_DEFAULT_S = 900
+  var SCRIPT_MAX_S = 3600
   var REDIRECT_VARS = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY',
     'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_NAMESPACE', 'GIT_PREFIX']
 
@@ -468,18 +477,20 @@ export function createWorkspaceCore(deps: WorkspaceCoreDeps) {
       for (var i = 0; i < done.length && jobs.size > MAX_JOBS; i++) jobs.delete(done[i][0])
     }
   }
-  function runningCount(): number {
+  function runningCount(scripts: boolean): number {
     var n = 0
-    jobs.forEach((j) => { if (j.state === 'running') n++ })
+    jobs.forEach((j) => { if (j.state === 'running' && (j.kind === 'script') === scripts) n++ })
     return n
   }
-  function startJob(h: string, id: string, kind: 'create' | 'remove', provider: string, busyKey: string,
+  function startJob(h: string, id: string, kind: 'create' | 'remove' | 'script', provider: string, busyKey: string,
     work: (job: WorkspaceJob) => Promise<Record<string, unknown>>): WorkspaceReply {
     pruneJobs()
     var existing = jobs.get(jobKey(h, id))
     if (existing) return { ok: true, jobId: id, state: existing.state, existing: true }
     if (busy.has(busyKey)) return fail('another workspace operation is running for this place', 'busy')
-    if (runningCount() >= MAX_RUNNING) return fail('too many workspace operations are running on this host', 'busy')
+    if (kind === 'script' ? runningCount(true) >= MAX_SCRIPTS_RUNNING : runningCount(false) >= MAX_RUNNING) {
+      return fail('too many workspace operations are running on this host', 'busy')
+    }
     var job: WorkspaceJob = { id: id, kind: kind, provider: provider, state: 'running', startedAt: now() }
     jobs.set(jobKey(h, id), job)
     busy.add(busyKey)
@@ -1186,6 +1197,202 @@ export function createWorkspaceCore(deps: WorkspaceCoreDeps) {
     }
   }
 
+  // ── project scripts ('workspace-scripts-v1') ──
+
+  /**
+   * The repository's scripts file, `walnut.json` at the git top of `dir` (dir
+   * itself outside git). Only read here; the server parses it.
+   */
+  /**
+   * The repository's scripts file at the git top of `dir`, with the repository's
+   * identity (its common git dir, the same for the checkout and every worktree
+   * of it). With `ref`, the file as committed there (what a new worktree made
+   * from it will hold), not the working copy.
+   */
+  async function scriptsFile(args: Record<string, unknown>): Promise<WorkspaceReply> {
+    if (!isAbsPathString(args.dir)) return fail('workspace.scriptsFile: dir must be an absolute path', 'bad_args')
+    var ref = typeof args.ref === 'string' && args.ref ? args.ref : null
+    if (ref !== null && !validRef(ref)) {
+      return fail('workspace.scriptsFile: ref is not a plain git ref', 'bad_args')
+    }
+    var dir = P.resolve(expandHome(String(args.dir)))
+    if (!(await isDir(dir))) return fail('the folder ' + dir + ' does not exist on this host', 'bad_anchor')
+    var top = await git(['rev-parse', '--show-toplevel'], dir)
+    var base = top.ok && top.out ? top.out : dir
+    if (await checkForbidden(base, 'folder')) return { ok: true, dir: base, file: null }
+    // Relative in the checkout itself (".git"), absolute in a worktree.
+    var common = top.ok ? await git(['rev-parse', '--git-common-dir'], base) : null
+    var head: WorkspaceReply = { ok: true, dir: base }
+    if (common && common.ok && common.out) head.repo = await realish(P.resolve(base, common.out))
+    for (var i = 0; i < SCRIPT_FILES.length; i++) {
+      var file = P.join(base, SCRIPT_FILES[i])
+      if (ref !== null) {
+        if (!top.ok) return Object.assign(head, { file: null })
+        var shown = await git(['show', ref + ':' + SCRIPT_FILES[i]], base)
+        if (!shown.ok) continue
+        if (shown.out.length > SCRIPT_FILE_MAX) return Object.assign(head, { file: { name: SCRIPT_FILES[i], path: file, error: 'larger than 64 KB' } })
+        return Object.assign(head, { file: { name: SCRIPT_FILES[i], path: file, content: shown.out, ref: ref } })
+      }
+      var st = await fsp.stat(file).catch(() => null)
+      if (!st || !st.isFile()) continue
+      if (typeof st.size === 'number' && st.size > SCRIPT_FILE_MAX) {
+        return Object.assign(head, { file: { name: SCRIPT_FILES[i], path: file, error: 'larger than 64 KB' } })
+      }
+      var content = await fsp.readFile(file, 'utf8').catch((err: unknown) => { throw coded('could not read ' + file + ': ' + errText(err), 'read_failed') })
+      if (content.length > SCRIPT_FILE_MAX) return Object.assign(head, { file: { name: SCRIPT_FILES[i], path: file, error: 'larger than 64 KB' } })
+      return Object.assign(head, { file: { name: SCRIPT_FILES[i], path: file, content: content } })
+    }
+    return Object.assign(head, { file: null })
+  }
+
+  // eslint-disable-next-line no-control-regex
+  var ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][A-Za-z0-9]|\x1b[=>]/g
+  // eslint-disable-next-line no-control-regex
+  var CTRL_RE = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g
+  function plainText(s: string): string {
+    return s.replace(ANSI_RE, '').replace(CTRL_RE, '')
+  }
+
+  /** The user's login shell runs the line (its profile sets PATH); a shell without POSIX `-c` falls back to sh. */
+  function scriptShell(): string {
+    var login = typeof deps.env.SHELL === 'string' && P.isAbsolute(deps.env.SHELL) ? deps.env.SHELL : '/bin/sh'
+    var name = P.basename(login)
+    return ['sh', 'bash', 'zsh', 'dash', 'ksh', 'mksh'].indexOf(name) >= 0 ? login : '/bin/sh'
+  }
+
+  /** One script run: its own process group, a deadline, the output's tail and its last line as progress. */
+  function spawnScript(command: string, cwd: string, env: Record<string, string>, timeoutMs: number, job: WorkspaceJob, endGroup: boolean): Promise<Record<string, unknown>> {
+    return new Promise((resolve, reject) => {
+      var started = now()
+      var tail = ''
+      var lineBuf = ''
+      var settled = false
+      var timedOut = false
+      var child: WorkspaceChild
+      var killTimer: ReturnType<typeof setTimeout> | null = null
+      var settleTimer: ReturnType<typeof setTimeout> | null = null
+      var exitTimer: ReturnType<typeof setTimeout> | null = null
+      var shell = scriptShell()
+      try {
+        child = deps.spawn(shell, ['-l', '-c', command], {
+          cwd: cwd, env: cleanEnv(env), stdio: ['pipe', 'pipe', 'pipe'], detached: true,
+        })
+      } catch (err) {
+        reject(coded('could not start ' + shell + ': ' + errText(err), 'spawn_failed'))
+        return
+      }
+      function finish(code: number | null, signal: string | null) {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        if (killTimer) clearTimeout(killTimer)
+        if (settleTimer) clearTimeout(settleTimer)
+        if (exitTimer) clearTimeout(exitTimer)
+        // A timed-out run's group is killed even when its shell left on the TERM (a child
+        // may ignore it); a teardown's leftovers go before its folder is removed.
+        if (timedOut) stop('SIGKILL')
+        else if (endGroup) stop('SIGTERM')
+        resolve({
+          exitCode: code, signal: signal, timedOut: timedOut, ms: now() - started, shell: P.basename(shell),
+          output: plainText(tail).slice(-SCRIPT_TAIL),
+        })
+      }
+      function stop(signal: string) {
+        var pid = child.pid
+        if (deps.killGroup && typeof pid === 'number' && pid > 1) {
+          try { deps.killGroup(pid, signal); return } catch { /* the group is gone, or no group: the child itself */ }
+        }
+        // An exited child's kill() signals nothing (Node drops its handle at exit).
+        try { child.kill(signal) } catch { /* already gone */ }
+      }
+      var timer = setTimeout(() => {
+        timedOut = true
+        stop('SIGTERM')
+        killTimer = setTimeout(() => stop('SIGKILL'), 3000)
+        settleTimer = setTimeout(() => finish(null, 'SIGKILL'), 6000)
+      }, timeoutMs)
+      function onData(b: Buffer) {
+        var s = b.toString('utf8')
+        tail = (tail + s).slice(-SCRIPT_TAIL * 2)
+        lineBuf += s
+        var lines = lineBuf.split(/\r?\n|\r/)
+        lineBuf = lines.pop() || ''
+        if (lineBuf.length > LINE_CAP) lineBuf = lineBuf.slice(-LINE_CAP)
+        for (var i = lines.length - 1; i >= 0; i--) {
+          var t = plainText(lines[i]).trim()
+          if (t) { job.progress = t.slice(0, 240); break }
+        }
+      }
+      child.on('error', (err) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        reject(coded(err && err.code === 'ENOENT' ? 'command not found: ' + shell : errText(err), 'spawn_failed'))
+      })
+      if (child.stdout) child.stdout.on('data', onData)
+      if (child.stderr) child.stderr.on('data', onData)
+      // As in run(): a background process the script left holding the pipes must not pin it.
+      child.on('exit', (code, signal) => {
+        if (settled || exitTimer) return
+        exitTimer = setTimeout(() => {
+          try { if (child.stdout && child.stdout.destroy) child.stdout.destroy() } catch { /* gone */ }
+          try { if (child.stderr && child.stderr.destroy) child.stderr.destroy() } catch { /* gone */ }
+          finish(code, signal)
+        }, EXIT_GRACE_MS)
+      })
+      child.on('close', (code, signal) => finish(code, signal))
+      if (child.stdin) {
+        // No input: a script that prompts reads end-of-file instead of hanging until its deadline.
+        child.stdin.on('error', () => { /* closed early: harmless */ })
+        child.stdin.end('')
+      }
+    })
+  }
+
+  /**
+   * Validate a script run and start it as a job. It only ever runs inside a
+   * workspace root: the git worktrees folder, or a region of its plugin provider.
+   */
+  async function runScript(cmd: Record<string, unknown>, spec: WorkspaceProviderSpec | null, h: string): Promise<WorkspaceReply> {
+    if (typeof cmd.jobId !== 'string' || !/^[A-Za-z0-9_-]{6,80}$/.test(cmd.jobId)) return fail('workspace.runScript: jobId is required', 'bad_args')
+    if (!isAbsPathString(cmd.root)) return fail('workspace.runScript: root must be an absolute path', 'bad_args')
+    if (typeof cmd.command !== 'string' || !cmd.command.trim() || cmd.command.length > 20000 || cmd.command.indexOf('\0') >= 0) {
+      return fail('workspace.runScript: command must be a non-empty line', 'bad_args')
+    }
+    var root = P.resolve(expandHome(String(cmd.root)))
+    var forb = await checkForbidden(root, 'workspace root')
+    if (forb) return fail(forb, 'forbidden_path')
+    if (!(await isDir(root))) return fail('the workspace folder ' + root + ' does not exist on this host', 'bad_root')
+    var rootReal = await realish(root)
+    var regions = spec ? await pluginRegions(spec) : [await realish(worktreesRoot())]
+    if (!regions.some((reg) => isInside(rootReal, reg) && rootReal !== reg)) {
+      return fail('scripts run only inside a workspace; ' + root + ' is outside the folders a workspace may live in', 'forbidden_path')
+    }
+    var cwd = root
+    if (cmd.cwd !== undefined) {
+      if (!isAbsPathString(cmd.cwd)) return fail('workspace.runScript: cwd must be an absolute path', 'bad_args')
+      var c = P.resolve(expandHome(String(cmd.cwd)))
+      if (isInside(await realish(c), rootReal) && (await isDir(c))) cwd = c
+    }
+    var env: Record<string, string> = {}
+    var rawEnv = cmd.env && typeof cmd.env === 'object' ? cmd.env as Record<string, unknown> : {}
+    var keys = Object.keys(rawEnv).slice(0, 16)
+    for (var i = 0; i < keys.length; i++) {
+      var v = rawEnv[keys[i]]
+      if (/^WALNUT_[A-Z0-9_]{1,40}$/.test(keys[i]) && typeof v === 'string' && v.length <= 4096 && v.indexOf('\0') < 0) env[keys[i]] = v
+    }
+    var secs = typeof cmd.timeoutSec === 'number' && Number.isFinite(cmd.timeoutSec) && cmd.timeoutSec > 0
+      ? Math.min(SCRIPT_MAX_S, Math.floor(cmd.timeoutSec)) : SCRIPT_DEFAULT_S
+    var command = String(cmd.command)
+    var endGroup = cmd.endGroup === true
+    var provider = spec ? spec.id : GIT_ID
+    // The removal's key: a script and a removal of one workspace never run at once.
+    return startJob(h, cmd.jobId, 'script', provider, provider + '|' + root, (job) => {
+      job.progress = 'Starting'
+      return spawnScript(command, cwd, env, secs * 1000, job, endGroup)
+    })
+  }
+
   // ── detect ──
 
   async function detect(args: Record<string, unknown>, h: string): Promise<WorkspaceReply> {
@@ -1234,6 +1441,7 @@ export function createWorkspaceCore(deps: WorkspaceCoreDeps) {
     try {
       if (name === 'workspace.configure') return await configure(cmd.config, scope)
       if (name === 'workspace.detect') return await detect(cmd, scope)
+      if (name === 'workspace.scriptsFile') return await scriptsFile(cmd)
       if (name === 'workspace.job') {
         pruneJobs()
         var j = typeof cmd.jobId === 'string' ? jobs.get(jobKey(scope, cmd.jobId)) : undefined
@@ -1258,6 +1466,7 @@ export function createWorkspaceCore(deps: WorkspaceCoreDeps) {
         var s = spec
         return startJob(scope, cmd.jobId, 'create', provider, key, (job) => (s ? pluginCreate(s, cmd, job) : gitCreate(cmd, job)))
       }
+      if (name === 'workspace.runScript') return await runScript(cmd, spec, scope)
       if (!isAbsPathString(cmd.root)) return fail(name + ': root must be an absolute path', 'bad_args')
       if (name === 'workspace.status') return { ok: true, probe: await probe(cmd, spec) }
       if (name === 'workspace.repos') {

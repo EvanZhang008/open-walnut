@@ -31,6 +31,8 @@ import {
 } from '@/api/projects';
 import { ProjectTrackingBlock } from './ProjectTrackingBlock';
 import { projectDisplayName } from '@/utils/project-display';
+import { ProjectScriptsDialog, scriptRoles } from '@/components/workspaces/ProjectScriptsDialog';
+import type { ProjectScript } from '@/api/workspaces';
 
 interface ProjectDetailPaneProps {
   /** Never '' — Inbox has no registry row. */
@@ -54,6 +56,7 @@ export function ProjectDetailPane({ project, tasks, onClose, style }: ProjectDet
   const [summaryRefreshing, setSummaryRefreshing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [scriptsOpen, setScriptsOpen] = useState(false);
   const confirm = useConfirm();
   const tasksStore = useTasksContextSafe();
   const { name: entryName, row } = useProjectEntry(project);
@@ -272,6 +275,41 @@ export function ProjectDetailPane({ project, tasks, onClose, style }: ProjectDet
           </div>
         )}
       </div>
+
+      {/* Project scripts (src/core/workspaces/scripts.ts): the saved list here, the
+          editor (with the repository's walnut.json beside it) in a dialog. */}
+      <div className="detail-section" data-testid="project-scripts-section">
+        <div className="detail-section-title">
+          Scripts
+          <button className="detail-summary-refresh project-scripts-edit" onClick={() => setScriptsOpen(true)} title="Add or edit this project's scripts" data-testid="project-scripts-edit">
+            Edit
+          </button>
+        </div>
+        {(() => {
+          const list = Array.isArray(metadata.scripts) ? (metadata.scripts as ProjectScript[]) : [];
+          if (!list.length) {
+            return <p className="detail-memory-text text-muted">No scripts. Add the commands this project's sessions run (tests, a dev server, a setup for new workspaces).</p>;
+          }
+          return (
+            <div className="project-scripts-mini">
+              {list.map((sc) => (
+                <div key={sc.id} className="project-scripts-mini-row" title={sc.command}>
+                  <span className="project-scripts-name">{sc.name}</span>
+                  {scriptRoles(sc).map((r) => <span key={r} className="project-scripts-role">{r}</span>)}
+                  <code className="project-scripts-command">{sc.command}</code>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
+      </div>
+      {scriptsOpen && (
+        <ProjectScriptsDialog
+          project={displayName}
+          onClose={() => setScriptsOpen(false)}
+          onSaved={(scripts) => setMetadata((m) => ({ ...m, scripts }))}
+        />
+      )}
 
       {/* Task statistics */}
       <div className="detail-section">

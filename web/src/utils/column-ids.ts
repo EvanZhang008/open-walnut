@@ -35,3 +35,14 @@ export function isPendingColumnId(id: string): boolean {
 export function isPlaceholderColumnId(id: string): boolean {
   return isDraftColumnId(id) || isPendingColumnId(id);
 }
+
+/**
+ * A launch waiting for its task's isolated workspace (and its setup script):
+ * `pending:ws-<taskId>`. Keyed by the task, so unlike the other placeholders it
+ * means the same thing after a reload, and the strip keeps it.
+ */
+export const WORKSPACE_WAIT_COL_PREFIX = `${PENDING_COL_PREFIX}ws-`;
+
+export function isWorkspaceWaitColumnId(id: string): boolean {
+  return id.startsWith(WORKSPACE_WAIT_COL_PREFIX);
+}

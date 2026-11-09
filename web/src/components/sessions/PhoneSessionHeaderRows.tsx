@@ -1,7 +1,7 @@
 /**
  * The session header's row-1 actions as kebab rows, for the phone (C64): the
  * panel's own header is hidden there, so Changed, Files, Board, Terminal,
- * Plan and Close are reached from the top bar's kebab. Each row calls the same
+ * Scripts, Plan and Close are reached from the top bar's kebab. Each row calls the same
  * handler as its header chip. Fork, Locate and Open in new tab are left out
  * on a phone (N12): a new tab is meaningless there, Locate is what Back does,
  * and Fork drew a greyed row with no reason. A disabled row says why.
@@ -17,6 +17,8 @@ export interface PhoneSessionHeaderRowsProps {
   onToggleView: (view: SessionSplitView) => void;
   board: 'live' | 'waiting' | 'none';
   terminal: boolean;
+  /** Opens the session's Scripts menu (project scripts, run in the terminal). */
+  onScripts?: () => void;
   plan: boolean;
   onPlan: () => void;
   onCloseSession?: () => void;
@@ -57,6 +59,7 @@ export function PhoneSessionHeaderRows(p: PhoneSessionHeaderRowsProps) {
       {p.terminal && (
         <Row label="Terminal" active={p.activeView === 'terminal'} onClick={view('terminal')} testId="phone-row-terminal" />
       )}
+      {p.onScripts && <Row label="Scripts" onClick={() => { p.close(); p.onScripts?.(); }} testId="phone-row-scripts" />}
       {/* A lead's row only (useBoardTab), after the rows every session has, as on the header. */}
       {p.board !== 'none' && (
         <Row label="Board" active={p.activeView === 'board'} disabled={p.board === 'waiting'} onClick={view('board')} testId="phone-row-board"

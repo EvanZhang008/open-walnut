@@ -96,8 +96,9 @@
   line-height: 1.5;
   cursor: pointer;
 }
-.draft-workspace-provider:hover { border-color: var(--accent); color: var(--accent); }
-.draft-workspace-provider.is-picked { border-color: var(--accent); color: var(--accent); background: var(--accent-subtle); }
+/* Hover is a hint, the pick is the state: they must not look alike. */
+.draft-workspace-provider:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.draft-workspace-provider.is-picked { border-color: var(--accent); color: var(--accent); background: var(--accent-subtle); font-weight: 600; }
 .draft-workspace-provider-meta { color: var(--fg-muted); }
 .draft-workspace-field {
   display: inline-flex;
@@ -135,10 +136,12 @@
   white-space: nowrap;
 }
 .workspace-pill-glyph { font-size: 10px; opacity: 0.8; }
-.workspace-pill-ok { color: var(--accent); }
-.workspace-pill-busy { color: var(--fg-muted); }
-.workspace-pill-warn { color: var(--color-warning, #b26a00); }
-.workspace-pill-error { color: var(--color-error, #ff3b30); }
+.workspace-pill-text.is-quiet { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+/* Two classes: the shared .todo-item-due-pill (globals.css, loaded later) would grey them out. */
+.workspace-pill.workspace-pill-ok { color: var(--accent); }
+.workspace-pill.workspace-pill-busy { color: var(--fg-muted); }
+.workspace-pill.workspace-pill-warn { color: var(--color-warning, #b26a00); }
+.workspace-pill.workspace-pill-error { color: var(--color-error, #ff3b30); }
 .workspace-pill-spin {
   width: 8px;
   height: 8px;
@@ -152,7 +155,13 @@
 @media (prefers-reduced-motion: reduce) { .workspace-pill-spin { animation: none; } }
 
 /* ── Kebab flyout ── */
-.workspace-flyout { min-width: 260px; max-width: 360px; padding: 6px 0; }
+.workspace-flyout {
+  min-width: 260px;
+  max-width: 360px;
+  padding: 6px 0;
+  /* Opaque (overlay-glass.css), and never taller than the window: its cards scroll. */
+  max-height: calc(100vh - 24px);
+}
 .workspace-flyout-head {
   display: flex;
   align-items: baseline;
@@ -165,6 +174,11 @@
 .workspace-flyout-state.is-failed { color: var(--color-error, #ff3b30); }
 .workspace-flyout-state.is-kept { color: var(--color-warning, #b26a00); }
 .workspace-flyout-state.is-ready { color: var(--accent); }
+.workspace-flyout-state.tone-busy { color: var(--fg-muted); }
+.workspace-flyout-state.tone-warn { color: var(--color-warning, #b26a00); }
+.workspace-flyout-state.tone-error { color: var(--color-error, #ff3b30); }
+.task-kebab-project-current-name.tone-error { color: var(--color-error, #ff3b30); }
+.task-kebab-project-current-name.tone-warn { color: var(--color-warning, #b26a00); }
 .workspace-flyout-note {
   margin: 0 12px 6px;
   font-size: 11px;
@@ -184,7 +198,13 @@
 }
 .workspace-fact-label { color: var(--fg-muted); }
 .workspace-fact-value { color: var(--fg); overflow-wrap: anywhere; user-select: text; }
-.workspace-fact-value.is-mono { font-family: var(--font-mono, ui-monospace, monospace); font-size: 10.5px; }
+.workspace-fact-value.is-mono { font-family: var(--font-mono, ui-monospace, monospace); font-size: 10.5px; overflow-wrap: break-word; }
+/* Breaks only where Breakable put a break (after a slash or a dash): globals.css, loaded later, sets break-all. */
+.workspace-preparing-changed {
+  margin: 10px auto 0; max-width: 460px; font-size: 12.5px; line-height: 1.5; color: var(--fg-secondary); text-align: center; overflow-wrap: anywhere;
+}
+.workspace-preparing-changed code { font-size: 11.5px; }
+.workspace-preparing-panel .workspace-preparing-root { overflow-wrap: break-word; word-break: normal; }
 .workspace-repos { display: flex; flex-wrap: wrap; gap: 3px 4px; }
 .workspace-repo {
   padding: 0 6px;
@@ -205,3 +225,300 @@
 }
 .workspace-preparing-panel .workspace-preparing-progress { color: var(--fg-secondary); }
 .workspace-preparing-panel .workspace-preparing-error { color: var(--color-error, #ff3b30); white-space: pre-wrap; }
+
+/* ── Project scripts: a setup / teardown run (flyout, preparing column) ── */
+.script-run-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 6px 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-secondary, transparent);
+  font-size: 11.5px;
+  line-height: 1.4;
+  min-width: 0;
+  text-align: left;
+}
+/* A narrow column: the info stretches to the column (never wider), the card fits in it. */
+.workspace-preparing-panel .pending-session-body { min-width: 0; }
+.workspace-preparing-panel .pending-session-info { align-self: stretch; min-width: 0; max-width: 100%; }
+.workspace-preparing-panel .pending-session-actions .pending-session-dismiss-btn { margin-top: 0; }
+.workspace-preparing-panel .script-run-card { margin: 12px auto 0; max-width: min(460px, 100%); width: 100%; box-sizing: border-box; }
+.script-run-head { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 6px; row-gap: 2px; min-width: 0; }
+.script-run-role { color: var(--fg-muted); font-size: 10.5px; white-space: nowrap; }
+.script-run-name { font-weight: 600; color: var(--fg); flex: 0 0 auto; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.script-run-status { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; color: var(--fg-muted); white-space: nowrap; max-width: 100%; }
+.script-run-card.is-done .script-run-status { color: var(--color-success, #1f9d55); }
+.script-run-card.is-failed .script-run-status,
+.script-run-card.is-skipped .script-run-status { color: var(--color-error, #ff3b30); white-space: normal; text-align: right; }
+/* A long failure stays on the name's line and wraps there, not alone on a line of its own. */
+.script-run-card.is-failed .script-run-status,
+.script-run-card.is-skipped .script-run-status { flex: 1 1 10em; min-width: 0; justify-content: flex-end; }
+/* Waiting for the user's OK is no failure: amber, not red. */
+.script-run-card[data-untrusted] .script-run-status { color: var(--color-warning, #b7791f); }
+.script-run-reason { color: var(--fg-secondary); font-size: 11px; line-height: 1.4; }
+.script-run-command,
+.script-run-progress {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10.5px;
+  color: var(--fg-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.script-run-progress { color: var(--fg-muted); }
+.script-run-output summary { cursor: pointer; color: var(--fg-muted); font-size: 11px; user-select: none; }
+.script-run-output summary:hover { color: var(--fg); }
+.script-run-output pre {
+  margin: 4px 0 0;
+  max-height: 180px;
+  overflow: auto;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--fg-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.script-run-action {
+  align-self: flex-start;
+  margin-top: 2px;
+  padding: 2px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--fg-secondary);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.script-run-action:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.script-run-action:disabled { opacity: 0.5; cursor: default; }
+.script-run-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.script-run-action.is-primary { border-color: var(--accent); color: var(--accent); }
+
+/* ── Project scripts: the editor dialog ── */
+/* Pinned near the top, not centered: the form opening or closing grows the dialog downward
+   instead of moving its head (centered, the whole dialog jumped by half the change). */
+.app-modal-overlay.project-scripts-overlay { align-items: flex-start; padding-top: min(10vh, 80px); }
+.app-modal.project-scripts-dialog {
+  width: min(600px, calc(100vw - 48px));
+  max-height: calc(100vh - min(10vh, 80px) - 40px);
+  overflow: auto;
+  background: var(--bg-primary, var(--card-bg, #1c1f26));
+}
+/* The title and its close stay in view while a long list scrolls under them. */
+.project-scripts-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  position: sticky; top: -20px; z-index: 2;
+  margin: -20px -22px 0; padding: 20px 22px 8px;
+  background: inherit; border-radius: 12px 12px 0 0;
+}
+.script-output-dialog .script-run-card { margin-top: 10px; }
+.script-output-dialog .script-run-command { white-space: pre-wrap; overflow-wrap: anywhere; text-overflow: clip; }
+.script-output-dialog .script-run-output pre { max-height: min(60vh, 520px); }
+.session-scripts-setup-more { display: block; margin-top: 2px; font-size: 11.5px; color: var(--accent, var(--fg-secondary)); }
+.project-scripts-lede { margin-top: 6px; font-size: 12.5px; color: var(--fg-secondary); line-height: 1.5; }
+.project-scripts-list { margin-top: 14px; display: flex; flex-direction: column; gap: 6px; }
+.project-scripts-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  min-width: 0;
+}
+.project-scripts-row.is-file { border-style: dashed; }
+.project-scripts-row-main { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; min-width: 0; flex: 1 1 auto; }
+.project-scripts-name { font-size: 13px; font-weight: 600; color: var(--fg); }
+.project-scripts-command {
+  flex-basis: 100%;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  color: var(--fg-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-scripts-roles { display: inline-flex; gap: 4px; }
+.project-scripts-role {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-size: 10.5px;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+.project-scripts-row-actions { display: flex; gap: 2px; flex-shrink: 0; }
+.project-scripts-link {
+  padding: 3px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-secondary);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.project-scripts-link:hover:not(:disabled) { background: var(--bg-hover, rgba(127, 127, 127, 0.12)); color: var(--fg); }
+.project-scripts-link.is-danger:hover:not(:disabled) { color: var(--color-error, #ff3b30); }
+.project-scripts-link:disabled { opacity: 0.5; cursor: default; }
+.project-scripts-add {
+  margin-top: 8px;
+  padding: 6px 12px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+}
+.project-scripts-add:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-subtle); }
+.project-scripts-empty { margin-top: 10px; font-size: 12.5px; color: var(--fg-muted); }
+.project-scripts-form {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.project-scripts-form .app-modal-input { margin-top: 4px; }
+.project-scripts-form .app-modal-actions { margin-top: 2px; }
+.project-scripts-field { display: flex; flex-direction: column; font-size: 12px; color: var(--fg-secondary); }
+.project-scripts-textarea { font-family: var(--font-mono, ui-monospace, monospace); font-size: 12.5px; line-height: 1.5; resize: vertical; min-height: 60px; }
+.project-scripts-check { display: flex; align-items: flex-start; gap: 8px; font-size: 12.5px; color: var(--fg); }
+.project-scripts-check input { margin-top: 2px; accent-color: var(--accent); cursor: pointer; }
+.project-scripts-check label { cursor: pointer; }
+.project-scripts-check span { display: flex; flex-direction: column; gap: 1px; }
+.project-scripts-check small { font-size: 11.5px; color: var(--fg-muted); }
+.project-scripts-check.is-nested { margin-left: 22px; margin-top: -4px; }
+.project-scripts-error { margin-top: 8px; font-size: 12px; color: var(--color-error, #ff3b30); overflow-wrap: anywhere; }
+.project-scripts-form .project-scripts-error { margin-top: 0; }
+.project-scripts-file { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
+.project-scripts-file-head { font-size: 12px; font-weight: 600; color: var(--fg-secondary); }
+.project-scripts-file-head code { font-weight: 500; }
+.project-scripts-field-hint { margin-top: 4px; font-size: 11px; color: var(--fg-muted); line-height: 1.4; }
+.project-scripts-field-hint.is-warn { color: var(--color-warning, #b26a00); font-size: 12px; overflow-wrap: anywhere; }
+.project-scripts-note { font-size: 12px; color: var(--fg-muted); line-height: 1.5; overflow-wrap: anywhere; }
+.project-scripts-note.is-warn { color: var(--color-warning, #b26a00); }
+.project-scripts-note code, .project-scripts-file-head code, .session-scripts-empty code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.92em;
+}
+/* The project pane's short list. */
+.project-scripts-mini { display: flex; flex-direction: column; gap: 6px; }
+.project-scripts-mini-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-width: 0; }
+.project-scripts-mini-row .project-scripts-name { font-size: 12.5px; }
+.project-scripts-mini-row .project-scripts-command { font-size: 11px; }
+.project-scripts-edit { font-size: 11px; }
+
+/* ── Project scripts: the session's Scripts menu ── */
+.session-scripts-menu { min-width: 260px; max-width: 380px; }
+.session-scripts-item { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.session-scripts-item-top { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.session-scripts-item-name { font-weight: 500; }
+.session-scripts-result { order: 1; margin-left: auto; font-size: 11px; white-space: nowrap; color: var(--fg-muted); }
+.session-scripts-result.is-passed { color: var(--color-success, #1a7f37); }
+.session-scripts-result.is-failed { color: var(--color-error, #d1242f); }
+.session-scripts-result.is-stopped,
+.session-scripts-result.is-notrun { color: var(--color-warning, #b26a00); }
+/* A long command wraps to three rows before it is cut (the row's tooltip has all of it). */
+.session-scripts-item-command {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10.5px;
+  color: var(--fg-muted);
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  max-width: 320px;
+}
+.session-scripts-empty { display: block; font-size: 12px; color: var(--fg-muted); white-space: normal; line-height: 1.45; max-width: 320px; }
+.session-scripts-error { display: block; font-size: 12px; color: var(--color-error, #ff3b30); white-space: normal; max-width: 320px; overflow-wrap: anywhere; }
+.draft-workspace-setup { display: flex; flex-basis: 100%; align-items: baseline; gap: 6px; min-width: 0; max-width: 100%; }
+.draft-workspace-setup-lead { white-space: nowrap; flex-shrink: 0; }
+.draft-workspace-setup strong { font-weight: 600; color: var(--fg-secondary); }
+/* Needs the person's OK before it runs: a callout, not one more line of the row. */
+.draft-workspace-setup.needs-ok {
+  flex-wrap: wrap;
+  row-gap: 4px;
+  padding: 6px 8px;
+  border: 1px solid color-mix(in srgb, var(--warning, #ff9500) 45%, transparent);
+  border-left-width: 3px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--warning, #ff9500) 9%, var(--bg));
+  color: var(--fg);
+}
+.draft-workspace-setup.needs-ok .draft-workspace-setup-lead { display: inline-flex; align-items: baseline; gap: 6px; white-space: normal; }
+.draft-workspace-allow {
+  padding: 0 10px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 20px;
+  cursor: pointer;
+}
+.draft-workspace-allow:hover:not(:disabled) { filter: brightness(1.08); }
+.draft-workspace-allow:disabled { opacity: 0.6; cursor: default; }
+.draft-workspace-setup code.is-open { white-space: pre-wrap; overflow-wrap: anywhere; cursor: zoom-out; }
+.draft-workspace-setup code.is-long { cursor: zoom-in; }
+.draft-workspace-setup:has(code.is-open) { flex-wrap: wrap; }
+.draft-workspace-setup code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10.5px;
+  color: var(--fg-secondary);
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--bg-secondary, transparent);
+}
+
+.project-scripts-allow-row { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+
+.project-scripts-role.is-replaced { color: var(--fg-secondary, var(--fg-muted)); background: var(--bg-secondary, transparent); }
+.session-scripts-dot { display: inline-block; width: 6px; height: 6px; margin-left: 5px; border-radius: 50%; vertical-align: 1px; }
+.session-scripts-dot.tone-busy { background: var(--accent); }
+.session-scripts-dot.tone-error { background: var(--color-error, #ff3b30); }
+.session-scripts-dot.tone-warn { background: var(--color-warning, #b26a00); }
+.session-scripts-setup { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--fg-secondary); max-width: 320px; }
+.session-scripts-setup strong { color: var(--fg); font-weight: 600; }
+.session-scripts-setup-line { font-weight: 400; }
+.session-scripts-setup-at { color: var(--fg-muted); }
+.session-scripts-note { display: block; font-size: 11.5px; font-weight: 400; color: var(--fg-secondary); white-space: normal; line-height: 1.45; max-width: 320px; }
+.session-scripts-setup.tone-error { color: var(--color-error, #ff3b30); }
+.session-scripts-setup.tone-warn { color: var(--color-warning, #b26a00); }
+.session-scripts-setup-tail { font-family: var(--font-mono, ui-monospace, monospace); font-size: 10.5px; color: var(--fg-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-scripts-form .app-modal-input[aria-invalid] { border-color: var(--color-error, #ff3b30); box-shadow: 0 0 0 1px var(--color-error, #ff3b30); }
+.workspace-preparing-fix .project-scripts-link { color: var(--accent); }
+.workspace-preparing-fix { margin-top: 10px; font-size: 12px; color: var(--fg-muted); text-align: center; max-width: 420px; }
+
+/* A long command folded to one line: a click shows all of it. */
+.script-command-toggle { cursor: zoom-in; }
+.script-command-toggle.is-open { cursor: zoom-out; white-space: pre-wrap; overflow-wrap: anywhere; text-overflow: clip; overflow: visible; }
+.script-command-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.project-scripts-save-hint { font-size: 12px; color: var(--fg-muted); margin-top: 2px; }
+.session-scripts-loading { display: block; font-size: 12px; color: var(--fg-muted); }

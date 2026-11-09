@@ -21,7 +21,7 @@ import type { SessionEffort, Task } from '../types.js'
 import type { TaskWorkspace, WorkspacePendingStart, WorkspaceProbeSummary } from './types.js'
 import { workspaceRpc, WorkspaceError, replyError, hostLabel } from './daemon-client.js'
 import { findProvider, validateInputs, workspaceProviderCatalog, GIT_WORKTREE_ID } from './registry.js'
-import { cleanupDecision, isLaunchReady, keptReason, workspaceName, isBusy, type CleanupTrigger } from './decisions.js'
+import { cleanupDecision, isLaunchReady, keptReason, workspaceName, isBusy, setupBlocksLaunch, setupHoldsLaunch, type CleanupTrigger } from './decisions.js'
 import { log } from '../../logging/index.js'
 import { role } from '../server-role.js'
 import { missingIsNull } from '../../lib/id-ref.js'
@@ -47,6 +47,12 @@ export interface WorkspaceManagerDeps {
   hasLiveSession(taskId: string): Promise<boolean>
   notify(input: { title: string; body: string; dedupKey: string; taskId?: string; severity: 'info' | 'warning' }): Promise<void>
   listTasks(): Promise<Task[]>
+  /** A project's metadata (its `scripts`, scripts.ts); null for none. */
+  projectMeta(project: string): Promise<Record<string, unknown> | null>
+  /** The walnut.json content hashes the user allowed to run setup and teardown by themselves (scripts.ts). */
+  scriptsTrust(): Promise<string[]>
+  /** Allow one more (the list as kept, oldest first). */
+  allowScriptsFile(hash: string): Promise<string[]>
   /** The realpath of this server's WALNUT_HOME (a workspace records the one that made it). */
   walnutHome(): Promise<string>
   /** A replica (the companion or a host replica): workspaces are made and removed by the Mac only. */
@@ -112,6 +118,18 @@ const realDeps: WorkspaceManagerDeps = {
   async listTasks() {
     const { listTasks } = await import('../task-manager.js')
     return listTasks()
+  },
+  async projectMeta(project) {
+    const { getProjectMetadata } = await import('../task-manager.js')
+    return getProjectMetadata(project)
+  },
+  async scriptsTrust() {
+    const { readTrustFile } = await import('./scripts-trust.js')
+    return readTrustFile()
+  },
+  async allowScriptsFile(hash) {
+    const { allowInTrustFile } = await import('./scripts-trust.js')
+    return allowInTrustFile(hash)
   },
   walnutHome: () => (ownHome ??= (async () => {
     const { WALNUT_HOME } = await import('../../constants.js')
@@ -264,12 +282,30 @@ export async function retryWorkspace(taskId: string): Promise<Task> {
   return requestWorkspace(taskId, { provider: ws.provider, host: ws.host, anchor: ws.anchor, inputs: ws.inputs })
 }
 
+/** The person gave up the start waiting for the workspace (Dismiss): it never starts, and nothing asks them about it. */
+export async function cancelPendingStart(taskId: string): Promise<Task> {
+  const task = await taskOrThrow(taskId)
+  if (!task.workspace?.pending_start) return task
+  const written = await deps.write(task.id, (cur) => (cur?.pending_start ? stamp(cur, { pending_start: undefined, launch_error: undefined }) : null))
+  log.web.info('workspace start dismissed', { taskId })
+  return written ?? (await taskOrThrow(taskId))
+}
+
 /** Remember a start that waits for the workspace; kicks creation when nothing is making it yet. */
 export async function deferStart(taskId: string, pending: WorkspacePendingStart): Promise<Task> {
   const task = await taskOrThrow(taskId)
   const ws = task.workspace
   if (!ws) throw new WorkspaceError('This task has no workspace.', 404, 'none')
   if (ws.state === 'removing') throw new WorkspaceError('This task\'s workspace is being removed; start the session after it is gone.', 409, 'busy')
+  if (isLaunchReady(ws)) {
+    // Ready, its setup script holding the first session (or it just ended): the start
+    // waits on the row, and goes now unless the setup still holds it (its end launches it).
+    await assertMadeHere(ws)
+    const written = await deps.write(task.id, (latest) => (latest && isLaunchReady(latest) ? stamp(latest, { pending_start: pending }) : null))
+    if (!written) throw new WorkspaceError('This task\'s workspace changed meanwhile; try again.', 409, 'conflict')
+    if (!setupHoldsLaunch(written.workspace)) void launchPending(task.id)
+    return written
+  }
   if (ws.state === 'creating') {
     // Another Walnut's creation is never driven here, so a start must not wait on it.
     await assertMadeHere(ws)
@@ -312,9 +348,12 @@ type JobOutcome =
   | { state: 'failed'; error: string; code?: string; result?: Record<string, unknown> }
   | { state: 'lost'; error: string }
 
-export async function pollJob(host: string, jobId: string, lostAfterMs: number, onProgress: (p: string) => Promise<void>): Promise<JobOutcome> {
+export async function pollJob(host: string, jobId: string, lostAfterMs: number, onProgress: (p: string) => Promise<void>,
+  opts: { minGapMs?: number } = {}): Promise<JobOutcome> {
   let lastAnswer = deps.now()
   let lastProgress: string | undefined
+  // A line held back by the gap is reported at a later poll, so the last one always lands.
+  let reportedAt = -Infinity
   let lastError = ''
   for (;;) {
     await deps.sleep(POLL_MS)
@@ -326,8 +365,9 @@ export async function pollJob(host: string, jobId: string, lostAfterMs: number, 
       if (!job) return { state: 'lost', error: `${hostLabel(host)} has no record of this job (its Walnut daemon may have restarted). Retry to start over.` }
       if (job.state === 'running') {
         const progress = typeof job.progress === 'string' ? job.progress : undefined
-        if (progress && progress !== lastProgress) {
+        if (progress && progress !== lastProgress && deps.now() - reportedAt >= (opts.minGapMs ?? 0)) {
           lastProgress = progress
+          reportedAt = deps.now()
           await onProgress(progress).catch(() => {})
         }
         continue
@@ -411,7 +451,15 @@ async function runCreate(task: Task, ws: TaskWorkspace): Promise<void> {
     void onTaskCompleted(task.id)
     return
   }
-  if (ready.workspace?.pending_start) await launchPending(task.id)
+  // The project's or the repository's setup script (scripts.ts): a waiting one
+  // holds the start until it ends. Its failure never keeps the session from starting.
+  try {
+    const { runSetupAfterCreate } = await import('./scripts.js')
+    await runSetupAfterCreate(task.id)
+  } catch (err) {
+    log.web.warn('workspace setup could not run', { taskId: task.id, error: errText(err) })
+  }
+  if ((await deps.getTask(task.id))?.workspace?.pending_start) await launchPending(task.id)
 }
 
 /** Start the session that waited for the workspace (once: a live session means it already started). */
@@ -437,10 +485,14 @@ async function launchPendingOnce(taskId: string): Promise<void> {
     await deps.write(task.id, (cur) => (cur?.pending_start ? stamp(cur, { pending_start: undefined }) : null))
     return
   }
+  // A session of the task runs already (started some other way): nothing waits any more.
   if (await deps.hasLiveSession(task.id)) {
     await deps.write(task.id, (cur) => (cur?.pending_start ? stamp(cur, { pending_start: undefined, launch_error: undefined }) : null))
     return
   }
+  // A setup script that holds the first session: its end launches it (scripts.ts);
+  // a failed one waits for the person's choice (run it again, or start anyway).
+  if (setupHoldsLaunch(ws) || setupBlocksLaunch(ws)) return
   try {
     await deps.launch(task, ws, pending)
     await deps.write(task.id, (cur) => (cur ? stamp(cur, { pending_start: undefined, launch_error: undefined }) : null))
@@ -507,7 +559,9 @@ export async function beginRemoval(task: Task, ws: TaskWorkspace, trigger: 'manu
   still?: (task: Readonly<Task>) => boolean): Promise<Task | null> {
   const jobId = deps.jobId()
   const from = ws.state === 'kept' ? 'kept' : 'ready'
-  const written = await deps.write(task.id, (cur, row) => (cur && isLaunchReady(cur) && cur.root === ws.root && (!still || still(row))
+  const { scriptRunning } = await import('./scripts.js')
+  // A setup or teardown running in it holds the removal (its end runs the check again).
+  const written = await deps.write(task.id, (cur, row) => (cur && isLaunchReady(cur) && cur.root === ws.root && !scriptRunning(cur) && (!still || still(row))
     ? stamp(cur, { state: 'removing', job_id: jobId, removal: { trigger, from }, progress: 'Checking every repository', error: undefined })
     : null))
   if (written) void drive(task.id)
@@ -526,6 +580,9 @@ export async function removeWorkspaceManually(taskId: string): Promise<Task> {
   if (!ws || !isLaunchReady(ws)) throw new WorkspaceError('This task has no workspace to remove.', 409, 'none')
   await assertMadeHere(ws)
   if (await deps.sessionBusy(task.id)) throw new WorkspaceError('A session of this task is working in the workspace right now. Stop it first.', 409, 'session-busy')
+  const { scriptRunning } = await import('./scripts.js')
+  const script = scriptRunning(ws)
+  if (script) throw new WorkspaceError(`Its ${script} script is running in the workspace right now. Remove it after it ends.`, 409, 'script-busy')
   const written = await beginRemoval(task, ws, 'manual')
   if (!written) throw new WorkspaceError('This task\'s workspace changed meanwhile; reload and try again.', 409, 'conflict')
   log.web.info('workspace manual removal started', { taskId: task.id, root: ws.root, provider: ws.provider })

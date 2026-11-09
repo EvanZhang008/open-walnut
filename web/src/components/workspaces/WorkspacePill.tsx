@@ -10,12 +10,14 @@ export function WorkspacePill({ task }: { task: { workspace?: TaskWorkspace } })
     <span
       className={`todo-item-due-pill workspace-pill workspace-pill-${pill.tone}`}
       title={pill.title}
+      aria-label={pill.text}
       data-testid="workspace-pill"
       data-tone={pill.tone}
     >
       {pill.tone === 'busy' && <span className="workspace-pill-spin" aria-hidden />}
       <span className="workspace-pill-glyph" aria-hidden>⎇</span>
-      {pill.text}
+      {/* A plain ready workspace is its glyph alone, so a narrow row keeps its title. */}
+      <span className={`workspace-pill-text${pill.tone === 'ok' ? ' is-quiet' : ''}`}>{pill.text}</span>
     </span>
   );
 }

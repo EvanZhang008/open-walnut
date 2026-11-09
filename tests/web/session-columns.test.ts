@@ -668,6 +668,17 @@ describe('sessionColumns: mergeUrlColumns', () => {
   it('drops a saved free column the URL does not name', () => {
     expect(mergeUrlColumns(['x'], [slot('a'), slot('b')])).toEqual([slot('x')]);
   });
+  it('keeps a launch waiting for its workspace (a URL never names one) where it was', () => {
+    // A reload while its setup runs: the URL carries the real sessions only.
+    expect(mergeUrlColumns(['a', 'b'], [slot('a'), slot('pending:ws-t1'), slot('b')])).toEqual([
+      slot('a'), slot('pending:ws-t1'), slot('b'),
+    ]);
+    expect(mergeUrlColumns(['a'], [slot('pending:ws-t2'), slot('a'), slot('p', true)])).toEqual([
+      slot('pending:ws-t2'), slot('a'), slot('p', true),
+    ]);
+    // Other placeholders resolve to nothing after a reload and stay out.
+    expect(mergeUrlColumns(['a'], [slot('a'), slot('pending:qs-1'), slot('draft:1-1')])).toEqual([slot('a')]);
+  });
   it('puts the URL pins before the kept ones, the free columns first', () => {
     expect(mergeUrlColumns(['p1', 'x'], [slot('p1', true), slot('p2', true)])).toEqual([
       slot('x'), slot('p1', true), slot('p2', true),

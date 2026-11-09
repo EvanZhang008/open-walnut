@@ -86,8 +86,68 @@ export interface TaskWorkspace {
   pending_start?: WorkspacePendingStart
   /** The workspace is ready but the session waiting for it could not start (Retry starts it again). */
   launch_error?: string
+  /** The setup script run after it was made (scripts.ts). */
+  setup?: WorkspaceScriptRun
+  /** The teardown script run when the task completed. */
+  teardown?: WorkspaceScriptRun
   created_at?: string
   updated_at?: string
+}
+
+/**
+ * A named command of a project or a repository (scripts.ts). It runs in a
+ * shell on the folder's host: by hand from a session's Scripts menu (in its
+ * terminal), as `setup` right after an isolated workspace is made, or as
+ * `teardown` when its task completes.
+ */
+export interface ProjectScript {
+  id: string
+  name: string
+  command: string
+  /** Runs when a new workspace is made for a task. */
+  setup?: boolean
+  /** With setup: the task's first session waits for it (default true). */
+  wait?: boolean
+  /** Runs in the task's workspace when the task completes, before the cleanup check. */
+  teardown?: boolean
+  /** Setup / teardown deadline (default 900, at most 3600). */
+  timeout_sec?: number
+}
+
+/** Where a script came from: the project's own list, or a file in the repository. */
+export type ProjectScriptSource = 'project' | 'walnut.json'
+
+export interface ResolvedProjectScript extends ProjectScript {
+  source: ProjectScriptSource
+}
+
+/** One setup or teardown run, as the task row keeps it. */
+export interface WorkspaceScriptRun {
+  name: string
+  command: string
+  source: ProjectScriptSource
+  /** running: the host runs it; skipped: it could not run at all (`error` says why). */
+  state: 'running' | 'done' | 'failed' | 'skipped'
+  /** Setup only: the first session waits for it. */
+  wait?: boolean
+  job_id?: string
+  exit_code?: number | null
+  timed_out?: boolean
+  error?: string
+  /** The last line it printed, while it runs. */
+  progress?: string
+  /** The end of its output (at most a few KB). */
+  output?: string
+  started_at: string
+  ended_at?: string
+  /** Teardown only: the completion it ran for (the task's completed_at), so a later pass does not run it again. */
+  for_completion?: string
+  /** Skipped because it comes from a walnut.json the user has not allowed yet. */
+  untrusted?: boolean
+  /** The file's content hash when it was skipped: "Allow and run" runs only that version. */
+  file_hash?: string
+  /** A failed waiting setup: the user chose to start the session anyway. */
+  proceed?: boolean
 }
 
 /** One provider the UI can offer for a folder. */

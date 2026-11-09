@@ -47,6 +47,7 @@ const BOXES: Record<string, Kind> = {
   'components/common/AnswerBox.tsx': form('the shared box itself'),
   'components/agents/AgentForm.tsx': form("an agent's instructions"),
   'components/commands/CommandForm.tsx': form("a command's prompt text"),
+  'components/workspaces/ProjectScriptsDialog.tsx': form("a project script's shell command"),
   'components/common/AppErrorBoundary.tsx': form('a crash report to copy'),
   'components/common/CollapsibleUrlEditor.tsx': form('a note editor'),
   'components/notes/RawMarkdownView.tsx': form('a raw markdown editor'),

@@ -306,6 +306,8 @@ export interface UserStatusInput {
   /** A session's close left these for the user (result_report.owed, sessions/owed-to-user.ts):
    *  Needs you until they are settled, whatever its later turns report. */
   owedHold?: { ask: string; at: string } | null;
+  /** A person's start its isolated workspace holds for them (workspaces/decisions.ts workspaceHoldAsk): what to do. */
+  workspaceHold?: string | null;
   /** When the phase last moved (a turn's end, a park). A report older than this was written
    *  before the latest turn and only lends its words, never the state. */
   phaseChangedAt?: string | null;
@@ -1013,6 +1015,8 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
   // 他现在必须正在 working"), or its own work going on without one (ownWork, 2026-11-02, the user:
   // "if it is runnig it shoud be i progress right?"), read below once nothing asks the user.
   if (running) return strip({ state: 'working', ...w });
+  // Its session waits for the person's choice about its workspace (a failed setup, a file to allow).
+  if (!none(input.workspaceHold)) return strip({ state: 'needs', source: 'error', ask: clean(input.workspaceHold!), ...w });
   // A close its session tried left something for the user (2026-11-02: a task closed with the user's
   // own resubmit step still in its Progress read Done). Its own later ask, when it has one, speaks.
   if (input.owedHold && !input.isMain && !input.isLead && !none(input.owedHold.ask)) {

@@ -2778,7 +2778,10 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'workspace.job':
     case 'workspace.status':
     case 'workspace.repos':
-    case 'workspace.remove': return cmdWorkspace(ws, id as number, cmd)
+    case 'workspace.remove':
+    // 'workspace-scripts-v1': a repository's scripts file and a script run in a workspace.
+    case 'workspace.scriptsFile':
+    case 'workspace.runScript': return cmdWorkspace(ws, id as number, cmd)
     case 'list': return cmdList(ws, id as number)
     case 'sessions.discoverExternal': return cmdDiscoverExternalSessions(ws, id as number, cmd)
     case 'sessions.describeExternal': return cmdDescribeExternalSessions(ws, id as number, cmd)

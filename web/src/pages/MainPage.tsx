@@ -113,7 +113,9 @@ import { useAutoAnimate } from '@formkit/auto-animate/react';
 import { columnMotion } from './session-columns-motion';
 import { WorkspacePreparingPanel } from '@/components/workspaces/WorkspacePreparingPanel';
 import { draftWorkspaceRequest, setDraftWorkspace } from '@/components/workspaces/draft-workspace-store';
-import { rememberWorkspaceLaunch, workspaceLaunchInfo, workspacePendingColumnId, workspacePendingTaskId } from '@/components/workspaces/preparing-columns';
+import { useCleanupNotices } from '@/components/workspaces/useCleanupNotices';
+import { rememberWorkspaceLaunch, waitingStartColumnOf, workspaceLaunchInfo, workspacePendingColumnId, workspacePendingTaskId } from '@/components/workspaces/preparing-columns';
+import { isWorkspaceUsable, workspaceOf } from '@/components/workspaces/workspace-text';
 
 // The session columns, the focused task and the detail choice are layout record fields
 // (utils/layout-record.ts): kept on disk, so a Mac app relaunch (which drops
@@ -400,6 +402,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const { health, loading: healthLoading } = useSystemHealth();
   const { notify, dismissToast } = useNotifications();
   const { tasks, loading, refreshing: tasksRefreshing, error: tasksError, completedHidden, toggleComplete, setPhase, create, update, reorder, moveTask, reparentTask, deleteTask, batchSetPhase, batchDelete, bakeOrder, showOperationError, taskGroups, hiddenGroups, folderMeta, groupTasks, addToGroup, ungroupTasks, renameGroup, setGroupHidden, createFolder, deleteFolder, setFolderParent, moveFolderToProject } = useTasksContext();
+  // A completed task's workspace cleanup says when its script runs and whether the workspace went.
+  useCleanupNotices(tasks);
   const favorites = useFavorites();
   const focusBar = useFocusBarContext();
   const pinnedTaskIdSet = useMemo(() => new Set(focusBar.pinnedIds), [focusBar.pinnedIds]);
@@ -3101,8 +3105,18 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const handleStartSessionForTask = useCallback(async (task: Task) => {
     // Starting a session on a task (its ▶) is opening it, for the Recent tab.
     recordTaskOpened(task.id);
+    // A start that waits for the task's workspace (it is being made, or its setup
+    // failed and waits for the person): show that launch's column again, before
+    // any older session of the task.
+    const waiting = waitingStartColumnOf(task);
+    if (waiting) { openSessionOrToast(waiting); return; }
+    const ws = workspaceOf(task);
     const existing = resolveTaskSessionId(task);
     if (existing) { openSessionOrToast(existing); return; }
+    // A ready workspace is where its task's sessions run, on its own host: the draft says so.
+    const inWorkspace = isWorkspaceUsable(ws) ? ws! : undefined;
+    const taskCwd = inWorkspace?.cwd ?? task.cwd;
+    const taskHost = inWorkspace && inWorkspace.host !== '__local__' ? inWorkspace.host : null;
 
     // In-flight latch. `resolveTaskSessionId` above can't gate a SECOND click:
     // the task's session_id only lands after the launch round-trips (~270ms
@@ -3116,7 +3130,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     let unlatchDeferred = false;
     try {
       const last = readLastLaunchPath();
-      const cwd = task.cwd || last?.cwd;
+      const cwd = taskCwd || last?.cwd;
       if (!cwd) {
         openDraftColumn({
           project: task.project || undefined,
@@ -3150,8 +3164,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           // is deliberately path-neutral now: a plain "+" must not inherit the last
           // launch, but a ▶ that already decided it has somewhere to run should hand
           // the bound draft that same folder.
-          ...(task.cwd
-            ? { cwd: task.cwd, host: null, cwdPinned: true }
+          ...(taskCwd
+            ? { cwd: taskCwd, host: taskHost, cwdPinned: true }
             : { cwd, host: last?.host ?? null, ...(last?.hostLabel ? { hostLabel: last.hostLabel } : {}) }),
         });
         return;
@@ -3162,13 +3176,13 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       // Host rides ONLY with a memory-derived cwd. A task carrying its own cwd is
       // pinned to that path — pairing it with the last remembered host would launch
       // a local folder on whatever remote box was used last.
-      const fromMemory = !task.cwd;
+      const fromMemory = !taskCwd;
       // Awaited so the latch holds through the whole HTTP round-trip — the
       // window in which a second click still sees a session-less task.
       await launchQuickStart(
         {
           cwd,
-          host: fromMemory ? (last?.host ?? null) : null,
+          host: fromMemory ? (last?.host ?? null) : taskHost,
           ...(fromMemory && last?.hostLabel ? { hostLabel: last.hostLabel } : {}),
         },
         freshLauncherMeta(),

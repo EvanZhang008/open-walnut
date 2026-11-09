@@ -88,6 +88,16 @@ html:root {
     backdrop-filter: none;
   }
 
+  /* The workspace flyout opens over its own kebab menu and holds output to read
+     (a setup's log), and the Scripts menu lists commands to read: opaque, or the
+     rows behind show through their text. */
+  html .wn-context-menu.session-scripts-menu,
+  html .workspace-flyout.workspace-flyout {
+    background: var(--bg-elevated, var(--card-bg));
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
   /* A composer inside a glass popover is part of that glass, not a second layer. */
   html .cal-create-popover .quick-task-composer {
     background: transparent;

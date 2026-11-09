@@ -19,7 +19,7 @@ import { HostStatusDot } from './path-selector/HostStatusDot';
 import { CLOUD_BOX_ALIAS, hostDisplayLabel, LOCAL_HOST_LABEL } from '@/utils/host-display-label';
 import type { DraftColumn } from './draft-column';
 import type { DraftDecisionMenu } from './DraftDecisionRow';
-import { DRAFT_MENU_OWNER_ATTR } from './DraftDecisionRow';
+import { DRAFT_MENU_OWNER_ATTR, menuTriggerProps } from './DraftDecisionRow';
 import type { DraftProjectChipModel } from './draft-project-chip';
 import '@/styles/draft-launch-pills.css';
 
@@ -144,10 +144,9 @@ export function DraftProjectChip({ chip, menu, project, onPick }: {
         aria-expanded={active}
         // WebKit (the Mac app) blurs the composer on a button mousedown even
         // though the button never takes focus; the caret must stay put.
-        onMouseDown={viaMenu ? (e) => e.preventDefault() : undefined}
-        onClick={chip.action === 'none' ? undefined
-          : viaMenu ? (e) => menu.openFrom(e.currentTarget, e)
-          : () => setFlyoutOpen((o) => !o)}
+        {...(chip.action === 'none' ? {}
+          : viaMenu ? menuTriggerProps(menu!)
+          : { onClick: () => setFlyoutOpen((o) => !o) })}
       >
         <span className="draft-pill-key">{chip.key}</span>{' '}
         <span className="draft-pill-name">{chip.name}</span>

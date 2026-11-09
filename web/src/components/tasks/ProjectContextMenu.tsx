@@ -24,7 +24,8 @@
  *    through portals along the COMPONENT tree, and a press that reached either
  *    handle would arm a project reorder from inside the menu.
  */
-import { type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
+import { useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
+import { ProjectScriptsDialog } from '@/components/workspaces/ProjectScriptsDialog';
 import { ContextMenu, useContextMenu } from '@/components/common/ContextMenu';
 import { useProjectActions } from '@/hooks/useProjectActions';
 import type { SortBy } from './ViewDropdown';
@@ -61,6 +62,7 @@ export function useProjectContextMenu(actions: ProjectMenuActions): ProjectConte
   const sortPicker = useCursorFlyout<{ project: string; current: SortBy }>();
   const projectPicker = useCursorFlyout<string>();
   const settings = useBulkTaskSettings();
+  const [scriptsOf, setScriptsOf] = useState<string | null>(null);
 
   const open = menu.state;
   const node = (
@@ -74,6 +76,7 @@ export function useProjectContextMenu(actions: ProjectMenuActions): ProjectConte
             remove: (project) => { void remove(project); },
             pickSort: (project, current) => sortPicker.open({ project, current }, open.point, open.origin),
             pickProject: (project) => projectPicker.open(project, open.point, open.origin),
+            editScripts: (project) => setScriptsOf(project),
           }, settings.rows({ kind: 'project', project: open.payload.project }, open.point, open.origin))}
           onClose={menu.close}
           returnFocus={open.origin}
@@ -108,6 +111,7 @@ export function useProjectContextMenu(actions: ProjectMenuActions): ProjectConte
         />
       )}
       {settings.node}
+      {scriptsOf && <ProjectScriptsDialog project={scriptsOf} onClose={() => setScriptsOf(null)} />}
     </>
   );
 

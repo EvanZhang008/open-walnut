@@ -64,6 +64,8 @@ export interface ProjectMenuDialogs {
   pickSort: (project: string, current: SortBy) => void;
   /** Open the project list for the Project row; a pick moves this project into that one. */
   pickProject?: (project: string) => void;
+  /** Open the editor of this project's scripts (workspaces/ProjectScriptsDialog). */
+  editScripts?: (project: string) => void;
 }
 
 /** The setting rows a project shares with the task menu, built from its open tasks (`useBulkTaskSettings`). */
@@ -89,7 +91,7 @@ export function buildProjectMenuItems(
   settings: ProjectSettingRows = { pinned: [], fields: [] },
 ): ContextMenuItem[] {
   const { onToggleCollapse, onNewTask, onNewFolder, onNewSession, onNewSeparator, onToggleFavorite, onViewDetails } = actions;
-  const { busy, rename, remove, pickSort, pickProject } = dialogs;
+  const { busy, rename, remove, pickSort, pickProject, editScripts } = dialogs;
   // Every row below that acts on the REGISTRY needs a real project name.
   const named = !!target.project;
   return [
@@ -176,6 +178,13 @@ export function buildProjectMenuItems(
       label: target.favorite ? 'Unfavorite project' : 'Favorite project',
       when: !!onToggleFavorite && named,
       onSelect: () => onToggleFavorite?.(target.project),
+    },
+    {
+      key: 'scripts',
+      label: 'Scripts…',
+      title: "This project's commands: setup for new workspaces, one-click runs in a session",
+      when: !!editScripts && named,
+      onSelect: () => editScripts?.(target.project),
     },
     {
       key: 'details',

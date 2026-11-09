@@ -31,6 +31,7 @@ import { useProjectActions } from '@/hooks/useProjectActions';
 import { projectDisplayName } from '@/utils/project-display';
 import { rowAnchorOf, scrollMovedRow, type RowAnchor } from '@/utils/cursor-menu-scroll';
 import * as ICONS from '../common/Icons';
+import { ProjectScriptsDialog } from '../workspaces/ProjectScriptsDialog';
 
 /** Shared open/close + placement shell for one trigger button and its menu.
  *  Supports two anchor paths (same semantics as TaskKebabMenu): the trigger
@@ -286,6 +287,7 @@ export function ProjectKebabMenu({ project, isFavorite, onToggleFavorite, onView
   // Both flows close the menu FIRST: their dialog owns the screen from here, and
   // a menu left open behind a modal reads as two competing surfaces.
   const handleRename = useCallback(() => { closeMenu(); void rename(project); }, [closeMenu, rename, project]);
+  const [scripts, setScripts] = useState(false);
   const handleDelete = useCallback(() => { closeMenu(); void remove(project); }, [closeMenu, remove, project]);
 
   return (
@@ -335,6 +337,11 @@ export function ProjectKebabMenu({ project, isFavorite, onToggleFavorite, onView
             <span className="task-kebab-icon">✎</span>
             <span>Rename…</span>
           </button>
+          <button className="task-kebab-item" data-menu-item="scripts" title="The project's scripts: setup for new workspaces, one-click runs in its sessions"
+            onClick={(e) => { e.stopPropagation(); closeMenu(); setScripts(true); }}>
+            <span className="task-kebab-icon"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden focusable="false"><path d="M2.5 1.5v7l6-3.5z" fill="currentColor" /></svg></span>
+            <span>Scripts…</span>
+          </button>
           {!!extraItems?.length && <div className="task-kebab-divider" />}
           {extraItems?.map((x) => (
             <button
@@ -358,6 +365,14 @@ export function ProjectKebabMenu({ project, isFavorite, onToggleFavorite, onView
           </button>
         </div>,
         document.body,
+      )}
+      {/* Portalled, but React events still bubble to the row (a click selects it, Enter and
+          Space too, a pointerdown arms its drag): they stop here. Escape goes on to the dialog's own handler. */}
+      {scripts && (
+        <span style={{ display: 'contents' }} onClick={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()}
+          onKeyDown={(e) => { if (e.key !== 'Escape') e.stopPropagation(); }}>
+          <ProjectScriptsDialog project={project} onClose={() => setScripts(false)} />
+        </span>
       )}
     </span>
   );

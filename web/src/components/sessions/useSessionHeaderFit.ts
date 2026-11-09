@@ -42,6 +42,8 @@ export const TOOL_ITEMS: Record<string, { kind: ToolItemKind; priority: number; 
   changed: { kind: 'chip', priority: 3, name: 'Changed' },
   files: { kind: 'chip', priority: 4, name: 'Files' },
   terminal: { kind: 'chip', priority: 6, name: 'Terminal' },
+  // Scripts rides with Terminal (it types into it) and leaves just before it.
+  scripts: { kind: 'chip', priority: 6.05, name: 'Scripts' },
   // Board is a lead's chip only, and like Plan it may join after first paint (when the
   // task list or the owner read lands): it leaves just before Terminal, so arriving it
   // never pushes Terminal into "..." (2026-10-26).

@@ -25954,6 +25954,30 @@ a.file-link:hover {
   overflow: hidden;
 }
 
+/* An empty terminal while its shell starts (SessionTerminal: until the first output). */
+.session-terminal-body:has(> .session-terminal-starting) { position: relative; }
+.session-terminal-starting {
+  position: absolute;
+  top: 14px;
+  left: 16px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  color: #a9b1d6;
+  opacity: 0.85;
+  pointer-events: none;
+}
+.session-terminal-gone-notice {
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--fg);
+  background: color-mix(in srgb, var(--warning, #ff9500) 12%, var(--bg));
+  border-bottom: 1px solid var(--border);
+}
+.session-terminal-label.is-gone {
+  text-decoration: line-through;
+  opacity: 0.7;
+}
 .session-terminal-inline-error {
   display: flex;
   align-items: center;
@@ -27010,6 +27034,11 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
   outline-offset: 2px;
 }
+/* A button that cannot act now must look it: no hover lift, no pointer. */
+.app-modal-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.app-modal-btn:disabled:hover { background: var(--bg-secondary, transparent); }
+.app-modal-btn.primary:disabled:hover { background: var(--accent, #6366f1); filter: none; }
+.app-modal-btn.primary.danger:disabled:hover { background: var(--error, #e5484d); }
 
 /* ============================================================================
    Permission Doctor — fix dialog + Settings → Permissions rows

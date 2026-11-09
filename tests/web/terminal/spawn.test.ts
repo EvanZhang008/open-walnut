@@ -9,6 +9,7 @@ import {
   buildRemoteSshArgs,
   buildRemotePlainShellCommand,
   remoteCdTarget,
+  localStartDir,
   dtachPidPath,
   DTACH_SOCKET_DIR,
 } from '../../../src/web/terminal/spawn.js';
@@ -70,7 +71,7 @@ describe('buildRemoteDtachCommand', () => {
 
   it('defaults to the remote $SHELL as a LOGIN shell, cds to cwd', () => {
     expect(buildRemoteDtachCommand('/home/u/.local/bin/walnut-dtach', 'sid2', undefined, '/var/data')).toBe(
-      `${dtachOwnerClaimScript()}; cd '/var/data' && exec '/home/u/.local/bin/walnut-dtach' -A '${DTACH_SOCKET_DIR}/walnut-sid2.dsock' -z -E -r winch ${record('sid2')} ${DEFAULT_SHELL}`,
+      `${dtachOwnerClaimScript()}; cd '/var/data' || cd; exec '/home/u/.local/bin/walnut-dtach' -A '${DTACH_SOCKET_DIR}/walnut-sid2.dsock' -z -E -r winch ${record('sid2')} ${DEFAULT_SHELL}`,
     );
   });
 
@@ -85,7 +86,7 @@ describe('buildRemoteDtachCommand', () => {
 
   it('shell-quotes a cwd containing single quotes safely', () => {
     const cmd = buildRemoteDtachCommand('dtach', 'sid2', undefined, "/weird/it's here");
-    expect(cmd).toContain("cd '/weird/it'\\''s here' &&");
+    expect(cmd).toContain("cd '/weird/it'\\''s here' || cd;");
   });
 
   it('omits the cd prefix when no cwd (still makes the socket dir + execs login shell)', () => {
@@ -130,7 +131,7 @@ describe('buildRemoteSshArgs', () => {
     expect(args).toContain('alice@dev.example.com');
     const last = args[args.length - 1];
     expect(last).toContain(`mkdir -p '${DTACH_SOCKET_DIR}'`);
-    expect(last).toContain("cd '/home/alice/x' && exec 'dtach' -A");
+    expect(last).toContain("cd '/home/alice/x' || cd; exec 'dtach' -A");
     expect(last).toContain('walnut-sid3.dsock');
     // default → remote $SHELL launched as a login shell
     expect(last.endsWith(' "${SHELL:-/bin/bash}"')).toBe(true);
@@ -165,8 +166,8 @@ describe('remote cd keeps a leading ~ outside the quotes (C40)', () => {
   });
 
   it('dtach and plain shell commands both emit cd ~/\'rest\'', () => {
-    expect(buildRemoteDtachCommand('dtach', 'sid9', undefined, '~/proj a')).toContain("cd ~/'proj a' && exec");
-    expect(buildRemotePlainShellCommand(undefined, '~/proj a')).toContain("cd ~/'proj a' && exec");
+    expect(buildRemoteDtachCommand('dtach', 'sid9', undefined, '~/proj a')).toContain("cd ~/'proj a' || cd; exec");
+    expect(buildRemotePlainShellCommand(undefined, '~/proj a')).toContain("cd ~/'proj a' || cd; exec");
     expect(buildRemotePlainShellCommand(undefined, '~/proj a')).not.toContain("'~/");
   });
 });
@@ -181,3 +182,15 @@ describe('terminalEnv', () => {
     expect(env).toMatchObject({ PATH: userPath, HOME: '/home/acme', TERM: 'xterm-256color' })
   })
 })
+
+describe('a terminal whose folder is gone (a removed workspace) still opens', () => {
+  it('locally it starts in home; remotely cd falls back to home', async () => {
+    const os = await import('node:os');
+    const here = process.cwd();
+    expect(await localStartDir(here, 's1')).toBe(here);
+    expect(await localStartDir('/nonexistent/walnut-removed-workspace', 's1')).toBe(os.homedir());
+    expect(await localStartDir(undefined, 's1')).toBe(os.homedir());
+    // The shell runs dtach whether or not the cd worked (no `&&` that ends the ssh command).
+    expect(buildRemotePlainShellCommand(undefined, '/gone/ws')).toBe(`cd '/gone/ws' || cd; exec "\${SHELL:-/bin/bash}" -l`);
+  });
+});
