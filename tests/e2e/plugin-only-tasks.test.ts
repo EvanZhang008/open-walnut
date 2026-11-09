@@ -8,13 +8,18 @@
  * plugin. Checked here: the create stamp (op and direct create), every general list leaving the
  * row out (web list, v1 list, the phone's snapshot, Org counts, project counts, search), the
  * plugin's own reads still seeing it, keepInPlugin bringing an older task in and giving it back,
- * and a plugin without the option keeping today's behaviour.
+ * and a plugin without the option keeping today's behaviour. Also: a person or a session calling
+ * the op route keeps its own identity, and the create still knows which plugin made it
+ * (x-walnut-plugin-id), while an older caller naming only `plugin:<id>` still works.
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import type { Server as HttpServer } from 'node:http'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { WebSocket } from 'ws'
+import { createMockConstants } from '../helpers/mock-constants.js'
+
+vi.mock('../../src/constants.js', () => createMockConstants('walnut-plugin-only-tasks'))
 
 import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
@@ -27,18 +32,18 @@ const frames: Array<{ type?: string; name?: string; data?: unknown }> = []
 
 const PROJECT = 'Practice Room'
 
-async function api(method: string, route: string, body?: unknown) {
+async function api(method: string, route: string, body?: unknown, headers: Record<string, string> = {}) {
   const r = await fetch(`http://localhost:${port}${route}`, {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...headers },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   })
   const text = await r.text()
   return { status: r.status, data: text ? JSON.parse(text) : null }
 }
 
-async function op<T = any>(pluginId: string, name: string, args: Record<string, unknown> = {}): Promise<T> {
-  const r = await api('POST', `/api/plugin-runtime/${pluginId}/ops/${pluginId}_${name}`, args)
+async function op<T = any>(pluginId: string, name: string, args: Record<string, unknown> = {}, headers: Record<string, string> = {}): Promise<T> {
+  const r = await api('POST', `/api/plugin-runtime/${pluginId}/ops/${pluginId}_${name}`, args, headers)
   if (!r.data?.ok) throw new Error(`${pluginId}_${name}: ${JSON.stringify(r.data)}`)
   return r.data.result as T
 }
@@ -61,7 +66,7 @@ export function activate(walnut) {
     name, title: name, description: 'Plugin-only tasks probe: ' + name, readonly: false, remote: 'deny',
     inputSchema: { type: 'object', properties: {
       title: { type: 'string' }, project: { type: 'string' }, id: { type: 'string' },
-      ids: { type: 'array', items: { type: 'string' } }, keep: { type: 'boolean' },
+      ids: { type: 'array', items: { type: 'string' } }, keep: { type: 'boolean' }, target: { type: 'string' },
     } }, handler,
   })
   op('make', async (args) => {
@@ -72,6 +77,18 @@ export function activate(walnut) {
   op('keep', async (args) => walnut.tasks.keepInPlugin(args.ids, args.keep))
   op('list', async (args) => walnut.tasks.list({ project: args.project }))
   op('get', async (args) => walnut.tasks.get(args.id))
+  // One plugin's op running another plugin's (args.target), as walnut.ops.call does.
+  op('relay', async (args) => walnut.ops.unwrap(await walnut.ops.call(args.target, { title: args.title, project: args.project })))
+  // The raw identity headers a nested call carries, read back by the plugin's own route.
+  walnut.http.route('GET', '/echo', (req) => ({ json: {
+    sid: req.headers['x-walnut-caller-sid'] ?? null,
+    kind: req.headers['x-walnut-caller-kind'] ?? null,
+    plugin: req.headers['x-walnut-plugin-id'] ?? null,
+  } }))
+  op('who', async (_args, ctx) => ({
+    ctx: { kind: ctx.callerKind, sid: ctx.callerSid ?? null },
+    echo: walnut.ops.unwrap(await walnut.ops.call('api', { method: 'GET', path: '/api/plugins/' + walnut.pluginId + '/echo' })),
+  }))
 }
 `
 
@@ -230,5 +247,69 @@ describe('tasks a plugin keeps to its own view', () => {
     expect(String(r.data.message ?? r.data.error)).toMatch(/taskVisibility/)
     const other = await api('POST', '/api/plugin-runtime/plain/ops/plain_keep', { ids: [kept], keep: false })
     expect(other.data).toMatchObject({ ok: true, result: { changed: [], skipped: [{ id: kept, reason: 'other-plugin' }] } })
+  })
+})
+
+describe('who a plugin op runs for, and which plugin keeps the task', () => {
+  const DESK = 'Session Desk'
+  const sid = 'b7c5e0f1-0000-4000-8000-00000000b001'
+  let own = ''
+
+  beforeAll(async () => {
+    const { addTask } = await import('../../src/core/task-manager.js')
+    const { createSessionRecord, updateSessionRecord } = await import('../../src/core/session-tracker.js')
+    own = (await addTask({ title: 'Desk worker', project: DESK })).task.id
+    await createSessionRecord(sid, own, DESK, WALNUT_HOME, { mode: 'dontAsk' })
+    await updateSessionRecord(sid, { process_status: 'stopped' })
+  })
+
+  it('a person stays a person, with the plugin named beside it', async () => {
+    expect(await op('keeper', 'who')).toEqual({
+      ctx: { kind: 'person', sid: null },
+      echo: { sid: null, kind: null, plugin: 'keeper' },
+    })
+  })
+
+  it('a session keeps its id, and what it creates through a keeping plugin is still kept', async () => {
+    expect(await op('keeper', 'who', {}, { 'x-walnut-caller-sid': sid })).toEqual({
+      ctx: { kind: 'agent', sid },
+      echo: { sid, kind: null, plugin: 'keeper' },
+    })
+    const placeOf = async (id: string) => {
+      const t = (await api('GET', `/api/tasks/${id}`)).data.task
+      return { group_id: t.group_id ?? null, parent_task_id: t.parent_task_id ?? null }
+    }
+    const callerBefore = await placeOf(own)
+    const made = (await op<{ id: string }>('keeper', 'make', { title: 'Session partner', project: DESK }, { 'x-walnut-caller-sid': sid })).id
+    const kept = (await api('GET', `/api/tasks/${made}`)).data.task
+    expect(kept).toMatchObject({ id: made, plugin_only: 'keeper' })
+    // The plugin's task, not the session's: no parent, no folder made for it, the caller left where it was.
+    expect(kept.parent_task_id ?? null).toBeNull()
+    expect(kept.group_id ?? null).toBeNull()
+    expect(await placeOf(own)).toEqual(callerBefore)
+    expect(await listIds()).not.toContain(made)
+    // A plugin that keeps nothing: the session's task is its subtask, as before.
+    const plainMade = (await op<{ id: string }>('plain', 'make', { title: 'Session ticket', project: DESK }, { 'x-walnut-caller-sid': sid })).id
+    const ticket = (await api('GET', `/api/tasks/${plainMade}`)).data.task
+    expect(ticket.plugin_only).toBeUndefined()
+    expect(ticket.parent_task_id).toBe(own)
+  })
+
+  it('a plugin that keeps nothing running a keeping plugin\'s op: the task is still kept', async () => {
+    const made = (await op<{ id: string }>('plain', 'relay', { target: 'keeper_make', title: 'Relayed partner', project: PROJECT })).id
+    expect((await api('GET', `/api/tasks/${made}`)).data.task).toMatchObject({ id: made, plugin_only: 'keeper' })
+    expect(await listIds()).not.toContain(made)
+  })
+
+  it('an older caller that names only plugin:<id> still has its task kept', async () => {
+    const { executeOp } = await import('../../src/ops/executor.js')
+    const { LOCAL_ORIGIN } = await import('../../src/lib/caller-origin.js')
+    const { getPluginApiBase } = await import('../../src/core/plugins/server-api.js')
+    const r = await executeOp('task_create', { title: 'Older partner', project: PROJECT, record_only: true }, {
+      apiBase: getPluginApiBase(), callerSid: 'plugin:keeper', origin: LOCAL_ORIGIN,
+    }) as { ok: true; result: { id?: string; taskId?: string; task?: { id: string } } }
+    expect(r.ok).toBe(true)
+    const id = r.result.id ?? r.result.taskId ?? r.result.task!.id
+    expect((await api('GET', `/api/tasks/${id}`)).data.task.plugin_only).toBe('keeper')
   })
 })

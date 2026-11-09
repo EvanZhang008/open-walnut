@@ -143,10 +143,17 @@ export interface EngineCapabilities {
    * short hidden turn of its own; pi's is a few seconds on a cached prompt.
    */
   readonly statusQuestion?: boolean;
+  /**
+   * Whether a router area's isolated session can run on it (core/router/session-policy.ts):
+   * a slim profile that replaces the system prompt and holds only the area's tools and MCP
+   * servers. Only Claude Code takes that profile today; every other engine is refused.
+   */
+  readonly areaProfile?: boolean;
 }
 
 const CLAUDE: EngineCapabilities = {
   id: 'claude',
+  areaProfile: true,
   displayName: 'Claude',
   runtimeKind: 'native',
   historySource: 'provider-jsonl',

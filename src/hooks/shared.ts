@@ -181,6 +181,8 @@ export function updateTaskFromSession(taskId: string, summary: SessionSummary): 
         } catch { /* ignore corrupt payload */ }
       }
 
+      if (payload.router_area_id || payload.org_role === 'router') return;
+
       // Append note entry.
       const entry = `[${summary.date}] Session: ${summary.summary}`;
       const currentNote = row.note ?? '';
@@ -223,7 +225,11 @@ export function updateTaskFromSession(taskId: string, summary: SessionSummary): 
            session_ids = @session_ids,
            updated_at = @updated_at,
            payload = @payload
-         WHERE id = @id`,
+         WHERE id = @id
+           AND CASE WHEN payload IS NULL OR payload = '' THEN 1 WHEN json_valid(payload) THEN
+             json_type(payload) = 'object' AND coalesce(json_extract(payload, '$.router_area_id'), '') = ''
+             AND coalesce(json_extract(payload, '$.org_role'), '') <> 'router'
+             ELSE 0 END`,
       );
       const updateWithoutPayload = db.prepare(
         `UPDATE tasks SET
@@ -231,7 +237,11 @@ export function updateTaskFromSession(taskId: string, summary: SessionSummary): 
            phase = @phase,
            session_ids = @session_ids,
            updated_at = @updated_at
-         WHERE id = @id`,
+         WHERE id = @id
+           AND CASE WHEN payload IS NULL OR payload = '' THEN 1 WHEN json_valid(payload) THEN
+             json_type(payload) = 'object' AND coalesce(json_extract(payload, '$.router_area_id'), '') = ''
+             AND coalesce(json_extract(payload, '$.org_role'), '') <> 'router'
+             ELSE 0 END`,
       );
 
       const tx = db.transaction(() => {

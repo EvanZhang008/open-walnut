@@ -13,6 +13,7 @@ import {
   type PluginWebModuleInfo,
 } from '../../core/plugins/plugin-web-module.js'
 import { callPrimaryControl, type RelayFailure } from './v1-control-relay.js'
+import type { PluginOpCaller } from '../../core/plugins/server-api.js'
 
 const SERVER_RELAY_SID = '__server__'
 const HASH_PATTERN = /^[a-f0-9]{64}$/
@@ -479,6 +480,8 @@ export async function callPrimaryPluginOp(
   pluginIdInput: string,
   opName: string,
   args: Record<string, unknown>,
+  /** Who the companion's request ran for; the Mac checks it again and runs an unknown one as the plugin. */
+  caller?: PluginOpCaller,
 ): Promise<Record<string, unknown>> {
   const pluginId = validPluginId(pluginIdInput)
   if (!OP_NAME_PATTERN.test(opName)) throw new PluginRuntimeRelayError('Invalid operation name', 400)
@@ -497,7 +500,7 @@ export async function callPrimaryPluginOp(
   const outcome = await callPrimaryControl(
     'server.plugin-op',
     SERVER_RELAY_SID,
-    { pluginId, opName, args, ...(testRun ? { testRun } : {}) },
+    { pluginId, opName, args, ...(testRun ? { testRun } : {}), ...(caller ? { caller } : {}) },
     15_000,
   )
   if (!outcome.ok) throw relayError(outcome.failure)

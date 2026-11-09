@@ -18,6 +18,7 @@
 import { ABOUT_TAG_NAME } from '../org/message-about.js';
 import { BRIEF_SECTIONS, NEEDS_CATEGORY_LABELS, briefTeam, fallbackUserState, needsLineOf, shownState, storedUserState, type BriefSectionTask, type BriefTask, type UserState } from '../user-status.js';
 import { pickLead } from '../org/org-tree.js';
+import { sameAreaTasks } from '../router/same-area.js';
 
 export type BriefSectionKey = (typeof BRIEF_SECTIONS)[number]['state'];
 
@@ -66,11 +67,13 @@ export function briefVpOf(task: BriefTask, tasks: readonly BriefTask[]): BriefTa
   return vp && vp.id !== task.id && vp.phase !== 'COMPLETE' ? vp : undefined;
 }
 
-/** The tasks whose Needs you a Brief covers: a lead's team, Main's whole org. */
+/** The tasks whose Needs you a Brief covers: a lead's team, Main's whole org, each kept to the
+ *  owner's incoming-item area (router/same-area.ts), so Walnut never writes an area task's ask into
+ *  the Brief of a node outside that area. A line the writer put there itself is left alone. */
 export function briefAskScope<T extends BriefSectionTask>(owner: BriefSectionTask, tasks: readonly T[]): T[] {
-  return owner.org_role === 'main'
+  return sameAreaTasks(owner, owner.org_role === 'main'
     ? tasks.filter((t) => !t.plugin_only && t.id !== owner.id)
-    : briefTeam(owner, tasks);
+    : briefTeam(owner, tasks));
 }
 
 const attr = (v: string) => v.replace(/\s+/g, ' ').trim().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -93,7 +96,7 @@ export function addedAskLine(task: BriefSectionTask, main: boolean, tasks: reado
 }
 
 function askLineOf(task: BriefSectionTask, main: boolean, tasks: readonly BriefSectionTask[], ask: string): string {
-  const vp = main ? briefVpOf(task, tasks) : undefined;
+  const vp = main ? briefVpOf(task, sameAreaTasks(task, tasks)) : undefined;
   return `- <task-ref id="${task.id}" label="${attr(task.title)}"/>${vp ? ` (VP <task-ref id="${vp.id}" label="${attr(vp.title)}"/>)` : ''}: ${ask}`;
 }
 

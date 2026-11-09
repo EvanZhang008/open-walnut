@@ -293,16 +293,16 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
     // A separate process: the server re-judges its socket, and can only lower this.
     const { LOCAL_ORIGIN } = await import('../lib/caller-origin.js')
     // Outside every session and with no terminal, the call is a script's, never the user's.
-    const { cliAutomationSender } = await import('../lib/cli-sender.js')
-    const sender = cliAutomationSender()
-    let r = await executeOp(name, parsed, { origin: LOCAL_ORIGIN, callId, ...(sender ? { sender } : {}) })
+    const { cliOpCaller } = await import('../lib/cli-sender.js')
+    const caller = cliOpCaller()
+    let r = await executeOp(name, parsed, { origin: LOCAL_ORIGIN, callId, ...caller })
     // A server older than the run id refused it before anything ran: the same call without it.
     if (!r.ok && runId && refusedRunId(name, r.message)) {
       dropRunId(name, parsed)
       runId = null
       // Other arguments, so another call: nothing of the first ran.
       callId = newCallId()
-      r = await executeOp(name, parsed, { origin: LOCAL_ORIGIN, callId, ...(sender ? { sender } : {}) })
+      r = await executeOp(name, parsed, { origin: LOCAL_ORIGIN, callId, ...caller })
     }
     if (!r.ok && r.unreachable) {
       const { callThroughHostDaemon } = await import('./tools-daemon-fallback.js')

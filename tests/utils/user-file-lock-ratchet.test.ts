@@ -31,6 +31,10 @@ const repoRoot = path.resolve(__dirname, '../..');
  * `authFilePath()` locks, which now live in device-store.ts), while a call on any other path text fails.
  */
 const STORE_LOCKS = new Set<string>([
+  'src/core/router/route-lock.ts: lock',                        // WALNUT_HOME/router/areas/<area>/items.sqlite route lock
+  'src/core/router/handoff-approval.ts: d.file',                // WALNUT_HOME/router/handoff-approvals.json
+  'src/core/router/migration.ts: file',                         // a legacy watcher migration record under WALNUT_HOME/router
+  'src/core/triage/routing-rules.ts: file',                     // WALNUT_HOME/triage/routing-rules.json
   'src/core/boards/board-store.ts: file',                       // WALNUT_HOME/boards/<task>.json
   'src/core/bounded-memory.ts: this.filePath',                  // an agent's memory under WALNUT_HOME
   'src/core/cron/timer.ts: state.deps.storePath',               // the cron jobs store

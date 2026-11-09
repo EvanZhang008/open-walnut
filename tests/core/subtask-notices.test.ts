@@ -99,6 +99,15 @@ function notice(over: Partial<SubtaskNotice> = {}): SubtaskNotice {
 let sessions: SessionRecord[];
 let parent: Partial<Task>;
 
+/**
+ * The subtasks the notices name exist in the store, outside every incoming-item area: the area
+ * gate (router/context-sharing.ts) reads the child before its words reach the parent, and a child
+ * it cannot find stays fail-closed. Identity only (no parent link, no phase), so what a test reads
+ * of a child's state still comes from its own getChildTasks or task map.
+ */
+const STORED_CHILDREN = new Set(['child-a', 'child-b', 'child-c', 'child-x', 'a', 'b', 'c', 'd', 'x', 'y', 'daily']);
+const storedChild = (id: string): Partial<Task> | null => (STORED_CHILDREN.has(id) ? { id } : null);
+
 beforeEach(async () => {
   await resetHeld();
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
@@ -115,7 +124,7 @@ beforeEach(async () => {
   getQueue.mockReset();
   deleteMessage.mockReset();
   deleteMessage.mockResolvedValue(true);
-  getTask.mockImplementation(async (id: string) => (id === parent.id ? parent : null));
+  getTask.mockImplementation(async (id: string) => (id === parent.id ? parent : storedChild(id)));
   getSessionByClaudeId.mockImplementation(async (sid: string) => sessions.find((s) => s.claudeSessionId === sid) ?? null);
   getSessionsForTask.mockImplementation(async (taskId: string) => sessions.filter((s) => s.taskId === taskId));
   sendMessageToSession.mockResolvedValue({ id: 'qm-1' });
@@ -265,6 +274,18 @@ describe('delivery to the parent', () => {
     expect(text).toContain('newer');
     expect(text).not.toContain('older');
     expect(text).toContain('(child-b) completed its task');
+  });
+
+  it('a child the store cannot find is withheld: the parent hears nothing of it, a stored child still goes out', async () => {
+    await queueSubtaskNotice(notice({ child: { id: 'child-gone', title: 'Gone' }, lastWords: { text: 'secret words' } }));
+    await queueSubtaskNotice(notice({ child: { id: 'child-b', title: 'B' }, kind: 'completed' }));
+    await vi.advanceTimersByTimeAsync(COALESCE_MS + 10);
+
+    expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+    const { text } = delivered();
+    expect(text).toContain('(child-b) completed its task');
+    expect(text).not.toContain('child-gone');
+    expect(text).not.toContain('secret words');
   });
 
   it('a stop the child already undid with a new turn is not sent; a completion still is', async () => {

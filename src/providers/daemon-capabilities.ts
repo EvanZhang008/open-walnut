@@ -589,6 +589,16 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // Mac pushes neither and the run waits for the Mac. Sidecar-gated in the source twin
   // like clock-routine-v1.
   'clock-host-start-v1',
+  // 'trigger-state-snapshot-v1': `triggers.state.snapshot {home, triggerId}` reads the
+  // exact host state of ONE trigger its Walnut already disarmed (the disabled set
+  // pushed first, on the same socket), with no check, pending fire or host delivery in
+  // flight, from that Walnut's own state file, bounded in size and never written
+  // (trigger-state-snapshot-core.ts). It answers `{supported, complete, frozen, state,
+  // digest, stateMtimeMs, seenReliableUntil}` or `{supported: false, reason}`, so a
+  // server moving a legacy watcher keeps its dedup set and cursor. Informational and
+  // fail closed: a daemon without it has no such command, and the server must not
+  // migrate state from it. Sidecar-gated in the source twin like triggers-v1.
+  'trigger-state-snapshot-v1',
   'git-file-history-v1',
   'fs-mutate-v1',
   'fs-write-atomic-v1',

@@ -34,8 +34,15 @@ vi.mock('../../src/core/session-tracker.js', () => ({
     !(s.type === 'triage' || s.type === 'hook' || s.type === 'cron') && !(typeof s.lane === 'string' && s.lane.length > 0),
 }));
 
+// The sender's and receiver's tasks exist, outside every incoming-item area: the send's area
+// gate (router/context-sharing.ts) reads both and refuses a task it cannot find. Identity only
+// (no parent link, no org role, no phase), so every other check still reads them as unknown.
+const STORED_TASKS = new Set(['task-asker-1', 'task-peer-1', 'task-title-asker', 'task-title-peer']);
 vi.mock('../../src/core/task-manager.js', () => ({
-  getTask: async (handle: string) => { throw new Error(`No task found: ${handle}`); },
+  getTask: async (handle: string) => {
+    if (STORED_TASKS.has(handle)) return { id: handle };
+    throw new Error(`No task found: ${handle}`);
+  },
 }));
 
 const sendMessageToSession = vi.fn();

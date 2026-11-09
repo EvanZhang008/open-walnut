@@ -230,7 +230,7 @@ export function getDaemonSource(): string {
   // external-scan-core.cjs, path-resolve-core.cjs) and daemonCapabilities() in
   // the template adds the capability back at runtime only when that sidecar
   // actually loads.
-  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'task-dir-v1', 'task-dir-prune-v1', 'task-dir-prune-builds-v1', 'task-dir-sizes-v1', 'host-exec-v1', 'host-exec-v2', 'net-v1', 'net-join-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'acp-model-catalog-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'codex-outside-v1', 'claude-outside-v1', 'budget-v2', 'walnut-mcp-v1'])
+  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'task-dir-v1', 'task-dir-prune-v1', 'task-dir-prune-builds-v1', 'task-dir-sizes-v1', 'host-exec-v1', 'host-exec-v2', 'net-v1', 'net-join-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'trigger-state-snapshot-v1', 'acp-model-catalog-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'codex-outside-v1', 'claude-outside-v1', 'budget-v2', 'walnut-mcp-v1'])
   const capsLiteral = JSON.stringify(
     [...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => !SIDECAR_GATED_CAPABILITIES.has(c)),
   )
@@ -4295,6 +4295,8 @@ function dispatchCommand(ws, id, cmd) {
     case 'triggers.run': return daemonCommands.run(function () { return cmdTriggersRun(ws, id, cmd); });
     case 'triggers.ack': return daemonCommands.run(function () { return cmdTriggersAck(ws, id, cmd); });
     case 'triggers.claim': return daemonCommands.run(function () { return cmdTriggersClaim(ws, id, cmd); });
+    // trigger-state-snapshot-v1: read-only, still trusted-socket only (host data).
+    case 'triggers.state.snapshot': return daemonCommands.run(function () { return cmdTriggersStateSnapshot(ws, id, cmd); });
     case 'skills.sync': return cmdSkillsSync(ws, id, cmd);
     case 'bridgeResume': return daemonCommands.run(function () { return cmdBridgeResume(ws, id, cmd); });
     case 'stt': return cmdSttRelay(ws, id, cmd);
@@ -8458,6 +8460,11 @@ function armedOf(home) {
 // answer busy). Keyed by id, not held on the entry: a configure that re-arms the
 // trigger mid-write must not make its fires claimable.
 var hostDeliveriesInFlight = new Map();
+// The entries whose check process is running right now. Held apart from the maps:
+// a configure that disarms a trigger mid-check deletes its entry from armedTriggers
+// while the script still runs, and triggers.state.snapshot must still see it.
+// runTrigger adds before the spawn and removes in its finally. Mirror daemon-standalone.ts.
+var triggerChecksRunning = new Set();
 // Per Walnut: { configured, hash, inherited }: the set as its server last sent it
 // (or its triggers.json kept it) and that set's hash; what is armed is this set with
 // the holds a session made here while its Walnut was away (offlineHost.triggerHolds).
@@ -8922,6 +8929,7 @@ async function runTrigger(entry) {
   if (entry.def.clock) return runClock(entry, false) === 'fired' ? { outcome: 'fired' } : { outcome: 'quiet' };
   if (!entry.def.check) return { outcome: 'error', error: 'trigger has no check' };
   entry.running = true;
+  triggerChecksRunning.add(entry);
   var startedAt = Date.now();
   // A configure that lands mid-run may have disarmed this trigger. The run is
   // discarded then: the server no longer knows this id, so the fire would name a
@@ -8985,6 +8993,7 @@ async function runTrigger(entry) {
     return quiet;
   } finally {
     entry.running = false;
+    triggerChecksRunning.delete(entry);
   }
 }
 
@@ -9428,6 +9437,56 @@ function cmdTriggersRun(ws, id, cmd) {
     logMsg('error', 'trigger run threw', { id: entry.def.id, error: err && err.message });
   });
   return sendOk(ws, id, { ran: true, started: true });
+}
+
+// triggers.state.snapshot (trigger-state-snapshot-v1): the exact host state of ONE
+// trigger its Walnut already disarmed, with no check or fire in flight, read from
+// that Walnut's own state file and never written (trigger-state-snapshot-core.ts,
+// through the sidecar, holds every rule). Runs behind any configure in flight. Every
+// refusal is an ok reply {supported: false, reason}, so a caller that cannot freeze
+// moves on. Mirror daemon-standalone.ts.
+function cmdTriggersStateSnapshot(ws, id, cmd) {
+  if (!triggerCheckCore || typeof triggerCheckCore.takeTriggerStateSnapshot !== 'function') {
+    return sendOk(ws, id, { supported: false, reason: 'sidecar_missing' });
+  }
+  return sessionStartGate.run('triggers.configure', async function () {
+    var home = walnutScope.askedHome(cmd);
+    var homeScope = home ? triggerScopes.get(home) : undefined;
+    var unnamedScope = triggerScopes.get('');
+    var reply = triggerCheckCore.takeTriggerStateSnapshot({
+      fs: fs,
+      nowMs: Date.now(),
+      request: {
+        askedHome: home,
+        triggerId: cmd.triggerId,
+        socketTriggerScope: ws.triggerScope,
+        socketGatewayHome: gatewayClientHomes.get(ws),
+        configuredIds: homeScope ? homeScope.configured.map(function (def) { return def.id; }) : undefined,
+        unnamedConfiguredIds: unnamedScope ? unnamedScope.configured.map(function (def) { return def.id; }) : [],
+      },
+      liveFacts: function (h, tid) {
+        var key = triggerKey(h, tid);
+        return {
+          armed: armedTriggers.has(key),
+          draining: drainingTriggers.has(key),
+          heldUnnamed: !!heldTrigger('', tid),
+          checkRunning: [...triggerChecksRunning].some(function (e) { return e.def.id === tid && (e.home === h || e.home === ''); }),
+          hostDeliveryInFlight: hostDeliveriesInFlight.has(key) || hostDeliveriesInFlight.has(triggerKey('', tid)),
+        };
+      },
+      statePath: function (h, tid) { return triggerStatePath(h, tid); },
+      sharedCopyMtimeMs: function (tid) {
+        try {
+          var st = fs.lstatSync(path.join(TRIGGER_STATE_DIR, triggerCheckCore.triggerStateFileName(tid)));
+          return st.isFile() ? st.mtimeMs : undefined;
+        } catch (err) { return undefined; }
+      },
+    });
+    var logged = { id: typeof cmd.triggerId === 'string' ? cmd.triggerId.slice(0, 200) : '', scope: walnutScope.label(home), supported: reply.supported };
+    if (reply.supported) { logged.seq = reply.state.seq; logged.seen = reply.seenCount; } else { logged.reason = reply.reason; }
+    logMsg('info', 'trigger state snapshot', logged);
+    sendOk(ws, id, reply);
+  });
 }
 
 // A server takes the fires it just received (trigger-claim-v1). From then on only
@@ -13504,6 +13563,8 @@ function daemonCapabilities() {
   // Host delivery needs the envelope builder the newer sidecar carries.
   if (triggerCheckCore && typeof triggerCheckCore.claimFires === 'function' && typeof triggerCheckCore.buildTriggerMessage === 'function') caps.push('trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1');
   if (triggerCheckCore && typeof triggerCheckCore.applyClockFire === 'function' && typeof triggerCheckCore.buildScheduledMessage === 'function') caps.push('clock-routine-v1');
+  // An older sidecar carries no snapshot rules: the capability stays off (fail closed).
+  if (triggerCheckCore && typeof triggerCheckCore.takeTriggerStateSnapshot === 'function') caps.push('trigger-state-snapshot-v1');
   // A routine run started here needs the start's checks and its task token from the sidecar.
   if (triggerCheckCore && typeof triggerCheckCore.applyClockFire === 'function' && typeof triggerCheckCore.validateClockStartSpec === 'function' && typeof triggerCheckCore.START_TASK_TOKEN === 'string') caps.push('clock-host-start-v1');
   if (cronRuntime) caps.push('cron-supervision-v1', 'service-update-v1');

@@ -735,6 +735,10 @@ export async function forkSessionToTask(
 
   const sourceRecord = await getSessionByClaudeId(sourceSessionId);
   if (!sourceRecord) throw new SessionControlError('Source session not found', 404);
+  const { mayShareTaskContext } = await import('../router/context-sharing.js');
+  if (sourceRecord.profile?.areaId || (sourceRecord.taskId && !await mayShareTaskContext(sourceRecord.taskId, undefined))) {
+    throw new SessionControlError('An area conversation cannot be copied into another task.', 409, { code: 'area_scoped' });
+  }
 
   // Codex sessions run through ACP. The installed adapter does not advertise
   // ACP session.fork, and falling through to Claude's native --fork-session

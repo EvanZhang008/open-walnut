@@ -39,10 +39,19 @@ const records = new Map<string, Record<string, unknown>>();
 const patches: Array<{ sessionId: string; patch: Record<string, unknown> }> = [];
 vi.mock('../../src/core/session-tracker.js', () => ({
   getSessionByClaudeId: vi.fn(async (sessionId: string) => records.get(sessionId)),
+  getSessionsForTask: vi.fn(async (taskId: string) => [...records.values()].filter((record) => record.taskId === taskId)),
   updateSessionRecord: vi.fn(async (sessionId: string, patch: Record<string, unknown>) => {
     patches.push({ sessionId, patch });
     const rec = records.get(sessionId);
     if (rec) Object.assign(rec, patch);
+  }),
+}));
+
+vi.mock('../../src/core/task-manager.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  getTask: vi.fn(async (id: string) => {
+    if (![...records.values()].some((record) => record.taskId === id)) throw new Error(`No task found matching ID prefix "${id}"`);
+    return { id, source: 'local', phase: 'IN_PROGRESS' };
   }),
 }));
 

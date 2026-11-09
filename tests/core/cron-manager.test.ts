@@ -23,6 +23,7 @@ import {
 import { applyJobResult, armTimer, stopTimer, emit } from '../../src/core/cron/timer.js';
 import { normalizeCronJobCreate, normalizeCronJobPatch } from '../../src/core/cron/normalize.js';
 import { CronService } from '../../src/core/cron/service.js';
+import { cronJobRevision } from '../../src/core/cron/job-revision.js';
 import type {
   CronServiceDeps,
   CronServiceState,
@@ -450,6 +451,43 @@ describe('CronService', () => {
   });
 
   describe('update', () => {
+    it('refuses an old definition revision under the store lock without changing the newer routine', async () => {
+      const service = await isolatedService();
+      const job = await service.add(makeEveryInput());
+      const expectedRevision = cronJobRevision(job);
+      const changed = await service.update(job.id, { name: 'Changed elsewhere' });
+      await expect(service.update(job.id, { enabled: false }, { expectedRevision }))
+        .rejects.toMatchObject({ code: 'routine_changed', statusCode: 409 });
+      const [kept] = await service.list({ includeDisabled: true, recompute: false });
+      expect(kept).toEqual(changed);
+      const paused = await service.update(job.id, { enabled: false }, { expectedRevision: cronJobRevision(kept) });
+      expect(paused.enabled).toBe(false);
+    });
+
+    it('allows only one of two conditional writers using the same revision', async () => {
+      const service = await isolatedService();
+      const job = await service.add(makeEveryInput());
+      const options = { expectedRevision: cronJobRevision(job) };
+      const results = await Promise.allSettled([
+        service.update(job.id, { name: 'First definition' }, options),
+        service.update(job.id, { name: 'Second definition' }, options),
+      ]);
+      expect(results.filter((one) => one.status === 'fulfilled')).toHaveLength(1);
+      expect(results.filter((one) => one.status === 'rejected')).toEqual([
+        expect.objectContaining({ reason: expect.objectContaining({ code: 'routine_changed' }) }),
+      ]);
+    });
+
+    it('ignores runtime reports but includes enabled and every saved definition field in the revision', () => {
+      const job = createJob(createMockState(), makeEveryInput());
+      const before = cronJobRevision(job);
+      expect(cronJobRevision({ ...job, state: { lastRunAtMs: 2_000 }, updatedAtMs: 2_000 })).toBe(before);
+      for (const patch of [{ enabled: false }, { name: 'Other name' }, { futureField: 'new setting' }]) {
+        expect(cronJobRevision({ ...job, ...patch })).not.toBe(before);
+      }
+      expect(cronJobRevision(Object.fromEntries(Object.entries(job).reverse()))).toBe(before);
+    });
+
     it('modifies job fields and recomputes schedule', async () => {
       const service = await isolatedService();
       const job = await service.add(makeEveryInput());

@@ -65,6 +65,7 @@ const doneAt = (t: Task) => Date.parse(t.completed_at ?? t.updated_at ?? '') || 
  */
 export function orgTaskTabs(row: ChannelRow, rows: readonly ChannelRow[], tasks: readonly Task[], now: number): OrgTaskTabs {
   const byId = new Map(tasks.map((t) => [t.id, t] as const));
+  if (row.kind === 'router') return { watching: [], needs: row.alerts, working: [], waiting: [], done: [] };
   const nodes = row.kind === 'main' ? rows : [row];
   const open = new Map<string, Task>();
   const projects = new Set<string>();

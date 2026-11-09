@@ -45,6 +45,22 @@ vi.mock('../../src/core/task-manager.js', () => ({
   listTasksByIds: async (ids: string[]) => tasks.filter((t) => ids.includes(t.id)),
 }));
 
+// Inject the mocked stores because concurrent dynamic imports can bypass these module factories.
+vi.mock('../../src/core/router/context-sharing.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../src/core/router/context-sharing.js')>();
+  const { readRouterAreas } = await import('../../src/core/router/areas.js');
+  const deps: import('../../src/core/router/context-sharing.js').ContextSharingDeps = {
+    readAreas: (home) => readRouterAreas(home),
+    getTask: (id) => getTask(id),
+    sessionsForTask: (taskId) => getSessionsForTask(taskId),
+  };
+  return {
+    ...real,
+    mayShareTaskContext: (from: string, to: string | undefined, given?: typeof deps) =>
+      real.mayShareTaskContext(from, to, given ?? deps),
+  };
+});
+
 const sendMessageToSession = vi.fn();
 const enqueueMessage = vi.fn();
 const getQueue = vi.fn();
@@ -91,6 +107,14 @@ let tasks: Array<{
   id: string; title: string; session_id?: string; parent_task_id?: string; phase?: string;
   org_role?: 'main' | 'lead'; project?: string; org_leads?: string[];
 }> = [];
+
+// A missing task fails the context boundary closed; message fixtures must include their tasks.
+function addOrdinaryTasksForSessions(): void {
+  for (const s of sessions) {
+    if (!s.taskId || tasks.some((t) => t.id === s.taskId)) continue;
+    tasks.push({ id: s.taskId, title: s.title ?? '', phase: 'IN_PROGRESS' });
+  }
+}
 
 /** Grabs the (sid, busText, opts) of the Nth sendMessageToSession call. */
 function dispatched(n = 0): { sid: string; busText: string; opts: Record<string, unknown> } {
@@ -362,6 +386,7 @@ describe('performSessionSend — who is speaking decides the envelope', () => {
       rec('sess-caller-1', { title: 'Migration worker', host: 'devbox', taskId: 'task-11' }),
       rec('sess-target-1', { title: 'Target', taskId: 'task-77' }),
     ];
+    addOrdinaryTasksForSessions();
 
     const result = await performSessionSend({
       to: 'sess-target-1', text: 'rows are migrated', callerSid: 'sess-caller-1', expectReply: false,
@@ -382,6 +407,17 @@ describe('performSessionSend — who is speaking decides the envelope', () => {
     expect(parsed.attrs['from-task']).toBe('task-11');
     expect(parsed.attrs.host).toBe('devbox');
     expect(parsed.body).toBe('rows are migrated');
+  });
+
+  it.each(['task-11', 'task-77'])('refuses a peer send when its task %s is missing', async (missing) => {
+    sessions = [rec('sess-caller-1', { taskId: 'task-11' }), rec('sess-target-1', { taskId: 'task-77' })];
+    addOrdinaryTasksForSessions();
+    tasks = tasks.filter((task) => task.id !== missing);
+    await expectSendError(performSessionSend({
+      to: 'sess-target-1', text: 'Do not deliver', callerSid: 'sess-caller-1', expectReply: false,
+    }), 'area_forbidden', 403);
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+    expect(enqueueMessage).not.toHaveBeenCalled();
   });
 
   it('labels an anonymous caller by its transport host, and says unknown without one', async () => {
@@ -622,6 +658,7 @@ describe('performSessionSend — in_reply_to', () => {
       rec(TARGET, { title: 'Target', host: 'devbox', taskId: 'task-target' }),
       rec('sess-bystander', { title: 'Bystander', taskId: 'task-bystander' }),
     ];
+    addOrdinaryTasksForSessions();
   });
 
   it('404s an unknown request id', async () => {
@@ -822,7 +859,8 @@ describe('performSessionSend — in_reply_to', () => {
     });
 
     it('an asker parked on its replies is woken by the line naming the settled request, not left waiting', async () => {
-      tasks = [{ id: 'task-asker', title: 'Asker', phase: 'WAITING' }];
+      // Only the asker parks; the replier's task stays as the fixture made it.
+      tasks = tasks.map((t) => (t.id === 'task-asker' ? { ...t, phase: 'WAITING' } : t));
       const a = await armRequest({ toTaskId: 'task-target' });
       const b = await armRequest({ toTaskId: 'task-target' });
       await performSessionSend({ text: ANSWER, inReplyTo: a.id, callerSid: TARGET });
@@ -893,6 +931,7 @@ describe('performSessionSend — in_reply_to', () => {
 
     it('the same words to another asker are its own answer', async () => {
       sessions.push(rec('sess-asker-2', { title: 'Asker two', taskId: 'task-asker-2' }));
+      addOrdinaryTasksForSessions();
       const { createSessionRequest } = await import('../../src/core/session-requests.js');
       const a = await armRequest({ toTaskId: 'task-target' });
       const other = await createSessionRequest({ fromSessionId: 'sess-asker-2', toSessionId: TARGET, toTaskId: 'task-target', text: 'status?' });
@@ -1115,6 +1154,7 @@ describe('performSessionSend — in_reply_to routes to the requester’s CURRENT
       rec(ASKER, { title: 'Asker', taskId: 'task-asker' }),
       rec(TARGET, { title: 'Target', host: 'devbox', taskId: 'task-target' }),
     ];
+    addOrdinaryTasksForSessions();
   });
 
   it('lands in the newer session when the requester TASK moved on', async () => {
@@ -1142,6 +1182,7 @@ describe('performSessionSend — in_reply_to routes to the requester’s CURRENT
       }),
       rec(TARGET, { title: 'Target', taskId: 'task-target' }),
     ];
+    addOrdinaryTasksForSessions();
 
     const result = await performSessionSend({ text: 'done', inReplyTo: rq.id, callerSid: TARGET });
 
@@ -1155,6 +1196,7 @@ describe('performSessionSend — in_reply_to routes to the requester’s CURRENT
     const rq = await armRequest();
     // A fork exists, but the asker is alive — nothing may be re-routed.
     sessions.push(rec('sess-fork-1', { title: 'Fork of Asker', taskId: 'task-fork', forkedFromSessionId: ASKER }));
+    addOrdinaryTasksForSessions();
 
     const result = await performSessionSend({ text: 'done', inReplyTo: rq.id, callerSid: TARGET });
 

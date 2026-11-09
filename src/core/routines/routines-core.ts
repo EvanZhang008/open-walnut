@@ -25,6 +25,7 @@ import { exemptTemplateRun } from './trigger-templates.js';
 import { REMOTE_HTTP_ORIGIN } from '../../lib/caller-origin.js';
 import { isCompanion, isHostReplicaProgram } from '../server-role.js';
 import { NeedsLeaderError } from '../replication/needs-leader.js';
+import { CronJobChangedError } from '../cron/job-revision.js';
 
 /** Resolve the live cron service or throw a 503 (server still booting). */
 async function requireCronService(): Promise<CronService> {
@@ -37,6 +38,7 @@ async function requireCronService(): Promise<CronService> {
 /** Map the engine's message-based errors onto HTTP-ish codes. */
 function mapCronError(err: unknown): never {
   if (err instanceof SessionControlError) throw err;
+  if (err instanceof CronJobChangedError) throw new SessionControlError(err.message, err.statusCode);
   const msg = err instanceof Error ? err.message : String(err);
   if (/unknown cron job id/i.test(msg)) throw new SessionControlError(msg, 404);
   // jobs.ts throws bare Errors for input validation (payload/executor shape) —
@@ -286,9 +288,12 @@ export async function createRoutine(body: unknown, origin?: string, opts?: { id?
 }
 
 /** `origin`: who asks (a route passes the request's); omitted = the server's own code. */
-export async function patchRoutine(id: string, body: unknown, origin?: string): Promise<{ job: unknown }> {
+export async function patchRoutine(id: string, body: unknown, origin?: string, opts?: { expectedRevision?: string }): Promise<{ job: unknown }> {
   refuseRoutineWriteOnReplica();
-  if (isCompanion()) return await (await companion()).companionRoutineWrite('patch', { id, body: body ?? {} }) as { job: unknown };
+  if (isCompanion()) {
+    if (opts?.expectedRevision !== undefined) throw new SessionControlError('Conditional routine changes must run on the primary.', 501);
+    return await (await companion()).companionRoutineWrite('patch', { id, body: body ?? {} }) as { job: unknown };
+  }
   const service = await requireCronService();
   const { normalizeCronJobPatch } = await import('../cron/index.js');
   const patch = normalizeCronJobPatch(body);
@@ -300,7 +305,7 @@ export async function patchRoutine(id: string, body: unknown, origin?: string): 
   assertWakeNotOnCheck(patch, before ?? undefined);
   await validateCheckForSave(patch, body, before ?? undefined, origin);
   try {
-    const job = await service.update(id, patch);
+    const job = await service.update(id, patch, opts);
     log.web.info('routine updated via shared core', { jobId: id });
     pushTriggersFor([before?.check?.host, job.check?.host, clockHostOf(before), clockHostOf(job)]);
     return { job };
@@ -390,6 +395,7 @@ export async function listRoutineExecutors(): Promise<Record<string, unknown>> {
       label: e.label,
       description: e.description,
       configSchema: e.configSchema,
+      ...(e.internal ? { internal: true } : {}),
     })),
     options: { hosts, models },
   };

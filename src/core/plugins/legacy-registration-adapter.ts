@@ -47,7 +47,7 @@ export async function createLegacyRegistrationAdapter(
         name: tool.name,
         description: tool.description,
         inputSchema: tool.input_schema,
-        execute(input) { return tool.execute(input) },
+        execute(input, meta) { return tool.execute(input, meta) }
       })
     },
     registerExtIndex(spec: ExtIndexSpec) {

@@ -69,6 +69,8 @@ import { countOwnerOps, definePluginOp, listOpEntries, type HttpBinding, type Wa
 import { registerTimelineSource } from '../time-tracking/timeline/registry.js'
 import { registerMentionSource, type MentionSourceSpec } from '../mention-sources/registry.js'
 import { ensureCoreMentionSources } from '../mention-sources/notes-source.js'
+import { assertRouterSource, registerRouterSource, type RouterSourceAdapter } from '../router/source-registry.js'
+import type { RouterSource, RouterSourceKind } from '../router/types.js'
 import type { TimelineSourceSpec } from '../time-tracking/timeline/types.js'
 import { jsonSchemaToZodShape } from '../../ops/schema-to-zod.js'
 import { LOCAL_ORIGIN } from '../../lib/caller-origin.js'
@@ -173,7 +175,7 @@ interface PluginOpSpec {
   timeoutMs?: number
   handler(
     args: Record<string, unknown>,
-    ctx: { call(method: HttpBinding['method'], path: string, body?: unknown): Promise<unknown> },
+    ctx: { callerSid?: string; callerKind: 'person' | 'agent'; call(method: HttpBinding['method'], path: string, body?: unknown): Promise<unknown> },
   ): Promise<unknown>
 }
 
@@ -284,18 +286,58 @@ export function getPluginApiBase(): string | undefined {
 // `origin` is who the call acts for (src/lib/caller-origin.ts): a plugin's own
 // code passes local, a route passes its request's origin, and a nested call can
 // only lower it.
+// `caller`: who a route or relay ran it for; absent or invalid runs as the plugin (an agent),
+// never a person. The plugin id travels apart from the caller, so a person keeps the plugin's attribution.
 export async function callPluginOp<T = unknown>(
   pluginId: string,
   name: string,
   args: Record<string, unknown>,
   origin: string,
+  caller?: PluginOpCaller,
 ): Promise<{ ok: true; result: T } | { ok: false; message: string }> {
   await import('../../ops/index.js')
+  const checked = caller === undefined ? undefined : parsePluginOpCaller(caller)
+  const who: { callerSid?: string; callerMode?: 'human' } = !checked
+    ? { callerSid: `plugin:${pluginId}` }
+    : checked.kind === 'person'
+      ? { callerMode: 'human' }
+      : checked.sid ? { callerSid: checked.sid } : {}
   return await executeOp(name, args ?? {}, {
     apiBase: configuredApiBase,
-    callerSid: `plugin:${pluginId}`,
+    ...who,
+    callerPluginId: pluginId,
     origin,
   }) as { ok: true; result: T } | { ok: false; message: string }
+}
+
+/** Who a plugin op runs for: a person (never a session id), or an agent (its session, else none). */
+export interface PluginOpCaller { sid?: string; kind: 'person' | 'agent' }
+
+/** The longest caller session id a route or relay may name. */
+export const PLUGIN_OP_CALLER_SID_MAX = 200
+/** Printable ASCII with no space or comma: a session id, never a joined header or a sentence. */
+const PLUGIN_OP_CALLER_SID = /^[\x21-\x2b\x2d-\x7e]+$/
+
+/** A caller session id as named, or undefined when it is empty or not one. */
+export function pluginOpCallerSid(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const sid = value.trim()
+  return sid && sid.length <= PLUGIN_OP_CALLER_SID_MAX && PLUGIN_OP_CALLER_SID.test(sid) ? sid : undefined
+}
+
+/**
+ * A caller as a relay or route sent it, checked field by field; undefined for any other shape
+ * (an unknown kind or field, a person with a session id, a bad id), which runs as the plugin.
+ */
+export function parsePluginOpCaller(value: unknown): PluginOpCaller | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const record = value as Record<string, unknown>
+  if (Object.keys(record).some((key) => key !== 'kind' && key !== 'sid')) return undefined
+  if (record.kind === 'person') return record.sid === undefined ? { kind: 'person' } : undefined
+  if (record.kind !== 'agent') return undefined
+  if (record.sid === undefined) return { kind: 'agent' }
+  const sid = pluginOpCallerSid(record.sid)
+  return sid ? { kind: 'agent', sid } : undefined
 }
 
 export async function listPluginOps(): Promise<Array<{ name: string; title: string; readonly: boolean; owner: string }>> {
@@ -1267,15 +1309,15 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
           if (contributions.extIndex === internal) contributions.extIndex = null
         }))
       },
-      tool(spec: { name: string; description: string; inputSchema?: Record<string, unknown>; execute(input: Record<string, unknown>): unknown | Promise<unknown> }) {
+      tool(spec: { name: string; description: string; inputSchema?: Record<string, unknown>; execute(input: Record<string, unknown>, meta?: { toolUseId?: string; source?: string; callerSid?: string; callerKind?: 'person' | 'agent' }): unknown | Promise<unknown> }) {
         assertLive(`registry.tool("${spec.name}")`)
         const before = contributions.tools.length
         legacyApi.registerTool({
           name: spec.name,
           description: spec.description,
           input_schema: spec.inputSchema ?? { type: 'object', properties: {} },
-          async execute(input) {
-            const result = await spec.execute(input)
+          async execute(input, meta) {
+            const result = await spec.execute(input, meta)
             if (typeof result === 'string' || Array.isArray(result)) return result as never
             return JSON.stringify(result, null, 2)
           },
@@ -1307,7 +1349,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
           input: jsonSchemaToZodShape(spec.inputSchema),
           // A plugin op is in-process by construction: it never gets an HTTP `bind`,
           // so `call` is the only way it can reach a route, exactly like a core handler.
-          handler: async (args, call) => structuredOpResult(await spec.handler(args, { call })),
+          handler: async (args, call, caller) => structuredOpResult(await spec.handler(args, { call, callerKind: caller?.kind ?? 'agent', ...(caller?.sid ? { callerSid: caller.sid } : {}) })),
           ...(spec.timeoutMs !== undefined ? { timeoutMs: spec.timeoutMs } : {}),
           tags: {
             readonly,
@@ -1334,6 +1376,25 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         // Core's own sources first, so a plugin activating at boot never takes Notes' keywords.
         ensureCoreMentionSources()
         return own(registerMentionSource(pluginId, { ...spec, id }))
+      },
+      // One channel's cache-only source for the inbound router (core/router/source-registry.ts).
+      // The latest registration of a kind answers; its disposer removes only its own entry.
+      routerSource(kind: RouterSourceKind, adapter: RouterSourceAdapter) {
+        assertLive(`registry.routerSource("${String(kind)}")`)
+        // Validate the plugin's own object (a stray field, a non-function read), then register a
+        // fresh wrapper: an old activation's dispose never matches the replacement even when both
+        // pass the same adapter object, and the adapter gets a frozen copy of the source, so it
+        // cannot rewrite what its answer is checked against.
+        assertRouterSource(kind, adapter)
+        const { resolve, read, currentSources } = adapter
+        const copy = (source: RouterSource): RouterSource => Object.freeze({ kind: source.kind, account: source.account, message: source.message,
+          ...(source.version !== undefined ? { version: source.version } : {}) })
+        const wrapped: RouterSourceAdapter = {
+          resolve: (source) => resolve.call(adapter, copy(source)),
+          ...(read ? { read: (source: RouterSource) => read.call(adapter, copy(source)) } : {}),
+          ...(currentSources ? { currentSources: (sources: readonly RouterSource[]) => currentSources.call(adapter, sources.map(copy)) } : {}),
+        }
+        return own(toDisposable(registerRouterSource(kind, wrapped)))
       },
       wsMethod(id: string, handler: (payload: unknown) => unknown | Promise<unknown>) {
         assertLive(`registry.wsMethod("${id}")`)

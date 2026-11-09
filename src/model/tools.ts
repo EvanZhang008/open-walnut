@@ -25,6 +25,8 @@ export interface ToolExecuteMeta {
    *  write provenance: a memory entry written by an unattended background run
    *  carries weaker evidence than one written while the user was present. */
   source?: string;
+  callerSid?: string;
+  callerKind?: 'person' | 'agent';
 }
 
 export interface ToolDefinition {

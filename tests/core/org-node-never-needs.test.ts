@@ -26,6 +26,7 @@ const roles = (): OrgRole[] => {
   const union = src.match(/export type OrgRole = ([^;]+);/)?.[1] ?? ''
   return [...union.matchAll(/'([a-z]+)'/g)].map((m) => m[1] as OrgRole)
 }
+// The Router reads as a lead does (user-status-sync.ts statusInput).
 const flags = (role: OrgRole): Partial<UserStatusInput> => (role === 'main' ? { isMain: true } : { isLead: true })
 
 // Each fact that makes an individual task ask the user.
@@ -39,7 +40,7 @@ const ASKING: Record<string, Partial<UserStatusInput>> = {
 }
 
 describe('no org node is ever Needs you', () => {
-  it('reads the org roles from the source', () => expect(roles().sort()).toEqual(['lead', 'main']))
+  it('reads the org roles from the source', () => expect(roles().sort()).toEqual(['lead', 'main', 'router']))
 
   it('an individual task asks for each of these facts (the cases are real)', () => {
     for (const [name, facts] of Object.entries(ASKING)) {

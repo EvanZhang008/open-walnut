@@ -100,7 +100,8 @@ export function tasksShallowEqual(a: Task, b: Task): boolean {
   for (const k of ['transferred_to', 'transferred_from', 'transfer', 'watched_at', 'link_names', 'legacy_session_ids', 'engine_fallback', 'pr_status', 'pr_auto_complete', 'pr_wake'] as const) {
     if (JSON.stringify(a[k] ?? null) !== JSON.stringify(b[k] ?? null)) return false;
   }
-  const arrKeys: (keyof Task)[] = ['tags', 'depends_on'];
+  if (a.router_area_id !== b.router_area_id || a.router_paused !== b.router_paused) return false;
+  const arrKeys: (keyof Task)[] = ['tags', 'depends_on', 'router_links'];
   for (const k of arrKeys) {
     const av = (a[k] as string[] | undefined) ?? [];
     const bv = (b[k] as string[] | undefined) ?? [];

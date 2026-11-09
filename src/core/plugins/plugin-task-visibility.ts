@@ -3,7 +3,8 @@
  * `taskVisibility: "plugin"`, see Task.plugin_only).
  *
  * A plugin reaches the task routes through `walnut.ops.call`, whose requests name the
- * caller `plugin:<id>` (callPluginOp in server-api.ts). The create routes ask this module
+ * plugin in `x-walnut-plugin-id` (callPluginOp in server-api.ts; older ones only as the caller
+ * sid `plugin:<id>`), whoever the caller is. The create routes ask this module
  * whether that caller keeps its tasks, and stamp the new task when it does. The answer
  * follows the plugin's live generation: a reload registers again, and the old
  * generation's dispose never removes the newer registration.
@@ -35,8 +36,14 @@ export function pluginKeepsTasks(pluginId: string): boolean {
   return keeping.has(pluginId);
 }
 
-/** The plugin id a caller sid names (`plugin:<id>`), when that plugin keeps its tasks. */
-export function pluginOnlyForCaller(sid: string | undefined | null): string | undefined {
+/**
+ * The plugin that keeps a new task: the plugin the call was made through (`x-walnut-plugin-id`,
+ * set by callPluginOp for a person and a session alike) when named, else the plugin a caller sid
+ * names (`plugin:<id>`, older callers). Only a plugin that keeps its tasks answers.
+ */
+export function pluginOnlyForCaller(sid: string | undefined | null, pluginId?: string | null): string | undefined {
+  const named = pluginId?.trim();
+  if (named) return keeping.has(named) ? named : undefined;
   const raw = sid?.trim();
   if (!raw || !raw.startsWith(PLUGIN_CALLER_PREFIX)) return undefined;
   const id = raw.slice(PLUGIN_CALLER_PREFIX.length);

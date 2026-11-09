@@ -259,7 +259,14 @@ describe('a changed body revision', () => {
     const again = await one.service.readMessage('fake:one', 'm-1');
     expect(again.body?.text).toBe('body v2');
     expect(after.getBody).toHaveBeenCalledTimes(1);
-    expect(await bodyRefOf(one, 'fake:one', 'm-1')).toBe(ref);
+    // A body file is named by its content, so the repaired text lands under a new ref in the same
+    // account and month folder; the cleared v1 file stays gone and the new file holds the v2 bytes.
+    const repaired = await bodyRefOf(one, 'fake:one', 'm-1');
+    expect(repaired).toBeTruthy();
+    expect(repaired).not.toBe(ref);
+    expect(path.dirname(repaired!)).toBe(path.dirname(ref!));
+    expect(await exists(one, ref!)).toBe(false);
+    expect(await fsp.readFile(path.join(one.root, `${repaired}.txt`), 'utf8')).toBe('body v2');
   });
 
   it('does nothing at all when the provider registers again with the same revision', async () => {

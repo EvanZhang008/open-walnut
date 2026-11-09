@@ -101,8 +101,8 @@ export function stampDarwinIdentity(file, name, opts = {}) {
   const id = DARWIN_IDENTITY[name]
   if (!id) throw new Error(`no fixed darwin identity for ${name}; add one to scripts/lib/macho-identity.mjs`)
   const run = opts.run ?? ((cmd, args) => execFileSync(cmd, args, { stdio: 'ignore' }))
-  writeMachoUuid(file, id.uuid)
   if ((opts.platform ?? process.platform) === 'darwin') {
+    writeMachoUuid(file, id.uuid)
     run('codesign', ['--force', '--sign', '-', '--identifier', id.identifier, '--preserve-metadata=entitlements,flags', file])
     run('codesign', ['--verify', file])
     return id
@@ -111,8 +111,10 @@ export function stampDarwinIdentity(file, name, opts = {}) {
   try {
     run(rcodesign, ['--version'])
   } catch {
-    throw new Error(`${name} needs an ad-hoc signature after its identity is stamped: build it on macOS, or put rcodesign on PATH (sh scripts/install-rcodesign.sh <dir>)`)
+    throw Object.assign(new Error(`${name} needs an ad-hoc signature after its identity is stamped: build it on macOS, or put rcodesign on PATH (sh scripts/install-rcodesign.sh <dir>)`), { code: 'signer_unavailable' })
   }
+  // Editing the first page invalidates bun's signature, so prove the signer exists before touching it.
+  writeMachoUuid(file, id.uuid)
   run(rcodesign, ['sign', '--binary-identifier', id.identifier, file])
   return id
 }
@@ -152,7 +154,7 @@ if (import.meta.main) {
     try {
       stampDarwinIdentity(file, name)
     } catch (err) {
-      if (flag !== '--where-signable' || process.platform === 'darwin') throw err
+      if (flag !== '--where-signable' || process.platform === 'darwin' || err.code !== 'signer_unavailable') throw err
       console.error(`macho-identity: ${name} keeps bun's identity on this host (${err.message})`)
       process.exit(0)
     }

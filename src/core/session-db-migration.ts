@@ -99,6 +99,8 @@ interface SessionStoreV2 {
   sessions: SessionRecord[];
 }
 
+let sessionMigration: Promise<SessionMigrationResult> | null = null;
+
 /**
  * Run the one-shot JSON→SQLite migration if needed.
  *
@@ -108,14 +110,25 @@ interface SessionStoreV2 {
  *
  * Returns `{migrated: true, count: N}` after a successful import.
  */
-export async function runSessionMigrationIfNeeded(): Promise<SessionMigrationResult> {
+export function runSessionMigrationIfNeeded(): Promise<SessionMigrationResult> {
+  if (sessionMigration) return sessionMigration;
+  const running = migrateSessionStore();
+  const shared = running.finally(() => { if (sessionMigration === shared) sessionMigration = null; });
+  sessionMigration = shared;
+  return shared;
+}
+
+async function migrateSessionStore(): Promise<SessionMigrationResult> {
   const db = getDb();
   if (!db) {
     return { migrated: false, count: 0 };
   }
 
+  db.exec('CREATE TABLE IF NOT EXISTS session_migrations (id TEXT PRIMARY KEY)');
+  const done = db.prepare('SELECT 1 FROM session_migrations WHERE id = ?').get('legacy-json');
   const existing = db.prepare('SELECT COUNT(*) AS n FROM sessions').get() as { n: number };
-  if (existing.n > 0) {
+  if (done || existing.n > 0) {
+    if (!done) db.prepare('INSERT OR IGNORE INTO session_migrations (id) VALUES (?)').run('legacy-json');
     return { migrated: false, count: existing.n };
   }
 
@@ -125,8 +138,11 @@ export async function runSessionMigrationIfNeeded(): Promise<SessionMigrationRes
 
   // readJsonFile throws on corrupt content — let that propagate so a bad
   // sessions.json aborts startup instead of silently creating an empty DB.
-  const store = await readJsonFile<SessionStoreV2>(SESSIONS_FILE, { version: 2, sessions: [] });
-  const rawSessions: SessionRecord[] = Array.isArray(store.sessions) ? store.sessions : [];
+  const store = await readJsonFile<SessionStoreV2>(SESSIONS_FILE, { version: 2, sessions: [] }, { readErrors: 'throw' });
+  if (!store || typeof store !== 'object' || !Array.isArray(store.sessions)) {
+    throw new Error('The legacy session store has no readable sessions list; migration cannot establish its history.');
+  }
+  const rawSessions: SessionRecord[] = store.sessions;
   const sessions: SessionRecord[] = rawSessions.map(applyLegacyFixups);
 
   // Build the prepared INSERT from SESSION_COLUMNS so the column list here and
@@ -163,6 +179,7 @@ export async function runSessionMigrationIfNeeded(): Promise<SessionMigrationRes
         });
       }
     }
+    h.prepare('INSERT OR IGNORE INTO session_migrations (id) VALUES (?)').run('legacy-json');
   });
 
   const after = db.prepare('SELECT COUNT(*) AS n FROM sessions').get() as { n: number };

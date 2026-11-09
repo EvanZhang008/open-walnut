@@ -58,7 +58,12 @@ export function useDraft(key: string | null | undefined, opts: { baseline?: stri
   baselineRef.current = baseline;
   const load = (from: string | null) => (from && readDraft(from)) || baselineRef.current;
 
-  const [text, setTextState] = useState(() => load(k));
+  const [stateText, setTextState] = useState(() => load(k));
+  // Set by a clear, until the box is typed in or loads other words: the box shows its baseline as
+  // it is in this render. A save whose reply moves the baseline clears in the same render, and the
+  // old baseline (read when clear ran) must not show for a frame as unsaved words against the new one.
+  const followBase = useRef(false);
+  const text = followBase.current ? baseline : stateText;
   const textRef = useRef(text);
   textRef.current = text;
   const keyRef = useRef(k);
@@ -85,6 +90,7 @@ export function useDraft(key: string | null | undefined, opts: { baseline?: stri
     flush();
     keyRef.current = k;
     const next = load(k);
+    followBase.current = false;
     textRef.current = next;
     setTextState(next);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -102,6 +108,7 @@ export function useDraft(key: string | null | undefined, opts: { baseline?: stri
 
   const setText = useCallback((next: SetStateAction<string>) => {
     const value = typeof next === 'function' ? (next as (prev: string) => string)(textRef.current) : next;
+    followBase.current = false;
     textRef.current = value;
     setTextState(value);
     const kk = keyRef.current;
@@ -125,6 +132,7 @@ export function useDraft(key: string | null | undefined, opts: { baseline?: stri
     if (target !== kk && sentKey !== undefined) return;
     clearTimeout(timer.current);
     pending.current = null;
+    followBase.current = true;
     textRef.current = baselineRef.current;
     setTextState(baselineRef.current);
   }, []);
@@ -155,6 +163,7 @@ export function useDraft(key: string | null | undefined, opts: { baseline?: stri
     if (!pending.current && stored !== textRef.current) {
       const active = document.activeElement;
       if (!(active && active.getAttribute('data-draft-key') === k)) {
+        followBase.current = false;
         textRef.current = stored;
         setTextState(stored);
       }
@@ -165,6 +174,7 @@ export function useDraft(key: string | null | undefined, opts: { baseline?: stri
       const active = document.activeElement;
       if (active && active.getAttribute('data-draft-key') === k) return;
       const next = remote || baselineRef.current;
+      followBase.current = !remote;
       textRef.current = next;
       setTextState(next);
     });

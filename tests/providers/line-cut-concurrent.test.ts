@@ -27,6 +27,8 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-line-cut-con
 import { WALNUT_HOME } from '../../src/constants.js'
 import { createSessionRecord, _resetSessionTrackerForTesting } from '../../src/core/session-tracker.js'
 import { closeDb } from '../../src/core/session-db.js'
+import { closeDb as closeTaskDb } from '../../src/core/task-db.js'
+import { addTasksBulk, _resetForTesting as resetTaskStore } from '../../src/core/task-manager.js'
 import { ClaudeCodeSession, SessionRunner } from '../../src/providers/claude-code-session.js'
 import { RemoteSessionManager } from '../../src/providers/remote-session-manager.js'
 import { enqueueMessage, getQueue, resetCache } from '../../src/core/session-message-queue.js'
@@ -50,10 +52,21 @@ const rows = async () => (await getQueue(SID)).map((m) => ({ text: m.message, st
 
 beforeEach(async () => {
   closeDb()
+  closeTaskDb()
+  resetTaskStore()
   _resetSessionTrackerForTesting()
   resetLineConsumption()
   await fs.mkdir(WALNUT_HOME, { recursive: true })
   resetCache()
+  // The launch gate reads the record's task, so the task must exist.
+  const now = new Date().toISOString()
+  await addTasksBulk([
+    {
+      id: 'concurrent-task', title: 'Line test task', status: 'in_progress', phase: 'IN_PROGRESS', priority: 'none',
+      project: 'testproject', source: 'local', session_ids: [], created_at: now, updated_at: now,
+      description: '', summary: '', note: '',
+    },
+  ])
   await createSessionRecord(SID, 'concurrent-task', 'test', WALNUT_HOME, { initialProcessStatus: 'idle' })
   delivered = []
   held = []
@@ -69,6 +82,8 @@ afterEach(async () => {
   resetLineConsumption()
   resetCache()
   closeDb()
+  closeTaskDb()
+  resetTaskStore()
   _resetSessionTrackerForTesting()
   await fs.rm(WALNUT_HOME, { recursive: true, force: true, maxRetries: 3 })
 })

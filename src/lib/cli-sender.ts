@@ -35,3 +35,22 @@ export function cliAutomationSender(
   if (named) return PERSON.has(named.toLowerCase()) ? undefined : senderLabel(named);
   return ttys.some(Boolean) ? undefined : 'script';
 }
+
+/** The explicit caller every CLI `executeOp` passes: a session, an automation, or the person. */
+export type CliOpCaller = { callerSid: string } | { sender: string } | { callerMode: 'human' };
+
+/**
+ * The executor no longer reads WALNUT_SESSION_ID itself (a server's own env must never name
+ * the caller), so a CLI command states who it is: the session it runs in, else the automation
+ * label, else the person at the terminal. `ttys` is injectable for tests.
+ */
+export function cliOpCaller(
+  env: NodeJS.ProcessEnv = process.env,
+  ttys: readonly boolean[] = [!!process.stdin.isTTY, !!process.stdout.isTTY, !!process.stderr.isTTY],
+): CliOpCaller {
+  const sid = (env.WALNUT_SESSION_ID ?? '').trim();
+  if (sid) return { callerSid: sid };
+  const sender = cliAutomationSender(env, ttys);
+  if (sender) return { sender };
+  return { callerMode: 'human' as const };
+}

@@ -31,7 +31,7 @@ import { toDisplayedUserText } from '../sessions/reference-cards.js';
 import { isAwaitingTurnEnd } from '../sessions/self-complete-stop.js';
 import { agentMemoryPrompt, applyAgentMemoryAnswer, keepsAgentMemory, readAgentMemoryField, splitAgentMemory } from '../sessions/agent-memory.js';
 import { setReportPending, __resetReportPending } from '../sessions/report-pending.js';
-import { armStatusQuestion, cancelStatusQuestion, statusQuestionOwns, applyStatusAnswer } from '../sessions/status-question.js';
+import { armStatusQuestion, cancelStatusQuestion, statusQuestionOwns, applyStatusAnswer, routerScopedStatus } from '../sessions/status-question.js';
 
 /** The summary's own hold on the report: a session whose status the turn-end side question asks
  *  (sessions/status-question.ts) has its report pending kept by that ask instead. */
@@ -896,6 +896,8 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
   // the type flows and a stale/cleared task can't trigger a no-op triage.
   if (!p.taskId) return;
   const taskId = p.taskId;
+  // A router area task's note and status are router_work's alone: no generic merged note.
+  if (await routerScopedStatus(taskId, p.sessionId)) return;
 
   // Cooldown: prevent burst dispatches from replayed events after server restart.
   // The daemon may replay N result events in milliseconds — without this guard,

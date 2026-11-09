@@ -401,6 +401,12 @@ export async function deliverLetterToOrigin(
     const { picturesHeader } = await import('../answer-pictures.js');
     const text = buildLetterDeliveryText(letter, human, await picturesHeader(human.images));
     if (record.pendingPermission) {
+      // The raw enqueue below skips sendMessageToSession, so the area check runs here on the
+      // record as it is now (router/delivery-scope.ts). A refusal lands in the catch: failed.
+      const fresh = await getSessionByClaudeId(sid);
+      if (!fresh) throw new Error(`Origin session ${sid} no longer exists`);
+      const { assertAreaDelivery } = await import('../router/delivery-scope.js');
+      assertAreaDelivery(fresh, sid, human.by ? 'peer' : 'human-inbox', options.messageId);
       const { enqueueMessage } = await import('../session-message-queue.js');
       const parked = await withTimeout(enqueueMessage(sid, frameForSource(text, human.by ? 'peer' : 'human-inbox'), { ...(options.messageId ? { id: options.messageId } : {}), sentBy: human.by ? 'agent' : 'person' }), DELIVERY_TIMEOUT_MS, () => null);
       if (!parked) {

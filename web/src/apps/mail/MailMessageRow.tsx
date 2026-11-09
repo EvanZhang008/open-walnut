@@ -8,9 +8,11 @@ import type { ReactNode } from 'react';
 import type { MailAccountDto, MailMessageDto } from '@/api/mail';
 import { formatMailTime, isUnread, rowRecipientLabel, senderLabel } from './mail-format';
 import { openMailMessage } from './mail-actions';
-import { pairKey, setMailRowNote, type MailSnapshot } from './mail-store';
+import { getMailSnapshot, pairKey, setMailRowNote, type MailSnapshot } from './mail-store';
 import type { MailRowMenuHandle } from './MailRowContextMenu';
 import { AlertCircleIcon, AttachmentIcon, TaskIcon } from './mail-icons';
+import { mailboxRoleOf, outgoingKind, showsRouteLine } from './mail-route-model';
+import { MailRouteLine } from './MailRouteLine';
 
 /**
  * Does a click on this row belong to a text selection inside it?
@@ -70,6 +72,9 @@ export function MailRow({ message, selected, accounts, outbound, menu, flagFaile
   // full identity is on the row's own title, in the reader head and in the composer head (spec 6.9).
   const mark = who.replace(/[^\p{L}\p{N}]/gu, '').slice(0, 1).toLocaleUpperCase() || '?';
   const recipient = outbound ? rowRecipientLabel(message.to) : '';
+  const role = mailboxRoleOf(getMailSnapshot().mailboxes, message);
+  const routed = showsRouteLine(message, { outbound, role });
+  const outgoing = outgoingKind(message, { outbound, role });
   return (
     /* A `div role="button"`, NOT a `<button>`, and the reason is WebKit: it refuses a text selection
        inside a form control whatever `user-select` says, so in the Mac app a row's subject could not be
@@ -105,6 +110,8 @@ export function MailRow({ message, selected, accounts, outbound, menu, flagFaile
       /* What the element used to do by itself. Space is prevented as well as answered, or the list
          scrolls a page under the message that just opened. */
       onKeyDown={(event) => {
+        // A key pressed on a control inside the row (the route link, the flag mark) is that control's.
+        if (event.target !== event.currentTarget) return;
         if (event.key !== 'Enter' && event.key !== ' ') return;
         event.preventDefault();
         void openMailMessage(message.accountId, message.messageId);
@@ -180,6 +187,8 @@ export function MailRow({ message, selected, accounts, outbound, menu, flagFaile
         )}
       </span>
       <span className="mail-row-snippet">{message.snippet}</span>
+      {routed && <MailRouteLine route={message.route} unavailable={message.routingUnavailable} handoff={message.routingHandoff} routingArea={message.routingArea} routingCoverage={message.routingCoverage} surface="row" />}
+      {outgoing && <MailRouteLine route={undefined} outgoing={outgoing} surface="row" />}
       {footer}
     </div>
   );

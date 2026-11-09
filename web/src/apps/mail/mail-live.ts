@@ -20,6 +20,7 @@ import { loadMailBadgeSource, onMailEvent } from './mail-actions';
 import { readGroupedPref, subscribeGroupedPref } from './mail-grouped-pref';
 import { loadGroupedRailBadge, railValue, setRailListener } from './mail-groups-store';
 import { publishBadge, setMailBadgeHandle, type MailBadgeHandle } from './mail-store';
+import { onMailRouteChanged } from './mail-route-live';
 import { afterFirstScreen } from '@/utils/after-first-screen';
 
 const PREFIX = 'plugin:mail:';
@@ -60,6 +61,7 @@ export function ensureMailLive(): void {
     subscribed = true;
     // The unsubscribe is deliberately dropped: this lives as long as the page does.
     wsClient.subscribeAll((name, data) => {
+      if (name === 'router:item-changed') { onMailRouteChanged(data); return; }
       if (!name.startsWith(PREFIX)) return;
       onMailEvent(name.slice(PREFIX.length), data);
     });

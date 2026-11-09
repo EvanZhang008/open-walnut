@@ -1028,7 +1028,7 @@ export interface PluginToolSpec {
   name: string
   description: string
   inputSchema?: Record<string, unknown>
-  execute(input: Record<string, unknown>): unknown | Promise<unknown>
+  execute(input: Record<string, unknown>, meta?: { toolUseId?: string; source?: string; callerSid?: string; callerKind?: 'person' | 'agent' }): unknown | Promise<unknown>
 }
 
 /**
@@ -1078,6 +1078,8 @@ export interface PluginOpDefinition {
   handler(
     args: Record<string, unknown>,
     ctx: {
+      callerSid?: string
+      callerKind?: 'person' | 'agent'
       call(
         method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
         path: string,
@@ -1366,6 +1368,55 @@ export interface PluginMentionSourceDefinition {
   resolve(ref: string, ctx: { signal: AbortSignal }): Promise<string | null>
 }
 
+/** The channels the inbound router routes from. */
+export type PluginRouterSourceKind = 'mail' | 'slack' | 'wechat'
+
+/** One inbound item's identity: the channel, the exact account (never folded), the message id in it. */
+export interface PluginRouterSource {
+  kind: PluginRouterSourceKind
+  account: string
+  message: string
+  /** Cache-owned delivery identity, for a message handle that a later reply can point at. */
+  version?: string
+}
+
+/** An inbound item as the router sees it, read from your own cache. */
+export interface PluginRouterItem {
+  /** Exactly the source Walnut asked for: a different kind, account or message is refused. */
+  source: PluginRouterSource
+  /** The exact cached item's delivery identity (one router row per key). */
+  key: string
+  /** Optional identity shared by copies, used only to restrict access, never to grant another body. */
+  scopeKey?: string
+  threadKey?: string
+  sender: string
+  subject: string
+  preview?: string
+}
+
+/** An item's cached content. Attachments are metadata only; their bytes are never read. */
+export interface PluginRouterItemContent {
+  item: PluginRouterItem
+  body: { text?: string; html?: string } | null
+  bodyAvailable: boolean
+  attachments: Array<{ filename?: string; mimeType?: string; bytes?: number }>
+  attachmentsAvailable: false
+}
+
+/**
+ * A cache-only source for the inbound router. Both calls answer from what your plugin already
+ * stored, for the exact item named: never fetch from the remote service, send, or mark anything
+ * read, and throw when the item is not cached. Walnut treats the returned text as untrusted
+ * outside content, runs each call under a 3 s deadline, and refuses an answer whose
+ * `source` is not exactly the one it asked for.
+ */
+export interface PluginRouterSourceAdapter {
+  resolve(source: PluginRouterSource): Promise<PluginRouterItem>
+  read?(source: PluginRouterSource): Promise<PluginRouterItemContent>
+  /** Cache-only batch check: return the given sources that are still the current cached delivery. */
+  currentSources?(sources: readonly PluginRouterSource[]): Promise<PluginRouterSource[]>
+}
+
 export interface RegistryService {
   sync(adapter: PluginIntegrationSync): Disposable
   sourceClaim(
@@ -1384,6 +1435,10 @@ export interface RegistryService {
   /** Add a source to the composer's "@" picker (see PluginMentionSourceDefinition). Absent on
    *  Walnut before 2026-10-31: call it as `registry.mentionSource?.(...)`. */
   mentionSource?(definition: PluginMentionSourceDefinition): Disposable
+  /** Serve one channel's items to the inbound router (see PluginRouterSourceAdapter). The
+   *  latest registration of a kind answers; disposing an earlier one leaves it in place.
+   *  Absent on Walnut before 2026-11-07: call it as `registry.routerSource?.(...)`. */
+  routerSource?(kind: PluginRouterSourceKind, adapter: PluginRouterSourceAdapter): Disposable
   wsMethod(id: string, handler: (payload: unknown) => unknown | Promise<unknown>): Disposable
   agent(definition: PluginAgentDefinition): Disposable
   provider(id: string, adapter: PluginProviderAdapter): Disposable

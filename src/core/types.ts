@@ -48,7 +48,7 @@ export interface OrgPin {
 }
 
 /** A task's place in the org above the work (Task.org_role). */
-export type OrgRole = 'main' | 'lead';
+export type OrgRole = 'main' | 'lead' | 'router';
 /** Canonical list of valid priority values — use for runtime validation. */
 export const VALID_PRIORITIES: readonly TaskPriority[] = ['immediate', 'important', 'backlog', 'none'] as const;
 
@@ -986,6 +986,9 @@ export interface Task {
    *  from the task lists; the org chart and the chat slot show them. Payload blob,
    *  local-only, never pushed to sync backends. */
   org_role?: OrgRole;
+  router_area_id?: string;
+  router_links?: string[];
+  router_paused?: boolean;
   /** A lead only: the other projects it leads, put under it by the user in the
    *  org chart (setProjectVp in src/core/org/org-store.ts). Each stays its own
    *  project with its own tasks; this lead is its contact. Payload blob,
@@ -3100,6 +3103,9 @@ export interface SessionMcpServer {
  *   tools                         → `--tools` (comma-joined)
  */
 export interface SessionProfile {
+  areaId?: string;
+  areaRole?: 'router' | 'work';
+  areaPolicyVersion?: number;
   systemPrompt?: string;
   /** How `systemPrompt` is applied. Undefined = 'append' (the safe default). */
   systemPromptMode?: 'replace' | 'append';

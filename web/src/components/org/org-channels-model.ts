@@ -96,7 +96,7 @@ export type AlertProbe = (task: Task) => { kind: Exclude<OrgAlertView['kind'], '
 export interface ChannelRow {
   /** 'main' | `project:<key>`: the page's selection and URL value. */
   key: string;
-  kind: 'main' | 'project';
+  kind: 'main' | 'project' | 'router';
   /** '' = the Inbox. */
   project: string;
   name: string;
@@ -304,10 +304,37 @@ export function sortChannels(rows: readonly ChannelRow[]): ChannelRow[] {
 
 export interface OrgChannels {
   main: ChannelRow;
+  /** One row per open router node (Task.org_role 'router'): its own nodes, never VPs. */
+  routers: ChannelRow[];
   /** One row per VP: a project under another VP is part of that VP's row, not a row of its own. */
   rows: ChannelRow[];
   /** One row per project, each with its own work (the org chart's cards and their project lines). */
   projects: ChannelRow[];
+}
+
+/** What the channel helpers read: `routers` may be missing (a hand-made fixture, an older caller). */
+export type OrgChannelsLike = Omit<OrgChannels, 'routers'> & { routers?: readonly ChannelRow[] };
+
+/** A router's state in a word or two. Never claims collection runs: an unpaused router is only
+ *  ready for the items routed to its area (some source accounts may not be readable yet). */
+export function routerStateWord(paused: boolean, short = false): string {
+  return paused ? 'Paused' : short ? 'Ready' : 'Ready for assigned items';
+}
+
+export function vpLinkCount(n: number): string {
+  return `${n} VP ${n === 1 ? 'link' : 'links'}`;
+}
+
+/** An area's id read as words ("native_fixture" -> "Native fixture"), shown until the areas list names it. */
+export function areaIdWords(id: string): string {
+  const words = id.replace(/[_-]+/g, ' ').trim();
+  return words ? words[0].toUpperCase() + words.slice(1) : id;
+}
+
+/** A router row's line: its area (by name once known), Paused or Ready, how many VPs it works with first. */
+export function routerLine(task: Pick<Task, 'router_area_id' | 'router_paused' | 'router_links'>, areaNames: Readonly<Record<string, string>> = {}): string {
+  const area = task.router_area_id ? areaNames[task.router_area_id] || areaIdWords(task.router_area_id) : 'Area not configured';
+  return `${area} · ${routerStateWord(task.router_paused !== false, true)} · ${vpLinkCount(new Set(task.router_links ?? []).size)}`;
 }
 
 function addCounts(a: OrgCounts, b: OrgCounts): OrgCounts {
@@ -336,7 +363,7 @@ function vpNodes(projects: readonly OrgProjectNode[]): { node: OrgProjectNode; l
     });
 }
 
-export function buildChannels(tree: OrgTree, tasks: readonly Task[], probe: AlertProbe): OrgChannels {
+export function buildChannels(tree: OrgTree, tasks: readonly Task[], probe: AlertProbe, areaNames: Readonly<Record<string, string>> = {}): OrgChannels {
   const byId = new Map(tasks.map((t) => [t.id, t] as const));
   const projects = sortChannels(tree.projects.map((p) => projectRow(p, byId, probe)));
   const rows = sortChannels(vpNodes(tree.projects).map(({ node, led }) => {
@@ -377,7 +404,16 @@ export function buildChannels(tree: OrgTree, tasks: readonly Task[], probe: Aler
     lastAt: taskTime(mainTask),
     unread: !!mainTask?.unread,
   };
-  return { main, rows, projects };
+  const routers: ChannelRow[] = tasks.filter((task) => task.org_role === 'router' && task.phase !== 'COMPLETE').map((task) => ({
+    key: `router:${task.id}`, kind: 'router', project: '', name: task.org_name || task.title,
+    contactId: task.id, contactTitle: task.title, isLead: false,
+    counts: { open: 1, running: task.user_status?.state === 'working' ? 1 : 0, needsYou: 0, toRead: 0, waiting: 0 },
+    state: task.router_paused !== false ? 'parked' : task.user_status?.state === 'working' ? 'working' : 'quiet',
+    alerts: collectAlerts([task.id], byId, probe), needs: 0,
+    latest: routerLine(task, areaNames),
+    latestAt: taskTime(task), lastAt: taskTime(task), unread: !!task.unread,
+  }));
+  return { main, rows, projects, routers };
 }
 
 /** Rows whose project, contact or latest line holds every word of `q` (case-insensitive). */
@@ -391,15 +427,15 @@ export function filterChannels(rows: readonly ChannelRow[], q: string): ChannelR
 }
 
 /** The row that shows `key`: its own, or its VP's when the project is under another VP. */
-export function rowOf(channels: OrgChannels, key: string | null): ChannelRow | undefined {
+export function rowOf(channels: OrgChannelsLike, key: string | null): ChannelRow | undefined {
   if (!key) return undefined;
   if (key === MAIN_KEY) return channels.main;
-  return channels.rows.find((r) => r.key === key || !!r.led?.some((l) => l.key === key));
+  return [...channels.rows, ...(channels.routers ?? [])].find((r) => r.key === key || !!r.led?.some((l) => l.key === key));
 }
 
 /** The selected row: the URL's (a project under another VP selects that VP), else the first lead
  *  (the most urgent), else Main. */
-export function pickChannel(channels: OrgChannels, key: string | null): ChannelRow {
+export function pickChannel(channels: OrgChannelsLike, key: string | null): ChannelRow {
   return rowOf(channels, key) || channels.rows[0] || channels.main;
 }
 
@@ -428,7 +464,7 @@ export interface MovedRow {
 }
 
 /** Every project a VP took over (its lead's `org_leads`), whether or not it has open work now. */
-export function movedProjects(channels: OrgChannels, tasks: readonly Task[]): MovedRow[] {
+export function movedProjects(channels: OrgChannelsLike, tasks: readonly Task[]): MovedRow[] {
   const out: MovedRow[] = [];
   const seen = new Set<string>();
   for (const lead of tasks) {
@@ -555,6 +591,14 @@ export function mainTeamColumns(rows: readonly ChannelRow[]): TeamColumn[] {
 // ── Avatars ──
 
 const PALETTE = ['#5B8DEF', '#E8833A', '#3BAA75', '#A35CDB', '#D9534F', '#2AA7B8', '#C69214', '#6C7A89', '#E05297', '#4F6BD8'];
+
+/** Every router wears this one colour, whatever its name, so a renamed router never looks like a VP. */
+export const ROUTER_AVATAR_COLOR = '#64748b';
+
+/** A row's avatar colour: a router's fixed one, else one picked from its name. */
+export function rowAvatarColor(row: Pick<ChannelRow, 'kind' | 'name'>): string {
+  return row.kind === 'router' ? ROUTER_AVATAR_COLOR : avatarColor(row.name);
+}
 
 export function avatarColor(name: string): string {
   let h = 0;

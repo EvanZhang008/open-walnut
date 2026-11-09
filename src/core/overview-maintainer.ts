@@ -19,6 +19,7 @@
  * - task must have a non-empty project, and that project must already own a
  *   skill (resolved by name across the skill grouping dirs) — else skip silently;
  * - bulk sources (sync/reconcile/migration) never trigger;
+ * - a task of an incoming-item area never runs (areaScoped: checked again before the model and before the writes);
  * - repeated events for the same task+phase are deduped;
  * - runs are serialized (one maintainer run at a time).
  */
@@ -41,6 +42,7 @@ import { addNotification as addFeedNotification } from './notifications/store.js
 import type { UsageSource } from './usage/index.js';
 import { log } from '../logging/index.js';
 import { fastCallText } from './cheap-model.js';
+import { WALNUT_HOME } from '../constants.js';
 
 const SUBSCRIBER = 'overview-maintainer';
 /** Sources that bulk-import tasks — a hook storm, not real lifecycle events. */
@@ -391,6 +393,33 @@ async function applyMaintainerAnswer(
   return writes;
 }
 
+const NOT_FOUND = /^(No task found|Ambiguous ID prefix)/;
+const markedForArea = (t: Pick<Task, 'router_area_id' | 'org_role'> | undefined): boolean =>
+  !!(typeof t?.router_area_id === 'string' && t.router_area_id.trim()) || t?.org_role === 'router';
+
+/** Area work (event copy, stored task, registry, session profiles) never reaches this model or a shared skill; an unreadable scope counts as area. */
+export async function areaScoped(taskId: string, seen?: Pick<Task, 'router_area_id' | 'org_role'>): Promise<boolean> {
+  if (markedForArea(seen)) return true;
+  try {
+    const [{ getTask }, { getSessionsForTask }, { readRouterAreas, taskArea }] = await Promise.all([
+      import('./task-manager.js'), import('./session-tracker.js'), import('./router/areas.js'),
+    ]);
+    const stored = await getTask(taskId).catch((err: unknown) => {
+      if (err instanceof Error && NOT_FOUND.test(err.message)) return undefined;
+      throw err;
+    });
+    if (markedForArea(stored)) return true;
+    const file = await readRouterAreas(WALNUT_HOME);
+    if (taskArea(file, taskId) || file.routers.some((r) => r.taskId === taskId)) return true;
+    return (await getSessionsForTask(taskId)).some((r) => typeof r.profile?.areaId === 'string' && !!r.profile.areaId.trim());
+  } catch (err) {
+    log.agent.warn('overview-maintainer: area scope unreadable, skipping', {
+      taskId, error: err instanceof Error ? err.message : String(err),
+    });
+    return true;
+  }
+}
+
 /**
  * All gating + serialized execution for one task lifecycle event.
  * Resolves when THIS task's maintainer run finishes (tests await it);
@@ -406,6 +435,7 @@ export async function maybeRunForTaskEvent(
   if (!task?.id || !task.project?.trim()) return false; // Inbox has no project skill
   if (task.parent_task_id) return false; // subtasks never trigger
   if (SKIP_SOURCE.test(source)) return false;
+  if (await areaScoped(task.id, task)) return false;
 
   const dedupKey = `${eventName}:${task.id}`;
   if (handled.has(dedupKey)) return false;
@@ -430,6 +460,8 @@ export async function maybeRunForTaskEvent(
   await prior;
 
   try {
+    // Classified while it waited in the queue: the event's copy is old, so read the scope again.
+    if (await areaScoped(task.id)) return false;
     log.agent.info('overview-maintainer: running for task event', {
       taskId: task.id, event: eventName, project: location.name,
     });
@@ -450,6 +482,7 @@ export async function maybeRunForTaskEvent(
       });
       return false;
     }
+    if (await areaScoped(task.id)) return false;
     const writes = await applyMaintainerAnswer(parsed.answer, location);
     log.agent.info('overview-maintainer: run complete', {
       taskId: task.id, project: location.name,

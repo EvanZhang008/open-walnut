@@ -324,6 +324,8 @@ export async function queueSubtaskNotice(n: SubtaskNotice): Promise<void> {
     const { getTask } = await import('../task-manager.js');
     const parent = await getTask(n.parentTaskId).catch(() => null);
     if (!parent) return;
+    const { mayShareTaskContext } = await import('../router/context-sharing.js');
+    if (!await mayShareTaskContext(n.child.id, parent.id)) return;
     const dest = await resolveParentDestination(parent);
     if (!dest) {
       log.session.info('subtask notice skipped: parent cannot hear', {

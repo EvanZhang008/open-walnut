@@ -16,7 +16,10 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { fieldDistBin, fieldVersions, packVersion, readFieldJson, writeFieldJson } from '../../scripts/release-rehearsal/field-packs.mjs'
-import { judgeDaemon, nodeForm, pruneToLogs, releaseArchive, startFrom, startPointsOf } from '../../scripts/release-rehearsal/field.mjs'
+import { FIELD_SCENARIOS, REHEARSAL_ROUTER, ROUTER_AREAS, ROUTER_STORE_VERSION, TASK_STORE, judgeDaemon, judgeRouterRefusal, nodeForm, pruneToLogs, releaseArchive, startFrom, startPointsOf } from '../../scripts/release-rehearsal/field.mjs'
+import { TASK_DB_MAX_SUPPORTED_VERSION, TASK_DB_ROUTER_VERSION, TASK_DB_SCHEMA_VERSION } from '../../src/core/task-db-version.js'
+import { normalizeRouterAreas, routerAreasPath } from '../../src/core/router/areas.js'
+import { routerTaskDbPath } from '../../src/core/router/data-version.js'
 import { buildPackument, startRegistry } from '../../scripts/release-rehearsal/registry.mjs'
 import { compareVersions } from '../../scripts/release-rehearsal/version-order.mjs'
 import { TARGETS, builtName } from '../../scripts/release-files.mjs'
@@ -125,6 +128,62 @@ describe('judgeDaemon: the daemon after an update in use', () => {
 
   it('with the release\'s daemon version unknown, it still requires a replacement', () => {
     expect(() => judgeDaemon({ before, now: { ...before }, expected: null, alive: alive([100]) })).toThrow(/still pid 100/)
+  })
+})
+
+describe('field-router-back: going back from a task store a router stamped', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'scripts/release-rehearsal/field.mjs'), 'utf8')
+  const goneBack = src.slice(src.indexOf('async function goneBack'), src.indexOf('async function updatedWhileServing'))
+  const REFUSED = 'Task database schema 14 is newer than supported schema 13; use a newer Walnut build.'
+  const EXITED = 'open-walnut web exited 1 before serving (log: /w/log.txt)'
+
+  it('runs right after field-back as goneBack with a router, and field-back keeps its serve-or-refuse outcome', () => {
+    expect(FIELD_SCENARIOS.indexOf('field-router-back')).toBe(FIELD_SCENARIOS.indexOf('field-back') + 1)
+    expect(src).toContain("'field-back': goneBack,")
+    expect(src).toContain("'field-router-back': (a) => goneBack({ ...a, router: true }),")
+    // The ordinary way back still accepts either a serving start point or its REFUSAL.
+    expect(goneBack).toContain("outcome = `${from.version} serves the task and the history (three answers)")
+    expect(goneBack).toContain("if (!/exited \\d+ before serving/.test(message) || !REFUSAL.test(tail))")
+    expect(goneBack).toContain('} else try {')
+  })
+
+  it('stamps through the release\'s own POST /api/v1/org/routers, never by hand, and reads the stamp back from the file', () => {
+    expect(src).toContain("w.api('POST', '/api/v1/org/routers', REHEARSAL_ROUTER)")
+    expect(src).not.toMatch(/user_version\s*=/)
+    expect(src).toContain("db.query('PRAGMA user_version').get().user_version")
+    const setUp = goneBack.indexOf('setUpRouter(w')
+    // Unstamped before the router, stamped after it, and the refusal is the only way back.
+    expect(goneBack.indexOf('plain.version < ROUTER_STORE_VERSION')).toBeLessThan(setUp)
+    expect(goneBack.indexOf('expectStore(checkSqlite(releaseFile')).toBeGreaterThan(setUp)
+    expect(goneBack).toContain('judgeRouterRefusal(')
+  })
+
+  it('names the version, the store and the registry the router code writes', () => {
+    expect(ROUTER_STORE_VERSION).toBe(TASK_DB_ROUTER_VERSION)
+    expect(ROUTER_STORE_VERSION).toBeGreaterThan(TASK_DB_SCHEMA_VERSION)
+    expect(ROUTER_STORE_VERSION).toBeLessThanOrEqual(TASK_DB_MAX_SUPPORTED_VERSION)
+    const home = path.join(tmp, 'home', '.open-walnut')
+    expect(path.join(home, TASK_STORE)).toBe(routerTaskDbPath(home))
+    expect(path.join(home, ROUTER_AREAS)).toBe(routerAreasPath(home))
+  })
+
+  it('sends the paused local router the Org page\'s form sends, which the area schema accepts', () => {
+    expect(REHEARSAL_ROUTER).toMatchObject({ area_id: 'personal', host: '__local__', links: [], sources: [] })
+    const area = { id: REHEARSAL_ROUTER.area_id, name: REHEARSAL_ROUTER.area_name, host: REHEARSAL_ROUTER.host, taskIds: ['t-1'], sources: REHEARSAL_ROUTER.sources }
+    expect(normalizeRouterAreas({ version: 1, areas: [area], routers: [{ taskId: 't-1', areaId: area.id, paused: true }], items: [] }).areas).toEqual([area])
+    const form = fs.readFileSync(path.join(ROOT, 'web/src/components/org/OrgRouterSetup.tsx'), 'utf8')
+    expect(form).toContain("{ id: 'personal', name: 'Personal' }")
+    expect(form).toContain("host: '__local__', links, sources: []")
+  })
+
+  it('takes only the start point\'s own guard on the router\'s store version as the refusal', () => {
+    expect(judgeRouterRefusal({ version: '0.6.28', message: EXITED, tail: `boot\n${REFUSED}\n` })).toBe(`0.6.28 refuses the router's task store before serving: ${REFUSED}`)
+    // Exited for another reason, or never exited at all.
+    expect(() => judgeRouterRefusal({ version: '0.6.28', message: EXITED, tail: 'EADDRINUSE' })).toThrow(/did not refuse the router's task store/)
+    expect(() => judgeRouterRefusal({ version: '0.6.28', message: 'open-walnut web did not answer within 600s', tail: REFUSED })).toThrow(/did not refuse/)
+    // A guard about another store version is not this store's refusal.
+    expect(() => judgeRouterRefusal({ version: '0.6.28', message: EXITED, tail: REFUSED.replace('schema 14', 'schema 15') })).toThrow(/did not refuse/)
+    expect(() => judgeRouterRefusal({ version: '0.6.28', message: EXITED, tail: REFUSED.replace('schema 13', 'schema 14') })).toThrow(/did not refuse/)
   })
 })
 

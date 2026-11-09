@@ -25,6 +25,7 @@ import {
   TASK_COLUMNS,
   TASK_DB_PATH,
   SCHEMA_VERSION,
+  MAX_SUPPORTED_SCHEMA_VERSION,
 } from '../../src/core/task-db.js';
 import { runMigrationIfNeeded } from '../../src/core/task-db-migration.js';
 import {
@@ -111,15 +112,15 @@ describe('task-db: schema idempotency', () => {
     const raw = new Database(TASK_DB_PATH);
     raw.exec('CREATE TABLE future_task_state (id TEXT PRIMARY KEY, phase TEXT)');
     raw.prepare('INSERT INTO future_task_state VALUES (?, ?)').run('future', 'FUTURE_ACTION');
-    raw.pragma(`user_version = ${SCHEMA_VERSION + 1}`);
+    raw.pragma(`user_version = ${MAX_SUPPORTED_SCHEMA_VERSION + 1}`);
     const journal = raw.pragma('journal_mode', { simple: true });
     raw.close();
 
-    expect(() => getDb()).toThrow(`Task database schema ${SCHEMA_VERSION + 1} is newer than supported schema ${SCHEMA_VERSION}`);
+    expect(() => getDb()).toThrow(`Task database schema ${MAX_SUPPORTED_SCHEMA_VERSION + 1} is newer than supported schema ${MAX_SUPPORTED_SCHEMA_VERSION}`);
     expect(() => getDb()).toThrow('use a newer Walnut build');
 
     const check = new Database(TASK_DB_PATH, { readonly: true });
-    expect(check.pragma('user_version', { simple: true })).toBe(SCHEMA_VERSION + 1);
+    expect(check.pragma('user_version', { simple: true })).toBe(MAX_SUPPORTED_SCHEMA_VERSION + 1);
     expect(check.pragma('journal_mode', { simple: true })).toBe(journal);
     expect(check.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()).toEqual([{ name: 'future_task_state' }]);
     expect(check.prepare('SELECT * FROM future_task_state').all()).toEqual([{ id: 'future', phase: 'FUTURE_ACTION' }]);

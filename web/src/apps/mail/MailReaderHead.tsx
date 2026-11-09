@@ -23,7 +23,9 @@ import { setOpenMessageRead } from './mail-read-flag';
 import { MailContentActions } from './MailContentActions';
 import { MailInviteCard } from './MailInviteCard';
 import { MailSortLine } from './MailSortLine';
-import type { MailOpenMessage } from './mail-store';
+import { getMailSnapshot, type MailOpenMessage } from './mail-store';
+import { mailboxRoleOf, outgoingKind, showsRouteLine } from './mail-route-model';
+import { MailRouteLine } from './MailRouteLine';
 import { openFinishUnsubscribeAsk, unsubscribeFromMessage } from './mail-unsubscribe-actions';
 import {
   unsubscribeHandsOverToAsk,
@@ -58,6 +60,9 @@ export function MailReaderHead({ open, message, accounts, providers }: Props) {
   const [details, setDetails] = useState(false);
   const mark = senderMark(message.from);
   const extras = detailRows(message);
+  const role = mailboxRoleOf(getMailSnapshot().mailboxes, message);
+  const routed = showsRouteLine(message, { role });
+  const outgoing = outgoingKind(message, { role });
   // WHICH ACCOUNT this mail is in, and therefore which identity the reply buttons above would send
   // as. Only with more than one account, because with one it is noise. It was never on screen: the
   // reply is already correct (it uses `open.accountId`), but a merged list is the first place a
@@ -121,6 +126,8 @@ export function MailReaderHead({ open, message, accounts, providers }: Props) {
         </span>
       </div>
 
+      {routed && <MailRouteLine route={message.route} unavailable={message.routingUnavailable} surface="reader" subject={message.subject} source={{ account: message.accountId, message: message.messageId, ...(message.deliveryVersion ? { version: message.deliveryVersion } : {}) }} routingArea={message.routingArea} routingCoverage={message.routingCoverage} handoff={message.routingHandoff} />}
+      {outgoing && <MailRouteLine route={undefined} outgoing={outgoing} surface="reader" />}
       {message.invite && canAnswerInvites(providers, open.accountId) && (
         <MailInviteCard accountId={open.accountId} messageId={open.messageId} kind={message.invite.kind} />
       )}

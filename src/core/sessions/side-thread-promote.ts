@@ -33,6 +33,18 @@ export interface PromoteSideThreadResult {
   sessionId: string;
 }
 
+/** Whether the parent or the thread works in an incoming-item area. Unknown counts as in one. */
+async function sideThreadInArea(parentAreaId: string | undefined, threadAreaId: string | undefined, parentTaskId: string | undefined): Promise<boolean> {
+  if (parentAreaId || threadAreaId) return true;
+  if (!parentTaskId) return false;
+  try {
+    const { mayShareTaskContext } = await import('../router/context-sharing.js');
+    return !await mayShareTaskContext(parentTaskId, undefined);
+  } catch {
+    return true;
+  }
+}
+
 export async function promoteSideThread(
   parentSid: string,
   threadId: string,
@@ -58,6 +70,12 @@ export async function promoteSideThread(
   // nothing to be a sibling of, so it becomes a top-level Inbox task.
   const parentRecord = await getSessionByClaudeId(parentSid);
   const siblingOfTaskId = parentRecord?.taskId?.trim() || undefined;
+  // A side thread of incoming-item area work may answer questions, but promoting it would
+  // make an ordinary task outside the area holding the area's conversation. Refused before
+  // any write (router/context-sharing.ts keeps the area rule).
+  if (await sideThreadInArea(parentRecord?.profile?.areaId, threadRecord.profile?.areaId, siblingOfTaskId)) {
+    throw new SessionControlError('A side thread of incoming-item area work stays a side thread. Nothing was promoted.', 409, { code: 'area_scoped' });
+  }
   // A thread's label is a NAME only when someone (a human, or the auto-titler)
   // actually named it. The client mints the chip's label by truncating the
   // question itself, and passing THAT through as the task title is how a task —

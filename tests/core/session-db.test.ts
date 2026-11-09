@@ -330,6 +330,20 @@ describe('session-db: transaction atomicity', () => {
 // ── 4. Migration idempotency ───────────────────────────────────────────────
 
 describe('session-db migration: idempotency', () => {
+  it('never resurrects migrated JSON history after all SQLite session rows are removed', async () => {
+    await fsp.writeFile(SESSIONS_FILE, JSON.stringify({ version: 2, sessions: [{
+      claudeSessionId: 'removed-legacy-session', taskId: 'legacy-task', project: '',
+      process_status: 'stopped', mode: 'default', startedAt: '2026-01-01T00:00:00Z',
+      lastActiveAt: '2026-01-01T00:00:00Z', messageCount: 1,
+    }] }));
+    expect(await runSessionMigrationIfNeeded()).toMatchObject({ migrated: true, count: 1 });
+    getDb()!.prepare('DELETE FROM sessions').run();
+    closeDb();
+    expect(await runSessionMigrationIfNeeded()).toEqual({ migrated: false, count: 0 });
+    expect(getDb()!.prepare('SELECT COUNT(*) FROM sessions').pluck().get()).toBe(0);
+    expect(fs.existsSync(SESSIONS_FILE)).toBe(true);
+  });
+
   it('runSessionMigrationIfNeeded is a no-op on a second call (row count stable, no re-copy)', async () => {
     closeDb();
 

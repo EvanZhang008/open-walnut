@@ -38,6 +38,9 @@ export interface OrgTaskLike {
   phase: TaskPhase;
   parent_task_id?: string;
   org_role?: OrgRole;
+  router_area_id?: string;
+  router_links?: readonly string[];
+  router_paused?: boolean;
   /** A lead only: the other projects it leads (Task.org_leads). */
   org_leads?: readonly string[];
   /** A lead only: the name the user gave it (Task.org_name). */
@@ -109,6 +112,7 @@ export interface OrgProjectNode {
 
 export interface OrgTree {
   main?: OrgNodeRef;
+  routers?: Array<OrgNodeRef & { areaId?: string; links: readonly string[]; paused: boolean }>;
   projects: OrgProjectNode[];
   counts: OrgCounts;
 }
@@ -117,7 +121,7 @@ const ZERO: OrgCounts = { open: 0, running: 0, needsYou: 0, toRead: 0, waiting: 
 
 /** The main agent or a project lead: the org's own nodes, never work. */
 export function isOrgNode(task: { org_role?: string }): boolean {
-  return task.org_role === 'main' || task.org_role === 'lead';
+  return task.org_role === 'main' || task.org_role === 'lead' || task.org_role === 'router';
 }
 
 /** What the UI calls the main agent and a project's lead (2026-10-26, the user: "change main agent
@@ -143,6 +147,7 @@ export function orgDisplayTitle(task: { title: string; project?: string; org_rol
   if (task.org_role === 'main') return CEO_LABEL;
   if (task.org_role === 'lead' && task.org_name?.trim()) return `${task.org_name.trim()} ${VP_LABEL}`;
   if (task.org_role === 'lead') return task.title.replace(/ lead$/i, ` ${VP_LABEL}`);
+  if (task.org_role === 'router') return task.org_name?.trim() || task.title;
   return task.project && task.title.trim().toLowerCase() === task.project.trim().toLowerCase()
     ? askProjectDisplay(task.title) : task.title;
 }
@@ -400,7 +405,10 @@ export function buildOrgTree(all: readonly OrgTaskLike[]): OrgTree {
   });
 
   const main = pickMain(tasks);
-  return { ...(main ? { main: refOf(main) } : {}), projects, counts: total };
+  const routers = tasks.filter((task) => task.org_role === 'router' && task.phase !== 'COMPLETE').map((task) => ({
+    ...refOf(task), areaId: task.router_area_id, links: task.router_links ?? [], paused: task.router_paused !== false,
+  }));
+  return { ...(main ? { main: refOf(main) } : {}), ...(routers.length ? { routers } : {}), projects, counts: total };
 }
 
 /** The project a name points at, case-insensitively; '' or "inbox" is the Inbox. */

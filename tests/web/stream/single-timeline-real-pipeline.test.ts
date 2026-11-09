@@ -242,6 +242,13 @@ beforeAll(async () => {
   sessionRunner.setCliCommand(MOCK_CLI)
   sessionRunner.setTestDaemonUrl(`ws://127.0.0.1:${daemon.port}`)
   server = await startServer({ port: 0, dev: true })
+  const { addTasksBulk } = await import('../../../src/core/task-manager.js')
+  const now = new Date().toISOString()
+  await addTasksBulk(['stl-task-b1', 'stl-task-b2', 'stl-task-b3'].map((id) => ({
+    id, title: 'Stream test task', status: 'in_progress', phase: 'IN_PROGRESS', priority: 'none',
+    project: 'Walnut', source: 'local', session_ids: [], created_at: now, updated_at: now,
+    description: '', summary: '', note: '',
+  })))
   const addr = server.address()
   port = typeof addr === 'object' && addr ? addr.port : 0
   await new Promise((r) => setTimeout(r, 1500))

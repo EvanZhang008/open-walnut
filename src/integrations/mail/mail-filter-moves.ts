@@ -43,7 +43,7 @@ const RETRY_AFTER_MS = [60_000, 5 * 60_000]
 export const CANNOT_ARCHIVE = 'This account cannot move mail to an archive.'
 
 export interface FilterMoverDeps {
-  store: Pick<MailStore, 'moves' | 'deleteMessages' | 'bumpMailboxUnread'>
+  store: Pick<MailStore, 'moves' | 'deleteMessages' | 'bumpMailboxUnread' | 'withAccountWrite'>
   bodies: Pick<MailBodyStore, 'remove'>
   providers: Pick<MailProviderRegistry, 'get'>
   /** Group counts moved in these folders (the sort engine's `notifyGroupsChanged`). */
@@ -206,15 +206,18 @@ export class MailFilterMover {
   /** The moved mail is not in the inbox any more: its cached row and body go, and the counts follow. */
   private async dropCached(accountId: string, messageIds: string[], pairs: Map<string, FolderPair>): Promise<void> {
     if (messageIds.length === 0) return
-    const rows = await this.deps.store.moves.cachedRows(accountId, messageIds)
-    for (const row of rows) if (row.body_ref) await this.deps.bodies.remove(row.body_ref).catch(() => undefined)
-    await this.deps.store.deleteMessages(rows.map((row) => row.rowid))
-    const unread = new Map<string, number>()
-    for (const row of rows) {
-      pairs.set(`${accountId}\u0000${row.mailbox_id}`, { accountId, mailboxId: row.mailbox_id })
-      if (row.seen === 0) unread.set(row.mailbox_id, (unread.get(row.mailbox_id) ?? 0) + 1)
-    }
-    for (const [mailboxId, count] of unread) await this.deps.store.bumpMailboxUnread(accountId, mailboxId, -count)
+    // In the account's write gate (the provider call already returned), rows before files.
+    await this.deps.store.withAccountWrite(accountId, async () => {
+      const rows = await this.deps.store.moves.cachedRows(accountId, messageIds)
+      await this.deps.store.deleteMessages(rows.map((row) => row.rowid))
+      for (const row of rows) if (row.body_ref) await this.deps.bodies.remove(row.body_ref).catch(() => undefined)
+      const unread = new Map<string, number>()
+      for (const row of rows) {
+        pairs.set(`${accountId}\u0000${row.mailbox_id}`, { accountId, mailboxId: row.mailbox_id })
+        if (row.seen === 0) unread.set(row.mailbox_id, (unread.get(row.mailbox_id) ?? 0) + 1)
+      }
+      for (const [mailboxId, count] of unread) await this.deps.store.bumpMailboxUnread(accountId, mailboxId, -count)
+    })
   }
 
   dispose(): void {

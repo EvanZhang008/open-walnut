@@ -16,13 +16,12 @@
  *   than a mailbox-sized download.
  */
 import type { MailBodyStore } from './bodies.js'
-import { MailBodyTooLargeError, MAX_BODY_BYTES, snippetOf } from './bodies.js'
+import { MailBodySnapshotError, MailBodyTooLargeError, MAX_BODY_BYTES, snippetOf } from './bodies.js'
 import { keyOfMessage } from './message-tasks.js'
 import {
   bodyBelongsTo,
   fillAddressesFromBody,
   fillUnsubscribeFromBody,
-  filledAddresses,
   payloadForRetiredBody,
   recipientsForUpdate,
   senderForUpdate,
@@ -42,6 +41,7 @@ import {
 } from './service-dto.js'
 import { unsubscribeFromBodyHtml } from './unsubscribe-link.js'
 import { reconcileUnread, type UnreadReconcileResult } from './unread-reconcile.js'
+import { mailRouterKey, mailRowDeliveryVersion } from './router-source.js'
 import {
   MAX_PAGE_CHECKS,
   PAGE_UNREAD_WAIT_MS,
@@ -71,7 +71,7 @@ import {
 import type { MailProviderRegistry } from './provider-registry.js'
 import type { MessageScopeRole } from './scope.js'
 import { folderKey } from './store.js'
-import type { MailStore, MessageRow, MessageWrite, UnreadKeyRow } from './store.js'
+import type { BodyWriteExpected, KnownMessage, MailStore, MessageRow, MessageWrite, UnreadKeyRow } from './store.js'
 import type { UnsubscribeRow } from './store-write.js'
 import type {
   MailAccount,
@@ -107,6 +107,48 @@ function sentAtOf(envelope: MailEnvelope): number {
   return Number.isFinite(envelope.sentAt) ? envelope.sentAt : 0
 }
 
+/** The delivery a fetch started from: what a body (or a failure marker) may be written against. */
+function expectedOf(row: MessageRow): BodyWriteExpected {
+  return {
+    sentAt: row.sent_at, receivedAt: row.received_at ?? null, bodyRef: row.body_ref ?? null, rfcMessageId: row.rfc_message_id,
+    metadata: {
+      fromAddr: row.from_addr, subject: row.subject, snippet: row.snippet,
+      threadId: row.thread_id ?? null, attachmentsJson: row.attachments_json ?? null, payload: row.payload ?? null,
+    },
+  }
+}
+
+/** Is `fresh` still the delivery `before` was (instants and Message-ID), now holding `bodyRef`? */
+function sameInstants(before: MessageRow, fresh: MessageRow | undefined, bodyRef: string | null): fresh is MessageRow {
+  return !!fresh && fresh.rowid === before.rowid && fresh.sent_at === before.sent_at
+    && (fresh.received_at ?? null) === (before.received_at ?? null)
+    && fresh.rfc_message_id === before.rfc_message_id
+    && (fresh.body_ref ?? null) === bodyRef
+}
+
+/** Is `fresh` exactly the snapshot `before` was: the same row at the same version? */
+function unchanged(before: MessageRow, fresh: MessageRow | undefined): fresh is MessageRow {
+  return !!fresh && fresh.rowid === before.rowid && fresh.sent_at === before.sent_at
+    && fresh.received_at === before.received_at && fresh.rfc_message_id === before.rfc_message_id
+    && fresh.body_ref === before.body_ref && fresh.from_addr === before.from_addr
+    && fresh.subject === before.subject && fresh.snippet === before.snippet
+    && fresh.thread_id === before.thread_id && fresh.attachments_json === before.attachments_json
+    && fresh.payload === before.payload
+}
+
+/** The `knownMessages` entry for a row this page just wrote; `body` is what it kept of the old one. */
+function knownAfter(rowid: number, write: MessageWrite, body: Pick<KnownMessage, 'body_ref' | 'body_error'> | null): KnownMessage {
+  return {
+    rowid, envelope_hash: write.envelopeHash, body_ref: body?.body_ref ?? null, body_error: body?.body_error ?? null,
+    snippet: write.snippet, payload: write.payload, sent_at: write.sentAt, received_at: write.receivedAt,
+    rfc_message_id: write.rfcMessageId,
+  }
+}
+
+function deliveryChanged(): MailServiceError {
+  return new MailServiceError('delivery_changed', 'A newer delivery replaced this email while its body was being read. Open it again.', 409)
+}
+
 /**
  * One message, as the unsubscribe ladder needs it: which rung it can be handed to, what the ledger
  * keys it under, and the sender's own links. See `MailService.unsubscribeSubject`.
@@ -134,7 +176,6 @@ export interface MailServiceSortHook {
 export class MailService {
   /** Per account: the last `send` verdict and when it was learned. See `sendCapabilityOf`. */
   private readonly sendCache = new Map<string, { send: boolean; at: number }>()
-
   /** Every provider unread question goes through here: one clock and one call in flight per folder. */
   private readonly unreadChecks: UnreadChecks
 
@@ -143,6 +184,7 @@ export class MailService {
     bodies: MailBodyStore
     providers: MailProviderRegistry
     now?: () => number
+    routes?: (messages: MailMessageDto[]) => Promise<MailMessageDto[]>
     /**
      * Optional: told when an unread check settles that changed rows or that a page said was running. Its
      * own seam rather than the whole `MailEvents`, because this is the only thing a read path announces.
@@ -429,7 +471,8 @@ export class MailService {
 
   /** One page of rows as the wire shows them: the task backlink and the unsubscribe ledger. */
   private async decorate(rows: MessageRow[]): Promise<MailMessageDto[]> {
-    return this.withUnsubscribes(rows, await this.withTaskIds(rows.map((row) => toDto(row))))
+    const messages = await this.withUnsubscribes(rows, await this.withTaskIds(rows.map((row) => toDto(row))))
+    return this.deps.routes ? this.deps.routes(messages) : messages
   }
 
   /** One row, decorated. The single-message read paths all go through this. */
@@ -587,13 +630,16 @@ export class MailService {
    */
   async readMessage(accountId: string, messageId: string, options: {
     retry?: boolean
+    /** Answer from the cache only: an automated reader never makes the provider fetch a body. */
+    cacheOnly?: boolean
   } = {}): Promise<{
     message: MailMessageDto
     body: MailBodyDto | null
     bodyError?: ProviderErrorCode | 'unknown'
   }> {
     const row = await this.requireMessage(accountId, messageId)
-    if (row.body_ref) return { message: await this.oneWithTaskId(row), body: await this.readStoredBody(row) }
+    if (row.body_ref) return this.readCached(row)
+    if (options.cacheOnly) return { message: await this.oneWithTaskId(row), body: null }
     // A body the provider already refused (over the cap, gone from the server) is answered from
     // the marker. Re-asking on every open is how one 40 MB message becomes a download per click.
     if (row.body_error && !options.retry) {
@@ -607,32 +653,21 @@ export class MailService {
         `a body for ${messageId}`,
         () => this.provider(accountId).getBody(accountId, messageId, sizeHintOf(row)),
       )
-      const stored = await this.storeBody(row, body)
-      const message = await this.oneWithTaskId(row)
-      // `row` was read BEFORE the body arrived, so anything the body just taught the cache has to
-      // ride this answer explicitly or the response that learned it would still not carry it.
-      return {
-        message: {
-          ...message,
-          hasBody: true,
-          snippet: stored.snippet,
-          ...filledAddresses(stored.filled),
-          // Same reason as the addresses: the console opens a newsletter, this read is what learns
-          // it has an unsubscribe link, and without this the very response that learned it would
-          // still say there is none until the next list. Only `available` is restated — `done` and
-          // `pending` came from the ledger query above and replacing the whole object would throw
-          // away the "already unsubscribed" this very read just looked up.
-          ...(stored.unsubscribe
-            ? {
-              unsubscribe: {
-                ...message.unsubscribe,
-                available: unsubscribeAvailability(stored.unsubscribe),
-              },
-            }
-            : {}),
-        },
-        body: stored.body,
-      }
+      const stored = await this.storeBody(row, body).catch(async (error: unknown) => {
+        // Another read (the prefetch, say) stored this same delivery's body first: that capture is
+        // the row's now, and it is answered as one cached snapshot rather than as a conflict.
+        const fresh = error instanceof MailServiceError && error.code === 'delivery_changed'
+          ? await this.deps.store.getMessage(row.account_id, row.message_id)
+          : undefined
+        if (fresh?.body_ref && sameInstants(row, fresh, fresh.body_ref)) return fresh
+        throw error
+      })
+      if ('rowid' in stored) return this.readCached(stored)
+      // Answered as one cached snapshot of the row as it is NOW, confirmed to be the delivery the
+      // body was stored for: what the body taught (addresses, the unsubscribe link) is on that row.
+      const fresh = await this.deps.store.getMessage(row.account_id, row.message_id)
+      if (!sameInstants(row, fresh, stored.ref)) throw deliveryChanged()
+      return this.readCached(fresh)
     } catch (error) {
       if (error instanceof MailServiceError) throw error
       const code = error instanceof MailBodyTooLargeError
@@ -640,12 +675,23 @@ export class MailService {
         : providerErrorCode(error) ?? 'unknown'
       // PERMANENT failures are remembered; transient ones are not. A message over the cap or one
       // the server no longer has will answer the same way forever, and the prefetch would
-      // otherwise re-download every one of them on every tick.
+      // otherwise re-download every one of them on every tick. Only on the delivery it was about.
       if (code === 'too-large' || code === 'not-found') {
-        await this.deps.store.setMessageBodyError(row.rowid, code).catch(() => undefined)
+        await this.deps.store.withAccountWrite(row.account_id, () => this.deps.store.setMessageBodyError(row.rowid, code, expectedOf(row))).catch(() => undefined)
       }
-      return { message: await this.oneWithTaskId(row), body: null, bodyError: code }
+      // The failure is about the delivery the fetch started from; a row that moved since is not it.
+      const fresh = await this.deps.store.getMessage(row.account_id, row.message_id)
+      if (!unchanged(row, fresh)) throw deliveryChanged()
+      return { message: await this.oneWithTaskId(fresh), body: null, bodyError: code }
     }
+  }
+
+  /** A cached body with the row it belongs to, as one snapshot: a poll may retire it (or a read replace it) mid-read. */
+  private async readCached(row: MessageRow): Promise<{ message: MailMessageDto; body: MailBodyDto | null }> {
+    const body = await this.readStoredBody(row)
+    const fresh = await this.deps.store.getMessage(row.account_id, row.message_id)
+    if (!unchanged(row, fresh)) throw deliveryChanged()
+    return { message: await this.oneWithTaskId(fresh), body }
   }
 
   /** The cached envelope alone, with no provider call. What a timed-out read degrades to. */
@@ -667,6 +713,8 @@ export class MailService {
     references: string[]
     subject: string
     from: MailAddress
+    /** The delivery these headers were read from, so a caller can refuse one that moved meanwhile. */
+    deliveryVersion: string
   }> {
     const row = await this.requireMessage(accountId, messageId)
     const payload = parseJson<MessagePayload>(row.payload, {})
@@ -677,17 +725,19 @@ export class MailService {
       references,
       subject: row.subject,
       from: payload.from ?? { address: row.from_addr },
+      deliveryVersion: mailRowDeliveryVersion(row),
     }
   }
 
-  async search(query: { accountId?: string; q: string; limit: number }): Promise<{
+  async search(query: { accountId?: string; q: string; limit: number; cacheOnly?: boolean }): Promise<{
     messages: MailMessageDto[]
     source: 'provider' | 'cache'
   }> {
     // Resolved WITHOUT throwing: a provider plugin that is off or reloading must not turn cache
     // search into a 503. The cache is local, it is the whole point, and it still answers.
     const spec = query.accountId ? this.deps.providers.get(providerIdOf(query.accountId)) : undefined
-    if (spec?.capabilities.search && spec.search && query.accountId) {
+    // `cacheOnly`: an automated caller reads cached rows only, whose versions are the ones it confirms.
+    if (!query.cacheOnly && spec?.capabilities.search && spec.search && query.accountId) {
       const accountId = query.accountId
       const envelopes = await callProvider(
         'a search',
@@ -776,8 +826,12 @@ export class MailService {
   // ── writes the poller drives ──
 
   /** Upsert one page. A page already in the cache is a no-op, down to `updated_at`. */
-  async ingestPage(accountId: string, envelopes: MailEnvelope[]): Promise<IngestResult> {
-    const result: IngestResult = { added: 0, updated: 0, headlines: [] }
+  ingestPage(accountId: string, envelopes: MailEnvelope[]): Promise<IngestResult> {
+    return this.deps.store.withAccountWrite(accountId, () => this.ingestPageNow(accountId, envelopes))
+  }
+
+  private async ingestPageNow(accountId: string, envelopes: MailEnvelope[]): Promise<IngestResult> {
+    const result: IngestResult = { added: 0, updated: 0, received: 0, headlines: [] }
     if (envelopes.length === 0) return result
     // The mirror is checked FIRST, every page. A delete that lands mid-tick removes the account
     // row while this tick still holds a page of envelopes, and inserting them would orphan rows
@@ -811,6 +865,38 @@ export class MailService {
       }
     }
     const updatedWithSort: string[] = []
+    // One new delivery: a row inserted, or a cached row whose delivery instants moved (the same
+    // conversation handle after a reply landed). Counted in `received`, never in `added`, which
+    // stays the count of new cache rows. The headline's `version` names the exact delivery, so a
+    // grant for an earlier message on the same handle is not this reply's; `canonicalKey` stays the
+    // unversioned RFC scope, so a copy with another received time cannot step out of its area.
+    const delivered = async (write: MessageWrite) => {
+      // The version is the stored row's own (the one every reader confirms against), read back
+      // after the write. A row some other writer has rewritten since is not this arrival's
+      // snapshot, so it gets no headline (it is still counted: the mail did arrive).
+      const row = await this.deps.store.getMessage(accountId, write.messageId)
+      if (!row) return
+      result.received = (result.received ?? 0) + 1
+      const group = write.sort?.group
+      const important = !group || group === 'important'
+      if (important) result.importantAdded = (result.importantAdded ?? 0) + 1
+      // A handle this page already headlined was rewritten by this write: its earlier headline names
+      // a snapshot that no longer stands.
+      result.headlines = result.headlines.filter((one) => one.messageId !== row.message_id)
+      if (result.importantHeadlines) result.importantHeadlines = result.importantHeadlines.filter((one) => one.messageId !== row.message_id)
+      if (row.envelope_hash !== write.envelopeHash) return
+      const headline = {
+        from: row.from_addr,
+        subject: row.subject,
+        messageId: row.message_id,
+        version: mailRowDeliveryVersion(row),
+        canonicalKey: mailRouterKey(row.account_id, row.message_id, row.rfc_message_id),
+      }
+      result.headlines.push(headline)
+      // Important for triage and the arrival highlight: Important itself (mail still waiting for the
+      // model sits there too), and anything the engine could not classify (NULL reads as Important).
+      if (important) (result.importantHeadlines ??= []).push({ ...headline })
+    }
     for (const envelope of envelopes) {
       const existing = known.get(envelope.messageId)
       const hash = envelopeHashOf(envelope)
@@ -818,14 +904,18 @@ export class MailService {
       if (existing) {
         // The row moved in time, so it is a different message than the one its body was read for
         // (a conversation row after a reply landed: see `bodyBelongsTo`). The old body goes BEFORE
-        // the envelope is rewritten, file first and then the columns, the order body-revision.ts
-        // uses so a crash leaves a row that still names its file rather than a file nobody names.
+        // the envelope is rewritten, columns first and then the file, so no reader confirms a row
+        // whose file is already gone (a crash leaves at worst a file nobody names).
         const arrived = { sentAt: sentAtOf(envelope), receivedAt: envelope.receivedAt ?? null }
-        const retire = (existing.body_ref !== null || existing.body_error !== null)
-          && !bodyBelongsTo(existing, arrived)
+        // A new delivery whether or not a body was cached for the old one: flags, a preview or a
+        // re-decoded subject change the row, but only a moved instant (or another Message-ID under
+        // the same instants) is mail that arrived.
+        const moved = !bodyBelongsTo(existing, arrived)
+          || existing.rfc_message_id !== (envelope.rfcMessageId ?? '')
+        const retire = (existing.body_ref !== null || existing.body_error !== null) && moved
         if (retire) {
-          if (existing.body_ref) await this.deps.bodies.remove(existing.body_ref)
           await this.deps.store.retireMessageBody(existing.rowid)
+          if (existing.body_ref) await this.deps.bodies.remove(existing.body_ref)
           this.deps.log?.info?.('mail body retired: the envelope moved', {
             accountId, messageId: envelope.messageId, storedSentAt: existing.sent_at, sentAt: arrived.sentAt,
           })
@@ -833,7 +923,7 @@ export class MailService {
         // A retired body's snippet is text from ANOTHER message, so it is not carried forward the
         // way body-revision keeps a mis-decoded one: the preview, when the listing has one, or
         // nothing until the re-fetch.
-        const carried = retire
+        const carried = moved
           ? { snippet: '', payload: JSON.stringify(payloadForRetiredBody(parseJson<MessagePayload>(existing.payload, {}))) }
           : existing
         const write = withSort(this.toWrite(accountId, envelope, hash, carried))
@@ -844,20 +934,17 @@ export class MailService {
         // changed subject silently deleted the body from search.
         if (!existing.body_ref || retire) await this.reindex(existing.rowid, write)
         result.updated += 1
+        // The page may name this handle again: it is compared against the row as just written.
+        known.set(envelope.messageId, knownAfter(existing.rowid, write, retire ? null : existing))
+        if (moved) await delivered(write)
         continue
       }
       const write = withSort(this.toWrite(accountId, envelope, hash, existing))
       const rowid = await this.deps.store.insertMessage(write, this.now)
       await this.reindex(rowid, write)
       result.added += 1
-      result.headlines.push({ from: write.fromAddr, subject: write.subject })
-      // Important for triage and the arrival highlight: Important itself (mail still waiting for the
-      // model sits there too), and anything the engine could not classify (NULL reads as Important).
-      const group = write.sort?.group
-      if (!group || group === 'important') {
-        result.importantAdded = (result.importantAdded ?? 0) + 1
-        ;(result.importantHeadlines ??= []).push({ from: write.fromAddr, subject: write.subject })
-      }
+      known.set(envelope.messageId, knownAfter(rowid, write, null))
+      await delivered(write)
     }
     if (sorted.size > 0) {
       result.sortedPairs = [...sorted.values()]
@@ -907,7 +994,7 @@ export class MailService {
         // read path will try again and report it to whoever actually asked.
         const code = error instanceof MailBodyTooLargeError ? 'too-large' : providerErrorCode(error)
         if (code === 'too-large' || code === 'not-found') {
-          await this.deps.store.setMessageBodyError(row.rowid, code).catch(() => undefined)
+          await this.deps.store.withAccountWrite(row.account_id, () => this.deps.store.setMessageBodyError(row.rowid, code, expectedOf(row))).catch(() => undefined)
         }
       }
     }
@@ -1092,7 +1179,14 @@ export class MailService {
     return row
   }
 
-  private async storeBody(row: MessageRow, body: MailBody): Promise<{
+  /** The body write, its CAS and its index, in the account's write order (the fetch stays outside). */
+  private storeBody(row: MessageRow, body: MailBody) {
+    return this.deps.store.withAccountWrite(row.account_id, () => this.storeBodyNow(row, body))
+  }
+
+  private async storeBodyNow(row: MessageRow, body: MailBody): Promise<{
+    /** The reference now on the row. */
+    ref: string
     body: MailBodyDto
     snippet: string
     filled: BodyAddressFill
@@ -1101,6 +1195,8 @@ export class MailService {
   }> {
     const declared = body.bytes ?? Buffer.byteLength(body.text ?? body.html ?? '')
     if (declared > MAX_BODY_BYTES) throw new MailBodyTooLargeError(declared)
+    // Checked inside the gate before any file is written, so a known-stale answer leaves no orphan file (the CAS below still guards).
+    if (!unchanged(row, await this.deps.store.getMessage(row.account_id, row.message_id))) throw deliveryChanged()
     const stored = await this.deps.bodies.write(row.account_id, row.message_id, row.sent_at, {
       ...body,
       bytes: declared,
@@ -1132,13 +1228,17 @@ export class MailService {
       bodyFormat: stored.format,
       bodyTruncated: stored.truncated,
     }
-    await this.deps.store.setMessageBody(row.rowid, {
+    const landed = await this.deps.store.setMessageBody(row.rowid, {
       bodyRef: stored.ref,
       bodyBytes: stored.bytes,
       snippet: stored.snippet,
       payload: JSON.stringify(payload),
       ...(filled.fromAddr ? { fromAddr: filled.fromAddr } : {}),
-    })
+    }, expectedOf(row))
+    // The row moved on while the provider answered: these bytes belong to the old delivery. The file
+    // stays (its ref names its content, so another read of the same delivery may hold it) and nothing
+    // is indexed.
+    if (!landed) throw deliveryChanged()
     // The FTS row is rewritten with the whole plain text, which is the only reason cache
     // search can find a word that appears nowhere but deep inside the body. With the FILLED
     // sender, so an address the listing never carried is searchable as soon as it is known.
@@ -1151,6 +1251,7 @@ export class MailService {
     // Answered from what was just written, not re-read from disk: the bytes are already here,
     // and two extra file reads per body open is latency for nothing.
     return {
+      ref: stored.ref,
       snippet: stored.snippet,
       filled,
       // Either the body's own headers or the link found in its markup: both are things THIS read
@@ -1171,7 +1272,12 @@ export class MailService {
   private async readStoredBody(row: MessageRow): Promise<MailBodyDto | null> {
     if (!row.body_ref) return null
     const payload = parseJson<MessagePayload>(row.payload, {})
-    const files = await this.deps.bodies.read(row.body_ref)
+    // A half removed mid-read (an html-only body losing its html) fails the content check, never answers empty.
+    const files = await this.deps.bodies.read(row.body_ref, { accountId: row.account_id, messageId: row.message_id })
+      .catch((error: unknown) => { throw error instanceof MailBodySnapshotError ? deliveryChanged() : error })
+    // The text half is always written, so a missing one is a body retired between the row read and
+    // the file read: never answered as an empty body.
+    if (files.text === undefined) throw deliveryChanged()
     // A message whose only content is attachments has a real, empty body: `text: ''` renders as
     // "no text content, N attachments". Answering `null` here made it look like a fetch that
     // never happened, so the reader showed nothing and no `bodyError` explained why.
@@ -1217,7 +1323,7 @@ export class MailService {
       // Carried forward the same way: a body read may have filled the addresses the listing lacks.
       ...(recipientsForUpdate(envelope.to, stored.to) ? { to: recipientsForUpdate(envelope.to, stored.to) } : {}),
       ...(recipientsForUpdate(envelope.cc, stored.cc) ? { cc: recipientsForUpdate(envelope.cc, stored.cc) } : {}),
-      ...(envelope.replyTo ? { replyTo: envelope.replyTo } : {}),
+      ...(recipientsForUpdate(envelope.replyTo, stored.replyTo) ? { replyTo: recipientsForUpdate(envelope.replyTo, stored.replyTo) } : {}),
       ...(envelope.sentAtHeader ? { sentAtHeader: envelope.sentAtHeader } : {}),
       ...(envelope.inReplyTo ? { inReplyTo: envelope.inReplyTo } : {}),
       ...(envelope.references ? { references: envelope.references } : {}),

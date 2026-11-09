@@ -182,7 +182,8 @@ export function senderForUpdate(
   if (from?.address) return from
   const learned = stored.from?.address
   if (!learned) return from
-  return from?.name ? { name: from.name, address: learned } : { address: learned }
+  const name = from?.name || stored.from?.name
+  return name ? { name, address: learned } : { address: learned }
 }
 
 /**
@@ -257,7 +258,7 @@ export function payloadForRetiredBody(stored: MessagePayload): MessagePayload {
   // name the recipients of the previous newest message (`recipientsForUpdate` would otherwise carry
   // them under the new one). An envelope that names its own recipients restates them on this write.
   const {
-    bodyFormat: _format, bodyTruncated: _truncated, from: _from, to: _to, cc: _cc, listUnsubscribe, ...rest
+    bodyFormat: _format, bodyTruncated: _truncated, from: _from, to: _to, cc: _cc, replyTo: _replyTo, listUnsubscribe, ...rest
   } = stored
   if (!hasHeaderSignal(listUnsubscribe)) return rest
   const { bodyLink: _link, bodyCandidates: _candidates, ...fromHeaders } = listUnsubscribe!

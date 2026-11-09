@@ -1,7 +1,7 @@
 import { registry } from '../integration-registry.js'
 import { getPluginLifecycleRecords } from '../integration-loader.js'
 import { validatePluginId } from './ids.js'
-import { callPluginOp, getPluginApiBase, listPluginOps } from './server-api.js'
+import { callPluginOp, getPluginApiBase, listPluginOps, parsePluginOpCaller } from './server-api.js'
 import { ORIGIN_HEADER, REMOTE_HTTP_ORIGIN, lowerOrigin } from '../../lib/caller-origin.js'
 import { parseTestRunLabel, testRunMarkingEnabled, withTestRun } from '../test-run.js'
 
@@ -334,9 +334,12 @@ export async function handlePluginControlRelay(
         const origin = lowerOrigin(REMOTE_HTTP_ORIGIN, relayOrigin)
         // The companion's request was a test run: so is the op here, while it runs.
         const testRun = (await testRunMarkingEnabled()) ? parseTestRunLabel(params.testRun) : undefined
+        // Who the companion ran it for. An older companion names nobody, and a caller of any
+        // other shape is not trusted: both run as the plugin (an agent), never as a person.
+        const caller = parsePluginOpCaller(params.caller)
         let open = true
         try {
-          const result = await withTestRun(testRun, () => callPluginOp(pluginId, opName, args, origin), () => open)
+          const result = await withTestRun(testRun, () => callPluginOp(pluginId, opName, args, origin, caller), () => open)
           return { ok: true, result: result as unknown as Record<string, unknown> }
         } finally {
           open = false

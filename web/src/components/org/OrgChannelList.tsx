@@ -4,6 +4,7 @@
  * is, its state dot, when its work last moved, one line of what is happening and,
  * when something waits on the user, how many. Up and Down move the selection. While the
  * pointer is over the list the rows keep their order, so a click lands on the row aimed at.
+ * Before the VPs, the Routers (OrgRouterSection): router nodes, which are neither VPs nor tasks under one.
  * A project another VP took over has no row of its own: it sits in "Archived" at
  * the bottom (folded), saying which VP has it now; a click opens that VP. A right-click on any
  * row opens Walnut's own menu of what that row can do (the page builds it: OrgPage rowMenu).
@@ -22,9 +23,10 @@ import '@/styles/org-rail.css';
 import { readOrgPlace, writeOrgPlace } from './org-place';
 import { timeAgo } from '@/utils/time';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
-import { avatarColor, initials, type ChannelRow, type ChannelState, type MovedRow } from './org-channels-model';
+import { avatarColor, initials, rowAvatarColor, type ChannelRow, type ChannelState, type MovedRow } from './org-channels-model';
 import { usePointerHold } from './hold-order';
 import { OrgEditableName } from './OrgEditableName';
+import { OrgRouterSection } from './OrgRouterSection';
 import { OrgSettingsMenu } from './OrgSettingsMenu';
 import { useOrgSettings } from './useOrgSettings';
 import { USER_STATE_LABELS, stateCountLabel } from '@open-walnut/user-status';
@@ -41,7 +43,7 @@ export function OrgAvatar({ row, size = 34 }: { row: ChannelRow; size?: number }
   return (
     <span
       className={`org-avatar${main ? ' is-main' : ''}`}
-      style={{ width: size, height: size, fontSize: Math.round(size * 0.37), ...(main ? {} : { background: avatarColor(row.name) }) }}
+      style={{ width: size, height: size, fontSize: Math.round(size * 0.37), ...(main ? {} : { background: rowAvatarColor(row) }) }}
       aria-hidden="true"
     >
       {main ? 'C' : initials(row.name)}
@@ -222,6 +224,8 @@ function MovedSection({ moved, query, onSelect, onMenu }: { moved: readonly Move
 interface Props {
   main: ChannelRow;
   rows: readonly ChannelRow[];
+  /** The router nodes (buildChannels' `routers`), already filtered by the search. */
+  routers?: readonly ChannelRow[];
   /** Projects another VP took over (movedProjects). */
   moved?: readonly MovedRow[];
   /** What a right-click on a row offers; no menu without it. `point` is where the click landed:
@@ -234,6 +238,7 @@ interface Props {
   onQuery: (q: string) => void;
   onSelect: (key: string) => void;
   onOpenChart: () => void;
+  onNewRouter?: () => void;
   /** The tasks kept in view under a row (keptByRow: watched or locked), shown under it. */
   keptOf?: (row: ChannelRow) => readonly KeptTask[];
   /** The tasks open beside the page: their rows wear a light tint. */
@@ -243,7 +248,7 @@ interface Props {
   now: number;
 }
 
-export function OrgChannelList({ main, rows, moved = [], rowMenu, total, selectedKey, query, onQuery, onSelect, onOpenChart, keptOf, openTaskIds, onOpenTask, onUnwatch, now }: Props) {
+export function OrgChannelList({ main, rows, routers = [], moved = [], rowMenu, total, selectedKey, query, onQuery, onSelect, onOpenChart, onNewRouter, keptOf, openTaskIds, onOpenTask, onUnwatch, now }: Props) {
   const listRef = useRef<HTMLDivElement>(null);
   const orgName = useOrgSettings();
   // A right-click selects a word in WebKit before the menu opens: that selection is the
@@ -271,7 +276,8 @@ export function OrgChannelList({ main, rows, moved = [], rowMenu, total, selecte
   // click meant for another. The new order shows once the pointer leaves.
   const hold = usePointerHold(rows);
   const shown = hold.shown;
-  const keys = [main.key, ...shown.map((r) => r.key)];
+  // Up and Down walk the CEO, the routers, then the VPs, in the order they are drawn.
+  const keys = [main.key, ...routers.map((r) => r.key), ...shown.map((r) => r.key)];
   const keptUnder = (r: ChannelRow) => (keptOf && onOpenTask && onUnwatch
     ? <KeptChildren row={r} kept={keptOf(r)} open={openTaskIds} onOpenTask={onOpenTask} onUnwatch={onUnwatch} />
     : null);
@@ -293,6 +299,8 @@ export function OrgChannelList({ main, rows, moved = [], rowMenu, total, selecte
           <OrgEditableName value={orgName.settings.name} label="the org" onSave={(v) => orgName.save({ name: v })} testId="org-name" />
         </h1>
         <span className="org-list-actions">
+          {/* Outside the listbox (which holds only options), so Up and Down never stop on it. */}
+          {onNewRouter && <button type="button" className="btn btn-sm" data-testid="org-new-router" onClick={onNewRouter} title="A router sits beside the VPs; it starts paused">New router</button>}
           <button type="button" className="btn btn-sm" data-testid="org-open-chart" onClick={onOpenChart} title="The CEO and every project's VP on one sheet; drag a project onto another VP to put it under that VP">Org chart</button>
           <OrgSettingsMenu />
         </span>
@@ -301,8 +309,8 @@ export function OrgChannelList({ main, rows, moved = [], rowMenu, total, selecte
         className="org-search"
         type="search"
         value={query}
-        placeholder="Search VPs…"
-        aria-label="Search VPs"
+        placeholder="Search VPs and routers…"
+        aria-label="Search VPs and routers"
         data-testid="org-search"
         onChange={(e) => onQuery(e.target.value)}
       />
@@ -310,7 +318,7 @@ export function OrgChannelList({ main, rows, moved = [], rowMenu, total, selecte
         ref={listRef}
         className="org-list-scroll"
         role="listbox"
-        aria-label="The CEO and the VPs"
+        aria-label="The CEO, the VPs and the routers"
         onKeyDown={onKeyDown}
         onScroll={onScroll}
         onPointerEnter={hold.onPointerEnter}
@@ -318,7 +326,9 @@ export function OrgChannelList({ main, rows, moved = [], rowMenu, total, selecte
       >
         <Row row={main} selected={selectedKey === main.key} now={now} onSelect={onSelect} onMenu={onMenu} />
         {keptUnder(main)}
-        <div className="org-list-section" role="presentation">VPs · {total}</div>
+        {/* Routers sit above the VPs: there are few, and below dozens of VPs nobody would see them. */}
+        <OrgRouterSection rows={routers} selectedKey={selectedKey} now={now} onSelect={onSelect} />
+        <div className="org-list-section" role="presentation" data-testid="org-vps-head">VPs · {total}</div>
         {shown.map((r) => (
           <div key={r.key} className="org-channel-wrap" role="presentation">
             <Row row={r} selected={selectedKey === r.key} now={now} onSelect={onSelect} onMenu={onMenu} />
@@ -328,7 +338,7 @@ export function OrgChannelList({ main, rows, moved = [], rowMenu, total, selecte
         <MovedSection moved={moved} query={query} onSelect={onSelect} onMenu={onMenu} />
       </div>
       {total === 0 && <p className="org-empty-note" data-testid="org-empty">No open work yet. Ask the CEO to start something.</p>}
-      {total > 0 && rows.length === 0 && <p className="org-empty-note" data-testid="org-no-match">No VP matches “{query}”.</p>}
+      {total > 0 && rows.length === 0 && routers.length === 0 && <p className="org-empty-note" data-testid="org-no-match">No VP or router matches “{query}”.</p>}
       {menu.state && rowMenu && (
         <ContextMenu
           point={menu.state.point}

@@ -83,6 +83,42 @@ export interface KnownMessage extends Record<string, unknown> {
   /** The instants the stored body was fetched under: an envelope that moves them retires it. */
   sent_at: number
   received_at: number | null
+  /** Part of the delivery too: the same instants under another Message-ID are another message. */
+  rfc_message_id: string
+}
+
+/**
+ * The delivery a body was fetched for. A body write or a permanent-failure marker carrying one lands
+ * only while the row is still that delivery, so a late fetch never pins old bytes on a newer envelope.
+ */
+export interface BodyWriteExpected {
+  sentAt: number
+  receivedAt: number | null
+  bodyRef: string | null
+  rfcMessageId?: string
+  /** The row's version metadata as the fetch saw it: a same-instant rewrite in between also refuses. */
+  metadata?: {
+    fromAddr: string
+    subject: string
+    snippet: string
+    threadId: string | null
+    attachmentsJson: string | null
+    payload: string | null
+  }
+}
+
+function expectedClause(expected: BodyWriteExpected | undefined): { sql: string; params: unknown[] } {
+  if (!expected) return { sql: '', params: [] }
+  const rfc = expected.rfcMessageId !== undefined
+  const meta = expected.metadata
+  return {
+    sql: ' AND sent_at = ? AND received_at IS ? AND body_ref IS ?' + (rfc ? ' AND rfc_message_id = ?' : '')
+      + (meta ? ' AND from_addr = ? AND subject = ? AND snippet = ? AND thread_id IS ? AND attachments_json IS ? AND payload IS ?' : ''),
+    params: [
+      expected.sentAt, expected.receivedAt, expected.bodyRef, ...(rfc ? [expected.rfcMessageId] : []),
+      ...(meta ? [meta.fromAddr, meta.subject, meta.snippet, meta.threadId, meta.attachmentsJson, meta.payload] : []),
+    ],
+  }
 }
 
 /** What an upsert needs, already flattened to columns by the caller. */
@@ -282,12 +318,27 @@ export class MailStore {
   /** The ledger of mail a "keep out of the inbox" rule moved, in store-moves.ts. */
   readonly moves: MailMoveStore
 
+  /** One cache write per account at a time (see `withAccountWrite`). */
+  private readonly accountWrites = new Map<string, Promise<unknown>>()
+
   constructor(private readonly db: MailDatabase) {
     this.write = new MailWriteStore(db)
     this.tasks = new MailTaskStore(db)
     this.sort = new MailSortStore(db)
     this.summaries = new MailSummaryStore(db)
     this.moves = new MailMoveStore(db)
+  }
+
+  // Cache writes and clears share this order; never hold it for provider calls or re-enter it.
+  async withAccountWrite<T>(accountId: string, work: () => Promise<T>): Promise<T> {
+    const previous = this.accountWrites.get(accountId) ?? Promise.resolve()
+    const current = previous.catch(() => undefined).then(work)
+    this.accountWrites.set(accountId, current)
+    try {
+      return await current
+    } finally {
+      if (this.accountWrites.get(accountId) === current) this.accountWrites.delete(accountId)
+    }
   }
 
   get status(): MailDbStatus {
@@ -485,7 +536,7 @@ export class MailStore {
     if (messageIds.length === 0) return new Map()
     const rows = await this.db.all<KnownMessage & { message_id: string }>(
       'SELECT rowid, message_id, envelope_hash, body_ref, body_error, snippet, payload,'
-      + ' sent_at, received_at FROM messages'
+      + ' sent_at, received_at, rfc_message_id FROM messages'
       + ` WHERE account_id = ? AND message_id IN (${placeholders(messageIds.length)})`,
       [accountId, ...messageIds],
     )
@@ -498,6 +549,7 @@ export class MailStore {
       payload: row.payload,
       sent_at: row.sent_at,
       received_at: row.received_at,
+      rfc_message_id: row.rfc_message_id ?? '',
     }]))
   }
 
@@ -702,8 +754,13 @@ export class MailStore {
   }
 
   /** Remember that this body can never arrive, so nothing asks for it again on its own. */
-  async setMessageBodyError(rowid: number, code: string): Promise<void> {
-    await this.db.run('UPDATE messages SET body_error = ? WHERE rowid = ?', [code, rowid])
+  async setMessageBodyError(rowid: number, code: string, expected?: BodyWriteExpected): Promise<boolean> {
+    const where = expectedClause(expected)
+    const result = await this.db.run(
+      `UPDATE messages SET body_error = ? WHERE rowid = ?${where.sql}`,
+      [code, rowid, ...where.params],
+    )
+    return result.changes === 1
   }
 
   /** A retry (or a re-fetch that worked) clears the marker. */
@@ -723,13 +780,15 @@ export class MailStore {
     snippet: string
     payload: string
     fromAddr?: string
-  }): Promise<void> {
-    await this.db.run(
+  }, expected?: BodyWriteExpected): Promise<boolean> {
+    const where = expectedClause(expected)
+    const result = await this.db.run(
       'UPDATE messages SET body_ref = ?, body_bytes = ?, snippet = ?, payload = ?,'
       + " from_addr = COALESCE(NULLIF(from_addr, ''), NULLIF(?, ''), from_addr),"
-      + ' body_error = NULL WHERE rowid = ?',
-      [body.bodyRef, body.bodyBytes, body.snippet, body.payload, body.fromAddr ?? '', rowid],
+      + ` body_error = NULL WHERE rowid = ?${where.sql}`,
+      [body.bodyRef, body.bodyBytes, body.snippet, body.payload, body.fromAddr ?? '', rowid, ...where.params],
     )
+    return result.changes === 1
   }
 
   /** The read-flag write. `seen` moves with the array, or the unread filter would disagree with it. */

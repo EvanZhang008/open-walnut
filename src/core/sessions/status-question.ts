@@ -93,6 +93,23 @@ export function statusAskInFlight(sessionId: string): boolean {
   return inFlight.has(sessionId);
 }
 
+export async function routerScopedStatus(taskId: string, sessionId: string): Promise<boolean> {
+  try {
+    const { getSessionByClaudeId } = await import('../session-tracker.js');
+    const profile = (await getSessionByClaudeId(sessionId))?.profile;
+    if (profile?.areaId || profile?.areaRole) return true;
+    const { getTask } = await import('../task-manager.js');
+    const task = await getTask(taskId);
+    if (!task || task.router_area_id || task.org_role === 'router') return true;
+    const { WALNUT_HOME } = await import('../../constants.js');
+    const { readRouterAreas, taskArea } = await import('../router/areas.js');
+    const file = await readRouterAreas(WALNUT_HOME);
+    return !!taskArea(file, taskId) || file.routers.some((r) => r.taskId === taskId);
+  } catch {
+    return true;
+  }
+}
+
 /** A session Walnut can ask now: a native Claude Code one, or a live ACP one whose engine takes the question. */
 async function askableSession(sessionId: string): Promise<boolean> {
   const { sessionRunner } = await import('../../providers/claude-code-session.js');
@@ -105,6 +122,11 @@ async function askableSession(sessionId: string): Promise<boolean> {
 
 /** Ask the status now. Never throws; answers whether a status was stored. */
 export async function askStatus(taskId: string, sessionId: string, turnEndedMs: number, why: 'turn-end' | 'reconcile' | 'watch' = 'turn-end'): Promise<boolean> {
+  if (await routerScopedStatus(taskId, sessionId)) {
+    cancelStatusQuestion(sessionId);
+    owned.set(sessionId, 'answered');
+    return false;
+  }
   if (inFlight.has(sessionId)) {
     // Its answer may describe the turn before this one: ask again when it settles.
     if (why === 'turn-end') rerun.set(sessionId, { taskId, turnEndedMs });
@@ -166,6 +188,12 @@ export async function askStatus(taskId: string, sessionId: string, turnEndedMs: 
 
 /** A turn ended: ask once it stays quiet. Returns false when this session's status is not ours. */
 export async function armStatusQuestion(taskId: string, sessionId: string, turnEndedMs = Date.now()): Promise<boolean> {
+  if (await routerScopedStatus(taskId, sessionId)) {
+    cancelStatusQuestion(sessionId);
+    if (owned.size > 2000) owned.clear();
+    owned.set(sessionId, 'answered');
+    return true;
+  }
   if (!(await askableSession(sessionId).catch(() => false))) {
     // Not askable this turn (an ACP engine, or a runner that lost it): the summary asks.
     owned.delete(sessionId);

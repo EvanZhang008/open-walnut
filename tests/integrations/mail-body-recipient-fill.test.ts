@@ -46,6 +46,7 @@ const BODY: MailBody = {
   from: { name: 'Alder Desk', address: 'alder@example.test' },
   to: [{ name: 'Birch, Sam', address: MINE }],
   cc: [{ address: 'cedar@example.test' }, { address: 'dogwood@example.test' }],
+  replyTo: [{ address: 'replies@example.test' }],
 };
 
 const open: MailDatabase[] = [];
@@ -114,7 +115,7 @@ describe('fillAddressesFromBody: a list of bare names is a gap', () => {
       fromAddr: '',
       payload: { from: { name: 'Alder Desk', address: '' }, to: [{ name: 'Birch, Sam', address: '' }] },
     }, BODY);
-    expect(fill.filled.sort()).toEqual(['cc', 'from', 'to']);
+    expect(fill.filled.sort()).toEqual(['cc', 'from', 'replyTo', 'to']);
     expect(fill.fromAddr).toBe('alder@example.test');
     expect(fill.payload.to).toEqual([{ name: 'Birch, Sam', address: MINE }]);
     expect(fill.payload.cc).toEqual([{ address: 'cedar@example.test' }, { address: 'dogwood@example.test' }]);
@@ -125,7 +126,7 @@ describe('fillAddressesFromBody: a list of bare names is a gap', () => {
       fromAddr: 'elm@example.test',
       payload: { from: { address: 'elm@example.test' }, to: [{ address: 'fir@example.test' }, { name: 'Bare' } as never] },
     }, BODY);
-    expect(fill.filled).toEqual(['cc']);
+    expect(fill.filled).toEqual(['cc', 'replyTo']);
     expect(fill.fromAddr).toBeUndefined();
     expect(fill.payload.to).toEqual([{ address: 'fir@example.test' }, { name: 'Bare' }]);
   });
@@ -136,6 +137,7 @@ describe('fillAddressesFromBody: a list of bare names is a gap', () => {
       from: { name: 'Grove Team', address: '/o=ExchangeLabs/ou=Exchange/cn=Recipients/cn=grove' },
       to: undefined,
       cc: undefined,
+      replyTo: undefined,
     });
     expect(fill.filled).toEqual([]);
     expect(fill.dropped).toEqual(['from']);
@@ -186,7 +188,31 @@ describe('the base, end to end on the real database', () => {
     expect(row.from?.address).toBe('alder@example.test');
     expect(row.to).toEqual([{ name: 'Birch, Sam', address: MINE }]);
     expect(row.cc?.map((a) => a.address)).toEqual(['cedar@example.test', 'dogwood@example.test']);
+    expect(JSON.parse((await one.store.getMessage(ACCOUNT, THREAD))!.payload!).replyTo).toEqual(BODY.replyTo);
     expect(one.bodyReads).toEqual([THREAD]);
+  });
+
+  it('keeps a sender name learned from the body when the listing still has no address or name', async () => {
+    const one = await openBase({ current: BODY });
+    await one.service.ingestPage(ACCOUNT, [listed({ from: { address: '' } })]);
+    const first = await one.service.readMessage(ACCOUNT, THREAD);
+    await one.service.ingestPage(ACCOUNT, [listed({ from: { address: '' }, flags: ['\\Seen'] })]);
+    const after = await one.service.readMessage(ACCOUNT, THREAD);
+    expect(after.message.from).toEqual(BODY.from);
+    expect(after.message.deliveryVersion).toBe(first.message.deliveryVersion);
+    expect(JSON.parse((await one.store.getMessage(ACCOUNT, THREAD))!.payload!).replyTo).toEqual(BODY.replyTo);
+  });
+
+  it('drops the previous reply address when a new delivery arrives before any body was cached', async () => {
+    for (const next of [{ sentAt: REPLY_AT, receivedAt: REPLY_AT }, { rfcMessageId: 'conv-newest' }]) {
+      const one = await openBase({ current: BODY });
+      await one.service.ingestPage(ACCOUNT, [listed({ replyTo: [{ address: 'previous@example.test' }] })]);
+      await one.service.ingestPage(ACCOUNT, [listed(next)]);
+      const row = (await one.store.getMessage(ACCOUNT, THREAD))!;
+      expect(row.body_ref).toBeNull();
+      expect(JSON.parse(row.payload!).replyTo).toBeUndefined();
+      expect(one.bodyReads).toEqual([]);
+    }
   });
 
   it('a reply landing in the thread retires the old addresses, and the next read learns the new ones', async () => {
@@ -203,6 +229,7 @@ describe('the base, end to end on the real database', () => {
     expect(moved.from).toEqual({ name: 'Ivy Ops', address: '' });
     expect(moved.to).toEqual([{ name: 'Birch, Sam', address: '' }]);
     expect(moved.cc ?? []).toEqual([]);
+    expect(JSON.parse((await one.store.getMessage(ACCOUNT, THREAD))!.payload!).replyTo).toBeUndefined();
 
     body.current = {
       ...BODY,

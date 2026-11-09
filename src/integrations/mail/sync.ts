@@ -37,10 +37,12 @@ import {
   providerErrorCode,
   reasonOf,
   withBudget,
+  type MailIncomingCapture,
+  type MailIncomingFinish,
   type MailSyncHost,
   type MailSyncLimits,
 } from './contract.js'
-import type { MailEvents } from './events.js'
+import type { MailEvents, MailHeadline } from './events.js'
 import type { MailRetention } from './retention.js'
 import type { MailService } from './service.js'
 import type { MailStore, MailboxRow } from './store.js'
@@ -229,6 +231,8 @@ export class MailSync {
      * grouping is on, `messages-received` announces only the mail that landed in Important.
      */
     sort?: MailSyncSortHook
+    /** Area rules intake for arrived inbox mail; optional so a loop without areas runs as before. */
+    captureIncoming?: MailIncomingCapture
   }) {}
 
   get polling(): boolean {
@@ -431,6 +435,13 @@ export class MailSync {
     })
   }
 
+  /** Run a cache wipe between ticks; each account it returns lists from the top again as a backfill. */
+  resetAccountBackfill(work: () => Promise<readonly string[]>): Promise<void> {
+    return this.queue(async () => {
+      for (const accountId of await work()) this.stateFor(accountId).backfilled = false
+    })
+  }
+
   /** An unread check cleared rows of this account: its folder counts are due a re-list. */
   markRelistDue(accountId: string): void {
     this.stateFor(accountId).relistDue = true
@@ -568,13 +579,13 @@ export class MailSync {
       }
       const containers = sweep.containers
 
-      const headlines: Array<{ from: string; subject: string }> = []
+      const headlines: MailHeadline[] = []
       let exhausted = true
       // Counted separately from `added`: a message appearing in Sent is one the user sent, and
       // announcing it as "received" is wrong in the one place a human reads the number.
       let received = 0
       let receivedImportant = 0
-      const importantHeadlines: Array<{ from: string; subject: string }> = []
+      const importantHeadlines: MailHeadline[] = []
       let visited = 0
       /** Non-inbox containers visited, which is what the rotation cursor counts. */
       let visitedRotated = 0
@@ -630,7 +641,7 @@ export class MailSync {
         added += outcome.added
         updated += outcome.updated
         if (mailbox.role === ('inbox' satisfies MailboxRole)) {
-          received += outcome.added
+          received += outcome.received
           headlines.push(...outcome.headlines)
           receivedImportant += outcome.importantAdded
           importantHeadlines.push(...outcome.importantHeadlines)
@@ -665,22 +676,31 @@ export class MailSync {
       }
 
       const inbox = mailboxes.find((row) => row.role === 'inbox')
-      if (inbox && Date.now() < deadlineAt) {
-        await this.deps.service.prefetchBodies(accountId, inbox.mailbox_id, BODY_PREFETCH_LIMIT, deadlineAt)
-      }
 
       // One event per account per tick, and none at all for the first backfill: "you have 4812
       // new messages" is the account being added, not news.
       // With grouping on, the count and headlines are Important's only (Inbox Triage reads them, and a
       // pager burst is not "new mail that needs you"); `importantAdded` rides the event either way.
-      if (state.backfilled) {
-        const grouped = this.deps.sort?.groupedOn() ?? false
-        this.deps.events.messagesReceived(
-          accountId,
-          grouped ? receivedImportant : received,
-          grouped ? importantHeadlines : headlines,
-          receivedImportant,
-        )
+      const announcing = state.backfilled
+      const grouped = announcing && (this.deps.sort?.groupedOn() ?? false)
+      const importantIds = new Set(importantHeadlines.map((one) => one.messageId))
+      /** `null` keeps the headlines as ingested; a list replaces them (never adding a non-Important one when grouped). */
+      const announce = (shown: readonly MailHeadline[] | null): void => {
+        const list = shown === null ? (grouped ? importantHeadlines : headlines)
+          : grouped ? shown.filter((one) => importantIds.has(one.messageId)) : [...shown]
+        this.deps.events.messagesReceived(accountId, grouped ? receivedImportant : received, list, receivedImportant)
+      }
+      // Area rules confirm before the event, which then waits for the prefetch so it names the filled sender.
+      const deferred = announcing && !!this.deps.captureIncoming && headlines.length > 0
+      const finish = deferred ? await this.captureIncoming(accountId, headlines) : null
+      // Without area intake, announce the captured snapshot before prefetch can change its content version.
+      if (announcing && !deferred) announce(null)
+      try {
+        if (inbox && Date.now() < deadlineAt) {
+          await this.deps.service.prefetchBodies(accountId, inbox.mailbox_id, BODY_PREFETCH_LIMIT, deadlineAt)
+        }
+      } finally {
+        if (deferred) announce(finish ? await this.finishIncoming(accountId, finish) : [])
       }
       if (inbox && this.deps.sort && Date.now() < deadlineAt) {
         await this.refreshCategoryHints(accountId, spec, inbox.mailbox_id, !state.backfilled)
@@ -707,6 +727,27 @@ export class MailSync {
       await this.onFailedPoll(accountId, state, error)
     }
     return { added, updated }
+  }
+
+  /** `null` when the capture failed: the event then carries its count only. */
+  private async captureIncoming(accountId: string, headlines: MailHeadline[]): Promise<MailIncomingFinish | null> {
+    try {
+      return await this.deps.captureIncoming!(accountId, headlines)
+    } catch (error) {
+      // Fail closed: an unconfirmed arrival may be a rule's private item.
+      this.deps.walnut.log.warn('mail area intake capture failed', { accountId, error: reasonOf(error).slice(0, 200) })
+      return null
+    }
+  }
+
+  /** The headlines to announce: `null` keeps the ingested ones, `[]` after a failure. */
+  private async finishIncoming(accountId: string, finish: MailIncomingFinish): Promise<readonly MailHeadline[] | null> {
+    try {
+      return (await finish()) ?? null
+    } catch (error) {
+      this.deps.walnut.log.warn('mail area intake confirm failed', { accountId, error: reasonOf(error).slice(0, 200) })
+      return []
+    }
   }
 
   /**
@@ -802,23 +843,26 @@ export class MailSync {
   ): Promise<{
     added: number
     updated: number
-    headlines: Array<{ from: string; subject: string }>
+    /** New deliveries (`IngestResult.received`): new rows plus known handles whose instants moved. */
+    received: number
+    headlines: MailHeadline[]
     exhausted: boolean
     /** The provider says this container is not there. Reported so a caller can say so. */
     missing: boolean
-    /** Of `added`, the mail that landed in Important (or is not sorted yet). */
+    /** Of `received`, the mail that landed in Important (or is not sorted yet). */
     importantAdded: number
-    importantHeadlines: Array<{ from: string; subject: string }>
+    importantHeadlines: MailHeadline[]
   }> {
     const startedAt = Date.now()
     let cursor = mailbox.cursor ?? undefined
     let added = 0
     let updated = 0
+    let received = 0
     let exhausted = false
     let missing = false
-    const headlines: Array<{ from: string; subject: string }> = []
+    const headlines: MailHeadline[] = []
     let importantAdded = 0
-    const importantHeadlines: Array<{ from: string; subject: string }> = []
+    const importantHeadlines: MailHeadline[] = []
 
     for (let page = 0; page < MAX_PAGES_PER_TICK; page += 1) {
       if (Date.now() >= deadlineAt) break
@@ -855,15 +899,20 @@ export class MailSync {
       // Honoured once per container per tick. A provider that answered `reset` on every page
       // would otherwise delete the rows it just handed us, forever.
       if (result.reset) {
+        // The inbox lists its old mail again from the top; none of it is an arrival until it drains.
+        if (mailbox.role === ('inbox' satisfies MailboxRole)) this.stateFor(accountId).backfilled = false
         await this.deps.retention.resetContainer(accountId, mailbox.mailbox_id)
         await this.deps.store.setMailboxCursor(accountId, mailbox.mailbox_id, null, Date.now())
       }
       const ingested = await this.deps.service.ingestPage(accountId, result.messages ?? [])
       added += ingested.added
       updated += ingested.updated
+      // A reply on a known conversation handle is an `updated` row and still a new delivery.
+      const pageReceived = ingested.received ?? ingested.added
+      received += pageReceived
       headlines.push(...ingested.headlines)
-      // No engine (or it could not sort this page): every new row is Important, as before.
-      importantAdded += ingested.importantAdded ?? (ingested.sortedPairs ? 0 : ingested.added)
+      // No engine (or it could not sort this page): every new delivery is Important, as before.
+      importantAdded += ingested.importantAdded ?? (ingested.sortedPairs ? 0 : pageReceived)
       importantHeadlines.push(...(ingested.importantHeadlines ?? (ingested.sortedPairs ? [] : ingested.headlines)))
       cursor = result.cursor
       await this.deps.store.setMailboxCursor(accountId, mailbox.mailbox_id, cursor ?? null, Date.now())
@@ -874,7 +923,7 @@ export class MailSync {
       { accountId, mailboxId: mailbox.mailbox_id, added, updated, tookMs: Date.now() - startedAt },
       cursor ?? null,
     )
-    return { added, updated, headlines, exhausted, missing, importantAdded, importantHeadlines }
+    return { added, updated, received, headlines, exhausted, missing, importantAdded, importantHeadlines }
   }
 
   private async onGoodPoll(accountId: string, state: AccountState): Promise<void> {

@@ -59,6 +59,17 @@ export class MailBodyTooLargeError extends Error {
   }
 }
 
+export class MailBodySnapshotError extends Error {
+  constructor() {
+    super('The cached email body changed while it was being read')
+    this.name = 'MailBodySnapshotError'
+  }
+}
+
+function bodyHash(accountId: string, messageId: string, text: string, html: string): string {
+  return crypto.createHash('sha256').update(JSON.stringify([accountId, messageId, text, html])).digest('hex')
+}
+
 function accountFolder(accountId: string): string {
   // Hashed, not the address: an account id contains an email address, and a directory name
   // is the one part of a cache that shows up in a screen share or a crash log.
@@ -151,15 +162,22 @@ export function plainTextOf(body: Pick<MailBody, 'text' | 'html'>): string {
   return ''
 }
 
+/** Same-directory temp file then rename, so a reader of the path sees the old bytes or the new, never a truncated file. */
+async function writeWhole(target: string, value: string): Promise<void> {
+  const temp = `${target}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`
+  try {
+    await fsp.writeFile(temp, value, { encoding: 'utf8', mode: 0o600, flag: 'wx' })
+    await fsp.rename(temp, target)
+  } catch (error) {
+    await fsp.rm(temp, { force: true }).catch(() => undefined)
+    throw error
+  }
+}
+
 export class MailBodyStore {
   constructor(private readonly dataDir: string) {}
 
-  /**
-   * Write a fetched body and hand back what the row needs.
-   *
-   * The hash is over the account and the provider handle, not the content: a re-fetch of the
-   * same message has to land on the same file, or every body update would leak a file.
-   */
+  // A later body gets another reference, so a confirmed snapshot is never overwritten in place.
   async write(
     accountId: string,
     messageId: string,
@@ -173,7 +191,7 @@ export class MailBodyStore {
 
     const text = clip(body.text ?? '', MAX_BODY_BYTES)
     const html = clip(body.html ?? '', MAX_BODY_BYTES)
-    const hash = crypto.createHash('sha1').update(`${accountId}\u0000${messageId}`).digest('hex').slice(0, 32)
+    const hash = bodyHash(accountId, messageId, text.value, html.value)
     const ref = `bodies/${accountFolder(accountId)}/${monthFolder(sentAt)}/${hash}`
     const absolute = path.join(this.dataDir, ref)
     await fsp.mkdir(path.dirname(absolute), { recursive: true, mode: 0o700 })
@@ -181,9 +199,10 @@ export class MailBodyStore {
     // The text half is ALWAYS written, even empty. A message whose only content is attachments
     // otherwise left a `body_ref` pointing at nothing: the reader saw `hasBody: true` with no body
     // and no error, and nothing ever refetched it. An empty file is an honest "no text content".
-    await fsp.writeFile(`${absolute}.txt`, text.value, { encoding: 'utf8', mode: 0o600 })
-    if (html.value) await fsp.writeFile(`${absolute}.html`, html.value, { encoding: 'utf8', mode: 0o600 })
-    else await fsp.rm(`${absolute}.html`, { force: true })
+    await writeWhole(`${absolute}.txt`, text.value)
+    // The ref names its content, so an empty html half never had a file and none is removed: a
+    // reader of this ref (or of a legacy handle-named ref) never sees a half vanish under it.
+    if (html.value) await writeWhole(`${absolute}.html`, html.value)
 
     const plain = plainTextOf({ text: text.value, html: html.value })
     // Labelled by what the PROVIDER handed over, not by what is on disk: a provider that only
@@ -204,13 +223,20 @@ export class MailBodyStore {
     }
   }
 
-  /** Whatever is on disk for `ref`. A missing half is `undefined`, never an error. */
-  async read(ref: string): Promise<{ text?: string; html?: string }> {
+  async read(ref: string, identity?: { accountId: string; messageId: string }): Promise<{ text?: string; html?: string }> {
     const absolute = path.join(this.dataDir, ref)
     const [text, html] = await Promise.all([
       fsp.readFile(`${absolute}.txt`, 'utf8').catch(() => undefined),
       fsp.readFile(`${absolute}.html`, 'utf8').catch(() => undefined),
     ])
+    if (identity) {
+      const hash = path.basename(ref)
+      // Both halves must match the confirmed content, even when only one vanished during eviction.
+      if (text === undefined || (/^[a-f0-9]{64}$/.test(hash)
+        && bodyHash(identity.accountId, identity.messageId, text, html ?? '') !== hash)) {
+        throw new MailBodySnapshotError()
+      }
+    }
     return { ...(text !== undefined ? { text } : {}), ...(html !== undefined ? { html } : {}) }
   }
 

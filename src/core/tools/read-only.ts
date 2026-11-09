@@ -26,10 +26,8 @@ function opAsTool(op: WalnutOp): ToolDefinition {
     input_schema: opInputJsonSchema(op),
     // Read-only by definition, so a batch of them may run concurrently.
     parallelSafe: true,
-    execute: async (params) => {
-      // An in-process turn on this Mac (a routine watcher); a caller that started it
-      // from elsewhere still lowers this through the origin in effect.
-      const outcome = await executeOp(op.name, params ?? {}, { origin: LOCAL_ORIGIN });
+    execute: async (params, meta) => {
+      const outcome = await executeOp(op.name, params ?? {}, { origin: LOCAL_ORIGIN, ...(meta?.callerSid ? { callerSid: meta.callerSid } : {}), ...(meta?.callerKind === 'person' ? { callerMode: 'human' as const } : {}) });
       // "Error:" prefix is the loop's error signal — it marks the tool_result
       // `is_error` so the model retries or reports instead of trusting the text.
       return outcome.ok ? JSON.stringify(outcome.result, null, 2) : `Error: ${outcome.message}`;

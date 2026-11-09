@@ -37,6 +37,8 @@ import { loadTriageState } from '../../src/core/triage/state.js';
 import { triageRunsNotePath } from '../../src/core/triage/runs.js';
 import { getTask } from '../../src/core/task-manager.js';
 import { getSessionsForTask } from '../../src/core/session-tracker.js';
+import { routerAreasPath } from '../../src/core/router/areas.js';
+import { mailRouterKey } from '../../src/integrations/mail/router-source.js';
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs');
 const TRIAGE_PROJECT = 'Ask Inbox Triage';
@@ -330,4 +332,95 @@ describe('Inbox Triage runs, end to end', () => {
       expect((await loadTriageState()).stateStale).toBe(true);
     }, { timeout: 30_000, interval: 200 });
   }, 60_000);
+
+  it('mail queued before it was classified into an area never reaches the run that reads the batch', async () => {
+    const account = 'desk';
+    const canary = { from: 'canary-sender@desk.test', subject: 'Canary-classified-7f3d', messageId: 'INBOX:41', canonicalKey: mailRouterKey(account, 'INBOX:41', '<canary-41@desk.test>') };
+    const ordinary = { from: 'ordinary-sender@desk.test', subject: 'Ordinary-open-9a2c', messageId: 'INBOX:42', canonicalKey: mailRouterKey(account, 'INBOX:42', '<ordinary-42@desk.test>') };
+
+    // Below the wake threshold, so nothing runs until the test asks for it.
+    bus.emit('plugin:mail:messages-received', { accountId: account, count: 2, headlines: [canary, ordinary] }, ['web-ui']);
+    await getTriageCollectHandleForTesting()!.flush();
+    const queued = await loadTriageState();
+    expect(queued.claim).toBeUndefined();
+    expect(queued.pending.mail.find((row) => row.accountId === account)?.headlines).toEqual([canary, ordinary]);
+
+    const areas = routerAreasPath(WALNUT_HOME);
+    const areasDir = path.dirname(areas);
+    const dirExisted = await fs.stat(areasDir).then(() => true, () => false);
+    const previous = await fs.readFile(areas, 'utf-8').catch((err: NodeJS.ErrnoException) => {
+      if (err.code === 'ENOENT') return undefined;
+      throw err;
+    });
+    try {
+      await fs.mkdir(areasDir, { recursive: true });
+      await fs.writeFile(areas, JSON.stringify({
+        version: 1,
+        areas: [{ id: 'desk-area', name: 'Desk', host: '__local__', taskIds: [], sources: [{ kind: 'mail', account }] }],
+        routers: [],
+        items: [{ source: { kind: 'mail', account, message: canary.messageId }, areaId: 'desk-area', canonicalKey: canary.canonicalKey }],
+      }), 'utf-8');
+
+      const job = await triageRoutine();
+      expect(job?.id, 'the triage routine must exist').toBeTruthy();
+      await vi.waitFor(async () => {
+        expect((await triageRoutine())?.state?.runningAtMs).toBeUndefined();
+      }, { timeout: 30_000, interval: 200 });
+      daemon.clearCommandHistory();
+      const known = new Set((await triageTasks()).map((t: any) => t.id));
+      // POST /api/routines/:id/run answers { result } with ops.run's CronRunResult; only
+      // { ran: false, reason: 'already-running' } proves nothing ran, so only that is sent again.
+      const deadline = Date.now() + 30_000;
+      for (;;) {
+        const ran = await send('POST', `/api/routines/${job.id}/run`, {});
+        expect(ran.status, JSON.stringify(ran.json)).toBe(200);
+        const result = ran.json?.result;
+        if (result?.ok === true && result.ran === false && result.reason === 'already-running' && Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 500));
+          continue;
+        }
+        expect(result, JSON.stringify(ran.json)).toEqual({ ok: true, ran: true });
+        break;
+      }
+
+      const task = await waitForNewRunTask(known);
+      // The count is the event's: one hidden headline never shrinks it.
+      expect(task.title).toMatch(/^Triage · \d{2}:\d{2} · 2 items$/);
+
+      const escaped = (s: string) => JSON.stringify(s).slice(1, -1);
+      const has = (line: string, needle: string) => line.includes(needle) || line.includes(escaped(needle));
+      const daemonLines = () => [
+        ...daemon.getCommandHistoryFor('start').map((e) => String(e.payload.message ?? '')),
+        ...daemon.getCommandHistoryFor('send').map((e) => String(e.payload.message ?? '')),
+        ...daemon.getFifoWrites().map((w) => w.message),
+      ].filter(Boolean);
+      const envelope = await vi.waitFor(() => {
+        const found = daemonLines().find((line) => has(line, 'from="Inbox Triage"') && has(line, ordinary.subject));
+        expect(found, 'the run session must receive the batch through the daemon').toBeDefined();
+        return found!;
+      }, { timeout: 30_000, interval: 200 });
+      expect(has(envelope, ordinary.from)).toBe(true);
+      for (const line of daemonLines()) {
+        expect(line).not.toContain(canary.subject);
+        expect(line).not.toContain(canary.from);
+      }
+      const record = JSON.stringify(await getTask(task.id));
+      expect(record).not.toContain(canary.subject);
+      expect(record).not.toContain(canary.from);
+
+      await vi.waitFor(async () => {
+        const s = await loadTriageState();
+        expect(s.runs).toBe(queued.runs + 1);
+        expect(s.claim).toBeUndefined();
+        expect(s.pending.mail).toEqual([]);
+      }, { timeout: 30_000, interval: 200 });
+    } finally {
+      if (previous === undefined) {
+        await fs.rm(areas, { force: true });
+        if (!dirExisted) await fs.rmdir(areasDir).catch(() => {});
+      } else {
+        await fs.writeFile(areas, previous, 'utf-8');
+      }
+    }
+  }, 120_000);
 });

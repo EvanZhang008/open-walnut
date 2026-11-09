@@ -207,6 +207,46 @@ export interface MailMessageDto {
    * answer live on the calendar and come from `readMailInvite`.
    */
   invite?: { kind: 'request' | 'canceled' };
+  /** The delivery a reused id names now; a routing receipt applies only to its own version. */
+  deliveryVersion?: string;
+  /** Absent means no routing receipt exists, not proof that no legacy monitor processed it. */
+  route?: MailRouteDto;
+  /** `paused`: no router of the area reads anything now (absent from an older server). */
+  routingArea?: { id: string; name: string; paused?: boolean };
+  /** With no area for the message: why no router has it (absent from an older server). */
+  routingCoverage?: MailRoutingCoverage;
+  routingUnavailable?: boolean;
+  /** Only while no receipt exists: the router asked the person before handing this message on. */
+  routingHandoff?: MailRoutingHandoffDto;
+}
+
+/** `no_router`: no area with a router takes this account; `unassigned`: one does, but this message has no area. */
+export type MailRoutingCoverage = 'no_router' | 'unassigned';
+
+export interface MailRoutingHandoffDto {
+  approvalId: string;
+  status: 'pending' | 'approved' | 'denied' | 'expired' | 'canceled' | 'missing' | 'claim_incomplete';
+  /** Epoch milliseconds of the ask. */
+  at: number;
+  targetTitle?: string;
+}
+
+export type MailRouteStatus = 'routing' | 'routed' | 'not_routed' | 'failed' | 'unknown';
+
+export interface MailRouteDto {
+  areaId: string;
+  status: MailRouteStatus;
+  taskId?: string;
+  /** The task or VP it went to, as the server reads it now: `available: false` once it is gone. */
+  target?: { id: string; title: string; kind: 'task' | 'vp'; available: boolean };
+  reason: string;
+  /** Epoch milliseconds of the decision. */
+  at: number;
+  ruleId?: string;
+  error?: string;
+  /** `legacy`: handled before the router and recorded after the fact; an older server never sends it. */
+  origin?: 'legacy';
+  evidence?: string;
 }
 
 export type MailInviteResponse = 'accept' | 'tentative' | 'decline';

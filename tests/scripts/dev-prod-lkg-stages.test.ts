@@ -219,9 +219,11 @@ describe('stage_plugin_source', () => {
 
 describe('rollback_to_lkg', () => {
   function harness(root: string, lkg: string): string {
+    const checker = program(path.join(root, 'check-runtime'), 'printf "CHECK %s\\n" "$*"; exit "${ROLLBACK_CHECK_EXIT:-0}"')
     return [fn('clone_copy'), fn('carry_plugin_source'), fn('stage_lkg_for_rollback'), fn('lkg_file'), fn('rollback_to_lkg'),
       'launch_server() { printf "LAUNCH %s\\n" "$*"; }',
       'wait_for_config_ready() { return 0; }',
+      `BUN_BIN='${checker}'`, `REPO_ROOT='${root}/repo'`, `REHEARSAL_HOME='${root}/data'`,
       `STAGE_ROOT='${root}'`, `LKG_DIR='${lkg}'`, `SERVE_ROOT='${root}/serve'`, 'MACHINE_TARGET=darwin-arm64',
       'PORT=1', 'rollback_to_lkg'].join('\n')
   }
@@ -261,6 +263,18 @@ describe('rollback_to_lkg', () => {
       `LKG_LEGACY_DIR='${legacy}'`, `WALNUT_DEVPROD_LKG_DIR='${root}/state/open-walnut-lkg'`, 'rollback_to_lkg'].join('\n'))
     expect(named.stdout).not.toMatch(/^LAUNCH/m)
     expect(named.stderr).toMatch(/No last-known-good file at/)
+  })
+
+  it('a refused data compatibility check stages and launches nothing', () => {
+    const root = tmp()
+    const lkg = path.join(root, 'open-walnut-lkg')
+    const file = program(path.join(lkg, 'dist-bin', 'walnut-darwin-arm64'))
+    const r = bash(`export ROLLBACK_CHECK_EXIT=1\n${harness(root, lkg)}`)
+    expect(r.status, r.stderr).toBe(0)
+    expect(r.stdout).toContain(`CHECK ${root}/repo/scripts/lib/rollback-data-check.mjs ${file} ${root}/data`)
+    expect(r.stdout).not.toMatch(/^LAUNCH/m)
+    expect(r.stderr).toContain('Rollback data check failed; the last-known-good server was not started.')
+    expect(fs.readdirSync(root).filter((name) => name.startsWith('open-walnut-stage.rollback.'))).toEqual([])
   })
 
   it('never starts a Node LKG an older deploy left: it names it and leaves the port unserved', () => {

@@ -56,8 +56,8 @@ export async function runApproveCommand(argv: string[]): Promise<void> {
       return
     }
   }
-  const { cliAutomationSender } = await import('../lib/cli-sender.js')
-  const sender = cliAutomationSender()
+  const { cliOpCaller } = await import('../lib/cli-sender.js')
+  const caller = cliOpCaller()
   const code = await runApprove({
     what: parsed.what, detail, biometric: parsed.biometric, timeoutMs: parsed.timeoutMs, json: parsed.json,
     cwd: process.cwd(), ...(parsed.command ? { command: parsed.command } : {}),
@@ -68,7 +68,7 @@ export async function runApproveCommand(argv: string[]): Promise<void> {
     ...(parsed.approvalId ? { approvalId: parsed.approvalId } : {}),
   }, {
     call: async (name, args) => {
-      const r = await executeOp(name, args, { origin: LOCAL_ORIGIN, ...(sender ? { sender } : {}) })
+      const r = await executeOp(name, args, { origin: LOCAL_ORIGIN, ...caller })
       return r.ok ? { ok: true, result: r.result } : opFailure(r.message)
     },
     say: (line) => console.error(line),
@@ -83,7 +83,8 @@ export async function runApproveCommand(argv: string[]): Promise<void> {
 }
 
 export async function runApprovalsList(all: boolean, globals: { json?: boolean }): Promise<void> {
-  const r = await executeOp('approval_list', all ? { status: 'all' } : {}, { origin: LOCAL_ORIGIN })
+  const { cliOpCaller } = await import('../lib/cli-sender.js')
+  const r = await executeOp('approval_list', all ? { status: 'all' } : {}, { origin: LOCAL_ORIGIN, ...cliOpCaller() })
   if (!r.ok) {
     console.error(r.message)
     process.exitCode = 1

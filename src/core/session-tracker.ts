@@ -40,15 +40,20 @@ import { assertTaskSessionFree, otherTaskSessionId } from './sessions/one-sessio
 import { isAcpEngine, resolveEngine } from './agents/engine-registry.js';
 import { CLOUD_BOX_DEFAULT_IDLE_LIMIT, CLOUD_BOX_DEFAULT_LIMIT, CLOUD_BOX_HOST_ALIAS } from './hosts/cloud-box-host.js';
 import { NeedsLeaderError } from './replication/needs-leader.js';
+import { OrgError } from './org/org-store.js';
+import {
+  assertOutsideHistoryImport, assertSessionHistoryWrite, isHistoryRefusal, sessionHistoryWriteNeedsCheck,
+  taskDbHandle, type SessionHistoryFields,
+} from './router/history-write.js';
 
 let sessionInitialized = false;
 
 async function ensureSessionInit(): Promise<void> {
   if (sessionInitialized) return;
-  sessionInitialized = true;
   getDb();
   // A host replica's session store is a copy (replica/copy-guard.ts): no migration writes it.
   if (!isHostReplica()) await runSessionMigrationIfNeeded();
+  sessionInitialized = true;
 }
 
 // ── Whole-store read cache ────────────────────────────────────────────────
@@ -1721,7 +1726,14 @@ export async function acceptAcpPrompt(
  * Single-row INSERT OR REPLACE for a SessionRecord. Used by the SQLite fast
  * paths — mapping via sessionToRow, spill-field preservation, one transaction.
  */
-function writeSessionRowSqlite(db: import('../lib/sqlite.js').Database, session: SessionRecord): void {
+function writeSessionRowSqlite(
+  db: import('../lib/sqlite.js').Database,
+  session: SessionRecord,
+  // A writer moving an existing record to a new id names the old one, so its history is never read as fresh.
+  opts?: { before: SessionHistoryFields },
+): void {
+  const before = opts ? opts.before : storedHistoryFields(db, session.claudeSessionId);
+  if (sessionHistoryWriteNeedsCheck(before, session)) assertSessionHistoryWrite(before, session, taskDbHandle());
   const insertCols = [...SESSION_COLUMNS, 'payload'];
   const insertSql =
     'INSERT OR REPLACE INTO sessions (' + insertCols.join(', ') + ') VALUES (' +
@@ -1733,6 +1745,30 @@ function writeSessionRowSqlite(db: import('../lib/sqlite.js').Database, session:
   }
   db.prepare(insertSql).run(bound);
   noteSessionRowTouched(session.claudeSessionId);
+}
+
+/** The stored row's area history fields only (router/history-write.ts), without decoding the whole payload. */
+function storedHistoryFields(db: import('../lib/sqlite.js').Database, claudeSessionId: string): SessionHistoryFields | undefined {
+  const field = (key: string) => `CASE WHEN json_valid(payload) THEN json_extract(payload, '$.${key}') END AS ${key}`;
+  const keys = ['profile', 'engine', 'legacyTaskId', 'fromPlanSessionId', 'forkedFromSessionId', 'rewoundAtMessageUuid', 'engineSwitch', 'resumedBySwitch'];
+  const row = db.prepare(`SELECT task_id, host, from_plan_session_id, forked_from_session_id,
+    CASE WHEN payload IS NULL OR payload = '' THEN 1 WHEN json_valid(payload) THEN json_type(payload) = 'object' ELSE 0 END AS readable,
+    ${keys.map(field).join(', ')} FROM sessions WHERE claude_session_id = ?`)
+    .get(claudeSessionId) as Record<string, any> | undefined;
+  if (!row) return undefined;
+  if (!row.readable) throw new OrgError('router_history_unreadable', 503, `Session ${claudeSessionId}'s policy payload cannot be read. Nothing was written; retry after repairing the store.`);
+  const json = (v: unknown) => {
+    if (typeof v !== 'string') return v ?? undefined;
+    try { return JSON.parse(v); } catch { return v; }
+  };
+  return {
+    claudeSessionId, taskId: row.task_id ?? undefined, host: row.host ?? undefined, engine: row.engine ?? undefined,
+    profile: json(row.profile), legacyTaskId: row.legacyTaskId ?? undefined,
+    fromPlanSessionId: row.from_plan_session_id ?? row.fromPlanSessionId ?? undefined,
+    forkedFromSessionId: row.forked_from_session_id ?? row.forkedFromSessionId ?? undefined,
+    rewoundAtMessageUuid: row.rewoundAtMessageUuid ?? undefined,
+    engineSwitch: json(row.engineSwitch), resumedBySwitch: json(row.resumedBySwitch),
+  } as SessionHistoryFields;
 }
 
 /** The one DELETE for a session row: the lock patches the cache from what it notes. */
@@ -1837,6 +1873,8 @@ export async function importSessionRecord(opts: {
         );
       }
       if (opts.taskId) assertTaskSessionFree(handle, opts.taskId, opts.claudeSessionId);
+      // Outside history never joins an area, whatever profile it names.
+      assertOutsideHistoryImport(record, taskDbHandle());
       writeSessionRowSqlite(handle, record);
 
       log.session.info('imported external session', {
@@ -2281,10 +2319,13 @@ export async function batchUpdateSessionRecords(
           const row = selectStmt.get(id) as Record<string, any> | undefined;
           if (!row) continue; // missing row — skip, don't abort the batch
           const session = rowToSession(row);
+          const before = storedHistoryFields(handle, id)!;
           // Reuse the shared no-op guard + status_history + terminal PID clear.
           if (!applyUpdateToSession(session, updates, 'clearing stale PID on batch terminal transition')) {
             continue; // no material change — skip write
           }
+          // A refusal skips this row like any other row error.
+          if (sessionHistoryWriteNeedsCheck(before, session)) assertSessionHistoryWrite(before, session, taskDbHandle());
           const partial = sessionToRow(session);
           const bound: Record<string, unknown> = {};
           for (const col of insertCols) bound[col] = partial[col] === undefined ? null : partial[col];
@@ -2392,6 +2433,7 @@ export async function renameSessionId(
       }
 
       const session = rowToSession(oldRow);
+      const historyBefore = storedHistoryFields(handle, oldClaudeSessionId)!;
       initializeStatusVersion(session);
       const beforeStatus = canonicalStatusProjection(session);
       session.claudeSessionId = newClaudeSessionId;
@@ -2409,6 +2451,7 @@ export async function renameSessionId(
       const now = new Date().toISOString();
       session.lastActiveAt = now;
       commitStatusVersion(session, beforeStatus, now);
+      if (sessionHistoryWriteNeedsCheck(historyBefore, session)) assertSessionHistoryWrite(historyBefore, session, taskDbHandle());
 
       // Delete old PK + insert under new PK in one transaction so a crash mid-rename
       // can't leave both rows orphaned. INSERT OR REPLACE with the new PK won't
@@ -2484,6 +2527,7 @@ export async function stageAcpSessionIdMigration(
       if (conflict) return null;
 
       const oldRecord = rowToSession(oldRow);
+      const historyBefore = storedHistoryFields(handle, oldClaudeSessionId)!;
       initializeStatusVersion(oldRecord);
       const now = new Date().toISOString();
       const replacement: SessionRecord = {
@@ -2513,7 +2557,7 @@ export async function stageAcpSessionIdMigration(
       replacement.statusUpdatedAt = now;
 
       writeSessionRowSqlite(handle, redirect);
-      writeSessionRowSqlite(handle, replacement);
+      writeSessionRowSqlite(handle, replacement, { before: historyBefore });
       log.session.info('ACP session ID migration staged', {
         oldSessionId: oldClaudeSessionId,
         newSessionId: newClaudeSessionId,
@@ -2694,6 +2738,7 @@ async function retaskSessionRows(
             if (!row || !from.has(row.task_id)) continue;
             const session = rowToSession(row);
             const before = canonicalStatusProjection(session);
+            const historyBefore = storedHistoryFields(handle, id)!;
             // A survivor that already has its session takes no second one: the
             // merge refuses that case up front, so a row met here lost a race and
             // is left with no task rather than break one-session-per-task.
@@ -2706,6 +2751,18 @@ async function retaskSessionRows(
             // No task is a NULL column, as rows with no link have always been stored.
             if (target && !taken) session.taskId = target;
             else delete (session as Partial<SessionRecord>).taskId;
+            if (sessionHistoryWriteNeedsCheck(historyBefore, session)) {
+              try {
+                assertSessionHistoryWrite(historyBefore, session, taskDbHandle());
+              } catch (err) {
+                // An area conversation is never left with no task: it keeps its (deleted) task's id.
+                if (!session.taskId && isHistoryRefusal(err)) {
+                  log.session.warn('retask: area conversation kept on its task', { sessionId: id, fromTaskId: row.task_id });
+                  continue;
+                }
+                throw err;
+              }
+            }
             commitStatusVersion(session, before, now);
             write.run(session.taskId ?? null, session.statusRevision, session.statusUpdatedAt, session.claudeSessionId);
             noteSessionRowTouched(session.claudeSessionId);
@@ -2887,6 +2944,7 @@ export async function completeTaskSessions(
         session.last_status_change = now;
         session.lastActiveAt = now;
         commitStatusVersion(session, beforeStatus, now);
+        // history-write exempt: status, reason, pid and activity times only, read from this row.
         const partial = sessionToRow(session);
         const bound: Record<string, unknown> = {};
         for (const col of insertCols) {

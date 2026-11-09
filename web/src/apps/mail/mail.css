@@ -1458,3 +1458,109 @@
   font-weight: 600;
   white-space: nowrap;
 }
+
+.mail-route {
+  display: grid;
+  grid-template-columns: 6px auto minmax(0, 1fr);
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.mail-route-reader {
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.mail-route-mark {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--fg-muted);
+  opacity: 0.6;
+}
+.mail-route-mark[data-route-status='routed'] { background: var(--success); opacity: 1; }
+.mail-route-mark[data-route-status='routing'] { background: var(--accent); opacity: 1; }
+.mail-route-mark[data-route-status='confirmed'] { background: var(--accent); opacity: 0.6; }
+.mail-route-mark[data-route-status='failed'] { background: var(--error); opacity: 1; }
+.mail-route-mark[data-route-status='unknown'] { background: var(--warning); opacity: 1; }
+
+.mail-route-lead,
+.mail-route-sep { flex: 0 0 auto; }
+
+.mail-route-name,
+.mail-route-link,
+.mail-route-detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mail-route-name,
+.mail-route-link { color: var(--fg-secondary); }
+
+.mail-route-sep { display: none; }
+.mail-route-detail { grid-column: 2 / -1; }
+/* A row keeps its route to one line (the detail after a dot, cut short), so every row can carry one
+   without growing; the reader gives the detail its own line. */
+.mail-route-row { display: flex; }
+.mail-route-row .mail-route-name,
+.mail-route-row .mail-route-link { flex: 0 1 auto; }
+.mail-route-row .mail-route-sep { display: inline; }
+/* The reason keeps a readable share of the line; a long target name gives way first. */
+.mail-route-row .mail-route-detail { flex: 1 1 0; min-width: 64px; }
+
+.mail-route-link {
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+  text-align: left;
+}
+.mail-route-link:hover { text-decoration: underline; }
+.mail-route-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+
+.mail-route[data-route-status='failed'] .mail-route-lead { color: var(--error); }
+.mail-route[data-route-status='unknown'] .mail-route-lead { color: var(--warning); }
+
+/* The reader's inline area choice for a message with no routing record (MailRouterAssignment). */
+.mail-router-assign { margin: 4px 0 0; font-size: 12px; color: var(--fg-secondary); }
+/* Under the route line's words (6px mark + 4px gap), so the note reads as part of that line. */
+.mail-router-assign.is-confirmed { color: var(--fg-secondary); padding-left: 10px; }
+/* The reader's line foot: the scope note and the next step on one row under the line's words. */
+.mail-route-foot { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; margin: 2px 0 0; padding-left: 10px; font-size: 12px; }
+.mail-route-foot > .mail-router-assign { margin: 0; padding-left: 0; }
+.mail-route-foot > .mail-router-assign.is-open { flex-basis: 100%; margin: 4px 0 0 -10px; }
+.mail-router-assign.is-open {
+  display: flex; flex-direction: column; gap: 6px; max-width: 520px; padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--bg);
+}
+.mail-router-choose,
+.mail-router-link {
+  padding: 0; border: none; background: none; font: inherit; color: var(--accent); cursor: pointer;
+}
+.mail-router-choose:hover,
+.mail-router-link:hover { text-decoration: underline; }
+.mail-router-choose:focus-visible,
+.mail-router-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 2px; }
+.mail-router-note { margin: 0; color: var(--fg-muted); }
+.mail-router-error { margin: 0; color: var(--error); }
+.mail-router-areas { margin: 0; padding: 4px 0 0; border: none; min-width: 0; }
+.mail-router-areas legend { padding: 0; font-weight: 600; color: var(--fg); }
+.mail-router-area { display: flex; align-items: center; gap: 6px; padding: 2px 0; color: var(--fg); }
+.mail-router-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }

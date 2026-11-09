@@ -31,7 +31,7 @@ import type { ThreadCapture, ThreadHintState, ThreadsTidyState } from '../org/th
 import type { UserAskCapture } from '../sessions/user-asks.js';
 
 type HintRecord = Pick<SessionRecord, 'output_mode' | 'output_mode_injected' | 'hintState' | 'lastCompactUuid' | 'lastCompactAt'>
-  & Partial<Pick<SessionRecord, 'claudeSessionId' | 'taskId' | 'threadMeta' | 'asksSent'>>;
+  & Partial<Pick<SessionRecord, 'claudeSessionId' | 'taskId' | 'threadMeta' | 'asksSent' | 'profile'>>;
 type HintConfig = Pick<Config, 'session'> | null;
 
 /** Hints a send asks for by kind (`on_request`), with an argument (a question's number). */
@@ -383,7 +383,7 @@ export async function prepareHintedSend(
   opts: HintSendOptions = {},
 ): Promise<PreparedHintedSend> {
   const now = opts.now ?? Date.now;
-  if (message.startsWith('/')) return escapedOnly(message);
+  if (message.startsWith('/') || record?.profile?.areaId) return escapedOnly(message);
   try {
     const config = opts.config !== undefined ? opts.config : await import('../config-manager.js').then((m) => m.getConfig()).catch(() => null);
     const hints = effectiveHints(config);
@@ -459,6 +459,7 @@ export async function requestedHintBlocks(message: string, requested: RequestedH
 /** A start that opens a NEW conversation (not a fork, a rewind or a transfer's resume). */
 export interface StartHintData {
   taskId?: string;
+  profile?: SessionRecord['profile'];
   message: string;
   preassignedSessionId?: string;
   forkedFromSessionId?: string;
@@ -479,7 +480,7 @@ export interface StartHintData {
  */
 export async function prepareStartHints<T extends StartHintData>(data: T, opts: { config?: HintConfig; now?: () => number } = {}): Promise<{ data: T; commit(sessionId: string): Promise<void> }> {
   const none = { data, commit: async () => {} };
-  if (!data.message || data.message.startsWith('/') || data.forkedFromSessionId || data.resumeFile || data.resumeSessionAtMessageUuid) return none;
+  if (!data.message || data.profile?.areaId || data.message.startsWith('/') || data.forkedFromSessionId || data.resumeFile || data.resumeSessionAtMessageUuid) return none;
   try {
     const config = opts.config !== undefined ? opts.config : await import('../config-manager.js').then((m) => m.getConfig()).catch(() => null);
     const hints = effectiveHints(config);

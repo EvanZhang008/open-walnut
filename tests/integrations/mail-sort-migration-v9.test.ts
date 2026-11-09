@@ -21,6 +21,7 @@ import { MailBodyStore } from '../../src/integrations/mail/bodies.js'
 import { envelopeHashOf } from '../../src/integrations/mail/contract.js'
 import { MAIL_MIGRATIONS, MailDatabase } from '../../src/integrations/mail/db.js'
 import { MailProviderRegistry } from '../../src/integrations/mail/provider-registry.js'
+import { mailRowDeliveryVersion } from '../../src/integrations/mail/router-source.js'
 import { MailService } from '../../src/integrations/mail/service.js'
 import { MailSortEngine } from '../../src/integrations/mail/sort-engine.js'
 import { MailStore } from '../../src/integrations/mail/store.js'
@@ -191,7 +192,14 @@ describe('ingest after v10', () => {
     const person: MailEnvelope = { ...envelopeFor(0), messageId: 'INBOX:1:99998', rfcMessageId: '<p@marina.example.invalid>', sentAt: T0 + 10_000_001 }
     const result = await service().ingestPage(ACCOUNT, [person])
     expect(result.importantAdded).toBe(1)
-    expect(result.importantHeadlines).toEqual([{ from: 'carol.pier@friend.example.invalid', subject: 'Subject 0' }])
+    // The headline names the delivery it saw: the version the stored row gives, read back, never a made-up hash.
+    const row = await store.getMessage(ACCOUNT, person.messageId)
+    expect(row).toBeDefined()
+    expect(result.importantHeadlines).toEqual([{
+      from: 'carol.pier@friend.example.invalid', subject: 'Subject 0', messageId: person.messageId,
+      version: mailRowDeliveryVersion(row!),
+      canonicalKey: JSON.stringify(['mail', ACCOUNT, 'rfc', person.rfcMessageId]),
+    }])
   })
 })
 

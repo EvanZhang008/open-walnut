@@ -19,8 +19,8 @@
  *   them are not.
  * - Rows come a PAGE at a time, never as one SELECT. An account with 50,000 cached bodies has to be
  *   a loop of small statements, which is the same shape retention's deletes already use.
- * - The FILE goes before the row is cleared. The other order leaves bytes on disk that no row names
- *   any more, and nothing else in the plugin can find them again.
+ * - The ROW is cleared before its file goes, inside the account's write gate: file first let a reader
+ *   confirm a row whose file had vanished, and a crash now leaves at worst an unnamed file.
  * - The SNIPPET is left exactly as it is, and that is deliberate. A row's snippet was derived from
  *   the body being retired, so it carries the same fault, but the envelope's own preview is not kept
  *   anywhere once a body has overwritten that column (`storeBody` writes the body-derived snippet
@@ -37,6 +37,7 @@ const PAGE = 200
 
 export interface BodyRevisionDeps {
   store: {
+    withAccountWrite<T>(accountId: string, work: () => Promise<T>): Promise<T>
     listAccounts(): Promise<Array<{ account_id: string }>>
     bodiedForAccount(accountId: string, limit: number): Promise<BodiedRow[]>
     clearMessageBody(rowid: number): Promise<void>
@@ -83,7 +84,7 @@ export async function reconcileBodyRevision(
     .filter((accountId) => accountId.startsWith(prefix))
 
   let bodies = 0
-  for (const accountId of accountIds) bodies += await clearAccountBodies(deps, accountId)
+  for (const accountId of accountIds) bodies += await deps.store.withAccountWrite(accountId, () => clearAccountBodies(deps, accountId))
 
   await deps.store.tasks.setMeta(key, revision)
   deps.log?.info('mail retired the bodies a provider had cached before its fix', {
@@ -92,6 +93,7 @@ export async function reconcileBodyRevision(
   return { swept: true, accounts: accountIds.length, bodies }
 }
 
+/** Caller holds the account's write gate. */
 async function clearAccountBodies(deps: BodyRevisionDeps, accountId: string): Promise<number> {
   let cleared = 0
   let firstOfPreviousPage: number | undefined
@@ -107,8 +109,8 @@ async function clearAccountBodies(deps: BodyRevisionDeps, accountId: string): Pr
     }
     firstOfPreviousPage = page[0]!.rowid
     for (const row of page) {
-      await deps.bodies.remove(row.body_ref)
       await deps.store.clearMessageBody(row.rowid)
+      await deps.bodies.remove(row.body_ref)
       cleared += 1
     }
     if (page.length < PAGE) return cleared

@@ -19,13 +19,19 @@ import { briefTeam, needsLineText, storedUserState } from '../user-status.js';
 import { ORG_REPORT } from '../human-inbox/walnut-letters/org-report.js';
 import type { LetterLang } from '../human-inbox/walnut-letters/languages.js';
 import { briefSectionOf } from '../sessions/brief-structure.js';
+import { sameAreaTasks, sameTaskArea } from '../router/same-area.js';
 
 const SCHEDULE_FILE = path.join(WALNUT_HOME, 'org', 'report-schedule.json');
 /** A report the clock could not send this long after its time is dropped, with a log line. */
 const LATE_DROP_MS = 12 * 60 * 60_000;
 const LIST_MAX = 20;
 
-export interface MorningReport { subject: string; markdown: string; text: string; taskRefs: string[]; counts: { needs: number; done: number; moved: number } }
+export interface MorningReport {
+  subject: string; markdown: string; text: string; taskRefs: string[]; counts: { needs: number; done: number; moved: number };
+  /** Open decision letters left out because Walnut cannot tell their area: the sending task is
+   *  gone from the store. Only how many, never their words. Absent when none. */
+  withheld?: { decisions: number };
+}
 
 const flat = (v: string, max = 240): string => {
   const s = v.replace(/\s+/g, ' ').trim();
@@ -47,8 +53,22 @@ const hhmm = reportTime;
 
 /** Pure: the report for `owner` (Main: the whole org; a lead: its team), since `since`. */
 export function buildMorningReport(owner: Task, tasks: readonly Task[], letters: readonly LetterRecord[], since: number, now = Date.now(), lang: LetterLang = 'en'): MorningReport {
-  const scope = owner.org_role === 'main' ? tasks.filter((t) => !t.plugin_only && t.id !== owner.id) : briefTeam(owner, tasks);
-  const decisions = letters.filter((l) => l.type === 'action_required' && !l.answered && !l.archived && !l.settled);
+  // Only the owner's incoming-item area (router/same-area.ts): an unscoped node never reads an area
+  // task's title, ask or result, nor a decision letter that task sent.
+  const scope = sameAreaTasks(owner, owner.org_role === 'main' ? tasks.filter((t) => !t.plugin_only && t.id !== owner.id) : briefTeam(owner, tasks));
+  // A letter with no sending task (Walnut's own, a system one) is listed as before. One whose sending
+  // task is in the store goes by that task's area. One whose sending task is gone cannot be placed,
+  // so it is never shared: only its count is kept (`withheld`), never its subject.
+  const byId = new Map(tasks.map((t) => [t.id, t] as const));
+  let withheldDecisions = 0;
+  const letterInArea = (l: LetterRecord): boolean => {
+    const fromId = l.sender?.taskId;
+    if (!fromId) return true;
+    const from = byId.get(fromId);
+    if (!from) { withheldDecisions++; return false; }
+    return sameTaskArea(owner, from);
+  };
+  const decisions = letters.filter((l) => l.type === 'action_required' && !l.answered && !l.archived && !l.settled && letterInArea(l));
   const refs = new Set<string>();
   const needs = scope.filter((t) => briefSectionOf(t) === 'needs').sort((a, b) => atOf(b) - atOf(a));
   const done = scope.filter((t) => t.phase === 'COMPLETE' && atOf(t) >= since).sort((a, b) => atOf(b) - atOf(a));
@@ -93,7 +113,10 @@ export function buildMorningReport(owner: Task, tasks: readonly Task[], letters:
   });
   const counts = { needs: needs.length, done: done.length, moved: moved.length };
   void now;
-  return { subject: report.subject, markdown: report.markdown, text: report.text ?? '', taskRefs: [...refs].slice(0, 30), counts };
+  return {
+    subject: report.subject, markdown: report.markdown, text: report.text ?? '', taskRefs: [...refs].slice(0, 30), counts,
+    ...(withheldDecisions ? { withheld: { decisions: withheldDecisions } } : {}),
+  };
 }
 
 /** "08:00" (the next time the server's clock reads it), an ISO time, or a duration ("8h"). */
@@ -152,7 +175,7 @@ export async function sendReport(task: Task, since: number, now = Date.now()): P
     // The report opens the absence's thread: the node's later updates join it.
     away?.away ? { awayThread: { taskId: task.id, since: away.lastSeenAt } } : {},
   );
-  log.notif.info('org report sent', { taskId: task.id, letterId: letter.id, ...report.counts });
+  log.notif.info('org report sent', { taskId: task.id, letterId: letter.id, ...report.counts, ...(report.withheld ? { withheldDecisions: report.withheld.decisions } : {}) });
   return letter;
 }
 

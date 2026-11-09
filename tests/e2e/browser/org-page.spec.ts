@@ -427,8 +427,8 @@ test('the org\'s name and the user\'s role are renamed in place, kept, and the C
   await openOrg(page)
   // The org's own names: Main reads as the CEO, the leads as VPs.
   await expect(page.getByTestId('org-channel-main').locator('.org-channel-name')).toHaveText('CEO')
-  await expect(page.locator('.org-list-section').first()).toHaveText(/^VPs · \d+$/)
-  await expect(page.getByTestId('org-search')).toHaveAttribute('placeholder', 'Search VPs…')
+  await expect(page.getByTestId('org-vps-head')).toHaveText(/^VPs · \d+$/)
+  await expect(page.getByTestId('org-search')).toHaveAttribute('placeholder', 'Search VPs and routers…')
 
   // The title is the org's name: a click renames it, Enter keeps it, a reload still shows it.
   const name = page.getByTestId('org-name')

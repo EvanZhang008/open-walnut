@@ -64,8 +64,31 @@ export const CLAIM_TTL_MS = 15 * 60_000;
 export interface TriagePendingMail {
   accountId: string;
   count: number;
-  headlines: Array<{ from: string; subject: string }>;
+  headlines: Array<{ from: string; subject: string; messageId?: string; canonicalKey?: string; version?: string }>;
   atMs: number;
+}
+
+const HEADLINE_MESSAGE_MAX = 1_000;
+const HEADLINE_KEY_MAX = 2_048;
+const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
+
+function identityField(value: unknown, max: number): string | undefined {
+  return typeof value === 'string' && value && value.length <= max && !CONTROL_CHARS.test(value) ? value : undefined;
+}
+
+/** A headline as an event or the file carried it; a malformed id or key reads as absent. */
+export function readTriageHeadline(raw: unknown): TriagePendingMail['headlines'][number] {
+  const row = (raw ?? {}) as Record<string, unknown>;
+  const messageId = identityField(row.messageId, HEADLINE_MESSAGE_MAX);
+  const canonicalKey = identityField(row.canonicalKey, HEADLINE_KEY_MAX);
+  const version = identityField(row.version, 200);
+  return {
+    from: str(row.from, 200),
+    subject: str(row.subject, 300),
+    ...(messageId ? { messageId } : {}),
+    ...(canonicalKey ? { canonicalKey } : {}),
+    ...(version ? { version } : {}),
+  };
 }
 
 /** One Slack message, as `plugin:slack:messages-received` reported it. */
@@ -159,12 +182,7 @@ function readMailRow(raw: unknown): TriagePendingMail | null {
   const r = raw as Record<string, unknown>;
   const accountId = str(r.accountId, 200);
   if (!accountId) return null;
-  const headlines = Array.isArray(r.headlines)
-    ? r.headlines.slice(0, 5).map((h) => {
-      const row = (h ?? {}) as Record<string, unknown>;
-      return { from: str(row.from, 200), subject: str(row.subject, 300) };
-    })
-    : [];
+  const headlines = Array.isArray(r.headlines) ? r.headlines.slice(0, 5).map(readTriageHeadline) : [];
   return { accountId, count: Math.max(0, Math.floor(num(r.count))), headlines, atMs: num(r.atMs) };
 }
 

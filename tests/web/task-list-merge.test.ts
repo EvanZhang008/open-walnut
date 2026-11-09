@@ -157,6 +157,16 @@ describe('mergeFetchedTasks', () => {
     expect(listRowEqual(told, { ...told, org_instructions: { text: '', at: '2026-10-27T10:05:00Z' } } as Task)).toBe(false);
   });
 
+  it('detects every router setting even when updated_at is unchanged', () => {
+    const a = task({ id: 'r', org_role: 'router', router_area_id: 'personal', router_links: ['vp-a', 'vp-b'], router_paused: true });
+    expect(listRowEqual(a, { ...a, router_links: [...a.router_links!] })).toBe(true);
+    for (const patch of [{ router_area_id: 'work' }, { router_links: ['vp-a'] }, { router_links: [] }, { router_paused: false }]) {
+      const changed = { ...a, ...patch };
+      expect(listRowEqual(a, changed)).toBe(false);
+      expect(mergeFetchedTasks([a], [changed])[0]).toBe(changed);
+    }
+  });
+
   it('detects is_blocked flips (blocked badge must heal on refetch)', () => {
     const a = task({ id: 'a' });
     const blocked = { ...a, is_blocked: true } as unknown as Task;

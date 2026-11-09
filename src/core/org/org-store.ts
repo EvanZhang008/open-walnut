@@ -576,8 +576,9 @@ function waitingOnUser(nodes: import('./org-tree.js').OrgTaskNode[], limit = 3):
 }
 
 /** The reports of `of`: the main agent (or nobody) → projects; a lead → its project's teams; a task → its workers. */
-export async function orgReportsOf(of: Task | undefined): Promise<{ of: string; rows: OrgReportRow[] }> {
-  const tree = await getOrgTree();
+export async function orgReportsOf(of: Task | undefined, scoped?: OrgTree): Promise<{ of: string; rows: OrgReportRow[] }> {
+  // `scoped`: a tree already narrowed to what the caller may read (web/routes/org-v1.ts).
+  const tree = scoped ?? await getOrgTree();
   if (!of || of.org_role === 'main') {
     return {
       of: 'main',

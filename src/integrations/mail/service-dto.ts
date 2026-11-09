@@ -17,6 +17,7 @@ import type { StoredBodyFormat } from './bodies.js'
 import { snippetOf } from './bodies.js'
 import { threadIdOf, type MailMessageDto } from './contract.js'
 import type { MessageRow } from './store.js'
+import { mailRowDeliveryVersion } from './router-source.js'
 import type { MailUnsubscribeAvailability } from './contract.js'
 import type {
   MailAddress,
@@ -160,6 +161,7 @@ export function toDto(row: MessageRow): MailMessageDto {
     subject: row.subject,
     snippet: row.snippet,
     sentAt: row.sent_at,
+    deliveryVersion: mailRowDeliveryVersion(row),
     ...(payload.sentAtHeader ? { sentAtHeader: payload.sentAtHeader } : {}),
     ...(row.received_at ? { receivedAt: row.received_at } : {}),
     flags: parseJson<string[]>(row.flags_json, []),

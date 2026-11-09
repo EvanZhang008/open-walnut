@@ -26,6 +26,7 @@ import { migratePhase } from './phase.js';
 import { normalizeTags, tagsAreNormal } from './tag-model.js';
 import { migrateFocusTier } from './types.js';
 import type { ExtIndexSpec } from './integration-types.js';
+import { TASK_DB_MAX_SUPPORTED_VERSION, TASK_DB_SCHEMA_VERSION } from './task-db-version.js';
 
 /** SQLite file path. Sits next to the legacy tasks.json in the same dir. */
 export const TASK_DB_PATH = path.join(TASKS_DIR, 'tasks.sqlite');
@@ -161,9 +162,9 @@ function openShared(): DatabaseType {
   try {
     const schemaVersion = handle.pragma('user_version', { simple: true }) as number;
     // Reject newer data before any pragma/schema write; see docs/decision/task-session-status.md.
-    if (schemaVersion > SCHEMA_VERSION) {
+    if (schemaVersion > MAX_SUPPORTED_SCHEMA_VERSION) {
       handle.close();
-      throw new Error(`Task database schema ${schemaVersion} is newer than supported schema ${SCHEMA_VERSION}; use a newer Walnut build.`);
+      throw new Error(`Task database schema ${schemaVersion} is newer than supported schema ${MAX_SUPPORTED_SCHEMA_VERSION}; use a newer Walnut build.`);
     }
     handle.pragma('journal_mode = WAL');
     handle.pragma('busy_timeout = 5000');
@@ -635,7 +636,9 @@ const SCHEMA_SQL = `
  * Exported so migration tests can assert "the DB ended up current" without
  * hardcoding a number that every future bump would break.
  */
-export const SCHEMA_VERSION = 13;
+export const SCHEMA_VERSION = TASK_DB_SCHEMA_VERSION;
+/** 14 = router areas stamp (core/router/data-version.ts); migrations never touch it. */
+export const MAX_SUPPORTED_SCHEMA_VERSION = TASK_DB_MAX_SUPPORTED_VERSION;
 
 function runOneTimeMigrations(handle: DatabaseType): void {
   const current = handle.pragma('user_version', { simple: true }) as number;

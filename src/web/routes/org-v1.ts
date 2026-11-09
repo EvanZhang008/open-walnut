@@ -35,10 +35,11 @@ import { matchIdRef, missingIsNull } from '../../lib/id-ref.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { getOrgSettings, setOrgSettings } from '../../core/org/org-settings.js'
 import {
-  OrgError, contactLaunch, ensureMainTask, getOrgTree, orgReportsOf, resolveOrgContact, setProjectVp,
+  OrgError, contactLaunch, ensureMainTask, getOrgTree, orgReportsOf, orgTasks, resolveOrgContact, setProjectVp,
 } from '../../core/org/org-store.js'
 import { createOrgNode, editOrgNode, editProjectVp, type OrgWriter } from '../../core/org/org-node-edit.js'
-import { orgDisplayTitle } from '../../core/org/org-tree.js'
+import { buildOrgTree, orgDisplayTitle } from '../../core/org/org-tree.js'
+import { areaCallerOf, buildAreaDenials, deniedTasksNow, type AreaCaller } from '../middleware/router-area-reader.js'
 
 export const orgV1Router = Router()
 
@@ -54,6 +55,25 @@ function sendError(res: Response, next: NextFunction, err: unknown): void {
     return
   }
   next(err)
+}
+
+/** The task `ref` (an id or a unique prefix, as getTask takes) names in `tasks`, else undefined. */
+export function snapshotTask<T extends { id: string }>(tasks: readonly T[], ref: string): T | undefined {
+  const matches = matchIdRef(tasks, ref)
+  return matches.length === 1 ? matches[0] : undefined
+}
+
+interface CallerOrgView { caller: AreaCaller; tasks: Task[]; visible: Task[]; denied: ReadonlySet<string> }
+
+/** A session's or automated caller's org: ONE task read, judged and shown from the same snapshot; a person gets undefined. */
+async function callerOrgView(req: Request): Promise<CallerOrgView | undefined> {
+  const caller = areaCallerOf(req)
+  if (!caller) return undefined
+  const tasks = await orgTasks()
+  const built = await buildAreaDenials(caller, { tasks })
+  if (!built) throw new OrgError('area_unverifiable', 503, 'The incoming-item area registry could not be read, so the org is not shown to this caller.')
+  const denied = built.denials.tasks
+  return { caller, tasks, visible: tasks.filter((t) => !denied.has(t.id)), denied }
 }
 
 function brief(task: Task): Record<string, unknown> {
@@ -88,9 +108,10 @@ async function hasSession(task: Task): Promise<boolean> {
   return !!(await taskConversation(task.id))
 }
 
-orgV1Router.get('/org', async (_req: Request, res: Response, next: NextFunction) => {
+orgV1Router.get('/org', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    res.json({ tree: await getOrgTree() })
+    const view = await callerOrgView(req)
+    res.json({ tree: view ? buildOrgTree(view.visible) : await getOrgTree() })
   } catch (err) {
     sendError(res, next, err)
   }
@@ -100,8 +121,9 @@ orgV1Router.get('/org', async (_req: Request, res: Response, next: NextFunction)
 // (core/status-consistency.ts). Read-only; answers 503 rather than hang past its deadline, and
 // callers at once share one pass (it reads every task).
 let statusCheckFlight: Promise<Awaited<ReturnType<typeof import('../../core/status-consistency.js').checkStatuses>>> | null = null
-orgV1Router.get('/org/status-check', async (_req: Request, res: Response, next: NextFunction) => {
+orgV1Router.get('/org/status-check', async (req: Request, res: Response, next: NextFunction) => {
   try {
+    const view = await callerOrgView(req)
     const { checkStatuses } = await import('../../core/status-consistency.js')
     const checkedAt = new Date().toISOString()
     const flight = statusCheckFlight ??= checkStatuses().finally(() => { statusCheckFlight = null })
@@ -110,7 +132,13 @@ orgV1Router.get('/org/status-check', async (_req: Request, res: Response, next: 
       new Promise<null>((r) => { const t = setTimeout(() => r(null), 15_000); t.unref?.() }),
     ])
     if (!result) { res.status(503).json({ error: 'status check timed out', checkedAt }); return }
-    res.json({ checkedAt, mismatches: result })
+    if (!view) { res.json({ checkedAt, mismatches: result }); return }
+    const shown = new Set(view.visible.map((t) => t.id))
+    const kept = result.filter((m) => shown.has(m.taskId))
+    // Rows come from the check's own later read: a task classified since the snapshot is judged again.
+    const now = await deniedTasksNow(view.caller, [...new Set(kept.map((m) => m.taskId))])
+    if (!now) throw new OrgError('area_unverifiable', 503, 'The incoming-item area registry could not be read, so the org is not shown to this caller.')
+    res.json({ checkedAt, mismatches: kept.filter((m) => !now.has(m.taskId)) })
   } catch (err) {
     sendError(res, next, err)
   }
@@ -120,10 +148,13 @@ orgV1Router.get('/org/reports', async (req: Request, res: Response, next: NextFu
   try {
     const { getTask } = await import('../../core/task-manager.js')
     const ofParam = typeof req.query.of === 'string' ? req.query.of.trim() : ''
+    const view = await callerOrgView(req)
     let of: Task | undefined
     if (ofParam) {
-      of = (await getTask(ofParam).catch(missingIsNull)) ?? undefined
+      // A session's `of` resolves in its judged snapshot only: a task made or marked after it is not shown.
+      of = view ? snapshotTask(view.tasks, ofParam) : (await getTask(ofParam).catch(missingIsNull)) ?? undefined
       if (!of) throw new OrgError('unknown_task', 404, `No task "${ofParam}".`)
+      if (view?.denied.has(of.id)) throw new OrgError('area_forbidden', 403, 'This session may not read work of another incoming-item area.')
     } else {
       const sid = header(req, 'x-walnut-caller-sid')
       if (sid) {
@@ -132,7 +163,7 @@ orgV1Router.get('/org/reports', async (req: Request, res: Response, next: NextFu
         if ('task' in me && me.task) of = await getTask(me.task.id).catch(() => undefined)
       }
     }
-    res.json(await orgReportsOf(of))
+    res.json(await orgReportsOf(of, view ? buildOrgTree(view.visible) : undefined))
   } catch (err) {
     sendError(res, next, err)
   }

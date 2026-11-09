@@ -459,13 +459,43 @@ describe('plugin runtime routes', () => {
     await request(app).post('/api/plugin-runtime/sample/clear-quarantine').expect(200, { ok: true })
 
     expect(listPrimaryOps).toHaveBeenCalledWith('sample')
-    expect(callPrimaryOp).toHaveBeenCalledWith('sample', 'task_get', { id: 'abc' })
+    // No caller header: a person, and the companion says so to the primary.
+    expect(callPrimaryOp).toHaveBeenCalledWith('sample', 'task_get', { id: 'abc' }, { kind: 'person' })
     expect(deps.discover).not.toHaveBeenCalled()
     expect(managePrimary.mock.calls.map((call) => call[1])).toEqual([
       'discover',
       'reload',
       'disable',
       'clear-quarantine',
+    ])
+  })
+
+  it('tells the primary who a cloud plugin op runs for, read from the request headers only', async () => {
+    const callPrimaryOp = vi.fn(async () => ({ ok: true, result: {} }))
+    const { app } = setup({ cloudMode: true, callPrimaryOp })
+    const send = (headers: Record<string, string>) => {
+      const r = request(app).post('/api/plugin-runtime/sample/ops/task_get')
+      for (const [name, value] of Object.entries(headers)) r.set(name, value)
+      return r.send({ id: 'abc' }).expect(200)
+    }
+    const sid = 'b7c5e0f1-0000-4000-8000-00000000a001'
+    await send({ 'x-walnut-caller-sid': sid })
+    await send({ 'x-walnut-caller-kind': 'automation' })
+    // A session id that is not one never reads as a person: the primary runs it as the plugin.
+    await send({ 'x-walnut-caller-sid': 'x'.repeat(201) })
+    await send({ 'x-walnut-caller-sid': 'two ids' })
+    await send({ 'x-walnut-caller-sid': '' })
+    await send({ 'x-walnut-caller-kind': '' })
+    // A session id wins over a caller kind, as on every person route.
+    await send({ 'x-walnut-caller-sid': sid, 'x-walnut-caller-kind': 'automation' })
+    expect(callPrimaryOp.mock.calls.map((call) => (call as unknown[])[3])).toEqual([
+      { kind: 'agent', sid },
+      { kind: 'agent' },
+      undefined,
+      undefined,
+      undefined,
+      { kind: 'agent' },
+      { kind: 'agent', sid },
     ])
   })
 

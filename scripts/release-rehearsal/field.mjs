@@ -36,6 +36,12 @@
  *               forward again: the dist-tags name the release, the old
  *               install's startup update takes it, and the work and the
  *               SQLite files are still whole.
+ *   field-router-back  field-back with a router: once updated, the release
+ *               creates a paused router through POST /api/v1/org/routers, which
+ *               stamps the task store ROUTER_STORE_VERSION. The start point
+ *               reinstalled must refuse that store before serving (REFUSAL, never
+ *               the served fallback); forward again, the router, its area, the
+ *               stamp, the work and every SQLite file are whole.
  *   field-cli   an install in use runs its own `walnut update` while its server
  *               serves; the old server keeps answering; its restart is the
  *               release, with the task, the history and the session.
@@ -88,7 +94,7 @@ const ask = (label, mark) => ({ text: `snapshot-clean-turn:answered ${label} ${m
 const reports = (printed, version) => printed.split(/\s/)[0] === version
 
 /** Every field scenario, in the order they run (--field-only picks some). */
-export const FIELD_SCENARIOS = ['field', 'field-work', 'field-back', 'field-cli', 'field-hand', 'field-lag', 'field-index', 'field-unscripted', 'field-archive']
+export const FIELD_SCENARIOS = ['field', 'field-work', 'field-back', 'field-router-back', 'field-cli', 'field-hand', 'field-lag', 'field-index', 'field-unscripted', 'field-archive']
 
 /** Where a release's GitHub assets are (`<base>/v<version>/<file>`). */
 export const RELEASE_DOWNLOADS = 'https://github.com/EvanZhang008/open-walnut/releases/download'
@@ -182,7 +188,8 @@ function checkSqlite(file, dbs, env) {
         db.query('INSERT INTO walnut_rehearsal_probe VALUES (?)').run(1)
         const wrote = db.query('SELECT count(*) AS n FROM walnut_rehearsal_probe').get().n
         db.exec('ROLLBACK')
-        out[f] = { check, tables, wrote }
+        const version = db.query('PRAGMA user_version').get().user_version
+        out[f] = { check, tables, wrote, version }
       } finally { db.close() }
     }
     console.log(JSON.stringify(out))`
@@ -478,6 +485,54 @@ async function inUse({ from, field, work, walnuts, opts }) {
  */
 export const REFUSAL = /Task database schema \d+ is newer than supported schema \d+; use a newer Walnut build\./
 
+/** The task store's user_version once an isolated area is saved (TASK_DB_ROUTER_VERSION, src/core/task-db-version.ts). */
+export const ROUTER_STORE_VERSION = 14
+/** Under the Walnut home: the task store the stamp lands in, and the router areas registry. */
+export const TASK_STORE = path.join('tasks', 'tasks.sqlite')
+export const ROUTER_AREAS = path.join('router', 'areas.json')
+/** What the Org page's New router form sends: a paused router of the Personal area on this machine, no VP links, no sources. */
+export const REHEARSAL_ROUTER = { name: 'Rehearsal router', area_id: 'personal', area_name: 'Personal', host: '__local__', links: [], sources: [] }
+
+/** Only an exit before serving with the start point's own guard naming the router's store version above its supported one is the refusal. */
+export function judgeRouterRefusal({ version, message, tail }) {
+  const refused = tail.match(REFUSAL)
+  const [schema, supported] = refused ? refused[0].match(/\d+/g).map(Number) : []
+  if (!/exited \d+ before serving/.test(message) || !refused || schema !== ROUTER_STORE_VERSION || !(supported < ROUTER_STORE_VERSION)) {
+    throw new Error(`${version} did not refuse the router's task store (version ${ROUTER_STORE_VERSION}) with its own newer-data guard: ${message}\n${tail.slice(-3000)}`)
+  }
+  return `${version} refuses the router's task store before serving: ${refused[0]}`
+}
+
+/** The router as the release serves it: its task's role marker and its area's registry, which is returned. */
+async function readRouter(w, id, version) {
+  const got = await w.api('GET', `/api/v1/tasks/${encodeURIComponent(id)}`)
+  const t = got.json?.task
+  if (got.status !== 200 || t?.org_role !== 'router' || t.router_area_id !== REHEARSAL_ROUTER.area_id || t.router_paused !== true || (t.org_name ?? t.title) !== REHEARSAL_ROUTER.name) {
+    throw new Error(`the router task ${id} under ${version} is ${got.status} ${got.text.slice(0, 400)}`)
+  }
+  const areas = await w.api('GET', '/api/v1/router/areas')
+  const area = (areas.json?.areas ?? []).find((a) => a.id === REHEARSAL_ROUTER.area_id)
+  const assigned = (areas.json?.routers ?? []).find((r) => r.taskId === id)
+  if (areas.status !== 200 || !area?.taskIds?.includes(id) || area.host !== REHEARSAL_ROUTER.host || assigned?.areaId !== area.id || assigned.paused !== true) {
+    throw new Error(`the router areas under ${version} do not hold router ${id}: ${areas.status} ${areas.text.slice(0, 400)}`)
+  }
+  return areas.json
+}
+
+/** The release creates the router by its own creation path (no stamp written here). */
+async function setUpRouter(w, version) {
+  const made = await w.api('POST', '/api/v1/org/routers', REHEARSAL_ROUTER)
+  const id = made.json?.task?.id
+  if (made.status !== 201 || !id) throw new Error(`POST /api/v1/org/routers under ${version} answered ${made.status} ${made.text.slice(0, 300)}`)
+  return { id, areas: await readRouter(w, id, version) }
+}
+
+/** The task store's check from checkSqlite's results, which must be whole at `version`. */
+function expectStore(results, w, version, when) {
+  const r = results[path.join(w.walnutHome, TASK_STORE)]
+  if (r?.check !== 'ok' || r.version !== version) throw new Error(`${when}, ${TASK_STORE} is ${JSON.stringify(r ?? null)}, expected integrity ok at version ${version}`)
+}
+
 /**
  * Going back: the release has run on the install's data; the start point is
  * reinstalled and started on it. It must serve the work (the task the start
@@ -487,18 +542,46 @@ export const REFUSAL = /Task database schema \d+ is newer than supported schema 
  * file is gone with the reinstall). Then forward again, as a person who rolled
  * back later upgrades: the dist-tags name the release, the old install's own
  * startup update takes it, and the work and the SQLite files are still whole.
+ * `router` (field-router-back): the release first creates a router, and going
+ * back must be the start point's refusal.
  */
-async function goneBack({ from, field, work, walnuts, opts }) {
+async function goneBack({ from, field, work, walnuts, opts, router = false }) {
   return withRegistry(field, from, opts, async (registry) => {
-    const w = walnutFor(work, `field-back-${from.version}`, registry, walnuts)
-    const { done } = await updateInUse(w, from, field, registry, opts.upstream)
+    const w = walnutFor(work, `${router ? 'field-router-back' : 'field-back'}-${from.version}`, registry, walnuts)
+    const { done, file: releaseFile } = await updateInUse(w, from, field, registry, opts.upstream)
     await w.stop()
+    const store = path.join(w.walnutHome, TASK_STORE)
+    let made = null
+    let areasBytes = null
+    if (router) {
+      // The update alone leaves the store unstamped: the stamp below is the router's creation path.
+      const plain = checkSqlite(releaseFile, [store], w.env)[store]
+      if (plain?.check !== 'ok' || !(plain.version < ROUTER_STORE_VERSION)) throw new Error(`before any router, ${TASK_STORE} under ${field.release.version} is ${JSON.stringify(plain ?? null)}`)
+      await w.start({ timeoutMs: 600_000 })
+      await expectServing(w, field.release.version)
+      made = await setUpRouter(w, field.release.version)
+      await w.stop()
+      expectStore(checkSqlite(releaseFile, [store], w.env), w, ROUTER_STORE_VERSION, `once ${field.release.version} created router ${made.id}`)
+      areasBytes = fs.readFileSync(path.join(w.walnutHome, ROUTER_AREAS))
+    }
     // The way back: the dist-tags name the start point again (the release is
     // pulled), so its startup update does not take the release forward again.
     registry.setDistTags(tags(from.version))
     await installStart(w, from, opts.upstream)
     let outcome
-    try {
+    if (router) {
+      const backMark = logOf(w).length
+      try {
+        await w.start({ timeoutMs: 600_000 })
+      } catch (err) {
+        outcome = judgeRouterRefusal({ version: from.version, message: err instanceof Error ? err.message : String(err), tail: logOf(w).slice(backMark).split('\n').slice(-60).join('\n') })
+      }
+      // Published start points predate router areas: serving here fails, never the field-back fallback.
+      if (!outcome) {
+        await w.stop()
+        throw new Error(`${from.version} served on the task store router ${made.id} stamped ${ROUTER_STORE_VERSION}; it must refuse it before serving (log: ${w.logFile})`)
+      }
+    } else try {
       await w.start({ timeoutMs: 600_000 })
       const status = await w.api('GET', '/api/v1/status')
       if (status.json?.version !== from.version) throw new Error(`gone back to ${from.version}, serving ${status.json?.version ?? status.text.slice(0, 200)} (log: ${w.logFile})`)
@@ -522,6 +605,10 @@ async function goneBack({ from, field, work, walnuts, opts }) {
     const back = checkSqlite(process.execPath, sqliteFiles(w.walnutHome).map((d) => path.join(w.walnutHome, d)), w.env)
     const badBack = Object.entries(back).filter(([, r]) => r.check !== 'ok')
     if (badBack.length) throw new Error(`after going back to ${from.version}, SQLite files fail the integrity check: ${JSON.stringify(badBack)}`)
+    if (router) {
+      expectStore(back, w, ROUTER_STORE_VERSION, `after ${from.version} refused it`)
+      if (!fs.readFileSync(path.join(w.walnutHome, ROUTER_AREAS)).equals(areasBytes)) throw new Error(`${from.version} changed ${ROUTER_AREAS} while refusing the store`)
+    }
     // Forward again: the old install's own startup update takes the release once more.
     registry.setDistTags(tags(field.release.version))
     const mark = logOf(w).length
@@ -539,12 +626,18 @@ async function goneBack({ from, field, work, walnuts, opts }) {
     for (const [label, mark2] of [['one', done.marks[0]], ['two', done.marks[1]]]) {
       if (!historyAgain.some((m) => m.role === 'assistant' && m.text?.includes(ask(label, mark2).answer))) throw new Error(`"${ask(label, mark2).answer}" is gone from the history after going back and forward`)
     }
+    if (router) {
+      const areasAgain = await readRouter(w, made.id, field.release.version)
+      if (JSON.stringify(areasAgain) !== JSON.stringify(made.areas)) throw new Error(`the router areas changed across going back and forward: ${JSON.stringify(made.areas)} became ${JSON.stringify(areasAgain)}`)
+    }
     await w.stop()
     const again = checkSqlite(file, sqliteFiles(w.walnutHome).map((d) => path.join(w.walnutHome, d)), w.env)
     const badAgain = Object.entries(again).filter(([, r]) => r.check !== 'ok' || r.wrote !== 1)
     if (badAgain.length) throw new Error(`after going forward again, bun:sqlite on the SQLite files: ${JSON.stringify(badAgain)}`)
+    if (router) expectStore(again, w, ROUTER_STORE_VERSION, 'after going forward again')
     await w.shutdown()
-    return `${from.version} -> ${field.release.version} -> ${from.version} -> ${field.release.version}: ${outcome}; ${Object.keys(back).length} SQLite files check ok after going back; forward again by its startup update, both tasks and the history kept, ${Object.keys(again).length} SQLite files check ok and take a write`
+    const kept = router ? `; router ${made.id} (paused, area ${REHEARSAL_ROUTER.area_id}), its area and the store at version ${ROUTER_STORE_VERSION} kept` : ''
+    return `${from.version} -> ${field.release.version} -> ${from.version} -> ${field.release.version}: ${outcome}; ${Object.keys(back).length} SQLite files check ok after going back; forward again by its startup update, both tasks and the history kept, ${Object.keys(again).length} SQLite files check ok and take a write${kept}`
   })
 }
 
@@ -766,6 +859,7 @@ export async function rehearseField({ work, fieldJson, scenario, walnuts, opts =
     field: fresh,
     'field-work': inUse,
     'field-back': goneBack,
+    'field-router-back': (a) => goneBack({ ...a, router: true }),
     'field-cli': (a) => updatedWhileServing({ ...a, how: 'cli' }),
     'field-hand': (a) => updatedWhileServing({ ...a, how: 'hand' }),
     'field-lag': lagging,

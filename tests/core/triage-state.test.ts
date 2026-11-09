@@ -112,6 +112,28 @@ describe('the buffer on disk', () => {
     expect(state.pending.droppedSlack).toBe(3);
   });
 
+  it('keeps a headline identity across the file, and reads a malformed one as absent', async () => {
+    const key = JSON.stringify(['mail', 'a', 'rfc', '<one@example.test>']);
+    await recordTriageArrivals({
+      mail: [{
+        accountId: 'a',
+        count: 3,
+        headlines: [
+          { from: 'x@example.test', subject: 'kept', messageId: 'INBOX:1', canonicalKey: key },
+          { from: 'x@example.test', subject: 'control', messageId: 'INBOX:\u0001', canonicalKey: `${key}\n` },
+          { from: 'x@example.test', subject: 'too long', messageId: 'm'.repeat(1_001), canonicalKey: 'k'.repeat(2_049) },
+        ],
+        atMs: 9,
+      }],
+    });
+    const state = await loadTriageState();
+    expect(state.pending.mail[0]?.headlines).toEqual([
+      { from: 'x@example.test', subject: 'kept', messageId: 'INBOX:1', canonicalKey: key },
+      { from: 'x@example.test', subject: 'control' },
+      { from: 'x@example.test', subject: 'too long' },
+    ]);
+  });
+
   it('keeps 120 Slack rows out of 400 and says 280 were dropped', async () => {
     // 400 items is 20 real ticks of the plugin's own 20-item cap.
     for (let tick = 0; tick < 20; tick++) {

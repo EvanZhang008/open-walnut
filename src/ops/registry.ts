@@ -82,6 +82,7 @@ export interface WalnutOp {
   handler?: (
     args: Record<string, unknown>,
     call: (method: HttpBinding['method'], path: string, body?: unknown) => Promise<unknown>,
+    caller?: { sid?: string; kind: 'person' | 'agent' },
   ) => Promise<unknown>
   /**
    * The endpoints a `handler` op reaches (templates shaped like `bind.path`),

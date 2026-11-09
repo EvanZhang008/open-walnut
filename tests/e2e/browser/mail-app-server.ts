@@ -297,6 +297,30 @@ function mailFixtureSeams() {
   return {
     name: 'walnut-mail-fixture-seams',
     configureServer(server: { middlewares: { use: (fn: (req: any, res: any, next: () => void) => void) => void } }) {
+      if (process.env.PW_MAIL_ROUTER === '1') {
+        server.middlewares.use((req, res, next) => {
+          if (req.method !== 'POST' || req.url !== '/__fixture/router-event') return next()
+          let raw = ''
+          req.on('data', (chunk: Buffer) => { raw += chunk.toString('utf8') })
+          req.on('end', () => {
+            void (async () => {
+              const input = JSON.parse(raw) as { accountId: string; messageId: string; status: 'routing' | 'unknown'; at: number }
+              const row = routerRows?.rows.find((one) => one.accountId === input.accountId && one.messageId === input.messageId)
+              if (!row || !['routing', 'unknown'].includes(input.status) || !Number.isFinite(input.at)) throw new Error('Unknown fixture event')
+              const { bus } = await import('../../../src/core/event-bus.js')
+              bus.emit('router:item-changed', { source: { kind: 'mail', account: row.accountId, message: row.messageId, version: row.deliveryVersion },
+                route: { areaId: 'personal', status: input.status, reason: 'Live fixture routing update', at: input.at } }, ['web-ui'], { source: 'router' })
+              res.statusCode = 200
+              res.setHeader('content-type', 'application/json')
+              res.end(JSON.stringify({ ok: true }))
+            })().catch((error) => {
+              res.statusCode = 400
+              res.setHeader('content-type', 'application/json')
+              res.end(JSON.stringify({ error: String(error) }))
+            })
+          })
+        })
+      }
       // The grouping fixture's own endpoints, on this port (spec helpers call them here).
       if (withGroups) {
         server.middlewares.use((req, res, next) => {
@@ -411,6 +435,157 @@ async function seedRowWithTask(): Promise<{ accountId: string; messageId: string
 
 const ctxTaskRow = withCtx ? await seedRowWithTask() : null
 
+async function seedRouterRows() {
+  // `deliveryVersion` is the DTO's own (toDto): the registry confirms that exact delivery, never a later one on the same handle.
+  type CachedMessage = { accountId: string; messageId: string; deliveryVersion: string; hasBody: boolean; rfcMessageId?: string; threadId?: string; subject: string; from?: { address: string } }
+  const listInbox = async (): Promise<CachedMessage[]> => {
+    const response = await fetch(`${apiTarget}/api/plugins/mail/messages?scope=role:inbox&limit=100`)
+    if (!response.ok) throw new Error('Router mail fixture has no inbox cache')
+    return ((await response.json()) as { messages: CachedMessage[] }).messages
+  }
+  let listed: CachedMessage[] = []
+  const deadline = Date.now() + 90_000
+  while (Date.now() < deadline) {
+    listed = await listInbox()
+    if (listed.length >= 15) break
+    await new Promise((resolve) => setTimeout(resolve, 500))
+  }
+  if (listed.length < 15) throw new Error('Router mail fixture needs fifteen cached messages')
+  // The version covers the cached body ref, so a body first fetched when a person opens the mail
+  // would be a new delivery and the seeded receipt would no longer match it. Each chosen mail's body
+  // is cached first, through the real read route (the fixture's canned provider, no real account).
+  const chosen = listed.slice(0, 15)
+  for (const m of chosen) {
+    const response = await fetch(`${apiTarget}/api/plugins/mail/messages/${encodeURIComponent(m.accountId)}/${encodeURIComponent(m.messageId)}`)
+    const read = response.ok ? await response.json() as { body?: unknown } : null
+    if (!read?.body) throw new Error(`Router mail fixture could not cache the body of ${m.messageId}`)
+  }
+  // Fresh rows after the body writes: their delivery versions are what the registry and ledger confirm.
+  const fresh = new Map((await listInbox()).map((m) => [`${m.accountId}\u0000${m.messageId}`, m]))
+  const messages = chosen.map((m) => {
+    const now = fresh.get(`${m.accountId}\u0000${m.messageId}`)
+    if (!now) throw new Error(`Router mail fixture lost ${m.messageId} after caching its body`)
+    if (!now.hasBody) throw new Error(`Router mail fixture row ${m.messageId} has no cached body`)
+    if (typeof now.deliveryVersion !== 'string' || !now.deliveryVersion) throw new Error('Router mail fixture rows carry no delivery version')
+    return now
+  })
+  const { addTask } = await import('../../../src/core/task-manager.js')
+  const { createRouterNode } = await import('../../../src/core/router/nodes.js')
+  const { ensureProjectLead } = await import('../../../src/core/org/org-store.js')
+  const { updateRouterAreas } = await import('../../../src/core/router/areas.js')
+  const { routerStore } = await import('../../../src/core/router/runtime.js')
+  // The mail adapter's own item for each cached row, so every ledger key is the one a real route writes.
+  const { resolveRouterItem } = await import('../../../src/core/router/source-registry.js')
+  const owner = (await addTask({ title: 'Review the dock reservation', project: 'Dock', source: 'local' })).task
+  const vp = await ensureProjectLead('Dock')
+  await createRouterNode({ name: 'Personal mail router', areaId: 'personal', areaName: 'Personal', host: '__local__', links: [vp.id], sources: [] })
+  await updateRouterAreas(tmpBase, (file) => ({ ...file,
+    areas: file.areas.map((area) => area.id === 'personal' ? { ...area, taskIds: [...area.taskIds, owner.id, vp.id],
+      sources: [...new Set(listed.map((m) => m.accountId))].map((account) => ({ kind: 'mail' as const, account })) } : area),
+    // Only the six routed rows and one confirmed row are assigned: every other message, of the same known accounts, still needs Choose area.
+    items: [...messages.slice(0, 7), ...messages.slice(10, 15)]
+      .map((m) => ({ areaId: 'personal', source: { kind: 'mail' as const, account: m.accountId, message: m.messageId, version: m.deliveryVersion } })),
+  }))
+  const ledger = routerStore('personal', tmpBase)
+  const cases = ['task', 'vp', 'not_routed', 'failed', 'unknown', 'routing'] as const
+  const rows = []
+  for (let i = 0; i < cases.length; i++) {
+    const m = messages[i]!
+    const status = cases[i]!
+    // Resolved at the confirmed version: a row that moved since the fresh read fails the seed here.
+    const item = await resolveRouterItem({ kind: 'mail', account: m.accountId, message: m.messageId, version: m.deliveryVersion })
+    const claim = await ledger.claim(item, status === 'not_routed'
+      ? { status, reason: 'Newsletter, no action needed' }
+      : { status: 'routing', taskId: status === 'vp' ? vp.id : owner.id, reason: 'Existing thread owner' })
+    if (status !== 'not_routed' && status !== 'routing') await ledger.settle(item.key, claim.route.messageId!,
+      { status: status === 'task' || status === 'vp' ? 'routed' : status, ...(status === 'failed' ? { error: 'Receiver was not ready' } : {}) })
+    rows.push({ ...m, status })
+  }
+  const legacy = messages[14]!
+  const legacyItem = await resolveRouterItem({ kind: 'mail', account: legacy.accountId, message: legacy.messageId, version: legacy.deliveryVersion })
+  await ledger.recordLegacy(legacyItem, { taskId: owner.id, reason: 'Handled before the router', evidence: 'The prior task recorded its review', at: Date.now() - 60_000 })
+  rows.push({ ...legacy, status: 'legacy' })
+  const pick = (m: (typeof messages)[number]) => ({ accountId: m.accountId, messageId: m.messageId, subject: m.subject })
+  const handoffs = await seedHandoffAsks(messages.slice(10, 14), pick)
+  return { ownerId: owner.id, vpId: vp.id, rows, confirmed: pick(messages[6]!), unassigned: messages.slice(7, 10).map(pick), handoffs }
+}
+
+// Approval records go straight into this home's file, never through the store, so nothing is announced, pushed or told to a session.
+async function seedHandoffAsks<T>(picked: Array<{ accountId: string; messageId: string; deliveryVersion: string; rfcMessageId?: string; subject: string; from?: { address: string } }>,
+  pick: (m: (typeof picked)[number]) => T) {
+  const crypto = await import('node:crypto')
+  const { addTask } = await import('../../../src/core/task-manager.js')
+  const { approvalDigest } = await import('../../../src/core/approvals/digest.js')
+  const { updateJsonFile } = await import('../../../src/utils/fs.js')
+  const { readRouterAreas } = await import('../../../src/core/router/areas.js')
+  const { claimHandoffApproval, requestHandoffApproval } = await import('../../../src/core/router/handoff-approval.js')
+  const { readRouterItem } = await import('../../../src/core/router/source-registry.js')
+  type ApprovalRecord = import('../../../src/core/approvals/types.js').ApprovalRecord
+  type ApprovalsFile = import('../../../src/core/approvals/types.js').ApprovalsFile
+  const approvalsFile = path.join(tmpBase, 'approvals', 'approvals.json')
+  const empty: ApprovalsFile = { version: 1, approvals: [] }
+  const putApproval = (id: string, patch: Partial<ApprovalRecord>) => updateJsonFile<ApprovalsFile>(approvalsFile, empty, (file) => {
+    const rec = file.approvals.find((one) => one.id === id)
+    if (rec) Object.assign(rec, patch)
+    return file
+  })
+  const routerTaskId = (await readRouterAreas(tmpBase)).routers.find((one) => one.areaId === 'personal')!.taskId
+  const target = (await addTask({ title: 'Pantry shelf inventory', source: 'local' })).task
+  let n = 0
+  const deps = {
+    home: tmpBase,
+    activeKeyCount: async () => 0,
+    livePendingIds: async () => new Set<string>(),
+    createApproval: async (input: import('../../../src/core/approvals/store.js').CreateInput) => {
+      const id = `apr-fixture-${++n}`
+      const now = Date.now()
+      const createdAt = new Date(now).toISOString()
+      const expiresAt = new Date(now + 24 * 60 * 60_000).toISOString()
+      const waitToken = crypto.randomBytes(24).toString('base64url')
+      const rec: ApprovalRecord = {
+        id, what: input.what, ...(input.detail ? { detail: input.detail } : {}), mode: input.mode, requester: input.requester, createdAt, expiresAt,
+        status: 'pending', waitTokenHash: crypto.createHash('sha256').update(waitToken, 'utf8').digest('hex'),
+        digest: approvalDigest({ id, mode: input.mode, createdAt, expiresAt, host: input.requester.host, taskId: input.requester.taskId, what: input.what, detail: input.detail }),
+        ...(input.guard ? { guard: input.guard } : {}), ...(input.testRun ? { testRun: input.testRun } : {}),
+      }
+      await updateJsonFile<ApprovalsFile>(approvalsFile, empty, (file) => { file.approvals.push(rec); return file })
+      const { waitTokenHash: _hidden, ...approval } = rec
+      return { approval, waitToken }
+    },
+  }
+  const answer = (decision: 'approve' | 'deny') => ({ decision, at: new Date().toISOString(), mode: 'tap' as const, device: { name: 'Fixture', kind: 'web' as const } })
+  const states = ['pending', 'denied', 'expired', 'claimed'] as const
+  const out: Array<T & { status: (typeof states)[number] }> = []
+  for (let i = 0; i < states.length; i++) {
+    const m = picked[i]!
+    const status = states[i]!
+    // The confirmed delivery: the adapter reads only a versioned source.
+    const source = { kind: 'mail' as const, account: m.accountId, message: m.messageId, version: m.deliveryVersion }
+    // The adapter's exact item, as a real ask freezes it; only the body is the fixture's.
+    const { item } = await readRouterItem(source)
+    const snapshot = {
+      areaId: 'personal', source, canonicalKey: item.key, targetTaskId: target.id, targetScope: 'unscoped', byTaskId: routerTaskId,
+      brief: 'Please check the shelf counts in this note.', reason: 'The note is about the shelf inventory.',
+      content: { item, body: { text: 'Neutral fixture body.' },
+        bodyAvailable: true, attachments: [], attachmentsAvailable: false as const },
+    }
+    const ticket = await requestHandoffApproval(snapshot,
+      { targetTitle: target.title, routerTitle: 'Personal mail router', host: '__local__', testRun: 'mail-router-fixture' }, deps)
+    // A terminal record carries readAt: its asker already knows, so no note goes to the router's session.
+    const readAt = new Date().toISOString()
+    if (status === 'denied') await putApproval(ticket.approvalId, { status: 'denied', answer: answer('deny'), readAt })
+    if (status === 'expired') await putApproval(ticket.approvalId, { status: 'expired', readAt })
+    if (status === 'claimed') {
+      await putApproval(ticket.approvalId, { status: 'approved', answer: answer('approve') })
+      const { content: _content, ...identity } = snapshot
+      await claimHandoffApproval(ticket.approvalId, identity, { home: tmpBase })
+    }
+    out.push({ ...pick(m), status })
+  }
+  return out
+}
+const routerRows = process.env.PW_MAIL_ROUTER === '1' ? await seedRouterRows() : null
+
 // `outbox` is where the canned provider writes every message it was handed, so the write spec can
 // assert what went over the wire rather than what the console said about it.
 const fixture = {
@@ -428,6 +603,7 @@ const fixture = {
     ? ['ctx-fetch-ok', 'ctx-fetch-running', 'ctx-fetch-unknown', 'ctx-fetch-stopped', 'ctx-fetch-failed']
     : [],
   ctxTaskRow,
+  routerRows,
   groups: withGroups,
   groupsDense: withGroupsDense,
   ruleModel: ruleModelMode,

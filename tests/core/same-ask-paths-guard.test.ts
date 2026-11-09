@@ -63,6 +63,8 @@ describe('every write that asks the user is checked', () => {
     const writers = filesWith(/[{,]\s*status_report\s*:/)
     const CHECKED: Record<string, RegExp> = {
       'src/core/sessions/report-set.ts': /refuseSameAsk\(/,
+      // A receiving task saving its findings with a NEED_ACTION ask runs the same check first.
+      'src/core/router/processing.ts': /refuseSameAsk\(/,
       // The turn-end report is the task's own words: the question lists its tree's asks first, and
       // the shown status folds whatever it still asks twice.
       'src/core/sessions/status-question.ts': /sameAskQuestionFor\(/,

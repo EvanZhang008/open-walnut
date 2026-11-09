@@ -33,6 +33,7 @@ import type { ActionDescriptor, ActionContext, ActionResult } from './types.js';
 import { readTriageConfig, isTriageWithinActiveHours } from '../core/triage/config.js';
 import { claimTriageBatch } from '../core/triage/state.js';
 import { buildTriageBatch, TRIAGE_STATE_NOTE } from '../core/triage/batch.js';
+import { keepTriageMailOutsideAreas } from '../core/triage/router-mail.js';
 import { TRIAGE_ACTION_ID } from '../core/triage/types.js';
 import { readRoutingRules, type TriageRoutingRule } from '../core/triage/routing-rules.js';
 
@@ -97,13 +98,14 @@ export async function run(ctx: ActionContext): Promise<ActionResult> {
   }
   const nowMs = Date.now();
   const claimed = await claimTriageBatch(nowMs, home);
+  const mail = await keepTriageMailOutsideAreas(claimed.mail, home);
   const stateDoc = await readStateNote(home);
   // A rule whose task is complete or gone sits out: it must not win the first match and keep a
   // later rule (to open work) from routing the item.
   const rules = await liveRules(allRules);
 
   const batch = buildTriageBatch({
-    mail: claimed.mail,
+    mail,
     slack: claimed.slack,
     droppedMail: claimed.claim.droppedMail,
     droppedSlack: claimed.claim.droppedSlack,

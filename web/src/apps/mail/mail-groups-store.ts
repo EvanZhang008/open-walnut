@@ -408,8 +408,11 @@ export function applySeenToGroupedRows(message: { accountId: string; mailboxId: 
   // A mail read in a group is the person working in it: held at zero while the pointer stays.
   if (seen) {
     for (const view of views.values()) {
-      if (groupId in view.worked || !pages.has(pageKey(view.viewKey, groupId, ''))) continue;
-      views.set(view.viewKey, { ...view, worked: { ...view.worked, [groupId]: true } });
+      if (!pages.has(pageKey(view.viewKey, groupId, ''))) continue;
+      const group = view.groups?.groups.find(one => one.id === groupId);
+      const held = view.heldOrder !== null && group && !(groupId in view.letGo)
+        ? { ...view.held, [groupId]: group } : view.held;
+      views.set(view.viewKey, { ...view, held, worked: { ...view.worked, [groupId]: true } });
     }
   }
   adjustUnread(groupId, row.senderKey ?? '', seen ? -1 : 1, { ...message, mailboxId: row.mailboxId });
@@ -422,6 +425,35 @@ export function replaceGroupedRow(message: MailMessageDto): void {
   for (const [key, page] of pages) {
     const rows = withFlags(page.rows, message, () => message.flags);
     if (rows !== page.rows) { pages.set(key, { ...page, rows }); touched = true; }
+  }
+  if (touched) emit();
+}
+
+/** `version` is the delivery the receipt is for; a row of another delivery under the same id keeps its own. */
+export function applyRouteToGroupedRows(target: { accountId: string; messageId: string; version?: string }, route: NonNullable<MailMessageDto['route']>): void {
+  let touched = false;
+  for (const [key, page] of pages) {
+    const rows = page.rows.map((one) => {
+      if (rowId(one) !== rowId(target) || (one.deliveryVersion ?? '') !== (target.version ?? '')
+        || (one.route && one.route.at > route.at)) return one;
+      touched = true;
+      return { ...one, route, routingUnavailable: false };
+    });
+    if (rows.some((one, i) => one !== page.rows[i])) pages.set(key, { ...page, rows });
+  }
+  if (touched) emit();
+}
+
+/** The area the person confirmed for one delivery; a row that already names an area keeps it. */
+export function applyAreaToGroupedRows(target: { accountId: string; messageId: string; version?: string }, area: { id: string; name: string }): void {
+  let touched = false;
+  for (const [key, page] of pages) {
+    const rows = page.rows.map((one) => {
+      if (rowId(one) !== rowId(target) || (one.deliveryVersion ?? '') !== (target.version ?? '') || one.routingArea) return one;
+      touched = true;
+      return { ...one, routingArea: area };
+    });
+    if (rows.some((one, i) => one !== page.rows[i])) pages.set(key, { ...page, rows });
   }
   if (touched) emit();
 }

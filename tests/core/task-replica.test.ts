@@ -21,6 +21,8 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-task-replica
 import { WALNUT_HOME, TASKS_DIR, TASK_QUEUE_DIR } from '../../src/constants.js'
 import * as tm from '../../src/core/task-manager.js'
 import { closeDb } from '../../src/core/task-db.js'
+import { closeDb as closeSessionDb } from '../../src/core/session-db.js'
+import { _resetSessionTrackerForTesting } from '../../src/core/session-tracker.js'
 import { syncTaskReplica, forgetTaskReplica, _resetTaskReplicaForTesting, type TaskReplicaDeps } from '../../src/core/replication/task-replica.js'
 import * as store from '../../src/core/replication/task-replica-store.js'
 import { recordDeleteTombstone, _resetDeleteTombstonesForTesting } from '../../src/core/task-queue.js'
@@ -63,6 +65,8 @@ const companionIds = async () => (await tm.listTasks()).map((t) => t.id)
 const sent = () => calls.filter((c) => c.op === 'put' && c.kind === 'tasks').reduce((s, c) => s + c.n, 0)
 
 beforeEach(async () => {
+  closeSessionDb()
+  _resetSessionTrackerForTesting()
   closeDb()
   tm._resetForTesting()
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true })
@@ -81,6 +85,8 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  closeSessionDb()
+  _resetSessionTrackerForTesting()
   closeDb()
   tm._resetForTesting()
 })
@@ -99,6 +105,29 @@ describe('the companion copy of the tasks', () => {
     calls = []
     expect((await syncTaskReplica(deps)).map((r) => r.action)).toEqual(['unchanged', 'unchanged'])
     expect(calls).toEqual([])
+  })
+
+  it('copies area work with primary-only sessions in the ordered batch and after a reorder', async () => {
+    primary = [row('area-work', { router_area_id: 'desk', session_ids: ['primary-only-session'],
+      session_id: 'primary-only-session', note: 'Area fixture findings' }), row('ordinary-work')]
+    const first = await syncTaskReplica(deps)
+    expect(first.map((result) => result.action)).toEqual(['synced', 'synced'])
+    expect(await companionIds()).toEqual(['area-work', 'ordinary-work'])
+    expect(await tm.getTask('area-work')).toMatchObject({ router_area_id: 'desk', session_ids: ['primary-only-session'] })
+    primary = [primary[1], primary[0]]
+    await syncTaskReplica(deps)
+    expect(await companionIds()).toEqual(['ordinary-work', 'area-work'])
+    calls = []
+    expect((await syncTaskReplica(deps)).map((result) => result.action)).toEqual(['unchanged', 'unchanged'])
+    expect(calls).toEqual([])
+  })
+
+  it('ordinary writes on the companion cannot use the trusted copy scope', async () => {
+    primary = [row('area-work', { router_area_id: 'desk' })]
+    await syncTaskReplica(deps)
+    await expect(tm.updateTaskRaw('area-work', { router_area_id: 'elsewhere' }))
+      .rejects.toMatchObject({ code: 'router_history_not_isolated', status: 409 })
+    expect((await tm.getTask('area-work')).router_area_id).toBe('desk')
   })
 
   it('a changed row is sent alone, even a change that leaves updated_at alone; a removed row goes; the order follows', async () => {

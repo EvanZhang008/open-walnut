@@ -253,6 +253,7 @@ export function registerMailRoutes(
     // `?retry=1` is the only way a refused body is asked for again. Without it a message over
     // the cap, or one the server no longer has, would be re-downloaded on every single open.
     const retry = firstQuery(request.query.retry) === '1'
+    const cacheOnly = !!request.headers['x-walnut-caller-sid'] || request.headers['x-walnut-caller-kind']?.trim().toLowerCase() === 'automation'
     try {
       // `body.html` is RAW. The console sanitizes it; see the file comment.
       //
@@ -262,7 +263,7 @@ export function registerMailRoutes(
       // abandon those bytes without making anything faster, since nothing this process does can
       // cancel the command the mail server is already answering.
       const answered = await withBudget(
-        service.readMessage(accountId, messageId, { retry }),
+        service.readMessage(accountId, messageId, { retry, cacheOnly }),
         READ_DEADLINE_MS,
       )
       if (answered) return { json: answered }
@@ -351,6 +352,7 @@ export function registerMailRoutes(
           ...(firstQuery(request.query.account) ? { accountId: firstQuery(request.query.account)! } : {}),
           q,
           limit: intQuery(request.query.limit, DEFAULT_PAGE, MAX_PAGE),
+          cacheOnly: !!request.headers['x-walnut-caller-sid'] || request.headers['x-walnut-caller-kind']?.trim().toLowerCase() === 'automation',
         }),
       }
     } catch (error) {

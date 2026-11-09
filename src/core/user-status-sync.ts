@@ -504,7 +504,8 @@ export function statusInputOf(task: Task, facts: StatusFacts, nowMs = Date.now()
     markedByPerson: personMarkedNeeds(task),
     // The task's own session when it has one: an older session's pending report says nothing of this turn.
     reportPending: task.session_id ? isReportPending(task.session_id) : own.some(([sid]) => isReportPending(sid)),
-    isLead: task.org_role === 'lead',
+    // The Router is an org node beside the VPs: its questions stay in its chat, as a lead's do.
+    isLead: task.org_role === 'lead' || task.org_role === 'router',
     dueDate: task.due_date ?? null,
     checkRanAt: facts.checks?.get(task.id) ?? null,
     askCheckedAt: askCheckedAtOf(task, facts.checks, task.status_report?.state === 'needs' ? task.status_report.ask : null),
@@ -694,7 +695,8 @@ export function statusOf(
 ): { input: UserStatusInput; status: UserStatus } {
   const input = statusInputOf(task, facts, nowMs);
   const derived = deriveUserStatus(input, nowMs);
-  const asks = task.org_role ? [] : rollUpAsks(childrenOf.get(task.id) ?? [], task.id);
+  const children = (childrenOf.get(task.id) ?? []).filter((child) => child.router_area_id === task.router_area_id);
+  const asks = task.org_role ? [] : rollUpAsks(children, task.id);
   const withAsks = asks.length ? { ...derived, asks } : derived;
   const folded = foldSameAsk(task.id, withAsks, asks, {
     report: reportIsCurrent(input) ? task.status_report ?? null : null,

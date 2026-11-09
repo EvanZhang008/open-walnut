@@ -11,6 +11,9 @@
  *            by team, or as the Board its lead keeps), Brief and Threads; it widens beside the chat
  *            and closes, and never takes the chat's place
  *   A node no one answers for (the Inbox) has no chat: its teams fill the page instead.
+ *   A router (row kind 'router', OrgRouterSettings) is its own node, not a VP: its header has a folded
+ *            settings section of its own under it, and it has no side bar, so no Tasks (it owns no
+ *            team and never sees the Inbox's tasks), no Brief and no Threads. A VP gets none of it.
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { usePendingApprovals } from '@/components/approvals/ApprovalRow';
@@ -35,6 +38,8 @@ import { askWords } from './org-ask-form';
 import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from '@/utils/composer-insert';
 import { recentMainStart } from './ask-main';
 import { OrgNodeStart } from './OrgNodeStart';
+import { OrgRouterSettings } from './OrgRouterSettings';
+import { OrgRouterFromMail } from './OrgRouterFromMail';
 import { OrgAvatar } from './OrgChannelList';
 import { useHasBoard } from './useBoardOwner';
 import { flashProbeEnabled } from '@/utils/flash-probe';
@@ -185,10 +190,13 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
   // A Main started a moment ago by a quick action: its session before the store has it.
   const launch = row.kind === 'main' ? recentMainStart(row.contactId) : null;
   const sessionId = (contact ? resolveTaskSessionId(contact) : null) ?? launch?.sessionId ?? null;
-  const hasBoard = useHasBoard(row.contactId);
+  // A router is its own node: no team, no Board, no Brief, no Threads, no side bar (OrgRouterSettings).
+  const isRouter = row.kind === 'router';
+  const routerTask = isRouter && contact?.org_role === 'router' ? contact : undefined;
+  const hasBoard = useHasBoard(isRouter ? undefined : row.contactId);
   const columns = useMemo(
-    () => (row.kind === 'main' ? mainTeamColumns(rows) : teamColumns(row, tasks)),
-    [row, rows, tasks],
+    () => (row.kind === 'main' ? mainTeamColumns(rows) : isRouter ? [] : teamColumns(row, tasks)),
+    [row, rows, tasks, isRouter],
   );
   /** The chat's Inbox tab, asked for by Answer on a letter (SessionPanel inboxRequest), for the
    *  session it was asked of: a replaced session's new panel does not reopen it. */
@@ -204,8 +212,8 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
   // Main and a lead keep a Brief and Threads. The row says so too, before the node's own task has
   // loaded (a reload paints from the cache first), so a reload does not show Task for a moment
   // before the view it was left on.
-  const keepsBrief = contact?.org_role === 'main' || contact?.org_role === 'lead'
-    || (!!row.contactId && (row.kind === 'main' || row.isLead));
+  const keepsBrief = !isRouter && (contact?.org_role === 'main' || contact?.org_role === 'lead'
+    || (!!row.contactId && (row.kind === 'main' || row.isLead)));
   const topView: OrgTopView = keepsBrief ? topPick : 'task';
   /** The Task view's tab: Needs you until the user picks another, then the one he left it on. */
   const [keptTab, setTaskTab] = usePageViewOf<KeptRailTab>('org', 'node.taskTab', row.key, 'needs', isKeptRailTab);
@@ -218,14 +226,15 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
   const pickTop = (v: OrgTopView) => setTopPick(v);
   /** The panel above or beside the chat (Task, Brief, Threads) closed: the chat takes its room;
    *  kept per node (2026-11-02, the user: "it is a panel too, you can at least let me close it"). */
-  const [railHidden, setRailHidden] = usePageViewOf<boolean>('org', 'node.railHidden', row.key, false, isBoolean);
+  const [railKeptHidden, setRailHidden] = usePageViewOf<boolean>('org', 'node.railHidden', row.key, false, isBoolean);
+  const railHidden = isRouter || railKeptHidden;
   // Read while shown: the dot on the Brief tab is for a rewrite the user has not seen.
   useEffect(() => { if (!railHidden && topView === 'brief' && contact && brief?.at) markBriefSeen(contact.id, brief.at); }, [railHidden, topView, contact, brief?.at]);
   const briefNew = (railHidden || topView !== 'brief') && !!contact && briefUnread(contact.id, brief?.at);
   // Opening a node whose Brief is stale asks it for one refresh turn (core/sessions/brief-refresh.ts).
   const briefFresh = useBriefRefresh(keepsBrief ? contact : undefined, tasks);
   const updating = keepsBrief && !!contact && briefUpdating(contact, now);
-  const title = row.kind === 'main' ? 'CEO' : row.contactTitle;
+  const title = row.kind === 'main' ? 'CEO' : isRouter ? row.name : row.contactTitle;
   // Main is always someone to talk to: its task is made by the first chat.
   const canTalk = row.kind === 'main' || !!row.contactId || !!row.node?.needsLead;
   // The chat is always there (2026-11-02, the user: the side bar "can expand to more but not like a
@@ -420,13 +429,14 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
                 Leads {[...(row.vpOnly && !row.node?.counts.open ? [] : [row.name]), ...row.led.map((l) => l.name)].join(', ')}
               </span>
             )}
+            {isRouter && <span className="org-muted" data-testid="org-detail-router-role">Router</span>}
             {lastMoved && <span className="org-muted">· moved {lastMoved}</span>}
           </div>
         </div>
         <div className="org-detail-tools" data-testid="org-detail-tools">
           {/* The chat's status and its kebab (Changed, Files, Terminal, Board, the session's menu). */}
           <span ref={setChatTools} className="org-detail-chat-tools" data-testid="org-detail-chat-tools" />
-          <button
+          {!isRouter && <button
             type="button"
             className={`org-rail-toggle${railHidden ? '' : ' is-on'}`}
             data-testid="org-rail-toggle"
@@ -437,12 +447,16 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M15 4v16" /></svg>
             {railHidden && (briefNew || threadsNew) && <i className="org-top-new" data-testid="org-rail-toggle-new"><span className="org-sr-only">, something new</span></i>}
-          </button>
+          </button>}
         </div>
       </header>
+      {/* A router's own settings, folded under its header; outside the split, so opening it or a
+          save never moves or remounts the chat below. */}
+      {routerTask && <OrgRouterFromMail node={row.key} routerId={routerTask.id} title={title} paused={routerTask.router_paused !== false} />}
+      {routerTask && <OrgRouterSettings key={routerTask.id} router={routerTask} tasks={tasks} tasksLoading={!!tasksLoading} />}
       {/* One parent for both places, so moving the rail never remounts it (a picked choice, an
           open More and the held order stay when a side panel narrows the page). */}
-      <div ref={(el) => { splitRef.current = el; railWidth.panelRef.current = el; }} className={`org-detail-split ${railHidden ? 'no-rail' : railSide ? 'has-rail' : 'is-stacked'}`}>
+      <div ref={(el) => { splitRef.current = el; railWidth.panelRef.current = el; }} className={`org-detail-split ${railHidden ? 'no-rail' : railSide ? 'has-rail' : 'is-stacked'}${isRouter ? ' is-router-split' : ''}`}>
       <div className="org-detail-col">
       <div
         ref={bodyRef}
@@ -453,7 +467,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
         {shown === 'team' && renderTeam()}
         {shown === 'chat' && (sessionId ? (
           <div ref={chatHostRef} className="org-chat-host" data-testid="org-chat">
-            <SessionPanel key={sessionId} sessionId={sessionId} viewPlace="org-node" embedded headerSlot={chatTools} {...(hasBoard && row.contactId ? { onHostBoard: () => openTasks('board') } : {})} inboxRequest={chatInbox?.sid === sessionId ? chatInbox.n : 0} onTaskClick={openChip} onSessionClick={onOpenSession} />
+            <SessionPanel key={sessionId} sessionId={sessionId} viewPlace="org-node" embedded headerSlot={chatTools} {...(!isRouter && hasBoard && row.contactId ? { onHostBoard: () => openTasks('board') } : {})} inboxRequest={chatInbox?.sid === sessionId ? chatInbox.n : 0} onTaskClick={openChip} onSessionClick={onOpenSession} />
           </div>
         ) : (
           // No session yet: it starts by itself in the background (org-autostart.ts); Retry only after a failure.
@@ -462,7 +476,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
       </div>
       {!canTalk && <p className="org-composer org-composer-note" data-testid="org-no-contact">The Inbox has no VP: open a task to talk to it.</p>}
       </div>
-      {railSide && !railHidden && (
+      {!isRouter && railSide && !railHidden && (
         <OrgPaneHandle
           className="org-rail-handle"
           testId="org-rail-handle"
@@ -474,7 +488,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
           panelSide="right"
         />
       )}
-      {!railHidden && rail}
+      {!isRouter && !railHidden && rail}
       </div>
     </div>
   );

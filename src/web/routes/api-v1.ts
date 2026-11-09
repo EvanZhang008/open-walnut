@@ -2844,8 +2844,17 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
     const { resolveCallerPlacement, decidePlacement, createTimeCwd } =
       await import('../../core/sessions/caller-placement.js')
     const rawSid = req.headers['x-walnut-caller-sid']
-    const caller = await resolveCallerPlacement(Array.isArray(rawSid) ? rawSid[0] : rawSid)
-      .catch(() => ({ kind: 'unknown' as const }))
+    // A plugin whose manifest keeps its tasks to its own view (taskVisibility "plugin")
+    // creates through walnut.ops.call, which names the plugin in x-walnut-plugin-id (older
+    // calls only as the caller sid `plugin:<id>`), for a person and a session alike.
+    const { pluginOnlyForCaller } = await import('../../core/plugins/plugin-task-visibility.js')
+    const rawPlugin = req.headers['x-walnut-plugin-id']
+    const pluginOnly = pluginOnlyForCaller(Array.isArray(rawSid) ? rawSid[0] : rawSid, Array.isArray(rawPlugin) ? rawPlugin[0] : rawPlugin)
+    // Such a task is the plugin's, not the calling session's: no parent, folder or tier from it.
+    const caller = pluginOnly
+      ? { kind: 'unknown' as const }
+      : await resolveCallerPlacement(Array.isArray(rawSid) ? rawSid[0] : rawSid)
+        .catch(() => ({ kind: 'unknown' as const }))
     const placementReq = {
       ...(typeof project === 'string' ? { project } : {}),
       ...(typeof groupId === 'string' ? { group_id: groupId } : {}),
@@ -2853,10 +2862,6 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
       ...(typeof launchHost === 'string' ? { launch_host: launchHost } : {}),
     }
     const decision = decidePlacement(placementReq, caller)
-    // A plugin whose manifest keeps its tasks to its own view (taskVisibility "plugin")
-    // creates through walnut.ops.call, which names the caller `plugin:<id>`.
-    const { pluginOnlyForCaller } = await import('../../core/plugins/plugin-task-visibility.js')
-    const pluginOnly = pluginOnlyForCaller(Array.isArray(rawSid) ? rawSid[0] : rawSid)
     // The create rules by caller, shared with the offline drain (create-rules.ts): a
     // worker naming a project other than its own quotes the user's words for it, a session's depth cap, an ask's project, the board tier (a worker's own, else pinned
     // by default), and a session's long title cut to its head (the long form becomes the
@@ -4570,6 +4575,9 @@ import { humanInboxItemsV1Router } from './human-inbox-items-v1.js'
 
 apiV1Router.use(humanInboxItemsV1Router)
 apiV1Router.use(humanInboxV1Router)
+
+import { routerV1Router } from './router-v1.js'
+apiV1Router.use(routerV1Router)
 
 // Inbox Triage's standing routing rules (core/triage/routing-rules.ts): one feature, mounted here.
 import { triageRulesV1Router } from './triage-rules-v1.js'

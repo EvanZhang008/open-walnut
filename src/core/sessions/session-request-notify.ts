@@ -295,6 +295,30 @@ async function requestStillOpen(id: string): Promise<boolean> {
   return !!row && (row.status === 'pending' || row.status === 'expired');
 }
 
+/**
+ * Whether the target's words may be quoted to the asker: both tasks in the same incoming-item
+ * area, or neither in one (router/context-sharing.ts). The tasks are read from where each
+ * actually sits now, never from the request alone; anything unknown or failing withholds.
+ */
+async function mayQuoteTarget(request: SessionRequest): Promise<boolean> {
+  try {
+    const { getSessionByClaudeId } = await import('../session-tracker.js');
+    const { mayShareTaskContext } = await import('../router/context-sharing.js');
+    const asker = await getSessionByClaudeId(request.fromSessionId).catch(() => undefined);
+    const target = request.toSessionId ? await getSessionByClaudeId(request.toSessionId).catch(() => undefined) : undefined;
+    if (asker?.profile?.areaId || target?.profile?.areaId) {
+      if (asker?.profile?.areaId !== target?.profile?.areaId) return false;
+    }
+    const targetTaskId = request.toTaskId ?? target?.taskId;
+    if (target?.taskId && request.toTaskId && target.taskId !== request.toTaskId
+      && !await mayShareTaskContext(target.taskId, asker?.taskId)) return false;
+    if (!targetTaskId) return asker?.taskId ? mayShareTaskContext(asker.taskId, undefined) : true;
+    return await mayShareTaskContext(targetTaskId, asker?.taskId);
+  } catch {
+    return false;
+  }
+}
+
 async function askerTaskIsComplete(fromSessionId: string): Promise<boolean> {
   try {
     const { getSessionByClaudeId } = await import('../session-tracker.js');
@@ -320,7 +344,7 @@ async function gateRequest(
   request: SessionRequest,
   outcome: SessionRequestOutcome,
   context: FallbackContext,
-): Promise<'skip' | { undelivered?: { why: string; stillQueued: boolean } }> {
+): Promise<'skip' | { undelivered?: { why: string; stillQueued: boolean }; withheld?: boolean }> {
   // The asker's message itself may not have reached the target yet. A turn end or
   // error then belongs to an earlier turn and says nothing of this request: the
   // message is still on its way, and its own turn (or a park, or the deadline)
@@ -370,7 +394,15 @@ async function gateRequest(
     }
     return 'skip';
   }
-  return { ...(undelivered ? { undelivered } : {}) };
+  // Across an incoming-item area the notice still settles the request, but carries none of
+  // the target's last words, tool calls or hand-off quotes.
+  const withheld = !await mayQuoteTarget(request);
+  if (withheld) {
+    log.session.info('request fallback: target and asker are in different areas, quote withheld', {
+      requestId: request.id, fromSessionId: request.fromSessionId, toTaskId: request.toTaskId, outcome,
+    });
+  }
+  return { ...(undelivered ? { undelivered } : {}), ...(withheld ? { withheld } : {}) };
 }
 
 /**
@@ -397,22 +429,25 @@ export async function notifyRequesterGroup(
   for (const r of requests) byAsker.set(r.fromSessionId, [...(byAsker.get(r.fromSessionId) ?? []), r]);
   let delivered = false;
   for (const [, rows] of byAsker) {
-    const heard: { request: SessionRequest; undelivered?: { why: string; stillQueued: boolean } }[] = [];
+    const heard: { request: SessionRequest; undelivered?: { why: string; stillQueued: boolean }; withheld?: boolean }[] = [];
     for (const request of rows) {
       const gate = await gateRequest(request, outcome, context);
       if (gate === 'skip') continue;
       // A message that never arrived is an error for the asker, whatever edge noticed it.
       const settled = await settleNotified(request.id, gate.undelivered && !gate.undelivered.stillQueued ? 'error' : outcome);
       if (!settled) continue; // replied / already notified — someone else spoke
-      heard.push({ request: settled, ...(gate.undelivered ? { undelivered: gate.undelivered } : {}) });
+      heard.push({ request: settled, ...(gate.undelivered ? { undelivered: gate.undelivered } : {}), ...(gate.withheld ? { withheld: true } : {}) });
     }
     if (heard.length === 0) continue;
-    const ran = heard.filter((h) => !h.undelivered);
+    // A withheld notice never shares one message with a quoted one.
+    const ran = heard.filter((h) => !h.undelivered && !h.withheld);
+    const ranWithheld = heard.filter((h) => !h.undelivered && h.withheld);
     const notRan = heard.filter((h) => h.undelivered);
-    for (const part of [ran, notRan]) {
+    for (const part of [ran, ranWithheld, notRan]) {
       if (part.length === 0) continue;
       const [first, ...rest] = part;
-      if (await deliverSettled(first.request, rest.map((h) => h.request), first.undelivered, outcome, context)) delivered = true;
+      const withheld = part.some((h) => h.withheld);
+      if (await deliverSettled(first.request, rest.map((h) => h.request), first.undelivered, outcome, context, withheld)) delivered = true;
     }
   }
   return delivered;
@@ -425,6 +460,7 @@ async function deliverSettled(
   undelivered: { why: string; stillQueued: boolean } | undefined,
   outcome: SessionRequestOutcome,
   context: FallbackContext,
+  withheld = false,
 ): Promise<boolean> {
   const settled = request;
   const alsoUnanswered = also.map((r) => ({ id: r.id, preview: r.preview }));
@@ -442,12 +478,18 @@ async function deliverSettled(
     }
     logReplyReroute(request.id, request.fromSessionId, destination);
     const origin = destination.session;
+    // A reroute may land in another session than the asker's: the area check holds there too.
+    if (!withheld && (origin.claudeSessionId !== request.fromSessionId)) {
+      const { mayShareTaskContext } = await import('../router/context-sharing.js');
+      withheld = !!origin.profile?.areaId || (!!request.toTaskId && !await mayShareTaskContext(request.toTaskId, origin.taskId).catch(() => false));
+    }
 
     // Target naming is embellishment — a failed lookup must not lose the notice.
+    // Withheld: not even its title crosses the area.
     let targetTitle: string | undefined;
     let targetPhase = context.phase;
     let targetSessionId = request.toSessionId;
-    if (request.toTaskId) {
+    if (request.toTaskId && !withheld) {
       try {
         const { listTasksByIds } = await import('../task-manager.js');
         const task = (await listTasksByIds([request.toTaskId]))[0];
@@ -476,11 +518,11 @@ async function deliverSettled(
     }
     // Where the work went, when the target handed it on (request-handoff.ts).
     // An overdue one quotes that task's latest message and state, not the target's.
-    const handedOn = (outcome === 'timeout' ? undefined : context.handedOn)
+    const handedOn = withheld ? undefined : (outcome === 'timeout' ? undefined : context.handedOn)
       ?? await (await import('./request-handoff.js')).handedOnFor(settled, { words: outcome === 'timeout' });
     // The quote: the turn's own result when the edge carried it, else the transcript.
     // Not read for an overdue request handed on: its notice quotes the task it went to.
-    const lastMessage = outcome === 'timeout' && handedOn?.length ? undefined
+    const lastMessage = withheld || (outcome === 'timeout' && handedOn?.length) ? undefined
       : (context.lastMessage ? clipNoticeMessage(context.lastMessage) : undefined)
         ?? context.lastWords
         ?? await readLastWords(targetSessionId);

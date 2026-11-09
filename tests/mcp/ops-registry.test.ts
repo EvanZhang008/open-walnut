@@ -136,6 +136,28 @@ describe('ops registry — arg validation (executor front door)', () => {
     if (!r.ok) expect(r.message).toContain('/api/')
   })
 
+  it('stamps the explicit caller, never a session inherited from the server environment', async () => {
+    const seen: Array<{ sid?: string; kind?: string }> = [];
+    const stub = http.createServer((req, res) => {
+      seen.push({ sid: req.headers['x-walnut-caller-sid'] as string | undefined, kind: req.headers['x-walnut-caller-kind'] as string | undefined });
+      res.writeHead(200, { 'content-type': 'application/json' }).end('{"task":{"id":"fixture"}}');
+    });
+    await new Promise<void>((resolve) => stub.listen(0, '127.0.0.1', resolve));
+    onTestFinished(() => new Promise<void>((resolve) => stub.close(() => resolve())));
+    const apiBase = `http://127.0.0.1:${(stub.address() as AddressInfo).port}`;
+    const prior = process.env.WALNUT_SESSION_ID;
+    process.env.WALNUT_SESSION_ID = 'server-environment-sid';
+    try {
+      await executeOp('task_get', { id: 'fixture' }, { origin: LOCAL_ORIGIN, apiBase });
+      await executeOp('task_get', { id: 'fixture' }, { origin: LOCAL_ORIGIN, apiBase, callerSid: 'explicit-session' });
+      await executeOp('task_get', { id: 'fixture' }, { origin: LOCAL_ORIGIN, apiBase, callerMode: 'human' });
+      expect(seen).toEqual([{ sid: undefined, kind: 'automation' }, { sid: 'explicit-session', kind: undefined }, { sid: undefined, kind: undefined }]);
+    } finally {
+      if (prior === undefined) delete process.env.WALNUT_SESSION_ID;
+      else process.env.WALNUT_SESSION_ID = prior;
+    }
+  });
+
   it('validates task_update phase against the WHOLE lifecycle — no caller distinction', async () => {
     // The human-vs-AI gate is deliberately gone: both write every phase,
     // COMPLETE included. Only the phase VALUE is still checked, and it is

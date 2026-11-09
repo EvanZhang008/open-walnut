@@ -22,6 +22,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { TEST_RUN_HEADER, ambientTestRun, parseTestRunLabel } from '../core/test-run.js'
 import { answerByHeader } from '../lib/answer-by.js'
 const humanCallerScope = new AsyncLocalStorage<boolean>()
+const explicitCallerScope = new AsyncLocalStorage<{ sid?: string; kind: 'person' | 'agent'; pluginId?: string }>()
 import { getOp, type HttpBinding, type WalnutOp } from './registry.js'
 import { getSelfApiRoot, getSelfCallToken } from '../lib/self-api-root.js'
 import { fetchErrorCode } from '../lib/fetch-error.js'
@@ -66,13 +67,17 @@ export const CALLER_SID_HEADER = 'x-walnut-caller-sid'
  *  senders' fence labels. Same trust level as the sid header: never gated on. */
 export const CALLER_HOST_HEADER = 'x-walnut-caller-host'
 
+/** The plugin a call was made through (callPluginOp). Provenance only, like the sid header:
+ *  it grants no read and never makes a caller a person (task_create keeps such a plugin's tasks). */
+export const CALLER_PLUGIN_HEADER = 'x-walnut-plugin-id'
+
 /**
  * Who is calling. `sid` and `host` are labels, never gated on. `origin` is the
  * trust class the self-call carries (src/lib/caller-origin.ts): the receiving
  * route may LOWER trust on it, never raise it.
  */
 interface CallerProvenance {
-  sid?: string; host?: string; origin: string; beforeMutation?: () => Promise<void>; sender?: string; proof?: string
+  host?: string; proof?: string; sid?: string; explicitSid?: string; callerKind: 'person' | 'agent'; pluginId?: string; origin: string; beforeMutation?: () => Promise<void>; sender?: string
   /** The op call's id (src/lib/op-call-id.ts): each write it makes carries an op id derived from it. */
   callId?: string
   /** Writes made so far per route, for those op ids. */
@@ -103,29 +108,6 @@ const OP_ID_HEADER = 'x-walnut-op-id'
 /** An error a handler op's self-call throws, carrying whether its answer was lost. */
 class SelfCallError extends Error {
   constructor(message: string, readonly lost: boolean) { super(message) }
-}
-
-/**
- * Who is calling, for ops whose server side stamps provenance (the human inbox
- * stamps a letter's sender from it). An explicit `callerSid` always wins — the
- * gateway resolved it from the daemon's own view of the calling CLI. The env
- * fallback covers the OTHER processes: `walnut tools call` and `walnut mcp`, which
- * run inside a managed session and inherit WALNUT_SESSION_ID.
- *
- * The header is provenance within the user's OWN trust domain — the socket is
- * owner-only 0600 and the localhost route is unauthenticated, so anyone who can
- * set this header is already the user (or a process the user ran). It is NOT a
- * cross-tenant credential. It does drive two same-user integrity choices, not
- * just labels: which session may answer a reply-request (session-send-core
- * performReply) and the "from session X" name on a peer fence. A local process
- * that forges it can therefore impersonate one of the user's OTHER sessions to
- * a third — but never escalate authorization: the fence still declares the
- * message unauthorized. Do not rely on this header as a security boundary
- * against a hostile local process (that boundary is the 0600 socket itself).
- */
-function resolveCallerSid(explicit?: string): string | undefined {
-  const sid = (explicit ?? process.env.WALNUT_SESSION_ID ?? '').trim()
-  return sid || undefined
 }
 
 /**
@@ -177,10 +159,11 @@ async function rawRequest(
         ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
         ...(prov.sid ? { [CALLER_SID_HEADER]: prov.sid } : {}),
         ...(prov.host ? { [CALLER_HOST_HEADER]: prov.host } : {}),
+        ...(prov.pluginId ? { [CALLER_PLUGIN_HEADER]: prov.pluginId } : {}),
         // A host daemon's word on the asking process, by a token only this process holds (relay-proof.ts).
         ...(prov.proof ? { 'x-walnut-caller-proof': prov.proof } : {}),
         // No session and no person behind it: a script or a scheduled job (src/lib/cli-sender.ts).
-        ...(!prov.sid && prov.sender ? { [CALLER_KIND_HEADER]: 'automation', [SENDER_LABEL_HEADER]: prov.sender } : {}),
+        ...(!prov.sid && prov.callerKind === 'agent' ? { [CALLER_KIND_HEADER]: 'automation', ...(prov.sender ? { [SENDER_LABEL_HEADER]: prov.sender } : {}) } : {}),
         ...(selfToken ? { Authorization: `Bearer ${selfToken}` } : {}),
         // A retry of the same call meets this write's first answer instead of applying it twice.
         ...(opId ? { [OP_ID_HEADER]: opId } : {}),
@@ -295,6 +278,8 @@ export function materializeBinding(
 export interface ExecuteOpOptions {
   apiBase?: string
   callerSid?: string
+  /** The plugin the call is made through (callPluginOp): provenance, whoever the caller is. */
+  callerPluginId?: string
   /** Human clicks never inherit a session id from headers or the process environment. */
   callerMode?: 'session' | 'human'
   /**
@@ -431,13 +416,20 @@ export async function executeOp(
   const args = parsed.args
 
   const base = resolveApiBase(options.apiBase)
-  const human = options.callerMode === 'human' || humanCallerScope.getStore() === true
-  const sid = options.callerMode === 'human' || humanCallerScope.getStore() ? undefined : resolveCallerSid(options.callerSid)
+  const inherited = explicitCallerScope.getStore()
+  const human = inherited ? inherited.kind === 'person' : options.callerMode === 'human' || humanCallerScope.getStore() === true
+  const explicitSid = human ? undefined : inherited ? inherited.sid : options.callerSid?.trim() || undefined
+  const callerKind = human ? 'person' : 'agent'
+  // The plugin making this call names it; a call naming none keeps the one it runs under.
+  const pluginId = options.callerPluginId?.trim() || inherited?.pluginId
   // A read runs again freely; a write runs once per call id.
   const once = callId && op.tags.readonly !== true ? callId : undefined
   const run = async (): Promise<OpOutcome> => {
     const prov: CallerProvenance = {
-      sid,
+      sid: explicitSid,
+      explicitSid,
+      callerKind,
+      ...(pluginId ? { pluginId } : {}),
       host: options.callerHost?.trim() || undefined,
       beforeMutation: options.beforeMutation,
       origin,
@@ -445,7 +437,7 @@ export async function executeOp(
       ...(options.callerProof ? { proof: options.callerProof } : {}),
       ...(once ? { callId: once } : {}),
     }
-    const outcome = await humanCallerScope.run(human, () => runOp(op, args, base, prov))
+    const outcome = await humanCallerScope.run(human, () => explicitCallerScope.run({ sid: explicitSid, kind: callerKind, ...(pluginId ? { pluginId } : {}) }, () => runOp(op, args, base, prov)))
     // A handler that caught a lost or refused-for-now self-call and answered ok (a bulk op's
     // failed row): a copy must run it again, and the ledger answers the rows that applied.
     if (outcome.ok) return prov.lostAny || prov.unsettled ? { ...outcome, retry: true } : outcome
@@ -456,7 +448,7 @@ export async function executeOp(
     // made, say an edit already applied) is told what that first try already applied.
     return once && op.handler ? withEarlierWrites(outcome, base, prov) : outcome
   }
-  return once ? runOnce(once, op.name, args, sid, run) : run()
+  return once ? runOnce(once, op.name, args, explicitSid, run) : run()
 }
 
 /**
@@ -467,7 +459,7 @@ export async function executeOp(
 async function withEarlierWrites(outcome: Extract<OpOutcome, { ok: false }>, base: string, prov: CallerProvenance): Promise<OpOutcome> {
   if (!prov.callId) return outcome
   const mine = new Set(prov.writtenIds ?? [])
-  const read = await rawRequest(base, 'GET', `/op-calls/${encodeURIComponent(prov.callId)}`, undefined, 5_000, { origin: prov.origin, ...(prov.sid ? { sid: prov.sid } : {}) })
+  const read = await rawRequest(base, 'GET', `/op-calls/${encodeURIComponent(prov.callId)}`, undefined, 5_000, { origin: prov.origin, callerKind: prov.callerKind, ...(prov.sid ? { sid: prov.sid, explicitSid: prov.explicitSid } : {}), ...(prov.pluginId ? { pluginId: prov.pluginId } : {}) })
   const writes = read.ok ? ((read.result as { writes?: Array<{ route?: string; status?: number; outcome?: string; state?: string; opId?: string }> })?.writes ?? []) : []
   const earlier = writes.filter((w) => w.state === 'recorded' && w.outcome === 'applied' && (!w.opId || !mine.has(w.opId)))
   if (!earlier.length) return outcome
@@ -497,7 +489,7 @@ async function runOp(
       }
       // A handler that runs another op in-process (a plugin's walnut.ops.call)
       // acts for the same caller: the nested call cannot climb above this origin.
-      const result = await withCallerOrigin(prov.origin, () => op.handler!(args, call))
+      const result = await withCallerOrigin(prov.origin, () => op.handler!(args, call, { sid: prov.explicitSid, kind: prov.callerKind }))
       const message = op.resultError?.(result)
       return message ? { ok: false, message, result } : { ok: true, result }
     } catch (err) {

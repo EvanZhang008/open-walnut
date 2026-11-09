@@ -82,6 +82,11 @@ export interface TriggerTemplateDefinition {
    * own read ops already answer remote sessions.
    */
   remote?: boolean
+  /**
+   * Walnut arms it itself (the router wake): it is left out of the listing a picker or an agent
+   * reads, since nobody can arm it by hand. Plugins leave it unset.
+   */
+  internal?: boolean
   /** Validate and normalize the params (resolve "#name" to an id). Throw an Error with a plain message to refuse. */
   prepare(params: Record<string, string>): Promise<TriggerTemplatePrepared> | TriggerTemplatePrepared
   options?(key: string, query: string): Promise<TriggerTemplateOption[]> | TriggerTemplateOption[]
@@ -159,6 +164,7 @@ export function summarizeTemplate(record: TriggerTemplateRecord): TriggerTemplat
 
 export function listTriggerTemplates(): TriggerTemplateSummary[] {
   return templates.values()
+    .filter((t) => !t.internal)
     .sort((a, b) => a.pluginName.localeCompare(b.pluginName) || a.title.localeCompare(b.title))
     .map(summarizeTemplate)
 }

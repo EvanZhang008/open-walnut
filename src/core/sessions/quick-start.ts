@@ -263,6 +263,28 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     if (refused) throw new QuickStartError(refused.error, 409, { ...refused });
   }
 
+  let existingTask: Task | undefined;
+  if (existingTaskId) {
+    try {
+      existingTask = await getTask(existingTaskId);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('No task found matching')) throw new QuickStartError(`Task "${existingTaskId}" not found`, 404);
+      if (msg.includes('Ambiguous ID prefix')) throw new QuickStartError(msg, 400);
+      throw err;
+    }
+    const target = existingTask;
+    const { readRouterAreas, taskArea } = await import('../router/areas.js');
+    const { WALNUT_HOME } = await import('../../constants.js');
+    const areas = await readRouterAreas(WALNUT_HOME).catch((error) => {
+      if (target.router_area_id || target.org_role === 'router') throw error;
+      return undefined;
+    });
+    if (target.router_area_id || target.org_role === 'router' || (areas && taskArea(areas, target.id))) {
+      throw new QuickStartError('Open this area task through its own isolated conversation, not the quick launcher.', 409);
+    }
+  }
+
   // Engine, resolved BEFORE anything else reads it: every gate below
   // (`isAcpEngine`) and the SESSION_START payload must see the engine this
   // launch will ACTUALLY run on, so a launch that named none behaves exactly as
@@ -426,23 +448,7 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     // Retry mode: reuse existing task, archive error sessions.
     // Note: footer taskMeta picks (unread/priority/pinTier) are
     // intentionally IGNORED on retry — we preserve the original task's metadata.
-    // getTask THROWS on an unknown id (it never returns null) and is a PREFIX
-    // matcher with three failure modes: no match, ambiguous prefix, and a
-    // store read failure. Only "no match" is the caller's 404; ambiguity is
-    // their 400 (the task exists — they must be more specific), and anything
-    // else is a real 500 that must not be dressed up as "task not found".
-    try {
-      updatedTask = await getTask(existingTaskId);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes('No task found matching')) {
-        throw new QuickStartError(`Task "${existingTaskId}" not found`, 404);
-      }
-      if (msg.includes('Ambiguous ID prefix')) {
-        throw new QuickStartError(msg, 400);
-      }
-      throw err;
-    }
+    updatedTask = existingTask!;
     // An Ask Walnut launch ON an existing plain task (task-row ▶ → Ask Walnut)
     // makes it a Personal-AI task from here on: stamp the marker, because every
     // Ask Walnut behaviour keys on it, never on the project — the amber title,

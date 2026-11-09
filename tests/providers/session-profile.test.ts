@@ -239,6 +239,31 @@ describe('profile → CLI arg assembly', () => {
 // ══════════════════════════════════════════════════════════════════
 
 describe('profile record round-trip', () => {
+  /**
+   * A cold resume reads its record's task (the area launch gate), so the tasks the resumed
+   * records name are real rows in a fresh task store, outside every incoming-item area.
+   * A task the store cannot find still refuses the resume.
+   */
+  async function seedTasks(...ids: string[]): Promise<void> {
+    const { closeDb: closeTaskDb } = await import('../../src/core/task-db.js')
+    const { addTasksBulk, _resetForTesting: resetTaskStore } = await import('../../src/core/task-manager.js')
+    closeTaskDb()
+    resetTaskStore()
+    const now = new Date().toISOString()
+    await addTasksBulk(ids.map((id) => ({
+      id, title: `Profile task ${id}`, status: 'in_progress', phase: 'IN_PROGRESS', priority: 'none',
+      project: 'proj', source: 'local', session_ids: [], created_at: now, updated_at: now,
+      description: '', summary: '', note: '',
+    })) as Parameters<typeof addTasksBulk>[0])
+  }
+
+  afterEach(async () => {
+    const { closeDb: closeTaskDb } = await import('../../src/core/task-db.js')
+    const { _resetForTesting: resetTaskStore } = await import('../../src/core/task-manager.js')
+    closeTaskDb()
+    resetTaskStore()
+  })
+
   it('createSessionRecord persists profile + lane and reads them back', async () => {
     const { createSessionRecord, getSessionByClaudeId } = await import('../../src/core/session-tracker.js')
     const profile: SessionProfile = {
@@ -304,6 +329,7 @@ describe('profile record round-trip', () => {
       // A cold resume must come back with the same restricted tool set.
       tools: ['Read', 'Grep'],
     }
+    await seedTasks('task-3')
     await createSessionRecord('sid-resume', 'task-3', 'proj', tmpBase, { pid: 4321, profile, lane: 'personal-ai' })
     // Private method — reached through the instance under test, deliberately:
     // the contract asserted here is "the resume path re-reads the profile", and
@@ -329,6 +355,7 @@ describe('profile record round-trip', () => {
       { value: 'global.anthropic.claude-fable-5-1[1m]', displayName: 'Fable' },
       { value: 'global.anthropic.claude-opus-5-5[1m]', displayName: 'Opus' },
     ], tmpBase, Date.now())
+    await seedTasks('task-5', 'task-6', 'task-7')
     await createSessionRecord('sid-retired', 'task-5', 'proj', tmpBase, { pid: 4323, cliModel: 'global.anthropic.claude-fable-5[1m]' })
     await createSessionRecord('sid-current', 'task-6', 'proj', tmpBase, { pid: 4324, cliModel: 'global.anthropic.claude-opus-5-5[1m]' })
     // No catalog was ever fetched for this host: nothing to judge by, keep it.
@@ -347,12 +374,26 @@ describe('profile record round-trip', () => {
   it('resolveResumeArgs leaves profile undefined for a plain session', async () => {
     const { createSessionRecord } = await import('../../src/core/session-tracker.js')
     const { sessionRunner } = await import('../../src/providers/claude-code-session.js')
+    await seedTasks('task-4')
     await createSessionRecord('sid-plain', 'task-4', 'proj', tmpBase, { pid: 4322 })
     const resolved = await (sessionRunner as unknown as {
       resolveResumeArgs: (id: string) => Promise<{ profile?: SessionProfile; lane?: string }>
     }).resolveResumeArgs('sid-plain')
     expect(resolved.profile).toBeUndefined()
     expect(resolved.lane).toBeUndefined()
+  })
+
+  it('resolveResumeArgs resumes a plain record whose task is gone', async () => {
+    // An area record with no area task cannot be stored at all (router/history-write.ts), and
+    // the area refusals are pinned in router-area-launch.test.ts.
+    const { createSessionRecord } = await import('../../src/core/session-tracker.js')
+    const { sessionRunner } = await import('../../src/providers/claude-code-session.js')
+    await seedTasks('task-4')
+    await createSessionRecord('sid-orphan', 'task-missing', 'proj', tmpBase, { pid: 4326 })
+    const resolve = (sessionRunner as unknown as {
+      resolveResumeArgs: (id: string) => Promise<{ profile?: SessionProfile }>
+    }).resolveResumeArgs.bind(sessionRunner)
+    expect((await resolve('sid-orphan')).profile).toBeUndefined()
   })
 })
 

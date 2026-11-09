@@ -258,6 +258,7 @@
 
 .mail-row.mail-kid {
   flex-direction: row;
+  flex-wrap: wrap;
   align-items: baseline;
   gap: 6px;
   padding: 6px 12px 6px 17px;
@@ -265,6 +266,7 @@
   font-size: 13px;
 }
 
+.mail-row.mail-kid .mail-route { flex: 1 0 100%; max-width: 100%; padding-left: 12px; box-sizing: border-box; }
 .mail-kid-dot { flex: 0 0 6px; display: inline-flex; width: 6px; }
 .mail-kid-dot .mail-row-dot { transform: translateY(-1px); }
 

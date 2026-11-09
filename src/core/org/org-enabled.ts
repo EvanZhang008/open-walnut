@@ -129,7 +129,7 @@ export const ORG_OFF_BLOCKED_SOURCES: ReadonlySet<string> = new Set([
 
 /** An org node: Main or a VP (a project's lead). */
 export function isOrgNode(task: { org_role?: string } | null | undefined): boolean {
-  return task?.org_role === 'main' || task?.org_role === 'lead';
+  return task?.org_role === 'main' || task?.org_role === 'lead' || task?.org_role === 'router';
 }
 
 /** For tests: forget the cached value. */

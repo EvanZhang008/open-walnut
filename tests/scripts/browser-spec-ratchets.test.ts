@@ -1580,9 +1580,14 @@ describe('the sidebar on the shared fixture', () => {
   // and read a title cut sideways. A spec that opens or shuts the sidebar keeps its prefs to
   // itself (isolateUiPrefs, isolateUiPrefsContext, isolatePrefs, or its own ui-prefs route),
   // directly or through a helper it imports. Specs with their own config run on their own
-  // fixture. The specs below did it before this check: the list only shrinks.
-  const own = new Set(fs.readdirSync(DIR).filter((f) => f.endsWith('.config.ts'))
-    .flatMap((f) => testMatchNames(fs.readFileSync(path.join(DIR, f), 'utf8'))))
+  // fixture, and so does a spec that starts its own mail fixture server (MailFixtureServer: its
+  // own data, port and origin, so its prefs never reach the shared one). The specs below did it
+  // before this check: the list only shrinks.
+  const ownServer = /new MailFixtureServer\(/
+  const own = new Set([
+    ...fs.readdirSync(DIR).filter((f) => f.endsWith('.config.ts')).flatMap((f) => testMatchNames(fs.readFileSync(path.join(DIR, f), 'utf8'))),
+    ...fs.readdirSync(DIR).filter((f) => f.endsWith('.spec.ts') && ownServer.test(fs.readFileSync(path.join(DIR, f), 'utf8'))),
+  ])
   // The sidebar's own button, found by its class or its name.
   const button = /locator\(['"]\.sidebar-collapse-btn['"]\)|name: ['"](?:Expand|Collapse) sidebar['"]/
   /** Clicks that button (on the line that finds it, or through the name it is kept in), or stores the pref. */
@@ -1610,29 +1615,19 @@ describe('the sidebar on the shared fixture', () => {
     'engine-settings-popover-r2.spec.ts', 'engine-settings-popover-r2.webkit.spec.ts',
     'engine-settings-popover-r3-rows.spec.ts', 'engine-settings-popover-scope.spec.ts',
     'engine-settings-popover.webkit.spec.ts', 'engine-settings-project-scope.spec.ts',
-    'keep-awake-settings.spec.ts',
-    'mail-app-design.spec.ts', 'mail-app-filter.spec.ts', 'mail-app-folder-fetch.spec.ts', 'mail-app-gate.spec.ts',
-    'mail-app-read.spec.ts', 'mail-app-sidebar.spec.ts', 'mail-app-sidebar.webkit.spec.ts',
-    'mail-app-unified.spec.ts', 'mail-app-unified.webkit.spec.ts', 'mail-app-write.spec.ts',
-    'mail-context-fixes.spec.ts', 'mail-context-fixes.webkit.spec.ts', 'mail-context-folder.spec.ts',
-    'mail-context-folder.webkit.spec.ts', 'mail-context-geometry.spec.ts', 'mail-context-geometry.webkit.spec.ts',
-    'mail-context-independent.spec.ts', 'mail-context-round2.spec.ts', 'mail-context-round2.webkit.spec.ts',
-    'mail-context-row.spec.ts', 'mail-context-row.webkit.spec.ts', 'mail-ctx-r3.spec.ts',
-    'mail-ctx-r3.webkit.spec.ts', 'mail-ctx-v3.spec.ts', 'mail-grouping-bulk.spec.ts',
-    'mail-grouping-learn.spec.ts', 'mail-grouping-learn.webkit.spec.ts', 'mail-grouping-live.spec.ts',
-    'mail-grouping-narrow.webkit.spec.ts', 'mail-grouping-panes-filter.spec.ts',
-    'mail-grouping-rules-settings.spec.ts', 'mail-grouping-two-sections.spec.ts', 'mail-grouping-unsub.spec.ts',
-    'mail-grouping.spec.ts', 'mail-grouping.webkit.spec.ts', 'mail-invite.spec.ts', 'mail-menu-stays-open.spec.ts',
-    'mail-read-elsewhere.spec.ts', 'mail-reply-names-only.spec.ts', 'mail-sidebar-anchor.spec.ts',
-    'mail-sidebar-review.spec.ts', 'mail-sidebar-review.webkit.spec.ts', 'mail-sidebar-round2.spec.ts',
-    'mail-sidebar-round2.webkit.spec.ts', 'mail-sidebar-round3.spec.ts', 'mail-sidebar-round3.webkit.spec.ts',
-    'mail-sync-line.spec.ts', 'mail-sync-line.webkit.spec.ts', 'mail-unsubscribe.spec.ts',
-    'mail-unsubscribe.webkit.spec.ts', 'permissions-session-access.spec.ts', 'phone-mail-groups.spec.ts',
-    'phone-mail-r4.spec.ts', 'plugin-app-visibility.spec.ts', 'plugin-apps.spec.ts',
-    'plugin-config-card-layout.spec.ts', 'plugin-connection.spec.ts', 'plugin-hot-reload.spec.ts',
-    'plugin-install-link.spec.ts', 'plugin-mcp-servers.spec.ts', 'plugin-secret-form.spec.ts',
-    'plugin-store.spec.ts', 'plugin-update-layout.spec.ts', 'plugin-update-round3.spec.ts',
-    'settings-claude-code-import.spec.ts', 'settings-default-engine.spec.ts',
+    'keep-awake-settings.spec.ts', 'mail-app-design.spec.ts', 'mail-app-filter.spec.ts',
+    'mail-app-folder-fetch.spec.ts', 'mail-app-gate.spec.ts', 'mail-app-read.spec.ts',
+    'mail-app-sidebar.spec.ts', 'mail-app-sidebar.webkit.spec.ts', 'mail-app-unified.spec.ts',
+    'mail-app-unified.webkit.spec.ts', 'mail-app-write.spec.ts', 'mail-context-independent.spec.ts',
+    'mail-grouping-bulk.spec.ts', 'mail-grouping-learn.spec.ts', 'mail-grouping-learn.webkit.spec.ts',
+    'mail-grouping-live.spec.ts', 'mail-grouping-narrow.webkit.spec.ts', 'mail-grouping-panes-filter.spec.ts',
+    'mail-grouping-rules-settings.spec.ts', 'mail-grouping-two-sections.spec.ts',
+    'mail-grouping-unsub.spec.ts', 'mail-grouping.spec.ts', 'mail-grouping.webkit.spec.ts',
+    'permissions-session-access.spec.ts', 'phone-mail-groups.spec.ts', 'plugin-app-visibility.spec.ts',
+    'plugin-apps.spec.ts', 'plugin-config-card-layout.spec.ts', 'plugin-connection.spec.ts',
+    'plugin-hot-reload.spec.ts', 'plugin-install-link.spec.ts', 'plugin-mcp-servers.spec.ts',
+    'plugin-secret-form.spec.ts', 'plugin-store.spec.ts', 'plugin-update-layout.spec.ts',
+    'plugin-update-round3.spec.ts', 'settings-claude-code-import.spec.ts', 'settings-default-engine.spec.ts',
     'settings-default-engine.webkit.spec.ts', 'settings-layout.spec.ts', 'settings-panes.spec.ts',
     'settings-triage.spec.ts', 'sidebar-declutter.spec.ts', 'sidebar-status-items.spec.ts',
   ]

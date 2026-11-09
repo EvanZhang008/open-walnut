@@ -143,7 +143,7 @@ export async function enqueueMessage(
   };
   // A relayed row is written strictly: on a disk failure the companion is told
   // (QueueNotStoredError) instead of the row living in this process alone.
-  const itemAction = opts?.id?.startsWith('qm-inbox-') === true;
+  const itemAction = opts?.id?.startsWith('qm-inbox-') === true || opts?.id?.startsWith('qm-route-') === true;
   const relayed = opts?.relayTaken === true;
   const outcome = await mutateStore((s) => {
     if (!s.queues[sessionId]) {
@@ -244,6 +244,11 @@ export async function sendMessageToSession(
   // task's active session (sessions/engine-switch.ts).
   const { activeSessionFor, movingFrom } = await import('./sessions/engine-switch.js');
   sessionId = await activeSessionFor(sessionId, opts?.messageId);
+  const { getSessionByClaudeId } = await import('./session-tracker.js');
+  const areaRecord = await getSessionByClaudeId(sessionId);
+  // The router's wake passes only inside router/wake.ts's own grant, into a router session.
+  const { assertAreaDelivery } = await import('./router/delivery-scope.js');
+  const scopedArea = assertAreaDelivery(areaRecord, sessionId, opts?.source, opts?.messageId);
   await refuseOrgDeliveryWhileOff(sessionId, opts?.source, opts?.taskId);
   // Its task is moving to another host: the row is held here and goes with the task.
   const { MOVE_HELD_REASON } = await import('./sessions/engine-switch-io.js');
@@ -255,7 +260,7 @@ export async function sendMessageToSession(
   // A task that moved since its session was told rides a place note on this
   // message, in the same row, so it never costs a turn (sessions/place-notice.ts).
   const { pendingPlaceNotice } = await import('./sessions/place-notice.js');
-  const place = await pendingPlaceNotice(sessionId);
+  const place = scopedArea ? null : await pendingPlaceNotice(sessionId);
   // A restart that killed the session's process rides the same way, on
   // whichever message reaches it first (sessions/restart-notice.ts).
   const { pendingRestartNotice } = await import('./sessions/restart-notice.js');
@@ -265,17 +270,17 @@ export async function sendMessageToSession(
   const folderMoved = await pendingFolderMovedNotice(sessionId);
   // An engine switch with no message ran no turn: the context it carried leads this message (sessions/engine-switch-io.ts).
   const { pendingSwitchContext } = await import('./sessions/engine-switch-io.js');
-  const switchContext = await pendingSwitchContext(sessionId);
+  const switchContext = scopedArea ? null : await pendingSwitchContext(sessionId);
   // One task's message to another is stamped first, so a lead's team note never repeats what this
   // message tells it (org/lead-traffic.ts).
   const { noteQueuedMessage } = await import('./org/lead-traffic.js');
-  await noteQueuedMessage(sessionId, opts?.enqueueMessage ?? message);
+  if (!scopedArea) await noteQueuedMessage(sessionId, opts?.enqueueMessage ?? message);
   // The main agent's org update rides the same way: one folded note, never a turn (org/org-store.ts).
   const { pendingOrgDigest } = await import('./org/org-store.js');
-  const digest = await pendingOrgDigest(sessionId);
+  const digest = scopedArea ? null : await pendingOrgDigest(sessionId);
   // A status change of a task it asked something rides the same way (sessions/status-push.ts).
   const { pendingStatusNote } = await import('./sessions/status-push.js');
-  const statusNote = pendingStatusNote(sessionId);
+  const statusNote = scopedArea ? null : pendingStatusNote(sessionId);
   // Every message is escaped, and a turn nobody typed still carries the message
   // hints a human send would (hints/hint-send.ts), unless its sender composed them.
   const { prepareQueuedHintedSend } = await import('./hints/hint-send.js');
@@ -283,16 +288,16 @@ export async function sendMessageToSession(
   // What a plugin App shows (an editor, a test run) rides the same way: what
   // changed since this session last read it, never a turn (sessions/app-state.ts).
   const { pendingAppState } = await import('./sessions/app-state.js');
-  const appState = await pendingAppState(sessionId, rawBody);
+  const appState = scopedArea ? null : await pendingAppState(sessionId, rawBody);
   // A peer's message into a waiting task says the wait comes back (task-wait-resume.ts).
   const { waitNoteFor } = await import('./task-wait-resume.js');
   const waitNote = await waitNoteFor(sessionId, opts?.source, opts?.endsWait === true);
   // A lead that handed its project over hears so on every message that still reaches it (org/retired-lead.ts).
   const { pendingRetiredLeadNote } = await import('./org/retired-lead.js');
-  const retiredNote = await pendingRetiredLeadNote(sessionId, rawBody);
+  const retiredNote = scopedArea ? null : await pendingRetiredLeadNote(sessionId, rawBody);
   // A background notice that waited for this message rides in front of it (sessions/held-notices.ts).
   const { pendingHeldNotices } = await import('./sessions/held-notices.js');
-  const heldNotes = await pendingHeldNotices(sessionId);
+  const heldNotes = scopedArea ? null : await pendingHeldNotices(sessionId);
   // Whatever a person did not type is framed here, so the transcript says who sent it (sessions/send-frame.ts).
   const framedBody = frameForSource(rawBody, opts?.source);
   const outputMode = opts?.hinted ? null : await prepareQueuedHintedSend(sessionId, opts?.source, framedBody);
@@ -326,7 +331,7 @@ export async function sendMessageToSession(
   // An ask into a lead's team from outside it (the user, the main agent, another team) is the
   // lead's to know: its next team note lists it (org/team-asks.ts). Fire and forget.
   // A test run's words are never the user's (test-run.ts): read now, while the request is surely open.
-  if (ambientTestRun() === undefined) {
+  if (!scopedArea && ambientTestRun() === undefined) {
     void import('./org/team-asks.js').then((m) => m.noteTeamAsk(sessionId, message, rawBody, opts?.source, msg.id)).catch(() => {});
   }
   // A repeat collapsed onto the row already queued: only the row that holds the note counts.

@@ -865,6 +865,9 @@ node_modules/
 plugin-stores/
 plugin-data/
 
+# Routing ledgers, approval tokens and frozen incoming content stay on the primary.
+/router/
+
 # Voice recordings + transcripts (machine-local binary). Pre-1a location; new
 # writes go to tmp/stt-recordings/, but old installs still have this dir.
 stt-debug/
@@ -978,7 +981,7 @@ const CRITICAL_IGNORE_FILES = [
   'triage-state.json', 'session-requests.json', 'code-server/instance.json',
 ];
 /** Repo-relative dir prefixes: what the untrack pass matches `ls-files` output against. */
-const CRITICAL_IGNORE_DIRS = ['health/', 'models/', 'places/', 'voice-archive/', 'plugin-data/', 'secrets/', 'local/', 'components/', 'vault/'];
+const CRITICAL_IGNORE_DIRS = ['health/', 'models/', 'places/', 'voice-archive/', 'plugin-data/', 'secrets/', 'local/', 'components/', 'vault/', 'router/'];
 /**
  * The .gitignore LINE for a dir when it differs from the prefix. `models/` is
  * root-anchored: a `models` folder inside notes/ is user content, and an
@@ -988,7 +991,7 @@ const CRITICAL_IGNORE_DIRS = ['health/', 'models/', 'places/', 'voice-archive/',
  */
 const CRITICAL_IGNORE_LINES: Record<string, string> = {
   'health/': '/health/', 'models/': '/models/', 'places/': '/places/', 'voice-archive/': '/voice-archive/', 'local/': '/local/',
-  'components/': '/components/', 'vault/': '/vault/',
+  'components/': '/components/', 'vault/': '/vault/', 'router/': '/router/',
 };
 const CRITICAL_IGNORES = [
   ...CRITICAL_IGNORE_FILES,

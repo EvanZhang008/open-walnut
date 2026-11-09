@@ -219,6 +219,7 @@ describe('auth.json is never synced (data-repo gitignore)', () => {
       'plugin-data/',
       'secrets/',
       '/vault/',
+      '/router/',
     ]));
   });
 
@@ -282,6 +283,25 @@ describe('auth.json is never synced (data-repo gitignore)', () => {
     ensureCriticalIgnores();
     const gitignore = await fsp.readFile(path.join(tmpDir, '.gitignore'), 'utf-8');
     expect(gitignore.split('\n')).toContain('config.yaml');
+  });
+
+  it('keeps routing approvals, ledgers and frozen content local without dropping similarly named notes', async () => {
+    initSync();
+    await fsp.writeFile(path.join(tmpDir, '.gitignore'), 'images/\n');
+    const privatePath = path.join(tmpDir, 'router', 'handoffs', 'fixture.json');
+    const notePath = path.join(tmpDir, 'notes', 'router', 'idea.md');
+    await fsp.mkdir(path.dirname(privatePath), { recursive: true });
+    await fsp.mkdir(path.dirname(notePath), { recursive: true });
+    await fsp.writeFile(privatePath, '{"body":"neutral fixture"}\n');
+    await fsp.writeFile(notePath, 'Router design note\n');
+    execSync('git add -f router/handoffs/fixture.json notes/router/idea.md && git commit -q -m "legacy routing fixture"', { cwd: tmpDir });
+    ensureCriticalIgnores();
+    expect(ensureMachineLocalUntracked()).toContain('router/handoffs/fixture.json');
+    const tracked = execSync('git ls-files', { cwd: tmpDir, encoding: 'utf-8' }).split('\n');
+    expect(tracked).not.toContain('router/handoffs/fixture.json');
+    expect(tracked).toContain('notes/router/idea.md');
+    await expect(fsp.readFile(privatePath, 'utf-8')).resolves.toContain('neutral fixture');
+    expect(execSync('git check-ignore router/handoffs/another.json', { cwd: tmpDir, encoding: 'utf-8' }).trim()).toBe('router/handoffs/another.json');
   });
 
   it('repairs and untracks private Plugin paths on an older install', async () => {

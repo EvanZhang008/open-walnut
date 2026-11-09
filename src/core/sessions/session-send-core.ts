@@ -47,6 +47,7 @@ import {
   type SessionRequest,
 } from '../session-requests.js';
 import { queueSentBy } from './send-sent-by.js';
+import { assertAreaDelivery } from '../router/delivery-scope.js';
 import { frameForSource } from './send-frame.js';
 import { isPersonSource } from './send-sent-by.js';
 import { noteRequestDelivering } from './undelivered-requests.js';
@@ -66,7 +67,7 @@ export class SendError extends Error {
       | 'bad_request' | 'unknown_target' | 'ambiguous_target' | 'task_has_no_session'
       | 'target_archived' | 'task_starting' | 'self_send' | 'queue_full' | 'throttled' | 'delivery_failed'
       | 'unknown_request' | 'request_already_settled' | 'not_request_target' | 'origin_session_gone'
-      | 'parent_complete' | 'target_complete' | 'lead_handed_over' | 'org_off' | 'not_above' | 'no_open_ask' | 'user_words' | 'user_spoke_since',
+      | 'parent_complete' | 'target_complete' | 'lead_handed_over' | 'org_off' | 'not_above' | 'no_open_ask' | 'user_words' | 'user_spoke_since' | 'area_forbidden' | 'cross_area',
     message: string,
     public statusCode = 400,
     public detail?: Record<string, unknown>,
@@ -397,6 +398,12 @@ export async function deliverToSession(
   }
   const leaderAnswersQuestion = opts.fromLeader === true && target.pendingPermission?.toolName === 'AskUserQuestion';
   if (target.pendingPermission && !leaderAnswersQuestion) {
+    // The raw enqueue below skips sendMessageToSession, so the area check runs here, on the
+    // record as it is now (router/delivery-scope.ts), never on the caller's snapshot.
+    const { getSessionByClaudeId } = await import('../session-tracker.js');
+    const fresh = await getSessionByClaudeId(sid);
+    if (!fresh) throw new SendError('unknown_target', `session ${shortId(sid)} no longer exists`, 404);
+    assertAreaDelivery(fresh, sid, opts.source, opts.messageId);
     const { enqueueMessage } = await import('../session-message-queue.js');
     const { escapeHintTags } = await import('../hints/hint-format.js');
     const sentBy = queueSentBy(opts.source);
@@ -764,6 +771,12 @@ async function performPlainSend(input: SessionSendInput): Promise<DeliveredSendR
     throw err;
   }
   const targetSid = target.session.claudeSessionId;
+  if (caller.kind === 'session' && caller.record.taskId) {
+    const { mayShareTaskContext } = await import('../router/context-sharing.js');
+    if (!await mayShareTaskContext(caller.record.taskId, target.taskId ?? target.session.taskId)) {
+      throw new SendError('area_forbidden', 'Context cannot be sent across an area boundary.', 403);
+    }
+  }
 
   // A session its task is moving away from is archived until the move is done: a message for it
   // is held there and moves with the task (engine-switch.ts movingFrom), never refused.
@@ -979,6 +992,12 @@ async function performReply(
   }
   logReplyReroute(onward?.final.id ?? id, onward?.final.fromSessionId ?? request.fromSessionId, destination);
   const origin = destination.session;
+  if (caller.record.taskId) {
+    const { mayShareTaskContext } = await import('../router/context-sharing.js');
+    if (!await mayShareTaskContext(caller.record.taskId, origin.taskId)) {
+      throw new SendError('cross_area', 'This reply crosses an incoming-item area. Nothing was delivered or settled.', 403);
+    }
+  }
   // Before the settle: a refused answer leaves the request open for a forced retry.
   const replyBody = await admitCompleteTarget(caller, origin.taskId, input, text, 'reply');
 

@@ -26,9 +26,10 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 vi.mock('../../src/constants.js', () => createMockConstants('sync-reconciler-edge'));
 
 // Session tracker mock — tests control the visible session list.
-const mockSessions: Array<{ claudeSessionId: string; process_status: string }> = [];
+const mockSessions: Array<{ claudeSessionId: string; process_status: string; taskId?: string; profile?: { areaId?: string } }> = [];
 vi.mock('../../src/core/session-tracker.js', () => ({
   listSessions: vi.fn(async () => mockSessions),
+  getSessionsForTask: vi.fn(async (taskId: string) => mockSessions.filter((session) => session.taskId === taskId)),
 }));
 
 import { SYNC_DIR, WALNUT_HOME } from '../../src/constants.js';

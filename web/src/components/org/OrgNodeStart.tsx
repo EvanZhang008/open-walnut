@@ -16,6 +16,8 @@ import { log } from '@/utils/log';
 import { useOrgSettings } from './useOrgSettings';
 import type { ChannelRow } from './org-channels-model';
 import { orgStartView } from './org-start-view';
+import { ROUTER_SETTINGS_OPEN_EVENT } from './OrgRouterSettings';
+import { useRouterSettingsOpen } from './router-settings-open';
 
 export function OrgNodeStart({ row, contact, title, onStart, loading = false, starting = false }: {
   row: ChannelRow; contact: Task | undefined; title: string;
@@ -68,6 +70,7 @@ export function OrgNodeStart({ row, contact, title, onStart, loading = false, st
   };
   const start = () => { setAnswer(null); onStart(row); };
 
+  const settingsOpen = useRouterSettingsOpen(contact?.id ?? '');
   const view = orgStartView({ enabled: enabled || !loaded, row, contact, answer, loading, starting });
   return (
     <div className="org-chat-start" data-testid="org-chat-start" data-state={view.kind}>
@@ -83,7 +86,17 @@ export function OrgNodeStart({ row, contact, title, onStart, loading = false, st
         <p data-testid="org-start-failed">{title} could not start: {view.error}</p>
         <button type="button" className="btn btn-sm btn-primary" data-testid="org-start-retry" disabled={busy} onClick={start}>Retry</button>
       </>}
-      {view.kind === 'idle' && <>
+      {view.kind === 'idle' && contact?.org_role === 'router' && <>
+        {/* A router starts on its own when an item reaches its area; Paused is its settings' switch,
+            so this only says what the switch means, and the button only opens a chat. */}
+        <p data-testid="org-router-idle">{routerIdleLine(title, contact.router_paused !== false)}</p>
+        <div className="org-chat-start-actions">
+          {contact.router_paused !== false && !settingsOpen && <button type="button" className="btn btn-sm" data-testid="org-router-open-settings"
+            onClick={() => window.dispatchEvent(new CustomEvent(ROUTER_SETTINGS_OPEN_EVENT, { detail: contact.id }))}>Open settings</button>}
+          <button type="button" className="btn btn-sm" data-testid="org-start-chat" disabled={busy} onClick={start}>Chat with {title}</button>
+        </div>
+      </>}
+      {view.kind === 'idle' && contact?.org_role !== 'router' && <>
         <p>{title} has not started yet.</p>
         <button type="button" className="btn btn-sm btn-primary" data-testid="org-start-chat" disabled={busy} onClick={start}>Start {title}</button>
       </>}
@@ -93,4 +106,11 @@ export function OrgNodeStart({ row, contact, title, onStart, loading = false, st
       </>}
     </div>
   );
+}
+
+/** A router with no conversation yet: when it starts, and what Paused means for it. */
+export function routerIdleLine(title: string, paused: boolean): string {
+  return paused
+    ? `${title} is paused: it reads no incoming items until you turn Paused off in its settings.`
+    : `${title} starts by itself when an item reaches its area.`;
 }

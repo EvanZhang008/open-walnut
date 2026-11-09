@@ -13,7 +13,8 @@ import type { GlobalOptions } from '../core/types.js'
 export async function runGuide(globals: GlobalOptions): Promise<void> {
   const { executeOp } = await import('../ops/index.js')
   const { LOCAL_ORIGIN } = await import('../lib/caller-origin.js')
-  const outcome = await executeOp('skill_read', { dirName: 'walnut' }, { origin: LOCAL_ORIGIN })
+  const { cliOpCaller } = await import('../lib/cli-sender.js')
+  const outcome = await executeOp('skill_read', { dirName: 'walnut' }, { origin: LOCAL_ORIGIN, ...cliOpCaller() })
   if (!outcome.ok) {
     console.error(`walnut: ${outcome.message}`)
     process.exitCode = 1

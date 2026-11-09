@@ -39,6 +39,7 @@ export interface OrgStartOutcome {
 
 /** The first message: who started it and what to do first. Plain words, no ask of anyone. */
 export function orgStartMessage(task: Pick<Task, 'org_role' | 'title' | 'org_name' | 'project'>, title: string): string {
+  if (task.org_role === 'router') return 'Walnut opened your isolated router conversation. You are a router beside the VPs, not a VP or their subordinate. No incoming content has been supplied. Wait for a confirmed item in your own area; VP collaboration links do not grant data access.';
   const who = task.org_role === 'main' ? 'the CEO of the org' : `the ${title} in the org`;
   return [
     `Walnut started your session in the background: you are ${who}.`,
@@ -153,7 +154,8 @@ export async function startOrgNode(taskId: string, why: OrgStartWhy): Promise<Or
       // A lead starts where its project's tasks start, as org_send starts it.
       const { startSessionForTask } = await import('../sessions/task-start.js');
       const started = await startSessionForTask({
-        taskIdPrefix: task.id, message, source: ORG_START_SOURCE, expectReply: false, awaitStart: true,
+        taskIdPrefix: task.id, ...(task.org_role === 'router' ? { idle: true } : { message }),
+        source: ORG_START_SOURCE, expectReply: false, awaitStart: true,
         // Retry is the user's own click: it starts at once wherever the node runs (review round 5).
         ...(why === 'retry' ? { byPerson: true } : {}),
       });

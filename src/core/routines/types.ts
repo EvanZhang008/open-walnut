@@ -90,6 +90,8 @@ export interface ExecutorDefinition {
   /** Short one-liner shown under the executor picker. */
   description: string;
   configSchema: ExecutorFieldSpec[];
+  /** Walnut makes these routines itself (the router wake): kept for labels, never offered in a form. */
+  internal?: boolean;
   /** Validate + coerce a raw config object. */
   validate(config: unknown):
     | { ok: true; config: Record<string, unknown> }

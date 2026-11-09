@@ -62,6 +62,7 @@ import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { setDeliveryWaitForTests, setRouteDeadlineForTests } from '../../src/web/routes/human-inbox-v1.js'
 import { CALLER_SID_HEADER, executeOp } from '../../src/ops/index.js'
+import { cliOpCaller } from '../../src/lib/cli-sender.js'
 import { LETTER_BODY_MAX_BYTES, LETTER_HTML_MAX_BYTES } from '../../src/core/human-inbox/types.js'
 
 let server: HttpServer
@@ -641,12 +642,14 @@ describe('ops registry parity — executeOp reaches the real routes', () => {
     expect(letter.thread[0].from).toBe('agent')
   })
 
-  it('falls back to WALNUT_SESSION_ID when no callerSid is passed (CLI / MCP path)', async () => {
+  it('the in-session CLI / MCP path names WALNUT_SESSION_ID as its caller', async () => {
+    // The CLI and MCP entry points read the env (cliOpCaller); executeOp itself never does, so a
+    // server-side call that names no caller cannot inherit the server process's session id.
     process.env.WALNUT_SESSION_ID = SENDER_SID
     try {
       const sent = await executeOp('human_inbox_send', {
         subject: 'From the in-session CLI', type: 'info', markdown: 'hello',
-      }, { apiBase: apiBase() })
+      }, { apiBase: apiBase(), ...cliOpCaller() })
       expect(sent.ok, sent.ok ? '' : sent.message).toBe(true)
       const letterId = (sent as { result: { letterId: string } }).result.letterId
       const { letter } = await getLetter(letterId)

@@ -172,6 +172,8 @@ export interface ExecutorInfo {
   label: string;
   description: string;
   configSchema: ExecutorFieldSpec[];
+  /** Walnut makes these routines itself: shown on a routine of it, never offered for a new one. */
+  internal?: boolean;
 }
 
 export interface ExecutorOptions {

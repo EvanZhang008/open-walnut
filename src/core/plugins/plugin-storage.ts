@@ -19,12 +19,18 @@ const { bindByIndex, onlyTrailingNoise } = driver
 if (typeof bindByIndex !== 'function' || typeof onlyTrailingNoise !== 'function') {
   throw new Error('Plugin database driver ' + workerData.driver + ' has no plugin parameter binding (bindByIndex)')
 }
-const directory = path.dirname(workerData.file)
-fs.mkdirSync(directory, { recursive: true, mode: 0o700 })
-fs.chmodSync(directory, 0o700)
-const db = new Database(workerData.file)
-fs.chmodSync(workerData.file, 0o600)
-db.pragma('journal_mode = WAL')
+// An existing file is opened as it is: no directory, mode or journal change before it is read.
+let db
+if (workerData.existingOnly) {
+  db = new Database(workerData.file, { fileMustExist: true })
+} else {
+  const directory = path.dirname(workerData.file)
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 })
+  fs.chmodSync(directory, 0o700)
+  db = new Database(workerData.file)
+  fs.chmodSync(workerData.file, 0o600)
+  db.pragma('journal_mode = WAL')
+}
 db.pragma('busy_timeout = 5000')
 
 // A plugin's statement answers as better-sqlite3's did (the plugin API contract): its
@@ -88,6 +94,23 @@ parentPort.on('message', ({ id, method, args }) => {
           ? 'Plugin database batch failed at statement ' + failedAt + ', nothing was written: ' + message
           : 'Plugin database batch failed, nothing was written: ' + message)
       }
+    } else if (method === 'ensureUserVersion') {
+      // A plain read decides first; only a version to stamp takes the IMMEDIATE transaction, which reads it again.
+      const { minVersion, requiredVersion, maxVersion } = args
+      const judge = () => {
+        const current = Number(db.pragma('user_version', { simple: true }))
+        if (!Number.isInteger(current)) return { status: 'unreadable' }
+        if (current > maxVersion) return { status: 'newer', current }
+        if (current >= requiredVersion) return { status: 'current', current }
+        if (current < minVersion) return { status: 'older', current }
+        return null
+      }
+      value = judge() ?? db.transaction(() => {
+        const settled = judge()
+        if (settled) return settled
+        db.exec('PRAGMA user_version = ' + requiredVersion)
+        return { status: 'stamped', current: requiredVersion }
+      }).immediate()
     } else if (method === 'close') {
       db.close()
     } else {
@@ -104,6 +127,10 @@ parentPort.on('message', ({ id, method, args }) => {
 // itself (dist/lib/sqlite.js in a build): the same bun:sqlite as the server.
 const SQLITE_DRIVER_PATH = sqliteModuleFile()
 
+export type UserVersionOutcome =
+  | { status: 'stamped' | 'current' | 'newer' | 'older'; current: number }
+  | { status: 'unreadable' }
+
 interface PendingRequest {
   resolve(value: unknown): void
   reject(error: Error): void
@@ -117,11 +144,12 @@ export class PluginDatabaseClient implements Disposable {
   private disposed = false
   private dead = false
 
-  constructor(filePath: string, driverPath = SQLITE_DRIVER_PATH) {
+  /** `existingOnly` is host-internal: open an existing file as it is (no mkdir, chmod or WAL switch); plugins never pass it. */
+  constructor(filePath: string, driverPath = SQLITE_DRIVER_PATH, opts: { existingOnly?: boolean } = {}) {
     if (!driverPath) throw new Error('Plugin database driver not found (dist/lib/sqlite.js is missing from this build)')
     this.worker = new Worker(DB_WORKER_SOURCE, {
       eval: true,
-      workerData: { file: filePath, driver: driverPath },
+      workerData: { file: filePath, driver: driverPath, existingOnly: opts.existingOnly === true },
     })
     this.worker.on('message', (message: { id: number; ok: boolean; value?: unknown; error?: string }) => {
       const pending = this.pending.get(message.id)
@@ -167,6 +195,17 @@ export class PluginDatabaseClient implements Disposable {
       versions.add(migration.version)
     }
     return this.request('migrate', { migrations }) as Promise<number>
+  }
+
+  /**
+   * Host-internal, not on the plugin API: sets `user_version` to `requiredVersion` when it is in
+   * [minVersion, requiredVersion), in one transaction; never lowers it and never touches one above maxVersion.
+   */
+  ensureUserVersion(minVersion: number, requiredVersion: number, maxVersion: number): Promise<UserVersionOutcome> {
+    if (![minVersion, requiredVersion, maxVersion].every((v) => Number.isInteger(v) && v >= 0) || !(minVersion <= requiredVersion && requiredVersion <= maxVersion)) {
+      return Promise.reject(new RangeError('ensureUserVersion takes integers with min <= required <= max'))
+    }
+    return this.request('ensureUserVersion', { minVersion, requiredVersion, maxVersion }) as Promise<UserVersionOutcome>
   }
 
   /** Runs every statement with `run`, in order, in one transaction: all of them commit or none does. */

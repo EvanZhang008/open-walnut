@@ -185,6 +185,7 @@ import {
 } from './trigger-check-core.js'
 import { buildScheduledMessage, buildTriggerMessage } from './trigger-envelope-core.js'
 import { START_TASK_TOKEN, clockDueMs, clockFireOwed, clockStateOnArm, dropStaleClockFires, type ClockReport } from './trigger-clock-core.js'
+import { takeTriggerStateSnapshot } from './trigger-state-snapshot-core.js'
 import { createClockSchedule } from './clock-schedule-core.js'
 import { resolvePathHostLocal } from './path-resolve-core.js'
 import { ensureTaskDir, isTaskDirId, listTaskDirs, pruneTaskBuilds, pruneTaskDirs, readOpenPaths, removeTaskDirs, taskDirInUse, taskDirPath, taskDirRoot, taskDirSizes, type HostWork } from './task-dir-core.js'
@@ -2793,6 +2794,8 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'triggers.run': return daemonCommands.run(() => cmdTriggersRun(ws, id as number, cmd))
     case 'triggers.ack': return daemonCommands.run(() => cmdTriggersAck(ws, id as number, cmd))
     case 'triggers.claim': return daemonCommands.run(() => cmdTriggersClaim(ws, id as number, cmd))
+    // trigger-state-snapshot-v1: read-only, still trusted-socket only (host data).
+    case 'triggers.state.snapshot': return daemonCommands.run(() => cmdTriggersStateSnapshot(ws, id as number, cmd))
     case 'skills.sync': return cmdSkillsSync(ws, id as number, cmd)
     case 'bridgeResume': return daemonCommands.run(() => cmdBridgeResume(ws, id as number, cmd))
     case 'stt': return cmdSttRelay(ws, id as number, cmd)
@@ -7091,6 +7094,13 @@ function fireHolders(home?: string): ArmedTrigger[] {
  */
 const hostDeliveriesInFlight = new Map<string, Set<number>>()
 /**
+ * The entries whose check process is running right now. Held apart from the maps:
+ * a configure that disarms a trigger mid-check deletes its entry from armedTriggers
+ * while the script still runs, and triggers.state.snapshot must still see it.
+ * runTrigger adds before the spawn and removes in its finally. Mirror daemon-source.ts.
+ */
+const triggerChecksRunning = new Set<ArmedTrigger>()
+/**
  * Per Walnut: the set as its server last sent it (or as its triggers.json kept it),
  * and that set's hash. What is armed is this set with the pauses, resumes and
  * deletes a session made here while its Walnut was away (offlineHost.triggerHolds),
@@ -7533,6 +7543,7 @@ async function runTrigger(entry: ArmedTrigger): Promise<{ outcome: 'fired' | 'qu
   if (entry.def.clock) return runClock(entry, false) === 'fired' ? { outcome: 'fired' } : { outcome: 'quiet' }
   if (!entry.def.check) return { outcome: 'error', error: 'trigger has no check' }
   entry.running = true
+  triggerChecksRunning.add(entry)
   const startedAt = Date.now()
   // A configure that lands mid-run may have disarmed this trigger. The run is
   // discarded then: the server no longer knows this id, so the fire would name a
@@ -7594,6 +7605,7 @@ async function runTrigger(entry: ArmedTrigger): Promise<{ outcome: 'fired' | 'qu
     return { outcome: 'quiet', ...(reason ? { reason } : {}) }
   } finally {
     entry.running = false
+    triggerChecksRunning.delete(entry)
   }
 }
 
@@ -8064,6 +8076,54 @@ function cmdTriggersRun(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
     logMsg('error', 'trigger run threw', { id: entry.def.id, error: (err as Error).message })
   })
   return sendOk(ws, id, { ran: true, started: true })
+}
+
+/**
+ * triggers.state.snapshot (trigger-state-snapshot-v1): the exact host state of ONE
+ * trigger its Walnut already disarmed, with no check or fire in flight, read from
+ * that Walnut's own state file and never written (trigger-state-snapshot-core.ts
+ * holds every rule). Runs behind any configure in flight. Every refusal is an ok
+ * reply `{supported: false, reason}`, so a caller that cannot freeze moves on.
+ * Mirror daemon-source.ts.
+ */
+function cmdTriggersStateSnapshot(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  return triggersConfigureGate.run('triggers.configure', async () => {
+    const home = walnutScope.askedHome(cmd)
+    const reply = takeTriggerStateSnapshot({
+      fs,
+      nowMs: Date.now(),
+      request: {
+        askedHome: home,
+        triggerId: cmd.triggerId,
+        socketTriggerScope: ws.data?.triggerScope,
+        socketGatewayHome: gatewayClientHomes.get(ws),
+        configuredIds: home && triggerScopes.has(home) ? triggerScopes.get(home)!.configured.map((def) => def.id) : undefined,
+        unnamedConfiguredIds: (triggerScopes.get('')?.configured ?? []).map((def) => def.id),
+      },
+      liveFacts: (h, tid) => {
+        const key = triggerKey(h, tid)
+        return {
+          armed: armedTriggers.has(key),
+          draining: drainingTriggers.has(key),
+          heldUnnamed: !!heldTrigger('', tid),
+          checkRunning: [...triggerChecksRunning].some((e) => e.def.id === tid && (e.home === h || e.home === '')),
+          hostDeliveryInFlight: hostDeliveriesInFlight.has(key) || hostDeliveriesInFlight.has(triggerKey('', tid)),
+        }
+      },
+      statePath: (h, tid) => triggerStatePath(h, tid),
+      sharedCopyMtimeMs: (tid) => {
+        try {
+          const st = fs.lstatSync(path.join(TRIGGER_STATE_DIR, triggerStateFileName(tid)))
+          return st.isFile() ? st.mtimeMs : undefined
+        } catch { return undefined }
+      },
+    })
+    logMsg('info', 'trigger state snapshot', {
+      id: typeof cmd.triggerId === 'string' ? cmd.triggerId.slice(0, 200) : '', scope: walnutScope.label(home),
+      supported: reply.supported, ...(reply.supported ? { seq: reply.state.seq, seen: reply.seenCount } : { reason: reply.reason }),
+    })
+    sendOk(ws, id, reply as unknown as Record<string, unknown>)
+  })
 }
 
 /**

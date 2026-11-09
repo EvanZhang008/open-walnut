@@ -1909,6 +1909,10 @@ rollback_to_lkg() {
     fi
     return 0
   fi
+  if ! "$BUN_BIN" "$REPO_ROOT/scripts/lib/rollback-data-check.mjs" "$lkg_path" "${REHEARSAL_HOME:-$HOME/.open-walnut}"; then
+    echo "Rollback data check failed; the last-known-good server was not started. :$PORT is left unserved." >&2
+    return 0
+  fi
   lkg="${lkg_path%/dist-bin/*}"
   if from="$(stage_lkg_for_rollback "$lkg")"; then
     lkg_path="$from/${lkg_path#"$lkg/"}"

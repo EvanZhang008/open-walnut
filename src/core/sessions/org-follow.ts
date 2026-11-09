@@ -66,6 +66,8 @@ export async function noteOrgEdge(task: Task, edge: OrgEdge): Promise<boolean> {
     let follower: Task | undefined;
     let rec: Awaited<ReturnType<typeof followerSession>> = null;
     for (const f of statusFollowersOf(task, byId, vpOf, main)) {
+      const { mayShareTaskContext } = await import('../router/context-sharing.js');
+      if (!await mayShareTaskContext(task.id, f.id)) continue;
       if (f.phase === 'COMPLETE' || f.status === 'done') continue;
       if (!f.org_role) return false;
       rec = await followerSession(f.id);
@@ -119,6 +121,8 @@ export async function orgFollowerCanHear(task: Task): Promise<boolean> {
     const { followContext, followerSession, statusFollowersOf } = await import('./status-push.js');
     const { byId, vpOf, main } = await followContext(await listTasks());
     for (const f of statusFollowersOf(task, byId, vpOf, main)) {
+      const { mayShareTaskContext } = await import('../router/context-sharing.js');
+      if (!await mayShareTaskContext(task.id, f.id)) continue;
       if (f.phase === 'COMPLETE' || f.status === 'done') continue;
       if (!f.org_role) return false;
       if (await followerSession(f.id)) return true;

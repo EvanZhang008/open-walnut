@@ -1,4 +1,5 @@
 import type { StoredBodyFormat } from './bodies.js'
+import type { MailHeadline } from './events.js'
 import type {
   Disposable,
   MailAccount,
@@ -51,6 +52,7 @@ export interface MailMessageDto {
   sentAt: number
   sentAtHeader?: string
   receivedAt?: number
+  deliveryVersion?: string
   flags: string[]
   attachments: MailAttachmentMeta[]
   hasBody: boolean
@@ -65,6 +67,34 @@ export interface MailMessageDto {
    * truth that goes stale silently. Absent means nobody has made a task from this message yet.
    */
   taskId?: string
+  /** `paused`: no router of the area reads anything now. */
+  routingArea?: { id: string; name: string; paused?: boolean }
+  /**
+   * With no area for the message: why no router has it. `no_router`: no area with a router takes its
+   * account; `unassigned`: one does, but this message has no confirmed area.
+   */
+  routingCoverage?: 'no_router' | 'unassigned'
+  routingUnavailable?: boolean
+  /** The area router's latest handoff ask for this message, only while no routing receipt exists. */
+  routingHandoff?: {
+    approvalId: string
+    status: 'pending' | 'approved' | 'denied' | 'expired' | 'canceled' | 'missing' | 'claim_incomplete'
+    at: number
+    targetTitle?: string
+  }
+  route?: {
+    areaId: string
+    status: 'routing' | 'routed' | 'not_routed' | 'failed' | 'unknown'
+    taskId?: string
+    target?: { id: string; title: string; kind: 'task' | 'vp'; available: boolean }
+    reason: string
+    at: number
+    ruleId?: string
+    error?: string
+    /** `legacy`: handled before the router and recorded after the fact; never delivered by the router. */
+    origin?: 'legacy'
+    evidence?: string
+  }
   /**
    * How this message can be unsubscribed from, and whether it already was.
    *
@@ -254,18 +284,37 @@ export const SEND_DEADLINE_MS = 30_000
 export const SEND_STUCK_MS = 5 * 60_000
 
 export interface IngestResult {
+  /** New cache rows. */
   added: number
+  /** Cache rows rewritten (a new delivery on a known handle, flags, a preview, a subject). */
   updated: number
-  headlines: Array<{ from: string; subject: string }>
   /**
-   * Of `added`, how many landed in Important or are not sorted yet, with their headlines. What a
+   * New deliveries: every added row, plus every known row whose sent or received instant moved (a
+   * conversation-shaped handle after a reply landed). A row that only changed flags or metadata is
+   * not one, and an identical listing is nothing. What `messages-received` counts. Optional so an
+   * older caller's stand-in still reads; absent means `added`.
+   */
+  received?: number
+  /** One per delivery in `received`, naming its exact cached snapshot. */
+  headlines: Array<{ from: string; subject: string; messageId?: string; version?: string; canonicalKey?: string }>
+  /**
+   * Of `received`, how many landed in Important or are not sorted yet, with their headlines. What a
    * `messages-received` announces when grouping is on (Inbox Triage reads only those).
    */
   importantAdded?: number
-  importantHeadlines?: Array<{ from: string; subject: string }>
+  importantHeadlines?: Array<{ from: string; subject: string; messageId?: string; version?: string; canonicalKey?: string }>
   /** Folders whose group counts this page moved. */
   sortedPairs?: Array<{ accountId: string; mailboxId: string }>
 }
+
+/** Settles a capture after the body prefetch: the headlines to announce at their current versions, or void to keep the ingested ones. */
+export type MailIncomingFinish = () => Promise<ReadonlyArray<MailHeadline> | void>
+
+/** Confirms one tick's arrived inbox deliveries before they are announced; a throw hides the event's headlines. */
+export type MailIncomingCapture = (
+  accountId: string,
+  headlines: ReadonlyArray<MailHeadline>,
+) => Promise<MailIncomingFinish>
 
 export interface RetentionLimits {
   retentionDays: number

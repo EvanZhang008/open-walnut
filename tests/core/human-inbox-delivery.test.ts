@@ -155,6 +155,44 @@ describe('delivery: a session parked on a permission prompt', () => {
     expect(opts).toMatchObject({ source: 'human-inbox', taskId: 'task-7' });
   });
 
+  it('never parks a letter answer in an area session: the area check runs on the fresh record', async () => {
+    const parked = {
+      claudeSessionId: SENDER.sessionId,
+      host: 'workstation',
+      pendingPermission: { requestId: 'req-9', toolName: 'Bash', receivedAt: new Date().toISOString() },
+    };
+    // The first read is ordinary; the fresh read right before the enqueue is an area session.
+    const area = { ...parked, profile: { areaId: 'personal', areaRole: 'work' } };
+    const letter = await sendLetter(letterInput({ type: 'action_required', actions: [{ id: 'ship', label: 'Ship it' }] }));
+    const answered = await answerLetter(letter.id, { actionId: 'ship', freeText: 'go' });
+    const agent = { sessionId: 'sess-lead-2', taskId: 'task-lead', name: 'Lead' };
+    for (const human of [{ choice: 'Ship it', text: 'go' }, { choice: 'Ship it', by: agent }]) {
+      getSessionByClaudeId.mockReset();
+      getSessionByClaudeId.mockResolvedValueOnce(parked).mockResolvedValueOnce(area);
+      const delivery = await deliverLetterToOrigin(answered, human);
+      expect(delivery).toMatchObject({ status: 'failed', sessionId: SENDER.sessionId });
+      expect((delivery as { reason?: string }).reason).toMatch(/not delivered into an area session/);
+    }
+    expect(enqueueMessage).not.toHaveBeenCalled();
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+    // The refusal loses nothing the person did: the answer stays on the letter.
+    expect((await getLetter(letter.id))?.answered).toMatchObject({ actionId: 'ship', freeText: 'go' });
+  });
+
+  it('fails a parked delivery whose origin record is gone by the time it would enqueue', async () => {
+    getSessionByClaudeId
+      .mockResolvedValueOnce({
+        claudeSessionId: SENDER.sessionId,
+        host: 'workstation',
+        pendingPermission: { requestId: 'req-9', toolName: 'Bash', receivedAt: new Date().toISOString() },
+      })
+      .mockResolvedValueOnce(null);
+    const delivery = await deliverLetterToOrigin(record(), { choice: 'Ship it now' });
+    expect(delivery).toMatchObject({ status: 'failed', sessionId: SENDER.sessionId });
+    expect(enqueueMessage).not.toHaveBeenCalled();
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+  });
+
   it('reports an honest status when there is nothing to deliver to', async () => {
     expect(await deliverLetterToOrigin(record({ sender: { sessionId: 'external', host: 'local' } }), {}))
       .toEqual({ status: 'skipped', reason: 'no_origin_session' });

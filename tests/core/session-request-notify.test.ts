@@ -45,6 +45,14 @@ const getQueue = vi.fn();
 
 const listTasksByIds = vi.fn();
 const getTask = vi.fn();
+/**
+ * The target tasks the requests name exist in the store, outside every incoming-item area:
+ * the area gate (router/context-sharing.ts) reads each one and withholds the quote for a task
+ * it cannot find. Only identity lives here (no area mark, no role); phase and title still come
+ * from each test's listTasksByIds.
+ */
+const TARGET_TASKS = new Set(['task-77', 'task-88', 'task-other', 'task-asker-2']);
+const targetTask = (id: string) => (TARGET_TASKS.has(id) ? { id } : undefined);
 vi.mock('../../src/core/task-manager.js', () => ({
   listTasksByIds: (...args: unknown[]) => listTasksByIds(...args),
   getTask: (...args: unknown[]) => getTask(...args),
@@ -220,6 +228,8 @@ beforeEach(() => {
   // it with its next message (held-notices.ts).
   getTask.mockImplementation(async (id: string) => {
     if (id === 'task-asker' || id === 'task-fork') return { id, phase: 'WAITING' };
+    const target = targetTask(id);
+    if (target) return target;
     throw new Error('no such task');
   });
   getQueue.mockReset();
@@ -251,6 +261,19 @@ describe('notifyRequesterFallback — the settle wins exactly once', () => {
     // The task title is embellishment on top of the settled row.
     expect(text).toContain('about="Run the migration [sess-tar]"');
     expect(text).toContain('Its turn ended WITHOUT an explicit reply');
+  });
+
+  it('a target task the store cannot find still settles the request, but its title and words stay withheld', async () => {
+    buildSessionTranscript.mockResolvedValue(transcriptOf('Rows counted: 4182.'));
+    const rq = await arm({ toTaskId: 'task-gone' });
+
+    expect(await notifyRequesterFallback(rq, 'completed')).toBe(true);
+
+    expect((await getSessionRequest(rq.id))?.status).toBe('notified');
+    const text = deliveredText();
+    expect(text).toContain(`request="${rq.id}"`);
+    expect(text).not.toContain('Run the migration');
+    expect(text).not.toContain('Rows counted: 4182.');
   });
 
   it('stays silent when the row was already settled by a reply', async () => {
@@ -755,6 +778,8 @@ describe('sessionRequestWatchHook — the parent hears about its subtask by stat
     listTasksByIds.mockResolvedValue([child]);
     getTask.mockImplementation(async (id: string) => {
       if (id === parentTask.id) return parentTask;
+      // The child exists: the area gate reads it before the parent may hear its words.
+      if (id === child.id) return { id: child.id };
       throw new Error('no such task');
     });
     buildSessionTranscript.mockResolvedValue(transcriptOf(
@@ -919,6 +944,7 @@ describe('sessionRequestWatchHook — the parent hears about its subtask by stat
     getTask.mockImplementation(async (id: string) => {
       if (id === parentTask.id) return { ...parentTask, parent_task_id: 'task-grand' };
       if (id === 'task-grand') return { id: 'task-grand', title: 'Grand', phase: 'IN_PROGRESS' };
+      if (id === child.id) return { id: child.id };
       throw new Error('no such task');
     });
     await fire();

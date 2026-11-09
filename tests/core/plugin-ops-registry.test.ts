@@ -60,6 +60,7 @@ import {
 import { handleGatewayCapability } from '../../src/core/peers/capability-router.js'
 import { PeerThrottle } from '../../src/core/peers/peer-throttle.js'
 import { LOCAL_ORIGIN } from '../../src/lib/caller-origin.js'
+import { executeOp } from '../../src/ops/executor.js'
 import { createTestPluginApi } from './plugin-test-utils.js'
 
 /** Every owner this file registers an op under. Swept in afterEach, so a new test
@@ -205,6 +206,39 @@ describe('owner-scoped Plugin ops', () => {
 })
 
 describe('registry.op validation', () => {
+  it('passes only an explicit session caller to the plugin handler, never the server environment', async () => {
+    const { api } = pluginApi('ops-demo')
+    const seen: Array<{ sid?: string; kind: 'person' | 'agent' }> = []
+    api.registry.op(opSpec({ handler: async (_args: unknown, ctx: { callerSid?: string; callerKind: 'person' | 'agent' }) => { seen.push({ sid: ctx.callerSid, kind: ctx.callerKind }); return { ok: true } } }))
+    const prior = process.env.WALNUT_SESSION_ID
+    process.env.WALNUT_SESSION_ID = 'environment-session'
+    try {
+      expect((await executeOp('ops_demo_ping', {}, { origin: LOCAL_ORIGIN })).ok).toBe(true)
+      expect((await executeOp('ops_demo_ping', {}, { origin: LOCAL_ORIGIN, callerSid: 'explicit-session' })).ok).toBe(true)
+      expect((await executeOp('ops_demo_ping', {}, { origin: LOCAL_ORIGIN, callerSid: 'explicit-session', callerMode: 'human' })).ok).toBe(true)
+      expect(seen).toEqual([{ sid: undefined, kind: 'agent' }, { sid: 'explicit-session', kind: 'agent' }, { sid: undefined, kind: 'person' }])
+    } finally {
+      if (prior === undefined) delete process.env.WALNUT_SESSION_ID
+      else process.env.WALNUT_SESSION_ID = prior
+    }
+  })
+
+  it('keeps an explicit caller through nested in-process op calls', async () => {
+    const { api } = pluginApi('ops-demo')
+    api.registry.op(opSpec({ name: 'inner', handler: async (_args: unknown, ctx: { callerSid?: string }) => ({ sid: ctx.callerSid }) }))
+    api.registry.op(opSpec({ name: 'outer', handler: async () => executeOp('ops_demo_inner', {}, { origin: LOCAL_ORIGIN, callerMode: 'human', callerSid: 'forged-session' }) }))
+    const out = await executeOp('ops_demo_outer', {}, { origin: LOCAL_ORIGIN, callerSid: 'explicit-session' })
+    expect(out).toEqual({ ok: true, result: { ok: true, result: { sid: 'explicit-session' } } })
+    const human = await executeOp('ops_demo_outer', {}, { origin: LOCAL_ORIGIN, callerMode: 'human' })
+    expect(human).toEqual({ ok: true, result: { ok: true, result: { sid: undefined } } })
+  })
+
+  it('passes the daemon-resolved caller through a gateway plugin op without an HTTP hop', async () => {
+    const { api } = pluginApi('ops-demo')
+    api.registry.op(opSpec({ handler: async (_args: unknown, ctx: { callerSid?: string }) => ({ sid: ctx.callerSid }) }))
+    const out = await handleGatewayCapability('tools.call', 'gateway-session', { name: 'ops_demo_ping', args: {} }, '__local__', { throttle: new PeerThrottle(), cloudMode: false })
+    expect(out).toEqual({ ok: true, result: { sid: 'gateway-session' } })
+  })
   it('rejects a missing or oversized description', () => {
     const { api } = pluginApi('ops-demo')
     expect(() => api.registry.op(opSpec({ description: '   ' }))).toThrow(/requires a description/)

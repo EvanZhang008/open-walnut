@@ -110,6 +110,16 @@ export async function runWatchPass(nowMs = Date.now()): Promise<string[]> {
     // Nowhere to tell the answer yet (the watcher's session is stopped): the clock restarts, no ask spent.
     const rec = await followerSession(watcher.id);
     if (!rec) { await polled(task.id); continue; }
+    // Its status line never crosses an incoming-item area (router/context-sharing.ts), to the
+    // watcher's task or to the session that would read it: no ask is spent, nothing rides.
+    const { mayShareTaskContext } = await import('../router/context-sharing.js');
+    const sharable = await mayShareTaskContext(task.id, watcher.id).catch(() => false)
+      && (rec.taskId === watcher.id || await mayShareTaskContext(task.id, rec.taskId).catch(() => false));
+    if (!sharable) {
+      log.session.info('task watch: watcher is outside the task\'s area, nothing asked or told', { taskId: task.id, watcher: w.by });
+      await polled(task.id);
+      continue;
+    }
     const sessions = (await getSessionsForTask(task.id).catch(() => [])).filter((s) => !s.archived);
     const live = sessions.find((s) => s.process_status === 'running') ?? sessions.find((s) => s.process_status === 'idle');
     // An ACP engine answers a hidden ask with a turn of its own, and a chat lane has no status.

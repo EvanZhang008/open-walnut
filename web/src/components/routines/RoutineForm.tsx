@@ -769,7 +769,7 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
           <div className="form-group">
             <label>Run with</label>
             <div className="cron-form-radio-group">
-              {executors.map((ex) => (
+              {executors.filter((ex) => !ex.internal || ex.type === executorType).map((ex) => (
                 <label key={ex.type} className="cron-form-radio" title={ex.description}>
                   <input type="radio" name="routine-executor" checked={executorType === ex.type}
                     onChange={() => pickExecutor(ex.type)} />

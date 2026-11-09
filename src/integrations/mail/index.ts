@@ -17,7 +17,12 @@ import { MailDrafts } from './drafts.js'
 import { MailEvents } from './events.js'
 import { MailFilterMover } from './mail-filter-moves.js'
 import { registerMailItemSource } from './item-source.js'
+import { readRouterAreas } from '../../core/router/areas.js'
+import { registerMailRouterSource } from './router-source.js'
+import { decorateMailRoutes } from './router-decoration.js'
+import { createMailRouterIntake } from './router-intake.js'
 import { createMailOps } from './ops.js'
+import { guardMailOps, guardMailTools, keepUnassignedMail } from './router-read-guard.js'
 import { createMailMentionSource } from './mention-source.js'
 import { MailProviderRegistry, PROVIDERS_CHANGED_EVENT } from './provider-registry.js'
 import { createMailTriggerTemplate } from './trigger-template.js'
@@ -130,7 +135,9 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   const db = openMailDatabase(walnut)
   const store = new MailStore(db)
   const unregisterItemSource = registerMailItemSource(store)
+  const routingHome = path.dirname(path.dirname(walnut.storage.dataDir))
   const bodies = new MailBodyStore(walnut.storage.dataDir)
+  const unregisterRouterSource = registerMailRouterSource(store, bodies)
   // Inbox sorting. Built before the service because ingest classifies each row it writes. The rules
   // file lives in this plugin's data dir; its poll is a HOST timer so teardown cancels it.
   const sort = new MailSortEngine({
@@ -175,6 +182,7 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
     store,
     bodies,
     providers,
+    routes: (messages) => decorateMailRoutes(messages, routingHome),
     events: {
       unreadReconciled: (event) => {
         events.unreadReconciled(event)
@@ -204,7 +212,15 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
     store, service, events, drafts, approvals, letters: walnut.letters, log: walnut.log,
   })
   // Everything that deletes, in one place, so a read path cannot reach a delete by accident.
-  const retention = new MailRetention({ store, bodies, events })
+  const retention = new MailRetention({
+    store,
+    bodies,
+    events,
+    // Exact mail items an area holds; a read error rejects, and retention then deletes nothing.
+    protectedRouterItems: async () => new Set((await readRouterAreas(routingHome)).items
+      .filter((item) => item.source.kind === 'mail')
+      .map((item) => JSON.stringify([item.source.account, item.source.message]))),
+  })
   // Mail leaving the plugin as a letter: the day's unread becomes one, through the host's own
   // `walnut.letters`, so the kernel never learns the word "mail" for it. A message no longer becomes
   // a task here: the Mail reader and the Inbox letter offer Talk to CEO / New task on it instead.
@@ -237,7 +253,8 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   // The digest rides the tick rather than a timer of its own: "is today's due" is a clock question,
   // and this plugin already owns exactly one timer. A replica arms no tick at all, which is also how
   // the digest stays off there without a second replica check.
-  sync = new MailSync({ walnut, store, service, retention, events, sends, approvals, digest, sort })
+  const captureIncoming = createMailRouterIntake({ store, home: routingHome })
+  sync = new MailSync({ walnut, store, service, retention, events, sends, approvals, digest, sort, captureIncoming })
   relistDue = (accountId) => sync.markRelistDue(accountId)
   setActiveMailSync(sync)
 
@@ -308,7 +325,18 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
     identityRevision: async (providerId, revision) => {
       if (walnut.replica) return
       try {
-        await reconcileIdentityRevision({ store, bodies, log: walnut.log }, providerId, revision)
+        await sync.resetAccountBackfill(async () => {
+          const result = await reconcileIdentityRevision({ store, bodies, log: walnut.log }, providerId, revision)
+            .catch((error: unknown) => {
+              walnut.log.warn('mail could not drop the cache a provider re-keyed', {
+                providerId, revision: revision ?? '', error: String(error).slice(0, 200),
+              })
+              return null
+            })
+          if (result && !result.swept) return []
+          // A partial wipe re-lists too, so its accounts are not announced either.
+          return (await store.listAccounts()).map((row) => row.account_id).filter((id) => id.startsWith(`${providerId}:`))
+        })
       } catch (error: unknown) {
         walnut.log.warn('mail could not drop the cache a provider re-keyed', {
           providerId, revision: revision ?? '', error: String(error).slice(0, 200),
@@ -376,11 +404,15 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
     // would register a second copy on top.
     const fresh: Array<{ dispose(): void | Promise<void> }> = []
     try {
-      for (const tool of createMailTools(agentDeps)) fresh.push(walnut.registry.tool(tool))
-      for (const op of createMailOps(agentDeps)) fresh.push(walnut.registry.op(op))
+      // Every op and tool naming an exact message judges a non-person caller's incoming-item area
+      // first: the gateway and tool belts run these in-process, past the HTTP area middleware.
+      for (const tool of guardMailTools(createMailTools(agentDeps), agentDeps, createMailTools)) fresh.push(walnut.registry.tool(tool))
+      for (const op of guardMailOps(createMailOps(agentDeps), agentDeps, createMailOps)) fresh.push(walnut.registry.op(op))
       fresh.push(walnut.registry.skill({ id: 'walnut-mail', directory: SKILL_DIR }))
       fresh.push(walnut.registry.triggerTemplate(createMailTriggerTemplate({
         store, listAccounts: () => service.listAccounts({ capabilities: false }),
+        // The watching session is judged as an agent with no area: classified mail never reaches it.
+        filterIncoming: (rows) => keepUnassignedMail(rows),
       })))
       fresh.push(walnut.registry.agentContext(line))
       // The "@" picker's Mail tab. Optional on the host: an older Walnut has no picker sources.
@@ -459,6 +491,7 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   return {
     dispose: async () => {
       unregisterItemSource()
+      unregisterRouterSource()
       accountsWatch.dispose()
       firstSyncTimer.dispose()
       retryTimer?.dispose()

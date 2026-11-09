@@ -185,6 +185,69 @@
 /* ── The detail ── */
 
 .org-detail-pane { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.org-router-setup { padding: 20px; overflow-y: auto; min-width: 0; color: var(--fg); background: var(--bg); }
+.org-router-setup > label { display: flex; flex-direction: column; gap: 6px; max-width: 480px; }
+.org-router-setup fieldset { margin: 16px 0; padding: 12px; border: 1px solid var(--border); border-radius: 8px; }
+.org-router-setup fieldset label { display: flex; align-items: center; gap: 8px; padding: 5px 0; }
+.org-router-setup p { font-size: 13px; color: var(--fg-secondary); max-width: 560px; }
+.org-router-setup .btn { margin-right: 8px; }
+/* A router's own settings (OrgRouterSettings): folded inline under its header, never a menu. Open, it
+   takes the height its form needs, up to all but the chat's floor below (.is-router-split), and a
+   taller form scrolls inside itself; the chat keeps its place in the tree either way. */
+.org-router-settings { flex: none; border-bottom: 1px solid var(--border); background: var(--bg); color: var(--fg); }
+.org-router-settings-head {
+  display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; padding: 8px 18px;
+  border: 0; background: transparent; color: inherit; font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+}
+.org-router-settings-head:hover { background: var(--bg-secondary); }
+.org-router-settings-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.org-router-settings-caret { flex: none; width: 12px; color: var(--fg-muted, #86868b); }
+.org-router-settings-title { flex: none; font-weight: 600; }
+.org-router-settings-summary { flex: 1; min-width: 0; color: var(--fg-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.org-router-settings-scroll { overflow-y: auto; }
+.org-router-settings.is-open { flex: 0 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.org-router-settings.is-open .org-router-settings-scroll { flex: 1 1 auto; min-height: 0; }
+.org-detail-split.is-router-split { min-height: 160px; }
+/* Mail's "Open router": the message, its state and the next step, under the router's header. */
+.org-router-from-mail { flex: none; padding: 8px 20px; border-bottom: 1px solid var(--border); background: var(--bg-secondary); color: var(--fg); font-size: 13px; }
+.org-router-from-mail p { margin: 0; }
+.org-router-from-mail p + p { margin-top: 4px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.org-router-from-mail-label { font-weight: 600; }
+.org-router-from-mail-state { color: var(--fg-secondary); }
+.org-chat-start-actions { display: flex; gap: 8px; }
+.org-router-sources { margin: 0; padding: 0 0 0 16px; font-size: 13px; }
+.org-router-setup-actions { display: flex; gap: 8px; margin-top: 4px; }
+.org-router-setup-actions .btn { margin-right: 0; }
+.org-router-settings-body {
+  display: flex; flex-direction: column; gap: 12px; padding: 4px 18px 14px 38px;
+}
+.org-router-rules { padding: 4px 18px 14px 38px; min-width: 0; }
+.org-router-rules h4 { margin: 0 0 6px; font-size: 13px; }
+.org-router-rules fieldset { margin: 12px 0; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; min-width: 0; }
+.org-router-rules legend { font-size: 12px; overflow-wrap: anywhere; }
+.org-router-rules .org-router-actions { margin: 12px 0; }
+.org-router-field { display: flex; flex-direction: column; gap: 4px; max-width: 520px; font-size: 13px; }
+.org-router-field input:not([type]) { max-width: 360px; }
+.org-router-label { font-weight: 600; }
+.org-router-hint { font-size: 12px; color: var(--fg-secondary); }
+.org-router-check { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 13px; }
+.org-router-check.is-stale { color: var(--fg-secondary); font-style: italic; }
+/* Many VPs: a finder above, and the list scrolls inside its own box so Save and the rules stay near. */
+.org-router-link-filter {
+  width: 100%; max-width: 320px; margin: 0 0 6px; padding: 5px 8px; font: inherit; font-size: 13px;
+  color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+}
+.org-router-link-filter:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+.org-router-link-list { max-height: 228px; overflow-y: auto; }
+.org-router-links { margin: 0; padding: 10px 12px; max-width: 520px; border: 1px solid var(--border); border-radius: 8px; }
+.org-router-links legend { padding: 0 4px; font-size: 13px; font-weight: 600; }
+.org-router-links > .org-router-hint { margin: 0 0 6px; }
+.org-router-warn { margin: 6px 0 0; font-size: 12px; color: var(--warning, #b25000); }
+.org-router-error { margin: 0; font-size: 12px; color: var(--error, #d70015); }
+.org-router-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.org-page.is-phone .org-router-settings-head { padding: 8px 12px; }
+.org-page.is-phone .org-router-settings-body,
+.org-page.is-phone .org-router-rules { padding: 4px 12px 12px; }
 .org-detail { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .org-detail-head {
   display: flex;

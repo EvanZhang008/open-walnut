@@ -69,8 +69,8 @@ export class CronService {
     return await ops.add(this.state, input, opts);
   }
 
-  async update(id: string, patch: CronJobPatch): Promise<CronJob> {
-    return await ops.update(this.state, id, patch);
+  async update(id: string, patch: CronJobPatch, opts?: { expectedRevision?: string }): Promise<CronJob> {
+    return await ops.update(this.state, id, patch, opts);
   }
 
   async remove(id: string): Promise<{ ok: boolean; removed: boolean }> {

@@ -1495,6 +1495,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     log.web.warn('orphan recovery skipped', { error: err instanceof Error ? err.message : String(err) })
   }
 
+  // Confirm rollback protection before any isolated work can start; an empty registry stamps nothing.
+  if (!isHostReplica() && !isCompanion()) {
+    const { readRouterAreas, ensureAreasDataVersion } = await import('../core/router/areas.js')
+    if ((await readRouterAreas(WALNUT_HOME)).areas.length > 0) await ensureAreasDataVersion(WALNUT_HOME)
+  }
+
   // Start local daemon for session management. All sessions (local + remote)
   // go through a daemon — local uses the daemon on this machine, remote uses
   // a daemon on the SSH target. Must be running before any createSessionManager().
@@ -1744,6 +1750,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // An ACP session's `walnut` names itself by its worker's runtime id: the caller header
   // reads as that session's record id from here on (core/sessions/acp-caller-sid.ts).
   app.use('/api', (await import('../core/sessions/acp-caller-sid.js')).acpCallerSidMiddleware)
+  app.use('/api', (await import('./middleware/router-area-access.js')).routerAreaAccess)
+  app.use('/api', (await import('./middleware/router-area-reader.js')).routerAreaReader)
   // A host replica answering alone (the Mac away, no companion standing in): a
   // session that runs on the Mac (or another host) cannot be read here beyond
   // its row; its reads answer needs_leader. This host's sessions are WP6's
@@ -2006,6 +2014,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // Also needs no cron deps.
     const { createSessionExecutor } = await import('../core/routines/executors/session.js')
     registerExecutor(createSessionExecutor())
+    // The area routers' wake: the router:pending template and the router executor (core/router/wake.ts).
+    const { registerRouterWake } = await import('../core/router/wake.js')
+    registerRouterWake()
   }
 
   // ── Routine wake: the counter half of a trigger ──
@@ -6138,6 +6149,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       log.cron.warn('routine start pickup failed', { error: err instanceof Error ? err.message : String(err) })
     }
     await cronService.start()
+    // The routers' wakes follow their tasks once the engine and the router:pending template are up (core/router/wake.ts).
+    if (!IS_EPHEMERAL && !isCompanion()) {
+      const { reconcileRouterWakes, routerWakeRegistered } = await import('../core/router/wake.js')
+      void reconcileRouterWakes({ isLive: routerWakeRegistered }).catch((err) => {
+        log.cron.warn('router wakes not reconciled', { error: err instanceof Error ? err.message : String(err) })
+      })
+    }
   })().catch((err) => {
     log.cron.error('failed to start cron service', { error: err instanceof Error ? err.message : String(err) })
   })
@@ -7061,6 +7079,10 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   await pluginMutationTail.catch(() => undefined)
   await stopPluginSyncPolling()
   try { await disposeLoadedPlugins(registry) } catch { /* best-effort shutdown */ }
+  const { disposeRouterWake } = await import('../core/router/wake.js')
+  disposeRouterWake()
+  const { disposeRouterStores } = await import('../core/router/runtime.js')
+  await disposeRouterStores()
   // A plugin's dispose closes its MCP servers; this catches one whose plugin never finished
   // disposing, so no server process outlives Walnut.
   try {

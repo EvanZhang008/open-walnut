@@ -33,6 +33,9 @@ const PROJECT = 'Marina';
 
 beforeEach(async () => {
   closeDb();
+  // A refine from the previous test can reopen the session store after its afterEach closed it;
+  // wiping the files under that open handle makes the next task write's history read fail.
+  (await import('../../src/core/session-db.js')).closeDb();
   _resetForTesting();
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
   forkTitle.summarizeForkPrompt.mockClear();

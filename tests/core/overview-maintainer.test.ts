@@ -16,6 +16,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { createMockConstants } from '../helpers/mock-constants.js';
 import { removeTempTree } from '../helpers/temp-home.js';
+import { seedLegacySession } from '../helpers/router-history-fixtures.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants());
 
@@ -37,6 +38,21 @@ import {
   type MaintainerRunner,
 } from '../../src/core/overview-maintainer.js';
 import type { Task } from '../../src/core/types.js';
+import { addTask, updateTaskRaw, _resetForTesting as resetTasks } from '../../src/core/task-manager.js';
+import { _resetSessionTrackerForTesting } from '../../src/core/session-tracker.js';
+import * as sessionTracker from '../../src/core/session-tracker.js';
+import { closeDb as closeTaskDb } from '../../src/core/task-db.js';
+import { closeDb as closeSessionDb } from '../../src/core/session-db.js';
+import { routerAreasPath, updateRouterAreas } from '../../src/core/router/areas.js';
+import { randomUUID } from 'node:crypto';
+
+/** The area check opens the task and session stores in WALNUT_HOME: close them before the tree goes. */
+function closeStores(): void {
+  closeTaskDb();
+  closeSessionDb();
+  resetTasks();
+  _resetSessionTrackerForTesting();
+}
 
 /** Skill grouping directory (NOT a task category) the fixtures live under. */
 const SKILL_CAT = 'work';
@@ -98,6 +114,7 @@ function logOnly(text = 'Started the history.db index workstream.'): MaintainerR
 }
 
 beforeEach(async () => {
+  closeStores();
   await removeTempTree(WALNUT_HOME);
   await fsp.mkdir(WALNUT_HOME, { recursive: true });
   vi.clearAllMocks();
@@ -110,6 +127,7 @@ afterEach(async () => {
   // otherwise run the maintainer (writing skills/ + notifications.json) into
   // the tree being deleted → `ENOTEMPTY: rmdir .../walnut-test-*`.
   stopOverviewMaintainer();
+  closeStores();
   await removeTempTree(WALNUT_HOME);
 });
 
@@ -419,5 +437,141 @@ describe('bus wiring', () => {
     const ran = await maybeRunForTaskEvent(EventNames.TASK_CREATED, task, 'api', runner);
     expect(ran).toBe(false);
     expect(runner).not.toHaveBeenCalled();
+  });
+});
+
+describe('incoming-item areas', () => {
+  let seeded = '';
+  beforeEach(async () => {
+    await seedProjectSkill();
+    seeded = fs.readFileSync(SKILL_FILE, 'utf-8');
+  });
+
+  const stored = async (title = 'Area work'): Promise<Task> => (await addTask({ title, project: PROJECT })).task;
+  const mark = (id: string, patch: Record<string, unknown>) =>
+    updateTaskRaw(id, patch as Partial<Task>, { source: 'router-areas', emitEvent: false });
+  /** No model call, no history entry, the project skill as it was. */
+  const wroteNothing = (runner: MaintainerRunner) => {
+    expect(runner).not.toHaveBeenCalled();
+    expect(fs.existsSync(LOG_FILE)).toBe(false);
+    expect(fs.readFileSync(SKILL_FILE, 'utf-8')).toBe(seeded);
+  };
+  const lifecycle = [EventNames.TASK_CREATED, EventNames.TASK_COMPLETED];
+
+  it('skips a task marked on the event copy, from any source, created or completed', async () => {
+    const runner = logOnly();
+    for (const event of lifecycle) {
+      for (const source of ['api', 'router-work', 'router-runtime', 'web-ui', '']) {
+        expect(await maybeRunForTaskEvent(event, makeTask({ id: `marked-${event}-${source}`, router_area_id: 'personal' }), source, runner)).toBe(false);
+        expect(await maybeRunForTaskEvent(event, makeTask({ id: `router-${event}-${source}`, org_role: 'router' }), source, runner)).toBe(false);
+      }
+    }
+    wroteNothing(runner);
+  });
+
+  it('reads the stored task: a stale unmarked event copy of a marked task is skipped', async () => {
+    const task = await stored();
+    const copy = { ...task };
+    await mark(task.id, { router_area_id: 'personal' });
+    const runner = logOnly();
+    for (const event of lifecycle) expect(await maybeRunForTaskEvent(event, copy, 'api', runner)).toBe(false);
+    wroteNothing(runner);
+  });
+
+  it('skips a task only the registry lists', async () => {
+    const task = await stored();
+    await updateRouterAreas(WALNUT_HOME, () => ({
+      version: 1, routers: [], items: [],
+      areas: [{ id: 'personal', name: 'Personal', host: '__local__', taskIds: [task.id], sources: [] }],
+    }));
+    const runner = logOnly();
+    for (const event of lifecycle) expect(await maybeRunForTaskEvent(event, task, 'api', runner)).toBe(false);
+    wroteNothing(runner);
+  });
+
+  it('skips a task only a session profile names', async () => {
+    const task = await stored();
+    await seedLegacySession(randomUUID(), task.id, PROJECT, '/tmp', { profile: { areaId: 'personal' }, initialProcessStatus: 'running' });
+    const runner = logOnly();
+    for (const event of lifecycle) expect(await maybeRunForTaskEvent(event, task, 'api', runner)).toBe(false);
+    wroteNothing(runner);
+  });
+
+  it('checks again after the queue: a task classified while it waited never reaches the model', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const first: MaintainerRunner = vi.fn(async () => { await gate; return { response: JSON.stringify({ log: 'First entry.' }) }; });
+    const queued = await stored('Queued work');
+    const queuedRunner = logOnly('Queued entry.');
+    const a = maybeRunForTaskEvent(EventNames.TASK_CREATED, makeTask({ id: 'queue-first' }), 'api', first);
+    await vi.waitFor(() => expect(first).toHaveBeenCalled());
+    let initialScopeRead = false;
+    let reachedQueue = false;
+    const readSessions = sessionTracker.getSessionsForTask;
+    const scopeRead = vi.spyOn(sessionTracker, 'getSessionsForTask').mockImplementation(async (id) => {
+      const records = await readSessions(id);
+      if (id === queued.id) initialScopeRead = true;
+      return records;
+    });
+    const eventCopy = { ...queued, get project() {
+      // This lookup follows the first scope check; the same stack then installs the queue tail.
+      if (initialScopeRead) reachedQueue = true;
+      return queued.project;
+    } };
+    const b = maybeRunForTaskEvent(EventNames.TASK_CREATED, eventCopy, 'api', queuedRunner);
+    try {
+      await vi.waitFor(() => expect(reachedQueue).toBe(true));
+      await mark(queued.id, { router_area_id: 'personal' });
+      release();
+      expect(await a).toBe(true);
+      expect(await b).toBe(false);
+      expect(queuedRunner).not.toHaveBeenCalled();
+      const logged = fs.readFileSync(LOG_FILE, 'utf-8');
+      expect(logged).toContain('First entry.');
+      expect(logged).not.toContain('Queued entry.');
+    } finally {
+      release();
+      scopeRead.mockRestore();
+      await Promise.allSettled([a, b]);
+    }
+  });
+
+  it('checks again before writing: a task classified while the model answered writes nothing', async () => {
+    const task = await stored();
+    const runner: MaintainerRunner = vi.fn(async () => {
+      await mark(task.id, { router_area_id: 'work' });
+      return { response: JSON.stringify({ log: 'Late entry.', skill: `${SEED_BODY}\n\nLATE_SKILL_CANARY` }) };
+    });
+    expect(await maybeRunForTaskEvent(EventNames.TASK_COMPLETED, task, 'api', runner)).toBe(false);
+    expect(runner).toHaveBeenCalledTimes(1);
+    expect(fs.existsSync(LOG_FILE)).toBe(false);
+    expect(fs.readFileSync(SKILL_FILE, 'utf-8')).toBe(seeded);
+  });
+
+  it('fails closed while the registry cannot be read, and runs again once it can', async () => {
+    const file = routerAreasPath(WALNUT_HOME);
+    await fsp.mkdir(path.dirname(file), { recursive: true });
+    await fsp.writeFile(file, '{ not json');
+    const blocked = logOnly();
+    expect(await maybeRunForTaskEvent(EventNames.TASK_CREATED, makeTask({ id: 'registry-bad' }), 'api', blocked)).toBe(false);
+    wroteNothing(blocked);
+    await fsp.rm(file);
+    const runner = logOnly('Registry readable again.');
+    expect(await maybeRunForTaskEvent(EventNames.TASK_CREATED, makeTask({ id: 'registry-ok' }), 'api', runner)).toBe(true);
+    expect(fs.readFileSync(LOG_FILE, 'utf-8')).toContain('Registry readable again.');
+  });
+
+  it('runs an ordinary stored task as before, beside area work', async () => {
+    const area = await stored('Area neighbour');
+    await updateRouterAreas(WALNUT_HOME, () => ({
+      version: 1, routers: [], items: [],
+      areas: [{ id: 'personal', name: 'Personal', host: '__local__', taskIds: [area.id], sources: [] }],
+    }));
+    await seedLegacySession(randomUUID(), area.id, PROJECT, '/tmp', { profile: { areaId: 'personal' }, initialProcessStatus: 'running' });
+    const ordinary = await stored('Ordinary work');
+    const runner = logOnly('Ordinary entry.');
+    expect(await maybeRunForTaskEvent(EventNames.TASK_COMPLETED, ordinary, 'api', runner)).toBe(true);
+    expect(runner).toHaveBeenCalledTimes(1);
+    expect(fs.readFileSync(LOG_FILE, 'utf-8')).toContain('Ordinary entry.');
   });
 });

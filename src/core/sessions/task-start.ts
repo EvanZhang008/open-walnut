@@ -6,8 +6,10 @@ import { createSessionRecord, getSessionsForTask, updateSessionRecord } from '..
 import { QuickStartError } from './quick-start.js';
 import { continueTaskConversation, detachTaskSession, taskConversation } from './task-session-claim.js';
 import { stableJson } from '../task-create-idempotency.js';
-import type { Task, EngineFallbackNote, SessionEffort, SessionEngine, SessionMode } from '../types.js';
+import type { Task, EngineFallbackNote, SessionEffort, SessionEngine, SessionMode, SessionProfile, SessionRecord } from '../types.js';
 import type { FallbackDecision } from '../agents/fallback-engine.js';
+import type { RouterArea } from '../router/areas.js';
+import { isRouterAreaSession, routerAreaProfile, runsAreaProfile } from '../router/session-policy.js';
 import { engineCaps, isAcpEngine, normalizeEngine, resolveEngine } from '../agents/engine-registry.js';
 import { isDaemonCommandOutcomeUnknown } from '../../providers/delivery-failure.js';
 import { log } from '../../logging/index.js';
@@ -271,6 +273,17 @@ async function startSessionForTaskNow(params: SessionStartParams): Promise<Sessi
   }
   await refuseStartOfRetiredLead(task, params.callerSid);
   await refuseOrgStartWhileOff(task, params.source, params.callerSid);
+  // A router area task runs only in its isolated profile, on this machine, in its own directory.
+  const area = await routerAreaStart(task, params);
+  if (area) params = area.params;
+  if (params.callerSid) {
+    const { resolveCaller } = await import('./session-send-core.js');
+    const caller = await resolveCaller(params.callerSid);
+    if (caller.kind === 'session' && caller.record.taskId) {
+      const { mayShareTaskContext } = await import('../router/context-sharing.js');
+      if (!await mayShareTaskContext(caller.record.taskId, task.id)) throw areaRefusal('cross_area', 'A start cannot carry context across an incoming-item area. Nothing was started.');
+    }
+  }
   if (params.source !== 'engine-switch') {
     const { isSwitching } = await import('./engine-switch.js');
     if (isSwitching(task.id)) {
@@ -294,7 +307,9 @@ async function startSessionForTaskNow(params: SessionStartParams): Promise<Sessi
   }
   // Resolved before the duplicate check: on the normal path nothing awaits between
   // that check and taking the slot below, or two concurrent starts both get through.
-  const inherited = params.engine !== undefined ? undefined : await inheritedEngine(task, params);
+  // An area task is always Claude Code: the default engine of the install never applies to it.
+  const inherited = area ? undefined
+    : params.engine !== undefined ? undefined : await inheritedEngine(task, params);
   const engine = params.engine !== undefined ? normalizeEngine(params.engine) : inherited?.engine;
   // The fallback's model rides only this launch (prepareLaunch below): a start that waits for its
   // workspace or a slot replays the start as asked, and decides again then.
@@ -309,7 +324,7 @@ async function startSessionForTaskNow(params: SessionStartParams): Promise<Sessi
     const made = await startInNewWorkspace(task, params, params.workspace);
     if (made) return made;
   }
-  if (willDeferStart(task, params)) {
+  if (!area && willDeferStart(task, params)) {
     // Its host's slot is taken when the workspace is ready and the start runs (manager.ts).
     await checkUserRequest(task, params.callerSid, params.userRequest);
     const deferred = await deferTaskStart(task, params);
@@ -328,6 +343,8 @@ async function startSessionForTaskNow(params: SessionStartParams): Promise<Sessi
   try {
     await checkUserRequest(task, params.callerSid, params.userRequest);
     const records = await getSessionsForTask(task.id);
+    // Before anything below may cancel, retire, unarchive or resume one of them.
+    if (area) refuseForeignAreaSessions(task, area.area, records);
     const live = records.find((s) => !s.archived && LIVE_STATUSES.has(s.process_status));
     const previous = records.find((s) => s.claudeSessionId === task.last_start?.session_id);
     const interrupted = (record: typeof previous) => !!record && record.claudeSessionId === task.last_start?.session_id
@@ -397,11 +414,12 @@ async function startSessionForTaskNow(params: SessionStartParams): Promise<Sessi
         }
       }
     }
-    const launch = await prepareLaunch(task, { ...params, engine, ...(fallback?.model ? { model: fallback.model } : {}) });
+    const launch = await prepareLaunch(task, { ...params, engine, ...(fallback?.model ? { model: fallback.model } : {}) }, area);
     // An engine switch's own start leaves the note to the switch: it clears it once it is done.
     if (params.source !== 'engine-switch') await noteEngineFallback(task, fallback?.note);
-    // A first start that names no host goes where there is room (start-placement.ts). One that
-    // runs on the fallback stays where the default engine is out of usage: the decision was its.
+    // A first start that names no host goes where there is room (start-placement.ts); an area task
+    // stays here. One that runs on the fallback stays where the default engine is out of usage: the
+    // decision was its.
     // A slot on the host it runs on; an automatic start fails when that host is full (its caller
     // reads why). A move takes its slot on the target before anything is set up there (review
     // round 3: a refused start left a new clone behind on every try). Nothing waits here, so
@@ -411,7 +429,7 @@ async function startSessionForTaskNow(params: SessionStartParams): Promise<Sessi
     const slotOpts = { automatic };
     let moveSlot: ((holdMs?: number) => void) | undefined;
     const { placeStartByLoad } = await import('./start-placement.js');
-    const placement = fallback ? undefined : await placeStartByLoad(task, params, launch, engine, {
+    const placement = area || fallback ? undefined : await placeStartByLoad(task, params, launch, engine, {
       admit: async (host) => (moveSlot = await admitHostStart(task.id, host, slotOpts)),
     });
     if (placement?.moved && moveSlot) releaseAdmission = moveSlot;
@@ -493,15 +511,16 @@ async function startSessionForTaskNow(params: SessionStartParams): Promise<Sessi
         }
         if (sid) {
           await createSessionRecord(sid, task.id, task.project ?? '', launch.cwd, {
-            title: task.title, host: launch.host, mode: params.mode as SessionMode | undefined,
+            title: task.title, host: launch.host, mode: launch.mode as SessionMode | undefined,
             ...(launch.effort ? { effort: launch.effort } : {}),
+            ...(launch.profile ? { profile: launch.profile } : {}),
             engine, initialProcessStatus: 'idle', initialStatusReason: 'awaiting_spawn',
           });
           seeded = true;
           await linkSession(task.id, sid);
           // A start is an ask too: one from outside the task's team is its VP's to know, as a
           // message is (team-asks.ts; org_send `task` starts a team task that has no session).
-          if (caller?.kind === 'session' && launch.message) {
+          if (!area && caller?.kind === 'session' && launch.message) {
             const { buildPeerWrapper } = await import('../peers/peer-wrapper.js');
             const { senderTitleOf } = await import('../peers/sender-name.js');
             const envelope = buildPeerWrapper(launch.message, {
@@ -528,7 +547,7 @@ async function startSessionForTaskNow(params: SessionStartParams): Promise<Sessi
         // provider-issued id (an ACP engine) is known only once it started: told under it then. A
         // start with no message (an idle engine switch) runs no turn: the next message carries it.
         const { pendingAppState } = await import('./app-state.js');
-        const appState = firstMessage.trim() ? await pendingAppState(runtimeId, firstMessage, Date.now(), { taskId: task.id }) : null;
+        const appState = !area && firstMessage.trim() ? await pendingAppState(runtimeId, firstMessage, Date.now(), { taskId: task.id }) : null;
         if (appState) firstMessage = `${appState.text}\n\n${firstMessage}`;
         const starting = spawnStill = sessionRunner.startSession({ ...launch, message: firstMessage, namingMessage: startBody, attributed: true, preassignedSessionId: sid, runtimeId: sid ? undefined : runtimeId, waitForSpawn: true }).then(async (ready) => {
           appState?.markTold(ready.claudeSessionId);
@@ -863,7 +882,99 @@ async function startInNewWorkspace(
   return made ? { ...made, applied: pendingApplied(params) } : null;
 }
 
-async function prepareLaunch(task: Task, params: SessionStartParams) {
+/** A start of a task in a router area: the area, the isolated profile, and the start pinned to its place. */
+interface RouterAreaStart {
+  area: RouterArea;
+  profile: SessionProfile;
+  cwd: string;
+  params: SessionStartParams;
+}
+
+const areaRefusal = (code: string, message: string, status = 409) => new QuickStartError(message, status, { code, error: message });
+
+/**
+ * Router areas (router/areas.ts) keep Personal and Work apart: their tasks read outside content the
+ * ordinary global toolbelt must never see. Such a task starts only on Claude Code, in dontAsk mode,
+ * with the area's own profile (router/session-policy.ts), on this machine (a slim profile is local
+ * only), in its own task directory; any other engine, mode, host, folder or workspace is refused,
+ * never silently replaced. Null for a task in no area: its start is unchanged.
+ */
+async function routerAreaStart(task: Task, params: SessionStartParams): Promise<RouterAreaStart | null> {
+  const { readRouterAreas, taskArea } = await import('../router/areas.js');
+  const { WALNUT_HOME } = await import('../../constants.js');
+  let file: Awaited<ReturnType<typeof readRouterAreas>>;
+  try {
+    file = await readRouterAreas(WALNUT_HOME);
+  } catch (err) {
+    if (!task.router_area_id && task.org_role !== 'router') return null;
+    throw areaRefusal('router_areas_unreadable', `This task's router area could not be read: ${err instanceof Error ? err.message : String(err)}`, 503);
+  }
+  const area = taskArea(file, task.id);
+  if (task.router_area_id && task.router_area_id !== area?.id) throw areaRefusal('router_area_mismatch', 'The task and its configured area disagree. Nothing was started.');
+  if (!area && (task.router_area_id || task.org_role === 'router')) throw areaRefusal('router_unassigned', 'This scoped task has no matching area. Finish its router setup before starting it.');
+  if (!area) return null;
+  if (task.router_area_id !== area.id || task.source !== 'local'
+    || file.routers.some((router) => router.taskId === task.id) !== (task.org_role === 'router')) {
+    throw areaRefusal('router_area_mismatch', 'The task does not match its configured local area role. Nothing was started.');
+  }
+  if (area.host !== '__local__') {
+    throw areaRefusal('area_host_unsupported', `Task ${task.id} belongs to router area ${area.id} on host "${area.host}"; an isolated area session runs only on this machine for now.`);
+  }
+  if (params.engine !== undefined && !runsAreaProfile(params.engine)) {
+    throw areaRefusal('area_engine_unsupported', `Task ${task.id} belongs to router area ${area.id}, whose sessions run only on Claude Code.`);
+  }
+  if (params.mode !== undefined && params.mode !== 'dontAsk') {
+    throw areaRefusal('area_mode_unsupported', `Task ${task.id} belongs to router area ${area.id}, whose sessions run only in dontAsk mode.`);
+  }
+  if (params.host !== undefined && !LOCAL_ALIASES.has(params.host)) {
+    throw areaRefusal('area_host_unsupported', `Task ${task.id} belongs to router area ${area.id} and runs only on this machine, not on "${params.host}".`);
+  }
+  if (params.workspace || params.createCwd) {
+    throw areaRefusal('area_place_fixed', `Task ${task.id} belongs to router area ${area.id} and runs only in its own task directory.`);
+  }
+  const { link } = await import('../hosts/link.js');
+  if (!(await link('__local__')).hasCapability('walnut-mcp-v1')) {
+    throw areaRefusal('area_tools_unavailable', 'This daemon cannot serve isolated routing tools. Update Walnut before starting this area conversation.');
+  }
+  const { taskDirForHost } = await import('./task-dir-place.js');
+  const cwd = await taskDirForHost(task.id, '__local__');
+  if (!cwd) throw areaRefusal('area_place_fixed', `Task ${task.id} has no task directory on this machine.`, 500);
+  if (params.cwd !== undefined && path.resolve(params.cwd) !== path.resolve(cwd)) {
+    throw areaRefusal('area_place_fixed', `Task ${task.id} belongs to router area ${area.id} and runs only in its own task directory, not in ${params.cwd}.`);
+  }
+  return {
+    area, profile: routerAreaProfile(area.id, file.routers.some((router) => router.taskId === task.id) ? 'router' : 'work'), cwd,
+    params: { ...params, engine: undefined, mode: 'dontAsk', host: '__local__', cwd },
+  };
+}
+
+/**
+ * An area task's sessions must all carry its isolated profile. One that does not (made before the
+ * task joined the area, or with another profile) has seen context outside the area: it is never
+ * continued, resumed, retired or replaced by a start; the refusal leaves it as it is.
+ */
+function refuseForeignAreaSessions(task: Task, area: RouterArea, records: SessionRecord[]): void {
+  const foreign = records.find((r) => !isRouterAreaSession(r, area, task.org_role === 'router' ? 'router' : 'work'));
+  if (!foreign) return;
+  throw new QuickStartError(
+    `Task ${task.id} belongs to router area ${area.id}, but its session ${foreign.claudeSessionId} was not started isolated in that area. `
+    + 'It is left untouched; route the area\'s work through a new task in the area.', 409,
+    { code: 'area_session_not_isolated', error: 'area_session_not_isolated', sessionId: foreign.claudeSessionId, areaId: area.id });
+}
+
+async function prepareLaunch(task: Task, params: SessionStartParams, area?: RouterAreaStart | null) {
+  if (area) {
+    // Its own task directory on this machine and its profile, whatever the task or project recorded.
+    const { taskId, project, model, effort, message } = await resolveTaskLaunchReadOnly(task, { ...params, workspace: undefined });
+    const { ensureTaskDirOnHost } = await import('./task-dir-place.js');
+    const made = await ensureTaskDirOnHost(task.id, '__local__');
+    if ('error' in made) throw new QuickStartError(`Task ${task.id} could not make its task directory (${made.error}).`, made.status);
+    if (path.resolve(made.path) !== path.resolve(area.cwd)) throw areaRefusal('area_place_fixed', `Task ${task.id}'s task directory moved while it started; retry.`);
+    return {
+      taskId, project, cwd: area.cwd, host: '', model, mode: 'dontAsk' as const, ...(effort ? { effort } : {}),
+      engine: undefined, message, profile: area.profile,
+    };
+  }
   const launch = await resolveTaskLaunchReadOnly(task, params);
   if (params.createCwd && !launch.createTaskDir) {
     // Same sanitize rule as the quick-start route: this path may ride a daemon RPC.
@@ -878,5 +989,5 @@ async function prepareLaunch(task: Task, params: SessionStartParams) {
     if ('error' in made) throw new QuickStartError(`Task ${task.id} needs a cwd on host "${launch.host}": its task directory there could not be made (${made.error}). Pass cwd.`, made.status);
   }
   const { createTaskDir, ...resolved } = launch;
-  return resolved;
+  return { ...resolved, profile: undefined as SessionProfile | undefined };
 }

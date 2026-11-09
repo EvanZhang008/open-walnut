@@ -14,11 +14,11 @@ export async function runPassCommand(argv: string[]): Promise<void> {
     process.exitCode = PASS_EXIT.error
     return
   }
-  const { cliAutomationSender } = await import('../lib/cli-sender.js')
-  const sender = cliAutomationSender()
+  const { cliOpCaller } = await import('../lib/cli-sender.js')
+  const caller = cliOpCaller()
   process.exitCode = await runPass(parsed, {
     call: async (name, args) => {
-      const r = await executeOp(name, args, { origin: LOCAL_ORIGIN, ...(sender ? { sender } : {}) })
+      const r = await executeOp(name, args, { origin: LOCAL_ORIGIN, ...caller })
       return r.ok ? { ok: true, result: r.result } : opFailure(r.message)
     },
     say: (line) => console.error(line),

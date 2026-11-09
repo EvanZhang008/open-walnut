@@ -19,6 +19,7 @@ import {
   deleteTask,
   deleteTasksByIds,
   mergeTasksInto,
+  AreaMergeRefusedError,
   ActiveSessionError,
   InvalidProjectNameError,
   InvalidFocusTierError,
@@ -1732,6 +1733,19 @@ tasksRouter.post('/:id/merge', async (req: Request, res: Response, next: NextFun
       ...(notMerged.length > 0 ? { not_merged: notMerged } : {}),
     })
   } catch (err) {
+    if (err instanceof AreaMergeRefusedError) {
+      // 409 either way; a refusal after earlier victims merged says which ones (they stay merged).
+      const partial = err.partial
+      res.status(err.status).json({
+        error: err.message, code: err.code, role: err.role, task_id: err.taskId,
+        merged: partial?.mergedIds.length ?? 0,
+        ...(partial && partial.mergedIds.length > 0 ? { merged_ids: partial.mergedIds, sessions_relinked: partial.sessionsRelinked } : {}),
+        refused: [{ id: err.taskId, role: err.role }],
+        ...(partial && partial.notMerged.length > 0 ? { not_merged: partial.notMerged } : {}),
+        ...(partial && partial.notAttempted.length > 0 ? { not_attempted: partial.notAttempted } : {}),
+      })
+      return
+    }
     const msg = err instanceof Error ? err.message : String(err)
     if (msg.includes('No task found matching')) {
       res.status(404).json({ error: msg })

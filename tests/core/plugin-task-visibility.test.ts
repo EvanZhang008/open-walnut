@@ -32,7 +32,14 @@ describe('plugin task visibility', () => {
     expect(pluginOnlyForCaller(' plugin:practice ')).toBe('practice')
     // A session's sid, an unknown plugin, an empty id, nothing at all.
     for (const sid of ['c0ffee-session', 'plugin:other', 'plugin:', '', undefined, null]) expect(pluginOnlyForCaller(sid)).toBeUndefined()
+    // The plugin a call was made through (x-walnut-plugin-id) answers for a person and a session alike,
+    // and when named it decides alone: a sid naming another plugin changes nothing.
+    expect(pluginOnlyForCaller(undefined, 'practice')).toBe('practice')
+    expect(pluginOnlyForCaller('c0ffee-session', ' practice ')).toBe('practice')
+    expect(pluginOnlyForCaller('plugin:practice', 'other')).toBeUndefined()
+    expect(pluginOnlyForCaller('plugin:practice', '')).toBe('practice')
     undo()
+    expect(pluginOnlyForCaller(undefined, 'practice')).toBeUndefined()
     expect(pluginOnlyForCaller('plugin:practice')).toBeUndefined()
   })
 

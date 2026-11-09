@@ -88,6 +88,32 @@ describe('darwin identity: the Mach-O edit', () => {
     fs.rmSync(dir, { recursive: true, force: true })
   })
 
+  it('leaves every darwin file byte-for-byte unchanged when the cross-host signer is unavailable', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'macho-id-'))
+    try {
+      for (const name of Object.keys(DARWIN_IDENTITY)) {
+        const file = path.join(dir, name)
+        const before = fakeMacho(Buffer.alloc(16))
+        fs.writeFileSync(file, before)
+        expect(() => stampDarwinIdentity(file, name, { platform: 'linux', run: () => { throw new Error('missing signer') } }))
+          .toThrow(expect.objectContaining({ code: 'signer_unavailable' }))
+        expect(fs.readFileSync(file)).toEqual(before)
+      }
+    } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  it('an available signer that fails to sign is never treated as an unavailable signer', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'macho-id-'))
+    const file = path.join(dir, 'daemon-darwin-arm64')
+    fs.writeFileSync(file, fakeMacho(Buffer.alloc(16)))
+    const failed = new Error('signature failed')
+    try {
+      expect(() => stampDarwinIdentity(file, 'daemon-darwin-arm64', { platform: 'linux', run: (_cmd: string, args: string[]) => {
+        if (args[0] === 'sign') throw failed
+      } })).toThrow(failed)
+    } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+  })
+
   it('refuses what it cannot edit safely: a fat file, no LC_UUID', () => {
     const fat = Buffer.alloc(64); fat.writeUInt32BE(0xcafebabe, 0)
     expect(() => uuidOffset(fat)).toThrow(/thin 64-bit/)

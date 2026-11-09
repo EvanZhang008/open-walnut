@@ -96,6 +96,17 @@ describe('execute routes through executeOp', () => {
     expect(result).toBe(JSON.stringify({ count: 1, tasks: [{ id: 'abc' }] }, null, 2));
   });
 
+  it('passes explicit caller metadata and never treats an anonymous watcher as a person', async () => {
+    executeOp.mockResolvedValue({ ok: true, result: [] });
+    const read = await tool('task_list');
+    await read.execute({}, { source: 'cron' });
+    expect(executeOp).toHaveBeenLastCalledWith('task_list', {}, { origin: LOCAL_ORIGIN });
+    await read.execute({}, { callerSid: 'fixture-session', callerKind: 'agent' });
+    expect(executeOp).toHaveBeenLastCalledWith('task_list', {}, { origin: LOCAL_ORIGIN, callerSid: 'fixture-session' });
+    await read.execute({}, { callerKind: 'person' });
+    expect(executeOp).toHaveBeenLastCalledWith('task_list', {}, { origin: LOCAL_ORIGIN, callerMode: 'human' });
+  });
+
   it('passes {} when the model sends no params at all', async () => {
     executeOp.mockResolvedValue({ ok: true, result: [] });
 

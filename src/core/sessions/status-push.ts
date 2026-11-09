@@ -261,6 +261,7 @@ export async function flushStatusPush(now = Date.now()): Promise<number> {
       }
     }
     const { getSessionByClaudeId } = await import('../session-tracker.js');
+    const { mayShareTaskContext } = await import('../router/context-sharing.js');
     let sent = 0;
     for (const [sid, slot] of out) {
       const rec = slot.rec ?? await getSessionByClaudeId(sid).catch(() => null);
@@ -268,7 +269,9 @@ export async function flushStatusPush(now = Date.now()): Promise<number> {
       try {
         // The lines ride its next message (pendingStatusNote), never a turn of their own; one whose
         // move a notice already told this session (org-follow.ts) is not said again.
-        for (const [id, { line, at }] of slot.lines) rideLine(sid, id, line, now, at);
+        for (const [id, { line, at }] of slot.lines) {
+          if (await mayShareTaskContext(id, rec.taskId)) rideLine(sid, id, line, now, at);
+        }
         sent++;
       } catch (err) {
         log.session.warn('status push not delivered', { sessionId: sid, error: err instanceof Error ? err.message : String(err) });

@@ -34,6 +34,8 @@ import { registerSessionServerProbe } from '../core/sessions/session-server-stat
 import { frameStartData } from '../core/sessions/send-frame.js'
 import { CostWatermark } from '../core/usage/cost-watermark.js'
 import { readUserSettingsEnv, slimChildSettingsArg } from './inline-subagent.js'
+import { isRouterAreaSession } from '../core/router/session-policy.js'
+import { idRefErrorStatus } from '../lib/id-ref.js'
 import { requestTagOn, requestTagValue, withRequestTagHeaders } from '../core/sessions/request-tag.js'
 import { COMPACTED_MESSAGE, COMPACTING_MESSAGE, COMPACTION_FAILED_MESSAGE, COMPACTION_STOPPED_DETAIL, COMPACTION_STOPPED_MESSAGE, compactedDetail, firstSightingOfLine } from '../core/stream/compaction-notice.js'
 import { HOOK_LIFECYCLE_SUBTYPES, hookFailureNotice } from '../core/stream/hook-notice.js'
@@ -1415,6 +1417,8 @@ export class ClaudeCodeSession {
   /** Launch-config bundle expanded into spawn args. Persisted so a cold --resume
    *  re-applies it (spawn-time flags have no live control_request). */
   private _profile: import('../core/types.js').SessionProfile | undefined
+  /** The isolated area this session runs in (core/router/session-policy.ts), if any. */
+  get areaId(): string | undefined { return this._profile?.areaId }
   /** UI conversation lane this session backs, if any. Persisted so capacity
    *  counting and the default session lists skip it. */
   private _lane: string | undefined
@@ -2808,6 +2812,13 @@ export class ClaudeCodeSession {
     // persisted record. That's why the profile is stored (persistSessionRecord)
     // and re-resolved (resolveResumeArgs) rather than being a one-shot param.
     const profile = opts?.profile
+    if (this._profile?.areaId && !profile?.areaId) throw new Error('A scoped session cannot resume without its area policy')
+    if (profile?.areaId) {
+      const area = { id: profile.areaId, name: '', host: '__local__', taskIds: [], sources: [] }
+      if (!this.taskId || !isRouterAreaSession({ profile, host, engine: undefined }, area) || appendSystemPrompt || forkSession) {
+        throw new Error('The session does not match its isolated area policy')
+      }
+    }
     this._profile = profile
     this._lane = opts?.lane
     this._spawnAppendPrompt = appendSystemPrompt
@@ -2857,6 +2868,7 @@ export class ClaudeCodeSession {
     // (inline-subagent.ts). Local only: those settings are this machine's.
     const slim = profile?.slim === true && !host
     if (slim) args.push('--setting-sources', '', '--strict-mcp-config')
+    if (profile?.areaId) args.push('--disable-slash-commands')
     // The in-session `walnut` CLI (and the walnut MCP child) must reach the
     // server that launched this session. They default to :3456, so a session of
     // any other server (ephemeral, fixture, vitest) wrote into the user's real
@@ -2868,7 +2880,11 @@ export class ClaudeCodeSession {
     // (compact-open-items-hook.ts) and the /tmp git guard (git-tmp-guard-hook.ts),
     // local and remote alike.
     const sessionSettings: Record<string, unknown> = {}
-    const slimEnv = slim ? readUserSettingsEnv() : {}
+    const slimEnv = slim ? { ...readUserSettingsEnv() } : {}
+    if (profile?.areaId) {
+      if (!slim) throw new Error('Area sessions require a local slim profile')
+      Object.assign(slimEnv, { CLAUDE_CODE_DISABLE_CLAUDE_MDS: '1', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' })
+    }
     // session.tag_requests: the task's id rides every model request as a header, beside any
     // the user set in this machine's settings (another host's own are not known here).
     const tagEnv: Record<string, string> = requestTagOn()
@@ -3468,6 +3484,26 @@ export class ClaudeCodeSession {
     cliCommand?: string,
     testDaemonUrl?: string,
   ): Promise<ClaudeCodeSession> {
+    const { getTask } = await import('../core/task-manager.js')
+    const task = record.taskId ? await getTask(record.taskId).catch(() => undefined) : undefined
+    const { readRouterAreas, taskArea } = await import('../core/router/areas.js')
+    const { WALNUT_HOME } = await import('../constants.js')
+    const areas = await readRouterAreas(WALNUT_HOME).catch((error) => {
+      if (record.profile?.areaId || task?.router_area_id || task?.org_role === 'router') throw error
+      return undefined
+    })
+    const area = record.taskId && areas ? taskArea(areas, record.taskId) : undefined
+    if (area || record.profile?.areaId || task?.router_area_id || task?.org_role === 'router') {
+      const role = areas?.routers.some((router) => router.taskId === record.taskId) ? 'router' : 'work'
+      if (!task || !area || task.source !== 'local' || task.router_area_id !== area.id
+        || (role === 'router') !== (task.org_role === 'router') || !isRouterAreaSession(record, area, role)) {
+        throw new Error('The attached session does not match its isolated area policy')
+      }
+      const { link } = await import('../core/hosts/link.js')
+      if (!(await link('__local__')).hasCapability('walnut-mcp-v1')) {
+        throw new Error('This daemon cannot serve isolated routing tools. Update Walnut before reconnecting this area conversation.')
+      }
+    }
     const session = new ClaudeCodeSession(record.taskId, record.project, cliCommand)
     session._testDaemonUrl = testDaemonUrl
     // An attached session's init is historic fact (the record exists because the CLI
@@ -10727,6 +10763,18 @@ async function noteFolderGoneOnce(sessionId: string | null | undefined, cwd?: st
   } catch { /* the refusal itself still stands and is reported */ }
 }
 
+/** With no session record: whether the session's task belongs to an area (then its resume fails closed). */
+async function taskMayBeInArea(taskId: string | undefined): Promise<boolean> {
+  if (!taskId) return false
+  const { readRouterAreas, taskArea } = await import('../core/router/areas.js')
+  const { WALNUT_HOME } = await import('../constants.js')
+  const areas = await readRouterAreas(WALNUT_HOME).catch(() => null)
+  if (areas && taskArea(areas, taskId)) return true
+  const { getTask } = await import('../core/task-manager.js')
+  const task = await getTask(taskId).catch(() => null)
+  return !!task && task.id === taskId && (!!task.router_area_id || task.org_role === 'router')
+}
+
 export class SessionRunner {
   private sessions = new Map<string, ClaudeCodeSession>()
   /** ACP-backed sessions (any ACP engine), keyed by trackingId (providerSessionId or runtimeId). */
@@ -11916,11 +11964,48 @@ export class SessionRunner {
   }
 
   private async assertStartRouting(data: {
+    taskId?: string
     engine?: import('../core/types.js').SessionEngine
+    profile?: import('../core/types.js').SessionProfile
+    host?: string
+    mode?: string
+    appendSystemPrompt?: string
     forkedFromSessionId?: string
     resumeFile?: string
     transferAttemptId?: string
   }): Promise<void> {
+    if (data.profile?.areaId && !data.taskId) throw new Error('An area session must name its task')
+    if (data.taskId) {
+      const { readRouterAreas, taskArea } = await import('../core/router/areas.js')
+      const { WALNUT_HOME } = await import('../constants.js')
+      const { getTask } = await import('../core/task-manager.js')
+      // A session may start for a task that does not exist (yet); only an area start needs one.
+      const task = await getTask(data.taskId).catch((error) => {
+        if (data.profile?.areaId) throw error
+        return null
+      })
+      const marked = !!task && (!!task.router_area_id || task.org_role === 'router')
+      let areas: Awaited<ReturnType<typeof readRouterAreas>> | undefined
+      try { areas = await readRouterAreas(WALNUT_HOME) } catch (error) {
+        if (marked || data.profile?.areaId) throw error
+      }
+      const area = areas && taskArea(areas, data.taskId)
+      if (!area && (marked || data.profile?.areaId)) throw new Error('This scoped task has no matching area')
+      if (area && !task) throw new Error('This area task is unavailable; its session cannot start')
+      if (area && task) {
+        const role = areas!.routers.some((router) => router.taskId === task.id) ? 'router' : 'work'
+        if (task.router_area_id !== area.id || task.source !== 'local' || (role === 'router') !== (task.org_role === 'router')
+          || !isRouterAreaSession({ profile: data.profile, host: data.host, engine: data.engine }, area, role)
+          || data.mode !== 'dontAsk' || data.appendSystemPrompt || data.forkedFromSessionId) {
+          throw new Error('This area task requires a fresh isolated session on its configured host')
+        }
+        if (this.sdkClient?.connected) throw new Error('Area sessions require the verified CLI launch path')
+        const { link } = await import('../core/hosts/link.js')
+        if (!(await link('__local__')).hasCapability('walnut-mcp-v1')) {
+          throw new Error('This daemon cannot serve isolated routing tools. Update Walnut before starting this area conversation.')
+        }
+      }
+    }
     if (!data.forkedFromSessionId) return
     if (isAcpEngine(data.engine)) {
       throw new AcpForkUnsupportedError(data.forkedFromSessionId, resolveEngine(data.engine))
@@ -11932,6 +12017,10 @@ export class SessionRunner {
     }
     const { getSessionByClaudeId } = await import('../core/session-tracker.js')
     const source = await getSessionByClaudeId(data.forkedFromSessionId)
+    if (source?.profile?.areaId || (source?.taskId
+      && !await (await import('../core/router/context-sharing.js')).mayShareTaskContext(source.taskId, undefined))) {
+      throw new Error('A scoped conversation cannot be copied into another task')
+    }
     if (source) assertSessionForkSupported(source)
   }
 
@@ -14014,9 +14103,65 @@ export class SessionRunner {
     let resolvedLane: string | undefined
     let resolvedResumeSessionAt: string | undefined
     let resolvedAppendSystemPrompt: string | undefined
+    // An isolated area session fails closed: a resume that cannot prove its area policy never
+    // runs unscoped. Every other session keeps the old fallback (defaults on a read failure).
+    const live = this.findSessionByClaudeId(sessionId)
+    let areaBound = !!live?.areaId
     try {
       const { getSessionByClaudeId: getSession } = await import('../core/session-tracker.js')
-      const record = await getSession(sessionId)
+      // An unreadable session store cannot say whether this was an area session.
+      const record = await getSession(sessionId).catch((error) => {
+        areaBound = true
+        throw error
+      })
+      if (!record) {
+        if (areaBound || await taskMayBeInArea(live?.taskId)) {
+          areaBound = true
+          throw new Error('The session record is unavailable; its area policy cannot be restored')
+        }
+      } else if (record.profile?.areaId) areaBound = true
+      if (record?.taskId) {
+        const { getTask } = await import('../core/task-manager.js')
+        // A task that is gone is no area task unless other evidence says so; a store that
+        // cannot be read cannot say, so that refuses.
+        const found = await getTask(record.taskId).catch((error) => {
+          if (areaBound || idRefErrorStatus(error instanceof Error ? error.message : '') !== 404) {
+            areaBound = true
+            throw error
+          }
+          return null
+        })
+        // A prefix lookup may answer another task: only the stored id's own task counts.
+        const task = found && found.id === record.taskId ? found : null
+        if (task && (task.router_area_id || task.org_role === 'router')) areaBound = true
+        const { readRouterAreas, taskArea } = await import('../core/router/areas.js')
+        const { WALNUT_HOME } = await import('../constants.js')
+        // A task with no area mark is outside every area (the mark is never cleared), so only a
+        // marked one needs the areas file to resume.
+        const areas = await readRouterAreas(WALNUT_HOME).catch((error) => {
+          if (areaBound) throw error
+          return undefined
+        })
+        const area = areas ? taskArea(areas, record.taskId) : undefined
+        if (area) areaBound = true
+        if (areaBound && !task) {
+          throw new Error(found ? 'The saved session task is unavailable; a prefix match cannot restore its launch policy'
+            : 'The saved session task is unavailable; its area policy cannot be restored')
+        }
+        if (areaBound && task) {
+          const role = areas?.routers.some((router) => router.taskId === task.id) ? 'router' : 'work'
+          if (!area || task.router_area_id !== area.id || task.source !== 'local'
+            || (role === 'router') !== (task.org_role === 'router') || !isRouterAreaSession(record, area, role)) {
+            throw new Error('The saved session does not match its isolated area policy')
+          }
+          const { link } = await import('../core/hosts/link.js')
+          if (!(await link('__local__')).hasCapability('walnut-mcp-v1')) {
+            throw new Error('This daemon cannot serve isolated routing tools. Update Walnut before resuming this area conversation.')
+          }
+        }
+      }
+      if (areaBound && !record?.taskId) throw new Error('The area session has no task; its area policy cannot be restored')
+      if (record?.profile?.areaId && record.profile.areaPolicyVersion !== 1) throw new Error('The area session policy version is not supported')
       // record.mode is the durable mode (a PATCH persists it first; CLI-reported
       // changes are written back), so a cold --resume must carry it.
       if (record?.mode) resolvedMode = record.mode
@@ -14087,7 +14232,8 @@ export class SessionRunner {
         }
       }
     } catch (err) {
-      log.session.warn('resolveResumeArgs: failed to read record', { sessionId, error: err instanceof Error ? err.message : String(err) })
+      log.session.warn('resolveResumeArgs: failed to read record', { sessionId, areaBound, error: err instanceof Error ? err.message : String(err) })
+      if (areaBound) throw err
     }
     return {
       model: resolvedModel, effort: resolvedEffort, profile: resolvedProfile,

@@ -170,6 +170,9 @@ const DAEMON_SOURCE_FILES = [
   // Clock routines (clock-routine-v1): the rules ride the sidecar, the schedule
   // math is imported by the standalone twin and inlined into the source twin.
   'src/providers/trigger-clock-core.ts',
+  // triggers.state.snapshot rules (trigger-state-snapshot-v1), bundled into the binary
+  // and shipped in the trigger-check-core.cjs sidecar: same lockstep rule.
+  'src/providers/trigger-state-snapshot-core.ts',
   'src/providers/clock-schedule-core.ts',
   'src/core/cron/trigger-timing.ts',
   'src/core/transcript-chain.ts',

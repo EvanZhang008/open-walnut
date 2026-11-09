@@ -56,6 +56,10 @@ export interface MailSyncCompletedEvent {
 export interface MailHeadline {
   from: string
   subject: string
+  messageId?: string
+  /** The exact cached snapshot announced, never authorization for a later capture on the same handle. */
+  version?: string
+  canonicalKey?: string
 }
 
 export interface MailMessagesReceivedEvent {

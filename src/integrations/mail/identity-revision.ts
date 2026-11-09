@@ -19,7 +19,8 @@
  *   next registration finishes the wipe instead of declaring it done with half the ghosts alive.
  * - Rows go a PAGE at a time. An account with 50,000 cached rows is a loop of small statements, the
  *   same shape retention deletes in, never one statement that pins the worker.
- * - The FILE goes before the row. The other order leaves bytes on disk that no row names any more.
+ * - The ROW goes before its file, inside the account's write gate, so no reader confirms a row whose
+ *   file is gone; a crash leaves at worst an unnamed file.
  *
  * What is NOT touched: accounts, mailboxes (their names and counts come from the provider on every
  * tick anyway), drafts and the approval ledger. A draft's `inReplyTo` is a provider handle the
@@ -31,6 +32,7 @@ const PAGE = 200
 
 export interface IdentityRevisionDeps {
   store: {
+    withAccountWrite<T>(accountId: string, work: () => Promise<T>): Promise<T>
     listAccounts(): Promise<Array<{ account_id: string }>>
     rowsForAccount(accountId: string, limit: number): Promise<Array<{ rowid: number; body_ref: string | null }>>
     deleteMessages(rowids: number[]): Promise<void>
@@ -82,11 +84,13 @@ export async function reconcileIdentityRevision(
   let messages = 0
   let mailboxes = 0
   for (const accountId of accountIds) {
-    messages += await wipeAccountMessages(deps, accountId)
-    for (const mailbox of await deps.store.listMailboxes(accountId)) {
-      await deps.store.setMailboxCursor(accountId, mailbox.mailbox_id, null, 0)
-      mailboxes += 1
-    }
+    await deps.store.withAccountWrite(accountId, async () => {
+      messages += await wipeAccountMessages(deps, accountId)
+      for (const mailbox of await deps.store.listMailboxes(accountId)) {
+        await deps.store.setMailboxCursor(accountId, mailbox.mailbox_id, null, 0)
+        mailboxes += 1
+      }
+    })
   }
 
   await deps.store.tasks.setMeta(key, revision)
@@ -96,6 +100,7 @@ export async function reconcileIdentityRevision(
   return { swept: true, accounts: accountIds.length, messages, mailboxes }
 }
 
+/** Caller holds the account's write gate. */
 async function wipeAccountMessages(deps: IdentityRevisionDeps, accountId: string): Promise<number> {
   let deleted = 0
   let firstOfPreviousPage: number | undefined
@@ -109,8 +114,8 @@ async function wipeAccountMessages(deps: IdentityRevisionDeps, accountId: string
       return deleted
     }
     firstOfPreviousPage = page[0]!.rowid
-    for (const row of page) if (row.body_ref) await deps.bodies.remove(row.body_ref)
     await deps.store.deleteMessages(page.map((row) => row.rowid))
+    for (const row of page) if (row.body_ref) await deps.bodies.remove(row.body_ref)
     deleted += page.length
     if (page.length < PAGE) return deleted
   }

@@ -49,7 +49,8 @@ import {
   readPluginWebModule,
   type PluginWebModule,
 } from '../../core/plugins/plugin-web-module.js'
-import { callPluginOp, listPluginOps } from '../../core/plugins/server-api.js'
+import { callPluginOp, listPluginOps, pluginOpCallerSid, type PluginOpCaller } from '../../core/plugins/server-api.js'
+import { CALLER_KIND_HEADER } from '../../lib/cli-sender.js'
 import {
   callPrimaryPluginOp,
   listPrimaryPluginOps,
@@ -115,7 +116,7 @@ export interface PluginRuntimeRouterDeps {
   listPrimaryModules?(): Promise<PrimaryPluginRuntimeCatalogue>
   readPrimaryModule?(pluginId: string, expectedHash?: string): Promise<PluginWebModule>
   listPrimaryOps?(pluginId: string): ReturnType<typeof listPrimaryPluginOps>
-  callPrimaryOp?(pluginId: string, opName: string, args: Record<string, unknown>): ReturnType<typeof callPrimaryPluginOp>
+  callPrimaryOp?(pluginId: string, opName: string, args: Record<string, unknown>, caller?: PluginOpCaller): ReturnType<typeof callPrimaryPluginOp>
   managePrimary?(
     pluginId: string,
     operation: PluginManagementAction,
@@ -149,6 +150,25 @@ export interface PluginRuntimeRouterDeps {
   pluginDirOf?(pluginId: string): Promise<string | undefined>
   builtinPluginDir?: string | null
   exampleRoot?: string | null
+}
+
+/**
+ * Who a plugin op request runs for, by the convention of the person routes: a session id
+ * (`x-walnut-caller-sid`) is that session, a declared caller kind (`x-walnut-caller-kind`,
+ * a script or a scheduled job) is an agent with no session, and no header at all is a person.
+ * Never read from this process's environment. A session id that is not one (empty, too
+ * long, two joined headers) answers undefined: the op then runs as the plugin, never a person.
+ */
+export function pluginOpCallerOf(headers: Record<string, string | string[] | undefined>): PluginOpCaller | undefined {
+  const rawSid = headers['x-walnut-caller-sid']
+  if (Array.isArray(rawSid)) return undefined
+  if (rawSid !== undefined) {
+    const sid = pluginOpCallerSid(rawSid)
+    return sid ? { kind: 'agent', sid } : undefined
+  }
+  const kind = headers[CALLER_KIND_HEADER]
+  if (kind !== undefined) return { kind: 'agent' }
+  return { kind: 'person' }
 }
 
 function routePluginId(value: string | string[]): string {
@@ -517,8 +537,11 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
       const args = req.body && typeof req.body === 'object' && !Array.isArray(req.body)
         ? req.body as Record<string, unknown>
         : {}
+      // Who the op runs for: its nested reads and writes carry this caller, never the plugin's
+      // own name in its place (a person reads as a person, a session keeps its own area).
+      const caller = pluginOpCallerOf(req.headers)
       if (cloudMode) {
-        res.json(await invokePrimaryOp(pluginId, opName, args))
+        res.json(await invokePrimaryOp(pluginId, opName, args, caller))
         return
       }
       if (!activePlugin(pluginId)) {
@@ -528,7 +551,7 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
       // The op acts for this request's caller: a paired phone or a remote host's
       // `api` call is not this Mac, and its self-calls say so (src/lib/caller-origin.ts).
       const { requestOrigin } = await import('../middleware/request-origin.js')
-      res.json(await callPluginOp(pluginId, opName, args, requestOrigin(req)))
+      res.json(await callPluginOp(pluginId, opName, args, requestOrigin(req), caller))
     } catch (error) {
       res.status(errorStatus(error)).json({ error: error instanceof Error ? error.message : String(error) })
     }

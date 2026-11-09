@@ -96,6 +96,7 @@ const MARKERS: Record<string, { re: RegExp; files: Record<string, { count: numbe
       'src/core/sessions/session-send-core.ts': { count: 2, way: 'the code type, and the refusal: never for a session its task is moving away from (movingFrom): that message is held and goes with the task' },
       'src/providers/gateway-core.ts': { count: 1, way: 'the code type the host gateway relays' },
       'src/core/human-inbox/item-plans.ts': { count: 1, way: 'attaching an email to an archived conversation: no move involved' },
+      'src/core/router/service.ts': { count: 1, way: 'a router handoff\'s list of send refusals that end it as failed (SEND_REFUSED); the send core never answers it for a moving task' },
     },
   },
   'work packed on the old host': {

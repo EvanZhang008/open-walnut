@@ -8,10 +8,15 @@
  * asks reach the user as letters and Threads, never as a Needs you of their own. An ask is open while
  * it is shown: a task's Needs you (its own question, a Board choice, its decision letter) or an open
  * decision letter of its own.
+ *
+ * Every read here stays inside the task's incoming-item area (router/same-area.ts): a task in an
+ * area sees only tasks of that area, a task in none sees only tasks in none, so a status question,
+ * a fold or a refusal never carries another area's ask or title.
  */
 import { log } from '../logging/index.js';
 import type { Task } from './types.js';
 import { briefTeam } from './user-status.js';
+import { sameTaskArea } from './router/same-area.js';
 import {
   FOLDABLE_SOURCES, answeredAskMessage, answerFor, answersOf, findSameAsk, SameAskError, sameAskMessage, sameAskReasonOf, type RelativeAsk, type TreeAsk,
 } from './same-ask.js';
@@ -89,6 +94,7 @@ export function teammatesIndex(everything: readonly Task[], only: (t: Task) => b
     for (const k of keys(task)) {
       for (const t of byKey.get(k) ?? []) {
         if (t.id === task.id || above.has(t.id) || seen.has(t.id) || ancestorsOf(t, byId).has(task.id)) continue;
+        if (!sameTaskArea(task, t)) continue;
         seen.set(t.id, t);
       }
     }
@@ -143,7 +149,7 @@ export function treeAround(taskId: string, everything: readonly Task[]): Array<{
   } else {
     for (const t of teammatesIndex(everything)(self)) if (!out.has(t.id)) out.set(t.id, { task: t, relation: 'team' });
   }
-  return [...out.values()];
+  return [...out.values()].filter((a) => sameTaskArea(self, a.task));
 }
 
 /** An open decision letter, as the tree reads it. */
@@ -188,13 +194,13 @@ async function readOpenLetters(): Promise<OpenLetter[]> {
 }
 
 /** The tree's open asks, read from the store; the inbox only when the task has a tree at all. */
-async function readTree(taskId: string, forWrite: boolean): Promise<{ self?: Task; asks: TreeAsk[] }> {
+async function readTree(taskId: string, forWrite: boolean): Promise<{ self?: Task; asks: TreeAsk[]; everything: Task[] }> {
   const { listTasks } = await import('./task-manager.js');
   const everything = await listTasks();
   const self = everything.find((t) => t.id === taskId);
-  if (!treeAround(taskId, everything).length) return { self, asks: [] };
+  if (!treeAround(taskId, everything).length) return { self, asks: [], everything };
   const letters = await readOpenLetters().catch(() => []);
-  return { self, asks: treeAsksOf(taskId, everything, letters, forWrite) };
+  return { self, asks: treeAsksOf(taskId, everything, letters, forWrite), everything };
 }
 
 /**
@@ -257,7 +263,8 @@ async function refuseSignInAsk(taskId: string, text: string, what: 'letter' | 'r
     log.task.info('same-ask: sign-in ask refused, the sign-in state is known', { taskId, what });
     throw new SameAskError(why, dummy);
   }
-  const other = everything.find((t) => t.id !== taskId && t.phase !== 'COMPLETE' && t.status !== 'done'
+  const self = everything.find((t) => t.id === taskId) ?? { id: taskId };
+  const other = everything.find((t) => t.id !== taskId && sameTaskArea(self, t) && t.phase !== 'COMPLETE' && t.status !== 'done'
     && t.user_status?.state === 'needs' && t.user_status.source === 'session' && isSignInAsk(t.user_status.ask, words));
   if (!other) return;
   const hit: TreeAsk = { taskId: other.id, title: other.title, ask: other.user_status!.ask!, where: 'status', relation: 'elsewhere' };
@@ -274,12 +281,17 @@ const WHO: Record<TreeAsk['relation'], string> = { descendant: 'your subtask', t
 export async function sameAskQuestionFor(taskId: string): Promise<string> {
   let asks: TreeAsk[];
   let self: Task | undefined;
+  let everything: Task[] = [];
   try {
-    ({ self, asks } = await readTree(taskId, false));
+    ({ self, asks, everything } = await readTree(taskId, false));
   } catch {
     return '';
   }
-  const fold = self?.user_status?.sameAsk;
+  // A stored fold names its task only when that task is known and in the same area (one stored
+  // before the area mark, or naming a task gone from the store, is left out).
+  const stored = self?.user_status?.sameAsk;
+  const foldTask = stored ? everything.find((t) => t.id === stored.id) : undefined;
+  const fold = stored && self && foldTask && sameTaskArea(self, foldTask) ? stored : undefined;
   const above = self?.user_status?.answeredFor;
   if (!asks.length && !fold && !above) return '';
   const lines = asks.slice(0, QUESTION_ASKS_MAX).map((a) => `- [${a.taskId}] ${a.title.replace(/\s+/g, ' ').slice(0, 80)} (${WHO[a.relation]}${a.where === 'letter' ? ', a decision letter' : ''}): "${a.ask.replace(/\s+/g, ' ').slice(0, 200)}"`);

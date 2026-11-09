@@ -17,6 +17,11 @@ const queued: { sid: string; text: string }[] = [];
 
 vi.mock('../../src/core/task-manager.js', () => ({
   listTasks: async () => [...tasks.values()],
+  getTask: async (id: string) => {
+    const task = tasks.get(id);
+    if (!task) throw new Error(`No task found matching ID prefix "${id}"`);
+    return task;
+  },
 }));
 vi.mock('../../src/core/session-tracker.js', () => ({
   getSessionsForTask: async (id: string) => sessions.filter((s) => s.taskId === id),

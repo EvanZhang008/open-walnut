@@ -17,6 +17,8 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from 'react';
 import type { MailAccountDto, MailDraftDto, MailProviderSummary, MailboxDto } from '@/api/mail';
+import { useNavigate } from 'react-router-dom';
+import { ORG_ROUTER_SETUP_PATH } from './MailRouterAssignment';
 import { ContextMenu } from '@/components/common/ContextMenu';
 import { useScrollAnchor } from '@/hooks/useScrollAnchor';
 import {
@@ -287,6 +289,7 @@ function useFolderFetchNotes(selection: string): {
 export function MailAccountsPane({
   accounts, mailboxes, drafts, providers, selected, refreshing, refreshNote, onAddAccount, onPicked,
 }: Props) {
+  const navigate = useNavigate();
   const aim = useAim();
   // `arrivals` is session churn nothing else in the console renders, so it is read from the store here
   // rather than threaded through the app shell.
@@ -464,6 +467,12 @@ export function MailAccountsPane({
               label: 'Send digest now',
               title: 'One letter listing what is unread, sent now as well as at its usual time',
               onSelect: () => { void sendMailDigest(); },
+            },
+            {
+              key: 'router',
+              label: 'Set up routing in Org',
+              title: 'Create or open an area router. Each message still needs its own area confirmation.',
+              onSelect: () => navigate(ORG_ROUTER_SETUP_PATH),
             },
           ]}
         />

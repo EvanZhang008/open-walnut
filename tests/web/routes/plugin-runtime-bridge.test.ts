@@ -229,6 +229,17 @@ describe('cloud Plugin runtime relay', () => {
       ok: true,
       result: { value: 1 },
     })
+    // No caller named: the params carry none, so the primary runs it as the plugin.
+    expect(callPrimaryControlMock).toHaveBeenLastCalledWith(
+      'server.plugin-op', '__server__', { pluginId: 'sample', opName: 'task_get', args: { id: 'abc' } }, 15_000,
+    )
+    callPrimaryControlMock.mockResolvedValueOnce({ ok: true, result: { ok: true, result: {} } })
+    await callPrimaryPluginOp('sample', 'task_get', { id: 'abc' }, { kind: 'agent', sid: 'b7c5e0f1-0000-4000-8000-00000000a002' })
+    expect(callPrimaryControlMock).toHaveBeenLastCalledWith(
+      'server.plugin-op', '__server__',
+      { pluginId: 'sample', opName: 'task_get', args: { id: 'abc' }, caller: { kind: 'agent', sid: 'b7c5e0f1-0000-4000-8000-00000000a002' } },
+      15_000,
+    )
 
     callPrimaryControlMock.mockResolvedValueOnce({
       ok: true,

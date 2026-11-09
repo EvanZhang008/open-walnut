@@ -604,8 +604,14 @@ describe('pendingResumeSessionAt threading', () => {
     const sid = 'thread-unset';
     records.set(sid, { sessionId: sid, cwd: CWD });
     expect((await runnerInternals.resolveResumeArgs(sid)).resumeSessionAt).toBeUndefined();
-    // Unknown session: no record, no flag, no throw.
-    expect((await runnerInternals.resolveResumeArgs('thread-missing')).resumeSessionAt).toBeUndefined();
+    // An ordinary session with no record resumes on its defaults, as before area isolation.
+    expect(await runnerInternals.resolveResumeArgs('thread-missing')).toMatchObject({ profile: undefined, mode: undefined });
+  });
+
+  it('an area session that cannot prove its policy never resumes unscoped', async () => {
+    const sid = 'thread-area-no-task';
+    records.set(sid, { sessionId: sid, cwd: CWD, profile: { areaId: 'area-1', areaPolicyVersion: 1 } } as never);
+    await expect(runnerInternals.resolveResumeArgs(sid)).rejects.toThrow('The area session has no task');
   });
 
   it('clears once a turn has really completed — and needs no cache invalidation', async () => {

@@ -28,6 +28,9 @@ import { frameAsWalnut } from '../../src/core/sessions/send-frame.js';
 import { buildPeerWrapper } from '../../src/core/peers/peer-wrapper.js';
 import { REQUESTS_FILE, getSessionRequest } from '../../src/core/session-requests.js';
 
+// A start reaches the runner only after its own checks (its router area read included), whose
+// first dynamic imports take more than vi.waitFor's 1 s default in a busy worker.
+const START_WAIT = { timeout: 10_000 };
 const params = { taskIdPrefix: 'task-1', message: 'Fix the flake.', source: 'test' };
 const task = { id: 'task-1', title: 'Fix the flake', project: 'test', cwd: '/tmp/test-project' };
 
@@ -55,7 +58,7 @@ describe('task start confirmation and reply contract', () => {
       finish = resolve;
     }));
     const pending = startSessionForTask(params);
-    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'), START_WAIT);
     let settled = false;
     void pending.then(() => { settled = true; });
     await Promise.resolve();
@@ -124,7 +127,7 @@ describe('task start confirmation and reply contract', () => {
     // a cold dynamic import among them outlasts a microtask. A second start sent too
     // early was not refused, and the never-released first one then held the guard
     // and failed every later test in the file (2026-10-30 quick tier: 13 red).
-    await vi.waitFor(() => expect(mocks.getSessionsForTask).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(mocks.getSessionsForTask).toHaveBeenCalledTimes(1), START_WAIT);
     try {
       await expect(startSessionForTask(params)).rejects.toBeInstanceOf(SessionExistsError);
     } finally {
@@ -168,12 +171,12 @@ describe('task start confirmation and reply contract', () => {
     let finish!: (value: unknown) => void;
     mocks.startSession.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
     const pending = startSessionForTask({ ...params, expectReply: false });
-    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'), START_WAIT);
     await vi.advanceTimersByTimeAsync(5_000);
     expect(await pending).toMatchObject({ started: false, starting: true, taskId: task.id });
     await expect(startSessionForTask(params)).rejects.toBeInstanceOf(SessionExistsError);
     finish({ claudeSessionId: 'eventual-1' });
-    await vi.waitFor(() => expect(isTaskStarting(task.id)).toBe(false));
+    await vi.waitFor(() => expect(isTaskStarting(task.id)).toBe(false), START_WAIT);
   });
 
   it('keeps uncertain attempts blocked rather than minting a second run', async () => {
@@ -224,13 +227,13 @@ describe('task start confirmation and reply contract', () => {
     let finish!: (value: unknown) => void;
     mocks.startSession.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
     const pending = startSessionForTask({ ...params, expectReply: false });
-    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'), START_WAIT);
     await vi.advanceTimersByTimeAsync(120_000);
     expect(await pending).toMatchObject({ started: false });
     expect(isTaskStarting(task.id)).toBe(false);
     expect(mocks.updateTaskRaw).toHaveBeenLastCalledWith(task.id, expect.objectContaining({ last_start: expect.objectContaining({ state: 'unconfirmed' }) }), expect.any(Object));
     finish({ claudeSessionId: 'late-session' });
-    await vi.waitFor(() => expect(mocks.updateTaskRaw).toHaveBeenLastCalledWith(task.id, expect.objectContaining({ last_start: expect.objectContaining({ state: 'started', session_id: 'late-session' }) }), expect.any(Object)));
+    await vi.waitFor(() => expect(mocks.updateTaskRaw).toHaveBeenLastCalledWith(task.id, expect.objectContaining({ last_start: expect.objectContaining({ state: 'started', session_id: 'late-session' }) }), expect.any(Object)), START_WAIT);
   });
 
   it('inherits host even when cwd was explicitly supplied', async () => {

@@ -102,7 +102,7 @@ export async function applySession(ctx: V2Context, record: V2Record): Promise<vo
     appendPrompt = (await buildSessionContext(taskId, cwd, ctx.hostKey)).systemPrompt;
   } catch { /* the context is additive: a resume without it still answers */ }
   const title = typeof record.title === 'string' ? record.title.slice(0, 500) : '';
-  await createSessionRecord(sid, taskId, task.project ?? '', cwd, {
+  await adoptOutsideRecord({ claudeSessionId: sid, taskId, profile }, () => createSessionRecord(sid, taskId, task.project ?? '', cwd, {
     host: ctx.hostKey,
     ...(title ? { title } : {}),
     ...(mode ? { mode } : {}),
@@ -112,7 +112,7 @@ export async function applySession(ctx: V2Context, record: V2Record): Promise<vo
     appliedAppendSystemPrompt: appendPrompt,
     // The rescue after the batch looks at the CLI as a reconnect does (it may have stopped since).
     initialProcessStatus: 'stopped',
-  });
+  }));
   // The task's session, as this Mac's own start links it (claude-code-session.ts after init).
   // The record is made already: a link that fails throws, and the retry takes the branch above.
   rescueAfterBatch(ctx.hostKey, sid);
@@ -141,7 +141,7 @@ async function adoptRoutineRun(ctx: V2Context, record: V2Record, sid: string, ta
     appendPrompt = (await buildSessionContext(taskId, cwd, ctx.hostKey)).systemPrompt;
   } catch { /* the context is additive: a resume without it still answers */ }
   const title = typeof record.title === 'string' && record.title.trim() ? record.title.slice(0, 500) : task.title ?? '';
-  await createSessionRecord(sid, taskId, task.project ?? '', cwd, {
+  await adoptOutsideRecord({ claudeSessionId: sid, taskId }, () => createSessionRecord(sid, taskId, task.project ?? '', cwd, {
     host: ctx.hostKey,
     ...(title ? { title } : {}),
     ...(mode ? { mode } : {}),
@@ -149,11 +149,29 @@ async function adoptRoutineRun(ctx: V2Context, record: V2Record, sid: string, ta
     ...(effort ? { effort } : {}),
     appliedAppendSystemPrompt: appendPrompt,
     initialProcessStatus: 'stopped',
-  });
+  }));
   rescueAfterBatch(ctx.hostKey, sid);
   await linkAdopted(taskId, sid, mode === 'plan' ? 'plan' : 'exec');
   ctx.result.replayed++;
   log.session.info('offline handover: adopted a routine run the host started while this Mac was away', { host: ctx.hostKey, sessionId: sid, taskId, jobId: r.id, slotMs: r.slotMs, mode, model });
+}
+
+/**
+ * A host's adopted session is outside history (router/history-write.ts): never into an area task
+ * or with an area profile. Checked first, and the store's own check maps the same way.
+ */
+async function adoptOutsideRecord(
+  record: { claudeSessionId: string; taskId: string; profile?: import('../types.js').SessionProfile },
+  create: () => Promise<unknown>,
+): Promise<void> {
+  const { assertOutsideHistoryImport, isHistoryRefusal, taskDbHandle } = await import('../router/history-write.js');
+  try {
+    assertOutsideHistoryImport(record, taskDbHandle());
+    await create();
+  } catch (err) {
+    if (isHistoryRefusal(err)) throw new RefusedWrite((err as Error).message);
+    throw err;
+  }
 }
 
 /** A routine run's mode when this Mac lets a routine run in it on a host; else the plain default. */

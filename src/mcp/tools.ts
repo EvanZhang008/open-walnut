@@ -113,7 +113,7 @@ async function runWithCallId(name: string, given: Record<string, unknown>, base:
   const args = { ...given }
   const { callId, bad } = callIdFor(args)
   if (bad) return fail(bad)
-  const r = await executeOp(name, args, { apiBase: base, origin: LOCAL_ORIGIN, callId })
+  const r = await executeOp(name, args, { apiBase: base, origin: LOCAL_ORIGIN, callId, callerSid: process.env.WALNUT_SESSION_ID?.trim() })
   if (r.ok) return ok(r.result)
   if (r.result !== undefined) return { ...ok(r.result), isError: true }
   return fail(r.lost || r.unreachable ? [r.message, ...lostCallLines(name, args, callId)].join('\n') : r.message)

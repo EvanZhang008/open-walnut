@@ -18,6 +18,7 @@ import {
 import type { Task } from '../types.js';
 import { briefVpOf } from './brief-rules.js';
 import { BRIEF_STRUCTURE_RULE, briefSectionOf, briefSectionsBlock, type BriefSectionKey } from './brief-structure.js';
+import { sameAreaTasks } from '../router/same-area.js';
 
 export function keepsBrief(task: Pick<Task, 'org_role'>): boolean {
   return task.org_role === 'main' || task.org_role === 'lead';
@@ -35,7 +36,8 @@ const SECTION_LIST_MAX = 15;
 /** Every task in the node's Needs you section now, with its ask (the same scope as the list below). */
 export function briefNeedsAsks(owner: Task, tasks: readonly Task[]): Record<string, string> {
   const main = owner.org_role === 'main';
-  const org = main ? tasks.filter((t) => !t.plugin_only && t.id !== owner.id) : briefTeam(owner, tasks);
+  // Only the owner's own area (router/same-area.ts): an unscoped Main never reads an area task's ask.
+  const org = sameAreaTasks(owner, main ? tasks.filter((t) => !t.plugin_only && t.id !== owner.id) : briefTeam(owner, tasks));
   const out: Record<string, string> = {};
   for (const t of org) {
     const us = t.user_status;
@@ -49,8 +51,9 @@ export function briefSectionLines(owner: Task, tasks: readonly Task[], now = Dat
   const flat = (v: string) => v.replace(/\s+/g, ' ').trim().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const ref = (t: { id: string; title: string }) => `<task-ref id="${t.id}" label="${flat(t.title).replace(/"/g, '&quot;')}"/>`;
   const main = owner.org_role === 'main';
-  const team = briefTeam(owner, tasks);
-  const org = main ? tasks.filter((t) => !t.plugin_only && t.id !== owner.id) : team;
+  // The team is read on every task (a chain may pass through any), then kept to the owner's area.
+  const team = sameAreaTasks(owner, briefTeam(owner, tasks));
+  const org = main ? sameAreaTasks(owner, tasks.filter((t) => !t.plugin_only && t.id !== owner.id)) : team;
   const out: Record<BriefSectionKey, Array<{ line: string; at: number }>> = { needs: [], working: [], waiting: [] };
   const inTeam = new Set(team.map((t) => t.id));
   for (const t of org) {
@@ -82,7 +85,7 @@ export function briefSectionLines(owner: Task, tasks: readonly Task[], now = Dat
       words = s?.now ? flat(s.now).slice(0, 160) : 'working';
     }
     if (resultIsPartial(t.result_report)) words += `; Partial, not done: ${flat(t.result_report!.not_done!.join('; ')).slice(0, 200)}`;
-    const vp = main ? briefVpOf(t, tasks) : undefined;
+    const vp = main ? briefVpOf(t, sameAreaTasks(owner, tasks)) : undefined;
     const at = t.phase_changed_at ? Date.parse(t.phase_changed_at) : 0;
     out[section].push({ line: `- ${ref(t)}${vp ? ` (VP ${ref(vp)})` : ''}: ${words}`, at: Number.isFinite(at) ? at : 0 });
   }

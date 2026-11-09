@@ -691,15 +691,18 @@ describe('bodies', () => {
 
     const files = await bodyFiles();
     expect(files.length).toBeGreaterThan(0);
-    // bodies/<accountHash>/<yyyymm>/<hash>.txt — the account is hashed, not spelled out: a
-    // directory name is the one part of a cache that shows up in a screen share.
-    expect(files[0]).toMatch(/^[0-9a-f]{12}\/\d{6}\/[0-9a-f]{32}\.txt$/);
+    // bodies/<accountHash>/<yyyymm>/<contentHash>.txt — the account is hashed, not spelled out: a
+    // directory name is the one part of a cache that shows up in a screen share. The file name is
+    // the body's content address (sha256 of account, message and body: 64 hex), so a changed body
+    // gets a new file instead of overwriting the old one.
+    expect(files[0]).toMatch(/^[0-9a-f]{12}\/\d{6}\/[0-9a-f]{64}\.txt$/);
     expect(files.join(' ')).not.toContain('alice');
 
     const row = await rows<{ body_ref: string; body_bytes: number }>(
       `SELECT body_ref, body_bytes FROM messages WHERE message_id = '${bodyMessageId}'`,
     );
-    expect(row[0]!.body_ref).toMatch(/^bodies\//);
+    expect(row[0]!.body_ref).toMatch(/^bodies\/[0-9a-f]{12}\/\d{6}\/[0-9a-f]{64}$/);
+    expect(files).toContain(`${row[0]!.body_ref.slice('bodies/'.length)}.txt`);
     expect(row[0]!.body_bytes).toBeGreaterThan(0);
   });
 

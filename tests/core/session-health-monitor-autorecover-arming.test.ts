@@ -33,7 +33,9 @@ vi.mock('../../src/core/session-auto-recover.js', () => ({
   getSessionAutoRecover: () => ({ hasPending: pendingMock }),
 }))
 
-const applySessionPhaseMock = vi.fn(async () => undefined)
+// Hoisted: the factory reads it when phase.js is first imported, which a static import chain
+// can make happen before this file's own top-level lines run.
+const applySessionPhaseMock = vi.hoisted(() => vi.fn(async () => undefined))
 vi.mock('../../src/core/phase.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/core/phase.js')>()
   return { ...actual, applySessionPhase: applySessionPhaseMock }

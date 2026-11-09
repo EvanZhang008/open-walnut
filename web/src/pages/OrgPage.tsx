@@ -55,7 +55,9 @@ import {
   ANSWERED_HOLD_MS, phaseMark, promptAnswered, promptKey, settleHolds, withAnswered, without, type AnsweredHolds,
 } from '@/components/org/org-answered';
 import { OrgPaneHandle } from '@/components/org/OrgPaneHandle';
+import { OrgRouterSetup } from '@/components/org/OrgRouterSetup';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
+import { useRouterAreaNames } from '@/components/org/router-area-names';
 import '@/styles/org-page.css';
 
 /** The page's own panes (the dividers below): the list, the node between, an opened task. */
@@ -97,7 +99,7 @@ function useMinuteNow(): number {
 }
 
 export function OrgPage() {
-  const { tasks, loading: tasksLoading, showOperationError, update: updateTaskInStore } = useTasksContext();
+  const { tasks, loading: tasksLoading, showOperationError, update: updateTaskInStore, refetch } = useTasksContext();
   const navigate = useNavigate();
   const phone = usePhoneLayout();
   const now = useMinuteNow();
@@ -105,6 +107,7 @@ export function OrgPage() {
   const [params, setParams] = useSearchParams();
   const [query, setQuery] = useState('');
   const [chartOpen, setChartOpen] = useState(false);
+  const [routerSetup, setRouterSetup] = useState(() => params.get('router_setup') === '1');
   /** The question the chart opens on (a row menu's move), or none. */
   const [chartStart, setChartStart] = useState<ChartStart | null>(null);
   const openChart = useCallback((start?: ChartStart) => { setChartStart(start ?? null); setChartOpen(true); }, []);
@@ -158,6 +161,7 @@ export function OrgPage() {
   // The org's own tasks: Main, the leads, and every task under a project.
   const orgTasks = useMemo(() => {
     const ids = new Set<string>(tree.main ? [tree.main.id] : []);
+    for (const router of tree.routers ?? []) ids.add(router.id);
     for (const p of tree.projects) {
       if (p.lead) ids.add(p.lead.id);
       for (const n of flattenNodes(p.teams)) ids.add(n.id);
@@ -171,10 +175,16 @@ export function OrgPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [orgTasks, epoch, answeredProbe],
   );
+  // A router row names its area ("Personal"), not the area's id.
+  const routerAreaIds = useMemo(
+    () => [...new Set(shownTasks.filter((t) => t.org_role === 'router' && t.router_area_id).map((t) => t.router_area_id as string))],
+    [shownTasks],
+  );
+  const areaNames = useRouterAreaNames(routerAreaIds);
   const channels = useMemo(
-    () => buildChannels(tree, shownTasks, answeredProbe),
+    () => buildChannels(tree, shownTasks, answeredProbe, areaNames),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- alertSig stands for the status store
-    [tree, shownTasks, alertSig],
+    [tree, shownTasks, alertSig, areaNames],
   );
   // For callbacks that must stay stable across org updates (select: the row menu memo holds it).
   const channelsRef = useCommittedRef(channels);
@@ -297,6 +307,7 @@ export function OrgPage() {
     setParams(() => {
       const next = liveParams();
       next.set('node', key);
+      next.delete('router_setup');
       if (tab) next.set('tab', tab); else next.delete('tab');
       next.delete('open');
       return next;
@@ -343,7 +354,7 @@ export function OrgPage() {
   }, [setParams, phone]);
   // Main or a lead named anywhere on the page is a node of the page: it is selected, not opened beside.
   const nodeOf = useCallback((match: (t: Task) => boolean): ChannelRow | undefined => {
-    const all = [channels.main, ...channels.rows];
+    const all = [channels.main, ...channels.rows, ...channels.routers];
     return all.find((r) => { const t = r.contactId ? tasks.find((x) => x.id === r.contactId) : undefined; return !!t && match(t); });
   }, [channels, tasks]);
   /** A letter's Answer: the task beside the page opens on its session's Inbox tab. */
@@ -466,6 +477,7 @@ export function OrgPage() {
         <OrgChannelList
           main={channels.main}
           rows={visibleRows}
+          routers={filterChannels(channels.routers, query)}
           moved={moved}
           rowMenu={rowMenu}
           total={channels.rows.length}
@@ -474,6 +486,7 @@ export function OrgPage() {
           onQuery={setQuery}
           onSelect={select}
           onOpenChart={() => openChart()}
+          onNewRouter={() => setRouterSetup(true)}
           keptOf={keptOf}
           openTaskIds={openTaskIds}
           onOpenTask={openTask}
@@ -508,7 +521,8 @@ export function OrgPage() {
       )}
       {showDetail && (!phone || phoneView === 'detail') && (
         <section className="org-detail-pane" aria-label={selected.name} aria-busy={nodeArriving || undefined}>
-          {!nodeArriving && <OrgNodeDetail
+          {routerSetup && <OrgRouterSetup tasks={tasks} onCancel={() => { setRouterSetup(false); setParams(() => { const next = liveParams(); next.delete('router_setup'); return next; }, { replace: true }); }} onDone={(id) => { setRouterSetup(false); refetch(); select(`router:${id}`); }} />}
+          {!nodeArriving && !routerSetup && <OrgNodeDetail
             key={selected.key}
             row={selected}
             rows={channels.rows}

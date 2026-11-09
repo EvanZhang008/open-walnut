@@ -34,7 +34,7 @@ import { bus, type BusEvent } from '../event-bus.js';
 import { CLOUD_MODE } from '../../constants.js';
 import { log } from '../../logging/index.js';
 import { readTriageConfig, type TriageConfigHolder } from './config.js';
-import { recordTriageArrivals, type TriagePendingMail, type TriagePendingSlack } from './state.js';
+import { readTriageHeadline, recordTriageArrivals, type TriagePendingMail, type TriagePendingSlack } from './state.js';
 import { TRIAGE_WAKE_EVENTS } from './types.js';
 
 /** The ONE subscriber name. Re-subscribing overwrites it; nothing else may use it. */
@@ -86,12 +86,7 @@ export function mailArrival(data: unknown, atMs: number): TriagePendingMail | nu
   const accountId = str(d.accountId, 200);
   const n = count(d.count);
   if (!accountId || n <= 0) return null;
-  const headlines = Array.isArray(d.headlines)
-    ? d.headlines.slice(0, MAX_HEADLINES).map((h) => {
-      const row = (h ?? {}) as Record<string, unknown>;
-      return { from: str(row.from, 200), subject: str(row.subject, 300) };
-    })
-    : [];
+  const headlines = Array.isArray(d.headlines) ? d.headlines.slice(0, MAX_HEADLINES).map(readTriageHeadline) : [];
   return { accountId, count: n, headlines, atMs };
 }
 

@@ -1,4 +1,5 @@
 import fsSync from 'node:fs';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { getDb as getSessionDb } from './session-db.js';
 import { TASK_SESSION_ROW_SQL, TaskSessionTakenError } from './sessions/one-session-per-task.js';
 import { CLOUD_MODE, TASKS_FILE } from '../constants.js';
@@ -30,6 +31,9 @@ import {
 import { registry } from './integration-registry.js';
 import { dbGeneration, getDb, inCopyApply, rowToTask, taskToRow, TASK_COLUMNS, transaction as dbTransaction, TASK_DB_PATH } from './task-db.js';
 import { runMigrationIfNeeded } from './task-db-migration.js';
+import { runSessionMigrationIfNeeded } from './session-db-migration.js';
+import { assertTaskHistoryRowReadable, assertTaskHistoryWrite, sessionDbHandle, taskHistoryWriteNeedsCheck } from './router/history-write.js';
+import { OrgError } from './org/org-store.js';
 import { isFollower, isHostReplica, placement } from './server-role.js';
 import { stampedFieldTimes as stampFieldTimesPure, type FieldStamp } from './task-field-times.js';
 
@@ -446,6 +450,8 @@ export function _resetForTesting(): void {
   rowShadowDataVersion = null;
   pendingRowShadow = null;
   writeLockDepth = 0;
+  sessionHistoryReady = false;
+  sessionHistoryError = undefined;
   // Statements are bound to a connection the caller is about to replace.
   findByExtIdStmts.clear();
   findByExtIdStmtsDb = null;
@@ -456,6 +462,15 @@ export function _resetForTesting(): void {
 // The promise chain prevents concurrent async operations within the server.
 // The file lock prevents races with hook child processes (on-stop, on-compact).
 let writeLock: Promise<void> = Promise.resolve();
+let sessionHistoryReady = false;
+let sessionHistoryError: unknown;
+const taskReplicaApply = new AsyncLocalStorage<true>();
+
+function historySessionDb(): ReturnType<typeof sessionDbHandle> {
+  if (sessionHistoryError) throw new OrgError('router_history_unreadable', 503,
+    `The legacy session history could not be read (${sessionHistoryError instanceof Error ? sessionHistoryError.message : String(sessionHistoryError)}). This history write was refused; retry after repairing the store.`);
+  return sessionDbHandle();
+}
 // Depth of the currently-executing locked section. The lock serializes, so this
 // is 0 or 1 in practice; it exists so a helper reachable BOTH from inside a
 // locked section and from a bare call can avoid self-deadlocking (the file lock
@@ -479,10 +494,21 @@ function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
   let changesAtStart = -1;
   return prev
     .then(() => withFileLock(TASKS_FILE, async () => {
+      if (!sessionHistoryReady && !isHostReplica() && !taskReplicaApply.getStore()) {
+        try {
+          await runSessionMigrationIfNeeded();
+          sessionHistoryReady = true;
+          sessionHistoryError = undefined;
+        } catch (error) { sessionHistoryError = error; }
+      }
       seededAtStart = taskStoreCacheSeeded;
       changesAtStart = totalChanges();
       writeLockDepth += 1;
-      try { return await fn(); } finally { writeLockDepth -= 1; }
+      try { return await fn(); } catch (error) {
+        // A rejected whole-store mutation may have changed a shared history array before its first SQL write.
+        invalidateTaskStoreCache();
+        throw error;
+      } finally { writeLockDepth -= 1; }
     }))
     .finally(() => {
       // The next section waits on this resolve, so nothing before it may skip it:
@@ -961,14 +987,22 @@ async function writeStore(store: TaskStore): Promise<void> {
     const insertStmt = handle.prepare(insertSql);
     // The rows as stored, for the per-field change times (task-field-times.ts): the
     // shadow when it is current, else read once (the rewrite is whole-store then anyway).
-    let storedRows: Map<string, Record<string, any>> | null = null;
+    // The area history rule judges a row against what the table holds now, never the shadow: a
+    // write on this connection outside writeStore leaves data_version alone, so the shadow can
+    // still describe the row before it (2026-11-07: a stale shadow read a marked row as unmarked
+    // and refused every later whole-store write). A full rewrite reads the table once.
+    const storedRows: Map<string, Record<string, any>> | null = !shadow || (!canSkipUnchanged && !taskReplicaApply.getStore())
+      ? new Map((handle.prepare('SELECT * FROM tasks').all() as Record<string, any>[]).map((r) => [String(r.id), r]))
+      : null;
+    const oneRow = handle.prepare('SELECT * FROM tasks WHERE id = ?');
+    const decodedRows = new Map<string, Task | undefined>();
     const storedTask = (id: string): Task | undefined => {
-      const old = shadow?.fingerprints.get(id);
-      if (old) return rowToTask(boundRow(old));
-      if (shadow) return undefined;
-      storedRows ??= new Map((handle.prepare('SELECT * FROM tasks').all() as Record<string, any>[]).map((r) => [String(r.id), r]));
-      const row = storedRows.get(id);
-      return row ? rowToTask(row) : undefined;
+      if (decodedRows.has(id)) return decodedRows.get(id);
+      const row = storedRows ? storedRows.get(id) : oneRow.get(id) as Record<string, any> | undefined;
+      if (row && !taskReplicaApply.getStore()) assertTaskHistoryRowReadable(row);
+      const task = row ? rowToTask(row) : undefined;
+      decodedRows.set(id, task);
+      return task;
     };
     for (const task of validTasks) {
       // Identity over the exact bound values, so a field that round-trips to the
@@ -986,6 +1020,11 @@ async function writeStore(store: TaskStore): Promise<void> {
       storeStats.fingerprintedRows += 1;
       if (canSkipUnchanged && sameFingerprint(shadow!.fingerprints.get(task.id), fingerprint)) {
         continue; // row unchanged and keeps its position — skip the write
+      }
+      // Every follower mirrors the leader's checked rows, including the companion's separate session copy.
+      if (!taskReplicaApply.getStore()) {
+        const stored = storedTask(task.id);
+        if (taskHistoryWriteNeedsCheck(stored, task)) assertTaskHistoryWrite(stored, task, historySessionDb());
       }
       insertStmt.run(boundRow(fingerprint));
       storeStats.rowsWritten += 1;
@@ -1136,6 +1175,7 @@ export interface AddTaskInput {
   agent_id?: string;
   /** An org node (see Task.org_role): the main agent or a project lead. */
   org_role?: import('./types.js').OrgRole;
+  router_area_id?: string;
   /** The plugin whose own view is the only place the task shows (see Task.plugin_only). Such a
    *  task never syncs (born local) and is never pinned. */
   plugin_only?: string;
@@ -3062,6 +3102,7 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
       ...(input.walnut_agent ? { walnut_agent: true } : {}),
       ...(input.walnut_agent && input.agent_id ? { agent_id: input.agent_id } : {}),
       ...(input.org_role ? { org_role: input.org_role } : {}),
+      ...(input.router_area_id ? { router_area_id: input.router_area_id } : {}),
       ...(keptBy ? { plugin_only: keptBy } : {}),
       ...(syncHold ? { sync_hold: syncHold } : {}),
       // Born pinned (interactive/AI creates — newTaskPinDefault), in the tier
@@ -4696,6 +4737,9 @@ export async function updateTask(
         throw new Error(ambiguousIdMessage(updates.parent_task_id!, parentMatches, 'parent_task_id'));
       }
       const parentTask = parentMatches[0];
+      if (task.org_role === 'router' || task.router_area_id !== parentTask.router_area_id) {
+        throw new Error('Router nodes are independent, and receiving work cannot move under a leader in another area.');
+      }
       if (parentTask.id === task.id) {
         throw new Error('A task cannot be its own parent.');
       }
@@ -5704,6 +5748,64 @@ function taskRowExists(id: string): boolean {
 }
 
 /**
+ * A merge refused because the survivor or the victim is incoming-item area work (or its scope
+ * could not be read). The area registry and its ledger keep the victim's exact id for good, and
+ * a merge moves sessions, children and history, which is no area migration: such a merge is
+ * refused before anything is written, within one area too.
+ */
+export class AreaMergeRefusedError extends Error {
+  public readonly code = 'area_merge_refused';
+  public readonly status = 409;
+  public readonly role: 'survivor' | 'victim';
+  public readonly taskId: string;
+  /**
+   * Set by mergeTasksInto when the refusal came after earlier victims of the batch were already
+   * merged (a task classified into an area meanwhile): what really happened, never rolled back.
+   * `notAttempted` are the victims after the refused one.
+   */
+  public readonly partial?: MergeAreaPartial;
+  constructor(role: 'survivor' | 'victim', taskId: string, partial?: MergeAreaPartial) {
+    super(partial && partial.mergedIds.length > 0
+      ? `mergeTaskInto: ${role} "${taskId}" is incoming-item area work, or its area could not be read. `
+        + `${partial.mergedIds.length} earlier ${partial.mergedIds.length === 1 ? 'victim was' : 'victims were'} already merged; this one and the rest were not.`
+      : `mergeTaskInto: ${role} "${taskId}" is incoming-item area work, or its area could not be read. Nothing was merged.`);
+    this.name = 'AreaMergeRefusedError';
+    this.role = role;
+    this.taskId = taskId;
+    if (partial) this.partial = partial;
+  }
+}
+
+export interface MergeAreaPartial {
+  mergedIds: string[];
+  sessionsRelinked: number;
+  notMerged: Array<{ id: string; reason: 'survivor_gone' | 'victim_gone' }>;
+  notAttempted: string[];
+}
+
+/**
+ * Before any write: both tasks must read as ordinary work by the full area rule (router/context-
+ * sharing.ts: marker, registry, router assignment, every session profile; a failed read refuses).
+ * A task missing here keeps MergeTaskMissingError. Runs outside the task write lock: the rule
+ * reads tasks through getTask.
+ */
+async function refuseAreaMerge(survivorId: string, victimId: string): Promise<void> {
+  const { mayShareTaskContext } = await import('./router/context-sharing.js');
+  for (const [role, id] of [['survivor', survivorId], ['victim', victimId]] as const) {
+    if (!taskRowExists(id)) throw new MergeTaskMissingError(role, id);
+    if (await mayShareTaskContext(id, undefined)) continue;
+    // Deleted meanwhile reads as a refusal there: it is still a missing task.
+    if (!taskRowExists(id)) throw new MergeTaskMissingError(role, id);
+    throw new AreaMergeRefusedError(role, id);
+  }
+}
+
+/** The same refusal on the rows read under the write lock: their own area marks and role. */
+function areaMarked(task: Task): boolean {
+  return (typeof task.router_area_id === 'string' && !!task.router_area_id.trim()) || task.org_role === 'router';
+}
+
+/**
  * Merge one task into another, then delete the victim. Session links are the
  * point: `session_ids` are unioned, empty session slots are filled from the
  * victim, and every sessions.task_id row pointing at the victim is re-pointed
@@ -5771,7 +5873,18 @@ async function mergeTasksIntoNow(survivorId: string, victimIds: readonly string[
   const notMerged: MergeTasksResult['notMerged'] = [];
   let sessionsRelinked = 0;
   let survivorGone = false;
+  // An area task anywhere in the batch refuses the whole batch before its first merge; a
+  // missing task is still listed below as not merged.
+  await ensureInit();
   for (const victimId of victimIds) {
+    if (victimId === survivorId) continue;
+    try {
+      await refuseAreaMerge(survivorId, victimId);
+    } catch (err) {
+      if (!(err instanceof MergeTaskMissingError)) throw err;
+    }
+  }
+  for (const [index, victimId] of victimIds.entries()) {
     if (survivorGone) {
       notMerged.push({ id: victimId, reason: 'survivor_gone' });
       continue;
@@ -5782,6 +5895,13 @@ async function mergeTasksIntoNow(survivorId: string, victimIds: readonly string[
       sessionsRelinked += one.sessionsRelinked;
       if (one.survivorDeleted) survivorGone = true;
     } catch (err) {
+      // Classified into an area after the check above: the batch stops here, and the refusal
+      // says what was already merged (kept, never rolled back) and what was not tried.
+      if (err instanceof AreaMergeRefusedError) {
+        throw new AreaMergeRefusedError(err.role, err.taskId, {
+          mergedIds: [...mergedIds], sessionsRelinked, notMerged: [...notMerged], notAttempted: victimIds.slice(index + 1),
+        });
+      }
       if (!(err instanceof MergeTaskMissingError)) throw err;
       if (err.role === 'survivor') survivorGone = true;
       notMerged.push({ id: victimId, reason: err.role === 'survivor' ? 'survivor_gone' : 'victim_gone' });
@@ -5816,6 +5936,7 @@ async function mergeTaskIntoNow(
 ): Promise<MergeTaskResult> {
   if (survivorId === victimId) throw new Error('mergeTaskInto: survivor and victim are the same task');
   await ensureInit();
+  await refuseAreaMerge(survivorId, victimId);
 
   let detachedVictimSessions: string[] = [];
   let inheritedLegacySessions: string[] = [];
@@ -5825,6 +5946,9 @@ async function mergeTaskIntoNow(
     const victim = store.tasks.find((t) => t.id === victimId);
     if (!survivor) throw new MergeTaskMissingError('survivor', survivorId);
     if (!victim) throw new MergeTaskMissingError('victim', victimId);
+    // Marked between the check above and this lock: nothing is written.
+    if (areaMarked(survivor)) throw new AreaMergeRefusedError('survivor', survivorId);
+    if (areaMarked(victim)) throw new AreaMergeRefusedError('victim', victimId);
 
     // One session per task (sessions/one-session-per-task.ts): the survivor keeps
     // its own session; the victim's follows only when the survivor has none. A
@@ -6450,6 +6574,7 @@ function fileTasksLocked(
     seen.add(item.id);
     const row = sel.get(item.id) as Record<string, any> | undefined;
     if (!row) { skipped.push({ id: item.id, reason: 'missing' }); continue; }
+    assertTaskHistoryRowReadable(row);
     const task = rowToTask(row);
     if (item.expect_project !== undefined && !sameProject(task.project, item.expect_project)) {
       skipped.push({ id: task.id, reason: 'changed' }); continue;
@@ -6510,6 +6635,7 @@ function fileTasksLocked(
     // other payload fields survive (see updateTasksBulk).
     if ('payload' in patchRow) patchRow.payload = taskToRow({ ...task, ...prepared }).payload ?? null;
     const cols = Object.keys(patchRow);
+    // history-write exempt: a filing patch sets only project, folder, sync hold and pin fields.
     handle.prepare(`UPDATE tasks SET ${cols.map((c) => `${c} = @${c}`).join(', ')} WHERE id = @id`).run({ ...patchRow, id: task.id });
     Object.assign(task, prepared);
     normalizeNullClears(task);
@@ -7799,6 +7925,11 @@ export async function applyTaskReplica(change: {
   order?: readonly string[];
   registry?: TaskReplicaRegistry;
 }): Promise<{ written: number; removed: number; skipped: string[] }> {
+  if (!isFollower()) throw new Error('Only a follower applies the leader task copy.');
+  return taskReplicaApply.run(true, () => applyTaskReplicaNow(change));
+}
+
+async function applyTaskReplicaNow(change: Parameters<typeof applyTaskReplica>[0]): Promise<{ written: number; removed: number; skipped: string[] }> {
   await ensureInit();
   if (!change.order && !change.registry) return applyTaskReplicaRows(change.rows ?? [], change.removeIds ?? []);
   return withWriteLock(async () => {
@@ -7832,6 +7963,7 @@ export async function applyTaskReplica(change: {
 }
 
 /** applyTaskReplica's row-only path: O(rows sent), every column bound (an absent field is a clear). */
+// The trusted follower apply scope is the same for ordered and rows-only copies.
 function applyTaskReplicaRows(rows: readonly Task[], removeIds: readonly string[]): Promise<{ written: number; removed: number; skipped: string[] }> {
   return withWriteLock(async () => {
     let written = 0;
@@ -8639,7 +8771,15 @@ export async function updateTaskRaw(
     const setClause = cols.map((c) => `${c} = @${c}`).join(', ');
     const bound: Record<string, unknown> = { ...patchRow, id };
     dbTransaction((handle) => {
+      const currentRow = handle.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+      if (!currentRow) throw new Error(`Task ${id} disappeared before its update.`);
+      assertTaskHistoryRowReadable(currentRow);
+      const current = rowToTask(currentRow);
+      const merged = { ...current, ...prepared } as Task;
+      if (taskHistoryWriteNeedsCheck(current, merged)) assertTaskHistoryWrite(current, merged, historySessionDb());
+      if ('payload' in patchRow) bound.payload = taskToRow(merged).payload ?? null;
       handle.prepare(`UPDATE tasks SET ${setClause} WHERE id = @id`).run(bound);
+      Object.assign(task, current);
     });
     patchStoreCacheRows([id]); // targeted write on our own connection — see patchStoreCacheRows
     // Return the merged post-update task so callers can emit / push without re-reading.
@@ -8799,6 +8939,7 @@ export async function updateTasksBulk(
       for (const { id, patch } of updates) {
         const row = sel.get(id) as Record<string, any> | undefined;
         if (!row) continue;
+        assertTaskHistoryRowReadable(row);
         const task = rowToTask(row);
         const prepared = prepareRawUpdate(task, patch, opts);
         if (!prepared) continue;
@@ -8813,6 +8954,8 @@ export async function updateTasksBulk(
         }
         const cols = Object.keys(patchRow);
         if (cols.length === 0) continue;
+        const merged = { ...task, ...prepared } as Task;
+        if (taskHistoryWriteNeedsCheck(task, merged)) assertTaskHistoryWrite(task, merged, historySessionDb());
         const setClause = cols.map((c) => `${c} = @${c}`).join(', ');
         handle.prepare(`UPDATE tasks SET ${setClause} WHERE id = @id`).run({ ...patchRow, id });
         // Apply the patch to the in-memory task object so callers see the
@@ -8883,6 +9026,7 @@ export async function addTasksBulk(
           created_at: td.created_at ?? nowIso,
           updated_at: td.updated_at ?? nowIso,
         } as Task;
+        if (taskHistoryWriteNeedsCheck(undefined, task)) assertTaskHistoryWrite(undefined, task, historySessionDb());
         const partial = taskToRow(task);
         const bound: Record<string, unknown> = {};
         for (const col of insertCols) {

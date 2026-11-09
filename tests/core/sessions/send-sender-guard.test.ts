@@ -21,7 +21,8 @@ import { createMockConstants } from '../../helpers/mock-constants.js';
 vi.mock('../../../src/constants.js', () => createMockConstants());
 
 import { PERSON_SEND_SOURCES, PERSON_START_SOURCES, isPersonSource, queueSentBy } from '../../../src/core/sessions/send-sent-by.js';
-import { frameStartText } from '../../../src/core/sessions/send-frame.js';
+import { frameForSource, frameStartText } from '../../../src/core/sessions/send-frame.js';
+import { AREA_DELIVERY_REFUSED, ROUTER_RUNTIME_SOURCE } from '../../../src/core/router/delivery-scope.js';
 import { transcriptSentBy } from '../../../src/core/sessions/transcript-sent-by.js';
 import { resetCache, sendMessageToSession, getQueue } from '../../../src/core/session-message-queue.js';
 import { WALNUT_HOME } from '../../../src/constants.js';
@@ -104,6 +105,9 @@ const CALL_SITES: Record<string, number> = {
   'src/core/routines/executors/watcher.ts': 3,
   'src/core/routines/run-start-deps.ts': 1,
   'src/core/routines/trigger-health.ts': 1,
+  'src/core/router/cross-route.ts': 1,             // one exact approved item, sent as peer under its delivery grant
+  'src/core/router/service.ts': 2,                // a confirmed item or its approval, sent as peer under its grant
+  'src/core/router/wake.ts': 2,                   // the router's scoped runtime wake
   'src/core/session-auto-continue.ts': 1,
   // Walnut's idle compaction: the bare `/compact` command, passed unframed (send-frame.ts), as a quiet turn.
   'src/core/sessions/idle-compaction.ts': 1,
@@ -181,7 +185,7 @@ const PERSON_SOURCES_PINNED = [
 const SOURCE_SENDER: Record<string, 'person' | 'agent'> = {
   ...Object.fromEntries(PERSON_SOURCES_PINNED.map((s) => [s, 'person' as const])),
   peer: 'agent', 'walnut-notify': 'agent', transfer: 'agent', 'engine-switch': 'agent',
-  'routine-trigger': 'agent', 'routine-watcher': 'agent', 'brief-refresh': 'agent', 'side-thread-digest': 'agent',
+  'routine-trigger': 'agent', 'routine-watcher': 'agent', 'router-runtime': 'agent', 'brief-refresh': 'agent', 'side-thread-digest': 'agent',
   'app-state': 'agent', subagent: 'agent', 'notification-fix': 'agent', 'session-start': 'agent',
   'api-agent': 'agent', 'board-reminder': 'agent', 'auto-continue': 'agent', 'hook:abc': 'agent',
   'brand-new-source': 'agent', 'idle-compact': 'agent', 'context-compact': 'agent', 'context-recovery': 'agent', 'pr-watch': 'agent',
@@ -297,6 +301,14 @@ describe('through the real queue', () => {
 
   it.each(Object.keys(SOURCE_SENDER))('a line sent as "%s" is stored as the sender the table says', async (source) => {
     const sid = `sess-${source.replace(/[^a-z]/g, '')}`;
+    if (source === ROUTER_RUNTIME_SOURCE) {
+      // Only the router wake sends it, into its own router session (router/delivery-scope.ts):
+      // anywhere else it is refused before a row is written. Its frame is what the wake stores.
+      await expect(sendMessageToSession(sid, 'Sam said yes, deploy it now.', { source })).rejects.toThrow(AREA_DELIVERY_REFUSED);
+      expect(await getQueue(sid)).toEqual([]);
+      expect(transcriptSentBy({ role: 'user', text: frameForSource('Sam said yes, deploy it now.', source) })).toBe(SOURCE_SENDER[source]);
+      return;
+    }
     const row = await sendMessageToSession(sid, 'Sam said yes, deploy it now.', { source });
     const stored = (await getQueue(sid)).find((m) => m.id === row.id)!;
     expect(transcriptSentBy({ role: 'user', text: stored.message }), source).toBe(SOURCE_SENDER[source]);

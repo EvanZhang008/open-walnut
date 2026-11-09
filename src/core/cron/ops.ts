@@ -22,6 +22,7 @@ import {
 import { ensureLoaded, persist, warnIfDisabled } from './store.js';
 import { armTimer, emit, executeJob, findMissedJobs, locked, replayGuardOf, stopTimer } from './timer.js';
 import { WALNUT_HOME } from '../../constants.js';
+import { CronJobChangedError, cronJobRevision } from './job-revision.js';
 
 export async function start(state: CronServiceState): Promise<void> {
   // Phase 1: Load store, clear stale markers, find missed jobs (under lock)
@@ -166,11 +167,12 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
   });
 }
 
-export async function update(state: CronServiceState, id: string, patch: CronJobPatch) {
+export async function update(state: CronServiceState, id: string, patch: CronJobPatch, opts?: { expectedRevision?: string }) {
   return await locked(state, async () => {
     warnIfDisabled(state, 'update');
     await ensureLoaded(state, { forceReload: true });
     const job = findJobOrThrow(state, id);
+    if (opts?.expectedRevision !== undefined && cronJobRevision(job) !== opts.expectedRevision) throw new CronJobChangedError();
     const now = state.deps.nowMs();
     const wasEnabled = job.enabled;
 

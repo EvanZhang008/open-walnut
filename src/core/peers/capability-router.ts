@@ -90,7 +90,7 @@ export async function handleGatewayCapability(
   callerSid = (await import('../sessions/acp-caller-sid.js')).canonicalCallerSid(callerSid);
   switch (capability) {
     case 'tools.list':
-      return handleToolsList(payload ?? {}, host);
+      return handleToolsList(payload ?? {}, host, callerSid);
     case 'tools.call':
       return handleToolsCall(callerSid, payload ?? {}, host, d);
     // Old daemons / old shims still speak these — answer with the replacement
@@ -121,7 +121,9 @@ export async function handleGatewayCapability(
  * and `walnut tools call <op> --help` get a schema without shipping every op's
  * parameter descriptions over the socket.
  */
-async function handleToolsList(payload: Record<string, unknown>, host: string): Promise<CapabilityOutcome> {
+async function handleToolsList(payload: Record<string, unknown>, host: string, callerSid: string): Promise<CapabilityOutcome> {
+  const { areaOpsForCaller } = await import('../router/gateway-policy.js');
+  const areaOps = await areaOpsForCaller(callerSid);
   const { listOps, getOpOwner } = await import('../../ops/index.js');
   const { opParams, formatParamSignature } = await import('../../ops/op-help.js');
   const wanted = typeof payload.name === 'string' ? payload.name.trim() : '';
@@ -131,7 +133,7 @@ async function handleToolsList(payload: Record<string, unknown>, host: string): 
   // refused. An older hub ignores the flag; that server then lists permissive schemas.
   if (payload.schemas === true) {
     const { opInputJsonSchema } = await import('../../ops/registry.js');
-    const ops = listOps().filter((o) => !gatewayRefusal(o, host, getOpOwner(o.name)));
+    const ops = listOps().filter((o) => (!areaOps || areaOps.has(o.name)) && !gatewayRefusal(o, host, getOpOwner(o.name)));
     return {
       ok: true,
       result: {
@@ -146,7 +148,8 @@ async function handleToolsList(payload: Record<string, unknown>, host: string): 
       },
     };
   }
-  const ops = wanted ? listOps({ includeDeprecated: true }).filter((o) => o.name === wanted) : listOps();
+  const ops = (wanted ? listOps({ includeDeprecated: true }).filter((o) => o.name === wanted) : listOps())
+    .filter((o) => !areaOps || areaOps.has(o.name));
   return {
     ok: true,
     result: {
@@ -207,6 +210,9 @@ async function handleToolsCall(
   if (typeof name !== 'string' || !name) {
     return err('bad_request', 'tools.call requires a non-empty string "name"');
   }
+  const { areaOpsForCaller } = await import('../router/gateway-policy.js');
+  const areaOps = await areaOpsForCaller(callerSid);
+  if (areaOps && !areaOps.has(name)) return err('bad_request', 'This scoped session may use only its area routing tools. Nothing ran.');
   let args = payload.args;
   if (args !== undefined && (typeof args !== 'object' || args === null || Array.isArray(args))) {
     return err('bad_request', 'tools.call "args" must be a JSON object');

@@ -381,6 +381,8 @@ export type PluginToolResult = string | Array<PluginToolTextBlock | PluginToolIm
 export interface PluginToolMeta {
   toolUseId?: string;
   source?: string;
+  callerSid?: string;
+  callerKind?: 'person' | 'agent';
 }
 
 export interface PluginToolSpec {

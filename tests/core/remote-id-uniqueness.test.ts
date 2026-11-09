@@ -30,6 +30,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('remote-id-uniquenes
 
 vi.mock('../../src/core/session-tracker.js', () => ({
   listSessions: vi.fn(async () => []),
+  getSessionsForTask: vi.fn(async () => []),
   unlinkSessionsFromTasks: vi.fn(async () => 0),
   relinkSessionsToTask: vi.fn(async () => 0),
   completeTaskSessions: vi.fn(async () => 0),
