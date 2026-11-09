@@ -21,6 +21,8 @@ const LISTED: Record<string, Array<{ snippet: string; his: string }>> = {
   'src/core/user-status.ts': [
     { snippet: "if (!owner) return strip<UserStatus>({ state: 'needs', source: 'error'", his: 'failureOf: his kind by the error text (usersErrorKind), or no lead, VP or Main above the task' },
     { snippet: 'has its session open in a terminal right now', his: "yes: the user's own terminal holds the session, only closing it frees it" },
+    { snippet: "source: 'error', ask: limitAskWords(ul, nowMs)", his: "yes (spending): its subscription's usage limit, after the user turned Walnut's wait off or it gave up" },
+    { snippet: "source: 'error', ask: clean(input.workspaceHold!)", his: "yes: only a person's own start (no caller session) waits on it, and allowing a setup source is a permission" },
   ],
 }
 

@@ -118,7 +118,9 @@ describe('the endpoint wait', () => {
     expect(triesAt[2]! - triesAt[1]!).toBeGreaterThanOrEqual(60)
     expect(r.gaveUp).toHaveLength(1)
     expect(r.gaveUp[0]).toMatch(/kept dropping mid-request .*Check the network there, then Retry the session/)
-    expect(statusOf(r.rec)).toMatchObject({ state: 'needs', source: 'error' })
+    // Its lead's to retry (2026-11-09), the user's only with no one above the task.
+    expect(statusOf(r.rec)).toMatchObject({ state: 'waiting', kind: 'lead', waitingOn: expect.stringContaining('Walnut stopped waiting for its model endpoint') })
+    expect(statusOf(r.rec, false)).toMatchObject({ state: 'needs', source: 'error' })
   })
 
   it('a drop after a long refusal still waits its clock from the drop, never at once', async () => {

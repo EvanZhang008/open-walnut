@@ -426,7 +426,7 @@ describe('SessionAutoContinue retryAt', () => {
     const off = onAutoRetryChange((sid) => told.push(sid))
     try {
       const t0 = h.clock.now()
-      h.sac.handleEvent(resultEvent({ sessionId: 'sess-1', isError: true, result: 'API Error: Connection dropped (ECONNRESET)' }))
+      h.sac.handleEvent(resultEvent({ sessionId: 'sess-1', isError: true, result: 'API Error: 529 Overloaded' }))
       expect(h.sac.retryAt('sess-1')).toBe(t0 + 1_000)
       expect(told).toEqual(['sess-1'])
       h.clock.advance(1_100); h.timers.runDue()
@@ -436,7 +436,7 @@ describe('SessionAutoContinue retryAt', () => {
       expect(told).toEqual(['sess-1', 'sess-1'])
       // The second retry waits twice as long.
       const t1 = h.clock.now()
-      h.sac.handleEvent(resultEvent({ sessionId: 'sess-1', isError: true, result: 'API Error: Connection dropped (ECONNRESET)' }))
+      h.sac.handleEvent(resultEvent({ sessionId: 'sess-1', isError: true, result: 'API Error: 529 Overloaded' }))
       expect(h.sac.retryAt('sess-1')).toBe(t1 + 2_000)
       // A person's message takes over: no retry is pending any more.
       h.sac.handleEvent(sendEvent('sess-1'))
@@ -451,7 +451,7 @@ describe('SessionAutoContinue holdUntilRetried', () => {
     h.clock.advance(1_100); h.timers.runDue()
     for (let i = 0; i < 5; i++) await Promise.resolve()
   }
-  const ERR = 'API Error: Connection dropped (ECONNRESET)'
+  const ERR = 'API Error: 529 Overloaded'
 
   it('holds nothing when no retry is pending', () => {
     const h = makeHarness({ delayMs: 1_000 })

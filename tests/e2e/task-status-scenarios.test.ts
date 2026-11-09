@@ -249,25 +249,27 @@ describe('every surface shows the same state after every step', () => {
 
   // 2026-11-09, the CEO for the user: two sessions failed on ECONNRESET, Walnut's own retries failed
   // too, and both read Needs you with "Retry it or open it". Retrying what an agent broke is never his.
-  it('a turn fails on ECONNRESET -> Walnut retries it -> the retry fails too -> its lead retries, never the user', async () => {
+  // A dropped connection (ECONNRESET) waits on the endpoint instead (sessions/endpoint-wait.ts); its
+  // give-up goes the same way (tests/core/sessions/session-error-owner.test.ts).
+  it('a turn fails on an overloaded answer -> Walnut retries it -> the retry fails too -> its lead retries, never the user', async () => {
     const { lead, worker, sid } = await team('Resetflow')
     await turnStarts(worker, sid, 'web-ui')
-    const ECONNRESET = 'API Error: Connection dropped (ECONNRESET)'
-    await updateSessionRecord(sid, { process_status: 'error', errorMessage: ECONNRESET })
-    bus.emit(EventNames.SESSION_RESULT, { sessionId: sid, taskId: worker.id, result: ECONNRESET, isError: true }, ['*'], { source: 'session-runner' })
+    const OVERLOADED = 'API Error: 529 Overloaded'
+    await updateSessionRecord(sid, { process_status: 'error', errorMessage: OVERLOADED })
+    bus.emit(EventNames.SESSION_RESULT, { sessionId: sid, taskId: worker.id, result: OVERLOADED, isError: true }, ['*'], { source: 'session-runner' })
     await expect.poll(async () => (await getTask(worker.id)).phase, { timeout: 10_000 }).toBe('NEED_ACTION')
     expect(getSessionAutoContinue()?.retryAt(sid)).toBeGreaterThan(Date.now())
     await expectEverywhere(worker.id, lead.id, 'waiting', 'Walnut retries it')
     expect((await getTask(worker.id)).user_status).toMatchObject({ kind: 'machine', waitingOn: expect.stringContaining('Walnut, retrying its failed turn by itself') })
     // The retry goes out, and its turn fails the same way: no retry is left, so it is its lead's.
     await expect.poll(() => getSessionAutoContinue()?.firedCount(sid), { timeout: 15_000 }).toBe(1)
-    await updateSessionRecord(sid, { process_status: 'error', errorMessage: ECONNRESET })
-    bus.emit(EventNames.SESSION_RESULT, { sessionId: sid, taskId: worker.id, result: ECONNRESET, isError: true }, ['*'], { source: 'session-runner' })
+    await updateSessionRecord(sid, { process_status: 'error', errorMessage: OVERLOADED })
+    bus.emit(EventNames.SESSION_RESULT, { sessionId: sid, taskId: worker.id, result: OVERLOADED, isError: true }, ['*'], { source: 'session-runner' })
     await expect.poll(async () => (await getTask(worker.id)).phase, { timeout: 10_000 }).toBe('NEED_ACTION')
     expect(getSessionAutoContinue()?.retryAt(sid)).toBeNull()
     await expectEverywhere(worker.id, lead.id, 'waiting', 'its lead retries it')
     expect((await getTask(worker.id)).user_status).toMatchObject({
-      kind: 'lead', waitingOn: `Its lead, to retry it: its session failed again after Walnut's own retry (${ECONNRESET})`,
+      kind: 'lead', waitingOn: `Its lead, to retry it: its session failed again after Walnut's own retry (${OVERLOADED})`,
     })
     // An error only the user can fix still reaches him.
     await updateSessionRecord(sid, { errorMessage: 'Invalid API key · Please run /login' })
