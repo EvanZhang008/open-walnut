@@ -40,7 +40,7 @@ export function tampered(h: Host): boolean {
   return false
 }
 
-export function makeHost(z: number, mark?: 'walnutMenu' | 'walnutSavebar'): { host: Host; root: ShadowRoot } {
+export function makeHost(z: number, mark?: 'walnutMenu' | 'walnutSavebar' | 'walnutCursor'): { host: Host; root: ShadowRoot } {
   const el = document.createElement('walnut-ext')
   el.dataset.walnutHost = '1'
   if (mark) el.dataset[mark] = '1' // set before the watch starts: a later attribute change is the page's

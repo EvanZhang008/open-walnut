@@ -7,6 +7,9 @@
  * asks again and a denial holds; the agent's tab sits in its own window with a frame and a
  * Stop button, and Stop gives the tab back; the person's own tabs are never listed or touched;
  * Settings, Browser extension shows the browser and the allowed site, and Remove takes it off.
+ * The agent's cursor is drawn where it acts (in the top document for a step in a frame) and never
+ * takes a click; a tab of the person's the agent holds sits in its task's tab group of that window
+ * and goes back where it was when let go (2026-11-09).
  *
  * Agents act through the API here (`walnut browser` and the `browser` op call the same route).
  * Sites are *.example.test / *.other.test, mapped to this machine by Chromium's host resolver.
@@ -264,6 +267,10 @@ test('read, type, pick and click like a person; a screenshot of the tab', async 
   expect((await act(page, { action: 'click', ref: send, request: ask.body.request })).status).toBe(200)
   const text = await act(page, { action: 'text' })
   expect(text.body.text).toContain('Ordered for Test Person: rye')
+  // The agent's cursor is drawn where it acted, one of it, and it never takes a click (page-cursor.ts).
+  const cursor = agentPage()!.locator('walnut-ext[data-walnut-cursor]')
+  await expect(cursor).toHaveCount(1)
+  expect(await cursor.evaluate((el) => ({ pe: getComputedStyle(el).pointerEvents, w: el.getBoundingClientRect().width, z: getComputedStyle(el).zIndex }))).toEqual({ pe: 'none', w: 0, z: '2147483647' })
   // What the agent typed is in the page's own field, as the page's framework would see it.
   await expect(agentPage()!.locator('#who')).toHaveValue('Test Person')
   const shot = await act(page, { action: 'screenshot', inline: true })
@@ -411,6 +418,9 @@ test('frames: the snapshot reads same-origin and cross-origin frames, a frame re
 
   expect((await act(page, { action: 'type', ref: field, text: 'hello frame' })).status).toBe(200)
   expect((await act(page, { action: 'click', ref: cross })).status).toBe(200)
+  // A step in another site's frame: its cursor is drawn once, in the top document (agent-cursor.ts), none in the frames.
+  await expect(agentPage()!.locator('walnut-ext[data-walnut-cursor]')).toHaveCount(1)
+  for (const f of agentPage()!.frames().slice(1)) expect(await f.locator('walnut-ext[data-walnut-cursor]').count().catch(() => 0)).toBe(0)
   expect((await act(page, { action: 'click', ref: same })).status).toBe(200)
   const outs = async () => (await Promise.all(agentPage()!.frames().map((f) => f.evaluate(() => document.getElementById('o')?.textContent ?? '').catch(() => '')))).join('|')
   await expect.poll(outs).toContain('cross clicked: hello frame')
@@ -518,6 +528,14 @@ test('the person\'s tabs: listed by title and address; one they are not on can b
   expect(row(agentTab)).toMatchObject({ owner: 'mine' })
   expect(JSON.stringify(all.body)).not.toContain('Order a test sandwich</h1>')
 
+  // Where the tab is in the person's window, and its tab group (none yet).
+  const placeOf = (id: number) => sw.evaluate(async (tab: number) => {
+    const t = await chrome.tabs.get(tab)
+    const g = t.groupId >= 0 ? await chrome.tabGroups.get(t.groupId) : null
+    return { windowId: t.windowId, index: t.index, group: g ? { title: g.title, windowId: g.windowId, collapsed: g.collapsed } : null }
+  }, id)
+  const was = await placeOf(ids.a)
+  expect(was.group).toBeNull()
   const here = await act(page, { action: 'take', tab: ids.b })
   expect(here.status).toBe(409)
   expect(here.body.code).toBe('person_is_here')
@@ -525,6 +543,10 @@ test('the person\'s tabs: listed by title and address; one they are not on can b
   expect(took.status, JSON.stringify(took.body)).toBe(200)
   expect(took.body).toMatchObject({ tab: ids.a, taken: true })
   await expect.poll(() => p1.locator('walnut-ext').count(), { timeout: 10_000 }).toBeGreaterThan(0)
+  // Held by the agent: in its task's group of the person's own window, never folded, and the person stays on their tab.
+  await expect.poll(async () => (await placeOf(ids.a)).group?.title ?? '', { timeout: 10_000 }).toMatch(/^walnut-/)
+  expect((await placeOf(ids.a)).group).toMatchObject({ windowId: was.windowId, collapsed: false })
+  expect(await sw.evaluate(async (id: number) => (await chrome.tabs.get(id)).active, ids.b)).toBe(true)
   const snap = await act(page, { action: 'snapshot', tab: ids.a })
   expect(snap.status).toBe(200)
   expect(snap.body.snapshot).toContain('Order a test sandwich')
@@ -541,7 +563,10 @@ test('the person\'s tabs: listed by title and address; one they are not on can b
   expect((await act(page, { action: 'close', tab: child })).body).toMatchObject({ closed: true })
   const back = await act(page, { action: 'close', tab: ids.a })
   expect(back.body).toMatchObject({ closed: false, released: true })
+  // The frame, its pill and the agent's cursor (drawn by the click above) are all gone.
   await expect.poll(() => p1.locator('walnut-ext').count(), { timeout: 10_000 }).toBe(0)
+  // Let go: out of the task's group, back where it was.
+  await expect.poll(async () => JSON.stringify(await placeOf(ids.a)), { timeout: 10_000 }).toBe(JSON.stringify(was))
   expect(p1.isClosed()).toBe(false)
   expect((await act(page, { action: 'snapshot', tab: ids.a })).body.code).toBe('not_your_tab')
   // A browser page is never taken.
@@ -670,6 +695,10 @@ test('fill_code types the saved login\'s one-time code into the page; the agent 
 
 test('the agent tab wears a frame; Stop gives it back to the person', async () => {
   const tab = agentPage()!
+  // The agent points at something: its cursor is there until Stop.
+  const before = (await act(tab, { action: 'snapshot', tab: agentTab })).body.snapshot as string
+  expect((await act(tab, { action: 'hover', tab: agentTab, ref: refOf(before, /textbox "Your name"/) })).status).toBe(200)
+  await expect(tab.locator('walnut-ext[data-walnut-cursor]')).toHaveCount(1)
   await tab.bringToFront()
   const vw = await tab.evaluate(() => ({ w: innerWidth, h: innerHeight }))
   await tab.screenshot({ path: path.join(test.info().outputDir, 'agent-tab.png') })
@@ -677,8 +706,9 @@ test('the agent tab wears a frame; Stop gives it back to the person', async () =
   await tab.mouse.click(vw.w - 14 - 8 - 20, vw.h - 14 - 7 - 11)
   await expect.poll(async () => (await act(tab, { action: 'snapshot', tab: agentTab })).body.code, { timeout: 10_000 }).toBe('not_your_tab')
   expect((await act(tab, { action: 'tabs' })).body.tabs).toEqual([])
-  // The page stays, now the person's.
+  // The page stays, now the person's, with no agent cursor on it.
   await expect(tab.locator('#who')).toBeVisible()
+  await expect.poll(() => tab.locator('walnut-ext[data-walnut-cursor]').count(), { timeout: 10_000 }).toBe(0)
 })
 
 test('Settings, Browser extension shows the browser and the allowed site; Remove takes it off', async () => {

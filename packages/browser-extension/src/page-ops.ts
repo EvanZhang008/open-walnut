@@ -1,13 +1,15 @@
 /**
  * The page side of an agent's command (content.ts hands every `agent` message here): the actions
  * agents call (page-agent.ts, page-agent-forms.ts), and the background's own steps for a full
- * page screenshot and for real input (where to point, what to focus).
+ * page screenshot and for real input (where to point, what to focus). Each step that acts at a
+ * point or on an element moves the agent's cursor there first (page-cursor.ts, cursor-acts.ts).
  */
 import * as pa from './page-agent'
 import * as forms from './page-agent-forms'
 import { clickFacts, clickTarget, enterFacts, judgeOutward, messageOf, orderTotal, outwardHold, pressFacts } from './page-agent-outward'
 import { cancelTyping, dragPoints, scrollIn, typeField, typeSlowly } from './page-input'
 import { annotate, refOfLabel } from './page-annotate'
+import { onScreenMiddle, pointAt, type CursorKind } from './page-cursor'
 
 /** position:fixed and sticky elements hidden after the first slice of a full screenshot, so they are drawn once. */
 let hiddenFixed: Array<{ el: HTMLElement; v: string }> = []
@@ -56,7 +58,7 @@ const intoFrame = (el: Element | null) => !!el && FRAMES.has(el.tagName)
  * debugger can find it; `active` only checks that the focus is not inside a frame.
  */
 
-function locate(args: Record<string, unknown>): Record<string, unknown> {
+async function locate(args: Record<string, unknown>): Promise<Record<string, unknown>> {
   // The middle of the page (a wheel with no element named).
   if (args.middle === true) args = { ...args, x: Math.round(innerWidth / 2), y: Math.round(innerHeight / 2) }
   // Keys with no element go where the focus is: never into a frame (its site is not checked here).
@@ -88,6 +90,8 @@ function locate(args: Record<string, unknown>): Record<string, unknown> {
     if (!input) throw new pa.PageError(`${String(args.ref)} is not a file field (input type=file).`, 'not_a_file_field')
     input.setAttribute('data-walnut-upload', args.mark)
   }
+  // The point the debugger is about to use (agent-trusted.ts names the kind: a click shows its ripple).
+  if ((args.cursor === 'click' || args.cursor === 'move') && el.getBoundingClientRect().width > 0) await pointAt(x, y, args.cursor)
   return { x, y, what: `${pa.roleOf(el)} "${pa.clip(pa.nameOf(el), 60)}"` }
 }
 
@@ -167,6 +171,14 @@ function trustedHow(args: Record<string, unknown>): How[] {
 
 const atPoint = (args: Record<string, unknown>) => args.ref === undefined && typeof args.x === 'number' && typeof args.y === 'number'
 
+/** The cursor to an element's middle when it is on screen (nothing is scrolled for it); a bad ref stays the step's own error. */
+async function toElement(get: () => Element | null, kind: CursorKind = 'move'): Promise<void> {
+  let el: Element | null = null
+  try { el = get() } catch { return }
+  const m = el && el !== document.body ? onScreenMiddle(el) : null
+  if (m) await pointAt(m.x, m.y, kind)
+}
+
 /** The element a typed text goes to (as pa.type picks it; at a point, the element there). */
 const typeTarget = (args: Record<string, unknown>): Element | null => (args.ref !== undefined ? pa.byRef(args.ref) : atPoint(args) ? pa.target(args).el : document.activeElement)
 
@@ -181,6 +193,9 @@ async function typeOp(args: Record<string, unknown>): Promise<unknown> {
   const parts: Part[] = [...(atPoint(args) ? [[{ click: true }, field] as Part] : []), ...(how ? [[how, field] as Part] : [])]
   const h = held(args, parts)
   if (h) return h
+  // The cursor to where the text goes: a click at the point, else the field (scrolled into view as the typing does).
+  if (atPoint(args)) await pointAt(Number(args.x), Number(args.y), 'click')
+  else await toElement(() => { if (field instanceof HTMLElement && args.ref !== undefined) pa.centerOf(field); return field })
   if (atPoint(args)) {
     const el = typeField(args)
     if (!el) throw new pa.PageError(`Nothing to type in at ${String(args.x)},${String(args.y)}.`, 'no_field')
@@ -201,17 +216,33 @@ export async function runPageOp(op: string, args: Record<string, unknown>): Prom
   switch (op) {
     case 'snapshot': return pa.snapshot(typeof args.max === 'number' ? args.max : undefined)
     case 'text': return pa.text(typeof args.max === 'number' ? args.max : undefined)
-    case 'click': return held(args, [[{ click: true }, pa.target(args).el]]) ?? pa.click(args)
-    case 'hover': return pa.hover(args)
+    case 'click': {
+      const t = pa.target(args)
+      const h = held(args, [[{ click: true }, t.el]])
+      // A held click points at what it waits on; one that goes ahead shows its ripple there.
+      await pointAt(t.x, t.y, h ? 'move' : 'click')
+      return h ?? pa.click(args)
+    }
+    case 'hover': { const t = pa.target(args); await pointAt(t.x, t.y); return pa.hover(args) }
     case 'type': return typeOp(args)
-    case 'select': return pa.select(args)
+    case 'select': await toElement(() => pa.byRef(args.ref)); return pa.select(args)
     case 'press': return held(args, [[{ key: String(args.key ?? '') }, document.activeElement]]) ?? pa.press(args)
-    case 'scroll': return scrollsInside(args) ? scrollIn(args) : pa.scroll(args)
+    case 'scroll': {
+      // At a point or over an element: the cursor is there (a scroll of the whole page has no point).
+      if (atPoint(args)) await pointAt(Number(args.x), Number(args.y))
+      else if (scrollsInside(args)) await toElement(() => pa.byRef(args.ref))
+      if (scrollsInside(args)) return scrollIn(args)
+      const r = pa.scroll(args)
+      if (args.ref !== undefined) await toElement(() => pa.byRef(args.ref))
+      return r
+    }
     case 'annotate': return annotate()
     case 'drag_points': {
       // A drag presses and releases: judged as the clicks it may make (where it starts, where it
       // ends, and the control both are in, which the release clicks), one ask for all.
       const d = dragPoints(args)
+      // Where it starts; the background moves it on to the end while the debugger drags (agent-drag.ts).
+      await pointAt(d.from.x, d.from.y, 'drag')
       return held(args, [d.common, d.fromEl, d.toEl].map((el): Part => [{ click: true }, el])) ?? { from: d.from, to: d.to }
     }
     case 'cancel_input': return { cancelled: cancelTyping() }
@@ -220,7 +251,7 @@ export async function runPageOp(op: string, args: Record<string, unknown>): Prom
     case 'find': return forms.find(args)
     case 'form_values': return forms.formValues(args)
     case 'fill_form': return forms.fillForm(args)
-    case 'upload': return forms.upload(args)
+    case 'upload': await toElement(() => (typeof args.selector === 'string' && args.ref === undefined ? forms.bySelector(args.selector) : pa.byRef(args.ref))); return forms.upload(args)
     case 'capture': return capture(args)
     case 'locate': return locate(args)
   }

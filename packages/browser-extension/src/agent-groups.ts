@@ -2,24 +2,27 @@
  * Each task's own tabs in Walnut's agent window sit in one Chrome tab group named after the task,
  * `walnut-<task name>` (2026-11-08, the user: "in the chrome it should show walnut-xxx-task-name in
  * a chrome group"), so the person sees at a glance which task works in which tabs. Only tabs an
- * agent opened in the agent window: a tab of the person's (handed over or taken) is never moved or
- * grouped. A browser without tab groups (Firefox before 139, or the permission not granted) groups
- * nothing and everything else works as before.
+ * agent opened in the agent window. A tab the agent holds in a window of the person's (one they
+ * handed over with Act in tab, or one it took) joins that task's group of that window while the
+ * agent holds it, and goes back where it was after (agent-groups-person.ts). A browser without tab
+ * groups (Firefox before 139, or the permission not granted) groups nothing and everything else
+ * works as before.
  */
 import type { Tab } from './ext'
 
 /** The calls grouping needs, loosely typed (Chrome's tabs.group and tabGroups). */
 export interface GroupApi {
   tabs: {
-    get(tabId: number): Promise<Tab & { groupId?: number }>
+    get(tabId: number): Promise<Tab & { groupId?: number; index?: number; pinned?: boolean }>
     group?(o: { tabIds: number[]; groupId?: number; createProperties?: { windowId?: number } }): Promise<number>
     ungroup?(tabIds: number | number[]): Promise<void>
-    query?(o: { active?: boolean; windowId?: number }): Promise<Array<Tab & { groupId?: number }>>
+    query?(o: { active?: boolean; windowId?: number }): Promise<Array<Tab & { groupId?: number; index?: number }>>
+    move?(tabId: number, o: { index: number }): Promise<unknown>
     update?(tabId: number, o: { active?: boolean; url?: string }): Promise<unknown>
     create?(o: { url: string; windowId?: number; active?: boolean; index?: number }): Promise<Tab>
   }
   tabGroups?: {
-    get(groupId: number): Promise<{ id: number; title?: string; windowId: number; collapsed?: boolean }>
+    get(groupId: number): Promise<{ id: number; title?: string; color?: string; windowId: number; collapsed?: boolean }>
     update(groupId: number, o: { title?: string; color?: string; collapsed?: boolean }): Promise<unknown>
   }
   runtime?: { getURL(path: string): string }
@@ -51,6 +54,13 @@ export function groupTitle(who: string | undefined): string {
 const KEY = 'agentGroups'
 /** One grouping at a time, so two opens of one task at once make one group, not two. */
 let chain: Promise<unknown> = Promise.resolve()
+
+/** Run `work` in the one line of group changes (agent-groups-person.ts uses it too); a failure is its own. */
+export function inGroupChain<T>(work: () => Promise<T>, fallback: T): Promise<T> {
+  const run = chain.then(work).catch(() => fallback)
+  chain = run
+  return run
+}
 
 /**
  * Put an agent's tab into its task's group in the agent window, made (and named) the first time.

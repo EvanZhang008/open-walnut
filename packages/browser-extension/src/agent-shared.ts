@@ -4,6 +4,7 @@
  * the checks every page goes through, and reaching a frame's script.
  */
 import { groupAgentTab, noteGroupUse, type GroupApi } from './agent-groups'
+import { groupPersonTab, restorePersonTab } from './agent-groups-person'
 import { ext, type Tab } from './ext'
 import { siteKey } from '../../../src/core/vault/url-match'
 import { tabStore } from './tab-store'
@@ -40,6 +41,25 @@ export const newGrant = (): string => `g${Date.now().toString(36)}${Math.random(
 export const agentTabs = {
   ...rawAgentTabs,
   set: (tabId: number, v: AgentTab) => rawAgentTabs.set(tabId, { ...v, grant: v.grant ?? newGrant() }),
+  /** Every release ends a holding by deleting it: the tab is let go as it is (letGo). */
+  delete: async (tabId: number) => { await rawAgentTabs.delete(tabId); await letGo(tabId) },
+  deleteIf: async (tabId: number, ok: (cur: AgentTab) => boolean) => {
+    const done = await rawAgentTabs.deleteIf(tabId, ok)
+    if (done) await letGo(tabId)
+    return done
+  },
+}
+
+/**
+ * The agent no longer holds the tab (Stop on the page or in the Browser view, the side panel's
+ * release and Stop all, Done (the task's tidy-up), close, agents turned off, the tab closed): the
+ * agent's cursor leaves every frame of it (page-cursor.ts), and a tab of the person's window leaves
+ * its task's group for where it was (agent-groups-person.ts). The cursor's message is not waited
+ * for: a page that does not answer never holds a release up.
+ */
+async function letGo(tabId: number): Promise<void> {
+  void Promise.resolve().then(() => ext.tabs.sendMessage(tabId, { type: 'agent-cursor', off: true })).catch(() => undefined)
+  await restorePersonTab(ext as unknown as GroupApi, tabId).catch(() => undefined)
 }
 
 /**
@@ -167,7 +187,9 @@ export function settled(tabId: number): Promise<void> {
 
 /**
  * The frame and pill on an agent's tab (content.ts): `driving` while the person took it over. A tab
- * an agent opened in the agent window goes into its task's tab group as it is marked (agent-groups.ts).
+ * an agent opened in the agent window goes into its task's tab group as it is marked (agent-groups.ts);
+ * a tab it holds in a window of the person's, into that task's group of that window
+ * (agent-groups-person.ts), until it is let go (letGo).
  */
 export async function mark(tabId: number, on: boolean, who?: string, mode?: 'driving'): Promise<void> {
   const rec = on ? await agentTabs.get(tabId) : undefined
@@ -175,6 +197,8 @@ export async function mark(tabId: number, on: boolean, who?: string, mode?: 'dri
   await toPage(tabId, { type: 'agent-mark', on, ...(who ? { who } : {}), ...(driving ? { mode: 'driving' } : {}) }, 4000)
   // Grouped, then folded once the agent is quiet (a new group opens unfolded: review 2026-11-08).
   if (rec && !personsTab(rec)) void groupAgentTab(ext as unknown as GroupApi, tabId, rec.owner, rec.who, await agentWindowId()).then(() => noteGroupUse(ext as unknown as GroupApi, rec.owner))
+  // Outside the agent window (groupPersonTab leaves that one alone): the task's group of the person's window.
+  if (rec) void groupPersonTab(ext as unknown as GroupApi, tabId, rec.owner, rec.who, async () => (await agentTabs.get(tabId))?.grant === rec.grant)
 }
 
 const UNREACHED: Record<ReachError, string> = {

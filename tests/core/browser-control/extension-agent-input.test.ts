@@ -27,6 +27,8 @@ const fake = {
   trusted: true,
   /** Whether the page's script answers (a dialog holds it when not). */
   checkAnswers: true,
+  /** The page's ops, the cursor's messages and the debugger's commands, in the order they went out. */
+  order: [] as string[],
 }
 const ev = () => ({ addListener() {}, removeListener() {} })
 const PAGE_URL = 'https://shop.example.test/checkout'
@@ -43,8 +45,10 @@ const tab = () => ({ id: 7, windowId: 3, active: true, url: PAGE_URL, title: 'Ch
     get: async () => tab(), query: async () => [tab()], update: async () => tab(), create: async () => tab(),
     sendMessage: async (_tabId: number, msg: { type: string; op?: string; args?: Record<string, unknown> }, opts?: { frameId?: number }) => {
       if (msg.type === 'agent-check') return fake.checkAnswers ? { ok: true, walnut: false, href: PAGE_URL, doc: 'doc-1' } : undefined
+      if (msg.type === 'agent-cursor') fake.order.push(`cursor ${JSON.stringify(msg)}`)
       if (msg.type !== 'agent') return { ok: true }
       const frameId = opts?.frameId ?? 0
+      fake.order.push(`page ${msg.op} ${JSON.stringify(msg.args ?? {})}`)
       fake.pageLog.push({ op: msg.op!, args: msg.args ?? {}, frameId })
       try {
         return { ok: true, result: await fake.page(msg.op!, msg.args ?? {}, frameId) }
@@ -66,6 +70,7 @@ const tab = () => ({ id: 7, windowId: 3, active: true, url: PAGE_URL, title: 'Ch
     detach: async () => { fake.log.push(['detach', undefined]) },
     sendCommand: async (_t: unknown, method: string, params?: Record<string, unknown>) => {
       fake.log.push([method, params])
+      fake.order.push(`${method} ${String(params?.type ?? '')}`)
       return (await fake.onSend(method, params)) ?? {}
     },
     onEvent: { addListener: (fn: Listener) => fake.events.push(fn), removeListener() {} },
@@ -97,6 +102,7 @@ beforeEach(() => {
   fake.frames = []
   fake.trusted = true
   fake.checkAnswers = true
+  fake.order = []
   dialogs._resetDialogsForTesting()
   dropDebugger(7)
 })
@@ -469,5 +475,42 @@ describe('annotate and zoom', () => {
   it('work on what is on screen, never with full', async () => {
     expect(await code(act('screenshot', { full: true, annotate: true }))).toBe('bad_request')
     expect(await code(act('zoom', { full: true, x: 0, y: 0, width: 10, height: 10 }))).toBe('bad_request')
+  })
+})
+
+describe('the agent\'s cursor before real input (page-cursor.ts)', () => {
+  /** Where in the order the first of these went out. */
+  const first = (re: RegExp) => fake.order.findIndex((o) => re.test(o))
+
+  it.each([
+    ['click', { ref: 'e1' }, 'click'],
+    ['hover', { ref: 'e1' }, 'move'],
+    ['type', { x: 30, y: 40, text: 'ab' }, 'click'],
+    ['type', { ref: 'e2', text: 'ab' }, 'move'],
+    ['scroll', { ref: 'e4', direction: 'down' }, 'move'],
+    ['scroll', { direction: 'down' }, 'move'],
+  ])('trusted %s %j: the page draws it (%s) at the point before the debugger acts there', async (action, args, kind) => {
+    fake.page = (op) => (op === 'locate' ? { x: 30, y: 40, what: 'button "Go"' } : {})
+    await act(action, { trusted: true, ...args })
+    expect(pageOps('locate')[0].args.cursor).toBe(kind)
+    const input = first(/^Input\.dispatch/)
+    expect(input).toBeGreaterThan(-1)
+    expect(first(/^page locate .*"cursor"/)).toBeLessThan(input)
+  })
+
+  it('a trusted key press or typing into the focus has no point: no cursor asked', async () => {
+    fake.page = (op) => (op === 'locate' ? { x: 0, y: 0, what: 'textbox' } : {})
+    await act('press', { trusted: true, key: 'a' })
+    await act('type', { trusted: true, text: 'ab' })
+    expect(pageOps('locate').every((p) => p.args.cursor === undefined)).toBe(true)
+  })
+
+  it('a drag: at the start (the page, with its two ends), then along to the end before the button goes down', async () => {
+    fake.page = (op) => (op === 'drag_points' ? { from: { x: 10, y: 20, what: 'a' }, to: { x: 110, y: 70, what: 'b' } } : {})
+    await act('drag', { ref: 'e3', to_ref: 'e9' })
+    const along = first(/^cursor .*"kind":"drag"/)
+    expect(fake.order[along]).toContain('"x":110,"y":70')
+    expect(along).toBeGreaterThan(first(/^page drag_points/))
+    expect(along).toBeLessThan(first(/mousePressed/))
   })
 })

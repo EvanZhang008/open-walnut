@@ -628,7 +628,8 @@ export function initAgent(deps: { isWalnutPage: (url: string) => Promise<boolean
   watchOpened()
   watchDownloads()
   watchMedia()
-  ext.tabs.onRemoved.addListener((tabId) => { void agentTabs.delete(tabId); void forgetTampered(tabId) })
+  // Only a tab an agent held is let go (agent-shared.ts letGo): any other closed tab costs nothing.
+  ext.tabs.onRemoved.addListener((tabId) => { void agentTabs.deleteIf(tabId, () => true); void forgetTampered(tabId) })
   ext.tabs.onUpdated.addListener((tabId, change: { status?: string }) => { if (change.status === 'loading') void tabLoading(tabId) })
   // Each agent tab's own list of addresses, for Back when the browser skips one.
   ext.tabs.onUpdated.addListener((tabId, change: { url?: string }) => {

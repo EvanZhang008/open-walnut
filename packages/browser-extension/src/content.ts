@@ -33,6 +33,7 @@ import { closeMenu, focusMoved, hideIcon, menu, onFieldKey, openingFor, openMenu
 import { fillCode, fillLogin, fillNewPassword, fillWalletForm } from './content-fill'
 import * as pageAgent from './page-agent'
 import { runPageOp } from './page-ops'
+import { cursorMask, cursorOff, listenCursor } from './page-cursor'
 import { walnutAddress } from './walnut-address'
 import { siteKey } from '../../../src/core/vault/url-match'
 import { initPageBrowserKey } from './page-browser-key'
@@ -339,6 +340,8 @@ let agentMark: Host | null = null
 /** What the pill shows now: the agent's tab, or the person's while they took it over. */
 let agentMarkKey = ''
 function showAgentMark(on: boolean, who?: string, mode?: string): void {
+  // The person took the tab over: the agent's cursor is not where anything happens now.
+  if (mode === 'driving') cursorOff()
   if (SELF !== 'top') return
   const key = `${mode === 'driving' ? 'driving' : 'agent'}\0${who ?? ''}`
   if (!on || (agentMark && agentMarkKey !== key)) { if (agentMark) { dropHost(agentMark); agentMark = null } }
@@ -372,7 +375,7 @@ function showAgentMark(on: boolean, who?: string, mode?: string): void {
   stop.textContent = 'Stop'
   stop.title = 'Take this tab back: the agent can no longer use it'
   // Only the person's own click: an agent's synthetic one is not trusted.
-  stop.addEventListener('click', (e) => { if (e.isTrusted) void ask({ type: 'agent-stop' }).then(() => showAgentMark(false)) })
+  stop.addEventListener('click', (e) => { if (e.isTrusted) void ask({ type: 'agent-stop' }).then(() => { cursorOff(); showAgentMark(false) }) })
   pill.append(stop)
   const edge = document.createElement('div')
   edge.className = 'edge'
@@ -388,6 +391,8 @@ const markWatch = new MutationObserver(() => {
 
 // ── messages from the background ──
 
+// The agent's cursor: placed, and taken away, by the background (page-cursor.ts).
+listenCursor()
 ext.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   switch (msg?.type) {
     case 'fill':
@@ -428,6 +433,8 @@ ext.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       sendResponse({ ok: true, walnut: isWalnutApp(), ...pageAgent.pageContext(msg.withText === true) }); return
     case 'agent-mask':
       // Each frame of the tab is asked (a password in an embedded sign-in is drawn as dots too).
+      // The agent's cursor is not in its own screenshot (it stays in the live view's pictures).
+      cursorMask(msg.on === true)
       if (msg.on === true) sendResponse({ ok: true, masked: pageAgent.maskSecrets() })
       else { pageAgent.unmask(); sendResponse({ ok: true }) }
       return

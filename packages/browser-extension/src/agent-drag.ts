@@ -12,6 +12,10 @@ import { cdpDrag, type DragState } from './cdp'
 import { AgentError, frameOp, settled, where, type AgentTab, type WireCommand } from './agent-shared'
 import { watched } from './agent-debugger'
 import { outwardHeld } from './agent-page'
+import { toPage } from './page-reach'
+
+/** How long the drawn cursor takes from the start of a drag to its end (about the debugger's own drag). */
+const DRAG_CURSOR_MS = 300
 
 /** The drag data the browser reported per tab while a drag runs (Input.dragIntercepted). */
 const intercepted = new Map<number, Record<string, unknown>>()
@@ -42,6 +46,8 @@ export async function dragAct(c: WireCommand, tabId: number, rec: AgentTab): Pro
   // A drag that would buy, send or delete: nothing was pressed, the person is asked.
   if (found.hold) throw outwardHeld(found.hold)
   const r = found as { from: End; to: End }
+  // The agent's cursor (at the start since drag_points) goes along to the end as the debugger drags.
+  void toPage(tabId, { type: 'agent-cursor', x: r.to.x, y: r.to.y, kind: 'drag', ms: DRAG_CURSOR_MS }, 3000)
   listen()
   intercepted.delete(tabId)
   const steps = typeof a.steps === 'number' && a.steps > 0 ? a.steps : undefined

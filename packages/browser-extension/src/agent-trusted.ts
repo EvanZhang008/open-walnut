@@ -53,6 +53,7 @@ export async function trustedAct(c: WireCommand, tabId: number, tab: Tab, rec: A
   const page = await reached(tabId)
   if (page.walnut) throw new AgentError(WALNUT_PAGE, 'walnut_page')
   await checkPage(c.allow, page.href)
+  // `cursor`: the page draws the agent's cursor at the point before the debugger acts there (page-cursor.ts).
   const locate = async (extra: Record<string, unknown> = {}) => {
     const r = await frameOp(tabId, 0, 'locate', { ref: a.ref, x: a.x, y: a.y, ...(typeof a.label === 'number' ? { label: a.label } : {}), ...(a.outward_ok ? { outward_ok: a.outward_ok } : {}), ...extra }, c.allow)
     // A step that buys, sends or deletes waits for the person (page-ops.ts held).
@@ -79,8 +80,8 @@ export async function trustedAct(c: WireCommand, tabId: number, tab: Tab, rec: A
       out = { ...(await run(tabId, rec.owner, (send) => cdpEvaluate(send, expression))) }
       break
     }
-    case 'click': { const l = await locate(trustedOutward('click', a)); dialog = await watched(tabId, rec.owner, (send) => cdpClick(send, l.x, l.y)); out = { clicked: l.what, trusted: true }; break }
-    case 'hover': { const l = await locate(); await run(tabId, rec.owner, (send) => cdpHover(send, l.x, l.y)); out = { hovered: l.what, trusted: true }; break }
+    case 'click': { const l = await locate({ ...trustedOutward('click', a), cursor: 'click' }); dialog = await watched(tabId, rec.owner, (send) => cdpClick(send, l.x, l.y)); out = { clicked: l.what, trusted: true }; break }
+    case 'hover': { const l = await locate({ cursor: 'move' }); await run(tabId, rec.owner, (send) => cdpHover(send, l.x, l.y)); out = { hovered: l.what, trusted: true }; break }
     case 'press': {
       const k = String(a.key ?? '')
       // Every combo that ends in Enter, and Space or Enter on a focused button or link, is judged.
@@ -99,8 +100,8 @@ export async function trustedAct(c: WireCommand, tabId: number, tab: Tab, rec: A
       const at = a.ref === undefined && typeof a.x === 'number' && typeof a.y === 'number'
       // The click at the point is judged as any click is (a Pay button there waits for the person),
       // and with the Enter the text presses, as one step: one ask, one yes for both.
-      const l = at ? await locate({ focus: true, clear: a.clear === true, outward: 'click', ...(enter.outward ? { then_enter: true, typing: enter.typing } : {}) })
-        : a.ref !== undefined ? await locate({ focus: true, clear: a.clear === true, ...enter }) : (await locate({ active: true, ...enter }), undefined)
+      const l = at ? await locate({ focus: true, clear: a.clear === true, outward: 'click', cursor: 'click', ...(enter.outward ? { then_enter: true, typing: enter.typing } : {}) })
+        : a.ref !== undefined ? await locate({ focus: true, clear: a.clear === true, cursor: 'move', ...enter }) : (await locate({ active: true, ...enter }), undefined)
       dialog = await watched(tabId, rec.owner, async (send) => {
         if (at && l) await cdpClick(send, l.x, l.y)
         await cdpType(send, text, slowly ? SLOW_KEY_MS : 0)
@@ -111,7 +112,7 @@ export async function trustedAct(c: WireCommand, tabId: number, tab: Tab, rec: A
     }
     case 'scroll': {
       // The wheel over the element (or point, or the middle of the page): what is under it scrolls.
-      const l = await locate(a.ref === undefined && typeof a.x !== 'number' ? { middle: true } : {})
+      const l = await locate(a.ref === undefined && typeof a.x !== 'number' ? { middle: true, cursor: 'move' } : { cursor: 'move' })
       const d = wheelDelta(a)
       await run(tabId, rec.owner, (send) => cdpWheel(send, l.x, l.y, d.x, d.y))
       out = { scrolled: `${d.said} over ${l.what}`, trusted: true }
@@ -125,7 +126,7 @@ export async function trustedAct(c: WireCommand, tabId: number, tab: Tab, rec: A
       const other = paths.filter((p) => !mine.includes(p))
       if (other.length) throw new AgentError(`A trusted upload sends only files this task downloaded (downloads lists them); not ${other.slice(0, 3).join(', ')}. Send other files as bytes, without trusted.`, 'path_not_allowed')
       const markId = crypto.randomUUID().replace(/-/g, '')
-      const l = await locate({ mark: markId, ...(typeof a.selector === 'string' && a.ref === undefined ? { selector: a.selector } : {}) })
+      const l = await locate({ mark: markId, cursor: 'move', ...(typeof a.selector === 'string' && a.ref === undefined ? { selector: a.selector } : {}) })
       await run(tabId, rec.owner, (send) => cdpUpload(send, markId, paths))
       out = { uploaded: paths, into: l.what, trusted: true }
       break

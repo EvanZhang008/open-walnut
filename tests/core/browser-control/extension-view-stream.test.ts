@@ -9,7 +9,9 @@
  *     shrunk), a repeat without its bytes, and stops when Walnut says nobody watches or the tab went;
  *   - Take over marks the tab the person's, brings its window and tab forward, and every agent
  *     command there is refused until Hand back; another owner's tab is never taken over;
- *   - an agent's tab goes into one group per task, named walnut-<task name>.
+ *   - an agent's tab goes into one group per task per window, named walnut-<task name>: the agent
+ *     window's own, and (2026-11-09, Act in tab) one in the person's window for a tab held there,
+ *     never folded, left when the agent lets the tab go (more in extension-agent-release.test.ts).
  */
 import { beforeEach, describe, expect, it } from 'vitest'
 
@@ -54,6 +56,7 @@ const { viewWatch, viewFrame, streaming, noteWorked, bringUpForCommand, STREAM_Q
 const { takeOver, handBack, drivingRefusal } = await import('../../../packages/browser-extension/src/agent-takeover')
 const { agentTabs } = await import('../../../packages/browser-extension/src/agent-shared')
 const { groupAgentTab, groupTitle } = await import('../../../packages/browser-extension/src/agent-groups')
+const { groupPersonTab, restorePersonTab } = await import('../../../packages/browser-extension/src/agent-groups-person')
 
 const OWNER = 'task:stream'
 const allow = { any: true, sites: [], walnut: ['walnut.example.test'] }
@@ -261,11 +264,12 @@ describe('the task\'s tab group', () => {
     expect(groupTitle('面试 prep')).toBe('walnut-面试-prep')
   })
 
-  it('one group per task in the agent window: made once, named, then reused; nothing outside the agent window', async () => {
+  it('one group per task per window: the agent window\'s made once, named, reused; a held tab of the person\'s window joins that window\'s own, never folded, and goes back after', async () => {
     const groups = new Map<number, { id: number; title?: string; windowId: number }>()
     const tabs = new Map<number, { id: number; windowId: number; groupId?: number }>([[7, { id: 7, windowId: 3 }], [8, { id: 8, windowId: 3 }], [9, { id: 9, windowId: 5 }]])
     let made = 0
-    const session: Record<string, unknown> = {}
+    let folds = 0
+    const session: Record<string, unknown> = { agentWindow: 3 }
     const api = {
       tabs: {
         get: async (id: number) => ({ ...tabs.get(id)! }),
@@ -275,10 +279,11 @@ describe('the task\'s tab group', () => {
           for (const t of o.tabIds) tabs.get(t)!.groupId = gid
           return gid
         },
+        ungroup: async (id: number) => { tabs.get(id)!.groupId = -1 },
       },
       tabGroups: {
         get: async (id: number) => { const g = groups.get(id); if (!g) throw new Error('No group'); return g },
-        update: async (id: number, o: { title?: string }) => { groups.get(id)!.title = o.title },
+        update: async (id: number, o: { title?: string; collapsed?: boolean }) => { if ('collapsed' in o) folds++; groups.get(id)!.title = o.title },
       },
       storage: { session: { get: async (k: string) => ({ [k]: session[k] }), set: async (o: Record<string, unknown>) => { Object.assign(session, o) } } },
     }
@@ -289,8 +294,18 @@ describe('the task\'s tab group', () => {
     expect([...groups.values()]).toEqual([{ id: 100, windowId: 3, title: 'walnut-order-printer-paper' }])
     expect(tabs.get(7)!.groupId).toBe(100)
     expect(tabs.get(8)!.groupId).toBe(100)
-    // A tab in the person's window is never grouped.
+    // The agent window's grouping leaves a tab of the person's window alone...
     expect(tabs.get(9)!.groupId).toBeUndefined()
+    // ...which, held by the agent there (Act in tab), joins that task's group of its own window.
+    await groupPersonTab(api as never, 9, OWNER, 'Order printer paper')
+    expect(groups.get(tabs.get(9)!.groupId!)).toEqual({ id: 101, windowId: 5, title: 'walnut-order-printer-paper' })
+    // The agent window's tabs are never taken into a person's group.
+    await groupPersonTab(api as never, 7, OWNER, 'Order printer paper')
+    expect(tabs.get(7)!.groupId).toBe(100)
+    expect(folds).toBe(0)
+    // Let go: out of the task's group, back as it was (it had none).
+    await restorePersonTab(api as never, 9)
+    expect(tabs.get(9)!.groupId).toBe(-1)
     // Another task: a group of its own.
     tabs.set(10, { id: 10, windowId: 3 })
     await groupAgentTab(api as never, 10, 'task:other', 'Book a table', 3)
