@@ -73,6 +73,8 @@ export function noPictureLine(f: Pick<BrowserFrame, 'why' | 'window'> | null, ha
         ? 'This tab is behind another tab in your window. Walnut never switches your tabs to take a picture: it shows when the tab is in front.'
         : 'This tab is behind another tab in the agent window: the picture shows when it is in front.';
     case 'minimized': return "Walnut's agent window is minimized: the picture shows again when you restore it.";
+    // Chrome draws nothing in a window other windows cover entirely, so the last picture is old.
+    case 'covered': return "Chrome stops drawing Walnut's agent window while other windows cover all of it, so no new picture can be taken. It comes as soon as any part of that window is on screen.";
     case 'no_permission': return 'The Walnut extension may not take pictures of pages in this browser (it asks for that permission in its Settings).';
     case 'not_web': return 'The tab is not on a web page now.';
     case 'walnut_page': return "The tab shows Walnut's own page: no picture of it.";

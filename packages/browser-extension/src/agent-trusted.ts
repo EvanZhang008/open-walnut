@@ -25,7 +25,7 @@ export const DEBUGGER_OPS = new Set(['dialog', 'evaluate'])
  */
 export const REAL_INPUT_SWITCH = 'Only the person can turn it on: in Chrome, click the Walnut extension\'s icon in the toolbar (in the puzzle-piece Extensions menu when it is not pinned), '
   + 'click the gear (Settings) at the top of the popup, and turn on "Let agents use real mouse and keys"; Chrome then asks to allow the debugger: Allow. '
-  + 'While an agent uses it, Chrome shows its "started debugging" bar on that tab.'
+  + 'While an agent uses it, Chrome shows its "started debugging" bar at the top of every tab.'
 const OFF = `Real input is off in this browser. ${REAL_INPUT_SWITCH} Without it, use the action without trusted.`
 
 export async function trustedReady(): Promise<boolean> {

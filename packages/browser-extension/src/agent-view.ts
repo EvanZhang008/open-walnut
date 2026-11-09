@@ -28,7 +28,7 @@
 import { ext } from './ext'
 import { AgentError, agentTabs, agentWindowId, personsTab, walnutCheck, where, type AgentTab, type WireCommand } from './agent-shared'
 import { walnutAddress } from './walnut-address'
-import { capture, tryCapture } from './capture-gate'
+import { WindowCovered, capture, tryCapture } from './capture-gate'
 import { frontDriven } from './agent-takeover'
 import { noteGroupUse, type GroupApi } from './agent-groups'
 
@@ -84,7 +84,7 @@ export async function bringUpForCommand(tabId: number): Promise<void> {
 }
 
 /** Why a frame has no picture this time. */
-export type NoFrame = 'behind' | 'busy' | 'minimized' | 'no_permission' | 'not_web' | 'walnut_page' | 'changed' | 'failed'
+export type NoFrame = 'behind' | 'busy' | 'minimized' | 'covered' | 'no_permission' | 'not_web' | 'walnut_page' | 'changed' | 'failed'
 
 async function shrink(dataUrl: string): Promise<string> {
   try {
@@ -182,12 +182,12 @@ async function frameOf(c: WireCommand, busy: (tabId: number) => boolean, full: b
   if (switched) noteGroupUse(ext as unknown as GroupApi, rec.owner)
   if (shot === undefined || shot === 'busy') return none('busy')
   if (shot === null) throw new AgentError('That tab was closed or given back.', 'not_your_tab')
-  if (shot === 'behind' || shot === 'failed' || shot === 'changed') return none(shot)
+  if (shot === 'behind' || shot === 'failed' || shot === 'changed' || shot === 'covered') return none(shot)
   return finish(shot)
 
-  async function pictureNow(): Promise<string | 'failed' | 'changed' | null> {
+  async function pictureNow(): Promise<string | 'failed' | 'changed' | 'covered' | null> {
     let image: string
-    try { image = await capture(win, { format: 'jpeg', quality: full ? STREAM_QUALITY : 60 }) } catch { return 'failed' as const }
+    try { image = await capture(win, { format: 'jpeg', quality: full ? STREAM_QUALITY : 60 }) } catch (err) { return err instanceof WindowCovered ? 'covered' as const : 'failed' as const }
     // What was on screen must be this tab still (a page's popup, another agent's tab brought up meanwhile).
     const [shown] = await ext.tabs.query({ active: true, windowId: win })
     if (shown?.id !== tabId) return 'changed' as const

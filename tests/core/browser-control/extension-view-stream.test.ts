@@ -25,6 +25,8 @@ const fake = {
   front: 7,
   /** Whether the person is in the agent window. */
   focused: false,
+  /** What captureVisibleTab throws, when set. */
+  captureError: '' as string,
 }
 const tab = (id = 7) => ({ id, windowId: 3, active: id === fake.front, url: 'https://shop.example.test/', title: 'Shop' })
 ;(globalThis as any).chrome = {
@@ -39,7 +41,7 @@ const tab = (id = 7) => ({ id, windowId: 3, active: id === fake.front, url: 'htt
     query: async () => [tab(fake.front)],
     update: async (id: number, o: Record<string, unknown>) => { fake.tabUpdates.push({ id, o }); if (o.active === true) fake.front = id; return tab(id) },
     sendMessage: async (id: number, msg: Record<string, unknown>) => { fake.messages.push({ tab: id, msg }); return { ok: true } },
-    captureVisibleTab: async (windowId: number, o: Record<string, unknown>) => { fake.captures.push({ windowId, o }); return fake.image },
+    captureVisibleTab: async (windowId: number, o: Record<string, unknown>) => { fake.captures.push({ windowId, o }); if (fake.captureError) throw new Error(fake.captureError); return fake.image },
   },
   windows: {
     get: async () => ({ state: 'normal', focused: fake.focused }), onRemoved: ev(),
@@ -67,6 +69,7 @@ beforeEach(() => {
   fake.image = 'data:image/jpeg;base64,AAAA'
   fake.front = 7
   fake.focused = false
+  fake.captureError = ''
   _resetViewForTesting()
 })
 
@@ -188,6 +191,18 @@ describe('a tab behind the one the agent uses (2026-11-08: the view froze on "Wa
     fake.session.agentTabs = { 7: { owner: OWNER, grant: 'g1' }, 8: { owner: OWNER, grant: 'g1', handed: true } }
     await bringUpForCommand(8)
     expect(fake.tabUpdates).toEqual([])
+  })
+})
+
+// 2026-11-09, live in the person's Chrome: with the agent window entirely under other windows,
+// Chrome draws nothing there and every capture fails "image readback failed" (an empty surface).
+describe('a window other windows cover', () => {
+  it('says covered, not "try again": no picture can come until part of it is on screen', async () => {
+    fake.captureError = 'Failed to capture tab: image readback failed'
+    expect(await viewFrame(cmd('view_frame'), () => false)).toMatchObject({ shown: false, why: 'covered' })
+    // Any other capture error is still a plain failure, tried again.
+    fake.captureError = 'Tabs cannot be edited right now'
+    expect(await viewFrame(cmd('view_frame'), () => false)).toMatchObject({ shown: false, why: 'failed' })
   })
 })
 

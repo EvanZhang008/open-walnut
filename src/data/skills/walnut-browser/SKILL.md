@@ -92,7 +92,7 @@ More actions, when the loop above is not enough:
   `--status 4xx`, `--type XHR`; images, fonts, media and stylesheets only with
   `--include-static`); `network-body <id>` reads a response (200,000 characters, `--max-chars`
   up to 1,000,000; base64 for bytes); `network-request-body <id>` what a request sent; `console
-  --level error` the page's errors. Chrome shows its debugging bar on that tab while it records;
+  --level error` the page's errors. Chrome shows its debugging bar on every tab while it records;
   `network --stop` or giving the tab back ends it. To read a site's own data (an API the page
   calls), this is the way: open the page in a tab of your own (it has the user's sign-ins), never
   record theirs. After `fill-login` on a site, its request bodies and console are not read (the

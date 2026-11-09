@@ -4,7 +4,7 @@
  * scripts that read a site's own data the way the page does (a shop's order history, an API a
  * page calls). The browser's debugger stays attached to the tab while it records, so it needs the
  * person's real-input switch, as evaluate does, and Chrome shows its "started debugging" bar on
- * that tab meanwhile; the person ends it with that bar's Cancel, or Stop on the page.
+ * every tab meanwhile (a global bar); the person ends it with that bar's Cancel, or Stop on the page.
  *
  * Only in a tab an agent opened, never the person's own or one theirs opened (agent-shared.ts
  * nearPerson): such a tab shares the person's sign-ins, so a page they are signed in to answers

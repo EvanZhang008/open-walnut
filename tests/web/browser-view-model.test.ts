@@ -20,6 +20,8 @@ describe('the Browser view\'s words', () => {
     expect(noPictureLine({ why: 'behind', window: 'person' }, true)).toMatch(/never switches your tabs/)
     expect(noPictureLine({ why: 'behind', window: 'agent' }, false)).toMatch(/behind another tab in the agent window/)
     expect(noPictureLine({ why: 'minimized' }, true)).toMatch(/minimized/)
+    // Even with an old picture on the card: it is old because the window draws nothing now.
+    expect(noPictureLine({ why: 'covered' }, true)).toMatch(/cover all of it/)
     expect(noPictureLine({ why: 'old_extension' }, false)).toMatch(/update it/)
     expect(noPictureLine({ why: 'busy' }, true)).toBeNull()
     expect(noPictureLine({ why: 'busy' }, false)).toMatch(/clicking or typing in another of its tabs/)
