@@ -143,7 +143,9 @@ async function stubDictation(page: Page): Promise<{ transcribe: string[]; draft:
 
 /** Record for a beat and stop, the way a short question is dictated. */
 async function dictate(page: Page, panel: Locator): Promise<Locator> {
-  const mic = panel.locator('.chat-input-controls .mic-btn-wrapper .mic-btn')
+  // In a panel, the main composer's mic (a question page's own composer has one too, and
+  // these tests read the main composer, `.chat-input-textarea` first); or the composer given.
+  const mic = panel.locator('.chat-input-controls .mic-btn-wrapper .mic-btn').first()
   await mic.click()
   await expect(mic).toHaveClass(/mic-recording/, { timeout: 15_000 })
   await page.waitForTimeout(1200)
@@ -542,17 +544,22 @@ test.describe('Voice input keeps the selected passage', () => {
       // user picked. A highlight must not quietly re-aim it (dictation never re-aims
       // anything); the pill's Ask stays the way to do that, and the pill holds
       // through the landing so it is still there to press.
-      const history = panel.locator('.session-history')
+      // The page on screen: the stack keeps the root page mounted under it, so the panel
+      // holds two histories once a question page is open.
+      const history = questionPage(panel).locator('.session-history')
       await expect(history).toContainText(REPLY_PHRASE, { timeout: 20_000 })
       await expect(questionQuote(panel)).toContainText('rewrites the index')
 
       await centreRow(page, panel, REPLY_PHRASE)
-      await dragPhrase(page, `.session-panel[data-session-id="${TREE_SESSION_ID}"] .session-history`, REPLY_PHRASE)
+      await dragPhrase(page, `.session-panel[data-session-id="${TREE_SESSION_ID}"] .thread-stack:not([data-thread-depth="0"]) .session-history`, REPLY_PHRASE)
       expect(await selectedText(page)).toBe(REPLY_PHRASE)
       const pagePill = page.locator('[data-testid="quote-pin-pill"]')
       await expect(pagePill).toBeVisible()
-      await dictate(page, panel)
-      await expect(textarea).toHaveValue(ANY_WORDS, { timeout: 30_000 })
+      // Dictated where the user is: the question's own composer (Tree Mode puts the main
+      // conversation's beside it, 0a1147bbf).
+      const pageComposer = panel.locator('.chat-input-row').filter({ has: page.getByRole('textbox', { name: /^Reply in/ }) })
+      await dictate(page, pageComposer)
+      await expect(pageComposer.locator('.chat-input-textarea')).toHaveValue(ANY_WORDS, { timeout: 30_000 })
       await expect(questionPage(panel), 'the page keeps aiming where the user pointed it').toHaveAttribute('data-thread-depth', '1')
       await expect(questionQuote(panel)).toContainText('rewrites the index')
       await expect(questionQuote(panel)).not.toContainText(REPLY_PHRASE)

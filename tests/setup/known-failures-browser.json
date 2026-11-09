@@ -1,6 +1,6 @@
 {
   "suite": "playwright: chromium, chromium-host-fixture",
-  "count": 226,
+  "count": 225,
   "failures": [
     "action-cards-and-time.spec.ts :: suggest action cards › card renders, its button runs the real op, and the receipt survives a reload",
     "action-cards-and-time.spec.ts :: time tracking › real interaction earns human time banked against the right task and kind",
@@ -201,7 +201,6 @@
     "task-board-view.spec.ts :: finished items fold: an answered choice to one row, a done section's thread to its newest message",
     "task-board-view.spec.ts :: the reader keeps their place across the leader's writes, and every thread opens at its newest",
     "task-board.spec.ts :: a board that cannot load says so with Retry, and Retry recovers",
-    "task-detail-popup.spec.ts :: a busy task reads as one header, a main column of rows and a rail of facts",
     "task-move-to-project.spec.ts :: the row kebab moves a task to another project",
     "task-multi-select-batch.spec.ts :: selection bar shows Complete and Delete directly, not behind a caret",
     "task-reopen-on-message.spec.ts :: a completed task returns to in progress when its session is messaged again",
@@ -434,7 +433,6 @@
     "task-board-view.spec.ts :: finished items fold: an answered choice to one row, a done section's thread to its newest message": "Error: expect(locator).toBeVisible() failed",
     "task-board-view.spec.ts :: the reader keeps their place across the leader's writes, and every thread opens at its newest": "Error: expect(locator).toBeVisible() failed",
     "task-board.spec.ts :: a board that cannot load says so with Retry, and Retry recovers": "Error: expect(locator).toBeVisible() failed",
-    "task-detail-popup.spec.ts :: a busy task reads as one header, a main column of rows and a rail of facts": "Error: expect(locator).toHaveText(expected) failed",
     "task-move-to-project.spec.ts :: the row kebab moves a task to another project": "Error: expect(locator).toBeVisible() failed",
     "task-multi-select-batch.spec.ts :: selection bar shows Complete and Delete directly, not behind a caret": "Error: expect(locator).toBeVisible() failed",
     "task-reopen-on-message.spec.ts :: a completed task returns to in progress when its session is messaged again": "Error: expect(locator).toHaveClass(expected) failed",

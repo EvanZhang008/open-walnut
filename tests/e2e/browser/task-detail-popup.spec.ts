@@ -90,9 +90,13 @@ test('a busy task reads as one header, a main column of rows and a rail of facts
   await expect(badges).toContainText('Waiting')
   await expect(badges.locator('[data-testid="tag-editor"]')).toContainText('review')
 
-  // Sessions: four rows, each its title, never its id.
-  const sessions = section(modal, 'Sessions')
-  await expect(sessions.locator('.tdp-label-count')).toHaveText('4')
+  // Session: the task's one session, its three earlier ones folded under it (one session per
+  // task, d9942deb9); opened, four rows, each its title, never its id.
+  const sessions = section(modal, 'Session')
+  const earlier = sessions.getByRole('button', { name: 'Earlier sessions (3)' })
+  await expect(earlier).toHaveAttribute('aria-expanded', 'false')
+  await expect(sessions.locator('.todo-detail-session-item')).toHaveCount(1)
+  await earlier.click()
   const rows = sessions.locator('.todo-detail-session-item')
   await expect(rows).toHaveCount(4, { timeout: 20_000 })
   await expect(rows.filter({ hasText: 'Rename the time grid \u91cd\u547d\u540d' })).toHaveCount(1)
@@ -110,21 +114,23 @@ test('a busy task reads as one header, a main column of rows and a rail of facts
   await expect(subtasks.locator('.tdp-task-row')).toHaveCount(3)
   await expect(subtasks.locator('.tdp-task-row.is-done')).toHaveText(/Collect the agent clock/)
 
-  // Description and Note: Markdown as text, not a card per part.
+  // Description and Note: the shared rich editor (TaskFieldEditor), its Markdown drawn as text,
+  // not a card per part.
   const description = section(modal, 'Description')
   const note = section(modal, 'Note')
-  await expect(description.locator('.markdown-body h2')).toHaveText('What this is')
-  await expect(note.locator('.markdown-body h3')).toHaveText('Next')
-  const doc = await note.locator('.todo-detail-note').evaluate((el) => {
+  await expect(description.locator('.ProseMirror h2')).toHaveText('What this is')
+  await expect(note.locator('.ProseMirror h3')).toHaveText('Next')
+  const doc = await note.locator('.ProseMirror').evaluate((el) => {
     const cs = getComputedStyle(el)
     return { border: cs.borderTopWidth, background: cs.backgroundColor, width: el.getBoundingClientRect().width }
   })
   expect(doc.border).toBe('0px')
   expect(doc.background).toBe('rgba(0, 0, 0, 0)')
-  expect(doc.width).toBeLessThanOrEqual(761)
+  // It stays inside the main column (a fixed pixel cap broke when the editor took the field).
+  expect(doc.width).toBeLessThanOrEqual((await modal.locator('.tdp-main').boundingBox())!.width + 0.5)
 
   // The parts in reading order.
-  const tops = await Promise.all(['Sessions', 'Parent', 'Subtasks', 'Description', 'Note'].map(async (label) => (await section(modal, label).boundingBox())!.y))
+  const tops = await Promise.all(['Session', 'Parent', 'Subtasks', 'Description', 'Note'].map(async (label) => (await section(modal, label).boundingBox())!.y))
   expect([...tops].sort((a, b) => a - b)).toEqual(tops)
 
   // The rail: one fact per row, to the right of the main column.
@@ -181,14 +187,23 @@ test('rows lead where they say, and the rail\'s dates change in place', async ({
 
 test('a narrow popup puts the facts first, then the main column', async ({ page, browserName }) => {
   const errors = watchErrors(page)
-  await page.setViewportSize({ width: 760, height: 900 })
+  // A desktop window just wide enough not to be the phone app (768 px and below, 7e7f280b6,
+  // where the popup is a full-screen page): the popup is then under its 720 px container width.
+  await page.setViewportSize({ width: 790, height: 900 })
   await loadHome(page)
   const modal = await openDetails(page, TASK, 'Time slots fixture')
+  expect((await modal.locator('.tdp').boundingBox())!.width).toBeLessThanOrEqual(720)
+  // The earlier sessions, folded under the task's one session, hold the long title.
+  await modal.getByRole('button', { name: 'Earlier sessions (3)' }).click()
   await expect(modal.locator('.todo-detail-session-item')).toHaveCount(4, { timeout: 20_000 })
-  // The long session title is cut with an ellipsis here, on one line.
+  // The long session title stays on one line, and one too long for it is cut with an ellipsis
+  // (at the narrowest desktop width it still fits, so the rule is read, not a cut seen).
   const cut = await modal.locator('.todo-detail-session-item').filter({ hasText: 'Review the day-by-day list' })
-    .locator('.tdp-row-title').evaluate((el) => ({ cut: el.scrollWidth > el.clientWidth, height: el.getBoundingClientRect().height }))
-  expect(cut.cut).toBe(true)
+    .locator('.tdp-row-title').evaluate((el) => {
+      const cs = getComputedStyle(el)
+      return { overflow: cs.textOverflow, wrap: cs.whiteSpace, hidden: cs.overflow, height: el.getBoundingClientRect().height }
+    })
+  expect(cut).toMatchObject({ overflow: 'ellipsis', wrap: 'nowrap', hidden: 'hidden' })
   expect(cut.height).toBeLessThanOrEqual(22)
   const [main, rail] = await Promise.all([modal.locator('.tdp-main').boundingBox(), modal.locator('.tdp-rail').boundingBox()])
   expect(rail!.y + rail!.height).toBeLessThanOrEqual(main!.y)
@@ -201,12 +216,14 @@ test('a narrow popup puts the facts first, then the main column', async ({ page,
   expect(errors).toEqual([])
 })
 
-test('a task with nothing yet says so in one line, with its facts beside it', async ({ page, browserName }) => {
+test('a task with nothing yet shows only its empty description and note, with its facts beside it', async ({ page, browserName }) => {
   const errors = watchErrors(page)
   await loadHome(page)
   const modal = await openDetails(page, fixture!.slots.emptyTaskId, 'Time empty fixture')
-  await expect(modal.locator('.todo-detail-empty')).toHaveText('No sessions, note or description yet.')
-  await expect(modal.locator('.tdp-section')).toHaveCount(0)
+  // Nothing to list: no Session, Parent or Subtasks part; Description and Note are the empty
+  // editors to write in (the one-line empty state went with 6b0d0b5cb).
+  for (const label of ['Session', 'Parent', 'Subtasks']) await expect(section(modal, label)).toHaveCount(0)
+  for (const label of ['Description', 'Note']) await expect(section(modal, label).locator('.ProseMirror')).toHaveText('')
   await expect(fact(modal, 'Start').locator('.dp-trigger')).toHaveText('Set date')
   await expect(fact(modal, 'Due').locator('.dp-trigger')).toHaveText('Set date')
   await page.waitForTimeout(500)

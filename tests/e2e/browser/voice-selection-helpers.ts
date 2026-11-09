@@ -75,7 +75,9 @@ export async function wheel(page: Page, panel: Locator, dy: number): Promise<voi
 /** Park a row mid-timeline: under the sticky header or behind the composer its words
  *  can be neither dragged over nor pointed at. */
 export async function centreRow(page: Page, panel: Locator, needle = PARAGRAPH): Promise<void> {
-  const history = panel.locator('.session-history')
+  // The history that holds the row: with a question page open the stack keeps the root
+  // page's history mounted under it, so the panel has two.
+  const history = panel.locator('.session-history').filter({ has: page.locator('.session-msg-content', { hasText: needle }) }).last()
   const row = panel.locator('.session-msg-content', { hasText: needle }).last()
   let lastTop = -1
   for (let i = 0; i < 30; i++) {
