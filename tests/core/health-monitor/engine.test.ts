@@ -376,6 +376,66 @@ describe('health monitor engine', () => {
     expect(await ringAfter()).toBe(first)
   })
 
+  it('a check that stops reporting is no recovery: the owner hears no OK, and the ring after it is the same episode', async () => {
+    const h = await harness()
+    h.open.add('owner-1'); h.live.add('owner-1')
+    setCustomAlarms(customAlarmDefs([{ id: 'gate', command: 'true', alarm: { threshold: 60, minutes: 3 }, owner_task: 'owner-1' }]))
+    try {
+      h.m.setGauge('custom.gate', 90)
+      await minutes(h, 5)
+      expect(h.m.alarms['custom.gate'].state).toBe('ALARM')
+      expect(h.told.map((t) => t.taskId)).toEqual(['owner-1'])
+      h.m.setGauge('custom.gate', null)
+      for (let i = 0; i < 10 && h.m.alarms['custom.gate'].state === 'ALARM'; i++) await minutes(h, 1)
+      expect(h.m.alarms['custom.gate'].state).toBe('INSUFFICIENT_DATA')
+      expect(h.told).toHaveLength(1)
+      expect(h.m.alarms['custom.gate'].clearedAt).toBeUndefined()
+      h.m.setGauge('custom.gate', 90)
+      await minutes(h, 5)
+      expect(h.m.alarms['custom.gate'].state).toBe('ALARM')
+      expect(h.told).toHaveLength(1)
+      expect(h.fixes).toHaveLength(0)
+      // a real OK is a recovery: the owner hears it
+      h.m.setGauge('custom.gate', 10)
+      await minutes(h, 3)
+      expect(h.m.alarms['custom.gate'].state).toBe('OK')
+      expect(h.told.at(-1)!.text).toContain('back to OK')
+    } finally {
+      setCustomAlarms([])
+    }
+  })
+
+  it('an owner that closed while its alarm rings on hands over to a new fix task after the usual delay', async () => {
+    const h = await harness()
+    h.open.add('owner-1'); h.live.add('owner-1')
+    h.m.setOverride('session.hung', { ownerTask: 'owner-1' }, 'task:lead')
+    collectorHung(h, 4)
+    await minutes(h, 20)
+    expect(h.told.map((t) => t.taskId)).toEqual(['owner-1'])
+    h.open.delete('owner-1')
+    await minutes(h, 300)
+    expect(h.fixes).toHaveLength(0)
+    await minutes(h, 70)
+    expect(h.fixes.map((f) => f.alarmId)).toEqual(['session.hung'])
+    expect(h.told.map((t) => t.taskId)).toEqual(['owner-1'])
+  })
+
+  it("owner_task null takes the owner off, even one the person's config names", async () => {
+    const h = await harness()
+    h.open.add('owner-1'); h.live.add('owner-1')
+    setCustomAlarms(customAlarmDefs([{ id: 'gate', command: 'true', alarm: { threshold: 60, minutes: 3 }, owner_task: 'owner-1' }]))
+    try {
+      h.m.setOverride('custom.gate', { ownerTask: null }, 'human')
+      h.m.setGauge('custom.gate', 90)
+      await minutes(h, 5)
+      expect(h.m.alarms['custom.gate'].state).toBe('ALARM')
+      expect(h.told).toHaveLength(0)
+      expect(h.fixes.map((f) => f.alarmId)).toEqual(['custom.gate'])
+    } finally {
+      setCustomAlarms([])
+    }
+  })
+
   it("the person's own metric with an alarm rings and files its fix task; taken out of the config, it goes", async () => {
     const h = await harness()
     setCustomAlarms(customAlarmDefs([{ id: 'deploy-wait', title: 'Deploy queue wait', command: 'true', unit: 'min', alarm: { comparison: '>', threshold: 60, minutes: 5 } }]))

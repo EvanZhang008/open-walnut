@@ -30,6 +30,8 @@ import { LOCAL_ORIGIN } from '../../src/lib/caller-origin.js'
 import { addTask, completeTask, getTask } from '../../src/core/task-manager.js'
 import { tellTask } from '../../src/core/health-monitor/fix-task.js'
 import { getConfig } from '../../src/core/config-manager.js'
+import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js'
+import { getQueue } from '../../src/core/session-message-queue.js'
 
 let base = ''
 
@@ -142,6 +144,16 @@ describe('what an alarm does, and who owns it', () => {
     expect(await tellTask({ taskId: task.id, text: 'the alarm rang', start: false })).toMatchObject({ delivered: false, started: false })
     await completeTask(task.id)
     expect((await tellTask({ taskId: task.id, text: 'the alarm rang', start: true })).detail).toBe('the task is closed')
+  })
+
+  it('a note without start goes only into a session that is live: a stopped one is never resumed for it', async () => {
+    const { task } = await addTask({ title: 'Owner with a session', project: 'Walnut' })
+    const sid = 'health-tell-0000-4000-8000-000000000001'
+    await createSessionRecord(sid, task.id, 'Walnut', WALNUT_HOME)
+    await updateSessionRecord(sid, { process_status: 'stopped' } as never)
+    const before = (await getQueue(sid)).length
+    expect(await tellTask({ taskId: task.id, text: 'the alarm is back to OK', start: false })).toMatchObject({ delivered: false, started: false })
+    expect((await getQueue(sid)).length).toBe(before)
   })
 
   it("Main's Brief read carries Walnut's health beside its lists", async () => {

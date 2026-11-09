@@ -98,6 +98,7 @@ export async function startHealthMonitor(opts: StartOptions): Promise<HealthMoni
 }
 
 let customTimer: ReturnType<typeof setInterval> | null = null
+let customRunner: CustomMetricRunner | null = null
 
 /** The person's own command metrics (custom-metrics.ts): their alarms show everywhere, their commands run only where actions are on. */
 function startCustomMetrics(monitor: HealthMonitor): void {
@@ -111,7 +112,7 @@ function startCustomMetrics(monitor: HealthMonitor): void {
       const list = readCustomMetrics(raw, key !== seen)
       seen = key
       setCustomAlarms(customAlarmDefs(list))
-      if (actionsOn && list.length) void runner.tick(list, Date.now())
+      if (actionsOn) void runner.tick(list, Date.now())
     } catch (err) {
       log.obs.warn('health monitor: custom metrics not read', { error: err instanceof Error ? err.message : String(err) })
     }
@@ -119,11 +120,14 @@ function startCustomMetrics(monitor: HealthMonitor): void {
   void tick()
   customTimer = setInterval(() => { void tick() }, MINUTE_MS)
   customTimer.unref?.()
+  customRunner = runner
 }
 
 export function stopHealthMonitor(): void {
   if (customTimer) clearInterval(customTimer)
   customTimer = null
+  customRunner?.stop()
+  customRunner = null
   setCustomAlarms([])
   setGaugeSink(null)
   running?.stop()

@@ -13,18 +13,20 @@
 
 import { log } from '../../logging/index.js'
 import { allAlarms } from './alarms.js'
+import { flapHeld, sameEpisode } from './transitions.js'
 import { MinuteCollector, type SignatureCount } from './collect.js'
 import { evaluateAlarm, fillPattern, indexRows, matchSeries, MINUTE_MS, parseSeriesKey, type RowIndex } from './evaluate.js'
 import {
   chronicDays, chronicVerdict, hourStart, logDef, signatureId, spikeBaseline, spikeThreshold, spikeVerdict, HOUR_MS,
 } from './log-alarms.js'
-import { HealthStore, MEMORY_MINUTES, pruneLogHours, type LogHoursFile, type ServerEvent, type StateFile } from './store.js'
-import type { AlarmActionRecord, AlarmDef, AlarmInstanceState, AlarmOverride, AlarmState, MinuteRow } from './types.js'
+import { HealthStore, MEMORY_MINUTES, pruneLogHours, type LogHoursFile, type StateFile } from './store.js'
+import type { AlarmActionRecord, AlarmDef, AlarmInstanceState, AlarmOverride, AlarmState, EngineDeps, FixMode, MinuteRow, TellTaskResult } from './types.js'
 import { fixBrief, recoveredNote, ringAgainNote, type BriefInput } from './brief.js'
-import { shutdownBailsSince } from './exit-trace.js'
-import { effectiveOverride, overrideHolds, patchOverride, type OverridePatch } from './overrides.js'
+import { bootOnSameBuild, shutdownBailsSince } from './exit-trace.js'
+import { effectiveOverride, overrideHolds, ownerOf, patchOverride, type OverridePatch } from './overrides.js'
 
 export { effectiveOverride, overrideHolds } from './overrides.js'
+export { bootOnSameBuild } from './exit-trace.js'
 
 export const FIX_TASKS_PER_DAY = 5
 const HISTORY_MAX = 50
@@ -37,58 +39,8 @@ const MAX_LOG_ALARMS = 60
 const REOPEN_AFTER_MS = 6 * 3_600_000
 /** A failed fix-task step is tried again after this. */
 const RETRY_MS = 30 * 60_000
-/** An alarm back in ALARM within this of clearing must cross for one more period (flapping). */
-const FLAP_WINDOW_MS = 60 * 60_000
-const flapHoldMs = (def: AlarmDef): number => Math.min(Math.max(def.periodMin, 2), 30) * 60_000
 
-export type FixMode = 'record' | 'start' | 'off'
-
-/**
- * A boot on the same build as the boot before it is a start nobody deployed: a
- * crash and its respawn, a launchd relaunch, a reboot. A deploy, an update and a
- * rollback all start a different build. (2026-11-10: every one of 16 boots in a
- * day was a queued deploy, and the alarm counting all boots asked for a fix.)
- * A boot an older Walnut recorded has no build, so it never matches.
- */
-export function bootOnSameBuild(events: readonly ServerEvent[], build: string | null): boolean {
-  for (let i = events.length - 1; i >= 0; i--) {
-    const e = events[i]
-    if (e.kind !== 'boot') continue
-    return 'build' in e && e.build === build
-  }
-  return false
-}
-
-export interface FixTaskInput {
-  alarmId: string
-  title: string
-  brief: string
-  mode: 'record' | 'start'
-}
-
-export interface TellTaskInput { taskId: string; text: string; start: boolean }
-export interface TellTaskResult { delivered: boolean; started: boolean; detail: string }
-
-export interface EngineDeps {
-  store: HealthStore
-  collector: MinuteCollector
-  pid: number
-  /** The build this server runs (commit and build time, null from source): see bootOnSameBuild. */
-  build?: string | null
-  now?: () => number
-  /** The server's exit trace (shutdown cut-offs are read from it at boot). */
-  exitTraceFile?: string | null
-  fixMode: () => Promise<FixMode>
-  autoFix: (id: string, labels?: Record<string, string>) => Promise<{ ok: boolean; detail: string }>
-  openFixTask: (input: FixTaskInput) => Promise<{ taskId: string; started: boolean }>
-  isTaskOpen: (taskId: string) => Promise<boolean>
-  /** Tell a task about its alarm: into its session, or (`start`) a new one when it has none. */
-  tellTask: (input: TellTaskInput) => Promise<TellTaskResult>
-  notify?: (alarmId: string, title: string, body: string) => void
-  recover?: (alarmId: string) => void
-  /** Something a reader shows changed (a state, an action). */
-  onChange?: () => void
-}
+export type { EngineDeps, FixMode, FixTaskInput, TellTaskInput, TellTaskResult } from './types.js'
 
 export class HealthMonitor {
   private rows: MinuteRow[] = []
@@ -233,7 +185,8 @@ export class HealthMonitor {
       for (const { id, key, labels } of this.instancesOf(def, index, now)) {
         const d = this.effectiveDef(def, id)
         const ev = evaluateAlarm(d, index, key, now)
-        await this.apply(d, id, labels, ev.state, ev.value, `${ev.breaching} of ${d.evaluationPeriods} periods crossed ${d.comparison} ${d.threshold} ${d.unit}`.trim(), now)
+        const verdict = ev.undetermined ? (this.state.alarms[id]?.state ?? 'INSUFFICIENT_DATA') : ev.state
+        await this.apply(d, id, labels, verdict, ev.value, `${ev.breaching} of ${d.evaluationPeriods} periods crossed ${d.comparison} ${d.threshold} ${d.unit}`.trim(), now)
       }
     }
     await this.evaluateLogs(now)
@@ -325,16 +278,14 @@ export class HealthMonitor {
       if (next === 'ALARM') inst.history.push({ at: now, from: 'INSUFFICIENT_DATA', to: 'ALARM', value, reason })
       this.deps.onChange?.()
     } else {
-      // An alarm that cleared less than an hour ago rings again only once it crossed for one more period.
-      if (verdict === 'ALARM' && inst.state !== 'ALARM' && inst.clearedAt !== undefined && now - inst.clearedAt < FLAP_WINDOW_MS) {
-        inst.heldSince ??= now
-        if (now - inst.heldSince < flapHoldMs(def)) next = inst.state
-      } else delete inst.heldSince
+      next = flapHeld(def, inst, verdict, now)
       if (inst.state !== next) {
         inst.history.push({ at: now, from: inst.state, to: next, value, reason })
         if (inst.history.length > HISTORY_MAX) inst.history.splice(0, inst.history.length - HISTORY_MAX)
-        if (inst.state === 'ALARM') this.recovered(def, inst, now)
-        if (next === 'ALARM') { inst.actions = []; delete inst.heldSince }
+        // Only OK is a recovery: no data (a check that failed, a gauge gone) proves nothing was fixed.
+        if (inst.state === 'ALARM' && next === 'OK') this.recovered(def, inst, now)
+        // A new episode starts from OK (or a first ring); back from no data it is the same one.
+        if (next === 'ALARM') { if (!sameEpisode(inst)) inst.actions = []; delete inst.heldSince }
         inst.state = next
         inst.since = now
         log.obs.info('health monitor: alarm state', { alarm: id, state: next, value, reason })
@@ -376,7 +327,7 @@ export class HealthMonitor {
     if (fixAt !== undefined && now - fixAt < graceMin * MINUTE_MS) return
     if (then === 'none') return
     // A task that owns the problem hears it instead of a new fix task (the user's card still goes out).
-    const owner = effectiveOverride(this.state.overrides, inst.id, inst.defId)?.ownerTask ?? def.ownerTask
+    const owner = ownerOf(effectiveOverride(this.state.overrides, inst.id, inst.defId), def.ownerTask)
     if (owner && await this.toOwner(def, inst, owner, reason, now) && then === 'fix-task') return
     if (then === 'notify') {
       if (inst.actions.some((a) => a.kind === 'notify')) return
@@ -402,9 +353,11 @@ export class HealthMonitor {
   /** True once the owner task has it (told now or earlier this episode); false sends it the usual way. */
   private async toOwner(def: AlarmDef, inst: AlarmInstanceState, owner: string, reason: string, now: number): Promise<boolean> {
     const done = inst.actions.find((a) => a.kind === 'fix-task' && a.taskId === owner)
+    // A closed owner (it finished, the alarm rings on) hands over to the fix-task path, which
+    // files a new task after its usual delay (REOPEN_AFTER_MS) and never reopens the owner.
+    if (!(await this.deps.isTaskOpen(owner).catch(() => !!done?.ok))) return false
     if (done?.ok) return true
     if (done && now - done.at < RETRY_MS) return true
-    if (!(await this.deps.isTaskOpen(owner).catch(() => false))) return false
     const mode = await this.deps.fixMode()
     if (mode === 'off') return false
     const r = await this.deps.tellTask({ taskId: owner, text: ringAgainNote(this.briefInput(def, inst, reason, now), true), start: mode === 'start' })
@@ -520,7 +473,10 @@ export class HealthMonitor {
 
   /** Change an alarm (a built-in's id applies to all its instances). */
   setOverride(id: string, patch: OverridePatch, by: string): AlarmOverride | null {
-    const next = patchOverride(this.state.overrides[id], patch, by, this.now())
+    const defId = this.state.alarms[id]?.defId ?? id
+    // What it would inherit without an owner of its own: its alarm's (config) or, for an instance, its alarm's override.
+    const inherited = ownerOf(defId === id ? undefined : this.state.overrides[defId], allAlarms().find((d) => d.id === defId)?.ownerTask)
+    const next = patchOverride(this.state.overrides[id], patch, by, this.now(), inherited !== undefined)
     if (next) this.state.overrides[id] = next
     else delete this.state.overrides[id]
     this.save()

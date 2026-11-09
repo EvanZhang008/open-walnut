@@ -78,6 +78,18 @@ describe('evaluateAlarm', () => {
     expect(evaluateAlarm(gauge({ missing: 'breaching' }), empty, 'g', T0).state).toBe('ALARM')
   })
 
+  it('missing periods that could still be crossing leave it undetermined, never OK', () => {
+    // 3 of 5 to alarm: 2 crossing, 2 missing, 1 under. The missing ones could make 3+, so no OK yet.
+    const r = indexRows(rows(5, (i) => ([{ g: 20 }, {}, { g: 20 }, {}, { g: 1 }][i])))
+    expect(evaluateAlarm(gauge(), r, 'g', T0)).toMatchObject({ state: 'INSUFFICIENT_DATA', undetermined: true })
+    // 3 under with data: 3 crossing is out of reach whatever the missing ones were.
+    const r2 = indexRows(rows(5, (i) => ([{ g: 1 }, {}, { g: 1 }, {}, { g: 1 }][i])))
+    expect(evaluateAlarm(gauge(), r2, 'g', T0)).toMatchObject({ state: 'OK' })
+    expect(evaluateAlarm(gauge(), r2, 'g', T0).undetermined).toBeUndefined()
+    // notBreaching treats a missing period as under, as before
+    expect(evaluateAlarm(gauge({ missing: 'notBreaching' }), r, 'g', T0).state).toBe('OK')
+  })
+
   it('a counter reads 0 for a recorded minute without its key, a gauge reads nothing', () => {
     const r = indexRows(rows(10, () => ({ other: 1 })))
     expect(periodValues(r, 'c', 'counter', 'sum', 5, 2, T0)).toEqual([0, 0])

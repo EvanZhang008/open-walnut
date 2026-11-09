@@ -8,6 +8,9 @@
  * when that is not enough, opens one "fix Walnut" task for the alarm.
  */
 
+import type { MinuteCollector } from './collect.js'
+import type { HealthStore } from './store.js'
+
 export type AlarmState = 'OK' | 'ALARM' | 'INSUFFICIENT_DATA'
 
 /** One minute of numbers: `t` is the minute's start (epoch ms), `v` maps a series key to its value. */
@@ -128,4 +131,39 @@ export interface AlarmOverride {
   /** `human` or `task:<id>`. */
   by: string
   at: number
+}
+
+// ── what the engine needs from the rest of Walnut (engine.ts) ──
+
+export type FixMode = 'record' | 'start' | 'off'
+
+export interface FixTaskInput {
+  alarmId: string
+  title: string
+  brief: string
+  mode: 'record' | 'start'
+}
+
+export interface TellTaskInput { taskId: string; text: string; start: boolean }
+export interface TellTaskResult { delivered: boolean; started: boolean; detail: string }
+
+export interface EngineDeps {
+  store: HealthStore
+  collector: MinuteCollector
+  pid: number
+  /** The build this server runs (commit and build time, null from source): see bootOnSameBuild in exit-trace.ts. */
+  build?: string | null
+  now?: () => number
+  /** The server's exit trace (shutdown cut-offs are read from it at boot). */
+  exitTraceFile?: string | null
+  fixMode: () => Promise<FixMode>
+  autoFix: (id: string, labels?: Record<string, string>) => Promise<{ ok: boolean; detail: string }>
+  openFixTask: (input: FixTaskInput) => Promise<{ taskId: string; started: boolean }>
+  isTaskOpen: (taskId: string) => Promise<boolean>
+  /** Tell a task about its alarm: into its session, or (`start`) a new one when it has none. */
+  tellTask: (input: TellTaskInput) => Promise<TellTaskResult>
+  notify?: (alarmId: string, title: string, body: string) => void
+  recover?: (alarmId: string) => void
+  /** Something a reader shows changed (a state, an action). */
+  onChange?: () => void
 }

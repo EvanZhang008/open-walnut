@@ -69,6 +69,7 @@ const RAW_SIGNAL_BUDGET: Record<string, number> = {
   'src/core/cloud-setup/providers/aws.ts': 1,      // its own CLI child's group, on timeout
   'src/core/cloud-setup/providers/cli-exec.ts': 3, // same
   'src/core/expose/install-cli.ts': 1,             // its own install shell's group, on timeout or shutdown
+  'src/core/health-monitor/custom-metrics.ts': 1,  // its own metric command's group, at the deadline, the output cap or a config change
   'src/core/host-server/host-file-build.ts': 1,    // its own clone build's group, at the deadline
   'src/core/plugin-npm-install.ts': 1,             // its own npm child's group
   'src/core/process-group-kill.ts': 1,             // safeKillProcessGroup itself (refuses pid <= 1)

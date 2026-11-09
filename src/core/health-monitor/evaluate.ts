@@ -118,6 +118,8 @@ export interface Evaluation {
   value: number | null
   breaching: number
   periods: Array<number | null>
+  /** Too few periods with data to tell either way: the alarm keeps the state it has. */
+  undetermined?: true
 }
 
 /** Evaluate one alarm instance on one series key. */
@@ -143,6 +145,13 @@ export function evaluateAlarm(def: AlarmDef, index: RowIndex, key: string, nowMs
   })
   const value = [...periods].reverse().find((v) => v !== null) ?? null
   if (breaching >= def.datapointsToAlarm) return { state: 'ALARM', value, breaching, periods }
-  if (withData === 0 && def.missing === 'missing') return { state: 'INSUFFICIENT_DATA', value, breaching, periods }
+  if (def.missing === 'missing') {
+    if (withData === 0) return { state: 'INSUFFICIENT_DATA', value, breaching, periods }
+    // The missing periods could still be crossing: OK only once enough periods with data are not,
+    // so one failed check (a missed sample) never reads as a recovery.
+    if (withData - breaching < def.evaluationPeriods - def.datapointsToAlarm + 1) {
+      return { state: 'INSUFFICIENT_DATA', value, breaching, periods, undetermined: true }
+    }
+  }
   return { state: 'OK', value, breaching, periods }
 }

@@ -1,5 +1,5 @@
 /**
- * Cut-off shutdowns from the server's exit trace. The file names each with its
+ * Cut-off shutdowns from the server's exit trace, and whether a boot was a restart. The file names each with its
  * pid; only pids this monitor saw boot are this server's (the file also holds
  * test servers'), and a line already recorded is not counted twice.
  */
@@ -31,4 +31,20 @@ export async function shutdownBailsSince(file: string, events: readonly ServerEv
     out.push({ kind: 'shutdown-bail', at, pid })
   }
   return out
+}
+
+/**
+ * A boot on the same build as the boot before it is a start nobody deployed: a
+ * crash and its respawn, a launchd relaunch, a reboot. A deploy, an update and a
+ * rollback all start a different build. (2026-11-10: every one of 16 boots in a
+ * day was a queued deploy, and the alarm counting all boots asked for a fix.)
+ * A boot an older Walnut recorded has no build, so it never matches.
+ */
+export function bootOnSameBuild(events: readonly ServerEvent[], build: string | null): boolean {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i]
+    if (e.kind !== 'boot') continue
+    return 'build' in e && e.build === build
+  }
+  return false
 }

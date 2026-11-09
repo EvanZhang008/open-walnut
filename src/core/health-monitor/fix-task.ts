@@ -69,11 +69,20 @@ export async function tellTask(input: TellTaskInput): Promise<TellTaskResult> {
   if (target && (isLiveSessionStatus(target.process_status) || input.start)) {
     const { buildWalnutMessage } = await import('../peers/walnut-message-tag.js')
     const { sendMessageToSession } = await import('../session-message-queue.js')
-    await sendMessageToSession(target.claudeSessionId, buildWalnutMessage({
-      kind: 'notification',
-      attrs: { from: 'Walnut: health monitor', note: 'a health alarm about the problem this task works on' },
-      body: input.text,
-    }), { source: FIX_SEND_SOURCE, taskId: task.id })
+    const { liveDelivery, liveSendGuard, notDeliveredLive } = await import('../sessions/ask-answer.js')
+    // Without start, only into the session still live when the row is stored: a Stop or a death
+    // since the check never turns this note into a cold resume (the answers_ask guard).
+    const guard = input.start ? {} : await liveSendGuard(await liveDelivery(target.claudeSessionId))
+    try {
+      await sendMessageToSession(target.claudeSessionId, buildWalnutMessage({
+        kind: 'notification',
+        attrs: { from: 'Walnut: health monitor', note: 'a health alarm about the problem this task works on' },
+        body: input.text,
+      }), { source: FIX_SEND_SOURCE, taskId: task.id, ...guard })
+    } catch (err) {
+      if (!input.start && await notDeliveredLive(err)) return { delivered: false, started: false, detail: `its task ${name} stopped before it could be told` }
+      throw err
+    }
     return { delivered: true, started: false, detail: `told its task ${name}` }
   }
   if (!target && input.start) {
