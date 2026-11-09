@@ -211,7 +211,7 @@ describe('sweepTaskDirsOnce', () => {
     const caps = ['task-dir-v1', 'task-dir-sizes-v1']
     const local = mk('__local__', caps)
     const remote = mk('cloud', caps)
-    const res = await sweepTaskDirsOnce({ conns: [local.conn, remote.conn], loadTasks, now: NOW, lowDisk: true, tellTask, noticeFile, orgOn: true })
+    const res = await sweepTaskDirsOnce({ conns: [local.conn, remote.conn], loadTasks, now: NOW, lowDisk: true, freeBytes: 25 * GiB, tellTask, noticeFile, orgOn: true })
     // Only open tasks with a session are measured; only this machine's disk is low.
     expect(local.calls.find((c) => c[0] === 'taskdir.sizes')?.[1]).toEqual({ taskIds: ['big', 'small'] })
     expect(remote.calls.some((c) => c[0] === 'taskdir.sizes')).toBe(false)
@@ -222,15 +222,15 @@ describe('sweepTaskDirsOnce', () => {
     expect(told[0].text).toContain('Walnut deletes none of it for you')
     expect(res.find((r) => r.host === '__local__')?.toldSize).toEqual(['big'])
     // Not again the same day, also after a restart (the record is on disk) ...
-    await sweepTaskDirsOnce({ conns: [mk('__local__', caps).conn], loadTasks, now: NOW + 3_600_000, lowDisk: true, tellTask, noticeFile })
+    await sweepTaskDirsOnce({ conns: [mk('__local__', caps).conn], loadTasks, now: NOW + 3_600_000, lowDisk: true, freeBytes: 25 * GiB, tellTask, noticeFile })
     expect(told).toHaveLength(1)
     // ... unless it grew by 2 GB, or a day went by.
     sizes = sizes.map((s) => (s.taskId === 'big' ? { ...s, bytes: 11.5 * GiB } : s))
-    await sweepTaskDirsOnce({ conns: [mk('__local__', caps).conn], loadTasks, now: NOW + 7_200_000, lowDisk: true, tellTask, noticeFile })
+    await sweepTaskDirsOnce({ conns: [mk('__local__', caps).conn], loadTasks, now: NOW + 7_200_000, lowDisk: true, freeBytes: 25 * GiB, tellTask, noticeFile })
     expect(told).toHaveLength(2)
     // A new notice is new news: its own message id, never a retry the queue would skip.
     expect(told[1].messageId).not.toBe(told[0].messageId)
-    await sweepTaskDirsOnce({ conns: [mk('__local__', caps).conn], loadTasks, now: NOW + 7_200_000 + DAY, lowDisk: true, tellTask, noticeFile })
+    await sweepTaskDirsOnce({ conns: [mk('__local__', caps).conn], loadTasks, now: NOW + 7_200_000 + DAY, lowDisk: true, freeBytes: 25 * GiB, tellTask, noticeFile })
     expect(told).toHaveLength(3)
     // A disk that is not low, or a host without the capability, measures nothing.
     const calm = mk('__local__', caps)
@@ -239,6 +239,34 @@ describe('sweepTaskDirsOnce', () => {
     await sweepTaskDirsOnce({ conns: [older.conn], loadTasks, now: NOW + 3 * DAY, lowDisk: true, tellTask, noticeFile })
     expect([...calm.calls, ...older.calls].some((c) => c[0] === 'taskdir.sizes')).toBe(false)
     expect(told).toHaveLength(3)
+  })
+
+  // 2026-11-09: a task told at 5.45 GiB went on writing for 18 hours while the Mac sat at 13 to 15 GiB,
+  // because the notice waited a day. Under the floor (20 GiB) it comes every 6 hours; low only by the
+  // watermark, above the floor, once a day as before.
+  it('the size notice repeats every 6 hours while free space is under the floor, daily above it', async () => {
+    const GiB = 1024 ** 3
+    const HOUR = 3_600_000
+    const conn = {
+      host: '__local__', hasCapability: (c: string) => ['task-dir-v1', 'task-dir-sizes-v1'].includes(c),
+      send: async (cmd: string) => {
+        if (cmd === 'taskdir.list') return { ok: true, dirs: [dir('big', 0.1)] }
+        if (cmd === 'taskdir.sizes') return { ok: true, sizes: [{ taskId: 'big', bytes: 6 * GiB, partial: false, top: [] }] }
+        return { ok: false }
+      },
+    }
+    const loadTasks = async () => [{ ...task('big', 'IN_PROGRESS'), session_id: 's-big' }]
+    const run = async (freeGiB: number) => {
+      const told: number[] = []
+      const noticeFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-size-notice-')), 'told.json')
+      for (const h of [0, 5, 6, 12, 17, 18, 23, 24]) {
+        const n = await sweepTaskDirsOnce({ conns: [conn], loadTasks, now: NOW + h * HOUR, lowDisk: true, freeBytes: freeGiB * GiB, tellTask: async () => {}, noticeFile, orgOn: true })
+        if (n.find((r) => r.host === '__local__')?.toldSize?.length) told.push(h)
+      }
+      return told
+    }
+    expect(await run(13)).toEqual([0, 6, 12, 18, 24])
+    expect(await run(25)).toEqual([0, 24])
   })
 
   // 2026-11-09: finished tasks held 10 GB on a Mac under its floor, most completed hours earlier, and pruning

@@ -6,16 +6,22 @@
  * growth was each running task's own test run folders (a data copy per run,
  * 0.3 to 1.3 GB each, a dozen per task). Those may be evidence, so Walnut
  * never deletes them; the task that made them judges, and it is told with
- * its largest folders named. Once a day per task, or again when it grew by
- * 2 GB since it was told. Called by the sweep (task-dir-sweep.ts) for the
- * local host only, because only this machine's disk is measured.
+ * its largest folders named. Once a day per task, every 6 hours while free
+ * space is under the floor (taskDirLowDiskFloorBytes; 2026-11-09: a task told
+ * at 5.45 GiB kept writing for 18 hours while the Mac sat at 13 to 15 GiB),
+ * or again when it grew by 2 GB since it was told. Called by the sweep
+ * (task-dir-sweep.ts) for the local host only, because only this machine's
+ * disk is measured.
  */
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { log } from '../logging/index.js'
 import type { TaskDirSize } from '../providers/task-dir-sizes.js'
+import { taskDirLowDiskFloorBytes } from '../lib/task-dir.js'
 
 export const SIZE_NOTICE_REPEAT_MS = 24 * 3_600_000
+/** The repeat while free space is under the floor. */
+export const SIZE_NOTICE_REPEAT_UNDER_FLOOR_MS = 6 * 3_600_000
 export const SIZE_NOTICE_GROWTH_BYTES = 2 * 1024 ** 3
 const TOLD_KEEP_MS = 7 * 24 * 3_600_000
 
@@ -31,14 +37,14 @@ export function taskDirNoticeBytes(env: NodeJS.ProcessEnv): number {
 }
 
 /** The directories to tell their task about now. */
-export function pickSizeNotices(sizes: TaskDirSize[], tasks: Map<string, SizeNoticeTask>, told: ToldSizes, opts: { now: number; floor: number; orgOn: boolean }): TaskDirSize[] {
+export function pickSizeNotices(sizes: TaskDirSize[], tasks: Map<string, SizeNoticeTask>, told: ToldSizes, opts: { now: number; floor: number; orgOn: boolean; repeatMs?: number }): TaskDirSize[] {
   if (!(opts.floor > 0)) return []
   return sizes.filter((s) => {
     const t = tasks.get(s.taskId)
     if (!t || !mayTell(t, opts.orgOn)) return false
     if (!(s.bytes >= opts.floor)) return false
     const prev = told[s.taskId]
-    return !prev || opts.now - prev.at >= SIZE_NOTICE_REPEAT_MS || s.bytes - prev.bytes >= SIZE_NOTICE_GROWTH_BYTES
+    return !prev || opts.now - prev.at >= (opts.repeatMs ?? SIZE_NOTICE_REPEAT_MS) || s.bytes - prev.bytes >= SIZE_NOTICE_GROWTH_BYTES
   })
 }
 
@@ -98,7 +104,9 @@ export async function tellOversizeTasks(conn: Conn, dirs: Array<{ taskId: string
   const sizes = Array.isArray(res?.sizes) ? res.sizes : []
   for (const s of sizes) rec.measured[s.taskId] = deps.now
   const told = rec.told
-  const due = pickSizeNotices(sizes, tasks, told, { now: deps.now, floor, orgOn })
+  const underFloor = deps.freeBytes !== null && deps.freeBytes < taskDirLowDiskFloorBytes(process.env)
+  const repeatMs = underFloor ? SIZE_NOTICE_REPEAT_UNDER_FLOOR_MS : SIZE_NOTICE_REPEAT_MS
+  const due = pickSizeNotices(sizes, tasks, told, { now: deps.now, floor, orgOn, repeatMs })
   const deliver = deps.deliver ?? deliverNotice
   const out: string[] = []
   for (const s of due) {
@@ -114,7 +122,7 @@ export async function tellOversizeTasks(conn: Conn, dirs: Array<{ taskId: string
     }
   }
   await writeRecord(deps.file, rec)
-  log.session.info('task dir sizes checked', { host: conn.host, asked: open.length, measured: sizes.length, told: out, floorBytes: floor })
+  log.session.info('task dir sizes checked', { host: conn.host, asked: open.length, measured: sizes.length, told: out, floorBytes: floor, repeatHours: repeatMs / 3_600_000 })
   return out
 }
 

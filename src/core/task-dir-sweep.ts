@@ -152,6 +152,8 @@ export async function sweepTaskDirsOnce(deps?: {
   now?: number
   /** This machine's disk is low: the local host's idle wait shortens (default: the disk watermark). */
   lowDisk?: boolean
+  /** This machine's free bytes as the size notice reads them (tests); measured when absent. */
+  freeBytes?: number | null
   /** Delivers a size notice to a task (tests); default its session (task-dir-size-notice.ts). */
   tellTask?: (task: TaskStateForSweep, text: string, messageId: string) => Promise<void>
   noticeFile?: string
@@ -226,7 +228,7 @@ export async function sweepTaskDirsOnce(deps?: {
       })
       if (lowDisk && conn.host === '__local__' && conn.hasCapability?.('task-dir-sizes-v1')) {
         const { tellOversizeTasks } = await import('./task-dir-size-notice.js')
-        const free = await fsp.statfs(WALNUT_HOME).then((f) => Number(f.bavail) * Number(f.bsize)).catch(() => null)
+        const free = deps?.freeBytes !== undefined ? deps.freeBytes : await fsp.statfs(WALNUT_HOME).then((f) => Number(f.bavail) * Number(f.bsize)).catch(() => null)
         const live = dirs.filter((d) => !removed.has(d.taskId))
         row.toldSize = await tellOversizeTasks(conn, live, tasks, {
           now, freeBytes: free, file: deps?.noticeFile ?? path.join(WALNUT_HOME, 'cache', 'task-dir-size-notices.json'),
