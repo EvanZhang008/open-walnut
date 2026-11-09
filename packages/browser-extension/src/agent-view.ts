@@ -21,7 +21,9 @@
  *     on screen has no command running (an agent's real input or page step goes on undisturbed)
  *     and is not watched itself, and the picture counts only if that tab is still the one on
  *     screen after the capture;
- *   - no debugger, no page script, no mask: nothing in the page changes for a frame.
+ *   - no page script, no mask: nothing in the page changes for a frame. The debugger only while
+ *     the window is covered and the person turned live pictures on (agent-live.ts): its
+ *     Page.captureScreenshot draws the page off screen and shows no window.
  * The frame goes to the person's Walnut alone (the route refuses agents): an agent takes a
  * screenshot, which draws a shown password as dots.
  */
@@ -29,6 +31,7 @@ import { ext } from './ext'
 import { AgentError, agentTabs, agentWindowId, personsTab, walnutCheck, where, type AgentTab, type WireCommand } from './agent-shared'
 import { walnutAddress } from './walnut-address'
 import { WindowCovered, capture, tryCapture } from './capture-gate'
+import { endLive, liveHeld, liveNow, livePicture, liveState, type LiveState } from './agent-live'
 import { frontDriven } from './agent-takeover'
 import { noteGroupUse, type GroupApi } from './agent-groups'
 
@@ -103,6 +106,45 @@ async function shrink(dataUrl: string): Promise<string> {
   } catch {
     // No canvas here (an older browser): the capture as it came.
     return dataUrl
+  }
+}
+
+/** Why the tab's last covered frame had no live picture (agent-live.ts), for its frame's `live`. */
+const coveredLive = new Map<number, LiveState>()
+
+/**
+ * The picture of what the window shows. A stream (`full`) of a covered window takes it through the
+ * debugger instead, while live pictures are on (agent-live.ts), and goes back to captureVisibleTab
+ * (letting the debugger go) as soon as the window shows again. A single frame (`view_frame`, an
+ * older Walnut) never attaches the debugger.
+ */
+async function pictureOf(tabId: number, win: number, full: boolean, liveOk: boolean): Promise<string | 'failed' | 'covered'> {
+  const quality = full ? STREAM_QUALITY : 60
+  // Only an agent's own tab in Walnut's agent window: never the debugger on a tab of the person's.
+  if (!liveOk && liveHeld(tabId)) await endLive(tabId)
+  if (full && liveOk && liveNow(tabId)) {
+    // The person may have turned live pictures off meanwhile (or the permission went): let go at once.
+    if (await liveState(tabId) !== 'on') await endLive(tabId)
+    else try { return await livePicture(tabId, quality) } catch { /* tried the window next */ }
+  }
+  try {
+    const image = await capture(win, { format: 'jpeg', quality })
+    // The window shows again: no debugger (and no bar) for this tab now.
+    if (liveHeld(tabId)) await endLive(tabId)
+    coveredLive.delete(tabId)
+    return image
+  } catch (err) {
+    if (!(err instanceof WindowCovered)) return 'failed'
+  }
+  const state: LiveState = liveOk ? await liveState(tabId) : 'unavailable'
+  if (!full || state !== 'on') { coveredLive.set(tabId, state); return 'covered' }
+  try {
+    const image = await livePicture(tabId, quality)
+    coveredLive.delete(tabId)
+    return image
+  } catch {
+    coveredLive.set(tabId, 'failed')
+    return 'covered'
   }
 }
 
@@ -182,12 +224,16 @@ async function frameOf(c: WireCommand, busy: (tabId: number) => boolean, full: b
   if (switched) noteGroupUse(ext as unknown as GroupApi, rec.owner)
   if (shot === undefined || shot === 'busy') return none('busy')
   if (shot === null) throw new AgentError('That tab was closed or given back.', 'not_your_tab')
-  if (shot === 'behind' || shot === 'failed' || shot === 'changed' || shot === 'covered') return none(shot)
+  // A covered window says whether live pictures could show it (the card offers to turn them on).
+  if (shot === 'covered') return { ...none('covered'), live: coveredLive.get(tabId) ?? 'unavailable' }
+  if (shot === 'behind' || shot === 'failed' || shot === 'changed') return none(shot)
   return finish(shot)
 
   async function pictureNow(): Promise<string | 'failed' | 'changed' | 'covered' | null> {
     let image: string
-    try { image = await capture(win, { format: 'jpeg', quality: full ? STREAM_QUALITY : 60 }) } catch (err) { return err instanceof WindowCovered ? 'covered' as const : 'failed' as const }
+    const got = await pictureOf(tabId, win, full, inAgentWindow && !personsTab(rec))
+    if (typeof got !== 'string') return got
+    image = got
     // What was on screen must be this tab still (a page's popup, another agent's tab brought up meanwhile).
     const [shown] = await ext.tabs.query({ active: true, windowId: win })
     if (shown?.id !== tabId) return 'changed' as const
@@ -231,6 +277,8 @@ export type PushAnswer = { more?: boolean; ms?: number; again?: boolean } | null
 export type Push = (body: Record<string, unknown>) => Promise<PushAnswer>
 
 const streams = new Map<number, { until: number; grant?: string }>()
+/** Frames without a picture after which the stream holds no debugger for the tab (agent-live.ts). */
+const LETS_GO = new Set<string>(['minimized', 'behind', 'not_web', 'walnut_page', 'no_permission'])
 const watchMs = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(1000, Math.min(WATCH_MAX_MS, v)) : WATCH_MS)
 
 /**
@@ -267,6 +315,9 @@ async function stream(tabId: number, c: WireCommand, busy: (tabId: number) => bo
         await push({ tab: tabId, seq: ++seq, gone: true, code: err instanceof AgentError ? err.code : 'browser_error' }).catch(() => null)
         return
       }
+      // No picture of this tab can come now for a reason no capture changes (minimized, behind
+      // another tab, not a web page): live pictures let the debugger go meanwhile.
+      if (frame.shown !== true && typeof frame.why === 'string' && LETS_GO.has(frame.why)) await endLive(tabId)
       const image = frame.shown === true && typeof frame.image === 'string' ? frame.image : ''
       const body = image && image === last ? { ...frame, image: undefined, same: true } : frame
       if (image) last = image
@@ -281,10 +332,13 @@ async function stream(tabId: number, c: WireCommand, busy: (tabId: number) => bo
     }
   } finally {
     if (streams.get(tabId) === s) streams.delete(tabId)
+    // Nobody watches: live pictures let the debugger go (its bar goes with it), unless a new stream took over.
+    if (!streams.has(tabId)) await endLive(tabId)
   }
 }
 
 export function _resetViewForTesting(): void {
+  coveredLive.clear()
   framedAt.clear()
   ownerFramedAt.clear()
   workedAt.clear()

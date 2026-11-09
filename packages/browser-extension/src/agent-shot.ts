@@ -9,7 +9,8 @@ import { ext, type Tab } from './ext'
 import { siteKey } from '../../../src/core/vault/url-match'
 import { toPage } from './page-reach'
 import { framesOf } from './agent-page'
-import { capture, withCapture } from './capture-gate'
+import { WindowCovered, capture, withCapture } from './capture-gate'
+import { endShot, liveShot, liveState } from './agent-live'
 import { frontDriven } from './agent-takeover'
 import { base64, cropPicture, drawLabels } from './agent-picture'
 import type { LabelBox } from './input-math'
@@ -21,6 +22,25 @@ const CAPTURE_GAP_MS = 550
 /** A full page stops here, under the command's own limit. */
 const FULL_BUDGET_MS = 25_000
 
+type Shoot = (o: { format: 'jpeg' | 'png'; quality?: number }) => Promise<string>
+
+/**
+ * The window's picture; a covered window's through the debugger while the person has live
+ * pictures on (agent-live.ts: it draws the page off screen, no window moves), else the covered
+ * error as it was.
+ */
+export function shooter(tabId: number, windowId: number, liveOk: boolean): Shoot {
+  return async (o) => {
+    try {
+      return await capture(windowId, o)
+    } catch (err) {
+      // Only an agent's own tab in Walnut's agent window: never the debugger on a tab of the person's.
+      if (!(err instanceof WindowCovered) || !liveOk || await liveState(tabId) !== 'on') throw err
+      return liveShot(tabId, o)
+    }
+  }
+}
+
 async function maskAll(tabId: number, on: boolean): Promise<boolean> {
   const top = await toPage<{ ok?: boolean }>(tabId, { type: 'agent-mask', on }, 5000)
   for (const f of await framesOf(tabId)) await toPage(tabId, { type: 'agent-mask', on }, 3000, f.frameId)
@@ -30,7 +50,7 @@ async function maskAll(tabId: number, on: boolean): Promise<boolean> {
 /** `format: 'png'` (the CLI asks for it for a .png file), else JPEG. */
 const pngOf = (c: WireCommand) => c.args.format === 'png'
 
-async function full(c: WireCommand, tabId: number, tab: Tab): Promise<{ image: string; height: number; pageHeight: number; cut: boolean }> {
+async function full(c: WireCommand, tabId: number, shoot: Shoot): Promise<{ image: string; height: number; pageHeight: number; cut: boolean }> {
   const m = await frameOp(tabId, 0, 'capture', { step: 'start' }, c.allow, 5000) as { x: number; y: number; w: number; h: number; total: number }
   const height = Math.min(m.total, FULL_MAX_PX)
   const slices: Array<{ y: number; img: string }> = []
@@ -42,7 +62,7 @@ async function full(c: WireCommand, tabId: number, tab: Tab): Promise<{ image: s
       const at = await frameOp(tabId, 0, 'capture', { step: 'at', y, hideFixed: slices.length > 0 }, c.allow, 5000) as { y: number }
       await sleep(Math.max(slices.length ? 150 : 300, last + CAPTURE_GAP_MS - Date.now()))
       last = Date.now()
-      slices.push({ y: at.y, img: await capture(tab.windowId!, { format: 'jpeg', quality: 80 }) })
+      slices.push({ y: at.y, img: await shoot({ format: 'jpeg', quality: 80 }) })
       // The page would not scroll further: this was its bottom.
       if (at.y < y - 1 || at.y + m.h >= height) break
       y = at.y + m.h
@@ -74,27 +94,27 @@ function zoomRegion(a: Record<string, unknown>): { x: number; y: number; width: 
 }
 
 /** The picture of what is on screen, then numbered (annotate) or cropped (zoom). */
-async function onScreen(c: WireCommand, tabId: number, tab: Tab): Promise<Record<string, unknown>> {
+async function onScreen(c: WireCommand, tabId: number, shoot: Shoot): Promise<Record<string, unknown>> {
   const png = pngOf(c)
   if (c.action === 'zoom') {
     const region = zoomRegion(c.args)
     const m = await frameOp(tabId, 0, 'capture', { step: 'start' }, c.allow, 5000) as { w: number; h: number }
     // The whole picture as PNG: the crop keeps every pixel of it.
-    const shot = await capture(tab.windowId!, { format: 'png' })
+    const shot = await shoot({ format: 'png' })
     const z = await cropPicture(shot, region, m.w, png)
     if (!z) throw new AgentError(`Nothing of that region is on screen (the page shows ${m.w}x${m.h} CSS pixels).`, 'bad_request')
     return { image: z.image, zoom: region, pixels: { width: z.width, height: z.height }, scale: z.scale }
   }
   if (c.args.annotate === true) {
     const ann = await frameOp(tabId, 0, 'annotate', {}, c.allow, 8000) as { boxes: LabelBox[]; vw: number; more?: number }
-    const shot = await capture(tab.windowId!, png ? { format: 'png' } : { format: 'jpeg', quality: 85 })
+    const shot = await shoot(png ? { format: 'png' } : { format: 'jpeg', quality: 85 })
     const image = await drawLabels(shot, ann.boxes, ann.vw, png)
     return {
       image, annotated: true, labels: ann.boxes.map((b) => ({ label: b.label, ref: b.ref, role: b.role, name: b.name })),
       ...(ann.more ? { note: `${ann.more} more element(s) on screen are not numbered: zoom in, or use snapshot.` } : {}),
     }
   }
-  return { image: await capture(tab.windowId!, png ? { format: 'png' } : { format: 'jpeg', quality: 70 }) }
+  return { image: await shoot(png ? { format: 'png' } : { format: 'jpeg', quality: 70 }) }
 }
 
 export async function screenshot(c: WireCommand, tabId: number, tab: Tab, rec: AgentTab): Promise<Record<string, unknown>> {
@@ -120,6 +140,7 @@ export async function screenshot(c: WireCommand, tabId: number, tab: Tab, rec: A
     await ext.tabs.update(tabId, { active: true })
     // A password the page shows as text (its "show" button) is drawn as dots for the capture.
     let out: Record<string, unknown>
+    const shoot = shooter(tabId, tab.windowId!, !personsTab(rec) && tab.windowId === await agentWindowId())
     try {
       if (!(await maskAll(tabId, true))) throw new AgentError('The page is not ready: wait and try again.', 'page_not_ready')
       await sleep(250)
@@ -128,12 +149,13 @@ export async function screenshot(c: WireCommand, tabId: number, tab: Tab, rec: A
         // is scrolled through (a tab of the person's keeps them, they may be looking).
         const unmark = !personsTab(rec)
         if (unmark) await mark(tabId, false)
-        const f = await full(c, tabId, tab).finally(() => unmark ? mark(tabId, true, rec.who) : undefined)
+        const f = await full(c, tabId, shoot).finally(() => unmark ? mark(tabId, true, rec.who) : undefined)
         out = { image: f.image, full: true, height: f.height, pageHeight: f.pageHeight, ...(f.cut ? { cut: true, note: `Cut at ${f.height} of ${f.pageHeight} px of the page.` } : {}) }
       } else {
-        out = await onScreen(c, tabId, tab)
+        out = await onScreen(c, tabId, shoot)
       }
     } finally {
+      await endShot(tabId)
       await maskAll(tabId, false)
     }
     // What was on screen must still be that tab on that page (not a window the page opened).

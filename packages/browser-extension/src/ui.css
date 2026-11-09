@@ -523,3 +523,12 @@ html.in-rail .view-bar > .back-btn[data-testid="panel-view-back"] { visibility: 
 .look-control-status.is-tab { color: #2457c5; }
 .look-control-status.is-off .look-relay-dot { background: none; border: 1.5px solid currentColor; box-sizing: border-box; }
 .look-control-status .look-control-title { color: var(--fg); }
+
+/* ── grant.html: "Show it live" from a task's Browser view (grant.ts) ── */
+body.grant { margin: 0; min-height: 100vh; box-sizing: border-box; padding: 72px 16px; background: var(--bg2); }
+.grant-page { max-width: 460px; margin: 0 auto; padding: 28px; background: var(--bg); border: 1px solid var(--line); border-radius: 14px; }
+.grant-page h1 { font-size: 18px; margin: 0 0 12px; }
+.grant-page p { margin: 0 0 12px; line-height: 1.5; }
+.grant-page .grant-note { color: var(--muted); }
+.grant-page .grant-line:empty { display: none; }
+.grant-page .grant-line { margin: 12px 0 0; }

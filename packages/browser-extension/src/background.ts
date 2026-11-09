@@ -32,6 +32,7 @@ import { walletValues } from './bg-wallet'
 import { itemDetail, secretField } from './popup-item-data'
 import { getSettings, pageFillOn } from './settings'
 import { BROWSER_KEY_MESSAGE, handBrowserKey, handPanelBrowserKey, initHandBrowserKey } from './hand-browser-key'
+import { migrateRealInput } from './trusted-switch'
 
 const { pendingSave, pendingPrev, seenUsername, connecting, menus, frames, generated, lastLogin } = stores
 
@@ -501,6 +502,10 @@ ext.contextMenus?.onClicked.addListener((info, tab) => {
   const text = info.menuItemId === 'walnut-ask-selection' ? (info.selectionText ?? '').slice(0, 4000) : ''
   if (text && tab?.windowId !== undefined) void ext.storage.session.set({ panelAsk: { windowId: tab.windowId, text, at: Date.now() } })
 })
+
+// Once, at the first start of a build that keeps real input apart from the debugger permission:
+// a person who had real input on (the permission held) keeps it (trusted-switch.ts).
+void migrateRealInput().catch(() => undefined)
 
 ext.runtime.onInstalled.addListener(() => {
   // Content scripts never read the vault session (Chrome's default; Firefox keeps session storage from them too).

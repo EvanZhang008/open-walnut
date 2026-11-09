@@ -16,13 +16,14 @@
  */
 import { more } from './agent-api'
 import { ext, isFirefox } from './ext'
-import { CdpError, dropDebugger, holdDebugger, type Send } from './cdp'
+import { CdpError, acquireDebugger, dropDebugger, releaseDebugger, type Send } from './cdp'
 import { AgentError, agentTabs, allowed, filledHere, filledOrigins, nearPerson, originOf, walnutCheck, where, type AgentTab, type WireCommand } from './agent-shared'
 import { walnutAddress } from './walnut-address'
 import { siteKey } from '../../../src/core/vault/url-match'
 import { NET_MAX, bodyOut, fold, listConsole, listRequests, maskEntry, maskUrlsIn, newRecord, urlsOf, type ConsoleEntry, type Judge, type NetEntry, type NetRecord } from './net-record'
 import { REAL_INPUT_SWITCH, trustedReady } from './agent-trusted'
 import { DIALOG_OPEN, heldForDialog, leaveDialog, watchDialogs } from './agent-dialog'
+import { REAL_INPUT_KEY } from './trusted-switch'
 
 const siteOf = (u: string): string => siteKey(u)?.domain ?? ''
 
@@ -64,6 +65,11 @@ function listen(): void {
     if (!p.permissions?.includes('debugger')) return
     for (const tabId of [...records.keys()]) void stopRecording(tabId)
   })
+  // Or turned the switch alone off (the permission may stay for live pictures): the same.
+  ext.storage.onChanged?.addListener((changes, area) => {
+    if (area !== 'local' || changes[REAL_INPUT_KEY]?.newValue !== false) return
+    for (const tabId of [...records.keys()]) void stopRecording(tabId)
+  })
 }
 
 /** Why this tab may not record, or nothing. */
@@ -87,14 +93,14 @@ export async function startRecording(tabId: number, rec: AgentTab): Promise<bool
   listen()
   watchDialogs()
   const dbg = more.debugger!
-  const target = { tabId }
   const gen = genOf(tabId)
   attaching.add(tabId)
+  let send: Send
   try {
-    await dbg.attach(target, '1.3')
+    // The tab's one session (cdp.ts): joined when live pictures hold it already, left attached after.
+    send = await acquireDebugger(dbg, tabId, 'record')
   } catch (err) {
-    const m = err instanceof Error ? err.message : String(err)
-    throw new AgentError(/already attached/i.test(m) ? 'Another debugger (DevTools?) is open on that tab: close it and try again.' : `The browser would not attach its debugger: ${m}`, 'debugger_busy')
+    throw new AgentError(err instanceof Error ? err.message : String(err), err instanceof CdpError ? err.code : 'debugger_busy')
   } finally {
     attaching.delete(tabId)
   }
@@ -108,13 +114,11 @@ export async function startRecording(tabId: number, rec: AgentTab): Promise<bool
     return now?.owner !== rec.owner || (!!rec.grant && now?.grant !== rec.grant)
   }
   if (await stale()) {
-    await dbg.detach(target).catch(() => undefined)
+    await releaseDebugger(dbg, tabId, 'record')
     throw gone()
   }
-  const send: Send = (method, params) => dbg.sendCommand(target, method, params ?? {})
   const r = { ...newRecord(), send }
   records.set(tabId, r)
-  holdDebugger(tabId, send)
   try {
     // Bodies stay in the browser's own buffer (the newest few MB) until an agent asks for one.
     await send('Network.enable', { maxTotalBufferSize: 30_000_000, maxResourceBufferSize: 10_000_000 })
@@ -128,7 +132,7 @@ export async function startRecording(tabId: number, rec: AgentTab): Promise<bool
   }
   if (await stale()) {
     if (records.get(tabId) === r) await stopRecording(tabId)
-    else await dbg.detach(target).catch(() => undefined)
+    else await releaseDebugger(dbg, tabId, 'record')
     throw gone()
   }
   return true
@@ -143,8 +147,8 @@ export async function stopRecording(tabId: number): Promise<boolean> {
   const r = records.get(tabId)
   if (!r) return false
   records.delete(tabId)
-  dropDebugger(tabId)
-  await more.debugger?.detach({ tabId }).catch(() => undefined)
+  // Detached only when nobody else holds the session (live pictures of the tab, a step under way).
+  await releaseDebugger(more.debugger, tabId, 'record')
   return true
 }
 

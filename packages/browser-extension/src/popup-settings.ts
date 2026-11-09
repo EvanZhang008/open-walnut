@@ -9,7 +9,7 @@ import { h, icon } from './dom'
 import { AUTO_LOCKS, getSettings, setSettings, type AutoLock } from './settings'
 import { errLine, iconButton, popupIcon, switchRow, topBar } from './popup-ui'
 import { disconnectControl } from './popup-disconnect'
-import { setTrustedInput, trustedInputState } from './trusted-switch'
+import { setLivePictures, setTrustedInput, trustedInputState } from './trusted-switch'
 
 /** Agents in this browser: off until the person turns it on here. */
 async function agentSection(): Promise<HTMLElement> {
@@ -40,26 +40,44 @@ async function agentSection(): Promise<HTMLElement> {
     h('div', { class: 'group' },
       h('label', { class: 'row switch-row', for: 'agents' },
         h('span', { class: 'row-text' }, h('span', { class: 'row-title' }, 'Let Walnut agents use this browser')), box),
-      trusted?.row ?? null),
-    note, st.on ? sites : null, err, trusted?.note ?? null)
+      ...(trusted?.rows ?? [])),
+    note, st.on ? sites : null, err, ...(trusted?.notes ?? []))
   return wrap
 }
 
-/** Real mouse and keys for agents (the optional debugger permission); Chrome only, so hidden elsewhere. */
-async function trustedRow(): Promise<{ row: HTMLElement; note: HTMLElement } | null> {
-  const { available, on } = await trustedInputState()
-  if (!available) return null
+/**
+ * Real mouse and keys for agents, and live pictures of a covered agent window: both use the
+ * optional debugger permission (trusted-switch.ts), each with its own switch; Chrome only, so
+ * hidden elsewhere.
+ */
+async function trustedRow(): Promise<{ rows: HTMLElement[]; notes: HTMLElement[] } | null> {
+  const st = await trustedInputState()
+  if (!st.available) return null
+  let held = st.permission
   const box = h('input', { type: 'checkbox', id: 'trusted', role: 'switch', 'data-testid': 'popup-trusted' }) as HTMLInputElement
-  box.checked = on
+  box.checked = st.on
+  const live = h('input', { type: 'checkbox', id: 'live-pictures', role: 'switch', 'data-testid': 'popup-live-pictures' }) as HTMLInputElement
+  live.checked = st.livePictures
+  // Each switch's answer; the permission may have come or gone with it, which the other one reads.
+  const reread = () => void trustedInputState().then((now) => { held = now.permission; box.checked = now.on; live.checked = now.livePictures })
   box.onclick = () => {
     // Asked inside the click: nothing is awaited before the browser's permission request.
     const want = box.checked
-    void setTrustedInput(want).then((now) => { box.checked = now })
+    void setTrustedInput(want).then(reread)
+  }
+  live.onclick = () => {
+    const want = live.checked
+    void setLivePictures(want, held).then(reread)
   }
   return {
-    row: h('label', { class: 'row switch-row', for: 'trusted' },
-      h('span', { class: 'row-text' }, h('span', { class: 'row-title' }, 'Let agents use real mouse and keys')), box),
-    note: h('p', { class: 'group-note' }, 'Real mouse and keys are for sites that ignore simulated input. This also lets agents run scripts in a page, which Walnut cannot check before a purchase or a send. Chrome shows a debugging bar while an agent uses them.'),
+    rows: [
+      h('label', { class: 'row switch-row', for: 'trusted' },
+        h('span', { class: 'row-text' }, h('span', { class: 'row-title' }, 'Let agents use real mouse and keys')), box),
+      h('label', { class: 'row switch-row', for: 'live-pictures' },
+        h('span', { class: 'row-text' }, h('span', { class: 'row-title' }, "Live pictures while Walnut's agent window is covered")), live)],
+    notes: [
+      h('p', { class: 'group-note' }, 'Real mouse and keys are for sites that ignore simulated input. This also lets agents run scripts in a page, which Walnut cannot check before a purchase or a send. Chrome shows a debugging bar while an agent uses them.'),
+      h('p', { class: 'group-note', 'data-testid': 'popup-live-pictures-note' }, "Chrome stops drawing Walnut's agent window while other windows cover it. With live pictures on, a task's Browser view in Walnut still shows the agent's tab, through Chrome's debugger; Chrome shows its debugging bar while it does, only while you watch a covered agent window.")],
   }
 }
 

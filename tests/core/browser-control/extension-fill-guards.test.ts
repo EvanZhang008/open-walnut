@@ -83,16 +83,27 @@ describe('fill_login after an agent touched the page (page_tampered)', () => {
       expect(body.indexOf('noteTampered('), outer).toBeGreaterThan(0)
       expect(body.indexOf('noteTampered('), outer).toBeLessThan(body.indexOf(`${inner}(`))
     }
-    // Every place that attaches the debugger is one of these; a new one fails until it is placed here.
+    // The debugger is attached in one place: the tab's one shared session (cdp.ts acquireDebugger).
     const attaches = callsOf(/\.attach\(target,/g).map((u) => `${u.f}: ${enclosing(src(u.f), u.at)}`)
-    expect(attaches.sort()).toEqual([
+    expect(attaches).toEqual(['cdp.ts: acquireDebugger'])
+    // Every use of that session is one of these; a new one fails until it is placed here.
+    const holders = callsOf(/(?<!function )\bacquireDebugger\(/g).map((u) => `${u.f}: ${enclosing(src(u.f), u.at)}`)
+    expect(holders.sort()).toEqual([
       // A recording reads the tab's requests and console; it sends no input, so it marks nothing.
       'agent-net.ts: startRecording',
       // Reached only from watched, after its mark (above).
       'agent-dialog.ts: runWatching',
       // Reached only from run, after its mark (above).
       'cdp.ts: withDebugger',
+      // Live pictures of a covered agent window (and an agent's screenshot of one): a picture of
+      // the page, no input and no script, so it marks nothing (checked below).
+      'agent-live.ts: take',
     ].sort())
+    // The picture holder sends Page.captureScreenshot and nothing else.
+    const live = src('agent-live.ts')
+    const sent = [...live.matchAll(/\bsend(?:Command)?\(\s*'([\w.]+)'/g)].map((m) => m[1])
+    expect(sent).toEqual(['Page.captureScreenshot'])
+    expect(live).not.toMatch(/\bsend(?:Command)?\(\s*[^'\s]/)
   })
 
   it('fill_login checks the mark against the document now loaded before it fills', () => {

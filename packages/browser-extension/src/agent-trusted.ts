@@ -9,6 +9,7 @@
  * upload sends only files this task's own downloads wrote.
  */
 import { more } from './agent-api'
+import { realInputOn } from './trusted-switch'
 import { isFirefox, type Tab } from './ext'
 import { cdpClick, cdpEvaluate, cdpHover, cdpPress, cdpType, cdpUpload, cdpWheel } from './cdp'
 import { run, watched } from './agent-debugger'
@@ -36,8 +37,9 @@ export const REAL_INPUT_SWITCH = 'Only the person can turn it on: in Chrome, cli
   + 'While an agent uses it, Chrome shows its "started debugging" bar at the top of every tab.'
 const OFF = `Real input is off in this browser. ${REAL_INPUT_SWITCH} Without it, use the action without trusted.`
 
+/** The debugger permission and the person's real-input switch (trusted-switch.ts: the permission alone may be held for live pictures only). */
 export async function trustedReady(): Promise<boolean> {
-  return !isFirefox && !!more.debugger && await more.permissions.contains({ permissions: ['debugger'] }).catch(() => false)
+  return !isFirefox && !!more.debugger && await realInputOn()
 }
 
 export async function trustedAct(c: WireCommand, tabId: number, tab: Tab, rec: AgentTab): Promise<Record<string, unknown>> {

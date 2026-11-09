@@ -126,3 +126,33 @@ test('Settings in the popup: the lock help runs under its select at full width, 
   await lock.selectOption('walnut')
   await p.close()
 })
+
+// 2026-11-09: live pictures of a covered agent window (agent-live.ts) have their own switch beside
+// real input, and "Show it live" in a task's Browser view opens grant.html (grant-open.ts).
+test('Settings shows the live pictures switch apart from real input, and grant.html asks with one Allow', async () => {
+  const p = await popup()
+  await expect(p.getByLabel('Search Walnut')).toBeVisible({ timeout: 20_000 })
+  await p.getByTestId('popup-settings').click()
+  const real = p.getByTestId('popup-trusted')
+  const live = p.getByTestId('popup-live-pictures')
+  await expect(live).toBeAttached()
+  // A fresh browser holds no debugger permission: both off, each its own switch.
+  await expect(real).not.toBeChecked()
+  await expect(live).not.toBeChecked()
+  await expect(p.getByText("Live pictures while Walnut's agent window is covered", { exact: true })).toBeVisible()
+  await expect(p.getByTestId('popup-live-pictures-note')).toContainText("Chrome shows its debugging bar while it does")
+  await shot(p, 'settings-live-pictures', true)
+  await p.close()
+
+  // The grant page: what happens, then one Allow (Chrome's own box follows its click).
+  const g = await ctx.newPage()
+  await g.setViewportSize({ width: 900, height: 700 })
+  await g.goto(`chrome-extension://${extId}/grant.html`)
+  await expect(g.getByRole('heading', { name: "Show Walnut's agent window live" })).toBeVisible({ timeout: 20_000 })
+  await expect(g.getByText(/never brings the window forward/)).toBeVisible()
+  await expect(g.getByText(/started debugging this browser/)).toBeVisible()
+  await expect(g.getByTestId('grant-allow')).toHaveCount(1)
+  await expect(g.getByTestId('grant-allow')).toBeEnabled()
+  await shot(g, 'grant-page')
+  await g.close()
+})

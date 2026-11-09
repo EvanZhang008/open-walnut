@@ -9,7 +9,7 @@
  */
 import { more } from './agent-api'
 import { ext } from './ext'
-import { CdpError, dropDebugger, heldSend, holdDebugger, type Send } from './cdp'
+import { CdpError, acquireDebugger, dropDebugger, holdDebugger, holdersOf, releaseDebugger, stepHolder, type Send } from './cdp'
 import { AgentError } from './agent-shared'
 import { pageCheck } from './page-reach'
 
@@ -106,8 +106,8 @@ export async function releaseDialogHold(tabId: number): Promise<void> {
   if (t === undefined) return
   clearTimeout(t)
   forDialog.delete(tabId)
-  dropDebugger(tabId)
-  await more.debugger?.detach({ tabId }).catch(() => undefined)
+  // Detached only when nobody else holds the session (live pictures, a step under way).
+  await releaseDebugger(more.debugger, tabId, 'dialog')
 }
 
 /**
@@ -120,8 +120,8 @@ export async function leaveDialog(tabId: number): Promise<void> {
   if (t === undefined) return
   clearTimeout(t)
   forDialog.delete(tabId)
-  dropDebugger(tabId)
-  await more.debugger?.detach({ tabId }).catch(() => undefined)
+  // Detached only when nobody else holds the session (live pictures, a step under way).
+  await releaseDebugger(more.debugger, tabId, 'dialog')
 }
 
 let holdMs = HOLD_MS
@@ -179,21 +179,11 @@ export type OnInterrupt = (send: Send) => void
 export async function runWatching<T>(tabId: number, work: (send: Send) => Promise<T>, onInterrupt?: OnInterrupt): Promise<{ done: T } | { dialog: DialogInfo }> {
   listen()
   const dbg = more.debugger!
-  const target = { tabId }
-  let send = heldSend(tabId)
-  let mine = false
-  if (!send) {
-    try {
-      await dbg.attach(target, '1.3')
-    } catch (err) {
-      const m = err instanceof Error ? err.message : String(err)
-      throw new CdpError(/already attached/i.test(m) ? 'Another debugger (DevTools?) is open on that tab: close it and try again.' : `The browser would not attach its debugger: ${m}`, 'debugger_busy')
-    }
-    send = (method, params) => dbg.sendCommand(target, method, params ?? {})
-    mine = true
-  }
+  // The tab's session (cdp.ts): a recording's or live pictures' when one is held, else attached
+  // for this step; this step holds it until it ends.
+  const by = stepHolder()
+  const raw = await acquireDebugger(dbg, tabId, by)
   const opened = whenDialog(tabId)
-  const raw = send
   // A step a dialog cut short stops there: whatever it would send after (the next key, the rest of
   // a drag) is refused, so nothing more happens once the dialog is answered.
   let interrupted = false
@@ -209,16 +199,17 @@ export async function runWatching<T>(tabId: number, work: (send: Send) => Promis
     if ('dialog' in r) {
       interrupted = true
       try { onInterrupt?.(raw) } catch { /* best effort */ }
-      if (mine) {
-        holdDebugger(tabId, raw)
+      // A recording keeps its session (and Page on) anyway; otherwise the dialog holds it until it
+      // is answered, whoever else lets go meanwhile (live pictures ending, this step).
+      if (!holdersOf(tabId).includes('record')) {
+        holdDebugger(tabId, raw, 'dialog')
         armHold(tabId)
-        mine = false
       }
     }
     return r
   } finally {
     opened.cancel()
-    if (mine) await dbg.detach(target).catch(() => undefined)
+    await releaseDebugger(dbg, tabId, by)
   }
 }
 

@@ -192,6 +192,10 @@ describe('the agent window', () => {
       ['panel-ask.ts: if (o.status === \'rejected\' && win.id !== undefined) await ext.windows.create({ url: ext.runtime.getURL(`sidepanel.html?window=${win.id}`), type: \'popup\', width: 420, height: 760 })', 'Ask, the person\'s click'],
       ['popup.ts: if (ext.sidePanel && windowId !== undefined) void ext.sidePanel.open({ windowId }).catch(() => undefined)', 'popup button'],
       ['popup.ts: else if (windowId !== undefined) void ext.windows.create({ url: ext.runtime.getURL(`sidepanel.html?window=${windowId}`), type: \'popup\', width: 420, height: 760 })', 'popup button'],
+      // "Show it live" in a task's Browser view (grant-open.ts): the person's own click brings the
+      // grant page up in their window; anyone else's opens it there in the background.
+      ['grant-open.ts: const tab = await ext.tabs.create({ url, windowId, active: person })', 'Show it live: in front only for the person\'s click, never in the agent window'],
+      ['grant-open.ts: if (tab.windowId !== undefined) await ext.windows.update?.(tab.windowId, { focused: true }).catch(() => undefined)', 'Show it live, the person\'s click'],
     ])
     const RAISES = /windows\.(create|update)\??\.?\(|tabs\.create\(|sidePanel\.open\(|openPopup\(|focused:\s*true|drawAttention|state:\s*['"]minimized['"]/
     const found: string[] = []
@@ -213,7 +217,8 @@ describe('the agent window', () => {
   // background; only tabs.update brings it to the front of its window (frontInWindow).
   it('every tab the agent code opens is made in the background', () => {
     const dir = path.resolve(__dirname, '../../../packages/browser-extension/src')
-    const PERSONS = new Set(['background.ts', 'bg-fill.ts', 'panel-ask.ts', 'popup.ts'])
+    // grant-open.ts opens its page in front for the person's click only (active: person), never for an agent.
+    const PERSONS = new Set(['background.ts', 'bg-fill.ts', 'panel-ask.ts', 'popup.ts', 'grant-open.ts'])
     const bad: string[] = []
     for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.ts') && !PERSONS.has(x))) {
       fs.readFileSync(path.join(dir, f), 'utf8').split('\n').forEach((line, i) => {
@@ -237,6 +242,7 @@ describe('the agent window', () => {
       ['agent-view.ts: await ext.tabs.update(tabId, { active: true })', 'a picture: agent window only, never focused or under a taken-over tab'],
       ['agent-view.ts: await ext.tabs.update(back, { active: true }).catch(() => undefined)', 'put back after a picture: only while nobody came in'],
       ['agent-window.ts: await api.tabs.update(tabId, { active: true }).catch(() => undefined)', 'frontInWindow: a new agent tab, never in a window the person is in'],
+      ['grant-open.ts: if (tab.id !== undefined) await ext.tabs.update(tab.id, { active: true }).catch(() => undefined)', 'Show it live, the person\'s click (bringUp runs only when the person asked)'],
     ])
     const found: string[] = []
     const walk = (d: string): string[] => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => e.isDirectory() ? walk(path.join(d, e.name)) : e.name.endsWith('.ts') ? [path.join(d, e.name)] : [])
@@ -259,6 +265,10 @@ describe('the agent window', () => {
     // Input.setInterceptDrags and Input.dispatchDragEvent (a drag, agent-drag.ts) act inside the page's renderer like the mouse events.
     const QUIET = new Set(['DOM.getDocument', 'DOM.querySelector', 'DOM.setFileInputFiles', 'Input.dispatchKeyEvent', 'Input.dispatchMouseEvent',
       'Input.setInterceptDrags', 'Input.dispatchDragEvent',
+      // Page.captureScreenshot (agent-live.ts): live pictures of a covered agent window. It makes the
+      // page draw off screen (Chromium's IncrementCapturerCount with stay_hidden); it does not show,
+      // raise or focus the window, nor switch a tab.
+      'Page.captureScreenshot',
       'Page.enable', 'Page.handleJavaScriptDialog', 'Runtime.enable', 'Runtime.evaluate', 'Network.enable', 'Network.disable', 'Network.getResponseBody', 'Network.getRequestPostData', 'Log.enable'])
     const walk = (d: string): string[] => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => e.isDirectory() ? walk(path.join(d, e.name)) : e.name.endsWith('.ts') ? [path.join(d, e.name)] : [])
     const sent: string[] = []

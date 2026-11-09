@@ -31,6 +31,7 @@ import { inHandedReach } from './agent-tab-kind'
 import { openInAgentWindow, resizeAgentWindow, windowOf } from './agent-window'
 import { bringUpForCommand, noteWorked, viewFrame, viewWatch, watchedOwner, type PushAnswer } from './agent-view'
 import { drivingRefusal, handBack, takeOver } from './agent-takeover'
+import { openGrant } from './grant-open'
 import { NET_OPS, netAct, startRecording, stopRecording } from './agent-net'
 import { watchMedia } from './agent-media'
 import { noteGroupUse, setGroupBusy, ungroupBeforeClose, type GroupApi } from './agent-groups'
@@ -347,16 +348,27 @@ function inTurn<T>(tab: unknown, work: () => Promise<T>): Promise<T> {
 
 /**
  * The person's own commands from the Browser view in Walnut (agent-view.ts): a frame of a tab, and
- * Stop. Neither waits in a tab's turn (a frame behind an agent's 40 s wait would be no live view),
- * and neither is an agent's: the server sends them only for a person's request.
+ * Stop. None waits in a tab's turn (a frame behind an agent's 40 s wait would be no live view).
+ * The server sends them only for a person's request, except view_grant, which an agent may ask for
+ * too (`person: false`): it only opens a page in the background, the grant stays the person's clicks.
  */
-const VIEW_ACTS = new Set(['view_frame', 'view_watch', 'view_stop', 'view_takeover', 'view_handback'])
+const VIEW_ACTS = new Set(['view_frame', 'view_watch', 'view_stop', 'view_takeover', 'view_handback', 'view_grant'])
 const push = (body: Record<string, unknown>) => call<PushAnswer>('POST', '/browser/view/push', body, { noSession: true, timeoutMs: 10_000 })
 
 async function viewAct(c: WireCommand): Promise<unknown> {
   if (c.action === 'view_frame') return viewFrame(c, holdsScreen)
   if (c.action === 'view_watch') return viewWatch(c, holdsScreen, push)
   if (c.action === 'view_takeover') return takeOver(c)
+  // "Show it live": the page where the person allows live pictures of a covered window
+  // (grant-open.ts). An agent may ask for it too (the server says whose ask it is): then only while
+  // agents may use this browser, for a tab that is an agent's, and the page opens in the background.
+  if (c.action === 'view_grant') {
+    if (c.args.person !== true) {
+      await tabOnlyCheck(c)
+      if (typeof c.args.tab !== 'number' || !(await agentTabs.get(c.args.tab))) throw new AgentError('That tab is no agent\'s now (closed, or given back with Stop).', 'not_your_tab')
+    }
+    return openGrant(c)
+  }
   if (c.action === 'view_handback') {
     const tabId = typeof c.args.tab === 'number' ? c.args.tab : NaN
     return { tab: tabId, handedBack: await handBack(tabId, typeof c.args.owner === 'string' ? c.args.owner : undefined) }
@@ -457,6 +469,9 @@ export async function agentLoop(): Promise<void> {
           // The Browser view's picture stream and Take over (agent-view.ts, agent-takeover.ts); drag,
           // zoom, labels, typing at a point or slowly, dialog read, scroll in a box (input-v2.ts on the server).
           'view-stream', 'takeover', 'input-v2',
+          // A covered window's frame says whether live pictures could show it, and view_grant opens
+          // the page that turns them on (agent-live.ts, grant-open.ts); Chrome only (the debugger).
+          ...(isFirefox ? [] : ['live-pictures']),
         ]
         const r = await call<{ commands: WireCommand[] }>('POST', '/browser/poll', {
           browser: isFirefox ? 'firefox' : 'chrome', version: ext.runtime.getManifest().version, caps, tabs: await report(), waitMs: 25_000,

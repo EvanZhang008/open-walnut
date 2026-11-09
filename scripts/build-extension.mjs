@@ -33,7 +33,7 @@ const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
 // A browser takes 1 to 4 dot-separated numbers only.
 const version = String(pkg.version).split(/[-+]/)[0].split('.').slice(0, 4).map((n) => String(Number(n) || 0)).join('.')
 
-const ENTRIES = ['background', 'content', 'popup', 'menu', 'savebar', 'sidepanel']
+const ENTRIES = ['background', 'content', 'popup', 'menu', 'savebar', 'sidepanel', 'grant']
 /**
  * Each page: its body class, its html class, and the script it runs (its own name's by default).
  * popup-ask.html is the toolbar popup on Ask: the side panel's page in its popup form (sidepanel.ts),
@@ -45,6 +45,8 @@ const PAGES = {
   savebar: { body: 'bar', html: 'frame' },
   sidepanel: { body: 'sidepanel', html: 'panel' },
   'popup-ask': { body: 'sidepanel askpop', html: 'panel askpop', script: 'sidepanel' },
+  // "Show it live" from a task's Browser view (grant-open.ts, grant.ts): the debugger asked for in its one click.
+  grant: { body: 'grant' },
 }
 const SITES = ['http://*/*', 'https://*/*']
 /**
@@ -94,8 +96,9 @@ export function manifestFor(browser, build) {
     // tabGroups: each task's agent tabs sit in one group named walnut-<task name> (agent-groups.ts).
     permissions: ['storage', 'alarms', 'contextMenus', 'scripting', 'downloads', 'clipboardRead', 'clipboardWrite', 'idle',
       ...(browser === 'chrome' ? ['sidePanel', 'offscreen', 'tabGroups'] : [])],
-    // Real mouse and keys for agents (agent-trusted.ts): Chrome's debugger, only once the person
-    // turns it on in Settings (the browser asks them then). Firefox gives extensions none.
+    // Chrome's debugger, only once the person turns it on (the browser asks them then): real mouse
+    // and keys for agents (agent-trusted.ts, a switch in Settings), and live pictures of a covered
+    // agent window (agent-live.ts; Settings, or grant.html from a task's Browser view). Firefox gives extensions none.
     ...(browser === 'chrome' ? { optional_permissions: ['debugger'] } : {}),
     // Every web page (the same warning as http and https alone): a screenshot of an agent's
     // tab (captureVisibleTab) needs all URLs, so it is asked once, at install.

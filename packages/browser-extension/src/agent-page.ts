@@ -13,7 +13,7 @@ import { popupRecord } from './agent-tab-kind'
 import { muteAgentTab } from './agent-media'
 import { noteAgentMade } from './agent-tidy'
 import { frontInWindow } from './agent-window'
-import { debuggerHeld } from './cdp'
+import { holdersOf } from './cdp'
 import { whenDialog } from './agent-dialog'
 import {
   ACTING_MS, AgentError, WALNUT_PAGE, acting, agentTabs, allowed, checkPage, frameOp, loaded, mark, originOf, personsTab, settled, sleep, where,
@@ -367,8 +367,9 @@ export async function pageOp(c: WireCommand, tabId: number, tab: Tab, rec: Agent
   const started = Date.now()
   acting.set(tabId, Date.now() + ms + ACTING_MS)
   try {
-    // A tab that records has the debugger's Page on: a dialog the step opens is seen, and answered with.
-    const dialogWatch = debuggerHeld(tabId) ? whenDialog(tabId) : undefined
+    // A tab that records has the debugger's Page on: a dialog the step opens is seen, and answered
+    // with (the recording keeps the session for its answer). Live pictures alone hold no dialog.
+    const dialogWatch = holdersOf(tabId).includes('record') ? whenDialog(tabId) : undefined
     let r: Record<string, unknown>
     try {
       const step = frameOp(tabId, frameId, c.action, a, c.allow, ms)

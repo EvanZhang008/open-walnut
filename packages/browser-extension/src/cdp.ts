@@ -13,32 +13,93 @@ export class CdpError extends Error {
 }
 
 /**
- * Tabs whose debugger stays attached while an agent records there (agent-net.ts): an action that
- * needs the debugger uses that session instead of a second attach (which the browser refuses),
- * and leaves it attached.
+ * One debugger session per tab, shared by everything that needs it (the browser refuses a second
+ * attach): a recording (agent-net.ts, `record`), a dialog waiting for its answer (agent-dialog.ts,
+ * `dialog`), the live pictures of a covered agent window (agent-live.ts, `picture` and `shot`), and
+ * each real-input step while it runs (`step:<n>`). Each holder names itself; the session is
+ * detached only when the last one lets go, so a picture never cuts a click short and a click never
+ * ends a recording.
  */
-const held = new Map<number, Send>()
-export function holdDebugger(tabId: number, send: Send): void { held.set(tabId, send) }
-export function dropDebugger(tabId: number): void { held.delete(tabId) }
-export const debuggerHeld = (tabId: number): boolean => held.has(tabId)
-/** The session a tab's debugger is held with (a recording, or a dialog waiting for its answer), if any. */
-export const heldSend = (tabId: number): Send | undefined => held.get(tabId)
+const held = new Map<number, { send: Send; by: Set<string> }>()
+/** Attaches under way: a second user waits for it instead of attaching again. */
+const attaching = new Map<number, Promise<void>>()
+const watchedApis = new WeakSet<object>()
 
-/** Attach to the tab, do the work, always detach (or the recording's session, left attached). */
-export async function withDebugger<T>(dbg: DebuggerApi, tabId: number, work: (send: Send) => Promise<T>): Promise<T> {
-  const kept = held.get(tabId)
-  if (kept) return work(kept)
-  const target = { tabId }
-  try {
-    await dbg.attach(target, '1.3')
-  } catch (err) {
-    const m = err instanceof Error ? err.message : String(err)
-    throw new CdpError(/already attached/i.test(m) ? 'Another debugger (DevTools?) is open on that tab: close it and try again.' : `The browser would not attach its debugger: ${m}`, 'debugger_busy')
+/** `by` holds the tab's session `send` (joined when one is held already). */
+export function holdDebugger(tabId: number, send: Send, by = 'record'): void {
+  const e = held.get(tabId)
+  if (e) e.by.add(by)
+  else held.set(tabId, { send, by: new Set([by]) })
+}
+/**
+ * `by` lets go; with no `by`, the session is gone for everyone (the browser detached it, the tab
+ * closed). True when nobody holds it now (the caller then detaches).
+ */
+export function dropDebugger(tabId: number, by?: string): boolean {
+  const e = held.get(tabId)
+  if (!e) return false
+  if (by !== undefined) e.by.delete(by)
+  if (by !== undefined && e.by.size) return false
+  held.delete(tabId)
+  return true
+}
+export const debuggerHeld = (tabId: number): boolean => held.has(tabId)
+/** The session a tab's debugger is held with (a recording, a dialog, live pictures), if any. */
+export const heldSend = (tabId: number): Send | undefined => held.get(tabId)?.send
+/** Who holds the tab's session now (tests, and whether a recording holds it). */
+export const holdersOf = (tabId: number): string[] => [...(held.get(tabId)?.by ?? [])]
+
+let steps = 0
+/** A holder name for one step (each real-input step its own). */
+export const stepHolder = (): string => `step:${++steps}`
+
+const busyError = (err: unknown) => {
+  const m = err instanceof Error ? err.message : String(err)
+  return new CdpError(/already attached/i.test(m) ? 'Another debugger (DevTools?) is open on that tab: close it and try again.' : `The browser would not attach its debugger: ${m}`, 'debugger_busy')
+}
+
+/** `by` holds the tab's session: the one held already, else a new attach. */
+export async function acquireDebugger(dbg: DebuggerApi, tabId: number, by: string): Promise<Send> {
+  // The browser let go by itself (the tab closed, the person cancelled its bar): nobody holds it.
+  if (!watchedApis.has(dbg) && dbg.onDetach) {
+    watchedApis.add(dbg)
+    dbg.onDetach.addListener((source) => { if (typeof source?.tabId === 'number') dropDebugger(source.tabId) })
   }
+  for (let p = attaching.get(tabId); p; p = attaching.get(tabId)) await p
+  const e = held.get(tabId)
+  if (e) { e.by.add(by); return e.send }
+  const target = { tabId }
+  // Set before anything is awaited: a second user arriving now waits for this attach.
+  const attach = dbg.attach(target, '1.3')
+  attaching.set(tabId, attach.then(() => undefined, () => undefined))
   try {
-    return await work((method, params) => dbg.sendCommand(target, method, params ?? {}))
+    await attach
+  } catch (err) {
+    throw busyError(err)
   } finally {
-    await dbg.detach(target).catch(() => undefined)
+    attaching.delete(tabId)
+  }
+  const send: Send = (method, params) => dbg.sendCommand(target, method, params ?? {})
+  held.set(tabId, { send, by: new Set([by]) })
+  return send
+}
+
+/** `by` lets go of the tab's session; the last holder detaches it. */
+export async function releaseDebugger(dbg: DebuggerApi | undefined, tabId: number, by: string): Promise<void> {
+  if (dropDebugger(tabId, by)) await dbg?.detach({ tabId }).catch(() => undefined)
+}
+
+/** For tests: no session held, none attaching. */
+export function _resetDebuggerForTesting(): void { held.clear(); attaching.clear() }
+
+/** Attach to the tab (or join the session held), do the work, let go (detached unless another holder needs it). */
+export async function withDebugger<T>(dbg: DebuggerApi, tabId: number, work: (send: Send) => Promise<T>): Promise<T> {
+  const by = stepHolder()
+  const send = await acquireDebugger(dbg, tabId, by)
+  try {
+    return await work(send)
+  } finally {
+    await releaseDebugger(dbg, tabId, by)
   }
 }
 
