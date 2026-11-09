@@ -371,3 +371,8 @@
 .oc-vp-new button:hover, .oc-vp-new button:focus-visible { background: var(--bg-secondary); color: var(--fg); }
 .oc-vp-empty { margin: 0; padding: 4px 2px 0; border-top: 1px solid var(--border); font-size: 12px; color: var(--fg-muted); }
 .oc-ceo-wrap { position: relative; display: flex; justify-content: center; width: min(320px, 100%); }
+
+/* A router's card (OrgChartSheet.tsx): in the VPs' row, because a router sits beside the VPs, but
+   drawn apart from them: the router colour on its edge and a Router label, no drag, no drop. */
+.oc-router { border-left: 3px solid var(--org-router-color, #64748b); }
+.oc-router .oc-card-btn { align-items: center; }

@@ -19,6 +19,7 @@ import {
 import type { MailAccountDto, MailDraftDto, MailProviderSummary, MailboxDto } from '@/api/mail';
 import { useNavigate } from 'react-router-dom';
 import { ORG_ROUTER_SETUP_PATH } from './MailRouterAssignment';
+import { MailRouterRows } from './MailRouterRows';
 import { ContextMenu } from '@/components/common/ContextMenu';
 import { useScrollAnchor } from '@/hooks/useScrollAnchor';
 import {
@@ -501,6 +502,7 @@ export function MailAccountsPane({
           onFetchAsked={fetchNotes.watch}
           onPicked={onPicked}
         />
+        <MailRouterRows onPicked={onPicked} />
         {accounts.map((account) => (
           <MailAccountFolders
             key={account.accountId}

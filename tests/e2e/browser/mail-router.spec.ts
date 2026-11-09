@@ -295,6 +295,36 @@ test('mail setup opens the existing area router without granting account access'
   await capture(page, { path: '/tmp/router-mail/setup-reuse.png' });
 });
 
+test('Mail lists the area router with its live state, and it opens at Org level, beside the VPs in the chart', async ({ page }) => {
+  await enterMail(page);
+  const writes: string[] = [];
+  page.on('request', (request) => { if (request.method() !== 'GET') writes.push(request.url()); });
+  const group = page.getByTestId('mail-routers');
+  await expect(group).toBeVisible();
+  const row = group.getByTestId('mail-router-row').filter({ hasText: 'Personal mail router' });
+  await expect(row).toHaveCount(1);
+  await expect(row.getByTestId('mail-router-state')).toHaveText('Paused');
+  await expect(row).toHaveAttribute('data-router-state', 'paused');
+  const routerId = await row.getAttribute('data-task-id');
+  await row.click();
+  await expect(page.getByTestId('org-detail-title')).toContainText('Personal mail router');
+  await expect(page.locator(`[data-testid="org-channel-router"][data-key="router:${routerId}"]`)).toHaveAttribute('aria-selected', 'true');
+  // The chart draws it in the VPs' row, as a router, and a click opens its own node.
+  await page.getByTestId('org-open-chart').click();
+  const card = page.getByTestId('org-chart-router').filter({ hasText: 'Personal mail router' });
+  await expect(card).toBeVisible();
+  await expect(card).toContainText('Router');
+  await expect(page.getByTestId('org-chart-vps').getByTestId('org-chart-router').first()).toBeVisible();
+  await expect(page.getByTestId('org-chart-empty')).toHaveCount(0);
+  // Keyboard opens it as a click does.
+  await card.getByTestId('org-chart-router-open').focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByTestId('org-chart')).toHaveCount(0);
+  await expect(page.getByTestId('org-detail-title')).toContainText('Personal mail router');
+  expect(writes.filter((url) => url.includes('/api/v1/router/assign') || url.includes('/api/v1/org/routers') || url.includes('/api/plugins/mail/'))).toEqual([]);
+  await capture(page, { path: '/tmp/router-mail/router-at-org-level.png' });
+});
+
 test('a late area confirmation never appears on another email, and returning reads the server confirmation', async ({ page }) => {
   await enterMail(page);
   const item = fixture.routerRows.unassigned[2]!;

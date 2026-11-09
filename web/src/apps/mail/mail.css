@@ -1564,3 +1564,22 @@
 .mail-router-areas legend { padding: 0; font-weight: 600; color: var(--fg); }
 .mail-router-area { display: flex; align-items: center; gap: 6px; padding: 2px 0; color: var(--fg); }
 .mail-router-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+
+/* The Routers group (MailRouterRows.tsx): each area's router, the task its mail goes to first, with
+   its live state. The same row face as a folder, a status dot where a folder has its glyph, and its
+   own hairline like the smart group's. */
+.mail-routers { margin: 0 0 8px; }
+.mail-router-list {
+  list-style: none;
+  margin: 0 8px 0;
+  padding: 0 0 8px;
+  border-bottom: 1px solid var(--border);
+}
+.mail-router-row { gap: 8px; padding-left: 8px; }
+.mail-router-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); }
+.mail-router-state { flex: 0 0 auto; font-size: 11.5px; color: var(--fg-secondary); }
+.mail-router-dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: var(--fg-muted); }
+.mail-router-dot[data-tone='ready'] { background: var(--success, #2f9e44); }
+.mail-router-dot[data-tone='working'] { background: var(--accent); }
+.mail-router-dot[data-tone='needs'] { background: var(--error, #d70015); }
+.mail-router-row[data-router-state='needs'] .mail-router-state { color: var(--error, #d70015); }

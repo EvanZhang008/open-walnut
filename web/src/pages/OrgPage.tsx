@@ -591,6 +591,7 @@ export function OrgPage() {
         <OrgChartSheet
           main={channels.main}
           rows={channels.projects}
+          routers={channels.routers}
           tasks={tasks}
           {...(chartStart ? { startWith: chartStart } : {})}
           onClose={() => { setChartOpen(false); setChartStart(null); }}

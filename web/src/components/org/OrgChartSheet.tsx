@@ -2,6 +2,8 @@
  * The org chart: Main and its VPs, one screen.
  *
  *   Main · CEO
+ *   └ each router first (its own node beside the VPs, never under one: its area, Paused or
+ *     Ready and its VP links, a click opens it), then
  *   └ one card per VP: its avatar, name, how many it has open and what it is doing, then the
  *     projects it leads (its own included) (OrgChartVp.tsx); an open card holds Open chat and
  *     its menu, an open project every task in it as a tree with each one's status icon, and a
@@ -25,7 +27,7 @@ import { useDialogFocus } from '@/hooks/useDialogFocus';
 import { log } from '@/utils/log';
 import { ContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import { OrgChartProject } from './OrgChartProject';
-import { OrgChartCeo, OrgChartVp } from './OrgChartVp';
+import { OrgChartCeo, OrgChartVp, pressable } from './OrgChartVp';
 import { OrgEditableName } from './OrgEditableName';
 import { OrgNodeEditor, type OrgNodeEditorMode } from './OrgNodeEditor';
 import { useOrgSettings } from './useOrgSettings';
@@ -43,6 +45,8 @@ interface Props {
   main: ChannelRow;
   /** One row per project (OrgChannels.projects). */
   rows: readonly ChannelRow[];
+  /** One row per open router (OrgChannels.routers): drawn beside the VPs, not as one. */
+  routers?: readonly ChannelRow[];
   tasks: readonly Task[];
   onClose: () => void;
   /** Open a card on the Org page (a channel row's key). */
@@ -58,7 +62,7 @@ const DRAG_TYPE = 'application/x-walnut-org-project';
 /** The drop zone that gives a project a dedicated VP again. */
 const OWN = '__own__';
 
-export function OrgChartSheet({ main, rows, tasks, onClose, onPick, onOpenTask, startWith }: Props) {
+export function OrgChartSheet({ main, rows, routers = [], tasks, onClose, onPick, onOpenTask, startWith }: Props) {
   const [panel, setPanel] = useState<HTMLDivElement | null>(null);
   const [dragKey, setDragKey] = useState<string | null>(null);
   const [overKey, setOverKey] = useState<string | null>(null);
@@ -323,10 +327,23 @@ export function OrgChartSheet({ main, rows, tasks, onClose, onPick, onOpenTask, 
                   : 'Drag a project here to create a dedicated VP for it'}
             </div>
           )}
-          {cards.length === 0 && (
+          {cards.length === 0 && routers.length === 0 && (
             <p className="org-empty" data-testid="org-chart-empty">No open work yet. Ask the CEO to start something, or make a VP or a project here.</p>
           )}
           <ul className="oc-vps" data-testid="org-chart-vps">
+            {routers.map((r) => (
+              <li key={r.key} className="oc-vp oc-router" data-testid="org-chart-router" data-key={r.key}>
+                <div className="oc-card-btn" data-testid="org-chart-router-open" title={`Open ${r.name}`} {...pressable(() => pick(r.key))}>
+                  <span className="oc-card-main">
+                    <span className="oc-card-headline">
+                      <span className="oc-card-title" data-testid="org-chart-router-name">{r.name}</span>
+                      <span className="oc-role">Router</span>
+                    </span>
+                    <span className="oc-doing" data-testid="org-chart-router-line" title={r.latest}>{r.latest}</span>
+                  </span>
+                </div>
+              </li>
+            ))}
             {cards.map((c) => {
               const plan = dragged ? planFor(c) : null;
               const over = overKey === c.key && !!plan;
