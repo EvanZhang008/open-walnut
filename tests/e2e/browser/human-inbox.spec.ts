@@ -234,13 +234,16 @@ test('an action_required letter arrives, reads in the reader, and one click answ
   await expect(panel.locator('.inbox-project-strip, [data-testid="inbox-project-strip"]')).toHaveCount(0)
   await expect(panel.getByRole('region', { name: 'Projects' })).toHaveCount(0)
 
-  // The envelope is entirely system-stamped: type, sender session, task, host.
+  // The envelope is entirely system-stamped: type, sender session, task, host. Who sent it
+  // leads the row as its origin badge (2026-11-04: every letter says who sent it, first).
   const row = envelope(panel, DECISION_SUBJECT)
   await expect(row).toBeVisible({ timeout: 15_000 })
   await expect(row).toHaveClass(/hib-unread/)
   await expect(row.locator('.hib-type')).toHaveText('Action needed')
   await expect(row.locator('.hib-preview')).toContainText(`ship now or hold for review (${NONCE})`)
-  await expect(row.locator('.hib-row-chips')).toContainText('Session: walnut')
+  const origin = row.getByTestId('letter-origin')
+  await expect(origin).toHaveAttribute('data-origin-kind', 'task')
+  await expect(origin.locator('.hib-origin-name')).toHaveText('Session: walnut')
   await expect(row.locator('.hib-row-chips')).toContainText('local')
   await shot(page, 'e2e-01-inbox-rail')
 
@@ -401,8 +404,10 @@ test('pin, mark unread and archive each move the envelope', async ({ page, reque
 
   const row = envelope(panel, INFO_SUBJECT)
   await expect(row).toBeVisible({ timeout: 15_000 })
-  // No caller sid → the honest `external` sender, never a guess.
-  await expect(row.locator('.hib-row-chips')).toContainText('External agent')
+  // No caller sid: an API caller Walnut cannot tie to a session, said so by the origin badge, never a guess.
+  const origin = row.getByTestId('letter-origin')
+  await expect(origin).toHaveAttribute('data-origin-kind', 'script')
+  await expect(origin.locator('.hib-origin-name')).toHaveText('A script')
 
   // ── Pin: pinned letters sort ahead of newer unpinned ones ──
   await rowButton(row, 'Pin').click()
