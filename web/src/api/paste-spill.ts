@@ -11,7 +11,7 @@
  * named on a `- <path>` line there first (src/providers/outbound-uploads.ts).
  */
 
-import { splitAttachmentHeaders, withFilePaths } from './file-upload';
+import { attachmentParts, withFilePaths } from './file-upload';
 import { apiPost } from './client';
 
 /**
@@ -33,7 +33,7 @@ export async function spillOversizedText(text: string): Promise<string> {
 
   // Attached files stay in front, in the message itself: the server finds them
   // there (to copy them to a remote session's host), never inside the spilled file.
-  const parts = splitAttachmentHeaders(text);
+  const parts = attachmentParts(text);
   const files = parts?.files ?? [];
   const body = files.length > 0 && parts ? parts.body : text;
   if (body.length <= PASTE_SPILL_THRESHOLD) return text;

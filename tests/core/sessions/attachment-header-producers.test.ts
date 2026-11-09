@@ -59,9 +59,17 @@ const KNOWN: Record<string, 'defines' | 'builds' | 'calls' | 'reads'> = {
   'core/sessions/transcript-from-jsonl.ts': 'reads', // a comment
   'providers/user-line-images-core.ts': 'reads', // the daemon turns the header's paths into image blocks
   'providers/daemon-source.ts': 'reads', // the daemon's self-test of that parser
+  'providers/outbound-uploads.ts': 'reads', // a comment: it copies a file header's paths to the session's host
   // Outside src/ (paths from the repo root).
   '../web/src/hooks/useSessionSend.ts': 'reads', // splitAttachmentHeaders for the waiting bubble
   '../web/src/components/sessions/optimistic-dedup.ts': 'reads', // a comment on dedup
+  '../web/src/api/file-upload.ts': 'calls', // the web's withFilePaths: attachmentHeaderBlock('files', …)
+  '../web/src/api/paste-spill.ts': 'calls', // keeps the files header in front of a spilled paste: withFilePaths
+  '../web/src/components/chat/ChatInput.tsx': 'calls', // the composer's send: withFilePaths
+  '../web/src/components/common/composer-attachments.ts': 'reads', // a comment
+  '../web/src/components/sessions/DraftSessionPanel.tsx': 'reads', // a comment
+  '../web/src/components/sessions/MessageAttachments.tsx': 'reads', // a comment: the cards drawn from the headers
+  '../web/src/components/sessions/SessionMessage.tsx': 'reads', // a comment: the bubble splits the headers off
 }
 
 const NAMES = /IMAGES_ATTACHED_LINE|FILES_ATTACHED_LINE|(?:Images|Files) attached|The user attached|attachmentHeaderBlock\(|imageContextBlock\(|buildSessionImageContext\(|withImagePaths\(|withFilePaths\(/

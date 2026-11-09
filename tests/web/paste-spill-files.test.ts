@@ -14,7 +14,7 @@ vi.mock('../../web/src/api/client', () => ({
 }))
 
 const { spillOversizedText, PASTE_SPILL_THRESHOLD } = await import('../../web/src/api/paste-spill')
-const { withFilePaths, splitAttachmentHeaders } = await import('../../web/src/api/file-upload')
+const { withFilePaths, attachmentParts } = await import('../../web/src/api/file-upload')
 
 beforeEach(() => { posted.length = 0 })
 
@@ -23,7 +23,7 @@ describe('spilling a long message with attached files', () => {
     const words = 'x'.repeat(PASTE_SPILL_THRESHOLD + 10)
     const out = await spillOversizedText(withFilePaths(words, ['/state/tasks/t/uploads/up-1/a.log']))
     expect(posted).toEqual([{ text: words }])
-    const parts = splitAttachmentHeaders(out)
+    const parts = attachmentParts(out)
     expect(parts?.files).toEqual(['/state/tasks/t/uploads/up-1/a.log'])
     expect(parts?.body).toMatch(/^\[Large text attached — 200,010 chars/)
     expect(parts?.body).toContain('- /state/pastes/p-1.txt')

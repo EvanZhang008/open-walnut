@@ -1,7 +1,7 @@
 /**
  * The attachments of a sent message, read from the headers it carries
  * (`[Images attached …]`, `[Files attached …]`, api/file-upload.ts
- * splitAttachmentHeaders): pictures inline, every other file as a card that
+ * attachmentParts): pictures inline, every other file as a card that
  * opens it. Used by a person's bubble in history and by the bubble of a message
  * still on its way, so both look the same.
  */

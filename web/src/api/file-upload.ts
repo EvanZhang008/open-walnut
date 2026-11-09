@@ -16,6 +16,7 @@
  * src/core/sessions/session-uploads.ts (pinned by a contract test).
  */
 
+import { FILES_ATTACHED_LINE, attachmentHeaderBlock, splitAttachmentHeaders } from '@open-walnut/attachment-headers';
 import { getDeviceToken } from './device-token';
 import { TEST_RUN_HEADER, testRunLabel } from './test-run';
 
@@ -25,8 +26,8 @@ export const UPLOAD_CHUNK_BYTES = 2 * 1024 * 1024;
 export const MAX_FILE_BYTES = 4 * 1024 * 1024 * 1024;
 /** Files per message, beside the pictures (the phone keeps the same cap). */
 export const MAX_FILES = 10;
-/** The header of a message with attached files, the dash written as an escape. */
-export const FILES_ATTACHED_LINE = '[Files attached — open them from these paths]';
+/** The header of a message with attached files (src/lib/attachment-headers.ts). */
+export { FILES_ATTACHED_LINE };
 
 /** Where an attachment's bytes go: a session's host, or this machine before a session exists. */
 export interface UploadTarget { sessionId?: string }
@@ -63,8 +64,7 @@ export function safeUploadName(raw: string): string {
 
 /** The message naming saved files under the header (session-uploads.ts withFilePaths). */
 export function withFilePaths(text: string, paths: string[]): string {
-  if (paths.length === 0) return text;
-  return `${FILES_ATTACHED_LINE}\n${paths.map((p) => `- ${p}`).join('\n')}\n\n${text}`;
+  return attachmentHeaderBlock('files', paths) + text;
 }
 
 /** The parts of a stored message: the paths of its attachment headers and the person's words. */
@@ -74,28 +74,15 @@ export interface AttachmentParts {
   body: string;
 }
 
-const HEADER_RE = /^\[(Images|Files) attached[^\]\n]*\]\n((?:- [^\n]+\n?)*)\n?/;
-
 /**
- * Split the `[Images attached …]` and `[Files attached …]` headers off the front
- * of a message, in any order (the server puts the pictures' header ahead of the
- * files' one). Null when the message has none, so an ordinary one takes the path
- * it always took.
+ * The attachment headers at the front of a message, read with the parser the
+ * server and the queue card use (src/lib/attachment-headers.ts). Null when the
+ * message has none, so an ordinary one takes the path it always took.
  */
-export function splitAttachmentHeaders(text: string): AttachmentParts | null {
-  const images: string[] = [];
-  const files: string[] = [];
-  let rest = text;
-  for (let i = 0; i < 4; i++) {
-    const m = HEADER_RE.exec(rest);
-    if (!m) break;
-    const paths = m[2].split('\n').filter((l) => l.startsWith('- ')).map((l) => l.slice(2).trim()).filter(Boolean);
-    if (paths.length === 0) break;
-    (m[1] === 'Images' ? images : files).push(...paths);
-    rest = rest.slice(m[0].length);
-  }
-  if (images.length === 0 && files.length === 0) return null;
-  return { images, files, body: rest };
+export function attachmentParts(text: string): AttachmentParts | null {
+  const split = splitAttachmentHeaders(text);
+  if (split.images.length === 0 && split.files.length === 0) return null;
+  return { images: split.images, files: split.files, body: split.text };
 }
 
 /** A friendly size: "812 B", "4.2 KB", "3 MB", "4 GB". */

@@ -33,7 +33,7 @@ import { detectOutboundSend } from './session-outbound';
 import { SessionEnvelopeSegments } from './SessionProvenanceCard';
 import { SessionOutboundCard } from './SessionOutboundCard';
 import { splitLeadingBanners } from '@open-walnut/history-injected-banner';
-import { splitAttachmentHeaders } from '@/api/file-upload';
+import { attachmentParts } from '@/api/file-upload';
 import { MessageAttachments } from './MessageAttachments';
 import { injectedContextLabel } from '@open-walnut/walnut-added';
 import { splitLeadingRiders } from '@open-walnut/history-walnut-riders';
@@ -1300,7 +1300,7 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
   // The attachments a person sent ride in front of their words as headers
   // naming the saved paths (`[Images attached …]`, `[Files attached …]`): drawn
   // as pictures and file cards above the words instead of as path lists.
-  const attachmentSplit = useMemo(() => (isUser && bodyText ? splitAttachmentHeaders(bodyText) : null), [isUser, bodyText]);
+  const attachmentSplit = useMemo(() => (isUser && bodyText ? attachmentParts(bodyText) : null), [isUser, bodyText]);
   const shownUserText = attachmentSplit ? attachmentSplit.body : bodyText;
 
   // …and its ANSWER is a JSON object, usually with the model's own reasoning

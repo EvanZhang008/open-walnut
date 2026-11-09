@@ -8,7 +8,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   FILES_ATTACHED_LINE as WEB_LINE, MAX_FILE_BYTES, UPLOAD_CHUNK_BYTES as WEB_CHUNK, safeUploadName,
-  splitAttachmentHeaders, uploadFile, withFilePaths as webWithFilePaths, FileUploadError, formatBytes,
+  attachmentParts, uploadFile, withFilePaths as webWithFilePaths, FileUploadError, formatBytes,
 } from '../../web/src/api/file-upload.js'
 import {
   FILES_ATTACHED_LINE, MAX_UPLOAD_BYTES, UPLOAD_CHUNK_BYTES, isUploadName, withFilePaths, withoutAttachmentHeaders,
@@ -41,27 +41,27 @@ describe('the web mirror of the upload contract', () => {
   })
 })
 
-describe('splitAttachmentHeaders', () => {
+describe('attachmentParts', () => {
   it('reads both headers in the order the server writes them, and keeps the words', () => {
     const sent = webWithFilePaths('why does this crash?', ['/h/uploads/up-1/crash.log', '/h/uploads/up-2/core dump.zip'])
     const stored = `${IMAGES_ATTACHED_LINE}\n- /tmp/open-walnut/images/1-abc.png\n\n${sent}`
-    expect(splitAttachmentHeaders(stored)).toEqual({
+    expect(attachmentParts(stored)).toEqual({
       images: ['/tmp/open-walnut/images/1-abc.png'],
       files: ['/h/uploads/up-1/crash.log', '/h/uploads/up-2/core dump.zip'],
       body: 'why does this crash?',
     })
     // The same words the server's title reader keeps.
-    expect(splitAttachmentHeaders(stored)!.body).toBe(withoutAttachmentHeaders(stored))
+    expect(attachmentParts(stored)!.body).toBe(withoutAttachmentHeaders(stored))
   })
 
   it('a message of files only has empty words', () => {
-    expect(splitAttachmentHeaders(webWithFilePaths('', ['/x/a.pdf']))).toEqual({ images: [], files: ['/x/a.pdf'], body: '' })
+    expect(attachmentParts(webWithFilePaths('', ['/x/a.pdf']))).toEqual({ images: [], files: ['/x/a.pdf'], body: '' })
   })
 
   it('an ordinary message, or a header mid-text, is left alone', () => {
-    expect(splitAttachmentHeaders('hello')).toBeNull()
-    expect(splitAttachmentHeaders(`see\n${FILES_ATTACHED_LINE}\n- /x/a.pdf`)).toBeNull()
-    expect(splitAttachmentHeaders(`${FILES_ATTACHED_LINE}\n\nno paths`)).toBeNull()
+    expect(attachmentParts('hello')).toBeNull()
+    expect(attachmentParts(`see\n${FILES_ATTACHED_LINE}\n- /x/a.pdf`)).toBeNull()
+    expect(attachmentParts(`${FILES_ATTACHED_LINE}\n\nno paths`)).toBeNull()
   })
 })
 
