@@ -2363,6 +2363,13 @@ extension AppDelegate: WKNavigationDelegate {
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
         guard let url = navigationAction.request.url else { return nil }
+        if linkPolicy.isAgentReference(url) {
+            let script = "window.__walnutDesktop?.openAgentRef(" + AppLink.jsString(url.absoluteString) + ") === true"
+            webView.evaluateJavaScript(script) { result, _ in
+                if result as? Bool != true { NSWorkspace.shared.open(url) }
+            }
+            return nil
+        }
         let request = LinkRequest(url: url, isLinkClick: false, targetsNewWindow: true, isMainFrame: true)
         switch linkPolicy.verdict(for: request) {
         case .openInAppWindow:

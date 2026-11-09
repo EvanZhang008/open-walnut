@@ -64,6 +64,10 @@ struct LinkPolicy {
         return id == b.queryItems?.first(where: { $0.name == "id" })?.value
     }
 
+    func isAgentReference(_ url: URL) -> Bool {
+        isAppOrigin(url) && url.path == "/open-ref"
+    }
+
     func verdict(for request: LinkRequest) -> LinkVerdict {
         let url = request.url
         let scheme = url.scheme?.lowercased() ?? ""

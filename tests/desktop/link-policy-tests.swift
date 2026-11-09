@@ -58,6 +58,9 @@ struct LinkPolicyTests {
         precondition(!policy.isSameWindowTarget(session, URL(string: "http://localhost:3456/popout?view=note&id=abc")!))
         precondition(!policy.isSameWindowTarget(session, URL(string: "http://example.com:3456/popout?view=session&id=abc")!))
         precondition(!policy.isSameWindowTarget(URL(string: "http://localhost:3456/popout?view=file&path=a&line=1")!, URL(string: "http://localhost:3456/popout?view=file&path=a&line=2")!))
+        precondition(policy.isAgentReference(URL(string: "http://localhost:3456/open-ref#token=abc")!))
+        precondition(!policy.isAgentReference(URL(string: "https://example.com/open-ref#token=abc")!))
+        precondition(!policy.isAgentReference(URL(string: "http://localhost:5173/open-ref#token=abc")!))
         print("LinkPolicyTests: all passed")
     }
 }
