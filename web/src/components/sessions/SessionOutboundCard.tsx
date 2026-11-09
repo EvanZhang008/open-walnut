@@ -245,7 +245,8 @@ function withRecord(send: OutboundSend, record: OpCallRecord | undefined): Outbo
     ...(f.detail !== undefined ? { body: f.detail } : {}),
     ...(f.title && !send.title ? { title: f.title } : {}),
     ...(!send.to && f.to[0] ? { to: f.to[0] } : {}),
-    ...(!send.refs?.length && f.to.length ? { refs: f.to } : {}),
+    // What the record says it reached is that call's own; the transcript's may be another send's.
+    ...(f.to.length ? { refs: f.to } : {}),
     ...(f.kind === 'reply' ? { kind: 'reply' as const } : {}),
     ...(!record.ok ? { error: record.error ?? 'The call was refused' } : {}),
     payloadFrom: undefined,
@@ -393,17 +394,44 @@ export function SessionOutboundCards({
   );
 }
 
-/** Each record with the transcript's reading of the same call (same op, same
- *  order); a record with no such call (a loop's later sends) borrows the row's. */
+/**
+ * Each transcript call with Walnut's record of it (same op, same order), every
+ * call kept whether or not it has one; a record with no call of its own (a loop's
+ * later sends) is added after the row's last call of that op, carrying only what
+ * the record says: never another send's target, request or answer.
+ */
 export function pairWithRecords(calls: OutboundSend[], records: OpCallRecord[] | undefined): Array<{ send: OutboundSend; record?: OpCallRecord }> {
   if (!records?.length) return calls.map((send) => ({ send }));
+  const byOp = new Map<string, OpCallRecord[]>();
+  for (const r of records) byOp.set(r.op, [...(byOp.get(r.op) ?? []), r]);
   const used = new Map<string, number>();
-  return records.map((record) => {
-    const n = used.get(record.op) ?? 0;
-    used.set(record.op, n + 1);
-    const sameOp = calls.filter((c) => c.op === record.op);
-    const base = sameOp[Math.min(n, sameOp.length - 1)] ?? calls[0];
-    const send: OutboundSend = base.op === record.op ? base : { ...base, op: record.op, fields: record.fields, kind: 'peer-note' };
-    return { send, record };
+  const lastOf = new Map<string, number>();
+  calls.forEach((c, i) => lastOf.set(c.op, i));
+  const out: Array<{ send: OutboundSend; record?: OpCallRecord }> = [];
+  const extras = (op: string, base: OutboundSend) => {
+    const list = byOp.get(op) ?? [];
+    for (const record of list.slice(used.get(op) ?? 0)) out.push({ send: ownSend(base, record), record });
+    used.set(op, list.length);
+  };
+  calls.forEach((send, i) => {
+    const list = byOp.get(send.op) ?? [];
+    const n = used.get(send.op) ?? 0;
+    if (n < list.length) { out.push({ send, record: list[n] }); used.set(send.op, n + 1); } else out.push({ send });
+    if (lastOf.get(send.op) === i) extras(send.op, send);
   });
+  // A record of an op the transcript shows no call of (a payload built in a subshell).
+  for (const op of byOp.keys()) if (!lastOf.has(op) && calls[0]) extras(op, calls[0]);
+  return out;
+}
+
+/** A send built from its record alone, on the row's command (for the details). */
+function ownSend(base: OutboundSend, record: OpCallRecord): OutboundSend {
+  return {
+    op: record.op,
+    fields: record.fields,
+    ...(base.form ? { form: base.form } : {}),
+    via: base.via,
+    kind: record.fields.kind === 'reply' ? 'reply' : 'peer-note',
+    raw: base.raw,
+  };
 }

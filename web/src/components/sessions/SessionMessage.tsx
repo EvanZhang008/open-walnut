@@ -660,7 +660,7 @@ export function isTextPlusStepTools(m: SessionHistoryMessage): boolean {
   return m.role === 'assistant'
     && !!(m.text ?? '').trim()
     && !!m.tools && m.tools.length > 0
-    && m.tools.every((t) => isMergeableHistoryTool(t) || !!detectOutboundSend(t));
+    && m.tools.every((t) => isMergeableHistoryTool(t) || detectOutboundCalls(t, t.result).length > 0);
 }
 
 /** A streaming run member: a generic tool (running or done), or the reasoning

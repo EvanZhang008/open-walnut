@@ -283,12 +283,13 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
     const record = (ok: boolean, result?: unknown, error?: string): Promise<void> =>
       recordSessionOpCall({ op: name, args: parsed, result, ok, ...(error ? { error } : {}), form: argForm, ...(argPath ? { path: argPath } : {}) })
     if (name === 'task_send' || name === 'session_send') {
-      const { callHostDaemonTool, formatErrorLines, errorToExitCode } = await import('../providers/wn-cli.js')
+      const { callHostDaemonTool, formatErrorLines, errorToExitCode, recordCardedCallViaDaemon } = await import('../providers/wn-cli.js')
       const resp = await callHostDaemonTool(name, parsed, process.env, callId)
       if (resp && !(resp.ok === false && (resp.error.code === 'hub_unreachable' || resp.error.code === 'unknown_caller'))) {
+        // The record takes the daemon's way too: a session's call never goes over HTTP.
+        await recordCardedCallViaDaemon(name, parsed, argForm, argPath, resp)
         if (resp.ok) {
           console.log(JSON.stringify(resp.result, null, 2))
-          await record(true, resp.result)
           return
         }
         console.error(formatErrorLines(resp.error).join('\n'))
@@ -297,8 +298,6 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
           if (resp.error.detail === undefined) console.log(JSON.stringify(lostCallDetail(name, callId), null, 2))
         }
         process.exitCode = errorToExitCode(resp.error.code)
-        // A timed-out call may have run: no record says it failed.
-        if (resp.error.code !== 'hub_timeout') await record(false, undefined, formatErrorLines(resp.error).join(' '))
         return
       }
     }

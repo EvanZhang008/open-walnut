@@ -76,15 +76,69 @@ describe('the CLI records a call, the card finds it by its row', () => {
     expect(entry?.toolUseId).toBe('toolu_bg')
   })
 
-  it('two rows sending at once each get their own call', async () => {
+  it('two rows that could both have sent name neither (never the wrong one)', async () => {
     vi.spyOn(sessionRunner, 'findByClaudeId').mockReturnValue(fakeRunner([
-      ['toolu_a', "echo '{}' | walnut tools call task_send -"],
-      ['toolu_b', "echo '{}' | walnut tools call task_send -"],
+      ['toolu_a', `walnut tools call task_send '{"to":"task-aaaa","text":"A"}'`],
+      ['toolu_b', `walnut tools call task_send '{"to":"task-bbbb","text":"B"}'`],
     ]) as never)
     const f = { op: 'task_send', kind: 'send', to: [], detail: 'x' }
-    const one = await recordOpCall(SID, { op: 'task_send', form: 'stdin', ok: true, fields: f })
-    const two = await recordOpCall(SID, { op: 'task_send', form: 'stdin', ok: true, fields: f })
-    expect(new Set([one?.toolUseId, two?.toolUseId])).toEqual(new Set(['toolu_a', 'toolu_b']))
+    expect((await recordOpCall(SID, { op: 'task_send', form: 'inline', ok: true, fields: f }))?.toolUseId).toBeUndefined()
+    expect((await recordOpCall(SID, { op: 'task_send', form: 'inline', ok: true, fields: f }))?.toolUseId).toBeUndefined()
+    // A file only one of them names is certain.
+    vi.spyOn(sessionRunner, 'findByClaudeId').mockReturnValue(fakeRunner([
+      ['toolu_a', 'walnut tools call task_send @/tmp/a.json'],
+      ['toolu_b', 'walnut tools call task_send @/tmp/b.json'],
+    ]) as never)
+    expect((await recordOpCall(SID, { op: 'task_send', form: 'file', path: '/tmp/b.json', ok: true, fields: f }))?.toolUseId).toBe('toolu_b')
+  })
+
+  it("the session's own walnut CLI records an @file send through its gateway, words included", async () => {
+    const net = await import('node:net')
+    const fsp = await import('node:fs/promises')
+    const os = await import('node:os')
+    const path = await import('node:path')
+    const { runWalnutCli } = await import('../../../src/providers/wn-cli.js')
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'op-rec-'))
+    const sock = path.join(dir, 'gateway.sock')
+    const payload = path.join(dir, 'payload.json')
+    await fsp.writeFile(payload, JSON.stringify({ to: 'task-aaaa', title: 'From a file', text: 'Exact words from file.' }))
+    const seen: Array<{ op: string; args: { name: string; args: Record<string, unknown> } }> = []
+    const gateway = net.createServer((s) => {
+      let buf = ''
+      s.on('data', (d) => {
+        buf += d.toString()
+        if (!buf.includes('\n')) return
+        const req = JSON.parse(buf.trim())
+        seen.push(req)
+        s.end(JSON.stringify({ ok: true, result: req.args.name === 'task_send' ? { delivery: 'queued', targetTaskId: 'task-aaaa' } : { id: 'oc-1' } }) + '\n')
+      })
+    })
+    await new Promise<void>((r) => gateway.listen(sock, r))
+    const old = { socket: process.env.WALNUT_AGENT_SOCKET, sid: process.env.WALNUT_SESSION_ID }
+    process.env.WALNUT_AGENT_SOCKET = sock
+    process.env.WALNUT_SESSION_ID = SID
+    const out = vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
+    try {
+      expect(await runWalnutCli(['tools', 'call', 'task_send', `@${payload}`])).toBe(0)
+    } finally {
+      out.mockRestore()
+      for (const [k, v] of Object.entries({ WALNUT_AGENT_SOCKET: old.socket, WALNUT_SESSION_ID: old.sid })) {
+        if (v === undefined) delete process.env[k]; else process.env[k] = v
+      }
+      await new Promise<void>((r) => gateway.close(() => r()))
+      await fsp.rm(dir, { recursive: true })
+    }
+    expect(seen.map((r) => r.args.name)).toEqual(['task_send', 'op_card_record'])
+    expect(seen[1].args.args).toMatchObject({ op: 'task_send', form: 'file', path: payload, ok: true, key: expect.stringMatching(/^[A-Za-z0-9_-]+$/) })
+    expect(seen[1].args.args.fields).toMatchObject({ title: 'From a file', detail: 'Exact words from file.', to: ['task-aaaa'] })
+  })
+
+  it('a record relayed twice (same key) is kept once', async () => {
+    vi.spyOn(sessionRunner, 'findByClaudeId').mockReturnValue(fakeRunner([['toolu_twice', 'walnut tools call board_post @/tmp/p.json']]) as never)
+    const input = { op: 'board_post', form: 'file', path: '/tmp/p.json', ok: true, key: 'k-twice-1', fields: { op: 'board_post', kind: 'board', to: [], detail: 'once' } }
+    await recordOpCall(SID, input)
+    await recordOpCall(SID, input)
+    expect((await lookup(['toolu_twice'])).toolu_twice).toHaveLength(1)
   })
 
   it('keeps a refusal with its error', async () => {

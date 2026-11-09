@@ -97,6 +97,8 @@ function threadWords(args: Args): string | undefined {
 const SEND: OpCardSpec = {
   kind: (a) => (s(a.in_reply_to) || s(a.inReplyTo) ? 'reply' : 'send'),
   to: ['to'],
+  // The task the server says the message reached (`to` may be a title or a prefix).
+  toFromResult: ['targetTaskId'],
   title: (a) => s(a.title),
   detail: (a) => first(a, ['text']) ?? s(a.result),
 }
@@ -115,6 +117,13 @@ export const OP_CARDS: Record<string, OpCardSpec> = {
   task_send: SEND,
   session_send: SEND,
   org_send: { kind: 'send', to: ['to'], title: (a) => s(a.title), detail: (a) => s(a.text) },
+  // A mail or Slack item handed to the task that takes it, with the router's brief.
+  router_route: {
+    kind: 'send', to: ['task_id'], toFromResult: ['taskId', 'targetTaskId'],
+    toLabel: (a) => (a.not_routed === true ? 'Not routed' : undefined),
+    title: (a) => s(a.new_task_title) ?? s(a.reason), detail: (a) => s(a.text) ?? s(a.reason),
+  },
+  triage_route: { kind: 'send', toFromResult: ['taskId', 'targetTaskId'], title: (a) => s(a.item), detail: (a) => s(a.text) },
   // A thread, a Brief and a Board are the node's own (`task` defaults to the
   // caller's): the card names the place, never the caller as its own target.
   thread_update: {
@@ -171,6 +180,11 @@ export const OP_CARDS: Record<string, OpCardSpec> = {
  */
 export const NOT_CARDED: Record<string, string> = {
   task_update: 'edits a task field; its description is no message',
+  agent_skill_write: 'the session writes its own skill',
+  triage_rule_set: 'saves a routing rule; its note is the rule\'s own',
+  router_context: 'reads routing context; its message names the item to read',
+  router_item: 'reads one routed item',
+  router_work: 'the receiver records its own note on the work',
   task_note_write: 'the session writes its own task note',
   agent_memory_write: 'the session writes its own memory',
   memory_write: 'writes memory, not to anyone',
@@ -238,9 +252,12 @@ function resultRefs(result: unknown, keys: string[]): string[] {
     const v = s(r[k])
     if (v) return [v]
   }
-  const task = r.task && typeof r.task === 'object' ? r.task as Args : undefined
-  const id = task ? s(task.id) : undefined
-  return id ? [id] : []
+  for (const k of ['task', 'target']) {
+    const o = r[k] && typeof r[k] === 'object' ? r[k] as Args : undefined
+    const id = o ? s(o.id) ?? s(o.taskId) : undefined
+    if (id) return [id]
+  }
+  return []
 }
 
 /**

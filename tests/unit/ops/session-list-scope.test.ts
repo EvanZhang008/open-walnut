@@ -75,7 +75,10 @@ describe('the legacy session_* ops are hidden, not gone', () => {
       expect(visible, name).not.toContain(name)
     }
     for (const name of visible) expect(all).toContain(name)
-    expect(all.length).toBe(visible.length + LEGACY.length)
+    // Hidden besides them: internal ops no model calls (op_card_record: the walnut CLI's own record for a chat card).
+    const INTERNAL = ['op_card_record']
+    for (const name of INTERNAL) expect(all, name).toContain(name)
+    expect(all.length).toBe(visible.length + LEGACY.length + INTERNAL.length)
   })
 
   it('each legacy op still executes and still shapes its result', () => {

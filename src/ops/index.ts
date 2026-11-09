@@ -39,6 +39,7 @@ import './task-watch.js'
 import './private-tasks.js'
 import './feature-nodes.js'
 import './router.js'
+import './session-op-record.js'
 
 export {
   defineOp,

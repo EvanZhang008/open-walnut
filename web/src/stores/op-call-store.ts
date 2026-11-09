@@ -4,9 +4,9 @@
  * transcript does not hold (`@file`, stdin, a payload built in a subshell) reads
  * them here, so a deleted temp file never leaves it blank.
  *
- * One request per session per tick for every card that asks, batched; a row that
- * has a record keeps it for the page, a row with none is asked again once its call
- * returns (the CLI records before it exits, so a card drawn mid-call finds it then).
+ * One request per session per tick for every card that asks, batched. A row is
+ * asked once while its call runs and once after it returned (the CLI records each
+ * call before it exits, so a loop's later sends are there by then).
  */
 import { useEffect, useSyncExternalStore } from 'react';
 import { apiPost } from '@/api/client';
@@ -40,7 +40,7 @@ function emit(): void {
   for (const l of listeners) l();
 }
 
-function flush(): void {
+function sendBatch(): void {
   flushTimer = null;
   const batch = [...queued];
   queued.clear();
@@ -51,7 +51,9 @@ function flush(): void {
     ).then((res) => {
       let changed = false;
       for (const [tool, calls] of Object.entries(res?.calls ?? {})) {
-        if (Array.isArray(calls) && calls.length > 0) { records.set(key(sid, tool), calls); changed = true; }
+        const k = key(sid, tool);
+        // A later answer may hold more (a loop's later sends): it replaces the earlier one.
+        if (Array.isArray(calls) && calls.length >= (records.get(k)?.length ?? 1)) { records.set(k, calls); changed = true; }
       }
       if (changed) emit();
     }).catch((err) => {
@@ -61,15 +63,16 @@ function flush(): void {
   }
 }
 
-/** Ask for one row's record (no-op when it is known, or already asked in this `generation`). */
+/** Ask for one row's records, once per `generation` of what the card knows of the
+ *  call: a row read while it ran is read again once it returned. */
 export function requestOpCalls(sessionId: string, toolUseId: string, generation: string): void {
   const k = key(sessionId, toolUseId);
-  if (records.has(k) || asked.get(k) === generation) return;
+  if (asked.get(k) === generation) return;
   asked.set(k, generation);
   let set = queued.get(sessionId);
   if (!set) queued.set(sessionId, (set = new Set()));
   set.add(toolUseId);
-  if (!flushTimer) flushTimer = setTimeout(flush, 0);
+  if (!flushTimer) flushTimer = setTimeout(sendBatch, 0);
 }
 
 export function getOpCalls(sessionId: string, toolUseId: string): OpCallRecord[] | undefined {

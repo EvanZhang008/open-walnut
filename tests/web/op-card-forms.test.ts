@@ -22,13 +22,16 @@ import { renderToStaticMarkup } from '../../web/node_modules/react-dom/server.no
 import { listOps } from '../../src/ops/index.js'
 import { MESSAGE_ARG_KEYS, NOT_CARDED, OP_CARDS, opCardFields } from '../../src/core/op-cards.js'
 import { detectOutboundCalls } from '@/components/sessions/session-outbound'
-import { SessionOutboundCards } from '@/components/sessions/SessionOutboundCard'
-import { _resetOpCallStore, _setOpCalls, type OpCallRecord } from '@/stores/op-call-store'
+import { pairWithRecords, SessionOutboundCards } from '@/components/sessions/SessionOutboundCard'
+import { _resetOpCallStore, _setOpCalls, requestOpCalls, type OpCallRecord } from '@/stores/op-call-store'
+import { apiPost } from '@/api/client'
 import type { SessionHistoryTool } from '@/types/session'
+import { findOpCalls } from '../../src/lib/walnut-op-command.js'
 
 vi.mock('@/utils/log', () => ({ log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} } }))
 // The markdown renderer needs a real DOM (DOMPurify); the folded card shows plain
 // fields, and the open card's words are the text itself here.
+vi.mock('@/api/client', () => ({ apiPost: vi.fn(async () => ({ calls: {} })) }))
 // Clicks need a router; this test reads what the card says.
 vi.mock('@/hooks/useEntityClickHandler', () => ({ useEntityClickHandler: () => () => {} }))
 vi.mock('@/hooks/useEntityLabels', () => ({
@@ -162,5 +165,60 @@ describe('prose and help never card', () => {
     expect(detectOutboundCalls(bash('walnut tools call thread_update --help'))).toEqual([])
     expect(detectOutboundCalls(bash('echo "walnut tools call brief_write now"'))).toEqual([])
     expect(detectOutboundCalls(bash("walnut tools call task_get '{\"id\":\"x\"}'"))).toEqual([])
+  })
+})
+
+/** The independent review's probes (2026-11-09), each turned to the behaviour it asked for. */
+describe('review regressions', () => {
+  it('a row with records for some calls keeps every call', () => {
+    const tool = bash(`walnut tools call task_send @a.json; walnut tools call thread_update '{"reply":"Second operation."}'; walnut tools call thread_update '{"reply":"Third operation."}'`)
+    const calls = detectOutboundCalls(tool)
+    expect(calls).toHaveLength(3)
+    const paired = pairWithRecords(calls, [recordFor('task_send')])
+    expect(paired.map((p) => [p.send.op, !!p.record])).toEqual([['task_send', true], ['thread_update', false], ['thread_update', false]])
+  })
+
+  it("a loop's later send names its own target, never the first one's", () => {
+    const result = JSON.stringify({ targetSessionId: 'session-A', targetTaskId: 'task-AAAA', delivery: 'queued' }) + '\n'
+      + JSON.stringify({ targetSessionId: 'session-B', targetTaskId: 'task-BBBB', delivery: 'queued' })
+    const tool = bash('for id in a b; do walnut tools call task_send "$(python3 make.py $id)"; done', 'toolu_1', result)
+    const first = { ...recordFor('task_send'), id: 'oc-a', fields: opCardFields('task_send', { to: 'task-AAAA', text: 'First actual message.' }, { targetTaskId: 'task-AAAA' })! }
+    const second = { ...recordFor('task_send'), id: 'oc-b', fields: opCardFields('task_send', { to: 'task-BBBB', text: 'Second actual message.' }, { targetTaskId: 'task-BBBB' })! }
+    const pairs = pairWithRecords(detectOutboundCalls(tool, result), [first, second])
+    expect(pairs).toHaveLength(2)
+    expect(pairs[1].send.target).toBeUndefined()
+    _setOpCalls(SID, 'toolu_1', [first, second])
+    const html = render(tool)
+    const cards = html.split('<div class="op-card-to">').slice(1)
+    expect(cards).toHaveLength(2)
+    expect(cards[0]).toContain('task-AAAA')
+    expect(cards[1]).toContain('Second actual message.')
+    expect(cards[1]).toContain('task-BBBB')
+    expect(cards[1]).not.toContain('task-AAAA')
+  })
+
+  it('a row read while its call ran is read again once it returned (a loop sends more)', async () => {
+    vi.mocked(apiPost).mockClear()
+    _setOpCalls(SID, 'toolu_loop', [recordFor('task_send')])
+    requestOpCalls(SID, 'toolu_loop', 'running')
+    requestOpCalls(SID, 'toolu_loop', 'running')
+    await vi.waitFor(() => expect(vi.mocked(apiPost)).toHaveBeenCalledTimes(1))
+    requestOpCalls(SID, 'toolu_loop', 'done')
+    await vi.waitFor(() => expect(vi.mocked(apiPost)).toHaveBeenCalledTimes(2))
+  })
+
+  it('a file another command may have changed claims nothing', () => {
+    const command = `echo '{"text":"NOT SENT"}' > a.json; python3 replace.py a.json; walnut tools call task_send @a.json`
+    expect(findOpCalls(command, () => true)[0].args).toBeUndefined()
+    expect(findOpCalls(`echo '{"text":"x"}' >> a.json; walnut tools call task_send @a.json`, () => true)[0].args).toBeUndefined()
+    expect(findOpCalls(`echo "{\\"text\\":\\"$MSG\\"}" > a.json; walnut tools call task_send @a.json`, () => true)[0].args).toBeUndefined()
+    expect(findOpCalls(`cat > a.json <<EOF\n{"text":"$MSG"}\nEOF\nwalnut tools call task_send @a.json`, () => true)[0].args).toBeUndefined()
+    // A quoted delimiter does not expand: the body is exactly what was sent.
+    expect(findOpCalls(`cat > a.json <<'EOF'\n{"text":"costs $5"}\nEOF\nwalnut tools call task_send @a.json`, () => true)[0].args?.text).toBe('costs $5')
+  })
+
+  it('a heredoc marker in a comment or inside quotes opens nothing', () => {
+    expect(findOpCalls(`# example <<EOF\nwalnut tools call task_send '{"text":"Actual call."}'`, () => true)[0].args?.text).toBe('Actual call.')
+    expect(findOpCalls(`python3 -c 'print("a <<EOF b")\nprint(2)'\nwalnut tools call task_send '{"text":"After quotes."}'`, () => true)[0].args?.text).toBe('After quotes.')
   })
 })

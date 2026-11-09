@@ -9232,21 +9232,21 @@ export class ClaudeCodeSession {
    * replaces this line with the person's answer.
    */
   /**
-   * The Bash call of this session that ran a command `matches` accepts: a call
-   * still running first (newest first), then one that returned in the last half
-   * hour (a background command). Lets the server tie a `walnut tools call` the
-   * session's CLI made back to the transcript row that made it (op-call-log.ts).
+   * The ONE Bash call of this session that ran a command `matches` accepts, or
+   * undefined when that is not certain: the one call still running that could have,
+   * else the one that returned in the last half hour (a background command) and holds
+   * no record of this op yet (`taken`). Two calls that could both have run it name
+   * neither: a record tied to the wrong row would show one message's words under
+   * another's command (op-call-log.ts), and an untied one leaves the card to the
+   * transcript.
    */
   bashCallMatching(matches: (command: string) => boolean, taken: ReadonlySet<string> = new Set()): string | undefined {
-    const open = [...this._openBashCalls].reverse()
-    for (const [id, command] of open) if (!taken.has(id) && matches(command)) return id
-    for (const [id, command] of open) if (matches(command)) return id
+    const one = (ids: string[]): string | undefined => (ids.length === 1 ? ids[0] : undefined)
+    const open = [...this._openBashCalls].filter(([, command]) => matches(command)).map(([id]) => id)
+    if (open.length > 0) return one(open)
     const since = Date.now() - 30 * 60_000
-    for (let i = this._closedBashCalls.length - 1; i >= 0; i--) {
-      const c = this._closedBashCalls[i]
-      if (c.closedAt >= since && !taken.has(c.id) && matches(c.command)) return c.id
-    }
-    return undefined
+    const closed = this._closedBashCalls.filter((c) => c.closedAt >= since && !taken.has(c.id) && matches(c.command)).map((c) => c.id)
+    return one([...new Set(closed)])
   }
 
   private async noteAllowedByRule(toolUseId: string, command: string): Promise<void> {

@@ -41,6 +41,8 @@ export interface OpCallEntry {
   ok: boolean
   error?: string
   fields: OpCardFields
+  /** The CLI's own id of the call, so a relay sent twice is kept once. */
+  key?: string
 }
 
 interface OpCallFile { sessionId: string; calls: OpCallEntry[] }
@@ -80,9 +82,10 @@ export function normalizeFields(op: string, raw: unknown): OpCardFields | null {
   }
 }
 
+/** Only the leader keeps them: a companion or a host's replica keeps none. */
 async function companion(): Promise<boolean> {
-  const { isCompanion } = await import('../server-role.js')
-  return isCompanion()
+  const { isFollower } = await import('../server-role.js')
+  return isFollower()
 }
 
 /** The session's Bash call that ran `op` (and `@path`), skipping calls that already hold one. */
@@ -104,6 +107,7 @@ export interface RecordInput {
   ok?: unknown
   error?: unknown
   fields?: unknown
+  key?: unknown
 }
 
 /** Record one call. Null when it is not one to keep (an op no card covers, a bad id, the companion). */
@@ -114,10 +118,13 @@ export async function recordOpCall(sid: string, input: RecordInput, now = new Da
   const form = FORMS.has(input.form as OpArgForm) ? input.form as OpArgForm : 'none'
   const filePath = str(input.path, 1000)
   const error = str(input.error, 600)
+  const key = typeof input.key === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(input.key) ? input.key : undefined
   let entry: OpCallEntry | null = null
   await fs.mkdir(dir(), { recursive: true })
   await updateJsonFile<OpCallFile | null>(file, null, async (cur) => {
     const calls = Array.isArray(cur?.calls) ? cur!.calls : []
+    const again = key ? calls.find((c) => c.key === key) : undefined
+    if (again) { entry = again; return cur! }
     // A loop sends several times from one row: those rows are not taken, the
     // matcher only prefers a row with none of this op yet.
     const taken = new Set(calls.filter((c) => c.op === input.op && c.toolUseId && Date.parse(c.at) > now.getTime() - 30 * 60_000).map((c) => c.toolUseId!))
@@ -132,6 +139,7 @@ export async function recordOpCall(sid: string, input: RecordInput, now = new Da
       ok: input.ok !== false,
       ...(error ? { error } : {}),
       fields,
+      ...(key ? { key } : {}),
     }
     return { sessionId: sid, calls: [...calls, entry].slice(-MAX_ENTRIES) }
   })

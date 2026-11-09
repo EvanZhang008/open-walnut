@@ -32,7 +32,7 @@ sessionOpCallsV1Router.post('/sessions/op-calls', async (req: Request, res: Resp
     const body = (req.body ?? {}) as Record<string, unknown>
     const op = typeof body.op === 'string' ? body.op : ''
     const { recordOpCall } = await import('../../core/sessions/op-call-log.js')
-    const entry = await recordOpCall(sid, { op, form: body.form, path: body.path, ok: body.ok, error: body.error, fields: body.fields })
+    const entry = await recordOpCall(sid, { op, form: body.form, path: body.path, ok: body.ok, error: body.error, fields: body.fields, key: body.key })
     if (!entry) { res.status(204).end(); return }
     res.json({ id: entry.id, ...(entry.toolUseId ? { toolUseId: entry.toolUseId } : {}) })
   } catch (err) {

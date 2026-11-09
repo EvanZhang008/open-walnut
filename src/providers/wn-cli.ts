@@ -815,6 +815,9 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
   let argsFile: string | undefined
   let spilledArgsFile: string | undefined
   let runId: string | null = null
+  // How the arguments arrived, for the session's chat card (recordCardedCall).
+  let argForm: 'inline' | 'file' | 'stdin' | 'none' = 'none'
+  let argPath: string | undefined
   // Every call's id (src/lib/op-call-id.ts), sent beside its name: a resend runs it at most
   // once, and op_result reads what it did when its answer is lost.
   let callId = ''
@@ -841,6 +844,8 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
       process.stderr.write(`walnut: ${source.message}\n`)
       return 2
     }
+    argForm = source.kind
+    if (source.kind === 'file') argPath = source.path
     let rawJson = ''
     if (source.kind === 'inline') rawJson = source.json
     else if (source.kind === 'stdin') {
@@ -989,6 +994,10 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
     return resp.ok ? 0 : errorToExitCode(resp.error.code)
   }
 
+  if (parsed.kind === 'tools.call' && argsFile === undefined) {
+    await recordCardedCall(socketPath, sid, parsed.name, callArgs, argForm, argPath, resp)
+  }
+
   if (!resp.ok) {
     const detail = parsed.kind === 'tools.call' && resp.error.detail !== undefined && !stoppingAnswer(resp)
     if (detail) {
@@ -1027,6 +1036,59 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
     await writeStdout(JSON.stringify(resp.result, null, 2) + '\n')
   }
   return 0
+}
+
+/** recordCardedCall for a call that went through this session's host daemon from
+ *  another CLI (src/commands/tools.ts): the record takes the same way, never HTTP. */
+export async function recordCardedCallViaDaemon(
+  name: string, args: Record<string, unknown>, form: 'inline' | 'file' | 'stdin' | 'flags' | 'none',
+  filePath: string | undefined, resp: GatewayResponse, env: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
+  const socket = (env.WALNUT_AGENT_SOCKET ?? '').trim()
+  const sid = (env.WALNUT_SESSION_ID ?? '').trim()
+  if (!socket || !sid) return
+  await recordCardedCall(socket, sid, name, args, form, filePath, resp)
+}
+
+/** How long a call's record may hold the CLI's exit (display data only). */
+const RECORD_TIMEOUT_MS = 2_000
+
+/**
+ * Leave Walnut a record of what a carded call said (core/op-cards.ts,
+ * core/sessions/op-call-log.ts), through the same gateway the call took, so the
+ * session's chat card shows the words of an `@file` or stdin payload after the
+ * file is gone. Only from a session, only for a carded op; never throws, never
+ * changes what the call printed or its exit code. A server that cannot answer
+ * costs the card its words, nothing else.
+ */
+async function recordCardedCall(
+  socketPath: string,
+  sid: string,
+  name: string,
+  args: Record<string, unknown>,
+  form: 'inline' | 'file' | 'stdin' | 'flags' | 'none',
+  filePath: string | undefined,
+  resp: GatewayResponse,
+): Promise<void> {
+  if (!sid || sid === EXTERNAL_CALLER_SID || process.env.WALNUT_OP_RECORD === '0') return
+  // No server to tell: the record would only wait out its timeout.
+  if (!resp.ok && (resp.error.code === 'hub_unreachable' || resp.error.code === 'hub_timeout')) return
+  try {
+    const { opCardFields } = await import('../core/op-cards.js')
+    const fields = opCardFields(name, args, resp.ok ? resp.result : resp.error.detail)
+    if (!fields) return
+    const record = {
+      // One key per call: a relay sent twice (a read op may be re-sent to the next server run) is kept once.
+      key: `${sid.slice(0, 8)}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
+      op: name,
+      form,
+      ...(filePath ? { path: filePath } : {}),
+      ok: resp.ok,
+      ...(!resp.ok ? { error: `${resp.error.code}: ${resp.error.message}`.slice(0, 600) } : {}),
+      fields,
+    }
+    await requestOverSocket(socketPath, { v: 1, op: 'tools.call', sid, args: { name: 'op_card_record', args: record } }, RECORD_TIMEOUT_MS)
+  } catch { /* display data only */ }
 }
 
 // ── walnut mcp-server — Walnut's ops as an MCP stdio server (walnut-mcp-stdio.ts) ──

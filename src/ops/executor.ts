@@ -537,7 +537,8 @@ export async function recordSessionOpCall(input: {
   form: string
   path?: string
 }): Promise<void> {
-  const sid = resolveCallerSid()
+  // A session's own CLI names its session in its env; a person's terminal has none.
+  const sid = (process.env.WALNUT_SESSION_ID ?? '').trim()
   if (!sid || humanCallerScope.getStore() === true) return
   try {
     const { opCardFields } = await import('../core/op-cards.js')
@@ -550,6 +551,6 @@ export async function recordSessionOpCall(input: {
       ok: input.ok,
       ...(input.error ? { error: input.error.slice(0, 600) } : {}),
       fields,
-    }, OP_CALL_RECORD_TIMEOUT_MS, { sid, origin: LOCAL_ORIGIN })
+    }, OP_CALL_RECORD_TIMEOUT_MS, { sid, explicitSid: sid, callerKind: 'agent', origin: LOCAL_ORIGIN })
   } catch { /* display data only */ }
 }

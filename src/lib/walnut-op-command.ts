@@ -28,6 +28,9 @@ export interface ShellToken {
   quoted: boolean
   /** True for a run of shell operators (`|`, `&&`, `;`, newline, …). */
   op: boolean
+  /** True when the shell would expand part of it (`$x`, `$(…)`, a backtick outside
+   *  single quotes): its value here is not what the command saw. */
+  expands?: boolean
 }
 
 export type OpArgForm = 'inline' | 'file' | 'stdin' | 'flags' | 'none'
@@ -56,6 +59,8 @@ const ENV_ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=/
 const MAX_COMMAND_CHARS = 400_000
 
 const HEREDOC_WORD = '\u0000HEREDOC'
+/** A heredoc body the shell expands: its text here is not what the command read. */
+const EXPANDED_BODY = '\u0000EXPANDED'
 
 /**
  * Split a shell command into words, undoing ONE level of quoting.
@@ -84,6 +89,7 @@ export function tokenizeCommand(command: string): ShellToken[] {
     }
     let value = ''
     let quoted = false
+    let expands = false
     while (i < n) {
       const ch = command[i]
       if (ch === ' ' || ch === '\t' || ch === '\r' || OPERATOR_CHARS.has(ch)) break
@@ -100,6 +106,7 @@ export function tokenizeCommand(command: string): ShellToken[] {
         i++
         while (i < n && command[i] !== '"') {
           if (command[i] === '\\' && i + 1 < n) { value += command[i + 1]; i += 2; continue }
+          if (command[i] === '$' || command[i] === '`') expands = true
           value += command[i++]
         }
         i++
@@ -127,65 +134,82 @@ export function tokenizeCommand(command: string): ShellToken[] {
         i += 2
         continue
       }
+      if (ch === '$' || ch === '`') expands = true
       value += ch
       i++
     }
-    tokens.push({ value, quoted, op: false })
+    tokens.push({ value, quoted, op: false, ...(expands ? { expands } : {}) })
   }
   return tokens
 }
 
-/** Where a quote opened at `from` closes on its line, or -1 (only the quote kinds a line needs). */
-function lineQuoteState(line: string): boolean[] {
-  // inQuote[i] = position i is inside a quote.
-  const out: boolean[] = []
-  let q: string | null = null
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i]
-    out.push(q !== null)
-    if (q) { if (c === q && (q === "'" || line[i - 1] !== '\\')) q = null; continue }
-    if (c === "'" || c === '"') q = c
-  }
-  return out
-}
-
 /**
  * Cut every heredoc body out of `command`. Each `<<DELIM` becomes one word the
- * tokenizer keeps (`\0HEREDOC<n>`), and its body is returned by index.
+ * tokenizer keeps (`\0HEREDOC<n>`), and its body is returned by index. One pass
+ * with the tokenizer's own lexical state: a `<<` inside quotes (single, double,
+ * across lines too) or after a `#` comment opens nothing, and `<<<` is a
+ * here-string.
  */
 export function extractHeredocs(command: string): { text: string; bodies: string[] } {
   if (!command.includes('<<')) return { text: command, bodies: [] }
-  const lines = command.split('\n')
-  const out: string[] = []
   const bodies: string[] = []
-  for (let li = 0; li < lines.length; li++) {
-    const line = lines[li]
-    const inQuote = lineQuoteState(line)
-    const pending: { strip: boolean; delim: string }[] = []
-    const re = /<<(-?)\s*(?:'([^']+)'|"([^"]+)"|\\?([A-Za-z_][A-Za-z0-9_]*))/g
-    let rebuilt = ''
-    let last = 0
-    for (let m = re.exec(line); m; m = re.exec(line)) {
-      // `<<<` is a here-string, not a heredoc.
-      if (line[m.index + 2] === '<' || line[m.index - 1] === '<' || inQuote[m.index]) continue
-      const delim = m[2] ?? m[3] ?? m[4]
-      rebuilt += `${line.slice(last, m.index)} ${HEREDOC_WORD}${bodies.length + pending.length} `
-      last = m.index + m[0].length
-      pending.push({ strip: m[1] === '-', delim })
-    }
-    out.push(rebuilt + line.slice(last))
-    for (const p of pending) {
-      const body: string[] = []
-      while (li + 1 < lines.length) {
-        const next = lines[++li]
-        const cmp = p.strip ? next.replace(/^\t+/, '') : next
-        if (cmp === p.delim) break
-        body.push(p.strip ? next.replace(/^\t+/, '') : next)
+  let out = ''
+  let quote: '"' | "'" | null = null
+  let comment = false
+  const pending: { strip: boolean; delim: string; expands: boolean }[] = []
+  const n = command.length
+  let i = 0
+  while (i < n) {
+    const c = command[i]
+    if (c === '\n') {
+      out += c
+      i++
+      comment = false
+      if (quote || pending.length === 0) continue
+      // The bodies of this line's heredocs follow it, one after another.
+      for (const p of pending) {
+        const body: string[] = []
+        while (i < n) {
+          const eol = command.indexOf('\n', i)
+          const line = command.slice(i, eol < 0 ? n : eol)
+          i = eol < 0 ? n : eol + 1
+          const cmp = p.strip ? line.replace(/^\t+/, '') : line
+          if (cmp === p.delim) break
+          body.push(cmp)
+        }
+        const text = body.join('\n')
+        // An unquoted delimiter expands `$x` and backticks in the body.
+        bodies.push(p.expands && /[$`]/.test(text) ? EXPANDED_BODY : text)
       }
-      bodies.push(body.join('\n'))
+      pending.length = 0
+      continue
     }
+    if (comment) { out += c; i++; continue }
+    if (quote) {
+      out += c
+      if (c === '\\' && quote === '"' && i + 1 < n) { out += command[i + 1]; i += 2; continue }
+      if (c === quote) quote = null
+      i++
+      continue
+    }
+    if (c === '\\' && i + 1 < n) { out += c + command[i + 1]; i += 2; continue }
+    if (c === "'" || c === '"') { quote = c; out += c; i++; continue }
+    if (c === '#' && (i === 0 || /[\s;|&()]/.test(command[i - 1]))) { comment = true; out += c; i++; continue }
+    if (c === '<' && command[i + 1] === '<' && command[i + 2] !== '<' && command[i - 1] !== '<') {
+      const m = /^<<(-?)\s*(?:'([^'\n]+)'|"([^"\n]+)"|\\?([A-Za-z_][A-Za-z0-9_]*))/.exec(command.slice(i, i + 200))
+      if (m) {
+        out += ` ${HEREDOC_WORD}${bodies.length + pending.length} `
+        pending.push({ strip: m[1] === '-', delim: m[2] ?? m[3] ?? m[4], expands: m[4] !== undefined })
+        i += m[0].length
+        continue
+      }
+    }
+    out += c
+    i++
   }
-  return { text: out.join('\n'), bodies }
+  // A heredoc whose line never ended: no body.
+  for (let k = 0; k < pending.length; k++) bodies.push('')
+  return { text: out, bodies }
 }
 
 function isWalnutBinary(word: string): boolean {
@@ -227,7 +251,7 @@ function segmentsOf(tokens: ShellToken[]): Segment[] {
 
 /** The text a segment writes to stdout or to a file, when it is a literal writer
  *  (`cat <<EOF`, `echo '…'`, `printf '%s' '…'`), with the file it redirects into. */
-function literalOutput(seg: Segment, bodies: string[]): { text: string; file?: string } | null {
+function literalOutput(seg: Segment, bodies: string[]): { text: string; file?: string; append?: boolean } | null {
   const w = seg.words
   if (w.length === 0) return null
   let i = 0
@@ -235,30 +259,33 @@ function literalOutput(seg: Segment, bodies: string[]): { text: string; file?: s
   const head = w[i]?.value
   if (!head) return null
   let file: string | undefined
+  let append = false
   const rest: ShellToken[] = []
   let heredoc: string | undefined
   for (let j = i + 1; j < w.length; j++) {
     const v = w[j].value
-    if (!w[j].quoted && (v === '>' || v === '>>')) { file = w[j + 1]?.value; j++; continue }
-    if (!w[j].quoted && /^>>?[^>&]/.test(v)) { file = v.replace(/^>>?/, ''); continue }
+    if (!w[j].quoted && (v === '>' || v === '>>')) { file = w[j + 1]?.value; append = v === '>>'; j++; continue }
+    if (!w[j].quoted && /^>>?[^>&]/.test(v)) { file = v.replace(/^>>?/, ''); append = v.startsWith('>>'); continue }
     if (!w[j].quoted && v.startsWith(HEREDOC_WORD)) { heredoc = bodies[Number(v.slice(HEREDOC_WORD.length))]; continue }
     if (!w[j].quoted && /^\d?>&?\d|^2>/.test(v)) continue
     rest.push(w[j])
   }
+  // A writer whose words the shell expands wrote something this reader cannot know.
+  if (heredoc === EXPANDED_BODY || rest.some((t) => t.expands)) return { text: '', ...(file ? { file } : {}), append: true }
   if (head === 'cat' || head === 'tee') {
     if (heredoc === undefined) return null
     if (head === 'tee' && rest[0] && !rest[0].value.startsWith('-')) file = rest[0].value
-    return { text: heredoc, ...(file ? { file } : {}) }
+    return { text: heredoc, ...(file ? { file } : {}), ...(append ? { append } : {}) }
   }
   if (head === 'echo') {
     const words = rest.filter((t, k) => !(k === 0 && !t.quoted && /^-[neE]+$/.test(t.value)))
-    return { text: words.map((t) => t.value).join(' '), ...(file ? { file } : {}) }
+    return { text: words.map((t) => t.value).join(' '), ...(file ? { file } : {}), ...(append ? { append } : {}) }
   }
   if (head === 'printf') {
     if (rest.length === 0) return null
     const fmt = rest[0].value
     const text = rest.length > 1 && /^%s\\?n?$/.test(fmt) ? rest.slice(1).map((t) => t.value).join('') : fmt.replace(/\\n/g, '\n')
-    return { text, ...(file ? { file } : {}) }
+    return { text, ...(file ? { file } : {}), ...(append ? { append } : {}) }
   }
   return null
 }
@@ -281,8 +308,15 @@ export function findOpCalls(command: string, wanted: (op: string) => boolean): C
     const call = opCallIn(seg, bodies, wanted, piped, files)
     if (call) out.push(call)
     const lit = literalOutput(seg, bodies)
-    if (lit?.file) files.set(lit.file, lit.text)
-    piped = seg.end === '|' && lit && !lit.file ? lit.text : undefined
+    if (lit?.file && !lit.append) files.set(lit.file, lit.text)
+    else {
+      // Any other command that names a file this one wrote may have changed it
+      // (`python3 fix.py a.json`, `sed -i … a.json`, `>> a.json`): what it holds
+      // now is not known, so the reader claims nothing about it.
+      for (const f of [...files.keys()]) if (!call && seg.words.some((w) => w.value.includes(f))) files.delete(f)
+      if (lit?.file) files.delete(lit.file)
+    }
+    piped = seg.end === '|' && lit && !lit.file && !lit.append ? lit.text : undefined
   }
   return out
 }
@@ -315,7 +349,7 @@ function opCallIn(
     const arg = words[0]
     if (arg && (arg.value === '--help' || arg.value === '-h')) return null
     const op = opTok.value
-    const stdin = heredoc ?? piped
+    const stdin = heredoc === EXPANDED_BODY ? undefined : heredoc ?? piped
     if (!arg) return { op, form: stdin !== undefined ? 'stdin' : 'none', ...(stdin !== undefined ? withArgs(stdin) : {}) }
     if (arg.value === '-' && !arg.quoted) return { op, form: 'stdin', ...(stdin !== undefined ? withArgs(stdin) : {}) }
     if (arg.value.startsWith('@')) {
