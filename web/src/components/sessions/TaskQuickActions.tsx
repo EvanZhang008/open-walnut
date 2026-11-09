@@ -228,9 +228,14 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
       if ((e.target as HTMLElement).closest?.('.task-kebab-project-flyout, .adopt-worker-flyout')) return;
       dismissKebab();
     };
-    // Capture, and taken (preventDefault): the open menu is the layer this Escape closes, so a
-    // full-screen panel under it stays (useFullscreen leaves only on an Escape nobody took).
-    const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); closeKebab(); } };
+    // The menu's Esc is its own: taken in the capture phase and consumed, so the layer under it
+    // (full screen, a Board peek tab) stays open (one Esc closes one layer).
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.isComposing) return;
+      e.preventDefault();
+      e.stopPropagation();
+      closeKebab();
+    };
     const handleScroll = (e: Event) => {
       if (kebabMenuRef.current?.contains(e.target as Node)) return;
       if ((e.target as HTMLElement).closest?.('.task-kebab-project-flyout, .adopt-worker-flyout')) return;

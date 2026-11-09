@@ -83,8 +83,8 @@ const sameList = (a: string[], b: string[]) => a.length === b.length && a.every(
 /**
  * The tool row (`.session-meta-row-2`): which `[data-header-id]` items stay and
  * which go to the row's "..." menu. Pass the row's ref; the hook
- * finds the items itself, so a chip the session does not offer (no Fork, Board or
- * Locate on a session known to have no task, no Terminal on a host without SSH)
+ * finds the items itself, so a chip the session does not offer (no Fork or Board
+ * on a session known to have no task, no Terminal on a host without SSH)
  * simply is not there. One that waits for the session record is there from the
  * first frame, disabled; one kept as a spacer (`data-header-spacer`) is an item
  * like the control it stands in for, so the row folds exactly as before.

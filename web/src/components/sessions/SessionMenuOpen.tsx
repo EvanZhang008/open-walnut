@@ -50,8 +50,9 @@ export interface SessionMenuOpenProps {
   onPlan?: () => void;
   /** The Board row's own handler (a host that draws the board itself), else the split view. */
   onBoard?: () => void;
-  /** Locate the task on Home ("Find on Home" off it); absent when there is no task to find. */
-  locate?: { label: string; onClick: () => void };
+  /** Locate the task on Home ("Find on Home" off it); absent when there is no task to find,
+   *  `waiting` (why) while the session record that names the task is still on its way. */
+  locate?: { label: string; onClick: () => void; waiting?: string | null };
   onPopout?: () => void;
   onFullscreen?: () => void;
   /** A column shown inside another surface (a task opened from a Board): its views open by locating the task, so it offers none of the header's. */
@@ -99,7 +100,7 @@ export function SessionMenuOpen(p: SessionMenuOpenProps) {
     <>
       {/* Locate is a row of its own, by its name, as Watch is among the task's rows below
           (2026-11-09, the user of the header's crosshair and eye: "this 2 put iot in the drop down"). */}
-      {p.locate && <Row icon={ICON_LOCATE} label={p.locate.label} onClick={() => { close(); p.locate!.onClick(); }} testId="session-menu-locate" />}
+      {p.locate && <Row icon={ICON_LOCATE} label={p.locate.label} disabled={!!p.locate.waiting} why={p.locate.waiting ?? undefined} onClick={() => { close(); p.locate!.onClick(); }} testId="session-menu-locate" />}
       <KebabGroup
         label="Open"
         hint={`changed · files${p.board !== 'none' ? ' · board' : ''} · inbox · code · web${hintCount ? ` (${hintCount})` : ''}`}

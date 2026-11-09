@@ -18,7 +18,7 @@
  * The rules of what is a chip live in pages/sessionTaskbar.ts; this file only draws.
  */
 import '@/styles/session-taskbar.css';
-import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type DragEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 import type { Task } from '@open-walnut/core';
 import { needsLineText } from '@open-walnut/user-status';
@@ -140,6 +140,35 @@ function RecentMore({ ids, tasks, onRestore, onClose }: { ids: readonly string[]
     refs: [menuRef, btnRef],
     onClose: (reason) => { setOpen(false); if (reason === 'escape') btnRef.current?.focus({ preventScroll: true }); },
   });
+  const items = () => Array.from(menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? []);
+  // Opened, the first row takes the focus; the arrows move between the rows (and their x).
+  useEffect(() => {
+    if (!open) return;
+    const t = requestAnimationFrame(() => items()[0]?.focus({ preventScroll: true }));
+    return () => cancelAnimationFrame(t);
+  }, [open]);
+  const onMenuKey = (e: ReactKeyboardEvent) => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Home' && e.key !== 'End') return;
+    e.preventDefault();
+    const list = items();
+    if (list.length === 0) return;
+    const at = list.indexOf(document.activeElement as HTMLElement);
+    const next = e.key === 'Home' ? 0 : e.key === 'End' ? list.length - 1
+      : e.key === 'ArrowDown' ? (at + 1) % list.length : (at - 1 + list.length) % list.length;
+    list[next]?.focus({ preventScroll: true });
+  };
+  // x on a row: the focus goes to the row that takes its place; the last row gone takes the menu
+  // and its button with it, so then to the last Recent pill.
+  const remove = (sid: string) => {
+    const at = ids.indexOf(sid);
+    const group = btnRef.current?.closest('.session-taskbar-recent') ?? null;
+    onClose(sid);
+    requestAnimationFrame(() => {
+      const rows = Array.from(menuRef.current?.querySelectorAll<HTMLElement>('.session-taskbar-more-row .session-taskbar-open') ?? []);
+      const pills = Array.from(group?.querySelectorAll<HTMLElement>('.session-taskbar-recent-pill .session-taskbar-open') ?? []);
+      (rows[Math.min(at, rows.length - 1)] ?? (btnRef.current?.isConnected ? btnRef.current : pills[pills.length - 1]))?.focus({ preventScroll: true });
+    });
+  };
   return (
     <>
       <button
@@ -161,6 +190,7 @@ function RecentMore({ ids, tasks, onRestore, onClose }: { ids: readonly string[]
           data-testid="session-taskbar-recent-more-menu"
           style={menuPlacementStyle(placement)}
           onPointerDown={(e) => e.stopPropagation()}
+          onKeyDown={onMenuKey}
         >
           {ids.map((sid) => (
             <RecentMoreRow
@@ -168,7 +198,7 @@ function RecentMore({ ids, tasks, onRestore, onClose }: { ids: readonly string[]
               sessionId={sid}
               task={taskOfSession(tasks, sid)}
               onRestore={(id) => { setOpen(false); onRestore(id); }}
-              onClose={onClose}
+              onClose={remove}
             />
           ))}
         </div>,
@@ -187,7 +217,7 @@ function RecentMoreRow({ sessionId, task, onRestore, onClose }: { sessionId: str
         <span className="session-taskbar-dot" aria-hidden="true" />
         <span className="session-taskbar-title">{title}</span>
       </button>
-      <button type="button" className="session-taskbar-close" onClick={() => onClose(sessionId)} aria-label={`Remove ${title} from Recent`}>
+      <button type="button" role="menuitem" className="session-taskbar-close" onClick={() => onClose(sessionId)} aria-label={`Remove ${title} from Recent`}>
         {ICON_CLOSE}
       </button>
     </div>

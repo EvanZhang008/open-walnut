@@ -1,6 +1,6 @@
 /**
- * The session header controls that need the session's task (Fork, Board,
- * Locate), decided so the tool row never moves when the record lands.
+ * The session header controls that need the session's task (Fork, Board),
+ * decided so the tool row never moves when the record lands.
  *
  * 2026-10-11: Fork rendered nothing until the record named the task, then
  * appeared in front of Changed and Files and pushed them right, so a click
@@ -44,7 +44,7 @@ export function headerTaskPresence(
 }
 
 /**
- * How the row draws Fork, Board and Locate on this frame: as the controls,
+ * How the row draws Fork and Board on this frame: as the controls,
  * as spacers, or not at all.
  *
  * Drawn ('live') while the session has a task or may have one. Once a panel

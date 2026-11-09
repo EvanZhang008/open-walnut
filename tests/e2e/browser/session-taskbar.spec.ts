@@ -187,6 +187,55 @@ test('Watch on a task the board does not hold (an archived one) brings it onto t
   await expect(watching.getByText('Archived migration plan')).toHaveCount(0)
 })
 
+test('Watch clicked while its write is still on its way reads Stop watching when the menu opens again', async ({ page }) => {
+  const ARCHIVED = 'mpwold01-aa11'
+  await page.route(`**/api/sessions/${SESSION_ID}`, async (route) => {
+    const response = await route.fetch()
+    const body = await response.json()
+    if (body.session) body.session.taskId = ARCHIVED
+    else body.taskId = ARCHIVED
+    await route.fulfill({ response, json: body })
+  })
+  // The task's write takes 3 s (a slow network): the menu row unmounts long before its echo.
+  const writes: string[] = []
+  await page.route(`**/api/tasks/${ARCHIVED}`, async (route) => {
+    if (route.request().method() !== 'PATCH') return route.fallback()
+    writes.push(String((route.request().postDataJSON() as { watched_at?: string }).watched_at ?? ''))
+    await new Promise((r) => setTimeout(r, 3000))
+    await route.fallback()
+  })
+  await page.addInitScript((id) => {
+    localStorage.setItem('open-walnut-layout:home-columns', JSON.stringify({ v: 1, value: [{ id, locked: false }] }))
+  }, SESSION_ID)
+  await page.goto('/')
+  await page.waitForLoadState('networkidle')
+  const panel = page.locator(`.main-page-session-column .session-panel[data-session-id="${SESSION_ID}"]`)
+  await expect(panel).toBeVisible({ timeout: 30_000 })
+  await (await kebabRow(panel, 'task-kebab-watch')).click()
+  await expect(page.locator('.task-kebab-menu')).toHaveCount(0)
+  // Opened again at once: the click, not the stale task.
+  const watch = await kebabRow(panel, 'task-kebab-watch')
+  await expect(watch).toHaveText('Stop watching')
+  await watch.click()
+  await expect.poll(() => writes.length).toBe(2)
+  expect(writes[0]).not.toBe('')
+  expect(writes[1]).toBe('')
+  await expect((await kebabRow(panel, 'task-kebab-watch'))).toHaveText('Watch', { timeout: 15_000 })
+  await closeSessionKebab(panel)
+})
+
+test('Esc on the session menu closes the menu only: full screen stays, and the next Esc leaves it', async ({ page }) => {
+  const panel = await openSessionPanel(page)
+  await panel.locator('.session-panel-expand').click()
+  await expect(panel).toHaveClass(/open-walnut-fullscreen/)
+  await openSessionKebab(panel)
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.task-kebab-menu')).toHaveCount(0)
+  await expect(panel).toHaveClass(/open-walnut-fullscreen/)
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.open-walnut-fullscreen')).toHaveCount(0)
+})
+
 test('Watch in the session menu keeps the task on the Watching list, and reads Stop watching while on', async ({ page }) => {
   const panel = await openSessionPanel(page)
   // The search that found the task hides the Watching section: clear it.

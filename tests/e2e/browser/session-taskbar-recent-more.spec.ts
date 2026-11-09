@@ -71,9 +71,21 @@ test('Recent shows at most two pills, the rest behind "N more": 0, 1, 2, 3 and 1
     expect(box.x + box.width).toBeLessThanOrEqual(vp.width)
     expect(box.y + box.height).toBeLessThanOrEqual(vp.height)
     await beat(page)
-    // x on a row takes it off Recent; the menu stays open with one row fewer.
-    await rows.first().getByRole('button', { name: /Remove .* from Recent/ }).click()
+    // The keyboard: the first row has the focus on open, and the arrows walk the rows and their x.
+    await expect(rows.first().locator('.session-taskbar-open')).toBeFocused()
+    await page.keyboard.press('ArrowDown')
+    await expect(rows.first().locator('.session-taskbar-close')).toBeFocused()
+    await page.keyboard.press('ArrowUp')
+    await expect(rows.first().locator('.session-taskbar-open')).toBeFocused()
+    // x on a row takes it off Recent; the menu stays open with one row fewer, the focus on the row
+    // that took its place (with none left, the menu and its button go: on the last pill).
+    await rows.first().getByRole('menuitem', { name: /Remove .* from Recent/ }).click()
     await expect(rows).toHaveCount(n - 3)
+    if (n - 3 > 0) await expect(rows.first().locator('.session-taskbar-open')).toBeFocused()
+    else {
+      await expect(more(page)).toHaveCount(0)
+      await expect(pills(page).last().locator('.session-taskbar-open')).toBeFocused()
+    }
     await expect(pills(page)).toHaveCount(2)
     await beat(page)
     // Escape closes it.

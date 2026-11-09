@@ -5,7 +5,7 @@
  * "pin": Focus and the pinned board already are pins. One field, `watched_at`, the
  * time the watch began; clearing it ends the watch. Nothing else about the task moves.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useSyncExternalStore } from 'react';
 import type { Task } from '@open-walnut/core';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { updateTask } from '@/api/tasks';
@@ -14,13 +14,34 @@ import * as ICONS from '../common/Icons';
 import { isWatched } from './status-sections';
 import '@/styles/task-watch.css';
 
+/**
+ * A plain PATCH's value, per task, until its echo (or a failure) arrives, so the eye and the menu
+ * row answer the click. Kept outside any component: the kebab's row unmounts with the menu, and a
+ * menu opened again before the echo still reads the click (2026-11-09 review).
+ */
+interface PendingWatch { value: string; write: number; base: string | null }
+const pendingWatch = new Map<string, PendingWatch>();
+const pendingListeners = new Set<() => void>();
+let writeSeq = 0;
+function setPendingWatch(id: string, next: PendingWatch | null): void {
+  if (next) pendingWatch.set(id, next); else pendingWatch.delete(id);
+  for (const l of pendingListeners) l();
+}
+function subscribePending(l: () => void): () => void {
+  pendingListeners.add(l);
+  return () => { pendingListeners.delete(l); };
+}
+
 export function useWatchToggle(task: Pick<Task, 'id'> & { watched_at?: string | null }) {
   const store = useTasksContextSafe();
-  // A plain PATCH's value until its echo (or a failure) arrives, so the eye answers the click.
-  const [pending, setPending] = useState<string | null>(null);
-  const writes = useRef(0);
-  useEffect(() => { setPending(null); }, [task.watched_at]);
-  const watched = pending !== null ? pending !== '' : isWatched(task);
+  const pending = useSyncExternalStore(subscribePending, () => pendingWatch.get(task.id), () => pendingWatch.get(task.id));
+  const base = task.watched_at ?? null;
+  // The task moved since the click (its echo, or anyone's later write): that is the truth now.
+  useEffect(() => {
+    const p = pendingWatch.get(task.id);
+    if (p && p.base !== base) setPendingWatch(task.id, null);
+  }, [task.id, base]);
+  const watched = pending && pending.base === base ? pending.value !== '' : isWatched(task);
   // Off the board's store (a session menu on the Org page), a plain PATCH; the
   // task:updated it broadcasts refreshes whoever shows the task.
   // A task the board's store does not hold (an archived one a session panel opened) is a plain
@@ -29,12 +50,12 @@ export function useWatchToggle(task: Pick<Task, 'id'> & { watched_at?: string | 
   const toggle = () => {
     const watched_at = watched ? '' : new Date().toISOString();
     if (store && store.tasks.some((t) => t.id === task.id)) { store.update(task.id, { watched_at }); return; }
-    setPending(watched_at);
-    const write = ++writes.current;
+    const write = ++writeSeq;
+    setPendingWatch(task.id, { value: watched_at, write, base });
     void updateTask(task.id, { watched_at }).catch((err) => {
       log.warn('task-watch', 'watch write failed', { taskId: task.id, error: String(err) });
       // Only the latest click's value is shown: an older write failing leaves it.
-      if (write === writes.current) setPending(null);
+      if (pendingWatch.get(task.id)?.write === write) setPendingWatch(task.id, null);
       store?.showOperationError(`Could not ${watched_at ? 'watch' : 'stop watching'} the task: ${err instanceof Error ? err.message : String(err)}`);
     });
   };

@@ -585,7 +585,13 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
       if ((e.target as HTMLElement).closest?.('.task-kebab-project-flyout, .adopt-worker-flyout')) return;
       closeMenu();
     };
-    const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeMenu(); };
+    // Its Esc is its own (capture phase, consumed): the layer under it stays open (TaskQuickActions.tsx).
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.isComposing) return;
+      e.preventDefault();
+      e.stopPropagation();
+      closeMenu();
+    };
     // Three different scroll cases, deliberately:
     //  1. Inside the menu — the menu scrolls its own overflow now, so this must
     //     NOT dismiss it (that would make the fix unusable).
@@ -608,11 +614,11 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
       if (r && (r.bottom < 0 || r.top > window.innerHeight)) closeMenu();
     };
     document.addEventListener('mousedown', handleClickOutside);
-    document.addEventListener('keydown', handleKey);
+    document.addEventListener('keydown', handleKey, true);
     window.addEventListener('scroll', handleScroll, true);
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
-      document.removeEventListener('keydown', handleKey);
+      document.removeEventListener('keydown', handleKey, true);
       window.removeEventListener('scroll', handleScroll, true);
     };
   }, [open, closeMenu, cursorAnchor]);

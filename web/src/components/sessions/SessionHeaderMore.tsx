@@ -6,7 +6,8 @@
  * `SessionHeaderMoreMenu` is the "..." chip on the tool row and its menu: one row
  * per hidden view chip (Changed, Files, Board, Terminal, Fork, a plugin fact
  * the user pinned to the header), then, after a divider, one per hidden window button (Open in new tab,
- * Locate task).
+ * Minimize). Watch and Locate are no header buttons any more: they are rows of the kebab, by name
+ * (2026-11-09, the user: "this 2 put iot in the drop down").
  *
  * Its rows proxy to the REAL element, which stays mounted under `data-hidden="true"`
  * (see useSessionHeaderFit.ts): a click on a row is `.click()` on it, and a

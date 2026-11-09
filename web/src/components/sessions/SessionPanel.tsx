@@ -340,7 +340,7 @@ interface SessionPanelProps {
    * Rendered INSIDE another surface (the home page's Ask Walnut slot) rather than
    * as a session column. The panel behaves exactly like a column's — close (the
    * host decides what closing means: the slot hides itself), popout, fullscreen,
-   * locate all stay. The ONE control hidden is lock: it pins a panel within the
+   * and the kebab's Locate all stay. The ONE control hidden is lock: it pins a panel within the
    * column rotation, and there is no rotation here.
    */
   embedded?: boolean;
@@ -380,7 +380,7 @@ interface SessionPanelProps {
    *  home page's column answers by closing itself. Not called while the panel is fullscreen. */
   onTaskCompleted?: (sessionId: string, info: { taskId: string; from: TaskPhase; title?: string }) => void;
   onTaskClick?: (taskId: string) => void;
-  /** The header's Locate button: find this panel's task in the task panel. Its session is
+  /** The kebab's Locate row: find this panel's task in the task panel. Its session is
    *  already on screen, so unlike onTaskClick it must not open (and so reorder) any column. */
   onLocateTask?: (taskId: string) => void;
   /** Open the task's full-screen detail modal (shared with the home task panel). */
@@ -572,7 +572,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   const toolRowRef = useRef<HTMLDivElement>(null);
   // A narrow title row puts its labels on a line under the title (useTitleRowTight.ts).
   const [titleRowRef, titleRowTight] = useTitleRowTight();
-  // Fork, Board and Locate need the session's task. Whether they exist is decided
+  // Fork and Board (and the kebab's Locate) need the session's task. Whether they exist is decided
   // on the first frame from what this page already knows (the status store, which
   // every list naming the session seeds); a session known to have no task gets
   // none of them, one with a task gets them in place, disabled until the record
@@ -2750,10 +2750,14 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
       onBoard={onHostBoard}
       terminal={terminalOffered && !inset}
       onPlan={hasPlanContent || showExecuteButtons ? () => setPlanPopoverOpen(true) : undefined}
-      locate={taskSlot === 'live' && session?.taskId && !locateWaitReason ? {
+      // Drawn, disabled with the reason, while the record that names the task is on its way, so
+      // the row is there from the first opening of the menu (as the header button was).
+      locate={taskSlot === 'live' ? {
         label: onLocateTask ?? onTaskClick ? 'Locate task' : 'Find on Home',
+        waiting: locateWaitReason ?? (session?.taskId ? null : 'Locate becomes available once the session has loaded'),
         onClick: () => {
-          const taskId = session.taskId!;
+          const taskId = session?.taskId;
+          if (!taskId) return;
           const locate = onLocateTask ?? onTaskClick;
           if (locate) locate(taskId); else locateTaskOnHome(taskId, navigate, { sessionId });
         },
@@ -2918,9 +2922,9 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
         >
           {/* Two-row header, and the split is deliberate (2026-07-27):
               ROW 1 = tool chips (Fork / Changed / Files / Board / Terminal / Plan) + time
-                      + EVERY icon button (locate / lock / popout / expand / close).
+                      + EVERY icon button (minimize / lock / popout / expand / close).
                       The row holds still while the session record loads: the chips that
-                      need the session's task (Fork, Board, Locate) exist or not from the
+                      need the session's task (Fork, Board) exist or not from the
                       first frame, by what the page already knows of the task
                       (headerTaskPresence), and wait disabled for the record only while it
                       loads. A session known to have no task never shows them; once
@@ -3144,7 +3148,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
               {/* Watch and Locate are rows of the kebab, by their names (2026-11-09, the user of
                   the eye and the crosshair here: "this 2 put iot in the drop down"). */}
               {/* The three that matter most sit together at the right end, always in this
-                  order: Lock, Expand, Close. Open in new tab and Locate come before them,
+                  order: Lock, Expand, Close. Minimize and Open in new tab come before them,
                   so a narrow column drops those two first and the three never move. */}
               {/* Inset (a task opened from a Board): no popout or fullscreen of its own. */}
               {!inset && (
