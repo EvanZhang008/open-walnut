@@ -71,6 +71,8 @@ import { ThreadQuoteHead } from './ThreadQuoteHead';
 import { ThreadAskedFromList } from './ThreadAskedFromList';
 import { ThreadStackHeader } from './ThreadStackHeader';
 import { isSidePage, useTreeHalf } from './tree-half-context';
+import { placeKeyOf } from './reading-place';
+import { useReadingPlace } from './useReadingPlace';
 import { ThreadTurnLabel } from './ThreadTurnLabel';
 import { foldGroupOf, foldOpenKeys, foldParts, isFolded } from '@/utils/thread-fold';
 import { envelopeSteps, foldStepsPhrase, walnutCompactLine, type FoldStep } from './fold-steps';
@@ -1419,6 +1421,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   }, [sid8]);
 
   // Reset on session switch
+  const resetSidRef = useRef<string | null>(null);
   useEffect(() => {
     // Always-on mount marker: lets forensics tell N mounts of the same session
     // apart (SessionPanel vs FocusDock vs popout vs second tab). One line per
@@ -1437,11 +1440,17 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     blockIndexMap.current.clear();
     consumedQueueIds.current.clear();
     notifiedConsumedIds.current.clear();
-    isAtBottom.current = true;
+    // A mount starts there already (its refs' first values); writing them again
+    // here, after the layout effects, would undo the place the box was put back
+    // at and count bubbles already shown as a send (useReadingPlace).
+    if (resetSidRef.current !== null && resetSidRef.current !== sessionId) {
+      isAtBottom.current = true;
+      prevOptimisticLen.current = 0;
+    }
+    resetSidRef.current = sessionId;
     firstScrollDone.current = false;
     initialLoadDone.current = false;
     ignoreScrollUntil.current = 0;
-    prevOptimisticLen.current = 0;
     setShowScrollArrow(false);
     if (scrollRafId.current !== null) { cancelAnimationFrame(scrollRafId.current); scrollRafId.current = null; }
     if (resizeTimerRef.current) { clearTimeout(resizeTimerRef.current); resizeTimerRef.current = null; }
@@ -1624,6 +1633,22 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // initial-load "always to the bottom" never overrides it; following does.
   const onQuestionPageRef = useRef(onQuestionPage);
   useLayoutEffect(() => { onQuestionPageRef.current = onQuestionPage; }, [onQuestionPage]);
+  // Each page goes back to where the reader left it, in whichever box shows it
+  // (reading-place.ts). While a kept place owns the landing, no load path forces
+  // the box to the bottom (`readingPlace.held`, read next to onQuestionPageRef).
+  const widenWindow = useCallback((count: number) => {
+    setTruncationOffset((t) => (count > t ? count : t));
+  }, []);
+  const readingPlace = useReadingPlace({
+    sessionId, pageKey: placeKeyOf(stackMode, currentKey), view: stackMode ? 'stack' : 'linear',
+    containerRef, isAtBottom, messages, renderNonce: `${messages.length}:${truncationOffset}`, widenWindow,
+    loaded: !loading && !phase2Pending && messages.length > 0,
+    older: (olderHidden > 0 || olderWindowed) && !olderUnavailable, loadOlder: loadFullHistory,
+  });
+  const { release: releasePlace, carryRow: carryPlaceRow } = readingPlace;
+  const placeHeldFn = useCallback(() => readingPlace.held.current, [readingPlace.held]);
+  /** The page's landing is not the load's to make: a question page, or a kept place. */
+  const landingOwnedRef = useRef(() => onQuestionPageRef.current || readingPlace.held.current);
   const currentKeyRef = useRef(currentKey);
   currentKeyRef.current = currentKey;
   // A remembered scrollTop belongs to the page it was taken on: another page's
@@ -1833,13 +1858,14 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       // the passage's row where the reader selected it while the new view settles.
       const row = containerRef.current?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(target.msgId)}"]`);
       if (row) askHold.current = { msgId: target.msgId, top: row.getBoundingClientRect().top, until: performance.now() + ASK_HOLD_MS };
+      carryPlaceRow(target.msgId);
       keepCardOnSwitch.current = { sessionId, mode: 'linear' };
       threadsApi.setViewMode('linear');
     }
     stack.ask({ msgId: target.msgId, quote: target.quote }, { focusComposer: false });
     setCardOpen(true);
     setCardOverKey(null);
-  }, [stack, sessionId, stackMode, threadsApi.viewMode, threadsApi.setViewMode]);
+  }, [stack, sessionId, stackMode, threadsApi.viewMode, threadsApi.setViewMode, carryPlaceRow]);
   const askHold = useRef<{ msgId: string; top: number; until: number } | null>(null);
   useLayoutEffect(() => {
     const hold = askHold.current;
@@ -2646,7 +2672,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const phase2PendingRef = useRef(phase2Pending);
   useEffect(() => { phase2PendingRef.current = phase2Pending; }, [phase2Pending]);
   const debouncedScroll = useCallback((reason: string) => {
-    const forceScroll = phase2PendingRef.current && !initialLoadDone.current && !onQuestionPageRef.current;
+    const forceScroll = phase2PendingRef.current && !initialLoadDone.current && !landingOwnedRef.current();
     if (!forceScroll && !isAtBottom.current) return;
     // Suppress resize-induced scroll events during debounce window
     ignoreScrollUntil.current = Date.now() + 350;
@@ -2654,7 +2680,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     resizeTimerRef.current = setTimeout(() => {
       resizeTimerRef.current = null;
       const el = containerRef.current;
-      const force = phase2PendingRef.current && !initialLoadDone.current && !onQuestionPageRef.current;
+      const force = phase2PendingRef.current && !initialLoadDone.current && !landingOwnedRef.current();
       if (!el || (!force && !isAtBottom.current)) {
         if (!isAtBottom.current && !force) scrollLog('debounced', `SKIP(${reason})`, el);
         return;
@@ -2720,6 +2746,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       if (stopped) return;
       // A question page owns its landing (a reload restores it): never pin it.
       if (onQuestionPageRef.current) { stop(); return; }
+      // A kept place owns it while it holds: skip the frame (a place that turns
+      // out not to be drawn any more lets the pin take the bottom again).
+      if (readingPlace.held.current) { raf = requestAnimationFrame(pin); return; }
       frame++;
       const el = containerRef.current;
       if (el && !selectionActive()) {
@@ -2787,7 +2816,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     return n;
   }, [optimisticMessages, stackMode, rowThreadKey, currentKey, pagePending, threadTree]);
   // A move to another page brings that page's bubbles along: no send, no follow.
-  const bubblePageRef = useRef(currentKey);
+  // A box that mounts with bubbles already there (Main moving into the left
+  // page while a send is on its way) counts them as there, not as a send.
+  const bubblePageRef = useRef<string | null>(null);
   useLayoutEffect(() => {
     const len = ownBubbleCount;
     if (bubblePageRef.current !== currentKey) {
@@ -2797,11 +2828,12 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
     // A card's send still in flight holds it (the count drops when its send returns).
     if (len > prevOptimisticLen.current && cardSendHold.current === 0) {
+      releasePlace();
       isAtBottom.current = true;
       setShowScrollArrow(false);
     }
     prevOptimisticLen.current = len;
-  }, [ownBubbleCount, currentKey]);
+  }, [ownBubbleCount, currentKey, releasePlace]);
 
   // 送达标记和等待提示会在后续帧增高内容，保持原本贴底的阅读位置。
   useEffect(() => {
@@ -2823,7 +2855,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // stuck at the top. During initial loading, user hasn't meaningfully scrolled up.
   useLayoutEffect(() => {
     if (!containerRef.current || messages.length === 0) return;
-    const forceScroll = phase2Pending && !initialLoadDone.current && !onQuestionPageRef.current; // initial load only
+    const forceScroll = phase2Pending && !initialLoadDone.current && !landingOwnedRef.current(); // initial load only
     if (!forceScroll && !isAtBottom.current) return;
     // Selection wins over follow-bottom even on forced initial-load scrolls —
     // the user selecting means they're reading, not waiting for the bottom.
@@ -2958,10 +2990,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const handleScrollToBottom = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
+    releasePlace();
     el.scrollTop = el.scrollHeight;
     isAtBottom.current = true;
     setShowScrollArrow(false);
-  }, []);
+  }, [releasePlace]);
 
   // Parent-requested jump to the bottom (a quote-to-ask prefill). Deliberately
   // NOT gated on isAtBottom or the selection guard: those protect the AUTOMATIC
@@ -2972,6 +3005,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // which shrinks this scroller a frame or two later.
   useEffect(() => {
     if (!scrollToBottomNonce) return;
+    releasePlace();
     let frames = 0;
     let raf = 0;
     const chase = () => {
@@ -2984,6 +3018,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     };
     raf = requestAnimationFrame(chase);
     return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per request
   }, [scrollToBottomNonce]);
 
   // ── Deduplicate optimistic messages against persisted history ──
@@ -4336,7 +4371,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   });
   useThreadLanding({
     sessionId, enabled: stackMode, targetOnly: threadsApi.viewMode === 'linear', containerRef, stack, tree: threadTree,
-    locatePassage, jumpToPlace, toast, isAtBottom, settleLayout: threadMap.settle,
+    locatePassage, jumpToPlace, toast, isAtBottom, settleLayout: threadMap.settle, placeAt: readingPlace.placeAt, keepPlace: readingPlace.keep, adoptPlace: readingPlace.adopt, placeHeld: placeHeldFn,
   });
 
   /** Conversation Mode: the label above a question's user row (the turn head)

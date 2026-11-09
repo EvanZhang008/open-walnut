@@ -27,15 +27,6 @@
 }
 
 /* ── Left-edge band: no layout width, no pointer events (geometry only). ── */
-.thread-drawer-edge {
-  position: absolute; top: 0; bottom: 0; left: 0; width: 8px; z-index: 20; pointer-events: none;
-}
-.thread-drawer-edge::after {
-  content: ''; position: absolute; left: 2px; top: 50%; width: 3px; height: 28px; border-radius: 2px;
-  background: var(--fg-muted); opacity: 0; transform: translateY(-50%);
-  transition: opacity 120ms ease, height 160ms ease, background-color 120ms ease;
-}
-.thread-drawer-edge[data-armed="true"]::after { opacity: 0.9; height: 64px; background: var(--accent); }
 
 /* ── Drawer overlay (spec 6.2): absolute inside the panel, opaque body, glass
    only on the 12px band around it. Never touches the transcript's box (C7). ── */
@@ -350,7 +341,7 @@
   .thread-drawer { animation: thread-drawer-fade-in 120ms linear; }
   .thread-drawer[data-state="closing"] { animation: thread-drawer-fade-out 120ms linear forwards; }
   .thread-tree-row[data-pulse="true"], .thread-tree-skeleton { animation: none; }
-  .thread-tree-disclosure svg, .thread-drawer-edge::after { transition: none; }
+  .thread-tree-disclosure svg { transition: none; }
 }
 @keyframes thread-drawer-fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes thread-drawer-fade-out { from { opacity: 1; } to { opacity: 0; } }

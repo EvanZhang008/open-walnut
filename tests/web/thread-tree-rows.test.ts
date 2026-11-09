@@ -4,6 +4,8 @@
  * the browser specs load (30 questions, 5 levels, 10 pins).
  */
 import { describe, it, expect } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
 import { buildThreadTree, ROOT_THREAD_KEY, type ThreadTreeMessage } from '@/utils/thread-tree';
 import { counts, indexMeta, openBelow, type ThreadMetaIndex } from '@/utils/thread-meta';
 import type { SessionPinnedMessage, SessionThreadAnchor, SessionThreadMeta } from '@/types/session';
@@ -13,7 +15,6 @@ import {
   type FlattenOptions, type TreeRow,
 } from '@/utils/thread-tree-rows';
 import { buildDenseSession, DENSE_EXPECTED_COUNTS } from '../e2e/browser/threads-fixture';
-import { shouldArmEdge } from '@/hooks/useDrawerEdgePeek';
 import { insidePeekRegion } from '@/hooks/useDrawerPeekClose';
 import { pathItems } from '@/components/sessions/ThreadStackCrumbs';
 import { answeredAgo } from '@/components/sessions/ThreadTreeRows';
@@ -348,18 +349,10 @@ describe('performance (C38)', () => {
 });
 
 describe('drawer and stack chrome rules', () => {
-  const panel = { left: 400, top: 0, right: 900, bottom: 800 };
-  const band = { left: 400, top: 0, right: 408, bottom: 800 };
-  const arm = (prev: { x: number; y: number } | null, extra: Partial<Parameters<typeof shouldArmEdge>[0]> = {}) =>
-    shouldArmEdge({ prev, now: { x: 403, y: 300 }, panel, band, buttons: 0, selectionPill: false, ...extra });
-
-  it('the edge arms only on an entry from this panel content (C63)', () => {
-    expect(arm({ x: 520, y: 300 })).toBe(true);
-    expect(arm({ x: 380, y: 300 })).toBe(false);
-    expect(arm(null)).toBe(false);
-    expect(arm({ x: 520, y: 300 }, { buttons: 1 })).toBe(false);
-    expect(arm({ x: 520, y: 300 }, { selectionPill: true })).toBe(false);
-    expect(arm({ x: 520, y: 300 }, { rail: { left: 400, top: 200, right: 430, bottom: 500 } })).toBe(false);
+  it('the list never opens from the pointer passing the left edge, only from its marker (2026-11-09)', () => {
+    const drawer = fs.readFileSync(path.resolve(__dirname, '../../web/src/components/sessions/ThreadTreeDrawer.tsx'), 'utf8');
+    expect(drawer).not.toMatch(/useDrawerEdgePeek|thread-drawer-edge|setMode\('peek'\)/);
+    expect(fs.existsSync(path.resolve(__dirname, '../../web/src/hooks/useDrawerEdgePeek.ts'))).toBe(false);
   });
 
   it('peek stays open inside [panel.left - 40, drawer.right + 18] x [top - 18, bottom + 18] (C28)', () => {

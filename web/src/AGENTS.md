@@ -397,6 +397,21 @@ show inline after the open ones, other completed hits that show the query fold i
   `thread-stack.v1:<sid>` plus the `t<n>` URL leaf); landing on a pop is `useThreadLanding`
   (restore scroll, correct once, flash the passage, `armBack: false` so a pop never arms the
   outline's Back). The pure rules live in `utils/thread-stack-state.ts` and are unit tested.
+  **Every page keeps the reader's place, whichever box shows it** (2026-11-09, the user: "when
+  click from main chat and then it jump to bottom while open a another pannel", "it shoudl alwys
+  remmebret the location"): `components/sessions/reading-place.ts` keeps it per session and page
+  (Conversation Mode's main conversation shares Main's), by content (the rows on screen and their
+  height, or "at the end"), in memory and localStorage (the newest 30 sessions, so a Mac app
+  restart keeps it too); `useReadingPlace`, inside
+  SessionChatHistory, is its one owner: it records a box the reader moved, and the page a box
+  leaves as it shows it (the stack's capture, `keep`), restores before
+  paint on every mount, page change and view switch (Main moving into a Tree Mode side page, a
+  slide, full screen, a reload, a place older than the loaded tail), holds it against late layout,
+  and while it holds every forced load scroll and the bottom pin stand down (`landingOwnedRef`); a
+  send or the arrow lets go (`release`). The stack landing defers to a kept place (`placeAt`),
+  except a pop in the same box to the place it left, untouched since: that lands as a pop, the
+  passage at its screen height (C4) and flashed (`adopt`).
+  Ratchets: `tests/web/reading-place.test.ts`, `tests/e2e/browser/session-reading-place.spec.ts`.
   **Asking opens a page before anything is written**: a pending page (`pending:<parent>:<hash>`)
   holds the quote head and an empty composer; the first send does ONE PATCH carrying
   `thread_anchors` + `thread_meta` together, and the text the model sees is composed into the

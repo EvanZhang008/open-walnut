@@ -826,10 +826,64 @@ export function buildSplitSession(): ThreadsFixtureSession {
   };
 }
 
+/** Its own session for the reading-place spec (session-reading-place.spec.ts):
+ *  a long main conversation (twelve turns, a long answer each) with a question
+ *  asked from the third answer and one from the eighth, each three turns long,
+ *  filed between the main turns as a real transcript has them. Every page is
+ *  taller than its box, so each has a place to keep. */
+export const PLACE_SESSION = 'pw-threads-place-session';
+export const PLACE_TASK = 'pw-task-threads-place';
+export const PLACE_READY = 'Main turn 1: how does the cache start?';
+export const PLACE_PASSAGES = {
+  Q1: 'The third answer explains why the warm pages are read first.',
+  Q2: 'The eighth answer says when a cold page is dropped.',
+} as const;
+export const PLACE_TITLES = { Q1: 'Warm pages first', Q2: 'Dropping cold pages' } as const;
+
+export function buildPlaceSession(): ThreadsFixtureSession & { mainAnswer: (n: number) => string } {
+  const P = 'b8c9d0';
+  let k = 0;
+  const t = () => { k++; return { u: fxUuid(P, k, 'u'), a: fxUuid(P, k, 'a') }; };
+  const main = Array.from({ length: 12 }, () => t());
+  const q1 = Array.from({ length: 3 }, () => t());
+  const q2 = Array.from({ length: 3 }, () => t());
+  const S = PLACE_PASSAGES;
+  const long = (seed: number) => filler(seed, 260);
+  const rows: FixtureRow[] = [];
+  const mainTurn = (i: number) => {
+    rows.push({ role: 'user', uuid: main[i].u, text: i === 0 ? PLACE_READY : `Main turn ${i + 1}: and then?` });
+    const lead = i === 2 ? `${S.Q1} ` : i === 7 ? `${S.Q2} ` : '';
+    rows.push({ role: 'assistant', uuid: main[i].a, text: `Main answer ${i + 1}. ${lead}${long(700 + i)}` });
+  };
+  const qTurns = (ids: typeof q1, quote: string, name: string, seed: number) => ids.forEach((x, j) => {
+    rows.push({ role: 'user', uuid: x.u, text: j === 0 ? `> ${quote}\n\n${name} turn 1: why?` : `${name} turn ${j + 1}: more?` });
+    rows.push({ role: 'assistant', uuid: x.a, text: `${name} answer ${j + 1}. ${long(seed + j)}` });
+  });
+  for (let i = 0; i < 4; i++) mainTurn(i);
+  qTurns(q1, S.Q1, 'Q1', 800);
+  for (let i = 4; i < 9; i++) mainTurn(i);
+  qTurns(q2, S.Q2, 'Q2', 820);
+  for (let i = 9; i < 12; i++) mainTurn(i);
+  const at = '2026-11-08T02:00:00.000Z';
+  const q = (ids: typeof q1, parent: string, quote: string, title: string, seq: number) => ({
+    // A follow-up copies the question's anchor (one key = one question).
+    anchors: ids.map((x, j) => ({ msgId: x.u, parent, quote: { exact: quote }, source: j === 0 ? 'selection' as const : 'sticky' as const, at })),
+    meta: { headId: ids[0].u, status: 'open' as const, title, titleSource: 'ai' as const, titleState: 'done' as const, question: 'why?', seq, thread: String(seq), updatedAt: at },
+  });
+  const qs = [q(q1, main[2].a, S.Q1, PLACE_TITLES.Q1, 1), q(q2, main[7].a, S.Q2, PLACE_TITLES.Q2, 2)];
+  return {
+    sessionId: PLACE_SESSION, taskId: PLACE_TASK, title: 'Threads reading place fixture session',
+    rows, parked: [], pinnedMessages: [],
+    threadAnchors: qs.flatMap((x) => x.anchors),
+    threadMeta: qs.map((x) => x.meta),
+    mainAnswer: (n: number) => main[n - 1].a,
+  };
+}
+
 export function allThreadsFixtures(nowMs: number): ThreadsFixtureSession[] {
   return [
     buildDenseSession(nowMs), buildAiSession(), buildCommentsSession(), buildDocCommentsSession(), buildFailedSession(nowMs), buildRewrittenSession(nowMs), buildReloadSession(),
-    buildMapSession(nowMs), buildPinsOnlySession(nowMs), buildTaggedSession(nowMs), buildQueuedSession(), buildMergedSession(), buildMidTurnSession(), buildStrictSession(), buildSplitSession(),
+    buildMapSession(nowMs), buildPinsOnlySession(nowMs), buildTaggedSession(nowMs), buildQueuedSession(), buildMergedSession(), buildMidTurnSession(), buildStrictSession(), buildSplitSession(), buildPlaceSession(),
     buildReviewSession(nowMs), buildReviewOldSession(nowMs),
   ];
 }

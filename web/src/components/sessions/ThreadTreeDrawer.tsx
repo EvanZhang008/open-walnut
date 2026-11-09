@@ -5,8 +5,12 @@
  * glass would make the titles' contrast swing), glass only on the outer 12px
  * shadow band.
  *
- * Modes (6.1): `closed` renders only the 8px left-edge band (hover entry);
- * `peek` closes by pointer geometry (useDrawerPeekClose); `open` closes on Esc
+ * Modes (6.1): `closed` renders nothing: the list opens only from its own
+ * marker (the question map's rail or list button) or the shortcut, never from
+ * the pointer passing the panel's left edge (2026-11-09, the user: "only if i go
+ * there this pannel shod the other reglar like middel left shoudln't"; the 8px
+ * edge band that opened it on a dwell is gone). `peek` (kept for the pointer
+ * close, useDrawerPeekClose) has no entry now; `open` closes on Esc
  * (the search is cleared first), the toggle, the × and an outside click
  * (toast, selection pill, confirm and menu portals exempt). A row jump closes
  * either mode; focus goes back to what had it before the drawer opened.
@@ -19,7 +23,6 @@ import type { ThreadDrawerFilter, ThreadTreeDrawerProps } from '@/components/ses
 import { THREAD_OVERLAY_SELECTOR } from '@/components/sessions/ThreadConfirm';
 import { ThreadCloseIcon, ThreadSearchIcon } from '@/components/sessions/ThreadIcons';
 import { ThreadTreeRows, type ThreadTreeRowsHandle } from '@/components/sessions/ThreadTreeRows';
-import { useDrawerEdgePeek } from '@/hooks/useDrawerEdgePeek';
 import { useDrawerPeekClose } from '@/hooks/useDrawerPeekClose';
 import {
   chipCounts, counts as countQuestions, hiddenKeysOf, isOpenish, metaOf, openChipTitle, pluralQuestions, statusOf, summaryText,
@@ -232,7 +235,6 @@ export function ThreadTreeDrawer(p: ThreadTreeDrawerProps) {
     || document.activeElement === searchRef.current
     || document.querySelector(`${THREAD_OVERLAY_SELECTOR}[data-thread-overlay="confirm"], .thread-menu`) !== null, [overlayOpen]);
   useDrawerPeekClose({ active: mode === 'peek', panelRef, drawerRef, blocked, onClose: () => close(false) });
-  const edge = useDrawerEdgePeek({ panelRef, enabled: mode === 'closed' && tree.threads.length > 1, onPeek: () => setMode('peek') });
 
   const onJumped = useCallback(() => close(false), [close]);
   const clearSearch = useCallback(() => { setQuery(''); searchRef.current?.focus({ preventScroll: true }); }, [setQuery]);
@@ -262,10 +264,7 @@ export function ThreadTreeDrawer(p: ThreadTreeDrawerProps) {
     close();
   };
 
-  if (mode === 'closed' && !visible) {
-    if (tree.threads.length <= 1) return null;
-    return <div ref={edge.edgeRef} className="thread-drawer-edge" data-armed={edge.armed ? 'true' : undefined} aria-hidden="true" />;
-  }
+  if (mode === 'closed' && !visible) return null;
 
   const chips = chipCounts(c);
   const summary = summaryText(c);

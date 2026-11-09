@@ -90,6 +90,7 @@ const READER_SCROLLS: Record<string, string> = {
   'web/src/components/sessions/phone-session-layer.tsx': 'the reader tapped the bar title (C53)',
   'web/src/hooks/usePhoneRestore.ts': "a reload puts back the reader's own saved place",
   'web/src/components/sessions/SessionChatHistory.tsx': 'the open-time landing, decided by phoneTurnStartStep',
+  'web/src/components/sessions/useReadingPlace.ts': "a page put back where the reader left it (reading-place.ts)",
 }
 
 function sources(dir: string, out: string[] = []): string[] {

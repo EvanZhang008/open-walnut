@@ -51,6 +51,22 @@ export interface UseThreadLandingArgs {
    * gutter that changes a frame later is off by the rewrap (C4).
    */
   settleLayout?: () => void;
+  /**
+   * When a page's reading place was kept (useReadingPlace), if it has one. Such
+   * a page goes back exactly where the reader left it, which that hook restores
+   * before this runs; a landing here would move it (2026-11-09, the user: "it
+   * shoudl alwys remmebret the location"). Except a pop in this box to a place
+   * this box left and nobody moved since: the pop's landing below is that same
+   * place, kept at the passage's height on screen (C4), and it flashes.
+   */
+  placeAt?: (pageKey: string) => number | undefined;
+  /** Keep the reading place of the page this box is leaving (useReadingPlace's
+   *  `keep`), called from the stack's capture before its rows are swapped. */
+  keepPlace?: (pageKey: string) => void;
+  /** This hook lands the page itself: the kept place lets go (useReadingPlace's `adopt`). */
+  adoptPlace?: () => void;
+  /** A kept place holds the box now (a view switch carried the rows on screen). */
+  placeHeld?: () => boolean;
 }
 
 function prefersReducedMotion(): boolean {
@@ -121,6 +137,8 @@ export function useThreadLanding(args: UseThreadLandingArgs): void {
   const argsRef = useRef(args);
   argsRef.current = args;
   /** The passage each page was left for (the pending page's lives only here). */
+  /** When this box last left each page with the passage it opened on screen (the stack's capture). */
+  const leftAt = useRef(new Map<string, number>());
   const passages = useRef(new Map<string, Passage>());
 
   const passageOf = useCallback((childKey: string, pending?: ThreadPendingPage): Passage | undefined => {
@@ -140,13 +158,20 @@ export function useThreadLanding(args: UseThreadLandingArgs): void {
     stack.setCapture((from, to, pending) => {
       const el = containerRef.current;
       if (!el) return;
+      argsRef.current.keepPlace?.(from);
       const rec: PageLanding = { scrollTop: el.scrollTop, boxTop: el.getBoundingClientRect().top };
       const passage = passageOf(to, pending);
+      let seen = false;
       if (passage && rowOf(el, passage.msgId)) {
         const top = rangeTop(el, argsRef.current.locatePassage(passage));
         if (top !== undefined) rec.sentenceTop = top;
+        // On screen, or gone from the answer (the pop lands on the answer and says why).
+        seen = top === undefined || (top >= 0 && top <= el.clientHeight);
         passages.current.set(from, passage);
       }
+      // A pop back lands on the passage only where the reader left with it on screen.
+      if (seen) leftAt.current.set(from, Date.now());
+      else leftAt.current.delete(from);
       argsRef.current.stack.landings.set(from, rec);
     });
     return () => stack.setCapture(null);
@@ -217,7 +242,9 @@ export function useThreadLanding(args: UseThreadLandingArgs): void {
     // path that lands settles it: one that returns leaves a gutter change to the
     // map's own hold, which keeps the reading position.
     const settle = () => argsRef.current.settleLayout?.();
+    const placeAt = argsRef.current.placeAt;
     if (!fresh || !nav) {
+      if (reenabled && (placeAt?.(stack.currentKey) !== undefined || argsRef.current.placeHeld?.())) return;
       const rec = reenabled ? stack.landings.get(stack.currentKey) : undefined;
       if (!rec) return;
       settle();
@@ -226,6 +253,28 @@ export function useThreadLanding(args: UseThreadLandingArgs): void {
       return holdScroll(el, rec.scrollTop);
     }
     settle();
+    const keptAt = placeAt?.(nav.to);
+    const left = leftAt.current.get(nav.to);
+    // A pop to the place this box left with its passage on screen (kept then,
+    // untouched since) lands as a pop: the passage where it was, flashed.
+    const ownPop = nav.direction === 'pop' && left !== undefined && (keptAt === undefined || keptAt <= left);
+    if (ownPop) argsRef.current.adoptPlace?.();
+    if (keptAt !== undefined && !ownPop) {
+      // Back to the reader's own place (already restored); the passage a pop
+      // comes back to only flashes, and only where it is on screen once the
+      // place settled (the chrome above the box can still be leaving now).
+      const child = nav.direction === 'pop' ? nav.popped[nav.popped.length - 1] : undefined;
+      const passage = child ? passageOf(child) : undefined;
+      if (!passage) return;
+      let raf = requestAnimationFrame(() => {
+        raf = requestAnimationFrame(() => {
+          const range = rowOf(el, passage.msgId) ? argsRef.current.locatePassage(passage) : null;
+          const top = rangeTop(el, range);
+          if (range && top !== undefined && top >= 0 && top <= el.clientHeight) flashRange(range);
+        });
+      });
+      return () => cancelAnimationFrame(raf);
+    }
     argsRef.current.isAtBottom.current = false;
     if (nav.direction !== 'none') slide(el, nav.direction);
     if (nav.direction === 'pop') {
@@ -265,5 +314,5 @@ export function useThreadLanding(args: UseThreadLandingArgs): void {
     return () => { clearTimeout(timer); el.removeEventListener('scroll', onScroll); };
   }, [enabled, containerRef, currentKey]);
 
-  useEffect(() => { passages.current.clear(); }, [args.sessionId]);
+  useEffect(() => { passages.current.clear(); leftAt.current.clear(); }, [args.sessionId]);
 }

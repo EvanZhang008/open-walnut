@@ -597,8 +597,6 @@ export const ThreadMap = memo(function ThreadMap(p: ThreadMapProps) {
           // Explicit: WebKit (the Mac app) leaves a bare <button> out of the Tab
           // order, and the rail is the map's one tab stop in this shape.
           tabIndex={0}
-          // The drawer's edge peek never arms over the rail (or its open list).
-          {...(open ? {} : { 'data-thread-rail': '' })}
           aria-expanded={open}
           aria-label={`Questions map: ${pluralQuestions(p.counts.all)}`}
           // Opens only: the list covers the rail, so a toggle here could only
@@ -627,7 +625,7 @@ export const ThreadMap = memo(function ThreadMap(p: ThreadMapProps) {
         </button>
       </div>
       {open && (
-        <div className="thread-map-overlay" data-thread-rail="">
+        <div className="thread-map-overlay">
           <MapList {...p} maxHeight={maxHeight} overlay onDone={doneFromOverlay} onToggleShape={toggleShape} onArchiveRow={archiveRow} />
         </div>
       )}

@@ -234,7 +234,10 @@ test.describe('Question stack', () => {
     await shot(page, 'c5-sliver-dark')
     await page.evaluate(() => { delete document.documentElement.dataset.theme })
 
-    // The outermost bar pops straight to root and flashes ONE landing.
+    // The outermost bar pops straight to root: at most ONE landing flashes, the
+    // passage it came from, and root comes back where the reader left it (it is
+    // flashed only when on screen there: 2026-11-09, the user: "it shoudl alwys
+    // remmebret the location").
     await page.evaluate(() => {
       const w = window as unknown as { __flashes: string[] }
       w.__flashes = []
@@ -248,11 +251,10 @@ test.describe('Question stack', () => {
     await bars.first().click()
     await expectDepth(panel, 0)
     await expect(bars).toHaveCount(0)
-    await expect.poll(() => page.evaluate(() => (window as unknown as { __flashes: string[] }).__flashes.length)).toBeGreaterThan(0)
-    await page.waitForTimeout(900)
+    await page.waitForTimeout(1500)
     const flashes = await page.evaluate(() => (window as unknown as { __flashes: string[] }).__flashes)
-    expect(flashes, 'only the final landing flashes').toHaveLength(1)
-    expect(flashes[0]).toContain('Point 6:')
+    expect(flashes.length, 'only the final landing flashes').toBeLessThanOrEqual(1)
+    for (const f of flashes) expect(f).toContain('Point 6:')
   })
 
   test('sliver geometry: beside the content column; a drag does not pop; hover names the level', async ({ page }) => {

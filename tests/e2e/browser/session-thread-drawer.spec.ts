@@ -129,35 +129,37 @@ test.describe('tree drawer', () => {
     await expect(drawer).toHaveCount(0)
   })
 
-  test('the left edge peeks only on an entry from inside the panel content (C63, C28)', async ({ page }) => {
-    const panel = await openDense(page, { width: 700 })
+  test('passing the left edge never opens the list; only its marker does (2026-11-09)', async ({ page }) => {
+    // The user: "only if i go there this pannel shod the other reglar like middel
+    // left shoudln't". A narrow column draws the map as its rail of marks.
+    const panel = await openDense(page, { width: 560 })
+    const history = panel.locator('.session-history').first()
+    const hb = await box(history)
     const pb = await box(panel)
-    const y = pb.y + pb.height / 2
-    // From outside the panel (a neighbour, the sidebar): never arms.
-    await page.mouse.move(Math.max(1, pb.x - 30), y)
-    await page.mouse.move(pb.x + 3, y, { steps: 2 })
-    await page.waitForTimeout(1000)
+    // Along the whole left edge, coming in from the text (the old 8px band's
+    // entry) and dwelling well past its old 300ms.
+    for (const share of [0.3, 0.5, 0.7, 0.9]) {
+      const y = hb.y + hb.height * share
+      await page.mouse.move(pb.x + 220, y, { steps: 3 })
+      await page.mouse.move(pb.x + 3, y, { steps: 6 })
+      await page.waitForTimeout(700)
+      await page.mouse.move(pb.x + 1, y + 30, { steps: 3 })
+      await page.waitForTimeout(400)
+      await expect(drawerOf(panel), `left edge at ${share}`).toHaveCount(0)
+      await expect(panel.locator('.thread-map-overlay'), `left edge at ${share}`).toHaveCount(0)
+    }
+    // The marker opens it: a click on the rail's marks (nothing here pops up on a
+    // pass of the pointer, 2026-10-23).
+    const map = panel.locator('.session-panel-body .thread-map')
+    await expect(map).toHaveAttribute('data-shape', 'rail')
+    const rail = map.locator('.thread-map-rail')
+    const rb = await box(rail)
+    await page.mouse.move(rb.x + rb.width / 2, rb.y + rb.height / 2, { steps: 6 })
+    await page.waitForTimeout(700)
+    await expect(map.locator('.thread-map-overlay')).toHaveCount(0)
+    await page.mouse.click(rb.x + rb.width / 2, rb.y + rb.height / 2)
+    await expect(map.locator('.thread-map-overlay')).toBeVisible({ timeout: 3000 })
     await expect(drawerOf(panel)).toHaveCount(0)
-    // Leave the band, then come in from the content: peeks after the dwell.
-    await page.mouse.move(pb.x + 200, y, { steps: 4 })
-    await page.mouse.move(pb.x + 3, y, { steps: 6 })
-    await expect(drawerOf(panel)).toHaveAttribute('data-mode', 'peek', { timeout: 2000 })
-    // Moving over rows (they re-render under the pointer) does not close it.
-    const d = await box(drawerOf(panel))
-    for (let i = 0; i < 6; i++) await page.mouse.move(d.x + 40 + i * 20, d.y + 120 + i * 30, { steps: 3 })
-    await page.waitForTimeout(600)
-    await expect(drawerOf(panel)).toHaveAttribute('data-mode', 'peek')
-    // Out of the extended rect: closes after ~260ms.
-    await page.mouse.move(pb.right - 60, y + 40, { steps: 6 })
-    await expect(drawerOf(panel)).toHaveCount(0, { timeout: 2000 })
-    // Peek again; a focused search blocks the close.
-    await page.mouse.move(pb.x + 200, y, { steps: 6 })
-    await page.mouse.move(pb.x + 3, y, { steps: 6 })
-    await expect(drawerOf(panel)).toHaveAttribute('data-mode', 'peek', { timeout: 2000 })
-    await drawerOf(panel).locator('.thread-drawer-search-input').evaluate((el) => (el as HTMLInputElement).focus())
-    await page.mouse.move(pb.right - 60, y + 40, { steps: 6 })
-    await page.waitForTimeout(800)
-    await expect(drawerOf(panel)).toHaveAttribute('data-mode', 'peek')
   })
 
   test('rows: disclosure only with children, pins under their question, current row selected (C29)', async ({ page }) => {

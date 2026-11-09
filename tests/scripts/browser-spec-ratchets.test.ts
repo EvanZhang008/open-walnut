@@ -1276,6 +1276,8 @@ describe('a test that loads a page again after it opened full screen or a split 
     // replayed draft, the newer words a reload must bring back.
     'file-doc-bar.spec.ts': ['nothing open lists the files read last', 'a draft replayed on open reaches disk on its own', 'an older write landing keeps the newer', 'text typed and reloaded at once comes back'],
     'session-thread-review-sidebar.spec.ts': ['a card shows its whole thread with its own scroll'],
+    // The full-screen split that comes back holds each pane's reading place, the check.
+    'session-reading-place.spec.ts': ['a reload brings each pane back to its place'],
     // Each tab keeps its own view (dc8132c6b): the second tab's load is the check.
     'view-state-tabs.spec.ts': ["another tab's session panel view never moves this tab's"],
     // The Terminal view that comes back is the check: each terminal reattached after a
