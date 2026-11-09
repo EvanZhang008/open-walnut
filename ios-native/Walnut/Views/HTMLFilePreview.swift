@@ -430,7 +430,7 @@ final class HTMLPreviewLoader {
         var request = URLRequest(url: url)
         if ignoringCache { request.cachePolicy = .reloadIgnoringLocalCacheData }
         if let token {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.authorizeForWalnut(token: token)
         }
         return request
     }

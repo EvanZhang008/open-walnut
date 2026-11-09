@@ -33,7 +33,7 @@ enum SessionMediaDownload {
         guard let url = WalnutAPI.rawFileContentURL(path: path, host: host),
               let token = AppConfig.token else { throw APIError.notConfigured }
         var request = URLRequest(url: url)
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.authorizeForWalnut(token: token)
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.timeoutInterval = 300
         return request

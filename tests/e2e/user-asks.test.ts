@@ -35,6 +35,7 @@ import { teamSnapshotText } from '../../src/core/org/team-note.js'
 import { applyOwedAnswer, owedQuestionFor, readUserAsks, wakeIdleOwed } from '../../src/core/sessions/user-asks.js'
 import { openAsks, type UserAsksFile } from '../../src/core/sessions/user-asks-model.js'
 import { bus } from '../../src/core/event-bus.js'
+import { withTestRun } from '../../src/core/test-run.js'
 import { STATUS_SETTLE_MS } from '../../src/core/sessions/status-question.js'
 
 const WORKER_SID = '66666666-7777-4888-9999-000000000001'
@@ -96,6 +97,8 @@ describe('the user asks a task owes', () => {
     await typeIntoChat(WORKER_SID, QUESTION, { threadKey: 'qm-1' })
     await typeIntoChat(WORKER_SID, QUESTION, { threadKey: 'qm-1' })
     await typeIntoChat(WORKER_SID, 'a side question', { threads: false })
+    // A test run's words (a phone or browser under automation, core/test-run.ts) are never his.
+    await withTestRun('ios-uitest', () => typeIntoChat(WORKER_SID, 'Stop everything and just say pineapple.'))
     await vi.waitFor(async () => { expect(openAsks(await readUserAsks(workerId))).toHaveLength(1) }, { timeout: 5_000, interval: 50 })
     const open = openAsks(await readUserAsks(workerId))
     expect(open.map((a) => a.text)).toEqual([QUESTION])
@@ -103,6 +106,8 @@ describe('the user asks a task owes', () => {
     await typeIntoChat(LEAD_SID, 'how is the tunnel going?')
     await expect(fs.access(path.join(WALNUT_HOME, 'user-asks', `${leadId}.json`))).rejects.toThrow()
     expect((await fs.stat(path.join(WALNUT_HOME, 'org', 'threads', `${leadId}.json`))).isFile()).toBe(true)
+    await withTestRun('ios-uitest', () => typeIntoChat(LEAD_SID, 'Pineapple status, please.'))
+    expect(await fs.readFile(path.join(WALNUT_HOME, 'org', 'threads', `${leadId}.json`), 'utf8')).not.toContain('Pineapple')
   })
 
   it('the status question lists it; "on it" keeps it owed, an answer closes it', async () => {

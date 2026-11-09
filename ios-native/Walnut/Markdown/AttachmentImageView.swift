@@ -310,7 +310,7 @@ final class AttachmentLoader {
         var request = URLRequest(url: resolved.url)
         if resolved.needsAuth {
             guard let token else { return nil }
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.authorizeForWalnut(token: token)
         }
         guard let (data, _) = await CappedDownloadDelegate(maxBytes: AttachmentLimits.networkBytes).fetch(request),
               let image = downsample(data)

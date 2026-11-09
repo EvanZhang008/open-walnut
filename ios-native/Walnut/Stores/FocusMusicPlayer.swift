@@ -335,7 +335,7 @@ final class FocusMusicPlayer {
     private func item(for track: RhythmMusicListing.Track) -> AVPlayerItem? {
         guard let url = WalnutAPI.rawFileContentURL(path: track.file), let token = AppConfig.token else { return nil }
         // The raw route needs the device token; AVURLAsset sends it on every range request.
-        let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": ["Authorization": "Bearer \(token)"]])
+        let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": TestRunMark.headers(token: token)])
         return AVPlayerItem(asset: asset)
     }
 

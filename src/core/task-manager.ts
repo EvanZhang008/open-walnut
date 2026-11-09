@@ -712,11 +712,12 @@ async function readStoreView(): Promise<TaskStore> {
 }
 
 /** Ids of the tasks a plugin keeps to its own view (Task.plugin_only), read off the cached
- *  snapshot without copying it: the general surfaces drop these rows. */
-export async function pluginOnlyTaskIds(): Promise<Set<string>> {
+ *  snapshot without copying it: the general surfaces drop these rows. `testViewer`: a test
+ *  run's own request, which sees test tasks (test-run.ts), so they are not among them. */
+export async function pluginOnlyTaskIds(opts: { testViewer?: boolean } = {}): Promise<Set<string>> {
   const store = await readStoreView();
   const ids = new Set<string>();
-  for (const t of store.tasks) if (t.plugin_only) ids.add(t.id);
+  for (const t of store.tasks) if (t.plugin_only && !(opts.testViewer && isTestRunTask(t))) ids.add(t.id);
   return ids;
 }
 

@@ -25,9 +25,7 @@ struct WalnutAPI {
     func testStatus(serverURL: String, token: String?) async throws -> ServerStatus {
         guard let base = URL(string: AppConfig.normalize(serverURL)) else { throw APIError.notConfigured }
         var request = URLRequest(url: base.appendingPathComponent("api/v1/status"))
-        if let token, !token.isEmpty {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
+        request.authorizeForWalnut(token: token)
         let (data, response) = try await perform(request)
         return try Self.decode(ServerStatus.self, data: data, response: response)
     }
@@ -649,7 +647,7 @@ struct WalnutAPI {
         var request = URLRequest(url: url)
         request.httpMethod = method
         if let timeout { request.timeoutInterval = timeout }
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.authorizeForWalnut(token: token)
         if let body {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try JSONEncoder().encode(body)

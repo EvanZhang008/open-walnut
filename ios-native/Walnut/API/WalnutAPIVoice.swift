@@ -52,7 +52,7 @@ extension WalnutAPI {
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.timeoutInterval = timeout
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.authorizeForWalnut(token: token)
         if let body {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try JSONEncoder().encode(body)
@@ -183,7 +183,7 @@ extension WalnutAPI {
         else { throw APIError.notConfigured }
         var request = URLRequest(url: url)
         request.timeoutInterval = 120
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.authorizeForWalnut(token: token)
         let (temporary, response) = try await URLSession.shared.download(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             let data = try Data(contentsOf: temporary)

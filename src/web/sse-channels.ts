@@ -9,7 +9,10 @@ import { log } from '../logging/index.js'
 // explicit flush past the compression middleware.
 
 interface SseEvent { seq: number; event: string; data: unknown }
-interface SseConn { res: Response; ping: NodeJS.Timeout }
+/** A test run's own connection (`x-walnut-test-run`, src/core/test-run.ts): it sees test objects. */
+interface SseConn { res: Response; ping: NodeJS.Timeout; testViewer: boolean }
+/** Who an event goes to: everyone, people only (not a test run's connection), or test runs only. */
+export type SseAudience = 'all' | 'people' | 'test-viewers'
 interface Channel { events: SseEvent[]; conns: Set<SseConn>; lastActiveAt: number }
 
 /** Ring cap per channel — a turn rarely exceeds a few hundred events. */
@@ -68,15 +71,22 @@ function writeSseEvent(res: Response, ev: SseEvent): void {
  * whose subscribers get a fresh snapshot on attach (e.g. the mobile events
  * feed): replaying stale history there would OVERWRITE the newer snapshot.
  */
-export function emitSse(key: string, event: string, data: unknown, opts?: { reset?: boolean; buffer?: boolean }): void {
+export function emitSse(
+  key: string, event: string, data: unknown,
+  opts?: { reset?: boolean; buffer?: boolean; audience?: SseAudience },
+): void {
   const ch = getChannel(key)
   if (opts?.reset) ch.events = []
   const ev: SseEvent = { seq: nextSeq++, event, data }
-  if (opts?.buffer !== false) {
+  const audience = opts?.audience ?? 'all'
+  // The ring replays to every later subscriber, so only an event for everyone goes in it.
+  if (opts?.buffer !== false && audience === 'all') {
     ch.events.push(ev)
     if (ch.events.length > RING_MAX) ch.events.splice(0, ch.events.length - RING_MAX)
   }
   for (const conn of ch.conns) {
+    if (audience === 'people' && conn.testViewer) continue
+    if (audience === 'test-viewers' && !conn.testViewer) continue
     try { writeSseEvent(conn.res, ev) } catch { /* dead conn — close handler cleans up */ }
   }
 }
@@ -107,6 +117,8 @@ export function attachSse(
     onClose?: () => void
     onAttach?: (write: (event: string, data: unknown) => void) => void
     replay?: boolean
+    /** A test run's own connection: it gets the events for test viewers, not those for people. */
+    testViewer?: boolean
   },
 ): void {
   res.status(200)
@@ -141,6 +153,7 @@ export function attachSse(
 
   const conn: SseConn = {
     res,
+    testViewer: opts?.testViewer === true,
     ping: setInterval(() => {
       try {
         res.write(': ping\n\n')

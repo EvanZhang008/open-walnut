@@ -37,7 +37,7 @@ extension WalnutAPI {
         // Short: this is background telemetry and must never sit on a connection
         // the user's own requests could be using.
         request.timeoutInterval = 20
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.authorizeForWalnut(token: token)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(Body(samples: samples))
         // retrySafe: false — not for safety (every sample carries an idempotency

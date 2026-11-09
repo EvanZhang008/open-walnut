@@ -103,6 +103,66 @@ describe('test-run objects stay off the board', () => {
     expect(await projectNames(TEST)).toContain('Probe Room')
   })
 
+  it('the phone under automation sees them too: its list, its sessions, its feed', async () => {
+    // 2026-11-09: the phone app under automation marks its requests (ios-native/Shared/TestRunMark.swift)
+    // and must find the test task it drives; a person's phone never sees one.
+    const v1 = async (headers: Record<string, string> = {}) =>
+      (await api('GET', '/api/v1/tasks', undefined, headers)).data.tasks as Array<{ id: string; plugin_only?: string }>
+    const mine = (await v1(TEST)).find((t) => t.id === probe)
+    expect(mine).toBeDefined()
+    expect(mine!.plugin_only).toBeUndefined()
+    expect((await v1()).map((t) => t.id)).not.toContain(probe)
+    const st = await import('../../src/core/session-tracker.js')
+    await st.createSessionRecord('test-run-phone-sess-01', probe, '', '/tmp', { title: 'probe phone session', initialProcessStatus: 'stopped' })
+    const sessionIds = async (headers: Record<string, string> = {}) =>
+      ((await api('GET', '/api/v1/sessions', undefined, headers)).data.sessions as Array<{ id?: string; session_id?: string; claudeSessionId?: string }>)
+        .map((r) => r.id ?? r.session_id ?? r.claudeSessionId)
+    expect(await sessionIds(TEST)).toContain('test-run-phone-sess-01')
+    expect(await sessionIds()).not.toContain('test-run-phone-sess-01')
+
+    // The live feed: a snapshot at attach, then frames. Each connection reads its own.
+    const feed = (headers: Record<string, string>) => {
+      const ctrl = new AbortController()
+      let text = ''
+      const ready = fetch(`http://localhost:${port}/api/v1/events`, { headers, signal: ctrl.signal }).then(async (res) => {
+        const reader = res.body!.getReader()
+        void (async () => {
+          for (;;) {
+            const { value, done } = await reader.read().catch(() => ({ value: undefined, done: true }))
+            if (done) return
+            text += new TextDecoder().decode(value)
+          }
+        })()
+      })
+      const frames = () => [...text.matchAll(/event: (\S+)\ndata: (.*)\n/g)].map((m) => ({ event: m[1], data: JSON.parse(m[2]) }))
+      return { ready, frames, close: () => ctrl.abort() }
+    }
+    const person = feed({})
+    const phone = feed(TEST)
+    await Promise.all([person.ready, phone.ready])
+    const until = async (ok: () => boolean) => { for (let i = 0; i < 100 && !ok(); i++) await new Promise((r) => setTimeout(r, 50)) }
+    const snapshotOf = (f: typeof person) => f.frames().find((x) => x.event === 'snapshot')?.data as { tasks: Array<{ id: string }>; sessions: Array<Record<string, unknown>> } | undefined
+    await until(() => !!snapshotOf(person) && !!snapshotOf(phone))
+    expect(snapshotOf(phone)!.tasks.map((t) => t.id)).toContain(probe)
+    expect(snapshotOf(person)!.tasks.map((t) => t.id)).not.toContain(probe)
+    expect(JSON.stringify(snapshotOf(phone)!.sessions)).toContain('test-run-phone-sess-01')
+    expect(JSON.stringify(snapshotOf(person)!.sessions)).not.toContain('test-run-phone-sess-01')
+
+    expect((await api('PATCH', `/api/tasks/${probe}`, { description: 'probe moved' }, TEST)).status).toBe(200)
+    expect((await api('PATCH', `/api/tasks/${real}`, { description: 'real moved' })).status).toBe(200)
+    const about = (f: typeof person, id: string) => f.frames().filter((x) => (x.data as { id?: string })?.id === id).map((x) => x.event)
+    await until(() => about(phone, probe).length > 0 && about(person, probe).length > 0 && about(person, real).length > 0 && about(phone, real).length > 0)
+    expect(about(phone, probe)).toEqual(expect.arrayContaining(['task-upsert']))
+    expect(about(phone, probe)).not.toContain('task-delete')
+    const upsert = phone.frames().find((x) => x.event === 'task-upsert' && (x.data as { id?: string }).id === probe)!.data as { plugin_only?: string }
+    expect(upsert.plugin_only).toBeUndefined()
+    expect(about(person, probe)).toEqual(['task-delete'])
+    expect(about(person, real)).toContain('task-upsert')
+    expect(about(phone, real)).toContain('task-upsert')
+    person.close(); phone.close()
+    await st.deleteSessionRecords(new Set(['test-run-phone-sess-01']), 'test')
+  })
+
   it('makes Org VPs and projects test objects, never Main or a real project\'s lead', async () => {
     const vp = await api('POST', '/api/v1/org/vps', { name: 'Probe VP' }, TEST)
     expect(vp.status).toBe(201)

@@ -213,7 +213,7 @@ final class SSEClient: @unchecked Sendable {
     /// whole Last-Event-ID contract.
     static func streamRequest(url: URL, token: String, resumeFrom: String?) -> URLRequest {
         var request = URLRequest(url: url)
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.authorizeForWalnut(token: token)
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         request.timeoutInterval = 3600
         if let resumeFrom {

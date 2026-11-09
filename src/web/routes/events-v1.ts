@@ -37,7 +37,8 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
 import { bus, EventNames } from '../../core/event-bus.js'
-import { attachSse, emitSse, sseConnCount } from '../sse-channels.js'
+import { attachSse, emitSse, sseConnCount, type SseAudience } from '../sse-channels.js'
+import { ambientTestRun, isTestRunTask, phoneListedTasks, unmarkForTestViewer } from '../../core/test-run.js'
 import { CHAT_TURN_FRAME_KIND, handleBridgeChatTurnFrame } from './chat-turn-relay.js'
 import { LEADER_HEARTBEAT_KIND } from '../../core/leader/protocol.js'
 import { SEND_PATH_READY_KIND } from '../../core/send-path-announce.js'
@@ -119,8 +120,8 @@ async function projectSessionRow(sessionId: string): Promise<Record<string, unkn
  *  connection gets a fresh snapshot on attach, and replaying pre-snapshot
  *  history would overwrite that newer snapshot on the phone (completed tasks
  *  flipping back to todo, ended sessions showing running). */
-function fanOut(event: string, data: unknown): void {
-  emitSse(EVENTS_CHANNEL, event, data, { buffer: false })
+function fanOut(event: string, data: unknown, audience: SseAudience = 'all'): void {
+  emitSse(EVENTS_CHANNEL, event, data, { buffer: false, audience })
 }
 
 /**
@@ -156,9 +157,11 @@ export async function forwardMobileEventToBridge(kind: string, data: unknown): P
   return true
 }
 
-function emitFeedEvent(event: string, data: unknown): void {
-  fanOut(event, data)
-  if (!CLOUD_MODE) forwardToBridge(event, bridgeCopy(event, data))
+/** `audience`: a test task's frames (src/core/test-run.ts) go to a test run's own phone only; the
+ *  companion's phones are people's, so the bridge never carries those. */
+function emitFeedEvent(event: string, data: unknown, audience: SseAudience = 'all'): void {
+  fanOut(event, data, audience)
+  if (!CLOUD_MODE && audience !== 'test-viewers') forwardToBridge(event, bridgeCopy(event, data))
 }
 
 /**
@@ -216,8 +219,12 @@ function scheduleSessionUpsert(sessionId: string): void {
       // No local subscribers and no bridge relay → skip the read entirely.
       if (!(await hasFeedConsumers())) return
       const row = await projectSessionRow(sessionId)
-      // A plugin's own task's session (Task.plugin_only) never reaches the phone's list.
-      if (row && !hiddenSessionRow(row, await (await import('../../core/task-manager.js')).pluginOnlyTaskIds())) emitFeedEvent('session-upsert', row)
+      if (!row) return
+      // A plugin's own task's session (Task.plugin_only) never reaches the phone's list; a test
+      // task's reaches a test run's own phone only.
+      const { pluginOnlyTaskIds } = await import('../../core/task-manager.js')
+      if (!hiddenSessionRow(row, await pluginOnlyTaskIds())) emitFeedEvent('session-upsert', row)
+      else if (!hiddenSessionRow(row, await pluginOnlyTaskIds({ testViewer: true }))) emitFeedEvent('session-upsert', row, 'test-viewers')
     })().catch(() => {})
   }, SESSION_UPSERT_COALESCE_MS)
   timer.unref?.()
@@ -247,10 +254,16 @@ async function handleBusEvent(name: string, data: unknown): Promise<void> {
     }
     // TASK_UPDATED bulk signals carry { task: null } — nothing to project.
     if (!d.task || !d.task.id) return
-    // A plugin's own task leaves the phone, also when it became one after the phone saw it.
-    if (d.task.plugin_only) { emitFeedEvent('task-delete', { id: d.task.id }); return }
     const { projectTask } = await import('../../core/task-projection.js')
     const { withLiveActivity } = await import('../../core/sessions/live-activity-registry.js')
+    // A plugin's own task leaves the phone, also when it became one after the phone saw it; a
+    // test task stays on a test run's own phone, unmarked (core/test-run.ts).
+    if (d.task.plugin_only) {
+      const test = isTestRunTask(d.task)
+      emitFeedEvent('task-delete', { id: d.task.id }, test ? 'people' : 'all')
+      if (test) emitFeedEvent('task-upsert', withLiveActivity(projectTask(unmarkForTestViewer(d.task))), 'test-viewers')
+      return
+    }
     emitFeedEvent('task-upsert', withLiveActivity(projectTask(d.task)))
     return
   }
@@ -417,6 +430,8 @@ export function stopMobileEventsFeed(): void {
 // ── Snapshot builders ───────────────────────────────────────────────────────
 
 async function buildSnapshot(): Promise<{ sessions: unknown[]; tasks: unknown[] }> {
+  // Built inside the subscriber's request: a test run's own phone sees test tasks (core/test-run.ts).
+  const testViewer = ambientTestRun() !== undefined
   let sessions: unknown[] = []
   let tasks: unknown[] = []
   try {
@@ -432,8 +447,9 @@ async function buildSnapshot(): Promise<{ sessions: unknown[]; tasks: unknown[] 
       const { buildSessionProjection } = await import('../../core/session-projection.js')
       sessions = (await buildSessionProjection()).sessions
     }
-    // The sessions of a plugin's own tasks (Task.plugin_only) live in that plugin's view.
-    const hidden = await (await import('../../core/task-manager.js')).pluginOnlyTaskIds()
+    // The sessions of a plugin's own tasks (Task.plugin_only) live in that plugin's view; a test
+    // task's show to a test run's own phone (core/test-run.ts).
+    const hidden = await (await import('../../core/task-manager.js')).pluginOnlyTaskIds({ testViewer })
     if (hidden.size > 0) sessions = sessions.filter((s) => !hiddenSessionRow(s, hidden))
   } catch (err) {
     log.web.warn('mobile-events: session snapshot failed', {
@@ -444,7 +460,7 @@ async function buildSnapshot(): Promise<{ sessions: unknown[]; tasks: unknown[] 
     // Tasks: both boxes have a real local task store.
     const { buildTaskProjection } = await import('../../core/task-projection.js')
     const { withLiveActivityAll } = await import('../../core/sessions/live-activity-registry.js')
-    tasks = withLiveActivityAll((await buildTaskProjection()).tasks.filter((t) => !t.plugin_only))
+    tasks = withLiveActivityAll(phoneListedTasks((await buildTaskProjection()).tasks, testViewer))
   } catch (err) {
     log.web.warn('mobile-events: task snapshot failed', {
       error: err instanceof Error ? err.message : String(err),
@@ -465,6 +481,7 @@ eventsV1Router.get('/events', async (_req: Request, res: Response, next: NextFun
     attachSse(EVENTS_CHANNEL, _req, res, {
       onAttach: (write) => write('snapshot', snapshot),
       replay: false,
+      testViewer: ambientTestRun() !== undefined,
     })
   } catch (err) {
     next(err)

@@ -2624,7 +2624,9 @@ apiV1Router.get('/tasks', async (req: Request, res: Response, next: NextFunction
     // A plugin's own tasks (Task.plugin_only) are in no list the phone shows.
     // A running task's live action rides the row (core/live-activity.ts; additive, in memory).
     const { withLiveActivityAll } = await import('../../core/sessions/live-activity-registry.js')
-    let tasks = withLiveActivityAll(projection.tasks.filter((t) => !t.plugin_only))
+    // A test task shows to a test run's own phone, unmarked (core/test-run.ts).
+    const { phoneListedTasks } = await import('../../core/test-run.js')
+    let tasks = withLiveActivityAll(phoneListedTasks(projection.tasks))
     const status = typeof req.query.status === 'string' ? req.query.status : undefined
     if (status) tasks = tasks.filter((t) => t.status === status)
     // Additive filters (Wave 1): project ('' = Inbox, case-insensitive like the
@@ -3792,7 +3794,8 @@ apiV1Router.get('/sessions', async (req: Request, res: Response, next: NextFunct
 
     // The sessions of a plugin's own tasks (Task.plugin_only) live in that plugin's view:
     // not the phone's list, not an agent's session_list.
-    const hiddenTasks = await (await import('../../core/task-manager.js')).pluginOnlyTaskIds()
+    const { ambientTestRun } = await import('../../core/test-run.js')
+    const hiddenTasks = await (await import('../../core/task-manager.js')).pluginOnlyTaskIds({ testViewer: ambientTestRun() !== undefined })
     let sessions = hiddenTasks.size > 0
       ? all.filter((s) => { const taskId = (s as { task_id?: unknown }).task_id; return !(typeof taskId === 'string' && hiddenTasks.has(taskId)) })
       : all

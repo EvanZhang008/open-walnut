@@ -16,7 +16,8 @@
  *
  * Who says so: the web app under browser automation (`navigator.webdriver`, so every
  * Playwright run marks itself), a page opened with `?walnut-test-run=<label>`, the `walnut`
- * CLI with `WALNUT_TEST_RUN=<label>` in its env, or any client sending the header. The test
+ * CLI with `WALNUT_TEST_RUN=<label>` in its env, the iOS app in the Simulator or under
+ * XCTest, a UI test or a Maestro flow (ios-native/Shared/TestRunMark.swift), or any client sending the header. The test
  * window itself still sees test objects (the server hands them to it unmarked), so a UI
  * check can find what it made.
  *
@@ -121,6 +122,17 @@ export function unmarkForTestViewer<T extends { plugin_only?: string }>(task: T)
   if (!isTestRunTask(task)) return task;
   const { plugin_only: _owner, ...rest } = task;
   return rest as T;
+}
+
+/**
+ * The tasks a phone's list shows: never a plugin's own task, a test task only to a test run's
+ * own request, unmarked (2026-11-09: the phone app under automation marks its requests, and must
+ * find the test task it is driving, as a test window does).
+ */
+export function phoneListedTasks<T extends { plugin_only?: string }>(
+  tasks: readonly T[], testViewer: boolean = ambientTestRun() !== undefined,
+): T[] {
+  return (testViewer ? tasks.map(unmarkForTestViewer) : tasks).filter((t) => !t.plugin_only);
 }
 
 export function resetTestRunForTesting(): void {

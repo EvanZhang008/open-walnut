@@ -207,7 +207,7 @@ final class EventsFeedClient: @unchecked Sendable {
 
     private func streamOnce(generation gen: UInt64) async throws {
         var request = URLRequest(url: url)
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.authorizeForWalnut(token: token)
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         request.timeoutInterval = 3600
 

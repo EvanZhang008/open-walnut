@@ -30,6 +30,7 @@ import { deleteMessage, getQueue, sendMessageToSession } from '../../src/core/se
 import { sendLetter } from '../../src/core/human-inbox/store.js'
 import { _setLeadWaitClocksForTesting, tellLead } from '../../src/core/org/lead-waits.js'
 import { noteTeamAsk, pendingTeamAsks } from '../../src/core/org/team-asks.js'
+import { withTestRun } from '../../src/core/test-run.js'
 import { collectOpenItems } from '../../src/core/sessions/open-items.js'
 import { pendingRiding, ridingKeys } from '../../src/core/sessions/status-riding.js'
 
@@ -304,6 +305,8 @@ describe('what reaches the lead without a message from anyone', () => {
     // The main agent's is from outside.
     const main = '<walnut-message kind="peer-note" from="Main [3ea08ceb]" from-task="main-task" title="Check the fence too">\nAlso the fence.\n</walnut-message>'
     await noteTeamAsk(sid, 'Also the fence.', main, 'peer')
+    // A test run's words (a phone or browser under automation) are never the user's.
+    await withTestRun('ios-uitest', () => noteTeamAsk(sid, 'Water the tulips too.', 'Water the tulips too.', 'mobile'))
     expect((await pendingTeamAsks(leadId)).map((a) => [a.from, a.gist])).toEqual([
       ['the user', 'Please also renew the parking permit.'], ['Main', 'Check the fence too'],
     ])

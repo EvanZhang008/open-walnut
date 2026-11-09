@@ -58,7 +58,7 @@ extension WalnutAPI {
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
         request.timeoutInterval = timeout
-        request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
+        request.authorizeForWalnut(token: bearer)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(["token": token])
         return request

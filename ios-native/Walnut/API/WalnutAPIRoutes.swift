@@ -47,6 +47,7 @@ enum InstanceProbe {
         request.httpMethod = "GET"
         request.timeoutInterval = timeout
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.markTestRun()
         return request
     }
 

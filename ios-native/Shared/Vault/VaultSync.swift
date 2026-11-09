@@ -86,7 +86,7 @@ struct VaultClient: Sendable {
         guard let full = URL(string: "api/v1\(path)", relativeTo: url) else { throw VaultSyncError.network("bad address") }
         var req = URLRequest(url: full, timeoutInterval: timeout)
         req.httpMethod = method
-        req.setValue("Bearer \(server.token)", forHTTPHeaderField: "Authorization")
+        req.authorizeForWalnut(token: server.token)
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
         if let body {

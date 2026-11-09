@@ -267,7 +267,7 @@ extension WalnutAPI {
         }
         var request = URLRequest(url: url)
         request.httpMethod = method
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.authorizeForWalnut(token: token)
         let (data, response) = try await perform(request)
         guard let http = response as? HTTPURLResponse else { throw APIError.badResponse }
         if (200...299).contains(http.statusCode) { return }

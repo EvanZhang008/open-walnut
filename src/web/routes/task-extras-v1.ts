@@ -160,7 +160,9 @@ taskExtrasV1Router.get('/tasks/meta/sprints', async (_req: Request, res: Respons
 taskExtrasV1Router.get('/tasks/enriched', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const { listTasks } = await import('../../core/task-manager.js')
-    const tasks = (await listTasks({})).filter((t) => !t.title.startsWith('.metadata') && !t.plugin_only)
+    // A test task shows to a test run's own phone, unmarked (core/test-run.ts).
+    const { phoneListedTasks } = await import('../../core/test-run.js')
+    const tasks = phoneListedTasks(await listTasks({})).filter((t) => !t.title.startsWith('.metadata'))
     const now = Date.now()
     const enriched = tasks.map((t) => ({
       ...t,

@@ -41,7 +41,7 @@ enum LetterBodyDownload {
     static func fetchDocument(from url: URL, isHTML: Bool) async throws -> URL {
         guard let token = AppConfig.token else { throw Failure.notConfigured }
         var request = URLRequest(url: url)
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.authorizeForWalnut(token: token)
         // A big body over a phone link legitimately takes a while; the default
         // 30s request timeout would kill it mid-transfer.
         request.timeoutInterval = 300

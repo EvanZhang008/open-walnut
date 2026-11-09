@@ -434,9 +434,11 @@ export async function recentQuickTasks(limit: number): Promise<QuickTaskRow[]> {
     import('../../core/task-manager.js'),
     import('../../core/user-status.js'),
   ])
-  return (await listTasks())
-    // What the board shows: no plugin's own task (test runs included), not Main or a lead.
-    .filter((t) => t.phase !== 'COMPLETE' && !t.plugin_only && !t.org_role)
+  const { phoneListedTasks } = await import('../../core/test-run.js')
+  // What the board shows: no plugin's own task (a test task only to a test run's own phone,
+  // core/test-run.ts), not Main or a lead.
+  return phoneListedTasks(await listTasks())
+    .filter((t) => t.phase !== 'COMPLETE' && !t.org_role)
     .map((task) => ({ task, state: task.user_status?.state ?? fallbackUserState(task.phase) }))
     .sort((a, b) => (STATE_RANK[a.state] ?? 9) - (STATE_RANK[b.state] ?? 9)
       || String(b.task.updated_at ?? '').localeCompare(String(a.task.updated_at ?? '')))

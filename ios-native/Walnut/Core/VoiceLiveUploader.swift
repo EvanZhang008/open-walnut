@@ -125,7 +125,7 @@ extension WalnutAPI {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.timeoutInterval = 30
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.authorizeForWalnut(token: token)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(Body(from: from, audio: audio.base64EncodedString()))
         let (data, response) = try await perform(request, retrySafe: true)
@@ -139,7 +139,7 @@ extension WalnutAPI {
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
         request.timeoutInterval = 15
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.authorizeForWalnut(token: token)
         _ = try await perform(request, retrySafe: true)
     }
 }

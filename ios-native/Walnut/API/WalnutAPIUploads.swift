@@ -85,7 +85,7 @@ extension WalnutAPI: SessionUploadTransport {
         request.httpMethod = "PUT"
         // A 2 MB chunk over a slow uplink, plus the host's write.
         request.timeoutInterval = 120
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.authorizeForWalnut(token: token)
         request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
         request.httpBody = data
         let (body, response) = try await perform(request, retrySafe: true)

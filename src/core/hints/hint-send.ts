@@ -19,6 +19,7 @@
 import { REFERENCE_CARDS_OPEN } from '../sessions/reference-cards.js';
 import type { Config, MessageHintRole, MessageHintTrigger, SessionHintState, SessionRecord, Task } from '../types.js';
 import { log } from '../../logging/index.js';
+import { ambientTestRun } from '../test-run.js';
 import { composeHinted, parseHinted, renderHintBlock, splitHinted, type CarriedHint } from './hint-format.js';
 import { effectiveHints, hintApplies, needsTaskForAudience, type EffectiveHint, type HintTarget } from './hint-registry.js';
 import { dueReasons } from './hint-schedule.js';
@@ -390,10 +391,12 @@ export async function prepareHintedSend(
     // A message composed upstream (the companion's voice hint) keeps those blocks.
     const upstream = opts.upstreamBlocks?.length ? splitHinted(message, opts.upstreamBlocks) : null;
     const words = upstream ? upstream.text : message;
+    // A test run's words are never the user's (test-run.ts): no Thread, no ask kept for them.
+    const usersWords = opts.sentBy === 'person' && opts.threads !== false && ambientTestRun() === undefined;
     // The user's words to an Org node become one of its Threads, whether or not its hint is on.
-    const thread = opts.sentBy === 'person' && opts.threads !== false ? await captureThread(record, task, words, opts) : null;
+    const thread = usersWords ? await captureThread(record, task, words, opts) : null;
     // Any other task's chat: the user's words are kept until its turn-end status says they are answered.
-    const userAsk = opts.sentBy === 'person' && opts.threads !== false && !thread ? await captureUserAsk(record, task, words, opts) : null;
+    const userAsk = usersWords && !thread ? await captureUserAsk(record, task, words, opts) : null;
     const plan = planHints({
       hints, target, record, config, away, brief, threadsTidy, inChat: opts.inChat ?? opts.sentBy === 'person', message: words,
       ...(opts.requested ? { requested: opts.requested } : {}),

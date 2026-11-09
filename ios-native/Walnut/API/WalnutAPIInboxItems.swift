@@ -13,7 +13,7 @@ extension WalnutAPI: InboxItemTransport {
         guard let base = AppConfig.serverURL, let token = AppConfig.token,
               let url = URL(string: base.absoluteString + "/api/v1" + path) else { throw APIError.notConfigured }
         var request = URLRequest(url: url); request.httpMethod = method; request.timeoutInterval = timeout
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.authorizeForWalnut(token: token)
         // A simulator happens to share the Mac's loopback. It is still a phone, not its console.
         request.setValue("remote-http", forHTTPHeaderField: "x-walnut-origin")
         if let body {

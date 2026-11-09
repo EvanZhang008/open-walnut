@@ -45,6 +45,7 @@ import type { PendingInstructionNotice } from './sessions/instruction-notice.js'
 import { leadsWithNotice, markNoticeDelivering } from './sessions/instruction-notice-flight.js';
 import { PERSON_SEND_SOURCES, queueSentBy } from './sessions/send-sent-by.js';
 import { frameForSource } from './sessions/send-frame.js';
+import { ambientTestRun } from './test-run.js';
 import { dropRepeatedHintBlocks, foldTidyIntoThreads, hintBlocksIn, replaceHintedText } from './hints/hint-format.js';
 import { noteUserActivity } from './self-update/idle-gate.js';
 import { isQuietRowId, noteQuietTurnDelivery, noteSessionSend as noteQuietTurnSend, quietTurnRow } from './sessions/quiet-turn.js';
@@ -324,7 +325,10 @@ export async function sendMessageToSession(
   const source = opts?.source ?? 'unknown';
   // An ask into a lead's team from outside it (the user, the main agent, another team) is the
   // lead's to know: its next team note lists it (org/team-asks.ts). Fire and forget.
-  void import('./org/team-asks.js').then((m) => m.noteTeamAsk(sessionId, message, rawBody, opts?.source, msg.id)).catch(() => {});
+  // A test run's words are never the user's (test-run.ts): read now, while the request is surely open.
+  if (ambientTestRun() === undefined) {
+    void import('./org/team-asks.js').then((m) => m.noteTeamAsk(sessionId, message, rawBody, opts?.source, msg.id)).catch(() => {});
+  }
   // A repeat collapsed onto the row already queued: only the row that holds the note counts.
   if (place && msg.message.startsWith(place.text)) await place.markTold();
   if (digest && msg.message.includes(digest.text)) await digest.markTold();

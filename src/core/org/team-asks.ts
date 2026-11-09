@@ -29,6 +29,7 @@ import { splitLeadingBanners } from '../../lib/history-injected-banner.js';
 import { withoutLeadingRiders } from '../../lib/history-walnut-riders.js';
 import { buildOrgTree, type OrgTaskNode } from './org-tree.js';
 import type { TeamAsk } from './team-note.js';
+import { ambientTestRun } from '../test-run.js';
 
 const FILE = path.join(WALNUT_HOME, 'org', 'team-asks.json');
 // A note with nothing the lead must act on now waits up to an hour (team-note.ts), so the store
@@ -187,6 +188,9 @@ export function askKey(a: TeamAsk): string {
 export async function noteTeamAsk(
   sessionId: string, message: string, enqueued: string, source: string | undefined, messageId?: string,
 ): Promise<void> {
+  // A test run's words are never the user's (test-run.ts; 2026-11-09: a phone acceptance run's
+  // queued message read to its lead as "the user is talking with it in its own chat").
+  if (ambientTestRun() !== undefined) return;
   try {
     // The org is off (org-enabled.ts): no VP keeps its team's asks.
     const { isOrgEnabled } = await import('./org-enabled.js');

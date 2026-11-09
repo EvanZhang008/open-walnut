@@ -486,7 +486,7 @@ final class AppLog: @unchecked Sendable {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.timeoutInterval = 30
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.authorizeForWalnut(token: token)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
         let compress = !compressionIsDisabled()

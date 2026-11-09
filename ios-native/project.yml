@@ -173,6 +173,7 @@ targets:
       - path: WalnutAutoFill
       - path: Shared/Vault
       - path: Shared/VaultUI
+      - path: Shared/TestRunMark.swift
       - path: Walnut/Core/Theme.swift
     info:
       path: WalnutAutoFill/Info.plist
