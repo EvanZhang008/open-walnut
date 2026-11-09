@@ -165,6 +165,10 @@ test.describe('Selection pill: Quote and Comment stay on the passage and go with
   test.beforeEach(async ({ page, request }) => {
     await resetThreadsFixture(request, AI_SESSION)
     await page.setViewportSize({ width: 1280, height: 900 })
+    // The session column's fixed width (open()) assumes Home's chat spot is closed. Said here,
+    // not left to the server's synced layout: on the Mac its read timed out at
+    // boot, the chat opened by default and pushed the session off screen (2026-11-09).
+    await page.addInitScript(() => localStorage.setItem('open-walnut-home-chat-visible', 'false'))
     await loadHome(page)
     await page.evaluate(() => { for (const k of Object.keys(localStorage)) if (k.startsWith('draft:')) localStorage.removeItem(k) })
   })
