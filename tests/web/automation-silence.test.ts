@@ -266,15 +266,22 @@ describe('the page silencer', () => {
 describe('the WebKit voice specs, the one place a test browser may make an AudioContext', () => {
   // Their synthetic microphone and the app's meter need one; nothing they make reaches a
   // destination but through a gain of zero, and no media or speech plays. A new spec that
-  // claims the exemption fails here until it is listed, with why.
+  // claims the exemption fails here until it is listed, with why. The mark is written once,
+  // as VOICE_TEST_USER_AGENT in webkit-recorder.ts, and a spec claims it by using that.
   const VOICE_TEST_SPECS: Record<string, string> = {
     'tests/e2e/browser/mic-stall.webkit.spec.ts': 'the mic warning in WebKit, from a synthetic mic',
+    'tests/e2e/browser/send-waits-for-dictation.webkit.spec.ts': 'send waits for dictation, from a synthetic mic',
+    'tests/e2e/browser/session-voice-selection.webkit.spec.ts': 'the quote pill hold while dictating, from a synthetic mic',
     'tests/e2e/browser/stt-failure-recovery.webkit.spec.ts': 'dictation failures in WebKit, from a synthetic mic',
+    'tests/e2e/browser/stt-final-whole-clip.webkit.spec.ts': 'the final transcript of a whole clip, from a synthetic mic',
+    'tests/e2e/browser/stt-live-draft-recorder.webkit.spec.ts': 'the live draft while recording, from a synthetic mic',
   };
+  const DIRS = ['tests', 'web', 'src', 'scripts', 'plugin-store', 'packages'];
+  const CODE = /\.(ts|tsx|js|mjs|cjs)$/;
 
-  it('only the listed specs claim it', () => {
-    const found = filesMatching(['tests', 'web', 'src', 'scripts', 'plugin-store', 'packages'], /WalnutVoiceTest'/, /\.(ts|tsx|js|mjs|cjs)$/, /automation-silence\.test\.ts$/);
-    expect(found).toEqual(Object.keys(VOICE_TEST_SPECS).sort());
+  it('the mark is written in one place, and only the listed specs claim it', () => {
+    expect(filesMatching(DIRS, /WalnutVoiceTest['"`][\s;),}]*$/m, CODE, /automation-silence\.test\.ts$/)).toEqual(['tests/e2e/browser/webkit-recorder.ts']);
+    expect(filesMatching(DIRS, /\bVOICE_TEST_USER_AGENT\b/, CODE, /automation-silence\.test\.ts$|webkit-recorder\.ts$/)).toEqual(Object.keys(VOICE_TEST_SPECS).sort());
   });
 
   it('gets a context there, still wired through a gain of zero, and nothing else', async () => {
