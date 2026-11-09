@@ -23,6 +23,7 @@
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { mkdir } from 'node:fs/promises'
 import { isolateUiPrefs } from './todo-panel-helpers'
+import { withCssColor } from './css-color'
 
 test.use({ viewport: { width: 1280, height: 820 } })
 
@@ -227,17 +228,17 @@ test('⋯ holds every rare action as an overlay, and Fullscreen enters and leave
     .evaluateAll((els) => els.map((el) => getComputedStyle(el).visibility))
   expect(underSheets.length, 'the session column is a sheet under this one').toBeGreaterThan(0)
   expect(underSheets.every((v) => v === 'hidden'), 'a sheet under a sheet is not drawn').toBe(true)
-  const pokingOut = await page.evaluate(({ x, y, width, height }) => {
+  const pokingOut = await page.evaluate(withCssColor((toRgba) => ({ x, y, width, height }: { x: number; y: number; width: number; height: number }) => {
     const hits: string[] = []
     for (const [px, py] of [[x + 1.5, y + 1.5], [x + width - 1.5, y + 1.5], [x + 1.5, y + height - 1.5], [x + width - 1.5, y + height - 1.5]]) {
       for (const el of document.elementsFromPoint(px, py)) {
         if (!el.closest('.open-walnut-fullscreen, .file-content-view.fv-fullscreen')) continue
         const cs = getComputedStyle(el)
-        if (cs.visibility !== 'hidden' && !/rgba\([^)]*,\s*0\)|transparent/.test(cs.backgroundColor)) hits.push(`${el.className} at ${Math.round(px)},${Math.round(py)}`)
+        if (cs.visibility !== 'hidden' && toRgba(cs.backgroundColor)[3] > 0) hits.push(`${el.className} at ${Math.round(px)},${Math.round(py)}`)
       }
     }
     return hits
-  }, sheet)
+  }), sheet)
   expect(pokingOut, 'no painted box of a sheet reaches past its rounded corner').toEqual([])
   const fsDoc = (await page.locator('.fv-fullscreen .ProseMirror').boundingBox())!
   expect(Math.abs(fsDoc.x + fsDoc.width / 2 - (sheet.x + sheet.width / 2))).toBeLessThan(40)
@@ -361,14 +362,14 @@ test('an overlapping change stops saving and offers keep mine or the disk versio
   // The confirm is a solid card: nothing of the text under it shows through.
   const card = page.locator('.app-modal')
   await expect(card).toBeVisible()
-  await page.waitForTimeout(400)
-  const look = await card.evaluate((el) => {
+  // Polled, not read after a fixed wait: the card fades in, and under load the fade outlasts any wait.
+  const look = () => card.evaluate(withCssColor((toRgba) => (el: Element) => {
     let o = 1
     for (let n: Element | null = el; n; n = n.parentElement) o *= Number(getComputedStyle(n).opacity)
-    return { opacity: o, bg: getComputedStyle(el).backgroundColor }
-  })
-  expect(look.opacity, 'the confirm card is fully opaque once shown').toBe(1)
-  expect(look.bg).not.toMatch(/rgba\([^)]*,\s*0?\.\d+\)|transparent/)
+    return { opacity: o, bgAlpha: toRgba(getComputedStyle(el).backgroundColor)[3] }
+  }))
+  await expect.poll(async () => (await look()).opacity, { message: 'the confirm card is fully opaque once shown' }).toBe(1)
+  expect((await look()).bgAlpha, 'the confirm card has a solid background').toBe(1)
   await page.screenshot({ path: `${SHOTS}/6b-confirm-disk.png` })
   await page.getByRole('button', { name: 'Use the version on disk' }).last().click()
   await expect(source(page)).toContainText('AGAIN one')

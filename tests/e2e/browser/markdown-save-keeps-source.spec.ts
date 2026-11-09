@@ -44,7 +44,8 @@ const FIXTURE = [
 const IDLE_MS = 2000
 
 // One file per surface; a failure on one surface does not skip the others.
-test.describe.configure({ mode: 'default', timeout: 120_000 })
+test.describe.configure({ mode: 'default' })
+test.describe.configure({ timeout: 120_000 })
 
 /** Count the PUTs a surface sends to its save endpoint. */
 function countPuts(page: Page, pathPart: string): () => number {
