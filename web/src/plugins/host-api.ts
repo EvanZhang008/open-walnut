@@ -10,6 +10,7 @@ import { APP_PLACEMENTS, appRegistry, assertBadge, type AppBadge, type AppContri
 import { pluginUiRegistry } from './registry'
 import { registerLinkHandler, type LinkHandlerContribution } from './link-handlers'
 import { createWebAi } from './plugin-ai'
+import { createWebPasswords } from './plugin-passwords'
 import { createPluginViews } from './views'
 import { createPluginUseView } from './use-view'
 import { createPluginUseDraft } from './use-draft'
@@ -267,6 +268,7 @@ export function createWebPluginApi(
     },
     appState,
     ai: createWebAi(pluginId, context.signal),
+    passwords: createWebPasswords(pluginId, pluginName),
     // The same two choices Walnut's own surfaces offer; the item is checked there (normalizeContentItem).
     content: {
       actions: (item) => contentActions(item),

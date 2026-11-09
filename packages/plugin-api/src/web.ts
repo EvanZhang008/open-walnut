@@ -418,6 +418,34 @@ export interface WebUiService {
   }
 }
 
+/** A login to keep in the person's Passwords: the exact title and its password, nothing else. */
+export interface PasswordSaveInput {
+  title: string
+  password: string
+}
+
+/**
+ * What came of a save. `locked`: Passwords is locked in this window, so nothing was written;
+ * `ambiguous`: more than one item has that title, so none was changed; `exists`: the one item with
+ * that title is not one this plugin may change (not a login, or a website login it did not save),
+ * so it was left alone; `conflict`: the item kept changing while it was saved; `unavailable`: the
+ * vault refused or could not be reached (a test run, another device than the Mac).
+ */
+export type PasswordSaveResult =
+  | { saved: true; action: 'created' | 'updated' | 'unchanged' }
+  | { saved: false; reason: 'locked' | 'ambiguous' | 'exists' | 'conflict' | 'invalid' | 'unavailable' }
+
+export interface PasswordsService {
+  /**
+   * Keeps a secret the person just typed into your App (and that you know works) in their
+   * Passwords, under exactly `title`: creates the login (tagged `plugin:<your id>`), or sets the
+   * password of the one item with that title when it is a login you saved or one with no website.
+   * It writes through this window's own unlock, never unlocks or prompts, and never reads a value
+   * back to you.
+   */
+  save(input: PasswordSaveInput): Promise<PasswordSaveResult>
+}
+
 export interface WalnutWebApi {
   readonly pluginId: string
   readonly pluginName: string
@@ -456,6 +484,11 @@ export interface WalnutWebApi {
    * does not have it, so feature-detect.
    */
   readonly content?: ContentActionsService
+  /**
+   * The person's Passwords, write only: keep a secret they typed into your App. Optional: a host
+   * older than it does not have it, so feature-detect.
+   */
+  readonly passwords?: PasswordsService
   readonly unsafe: {
     readonly react: unknown
     readonly host: unknown

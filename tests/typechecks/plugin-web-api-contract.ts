@@ -32,6 +32,10 @@ const contentActions = hostApi.content.actions({ source: 'Chat', title: 'Review 
 const firstActionLabel: string = contentActions[0].label
 void firstActionLabel
 
+// walnut.passwords: the host always has it; a plugin reads it as optional and never gets a value back.
+const pinSave: Promise<import('../../packages/plugin-api/src/web.js').PasswordSaveResult> = hostApi.passwords.save({ title: 'Example PIN', password: 'fake' })
+void pinSave
+
 const app = hostApi.ui.app({
   id: 'main',
   title: 'Example',
