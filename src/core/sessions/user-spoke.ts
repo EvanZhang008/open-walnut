@@ -25,6 +25,13 @@ export interface UserSaid {
   /** He wrote after that: his messages since then (newest last); else his last few. */
   spokeSince: boolean;
   words: SpokenWord[];
+  /**
+   * The caller acts on words of his it quotes (user_words), and he wrote in the task after them:
+   * when the newest message it quotes was written (null: none of his messages Walnut holds), and
+   * his messages in the task after it, newest last (wordsAfterQuote).
+   */
+  quotedAt?: string | null;
+  afterQuote?: SpokenWord[];
 }
 
 /** His last messages shown when he wrote nothing since the ask. */
@@ -91,6 +98,56 @@ export function wordsNotPassedBack(said: UserSaid, userWords: string | undefined
   });
 }
 
+/** A quote placed nowhere: his messages in the task this recent count as maybe newer than it. */
+export const UNPLACED_QUOTE_MS = 7 * 24 * 60 * 60_000;
+
+/** The parts of user_words in quotation marks, plain and without spaces, each long enough to place. */
+function quotedParts(userWords: string): string[] {
+  const parts = [...userWords.matchAll(/["\u201c\u300c\u300e]([^"\u201d\u300d\u300f]{2,})["\u201d\u300d\u300f]/g)].map((m) => m[1]);
+  return [userWords, ...parts].map((p) => plain(p).replace(/ /g, '')).filter((p) => p.length >= SHORT_OPENING);
+}
+
+/** Whether `userWords` passes the message `w` back: its opening is in it (wordsNotPassedBack's rule). Pure. */
+export function passesBack(w: SpokenWord, userWords: string | undefined): boolean {
+  return !wordsNotPassedBack({ askSince: null, spokeSince: true, words: [w] }, userWords).length;
+}
+
+/**
+ * Whether the message `w` is where the words `userWords` quotes come from: it passes the message
+ * back, or a quoted part of it (or the whole) makes up at least half of the message. A newer message
+ * that only mentions the old words ("I changed my mind about no audits: send it") is no source
+ * (2026-11-09 review), so it can never move the quote's time past itself. Pure.
+ */
+export function quotesWord(w: SpokenWord, userWords: string): boolean {
+  if (!plain(w.text)) return false;
+  if (passesBack(w, userWords)) return true;
+  const bare = plain(w.text).replace(/ /g, '');
+  return quotedParts(userWords).some((p) => bare.includes(p) && p.length * 2 >= bare.length);
+}
+
+/**
+ * His messages in the task newer than the words a caller acts on (2026-11-08, the Personal VP's
+ * reflection: it answered an ask on his "no inspection" of the day before, and in the task he had
+ * since asked for that very email). `inTask`: his messages in the task and in each teammate folded
+ * under it, the words that win; `pool`: where else the quote may come from (the caller's own chat or
+ * Threads). The EARLIEST message the quote comes from places it: words he repeated later never hide
+ * what he wrote between. Placed nowhere, his messages in the task of the last UNPLACED_QUOTE_MS (his
+ * last few) may be newer. Null with no quote. Pure.
+ */
+export function wordsAfterQuote(
+  inTask: readonly SpokenWord[], pool: readonly SpokenWord[], userWords: string | undefined, nowMs = Date.now(),
+): { quotedAt: string | null; after: SpokenWord[] } | null {
+  const given = (userWords ?? '').trim();
+  if (!plain(given)) return null;
+  const sorted = [...inTask].filter((w) => plain(w.text)).sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  const placed = [...inTask, ...pool].filter((w) => quotesWord(w, given)).map((w) => Date.parse(w.at)).filter(Number.isFinite);
+  if (placed.length) {
+    const at = Math.min(...placed);
+    return { quotedAt: new Date(at).toISOString(), after: sorted.filter((w) => Date.parse(w.at) > at).slice(-SINCE_WORDS_MAX) };
+  }
+  return { quotedAt: null, after: sorted.filter((w) => nowMs - Date.parse(w.at) <= UNPLACED_QUOTE_MS).slice(-LAST_WORDS_SHOWN) };
+}
+
 /** His words as one line each: `2026-11-07 16:10 UTC: "submit the cr"`. Pure. */
 export function quoteWords(words: readonly SpokenWord[]): string {
   return words.map((w) => `${stamp(w.at)}: "${w.text.replace(/\s+/g, ' ').trim().slice(0, WORD_CHARS) || '(a picture)'}"`).join('; ');
@@ -109,10 +166,19 @@ export function userSpokeMessage(target: Pick<Task, 'id' | 'title'>, said: UserS
     + 'if they already answer the ask or change it, tell the task what he said instead, or leave it to him.';
 }
 
+/** The refusal when he wrote in the task after the words the caller quotes. Pure. */
+export function userSpokeAfterQuoteMessage(target: Pick<Task, 'id' | 'title'>, quotedAt: string | null, after: readonly SpokenWord[], what: string): string {
+  return `Not ${what}: the user wrote in "${target.title}" (${target.id}) or a teammate whose same ask shows on it `
+    + (quotedAt ? `after the words of his you quote (${stamp(quotedAt)})` : 'recently, and Walnut cannot tell when the words of his you quote were written, so these may be newer')
+    + `: ${quoteWords(after)}. Newer words of his win over older ones. Read them first. If your answer still stands with them, `
+    + 'send it again with user_words quoting each of those messages too; if they change the decision, tell the task what he said instead, or leave it to him.';
+}
+
 /** What a tool that settles an ask says of it (task_send answers_ask, task_report_set). */
 export const USER_SPOKE_TEXT = 'Settling a task\'s ask in the user\'s place shows what he wrote in that task (userSaid: his messages since it began asking, '
   + 'else his last few). When he wrote there after the ask appeared, it is refused with 409 user_spoke_since quoting his words: read them, '
-  + 'and if your answer still stands, send again with user_words quoting each of them.';
+  + 'and if your answer still stands, send again with user_words quoting each of them. The same holds for his words in that task newer than '
+  + 'the ones you quote in user_words: newer words win, so each of them must be quoted too.';
 /** How user_words passes his words back. */
 export const USER_WORDS_BACK = 'quote each message of his it names (task_history rows with sentBy "person", or his thread messages), word for word.';
 
@@ -177,7 +243,25 @@ export async function settleCheck(
   const { openAskOf } = await import('./ask-answer.js');
   if (!('ask' in openAskOf(target))) return null;
   const said = await userSaidIn(target, everything);
-  return wordsNotPassedBack(said, userWords).length ? { said, refusal: userSpokeMessage(target, said, what) } : { said };
+  if (wordsNotPassedBack(said, userWords).length) return { said, refusal: userSpokeMessage(target, said, what) };
+  // The words it quotes: his messages in the task newer than them must be quoted too.
+  const later = await wordsAfterQuoteIn(target, callerTaskId, userWords, everything);
+  if (!later) return { said };
+  const unquoted = later.after.filter((w) => !passesBack(w, userWords));
+  const shown: UserSaid = { ...said, quotedAt: later.quotedAt, afterQuote: later.after };
+  return unquoted.length ? { said: shown, refusal: userSpokeAfterQuoteMessage(target, later.quotedAt, unquoted, what) } : { said: shown };
+}
+
+/** wordsAfterQuote on Walnut's record: his words in `target` and its folded teammates, placed against the caller's too. */
+async function wordsAfterQuoteIn(
+  target: Spoken, callerTaskId: string, userWords: string | undefined, everything: readonly Spoken[],
+): Promise<{ quotedAt: string | null; after: SpokenWord[] } | null> {
+  if (!plain(userWords ?? '')) return null;
+  const folded = everything.filter((t) => t.id !== target.id && t.user_status?.sameAsk?.id === target.id);
+  const inTask: SpokenWord[] = [];
+  for (const t of [target, ...folded]) inTask.push(...await userWordsIn(t));
+  const caller = everything.find((t) => t.id === callerTaskId);
+  return wordsAfterQuote(inTask, caller ? await userWordsIn(caller) : [], userWords);
 }
 
 /** The task a session works for, or null (a person, an unknown session). */

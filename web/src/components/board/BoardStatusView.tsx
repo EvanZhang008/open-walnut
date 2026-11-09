@@ -22,6 +22,7 @@ import { usePageViewOf } from '@/utils/view-memory';
 import { log } from '@/utils/log';
 import { apiPost } from '@/api/client';
 import { LiveActivityLine } from './LiveActivityLine';
+import { WithdrawAnswerButton } from '@/components/tasks/AnsweredForLine';
 import { useLiveActivity } from '@/stores/live-activity-store';
 import {
   NOT_STARTED_LABEL, STATUS_CHIPS, briefCountsLine, buildStatusBoard, chipCount, chipLabel, filteredRows, isNotStartedStatus, isStatusFilter, needsRowLine,
@@ -78,6 +79,7 @@ function WhereCell({ row }: { row: StatusRow }) {
   return (
     <>
       {s.state === 'waiting' && <span className={`bs-on${s.kind === 'stuck' ? ' bs-on-stuck' : ''}`} title={sameAskLine(s) ? waitingSentence(s) : undefined}>{waitingLine(s, formatWaitUntil)}</span>}
+      {s.state === 'waiting' && s.answeredFor && row.task.phase !== 'COMPLETE' && <WithdrawAnswerButton taskId={row.task.id} compact />}
       {s.state === 'working' && <LiveActivityLine taskId={row.task.id} />}
       {s.now && <span className="bs-now">{s.now}</span>}
       {!s.now && !live && s.state === 'working' && <span className="bs-muted">{s.carriesOn ? 'Its own work goes on.' : 'Running a turn now.'}</span>}

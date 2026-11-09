@@ -43,6 +43,7 @@ const ASKS_SNOOZE = /snoozedUntil|snoozeEndedMs|readSnoozedUntil|\.snoozed\b/
 const NOT_REMINDERS: Record<string, string> = {
   'src/core/sessions/machine-wake.ts': 'resumes work a machine stop interrupted; it reminds no one of an ask',
   'src/core/org/lead-waits.ts': 'wakes a lead for its worker: team work, not a reminder to the user, so a snooze does not stop it',
+  'src/core/sessions/ask-withdraw.ts': 'tells a task once that an answer given in its user\'s place was taken back, so it stops acting on it; the ask itself goes back through the derived status, snooze applied',
   'src/core/routines/run-start-deps.ts': 'a routine start failure writes NEED_ACTION; the derived status applies the snooze',
   'src/web/routes/quick-input-v1.ts': "sends the user's own typed message to Main and lists tasks by their stored status (snooze applied); it reminds no one",
 }

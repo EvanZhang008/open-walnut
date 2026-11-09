@@ -25,7 +25,7 @@ import { log } from '../logging/index.js';
 import { bootPolicy } from './boot-policy.js';
 import { routineRunToClose } from './routines/run-close.js';
 import { deriveUserStatus, reportIsCurrent, rollUpAsks, TURN_TO_READ, type UserStatus, type UserStatusInput } from './user-status.js';
-import { answeredAbove, answerFor, answersOf, askKey, foldSameAsk, type RelativeAsk } from './same-ask.js';
+import { answeredAbove, answerFor, answersOf, askKey, foldSameAsk, withdrawnAtOf, type RelativeAsk } from './same-ask.js';
 import { isSignInAsk, signInWaitWords, type SignInState } from './sign-in-ask.js';
 import { relativeAsksIndex } from './same-ask-tree.js';
 import { isReportPending, onReportPendingChange } from './sessions/report-pending.js';
@@ -721,6 +721,7 @@ export function statusOf(
     selfCreatedAt: task.created_at,
     answeredAt: (id, ask) => answeredAtOf(facts.tasksById?.get(id), ask, nowMs),
     answeredThere: (id) => answeredThereOf(facts.tasksById?.get(id)),
+    withdrawnAt: (id, ask) => withdrawnAtOf(facts.tasksById?.get(id)?.asks_withdrawn, ask),
     signIn: (ask) => isSignInAsk(ask, facts.loginWords ?? []),
   });
   return { input, status: signInHeld(answeredAbove(folded, answersOf(task), nowMs), facts) };

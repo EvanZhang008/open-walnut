@@ -39,6 +39,7 @@ export const UNCOMPARED_TASK_FIELDS: Readonly<Record<string, string>> = {
   needs_marked_at: 'drawn through user_status (a person\'s own Needs you)',
   ask_answered: 'drawn through user_status (an ask answered above leaves Needs you)',
   asks_answered: 'drawn through user_status, as ask_answered',
+  asks_withdrawn: 'not drawn (a record of answers taken back; the ask shows through user_status)',
 };
 
 export function tasksShallowEqual(a: Task, b: Task): boolean {

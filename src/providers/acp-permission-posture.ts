@@ -148,7 +148,7 @@ const WALNUT_MCP_TITLES: readonly RegExp[] = [
  * moves a session, changes a permission, reaches outside Walnut or deletes.
  */
 export const WALNUT_WRITE_OPS_ANSWERED: ReadonlySet<string> = new Set([
-  'task_send', 'task_report_set', 'task_complete', 'task_not_done_settle', 'task_note_write', 'task_update', 'task_watch',
+  'task_send', 'task_report_set', 'task_complete', 'task_not_done_settle', 'task_ask_answer_withdraw', 'task_note_write', 'task_update', 'task_watch',
   'board_post', 'board_edit', 'board_set', 'board_project_set', 'board_card_set', 'board_remind',
   'brief_write', 'thread_update', 'thread_create', 'human_inbox_send', 'human_inbox_reply',
 ])

@@ -54,6 +54,7 @@ import { orgDisplayTitle } from '@open-walnut/org-tree';
 import { TaskFieldEditor } from './TaskFieldEditor';
 import { TaskDependencies, TaskDetailActions, TaskNoteAdd } from './TaskDetailEdits';
 import { StartQueueLine } from './StartQueueLine';
+import { AnsweredForLine } from './AnsweredForLine';
 import '@/styles/task-detail-pane.css';
 
 type Task = CoreTask & { has_description?: boolean; has_summary?: boolean; has_ext?: boolean; has_note?: boolean };
@@ -243,6 +244,7 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
         <div className="tdp-main">
           <TransferLinks task={task} onOpenTask={openLinked} className="tdp-transfer" />
           <StartQueueLine task={task} onError={reportError} />
+          <AnsweredForLine task={task} onError={reportError} />
 
           {hasSessions && (
             <Section label="Session">

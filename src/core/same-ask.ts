@@ -292,6 +292,9 @@ export interface FoldContext {
   /** That task's own status reads the ask answered (a fold of its own that was answered, or an answer
    *  above it): the answer travels along a chain of folds. */
   answeredThere?: (taskId: string) => boolean;
+  /** When an answer to `ask` given there for the user was taken back (withdrawnAtOf): what it
+   *  answered before then is no evidence any more. */
+  withdrawnAt?: (taskId: string, ask: string) => string | null | undefined;
   /** Whether an ask asks the user to sign in again (sign-in-ask.ts isSignInAsk): two of them are one
    *  ask, and `relatives` then holds every task's sign-in ask, not only its teammates'. */
   signIn?: (ask: string) => boolean;
@@ -377,12 +380,21 @@ export function foldSameAsk(selfId: string, derived: UserStatus, asks: readonly 
       ...(picked.team ? { team: true as const } : {}), ...((hit as RelativeAsk).answered ? { answered: true as const } : {}),
       ...(bothSignIn(hit) ? { signIn: true as const } : {}),
     };
-  } else if (prev && prev.key === key && prev.stamp === stamp && prev.at && !prev.answered && ctx.stillAsks?.(prev.id, prev.ask)) {
-    fold = prev;
-  } else if (prev && prev.key === key && prev.stamp === stamp && prev.at) {
-    // The answer reached that task: a person wrote to it, or a lead, VP or Main answered it there.
-    const reached = [ctx.personInputAt?.(prev.id), ctx.answeredAt?.(prev.id, prev.ask)].map((v) => Date.parse(v ?? '')).filter(Number.isFinite);
-    if (prev.answered || ctx.answeredThere?.(prev.id) || reached.some((t) => t >= Date.parse(prev.at))) fold = { ...prev, answered: true };
+  } else {
+    // An answer given there for the user that was taken back since the fold (sessions/ask-withdraw.ts):
+    // only what reached that task after it counts (2026-11-09 review: a teammate read the withdrawn
+    // answer as answered for good).
+    const takenAt = prev?.at ? Date.parse(ctx.withdrawnAt?.(prev.id, prev.ask) ?? '') : NaN;
+    const takenBack = Number.isFinite(takenAt) && takenAt >= Date.parse(prev!.at);
+    if (prev && prev.key === key && prev.stamp === stamp && prev.at && (!prev.answered || takenBack) && ctx.stillAsks?.(prev.id, prev.ask)) {
+      const { answered: _answered, ...open } = prev;
+      fold = open;
+    } else if (prev && prev.key === key && prev.stamp === stamp && prev.at) {
+      // The answer reached that task: a person wrote to it, or a lead, VP or Main answered it there.
+      const since = takenBack ? takenAt : Date.parse(prev.at);
+      const reached = [ctx.personInputAt?.(prev.id), ctx.answeredAt?.(prev.id, prev.ask)].map((v) => Date.parse(v ?? '')).filter(Number.isFinite);
+      if ((prev.answered && !takenBack) || ctx.answeredThere?.(prev.id) || reached.some((t) => t >= since)) fold = { ...prev, answered: true };
+    }
   }
   if (!fold) return derived;
   const out: UserStatus = {
@@ -423,6 +435,43 @@ export interface AskAnswer {
 /** The writer of a status's now/next, kept when a fold or an answer rebuilds it (user-status.ts reportSourceOf). */
 function reportSource(s: Pick<UserStatus, 'reportBy' | 'reportSessionId'>): Pick<UserStatus, 'reportBy' | 'reportSessionId'> {
   return { ...(s.reportBy ? { reportBy: s.reportBy } : {}), ...(s.reportSessionId ? { reportSessionId: s.reportSessionId } : {}) };
+}
+
+/** An answer for the user that was taken back (sessions/ask-withdraw.ts), kept on the task as a record. */
+export interface AskAnswerWithdrawal {
+  key: string;
+  ask: string;
+  /** The answer that was taken back: its words, who gave it and when. */
+  text: string;
+  answeredBy: string;
+  answeredByTitle: string;
+  answeredAt: string;
+  /** Who took it back: a task id, or `human`, and the name the user reads. */
+  by: string;
+  byTitle: string;
+  at: string;
+  reason?: string;
+  /** Its report still asked it then, so it went back on the user's Needs you. */
+  needsAgain: boolean;
+  /** Told to a teammate whose same ask was folded under that task and read answered there. */
+  via?: { id: string; title: string };
+  /** How the task hears it: told, with its next message (session-message-queue.ts), or not at all (complete, no session). */
+  told: 'now' | 'next_message' | 'not';
+}
+
+/** The withdrawals a task keeps (Task.asks_withdrawn), oldest first. */
+export const ASKS_WITHDRAWN_MAX = 8;
+
+/** When an answer to `ask` was last taken back on that task (Task.asks_withdrawn), or null. Pure. */
+export function withdrawnAtOf(list: readonly AskAnswerWithdrawal[] | null | undefined, ask: string | null | undefined): string | null {
+  if (!ask) return null;
+  let best: string | null = null;
+  for (const w of list ?? []) {
+    if (w.via) continue;
+    const same = w.key === askKey(ask) || sameAskReworded(w.ask, ask) || askIsPartOf(ask, w.ask);
+    if (same && (!best || w.at > best)) best = w.at;
+  }
+  return best;
 }
 
 /** An answer above holds this long: a much later ask in the same words is a new decision. */

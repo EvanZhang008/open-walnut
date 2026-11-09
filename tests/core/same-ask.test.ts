@@ -4,7 +4,7 @@
  * Pure. Non-ASCII strings below are test data (CJK asks), written as \u escapes.
  */
 import { describe, it, expect } from 'vitest'
-import { answeredAbove, askKey, foldSameAsk, sameAskText, findSameAsk, sameAskMessage, sameAskReasonOf } from '../../src/core/same-ask.js'
+import { answeredAbove, askKey, foldSameAsk, withdrawnAtOf, sameAskText, findSameAsk, sameAskMessage, sameAskReasonOf } from '../../src/core/same-ask.js'
 import { relativeAsksIndex, teamKeysOf, teammatesIndex, treeAround, treeAsksOf } from '../../src/core/same-ask-tree.js'
 import { standsAbove } from '../../src/core/sessions/ask-answer.js'
 import { readStatusReport } from '../../src/core/session-hooks/builtins.js'
@@ -219,6 +219,32 @@ describe('foldSameAsk beside it in its team', () => {
     const folded = foldSameAsk('lead', needs(ASK), [], { report, nowIso: NOW, relatives: [sib] })
     expect(foldSameAsk('lead', needs(ASK), [], { report, prev: folded, answeredAt: () => '2026-11-04T10:30:00.000Z' })).toMatchObject({ state: 'waiting', sameAsk: { id: 'sib', answered: true } })
     expect(foldSameAsk('lead', needs(ASK), [], { report, prev: folded, answeredAt: () => '2026-11-04T09:00:00.000Z' }).state).toBe('needs')
+  })
+
+  it('an answer taken back there (sessions/ask-withdraw.ts): a teammate that read it answered reads it so no more: its own ask returns, or folds open while that task asks again', () => {
+    const folded = foldSameAsk('lead', needs(ASK), [], { report, nowIso: NOW, relatives: [sib] })
+    const answered = foldSameAsk('lead', needs(ASK), [], { report, prev: folded, answeredAt: () => '2026-11-04T10:30:00.000Z' })
+    expect(answered).toMatchObject({ sameAsk: { answered: true } })
+    // The answer was taken back after the fold: no evidence left, its own ask is back.
+    const taken = () => '2026-11-04T11:00:00.000Z'
+    expect(foldSameAsk('lead', needs(ASK), [], { report, prev: answered, withdrawnAt: taken }).state).toBe('needs')
+    // That task asks it again: still one ask, shown there, open.
+    const open = foldSameAsk('lead', needs(ASK), [], { report, prev: answered, withdrawnAt: taken, stillAsks: () => true })
+    expect(open).toMatchObject({ state: 'waiting', sameAsk: { id: 'sib' } })
+    expect(open.sameAsk?.answered).toBeUndefined()
+    // The user answered there after the withdrawal: answered again.
+    expect(foldSameAsk('lead', needs(ASK), [], { report, prev: answered, withdrawnAt: taken, personInputAt: () => '2026-11-04T11:30:00.000Z' }))
+      .toMatchObject({ sameAsk: { answered: true } })
+    // A withdrawal from before the fold says nothing about it.
+    expect(foldSameAsk('lead', needs(ASK), [], { report, prev: answered, withdrawnAt: () => '2026-11-01T00:00:00.000Z' })).toMatchObject({ sameAsk: { answered: true } })
+  })
+
+  it('withdrawnAtOf reads the task\'s own withdrawals of that ask, the newest', () => {
+    const w = (at: string, ask: string, via?: { id: string; title: string }) => ({ key: askKey(ask), ask, text: 'x', answeredBy: 'a', answeredByTitle: 'A', answeredAt: at, by: 'b', byTitle: 'B', at, needsAgain: true, told: 'now' as const, ...(via ? { via } : {}) })
+    expect(withdrawnAtOf([w('2026-11-01T00:00:00.000Z', ASK), w('2026-11-02T00:00:00.000Z', ASK)], ASK)).toBe('2026-11-02T00:00:00.000Z')
+    expect(withdrawnAtOf([w('2026-11-02T00:00:00.000Z', 'Rename the pear bucket to plum now?')], ASK)).toBeNull()
+    // One told to a teammate is not that task's own.
+    expect(withdrawnAtOf([w('2026-11-02T00:00:00.000Z', ASK, { id: 'x', title: 'X' })], ASK)).toBeNull()
   })
 })
 

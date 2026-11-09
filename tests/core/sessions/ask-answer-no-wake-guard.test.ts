@@ -68,6 +68,8 @@ describe('every path that takes an answers_ask keeps the rule', () => {
     'src/core/sessions/ask-answer.ts': (c) => { expect(c).toContain('export function answerReach(') },
     // Prompt text only (the default org instructions name the flag).
     'src/core/org/core-instructions.ts': () => {},
+    // Op text only: task_ask_answer_withdraw names the answers it takes back; it delivers no answer.
+    'src/ops/tasks.ts': (c) => { expect(c).not.toMatch(/answers_ask\s*:|answersAsk\s*:/) },
   }
 
   it('no file reads the flag that is not listed here', () => {

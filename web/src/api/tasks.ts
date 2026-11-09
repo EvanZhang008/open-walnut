@@ -673,6 +673,11 @@ export async function cancelQueuedStart(id: string): Promise<{ taskId: string; c
   return apiDelete<{ taskId: string; cleared: boolean }>(`/api/v1/tasks/${encodeURIComponent(id)}/start-queue?by=person`);
 }
 
+/** The user takes back an answer a lead, VP or Main gave in his place: the ask returns to his Needs you. */
+export async function withdrawAskAnswer(id: string, reason?: string): Promise<{ task: Task; needsAgain: boolean }> {
+  return apiPost<{ task: Task; needsAgain: boolean }>(`/api/v1/tasks/${encodeURIComponent(id)}/ask-answer/withdraw`, reason ? { reason } : {});
+}
+
 /** The user's own start of a task (the start route with no caller: it never waits for a host slot). */
 export async function startTaskAsPerson(id: string, message?: string): Promise<{ taskId: string; sessionId?: string }> {
   // `message`: the user's own first words to it (the board's Sort reply), sent as his message.

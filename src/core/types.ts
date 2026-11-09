@@ -1,6 +1,6 @@
 import type { StatusReport, TaskBrief, UserStatus } from './user-status.js';
 import type { TaskResultReport, TaskReviewScore } from './peers/structured-reply.js';
-import type { AskAnswer } from './same-ask.js';
+import type { AskAnswer, AskAnswerWithdrawal } from './same-ask.js';
 export type TaskStatus = 'todo' | 'in_progress' | 'done';
 /**
  * The one state field. WAITING (added 0.5.2) is a task set aside until something
@@ -1075,6 +1075,10 @@ export interface Task {
   /** Every such answer still kept, oldest first, at most ASKS_ANSWERED_MAX (same-ask.ts): a second
    *  answer no longer takes the first one's place. Local-only, payload blob. */
   asks_answered?: AskAnswer[];
+  /** Answers for the user that were taken back (sessions/ask-withdraw.ts), oldest first, at most
+   *  ASKS_WITHDRAWN_MAX: which ask, whose answer, who withdrew it and why, and whether the task was
+   *  told (one still to tell rides its next message). Local-only, payload blob. */
+  asks_withdrawn?: AskAnswerWithdrawal[];
   /** The ONE status the user sees (src/core/user-status.ts), derived on the server from the
    *  phase, the live session, open letters, Board choices, reply requests, triggers and
    *  `status_report`, and kept current by user-status-sync.ts. Every surface (Board, Org, task

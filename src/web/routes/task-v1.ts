@@ -8,6 +8,7 @@
  *   POST   /tasks/:id/complete       → { task } (completeTask semantics, CLI parity)
  *   POST   /tasks/:id/start          → { action, taskId, title, sessionId? }
  *   PUT    /tasks/:id/report         → { task, phase } (its own line, set by its lead, VP, Main or a person)
+ *   POST   /tasks/:id/ask-answer/withdraw → { task, withdrawn, needsAgain } (an answer given in the user's place, taken back)
  *   POST   /tasks/:id/star           → { task, starred: false } (RETIRED no-op)
  *   POST   /tasks/:id/notes          → { task } (append timestamped note)
  *   PUT    /tasks/:id/note           → { task } (replace whole note)
@@ -380,6 +381,40 @@ taskV1Router.post('/tasks/:id/not-done', async (req: Request, res: Response, nex
       res.json({ task: updated?.task ?? { ...task, result_report: withOwed(report) } })
     } catch (err) {
       if (sendTaskManagerError(res, err)) return
+      throw err
+    }
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/v1/tasks/:id/ask-answer/withdraw { ask?, reason? } → { task, withdrawn, needsAgain }: an
+// answer given in the user's place (task_send answers_ask) is taken back, and the ask goes back on
+// his Needs you while the task still asks it (core/sessions/ask-withdraw.ts).
+taskV1Router.post('/tasks/:id/ask-answer/withdraw', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const b = (req.body ?? {}) as Record<string, unknown>
+    const rawActor = req.headers['x-walnut-caller-sid']
+    const actorSid = (Array.isArray(rawActor) ? rawActor[0] : rawActor)?.trim() || undefined
+    let callerTaskId: string | null = null
+    if (actorSid) {
+      const { resolveCaller } = await import('../../core/sessions/session-send-core.js')
+      const caller = await resolveCaller(actorSid).catch(() => null)
+      if (caller?.kind === 'session' && caller.record.taskId) callerTaskId = caller.record.taskId
+      else if (caller?.kind === 'session' || caller?.kind === 'external') {
+        sendError(res, 409, 'not_above', 'Only a task\'s session or the user takes back an answer given in the user\'s place')
+        return
+      }
+    }
+    const { withdrawAskAnswer, AskWithdrawError } = await import('../../core/sessions/ask-withdraw.js')
+    try {
+      const out = await withdrawAskAnswer(callerTaskId, paramStr(req.params.id), {
+        ...(typeof b.ask === 'string' ? { ask: b.ask } : {}),
+        ...(typeof b.reason === 'string' ? { reason: b.reason } : {}),
+      })
+      res.json(out)
+    } catch (err) {
+      if (err instanceof AskWithdrawError) { sendError(res, err.status, err.code, err.message); return }
       throw err
     }
   } catch (err) {

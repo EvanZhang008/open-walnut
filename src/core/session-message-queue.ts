@@ -295,6 +295,9 @@ export async function sendMessageToSession(
   // A background notice that waited for this message rides in front of it (sessions/held-notices.ts).
   const { pendingHeldNotices } = await import('./sessions/held-notices.js');
   const heldNotes = scopedArea ? null : await pendingHeldNotices(sessionId);
+  // An answer given for the user that was taken back, which its task has not heard yet (sessions/ask-withdraw.ts).
+  const { pendingWithdrawnNote } = await import('./sessions/ask-withdraw.js');
+  const withdrawn = await pendingWithdrawnNote(sessionId);
   // Whatever a person did not type is framed here, so the transcript says who sent it (sessions/send-frame.ts).
   const framedBody = frameForSource(rawBody, opts?.source);
   const outputMode = opts?.hinted ? null : await prepareQueuedHintedSend(sessionId, opts?.source, framedBody);
@@ -303,7 +306,7 @@ export async function sendMessageToSession(
   // for the next message (each is told only when the row holds it, below).
   const slashCommand = body.trimStart().startsWith('/');
   // App state leads: an App's AI-only brief counts only at the head of a line (lib/ai-only-envelope.ts).
-  const notes = [appState?.text, place?.text, folderMoved?.text, restart?.text, digest?.text, statusNote?.text, heldNotes?.text, waitNote, retiredNote].filter(Boolean).join('\n\n');
+  const notes = [appState?.text, place?.text, folderMoved?.text, restart?.text, digest?.text, statusNote?.text, heldNotes?.text, withdrawn?.text, waitNote, retiredNote].filter(Boolean).join('\n\n');
   const lead = [notes, switchContext?.text].filter(Boolean).join('\n\n');
   const enqueueText = lead && !slashCommand ? `${lead}\n\n${body}` : body;
   let msg: QueuedMessage;
@@ -338,6 +341,7 @@ export async function sendMessageToSession(
   if (folderMoved && msg.message.includes(folderMoved.text)) await folderMoved.markTold();
   if (switchContext && msg.message.includes(switchContext.text)) await switchContext.markTold();
   if (statusNote && msg.message.includes(statusNote.text)) statusNote.markTold();
+  if (withdrawn && msg.message.includes(withdrawn.text)) await withdrawn.markTold();
   if (outputMode && msg.message.includes(outputMode.enqueueText)) await outputMode.commit();
   if (appState) {
     if (msg.message.includes(appState.text)) appState.markTold();

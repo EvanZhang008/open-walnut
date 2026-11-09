@@ -41,6 +41,7 @@ import { OrgAlertSnooze } from './OrgAlertSnooze';
 import { usePointerHold } from './hold-order';
 import { writeBriefFolded, type OrgTopView } from './org-brief-model';
 import type { BriefFreshness } from '@open-walnut/brief-fresh';
+import { WithdrawAnswerButton } from '@/components/tasks/AnsweredForLine';
 import { ORG_RAIL_TABS, ORG_RAIL_TAB_LABELS, TAB_DOT, stateTab, taskTabNote, type OrgRailTab, type OrgTaskTab, type OrgTaskTabs } from './org-task-tabs';
 import { useWatchToggle } from '@/components/tasks/WatchToggle';
 import * as ICONS from '@/components/common/Icons';
@@ -170,6 +171,7 @@ function TaskTabList({ tasks, tab, onOpen, now }: { tasks: readonly Task[]; tab:
               </span>
             </button>
             <OrgWatchToggle task={t} />
+            {own === 'waiting' && t.user_status?.answeredFor && t.phase !== 'COMPLETE' && <WithdrawAnswerButton taskId={t.id} compact />}
           </li>
         );
       })}

@@ -26,6 +26,8 @@ const PRODUCERS: Record<string, { file: string; outcome: string | null }> = {
   retiredNote: { file: 'src/core/org/retired-lead.ts', outcome: 'handed-over' },
   // A request past its deadline, or its reminder, held for the next message (sessions/held-notices.ts).
   heldNotes: { file: 'src/core/session-requests.ts', outcome: 'timeout' },
+  // An answer given for the user that was taken back, which its task has not heard yet (sessions/ask-withdraw.ts).
+  withdrawn: { file: 'src/core/sessions/ask-withdraw.ts', outcome: 'answer-withdrawn' },
 };
 
 describe('the rider list names every note Walnut puts in front of a message', () => {

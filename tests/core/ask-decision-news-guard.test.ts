@@ -396,6 +396,7 @@ describe('every path that tells an ask changed compares the decision', () => {
       'src/core/ask-decision.ts': 'keeps the id when the session said nothing and the words still say the same',
       'src/core/same-ask-tree.ts': 'two TASKS asking the same: each has its own decision, so only the words can tell (a refusal names the other task, it hides nothing)',
       'src/core/user-status-sync.ts': 'the fold between two tasks (stillAsks) and a watch armed before decisions existed',
+      'src/core/sessions/ask-withdraw.ts': 'an answer taken back is found by the words it answered, and the report still asking it by the same words',
       'src/core/sessions/ask-answer.ts': 'an answer from above recorded against the words it answered',
       'src/core/sessions/report-set.ts': 'a report from before decisions existed: the decision is compared first',
       'src/core/sessions/brief-fresh.ts': 'a Brief line stored before decisions existed (the n1 mark): new marks keep the decision',

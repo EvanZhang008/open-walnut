@@ -109,11 +109,28 @@ describe('every write that asks the user is checked', () => {
 
 describe('an ask answered above it', () => {
   it('only ask-answer.ts records an answer, and only through task_send answers_ask', () => {
-    expect(filesWith(/[{,]\s*ask_answered\s*:/), 'a new writer of Task.ask_answered: go through sessions/ask-answer.ts (it checks the sender stands above the task and tells it once)')
-      .toEqual(['src/core/sessions/ask-answer.ts'])
+    expect(filesWith(/[{,]\s*ask_answered\s*:/), 'a new writer of Task.ask_answered: go through sessions/ask-answer.ts (it checks the sender stands above the task and tells it once), or take one back through sessions/ask-withdraw.ts')
+      .toEqual(['src/core/sessions/ask-answer.ts', 'src/core/sessions/ask-withdraw.ts'])
     expect(code('src/core/sessions/session-send-core.ts')).toMatch(/export async function performSessionSend[\s\S]*?answersAsk[\s\S]*?prepareAskAnswer\([\s\S]*?performPlainSend\([\s\S]*?commit\(\)/)
     expect(code('src/web/routes/messages-v1.ts')).toContain('answersAsk: b.answers_ask === true')
     expect(code('src/ops/work.ts')).toContain('answers_ask:')
+  })
+
+  it('an answer can be taken back: ask-withdraw.ts only removes answers, checked like answers_ask, and the task is told once', () => {
+    const w = code('src/core/sessions/ask-withdraw.ts')
+    // Who may: the person, the answerer, or one that stands above the task (ask-answer.ts).
+    expect(w).toMatch(/caller\.id !== answer\.by && !standsAbove\(caller, target, everything\)[\s\S]*?AskWithdrawError\('not_above'/)
+    // It writes only what it keeps of the answers already there, under the row's lock, never a new one.
+    expect(w).toMatch(/storeEntry\(target\.id, entry, \(cur\) => \{[\s\S]*?answersOf\(cur\)[\s\S]*?\.filter\(\(a\) => !same\(a\)\)[\s\S]*?asks_answered: kept\.length \? kept : null,[\s\S]*?ask_answered: kept\.length \? kept\[kept\.length - 1\] : null/)
+    // A teammate that read it answered there is told too, and the fold reads the withdrawal (same-ask.ts).
+    expect(w).toMatch(/fold\?\.id !== target\.id \|\| !fold\.answered[\s\S]*?via: \{ id: target\.id/)
+    expect(code('src/core/same-ask.ts')).toMatch(/export function foldSameAsk[\s\S]*?ctx\.withdrawnAt\?\.\(/)
+    expect(code('src/core/user-status-sync.ts')).toMatch(/withdrawnAt: \(id, ask\) => withdrawnAtOf\(/)
+    // Told now only into a live session, else with its next message, from the stored record (it survives a restart).
+    expect(w).toMatch(/async function tellNow[\s\S]*?liveSendGuard\(/)
+    expect(code('src/core/session-message-queue.ts')).toMatch(/pendingWithdrawnNote\(sessionId\)[\s\S]*?withdrawn\?\.text[\s\S]*?withdrawn\.markTold\(\)/)
+    expect(code('src/web/routes/task-v1.ts')).toContain("'/tasks/:id/ask-answer/withdraw'")
+    expect(code('src/ops/tasks.ts')).toContain("name: 'task_ask_answer_withdraw'")
   })
 
   it('Main and every lead are told to answer that way, and every session not to ask what was decided', async () => {

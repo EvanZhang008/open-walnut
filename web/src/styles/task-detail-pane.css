@@ -384,3 +384,6 @@
 }
 .tdp-start-queue-now { font-weight: 600; }
 .tdp-start-queue-btn:disabled { opacity: 0.5; cursor: default; }
+/* Withdraw on an answer given for the user (AnsweredForLine.tsx), also on a Board Status row. */
+.answered-for-confirm { display: inline-flex; gap: 6px; }
+.answered-for-btn-compact { margin-left: 6px; font-size: 11px; padding: 0 6px; }

@@ -54,7 +54,7 @@ defineOp({
     'so list there anything left over instead of burying it in the text. ' +
     'A reviewer answering a review gives its verdict as `score` ({function, ux, ui}, each out of 10) as well as in the text. ' +
     'Give every message a `title`: the one-line TL;DR the reader sees first. ' +
-    'When you decide in the user\'s place a question a task below you is asking the user, pass answers_ask=true: the user sees that ask no more, and the task is told once. ' +
+    'When you decide in the user\'s place a question a task below you is asking the user, pass answers_ask=true: the user sees that ask no more, and the task is told once. An answer that turns out wrong is taken back with task_ask_answer_withdraw (the ask returns to his Needs you). ' +
     'Such an answer never resumes a stopped session or reopens a finished task: to a COMPLETE task, or one whose session is not running, it is only recorded (no turn starts); task_start it when it must act on the answer. ' +
     'Address the task id. A task not started yet returns 409: use task_start. ' +
     'A COMPLETE task returns 409 target_complete: its work is done and a message would reopen it. ' +
@@ -79,7 +79,7 @@ defineOp({
       + `409 user_spoke_since when the user wrote in that task after it asked. ${USER_SPOKE_TEXT}`),
     user_words: z.string().min(1).max(4000).optional().describe(
       'With answers_ask: the user\'s own words you act on, quoted exactly. Needed on an ask of a kind only the user approves (an outward send, spending, credentials, permissions, a cloud delete, an irreversible step), '
-      + `and after 409 user_spoke_since: ${USER_WORDS_BACK}`),
+      + `and after 409 user_spoke_since: ${USER_WORDS_BACK} His messages in that task newer than the words you quote must be quoted too (409 user_spoke_since names them).`),
     force: z.boolean().optional().describe('Send to (or answer) a task that is COMPLETE, which reopens it. Needs `reason`'),
     reason: z.string().min(1).max(500).optional().describe('With force: what changed and why the complete task must act again. Shown to that task and the user'),
     messageId: z.string().regex(/^qm-[A-Za-z0-9-]{1,64}$/).optional().describe('Stable id for retry deduplication'),

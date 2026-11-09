@@ -56,7 +56,7 @@ const TAG_CLOSE = '\n</walnut-message>';
  * (TimelineInboundMessage.riderOutcomes).
  */
 export const RIDER_NOTICE_OUTCOMES: readonly string[] = [
-  'moved', 'folder-moved', 'restarted', 'org-update', 'status', 'waiting', 'handed-over', 'timeout', 'task-routing-policy',
+  'moved', 'folder-moved', 'restarted', 'org-update', 'status', 'waiting', 'handed-over', 'timeout', 'task-routing-policy', 'answer-withdrawn',
 ];
 const RIDER_OUTCOMES = new Set(RIDER_NOTICE_OUTCOMES);
 /** `name="value"`, first occurrence wins (same rule as the envelope parser). */

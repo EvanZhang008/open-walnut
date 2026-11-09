@@ -21,6 +21,7 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-user-spok
 import { WALNUT_HOME } from '../../../src/constants.js'
 import {
   askSinceOf, needsSinceOf, quoteWords, userSaidIn, userSaidLine, userSaidOf, userWordsIn, wordsNotPassedBack, LAST_WORDS_SHOWN,
+  passesBack, quotesWord, wordsAfterQuote, UNPLACED_QUOTE_MS,
 } from '../../../src/core/sessions/user-spoke.js'
 import { fileThreadMessage } from '../../../src/core/org/threads-store.js'
 import { getOp } from '../../../src/ops/registry.js'
@@ -104,6 +105,60 @@ describe('what he wrote since', () => {
   })
 })
 
+describe('his words newer than the ones a caller quotes', () => {
+  const inTask = [
+    { at: at(1), text: 'no audits, never' },
+    { at: at(30), text: 'I want the vendor to confirm in writing whether an order ships' },
+    { at: at(31), text: 'if he cannot, find other vendors' },
+  ]
+  it('a quote placed in the task: every later message of his counts, quoted ones aside', () => {
+    const r = wordsAfterQuote(inTask, [], 'He said "no audits, never".', Date.parse(at(40)))!
+    expect(r.quotedAt).toBe(at(1))
+    expect(r.after.map((w) => w.text)).toEqual([inTask[1].text, inTask[2].text])
+    // Quoting the newest instead: nothing after it.
+    expect(wordsAfterQuote(inTask, [], '"if he cannot, find other vendors"', Date.parse(at(40)))!.after).toEqual([])
+  })
+  it('a fragment that is most of a message places it too, in the caller\'s own record as well (a VP\'s thread)', () => {
+    const vp = [{ at: at(20), text: '\u4e0d\u8981inspection\u6c99\u5e01' }]
+    const r = wordsAfterQuote(inTask, vp, 'his words: "\u4e0d\u8981 inspection"', Date.parse(at(40)))!
+    expect(r.quotedAt).toBe(at(20))
+    expect(r.after).toHaveLength(2)
+    expect(quotesWord(inTask[1], 'no')).toBe(false)
+  })
+
+  it('a newer message that only mentions the old words is no source of them, and must be passed back (2026-11-09 review)', () => {
+    const words = [
+      { at: at(1), text: 'no audits, never' },
+      { at: at(30), text: 'I changed my mind about no audits, never: send the vendor email now' },
+    ]
+    expect(quotesWord(words[1], '"no audits, never"')).toBe(false)
+    const r = wordsAfterQuote(words, [], '"no audits, never"', Date.parse(at(40)))!
+    expect(r.quotedAt).toBe(at(1))
+    expect(r.after.map((w) => w.text)).toEqual([words[1].text])
+    expect(passesBack(words[1], '"no audits, never"')).toBe(false)
+  })
+
+  it('words he repeated later never hide what he wrote between: the earliest source places it', () => {
+    const words = [
+      { at: at(1), text: 'keep the snapshots' }, { at: at(10), text: 'delete them all after all' }, { at: at(20), text: 'keep the snapshots' },
+    ]
+    const r = wordsAfterQuote(words, [], 'keep the snapshots', Date.parse(at(40)))!
+    expect(r.quotedAt).toBe(at(1))
+    expect(r.after.filter((w) => !passesBack(w, 'keep the snapshots')).map((w) => w.text)).toEqual(['delete them all after all'])
+  })
+  it('a quote placed nowhere: his recent messages in the task may be newer; old ones are not asked for', () => {
+    const r = wordsAfterQuote(inTask, [], 'words from a call we had', Date.parse(at(40)))!
+    expect(r.quotedAt).toBeNull()
+    expect(r.after).toHaveLength(LAST_WORDS_SHOWN)
+    const later = Date.parse(at(40)) + UNPLACED_QUOTE_MS + 60_000
+    expect(wordsAfterQuote(inTask, [], 'words from a call we had', later)!.after).toEqual([])
+  })
+  it('no quote: no such rule', () => {
+    expect(wordsAfterQuote(inTask, [], undefined)).toBeNull()
+    expect(wordsAfterQuote(inTask, [], '  ')).toBeNull()
+  })
+})
+
 describe('where his words are read', () => {
   it('an Org node: its Threads', async () => {
     await fileThreadMessage('mlead-0001', { text: 'discuss before doing', images: [], via: 'chat', newThreadId: 'th-aaaaaa000001', messageId: 'tm-aaaaaa000001', at: at(3), lang: 'en' } as never)
@@ -142,6 +197,12 @@ describe('every path that settles an ask for the user reads his words first', ()
     'src/core/sessions/report-set.ts': (c) => {
       expect(c).toMatch(/needsSinceOf\([\s\S]*?by\.startsWith\('task:'\)[\s\S]*?settleCheck\([\s\S]*?if \(check\?\.refusal\) throw new ReportChangeError\(check\.refusal, 'user_spoke_since'[\s\S]*?status_report: report/)
     },
+    // Taking an answer back settles nothing for him: it only removes the recorded answer, so his ask returns.
+    'src/core/sessions/ask-withdraw.ts': (c) => {
+      expect(c).not.toMatch(/status_report\s*:/)
+      expect(c).toMatch(/asks_answered: kept\.length \? kept : null/)
+      expect(c).not.toMatch(/answers_ask|ask_answered: answer\b/)
+    },
     // The task's own report: stamped with when it began asking, so a reworded ask keeps the time.
     'src/core/sessions/status-question.ts': (c) => {
       expect(c).toMatch(/needsSinceOf\(report, prev\)[\s\S]*?needs_since: needsSince[\s\S]*?status_report: report/)
@@ -163,7 +224,10 @@ describe('every path that settles an ask for the user reads his words first', ()
     expect(code('src/core/sessions/session-send-core.ts')).toContain("'user_spoke_since'")
     expect(code('src/core/sessions/user-spoke.ts')).toMatch(/export function userSpokeMessage[\s\S]*?quoteWords\(said\.words\)/)
     // The one check: his words read (folds too), and a refusal unless each is passed back.
-    expect(code('src/core/sessions/user-spoke.ts')).toMatch(/export async function settleCheck[\s\S]*?openAskOf\([\s\S]*?userSaidIn\(target, everything\)[\s\S]*?wordsNotPassedBack\(said, userWords\)\.length \? \{ said, refusal: userSpokeMessage\(/)
+    expect(code('src/core/sessions/user-spoke.ts')).toMatch(/export async function settleCheck[\s\S]*?openAskOf\([\s\S]*?userSaidIn\(target, everything\)[\s\S]*?if \(wordsNotPassedBack\(said, userWords\)\.length\) return \{ said, refusal: userSpokeMessage\(/)
+    // ...and his words newer than the ones it quotes, placed against the caller's own record too.
+    expect(code('src/core/sessions/user-spoke.ts')).toMatch(/export async function settleCheck[\s\S]*?wordsAfterQuoteIn\(target, callerTaskId, userWords, everything\)[\s\S]*?refusal: userSpokeAfterQuoteMessage\(/)
+    expect(code('src/core/sessions/user-spoke.ts')).toMatch(/async function wordsAfterQuoteIn[\s\S]*?for \(const t of \[target, \.\.\.folded\]\) inTask\.push/)
   })
 
   it('every task PATCH route checks a phase write by another task', () => {

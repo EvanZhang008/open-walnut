@@ -1257,6 +1257,39 @@ defineOp({
   tags: { readonly: false, remote: 'allow', destructive: false },
 })
 
+defineOp({
+  name: 'task_ask_answer_withdraw',
+  title: 'Take back an answer given in the user\'s place',
+  description:
+    'An answer you (or a lead, a VP, Main) gave to a task\'s ask of the user in his place (task_send answers_ask) took that ask ' +
+    'off his Needs you. When it turns out wrong (his newer words in the task say otherwise, say), take it back here instead of ' +
+    'only telling the task: Walnut removes the recorded answer, so while the task still asks it, the ask is back on his Needs you, ' +
+    'and the task is told once (a running turn now, otherwise with its next message; it is never woken just for this, and a ' +
+    'complete task is not told). Who may: the user, the task that gave the answer, and any task that may answer it (its lead or VP, ' +
+    'Main, a task it is under). A session says why in reason; the task hears it.',
+  input: {
+    id: z.string().min(1).describe('The task whose ask was answered (id or unique prefix)'),
+    reason: z.string().min(1).max(500).optional().describe('Why it is taken back (10+ characters from a session): the task is told it'),
+    ask: z.string().min(1).max(500).optional().describe('Which ask\'s answer, when the task holds several (default: the one its status shows)'),
+  },
+  bind: { method: 'POST', path: '/tasks/:id/ask-answer/withdraw' },
+  mapResult: ({ body }) => {
+    const b = (body ?? {}) as { task?: Record<string, unknown>; withdrawn?: { ask?: string; told?: string }; needsAgain?: boolean; teammates?: Array<{ id: string; title: string }> }
+    const mates = b.teammates?.length ? ` Teammates that read it answered there were told too: ${b.teammates.map((t) => `"${t.title}" (${t.id})`).join(', ')}.` : ''
+    const told = b.withdrawn?.told === 'now' ? 'The task was told now.'
+      : b.withdrawn?.told === 'next_message' ? 'The task hears it with its next message (it was not woken for it).'
+        : 'The task was not told (it is complete, or has no session).'
+    return withOutcome(
+      { ...(b.task ? { task: taskView(b.task) } : {}), withdrawn: b.withdrawn, needsAgain: b.needsAgain === true, ...(b.teammates?.length ? { teammates: b.teammates } : {}) },
+      `The answer to "${String(b.withdrawn?.ask ?? '').replace(/\s+/g, ' ').slice(0, 160)}" is taken back. `
+        + (b.needsAgain ? 'The task still asks it, so it is back on the user\'s Needs you. ' : 'The task\'s status no longer asks it, so nothing returns to Needs you until it asks again. ')
+        + told + mates,
+      b.needsAgain ? 'Leave it to the user now; do not answer it again for him unless his own words decide it.' : 'No further action is required.',
+    )
+  },
+  tags: { readonly: false, remote: 'allow', destructive: false },
+})
+
 const MAX_BULK_WRITE = 50
 
 /** One row of a bulk write result: the task's headline, or why that id failed. */
