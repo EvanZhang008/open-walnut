@@ -37,6 +37,7 @@ const config = mergeConfig(
         '@open-walnut/message-about': path.resolve(import.meta.dirname, 'src/core/org/message-about.ts'),
         '@open-walnut/thread-view': path.resolve(import.meta.dirname, 'src/core/org/thread-view.ts'),
         '@open-walnut/live-activity': path.resolve(import.meta.dirname, 'src/core/live-activity.ts'),
+        '@open-walnut/terminal-key': path.resolve(import.meta.dirname, 'src/core/terminal-key.ts'),
         '@open-walnut/brief-structure': path.resolve(import.meta.dirname, 'src/core/sessions/brief-structure.ts'),
         '@open-walnut/brief-fresh': path.resolve(import.meta.dirname, 'src/core/sessions/brief-fresh.ts'),
         '@open-walnut/companion-keep': path.resolve(import.meta.dirname, 'src/core/replication/companion-keep.ts'),

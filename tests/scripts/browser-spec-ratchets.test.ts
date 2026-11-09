@@ -1278,6 +1278,9 @@ describe('a test that loads a page again after it opened full screen or a split 
     'session-thread-review-sidebar.spec.ts': ['a card shows its whole thread with its own scroll'],
     // Each tab keeps its own view (dc8132c6b): the second tab's load is the check.
     'view-state-tabs.spec.ts': ["another tab's session panel view never moves this tab's"],
+    // The Terminal view that comes back is the check: each terminal reattached after a
+    // reload, the same terminals in a second window, the dock's height kept.
+    'terminal-multi.spec.ts': ['several terminals: tabs, splits, a reload reattaches each', 'a split splits only the focused pane', 'the terminal docked under Changed and Files'],
     // Tree Mode's split survives a reload: the pages, the path and every draft that came back are the check.
     'session-tree-split.spec.ts': ['A: asking splits, each page sends into its own question, a reload keeps the pages', 'B: Cmd+[ / Cmd+] slide the pages'],
     // The sibling page's share of the column, dragged, is what the reload checks.

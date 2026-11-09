@@ -81,14 +81,14 @@ export class TerminalReaper {
     this.running = true
     try {
       const { terminalManager } = await import('../web/terminal/terminal-manager.js')
-      const { conditionalReap, reapOrphanDtach } = await import('../web/terminal/dtach-lifecycle.js')
+      const { conditionalReapTerminal, reapOrphanDtach } = await import('../web/terminal/dtach-lifecycle.js')
       const { getSessionByClaudeId } = await import('./session-tracker.js')
 
       const active = terminalManager.listActive()
       let reapedActive = 0
 
       // ① Active-terminal recheck.
-      for (const { sessionId, host } of active) {
+      for (const { sessionId, terminalKey, host } of active) {
         let record
         try {
           record = await getSessionByClaudeId(sessionId)
@@ -108,13 +108,13 @@ export class TerminalReaper {
         try {
           // conditionalReap keeps a terminal running a foreground build/test; only
           // an idle shell is actually killed.
-          const result = await conditionalReap({ claudeSessionId: sessionId, host })
+          const result = await conditionalReapTerminal({ claudeSessionId: sessionId, host, terminalKey })
           if (result === 'killed') {
             reapedActive++
-            log.web.info('terminal reaper: reaped idle terminal', { sessionId, host, reason: 'session-deleted' })
+            log.web.info('terminal reaper: reaped idle terminal', { sessionId, terminalKey, host, reason: 'session-deleted' })
           }
         } catch (err) {
-          log.web.warn('terminal reaper: conditionalReap failed', { sessionId, host, error: String(err) })
+          log.web.warn('terminal reaper: conditionalReap failed', { sessionId, terminalKey, host, error: String(err) })
         }
       }
 

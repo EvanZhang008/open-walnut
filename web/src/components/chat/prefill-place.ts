@@ -9,8 +9,10 @@
  *               the message like keep-draft; once the box holds a quote, each new
  *               one goes at the END, so quotes and their comments read in the order
  *               they were added, however many the user collects before sending
+ *   attach      a block added from beside the chat (terminal output): always after
+ *               what is typed, as its own paragraph, so blocks read in the order added
  */
-export type PrefillMode = 'replace' | 'keep-draft' | 'append' | 'stack';
+export type PrefillMode = 'replace' | 'keep-draft' | 'append' | 'stack' | 'attach';
 
 export interface PlacedPrefill {
   text: string;
@@ -31,6 +33,10 @@ export function placePrefill(mode: PrefillMode, typed: string, prefill: string):
   if (mode === 'append') {
     const head = typed.replace(/\s+$/, '');
     return { text: head ? `${head} ${prefill}` : prefill, caret: 'end' };
+  }
+  if (mode === 'attach') {
+    const head = typed.replace(/\s+$/, '');
+    return { text: head ? `${head}\n\n${prefill}` : prefill, caret: 'end' };
   }
   if (mode === 'stack' && holdsQuote(typed)) {
     return { text: `${typed.replace(/\s+$/, '')}\n\n${prefill}`, caret: 'end' };

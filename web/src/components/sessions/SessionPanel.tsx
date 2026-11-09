@@ -54,6 +54,8 @@ import { BoardTaskPeek } from '@/components/board/BoardTaskPeek';
  */
 const SessionFileExplorer = lazy(() => import('./SessionFileExplorer').then((m) => ({ default: m.SessionFileExplorer })));
 const SessionTerminal = lazy(() => import('./SessionTerminal').then((m) => ({ default: m.SessionTerminal })));
+/** The views the terminal docks under, by the name its "Show with ..." button says. */
+const DOCK_VIEW_LABEL: Partial<Record<SessionSplitView, string>> = { changed: 'Changed', files: 'Files', web: 'Web' };
 const SessionChangedTab = lazy(() => import('./SessionChangedTab').then((m) => ({ default: m.SessionChangedTab })));
 const SessionInboxPane = lazy(() => import('@/components/inbox/SessionInboxPane').then((m) => ({ default: m.SessionInboxPane })));
 const TaskBoardPane = lazy(() => import('@/components/board/TaskBoardPane').then((m) => ({ default: m.TaskBoardPane })));
@@ -63,9 +65,11 @@ import { useSessionLetters } from '@/hooks/useSessionLetters';
 import {
   consumeSessionInboxLink, SESSION_INBOX_LINK_EVENT,
 } from '@/components/inbox/session-inbox-link';
-import { buildPassagePrefill, buildSelectionPrefill, displayPathForPrefill } from './diffPrefill';
+import { buildPassagePrefill, buildSelectionPrefill, buildTerminalPrefill, displayPathForPrefill } from './diffPrefill';
+import { TerminalDock } from './TerminalDock';
+import type { TerminalPathLink } from './terminal-links';
 import type { SessionSplitView } from './sessionSplitView';
-import { ICON_ROBOT, ICON_EXPAND, ICON_COLLAPSE, ICON_CLOSE, ICON_EYE, ICON_MINIMIZE, ICON_LOCK, ICON_UNLOCK, ICON_LOCATE, ICON_NEW_TAB, ICON_PANEL_RIGHT, ICON_PANEL_RIGHT_FILLED } from '../common/Icons';
+import { ICON_ROBOT, ICON_EXPAND, ICON_COLLAPSE, ICON_CLOSE, ICON_EYE, ICON_MINIMIZE, ICON_LOCK, ICON_UNLOCK, ICON_LOCATE, ICON_NEW_TAB, ICON_PANEL_RIGHT, ICON_PANEL_RIGHT_FILLED, ICON_TERMINAL } from '../common/Icons';
 import { openPopout } from '@/popout/openPopout';
 import { locateTaskOnHome, navigateToTarget } from '@/utils/open-session';
 import { UserMessagesSummary } from './UserMessagesSummary';
@@ -127,7 +131,7 @@ import { usePendingCardTool } from '@/hooks/usePendingCardTool';
 import '@/styles/phone-session.css';
 import { useFullscreen, useSheetPlace } from '@/hooks/useFullscreen';
 import { fullscreenPlace } from '@/hooks/fullscreen-owner';
-import { usePanelView } from './panel-view';
+import { usePanelView, TERMINAL_DOCK_VIEWS } from './panel-view';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { useHeightVar } from '@/hooks/useHeightVar';
 import { useSessionPlan } from '@/hooks/useSessionPlan';
@@ -521,7 +525,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   const { isFullscreen, enterFullscreen, exitFullscreen, fullscreenClass, FullscreenBackdrop } = useFullscreen({ keepAcrossRoutes: true, place: sheetAt });
   // What the panel shows beside its chat, kept for this place (panel-view.ts).
   const panelView = usePanelView(sheetAt);
-  const { activeView, setActiveView, fileViewTarget: keptFileTarget, setFileViewTarget, webRequest, setWebRequest, inboxLetterId, setInboxLetterId } = panelView;
+  const { activeView, setActiveView, fileViewTarget: keptFileTarget, setFileViewTarget, webRequest, setWebRequest, inboxLetterId, setInboxLetterId, terminalDock, setTerminalDock } = panelView;
   // A file a click opened before this panel mounted is not a click now: the explorer reopens
   // what was read last (it keeps that itself, and the user may have browsed on), so the kept
   // target only roots it on another host. A click in this mount gets a new nonce.
@@ -1223,6 +1227,17 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     autoCollapsed.current = false;
     setChatCollapsed(false);
   }, []);
+  // A terminal selection's "Add to chat": the output goes in as a block AFTER what
+  // is typed ('attach'), so several blocks read in the order added and nothing is
+  // sent. Reveals the chat like a code selection does (same display:none trap).
+  const handleTerminalAddToChat = useCallback((text: string, source: string) => {
+    setPrefillText(buildTerminalPrefill(text, source));
+    setPrefillMode('attach');
+    setPrefillNonce((n) => n + 1);
+    autoCollapsed.current = false;
+    setChatCollapsed(false);
+    log.info('session-panel', 'terminal selection added to the composer', { sessionId, source, chars: text.length });
+  }, [sessionId]);
   // "Quote in session" from a task row elsewhere on the page: append the pill to
   // whatever is typed (a quote joins the sentence in progress, it does not lead
   // it), reveal, focus. Marking the event handled tells the sender the text has
@@ -1555,10 +1570,71 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
       ? { path: session?.cwd ?? '~', nonce: (prev?.nonce ?? 0) + 1, missing: missingPathLine(path, t.missing.checked) }
       : { path, line, endLine, term, nonce: (prev?.nonce ?? 0) + 1, ...(t.elsewhere ? { onHost: { host: t.host } } : {}) });
     setActiveView('files');
-    enterFullscreen();
+    // Phone: the view is a layer under the top bar (its Back closes it), never a full-screen sheet over that bar.
+    if (!isPhoneLayout()) enterFullscreen();
   }, [enterFullscreen, inset, session?.cwd, sessionId, setActiveView, setFileViewTarget]);
   const handleFileOpen = useClickedPathOpener(openLocatedFile, { host: session?.host ?? undefined, cwd: session?.cwd ?? undefined, sessionId });
   openDocRef.current = (path) => handleFileOpen(path);
+  // A path clicked in the terminal opens in Files with the terminal docked under
+  // it, so the output that named the file stays in view (one frame: no reconnect).
+  const terminalOnPhone = usePhoneLayout();
+  const terminalDockAllowed = !inset && !terminalOnPhone;
+  // A path no host has (a typo, a file the command has not written yet) says so
+  // in the terminal and leaves the view as it was.
+  const [terminalPathMissing, setTerminalPathMissing] = useState<{ text: string; nonce: number } | null>(null);
+  // The height the docked terminals need (stacked panes): the dock grows to it.
+  const [terminalWantPx, setTerminalWantPx] = useState(0);
+  // The next places to try for a relative path when the one tried is missing
+  // (the shell's directory, its repository root, the session's directory).
+  const terminalFallback = useRef<string[]>([]);
+  // The path as the terminal printed it: the missing note names it (the places tried were several).
+  const terminalPrinted = useRef<string | null>(null);
+  const openTerminalPathRef = useRef<(path: string, line?: number) => void>(() => {});
+  const openTerminalTarget = useCallback((t: ClickedPathTarget) => {
+    const next = terminalFallback.current.shift();
+    if (t.missing && next) { openTerminalPathRef.current(next, t.line); return; }
+    terminalFallback.current = [];
+    if (t.missing) {
+      const text = missingPathLine(terminalPrinted.current ?? t.path, t.missing.checked);
+      setTerminalPathMissing((prev) => ({ text, nonce: (prev?.nonce ?? 0) + 1 }));
+      return;
+    }
+    setTerminalPathMissing(null);
+    if (terminalDockAllowed) setTerminalDock((d) => (d.on ? d : { ...d, on: true }));
+    openLocatedFile(t);
+  }, [openLocatedFile, setTerminalDock, terminalDockAllowed]);
+  const openTerminalPath = useClickedPathOpener(openTerminalTarget, { host: session?.host ?? undefined, cwd: session?.cwd ?? undefined, sessionId });
+  openTerminalPathRef.current = openTerminalPath;
+  const handleTerminalPath = useCallback((link: TerminalPathLink) => {
+    traceInteraction('view-open:files-from-terminal', { sessionId });
+    terminalFallback.current = [...(link.fallbackPaths ?? [])];
+    terminalPrinted.current = link.printed ?? null;
+    openTerminalPath(link.path, link.line);
+  }, [openTerminalPath, sessionId]);
+  // The terminal docked under Changed / Files / Web: the dock remembers the view
+  // it was last under, so "Show with Changed" from the Terminal view goes back there.
+  const lastDockView = useRef<SessionSplitView>('changed');
+  if (activeView && TERMINAL_DOCK_VIEWS.includes(activeView)) lastDockView.current = activeView;
+  const dockViewLabel = DOCK_VIEW_LABEL[lastDockView.current] ?? 'Changed';
+  const dockTerminal = useCallback(() => {
+    const view = lastDockView.current;
+    traceInteraction('terminal-dock:on', { sessionId, view });
+    setTerminalDock((d) => ({ ...d, on: true }));
+    setActiveView(view);
+    applyOpenCollapse(view);
+  }, [applyOpenCollapse, sessionId, setActiveView, setTerminalDock]);
+  const undockTerminal = useCallback(() => {
+    traceInteraction('terminal-dock:off', { sessionId });
+    setTerminalDock((d) => ({ ...d, on: false }));
+  }, [sessionId, setTerminalDock]);
+  const maximizeTerminal = useCallback(() => {
+    traceInteraction('view-open:terminal', { sessionId });
+    setActiveView('terminal');
+    applyOpenCollapse('terminal');
+  }, [applyOpenCollapse, sessionId, setActiveView]);
+  const resizeTerminalDock = useCallback((px: number) => setTerminalDock((d) => ({ ...d, px })), [setTerminalDock]);
+  const terminalDocked = terminalOffered && terminalDockAllowed && terminalDock.on && !!activeView && TERMINAL_DOCK_VIEWS.includes(activeView);
+  const terminalShown = activeView === 'terminal' || terminalDocked;
 
   // A host:port service the session started (a dev server, a report page) opens
   // in the Web split view instead of a browser tab: remote ports come through an
@@ -3352,14 +3428,27 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                 aria-expanded={false}
               >{ICON_PANEL_RIGHT}</button>
             ) : null;
+            // Changed / Files / Web: a Terminal toggle beside the chat toggle
+            // docks the terminal under the view (tests next to the diff).
+            const dockToggle = terminalOffered && terminalDockAllowed && activeView && TERMINAL_DOCK_VIEWS.includes(activeView) ? (
+              <button
+                type="button"
+                className={`sfe-btn session-terminal-dock-toggle${terminalDocked ? ' is-on' : ''}`}
+                onClick={terminalDocked ? undockTerminal : () => setTerminalDock((d) => ({ ...d, on: true }))}
+                aria-pressed={terminalDocked}
+                title={terminalDocked ? 'Hide the terminal (it keeps running)' : `Show the terminal under ${DOCK_VIEW_LABEL[activeView] ?? 'this view'}`}
+                data-testid="terminal-dock-toggle"
+              >{ICON_TERMINAL}<span className="sfe-btn-label">Terminal</span></button>
+            ) : null;
+            const dockBarSlot = dockToggle ? <>{dockToggle}{chatBarSlot}</> : chatBarSlot;
             return (
               <>
                 {splitOpen && sessionId && activeView !== 'code' && (
                   // data-time-view: which part of the panel had the input (time tracking).
-                  <div className="session-panel-diff-col" data-time-view={activeView ?? undefined}>
+                  <div className={`session-panel-diff-col${terminalDocked ? ' has-terminal-dock' : ''}`} data-time-view={activeView ?? undefined}>
                     <Suspense fallback={null}>
                     {activeView === 'changed' && (
-                      <SessionChangedTab sessionId={sessionId} sessionCwd={session?.cwd} sessionHost={session?.host} onSelectCode={handleSelectCode} onComment={handleDiffComment} barRightSlot={chatBarSlot} onOpenFile={handleFileOpen} />
+                      <SessionChangedTab sessionId={sessionId} sessionCwd={session?.cwd} sessionHost={session?.host} onSelectCode={handleSelectCode} onComment={handleDiffComment} barRightSlot={dockBarSlot} onOpenFile={handleFileOpen} />
                     )}
                     {activeView === 'files' && (
                       <SessionFileExplorer
@@ -3384,17 +3473,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                         // Same sink the Changed tab uses — a quote from a whole file and
                         // a quote from a diff compose the identical prefill.
                         onSelectCode={handleSelectCode}
-                        barRightSlot={chatBarSlot}
-                      />
-                    )}
-                    {activeView === 'terminal' && (
-                      <SessionTerminal
-                        sessionId={sessionId}
-                        label={session?.cwd ?? session?.host ?? 'Terminal'}
-                        host={session?.host}
-                        onClose={() => toggleView('terminal')}
-                        embedded
-                        barRightSlot={chatBarSlot}
+                        barRightSlot={dockBarSlot}
                       />
                     )}
                     {/* Inbox: this session's letters, reader in place. Same split
@@ -3405,7 +3484,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                         host={session?.host}
                         request={webRequest}
                         onNavigate={openWebView}
-                        barRightSlot={chatBarSlot}
+                        barRightSlot={dockBarSlot}
                       />
                     )}
                     {activeView === 'inbox' && (
@@ -3447,6 +3526,41 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                       />
                     )}
                     </Suspense>
+                    {/* The terminals: the whole column (Terminal), or docked under
+                        Changed / Files / Web. One element at one place for both, so a
+                        switch between them keeps every terminal mounted; in a Suspense
+                        of its own, so a view above loading its code (a lazy Files)
+                        never hides the terminals and drops their screens. */}
+                    {terminalShown && (
+                      <Suspense fallback={null}>
+                      <TerminalDock docked={terminalDocked} px={terminalDock.px} wantPx={terminalWantPx} onResized={resizeTerminalDock}>
+                        <SessionTerminal
+                          // Its layout belongs to one session: a panel that moves to
+                          // another (an engine switch) starts from that one's layout.
+                          key={sessionId}
+                          sessionId={sessionId}
+                          label={session?.cwd ?? session?.host ?? 'Terminal'}
+                          host={session?.host}
+                          onClose={terminalDocked ? undockTerminal : () => toggleView('terminal')}
+                          embedded
+                          barRightSlot={terminalDocked ? undefined : chatBarSlot}
+                          compact={terminalOnPhone}
+                          dock={terminalDockAllowed ? {
+                            docked: terminalDocked,
+                            viewLabel: terminalDocked ? (DOCK_VIEW_LABEL[activeView!] ?? dockViewLabel) : dockViewLabel,
+                            onDock: dockTerminal,
+                            onUndock: undockTerminal,
+                            onMaximize: maximizeTerminal,
+                          } : undefined}
+                          onAddToChat={handleTerminalAddToChat}
+                          onOpenPath={handleTerminalPath}
+                          pathNotice={terminalPathMissing}
+                          onDismissPathNotice={() => setTerminalPathMissing(null)}
+                          onDockWant={setTerminalWantPx}
+                        />
+                      </TerminalDock>
+                      </Suspense>
+                    )}
                   </div>
                 )}
                 {/* Code view keep-alive: once opened it stays MOUNTED for the

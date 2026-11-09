@@ -25833,6 +25833,8 @@ a.file-link:hover {
 .session-terminal-icon { font-size: 14px; flex-shrink: 0; }
 
 .session-terminal-label {
+  /* Shrinks first in a narrow bar, so the status pill beside it stays whole. */
+  min-width: 0;
   font-family: var(--font-mono, 'SF Mono', 'Fira Code', monospace);
   font-size: 12px;
   font-weight: 600;
@@ -25983,6 +25985,260 @@ a.file-link:hover {
   margin-top: 4px;
   padding: 6px 16px;
 }
+
+/* ── Several terminals: tabs, split panes, the dock under Changed / Files / Web ── */
+.session-terminal-pill-slot { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.session-terminal-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+@media (hover: hover) {
+  .session-terminal-icon-btn:hover:not(:disabled) { color: var(--fg-primary); background: var(--bg-hover, var(--bg)); border-color: var(--border); }
+}
+/* A narrow terminal bar (a split column, a small window) keeps its controls: the words go first. */
+.session-terminal-panel-embedded { container: terminal-panel / inline-size; }
+@container terminal-panel (max-width: 640px) {
+  .session-terminal-dock-btn span { display: none; }
+}
+.session-terminal-dock-btn { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--fg-muted); white-space: nowrap; }
+.session-terminal-dock-btn:hover { color: var(--fg-primary); }
+.session-terminal-dock-btn svg { display: block; width: 14px; height: 14px; }
+.session-terminal-icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+.session-terminal-icon-btn:disabled { opacity: 0.35; cursor: default; }
+.session-terminal-icon-btn svg { display: block; }
+
+.session-terminal-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 4px 8px 0;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  flex-shrink: 0;
+  scrollbar-width: none;
+}
+.session-terminal-tabs::-webkit-scrollbar { display: none; }
+.session-terminal-tabs-wrap { flex-shrink: 0; background: var(--bg-secondary); }
+/* More tabs than fit: the strip fades out where more are (it scrolls; the shown one is kept in view). */
+.session-terminal-tabs.fade-right { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent); }
+.session-terminal-tabs.fade-left { -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 32px), transparent); mask-image: linear-gradient(to left, #000 calc(100% - 32px), transparent); }
+.session-terminal-tabs.fade-left.fade-right { -webkit-mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent); mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent); }
+.session-terminal-tab {
+  display: flex;
+  align-items: center;
+  max-width: 220px;
+  min-width: 0;
+  flex-shrink: 0;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 7px 7px 0 0;
+  color: var(--fg-muted);
+  margin-bottom: -1px;
+}
+.session-terminal-tab:hover { color: var(--fg-primary); }
+.session-terminal-tab.is-active {
+  background: #1a1b26;
+  border-color: var(--border);
+  color: #c0caf5;
+}
+.session-terminal-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 5px 4px 5px 10px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.session-terminal-tab-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono, 'SF Mono', 'Fira Code', monospace); }
+.session-terminal-tab-split { display: inline-flex; opacity: 0.75; }
+.session-terminal-tab-split svg { width: 12px; height: 12px; }
+.session-terminal-tab-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-right: 4px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  opacity: 0.6;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.session-terminal-tab-close:hover { opacity: 1; background: color-mix(in srgb, currentColor 16%, transparent); }
+.session-terminal-tab-close svg { width: 11px; height: 11px; }
+
+.session-terminal-tabs-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: #1a1b26;
+}
+.session-terminal-tabs-body:focus { outline: none; }
+.session-terminal-waiting {
+  margin: auto;
+  font-size: 12px;
+  color: #7f86a8;
+}
+.session-terminal-group { flex: 1; min-height: 0; min-width: 0; position: relative; }
+.session-terminal-group.is-hidden { display: none; }
+/* Each pane is placed by its box in the tab (SessionTerminal: paneRects). */
+.session-terminal-pane {
+  position: absolute;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.session-terminal-pane.has-left { border-left: 1px solid #2f3449; }
+.session-terminal-pane.has-top { border-top: 1px solid #2f3449; }
+.session-terminal-pane-strip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 4px 0 10px;
+  flex-shrink: 0;
+  background: #16161e;
+  box-sizing: border-box;
+  color: #7f86a8;
+  font-size: 11px;
+  box-shadow: inset 0 -1px 0 #2f3449;
+}
+.session-terminal-pane.is-focused .session-terminal-pane-strip { color: #c0caf5; box-shadow: inset 0 -2px 0 var(--accent); }
+.session-terminal-pane-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono, 'SF Mono', 'Fira Code', monospace); }
+.session-terminal-pane-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.session-terminal-pane-close:hover { background: rgba(192, 202, 245, 0.14); color: #c0caf5; }
+.session-terminal-pane-close svg { width: 11px; height: 11px; }
+.session-terminal-pane .session-terminal-body { position: relative; }
+/* A clicked path that no host has: one line over the terminals, then gone. */
+.session-terminal-path-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px 4px 10px;
+  flex-shrink: 0;
+  background: #24283b;
+  color: #e0af68;
+  font-size: 12px;
+  border-bottom: 1px solid #2f3449;
+}
+.session-terminal-path-notice > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Docked under a view, a split gives its room to the output: slimmer strips. */
+.session-terminal-panel.is-docked .session-terminal-pane-strip { height: 20px; font-size: 10.5px; }
+.session-terminal-panel.is-docked .session-terminal-pane-close { width: 18px; height: 18px; }
+.session-terminal-panel.is-docked .session-terminal-tab-btn { padding-top: 3px; padding-bottom: 3px; }
+
+/* "Add to chat" beside a selection: an overlay over the terminal (border, solid
+   background, shadow), never a change to the layout under it. */
+.session-terminal-selection-pop {
+  position: absolute;
+  z-index: 6;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+}
+.session-terminal-selection-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-primary);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.session-terminal-selection-btn:hover { background: var(--bg-hover, var(--bg-secondary)); }
+.session-terminal-selection-btn svg { width: 13px; height: 13px; }
+
+.session-terminal-inline-note {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  font-size: 12px;
+  color: var(--fg-primary);
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border);
+}
+.session-terminal-inline-note > span { flex: 1; min-width: 0; }
+
+/* The frame: the whole left column, or docked under the view with a drag handle. */
+.session-terminal-dock.is-full {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.session-terminal-dock.is-docked {
+  flex: 0 0 auto;
+  order: 2;
+  min-height: 120px;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  border-top: 1px solid var(--border);
+}
+.session-panel-diff-col.has-terminal-dock > :not(.session-terminal-dock) { flex: 1 1 0; min-height: 0; }
+.session-terminal-dock-resize {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -4px;
+  height: 8px;
+  z-index: 7;
+  cursor: row-resize;
+  touch-action: none;
+}
+.session-terminal-dock-resize:hover,
+.session-terminal-dock-resize:focus-visible,
+.session-terminal-dock.is-resizing .session-terminal-dock-resize {
+  outline: none;
+  background: linear-gradient(to bottom, transparent 3px, var(--accent) 3px, var(--accent) 5px, transparent 5px);
+}
+.session-terminal-dock.is-resizing { user-select: none; }
+.session-terminal-panel.is-docked .session-terminal-header { min-height: 36px; padding: 4px 10px; }
+.session-terminal-dock-toggle.is-on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
 
 /* ── Session Code view (embedded VS Code / code-server iframe) ─────────── */
 /* Keep-alive: once opened, the Code column stays mounted and is HIDDEN with

@@ -29,8 +29,19 @@ import { listSessions } from '../../core/session-tracker.js'
 import { getConfig } from '../../core/config-manager.js'
 import { shellQuote } from '../../providers/session-io.js'
 import { log } from '../../logging/index.js'
+import { parseTerminalKey, terminalKeyFor } from '../../core/terminal-key.js'
 
 const CMD_TIMEOUT_MS = 8_000
+
+/**
+ * One terminal of a session: `terminalKey` names which (core/terminal-key.ts);
+ * absent means the session's first terminal, whose key is the session id.
+ */
+export type TerminalRef = Pick<SessionRecord, 'claudeSessionId' | 'host'> & { terminalKey?: string }
+
+function keyOf(ref: TerminalRef): string {
+  return ref.terminalKey ?? ref.claudeSessionId
+}
 
 /**
  * Shell names that mean "no foreground task" when reported as the descendant command.
@@ -102,8 +113,8 @@ function runPosix(host: string | undefined, script: string): Promise<{ code: num
  * commas included), so we get the same table on both and resolve the leaf
  * ourselves.
  */
-export async function hasForegroundProcess(record: Pick<SessionRecord, 'claudeSessionId' | 'host'>): Promise<boolean> {
-  const sock = dtachSocketPath(record.claudeSessionId, !!record.host)
+export async function hasForegroundProcess(record: TerminalRef): Promise<boolean> {
+  const sock = dtachSocketPath(keyOf(record), !!record.host)
   const res = await runPosix(record.host, dtachProbeScript(sock, true))
   const probe = parseDtachProbe(res.stdout)
   const masters = chooseDtachMaster(probe, sock).targets.map((t) => String(t.pid))
@@ -139,15 +150,72 @@ export async function hasForegroundProcess(record: Pick<SessionRecord, 'claudeSe
   })
 }
 
+/** Where a shell is: its directory, and the root of the git repository that holds it (if any). */
+export interface ShellPlace { cwd: string; root: string | null }
+
+/** The working directory of process `pid` on the host (Linux /proc, else lsof), and its git root. */
+function cwdScript(pid: number): string {
+  return [
+    `d=$(readlink /proc/${pid}/cwd 2>/dev/null || lsof -a -p ${pid} -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')`,
+    '[ -n "$d" ] || exit 0',
+    'echo "CWD:$d"',
+    'r=$(git -C "$d" rev-parse --show-toplevel 2>/dev/null) && echo "ROOT:$r"',
+  ].join('\n')
+}
+
+async function placeOf(host: string | undefined, pid: number): Promise<ShellPlace | null> {
+  if (!Number.isInteger(pid) || pid <= 1) return null
+  const lines = (await runPosix(host, cwdScript(pid))).stdout.split('\n').map((l) => l.trim())
+  const cwd = lines.find((l) => l.startsWith('CWD:/'))?.slice(4)
+  if (!cwd) return null
+  const root = lines.find((l) => l.startsWith('ROOT:/'))?.slice(5) ?? null
+  return { cwd, root }
+}
+
+/**
+ * The directory the terminal's shell is in now (after the user's `cd`), with
+ * the root of the git repository it is in (`git diff` prints paths from
+ * there), so a relative path the output prints opens the file it means. The
+ * shell is the deepest shell under the verified dtach master (a wrapper `sh -c` may sit
+ * above it; a running `vim` below it is not a shell). `plainPid`: a shell this
+ * server runs without dtach (its pty's own process). Null when it cannot be told.
+ */
+export async function terminalShellCwd(ref: TerminalRef, plainPid?: number): Promise<ShellPlace | null> {
+  if (plainPid !== undefined) return placeOf(ref.host, plainPid)
+  const sock = dtachSocketPath(keyOf(ref), !!ref.host)
+  const probe = parseDtachProbe((await runPosix(ref.host, dtachProbeScript(sock, true))).stdout)
+  const master = chooseDtachMaster(probe, sock).targets[0]
+  if (!master) return null
+  const children = new Map<string, { pid: string; comm: string }[]>()
+  for (const line of probe.table) {
+    const m = line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/)
+    if (!m) continue
+    const [, pid, ppid, commRaw] = m
+    if (!children.has(ppid!)) children.set(ppid!, [])
+    children.get(ppid!)!.push({ pid: pid!, comm: commRaw!.trim().split('/').pop() ?? '' })
+  }
+  let shell = ''
+  let cur = String(master.pid)
+  const seen = new Set<string>()
+  while (!seen.has(cur)) {
+    seen.add(cur)
+    const next = children.get(cur)?.[0]
+    if (!next) break
+    if (SHELL_COMMANDS.has(next.comm) && next.comm !== 'dtach' && next.comm !== 'login') shell = next.pid
+    cur = next.pid
+  }
+  return shell ? placeOf(ref.host, Number(shell)) : null
+}
+
 /**
  * Explicitly destroy a session's dtach session (signal its verified master,
  * remove socket + record). 'left' when a process may hold the socket but could
  * not be proved its master: nothing was signalled and the socket is kept, and
  * `reason` says why (what "End terminal" reports instead of claiming it ended).
  */
-export async function stopDtachSession(record: Pick<SessionRecord, 'claudeSessionId' | 'host'>): Promise<StopOutcome> {
-  const sock = dtachSocketPath(record.claudeSessionId, !!record.host)
-  const ctx = { sessionId: record.claudeSessionId, host: record.host }
+export async function stopDtachSession(record: TerminalRef): Promise<StopOutcome> {
+  const sock = dtachSocketPath(keyOf(record), !!record.host)
+  const ctx = { sessionId: record.claudeSessionId, terminalKey: keyOf(record), host: record.host }
   const res = await stopDtachMaster((script) => runPosix(record.host, script), sock, ctx)
   if (res.outcome === 'stopped') {
     log.web.info('dtach session killed', { ...ctx, source: res.source, pids: res.signalled })
@@ -186,14 +254,14 @@ export async function retireTestServerTerminalRoots(hosts: string[]): Promise<vo
 }
 
 /** stopDtachSession, outcome only. */
-export async function killDtachSession(record: Pick<SessionRecord, 'claudeSessionId' | 'host'>): Promise<StopOutcome['outcome']> {
+export async function killDtachSession(record: TerminalRef): Promise<StopOutcome['outcome']> {
   return (await stopDtachSession(record)).outcome
 }
 
 /**
- * Conditional reap on task completion / session stop. Keeps the dtach session
- * if a client is actively viewing it OR a foreground process is still running;
- * otherwise kills it. Returns 'killed' | 'kept'.
+ * Conditional reap of ONE terminal. Keeps the dtach session if a client is
+ * actively viewing it OR a foreground process is still running; otherwise
+ * kills it. Returns 'killed' | 'kept'.
  *
  * The viewing check exists because task completion is a data-model event that
  * says nothing about the user's screen: marking a task done while its terminal
@@ -201,31 +269,81 @@ export async function killDtachSession(record: Pick<SessionRecord, 'claudeSessio
  * An idle viewed terminal is later collected by the periodic reaper / orphan
  * sweep once the session record itself is deleted.
  */
-export async function conditionalReap(record: Pick<SessionRecord, 'claudeSessionId' | 'host'>): Promise<'killed' | 'kept'> {
+export async function conditionalReapTerminal(ref: TerminalRef): Promise<'killed' | 'kept'> {
+  const key = keyOf(ref)
+  const ctx = { sessionId: ref.claudeSessionId, terminalKey: key }
   try {
     const { terminalManager } = await import('./terminal-manager.js')
-    if (terminalManager.isViewing(record.claudeSessionId)) {
-      log.web.info('dtach kept (client attached)', { sessionId: record.claudeSessionId })
+    if (terminalManager.isViewing(key)) {
+      log.web.info('dtach kept (client attached)', ctx)
       return 'kept'
     }
     // Plain shell: no dtach master to inspect, and its detached pty dies at
     // grace expiry anyway, so end it now like an idle shell.
-    if (terminalManager.liveMode(record.claudeSessionId)?.persistent === false) {
-      terminalManager.end(record.claudeSessionId)
-      log.web.info('plain terminal ended (no dtach socket)', { sessionId: record.claudeSessionId })
+    if (terminalManager.liveMode(key)?.persistent === false) {
+      terminalManager.end(key)
+      log.web.info('plain terminal ended (no dtach socket)', ctx)
       return 'killed'
     }
   } catch { /* terminal feature disabled → fall through to process check */ }
-  if (await hasForegroundProcess(record)) {
-    log.web.info('dtach kept (foreground process running)', { sessionId: record.claudeSessionId })
+  if (await hasForegroundProcess(ref)) {
+    log.web.info('dtach kept (foreground process running)', ctx)
     return 'kept'
   }
   // A master that could not be proved is left running, so the terminal is kept.
-  return (await killDtachSession(record)) === 'left' ? 'kept' : 'killed'
+  return (await killDtachSession(ref)) === 'left' ? 'kept' : 'killed'
 }
 
 /**
- * List walnut dtach socket session-ids present on a host (local or remote),
+ * Conditional reap of EVERY terminal of a session (task completion / session
+ * stop): each one by conditionalReapTerminal. 'kept' when any was kept.
+ */
+export async function conditionalReap(record: Pick<SessionRecord, 'claudeSessionId' | 'host'>): Promise<'killed' | 'kept'> {
+  const keys = await sessionTerminalKeys(record)
+  let kept = false
+  for (const terminalKey of keys) {
+    if ((await conditionalReapTerminal({ ...record, terminalKey })) === 'kept') kept = true
+  }
+  return kept ? 'kept' : 'killed'
+}
+
+/**
+ * The keys of a session's terminals: the ones this process holds, the sockets on
+ * its host, and always its first terminal (a listing that fails must not lose
+ * the one terminal a session had before it could hold several).
+ */
+export async function sessionTerminalKeys(record: Pick<SessionRecord, 'claudeSessionId' | 'host'>): Promise<string[]> {
+  const sid = record.claudeSessionId
+  const keys = new Set<string>([terminalKeyFor(sid)])
+  try {
+    const { terminalManager } = await import('./terminal-manager.js')
+    for (const { slot } of terminalManager.liveSlots(sid)) keys.add(terminalKeyFor(sid, slot))
+  } catch { /* terminal feature disabled */ }
+  try {
+    const listed = await listWalnutDtach(record.host)
+    for (const id of listed.ids) if (parseTerminalKey(id).sessionId === sid) keys.add(id)
+  } catch (err) {
+    log.web.debug('sessionTerminalKeys: list failed', { sessionId: sid, host: record.host, error: String(err) })
+  }
+  return [...keys].sort((a, b) => parseTerminalKey(a).slot - parseTerminalKey(b).slot)
+}
+
+/**
+ * The slots of a session's persistent terminals whose dtach socket is on its
+ * host now: what another device, or this page after a reload, can reattach.
+ * Throws when the host could not be listed.
+ */
+export async function listSessionDtachSlots(record: Pick<SessionRecord, 'claudeSessionId' | 'host'>): Promise<number[]> {
+  const listed = await listWalnutDtach(record.host)
+  const slots = listed.ids
+    .map((id) => parseTerminalKey(id))
+    .filter((k) => k.sessionId === record.claudeSessionId)
+    .map((k) => k.slot)
+  return [...new Set(slots)].sort((a, b) => a - b)
+}
+
+/**
+ * List walnut dtach socket terminal keys (core/terminal-key.ts) present on a host (local or remote),
  * the ids that have a master pid record (`.dpid`), and the dir's ownership
  * marker (see dtachOwnerMarkerPath in spawn.ts). One round-trip: `OWNER:<data-dir>`
  * line first, then the socket paths, then the record paths (two `ls` calls, so a
@@ -319,10 +437,10 @@ export async function reapOrphanDtach(opts: { remoteHosts?: boolean } = {}): Pro
 
   // Same guard as conditionalReap: never vaporize a terminal a client is
   // looking at, even if its session record is already gone.
-  let isViewing: (sid: string) => boolean = () => false
+  let isViewing: (key: string) => boolean = () => false
   try {
     const { terminalManager } = await import('./terminal-manager.js')
-    isViewing = (sid) => terminalManager.isViewing(sid)
+    isViewing = (key) => terminalManager.isViewing(key)
   } catch { /* terminal feature disabled */ }
 
   // Determine hosts to sweep. Orphans are by definition on hosts that may no
@@ -364,14 +482,16 @@ export async function reapOrphanDtach(opts: { remoteHosts?: boolean } = {}): Pro
       log.web.warn('reapOrphanDtach: list failed', { host, error: String(err) })
       continue
     }
-    for (const sid of ids) {
+    for (const key of ids) {
+      // A key names one terminal of a session (core/terminal-key.ts).
+      const sid = parseTerminalKey(key).sessionId
       if (liveIds.has(sid)) continue // session still tracked → keep
-      if (isViewing(sid)) continue   // client actively viewing → keep
-      log.web.info('reaping orphan dtach session', { sid, host })
+      if (isViewing(key)) continue   // client actively viewing → keep
+      log.web.info('reaping orphan dtach session', { sid, terminalKey: key, host })
       try {
-        await killDtachSession({ claudeSessionId: sid, host })
+        await killDtachSession({ claudeSessionId: sid, host, terminalKey: key })
       } catch (err) {
-        log.web.warn('reapOrphanDtach: kill failed', { sid, host, error: String(err) })
+        log.web.warn('reapOrphanDtach: kill failed', { sid, terminalKey: key, host, error: String(err) })
       }
     }
   }

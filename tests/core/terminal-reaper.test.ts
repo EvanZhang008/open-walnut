@@ -4,10 +4,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // The reaper dynamically imports these three modules; mock all three so we can
 // drive the active-terminal list, the session lookup, and the reap helpers.
 
-let activeTerminals: { sessionId: string; host?: string }[] = [];
+let activeTerminals: { sessionId: string; terminalKey?: string; host?: string }[] = [];
 vi.mock('../../src/web/terminal/terminal-manager.js', () => ({
   terminalManager: {
-    listActive: () => activeTerminals,
+    listActive: () => activeTerminals.map((t) => ({ terminalKey: t.sessionId, ...t })),
   },
 }));
 
@@ -17,14 +17,14 @@ vi.mock('../../src/core/session-tracker.js', () => ({
   getSessionByClaudeId: vi.fn(async (sid: string) => sessionRecords.get(sid)),
 }));
 
-// Record which sessions conditionalReap was asked to reap; return value is
+// Record which sessions conditionalReapTerminal was asked to reap; return value is
 // driven per-session via `foregroundSessions` (a fg process → 'kept').
-const conditionalReapCalls: { sessionId: string; host?: string }[] = [];
+const conditionalReapCalls: { sessionId: string; host?: string; terminalKey?: string }[] = [];
 let foregroundSessions = new Set<string>();
 const reapOrphanDtach = vi.fn(async () => {});
 vi.mock('../../src/web/terminal/dtach-lifecycle.js', () => ({
-  conditionalReap: vi.fn(async (rec: { claudeSessionId: string; host?: string }) => {
-    conditionalReapCalls.push({ sessionId: rec.claudeSessionId, host: rec.host });
+  conditionalReapTerminal: vi.fn(async (rec: { claudeSessionId: string; host?: string; terminalKey?: string }) => {
+    conditionalReapCalls.push({ sessionId: rec.claudeSessionId, host: rec.host, ...(rec.terminalKey !== rec.claudeSessionId ? { terminalKey: rec.terminalKey } : {}) });
     return foregroundSessions.has(rec.claudeSessionId) ? 'kept' : 'killed';
   }),
   reapOrphanDtach,
@@ -63,7 +63,7 @@ describe('TerminalReaper.reap — active-terminal recheck (policy A)', () => {
 
   it('KEEPS a terminal whose task was closed (stopped) — Policy A: record exists', async () => {
     // 'stopped' is the normal resting state of a returnable session; the record
-    // still exists, so ① must NOT reap it (never even calls conditionalReap).
+    // still exists, so ① must NOT reap it (never even calls conditionalReapTerminal).
     activeTerminals = [{ sessionId: 's-done', host: 'devbox' }];
     sessionRecords.set('s-done', { claudeSessionId: 's-done', process_status: 'stopped' });
 
@@ -113,7 +113,7 @@ describe('TerminalReaper.reap — active-terminal recheck (policy A)', () => {
   it('KEEPS a deleted session whose terminal still runs a foreground build', async () => {
     activeTerminals = [{ sessionId: 's-build' }];
     // no record → deleted, so ① considers it; but a live foreground process
-    // means conditionalReap returns 'kept' (never kill a live build).
+    // means conditionalReapTerminal returns 'kept' (never kill a live build).
     foregroundSessions.add('s-build');
 
     const res = await new TerminalReaper().reap();
@@ -132,31 +132,48 @@ describe('TerminalReaper.reap — orphan sweep (②)', () => {
 
   it('still sweeps even if an active-terminal recheck throws', async () => {
     activeTerminals = [{ sessionId: 's-gone' }];
-    // deleted session (no record) so ① calls conditionalReap, which throws.
-    const { conditionalReap } = await import('../../src/web/terminal/dtach-lifecycle.js');
-    (conditionalReap as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('boom'));
+    // deleted session (no record) so ① calls conditionalReapTerminal, which throws.
+    const { conditionalReapTerminal } = await import('../../src/web/terminal/dtach-lifecycle.js');
+    (conditionalReapTerminal as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('boom'));
 
     await new TerminalReaper().reap();
     expect(reapOrphanDtach).toHaveBeenCalledTimes(1); // ② not blocked by ① failure
   });
 });
 
+describe('TerminalReaper.reap — a session with several terminals', () => {
+  it('reaps each terminal of a deleted session by its own key, and keeps a live session\'s', async () => {
+    activeTerminals = [
+      { sessionId: 's-gone' },
+      { sessionId: 's-gone', terminalKey: 's-gone__term2' },
+      { sessionId: 's-live', terminalKey: 's-live__term3' },
+    ];
+    sessionRecords.set('s-live', { claudeSessionId: 's-live', process_status: 'stopped' });
+    const res = await new TerminalReaper().reap();
+    expect(conditionalReapCalls).toEqual([
+      { sessionId: 's-gone', host: undefined },
+      { sessionId: 's-gone', host: undefined, terminalKey: 's-gone__term2' },
+    ]);
+    expect(res).toEqual({ rechecked: 3, reapedActive: 2 });
+  });
+});
+
 describe('TerminalReaper.reap — overlap guard (③)', () => {
   it('skips a second reap() while the first is still in flight', async () => {
-    // Make conditionalReap hang so the first reap() stays in flight, then fire a
+    // Make conditionalReapTerminal hang so the first reap() stays in flight, then fire a
     // second reap() concurrently — it must short-circuit (running=true) and not
     // run the orphan sweep again.
-    activeTerminals = [{ sessionId: 's-gone' }]; // deleted → ① calls conditionalReap
+    activeTerminals = [{ sessionId: 's-gone' }]; // deleted → ① calls conditionalReapTerminal
     let release!: () => void;
     const hang = new Promise<void>((res) => { release = () => res(); });
-    const { conditionalReap } = await import('../../src/web/terminal/dtach-lifecycle.js');
-    (conditionalReap as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => {
+    const { conditionalReapTerminal } = await import('../../src/web/terminal/dtach-lifecycle.js');
+    (conditionalReapTerminal as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => {
       await hang;
       return 'killed';
     });
 
     const reaper = new TerminalReaper();
-    const first = reaper.reap();          // stalls inside conditionalReap
+    const first = reaper.reap();          // stalls inside conditionalReapTerminal
     const second = await reaper.reap();   // should be skipped immediately
 
     expect(second).toEqual({ rechecked: 0, reapedActive: 0 });

@@ -720,3 +720,16 @@
     cursor: pointer;
   }
 }
+
+/* A session's terminals on a phone: one at a time, a tab per terminal. Every
+   control a finger hits is 44 px; the tab strip scrolls sideways. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .session-panel.is-phone-layer .session-terminal-icon-btn { width: 44px; height: 44px; }
+  .session-panel.is-phone-layer .session-terminal-tabs { padding: 0 6px; gap: 4px; }
+  .session-panel.is-phone-layer .session-terminal-tab { margin-bottom: 0; border-radius: 8px 8px 0 0; }
+  .session-panel.is-phone-layer .session-terminal-tab-btn { min-height: 44px; padding: 0 4px 0 12px; font-size: 13px; }
+  .session-panel.is-phone-layer .session-terminal-tab-close { width: 44px; height: 44px; margin-right: 0; }
+  .session-panel.is-phone-layer .session-terminal-selection-btn { height: 44px; padding: 0 14px; font-size: 14px; }
+  .session-panel.is-phone-layer .session-terminal-selection-pop { padding: 2px; }
+  .session-panel.is-phone-layer .session-terminal-btn { min-height: 44px; padding: 0 14px; font-size: 14px; }
+}

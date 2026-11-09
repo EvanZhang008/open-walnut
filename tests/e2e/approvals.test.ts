@@ -541,6 +541,15 @@ describe('who asks: Walnut checks the asking process, never only the session id 
       const inside = await curlInSession(async (pid) => fs.writeFile(pidFile, `${pid}\n${await masterStart(pid)}\n`), '/api/v1/approvals', { what: 'Identity: terminal', terminal_session: sid })
       expect(inside.body.approval.requester).toMatchObject({ taskId: task.id, via: 'terminal', identity: 'verified' })
       expect(inside.body.approval.requester.sessionId).toBeUndefined()
+      // The session's second terminal names itself by its key and proves itself by its own record.
+      const secondFile = dtachPidPath(`${sid}__term2`)
+      try {
+        const second = await curlInSession(async (pid) => fs.writeFile(secondFile, `${pid}\n${await masterStart(pid)}\n`), '/api/v1/approvals', { what: 'Identity: second terminal', terminal_session: `${sid}__term2` })
+        expect(second.body.approval.requester).toMatchObject({ taskId: task.id, via: 'terminal', identity: 'verified' })
+        await withdraw(second)
+      } finally {
+        await fs.rm(secondFile, { force: true })
+      }
       // A pid record naming another start time is a dead terminal's: the process under its pid got
       // the pid later and is not that terminal's shell. A record with no start time proves nothing.
       for (const second of ['ps:Mon Jan 1 00:00:00 2001', 'proc:12', '']) {

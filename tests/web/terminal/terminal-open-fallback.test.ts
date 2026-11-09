@@ -292,7 +292,7 @@ describe('Retry (reprobe) and reattach', () => {
   it('conditionalReap ends a detached plain shell (it has no dtach socket to inspect)', async () => {
     hostState.scenario = 'no_compiler';
     await open('sess-reap');
-    terminalManager.close('sess-reap'); // detach: nobody is viewing it
+    terminalManager.close('sess-reap', ws as never); // detach: nobody is viewing it
     expect(await conditionalReap({ claudeSessionId: 'sess-reap', host: 'devbox' })).toBe('killed');
     expect(spawned[0].kill).toHaveBeenCalled();
     expect(terminalManager.liveMode('sess-reap')).toBeNull();

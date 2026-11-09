@@ -49,6 +49,7 @@ export default defineConfig({
       '@open-walnut/message-about': path.resolve(__dirname, '../src/core/org/message-about.ts'),
       '@open-walnut/thread-view': path.resolve(__dirname, '../src/core/org/thread-view.ts'),
       '@open-walnut/live-activity': path.resolve(__dirname, '../src/core/live-activity.ts'),
+      '@open-walnut/terminal-key': path.resolve(__dirname, '../src/core/terminal-key.ts'),
       // The Brief's three sections: the server stores the letter in them, the page keeps them live.
       '@open-walnut/brief-structure': path.resolve(__dirname, '../src/core/sessions/brief-structure.ts'),
       '@open-walnut/brief-fresh': path.resolve(__dirname, '../src/core/sessions/brief-fresh.ts'),

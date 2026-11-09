@@ -1161,6 +1161,7 @@ await fs.writeFile(
         { id: `pw-switch-workflow-task-${browser}`, session: `pw-workflow-switch-${browser}`, title: `Workflow switch fixture ${browser}` },
         { id: `pw-bgbar-task-${browser}`, session: `pw-background-bar-${browser}`, title: `Background bar fixture ${browser}` },
         { id: `pw-term-end-task-${browser}`, session: `pw-term-end-${browser}`, title: `Terminal end fixture ${browser}` },
+        { id: `pw-term-multi-task-${browser}`, session: `pw-term-multi-${browser}`, title: `Terminal multi fixture ${browser}` },
       ]).map(({ id, session, title }) => ({
         id,
         title,
@@ -3957,6 +3958,8 @@ await fs.writeFile(
         { sid: `pw-background-bar-${browser}`, taskId: `pw-bgbar-task-${browser}`, title: `Background bar fixture ${browser}` },
         // terminal-end-unconfirmed.spec.ts: a real local terminal, in a dir that exists.
         { sid: `pw-term-end-${browser}`, taskId: `pw-term-end-task-${browser}`, title: `Terminal end fixture ${browser}`, cwd: tmpBase },
+        // terminal-multi.spec.ts: several real local terminals, tabs, splits, the dock, links.
+        { sid: `pw-term-multi-${browser}`, taskId: `pw-term-multi-task-${browser}`, title: `Terminal multi fixture ${browser}`, cwd: tmpBase },
       ]).map(({ sid, taskId, title, cwd }) => ({
         claudeSessionId: sid,
         taskId,

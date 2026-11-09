@@ -34,17 +34,29 @@ import {
 import { log } from '@/utils/log';
 import { awaitEndAnswer, createEndGuard } from './terminal-end-model';
 import type { TerminalStatus } from './terminal-status-label';
+import { terminalKeyFor } from '@open-walnut/terminal-key';
 
 // The states and their pill labels live in terminal-status-label.ts.
 export type { TerminalStatus };
 
+/** Keys typed before the open answers that are kept for it (a paste larger than this is dropped). */
+const PENDING_INPUT_MAX = 4096;
+
+export type TerminalEndedBy = 'window' | 'other' | null;
+
 interface UseSessionTerminalOpts {
   sessionId: string;
+  /** Which of the session's terminals (1 = its first; see `@open-walnut/terminal-key`). */
+  slot?: number;
   enabled: boolean;
   /** Called with incoming terminal bytes (write to xterm). */
   onData: (data: string) => void;
-  /** Called when the pty exits. */
-  onExit?: (exitCode: number, signal: number | null) => void;
+  /**
+   * Called when the pty exits. `endedBy`: 'window' when another window ended it
+   * (End, or a reopen that replaced it), 'other' when something else did (a
+   * tool, an agent, the server), null when the shell itself exited.
+   */
+  onExit?: (exitCode: number, signal: number | null, endedBy: TerminalEndedBy) => void;
   /** Current terminal size — read at open/attach time. */
   getSize: () => { cols: number; rows: number };
 }
@@ -68,7 +80,13 @@ interface UseSessionTerminalReturn {
 
 export function useSessionTerminal(opts: UseSessionTerminalOpts): UseSessionTerminalReturn {
   const { sessionId, enabled, onData, onExit, getSize } = opts;
+  const slot = opts.slot ?? 1;
+  // The terminal's key: its terminalId, and the name of its events. Known before
+  // the open answers, since the server replays the backlog while it opens.
+  const key = terminalKeyFor(sessionId, slot);
   const [status, setStatus] = useState<TerminalStatus>('idle');
+  const statusRef = useRef(status);
+  statusRef.current = status;
   const [plain, setPlain] = useState<TerminalOpenPlain | null>(null);
   const [sshFailed, setSshFailed] = useState<TerminalSshFailed | null>(null);
   // Read inside open() without making it depend on render state.
@@ -96,10 +114,16 @@ export function useSessionTerminal(opts: UseSessionTerminalOpts): UseSessionTerm
   // `_ws:reconnected` handler can both fire open() before the first RPC
   // resolves; without this guard we'd send two terminal:open RPCs.
   const openingRef = useRef(false);
+  const openPromiseRef = useRef<Promise<void> | null>(null);
+  // An open that answers after the view unmounted detaches what it opened, so no
+  // shell stays attached to this socket with nobody looking (the reapers would
+  // count it as viewed forever). StrictMode's remount sets it back before then.
+  const mountedRef = useRef(true);
+  // Keys typed while the open is on its way (a new terminal takes the focus at
+  // once): sent as soon as it answers, so the first keys are not lost.
+  const pendingInputRef = useRef('');
 
-  const open = useCallback(async (opts: { reprobe?: boolean } = {}) => {
-    if (openingRef.current) return;
-    openingRef.current = true;
+  const openOnce = useCallback(async (opts: { reprobe?: boolean }) => {
     genRef.current++;
     const { cols, rows } = getSizeRef.current();
     setStatus('connecting');
@@ -108,8 +132,14 @@ export function useSessionTerminal(opts: UseSessionTerminalOpts): UseSessionTerm
     setEndUnconfirmed(null);
     unconfirmedRef.current = false;
     try {
-      const res = await terminalOpen(sessionId, cols, rows, opts);
+      const res = await terminalOpen(sessionId, cols, rows, { ...opts, slot });
+      if (!mountedRef.current) {
+        if (res.ok) terminalClose(res.terminalId).catch(() => { /* best-effort */ });
+        log.info('terminal', 'open answered after the view closed; detached', { sessionId, slot });
+        return;
+      }
       if (!res.ok) {
+        pendingInputRef.current = '';
         terminalIdRef.current = null;
         wasPlainRef.current = false;
         setPlain(null);
@@ -130,22 +160,34 @@ export function useSessionTerminal(opts: UseSessionTerminalOpts): UseSessionTerm
         log.warn('terminal', 'opened a plain shell (not persistent)', { sessionId, host: res.host, reason: res.reason });
       }
       setStatus('ready');
+      const pending = pendingInputRef.current;
+      pendingInputRef.current = '';
+      if (pending) terminalInput(res.terminalId, pending).catch(() => { /* dropped on disconnect */ });
       log.info('terminal', 'opened', { sessionId, terminalId: res.terminalId, persistent: res.persistent });
     } catch (err) {
+      pendingInputRef.current = '';
       terminalIdRef.current = null;
       setErrorMessage(err instanceof Error ? err.message : String(err));
       setStatus('error');
       log.warn('terminal', 'open failed', { sessionId, error: String(err) });
-    } finally {
-      openingRef.current = false;
     }
-  }, [sessionId]);
+  }, [sessionId, slot]);
+
+  const open = useCallback((opts: { reprobe?: boolean } = {}): Promise<void> => {
+    if (openingRef.current) return openPromiseRef.current ?? Promise.resolve();
+    openingRef.current = true;
+    const p = openOnce(opts).finally(() => { openingRef.current = false; openPromiseRef.current = null; });
+    openPromiseRef.current = p;
+    return p;
+  }, [openOnce]);
 
   // Open when enabled; tear down (detach, keep dtach session) when disabled/unmounted.
   useEffect(() => {
     if (!enabled) return;
+    mountedRef.current = true;
     void open();
     return () => {
+      mountedRef.current = false;
       genRef.current++;
       const id = terminalIdRef.current;
       if (id) {
@@ -155,28 +197,26 @@ export function useSessionTerminal(opts: UseSessionTerminalOpts): UseSessionTerm
     };
   }, [enabled, open]);
 
-  // Live output for this terminal. NOTE: we subscribe by sessionId because the
-  // backend sets terminalId == sessionId (one terminal per session — see
-  // TerminalManager.spawnTerminal). If that coupling is ever broken (e.g.
-  // terminalId becomes a UUID), this subscription must switch to terminalIdRef
-  // or events will silently stop arriving.
-  useEvent(`terminal:data:${sessionId}`, (data) => {
+  // Live output for this terminal, by its key: the server names the events by
+  // the terminalId, which is the key (TerminalManager.spawnTerminal).
+  useEvent(`terminal:data:${key}`, (data) => {
     const d = data as { data?: string };
     if (typeof d?.data === 'string') onDataRef.current(d.data);
   });
 
   // pty exit.
-  useEvent(`terminal:exit:${sessionId}`, (data) => {
-    const d = data as { exitCode?: number; signal?: number | null };
+  useEvent(`terminal:exit:${key}`, (data) => {
+    const d = data as { exitCode?: number; signal?: number | null; ended?: boolean; endedElsewhere?: boolean };
     setStatus('exited');
-    onExitRef.current?.(d?.exitCode ?? 0, d?.signal ?? null);
+    onExitRef.current?.(d?.exitCode ?? 0, d?.signal ?? null, d?.endedElsewhere === true ? 'window' : d?.ended === true ? 'other' : null);
     log.info('terminal', 'exited', { sessionId, exitCode: d?.exitCode });
   });
 
   // On WS reconnect: try cheap attach (pty still alive in grace window);
   // on failure, reopen — server re-attaches the persistent dtach session.
+  // An exited terminal stays ended: only Restart starts a new shell.
   useEvent('_ws:reconnected', () => {
-    if (!enabled || unconfirmedRef.current || endGuard.busy(genRef.current)) return;
+    if (!enabled || unconfirmedRef.current || endGuard.busy(genRef.current) || statusRef.current === 'exited') return;
     const id = terminalIdRef.current;
     const { cols, rows } = getSizeRef.current();
     if (id) {
@@ -198,6 +238,7 @@ export function useSessionTerminal(opts: UseSessionTerminalOpts): UseSessionTerm
   const sendInput = useCallback((data: string) => {
     const id = terminalIdRef.current;
     if (id) terminalInput(id, data).catch(() => { /* dropped on disconnect */ });
+    else if (openingRef.current && pendingInputRef.current.length + data.length <= PENDING_INPUT_MAX) pendingInputRef.current += data;
   }, []);
 
   const sendResize = useCallback((cols: number, rows: number) => {
@@ -206,6 +247,9 @@ export function useSessionTerminal(opts: UseSessionTerminalOpts): UseSessionTerm
   }, []);
 
   const kill = useCallback(async (): Promise<boolean> => {
+    // An End while the open is still on its way ends the shell that open starts:
+    // wait for it, else the shell would start after the End and outlive its pane.
+    if (openingRef.current && openPromiseRef.current) await openPromiseRef.current;
     const id = terminalIdRef.current;
     if (!id) return true; // no terminal was open: nothing to end
     const gen = genRef.current;

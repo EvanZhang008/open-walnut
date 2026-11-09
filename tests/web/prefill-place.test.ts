@@ -18,6 +18,13 @@ describe('placePrefill', () => {
     expect(placePrefill('keep-draft', '', '> q\n\n')).toEqual({ text: '> q\n\n', caret: 'block' });
   });
 
+  it('attach puts a terminal block after what is typed, as its own paragraph, in the order added', () => {
+    expect(placePrefill('attach', '', 'B1\n')).toEqual({ text: 'B1\n', caret: 'end' });
+    expect(placePrefill('attach', 'why does this fail?  \n', 'B1\n')).toEqual({ text: 'why does this fail?\n\nB1\n', caret: 'end' });
+    const once = placePrefill('attach', '', 'B1\n').text;
+    expect(placePrefill('attach', once, 'B2\n').text).toBe('B1\n\nB2\n');
+  });
+
   it('append joins the sentence in progress with one space', () => {
     expect(placePrefill('append', 'look at  \n', '@[Task]')).toEqual({ text: 'look at @[Task]', caret: 'end' });
     expect(placePrefill('append', '', '@[Task]')).toEqual({ text: '@[Task]', caret: 'end' });

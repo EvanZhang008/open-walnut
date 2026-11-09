@@ -10,7 +10,9 @@
  * What it pins: the shell runs and answers input, a UTF-8 character survives the
  * trip whole, a resize reaches the shell, Ctrl-C interrupts the foreground job,
  * a reattach replays what was printed, and the shell's own exit reaches the
- * client as terminal:exit:<id>.
+ * client as terminal:exit:<id>. A session's second terminal is a shell of its
+ * own, and it outlives a server restart: the host lists it and a reopen finds
+ * the same shell.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -27,6 +29,7 @@ import { createSessionRecord } from '../../src/core/session-tracker.js'
 import { killDtachSession } from '../../src/web/terminal/dtach-lifecycle.js'
 
 const SESSION_ID = 'term-pty-e2e-1'
+const SESSION_ID_2 = 'term-pty-e2e-2'
 
 let server: HttpServer
 let port = 0
@@ -72,15 +75,15 @@ class Client {
     })
   }
 
-  async open(sessionId: string, cols = 100, rows = 30): Promise<Record<string, unknown>> {
-    // The terminal's id is its session's (one terminal per session), and a
-    // reattach replays the scrollback BEFORE the open answers.
-    this.terminalId = sessionId
-    const res = await this.rpc('terminal:open', { sessionId, cols, rows })
+  async open(sessionId: string, cols = 100, rows = 30, slot = 1): Promise<Record<string, unknown>> {
+    // The terminal's id is its key (the session's id for its first terminal), and
+    // a reattach replays the scrollback BEFORE the open answers.
+    this.terminalId = slot === 1 ? sessionId : `${sessionId}__term${slot}`
+    const res = await this.rpc('terminal:open', { sessionId, cols, rows, ...(slot === 1 ? {} : { slot }) })
     expect(res.ok, res.error).toBe(true)
     const payload = res.payload ?? {}
     expect(payload.ok).toBe(true)
-    expect(payload.terminalId).toBe(sessionId)
+    expect(payload.terminalId).toBe(this.terminalId)
     return payload
   }
 
@@ -117,6 +120,9 @@ afterAll(async () => {
   // A dtach session outlives the server by design: end it here, so a failed
   // assertion does not leave its shell running.
   await killDtachSession({ claudeSessionId: SESSION_ID }).catch(() => {})
+  for (const slot of [1, 2]) {
+    await killDtachSession({ claudeSessionId: SESSION_ID_2, terminalKey: slot === 1 ? SESSION_ID_2 : `${SESSION_ID_2}__term2` }).catch(() => {})
+  }
   await stopServer()
   if (savedShell === undefined) delete process.env.SHELL
   else process.env.SHELL = savedShell
@@ -167,4 +173,54 @@ describe('the in-app terminal over a real pty', () => {
     await again.rpc('terminal:kill', { terminalId: again.id })
     again.ws.close()
   }, 90_000)
+
+  it("a session's second terminal is its own shell, and keeps it across a server restart", async () => {
+    const sessionId = SESSION_ID_2
+    const cwd = path.join(WALNUT_HOME, 'work2')
+    await fs.mkdir(path.join(cwd, 'sub'), { recursive: true })
+    await createSessionRecord(sessionId, `task-${sessionId}`, '', cwd)
+
+    const first = await Client.connect()
+    await first.open(sessionId, 100, 30, 1)
+    await first.input('export WHO=first\r')
+    const second = await Client.connect()
+    const opened = await second.open(sessionId, 100, 30, 2)
+    await second.input('cd sub && export WHO=second && echo set-$WHO\r')
+    await second.waitFor(/set-second/)
+    // Its own shell: the first terminal's variable is not here, and its output stays its own.
+    await second.input('echo who-${WHO}-$(basename "$PWD")\r')
+    await second.waitFor(/who-second-sub/)
+    expect(first.output).not.toMatch(/who-second/)
+    // Each shell's own directory, after its cd: a relative path in its output opens from there.
+    const realCwd = await fs.realpath(cwd)
+    const cwdOf = async (c: Client) => ((await c.rpc('terminal:cwd', { terminalId: c.id })).payload as { cwd: string | null }).cwd
+    expect(await cwdOf(second)).toBe(path.join(realCwd, 'sub'))
+    expect(await cwdOf(first)).toBe(realCwd)
+
+    const listed = await second.rpc('terminal:list', { sessionId })
+    expect(listed.ok, listed.error).toBe(true)
+    expect((listed.payload as { slots: number[] }).slots).toEqual([1, 2])
+    first.ws.close()
+    second.ws.close()
+    // A plain shell (no dtach here) dies with the server: nothing to keep across a restart.
+    if (opened.persistent !== true) return
+
+    await stopServer()
+    server = await startServer({ port: 0, dev: true })
+    const addr = server.address()
+    port = typeof addr === 'object' && addr ? addr.port : 0
+
+    const back = await Client.connect()
+    // The new server holds no pty yet: the host's sockets name both terminals.
+    const relisted = await back.rpc('terminal:list', { sessionId })
+    expect((relisted.payload as { slots: number[]; listed: boolean })).toEqual({ slots: [1, 2], listed: true })
+    await back.open(sessionId, 100, 30, 2)
+    await back.input('echo again-${WHO}-$(basename "$PWD")\r')
+    await back.waitFor(/again-second-sub/)
+    expect(await cwdOf(back)).toBe(path.join(realCwd, 'sub'))
+    await back.rpc('terminal:kill', { terminalId: back.id })
+    const after = await back.rpc('terminal:list', { sessionId })
+    expect((after.payload as { slots: number[] }).slots).toEqual([1])
+    back.ws.close()
+  }, 120_000)
 })

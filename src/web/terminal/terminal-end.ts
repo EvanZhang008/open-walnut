@@ -1,5 +1,5 @@
 /**
- * The answer of "End terminal" (terminal:kill) for a session's dtach session.
+ * The answer of "End terminal" (terminal:kill) for one of a session's dtach sessions.
  *
  * Only a master that was stopped, or no master at all, is reported as ended. A
  * master that could not be proved (the probe gave no answer, the socket's owner
@@ -9,9 +9,8 @@
  * words for the user; the technical one goes to the log.
  */
 
-import type { SessionRecord } from '../../core/types.js'
 import type { StopOutcome } from './dtach-master.js'
-import { stopDtachSession } from './dtach-lifecycle.js'
+import { stopDtachSession, type TerminalRef } from './dtach-lifecycle.js'
 import { log } from '../../logging/index.js'
 
 export type TerminalKillAnswer =
@@ -19,7 +18,7 @@ export type TerminalKillAnswer =
   | { killed: false; unconfirmed: true; reason: string }
 
 type StopResult = Pick<StopOutcome, 'outcome' | 'reason'>
-type StopFn = (record: Pick<SessionRecord, 'claudeSessionId' | 'host'>) => Promise<StopResult>
+type StopFn = (record: TerminalRef) => Promise<StopResult>
 
 const REASON_MAX = 200
 let stop: StopFn = stopDtachSession
@@ -50,7 +49,7 @@ export function killAnswer(terminalId: string, res: StopResult): TerminalKillAns
 }
 
 /** Stop the session's dtach master and answer for it. Never throws. */
-export async function endDtachForTerminal(terminalId: string, record: Pick<SessionRecord, 'claudeSessionId' | 'host'>): Promise<TerminalKillAnswer> {
+export async function endDtachForTerminal(terminalId: string, record: TerminalRef): Promise<TerminalKillAnswer> {
   let res: StopResult
   try {
     res = await stop(record)

@@ -33,6 +33,7 @@
       "@open-walnut/message-about": ["../src/core/org/message-about"],
       "@open-walnut/thread-view": ["../src/core/org/thread-view"],
       "@open-walnut/live-activity": ["../src/core/live-activity"],
+      "@open-walnut/terminal-key": ["../src/core/terminal-key"],
       "@open-walnut/brief-structure": ["../src/core/sessions/brief-structure"],
       "@open-walnut/brief-fresh": ["../src/core/sessions/brief-fresh"],
       "@open-walnut/companion-keep": ["../src/core/replication/companion-keep"],

@@ -44,9 +44,43 @@ export interface TerminalSshFailed {
 
 export type TerminalOpenResult = TerminalOpenPersistent | TerminalOpenPlain | TerminalSshFailed;
 
-/** `reprobe` (Retry): re-check dtach now and upgrade a plain shell if it is available. */
-export function terminalOpen(sessionId: string, cols: number, rows: number, opts: { reprobe?: boolean } = {}): Promise<TerminalOpenResult> {
-  return wsClient.sendRpc<TerminalOpenResult>('terminal:open', { sessionId, cols, rows, ...(opts.reprobe ? { reprobe: true } : {}) });
+/**
+ * `reprobe` (Retry): re-check dtach now and upgrade a plain shell if it is available.
+ * `slot`: which of the session's terminals (1 to 8, default 1); the answer's
+ * terminalId is its key (`@open-walnut/terminal-key`).
+ */
+export function terminalOpen(sessionId: string, cols: number, rows: number, opts: { reprobe?: boolean; slot?: number } = {}): Promise<TerminalOpenResult> {
+  return wsClient.sendRpc<TerminalOpenResult>('terminal:open', {
+    sessionId, cols, rows,
+    ...(opts.reprobe ? { reprobe: true } : {}),
+    ...(opts.slot && opts.slot !== 1 ? { slot: opts.slot } : {}),
+  });
+}
+
+/**
+ * The slots of a session's terminals that run now (a dtach socket on its host, or
+ * a shell this server holds). `listed: false`: the host could not be asked, so
+ * the slots are only the ones the server holds.
+ */
+export function terminalList(sessionId: string): Promise<{ slots: number[]; listed: boolean }> {
+  return wsClient.sendRpc<{ slots: number[]; listed: boolean }>('terminal:list', { sessionId });
+}
+
+/**
+ * The slot for a new terminal of a session: free on the host, in no other
+ * window's layout lately (the server holds each answer for a minute), and not in
+ * `exclude` (this page's own). null when every slot is taken.
+ */
+export function terminalReserve(sessionId: string, exclude: number[]): Promise<{ slot: number | null }> {
+  return wsClient.sendRpc<{ slot: number | null }>('terminal:reserve', { sessionId, exclude });
+}
+
+/**
+ * The directory the terminal's shell is in now (after a `cd`), and the root of
+ * the git repository that holds it; null when it cannot be told / is in none.
+ */
+export function terminalCwd(terminalId: string): Promise<{ cwd: string | null; root?: string | null }> {
+  return wsClient.sendRpc<{ cwd: string | null; root?: string | null }>('terminal:cwd', { terminalId });
 }
 
 export function terminalAttach(terminalId: string, cols: number, rows: number): Promise<{ ok: boolean }> {

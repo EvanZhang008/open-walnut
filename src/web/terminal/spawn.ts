@@ -134,7 +134,9 @@ function socketDir(remote: boolean): string {
 }
 
 /**
- * Stable dtach socket path derived from the Claude session ID.
+ * Stable dtach socket path derived from the terminal key: the Claude session ID
+ * for a session's first terminal, `<sessionId>__term<n>` for its others
+ * (core/terminal-key.ts).
  *
  * The path is interpolated UNQUOTED into remote `ssh ... 'dtach -A <path>'`
  * command strings, so the session id must contain no shell metacharacters.
@@ -424,10 +426,13 @@ export async function resolveSpawnForSession(
   record: SessionRecord,
   cols: number,
   rows: number,
-  opts: { persistent?: boolean } = {},
+  opts: { persistent?: boolean; terminalKey?: string } = {},
 ): Promise<SpawnResult> {
   const pty = await loadPty()
-  const env = terminalEnv(process.env, record.host ? undefined : record.claudeSessionId)
+  // Which of the session's terminals (core/terminal-key.ts): its dtach socket and
+  // pid record are named by it. Slot 1's key is the session id.
+  const key = opts.terminalKey ?? record.claudeSessionId
+  const env = terminalEnv(process.env, record.host ? undefined : key)
   const persistent = opts.persistent !== false
 
   if (!persistent) {
@@ -451,8 +456,8 @@ export async function resolveSpawnForSession(
     // login user's actual shell from passwd, e.g. zsh) launched as a LOGIN
     // shell. This loads the full startup chain (PATH + aliases) so the embedded
     // terminal matches what the user sees in tmux — not a bare aliasless bash.
-    const args = buildRemoteSshArgs(dtachBin, record.claudeSessionId, target, undefined, record.cwd, record.host)
-    log.web.info('terminal spawn (remote/dtach)', { sessionId: record.claudeSessionId, host: record.host, cwd: record.cwd })
+    const args = buildRemoteSshArgs(dtachBin, key, target, undefined, record.cwd, record.host)
+    log.web.info('terminal spawn (remote/dtach)', { sessionId: record.claudeSessionId, terminalKey: key, host: record.host, cwd: record.cwd })
     const p = pty.spawn('ssh', args, { name: 'xterm-256color', cols, rows, cwd: os.homedir(), env })
     return { pty: p, cwd: record.cwd, host: record.host }
   }
@@ -467,8 +472,8 @@ export async function resolveSpawnForSession(
     fs.mkdirSync(DTACH_SOCKET_DIR, { recursive: true })
     fs.writeFileSync(dtachOwnerMarkerPath(), `${WALNUT_HOME}\n`, { flag: 'wx' })
   } catch { /* best-effort; EEXIST = already claimed */ }
-  const args = buildDtachArgs(dtachBin, record.claudeSessionId, localShell())
-  log.web.info('terminal spawn (local/dtach)', { sessionId: record.claudeSessionId, cwd })
+  const args = buildDtachArgs(dtachBin, key, localShell())
+  log.web.info('terminal spawn (local/dtach)', { sessionId: record.claudeSessionId, terminalKey: key, cwd })
   // Start dir comes from the pty's cwd option (a new dtach session inherits
   // the launching process's cwd).
   const p = pty.spawn(dtachBin, args.slice(1), { name: 'xterm-256color', cols, rows, cwd, env })

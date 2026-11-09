@@ -57,20 +57,28 @@ vi.mock('../../../src/core/config-manager.js', () => ({
 }));
 
 let viewing = false;
+// Terminal keys (core/terminal-key.ts) a client is viewing, beside `viewing` (every key).
+const viewingKeys = new Set<string>();
 vi.mock('../../../src/web/terminal/terminal-manager.js', () => ({
-  terminalManager: { isViewing: () => viewing },
+  terminalManager: { isViewing: (key: string) => viewing || viewingKeys.has(key), liveSlots: () => [] },
 }));
 
 import { reapOrphanDtach, conditionalReap } from '../../../src/web/terminal/dtach-lifecycle.js';
 
 // A signal goes only to the verified master pid, in the stop script.
 const killsExecuted = () => shellCalls.filter((s) => s.includes('kill -TERM 4242')).length;
+// The sockets the stops ran against, by terminal key.
+const stoppedKeys = () => shellCalls
+  .filter((s) => s.includes('kill -TERM 4242'))
+  .map((s) => /walnut-([A-Za-z0-9_-]+)\.dsock/.exec(s)?.[1])
+  .sort();
 
 beforeEach(() => {
   shellCalls.length = 0;
   liveSessionIds.length = 0;
   socketList = ['orphan-sid-1', 'orphan-sid-2'];
   viewing = false;
+  viewingKeys.clear();
 });
 
 describe('reapOrphanDtach ownership gate', () => {
@@ -117,5 +125,40 @@ describe('conditionalReap viewing guard', () => {
     const result = await conditionalReap({ claudeSessionId: 'sid-idle', host: undefined });
     expect(result).toBe('killed');
     expect(killsExecuted()).toBe(1);
+  });
+});
+
+describe('several terminals per session (terminal keys)', () => {
+  it('the orphan sweep reaps every terminal of a deleted session and none of a live one', async () => {
+    ownerResponse = WALNUT_HOME;
+    socketList = ['gone-sid', 'gone-sid__term2', 'gone-sid__term7', 'live-sid', 'live-sid__term3'];
+    liveSessionIds.push('live-sid');
+    await reapOrphanDtach();
+    expect(stoppedKeys()).toEqual(['gone-sid', 'gone-sid__term2', 'gone-sid__term7']);
+  });
+
+  it('the orphan sweep keeps a deleted session\'s terminal a client is viewing', async () => {
+    ownerResponse = WALNUT_HOME;
+    socketList = ['gone-sid', 'gone-sid__term2'];
+    viewingKeys.add('gone-sid__term2');
+    await reapOrphanDtach();
+    expect(stoppedKeys()).toEqual(['gone-sid']);
+  });
+
+  it('task completion reaps every idle terminal of the session, never another session\'s', async () => {
+    ownerResponse = WALNUT_HOME;
+    socketList = ['sid-idle__term2', 'sid-idle__term5', 'other-sid__term2'];
+    const result = await conditionalReap({ claudeSessionId: 'sid-idle', host: undefined });
+    expect(result).toBe('killed');
+    expect(stoppedKeys()).toEqual(['sid-idle', 'sid-idle__term2', 'sid-idle__term5']);
+  });
+
+  it('task completion keeps the one terminal being viewed and still reaps the others', async () => {
+    ownerResponse = WALNUT_HOME;
+    socketList = ['sid-mixed', 'sid-mixed__term2'];
+    viewingKeys.add('sid-mixed__term2');
+    const result = await conditionalReap({ claudeSessionId: 'sid-mixed', host: undefined });
+    expect(result).toBe('kept');
+    expect(stoppedKeys()).toEqual(['sid-mixed']);
   });
 });

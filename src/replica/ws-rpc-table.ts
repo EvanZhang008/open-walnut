@@ -46,6 +46,9 @@ export const WS_RPC_TABLE: Readonly<Record<string, RpcRow>> = {
   'terminal:close': { kind: 'write', away: 'needs-leader', why: 'terminal_needs_mac' },
   'terminal:kill': { kind: 'write', away: 'needs-leader', why: 'terminal_needs_mac' },
   'terminal:prewarm': { kind: 'write', away: 'needs-leader', why: 'terminal_needs_mac' },
+  'terminal:list': { kind: 'write', away: 'needs-leader', why: 'terminal_needs_mac' },
+  'terminal:reserve': { kind: 'write', away: 'needs-leader', why: 'terminal_needs_mac' },
+  'terminal:cwd': { kind: 'write', away: 'needs-leader', why: 'terminal_needs_mac' },
 }
 
 /** What a method does away; a method the table does not name needs the Mac (plugin methods included). */

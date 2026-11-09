@@ -175,11 +175,15 @@ async function proveIdentity(req: Request, body: Record<string, unknown>, out: A
   }
   const terminal = str(body.terminal_session, 120)
   if (local && conn && terminal && /^[A-Za-z0-9_-]+$/.test(terminal)) {
+    // The terminal's key (core/terminal-key.ts): a session's first terminal is its
+    // id, another one `<id>__term<n>`. Its own shell proves the caller; the task is the session's.
+    const { parseTerminalKey } = await import('../../core/terminal-key.js')
+    const terminalSession = parseTerminalKey(terminal).sessionId
     const shell = await terminalShell(terminal)
-    const seen = await localCallerIdentity({ conn, sessionId: terminal, sessionProcs: shell ? [shell] : [], notSession })
+    const seen = await localCallerIdentity({ conn, sessionId: terminalSession, sessionProcs: shell ? [shell] : [], notSession })
     if (seen.identity === 'verified') {
       const { getSessionByClaudeId } = await import('../../core/session-tracker.js')
-      const rec = await getSessionByClaudeId(terminal).catch(() => null)
+      const rec = await getSessionByClaudeId(terminalSession).catch(() => null)
       if (rec?.taskId) {
         out.taskId = rec.taskId
         out.via = 'terminal'
@@ -236,11 +240,11 @@ async function localDaemonPids(): Promise<number[]> {
  * start time the master recorded for itself (`proc:<ticks>` on Linux, `ps:<lstart in UTC>`
  * elsewhere, dtach-master.ts). The process under that pid counts only while it is that one.
  */
-async function terminalShell(sessionId: string): Promise<SessionProc | undefined> {
+async function terminalShell(terminalKey: string): Promise<SessionProc | undefined> {
   try {
     const { dtachPidPath } = await import('../terminal/spawn.js')
     const fs = await import('node:fs/promises')
-    const [first, second] = (await fs.readFile(dtachPidPath(sessionId), 'utf8')).split('\n')
+    const [first, second] = (await fs.readFile(dtachPidPath(terminalKey), 'utf8')).split('\n')
     const pid = Number(first)
     if (!Number.isInteger(pid) || pid <= 1) return undefined
     const m = /^(proc|ps):(.+)$/.exec((second ?? '').trim())

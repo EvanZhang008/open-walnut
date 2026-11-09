@@ -4,7 +4,8 @@
  * walnut no matter where include plugin, remember the state, like full store, file tab, tab
  * location"): the split view open beside the chat (Changed, Files, Terminal, Inbox, Web, Code,
  * Board), the file a click opened in Files, the service open in Web, the letter open in Inbox,
- * whether the user hid the chat beside it, and Tree Mode's split (tree-split-state.ts). A panel
+ * whether the user hid the chat beside it, the terminal docked under Changed / Files / Web
+ * (and its height), and Tree Mode's split (tree-split-state.ts). A panel
  * that mounts again (a plugin reloaded, a page reload, another page and back, the app
  * restarted) shows it as it was left. The file the
  * explorer shows after browsing, its tree and its history are the explorer's own
@@ -43,6 +44,22 @@ export interface PanelViewRecord {
   chatHidden?: boolean;
   /** Tree Mode's split screen: split or single, and the path bar's levels (tree-split-state.ts). */
   tree?: TreeSplitRecord;
+  /** The terminal shown under Changed / Files / Web, and its height in px (absent: not docked). */
+  terminalDock?: TerminalDockRecord;
+}
+
+export interface TerminalDockRecord {
+  on: boolean;
+  px?: number;
+}
+
+/** The views the terminal can be docked under. */
+export const TERMINAL_DOCK_VIEWS: readonly SessionSplitView[] = ['changed', 'files', 'web'];
+
+function isTerminalDock(v: unknown): v is TerminalDockRecord {
+  if (!v || typeof v !== 'object') return false;
+  const d = v as Record<string, unknown>;
+  return typeof d.on === 'boolean' && optional(d.px, isNum);
 }
 
 const EMPTY: PanelViewRecord = { view: null };
@@ -73,10 +90,11 @@ export function isPanelView(v: unknown): v is PanelViewRecord {
     && (r.web === undefined || r.web === null || isWebRequest(r.web))
     && (r.letter === undefined || r.letter === null || isStr(r.letter))
     && (r.chatHidden === undefined || typeof r.chatHidden === 'boolean')
-    && (r.tree === undefined || isTreeSplitRecord(r.tree));
+    && (r.tree === undefined || isTreeSplitRecord(r.tree))
+    && (r.terminalDock === undefined || isTerminalDock(r.terminalDock));
 }
 
-type Field = Exclude<keyof PanelViewRecord, 'chatHidden' | 'tree'>;
+type Field = Exclude<keyof PanelViewRecord, 'chatHidden' | 'tree' | 'terminalDock'>;
 
 /** One field's setter over the record, `useState` style (a value or an updater). */
 function fieldSetter<K extends Field>(set: Dispatch<SetStateAction<PanelViewRecord>>, key: K): Dispatch<SetStateAction<NonNullable<PanelViewRecord[K]> | null>> {
@@ -106,8 +124,17 @@ export function usePanelView(place: string) {
       return sameTreeSplit(cur, next) ? prev : { ...prev, tree: next };
     });
   }, [setRecord]);
+  const setTerminalDock = useCallback((update: (prev: TerminalDockRecord) => TerminalDockRecord) => {
+    setRecord((prev) => {
+      const cur = prev.terminalDock ?? { on: false };
+      const next = update(cur);
+      return next.on === cur.on && next.px === cur.px ? prev : { ...prev, terminalDock: next };
+    });
+  }, [setRecord]);
   return {
     activeView: record.view,
+    terminalDock: record.terminalDock ?? { on: false },
+    setTerminalDock,
     fileViewTarget: record.file ?? null,
     webRequest: record.web ?? null,
     inboxLetterId: record.letter ?? null,

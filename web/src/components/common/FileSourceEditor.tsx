@@ -236,8 +236,11 @@ export const FileSourceEditor = forwardRef<FileSourceEditorHandle, FileSourceEdi
       scrollToLine: (line: number, term?: string, endLine?: number) => {
         const view = viewRef.current;
         if (!view || line < 1 || line > view.state.doc.lines) return;
+        const from = view.state.doc.line(line).from;
+        // The caret goes to the line too, so it stays marked after the flash.
         view.dispatch({
-          effects: EditorView.scrollIntoView(view.state.doc.line(line).from, { y: 'center' }),
+          selection: { anchor: from },
+          effects: EditorView.scrollIntoView(from, { y: 'center' }),
         });
         cmFlashTerm(view, line, term, endLine);
       },
@@ -381,7 +384,8 @@ export const FileSourceEditor = forwardRef<FileSourceEditorHandle, FileSourceEdi
         const pos = view.state.doc.line(initialLine).from;
         lineRaf = requestAnimationFrame(() => {
           if (viewRef.current === view) {
-            view.dispatch({ effects: EditorView.scrollIntoView(pos, { y: 'center' }) });
+            // The caret goes to the line too, so it stays marked after the flash.
+            view.dispatch({ selection: { anchor: pos }, effects: EditorView.scrollIntoView(pos, { y: 'center' }) });
             // Landing cue for reference jumps: flash the jumped-to term (or
             // line). Runs on THIS instance, so a remount can't strand it.
             cmFlashTerm(view, initialLine, initialFlashTerm, initialEndLine);

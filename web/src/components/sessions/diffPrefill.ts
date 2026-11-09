@@ -101,3 +101,19 @@ export function buildPassagePrefill(passage: string, comment?: string): string {
   const note = comment?.replace(/\r\n?/g, '\n').trim();
   return note ? `${quote}${note}\n\n` : quote;
 }
+
+/**
+ * The block a terminal selection's "Add to chat" puts in the composer: where it
+ * came from, then the output as it was printed, in a fence (a longer one when
+ * the output itself holds a fence). Trailing spaces and blank edge lines go: a
+ * terminal pads rows with spaces.
+ */
+export function buildTerminalPrefill(output: string, source: string): string {
+  const lines = output.replace(/\r\n?/g, '\n').split('\n').map((l) => l.trimEnd());
+  while (lines.length > 0 && lines[0] === '') lines.shift();
+  while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+  const body = lines.join('\n');
+  let fence = '```';
+  while (body.includes(fence)) fence += '`';
+  return `From ${source}:\n${fence}text\n${body}\n${fence}\n`;
+}

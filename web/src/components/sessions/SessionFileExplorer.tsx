@@ -251,6 +251,10 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
   const [missingShown, setMissingShown] = useState<string | null>(missingNote ?? null);
   useEffect(() => { setMissingShown(missingNote ?? null); }, [missingNote, openNonce]);
   const [root, setRoot] = useState<string>(cwd || '~');
+  /** The file a deep link (`cwd` naming a file) opened, by its canonical path; the mount-time line is for it. */
+  const [deepLinkFile, setDeepLinkFile] = useState<string | null>(null);
+  const cwdRef = useRef(cwd);
+  cwdRef.current = cwd;
   // Hidden files shown or not stays as it was left, in every session's explorer (utils/view-memory.ts).
   const [showHidden, setShowHidden] = usePageView('files', 'showHidden', false, isBoolean);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -520,6 +524,9 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
         // (VS Code style). An EXPLICIT target always beats the remembered one.
         if (res.selectedFile) {
           const target = joinPath(canonical, res.selectedFile);
+          // The deep link's own file, as the host spelled it (`~/x` comes back absolute): its line applies to it.
+          // Only the mount's own path: a file typed in the path bar later is not the deep link.
+          if (dirPath === cwdRef.current) setDeepLinkFile(target);
           // A deep-linked file IS a navigation — it joins the back/forward stack.
           commitSelectionRef.current(target);
         } else if (restoreExpanded) {
@@ -680,6 +687,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
     setRootReconnecting(false);
     setReconnectingDirs(new Set());
     setSelectedFile(null);
+    setDeepLinkFile(null);
     setFocusedDir(null);
     pendingValidateRef.current = null;
     // Which dirs were open last time is ALREADY on disk in localStorage, so it
@@ -1566,6 +1574,9 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
     { key: 'close-file', label: 'Close file', icon: ICON_CLOSE, onSelect: () => commitSelection(null) },
   ];
 
+  // The deep link's file: `cwd` itself, or what the host resolved it to (`~/x:5` opens `/home/u/x`).
+  const deepLinked = selectedFile !== null && (selectedFile === cwd || selectedFile === deepLinkFile);
+
   return (
     <div className="session-file-explorer" ref={explorerRef}>
       <div className={`session-file-explorer-body${phone ? (selectedFile ? ' is-phone-file' : ' is-phone-tree') : ''}`}>
@@ -1758,9 +1769,9 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
               // file (session:tool-use/result) and pull those bytes in.
               sessionId={sessionId}
               // Reference jumps ride refLine; the mount-time deep link keeps initialLine.
-              line={refLine?.file === selectedFile ? refLine.line : (selectedFile === cwd ? initialLine : undefined)}
-              lineEnd={refLine?.file === selectedFile ? undefined : (selectedFile === cwd ? initialEndLine : undefined)}
-              lineTerm={refLine?.file === selectedFile ? refLine.term : (selectedFile === cwd ? initialTerm : undefined)}
+              line={refLine?.file === selectedFile ? refLine.line : (deepLinked ? initialLine : undefined)}
+              lineEnd={refLine?.file === selectedFile ? undefined : (deepLinked ? initialEndLine : undefined)}
+              lineTerm={refLine?.file === selectedFile ? refLine.term : (deepLinked ? initialTerm : undefined)}
               reloadToken={reloadToken}
               onSelectCode={onSelectCode}
               onSymbolLookup={handleSymbolLookup}
