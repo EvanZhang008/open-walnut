@@ -82,6 +82,9 @@ function buildTwin(kind: Twin, initial: Pending | null = pending(), owner = '') 
     followerScope: vi.fn(() => false),
     // The Walnut the session belongs to ('' = none recorded).
     sessionHomeOf: () => owner,
+    // bridgeHearsSession re-reads the spawn journal on a miss; no journal here.
+    journaledIds: () => new Set<string>(),
+    journaledSids: null,
     // The served-Walnuts note handleCommand takes for a server socket's per-Walnut push.
     servedWalnuts: { note: vi.fn() },
     walnutScope: { askedHome: () => '' },

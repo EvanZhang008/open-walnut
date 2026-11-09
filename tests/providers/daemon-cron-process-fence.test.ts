@@ -712,6 +712,9 @@ function buildGateTwin(kind: 'standalone' | 'template'): GateTwin {
     cancelledStartPath: (sid: string) => `/fixture/cancelled-starts/${sid}`,
     path: nodePath,
     STREAMS_DIR: '/fixture',
+    // The session ran here (its residence check: stream file, then the spawn journal).
+    livedHere: () => true,
+    bridgeHearsSession: () => true,
     MODE_CLI: { default: 'default' },
     // No resume record on disk: bridge resume uses the in-memory session's command.
     hostResume: createHostResume({ fs: nodeFs, path: nodePath, dir: '/fixture/no-resume-records', now: () => Date.now(), log: () => {}, modeCli: { default: 'default' } }),
