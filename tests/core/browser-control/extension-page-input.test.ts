@@ -161,12 +161,12 @@ describe('typing that sends waits for the person', () => {
     const r = await runPageOp('type', { ref: ref('#msg'), text: 'hi there\n', slowly: true }) as R
     expect(r.hold).toMatchObject({ kind: 'send' })
     expect((page.$('#msg') as HTMLTextAreaElement).value).toBe('')
-    const plain = await runPageOp('type', { ref: ref('#msg'), text: 'hi there\n' }) as R
-    expect(plain.hold).toBeUndefined()
     // With the yes for exactly that step it types.
     const ok = await runPageOp('type', { ref: ref('#msg'), text: 'hi there\n', slowly: true, outward_ok: r.hold.sig }) as R
     expect(ok.hold).toBeUndefined()
     expect(ok.typed).toContain('one key at a time')
+    const plain = await runPageOp('type', { ref: ref('#msg'), text: 'hi there\n' }) as R
+    expect(plain.hold).toBeUndefined()
   })
 
   it('at a point: the click there and the Enter are one ask, and the one yes covers both', async () => {

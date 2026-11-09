@@ -191,14 +191,16 @@ describe('scroll inside a box, and typing', () => {
     expect(located).toHaveLength(1)
     expect(located[0]).toMatchObject({ x: 30, y: 40, outward: 'click', focus: true })
     expect(located[0].then_enter).toBeUndefined()
-    // With a submit, the same one ask names the Enter too.
-    fake.pageLog = []
-    await act('type', { trusted: true, x: 30, y: 40, text: 'ab', submit: true })
-    expect(pageOps('locate').map((p) => p.args)).toEqual([expect.objectContaining({ outward: 'click', then_enter: true, typing: 'ab' })])
     expect(mouse().map((m) => m.type)).toEqual(['mouseMoved', 'mousePressed', 'mouseReleased'])
     const keys = fake.log.filter((l) => l[0] === 'Input.dispatchKeyEvent').map((l) => `${l[1]!.type} ${l[1]!.key}`)
     expect(keys).toEqual(['keyDown a', 'keyUp a', 'keyDown b', 'keyUp b'])
     expect(methods()).toContain('Page.enable')
+    // With a submit, the same one ask names the Enter too.
+    fake.pageLog = []
+    fake.log = []
+    await act('type', { trusted: true, x: 30, y: 40, text: 'ab', submit: true })
+    expect(pageOps('locate').map((p) => p.args)).toEqual([expect.objectContaining({ outward: 'click', then_enter: true, typing: 'ab' })])
+    expect(mouse().map((m) => m.type)).toEqual(['mouseMoved', 'mousePressed', 'mouseReleased'])
   })
 
   it('slowly types at most 200 characters', async () => {
