@@ -21,7 +21,12 @@ const RELEASE_BASE = 'https://github.com/EvanZhang008/open-walnut/releases/downl
  * Pinned SHA-256 of each `.gz` asset of NET_BIN_TAG (its SHA256SUMS); a target not here is
  * checked by SHA256SUMS. Empty from a version bump until that release is built and pinned.
  */
-export const NET_BIN_SHA256: Readonly<Record<string, string>> = {}
+export const NET_BIN_SHA256: Readonly<Record<string, string>> = {
+  'darwin-arm64': '7bd20c1b772f0268989f6f84528e8fd53cce7136cc1d4f15dc0d52de35fe2a9e',
+  'darwin-x64': '7dc5e93d7500f485a290c5cd3f817247e2d3676f3536c11d59fd3ad41bf8a318',
+  'linux-arm64': '3c8af50918ceb6ad1def7d3844cc416bc3010d8fc7845b406f631f4deca7e381',
+  'linux-x64': '6e8ea3103f64a609087aa3a37964ae4acf8824ca9817f19b49c4381dba1e5d1a',
+}
 const MAX_BYTES = 64 * 1024 * 1024
 /** One download's limit; a join waits longer than this for the network key (commands/net.ts). */
 export const FETCH_TIMEOUT_MS = 180_000
