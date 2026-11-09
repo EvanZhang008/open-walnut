@@ -1184,6 +1184,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
     },
 
     http: {
+      streams: true,
       route(method: string, routePath: string, handler: PluginRouteHandler) {
         assertLive(`http.route(${method} ${routePath})`)
         const route = createPluginHttpRoute(method, routePath, handler)

@@ -743,6 +743,8 @@ export interface PluginRequest {
   path: string
   query: Record<string, string | string[]>
   headers: Record<string, string>
+  /** Present on hosts that cancel streams when the browser disconnects. */
+  signal?: AbortSignal
   json<T = unknown>(): Promise<T>
   text(): Promise<string>
 }
@@ -752,6 +754,10 @@ export interface PluginReply {
   headers?: Record<string, string>
   json?: unknown
   text?: string
+  /** Binary response or lazy byte chunks; available on hosts with http.streams === true. */
+  body?: Uint8Array | AsyncIterable<Uint8Array>
+  /** Deadline for lazy response chunks. Default 60 seconds, maximum ten minutes. */
+  timeoutMs?: number
 }
 
 export type PluginRouteHandler = (request: PluginRequest) => PluginReply | Promise<PluginReply>
@@ -772,6 +778,8 @@ export interface PluginFetchResponse {
 }
 
 export interface HttpService {
+  /** Feature-detect before returning binary or streamed route bodies. */
+  readonly streams?: boolean
   route(method: string, path: string, handler: PluginRouteHandler): Disposable
   fetch(url: string, init?: PluginFetchInit): Promise<PluginFetchResponse>
 }
