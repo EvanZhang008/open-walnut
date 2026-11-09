@@ -528,7 +528,10 @@ export function createEnvelopeKit(): EnvelopeKit {
     const lead =
       kind === 'completed' ? `${who} completed its task.${replied}${pointer}`
       : kind === 'error' ? `${who} ended its turn with an ERROR${errorText ? `: ${errorText}` : ''}. The work likely did not finish.${pointer}`
-        + ' If this is its second failure with the same error, stop retrying and tell the user.'
+        // 2026-11-09, the CEO for the user: retrying what an agent broke is never the user's decision.
+        + ' Walnut already retried a passing error (a dropped connection, an overloaded or 5xx answer) by itself, so it is yours now:'
+        + ' retry it once with the retry line below. If it fails the same way again, decide yourself (restart it, move it to another host,'
+        + ' or do the work another way); bring the user only an error that is theirs to fix: credentials, a sign-in, a permission, or spending.'
       : kind === 'blocked' && asking ? `${who} is asking the user a question it could not send to you. `
         + 'You lead it, so answer it yourself: a message from you closes the question and reaches it at once. '
         + `Ask the user in your own session only if you cannot decide.${pointer}`
@@ -542,9 +545,11 @@ export function createEnvelopeKit(): EnvelopeKit {
       ...(last || kind === 'completed' || !input.repliedRecently
         ? [`  walnut tools call task_history '{"id":"${child.taskId}"}'   # read the full record`]
         : []),
-      ...((kind !== 'blocked' || asking) && kind !== 'completed'
-        ? [`  walnut tools call task_send '{"to":"${child.taskId}","text":"..."}'  # ${asking ? 'answer it' : 'continue it'}`]
-        : []),
+      ...(kind === 'error'
+        ? [`  walnut tools call task_send '{"to":"${child.taskId}","text":"continue: your last turn failed on an error; carry on where it stopped"}'  # retry it`]
+        : (kind !== 'blocked' || asking) && kind !== 'completed'
+          ? [`  walnut tools call task_send '{"to":"${child.taskId}","text":"..."}'  # ${asking ? 'answer it' : 'continue it'}`]
+          : []),
     ];
     return buildWalnutMessage({
       kind: 'notification',

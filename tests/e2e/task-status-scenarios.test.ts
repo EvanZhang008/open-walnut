@@ -43,6 +43,8 @@ import { taskNeedsAction, taskUserState } from '../../web/src/utils/session-stat
 import { askAnswerText, shownState, type StatusReport } from '../../src/core/user-status.js'
 import { readStatusReport } from '../../src/core/session-hooks/builtins.js'
 import type { Task } from '../../src/core/types.js'
+import { bus, EventNames } from '../../src/core/event-bus.js'
+import { getSessionAutoContinue } from '../../src/core/session-auto-continue.js'
 
 type State = 'needs' | 'read' | 'working' | 'waiting' | 'done'
 
@@ -125,12 +127,15 @@ async function turnEnds(task: Task, sid: string, r: Partial<StatusReport>): Prom
 
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
+  // Walnut's own retry of a failed turn fires in a second here, not three minutes.
+  process.env.WALNUT_AUTO_CONTINUE_DELAY_MS = '1000'
   server = await startServer({ port: 0, dev: true })
   const addr = server.address()
   port = typeof addr === 'object' && addr ? addr.port : 0
 })
 
 afterAll(async () => {
+  delete process.env.WALNUT_AUTO_CONTINUE_DELAY_MS
   await stopServer()
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 })
@@ -240,6 +245,33 @@ describe('every surface shows the same state after every step', () => {
     await turnEnds(worker, sid, { state: 'done', now: 'Shipped the fix.' })
     await expectEverywhere(worker.id, lead.id, 'waiting', 'done, on its lead')
     expect((await getTask(worker.id)).user_status?.kind).toBe('lead')
+  }, 120_000)
+
+  // 2026-11-09, the CEO for the user: two sessions failed on ECONNRESET, Walnut's own retries failed
+  // too, and both read Needs you with "Retry it or open it". Retrying what an agent broke is never his.
+  it('a turn fails on ECONNRESET -> Walnut retries it -> the retry fails too -> its lead retries, never the user', async () => {
+    const { lead, worker, sid } = await team('Resetflow')
+    await turnStarts(worker, sid, 'web-ui')
+    const ECONNRESET = 'API Error: Connection dropped (ECONNRESET)'
+    await updateSessionRecord(sid, { process_status: 'error', errorMessage: ECONNRESET })
+    bus.emit(EventNames.SESSION_RESULT, { sessionId: sid, taskId: worker.id, result: ECONNRESET, isError: true }, ['*'], { source: 'session-runner' })
+    await expect.poll(async () => (await getTask(worker.id)).phase, { timeout: 10_000 }).toBe('NEED_ACTION')
+    expect(getSessionAutoContinue()?.retryAt(sid)).toBeGreaterThan(Date.now())
+    await expectEverywhere(worker.id, lead.id, 'waiting', 'Walnut retries it')
+    expect((await getTask(worker.id)).user_status).toMatchObject({ kind: 'machine', waitingOn: expect.stringContaining('Walnut, retrying its failed turn by itself') })
+    // The retry goes out, and its turn fails the same way: no retry is left, so it is its lead's.
+    await expect.poll(() => getSessionAutoContinue()?.firedCount(sid), { timeout: 15_000 }).toBe(1)
+    await updateSessionRecord(sid, { process_status: 'error', errorMessage: ECONNRESET })
+    bus.emit(EventNames.SESSION_RESULT, { sessionId: sid, taskId: worker.id, result: ECONNRESET, isError: true }, ['*'], { source: 'session-runner' })
+    await expect.poll(async () => (await getTask(worker.id)).phase, { timeout: 10_000 }).toBe('NEED_ACTION')
+    expect(getSessionAutoContinue()?.retryAt(sid)).toBeNull()
+    await expectEverywhere(worker.id, lead.id, 'waiting', 'its lead retries it')
+    expect((await getTask(worker.id)).user_status).toMatchObject({
+      kind: 'lead', waitingOn: `Its lead, to retry it: its session failed again after Walnut's own retry (${ECONNRESET})`,
+    })
+    // An error only the user can fix still reaches him.
+    await updateSessionRecord(sid, { errorMessage: 'Invalid API key · Please run /login' })
+    await expectEverywhere(worker.id, lead.id, 'needs', 'a sign-in is his')
   }, 120_000)
 
   // 2026-11-02, the user, on a task parked on its own build: "if it is runnig it shoud be i

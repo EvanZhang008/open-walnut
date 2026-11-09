@@ -35,6 +35,7 @@ import type { OutlivingSource } from './sessions/outliving-work.js';
 import { snoozedUntil } from './snooze.js';
 import { isQuietTurn } from './sessions/quiet-turn.js';
 import { workspaceHoldAsk } from './workspaces/decisions.js';
+import { orgEnabledCached } from './org/org-enabled.js';
 
 const SUBSCRIBER = 'user-status-sync';
 const OWN_SOURCE = 'user-status';
@@ -68,6 +69,8 @@ export interface StatusFacts {
     pendingTool?: string; taskId?: string; archived?: boolean; startedAt?: string;
     /** Its own work that runs on after its turn (sessions/outliving-work.ts), from the live runner. */
     outliving?: OutlivingSource[];
+    /** Walnut retries its failed turn by itself at this time (session-auto-continue.ts, ISO). */
+    autoRetryAt?: string;
   }>;
   /** Task id -> subject of its newest unanswered action_required letter. */
   letters: Map<string, string>;
@@ -98,6 +101,8 @@ export interface StatusFacts {
   teamStopped?: Map<string, string>;
   /** Project keys (trimmed, lower case) that have an open lead (filled by syncUserStatuses). */
   projectLeads?: Set<string>;
+  /** The org is on and has an open Main, who takes a failure with no lead and no VP above it. */
+  hasMain?: boolean;
   /** Every task by id, for what a task takes from its ancestors (a snooze, snooze.ts). */
   tasksById?: ReadonlyMap<string, Task>;
   /** A task's teammates' open asks beside it (same-ask-tree.ts relativeAsksIndex), for a same-ask fold. */
@@ -347,15 +352,18 @@ export async function readStatusFacts(tasks: readonly Task[], allIds: readonly s
       if (!names.has(host)) names.set(host, import('./hosts/host-display-name.js').then((m) => m.hostDisplayNameFor(host)).catch(() => host));
       return names.get(host)!;
     };
+    const autoContinue = await import('./session-auto-continue.js').then((m) => m.getSessionAutoContinue()).catch(() => null);
     for (const rec of await listSessionsForTasks(taskIds, sessionIds)) {
       if (rec.provider === 'embedded') continue;
       // Only a live process carries work on: a stopped one's runner state is its last word.
       const live = rec.process_status === 'running' || rec.process_status === 'idle';
       const outliving = live && runner ? runner.outlivingWorkOf(rec.claudeSessionId) : [];
       const hostDown = rec.host && !rec.archived && linkDown(rec.host) ? await downHostName(rec.host) : undefined;
+      const retryAt = rec.process_status !== 'running' ? autoContinue?.retryAt(rec.claudeSessionId) ?? null : null;
       sessions.set(rec.claudeSessionId, {
         ...(outliving.length ? { outliving } : {}),
         ...(hostDown ? { hostDown } : {}),
+        ...(retryAt ? { autoRetryAt: new Date(retryAt).toISOString() } : {}),
         // A quiet turn (Walnut's idle compaction, sessions/quiet-turn.ts) is no running work.
         processStatus: rec.process_status === 'running' && isQuietTurn(rec.claudeSessionId) ? 'idle' : rec.process_status,
         errorMessage: rec.errorMessage,
@@ -436,6 +444,8 @@ function choiceInput(task: Task, facts: StatusFacts): Pick<UserStatusInput, 'ope
 /** A park lands just before the hand-back it causes; the two clocks are the same process's. */
 const UNDELIVERED_SLACK_MS = 60_000;
 
+const openLeader = (t: Task): boolean => t.phase !== 'COMPLETE' && t.status !== 'done';
+
 /** The input deriveUserStatus takes for one task, from the facts. Exported for tests. */
 /** What a session's close left for the user, still open (sessions/owed-to-user.ts). */
 function openOwedHold(task: Task): { ask: string; at: string } | null {
@@ -488,6 +498,8 @@ export function statusInputOf(task: Task, facts: StatusFacts, nowMs = Date.now()
     usageLimit: main?.usageLimit ?? null,
     hostDown: main?.hostDown ?? null,
     projectLead: !!facts.projectLeads?.has((task.project ?? '').trim().toLowerCase()) && task.org_role !== 'lead',
+    hasMain: !!facts.hasMain,
+    autoRetryAt: main?.autoRetryAt ?? null,
     undeliveredMessage: undelivered?.reason ?? null,
     statusSince: main?.statusSince ?? null,
     pendingPermissionTool: prompt,
@@ -503,6 +515,8 @@ export function statusInputOf(task: Task, facts: StatusFacts, nowMs = Date.now()
     schedules: facts.schedules.get(task.id) ?? [],
     waitUntil: task.wait_until ?? null,
     hasLeader: !!task.parent_task_id,
+    // A leader that completed hears nothing more from its subtasks: a failure goes past it.
+    ...(task.parent_task_id && facts.tasksById?.has(task.parent_task_id) ? { leaderOpen: openLeader(facts.tasksById.get(task.parent_task_id)!) } : {}),
     openWorkers: facts.openWorkers?.get(task.id) ?? 0,
     workersAtWork: facts.workersAtWork?.get(task.id) ?? [],
     isMain: task.org_role === 'main',
@@ -588,8 +602,11 @@ export function completeStatusFacts(facts: StatusFacts, everything: readonly Tas
   // A pause of the wake sources only (sessions:"keep") leaves the sessions running: not a stop to show.
   for (const t of everything) if (!t.team_stop?.keptSessions) for (const m of t.team_stop?.members ?? []) facts.teamStopped.set(m.id, t.team_stop!.at);
   facts.projectLeads = new Set();
+  // With the org off no VP or Main hears a task (status-push.ts followContext), so none takes its failure.
+  const orgOn = orgEnabledCached();
+  facts.hasMain = orgOn && everything.some((t) => t.org_role === 'main' && t.phase !== 'COMPLETE' && t.status !== 'done');
   for (const t of everything) {
-    if (t.org_role !== 'lead' || t.phase === 'COMPLETE' || t.status === 'done') continue;
+    if (!orgOn || t.org_role !== 'lead' || t.phase === 'COMPLETE' || t.status === 'done') continue;
     for (const p of [t.project, ...(t.org_leads ?? [])]) {
       const key = (p ?? '').trim().toLowerCase();
       if (key) facts.projectLeads.add(key);
@@ -925,6 +942,8 @@ function onEvent(event: { name: string; data: unknown; source?: string }): void 
   }
 }
 
+let stopRetryFollow: (() => void) | null = null;
+
 export function startUserStatusSync(): void {
   if (!bootPolicy('user-status') || live) return;
   live = true;
@@ -941,6 +960,11 @@ export function startUserStatusSync(): void {
   });
   // A turn-end report armed, asked or settled changes what the task waits on (user-status.ts).
   onReportPendingChange((sid) => markSession(sid));
+  // Walnut's own retry of a failed turn armed, fired or cancelled: the task waits on it, or no more.
+  void import('./session-auto-continue.js').then(({ onAutoRetryChange }) => {
+    if (live) stopRetryFollow = onAutoRetryChange((sid) => markSession(sid));
+  })
+    .catch((err) => log.task.warn('user-status: auto-retry changes not followed', { error: errText(err) }));
   markAll();
   void import('./sessions/report-phase.js').then(({ applyStoredReports }) => applyStoredReports())
     .catch((err) => log.task.warn('user-status: stored reports not applied', { error: errText(err) }));
@@ -972,6 +996,8 @@ export async function settleUserStatusSync(): Promise<void> {
 export function stopUserStatusSync(): void {
   bus.unsubscribe(SUBSCRIBER);
   onReportPendingChange(null);
+  stopRetryFollow?.();
+  stopRetryFollow = null;
   if (missedReportsTimer) clearTimeout(missedReportsTimer);
   missedReportsTimer = null;
   live = false;

@@ -74,10 +74,10 @@ function rig(opts: { probe?: (n: number) => EndpointProbeAnswer | Promise<Endpoi
 }
 
 /** The status a task with this session reads (worker of a lead, its turn handed back). */
-function statusOf(rec: SessionRecord) {
+function statusOf(rec: SessionRecord, hasLeader = true) {
   const w = rec.endpointWait
   return deriveUserStatus({
-    phase: 'NEED_ACTION', hasSession: true, hasLeader: true, processStatus: rec.process_status,
+    phase: 'NEED_ACTION', hasSession: true, hasLeader, processStatus: rec.process_status,
     errorMessage: rec.errorMessage, errorReason: 'api_error',
     endpointWait: w ? { state: w.state, url: w.url, where: w.where, since: w.since, resumes: w.resumes, gaveUpWhy: w.gaveUpWhy, probeError: w.probeError, cause: w.cause } : null,
   })
@@ -284,10 +284,14 @@ describe('the endpoint wait', () => {
     expect(r.gaveUp).toHaveLength(1)
     expect(r.gaveUp[0]).toMatch(/model endpoint http:\/\/127\.0\.0\.1:8402 on this (Mac|machine) has not answered since 2026-11-03 14:00 UTC/)
     expect(r.sent).toEqual([])
-    const needs = statusOf(r.rec)
+    // A gave-up wait is its lead's to retry (2026-11-09), the user's only with no one above the task.
+    const lead = statusOf(r.rec)
+    expect(lead).toMatchObject({ state: 'waiting', kind: 'lead' })
+    expect(lead.waitingOn).toContain('Walnut stopped waiting for its model endpoint')
+    const needs = statusOf(r.rec, false)
     expect(needs.state).toBe('needs')
     expect(needs.ask).toContain('http://127.0.0.1:8402')
-    // A gave-up wait no longer holds the turn's notices: the failure is the user's now.
+    // A gave-up wait no longer holds the turn's notices: the failure is its lead's now.
     expect(recordInEndpointWait(r.rec)).toBe(false)
     const probesAtGiveUp = r.probes()
     await r.advance(60 * MIN)

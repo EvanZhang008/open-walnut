@@ -105,7 +105,9 @@ describe('the words say why', () => {
     // Its own current report, a letter, a failed session: still the user's.
     expect(deriveUserStatus({ ...base, report: report({ state: 'needs', ask: 'Pick A or B?' }) }, NOW)).toMatchObject({ state: 'needs', ask: 'Pick A or B?' })
     expect(deriveUserStatus({ ...base, openLetter: 'Approve the quota raise' }, NOW)).toMatchObject({ state: 'needs', source: 'letter' })
-    expect(deriveUserStatus({ ...base, processStatus: 'error' }, NOW)).toMatchObject({ state: 'needs', source: 'error' })
+    // A failed session is its lead's to retry (2026-11-09), unless only the user can fix the error.
+    expect(deriveUserStatus({ ...base, processStatus: 'error' }, NOW)).toMatchObject({ state: 'waiting', kind: 'lead', waitingOn: expect.stringContaining('Its lead, to retry it') })
+    expect(deriveUserStatus({ ...base, processStatus: 'error', errorMessage: 'API Error: 401 invalid api key' }, NOW)).toMatchObject({ state: 'needs', source: 'error' })
     // No lead: its turn is there for the user to read, with nothing asked.
     expect(deriveUserStatus({ ...base, hasLeader: false }, NOW)).toMatchObject({ state: 'read', toRead: 'turn' })
     // A lead (or Main) with no ask of its own is never a bare Needs you (2026-10-31, the user: "u can
@@ -232,7 +234,8 @@ describe('stopped by the machine, not the work', () => {
   })
 
   it('names the lead as the one who restarts it, when there is one', () => {
-    expect(deriveUserStatus({ phase: 'IN_PROGRESS', ...lost, projectLead: true }, NOW).waitingOn).toContain('its lead restarts it if that fails')
+    expect(deriveUserStatus({ phase: 'IN_PROGRESS', ...lost, hasLeader: true }, NOW).waitingOn).toContain('its lead restarts it if that fails')
+    expect(deriveUserStatus({ phase: 'IN_PROGRESS', ...lost, projectLead: true }, NOW).waitingOn).toContain('its VP restarts it if that fails')
     expect(deriveUserStatus({ phase: 'IN_PROGRESS', ...lost }, NOW).waitingOn).not.toContain('lead')
   })
 

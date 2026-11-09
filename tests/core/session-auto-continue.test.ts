@@ -16,6 +16,7 @@ import {
   matchesRetryExhaustion,
   resolveAutoContinueConfig,
   AUTO_CONTINUE_SOURCE,
+  onAutoRetryChange,
   type AutoContinueConfig,
   type AutoContinueDeps,
 } from '../../src/core/session-auto-continue.js'
@@ -349,7 +350,8 @@ describe('SessionAutoContinue hourly cap', () => {
 
     async function cycle() {
       h.sac.handleEvent(resultEvent({ sessionId: 'sess-1', isError: true, result: 'Request timed out' }))
-      h.clock.advance(1_100)
+      // Past the backoff of the second retry (twice the first delay).
+      h.clock.advance(2_100)
       h.timers.runDue()
       await Promise.resolve(); await Promise.resolve()
     }
@@ -382,9 +384,10 @@ describe('resolveAutoContinueConfig', () => {
   const KEYS = ['WALNUT_AUTO_CONTINUE_ENABLED', 'WALNUT_AUTO_CONTINUE_DELAY_MS', 'WALNUT_AUTO_CONTINUE_MAX_PER_HOUR', 'WALNUT_AUTO_CONTINUE_WINDOW_MS']
   beforeEach(() => { for (const k of KEYS) delete process.env[k] })
 
-  it('defaults: enabled, 3-min delay, cap 2/hour', () => {
+  // 2026-11-09, the CEO for the user: retry once, then the node above the task retries it.
+  it('defaults: enabled, 3-min delay, one retry an hour', () => {
     const cfg = resolveAutoContinueConfig()
-    expect(cfg).toEqual({ enabled: true, delayMs: 180_000, maxPerHour: 2, windowMs: 3_600_000 })
+    expect(cfg).toEqual({ enabled: true, delayMs: 180_000, maxPerHour: 1, windowMs: 3_600_000 })
   })
   it('honors env overrides and clamps out-of-range values', () => {
     process.env.WALNUT_AUTO_CONTINUE_ENABLED = '0'
@@ -411,5 +414,76 @@ describe('startSessionAutoContinue bus wiring', () => {
     expect(handle.instance).toBeTruthy()
     handle.stop()
     bus.clear()
+  })
+})
+
+// ── The retry the status reads (2026-11-09: a task read Needs you while Walnut's own retry was pending) ──
+
+describe('SessionAutoContinue retryAt', () => {
+  it('says when the pending retry fires, backs off for the next one, and tells its listeners', async () => {
+    const h = makeHarness({ maxPerHour: 2, delayMs: 1_000 })
+    const told: string[] = []
+    const off = onAutoRetryChange((sid) => told.push(sid))
+    try {
+      const t0 = h.clock.now()
+      h.sac.handleEvent(resultEvent({ sessionId: 'sess-1', isError: true, result: 'API Error: Connection dropped (ECONNRESET)' }))
+      expect(h.sac.retryAt('sess-1')).toBe(t0 + 1_000)
+      expect(told).toEqual(['sess-1'])
+      h.clock.advance(1_100); h.timers.runDue()
+      await Promise.resolve(); await Promise.resolve()
+      expect(h.sac.retryAt('sess-1')).toBeNull()
+      expect(h.sends).toHaveLength(1)
+      expect(told).toEqual(['sess-1', 'sess-1'])
+      // The second retry waits twice as long.
+      const t1 = h.clock.now()
+      h.sac.handleEvent(resultEvent({ sessionId: 'sess-1', isError: true, result: 'API Error: Connection dropped (ECONNRESET)' }))
+      expect(h.sac.retryAt('sess-1')).toBe(t1 + 2_000)
+      // A person's message takes over: no retry is pending any more.
+      h.sac.handleEvent(sendEvent('sess-1'))
+      expect(h.sac.retryAt('sess-1')).toBeNull()
+      expect(told).toHaveLength(4)
+    } finally { off() }
+  })
+})
+
+describe('SessionAutoContinue holdUntilRetried', () => {
+  async function fireDue(h: ReturnType<typeof makeHarness>) {
+    h.clock.advance(1_100); h.timers.runDue()
+    for (let i = 0; i < 5; i++) await Promise.resolve()
+  }
+  const ERR = 'API Error: Connection dropped (ECONNRESET)'
+
+  it('holds nothing when no retry is pending', () => {
+    const h = makeHarness({ delayMs: 1_000 })
+    expect(h.sac.holdUntilRetried('sess-1', () => {})).toBe(false)
+  })
+
+  it('drops what it held once the retry started its turn', async () => {
+    const h = makeHarness({ delayMs: 1_000 })
+    h.sac.handleEvent(resultEvent({ sessionId: 'sess-1', isError: true, result: ERR }))
+    let replayed = 0
+    expect(h.sac.holdUntilRetried('sess-1', () => { replayed++ })).toBe(true)
+    await fireDue(h)
+    expect(h.sends).toHaveLength(1)
+    expect(replayed).toBe(0)
+  })
+
+  it('replays what it held when the retry could not be sent', async () => {
+    const h = makeHarness({ delayMs: 1_000 }, { send: async () => { throw new Error('daemon unreachable') } })
+    h.sac.handleEvent(resultEvent({ sessionId: 'sess-1', isError: true, result: ERR }))
+    let replayed = 0
+    h.sac.holdUntilRetried('sess-1', () => { replayed++ })
+    await fireDue(h)
+    expect(replayed).toBe(1)
+  })
+
+  it('drops what it held when another send takes the session over', () => {
+    const h = makeHarness({ delayMs: 1_000 })
+    h.sac.handleEvent(resultEvent({ sessionId: 'sess-1', isError: true, result: ERR }))
+    let replayed = 0
+    h.sac.holdUntilRetried('sess-1', () => { replayed++ })
+    h.sac.handleEvent(sendEvent('sess-1'))
+    expect(replayed).toBe(0)
+    expect(h.sac.holdUntilRetried('sess-1', () => {})).toBe(false)
   })
 })

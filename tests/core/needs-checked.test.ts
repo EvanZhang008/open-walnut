@@ -70,8 +70,9 @@ describe('a stopped team', () => {
     // A turn it ran after the stop speaks for itself.
     const ran = deriveUserStatus({ ...base, report: { at: ago(30_000), state: 'waiting', waiting_kind: 'task', waiting_on: 'The review' } }, NOW)
     expect(ran.waitingOn ?? '').not.toContain('Its team was stopped')
-    // A failure still needs the user first.
-    expect(deriveUserStatus({ ...base, processStatus: 'error', errorMessage: 'boom' }, NOW).source).toBe('error')
+    // A failure still speaks before the stop, and is its lead's to retry (2026-11-09), unless it is the user's kind.
+    expect(deriveUserStatus({ ...base, processStatus: 'error', errorMessage: 'boom' }, NOW).waitingOn).toContain('Its lead, to retry it')
+    expect(deriveUserStatus({ ...base, processStatus: 'error', errorMessage: 'API Error: 401 unauthorized' }, NOW).source).toBe('error')
   })
 })
 

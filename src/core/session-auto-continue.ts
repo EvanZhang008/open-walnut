@@ -79,7 +79,9 @@ export function resolveAutoContinueConfig(): AutoContinueConfig {
   return {
     enabled: process.env.WALNUT_AUTO_CONTINUE_ENABLED !== '0',
     delayMs: clampInt(process.env.WALNUT_AUTO_CONTINUE_DELAY_MS, 180_000, 0, 3_600_000),
-    maxPerHour: clampInt(process.env.WALNUT_AUTO_CONTINUE_MAX_PER_HOUR, 2, 0, 100),
+    // One retry, then the node above the task retries it (2026-11-09, the CEO for the user:
+    // "retry once, then lead"; user-status.ts failureOf).
+    maxPerHour: clampInt(process.env.WALNUT_AUTO_CONTINUE_MAX_PER_HOUR, 1, 0, 100),
     windowMs: clampInt(process.env.WALNUT_AUTO_CONTINUE_WINDOW_MS, 3_600_000, 60_000, 86_400_000),
   }
 }
@@ -131,6 +133,11 @@ export class SessionAutoContinue {
   private readonly cfg: AutoContinueConfig
   private readonly deps: AutoContinueDeps
   private readonly pending = new Map<string, ReturnType<typeof setTimeout>>()
+  /** sessionId → when its pending nudge fires (ms): the task waits on Walnut's retry until then. */
+  private readonly pendingAt = new Map<string, number>()
+  /** sessionId → what a reader held back while the retry was pending (builtins.ts turn-end notices):
+   *  run if the retry never starts its turn, dropped once it does or a send takes over. */
+  private readonly heldBack = new Map<string, Array<() => void>>()
   /** sessionId → fired-nudge timestamps (ms), pruned to the rolling window. */
   private readonly fires = new Map<string, number[]>()
   /** sessionId → supersession epoch. Bumped on every non-auto send (and delete);
@@ -237,15 +244,50 @@ export class SessionAutoContinue {
       })
       return
     }
+    // Backoff: each retry inside the window waits twice as long as the one before it.
+    const delayMs = Math.min(this.cfg.delayMs * 2 ** this.firesInWindow(sessionId), 3_600_000)
     log.session.info('auto-continue scheduled after retry-exhaustion result', {
-      sessionId, taskId, delayMs: this.cfg.delayMs,
+      sessionId, taskId, delayMs,
     })
     const epoch = this.epochs.get(sessionId) ?? 0
     const handle = this.deps.setTimer(() => {
       this.pending.delete(sessionId)
+      this.pendingAt.delete(sessionId)
+      notifyRetryChange(sessionId)
       void this.fire(sessionId, taskId, epoch)
-    }, this.cfg.delayMs)
+    }, delayMs)
     this.pending.set(sessionId, handle)
+    this.pendingAt.set(sessionId, this.deps.now() + delayMs)
+    notifyRetryChange(sessionId)
+  }
+
+  /**
+   * Keep `replay` until the pending retry is settled: it runs if the retry never starts a turn (its
+   * send failed, the cap was reached at fire time), and is dropped when the retry's turn starts or
+   * another send takes the session over (that turn's own end speaks). False when nothing is pending.
+   */
+  holdUntilRetried(sessionId: string, replay: () => void): boolean {
+    if (!this.pending.has(sessionId)) return false
+    const list = this.heldBack.get(sessionId) ?? []
+    if (list.length < 8) list.push(replay)
+    this.heldBack.set(sessionId, list)
+    return true
+  }
+
+  private releaseHeld(sessionId: string, run: boolean): void {
+    const list = this.heldBack.get(sessionId)
+    this.heldBack.delete(sessionId)
+    if (!run || !list) return
+    for (const fn of list) {
+      try { fn() } catch (err) {
+        log.session.warn('auto-continue: a held notice failed to replay', { sessionId, error: err instanceof Error ? err.message : String(err) })
+      }
+    }
+  }
+
+  /** When Walnut's own retry of this session's failed turn fires (ms), or null when none is pending. */
+  retryAt(sessionId: string): number | null {
+    return this.pending.has(sessionId) ? this.pendingAt.get(sessionId) ?? null : null
   }
 
   private async fire(sessionId: string, taskId: string | undefined, epoch: number): Promise<void> {
@@ -260,6 +302,7 @@ export class SessionAutoContinue {
       // check-then-push gap was the cap-overrun race). Released on abort below.
       if (this.firesInWindow(sessionId) >= this.cfg.maxPerHour) {
         log.session.info('auto-continue aborted at fire — hourly cap reached', { sessionId, taskId })
+        this.releaseHeld(sessionId, true)
         return
       }
       const reservedAt = this.deps.now()
@@ -283,11 +326,13 @@ export class SessionAutoContinue {
         return
       }
       if (!rec) {
+        this.releaseHeld(sessionId, false)
         releaseSlot()
         log.session.info('auto-continue aborted — session gone', { sessionId, taskId })
         return
       }
       if (rec.archived) {
+        this.releaseHeld(sessionId, false)
         releaseSlot()
         log.session.info('auto-continue aborted — session archived', { sessionId, taskId })
         return
@@ -297,15 +342,19 @@ export class SessionAutoContinue {
         sessionId, taskId: taskId ?? rec.taskId, firesInWindow: this.firesInWindow(sessionId),
       })
       this.deps.emitNote(sessionId, taskId ?? rec.taskId,
-        'Auto-continuing after an upstream timeout — resuming the interrupted turn.')
+        'Auto-continuing after an upstream error: resuming the interrupted turn.')
       await this.deps.send(sessionId, NUDGE_MESSAGE, {
         source: AUTO_CONTINUE_SOURCE,
         taskId: taskId ?? rec.taskId,
       })
+      // The retry's own turn speaks for it now.
+      this.releaseHeld(sessionId, false)
     } catch (err) {
       log.session.warn('auto-continue fire failed', {
         sessionId, taskId, error: err instanceof Error ? err.message : String(err),
       })
+      // The retry never started: the error it held back is heard after all.
+      this.releaseHeld(sessionId, true)
     }
   }
 
@@ -317,12 +366,18 @@ export class SessionAutoContinue {
     if (!handle) return
     this.deps.clearTimer(handle)
     this.pending.delete(sessionId)
+    this.pendingAt.delete(sessionId)
+    // Another send took the session over (its turn speaks), or it was deleted.
+    this.releaseHeld(sessionId, false)
+    notifyRetryChange(sessionId)
     log.session.info('auto-continue canceled', { sessionId, reason })
   }
 
   stop(): void {
     for (const handle of this.pending.values()) this.deps.clearTimer(handle)
     this.pending.clear()
+    this.pendingAt.clear()
+    this.heldBack.clear()
     this.fires.clear()
     this.epochs.clear()
   }
@@ -333,6 +388,20 @@ export class SessionAutoContinue {
 }
 
 // ── Module wiring ──
+
+const retryListeners = new Set<(sessionId: string) => void>()
+
+/** Told whenever a session's pending retry is armed, fires or is cancelled (the status sync re-derives it). */
+export function onAutoRetryChange(fn: (sessionId: string) => void): () => void {
+  retryListeners.add(fn)
+  return () => { retryListeners.delete(fn) }
+}
+
+function notifyRetryChange(sessionId: string): void {
+  for (const fn of retryListeners) {
+    try { fn(sessionId) } catch { /* a listener's failure is its own */ }
+  }
+}
 
 let instance: SessionAutoContinue | null = null
 

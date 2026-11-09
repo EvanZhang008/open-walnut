@@ -169,12 +169,16 @@ describe('the wording of each kind', () => {
     expect(replied.body).not.toContain('The page renders');
   });
 
-  it('error: carries the error text, bounded, and the second-failure rule', () => {
+  it('error: carries the error text, bounded, the lead retry line and whose errors reach the user', () => {
     const text = buildSubtaskNoticeText(notice({ kind: 'error', error: `boom\n${'x'.repeat(900)}`, lastWords: undefined }));
     const env = parseWalnutMessage(text)!;
     expect(env.attrs.outcome).toBe('error');
     expect(env.body).toMatch(/ended its turn with an ERROR: boom x{494}…\. The work likely did not finish\./);
-    expect(env.body).toContain('If this is its second failure with the same error, stop retrying and tell the user.');
+    // 2026-11-09: Walnut retried it already; the lead retries once more and brings the user only their own kinds.
+    expect(env.body).toContain('Walnut already retried a passing error');
+    expect(env.body).toContain('bring the user only an error that is theirs to fix: credentials, a sign-in, a permission, or spending.');
+    expect(env.body).not.toContain('tell the user.');
+    expect(env.body).toMatch(/walnut tools call task_send '\{"to":"[^"]+","text":"continue: your last turn failed on an error; carry on where it stopped"\}'  # retry it/);
   });
 
   it('no quote and no recent reply: says why and still points at the record', () => {

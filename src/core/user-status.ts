@@ -42,6 +42,7 @@ import type { ThreadCounts } from './org/thread-view.js';
 import { outlivingLine, type OutlivingSource } from './sessions/outliving-work.js';
 import type { SameAskFold } from './same-ask.js';
 import { reportDecision, type AskMemory, type StatusDecision } from './ask-decision.js';
+import { ERROR_OWNER_WORDS, USER_ERROR_WORDS, errorOwnerOf, usersErrorKind } from './sessions/session-error-owner.js';
 
 export type UserState = 'needs' | 'read' | 'working' | 'waiting' | 'done';
 
@@ -288,6 +289,12 @@ export interface UserStatusInput {
   hostDown?: string | null;
   /** Its project has an open lead (a VP), who restarts what Walnut could not. */
   projectLead?: boolean;
+  /** Its leader is still open (false: it completed, and a failure goes past it to the VP or Main). */
+  leaderOpen?: boolean;
+  /** The org has an open Main, who takes the failures of a task with no lead and no VP. */
+  hasMain?: boolean;
+  /** Walnut retries its failed turn by itself at this time (session-auto-continue.ts, ISO). */
+  autoRetryAt?: string | null;
   /** A message to its session was parked, never delivered, since the phase last moved: the reason. */
   undeliveredMessage?: string | null;
   /** When its session's status last moved (ISO). */
@@ -584,6 +591,21 @@ const RESTART_WORDS: Record<string, string> = {
 };
 
 /**
+ * A failure Walnut could not undo by itself (2026-11-09, the CEO for the user: "retrying what an
+ * agent broke was never his decision"): the node above the task retries it (its lead, else its
+ * project's VP, else Main) and the task waits on that node, so it never reads Needs you for him.
+ * Only a failure the user alone can fix (credentials, a sign-in, a permission, spending) is his,
+ * named by its kind, and so is one with no node above it. `text` is the error, for its kind.
+ */
+function failureOf(input: UserStatusInput, w: ReturnType<typeof words>, ask: string, what: string, machine = false, text?: string | null): UserStatus {
+  const by = machine ? { stoppedBy: 'machine' as const } : {};
+  const theirs = usersErrorKind(text ?? ask);
+  const owner = theirs ? null : errorOwnerOf(input);
+  if (!owner) return strip<UserStatus>({ state: 'needs', source: 'error', ask: theirs ? `${ask} It needs ${USER_ERROR_WORDS[theirs]}.` : ask, ...w, ...by });
+  return strip<UserStatus>({ state: 'waiting', kind: 'lead', waitingOn: clipped(`${ERROR_OWNER_WORDS[owner]}, to retry it: ${what}`, 300), ...w, ...by });
+}
+
+/**
  * Stopped by the machine, not by the work (2026-10-28: a full disk, a restart and an SSH drop put
  * tasks under "Needs the user now"). Walnut resumes such a task itself once the cause clears, and
  * its lead restarts it when Walnut cannot; only what neither can fix reaches the user. Read from
@@ -611,12 +633,12 @@ function machineStop(input: UserStatusInput, w: ReturnType<typeof words>, nowMs:
   }
   const ew = input.endpointWait;
   if (ew && input.processStatus !== 'running') {
-    if (ew.state === 'gave_up') return strip<UserStatus>({ state: 'needs', source: 'error', ask: endpointGaveUpWords(ew), ...w, stoppedBy: 'machine' });
+    if (ew.state === 'gave_up') return failureOf(input, w, endpointGaveUpWords(ew), 'Walnut stopped waiting for its model endpoint', true);
     return strip<UserStatus>({ state: 'waiting', kind: 'machine', waitingOn: endpointWaitingWords(ew), ...w, stoppedBy: 'machine' });
   }
   const loss = input.restartLoss;
   const live = input.processStatus === 'running' || input.processStatus === 'idle';
-  const owner = input.hasLeader || input.projectLead;
+  const owner = errorOwnerOf(input);
   const parked = input.phase === 'WAITING';
   if (loss && !live) {
     const after = RESTART_WORDS[loss.cause ?? ''] ?? 'a restart';
@@ -624,9 +646,7 @@ function machineStop(input: UserStatusInput, w: ReturnType<typeof words>, nowMs:
       return strip<UserStatus>({ state: 'waiting', kind: 'machine', waitingOn: `Walnut, resuming it after ${after}`, ...w, stoppedBy: 'machine' });
     }
     if (loss.state === 'gave_up') {
-      return owner
-        ? strip<UserStatus>({ state: 'waiting', kind: 'lead', waitingOn: `Its lead, to restart it: Walnut could not resume it after ${after}`, ...w, stoppedBy: 'machine' })
-        : strip<UserStatus>({ state: 'needs', source: 'error', ask: `Walnut could not resume it after ${after}. Restart it or open it.`, ...w, stoppedBy: 'machine' });
+      return failureOf(input, w, `Walnut could not resume it after ${after}. Restart it or open it.`, `Walnut could not resume it after ${after}`, true);
     }
   }
   const cause = infraStopCause(input);
@@ -636,11 +656,9 @@ function machineStop(input: UserStatusInput, w: ReturnType<typeof words>, nowMs:
   const since = input.statusSince ? Date.parse(input.statusSince) : NaN;
   if (Number.isFinite(since) && nowMs - since >= MACHINE_STOP_ESCALATE_MS) {
     const what = cause === 'host' ? 'Its host has been unreachable' : 'It has been stopped by the machine';
-    return owner
-      ? strip<UserStatus>({ state: 'waiting', kind: 'lead', waitingOn: `Its lead, to check it: ${what.toLowerCase()} for a day`, ...w, stoppedBy: 'machine' })
-      : strip<UserStatus>({ state: 'needs', source: 'error', ask: `${what} for a day. Check the host, or restart it elsewhere.`, ...w, stoppedBy: 'machine' });
+    return failureOf(input, w, `${what} for a day. Check the host, or restart it elsewhere.`, `${what.toLowerCase()} for a day`, true);
   }
-  const who = owner ? ', and its lead restarts it if that fails' : '';
+  const who = owner ? `, and ${ERROR_OWNER_WORDS[owner].replace(/^Its/, 'its')} restarts it if that fails` : '';
   const waitingOn = cause === 'host' ? `Its host to come back: Walnut reconnects and resumes it by itself${who}`
     : cause === 'restart' ? `Walnut, resuming it after Walnut restarted${who}`
       : `Walnut, resuming it after its process stopped under it${who}`;
@@ -1148,14 +1166,21 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
         return strip({ state: 'needs', source: 'error', ask: `The user (or someone) has its session open in a terminal right now (${terminal[1].slice(0, 80)}), so a message to it waits. The task is fine; Retry it once that terminal is closed.`, ...w });
       }
       const why = raw.replace(/^Not delivered( yet)?:\s*/i, '');
-      return strip({ state: 'needs', source: 'error', ask: `A message to it was not delivered: ${why.slice(0, 220)}`, ...w });
+      return failureOf(input, w, `A message to it was not delivered: ${why.slice(0, 220)}`, `a message to it was not delivered (${why.slice(0, 200)})`, false, why);
     }
     if (machine) return machine;
     // A machine stop under a turn that asked the user something: the ask is what they answer.
     if (input.processStatus === 'error' && !infraStopCause(input)) {
-    const why = clean(input.errorMessage);
-    return strip({ state: 'needs', source: 'error', ask: why ? `Its session failed (${why.slice(0, 140)}). Retry it or open it.` : 'Its session failed. Retry it or open it.', ...w });
-  }
+      const why = clean(input.errorMessage);
+      // Walnut retries a transient turn error by itself first (session-auto-continue.ts).
+      const retryAt = Date.parse(input.autoRetryAt ?? '');
+      if (Number.isFinite(retryAt)) {
+        const at = new Date(retryAt).toISOString().slice(11, 16);
+        return strip({ state: 'waiting', kind: 'machine', waitingOn: clipped(`Walnut, retrying its failed turn by itself at ${at} UTC${why ? ` (${why.slice(0, 140)})` : ''}`, 240), ...w, stoppedBy: 'machine' });
+      }
+      return failureOf(input, w, why ? `Its session failed (${why.slice(0, 140)}). Retry it or open it.` : 'Its session failed. Retry it or open it.',
+        why ? `its session failed again after Walnut's own retry (${why.slice(0, 160)})` : 'its session failed', false, why);
+    }
     // Its team was stopped in one step (sessions/team-stop.ts) and it ran no turn since: it waits
     // for the resume or a message, and says so, rather than reading as a session that stopped for
     // no reason. A report written after the stop is a turn of its own and speaks for itself.

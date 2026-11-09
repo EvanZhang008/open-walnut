@@ -2388,7 +2388,7 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
     const parentTaskId = task?.parent_task_id ?? undefined;
     // A task with no leader reports to the VP or Main that follows it (sessions/org-follow.ts).
     const { reportsToOrgNode } = await import('../sessions/org-follow.js');
-    const orgTask = !parentTaskId && task && reportsToOrgNode(task) ? task : undefined;
+    let orgTask = !parentTaskId && task && reportsToOrgNode(task) ? task : undefined;
     if (allPending.length === 0 && !parentTaskId && !orgTask) return;
 
     // Outcome from the target session's live state — eventSource strings are
@@ -2398,6 +2398,16 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
     else if (record?.pendingPermission) outcome = 'awaiting_human';
     else if (record?.process_status === 'error') outcome = 'error';
 
+    // A failure under a leader that completed (it hears nothing more from its subtasks) goes to the
+    // VP or Main above, as its status says (user-status.ts failureOf, 2026-11-09).
+    let leaderClosed = false;
+    if (outcome === 'error' && parentTaskId && task && !orgTask && phase !== 'COMPLETE') {
+      const { listTasksByIds } = await import('../task-manager.js');
+      const parent = (await listTasksByIds([parentTaskId]).catch(() => []))[0];
+      leaderClosed = !!parent && (parent.phase === 'COMPLETE' || parent.status === 'done');
+      if (leaderClosed && reportsToOrgNode(task, { leaderClosed })) orgTask = task;
+    }
+
     // Its turn never reached the model endpoint: Walnut waits for the endpoint and continues that turn
     // (sessions/endpoint-wait.ts), so its askers and its lead hear of the turn that follows, not of a
     // machine blip (2026-11-03: a proxy that went down failed eight sessions at once). A wait that gave
@@ -2406,6 +2416,16 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
       const { recordInEndpointWait } = await import('../sessions/endpoint-wait.js');
       if (recordInEndpointWait(record)) {
         log.session.info('turn-end notices held: the endpoint wait continues this turn', { sessionId: record.claudeSessionId, taskId: task?.id });
+        return;
+      }
+      // Walnut retries its failed turn by itself (session-auto-continue.ts): its askers and its lead
+      // hear of the retried turn, never of the error it is undoing (2026-11-09: a lead was told of
+      // an ECONNRESET three minutes before Walnut's own retry, and passed it to the user).
+      const retry = (await import('../session-auto-continue.js')).getSessionAutoContinue();
+      const retryAt = retry?.retryAt(record.claudeSessionId);
+      // Held, not dropped: a retry that never starts its turn lets this edge speak after all.
+      if (retryAt && retry!.holdUntilRetried(record.claudeSessionId, () => { void sessionRequestWatchHook.handler?.(payload); })) {
+        log.session.info('turn-end notices held: Walnut retries this turn', { sessionId: record.claudeSessionId, taskId: task?.id, retryAt: new Date(retryAt).toISOString() });
         return;
       }
       // Restart recovery continues this session (a restart killed it, or its process
@@ -2521,7 +2541,7 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
     let orgHears = false;
     if (orgTask && !undelivered?.held
       && !(edgeKind !== 'completed' && edgeKind !== 'error' && (await import('../sessions/team-stop.js')).stoppedByTeam(orgTask.id))) {
-      orgHears = await (await import('../sessions/org-follow.js')).orgFollowerCanHear(orgTask);
+      orgHears = await (await import('../sessions/org-follow.js')).orgFollowerCanHear(orgTask, { leaderClosed });
     }
     if (pending.length === 0 && !subtask && !orgHears) return;
 
@@ -2572,7 +2592,7 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
         actorSid,
         // The node's own open request to it is answered by the request fallback above.
         askerSids: speakers.map((r) => r.fromSessionId),
-      });
+      }, { leaderClosed });
     }
     if (!subtask || !parentTaskId || !task) return;
 

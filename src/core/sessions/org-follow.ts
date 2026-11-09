@@ -45,10 +45,13 @@ export interface OrgEdge {
   askerSids?: readonly string[];
 }
 
+/** A worker whose leader completed: its failure goes to the VP or Main above (user-status.ts failureOf). */
+export interface FollowOpts { leaderClosed?: boolean }
+
 /** Whether a task reports to an org node rather than to a leader. Pure. */
-export function reportsToOrgNode(task: Pick<Task, 'parent_task_id' | 'org_role' | 'plugin_only' | 'walnut_agent' | 'user_status'>): boolean {
+export function reportsToOrgNode(task: Pick<Task, 'parent_task_id' | 'org_role' | 'plugin_only' | 'walnut_agent' | 'user_status'>, opts: FollowOpts = {}): boolean {
   if (task.org_role === 'main' || task.plugin_only || task.walnut_agent) return false;
-  if (task.parent_task_id && task.org_role !== 'lead') return false;
+  if (task.parent_task_id && task.org_role !== 'lead' && !opts.leaderClosed) return false;
   return !task.user_status?.snoozed;
 }
 
@@ -58,9 +61,9 @@ export function orgNoticeText(text: string): string {
 }
 
 /** Hand one edge to the node that follows the task. Never throws; answers whether it rides. */
-export async function noteOrgEdge(task: Task, edge: OrgEdge): Promise<boolean> {
+export async function noteOrgEdge(task: Task, edge: OrgEdge, opts: FollowOpts = {}): Promise<boolean> {
   try {
-    if (!reportsToOrgNode(task)) return false;
+    if (!reportsToOrgNode(task, opts)) return false;
     const { RECENT_REPLY_MS, ackOnlyStop, buildSubtaskNoticeText } = await import('./subtask-notices.js');
     // A turn that was only an agent-ack is no news for the node above.
     if (ackOnlyStop(edge.kind, edge.lastWords)) return false;
@@ -128,8 +131,8 @@ export async function noteOrgEdge(task: Task, edge: OrgEdge): Promise<boolean> {
 }
 
 /** Whether the node above could hear at all (the hook asks before it pays for a transcript read). */
-export async function orgFollowerCanHear(task: Task): Promise<boolean> {
-  if (!reportsToOrgNode(task)) return false;
+export async function orgFollowerCanHear(task: Task, opts: FollowOpts = {}): Promise<boolean> {
+  if (!reportsToOrgNode(task, opts)) return false;
   try {
     const { listTasks } = await import('../task-manager.js');
     const { followContext, followerSession, statusFollowersOf } = await import('./status-push.js');
