@@ -10,6 +10,7 @@ import { fallbackSave } from '@/components/settings/sections/fallback-engine-sel
 import { draftFallbackLine, draftFallbackPill, draftFallbackWords } from '@/components/sessions/DraftFallbackNotice';
 import type { EngineFallbackNow } from '@/api/engine-fallback';
 import { fallbackLaunchMeta } from '@/components/sessions/draft-ownership';
+import { withDefaultModel } from '@/components/sessions/engine-default-model';
 
 const NOW = Date.parse('2026-11-06T12:00:00Z');
 const RESET = new Date(NOW + 2 * 3600_000).toISOString();
@@ -38,6 +39,12 @@ describe('the Settings line', () => {
     expect(at({ setting: { engine: 'codex' }, skip: 'limited_too' })).toMatch(/, and Codex is out of usage too, so new tasks wait for the reset\.$/);
     expect(at({ setting: { engine: 'codex' }, skip: 'not_runnable' })).toMatch(/, and Codex is not installed here, so new tasks wait for the reset\.$/);
     expect(at({})).toMatch(/: new tasks wait for the reset\.$/);
+  });
+
+  it('says no Claude model helps when the limit covers them all and none behind a proxy is set up', () => {
+    const line = fallbackNowLine(answer({ limit, setting: { engine: 'claude' }, skip: 'needs_model' }), NOW, { noClaudeModelHelps: true })!;
+    expect(line).toMatch(/, and it covers every Claude model, so new tasks wait for the reset\.$/);
+    expect(line).not.toContain('pick a model');
   });
 
   it('says nothing while nothing is limited', () => {
@@ -101,5 +108,21 @@ describe('fallbackLaunchMeta', () => {
     expect(fallbackLaunchMeta({ metaTouched: false }, meta, 'codex', true)).toBe(meta);
     expect(fallbackLaunchMeta({ metaTouched: false }, meta, undefined, false)).toBe(meta);
     expect(fallbackLaunchMeta({ metaTouched: false, taskId: 't1' }, meta, 'codex', false)).toBe(meta);
+  });
+});
+
+describe('withDefaultModel', () => {
+  const note = { from: 'claude', to: 'codex', at: new Date(NOW).toISOString() } as const;
+
+  it("names the engine's default model where the setting names none, as the picker does", () => {
+    expect(withDefaultModel(note, { id: 'gpt-best', name: 'GPT Best' })).toMatchObject({ model: 'gpt-best', model_label: 'GPT Best' });
+    expect(draftFallbackWords(answer({ setting: { engine: 'codex' }, fallback: { engine: 'codex', note: withDefaultModel({ ...note, window: 'five_hour', resets_at: RESET }, { id: 'gpt-best', name: 'GPT Best' }) } }), NOW))
+      .toMatch(/: this task starts on Codex \(GPT Best\)\.$/);
+  });
+
+  it('keeps a model the setting named, and a note with no default known', () => {
+    const named = { ...note, model: 'mock-gpt-fast', model_label: 'Mock GPT Fast' };
+    expect(withDefaultModel(named, { id: 'gpt-best', name: 'GPT Best' })).toBe(named);
+    expect(withDefaultModel(note, undefined)).toBe(note);
   });
 });

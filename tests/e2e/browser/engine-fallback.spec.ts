@@ -172,7 +172,8 @@ test('Settings: the fallback engine and its model save, read back after a reload
   await expect.poll(async () => (await config(request)).defaults?.fallback_engine).toEqual({ engine: 'codex' })
   const model = page.getByTestId('fallback-model-select')
   await expect(model).toBeVisible()
-  await expect(model.locator('option').first()).toHaveText(/Codex's default|Loading models/)
+  // The engine's own default is named as the model picker names it ("Codex default (GPT Best)").
+  await expect(model.locator('option').first()).toHaveText(/^Codex default( \(.+\))?$|Loading models/)
   // The mock adapter lists its models: one of them is saved with the engine.
   await expect.poll(async () => model.locator('option').count(), { timeout: 20_000 }).toBeGreaterThan(1)
   const firstModel = await model.locator('option').nth(1).getAttribute('value')
@@ -203,9 +204,10 @@ test('Settings: the fallback engine and its model save, read back after a reload
 
 test('a task that started on Codex: the Fallback banner, Switch to Claude Code, and the ×', async ({ page, request }) => {
   const cwd = await fixtureCwd(request)
-  const [a, b] = await whileClaudeLimited(request, cwd, async () => [
+  const [a, b, c] = await whileClaudeLimited(request, cwd, async () => [
     await startOnFallback(request, cwd, 'Add a retry to the uploader'),
     await startOnFallback(request, cwd, 'Tidy the importer'),
+    await startOnFallback(request, cwd, 'Write the changelog'),
   ])
 
   await presetPanelDesign(page, 'status')
@@ -215,7 +217,9 @@ test('a task that started on Codex: the Fallback banner, Switch to Claude Code, 
   await expect(colA).toHaveCount(1, { timeout: 30_000 })
   const banner = colA.getByTestId('engine-fallback-banner')
   await expect(banner).toBeVisible({ timeout: 30_000 })
-  await expect(banner.getByTestId('engine-fallback-head')).toHaveText('Started on Codex')
+  // The setting names no model: the engine's default runs, named as the model picker names it.
+  await expect(banner.getByTestId('engine-fallback-head')).toHaveText(/^Started on Codex \(.+\)$/, { timeout: 30_000 })
+  const runsOn = (await banner.getByTestId('engine-fallback-head').textContent())!.replace(/^Started on /, '')
   await expect(banner.getByTestId('engine-fallback-why')).toHaveText(/^Claude 5-hour limit reached · resets (\w{3}\s)?\d{1,2}:\d{2}\s[AP]M$/)
   await expect(banner.getByTestId('engine-fallback-detail')).toContainText('Claude Code was out of usage, so this task started on Codex, your fallback engine.')
   await expect(banner.getByTestId('engine-fallback-detail')).toContainText(/it goes on there after the reset at (\w{3}\s)?\d{1,2}:\d{2}\s[AP]M\./)
@@ -233,7 +237,7 @@ test('a task that started on Codex: the Fallback banner, Switch to Claude Code, 
   const rowB = await showSectionCard(page, 'needs', b.taskId)
   const rowTag = rowB.getByTestId('task-row-fallback')
   await expect(rowTag).toBeVisible({ timeout: 30_000 })
-  await expect(rowTag).toHaveAttribute('title', /^Started on Codex · Claude 5-hour limit reached/)
+  await expect(rowTag).toHaveAttribute('title', `Started on ${runsOn} · ${await banner.getByTestId('engine-fallback-why').textContent()}`)
 
   // ×: the note is taken off and stays off after a reload.
   const colB = columnFor(page, b.sid)
@@ -259,6 +263,16 @@ test('a task that started on Codex: the Fallback banner, Switch to Claude Code, 
 
   await page.reload()
   await expect(page.getByTestId('engine-fallback-banner')).toHaveCount(0, { timeout: 15_000 })
+
+  // By project, the default Home view, wears the same tag on the task's row.
+  await presetPanelDesign(page, 'project')
+  await page.reload()
+  const rowC = page.locator(`.todo-panel [data-task-id="${c.taskId}"]`).first()
+  await rowC.scrollIntoViewIfNeeded({ timeout: 30_000 })
+  const tagC = rowC.getByTestId('task-row-fallback')
+  await expect(tagC).toBeVisible({ timeout: 30_000 })
+  await expect(tagC).toHaveAttribute('title', new RegExp(`^Started on ${runsOn.replace(/[()]/g, '\\$&')} · Claude 5-hour limit reached`))
+  await shot(page, rowC, '2-row-by-project')
 })
 
 test("a new task's draft says where it starts while the default engine is out of usage", async ({ page }) => {
@@ -271,7 +285,7 @@ test("a new task's draft says where it starts while the default engine is out of
   await page.goto('/')
   const panel = await openDraft(page)
   const notice = panel.getByTestId('draft-fallback-notice')
-  await expect(notice).toHaveText(/^The Claude 5-hour limit is reached here \(resets (\w{3}\s)?\d{1,2}:\d{2}\s[AP]M\): this task starts on Codex\.$/, { timeout: 15_000 })
+  await expect(notice).toHaveText(/^The Claude 5-hour limit is reached here \(resets (\w{3}\s)?\d{1,2}:\d{2}\s[AP]M\): this task starts on Codex \(.+\)\.$/, { timeout: 15_000 })
   // The model pill says so too, instead of "Auto", and so does the picker's Auto row.
   await expect(panel.locator('.draft-model-select')).toHaveText('Codex (fallback)')
   await shot(page, notice, '3-draft-notice', 8)
@@ -287,11 +301,11 @@ test("a new task's draft says where it starts while the default engine is out of
   await expect(panel.locator('.draft-model-select')).toHaveText('Codex (fallback)')
   // A Claude model picked by hand waits for the reset: the line says so, with the way back.
   await picker.locator('.model-picker-row', { hasText: /^\s*Sonnet/ }).first().click()
-  await expect(notice).toHaveText(/: on Sonnet this task waits for the reset\.\s*Start on Codex instead$/)
+  await expect(notice).toHaveText(/: on Sonnet this task waits for the reset\.\s*Start on Codex \(.+\) instead$/)
   await expect(panel.locator('.draft-model-select')).not.toHaveText(/fallback/)
   await shot(page, notice, '4-draft-named-waits', 8)
   await notice.getByTestId('draft-fallback-use').click()
-  await expect(notice).toHaveText(/this task starts on Codex\.$/)
+  await expect(notice).toHaveText(/this task starts on Codex \(.+\)\.$/)
   await expect(panel.locator('.draft-model-select')).toHaveText('Codex (fallback)')
   // No fallback for this host now (none set, or nothing limited): no line.
   await page.unroute('**/api/engines/fallback*')

@@ -18,6 +18,7 @@ import { switchTaskEngine, SwitchSuperseded } from '@/api/engine-switch';
 import { dismissEngineFallback } from '@/api/engine-fallback';
 import { setSessionModel } from '@/api/sessions';
 import { log } from '@/utils/log';
+import { useEngineDefaultModel, withDefaultModel } from './engine-default-model';
 import '@/styles/engine-fallback.css';
 
 /** The switched task's first message on the default engine. */
@@ -91,7 +92,9 @@ export function EngineFallbackBanner({ taskId, sessionId, note, onGone }: {
     }
   }, [taskId, onGone]);
 
-  const words = fallbackBannerWords(note, now);
+  // A setting that names no model runs the engine's default: named as the model picker names it.
+  const defaultModel = useEngineDefaultModel(note.model ? undefined : note.to);
+  const words = fallbackBannerWords(withDefaultModel(note, defaultModel), now);
   return (
     // session-error-banner: placement under the glass header; engine-fallback.css: its own look.
     <div className="session-error-banner engine-fallback-banner" data-testid="engine-fallback-banner" role="status">

@@ -55,6 +55,7 @@ import { CronPill } from '@/components/sessions/CronPill';
 import { tierLabelOf } from '@/components/sessions/task-meta-constants';
 import { TriggerPill } from '@/components/routines/TriggerPill';
 import { TaskLimitPill } from './limit-row';
+import { TaskFallbackTag } from './fallback-row';
 import { ImportedPill } from '@/components/tasks/ImportedPill';
 import { WorkspacePill } from '@/components/workspaces/WorkspacePill';
 import { waitingStartColumnOf } from '@/components/workspaces/preparing-columns';
@@ -1228,6 +1229,8 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
           )}
           {/* A usage limit holds it: the Flat view's Limited words, and its reset is the row's time. */}
           <TaskLimitPill task={task} />
+          {/* It started on the fallback engine: the Flat view's Fallback tag (fallback-row.tsx). */}
+          <TaskFallbackTag task={task} />
           {task.phase === 'WAITING' && task.wait_until && !task.user_status?.limit && (
             <span
               className="todo-item-due-pill todo-item-wait-pill"

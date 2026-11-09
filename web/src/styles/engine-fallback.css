@@ -31,7 +31,9 @@
   color: var(--fg-secondary, var(--fg-muted));
   background: color-mix(in srgb, var(--fg, #000) 8%, transparent);
 }
-.engine-fallback-why { color: var(--fg); font-weight: 500; }
+/* The limit and its reset move to the next line as one piece in a narrow column ("· resets 4:38 PM"
+   never starts a line alone), and wrap inside only when even a line of their own is too narrow. */
+.engine-fallback-why { display: inline-block; color: var(--fg); font-weight: 500; }
 /* The dot between what happened and why: the weight of neither. */
 .engine-fallback-sep { font-weight: 400; color: var(--fg-secondary, var(--fg-muted)); }
 .engine-fallback-detail { margin-top: 2px; color: var(--fg-secondary, var(--fg-muted)); }

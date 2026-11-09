@@ -5,7 +5,7 @@
  * a new task starts on the default engine and waits for the reset, as before.
  *
  *   When it is out of usage   [Codex              v]
- *     Model                   [Codex's default    v]
+ *     Model                   [Codex default (GPT Best)  v]
  *   The Claude 5-hour limit is reached here (resets 3:00 PM): new tasks start on Codex now.
  *
  * Saves on pick, like Default engine. The line under it is the server's own answer for its
@@ -26,6 +26,7 @@ import { currentFallback, FALLBACK_OFF, fallbackEngineOptions, fallbackNeedsMode
 import { engineName } from './DefaultEngineRow';
 import type { useSerialSave } from './GeneralSection';
 import { log } from '@/utils/log';
+import { useEngineDefaultModel, withDefaultModel } from '@/components/sessions/engine-default-model';
 
 type SerialSave = ReturnType<typeof useSerialSave>;
 
@@ -58,7 +59,7 @@ function useFallbackModels(engine: SessionEngine | null): { options: Array<{ val
 }
 
 /** "The Claude 5-hour limit is reached here (resets 3:00 PM): new tasks start on Codex now." */
-export function fallbackNowLine(now: EngineFallbackNow | null, nowMs: number): string | null {
+export function fallbackNowLine(now: EngineFallbackNow | null, nowMs: number, opts: { noClaudeModelHelps?: boolean } = {}): string | null {
   if (!now) return null;
   const from = now.fallback?.note.from ?? now.defaultEngine;
   const limit = now.fallback ? { window: now.fallback.note.window, resetsAt: now.fallback.note.resets_at } : now.limit;
@@ -72,7 +73,9 @@ export function fallbackNowLine(now: EngineFallbackNow | null, nowMs: number): s
   if (!now.setting) return `${head}: new tasks wait for the reset.`;
   const engine = fallbackEngineName(now.setting.engine);
   switch (now.skip) {
-    case 'needs_model': return `${head}: pick a model below, or new tasks wait for the reset.`;
+    case 'needs_model': return opts.noClaudeModelHelps
+      ? `${head}, and it covers every Claude model, so new tasks wait for the reset.`
+      : `${head}: pick a model below, or new tasks wait for the reset.`;
     case 'shares_limit': return `${head}, and it covers ${fallbackModelName(now.setting) ?? 'that model'} too, so new tasks wait for the reset.`;
     case 'limited_too': return `${head}, and ${engine} is out of usage too, so new tasks wait for the reset.`;
     case 'not_runnable': return `${head}, and ${engine} is not installed here, so new tasks wait for the reset.`;
@@ -113,7 +116,8 @@ export function FallbackEngineRow({ config, save }: { config: Config; save: Seri
   }, [config.defaults?.fallback_engine?.engine, config.defaults?.fallback_engine?.model, config.defaults?.engine]);
   // Another Claude model of the same subscription: which limits it helps with.
   const sameClaude = picked === 'claude' && defaultEngine === 'claude';
-  const line = fallbackNowLine(now, Date.now());
+  // A setting that names no model runs the engine's default: named as the model picker names it.
+  const defaultModel = useEngineDefaultModel(picked ?? undefined);
 
   const pickedName = picked ? engineName(catalog.find((e) => e.id === picked)?.displayName ?? picked) : '';
   const needsModel = fallbackNeedsModel(picked ? { engine: picked, ...(model.value ? { model: model.value } : {}) } : null, defaultEngine);
@@ -122,6 +126,13 @@ export function FallbackEngineRow({ config, save }: { config: Config; save: Seri
     ? [{ value: model.value, label: saved?.model_label ?? model.value }, ...models.options] : models.options;
   const claudeRows = modelRows.filter((o) => claudeFamilyOf(o.value) || claudeFamilyOf(o.label));
   const otherRows = modelRows.filter((o) => !claudeFamilyOf(o.value) && !claudeFamilyOf(o.label));
+  // Claude is limited now by a window that covers every Claude model, and no model behind a proxy is
+  // set up: no model of this list helps, so say it before one is picked (2026-11-09 review).
+  const allClaudeLimited = sameClaude && otherRows.length === 0 && !now?.fallback && now?.limit
+    && !/^seven_day_(opus|sonnet)$/.test(now.limit.window ?? '') ? now.limit : null;
+  // The default model named is the picked engine's: the saved note of another engine (a pick still
+  // saving) keeps its own words.
+  const line = fallbackNowLine(now?.fallback && now.fallback.note.to === picked ? { ...now, fallback: { ...now.fallback, note: withDefaultModel(now.fallback.note, defaultModel) } } : now, Date.now(), { noClaudeModelHelps: !!allClaudeLimited });
 
   return (
     <>
@@ -152,7 +163,9 @@ export function FallbackEngineRow({ config, save }: { config: Config; save: Seri
           indent
           label="Model"
           htmlFor="fallback-model-select"
-          help={needsModel
+          help={needsModel && allClaudeLimited
+            ? <span className="settings-help-warning" data-testid="fallback-model-needed">No Claude model helps now: the {limitName({ engine: 'claude', window: allClaudeLimited.window })} covers every Claude model. Pick another engine above.</span>
+            : needsModel
             ? <span className="settings-help-warning" data-testid="fallback-model-needed">Pick a model: {pickedName} on its own default model is the engine that is out of usage.</span>
             : models.error ? <span data-testid="fallback-model-error">{pickedName} did not list its models ({models.error}). Its default model is used.</span>
             : sameClaude
@@ -169,7 +182,7 @@ export function FallbackEngineRow({ config, save }: { config: Config; save: Seri
               disabled={models.loading && !model.value}
               onChange={(e) => model.set(e.target.value)}
             >
-              <option value="">{needsModel ? 'Pick a model' : models.loading ? 'Loading models…' : `${pickedName}'s default`}</option>
+              <option value="">{needsModel ? 'Pick a model' : models.loading ? 'Loading models…' : `${pickedName} default${defaultModel ? ` (${defaultModel.name})` : ''}`}</option>
               {sameClaude ? (
                 // Which models help: a Claude model shares the 5-hour and weekly limits.
                 <>

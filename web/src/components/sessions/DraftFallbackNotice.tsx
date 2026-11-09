@@ -17,6 +17,7 @@
 import { useEffect, useState } from 'react';
 import { fallbackEngineName, fallbackModelName, limitName, limitTimeWords } from '@open-walnut/user-status';
 import { fetchEngineFallbackNow, type EngineFallbackNow } from '@/api/engine-fallback';
+import { useEngineDefaultModel, withDefaultModel } from './engine-default-model';
 
 const REFRESH_MS = 60_000;
 
@@ -100,7 +101,10 @@ export function DraftFallbackNotice({ now, named, onUseFallback }: {
   /** The action: the draft's model goes, so the launch names none and falls back. */
   onUseFallback?: () => void;
 }) {
-  const line = draftFallbackLine(now, Date.now(), named);
+  // A setting that names no model runs the engine's default: named as the model picker names it.
+  const defaultModel = useEngineDefaultModel(now?.fallback && !now.fallback.note.model ? now.fallback.engine : undefined);
+  const shown = now?.fallback ? { ...now, fallback: { ...now.fallback, note: withDefaultModel(now.fallback.note, defaultModel) } } : now;
+  const line = draftFallbackLine(shown, Date.now(), named);
   if (!line) return null;
   return (
     <div className={`draft-fallback-notice${line.waits ? ' is-wait' : ''}`} role="status" data-testid="draft-fallback-notice">
