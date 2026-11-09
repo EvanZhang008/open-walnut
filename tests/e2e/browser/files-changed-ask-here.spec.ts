@@ -142,14 +142,15 @@ async function chipOffWords(page: Page, view: Locator, root: Locator): Promise<{
       const r = el.ownerDocument.createRange()
       r.selectNodeContents(el)
       const b = el.getBoundingClientRect()
-      return {
-        box: { left: b.left, right: b.right, top: b.top, bottom: b.bottom },
-        lines: Array.from(r.getClientRects()).filter((q) => q.width > 0 && q.height > 0 && q.height < 40)
-          .map((q) => ({ left: q.left, right: q.right, top: q.top, bottom: q.bottom })),
-      }
+      const lines = Array.from(r.getClientRects()).filter((q) => q.width > 0 && q.height > 0 && q.height < 40)
+        .map((q) => ({ left: q.left, right: q.right, top: q.top, bottom: q.bottom }))
+      // The pointer's spot shows the block itself, not the file's own bar over
+      // the top of the scrolled text.
+      const at = lines[0] ? el.ownerDocument.elementFromPoint(lines[0].left + 3, (lines[0].top + lines[0].bottom) / 2) : null
+      return { box: { left: b.left, right: b.right, top: b.top, bottom: b.bottom }, lines, shown: !!at && el.contains(at) }
     }))
-    const { box, lines } = own
-    if (!lines.length || box.top < 80 || box.bottom > vh - 40) continue
+    const { box, lines, shown } = own
+    if (!lines.length || !shown || box.top < 80 || box.bottom > vh - 40) continue
     const first = lines[0]
     await page.mouse.move(first.left + 3, (first.top + first.bottom) / 2, { steps: 2 })
     await expect(chip).toBeVisible({ timeout: 3_000 })
@@ -510,6 +511,8 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
         const line = rects.filter((q) => Math.round(q.top) === Math.round(top))
         const right = Math.max(...line.map((q) => q.right))
         if (top < 80 || top > window.innerHeight - 60) continue
+        const at = el.ownerDocument.elementFromPoint(right - 4, top + line[0].height / 2)
+        if (!at || !el.contains(at)) continue
         return { x: right - 4, y: top + line[0].height / 2 }
       }
       return null
