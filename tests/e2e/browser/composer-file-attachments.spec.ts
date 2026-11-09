@@ -186,7 +186,8 @@ test('files of any type upload as attached, the message names their paths, the b
   ])
   await expect(card(page, 'build-2026-11-07.log')).toBeVisible()
   await expect(card(page, 'report final.pdf')).toContainText(/\d+% of|Waiting/)
-  await expect(composer(page).locator('.chat-attachments-note')).toContainText('Up to 10 files (4 GB each) and 5 images per message')
+  // No limit is hit, so no limit is said (2026-11-09, the user: "don't show this").
+  await expect(composer(page)).not.toContainText(/Up to \d|per message|GB each|goes? as (a )?files?/)
   // Sent while the uploads run: it waits for them, says so, and then goes by itself.
   const input = composer(page).locator('textarea')
   await input.click()
@@ -311,7 +312,7 @@ test('a stored message with attachment headers reads as pictures and file cards'
   await expect(bubble).not.toContainText('Read tool')
 })
 
-test('eight quick pastes keep five pictures and say the rest went as files', async ({ page }) => {
+test('eight quick pastes keep five pictures and say so on each picture that went as a file', async ({ page }) => {
   const h = await open(page)
   const png = PNG.toString('base64')
   // All eight before any read finishes: each add waits for the one before it.
@@ -328,13 +329,32 @@ test('eight quick pastes keep five pictures and say the rest went as files', asy
   }, png)
   await expect(composer(page).locator('.chat-image-preview')).toHaveCount(5)
   await expect(composer(page).locator('.file-card')).toHaveCount(3)
-  await expect(composer(page).locator('.chat-attachments-note')).toContainText('3 pictures go as files')
+  // The limit is said on each attachment that hit it, never as a line for the box.
+  const asFiles = composer(page).locator('.file-card')
+  for (let i = 0; i < 3; i++) await expect(asFiles.nth(i)).toContainText('Over 5 pictures, sent as a file')
+  await expect(composer(page).locator('.chat-attachments-note')).not.toContainText(/as files?|per message/)
   await expect(composer(page).locator('.chat-send-btn-icon')).toBeEnabled({ timeout: 15_000 })
   await composer(page).locator('textarea').press('Enter')
   await expect.poll(async () => (await h.sent()).length).toBe(1)
   const [msg] = await h.sent()
   expect(msg.imageRefs).toHaveLength(5)
   expect(msg.message.match(/\/shot\d\.png/g)).toHaveLength(3)
+})
+
+test('a TIFF attached shows no limits; the sixth picture says its limit on its own card', async ({ page }) => {
+  await open(page)
+  // The report: a TIFF (a file, not a picture past a limit) showed two standing limit lines.
+  await fileInput(page).setInputFiles([{ name: 'scan.tiff', mimeType: 'image/tiff', buffer: Buffer.alloc(2_000_000, 7) }])
+  await expect(card(page, 'scan.tiff')).toContainText('1.9 MB', { timeout: 15_000 })
+  await expect(composer(page)).not.toContainText(/Up to \d|per message|GB each|goes? as (a )?files?|pictures? go/i)
+  await shot(page, 'tiff-no-limits')
+  // Six pictures: five show, the sixth goes as a file and says why on its card alone.
+  await fileInput(page).setInputFiles([1, 2, 3, 4, 5, 6].map((i) => ({ name: `shot${i}.png`, mimeType: 'image/png', buffer: PNG })))
+  await expect(composer(page).locator('.chat-image-preview')).toHaveCount(5)
+  await expect(card(page, 'shot6.png')).toContainText('Over 5 pictures, sent as a file')
+  await expect(card(page, 'scan.tiff')).not.toContainText('sent as a file')
+  await expect(composer(page).locator('.chat-attachments-note')).not.toContainText(/as files?|per message/)
+  await shot(page, 'sixth-picture-limit')
 })
 
 test('files dropped on the conversation attach, and the panel says it takes them', async ({ page }) => {

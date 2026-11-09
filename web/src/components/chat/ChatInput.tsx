@@ -32,7 +32,7 @@ import { keepCommandFirst } from './leading-command';
 import { placePrefill, type PrefillMode } from './prefill-place';
 import type { ComposerControlsBarHandle } from './ComposerControlsBar';
 import { IMAGE_ACCEPT, MAX_IMAGES, pastedImageFiles } from '@/components/common/image-attachments';
-import { attachmentLimitsShort, attachmentLimitsText, keptAttachmentsKey, parseSavedAttachments, savedAttachments, sentFilePaths, sentImages, useComposerAttachments, type ComposerAttachment } from '@/components/common/composer-attachments';
+import { keptAttachmentsKey, parseSavedAttachments, savedAttachments, sentFilePaths, sentImages, useComposerAttachments, type ComposerAttachment } from '@/components/common/composer-attachments';
 import { ComposerAttachmentStrip } from './ComposerAttachmentStrip';
 import { MAX_FILES, withFilePaths, type UploadTarget } from '@/api/file-upload';
 import { isOfficeClipboardHtml } from '@/utils/html-to-markdown';
@@ -1905,7 +1905,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
             </div>
           )}
           {/* Attachments: pictures and files, each with its own upload state */}
-          <ComposerAttachmentStrip attachments={attachments} acceptsFiles={acceptsFiles} notice={attachNotice} sendWhenReady={!!sendWhenReady} kept={acceptsFiles && keepsKeyRef.current} onCancelSend={() => setSendWhenReady(false)} />
+          <ComposerAttachmentStrip attachments={attachments} notice={attachNotice} sendWhenReady={!!sendWhenReady} kept={acceptsFiles && keepsKeyRef.current} onCancelSend={() => setSendWhenReady(false)} />
           {pills.on && <ComposerRefLayer textareaRef={textareaRef} segments={pills.segments} />}
           <textarea
             ref={textareaRef}
@@ -1960,15 +1960,11 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
                 type="button"
                 role="menuitem"
                 disabled={atAttachLimit}
-                title={attachmentLimitsText(acceptsFiles)}
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
                 </svg>
-                <span className="chat-plus-menu-item-text">
-                  <span>{atAttachLimit ? 'Attachment limit reached' : acceptsFiles ? 'Attach files or images' : 'Attach image'}</span>
-                  <span className="chat-plus-menu-item-hint">{attachmentLimitsShort(acceptsFiles)}</span>
-                </span>
+                <span>{atAttachLimit ? 'Attachment limit reached' : acceptsFiles ? 'Attach files or images' : 'Attach image'}</span>
               </button>
               {/* Shortcuts — the discoverable index of the composer's special
                   commands (each row inserts its trigger and opens its picker). */}

@@ -1,10 +1,11 @@
 /**
  * The attachments above a composer's text: picture tiles and file cards, each
  * with its own upload progress, a Retry on one that failed and a remove button,
- * and one line below saying what the message waits for and the limits.
+ * and one line below saying what the message waits for. A limit is said only on
+ * the attachment that hit it, or when one was refused: never as a standing line.
  */
 import { FileCard } from '@/components/common/FileCard';
-import { attachmentLimitsText, picturesAsFilesText, type ComposerAttachment, type ComposerAttachments } from '@/components/common/composer-attachments';
+import { type ComposerAttachment, type ComposerAttachments } from '@/components/common/composer-attachments';
 import { formatBytes } from '@/api/file-upload';
 import '@/styles/attachments.css';
 
@@ -16,9 +17,11 @@ function fileDetail(a: ComposerAttachment): string {
   const size = formatBytes(a.size);
   if (a.status === 'failed') return a.error ? `Not uploaded: ${a.error}` : 'Not uploaded';
   // Short first: in a narrow column the end of the line is cut off.
-  if (a.status === 'preparing') return `Waiting · ${size}`;
-  if (a.status === 'uploading') return `${percent(a)}% of ${size}`;
-  return a.converted ? `${size} · Converted to JPEG` : size;
+  // A limit it hit leads, so a narrow card cuts the size, not the reason.
+  const limit = a.limit ? `${a.limit} · ` : '';
+  if (a.status === 'preparing') return `${limit}Waiting · ${size}`;
+  if (a.status === 'uploading') return `${limit}${percent(a)}% of ${size}`;
+  return `${limit}${a.converted ? `${size} · Converted to JPEG` : size}`;
 }
 
 /** Retry, with its word on a card; a picture tile is too small for the word, so only the arrow. */
@@ -64,9 +67,8 @@ function ImageTile({ a, onRetry, onRemove }: { a: ComposerAttachment; onRetry: (
   );
 }
 
-export function ComposerAttachmentStrip({ attachments, acceptsFiles, notice, sendWhenReady, kept, onCancelSend }: {
+export function ComposerAttachmentStrip({ attachments, notice, sendWhenReady, kept, onCancelSend }: {
   attachments: ComposerAttachments;
-  acceptsFiles: boolean;
   /** What the last add left out, said once under the strip. */
   notice?: string | null;
   /** The message goes by itself once every upload is done (sent while they ran). */
@@ -89,7 +91,6 @@ export function ComposerAttachmentStrip({ attachments, acceptsFiles, notice, sen
         ? `Sends when ${pending === 1 ? 'the upload finishes' : `the ${pending} uploads finish`}`
         : `Uploading ${pending === 1 ? '1 attachment' : `${pending} attachments`}; press Enter to send once ${pending === 1 ? 'it is' : 'they are'} done`
       : null;
-  const asFiles = picturesAsFilesText(items);
   // A picture tile has no room for words: why it failed is said here (a file card says it itself).
   const pictureFailures = items.filter((a) => a.kind === 'image' && a.status === 'failed');
   return (
@@ -106,7 +107,7 @@ export function ComposerAttachmentStrip({ attachments, acceptsFiles, notice, sen
               detail={fileDetail(a)}
               failed={a.status === 'failed'}
               progress={a.status === 'uploading' || a.status === 'preparing' ? (a.size > 0 ? a.sent / a.size : 0) : undefined}
-              title={a.status === 'failed' && a.error ? `${a.name}: ${a.error}` : a.name}
+              title={a.status === 'failed' && a.error ? `${a.name}: ${a.error}` : a.limit ? `${a.name}: ${a.limit}` : a.name}
               actions={(
                 <>
                   {a.status === 'failed' && !a.orphan && <RetryButton a={a} onRetry={retry} />}
@@ -122,11 +123,9 @@ export function ComposerAttachmentStrip({ attachments, acceptsFiles, notice, sen
         {sendWhenReady && failed === 0 && onCancelSend && (
           <button type="button" className="chat-attachments-cancel" onClick={onCancelSend}>Don&apos;t send yet</button>
         )}
-        {asFiles && <span className="chat-attachments-info">{asFiles}</span>}
         {pictureFailures.map((a) => (
           <span key={a.id} className="chat-attachments-failure">{`${a.name}: ${a.error ?? 'not uploaded'}`}</span>
         ))}
-        {items.length > 0 && <span className="chat-attachments-limits">{attachmentLimitsText(acceptsFiles)}</span>}
       </div>
     </div>
   );

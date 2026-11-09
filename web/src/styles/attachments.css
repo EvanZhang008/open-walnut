@@ -187,9 +187,7 @@ button.file-card-open:focus-visible { outline: 2px solid var(--accent); outline-
 }
 .chat-attachments-note:empty { display: none; }
 .chat-attachments-note.is-warning > span:first-child { color: var(--error); }
-.chat-attachments-limits { margin-left: auto; color: var(--fg-muted); }
 .chat-attachments-failure { color: var(--error); }
-.chat-attachments-info { color: var(--fg-secondary); }
 .chat-attachments-cancel {
   padding: 0;
   border: none;
@@ -228,10 +226,6 @@ button.file-card-open:focus-visible { outline: 2px solid var(--accent); outline-
   cursor: zoom-in;
   background: var(--bg-secondary);
 }
-
-/* The "+" menu's attach row: what it takes, and the limits under it. */
-.chat-plus-menu-item-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-.chat-plus-menu-item-hint { font-size: 11px; color: var(--fg-muted); white-space: nowrap; }
 
 /* Files dragged over a session panel (ChatInput): the whole panel takes them. */
 .session-panel[data-file-drop='over']::after {

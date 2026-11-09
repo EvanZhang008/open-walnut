@@ -53,22 +53,12 @@ export interface ComposerAttachment {
   converted?: boolean;
   /** Its bytes are gone (the page closed before it was up): it can only be removed, and attached again. */
   orphan?: boolean;
+  /** A limit this attachment hit, said on it alone (a picture past the picture limits goes as a file). */
+  limit?: string;
 }
 
 /** What a kept attachment that was still uploading says when the box shows it again. */
 export const ORPHAN_ERROR = 'Its upload stopped before it finished (the page closed or the box changed): remove it and attach it again';
-
-/** The limits in a few words, for the "+" menu's attach row. */
-export function attachmentLimitsShort(acceptsFiles: boolean): string {
-  return acceptsFiles ? `${MAX_FILES} files (${formatBytes(MAX_FILE_BYTES)} each), ${MAX_IMAGES} images` : `Up to ${MAX_IMAGES} images`;
-}
-
-/** The limits a composer states, in its own words. */
-export function attachmentLimitsText(acceptsFiles: boolean): string {
-  return acceptsFiles
-    ? `Up to ${MAX_FILES} files (${formatBytes(MAX_FILE_BYTES)} each) and ${MAX_IMAGES} images per message`
-    : `Up to ${MAX_IMAGES} images per message`;
-}
 
 interface Held {
   kind: ComposerAttachment['kind'];
@@ -244,10 +234,11 @@ export function useComposerAttachments(target: UploadTarget | null): ComposerAtt
         }
         if (countOf('file') >= MAX_FILES) { left.push(`Only ${MAX_FILES} files fit in one message`); continue; }
         if (file.size > MAX_FILE_BYTES) { left.push(`${original.name} is over ${formatBytes(MAX_FILE_BYTES)}`); continue; }
+        const limit = pictureLimitHit(file, picture);
         const item: ComposerAttachment = {
           id: nextId(), kind: 'file', name: safeUploadName(file.name || 'file'), size: file.size,
           mediaType: file.type || 'application/octet-stream', status: 'preparing', sent: 0,
-          ...(converted ? { converted } : {}),
+          ...(converted ? { converted } : {}), ...(limit ? { limit } : {}),
         };
         held.current.set(item.id, { kind: 'file', file, uploadId: newUploadId() });
         setItems((curr) => [...curr, item]);
@@ -395,10 +386,13 @@ export function keptAttachmentsKey(draftKey: string | null | undefined): string 
   return draftKey ? KEPT_ATTACHMENTS_PREFIX + draftKey : null;
 }
 
-/** Pictures in the box that go as files (past the picture count or size), said once under the strip. */
-export function picturesAsFilesText(items: readonly ComposerAttachment[]): string | null {
-  const n = items.filter((a) => a.kind === 'file' && a.mediaType.startsWith('image/')).length;
-  if (n === 0) return null;
-  const why = `a message shows ${MAX_IMAGES} pictures, each up to ${formatBytes(MAX_IMAGE_BYTES)}`;
-  return n === 1 ? `One picture goes as a file (${why})` : `${n} pictures go as files (${why})`;
+/**
+ * The limit a picture going as a file hit, in a few words for its card, or
+ * undefined for a file that hit none (a TIFF is a file, not a picture past a
+ * limit). Limits are said only where one is hit, never as a standing line.
+ */
+export function pictureLimitHit(file: File, picture: boolean): string | undefined {
+  if (picture) return `Over ${MAX_IMAGES} pictures, sent as a file`;
+  if (isPictureFile(file) && file.size > MAX_IMAGE_BYTES) return `Over ${formatBytes(MAX_IMAGE_BYTES)}, sent as a file`;
+  return undefined;
 }
