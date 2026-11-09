@@ -22,6 +22,18 @@ import { expectBareTitleRow } from './session-header-labels-helpers'
 const SESSION_ID = 'pw-vscode-session'
 const TASK_ID = 'pw-task-vscode'
 const LONG_TITLE = 'Fork of eks investigation ticket skill deep dive with a deliberately long title'
+/** The shared fixture's own title for TASK_ID: other spec files read it (session-taskbar.spec.ts). */
+const FIXTURE_TITLE = 'Editor fixture task'
+
+// The rename below writes the shared fixture server, so the title goes back after the test,
+// pass or fail: left renamed, every later spec that reads this task's title failed.
+let renamedFixture = false
+test.afterEach(async ({ request }) => {
+  if (!renamedFixture) return
+  renamedFixture = false
+  const restored = await request.patch(`/api/tasks/${TASK_ID}`, { data: { title: FIXTURE_TITLE } })
+  expect(restored.ok()).toBe(true)
+})
 
 async function openHomepageSession(page: Page) {
   await page.locator('.todo-search-input').fill(SESSION_ID)
@@ -160,6 +172,7 @@ test('the embedded Ask Walnut panel keeps compact activity time across task upda
 
 test('the session title owns the second header row and reveals its full text on hover', async ({ page, request }) => {
   // Long title so truncation pressure is real — the fixture title is short.
+  renamedFixture = true
   const renamed = await request.patch(`/api/tasks/${TASK_ID}`, { data: { title: LONG_TITLE } })
   expect(renamed.ok()).toBe(true)
 
