@@ -2,11 +2,11 @@
  * The final words come from the whole recording, in WebKit (the Mac app's
  * engine). Scenarios and why: stt-final-whole-clip-helpers.ts.
  */
-import { devices, expect, test } from '@playwright/test'
-import { ENGINE_CHECK, NO_RECORDER, hasMediaRecorder } from './webkit-recorder'
+import { expect, test } from '@playwright/test'
+import { ENGINE_CHECK, NO_RECORDER, VOICE_TEST_USER_AGENT, hasMediaRecorder } from './webkit-recorder'
 import { registerWholeClipScenarios } from './stt-final-whole-clip-helpers'
 
-test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
+test.use({ browserName: 'webkit', userAgent: VOICE_TEST_USER_AGENT })
 
 test(ENGINE_CHECK, async ({ browserName }) => {
   expect(browserName).toBe('webkit')

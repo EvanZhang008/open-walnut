@@ -4,11 +4,11 @@
  * possible here (WebKit has no fake capture device). Scenarios:
  * stt-failure-helpers.ts.
  */
-import { devices, expect, test } from '@playwright/test'
-import { ENGINE_CHECK, NO_RECORDER, hasMediaRecorder } from './webkit-recorder'
+import { expect, test } from '@playwright/test'
+import { ENGINE_CHECK, NO_RECORDER, VOICE_TEST_USER_AGENT, hasMediaRecorder } from './webkit-recorder'
 import { registerSttFailureScenarios } from './stt-failure-helpers'
 
-test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
+test.use({ browserName: 'webkit', userAgent: VOICE_TEST_USER_AGENT })
 
 test(ENGINE_CHECK, async ({ browserName }) => {
   expect(browserName).toBe('webkit')
