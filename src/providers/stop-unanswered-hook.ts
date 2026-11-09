@@ -30,10 +30,18 @@
  * transcript yet when the hook runs (2026-11-07: an answer filed inside its tag at 08:30:28 was
  * read as missing at 08:30:29, and the question was answered a second time). It is the newest
  * answer of all, so it counts after every ask.
+ *
+ * A question the person stopped needs no answer: the CLI's `[Request interrupted by user` line
+ * settles every ask taken since the last turn that ended (a Stop hook's `stop_hook_summary` line
+ * marks each end; a stopped turn has none). 2026-11-09, round 7 on the fixed build: a follow-up
+ * stopped mid-answer was named at the next question's turn end, and the model wrote "you stopped
+ * this one" under it.
  */
 const ASK_SCAN_AWK = String.raw`function key(s, n) { gsub(/[ \t]+/, " ", s); sub(/^ /, "", s); sub(/ $/, "", s); s = tolower(s); n = length(s); if (n >= 3 && substr(s, n - 2) == "...") s = substr(s, 1, n - 3); n = length(s); if (n >= 3 && substr(s, n - 2) == "\342\200\246") s = substr(s, 1, n - 3); sub(/ $/, "", s); return s }
 function scan(L, tag, ans,   p, t, e, id, nm) { while ((p = index(L, tag)) > 0) { L = substr(L, p + length(tag)); t = L; e = index(t, ">"); if (e > 0) t = substr(t, 1, e - 1); gsub(/\\"/, "\"", t); id = ""; if (match(t, /thread="?[0-9]+(\.[0-9]+)*/)) { id = substr(t, RSTART, RLENGTH); sub(/^thread="?/, "", id) } if (id == "") continue; nm = ""; if (match(t, /name="[^"]*"/)) nm = substr(t, RSTART + 6, RLENGTH - 7); n++; if (ans) { at[id] = n; an[id] = key(nm) } else { q[id] = n; qn[id] = key(nm) } } }
 /^walnut-stop-input / { scan($0, "<walnut-ask-answer ", 1); next }
+index($0, "\"subtype\":\"stop_hook_summary\"") { te = ++n; next }
+index($0, "\"type\":\"user\"") && index($0, "\"[Request interrupted by user") { for (id in q) if (q[id] > te) { at[id] = ++n; an[id] = qn[id] } next }
 { if (index($0, "\"type\":\"assistant\"")) { if (index($0, "\"type\":\"text\"") && !index($0, "\"type\":\"thinking\"") && !index($0, "\"type\":\"tool_use\"")) scan($0, "<walnut-ask-answer ", 1) } else if ((index($0, "\"type\":\"user\"") && !index($0, "\"tool_use_id\"")) || index($0, "\"type\":\"queue-operation\"")) scan($0, "<walnut-ask ", 0) }
 END { a = ""; d = ""; na = 0; nd = 0; for (id in q) { if ((id in at) && at[id] > q[id] && (qn[id] == "" || an[id] == qn[id])) { if (nd < 60) d = d (nd++ ? "," : "") id } else if (na < 60) a = a (na++ ? "," : "") id } print a " " d }`
 
@@ -48,7 +56,7 @@ export const ASK_IDS_SCRIPT =
   + 'if [ -n "$t" ] && [ -r "$t" ]; then '
   // The transcript's lines, then the hook input on one line (JSON keeps no raw newline inside a
   // string, so joining its lines changes no value).
-  + `r=$({ grep -F 'walnut-ask' "$t" 2>/dev/null; printf 'walnut-stop-input %s\\n' "$(printf '%s' "$in" | tr '\\n' ' ')"; } | LC_ALL=C awk '${ASK_SCAN_AWK}' 2>/dev/null); `
+  + `r=$({ grep -F -e 'walnut-ask' -e 'stop_hook_summary' -e 'Request interrupted by user' "$t" 2>/dev/null; printf 'walnut-stop-input %s\\n' "$(printf '%s' "$in" | tr '\\n' ' ')"; } | LC_ALL=C awk '${ASK_SCAN_AWK}' 2>/dev/null); `
   + 'a=${r% *}; d=${r#* }; '
   + 'if [ -n "$a" ]; then q=",\\"asked\\":\\"$a\\",\\"answered\\":\\"$d\\""; fi; fi; '
 

@@ -184,6 +184,39 @@ describe('the Stop hook reads the ids from the transcript on its own host', () =
     });
   });
 
+  // 2026-11-09, round 7 on the fixed build: a follow-up the person stopped mid-answer was named
+  // at the next question's turn end, and the model wrote "you stopped this one" under it.
+  it('a question whose turn the person stopped is settled; one from a turn that ended is not', () => {
+    // Each turn end leaves a stop_hook_summary line; its hook command quotes the tags.
+    const turnEnd = JSON.stringify({ type: 'system', subtype: 'stop_hook_summary', hookInfos: [{ command: 'awk \'<walnut-ask thread="9" name="nine">\'' }] });
+    const stopped = (variant = '') => JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: `[Request interrupted by user${variant}]` }] } });
+    withTranscript([
+      user(askHintText('5', 'five')),
+      assistant('an answer outside the tag'),
+      turnEnd,
+      user(askHintText('6', 'six')),
+      stopped(),
+      user(askHintText('7', 'seven')),
+      stopped(' for tool use'),
+      user(askHintText('8', 'eight')),
+    ], (input, dir) => {
+      const args = argsOf(run(input(), dir));
+      // 5 ended unanswered (still named); 6 and 7 were stopped; 8 is the live one; 9 is no ask.
+      expect(args.asked.split(',').sort()).toEqual(['5', '8']);
+      expect(args.answered.split(',').sort()).toEqual(['6', '7']);
+    });
+    withTranscript([
+      user(askHintText('6', 'six')),
+      stopped(),
+      // A follow-up in the stopped thread, after the stop, is asked again.
+      user(askHintText('6', 'six')),
+      // A tool result quoting the marker is no stop.
+      JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'logs: x [Request interrupted by user]' }] } }),
+    ], (input, dir) => {
+      expect(argsOf(run(input(), dir)).asked).toBe('6');
+    });
+  });
+
   it('a tool result quoting the ask tag is no ask', () => {
     withTranscript([
       user(askHintText('6', 'six')),
