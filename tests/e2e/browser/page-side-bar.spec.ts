@@ -442,11 +442,13 @@ test('the Org page whose first task load fails shows no node, tries again, and s
   let failing = true
   let failed = 0
   await page.route(/\/api\/tasks(\?|$)/, async (route) => {
-    if (failing && route.request().method() === 'GET') { failed++; return route.fulfill({ status: 400, json: { error: 'held down by the test' } }) }
+    // A network failure, never an answer of the test's own (task-list-stub-ratchet.test.ts).
+    if (failing && route.request().method() === 'GET') { failed++; return route.abort('failed') }
     await route.continue()
   })
   await openOrg(page)
-  await expect.poll(() => failed).toBeGreaterThan(0)
+  // The store tries a failed load 3 more times (2, 4, 6 s) before it gives up on it.
+  await expect.poll(() => failed, { timeout: 30_000 }).toBeGreaterThanOrEqual(4)
   await page.waitForTimeout(1500)
   // The load failed: no node is drawn (it settled on Main here before, and stayed there).
   await expect(page.getByTestId('org-detail-title')).toHaveCount(0)
