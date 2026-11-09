@@ -4018,6 +4018,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // session-request whose target never produced an edge (killed daemon, stale
   // result gate, host offline) still notifies the asker at its deadline.
   if (bootPolicy('session-request-sweep')) {
+    // A delivered ask stamps its request reached, which the silent-target notice reads after any
+    // restart (src/core/sessions/request-reached.ts).
+    void import('../core/sessions/request-reached.js').then((m) => m.startRequestReachedWatch()).catch(() => {})
     const sweep = setInterval(() => {
       void import('../core/sessions/session-request-notify.js')
         .then(({ sweepSessionRequests }) => sweepSessionRequests())

@@ -209,6 +209,7 @@ const INTERNAL_QUEUE_READS: Record<string, number> = {
   'core/sessions/undelivered-requests.ts': 2,
   'core/sessions/folder-gone.ts': 3,
   'core/sessions/idle-compaction.ts': 1,
+  'core/sessions/request-reached.ts': 1, // takenBackIds: rows the queue took back void their reached stamp
   'providers/claude-code-session.ts': 7,
 }
 const DISPLAY_QUEUE_READS: Record<string, number> = {

@@ -164,6 +164,10 @@ export interface OfflineRequestRow {
    * host, whether or not it has taken the row yet; this host only when it does not.
    */
   online?: true
+  /** The id the asked message went out as (the server's SessionRequest.messageId). */
+  messageId?: string
+  /** When this host wrote the asked message into the target's live CLI (SessionRequest.reachedAt). */
+  reachedAt?: string
 }
 
 /**
@@ -1465,6 +1469,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       if (row) { delete journalOf(home).rows[row.id]; persistJournal(home) }
       return fail('internal', `delivery failed: ${delivered.reason}`)
     }
+    if (row) { row.messageId = mid; row.reachedAt = new Date(deps.now()).toISOString() }
     if (row) append(home, { kind: 'row', row: { ...row } })
     append(home, { kind: 'delivery', fromSessionId: callerSid, toSessionId: targetSid, ...(target.taskId ? { toTaskId: target.taskId } : {}), messageId: mid, ...(row ? { requestId: row.id } : {}) })
     deps.log('info', 'offline host: message delivered', { home, from: callerSid, to: targetSid, requestId: row?.id, messageId: mid })
@@ -1613,6 +1618,8 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       if (row) { delete journalOf(home).rows[row.id]; persistJournal(home) }
       return null
     }
+    // Written into its live CLI: the target has the ask (the server's silent-target notice reads it).
+    if (row) { row.messageId = mid; row.reachedAt = new Date(deps.now()).toISOString() }
     if (row) append(home, { kind: 'row', row: { ...row } }, true)
     append(home, { kind: 'delivery', fromSessionId: callerSid, toSessionId: target.sid, ...(target.taskId ? { toTaskId: target.taskId } : {}), messageId: mid, ...(row ? { requestId: row.id } : {}) }, true)
     deps.log('info', 'host: message delivered on this host', { home, from: callerSid, to: target.sid, requestId: row?.id, messageId: mid })
@@ -2612,6 +2619,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
         if (row) { delete journalOf(home).rows[row.id]; persistJournal(home) }
         return fail('internal', `delivery failed: ${delivered.reason}`)
       }
+      if (row) { row.messageId = mid; row.reachedAt = new Date(deps.now()).toISOString() }
       if (row) append(home, { kind: 'row', row: { ...row } })
       append(home, { kind: 'delivery', fromSessionId: from.sid, toSessionId: targetSid, ...(target.taskId ? { toTaskId: target.taskId } : {}), messageId: mid, ...(row ? { requestId: row.id } : {}) })
       deps.log('info', 'offline host: leader delivered a peer message', { home, from: from.sid, fromHost: from.host, to: targetSid, requestId: row?.id, messageId: mid })

@@ -835,6 +835,9 @@ async function performPlainSend(input: SessionSendInput): Promise<DeliveredSendR
   // errors, because then the caller asked for something impossible.
   // (An inReplyTo send never reaches here — performReply returns at :259.)
   let request: (SessionRequest & { handOnRefused?: { id: string; reason: string }[] }) | undefined;
+  // The queue row's id, picked before the request row: the row then names it from the start, so
+  // its delivery stamps the request reached however fast it goes (session-requests.ts markRequestsReached).
+  const rowId = input.messageId ?? (await import('../session-queue-store.js')).generateId();
   // A note up the org (to its own leader, its VP, or Main) reports: no request unless asked for one
   // (reply-direction.ts). A hand-off keeps its asker's request.
   const reportsUp = input.expectReply === undefined && !input.handsOn && caller.kind === 'session'
@@ -860,6 +863,7 @@ async function performPlainSend(input: SessionSendInput): Promise<DeliveredSendR
         // A lead's or Main's answer waits on its teams: a longer default deadline.
         kind: input.replyKind ?? (await targetIsLead(target.taskId ?? target.session.taskId) ? 'lead' : 'send'),
         ...(input.handsOn ? { handsOn: [input.handsOn] } : {}),
+        messageId: rowId,
       });
     }
   }
@@ -901,7 +905,7 @@ async function performPlainSend(input: SessionSendInput): Promise<DeliveredSendR
   try {
     const fromLeader = await callerLeads(caller, taskId);
     ({ delivery, messageId } = await deliverToSession(target.session, {
-      busText: body, enqueueText, source, taskId, messageId: input.messageId, fromLeader,
+      busText: body, enqueueText, source, taskId, messageId: rowId, fromLeader,
       ...(input.liveOnly ? { liveOnly: input.liveOnly } : {}),
     }));
   } catch (err) {

@@ -161,6 +161,8 @@ describe('a same-host message while the server answers: the host delivers it', (
     const rec = records(h)
     expect(rec.map((x) => `${x.kind}:${x.online === true}`)).toEqual(['row:true', 'delivery:true'])
     expect(rec[0]).toMatchObject({ kind: 'row', row: { id: requestId, fromSessionId: A, toSessionId: B, toTaskId: TASK_B, status: 'pending' } })
+    // Written into its live CLI: the row says so, and names the message, for the server's silent-target notice.
+    expect(rec[0]).toMatchObject({ row: { messageId: h.delivered[0].messageId, reachedAt: new Date(h.clock.now).toISOString() } })
     expect(rec[1]).toMatchObject({ kind: 'delivery', fromSessionId: A, toSessionId: B, toTaskId: TASK_B, requestId, messageId: h.delivered[0].messageId })
   })
 

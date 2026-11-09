@@ -161,6 +161,16 @@ export interface SessionRequest {
   sameAnswerAs?: string;
   /** When its asker was told its target showed nothing since the ask (once; session-request-notify.ts remindSilent). */
   silentToldAt?: string;
+  /**
+   * When the asked message last reached the target's CLI (ISO): Walnut's proof of delivery for its
+   * queue row (`messageId`, session:messages-delivered), or a host's write into the target's live CLI
+   * (offline-host-core.ts localSend). A delivery is a write, not the CLI's reading: while the queue
+   * holds the row waiting to go out again (its process died unread), it proves nothing
+   * (stillReached). Durable, so a server restart never forgets that the target has
+   * the ask (2026-11-08: a restarted server told an asker a task had not taken the work 55
+   * minutes into the turn that read it). Additive, 2026-11.
+   */
+  reachedAt?: string;
 }
 
 /** How long an answer already delivered makes the same words to the same asker a repeat: one
@@ -413,6 +423,8 @@ export async function createSessionRequest(input: {
   handsOn?: readonly string[];
   /** What it asks for: sets the default deadline (REPLY_TIMEOUT_BY_KIND). */
   kind?: ReplyKind;
+  /** The queue row the asked message will go out as, known before it is queued (markRequestsReached). */
+  messageId?: string;
 }): Promise<SessionRequest & { handOnRefused?: HandOnRefusal[] }> {
   const request: SessionRequest = {
     id: `rq-${randomUUID().replace(/-/g, '').slice(0, 12)}`,
@@ -423,6 +435,7 @@ export async function createSessionRequest(input: {
     status: 'pending',
     createdAt: new Date().toISOString(),
     deadlineAt: Date.now() + clampReplyTimeoutSecs(input.replyTimeoutSecs, input.implicit, input.kind) * 1000,
+    ...(input.messageId ? { messageId: input.messageId } : {}),
   };
   let stored = request;
   let refused: HandOnRefusal[] = [];
@@ -587,18 +600,57 @@ export async function claimReminder(id: string, now = Date.now()): Promise<Sessi
   return claimed;
 }
 
+/**
+ * The request's ask reached its CLI, and the queue did not take that delivery back: `takenBack`
+ * holds the target's queue rows waiting to go out again (sessions/request-reached.ts takenBackIds).
+ */
+export function stillReached(r: Pick<SessionRequest, 'reachedAt' | 'messageId'>, takenBack?: ReadonlySet<string>): boolean {
+  return !!r.reachedAt && !(r.messageId && takenBack?.has(r.messageId));
+}
+
 /** Claim a pending request's one "nothing since you asked" notice. Null when it is not pending or was told. */
-export async function claimSilentNotice(id: string, now = Date.now()): Promise<SessionRequest | null> {
+export async function claimSilentNotice(id: string, now = Date.now(), seen?: { reachedAt?: string }): Promise<SessionRequest | null> {
   let claimed: SessionRequest | null = null;
   await updateRequests((store) => {
     const requests = [...(store.requests ?? [])];
     const idx = requests.findIndex((r) => r.id === id);
-    if (idx === -1 || requests[idx].status !== 'pending' || requests[idx].silentToldAt) return undefined;
+    // Delivered since the caller judged it (it asks the host, up to 5 s): not silent, no claim.
+    // `seen` is the stamp it judged void (the queue took that delivery back); none given: any stamp refuses.
+    const reached = requests[idx]?.reachedAt;
+    if (idx === -1 || requests[idx].status !== 'pending' || requests[idx].silentToldAt || (reached && reached !== seen?.reachedAt)) return undefined;
     claimed = { ...requests[idx], silentToldAt: new Date(now).toISOString() };
     requests[idx] = claimed;
     return { requests };
   });
   return claimed;
+}
+
+/**
+ * Stamp `reachedAt` on the pending requests whose asked message is one of these queue rows, now
+ * that it was delivered to its CLI (written, or taken). Each delivery moves it to the latest one:
+ * a row the queue took back (its process died unread) and sent again is reached again only by
+ * that send, and a claim made against the earlier stamp sees it moved (claimSilentNotice).
+ * A settled row is left as it is. Returns the ids it stamped.
+ */
+export async function markRequestsReached(messageIds: readonly string[], now = Date.now()): Promise<string[]> {
+  const ids = new Set(messageIds.filter(Boolean));
+  if (ids.size === 0) return [];
+  // A read first: almost no delivered message carries a request, and this runs on every delivery.
+  const rows = (await readJsonFile<RequestStore>(REQUESTS_FILE, EMPTY).catch(() => EMPTY)).requests ?? [];
+  if (!rows.some((r) => r.status === 'pending' && !!r.messageId && ids.has(r.messageId))) return [];
+  const stamped: string[] = [];
+  await updateRequests((store) => {
+    const requests = [...(store.requests ?? [])];
+    const at = new Date(now).toISOString();
+    for (let i = 0; i < requests.length; i++) {
+      const r = requests[i];
+      if (r.status !== 'pending' || !r.messageId || !ids.has(r.messageId) || r.reachedAt === at) continue;
+      requests[i] = { ...r, reachedAt: at };
+      stamped.push(r.id);
+    }
+    return stamped.length ? { requests } : undefined;
+  });
+  return stamped;
 }
 
 /** Undo a silent-target claim whose notice could not be delivered, so the next sweep tries again. */
@@ -788,6 +840,10 @@ export async function importOfflineRequest(row: SessionRequest): Promise<boolean
         // Time this server credited for being away (creditDowntime) stays credited.
         ...(here.pausedMs ? { pausedMs: here.pausedMs, deadlineAt: Math.max(row.deadlineAt, here.deadlineAt) } : {}),
         ...(here.remindPausedMs ? { remindPausedMs: here.remindPausedMs } : {}),
+        // What this server learned of it stays learned: the asker was told once, the target has it.
+        ...(here.silentToldAt && !row.silentToldAt ? { silentToldAt: here.silentToldAt } : {}),
+        ...(here.reachedAt && !row.reachedAt ? { reachedAt: here.reachedAt } : {}),
+        ...(here.messageId && !row.messageId ? { messageId: here.messageId } : {}),
       };
       if (requests[idx].status !== 'pending' || JSON.stringify(requests[idx]) === JSON.stringify(next)) return undefined;
       requests[idx] = next;

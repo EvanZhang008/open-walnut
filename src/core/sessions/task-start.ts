@@ -111,7 +111,13 @@ export interface SessionStartResult {
 }
 
 export class SessionExistsError extends QuickStartError {
-  constructor(message: string, public existingSessionId: string) {
+  constructor(
+    message: string,
+    public existingSessionId: string,
+    /** The task, and the refusal's first sentence without the advice (a route adds its own: session-exists-hint.ts). */
+    public taskId?: string,
+    public head?: string,
+  ) {
     super(message, 409);
     this.name = 'SessionExistsError';
   }
@@ -137,8 +143,8 @@ export function isTaskStarting(taskId: string): boolean {
 const SLOT_HOLD_MS = 60_000;
 
 function alreadyStarted(task: Task, sid: string): SessionExistsError {
-  return new SessionExistsError(
-    `Task "${task.title}" is already started or starting. Continue with task_send {"to":"${task.id}","text":"..."}.`, sid);
+  const head = `Task "${task.title}" is already started or starting.`;
+  return new SessionExistsError(`${head} Continue with task_send {"to":"${task.id}","text":"..."}.`, sid, task.id, head);
 }
 
 /**

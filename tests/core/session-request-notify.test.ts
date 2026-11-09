@@ -1683,3 +1683,163 @@ describe('time Walnut was away never counts against a deadline (2026-11-06)', ()
     expect(JSON.parse(fs.readFileSync(CLOCK, 'utf-8')).aliveAt).toBeGreaterThan(Date.now() - 60_000);
   });
 });
+
+describe('the silent-target notice asks the host before it tells (2026-11-08)', () => {
+  // rq-20eca396c5e9 and rq-9df5f31752c5: two "has not taken up the work" notices about a task that
+  // read the first ask in 10 s and worked on it in one turn for 100 minutes. A restart and two
+  // dropped daemon links had left the server's runner and record stale; the host knew all along.
+  const MIN = 60_000;
+  const setRow = (id: string, patch: Partial<SessionRequest>) => {
+    const store = JSON.parse(fs.readFileSync(REQUESTS_FILE, 'utf-8')) as { requests: SessionRequest[] };
+    Object.assign(store.requests.find((r) => r.id === id)!, patch);
+    fs.writeFileSync(REQUESTS_FILE, JSON.stringify(store));
+  };
+  const probe = vi.fn();
+  /** A pending ask `minutes` old, to a target idle since before it (no sign the server holds). */
+  async function silentAsk(minutes: number, patch: Partial<SessionRequest> = {}): Promise<SessionRequest> {
+    const rq = await arm({ text: 'look at the load' });
+    setRow(rq.id, { createdAt: new Date(Date.now() - minutes * MIN).toISOString(), deadlineAt: Date.now() + 60 * MIN, ...patch });
+    return (await getSessionRequest(rq.id))!;
+  }
+  const silentNotices = () => sendMessageToSession.mock.calls.filter((c) => String(c[1]).includes('has shown nothing'));
+
+  beforeEach(async () => {
+    const { setHostProbeForTests } = await import('../../src/core/sessions/session-request-notify.js');
+    probe.mockReset();
+    setHostProbeForTests((session, now) => probe(session, now));
+    listTasksByIds.mockResolvedValue([{ id: 'task-77', title: 'Mac load', phase: 'IN_PROGRESS', session_id: TARGET }]);
+    // Idle as the server sees it (a runner here would say "not in a turn" just as well).
+    sessions = [rec(ASKER, { title: 'Asker', taskId: 'task-asker' }), rec(TARGET, { title: 'Target', taskId: 'task-77', process_status: 'idle' })];
+    // A clock already running: no downtime credit moves these rows.
+    fs.mkdirSync(path.dirname(CLOCK), { recursive: true });
+    fs.writeFileSync(CLOCK, JSON.stringify({ aliveAt: Date.now() }));
+  });
+
+  it('a host that says the target is at work keeps the asker untold, whatever the server holds', async () => {
+    probe.mockResolvedValue({ alive: true, working: true });
+    const rq = await silentAsk(55);
+    await sweepSessionRequests();
+    expect(probe).toHaveBeenCalledTimes(1);
+    expect(silentNotices()).toEqual([]);
+    expect((await getSessionRequest(rq.id))?.silentToldAt).toBeUndefined();
+  });
+
+  it('an ask that reached its session is never told silent, and the host is not even asked', async () => {
+    probe.mockResolvedValue({ alive: true, working: false });
+    await silentAsk(55, { reachedAt: new Date(Date.now() - 54 * MIN).toISOString() })
+    await sweepSessionRequests();
+    expect(probe).not.toHaveBeenCalled();
+    expect(silentNotices()).toEqual([]);
+  });
+
+  it('a resend of an ask the target has: no notice for the resend', async () => {
+    probe.mockResolvedValue({ alive: false, working: false });
+    const first = await silentAsk(100, { reachedAt: new Date(Date.now() - 99 * MIN).toISOString(), silentToldAt: new Date().toISOString() });
+    await silentAsk(45);
+    await sweepSessionRequests();
+    expect(silentNotices()).toEqual([]);
+    expect((await getSessionRequest(first.id))?.status).toBe('pending');
+  });
+
+  it('a host that says stopped is believed over a record that says idle', async () => {
+    probe.mockResolvedValue({ alive: false, working: false });
+    await silentAsk(11);
+    await sweepSessionRequests();
+    expect(silentNotices()).toHaveLength(1);
+    expect(String(silentNotices()[0][1])).toContain('(it is stopped)');
+  });
+
+  it('a host that answers nothing waits three silent windows, then the asker is told why', async () => {
+    probe.mockResolvedValue(null);
+    const rq = await silentAsk(11);
+    await sweepSessionRequests();
+    expect(silentNotices()).toEqual([]);
+    setRow(rq.id, { createdAt: new Date(Date.now() - 31 * MIN).toISOString() });
+    await sweepSessionRequests();
+    expect(silentNotices()).toHaveLength(1);
+    expect(String(silentNotices()[0][1])).toContain('its host does not answer');
+  });
+
+  it('an overdue ask whose target the record shows stopped but the host shows at work waits on', async () => {
+    probe.mockResolvedValue({ alive: true, working: true });
+    sessions = [rec(ASKER, { title: 'Asker', taskId: 'task-asker' }), rec(TARGET, { title: 'Target', taskId: 'task-77', process_status: 'stopped' })];
+    const rq = await silentAsk(5, { reachedAt: new Date().toISOString() });
+    backdateDeadline(rq.id);
+    expect(await sweepSessionRequests()).toBe(0);
+    const row = (await getSessionRequest(rq.id))!;
+    expect(row.status).toBe('pending');
+    expect(row.activeWhy).toBe('its host says it is at work');
+  });
+
+  it('a delivered queue row stamps its request reached; a later delivery moves it; another row stamps nothing', async () => {
+    const { onDelivered } = await import('../../src/core/sessions/request-reached.js');
+    const { markRequestsReached } = await import('../../src/core/session-requests.js');
+    const rq = await arm({ messageId: 'qm-asked-row' });
+    expect(rq.messageId).toBe('qm-asked-row');
+    const delivered = (ids: string[]) => onDelivered({ name: 'session:messages-delivered', data: { sessionId: TARGET, count: ids.length, messageIds: ids } } as never);
+    await delivered(['qm-some-other-row']);
+    expect((await getSessionRequest(rq.id))?.reachedAt).toBeUndefined();
+    await delivered(['qm-asked-row']);
+    expect((await getSessionRequest(rq.id))?.reachedAt).toBeTruthy();
+    // Sent again (its process died unread and the queue took it back): the stamp is that send's.
+    const later = Date.now() + 5 * MIN;
+    expect(await markRequestsReached(['qm-asked-row'], later)).toEqual([rq.id]);
+    expect((await getSessionRequest(rq.id))?.reachedAt).toBe(new Date(later).toISOString());
+  });
+
+  // Review of 2026-11-09: a delivery is a write into the CLI's pipe, not its reading.
+  it('a stamp whose row the queue took back (its process died unread) proves nothing: the asker is told', async () => {
+    probe.mockResolvedValue({ alive: false, working: false });
+    await silentAsk(30, { messageId: 'qm-unread', reachedAt: new Date(Date.now() - 29 * MIN).toISOString() });
+    getQueue.mockImplementation(async (sid: string) => sid === TARGET ? [{ id: 'qm-unread', sessionId: TARGET, message: 'look at the load', status: 'pending', createdAt: new Date().toISOString() }] : []);
+    await sweepSessionRequests();
+    expect(probe).toHaveBeenCalledTimes(1);
+    expect(silentNotices()).toHaveLength(1);
+  });
+
+  it('a row still out in the CLI (processing) keeps its stamp: no notice', async () => {
+    probe.mockResolvedValue({ alive: false, working: false });
+    await silentAsk(30, { messageId: 'qm-out', reachedAt: new Date(Date.now() - 29 * MIN).toISOString() });
+    getQueue.mockImplementation(async (sid: string) => sid === TARGET ? [{ id: 'qm-out', sessionId: TARGET, message: 'look at the load', status: 'processing', createdAt: new Date().toISOString() }] : []);
+    await sweepSessionRequests();
+    expect(probe).not.toHaveBeenCalled();
+    expect(silentNotices()).toEqual([]);
+  });
+
+  it('a delivery while the host is asked refuses the claim: no notice', async () => {
+    const { markRequestsReached } = await import('../../src/core/session-requests.js');
+    const rq = await silentAsk(30, { messageId: 'qm-racing' });
+    probe.mockImplementation(async () => {
+      // The cold resume writes the line during the probe's 5 s.
+      expect(await markRequestsReached(['qm-racing'])).toEqual([rq.id]);
+      return { alive: true, working: false };
+    });
+    await sweepSessionRequests();
+    expect(probe).toHaveBeenCalledTimes(1);
+    expect(silentNotices()).toEqual([]);
+    expect((await getSessionRequest(rq.id))?.silentToldAt).toBeUndefined();
+  });
+
+  it('an independent new ask of the same asker is not covered by the earlier one: its host is asked, then it is told', async () => {
+    probe.mockResolvedValue({ alive: true, working: false });
+    await silentAsk(100, { reachedAt: new Date(Date.now() - 99 * MIN).toISOString(), silentToldAt: new Date().toISOString() });
+    const other = await arm({ text: 'also rotate the disk logs on the build box' });
+    setRow(other.id, { createdAt: new Date(Date.now() - 45 * MIN).toISOString(), deadlineAt: Date.now() + 60 * MIN });
+    await sweepSessionRequests();
+    expect(probe).toHaveBeenCalledTimes(1);
+    expect(silentNotices()).toHaveLength(1);
+    expect(String(silentNotices()[0][1])).toContain(other.id);
+  });
+
+  it('a host copy taken in again keeps what this server learned: told once, reached', async () => {
+    const { importOfflineRequest } = await import('../../src/core/session-requests.js');
+    const rq = await silentAsk(20);
+    const hostCopy = (await getSessionRequest(rq.id))!;
+    setRow(rq.id, { silentToldAt: new Date().toISOString(), reachedAt: new Date().toISOString() });
+    await importOfflineRequest({ ...hostCopy, preview: 'its copy' });
+    const merged = (await getSessionRequest(rq.id))!;
+    expect(merged.preview).toBe('its copy');
+    expect(merged.silentToldAt).toBeTruthy();
+    expect(merged.reachedAt).toBeTruthy();
+  });
+});

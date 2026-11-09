@@ -8,7 +8,7 @@
  * Every sign is listed here with facts that show only it; a new sign fails until it is.
  */
 import { describe, it, expect } from 'vitest'
-import { TARGET_SIGNS, targetSignSince, type TargetFacts, type TargetSign } from '../../../src/core/sessions/session-request-notify.js'
+import { TARGET_SIGNS, isResendOf, targetSignSince, type TargetFacts, type TargetSign } from '../../../src/core/sessions/session-request-notify.js'
 import type { SessionRequest } from '../../../src/core/session-requests.js'
 
 const ASKED = Date.parse('2026-11-07T22:00:00Z')
@@ -16,6 +16,7 @@ const iso = (ms: number): string => new Date(ms).toISOString()
 const after = iso(ASKED + 30 * 60_000)
 const before = iso(ASKED - 30 * 60_000)
 const SID = 'target-session'
+const ASK = 'Look at the 11-07 load spikes on the Mac and say what caused them.'
 
 const row = (over: Partial<SessionRequest>): SessionRequest => ({
   id: 'rq-other', fromSessionId: 'someone', preview: '', status: 'pending', createdAt: before, deadlineAt: ASKED, ...over,
@@ -30,6 +31,14 @@ const quiet: TargetFacts = {
 
 /** Each sign, alone. */
 const ONLY: Record<TargetSign, Partial<TargetFacts>> = {
+  'the ask reached its session': { rows: [row({ id: 'rq-this', toTaskId: 'target-task', createdAt: iso(ASKED), reachedAt: iso(ASKED + 3_000) })] },
+  'it has an earlier ask of the same asker': {
+    rows: [
+      row({ id: 'rq-first', fromSessionId: 'asker', toTaskId: 'target-task', createdAt: before, reachedAt: before, preview: ASK }),
+      row({ id: 'rq-this', fromSessionId: 'asker', toTaskId: 'target-task', createdAt: iso(ASKED), preview: ASK }),
+    ],
+  },
+  'its host says it is at work': { host: { alive: true, working: true } },
   'a turn running now': { inTurn: true },
   'work of it running after its turn': { outliving: ['background'] },
   'a turn begun since the ask': { turnStartedAt: ASKED + 60_000 },
@@ -102,6 +111,67 @@ describe('a target at work is never told silent: every sign since the ask counts
     expect(targetSignSince({ ...quiet, report: { at: after, turn_ended_at: after, by: 'task:its-lead' } })).toBeNull()
     // A status ask answered between turns: a new `at`, the last turn's end unchanged.
     expect(targetSignSince({ ...quiet, report: { at: after, turn_ended_at: before } })).toBeNull()
+  })
+
+  it('2026-11-08 04:57: read in 10 s and mid-turn, but the restarted server\'s runner read no turn', () => {
+    // rq-20eca396c5e9: asked 04:02:13, read 04:02:22, one turn until 05:43. The runner, reattached
+    // after a restart and then a dropped daemon link, said not in a turn; no report was written.
+    const askedAt = Date.parse('2026-11-08T04:02:13Z')
+    const stale: TargetFacts = {
+      since: askedAt, inTurn: false, processStatus: 'running', outliving: [], taskId: 'target-task', sessionIds: [SID],
+      rows: [row({ id: 'rq-this', fromSessionId: 'asker', toTaskId: 'target-task', createdAt: iso(askedAt) })], requestId: 'rq-this',
+    }
+    // What the server held then: no sign at all. Its host still knew.
+    expect(targetSignSince(stale)).toBeNull()
+    expect(targetSignSince({ ...stale, host: { alive: true, working: true } })).toBe('its host says it is at work')
+    // Now the delivery stamps the request, which no restart forgets.
+    expect(targetSignSince({ ...stale, rows: [{ ...stale.rows[0], reachedAt: '2026-11-08T04:02:16Z' }] })).toBe('the ask reached its session')
+  })
+
+  it('2026-11-08 05:43: a resend while the target works on the first ask is never told "not taken"', () => {
+    // rq-9df5f31752c5: the same asker resent at 04:58:50; the record read stopped after a dropped daemon link.
+    const first = row({ id: 'rq-first', fromSessionId: 'asker', toTaskId: 'target-task', createdAt: '2026-11-08T04:02:13Z', reachedAt: '2026-11-08T04:02:16Z', preview: ASK })
+    const resend = row({ id: 'rq-this', fromSessionId: 'asker', toTaskId: 'target-task', createdAt: '2026-11-08T04:58:50Z', preview: ASK })
+    const facts: TargetFacts = {
+      since: Date.parse(resend.createdAt), inTurn: false, processStatus: 'stopped', outliving: [], taskId: 'target-task',
+      sessionIds: [SID], rows: [first, resend], requestId: 'rq-this',
+    }
+    expect(targetSignSince(facts)).toBe('it has an earlier ask of the same asker')
+    // Another asker's earlier ask, one the target never got, or one asked after it, is not that.
+    expect(targetSignSince({ ...facts, rows: [{ ...first, fromSessionId: 'someone-else' }, resend] })).toBeNull()
+    expect(targetSignSince({ ...facts, rows: [{ ...first, reachedAt: undefined }, resend] })).toBeNull()
+    expect(targetSignSince({ ...facts, rows: [{ ...first, createdAt: '2026-11-08T05:00:00Z' }, resend] })).toBeNull()
+    // An earlier ask already settled before this one is a closed matter.
+    expect(targetSignSince({ ...facts, rows: [{ ...first, status: 'replied', settledAt: '2026-11-08T04:30:00Z' }, resend] })).toBeNull()
+  })
+
+  // Review of 2026-11-09: the earlier ask speaks only for a resend, never for an independent ask.
+  it('an independent new ask of the same asker is not a resend; a resend in other words around the same ask is', () => {
+    const first = row({ id: 'rq-first', fromSessionId: 'asker', toTaskId: 'target-task', createdAt: before, reachedAt: before, preview: ASK })
+    const facts = (preview: string): TargetFacts => ({ ...quiet, rows: [first, row({ id: 'rq-this', fromSessionId: 'asker', toTaskId: 'target-task', createdAt: iso(ASKED), preview })] })
+    expect(targetSignSince(facts('Also rotate the disk logs on the build box.'))).toBeNull()
+    expect(targetSignSince(facts(`Resending in case it was lost: ${ASK}`))).toBe('it has an earlier ask of the same asker')
+    expect(isResendOf(`${ASK.slice(0, 40)}\u2026`, ASK)).toBe(true)
+    expect(isResendOf('  look AT the 11-07 load spikes on the mac and say what caused them. ', ASK)).toBe(true)
+    // A short line inside a long one proves nothing.
+    expect(isResendOf('the Mac', ASK)).toBe(false)
+    expect(isResendOf('', '')).toBe(false)
+  })
+
+  it('a stamp whose queue row waits to go out again (taken back, unread) is no sign, for this ask or an earlier one', () => {
+    const self = row({ id: 'rq-this', fromSessionId: 'asker', toTaskId: 'target-task', createdAt: iso(ASKED), reachedAt: iso(ASKED + 3_000), messageId: 'qm-this', preview: ASK })
+    expect(targetSignSince({ ...quiet, rows: [self] })).toBe('the ask reached its session')
+    expect(targetSignSince({ ...quiet, rows: [self], takenBack: new Set(['qm-this']) })).toBeNull()
+    const first = row({ id: 'rq-first', fromSessionId: 'asker', toTaskId: 'target-task', createdAt: before, reachedAt: before, messageId: 'qm-first', preview: ASK })
+    const resend = { ...self, reachedAt: undefined, messageId: 'qm-resend' }
+    expect(targetSignSince({ ...quiet, rows: [first, resend] })).toBe('it has an earlier ask of the same asker')
+    expect(targetSignSince({ ...quiet, rows: [first, resend], takenBack: new Set(['qm-first']) })).toBeNull()
+  })
+
+  it('the host saying idle or stopped is no sign, and neither is a host that does not answer', () => {
+    expect(targetSignSince({ ...quiet, host: { alive: true, working: false } })).toBeNull()
+    expect(targetSignSince({ ...quiet, host: { alive: false, working: false } })).toBeNull()
+    expect(targetSignSince({ ...quiet, host: null })).toBeNull()
   })
 
   it('a process not running, or an unknown runner of a stopped one, is no turn', () => {

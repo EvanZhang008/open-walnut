@@ -68,6 +68,19 @@ describe('the land layer', () => {
     expect(layers.slowUniverse().filter((f: string) => f.startsWith('tests/e2e/'))).toEqual([])
   })
 
+  it('every slow-tier file runs with a config that includes it: tests/e2e with the e2e config', async () => {
+    const { default: slowConfig } = await import('../../vitest.slow.config.ts')
+    const slowInclude = new Set(slowConfig.test!.include as string[])
+    // `tests/commands/**/*.test.ts` and the like: any file under the directory.
+    const slowGlobs = [...slowInclude].filter((g) => g.includes('*')).map((g) => g.slice(0, g.indexOf('*')))
+    for (const f of layers.slowUniverse()) {
+      const config = layers.slowTierConfig(f)
+      if (config === 'vitest.e2e.config.ts') expect(f.startsWith('tests/e2e/'), f).toBe(true)
+      else expect(slowInclude.has(f) || slowGlobs.some((d) => f.startsWith(d)), f).toBe(true)
+    }
+    expect(layers.slowTierConfig('tests/e2e/queued-ask-restart-e2e.test.ts')).toBe('vitest.e2e.config.ts')
+  })
+
   it('never runs a file outside the quick tier (slow, quarantined, e2e), even one the change edits', () => {
     const plan = layers.landLayer(['tests/e2e/flow.test.ts', 'src/m.ts'], { universe, durations, namedBy: () => new Set<string>(), graph: fakeGraph({ 'src/m.ts': ['tests/not-in-tier.test.ts'] }) })
     expect(plan.files).not.toContain('tests/e2e/flow.test.ts')

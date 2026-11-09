@@ -26,6 +26,7 @@ import { isContextFullText } from './context-full.js';
 import { buildWalnutMessage, parseWalnutMessage } from '../peers/walnut-message-tag.js';
 import type { EnvelopeHandedOn } from '../peers/envelope-kit.js';
 import {
+  stillReached,
   buildRequestNotification,
   buildUndeliveredNotification,
   buildOverdueReminder,
@@ -217,7 +218,7 @@ export class NoticeBatch {
 }
 
 /** Why a target counts as at work on an overdue request ({@link targetAtWork}). */
-export type TargetAtWork = 'a turn running' | 'an answer just sent' | 'a status report of working';
+export type TargetAtWork = 'a turn running' | 'an answer just sent' | 'a status report of working' | 'its host says it is at work';
 
 /**
  * Whether the target of an overdue request is plainly at work, within its last wait (2026-11-04:
@@ -238,9 +239,10 @@ export async function targetAtWork(
       if (task?.phase === 'COMPLETE') return null;
     }
     const sid = r.toSessionId ?? task?.session_id ?? undefined;
+    let rec: import('../types.js').SessionRecord | null = null;
     if (sid) {
       const { getSessionByClaudeId } = await import('../session-tracker.js');
-      const rec = await getSessionByClaudeId(sid).catch(() => null);
+      rec = await getSessionByClaudeId(sid).catch(() => null);
       // Stopped on a permission prompt: it waits on a person, whatever it did before.
       if (rec?.pendingPermission) return null;
       if (rec?.process_status === 'running') return 'a turn running';
@@ -250,6 +252,8 @@ export async function targetAtWork(
     if (answered) return 'an answer just sent';
     const report = task?.status_report;
     if (report?.state === 'working' && !!report.at && Date.parse(report.at) >= since) return 'a status report of working';
+    // The record can be stale (a restart, a dropped daemon link wrote a live CLI stopped): its host decides.
+    if (rec && (await probeHost(rec, now))?.working) return 'its host says it is at work';
     return null;
   } catch {
     return null;
@@ -651,6 +655,9 @@ export const SILENT_AFTER_MS = 10 * 60_000;
  * turns with background jobs and a review running, one idle with a review round it had sent out.
  */
 export const TARGET_SIGNS = [
+  'the ask reached its session',
+  'it has an earlier ask of the same asker',
+  'its host says it is at work',
   'a turn running now',
   'work of it running after its turn',
   'a turn begun since the ask',
@@ -689,11 +696,48 @@ export interface TargetFacts {
   rows: readonly SessionRequest[];
   /** This request (never its own sign). */
   requestId: string;
+  /**
+   * Its host daemon's word (host-work.ts), asked only when nothing else shows: the one fact a
+   * server restart or a dropped daemon link cannot leave stale. Undefined when not asked.
+   */
+  host?: import('./host-work.js').HostWork | null;
+  /** Queue rows of the target waiting to go out again (request-reached.ts takenBackIds): their stamps prove nothing. */
+  takenBack?: ReadonlySet<string>;
+}
+
+/** Below this many characters a contained preview proves nothing ("ok", "status?"). */
+const RESEND_MIN_CHARS = 24;
+
+/**
+ * The ask is a resend of the earlier one: the same words (their previews, clipped at 160), or one
+ * holding the other whole ("Resending: <the first ask>").
+ */
+export function isResendOf(preview: string | undefined, earlier: string | undefined): boolean {
+  const norm = (t: string | undefined) => (t ?? '').replace(/\u2026$/, '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const a = norm(preview);
+  const b = norm(earlier);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  return short.length >= RESEND_MIN_CHARS && long.includes(short);
 }
 
 /** The first sign that the target took up the work since the ask (TARGET_SIGNS), or null. */
 export function targetSignSince(f: TargetFacts): TargetSign | null {
   const after = (iso: string | undefined): boolean => { const t = Date.parse(iso ?? ''); return Number.isFinite(t) && t >= f.since; };
+  const self = f.rows.find((x) => x.id === f.requestId);
+  // Durable facts first: a restarted server's runner and a session record a dropped daemon link
+  // rewrote can both be wrong (2026-11-08, the two notices about a task mid-turn on the ask).
+  if (self && stillReached(self, f.takenBack)) return 'the ask reached its session';
+  // A resend of an ask its target already has: the earlier one's own edges speak for both
+  // (2026-11-08: the resend was told "not taken" while the target was answering the first).
+  // Only a real resend (the same words): an independent new ask of the same asker still gets its
+  // own check of the host.
+  if (self && f.rows.some((x) => x.id !== self.id && x.fromSessionId === self.fromSessionId && stillReached(x, f.takenBack)
+    && x.status === 'pending' && Date.parse(x.createdAt) <= Date.parse(self.createdAt)
+    && ((!!f.taskId && x.toTaskId === f.taskId) || (!!x.toSessionId && x.toSessionId === self.toSessionId))
+    && isResendOf(self.preview, x.preview))) return 'it has an earlier ask of the same asker';
+  if (f.host?.working) return 'its host says it is at work';
   if (f.processStatus === 'running' && f.inTurn !== false) return 'a turn running now';
   if ((f.outliving ?? []).some((s) => s !== 'loop')) return 'work of it running after its turn';
   if ((f.turnStartedAt ?? 0) > f.since) return 'a turn begun since the ask';
@@ -718,6 +762,7 @@ export function targetSignSince(f: TargetFacts): TargetSign | null {
 export async function remindSilent(now = Date.now()): Promise<number> {
   const { IS_EPHEMERAL } = await import('../../constants.js');
   const { listPendingRequests, listAllSessionRequests, claimSilentNotice, releaseSilentNotice } = await import('../session-requests.js');
+  const { takenBackIds } = await import('./request-reached.js');
   const runner = await import('../../providers/claude-code-session.js').then((m) => m.sessionRunner).catch(() => null);
   // Time Walnut was not running (pausedMs, creditDowntime) is no silence: the target could not work either.
   const due = (await listPendingRequests()).filter((r) => !r.silentToldAt && r.toTaskId && now - Date.parse(r.createdAt) - (r.pausedMs ?? 0) >= SILENT_AFTER_MS
@@ -737,7 +782,7 @@ export async function remindSilent(now = Date.now()): Promise<number> {
     const asked = Date.parse(r.createdAt);
     // Working: any sign since the ask (TARGET_SIGNS). Not lastActiveAt: a status write moves it
     // (review round 6, Sol: a spawn timeout's error write read as work).
-    const sign = targetSignSince({
+    const facts: TargetFacts = {
       since: asked,
       inTurn: session?.process_status === 'running' ? runner?.isInTurn(session.claudeSessionId) ?? null : false,
       ...(session?.process_status ? { processStatus: session.process_status } : {}),
@@ -748,17 +793,30 @@ export async function remindSilent(now = Date.now()): Promise<number> {
       sessionIds: [sid, task.session_id, task.exec_session_id, ...(task.session_ids ?? [])].filter((x): x is string => !!x),
       rows: (ledger ??= await listAllSessionRequests().catch(() => null)) ?? [],
       requestId: r.id,
-    });
-    if (sign) continue;
+      takenBack: await takenBackIds([sid, task.session_id, task.exec_session_id].filter((x): x is string => !!x)),
+    };
+    if (targetSignSince(facts)) continue;
     // The ledger could not be read: an answer or a message of it is unknown, so not told this pass.
     if (!ledger) { ledger = undefined; continue; }
+    // Nothing the server holds shows work: its host has the last word, since the server's own view
+    // of a session can be stale after a restart or a dropped daemon link (host-work.ts).
+    const host = session ? await probeHost(session, now) : undefined;
+    if (host && targetSignSince({ ...facts, host })) {
+      log.session.info('silent target: its host says it is at work, asker not told', { requestId: r.id, taskId: task.id, sessionId: session?.claudeSessionId });
+      continue;
+    }
+    // A host that does not answer is no proof of silence: wait for it, a while.
+    if (session && host === null && now - asked - (r.pausedMs ?? 0) < SILENT_AFTER_MS * HOST_UNKNOWN_WAITS) continue;
+    const state = host ? (host.alive ? 'running' : 'stopped') : session?.process_status;
     const why = !session ? 'no session of it ever started'
-      : session.process_status === 'error' ? `its session stopped with an error${session.errorMessage ? `: ${session.errorMessage.length > 200 ? `${session.errorMessage.slice(0, cutEnd(session.errorMessage, 199))}…` : session.errorMessage}` : ''}`
-      : `its session has not taken up the work (${session.process_status === 'running' ? 'it waits after its last turn' : `it is ${session.process_status || 'not running'}`})`;
+      : !host?.alive && session.process_status === 'error' ? `its session stopped with an error${session.errorMessage ? `: ${session.errorMessage.length > 200 ? `${session.errorMessage.slice(0, cutEnd(session.errorMessage, 199))}…` : session.errorMessage}` : ''}`
+      : host === null ? 'its session has not taken up the work, as far as Walnut can tell: its host does not answer'
+      : `its session has not taken up the work (${state === 'running' ? 'it waits after its last turn' : `it is ${state || 'not running'}`})`;
     const { resolveReplyDestination, isLive } = await import('./reply-routing.js');
     const destination = await resolveReplyDestination(r.fromSessionId).catch(() => null);
     if (!destination || !isLive(destination.session)) continue;
-    const claimed = await claimSilentNotice(r.id, now);
+    // Judged on the stamp it saw (taken back, or none): a delivery during the host probe refuses the claim.
+    const claimed = await claimSilentNotice(r.id, now, { reachedAt: facts.rows.find((x) => x.id === r.id)?.reachedAt ?? r.reachedAt });
     if (!claimed) continue;
     const minutes = Math.round((now - asked - (r.pausedMs ?? 0)) / 60_000);
     const text = buildWalnutMessage({
@@ -781,6 +839,18 @@ export async function remindSilent(now = Date.now()): Promise<number> {
     }
   }
   return told;
+}
+
+/** How many silent windows a target whose host does not answer gets before its asker is told anyway. */
+export const HOST_UNKNOWN_WAITS = 3;
+
+/** The host's word on a session (host-work.ts); a test replaces it. */
+let probeHost: (session: import('../types.js').SessionRecord, now: number) => Promise<import('./host-work.js').HostWork | null> =
+  async (session, now) => (await import('./host-work.js')).hostWorkOf(session, now);
+
+/** Tests only: answer for the host. */
+export function setHostProbeForTests(fn: typeof probeHost | null): void {
+  probeHost = fn ?? (async (session, now) => (await import('./host-work.js')).hostWorkOf(session, now));
 }
 
 /** An ephemeral server's copy of the ledger came with the process: only rows it made overdue are its own. */

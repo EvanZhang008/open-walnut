@@ -134,6 +134,8 @@ export class MockDaemon {
   /** Command names to silently swallow (no reply) — one-shot each; forces a
    *  client-side command timeout (bulk-channel self-heal tests). */
   private _swallowNext = new Set<string>()
+  /** `<cmd>\u0000<sid>` pairs swallowed every time until released (holdCommandsFor). */
+  private _held = new Set<string>()
   /** Sessions flagged as dead via simulateDeath — exitCode returned in session_dead replies. */
   private _deadSessions = new Map<string, number>()
   /** Command log for test assertions. `connIndex` = arrival socket (0-based,
@@ -303,6 +305,9 @@ export class MockDaemon {
     if (this._fault === 'disconnect') {
       ws.close()
       return
+    }
+    if (typeof cmd.cmd === 'string' && typeof cmd.sid === 'string' && this._held.has(`${cmd.cmd}\u0000${cmd.sid}`)) {
+      return // held: no reply, nothing done, every time until released
     }
     if (typeof cmd.cmd === 'string' && this._swallowNext.has(cmd.cmd)) {
       this._swallowNext.delete(cmd.cmd)
@@ -1334,6 +1339,14 @@ export class MockDaemon {
    *  Forces the client's per-command timeout to fire. */
   swallowNextCommand(cmd: string): void {
     this._swallowNext.add(cmd)
+  }
+
+  /** Swallow EVERY command named `cmd` for session `sid` (no reply, nothing done) until
+   *  `release` is called: a layer between the queue and the delivery that never answers. */
+  holdCommandsFor(cmd: string, sid: string): { release: () => void } {
+    const key = `${cmd}\u0000${sid}`
+    this._held.add(key)
+    return { release: () => { this._held.delete(key) } }
   }
 
   // ── Helpers ──

@@ -545,7 +545,13 @@ taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: 
       res.status(202).json(started)
     } catch (err) {
       if (err instanceof SessionExistsError) {
-        sendError(res, 409, 'session_exists', err.message, { existing_session_id: err.existingSessionId })
+        // What to do instead, never a dead end: the caller's own open ask to it, or how to send (session-exists-hint.ts).
+        const { sessionExistsHint } = await import('../../core/sessions/session-exists-hint.js')
+        const hint = err.taskId && err.head ? await sessionExistsHint(err.taskId, callerSid) : null
+        sendError(res, 409, 'session_exists', hint ? `${err.head} ${hint.line}` : err.message, {
+          existing_session_id: err.existingSessionId,
+          ...(hint?.openRequest ? { open_request: hint.openRequest } : {}),
+        })
         return
       }
       if (err instanceof QuickStartError) {

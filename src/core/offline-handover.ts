@@ -931,6 +931,8 @@ function toRequest(row: Extract<OfflineRecord, { kind: 'row' }>['row']): Session
     deadlineAt: row.deadlineAt,
     ...(row.settledAt ? { settledAt: row.settledAt } : {}),
     ...(row.outcome ? { outcome: row.outcome } : {}),
+    ...(typeof row.messageId === 'string' ? { messageId: row.messageId } : {}),
+    ...(typeof row.reachedAt === 'string' ? { reachedAt: row.reachedAt } : {}),
   };
 }
 
