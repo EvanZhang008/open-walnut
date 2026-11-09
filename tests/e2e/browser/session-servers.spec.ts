@@ -422,3 +422,45 @@ test('a server that exits on its own leaves the list, and a Stop of one already 
   await expect(view.locator(`[data-port="${port}"]`)).toHaveCount(0, { timeout: 20_000 })
   await expect(view.locator('.session-server-error')).toHaveCount(0)
 })
+
+test('on a phone the shown page keeps its whole port in the strip, beside All servers and Stop', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  const port = await freePort()
+  await startServer(WEB, port, { WALNUT_SESSION_ID: SESSION_ID })
+  // The fixture's session runs on this machine; a remote host's name is the widest the strip's
+  // All button gets (2026-11-09: "All servers on <host>" and Stop left the shown chip a sliver).
+  await page.route(/\/api\/sessions\/pw-servers-session\/servers(\?|$)/, async (route) => {
+    if (route.request().method() !== 'GET') return route.continue()
+    const res = await route.fetch()
+    await route.fulfill({ response: res, json: { ...(await res.json()), host: 'a-remote-build-host' } })
+  })
+  await page.goto('/')
+  await page.locator('.todo-search-input').click()
+  await page.locator('.phone-search-input').fill('Session servers fixture')
+  await page.locator('.phone-search-row', { hasText: 'Session servers fixture task' }).first().click()
+  const panel = page.locator('.main-page-session-column.is-mobile-active .session-panel')
+  await expect(panel).toBeVisible({ timeout: 20_000 })
+
+  // The compact chip by the kebab opens the card; Open shows the page.
+  const chip = page.locator('[data-testid="session-web-chip"].is-compact')
+  await expect(chip).toBeVisible({ timeout: 60_000 })
+  await chip.click()
+  const card = page.getByTestId('session-web-card')
+  await card.locator(`[data-port="${port}"] [data-testid="session-server-open"]`).click()
+  await expect(panel.frameLocator('.session-web-iframe').getByText('DEV_SERVER_MARKER')).toBeVisible({ timeout: 20_000 })
+
+  const strip = panel.getByTestId('session-servers-strip')
+  const shown = strip.locator(`[data-testid="session-server-chip"][data-port="${port}"]`)
+  await expect(shown).toBeVisible()
+  await expect(strip.getByTestId('session-server-stop')).toBeVisible()
+  await shot(page, '20-phone-strip', testInfo)
+  // The port is drawn whole inside its chip, and the chip inside the strip's chip row.
+  const fit = await shown.evaluate((el) => {
+    const r = el.getBoundingClientRect()
+    const p = el.querySelector('.session-server-port')!.getBoundingClientRect()
+    const row = el.closest('.session-servers-strip-chips')!.getBoundingClientRect()
+    return { chip: Math.round(r.width), port: Math.round(p.width), inChip: p.left >= r.left - 0.5 && p.right <= r.right + 0.5, inRow: r.left >= row.left - 0.5 && r.right <= row.right + 0.5 }
+  })
+  expect(fit, JSON.stringify(fit)).toMatchObject({ inChip: true, inRow: true })
+  await expect(strip.getByTestId('session-servers-show-all')).toHaveAttribute('title', /servers? this session started on a-remote-build-host/)
+})

@@ -37,8 +37,8 @@
 .session-web-body-stopping .session-web-iframe { opacity: 0.45; transition: opacity 0.15s ease; }
 /* A chip keeps its size; only the page shown, alone too wide for the row, shortens its name. */
 .session-servers-strip-chips > .session-server-chip { flex: 0 0 auto; }
-/* Alone too wide for the row (a very narrow window): the chip shortens its name. */
-.session-servers-strip-chips > .session-server-chip:only-child { flex: 0 1 auto; min-width: 0; }
+/* Alone too wide for the row (a very narrow window): the chip shortens its name, never its port. */
+.session-servers-strip-chips > .session-server-chip:only-child { flex: 0 1 auto; min-width: min-content; }
 .session-servers-strip-chips .session-server-chip-open { min-width: 0; }
 .session-servers-strip-chips .session-server-chip-open > :not(.session-server-name) { flex-shrink: 0; }
 /* Every chip here is a web page, so the list's kind dot would say nothing: its room goes to the name. */
@@ -443,6 +443,8 @@
   .session-servers-strip-others { padding: 0 6px; }
   /* The port it stops is the chip marked as shown (and its tooltip): room for one more chip. */
   .session-servers-strip-stop-port { display: none; }
+  /* The host is in the list's title and the button's tooltip: its room goes to the chips (a phone). */
+  .session-servers-strip-all-host { display: none; }
 }
 
 /* The title row's chip for the session's web servers (SessionServersChip.tsx), sized like the
