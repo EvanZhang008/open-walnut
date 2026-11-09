@@ -22,8 +22,7 @@ import { copyRichText, copyTextRobust } from '@/utils/clipboard';
 import { markdownToRichHtml } from '@/utils/markdown';
 import { SuggestSegments, useSuggestSegments } from '@/components/chat/SuggestSegments';
 import { RichMarkdown } from '@/components/chat/RichBlocks';
-import { disclosureIds, RowDisclosureScope, useRowDisclosure } from './row-disclosure';
-import { idleRunsClosed, noteIdleRunsClosed } from './idle-run-pref';
+import { disclosureIds, useRowDisclosure } from './row-disclosure';
 import { toolMergesIntoRun } from '@/stream/tool-merge';
 import { useSelectionFrozenWith } from '@/utils/selection-guard';
 import { BashToolCall } from './BashToolCall';
@@ -474,21 +473,23 @@ function systemLineIcon(variant: string): string {
 }
 
 /** System notice that keeps compact lines inline and collapses verbose payloads. */
-export function SystemLineCollapsible({ variant, message, detail, time, noticeId }: {
+export function SystemLineCollapsible({ variant, message, detail, time, noticeId, inOpenedRun }: {
   variant: string;
   message: string;
   detail?: string;
   time?: string;
   /** The notice's id (the history row's msgId, the streamed block's uuid): keeps it open across the swap. */
   noticeId?: string;
+  /** Drawn inside a SystemGroupRun the reader opened (the idle compaction's line then shows why at once). */
+  inOpenedRun?: boolean;
 }) {
   // Kept by the notice's id (row-disclosure.ts), so it stays open when its
   // streamed block gives way to the persisted row; by its words when it has none.
   const [open, setOpen] = useRowDisclosure(noticeId ? `notice-${noticeId}` : disclosureIds.content(`sys-${variant}`, message), false);
   const toggleOpen = () => setOpen((o) => !o);
   const icon = systemLineIcon(variant);
-  // Walnut's idle compaction opens to why it ran and the setting that decides it.
-  if (isIdleCompactLine(message)) return <IdleCompactLine message={message} time={time} noticeId={noticeId} />;
+  // Walnut's idle compaction opens, on a click, to why it ran and the setting that decides it.
+  if (isIdleCompactLine(message)) return <IdleCompactLine message={message} time={time} noticeId={noticeId} inOpenedRun={inOpenedRun} />;
   if (detail && detail.length > 80) {
     return (
       <div className="tool-run-row">
@@ -543,16 +544,10 @@ export function systemGroupMemberFromHistory(message: SessionHistoryMessage): Sy
 
 /** Collapsed run of consecutive system notices from history or the live stream. */
 export const SystemGroupRun = memo(function SystemGroupRun({ members }: { members: SystemGroupMember[] }) {
-  // Walnut's idle compaction opens to why it ran, live and after (2026-11-04 review: the run closed when
-  // the compaction ended, its first line being another, and its reason was two clicks away).
-  const idleRun = members.some((member) => isIdleCompactLine(member.message));
-  const scope = useContext(RowDisclosureScope);
-  const [open, setOpen] = useRowDisclosure(members[0] ? disclosureIds.content(`sysrun-${members[0].variant}`, members[0].message) : undefined, idleRun && !idleRunsClosed(scope));
-  const toggle = () => {
-    const next = !open;
-    setOpen(next);
-    if (idleRun) noteIdleRunsClosed(scope, !next);
-  };
+  // Closed until the reader opens it, an idle compaction's run too (2026-11-09, the user: "no, auto hide
+  // cusotmer cna open if needed"; tests/web/notice-rows-start-closed.test.ts).
+  const [open, setOpen] = useRowDisclosure(members[0] ? disclosureIds.content(`sysrun-${members[0].variant}`, members[0].message) : undefined, false);
+  const toggle = () => setOpen((o) => !o);
   const allErrors = members.length > 0 && members.every((member) => member.variant === 'error' || member.variant === CLI_ERROR_VARIANT);
   // A compaction's run says so (its explanation and numbers are inside).
   const label = allErrors ? `${members.length} errors` : systemRunLabel(members);
@@ -575,6 +570,7 @@ export const SystemGroupRun = memo(function SystemGroupRun({ members }: { member
               detail={member.detail}
               time={member.time}
               {...(member.key ? { noticeId: member.key } : {})}
+              inOpenedRun
             />
           ))}
         </div>

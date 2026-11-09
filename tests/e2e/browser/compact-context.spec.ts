@@ -254,7 +254,10 @@ test('the idle compaction row says why it ran and changes its setting in place',
   expect(seen.running).toBe(0)
   const fold = history.getByText(/^Compacted by Walnut while idle/).last()
   await expect(fold).toBeVisible({ timeout: 60_000 })
-  // No click: the run opens by itself, live and once done, to the reason and the setting.
+  // Closed until the reader clicks it (2026-11-09, the user: "auto hide cusotmer cna open if needed"):
+  // one line; the click opens it straight to the reason and the setting.
+  await expect(history.getByTestId('idle-compact-line')).toHaveCount(0)
+  await fold.click()
   const line = history.getByTestId('idle-compact-line').first()
   await expect(line).toBeVisible()
   await expect(line.locator('.idle-compact-toggle')).toHaveAttribute('aria-expanded', 'true')
@@ -277,7 +280,7 @@ test('the idle compaction row says why it ran and changes its setting in place',
   await pct.press('Enter')
   await expect.poll(async () => (await idleCompactionConfig(request))?.limit_percent ?? null, { timeout: 10_000 }).toBe(90)
   await line.screenshot({ path: `${SHOTS}/${info.project.name}-idle-row.png` }).catch(() => {})
-  // Closed by the reader, the run stays closed across a reload.
+  // Closed by the reader, and closed again after a reload.
   await fold.click()
   await expect(history.getByTestId('idle-compact-line')).toHaveCount(0)
   await page.reload()

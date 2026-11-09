@@ -143,12 +143,16 @@ export function IdleCompactSetting() {
   );
 }
 
-/** The idle compaction's line in a session's timeline: opens to its reason and its setting. */
-export function IdleCompactLine({ message, time, noticeId }: { message: string; time?: string; noticeId?: string }) {
+/** The idle compaction's line in a session's timeline: a click opens it to its reason and its setting. */
+export function IdleCompactLine({ message, time, noticeId, inOpenedRun }: {
+  message: string; time?: string; noticeId?: string;
+  /** Drawn inside a run the reader just opened by a click: that click was for this row, so it shows why at once. */
+  inOpenedRun?: boolean;
+}) {
   const sessionId = useContext(RowDisclosureScope);
-  // Open by default: why it ran and its setting are what this row is for (2026-11-04 review: closed,
-  // a reader who opened the fold saw only the generic line and took it for missing).
-  const [open, setOpen] = useRowDisclosure(noticeId ? `notice-${noticeId}` : disclosureIds.content('sys-idle-compact', message), true);
+  // Closed until the reader opens it, like every Walnut notice row (2026-11-09, the user: "why ths
+  // automaticlaly open after compact, no, auto hide"; tests/web/notice-rows-start-closed.test.ts).
+  const [open, setOpen] = useRowDisclosure(noticeId ? `notice-${noticeId}` : disclosureIds.content('sys-idle-compact', message), !!inOpenedRun);
   // The live note already says why; a history row is the bare command line, its reason is on the record.
   const saysWhy = message.startsWith('Compacting this idle session');
   const reason = useIdleCompactReason(open && !saysWhy ? sessionId : null, noticeId);
