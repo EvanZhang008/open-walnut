@@ -436,32 +436,35 @@ struct MainTabView: View {
         // status probe, three store hydrations, first SwiftUI render — while
         // the OS still charged it against the scene-update allowance, and the
         // process got killed (0x8BADF00D, build 27).
-        .task {
-            LaunchGate.shared.whenActive {
-                LaunchTrace.mark("store hydration start")
-                let started = Date()
-                await connection.refreshStatus()
-                await chat.initialize()
-                DemoEntry.didHydrateChat(chat)
-                await notes.initialize()
-                await tasks.initialize()
-                await inbox.initialize()
-                await approvals.refresh()
-                approvals.presentNextIfAny()
-                LaunchTrace.mark("store hydration done")
-                // Closes the launch timeline on the tape: process start →
-                // first frame (LaunchTrace) → stores ready. A field report of
-                // "the app was stuck on open" is answerable from these three.
-                // Typed in steps: as one literal it ran past CI's type-check limit.
-                let elapsedMs: Int = Int(Date().timeIntervalSince(started) * 1000)
-                let sinceStartMs: Int = Int(Date().timeIntervalSince(LaunchTrace.processStart) * 1000)
-                let fields: [String: String] = [
-                    "elapsedMs": String(elapsedMs),
-                    "sinceProcessStartMs": String(sinceStartMs),
-                    "memoryMB": String(FreezeContext.residentMemoryMB()),
-                ]
-                AppLog.info("launch", "store hydration done", fields)
-            }
-        }
+        // One named call: a long closure here is type-checked together with this
+        // whole modifier chain, against both `whenActive` overloads, and CI's
+        // compiler gave up on it ("unable to type-check this expression").
+        .task { LaunchGate.shared.whenActive { await hydrateStores() } }
+    }
+
+    /// The cold-start hydration, run once the app is first active.
+    @MainActor private func hydrateStores() async {
+        LaunchTrace.mark("store hydration start")
+        let started = Date()
+        await connection.refreshStatus()
+        await chat.initialize()
+        DemoEntry.didHydrateChat(chat)
+        await notes.initialize()
+        await tasks.initialize()
+        await inbox.initialize()
+        await approvals.refresh()
+        approvals.presentNextIfAny()
+        LaunchTrace.mark("store hydration done")
+        // Closes the launch timeline on the tape: process start →
+        // first frame (LaunchTrace) → stores ready. A field report of
+        // "the app was stuck on open" is answerable from these three.
+        let elapsedMs: Int = Int(Date().timeIntervalSince(started) * 1000)
+        let sinceStartMs: Int = Int(Date().timeIntervalSince(LaunchTrace.processStart) * 1000)
+        let fields: [String: String] = [
+            "elapsedMs": String(elapsedMs),
+            "sinceProcessStartMs": String(sinceStartMs),
+            "memoryMB": String(FreezeContext.residentMemoryMB()),
+        ]
+        AppLog.info("launch", "store hydration done", fields)
     }
 }
