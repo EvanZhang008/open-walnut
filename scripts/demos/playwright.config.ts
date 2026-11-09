@@ -11,6 +11,8 @@ import path from 'node:path'
 import { defineConfig, devices } from '@playwright/test'
 import base from '../../playwright.config'
 import { CHROMIUM_SILENT } from '../../tests/e2e/browser/pw-silence.js'
+// Linux WebKit paints on the CPU: its GL painting threads crash the page on software GL.
+import '../../tests/e2e/browser/pw-webkit-paint.js'
 
 const repoRoot = path.resolve(import.meta.dirname, '../..')
 
