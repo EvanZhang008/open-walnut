@@ -32,8 +32,10 @@ final class SessionRetryPausedTests: XCTestCase {
         let host = UIHostingController(rootView: banner)
         let width: CGFloat = 402
         let natural = host.sizeThatFits(in: CGSize(width: width, height: .greatestFiniteMagnitude))
-        let compressed = host.sizeThatFits(in: CGSize(width: width, height: 80))
-        XCTAssertGreaterThan(natural.height, 80)
+        // The banner's type stops at the largest standard size (`BannerTypeCap`), so its natural
+        // height is whatever that gives; offered half of it, it must still take all of it.
+        XCTAssertGreaterThan(natural.height, 40)
+        let compressed = host.sizeThatFits(in: CGSize(width: width, height: natural.height / 2))
         XCTAssertEqual(compressed.height, natural.height, accuracy: 1)
         host.view.removeFromSuperview()
     }

@@ -47,9 +47,7 @@ final class OrgLargeTypeUITests: XCTestCase {
     private func openMainChat(_ app: XCUIApplication) {
         let threads = element(app, "org.bar.threads")
         if threads.waitForExistence(timeout: 8) { return }
-        if app.buttons["session.title"].exists {
-            app.navigationBars.buttons.element(boundBy: 0).tap()
-        }
+        app.leaveChatPeerForTheChat()
         let menu = app.buttons["chat.menu"]
         XCTAssertTrue(menu.waitForExistence(timeout: 60), "the chat never appeared")
         menu.tap()

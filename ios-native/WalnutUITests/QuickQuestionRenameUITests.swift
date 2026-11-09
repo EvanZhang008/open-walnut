@@ -46,9 +46,7 @@ final class QuickQuestionRenameUITests: XCTestCase {
             app.buttons["setup.connect"].tap()
         }
         // Off any session a previous run left pushed over the chat.
-        if app.buttons["session.title"].waitForExistence(timeout: 3) {
-            app.navigationBars.buttons.element(boundBy: 0).tap()
-        }
+        if app.buttons["session.title"].waitForExistence(timeout: 3) { app.leaveChatPeerForTheChat() }
         XCTAssertTrue(app.buttons["chat.menu"].waitForExistence(timeout: 60), "the chat never appeared")
         return app
     }

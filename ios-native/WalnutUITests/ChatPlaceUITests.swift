@@ -78,12 +78,8 @@ final class ChatPlaceUITests: XCTestCase {
 
     private func pause(_ seconds: Double) { Thread.sleep(forTimeInterval: seconds) }
 
-    /// Off any session a previous run left pushed over the chat.
-    private func backToTheChat(_ app: XCUIApplication) {
-        guard sessionTitle(app).exists else { return }
-        app.navigationBars.buttons.element(boundBy: 0).tap()
-        XCTAssertTrue(app.buttons["chat.menu"].waitForExistence(timeout: 20), "Back did not return to the chat")
-    }
+    /// Off any session a previous run left over the chat.
+    private func backToTheChat(_ app: XCUIApplication) { app.leaveChatPeerForTheChat() }
 
     private func openDrawer(_ app: XCUIApplication, view: String) {
         let menu = app.buttons["chat.menu"]
