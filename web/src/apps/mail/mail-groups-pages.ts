@@ -21,12 +21,14 @@ export interface GroupPageState {
   loading: boolean;
   olderLoading: boolean;
   error: string | null;
+  /** The last read failed on a dropped link and runs again by itself (`mail-load-retry.ts`). */
+  retrying: boolean;
   /** How many pages were read (first + Load older), for a refetch of "the pages already loaded". */
   pages: number;
 }
 
 export const EMPTY_PAGE: GroupPageState = {
-  rows: [], nextBefore: null, loaded: false, loading: false, olderLoading: false, error: null, pages: 0,
+  rows: [], nextBefore: null, loaded: false, loading: false, olderLoading: false, error: null, retrying: false, pages: 0,
 };
 
 export function pageKey(viewKey: string, group: string, sender = ''): string {

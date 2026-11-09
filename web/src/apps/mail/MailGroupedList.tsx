@@ -34,6 +34,7 @@ import {
   useGroupPage, useGroupsView, viewState, type GroupsViewState,
 } from './mail-groups-store';
 import { useGroupedPref } from './mail-grouped-pref';
+import { RETRYING_LINE } from './mail-load-retry';
 import { SMART_ACCOUNT, SMART_INBOX, type MailSnapshot } from './mail-store';
 import { readUnreadOnly, subscribeUnreadOnly, writeUnreadOnly } from './mail-unread-filter';
 import type { MailRowMenuHandle } from './MailRowContextMenu';
@@ -281,7 +282,9 @@ export function MailGroupedList({ snapshot, scope: scopeProp, menu, name, degrad
         {!groups ? (
           <>
             <Skeleton />
-            <p className="mail-pane-empty" data-testid="mail-list-empty">Loading…</p>
+            {view.retrying
+              ? <p className="mail-pane-empty" data-testid="mail-load-retrying" role="status">{RETRYING_LINE}</p>
+              : <p className="mail-pane-empty" data-testid="mail-list-empty">Loading…</p>}
           </>
         ) : (
           <>
@@ -343,7 +346,9 @@ export function MailGroupedList({ snapshot, scope: scopeProp, menu, name, degrad
                       {unreadOnly ? IMPORTANT_EMPTY_UNREAD : IMPORTANT_EMPTY}
                     </p>
                   )
-                ) : <p className="mail-pane-empty" data-testid="mail-important-loading">Loading…</p>
+                ) : important.retrying
+                  ? <p className="mail-pane-empty" data-testid="mail-load-retrying" role="status">{RETRYING_LINE}</p>
+                  : <p className="mail-pane-empty" data-testid="mail-important-loading">Loading…</p>
               ) : important.rows.map((message) => (
                 <MailRow
                   key={`${message.accountId} ${message.messageId}`}
@@ -354,6 +359,9 @@ export function MailGroupedList({ snapshot, scope: scopeProp, menu, name, degrad
                   flagFailed={snapshot.flagFailed}
                 />
               ))}
+              {important.retrying && important.rows.length > 0 && (
+                <p className="mail-list-note" data-testid="mail-load-retrying" role="status">{RETRYING_LINE}</p>
+              )}
               {important.error && <p className="mail-inline-error">{important.error}</p>}
               {important.nextBefore && important.rows.length > 0 && (
                 <button

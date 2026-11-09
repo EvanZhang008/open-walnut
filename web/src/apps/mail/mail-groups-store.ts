@@ -32,6 +32,7 @@ import {
   EMPTY_PAGE, appendOlder, mergeFirstPage, mergeKeepShown, pageKey, rowId, withFlags, withoutRows,
   type GroupPageState,
 } from './mail-groups-pages';
+import { failureLine, resetLoadRetries, retryLater, retrySettled } from './mail-load-retry';
 import { PAGE_SIZE, SEEN, onMailStoreReset } from './mail-store';
 
 export const IMPORTANT_ID = 'important';
@@ -43,6 +44,8 @@ export interface GroupsViewState {
   loading: boolean;
   /** The server's sentence for a failed `/groups`; the list falls back to All mail. */
   error: string | null;
+  /** `/groups` failed on a dropped link and is read again by itself (`mail-load-retry.ts`). */
+  retrying: boolean;
   /** Groups the person closed. Every other group is open, its mail listed under the row. */
   collapsed: Record<string, boolean>;
   /** The last row of each group on screen while the pointer is over the list, so a group read to 0 stays drawn. */
@@ -76,6 +79,8 @@ const groupsStartedAt = new Map<string, number>();
 const inflight = new Map<string, Promise<void>>();
 const again = new Set<string>();
 const listeners = new Set<() => void>();
+/** Bumped by every reset: a read that started before it neither writes nor retries. */
+let epoch = 0;
 let railSummary: number | null = null;
 let railListener: ((value: number | null) => void) | null = null;
 
@@ -98,7 +103,7 @@ export function subscribeGroups(fn: () => void): () => void {
 
 function freshView(scope: MailGroupsScope): GroupsViewState {
   return {
-    viewKey: groupsViewKey(scope), scope, groups: null, loading: false, error: null,
+    viewKey: groupsViewKey(scope), scope, groups: null, loading: false, error: null, retrying: false,
     collapsed: {}, held: {}, heldOrder: null, letGo: {}, worked: {},
   };
 }
@@ -144,8 +149,10 @@ function reloadChangedGroups(scope: MailGroupsScope, before: GroupsViewState, an
   const was = new Map((before.groups?.groups ?? []).map((one) => [one.id, one]));
   for (const group of answer.groups) {
     const old = was.get(group.id);
-    if (old && old.unread === group.unread && old.newestAt === group.newestAt) continue;
-    if (!isGroupOpen(before, group.id) || !pages.has(pageKey(before.viewKey, group.id, ''))) continue;
+    const page = pages.get(pageKey(before.viewKey, group.id, ''));
+    if (!isGroupOpen(before, group.id) || !page) continue;
+    // A page whose last read failed is read again whether or not its group moved.
+    if (old && old.unread === group.unread && old.newestAt === group.newestAt && !page.error) continue;
     // Under the pointer the new rows wait (they would push every line below them); the numbers do not.
     if (before.heldOrder !== null) {
       const waiting = deferredReloads.get(before.viewKey) ?? new Set<string>();
@@ -165,6 +172,7 @@ export function loadGroups(scope: MailGroupsScope, force = false): Promise<void>
   const key = groupsViewKey(scope);
   return coalesce(`groups:${key}`, async () => {
     const startedAt = Date.now();
+    const startedIn = epoch;
     patchView(scope, { loading: true });
     try {
       const answer = await getMailGroups(scope);
@@ -185,13 +193,16 @@ export function loadGroups(scope: MailGroupsScope, force = false): Promise<void>
       }
       // A group marked read that holds unread again (new mail, Undo) is an ordinary group once more.
       for (const id of Object.keys(letGo)) if ((answer.groups.find((one) => one.id === id)?.unread ?? 0) > 0) delete letGo[id];
-      patchView(scope, { groups: answer, loading: false, error: null, held, letGo });
+      retrySettled(`groups:${key}`);
+      patchView(scope, { groups: answer, loading: false, error: null, retrying: false, held, letGo });
       reloadChangedGroups(scope, view, answer);
       if (key === 'smart:inbox') railSummary = answer.important.unread;
     } catch (error) {
       const failure = mailFailure(error);
-      log.warn('mail', 'groups read failed', { viewKey: key, code: failure.code, error: failure.message });
-      patchView(scope, { loading: false, error: failure.message });
+      if (epoch !== startedIn) return;
+      const retrying = retryLater(`groups:${key}`, error, () => { void loadGroups(scope, true); });
+      log.warn('mail', 'groups read failed', { viewKey: key, code: failure.code, error: failure.message, retrying });
+      patchView(scope, { loading: false, retrying, error: retrying ? null : failureLine(failure) });
     }
   }, force);
 }
@@ -298,12 +309,17 @@ export function railValue(): number | null {
 
 /** `GET /groups/summary` for the rail badge of a tab that has never opened Mail. */
 export async function loadGroupedRailBadge(): Promise<void> {
+  const startedIn = epoch;
   try {
     const summary = await getMailGroupsSummary();
+    retrySettled('summary');
     railSummary = summary.importantUnread;
     emit();
   } catch (error) {
-    log.warn('mail', 'group summary read failed', { error: mailFailure(error).message });
+    const failure = mailFailure(error);
+    if (epoch !== startedIn) return;
+    const retrying = retryLater('summary', error, () => { void loadGroupedRailBadge(); });
+    log.warn('mail', 'group summary read failed', { error: failure.message, retrying });
   }
 }
 
@@ -524,19 +540,27 @@ export function loadGroupPage(
   join = false,
 ): Promise<void> {
   const key = pageKey(groupsViewKey(scope), group, sender);
-  return coalesce(`page:${key}:${mode}`, async () => {
+  const retryKey = `page:${key}:${mode}`;
+  return coalesce(retryKey, async () => {
+    const startedIn = epoch;
     const held = pageState(key);
     const query = pageQuery(scope, group, sender, unread);
     try {
       if (mode === 'older') {
-        if (!held.nextBefore) return;
+        // Nothing older (a refresh since reached the end): a waiting retry of this read has nothing to do.
+        if (!held.nextBefore) {
+          retrySettled(retryKey);
+          if (held.retrying) setPage(key, { retrying: false });
+          return;
+        }
         setPage(key, { olderLoading: true });
         const page = await listMailMessages({ ...query, before: held.nextBefore });
         const now = pageState(key);
         setPage(key, {
           rows: appendOlder(now.rows, page.messages), nextBefore: page.nextBefore ?? null,
-          olderLoading: false, pages: now.pages + 1,
+          olderLoading: false, retrying: false, error: null, pages: now.pages + 1,
         });
+        retrySettled(retryKey);
         return;
       }
       setPage(key, { loading: true });
@@ -558,20 +582,27 @@ export function loadGroupPage(
       setPage(key, {
         rows: merged,
         nextBefore: keepCursor ? now.nextBefore : (cursor ?? null),
-        loaded: true, loading: false, error: null,
+        loaded: true, loading: false, error: null, retrying: false,
         pages: mode === 'reload' ? want : Math.max(1, now.pages),
       });
+      retrySettled(retryKey);
     } catch (error) {
       const failure = mailFailure(error);
-      log.warn('mail', 'grouped page read failed', { key, mode, error: failure.message });
-      setPage(key, { loading: false, olderLoading: false, error: failure.message });
+      // A read the store was reset under (Mail closed, the account list changed) is not retried.
+      if (epoch !== startedIn) return;
+      // The read runs again as it was asked, joined to any read of the page already on its way.
+      const retrying = retryLater(retryKey, error, () => { void loadGroupPage(scope, group, sender, mode, unread, keepShown, true); });
+      log.warn('mail', 'grouped page read failed', { key, mode, error: failure.message, retrying });
+      setPage(key, { loading: false, olderLoading: false, retrying, error: retrying ? null : failureLine(failure) });
     }
   }, mode !== 'older' && !join);
 }
 
 /** Forget a list's pages (the unread filter changed what it holds). */
 export function resetPage(scope: MailGroupsScope, group: string, sender = ''): void {
-  pages.delete(pageKey(groupsViewKey(scope), group, sender));
+  const key = pageKey(groupsViewKey(scope), group, sender);
+  pages.delete(key);
+  for (const mode of ['first', 'older', 'reload']) retrySettled(`page:${key}:${mode}`);
   emit();
 }
 
@@ -604,6 +635,8 @@ export function knownViews(): GroupsViewState[] {
 export function resetMailGroupsStore(): void {
   views.clear(); pages.clear(); overlay.clear(); groupsStartedAt.clear();
   inflight.clear(); again.clear(); deferredReloads.clear(); railSummary = null;
+  resetLoadRetries();
+  epoch += 1;
   emit();
 }
 

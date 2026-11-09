@@ -33,6 +33,7 @@ import {
   UNSUBSCRIBE_ELLIPSIS, groupRowAria, markLabel, progressLabel, readOnlyTitle,
 } from './mail-groups-copy';
 import { loadGroupPage, setGroupOpen, useGroupPage } from './mail-groups-store';
+import { RETRYING_LINE } from './mail-load-retry';
 import { CheckIcon, MoreIcon, TwistIcon } from './mail-icons';
 import { isOpenRow } from './MailMessageRow';
 import { MailRouteLine } from './MailRouteLine';
@@ -327,14 +328,18 @@ function GroupRows({
   unsubBusy: boolean;
 }) {
   // Every page of an open group, read one after another: the list is short (unread mail only) and the
-  // person asked to see all of it. A failed page stops the chain; its error and Retry say so.
-  const more = !!page.nextBefore && page.loaded && !page.olderLoading && !page.error;
+  // person asked to see all of it. A failed page stops the chain: it reads again by itself while the
+  // link is down (`retrying`), and a failure that lasts shows its reason and Retry.
+  const more = !!page.nextBefore && page.loaded && !page.olderLoading && !page.error && !page.retrying;
   useEffect(() => {
     if (more) void loadGroupPage(scope, group.id, '', 'older', true);
   }, [more, rows.length, scope, group.id]);
   return (
     <div className="mail-group-kids" data-testid="mail-group-kids">
       {!page.loaded && page.loading && <p className="mail-group-kids-note">Loading…</p>}
+      {page.retrying && (
+        <p className="mail-group-kids-note" data-testid="mail-load-retrying" role="status">{RETRYING_LINE}</p>
+      )}
       {page.error && (
         <p className="mail-inline-error">
           {page.error}{' '}
