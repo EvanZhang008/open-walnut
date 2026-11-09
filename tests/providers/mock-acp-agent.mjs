@@ -496,11 +496,12 @@ rl.on('line', async (line) => {
         },
         agentInfo: { name: 'mock-acp-agent', version: '1.0.0' },
         authMethods: [],
-        // codex-acp ≥1.2 advertises mid-turn steering here. Suppress with
-        // MOCK_ACP_NO_STEERING=1 to model an old adapter (fallback path).
+        // codex-acp ≥1.2 advertises mid-turn steering here, and Walnut's patch adds injectOnly.
+        // MOCK_ACP_NO_STEERING=1 models an adapter without steering, MOCK_ACP_STEER_NO_INJECT_ONLY=1
+        // an unpatched one that steers but may start a turn of its own (both: the fallback path).
         ...(process.env.MOCK_ACP_NO_STEERING === '1'
           ? {}
-          : { _meta: { steering: { supported: true } } }),
+          : { _meta: { steering: process.env.MOCK_ACP_STEER_NO_INJECT_ONLY === '1' ? { supported: true } : { supported: true, injectOnly: true } } }),
       });
       break;
     case '_session/steering': {

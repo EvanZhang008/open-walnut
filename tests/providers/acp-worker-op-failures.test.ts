@@ -57,6 +57,8 @@ describe('which op failures are turn errors', () => {
     const dist = fs.readFileSync(createRequire(import.meta.url).resolve('@agentclientprotocol/codex-acp/dist/index.js'), 'utf8')
     expect(dist).toContain('injectOnly: params["injectOnly"] === true')
     expect(dist).toMatch(/if \(params\.injectOnly\) \{[\s\S]{0,200}return \{ outcome: "noActiveTurn" \}/)
+    // ...and says so at initialize, the only adapter Walnut steers (protocol.ts snapshotAcpCapabilities).
+    expect(dist).toMatch(/steering: \{\s*supported: true,\s*injectOnly: true\s*\}/)
   })
 })
 
@@ -106,6 +108,21 @@ describe('a steer that meets the end of the live turn', () => {
     expect(JSON.stringify(recs)).not.toContain('steer-started-turn')
     expect(metas(recs).filter((e) => e.type === 'turn-started')).toHaveLength(2)
     expect(metas(recs).filter((e) => e.type === 'steer-accepted')).toEqual([])
+  })
+
+  it('an adapter that may start a turn of its own is never steered: the text waits for the next turn, once', async () => {
+    worker = await initWorker({ MOCK_ACP_STEER_NO_INJECT_ONLY: '1' })
+    const state = await op(worker, 'getState')
+    expect((state.result as { capabilities: { steering: boolean } }).capabilities.steering).toBe(false)
+    await op(worker, 'prompt', { commandId: 'acp-prompt:qm-race2', walnutMessageId: 'qm-race2', text: 'steer-race' })
+    await waitFor((recs) => JSON.stringify(recs).includes('race turn open'))
+    expect((await op(worker, 'steer', { commandId: 'acp-steer:qm-late2', walnutMessageId: 'qm-late2', text: 'late words' })).error?.kind).toBe('steer_unsupported')
+    await waitFor((recs) => metas(recs).some((e) => e.type === 'turn-ended'))
+    expect((await op(worker, 'prompt', { commandId: 'acp-prompt:qm-late2', walnutMessageId: 'qm-late2', text: 'late words' })).ok).toBe(true)
+    const recs = await waitFor((r) => metas(r).filter((e) => e.type === 'turn-ended').length === 2)
+    expect(metas(recs).filter((e) => e.type === 'error')).toEqual([])
+    expect(JSON.stringify(recs)).not.toContain('steer-started-turn')
+    expect(metas(recs).filter((e) => e.type === 'turn-started')).toHaveLength(2)
   })
 
   it('no live turn and an adapter without steering: no error row either', async () => {

@@ -314,7 +314,12 @@ export interface AcpCapabilitySnapshot {
   forkSession: boolean
   resumeSession: boolean
   closeSession: boolean
-  /** Adapter advertises `_meta.steering.supported` (codex-acp ≥1.2) — mid-turn text injection. */
+  /**
+   * Adapter advertises `_meta.steering.supported` AND `injectOnly` (Walnut's codex-acp patch): mid-turn
+   * text injection that never starts a turn of its own. An adapter that only says `supported` may run a
+   * text that missed the live turn as a new turn it owns, while Walnut also sends it as the next prompt
+   * (2026-11-09: one message ran twice), so it is never steered; its messages wait for the next turn.
+   */
   steering: boolean
 }
 
@@ -350,7 +355,7 @@ export function snapshotAcpCapabilities(response: unknown): AcpCapabilitySnapsho
     forkSession: isAdvertised(session.fork),
     resumeSession: isAdvertised(session.resume),
     closeSession: isAdvertised(session.close),
-    steering: steering.supported === true,
+    steering: steering.supported === true && steering.injectOnly === true,
   }
 }
 
