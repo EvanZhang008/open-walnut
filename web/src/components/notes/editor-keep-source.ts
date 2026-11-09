@@ -52,12 +52,15 @@ export function untouchedMarkdown(ed: Editor, seed: string): string | null {
  * it is.
  *
  * The kept text is used only when the editor loads it as the same document as
- * `body` (both load and serialize to the same text: loading also collapses runs
- * of spaces, which typing can leave in `body`); anything else writes `body`, the
- * editor's own spelling, which is always a correct save. Not "renders to the same
- * HTML": the serializer is lossy (inline code ending in a space loses the space
- * after it), so the file's own bytes can render better than the editor's
- * spelling, and that check threw the whole merge away (2026-11-07, a 153-line note).
+ * `body`: it loads and serializes to `body` itself, or both load and serialize to
+ * the same text (loading also collapses runs of spaces, which typing can leave in
+ * `body`). The first alone holds where the serializer's output does not load back
+ * as itself, which a table cell's bold once caused for a whole note (2026-11-09).
+ * Anything else writes `body`, the editor's own spelling, which is always a
+ * correct save. Not "renders to the same HTML": the serializer is lossy (inline
+ * code ending in a space loses the space after it), so the file's own bytes can
+ * render better than the editor's spelling, and that check threw the whole merge
+ * away (2026-11-07, a 153-line note).
  */
 export function markdownKeepingSource(ed: Editor, seed: string | null | undefined, body?: string): string {
   const current = body ?? (ed.storage.markdown.getMarkdown() as string);
@@ -69,7 +72,11 @@ export function markdownKeepingSource(ed: Editor, seed: string | null | undefine
   if (untouched != null) {
     try {
       const kept = keepUntouchedSource(seed, untouched, current);
-      if (kept === current || serializeUntouched(ed, kept) === serializeUntouched(ed, current)) text = kept;
+      if (kept === current) text = kept;
+      else {
+        const loaded = serializeUntouched(ed, kept);
+        if (loaded === current || loaded === serializeUntouched(ed, current)) text = kept;
+      }
     } catch { /* the editor's spelling is always a correct save */ }
   }
   c.body = current;

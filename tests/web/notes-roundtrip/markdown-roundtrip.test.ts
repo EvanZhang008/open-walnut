@@ -211,6 +211,76 @@ describe('round-trip: tables (owned GFM serializer)', () => {
   it('preserves inline marks (bold/italic/code) inside cells', () =>
     expectByteClean('| **Bold** | *it* | `code` |\n| --- | --- | --- |\n| a | b | c |\n'));
 
+  // A cell renders into a scratch buffer, and tiptap-markdown trims each bold or
+  // italic mark at offsets it recorded into the output buffer. The cell's offsets
+  // once stayed on the shared stack and were applied to the document's own text:
+  // a `）` in a later cell became `*************` and the note's first line lost
+  // characters (2026-11-09, a real note). Every mark that trims, at the start,
+  // middle and end of a cell, over several rows, with prose around the table.
+  describe('marks in body cells leave every other byte alone', () => {
+    const marks = ['**bold**', '*italic*', '~~gone~~', '**两个**']
+    for (const mark of marks) {
+      for (const where of ['start', 'middle', 'end'] as const) {
+        const cell = (n: number) => (where === 'start' ? `${mark} ${n}` : where === 'end' ? `row ${n} ${mark}` : `a ${mark} b`)
+        it(`${mark} at the ${where} of cells in three rows`, () =>
+          expectByteClean([
+            'Intro line before the table.',
+            '',
+            '| Plan | Price | Note |',
+            '| --- | --- | --- |',
+            `| ${cell(1)} | USD 299（25/月） | plain |`,
+            `| Elite | ${cell(2)} | 1,599（两个） |`,
+            `| Base | 999（一个） | ${cell(3)} |`,
+            '',
+            'Outro line after the table.',
+          ].join('\n')))
+      }
+    }
+    // Marks the user applies in the editor, not ones a load produced: a bold over
+    // `（有）` at the end or start of a cell must be written so it loads as bold
+    // (in a paragraph the trim moves the delimiter inside the punctuation).
+    const cellDoc = (content: unknown[]) => h.schema.nodeFromJSON({
+      type: 'doc',
+      content: [{ type: 'table', content: [
+        { type: 'tableRow', content: [{ type: 'tableHeader', content: [{ type: 'text', text: 'H' }] }] },
+        { type: 'tableRow', content: [{ type: 'tableCell', content }] },
+      ] }],
+    })
+    for (const mark of ['bold', 'italic', 'strike']) {
+      for (const [where, content] of [
+        ['end', [{ type: 'text', text: 'a' }, { type: 'text', text: '（有）', marks: [{ type: mark }] }]],
+        ['start', [{ type: 'text', text: '（有）', marks: [{ type: mark }] }, { type: 'text', text: '中' }]],
+      ] as const) {
+        it(`${mark} over full-width brackets at the ${where} of a cell loads back as ${mark}`, () => {
+          const md = h.docToMd(cellDoc([...content]))
+          const cell = h.mdToDoc(md).firstChild!.child(1).firstChild!
+          const marked = [] as string[]
+          cell.forEach((n) => { if (n.marks.some((m) => m.type.name === mark)) marked.push(n.text ?? '') })
+          expect(marked.join(''), md).toContain('有')
+          expect(cell.textContent, md).not.toMatch(/[*~]/)
+          expect(h.roundTrip(md), 'and stays as written').toBe(md)
+        })
+      }
+    }
+    it('the shape of the 2026-11-09 note: bold rows then plain rows', () =>
+      expectByteClean([
+        'A first paragraph that must keep every character.',
+        '',
+        '| Part | What | Price | Verdict |',
+        '| --- | --- | --- | --- |',
+        '| **Pillow Cover**（有） | 加温控，**需要 Hub** | 999（一个）/ 1,599（两个） | 小众 |',
+        '| Protector | thin | 119 | ok |',
+        '',
+        '| Tier | US | CA | Includes |',
+        '| --- | --- | --- | --- |',
+        '| Standard | USD 199 | CAD 299 | alarms, **2 年保修** |',
+        '| Enhanced | USD 299 | CAD 399 | Standard + **5 年保修** |',
+        '| Elite | USD 399 | CAD 499 | more |',
+        '',
+        'Last line.',
+      ].join('\n')))
+  });
+
   it('NEVER emits raw <table> HTML', () => {
     const out = h.roundTrip('| A | B |\n| --- | --- |\n| 1 | 2 |\n');
     expect(out).not.toMatch(/<table|<\/table>|<tr|<td|<th/i);

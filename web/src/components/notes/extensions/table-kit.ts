@@ -56,12 +56,31 @@ function serializeCell(state: any, cell: PMNode): string {
   // Capture inline output into a temporary buffer by swapping the serializer's
   // output buffer + block context. Clearing delim/closed prevents the writer
   // from prepending a block delimiter (e.g. when a table sits inside a list).
-  const saved = { out: state.out, delim: state.delim, closed: state.closed, atBlockStart: state.atBlockStart };
-  state.out = '';
+  // `inlines` is swapped too: tiptap-markdown records where each bold/italic
+  // mark opened and closed as offsets into `out`, and trims at those offsets on
+  // a later render. A cell's offsets point into this scratch buffer, so left on
+  // the shared stack they were applied to the document's own output: a `)` in a
+  // later cell became a run of `*`, and the note's first line lost characters
+  // (2026-11-09, a real 229-line note with bold in its table rows).
+  const saved = { out: state.out, delim: state.delim, closed: state.closed, atBlockStart: state.atBlockStart, inlines: state.inlines };
+  // The buffer starts with the space that follows a cell's `|`: a mark opening
+  // the cell gets a non-zero offset (tiptap-markdown skips a trim at offset 0)
+  // and the delimiter sees the neighbour it has in the row. trim() drops it.
+  state.out = ' ';
   state.delim = '';
   state.closed = null;
+  const ownInlines = Array.isArray(saved.inlines);
+  if (ownInlines) state.inlines = [];
   try {
     state.renderInline(inlineHost, true);
+    // A mark that closes the cell is trimmed on the next render, and a cell has
+    // none: render the space that follows it in the row, once per closed mark.
+    // Without it `a` + bold `（有）` saved as `a**（有）**`, which loads as text.
+    for (let left = ownInlines ? state.inlines.length : 0; left > 0; left--) {
+      const top = state.inlines[state.inlines.length - 1];
+      if (!top?.start || !top?.end) break;
+      state.render(inlineHost.type.schema.text(' '), inlineHost, inlineHost.childCount);
+    }
   } catch {
     // Fall back to raw text if inline rendering throws — never lose the cell.
     state.out = inlineHost.textContent;
@@ -71,6 +90,7 @@ function serializeCell(state: any, cell: PMNode): string {
   state.delim = saved.delim;
   state.closed = saved.closed;
   state.atBlockStart = saved.atBlockStart;
+  if (Array.isArray(saved.inlines)) state.inlines = saved.inlines;
 
   // Collapse hard breaks: in a GFM cell, a <br> is encoded literally.
   // prosemirror-markdown writes hardBreak as "\\\n"; turn it into a `<br>`.
