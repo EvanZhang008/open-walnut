@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="900" height="460" viewBox="0 0 900 460" role="img" aria-labelledby="title description">
   <title id="title">EvanZhang008/open-walnut star history</title>
-  <desc id="description">54 cumulative GitHub stars since Feb 2026</desc>
+  <desc id="description">118 cumulative GitHub stars since Feb 2026</desc>
   <defs>
     <linearGradient id="area" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0%" stop-color="#2f81f7" stop-opacity="0.32" />
@@ -32,31 +32,31 @@
   <rect class="border" x="0.5" y="0.5" width="899" height="459" rx="8" />
   <text class="chart-title" x="72" y="42">EvanZhang008/open-walnut</text>
   <text class="chart-caption" x="72" y="64">GitHub star history</text>
-  <text class="chart-total" x="858" y="44" text-anchor="end">54</text>
+  <text class="chart-total" x="858" y="44" text-anchor="end">118</text>
   <text class="chart-caption" x="858" y="64" text-anchor="end">stars</text>
   <line class="grid" x1="72" y1="396" x2="858" y2="396" />
   <text class="axis-label" x="58" y="400" text-anchor="end">0</text>
   <line class="grid" x1="72" y1="334" x2="858" y2="334" />
-  <text class="axis-label" x="58" y="338" text-anchor="end">20</text>
+  <text class="axis-label" x="58" y="338" text-anchor="end">40</text>
   <line class="grid" x1="72" y1="272" x2="858" y2="272" />
-  <text class="axis-label" x="58" y="276" text-anchor="end">40</text>
+  <text class="axis-label" x="58" y="276" text-anchor="end">80</text>
   <line class="grid" x1="72" y1="210" x2="858" y2="210" />
-  <text class="axis-label" x="58" y="214" text-anchor="end">60</text>
+  <text class="axis-label" x="58" y="214" text-anchor="end">120</text>
   <line class="grid" x1="72" y1="148" x2="858" y2="148" />
-  <text class="axis-label" x="58" y="152" text-anchor="end">80</text>
+  <text class="axis-label" x="58" y="152" text-anchor="end">160</text>
   <line class="grid" x1="72" y1="86" x2="858" y2="86" />
-  <text class="axis-label" x="58" y="90" text-anchor="end">100</text>
+  <text class="axis-label" x="58" y="90" text-anchor="end">200</text>
   <line class="tick" x1="72" y1="396" x2="72" y2="402" />
   <text class="axis-label" x="72" y="424" text-anchor="middle">Feb 2026</text>
   <line class="tick" x1="268.5" y1="396" x2="268.5" y2="402" />
   <text class="axis-label" x="268.5" y="424" text-anchor="middle">Apr 2026</text>
   <line class="tick" x1="465" y1="396" x2="465" y2="402" />
-  <text class="axis-label" x="465" y="424" text-anchor="middle">Jun 2026</text>
+  <text class="axis-label" x="465" y="424" text-anchor="middle">Jul 2026</text>
   <line class="tick" x1="661.5" y1="396" x2="661.5" y2="402" />
   <text class="axis-label" x="661.5" y="424" text-anchor="middle">Sep 2026</text>
   <line class="tick" x1="858" y1="396" x2="858" y2="402" />
   <text class="axis-label" x="858" y="424" text-anchor="middle">Nov 2026</text>
-  <path d="M 72 396 H 72 V 392.9 H 72 V 389.8 H 119.64 V 386.7 H 217.53 V 383.6 H 243.93 V 380.5 H 447.98 V 377.4 H 452.07 V 374.3 H 452.18 V 371.2 H 453.2 V 368.1 H 457.28 V 365 H 465.08 V 361.9 H 475.59 V 358.8 H 485.91 V 355.7 H 485.99 V 352.6 H 487.89 V 349.5 H 489.48 V 346.4 H 499.16 V 343.3 H 520.16 V 340.2 H 551.02 V 337.1 H 555.76 V 334 H 558.51 V 330.9 H 558.61 V 327.8 H 558.93 V 324.7 H 558.98 V 321.6 H 559.21 V 318.5 H 584.54 V 315.4 H 597.04 V 312.3 H 658.67 V 309.2 H 658.95 V 306.1 H 675.04 V 303 H 754.6 V 299.9 H 758.29 V 296.8 H 774.92 V 293.7 H 792.08 V 290.6 H 834.6 V 287.5 H 841.13 V 284.4 H 841.19 V 281.3 H 842.49 V 278.2 H 847.71 V 275.1 H 848.1 V 272 H 848.19 V 268.9 H 849.16 V 265.8 H 849.26 V 262.7 H 849.39 V 259.6 H 849.65 V 256.5 H 849.71 V 253.4 H 849.81 V 250.3 H 850 V 247.2 H 850.28 V 244.1 H 853.77 V 241 H 855.14 V 237.9 H 855.39 V 234.8 H 856 V 231.7 H 856.93 V 228.6 H 858 V 396 H 72 Z" fill="url(#area)" />
-  <path class="line" d="M 72 396 H 72 V 392.9 H 72 V 389.8 H 119.64 V 386.7 H 217.53 V 383.6 H 243.93 V 380.5 H 447.98 V 377.4 H 452.07 V 374.3 H 452.18 V 371.2 H 453.2 V 368.1 H 457.28 V 365 H 465.08 V 361.9 H 475.59 V 358.8 H 485.91 V 355.7 H 485.99 V 352.6 H 487.89 V 349.5 H 489.48 V 346.4 H 499.16 V 343.3 H 520.16 V 340.2 H 551.02 V 337.1 H 555.76 V 334 H 558.51 V 330.9 H 558.61 V 327.8 H 558.93 V 324.7 H 558.98 V 321.6 H 559.21 V 318.5 H 584.54 V 315.4 H 597.04 V 312.3 H 658.67 V 309.2 H 658.95 V 306.1 H 675.04 V 303 H 754.6 V 299.9 H 758.29 V 296.8 H 774.92 V 293.7 H 792.08 V 290.6 H 834.6 V 287.5 H 841.13 V 284.4 H 841.19 V 281.3 H 842.49 V 278.2 H 847.71 V 275.1 H 848.1 V 272 H 848.19 V 268.9 H 849.16 V 265.8 H 849.26 V 262.7 H 849.39 V 259.6 H 849.65 V 256.5 H 849.71 V 253.4 H 849.81 V 250.3 H 850 V 247.2 H 850.28 V 244.1 H 853.77 V 241 H 855.14 V 237.9 H 855.39 V 234.8 H 856 V 231.7 H 856.93 V 228.6 H 858" />
+  <path d="M 72 396 H 72 V 394.45 H 72 V 392.9 H 118.35 V 391.35 H 213.6 V 389.8 H 239.28 V 388.25 H 437.81 V 386.7 H 441.8 V 385.15 H 441.9 V 383.6 H 442.9 V 382.05 H 446.86 V 380.5 H 454.45 V 378.95 H 464.68 V 377.4 H 474.72 V 375.85 H 474.79 V 374.3 H 476.65 V 372.75 H 478.19 V 371.2 H 487.61 V 369.65 H 508.04 V 368.1 H 538.07 V 366.55 H 542.68 V 365 H 545.35 V 363.45 H 545.45 V 361.9 H 545.76 V 360.35 H 545.82 V 358.8 H 546.03 V 357.25 H 570.68 V 355.7 H 582.85 V 354.15 H 642.81 V 352.6 H 643.08 V 351.05 H 658.73 V 349.5 H 736.14 V 347.95 H 739.73 V 346.4 H 755.92 V 344.85 H 772.61 V 343.3 H 813.98 V 341.75 H 820.34 V 340.2 H 820.39 V 338.65 H 821.66 V 337.1 H 826.74 V 335.55 H 827.12 V 334 H 827.2 V 332.45 H 828.15 V 330.9 H 828.25 V 329.35 H 828.37 V 327.8 H 828.62 V 326.25 H 828.68 V 324.7 H 828.78 V 323.15 H 828.96 V 321.6 H 829.24 V 320.05 H 832.63 V 318.5 H 833.96 V 316.95 H 834.21 V 315.4 H 834.8 V 313.85 H 835.7 V 312.3 H 837.03 V 310.75 H 838.14 V 309.2 H 838.46 V 307.65 H 839.03 V 306.1 H 839.03 V 304.55 H 839.5 V 303 H 839.76 V 301.45 H 839.98 V 299.9 H 839.99 V 298.35 H 840.05 V 296.8 H 840.22 V 295.25 H 840.26 V 293.7 H 840.5 V 292.15 H 840.58 V 290.6 H 840.68 V 289.05 H 840.83 V 287.5 H 840.95 V 285.95 H 841.25 V 284.4 H 841.25 V 282.85 H 841.4 V 281.3 H 841.55 V 279.75 H 841.92 V 278.2 H 842.11 V 276.65 H 842.21 V 275.1 H 842.47 V 273.55 H 842.98 V 272 H 843.19 V 270.45 H 843.37 V 268.9 H 843.51 V 267.35 H 843.58 V 265.8 H 843.68 V 264.25 H 844.64 V 262.7 H 845.66 V 261.15 H 845.86 V 259.6 H 846.01 V 258.05 H 846.37 V 256.5 H 846.68 V 254.95 H 847.11 V 253.4 H 847.31 V 251.85 H 847.32 V 250.3 H 847.98 V 248.75 H 848.35 V 247.2 H 849.03 V 245.65 H 849.26 V 244.1 H 850.27 V 242.55 H 850.38 V 241 H 850.43 V 239.45 H 850.55 V 237.9 H 850.59 V 236.35 H 852.03 V 234.8 H 852.27 V 233.25 H 852.99 V 231.7 H 853.33 V 230.15 H 853.34 V 228.6 H 854.24 V 227.05 H 854.67 V 225.5 H 854.77 V 223.95 H 854.83 V 222.4 H 856.11 V 220.85 H 856.17 V 219.3 H 856.29 V 217.75 H 856.38 V 216.2 H 856.45 V 214.65 H 856.91 V 213.1 H 858 V 396 H 72 Z" fill="url(#area)" />
+  <path class="line" d="M 72 396 H 72 V 394.45 H 72 V 392.9 H 118.35 V 391.35 H 213.6 V 389.8 H 239.28 V 388.25 H 437.81 V 386.7 H 441.8 V 385.15 H 441.9 V 383.6 H 442.9 V 382.05 H 446.86 V 380.5 H 454.45 V 378.95 H 464.68 V 377.4 H 474.72 V 375.85 H 474.79 V 374.3 H 476.65 V 372.75 H 478.19 V 371.2 H 487.61 V 369.65 H 508.04 V 368.1 H 538.07 V 366.55 H 542.68 V 365 H 545.35 V 363.45 H 545.45 V 361.9 H 545.76 V 360.35 H 545.82 V 358.8 H 546.03 V 357.25 H 570.68 V 355.7 H 582.85 V 354.15 H 642.81 V 352.6 H 643.08 V 351.05 H 658.73 V 349.5 H 736.14 V 347.95 H 739.73 V 346.4 H 755.92 V 344.85 H 772.61 V 343.3 H 813.98 V 341.75 H 820.34 V 340.2 H 820.39 V 338.65 H 821.66 V 337.1 H 826.74 V 335.55 H 827.12 V 334 H 827.2 V 332.45 H 828.15 V 330.9 H 828.25 V 329.35 H 828.37 V 327.8 H 828.62 V 326.25 H 828.68 V 324.7 H 828.78 V 323.15 H 828.96 V 321.6 H 829.24 V 320.05 H 832.63 V 318.5 H 833.96 V 316.95 H 834.21 V 315.4 H 834.8 V 313.85 H 835.7 V 312.3 H 837.03 V 310.75 H 838.14 V 309.2 H 838.46 V 307.65 H 839.03 V 306.1 H 839.03 V 304.55 H 839.5 V 303 H 839.76 V 301.45 H 839.98 V 299.9 H 839.99 V 298.35 H 840.05 V 296.8 H 840.22 V 295.25 H 840.26 V 293.7 H 840.5 V 292.15 H 840.58 V 290.6 H 840.68 V 289.05 H 840.83 V 287.5 H 840.95 V 285.95 H 841.25 V 284.4 H 841.25 V 282.85 H 841.4 V 281.3 H 841.55 V 279.75 H 841.92 V 278.2 H 842.11 V 276.65 H 842.21 V 275.1 H 842.47 V 273.55 H 842.98 V 272 H 843.19 V 270.45 H 843.37 V 268.9 H 843.51 V 267.35 H 843.58 V 265.8 H 843.68 V 264.25 H 844.64 V 262.7 H 845.66 V 261.15 H 845.86 V 259.6 H 846.01 V 258.05 H 846.37 V 256.5 H 846.68 V 254.95 H 847.11 V 253.4 H 847.31 V 251.85 H 847.32 V 250.3 H 847.98 V 248.75 H 848.35 V 247.2 H 849.03 V 245.65 H 849.26 V 244.1 H 850.27 V 242.55 H 850.38 V 241 H 850.43 V 239.45 H 850.55 V 237.9 H 850.59 V 236.35 H 852.03 V 234.8 H 852.27 V 233.25 H 852.99 V 231.7 H 853.33 V 230.15 H 853.34 V 228.6 H 854.24 V 227.05 H 854.67 V 225.5 H 854.77 V 223.95 H 854.83 V 222.4 H 856.11 V 220.85 H 856.17 V 219.3 H 856.29 V 217.75 H 856.38 V 216.2 H 856.45 V 214.65 H 856.91 V 213.1 H 858" />
   <text class="chart-caption" x="858" y="442" text-anchor="end">Updated from the GitHub API</text>
 </svg>
