@@ -204,15 +204,24 @@ describe('upload.part', () => {
     const old = 'up-bbbbbbbb-0000-0000-0000-000000000001'
     const recent = 'up-bbbbbbbb-0000-0000-0000-000000000002'
     const trigger = 'up-bbbbbbbb-0000-0000-0000-000000000003'
+    // A half-sent upload two days old: every sweep removes it, so its going says
+    // the task folder's sweep has run and what it kept, it kept on purpose.
+    const halfSent = 'up-bbbbbbbb-0000-0000-0000-000000000004'
     for (const [root, flag] of [[ownerless, true], [task, false]] as const) {
       await finish(root, old, flag)
       await finish(root, recent, flag)
       backdate(path.join(root, old), 31)
       backdate(path.join(root, recent), 29)
+      if (!flag) {
+        await core.uploadPart({ uploadId: halfSent, name: 'f.bin', size: 10, offset: 0, data: b64(five) }, root, flag)
+        backdate(path.join(root, halfSent), 2)
+      }
       await finish(root, trigger, flag)
     }
-    await new Promise((r) => setTimeout(r, 200))
-    expect(fs.existsSync(path.join(ownerless, old))).toBe(false)
+    await vi.waitFor(() => {
+      expect(fs.existsSync(path.join(ownerless, old))).toBe(false)
+      expect(fs.existsSync(path.join(task, halfSent))).toBe(false)
+    }, { timeout: 10_000, interval: 10 })
     expect(fs.existsSync(path.join(ownerless, recent, 'f.bin'))).toBe(true)
     expect(fs.existsSync(path.join(ownerless, trigger, 'f.bin'))).toBe(true)
     expect(fs.existsSync(path.join(task, old, 'f.bin'))).toBe(true)
