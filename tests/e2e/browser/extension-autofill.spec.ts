@@ -304,8 +304,13 @@ test('a login with a one-time code: its code is copied as it fills, the code pag
   const row = menu.getByTestId('menu-item').filter({ hasText: `Mfa ${stamp}` })
   await expect(row.getByTestId('totp-code')).toHaveText(/\d{3} \d{3}\d{1,2}/)
   await row.click()
-  const code = await totpNow(page, 'mfa')
-  await expect.poll(() => page.evaluate(() => [1, 2, 3, 4, 5, 6].map((i) => (document.getElementById(`c${i}`) as HTMLInputElement).value).join(''))).toBe(code)
+  const boxes = () => page.evaluate(() => [1, 2, 3, 4, 5, 6].map((i) => (document.getElementById(`c${i}`) as HTMLInputElement).value).join(''))
+  await expect.poll(boxes).toMatch(/^\d{6}$/)
+  // The code of the moment it filled: a 30 s window may have turned over since (CI, 2026-11-09:
+  // the code read after the click was the next window's).
+  const filledAt = Date.now()
+  const nearFill = await Promise.all([filledAt - 30_000, filledAt].map(async (t) => (await totpAt(params, t)).code))
+  expect([...nearFill, await totpNow(page, 'mfa')]).toContain(await boxes())
   expect(await page.evaluate(() => (document.getElementById('c3') as HTMLInputElement).value.length)).toBe(1)
 
   // One field with autocomplete="one-time-code", from its menu once the person is in it (waiting
