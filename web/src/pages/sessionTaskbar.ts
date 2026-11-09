@@ -65,7 +65,7 @@ export function minimizeOffStrip(lists: TaskbarLists, id: string): TaskbarLists 
   return { chips: [...lists.chips, id], recent: lists.recent.filter(r => r !== id) };
 }
 
-function sameList(a: readonly string[], b: readonly string[]): boolean {
+export function sameList(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((id, i) => id === b[i]);
 }
 

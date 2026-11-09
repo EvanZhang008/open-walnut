@@ -10,7 +10,7 @@ import { useSyncExternalStore } from 'react';
 import { readLayoutField, writeLayoutField } from '@/utils/layout-record';
 import { onMinimizeToTaskbar } from '@/utils/taskbar-minimize';
 import {
-  minimizeOffStrip, moveChip, removeChip, restoreTaskbar, taskbarAfterStripChange, type TaskbarLists,
+  minimizeOffStrip, moveChip, removeChip, restoreTaskbar, sameList, taskbarAfterStripChange, type TaskbarLists,
 } from './sessionTaskbar';
 import type { SessionSlot } from './sessionColumns';
 
@@ -31,8 +31,9 @@ function persist(next: TaskbarLists, prev?: TaskbarLists): void {
   // The chips' field is always written, an empty list included: its presence says the old
   // mixed field was already read into Recent (restoreTaskbar). The old field itself is left as
   // it was, so an older release on the same data still opens with its own bar.
-  if (!prev || next.chips !== prev.chips) writeLayoutField('homeMinimized', next.chips);
-  if (!prev || next.recent !== prev.recent) writeLayoutField('homeRecent', next.recent.length > 0 ? next.recent : null);
+  // By content: the rules build a new array even when its ids stayed the same.
+  if (!prev || !sameList(next.chips, prev.chips)) writeLayoutField('homeMinimized', next.chips);
+  if (!prev || !sameList(next.recent, prev.recent)) writeLayoutField('homeRecent', next.recent.length > 0 ? next.recent : null);
 }
 
 function set(update: (prev: TaskbarLists) => TaskbarLists): void {

@@ -252,6 +252,12 @@ describe('the taskbar store writes only what changed (two windows share one stor
       store.closeRecent(r);
       expect(decodeField(mem.get(LAYOUT_FIELDS.homeMinimized) ?? null)).toEqual([a, b]);
       expect(decodeField(mem.get(LAYOUT_FIELDS.homeRecent) ?? null)).toBeNull();
+      // A column leaving Home's strip by x (Recent only) does not write the chips either, though
+      // the rule hands back a new chips array with the same ids.
+      const x = 'aaaaaaaa-0000-4000-8000-000000000004';
+      store.applyStripChange([{ id: x, locked: false }], [], new Set());
+      expect(decodeField(mem.get(LAYOUT_FIELDS.homeMinimized) ?? null)).toEqual([a, b]);
+      expect(decodeField(mem.get(LAYOUT_FIELDS.homeRecent) ?? null)).toEqual([x]);
       store.resetTaskbarStoreForTests();
     } finally {
       g.localStorage = had;

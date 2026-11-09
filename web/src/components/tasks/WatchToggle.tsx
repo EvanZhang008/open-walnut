@@ -5,7 +5,7 @@
  * "pin": Focus and the pinned board already are pins. One field, `watched_at`, the
  * time the watch began; clearing it ends the watch. Nothing else about the task moves.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Task } from '@open-walnut/core';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { updateTask } from '@/api/tasks';
@@ -18,6 +18,7 @@ export function useWatchToggle(task: Pick<Task, 'id'> & { watched_at?: string | 
   const store = useTasksContextSafe();
   // A plain PATCH's value until its echo (or a failure) arrives, so the eye answers the click.
   const [pending, setPending] = useState<string | null>(null);
+  const writes = useRef(0);
   useEffect(() => { setPending(null); }, [task.watched_at]);
   const watched = pending !== null ? pending !== '' : isWatched(task);
   // Off the board's store (a session menu on the Org page), a plain PATCH; the
@@ -29,9 +30,11 @@ export function useWatchToggle(task: Pick<Task, 'id'> & { watched_at?: string | 
     const watched_at = watched ? '' : new Date().toISOString();
     if (store && store.tasks.some((t) => t.id === task.id)) { store.update(task.id, { watched_at }); return; }
     setPending(watched_at);
+    const write = ++writes.current;
     void updateTask(task.id, { watched_at }).catch((err) => {
       log.warn('task-watch', 'watch write failed', { taskId: task.id, error: String(err) });
-      setPending(null);
+      // Only the latest click's value is shown: an older write failing leaves it.
+      if (write === writes.current) setPending(null);
       store?.showOperationError(`Could not ${watched_at ? 'watch' : 'stop watching'} the task: ${err instanceof Error ? err.message : String(err)}`);
     });
   };
