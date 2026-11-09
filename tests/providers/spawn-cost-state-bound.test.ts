@@ -134,7 +134,10 @@ describe('the restored cost read on a cold resume', () => {
     expect(s._costBaselineKnown).toBe(true)
 
     answer.resolve({ totalCostUsd: 690 })
-    await new Promise((r) => setTimeout(r, 50))
+    // The late seed runs in the read's own continuation: once its promise settled and the
+    // microtasks after it drained, it has run if it ever will.
+    await answer.promise
+    await new Promise((r) => setImmediate(r))
     // Billed from the result's 690.02, not from the late 690.
     expect(s.billableCostDelta(690.5)).toBeCloseTo(0.48, 6)
   })
