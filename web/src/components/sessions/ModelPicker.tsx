@@ -21,7 +21,7 @@ import { useHostModelCatalog, seedHostCatalog } from '@/hooks/useModelCatalog';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { formatModelName } from '@/utils/model-name';
 import { sortByModelStrength } from '@/utils/model-strength-order';
-import { parseAcpModelId, acpProviderGroupId, shortAcpModelName, groupAcpModels, acpFilterMatch, acpEffortLadder, acpEffortLabel } from './acp-model-id';
+import { parseAcpModelId, acpProviderGroupId, shortAcpModelName, acpModelDisplayName, groupAcpModels, acpFilterMatch, acpEffortLadder, acpEffortLabel } from './acp-model-id';
 import type { AcpModelFamily } from './acp-model-id';
 import { SessionCostBlock } from './SessionCostBlock';
 import { oneRowPerModel, rowNamedLike } from './model-row-dedupe';
@@ -743,8 +743,9 @@ export function ModelPicker({
   // so the row can say so — "default" alone made the user open the picker
   // just to learn what launching untouched would do.
   const acpDraft = !sessionId;
+  // Named as its row in the list below and the composer's pill name it (the engine's own name).
   const acpDefaultLabel = acpDefaultModelId
-    ? `${engineUi.displayName} default (${shortAcpModelName(acpDefaultModelId)})`
+    ? `${engineUi.displayName} default (${acpModelDisplayName(acpDefaultModelId, acpModels?.find((m) => m.modelId === acpDefaultModelId)?.name) ?? shortAcpModelName(acpDefaultModelId)})`
     : `${engineUi.displayName} default`;
   const acpDefaultRow = onAcpSwitch && acpDraft && (
     <button

@@ -174,8 +174,8 @@ test('OpenCode draft lists probed models and the pick rides the launch payload',
   const defaultRow = picker.getByTestId('acp-default-row')
   await expect(defaultRow).toHaveAttribute('aria-selected', 'true')
   // The default row names the engine's RESOLVED default (the probe's
-  // currentModelId), not just "default".
-  await expect(defaultRow).toHaveText(/OpenCode default \(GPT Best\)/, { timeout: 10_000 })
+  // currentModelId), not just "default", by the name the list and the composer give it.
+  await expect(defaultRow).toHaveText(/OpenCode default \(Mock GPT Best\)/, { timeout: 10_000 })
 
   // The fixture catalog carries a second provider group ('Mock Provider') so
   // the grouped layout is exercised here too: the Provider column exists,
@@ -195,7 +195,7 @@ test('OpenCode draft lists probed models and the pick rides the launch payload',
   await expect(thinkerRow.locator('.model-picker-row-group')).toHaveText(/Mock Provider/)
   // Cross-group reach: the anonymous group's model matches too, tagless.
   await filter.fill('best')
-  const bestRow = picker.locator('.model-picker-row', { hasText: 'Mock GPT Best' })
+  const bestRow = picker.getByRole('option', { name: 'Mock GPT Best', exact: true })
   await expect(bestRow).toBeVisible({ timeout: 10_000 })
   await expect(bestRow.locator('.model-picker-row-group')).toHaveCount(0)
   // Picking straight from the filtered list works — and the pick clears the

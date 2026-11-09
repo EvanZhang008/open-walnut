@@ -109,7 +109,7 @@ export function EngineFallbackBanner({ taskId, sessionId, note, runsOn, onGone }
       <div className="engine-fallback-body">
         <div className="engine-fallback-head">
           <span className="engine-fallback-tag">Fallback</span> <span data-testid="engine-fallback-head">{words.head}</span>
-          <span className="engine-fallback-sep" aria-hidden="true"> · </span><span className="engine-fallback-why" data-testid="engine-fallback-why">{words.why}</span>
+          <span className="engine-fallback-why" data-testid="engine-fallback-why">{words.why}</span>
         </div>
         <div className="engine-fallback-detail" data-testid="engine-fallback-detail">{words.detail}</div>
         {failure && <div className="engine-fallback-failure" role="alert">{failure}</div>}

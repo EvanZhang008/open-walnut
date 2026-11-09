@@ -331,6 +331,25 @@ test("a new task's draft says where it starts while the default engine is out of
   await notice.getByTestId('draft-fallback-use').click()
   await expect(notice).toHaveText(/this task starts on Codex \(.+\)\.$/)
   await expect(panel.locator('.draft-model-select')).toHaveText('Codex (fallback)')
+  // The answer changes while the draft is open (Settings saved another fallback, in another tab):
+  // the page coming back reads it at once, not at the next minute's read.
+  await page.unroute('**/api/engines/fallback*')
+  await page.route('**/api/engines/fallback*', (route) => route.fulfill({ json: {
+    host: '__local__', defaultEngine: 'claude', setting: { engine: 'claude' }, skip: 'needs_model', fallback: null,
+    limit: { window: 'five_hour', resetsAt: resetsAt, resetsFrom: 'event' },
+  } }))
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await expect(notice).toHaveText(/, and it covers every Claude model: this task waits for the reset/, { timeout: 5_000 })
+  await expect(panel.locator('.draft-model-select')).not.toHaveText(/fallback/)
+  // A config save (Settings in this same page) reads it at once too: the server's config:changed.
+  await page.unroute('**/api/engines/fallback*')
+  await page.route('**/api/engines/fallback*', (route) => route.fulfill({ json: {
+    host: '__local__', defaultEngine: 'claude', setting: { engine: 'codex' },
+    fallback: { engine: 'codex', note: { from: 'claude', to: 'codex', window: 'five_hour', resets_at: resetsAt, resets_from: 'event', at: new Date().toISOString() } },
+  } }))
+  const cfg = await (await page.request.get('/api/config')).json()
+  expect((await page.request.put('/api/config', { data: cfg })).ok()).toBe(true)
+  await expect(notice).toHaveText(/this task starts on Codex \(.+\)\.$/, { timeout: 5_000 })
   // No fallback for this host now (none set, or nothing limited): no line.
   await page.unroute('**/api/engines/fallback*')
   await page.route('**/api/engines/fallback*', (route) => route.fulfill({ json: { host: '__local__', fallback: null } }))

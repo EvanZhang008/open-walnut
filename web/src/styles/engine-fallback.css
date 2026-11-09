@@ -31,11 +31,9 @@
   color: var(--fg-secondary, var(--fg-muted));
   background: color-mix(in srgb, var(--fg, #000) 8%, transparent);
 }
-/* The limit and its reset move to the next line as one piece in a narrow column ("· resets 4:38 PM"
-   never starts a line alone), and wrap inside only when even a line of their own is too narrow. */
-.engine-fallback-why { display: inline-block; color: var(--fg); font-weight: 500; }
-/* The dot between what happened and why: the weight of neither. */
-.engine-fallback-sep { font-weight: 400; color: var(--fg-secondary, var(--fg-muted)); }
+/* The limit and its reset: a line of their own under where it started, so no width leaves a dot
+   hanging at a line's end or a "· resets 4:38 PM" starting one (2026-11-09 reviews). */
+.engine-fallback-why { display: block; color: var(--fg); font-weight: 500; }
 .engine-fallback-detail { margin-top: 2px; color: var(--fg-secondary, var(--fg-muted)); }
 .engine-fallback-failure { margin-top: 4px; color: var(--danger, #ff3b30); }
 /* On their own line under the words, lined up with them (icon 16px + gap 10px). */

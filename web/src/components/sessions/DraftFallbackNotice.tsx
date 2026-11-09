@@ -18,6 +18,7 @@ import { useEffect, useState } from 'react';
 import { fallbackEngineName, fallbackModelName, limitName, limitTimeWords } from '@open-walnut/user-status';
 import { fetchEngineFallbackNow, type EngineFallbackNow } from '@/api/engine-fallback';
 import { useEngineDefaultModel, withDefaultModel } from './engine-default-model';
+import { useEvent } from '@/hooks/useWebSocket';
 
 const REFRESH_MS = 60_000;
 
@@ -85,9 +86,18 @@ export function draftFallbackPill(now: EngineFallbackNow | null): string | null 
   return `${fb.engine === fb.note.from && model ? model : fallbackEngineName(fb.engine)} (fallback)`;
 }
 
-/** The server's answer for the draft's host while it applies, read again every minute. */
+/** The server's answer for the draft's host while it applies, read again every minute, and at once
+ *  when the config changes (Settings saved another fallback) or the page comes back into view. */
 export function useDraftFallback(host: string | null | undefined, applies: boolean): EngineFallbackNow | null {
   const [now, setNow] = useState<EngineFallbackNow | null>(null);
+  const [again, setAgain] = useState(0);
+  useEvent('config:changed', () => setAgain((n) => n + 1));
+  useEffect(() => {
+    const back = () => { if (document.visibilityState === 'visible') setAgain((n) => n + 1); };
+    document.addEventListener('visibilitychange', back);
+    window.addEventListener('focus', back);
+    return () => { document.removeEventListener('visibilitychange', back); window.removeEventListener('focus', back); };
+  }, []);
   useEffect(() => {
     if (!applies) { setNow(null); return; }
     let live = true;
@@ -95,7 +105,7 @@ export function useDraftFallback(host: string | null | undefined, applies: boole
     void read();
     const id = window.setInterval(() => { void read(); }, REFRESH_MS);
     return () => { live = false; window.clearInterval(id); };
-  }, [host, applies]);
+  }, [host, applies, again]);
   return applies ? now : null;
 }
 
