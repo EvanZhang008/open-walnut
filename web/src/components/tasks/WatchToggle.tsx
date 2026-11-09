@@ -19,7 +19,7 @@ import '@/styles/task-watch.css';
  * row answer the click. Kept outside any component: the kebab's row unmounts with the menu, and a
  * menu opened again before the echo still reads the click (2026-11-09 review).
  */
-interface PendingWatch { value: string; write: number; base: string | null }
+interface PendingWatch { value: string; write: number; settled: boolean }
 const pendingWatch = new Map<string, PendingWatch>();
 const pendingListeners = new Set<() => void>();
 let writeSeq = 0;
@@ -36,12 +36,14 @@ export function useWatchToggle(task: Pick<Task, 'id'> & { watched_at?: string | 
   const store = useTasksContextSafe();
   const pending = useSyncExternalStore(subscribePending, () => pendingWatch.get(task.id), () => pendingWatch.get(task.id));
   const base = task.watched_at ?? null;
-  // The task moved since the click (its echo, or anyone's later write): that is the truth now.
+  // The task moved after the latest click's write came back (its echo, or anyone's later write):
+  // that is the truth now. A move while that write is still out is an older click's echo, and the
+  // latest click stays (2026-11-09 review: Watch, then Stop watching, the first echo first).
   useEffect(() => {
     const p = pendingWatch.get(task.id);
-    if (p && p.base !== base) setPendingWatch(task.id, null);
+    if (p?.settled) setPendingWatch(task.id, null);
   }, [task.id, base]);
-  const watched = pending && pending.base === base ? pending.value !== '' : isWatched(task);
+  const watched = pending ? pending.value !== '' : isWatched(task);
   // Off the board's store (a session menu on the Org page), a plain PATCH; the
   // task:updated it broadcasts refreshes whoever shows the task.
   // A task the board's store does not hold (an archived one a session panel opened) is a plain
@@ -51,8 +53,12 @@ export function useWatchToggle(task: Pick<Task, 'id'> & { watched_at?: string | 
     const watched_at = watched ? '' : new Date().toISOString();
     if (store && store.tasks.some((t) => t.id === task.id)) { store.update(task.id, { watched_at }); return; }
     const write = ++writeSeq;
-    setPendingWatch(task.id, { value: watched_at, write, base });
-    void updateTask(task.id, { watched_at }).catch((err) => {
+    setPendingWatch(task.id, { value: watched_at, write, settled: false });
+    void updateTask(task.id, { watched_at }).then(() => {
+      // Back: the echo that follows (or came already) retires it; until then it is the server's value.
+      const p = pendingWatch.get(task.id);
+      if (p?.write === write) setPendingWatch(task.id, { ...p, settled: true });
+    }, (err) => {
       log.warn('task-watch', 'watch write failed', { taskId: task.id, error: String(err) });
       // Only the latest click's value is shown: an older write failing leaves it.
       if (pendingWatch.get(task.id)?.write === write) setPendingWatch(task.id, null);

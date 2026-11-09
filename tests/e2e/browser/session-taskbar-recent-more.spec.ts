@@ -106,3 +106,29 @@ test('Recent shows at most two pills, the rest behind "N more": 0, 1, 2, 3 and 1
   // Leave the fixture's bar empty for the next spec.
   await page.evaluate(({ r }) => localStorage.setItem(r, JSON.stringify({ v: 1, value: null })), { r: RECENT_KEY })
 })
+
+test('in a short window the "N more" menu is cut to fit, and the row the keyboard moves to is scrolled into view', async ({ page }) => {
+  await isolateUiPrefs(page)
+  await page.setViewportSize({ width: 900, height: 300 })
+  await page.goto('/')
+  await page.waitForLoadState('networkidle')
+  const ids = await sessionIds(page)
+  await loadWithRecent(page, ids)
+  await more(page).click()
+  const m = menu(page)
+  await expect(m).toBeVisible()
+  const inView = async () => {
+    const box = (await m.boundingBox())!
+    const at = (await page.evaluate(() => (document.activeElement as HTMLElement).getBoundingClientRect().toJSON())) as DOMRect
+    return at.top >= box.y - 1 && at.bottom <= box.y + box.height + 1
+  }
+  await page.keyboard.press('End')
+  await expect(m.locator('.session-taskbar-more-row').last().locator('.session-taskbar-close')).toBeFocused()
+  expect(await inView(), 'the last row is shown').toBe(true)
+  await page.keyboard.press('Home')
+  expect(await inView(), 'the first row is shown').toBe(true)
+  for (let i = 0; i < 9; i++) await page.keyboard.press('ArrowDown')
+  expect(await inView(), 'a row reached by the arrows is shown').toBe(true)
+  await page.keyboard.press('Escape')
+  await page.evaluate(({ r }) => localStorage.setItem(r, JSON.stringify({ v: 1, value: null })), { r: RECENT_KEY })
+})

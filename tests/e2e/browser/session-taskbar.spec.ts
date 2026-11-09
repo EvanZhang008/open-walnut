@@ -196,12 +196,13 @@ test('Watch clicked while its write is still on its way reads Stop watching when
     else body.taskId = ARCHIVED
     await route.fulfill({ response, json: body })
   })
-  // The task's write takes 3 s (a slow network): the menu row unmounts long before its echo.
+  // A slow network: the first write takes 2 s, the second 6 s, so the first one's echo comes back
+  // while the second click's write is still out. The menu row unmounts long before either.
   const writes: string[] = []
   await page.route(`**/api/tasks/${ARCHIVED}`, async (route) => {
     if (route.request().method() !== 'PATCH') return route.fallback()
     writes.push(String((route.request().postDataJSON() as { watched_at?: string }).watched_at ?? ''))
-    await new Promise((r) => setTimeout(r, 3000))
+    await new Promise((r) => setTimeout(r, writes.length === 1 ? 2000 : 6000))
     await route.fallback()
   })
   await page.addInitScript((id) => {
@@ -220,8 +221,27 @@ test('Watch clicked while its write is still on its way reads Stop watching when
   await expect.poll(() => writes.length).toBe(2)
   expect(writes[0]).not.toBe('')
   expect(writes[1]).toBe('')
+  // The first write's echo lands (the task reads watched) while the second is still out: the menu
+  // keeps the latest click.
+  await page.waitForTimeout(3000)
+  await expect((await kebabRow(panel, 'task-kebab-watch'))).toHaveText('Watch')
+  await closeSessionKebab(panel)
+  await page.waitForTimeout(5000)
   await expect((await kebabRow(panel, 'task-kebab-watch'))).toHaveText('Watch', { timeout: 15_000 })
   await closeSessionKebab(panel)
+})
+
+test('Esc on a worker picker opened from the session menu closes the picker only, then the menu', async ({ page }) => {
+  const panel = await openSessionPanel(page)
+  const menu = await openSessionKebab(panel)
+  await menu.getByTestId('kebab-team-toggle').click()
+  await menu.getByTestId('kebab-adopt-worker').click()
+  await expect(page.getByTestId('adopt-worker-flyout')).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('adopt-worker-flyout')).toHaveCount(0)
+  await expect(page.locator('.task-kebab-menu')).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.task-kebab-menu')).toHaveCount(0)
 })
 
 test('Esc on the session menu closes the menu only: full screen stays, and the next Esc leaves it', async ({ page }) => {

@@ -588,6 +588,10 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
     // Its Esc is its own (capture phase, consumed): the layer under it stays open (TaskQuickActions.tsx).
     const handleKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.isComposing) return;
+      // A worker picker opened from the menu (Adopt, Release) is the layer on top and takes its own
+      // Esc (its capture listener): the menu stays. The menu's other pickers (Project, a plugin
+      // field) keep no Esc of their own, so one Esc closes them with the menu, as before.
+      if (document.querySelector('.adopt-worker-flyout')) return;
       e.preventDefault();
       e.stopPropagation();
       closeMenu();

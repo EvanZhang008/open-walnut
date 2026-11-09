@@ -141,12 +141,20 @@ function RecentMore({ ids, tasks, onRestore, onClose }: { ids: readonly string[]
     onClose: (reason) => { setOpen(false); if (reason === 'escape') btnRef.current?.focus({ preventScroll: true }); },
   });
   const items = () => Array.from(menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? []);
+  // A short window cuts the menu to fit: the row given the focus is scrolled into its view.
+  const focusRow = (el: HTMLElement | null | undefined) => {
+    if (!el) return;
+    el.focus({ preventScroll: true });
+    el.scrollIntoView({ block: 'nearest' });
+  };
   // Opened, the first row takes the focus; the arrows move between the rows (and their x).
+  // Once placed: an unplaced menu is not shown yet, and the focus would not take.
+  const placed = !!placement;
   useEffect(() => {
-    if (!open) return;
-    const t = requestAnimationFrame(() => items()[0]?.focus({ preventScroll: true }));
+    if (!open || !placed) return;
+    const t = requestAnimationFrame(() => focusRow(items()[0]));
     return () => cancelAnimationFrame(t);
-  }, [open]);
+  }, [open, placed]);
   const onMenuKey = (e: ReactKeyboardEvent) => {
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Home' && e.key !== 'End') return;
     e.preventDefault();
@@ -155,7 +163,7 @@ function RecentMore({ ids, tasks, onRestore, onClose }: { ids: readonly string[]
     const at = list.indexOf(document.activeElement as HTMLElement);
     const next = e.key === 'Home' ? 0 : e.key === 'End' ? list.length - 1
       : e.key === 'ArrowDown' ? (at + 1) % list.length : (at - 1 + list.length) % list.length;
-    list[next]?.focus({ preventScroll: true });
+    focusRow(list[next]);
   };
   // x on a row: the focus goes to the row that takes its place; the last row gone takes the menu
   // and its button with it, so then to the last Recent pill.
@@ -166,7 +174,7 @@ function RecentMore({ ids, tasks, onRestore, onClose }: { ids: readonly string[]
     requestAnimationFrame(() => {
       const rows = Array.from(menuRef.current?.querySelectorAll<HTMLElement>('.session-taskbar-more-row .session-taskbar-open') ?? []);
       const pills = Array.from(group?.querySelectorAll<HTMLElement>('.session-taskbar-recent-pill .session-taskbar-open') ?? []);
-      (rows[Math.min(at, rows.length - 1)] ?? (btnRef.current?.isConnected ? btnRef.current : pills[pills.length - 1]))?.focus({ preventScroll: true });
+      focusRow(rows[Math.min(at, rows.length - 1)] ?? (btnRef.current?.isConnected ? btnRef.current : pills[pills.length - 1]));
     });
   };
   return (
