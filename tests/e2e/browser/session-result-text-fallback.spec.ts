@@ -44,11 +44,16 @@ test.beforeAll(async () => {
  * The launcher moved: "+" grows a draft column and its cwd pill hosts the same
  * folder picker. The draft morphs into the pending → real column in place, so
  * the home-column assertions below are untouched.
+ *
+ * Claude is picked, not assumed: the shared folder carries the launch memory of
+ * the last start there, and a Codex spec running beside this one on the same
+ * fixture server left it on Codex (CI 2026-11-09: these turns went to the mock
+ * ACP agent, whose reply is not the mock CLI's, and nothing rendered).
  */
 async function openQuickStart(page: Page): Promise<void> {
   await page.evaluate((url) => { window.location.href = url }, `http://localhost:${TEST_PORT}/`)
   await page.waitForLoadState('networkidle')
-  await openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`)
+  await openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`, { engine: 'Claude' })
 }
 
 /** Send a prompt through the draft's composer and return the created task id. */
