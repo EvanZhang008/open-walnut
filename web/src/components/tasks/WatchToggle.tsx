@@ -19,10 +19,9 @@ import '@/styles/task-watch.css';
  * row answer the click. Kept outside any component: the kebab's row unmounts with the menu, and a
  * menu opened again before the echo still reads the click (2026-11-09 review).
  */
-interface PendingWatch { value: string; write: number; settled: boolean }
+interface PendingWatch { value: string; settled: boolean }
 const pendingWatch = new Map<string, PendingWatch>();
 const pendingListeners = new Set<() => void>();
-let writeSeq = 0;
 function setPendingWatch(id: string, next: PendingWatch | null): void {
   if (next) pendingWatch.set(id, next); else pendingWatch.delete(id);
   for (const l of pendingListeners) l();
@@ -30,6 +29,38 @@ function setPendingWatch(id: string, next: PendingWatch | null): void {
 function subscribePending(l: () => void): () => void {
   pendingListeners.add(l);
   return () => { pendingListeners.delete(l); };
+}
+
+/**
+ * One Watch write per task at a time, the latest click last: a click while a write is out only
+ * replaces what goes next, so the server applies the clicks in order and ends on the last one
+ * (2026-11-09 review: two PATCHes reaching the server in the opposite order kept the first click).
+ */
+const watchWriting = new Set<string>();
+const watchNext = new Map<string, string>();
+function queueWatchWrite(id: string, value: string, showError?: (msg: string) => void): void {
+  watchNext.set(id, value);
+  if (watchWriting.has(id)) return;
+  watchWriting.add(id);
+  void (async () => {
+    while (watchNext.has(id)) {
+      const v = watchNext.get(id)!;
+      watchNext.delete(id);
+      try {
+        await updateTask(id, { watched_at: v });
+      } catch (err) {
+        log.warn('task-watch', 'watch write failed', { taskId: id, error: String(err) });
+        // A newer click still goes out; with none, the click is undone and said so.
+        if (!watchNext.has(id) && pendingWatch.get(id)?.value === v) setPendingWatch(id, null);
+        showError?.(`Could not ${v ? 'watch' : 'stop watching'} the task: ${err instanceof Error ? err.message : String(err)}`);
+        continue;
+      }
+      // The latest click is written: its echo (or one that came already) retires the held value.
+      const p = pendingWatch.get(id);
+      if (!watchNext.has(id) && p?.value === v) setPendingWatch(id, { ...p, settled: true });
+    }
+    watchWriting.delete(id);
+  })();
 }
 
 export function useWatchToggle(task: Pick<Task, 'id'> & { watched_at?: string | null }) {
@@ -52,18 +83,8 @@ export function useWatchToggle(task: Pick<Task, 'id'> & { watched_at?: string | 
   const toggle = () => {
     const watched_at = watched ? '' : new Date().toISOString();
     if (store && store.tasks.some((t) => t.id === task.id)) { store.update(task.id, { watched_at }); return; }
-    const write = ++writeSeq;
-    setPendingWatch(task.id, { value: watched_at, write, settled: false });
-    void updateTask(task.id, { watched_at }).then(() => {
-      // Back: the echo that follows (or came already) retires it; until then it is the server's value.
-      const p = pendingWatch.get(task.id);
-      if (p?.write === write) setPendingWatch(task.id, { ...p, settled: true });
-    }, (err) => {
-      log.warn('task-watch', 'watch write failed', { taskId: task.id, error: String(err) });
-      // Only the latest click's value is shown: an older write failing leaves it.
-      if (pendingWatch.get(task.id)?.write === write) setPendingWatch(task.id, null);
-      store?.showOperationError(`Could not ${watched_at ? 'watch' : 'stop watching'} the task: ${err instanceof Error ? err.message : String(err)}`);
-    });
+    setPendingWatch(task.id, { value: watched_at, settled: false });
+    queueWatchWrite(task.id, watched_at, store?.showOperationError);
   };
   return { watched, toggle };
 }

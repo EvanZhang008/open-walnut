@@ -231,6 +231,59 @@ test('Watch clicked while its write is still on its way reads Stop watching when
   await closeSessionKebab(panel)
 })
 
+test('two Watch clicks while the first write is out reach the server in order: the last click is what is stored', async ({ page }) => {
+  const ARCHIVED = 'mpwold01-aa11'
+  await page.route(`**/api/sessions/${SESSION_ID}`, async (route) => {
+    const response = await route.fetch()
+    const body = await response.json()
+    if (body.session) body.session.taskId = ARCHIVED
+    else body.taskId = ARCHIVED
+    await route.fulfill({ response, json: body })
+  })
+  // Each write is held until the test lets it go.
+  const writes: string[] = []
+  const releases: Array<() => void> = []
+  await page.route(`**/api/tasks/${ARCHIVED}`, async (route) => {
+    const body = route.request().postDataJSON() as { watched_at?: string } | null
+    if (route.request().method() !== 'PATCH' || !body || !('watched_at' in body)) return route.fallback()
+    writes.push(String(body.watched_at ?? ''))
+    await new Promise<void>((resolve) => releases.push(resolve))
+    await route.fallback()
+  })
+  await page.addInitScript((id) => {
+    localStorage.setItem('open-walnut-layout:home-columns', JSON.stringify({ v: 1, value: [{ id, locked: false }] }))
+  }, SESSION_ID)
+  await page.goto('/')
+  await page.waitForLoadState('networkidle')
+  const panel = page.locator(`.main-page-session-column .session-panel[data-session-id="${SESSION_ID}"]`)
+  await expect(panel).toBeVisible({ timeout: 30_000 })
+  try {
+    await (await kebabRow(panel, 'task-kebab-watch')).click()
+    await expect.poll(() => writes.length).toBe(1)
+    const watch = await kebabRow(panel, 'task-kebab-watch')
+    await expect(watch).toHaveText('Stop watching')
+    await watch.click()
+    // The second click waits for the first write: one request out at a time.
+    await page.waitForTimeout(500)
+    expect(writes).toHaveLength(1)
+    await expect((await kebabRow(panel, 'task-kebab-watch'))).toHaveText('Watch')
+    await closeSessionKebab(panel)
+    releases[0]!()
+    await expect.poll(() => writes.length).toBe(2)
+    expect(writes[1]).toBe('')
+    releases[1]!()
+    await expect.poll(async () => {
+      const stored = await (await page.request.get(`/api/tasks/${ARCHIVED}`)).json() as { task?: { watched_at?: string | null } }
+      return stored.task?.watched_at ?? ''
+    }, { timeout: 15_000 }).toBe('')
+    await expect((await kebabRow(panel, 'task-kebab-watch'))).toHaveText('Watch')
+    await closeSessionKebab(panel)
+    await expect(page.getByRole('region', { name: 'Watching' }).getByText('Archived migration plan')).toHaveCount(0)
+  } finally {
+    releases.forEach((release) => release())
+  }
+})
+
 test('Esc on a worker picker opened from the session menu closes the picker only, then the menu', async ({ page }) => {
   const panel = await openSessionPanel(page)
   const menu = await openSessionKebab(panel)
