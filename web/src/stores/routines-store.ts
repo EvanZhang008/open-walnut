@@ -294,10 +294,22 @@ export async function removeRoutine(id: string): Promise<void> {
 }
 
 /** Run one now. The `cron:job-started` / `-finished` pushes carry the result. */
-export async function runRoutineNow(id: string): Promise<unknown> {
+export async function runRoutineNow(id: string, catchUpMs?: number): Promise<unknown> {
   writesInFlight += 1;
   try {
-    return await api.runRoutine(id);
+    return await api.runRoutine(id, catchUpMs);
+  } finally {
+    settleWrite();
+  }
+}
+
+/** Set a missed run aside; the card drops it at once. */
+export async function dismissRoutineMissedRun(id: string, slotMs: number): Promise<Routine> {
+  writesInFlight += 1;
+  try {
+    const job = await api.dismissMissedRun(id, slotMs);
+    replaceRoutine(job);
+    return job;
   } finally {
     settleWrite();
   }

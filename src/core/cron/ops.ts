@@ -36,7 +36,10 @@ export async function start(state: CronServiceState): Promise<void> {
     const jobs = state.store?.jobs ?? [];
 
     // Clear stale running markers from previous process
+    const bootAt = state.deps.nowMs();
     for (const job of jobs) {
+      // A routine's run history begins here when it has none yet (run-log.ts): no earlier slot is judged.
+      if (!job.check && job.state.runLogSinceMs === undefined) job.state.runLogSinceMs = bootAt;
       if (typeof job.state.runningAtMs === 'number') {
         state.deps.log.warn('clearing stale running marker on startup', {
           jobId: job.id,
@@ -206,7 +209,7 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
       // Deliberate user edit — the old slot's replay guard no longer applies.
       replayGuardOf(state).delete(id);
       if (job.enabled) {
-        if (scheduleChanged || !wasEnabled) startScheduleOver(job);
+        if (scheduleChanged || !wasEnabled) startScheduleOver(job, now);
         job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
         restartHostClock(job, now);
       } else {
@@ -276,7 +279,7 @@ async function relayCheckRun(job: CronJob) {
   }
 }
 
-export async function run(state: CronServiceState, id: string, mode?: 'due' | 'force') {
+export async function run(state: CronServiceState, id: string, mode?: 'due' | 'force', opts: { catchUpMs?: number } = {}) {
   // Phase 1: validate and mark running under lock
   const phase1 = await locked(state, async () => {
     warnIfDisabled(state, 'run');
@@ -320,7 +323,10 @@ export async function run(state: CronServiceState, id: string, mode?: 'due' | 'f
   // Phase 2: execute OUTSIDE the lock (prevents deadlock when agent calls cron tools)
   let outcome: Awaited<ReturnType<typeof executeJob>>;
   try {
-    outcome = await executeJob(state, jobToRun!, { forced: mode === 'force' });
+    outcome = await executeJob(state, jobToRun!, {
+      forced: mode === 'force',
+      ...(mode === 'force' && opts.catchUpMs !== undefined ? { catchUpMs: opts.catchUpMs } : {}),
+    });
   } finally {
     // Phase 3: Always finalize under lock, even if execution threw.
     await locked(state, async () => {
@@ -451,6 +457,16 @@ export async function recordRunStartFailure(
         ...(input.sessionId ? { sessionId: input.sessionId } : {}),
       }),
     }, input.ref, TRIGGER_FIRE_LOG_MAX);
+    // The run's history row read "started": it did not (run-log.ts counts the slot missed).
+    // Found by the run's task id (its summary names it), else by its dispatch time: a host's clock
+    // run replayed late carries the fire's time, not the dispatch's.
+    if (job.state.runLog) {
+      const byRef = job.state.runLog.some((e) => e.status === 'ok' && !!e.summary?.includes(input.ref));
+      job.state.runLog = job.state.runLog.map((e) => e.status === 'ok'
+        && (byRef ? !!e.summary?.includes(input.ref) : Math.abs(e.atMs - input.runAtMs) <= 5_000)
+        ? { ...e, status: 'error' as const, error: input.error.slice(0, 300) }
+        : e);
+    }
     await persist(state);
     // 'finished', not 'updated': the definition did not change (no wake or clock recompile).
     emit(state, { jobId: job.id, action: 'finished', status: job.state.lastStatus, error: input.error, runAtMs: input.runAtMs, nextRunAtMs: job.state.nextRunAtMs });
@@ -492,7 +508,7 @@ export async function toggle(state: CronServiceState, id: string) {
     replayGuardOf(state).delete(id);
 
     if (job.enabled) {
-      startScheduleOver(job);
+      startScheduleOver(job, now);
       job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
       restartHostClock(job, now);
     } else {
@@ -516,8 +532,11 @@ export async function toggle(state: CronServiceState, id: string) {
  * clock that came back before it are history, no longer slots of this schedule
  * (clock-fire.ts records them and runs none).
  */
-function startScheduleOver(job: CronJob): void {
+function startScheduleOver(job: CronJob, now: number): void {
   delete job.state.clockReturned;
+  // Slots before now were not expected of this schedule (run-log.ts missedRuns).
+  job.state.expectFromMs = now;
+  delete job.state.retrySlotMs;
 }
 
 /**
@@ -570,5 +589,29 @@ export async function applyTargetRepairs(
       armTimer(state);
     }
     return done;
+  });
+}
+
+/** Newest first, bounded, no repeats. */
+function markList(list: number[] | undefined, add: number[]): number[] {
+  return [...new Set([...add, ...(list ?? [])])].sort((a, b) => b - a).slice(0, 20);
+}
+
+/**
+ * A routine's missed slots (run-log.ts): `dismiss` sets one aside (a person or an agent chose not
+ * to run it), `told` records the slots its owner heard about. Returns the job, or null when gone.
+ */
+export async function markMissed(
+  state: CronServiceState, id: string, mark: { dismiss?: number[]; told?: number[] },
+): Promise<CronJob | null> {
+  return await locked(state, async () => {
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+    const job = state.store?.jobs.find((j) => j.id === id);
+    if (!job) return null;
+    if (mark.dismiss?.length) job.state.missedDismissedMs = markList(job.state.missedDismissedMs, mark.dismiss);
+    if (mark.told?.length) job.state.missedToldMs = markList(job.state.missedToldMs, mark.told);
+    await persist(state);
+    if (mark.dismiss?.length) emit(state, { jobId: id, action: 'updated', nextRunAtMs: job.state.nextRunAtMs });
+    return job;
   });
 }

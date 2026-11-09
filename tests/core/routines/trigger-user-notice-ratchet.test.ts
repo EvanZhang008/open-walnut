@@ -33,6 +33,9 @@ const ALLOWED: Record<string, { count: number; why: string }> = {
   'src/core/routines/executors/session.ts': {
     count: 1, why: 'a routine the user made himself (no check), with no task of its own to tell: a trigger never takes this path (userRoutine)',
   },
+  'src/core/routines/missed-runs.ts': {
+    count: 1, why: 'a missed run of a routine nobody owns (no session made it, not a session routine): the user made it',
+  },
   'src/core/routines/run-start-deps.ts': {
     count: 1, why: 'a run of a routine the user wrote that did not start; its fresh task is handed back to the user',
   },

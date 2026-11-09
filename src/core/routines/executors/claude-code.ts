@@ -74,6 +74,14 @@ export function stripTriageCountHint(message: string): string {
   return kept.join('\n');
 }
 
+/** A catch-up run's task says which run it stands for: "<title> (catch-up for 2026-11-08 08:00)". */
+export function catchUpTitle(title: string, runForMs: number | undefined): string {
+  if (runForMs === undefined) return title;
+  const d = new Date(runForMs);
+  const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return `${title} (catch-up for ${day} ${localHhMm(runForMs)})`;
+}
+
 /** Local HH:MM, zero-padded. */
 function localHhMm(nowMs: number): string {
   const d = new Date(nowMs);
@@ -171,7 +179,7 @@ export function createClaudeCodeExecutor(opts: { notify?: RoutineGateNotify; sta
       }
       return { ok: true, config: out };
     },
-    async run(job, executor, message) {
+    async run(job, executor, message, ctx) {
       const config = executor.config as {
         cwd: string; host?: string; model?: string; taskTitle?: string;
         walnutAgent?: boolean; agentId?: string; project?: string; titleTemplate?: string;
@@ -222,9 +230,9 @@ export function createClaudeCodeExecutor(opts: { notify?: RoutineGateNotify; sta
             cwd: config.cwd,
             host: config.host,
             model: config.model,
-            taskTitle: config.titleTemplate
-              ? renderRoutineTitleTemplate(config.titleTemplate, { nowMs: Date.now(), count })
-              : config.taskTitle || `Routine: ${job.name}`,
+            taskTitle: catchUpTitle(config.titleTemplate
+              ? renderRoutineTitleTemplate(config.titleTemplate, { nowMs: ctx?.runForMs ?? Date.now(), count })
+              : config.taskTitle || `Routine: ${job.name}`, ctx?.runForMs),
             project: config.project || 'Routines',
             source: 'routine',
             // Engine stays unset on purpose: quickStartSession inherits

@@ -27,7 +27,7 @@ const SERVER_RELAY_SID = '__server__'
 const RELAY_TIMEOUT_MS = 30_000
 export const ROUTINE_WRITES_NEED_MAC = 'routine_writes_need_mac'
 
-export type RoutineRelaySub = 'list' | 'get' | 'status' | 'create' | 'patch' | 'delete' | 'toggle' | 'run' | 'trigger' | 'check-test'
+export type RoutineRelaySub = 'list' | 'get' | 'status' | 'create' | 'patch' | 'delete' | 'toggle' | 'run' | 'dismiss-missed' | 'trigger' | 'check-test'
 
 async function relay(sub: RoutineRelaySub, params: Record<string, unknown>, why: string): Promise<Record<string, unknown>> {
   const { callPrimaryControl } = await import('../../web/routes/v1-control-relay.js')

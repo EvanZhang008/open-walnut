@@ -13,7 +13,8 @@
  *   PATCH  /routines/:id                 → { job }
  *   DELETE /routines/:id                 → 204
  *   POST   /routines/:id/toggle          → { job }
- *   POST   /routines/:id/run             → { result }
+ *   POST   /routines/:id/run             → { result }  (body { catchUpMs } runs a missed slot)
+ *   POST   /routines/:id/missed/dismiss  → { job }     (body { slotMs })
  *   POST   /routines/draft { text }      → { draft } (Wave 3 — one LLM call)
  *   POST   /routines/check-test { check } → { result } (walnut-trigger: run once)
  *   POST   /routines/trigger { run, every, prompt, description, … } → 201 { job, host, nextCheckAt }
@@ -35,6 +36,7 @@
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
+import { isCompanion } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 import { relayControlAction, sendV1Error as sendError, v1ErrorCode } from './v1-control-relay.js'
 import { requestOrigin } from '../middleware/request-origin.js'
@@ -255,11 +257,13 @@ routinesV1Router.get('/routines/:id', async (req: Request, res: Response, next: 
 routinesV1Router.post('/routines', async (req: Request, res: Response, next: NextFunction) => {
   try {
     if (CLOUD_MODE) {
-      await relayControlAction(res, 'server.routines.create', SERVER_RELAY_SID, { body: req.body ?? {} }, 201)
+      const sid = callerSid(req)
+      await relayControlAction(res, 'server.routines.create', SERVER_RELAY_SID, { body: req.body ?? {}, ...(sid ? { callerSid: sid } : {}) }, 201)
       return
     }
     const { createRoutine } = await import('../../core/routines/routines-core.js')
-    await runLocal(res, next, 201, () => createRoutine(req.body, requestOrigin(req)))
+    const sid = callerSid(req)
+    await runLocal(res, next, 201, () => createRoutine(req.body, requestOrigin(req), sid ? { callerSid: sid } : undefined))
   } catch (err) {
     next(err)
   }
@@ -319,12 +323,31 @@ routinesV1Router.post('/routines/:id/run', async (req: Request, res: Response, n
   try {
     const id = validRid(req, res)
     if (!id) return
+    // `catchUpMs`: the missed slot this run is made for (core/cron/run-log.ts).
+    const catchUpMs = typeof req.body?.catchUpMs === 'number' ? req.body.catchUpMs : undefined
     if (CLOUD_MODE) {
-      await relayControlAction(res, 'server.routines.run', SERVER_RELAY_SID, { id }, 200)
+      await relayControlAction(res, 'server.routines.run', SERVER_RELAY_SID, { id, ...(catchUpMs !== undefined ? { catchUpMs } : {}) }, 200)
       return
     }
     const { runRoutineNow } = await import('../../core/routines/routines-core.js')
-    await runLocal(res, next, 200, () => runRoutineNow(id))
+    await runLocal(res, next, 200, () => runRoutineNow(id, catchUpMs !== undefined ? { catchUpMs } : {}))
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/v1/routines/:id/missed/dismiss { slotMs } — set a missed run aside (core/cron/run-log.ts).
+routinesV1Router.post('/routines/:id/missed/dismiss', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = validRid(req, res)
+    if (!id) return
+    const slotMs = Number(req.body?.slotMs)
+    if (isCompanion()) {
+      await relayControlAction(res, 'server.routines.dismiss-missed', SERVER_RELAY_SID, { id, slotMs }, 200)
+      return
+    }
+    const { dismissMissedRun } = await import('../../core/routines/routines-core.js')
+    await runLocal(res, next, 200, () => dismissMissedRun(id, slotMs))
   } catch (err) {
     next(err)
   }

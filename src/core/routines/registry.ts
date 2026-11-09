@@ -38,6 +38,7 @@ export async function runExecutor(
   job: CronJob,
   executor: RoutineExecutorRef,
   message: string,
+  ctx?: { runForMs?: number },
 ): Promise<ExecutorRunResult> {
   const def = executors.get(executor.type);
   if (!def) {
@@ -48,7 +49,7 @@ export async function runExecutor(
     return { status: 'error', error: `invalid ${executor.type} config: ${validated.error}` };
   }
   try {
-    return await def.run(job, { type: executor.type, config: validated.config }, message);
+    return await def.run(job, { type: executor.type, config: validated.config }, message, ctx);
   } catch (err) {
     // A throw is something breaking, not the executor declining: mark it so a
     // trigger fire is replayed rather than consumed (a refusal returns an error

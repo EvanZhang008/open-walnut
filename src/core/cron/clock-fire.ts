@@ -21,9 +21,10 @@
  * nothing.
  */
 
+import { appendRun, runEntry } from './run-log.js';
 import type { TriggerFiredEvent } from '../../providers/trigger-check-core.js';
 import type { CronJob, CronServiceState } from './types.js';
-import { clockOnDaemon, computeJobNextRunAtMs } from './jobs.js';
+import { clockOnDaemon, computeJobNextRunAtMs, scheduleNextRunAtMs } from './jobs.js';
 import { replayGuardOf } from './timer.js';
 
 export type ClockTenure = 'current' | 'returned' | 'unknown';
@@ -76,13 +77,29 @@ export function owedClockVerdict(job: CronJob, fire: Pick<TriggerFiredEvent, 'cl
  */
 export function applyClockRun(
   job: CronJob,
-  r: { status: 'ok' | 'error'; error?: string; startedAt: number; endedAt: number; retry: boolean; tenure: ClockTenure },
+  r: {
+    status: 'ok' | 'error'; error?: string; startedAt: number; endedAt: number; retry: boolean; tenure: ClockTenure;
+    /** The slots the delivered fires were for, newest last (run-log.ts). */
+    slotsMs?: number[]; summary?: string;
+  },
 ): boolean {
   job.state.runningAtMs = undefined;
   if (r.retry) {
     job.state.lastError = r.error;
     return false;
   }
+  // Its row in the routine's history, wherever the clock was (run-log.ts).
+  // One delivery may carry several slots' fires (the server was away): the row stands for each.
+  const slots = (r.slotsMs ?? []).filter((s) => Number.isFinite(s)).sort((a, b) => a - b);
+  const slotMs = slots[slots.length - 1];
+  job.state.runLog = appendRun(job.state.runLog, runEntry({
+    atMs: r.startedAt, durationMs: r.endedAt - r.startedAt, status: r.status,
+    ...(slotMs !== undefined ? { slotMs } : {}),
+    ...(slots.length > 1 ? { alsoSlotsMs: slots.slice(0, -1) } : {}),
+    ...(r.error ? { error: r.error } : {}),
+    ...(r.summary ? { summary: r.summary } : {}),
+  }), (s) => scheduleNextRunAtMs(job, s + 1));
+  job.state.runLogSinceMs ??= Math.min(slots[0] ?? r.startedAt, r.startedAt);
   const last = job.state.lastRunAtMs;
   if (!(typeof last === 'number' && last > r.startedAt)) {
     job.state.lastRunAtMs = r.startedAt;

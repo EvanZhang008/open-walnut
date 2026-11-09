@@ -68,6 +68,7 @@ const PASSING: Record<string, string> = {
   'components/passwords/LockScreens.tsx#mode': 'the lock screen or its forgotten-password form; a reload opens on the lock screen, never on a half-typed recovery',
   'components/routines/TriggerPill.tsx#showPrompt': 'a trigger\'s prompt, a popover',
   'components/routines/TriggerPill.tsx#showHistory': 'a trigger\'s history, a popover',
+  'components/routines/RoutineCard.tsx#historyOpen': 'one routine\'s run history unfolded in one look',
   'components/inbox/LetterReader.tsx#fileView': 'a file opened from one letter, an overlay',
   'components/common/FileContentView.tsx#showSource': 'source of the file open now; the next file opens rendered',
   'components/common/MicButton.tsx#showChevron': 'hover state',

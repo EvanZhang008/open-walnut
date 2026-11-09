@@ -134,7 +134,33 @@ export type RoutineState = {
   clockFromMs?: number;
   /** The host starts a claude-code routine's runs itself while this Mac is away (clock-host-start-v1). */
   clockStarts?: boolean;
+  /** Routines without a check: every run, newest first (server: src/core/cron/run-log.ts). */
+  runLog?: RoutineRunEntry[];
 };
+
+/** One run of a routine (server: RoutineRunEntry in src/core/cron/types.ts). */
+export interface RoutineRunEntry {
+  atMs: number;
+  status: 'ok' | 'error' | 'skipped';
+  durationMs: number;
+  slotMs?: number;
+  error?: string;
+  summary?: string;
+  sessionId?: string;
+  manual?: true;
+  catchUpMs?: number;
+  attempt?: number;
+  willRetryAtMs?: number;
+  repeats?: number;
+  firstAtMs?: number;
+}
+
+/** A slot the routine should have run and has no good run for (server: MissedRun in run-log.ts). */
+export interface RoutineMissedRun {
+  slotMs: number;
+  reason: string;
+  failedAtMs?: number;
+}
 
 export interface Routine {
   id: string;
@@ -149,7 +175,11 @@ export interface Routine {
   executor?: RoutineExecutorRef;
   check?: RoutineCheck;
   wake?: RoutineWake;
+  /** The task told when it misses a run. */
+  ownerTaskId?: string;
   state: RoutineState;
+  /** Its missed runs, newest first; absent when none. */
+  missed?: RoutineMissedRun[];
 }
 
 export interface RoutineCheckTestResult {
@@ -238,9 +268,16 @@ export async function toggleRoutine(id: string): Promise<Routine> {
   return res.job;
 }
 
-export async function runRoutine(id: string): Promise<unknown> {
-  const res = await apiPost<{ result: unknown }>(`/api/routines/${id}/run`);
+/** Run now; `catchUpMs` names the missed slot this run is made for. */
+export async function runRoutine(id: string, catchUpMs?: number): Promise<unknown> {
+  const res = await apiPost<{ result: unknown }>(`/api/routines/${id}/run`, catchUpMs !== undefined ? { catchUpMs } : undefined);
   return res.result;
+}
+
+/** Set a missed run aside: nothing runs for it, and it no longer shows. */
+export async function dismissMissedRun(id: string, slotMs: number): Promise<Routine> {
+  const res = await apiPost<{ job: Routine }>(`/api/routines/${id}/missed/dismiss`, { slotMs });
+  return res.job;
 }
 
 /** A test run's time against its limit (server: TestTimeLimit in src/core/routines/trigger-api.ts). */

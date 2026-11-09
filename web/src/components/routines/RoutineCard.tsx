@@ -5,6 +5,7 @@ import {
   describeClockHost, describeClockWait, clockHostTitle,
   describeTriggerOff, triggerRunState,
 } from '@/utils/routine-format';
+import { describeMissed, describeRunEntry, runEntryFailed } from '@/utils/routine-runs';
 import '@/styles/routine-description.css';
 
 interface RoutineCardProps {
@@ -13,6 +14,10 @@ interface RoutineCardProps {
   /** Pause (false) or Resume (true): the state the card asks for, never a flip. */
   onToggle: (id: string, enabled: boolean) => void;
   onRunNow: (id: string) => void;
+  /** Run a missed slot now, as that slot's run. */
+  onCatchUp?: (id: string, slotMs: number) => Promise<unknown>;
+  /** Set a missed run aside. */
+  onDismissMissed?: (id: string, slotMs: number) => Promise<unknown>;
   onEdit: (routine: Routine) => void;
   onDelete: (id: string) => void;
 }
@@ -50,8 +55,21 @@ function getStatusLabel(r: Routine): string {
   return 'Idle';
 }
 
-export function RoutineCard({ routine, executorLabels, onToggle, onRunNow, onEdit, onDelete }: RoutineCardProps) {
+export function RoutineCard({ routine, executorLabels, onToggle, onRunNow, onCatchUp, onDismissMissed, onEdit, onDelete }: RoutineCardProps) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [missedBusy, setMissedBusy] = useState<number | null>(null);
+  const [missedError, setMissedError] = useState<string | null>(null);
+  const missed = routine.missed ?? [];
+  const runs = routine.check ? [] : routine.state.runLog ?? [];
+  const actOnMissed = (slotMs: number, act?: (id: string, slotMs: number) => Promise<unknown>) => {
+    if (!act) return;
+    setMissedBusy(slotMs);
+    setMissedError(null);
+    act(routine.id, slotMs)
+      .catch((err: unknown) => setMissedError(err instanceof Error ? err.message : String(err)))
+      .finally(() => setMissedBusy(null));
+  };
   const runTime = routine.check ? describeRunTime(routine.state.lastCheck, routine.check) : null;
   const [confirmDelete, setConfirmDelete] = useState(false);
   const off = describeOff(routine);
@@ -158,8 +176,62 @@ export function RoutineCard({ routine, executorLabels, onToggle, onRunNow, onEdi
           {waiting && <span className="routine-check-status pending" data-testid="routine-clock-wait">{waiting}</span>}
         </div>
       )}
+      {/* A run that did not happen (2026-11-08: the org reflection's day was lost unseen). */}
+      {missed.length > 0 && (
+        <div className="routine-missed text-xs" data-testid="routine-missed">
+          {missed.map((m) => (
+            <div key={m.slotMs} className="routine-missed-row" data-testid="routine-missed-row" data-slot={m.slotMs}>
+              <span className="routine-missed-text">{describeMissed(m)}</span>
+              <span className="routine-missed-actions">
+                {onCatchUp && (
+                  <button
+                    className="btn btn-sm routine-missed-run"
+                    data-testid="routine-missed-run"
+                    disabled={missedBusy !== null}
+                    onClick={() => actOnMissed(m.slotMs, onCatchUp)}
+                  >
+                    {missedBusy === m.slotMs ? 'Running…' : 'Run it now'}
+                  </button>
+                )}
+                {onDismissMissed && (
+                  <button
+                    className="btn btn-sm routine-missed-dismiss"
+                    data-testid="routine-missed-dismiss"
+                    disabled={missedBusy !== null}
+                    onClick={() => actOnMissed(m.slotMs, onDismissMissed)}
+                  >
+                    Dismiss
+                  </button>
+                )}
+              </span>
+            </div>
+          ))}
+          {missedError && <div className="cron-job-error" data-testid="routine-missed-error">{missedError}</div>}
+        </div>
+      )}
       {routine.state.lastError && (
         <div className="cron-job-error text-xs">{routine.state.lastError}</div>
+      )}
+      {runs.length > 0 && (
+        <div className="routine-history text-xs">
+          <button
+            className="routine-history-toggle"
+            data-testid="routine-history-toggle"
+            aria-expanded={historyOpen}
+            onClick={() => setHistoryOpen(!historyOpen)}
+          >
+            {historyOpen ? '▾' : '▸'} History ({runs.length} run{runs.length === 1 ? '' : 's'})
+          </button>
+          {historyOpen && (
+            <ul className="routine-history-list" data-testid="routine-history-list">
+              {runs.map((e) => (
+                <li key={`${e.atMs}-${e.status}`} className="routine-history-row" data-status={e.status} data-failed={runEntryFailed(e) ? 'true' : 'false'}>
+                  {describeRunEntry(e)}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       )}
     </div>
   );

@@ -101,5 +101,6 @@ export interface ExecutorDefinition {
    * instructions, with any init-processor output already prepended by the
    * cron engine) — use it instead of config.instructions.
    */
-  run(job: CronJob, executor: RoutineExecutorRef, message: string): Promise<ExecutorRunResult>;
+  /** `ctx.runForMs`: a catch-up run stands for this missed slot (cron/run-log.ts). */
+  run(job: CronJob, executor: RoutineExecutorRef, message: string, ctx?: { runForMs?: number }): Promise<ExecutorRunResult>;
 }

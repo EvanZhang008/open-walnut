@@ -29468,6 +29468,17 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 .trigger-jobs-time[data-near="true"], .routine-check-time[data-near="true"] { color: var(--warning); }
 .routine-check-time { color: var(--fg-muted); }
 .routine-check-test-limit { margin-top: 4px; font-size: 12px; color: var(--warning); }
+.routine-missed { margin-top: 6px; padding: 6px 10px; border-radius: 4px; border: 1px solid var(--warning); color: var(--fg); }
+.routine-missed-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.routine-missed-row + .routine-missed-row { margin-top: 4px; }
+.routine-missed-text { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; color: var(--warning); }
+.routine-missed-actions { display: flex; gap: 6px; flex: none; }
+.routine-history { margin-top: 6px; }
+.routine-history-toggle { background: none; border: none; padding: 0; color: var(--fg-secondary); cursor: pointer; font-size: 12px; }
+.routine-history-toggle:hover { color: var(--fg); }
+.routine-history-list { list-style: none; margin: 4px 0 0; padding: 0 0 0 12px; max-height: 240px; overflow-y: auto; }
+.routine-history-row { color: var(--fg-secondary); overflow-wrap: anywhere; padding: 2px 0; }
+.routine-history-row[data-failed="true"] { color: var(--error); }
 .trigger-jobs-error { font-size: 11px; color: var(--error); }
 .trigger-jobs-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
 .trigger-jobs-actions button {

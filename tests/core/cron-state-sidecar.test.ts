@@ -133,6 +133,9 @@ describe('cron-state.json sidecar', () => {
     const reloaded = reader.store!.jobs.find((j) => j.id === job.id)!;
     expect(reloaded.state).toEqual({
       nextRunAtMs: job.state.nextRunAtMs,
+      // Stamped at create (cron/run-log.ts): its schedule starts then.
+      expectFromMs: job.state.expectFromMs,
+      runLogSinceMs: job.state.runLogSinceMs,
       lastRunAtMs: NOW - 60_000,
       lastStatus: 'ok',
       lastDurationMs: 1234,

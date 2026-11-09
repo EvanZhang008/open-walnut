@@ -81,8 +81,14 @@ export class CronService {
     return await ops.toggle(this.state, id);
   }
 
-  async run(id: string, mode?: 'due' | 'force') {
-    return await ops.run(this.state, id, mode);
+  /** `opts.catchUpMs`: a forced run made for this missed slot (run-log.ts). */
+  async run(id: string, mode?: 'due' | 'force', opts?: { catchUpMs?: number }) {
+    return await ops.run(this.state, id, mode, opts);
+  }
+
+  /** Set missed slots aside, or record the ones the owner was told about (run-log.ts). */
+  async markMissed(id: string, mark: { dismiss?: number[]; told?: number[] }): Promise<CronJob | null> {
+    return await ops.markMissed(this.state, id, mark);
   }
 
   /**

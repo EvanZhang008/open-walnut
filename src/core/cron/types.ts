@@ -166,6 +166,8 @@ export type RunExecutorFn = (
   job: CronJob,
   executor: RoutineExecutorRef,
   message: string,
+  /** `runForMs`: a catch-up run stands for this missed slot (run-log.ts); a title dates by it. */
+  ctx?: { runForMs?: number },
 ) => Promise<ExecutorRunResult>;
 
 // ── Wake mode ──
@@ -202,6 +204,37 @@ export type CronDeliveryMode = 'none' | 'announce';
 export type CronDelivery = {
   mode: CronDeliveryMode;
   bestEffort?: boolean;
+};
+
+/**
+ * One run of a routine without a check (run-log.ts): every run, whatever its executor, so a run
+ * that did not happen can be seen after the next one replaced `state.last*`.
+ */
+export type RoutineRunEntry = {
+  /** When the run started. */
+  atMs: number;
+  status: 'ok' | 'error' | 'skipped';
+  durationMs: number;
+  /** The slot the run was due at (absent for Run now and for rows a host's clock reported late). */
+  slotMs?: number;
+  error?: string;
+  summary?: string;
+  sessionId?: string;
+  /** A person or an agent pressed Run now. */
+  manual?: true;
+  /** A catch-up run made for this missed slot. */
+  catchUpMs?: number;
+  /** The try inside its slot, from 2 (a start that failed and was tried again). */
+  attempt?: number;
+  /** A failed start that will be tried again at this time, inside its slot. */
+  willRetryAtMs?: number;
+  /** Identical skips in a row are one row: how many, and when the first was. */
+  repeats?: number;
+  firstAtMs?: number;
+  /** The slot of the first of those skips. */
+  firstSlotMs?: number;
+  /** Other slots this one run stood for (a host's clock delivering several at once). */
+  alsoSlotsMs?: number[];
 };
 
 // ── Runtime state ──
@@ -324,6 +357,18 @@ export type CronJobState = {
    * or an edit or a resume starts the schedule over.
    */
   clockReturned?: { host: string; fromMs: number; beforeMs?: number };
+  /** Routines without a check: their runs, newest first (run-log.ts). */
+  runLog?: RoutineRunEntry[];
+  /** When this routine's run history began: no slot before it is judged missed. */
+  runLogSinceMs?: number;
+  /** When the routine was last started over (made, resumed, its schedule edited): no slot before it is expected. */
+  expectFromMs?: number;
+  /** Missed slots a person or an agent set aside (Dismiss), newest first. */
+  missedDismissedMs?: number[];
+  /** Missed slots the owner was already told about, newest first. */
+  missedToldMs?: number[];
+  /** The slot a failed start is being tried again for, while those tries last (timer.ts). */
+  retrySlotMs?: number;
 };
 
 // ── The job itself ──
@@ -362,6 +407,11 @@ export type CronJob = {
    * disagreeing answer to the same question.
    */
   wake?: CronWake;
+  /**
+   * The task told when this routine misses a run (run-log.ts): the task whose session made it,
+   * or one set later. Absent: a session routine's own target, else the user's notifications.
+   */
+  ownerTaskId?: string;
   state: CronJobState;
 };
 

@@ -23,7 +23,7 @@ import { isCompanion, isHostReplicaProgram } from '../../core/server-role.js'
 import { requestOrigin } from '../middleware/request-origin.js'
 import { ANSWER_BY_HEADER, parseAnswerBy } from '../../lib/answer-by.js'
 import {
-  listRoutines, getRoutine, createRoutine, patchRoutine, deleteRoutine,
+  listRoutines, getRoutine, createRoutine, patchRoutine, deleteRoutine, dismissMissedRun,
   toggleRoutine, runRoutineNow, getRoutinesStatus, listRoutineActions,
   listRoutineExecutors,
 } from '../../core/routines/routines-core.js'
@@ -170,7 +170,8 @@ export function createCronRouter(cronServiceArg: CronService): Router {
   // POST /api/cron — create job
   router.post('/', async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const result = await createRoutine(req.body, requestOrigin(req))
+      const sid = callerSid(req)
+      const result = await createRoutine(req.body, requestOrigin(req), sid ? { callerSid: sid } : undefined)
       res.status(201).json(result)
     } catch (err) {
       handleCoreError(res, next, err)
@@ -213,7 +214,18 @@ export function createCronRouter(cronServiceArg: CronService): Router {
   // POST /api/cron/:id/run — manual trigger
   router.post('/:id/run', async (req: Request, res: Response, next: NextFunction) => {
     try {
-      res.json(await runRoutineNow(req.params.id as string))
+      // `catchUpMs`: the missed slot this run is made for (core/cron/run-log.ts).
+      const catchUpMs = typeof req.body?.catchUpMs === 'number' ? req.body.catchUpMs : undefined
+      res.json(await runRoutineNow(req.params.id as string, catchUpMs !== undefined ? { catchUpMs } : {}))
+    } catch (err) {
+      handleCoreError(res, next, err)
+    }
+  })
+
+  // POST /api/cron/:id/missed/dismiss { slotMs } — set a missed run aside
+  router.post('/:id/missed/dismiss', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      res.json(await dismissMissedRun(req.params.id as string, Number(req.body?.slotMs)))
     } catch (err) {
       handleCoreError(res, next, err)
     }

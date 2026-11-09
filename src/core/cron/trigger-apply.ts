@@ -476,7 +476,7 @@ export async function applyTriggerFired(
     // Read after the delivery: the clock may have changed hands meanwhile.
     const tenure = clockTenureOf(target, identity, opts.fromHost);
     const shouldDelete = clockRun
-      ? applyClockRun(target, { status: result.status, error, startedAt, endedAt, retry, tenure })
+      ? applyClockRun(target, { status: result.status, error, startedAt, endedAt, retry, tenure, slotsMs: fresh.flatMap((e) => (e.clock ? [e.clock.slotMs] : [])), ...(result.summary ? { summary: result.summary } : {}) })
       : applyJobResult(state, target, {
         status: result.status,
         error,

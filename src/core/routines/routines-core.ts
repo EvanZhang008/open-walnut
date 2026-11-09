@@ -19,6 +19,7 @@ import { log } from '../../logging/index.js';
 import { MIN_EVERY_MS } from '../../providers/trigger-check-core.js';
 import type { CronService } from '../cron/index.js';
 import type { CronJob, TriggerCheck } from '../cron/types.js';
+import { missedRuns } from '../cron/run-log.js';
 import { requireTriggerDaemon } from './trigger-daemon.js';
 import { assertCheckHostAllowed, checkCallerOrigin, checkCommandChanged } from './check-host-policy.js';
 import { exemptTemplateRun } from './trigger-templates.js';
@@ -244,31 +245,51 @@ function refuseRoutineWriteOnReplica(): void {
 /** The companion's half of this core (stage 4d): reads from the copy, writes on the Mac. */
 const companion = () => import('./companion-routines.js');
 
+/** A routine as every reader gets it: with the runs it missed (cron/run-log.ts), when there are any. */
+function withMissed<T>(job: T, nowMs = Date.now()): T {
+  const j = job as unknown as CronJob;
+  if (!j || typeof j !== 'object' || !j.state || !j.schedule) return job;
+  const missed = missedRuns(j, nowMs);
+  return (missed.length ? { ...j, missed } : job) as T;
+}
+
 export async function listRoutines(includeDisabled: boolean): Promise<{ jobs: unknown[] }> {
-  if (isHostReplicaProgram()) return { jobs: await copiedRoutines(includeDisabled) };
-  if (isCompanion()) return (await companion()).companionListRoutines(includeDisabled);
+  if (isHostReplicaProgram()) return { jobs: (await copiedRoutines(includeDisabled)).map((j) => withMissed(j)) };
+  if (isCompanion()) {
+    const out = await (await companion()).companionListRoutines(includeDisabled);
+    return { ...out, jobs: out.jobs.map((j) => withMissed(j)) };
+  }
   const service = await requireCronService();
-  return { jobs: await service.list({ includeDisabled }) };
+  return { jobs: (await service.list({ includeDisabled })).map((j) => withMissed(j)) };
 }
 
 export async function getRoutine(id: string): Promise<{ job: unknown }> {
-  if (isCompanion()) return (await companion()).companionGetRoutine(id);
+  if (isCompanion()) {
+    const out = await (await companion()).companionGetRoutine(id);
+    return { ...out, job: withMissed(out.job) };
+  }
   const jobs = isHostReplicaProgram() ? await copiedRoutines(true) : await (await requireCronService()).list({ includeDisabled: true });
   const job = jobs.find((j) => j.id === id);
   if (!job) throw new SessionControlError(`Cron job not found: ${id}`, 404);
-  return { job };
+  return { job: withMissed(job) };
 }
 
 /**
  * `origin`: who asks (a route passes the request's); omitted = the server's own code.
  * `opts.id`: the id a host gave a trigger it created while this server was away (trigger-api.ts).
  */
-export async function createRoutine(body: unknown, origin?: string, opts?: { id?: string }): Promise<{ job: unknown }> {
+export async function createRoutine(body: unknown, origin?: string, opts?: { id?: string; callerSid?: string }): Promise<{ job: unknown }> {
   refuseRoutineWriteOnReplica();
   if (isCompanion()) return await (await companion()).companionRoutineWrite('create', { body: body ?? {} }) as { job: unknown };
   const service = await requireCronService();
   const { normalizeCronJobCreate } = await import('../cron/index.js');
   const input = normalizeCronJobCreate(body);
+  // The task whose session made it owns it: that task hears when it misses a run (cron/run-log.ts).
+  if (input && !input.ownerTaskId && opts?.callerSid) {
+    const { callerTaskOf } = await import('../sessions/user-spoke.js');
+    const owner = await callerTaskOf(opts.callerSid);
+    if (owner) input.ownerTaskId = owner;
+  }
   // normalize() passes through schedule-less objects; createJob would then
   // TypeError on input.schedule.kind — a caller mistake, so reject as 400.
   if (!input || !input.schedule) {
@@ -349,13 +370,18 @@ export async function toggleRoutine(id: string): Promise<{ job: unknown }> {
   }
 }
 
-export async function runRoutineNow(id: string): Promise<{ result: unknown }> {
+/**
+ * Run now. `catchUpMs` names the missed slot this run is made for (cron/run-log.ts), so the slot
+ * reads caught up; it must be one of the routine's missed runs.
+ */
+export async function runRoutineNow(id: string, opts: { catchUpMs?: number } = {}): Promise<{ result: unknown }> {
   refuseRoutineWriteOnReplica();
-  if (isCompanion()) return await (await companion()).companionRoutineWrite('run', { id }) as { result: unknown };
+  if (isCompanion()) return await (await companion()).companionRoutineWrite('run', { id, ...(opts.catchUpMs !== undefined ? { catchUpMs: opts.catchUpMs } : {}) }) as { result: unknown };
   const service = await requireCronService();
+  if (opts.catchUpMs !== undefined) await assertMissedSlot(service, id, opts.catchUpMs);
   try {
-    const result = await service.run(id, 'force');
-    log.web.info('routine triggered via shared core', { jobId: id });
+    const result = await service.run(id, 'force', opts.catchUpMs !== undefined ? { catchUpMs: opts.catchUpMs } : undefined);
+    log.web.info('routine triggered via shared core', { jobId: id, ...(opts.catchUpMs !== undefined ? { catchUpMs: opts.catchUpMs } : {}) });
     return { result };
   } catch (err) {
     mapCronError(err);
@@ -468,12 +494,35 @@ export async function handleRoutinesRelayAction(
     case 'status': return await getRoutinesStatus();
     case 'executors': return await listRoutineExecutors();
     case 'get': return await getRoutine(id) as unknown as Record<string, unknown>;
-    case 'create': return await createRoutine(p.body, origin) as unknown as Record<string, unknown>;
+    case 'create': return await createRoutine(p.body, origin, typeof p.callerSid === 'string' ? { callerSid: p.callerSid } : undefined) as unknown as Record<string, unknown>;
     case 'patch': return await patchRoutine(id, p.body, origin) as unknown as Record<string, unknown>;
     case 'delete': return await deleteRoutine(id) as unknown as Record<string, unknown>;
     case 'toggle': return await toggleRoutine(id) as unknown as Record<string, unknown>;
-    case 'run': return await runRoutineNow(id) as unknown as Record<string, unknown>;
+    case 'run': return await runRoutineNow(id, typeof p.catchUpMs === 'number' ? { catchUpMs: p.catchUpMs } : {}) as unknown as Record<string, unknown>;
+    case 'dismiss-missed': return await dismissMissedRun(id, Number(p.slotMs)) as unknown as Record<string, unknown>;
     case 'draft': return await draftRoutineFromText(p.text) as unknown as Record<string, unknown>;
     default: throw new SessionControlError(`Unknown routines action: ${sub}`, 400);
   }
+}
+
+async function assertMissedSlot(service: Awaited<ReturnType<typeof requireCronService>>, id: string, slotMs: number): Promise<CronJob> {
+  if (!Number.isFinite(slotMs)) throw new SessionControlError('catchUpMs must be a time in milliseconds', 400);
+  const job = (await service.list({ includeDisabled: true })).find((j) => j.id === id);
+  if (!job) throw new SessionControlError(`Cron job not found: ${id}`, 404);
+  if (!missedRuns(job, Date.now()).some((m) => m.slotMs === slotMs)) {
+    throw new SessionControlError(`Routine ${id} has no missed run at ${new Date(slotMs).toISOString()}: read its missed runs (GET /api/routines/${id}, field "missed")`, 409);
+  }
+  return job;
+}
+
+/** Set a missed run aside: nobody will run it, and it no longer shows (cron/run-log.ts). */
+export async function dismissMissedRun(id: string, slotMs: number): Promise<{ job: unknown }> {
+  refuseRoutineWriteOnReplica();
+  if (isCompanion()) return await (await companion()).companionRoutineWrite('dismiss-missed', { id, slotMs }) as { job: unknown };
+  const service = await requireCronService();
+  await assertMissedSlot(service, id, slotMs);
+  const job = await service.markMissed(id, { dismiss: [slotMs] });
+  if (!job) throw new SessionControlError(`Cron job not found: ${id}`, 404);
+  log.web.info('routine missed run dismissed', { jobId: id, slotMs });
+  return { job: withMissed(job) };
 }

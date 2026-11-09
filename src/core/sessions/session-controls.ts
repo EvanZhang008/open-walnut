@@ -967,7 +967,7 @@ export type SessionControlAction =
   | 'server.routines' | 'server.routines.actions' | 'server.routines.status'
   | 'server.routines.executors' | 'server.routines.get' | 'server.routines.create'
   | 'server.routines.patch' | 'server.routines.delete' | 'server.routines.toggle'
-  | 'server.routines.run'
+  | 'server.routines.run' | 'server.routines.dismiss-missed'
   // Wave 3: NL routine draft — an LLM call, so it runs where the model
   // credentials live (the answering box); a REPLICA relays to the primary.
   | 'server.routines.draft'
@@ -1480,6 +1480,7 @@ export async function handleSessionControlRelay(
       case 'server.routines.delete':
       case 'server.routines.toggle':
       case 'server.routines.run':
+      case 'server.routines.dismiss-missed':
       case 'server.routines.check-test':
       case 'server.routines.trigger':
       case 'server.routines.draft': {

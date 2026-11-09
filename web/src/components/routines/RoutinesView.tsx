@@ -12,7 +12,7 @@ import type { Routine, CreateRoutineInput } from '@/api/routines';
  * /routines page (secondary).
  */
 export function RoutinesView({ compact = false }: { compact?: boolean }) {
-  const { routines, loading, error, create, update, setEnabled, remove, runNow } = useRoutines(true);
+  const { routines, loading, error, create, update, setEnabled, remove, runNow, catchUp, dismissMissed } = useRoutines(true);
   const { executors, options } = useExecutors();
   const [draft, setDraft] = useState<CreateRoutineInput | undefined>(undefined);
   const [showForm, setShowForm] = useState(false);
@@ -91,6 +91,8 @@ export function RoutinesView({ compact = false }: { compact?: boolean }) {
               executorLabels={executorLabels}
               onToggle={setEnabled}
               onRunNow={runNow}
+              onCatchUp={catchUp}
+              onDismissMissed={dismissMissed}
               onEdit={handleEdit}
               onDelete={remove}
             />

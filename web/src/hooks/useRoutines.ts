@@ -19,6 +19,7 @@ import {
   type RoutineChange,
   removeRoutine,
   runRoutineNow,
+  dismissRoutineMissedRun,
   setRoutineEnabled,
   subscribeRoutines,
   toggleRoutine,
@@ -37,6 +38,10 @@ interface UseRoutinesReturn {
   setEnabled: (id: string, enabled: boolean) => Promise<Routine>;
   remove: (id: string) => Promise<void>;
   runNow: (id: string) => Promise<unknown>;
+  /** Run a missed slot now, as that slot's run. */
+  catchUp: (id: string, slotMs: number) => Promise<unknown>;
+  /** Set a missed run aside. */
+  dismissMissed: (id: string, slotMs: number) => Promise<Routine>;
 }
 
 export function useRoutines(includeDisabled = true): UseRoutinesReturn {
@@ -71,6 +76,8 @@ export function useRoutines(includeDisabled = true): UseRoutinesReturn {
     setEnabled: setRoutineEnabled,
     remove: removeRoutine,
     runNow: runRoutineNow,
+    catchUp: runRoutineNow,
+    dismissMissed: dismissRoutineMissedRun,
   };
 }
 

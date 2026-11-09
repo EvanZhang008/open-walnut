@@ -277,6 +277,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate, givenId
     // has nothing to clear, so anything but a real object means no trigger.
     check: input.check && typeof input.check === 'object' ? input.check : undefined,
     wake: input.wake && typeof input.wake === 'object' ? input.wake : undefined,
+    ...(typeof input.ownerTaskId === 'string' && input.ownerTaskId.trim() ? { ownerTaskId: input.ownerTaskId.trim() } : {}),
     state: { ...input.state },
   };
 
@@ -284,6 +285,10 @@ export function createJob(state: CronServiceState, input: CronJobCreate, givenId
   syncExecutorFields(job);
   assertSupportedJobSpec(job);
   assertWakeAllowed(job);
+  // Its schedule starts now: no earlier slot is expected of it (run-log.ts missedRuns).
+  job.state.expectFromMs ??= now;
+  // Its history begins with it, so a run it misses before its first run is still seen.
+  job.state.runLogSinceMs ??= now;
   job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
   return job;
 }
@@ -300,6 +305,11 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch): void {
   }
   if (typeof patch.deleteAfterRun === 'boolean') {
     job.deleteAfterRun = patch.deleteAfterRun;
+  }
+  if ('ownerTaskId' in patch) {
+    const owner = typeof patch.ownerTaskId === 'string' ? patch.ownerTaskId.trim() : '';
+    if (owner) job.ownerTaskId = owner;
+    else delete job.ownerTaskId;
   }
   if (patch.schedule) {
     job.schedule = patch.schedule;

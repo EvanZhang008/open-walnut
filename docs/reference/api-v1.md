@@ -218,7 +218,8 @@ path on the companion".
 | PATCH | `/api/v1/routines/:id` | Edit a routine (cloud relays) |
 | DELETE | `/api/v1/routines/:id` | Delete a routine — 404 on unknown id (cloud relays) |
 | POST | `/api/v1/routines/:id/toggle` | Enable/disable (cloud relays) |
-| POST | `/api/v1/routines/:id/run` | Run now, forced (cloud relays) |
+| POST | `/api/v1/routines/:id/run` | Run now, forced; `{ catchUpMs }` runs one of its missed runs (cloud relays) |
+| POST | `/api/v1/routines/:id/missed/dismiss` | `{ slotMs }`: set a missed run aside (cloud relays; added 2026-11-09) |
 | GET | `/api/v1/projects` | Project registry + counts + favorite flags + Inbox; each row's `lead` `{ id, title }` (added 2026-10-28) is its open org lead, when it has one |
 | POST | `/api/v1/projects` | Idempotent create (201 new / 200 existing); `{ name, source?, user_words? }`: a session naming a service whose audience is `shared` passes `user_words` (the user's quoted ask), else `403 user_decision` |
 | PATCH | `/api/v1/projects/:name` | Rename, merge-on-collision (501 on REPLICA) |
@@ -3572,7 +3573,17 @@ passthrough). The natural-language draft endpoint is deliberately NOT in v1
 - `DELETE /api/v1/routines/:id` → `204`; unknown id → `404 not_found`
   (unlike the tolerant legacy web route — a phone delete fails loudly).
 - `POST /api/v1/routines/:id/toggle` → `{ "job" }` with `enabled` flipped.
-- `POST /api/v1/routines/:id/run` → `{ "result" }` — forced immediate run.
+- `POST /api/v1/routines/:id/run` → `{ "result" }` — forced immediate run. Body
+  `{ "catchUpMs": <slot> }` (added 2026-11-09) makes it the run of that missed
+  slot; a slot not in the routine's `missed` → `409`.
+- Run history and missed runs (additive, 2026-11-09): a routine without a check
+  keeps `state.runLog`, its runs newest first (`atMs`, `status`, `durationMs`,
+  `slotMs`, `error`, `summary`, `manual`, `catchUpMs`, `attempt`,
+  `willRetryAtMs`, `repeats`), and every read of a routine carries `missed:
+  [{ slotMs, reason, failedAtMs? }]` when a slot of an hourly-or-slower routine
+  ended with no good run. `ownerTaskId` is the task told about it (the creating
+  session's task). `POST /api/v1/routines/:id/missed/dismiss { slotMs }` →
+  `{ "job" }` sets one aside. Older clients ignore all three fields.
 - `POST /api/v1/routines/trigger` (the `trigger_create` op) body `{ run, every,
   prompt, description, session?, host?, cwd?, name?, timeoutSeconds?,
   maxFiresPerDay?, wait?, wait_until? }` → `201 { job, host,
