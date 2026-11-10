@@ -31,7 +31,7 @@ export { taskDirSizes, type TaskDirSize } from './task-dir-sizes.js'
 // Tool caches pruned while the disk is low (host-cache-prune.ts), and the session history
 // archive (transcript-archive.ts): the source twin loads both through this sidecar too.
 export { bunTranspilerCacheDirs, pruneHostCaches, type CachePruneResult } from './host-cache-prune.js'
-export { archiveTranscripts, liveTranscriptIdsFromPs, restoreSessionAnywhere, resumeSourceId, restoreForRead, plainFindResults, type ArchiveReport } from './transcript-archive.js'
+export { archiveTranscripts, liveTranscriptIdsFromPs, restoreSessionAnywhere, resumeSourceId, setArchiveLog, restoreForRead, plainFindResults, type ArchiveReport } from './transcript-archive.js'
 
 /** `home` is the data home of the Walnut that first made it: a host two Walnuts share keeps each one's dirs apart. */
 interface Marker { taskId: string; home?: string; createdAt?: string; lastUsedAt?: string; prunedAt?: string; buildsPrunedAt?: string }

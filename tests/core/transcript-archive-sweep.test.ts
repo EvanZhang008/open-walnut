@@ -25,7 +25,7 @@ describe('session history archive sweep', () => {
     expect(a.sent).toEqual([{ cmd: 'transcript.archive', args: { olderThanDays: 30, budgetMs: 600_000 } }])
     expect(b.sent).toEqual([])
     expect(rows).toEqual([
-      { host: '__local__', sessions: 2, files: 3, bytesBefore: 1000, bytesAfter: 300, failed: 0, partial: false },
+      { host: '__local__', sessions: 2, files: 3, bytesBefore: 1000, bytesAfter: 300, failed: 0, partial: false, finalized: 0, freedBytes: 0, aside: 0, conflicts: 0 },
       { host: 'dev', skipped: 'usage-not-read' },
       { host: 'old', skipped: 'no-capability' },
     ])

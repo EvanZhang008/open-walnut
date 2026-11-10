@@ -189,7 +189,7 @@ import { takeTriggerStateSnapshot } from './trigger-state-snapshot-core.js'
 import { createClockSchedule } from './clock-schedule-core.js'
 import { resolvePathHostLocal } from './path-resolve-core.js'
 import { createDaemonPorts } from './port-scan-core.js'
-import { archiveTranscripts, bunTranspilerCacheDirs, ensureTaskDir, liveTranscriptIdsFromPs, isTaskDirId, listTaskDirs, plainFindResults, pruneHostCaches, pruneTaskBuilds, pruneTaskDirs, readOpenPaths, removeTaskDirs, restoreForRead, restoreSessionAnywhere, resumeSourceId, taskDirInUse, taskDirPath, taskDirRoot, taskDirSizes, type HostWork } from './task-dir-core.js'
+import { archiveTranscripts, bunTranspilerCacheDirs, ensureTaskDir, liveTranscriptIdsFromPs, isTaskDirId, listTaskDirs, plainFindResults, pruneHostCaches, pruneTaskBuilds, pruneTaskDirs, readOpenPaths, removeTaskDirs, restoreForRead, restoreSessionAnywhere, resumeSourceId, setArchiveLog, taskDirInUse, taskDirPath, taskDirRoot, taskDirSizes, type HostWork } from './task-dir-core.js'
 import { createHostExec } from './host-exec-core.js'
 import { createNetSupervisor, netStateDir, resolveNetBinary } from './net-core.js'
 import { createHostMcp } from './host-mcp-core.js'
@@ -6128,6 +6128,7 @@ async function cmdTranscriptArchive(ws: ServerWebSocket<WsData>, id: number, cmd
   if (!Number.isFinite(days) || days < 1) return sendError(ws, id, 'transcript.archive: olderThanDays must be 1 or more')
   if (transcriptArchiveBusy) return sendOk(ws, id, { busy: true })
   transcriptArchiveBusy = true
+  setArchiveLog((msg) => logMsg('warn', 'transcript archive', { msg }))
   try {
     const live = new Set<string>()
     for (const [sid, s] of sessions) if (!s.exitedAt) live.add(sid)
@@ -6156,7 +6157,7 @@ async function cmdTranscriptArchive(ws: ServerWebSocket<WsData>, id: number, cmd
       dryRun: cmd.dryRun === true,
       ...(Number.isFinite(budgetMs) && budgetMs > 0 ? { budgetMs } : {}),
     })
-    if (report.sessions > 0 || report.failed > 0) logMsg('info', 'transcript archive pass', { ...report })
+    if (report.sessions > 0 || report.finalized > 0 || report.conflicts > 0 || report.failed > 0) logMsg('info', 'transcript archive pass', { ...report })
     sendOk(ws, id, report)
   } catch (err) {
     sendError(ws, id, 'transcript.archive failed: ' + (err as Error).message)

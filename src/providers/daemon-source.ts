@@ -13401,6 +13401,7 @@ async function cmdTranscriptArchive(ws, id, cmd) {
   if (!Number.isFinite(days) || days < 1) return sendError(ws, id, 'transcript.archive: olderThanDays must be 1 or more');
   if (transcriptArchiveBusy) return sendOk(ws, id, { busy: true });
   transcriptArchiveBusy = true;
+  if (typeof taskDirCore.setArchiveLog === 'function') taskDirCore.setArchiveLog((msg) => logMsg('warn', 'transcript archive', { msg }));
   try {
     const live = new Set();
     for (const [sid, s] of sessions) if (!s.exitedAt) live.add(sid);
@@ -13427,7 +13428,7 @@ async function cmdTranscriptArchive(ws, id, cmd) {
       dryRun: cmd.dryRun === true,
       ...(Number.isFinite(budgetMs) && budgetMs > 0 ? { budgetMs } : {}),
     });
-    if (report.sessions > 0 || report.failed > 0) logMsg('info', 'transcript archive pass', Object.assign({}, report));
+    if (report.sessions > 0 || report.finalized > 0 || report.conflicts > 0 || report.failed > 0) logMsg('info', 'transcript archive pass', Object.assign({}, report));
     sendOk(ws, id, report);
   } catch (err) {
     sendError(ws, id, 'transcript.archive failed: ' + err.message);

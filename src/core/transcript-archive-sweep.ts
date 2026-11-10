@@ -21,6 +21,8 @@ const FIRST_SWEEP_MS = 20 * 60_000
 const SWEEP_EVERY_MS = 6 * 3_600_000
 /** A pass that stopped at its budget goes on this soon (the first pass on a host with years of history). */
 const RESUME_AFTER_MS = 30 * 60_000
+/** Originals set aside are removed by a pass an hour later (transcript-archive.ts ASIDE_KEEP_MS): this one. */
+const FINALIZE_AFTER_MS = 70 * 60_000
 /** A pass is cut short here; the next one goes on where it stopped. */
 const PASS_BUDGET_MS = 10 * 60_000
 const PASS_TIMEOUT_MS = PASS_BUDGET_MS + 5 * 60_000
@@ -45,6 +47,11 @@ export interface ArchivePassRow {
   bytesBefore?: number
   bytesAfter?: number
   failed?: number
+  /** Originals removed this pass (the second step), the bytes that freed, and those still aside. */
+  finalized?: number
+  freedBytes?: number
+  aside?: number
+  conflicts?: number
   partial?: boolean
   skipped?: 'usage-not-read' | 'busy' | 'no-capability'
   error?: string
@@ -82,16 +89,18 @@ export async function archiveHistoryOnce(deps?: {
     if (!usageRead(conn)) { rows.push({ host: conn.host, skipped: 'usage-not-read' }); continue }
     try {
       const res = await conn.send('transcript.archive', { olderThanDays: days, budgetMs: PASS_BUDGET_MS, ...(deps?.dryRun ? { dryRun: true } : {}) }, PASS_TIMEOUT_MS) as
-        { ok?: boolean; error?: string; busy?: boolean; sessions?: number; files?: number; bytesBefore?: number; bytesAfter?: number; failed?: number; partial?: boolean; errors?: string[] }
+        { ok?: boolean; error?: string; busy?: boolean; sessions?: number; files?: number; bytesBefore?: number; bytesAfter?: number; failed?: number; partial?: boolean; errors?: string[]
+          finalized?: number; freedBytes?: number; aside?: number; conflicts?: number }
       if (res?.ok === false) throw new Error(res.error || 'transcript.archive refused')
       if (res?.busy) { rows.push({ host: conn.host, skipped: 'busy' }); continue }
       const row: ArchivePassRow = {
         host: conn.host, sessions: res?.sessions ?? 0, files: res?.files ?? 0,
         bytesBefore: res?.bytesBefore ?? 0, bytesAfter: res?.bytesAfter ?? 0, failed: res?.failed ?? 0, partial: !!res?.partial,
+        finalized: res?.finalized ?? 0, freedBytes: res?.freedBytes ?? 0, aside: res?.aside ?? 0, conflicts: res?.conflicts ?? 0,
       }
       rows.push(row)
-      if ((row.sessions ?? 0) > 0 || (row.failed ?? 0) > 0) {
-        log.session.info('session history archived', { ...row, days, freedBytes: (row.bytesBefore ?? 0) - (row.bytesAfter ?? 0), errors: res?.errors ?? [] })
+      if ((row.sessions ?? 0) > 0 || (row.finalized ?? 0) > 0 || (row.conflicts ?? 0) > 0 || (row.failed ?? 0) > 0) {
+        log.session.info('session history archived', { ...row, days, errors: res?.errors ?? [] })
       }
     } catch (err) {
       rows.push({ host: conn.host, error: (err as Error).message })
@@ -130,8 +139,10 @@ export function startTranscriptArchiveSweep(): { stop: () => void } {
   const run = (): void => {
     if (stopped) return
     void historyArchiveAllowed().then((ok) => (ok ? archiveHistoryNow() : null)).then((rows) => {
-      if (stopped || again || !rows?.some((r) => r.partial)) return
-      again = setTimeout(() => { again = null; run() }, RESUME_AFTER_MS)
+      if (stopped || again) return
+      const ms = rows?.some((r) => r.partial) ? RESUME_AFTER_MS : rows?.some((r) => (r.aside ?? 0) > 0) ? FINALIZE_AFTER_MS : 0
+      if (!ms) return
+      again = setTimeout(() => { again = null; run() }, ms)
       again.unref?.()
     }).catch(() => { /* next round */ })
   }

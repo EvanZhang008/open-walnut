@@ -11,26 +11,31 @@
  * transcript naming every file it compressed with its size, mtime and sha256.
  * Claude Code lists only `*.jsonl`, so it ignores both.
  *
- * Nothing is ever lost: each file is gzipped to a temp file while its bytes
- * are hashed, the temp file is read back through gunzip and must hash the
- * same, and only then is it renamed into place; the originals are removed
- * last, and only while every one of them still has the inode, size, mtime and
- * ctime it had when the pass began (a write of any kind moves ctime).
- * Anything else, an error included, undoes the pass and keeps the originals.
- * A restore checks every file against its manifest hash before the rename.
- * Both hold one lock file per session, so an archive and a restore never
- * interleave, and a crash at any point leaves the plain file in place or the
- * archive whole (a plain file always wins over a stale `.gz`). The lock names
- * its holder with a token and a pid; its holder touches it while it works, so
- * only a lock whose process is gone, or one nobody touched for LOCK_STALE_MS,
- * is ever broken, and a holder removes only its own lock.
+ * Nothing is ever lost, in two steps. First, each file is gzipped to a temp
+ * file while its bytes are hashed, the temp file is read back through gunzip
+ * and must hash the same, and only then is it renamed into place; the manifest
+ * is written, and every original is renamed aside to `<file>.walnut-orig`
+ * (the transcript last), only while each still has the inode, size, mtime and
+ * ctime it had when the pass began. Second, a pass at least ASIDE_KEEP_MS later
+ * removes the asides, only when each is still that same file, no file stands
+ * at its plain name and no process has the session. Anything a writer did in
+ * between (a write into an aside through a handle it held, a new file at the
+ * plain name) puts the session back plain with every copy kept: the writer's
+ * file stays, the other copy is kept beside it as `<file>.walnut-conflict-<time>`,
+ * never merged and never removed. A restore checks every file against its
+ * manifest hash, and the archive and manifest go only once the session is whole.
  *
- * A session someone opens while it is archived wins: a restore waits for the
- * pass's lock, a resume (or a fork of it) marks the session opened first
- * (noteSessionOpened), and right before an original is removed the pass asks
- * again whether the session is live or opened (`isLiveNow`, a fresh look at
- * the processes) and gives up if so. What is left is a CLI started from a
- * terminal in the few milliseconds between that look and the removal.
+ * Both steps and a restore hold one lock file per session, so they never
+ * interleave, and every state a crash can leave is one the manifest names. The
+ * lock names its holder with a token and a pid; its holder touches it while it
+ * works, so only a lock whose process is gone, or one nobody touched for
+ * LOCK_STALE_MS, is ever broken, and a holder removes only its own lock.
+ *
+ * A session in use is never archived: not one this daemon runs, a `claude`
+ * process names on its command line, or Claude Code's own registry
+ * (`~/.claude/sessions/<pid>.json`) names for a live process, nor one a resume
+ * or fork opened (noteSessionOpened); each is asked again right before the
+ * originals are set aside and before they are removed.
  *
  * A session is old when its transcript's mtime AND ctime, and every sidecar
  * file's mtime, are older than the cutoff. A restore renames a fresh file into
@@ -59,8 +64,12 @@ export const MIN_FILE_BYTES = 8 * 1024
 const LOCK_STALE_MS = 10 * 60_000
 /** Its holder touches the lock this often. */
 const LOCK_BEAT_MS = 30_000
-/** How long removed originals sit aside before they go, so a write already on its way lands where it is seen. */
-const SETTLE_MS = 200
+/**
+ * How long originals sit aside before a later pass removes them: a write through
+ * a handle a process held, or a new file at the plain name, shows by then, and
+ * the session goes back plain with every copy kept.
+ */
+const ASIDE_KEEP_MS = 60 * 60_000
 /** A session opened this recently is never archived (its CLI may still be starting). */
 const OPENED_GRACE_MS = 30 * 60_000
 /** How long a restore waits for an archive pass of the same session. */
@@ -68,8 +77,9 @@ const RESTORE_WAIT_MS = 60_000
 const MANIFEST_VERSION = 1
 const SID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 
-export interface ManifestFile { rel: string; size: number; mtimeMs: number; sha256: string }
-export interface Manifest { version: number; sessionId: string; archivedAt: string; files: ManifestFile[] }
+export interface ManifestFile { rel: string; size: number; mtimeMs: number; sha256: string; ino?: number }
+/** `asideAt` is set while the originals still sit aside (`<file>.walnut-orig`); a finalize clears it. */
+export interface Manifest { version: number; sessionId: string; archivedAt: string; asideAt?: number; files: ManifestFile[] }
 
 export interface ArchiveOptions {
   /** Sessions whose newest touch is older than this many ms are archived. */
@@ -77,7 +87,7 @@ export interface ArchiveOptions {
   now?: number
   /** A session the daemon still runs (or any other reason to keep it plain). */
   isLive?: (sessionId: string) => boolean
-  /** Asked again right before a session's originals are removed: a fresh look (the process table). */
+  /** Asked again right before originals are set aside or removed: a fresh look (the process table). */
   isLiveNow?: (sessionId: string) => boolean | Promise<boolean>
   /** Stop starting new sessions after this long; the next pass goes on. */
   budgetMs?: number
@@ -88,10 +98,18 @@ export interface ArchiveOptions {
 }
 
 export interface ArchiveReport {
+  /** Sessions compressed in this pass (their originals now sit aside). */
   sessions: number
   files: number
   bytesBefore: number
   bytesAfter: number
+  /** Sessions whose originals went in this pass, and the bytes that freed. */
+  finalized: number
+  freedBytes: number
+  /** Sessions whose originals still sit aside after this pass. */
+  aside: number
+  /** Sessions a write reached while archived: back plain, every copy kept. */
+  conflicts: number
   skippedLive: number
   failed: number
   errors: string[]
@@ -227,9 +245,8 @@ async function compressOne(src: string, rel: string, stamp: FileStamp): Promise<
   }
 }
 
-/** Decompress `gz` to its plain name after checking it against `want`; removes `gz`. */
-async function decompressOne(gz: string, want: ManifestFile | undefined): Promise<void> {
-  const dst = gz.slice(0, -ARCHIVE_SUFFIX.length)
+/** Decompress `gz` to `dst` after checking it against `want`; keeps `gz` (the caller drops it once the session is whole). */
+async function decompressOne(gz: string, want: ManifestFile | undefined, dst: string): Promise<void> {
   const tmp = tmpName(dst)
   const h = createHash('sha256')
   let size = 0
@@ -242,7 +259,6 @@ async function decompressOne(gz: string, want: ManifestFile | undefined): Promis
     const mtime = want?.mtimeMs ?? (await fsp.stat(gz)).mtimeMs
     await fsp.utimes(tmp, mtime / 1000, mtime / 1000)
     await fsp.rename(tmp, dst)
-    await fsp.rm(gz, { force: true })
   } catch (e) {
     await fsp.rm(tmp, { force: true })
     throw e
@@ -256,7 +272,7 @@ async function walkFiles(dir: string, base = dir, out: string[] = []): Promise<s
   for (const e of entries) {
     const p = path.join(dir, e.name)
     if (e.isDirectory()) await walkFiles(p, base, out)
-    else if (e.isFile() && !e.name.includes(TMP_TAG)) out.push(path.relative(base, p))
+    else if (e.isFile() && !e.name.includes(TMP_TAG) && !e.name.endsWith(ORIG_SUFFIX)) out.push(path.relative(base, p))
   }
   return out
 }
@@ -295,7 +311,22 @@ async function candidate(dir: string, sid: string, cutoff: number): Promise<Cand
   return { dir, sid, stamp: stampOf(st), side }
 }
 
-/** Archive one session; returns bytes before and after, or throws with the originals kept. */
+/** An original set aside under this name, recorded in the manifest before the move. */
+const ORIG_SUFFIX = '.walnut-orig'
+/** What a restore keeps when two copies of a file disagree; never removed by Walnut. */
+const CONFLICT_TAG = '.walnut-conflict-'
+const conflictName = (p: string) => p + CONFLICT_TAG + new Date().toISOString().replace(/[-:.]/g, '').slice(0, 15) + '-' + randomBytes(2).toString('hex')
+const exists = (p: string) => fsp.lstat(p).then(() => true, () => false)
+/** Is the file at `p` the one the manifest recorded (a restore writes back its size and mtime)? */
+const isRecorded = (s: fs.Stats, f: ManifestFile): boolean => s.size === f.size && s.mtimeMs === f.mtimeMs
+
+/**
+ * Archive one session: compress and verify every file, record the manifest
+ * with the name each original is about to be set aside under, then rename the
+ * originals aside (the transcript last). Nothing is removed here: the
+ * originals stay aside until a later pass finalizes them (finalizeAside).
+ * Throws with the originals in place when anything is off before the move.
+ */
 async function archiveSession(c: Candidate, h: Held, isLiveNow?: ArchiveOptions['isLiveNow']): Promise<{ files: number; before: number; after: number }> {
   const items = [...c.side, { rel: c.sid + '.jsonl', stamp: c.stamp }]
   const done: Array<ManifestFile & { gzBytes: number }> = []
@@ -304,106 +335,93 @@ async function archiveSession(c: Candidate, h: Held, isLiveNow?: ArchiveOptions[
       done.push(await compressOne(path.join(c.dir, it.rel), it.rel, it.stamp))
       beat(h)
     }
-    await writeManifest(c.dir, { version: MANIFEST_VERSION, sessionId: c.sid, archivedAt: new Date().toISOString(), files: done.map(({ gzBytes: _g, ...f }) => f) })
     // Someone opened the session meanwhile: it stays plain.
     if (openedRecently(c.sid) || (await isLiveNow?.(c.sid))) throw new Error(`${c.sid} was opened while it was archived`)
-    // Every original must be exactly as it was before any is removed, and the lock still ours.
     for (const it of items) {
       const now = stampOf(await fsp.lstat(path.join(c.dir, it.rel)))
       if (!sameStamp(now, it.stamp)) throw new Error(`${it.rel} changed while it was archived`)
     }
     if (!stillHeld(h) || openedRecently(c.sid)) throw new Error(`${c.sid} lost its archive lock`)
+    await writeManifest(c.dir, {
+      version: MANIFEST_VERSION, sessionId: c.sid, archivedAt: new Date().toISOString(),
+      asideAt: Date.now(), files: done.map(({ gzBytes: _g, ...f }) => ({ ...f, ino: items.find(i => i.rel === f.rel)!.stamp.ino })),
+    })
     beat(h)
   } catch (e) {
     await fsp.rm(manifestPath(c.dir, c.sid), { force: true })
     for (const f of done) await fsp.rm(path.join(c.dir, f.rel + ARCHIVE_SUFFIX), { force: true })
     throw e
   }
-  try { await removeOriginals(c, items) } catch (e) {
-    // The originals are back (merged with anything written meanwhile): the archive goes.
-    await fsp.rm(manifestPath(c.dir, c.sid), { force: true })
-    for (const f of done) await fsp.rm(path.join(c.dir, f.rel + ARCHIVE_SUFFIX), { force: true })
-    throw e
+  // From here the manifest names every aside: a crash at any point is undone by a restore.
+  for (const it of items) {
+    const p = path.join(c.dir, it.rel)
+    await fsp.rename(p, p + ORIG_SUFFIX)
   }
   return { files: done.length, before: done.reduce((n, f) => n + f.size, 0), after: done.reduce((n, f) => n + f.gzBytes, 0) }
 }
 
-const unchanged = (s: fs.Stats, st: FileStamp): boolean => s.ino === st.ino && s.size === st.size && s.mtimeMs === st.mtimeMs
-
-/** Put an original set aside back; anything written at `p` meanwhile is appended after it, never lost. */
-async function putBack(p: string, aside: string): Promise<void> {
-  try {
-    await fsp.link(aside, p)
-    await fsp.rm(aside, { force: true })
-    return
-  } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e }
-  // A writer made a new file at `p` (an append by path): old bytes first, then the new ones.
-  const merged = tmpName(p)
-  await pipeline(fs.createReadStream(aside), fs.createWriteStream(merged, { mode: 0o600 }))
-  await pipeline(fs.createReadStream(p), fs.createWriteStream(merged, { flags: 'a' }))
-  await fsyncPath(merged)
-  await fsp.rename(merged, p)
-  await fsp.rm(aside, { force: true })
-}
-
 /**
- * Remove a session's originals (archived and verified): each is renamed aside
- * (the transcript last), and after SETTLE_MS each must still be the file it
- * was and no new file may stand at its name. Anything else puts every one back
- * (merging a new file a writer made) and throws, so the caller drops the archive.
+ * The second step of an archive, at least ASIDE_KEEP_MS after the first: the
+ * originals set aside go when every one is still the file that was compressed,
+ * no file stands at its plain name, and no process has the session. Any write
+ * since (through a handle into an aside, or a new file at the plain name) puts
+ * the session back plain with every copy kept (restoreLocked). Returns the
+ * bytes freed; null when the session is in use; 'undo' when a pass stopped
+ * before it set every original aside (they are put back); 'written' when a
+ * writer reached the session.
  */
-async function removeOriginals(c: Candidate, items: Array<{ rel: string; stamp: FileStamp }>): Promise<void> {
-  const aside: Array<{ p: string; tmp: string; stamp: FileStamp }> = []
-  let moved = false
-  try {
-    for (const it of items) {
-      const p = path.join(c.dir, it.rel)
-      const tmp = tmpName(p)
-      await fsp.rename(p, tmp)
-      aside.push({ p, tmp, stamp: it.stamp })
-      if (!unchanged(await fsp.lstat(tmp), it.stamp)) { moved = true; break }
-    }
-    if (!moved) {
-      await new Promise(r => setTimeout(r, SETTLE_MS))
-      for (const a of aside) {
-        if (!unchanged(await fsp.lstat(a.tmp), a.stamp)) { moved = true; break }
-        if (await fsp.lstat(a.p).then(() => true, () => false)) { moved = true; break }
-      }
-    }
-  } catch (e) {
-    for (const a of aside.reverse()) await putBack(a.p, a.tmp)
-    throw e
+async function finalizeAside(dir: string, m: Manifest, isLiveNow: ArchiveOptions['isLiveNow'], h: Held): Promise<number | null | 'undo' | 'written'> {
+  let freed = 0
+  let undo = false
+  const asides: string[] = []
+  for (const f of m.files) {
+    const p = path.join(dir, f.rel)
+    const a = await fsp.lstat(p + ORIG_SUFFIX).catch(() => null)
+    const plain = await fsp.lstat(p).catch(() => null)
+    const same = (s: fs.Stats) => s.ino === f.ino && isRecorded(s, f)
+    // The original itself still at its name: the pass stopped before it set this one aside.
+    if (plain && !a && same(plain)) { undo = true; continue }
+    if (plain || (a && !same(a))) return 'written'
+    if (a) { asides.push(p + ORIG_SUFFIX); freed += a.size }
   }
-  if (moved) {
-    for (const a of aside.reverse()) await putBack(a.p, a.tmp)
-    throw new Error(`${c.sid} was written while it was archived`)
-  }
-  for (const a of aside) await fsp.rm(a.tmp, { force: true })
+  if (undo) return 'undo'
+  if (openedRecently(m.sessionId) || (await isLiveNow?.(m.sessionId)) || !stillHeld(h)) return null
+  for (const a of asides) await fsp.rm(a, { force: true })
+  await writeManifest(dir, { ...m, asideAt: undefined })
+  return freed
 }
 
-/** Remove temp files a crashed pass left in a project dir (and its session folders). */
+/** Remove temp files a crashed pass left in a project dir (its compression temps; never an aside). */
 async function sweepTemps(dir: string, names: string[], now: number): Promise<void> {
   for (const n of names) {
     if (!n.includes(TMP_TAG)) continue
     const p = path.join(dir, n)
-    // By ctime: an original set aside keeps its old mtime, and the rename that set it aside moved its ctime.
-    try { if (now - (await fsp.lstat(p)).ctimeMs > 3_600_000) await fsp.rm(p, { force: true }) } catch { /* gone */ }
+    try { if (now - (await fsp.lstat(p)).mtimeMs > 3_600_000) await fsp.rm(p, { force: true }) } catch { /* gone */ }
   }
 }
 
 /**
  * One archive pass over every projects dir: each plain session older than the
- * cutoff, not live, is compressed. Budgeted and resumable (a session either
- * moves whole or stays as it was), so a pass that stops early loses nothing.
+ * cutoff, not live, is compressed and its originals set aside; each session
+ * set aside ASIDE_KEEP_MS ago is finalized. Budgeted and resumable (a session
+ * either moves whole or stays as it was), so a pass that stops early loses nothing.
  */
 export async function archiveTranscripts(projectsDirs: string[], opts: ArchiveOptions): Promise<ArchiveReport> {
   const now = opts.now ?? Date.now()
   const cutoff = now - opts.olderThanMs
   const until = Date.now() + (opts.budgetMs ?? 10 * 60_000)
   const max = opts.maxSessions ?? Infinity
-  const r: ArchiveReport = { sessions: 0, files: 0, bytesBefore: 0, bytesAfter: 0, skippedLive: 0, failed: 0, errors: [], partial: false, dryRun: !!opts.dryRun }
+  const r: ArchiveReport = { sessions: 0, files: 0, bytesBefore: 0, bytesAfter: 0, finalized: 0, freedBytes: 0, aside: 0, conflicts: 0, skippedLive: 0, failed: 0, errors: [], partial: false, dryRun: !!opts.dryRun }
   if (!(opts.olderThanMs > 0)) return r
-  for (const root of [...new Set(projectsDirs)]) {
+  const roots = [...new Set(projectsDirs)]
+  const registry = claudeRegistryLive(roots)
+  const isLive = (sid: string) => registry.has(sid) || !!opts.isLive?.(sid)
+  const isLiveNow = async (sid: string) => claudeRegistryLive(roots).has(sid) || !!(await opts.isLiveNow?.(sid))
+  const fail = (where: string, e: unknown) => {
+    r.failed++
+    if (r.errors.length < 10) r.errors.push(`${where}: ${(e as Error).message}`)
+  }
+  for (const root of roots) {
     let projects: fs.Dirent[]
     try { projects = await fsp.readdir(root, { withFileTypes: true }) } catch { continue }
     for (const p of projects) {
@@ -412,20 +430,45 @@ export async function archiveTranscripts(projectsDirs: string[], opts: ArchiveOp
       let names: string[]
       try { names = await fsp.readdir(dir) } catch { continue }
       await sweepTemps(dir, names, now)
+      // Sessions set aside by an earlier pass: finalize the ones old enough. A session
+      // one of them put back plain waits for the next pass.
+      const handled = new Set<string>()
+      for (const name of names) {
+        if (!name.endsWith(MANIFEST_SUFFIX) || opts.dryRun) continue
+        const sid = name.slice(0, -MANIFEST_SUFFIX.length)
+        if (!SID_RE.test(sid)) continue
+        const m = await readManifest(dir, sid)
+        if (m) handled.add(sid)
+        if (!m || m.asideAt === undefined) continue
+        if (now - m.asideAt < ASIDE_KEEP_MS) { r.aside++; continue }
+        if (Date.now() > until) { r.partial = true; return r }
+        const h = tryLock(dir, sid)
+        if (!h) { r.aside++; continue }
+        try {
+          await withBeat(h, async () => {
+            const cur = await readManifest(dir, sid)
+            if (!cur || cur.asideAt === undefined) return
+            const freed = await finalizeAside(dir, cur, isLiveNow, h)
+            if (freed === null) { r.aside++; r.skippedLive++ }
+            else if (freed === 'undo') await restoreLocked(dir, sid)
+            else if (freed === 'written') { await restoreLocked(dir, sid); r.conflicts++ }
+            else { r.finalized++; r.freedBytes += freed }
+          })
+        } catch (e) { fail(path.join(dir, name), e) }
+      }
       for (const name of names) {
         if (!name.endsWith('.jsonl')) continue
         const sid = name.slice(0, -6)
-        if (!SID_RE.test(sid)) continue
+        if (!SID_RE.test(sid) || handled.has(sid)) continue
         if (Date.now() > until || r.sessions >= max) { r.partial = true; return r }
         const c = await candidate(dir, sid, cutoff)
         if (!c) continue
-        if (opts.isLive?.(sid)) { r.skippedLive++; continue }
+        if (isLive(sid) || openedRecently(sid)) { r.skippedLive++; continue }
         if (opts.dryRun) {
           r.sessions++; r.files += c.side.length + 1
           r.bytesBefore += c.stamp.size + c.side.reduce((n, s) => n + s.stamp.size, 0)
           continue
         }
-        if (openedRecently(sid)) { r.skippedLive++; continue }
         const h = tryLock(dir, sid)
         if (!h) continue
         try {
@@ -435,17 +478,36 @@ export async function archiveTranscripts(projectsDirs: string[], opts: ArchiveOp
             let cur: Candidate | null = c
             if (fs.existsSync(manifestPath(dir, sid))) { await restoreLocked(dir, sid); cur = await candidate(dir, sid, cutoff) }
             if (!cur) return
-            const got = await archiveSession(cur, h, opts.isLiveNow)
-            r.sessions++; r.files += got.files; r.bytesBefore += got.before; r.bytesAfter += got.after
+            const got = await archiveSession(cur, h, isLiveNow)
+            r.sessions++; r.aside++; r.files += got.files; r.bytesBefore += got.before; r.bytesAfter += got.after
           })
-        } catch (e) {
-          r.failed++
-          if (r.errors.length < 10) r.errors.push(`${path.join(dir, name)}: ${(e as Error).message}`)
-        }
+        } catch (e) { fail(path.join(dir, name), e) }
       }
     }
   }
   return r
+}
+
+/**
+ * Session ids Claude Code's own process registry (`<config dir>/sessions/<pid>.json`,
+ * beside `projects/`) names for a process still alive: every CLI on the host,
+ * a terminal's included, and the session an interactive one switched to.
+ */
+export function claudeRegistryLive(projectsDirs: readonly string[]): Set<string> {
+  const ids = new Set<string>()
+  for (const root of projectsDirs) {
+    const reg = path.join(path.dirname(path.resolve(root)), 'sessions')
+    let names: string[]
+    try { names = fs.readdirSync(reg) } catch { continue }
+    for (const n of names) {
+      if (!n.endsWith('.json')) continue
+      try {
+        const e = JSON.parse(fs.readFileSync(path.join(reg, n), 'utf8')) as { pid?: number; sessionId?: string }
+        if (typeof e.sessionId === 'string' && pidAlive(e.pid)) ids.add(e.sessionId)
+      } catch { /* torn or gone */ }
+    }
+  }
+  return ids
 }
 
 const inflight = new Map<string, Promise<boolean>>()
@@ -467,39 +529,63 @@ export function restoreSession(dir: string, sid: string): Promise<boolean> {
 
 async function restoreSessionNow(dir: string, sid: string): Promise<boolean> {
   const plain = path.join(dir, sid + '.jsonl')
-  const exists = (p: string) => fsp.lstat(p).then(() => true, () => false)
   // No manifest and no pass at work on it: nothing to do. A pass at work (its lock) is
-  // waited for, since it may write a manifest and remove the plain file next.
+  // waited for, since it may write a manifest and set the plain file aside next.
   if (!(await exists(manifestPath(dir, sid))) && !(await exists(lockPath(dir, sid)))) return exists(plain)
   const h = await lockWait(dir, sid, RESTORE_WAIT_MS)
   if (!h) throw new Error(`session ${sid} is being archived; try again`)
   return withBeat(h, async () => (await exists(manifestPath(dir, sid))) ? restoreLocked(dir, sid) : exists(plain))
 }
 
-/** The restore itself; the caller holds the session's lock. */
+/**
+ * The restore itself; the caller holds the session's lock. Per file, never
+ * merging two copies and never removing one that holds bytes no other has:
+ * - a file at the plain name that is the recorded one stays, its archive goes;
+ *   one that is not (a writer made it) stays too, and the archive's copy is
+ *   kept beside it as a conflict file;
+ * - an original set aside comes back by rename (its writes since included),
+ *   or is kept as a conflict file when a file already stands at its name;
+ * - otherwise the archive is decompressed (checked against its hash).
+ * The archive files and the manifest go only once every file is whole; an
+ * error keeps them (a later restore picks up where this one stopped).
+ */
 async function restoreLocked(dir: string, sid: string): Promise<boolean> {
-  const exists = (p: string) => fsp.lstat(p).then(() => true, () => false)
-  {
-    const m = await readManifest(dir, sid)
-    if (!m) throw new Error(`archive manifest of ${sid} cannot be read`)
-    const want = new Map(m.files.map(f => [f.rel, f]))
-    const rels = m.files.map(f => f.rel)
-    // Sidecar files first, the transcript last: a plain transcript means a whole session.
-    rels.sort((a, b) => (a === sid + '.jsonl' ? 1 : 0) - (b === sid + '.jsonl' ? 1 : 0))
-    for (const rel of rels) {
-      const p = path.join(dir, rel)
-      const g = p + ARCHIVE_SUFFIX
-      if (await exists(p)) { await fsp.rm(g, { force: true }); continue }
-      if (!(await exists(g))) {
-        if (rel === sid + '.jsonl') throw new Error(`archive of ${sid} has no transcript`)
-        continue
-      }
-      await decompressOne(g, want.get(rel))
+  const m = await readManifest(dir, sid)
+  if (!m) throw new Error(`archive manifest of ${sid} cannot be read`)
+  const files = [...m.files]
+  // Sidecar files first, the transcript last: a plain transcript means a whole session.
+  files.sort((a, b) => (a.rel === sid + '.jsonl' ? 1 : 0) - (b.rel === sid + '.jsonl' ? 1 : 0))
+  const spent: string[] = []
+  for (const f of files) {
+    const p = path.join(dir, f.rel)
+    const g = p + ARCHIVE_SUFFIX
+    const o = p + ORIG_SUFFIX
+    const plain = await fsp.lstat(p).catch(() => null)
+    const hasAside = await exists(o)
+    const hasGz = await exists(g)
+    if (plain) {
+      if (hasAside) await fsp.rename(o, conflictName(p))
+      else if (hasGz && !isRecorded(plain, f)) await decompressOne(g, f, conflictName(p))
+      if (hasGz) spent.push(g)
+      if (!isRecorded(plain, f) || hasAside) log(`archive of ${sid}: ${f.rel} was written while archived; every copy kept`)
+      continue
     }
-    await fsp.rm(manifestPath(dir, sid), { force: true })
-    return true
+    if (hasAside) { await fsp.rename(o, p); if (hasGz) spent.push(g); continue }
+    if (!hasGz) {
+      if (f.rel === sid + '.jsonl') throw new Error(`archive of ${sid} has no transcript`)
+      continue
+    }
+    await decompressOne(g, f, p)
+    spent.push(g)
   }
+  for (const g of spent) await fsp.rm(g, { force: true })
+  await fsp.rm(manifestPath(dir, sid), { force: true })
+  return true
 }
+
+let log: (msg: string) => void = (msg) => { try { process.stderr.write(`[transcript-archive] ${msg}\n`) } catch { /* closed */ } }
+/** Where the archive reports a file kept twice (the daemons pass their logger). */
+export function setArchiveLog(fn: (msg: string) => void): void { log = fn }
 
 /**
  * Make sure a transcript or sidecar path is plain before it is opened: when
@@ -588,7 +674,7 @@ export async function plainFindResults(found: readonly string[], name: string): 
   const out: string[] = []
   for (const f of found) {
     const base = path.basename(f)
-    if (base.includes(TMP_TAG) || base.endsWith(MANIFEST_SUFFIX) || base.endsWith(LOCK_SUFFIX)) continue
+    if (base.includes(TMP_TAG) || base.includes(CONFLICT_TAG) || base.endsWith(ORIG_SUFFIX) || base.endsWith(MANIFEST_SUFFIX) || base.endsWith(LOCK_SUFFIX)) continue
     if (isArchivedTranscriptName(base) && !name.endsWith(ARCHIVE_SUFFIX)) {
       const plain = f.slice(0, -ARCHIVE_SUFFIX.length)
       if (!(await ensurePlain(plain).catch(() => false))) continue
