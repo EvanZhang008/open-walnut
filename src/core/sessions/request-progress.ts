@@ -61,6 +61,24 @@ export async function progressReason(input: {
   return null;
 }
 
+/** A request's turn end is not an unanswered stop while the task's own work continues. */
+export async function requestTargetContinues(request: Pick<SessionRequest, 'toTaskId' | 'toSessionId'>): Promise<boolean> {
+  const { listTasksByIds } = await import('../task-manager.js');
+  const task = request.toTaskId ? (await listTasksByIds([request.toTaskId]).catch(() => []))[0] : undefined;
+  if (task?.phase === 'COMPLETE') return false;
+  const { getSessionByClaudeId } = await import('../session-tracker.js');
+  const sid = request.toSessionId ?? task?.session_id ?? undefined;
+  const record = sid ? await getSessionByClaudeId(sid).catch(() => null) : null;
+  if (record?.process_status === 'error' || record?.pendingPermission) return false;
+  if (record?.process_status === 'running') return true;
+  const live = task?.user_status;
+  if (live?.state === 'needs' || live?.state === 'read' || live?.state === 'done') return false;
+  // A running turn's stored Working can outlast the turn during status settling.
+  // Between turns, Working names what still carries it (its process, watch or clock).
+  if (live?.state === 'working' && live.carriesOn) return true;
+  return !!await progressReason({ sessionId: sid, taskId: task?.id, phase: task?.phase });
+}
+
 /** Latest deferred pass per session: a newer turn end replaces an older one. */
 const deferred = new Map<string, symbol>();
 

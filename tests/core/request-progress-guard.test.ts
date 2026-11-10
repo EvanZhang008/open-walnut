@@ -52,6 +52,14 @@ describe('every place that settles a request is classified', () => {
     expect(hook).toMatch(/settleAfterReport\(/);
   });
 
+  it('all fallback paths read the live continuation gate before settling the request', () => {
+    const src = read('core/sessions/session-request-notify.ts');
+    const gate = src.slice(src.indexOf('async function gateRequest('), src.indexOf('export async function notifyRequesterGroup('));
+    expect(gate).toMatch(/requestTargetContinues\(request\)/);
+    expect(gate).toMatch(/outcome === 'completed'/);
+    expect(read('core/sessions/request-progress.ts')).toMatch(/live\?\.state === 'working'/);
+  });
+
   it('the stop hook and the turn-end hook share the one progress rule', () => {
     expect(read('core/sessions/unanswered-at-stop.ts')).toMatch(/progressReason\(/);
   });

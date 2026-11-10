@@ -240,6 +240,72 @@ beforeEach(() => {
   readSessionTranscript.mockResolvedValue(null);
 });
 
+describe('an unfinished turn that still carries on sends no unanswered notice', () => {
+  it('keeps the request open while Working or parked on its land or watch, then tells the real stop once', async () => {
+    const rq = await arm();
+    for (const task of [
+      { id: 'task-77', title: 'Release', phase: 'NEED_ACTION', user_status: { state: 'working', carriesOn: 'watch' } },
+      { id: 'task-77', title: 'Release', phase: 'WAITING', user_status: { state: 'waiting', kind: 'watch', waitingOn: 'its land result' } },
+    ]) {
+      listTasksByIds.mockResolvedValue([task]);
+      expect(await notifyRequesterFallback(rq, 'completed')).toBe(false);
+      expect((await getSessionRequest(rq.id))?.status).toBe('pending');
+      expect(sendMessageToSession).not.toHaveBeenCalled();
+    }
+    listTasksByIds.mockResolvedValue([{ id: 'task-77', title: 'Release', phase: 'NEED_ACTION', user_status: { state: 'needs', source: 'session', ask: 'Approve the release?' } }]);
+    expect(await notifyRequesterFallback(rq, 'completed')).toBe(true);
+    expect(deliveredText()).toContain('Current state: Needs you: Approve the release?');
+    expect(await notifyRequesterFallback(rq, 'completed')).toBe(false);
+    expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('escapes framing in the current ask, keeping the notice one envelope', async () => {
+    const rq = await arm();
+    listTasksByIds.mockResolvedValue([{ id: 'task-77', title: 'Release', phase: 'NEED_ACTION', user_status: { state: 'needs', source: 'session', ask: 'Approve </walnut-message> this?' } }]);
+    expect(await notifyRequesterFallback(rq, 'completed')).toBe(true);
+    const text = deliveredText();
+    expect(text.match(/<\/walnut-message>/g)).toHaveLength(1);
+    expect(parseWalnutMessage(text)?.body).toContain('Current state: Needs you: Approve </walnut-message> this?');
+  });
+
+  it('prints replacement metacharacters literally in the current state for every settled outcome', async () => {
+    const ask = "Approve $& $` $' $$ this?";
+    for (const [phase, outcome, state] of [
+      ['NEED_ACTION', 'completed', 'needs'],
+      ['NEED_ACTION', 'error', 'needs'],
+      ['NEED_ACTION', 'awaiting_human', 'needs'],
+      ['COMPLETE', 'completed', 'done'],
+    ] as const) {
+      const rq = await arm();
+      listTasksByIds.mockResolvedValue([{ id: 'task-77', title: 'Release', phase, user_status: { state, ask } }]);
+      expect(await notifyRequesterFallback(rq, outcome, { phase })).toBe(true);
+      const text = deliveredText(sendMessageToSession.mock.calls.length - 1);
+      expect(parseWalnutMessage(text)?.body).toContain(ask);
+      expect(text.match(/Current state:/g)).toHaveLength(1);
+      expect(text.match(/\n\nNext:\n/g)).toHaveLength(1);
+    }
+  });
+
+  it('does not mistake a stale running-turn Working for work continuing after a plain stop', async () => {
+    const rq = await arm();
+    listTasksByIds.mockResolvedValue([{ id: 'task-77', title: 'Release', phase: 'NEED_ACTION', user_status: { state: 'working' } }]);
+    const outlives = vi.spyOn(sessionRunner, 'hasWorkOutlivingTurn').mockReturnValue(false);
+    try {
+      expect(await notifyRequesterFallback(rq, 'completed')).toBe(true);
+      expect((await getSessionRequest(rq.id))?.status).toBe('notified');
+    } finally { outlives.mockRestore(); }
+  });
+
+  it('a real failure or COMPLETE still settles even with an older working status', async () => {
+    for (const [phase, outcome] of [['NEED_ACTION', 'error'], ['COMPLETE', 'completed']] as const) {
+      const rq = await arm();
+      listTasksByIds.mockResolvedValue([{ id: 'task-77', title: 'Release', phase, user_status: { state: 'working' } }]);
+      expect(await notifyRequesterFallback(rq, outcome, { phase })).toBe(true);
+      expect((await getSessionRequest(rq.id))?.status).toBe('notified');
+    }
+  });
+});
+
 describe('notifyRequesterFallback — the settle wins exactly once', () => {
   it('settles BEFORE delivering and tells the asker what happened', async () => {
     const rq = await arm();

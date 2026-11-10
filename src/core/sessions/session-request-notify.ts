@@ -23,7 +23,7 @@
 import { log } from '../../logging/index.js';
 import { cutEnd } from '../text-cut.js';
 import { isContextFullText } from './context-full.js';
-import { buildWalnutMessage, parseWalnutMessage } from '../peers/walnut-message-tag.js';
+import { buildWalnutMessage, escapeBody, parseWalnutMessage } from '../peers/walnut-message-tag.js';
 import type { EnvelopeHandedOn } from '../peers/envelope-kit.js';
 import {
   stillReached,
@@ -436,6 +436,12 @@ async function gateRequest(
       }
     }
   }
+  // A turn end is not a stop while the task carries on. Read the live status here,
+  // before the atomic settle, so every turn-end caller shares this gate.
+  if (!undelivered && outcome === 'completed' && context.phase !== 'COMPLETE') {
+    const { requestTargetContinues } = await import('./request-progress.js');
+    if (await requestTargetContinues(request)) return 'skip';
+  }
   // A Walnut notice never goes into a COMPLETE task's session: nothing there
   // waits for it, and delivering would run a turn on finished work. Withdrawn,
   // not notified (nobody was told), so reopening the task restores it.
@@ -540,6 +546,7 @@ async function deliverSettled(
     // Target naming is embellishment — a failed lookup must not lose the notice.
     // Withheld: not even its title crosses the area.
     let targetTitle: string | undefined;
+    let currentState: string | undefined;
     let targetPhase = context.phase;
     let targetSessionId = request.toSessionId;
     if (request.toTaskId && !withheld) {
@@ -548,6 +555,13 @@ async function deliverSettled(
         const task = (await listTasksByIds([request.toTaskId]))[0];
         targetTitle = task?.title;
         targetPhase ??= task?.phase;
+        if (task) {
+          const { fallbackUserState, stateWord } = await import('../user-status.js');
+          const live = task.user_status;
+          currentState = stateWord(task.phase === 'COMPLETE' ? 'done' : live?.state ?? fallbackUserState(task.phase, task.status), !!live?.snoozed);
+          if (live?.ask) currentState += `: ${live.ask.replace(/\s+/g, ' ').slice(0, 200)}`;
+          else if (live?.waitingOn) currentState += `: ${live.waitingOn.replace(/\s+/g, ' ').slice(0, 200)}`;
+        }
         targetSessionId ??= task?.session_id ?? undefined;
       } catch { /* title stays generic */ }
     }
@@ -579,7 +593,7 @@ async function deliverSettled(
       : (context.lastMessage ? clipNoticeMessage(context.lastMessage) : undefined)
         ?? context.lastWords
         ?? await readLastWords(targetSessionId);
-    const text = buildRequestNotification(settled, outcome, {
+    const notification = buildRequestNotification(settled, outcome, {
       title: targetTitle,
       sessionId: request.toSessionId,
       taskId: request.toTaskId,
@@ -588,6 +602,8 @@ async function deliverSettled(
       ...(handedOn?.length ? { handedOn } : {}),
       ...(alsoUnanswered.length ? { alsoUnanswered } : {}),
     });
+
+    const text = currentState ? notification.replace('\n\nNext:\n', () => `\n\nCurrent state: ${escapeBody(currentState)}.\n\nNext:\n`) : notification;
 
     // Past its deadline the request stays open and nothing came back: background, riding the
     // asker's next message, never a turn of its own nor a line into a running one (held-notices.ts),
