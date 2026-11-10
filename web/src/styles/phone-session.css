@@ -748,6 +748,8 @@
     color: var(--success);
     font-size: 12px;
   }
+  /* A tapped chip keeps its colour: phone-fixes-r2.css gives a stuck :hover `color: inherit`. */
+  .app-shell-navigation .phone-topbar.phone-topbar .phone-bar-slot .session-web-chip.is-compact { color: var(--success); }
   .phone-topbar .phone-bar-slot .session-web-chip.is-compact .session-web-chip-dot { display: none; }
   .phone-topbar .phone-bar-slot .session-web-chip.is-compact .session-web-chip-icon svg { width: 16px; height: 16px; }
   .app-shell-navigation .phone-topbar:has(.phone-bar-slot .session-web-chip) .phone-topbar-title {

@@ -13,7 +13,7 @@
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import net from 'node:net'
-import { test, expect, type Locator, type Page, type Route } from '@playwright/test'
+import { test, expect, type Browser, type Locator, type Page, type Route, type TestInfo } from '@playwright/test'
 
 const SESSION_ID = 'pw-servers-session'
 const TASK_ID = 'pw-task-servers'
@@ -81,18 +81,22 @@ async function press(page: Page, loc: Locator): Promise<void> {
 
 /** The Browser view's two routes, answered from here: one tab of the task, and its picture. */
 function fakeBrowser(page: Page, picture: string) {
-  const state = { signIn: false, gone: false }
+  const state = { signIn: false, gone: false, tabs: null as null | Array<Record<string, unknown>> }
   const tab = () => ({
     device: 'pw-device', browser: 'Chrome', tab: 41, url: 'https://login.bank.test/signin', title: 'Sign in to Test Bank',
     window: 'agent', windowState: 'normal', connected: true, pictures: true,
     ...(state.signIn ? { signIn: { id: 'si-1', at: new Date().toISOString(), site: 'bank.test' } } : {}),
   })
   void page.route('**/api/v1/browser/view?*', (route: Route) => route.fulfill({
-    json: state.gone ? { tabs: [], ended: { at: new Date().toISOString(), why: 'stopped' } } : { tabs: [tab()] },
+    json: state.gone ? { tabs: [], ended: { at: new Date().toISOString(), why: 'stopped' } } : { tabs: state.tabs ?? [tab()] },
   }))
-  void page.route('**/api/v1/browser/view/frame?*', (route: Route) => route.fulfill({
-    json: { tab: 41, device: 'pw-device', shown: true, image: picture, at: new Date().toISOString(), title: 'Sign in to Test Bank', url: 'https://login.bank.test/signin', window: 'agent', windowState: 'normal' },
-  }))
+  void page.route('**/api/v1/browser/view/frame?*', (route: Route) => {
+    const asked = new URL(route.request().url()).searchParams.get('tab')
+    const shown = state.tabs?.find((t) => String(t.tab) === asked)
+    return route.fulfill({
+      json: { tab: shown?.tab ?? 41, device: 'pw-device', shown: true, image: picture, at: new Date().toISOString(), title: shown?.title ?? 'Sign in to Test Bank', url: shown?.url ?? 'https://login.bank.test/signin', window: 'agent', windowState: 'normal' },
+    })
+  })
   void page.route('**/api/v1/browser/view/stop', (route: Route) => { state.gone = true; return route.fulfill({ json: { ok: true } }) })
   return state
 }
@@ -192,5 +196,72 @@ test('servers and the browser show only as header pills, their details in popove
   await expect(chip).toHaveCount(0)
   await expect(body.locator('[data-testid^="session-browser-"]')).toHaveCount(0)
   await page.waitForTimeout(800)
+  await ctx.close()
+})
+
+/** A context on the fixture session's panel, its tabs answered from the page (phone: an iPhone's size and touch). */
+async function openSession(browser: Browser, testInfo: TestInfo, phone = false) {
+  const ctx = await browser.newContext({
+    viewport: phone ? { width: 390, height: 844 } : { width: 1280, height: 820 },
+    ...(phone ? { isMobile: true, hasTouch: true, userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1' } : {}),
+    baseURL: String(testInfo.project.use.baseURL ?? 'http://localhost:3457'),
+  })
+  const page = await ctx.newPage()
+  const art = await ctx.newPage()
+  await art.setContent('<body style="margin:0;background:#f4f6fb;font:18px sans-serif"><h1 style="padding:24px">A page</h1></body>')
+  const picture = `data:image/jpeg;base64,${(await art.screenshot({ type: 'jpeg', quality: 80 })).toString('base64')}`
+  await art.close()
+  const state = fakeBrowser(page, picture)
+  await page.goto(`/?s1=${SESSION_ID}`)
+  const panel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`).filter({ visible: true })
+  await expect(panel).toBeVisible({ timeout: 30_000 })
+  return { ctx, page, panel, state }
+}
+
+test('the Sign in pill opens the tab that asks, not a newer one', async ({ browser }, testInfo) => {
+  const { ctx, page, panel, state } = await openSession(browser, testInfo)
+  const common = { device: 'pw-device', browser: 'Chrome', window: 'agent', windowState: 'normal', connected: true, pictures: true }
+  state.tabs = [
+    { ...common, tab: 41, title: 'Sign in to Test Bank', url: 'https://login.bank.test/signin', signIn: { id: 'si-1', at: new Date().toISOString(), site: 'bank.test' } },
+    { ...common, tab: 42, title: 'A newer reference page', url: 'https://reference.test/page' },
+  ]
+  const chip = panel.getByTestId('session-browser-chip')
+  await expect(chip).toHaveText('Sign in', { timeout: 30_000 })
+  await press(page, chip)
+  const pop = page.getByTestId('session-browser-popover')
+  await expect(pop.getByTestId('session-browser-title')).toHaveText('Sign in to Test Bank')
+  await expect(pop.getByTestId('session-browser-hand')).toContainText('sign in')
+  await page.screenshot({ path: `${SHOTS}/${testInfo.project.name}-6-sign-in-asking-tab.png`, scale: 'css' })
+  await ctx.close()
+})
+
+test('a phone keeps the title readable beside every pill, and the view readable in its popover', async ({ browser }, testInfo) => {
+  const port = await freePort()
+  await startServer(port)
+  const { ctx, page } = await openSession(browser, testInfo, true)
+  const bar = page.locator('.phone-topbar')
+  await expect(bar.getByTestId('session-web-chip')).toBeVisible({ timeout: 60_000 })
+  const chip = bar.getByTestId('session-browser-chip')
+  await expect(chip).toBeVisible({ timeout: 30_000 })
+  for (const width of [390, 320]) {
+    await page.setViewportSize({ width, height: 844 })
+    await page.waitForTimeout(400)
+    const title = (await bar.locator('.phone-topbar-title').boundingBox())!
+    const pills = await bar.locator('.phone-bar-slot > *').evaluateAll((els) => els.map((e) => e.getBoundingClientRect().left))
+    // The title ends before the first pill, and has room for words.
+    expect(title.x + title.width).toBeLessThanOrEqual(Math.min(...pills) + 1)
+    expect(title.width).toBeGreaterThan(60)
+    await page.screenshot({ path: `${SHOTS}/${testInfo.project.name}-7-phone-${width}.png`, scale: 'css' })
+    await press(page, chip)
+    const pop = page.getByTestId('session-browser-popover')
+    await expect(pop.getByTestId('session-browser-picture')).toBeVisible({ timeout: 20_000 })
+    expect((await pop.getByTestId('session-browser-title').boundingBox())!.width).toBeGreaterThan(150)
+    await page.screenshot({ path: `${SHOTS}/${testInfo.project.name}-8-phone-${width}-popover.png`, scale: 'css' })
+    await page.keyboard.press('Escape')
+    await expect(pop).toHaveCount(0)
+    // A tapped pill keeps its colour (a touch screen's stuck :hover must not turn it black).
+    const colour = (l: Locator) => l.evaluate((e) => getComputedStyle(e).color)
+    expect(await colour(chip)).toBe(await colour(bar.getByTestId('session-web-chip')))
+  }
   await ctx.close()
 })

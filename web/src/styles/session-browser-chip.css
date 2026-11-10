@@ -63,9 +63,18 @@
 .session-browser-popover:has(> .session-browser-card--large) { width: min(1040px, calc(100vw - 24px)); }
 .session-browser-popover .session-browser-card--large .session-browser-shot { height: min(62vh, 600px); }
 
-/* The phone's top bar, beside the kebab: a browser glyph in a 44 px target. */
+/* A narrow popover (a phone): the view's actions take their own row under the names, so the
+   title and address keep the width. */
+@media (max-width: 520px) {
+  .session-browser-popover .session-browser-head { flex-wrap: wrap; }
+  .session-browser-popover .session-browser-names { flex: 1 1 0; min-width: 0; }
+  .session-browser-popover .session-browser-actions { flex: 1 0 100%; justify-content: flex-end; }
+}
+
+/* The phone's top bar, beside the kebab: a browser glyph in a 44 px target. Its colour outranks
+   phone-fixes-r2.css's touch rule (a tapped button's stuck :hover takes `color: inherit`). */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
-  .phone-topbar .phone-bar-slot .session-browser-chip.is-compact {
+  .app-shell-navigation .phone-topbar.phone-topbar .phone-bar-slot .session-browser-chip.is-compact {
     justify-content: center;
     gap: 3px;
     min-width: 44px;
@@ -77,28 +86,29 @@
     font-size: 12px;
     font-weight: 600;
   }
-  .phone-topbar .phone-bar-slot .session-browser-chip.is-compact.is-ask { color: var(--warning); }
-  .phone-topbar .phone-bar-slot .session-browser-chip.is-compact.is-yours { color: var(--accent); }
-  .phone-topbar .phone-bar-slot .session-browser-chip.is-compact.is-ended { color: var(--fg-muted); }
-  .phone-topbar .phone-bar-slot .session-browser-chip.is-compact .session-browser-chip-dot { display: none; }
-  .phone-topbar .phone-bar-slot .session-browser-chip.is-compact .session-browser-chip-icon svg { width: 16px; height: 16px; }
-  /* The title's gutters grow by every pill in the slot beside the kebab (the slot's children:
-     the kebab and each pill), whichever pills they are: wait, pull request, web, browser. The
-     doubled class outranks the pairwise rules of phone-session.css and pr-pill.css, which load later. */
+  .app-shell-navigation .phone-topbar.phone-topbar .phone-bar-slot .session-browser-chip.is-compact.is-ask { color: var(--warning); }
+  .app-shell-navigation .phone-topbar.phone-topbar .phone-bar-slot .session-browser-chip.is-compact.is-yours { color: var(--accent); }
+  .app-shell-navigation .phone-topbar.phone-topbar .phone-bar-slot .session-browser-chip.is-compact.is-ended { color: var(--fg-muted); }
+  .app-shell-navigation .phone-topbar.phone-topbar .phone-bar-slot .session-browser-chip.is-compact .session-browser-chip-dot { display: none; }
+  .app-shell-navigation .phone-topbar.phone-topbar .phone-bar-slot .session-browser-chip.is-compact .session-browser-chip-icon svg { width: 16px; height: 16px; }
+  /* The title's room beside the pills (the slot's children: the kebab and each pill, whichever
+     pills they are: wait, pull request, web, browser). One pill: centred, as before. Two or more:
+     a centred title would lose as much on the left as the pills take on the right (40 px at
+     320 px wide), so it starts beside the back button. The doubled class outranks the pairwise
+     rules of phone-session.css and pr-pill.css, which load later. */
   .app-shell-navigation .phone-topbar.phone-topbar:has(.phone-bar-slot .session-browser-chip) .phone-topbar-title {
     left: calc(96px + var(--wn-safe-left));
     right: calc(96px + var(--wn-safe-right));
   }
   .app-shell-navigation .phone-topbar.phone-topbar:has(.phone-bar-slot .session-browser-chip):has(.phone-bar-slot > :nth-child(3)) .phone-topbar-title {
-    left: calc(140px + var(--wn-safe-left));
+    left: calc(52px + var(--wn-safe-left));
     right: calc(140px + var(--wn-safe-right));
+    align-items: flex-start;
   }
   .app-shell-navigation .phone-topbar.phone-topbar:has(.phone-bar-slot .session-browser-chip):has(.phone-bar-slot > :nth-child(4)) .phone-topbar-title {
-    left: calc(184px + var(--wn-safe-left));
     right: calc(184px + var(--wn-safe-right));
   }
   .app-shell-navigation .phone-topbar.phone-topbar:has(.phone-bar-slot .session-browser-chip):has(.phone-bar-slot > :nth-child(5)) .phone-topbar-title {
-    left: calc(228px + var(--wn-safe-left));
     right: calc(228px + var(--wn-safe-right));
   }
 }
