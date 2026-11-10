@@ -47,6 +47,8 @@ import { createTriggerLabel, type TriggerLabels } from '../core/routines/trigger
  */
 export interface OfflineSliceSession {
   sid: string; taskId?: string; title?: string; aside?: boolean; noResume?: boolean
+  /** Runs on an ACP engine (the server's ACP worker): never a same-host delivery target, whatever this host's registry holds. */
+  acp?: boolean
   /**
    * An ACP session's worker runtime id (`acp-...`) when it differs from `sid`: that session's
    * `walnut` names itself by it (core/sessions/acp-caller-sid.ts), and `callerSidOf` maps it back.
@@ -982,6 +984,15 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     return slices.get(home)?.sessions.find((s) => s.sid === sid) ?? startedOf(home).find((s) => s.sid === sid)
   }
 
+  /**
+   * A session this host delivers into itself: a CLI live in its registry, and never one the copy
+   * marks ACP (its runner is the server's ACP worker; a CLI under its id is a stray, 2026-11-10).
+   * Every same-host delivery decision reads this, never deps.isLive alone (tests/providers/acp-never-native-ratchet.test.ts).
+   */
+  function liveHere(home: string, sid: string): boolean {
+    return deps.isLive(sid) && !sessionOf(home, sid)?.acp
+  }
+
   /** The session a gateway caller sid names: an ACP session's runtime id becomes its record id. */
   function callerSidOf(home: string, sid: string): string {
     try {
@@ -1372,8 +1383,8 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     const admitted = admitCompleteTarget(home, sessionOf(home, row.fromSessionId)?.taskId, args, text, 'reply')
     if ('error' in admitted) return admitted.error
     // The asker runs elsewhere: only a leader can carry the answer there.
-    const remoteHost = deps.isLive(row.fromSessionId) ? undefined : row.fromHost
-    if (!deps.isLive(row.fromSessionId) && !(remoteHost && deps.relay)) {
+    const remoteHost = liveHere(home, row.fromSessionId) ? undefined : row.fromHost
+    if (!liveHere(home, row.fromSessionId) && !(remoteHost && deps.relay)) {
       return needsServer(`The asking session (${row.fromSessionId.slice(0, 8)}) is not running on this host; routing the answer`)
     }
     const denied = admitWrite(callerSid) ?? roomFor(home)
@@ -1420,7 +1431,10 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     const { task, error } = resolveTask(home, to)
     if (error) return { error }
     if (task) {
-      const live = slice.sessions.filter((s) => s.taskId === task.id && deps.isLive(s.sid))
+      if (slice.sessions.some((s) => s.acp && s.sid === task.session_id)) {
+        return { error: needsServer(`Task ${task.id} runs on an ACP engine; delivering to it`) }
+      }
+      const live = slice.sessions.filter((s) => s.taskId === task.id && liveHere(home, s.sid))
       if (live.length === 0) {
         return { error: needsServer(`Task ${task.id} has no session running on this host; starting one`) }
       }
@@ -1432,7 +1446,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     const ref = to.trim()
     const byId = matchIdRef(slice.sessions, ref, (s) => s.sid).filter((s) => s.sid === ref || ref.length >= 8)
     if (byId.length === 1) {
-      if (!deps.isLive(byId[0].sid)) return { error: needsServer(`Session ${ref} is not running on this host; resuming it`) }
+      if (!liveHere(home, byId[0].sid)) return { error: needsServer(`Session ${ref} is not running on this host; resuming it`) }
       return { sid: byId[0].sid, taskId: byId[0].taskId, title: byId[0].title }
     }
     return { error: needsServer(`"${ref}" is not a session of this Walnut on this host; messages to other hosts`) }
@@ -1585,7 +1599,9 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     const ref = to.trim()
     const task = tasksWithOverlay(home).find((t) => t.id === ref)
     if (task) {
-      const live = slice.sessions.filter((s) => s.taskId === task.id && deps.isLive(s.sid))
+      // A task whose current session runs on an ACP engine is the server's to deliver to.
+      if (slice.sessions.some((s) => s.acp && s.sid === task.session_id)) return null
+      const live = slice.sessions.filter((s) => s.taskId === task.id && liveHere(home, s.sid))
       // The server picks the task's current session; with two live, leave it the choice.
       if (live.length !== 1 || live[0].aside) return null
       return { sid: live[0].sid, taskId: task.id, title: live[0].title ?? task.title }
@@ -1594,11 +1610,11 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     const key = (printed ?? ref).toLowerCase()
     if (key.length < 8 || !/^[0-9a-f-]+$/.test(key)) return null
     const hits = matchIdRef(slice.sessions, key, (s) => s.sid.toLowerCase())
-    if (hits.length !== 1 || hits[0].aside || !deps.isLive(hits[0].sid)) return null
+    if (hits.length !== 1 || hits[0].aside || !liveHere(home, hits[0].sid)) return null
     // An older session of a task that runs another one here too: the server
     // knows which one the task continues in.
     const taskId = hits[0].taskId
-    if (taskId && slice.sessions.filter((s) => s.taskId === taskId && deps.isLive(s.sid)).length !== 1) return null
+    if (taskId && slice.sessions.filter((s) => s.taskId === taskId && liveHere(home, s.sid)).length !== 1) return null
     return { sid: hits[0].sid, taskId, title: hits[0].title }
   }
 
@@ -1691,7 +1707,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     if (copy?.carries) return null
     const asker = row.fromSessionId
     // The server's first rung (reply-routing.ts): a live asker is its own address.
-    if (asker === callerSid || !deps.isLive(asker) || deps.pendingPrompt!(asker)) return null
+    if (asker === callerSid || !liveHere(home, asker) || deps.pendingPrompt!(asker)) return null
     const askerRow = sessionOf(home, asker)
     if (!askerRow || askerRow.aside) return null
     if (parentCompleteRefusal(home, callerSid, askerRow?.taskId)) return null
@@ -2492,8 +2508,8 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     row.outcome = outcome
     row.settledAt = new Date(deps.now()).toISOString()
     append(home, { kind: 'row', row: { ...row } })
-    const remoteHost = deps.isLive(row.fromSessionId) ? undefined : row.fromHost
-    if (!deps.isLive(row.fromSessionId) && !(remoteHost && deps.relay)) {
+    const remoteHost = liveHere(home, row.fromSessionId) ? undefined : row.fromHost
+    if (!liveHere(home, row.fromSessionId) && !(remoteHost && deps.relay)) {
       deps.log('info', 'offline host: asker not running, notice skipped', { home, requestId: row.id })
       return
     }
@@ -2570,9 +2586,11 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     if (!slice) return { ok: false, reason: 'no host copy for this Walnut' }
     const task = tasksWithOverlay(home).find((t) => t.id === taskId)
     if (task?.phase === 'COMPLETE') return { ok: false, reason: 'target task is complete' }
-    const live = slice.sessions.filter((s) => s.taskId === taskId && deps.isLive(s.sid))
+    // A task whose current session runs on an ACP engine: the server's ACP worker takes it, never an older CLI here.
+    if (slice.sessions.some((s) => s.acp && s.sid === task?.session_id)) return { ok: false, reason: 'the target task runs on an ACP engine; the Walnut server delivers it' }
+    const live = slice.sessions.filter((s) => s.taskId === taskId && liveHere(home, s.sid))
     if (live.length > 0) {
-      const sid = live[0].sid
+      const sid = (task?.session_id && live.find((s) => s.sid === task.session_id)?.sid) || live[0].sid
       try {
         const delivered = await deliverWithTaskRouting(home, sid, text, messageId)
         return delivered.ok ? { ok: true, sid } : { ok: false, reason: delivered.reason }
@@ -2615,7 +2633,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       if (d.kind === 'text') {
         if (typeof d.toSid !== 'string' || !sessionOf(home, d.toSid)) return fail('not_found', 'no session of that Walnut with that id on this host')
         if (typeof d.text !== 'string' || !d.text) return fail('bad_request', 'text must be a non-empty string')
-        if (!deps.isLive(d.toSid)) return fail('not_running', `session ${d.toSid.slice(0, 8)} is not running on this host`)
+        if (!liveHere(home, d.toSid)) return fail('not_running', `session ${d.toSid.slice(0, 8)} is not running on this host`)
         const denied = roomFor(home)
         if (denied) return denied
         const mid = messageId(d.messageId)
@@ -2706,7 +2724,9 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       // host server alone, host-server/alone-api.ts): its Walnut blocks are Walnut's.
       const body = typeof text === 'string' ? text.trim() : ''
       if (!body) return fail('bad_request', 'text must be a non-empty string')
-      if (!deps.isLive(sid)) {
+      // An ACP session is never resumed here as a CLI: the server's ACP worker delivers it.
+      if (sessionOf(home, sid)?.acp) return fail('not_running', 'this session runs on an ACP engine; the Walnut server delivers it when it is back')
+      if (!liveHere(home, sid)) {
         // A stopped session of this host (WP12): the person's message starts it again with
         // the command it last ran (resumeForTrigger's path and limits), journaled `resume`.
         if (!deps.resume) return fail('not_running', 'this session is not running; the Walnut server resumes it when it is back')

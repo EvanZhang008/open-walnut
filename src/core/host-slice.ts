@@ -281,6 +281,9 @@ export async function buildHostSlice(hostKey: string, now = Date.now()): Promise
       ...(isListableSession(s) ? {} : { aside: true }),
       // The host resumes a stopped session for a trigger fire only where we would.
       ...(resumableForTrigger(s) ? {} : { noResume: true }),
+      // An ACP session runs in the server's ACP worker, never a CLI of this host's registry: a
+      // message to it is the server's to deliver (2026-11-10: a stray Claude CLI on a Codex id took one).
+      ...(engineCaps(s.engine).runtimeKind === 'native' ? {} : { acp: true }),
     })),
     tasks: [...picked.values()],
     requests: pending,

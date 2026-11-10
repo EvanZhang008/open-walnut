@@ -244,6 +244,23 @@ describe('what the host leaves to the server (null: relay, nothing delivered)', 
     expect(await send(h, A, { to: B, text: 'x' }).result).toBeNull()
   })
 
+  it('an ACP session, by task or by id, even with a stray CLI live under its id here (2026-11-10)', async () => {
+    const h = harness()
+    // B runs on an ACP engine: its runner is the server's worker, whatever this host's registry holds.
+    h.host.configure(slice({ hash: 'h3a', sessions: [{ sid: A, taskId: TASK_A, title: 'Leader' }, { sid: B, taskId: TASK_B, title: 'Codex worker', acp: true }],
+      tasks: slice().tasks.map((t) => (t.id === TASK_B ? { ...t, session_id: B } : t)) }))
+    expect(h.live.has(B)).toBe(true)
+    expect(await send(h, A, { to: TASK_B, text: 'x' }).result).toBeNull()
+    expect(await send(h, A, { to: B, text: 'x' }).result).toBeNull()
+    // A request the ACP session asked: its answer is the server's to route, not written into that CLI.
+    h.host.configure(slice({ hash: 'h3b', sessions: [{ sid: A, taskId: TASK_A, title: 'Leader' }, { sid: B, taskId: TASK_B, title: 'Codex worker' }] }))
+    const asked = await send(h, B, { to: TASK_A, text: 'Which release?' }).result
+    const id = String(asked?.ok && asked.result.requestId)
+    h.host.configure(slice({ hash: 'h3c', sessions: [{ sid: A, taskId: TASK_A, title: 'Leader' }, { sid: B, taskId: TASK_B, title: 'Codex worker', acp: true }] }))
+    expect(await send(h, A, { in_reply_to: id, text: 'the October one' }).result).toBeNull()
+    expect(h.delivered.map((d) => d.sid)).toEqual([A])
+  })
+
   it('a worker\'s message to its completed parent (the server says why)', async () => {
     const h = harness()
     h.host.configure(slice({ hash: 'h4', tasks: slice().tasks.map((t) => (t.id === TASK_A ? { ...t, phase: 'COMPLETE' } : t)) }))

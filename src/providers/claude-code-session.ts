@@ -94,6 +94,7 @@ import { describeClaudeLaunchFailure } from './host-runtime-core.js'
 import { hostLinkReason, isHostWaitReason, slowHostReason } from './host-wait-words.js'
 import { AcpSession, sessionMcpServerToAcp, splitAcpModelId } from './acp-session.js'
 import { engineCaps, isAcpEngine, resolveEngine } from '../core/agents/engine-registry.js'
+import { AcpSessionNotNativeError, acpEngineOfRecord, refuseNativeSpawnOnAcpRecord } from './acp-native-guard.js'
 import { CLI_ERROR_PREFIX, extractImageFilePathFromInput } from '../core/session-history.js'
 import { launchNamingPlainText } from '../core/sessions/launch-naming.js'
 import { noteSessionProgress } from '../core/sessions/session-progress.js'
@@ -3089,6 +3090,8 @@ export class ClaudeCodeSession {
       const { sessionStops } = await import('../core/sessions/session-stop.js')
       const stopFence = opts?.stopFence !== undefined ? opts.stopFence : await sessionStops.fence(tmpId)
       stepDone('fenceMs')
+      // Never a Claude CLI under an ACP session's id, whichever path asked for it (acp-native-guard.ts).
+      await refuseNativeSpawnOnAcpRecord(resumeSessionId ?? preassignedId)
       if (this.taskId) {
         const { restoreOwnTaskDir } = await import('../core/sessions/task-dir-place.js')
         await restoreOwnTaskDir(this.taskId, resolvedCwd, host).catch(() => false)
@@ -13887,7 +13890,8 @@ export class SessionRunner {
     // attach / --resume and will deliver via the source of truth instead of guessing.
     // (Root-cause fix, mirrors the 2026-04-22 removal of the _hasPipe cache; see
     // memory: don't cache remote state locally.)
-    if (!targetSession) {
+    // A native object under an ACP session's id is a stray: never written into (acp-native-guard.ts).
+    if (!targetSession || this.findAcpSession(sessionId)) {
       log.session.info('injectMidTurn: no live session object — delegating to processNext', {
         sessionId,
       })
@@ -15229,6 +15233,25 @@ export class SessionRunner {
       ?? await this.maybeAttachAcpSession(sessionId)
     if (acpSession) {
       return this.drainAcpQueue(acpSession, acpSession.sessionId ?? sessionId)
+    }
+    // An ACP record that did not attach is never drained down the Claude path (acp-native-guard.ts).
+    // A server that is stopping leaves the rows queued: the next boot attaches and drains them. Any
+    // other miss (an archived record, a record that changed mid-attach) parks them, so the asker
+    // hears it was not delivered and the panel offers Retry.
+    const acpEngine = this.sdkSessionMap.has(sessionId) ? null : await acpEngineOfRecord(sessionId).catch(() => null)
+    if (acpEngine) {
+      if (this.acpDestroyed) {
+        log.session.warn('processNext: an ACP session did not attach while this server stops; its messages wait for the next one', { sessionId, engine: acpEngine })
+        return
+      }
+      const rows = (await getQueue(sessionId)).filter((m) => m.status === 'pending')
+      const reason = new AcpSessionNotNativeError(sessionId, acpEngine).message
+      log.session.warn('processNext: an ACP session did not attach; parking its messages (never a Claude CLI)', { sessionId, engine: acpEngine, rows: rows.length })
+      if (rows.length) {
+        await parkMessages(rows, reason).catch(() => {})
+        reportBatchFailed(sessionId, rows.map((m) => m.id), reason)
+      }
+      return
     }
 
     // One line per batch, under the uuid its rows were given the first time they

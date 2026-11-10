@@ -17,6 +17,7 @@
  */
 
 import { CwdMissingError } from './cwd-check.js';
+import { AcpSessionNotNativeError } from './acp-native-guard.js';
 import { isSessionStopSuperseded } from '../core/sessions/session-stop.js';
 import { InheritedSessionRefusedError } from './ephemeral-session-gate.js';
 import { DaemonFrameTooLargeError, FRAME_TOO_LARGE } from './daemon-frame-cap.js';
@@ -26,7 +27,7 @@ export type DeliveryFailureKind = 'permanent' | 'transient';
 export interface DeliveryFailureVerdict {
   kind: DeliveryFailureKind;
   /** Stable label for logs/tests. Absent for transient failures. */
-  code?: 'cwd_missing' | 'session_missing' | 'session_stopped' | 'budget_paused' | 'inherited_session' | 'session_live' | 'too_large';
+  code?: 'cwd_missing' | 'session_missing' | 'session_stopped' | 'budget_paused' | 'inherited_session' | 'session_live' | 'too_large' | 'acp_session';
   /** Human-readable cause, stored on the parked row and shown in the UI. */
   reason: string;
 }
@@ -62,6 +63,8 @@ export function classifyDeliveryFailure(err: unknown): DeliveryFailureVerdict {
   // Another process holds the session on its host: every retry is refused the
   // same way until that process ends, so the batch waits for the user's Retry.
   if (err instanceof SessionHeldElsewhereError) return { kind: 'permanent', code: 'session_live', reason: err.message.slice(0, HELD_REASON_MAX) };
+  // A Claude CLI under an ACP session's id: refused the same way on every try, so the batch waits (acp-native-guard.ts).
+  if (err instanceof AcpSessionNotNativeError) return { kind: 'permanent', code: 'acp_session', reason };
   if (err instanceof CwdMissingError) return { kind: 'permanent', code: 'cwd_missing', reason };
   if (CWD_MISSING.test(message)) return { kind: 'permanent', code: 'cwd_missing', reason };
   if (SESSION_MISSING.test(message)) return { kind: 'permanent', code: 'session_missing', reason };

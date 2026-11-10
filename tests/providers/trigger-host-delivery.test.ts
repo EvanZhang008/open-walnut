@@ -208,6 +208,17 @@ describe('offline host: which session on this host takes the fire', () => {
     expect(h.delivered).toEqual([{ sid: LIVE, text: 'ENVELOPE', messageId: 'qm-trigger-1' }])
   })
 
+  it('leaves the fire to the server when the task runs on an ACP engine, even with an older CLI of it live here (2026-11-10)', async () => {
+    const ACP = 'acacacac-9999-4999-8999-999999999999'
+    const h = setup({
+      sessions: [{ sid: ACP, taskId: TASK, title: 'Codex run', acp: true }, { sid: LIVE, taskId: TASK, title: 'Old Claude run' }],
+      tasks: [{ id: TASK, title: 'Monitor chat', phase: 'IN_PROGRESS', project: 'Ops', session_id: ACP }],
+    })
+    h.live.add(ACP)
+    expect(await h.host.deliverTrigger(HOME, TASK, 'E', 'qm-1')).toMatchObject({ ok: false, reason: expect.stringContaining('ACP engine') })
+    expect(h.delivered).toEqual([])
+  })
+
   it('leaves the fire to the server when nothing here can take it', async () => {
     const h = setup()
     expect(await h.host.deliverTrigger('/other/home', TASK, 'E', 'qm-1')).toMatchObject({ ok: false, reason: expect.stringContaining('no host copy') })

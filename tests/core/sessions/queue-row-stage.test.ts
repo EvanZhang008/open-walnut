@@ -210,7 +210,7 @@ const INTERNAL_QUEUE_READS: Record<string, number> = {
   'core/sessions/folder-gone.ts': 3,
   'core/sessions/idle-compaction.ts': 1,
   'core/sessions/request-reached.ts': 1, // takenBackIds: rows the queue took back void their reached stamp
-  'providers/claude-code-session.ts': 8, // +1: the retry clock of a delivery that threw (retryAfterDeliveryThrow)
+  'providers/claude-code-session.ts': 9, // +1: the retry clock of a delivery that threw (retryAfterDeliveryThrow); +1: an ACP record that did not attach parks its pending rows (acp-native-guard.ts)
   'providers/acp-stranded-rows.ts': 1, // settles an ACP row left 'processing' with no delivery in flight
   'core/sessions/queued-change.ts': 1, // queueOf: was a refused Edit or Delete's row taken or gone
   'core/sessions/lane-turn.ts': 2, // a joined message: which rows wait, and whether its own row was taken
