@@ -1131,7 +1131,7 @@ async function recordCardedCall(
       ...(!resp.ok ? { error: `${resp.error.code}: ${resp.error.message}`.slice(0, 600) } : {}),
       fields,
     }
-    await requestOverSocket(socketPath, { v: 1, op: 'tools.call', sid, args: { name: 'op_card_record', args: record } }, RECORD_TIMEOUT_MS)
+    await requestOverSocket(socketPath, { v: 1, op: 'tools.call', sid, args: { name: 'op_card_record', args: record, callId: newCallId() } }, RECORD_TIMEOUT_MS)
   } catch { /* display data only */ }
 }
 
