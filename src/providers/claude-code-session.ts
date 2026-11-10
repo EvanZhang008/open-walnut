@@ -131,6 +131,7 @@ import {
   rememberModelWindow, recallModelWindow,
 } from './context-window.js'
 import { hardStopTokens } from '../core/sessions/context-full.js'
+import { deliveryLatency, type KnownLineFate } from './delivery-latency.js'
 import {
   openTurn,
   settleTurn,
@@ -4195,7 +4196,7 @@ export class ClaudeCodeSession {
     /** Queue rows this line carries: for a CLI that reports its queue they stay queued until it takes the line (line-consumption.ts). */
     rows?: QueuedMessage[]
     /** The line was not written because its fate was already known (ran, waiting, cancelled, dropped); the rows are settled here. */
-    onFate?: (fate: { fate: string; state?: string }) => void
+    onFate?: (fate: { fate: string; state?: string; writtenAt?: number }) => void
     /** The line waits behind one whose answer is still being asked for. */
     onHeld?: () => void
     /** True once the user stopped the session: stop asking about this line. */
@@ -8512,6 +8513,10 @@ export class ClaudeCodeSession {
           teamActive: this._teamActive,
           backgroundActive: this.hasActiveBackgroundWork(),
         })
+        // One delivery is one turn's: a later turn that no send opened (auto-continue,
+        // a background command's follow-up) must not report it again.
+        this._lastDeliveryMs = undefined
+        this._lastDeliveryPath = undefined
 
         // ── Result-text fallback: the turn answered on `result` alone ──
         // (upstream ACP issue #453 / fix #858, adapted). The `result` line is
@@ -13896,7 +13901,7 @@ export class SessionRunner {
       const combined = joinQueuedRows(newMsgs.map((m) => m.message))
       const uuid = newMsgs[0].lineUuid
       const stops = targetSession.stopEpoch
-      let known: { fate: string } | undefined
+      let known: KnownLineFate | undefined
       let behindCut = false
 
       let delivered: boolean
@@ -13955,7 +13960,7 @@ export class SessionRunner {
           this.deliverRest(sessionId)
           return
         }
-        this.logDeliveryLatency(sessionId, 'mid-turn', newMsgs, targetSession)
+        this.logDeliveryLatency(sessionId, 'mid-turn', newMsgs, targetSession, known)
 
         // Tell frontend these messages have been delivered to the CLI. A mid-turn
         // send JOINS the running turn (no gen bump): the turn that answers it is this
@@ -14018,31 +14023,26 @@ export class SessionRunner {
    * single message from RPC through delivery. deliveryMs = now - enqueuedAt
    * of the oldest message in the batch (worst-case wait the user felt).
    */
-  private logDeliveryLatency(sessionId: string, path: 'stdin' | 'mid-turn' | 'resume', msgs: QueuedMessage[], session?: ClaudeCodeSession): void {
-    const now = Date.now()
-    let maxMs = 0
-    let oldestId: string | undefined
-    for (const m of msgs) {
-      const enq = Date.parse(m.enqueuedAt)
-      if (!Number.isNaN(enq)) {
-        const ms = now - enq
-        if (ms >= maxMs) { maxMs = ms; oldestId = m.id }
-      }
-    }
+  private logDeliveryLatency(sessionId: string, path: 'stdin' | 'mid-turn' | 'resume', msgs: QueuedMessage[], session?: ClaudeCodeSession, known?: KnownLineFate): void {
+    // Awake time only, and a line written before this delivery counts its own write (delivery-latency.ts).
+    const lat = deliveryLatency(msgs, Date.now(), known)
     log.session.info('message delivered', {
       sessionId,
       path,
       count: msgs.length,
-      deliveryMs: maxMs,
-      messageId: oldestId,
+      ...(lat.deliveryMs !== undefined ? { deliveryMs: lat.deliveryMs } : {}),
+      messageId: lat.messageId ?? msgs[0]?.id,
+      ...(lat.sleptMs !== undefined ? { wallMs: lat.wallMs, sleptMs: lat.sleptMs } : {}),
+      ...(lat.writtenEarlier ? { writtenEarlier: true, fate: known?.fate } : {}),
     })
+    if (lat.deliveryMs === undefined) return
     // Stash on the target session instance for its next per-turn wide event
     // (forensic observability). The result handler that reads these lives on
     // ClaudeCodeSession, so the values MUST land on that instance — not on the
     // runner. Fall back to a lookup if the caller didn't pass the instance.
     const target = session ?? this.findByClaudeId(sessionId)
     if (target) {
-      target._lastDeliveryMs = maxMs
+      target._lastDeliveryMs = lat.deliveryMs
       target._lastDeliveryPath = path
     }
   }
@@ -14085,7 +14085,7 @@ export class SessionRunner {
     // Read already (its init came first): settled as a read line (line-answer-v1).
     if (!session.holdResumeLineUntilRead(msgs, first.endsBefore ?? session.processEndCount)) session.settleReadResumeLine(msgs)
     reportDelivered(sessionId, ids, session.turnGen)
-    this.logDeliveryLatency(sessionId, 'resume', msgs, session)
+    this.logDeliveryLatency(sessionId, 'resume', msgs, session, known)
   }
 
   /**
@@ -15345,7 +15345,7 @@ export class SessionRunner {
         const reclaimsBefore = targetSession.lineReclaimCount
         const stops = targetSession.stopEpoch
         const target = targetSession
-        let known: { fate: string } | undefined
+        let known: KnownLineFate | undefined
         let behindCut = false
         let written: boolean
         try {
@@ -15396,7 +15396,7 @@ export class SessionRunner {
             this.deliverRest(sessionId)
             return
           }
-          this.logDeliveryLatency(sessionId, 'stdin', msgs, targetSession)
+          this.logDeliveryLatency(sessionId, 'stdin', msgs, targetSession, known)
 
           // Tell frontend these messages have been delivered to the CLI.
           // writeMessage already opened the new turn (gen bump) for an idle send,

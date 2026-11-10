@@ -27,6 +27,7 @@ import { monitorEventLoopDelay } from 'node:perf_hooks'
 import { execFile } from 'node:child_process'
 import { log } from '../logging/index.js'
 import { observe } from './observability/metrics.js'
+import { noteSleepSinceLastLook } from '../lib/sleep-ledger.js'
 
 /** Loop delay above this (ms) in a window is reported as a stall. */
 const STALL_THRESHOLD_MS = 250
@@ -54,11 +55,12 @@ const defaultClocks: MonitorClocks = {
 }
 
 /**
- * Second sleep signal, darwin-only: the wall-vs-monotonic gap NEVER fires on
- * Apple Silicon because mach_absolute_time (hrtime's source) keeps advancing
- * through system sleep there — measured hrtime ≈ os.uptime ≈ wall clock on an
- * M-series Mac, and "system sleep detected" appeared 0 times in days of logs
- * while minute-long sleep artifacts were reported as 1,000,000ms+ "stalls".
+ * Second sleep signal, darwin-only: under Node the wall-vs-monotonic gap NEVER
+ * fires on Apple Silicon because hrtime keeps advancing through system sleep
+ * there (measured hrtime ≈ os.uptime ≈ wall clock on an M-series Mac, while
+ * minute-long sleep artifacts were reported as 1,000,000ms+ "stalls"). Under
+ * Bun, which the server runs on now, hrtime stops while the Mac sleeps and the
+ * gap fires (2026-11-10 logs); this signal stays for a Node run.
  * kern.waketime is the kernel's last-wake timestamp: if it changed since we
  * last looked, the machine slept inside the window and the report is an
  * artifact. Only consulted when a stall is about to be reported (no per-tick
@@ -287,6 +289,8 @@ export function startEventLoopMonitor(clocksOverride?: MonitorClocks): void {
   // produce minute-long fake "event-loop blocked" warns (lateByMs = sleep
   // duration) falsely attributed to whatever section spanned the sleep.
   const probe = (): void => {
+    // Keeps the sleep ledger's intervals a second wide (lib/sleep-ledger.ts).
+    noteSleepSinceLastLook()
     const wallNow = clocks.now()
     const monoNow = clocks.monoNow()
     const wallDelta = wallNow - lastProbeWallAt
