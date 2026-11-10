@@ -26,7 +26,6 @@
  * Pure functions here; the tree reads are in same-ask-tree.ts.
  */
 import { normalizeText } from './human-inbox/duplicate-letter.js';
-import { closeRewording } from './ask-decision.js';
 import type { RolledAsk, StatusReport, UserStatus } from './user-status.js';
 
 /** A deliberate second ask says why in at least this many characters. */
@@ -139,7 +138,7 @@ const LINK_WORDS_MAX = 4;
  * `+` ("from>old+staging+database").
  */
 function directionLinks(text: string | undefined | null, token: (w: string) => string): string[] {
-  let norm = normalizeText(text ?? '');
+  let norm = normalizeText(nameDirections(text ?? ''));
   for (const [re, en] of CJK_DIRECTIONS) norm = norm.replace(re, en);
   const out = new Set<string>();
   for (const clause of norm.split(/[,.;:!?\u3001\uff0c\u3002\uff1b\uff1a\uff01\uff1f]+/u)) {
@@ -147,16 +146,9 @@ function directionLinks(text: string | undefined | null, token: (w: string) => s
     for (let i = 0; i < words.length; i++) {
       if (!DIRECTIONS.has(words[i]!)) continue;
       const target: string[] = [];
-      let script: boolean | undefined;
       for (const w of words.slice(i + 1)) {
         if (DIRECTIONS.has(w) || target.length >= LINK_WORDS_MAX) break;
         if (FRAME_WORDS.has(w)) continue;
-        // One script run: in mixed text the CJK words after a Latin target are the next verb, not
-        // more of where it points ("to Z" then a CJK "press" or a CJK "check" both point to Z;
-        // 2026-11-10, one ask reworded read as pointing elsewhere and came back as news).
-        const cjk = CJK_PIECE.test(w);
-        if (script !== undefined && cjk !== script) break;
-        script = cjk;
         // A CJK run is one "word" here: its first two characters stand for it, as askWords' bigrams do.
         target.push(CJK_PIECE.test(w) ? token([...w].slice(0, 2).join('')) : /^\d+$/.test(w) ? numberMarked(w) : token(stem(w)));
       }
@@ -164,6 +156,17 @@ function directionLinks(text: string | undefined | null, token: (w: string) => s
     }
   }
   return [...out].sort();
+}
+
+/**
+ * A name with a direction word inside it ("A to Z", "Door to Door", "Peer to Peer") says where
+ * nothing points: its direction word is dropped before the links are read. Only a name of single
+ * capital letters or one word repeated, so "Staging to Production" keeps its direction (2026-11-10:
+ * a portal named "A to Z" made one ask reworded read as pointing elsewhere, and come back as news).
+ */
+function nameDirections(text: string): string {
+  return text.replace(/\b([A-Z]|[A-Z][a-z]+) (to|vs|versus|into|from) ([A-Z]|[A-Z][a-z]+)\b/g, (whole, a: string, _d: string, b: string) =>
+    (a.length === 1 && b.length === 1) || a === b ? `${a} ${b}` : whole);
 }
 
 /**
@@ -441,6 +444,8 @@ export interface AskAnswer {
   /** The decision the ask carried when it was answered (ask-decision.ts): the same decision asked
    *  again in other words is still answered. Absent on an answer recorded before decisions had ids. */
   askId?: string;
+  /** Its decision key then (id, revision, deadline, links): a new fact named since is asked again. */
+  decisionKey?: string;
   /** The user withdrew the ask for good (task_send answers_ask with withdraw_ask, on their own words):
    *  it holds past ASK_ANSWER_HOLD_MS. Another decision still comes back, by the same rules. */
   withdrawn?: true;
@@ -495,26 +500,25 @@ export const ASK_ANSWER_HOLD_MS = 7 * 24 * 60 * 60_000;
 export const ASKS_ANSWERED_MAX = 8;
 
 /**
- * Whether `answer` still answers `ask` now, inside the hold: the decision the session itself named
- * (`said` with its id, ask-decision.ts), the same words, the same ask reworded (sameAskReworded, or a
- * close rewording, closeRewording, when the session named no other decision), or one part of what it
- * answered asked again on its own (2026-11-05: Main answered six questions at once, and the task asked
- * one of them again in a letter of its own). An id Walnut kept from the words alone never holds it by
- * itself: hiding an ask needs more than keeping it quiet (2026-11-10: a VP answered "don't remind me
- * again" for the user, and the task's own trigger put the same ask back in other words). Pure.
+ * Whether `answer` still answers `ask` now, inside the hold (past it, for an ask the user withdrew):
+ * the decision the session itself named, unchanged (`said` with the id and decision key it had when it
+ * was answered, so a new fact, deadline, option or link the session named is asked again: ask-decision.ts),
+ * the same words, the same ask reworded (sameAskReworded), or one part of what it answered asked again
+ * on its own (2026-11-05: Main answered six questions at once, and the task asked one of them again in
+ * a letter of its own). An id Walnut kept from the words alone never holds it by itself: hiding an ask
+ * needs more than keeping it quiet (2026-11-10, a review: a shared-word rule hid "delete production"
+ * under an answer about staging). Pure.
  */
 export function answerHolds(
   answer: AskAnswer | null | undefined, ask: string | null | undefined, nowMs = Date.now(),
-  decision?: { id: string; said?: boolean } | null,
+  decision?: { id: string; key?: string; said?: boolean } | null,
 ): boolean {
   if (!answer || !ask) return false;
   const at = Date.parse(answer.at);
   if (!Number.isFinite(at) || (!answer.withdrawn && nowMs - at > ASK_ANSWER_HOLD_MS)) return false;
-  const sameId = !!decision?.id && !!answer.askId && decision.id.toLowerCase() === answer.askId.toLowerCase();
-  if (sameId && decision!.said) return true;
+  if (decision?.said && answer.askId && answer.decisionKey && decision.id.toLowerCase() === answer.askId.toLowerCase()
+    && decision.key === answer.decisionKey) return true;
   if (askKey(ask) === answer.key || sameAskReworded(answer.ask, ask)) return true;
-  // Two ids that differ: the session asks another decision, so only the strict rules above hold.
-  if ((sameId || !decision?.id || !answer.askId) && closeRewording(answer.ask, ask)) return true;
   return askIsPartOf(ask, answer.ask);
 }
 
@@ -544,7 +548,7 @@ export function askIsPartOf(part: string, whole: string): boolean {
 /** The answer of `answers` that still answers `ask` now, or null. Pure. */
 export function answerFor(
   answers: readonly (AskAnswer | null | undefined)[], ask: string | null | undefined, nowMs = Date.now(),
-  decision?: { id: string; said?: boolean } | null,
+  decision?: { id: string; key?: string; said?: boolean } | null,
 ): AskAnswer | null {
   for (const a of answers) if (answerHolds(a, ask, nowMs, decision)) return a!;
   return null;

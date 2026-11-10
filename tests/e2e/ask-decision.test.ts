@@ -125,7 +125,7 @@ describe('one decision across rewordings', () => {
     expect(prepared.line).toContain('withdrew this ask for good')
     await prepared.commit()
     const answers = (await getTask(taskId)).asks_answered ?? []
-    expect(answers.at(-1)).toMatchObject({ withdrawn: true, by: vpId, askId: first })
+    expect(answers.at(-1)).toMatchObject({ withdrawn: true, by: vpId, askId: first, decisionKey: expect.stringMatching(new RegExp(`^${first}\\|`)) })
   })
 
   it('a new decision the session says is new moves the line', async () => {

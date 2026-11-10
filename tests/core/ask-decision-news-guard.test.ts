@@ -139,7 +139,7 @@ function answerTo(t: Task, opts: { noId?: true } = {}): AskAnswer {
   const ask = t.status_report!.ask!
   return {
     key: SAME_KEY(ask), ask, text: 'go ahead', by: 'lead', byTitle: 'Marina lead', at: iso(NOW - 60_000),
-    ...(!opts.noId && t.status_report!.ask_id ? { askId: t.status_report!.ask_id } : {}),
+    ...(!opts.noId && taskDecision(t) ? { askId: taskDecision(t)!.id, decisionKey: taskDecision(t)!.key } : {}),
   }
 }
 
@@ -326,8 +326,9 @@ describe('what is news is still news', () => {
 })
 
 describe('an ask a lead answered for the user stays answered in other words', () => {
-  // Hiding an ask needs more than keeping it quiet: the decision the session named itself, or a close
-  // rewording (same-ask.ts answerHolds). An id Walnut kept from the words alone never hides one.
+  // Hiding an ask needs more than keeping it quiet: the decision the session named itself, unchanged,
+  // or the strict word rules (same-ask.ts answerHolds). An id Walnut kept from the words alone never
+  // hides one.
   const held = (t: Task, a: AskAnswer) => answeredAbove(t.user_status!, [a], NOW).state !== 'needs'
   for (const { name, asks } of REWORDINGS) {
     it(`${name}: the session naming its decision keeps the answer`, () => {
@@ -359,8 +360,7 @@ describe('an ask a lead answered for the user stays answered in other words', ()
   it('another decision is asked again: said new, or another target, number or sign', () => {
     const was = turn(answer('Delete the staging database now that the move is done?'), null, NOW - 3_600_000)
     const a = answerTo(taskOf(was))
-    // Said new: the id differs, so a close rewording alone no longer holds it (the strict word rules,
-    // the same words reworded, still would).
+    // Said new: the id differs (the strict word rules, the same words reworded, still hold it).
     const said = turn(answer('Delete the old staging database now, the move being finished?', ['FOR_USER_ASK_ID: new']), was, NOW)
     expect(said.ask_id).not.toBe(was.ask_id)
     for (const ask of [
@@ -377,6 +377,23 @@ describe('an ask a lead answered for the user stays answered in other words', ()
     const to = (where: string) => `${'\u628a\u65e7\u6570\u636e\u8fc1\u5230'} ${where} ${'\u6570\u636e\u5e93\u5417\uff1f'}`
     expect(answerHolds({ ...a, key: SAME_KEY(to('staging')), ask: to('staging'), askId: undefined }, to('production'), NOW)).toBe(false)
   })
+  // 2026-11-10, the review of the first version: each of these hid a new approval under an old answer.
+  it('reordered clauses with another target, a mixed-script target, a direction swapped: asked again', () => {
+    const was = turn(answer('Delete the staging database after checking the backup?'), null, NOW - 3_600_000)
+    const now = turn(answer('After checking the backup, delete the production database?'), was, NOW)
+    expect(held(taskOf(now), answerTo(taskOf(was)))).toBe(false)
+    const project = (p: string) => `Transfer the approved backup to Project ${p} after validating checksum and retention policy?`
+    const north = project('\u5317\u65b9\u751f\u4ea7\u5e93')
+    expect(answerHolds({ ...answerTo(taskOf(was)), key: SAME_KEY(north), ask: north, askId: undefined }, project('\u5357\u65b9\u6d4b\u8bd5\u5e93').replace('validating checksum', 'verifying digest'), NOW)).toBe(false)
+    const move = (a: string, b: string) => `Move the data from ${a} to ${b} tonight?`
+    expect(answerHolds({ ...answerTo(taskOf(was)), key: SAME_KEY(move('Staging', 'Production')), ask: move('Staging', 'Production'), askId: undefined }, move('Production', 'Staging'), NOW)).toBe(false)
+  })
+  it('the session naming its decision with a new fact asks it again', () => {
+    const was = turn(answer('Approve the $20 deposit for the garden plot this week?'), null, NOW - 3_600_000)
+    const now = turn(answer('Approve the $200 deposit for the garden plot this week?', [`FOR_USER_ASK_ID: ${was.ask_id}`, 'FOR_USER_ASK_NEW: the deposit rose from $20 to $200']), was, NOW)
+    expect(now).toMatchObject({ ask_id: was.ask_id, ask_said: true, ask_rev: 1 })
+    expect(held(taskOf(now), answerTo(taskOf(was)))).toBe(false)
+  })
   it('past the hold the same words are a new decision', () => {
     const was = turn(answer('Approve testing on your real iPhone?'), null, NOW - 3_600_000)
     expect(answerHolds({ ...answerTo(taskOf(was)), at: iso(NOW - 8 * 24 * 3_600_000) }, was.ask, NOW, { id: was.ask_id!, said: true })).toBe(false)
@@ -384,12 +401,12 @@ describe('an ask a lead answered for the user stays answered in other words', ()
   it('an ask the user withdrew for good holds past the hold; another decision still comes back', () => {
     const was = turn(answer('Approve testing on your real iPhone?'), null, NOW - 3_600_000)
     const gone = { ...answerTo(taskOf(was)), at: iso(NOW - 30 * 24 * 3_600_000), withdrawn: true as const }
-    expect(answerHolds(gone, 'Can I run the tests on your real iPhone now?', NOW)).toBe(true)
+    expect(answerHolds(gone, 'Approve testing on your real iPhone?', NOW)).toBe(true)
+    expect(answerHolds(gone, 'Can I run the tests on your own iPhone?', NOW, { ...taskDecision(taskOf(was))!, said: true })).toBe(true)
     expect(answerHolds(gone, 'Delete the staging database now that the move is done?', NOW)).toBe(false)
-    expect(answerHolds(gone, 'Approve testing on your real iPhone?', NOW, { id: 'ask-other1' })).toBe(true)
   })
   it('an answer records the decision it answered, and the status passes its decision in', () => {
-    expect(code('src/core/sessions/ask-answer.ts')).toMatch(/askId: target\.status_report\.ask_id/)
+    expect(code('src/core/sessions/ask-answer.ts')).toMatch(/askId: d\.id, decisionKey: d\.key/)
     expect(code('src/core/same-ask.ts')).toMatch(/answerFor\(.*derived\.ask, nowMs, derived\.decision\)/)
   })
 })

@@ -157,21 +157,6 @@ export function sameDecisionWords(a: string | undefined | null, b: string | unde
   return !swapsTarget(a ?? '', b ?? '');
 }
 
-/** An answer given above holds on words alone only when the asks share at least this much: real
- *  rewordings shared 20% and up (tests/core/ask-decision-news-guard.test.ts), and so did two different
- *  asks of one task about one plugin, so a share that low only keeps an ask quiet, never hides it. */
-const HOLD_SHARE = 0.5;
-
-/** Whether `b` asks what `a` asks closely enough to keep `a`'s answer: sameDecisionWords, with at
- *  least HOLD_SHARE of their content words shared. Pure. */
-export function closeRewording(a: string | undefined | null, b: string | undefined | null): boolean {
-  if (!sameDecisionWords(a, b)) return false;
-  const sa = askShape(a).words;
-  const inB = new Set(askShape(b).words);
-  const shortest = Math.min(sa.length, inB.size);
-  return shortest > 0 && sa.filter((w) => inB.has(w)).length / shortest >= HOLD_SHARE;
-}
-
 /**
  * Whether `b` is `a` with a word or two in the middle swapped for others, and the rest as it was
  * ("Delete the staging database?" and "Delete the production database?"): another target. A word

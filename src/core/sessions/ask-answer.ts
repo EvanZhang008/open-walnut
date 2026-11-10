@@ -27,6 +27,7 @@ import type { SessionRecord, Task } from '../types.js';
 import { isLiveSessionStatus } from '../routines/session-target.js';
 import { briefTeam } from '../user-status.js';
 import { settleCheck, type UserSaid } from './user-spoke.js';
+import { reportDecision } from '../ask-decision.js';
 import { APPROVAL_KINDS, ASKS_ANSWERED_MAX, askAnswerLine, askKey, type AskAnswer, type SameAskFold } from '../same-ask.js';
 
 export class AskAnswerError extends Error {
@@ -129,6 +130,14 @@ export async function notDeliveredLive(err: unknown): Promise<boolean> {
   return err instanceof SendNoLongerWantedError || isSessionStopSuperseded(err);
 }
 
+/** The decision the answered ask carries (ask-decision.ts), recorded on the answer: its id and key. */
+function decisionOfAsk(target: Task, ask: string): Pick<AskAnswer, 'askId' | 'decisionKey'> {
+  const r = target.status_report;
+  if (r?.state !== 'needs' || askKey(r.ask) !== askKey(ask)) return {};
+  const d = reportDecision(r, target.due_date);
+  return d ? { askId: d.id, decisionKey: d.key } : {};
+}
+
 export interface PreparedAnswer {
   /** Walnut's line that leads the answer: the one time the asker is told. */
   line: string;
@@ -196,8 +205,7 @@ export async function prepareAskAnswer(
     // Only the resolved caller task's own session is recorded; a person's answer has none.
     ...(caller && callerSessionId?.trim() ? { sessionId: callerSessionId.trim() } : {}),
     // The decision it answers, so the same decision asked again in other words stays answered.
-    ...(target.status_report?.state === 'needs' && target.status_report.ask_id && askKey(target.status_report.ask) === askKey(ask)
-      ? { askId: target.status_report.ask_id } : {}),
+    ...decisionOfAsk(target, ask),
     ...(opts.withdraw ? { withdrawn: true as const } : {}),
   };
   return {
