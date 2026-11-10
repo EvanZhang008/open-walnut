@@ -106,8 +106,15 @@ test('a toast that slides up under the pointer ignores the click that was meant 
   expect(answered, 'the click meant for the toast that left did not answer the one that took its place').toEqual([gone.requestId])
   await expect(toastOf(mover).getByRole('button', { name: 'Allow', exact: true })).toBeEnabled()
 
-  // Sat still a beat, the same toast answers a click.
-  await page.waitForTimeout(500)
+  // Sat still a beat, the same toast answers a click. The beat is the guard's own: a toast that
+  // moved is marked settling until SHIFT_GUARD_MS after its last move (useShiftClickGuard.ts), and
+  // a slide drawn over a slow machine's frames keeps moving it, so wait for the mark to go.
+  const moverToast = toastOf(mover)
+  await expect(moverToast).not.toHaveAttribute('data-settling', { timeout: 10_000 })
+  await page.waitForFunction(({ px, py, cmd }) => {
+    const el = document.elementFromPoint(px, py)
+    return !!el?.closest('.nfc-perm-toast')?.textContent?.includes(cmd) && !!el.closest('button')
+  }, { px: x, py: y, cmd: mover.command }, { timeout: 10_000 })
   await page.mouse.click(x, y)
   await expect.poll(() => answered).toEqual([gone.requestId, mover.requestId])
 })
