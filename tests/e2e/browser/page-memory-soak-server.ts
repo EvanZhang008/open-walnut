@@ -54,6 +54,29 @@ process.argv.push('--_ephemeral-child')
 const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../..')
 
 /**
+ * The page is the production build of the SPA, served by the server itself as users run it: built
+ * here into the data home (about a minute), or WALNUT_WEB_STATIC_DIR when set. React's development
+ * build keeps an owner stack (an Error) on every element it creates, and an unformatted Error keeps
+ * the functions on its stack and their closures alive, so each render of the chat kept the one
+ * before it: hundreds of KB per chat row that users never see (2026-11-10). PW_SOAK_WEB=dev serves
+ * the source through Vite instead, for readable constructor names (PW_SOAK_HEAP_DIFF=1).
+ */
+const BUILT = process.env.PW_SOAK_WEB !== 'dev'
+// Beside the data home, not in it: the seed below starts the home over.
+const webBuildDir = `${tmpBase}-web`
+if (BUILT && !process.env.WALNUT_WEB_STATIC_DIR) {
+  const outDir = path.join(webBuildDir, 'static')
+  const { build } = await import('vite')
+  await build({
+    root: path.join(repoRoot, 'web'),
+    cacheDir: path.join(webBuildDir, 'vite-cache'),
+    build: { outDir, emptyOutDir: true },
+    logLevel: 'warn',
+  })
+  process.env.WALNUT_WEB_STATIC_DIR = outDir
+}
+
+/**
  * One cron push per tick, three times the page's 150 ms routines debounce: three hours replay in
  * about ten minutes (18x). Faster, the session column's 18x denser stream holds the page's main
  * thread long enough that the cron pushes pile up into bursts the store reads as one list fetch.
@@ -269,8 +292,8 @@ await fs.writeFile(jsonlPath, Array.from({ length: 12 }, (_, i) => [
 
 // ── Server + Vite ──
 
-const { startServer, stopServer } = await import('../../../src/web/server.js')
-const apiServer = await startServer({ port: 0, dev: true })
+const { startServer, stopServer, armGracefulSignalExit } = await import('../../../src/web/server.js')
+const apiServer = await startServer({ port: BUILT ? port : 0, dev: !BUILT })
 const apiAddress = apiServer.address()
 if (!apiAddress || typeof apiAddress === 'string') throw new Error('Soak fixture did not bind a TCP port')
 const apiTarget = `http://127.0.0.1:${apiAddress.port}`
@@ -278,31 +301,34 @@ const apiTarget = `http://127.0.0.1:${apiAddress.port}`
 // The seeded density, measured from the API the page reads, so the spec can refuse a thin seed.
 const listBytes = (await (await fetch(`${apiTarget}/api/routines?includeDisabled=true`)).text()).length
 
-const { createServer: createViteServer } = await import('vite')
-// The server trusts a page without a credential only when its Origin is the server's
-// own, so the proxy restates its own pages' origin as the API target.
-const { restateOwnOrigin } = await import('../../../web/dev-proxy-origin.js')
-const { holdUntilWarm } = await import('./fixture-warm.js')
-const warm = holdUntilWarm()
-const viteServer = await createViteServer({
-  root: path.join(repoRoot, 'web'),
-  // Every request waits behind the SPA's first compile (fixture-warm.ts).
-  plugins: [warm.plugin],
-  // Its own dependency cache, as test-server.ts: a shared one is re-optimized under it.
-  cacheDir: path.join(tmpBase, 'vite-cache'),
-  server: {
-    host: '127.0.0.1',
-    port,
-    strictPort: true,
-    proxy: {
-      '/api': { target: apiTarget, changeOrigin: true, configure: (proxy) => restateOwnOrigin(proxy, apiTarget) },
-      '/ws': { target: apiTarget.replace(/^http/, 'ws'), ws: true, configure: (proxy) => restateOwnOrigin(proxy, apiTarget) },
+let viteServer: import('vite').ViteDevServer | null = null
+if (!BUILT) {
+  const { createServer: createViteServer } = await import('vite')
+  // The server trusts a page without a credential only when its Origin is the server's
+  // own, so the proxy restates its own pages' origin as the API target.
+  const { restateOwnOrigin } = await import('../../../web/dev-proxy-origin.js')
+  const { holdUntilWarm } = await import('./fixture-warm.js')
+  const warm = holdUntilWarm()
+  viteServer = await createViteServer({
+    root: path.join(repoRoot, 'web'),
+    // Every request waits behind the SPA's first compile (fixture-warm.ts).
+    plugins: [warm.plugin],
+    // Its own dependency cache, as test-server.ts: a shared one is re-optimized under it.
+    cacheDir: path.join(tmpBase, 'vite-cache'),
+    server: {
+      host: '127.0.0.1',
+      port,
+      strictPort: true,
+      proxy: {
+        '/api': { target: apiTarget, changeOrigin: true, configure: (proxy) => restateOwnOrigin(proxy, apiTarget) },
+        '/ws': { target: apiTarget.replace(/^http/, 'ws'), ws: true, configure: (proxy) => restateOwnOrigin(proxy, apiTarget) },
+      },
     },
-  },
-  logLevel: 'warn',
-})
-await viteServer.listen()
-await warm.warm(viteServer)
+    logLevel: 'warn',
+  })
+  await viteServer.listen()
+  await warm.warm(viteServer)
+}
 
 // ── The replay ──
 
@@ -517,6 +543,7 @@ async function replay(hours: number): Promise<Record<string, number>> {
   }
   // Whatever of the last turn is left, so the session ends idle.
   while (queue.length > 0) { await queue.shift()!(); counts.session += 1 }
+  counts.turns = turn
   counts.ms = Date.now() - started
   return counts
 }
@@ -536,12 +563,12 @@ setInterval(() => {
   }, () => { /* no request */ })
 }, 250).unref()
 
-const fixture = { port, home: tmpBase, liveTaskId: LIVE_TASK, liveSessionId: LIVE_SESSION, liveTitle: LIVE_TITLE, routines: ROUTINE_COUNT, tasks: tasks.length, listBytes }
+const fixture = { port, built: BUILT, home: tmpBase, liveTaskId: LIVE_TASK, liveSessionId: LIVE_SESSION, liveTitle: LIVE_TITLE, routines: ROUTINE_COUNT, tasks: tasks.length, listBytes }
 await fs.writeFile(path.join(tmpBase, 'fixture.json'), JSON.stringify(fixture, null, 2))
 console.log(`SOAK_READY ${JSON.stringify(fixture)}`)
 
 const shutdown = async () => {
-  await viteServer.close().catch(() => {})
+  await viteServer?.close().catch(() => {})
   await stopServer()
   try {
     const { localDaemon } = await import('../../../src/providers/local-daemon.js')
@@ -552,9 +579,14 @@ const shutdown = async () => {
 }
 process.on('SIGINT', shutdown)
 process.on('SIGTERM', shutdown)
+// The server's own signal handler would re-raise the signal and end the process before shutdown()
+// removed anything (no 'exit' handler runs then); this one ends it.
+armGracefulSignalExit()
 // Last word on the data home, as test-server.ts: the server's own exit handlers write into it
-// after shutdown() removed it, and its SIGTERM handler may exit first. 'exit' handlers run in
+// after shutdown() removed it. 'exit' handlers run in
 // registration order, so this one, registered after startServer()'s, runs last.
 process.on('exit', () => {
-  try { fsSync.rmSync(tmpBase, { recursive: true, force: true, maxRetries: 3 }) } catch { /* best effort */ }
+  for (const dir of [tmpBase, webBuildDir]) {
+    try { fsSync.rmSync(dir, { recursive: true, force: true, maxRetries: 3 }) } catch { /* best effort */ }
+  }
 })

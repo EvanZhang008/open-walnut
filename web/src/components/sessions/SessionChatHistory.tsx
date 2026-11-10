@@ -539,6 +539,15 @@ const NO_MID_TURN_LINES: ReadonlySet<string> = new Set();
 
 // ── Auto-scroll constant ──
 const NEAR_BOTTOM_PX = 80;  // px from bottom to consider "at bottom"
+/** Fewest rows past the default tail a following window holds before it is cut. */
+const FOLLOW_TRIM_MIN_SLACK = 40;
+/** The reader has text selected in this box (a cut would drop what they hold). */
+function selectionInside(el: HTMLElement | null): boolean {
+  if (!el || typeof document === 'undefined') return false;
+  const sel = document.getSelection();
+  if (!sel || sel.isCollapsed || sel.rangeCount === 0) return false;
+  return el.contains(sel.anchorNode) || el.contains(sel.focusNode);
+}
 /** The note a held queued message shows when its hold named no reason. */
 const HELD_DEFAULT_REASON = 'Waiting to confirm the previous message';
 /** The server's words for a message the host did not take in time (slowHostReason). */
@@ -691,6 +700,12 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // cannot survive this array.
   const renderWindowStart = useRef<number | null>(null);
   const renderWindowAnchor = useRef<RenderWindowAnchor | null>(null);
+  // The last pass cut the window back for a reader at the bottom (render-window.ts
+  // `follow`); a layout effect then drops any widening so it stays cut.
+  const renderWindowTrimmed = useRef(false);
+  // The review pane holds the window open to the earliest question; it is read
+  // here before the hook that owns it runs, so through a ref.
+  const reviewHoldsWindow = useRef(false);
   const { lightboxSrc, openLightbox, closeLightbox } = useLightbox();
 
   // ── Outline (pinned messages) ──
@@ -3160,11 +3175,19 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     const turnLimit = historyTurnWindowLimit(messages, INITIAL_HISTORY_TURNS,
       rootPageWindow ? (i) => keyOf(messages[i].msgId ?? messages[i].walnutMessageId) === ROOT_THREAD_KEY : undefined);
     const limit = Math.max(rawLimit, turnLimit);
+    // A reader following the live end sees none of the rows above the default
+    // tail, so the window may drop them (a column left open on a busy session kept
+    // every row it ever drew). Not while anything holds an older row on purpose:
+    // the question pages, a jump in flight, the review pane, a text selection.
+    const follows = isAtBottom.current && !stackMode && !pendingJump.current && !reviewHoldsWindow.current
+      && !selectionInside(containerRef.current);
     const window = computeRenderWindow(
       messages,
       limit,
       { start: renderWindowStart.current, anchor: renderWindowAnchor.current },
+      follows ? { tailLimit: turnLimit, slack: Math.max(FOLLOW_TRIM_MIN_SLACK, Math.ceil(turnLimit / 2)) } : undefined,
     );
+    if (window.trimmed) renderWindowTrimmed.current = true;
     const visibleStart = window.start;
     if (olderPageSeq !== seenOlderPageSeq.current && renderWindowAnchor.current) {
       const at = messages.findIndex(m => m.msgId === renderWindowAnchor.current!.msgId);
@@ -3288,6 +3311,13 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     return { historyParts: parts, hiddenCount: visibleStart };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- rowThreadKeyRef: see above; windowAnchors stands for it
   }, [messages, truncationOffset, olderPageSeq, forkBoundaryIndex, gapAt, rootPageWindow, windowAnchors, partIdentity]);
+  // A cut window forgets how far "Load earlier turns" or a jump had widened it,
+  // else the next pass after the reader scrolls up would grow it straight back.
+  useLayoutEffect(() => {
+    if (!renderWindowTrimmed.current) return;
+    renderWindowTrimmed.current = false;
+    setTruncationOffset(0);
+  }, [historyParts]);
   // What `Show N earlier` counts: on the root page only root rows (N9), since
   // the rows of questions above it render on their own pages.
   const hiddenOnPage = useMemo(() => {
@@ -4369,6 +4399,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     renderBody: renderReviewBody, bodySig: reviewBodySig,
     canAsk: threadsApi.canAsk, draftKeyOf: reviewDraftKeyOf, sendToQuestion: sendFromReview,
   });
+  reviewHoldsWindow.current = review.on;
   reviewShownRef.current = review.on;
   // The review column has a card for each question beside its passage in the
   // timeline, so a passage above the rendered window had no card (2026-11-09:

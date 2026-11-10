@@ -15,23 +15,28 @@ import { bunRuntime } from '../../helpers/bun-runtime.js'
  * request, replays a compressed three hours of the push mix measured on the real page through the
  * server's real push paths. The page is opened the way a person keeps it: Home with the task list
  * and that session's column, then the Routines page, so every `cron:job-*` subscriber is live
- * (Home stays mounted under it).
+ * (Home stays mounted under it). The page is the production build (the fixture builds it), the
+ * build users run; PW_SOAK_WEB=dev serves the source through Vite instead.
  *
  * What fails it: a push handler that refetches a big list (bytes fetched per push, and how many
  * list-sized responses), the page keeping memory per event once the column is closed (JS heap after
  * a forced GC, Chromium only: WebKit has no heap reading a test runner can take; DOM nodes), or the
- * open column adding DOM per readout event (nodes per chat row). The open column's own heap is
- * recorded, not budgeted: it keeps every row it drew while live, about 1 MB a chat row in the dev
- * build this fixture serves, so its growth follows the content.
+ * open column adding DOM per readout event (nodes per chat row), or the open column keeping every row
+ * it drew while it follows the live end (2026-11-10: about 40 KB of JS heap a chat row, and the
+ * main thread's layout cost growing with them; chat rows drawn, and heap per chat row the session
+ * gained).
  *
  * Measured (2026-11-09, 3 hours in about 10 minutes): fixed code 770 B per push in WebKit, 600 to
  * 1,200 in Chromium, about 6 MB heap and 0 nodes kept; with the per-push list refetch put back,
  * 81 KB per push in WebKit (1,312 list reads, 1.9 GB) and 8.4 KB in Chromium (133 list reads, its
- * main thread held by the column).
+ * main thread held by the column). 2026-11-10, production build, Chromium: a column that kept every
+ * row it drew, about 40 KB of heap per chat row gained (and 630 rows drawn after three hours); cut
+ * back while following, 211 to 315 rows drawn and a few KB per row gained.
  * PW_SOAK_HOURS shortens the replay; PW_SOAK_HEAP_DIFF=1 prints what grew by constructor (Chromium).
  */
 
 const HOURS = Number(process.env.PW_SOAK_HOURS ?? 3)
+const WARM_HOURS = 1
 /** Bytes the page may fetch per push, on average, every push counted (about 25,000). Fixed code reads
  *  one routine (about 10 KB) per cron push, one push in nineteen: under 1.2 KB a push. */
 const BYTES_PER_PUSH_BUDGET = 4 * 1024
@@ -50,12 +55,22 @@ const HEAP_GROWTH_BUDGET = 25 * 1024 * 1024
 /** DOM nodes the page keeps once the column is closed: the task list and the Routines page draw the
  *  same rows before and after, so anything here grew per event. */
 const DOM_GROWTH_BUDGET = 1_500
-/** The open column keeps every row it drew (it never unmounts rows from the top while live), about
- *  30 nodes per chat row today; a readout event (speed, usage, live activity, ...) that added a node
- *  would add about 10 per row. */
+/** DOM nodes the open column holds per chat row it draws, about 30 today; a readout event (speed,
+ *  usage, live activity, ...) that added a node would add about 10 per row. */
 const NODES_PER_CHAT_ROW_BUDGET = 60
+/** Chat rows the open column draws at most, in turns of the replay: a reader following the live end
+ *  sees the default ten turns, and the window holds half that again before it cuts back to them
+ *  (render-window.ts `follow`). A column that keeps every row it drew holds all 30 turns of the
+ *  replay on top. */
+const DRAWN_TURNS_BUDGET = 16
+/** JS heap the open column keeps per chat row the session gained (Chromium, after a forced GC,
+ *  production build). A column that keeps every row it drew kept about 40 KB a row; one that cuts
+ *  back draws a bounded window, so its growth over three hours is at most five turns' rows spread
+ *  over thirty. Not judged on the dev build: React's owner stacks there keep every render of the
+ *  chat alive (hundreds of KB a row) whatever the column draws. */
+const HEAP_PER_GAINED_ROW_BUDGET = 15 * 1024
 
-interface SoakFixture { port: number; home: string; liveTaskId: string; liveSessionId: string; liveTitle: string; listBytes: number }
+interface SoakFixture { port: number; home: string; liveTaskId: string; liveSessionId: string; liveTitle: string; listBytes: number; built: boolean }
 
 let fixture: SoakFixture | null = null
 let child: ChildProcessWithoutNullStreams | null = null
@@ -89,7 +104,7 @@ async function startFixture(): Promise<SoakFixture> {
   child.stdout.on('data', keep)
   child.stderr.on('data', keep)
   return await new Promise<SoakFixture>((resolve, reject) => {
-    const deadline = setTimeout(() => reject(new Error(`Soak fixture did not start\n${output.slice(-8000)}`)), 180_000)
+    const deadline = setTimeout(() => reject(new Error(`Soak fixture did not start\n${output.slice(-8000)}`)), 420_000)
     const timer = setInterval(() => {
       const match = /SOAK_READY (\{.*\})/.exec(output)
       if (match) {
@@ -119,7 +134,8 @@ async function stopFixture(): Promise<void> {
   if (!graceful) child.kill('SIGKILL')
   // The fixture removes its data home on exit, but a server killed mid-shutdown leaves it (about
   // 90 MB with its Vite cache); the spec knows the path, so it goes here too.
-  if (fixture) await fs.rm(fixture.home, { recursive: true, force: true, maxRetries: 3 }).catch(() => {})
+  // The data home, and the production build the fixture made beside it.
+  for (const dir of fixture ? [fixture.home, `${fixture.home}-web`] : []) await fs.rm(dir, { recursive: true, force: true, maxRetries: 3 }).catch(() => {})
 }
 
 test.describe.configure({ mode: 'serial' })
@@ -291,7 +307,10 @@ test('a compressed three hours of pushes keep the page\'s fetches, heap and DOM 
     // the task once it is already the selected one (the second time here).
     await row.locator('[title="Pinned in Focus"]').first().click()
     await expect(column).toBeVisible({ timeout: 30_000 })
-    await expect(column.getByText('soak answer 12').first()).toBeVisible({ timeout: 30_000 })
+    // Its history is drawn: the newest row of the transcript is on screen. (A seeded answer is out of
+    // the default window once the warm-up's turns are in.)
+    await expect(column.locator('.session-msg').last()).toBeVisible({ timeout: 30_000 })
+    await expect.poll(() => column.locator('.session-msg').count(), { timeout: 30_000 }).toBeGreaterThan(10)
     await page.locator('.todo-search-input').fill('')
   }
   /** Home: the column closed with its own button. */
@@ -314,9 +333,15 @@ test('a compressed three hours of pushes keep the page\'s fetches, heap and DOM 
   const cdp = browserName === 'chromium' ? await page.context().newCDPSession(page) : null
   if (cdp) await cdp.send('HeapProfiler.enable')
 
-  // Warm up: a turn and a few minutes of pushes, so first-use caches exist before any baseline.
-  expect(await replay(0.1), 'the warm-up replay finished').not.toBeNull()
+  // Warm up: an hour of pushes, so first-use caches exist before any baseline and the open column
+  // already draws a full default window of replay turns. The column is short before it and holds
+  // all ten turns (under the window's cut), so the rows they add are ten replay turns' rows.
+  const rowsAtStart = await chatRows()
+  const warm = await replay(WARM_HOURS)
+  expect(warm, 'the warm-up replay finished').not.toBeNull()
   await settle()
+  const rowsPerTurn = ((await chatRows()) - rowsAtStart) / Math.max(1, warm!.turns ?? 1)
+  expect(rowsPerTurn, 'a replay turn adds chat rows to the open column').toBeGreaterThan(0)
   // The baseline of what outlives the view: the column closed, the Routines page on top.
   await closeColumn()
   await openRoutines()
@@ -334,7 +359,7 @@ test('a compressed three hours of pushes keep the page\'s fetches, heap and DOM 
 
   traffic.counting = true
   const finished = await replay(HOURS)
-  const counts = finished ?? { cron: Number.NaN, task: Number.NaN, session: Number.NaN, ms: Number.NaN }
+  const counts = finished ?? { cron: Number.NaN, task: Number.NaN, session: Number.NaN, turns: Number.NaN, ms: Number.NaN }
   // Answers to the last pushes land after the replay's end; they belong to it.
   await settle()
   traffic.counting = false
@@ -345,7 +370,8 @@ test('a compressed three hours of pushes keep the page\'s fetches, heap and DOM 
     const diff = await heapByConstructor(cdp!).then((snap) => heapGrowth(snapOpenBefore, snap), (err: Error) => `not read: ${err.message}`)
     console.log(`[page-memory-soak] open column heap growth by constructor:\n${diff}`)
   }
-  const rowsAdded = (await chatRows()) - rowsBefore
+  const rowsAfter = await chatRows()
+  const rowsGained = counts.turns * rowsPerTurn
   await closeColumn()
   await openRoutines()
   const after = await reading(page, cdp)
@@ -353,9 +379,12 @@ test('a compressed three hours of pushes keep the page\'s fetches, heap and DOM 
 
   const pushes = traffic.pushes
   const perPush = pushes > 0 ? traffic.bytes / pushes : 0
-  const openNodesPerRow = (openAfter.nodes - openBefore.nodes) / Math.max(1, rowsAdded)
+  // The column's own nodes: the open page less the same page with the column closed.
+  const openNodesPerRow = (openAfter.nodes - after.nodes) / Math.max(1, rowsAfter)
+  const heapPerGainedRow = openBefore.heap === null ? null : (openAfter.heap! - openBefore.heap) / Math.max(1, rowsGained)
   const record = {
-    browser: browserName, hours: HOURS, replayMs: counts.ms, sent: { cron: counts.cron, task: counts.task, session: counts.session },
+    browser: browserName, built: fixture!.built, hours: HOURS, replayMs: counts.ms,
+    sent: { cron: counts.cron, task: counts.task, session: counts.session, turns: counts.turns },
     pushesReceived: pushes, socketsOpened: traffic.sockets, responses: traffic.responses, fetched: mb(traffic.bytes), bytesPerPush: Math.round(perPush),
     largestResponse: traffic.largest, bigResponses: traffic.big,
     byRoute: [...traffic.byRoute.entries()].sort((a, b) => b[1].bytes - a[1].bytes).slice(0, 8)
@@ -365,8 +394,11 @@ test('a compressed three hours of pushes keep the page\'s fetches, heap and DOM 
       nodes: { before: before.nodes, after: after.nodes, growth: after.nodes - before.nodes, grewMost: grownClasses(before, after) },
     },
     openColumn: {
-      chatRowsAdded: rowsAdded,
-      heap: openBefore.heap === null ? null : { before: mb(openBefore.heap), after: mb(openAfter.heap!), growth: mb(openAfter.heap! - openBefore.heap) },
+      chatRows: { perTurn: rowsPerTurn, before: rowsBefore, after: rowsAfter, gained: Math.round(rowsGained) },
+      heap: openBefore.heap === null ? null : {
+        before: mb(openBefore.heap), after: mb(openAfter.heap!), growth: mb(openAfter.heap! - openBefore.heap),
+        perGainedRowKB: Math.round(heapPerGainedRow! / 1024),
+      },
       nodes: { before: openBefore.nodes, after: openAfter.nodes, perChatRow: Math.round(openNodesPerRow), grewMost: grownClasses(openBefore, openAfter) },
     },
   }
@@ -381,7 +413,7 @@ test('a compressed three hours of pushes keep the page\'s fetches, heap and DOM 
   expect(loadsDuringReplay, 'the page loaded again during the replay').toEqual([])
   // The replay really reached the page, and its turns reached the column.
   expect(pushes).toBeGreaterThan(counts.cron)
-  expect(rowsAdded).toBeGreaterThan(0)
+  expect(counts.turns).toBeGreaterThan(0)
   expect(perPush, 'bytes fetched per push: a push handler refetches a big list').toBeLessThan(BYTES_PER_PUSH_BUDGET)
   expect(traffic.big, `responses over ${SINGLE_RESPONSE_CAP / 1024} KB during the replay (largest: ${traffic.largest.url})`)
     .toBeLessThanOrEqual(Math.ceil(counts.cron * BIG_RESPONSES_PER_CRON_PUSH))
@@ -389,6 +421,12 @@ test('a compressed three hours of pushes keep the page\'s fetches, heap and DOM 
     expect(after.heap! - before.heap, 'JS heap the page kept after the replay, its column closed').toBeLessThan(HEAP_GROWTH_BUDGET)
   }
   expect(after.nodes - before.nodes, 'DOM nodes the page kept after the replay, its column closed').toBeLessThan(DOM_GROWTH_BUDGET)
-  expect(openNodesPerRow, 'DOM nodes the open column added per chat row: a readout event that adds a node').toBeLessThan(NODES_PER_CHAT_ROW_BUDGET)
+  expect(openNodesPerRow, 'DOM nodes the open column holds per chat row: a readout event that adds a node').toBeLessThan(NODES_PER_CHAT_ROW_BUDGET)
+  expect(rowsAfter, 'chat rows the open column draws, following the live end: it keeps every row it drew')
+    .toBeLessThanOrEqual(Math.ceil(DRAWN_TURNS_BUDGET * rowsPerTurn))
+  if (heapPerGainedRow !== null && fixture!.built) {
+    expect(heapPerGainedRow, 'JS heap the open column kept per chat row the session gained: it keeps every row it drew')
+      .toBeLessThan(HEAP_PER_GAINED_ROW_BUDGET)
+  }
   expect(errors).toEqual([])
 })

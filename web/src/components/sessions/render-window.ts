@@ -22,6 +22,13 @@
  *
  * So the window start is anchored to CONTENT (a msgId + its offset from the
  * start) and re-derived on every pass, during render, before the slice is cut.
+ *
+ * The one exception is a reader who FOLLOWS the bottom (`follow`): nothing above
+ * them is on screen, so once the window holds `slack` rows more than the default
+ * tail it is cut back to that tail in one step. Without it a column left open on
+ * a live session kept every row it ever drew (2026-11-10: 630 rows and 23,000 DOM
+ * nodes after three hours of a busy session, about 40 KB of JS heap a row in the
+ * production build and the main thread's layout cost growing with them).
  */
 
 export interface RenderWindowAnchor {
@@ -36,6 +43,16 @@ export interface RenderWindow {
   start: number;
   /** Content anchor for `start`, or null when no row near the start had a msgId. */
   anchor: RenderWindowAnchor | null;
+  /** The window was cut back to the tail for a reader following the bottom. */
+  trimmed?: boolean;
+}
+
+/** A reader parked at the bottom: the window may drop rows above them. */
+export interface RenderWindowFollow {
+  /** The default tail (rows) the window is cut back to. */
+  tailLimit: number;
+  /** Rows past the tail held before a cut, so a cut is rare, not one per new row. */
+  slack: number;
 }
 
 /** The PREVIOUS pass — may be the fresh-view state (nothing rendered yet). */
@@ -61,6 +78,7 @@ export function computeRenderWindow(
   messages: ReadonlyArray<{ msgId?: string }>,
   limit: number,
   prev: RenderWindowState,
+  follow?: RenderWindowFollow,
 ): RenderWindow {
   const natural = Math.max(0, messages.length - limit);
 
@@ -75,6 +93,10 @@ export function computeRenderWindow(
   }
 
   const start = ratchet === null ? natural : Math.min(natural, ratchet);
+  if (follow) {
+    const tail = Math.max(0, messages.length - follow.tailLimit);
+    if (tail - start > follow.slack) return { start: tail, anchor: anchorAt(messages, tail), trimmed: true };
+  }
   return { start, anchor: anchorAt(messages, start) };
 }
 

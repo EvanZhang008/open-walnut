@@ -176,3 +176,48 @@ describe('computeRenderWindow', () => {
     expect(w.start).toBe(20); // still monotonic-down, nothing evicted
   });
 });
+
+/**
+ * A column left open on a live session kept every row it ever drew (2026-11-10:
+ * 630 rows and 23,000 DOM nodes after three hours, about 40 KB of JS heap a row).
+ * A reader following the bottom sees none of the older rows, so the window may
+ * cut back to the default tail once it holds `slack` rows more.
+ */
+describe('computeRenderWindow: a reader following the bottom', () => {
+  const rows = (n: number) => Array.from({ length: n }, (_, i) => ({ msgId: `m${i}` }));
+  const follow = { tailLimit: 30, slack: 15 };
+
+  it('keeps growing until the slack is used, then cuts back to the tail in one step', () => {
+    let w = computeRenderWindow(rows(40), 30, { start: null, anchor: null }, follow);
+    expect(w.start).toBe(10);
+    expect(w.trimmed).toBeFalsy();
+    w = computeRenderWindow(rows(55), 30, w, follow);
+    expect(w.start).toBe(10); // 15 rows past the tail: still inside the slack
+    expect(w.trimmed).toBeFalsy();
+    w = computeRenderWindow(rows(56), 30, w, follow);
+    expect(w).toEqual({ start: 26, anchor: { msgId: 'm26', offset: 0 }, trimmed: true });
+  });
+
+  it('rows stay bounded however long the session runs', () => {
+    let w = computeRenderWindow(rows(30), 30, { start: null, anchor: null }, follow);
+    let most = 0;
+    for (let n = 31; n <= 2000; n++) {
+      w = computeRenderWindow(rows(n), 30, w, follow);
+      most = Math.max(most, n - w.start);
+    }
+    expect(most).toBeLessThanOrEqual(follow.tailLimit + follow.slack);
+  });
+
+  it('a widened window (Load earlier turns) is cut too while the reader follows', () => {
+    const w = computeRenderWindow(rows(200), 150, { start: null, anchor: null }, follow);
+    expect(w.start).toBe(170);
+    expect(w.trimmed).toBe(true);
+  });
+
+  it('a reader who is not following never loses a row', () => {
+    let w = computeRenderWindow(rows(40), 30, { start: null, anchor: null });
+    for (let n = 41; n <= 500; n++) w = computeRenderWindow(rows(n), 30, w);
+    expect(w.start).toBe(10);
+    expect(w.trimmed).toBeFalsy();
+  });
+});
