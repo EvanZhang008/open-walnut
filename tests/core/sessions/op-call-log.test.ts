@@ -76,6 +76,26 @@ describe('the CLI records a call, the card finds it by its row', () => {
     expect(entry?.toolUseId).toBe('toolu_bg')
   })
 
+  it('a title or summary carries words, never markup, also from a record kept before (an older CLI)', async () => {
+    vi.spyOn(sessionRunner, 'findByClaudeId').mockReturnValue(fakeRunner([
+      ['toolu_brief', 'walnut tools call brief_write @/tmp/brief.json'],
+    ]) as never)
+    const raw = '<task-ref id="mw72orri-8a87" label="Mac disk"/>: 12 GiB free, **12 GiB short**.'
+    await recordOpCall(SID, { op: 'brief_write', form: 'file', path: '/tmp/brief.json', ok: true, fields: { op: 'brief_write', kind: 'brief', to: [], title: 'Brief edited', summary: raw, detail: raw } })
+    expect((await lookup(['toolu_brief'])).toolu_brief[0].fields.summary).toBe('Mac disk: 12 GiB free, 12 GiB short.')
+    // A record an earlier server kept as the CLI sent it is read as words too.
+    const { WALNUT_HOME } = await import('../../../src/constants.js')
+    const fsp = await import('node:fs/promises')
+    const file = `${WALNUT_HOME}/op-calls/${SID}.json`
+    const stored = JSON.parse(await fsp.readFile(file, 'utf8'))
+    for (const c of stored.calls) if (c.toolUseId === 'toolu_brief') c.fields.summary = raw
+    await fsp.writeFile(file, JSON.stringify(stored))
+    const read = (await lookup(['toolu_brief'])).toolu_brief[0].fields
+    expect(read.summary).toBe('Mac disk: 12 GiB free, 12 GiB short.')
+    // The detail is the words as sent: the open card renders its markdown.
+    expect(read.detail).toBe(raw)
+  })
+
   it('two rows that could both have sent name neither (never the wrong one)', async () => {
     vi.spyOn(sessionRunner, 'findByClaudeId').mockReturnValue(fakeRunner([
       ['toolu_a', `walnut tools call task_send '{"to":"task-aaaa","text":"A"}'`],

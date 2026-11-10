@@ -216,6 +216,16 @@ function clip(text: string, max: number): string {
   return points.length > max ? `${points.slice(0, max - 1).join('').trimEnd()}…` : text
 }
 
+/**
+ * A recorded title or summary as words. A record's fields are made by the `walnut` CLI
+ * of the host that made the call (op-call-store), which may run an older build, and kept
+ * as they came: a card reads them through this, so no record shows markup.
+ */
+export function opCardPlainText(text: string | undefined): string | undefined {
+  if (!text || !/[<`*_#|]/.test(text)) return text
+  return plain(text) || undefined
+}
+
 /** Markdown that would print as noise in a one-line title or summary. */
 function plain(text: string): string {
   return text

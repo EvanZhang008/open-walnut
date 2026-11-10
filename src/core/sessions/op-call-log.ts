@@ -22,7 +22,7 @@ import fs from 'node:fs/promises'
 import { WALNUT_HOME } from '../../constants.js'
 import { readJsonFile, updateJsonFile } from '../../utils/fs.js'
 import {
-  isCardedOp, OP_CARD_DETAIL_MAX, OP_CARD_SUMMARY_MAX, OP_CARD_TITLE_MAX,
+  isCardedOp, opCardPlainText, OP_CARD_DETAIL_MAX, OP_CARD_SUMMARY_MAX, OP_CARD_TITLE_MAX,
   type OpCardFields, type OpCardKind,
 } from '../op-cards.js'
 import type { OpArgForm } from '../../lib/walnut-op-command.js'
@@ -70,8 +70,9 @@ export function normalizeFields(op: string, raw: unknown): OpCardFields | null {
   const kind = KINDS.has(r.kind as OpCardKind) ? r.kind as OpCardKind : 'send'
   const to = Array.isArray(r.to) ? r.to.filter((t): t is string => typeof t === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(t)).slice(0, 20) : []
   const toLabel = str(r.toLabel, 120)
-  const title = str(r.title, OP_CARD_TITLE_MAX)
-  const summary = str(r.summary, OP_CARD_SUMMARY_MAX)
+  // Words, never markup: the CLI that made these may run an older build (opCardPlainText).
+  const title = str(typeof r.title === 'string' ? opCardPlainText(r.title) : undefined, OP_CARD_TITLE_MAX)
+  const summary = str(typeof r.summary === 'string' ? opCardPlainText(r.summary) : undefined, OP_CARD_SUMMARY_MAX)
   const detail = str(r.detail, OP_CARD_DETAIL_MAX)
   return {
     op, kind, to,
@@ -169,7 +170,9 @@ export async function opCallsForTools(sid: string, toolUseIds: string[]): Promis
   const out: Record<string, OpCallEntry[]> = {}
   for (const c of await readCalls(sid)) {
     if (!c.toolUseId || !want.has(c.toolUseId)) continue
-    ;(out[c.toolUseId] ??= []).push(c)
+    // A record kept before its words were cleaned at write is cleaned as it is read.
+    const fields = normalizeFields(c.op, c.fields) ?? c.fields
+    ;(out[c.toolUseId] ??= []).push({ ...c, fields })
   }
   return out
 }
