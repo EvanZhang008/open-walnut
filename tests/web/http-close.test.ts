@@ -17,16 +17,25 @@ afterEach(() => {
   for (const s of servers.splice(0)) { s.closeAllConnections?.(); s.close() }
 })
 
-async function serve(): Promise<{ server: http.Server; port: number }> {
+/** Resolves once the server holds the connection or request it names: the tests wait on that, never on a clock. */
+interface Seen { request: (url: string) => Promise<void>; connection: () => Promise<void> }
+
+async function serve(): Promise<{ server: http.Server; port: number; seen: Seen }> {
+  const waiters = new Map<string, Array<() => void>>()
+  const hit = (key: string) => { for (const w of waiters.get(key) ?? []) w(); waiters.delete(key) }
+  const seenOnce = (key: string) => new Promise<void>((r) => { waiters.set(key, [...(waiters.get(key) ?? []), r]) })
   const server = http.createServer((req, res) => {
+    hit(`req:${req.url}`)
     if (req.url === '/hang') return // a long poll that outlives any shutdown
     if (req.url === '/stream') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.write(':\n\n'); return }
     if (req.url === '/slow') { setTimeout(() => res.end('late'), 200); return }
     res.end('ok')
   })
+  server.on('connection', () => hit('conn'))
   servers.push(server)
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
-  return { server, port: (server.address() as net.AddressInfo).port }
+  const seen: Seen = { request: (url) => seenOnce(`req:${url}`), connection: () => seenOnce('conn') }
+  return { server, port: (server.address() as net.AddressInfo).port, seen }
 }
 
 /** Write `text` on a raw socket and wait until it is accepted. */
@@ -49,9 +58,10 @@ const BOUND = HTTP_DRAIN_GRACE_MS + 1_500
 
 describe('closeHttpServer', () => {
   it('a request still being answered is cut after the grace', async () => {
-    const { server, port } = await serve()
+    const { server, port, seen } = await serve()
+    const held = seen.request('/hang')
     await raw(port, 'GET /hang HTTP/1.1\r\nHost: x\r\n\r\n')
-    await new Promise((r) => setTimeout(r, 100))
+    await held
     expect(await timeClose(server)).toBeLessThan(BOUND)
   })
 
@@ -63,9 +73,10 @@ describe('closeHttpServer', () => {
   })
 
   it('a request whose headers never finished does not hold it', async () => {
-    const { server, port } = await serve()
+    const { server, port, seen } = await serve()
+    const accepted = seen.connection()
     await raw(port, 'POST /x HTTP/1.1\r\nHost: x\r\nContent-Length: 10\r\n')
-    await new Promise((r) => setTimeout(r, 100))
+    await accepted
     expect(await timeClose(server)).toBeLessThan(BOUND)
   })
 
@@ -77,7 +88,8 @@ describe('closeHttpServer', () => {
   })
 
   it('a short request in flight still gets its answer', async () => {
-    const { server, port } = await serve()
+    const { server, port, seen } = await serve()
+    const arrived = seen.request('/slow')
     const answer = new Promise<string>((resolve, reject) => {
       http.get({ host: '127.0.0.1', port, path: '/slow', agent: false }, (res) => {
         let body = ''
@@ -85,16 +97,17 @@ describe('closeHttpServer', () => {
         res.on('end', () => resolve(body))
       }).on('error', reject)
     })
-    await new Promise((r) => setTimeout(r, 50))
+    await arrived
     const closing = closeHttpServer(server)
     expect(await answer).toBe('late')
     await closing
   })
 
   it('dropConnections cuts everything at once', async () => {
-    const { server, port } = await serve()
+    const { server, port, seen } = await serve()
+    const held = seen.request('/hang')
     await raw(port, 'GET /hang HTTP/1.1\r\nHost: x\r\n\r\n')
-    await new Promise((r) => setTimeout(r, 100))
+    await held
     expect(await timeClose(server, { dropConnections: true })).toBeLessThan(HTTP_DRAIN_GRACE_MS)
   })
 })

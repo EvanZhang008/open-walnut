@@ -58,8 +58,12 @@ describe('server stop with connections open', () => {
     // An idle keep-alive socket after one answer, and a request still arriving.
     const idle = await raw(port, 'GET /api/config HTTP/1.1\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\n')
     await new Promise<void>((r) => idle.once('data', () => r()))
-    await raw(port, 'POST /api/v1/tasks HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: 50\r\n\r\n{"ti')
-    await new Promise((r) => setTimeout(r, 100))
+    // Its headers are complete, its body is not: the server holds it as a request in flight.
+    const half = await raw(port, 'POST /api/v1/tasks HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: 50\r\n\r\n{"ti')
+    // A probe on the same server answering proves the half request was read before the stop.
+    const probe = await raw(port, 'GET /api/config HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n')
+    await new Promise<void>((r) => probe.once('data', () => r()))
+    expect(half.destroyed).toBe(false)
 
     const t0 = Date.now()
     const stopping = stopServer({ reason: 'SIGTERM' })
