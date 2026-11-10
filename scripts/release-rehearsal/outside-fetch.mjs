@@ -1,6 +1,9 @@
 /**
  * A GET to a service outside the rehearsal (GitHub's release downloads, npm's registry),
- * tried again past a passing failure: a dropped connection, a timeout, 429 or a 5xx.
+ * tried again past a passing failure: a dropped connection, a timeout, 429 or a 5xx. The
+ * release scripts that download use it too (scripts/runtime-bundle/build.mjs,
+ * scripts/components-release-ready.mjs; 2026-11-10, CI run 42831643140: the archive build's own
+ * three tries spanned 16 s, all "fetch failed", and failed the required Archive job).
  * 2026-11-05: GitHub answered 504 for a release's SHA256SUMS and the field rehearsal's
  * archive scenario failed; its three tries spanned 15 seconds. Every outside GET of the
  * rehearsals goes through here (ratchet: tests/scripts/release-rehearsal-outside-fetch.test.ts).
@@ -14,7 +17,9 @@ const passing = (status) => status === 429 || status >= 500
 
 /**
  * `fetch(url, init)` with a fresh `timeoutMs` deadline per attempt. Resolves the last
- * Response; rejects with the last error when every attempt failed to get one.
+ * Response; rejects with the last error when every attempt failed to get one. With `read`, a
+ * 2xx answer's body is read inside the attempt (its value is returned), so a download cut off
+ * partway is fetched again.
  */
 export async function outsideFetch(url, init = {}, {
   timeoutMs = 120_000,
@@ -22,12 +27,15 @@ export async function outsideFetch(url, init = {}, {
   fetchImpl = fetch,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   log = (line) => process.stderr.write(`${line}\n`),
+  read,
 } = {}) {
   for (let i = 0; ; i++) {
     let res, err
     try {
       res = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(timeoutMs) })
+      if (read && res.ok) return await read(res)
     } catch (e) {
+      res = undefined
       err = e
     }
     if (res && !passing(res.status)) return res

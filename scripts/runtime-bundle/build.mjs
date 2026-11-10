@@ -35,6 +35,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { retryRegistryLag, runPassingThrough } from '../npm-registry-lag.mjs'
+import { outsideFetch } from '../release-rehearsal/outside-fetch.mjs'
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 export const RUNTIME_MARKER = 'open-walnut-runtime.json'
@@ -173,19 +174,12 @@ export function updaterKnowsArchive(pkgRoot) {
   return false
 }
 
-/** GET with three tries: one dropped connection to nodejs.org must not fail a release. */
+/** GET through a dropped connection to nodejs.org, a cut-off download included (outside-fetch.mjs). */
 async function fetchOk(url, as) {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(300_000) })
-      if (!res.ok) throw new Error(`GET ${url} answered ${res.status}`)
-      return as === 'json' ? await res.json() : as === 'text' ? await res.text() : Buffer.from(await res.arrayBuffer())
-    } catch (err) {
-      if (attempt === 3) throw err
-      process.stdout.write(`${err instanceof Error ? err.message : String(err)}; trying again\n`)
-      await new Promise((r) => setTimeout(r, attempt * 5_000))
-    }
-  }
+  const read = async (res) => (as === 'json' ? await res.json() : as === 'text' ? await res.text() : Buffer.from(await res.arrayBuffer()))
+  const out = await outsideFetch(url, {}, { read, timeoutMs: 300_000, log: (line) => process.stdout.write(`${line}\n`) })
+  if (out instanceof Response) throw new Error(`GET ${url} answered ${out.status}`)
+  return out
 }
 
 const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex')

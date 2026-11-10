@@ -13,6 +13,7 @@
 // Exit 2: manifest-data.ts holds no manifest this can read (its format changed under this).
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
+import { outsideFetch } from './release-rehearsal/outside-fetch.mjs'
 
 const PIN = 'src/core/components/manifest-data.ts'
 
@@ -50,18 +51,11 @@ export function pinnedAssets(m, base = process.env.WALNUT_COMPONENTS_BASE_URL) {
 
 /** HTTP status of one archive: a 404 answers at once, a dropped connection is tried again. */
 async function status(url) {
-  let last = 0
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      const r = await fetch(url, { method: 'HEAD', redirect: 'follow', signal: AbortSignal.timeout(20_000) })
-      if (r.status === 200 || r.status === 404) return r.status
-      last = r.status
-    } catch {
-      last = 0
-    }
-    if (attempt < 2) await new Promise((res) => setTimeout(res, 2000 * (attempt + 1)))
+  try {
+    return (await outsideFetch(url, { method: 'HEAD', redirect: 'follow' }, { timeoutMs: 20_000 })).status
+  } catch {
+    return 0
   }
-  return last
 }
 
 if (import.meta.main) {

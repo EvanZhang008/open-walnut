@@ -55,6 +55,16 @@ describe('outsideFetch', () => {
     await expect(outsideFetch('https://x/a', {}, { fetchImpl: g.impl, ...quiet })).rejects.toThrow('reset')
   })
 
+  it('with read, fetches again a download cut off partway, and returns what it read', async () => {
+    let n = 0
+    const impl = async () => (n++ === 0
+      ? ({ ok: true, status: 200, text: async () => { throw new TypeError('terminated') } } as unknown as Response)
+      : new Response('body'))
+    const slept: number[] = []
+    expect(await outsideFetch('https://x/a', {}, { fetchImpl: impl, read: (r: Response) => r.text(), sleep: async (ms: number) => { slept.push(ms) }, log: () => {} })).toBe('body')
+    expect(slept).toEqual([OUTSIDE_WAITS_MS[0]])
+  })
+
   it('waits about three and a half minutes in all, the longest last', () => {
     expect(OUTSIDE_WAITS_MS.reduce((a, b) => a + b, 0)).toBe(220_000)
     expect([...OUTSIDE_WAITS_MS].sort((a, b) => a - b)).toEqual(OUTSIDE_WAITS_MS)
@@ -79,13 +89,21 @@ describe('every outside GET of the rehearsals goes through outsideFetch', () => 
     expect(got).toBeNull()
   })
 
-  it('no rehearsal script calls fetch for an outside service directly', () => {
+  it('no rehearsal or release download script calls fetch for an outside service directly', () => {
     // Allowed: the Walnut under test (`w.base`, `this.base`), and the local registry's
     // pass-through of npm's own request (npm tries again itself).
     const allowed = [/\$\{(w|this)\.base\}/, /fetch\(`\$\{upstream\}\$\{req\.url\}`/]
     const offenders: string[] = []
-    for (const file of fs.readdirSync(DIR).filter((f) => f.endsWith('.mjs') && f !== 'outside-fetch.mjs')) {
-      fs.readFileSync(path.join(DIR, file), 'utf8').split('\n').forEach((line, i) => {
+    // The release scripts that download read through it too: 2026-11-10, CI run 42831643140, the
+    // Node archive build's own three tries spanned 16 s and failed the required Archive job.
+    const files = [
+      ...fs.readdirSync(DIR).filter((f) => f.endsWith('.mjs') && f !== 'outside-fetch.mjs').map((f) => path.join(DIR, f)),
+      ...fs.readdirSync(path.join(REPO, 'scripts/runtime-bundle')).filter((f) => f.endsWith('.mjs')).map((f) => path.join(REPO, 'scripts/runtime-bundle', f)),
+      path.join(REPO, 'scripts/components-release-ready.mjs'),
+    ]
+    for (const abs of files) {
+      const file = path.relative(REPO, abs)
+      fs.readFileSync(abs, 'utf8').split('\n').forEach((line, i) => {
         if (/^\s*(\*|\/\/)/.test(line)) return
         if (!/\b(fetch|fetchImpl)\(/.test(line)) return
         if (!allowed.some((re) => re.test(line))) offenders.push(`${file}:${i + 1}: ${line.trim()}`)
