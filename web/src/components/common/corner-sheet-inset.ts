@@ -13,7 +13,6 @@ export function cornerSheetInsetOf(el: Element | null | undefined): number {
 }
 
 /** The sheet each measured pane was in at its last pick (null: none), to tell a pane that moved. */
-const sheetAtPick = new WeakMap<Element, Element | null>();
 
 /**
  * A layout mode picked by a pane's width, the corner's inset left out: a notice showing for a few
@@ -32,12 +31,26 @@ export function modeBesideCorner<M>(
   width: number,
   prev: M | null,
   pick: (width: number, prev: M | null) => M,
+  moved = false,
 ): M {
-  const sheet = el?.closest<HTMLElement>('.open-walnut-fullscreen') ?? null;
-  const moved = !!el && sheetAtPick.has(el) && sheetAtPick.get(el) !== sheet;
-  if (el) sheetAtPick.set(el, sheet);
-  const held = moved ? null : prev;
   const inset = cornerSheetInsetOf(el);
   if (inset <= 0) return pick(width, prev);
+  const held = moved ? null : prev;
   return held ?? pick(width + inset, held);
+}
+
+/** The sheet a pane was in at its last measure (`undefined` before the first). */
+export type SheetSeen = { current: Element | null | undefined };
+
+/**
+ * Whether `el` went into a sheet or out of one since the last read through `seen`, which it
+ * updates. Call it in the measure, once per measure, and hand the answer to modeBesideCorner's
+ * `moved`: never inside a state updater, which React may run twice (StrictMode, a replayed
+ * render), and whose second run would read the record the first one already moved.
+ */
+export function movedSheet(seen: SheetSeen, el: Element | null | undefined): boolean {
+  const sheet = el?.closest('.open-walnut-fullscreen') ?? null;
+  const moved = seen.current !== undefined && seen.current !== sheet;
+  seen.current = sheet;
+  return moved;
 }

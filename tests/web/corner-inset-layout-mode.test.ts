@@ -13,7 +13,7 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CORNER_SHEET_INSET_VAR, cornerSheetInsetOf, modeBesideCorner } from '../../web/src/components/common/corner-sheet-inset';
+import { CORNER_SHEET_INSET_VAR, cornerSheetInsetOf, modeBesideCorner, movedSheet, type SheetSeen } from '../../web/src/components/common/corner-sheet-inset';
 import { modeFor } from '../../web/src/components/board/kanban/useKanbanLayout';
 
 /** An element inside a sheet whose inline style holds `inset` (or no sheet at all). */
@@ -52,16 +52,35 @@ describe('modeBesideCorner', () => {
     expect(modeBesideCorner(inSheet(126), 400, null, modeFor)).toBe('narrow');
   });
 
+  /** A pane that goes full screen when the test says so, in a sheet whose inset is 126px. */
+  function movingPane() {
+    const sheet = { style: { getPropertyValue: (name: string) => (name === CORNER_SHEET_INSET_VAR ? '126px' : '') } };
+    const state = { inFullscreen: false };
+    const pane = { closest: (sel: string) => (sel === '.open-walnut-fullscreen' && state.inFullscreen ? sheet : null) } as unknown as Element;
+    return { pane, state };
+  }
+
   it('a pane that just went into the sheet under an inset keeps nothing of where it was', () => {
     // 2026-11-09: a narrow column went full screen while a notice held the corner, and kept its mode.
-    const sheet = { style: { getPropertyValue: (name: string) => (name === CORNER_SHEET_INSET_VAR ? '126px' : '') } };
-    let inFullscreen = false;
-    const pane = { closest: (sel: string) => (sel === '.open-walnut-fullscreen' && inFullscreen ? sheet : null) } as unknown as Element;
+    const { pane, state } = movingPane();
+    const seen: SheetSeen = { current: undefined };
+    expect(movedSheet(seen, pane)).toBe(false);
     expect(modeBesideCorner(pane, 560, null, modeFor)).toBe('narrow');
-    inFullscreen = true;
-    expect(modeBesideCorner(pane, 573, 'narrow', modeFor)).toBe('wide');
+    state.inFullscreen = true;
+    expect(movedSheet(seen, pane)).toBe(true);
+    expect(modeBesideCorner(pane, 573, null, modeFor)).toBe('wide');
     // Inside the sheet the hold is back: a width the inset moved keeps the mode it has.
+    expect(movedSheet(seen, pane)).toBe(false);
     expect(modeBesideCorner(pane, 520, 'wide', modeFor)).toBe('wide');
+  });
+
+  it('is pure: a state updater React runs twice (StrictMode, a replayed render) gets the same mode', () => {
+    // The pick runs inside setState updaters (useTreeSplit, useThreadStack, ThreadTreeDrawer).
+    const { pane, state } = movingPane();
+    modeBesideCorner(pane, 560, null, modeFor);
+    state.inFullscreen = true;
+    const first = modeBesideCorner(pane, 573, 'narrow', modeFor);
+    expect(modeBesideCorner(pane, 573, 'narrow', modeFor)).toBe(first);
   });
 });
 
@@ -93,6 +112,14 @@ describe('every width-picked layout mode leaves the corner inset out', () => {
   it('each one picks through modeBesideCorner', () => {
     const missing = pickers.filter((f) => !/\bmodeBesideCorner\(/.test(f.code)).map((f) => f.rel);
     expect(missing, 'pick the mode with modeBesideCorner(el, width, prev, pick) from components/common/corner-sheet-inset').toEqual([]);
+  });
+
+  it('each one tells a move into or out of a sheet with movedSheet, outside its state updater', () => {
+    // A record kept inside the pick (or the updater) is spent by React's second run of it.
+    const missing = pickers.filter((f) => !/\bmovedSheet\(/.test(f.code)).map((f) => f.rel);
+    expect(missing, 'read movedSheet(seenRef.current, el) in the measure, then pass prev null when it says moved').toEqual([]);
+    const inUpdater = pickers.filter((f) => /set\w+\(\(\w*\)\s*=>[^;]*\bmovedSheet\(/.test(f.code)).map((f) => f.rel);
+    expect(inUpdater).toEqual([]);
   });
 
   it('the inset is named in one place', () => {

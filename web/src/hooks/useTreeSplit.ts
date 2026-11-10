@@ -19,7 +19,7 @@ import type { ThreadMetaIndex } from '@/utils/thread-meta';
 import type { ThreadTree } from '@/utils/thread-tree';
 import { questionLabels } from '@/utils/question-tag';
 import { widthTier } from '@/utils/thread-stack-state';
-import { modeBesideCorner } from '@/components/common/corner-sheet-inset';
+import { modeBesideCorner, movedSheet } from '@/components/common/corner-sheet-inset';
 import {
   MAX_PANES, PATH_BAR_NARROW, SPLIT_MIN_WIDTH, THREE_PANES_MIN_WIDTH, barShown as barShownOf, closePaneMove, isPrefix, levelPickMoves,
   paneCap, paneCount, pairMoveTarget, retargetNav, roomFor, segmentRoles, segmentTarget, trailFor, trailHeadsOf, trailKeysOf,
@@ -138,13 +138,15 @@ export function useTreeSplit(a: UseTreeSplitArgs): TreeSplit {
   // (modeBesideCorner): a notice beside the sheet does not take a page away.
   const [widthBucket, setWidthBucket] = useState(0);
   const [tall, setTall] = useState(false);
+  const sheetSeen = useRef<Element | null | undefined>(undefined);
   const { panelRef, chatColRef } = a;
   useLayoutEffect(() => {
     if (!stackMode) return;
     const read = () => {
       const el = chatColRef.current ?? panelRef.current;
       const w = chatColRef.current?.getBoundingClientRect().width || panelRef.current?.getBoundingClientRect().width || 0;
-      setWidthBucket((prev) => modeBesideCorner(el, w, prev || null, (width) => widthTier(width, WIDTH_TIERS)));
+      const moved = movedSheet(sheetSeen, el);
+      setWidthBucket((prev) => modeBesideCorner(el, w, prev || null, (width) => widthTier(width, WIDTH_TIERS), moved));
       setTall((panelRef.current?.getBoundingClientRect().height ?? 0) >= SIBLING_MIN_PANEL_HEIGHT);
     };
     read();

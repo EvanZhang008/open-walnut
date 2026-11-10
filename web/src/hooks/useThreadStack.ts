@@ -32,7 +32,7 @@ import { subscribeDraft } from '@/utils/drafts';
 import { nextSamePassageKeys } from '@/utils/thread-same-passage';
 import { VIEWED_PREFIX, readViewed, writeViewed } from '@/utils/thread-viewed-store';
 import { log } from '@/utils/log';
-import { modeBesideCorner } from '@/components/common/corner-sheet-inset';
+import { modeBesideCorner, movedSheet } from '@/components/common/corner-sheet-inset';
 
 /** The widths `panelWidth` is compared against (the drawer toggle's narrow form, 560). */
 const PANEL_WIDTH_TIERS = [560, 600, 720] as const;
@@ -672,12 +672,16 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
   // only while the session has questions: a resize of a session without them
   // never re-renders the panel, and one with them only when a tier is crossed.
   const [panelWidth, setPanelWidth] = useState(0);
+  const sheetSeen = useRef<Element | null | undefined>(undefined);
   const hasQuestions = tree.threads.length > 1 || !!state.pending || drafts.size > 0;
   useEffect(() => {
     const el = args.panelRef.current;
     if (!hasQuestions || !el || typeof ResizeObserver === 'undefined') return;
     // A full-screen sheet's room for the notice corner never picks the tier (modeBesideCorner).
-    const read = () => setPanelWidth((prev) => modeBesideCorner(el, el.getBoundingClientRect().width, prev || null, (w) => widthTier(w, PANEL_WIDTH_TIERS)));
+    const read = () => {
+      const moved = movedSheet(sheetSeen, el);
+      setPanelWidth((prev) => modeBesideCorner(el, el.getBoundingClientRect().width, prev || null, (w) => widthTier(w, PANEL_WIDTH_TIERS), moved));
+    };
     read();
     const ro = new ResizeObserver(read);
     ro.observe(el);
