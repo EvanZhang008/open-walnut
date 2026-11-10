@@ -156,6 +156,8 @@ export interface EngineDeps {
   now?: () => number
   /** The server's exit trace (shutdown cut-offs are read from it at boot). */
   exitTraceFile?: string | null
+  /** False on a server that takes no actions (an isolated one): alarms still evaluate, nothing acts or records an action. */
+  actsOn?: () => boolean
   fixMode: () => Promise<FixMode>
   autoFix: (id: string, labels?: Record<string, string>) => Promise<{ ok: boolean; detail: string }>
   openFixTask: (input: FixTaskInput) => Promise<{ taskId: string; started: boolean }>

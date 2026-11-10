@@ -85,6 +85,7 @@ async function harness(opts: { pid?: number; exitTrace?: string; now?: number; b
     build: opts.build,
     now: () => clock.now,
     exitTraceFile: opts.exitTrace ?? null,
+    ...(opts.actsOn === false ? { actsOn: () => false } : {}),
     fixMode: async () => h.mode.v,
     autoFix: async (id, labels) => { h.autoFixes.push(id); h.autoFixLabels.push(labels); return { ok: true, detail: `${id} ran` } },
     openFixTask: async (input) => {
@@ -374,6 +375,20 @@ describe('health monitor engine', () => {
     await minutes(h, 61)
     h.m.setGauge('status.mismatches', 3)
     expect(await ringAfter()).toBe(first)
+  })
+
+  it('a server that takes no actions still rings its alarms but does and records nothing', async () => {
+    const h = await harness({ actsOn: false })
+    h.mode.v = 'start'
+    collectorHung(h, 4)
+    h.disk.free = 20
+    h.disk.usedPct = 96
+    await minutes(h, 120)
+    expect(h.m.alarms['session.hung'].state).toBe('ALARM')
+    expect(h.m.alarms['disk.free'].state).toBe('ALARM')
+    expect(h.m.alarms['session.hung'].actions).toEqual([])
+    expect(h.m.alarms['disk.free'].actions).toEqual([])
+    expect([h.fixes, h.autoFixes, h.told, h.notified]).toEqual([[], [], [], []])
   })
 
   it('a check that stops reporting is no recovery: the owner hears no OK, and the ring after it is the same episode', async () => {

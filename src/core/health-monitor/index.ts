@@ -80,6 +80,7 @@ export async function startHealthMonitor(opts: StartOptions): Promise<HealthMoni
     pid: process.pid,
     build: await runningBuildKey(),
     exitTraceFile: opts.exitTraceFile,
+    actsOn: () => actionsOn,
     fixMode,
     autoFix: async (id, labels) => (actionsOn ? runAutoFix(id, dataDir, labels) : { ok: false, detail: 'actions are off on an isolated server' }),
     openFixTask,

@@ -313,7 +313,7 @@ export class HealthMonitor {
   }
 
   private async act(def: AlarmDef, inst: AlarmInstanceState, reason: string, now: number): Promise<void> {
-    if (this.held(inst, now)) return
+    if (this.deps.actsOn?.() === false || this.held(inst, now)) return
     const { autoFix, then, graceMin = 30 } = def.action
     if (autoFix && !inst.actions.some((a) => a.kind === 'auto-fix')) {
       let r: { ok: boolean; detail: string }
