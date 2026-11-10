@@ -9,6 +9,7 @@
  */
 
 import type { AlarmDef } from './types.js'
+import { STALL_MACHINE_METRIC, STALL_OWN_METRIC } from '../stall-cause.js'
 
 export const BUILTIN_ALARMS: readonly AlarmDef[] = [
   {
@@ -31,10 +32,21 @@ export const BUILTIN_ALARMS: readonly AlarmDef[] = [
   {
     id: 'eventloop.stall',
     title: 'Server event loop stalls',
-    description: 'The longest event-loop delay in each minute. While it is high every page and every send waits.',
-    metric: 'eventloop.delay.max', kind: 'gauge', stat: 'max', periodMin: 1, comparison: '>', threshold: 1000,
+    description: 'The longest event-loop hold in each minute that Walnut\'s own work caused (code, garbage collection or a blocking call). While it is high every page and every send waits.',
+    metric: STALL_OWN_METRIC, kind: 'gauge', stat: 'max', periodMin: 1, comparison: '>', threshold: 1000,
     evaluationPeriods: 10, datapointsToAlarm: 6, missing: 'notBreaching',
     unit: 'ms', action: { then: 'fix-task' },
+  },
+  {
+    // The machine's share of the stalls (stall-cause.ts): no Walnut code ran in
+    // them, so there is nothing for a fix task to fix. Low memory, swap and a
+    // nearly full disk have alarms of their own.
+    id: 'eventloop.starved',
+    title: 'Machine too busy to run the server',
+    description: 'The longest event-loop delay in each minute while the machine did not run the server (CPU or memory pressure, swap). Walnut code was not running; pages and sends still wait.',
+    metric: STALL_MACHINE_METRIC, kind: 'gauge', stat: 'max', periodMin: 1, comparison: '>', threshold: 1000,
+    evaluationPeriods: 10, datapointsToAlarm: 6, missing: 'notBreaching',
+    unit: 'ms', action: { then: 'none' },
   },
   {
     id: 'send.delivery',

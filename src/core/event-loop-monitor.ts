@@ -28,6 +28,7 @@ import { execFile } from 'node:child_process'
 import { log } from '../logging/index.js'
 import { observe } from './observability/metrics.js'
 import { noteSleepSinceLastLook } from '../lib/sleep-ledger.js'
+import { stallMetricOf } from './stall-cause.js'
 
 /** Loop delay above this (ms) in a window is reported as a stall. */
 const STALL_THRESHOLD_MS = 250
@@ -326,6 +327,9 @@ export function startEventLoopMonitor(clocksOverride?: MonitorClocks): void {
         }
         const report = (): void => {
           log.web.warn('event-loop blocked (probe late)', payload)
+          // Health: Walnut's own stalls and the machine's are counted apart
+          // (stall-cause.ts), so a starved server opens no "fix Walnut" task.
+          observe(stallMetricOf(hold), payload.lateByMs)
           try {
             probeObserver?.reported({
               lateByMs: payload.lateByMs,

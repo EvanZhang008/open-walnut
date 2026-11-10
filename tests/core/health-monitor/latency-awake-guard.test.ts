@@ -22,10 +22,17 @@ const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
 
 /** Each millisecond alarm's metric, the file that measures it, and the words there that leave sleep out. */
 const AWAKE_ONLY: Record<string, { file: string; marker: RegExp; why: string }> = {
-  'eventloop.delay.max': {
+  // Both stall metrics are observed only in the probe's report(), which a probe
+  // that spans a sleep (wall vs monotonic gap, kern.waketime) never reaches.
+  'eventloop.stall.own': {
     file: 'src/core/event-loop-monitor.ts',
-    marker: /system sleep detected/,
-    why: 'the monitor drops a window that spans a sleep (wall vs monotonic gap, kern.waketime)',
+    marker: /probe lateness dropped/,
+    why: 'the probe drops a lateness that spans a sleep before it reports and counts the stall',
+  },
+  'eventloop.stall.machine': {
+    file: 'src/core/event-loop-monitor.ts',
+    marker: /probe lateness dropped/,
+    why: 'the same probe report as eventloop.stall.own',
   },
   'send.delivery.live': {
     file: 'src/providers/claude-code-session.ts',

@@ -19,6 +19,7 @@ import { setLogLevelTap } from '../../logging/subsystem.js'
 import { seriesKeyOf } from './evaluate.js'
 import { signatureKey } from './signature.js'
 import type { MinuteRow } from './types.js'
+import { STALL_MACHINE_METRIC, STALL_OWN_METRIC } from '../stall-cause.js'
 
 const GiB = 1024 ** 3
 
@@ -28,6 +29,7 @@ const COUNTERS = new Set(['host.link.lost'])
 /** Registry latencies kept as a minute max, under the health key their labels map to. */
 function maxKeyOf(name: string, labels: Record<string, string> | undefined): string | null {
   if (name === 'eventloop.delay.max') return 'eventloop.delay.max'
+  if (name === STALL_OWN_METRIC || name === STALL_MACHINE_METRIC) return name
   if (name === 'session.delivery') {
     const p = labels?.path
     if (p === 'stdin' || p === 'mid-turn') return 'send.delivery.live'
