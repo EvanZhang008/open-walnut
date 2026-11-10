@@ -22,7 +22,9 @@ let verdictDirs = 0
 function cleanEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
   const verdicts = path.join(os.tmpdir(), `push-gate-verdicts-${process.pid}-${verdictDirs++}`)
   dirs.push(verdicts)
-  const e: NodeJS.ProcessEnv = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', WALNUT_PUSH_GATE_VERDICTS: verdicts, WALNUT_FLAKY_LOG: path.join(verdicts, 'flaky.jsonl') }
+  const e: NodeJS.ProcessEnv = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', WALNUT_PUSH_GATE_VERDICTS: verdicts, WALNUT_FLAKY_LOG: path.join(verdicts, 'flaky.jsonl'),
+    // No real wait between GitHub reads: a fixture's job list is empty unless the test names jobs.
+    WALNUT_PUSH_GATE_LOG_RETRY_SECS: '0' }
   for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_PREFIX', 'WALNUT_PUSH_GATE']) delete e[k]
   return Object.assign(e, extra)
 }
@@ -400,6 +402,19 @@ esac
     expect(section.split(err).length - 1).toBe(1)
     expect(section).toMatch(/the iOS app failed to build/)
     expect(section).not.toMatch(/TEST BUILD FAILED|##\[group\]|grep|echo/)
+  })
+
+  it('says so for a failed tier whose job GitHub does not list, never skipping it without a word', () => {
+    // 2026-11-10: the job list came back without the tier under load, every failed tier was skipped,
+    // and a land was refused with "the failing tests are listed above" and none listed.
+    const g = ghRepo({
+      statuses: [st('walnut/push-gate (quick 7/8)', 'failure', '1 NEW failure(s)'), st('walnut/push-gate', 'failure', 'failed: quick 7/8')],
+      jobs: { jobs: [] },
+    })
+    const out = spawnSync('bash', [GATE, 'origin', URL], { cwd: g.r, input: line(commit(g.r, { 'a.txt': '1\n' }, 'one'), g.base), encoding: 'utf8', env: cleanEnv({ ...g.env, WALNUT_PUSH_GATE_LOG_RETRY_SECS: '0' }) })
+    expect(out.status).toBe(1)
+    expect(out.stdout).toContain('── quick 7/8 (')
+    expect(out.stdout).toContain("GitHub did not list this tier's job, so its failing tests are not named here")
   })
 
   it('asks again for a job log GitHub has not served yet, for up to two minutes, and says so when it never comes', () => {

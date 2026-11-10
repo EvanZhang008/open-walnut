@@ -344,11 +344,25 @@ if [ -z "$runner" ]; then
   # The failing tests, from each failed tier's job log.
   for tier in $(printf '%s' "$statuses" | jq -r '.[] | select(.state != "success" and .context != "walnut/push-gate") | .context | sub("^walnut/push-gate \\("; "") | sub("\\)$"; "") | gsub(" "; "_")'); do
     tier=${tier//_/ }
-    jobs=$(ghcall api "repos/$repo/actions/runs/$run/jobs?per_page=50" 2>/dev/null)
-    job=$(printf '%s' "$jobs" | jq -r --arg n "Gate ($tier)" '.jobs[] | select(.name == $n) | .id' | head -1)
-    # A land's frontend tier runs in its first land job.
-    [ -n "$job" ] || [ "$tier" != frontend ] || job=$(printf '%s' "$jobs" | jq -r '.jobs[] | select(.name | startswith("Gate (land 1/")) | .id' | head -1)
-    [ -n "$job" ] || continue
+    # The run's job list, asked again when GitHub's answer is empty or fails (2026-11-10: a land was
+    # refused with "the failing tests are listed above" and none listed: the list came back empty
+    # under load, and each failed tier was skipped without a word).
+    job=
+    for _ in 1 2 3 4 5; do
+      jobs=$(ghcall api "repos/$repo/actions/runs/$run/jobs?per_page=100" 2>/dev/null) || jobs=
+      job=$(printf '%s' "$jobs" | jq -r --arg n "Gate ($tier)" '.jobs[]? | select(.name == $n) | .id' 2>/dev/null | head -1)
+      # A land's frontend tier runs in its first land job.
+      [ -n "$job" ] || [ "$tier" != frontend ] || job=$(printf '%s' "$jobs" | jq -r '.jobs[]? | select(.name | startswith("Gate (land 1/")) | .id' 2>/dev/null | head -1)
+      [ -z "$job" ] || break
+      # A list that names jobs, only not this one, is GitHub's answer: no wait for it to change.
+      [ "$(printf '%s' "$jobs" | jq -r '(.jobs // []) | length' 2>/dev/null || echo 0)" = 0 ] || break
+      sleep "${WALNUT_PUSH_GATE_LOG_RETRY_SECS:-15}"
+    done
+    if [ -z "$job" ]; then
+      echo ""; echo "── $tier (https://github.com/$repo/actions/runs/$run)"
+      echo "GitHub did not list this tier's job, so its failing tests are not named here: read them at the link above."
+      continue
+    fi
     echo ""; echo "── $tier (https://github.com/$repo/actions/runs/$run/job/$job)"
     # GitHub serves a job's log a little after the job ends: an empty answer is asked again (a land
     # refused with no test named, 2026-11-09; three tries 10 s apart were not enough later that day,
