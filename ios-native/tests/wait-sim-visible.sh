@@ -8,16 +8,21 @@
 # it in none of six tries over two minutes, on the image and device that had passed twice
 # before. Waiting does not mend that, so halfway through the tries the simulator service is
 # restarted once and the iPhone booted again; a failure prints what xcodebuild did list.
+# 2026-11-10 (CI run 42796192784): on a first boot that spent two minutes migrating data, one
+# leg's xcodebuild listed the iPhone at try 3 (about 100 s), while the other leg restarted the
+# service at try 3 (90 s), which started the wait over, and failed. Each try takes 20 to 40 s
+# of xcodebuild besides the sleep, so the defaults now wait about 10 minutes and restart only
+# after about 5, past the slowest listing seen.
 #   wait-sim-visible.sh <udid>   (run from ios-native/, with Walnut.xcodeproj generated)
-# Knobs: WALNUT_SIM_WAIT_TRIES (6), WALNUT_SIM_WAIT_SECS (20), WALNUT_SIM_RECOVER_AT (3,
+# Knobs: WALNUT_SIM_WAIT_TRIES (14), WALNUT_SIM_WAIT_SECS (20), WALNUT_SIM_RECOVER_AT (7,
 # 0 = never), XCODEBUILD (xcodebuild), SIMCTL (xcrun simctl), WALNUT_SIM_SERVICE_RESTART
 # (the command that restarts the simulator service: launchd's own restart of its exact
 # label in the user domain, never a match on a process name).
 set -uo pipefail
 udid="${1:?usage: wait-sim-visible.sh <udid>}"
-tries="${WALNUT_SIM_WAIT_TRIES:-6}"
+tries="${WALNUT_SIM_WAIT_TRIES:-14}"
 secs="${WALNUT_SIM_WAIT_SECS:-20}"
-recover_at="${WALNUT_SIM_RECOVER_AT:-3}"
+recover_at="${WALNUT_SIM_RECOVER_AT:-7}"
 xb="${XCODEBUILD:-xcodebuild}"
 read -r -a simctl <<<"${SIMCTL:-xcrun simctl}"
 restart="${WALNUT_SIM_SERVICE_RESTART:-launchctl kickstart -k user/$(id -u)/com.apple.CoreSimulator.CoreSimulatorService}"

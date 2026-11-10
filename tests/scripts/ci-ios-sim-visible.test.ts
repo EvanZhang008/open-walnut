@@ -21,7 +21,7 @@ const UDID = 'F0C70C77-E423-4478-B648-3D25045B311B'
  * on, or (`afterRecover`) only once the simulator service was restarted and the iPhone booted
  * again. A fake simctl and service restart log their steps.
  */
-function run(seenFrom: number, tries = 3, opts: { afterRecover?: boolean; recoverAt?: number } = {}) {
+function run(seenFrom: number, tries: number | null = 3, opts: { afterRecover?: boolean; recoverAt?: number | null } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sim-visible-'))
   const fake = path.join(dir, 'xcodebuild')
   const seen = opts.afterRecover ? `[ -f "${dir}/rebooted" ]` : `[ $n -ge ${seenFrom} ]`
@@ -40,7 +40,10 @@ if [ "$1" = list ]; then echo '    iPhone 17 Pro (${UDID}) (Booted)'; fi
     cwd: dir, encoding: 'utf8',
     env: {
       ...process.env, XCODEBUILD: fake, SIMCTL: simctl, WALNUT_SIM_SERVICE_RESTART: `echo restart >> "${dir}/steps"`,
-      WALNUT_SIM_WAIT_TRIES: String(tries), WALNUT_SIM_WAIT_SECS: '0', WALNUT_SIM_RECOVER_AT: String(opts.recoverAt ?? 3),
+      WALNUT_SIM_WAIT_SECS: '0',
+      // null: the script's own default.
+      ...(tries === null ? {} : { WALNUT_SIM_WAIT_TRIES: String(tries) }),
+      ...(opts.recoverAt === null ? {} : { WALNUT_SIM_RECOVER_AT: String(opts.recoverAt ?? 3) }),
       PATH: `${dir}:${process.env.PATH}`,
     },
   })
@@ -76,6 +79,20 @@ describe('the iOS job waits until xcodebuild sees its simulator', () => {
   it('recovers at most once, and never when the simulator is seen first', () => {
     expect(run(99, 6, { recoverAt: 2 }).steps.filter((s) => s === 'restart')).toHaveLength(1)
     expect(run(2, 6).steps).toEqual([])
+  })
+
+  // 2026-11-10, CI run 42796192784: one leg saw the iPhone at try 3 of a slow first boot, the
+  // other restarted the service at try 3, which started the wait over, and failed.
+  it('by default waits past a slow listing without restarting anything, and restarts only well into the wait', () => {
+    const late = run(6, null, { recoverAt: null })
+    expect(late).toMatchObject({ code: 0, calls: 6 })
+    expect(late.steps).toEqual([])
+    const never = run(99, null, { recoverAt: null })
+    expect(never.code).toBe(1)
+    expect(never.calls).toBe(14)
+    expect(never.steps.filter((s) => s === 'restart')).toHaveLength(1)
+    // The restart comes after the 7th try, so 6 quiet ones went first.
+    expect(never.out.indexOf('restarting the simulator service')).toBeGreaterThan(never.out.indexOf('(try 7 of 14)'))
   })
 
   it("runs after the boot and before either leg's tests", () => {
