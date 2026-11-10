@@ -291,9 +291,11 @@ async function decompressOne(gz: string, want: ManifestFile | undefined, dst: st
   const h = createHash('sha256')
   let size = 0
   try {
-    await pipeline(fs.createReadStream(gz), createGunzip(), new Transform({
+    const count = new Transform({
       transform(chunk, _e, cb) { size += chunk.length; h.update(chunk); cb(null, chunk) },
-    }), fs.createWriteStream(tmp, { mode: 0o600 }))
+    })
+    const sink = fs.createWriteStream(tmp, { mode: 0o600 })
+    await pipeline(fs.createReadStream(gz), createGunzip(), count, sink)
     if (want && (h.digest('hex') !== want.sha256 || size !== want.size)) throw new Error(`archived copy of ${want.rel} does not match its manifest`)
     await fsyncPath(tmp)
     const mtime = want?.mtimeMs ?? (await fsp.stat(gz)).mtimeMs

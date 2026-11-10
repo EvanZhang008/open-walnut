@@ -16,6 +16,8 @@ function handler(twin: 'standalone' | 'source', home: string, fsImpl = fs) {
   expect(end).toBeGreaterThan(start)
   const js = ts.transpileModule(source.slice(start, end), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
   const context = vm.createContext({ fs: fsImpl, path, crypto, Buffer, HOME_DIR: home,
+    // The history archive's restore hook: nothing is archived in these homes.
+    restoreForRead: async () => {}, transcriptRestoreForRead: async () => {}, CLAUDE_PROJECTS_DIRS: [],
     sendOk: (out: Record<string, unknown>, _id: number, fields: Record<string, unknown>) => Object.assign(out, { ok: true, ...fields }),
     sendError: (out: Record<string, unknown>, _id: number, error: string) => Object.assign(out, { ok: false, error }),
   })
