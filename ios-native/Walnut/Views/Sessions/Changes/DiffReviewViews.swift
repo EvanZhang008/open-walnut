@@ -114,7 +114,7 @@ struct DiffCommentComposer: View {
                 Button("Keep Writing", role: .cancel) {}
             }
         }
-        .interactiveDismissDisabled(dirty || sending)
+        .holdsNavigation(dirty || sending)
         .onAppear { focused = true }
     }
 
@@ -262,7 +262,7 @@ struct DiffReviewSheet: View {
             }
         }
         // A swipe down mid-send would leave the send running unseen.
-        .interactiveDismissDisabled(review.sending)
+        .holdsNavigation(review.sending)
     }
 
     private var sendBar: some View {

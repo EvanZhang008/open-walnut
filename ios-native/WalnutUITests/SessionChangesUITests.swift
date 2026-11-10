@@ -289,9 +289,11 @@ final class SessionChangesUITests: XCTestCase {
         let removeButtons = app.buttons.matching(identifier: "diff.comment.remove")
         XCTAssertEqual(removeButtons.count, 2)
         removeButtons.element(boundBy: 1).tap()
-        XCTAssertFalse(text(app, containing: "Throwaway").waitForExistence(timeout: 2), "x did not remove the card")
+        // Undo first: it stays 5 seconds, and a wait for the card to be gone would
+        // spend them on a slow runner before Undo was looked for.
         let undo = element(app, "diff.undoRemove")
-        XCTAssertTrue(undo.waitForExistence(timeout: 3), "no Undo after removing a comment")
+        XCTAssertTrue(undo.waitForExistence(timeout: 4), "no Undo after removing a comment")
+        XCTAssertFalse(text(app, containing: "Throwaway").exists, "x did not remove the card")
         undo.tap()
         XCTAssertTrue(text(app, containing: "Throwaway").waitForExistence(timeout: 5), "Undo did not bring the comment back")
         app.buttons.matching(identifier: "diff.comment.remove").element(boundBy: 1).tap()

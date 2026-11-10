@@ -49,7 +49,7 @@ struct SessionFileDiffView: View {
     @State private var showMore = false
     /// The card just removed, for Undo (and where it stood in the review).
     @State private var removed: (comment: DiffReviewComment, index: Int)?
-    @AppStorage("diff.wrapLines") private var wrap = false
+    @AppStorage("diff.wrapLines", store: AppPrefs.defaults) private var wrap = false
     @Environment(\.dynamicTypeSize) private var typeSize
 
     /// Rows drawn before "Show more": a 20,000-line rewrite opens at once and
