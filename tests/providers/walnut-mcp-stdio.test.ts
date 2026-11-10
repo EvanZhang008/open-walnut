@@ -53,7 +53,7 @@ describe('walnut mcp-server handler', () => {
     const reply = await handle({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'task_get', arguments: { id: 'x' } } })
     const result = reply?.result as { isError?: boolean; content: Array<{ text: string }> }
     expect(result.isError).toBe(true)
-    expect(result.content[0].text).toContain('"outcome": "Refused"')
+    expect(result.content[0].text).toContain('"outcome":"Refused"')
     expect(result.content[0].text).toContain('walnut: internal: boom')
   })
 

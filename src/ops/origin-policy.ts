@@ -125,7 +125,7 @@ export function isPlacesServerPath(path: string): boolean {
   return forms === null || forms.some(isPlacesForm)
 }
 
-interface LocalOnlyRoute { op: string; method: HttpBinding['method']; tail: RegExp }
+interface LocalOnlyRoute { op: string; method: HttpBinding['method']; tail: RegExp; next?: string }
 
 function tailPattern(template: string): RegExp {
   const source = tailOf(fold(serverPath(template)))
@@ -141,7 +141,7 @@ export function localOnlyRoutes(): LocalOnlyRoute[] {
   for (const { op } of listOpEntries()) {
     if (op.tags.remote !== 'deny') continue
     for (const r of [...(op.bind ? [op.bind] : []), ...(op.routes ?? [])]) {
-      out.push({ op: op.name, method: r.method, tail: tailPattern(r.path) })
+      out.push({ op: op.name, method: r.method, tail: tailPattern(r.path), ...(op.remoteDenyNext ? { next: op.remoteDenyNext } : {}) })
     }
     out.push({ op: op.name, method: 'POST', tail: tailPattern(`/api/plugin-runtime/:plugin/ops/${op.name}`) })
   }
@@ -164,7 +164,7 @@ export function selfCallRefusal(opName: string, method: string, path: string, or
   for (const form of forms) {
     const tail = tailOf(form)
     const hit = routes.find((r) => r.method === verb && r.tail.test(tail))
-    if (hit) return `${verb} ${path.slice(0, 200)} is what ${hit.op} does, and ${hit.op} runs only for callers on this Mac`
+    if (hit) return `${verb} ${path.slice(0, 200)} is what ${hit.op} does, and ${hit.op} runs only for callers on this Mac.${hit.next ? ` ${hit.next}` : ''}`
   }
   return null
 }

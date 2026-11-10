@@ -285,7 +285,8 @@ async function handleToolsCall(
   if (!r.ok && r.lost) {
     return err('hub_timeout', `the Walnut server's own call to its API got no answer, so ${name} may have run: ${r.message}`, r.result === undefined ? undefined : { detail: r.result });
   }
-  if (!r.ok) return err('internal', r.message, r.result === undefined ? undefined : { detail: r.result });
+  // Arguments the op does not take are the caller's to fix (bad_request), never an internal fault.
+  if (!r.ok) return err(r.invalidArgs ? 'bad_request' : 'internal', r.message, r.result === undefined ? undefined : { detail: r.result });
   // GatewayResponse.result must be an object — wrap non-object op results.
   const result = (typeof r.result === 'object' && r.result !== null && !Array.isArray(r.result))
     ? r.result as Record<string, unknown>

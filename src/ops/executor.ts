@@ -58,7 +58,9 @@ export type OpOutcome =
    * connection), so a write may have applied. `retry`: a self-call was answered with a status a
    * retry may change (5xx, 408, 429): a copy of the same call runs again (op-calls.ts).
    */
-  | { ok: false; message: string; result?: unknown; unreachable?: true; lost?: true; retry?: true }
+  | { ok: false; message: string; result?: unknown; unreachable?: true; lost?: true; retry?: true
+      /** The call named no op, or arguments the op does not take: the caller's to fix, nothing ran. */
+      invalidArgs?: true }
 
 /** Header every op request carries when the caller's session id is known. */
 export const CALLER_SID_HEADER = 'x-walnut-caller-sid'
@@ -310,7 +312,7 @@ function originRefusal(op: WalnutOp, origin: string): string | null {
     return `${op.name} refused: ${op.localOnlyMessage ?? 'this data is only available to sessions on this Mac'}`
   }
   if (op.tags.remote === 'deny' && isRemoteHostOrigin(origin)) {
-    return `${op.name} is local-only (destructive): a session on another host cannot run it`
+    return `${op.name} is local-only (destructive): a session on another host cannot run it.${op.remoteDenyNext ? ` ${op.remoteDenyNext}` : ''}`
   }
   return null
 }
@@ -369,7 +371,7 @@ function dropRetiredInput(op: WalnutOp, raw: Record<string, unknown>): Record<st
 export function parseOpArgs(
   op: WalnutOp,
   rawArgs: Record<string, unknown> | undefined,
-): { ok: true; args: Record<string, unknown> } | { ok: false; message: string } {
+): { ok: true; args: Record<string, unknown> } | { ok: false; message: string; invalidArgs: true } {
   const raw = rawArgs ?? {}
   const input = isPlainObject(raw) ? dropRetiredInput(op, raw) : raw
   const parsed = z.object(op.input).strict().safeParse(input)
@@ -383,7 +385,7 @@ export function parseOpArgs(
         : i.code === 'invalid_type' ? invalidTypeHint(op.input, input, i.path, i.expected) : ''
       return `${i.path.join('.') || '(root)'}: ${i.message}${hint}`
     }).join('; ')
-    return { ok: false, message: `Invalid arguments for ${op.name}: ${issues}` }
+    return { ok: false, message: `Invalid arguments for ${op.name}: ${issues}`, invalidArgs: true }
   }
   return { ok: true, args: parsed.data as Record<string, unknown> }
 }
@@ -399,7 +401,7 @@ export async function executeOp(
   options: ExecuteOpOptions,
 ): Promise<OpOutcome> {
   const op = getOp(name)
-  if (!op) return { ok: false, message: `Unknown op: ${name}. Run \`walnut tools list\` for the catalog.` }
+  if (!op) return { ok: false, message: `Unknown op: ${name}. Run \`walnut tools list\` for the catalog.`, invalidArgs: true }
   // Untyped callers (tests, plain JS) may still pass nothing: that runs as the strictest class.
   options = options ?? ({} as ExecuteOpOptions)
   const origin = lowerOrigin(options.origin || UNKNOWN_ORIGIN, ambientCallerOrigin())
@@ -412,7 +414,7 @@ export async function executeOp(
   if (isPlainObject(rawArgs) && Object.hasOwn(rawArgs, '_call_id')) {
     given = { ...rawArgs }
     const taken = takeCallIdArg(given)
-    if (taken.bad) return { ok: false, message: `Invalid arguments for ${op.name}: ${taken.bad}` }
+    if (taken.bad) return { ok: false, message: `Invalid arguments for ${op.name}: ${taken.bad}`, invalidArgs: true }
     callId = taken.callId ?? callId
   }
   const parsed = parseOpArgs(op, given)
@@ -507,7 +509,7 @@ async function runOp(
   try {
     materialized = materializeBinding(op.bind!, args)
   } catch (err) {
-    return { ok: false, message: `Invalid arguments for ${op.name}: ${err instanceof Error ? err.message : String(err)}` }
+    return { ok: false, message: `Invalid arguments for ${op.name}: ${err instanceof Error ? err.message : String(err)}`, invalidArgs: true }
   }
   const refused = selfCallRefusal(op.name, op.bind!.method, materialized.path, prov.origin)
   if (refused) return { ok: false, message: refused }

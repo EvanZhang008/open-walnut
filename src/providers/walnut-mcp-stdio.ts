@@ -66,9 +66,10 @@ interface HubOpRow {
   signature?: string
 }
 
-/** What a tool's text content says for an op result: the CLI's own rendering. */
+/** What a tool's text content says for an op result: compact JSON, since a model reads it
+ *  (pretty-printing cost up to a fifth more characters on a task list, measured 2026-11-10). */
 function text(payload: unknown): string {
-  return JSON.stringify(payload, null, 2)
+  return JSON.stringify(payload)
 }
 
 /** One MCP tool row from a hub catalog row. An older hub sends no schema: accept any object. */

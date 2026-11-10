@@ -248,7 +248,7 @@ describe('the api passthrough for a caller off this Mac', () => {
     for (const path of spellings) {
       for (const origin of [HOST, REMOTE_HTTP_ORIGIN, UNKNOWN_ORIGIN]) {
         expect(selfCallRefusal('api', 'POST', path, origin), `${path} for ${origin}`)
-          .toMatch(/is what task_delete does, and task_delete runs only for callers on this Mac$/)
+          .toMatch(/is what task_delete does, and task_delete runs only for callers on this Mac\. Close it instead with task_complete/)
       }
       expect(selfCallRefusal('api', 'POST', path, LOCAL_ORIGIN), path).toBeNull()
     }

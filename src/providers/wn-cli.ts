@@ -1151,7 +1151,11 @@ async function runMcpServer(argv: string[]): Promise<number> {
   const { socketPath, sid } = endpoint
   const { runWalnutMcpStdio } = await import('./walnut-mcp-stdio.js')
   return runWalnutMcpStdio({
-    request: (op, args, timeoutMs) => requestRidingRestart(socketPath, { v: 1, op, sid, args }, timeoutMs),
+    // A call carries WALNUT_TEST_RUN the way `walnut tools call` does, so a test run through
+    // the tools makes test objects too.
+    request: (op, args, timeoutMs) => requestRidingRestart(socketPath, {
+      v: 1, op, sid, args: op === 'tools.call' ? { ...args, ...testRunArg() } : args,
+    }, timeoutMs),
     formatError: formatErrorLines,
   })
 }

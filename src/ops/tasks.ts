@@ -886,10 +886,15 @@ defineOp({
       : attachment === 'attached'
         ? `Talk to its session: walnut tools call task_send '{"to":"${taskId(task) || String(id)}","text":"..."}'`
         : dispatchHint(taskId(task) || String(id), attachment === 'none')
+    // A phase write changes the status the user reads, and Walnut derives that a moment
+    // later: the stored one in this answer is the old one, so it is left out, never shown
+    // stale beside the new phase (2026-11-10: an update read "waiting", a read right after "needs").
+    const view = task && typeof task === 'object' ? taskView(task as Record<string, unknown>) : undefined
+    if (view && body.phase !== undefined) delete view.user_status
     return withOutcome({
       ...headline(task), ...(patched ?? {}),
-      ...(task && typeof task === 'object' ? { task: taskView(task as Record<string, unknown>) } : {}),
-    }, outcome, next)
+      ...(view ? { task: view } : {}),
+    }, body.phase !== undefined ? `${outcome} Its status for the user is re-derived within seconds: task_get reads it.` : outcome, next)
   },
   tags: { readonly: false, remote: 'allow', destructive: false },
 })
@@ -1468,6 +1473,8 @@ defineOp({
     'Permanently delete a task. Only do this when the user explicitly asked for a deletion — ' +
     'completing a task (task_complete) is almost always what is wanted instead. A task with ' +
     'active sessions refuses the delete unless force is true (which stops those sessions first).',
+  remoteDenyNext: 'Close it instead with task_complete, or ask a session on the Mac to delete it. '
+    + 'A task made in a test run (WALNUT_TEST_RUN) is removed by Walnut itself within 6 hours of its last use.',
   input: {
     id: z.string().min(1).describe('Task id or a unique id prefix'),
     force: z.boolean().optional().describe('Stop the task\'s active sessions and delete anyway'),

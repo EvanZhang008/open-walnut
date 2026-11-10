@@ -25,6 +25,11 @@ export function walnutMcpInstructions(opts: { core?: boolean } = {}): string {
     'with task_update phase=NEED_ACTION when work is done and awaiting review; ' +
     'COMPLETE means the whole task is finished. ' +
     'Never delete tasks unless the user explicitly asked. ' +
+    'Which tool for what: find tasks task_list (q, scope, sort, limit); one task task_get; many task_get_bulk; ' +
+    'its conversation task_history; message a task task_send; create task_create; change task_update; close ' +
+    'task_complete; search tasks, memory and past sessions search; the user\'s memory memory_read; notes ' +
+    'note_search / note_read; a team board board_get; watches trigger_list / trigger_create; what is open for you ' +
+    'open_items; a letter to the user human_inbox_send; any other route api. ' +
     'These tools are the same operations as the `walnut` CLI (`walnut tools call <tool> \'<json>\'`), the same ' +
     'arguments and answers: call them here, and use the CLI only for a scripted chain of calls or where a tool is ' +
     'missing. They were read when your session started: after a Walnut update, a field or tool that Walnut\'s ' +

@@ -94,6 +94,8 @@ export interface WalnutOp {
   routes?: ReadonlyArray<Pick<HttpBinding, 'method' | 'path'>>
   /** With `localHostGateway`: the refusal a caller off this Mac gets. */
   localOnlyMessage?: string
+  /** For a `remote: 'deny'` op: what a session on another host does instead (said in the refusal). */
+  remoteDenyNext?: string
   /** Reshape a successful bound result (e.g. attach the task-ref citation). */
   mapResult?: (ctx: OpResultContext) => unknown
   /** When a write partly succeeds the result is kept, but every entry point must clearly report the op as failed. */
