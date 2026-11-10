@@ -1,7 +1,7 @@
 /**
  * The Files panel's document bar folds its tools into ⋯ one at a time while the
  * file's name is cut (BAR_STEPS in web/src/components/common/FileContentView.tsx):
- * History, then ‹ ›, then Find, then Preview / Source. A spec that presses one
+ * History, then ‹ ›, then Find, then Preview / Source, then the host's Terminal toggle. A spec that presses one
  * of them goes through pressBarTool, which finds it wherever it is now.
  */
 import { expect, type Locator, type Page } from '@playwright/test'
@@ -10,7 +10,7 @@ import { expect, type Locator, type Page } from '@playwright/test'
 export async function docBarSettled(bar: Locator): Promise<void> {
   await expect.poll(() => bar.evaluate((el) => {
     const name = el.querySelector('.sfe-crumb.is-last .sfe-crumb-text, .fv-doc-crumb-file')
-    return el.getAttribute('data-fold') === '4' || !name || name.scrollWidth <= name.clientWidth + 1
+    return el.getAttribute('data-fold') === '5' || !name || name.scrollWidth <= name.clientWidth + 1
   }), { message: 'the document bar settles: the name is whole, or nothing is left to fold' }).toBe(true)
 }
 

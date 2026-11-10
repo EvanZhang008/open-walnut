@@ -56,10 +56,10 @@ test('C19, C28: a markdown file: 44 px document bar targets in one sideways row,
   await page.waitForTimeout(500)
   // A phone's bar is narrow (data-fit="tight"): Preview / Source is one icon
   // switch and the rare actions are behind ⋯, so every control is a button.
-  // A name that would be cut even so moves the switch into ⋯ too (data-fold 4).
+  // A name that would be cut even so moves the switch into ⋯ too (data-fold 4 and on).
   await expect(bar).toHaveAttribute('data-fit', 'tight')
   await docBarSettled(bar)
-  if ((await bar.getAttribute('data-fold')) !== '4') await expect(bar.getByRole('button', { name: 'Show source' })).toBeVisible()
+  if (Number(await bar.getAttribute('data-fold')) < 4) await expect(bar.getByRole('button', { name: 'Show source' })).toBeVisible()
   await expect(bar.getByRole('button', { name: 'More file actions' })).toBeVisible()
   // The file's name is said once, in the doc bar; the top bar names its folder.
   const fileName = (await bar.locator('.sfe-crumb.is-last').innerText()).trim()

@@ -3554,6 +3554,8 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                 aria-pressed={terminalDocked}
                 // Its name stays when a narrow file bar draws it as the icon alone (file-doc-bar.css).
                 aria-label="Terminal"
+                // At the file bar's last step it folds into ⋯ as a Terminal row (FileContentView BAR_STEPS).
+                data-bar-foldable=""
                 title={terminalDocked ? 'Hide the terminal (it keeps running)' : `Show the terminal under ${DOCK_VIEW_LABEL[activeView] ?? 'this view'}`}
                 data-testid="terminal-dock-toggle"
               >{ICON_TERMINAL}<span className="sfe-btn-label">Terminal</span></button>

@@ -416,6 +416,7 @@ test('the file name comes first: tools fold into ⋯ one at a time while it is c
     nav: await bar(page).getByRole('button', { name: 'Back to the previously viewed file' }).isVisible(),
     find: await bar(page).getByRole('button', { name: 'Find in file' }).isVisible(),
     view: await bar(page).getByRole('button', { name: /^(Preview|Source|Show source|Show preview)$/ }).first().isVisible(),
+    terminal: await bar(page).getByTestId('terminal-dock-toggle').isVisible(),
   })
 
   // Room (the pane is the window less the tree and the chat): every tool is on the bar.
@@ -435,12 +436,13 @@ test('the file name comes first: tools fold into ⋯ one at a time while it is c
     // Settled: while anything is still on the bar to fold, the name is whole.
     await docBarSettled(bar(page))
     const f = await fold()
-    if (f < 4) expect(await nameCut(), `${w}px: the name is whole while a tool is still out`).toBe(false)
+    if (f < 5) expect(await nameCut(), `${w}px: the name is whole while a tool is still out`).toBe(false)
     // Folded in order: the tools gone from the bar are the first `f` of the order.
     const t = await onBar()
     expect(t.history, `${w}px fold ${f}: History`).toBe(f < 1)
     expect(t.find, `${w}px fold ${f}: Find`).toBe(f < 3)
     expect(t.view, `${w}px fold ${f}: Preview / Source`).toBe(f < 4)
+    expect(t.terminal, `${w}px fold ${f}: Terminal`).toBe(f < 5)
     // Each folded tool is a row of ⋯.
     if (f >= 1) {
       await bar(page).getByRole('button', { name: 'More file actions' }).click()
@@ -448,6 +450,7 @@ test('the file name comes first: tools fold into ⋯ one at a time while it is c
       await expect(menu.getByRole('menuitem', { name: 'History' })).toBeVisible()
       if (f >= 3) await expect(menu.getByRole('menuitem', { name: 'Find in file' })).toBeVisible()
       if (f >= 4) await expect(menu.getByRole('menuitem', { name: 'Show source' })).toBeVisible()
+      if (f >= 5) await expect(menu.getByRole('menuitemcheckbox', { name: 'Terminal' })).toBeVisible()
       // The whole name is the menu's first row.
       await expect(menu).toContainText(long)
       await page.keyboard.press('Escape')
@@ -483,9 +486,9 @@ test('a narrow pane keeps one line: the path gives way, the tools do not wrap', 
     expect(nameBox.width).toBeGreaterThan(36)
     expect(nameBox.x).toBeGreaterThanOrEqual(b.x)
     // The name comes first: a bar that cuts it has nothing left to fold into ⋯
-    // (data-fold 4). Any other bar would have folded one more tool instead.
+    // (data-fold 5). Any other bar would have folded one more tool instead.
     await docBarSettled(bar(page))
-    if ((await bar(page).getAttribute('data-fold')) !== '4') {
+    if ((await bar(page).getAttribute('data-fold')) !== '5') {
       const cut = await bar(page).locator('.sfe-crumb.is-last .sfe-crumb-text').evaluate((el) => el.scrollWidth > el.clientWidth + 1)
       expect(cut, `${shot}: a bar with tools still out shows the whole name`).toBe(false)
     }
@@ -509,12 +512,12 @@ test('a narrow pane keeps one line: the path gives way, the tools do not wrap', 
 
   // A narrow window: the pane is tight, so Find and History move into ⋯ and
   // Preview/Source become one switch; this long a name moves that switch into ⋯
-  // too (data-fold 4). All of them still work from there.
+  // too (data-fold 4), and then the Terminal toggle (5). All of them still work from there.
   await page.setViewportSize({ width: 820, height: 820 })
   await expect(bar(page)).toHaveAttribute('data-fit', 'tight')
   await fits('8-tight.png')
   const view = async (label: string) => {
-    if ((await bar(page).getAttribute('data-fold')) === '4') {
+    if (Number(await bar(page).getAttribute('data-fold')) >= 4) {
       await expect(bar(page).getByRole('button', { name: label })).toHaveCount(0)
       await bar(page).getByRole('button', { name: 'More file actions' }).click()
       await page.getByTestId('fv-more-menu').getByRole('menuitem', { name: label }).click()
@@ -530,6 +533,23 @@ test('a narrow pane keeps one line: the path gives way, the tools do not wrap', 
   await page.getByTestId('fv-more-menu').getByRole('menuitem', { name: 'Find in file' }).click()
   await expect(page.locator('.fv-search-bar')).toBeVisible()
   await page.keyboard.press('Escape')
+  // Everything folded: the Terminal toggle is a checked row of ⋯ that docks and undocks it.
+  if ((await bar(page).getAttribute('data-fold')) === '5') {
+    const dock = bar(page).getByTestId('terminal-dock-toggle')
+    await expect(dock).toBeHidden()
+    const terminalRow = async (checked: boolean) => {
+      await bar(page).getByRole('button', { name: 'More file actions' }).click()
+      const row = page.getByTestId('fv-more-menu').getByRole('menuitemcheckbox', { name: 'Terminal' })
+      await expect(row).toHaveAttribute('aria-checked', String(checked))
+      await row.click()
+    }
+    await terminalRow(false)
+    await expect(dock).toHaveAttribute('aria-pressed', 'true')
+    // The docked terminal takes the focus once it is up (which closes an open ⋯): let it.
+    await expect(page.getByRole('textbox', { name: 'Terminal input' })).toBeFocused()
+    await terminalRow(true)
+    await expect(dock).toHaveAttribute('aria-pressed', 'false')
+  }
 
   // A phone-width window: the file has the whole width and the bar still names it.
   await page.setViewportSize({ width: 700, height: 820 })

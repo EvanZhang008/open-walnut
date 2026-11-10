@@ -362,7 +362,7 @@
 .fv-doc-bar:not([data-fit='full']) .sfe-crumb.is-last .sfe-crumb-sep,
 .fv-doc-bar:not([data-fit='full']) .fv-doc-crumb-dir,
 .fv-doc-bar:not([data-fit='full']) .fv-doc-crumb-sep,
-.fv-doc-bar:is([data-fold='2'], [data-fold='3'], [data-fold='4']) .sfe-nav-group { display: none; }
+.fv-doc-bar:is([data-fold='2'], [data-fold='3'], [data-fold='4'], [data-fold='5']) .sfe-nav-group { display: none; }
 /* Below full width, saved and saving are a mark alone (✓, the spinner; the word
    is the tooltip); only a file that is NOT saving spells it out. */
 .fv-doc-bar:not([data-fit='full']) .fv-save-state:is([data-state='saved'], [data-state='saving']) .fv-save-state-word { display: none; }
@@ -372,6 +372,11 @@
 .fv-doc-bar[data-fit='tight'] .fv-save-state:is([data-state='held'], [data-state='waiting']) .fv-save-state-word { display: inline; }
 .fv-doc-bar[data-fit='tight'] .fv-save-state { min-width: 0; }
 .fv-doc-bar:not([data-fit='full']) .fv-save-state { margin-right: 4px; }
+/* Everything folded (the last step): the host's foldable buttons are rows of ⋯ and
+   the gaps close up, so a usual name is whole at an 820px window with the tree open
+   (2026-11-10 in WebKit: the bar was 225px and the name had 71 of its 103px). */
+.fv-doc-bar[data-fold='5'] [data-bar-foldable] { display: none; }
+.fv-html-toolbar.fv-doc-bar[data-fold='5'] { gap: 4px; padding: 0 4px 0 6px; }
 /* Below full width a short note (Path copied, Draft restored, a merge receipt)
    takes the save state's place for its few seconds, at most a few words wide
    (the whole text is its tooltip): the file's name keeps its room. */

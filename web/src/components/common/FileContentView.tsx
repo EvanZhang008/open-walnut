@@ -241,7 +241,8 @@ const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
  * The document bar's steps, roomiest first (see barStep in FileContentView): its
  * tier (full: words; compact: icons; tight: one Preview / Source switch, no save
  * word) and how many tools are folded into ⋯, one at a time, rarest first:
- * 1 History, 2 ‹ › (⌘[ ⌘] still work), 3 Find (⌘F still works), 4 Preview / Source.
+ * 1 History, 2 ‹ › (⌘[ ⌘] still work), 3 Find (⌘F still works), 4 Preview / Source,
+ * 5 the host's own buttons at the bar's end that carry data-bar-foldable (Terminal).
  */
 const BAR_STEPS = [
   { fit: 'full', fold: 0 },
@@ -251,6 +252,7 @@ const BAR_STEPS = [
   { fit: 'compact', fold: 3 },
   { fit: 'tight', fold: 3 },
   { fit: 'tight', fold: 4 },
+  { fit: 'tight', fold: 5 },
 ] as const;
 /** The step the bar's width alone gives: full, compact or tight. */
 const barStepForWidth = (w: number) => (w >= 560 ? 0 : w >= 440 ? 1 : 5);
@@ -2154,6 +2156,10 @@ export function FileContentView({
     if (r) setMoreAt((cur) => (cur ? null : { x: r.right, y: r.bottom }));
   };
   const pathRow = splitPathRow(filePath);
+  // The host's buttons folded at the last step, read when ⋯ opens (they are the host's, not ours).
+  const foldedTrail = barFold >= 5 && moreAt
+    ? [...(barRef.current?.querySelectorAll<HTMLButtonElement>('[data-bar-foldable]') ?? [])]
+    : [];
   const moreItems: ContextMenuItem[] = [
     // Where the file is, in full: the bar shows only its last folders.
     {
@@ -2170,6 +2176,11 @@ export function FileContentView({
     },
     // (No divider: the title block draws its own rule above the first action.)
     ...(barFold >= 2 && tightMenuItems?.length ? [...tightMenuItems, { divider: true }] : []),
+    ...(foldedTrail.length ? [...foldedTrail.map((btn, i) => ({
+      key: `trail-${i}`, label: btn.getAttribute('aria-label') || btn.textContent || '',
+      toggle: true, checked: btn.getAttribute('aria-pressed') === 'true',
+      onSelect: () => btn.click(),
+    })), { divider: true }] : []),
     ...(barFold >= 4 && isRenderable ? [{
       key: 'view', label: showSource ? 'Show preview' : 'Show source', icon: showSource ? ICON_FILE : ICON_CODE,
       onSelect: () => switchTab(!showSource),
