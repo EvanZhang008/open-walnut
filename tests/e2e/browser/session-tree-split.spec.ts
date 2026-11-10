@@ -313,6 +313,26 @@ test.describe('Tree Mode split screen', () => {
     await expectPages(panel, ['L 1', 'M 1.1', 'R 1.1.1'])
   })
 
+  test('a notice in the corner as the sheet opens takes no page away', async ({ page }) => {
+    // 2026-11-09, CI: a notice held the corner (another spec's) when the column went full screen,
+    // the sheet moved its left edge past it, and Tree Mode kept the 1037px column's two pages in
+    // the 1107px sheet. A pending approval card, for this page only, holds the corner here.
+    const now = Date.now()
+    await page.route(/\/api\/v1\/approvals(\?|$)/, async (route) => {
+      if (route.request().method() !== 'GET') return route.fallback()
+      await route.fulfill({ json: { keys: [], approvals: [{
+        id: 'apr-pw-tree-split-corner', what: 'Corner notice for the split', digest: '0'.repeat(64), mode: 'tap',
+        requester: { host: 'pw-host', local: true, cwd: '/work/site', command: 'release.sh', identity: 'none' },
+        createdAt: new Date(now).toISOString(), expiresAt: new Date(now + 30 * 60_000).toISOString(), status: 'pending',
+      }] } })
+    })
+    const panel = await openSheet(page)
+    await expect(page.getByTestId('approval-card')).toHaveCount(1, { timeout: 15_000 })
+    await expect.poll(() => panel.evaluate((el) => parseFloat((el as HTMLElement).style.getPropertyValue('--corner-sheet-inset')) || 0), { timeout: 10_000 }).toBeGreaterThan(0)
+    await openQuestion(panel, SPLIT_TITLES.Q111)
+    await expectPages(panel, ['L 1', 'M 1.1', 'R 1.1.1'])
+  })
+
   test('under the task tabs: the path bar sits right below them and a task tab covers both halves', async ({ page, request }) => {
     // A task the main chat names, so its pill opens it as a tab beside the chat.
     const created = await request.post('/api/tasks', { data: { title: `Split peek probe ${Date.now()}`, source: 'local' } })

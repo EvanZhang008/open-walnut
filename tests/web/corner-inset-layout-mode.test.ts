@@ -51,6 +51,18 @@ describe('modeBesideCorner', () => {
     expect(modeBesideCorner(inSheet(126), 573, null, modeFor)).toBe('wide');
     expect(modeBesideCorner(inSheet(126), 400, null, modeFor)).toBe('narrow');
   });
+
+  it('a pane that just went into the sheet under an inset keeps nothing of where it was', () => {
+    // 2026-11-09: a narrow column went full screen while a notice held the corner, and kept its mode.
+    const sheet = { style: { getPropertyValue: (name: string) => (name === CORNER_SHEET_INSET_VAR ? '126px' : '') } };
+    let inFullscreen = false;
+    const pane = { closest: (sel: string) => (sel === '.open-walnut-fullscreen' && inFullscreen ? sheet : null) } as unknown as Element;
+    expect(modeBesideCorner(pane, 560, null, modeFor)).toBe('narrow');
+    inFullscreen = true;
+    expect(modeBesideCorner(pane, 573, 'narrow', modeFor)).toBe('wide');
+    // Inside the sheet the hold is back: a width the inset moved keeps the mode it has.
+    expect(modeBesideCorner(pane, 520, 'wide', modeFor)).toBe('wide');
+  });
 });
 
 const ROOT = path.resolve(__dirname, '../../web/src');
