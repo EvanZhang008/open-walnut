@@ -202,6 +202,10 @@ targets:
               || /usr/libexec/PlistBuddy -c "Add :$k string $v" "$TARGET_BUILD_DIR/$INFOPLIST_PATH"
           done
         basedOnDependencyAnalysis: false
+        # The built Info.plist as an input orders this phase after Xcode writes it;
+        # without it the phase can run first, and Xcode then overwrites its edit.
+        inputFiles:
+          - $(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.openwalnut.ios.autofill
@@ -238,6 +242,10 @@ targets:
     postBuildScripts:
       - name: Take the app's build number
         basedOnDependencyAnalysis: false
+        # Ordered after Xcode writes the built Info.plist (2026-11-10: the phase ran
+        # first, found no file and failed the build).
+        inputFiles:
+          - $(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)
         script: |
           set -eu
           build=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "${SRCROOT}/Walnut/Support/Info.plist")
