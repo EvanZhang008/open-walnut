@@ -827,6 +827,10 @@ test.describe('Rich HTML streaming', () => {
     await expect(history.locator('.layout-card').last()).toBeVisible();
     await expect(history.locator('.layout-demo pre')).toHaveCount(0);
     await expect(history.locator('.layout-demo .layout-card')).toHaveCount(12);
+    // The paragraph after the widget is on screen: the widget's chunk is closed and frozen, so
+    // the details element clicked below is the one that stays (a render still catching up with
+    // the deltas can draw the open tail once more and replace it).
+    await expect(history).toContainText('LAYOUT-TAIL-ONE');
     await history.locator('.layout-details summary').click();
     await expect(history.locator('.layout-details')).toHaveAttribute('open', '');
     await streamDeltas(page, reply.slice((widget + '\n\nLAYOUT-TAIL-ONE').length));
@@ -836,7 +840,8 @@ test.describe('Rich HTML streaming', () => {
     await expect(history.locator('.layout-pre')).toHaveText('line one\n\n    line three');
     archived = true;
     await page.reload();
-    await expect(panel.locator('.layout-card')).toHaveCount(12);
+    // A reload boots the app and reads the history again: a load's time, not a render's.
+    await expect(panel.locator('.layout-card')).toHaveCount(12, { timeout: 30_000 });
     await expect(panel.locator('.layout-demo pre')).toHaveCount(0);
     await expect(panel.locator('pre code')).toHaveCount(1);
     await expect(panel.locator('.layout-pre')).toHaveText('line one\n\n    line three');
