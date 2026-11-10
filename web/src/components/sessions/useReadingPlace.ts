@@ -179,7 +179,8 @@ export function useReadingPlace(a: UseReadingPlaceArgs): ReadingPlaceApi {
     const { messages, widenWindow, loaded, older, loadOlder } = argsRef.current;
     for (const kept of p.place.rows) {
       const at = messages.findIndex((m) => (m.msgId ?? m.walnutMessageId) === kept.id);
-      if (at >= 0) { widenWindow(messages.length - at); return; }
+      // Off the live end first: a window following the bottom would cut the widening back.
+      if (at >= 0) { isAtBottom.current = false; widenWindow(messages.length - at); return; }
     }
     if (!loaded) return; // a reload still loading: wait for its rows
     // Older than the rows held (a long session after a reload, whose cache keeps

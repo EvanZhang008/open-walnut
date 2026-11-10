@@ -548,6 +548,22 @@ function selectionInside(el: HTMLElement | null): boolean {
   if (!sel || sel.isCollapsed || sel.rangeCount === 0) return false;
   return el.contains(sel.anchorNode) || el.contains(sel.focusNode);
 }
+/**
+ * Every row above `tailStart` is above the box's top edge, so a cut removes nothing the
+ * reader sees (ten short turns in a tall column leave older rows on screen at the bottom).
+ */
+function rowsAboveAreOffscreen(el: HTMLElement | null, tailStart: number): boolean {
+  if (!el) return false;
+  // A grouped row carries its first member's index, so the tail's own index may be on no row.
+  let row: HTMLElement | null = null;
+  let best = Infinity;
+  for (const r of Array.from(el.querySelectorAll<HTMLElement>('[data-msg-index]'))) {
+    const i = Number(r.dataset.msgIndex);
+    if (i >= tailStart && i < best) { best = i; row = r; }
+  }
+  if (!row) return false;
+  return row.getBoundingClientRect().top <= el.getBoundingClientRect().top;
+}
 /** The note a held queued message shows when its hold named no reason. */
 const HELD_DEFAULT_REASON = 'Waiting to confirm the previous message';
 /** The server's words for a message the host did not take in time (slowHostReason). */
@@ -1537,6 +1553,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       const { messageIndex } = (e as CustomEvent).detail;
       // Expand truncation to include the target message
       const needed = messages.length - messageIndex;
+      // Off the live end, as every jump is: a window following the bottom would cut the row back out.
+      isAtBottom.current = false;
       if (needed > truncationOffset) {
         setTruncationOffset(needed);
       }
@@ -3180,12 +3198,16 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     // every row it ever drew). Not while anything holds an older row on purpose:
     // the question pages, a jump in flight, the review pane, a text selection.
     const follows = isAtBottom.current && !stackMode && !pendingJump.current && !reviewHoldsWindow.current
-      && !selectionInside(containerRef.current);
+      && !readingPlace.held.current && !selectionInside(containerRef.current);
     const window = computeRenderWindow(
       messages,
       limit,
       { start: renderWindowStart.current, anchor: renderWindowAnchor.current },
-      follows ? { tailLimit: turnLimit, slack: Math.max(FOLLOW_TRIM_MIN_SLACK, Math.ceil(turnLimit / 2)) } : undefined,
+      follows ? {
+        tailLimit: turnLimit,
+        slack: Math.max(FOLLOW_TRIM_MIN_SLACK, Math.ceil(turnLimit / 2)),
+        canCut: (tailStart) => rowsAboveAreOffscreen(containerRef.current, tailStart),
+      } : undefined,
     );
     if (window.trimmed) renderWindowTrimmed.current = true;
     const visibleStart = window.start;

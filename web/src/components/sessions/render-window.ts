@@ -53,6 +53,8 @@ export interface RenderWindowFollow {
   tailLimit: number;
   /** Rows past the tail held before a cut, so a cut is rare, not one per new row. */
   slack: number;
+  /** Whether every row above `tailStart` is off screen; asked only when a cut is due. */
+  canCut?: (tailStart: number) => boolean;
 }
 
 /** The PREVIOUS pass — may be the fresh-view state (nothing rendered yet). */
@@ -95,7 +97,7 @@ export function computeRenderWindow(
   const start = ratchet === null ? natural : Math.min(natural, ratchet);
   if (follow) {
     const tail = Math.max(0, messages.length - follow.tailLimit);
-    if (tail - start > follow.slack) return { start: tail, anchor: anchorAt(messages, tail), trimmed: true };
+    if (tail - start > follow.slack && (follow.canCut?.(tail) ?? true)) return { start: tail, anchor: anchorAt(messages, tail), trimmed: true };
   }
   return { start, anchor: anchorAt(messages, start) };
 }

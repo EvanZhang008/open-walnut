@@ -220,4 +220,14 @@ describe('computeRenderWindow: a reader following the bottom', () => {
     expect(w.start).toBe(10);
     expect(w.trimmed).toBeFalsy();
   });
+  it('rows the reader still sees above the tail are never cut (ten short turns in a tall column)', () => {
+    const asked: number[] = []
+    const keep = { ...follow, canCut: (t: number) => { asked.push(t); return false } }
+    const w = computeRenderWindow(rows(200), 150, { start: null, anchor: null }, keep)
+    expect(w.start).toBe(50)
+    expect(w.trimmed).toBeFalsy()
+    expect(asked).toEqual([170])
+    const cut = computeRenderWindow(rows(200), 150, { start: null, anchor: null }, { ...follow, canCut: () => true })
+    expect(cut.trimmed).toBe(true)
+  })
 });
