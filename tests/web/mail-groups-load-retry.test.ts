@@ -169,6 +169,14 @@ describe('the retry stays one read and knows what is not a lost link', () => {
     expect(pageState(KEY).error).toContain('Cannot read properties');
   });
 
+  it("the server's own timeout answer is shown at once: the server is up, and /groups falls back to all mail", async () => {
+    api.getMailGroups.mockRejectedValue(new ApiError(503, 'timeout', { error: 'timeout', message: 'Group counts are taking too long.' }));
+    await loadGroups(SCOPE, true);
+    expect(viewState(SCOPE)).toMatchObject({ retrying: false, error: 'Group counts are taking too long.' });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(api.getMailGroups).toHaveBeenCalledTimes(1);
+  });
+
   it('a deadline is a lost link too', async () => {
     api.listMailMessages.mockRejectedValueOnce(new DOMException('The operation timed out.', 'TimeoutError')).mockResolvedValue({ messages: [row] });
     await loadGroupPage(SCOPE, 'ci', '', 'first', true, true, true);

@@ -31,7 +31,11 @@ const NO_ANSWER = /^(load failed|failed to fetch|networkerror when attempting to
  * answer) is shown at once, never dressed up as a lost connection.
  */
 export function isTransientError(error: unknown): boolean {
-  const { status } = mailFailure(error);
+  const { status, code } = mailFailure(error);
+  // The server answered that its own work ran out of time (the mail routes' 503 `timeout`, e.g.
+  // "Group counts are taking too long."): it is up, so this is no lost link. It is said at once,
+  // and the grouped list falls back to all mail with Try again instead of "reconnecting" for minutes.
+  if (status >= 500 && code === 'timeout') return false;
   if (status === 408 || status === 429 || status >= 500) return true;
   if (status !== 0) return false;
   if (error instanceof DOMException) return error.name === 'TimeoutError';
