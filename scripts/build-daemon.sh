@@ -100,6 +100,7 @@ SOURCES=(
   src/lib/task-dir.ts
   src/providers/pw-silence-core.ts
   src/providers/pw-noactivate-core.ts
+  src/lib/machine-hold.ts
   src/providers/host-exec-core.ts
   src/providers/host-exec-line.ts
   src/providers/host-exec-guards.ts

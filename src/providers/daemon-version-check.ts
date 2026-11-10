@@ -132,6 +132,7 @@ const DAEMON_SOURCE_FILES = [
   // The page silencer preload, written at every session start (rides the task-dir-core sidecar).
   'src/providers/pw-silence-core.ts',
   'src/providers/pw-noactivate-core.ts',
+  'src/lib/machine-hold.ts',
   // Commands for tasks on other hosts (exec.*) — bundled into the binary AND
   // shipped as the host-exec-core.cjs sidecar, with the macOS dialog guards it imports.
   'src/providers/host-exec-core.ts',

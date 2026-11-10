@@ -155,7 +155,7 @@ describe('refused for real', () => {
     }).stdout
     expect(run(home('held-run', { hold: 'asleep' }))).toMatch(/REFUSED [\s\S]*\[machine-hold\] This browser did not start: .*hold: asleep/)
     const free = run(home('free-run', {}))
-    expect(free, 'with no hold the same script runs (or fails for its own reasons, never the hold)').not.toMatch(/machine-hold/)
+    expect(free, 'with no hold the same script runs (or fails for its own reasons, never the hold)').not.toMatch(/\[machine-hold\]/)
   }, 90_000)
 
   // Node under the preload, as a Walnut session's processes run.
