@@ -160,13 +160,13 @@ function directionLinks(text: string | undefined | null, token: (w: string) => s
 
 /**
  * A name with a direction word inside it ("A to Z", "Door to Door", "Peer to Peer") says where
- * nothing points: its direction word is dropped before the links are read. Only a name of single
- * capital letters or one word repeated, so "Staging to Production" keeps its direction (2026-11-10:
+ * nothing points: its direction word is dropped before the links are read. Only "A to Z" and a
+ * capitalized word repeated, so "Staging to Production" and "from X to Y" keep their direction (2026-11-10:
  * a portal named "A to Z" made one ask reworded read as pointing elsewhere, and come back as news).
  */
 function nameDirections(text: string): string {
-  return text.replace(/\b([A-Z]|[A-Z][a-z]+) (to|vs|versus|into|from) ([A-Z]|[A-Z][a-z]+)\b/g, (whole, a: string, _d: string, b: string) =>
-    (a.length === 1 && b.length === 1) || a === b ? `${a} ${b}` : whole);
+  return text.replace(/\b([A-Z][a-z]*) (to|vs|versus|into|from) ([A-Z][a-z]*)\b/g, (whole, a: string, d: string, b: string) =>
+    (a === b && a.length > 1) || (a === 'A' && d === 'to' && b === 'Z') ? `${a} ${b}` : whole);
 }
 
 /**
@@ -516,8 +516,11 @@ export function answerHolds(
   if (!answer || !ask) return false;
   const at = Date.parse(answer.at);
   if (!Number.isFinite(at) || (!answer.withdrawn && nowMs - at > ASK_ANSWER_HOLD_MS)) return false;
-  if (decision?.said && answer.askId && answer.decisionKey && decision.id.toLowerCase() === answer.askId.toLowerCase()
-    && decision.key === answer.decisionKey) return true;
+  const sameId = !!decision?.id && !!answer.askId && decision.id.toLowerCase() === answer.askId.toLowerCase();
+  // The same decision with a new fact since (a revision, deadline, option or link): asked again,
+  // whatever its words.
+  if (sameId && decision!.key && answer.decisionKey && decision!.key !== answer.decisionKey) return false;
+  if (sameId && decision!.said && decision!.key && decision!.key === answer.decisionKey) return true;
   if (askKey(ask) === answer.key || sameAskReworded(answer.ask, ask)) return true;
   return askIsPartOf(ask, answer.ask);
 }

@@ -386,13 +386,28 @@ describe('an ask a lead answered for the user stays answered in other words', ()
     const north = project('\u5317\u65b9\u751f\u4ea7\u5e93')
     expect(answerHolds({ ...answerTo(taskOf(was)), key: SAME_KEY(north), ask: north, askId: undefined }, project('\u5357\u65b9\u6d4b\u8bd5\u5e93').replace('validating checksum', 'verifying digest'), NOW)).toBe(false)
     const move = (a: string, b: string) => `Move the data from ${a} to ${b} tonight?`
-    expect(answerHolds({ ...answerTo(taskOf(was)), key: SAME_KEY(move('Staging', 'Production')), ask: move('Staging', 'Production'), askId: undefined }, move('Production', 'Staging'), NOW)).toBe(false)
+    for (const [a, b] of [['Staging', 'Production'], ['X', 'Y']]) {
+      expect(answerHolds({ ...answerTo(taskOf(was)), key: SAME_KEY(move(a!, b!)), ask: move(a!, b!), askId: undefined }, move(b!, a!), NOW), `${a} -> ${b}`).toBe(false)
+    }
   })
   it('the session naming its decision with a new fact asks it again', () => {
     const was = turn(answer('Approve the $20 deposit for the garden plot this week?'), null, NOW - 3_600_000)
     const now = turn(answer('Approve the $200 deposit for the garden plot this week?', [`FOR_USER_ASK_ID: ${was.ask_id}`, 'FOR_USER_ASK_NEW: the deposit rose from $20 to $200']), was, NOW)
     expect(now).toMatchObject({ ask_id: was.ask_id, ask_said: true, ask_rev: 1 })
     expect(held(taskOf(now), answerTo(taskOf(was)))).toBe(false)
+  })
+  it('the same words with a new fact, option or deadline since the answer: asked again', () => {
+    const was = turn(answer('Approve testing on your real iPhone?'), null, NOW - 3_600_000)
+    const a = answerTo(taskOf(was))
+    const fact = turn(answer('Approve testing on your real iPhone?', ['FOR_USER_ASK_NEW: the tests now erase every photo and reset the phone']), was, NOW)
+    expect(fact.ask_rev).toBe(1)
+    expect(held(taskOf(fact), a)).toBe(false)
+    const due = turn(answer('Approve testing on your real iPhone?'), was, NOW)
+    expect(held(taskOf(due, { due_date: '2026-11-12' }), a)).toBe(false)
+    const picks = turn(answer('Approve testing on your real iPhone?', ['FOR_USER_ASK_KIND: single', 'FOR_USER_ASK_OPTIONS: Today | Tomorrow']), was, NOW)
+    expect(held(taskOf(picks), a)).toBe(false)
+    // Nothing new: still answered.
+    expect(held(taskOf(turn(answer('Approve testing on your real iPhone?'), was, NOW)), a)).toBe(true)
   })
   it('past the hold the same words are a new decision', () => {
     const was = turn(answer('Approve testing on your real iPhone?'), null, NOW - 3_600_000)
