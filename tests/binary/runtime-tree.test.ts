@@ -11,7 +11,7 @@ import os from 'node:os'
 import path from 'node:path'
 import zlib from 'node:zlib'
 import { checkArchivePath, packArchive, unpackArchive } from '../../src/binary/asset-archive.js'
-import { RUNTIME_MARKER, ensureRuntime, pruneRuntimes, unpackRuntime } from '../../src/binary/runtime-tree.js'
+import { RUNTIME_FILES, RUNTIME_MARKER, ensureRuntime, isComplete, pruneRuntimes, runtimeFileList, unpackRuntime } from '../../src/binary/runtime-tree.js'
 
 const entries = [
   { path: 'package.json', mode: 0o644, data: Buffer.from('{"name":"open-walnut"}\n') },
@@ -47,6 +47,25 @@ describe('asset archive', () => {
 
 describe('runtime tree', () => {
   const archive = (): Buffer => packArchive(entries, 3)
+
+  it('a tree that lost a file it lists (a cleaner took node_modules) is not complete, and unpacks again', () => {
+    // 2026-11-10: a build prune took a Demo's runtime node_modules; the marker stayed and the file died at boot.
+    const withDeps = [...entries, { path: 'node_modules/tiktoken/tiktoken_bg.wasm', mode: 0o644, data: Buffer.from([0, 97, 115, 109]) },
+      { path: 'node_modules/a/node_modules/b/i.js', mode: 0o644, data: Buffer.from('b') }]
+    expect(runtimeFileList(withDeps.map((e) => e.path))).toEqual(['dist', 'node_modules', 'package.json'])
+    const root = path.join(dir, 'runtime', '1.0.0-dddddddddddd')
+    unpackRuntime(root, packArchive(withDeps, 3), '1.0.0-dddddddddddd')
+    expect(isComplete(root, '1.0.0-dddddddddddd')).toBe(true)
+    fs.rmSync(path.join(root, 'node_modules'), { recursive: true })
+    expect(isComplete(root, '1.0.0-dddddddddddd')).toBe(false)
+    unpackRuntime(root, packArchive(withDeps, 3), '1.0.0-dddddddddddd')
+    expect(fs.readFileSync(path.join(root, 'node_modules/tiktoken/tiktoken_bg.wasm'))).toEqual(Buffer.from([0, 97, 115, 109]))
+    expect(isComplete(root, '1.0.0-dddddddddddd')).toBe(true)
+    // A tree an older build unpacked (no list) is trusted as before.
+    fs.rmSync(path.join(root, RUNTIME_FILES))
+    fs.rmSync(path.join(root, 'node_modules'), { recursive: true })
+    expect(isComplete(root, '1.0.0-dddddddddddd')).toBe(true)
+  })
 
   it('unpacks once, with the marker naming the build', () => {
     const root = path.join(dir, 'runtime', '1.0.0-aaaaaaaaaaaa')

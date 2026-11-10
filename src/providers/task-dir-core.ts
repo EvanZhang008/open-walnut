@@ -333,6 +333,8 @@ export async function removeTaskDirs(
 // already done, and the Mac fell under 25 GB free.
 
 /** Rebuildable wherever it is, when git does not track it. */
+/** src/binary/runtime-tree.ts RUNTIME_MARKER (a literal: this file is also the daemon's sidecar). */
+const RUNTIME_TREE_MARKER = '.walnut-runtime'
 const BUILD_DIRS = new Set(['node_modules', '.build', '.next', '.turbo'])
 /** Rebuildable only when the repo holding it ignores it: outside one (or unignored) a `dist/` or a test report is usually kept as evidence. */
 const IGNORED_BUILD_DIRS = new Set(['dist', 'playwright-report', 'test-results'])
@@ -381,6 +383,10 @@ async function findBuildDirs(dir: string, depth: number, out: string[], budget: 
   let entries: fs.Dirent[]
   if (read) entries = read
   else try { entries = await fsp.readdir(dir, { withFileTypes: true }) } catch { budget.partial = true; return }
+  // A compiled Walnut file's unpacked runtime tree (src/binary/runtime-tree.ts RUNTIME_MARKER): its
+  // node_modules and dist are the program's own files, not build output (2026-11-10: a Demo's file
+  // died at boot, 'Missing tiktoken_bg.wasm', after its tree lost node_modules here).
+  if (entries.some((e) => e.name === RUNTIME_TREE_MARKER && !e.isDirectory())) return
   for (const e of entries) {
     if (!e.isDirectory() || e.isSymbolicLink() || e.name === '.git') continue
     const p = path.join(dir, e.name)

@@ -228,6 +228,41 @@ const old = (p: string, t = new Date('2026-10-01T00:00:00Z')) => {
 }
 
 describe('pruneTaskBuilds (an idle task, open or not)', { timeout: 180_000 }, () => {
+  it('never takes the files of a compiled Walnut runtime tree, wherever it sits (both prunes)', async () => {
+    // 2026-11-10: a Demo's compiled file died at boot ('Missing tiktoken_bg.wasm') after its unpacked
+    // tree (runtime/<build>/, marked .walnut-runtime) lost its node_modules to this prune.
+    for (const id of ['open', 'done']) {
+      const dir = ensureTaskDir(root, id)!
+      const trees = [
+        path.join(dir, 'demo', 'runtime', '0.6.29-aaaaaaaaaaaa'), // a copied demo
+        path.join(dir, 'runtime', '0.6.30-bbbbbbbbbbbb'), // right under the task dir
+        path.join(cloneInto(dir, `clone-${id}`, { '.gitignore': 'runtime/\n' }), 'runtime', '0.6.31-cccccccccccc'), // ignored inside a repo
+      ]
+      for (const t of trees) {
+        write(path.join(t, '.walnut-runtime'), `${path.basename(t)}\n`)
+        write(path.join(t, 'node_modules', 'tiktoken', 'tiktoken_bg.wasm'))
+        write(path.join(t, 'dist', 'web', 'index.html'))
+        old(t)
+      }
+      // Plain build output beside them still goes.
+      write(path.join(dir, 'demo', 'node_modules', 'pkg', 'i.js'))
+      write(path.join(dir, 'demo', 'package.json'), '{}\n')
+      old(path.join(dir, 'demo'))
+    }
+    await pruneTaskBuilds(root, ['open'], { idleBefore: Date.now() })
+    await pruneTaskDirs(root, ['done'])
+    for (const id of ['open', 'done']) {
+      const dir = path.join(root, id)
+      expect(fs.existsSync(path.join(dir, 'demo', 'node_modules')), id).toBe(false)
+      for (const t of [path.join(dir, 'demo', 'runtime', '0.6.29-aaaaaaaaaaaa'), path.join(dir, 'runtime', '0.6.30-bbbbbbbbbbbb')]) {
+        expect(fs.existsSync(path.join(t, 'node_modules', 'tiktoken', 'tiktoken_bg.wasm')), `${id} ${t}`).toBe(true)
+        expect(fs.existsSync(path.join(t, 'dist', 'web', 'index.html')), `${id} ${t}`).toBe(true)
+      }
+      // The clone holding one may go whole once its task is done (it was pushed); while open it stays, tree and all.
+      if (id === 'open') expect(fs.existsSync(path.join(dir, 'clone-open', 'runtime', '0.6.31-cccccccccccc', 'node_modules', 'tiktoken', 'tiktoken_bg.wasm'))).toBe(true)
+    }
+  })
+
   it('takes only build output: clones, work, evidence and the marker\'s prunedAt stay', async () => {
     const dir = ensureTaskDir(root, 'open', '/data/home', new Date('2026-10-20T00:00:00Z'))!
     const clean = cloneInto(dir, 'clean', { '.gitignore': 'dist/\n' })

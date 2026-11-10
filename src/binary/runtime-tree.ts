@@ -11,6 +11,13 @@ import { unpackArchive } from './asset-archive.js'
 
 /** Written last into an unpacked tree; its content is the build's id. */
 export const RUNTIME_MARKER = '.walnut-runtime'
+/**
+ * Written just before the marker: the tree's top-level entries and its outermost node_modules
+ * folders, one per line. A tree whose marker is there but one of these is gone (a cleaner took
+ * node_modules for build output: 2026-11-10, a Demo's file died at boot, 'Missing
+ * tiktoken_bg.wasm') is unpacked again. A tree an older build wrote has no list and is trusted as before.
+ */
+export const RUNTIME_FILES = '.walnut-runtime-files'
 /** Unpacked trees of other builds kept beside this one (a server of the previous build may still run). */
 const KEEP_OTHER_BUILDS = 2
 /** A staging dir this old belongs to an unpack that died. */
@@ -31,13 +38,32 @@ export function runtimeRootsFor(env: NodeJS.ProcessEnv, id: string): string[] {
   return [path.join(home, 'local', 'runtime', id), path.join(os.tmpdir(), `open-walnut-runtime-${os.userInfo().uid}`, id)]
 }
 
-/** True when `root` holds build `id`'s whole tree (its marker is written last). */
+/** True when `root` holds build `id`'s whole tree (its marker is written last, and what RUNTIME_FILES names is still there). */
 export function isComplete(root: string, id: string): boolean {
   try {
-    return fs.readFileSync(path.join(root, RUNTIME_MARKER), 'utf8').trim() === id
+    if (fs.readFileSync(path.join(root, RUNTIME_MARKER), 'utf8').trim() !== id) return false
   } catch {
     return false
   }
+  let listed: string[]
+  try {
+    listed = fs.readFileSync(path.join(root, RUNTIME_FILES), 'utf8').split('\n').filter(Boolean)
+  } catch {
+    return true
+  }
+  return listed.every((rel) => fs.existsSync(path.join(root, rel)))
+}
+
+/** The entries RUNTIME_FILES lists for these archive paths: every top-level name and every outermost node_modules folder. */
+export function runtimeFileList(paths: Iterable<string>): string[] {
+  const out = new Set<string>()
+  for (const p of paths) {
+    const parts = p.split('/')
+    out.add(parts[0]!)
+    const nm = parts.indexOf('node_modules')
+    if (nm > 0 && nm < parts.length - 1) out.add(parts.slice(0, nm + 1).join('/'))
+  }
+  return [...out].sort()
 }
 
 /** Unpack `archive` into `root` through a staging dir and one rename, so no reader sees half a tree. */
@@ -45,18 +71,22 @@ export function unpackRuntime(root: string, archive: Buffer, id: string): void {
   fs.mkdirSync(path.dirname(root), { recursive: true, mode: 0o700 })
   const staging = `${root}.partial-${process.pid}-${Date.now()}`
   try {
+    const paths: string[] = []
     for (const entry of unpackArchive(archive)) {
       const target = path.join(staging, entry.path)
       fs.mkdirSync(path.dirname(target), { recursive: true })
       fs.writeFileSync(target, entry.data, { mode: entry.mode })
+      paths.push(entry.path)
     }
+    fs.writeFileSync(path.join(staging, RUNTIME_FILES), runtimeFileList(paths).map((p) => `${p}\n`).join(''))
     fs.writeFileSync(path.join(staging, RUNTIME_MARKER), `${id}\n`)
     try {
       fs.renameSync(staging, root)
     } catch {
       // Another process unpacked this build first: theirs is the same bytes.
       if (isComplete(root, id)) return
-      // A tree without the marker is a leftover of a broken unpack: replace it.
+      // A tree without the marker is a leftover of a broken unpack, and one missing a listed
+      // entry lost files to a cleaner: replace it.
       fs.rmSync(root, { recursive: true, force: true })
       fs.renameSync(staging, root)
     }
