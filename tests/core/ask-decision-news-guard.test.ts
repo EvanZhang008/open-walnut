@@ -282,6 +282,16 @@ describe('what is news is still news', () => {
       expect(changed(b, next)).toContain('status-push (the line to the node above)')
     })
   }
+  it('"nothing new" in any of its words is no new fact', () => {
+    const b = base()
+    let prev = b
+    for (const word of ['none', 'nothing new', 'No change.', '\u65e0\u65b0\u60c5\u51b5', '\u6ca1\u6709', '\u6682\u65e0\u65b0\u8fdb\u5c55\u3002', '\u306a\u3057']) {
+      const next = turn(answer('Approve testing on your real iPhone?', ['FOR_USER_ASK_KIND: yes-no', `FOR_USER_ASK_NEW: ${word}`]), prev, NOW)
+      expect(next.ask_rev, word).toBeUndefined()
+      expect(changed(prev, next), word).toEqual([])
+      prev = next
+    }
+  })
   it('a new fact the session names', () => {
     const b = base()
     const next = turn(answer('Approve testing on your real iPhone? It must happen today.', ['FOR_USER_ASK_NEW: the release moved to today']), b, NOW)

@@ -272,6 +272,15 @@ export function stampAskDecision(
   };
 }
 
+/** A FOR_USER_ASK_NEW that says nothing is new, in English or in the user's language (2026-11-10, on
+ *  production: a session wrote the Chinese for "nothing new" at every turn, and each counted as a new
+ *  fact). The CJK forms: none, no, not yet any, nothing new, no new situation, fact or content. */
+const NOTHING_NEW = new RegExp(
+  '^(?:none|n/a|nothing(?: new)?|no(?: change| new (?:fact|facts|info|information))?|same'
+  + '|\u65e0|\u6ca1\u6709|\u6682\u65e0|\u5c1a\u65e0'
+  + '|(?:\u65e0|\u6ca1\u6709|\u6682\u65e0)(?:\u65b0)?(?:\u60c5\u51b5|\u4e8b\u5b9e|\u5185\u5bb9|\u53d8\u5316|\u8fdb\u5c55)?'
+  + '|\u306a\u3057|\uc5c6\uc74c)[\s.\u3002!\uff01]*$', 'iu');
+
 /** What the session declared, from the raw FOR_USER_ASK_ID / FOR_USER_ASK_NEW values. */
 export function readDeclared(idWord: string | undefined, newWord: string | undefined): AskDeclared {
   const out: AskDeclared = {};
@@ -282,7 +291,7 @@ export function readDeclared(idWord: string | undefined, newWord: string | undef
     if (m) out.id = m[0];
   }
   const fact = (newWord ?? '').replace(/\s+/g, ' ').trim();
-  if (fact && !/^(none|n\/a|nothing|no)\b\.?$/i.test(fact)) out.newFact = fact.slice(0, 240);
+  if (fact && !NOTHING_NEW.test(fact)) out.newFact = fact.slice(0, 240);
   return out;
 }
 
