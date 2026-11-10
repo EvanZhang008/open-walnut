@@ -659,6 +659,54 @@ test.describe('the fullscreen review sidebar', () => {
     await expect(lastBox, 'the keyboard is back in the box').toBeFocused()
   })
 
+  test('a card whose box holds the keyboard keeps the box on screen as its answers come in; the timeline stays', async ({ page }) => {
+    // 2026-11-10 review (macOS WebKit): a card's box near the view's foot; the
+    // first follow-up's answer grew the card past the foot, and the next key
+    // typed made the browser scroll the timeline 633px to the caret.
+    await page.setViewportSize({ width: 1440, height: 640 })
+    await page.goto('/')
+    await page.waitForLoadState('networkidle')
+    const panel = await openThreadsSession(page, REVIEW_MIXED_SESSION, REVIEW_MIXED_TASK, REVIEW_MIXED_READY, { view: 'linear' })
+    const history = panel.locator('.session-history')
+    await panel.getByRole('button', { name: 'Expand session to full screen' }).click()
+    await expect(sidebarCards(panel)).toHaveCount(3, { timeout: 20_000 })
+    // An early question: the conversation below it leaves its card room to grow.
+    const card = sidebarCards(panel).filter({ hasText: 'Mixed point 1' })
+    const box = card.locator('textarea.thread-card-input')
+    const body = card.locator('.thread-review-body')
+    await wheelIntoView(page, history, box)
+    const hb = (await history.boundingBox())!
+    // The reader wheels the passage down until the box sits in the lower part of the view.
+    await page.mouse.move(hb.x + hb.width * 0.3, hb.y + hb.height / 2)
+    await expect.poll(async () => {
+      const y = (await box.boundingBox())!.y
+      if (y < hb.y + hb.height * 0.6) { await page.mouse.wheel(0, -40); await page.waitForTimeout(80) }
+      return (await box.boundingBox())!.y
+    }, { timeout: 15_000 }).toBeGreaterThan(hb.y + hb.height * 0.6)
+    await page.waitForTimeout(300)
+    await clickInPlace(page, box)
+    for (const q of ['First follow-up, long enough to grow the card by a few lines of its answer?', 'Second follow-up, long enough to grow the card by a few lines of its answer?', 'And a third?']) {
+      await page.evaluate(() => {
+        const h = document.querySelector('.session-history') as HTMLElement
+        const w = window as unknown as { __st: { on: boolean; v: number[] } }
+        w.__st = { on: true, v: [] }
+        const tick = () => { if (!w.__st.on) return; w.__st.v.push(h.scrollTop); requestAnimationFrame(tick) }
+        requestAnimationFrame(tick)
+      })
+      await expect(box, 'the keyboard is in the box').toBeFocused()
+      await page.keyboard.type(q)
+      await page.keyboard.press('Enter')
+      await expect(body).toContainText(`processed your message: ${q}`, { timeout: 30_000 })
+      await page.waitForTimeout(600)
+      const v = await page.evaluate(() => { const w = window as unknown as { __st: { on: boolean; v: number[] } }; w.__st.on = false; return w.__st.v })
+      expect(Math.max(...v) - Math.min(...v), `the timeline stayed while "${q}" was typed, sent and answered`).toBeLessThan(3)
+      const b = (await box.boundingBox())!
+      expect(b.y + b.height, 'the box stays above the view\'s foot').toBeLessThanOrEqual(hb.y + hb.height)
+      await expect.poll(() => body.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight), { timeout: 3_000 }).toBeLessThan(2)
+    }
+    expect(await body.evaluate((el) => el.scrollHeight - el.clientHeight), 'its conversation scrolls inside the card').toBeGreaterThan(40)
+  })
+
   test('scrolling a long reply with 22 cards stays smooth', async ({ page, browserName }) => {
     const panel = await openFullscreen(page)
     await goFullscreen(panel)

@@ -247,10 +247,25 @@ export const ThreadReviewSidebar = memo(function ThreadReviewSidebar(p: ThreadRe
       cap = lo;
       tops = stackWith(cap);
     }
+    // The card whose box holds the keyboard keeps that box on screen: its
+    // conversation scrolls inside it rather than growing the box past the
+    // view's foot, where the next key typed made the browser scroll the
+    // timeline to the caret (2026-11-10 review: 633px on a second follow-up).
+    const active = document.activeElement;
+    const scroller = layer.closest<HTMLElement>('.session-history');
+    const foot = scroller ? scroller.getBoundingClientRect().bottom - origin - REVIEW_GAP : Number.POSITIVE_INFINITY;
     for (const x of parts) {
       if (!x.body) continue;
       const hide = cap < REVIEW_BODY_MIN;
-      const max = !hide && x.bodyH > cap ? `${Math.max(0, cap - x.extra)}px` : '';
+      let own = cap;
+      const el = cards.current.get(x.key);
+      if (el && active && el.contains(active) && !x.body.contains(active)) {
+        const top = tops.get(x.key) ?? 0;
+        // Never below the floor; a card already past the foot keeps its size.
+        const room = foot - top - x.head;
+        if (top + x.head < foot) own = Math.min(own, Math.max(REVIEW_BODY_MIN, room));
+      }
+      const max = !hide && x.bodyH > own ? `${Math.max(0, own - x.extra)}px` : '';
       if (x.body.style.maxHeight !== max) x.body.style.maxHeight = max;
       const display = hide ? 'none' : '';
       if (x.body.style.display !== display) x.body.style.display = display;
@@ -261,6 +276,16 @@ export const ThreadReviewSidebar = memo(function ThreadReviewSidebar(p: ThreadRe
     }
   }, []);
   useLayoutEffect(place);
+  // The keyboard moving into or out of a card's box changes what that card may grow to.
+  useEffect(() => {
+    const layer = p.layerRef.current;
+    if (!layer) return;
+    let raf = 0;
+    const again = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; place(); }); };
+    layer.addEventListener('focusin', again);
+    layer.addEventListener('focusout', again);
+    return () => { layer.removeEventListener('focusin', again); layer.removeEventListener('focusout', again); if (raf) cancelAnimationFrame(raf); };
+  }, [place, p.layerRef]);
   // A card's size changes (fonts loading, an answer growing): place again, once
   // a frame. Observed again only when the set of cards changes.
   const cardSet = p.open ? p.entries.filter((e) => p.anchors.has(e.key)).map((e) => e.key).join('\u0001') : '';
