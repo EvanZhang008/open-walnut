@@ -177,6 +177,36 @@ export function lastMainLaneText(
   return undefined;
 }
 
+/** The text accumulator's state: the open message's text so far, and its id. */
+export interface TextAccumulator { buffer: string; msgId?: string }
+
+/**
+ * The text accumulator once a stream snapshot is adopted: the live turn's last main-lane text
+ * (the next delta of that message appends to it), followed by any text a delta added after the
+ * snapshot arrived, which the snapshot cannot hold. `atSnapshot` is the accumulator when the
+ * snapshot arrived, `now` when it is adopted (React adopts it at its next render). `cut`: a card,
+ * a message boundary or the turn's end cleared or cut the accumulator in between. `null` = leave
+ * the accumulator alone: it was cut, or it holds a newer message than the snapshot's.
+ */
+export function accumulatorAfterSnapshot(o: {
+  blocks: readonly StreamingBlock[];
+  completedLen: number;
+  atSnapshot: TextAccumulator;
+  now: TextAccumulator;
+  cut: boolean;
+}): TextAccumulator | null {
+  if (o.cut) return null;
+  const last = lastMainLaneText(o.blocks, o.completedLen);
+  // Nothing came after the snapshot: its live text is the accumulator.
+  if (o.now.buffer === o.atSnapshot.buffer && o.now.msgId === o.atSnapshot.msgId) {
+    return { buffer: last ? last.content : '', msgId: last?.msgId };
+  }
+  if (!o.now.buffer.startsWith(o.atSnapshot.buffer)) return null;
+  // The text that came after is another message's than the snapshot's last text: its own.
+  if (o.now.msgId && last?.msgId && o.now.msgId !== last.msgId) return null;
+  return { buffer: (last ? last.content : '') + o.now.buffer.slice(o.atSnapshot.buffer.length), msgId: last?.msgId ?? o.now.msgId };
+}
+
 // ── Main-lane text ──────────────────────────────────────────────────────────
 
 /** The index a main-lane TEXT delta may merge into, or -1 (→ push a new block).

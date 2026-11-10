@@ -28,6 +28,7 @@ import {
   resolvePermissionBlock,
   isPendingPermissionBlock,
   lastMainLaneText,
+  accumulatorAfterSnapshot,
   type StreamingBlock,
   type StreamingPermissionBlock,
 } from '@/stream/stream-reducer';
@@ -80,6 +81,47 @@ export interface UseSessionStreamReturn {
 const TEXT_FLUSH_INTERVAL_MS = 150;
 
 /**
+ * What seeds the text accumulator when a stream snapshot is adopted, to be called inside the
+ * setBlocks updater that adopts it. React runs that updater at its next render, not when it is
+ * queued, so a flag set in it and read right after setBlocks read false: the accumulator was
+ * never seeded, and the reply's next delta wrote only itself over the text a column opened on
+ * (2026-11-10: a column opened mid-reply lost the reply's head until the saved row came). Runs
+ * once (StrictMode calls an updater twice). Not covered: a text flush queued between the
+ * snapshot's arrival and that render carries the accumulator of before the seed; the open
+ * message heals at its next flush.
+ */
+function seedOnAdopt(
+  acc: { buffer: { current: string }; msgId: { current: string | undefined }; cut: { current: number } },
+  snapshot: StreamSnapshot,
+  snapCompletedLen: number,
+  alsoCache?: string,
+): () => void {
+  const atSnapshot = { buffer: acc.buffer.current, msgId: acc.msgId.current };
+  const cutAt = acc.cut.current;
+  let done = false;
+  return () => {
+    if (done) return;
+    done = true;
+    // Seed ONLY from the live turn (index >= completedLen). Seeding from a finished turn's final
+    // text made the next turn's first delta append to the OLD answer (inc-1786678797966: one
+    // block rendering "<whole previous answer><new answer>").
+    const next = accumulatorAfterSnapshot({
+      blocks: snapshot.blocks, completedLen: snapCompletedLen, atSnapshot,
+      now: { buffer: acc.buffer.current, msgId: acc.msgId.current }, cut: acc.cut.current !== cutAt,
+    });
+    if (next) { acc.buffer.current = next.buffer; acc.msgId.current = next.msgId; }
+    // Seed the global cache with the server snapshot for correction, with the text that came
+    // after it in its live block. A cut accumulator leaves the cache as its listener built it.
+    if (!alsoCache || !next) return;
+    const last = lastMainLaneText(snapshot.blocks, snapCompletedLen);
+    const blocks = last && last.msgId === next.msgId && last.content !== next.buffer
+      ? snapshot.blocks.map((b) => (b === last ? { ...last, content: next.buffer } : b))
+      : snapshot.blocks;
+    initStreamState(alsoCache, blocks, snapshot.isStreaming, snapshot.completedLen);
+  };
+}
+
+/**
  * Subscribe to session streaming events for a specific session.
  *
  * On mount / sessionId change:
@@ -92,6 +134,8 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
   const [isStreaming, setIsStreaming] = useState(false);
   const sessionStatus = useSessionStatus(sessionId);
   const streamBuffer = useRef('');
+  /** Counts every cut, clear and message boundary of the accumulator (seedOnAdopt). */
+  const textCut = useRef(0);
   // pendingThinking holds only deltas not yet flushed to setBlocks; it is the
   // timer-coalescing buffer, NOT the source of truth for any thinking block. The
   // committed text lives inside the last thinking block in setBlocks. Cleared
@@ -304,44 +348,38 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
         // (see doResubscribe for why reading the ref synchronously is wrong).
         const snapCompletedLen = snapshot.completedLen
           ?? (snapshot.isStreaming ? 0 : snapshot.blocks.length);
-        let appliedBlocks = false;
         // Reasoning still buffered: folded into the local blocks when the snapshot
         // is not adopted, and onto the snapshot only when it does not already end
         // with it (a delta broadcast after the server took the snapshot).
         const carried = takePendingThinking();
+        const seed = seedOnAdopt({ buffer: streamBuffer, msgId: currentTextMsgId, cut: textCut }, snapshot, snapCompletedLen, sessionId);
+        // Decided once per state: StrictMode calls an updater twice, and the first call's own
+        // lastAdoptedSeq write would make the second refuse what the first adopted and seeded.
+        let decided: { prev: StreamingBlock[]; adopt: boolean } | undefined;
         setBlocks((prev) => {
           // Adoption rules live in shouldAdoptSnapshot (pure, unit-tested) —
           // both failure directions have shipped as production bugs: adopting
           // an EMPTY snapshot wiped evidence-kept blocks ("reply visible while
           // streaming, gone when done", inc-1783357192826); never adopting
           // left stale finished-turn duplicates next to history forever.
-          if (!shouldAdoptSnapshot({
+          const adopt = decided?.prev === prev ? decided.adopt : shouldAdoptSnapshot({
             prevLen: prev.length,
             snapshotLen: snapshot.blocks.length,
             snapshotIsStreaming: snapshot.isStreaming,
             localIsStreaming: isStreamingRef.current,
             snapshotSeq: snapshot.seq,
             lastAdoptedSeq: lastAdoptedSeq.current ?? undefined,
-          })) return carried ? appendMainThinking(prev, carried.text, carried.msgId, completedLen.current) : prev;
-          appliedBlocks = true;
+          });
+          decided = { prev, adopt };
+          if (!adopt) return carried ? appendMainThinking(prev, carried.text, carried.msgId, completedLen.current) : prev;
           if (snapshot.seq != null) lastAdoptedSeq.current = snapshot.seq;
           // Server-authoritative boundary when present (see StreamSnapshot doc);
           // legacy fallback: finished turn → all completed, live turn → none.
           completedLen.current = snapCompletedLen;
+          seed();
           return foldCarriedThinking(snapshot.blocks, carried, snapCompletedLen) as StreamingBlock[];
         });
         setIsStreaming((prev) => (snapshot.isStreaming && !prev) ? true : prev);
-        if (appliedBlocks) {
-          // Seed ONLY from the live turn (index >= completedLen). Seeding from a
-          // finished turn's final text made the next turn's first delta append to
-          // the OLD answer (inc-1786678797966: one block rendering
-          // "<whole previous answer><new answer>").
-          const lastText = lastMainLaneText(snapshot.blocks, snapCompletedLen);
-          streamBuffer.current = lastText ? lastText.content : '';
-          currentTextMsgId.current = lastText?.msgId;
-          // Seed global cache with server snapshot for correction
-          initStreamState(sessionId, snapshot.blocks, snapshot.isStreaming, snapshot.completedLen);
-        }
       })
       .catch(() => {
         // Subscription failed — stay with current state (cache or empty)
@@ -372,14 +410,16 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
             ?? (snapshot.isStreaming ? 0 : snapshot.blocks.length);
           // Only apply snapshot if we don't already have streaming data
           // (avoid clobbering blocks from incremental events that arrived in between)
-          let adopted = false;
           // Same rule as the subscribe effect (foldCarriedThinking).
           const carried = takePendingThinking();
+          const seed = seedOnAdopt({ buffer: streamBuffer, msgId: currentTextMsgId, cut: textCut }, snapshot, snapCompletedLen);
           setBlocks((prev) => {
             if (prev.length > 0) return carried ? appendMainThinking(prev, carried.text, carried.msgId, completedLen.current) : prev;
-            adopted = true;
             completedLen.current = snapCompletedLen;
             if (snapshot.seq != null) lastAdoptedSeq.current = snapshot.seq;
+            // Skipped when the snapshot is NOT adopted: local blocks (and their accumulator) are
+            // newer, so overwriting the buffer would drop in-flight text.
+            seed();
             return foldCarriedThinking(snapshot.blocks, carried, snapCompletedLen) as StreamingBlock[];
           });
           // Non-regressive sync: snapshot only allowed to promote isStreaming false→true.
@@ -398,15 +438,6 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
             }
             return prev;
           });
-          // Live-turn blocks only — see the seeding note in the subscribe effect.
-          // Skipped when the snapshot was NOT adopted: local blocks (and their
-          // accumulator) are newer, so overwriting the buffer here would drop
-          // in-flight text.
-          if (adopted) {
-            const lastText = lastMainLaneText(snapshot.blocks, snapCompletedLen);
-            streamBuffer.current = lastText ? lastText.content : '';
-            currentTextMsgId.current = lastText?.msgId;
-          }
         }
       })
       .catch(() => {
@@ -483,6 +514,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
    *  Replaces the old `flushPendingTextRaf(); streamBuffer.current = ''` pair at
    *  those call sites; turn-end paths keep clearing outright. */
   const interruptPendingText = useCallback(() => {
+    textCut.current++;
     if (textDeltaRaf.current !== null) {
       clearTimeout(textDeltaRaf.current);
       textDeltaRaf.current = null;
@@ -588,6 +620,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     // flush its pending rAF content, then restart the accumulator for the new one.
     if (msgId && currentTextMsgId.current && msgId !== currentTextMsgId.current) {
       flushPendingTextRaf();
+      textCut.current++;
       streamBuffer.current = '';
     }
     if (msgId) currentTextMsgId.current = msgId;
@@ -734,6 +767,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     // Retries preserve the full failed response; no markup may leak into the new attempt.
     if (replacesMsgId) {
       flushPendingTextRaf();
+      textCut.current++;
       streamBuffer.current = '';
       currentTextMsgId.current = undefined;
     } else {
@@ -815,6 +849,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
       log.info('stream', `session:result blocks=${prev.length} (kept; hidden on absorption)`, { sessionId: sid });
       return prev;
     });
+    textCut.current++;
     streamBuffer.current = '';
     // TTFT markers are per-turn — re-arm for the next turn.
     sawFirstTextDelta.current = false;
@@ -832,6 +867,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     flushPendingTextRaf();
     flushPendingThinking();
     setIsStreaming(false);
+    textCut.current++;
     streamBuffer.current = '';
     // TTFT markers are per-turn — error ends the turn.
     sawFirstTextDelta.current = false;
@@ -868,6 +904,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     setBlocks([]);
     blocksLenRef.current = 0;
     completedLen.current = 0;
+    textCut.current++;
     streamBuffer.current = '';
     currentTextMsgId.current = undefined;
     if (activeSessionId.current) clearStreamState(activeSessionId.current);
