@@ -60,7 +60,7 @@ export interface UseSpeechToTextReturn {
   /** Error message (cleared on next toggle) */
   error: string | null;
   /** Start or stop recording */
-  toggleRecording: () => Promise<void>;
+  toggleRecording: () => void;
   /** Re-transcribe the last recording; pass a model for a one-shot whisper-cli retry */
   retryWithModel: (model?: string) => Promise<void>;
   /** Re-transcribe the last recording with the configured engine (after a failure) */
@@ -95,8 +95,6 @@ export interface UseSpeechToTextReturn {
   finishRecording: () => Promise<DictationOutcome>;
   /** Recording, or its words still on their way. */
   isBusy: () => boolean;
-  /** A press is opening the microphone (getUserMedia): no recording yet, one on its way. */
-  isOpening: () => boolean;
 }
 
 /** How a dictation a send waited on ended. */
@@ -250,8 +248,6 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
   const finishWaitersRef = useRef<Array<(outcome: DictationOutcome) => void>>([]);
   const [finishTick, setFinishTick] = useState(0);
   const busyRenderedRef = useRef(false);
-  // getUserMedia in flight: seconds on a first permission prompt.
-  const openingRef = useRef(false);
   busyRenderedRef.current = isRecording || isTranscribing;
   const isMountedRef = useRef(true);
   // Reset on every mount, not just set-false on unmount: this component can be
@@ -338,9 +334,7 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
       // Load the engine while the user talks, not in front of the first draft.
       warmupStt();
       const clickAt = performance.now();
-      openingRef.current = true;
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: DICTATION_AUDIO_CONSTRAINTS })
-        .finally(() => { openingRef.current = false; });
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: DICTATION_AUDIO_CONSTRAINTS });
       const openedMs = Math.round(performance.now() - clickAt);
       streamRef.current = stream;
 
@@ -993,8 +987,6 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
     return (!!recorder && recorder.state !== 'inactive') || busyRenderedRef.current;
   }, []);
 
-  const isOpening = useCallback(() => openingRef.current, []);
-
   const finishRecording = useCallback((): Promise<DictationOutcome> => {
     const recorder = mediaRecorderRef.current;
     const live = !!recorder && recorder.state !== 'inactive';
@@ -1041,6 +1033,5 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
     discardRecording,
     finishRecording,
     isBusy,
-    isOpening,
   };
 }

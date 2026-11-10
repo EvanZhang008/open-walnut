@@ -99,6 +99,9 @@ export function registerWholeClipScenarios(): void {
     const seen = await stubLanes(page)
     const sent = captureSends(page)
     const d = await openComposer(page)
+    // One mic in the composer: dictating to the clipboard is the iPhone's Action Button.
+    await expect(d.panel.locator('.mic-btn-wrapper')).toHaveCount(1)
+    await expect(d.panel.getByTitle(/clipboard/i)).toHaveCount(0)
     const send = d.panel.locator('.chat-send-btn-icon').first()
     for (let round = 1; round <= 2; round++) {
       seen.stopped = false
