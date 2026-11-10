@@ -98,7 +98,8 @@ describe('the old daemon kept to go back to', () => {
     const child = spawn(running, ['30'], { stdio: 'ignore' })
     const full = vi.spyOn(fsp, 'copyFile').mockRejectedValue(Object.assign(new Error('ENOSPC: no space left on device, copyfile'), { code: 'ENOSPC' }))
     try {
-      await new Promise((r) => setTimeout(r, 200))
+      // The process runs that file (its own file is what is kept).
+      await vi.waitFor(() => expect(fs.readlinkSync(`/proc/${child.pid}/exe`)).toBe(running), { timeout: 5_000, interval: 20 })
       // The disk is full in both places it may go (the kept dir, then beside the daemon's files).
       await expect(previousDaemon({ daemonDir: dir, binaryPath: path.join(dir, 'daemon-linux-x64'), compiledSelf: false, pid: child.pid!, version: 'walnut-daemon-old' }))
         .rejects.toBeInstanceOf(KeepFailedError)
@@ -133,7 +134,8 @@ describe('the old daemon kept to go back to', () => {
     fs.chmodSync(running, 0o755)
     const child = spawn(running, ['30'], { stdio: 'ignore' })
     try {
-      await new Promise((r) => setTimeout(r, 200))
+      // The process runs that file before the deploy removes it.
+      await vi.waitFor(() => expect(fs.readlinkSync(`/proc/${child.pid}/exe`)).toBe(running), { timeout: 5_000, interval: 20 })
       fs.rmSync(running)
       const kept = await previousDaemon({ daemonDir: dir, binaryPath: path.join(dir, 'daemon-linux-x64'), compiledSelf: false, pid: child.pid!, version: 'walnut-daemon-old' })
       expect(kept).toBe(path.join(previousKeepDir(dir), 'daemon-linux-x64'))

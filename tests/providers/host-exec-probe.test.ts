@@ -15,7 +15,7 @@
  * MACHINE SAFETY: the sockets are stand-ins, except one loopback listener on a free port; the
  * files are in a temp dir.
  */
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -134,8 +134,8 @@ describe('a file look', () => {
     expect(stuckFileLooks()).toBe(0)
     expect(stuckFileLooks(Date.now() + STUCK_LOOK_MS)).toBe(1)
     release()
-    await new Promise((r) => setTimeout(r, 10))
-    expect(stuckFileLooks(Date.now() + 10 * STUCK_LOOK_MS)).toBe(0)
+    // Its answer came: once the look has taken it, nothing is in flight.
+    await vi.waitFor(() => expect(stuckFileLooks(Date.now() + 10 * STUCK_LOOK_MS)).toBe(0), { timeout: 5_000, interval: 10 })
   })
 
   it('a found file says its size: 0 for one made and not written yet', async () => {

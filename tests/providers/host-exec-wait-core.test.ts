@@ -13,7 +13,7 @@
  * opens with this test runtime); the commands are /bin/sh builtins and sleep; every job is
  * stopped by the end.
  */
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
@@ -194,13 +194,16 @@ describe('exec.read and exec.run until on the host core', () => {
     // 2026-11-04 review (partial-zero): each read builds a new line splitter, whose quiet clock
     // started at its first look, so `Password: ` sitting there for seconds was not tested by a short wait.
     await core.run({ jobId: 'hx-wait-core-pw', taskId: 't-1', command: "printf 'Password: '; sleep 30", cwd: root, background: true })
-    await new Promise((r) => setTimeout(r, 1_500))
+    // Asked again until the prompt has been there its quiet time (a loaded host starts the shell
+    // late). A read whose clock starts at its own first look never matches with these waits.
     for (const wait of [0, 150]) {
-      const r = await core.read({ jobId: 'hx-wait-core-pw', taskId: 't-1', wait, until: { output: '^Password: $', partial: true } })
-      expect(r.waitedFor).toMatchObject({ matched: 'output', match: 'Password: ', unfinished: true })
+      await vi.waitFor(async () => {
+        const r = await core.read({ jobId: 'hx-wait-core-pw', taskId: 't-1', wait, until: { output: '^Password: $', partial: true } })
+        expect(r.waitedFor).toMatchObject({ matched: 'output', match: 'Password: ', unfinished: true })
+      }, { timeout: 15_000, interval: 100 })
     }
     await core.kill({ jobId: 'hx-wait-core-pw' })
-  }, 20_000)
+  }, 40_000)
 
   it('a partial match comes back with its line in the output; a read without one keeps to whole lines', async () => {
     // 2026-11-04 usability review: a partial match on the prompt answered output "hi\n", as if the prompt was never seen.
@@ -215,7 +218,8 @@ describe('exec.read and exec.run until on the host core', () => {
     // 2026-11-04 usability review: offset 999999 on a 5-byte log answered scanned 999999, and on a
     // running job such a wait would never see a line.
     await core.run({ jobId: 'hx-wait-core-past', taskId: 't-1', command: 'echo hi; sleep 1; echo LATE; sleep 20', cwd: root, background: true })
-    await new Promise((r) => setTimeout(r, 300))
+    // Its first line is in the log (a loaded host starts the shell late), the second a second off.
+    await vi.waitFor(async () => expect(await core.read({ jobId: 'hx-wait-core-past', taskId: 't-1' })).toMatchObject({ output: 'hi\n' }), { timeout: 10_000, interval: 25 })
     const r = await core.read({ jobId: 'hx-wait-core-past', taskId: 't-1', offset: 999_999, wait: 5_000, until: { output: 'LATE' } })
     expect(r).toMatchObject({ offset: 3, waitedFor: { matched: 'output', match: 'LATE' } })
     const ended = await core.run({ jobId: 'hx-wait-core-past2', taskId: 't-1', command: 'echo four', cwd: root })
@@ -228,7 +232,8 @@ describe('exec.read and exec.run until on the host core', () => {
     // 2026-11-04 review: every wait reads the log and asks the matcher on its own, with no limit per job.
     await core.run({ jobId: 'hx-wait-core-cap', taskId: 't-1', command: 'sleep 20', cwd: root, background: true })
     const waits = Array.from({ length: 4 }, () => core.read({ jobId: 'hx-wait-core-cap', taskId: 't-1', wait: 2_000, until: { output: 'never' } }))
-    await new Promise((r) => setTimeout(r, 200))
+    // Each wait counts itself a microtask in, before any look: one turn of the loop has all four running.
+    await new Promise((r) => setImmediate(r))
     await expect(core.read({ jobId: 'hx-wait-core-cap', taskId: 't-1', wait: 2_000, until: { output: 'never' } })).rejects.toMatchObject({ code: 'busy', message: expect.stringContaining('4 waits on job hx-wait-core-cap already run') })
     // A read with no wait_for is no wait.
     expect(await core.read({ jobId: 'hx-wait-core-cap', taskId: 't-1' })).toMatchObject({ running: true })

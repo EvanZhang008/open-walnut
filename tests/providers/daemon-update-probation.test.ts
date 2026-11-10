@@ -108,6 +108,19 @@ function restart(): void {
   process.kill(old, 'SIGKILL')
 }
 
+/**
+ * The probation's looks at a daemon, as they happen: each look that finds one serving asks `ps` for
+ * the age of the pid it read (t_up's t_pstart), so a `ps` first on PATH writes down which pid each
+ * look saw and hands on to the real one. Put in place before the probation starts (a shell keeps
+ * the path of a command it ran).
+ */
+function looksAt(): (pid: number) => number {
+  const said = path.join(work, 'ps-calls')
+  const rest = stubs.env.PATH.split(':').filter((dir) => dir !== stubs.bin).join(':')
+  fs.writeFileSync(path.join(stubs.bin, 'ps'), `#!/bin/sh\necho "$*" >> '${said}'\nPATH='${rest}' exec ps "$@"\n`, { mode: 0o755 })
+  return (pid) => (fs.existsSync(said) ? fs.readFileSync(said, 'utf8').split('\n').filter((l) => l === `-o etime= -p ${pid}`).length : 0)
+}
+
 describe('the probation of a service update that came to serve', () => {
   it('a new daemon that dies inside its probation is followed by the config from before, and its build is written down', async () => {
     const { previousUnit } = updated()
@@ -128,9 +141,15 @@ describe('the probation of a service update that came to serve', () => {
 
   it('one started again twice (a crash loop under Restart=) is put back too; once is not enough', async () => {
     const { previousUnit, newUnit } = updated()
+    const looks = looksAt()
     await probationRuns()
     restart()
-    await new Promise((r) => setTimeout(r, 3_000))
+    const first = daemonPid()
+    // Two looks of the probation at the restarted daemon: the first counted the restart, and the
+    // second came only because that one did not end the watch (a verdict is written before anything
+    // else). A second restart before the first look reads as one (2026-11-10: on a loaded runner 3 s
+    // was not enough, and the build was never put back).
+    await vi.waitFor(() => expect(looks(first)).toBeGreaterThanOrEqual(2), { timeout: 20_000, interval: 100 })
     expect(fs.readFileSync(unit(), 'utf8')).toBe(newUnit)
     expect(fs.existsSync(failedFile())).toBe(false)
     restart()
@@ -139,7 +158,7 @@ describe('the probation of a service update that came to serve', () => {
       expect(fs.existsSync(failedFile())).toBe(true)
     }, { timeout: 30_000, interval: 250 })
     expect(fs.readFileSync(failedFile(), 'utf8').split('\n')[2]).toMatch(/^the new daemon stopped and was started again 2 times within \d+ s of its probation/)
-  }, 60_000)
+  }, 120_000)
 
   it('a daemon that stays through it is kept: the copies go, nothing is written down', async () => {
     const { newUnit } = updated()

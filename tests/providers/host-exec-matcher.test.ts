@@ -199,13 +199,12 @@ describe('the matcher process', () => {
     const pid = await new Promise<number>((resolve) => daemon.stdout!.once('data', (d) => resolve(Number(String(d).trim()))))
     expect(pid).toBeGreaterThan(1)
     process.kill(daemon.pid!, 'SIGKILL')
-    let alive = true
-    for (let i = 0; i < 50 && alive; i++) {
-      await new Promise((r) => setTimeout(r, 100))
+    await vi.waitFor(() => {
+      let alive = true
       try { process.kill(pid, 0) } catch { alive = false }
-    }
-    expect(alive).toBe(false)
-  }, 20_000)
+      expect(alive).toBe(false)
+    }, { timeout: 15_000, interval: 100 })
+  }, 40_000)
 
   it('close ends the process and answers what was still queued', async () => {
     const m = matcher()

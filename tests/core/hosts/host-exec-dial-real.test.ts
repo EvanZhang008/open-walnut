@@ -106,6 +106,9 @@ async function waitFor(cond: () => boolean, what: string, ms = 10_000): Promise<
   throw new Error(`timed out waiting for ${what}`)
 }
 
+/** Bytes heard on the link's bulk socket so far: a read on it has begun to come in once they grow. */
+const bulkHeard = (conn: DaemonConnection) => (conn as unknown as { _bulkHeardBytes: number })._bulkHeardBytes
+
 /**
  * A reply already on its way when the path dies (the Mac falls asleep, or its network changes):
  * the request reaches the daemon, its reply crosses the link 600 ms later, and from the moment the
@@ -271,8 +274,10 @@ describe('after a wake or network signal, and with the main socket dead', () => 
     local.proxy!.setMode('blackhole')
     await sleep(300)
     quietFor30s(conn)
+    const bulkBefore = bulkHeard(conn)
     const read = conn.send('fs.read', { path: file }, 30_000).then(() => 'read', (e: Error) => e.message)
-    await sleep(200)
+    // The read streams on the bulk socket before the dial's check begins (a loaded host starts it late).
+    await waitFor(() => bulkHeard(conn) - bulkBefore > 64 * 1024, 'the bulk read streaming')
     const heard = conn.heardBytes
     expect(await outcome(dial('pcbox', 15_000))).toBe('refused 503 silent')
     expect(conn.heardBytes).toBeGreaterThan(heard) // the bulk read was streaming all along
@@ -289,8 +294,10 @@ describe('after a wake or network signal, and with the main socket dead', () => 
     fs.writeFileSync(file, 'x'.repeat(2 * 1024 * 1024))
     cleanups.push(() => fs.rmSync(path.dirname(file), { recursive: true, force: true }))
     proxy!.setMode('slow', { delayMs: 0, bytesPerSec: 256 * 1024, shared: true, queueBytes: 4 * 1024 * 1024 })
+    const bulkBefore = bulkHeard(conn)
     const read = conn.send('fs.read', { path: file }, 60_000).then((r) => (r.ok ? 'read' : 'refused'), (e: Error) => e.message)
-    await sleep(500)
+    // The download is coming in, the rest of it queued on the shared link ahead of the check's pong.
+    await waitFor(() => bulkHeard(conn) - bulkBefore > 64 * 1024, 'the download streaming')
     const heard = conn.heardBytes
     expect(await recheckQuietLinks({ quietMs: 0, deadlineMs: 3_000 })).toEqual({ pcbox: 'silent' })
     expect(conn.heardBytes - heard).toBeGreaterThan(256 * 1024) // the download went on through the check

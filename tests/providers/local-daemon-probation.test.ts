@@ -317,9 +317,9 @@ describe('a start with no daemon running', () => {
     expect(d.start.mock.calls.map(([file]) => file)).toEqual([path.join(tmpDir, 'bin', 'daemon-new')])
     expect(trial).not.toHaveBeenCalled()
     expect(d.stay.watching('new-version')).toBe(true)
+    await vi.waitFor(() => expect(pendSpy).toHaveBeenCalledWith(expect.objectContaining({ version: 'new-version' })), { timeout: 5_000, interval: 20 })
     await new Promise((r) => setTimeout(r, 20))
     expect(keepSpy).not.toHaveBeenCalled()
-    expect(pendSpy).toHaveBeenCalledWith(expect.objectContaining({ version: 'new-version' }))
     // It dies inside its window: refused, and the build that ran before starts.
     d.alive.mockReturnValue(false)
     d.start.mockClear()
