@@ -23,7 +23,16 @@ test('a clicked column looks as every column does: no tinted header, no accent l
   await loadHome(page)
   await expect(homeColumns(page)).toHaveCount(2, { timeout: 30_000 })
   await expect(col(page, 'a').getByText('kbd a answer 44')).toBeVisible({ timeout: 30_000 })
+  // An unread column wears a red composer ring until the person's first press in it, which marks
+  // it read through a task write (SessionPanel markRead). The shared fixture sessions can be unread
+  // here (other specs run turns in them), so both columns are pressed first and read before the
+  // look is compared: the ring this test is about is the current column's, not the unread one
+  // (CI 2026-11-10: column a still unread a moment after its click).
+  await col(page, 'b').getByText('kbd b answer 44').click()
   await col(page, 'a').getByText('kbd a answer 44').click()
+  for (const k of ['a', 'b'] as const) {
+    await expect(col(page, k).locator('.session-panel').first(), `column ${k} is read`).not.toHaveClass(/session-panel-unread/, { timeout: 10_000 })
+  }
   // Whether or not this engine's keys marked it, the mark itself must draw nothing.
   await col(page, 'a').evaluate((el) => el.classList.add('is-current'))
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
