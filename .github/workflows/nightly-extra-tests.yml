@@ -42,8 +42,10 @@ jobs:
     timeout-minutes: 120
     env:
       PW_IGNORE_LOAD: '1'
-      WALNUT_DAEMON_DIR: ${{ runner.temp }}/open-walnut-browser
     steps:
+      # A job's env cannot read the runner context (GitHub rejects the whole file),
+      # so the daemon dir under the runner's temp dir is set for later steps here.
+      - run: echo "WALNUT_DAEMON_DIR=$RUNNER_TEMP/open-walnut-browser" >> "$GITHUB_ENV"
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
