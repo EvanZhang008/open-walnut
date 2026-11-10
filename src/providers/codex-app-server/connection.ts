@@ -18,7 +18,9 @@
  * - a steer Codex took but did not answer before its turn ended is answered in a
  *   follow-up Codex turn of the same Walnut turn (turn.ts);
  * - plan mode, its "Implement this plan?" question, and the adapter's slash commands
- *   (commands.ts) work as they did there.
+ *   (commands.ts) work as they did there;
+ * - a command the turn left running is reported at the turn's end and when it ends
+ *   (background.ts), so Walnut reads the task as working and wakes it then.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -28,6 +30,7 @@ import { CodexSessionControls, initialAgentMode } from './controls.js'
 import { CodexEventMapper, type AcpUpdate } from './events.js'
 import { CodexApprovals, type AcpPermissionRequest, type AcpPermissionResponse } from './approvals.js'
 import { LiveTurn, type TurnResult } from './turn.js'
+import { CodexBackgroundWork, backgroundPollMs, listedTerminals, type BackgroundTerminal, type BackgroundWorkState } from './background.js'
 import { buildThreadConfig, turnUsage, withTimeout } from './thread-config.js'
 import { commandAnswer, parseSlashCommand, planCommand, type CommandStart } from './commands.js'
 import type { CodexModelRow } from '../codex-model-probe.js'
@@ -46,6 +49,8 @@ const MAX_CONTINUATIONS = 2
 const IMPLEMENT_PLAN_TEXT = 'Implement the approved plan.'
 /** All of a stop's background-terminal clean-up, so the stop answers well inside the daemon's wait. */
 const TERMINATE_BUDGET_MS = 3_000
+/** Reading what runs on at a turn's end: the turn's end waits on it. */
+const BACKGROUND_LIST_TIMEOUT_MS = 5_000
 
 /** No event at all for this long while a turn runs and nothing is in progress: the turn is stuck. */
 export function stallIdleMs(env: NodeJS.ProcessEnv): number {
@@ -72,6 +77,8 @@ export interface CodexConnectionHooks {
   /** The app-server process ended while it was not being closed. */
   onExit(exit: AppServerExit): void
   onStderr(bytes: number): void
+  /** What of the session's own commands runs on after its turn, and which of them ended (background.ts). */
+  onBackgroundWork?(state: BackgroundWorkState): void
 }
 
 /** A turn's failure, shaped as the adapter rejected a prompt (worker.ts classifyPromptRejection reads `data`). */
@@ -104,6 +111,7 @@ export class CodexDirectConnection {
   private readonly controls: CodexSessionControls
   private readonly events: CodexEventMapper
   private readonly approvals: CodexApprovals
+  private readonly background: CodexBackgroundWork
   /** Turns that ended here: a late event of one is never taken for the next turn's. */
   private readonly endedTurnIds = new Set<string>()
   private rowsLoaded = false
@@ -121,6 +129,12 @@ export class CodexDirectConnection {
     this.controls = new CodexSessionControls(initialAgentMode(env))
     this.events = new CodexEventMapper((update) => this.emit(update))
     this.approvals = new CodexApprovals((req) => this.client.requestPermission(req), () => this.threadId ?? '', this.events, (update) => this.emit(update))
+    this.background = new CodexBackgroundWork({
+      list: () => this.listBackgroundTerminals(BACKGROUND_LIST_TIMEOUT_MS),
+      turnRunning: () => this.turn !== null,
+      report: (state) => hooks.onBackgroundWork?.(state),
+      pollMs: backgroundPollMs(env),
+    })
     this.rpc = new AppServerRpc({
       command: launch.command,
       args: launch.args,
@@ -276,7 +290,7 @@ export class CodexDirectConnection {
     const turn = this.turn
     // A turn waiting on the plan question runs nothing at Codex, and a turn being stopped takes
     // nothing more: the words go in the next turn.
-    if (!turn || turn.settled || turn.holding || turn.stopping) return { outcome: 'noActiveTurn' }
+    if (!turn || turn.settled || turn.holding || turn.stopping || turn.ending) return { outcome: 'noActiveTurn' }
     const turnId = turn.id ?? await withTimeout(turn.started, TURN_START_TIMEOUT_MS)
     if (!turnId || turn.settled || this.turn !== turn) return { outcome: 'noActiveTurn' }
     const prompt = Array.isArray(params.prompt) ? params.prompt as Array<{ text?: string }> : []
@@ -326,14 +340,20 @@ export class CodexDirectConnection {
    */
   async cancel(_params: { sessionId: string }): Promise<{ turnClosed: boolean }> {
     const turn = this.turn
-    if (!turn || turn.settled) return { turnClosed: true }
+    // No turn runs, but commands the last one left running do: a stop ends them.
+    if (!turn || turn.settled) {
+      if (this.background.count > 0) await this.stopBackground()
+      return { turnClosed: true }
+    }
     turn.stopping = true
     // Waiting on the person's plan answer: no Codex turn runs. The question is withdrawn and
     // its card closed (askToImplement) before the turn ends.
     if (turn.holding) {
       this.approvals.cancelAll()
       await withTimeout(turn.ended, STEER_SETTLE_MS)
-      this.settleTurn(turn, { stopReason: 'cancelled' })
+      this.endTurn(turn, { stopReason: 'cancelled' }, true)
+      await withTimeout(turn.ended, STEER_SETTLE_MS)
+      await this.stopBackground()
       return { turnClosed: true }
     }
     const deadline = Date.now() + INTERRUPT_TIMEOUT_MS
@@ -348,24 +368,37 @@ export class CodexDirectConnection {
       if (!turn.settled) return { turnClosed: false }
     }
     const ended = await withTimeout(turn.ended, Math.max(1, deadline - Date.now()))
-    // An interrupt leaves Codex's background terminals running; a stop ends them too (best effort, older Codex has no such call).
-    await this.terminateBackgroundTerminals(TERMINATE_BUDGET_MS)
+    // An interrupt leaves Codex's background terminals running; a stop ends them too.
+    await this.stopBackground()
     return { turnClosed: ended === true || turn.settled }
   }
 
-  /** Ends the thread's background terminals within `budgetMs` overall (the daemon's stop waits on it). */
-  private async terminateBackgroundTerminals(budgetMs: number): Promise<void> {
+  /**
+   * A stop ends the thread's background terminals within TERMINATE_BUDGET_MS overall (the
+   * daemon's stop waits on it; best effort, an older Codex has no such call). They are
+   * dropped first, so the end of one is never taken for news that wakes the session.
+   */
+  private async stopBackground(): Promise<void> {
+    this.background.dropAll()
     const threadId = this.threadId
     if (!threadId) return
-    const deadline = Date.now() + budgetMs
+    const deadline = Date.now() + TERMINATE_BUDGET_MS
     const left = () => Math.max(1, deadline - Date.now())
+    const listed = await this.listBackgroundTerminals(left())
+    if (!listed) return
+    await withTimeout(Promise.all(listed.map(({ processId }) =>
+      this.rpc.request('thread/backgroundTerminals/terminate', { threadId, processId }, left()).catch(() => {}))), left())
+  }
+
+  /** The thread's background terminals; null when this Codex cannot say. */
+  private async listBackgroundTerminals(timeoutMs: number): Promise<BackgroundTerminal[] | null> {
+    const threadId = this.threadId
+    if (!threadId) return null
     try {
-      const listed: Record<string, unknown> = await this.rpc.request('thread/backgroundTerminals/list', { threadId }, left())
-      const ids = (Array.isArray(listed.data) ? listed.data.filter(isRecord) : [])
-        .map((t) => t.processId).filter((id): id is string | number => typeof id === 'string' || typeof id === 'number')
-      await withTimeout(Promise.all(ids.map((processId) =>
-        this.rpc.request('thread/backgroundTerminals/terminate', { threadId, processId }, left()).catch(() => {}))), left())
-    } catch { /* not offered by this Codex */ }
+      return listedTerminals(await this.rpc.request('thread/backgroundTerminals/list', { threadId }, timeoutMs))
+    } catch {
+      return null
+    }
   }
 
   async setSessionConfigOption(params: { configId: string; value: string | boolean }): Promise<Record<string, unknown>> {
@@ -377,12 +410,14 @@ export class CodexDirectConnection {
   async close(): Promise<void> {
     this.closing = true
     if (this.watchdog) clearInterval(this.watchdog)
+    this.background.close()
     await this.rpc.close()
   }
 
   kill(): void {
     this.closing = true
     if (this.watchdog) clearInterval(this.watchdog)
+    this.background.close()
     this.rpc.kill()
   }
 
@@ -461,6 +496,9 @@ export class CodexDirectConnection {
       if (!turn.id) { turn.id = turnId; turn.markStarted(turnId) } else if (root === turn.id && turnId !== turn.id) turn.aliases.add(turnId)
     }
     if (method === 'turn/completed' && turnId) this.endWaiters.get(turnId)?.()
+    // A command an ended turn left running says it ended under that turn's id: read before the drop below.
+    if (method === 'item/completed' && isRecord(params.item)) this.background.noteItemCompleted(params.item)
+    if (method === 'item/commandExecution/terminalInteraction') this.background.noteTerminalInteraction(params)
     // A late event of a turn that already ended (or of none we started) is dropped.
     if (turnId && (stale || !turn || (turn.id && !turn.owns(turnId)))) {
       if (method !== 'thread/tokenUsage/updated') return
@@ -488,7 +526,7 @@ export class CodexDirectConnection {
     if (status === 'failed') {
       const err = isRecord(t.error) ? t.error : {}
       const message = typeof err.message === 'string' && err.message ? err.message : 'Codex turn failed'
-      this.settleTurn(turn, { error: new CodexTurnError(message, {
+      this.endTurn(turn, { error: new CodexTurnError(message, {
         message,
         codexErrorInfo: err.codexErrorInfo ?? null,
         additionalDetails: err.additionalDetails ?? null,
@@ -498,7 +536,7 @@ export class CodexDirectConnection {
     // A stop is on its way: the turn ends here, with no follow-up and no plan question.
     if (turn.stopping) {
       if (turn.unanswered.length > 0) this.sayUnanswered(turn, 'The turn stopped before Codex answered')
-      this.settleTurn(turn, { stopReason: 'cancelled' })
+      this.endTurn(turn, { stopReason: 'cancelled' }, true)
       return
     }
     if (status === 'completed') {
@@ -516,7 +554,7 @@ export class CodexDirectConnection {
         return
       }
     }
-    this.settleTurn(turn, { stopReason: status === 'interrupted' ? 'cancelled' : 'end_turn' })
+    this.endTurn(turn, { stopReason: status === 'interrupted' ? 'cancelled' : 'end_turn' })
   }
 
   /** Names in the chat the words Codex took into this turn and never answered. */
@@ -535,8 +573,8 @@ export class CodexDirectConnection {
     const approved = await this.approvals.askPlan(plan.id, plan.text)
     turn.holding = false
     if (turn.settled || this.turn !== turn) return
-    if (turn.stopping) { this.settleTurn(turn, { stopReason: 'cancelled' }); return }
-    if (!approved) { this.settleTurn(turn, { stopReason: 'end_turn' }); return }
+    if (turn.stopping) { this.endTurn(turn, { stopReason: 'cancelled' }, true); return }
+    if (!approved) { this.endTurn(turn, { stopReason: 'end_turn' }); return }
     this.controls.set('collaboration_mode', 'default')
     this.emit({ sessionUpdate: 'config_option_update', configOptions: this.controls.sessionState().configOptions })
     this.continueTurn(turn, IMPLEMENT_PLAN_TEXT)
@@ -545,6 +583,17 @@ export class CodexDirectConnection {
   private retireTurnId(id: string): void {
     this.endedTurnIds.add(id)
     if (this.endedTurnIds.size > 64) this.endedTurnIds.delete(this.endedTurnIds.values().next().value as string)
+  }
+
+  /**
+   * A turn Codex ended: what it left running is read and reported first (background.ts), so
+   * the worker journals it ahead of the turn's end; then the turn settles. `stopped`: a stop
+   * ends those commands, so none is reported.
+   */
+  private endTurn(turn: LiveTurn, outcome: { stopReason: string } | { error: Error }, stopped = false): void {
+    if (turn.settled || turn.ending) return
+    turn.ending = true
+    void this.background.turnEnded({ stopped }).catch(() => {}).then(() => this.settleTurn(turn, outcome))
   }
 
   private settleTurn(turn: LiveTurn, outcome: { stopReason: string } | { error: Error }): void {
@@ -556,7 +605,7 @@ export class CodexDirectConnection {
 
   private checkStall(): void {
     const turn = this.turn
-    if (!turn || turn.settled || this.approvals.waiting) return
+    if (!turn || turn.settled || turn.ending || this.approvals.waiting) return
     const limit = this.events.itemRunning ? stallItemMs(this.env) : stallIdleMs(this.env)
     const quietMs = Date.now() - turn.lastEventAt
     if (quietMs < limit) return
@@ -593,6 +642,7 @@ export class CodexDirectConnection {
   private onExit(exit: AppServerExit): void {
     if (this.watchdog) clearInterval(this.watchdog)
     this.approvals.cancelAll()
+    this.background.gone()
     const turn = this.turn
     if (turn) {
       const how = exit.signal ? `signal ${exit.signal}` : `exit code ${exit.code}`

@@ -820,3 +820,99 @@ describe('transport switch', () => {
     expect(((init.result as { _meta?: { walnut?: unknown } })._meta?.walnut)).toBeUndefined()
   })
 })
+
+describe('direct Codex: a command the turn leaves running (background terminals)', () => {
+  type Bg = { type: string; running: Array<{ processId: string; command: string }>; finished: Array<{ processId: string; command: string; exitCode: number | null; output: string }> }
+  const bgRecords = () => metas().filter((e) => e.type === 'background-work') as unknown as Bg[]
+
+  it('is journaled ahead of the turn\'s end, and its end comes with its exit code and output', async () => {
+    const { w } = await startSession()
+    await op(w, 'prompt', { commandId: 'c1', walnutMessageId: 'm1', text: 'BG 300' })
+    await waitTurn('c1')
+    const all = metas()
+    const left = all.findIndex((e) => e.type === 'background-work')
+    const end = all.findIndex((e) => e.type === 'turn-ended' && e.commandId === 'c1')
+    // Ahead of the turn's end: the server never reads the task as done while the build runs.
+    expect(left).toBeGreaterThanOrEqual(0)
+    expect(left).toBeLessThan(end)
+    expect(bgRecords()[0]).toMatchObject({ running: [{ processId: '4242', command: 'make build' }], finished: [] })
+    expect(((await op(w, 'getState')).result as WorkerStateSnapshot).backgroundWork).toEqual([{ processId: '4242', command: 'make build' }])
+
+    // It ends after the turn: Codex's late item/completed carries how.
+    const ended = await waitFor(bgRecords, (r) => r.some((b) => b.finished.length > 0), 'the end of the background command')
+    expect(ended.at(-1)).toMatchObject({ running: [], finished: [{ processId: '4242', command: 'make build', exitCode: 0 }] })
+    expect(ended.at(-1)!.finished[0].output).toContain('BUILD OK')
+    expect(((await op(w, 'getState')).result as WorkerStateSnapshot).backgroundWork).toEqual([])
+    expect(errorRows()).toHaveLength(0)
+  })
+
+  it('an end Codex never tells is read from the list', async () => {
+    const { w } = await startSession({ MOCK_BG_SILENT: '1', WALNUT_CODEX_BG_POLL_MS: '100' })
+    await op(w, 'prompt', { commandId: 'c1', walnutMessageId: 'm1', text: 'BG 200' })
+    await waitTurn('c1')
+    const ended = await waitFor(bgRecords, (r) => r.some((b) => b.finished.length > 0), 'the polled end')
+    expect(ended.at(-1)).toMatchObject({ running: [], finished: [{ processId: '4242', exitCode: null, output: '' }] })
+  })
+
+  it('a stop ends what the turn left running, and its end is no news', async () => {
+    const { w } = await startSession()
+    await op(w, 'prompt', { commandId: 'c1', walnutMessageId: 'm1', text: 'BG_HOLD' })
+    await waitTurn('c1')
+    expect(bgRecords().at(-1)!.running).toHaveLength(1)
+    // No turn runs: the stop still reaches the command.
+    expect((await op(w, 'cancel', { commandId: 'x1' })).ok).toBe(true)
+    expect(requests('thread/backgroundTerminals/terminate').map((r) => r.params!.processId)).toEqual(['4242'])
+    // Its end (exit 143) came before the terminate's answer: dropped, nothing wakes the session.
+    expect(bgRecords().at(-1)).toMatchObject({ running: [], finished: [] })
+    expect(bgRecords().some((b) => b.finished.length > 0)).toBe(false)
+  })
+
+  it('an end during a later turn is told at that turn\'s end, unless that turn read the command after it ended', async () => {
+    const { w } = await startSession()
+    await op(w, 'prompt', { commandId: 'c1', walnutMessageId: 'm1', text: 'BG 300' })
+    await waitTurn('c1')
+    // The build ends while another turn runs: nothing is told mid-turn, it is told at its end.
+    await op(w, 'prompt', { commandId: 'c2', walnutMessageId: 'm2', text: 'SLOW 1500' })
+    await waitTurn('c2')
+    const all = metas()
+    const told = all.findIndex((e) => e.type === 'background-work' && (e as unknown as Bg).finished.length > 0)
+    expect(told).toBeGreaterThan(all.findIndex((e) => e.type === 'turn-started' && e.commandId === 'c2'))
+    expect(told).toBeLessThan(all.findIndex((e) => e.type === 'turn-ended' && e.commandId === 'c2'))
+
+    // A turn that polls the command and sees it end: the model knows, so it is not news.
+    await op(w, 'prompt', { commandId: 'c3', walnutMessageId: 'm3', text: 'BG_HOLD' })
+    await waitTurn('c3')
+    const pid = bgRecords().at(-1)!.running[0].processId
+    await op(w, 'prompt', { commandId: 'c4', walnutMessageId: 'm4', text: `BG_READ ${pid}` })
+    await waitTurn('c4')
+    const last = bgRecords().at(-1)!
+    expect(last).toMatchObject({ running: [], finished: [] })
+
+    // A read while it still ran proves nothing: its later failure is told.
+    await op(w, 'prompt', { commandId: 'c5', walnutMessageId: 'm5', text: 'BG_HOLD' })
+    await waitTurn('c5')
+    const peeked = bgRecords().at(-1)!.running[0].processId
+    await op(w, 'prompt', { commandId: 'c6', walnutMessageId: 'm6', text: `BG_PEEK ${peeked}` })
+    await waitTurn('c6')
+    expect(bgRecords().at(-1)).toMatchObject({ running: [], finished: [{ processId: peeked, exitCode: 1 }] })
+    expect(bgRecords().at(-1)!.finished[0].output).toContain('BUILD FAILED')
+  })
+
+  it('an end Codex never tells, during a later turn, is told at that turn\'s end', async () => {
+    const { w } = await startSession({ MOCK_BG_SILENT: '1' })
+    await op(w, 'prompt', { commandId: 'c1', walnutMessageId: 'm1', text: 'BG 300' })
+    await waitTurn('c1')
+    // It leaves the list while the next turn runs (the poll is off during a turn).
+    await op(w, 'prompt', { commandId: 'c2', walnutMessageId: 'm2', text: 'SLOW 1200' })
+    await waitTurn('c2')
+    expect(bgRecords().at(-1)).toMatchObject({ running: [], finished: [{ processId: '4242', exitCode: null }] })
+  })
+
+  it('a turn that leaves nothing running journals nothing about it', async () => {
+    const { w } = await startSession()
+    await op(w, 'prompt', { commandId: 'c1', walnutMessageId: 'm1', text: 'CMD' })
+    await waitTurn('c1')
+    expect(bgRecords()).toHaveLength(0)
+    expect(requests('thread/backgroundTerminals/list')).toHaveLength(1)
+  })
+})

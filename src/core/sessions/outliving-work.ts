@@ -13,6 +13,8 @@
  *   background  a run_in_background Bash command, a background Agent subagent, or any other task
  *               the CLI marks `is_backgrounded:true` (task_type local_bash, local_agent, ...).
  *               Whatever its type: the flag, not the type, detaches it from the turn.
+ *               On a direct Codex session (ACP): a command its turn left running in a background
+ *               terminal (providers/codex-app-server/background.ts, AcpSession.outlivingWork).
  *   team        an agent team (TeamCreate until TeamDelete or the team goes idle).
  *   wakeup      an armed ScheduleWakeup: the turn ended only to be re-invoked by the timer.
  *   loop        a /loop (CronCreate) it armed: the CLI's own scheduler fires it between turns.

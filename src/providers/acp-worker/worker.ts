@@ -57,6 +57,7 @@ import type {
   PermissionResponseParams,
   WorkerStateSnapshot,
   PendingPermissionSnapshot,
+  BackgroundTerminal,
 } from './protocol.js'
 import {
   EMPTY_ACP_CAPABILITIES,
@@ -294,6 +295,12 @@ export class AcpWorker {
       // The failed turn was journaled first (its prompt rejected); then this worker goes, and the next send starts a fresh one.
       onExit: () => this.adapterExited('Codex app-server exited'),
       onStderr: (bytes) => this.onAdapterStderr(bytes),
+      // Journaled as it is told: a turn's leftovers come ahead of that turn's end (connection.ts endTurn).
+      onBackgroundWork: (state) => {
+        this.backgroundWork = state.running
+        this.journal.appendMeta({ type: 'background-work', running: state.running, finished: state.finished })
+        this.notifyJournal()
+      },
     })
     try {
       const initResp = await direct.initialize()
@@ -313,6 +320,8 @@ export class AcpWorker {
   private sessionResponse: unknown = null
   private models: AcpModelCatalog = { availableModels: [] }
   private configOptions: AcpConfigOption[] = []
+  /** Commands the session's last turn left running (direct Codex only; background.ts). */
+  private backgroundWork: BackgroundTerminal[] = []
 
   /**
    * MCP mounts for session/new + session/load. The SAME list must ride both:
@@ -703,8 +712,9 @@ export class AcpWorker {
     this.acceptCommand('cancel', params.commandId)
     if (this.direct) {
       // turn/interrupt, answered by the turn's own end: the worker lives on (acp-daemon.ts acpAbortTurn).
+      // With no turn, a stop still ends the commands the last turn left running.
       this.failAllPendingPermissions()
-      const { turnClosed } = this.providerSessionId && (this.turnActive || this.controlPrompt)
+      const { turnClosed } = this.providerSessionId && (this.turnActive || this.controlPrompt || this.backgroundWork.length > 0)
         ? await this.direct.cancel({ sessionId: this.providerSessionId })
         : { turnClosed: true }
       return { cancelled: true, turnClosed }
@@ -801,6 +811,7 @@ export class AcpWorker {
       sessionResponse: this.sessionResponse,
       models: this.models,
       configOptions: this.configOptions,
+      backgroundWork: this.backgroundWork,
       lastAcceptedCommands: Object.fromEntries(this.lastAcceptedCommands),
       journalOffset: this.journal.offset,
     }

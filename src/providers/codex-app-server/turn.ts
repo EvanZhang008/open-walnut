@@ -69,6 +69,8 @@ export class LiveTurn {
   holding = false
   /** A stop is on its way: the turn ends at its next end, with no follow-up or plan question. */
   stopping = false
+  /** Codex ended it and its end is being recorded (connection.ts endTurn): it takes nothing more. */
+  ending = false
   private userTextWaiters = new Set<() => void>()
 
   constructor(ownInputs: OwnInput[]) {

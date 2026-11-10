@@ -186,6 +186,18 @@ codex-acp adapter's sessions write, so the web and phone apps read both alike. W
   `WALNUT_CODEX_STALL_ITEM_MS` change them) is stopped. Codex is then asked to end it too, and
   the next message waits for that; a turn Codex does not end in 10 seconds is ended with its
   process. A stop that had to end the process says so in the transcript.
+- **Commands left running.** Codex can end its turn while a command it started goes on (a build
+  or test run in one of its background terminals), and nothing of Codex's wakes it when that
+  command ends. The client asks Codex what still runs at each turn's end
+  (`thread/backgroundTerminals/list`) and reports it ahead of the turn's end, so the task stays
+  in progress and reads Working ("Its own work goes on after its turn"), and Walnut's idle reap
+  leaves the session alone. When such a command ends (Codex sends its `item/completed` late; the
+  list is read every 30 seconds in case it does not, `WALNUT_CODEX_BG_POLL_MS`), Walnut sends the
+  session a message naming the command, its exit code and the end of its output, and the model
+  carries on. A command that ends during a later turn is told at that turn's end, unless that turn
+  read the command after it ended. A stop ends these commands too, and a stop (or a stopped
+  session) withdraws a wake still on its way. A session
+  stopped or a worker gone while one ran hands the task back. src/providers/codex-app-server/background.ts.
 - **Plan mode and commands.** The session's Collaboration mode menu (Plan / Default) rides each
   turn as Codex's `collaborationMode`. When a turn in plan mode ends with a plan, the chat asks
   "Implement this plan?"; yes leaves plan mode and Codex implements it in the same turn. A

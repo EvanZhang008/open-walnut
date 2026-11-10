@@ -14,6 +14,9 @@
  *    lead's "stopped", the drain of the last piece) go through the shared definition.
  *  - a file that reads one of the raw signals is listed with its role; a new reader fails here
  *    until it uses the shared definition or says why it reads the raw one.
+ *  - the runner answers for every runtime an engine runs on: a Codex session (ACP) reports the
+ *    commands its turn left running (2026-11-10: a Codex task sat in Needs you three times while
+ *    its own build ran). A new runtime fails here until the runner reads its sessions too.
  */
 import { describe, it, expect, vi } from 'vitest'
 import fs from 'node:fs'
@@ -26,6 +29,7 @@ import { foldLines, assembleSnapshot, isWakeupArmed } from '../../../src/provide
 import { projectProcessStatus } from '../../../src/core/session-snapshot-apply.js'
 import { outlivingOf, outlivingLine, OUTLIVING_SOURCES, type OutlivingSource } from '../../../src/core/sessions/outliving-work.js'
 import { deriveUserStatus } from '../../../src/core/user-status.js'
+import { ENGINE_REGISTRY } from '../../../src/core/agents/engine-registry.js'
 
 const ROOT = path.resolve(__dirname, '../../..')
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
@@ -167,6 +171,10 @@ describe('the decisions go through the shared definition', () => {
     ['src/core/sessions/turn-end-wait.ts', /hasWorkOutlivingTurn\(/],
     ['src/core/session-hooks/builtins.ts', /workRunsOn[\s\S]{0,400}outlivingWorkOf\(childSid\)\.length > 0/],
     ['src/core/session-snapshot-apply.ts', /outlivingOf\(\{/],
+    // The runner's two answers read the ACP sessions too, and an ACP session's is its own leftovers.
+    ['src/providers/claude-code-session.ts', /hasWorkOutlivingTurn\(claudeSessionId: string\): boolean \{[\s\S]{0,300}this\.acpSessions\.get\(claudeSessionId\)\?\.outlivingWork/],
+    ['src/providers/claude-code-session.ts', /outlivingWorkOf\(claudeSessionId: string\): OutlivingSource\[\] \{[\s\S]{0,200}this\.acpSessions\.get\(claudeSessionId\)\?\.outlivingWork/],
+    ['src/providers/acp-session.ts', /get outlivingWork\(\): OutlivingSource\[\] \{\s*return this\._active && !this\._turnActive && this\._backgroundWork\.length > 0 \? \['background'\] : \[\]/],
   ])('%s', (file, pattern) => {
     expect(read(file)).toMatch(pattern)
   })
@@ -177,6 +185,7 @@ const RAW_READERS: Record<string, string> = {
   'src/core/sessions/outliving-work.ts': 'the shared definition',
   'src/core/sessions/idle-compaction.ts': 'skips an intermediate result (teamActive) and a session with an armed CLI cron, which a /compact would run beside',
   'src/providers/claude-code-session.ts': 'the live runner: keeps the signals and its turn-over rules',
+  'src/providers/acp-session.ts': 'the ACP runner: a turn whose own command runs on (direct Codex) says so on its session:result',
   'src/providers/daemon-fold.ts': 'the daemon fold that makes the signals',
   'src/providers/daemon-source.ts': 'the daemon (JS twin): folds and adopts',
   'src/providers/daemon-standalone.ts': 'the daemon (bun twin): folds and adopts',
@@ -226,5 +235,13 @@ describe('a reader of a raw signal is listed', () => {
     expect(readers.filter((f) => !(f in RAW_READERS)),
       'use sessions/outliving-work.ts (outlivingOf, sessionRunner.hasWorkOutlivingTurn / outlivingWorkOf), or list the file here with why it reads the raw signal').toEqual([])
     expect(Object.keys(RAW_READERS).filter((f) => !readers.includes(f))).toEqual([])
+  })
+})
+
+describe('the runner answers for every runtime', () => {
+  it('native (Claude Code) and ACP are all there is: a new runtime is read by the runner first', () => {
+    // sessionRunner.outlivingWorkOf / hasWorkOutlivingTurn read the native sessions and the ACP
+    // sessions (guarded above). An engine on a third runtime would read as idle while its own work ran.
+    expect([...new Set([...ENGINE_REGISTRY.values()].map((e) => e.runtimeKind))].sort()).toEqual(['acp', 'native'])
   })
 })

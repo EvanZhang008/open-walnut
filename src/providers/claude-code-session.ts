@@ -12003,7 +12003,10 @@ export class SessionRunner {
   /** The session's own work that runs on after its turn (see ClaudeCodeSession.outlivingWork).
    *  In memory: the health monitor's tick has pulled the daemon's task state just before. */
   hasWorkOutlivingTurn(claudeSessionId: string): boolean {
-    return this.findSessionByClaudeId(claudeSessionId)?.workOutlivesTurn ?? false
+    const native = this.findSessionByClaudeId(claudeSessionId)
+    if (native) return native.workOutlivesTurn
+    // An ACP session reports none but a command its last turn left running (no loop among them).
+    return (this.acpSessions.get(claudeSessionId)?.outlivingWork.length ?? 0) > 0
   }
 
   /** The prompt cache facts of the session's last live request (sessions/prompt-cache.ts); undefined when unknown here. */
@@ -12013,7 +12016,9 @@ export class SessionRunner {
 
   /** Which of the session's own work runs on after its turn; empty when none or no runner holds it. */
   outlivingWorkOf(claudeSessionId: string): OutlivingSource[] {
-    return this.findSessionByClaudeId(claudeSessionId)?.outlivingWork ?? []
+    return this.findSessionByClaudeId(claudeSessionId)?.outlivingWork
+      ?? this.acpSessions.get(claudeSessionId)?.outlivingWork
+      ?? []
   }
 
   /** The model's turn is still running (no result yet); null when this server holds no runner for it. */

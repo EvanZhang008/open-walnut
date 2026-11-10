@@ -64,6 +64,8 @@ import type {
   AcpConfigOption,
   AcpMcpServer,
   AcpModelCatalog,
+  BackgroundTerminal,
+  FinishedTerminal,
   JournalRecord,
   WorkerStateSnapshot,
 } from './acp-worker/protocol.js'
@@ -107,6 +109,7 @@ import {
 import { CODEX_MODEL_PREFIX_ENV, codexPickForProvider, codexRawConfig, parseCodexBaseConfig, resolveCodexEngine } from './codex-engine-config.js'
 import { parseUsageLimitReset, usageLimitSentence } from './usage-limit-text.js'
 import type { UsageLimitFacts } from '../core/sessions/usage-limit-model.js'
+import type { OutlivingSource } from '../core/sessions/outliving-work.js'
 
 const BUNDLED_ADAPTER_ENTRIES: Partial<Record<SessionEngine, string>> = {
   codex: 'node_modules/@agentclientprotocol/codex-acp/dist/index.js',
@@ -731,6 +734,12 @@ export class AcpSession {
   private _mode: SessionMode
   private _active = false
   private _turnActive = false
+  /** Commands the last turn left running (direct Codex, `background-work`): the session is on the job. */
+  private _backgroundWork: BackgroundTerminal[] = []
+  /** Ended commands reported during a turn: the session is woken with them once that turn ends. */
+  private _pendingWake: { finished: FinishedTerminal[]; v: number } | null = null
+  /** Moves at every stop, stop of the session and detach: a wake from before it is no longer wanted. */
+  private _backgroundEpoch = 0
   /** Latest line consumed by this in-memory instance (survives reconnects). */
   private _seenV: number
   /** Last terminal offset durably committed to SessionRecord. */
@@ -824,6 +833,14 @@ export class AcpSession {
   /** The session runs on another host's daemon (AcpSessionConfig.host). */
   private get remote(): boolean { return this.host !== '__local__' }
   get activity(): 'processing' | 'idle' { return this._turnActive ? 'processing' : 'idle' }
+  /**
+   * The session's own work that runs on after its turn (core/sessions/outliving-work.ts): a command
+   * its last turn left running. Read by every place that asks the runner (sessionRunner.outlivingWorkOf):
+   * the task reads Working, the idle reap waits, a request is not settled by the turn's end.
+   */
+  get outlivingWork(): OutlivingSource[] {
+    return this._active && !this._turnActive && this._backgroundWork.length > 0 ? ['background'] : []
+  }
   get hasPendingPermission(): boolean { return this._pendingPermissions.size > 0 }
   /** True while we hold a live daemon connection and an established worker —
    * i.e. `activity === 'processing'` is trustworthy, not a stale flag. */
@@ -952,6 +969,7 @@ export class AcpSession {
     if (ev.ev === 'acp_state' && ev.state === 'dead') {
       this._active = false
       this._turnActive = false
+      this.dropBackgroundWork('worker-gone')
       this._pendingPermissions.clear()
       this.persistPendingPermission(true)
       this.cfg.onWorkerDead?.(this)
@@ -968,6 +986,7 @@ export class AcpSession {
     // Track turn/pending state from meta facts (worker-observed, authoritative).
     if (record.kind === 'meta') {
       const t = record.event.type
+      if (t === 'background-work') this.noteBackgroundWork(record.event, v)
       if (t === 'prompt-accepted' || t === 'steer-accepted') this.noteTaken(record.event.walnutMessageId)
       if (t === 'prompt-accepted') {
         const terminalAlreadyObserved = this._terminalCommands.has(record.event.commandId)
@@ -1008,6 +1027,9 @@ export class AcpSession {
         full.usageLimit = usageLimit
         this._turnLimitText = usageLimit.text ?? null
       }
+      // Its own command runs on (or ended, and its wake is on the way): the turn ended, the work did
+      // not, so the task stays in progress (server.ts session-result, as for a Claude background command).
+      if (name === 'session:result' && (this._backgroundWork.length > 0 || this._pendingWake)) full.detachedBgActive = true
       if (name === 'session:permission-request') {
         const requestId = full.requestId as string
         const options = (full.acpOptions as Array<{ optionId?: string; kind?: string; name?: string }>) ?? []
@@ -1052,8 +1074,90 @@ export class AcpSession {
 
     if (record.kind === 'meta'
       && (record.event.type === 'turn-ended' || record.event.type === 'turn-interrupted')) {
+      // The wake is queued before the turn's end moves the cursor past the record that told the
+      // end: a restart in between reads that record again instead of losing the wake.
+      this.firePendingWake()
       this.commitTerminal(v, record)
     }
+    // A status question is a turn of the provider's too: an end told at its end waits for it.
+    if (record.kind === 'meta' && record.event.type === 'control-ended' && !this._turnActive) this.firePendingWake()
+  }
+
+  private firePendingWake(): void {
+    const wake = this._pendingWake
+    this._pendingWake = null
+    if (wake) this.wakeForEndedWork(wake.finished, wake.v)
+  }
+
+  /**
+   * A `background-work` record: what of the session's own commands runs on after its turn, and
+   * which ended. An end wakes the session (core/sessions/background-work-wake.ts), once its turn
+   * is over; the last command gone with no news (a stop ended it) hands the task back as a
+   * turn's end would have.
+   */
+  private noteBackgroundWork(event: { running: BackgroundTerminal[]; finished: FinishedTerminal[] }, v: number): void {
+    const had = this._backgroundWork.length > 0
+    this._backgroundWork = Array.isArray(event.running) ? event.running : []
+    const finished = Array.isArray(event.finished) ? event.finished : []
+    // A record a restart reads again past the last commit is the same news: the wake's id is the record's.
+    if (finished.length && v > this._committedV) {
+      if (this._turnActive || this._selfReport) {
+        this._pendingWake = { finished: [...(this._pendingWake?.finished ?? []), ...finished], v }
+      } else {
+        this.wakeForEndedWork(finished, v)
+      }
+      return
+    }
+    if (had && this._backgroundWork.length === 0 && !this._turnActive && !this._selfReport && !this._pendingWake) this.handBackAfterBackgroundWork('background-work-gone')
+  }
+
+  /**
+   * Queue the wake, in order with the cursor's commits (ahead of any that would pass this record).
+   * A stop, a stop of the session or a detach after the end was told withdraws it: the epoch moved,
+   * and the queue refuses a row from before the latest stop (its stop fence, read when the end was told).
+   */
+  private wakeForEndedWork(finished: FinishedTerminal[], v: number): void {
+    const sessionId = this.trackingId()
+    const taskId = this.taskId || undefined
+    const epoch = this._backgroundEpoch
+    const wanted = () => epoch === this._backgroundEpoch && this._active
+    const fence = import('../core/sessions/session-stop.js').then(({ sessionStops }) => sessionStops.fence(sessionId))
+    fence.catch(() => {})
+    this._cursorCommit = this._cursorCommit.then(async () => {
+      if (!wanted()) return
+      const { wakeForEndedBackgroundWork } = await import('../core/sessions/background-work-wake.js')
+      await wakeForEndedBackgroundWork(sessionId, taskId, finished, `qm-bgend-${this.runtimeId}-${v}`, { stopFence: await fence, stillWanted: wanted })
+      log.session.info('acp: woken by its own background command ending', { sessionId, taskId, ended: finished.map((f) => f.processId) })
+    }).catch((error) => {
+      // Withdrawn by a stop: the stop handed the task back.
+      const withdrawn = (error as { name?: string })?.name === 'SendNoLongerWantedError'
+        || (error as { code?: string })?.code === 'SESSION_STOP_SUPERSEDED'
+      if (withdrawn || !wanted()) return
+      log.session.warn('acp: background-end wake failed', { sessionId, error: error instanceof Error ? error.message : String(error) })
+      // Nobody will carry on for it: the task is handed back as the turn's end would have.
+      this.handBackAfterBackgroundWork('background-wake-failed')
+    })
+  }
+
+  /** The turn's end skipped its hand-back while its own command ran (detachedBgActive): apply it now. */
+  private handBackAfterBackgroundWork(why: string): void {
+    const taskId = this.taskId
+    if (!taskId) return
+    const sessionId = this.trackingId()
+    void import('../core/phase.js').then(({ applySessionPhase }) =>
+      applySessionPhase(taskId, 'session:result', `acp-session:${why}`, { sessionId }),
+    ).catch((error) => {
+      log.session.warn('acp: hand-back after background work failed', { sessionId, taskId, error: error instanceof Error ? error.message : String(error) })
+    })
+  }
+
+  /** The worker is gone (or stopped), and every command it ran with it. */
+  private dropBackgroundWork(why: string): void {
+    const had = this._backgroundWork.length > 0 || this._pendingWake !== null
+    this._backgroundEpoch++
+    this._backgroundWork = []
+    this._pendingWake = null
+    if (had) this.handBackAfterBackgroundWork(why)
   }
 
   /**
@@ -2315,6 +2419,7 @@ export class AcpSession {
     this._models = state.models ?? snapshotAcpModels(state.sessionResponse)
     this._configOptions = state.configOptions ?? snapshotAcpConfigOptions(state.sessionResponse)
     this._turnActive = state.turnActive
+    this._backgroundWork = state.backgroundWork ?? []
     // Adopt EVERY worker-reported pending permission, not just the first —
     // codex can hold several outstanding requests (2026-08-10 incident:
     // perm-2 + perm-3 concurrently; the untracked one died unanswerable).
@@ -2543,6 +2648,9 @@ export class AcpSession {
    */
   async abortTurn(options: { hard?: boolean } = {}): Promise<void> {
     this._controlEpoch++
+    // A stop also withdraws a wake for a leftover command's end that is still on its way.
+    this._backgroundEpoch++
+    this._pendingWake = null
     if (this._selfReport) {
       await this.cancelSelfReport('self-report aborted')
       return
@@ -2686,6 +2794,7 @@ export class AcpSession {
     }
     this._active = false
     this._turnActive = false
+    this.dropBackgroundWork('session-stopped')
     this._pendingPermissions.clear()
     this.persistPendingPermission(true)
   }
@@ -2695,6 +2804,7 @@ export class AcpSession {
   /** Detach event handling without touching the worker (server shutdown path). */
   detach(): void {
     this._controlEpoch++
+    this._backgroundEpoch++
     if (this._selfReport) {
       this.settleSelfReport(this._selfReport.commandId, new Error('ACP session detached'))
     }

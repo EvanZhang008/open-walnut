@@ -122,6 +122,7 @@ const CALL_SITES: Record<string, number> = {
   'src/core/sessions/ask-withdraw.ts': 1,
   'src/core/sessions/app-state.ts': 1,
   'src/core/sessions/auto-recover-env.ts': 1,
+  'src/core/sessions/background-work-wake.ts': 1, // a Codex session's own leftover command ended
   'src/core/sessions/brief-refresh.ts': 1,
   'src/core/sessions/endpoint-wait.ts': 1,         // its one continue, as auto-continue
   'src/core/sessions/folder-gone.ts': 1,           // a new conversation's first line: a notice, then the rows that waited as stored
@@ -192,7 +193,7 @@ const SOURCE_SENDER: Record<string, 'person' | 'agent'> = {
   'routine-trigger': 'agent', 'routine-watcher': 'agent', 'router-runtime': 'agent', 'brief-refresh': 'agent', 'side-thread-digest': 'agent',
   'app-state': 'agent', subagent: 'agent', 'notification-fix': 'agent', 'session-start': 'agent',
   'api-agent': 'agent', 'board-reminder': 'agent', 'auto-continue': 'agent', 'hook:abc': 'agent',
-  'brand-new-source': 'agent', 'idle-compact': 'agent', 'context-compact': 'agent', 'context-recovery': 'agent', 'pr-watch': 'agent',
+  'brand-new-source': 'agent', 'background-work-ended': 'agent', 'idle-compact': 'agent', 'context-compact': 'agent', 'context-recovery': 'agent', 'pr-watch': 'agent',
   // Bus tags of emits that are attributed on their own (START_EMITTERS), not send sources a person types into.
   'web-ui': 'agent', 'subagent-runner': 'agent',
 };

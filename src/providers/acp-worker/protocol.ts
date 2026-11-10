@@ -292,6 +292,16 @@ export interface AcpConfigOption {
   options: AcpConfigOptionChoice[]
 }
 
+/** A command the session's turn left running (direct Codex: a background terminal, codex-app-server/background.ts). */
+export interface BackgroundTerminal { processId: string; command: string }
+/** One that ended after its turn did. */
+export interface FinishedTerminal extends BackgroundTerminal {
+  /** null: Codex never said how it ended (it only left the list). */
+  exitCode: number | null
+  /** The end of what it printed (OUTPUT_TAIL_CHARS). */
+  output: string
+}
+
 export interface WorkerStateSnapshot {
   providerSessionId: string | null
   adapterPid: number | null
@@ -308,6 +318,8 @@ export interface WorkerStateSnapshot {
   models: AcpModelCatalog
   /** Provider-neutral selectable session controls normalized from configOptions. */
   configOptions: AcpConfigOption[]
+  /** Commands the last turn left running; absent from a worker that predates it. */
+  backgroundWork?: BackgroundTerminal[]
   /** Last accepted commandId per op — reattaching callers use this to avoid blind retries. */
   lastAcceptedCommands: Record<string, string>
   journalOffset: number
@@ -546,6 +558,13 @@ export type JournalMetaEvent =
   | { type: 'resume-failed'; providerSessionId: string; reason: string }
   /** A direct Codex resume of a thread Codex has failed (not a lost thread): the start fails, the id is kept (worker.ts RESUME_GIVE_UP). */
   | { type: 'resume-error'; providerSessionId: string; reason: string }
+  /**
+   * What of the session's own commands runs on after its turn (`running`, the whole set) and
+   * which of them ended since the last such record (`finished`). Written at a turn's end ahead of
+   * its turn-ended, and when one ends; the server reads the task as working while any runs and
+   * wakes the session with what ended (acp-session.ts, core/sessions/background-work-wake.ts).
+   */
+  | { type: 'background-work'; running: BackgroundTerminal[]; finished: FinishedTerminal[] }
 
 /**
  * Spawn env for the worker (daemon side) and the adapter (worker side): base

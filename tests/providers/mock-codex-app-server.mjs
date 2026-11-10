@@ -34,6 +34,15 @@
  *   REJECT_SAME       reports its own input at the first steer (send the same words), then
  *                     ends and refuses that steer
  *   PLAN              completes a plan item ("1. Do it."), then the turn
+ *   BG [<ms>]         starts a command and ends the turn with it running, as a background
+ *                     terminal (thread/backgroundTerminals/list has it); <ms> (400) later it
+ *                     exits 0 and its item/completed comes under the ended turn's id, as real
+ *                     Codex 0.167 does (MOCK_BG_SILENT: it only leaves the list)
+ *   BG_HOLD           the same, but it runs until terminated (thread/backgroundTerminals/terminate)
+ *   BG_READ <pid>     background terminal <pid> exits inside this turn, then the turn reads it
+ *                     (a terminalInteraction after its end); says "read", ends
+ *   BG_PEEK <pid>     reads background terminal <pid> while it runs, then it exits 1 later in
+ *                     the same turn; says "peeked", ends
  * thread/compact/start runs a compaction turn; review/start runs a child turn (its own id,
  * rootTurnId = the answered id) that says "review: <instructions>", ended under the root id.
  * config/read gives MOCK_SANDBOX_WW (JSON) as the [sandbox_workspace_write] table.
@@ -81,6 +90,17 @@ const askClient = (method, params) => new Promise((resolve) => {
 
 let threadId = null
 let ghostOf = null
+/** Background terminals: processId -> { itemId, turnId, command, timer } */
+const bgTerms = new Map()
+let nextPid = 4242
+function endBackground(pid, exitCode, output) {
+  const b = bgTerms.get(pid)
+  if (!b) return
+  clearTimeout(b.timer)
+  bgTerms.delete(pid)
+  if (process.env.MOCK_BG_SILENT) return
+  notify('item/completed', { threadId, turnId: b.turnId, item: { type: 'commandExecution', id: b.itemId, command: b.command, cwd: '/tmp', processId: pid, status: 'completed', exitCode, aggregatedOutput: output, commandActions: [] } })
+}
 /** @type {null | { id: string, kind: string, steers: string[], end: (status: string, error?: object) => void, done: boolean }} */
 let turn = null
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -168,6 +188,36 @@ async function runTurn(t, text) {
       t.held = true
       setTimeout(() => finish('completed'), 3000)
       return
+    case 'BG': case 'BG_HOLD': {
+      const pid = String(nextPid++)
+      const itemId = `call_${t.id}`
+      const command = word === 'BG' ? 'make build' : 'make watch'
+      notify('item/started', { threadId, turnId: t.id, item: { type: 'commandExecution', id: itemId, command, cwd: '/tmp', processId: pid, status: 'inProgress', commandActions: [] } })
+      const b = { itemId, turnId: t.id, command, timer: null }
+      bgTerms.set(pid, b)
+      if (word === 'BG') b.timer = setTimeout(() => endBackground(pid, 0, 'compiling\nBUILD OK\n'), Number(arg) || 400)
+      message(t.id, `started ${pid}`)
+      finish('completed')
+      return
+    }
+    case 'BG_READ': {
+      // It exits, then the model polls it and reads how it ended, inside this turn.
+      endBackground(arg, 0, 'BUILD OK\n')
+      notify('item/commandExecution/terminalInteraction', { threadId, turnId: t.id, itemId: `read_${t.id}`, processId: arg, stdin: '' })
+      message(t.id, 'read')
+      finish('completed')
+      return
+    }
+    case 'BG_PEEK': {
+      // The model sees it still running; it fails later in the turn, unread.
+      notify('item/commandExecution/terminalInteraction', { threadId, turnId: t.id, itemId: `peek_${t.id}`, processId: arg, stdin: '' })
+      message(t.id, 'peeked')
+      await sleep(100)
+      endBackground(arg, 1, 'BUILD FAILED\n')
+      await sleep(50)
+      finish('completed')
+      return
+    }
     case 'PLAN': {
       const item = { type: 'plan', id: `plan_${t.id}`, text: '1. Do it.' }
       notify('item/started', { threadId, turnId: t.id, item: { ...item, text: '' } })
@@ -386,7 +436,11 @@ async function handle(msg) {
       else if (t && t.id === params.turnId && t.kind !== 'DEAF' && t.kind !== 'HANG_DEAF') setTimeout(() => t.end('interrupted'), 20)
       return
     }
-    case 'thread/backgroundTerminals/list': return send({ id, result: { data: [] } })
+    case 'thread/backgroundTerminals/list':
+      return send({ id, result: { data: [...bgTerms].map(([processId, b]) => ({ itemId: b.itemId, processId, command: b.command, cwd: '/tmp', osPid: null, cpuPercent: null, rssKb: null })), nextCursor: null } })
+    case 'thread/backgroundTerminals/terminate':
+      endBackground(String(params.processId), 143, 'Terminated\n')
+      return send({ id, result: {} })
     default: return send({ id, error: { code: -32601, message: `method not found: ${method}` } })
   }
 }

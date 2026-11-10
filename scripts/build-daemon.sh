@@ -85,6 +85,7 @@ SOURCES=(
   src/providers/codex-app-server/errors.ts
   src/providers/codex-app-server/transport.ts
   src/providers/codex-app-server/turn.ts
+  src/providers/codex-app-server/background.ts
   src/providers/codex-app-server/commands.ts
   src/core/agents/codex-slash-commands.ts
   src/providers/codex-app-server/thread-config.ts
