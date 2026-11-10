@@ -124,12 +124,14 @@ test('the sidebar opens Main and the leads; a lead\'s red is its threads, its ta
   // No "N open" pill (2026-11-03, the user: "remove xx open not needed").
   await expect(detail.getByTestId('org-detail-counts')).not.toContainText(' open')
   // Its threads first ("0 threads"), then the one user status's words (src/core/user-status.ts):
-  // the task not started waits; the question is in its Tasks, never a Needs you of the node.
+  // the task nobody started counts under its own Not started pill (2026-11-09), out of Waiting /
+  // snoozed; the question is in its Tasks, never a Needs you of the node.
   const counts = detail.getByTestId('org-detail-counts')
   await expect(counts.locator('> *').first()).toHaveAttribute('data-testid', 'org-pill-threads')
   await expect(counts.getByTestId('org-pill-threads')).toHaveText('0 threads')
   await expect(counts).not.toContainText('Needs you')
-  await expect(counts).toContainText('1 Waiting / snoozed')
+  await expect(counts).toContainText('1 Not started')
+  await expect(counts).not.toContainText('Waiting / snoozed')
   // A VP opens on its Threads (2026-11-04); its tasks' asks are in Tasks.
   await expect(detail.getByTestId('org-top')).toHaveAttribute('data-view', 'threads')
   await showTasks(detail)
