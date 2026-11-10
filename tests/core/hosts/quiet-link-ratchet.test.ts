@@ -56,6 +56,7 @@ const SENDERS: Record<string, { calls: number; kind: Kind; why: string }> = {
   'src/core/hosts/named-paths.ts': { calls: 4, kind: 'wake-recheck', why: 'placement\'s file reads only on a link already open, under a 4 s deadline; a lost one reads as cannot be asked' },
   'src/core/hosts/placement.ts': { calls: 2, kind: 'wake-recheck', why: 'a load read under a 4 s deadline; a lost one means no load figure' },
   'src/core/human-inbox/item-status.ts': { calls: 1, kind: 'wake-recheck', why: 'a session state read under 1.5 s; a lost one answers unavailable' },
+  'src/core/transcript-archive-sweep.ts': { calls: 2, kind: 'wake-recheck', why: 'a background history archive pass under its own timeout; a lost one is logged and the next pass runs it again' },
   'src/core/net/net-mac.ts': { calls: 5, kind: 'wake-recheck', why: 'best-effort host network config pushes and status reads; a lost push is logged' },
   'src/core/net/net-seen.ts': { calls: 2, kind: 'wake-recheck', why: 'status reads under 10 s; a lost one reads as no answer' },
   'src/core/offline-handover.ts': { calls: 1, kind: 'wake-recheck', why: 'a copy pushed after a drain, fire and forget; a lost one only delays it' },
@@ -117,7 +118,8 @@ const SENDERS: Record<string, { calls: number; kind: Kind; why: string }> = {
   'src/core/plugin-jobs/index.ts': { calls: 2, kind: 'no-send', why: 'only dials: the job set rides the connect' },
   'src/core/routines/clock-placement.ts': { calls: 2, kind: 'no-send', why: 'asks the pool whether a link is up' },
   'src/core/session-snapshot-apply.ts': { calls: 2, kind: 'no-send', why: 'reads when a pooled link\'s daemon started' },
-  'src/providers/claude-code-session.ts': { calls: 5, kind: 'no-send', why: 'reads capability flags of pooled links (the local daemon\'s and a mount host\'s MCP)' },
+  'src/core/health-monitor/auto-fix.ts': { calls: 2, kind: 'no-send', why: 'a health fix reads whether the link is up and redials it; it sends no work on it' },
+  'src/providers/claude-code-session.ts': { calls: 7, kind: 'no-send', why: 'reads capability flags of pooled links (the local daemon\'s and a mount host\'s MCP)' },
   'src/web/local-daemon-lane.ts': { calls: 2, kind: 'no-send', why: 'keeps the loopback link dialled' },
   'src/web/server.ts': { calls: 1, kind: 'no-send', why: 'the host warmup dials to fill the pool' },
 }
