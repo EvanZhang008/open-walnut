@@ -36,7 +36,11 @@ final class TeamStatusModelTests: XCTestCase {
         XCTAssertEqual(b.waiting.map(\.id), ["c", "a", "d"])
         XCTAssertEqual(b.stuck, 1)
         XCTAssertEqual(b.notStarted, 1)
-        XCTAssertEqual(TeamStatusModel.countsLine(b), "1 Working, 3 Waiting / snoozed (1 with nothing to wake it, 1 not started), 1 Completed in the last 7 days.")
+        // Not started is its own category, never part of Waiting (the web's countsLine, 2026-11-09).
+        XCTAssertEqual(TeamStatusModel.countsLine(b), "1 Working, 2 Waiting / snoozed (1 with nothing to wake it), 1 Not started, 1 Completed in the last 7 days.")
+        XCTAssertEqual(TeamStatusChip.waiting.rows(b).map(\.id), ["c", "a"])
+        XCTAssertEqual(TeamStatusChip.notStarted.rows(b).map(\.id), ["d"])
+        XCTAssertEqual(TeamStatusChip.allCases.map { $0.count(b) }, [1, 1, 2, 1, 1])
         XCTAssertTrue(b.hasTeam)
         // On the leader's own page its own row is left out, and its team still shows.
         let mine = TeamStatusModel.build(ownerId: "lead", tasks: tasks, includeOwner: false, now: Self.now)
@@ -65,7 +69,8 @@ final class TeamStatusModelTests: XCTestCase {
         XCTAssertEqual(UserState.read.shown, .needs)
         XCTAssertEqual(UserState.read.label, "Needs you")
         XCTAssertFalse(UserState.allCases.map(\.label).contains("To read"))
-        XCTAssertEqual(TeamStatusSection.emptyText(.read), TeamStatusSection.emptyText(.needs))
+        // The chips: the four groups with Not started after Waiting, and no To read.
+        XCTAssertEqual(TeamStatusChip.allCases.map(\.label), ["Needs you", "Working", "Waiting / snoozed", "Not started", "Completed"])
     }
 
     func testToReadFromTheServerAndFromAnOlderOneIsNeedsYou() {
@@ -371,5 +376,24 @@ final class TeamStatusModelTests: XCTestCase {
     func testLiveActivityLineForAnMcpToolAndALongTurn() {
         let a = WalnutLiveActivity(kind: "tool", tool: "mcp__slack__post", since: "2026-10-26T05:34:20Z", turnStartedAt: "2026-10-26T03:30:00Z")
         XCTAssertEqual(LiveActivityFormat.line(a, now: Self.now).text, "slack: post · 40 s · turn 2 h 5 min")
+    }
+
+    /// A not started task that is snoozed sleeps under Waiting / snoozed; Not started counts only
+    /// the ones nobody started and nobody put aside (the web's `isNotStartedStatus`).
+    func testASnoozedTaskNobodyStartedIsWaitingNotNotStarted() {
+        var snoozed = WalnutUserStatus(state: "waiting", kind: "not-started", waitingOn: "Not started yet")
+        snoozed.snoozed = WalnutSnooze(until: "2026-11-20")
+        let tasks = [
+            task("lead", parent: nil, phase: "IN_PROGRESS", user: .init(state: "working")),
+            task("ns", phase: "TODO", user: .init(state: "waiting", kind: "not-started", waitingOn: "Not started yet")),
+            task("zz", phase: "TODO", user: snoozed),
+        ]
+        let b = TeamStatusModel.build(ownerId: "lead", tasks: tasks, now: Self.now)
+        XCTAssertEqual(b.notStartedRows.map(\.id), ["ns"])
+        XCTAssertEqual(b.waitingRows.map(\.id), ["zz"])
+        XCTAssertEqual(TeamStatusModel.countsLine(b), "1 Working, 1 Waiting / snoozed, 1 Not started, 0 Completed in the last 7 days.")
+        // A filter an older build kept still reads.
+        XCTAssertEqual(TeamStatusChip(rawValue: "waiting"), .waiting)
+        XCTAssertEqual(TeamStatusChip(rawValue: "notstarted"), .notStarted)
     }
 }

@@ -17,9 +17,10 @@ enum OrgNodeTasksModel {
         }
     }
 
-    /// The status groups, in the home panel's order.
+    /// The status groups, in the home panel's order. Not started is its own group after Waiting /
+    /// snoozed (the web's `org-task-tabs.ts`, 2026-11-09).
     enum Group: String, CaseIterable, Identifiable {
-        case watching, needs, working, waiting, done
+        case watching, needs, working, waiting, notStarted = "notstarted", done
         var id: String { rawValue }
         var label: String {
             switch self {
@@ -27,6 +28,7 @@ enum OrgNodeTasksModel {
             case .needs: return "Needs you"
             case .working: return "Working"
             case .waiting: return "Waiting / snoozed"
+            case .notStarted: return TeamStatusModel.notStartedLabel
             case .done: return "Completed"
             }
         }
@@ -95,7 +97,7 @@ enum OrgNodeTasksModel {
             switch state {
             case .needs, .read: rows[.needs, default: []].append(t)
             case .working: rows[.working, default: []].append(t)
-            case .waiting: rows[.waiting, default: []].append(t)
+            case .waiting: rows[TeamStatusModel.isNotStarted(t.userStatus) ? .notStarted : .waiting, default: []].append(t)
             case .done: rows[.done, default: []].append(t)
             }
         }

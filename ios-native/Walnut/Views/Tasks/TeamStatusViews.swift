@@ -146,8 +146,8 @@ struct TeamStatusSection: View {
     @Environment(TasksStore.self) private var tasks
     /// The state chip picked (nil = All open), kept across a relaunch (`ViewMemory`).
     @AppStorage(ViewMemory.key("team", "filter"), store: AppPrefs.defaults) private var filterRaw = ""
-    private var filter: UserState? {
-        get { UserState(rawValue: filterRaw) }
+    private var filter: TeamStatusChip? {
+        get { TeamStatusChip(rawValue: filterRaw) }
         nonmutating set { filterRaw = newValue?.rawValue ?? "" }
     }
     @State private var teamBusy = false
@@ -179,7 +179,7 @@ struct TeamStatusSection: View {
                 chips(board)
                     // A thumb that lands just below a chip filters, it does not open the first row.
                     .padding(.bottom, 6)
-                let rows = filter.map { board.rows($0) } ?? board.open
+                let rows = filter.map { $0.rows(board) } ?? board.open
                 if rows.isEmpty {
                     Text(Self.emptyText(filter))
                         .font(.subheadline)
@@ -253,12 +253,13 @@ struct TeamStatusSection: View {
         return (stop ? "Could not stop the team: " : "Could not resume the team: ") + error.localizedDescription
     }
 
-    static func emptyText(_ filter: UserState?) -> String {
+    static func emptyText(_ filter: TeamStatusChip?) -> String {
         switch filter {
         case nil: return "No open tasks on this team."
-        case .needs, .read: return "Nothing needs you right now."
+        case .needs: return "Nothing needs you right now."
         case .working: return "Nothing is working right now."
         case .waiting: return "Nothing is waiting right now."
+        case .notStarted: return "Every task on this team has started."
         case .done: return "Nothing was done in the last \(TeamStatusModel.doneWindowDays) days."
         }
     }
@@ -288,8 +289,8 @@ struct TeamStatusSection: View {
         // Wrapped onto a second line, never scrolled off the screen's edge.
         OrgChipFlow(spacing: 0) {
             chip("All open \(b.open.count)", on: filter == nil) { filter = nil }
-            ForEach(UserState.groups, id: \.self) { s in
-                chip("\(b.counts[s]) \(s.label)", on: filter == s, dot: UserStatePill.color(s)) { filter = s }
+            ForEach(TeamStatusChip.allCases, id: \.self) { c in
+                chip("\(c.count(b)) \(c.label)", on: filter == c, dot: c.dot) { filter = c }
             }
         }
     }
@@ -475,6 +476,47 @@ private struct RowTime: View {
             Text(verb.map { "\($0) \(ago == "now" ? "just now" : ago)" } ?? ago)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// The chips over a team's rows, in order: each shown group, with Not started after Waiting /
+/// snoozed (the web's `STATUS_CHIPS`). The raw values are the kept filter's words, so a filter an
+/// older build kept ("waiting", "needs") still reads.
+enum TeamStatusChip: String, CaseIterable {
+    case needs, working, waiting, notStarted = "notstarted", done
+
+    var label: String {
+        switch self {
+        case .needs: return UserState.needs.label
+        case .working: return UserState.working.label
+        case .waiting: return UserState.waiting.label
+        case .notStarted: return TeamStatusModel.notStartedLabel
+        case .done: return UserState.done.label
+        }
+    }
+
+    /// A chip's rows: Waiting / snoozed leaves the not started ones to their own chip.
+    func rows(_ b: TeamStatusBoard) -> [TeamStatusRow] {
+        switch self {
+        case .needs: return b.needs
+        case .working: return b.working
+        case .waiting: return b.waitingRows
+        case .notStarted: return b.notStartedRows
+        case .done: return b.done
+        }
+    }
+
+    func count(_ b: TeamStatusBoard) -> Int { rows(b).count }
+
+    /// Not started wears no state colour of its own: a plain grey dot.
+    var dot: Color {
+        switch self {
+        case .needs: return UserStatePill.color(.needs)
+        case .working: return UserStatePill.color(.working)
+        case .waiting: return UserStatePill.color(.waiting)
+        case .notStarted: return Color(.tertiaryLabel)
+        case .done: return UserStatePill.color(.done)
         }
     }
 }

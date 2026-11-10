@@ -79,7 +79,11 @@ struct TeamStatusBoard: Equatable {
     var waiting: [TeamStatusRow] = []
     var done: [TeamStatusRow] = []
     var stuck: Int { waiting.filter(\.isStuck).count }
-    var notStarted: Int { waiting.filter { $0.status?.kind == "not-started" }.count }
+    /// Waiting rows nobody started: a category of their own (`TeamStatusChip.notStarted`).
+    var notStartedRows: [TeamStatusRow] { waiting.filter { TeamStatusModel.isNotStarted($0.status) } }
+    var notStarted: Int { notStartedRows.count }
+    /// Waiting / snoozed without the not started ones.
+    var waitingRows: [TeamStatusRow] { waiting.filter { !TeamStatusModel.isNotStarted($0.status) } }
     var open: [TeamStatusRow] { needs + working + waiting }
     /// The lead has a team to show (one subtask at least, open or recently done).
     /// Whether the owner's own row is among the rows (`build`'s `includeOwner`).
@@ -187,13 +191,23 @@ enum TeamStatusModel {
         return board
     }
 
-    /// "10 Working, 16 Waiting / snoozed (1 with nothing to wake it, 5 not started), 12 Completed in
-    /// the last 7 days." To read tasks are Needs you, named in the line above it, never here.
+    /// "10 Working, 11 Waiting / snoozed (1 with nothing to wake it), 5 Not started, 12 Completed in
+    /// the last 7 days." To read tasks are Needs you, named in the line above it, never here. Not
+    /// started is its own category, never a part of Waiting (the web's `countsLine`).
     static func countsLine(_ b: TeamStatusBoard) -> String {
-        let extra = [b.stuck > 0 ? "\(b.stuck) with nothing to wake it" : nil, b.notStarted > 0 ? "\(b.notStarted) not started" : nil]
-            .compactMap { $0 }.joined(separator: ", ")
-        let waiting = "\(b.counts.waiting) \(UserState.waiting.label)" + (extra.isEmpty ? "" : " (\(extra))")
-        return "\(b.counts.working) \(UserState.working.label), \(waiting), \(b.counts.done) \(UserState.done.label) in the last \(doneWindowDays) days."
+        let extra = b.stuck > 0 ? " (\(b.stuck) with nothing to wake it)" : ""
+        let waiting = "\(b.counts.waiting - b.notStarted) \(UserState.waiting.label)\(extra)"
+        let notStarted = b.notStarted > 0 ? ", \(b.notStarted) \(notStartedLabel)" : ""
+        return "\(b.counts.working) \(UserState.working.label), \(waiting)\(notStarted), \(b.counts.done) \(UserState.done.label) in the last \(doneWindowDays) days."
+    }
+
+    /// Not started: a task nobody started (never run, marked in progress with no session, a start
+    /// that failed) and not snoozed, the web's `isNotStartedStatus` (2026-11-09, the owner: it is
+    /// "completeli differnet" from wait and snooze). A snoozed one sleeps under Waiting / snoozed.
+    static let notStartedLabel = "Not started"
+    static func isNotStarted(_ s: WalnutUserStatus?) -> Bool {
+        guard let s else { return false }
+        return s.state == UserState.waiting.rawValue && s.kind == "not-started" && s.snoozed == nil
     }
 
     /// An agent's sentence (or a title) as a clause inside other words: no closing period,

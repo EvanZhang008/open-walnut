@@ -55,12 +55,16 @@ final class OrgNodeTasksModelTests: XCTestCase {
             task("n", user: .init(state: "needs", ask: "Approve?")),
             task("r", user: .init(state: "working")),
             task("z", phase: "WAITING", user: .init(state: "waiting", kind: "time")),
+            task("ns", phase: "TODO", user: .init(state: "waiting", kind: "not-started", waitingOn: "Not started yet")),
             task("d", phase: "COMPLETE", status: "done", completed: "2026-11-04T01:00:00Z"),
         ]
         let s = OrgNodeTasksModel.statusSections(rows)
-        XCTAssertEqual(s.map(\.id), ["watching", "needs", "working", "waiting", "done"])
+        // Not started is its own group after Waiting / snoozed (2026-11-09).
+        XCTAssertEqual(s.map(\.id), ["watching", "needs", "working", "waiting", "notstarted", "done"])
         XCTAssertEqual(s.first?.rows.map(\.id), ["w"])
-        XCTAssertEqual(s.map(\.openByDefault), [true, true, true, false, false])
+        XCTAssertEqual(s.first { $0.id == "waiting" }?.rows.map(\.id), ["z"])
+        XCTAssertEqual(s.first { $0.id == "notstarted" }?.title, "Not started")
+        XCTAssertEqual(s.map(\.openByDefault), [true, true, true, false, false, false])
     }
 
     func testPinGroupsFollowTheTierOrderThenNotPinned() {
