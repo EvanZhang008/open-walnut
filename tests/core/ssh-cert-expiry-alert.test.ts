@@ -100,11 +100,13 @@ describe('the SSH certificate letter', () => {
   })
 
   it('past the expiry, a fresh sign-in that still works archives the letter (the host needs no certificate); a host that does not answer is asked again', async () => {
-    signIn = { ok: false, unknown: true }
     const alert = createCertExpiryAlert(deps())
-    clock = EXPIRES + 60_000
+    clock = EXPIRES - HOUR
     await alert.check()
     expect(sent).toHaveLength(1)
+    signIn = { ok: false, unknown: true }
+    clock = EXPIRES + 60_000
+    await alert.check()
     expect(turns).toHaveLength(0)
     expect(archived).toHaveLength(0)
     signIn = { ok: true }
@@ -115,6 +117,25 @@ describe('the SSH certificate letter', () => {
     await alert.check()
     expect(sent).toHaveLength(1)
     expect(await alert.joinLetter(['dev'])).toBeNull()
+  })
+
+  it('first seen past the expiry: a fresh sign-in first, then the letter that it ran out (never a warning for a time gone); unknown waits, working sends none', async () => {
+    signIn = { ok: false, unknown: true }
+    const alert = createCertExpiryAlert(deps())
+    clock = EXPIRES + 60_000
+    await alert.check()
+    expect(sent).toHaveLength(0)
+    signIn = { ok: false, error: 'Permission denied (publickey).' }
+    await alert.check()
+    await alert.check()
+    expect(sent).toHaveLength(1)
+    expect(sent[0]!.subject).toBe('SSH certificate for Dev box and Build host expired at 2026-11-04 15:52 UTC')
+    expect(sent[0]!.markdown).toContain('Permission denied (publickey).')
+    expect(turns).toHaveLength(0)
+    expect((await alert.episode())?.expiredTold).toBe(true)
+    // The sign-in alert joins it, with no second expired turn.
+    expect(await alert.joinLetter(['dev'], 'denied')).toBe('letter-1')
+    expect(turns).toHaveLength(0)
   })
 
   it('a step that fails (the turn could not be written) keeps the clock going, and the next check adds the turn', async () => {

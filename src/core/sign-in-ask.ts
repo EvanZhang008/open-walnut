@@ -15,8 +15,9 @@
  *   - otherwise every task's sign-in ask folds into the first one asked, whatever team it is in.
  *
  * The checker's file (SignInStateFile) is also how an outside reminder owns telling the user about
- * sign-in: written fresh with `owns: true`, Walnut's certificate letter and its sign-in failure
- * letter step aside (readSignInOwner); stale or removed, they speak again.
+ * sign-in: written fresh with `owns: true`, Walnut's warning ahead of a certificate's expiry steps
+ * aside (readSignInOwner); once sign-in is broken, Walnut's letter steps aside only for the owner's
+ * own open letter (readSignInOwnerLetter); stale or removed, they speak again.
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -119,6 +120,25 @@ async function freshStateFile(nowMs: number, dir: string): Promise<{ said: SignI
 export async function readSignInOwner(nowMs = Date.now(), dir = path.join(WALNUT_HOME, 'local')): Promise<{ by: string } | null> {
   const fresh = await freshStateFile(nowMs, dir);
   return fresh?.said.owns === true ? { by: fresh.by ?? 'the sign-in check' } : null;
+}
+
+/**
+ * The outside reminder that has its OWN open letter asking the user to sign in now (its file fresh,
+ * `owns: true`, `ok: false`, a `letterId` still before the user), or null. Once sign-in is broken
+ * (a login failure, a certificate past its expiry) only that holds Walnut's sign-in letter back:
+ * owning the reminder is not telling the user. 2026-11-10: the sign-in plugin kept `owns: true`
+ * fresh, pushed a heads-up two hours before the certificate expired, and wrote `ok: false` with no
+ * letter after it; Walnut stepped aside, and the inbox said nothing while every host refused the
+ * sign-in for half an hour.
+ */
+export async function readSignInOwnerLetter(
+  nowMs = Date.now(), dir = path.join(WALNUT_HOME, 'local'), isOpen: (letterId: string) => Promise<boolean> = letterOpen,
+): Promise<{ by: string; letterId: string } | null> {
+  const fresh = await freshStateFile(nowMs, dir);
+  if (fresh?.said.owns !== true || fresh.said.ok !== false) return null;
+  const letterId = typeof fresh.said.letterId === 'string' ? fresh.said.letterId.trim() : '';
+  if (!letterId || !(await isOpen(letterId))) return null;
+  return { by: fresh.by ?? 'the sign-in check', letterId };
 }
 
 /** Whether a letter is still before the user (not archived); a letter that cannot be read counts as open. */

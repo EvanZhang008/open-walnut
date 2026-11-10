@@ -2,7 +2,8 @@
  * "Your SSH certificate for <hosts> expires at <time>": this machine's SSH certificate for remote
  * hosts runs out soon (hosts/ssh-cert-expiry-alert.ts). Renewing it needs the user's own hand, so
  * the letter goes out a few hours ahead; when it has run out and a fresh sign-in fails, the same
- * letter gets one more turn (sshCertExpiredTurn), so the whole story stays in one thread. The next
+ * letter gets one more turn (sshCertExpiredTurn), so the whole story stays in one thread; a letter
+ * first written past the expiry (`expired`) says it ran out from the start. The next
  * step is the user's own words from config `ssh_login_hint`, inserted as given.
  */
 import type { ByLang, LetterLang } from './languages.js';
@@ -16,6 +17,13 @@ export interface SshCertExpiryParams {
   now: number;
   /** config `ssh_login_hint`, as the user wrote it. */
   hint?: string;
+  /**
+   * First written past the expiry, after a fresh sign-in was refused (no warning went out ahead:
+   * another reminder held it, or the server was down): the letter says it ran out.
+   */
+  expired?: boolean;
+  /** With `expired`: what SSH said. */
+  error?: string;
 }
 
 interface Words {
@@ -24,6 +32,7 @@ interface Words {
   names: (labels: string[]) => string;
   inAbout: (minutes: number) => string;
   subject: (names: string, at: string) => string;
+  expiredSubject: (names: string, at: string) => string;
   soon: (named: string, at: string, inWords: string, step: string) => string;
   why: string;
   closes: string;
@@ -38,6 +47,7 @@ const WORDS: ByLang<Words> = {
     names: (l) => (l.length === 2 ? `${l[0]} and ${l[1]}` : `${l[0]} and ${l.length - 1} more hosts`),
     inAbout: (m) => (m < 60 ? `in about ${Math.max(1, m)} minutes` : `in about ${Math.round(m / 60)} ${Math.round(m / 60) === 1 ? 'hour' : 'hours'}`),
     subject: (names, at) => `SSH certificate for ${names} expires at ${at}`,
+    expiredSubject: (names, at) => `SSH certificate for ${names} expired at ${at}`,
     soon: (named, at, inWords, step) => `This machine's SSH certificate for ${named} expires at ${at} (${inWords}). After that, new sessions and tests there cannot sign in. To keep them working, ${step} before then.`,
     why: 'Walnut cannot renew it for you: it needs your own sign-in.',
     closes: 'This letter archives itself once a renewed certificate is in place.',
@@ -50,6 +60,7 @@ const WORDS: ByLang<Words> = {
     names: (l) => (l.length === 2 ? `${l[0]} 和 ${l[1]}` : `${l[0]} 等 ${l.length} 台主机`),
     inAbout: (m) => (m < 60 ? `大约 ${Math.max(1, m)} 分钟后` : `大约 ${Math.round(m / 60)} 小时后`),
     subject: (names, at) => `${names} 的 SSH 证书将于 ${at} 过期`,
+    expiredSubject: (names, at) => `${names} 的 SSH 证书已于 ${at} 过期`,
     soon: (named, at, inWords, step) => `这台机器登录 ${named} 用的 SSH 证书将于 ${at} 过期（${inWords}）。过期后，那里新开的会话和测试都无法登录。为了不中断，请在此之前完成：${step}。`,
     why: 'Walnut 无法替你续期：这需要你本人登录。',
     closes: '续期后的新证书就位后，这封信会自动归档。',
@@ -88,9 +99,16 @@ export const SSH_CERT_EXPIRY = letterKind<SshCertExpiryParams>({
   type: 'review',
   callers: ['src/core/hosts/ssh-cert-expiry-alert.ts'],
   marked: true,
-  render: (lang, { hosts, expiresAt, now, hint }) => {
+  render: (lang, { hosts, expiresAt, now, hint, expired, error }) => {
     const w = WORDS[lang];
     const at = certTimeWords(expiresAt);
+    if (expired) {
+      const subject = w.expiredSubject(named(w, hosts, false), at);
+      const lines = [w.expired(named(w, hosts, true), at, stepOf(hint, w.genericStep)), w.why];
+      if (error) lines.push(`${w.sshSaid} ${error.replace(/\s+/g, ' ').slice(0, 300)}`);
+      lines.push(w.closes);
+      return { subject: subject.length > 200 ? `${subject.slice(0, 199)}…` : subject, markdown: lines.join('\n\n') };
+    }
     const subject = w.subject(named(w, hosts, false), at);
     const minutes = Math.round((expiresAt - now) / 60_000);
     const markdown = [w.soon(named(w, hosts, true), at, w.inAbout(minutes), stepOf(hint, w.genericStep)), w.why, w.closes].join('\n\n');
@@ -99,6 +117,7 @@ export const SSH_CERT_EXPIRY = letterKind<SshCertExpiryParams>({
   samples: [
     { hosts: ['Dev box'], expiresAt: Date.UTC(2026, 10, 4, 15, 52), now: Date.UTC(2026, 10, 4, 12, 50), hint: 'run your login command' },
     { hosts: ['Dev box', 'Build host', 'GPU box'], expiresAt: Date.UTC(2026, 10, 4, 15, 52), now: Date.UTC(2026, 10, 4, 15, 20) },
+    { hosts: ['Dev box', 'Build host'], expiresAt: Date.UTC(2026, 10, 10, 16, 4), now: Date.UTC(2026, 10, 10, 16, 5), expired: true, error: 'Permission denied (publickey).' },
   ],
   stillNeeded: { none: 'ssh-cert-expiry-alert.ts archives it itself once a renewed certificate is in place, or its hosts left Settings' },
 });

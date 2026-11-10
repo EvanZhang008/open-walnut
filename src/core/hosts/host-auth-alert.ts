@@ -144,8 +144,10 @@ export interface HostAuthAlertDeps {
    */
   joinLetter?: (hosts: string[], error?: string) => Promise<string | null>
   /**
-   * An outside reminder owns telling the user about sign-in now (sign-in-ask.ts readSignInOwner):
-   * a login failure sends no letter while it does, and does once it stops (stale, removed). A host
+   * An outside reminder that owns sign-in and has its OWN open letter asking the user to sign in
+   * now (sign-in-ask.ts readSignInOwnerLetter): a login failure sends no letter while that letter is
+   * before the user, and does once it is not (archived, the owner stale or removed). Owning the
+   * reminder alone holds nothing back here: a failing sign-in is always in the inbox, once. A host
    * key or account failure is not a sign-in and always gets its letter.
    */
   signInOwner?: () => Promise<{ by: string } | null>
@@ -163,6 +165,11 @@ export interface HostAuthAlert {
   check: () => Promise<void>
   /** The open episodes' letter ids (sent ones only). */
   openLetterIds: () => Promise<string[]>
+  /**
+   * Its own sent login letter (not one joined to the certificate letter) naming one of `hosts`, or
+   * null: the certificate alert sends no second letter for the same expiry.
+   */
+  loginLetterFor: (hosts: string[]) => Promise<string | null>
   /** Off: no new letter; a host connecting still archives one already sent. Test seam for the grace too. */
   configure: (opts: { enabled?: boolean; graceMs?: number }) => void
   /**
@@ -300,7 +307,7 @@ export function createHostAuthAlert(deps: HostAuthAlertDeps): HostAuthAlert {
         if (!due) { next = Math.min(next, ...hosts.map(([, f]) => f.since + graceMs)); continue }
         const owner = key === 'login' ? await deps.signInOwner?.().catch(() => null) : null
         if (owner) {
-          if (heldBy !== owner.by) log.session.info('host sign-in failed: no letter, another reminder owns sign-in', { by: owner.by, hosts: hosts.map(([h]) => h) })
+          if (heldBy !== owner.by) log.session.info('host sign-in failed: no letter, the sign-in owner\'s own letter asks already', { by: owner.by, hosts: hosts.map(([h]) => h) })
           heldBy = owner.by
           next = Math.min(next, now() + OWNER_RECHECK_MS)
           continue
@@ -369,6 +376,11 @@ export function createHostAuthAlert(deps: HostAuthAlertDeps): HostAuthAlert {
     observe,
     check,
     openLetterIds: async () => { await chain; return [...episodes.values()].flatMap((e) => (e.letterId ? [e.letterId] : [])) },
+    loginLetterFor: async (hosts) => {
+      await chain
+      const ep = episodes.get('login')
+      return ep?.letterId && !ep.joined && ep.hosts.some((h) => hosts.includes(h)) ? ep.letterId : null
+    },
     unjoin: (letterId) => serial(async () => {
       await loaded
       const ep = [...episodes.values()].find((e) => e.joined && e.letterId === letterId)
@@ -425,7 +437,7 @@ export async function startHostAuthAlert(opts: { knownHosts: () => Set<string>; 
       const { runningCertExpiryAlert } = await import('./ssh-cert-expiry-alert.js')
       return (await runningCertExpiryAlert()?.joinLetter(hosts, error)) ?? null
     },
-    signInOwner: async () => (await import('../sign-in-ask.js')).readSignInOwner(),
+    signInOwner: async () => (await import('../sign-in-ask.js')).readSignInOwnerLetter(),
     ...(process.env.WALNUT_HOST_SIGN_IN_LETTER_GRACE_MS && Number.isFinite(graceEnv) && graceEnv >= 0 ? { graceMs: graceEnv } : {}),
   })
   alert.configure({ enabled: opts.enabled !== false && process.env.WALNUT_HOST_SIGN_IN_LETTER !== '0' })

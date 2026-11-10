@@ -93,12 +93,20 @@ export interface CertExpiryAlertDeps {
    */
   onLetterClosed?: (letterId: string) => Promise<void>
   /**
-   * Another reminder owns the certificate (certLetterHandedOff: config `ssh_cert_letter: false`, or
-   * an outside reminder's fresh `owns: true` in local/sign-in-state.json): no letter here, an open
-   * one is archived. Read at every check, so it takes effect without a restart, and the letter
+   * Another reminder owns the certificate (certLetterHandedOff): no letter here, an open one is
+   * archived. `phase` says which letter: `ahead`, the warning before the expiry (config
+   * `ssh_cert_letter: false`, or an outside reminder's fresh `owns: true` in
+   * local/sign-in-state.json), or `expired`, the certificate past its expiry (the config switch, or
+   * that owner's OWN open letter asking the user to sign in: owning the reminder alone does not tell
+   * the user it ran out). Read at every check, so it takes effect without a restart, and the letter
    * comes back once the owner stops.
    */
-  handedOff?: () => Promise<boolean>
+  handedOff?: (phase: 'ahead' | 'expired') => Promise<boolean>
+  /**
+   * The sign-in failure letter (host-auth-alert.ts) already tells the user a login of these hosts
+   * stopped working: a certificate first seen past its expiry then sends no second letter.
+   */
+  loginLetterOpen?: (hosts: string[]) => Promise<boolean>
   language?: () => Promise<LetterLang>
   statePath?: string
   warnAheadMs?: number
@@ -172,7 +180,7 @@ export function createCertExpiryAlert(deps: CertExpiryAlertDeps): CertExpiryAler
 
   const lang = async (): Promise<LetterLang> => (await deps.language?.().catch(() => 'en' as const)) ?? 'en'
   const hint = async (): Promise<string | undefined> => deps.loginHint().catch(() => undefined)
-  const handedOff = async (): Promise<boolean> => (await deps.handedOff?.().catch(() => false)) ?? false
+  const handedOff = async (phase: 'ahead' | 'expired'): Promise<boolean> => (await deps.handedOff?.(phase).catch(() => false)) ?? false
 
   async function close(why: string): Promise<void> {
     const ep = episode!
@@ -198,14 +206,20 @@ export function createCertExpiryAlert(deps: CertExpiryAlertDeps): CertExpiryAler
     log.session.warn('ssh certificate expired: turn added to its letter', { letterId: ep.letterId, hosts: ep.hosts })
   }
 
-  async function send(): Promise<void> {
+  /**
+   * The letter: the warning before the expiry, or (first sent past it, after a refused fresh
+   * sign-in: `expired`) the letter that it ran out, which needs no expired turn after it.
+   */
+  async function send(expired?: { error?: string }): Promise<void> {
     const ep = episode!
     const { subject, markdown } = SSH_CERT_EXPIRY.render(await lang(), {
       hosts: ep.labels.length ? ep.labels : ep.hosts, expiresAt: ep.expiresAt, now: now(), hint: await hint(),
+      ...(expired ? { expired: true, ...(expired.error ? { error: expired.error } : {}) } : {}),
     })
     ep.letterId = await deps.send({ subject, markdown, opKey: ep.opKey })
+    if (expired) ep.expiredTold = true
     await save()
-    log.session.warn('ssh certificate expires soon: letter sent', { letterId: ep.letterId, hosts: ep.hosts, expiresAt: new Date(ep.expiresAt).toISOString() })
+    log.session.warn(expired ? 'ssh certificate expired: letter sent' : 'ssh certificate expires soon: letter sent', { letterId: ep.letterId, hosts: ep.hosts, expiresAt: new Date(ep.expiresAt).toISOString() })
   }
 
   function check(): Promise<void> {
@@ -220,7 +234,10 @@ export function createCertExpiryAlert(deps: CertExpiryAlertDeps): CertExpiryAler
 
   async function checkOnce(): Promise<void> {
     await loaded
-    if (await handedOff()) {
+    // Held in both phases (the config switch, or an owner's own open letter): no host is read.
+    // The warning ahead alone may be an owner's; without an episode the hosts are read first, so
+    // the check knows which of the two it is in.
+    if (await handedOff('expired') || (episode && now() < episode.expiresAt && await handedOff('ahead'))) {
       if (episode) await close('another reminder owns the certificate')
       arm(CHECK_EVERY_MS)
       return
@@ -232,6 +249,14 @@ export function createCertExpiryAlert(deps: CertExpiryAlertDeps): CertExpiryAler
       // Infinity (valid forever) proves a renewal; it never opens an episode.
       const at = await deps.certExpiry(h.host).catch(() => null)
       if (at !== null) expiry.set(h.host, at)
+    }
+    if (!episode) {
+      const soonest = Math.min(...[...expiry.values()].filter(Number.isFinite))
+      if (Number.isFinite(soonest) && soonest - now() <= warnAhead && now() < soonest && await handedOff('ahead')) {
+        // Held ahead of the expiry: look again by then, so the expiry itself is never missed.
+        arm(Math.max(5_000, Math.min(CHECK_EVERY_MS, soonest - now() + 5_000)))
+        return
+      }
     }
     if (episode) {
       // A host gone from Settings leaves it; with none left, nothing waits on the letter.
@@ -253,7 +278,32 @@ export function createCertExpiryAlert(deps: CertExpiryAlertDeps): CertExpiryAler
       }
       await save()
     }
-    if (!episode.letterId) {
+    // First seen past the expiry (held until now, or the server was down): a fresh sign-in first,
+    // then the letter that it ran out, never a warning about a time already gone.
+    if (!episode.letterId && now() >= episode.expiresAt && !episode.signInWorks) {
+      const probe = await deps.freshSignIn(episode.hosts[0]!).catch((err) => ({ ok: false, unknown: true, error: err instanceof Error ? err.message : String(err) }))
+      if (probe.ok) {
+        episode.signInWorks = true
+        await save()
+        log.session.info('ssh certificate expired but a fresh sign-in works: no letter', { hosts: episode.hosts })
+      } else if (probe.unknown) {
+        arm(NEAR_EVERY_MS)
+        return
+      } else if (await deps.loginLetterOpen?.(episode.hosts).catch(() => false)) {
+        // The sign-in failure letter got there first (it waits a minute, this check two after a
+        // start): it is the one letter for this expiry.
+        episode.expiredTold = true
+        await save()
+        log.session.info('ssh certificate expired: the sign-in letter already tells the user, no second letter', { hosts: episode.hosts })
+      } else {
+        try { await send({ ...(probe.error ? { error: probe.error } : {}) }) } catch (err) {
+          log.session.warn('ssh certificate letter could not be sent; trying again', { error: err instanceof Error ? err.message : String(err) })
+          arm(NEAR_EVERY_MS)
+          return
+        }
+      }
+    }
+    if (!episode.letterId && !episode.signInWorks && !episode.expiredTold) {
       try { await send() } catch (err) {
         log.session.warn('ssh certificate letter could not be sent; trying again', { error: err instanceof Error ? err.message : String(err) })
         arm(NEAR_EVERY_MS)
@@ -281,7 +331,7 @@ export function createCertExpiryAlert(deps: CertExpiryAlertDeps): CertExpiryAler
     episode: async () => { await chain; await loaded; return episode },
     joinLetter: (hosts, error) => serial(async () => {
       await loaded
-      if (await handedOff()) return null
+      if (episode && await handedOff(now() >= episode.expiresAt ? 'expired' : 'ahead')) return null
       if (!episode?.letterId || episode.signInWorks || !hosts.some((h) => episode!.hosts.includes(h))) return null
       if (now() >= episode.expiresAt) await tellExpired(error)
       return episode.letterId
@@ -293,13 +343,20 @@ export function createCertExpiryAlert(deps: CertExpiryAlertDeps): CertExpiryAler
 // ── Server wiring ──
 
 /**
- * Whether the certificate warning is another reminder's now: the user's or a plugin's config
- * switch (`ssh_cert_letter: false`), or an outside reminder that owns sign-in while it runs.
+ * Whether the certificate letter is another reminder's now: the user's or a plugin's config
+ * switch (`ssh_cert_letter: false`), or an outside reminder that owns sign-in while it runs. Past
+ * the expiry (`phase: 'expired'`) that reminder holds it only with its own open letter asking the
+ * user to sign in (readSignInOwnerLetter): a heads-up it pushed earlier is not the inbox.
  */
-export async function certLetterHandedOff(sshCertLetter: boolean | undefined, nowMs = Date.now(), dir?: string): Promise<boolean> {
+export async function certLetterHandedOff(
+  sshCertLetter: boolean | undefined, nowMs = Date.now(), dir?: string, phase: 'ahead' | 'expired' = 'ahead',
+  isOpen?: (letterId: string) => Promise<boolean>,
+): Promise<boolean> {
   if (sshCertLetter === false) return true
-  const { readSignInOwner } = await import('../sign-in-ask.js')
-  return !!(await readSignInOwner(nowMs, ...(dir ? [dir] : [])))
+  const { readSignInOwner, readSignInOwnerLetter } = await import('../sign-in-ask.js')
+  // undefined takes each reader's own default (WALNUT_HOME/local, the inbox store).
+  if (phase === 'expired') return !!(await readSignInOwnerLetter(nowMs, dir, isOpen))
+  return !!(await readSignInOwner(nowMs, dir))
 }
 
 let running: CertExpiryAlert | null = null
@@ -367,7 +424,8 @@ export async function startCertExpiryAlert(opts: { enabled?: boolean }): Promise
       const hint = (await getConfig()).ssh_login_hint
       return typeof hint === 'string' ? hint : undefined
     },
-    handedOff: async () => certLetterHandedOff((await getConfig()).ssh_cert_letter),
+    handedOff: async (phase) => certLetterHandedOff((await getConfig()).ssh_cert_letter, Date.now(), undefined, phase),
+    loginLetterOpen: async (hosts) => !!(await (await import('./host-auth-alert.js')).runningHostAuthAlert()?.loginLetterFor(hosts)),
     onLetterClosed: async (letterId) => { await (await import('./host-auth-alert.js')).runningHostAuthAlert()?.unjoin(letterId) },
     language: walnutLetterLanguage,
   })

@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { isSignInAsk, loginCommandWords, readSignInOwner, readSignInState, SIGN_IN_OK_FRESH_MS } from '../../src/core/sign-in-ask.js'
+import { isSignInAsk, loginCommandWords, readSignInOwner, readSignInOwnerLetter, readSignInState, SIGN_IN_OK_FRESH_MS } from '../../src/core/sign-in-ask.js'
 import { certLetterHandedOff } from '../../src/core/hosts/ssh-cert-expiry-alert.js'
 
 const WORDS = loginCommandWords('run acmelogin -o on this Mac')
@@ -121,6 +121,26 @@ describe('an outside reminder owns sign-in only while it runs (readSignInOwner, 
     expect(await readSignInOwner(now, dir)).toBeNull()
     // The config switch hands it off with no owner at all.
     expect(await certLetterHandedOff(false, now, dir)).toBe(true)
+  })
+
+  it('once sign-in is broken, only the owner\'s own open letter holds Walnut\'s (readSignInOwnerLetter)', async () => {
+    const now = Date.now()
+    const open = async (id: string) => id === 'lt-open'
+    const at = new Date(now - 60_000).toISOString()
+    // The 2026-11-10 file: owns, broken, no letter of its own.
+    write({ ok: false, checkedAt: at, by: 'the sign-in plugin', owns: true, producer: 'p' })
+    expect(await readSignInOwnerLetter(now, dir, open)).toBeNull()
+    expect(await certLetterHandedOff(undefined, now, dir, 'ahead', open)).toBe(true)
+    expect(await certLetterHandedOff(undefined, now, dir, 'expired', open)).toBe(false)
+    write({ ok: false, checkedAt: at, by: 'the sign-in plugin', owns: true, letterId: 'lt-gone' })
+    expect(await readSignInOwnerLetter(now, dir, open)).toBeNull()
+    write({ ok: true, checkedAt: at, owns: true, letterId: 'lt-open' })
+    expect(await readSignInOwnerLetter(now, dir, open)).toBeNull()
+    write({ ok: false, checkedAt: at, by: 'the sign-in plugin', owns: true, letterId: 'lt-open' })
+    expect(await readSignInOwnerLetter(now, dir, open)).toEqual({ by: 'the sign-in plugin', letterId: 'lt-open' })
+    expect(await certLetterHandedOff(undefined, now, dir, 'expired', open)).toBe(true)
+    expect(await readSignInOwnerLetter(now + SIGN_IN_OK_FRESH_MS, dir, open)).toBeNull()
+    expect(await certLetterHandedOff(false, now, dir, 'expired', open)).toBe(true)
   })
 })
 
